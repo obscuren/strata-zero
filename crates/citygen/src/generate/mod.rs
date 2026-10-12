@@ -5,6 +5,7 @@ pub mod districts;
 pub mod lots;
 pub mod streets;
 pub mod terrain;
+pub mod verticals;
 
 use crate::flavor::FlavorPack;
 use crate::geom::{Grid, Pos, Rect, Size};
@@ -229,6 +230,7 @@ pub(crate) fn runner_for(stage: Stage) -> Box<dyn StageRunner> {
         Stage::Arterials => Box::new(arterials::ArterialsStage::default()),
         Stage::Streets => Box::new(streets::StreetsStage::default()),
         Stage::Lots => Box::new(lots::LotsStage::default()),
+        Stage::Verticals => Box::new(verticals::VerticalsStage::default()),
         _ => Box::new(NoopStage),
     }
 }
