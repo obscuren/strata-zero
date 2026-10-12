@@ -152,8 +152,18 @@ pub fn status_bar(
     fps: f32,
     hints: &str,
     status: Option<&str>,
+    dev: bool,
 ) -> Line<'static> {
     let mut spans = Vec::new();
+    if dev {
+        spans.push(Span::styled(
+            " DEV ",
+            Style::default()
+                .fg(Color::Rgb(10, 11, 16))
+                .bg(Color::Rgb(255, 200, 80))
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
     if let Some(c) = city {
         spans.push(Span::styled(
             format!(" {} ", c.name),
@@ -209,7 +219,8 @@ mod tests {
         let sel = strata_selector(StratumKind::Skyways, 0);
         let text: String = sel.iter().map(|l| l.to_string() + "\n").collect();
         assert!(text.contains("Skyways") && text.contains("▌"));
-        let bar = status_bar(Some(&c), StratumKind::Street, 30.0, "q quit", None);
+        let bar = status_bar(Some(&c), StratumKind::Street, 30.0, "q quit", None, true);
+        assert!(bar.to_string().contains("DEV"));
         assert!(bar.to_string().contains(&c.name) && bar.to_string().contains("q quit"));
         let bar = status_bar(
             Some(&c),
@@ -217,6 +228,7 @@ mod tests {
             30.0,
             "q quit",
             Some("saved x"),
+            false,
         );
         assert!(bar.to_string().contains("saved x") && !bar.to_string().contains("q quit"));
         assert!(!legend(StratumKind::Undercity).is_empty());

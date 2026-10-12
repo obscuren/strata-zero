@@ -18,6 +18,9 @@ pub const MIN_W: u16 = 100;
 pub const MIN_H: u16 = 30;
 pub const FRAME: Duration = Duration::from_micros(33_333);
 
+/// Whether the app starts in dev mode: free camera, map browsing and the inspector.
+pub const DEV_DEFAULT: bool = true;
+
 /// State shared by every screen.
 pub struct AppState {
     pub params: GenParams,
@@ -25,6 +28,8 @@ pub struct AppState {
     pub player: Option<crate::walker::Player>,
     pub style: StylePack,
     pub tick: u64,
+    /// Dev mode: free camera, stratum browsing and the inspector. Toggled with `` ` ``.
+    pub dev: bool,
     status: Option<(String, u64)>,
 }
 
@@ -42,6 +47,7 @@ impl AppState {
             player: None,
             style: StylePack::load().expect("embedded style pack is valid"),
             tick: 0,
+            dev: DEV_DEFAULT,
             status: None,
         }
     }

@@ -51,6 +51,11 @@ WezTerm). Saved cities go to `./cities/*.city`.
 
 ## Keys
 
+**Dev mode** is on by default for now (`DEV_DEFAULT` in `crates/cyberpunk/src/app.rs`)
+and shows a `DEV` badge in the status bar. It unlocks the free camera, stratum
+browsing and the inspector with its minimap. Press `` ` `` to flip it at runtime;
+with it off you are always on foot.
+
 **Title** `↑↓` select · `enter` confirm · `q` quit
 
 **Configure** `↑↓` field · `←→` adjust · type digits into the seed · `enter`
@@ -60,7 +65,7 @@ on `RANDOM SEED` / `GENERATE` · `esc` back
 end · `r` reseed after an error · `esc` back
 
 **Explore** `hjkl` / arrows pan the cursor (shift: fast) · `[` `]` stratum down / up (Net on top) ·
-`w` walk · `i` inspector · `m` minimap · `e` legend · `d` digital overlay ·
+`w` walk · `i` inspector · `m` minimap (inside the inspector) · `e` legend · `d` digital overlay ·
 `s` save · `r` regenerate · `g` configure · `?` keys · `q` title
 
 **Walk** `hjkl` `yubn` / arrows move · `<` `>` take stairs, lift, ladder or

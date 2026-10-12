@@ -16,6 +16,7 @@ const EXPLORE: &[(&str, &str)] = &[
     ("s", "save city"),
     ("r", "regenerate with a fresh seed"),
     ("g", "configure"),
+    ("`", "dev mode on / off"),
     ("?", "this help"),
     ("q esc", "back to title"),
 ];
@@ -25,7 +26,8 @@ const WALK: &[(&str, &str)] = &[
     ("< >", "take stairs, lift, ladder or manhole"),
     ("enter", "jack in at an adjacent terminal / jack out"),
     (".", "wait a tick"),
-    ("tab", "back to free camera"),
+    ("tab", "back to free camera (dev mode)"),
+    ("`", "dev mode on / off"),
     ("i m e d", "inspector · minimap · legend · digital overlay"),
     ("s", "save city"),
     ("?", "this help"),

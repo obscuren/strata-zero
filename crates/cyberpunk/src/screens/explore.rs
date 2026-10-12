@@ -25,7 +25,6 @@ use std::cell::Cell;
 use std::time::Instant;
 
 const PANEL_W: u16 = 34;
-const MINIMAP_W: u16 = 26;
 const MINIMAP_H: u16 = 13;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,13 +121,13 @@ impl MapScreen {
         }
     }
 
-    fn layout(&self, area: Rect) -> (Rect, Option<Rect>, Rect) {
+    fn layout(&self, area: Rect, dev: bool) -> (Rect, Option<Rect>, Rect) {
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(5), Constraint::Length(1)])
             .split(area);
         let status = rows[1];
-        if self.show_inspector && rows[0].width > PANEL_W + 20 {
+        if self.show_inspector && dev && rows[0].width > PANEL_W + 20 {
             let cols = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Min(20), Constraint::Length(PANEL_W)])
@@ -165,7 +164,18 @@ impl MapScreen {
 
     fn handle_common(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
         match k.code {
-            KeyCode::Char('i') => self.show_inspector = !self.show_inspector,
+            KeyCode::Char('`') => {
+                st.dev = !st.dev;
+                st.set_status(
+                    if st.dev {
+                        "dev mode on"
+                    } else {
+                        "dev mode off"
+                    },
+                    60,
+                );
+            }
+            KeyCode::Char('i') if st.dev => self.show_inspector = !self.show_inspector,
             KeyCode::Char('m') => self.show_minimap = !self.show_minimap,
             KeyCode::Char('e') => self.show_legend = !self.show_legend,
             KeyCode::Char('d') => self.digital = !self.digital,
@@ -247,10 +257,11 @@ impl MapScreen {
     }
 
     fn handle_walk(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
+        let dev = st.dev;
         let city = st.city.as_ref()?;
         let player = st.player.as_mut()?;
         match k.code {
-            KeyCode::Tab => {
+            KeyCode::Tab if dev => {
                 self.cursor = player.pos;
                 self.mode = Mode::Explore;
             }
@@ -357,6 +368,10 @@ impl Screen for MapScreen {
                 return cmd;
             }
         }
+        if !st.dev && self.mode == Mode::Explore {
+            // Without dev mode there is no free camera: the player is always on foot.
+            self.enter_walk(st);
+        }
         let map = self.last_map.get();
         match (self.mode, &st.player) {
             (Mode::Walk, Some(p)) => self.cam.follow(p.pos, map.width, map.height),
@@ -381,7 +396,7 @@ impl Screen for MapScreen {
             );
             return;
         };
-        let (map, panel, status) = self.layout(area);
+        let (map, panel, status) = self.layout(area, st.dev);
         self.last_map.set(map);
         let origin = self.cam.origin(map.width, map.height);
         let cursor = self.focus_pos(st);
@@ -446,30 +461,6 @@ impl Screen for MapScreen {
             }
         }
 
-        if self.show_minimap && map.width > MINIMAP_W + 4 && map.height > MINIMAP_H + 4 {
-            let mm = Rect::new(
-                map.right() - MINIMAP_W - 1,
-                map.bottom() - MINIMAP_H - 1,
-                MINIMAP_W,
-                MINIMAP_H,
-            );
-            let block = boxed("map");
-            let inner = block.inner(mm);
-            f.render_widget(block, mm);
-            Minimap {
-                city,
-                stratum: self.stratum,
-                view: TileRect::new(origin.x, origin.y, map.width as i32, map.height as i32),
-                player: st
-                    .player
-                    .as_ref()
-                    .filter(|p| p.stratum == self.stratum)
-                    .map(|p| p.pos),
-                style: &st.style,
-            }
-            .render(inner, f.buffer_mut());
-        }
-
         if let Some(panel) = panel {
             let block = boxed(if self.show_legend {
                 "LEGEND"
@@ -478,6 +469,16 @@ impl Screen for MapScreen {
             });
             let inner = block.inner(panel);
             f.render_widget(block, panel);
+            // The minimap takes the lower part of the panel when there is room for it.
+            let (text_area, map_area) = if self.show_minimap && inner.height > MINIMAP_H + 8 {
+                let rows = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Min(5), Constraint::Length(MINIMAP_H + 2)])
+                    .split(inner);
+                (rows[0], Some(rows[1]))
+            } else {
+                (inner, None)
+            };
             let mut lines: Vec<Line> = strata_selector(self.stratum, st.tick);
             lines.push(Line::from(""));
             if self.show_legend {
@@ -488,27 +489,46 @@ impl Screen for MapScreen {
             }
             f.render_widget(
                 Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false }),
-                inner,
+                text_area,
             );
+            if let Some(mm) = map_area {
+                let block = boxed("map");
+                let mi = block.inner(mm);
+                f.render_widget(block, mm);
+                Minimap {
+                    city,
+                    stratum: self.stratum,
+                    view: TileRect::new(origin.x, origin.y, map.width as i32, map.height as i32),
+                    player: st
+                        .player
+                        .as_ref()
+                        .filter(|p| p.stratum == self.stratum)
+                        .map(|p| p.pos),
+                    style: &st.style,
+                }
+                .render(mi, f.buffer_mut());
+            }
         }
 
         let jacked = st.player.as_ref().is_some_and(|p| p.jacked_in());
+        let cam = if st.dev { " · tab camera" } else { "" };
         let hints = match (self.mode, jacked) {
             (Mode::Explore, _) => {
-                "hjkl pan · [] level · w walk · d overlay · e legend · s save · ? keys"
+                "hjkl pan · [] level · w walk · d overlay · e legend · s save · ? keys".to_string()
             }
             (Mode::Walk, true) => {
-                "⚡ jacked in · hjkl move · enter jack out · tab camera · d overlay · ? keys"
+                format!("⚡ jacked in · hjkl move · enter jack out{cam} · d overlay · ? keys")
             }
-            (Mode::Walk, false) => "hjkl move · <> stairs · enter jack in · tab camera · ? keys",
+            (Mode::Walk, false) => format!("hjkl move · <> stairs · enter jack in{cam} · ? keys"),
         };
         f.render_widget(
             Paragraph::new(status_bar(
                 Some(city),
                 self.stratum,
                 self.fps.fps,
-                hints,
+                &hints,
                 st.status_text(),
+                st.dev,
             )),
             status,
         );
@@ -740,5 +760,66 @@ mod tests {
         s.update(&mut st, &[key(KeyCode::Char('?'))]);
         t.draw(|f| s.draw(&st, f)).unwrap();
         assert!(buffer_text(t.backend().buffer()).contains("jack in"));
+    }
+
+    #[test]
+    fn dev_mode_off_locks_the_player_into_walk_mode() {
+        let mut st = state();
+        st.dev = false;
+        let mut s = MapScreen::explore(0);
+        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        s.update(&mut st, &[]);
+        assert_eq!(s.mode, Mode::Walk);
+        assert!(st.player.is_some());
+        s.update(&mut st, &[key(KeyCode::Tab)]);
+        assert_eq!(s.mode, Mode::Walk, "tab must not open the free camera");
+        s.update(&mut st, &[key(KeyCode::Char('i'))]);
+        st.tick += 500;
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let text = buffer_text(t.backend().buffer());
+        assert!(!text.contains("INSPECT"), "{text}");
+        assert!(!text.contains("tab camera"), "{text}");
+        assert!(!text.contains("DEV"), "{text}");
+        // The backtick flips dev mode at runtime; the camera and inspector come back.
+        s.update(&mut st, &[key(KeyCode::Char('`'))]);
+        assert!(st.dev);
+        s.update(&mut st, &[key(KeyCode::Tab)]);
+        assert_eq!(s.mode, Mode::Explore);
+        st.tick += 500;
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let text = buffer_text(t.backend().buffer());
+        assert!(text.contains("INSPECT") && text.contains("DEV"), "{text}");
+        // Flipping it off again drops straight back into the walk.
+        s.update(&mut st, &[key(KeyCode::Char('`'))]);
+        assert!(!st.dev);
+        assert_eq!(s.mode, Mode::Walk);
+    }
+
+    #[test]
+    fn minimap_lives_in_the_lower_part_of_the_inspector() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        s.update(&mut st, &[]);
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let text = buffer_text(t.backend().buffer());
+        let panel_x = 120 - PANEL_W as usize;
+        let rows: Vec<(usize, usize)> = text
+            .lines()
+            .enumerate()
+            .filter_map(|(y, l)| l.find("map").map(|x| (y, x)))
+            .collect();
+        assert!(!rows.is_empty(), "no minimap box: {text}");
+        assert!(
+            rows.iter().all(|(_, x)| *x >= panel_x),
+            "minimap drawn outside the panel: {rows:?}"
+        );
+        assert!(
+            rows.iter().all(|(y, _)| *y > 20),
+            "minimap not in the lower part: {rows:?}"
+        );
+        s.update(&mut st, &[key(KeyCode::Char('m'))]);
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        assert!(!buffer_text(t.backend().buffer()).contains("map"));
     }
 }
