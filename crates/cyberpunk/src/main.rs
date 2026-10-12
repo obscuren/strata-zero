@@ -1,4 +1,4 @@
-//! `city`: generate, explore and walk a cyberpunk city in the terminal.
+//! `cyberpunk`: a terminal roguelike in a multi-level cyberpunk city.
 
 mod anim;
 mod app;

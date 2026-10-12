@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
-    name = "city",
-    about = "Generate, explore and walk a cyberpunk city in the terminal"
+    name = "cyberpunk",
+    about = "A terminal roguelike in a multi-level cyberpunk city"
 )]
 pub struct Cli {
     #[command(subcommand)]
