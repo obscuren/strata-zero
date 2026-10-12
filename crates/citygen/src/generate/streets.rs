@@ -284,63 +284,122 @@ impl Carver<'_> {
         }
     }
 
-    /// Shrinks a candidate until every cell is untouched land of this district.
-    fn fit_block(&self, mut r: Rect) -> Option<Rect> {
-        let bad = |ctx: &GenCtx, p: Pos| {
-            !ctx.is_land(p)
-                || !ctx.in_district(p, self.d)
-                || ctx.terrain(StratumKind::Street, p) != Terrain::Void
-        };
+    fn is_bad(&self, p: Pos) -> bool {
+        !self.ctx.is_land(p)
+            || !self.ctx.in_district(p, self.d)
+            || self.ctx.terrain(StratumKind::Street, p) != Terrain::Void
+    }
+
+    /// Drops edge rows/columns that are entirely unusable.
+    fn trim(&self, mut r: Rect) -> Rect {
+        loop {
+            if r.w < 1 || r.h < 1 {
+                return r;
+            }
+            if (r.x..r.right()).all(|x| self.is_bad(Pos::new(x, r.y))) {
+                r = Rect::new(r.x, r.y + 1, r.w, r.h - 1);
+            } else if (r.x..r.right()).all(|x| self.is_bad(Pos::new(x, r.bottom() - 1))) {
+                r = Rect::new(r.x, r.y, r.w, r.h - 1);
+            } else if (r.y..r.bottom()).all(|y| self.is_bad(Pos::new(r.x, y))) {
+                r = Rect::new(r.x + 1, r.y, r.w - 1, r.h);
+            } else if (r.y..r.bottom()).all(|y| self.is_bad(Pos::new(r.right() - 1, y))) {
+                r = Rect::new(r.x, r.y, r.w - 1, r.h);
+            } else {
+                return r;
+            }
+        }
+    }
+
+    /// Greedy shrink from the dirtiest side until clean or too small.
+    fn shrink(&self, mut r: Rect) -> Option<Rect> {
         for _ in 0..12 {
             if r.w < 5 || r.h < 4 {
                 return None;
             }
             let top = (r.x..r.right())
-                .filter(|x| bad(self.ctx, Pos::new(*x, r.y)))
+                .filter(|x| self.is_bad(Pos::new(*x, r.y)))
                 .count();
             let bottom = (r.x..r.right())
-                .filter(|x| bad(self.ctx, Pos::new(*x, r.bottom() - 1)))
+                .filter(|x| self.is_bad(Pos::new(*x, r.bottom() - 1)))
                 .count();
             let left = (r.y..r.bottom())
-                .filter(|y| bad(self.ctx, Pos::new(r.x, *y)))
+                .filter(|y| self.is_bad(Pos::new(r.x, *y)))
                 .count();
             let right = (r.y..r.bottom())
-                .filter(|y| bad(self.ctx, Pos::new(r.right() - 1, *y)))
+                .filter(|y| self.is_bad(Pos::new(r.right() - 1, *y)))
                 .count();
             if top + bottom + left + right == 0 {
-                let interior_bad = r.inset(1).iter().any(|p| bad(self.ctx, p));
-                if !interior_bad {
-                    return Some(r);
+                match r.inset(1).iter().find(|p| self.is_bad(*p)) {
+                    None => return Some(r),
+                    Some(p) => {
+                        if (p.x - r.x) * r.h < (p.y - r.y) * r.w {
+                            r = Rect::new(p.x + 1, r.y, r.right() - p.x - 1, r.h);
+                        } else {
+                            r = Rect::new(r.x, p.y + 1, r.w, r.bottom() - p.y - 1);
+                        }
+                        continue;
+                    }
                 }
-                // An interior obstacle (arterial crossing); shrink the side nearest to it.
-                let p = r
-                    .inset(1)
-                    .iter()
-                    .find(|p| bad(self.ctx, *p))
-                    .expect("interior_bad");
-                if (p.x - r.x) * r.h < (p.y - r.y) * r.w {
-                    r = Rect::new(p.x + 1, r.y, r.right() - p.x - 1, r.h);
-                } else {
-                    r = Rect::new(r.x, p.y + 1, r.w, r.bottom() - p.y - 1);
-                }
-                continue;
             }
-            let top_f = top as f32 / r.w as f32;
-            let bottom_f = bottom as f32 / r.w as f32;
-            let left_f = left as f32 / r.h as f32;
-            let right_f = right as f32 / r.h as f32;
-            let max = top_f.max(bottom_f).max(left_f).max(right_f);
-            if max == top_f {
+            let fr = |n: usize, len: i32| n as f32 / len as f32;
+            let (t, b, l, rr) = (fr(top, r.w), fr(bottom, r.w), fr(left, r.h), fr(right, r.h));
+            let max = t.max(b).max(l).max(rr);
+            if max == t {
                 r = Rect::new(r.x, r.y + 1, r.w, r.h - 1);
-            } else if max == bottom_f {
+            } else if max == b {
                 r = Rect::new(r.x, r.y, r.w, r.h - 1);
-            } else if max == left_f {
+            } else if max == l {
                 r = Rect::new(r.x + 1, r.y, r.w - 1, r.h);
             } else {
                 r = Rect::new(r.x, r.y, r.w - 1, r.h);
             }
         }
         None
+    }
+
+    /// Turns one candidate into clean blocks: trims dead edges, and when the rest is still
+    /// dirty, splits it along the longer axis (painting an alley on the cut) and recurses.
+    fn fit_blocks(&mut self, r: Rect, depth: u8, out: &mut Vec<Rect>) {
+        let r = self.trim(r);
+        if r.w < 5 || r.h < 4 {
+            return;
+        }
+        if !r.iter().any(|p| self.is_bad(p)) {
+            out.push(r);
+            return;
+        }
+        let can_split_w = r.w >= 11;
+        let can_split_h = r.h >= 9;
+        if depth > 0 && (can_split_w || can_split_h) {
+            let vertical = if can_split_w && can_split_h {
+                r.w >= r.h
+            } else {
+                can_split_w
+            };
+            if vertical {
+                let s = r.x + r.w / 2;
+                paint_vline(self.ctx, s, r.y, r.bottom(), Line::ALLEY, self.d);
+                self.fit_blocks(Rect::new(r.x, r.y, s - r.x, r.h), depth - 1, out);
+                self.fit_blocks(
+                    Rect::new(s + 1, r.y, r.right() - s - 1, r.h),
+                    depth - 1,
+                    out,
+                );
+            } else {
+                let s = r.y + r.h / 2;
+                paint_hline(self.ctx, s, r.x, r.right(), Line::ALLEY, self.d);
+                self.fit_blocks(Rect::new(r.x, r.y, r.w, s - r.y), depth - 1, out);
+                self.fit_blocks(
+                    Rect::new(r.x, s + 1, r.w, r.bottom() - s - 1),
+                    depth - 1,
+                    out,
+                );
+            }
+            return;
+        }
+        if let Some(fitted) = self.shrink(r) {
+            out.push(fitted);
+        }
     }
 }
 
@@ -373,16 +432,18 @@ impl StreetsStage {
             StreetStyle::Strip => carver.strip(),
         }
         let candidates = std::mem::take(&mut carver.candidates);
-        let mut blocks: Vec<Block> = Vec::new();
+        let mut fitted = Vec::new();
         for c in candidates {
             let Some(c) = c.clamp_to(carver.bounds) else {
                 continue;
             };
-            if let Some(fitted) = carver.fit_block(c)
-                && blocks.iter().all(|b| !b.rect.intersects(fitted))
-            {
+            carver.fit_blocks(c, 4, &mut fitted);
+        }
+        let mut blocks: Vec<Block> = Vec::new();
+        for rect in fitted {
+            if blocks.iter().all(|b| !b.rect.intersects(rect)) {
                 blocks.push(Block {
-                    rect: fitted,
+                    rect,
                     district: district.id,
                 });
             }

@@ -2,6 +2,7 @@
 
 pub mod arterials;
 pub mod districts;
+pub mod lots;
 pub mod streets;
 pub mod terrain;
 
@@ -227,6 +228,7 @@ pub(crate) fn runner_for(stage: Stage) -> Box<dyn StageRunner> {
         Stage::Districts => Box::new(districts::DistrictsStage::default()),
         Stage::Arterials => Box::new(arterials::ArterialsStage::default()),
         Stage::Streets => Box::new(streets::StreetsStage::default()),
+        Stage::Lots => Box::new(lots::LotsStage::default()),
         _ => Box::new(NoopStage),
     }
 }
