@@ -554,6 +554,7 @@ mod tests {
         let mut s = MapScreen::explore(0);
         let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
         t.draw(|f| s.draw(&st, f)).unwrap();
+        s.update(&mut st, &[]);
         let before = s.cursor;
         s.update(&mut st, &[key(KeyCode::Right), key(KeyCode::Down)]);
         assert_eq!(s.cursor, Pos::new(before.x + 1, before.y + 1));

@@ -32,11 +32,6 @@ impl Camera {
         self.ty = p.y;
     }
 
-    pub fn pan(&mut self, dx: i32, dy: i32) {
-        self.tx += dx;
-        self.ty += dy;
-    }
-
     /// Moves the target only when `p` leaves the middle third of the view.
     pub fn follow(&mut self, p: Pos, view_w: u16, view_h: u16) {
         let zx = (view_w as i32 / 6).max(1);
@@ -71,13 +66,14 @@ impl Camera {
         let half_h = view_h as i32 / 2;
         let w = size.w as i32;
         let h = size.h as i32;
+        // The view spans origin..origin+view, so the far bound is the view's other half.
         self.tx = if w > view_w as i32 {
-            self.tx.clamp(half_w, w - half_w)
+            self.tx.clamp(half_w, w - (view_w as i32 - half_w))
         } else {
             w / 2
         };
         self.ty = if h > view_h as i32 {
-            self.ty.clamp(half_h, h - half_h)
+            self.ty.clamp(half_h, h - (view_h as i32 - half_h))
         } else {
             h / 2
         };
