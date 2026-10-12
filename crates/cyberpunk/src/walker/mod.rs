@@ -15,6 +15,7 @@ pub struct Player {
     pub pos: Pos,
     pub stratum: StratumKind,
     /// Where the body waits while jacked in: (stratum, tile). None when not jacked in.
+    #[allow(dead_code)] // read by the map screen from task 9
     pub body: Option<(StratumKind, Pos)>,
     /// What has been seen on each stratum, indexed by `StratumKind::index`.
     memory: Vec<Grid<Visibility>>,
@@ -75,11 +76,13 @@ impl Player {
         }
     }
 
+    #[allow(dead_code)] // wired by the map screen from task 9
     pub fn jacked_in(&self) -> bool {
         self.body.is_some()
     }
 
     /// Jacks in at a Jack connector on this tile or an 8-neighbour of it, leaving the body here.
+    #[allow(dead_code)] // wired by the map screen from task 9
     pub fn jack_in(&mut self, city: &City) -> Result<Pos, &'static str> {
         if self.jacked_in() {
             return Err("already jacked in");
@@ -105,6 +108,7 @@ impl Player {
     }
 
     /// Returns to the body.
+    #[allow(dead_code)] // wired by the map screen from task 9
     pub fn jack_out(&mut self, city: &City) -> Result<(), &'static str> {
         let (k, p) = self.body.take().ok_or("not jacked in")?;
         self.stratum = k;
