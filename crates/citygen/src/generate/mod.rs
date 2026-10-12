@@ -2,6 +2,7 @@
 
 pub mod arterials;
 pub mod districts;
+pub mod streets;
 pub mod terrain;
 
 use crate::flavor::FlavorPack;
@@ -225,6 +226,7 @@ pub(crate) fn runner_for(stage: Stage) -> Box<dyn StageRunner> {
         Stage::Terrain => Box::new(terrain::TerrainStage::default()),
         Stage::Districts => Box::new(districts::DistrictsStage::default()),
         Stage::Arterials => Box::new(arterials::ArterialsStage::default()),
+        Stage::Streets => Box::new(streets::StreetsStage::default()),
         _ => Box::new(NoopStage),
     }
 }

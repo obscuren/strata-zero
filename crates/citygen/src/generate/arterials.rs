@@ -130,7 +130,7 @@ impl StageRunner for ArterialsStage {
 #[cfg(test)]
 mod tests {
     use crate::generate::testutil::small;
-    use crate::geom::Rect;
+    use crate::geom::{Grid, Rect};
     use crate::params::WaterMode;
     use crate::pathing::components;
     use crate::tile::Terrain;
@@ -152,7 +152,16 @@ mod tests {
                 .any(|p| st.tiles.get(p).is_some_and(|t| t.terrain == Terrain::Road));
             assert!(near, "district {:?} centre not on road", d.id);
         }
-        let comps = components(st.tiles.size(), |p| st.tiles[p].terrain == Terrain::Road);
+        // The arterial stamps themselves form one connected network.
+        let mut mask = Grid::filled(st.tiles.size(), false);
+        for path in &c.arterials {
+            for p in path {
+                mask.fill_rect(Rect::new(p.x - 1, p.y - 1, 4, 4), true);
+            }
+        }
+        let comps = components(st.tiles.size(), |p| {
+            mask[p] && matches!(st.tiles[p].terrain, Terrain::Road | Terrain::Bridge)
+        });
         assert_eq!(comps.len(), 1);
     }
 
