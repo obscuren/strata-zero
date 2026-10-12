@@ -7,6 +7,7 @@ pub mod dressing;
 pub mod interiors;
 pub mod lots;
 pub mod naming;
+pub mod net;
 pub mod streets;
 pub mod terrain;
 pub mod verticals;
@@ -91,9 +92,7 @@ pub(crate) trait StageRunner {
     fn step(&mut self, ctx: &mut GenCtx) -> Result<StepOut, GenError>;
 }
 
-// Scratch types are populated by stages that land in later tasks; the allows go when they do.
 /// A rectangular block between streets, owned by one district.
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Block {
     pub rect: Rect,
@@ -121,7 +120,6 @@ pub(crate) struct Lot {
 }
 
 /// Intermediate state shared between stages; never serialized.
-#[allow(dead_code)]
 pub(crate) struct Scratch {
     pub land: Grid<bool>,
     pub wealth: Grid<f32>,
@@ -151,7 +149,6 @@ impl Scratch {
 }
 
 /// Everything a stage can see and mutate.
-#[allow(dead_code)]
 pub(crate) struct GenCtx {
     pub city: City,
     pub flavor: FlavorPack,
@@ -159,7 +156,6 @@ pub(crate) struct GenCtx {
     pub scratch: Scratch,
 }
 
-#[allow(dead_code)]
 impl GenCtx {
     pub fn rng(&self, stage: Stage) -> ChaCha8Rng {
         stage_rng(self.seed, stage.index())
@@ -215,18 +211,6 @@ impl GenCtx {
     }
 }
 
-/// A stage that does nothing; placeholder until the real stage lands.
-struct NoopStage;
-
-impl StageRunner for NoopStage {
-    fn begin(&mut self, _ctx: &mut GenCtx) -> Result<(), GenError> {
-        Ok(())
-    }
-    fn step(&mut self, _ctx: &mut GenCtx) -> Result<StepOut, GenError> {
-        Ok(StepOut::Finished)
-    }
-}
-
 pub(crate) fn runner_for(stage: Stage) -> Box<dyn StageRunner> {
     match stage {
         Stage::Terrain => Box::new(terrain::TerrainStage::default()),
@@ -239,7 +223,7 @@ pub(crate) fn runner_for(stage: Stage) -> Box<dyn StageRunner> {
         Stage::Connectivity => Box::new(connectivity::ConnectivityStage::default()),
         Stage::Dressing => Box::new(dressing::DressingStage::default()),
         Stage::Naming => Box::new(naming::NamingStage::default()),
-        _ => Box::new(NoopStage),
+        Stage::Net => Box::new(net::NetStage::default()),
     }
 }
 
