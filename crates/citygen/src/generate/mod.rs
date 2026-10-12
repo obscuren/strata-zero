@@ -3,6 +3,7 @@
 pub mod arterials;
 pub mod connectivity;
 pub mod districts;
+pub mod dressing;
 pub mod interiors;
 pub mod lots;
 pub mod streets;
@@ -235,6 +236,7 @@ pub(crate) fn runner_for(stage: Stage) -> Box<dyn StageRunner> {
         Stage::Verticals => Box::new(verticals::VerticalsStage::default()),
         Stage::Interiors => Box::new(interiors::InteriorsStage::default()),
         Stage::Connectivity => Box::new(connectivity::ConnectivityStage::default()),
+        Stage::Dressing => Box::new(dressing::DressingStage::default()),
         _ => Box::new(NoopStage),
     }
 }
