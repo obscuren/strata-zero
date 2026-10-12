@@ -5,7 +5,7 @@ use crate::geom::Pos;
 use crate::ids::{BuildingId, DistrictId, NodeId};
 use crate::net::NodeKind;
 use crate::tile::{Feature, Terrain};
-use crate::world::{City, StratumKind};
+use crate::world::{City, ConnectorKind, StratumKind};
 use std::fmt;
 
 /// Share of walkable tiles per stratum that must be reachable from the street.
@@ -69,6 +69,10 @@ impl City {
         let mut out = Vec::new();
 
         for c in &self.connectors {
+            if c.kind == ConnectorKind::Jack {
+                // A jack stands on a terminal tile and is used from beside it.
+                continue;
+            }
             for k in &c.serves {
                 if *k != StratumKind::Net && !self.walkable(*k, c.pos) {
                     out.push(Violation::ConnectorNotWalkable {

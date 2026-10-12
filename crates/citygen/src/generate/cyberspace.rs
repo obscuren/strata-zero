@@ -3,22 +3,28 @@
 use super::{GenCtx, StageRunner, StepOut};
 use crate::geom::{Pos, Rect};
 use crate::ids::{BuildingId, DistrictId};
-use crate::net::{NodeKind, SubnetOwner};
+use crate::net::{Node, NodeKind, SubnetOwner};
 use crate::params::GenError;
+use crate::pathing::astar;
 use crate::rng::tile_hash;
 use crate::tile::{Feature, Terrain, Tile};
-use crate::world::{Stratum, StratumKind};
+use crate::world::{Connector, ConnectorKind, Stratum, StratumKind};
 use std::collections::VecDeque;
 
 const K: StratumKind = StratumKind::Net;
 const GRID_LIGHT: u8 = 200;
 const HUB_RADIUS: i32 = 2;
+const NODE_SEARCH: i32 = 6;
+const LANE_LIGHT: u8 = 255;
 
 enum Work {
     Begin,
     Construct(usize),
     Gate(usize),
     Hub(usize),
+    Nodes,
+    Lane(usize),
+    Ports,
 }
 
 #[derive(Default)]
@@ -184,6 +190,116 @@ impl CyberspaceStage {
             }
         }
     }
+
+    /// Nearest walkable Net tile without a feature, scanning square rings in a fixed order.
+    fn nearest_free(ctx: &GenCtx, c: Pos) -> Option<Pos> {
+        for r in 1..=NODE_SEARCH {
+            let ring = Rect::new(c.x - r, c.y - r, 2 * r + 1, 2 * r + 1);
+            let hit = ring.border().find(|p| {
+                ctx.city
+                    .tile(K, *p)
+                    .is_some_and(|t| t.is_walkable() && t.feature.is_none())
+            });
+            if hit.is_some() {
+                return hit;
+            }
+        }
+        None
+    }
+
+    /// ICE first so it always takes the gate; then everything else in id order.
+    fn nodes(&mut self, ctx: &mut GenCtx) {
+        let mut order: Vec<usize> = (0..ctx.city.net.nodes.len()).collect();
+        order.sort_by_key(|i| (ctx.city.net.nodes[*i].kind != NodeKind::Ice, *i));
+        for i in order {
+            let node = ctx.city.net.nodes[i].clone();
+            let mut t = node.anchor.1;
+            if node.kind == NodeKind::Ice
+                && let Some(b) = node.building
+            {
+                t = self.gates[b.index()];
+            }
+            let taken = ctx
+                .city
+                .tile(K, t)
+                .is_none_or(|x| matches!(x.feature, Some(Feature::Node(_))));
+            if taken {
+                t = Self::nearest_free(ctx, t).unwrap_or(t);
+            }
+            ctx.set_feature(K, t, Some(Feature::Node(node.kind)));
+            ctx.city.net.nodes[i].cyber = t;
+        }
+    }
+
+    fn lane_end(&self, n: &Node) -> Pos {
+        match n.building {
+            Some(b) => self.gates[b.index()],
+            None => n.cyber,
+        }
+    }
+
+    fn lane(&mut self, ctx: &mut GenCtx, li: usize) {
+        let link = ctx.city.net.links[li];
+        let a = ctx.city.net.node(link.0).clone();
+        let b = ctx.city.net.node(link.1).clone();
+        if a.building.is_some() && a.building == b.building {
+            return;
+        }
+        let (start, goal) = (self.lane_end(&a), self.lane_end(&b));
+        if start == goal {
+            return;
+        }
+        let size = ctx.size();
+        let path = {
+            let city = &ctx.city;
+            astar(size, start, goal, |_, q| {
+                let t = city.tile(K, q)?;
+                if q == start || q == goal {
+                    return Some(1);
+                }
+                match t.terrain {
+                    Terrain::NetLane | Terrain::NetGate => Some(1),
+                    Terrain::NetGrid => Some(if matches!(t.feature, Some(Feature::Node(_))) {
+                        1
+                    } else {
+                        3
+                    }),
+                    _ => None,
+                }
+            })
+        };
+        let Some(path) = path else { return };
+        for p in path {
+            if ctx.terrain(K, p) == Terrain::NetGrid {
+                ctx.set_terrain(K, p, Terrain::NetLane);
+                if let Some(st) = ctx.city.stratum_mut(K) {
+                    st.light.set(p, LANE_LIGHT);
+                }
+            }
+        }
+    }
+
+    fn ports(ctx: &mut GenCtx) {
+        let street = StratumKind::Street;
+        let mut jacks = Vec::new();
+        if let Some(st) = ctx.city.stratum(street) {
+            for (p, t) in st.tiles.iter() {
+                if t.feature == Some(Feature::Terminal) && ctx.city.net.node_at(street, p).is_some()
+                {
+                    jacks.push(Connector {
+                        kind: ConnectorKind::Jack,
+                        pos: p,
+                        serves: vec![street, K],
+                        public: t.building.is_none(),
+                    });
+                }
+            }
+        }
+        ctx.city
+            .connectors
+            .retain(|c| c.kind != ConnectorKind::Jack);
+        ctx.city.connectors.extend(jacks);
+    }
 }
 
 impl StageRunner for CyberspaceStage {
@@ -199,6 +315,10 @@ impl StageRunner for CyberspaceStage {
         self.queue.extend((0..nb).map(Work::Construct));
         self.queue.extend((0..nb).map(Work::Gate));
         self.queue.extend((0..nd).map(Work::Hub));
+        self.queue.push_back(Work::Nodes);
+        self.queue
+            .extend((0..ctx.city.net.links.len()).map(Work::Lane));
+        self.queue.push_back(Work::Ports);
         self.total = self.queue.len().max(1);
         Ok(())
     }
@@ -212,6 +332,9 @@ impl StageRunner for CyberspaceStage {
             Work::Construct(i) => self.construct(ctx, i),
             Work::Gate(i) => self.gate(ctx, i),
             Work::Hub(d) => self.hub(ctx, d),
+            Work::Nodes => self.nodes(ctx),
+            Work::Lane(i) => self.lane(ctx, i),
+            Work::Ports => Self::ports(ctx),
         }
         let done = self.total - self.queue.len();
         Ok(StepOut::Continue(done as f32 / self.total as f32))
@@ -315,5 +438,165 @@ mod tests {
             assert!(gates >= 2, "hub at {a:?} has only {gates} gates");
         }
         assert!(hubs >= 1);
+    }
+
+    #[test]
+    fn every_node_stands_on_its_feature_and_ice_guards_the_gate() {
+        let c = city();
+        let net = c.stratum(StratumKind::Net).unwrap();
+        for n in &c.net.nodes {
+            assert_eq!(
+                net.tiles[n.cyber].feature,
+                Some(crate::tile::Feature::Node(n.kind)),
+                "node {:?} ({:?}) at {:?}",
+                n.id,
+                n.kind,
+                n.cyber
+            );
+        }
+        let mut ice = 0;
+        for n in c
+            .net
+            .nodes
+            .iter()
+            .filter(|n| n.kind == crate::net::NodeKind::Ice)
+        {
+            let Some(b) = n.building else { continue };
+            ice += 1;
+            let fp = c.building(b).footprint;
+            let gate = fp
+                .border()
+                .find(|p| net.tiles[*p].terrain == Terrain::NetGate)
+                .unwrap();
+            assert!(
+                n.cyber.chebyshev(gate) <= 1,
+                "ICE {:?} at {:?} is not at gate {gate:?}",
+                n.id,
+                n.cyber
+            );
+        }
+        assert!(ice >= 1, "fixture has no ICE");
+    }
+
+    #[test]
+    fn lanes_link_every_construct_gate_to_its_backbone() {
+        let c = city();
+        let net = c.stratum(StratumKind::Net).unwrap();
+        assert!(net.tiles.count(|t| t.terrain == Terrain::NetLane) > 20);
+        for b in &c.buildings {
+            let gate = b
+                .footprint
+                .border()
+                .find(|p| net.tiles[*p].terrain == Terrain::NetGate)
+                .unwrap();
+            let backbone = c
+                .net
+                .nodes
+                .iter()
+                .find(|n| {
+                    n.kind == crate::net::NodeKind::Backbone
+                        && c.net.subnet(n.subnet).owner
+                            == crate::net::SubnetOwner::District(b.district)
+                })
+                .unwrap();
+            let reach = crate::pathing::flood_fill(c.size, gate, |p| {
+                net.tiles.get(p).is_some_and(|t| t.is_walkable())
+            });
+            assert!(
+                reach.contains(&backbone.cyber),
+                "gate {gate:?} of {:?} cannot reach backbone {:?}",
+                b.id,
+                backbone.cyber
+            );
+        }
+    }
+
+    #[test]
+    fn street_terminals_with_nodes_become_jacks() {
+        let c = city();
+        let street = StratumKind::Street;
+        let jacks: Vec<_> = c
+            .connectors
+            .iter()
+            .filter(|k| k.kind == crate::world::ConnectorKind::Jack)
+            .collect();
+        assert!(jacks.len() >= 3, "only {} jacks", jacks.len());
+        for j in &jacks {
+            assert_eq!(j.serves, vec![street, StratumKind::Net]);
+            let t = c.tile(street, j.pos).unwrap();
+            assert_eq!(t.feature, Some(crate::tile::Feature::Terminal));
+            assert_eq!(j.public, t.building.is_none());
+            assert!(
+                c.walkable(StratumKind::Net, j.pos),
+                "port {:?} not walkable",
+                j.pos
+            );
+            assert!(j.pos.neighbors8().any(|n| c.walkable(street, n)));
+        }
+        for (p, t) in c.stratum(street).unwrap().tiles.iter() {
+            if t.feature == Some(crate::tile::Feature::Terminal)
+                && c.net.node_at(street, p).is_some()
+            {
+                assert!(
+                    jacks.iter().any(|j| j.pos == p),
+                    "terminal {p:?} has no jack"
+                );
+            }
+        }
+        assert!(
+            jacks.iter().any(|j| !j.public),
+            "fixture has no private port"
+        );
+    }
+
+    #[test]
+    fn every_jack_reaches_the_open_grid() {
+        let c = city();
+        let net = c.stratum(StratumKind::Net).unwrap();
+        for j in c
+            .connectors
+            .iter()
+            .filter(|k| k.kind == crate::world::ConnectorKind::Jack)
+        {
+            let reach = crate::pathing::flood_fill(c.size, j.pos, |p| {
+                net.tiles.get(p).is_some_and(|t| t.is_walkable())
+            });
+            assert!(
+                reach
+                    .iter()
+                    .any(|p| net.tiles[*p].terrain == Terrain::NetGrid
+                        && net.tiles[*p].building.is_none()),
+                "port {:?} is sealed in",
+                j.pos
+            );
+        }
+    }
+
+    #[test]
+    fn gates_open_onto_walkable_tiles() {
+        for seed in [6u64, 11, 29] {
+            let c = Generator::run(GenParams {
+                seed,
+                size: SizePreset::Custom { w: 80, h: 40 },
+                districts: 4,
+                ..Default::default()
+            })
+            .unwrap();
+            let net = c.stratum(StratumKind::Net).unwrap();
+            for b in &c.buildings {
+                let fp = b.footprint;
+                let gate = fp
+                    .border()
+                    .find(|p| net.tiles[*p].terrain == Terrain::NetGate)
+                    .unwrap();
+                assert!(
+                    gate.neighbors4().any(|q| {
+                        !fp.contains(q) && net.tiles.get(q).is_some_and(|t| t.is_walkable())
+                    }),
+                    "seed {seed}: gate {gate:?} of {:?} is sealed",
+                    b.id
+                );
+            }
+        }
     }
 }

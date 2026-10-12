@@ -378,7 +378,11 @@ mod tests {
                 .count()
                 > 100
         );
-        for k in &c.connectors {
+        for k in c
+            .connectors
+            .iter()
+            .filter(|k| k.kind != crate::world::ConnectorKind::Jack)
+        {
             for s in &k.serves {
                 let t = c.tile(*s, k.pos).unwrap();
                 assert!(t.is_walkable(), "{k:?} blocked on {s:?}");
