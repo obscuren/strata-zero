@@ -1,39 +1,22 @@
 //! Screens: one module per screen, plus shared test helpers.
 
-use crate::app::{AppState, Screen, ScreenCmd};
-use crossterm::event::{KeyCode, KeyEvent};
-use ratatui::Frame;
-
 pub mod configure;
+pub mod explore;
 pub mod files;
 pub mod generating;
+pub mod help;
 pub mod title;
 
-/// Draws nothing; stands in until the title screen lands.
-pub struct Blank;
-
-impl Screen for Blank {
-    fn update(&mut self, _st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
-        if keys
-            .iter()
-            .any(|k| matches!(k.code, KeyCode::Char('q') | KeyCode::Esc))
-        {
-            ScreenCmd::Quit
-        } else {
-            ScreenCmd::Stay
-        }
-    }
-    fn draw(&self, _st: &AppState, _f: &mut Frame) {}
-}
+use crate::app::Screen;
 
 /// The screen the app starts on.
 pub fn initial() -> impl Screen {
     title::Title::new(0)
 }
 
-/// The screen shown once a city exists (explore mode). Wired to the map screen later.
-pub fn explore_screen(_tick: u64) -> Box<dyn Screen> {
-    Box::new(Blank)
+/// The screen shown once a city exists: the map in explore mode.
+pub fn explore_screen(tick: u64) -> Box<dyn Screen> {
+    Box::new(explore::MapScreen::explore(tick))
 }
 
 #[cfg(test)]
