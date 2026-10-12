@@ -1,10 +1,12 @@
 //! World model and generator for the cyberpunk city.
 
 pub mod flavor;
+pub mod generate;
 pub mod geom;
 pub mod ids;
 pub mod net;
 pub mod params;
+pub mod pathing;
 pub mod rng;
 pub mod theme;
 pub mod tile;
@@ -12,6 +14,7 @@ pub mod validate;
 pub mod world;
 
 pub use flavor::FlavorPack;
+pub use generate::{Generator, Progress, Stage};
 pub use geom::{Dir, Grid, Pos, Rect, Size};
 pub use ids::*;
 pub use net::*;

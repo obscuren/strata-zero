@@ -111,13 +111,13 @@ impl GenParams {
                 format!("{} is outside 4..=12", self.districts),
             ));
         }
-        if (w as u64) * (h as u64) < self.districts as u64 * 1000 {
+        if (w as u64) * (h as u64) < self.districts as u64 * 800 {
             return Err(bad(
                 "districts",
                 format!(
                     "too many districts for map size ({} districts need at least {} tiles, map has {})",
                     self.districts,
-                    self.districts as u64 * 1000,
+                    self.districts as u64 * 800,
                     w as u64 * h as u64
                 ),
             ));
