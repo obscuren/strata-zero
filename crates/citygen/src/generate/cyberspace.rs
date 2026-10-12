@@ -1,7 +1,7 @@
 //! Stage 12: cyberspace — the Net stratum as a grid with constructs, hubs, lanes and ports.
 
 use super::{GenCtx, StageRunner, StepOut};
-use crate::geom::{Pos, Rect};
+use crate::geom::{Pos, Rect, Size};
 use crate::ids::{BuildingId, DistrictId};
 use crate::net::{Node, NodeKind, SubnetOwner};
 use crate::params::GenError;
@@ -16,6 +16,8 @@ const GRID_LIGHT: u8 = 200;
 const HUB_RADIUS: i32 = 2;
 const NODE_SEARCH: i32 = 6;
 const LANE_LIGHT: u8 = 255;
+/// How far a lane may stray from the box spanned by its endpoints.
+const LANE_MARGIN: i32 = 16;
 
 enum Work {
     Begin,
@@ -63,6 +65,35 @@ fn outward(r: Rect, p: Pos) -> Pos {
     } else {
         p.offset(1, 0)
     }
+}
+
+/// A* confined to the bounding box of `start` and `goal` grown by `margin`, so each
+/// search allocates a small grid instead of the whole map. A detour that leaves the
+/// box is not found.
+fn bounded_astar(
+    size: Size,
+    start: Pos,
+    goal: Pos,
+    margin: i32,
+    cost: impl Fn(Pos, Pos) -> Option<u32>,
+) -> Option<Vec<Pos>> {
+    let x0 = (start.x.min(goal.x) - margin).max(0);
+    let y0 = (start.y.min(goal.y) - margin).max(0);
+    let x1 = (start.x.max(goal.x) + margin + 1).min(size.w as i32);
+    let y1 = (start.y.max(goal.y) + margin + 1).min(size.h as i32);
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    let sub = Size {
+        w: (x1 - x0) as u32,
+        h: (y1 - y0) as u32,
+    };
+    let to_local = |p: Pos| Pos::new(p.x - x0, p.y - y0);
+    let to_world = |p: Pos| Pos::new(p.x + x0, p.y + y0);
+    astar(sub, to_local(start), to_local(goal), |a, b| {
+        cost(to_world(a), to_world(b))
+    })
+    .map(|path| path.into_iter().map(to_world).collect())
 }
 
 fn backbone_anchor(ctx: &GenCtx, d: DistrictId) -> Option<Pos> {
@@ -252,7 +283,7 @@ impl CyberspaceStage {
         let size = ctx.size();
         let path = {
             let city = &ctx.city;
-            astar(size, start, goal, |_, q| {
+            bounded_astar(size, start, goal, LANE_MARGIN, |_, q| {
                 let t = city.tile(K, q)?;
                 if q == start || q == goal {
                     return Some(1);
@@ -598,5 +629,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn lane_search_is_bounded_to_the_endpoints_box() {
+        use crate::geom::Size;
+        let size = Size { w: 200, h: 60 };
+        // A wall across x = 50 whose only opening, y = 58, lies far outside the margin.
+        let walled = |_: Pos, q: Pos| {
+            if q.x == 50 && q.y != 58 {
+                None
+            } else {
+                Some(1u32)
+            }
+        };
+        let (a, b) = (Pos::new(40, 10), Pos::new(60, 10));
+        assert!(
+            crate::pathing::astar(size, a, b, walled).is_some(),
+            "unbounded search finds the detour"
+        );
+        assert!(
+            super::bounded_astar(size, a, b, 16, walled).is_none(),
+            "bounded search gives up"
+        );
+        let free = |_: Pos, _: Pos| Some(1u32);
+        let path = super::bounded_astar(size, a, b, 16, free).unwrap();
+        assert_eq!((path[0], *path.last().unwrap()), (a, b));
     }
 }

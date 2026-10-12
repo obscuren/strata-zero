@@ -10,6 +10,7 @@ The generator builds a city as walkable tile maps on four strata:
 
 | Stratum | What lives there |
 |---|---|
+| Net | cyberspace: a dotted grid, a construct on every building, district hubs, link lanes, ICE at the gates |
 | Heights | rooftops of the tall towers, helipads, bridges between them |
 | Skyways | elevated walkways, mid-rise lobbies, platforms over intersections |
 | Street | districts, arterials, blocks, buildings, markets, neon |
@@ -19,8 +20,12 @@ Every building you see at street level is the same building you stand on at
 Heights. Districts have themes (corp core, night market, megablocks, combat
 zone, docks, industrial, neon strip, old town) that drive street layout,
 building mix, palette and signage. A Net graph of subnets, nodes and links is
-anchored to the physical tiles and can be shown as a digital overlay. That
-graph is the seed of the cyberspace side of the game.
+anchored to the physical tiles and can be shown as a digital overlay.
+
+The same graph is cyberspace. Jack in at any street terminal (walk up to it and
+press `enter`): your body stays at the port and you emerge in the Net at the
+same spot, in a wireframe world laid out one to one with the city. `enter`
+again jacks out. In Explore mode `]` past Heights shows the Net.
 
 Same seed and parameters always produce a byte-identical city.
 
@@ -54,18 +59,19 @@ on `RANDOM SEED` / `GENERATE` · `esc` back
 **Generating** `space` pause · `+` `-` steps per frame · `enter` skip to the
 end · `r` reseed after an error · `esc` back
 
-**Explore** `hjkl` / arrows pan (shift: fast) · `[` `]` stratum down / up ·
+**Explore** `hjkl` / arrows pan the cursor (shift: fast) · `[` `]` stratum down / up (Net on top) ·
 `w` walk · `i` inspector · `m` minimap · `e` legend · `d` digital overlay ·
 `s` save · `r` regenerate · `g` configure · `?` keys · `q` title
 
 **Walk** `hjkl` `yubn` / arrows move · `<` `>` take stairs, lift, ladder or
-manhole · `.` wait · `tab` back to the free camera · panels as above
+manhole · `enter` jack in at an adjacent terminal / jack out · `.` wait ·
+`tab` back to the free camera · panels as above
 
 ## Layout
 
 ```
 crates/citygen     world model + city generator (no terminal dependencies)
-crates/cyberpunk   the game: ratatui app, screens, renderer, and the `gen` CLI
+crates/cyberpunk   the game: ratatui app, screens, renderer, walking and jacking in, the `gen` CLI
 flavor/            names.ron (names, signage glyphs) · style.ron (palettes, glyph sets)
 docs/superpowers/specs   design specs
 docs/superpowers/plans   implementation plans
