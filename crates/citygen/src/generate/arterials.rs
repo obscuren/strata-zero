@@ -62,17 +62,24 @@ fn plan_edges(centers: &[Pos], extra: usize) -> Vec<(Pos, Pos)> {
 }
 
 impl ArterialsStage {
+    /// Routes one arterial. Existing arterial tiles are cheap so roads merge instead of
+    /// running in parallel; tiles beside an arterial are dear so new roads keep their
+    /// distance; water is crossable at bridge cost.
     fn route(&self, ctx: &GenCtx, a: Pos, b: Pos) -> Option<Vec<Pos>> {
         let land = &ctx.scratch.land;
         let arterial = &ctx.scratch.arterial;
-        astar(ctx.size(), a, b, |_, to| {
+        let size = ctx.size();
+        astar(size, a, b, |_, to| {
             if !land[to] {
-                Some(40)
-            } else if arterial[to] {
-                Some(10)
-            } else {
-                Some(11)
+                return Some(40);
             }
+            if arterial[to] {
+                return Some(2);
+            }
+            let near = Rect::new(to.x - 3, to.y - 3, 7, 7)
+                .iter()
+                .any(|q| size.contains(q) && arterial[q]);
+            Some(if near { 16 } else { 10 })
         })
     }
 

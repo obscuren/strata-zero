@@ -133,7 +133,60 @@ impl DistrictsStage {
             .collect()
     }
 
+    /// Assigns every land tile to its nearest seed on all physical strata.
+    fn assign_all(&self, ctx: &mut GenCtx) {
+        let size = ctx.size();
+        for y in 0..size.h as i32 {
+            for x in 0..size.w as i32 {
+                let p = Pos::new(x, y);
+                if !ctx.is_land(p) {
+                    continue;
+                }
+                let d = self.nearest_seed(p);
+                for k in StratumKind::PHYSICAL {
+                    if let Some(t) = ctx.city.tile_mut(k, p) {
+                        t.district = Some(d);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Merges districts too small to hold a block into their neighbours, keeping at least
+    /// the minimum district count. Returns true if anything changed.
+    fn merge_slivers(&mut self, ctx: &mut GenCtx) -> bool {
+        let land = ctx.scratch.land.count(|&l| l);
+        let mut merged = false;
+        loop {
+            let n = self.seeds.len();
+            if n <= 4 {
+                break;
+            }
+            let min_tiles = (600usize).max(land / (3 * n));
+            let st = ctx.city.stratum(StratumKind::Street).expect("street");
+            let mut counts = vec![0usize; n];
+            for (_, t) in st.tiles.iter() {
+                if let Some(d) = t.district {
+                    counts[d.index()] += 1;
+                }
+            }
+            let Some((smallest, _)) = counts
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| **c < min_tiles)
+                .min_by_key(|(_, c)| **c)
+            else {
+                break;
+            };
+            self.seeds.remove(smallest);
+            self.assign_all(ctx);
+            merged = true;
+        }
+        merged
+    }
+
     fn finalize(&mut self, ctx: &mut GenCtx) {
+        self.merge_slivers(ctx);
         let n = self.seeds.len();
         let size = ctx.size();
         let noise = self.noise.as_ref().expect("begin sets noise");
@@ -274,7 +327,13 @@ mod tests {
     #[test]
     fn every_land_tile_has_a_district_and_counts_match() {
         let c = small(5, WaterMode::Bay, 6);
-        assert_eq!(c.districts.len(), 6);
+        // The requested count is a maximum: slivers merge into neighbours.
+        assert!(
+            (4..=6).contains(&c.districts.len()),
+            "{}",
+            c.districts.len()
+        );
+        let n = c.districts.len();
         let st = c.stratum(StratumKind::Street).unwrap();
         for (_, t) in st.tiles.iter() {
             if t.terrain != Terrain::Water {
@@ -285,7 +344,7 @@ mod tests {
         }
         let mut ids: Vec<_> = c.districts.iter().map(|d| d.id).collect();
         ids.dedup();
-        assert_eq!(ids.len(), 6);
+        assert_eq!(ids.len(), n);
         for (i, d) in c.districts.iter().enumerate() {
             assert_eq!(d.id.index(), i);
             assert!(d.bounds.contains(d.center));

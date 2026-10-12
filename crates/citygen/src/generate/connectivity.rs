@@ -188,6 +188,12 @@ fn repair_stratum(city: &mut City, k: StratumKind, reach: &Grid<bool>) {
                 }
             }
             None => {
+                if drop_in_connector(city, k, &comp) {
+                    for p in &comp {
+                        reached.set(*p, true);
+                    }
+                    continue;
+                }
                 let in_building = comp
                     .iter()
                     .any(|p| city.tile(k, *p).is_some_and(|t| t.building.is_some()));
@@ -202,6 +208,49 @@ fn repair_stratum(city: &mut City, k: StratumKind, reach: &Grid<bool>) {
             }
         }
     }
+}
+
+/// Gives an isolated component its own public connector from the street directly below
+/// (or, for rooftops, a ladder from a walkway directly below). Returns true on success.
+fn drop_in_connector(city: &mut City, k: StratumKind, comp: &[Pos]) -> bool {
+    let street_ok = |city: &City, p: Pos| {
+        city.tile(StratumKind::Street, p).is_some_and(|t| {
+            t.feature.is_none()
+                && matches!(
+                    t.terrain,
+                    Terrain::Sidewalk | Terrain::Alley | Terrain::Plaza | Terrain::Road
+                )
+        }) && city.connectors_at(p).next().is_none()
+    };
+    let spot = comp.iter().copied().find(|p| {
+        city.tile(k, *p)
+            .is_some_and(|t| t.feature.is_none() && !t.is_connector())
+            && match k {
+                StratumKind::Heights => {
+                    city.walkable(StratumKind::Skyways, *p)
+                        && city.connectors_at(*p).next().is_none()
+                }
+                _ => street_ok(city, *p),
+            }
+    });
+    let Some(pos) = spot else { return false };
+    let (kind, serves) = match k {
+        StratumKind::Undercity => (
+            ConnectorKind::Manhole,
+            vec![StratumKind::Undercity, StratumKind::Street],
+        ),
+        StratumKind::Skyways => (
+            ConnectorKind::Stair,
+            vec![StratumKind::Street, StratumKind::Skyways],
+        ),
+        StratumKind::Heights => (
+            ConnectorKind::Ladder,
+            vec![StratumKind::Skyways, StratumKind::Heights],
+        ),
+        _ => return false,
+    };
+    ConnectivityStage::add_connector(city, kind, pos, serves);
+    true
 }
 
 impl ConnectivityStage {

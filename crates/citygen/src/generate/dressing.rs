@@ -1,11 +1,12 @@
 //! Stage 9: features, light maps and per-tile variants.
 
 use super::{GenCtx, Stage, StageRunner, StepOut};
+use crate::generate::connectivity::reachable_from_street;
 use crate::geom::{Pos, Rect};
 use crate::params::GenError;
 use crate::pathing::components;
 use crate::rng::{chance, tile_hash};
-use crate::tile::{Feature, Terrain};
+use crate::tile::{Feature, Terrain, Tile};
 use crate::world::{StratumKind, Theme};
 use rand::seq::IndexedRandom;
 use rand_chacha::ChaCha8Rng;
@@ -14,6 +15,7 @@ use std::collections::VecDeque;
 enum Work {
     Facade(usize),
     Streets(usize),
+    Verify,
     Lights(StratumKind),
     Variants(StratumKind),
 }
@@ -238,6 +240,39 @@ impl DressingStage {
         }
     }
 
+    /// Blocking features must never cut tiles off from the street: any blocker beside an
+    /// unreached walkable tile is removed, repeatedly, until nothing is cut off.
+    fn verify(ctx: &mut GenCtx) {
+        for _ in 0..6 {
+            let reach = reachable_from_street(&ctx.city);
+            let mut to_clear: Vec<(StratumKind, Pos)> = Vec::new();
+            for k in StratumKind::PHYSICAL {
+                let st = ctx.city.stratum(k).expect("stratum");
+                for (p, t) in st.tiles.iter() {
+                    if !t.is_walkable() || reach[k.index()][p] {
+                        continue;
+                    }
+                    for n in p.neighbors4() {
+                        let blocker = st.tiles.get(n).is_some_and(|u| {
+                            u.feature.is_some()
+                                && !u.is_walkable()
+                                && Tile::new(u.terrain).is_walkable()
+                        });
+                        if blocker {
+                            to_clear.push((k, n));
+                        }
+                    }
+                }
+            }
+            if to_clear.is_empty() {
+                return;
+            }
+            for (k, p) in to_clear {
+                ctx.set_feature(k, p, None);
+            }
+        }
+    }
+
     fn lights(ctx: &mut GenCtx, k: StratumKind) {
         let size = ctx.size();
         let base = base_light(k);
@@ -286,6 +321,7 @@ impl StageRunner for DressingStage {
             .extend((0..ctx.city.buildings.len()).map(Work::Facade));
         self.queue
             .extend((0..ctx.city.districts.len()).map(Work::Streets));
+        self.queue.push_back(Work::Verify);
         self.queue
             .extend(StratumKind::PHYSICAL.into_iter().map(Work::Lights));
         self.queue
@@ -301,6 +337,7 @@ impl StageRunner for DressingStage {
         match work {
             Work::Facade(i) => self.facade(ctx, i),
             Work::Streets(d) => self.streets(ctx, d),
+            Work::Verify => Self::verify(ctx),
             Work::Lights(k) => Self::lights(ctx, k),
             Work::Variants(k) => Self::variants(ctx, k),
         }

@@ -368,6 +368,36 @@ impl Carver<'_> {
         None
     }
 
+    /// Greedy largest clean rectangle in the district bounds (at least 5x4), for districts
+    /// whose street style produced no usable block.
+    fn largest_clean_rect(&self) -> Option<Rect> {
+        let b = self.bounds;
+        let mut best: Option<Rect> = None;
+        for start in b.iter() {
+            if self.is_bad(start) {
+                continue;
+            }
+            let mut w = 0;
+            while start.x + w < b.right() && w < 40 && !self.is_bad(Pos::new(start.x + w, start.y))
+            {
+                w += 1;
+            }
+            let mut h = 1;
+            while start.y + h < b.bottom() && h < 24 {
+                let row_clean = (0..w).all(|dx| !self.is_bad(Pos::new(start.x + dx, start.y + h)));
+                if !row_clean {
+                    break;
+                }
+                h += 1;
+            }
+            let r = Rect::new(start.x, start.y, w, h);
+            if r.w >= 5 && r.h >= 4 && best.is_none_or(|o| r.area() > o.area()) {
+                best = Some(r);
+            }
+        }
+        best
+    }
+
     /// Turns one candidate into clean blocks: trims dead edges, and when the rest is still
     /// dirty, splits it along the longer axis (painting an alley on the cut) and recurses.
     fn fit_blocks(&mut self, r: Rect, depth: u8, out: &mut Vec<Rect>) {
@@ -458,6 +488,14 @@ impl StreetsStage {
                     district: district.id,
                 });
             }
+        }
+        if blocks.is_empty()
+            && let Some(rect) = carver.largest_clean_rect()
+        {
+            blocks.push(Block {
+                rect,
+                district: district.id,
+            });
         }
         // Every block gets a walkable ring so each perimeter lot can open a door.
         for b in &blocks {
