@@ -11,6 +11,7 @@ mod save;
 mod screens;
 mod term;
 mod ui;
+mod walker;
 
 fn main() -> anyhow::Result<()> {
     cli::run()

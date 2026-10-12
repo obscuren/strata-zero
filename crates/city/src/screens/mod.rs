@@ -4,6 +4,9 @@ use crate::app::{AppState, Screen, ScreenCmd};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
 
+pub mod configure;
+pub mod generating;
+
 /// Draws nothing; stands in until the title screen lands.
 pub struct Blank;
 
@@ -24,6 +27,11 @@ impl Screen for Blank {
 /// The screen the app starts on.
 pub fn initial() -> impl Screen {
     Blank
+}
+
+/// The screen shown once a city exists (explore mode). Wired to the map screen later.
+pub fn explore_screen(_tick: u64) -> Box<dyn Screen> {
+    Box::new(Blank)
 }
 
 #[cfg(test)]

@@ -19,6 +19,7 @@ pub const FRAME: Duration = Duration::from_micros(33_333);
 pub struct AppState {
     pub params: GenParams,
     pub city: Option<City>,
+    pub player: Option<crate::walker::Player>,
     pub style: StylePack,
     pub tick: u64,
     status: Option<(String, u64)>,
@@ -35,6 +36,7 @@ impl AppState {
         AppState {
             params: GenParams::default(),
             city: None,
+            player: None,
             style: StylePack::load().expect("embedded style pack is valid"),
             tick: 0,
             status: None,
