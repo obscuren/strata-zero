@@ -189,11 +189,40 @@ impl Dir {
     }
 }
 
-/// Dense row-major grid of `T`.
+/// Dense row-major grid of `T`. Deserialization rejects data that does not match `size`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "RawGrid<T>")]
+#[serde(bound(deserialize = "T: Deserialize<'de>"))]
 pub struct Grid<T> {
     size: Size,
     data: Vec<T>,
+}
+
+/// The on-disk shape of a grid, before the size/data consistency check.
+#[derive(Deserialize)]
+struct RawGrid<T> {
+    size: Size,
+    data: Vec<T>,
+}
+
+impl<T> TryFrom<RawGrid<T>> for Grid<T> {
+    type Error = String;
+
+    fn try_from(raw: RawGrid<T>) -> Result<Self, Self::Error> {
+        if raw.data.len() != raw.size.area() {
+            return Err(format!(
+                "grid of {}x{} needs {} cells, found {}",
+                raw.size.w,
+                raw.size.h,
+                raw.size.area(),
+                raw.data.len()
+            ));
+        }
+        Ok(Grid {
+            size: raw.size,
+            data: raw.data,
+        })
+    }
 }
 
 impl<T: Clone> Grid<T> {
@@ -306,6 +335,24 @@ mod tests {
         assert_eq!(g.iter().count(), 12);
         g.fill_rect(Rect::new(0, 0, 2, 2), 9);
         assert_eq!(g.count(|&v| v == 9), 4);
+    }
+
+    #[test]
+    fn grid_rejects_inconsistent_serialized_data() {
+        #[derive(serde::Serialize)]
+        struct Fake {
+            size: Size,
+            data: Vec<u8>,
+        }
+        let bad = ron::to_string(&Fake {
+            size: Size { w: 4, h: 3 },
+            data: vec![0; 5],
+        })
+        .unwrap();
+        assert!(ron::from_str::<Grid<u8>>(&bad).is_err());
+        let good = ron::to_string(&Grid::filled(Size { w: 4, h: 3 }, 7u8)).unwrap();
+        let g: Grid<u8> = ron::from_str(&good).unwrap();
+        assert_eq!(g.count(|&v| v == 7), 12);
     }
 
     #[test]

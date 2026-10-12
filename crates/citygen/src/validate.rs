@@ -152,6 +152,14 @@ impl City {
             }
         }
 
+        for link in &self.net.links {
+            for id in [link.0, link.1] {
+                if id.index() >= self.net.nodes.len() {
+                    out.push(Violation::NetAnchor(id));
+                }
+            }
+        }
+
         for d in &self.districts {
             let has_building = self.buildings.iter().any(|b| b.district == d.id);
             let has_public = self.connectors.iter().any(|c| {

@@ -6,6 +6,9 @@ use anyhow::Result;
 use citygen::{City, GenParams};
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
 use ratatui::Frame;
+use ratatui::Terminal;
+use ratatui::backend::Backend;
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::Paragraph;
@@ -90,11 +93,78 @@ pub fn draw_too_small(f: &mut Frame) {
     );
 }
 
-/// The fixed-rate loop: poll input, tick, update, draw.
-pub fn run(mut screen: Box<dyn Screen>, mut st: AppState) -> Result<()> {
+/// One screen plus the state the loop threads through frames.
+pub struct Runner {
+    screen: Box<dyn Screen>,
+    pub st: AppState,
+    transition: Option<Transition>,
+    /// Our own copy of the last drawn frame; ratatui swaps buffers after every draw.
+    last_frame: Option<Buffer>,
+}
+
+impl Runner {
+    pub fn new(screen: Box<dyn Screen>, st: AppState) -> Self {
+        Runner {
+            screen,
+            st,
+            transition: None,
+            last_frame: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn transition(&self) -> Option<&Transition> {
+        self.transition.as_ref()
+    }
+
+    /// Runs one frame: tick, update with `keys`, draw. Returns false when the app quits.
+    pub fn frame<B: Backend>(&mut self, term: &mut Terminal<B>, keys: &[KeyEvent]) -> Result<bool> {
+        self.st.tick += 1;
+        if self
+            .transition
+            .as_ref()
+            .is_some_and(|t| t.active(self.st.tick))
+            && !keys.is_empty()
+        {
+            self.transition = None;
+        }
+        match self.screen.update(&mut self.st, keys) {
+            ScreenCmd::Stay => {}
+            ScreenCmd::Switch { to, fx } => {
+                let snapshot = self
+                    .last_frame
+                    .clone()
+                    .unwrap_or_else(|| Buffer::empty(term.get_frame().area()));
+                self.screen = to;
+                self.transition = Some(Transition::new(fx, snapshot, self.st.tick));
+            }
+            ScreenCmd::Quit => return Ok(false),
+        }
+        let st = &self.st;
+        let screen = &self.screen;
+        let transition = &self.transition;
+        let mut captured: Option<Buffer> = None;
+        term.draw(|f| {
+            if f.area().width < MIN_W || f.area().height < MIN_H {
+                draw_too_small(f);
+            } else {
+                screen.draw(st, f);
+                if let Some(t) = transition {
+                    t.apply(f, st.tick);
+                }
+            }
+            captured = Some(f.buffer_mut().clone());
+        })?;
+        self.last_frame = captured;
+        Ok(true)
+    }
+}
+
+/// The fixed-rate loop: poll input, run a frame, sleep the remainder.
+pub fn run(screen: Box<dyn Screen>, st: AppState) -> Result<()> {
     install_panic_hook();
     let (_guard, mut term) = TerminalGuard::enter()?;
-    let mut transition: Option<Transition> = None;
+    let mut runner = Runner::new(screen, st);
     loop {
         let start = Instant::now();
         let mut keys = Vec::new();
@@ -105,29 +175,9 @@ pub fn run(mut screen: Box<dyn Screen>, mut st: AppState) -> Result<()> {
                 keys.push(k);
             }
         }
-        st.tick += 1;
-        if transition.as_ref().is_some_and(|t| t.active(st.tick)) && !keys.is_empty() {
-            transition = None;
+        if !runner.frame(&mut term, &keys)? {
+            break;
         }
-        match screen.update(&mut st, &keys) {
-            ScreenCmd::Stay => {}
-            ScreenCmd::Switch { to, fx } => {
-                let snapshot = term.current_buffer_mut().clone();
-                screen = to;
-                transition = Some(Transition::new(fx, snapshot, st.tick));
-            }
-            ScreenCmd::Quit => break,
-        }
-        term.draw(|f| {
-            if f.area().width < MIN_W || f.area().height < MIN_H {
-                draw_too_small(f);
-                return;
-            }
-            screen.draw(&st, f);
-            if let Some(t) = &transition {
-                t.apply(f, st.tick);
-            }
-        })?;
         if let Some(rest) = FRAME.checked_sub(start.elapsed()) {
             std::thread::sleep(rest);
         }
@@ -162,6 +212,42 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(99, 29)).unwrap();
         t.draw(draw_too_small).unwrap();
         assert!(text(&t).contains("100"));
+    }
+
+    struct Says(&'static str, bool);
+
+    impl Screen for Says {
+        fn update(&mut self, _st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+            if self.1 && !keys.is_empty() {
+                return ScreenCmd::Switch {
+                    to: Box::new(Says("WORLD", false)),
+                    fx: TransitionKind::SlideUp,
+                };
+            }
+            ScreenCmd::Stay
+        }
+        fn draw(&self, _st: &AppState, f: &mut Frame) {
+            f.render_widget(ratatui::widgets::Paragraph::new(self.0), f.area());
+        }
+    }
+
+    #[test]
+    fn switch_snapshots_the_previous_frame() {
+        let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let mut runner = Runner::new(Box::new(Says("HELLO", true)), AppState::new());
+        assert!(runner.frame(&mut t, &[]).unwrap());
+        assert!(text(&t).contains("HELLO"));
+        let key = KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        assert!(runner.frame(&mut t, &[key]).unwrap());
+        let tr = runner.transition().expect("a transition is running");
+        let snapshot: String = (0..5)
+            .map(|x| tr.from[(x, 0)].symbol().to_string())
+            .collect();
+        assert_eq!(snapshot, "HELLO");
+        assert!(text(&t).contains("WORLD") || text(&t).contains("HELLO"));
     }
 
     #[test]

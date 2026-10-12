@@ -81,9 +81,36 @@ fn split<'a>(bytes: &'a [u8], path: &Path) -> Result<(Header, &'a [u8])> {
 
 pub fn load_city(path: &Path) -> Result<City> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    let (_, body) = split(&bytes, path)?;
+    let (header, body) = split(&bytes, path)?;
     let city: City = postcard::from_bytes(body)
         .with_context(|| format!("{}: corrupt or truncated city data", path.display()))?;
+    if (header.w, header.h) != (city.size.w, city.size.h) {
+        bail!(
+            "{}: header says {}x{} but the city is {}x{}",
+            path.display(),
+            header.w,
+            header.h,
+            city.size.w,
+            city.size.h
+        );
+    }
+    let strata_ok = city.strata.len() == citygen::StratumKind::PHYSICAL.len()
+        && city
+            .strata
+            .iter()
+            .all(|s| s.tiles.size() == city.size && s.light.size() == city.size);
+    if !strata_ok {
+        bail!("{}: strata do not match the city size", path.display());
+    }
+    if let Err(violations) = city.validate() {
+        let first: Vec<String> = violations.iter().take(3).map(|v| v.to_string()).collect();
+        bail!(
+            "{}: city violates its invariants ({} problems, e.g. {})",
+            path.display(),
+            violations.len(),
+            first.join("; ")
+        );
+    }
     Ok(city)
 }
 
@@ -164,6 +191,42 @@ mod tests {
         assert_eq!(list[0].name, c.name);
         assert_eq!(list[0].size.w, 80);
         assert!(list_cities(&dir.join("missing")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn rejects_structurally_inconsistent_cities() {
+        let dir = tmp("inconsistent");
+        let p = dir.join("x.city");
+        // Header disagrees with the body.
+        let c = tiny();
+        save_city(&p, &c).unwrap();
+        let mut bytes = std::fs::read(&p).unwrap();
+        let header_len = u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]) as usize;
+        let mut header: Header = postcard::from_bytes(&bytes[10..10 + header_len]).unwrap();
+        header.w = 96;
+        let hb = postcard::to_allocvec(&header).unwrap();
+        let body = bytes.split_off(10 + header_len);
+        bytes.truncate(6);
+        bytes.extend_from_slice(&(hb.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&hb);
+        bytes.extend_from_slice(&body);
+        std::fs::write(&p, &bytes).unwrap();
+        let err = load_city(&p).unwrap_err().to_string();
+        assert!(err.contains("header"), "{err}");
+        // Body violates the city invariants (tiles reference districts that do not exist).
+        let mut broken = tiny();
+        broken.districts.clear();
+        save_city(&p, &broken).unwrap();
+        let err = load_city(&p).unwrap_err().to_string();
+        assert!(
+            err.contains("invariant") || err.contains("missing"),
+            "{err}"
+        );
+        // A grid whose data length disagrees with its size never gets past deserialization.
+        let mut odd = tiny();
+        odd.strata.pop();
+        save_city(&p, &odd).unwrap();
+        assert!(load_city(&p).is_err());
     }
 
     #[test]

@@ -164,8 +164,10 @@ impl MapScreen {
             KeyCode::Char('?') => self.help = !self.help,
             KeyCode::Char('s') => {
                 let name = st.city.as_ref().map(|c| c.name.clone())?;
+                // The save prompt hands this very screen back, state intact.
+                let live = std::mem::replace(self, MapScreen::explore(st.tick));
                 return Some(ScreenCmd::Switch {
-                    to: Box::new(Files::save(st.tick, &name)),
+                    to: Box::new(Files::save(st.tick, &name, Some(Box::new(live)))),
                     fx: TransitionKind::None,
                 });
             }
@@ -510,12 +512,24 @@ mod tests {
         assert!(buffer_text(t.backend().buffer()).contains("move"));
         s.update(&mut st, &[key(KeyCode::Esc)]);
         assert!(!s.help);
+        // Saving while walking must bring the walk back, not a fresh explore screen.
+        s.stratum = StratumKind::Undercity;
+        let ScreenCmd::Switch { to: mut files, .. } = s.update(&mut st, &[key(KeyCode::Char('s'))])
+        else {
+            panic!("s should open the save screen");
+        };
+        let ScreenCmd::Switch { to: back, .. } = files.update(&mut st, &[key(KeyCode::Esc)]) else {
+            panic!("esc should return to the map");
+        };
+        st.tick += 500; // let transient statuses expire so the mode hints show
+        t.draw(|f| back.draw(&st, f)).unwrap();
+        let text = buffer_text(t.backend().buffer());
+        assert!(
+            text.contains("tab camera") && text.contains("Undercity"),
+            "{text}"
+        );
         s.update(&mut st, &[key(KeyCode::Tab)]);
         assert_eq!(s.mode, Mode::Explore);
-        assert!(matches!(
-            s.update(&mut st, &[key(KeyCode::Char('s'))]),
-            ScreenCmd::Switch { .. }
-        ));
         assert!(matches!(
             s.update(&mut st, &[key(KeyCode::Char('q'))]),
             ScreenCmd::Switch { .. }
