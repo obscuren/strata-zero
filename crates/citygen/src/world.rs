@@ -25,6 +25,15 @@ impl StratumKind {
         StratumKind::Heights,
     ];
 
+    /// Every stratum a finished city has, bottom first, Net last.
+    pub const ALL: [StratumKind; 5] = [
+        StratumKind::Undercity,
+        StratumKind::Street,
+        StratumKind::Skyways,
+        StratumKind::Heights,
+        StratumKind::Net,
+    ];
+
     pub fn label(self) -> &'static str {
         match self {
             StratumKind::Undercity => "Undercity",

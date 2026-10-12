@@ -2,9 +2,10 @@
 
 use crate::anim::effects::{flicker, pulse};
 use crate::render::lighting::lit;
+use crate::render::overlay::SIGNAL;
 use crate::render::style::StylePack;
 use crate::render::{Cell, ConnDir, RenderCtx, Rgb, Visibility};
-use citygen::{BuildingKind, ConnectorKind, Feature, StratumKind, Terrain, Tile};
+use citygen::{BuildingKind, ConnectorKind, Feature, NodeKind, StratumKind, Terrain, Tile};
 
 const LIGHT: [char; 16] = [
     '─', '│', '─', '└', '│', '│', '┌', '├', '─', '┘', '─', '┴', '┐', '┤', '┬', '┼',
@@ -21,13 +22,31 @@ pub const MASK_E: u8 = 2;
 pub const MASK_S: u8 = 4;
 pub const MASK_W: u8 = 8;
 
-/// Whether two adjacent terrains draw as one continuous structure (walls, walkways).
+/// Whether two adjacent terrains draw as one continuous structure (walls, walkways, lanes).
 pub fn connects(a: Terrain, b: Terrain) -> bool {
     use Terrain::*;
     let wallish = |t| matches!(t, Wall | Door | Window);
     let spanish = |t| matches!(t, Walkway | Bridge);
+    let netwall = |t| matches!(t, NetWall | NetGate);
+    let lane = |t| matches!(t, NetLane | NetGate);
     (wallish(a) && wallish(b))
         || (spanish(a) && (spanish(b) || matches!(b, Door | Floor | Stair | Lift | Ladder)))
+        || (netwall(a) && netwall(b))
+        || (lane(a) && lane(b))
+}
+
+/// Glyph for a Net node kind from the style's `net` set.
+pub fn node_glyph(kind: NodeKind, style: &StylePack) -> char {
+    let g = &style.glyphs.net;
+    let i = match kind {
+        NodeKind::Terminal => 0,
+        NodeKind::Server => 1,
+        NodeKind::Backbone => 2,
+        NodeKind::DataVault => 3,
+        NodeKind::Ice => 5,
+        _ => 4,
+    };
+    g[i % g.len()]
 }
 
 fn wall_set(kind: Option<BuildingKind>) -> &'static [char; 16] {
@@ -86,6 +105,7 @@ pub fn glyph_for(
             Feature::Helipad => 'H',
             Feature::Pipe => '╌',
             Feature::Cable => '╌',
+            Feature::Node(k) => node_glyph(k, style),
         };
     }
     let horizontal = mask & (MASK_E | MASK_W) != 0;
@@ -172,6 +192,24 @@ pub fn glyph_for(
             _ => '╫',
         },
         Terrain::Grate => '▦',
+        Terrain::NetGrid => {
+            if variant & 1 == 1 {
+                '·'
+            } else {
+                ' '
+            }
+        }
+        Terrain::NetLane => DOUBLE[(mask & 15) as usize],
+        Terrain::NetWall => {
+            let set = if kind.is_some_and(|k| k.is_corp()) {
+                &DOUBLE
+            } else {
+                &HEAVY
+            };
+            set[(mask & 15) as usize]
+        }
+        Terrain::NetFloor => ' ',
+        Terrain::NetGate => '▯',
     }
 }
 
@@ -220,18 +258,26 @@ pub fn legend_entries(k: StratumKind) -> Vec<(char, &'static str)> {
             ('▩', "ac unit"),
         ],
         StratumKind::Net => vec![
-            ('◇', "node"),
+            ('·', "grid"),
+            ('═', "lane"),
+            ('┃', "construct wall"),
+            ('▯', "gate"),
+            ('◇', "terminal / port"),
             ('◆', "server"),
             ('⬡', "backbone"),
+            ('⌗', "data vault"),
             ('◈', "ice"),
+            ('▪', "sensor"),
         ],
     };
-    out.extend(common);
+    if k != StratumKind::Net {
+        out.extend(common);
+    }
     out
 }
 
 /// Base colours for a terrain within a theme: (fg, bg).
-fn terrain_colors(terrain: Terrain, ctx: &RenderCtx) -> (Rgb, Rgb) {
+fn terrain_colors(terrain: Terrain, tile: &Tile, ctx: &RenderCtx, tick: u64) -> (Rgb, Rgb) {
     let ts = ctx.style.theme_or_neutral(ctx.theme);
     let bg0 = ctx.style.background;
     match terrain {
@@ -253,6 +299,14 @@ fn terrain_colors(terrain: Terrain, ctx: &RenderCtx) -> (Rgb, Rgb) {
         Terrain::Rail => (Rgb(140, 125, 95), Rgb(13, 16, 14)),
         Terrain::Stair | Terrain::Lift | Terrain::Ladder => (ts.accent2, ts.floor),
         Terrain::Grate => (Rgb(100, 112, 100), Rgb(13, 16, 14)),
+        Terrain::NetGrid => (ts.accent.mix(SIGNAL, 0.5).scale(0.45), Rgb(3, 6, 10)),
+        Terrain::NetLane => (
+            SIGNAL.scale(0.6 + 0.4 * pulse(tick + tile.variant as u64, 20)),
+            Rgb(3, 6, 10),
+        ),
+        Terrain::NetWall => (SIGNAL, Rgb(3, 6, 10)),
+        Terrain::NetFloor => (Rgb(10, 40, 44), Rgb(6, 18, 22)),
+        Terrain::NetGate => (Rgb(200, 255, 245), Rgb(6, 18, 22)),
     }
 }
 
@@ -281,6 +335,9 @@ fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
         Feature::Helipad => Rgb(230, 230, 130),
         Feature::Pipe => Rgb(125, 105, 85),
         Feature::Cable => Rgb(85, 85, 95),
+        Feature::Node(_) => {
+            Rgb(240, 255, 250).scale(0.7 + 0.3 * pulse(tick + tile.variant as u64, 30))
+        }
     }
 }
 
@@ -301,7 +358,7 @@ pub fn cell(tile: &Tile, ctx: &RenderCtx) -> Cell {
         ctx.wall_mask,
         ctx.style,
     );
-    let (mut fg, mut bg) = terrain_colors(tile.terrain, ctx);
+    let (mut fg, mut bg) = terrain_colors(tile.terrain, tile, ctx, tick);
     if let Some(f) = tile.feature {
         fg = feature_color(f, tile, ctx, tick);
     }
@@ -316,12 +373,15 @@ pub fn cell(tile: &Tile, ctx: &RenderCtx) -> Cell {
                 | Feature::Lamp
                 | Feature::Terminal
                 | Feature::Camera
+                | Feature::Node(_)
         )
     );
     let fg = if emits { fg } else { lit(fg, ctx.light) };
     let bg = lit(bg, ctx.light);
-    let bold =
-        tile.is_connector() || matches!(tile.feature, Some(Feature::Sign(_) | Feature::Neon(_)));
+    let jack = ctx.connector.is_some_and(|c| c.kind == ConnectorKind::Jack);
+    let bold = tile.is_connector()
+        || matches!(tile.feature, Some(Feature::Sign(_) | Feature::Neon(_)))
+        || (matches!(tile.feature, Some(Feature::Node(_))) && jack);
     Cell {
         ch,
         fg,
@@ -337,7 +397,9 @@ mod tests {
     use crate::render::lighting::apply_vis;
     use crate::render::style::StylePack;
     use crate::render::{RenderCtx, Visibility};
-    use citygen::{ALL_FEATURES, ALL_TERRAIN, Feature, Hue, StratumKind, Terrain, Theme, Tile};
+    use citygen::{
+        ALL_FEATURES, ALL_TERRAIN, Feature, Hue, NodeKind, StratumKind, Terrain, Theme, Tile,
+    };
     use unicode_width::UnicodeWidthChar;
 
     #[test]
@@ -422,5 +484,49 @@ mod tests {
         assert!(connects(Terrain::Wall, Terrain::Door));
         assert!(!connects(Terrain::Wall, Terrain::Floor));
         assert!(connects(Terrain::Walkway, Terrain::Bridge));
+    }
+
+    #[test]
+    fn net_tiles_render_in_the_signal_palette() {
+        let s = StylePack::load().unwrap();
+        let ctx = |stratum| RenderCtx {
+            style: &s,
+            theme: Some(Theme::CorpCore),
+            stratum,
+            light: 255,
+            tick: 0,
+            vis: Visibility::Visible,
+            connector: None,
+            kind: None,
+            wall_mask: MASK_E | MASK_W,
+        };
+        let wall = cell(&Tile::new(Terrain::NetWall), &ctx(StratumKind::Net));
+        assert_eq!(wall.ch, '━');
+        assert!(wall.fg.2 > wall.fg.0, "wall is cyan-ish: {:?}", wall.fg);
+        let lane = cell(&Tile::new(Terrain::NetLane), &ctx(StratumKind::Net));
+        assert_eq!(lane.ch, '═');
+        let mut grid = Tile::new(Terrain::NetGrid);
+        grid.variant = 1;
+        assert_eq!(cell(&grid, &ctx(StratumKind::Net)).ch, '·');
+        grid.variant = 2;
+        assert_eq!(cell(&grid, &ctx(StratumKind::Net)).ch, ' ');
+        assert_eq!(
+            cell(&Tile::new(Terrain::NetGate), &ctx(StratumKind::Net)).ch,
+            '▯'
+        );
+        let mut node = Tile::new(Terrain::NetGrid);
+        node.feature = Some(Feature::Node(NodeKind::Server));
+        assert_eq!(
+            cell(&node, &ctx(StratumKind::Net)).ch,
+            node_glyph(NodeKind::Server, &s)
+        );
+        assert_eq!(node_glyph(NodeKind::Server, &s), '◆');
+        assert_eq!(node_glyph(NodeKind::Ice, &s), '◈');
+        assert!(connects(Terrain::NetWall, Terrain::NetGate));
+        assert!(connects(Terrain::NetLane, Terrain::NetGate));
+        assert!(!connects(Terrain::NetLane, Terrain::NetWall));
+        let legend = legend_entries(StratumKind::Net);
+        assert!(legend.iter().any(|(_, l)| *l == "construct wall"));
+        assert!(!legend.iter().any(|(_, l)| *l == "stairs"));
     }
 }

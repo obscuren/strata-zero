@@ -1,6 +1,7 @@
 //! Tiles: terrain, features and derived walkability.
 
 use crate::ids::{BuildingId, DistrictId};
+use crate::net::NodeKind;
 use serde::{Deserialize, Serialize};
 
 /// Base terrain of a tile. Every tile has exactly one.
@@ -26,9 +27,14 @@ pub enum Terrain {
     Lift,
     Ladder,
     Grate,
+    NetGrid,
+    NetLane,
+    NetWall,
+    NetFloor,
+    NetGate,
 }
 
-pub const ALL_TERRAIN: [Terrain; 20] = [
+pub const ALL_TERRAIN: [Terrain; 25] = [
     Terrain::Void,
     Terrain::Water,
     Terrain::Sewage,
@@ -49,7 +55,52 @@ pub const ALL_TERRAIN: [Terrain; 20] = [
     Terrain::Lift,
     Terrain::Ladder,
     Terrain::Grate,
+    Terrain::NetGrid,
+    Terrain::NetLane,
+    Terrain::NetWall,
+    Terrain::NetFloor,
+    Terrain::NetGate,
 ];
+
+impl Terrain {
+    /// Human label for the inspector and legend.
+    pub fn label(self) -> &'static str {
+        use Terrain::*;
+        match self {
+            Void => "void",
+            Water => "water",
+            Sewage => "sewage",
+            Road => "road",
+            Sidewalk => "sidewalk",
+            Alley => "alley",
+            Plaza => "plaza",
+            Floor => "floor",
+            Wall => "wall",
+            Door => "door",
+            Window => "window",
+            Rooftop => "rooftop",
+            Walkway => "walkway",
+            Bridge => "bridge",
+            Tunnel => "tunnel",
+            Rail => "rail",
+            Stair => "stair",
+            Lift => "lift",
+            Ladder => "ladder",
+            Grate => "grate",
+            NetGrid => "grid",
+            NetLane => "lane",
+            NetWall => "construct wall",
+            NetFloor => "construct floor",
+            NetGate => "gate",
+        }
+    }
+
+    /// Cyberspace-only terrain.
+    pub fn is_net(self) -> bool {
+        use Terrain::*;
+        matches!(self, NetGrid | NetLane | NetWall | NetFloor | NetGate)
+    }
+}
 
 /// Named neon colours; the renderer maps them to RGB.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -83,9 +134,11 @@ pub enum Feature {
     Helipad,
     Pipe,
     Cable,
+    /// A Net node standing on this cyberspace tile.
+    Node(NodeKind),
 }
 
-pub const ALL_FEATURES: [Feature; 15] = [
+pub const ALL_FEATURES: [Feature; 16] = [
     Feature::Neon(Hue::Cyan),
     Feature::HoloAd,
     Feature::Lamp,
@@ -101,6 +154,7 @@ pub const ALL_FEATURES: [Feature; 15] = [
     Feature::Helipad,
     Feature::Pipe,
     Feature::Cable,
+    Feature::Node(NodeKind::Server),
 ];
 
 /// One cell of a stratum.
@@ -148,6 +202,10 @@ impl Tile {
                 | Lift
                 | Ladder
                 | Grate
+                | NetGrid
+                | NetLane
+                | NetFloor
+                | NetGate
         );
         let feature_ok = !matches!(
             self.feature,
@@ -163,7 +221,10 @@ impl Tile {
     }
 
     pub fn blocks_sight(&self) -> bool {
-        matches!(self.terrain, Terrain::Wall | Terrain::Door)
+        matches!(
+            self.terrain,
+            Terrain::Wall | Terrain::Door | Terrain::NetWall
+        )
     }
 
     /// Outdoor ground at street level: roads, sidewalks, alleys, plazas.
@@ -210,7 +271,31 @@ mod tests {
         assert!(!Tile::new(Terrain::Window).is_walkable());
         assert!(Tile::new(Terrain::Plaza).is_outdoor_ground());
         assert!(Tile::new(Terrain::Door).is_building_part());
-        assert_eq!(ALL_TERRAIN.len(), 20);
-        assert_eq!(ALL_FEATURES.len(), 15);
+        assert_eq!(ALL_TERRAIN.len(), 25);
+        assert_eq!(ALL_FEATURES.len(), 16);
+    }
+
+    #[test]
+    fn net_tiles_walk_and_block_like_the_spec_says() {
+        assert!(Tile::new(Terrain::NetGrid).is_walkable());
+        assert!(Tile::new(Terrain::NetLane).is_walkable());
+        assert!(Tile::new(Terrain::NetFloor).is_walkable());
+        assert!(Tile::new(Terrain::NetGate).is_walkable());
+        assert!(!Tile::new(Terrain::NetWall).is_walkable());
+        assert!(Tile::new(Terrain::NetWall).blocks_sight());
+        assert!(!Tile::new(Terrain::NetGate).blocks_sight());
+        let mut t = Tile::new(Terrain::NetGrid);
+        t.feature = Some(Feature::Node(crate::net::NodeKind::Ice));
+        assert!(t.is_walkable(), "nodes never block walking in this spec");
+        assert_eq!(Terrain::NetWall.label(), "construct wall");
+        assert_eq!(Terrain::Road.label(), "road");
+        assert!(Terrain::NetLane.is_net() && !Terrain::Road.is_net());
+        assert_eq!(ALL_TERRAIN.len(), 25);
+        assert_eq!(ALL_FEATURES.len(), 16);
+        assert_eq!(crate::world::StratumKind::ALL.len(), 5);
+        assert_eq!(
+            crate::world::StratumKind::ALL[4],
+            crate::world::StratumKind::Net
+        );
     }
 }
