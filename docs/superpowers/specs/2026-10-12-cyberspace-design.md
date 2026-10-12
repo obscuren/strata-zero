@@ -56,6 +56,10 @@ dumped. The Undercity, Skyways and Heights terminals do not get ports yet.
   on its physical stratum. Cost if wrong: one glyph constant.
 - **Version 1 saves are rejected** with a message that names the seed to
   regenerate from. Cost if wrong: the user regenerates a city in under a second.
+- **Jack key is Enter**, not `j`: `j` is "move south" in Walk mode. Cost if
+  wrong: one key binding.
+- **ICE is placed before other nodes** so it always takes the gate tile. Cost if
+  wrong: none visible; a door lock sits one tile over instead.
 
 ## 3. World model changes (`citygen`)
 
@@ -134,22 +138,28 @@ tile is the terminal itself (not walkable); it is used from an adjacent tile.
 
 `Stage::Cyberspace` runs after `Net`. Label "Compiling cyberspace"; short label
 "Cyber". `Stage::ALL` has 12 entries. The stage is resumable like the others;
-its work queue is `Begin`, one `Construct` per building, one `Hub` per district,
-`Nodes`, one `Lane` per inter-construct link, `Ports`.
+its work queue is `Begin`, one `Construct` per building, one `Gate` per
+building, one `Hub` per district, `Nodes`, one `Lane` per inter-construct link,
+`Ports`.
 
 1. **Begin.** Push `Stratum::new(Net, size)`. Every tile: `NetGrid`, `district`
    from the Street tile, `light` 200, `variant` with bit 0 set on the lattice
    positions `x % 4 == 0 && y % 2 == 0` and the other bits from `tile_hash`.
 2. **Construct** (per building `b`). Footprint border → `NetWall`, inset → `NetFloor`
    (a footprint too small to inset is all wall), `building = b.id`, light from
-   the building subnet's security. The **gate** is the border tile that is not a
-   corner and is nearest to the district backbone's anchor; it becomes `NetGate`
-   with light 255. The stage remembers `gate[b]`.
+   the building subnet's security.
+2b. **Gate** (per building, after every construct stands). Among border tiles
+   that are not corners and whose outward neighbour is still open `NetGrid`, the
+   one nearest to the district backbone's anchor becomes `NetGate` (light 255);
+   if none is open, the nearest non-corner border tile. The stage remembers
+   `gate[b]`.
 3. **Hub** (per district). Around the backbone anchor `c`, the border of
    `Rect(c.x-2, c.y-2, 5, 5)` becomes `NetWall` (light 255) where it is still
-   `NetGrid`, and its four edge midpoints become `NetGate`. If `c` lies inside a
+   `NetGrid`, never on a Street terminal tile and never 4-adjacent to a construct
+   gate, and its four edge midpoints become `NetGate`. If `c` lies inside a
    building footprint, no hub: the construct is the hub.
-4. **Nodes** (in id order). Target `t = anchor.1`, except ICE: `t = gate[building]`.
+4. **Nodes** (ICE first, then the rest in id order). Target `t = anchor.1`,
+   except ICE: `t = gate[building]`.
    If the Net tile at `t` already holds a `Feature::Node`, `t` becomes the nearest
    walkable Net tile without a node within Chebyshev distance 6, scanned in a
    fixed order. Then `node.cyber = t` and the tile's feature is `Node(kind)`. A
@@ -193,7 +203,7 @@ impl Player {
     /// or already jacked in.
     pub fn jack_in(&mut self, city: &City) -> Result<Pos, &'static str>;
     /// Returns to the body. Err if not jacked in.
-    pub fn jack_out(&mut self) -> Result<(), &'static str>;
+    pub fn jack_out(&mut self, city: &City) -> Result<(), &'static str>;
     pub fn jacked_in(&self) -> bool;
 }
 ```
@@ -205,11 +215,12 @@ blocks sight. Memory has five grids indexed by `StratumKind::index()`.
 
 ### Keys
 
-- **Walk** `j`: jack in at an adjacent terminal, or jack out. Status: "jacked in
-  at <building or district name>", "jacked out", "no terminal within reach".
-  Hints line while jacked in: `hjkl move · j jack out · tab camera · d net · ? keys`.
+- **Walk** `enter`: jack in at an adjacent terminal, or jack out. Status: "jacked
+  in at <building or district name>", "jacked out", "no terminal within reach".
+  Hints line while jacked in: `⚡ jacked in · hjkl move · enter jack out · tab
+  camera · d net · ? keys`.
 - **Explore** `[` `]` now range over all five strata; `]` from Heights shows the Net.
-- Help overlay (Walk) gains the `j` row. README documents the key and the stratum.
+- Help overlay (Walk) gains the `enter` row. README documents the key and the stratum.
 
 ### Explore cursor (the bounded fix)
 
@@ -267,7 +278,7 @@ show version 1 cities; `load_city` rejects version 1 with
   footprint border is `NetWall` or `NetGate` with exactly one gate on the border
   and its inset is `NetFloor`; grid tiles carry the Street district.
 - Every node's `cyber` tile holds `Feature::Node(kind)`; every ICE node stands on
-  its building's gate.
+  or beside its building's gate.
 - Every Street terminal tile with a node has a Jack serving `[Street, Net]`;
   every Jack has a walkable Street neighbour and a walkable Net tile.
 - At least one `NetLane` tile exists and the gate of every building reaches its
@@ -283,8 +294,8 @@ show version 1 cities; `load_city` rejects version 1 with
   `jack_out` restores stratum and position; `use_connector` on a Jack tile is `None`.
 - Explore `]` four times reaches the Net and the panel shows "Net"; the rendered
   Net stratum contains a lane or wall glyph.
-- Walk `j` beside a terminal jacks in (screen-level test), the hints mention
-  "jack out", and `j` again jacks out.
+- Walk `enter` beside a terminal jacks in (screen-level test), the hints mention
+  "jack out", and `enter` again jacks out.
 - The Explore cursor reaches `(0, 0)` and `(w-1, h-1)` while the camera origin
   never goes negative or past the map.
 - Save round trip at version 2; a version 1 file is listed but refused with a
