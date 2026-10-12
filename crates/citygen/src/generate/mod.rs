@@ -1,5 +1,6 @@
 //! The resumable generator: eleven chunked stages over a growing `City`.
 
+pub mod arterials;
 pub mod districts;
 pub mod terrain;
 
@@ -223,6 +224,7 @@ pub(crate) fn runner_for(stage: Stage) -> Box<dyn StageRunner> {
     match stage {
         Stage::Terrain => Box::new(terrain::TerrainStage::default()),
         Stage::Districts => Box::new(districts::DistrictsStage::default()),
+        Stage::Arterials => Box::new(arterials::ArterialsStage::default()),
         _ => Box::new(NoopStage),
     }
 }
