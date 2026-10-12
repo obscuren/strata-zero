@@ -42,9 +42,13 @@ pub fn inspector_lines(
         out.push(kv("terrain", "outside the map"));
         return out;
     };
-    out.push(kv("terrain", format!("{:?}", t.terrain).to_lowercase()));
-    if let Some(f) = t.feature {
-        out.push(kv("feature", format!("{f:?}").to_lowercase()));
+    out.push(kv("terrain", t.terrain.label()));
+    match t.feature {
+        Some(citygen::Feature::Node(k)) => {
+            out.push(kv("feature", format!("node · {}", k.label())));
+        }
+        Some(f) => out.push(kv("feature", format!("{f:?}").to_lowercase())),
+        None => {}
     }
     if let Some(d) = t.district.and_then(|d| city.district_opt(d)) {
         out.push(kv("district", d.name.clone()));
@@ -121,9 +125,9 @@ pub fn legend(stratum: StratumKind) -> Vec<Line<'static>> {
         .collect()
 }
 
-/// The four physical strata, top first, with the current one marked.
+/// Every stratum, top first (Net above Heights), with the current one marked.
 pub fn strata_selector(current: StratumKind, tick: u64) -> Vec<Line<'static>> {
-    StratumKind::PHYSICAL
+    StratumKind::ALL
         .iter()
         .rev()
         .map(|k| {

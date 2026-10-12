@@ -10,7 +10,7 @@ use ratatui::widgets::{Clear, Paragraph};
 
 const EXPLORE: &[(&str, &str)] = &[
     ("↑↓←→ hjkl", "pan the camera (shift: fast)"),
-    ("[ ]", "stratum down / up"),
+    ("[ ]", "stratum down / up (Net on top)"),
     ("w", "walk: drop the @ into the city"),
     ("i m e d", "inspector · minimap · legend · digital overlay"),
     ("s", "save city"),
@@ -23,6 +23,7 @@ const EXPLORE: &[(&str, &str)] = &[
 const WALK: &[(&str, &str)] = &[
     ("hjkl yubn ↑↓←→", "move"),
     ("< >", "take stairs, lift, ladder or manhole"),
+    ("enter", "jack in at an adjacent terminal / jack out"),
     (".", "wait a tick"),
     ("tab", "back to free camera"),
     ("i m e d", "inspector · minimap · legend · digital overlay"),

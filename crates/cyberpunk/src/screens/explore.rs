@@ -14,7 +14,7 @@ use crate::screens::title::Title;
 use crate::ui::panel::{boxed, inspector_lines, legend, status_bar, strata_selector};
 use crate::walker::Player;
 use citygen::rng::hash64;
-use citygen::{Dir, Pos, Rect as TileRect, StratumKind};
+use citygen::{City, Dir, Pos, Rect as TileRect, StratumKind};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -139,9 +139,14 @@ impl MapScreen {
         }
     }
 
-    fn change_stratum(&mut self, delta: i32) {
-        let i = self.stratum.index() as i32 + delta;
-        if let Some(k) = StratumKind::from_index(i.clamp(0, 3) as usize) {
+    fn change_stratum(&mut self, st: &AppState, delta: i32) {
+        let max = st
+            .city
+            .as_ref()
+            .map(|c| c.strata.len() as i32 - 1)
+            .unwrap_or(3);
+        let i = (self.stratum.index() as i32 + delta).clamp(0, max);
+        if let Some(k) = StratumKind::from_index(i as usize) {
             self.stratum = k;
         }
     }
@@ -214,8 +219,8 @@ impl MapScreen {
                     (self.cursor.y + dy * step).clamp(0, size.h as i32 - 1),
                 );
             }
-            KeyCode::Char('[') => self.change_stratum(-1),
-            KeyCode::Char(']') => self.change_stratum(1),
+            KeyCode::Char('[') => self.change_stratum(st, -1),
+            KeyCode::Char(']') => self.change_stratum(st, 1),
             KeyCode::Char('w') => self.enter_walk(st),
             KeyCode::Char('r') => {
                 let params = st.params.clone().with_seed(hash64(st.params.seed, st.tick));
@@ -249,6 +254,28 @@ impl MapScreen {
                 self.cursor = player.pos;
                 self.mode = Mode::Explore;
             }
+            KeyCode::Enter => {
+                if player.jacked_in() {
+                    match player.jack_out(city) {
+                        Ok(()) => {
+                            self.stratum = player.stratum;
+                            self.cam.snap(player.pos);
+                            st.set_status("jacked out", 60);
+                        }
+                        Err(e) => st.set_status(e, 60),
+                    }
+                } else {
+                    match player.jack_in(city) {
+                        Ok(port) => {
+                            self.stratum = StratumKind::Net;
+                            self.cam.snap(port);
+                            let where_ = port_name(city, port);
+                            st.set_status(format!("jacked in at {where_}"), 90);
+                        }
+                        Err(e) => st.set_status(e, 60),
+                    }
+                }
+            }
             KeyCode::Char('<') | KeyCode::Char('>') => {
                 let up = k.code == KeyCode::Char('>');
                 match player.use_connector(city, up) {
@@ -277,6 +304,20 @@ impl MapScreen {
         }
         Some(ScreenCmd::Stay)
     }
+}
+
+/// What a port is called in the status line: its building, else its district.
+fn port_name(city: &City, port: Pos) -> String {
+    let tile = city.tile(StratumKind::Street, port);
+    tile.and_then(|t| t.building)
+        .and_then(|b| city.building_opt(b))
+        .and_then(|b| b.name.clone())
+        .or_else(|| {
+            tile.and_then(|t| t.district)
+                .and_then(|d| city.district_opt(d))
+                .map(|d| d.name.clone())
+        })
+        .unwrap_or_else(|| "the Net".to_string())
 }
 
 impl Screen for MapScreen {
@@ -344,7 +385,7 @@ impl Screen for MapScreen {
         self.last_map.set(map);
         let origin = self.cam.origin(map.width, map.height);
         let cursor = self.focus_pos(st);
-        let focus = if self.digital {
+        let focus = if self.digital || self.stratum == StratumKind::Net {
             Digital::node_under(city, self.stratum, cursor)
         } else {
             None
@@ -380,15 +421,29 @@ impl Screen for MapScreen {
         }
         .render(map, f.buffer_mut());
 
-        if let Some(p) = &st.player
-            && p.stratum == self.stratum
-            && let Some((sx, sy)) = tile_to_screen(map, origin, p.pos)
-        {
-            f.buffer_mut()[(sx, sy)].set_char('@').set_style(
-                Style::default()
-                    .fg(Color::Rgb(255, 255, 255))
-                    .add_modifier(Modifier::BOLD),
-            );
+        if let Some(p) = &st.player {
+            if let Some((bk, bp)) = p.body
+                && bk == self.stratum
+                && let Some((sx, sy)) = tile_to_screen(map, origin, bp)
+            {
+                f.buffer_mut()[(sx, sy)].set_char('@').set_style(
+                    Style::default()
+                        .fg(Color::Rgb(110, 120, 130))
+                        .add_modifier(Modifier::DIM),
+                );
+            }
+            if p.stratum == self.stratum
+                && let Some((sx, sy)) = tile_to_screen(map, origin, p.pos)
+            {
+                let fg = if p.stratum == StratumKind::Net {
+                    Color::Rgb(0, 255, 200)
+                } else {
+                    Color::Rgb(255, 255, 255)
+                };
+                f.buffer_mut()[(sx, sy)]
+                    .set_char('@')
+                    .set_style(Style::default().fg(fg).add_modifier(Modifier::BOLD));
+            }
         }
 
         if self.show_minimap && map.width > MINIMAP_W + 4 && map.height > MINIMAP_H + 4 {
@@ -437,9 +492,15 @@ impl Screen for MapScreen {
             );
         }
 
-        let hints = match self.mode {
-            Mode::Explore => "hjkl pan · [] level · w walk · d net · e legend · s save · ? keys",
-            Mode::Walk => "hjkl move · <> stairs · tab camera · d net · ? keys",
+        let jacked = st.player.as_ref().is_some_and(|p| p.jacked_in());
+        let hints = match (self.mode, jacked) {
+            (Mode::Explore, _) => {
+                "hjkl pan · [] level · w walk · d net · e legend · s save · ? keys"
+            }
+            (Mode::Walk, true) => {
+                "⚡ jacked in · hjkl move · enter jack out · tab camera · d net · ? keys"
+            }
+            (Mode::Walk, false) => "hjkl move · <> stairs · enter jack in · tab camera · ? keys",
         };
         f.render_widget(
             Paragraph::new(status_bar(
@@ -607,5 +668,76 @@ mod tests {
         t.draw(|f| s.draw(&st, f)).unwrap();
         let text = buffer_text(t.backend().buffer());
         assert!(text.contains("119,59"), "{text}");
+    }
+
+    #[test]
+    fn enter_jacks_in_and_the_net_is_the_fifth_stratum() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        for _ in 0..4 {
+            s.update(&mut st, &[key(KeyCode::Char(']'))]);
+        }
+        assert_eq!(s.stratum, StratumKind::Net);
+        s.update(&mut st, &[key(KeyCode::Char(']'))]);
+        assert_eq!(s.stratum, StratumKind::Net);
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let text = buffer_text(t.backend().buffer());
+        assert!(text.contains("▌ Net"), "{text}");
+        assert!(
+            text.contains('═') || text.contains('┃') || text.contains('━'),
+            "{text}"
+        );
+
+        // Walk up to a public port and jack in.
+        s.update(&mut st, &[key(KeyCode::Char('['))]);
+        s.update(&mut st, &[key(KeyCode::Char('w'))]);
+        let city = st.city.as_ref().unwrap();
+        let jack = city
+            .connectors
+            .iter()
+            .find(|k| k.kind == citygen::ConnectorKind::Jack && k.public)
+            .unwrap()
+            .pos;
+        let stand = jack
+            .neighbors8()
+            .find(|n| city.walkable(StratumKind::Street, *n))
+            .unwrap();
+        {
+            let p = st.player.as_mut().unwrap();
+            p.pos = stand;
+            p.stratum = StratumKind::Street;
+        }
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        let p = st.player.as_ref().unwrap();
+        assert!(p.jacked_in());
+        assert_eq!(s.stratum, StratumKind::Net);
+        assert_eq!(p.pos, jack);
+        st.tick += 500;
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let text = buffer_text(t.backend().buffer());
+        assert!(text.contains("jack out"), "{text}");
+        assert!(text.contains("jacked in"), "{text}");
+        // The body shows on the Street while the avatar is in the Net.
+        s.mode = Mode::Explore;
+        s.stratum = StratumKind::Street;
+        s.cursor = stand;
+        s.cam.snap(stand);
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let map = s.last_map.get();
+        let origin = s.cam.origin(map.width, map.height);
+        let (sx, sy) = tile_to_screen(map, origin, stand).unwrap();
+        assert_eq!(t.backend().buffer()[(sx, sy)].symbol(), "@");
+        s.mode = Mode::Walk;
+        s.stratum = StratumKind::Net;
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        let p = st.player.as_ref().unwrap();
+        assert!(!p.jacked_in());
+        assert_eq!((p.stratum, p.pos), (StratumKind::Street, stand));
+        assert_eq!(s.stratum, StratumKind::Street);
+        s.update(&mut st, &[key(KeyCode::Char('?'))]);
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        assert!(buffer_text(t.backend().buffer()).contains("jack in"));
     }
 }
