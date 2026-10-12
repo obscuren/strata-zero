@@ -377,10 +377,7 @@ mod tests {
         for b in &c.buildings {
             let p = b.footprint.center();
             if b.span.contains(StratumKind::Skyways) {
-                assert!(matches!(
-                    sk.tiles[p].terrain,
-                    Terrain::Floor | Terrain::Wall
-                ));
+                assert!(sk.tiles[p].is_building_part() || sk.tiles[p].is_connector());
             } else {
                 // Air above a low roof may carry an elevated walkway.
                 assert!(matches!(
@@ -389,7 +386,10 @@ mod tests {
                 ));
             }
             if b.span.contains(StratumKind::Heights) {
-                assert_eq!(hi.tiles[p].terrain, Terrain::Rooftop);
+                assert!(matches!(
+                    hi.tiles[p].terrain,
+                    Terrain::Rooftop | Terrain::Lift | Terrain::Stair
+                ));
             } else {
                 assert!(matches!(
                     hi.tiles[p].terrain,

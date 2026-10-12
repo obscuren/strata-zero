@@ -284,10 +284,21 @@ impl Carver<'_> {
         }
     }
 
+    /// A tile a block may not use: water, another district, anything already painted, or a
+    /// tile touching water, the map edge or another district (so a street ring always fits
+    /// around the block).
     fn is_bad(&self, p: Pos) -> bool {
-        !self.ctx.is_land(p)
+        if !self.ctx.is_land(p)
             || !self.ctx.in_district(p, self.d)
             || self.ctx.terrain(StratumKind::Street, p) != Terrain::Void
+        {
+            return true;
+        }
+        p.neighbors4().any(|q| {
+            !self.ctx.city.size.contains(q)
+                || !self.ctx.is_land(q)
+                || !self.ctx.in_district(q, self.d)
+        })
     }
 
     /// Drops edge rows/columns that are entirely unusable.
@@ -446,6 +457,12 @@ impl StreetsStage {
                     rect,
                     district: district.id,
                 });
+            }
+        }
+        // Every block gets a walkable ring so each perimeter lot can open a door.
+        for b in &blocks {
+            for p in b.rect.grow(1).border() {
+                paint_cell(carver.ctx, p, district.id, Terrain::Alley);
             }
         }
         carver.ctx.scratch.blocks.extend(blocks);

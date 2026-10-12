@@ -18,41 +18,55 @@ pub(crate) struct LotsStage {
     rng: Option<ChaCha8Rng>,
 }
 
-/// Splits a block into lots no smaller than `min` and no larger than twice that.
-fn bsp(rng: &mut ChaCha8Rng, rect: Rect, min: (i32, i32), out: &mut Vec<Rect>) {
-    let (min_w, min_h) = min;
-    let split_w = rect.w > 2 * min_w;
-    let split_h = rect.h > 2 * min_h;
-    if !split_w && !split_h {
-        out.push(rect);
+/// Splits a run `[lo, hi)` into pieces of length in `[min, 2*min)` with jittered cuts.
+fn split_run(rng: &mut ChaCha8Rng, lo: i32, hi: i32, min: i32, out: &mut Vec<(i32, i32)>) {
+    let len = hi - lo;
+    if len < 2 * min {
+        out.push((lo, hi));
         return;
     }
-    let vertical = if split_w && split_h {
-        rect.w as f32 / min_w as f32 >= rect.h as f32 / min_h as f32
-    } else {
-        split_w
-    };
     let jitter: f32 = rng.random_range(0.4..0.6);
-    if vertical {
-        let s =
-            (rect.x + (rect.w as f32 * jitter) as i32).clamp(rect.x + min_w, rect.right() - min_w);
-        bsp(rng, Rect::new(rect.x, rect.y, s - rect.x, rect.h), min, out);
-        bsp(
-            rng,
-            Rect::new(s, rect.y, rect.right() - s, rect.h),
-            min,
-            out,
-        );
+    let s = (lo + (len as f32 * jitter) as i32).clamp(lo + min, hi - min);
+    split_run(rng, lo, s, min, out);
+    split_run(rng, s, hi, min, out);
+}
+
+/// Splits a block into lots: at most two back-to-back rows (or columns), each cut into
+/// strips along the long axis, so every lot touches the block perimeter.
+fn bsp(rng: &mut ChaCha8Rng, rect: Rect, min: (i32, i32), out: &mut Vec<Rect>) {
+    let (min_w, min_h) = min;
+    if rect.w >= rect.h {
+        let mut rows = Vec::new();
+        if rect.h >= 2 * min_h {
+            let s = rect.y + rect.h / 2;
+            rows.push((rect.y, s));
+            rows.push((s, rect.bottom()));
+        } else {
+            rows.push((rect.y, rect.bottom()));
+        }
+        for (y0, y1) in rows {
+            let mut cols = Vec::new();
+            split_run(rng, rect.x, rect.right(), min_w, &mut cols);
+            for (x0, x1) in cols {
+                out.push(Rect::new(x0, y0, x1 - x0, y1 - y0));
+            }
+        }
     } else {
-        let s =
-            (rect.y + (rect.h as f32 * jitter) as i32).clamp(rect.y + min_h, rect.bottom() - min_h);
-        bsp(rng, Rect::new(rect.x, rect.y, rect.w, s - rect.y), min, out);
-        bsp(
-            rng,
-            Rect::new(rect.x, s, rect.w, rect.bottom() - s),
-            min,
-            out,
-        );
+        let mut cols = Vec::new();
+        if rect.w >= 2 * min_w {
+            let s = rect.x + rect.w / 2;
+            cols.push((rect.x, s));
+            cols.push((s, rect.right()));
+        } else {
+            cols.push((rect.x, rect.right()));
+        }
+        for (x0, x1) in cols {
+            let mut rows = Vec::new();
+            split_run(rng, rect.y, rect.bottom(), min_h, &mut rows);
+            for (y0, y1) in rows {
+                out.push(Rect::new(x0, y0, x1 - x0, y1 - y0));
+            }
+        }
     }
 }
 
@@ -227,7 +241,7 @@ mod tests {
     fn buildings_fit_blocks_and_do_not_overlap() {
         let c = small(41, WaterMode::Bay, 7);
         assert!(
-            c.buildings.len() > 40,
+            c.buildings.len() > 30,
             "only {} buildings",
             c.buildings.len()
         );
