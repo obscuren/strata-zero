@@ -3,6 +3,7 @@
 use super::{GenCtx, Stage, StageRunner, StepOut};
 use crate::geom::{Pos, Rect};
 use crate::params::GenError;
+use crate::pathing::{bfs_nearest, components};
 use crate::tile::Terrain;
 use crate::world::{Building, Connector, ConnectorKind, StratumKind};
 use rand::Rng;
@@ -102,6 +103,45 @@ impl InteriorsStage {
                 Rect::new(inner.x, s + 1, inner.w, inner.bottom() - s - 1),
                 depth - 1,
             );
+        }
+    }
+
+    /// Guarantees every walkable tile inside the footprint reaches every other by carving
+    /// doors through inner walls (never the perimeter).
+    fn ensure_connected(ctx: &mut GenCtx, k: StratumKind, fp: Rect) {
+        let size = ctx.size();
+        let inner = fp.inset(1);
+        for _ in 0..8 {
+            let comps = components(size, |p| fp.contains(p) && ctx.city.walkable(k, p));
+            if comps.len() <= 1 {
+                return;
+            }
+            let main = &comps[0];
+            let mut in_main = vec![false; size.area()];
+            for p in main {
+                in_main[size.index(*p)] = true;
+            }
+            let start = comps[1][0];
+            let path = bfs_nearest(
+                size,
+                start,
+                |p| {
+                    inner.contains(p)
+                        && (ctx.city.walkable(k, p) || ctx.terrain(k, p) == Terrain::Wall)
+                },
+                |p| in_main[size.index(p)],
+                16,
+            );
+            match path {
+                Some(path) => {
+                    for p in path {
+                        if ctx.terrain(k, p) == Terrain::Wall && inner.contains(p) {
+                            ctx.set_terrain(k, p, Terrain::Door);
+                        }
+                    }
+                }
+                None => return,
+            }
         }
     }
 
@@ -228,6 +268,7 @@ impl InteriorsStage {
                 continue;
             }
             Self::partition(ctx, rng, k, fp.inset(1), 4);
+            Self::ensure_connected(ctx, k, fp);
             match k {
                 StratumKind::Street => {
                     let lobby = Self::exterior_door(

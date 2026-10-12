@@ -11,3 +11,6 @@ rand_chacha.workspace = true
 noise.workspace = true
 thiserror.workspace = true
 ron.workspace = true
+
+[dev-dependencies]
+postcard.workspace = true

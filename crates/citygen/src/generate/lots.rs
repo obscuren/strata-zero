@@ -103,8 +103,10 @@ impl LotsStage {
                 });
                 continue;
             }
+            // A district's first lot is always a building, so no district ends up empty.
+            let has_building = ctx.city.buildings.iter().any(|b| b.district == district.id);
             let plaza_p = spec.plaza * (1.3 - density);
-            if chance(rng, plaza_p) {
+            if has_building && chance(rng, plaza_p) {
                 let parking = matches!(
                     district.theme,
                     crate::world::Theme::CorpCore | crate::world::Theme::Industrial
