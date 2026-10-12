@@ -67,6 +67,8 @@ pub struct MapScreen {
     pub mode: Mode,
     pub stratum: StratumKind,
     pub cam: Camera,
+    /// The tile under inspection in Explore mode; the camera follows it.
+    pub cursor: Pos,
     pub show_inspector: bool,
     pub show_minimap: bool,
     pub show_legend: bool,
@@ -99,6 +101,7 @@ impl MapScreen {
             mode: Mode::Explore,
             stratum: StratumKind::Street,
             cam: Camera::default(),
+            cursor: Pos::new(0, 0),
             show_inspector: true,
             show_minimap: true,
             show_legend: false,
@@ -111,11 +114,11 @@ impl MapScreen {
         }
     }
 
-    /// The tile the inspector describes: the player in Walk mode, the view centre otherwise.
-    fn cursor(&self, st: &AppState) -> Pos {
+    /// The tile the inspector describes: the player in Walk mode, the cursor otherwise.
+    fn focus_pos(&self, st: &AppState) -> Pos {
         match (self.mode, &st.player) {
             (Mode::Walk, Some(p)) => p.pos,
-            _ => Pos::new(self.cam.tx, self.cam.ty),
+            _ => self.cursor,
         }
     }
 
@@ -205,7 +208,11 @@ impl MapScreen {
                 && !matches!(code, KeyCode::Char('y' | 'u' | 'b' | 'n')) =>
             {
                 let (dx, dy) = dir_for(code).expect("checked").delta();
-                self.cam.pan(dx * step, dy * step);
+                let size = st.city.as_ref().map(|c| c.size)?;
+                self.cursor = Pos::new(
+                    (self.cursor.x + dx * step).clamp(0, size.w as i32 - 1),
+                    (self.cursor.y + dy * step).clamp(0, size.h as i32 - 1),
+                );
             }
             KeyCode::Char('[') => self.change_stratum(-1),
             KeyCode::Char(']') => self.change_stratum(1),
@@ -238,7 +245,10 @@ impl MapScreen {
         let city = st.city.as_ref()?;
         let player = st.player.as_mut()?;
         match k.code {
-            KeyCode::Tab => self.mode = Mode::Explore,
+            KeyCode::Tab => {
+                self.cursor = player.pos;
+                self.mode = Mode::Explore;
+            }
             KeyCode::Char('<') | KeyCode::Char('>') => {
                 let up = k.code == KeyCode::Char('>');
                 match player.use_connector(city, up) {
@@ -286,6 +296,7 @@ impl Screen for MapScreen {
         };
         if !self.cam_ready {
             self.cam.snap(size.center());
+            self.cursor = size.center();
             self.cam_ready = true;
         }
         for k in keys {
@@ -306,8 +317,9 @@ impl Screen for MapScreen {
             }
         }
         let map = self.last_map.get();
-        if let (Mode::Walk, Some(p)) = (self.mode, &st.player) {
-            self.cam.follow(p.pos, map.width, map.height);
+        match (self.mode, &st.player) {
+            (Mode::Walk, Some(p)) => self.cam.follow(p.pos, map.width, map.height),
+            _ => self.cam.follow(self.cursor, map.width, map.height),
         }
         self.cam.clamp(size, map.width, map.height);
         self.cam.update();
@@ -331,7 +343,7 @@ impl Screen for MapScreen {
         let (map, panel, status) = self.layout(area);
         self.last_map.set(map);
         let origin = self.cam.origin(map.width, map.height);
-        let cursor = self.cursor(st);
+        let cursor = self.focus_pos(st);
         let focus = if self.digital {
             Digital::node_under(city, self.stratum, cursor)
         } else {
@@ -542,9 +554,9 @@ mod tests {
         let mut s = MapScreen::explore(0);
         let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
         t.draw(|f| s.draw(&st, f)).unwrap();
-        let before = (s.cam.tx, s.cam.ty);
+        let before = s.cursor;
         s.update(&mut st, &[key(KeyCode::Right), key(KeyCode::Down)]);
-        assert_ne!((s.cam.tx, s.cam.ty), before);
+        assert_eq!(s.cursor, Pos::new(before.x + 1, before.y + 1));
         assert!(matches!(
             s.update(&mut st, &[key(KeyCode::Char('r'))]),
             ScreenCmd::Switch { .. }
@@ -560,5 +572,39 @@ mod tests {
             s.update(&mut empty, &[key(KeyCode::Char('w'))]),
             ScreenCmd::Stay
         ));
+    }
+
+    #[test]
+    fn explore_cursor_reaches_the_map_corners_without_showing_void() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        s.update(&mut st, &[]);
+        let map = s.last_map.get();
+        for _ in 0..40 {
+            s.update(&mut st, &[key(KeyCode::Char('H')), key(KeyCode::Char('K'))]);
+        }
+        assert_eq!(s.cursor, Pos::new(0, 0));
+        for _ in 0..30 {
+            s.update(&mut st, &[]);
+        }
+        let o = s.cam.origin(map.width, map.height);
+        assert!(o.x >= 0 && o.y >= 0, "origin {o:?}");
+        for _ in 0..40 {
+            s.update(&mut st, &[key(KeyCode::Char('L')), key(KeyCode::Char('J'))]);
+        }
+        assert_eq!(s.cursor, Pos::new(119, 59));
+        for _ in 0..30 {
+            s.update(&mut st, &[]);
+        }
+        let o = s.cam.origin(map.width, map.height);
+        assert!(
+            o.x + map.width as i32 <= 120 && o.y + map.height as i32 <= 60,
+            "origin {o:?}"
+        );
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let text = buffer_text(t.backend().buffer());
+        assert!(text.contains("119,59"), "{text}");
     }
 }
