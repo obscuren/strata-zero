@@ -1,5 +1,6 @@
 //! The resumable generator: eleven chunked stages over a growing `City`.
 
+pub mod districts;
 pub mod terrain;
 
 use crate::flavor::FlavorPack;
@@ -221,6 +222,7 @@ impl StageRunner for NoopStage {
 pub(crate) fn runner_for(stage: Stage) -> Box<dyn StageRunner> {
     match stage {
         Stage::Terrain => Box::new(terrain::TerrainStage::default()),
+        Stage::Districts => Box::new(districts::DistrictsStage::default()),
         _ => Box::new(NoopStage),
     }
 }
@@ -341,6 +343,26 @@ impl Generator {
         }
         assert!(g.error.is_none(), "{:?}", g.error);
         g.ctx
+    }
+}
+
+/// Shared fixtures for stage tests.
+#[cfg(test)]
+pub(crate) mod testutil {
+    use super::Generator;
+    use crate::params::{GenParams, SizePreset, WaterMode};
+    use crate::world::City;
+
+    /// A 120x60 city with the given seed, water mode and district count.
+    pub fn small(seed: u64, water: WaterMode, districts: u8) -> City {
+        Generator::run(GenParams {
+            seed,
+            water,
+            districts,
+            size: SizePreset::Custom { w: 120, h: 60 },
+            ..Default::default()
+        })
+        .unwrap_or_else(|e| panic!("seed {seed}: {e}"))
     }
 }
 
