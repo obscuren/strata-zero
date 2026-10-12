@@ -1,0 +1,35 @@
+// Visual style pack: palettes per theme and stratum, neon hues, glyph sets.
+// Every glyph must be exactly one terminal cell wide.
+StylePack(
+    background: (10, 11, 16),
+    neutral: ThemeStyle(accent: (120, 140, 160), accent2: (200, 210, 220), wall: (90, 100, 115), floor: (28, 32, 40), road: (24, 26, 32), sidewalk: (46, 50, 60), roof: (70, 78, 90)),
+    themes: [
+        (CorpCore,    ThemeStyle(accent: (0, 229, 255),   accent2: (220, 235, 245), wall: (110, 135, 160), floor: (26, 34, 46),  road: (26, 29, 36),  sidewalk: (52, 58, 70),  roof: (80, 95, 115))),
+        (NightMarket, ThemeStyle(accent: (255, 0, 200),   accent2: (255, 150, 40),  wall: (130, 95, 80),   floor: (40, 30, 26),  road: (30, 26, 28),  sidewalk: (60, 48, 44),  roof: (95, 70, 60))),
+        (Megablocks,  ThemeStyle(accent: (255, 190, 0),   accent2: (210, 210, 200), wall: (120, 120, 125), floor: (34, 34, 36),  road: (26, 26, 28),  sidewalk: (56, 56, 58),  roof: (85, 85, 90))),
+        (CombatZone,  ThemeStyle(accent: (255, 40, 60),   accent2: (255, 200, 60),  wall: (110, 80, 70),   floor: (36, 26, 24),  road: (28, 22, 20),  sidewalk: (54, 42, 38),  roof: (80, 60, 55))),
+        (Docks,       ThemeStyle(accent: (0, 200, 190),   accent2: (190, 110, 60),  wall: (90, 110, 110),  floor: (26, 36, 38),  road: (24, 30, 32),  sidewalk: (46, 58, 60),  roof: (70, 90, 92))),
+        (Industrial,  ThemeStyle(accent: (230, 230, 0),   accent2: (120, 230, 90),  wall: (110, 115, 95),  floor: (34, 36, 28),  road: (28, 30, 24),  sidewalk: (54, 58, 46),  roof: (84, 88, 72))),
+        (NeonStrip,   ThemeStyle(accent: (255, 80, 180),  accent2: (60, 140, 255),  wall: (120, 90, 140),  floor: (36, 26, 44),  road: (28, 22, 34),  sidewalk: (58, 46, 68),  roof: (90, 70, 105))),
+        (OldTown,     ThemeStyle(accent: (255, 150, 60),  accent2: (90, 200, 140),  wall: (130, 115, 90),  floor: (40, 36, 28),  road: (30, 28, 24),  sidewalk: (62, 56, 46),  roof: (95, 85, 65))),
+    ],
+    strata: [
+        (Undercity, StratumStyle(tint: (-8, 8, -6),  fog: true,  rain: 0)),
+        (Street,    StratumStyle(tint: (0, 0, 0),    fog: false, rain: 1)),
+        (Skyways,   StratumStyle(tint: (0, 2, 8),    fog: false, rain: 2)),
+        (Heights,   StratumStyle(tint: (0, 6, 22),   fog: false, rain: 3)),
+        (Net,       StratumStyle(tint: (-10, 20, 0), fog: false, rain: 0)),
+    ],
+    hues: [
+        (Cyan, (0, 255, 230)), (Magenta, (255, 0, 200)), (Pink, (255, 90, 190)), (Orange, (255, 140, 0)),
+        (Yellow, (255, 220, 0)), (Green, (90, 255, 130)), (Blue, (70, 130, 255)), (Red, (255, 40, 60)), (White, (240, 240, 255)),
+    ],
+    glyphs: GlyphSets(
+        holo: ['▣', '▤', '▥', '▦', '▧', '▨', '▩', '◫', 'ｱ', 'ｲ', 'ｳ', 'ｴ', '¥', '$', '€', '§'],
+        rain: ['⠁', '⠂', '⠄', '⡀', '⢀', '⠈', '⠐', '⠠', '╵', '╷'],
+        water: ['≈', '~', '∼'],
+        steam: ['°', '∘', '○'],
+        mass: ['█', '▓', '▒', '░'],
+        net: ['◇', '◆', '⬡', '⌗', '▪', '◈'],
+    ),
+)

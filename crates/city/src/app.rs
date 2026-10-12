@@ -1,5 +1,6 @@
 //! Application state, the screen trait and the fixed-rate frame loop.
 
+use crate::render::style::StylePack;
 use crate::term::{TerminalGuard, install_panic_hook};
 use anyhow::Result;
 use citygen::{City, GenParams};
@@ -19,6 +20,7 @@ pub const FRAME: Duration = Duration::from_micros(33_333);
 pub struct AppState {
     pub params: GenParams,
     pub city: Option<City>,
+    pub style: StylePack,
     pub tick: u64,
     status: Option<(String, u64)>,
 }
@@ -34,6 +36,7 @@ impl AppState {
         AppState {
             params: GenParams::default(),
             city: None,
+            style: StylePack::load().expect("embedded style pack is valid"),
             tick: 0,
             status: None,
         }

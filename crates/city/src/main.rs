@@ -6,6 +6,7 @@
 mod anim;
 mod app;
 mod cli;
+mod render;
 mod save;
 mod screens;
 mod term;
