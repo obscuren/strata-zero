@@ -3,6 +3,7 @@
 // Screens, widgets and overlays land task by task; lifted once the app is wired up.
 #![allow(dead_code)]
 
+mod anim;
 mod app;
 mod cli;
 mod save;
