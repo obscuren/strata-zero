@@ -94,7 +94,7 @@ pub fn load_city(path: &Path) -> Result<City> {
             city.size.h
         );
     }
-    let strata_ok = city.strata.len() == citygen::StratumKind::PHYSICAL.len()
+    let strata_ok = city.strata.len() == citygen::StratumKind::ALL.len()
         && city
             .strata
             .iter()

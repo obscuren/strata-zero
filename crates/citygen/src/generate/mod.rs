@@ -1,7 +1,8 @@
-//! The resumable generator: eleven chunked stages over a growing `City`.
+//! The resumable generator: twelve chunked stages over a growing `City`.
 
 pub mod arterials;
 pub mod connectivity;
+pub mod cyberspace;
 pub mod districts;
 pub mod dressing;
 pub mod interiors;
@@ -35,10 +36,11 @@ pub enum Stage {
     Dressing,
     Naming,
     Net,
+    Cyberspace,
 }
 
 impl Stage {
-    pub const ALL: [Stage; 11] = [
+    pub const ALL: [Stage; 12] = [
         Stage::Terrain,
         Stage::Districts,
         Stage::Arterials,
@@ -50,6 +52,7 @@ impl Stage {
         Stage::Dressing,
         Stage::Naming,
         Stage::Net,
+        Stage::Cyberspace,
     ];
 
     pub fn label(self) -> &'static str {
@@ -65,6 +68,7 @@ impl Stage {
             Stage::Dressing => "Hanging neon",
             Stage::Naming => "Naming places",
             Stage::Net => "Wiring the Net",
+            Stage::Cyberspace => "Compiling cyberspace",
         }
     }
 
@@ -224,6 +228,7 @@ pub(crate) fn runner_for(stage: Stage) -> Box<dyn StageRunner> {
         Stage::Dressing => Box::new(dressing::DressingStage::default()),
         Stage::Naming => Box::new(naming::NamingStage::default()),
         Stage::Net => Box::new(net::NetStage::default()),
+        Stage::Cyberspace => Box::new(cyberspace::CyberspaceStage::default()),
     }
 }
 

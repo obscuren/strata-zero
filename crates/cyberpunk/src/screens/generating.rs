@@ -42,6 +42,7 @@ fn short(stage: Stage) -> &'static str {
         Stage::Dressing => "Neon",
         Stage::Naming => "Names",
         Stage::Net => "Net",
+        Stage::Cyberspace => "Cyber",
     }
 }
 
