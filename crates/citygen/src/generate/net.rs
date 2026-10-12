@@ -52,6 +52,7 @@ impl NetStage {
             id,
             kind,
             anchor,
+            cyber: anchor.1,
             subnet,
             building,
         });
