@@ -1,6 +1,7 @@
 //! The resumable generator: eleven chunked stages over a growing `City`.
 
 pub mod arterials;
+pub mod connectivity;
 pub mod districts;
 pub mod interiors;
 pub mod lots;
@@ -233,6 +234,7 @@ pub(crate) fn runner_for(stage: Stage) -> Box<dyn StageRunner> {
         Stage::Lots => Box::new(lots::LotsStage::default()),
         Stage::Verticals => Box::new(verticals::VerticalsStage::default()),
         Stage::Interiors => Box::new(interiors::InteriorsStage::default()),
+        Stage::Connectivity => Box::new(connectivity::ConnectivityStage::default()),
         _ => Box::new(NoopStage),
     }
 }
