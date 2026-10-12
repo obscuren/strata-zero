@@ -15,7 +15,7 @@ use ratatui::text::Span;
 use ratatui::widgets::{Paragraph, Widget};
 
 pub const TITLE: &str = "CYBERPUNK";
-const SUBTITLE: &str = "c i t y   g e n e r a t o r";
+const SUBTITLE: &str = "h i g h   t e c h   ·   l o w   l i f e";
 
 pub struct Title {
     menu: Menu,
@@ -147,6 +147,11 @@ mod tests {
             "{text}"
         );
         assert!(text.contains('█'));
+        st.tick = 600;
+        t.draw(|f| title.draw(&st, f)).unwrap();
+        let text = buffer_text(t.backend().buffer());
+        assert!(text.contains("h i g h   t e c h"), "{text}");
+        assert!(!text.contains("g e n e r a t o r"), "{text}");
         assert!(matches!(
             title.update(&mut st, &[key(KeyCode::Char('q'))]),
             ScreenCmd::Quit

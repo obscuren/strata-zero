@@ -495,10 +495,10 @@ impl Screen for MapScreen {
         let jacked = st.player.as_ref().is_some_and(|p| p.jacked_in());
         let hints = match (self.mode, jacked) {
             (Mode::Explore, _) => {
-                "hjkl pan · [] level · w walk · d net · e legend · s save · ? keys"
+                "hjkl pan · [] level · w walk · d overlay · e legend · s save · ? keys"
             }
             (Mode::Walk, true) => {
-                "⚡ jacked in · hjkl move · enter jack out · tab camera · d net · ? keys"
+                "⚡ jacked in · hjkl move · enter jack out · tab camera · d overlay · ? keys"
             }
             (Mode::Walk, false) => "hjkl move · <> stairs · enter jack in · tab camera · ? keys",
         };
@@ -719,6 +719,7 @@ mod tests {
         let text = buffer_text(t.backend().buffer());
         assert!(text.contains("jack out"), "{text}");
         assert!(text.contains("jacked in"), "{text}");
+        assert!(text.contains("d overlay"), "{text}");
         // The body shows on the Street while the avatar is in the Net.
         s.mode = Mode::Explore;
         s.stratum = StratumKind::Street;
