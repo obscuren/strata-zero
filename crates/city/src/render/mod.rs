@@ -1,8 +1,12 @@
 //! Rendering: colours, cells, the render context and the tileset.
 
 pub mod lighting;
+pub mod minimap;
 pub mod style;
 pub mod tileset;
+pub mod traffic;
+pub mod viewport;
+pub mod weather;
 
 use citygen::{BuildingKind, ConnectorKind, Pos, StratumKind, Theme};
 use ratatui::buffer::Buffer;
