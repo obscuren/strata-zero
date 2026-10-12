@@ -33,6 +33,8 @@ pub enum Field {
         label: String,
         value: String,
         max: usize,
+        /// Only digits are accepted when set.
+        numeric: bool,
     },
     Button {
         label: String,
@@ -114,8 +116,17 @@ impl Form {
                 }
             }
             KeyCode::Char(c) => {
-                if let Field::Text { value, max, .. } = &mut self.fields[self.selected]
-                    && c.is_ascii_digit()
+                if let Field::Text {
+                    value,
+                    max,
+                    numeric,
+                    ..
+                } = &mut self.fields[self.selected]
+                    && (if *numeric {
+                        c.is_ascii_digit()
+                    } else {
+                        c.is_alphanumeric() || " -_".contains(c)
+                    })
                     && value.chars().count() < *max
                 {
                     value.push(c);
@@ -306,6 +317,7 @@ mod tests {
                     label: "Seed".into(),
                     value: "12".into(),
                     max: 5,
+                    numeric: true,
                 },
                 Field::Button {
                     label: "GENERATE".into(),
