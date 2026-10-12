@@ -10,6 +10,7 @@ mod render;
 mod save;
 mod screens;
 mod term;
+mod ui;
 
 fn main() -> anyhow::Result<()> {
     cli::run()

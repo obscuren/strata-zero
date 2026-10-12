@@ -6,7 +6,6 @@ use anyhow::Result;
 use citygen::{City, GenParams};
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
 use ratatui::Frame;
-use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::Paragraph;
@@ -55,26 +54,7 @@ impl AppState {
     }
 }
 
-/// How a screen change is animated. Replaced by `ui::transition` later.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TransitionKind {
-    None,
-    Glitch,
-    SlideUp,
-}
-
-/// Placeholder transition: inactive until the ui module lands.
-pub struct Transition;
-
-impl Transition {
-    pub fn new(_kind: TransitionKind, _from: Buffer, _start: u64) -> Self {
-        Transition
-    }
-    pub fn active(&self, _tick: u64) -> bool {
-        false
-    }
-    pub fn apply(&self, _f: &mut Frame, _tick: u64) {}
-}
+pub use crate::ui::transition::{Transition, TransitionKind};
 
 /// What a screen asks the loop to do after an update.
 pub enum ScreenCmd {
