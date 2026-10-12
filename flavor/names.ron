@@ -1,0 +1,65 @@
+// Default flavor pack: original names in the shared cyberpunk register.
+// Swap this file (or add another and select it via GenParams.flavor) to retheme a city.
+FlavorPack(
+    city: NameParts(
+        prefixes: ["Neo", "New", "Night", "Grey", "Ash", "Iron", "Hollow", "Saint", "Port", "North", "Low", "Vanta", "Chrome", "Static", "Ember"],
+        suffixes: ["haven", "port", "gate", "spire", "fall", "reach", "burg", "side", "mouth", "wick", "crest", "shore", "vale", "march", "field"],
+    ),
+    districts: [
+        (CorpCore, NameParts(
+            prefixes: ["Apex", "Meridian", "Zenith", "Crown", "Axis", "Prime", "Nexus", "Vector", "Summit", "Core", "Helix", "Aurum"],
+            suffixes: [" Plaza", " Center", " Heights", " District", " Row", " Quarter", " Terrace", " Exchange", " Circle", " Mile", " Spire", " Square"],
+        )),
+        (NightMarket, NameParts(
+            prefixes: ["Kowloon", "Lantern", "Ginza", "Saigon", "Jade", "Paper", "Smoke", "Bazaar", "Spice", "Dragon", "Lotus", "Silk"],
+            suffixes: [" Market", " Alley", " Walk", " Ward", " Lanes", " Steps", " Street", " Yard", " Court", " Strip", " Row", " Block"],
+        )),
+        (Megablocks, NameParts(
+            prefixes: ["Block", "Stack", "Tower", "Unit", "Sector", "Hive", "Cell", "Slab", "Tier", "Bay", "Deck", "Quad"],
+            suffixes: [" 7", " 12", " 19", " 23", " 31", " 44", " 56", " 61", " 77", " 88", " 93", " 101"],
+        )),
+        (CombatZone, NameParts(
+            prefixes: ["Rust", "Scrap", "Cinder", "Dead", "Broken", "Razor", "Burnout", "Gravel", "Wreck", "Hollow", "Dust", "Scar"],
+            suffixes: [" Row", " Yards", " Flats", " End", " Hollow", " Cut", " Run", " Pit", " Zone", " Sprawl", " Line", " Reach"],
+        )),
+        (Docks, NameParts(
+            prefixes: ["Harbor", "Pier", "Tide", "Salt", "Anchor", "Cargo", "Quay", "Wharf", "Bilge", "Keel", "Gull", "Brine"],
+            suffixes: [" Point", " Docks", " Landing", " Basin", " Wharf", " Slip", " Reach", " Yard", " Front", " Bank", " Mole", " Strand"],
+        )),
+        (Industrial, NameParts(
+            prefixes: ["Furnace", "Foundry", "Reactor", "Kiln", "Crucible", "Smelter", "Turbine", "Boiler", "Coil", "Refinery", "Slag", "Pylon"],
+            suffixes: [" Works", " Yards", " Park", " Annex", " Fields", " Belt", " Grid", " Works", " Row", " Stacks", " Pit", " Sector"],
+        )),
+        (NeonStrip, NameParts(
+            prefixes: ["Neon", "Velvet", "Mirage", "Pulse", "Glitter", "Chrome", "Halo", "Afterglow", "Vapor", "Siren", "Candy", "Strobe"],
+            suffixes: [" Strip", " Boulevard", " Mile", " Drag", " Lane", " Avenue", " Parade", " Run", " Way", " Walk", " Row", " Line"],
+        )),
+        (OldTown, NameParts(
+            prefixes: ["Old", "Temple", "Cobble", "Lantern", "Ivy", "Chapel", "Mill", "Orchard", "Clock", "Tanner", "Weaver", "Bell"],
+            suffixes: [" Town", " Hill", " Quarter", " Close", " Lane", " Green", " Yard", " Gate", " Walk", " Cross", " Rise", " Row"],
+        )),
+    ],
+    corp: CorpParts(
+        first: ["Arasu", "Kiro", "Nov", "Hex", "Mira", "Tess", "Oro", "Vel", "Kai", "Zen", "Dai", "Sol", "Yuki", "Bran", "Ark", "Lum"],
+        second: ["tek", "dyne", "corp", "soft", "gen", "ware", "sys", "line", "med", "sec", "net", "bio", "form", "tron", "core", "flux"],
+        suffix: ["", " Industries", " Group", " Holdings", " Systems", " Biotech", " Dynamics", " Securities", " Logistics", " Media", " Capital", " Labs"],
+    ),
+    shops: [
+        (NoodleBar, ["{syl} Noodles", "Ramen {syl}", "{syl} Kitchen", "Hot {syl}", "{syl} Bowl"]),
+        (Bar, ["The {syl}", "{syl} Lounge", "Bar {syl}", "{syl} & Static", "Dive {syl}"]),
+        (Club, ["Club {syl}", "{syl} Afterdark", "Velvet {syl}", "{syl} Pulse"]),
+        (Clinic, ["{syl} Ripperdoc", "Clinic {syl}", "{syl} Chrome", "Doc {syl}"]),
+        (Shop, ["{syl} Goods", "{syl} Mart", "24h {syl}", "{syl} Supply"]),
+        (Pawn, ["{syl} Pawn", "{syl} & Sons", "Cash {syl}"]),
+        (Arcade, ["{syl} Arcade", "Neon {syl}", "{syl} Braindance"]),
+        (Hotel, ["Hotel {syl}", "{syl} Capsule", "The {syl} Inn"]),
+        (Temple, ["{syl} Temple", "Shrine of {syl}", "{syl} Mission"]),
+        (Market, ["{syl} Market", "{syl} Bazaar"]),
+        (Garage, ["{syl} Motors", "{syl} Autoworks"]),
+        (Warehouse, ["{syl} Storage", "{syl} Freight"]),
+        (Factory, ["{syl} Fabrication", "{syl} Assembly"]),
+        (Depot, ["{syl} Depot", "{syl} Transit"]),
+    ],
+    landmarks: ["{corp} Tower", "{district} Terminal", "The {district} Arcology", "{corp} Plaza", "Old {district} Station"],
+    signage: ['ｦ','ｧ','ｨ','ｩ','ｪ','ｫ','ｬ','ｭ','ｮ','ｯ','ｰ','ｱ','ｲ','ｳ','ｴ','ｵ','ｶ','ｷ','ｸ','ｹ','ｺ','ｻ','ｼ','ｽ','ｾ','ｿ','ﾀ','ﾁ','ﾂ','ﾃ','ﾄ','ﾅ','ﾆ','ﾇ','ﾈ','ﾉ','ﾊ','ﾋ','ﾌ','ﾍ','ﾎ','ﾏ','ﾐ','ﾑ','ﾒ','ﾓ','ﾔ','ﾕ','ﾖ','ﾗ','ﾘ','ﾙ','ﾚ','ﾛ','ﾜ','ﾝ','Ж','Ф','Ц','Ш','Я','Δ','Σ','Ψ','Ω','¥','$','€','§','¤'],
+)
