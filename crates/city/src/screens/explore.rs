@@ -417,13 +417,6 @@ impl Screen for MapScreen {
                 let node = focus.map(|id| city.net.node(id));
                 lines.extend(inspector_lines(city, self.stratum, cursor, node));
             }
-            if let Some(msg) = st.status_text() {
-                lines.push(Line::from(""));
-                lines.push(Line::styled(
-                    format!(" {msg}"),
-                    Style::default().fg(Color::Rgb(255, 200, 80)),
-                ));
-            }
             f.render_widget(
                 Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false }),
                 inner,
@@ -435,7 +428,13 @@ impl Screen for MapScreen {
             Mode::Walk => "hjkl move · <> stairs · tab camera · d net · ? keys",
         };
         f.render_widget(
-            Paragraph::new(status_bar(Some(city), self.stratum, self.fps.fps, hints)),
+            Paragraph::new(status_bar(
+                Some(city),
+                self.stratum,
+                self.fps.fps,
+                hints,
+                st.status_text(),
+            )),
             status,
         );
 

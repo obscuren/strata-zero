@@ -337,9 +337,7 @@ mod tests {
     use crate::render::lighting::apply_vis;
     use crate::render::style::StylePack;
     use crate::render::{RenderCtx, Visibility};
-    use citygen::{
-        ALL_FEATURES, ALL_TERRAIN, Feature, Hue, Pos, StratumKind, Terrain, Theme, Tile,
-    };
+    use citygen::{ALL_FEATURES, ALL_TERRAIN, Feature, Hue, StratumKind, Terrain, Theme, Tile};
     use unicode_width::UnicodeWidthChar;
 
     #[test]
@@ -389,7 +387,6 @@ mod tests {
             stratum: StratumKind::Street,
             light,
             tick,
-            pos: Pos::new(1, 1),
             vis: Visibility::Visible,
             connector: None,
             kind: None,

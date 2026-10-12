@@ -38,13 +38,6 @@ impl Menu {
     pub fn entrance(&self, i: usize, tick: u64) -> f32 {
         Tween::new(self.opened + i as u64 * 4, 8, Easing::OutCubic).progress(tick)
     }
-
-    pub fn settled(&self, tick: u64) -> bool {
-        self.items
-            .iter()
-            .enumerate()
-            .all(|(i, _)| self.entrance(i, tick) >= 1.0)
-    }
 }
 
 pub struct MenuView<'a> {

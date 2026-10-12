@@ -366,12 +366,22 @@ impl City {
         self.connectors.iter().filter(move |c| c.pos == p)
     }
 
+    /// Panics if the id is unknown; use `district_opt` on a city that may still be generating.
     pub fn district(&self, id: DistrictId) -> &District {
         &self.districts[id.index()]
     }
 
+    pub fn district_opt(&self, id: DistrictId) -> Option<&District> {
+        self.districts.get(id.index())
+    }
+
+    /// Panics if the id is unknown; use `building_opt` on a city that may still be generating.
     pub fn building(&self, id: BuildingId) -> &Building {
         &self.buildings[id.index()]
+    }
+
+    pub fn building_opt(&self, id: BuildingId) -> Option<&Building> {
+        self.buildings.get(id.index())
     }
 }
 

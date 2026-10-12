@@ -24,7 +24,8 @@ impl Player {
         let is_core = |p: Pos| {
             city.tile(street, p)
                 .and_then(|t| t.district)
-                .is_some_and(|d| city.district(d).theme == Theme::CorpCore)
+                .and_then(|d| city.district_opt(d))
+                .is_some_and(|d| d.theme == Theme::CorpCore)
         };
         let public: Vec<Pos> = city
             .connectors

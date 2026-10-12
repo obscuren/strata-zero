@@ -64,6 +64,7 @@ impl Generating {
     }
 
     /// Something that changes whenever generation advances; used by tests.
+    #[cfg(test)]
     pub fn progress_marker(&self) -> (usize, Option<(Stage, u32)>) {
         (
             self.done.len(),

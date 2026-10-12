@@ -9,7 +9,7 @@ pub mod traffic;
 pub mod viewport;
 pub mod weather;
 
-use citygen::{BuildingKind, ConnectorKind, Pos, StratumKind, Theme};
+use citygen::{BuildingKind, ConnectorKind, StratumKind, Theme};
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier, Style};
 use serde::{Deserialize, Serialize};
@@ -95,7 +95,6 @@ pub struct RenderCtx<'a> {
     pub stratum: StratumKind,
     pub light: u8,
     pub tick: u64,
-    pub pos: Pos,
     pub vis: Visibility,
     pub connector: Option<ConnDir>,
     pub kind: Option<BuildingKind>,

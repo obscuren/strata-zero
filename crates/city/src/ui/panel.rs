@@ -46,8 +46,7 @@ pub fn inspector_lines(
     if let Some(f) = t.feature {
         out.push(kv("feature", format!("{f:?}").to_lowercase()));
     }
-    if let Some(d) = t.district {
-        let d = city.district(d);
+    if let Some(d) = t.district.and_then(|d| city.district_opt(d)) {
         out.push(kv("district", d.name.clone()));
         out.push(kv("theme", d.theme.label()));
         out.push(kv(
@@ -55,8 +54,7 @@ pub fn inspector_lines(
             format!("{:.0}%  decay {:.0}%", d.wealth * 100.0, d.decay * 100.0),
         ));
     }
-    if let Some(b) = t.building {
-        let b = city.building(b);
+    if let Some(b) = t.building.and_then(|b| city.building_opt(b)) {
         out.push(kv(
             "building",
             b.name.clone().unwrap_or_else(|| b.kind.label().to_string()),
@@ -149,6 +147,7 @@ pub fn status_bar(
     stratum: StratumKind,
     fps: f32,
     hints: &str,
+    status: Option<&str>,
 ) -> Line<'static> {
     let mut spans = Vec::new();
     if let Some(c) = city {
@@ -169,7 +168,15 @@ pub fn status_bar(
         format!("· {fps:.0} fps "),
         Style::default().fg(DIM),
     ));
-    spans.push(Span::styled(format!("· {hints}"), Style::default().fg(DIM)));
+    match status {
+        Some(msg) => spans.push(Span::styled(
+            format!("· {msg}"),
+            Style::default()
+                .fg(Color::Rgb(255, 200, 80))
+                .add_modifier(Modifier::BOLD),
+        )),
+        None => spans.push(Span::styled(format!("· {hints}"), Style::default().fg(DIM))),
+    }
     Line::from(spans)
 }
 
@@ -198,8 +205,16 @@ mod tests {
         let sel = strata_selector(StratumKind::Skyways, 0);
         let text: String = sel.iter().map(|l| l.to_string() + "\n").collect();
         assert!(text.contains("Skyways") && text.contains("▌"));
-        let bar = status_bar(Some(&c), StratumKind::Street, 30.0, "q quit");
-        assert!(bar.to_string().contains(&c.name));
+        let bar = status_bar(Some(&c), StratumKind::Street, 30.0, "q quit", None);
+        assert!(bar.to_string().contains(&c.name) && bar.to_string().contains("q quit"));
+        let bar = status_bar(
+            Some(&c),
+            StratumKind::Street,
+            30.0,
+            "q quit",
+            Some("saved x"),
+        );
+        assert!(bar.to_string().contains("saved x") && !bar.to_string().contains("q quit"));
         assert!(!legend(StratumKind::Undercity).is_empty());
     }
 }

@@ -188,14 +188,19 @@ impl Widget for MapView<'_> {
                     .unwrap_or(Visibility::Visible);
                 let ctx = RenderCtx {
                     style: self.style,
-                    theme: tile.district.map(|d| self.city.district(d).theme),
+                    theme: tile
+                        .district
+                        .and_then(|d| self.city.district_opt(d))
+                        .map(|d| d.theme),
                     stratum: self.stratum,
                     light: st.light.get(p).copied().unwrap_or(0),
                     tick: self.tick,
-                    pos: p,
                     vis,
                     connector,
-                    kind: tile.building.map(|b| self.city.building(b).kind),
+                    kind: tile
+                        .building
+                        .and_then(|b| self.city.building_opt(b))
+                        .map(|b| b.kind),
                     wall_mask: mask,
                 };
                 apply_vis(cell(tile, &ctx), vis).write(buf, sx, sy);
@@ -280,6 +285,46 @@ mod tests {
             tile_to_screen(area, Pos::new(10, 10), Pos::new(9, 11)),
             None
         );
+    }
+
+    #[test]
+    fn mapview_renders_every_partial_generation_state() {
+        use citygen::{Generator, Progress};
+        let s = StylePack::load().unwrap();
+        let mut g = Generator::new(GenParams {
+            seed: 11,
+            size: SizePreset::Custom { w: 80, h: 40 },
+            districts: 4,
+            ..Default::default()
+        })
+        .unwrap();
+        let mut t = Terminal::new(TestBackend::new(90, 45)).unwrap();
+        let mut steps = 0u32;
+        loop {
+            let progress = g.step();
+            steps += 1;
+            if steps.is_multiple_of(7) || matches!(progress, Progress::Done) {
+                for k in StratumKind::PHYSICAL {
+                    t.draw(|f| {
+                        MapView {
+                            city: g.city(),
+                            stratum: k,
+                            origin: Pos::new(-2, -2),
+                            tick: steps as u64,
+                            style: &s,
+                            vis: None,
+                            overlays: &[&Weather],
+                            cursor: None,
+                        }
+                        .render(f.area(), f.buffer_mut())
+                    })
+                    .unwrap();
+                }
+            }
+            if matches!(progress, Progress::Done) {
+                break;
+            }
+        }
     }
 
     #[test]

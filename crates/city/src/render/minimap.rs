@@ -56,7 +56,10 @@ impl Widget for Minimap<'_> {
                         water += 1;
                     }
                     if theme.is_none() {
-                        theme = t.district.map(|d| self.city.district(d).theme);
+                        theme = t
+                            .district
+                            .and_then(|d| self.city.district_opt(d))
+                            .map(|d| d.theme);
                     }
                 }
                 let cell = &mut buf[(area.x + cx, area.y + cy)];

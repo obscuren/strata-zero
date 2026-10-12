@@ -1,4 +1,8 @@
 //! Tick-driven animation primitives: easing, tweens, timelines.
+//!
+//! This is a small library surface for every screen, so parts of it (extra easings,
+//! `Timeline`) are exercised by tests before any screen uses them.
+#![allow(dead_code)]
 
 pub mod effects;
 

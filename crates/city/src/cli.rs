@@ -109,7 +109,9 @@ pub fn run() -> Result<()> {
             if json {
                 let file = std::fs::File::create(&out)
                     .with_context(|| format!("creating {}", out.display()))?;
-                serde_json::to_writer_pretty(file, &city)?;
+                let mut writer = std::io::BufWriter::new(file);
+                serde_json::to_writer_pretty(&mut writer, &city)?;
+                std::io::Write::flush(&mut writer)?;
             } else {
                 save_city(&out, &city)?;
             }
