@@ -3,9 +3,10 @@
 use crate::anim::effects::pulse;
 use crate::render::Rgb;
 use crate::render::style::StylePack;
+use crate::render::tileset::node_glyph;
 use crate::render::viewport::{Overlay, tile_to_screen};
 use citygen::pathing::bresenham;
-use citygen::{City, NodeId, NodeKind, Pos, StratumKind, SubnetOwner};
+use citygen::{City, NodeId, Pos, StratumKind, SubnetOwner};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
@@ -20,20 +21,13 @@ pub struct Digital {
 }
 
 impl Digital {
-    /// Index into the style's `net` glyph set for a node kind.
-    fn glyph_index(kind: NodeKind) -> usize {
-        match kind {
-            NodeKind::Terminal => 0,
-            NodeKind::Server => 1,
-            NodeKind::Backbone => 2,
-            NodeKind::DataVault => 3,
-            NodeKind::Ice => 5,
-            _ => 4,
-        }
-    }
-
+    /// The node on a tile: by physical anchor on the city strata, by cyber tile on the Net.
     pub fn node_under(city: &City, stratum: StratumKind, p: Pos) -> Option<NodeId> {
-        city.net.node_at(stratum, p).map(|n| n.id)
+        if stratum == StratumKind::Net {
+            city.net.node_in_cyber(p).map(|n| n.id)
+        } else {
+            city.net.node_at(stratum, p).map(|n| n.id)
+        }
     }
 }
 
@@ -51,8 +45,29 @@ impl Overlay for Digital {
         if !self.enabled {
             return;
         }
-        let glyphs = &style.glyphs.net;
         let focus_subnet = self.focus.map(|id| city.net.node(id).subnet);
+        if stratum == StratumKind::Net {
+            // Nodes are tiles here; only the focused subnet's links are drawn.
+            let Some(sn) = focus_subnet else { return };
+            for link in &city.net.links {
+                let a = city.net.node(link.0);
+                let b = city.net.node(link.1);
+                if a.subnet != sn && b.subnet != sn {
+                    continue;
+                }
+                for p in bresenham(a.cyber, b.cyber) {
+                    if city.net.node_in_cyber(p).is_some() {
+                        continue;
+                    }
+                    if let Some((sx, sy)) = tile_to_screen(area, origin, p) {
+                        buf[(sx, sy)]
+                            .set_char('·')
+                            .set_fg(SIGNAL.scale(0.8).to_color());
+                    }
+                }
+            }
+            return;
+        }
 
         // Faint outline on every building that owns a subnet.
         for sn in &city.net.subnets {
@@ -106,7 +121,7 @@ impl Overlay for Digital {
             let Some((sx, sy)) = tile_to_screen(area, origin, n.anchor.1) else {
                 continue;
             };
-            let g = glyphs[Self::glyph_index(n.kind) % glyphs.len()];
+            let g = node_glyph(n.kind, style);
             let hot = focus_subnet == Some(n.subnet);
             let fg = if hot {
                 Rgb(255, 255, 255)
@@ -199,5 +214,62 @@ mod tests {
         })
         .unwrap();
         assert_ne!(t.backend().buffer()[(p.x as u16, p.y as u16)].symbol(), "◆");
+    }
+
+    #[test]
+    fn overlay_in_cyberspace_finds_nodes_by_cyber_tile_and_draws_links() {
+        let c = Generator::run(GenParams {
+            seed: 8,
+            size: SizePreset::Custom { w: 80, h: 40 },
+            districts: 4,
+            ..Default::default()
+        })
+        .unwrap();
+        let s = StylePack::load().unwrap();
+        // A server linked to a backbone far enough away that the line has tiles between.
+        let (server, backbone) = c
+            .net
+            .links
+            .iter()
+            .find_map(|l| {
+                let (a, b) = (c.net.node(l.0), c.net.node(l.1));
+                let pair = match (a.kind, b.kind) {
+                    (NodeKind::Server, NodeKind::Backbone) => (a, b),
+                    (NodeKind::Backbone, NodeKind::Server) => (b, a),
+                    _ => return None,
+                };
+                (pair.0.building.is_some() && pair.0.cyber.chebyshev(pair.1.cyber) >= 3)
+                    .then_some(pair)
+            })
+            .unwrap();
+        assert_eq!(
+            Digital::node_under(&c, StratumKind::Net, server.cyber),
+            Some(server.id)
+        );
+        let mut t = Terminal::new(TestBackend::new(80, 40)).unwrap();
+        t.draw(|f| {
+            MapView {
+                city: &c,
+                stratum: StratumKind::Net,
+                origin: Pos::new(0, 0),
+                tick: 0,
+                style: &s,
+                vis: None,
+                overlays: &[&Digital {
+                    enabled: true,
+                    focus: Some(server.id),
+                }],
+                cursor: None,
+            }
+            .render(f.area(), f.buffer_mut())
+        })
+        .unwrap();
+        // The focused link is drawn as dots between the two cyber tiles.
+        let dots = citygen::pathing::bresenham(server.cyber, backbone.cyber)
+            .into_iter()
+            .filter(|p| c.net.node_in_cyber(*p).is_none())
+            .filter(|p| t.backend().buffer()[(p.x as u16, p.y as u16)].symbol() == "·")
+            .count();
+        assert!(dots >= 1, "no link dots drawn");
     }
 }
