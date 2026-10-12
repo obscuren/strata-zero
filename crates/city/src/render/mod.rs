@@ -2,6 +2,7 @@
 
 pub mod lighting;
 pub mod minimap;
+pub mod overlay;
 pub mod style;
 pub mod tileset;
 pub mod traffic;
