@@ -4,16 +4,19 @@ pub mod fov;
 
 pub use crate::render::Visibility;
 use citygen::rng::hash64;
-use citygen::{City, Dir, Grid, Pos, StratumKind, Theme};
+use citygen::{City, ConnectorKind, Dir, Grid, Pos, StratumKind, Theme};
 
 pub const RADIUS_STREET: i32 = 14;
 pub const RADIUS_UNDER: i32 = 8;
+pub const RADIUS_NET: i32 = 24;
 
 #[derive(Clone, Debug)]
 pub struct Player {
     pub pos: Pos,
     pub stratum: StratumKind,
-    /// What has been seen on each physical stratum.
+    /// Where the body waits while jacked in: (stratum, tile). None when not jacked in.
+    pub body: Option<(StratumKind, Pos)>,
+    /// What has been seen on each stratum, indexed by `StratumKind::index`.
     memory: Vec<Grid<Visibility>>,
 }
 
@@ -54,7 +57,8 @@ impl Player {
         let mut player = Player {
             pos,
             stratum: street,
-            memory: StratumKind::PHYSICAL
+            body: None,
+            memory: StratumKind::ALL
                 .iter()
                 .map(|_| Grid::filled(city.size, Visibility::Unseen))
                 .collect(),
@@ -64,11 +68,49 @@ impl Player {
     }
 
     pub fn radius(&self) -> i32 {
-        if self.stratum == StratumKind::Undercity {
-            RADIUS_UNDER
-        } else {
-            RADIUS_STREET
+        match self.stratum {
+            StratumKind::Undercity => RADIUS_UNDER,
+            StratumKind::Net => RADIUS_NET,
+            _ => RADIUS_STREET,
         }
+    }
+
+    pub fn jacked_in(&self) -> bool {
+        self.body.is_some()
+    }
+
+    /// Jacks in at a Jack connector on this tile or an 8-neighbour of it, leaving the body here.
+    pub fn jack_in(&mut self, city: &City) -> Result<Pos, &'static str> {
+        if self.jacked_in() {
+            return Err("already jacked in");
+        }
+        let here = self.pos;
+        let k = self.stratum;
+        let port = std::iter::once(here)
+            .chain(here.neighbors8())
+            .find_map(|p| {
+                city.connectors_at(p)
+                    .find(|c| c.kind == ConnectorKind::Jack && c.serves.contains(&k))
+                    .map(|c| c.pos)
+            })
+            .ok_or("no terminal within reach")?;
+        if !city.walkable(StratumKind::Net, port) {
+            return Err("the port is dead");
+        }
+        self.body = Some((k, here));
+        self.stratum = StratumKind::Net;
+        self.pos = port;
+        self.update_fov(city);
+        Ok(port)
+    }
+
+    /// Returns to the body.
+    pub fn jack_out(&mut self, city: &City) -> Result<(), &'static str> {
+        let (k, p) = self.body.take().ok_or("not jacked in")?;
+        self.stratum = k;
+        self.pos = p;
+        self.update_fov(city);
+        Ok(())
     }
 
     /// Steps one tile if the target is walkable.
@@ -86,6 +128,7 @@ impl Player {
     pub fn use_connector(&mut self, city: &City, up: bool) -> Option<StratumKind> {
         let dest = city
             .connectors_at(self.pos)
+            .filter(|c| c.kind != ConnectorKind::Jack)
             .filter_map(|c| c.serves_from(self.stratum))
             .find_map(|(below, above)| if up { above } else { below })?;
         if !city.walkable(dest, self.pos) {
@@ -178,5 +221,63 @@ mod tests {
         assert_eq!(p.radius(), 14);
         p.stratum = StratumKind::Undercity;
         assert_eq!(p.radius(), 8);
+    }
+
+    #[test]
+    fn jacking_in_leaves_the_body_at_the_port() {
+        let c = Generator::run(GenParams {
+            seed: 6,
+            size: SizePreset::Custom { w: 120, h: 60 },
+            districts: 5,
+            ..Default::default()
+        })
+        .unwrap();
+        let jack = c
+            .connectors
+            .iter()
+            .find(|k| k.kind == citygen::ConnectorKind::Jack && k.public)
+            .unwrap();
+        let stand = jack
+            .pos
+            .neighbors8()
+            .find(|n| c.walkable(StratumKind::Street, *n))
+            .unwrap();
+        let mut p = Player::spawn(&c, 1);
+        p.pos = stand;
+        p.stratum = StratumKind::Street;
+        assert!(!p.jacked_in());
+        assert_eq!(p.jack_in(&c), Ok(jack.pos));
+        assert!(p.jacked_in());
+        assert_eq!(p.stratum, StratumKind::Net);
+        assert_eq!(p.pos, jack.pos);
+        assert_eq!(p.body, Some((StratumKind::Street, stand)));
+        assert_eq!(p.radius(), RADIUS_NET);
+        assert!(p.vis().count(|v| *v == Visibility::Visible) > 10);
+        assert_eq!(p.jack_in(&c), Err("already jacked in"));
+        assert_eq!(p.use_connector(&c, false), None, "jacks are not stairs");
+        assert_eq!(p.use_connector(&c, true), None);
+        assert_eq!(p.jack_out(&c), Ok(()));
+        assert_eq!(
+            (p.stratum, p.pos, p.body),
+            (StratumKind::Street, stand, None)
+        );
+        assert_eq!(p.jack_out(&c), Err("not jacked in"));
+        // Far from any terminal.
+        let far = c
+            .stratum(StratumKind::Street)
+            .unwrap()
+            .tiles
+            .iter()
+            .find(|(q, t)| {
+                t.is_walkable()
+                    && std::iter::once(*q).chain(q.neighbors8()).all(|n| {
+                        c.connectors_at(n)
+                            .all(|k| k.kind != citygen::ConnectorKind::Jack)
+                    })
+            })
+            .map(|(q, _)| q)
+            .unwrap();
+        p.pos = far;
+        assert_eq!(p.jack_in(&c), Err("no terminal within reach"));
     }
 }
