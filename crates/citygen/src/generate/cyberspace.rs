@@ -1,11 +1,11 @@
 //! Stage 12: cyberspace — the Net stratum as a grid with constructs, hubs, lanes and ports.
 
 use super::{GenCtx, StageRunner, StepOut};
-use crate::geom::{Pos, Rect, Size};
+use crate::geom::{Grid, Pos, Rect, Size};
 use crate::ids::{BuildingId, DistrictId};
 use crate::net::{Node, NodeKind, SubnetOwner};
 use crate::params::GenError;
-use crate::pathing::astar;
+use crate::pathing::{astar, components};
 use crate::rng::tile_hash;
 use crate::tile::{Feature, Terrain, Tile};
 use crate::world::{Connector, ConnectorKind, Stratum, StratumKind};
@@ -37,6 +37,8 @@ pub(crate) struct CyberspaceStage {
     pub(crate) gates: Vec<Pos>,
     /// Backbone anchor per district index.
     pub(crate) backbones: Vec<Option<Pos>>,
+    /// The main open-grid component once every construct stands; gates prefer to open onto it.
+    open: Option<Grid<bool>>,
 }
 
 /// Sets terrain, owner and light of one Net tile; out-of-bounds is a no-op.
@@ -157,29 +159,50 @@ impl CyberspaceStage {
         }
     }
 
-    /// Picks the gate once every construct stands, so it never opens onto another wall.
+    /// Marks the largest connected region of open grid; computed once, after the constructs.
+    fn ensure_open(&mut self, ctx: &GenCtx) {
+        if self.open.is_some() {
+            return;
+        }
+        let size = ctx.size();
+        let comps = components(size, |p| ctx.terrain(K, p) == Terrain::NetGrid);
+        let mut open = Grid::filled(size, false);
+        if let Some(main) = comps.iter().max_by_key(|c| c.len()) {
+            for p in main {
+                open.set(*p, true);
+            }
+        }
+        self.open = Some(open);
+    }
+
+    /// Picks the gate once every construct stands: onto the main grid if any border tile
+    /// allows it, else onto any open tile, else the nearest non-corner border tile.
     fn gate(&mut self, ctx: &mut GenCtx, i: usize) {
+        self.ensure_open(ctx);
         let b = ctx.city.buildings[i].clone();
         let fp = b.footprint;
         let target = self.backbones[b.district.index()].unwrap_or(fp.center());
-        let open = |ctx: &GenCtx, p: Pos| {
-            ctx.city
-                .tile(K, outward(fp, p))
-                .is_some_and(|t| t.terrain == Terrain::NetGrid)
-        };
         let candidates: Vec<Pos> = fp.border().filter(|p| !is_corner(fp, *p)).collect();
-        let gate = candidates
-            .iter()
-            .copied()
-            .filter(|p| open(ctx, *p))
-            .min_by_key(|p| (p.dist2(target), p.y, p.x))
-            .or_else(|| {
+        let gate = {
+            let open = self.open.as_ref().expect("set above");
+            let on_main = |p: Pos| open.get(outward(fp, p)).copied().unwrap_or(false);
+            let on_grid = |p: Pos| {
+                ctx.city
+                    .tile(K, outward(fp, p))
+                    .is_some_and(|t| t.terrain == Terrain::NetGrid)
+            };
+            let pick = |keep: &dyn Fn(Pos) -> bool| {
                 candidates
                     .iter()
                     .copied()
+                    .filter(|p| keep(*p))
                     .min_by_key(|p| (p.dist2(target), p.y, p.x))
-            })
-            .unwrap_or(fp.center());
+            };
+            pick(&on_main)
+                .or_else(|| pick(&on_grid))
+                .or_else(|| pick(&|_| true))
+                .unwrap_or(fp.center())
+        };
         set(ctx, gate, Terrain::NetGate, Some(b.id), 255);
         self.gates[i] = gate;
     }
@@ -262,8 +285,15 @@ impl CyberspaceStage {
         }
     }
 
-    fn lane_end(&self, n: &Node) -> Pos {
-        match n.building {
+    /// The construct a node stands in: its own building, else the one its cyber tile lies in
+    /// (a district backbone anchored at a server has no building of its own).
+    fn host(ctx: &GenCtx, n: &Node) -> Option<BuildingId> {
+        n.building
+            .or_else(|| ctx.city.tile(K, n.cyber).and_then(|t| t.building))
+    }
+
+    fn lane_end(&self, ctx: &GenCtx, n: &Node) -> Pos {
+        match Self::host(ctx, n) {
             Some(b) => self.gates[b.index()],
             None => n.cyber,
         }
@@ -273,10 +303,11 @@ impl CyberspaceStage {
         let link = ctx.city.net.links[li];
         let a = ctx.city.net.node(link.0).clone();
         let b = ctx.city.net.node(link.1).clone();
-        if a.building.is_some() && a.building == b.building {
+        let (ha, hb) = (Self::host(ctx, &a), Self::host(ctx, &b));
+        if ha.is_some() && ha == hb {
             return;
         }
-        let (start, goal) = (self.lane_end(&a), self.lane_end(&b));
+        let (start, goal) = (self.lane_end(ctx, &a), self.lane_end(ctx, &b));
         if start == goal {
             return;
         }
@@ -338,6 +369,7 @@ impl StageRunner for CyberspaceStage {
         let nb = ctx.city.buildings.len();
         let nd = ctx.city.districts.len();
         self.gates = vec![Pos::new(0, 0); nb];
+        self.open = None;
         self.backbones = (0..nd)
             .map(|d| backbone_anchor(ctx, DistrictId(d as u32)))
             .collect();
@@ -655,5 +687,86 @@ mod tests {
         let free = |_: Pos, _: Pos| Some(1u32);
         let path = super::bounded_astar(size, a, b, 16, free).unwrap();
         assert_eq!((path[0], *path.last().unwrap()), (a, b));
+    }
+
+    fn gate_of(c: &crate::world::City, b: crate::ids::BuildingId) -> Pos {
+        let net = c.stratum(StratumKind::Net).unwrap();
+        c.building(b)
+            .footprint
+            .border()
+            .find(|p| net.tiles[*p].terrain == Terrain::NetGate)
+            .expect("every construct has a gate")
+    }
+
+    #[test]
+    fn every_district_hub_is_lit_by_a_lane() {
+        for (seed, size) in [
+            (1u64, SizePreset::Small),
+            (6, SizePreset::Custom { w: 120, h: 60 }),
+        ] {
+            let c = Generator::run(GenParams {
+                seed,
+                size,
+                ..Default::default()
+            })
+            .unwrap();
+            let net = c.stratum(StratumKind::Net).unwrap();
+            for n in c
+                .net
+                .nodes
+                .iter()
+                .filter(|n| n.kind == crate::net::NodeKind::Backbone)
+            {
+                // A backbone inside a construct is reached through that construct's gate.
+                let terminal = match net.tiles[n.cyber].building {
+                    Some(b) => gate_of(&c, b),
+                    None => n.cyber,
+                };
+                assert!(
+                    terminal.neighbors4().any(|q| net
+                        .tiles
+                        .get(q)
+                        .is_some_and(|t| t.terrain == Terrain::NetLane)),
+                    "seed {seed}: backbone {:?} at {:?} (terminal {terminal:?}) has no lane",
+                    n.id,
+                    n.cyber
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn gates_open_onto_the_main_grid() {
+        let c = Generator::run(GenParams {
+            seed: 3,
+            size: SizePreset::Medium,
+            ..Default::default()
+        })
+        .unwrap();
+        let net = c.stratum(StratumKind::Net).unwrap();
+        let comps = crate::pathing::components(c.size, |p| {
+            net.tiles
+                .get(p)
+                .is_some_and(|t| t.building.is_none() && t.is_walkable())
+        });
+        let main: std::collections::HashSet<Pos> = comps
+            .iter()
+            .max_by_key(|c| c.len())
+            .unwrap()
+            .iter()
+            .copied()
+            .collect();
+        for b in &c.buildings {
+            let gate = gate_of(&c, b.id);
+            let out = gate
+                .neighbors4()
+                .find(|q| !b.footprint.contains(*q))
+                .unwrap();
+            assert!(
+                main.contains(&out),
+                "gate {gate:?} of {:?} opens into a pocket at {out:?}",
+                b.id
+            );
+        }
     }
 }

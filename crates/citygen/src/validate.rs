@@ -4,6 +4,8 @@ use crate::generate::connectivity::reachable_from_street;
 use crate::geom::{Grid, Pos};
 use crate::ids::{BuildingId, DistrictId, NodeId};
 use crate::net::NodeKind;
+use crate::net::SubnetOwner;
+use crate::pathing::flood_fill;
 use crate::tile::{Feature, Terrain};
 use crate::world::{City, ConnectorKind, StratumKind};
 use std::collections::VecDeque;
@@ -36,6 +38,7 @@ pub enum Violation {
     JackUnreachable {
         pos: Pos,
     },
+    GateSealed(BuildingId),
 }
 
 impl fmt::Display for Violation {
@@ -67,6 +70,10 @@ impl fmt::Display for Violation {
             Violation::CyberAnchor(n) => {
                 write!(f, "net node {n:?} is not on its cyberspace tile")
             }
+            Violation::GateSealed(b) => write!(
+                f,
+                "the construct gate of building {b:?} cannot be reached from its district backbone"
+            ),
             Violation::JackUnreachable { pos } => {
                 write!(
                     f,
@@ -213,6 +220,35 @@ impl City {
             };
             if !ok || n.subnet.index() >= self.net.subnets.len() {
                 out.push(Violation::NetAnchor(n.id));
+            }
+        }
+
+        if let Some(net) = self.stratum(StratumKind::Net) {
+            for d in &self.districts {
+                let Some(backbone) = self.net.nodes.iter().find(|n| {
+                    n.kind == NodeKind::Backbone
+                        && self.net.subnet(n.subnet).owner == SubnetOwner::District(d.id)
+                }) else {
+                    continue;
+                };
+                let mut reach = Grid::filled(self.size, false);
+                for p in flood_fill(self.size, backbone.cyber, |p| {
+                    net.tiles.get(p).is_some_and(|t| t.is_walkable())
+                }) {
+                    reach.set(p, true);
+                }
+                for b in self.buildings.iter().filter(|b| b.district == d.id) {
+                    let gate = b.footprint.border().find(|p| {
+                        net.tiles
+                            .get(*p)
+                            .is_some_and(|t| t.terrain == Terrain::NetGate)
+                    });
+                    if let Some(gate) = gate
+                        && !reach[gate]
+                    {
+                        out.push(Violation::GateSealed(b.id));
+                    }
+                }
             }
         }
 
@@ -458,6 +494,45 @@ mod tests {
                     ..
                 }
             )),
+            "{v:?}"
+        );
+    }
+
+    #[test]
+    fn detects_a_sealed_construct_gate() {
+        let mut c = generated();
+        assert!(c.validate().is_ok());
+        // A building that does not host its district's backbone; wall its gate's outward tile.
+        let hosts: Vec<BuildingId> = c
+            .net
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Backbone)
+            .filter_map(|n| c.tile(StratumKind::Net, n.cyber).and_then(|t| t.building))
+            .collect();
+        let b = c
+            .buildings
+            .iter()
+            .find(|b| !hosts.contains(&b.id))
+            .unwrap()
+            .clone();
+        let gate = b
+            .footprint
+            .border()
+            .find(|p| {
+                c.tile(StratumKind::Net, *p)
+                    .is_some_and(|t| t.terrain == Terrain::NetGate)
+            })
+            .unwrap();
+        let out = gate
+            .neighbors4()
+            .find(|q| !b.footprint.contains(*q))
+            .unwrap();
+        c.tile_mut(StratumKind::Net, out).unwrap().terrain = Terrain::NetWall;
+        let v = c.validate().unwrap_err();
+        assert!(
+            v.iter()
+                .any(|v| matches!(v, Violation::GateSealed(x) if *x == b.id)),
             "{v:?}"
         );
     }
