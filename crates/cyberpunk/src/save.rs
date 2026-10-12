@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 pub const MAGIC: &[u8; 4] = b"CITY";
-pub const FORMAT_VERSION: u16 = 1;
+pub const FORMAT_VERSION: u16 = 2;
+/// Versions whose header this build can read (for listing); only `FORMAT_VERSION` loads.
+const READABLE_VERSIONS: [u16; 2] = [1, 2];
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Header {
@@ -58,12 +60,12 @@ pub fn save_city(path: &Path, city: &City) -> Result<()> {
 }
 
 /// Splits a file into (header, body) after checking magic and version.
-fn split<'a>(bytes: &'a [u8], path: &Path) -> Result<(Header, &'a [u8])> {
+fn split<'a>(bytes: &'a [u8], path: &Path) -> Result<(Header, u16, &'a [u8])> {
     if bytes.len() < 10 || &bytes[0..4] != MAGIC {
         bail!("{} is not a .city file", path.display());
     }
     let version = u16::from_le_bytes([bytes[4], bytes[5]]);
-    if version != FORMAT_VERSION {
+    if !READABLE_VERSIONS.contains(&version) {
         bail!(
             "{} is .city version {version}; this build reads version {FORMAT_VERSION}",
             path.display()
@@ -76,12 +78,19 @@ fn split<'a>(bytes: &'a [u8], path: &Path) -> Result<(Header, &'a [u8])> {
     }
     let header: Header = postcard::from_bytes(&bytes[10..header_end])
         .with_context(|| format!("{}: corrupt header", path.display()))?;
-    Ok((header, &bytes[header_end..]))
+    Ok((header, version, &bytes[header_end..]))
 }
 
 pub fn load_city(path: &Path) -> Result<City> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    let (header, body) = split(&bytes, path)?;
+    let (header, version, body) = split(&bytes, path)?;
+    if version != FORMAT_VERSION {
+        bail!(
+            "{} was saved by an older version ({version}); regenerate it from seed {}",
+            path.display(),
+            header.seed
+        );
+    }
     let city: City = postcard::from_bytes(body)
         .with_context(|| format!("{}: corrupt or truncated city data", path.display()))?;
     if (header.w, header.h) != (city.size.w, city.size.h) {
@@ -131,7 +140,7 @@ pub fn list_cities(dir: &Path) -> Result<Vec<CityFileInfo>> {
         let Ok(bytes) = std::fs::read(&path) else {
             continue;
         };
-        let Ok((header, _)) = split(&bytes, &path) else {
+        let Ok((header, _, _)) = split(&bytes, &path) else {
             continue;
         };
         let modified = entry
@@ -257,5 +266,36 @@ mod tests {
         assert!(load_city(&p).is_err());
         std::fs::write(&p, b"CI").unwrap();
         assert!(load_city(&p).is_err());
+    }
+
+    #[test]
+    fn version_one_files_list_but_refuse_to_load() {
+        let dir = std::env::temp_dir().join(format!("cyberpunk-v1-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let header = postcard::to_allocvec(&Header {
+            name: "Old Town".into(),
+            seed: 42,
+            w: 80,
+            h: 40,
+        })
+        .unwrap();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(MAGIC);
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&(header.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&header);
+        bytes.extend_from_slice(&[0u8; 8]);
+        let path = dir.join("old.city");
+        std::fs::write(&path, &bytes).unwrap();
+        let listed = list_cities(&dir).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].seed, 42);
+        let err = load_city(&path).unwrap_err().to_string();
+        assert!(
+            err.contains("older version") && err.contains("seed 42"),
+            "{err}"
+        );
+        assert_eq!(FORMAT_VERSION, 2);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
