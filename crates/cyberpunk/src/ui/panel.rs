@@ -36,6 +36,8 @@ pub fn inspector_lines(
     stratum: StratumKind,
     p: Pos,
     node: Option<&Node>,
+    items: &[game::Stack],
+    content: &game::Content,
 ) -> Vec<Line<'static>> {
     let mut out = vec![kv("pos", format!("{},{}  {}", p.x, p.y, stratum.label()))];
     let Some(t) = city.tile(stratum, p) else {
@@ -109,6 +111,23 @@ pub fn inspector_lines(
     }
     if t.terrain == Terrain::Water {
         out.push(kv("note", "deep water"));
+    }
+    if !items.is_empty() {
+        let list: Vec<String> = items
+            .iter()
+            .map(|st| {
+                let name = content
+                    .item(&st.item)
+                    .map(|i| i.name.clone())
+                    .unwrap_or_else(|| st.item.to_string());
+                if st.qty > 1 {
+                    format!("{}× {name}", st.qty)
+                } else {
+                    name
+                }
+            })
+            .collect();
+        out.push(kv("items", list.join(", ")));
     }
     out
 }
@@ -216,11 +235,36 @@ mod tests {
         .unwrap();
         let b = &c.buildings[0];
         let p = b.footprint.center();
-        let lines = inspector_lines(&c, StratumKind::Street, p, None);
+        let content = game::Content::load().unwrap();
+        let lines = inspector_lines(&c, StratumKind::Street, p, None, &[], &content);
         let text: String = lines.iter().map(|l| l.to_string() + "\n").collect();
         assert!(text.contains(&format!("{},{}", p.x, p.y)));
         assert!(text.contains(b.kind.label()));
-        let off = inspector_lines(&c, StratumKind::Street, Pos::new(-5, -5), None);
+        assert!(!text.contains("items"));
+        let stacks = [
+            game::Stack {
+                item: game::ItemId::new("copper_coil"),
+                qty: 3,
+            },
+            game::Stack {
+                item: game::ItemId::new("dead_phone"),
+                qty: 1,
+            },
+        ];
+        let lines = inspector_lines(&c, StratumKind::Street, p, None, &stacks, &content);
+        let text: String = lines.iter().map(|l| l.to_string() + "\n").collect();
+        assert!(
+            text.contains("items") && text.contains("3× Copper coil, Dead phone"),
+            "{text}"
+        );
+        let off = inspector_lines(
+            &c,
+            StratumKind::Street,
+            Pos::new(-5, -5),
+            None,
+            &[],
+            &content,
+        );
         assert!(!off.is_empty());
         let sel = strata_selector(StratumKind::Skyways, 0);
         let text: String = sel.iter().map(|l| l.to_string() + "\n").collect();

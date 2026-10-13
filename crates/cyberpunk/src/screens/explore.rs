@@ -530,7 +530,14 @@ impl Screen for MapScreen {
                 lines.extend(legend(self.stratum));
             } else {
                 let node = focus.map(|id| city.net.node(id));
-                lines.extend(inspector_lines(city, self.stratum, cursor, node));
+                lines.extend(inspector_lines(
+                    city,
+                    self.stratum,
+                    cursor,
+                    node,
+                    st.ground.at(self.stratum, cursor),
+                    &st.content,
+                ));
             }
             f.render_widget(
                 Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false }),
