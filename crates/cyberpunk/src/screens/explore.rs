@@ -350,9 +350,45 @@ impl MapScreen {
         })
     }
 
+    /// The actives the character can fire, cooling ones greyed; none says so.
+    fn abilities(&self, st: &mut AppState) -> ScreenCmd {
+        let mut choices = Vec::new();
+        let mut letters = "abcdefgimnoprsuvwxyz".chars();
+        for (id, _) in st.character.abilities(&st.content) {
+            let Some(a) = st.content.ability(&id) else {
+                continue;
+            };
+            if !matches!(a.kind, game::AbilityKind::Active(_)) {
+                continue;
+            }
+            let Some(key) = letters.next() else { break };
+            choices.push(match st.character.cooling(&st.content, &id, st.tick) {
+                Some(left) => {
+                    Choice::disabled(key, format!("{} · cooling {}s", a.name, left.div_ceil(30)))
+                }
+                None => Choice::new(
+                    key,
+                    format!("{} · ready", a.name),
+                    Pick::Act(game::Action::Fire(id.clone())),
+                ),
+            });
+        }
+        if choices.is_empty() {
+            st.set_status("no active abilities", 90);
+            return ScreenCmd::Stay;
+        }
+        ScreenCmd::Push {
+            to: Box::new(Popup::verbs("ABILITIES", choices, st.tick)),
+            fx: TransitionKind::None,
+        }
+    }
+
     fn handle_walk(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
         if k.code == KeyCode::Char(' ') {
             return self.interact(st);
+        }
+        if k.code == KeyCode::Char('a') {
+            return Some(self.abilities(st));
         }
         let dev = st.dev;
         let bonus = st.character.sight_bonus(&st.content);
@@ -1292,5 +1328,53 @@ mod tests {
         s.update(&mut st, &[]);
         assert_eq!(s.stratum, StratumKind::Undercity);
         assert_eq!(st.status_text(), Some("now on Undercity"));
+    }
+
+    #[test]
+    fn a_lists_actives_fires_and_cools() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        st.tick = 100;
+        let ScreenCmd::Push { to: mut p, .. } = s.update(&mut st, &[key(KeyCode::Char('a'))])
+        else {
+            panic!("a opens the abilities popup")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*p, &st, 120, 40);
+        assert!(
+            text.contains("ABILITIES") && text.contains("a  Netscan · ready"),
+            "{text}"
+        );
+        let seen = |st: &AppState| {
+            st.player
+                .as_ref()
+                .unwrap()
+                .vis()
+                .count(|v| *v != crate::render::Visibility::Unseen)
+        };
+        let before = seen(&st);
+        p.update(&mut st, &[key(KeyCode::Char('a'))]);
+        assert!(seen(&st) > before, "the scan painted the map");
+        assert_eq!(st.status_text(), Some("Netscan: pulse sent"));
+        let ScreenCmd::Push { to: mut p, .. } = s.update(&mut st, &[key(KeyCode::Char('a'))])
+        else {
+            panic!()
+        };
+        st.tick += 40;
+        let text = draw_screen(&*p, &st, 120, 40);
+        assert!(text.contains("Netscan · cooling"), "{text}");
+        let msg = st.status_text().map(|m| m.to_string());
+        assert!(
+            matches!(p.update(&mut st, &[key(KeyCode::Enter)]), ScreenCmd::Stay),
+            "a cooling row cannot fire"
+        );
+        assert_eq!(st.status_text().map(|m| m.to_string()), msg);
+        st.character.equipment.clear();
+        assert!(matches!(
+            s.update(&mut st, &[key(KeyCode::Char('a'))]),
+            ScreenCmd::Stay
+        ));
+        assert_eq!(st.status_text(), Some("no active abilities"));
     }
 }

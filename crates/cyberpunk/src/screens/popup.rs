@@ -33,7 +33,6 @@ pub enum Pick {
     World(WorldAct),
     /// Shows these lines in place of the rows; Esc returns to the rows.
     Card(Vec<Line<'static>>),
-    #[allow(dead_code)] // the abilities popup (next task) builds disabled rows
     Close,
 }
 
@@ -56,7 +55,6 @@ impl Choice {
     }
 
     /// A greyed row that cannot be fired; shown so the player knows it exists.
-    #[allow(dead_code)] // the abilities popup (next task) builds disabled rows
     pub fn disabled(key: char, label: impl Into<String>) -> Self {
         Choice {
             key,
