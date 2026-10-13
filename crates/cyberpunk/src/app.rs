@@ -40,8 +40,16 @@ pub struct AppState {
     pub ground: game::Ground,
     /// A ping in flight: lights terminals and stairs around it until `until`.
     pub ping: Option<Ping>,
-    /// (message, expiry tick, is a warning)
-    status: Option<(String, u64, bool)>,
+    status: Option<Status>,
+}
+
+/// A one-line message with its timing.
+#[derive(Clone, Debug)]
+struct Status {
+    text: String,
+    since: u64,
+    until: u64,
+    warn: bool,
 }
 
 /// A handshake burst from the `ping` ability.
@@ -82,23 +90,39 @@ impl AppState {
 
     /// Shows a one-line message for `ttl` ticks.
     pub fn set_status(&mut self, msg: impl Into<String>, ttl: u64) {
-        self.status = Some((msg.into(), self.tick + ttl, false));
+        self.status = Some(Status {
+            text: msg.into(),
+            since: self.tick,
+            until: self.tick + ttl,
+            warn: false,
+        });
     }
 
     /// Shows a one-line refusal for `ttl` ticks; drawn in the warning colour.
     pub fn set_warning(&mut self, msg: impl Into<String>, ttl: u64) {
-        self.status = Some((msg.into(), self.tick + ttl, true));
+        self.status = Some(Status {
+            text: msg.into(),
+            since: self.tick,
+            until: self.tick + ttl,
+            warn: true,
+        });
+    }
+
+    fn live_status(&self) -> Option<&Status> {
+        self.status.as_ref().filter(|s| s.until > self.tick)
     }
 
     pub fn status_text(&self) -> Option<&str> {
-        match &self.status {
-            Some((msg, until, _)) if *until > self.tick => Some(msg.as_str()),
-            _ => None,
-        }
+        self.live_status().map(|s| s.text.as_str())
     }
 
     pub fn status_is_warning(&self) -> bool {
-        matches!(&self.status, Some((_, until, true)) if *until > self.tick)
+        self.live_status().is_some_and(|s| s.warn)
+    }
+
+    /// The tick the current status appeared, for a reveal.
+    pub fn status_since(&self) -> Option<u64> {
+        self.live_status().map(|s| s.since)
     }
 }
 

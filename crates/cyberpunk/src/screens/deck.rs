@@ -1,6 +1,6 @@
 //! The deck: the player's menu over the live map — quests, gear, inventory, workbench, map, skills.
 
-use crate::anim::effects::{glitch_cells, pulse};
+use crate::anim::effects::{glitch_cells, pulse, typewriter};
 use crate::anim::{Easing, Tween};
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::render::memmap::MemoryMap;
@@ -12,7 +12,7 @@ use crate::ui::logo::{self, Logo};
 use citygen::rng::hash64;
 use citygen::{Pos, StratumKind};
 use crossterm::event::{KeyCode, KeyEvent};
-use game::{ItemId, ItemKind, Slot};
+use game::{AbilityKind, Active, ItemId, ItemKind, Perk, Slot, Source};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -32,16 +32,18 @@ pub enum Tab {
     Workbench,
     Map,
     Skills,
+    Abilities,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 6] = [
+    pub const ALL: [Tab; 7] = [
         Tab::Quests,
         Tab::Gear,
         Tab::Inventory,
         Tab::Workbench,
         Tab::Map,
         Tab::Skills,
+        Tab::Abilities,
     ];
 
     pub fn label(self) -> &'static str {
@@ -52,6 +54,7 @@ impl Tab {
             Tab::Workbench => "WORKBENCH",
             Tab::Map => "MAP",
             Tab::Skills => "SKILLS",
+            Tab::Abilities => "ABILITIES",
         }
     }
 
@@ -75,6 +78,8 @@ pub(crate) enum Detail {
     Item(ItemId),
     Recipe(usize),
     Skill(usize),
+    /// Index into `Character::abilities`.
+    Ability(usize),
 }
 
 /// One list row and what the detail pane shows for it (`None` = a header).
@@ -184,7 +189,67 @@ impl Deck {
             Tab::Workbench => Self::workbench_rows(st),
             Tab::Map => Vec::new(),
             Tab::Skills => Self::skill_rows(st),
+            Tab::Abilities => Self::ability_rows(st),
         }
+    }
+
+    fn ability_rows(st: &AppState) -> Vec<Row> {
+        st.character
+            .abilities(&st.content)
+            .iter()
+            .enumerate()
+            .filter_map(|(i, (id, _))| {
+                let a = st.content.ability(id)?;
+                let (icon, state, tone) = match a.kind {
+                    AbilityKind::Passive => ('·', "passive".to_string(), Tone::Dim),
+                    AbilityKind::Active(_) => {
+                        match st.character.cooling(&st.content, id, st.tick) {
+                            Some(left) => (
+                                '◈',
+                                format!("active · cooling {}s", left.div_ceil(30)),
+                                Tone::Warn,
+                            ),
+                            None => ('◈', "active · ready".to_string(), Tone::Normal),
+                        }
+                    }
+                };
+                Some(Row {
+                    text: format!("{icon} {:<12} {state}", a.name),
+                    tone,
+                    detail: Some(Detail::Ability(i)),
+                })
+            })
+            .collect()
+    }
+
+    /// What an item does while worn: one line per perk, one per granted ability.
+    pub(crate) fn perk_lines(st: &AppState, item: &game::Item) -> Vec<Line<'static>> {
+        let cyan = |t: String| Line::from(Span::styled(t, Style::default().fg(CYAN)));
+        let mut out = Vec::new();
+        for p in &item.perks {
+            out.push(cyan(match p {
+                Perk::Stat(s, n) => format!("{n:+} {}", s.label()),
+                Perk::Skill(id, n) => format!(
+                    "{n:+} {}",
+                    st.content
+                        .skill(id)
+                        .map(|s| s.name.to_lowercase())
+                        .unwrap_or_else(|| id.to_string())
+                ),
+                Perk::Sight(n) => format!("{n:+} sight"),
+                Perk::Carry(kg) => format!("{kg:+.1} kg carry"),
+                Perk::HpMax(n) => format!("{n:+} max hp"),
+            }));
+        }
+        for id in &item.grants {
+            let name = st
+                .content
+                .ability(id)
+                .map(|a| a.name.clone())
+                .unwrap_or_else(|| id.to_string());
+            out.push(cyan(format!("grants {name}")));
+        }
+        out
     }
 
     fn quest_rows(st: &AppState) -> Vec<Row> {
@@ -299,7 +364,8 @@ impl Deck {
             .collect()
     }
 
-    fn item_lines(st: &AppState, id: &ItemId) -> Vec<Line<'static>> {
+    /// Everything about one item: the detail pane and the inspect card.
+    pub(crate) fn item_card(st: &AppState, id: &ItemId) -> Vec<Line<'static>> {
         let Some(item) = st.content.item(id) else {
             return vec![warn(format!("unknown item {id}"))];
         };
@@ -310,6 +376,7 @@ impl Deck {
             .unwrap_or_default();
         out.push(dim(format!("{}{slot}", item.kind.label())));
         out.push(dim(format!("{:.1} kg · ¤ {}", item.weight, item.value)));
+        out.extend(Self::perk_lines(st, item));
         if st.character.is_equipped(id) {
             out.push(Line::from(Span::styled(
                 "equipped",
@@ -348,13 +415,13 @@ impl Deck {
                 out
             }
             Some(Detail::Slot(slot)) => match st.character.equipped(*slot) {
-                Some(id) => Self::item_lines(st, id),
+                Some(id) => Self::item_card(st, id),
                 None => vec![
                     head("— empty —"),
                     dim(format!("nothing in the {} slot", slot.label())),
                 ],
             },
-            Some(Detail::Item(id)) => Self::item_lines(st, id),
+            Some(Detail::Item(id)) => Self::item_card(st, id),
             Some(Detail::Recipe(i)) => {
                 let r = &st.content.recipes[*i];
                 let skill = st
@@ -398,6 +465,30 @@ impl Deck {
                 let s = &st.content.skills[*i];
                 let mut out = vec![head(&s.name)];
                 out.push(dim(format!("stat · {}", s.stat.label())));
+                let mut bonus: Vec<String> = Vec::new();
+                for slot in Slot::ALL {
+                    let Some(item) = st
+                        .character
+                        .equipped(slot)
+                        .and_then(|id| st.content.item(id))
+                    else {
+                        continue;
+                    };
+                    for p in &item.perks {
+                        if let Perk::Skill(sid, n) = p
+                            && sid == &s.id
+                        {
+                            bonus.push(format!("{n:+} {}", item.name));
+                        }
+                    }
+                }
+                if !bonus.is_empty() {
+                    out.push(dim(format!(
+                        "base {} · {}",
+                        st.character.skill_base(&s.id),
+                        bonus.join(" · ")
+                    )));
+                }
                 out.push(plain(""));
                 out.push(plain(s.desc.clone()));
                 out.push(plain(""));
@@ -413,6 +504,49 @@ impl Deck {
                         out.push(dim(format!("  {}  (needs {})", t.name, t.level)));
                     }
                 }
+                out
+            }
+            Some(Detail::Ability(i)) => {
+                let abilities = st.character.abilities(&st.content);
+                let Some((id, source)) = abilities.get(*i) else {
+                    return Vec::new();
+                };
+                let Some(a) = st.content.ability(id) else {
+                    return Vec::new();
+                };
+                let mut out = vec![head(&a.name)];
+                let kind = match a.kind {
+                    AbilityKind::Passive => "passive",
+                    AbilityKind::Active(_) => "active",
+                };
+                let from = match source {
+                    Source::Innate => "innate".to_string(),
+                    Source::Item(item) => format!(
+                        "from {}",
+                        st.content
+                            .item(item)
+                            .map(|i| i.name.clone())
+                            .unwrap_or_else(|| item.to_string())
+                    ),
+                };
+                out.push(dim(format!("{kind} · {from}")));
+                if a.cooldown > 0 {
+                    out.push(dim(format!("cooldown {}s", a.cooldown.div_ceil(30))));
+                }
+                if let AbilityKind::Active(active) = a.kind {
+                    let effect = match active {
+                        Active::Scan { radius } => {
+                            format!("scan: paints the map within {radius} tiles")
+                        }
+                        Active::Ping { radius, ticks } => format!(
+                            "ping: lights terminals and stairs within {radius} tiles for {}s",
+                            ticks.div_ceil(30)
+                        ),
+                    };
+                    out.push(Line::from(Span::styled(effect, Style::default().fg(CYAN))));
+                }
+                out.push(plain(""));
+                out.push(plain(a.desc.clone()));
                 out
             }
         }
@@ -493,7 +627,7 @@ impl Screen for Deck {
                 }
                 KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => self.shift_tab(-1, st),
                 KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => self.shift_tab(1, st),
-                KeyCode::Char(c @ '1'..='6') => {
+                KeyCode::Char(c @ '1'..='7') => {
                     let i = c as usize - '1' as usize;
                     self.set_tab(Tab::ALL[i], st);
                 }
@@ -523,13 +657,22 @@ impl Screen for Deck {
 
         // Title: block-font handle when tall enough, else a caption; readout on the right.
         let handle = st.character.handle.to_uppercase();
-        let readout = format!(
-            "¤ {} · hp {}/{} · {:.1} kg",
+        let lead = format!(
+            "¤ {} · hp {}/{} · ",
             st.character.credits,
             st.character.hp,
             st.character.hp_max(&st.content),
-            st.character.weight(&st.content)
         );
+        let load = format!(
+            "{:.1}/{:.1} kg",
+            st.character.weight(&st.content),
+            st.character.carry_cap(&st.content)
+        );
+        let load_style = if st.character.overburdened(&st.content) {
+            Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(DIM)
+        };
         if area.height >= LOGO_MIN_ROWS {
             let w = logo::width(&handle).min(inner.width);
             Logo {
@@ -549,8 +692,16 @@ impl Screen for Deck {
                 right,
             );
         }
-        let rx = right.saturating_sub(readout.chars().count() as u16 + 1);
-        put(buf, rx, inner.y, &readout, Style::default().fg(DIM), right);
+        let rx = right.saturating_sub((lead.chars().count() + load.chars().count()) as u16 + 1);
+        put(buf, rx, inner.y, &lead, Style::default().fg(DIM), right);
+        put(
+            buf,
+            rx + lead.chars().count() as u16,
+            inner.y,
+            &load,
+            load_style,
+            right,
+        );
         y += 1;
 
         // Link line.
@@ -567,7 +718,7 @@ impl Screen for Deck {
 
         // Tab bar.
         let mut x = inner.x + 1;
-        let mut starts = [0u16; 6];
+        let mut starts = [0u16; 7];
         for (i, tab) in Tab::ALL.iter().enumerate() {
             let active = *tab == self.tab;
             let label = if active {
@@ -601,9 +752,10 @@ impl Screen for Deck {
         }
         y += 1;
 
-        // Body.
+        // Body, above the status strip and the hints.
         let hint_y = inner.bottom().saturating_sub(1);
-        let body = Rect::new(inner.x, y, inner.width, hint_y.saturating_sub(y));
+        let strip_y = hint_y.saturating_sub(1);
+        let body = Rect::new(inner.x, y, inner.width, strip_y.saturating_sub(y));
         if self.tab == Tab::Map {
             self.draw_map(st, body, buf);
         } else {
@@ -680,12 +832,28 @@ impl Screen for Deck {
             );
         }
 
+        // Status strip: the last action's result, typed out; refusals in magenta.
+        if let (Some(text), Some(since)) = (st.status_text(), st.status_since()) {
+            let p = tick.saturating_sub(since) as f32 / 20.0;
+            let shown = if p < 1.0 {
+                format!("{}▮", typewriter(text, p))
+            } else {
+                text.to_string()
+            };
+            let style = if st.status_is_warning() {
+                Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(CYAN)
+            };
+            put(buf, inner.x + 1, strip_y, &shown, style, right);
+        }
+
         // Hints.
         put(
             buf,
             inner.x + 1,
             hint_y,
-            "←→ tabs · ↑↓ select · 1-6 jump · esc close",
+            "←→ tabs · ↑↓ select · 1-7 jump · space act · esc close",
             Style::default().fg(DIM),
             right,
         );
@@ -711,6 +879,7 @@ mod tests {
     use super::*;
     use crate::screens::testutil::{buffer_text, key};
     use citygen::{GenParams, Generator, SizePreset};
+    use game::AbilityId;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -793,11 +962,11 @@ mod tests {
             &mut st,
             &[key(KeyCode::Left), key(KeyCode::Left), key(KeyCode::Left)],
         );
-        assert_eq!(d.tab, Tab::Skills, "left wraps around");
+        assert_eq!(d.tab, Tab::Abilities, "left wraps around");
         d.update(&mut st, &[key(KeyCode::Tab)]);
         assert_eq!(d.tab, Tab::Quests, "tab wraps forward");
         d.update(&mut st, &[key(KeyCode::BackTab)]);
-        assert_eq!(d.tab, Tab::Skills);
+        assert_eq!(d.tab, Tab::Abilities);
         assert!(matches!(
             d.update(&mut st, &[key(KeyCode::Esc)]),
             ScreenCmd::Pop {
@@ -827,7 +996,10 @@ mod tests {
             text.contains("▌QUESTS▐") && text.contains("SKILLS"),
             "{text}"
         );
-        assert!(text.contains("esc close"), "{text}");
+        assert!(
+            text.contains("1-7 jump") && text.contains("space act") && text.contains("esc close"),
+            "{text}"
+        );
         assert!(text.contains("║"), "no pane divider: {text}");
         for (i, l) in lines.iter().enumerate().take(29).skip(1) {
             assert!(l.starts_with('│') && l.ends_with('│'), "row {i}: {l:?}");
@@ -839,7 +1011,7 @@ mod tests {
         use unicode_width::UnicodeWidthChar;
         for c in [
             '▰', '▱', '☑', '☐', '✓', '▮', '◍', '┍', '┑', '┕', '┙', '▌', '▐', '║', '◈', '⌗', '▣',
-            '▪', '▫',
+            '▪', '▫', '≡',
         ] {
             assert_eq!(c.width(), Some(1), "{c:?}");
         }
@@ -1087,5 +1259,101 @@ mod tests {
         st.player = Some(p);
         let text = draw(&Deck::new(0), &st, 120, 35);
         assert!(text.contains(&format!("LINK · {name} · Street")), "{text}");
+    }
+
+    #[test]
+    fn abilities_tab_lists_sources_and_cooldowns() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('7'))]);
+        assert_eq!(d.tab, Tab::Abilities);
+        st.character.fired.insert(AbilityId::new("netscan"), 0);
+        st.tick = 60;
+        let text = draw(&d, &st, 120, 35);
+        assert!(
+            text.contains("Street sense") && text.contains("passive"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Netscan") && text.contains("cooling 8s"),
+            "{text}"
+        );
+        let rows = d.rows(&st);
+        d.row = rows
+            .iter()
+            .position(|r| r.text.contains("Netscan"))
+            .unwrap();
+        d.changed = 0;
+        let text = draw(&d, &st, 120, 35);
+        assert!(
+            text.contains("from Pawnshop deck") && text.contains("within 12 tiles"),
+            "{text}"
+        );
+        st.tick = 400;
+        assert!(draw(&d, &st, 120, 35).contains("ready"));
+    }
+
+    #[test]
+    fn readout_shows_capacity_and_status_strip_shows_messages() {
+        let mut st = state();
+        let d = Deck::new(0);
+        st.tick = 60;
+        let text = draw(&d, &st, 120, 35);
+        assert!(
+            text.contains("hp 45/45") && text.contains("11.6/16.0 kg"),
+            "{text}"
+        );
+        st.set_status("equipped Hardhat with visor", 90);
+        st.tick += 30;
+        assert!(draw(&d, &st, 120, 35).contains("equipped Hardhat with visor"));
+        st.set_warning("over capacity · 20.0/16.0 kg", 90);
+        st.tick += 30;
+        let mut t = Terminal::new(TestBackend::new(120, 35)).unwrap();
+        t.draw(|f| d.draw(&st, f)).unwrap();
+        let buf = t.backend().buffer();
+        let row = |y: u16| {
+            (0..120u16)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+        };
+        let y = (0..35u16)
+            .find(|y| row(*y).contains("over capacity"))
+            .expect("strip row");
+        let x = (0..120u16).find(|x| buf[(*x, y)].symbol() == "o").unwrap();
+        assert_eq!(buf[(x, y)].fg, MAGENTA);
+        st.character.inventory.push(game::Stack {
+            item: ItemId::new("scrap_servo"),
+            qty: 40,
+        });
+        let text = draw(&d, &st, 120, 35);
+        assert!(text.contains("35.6/16.0 kg"), "{text}");
+    }
+
+    #[test]
+    fn skills_and_gear_show_perks() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('6'))]);
+        let rows = d.rows(&st);
+        d.row = rows
+            .iter()
+            .position(|r| r.text.contains("Hacking"))
+            .unwrap();
+        d.changed = 0;
+        st.tick = 60;
+        let text = draw(&d, &st, 120, 35);
+        assert!(
+            text.contains("▰▰▰▰▱ 4") && text.contains("base 3 · +1 Pawnshop deck"),
+            "{text}"
+        );
+        d.update(&mut st, &[key(KeyCode::Char('2'))]);
+        let rows = d.rows(&st);
+        d.row = rows.iter().position(|r| r.text.contains("EYES")).unwrap();
+        d.changed = 0;
+        let text = draw(&d, &st, 120, 35);
+        assert!(
+            text.contains("+4 sight") && text.contains("grants Low-light"),
+            "{text}"
+        );
     }
 }
