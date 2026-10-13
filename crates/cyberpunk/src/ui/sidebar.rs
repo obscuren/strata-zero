@@ -1,12 +1,13 @@
-//! The sidebar beside the map: toggleable sections sharing one column.
+//! The sidebar beside the map: toggleable panes sharing one column.
 
 use crate::messages::{Entry, Kind, MessageLog};
 use crate::render::glyphs::kind_icon;
 use crate::render::minimap::Minimap;
 use crate::render::overlay::Digital;
 use crate::render::style::StylePack;
-use crate::ui::chrome::{CYAN, DIM, MAGENTA, RULE, TEXT, reveal};
-use crate::ui::panel::{boxed, inspector_lines, legend};
+use crate::ui::chrome::{CYAN, DIM, MAGENTA, PANEL_BG, TEXT, reveal};
+use crate::ui::hud::{RULE_STYLE, clock_at};
+use crate::ui::panel::{inspector_lines, legend};
 use crate::walker::port_name;
 use citygen::{City, ConnectorKind, Feature, NodeKind, Pos, Rect as TileRect, StratumKind};
 use game::{Character, Content, Ground};
@@ -16,15 +17,21 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
-pub const WIDTH: u16 = 30;
 pub const MINIMAP_H: u16 = 13;
 const LOG_MIN: u16 = 3;
-const HERE_CAP: u16 = 8;
+const HERE_CAP: u16 = 7;
 const QUEST_CAP: u16 = 4;
-const INSPECT_CAP: u16 = 15;
+const INSPECT_CAP: u16 = 14;
 const ITEM_ROWS: usize = 5;
 /// Ticks the newest log entry takes to type out.
 const REVEAL_TICKS: u64 = 20;
+/// Cells a log line's clock stamp takes, continuation rows hang under the text.
+const STAMP_W: usize = 7;
+
+/// The right column's width: the main tab row needs 38 cells.
+pub fn width(_total: u16) -> u16 {
+    40
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
@@ -115,21 +122,23 @@ impl Sidebar {
     }
 }
 
-/// Rows per section, in order. Each non-LOG section takes the smaller of its need and
-/// what is left; LOG takes the remainder; MAP drops when LOG would get under three rows.
-/// A section that would get only its rule row gets nothing instead.
+/// Rows per pane, in order; needs include each pane's separator row, which every
+/// pane but the first carries. Each non-LOG pane takes the smaller of its need and
+/// what is left; LOG takes the remainder; MAP drops when LOG would get under three
+/// rows. A pane that would get only its separator row gets nothing instead.
 pub fn budget(needs: &[(Section, u16)], height: u16) -> Vec<(Section, u16)> {
     let mut needs: Vec<(Section, u16)> = needs.to_vec();
-    let whole = |r: u16| if r < 2 { 0 } else { r };
+    // The first pane has no separator: one row is a whole pane there, two elsewhere.
+    let whole = |i: usize, r: u16| if r < if i == 0 { 1 } else { 2 } { 0 } else { r };
     loop {
         let mut left = height;
         let mut rows: Vec<(Section, u16)> = Vec::with_capacity(needs.len());
-        for (s, n) in &needs {
+        for (i, (s, n)) in needs.iter().enumerate() {
             if *s == Section::Log {
                 rows.push((*s, 0));
                 continue;
             }
-            let r = whole((*n).min(left));
+            let r = whole(i, (*n).min(left));
             left -= r;
             rows.push((*s, r));
         }
@@ -139,8 +148,8 @@ pub fn budget(needs: &[(Section, u16)], height: u16) -> Vec<(Section, u16)> {
             needs.retain(|(s, _)| *s != Section::Map);
             continue;
         }
-        if let Some(r) = rows.iter_mut().find(|(s, _)| *s == Section::Log) {
-            r.1 = whole(left);
+        if let Some(i) = needs.iter().position(|(s, _)| *s == Section::Log) {
+            rows[i].1 = whole(i, left);
         }
         rows.retain(|(_, r)| *r > 0);
         return rows;
@@ -171,18 +180,8 @@ fn dim(text: impl Into<String>) -> Line<'static> {
     Line::from(Span::styled(text.into(), Style::default().fg(DIM)))
 }
 
-/// `── TITLE ───…` padded to `width`.
-fn rule(title: &str, width: u16) -> Line<'static> {
-    let head = format!("── {title} ");
-    let n = (width as usize).saturating_sub(head.chars().count());
-    Line::from(vec![
-        Span::styled("── ", Style::default().fg(RULE)),
-        Span::styled(
-            format!("{title} "),
-            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("─".repeat(n), Style::default().fg(RULE)),
-    ])
+fn separator(width: u16) -> Line<'static> {
+    Line::from(Span::styled("─".repeat(width as usize), RULE_STYLE))
 }
 
 /// The focus tile: its feature, then what lies on it.
@@ -191,12 +190,12 @@ pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     if v.stratum == StratumKind::Net {
         if let Some(id) = Digital::node_under(city, v.stratum, v.focus) {
-            out.push(plain(format!("◆ {}", city.net.node(id).kind.label())));
+            out.push(plain(format!(" ◆ {}", city.net.node(id).kind.label())));
         }
     } else if let Some(t) = city.tile(v.stratum, v.focus)
         && t.feature == Some(Feature::Node(NodeKind::Terminal))
     {
-        out.push(plain(format!("╥ {}", port_name(city, v.focus))));
+        out.push(plain(format!(" ╥ {}", port_name(city, v.focus))));
     }
     for c in city
         .connectors_at(v.focus)
@@ -206,10 +205,10 @@ pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
             continue;
         };
         if above.is_some() {
-            out.push(plain(format!("> {} up", c.kind.label())));
+            out.push(plain(format!(" > {} up", c.kind.label())));
         }
         if below.is_some() {
-            out.push(plain(format!("< {} down", c.kind.label())));
+            out.push(plain(format!(" < {} down", c.kind.label())));
         }
     }
     let stacks = v.ground.at(v.stratum, v.focus);
@@ -223,19 +222,49 @@ pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
         } else {
             String::new()
         };
-        out.push(plain(format!("{icon} {name}{qty}")));
+        out.push(plain(format!(" {icon} {name}{qty}")));
     }
     if stacks.len() > ITEM_ROWS {
-        out.push(dim(format!("… and {} more", stacks.len() - ITEM_ROWS)));
+        out.push(dim(format!(" … and {} more", stacks.len() - ITEM_ROWS)));
     }
     if out.is_empty() {
-        out.push(dim("nothing here"));
+        out.push(dim(" nothing here"));
     }
     out
 }
 
-/// The first unfinished quest's upper-cased title and first open objective.
-pub fn quest_lines(character: &Character, content: &Content) -> (String, Vec<Line<'static>>) {
+/// One line for the footer: `3 items · terminal · stairs`, or `nothing`.
+pub fn here_summary(v: &SidebarView) -> String {
+    let mut parts = Vec::new();
+    let n = v.ground.at(v.stratum, v.focus).len();
+    if n == 1 {
+        parts.push("1 item".to_string());
+    } else if n > 1 {
+        parts.push(format!("{n} items"));
+    }
+    if v.stratum != StratumKind::Net
+        && v.city
+            .tile(v.stratum, v.focus)
+            .is_some_and(|t| t.feature == Some(Feature::Node(NodeKind::Terminal)))
+    {
+        parts.push("terminal".to_string());
+    }
+    for c in v
+        .city
+        .connectors_at(v.focus)
+        .filter(|c| c.kind != ConnectorKind::Jack && c.serves.contains(&v.stratum))
+    {
+        parts.push(c.kind.label().to_string());
+    }
+    if parts.is_empty() {
+        "nothing".to_string()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+/// The first unfinished quest: title and giver, its first open objective, and pips.
+pub fn quest_lines(character: &Character, content: &Content) -> Vec<Line<'static>> {
     for q in &character.quests {
         if q.is_done() {
             continue;
@@ -246,10 +275,28 @@ pub fn quest_lines(character: &Character, content: &Content) -> (String, Vec<Lin
         let Some(i) = q.done.iter().position(|d| !*d) else {
             continue;
         };
+        let done = q.done.iter().filter(|d| **d).count();
+        let total = q.done.len();
         let objective = quest.objectives.get(i).cloned().unwrap_or_default();
-        return (quest.title.to_uppercase(), vec![plain(objective)]);
+        return vec![
+            Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    quest.title.to_uppercase(),
+                    Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!(" · {}", quest.giver), Style::default().fg(TEXT)),
+            ]),
+            plain(format!(" » {objective}")),
+            Line::from(vec![
+                Span::raw(" "),
+                Span::styled("▰".repeat(done), Style::default().fg(CYAN)),
+                Span::styled("▱".repeat(total - done), Style::default().fg(DIM)),
+                Span::styled(format!(" {done}/{total}"), Style::default().fg(DIM)),
+            ]),
+        ];
     }
-    ("QUEST".to_string(), vec![dim("no active quest")])
+    vec![dim(" no active quest")]
 }
 
 /// Word-wraps `text` to `width` cells; words longer than a row are broken.
@@ -286,15 +333,28 @@ pub(crate) fn wrap_text(text: &str, width: usize) -> Vec<String> {
     rows
 }
 
+/// A log entry: its clock stamp, then the marked text; wraps hang under the text.
 fn entry_lines(e: &Entry, width: u16) -> Vec<Line<'static>> {
     let style = match e.kind {
         Kind::Info => Style::default().fg(TEXT),
         Kind::Warn => Style::default().fg(MAGENTA),
         Kind::Story => Style::default().fg(CYAN),
     };
-    wrap_text(&e.marked(), width as usize)
+    let (h, m) = clock_at(e.tick);
+    let stamp = format!(" {h:02}:{m:02} ");
+    wrap_text(&e.marked(), (width as usize).saturating_sub(STAMP_W))
         .into_iter()
-        .map(|s| Line::from(Span::styled(s, style)))
+        .enumerate()
+        .map(|(i, s)| {
+            if i == 0 {
+                Line::from(vec![
+                    Span::styled(stamp.clone(), Style::default().fg(DIM)),
+                    Span::styled(s, style),
+                ])
+            } else {
+                Line::from(vec![Span::raw(" ".repeat(STAMP_W)), Span::styled(s, style)])
+            }
+        })
         .collect()
 }
 
@@ -337,97 +397,96 @@ fn draw_log(log: &MessageLog, tick: u64, area: Rect, buf: &mut Buffer) {
     Paragraph::new(out).render(area, buf);
 }
 
-fn list_line(flags: &Sidebar, dev_row: bool) -> Line<'static> {
-    let mut spans = Vec::new();
-    for s in Section::ALL.iter().filter(|s| s.dev_only() == dev_row) {
-        let on = flags.is_on(*s);
-        spans.push(Span::styled(
-            if on { " ▣ " } else { " ▢ " },
-            Style::default().fg(if on { CYAN } else { DIM }),
-        ));
-        spans.push(Span::styled(
-            s.label().to_string(),
-            Style::default().fg(if on { TEXT } else { DIM }),
-        ));
-    }
-    Line::from(spans)
-}
-
-/// Draws the panel: the section list, then each active section within its budget.
-/// Returns whether the LOG section got any rows, so the map can toast when it did not.
+/// Draws the column: the active panes in order within their budget, a light rule
+/// before every pane but the first. Returns whether the LOG pane got any rows, so
+/// the map can toast when it did not.
 pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) -> bool {
-    let title = v.character.handle.to_uppercase();
-    let block = boxed(&title);
-    let inner = block.inner(area);
-    block.render(area, buf);
-    if inner.width == 0 || inner.height == 0 {
+    if area.width == 0 || area.height == 0 {
         return false;
     }
-    let w = inner.width;
-    let mut list = vec![list_line(flags, false)];
-    if v.dev {
-        list.push(list_line(flags, true));
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            buf[(x, y)].set_bg(PANEL_BG);
+        }
     }
-    let list_h = (list.len() as u16).min(inner.height);
-    Paragraph::new(list).render(Rect::new(inner.x, inner.y, w, list_h), buf);
-    let body = Rect::new(inner.x, inner.y + list_h, w, inner.height - list_h);
+    let w = area.width;
     let node = Digital::node_under(v.city, v.stratum, v.focus).map(|id| v.city.net.node(id));
-    let mut built: Vec<(Section, String, Vec<Line<'static>>, u16)> = Vec::new();
-    for s in flags.active(v.dev) {
-        let (title, lines, need) = match s {
+    let mut built: Vec<(Section, Vec<Line<'static>>, u16)> = Vec::new();
+    for (i, s) in flags.active(v.dev).into_iter().enumerate() {
+        let sep = if i == 0 { 0 } else { 1 };
+        let (lines, need) = match s {
             Section::Here => {
                 let l = here_lines(v);
-                let n = rows_for(&l, w).min(HERE_CAP - 1) + 1;
-                ("HERE".to_string(), l, n)
+                let n = rows_for(&l, w).min(HERE_CAP);
+                (l, n)
             }
             Section::Quest => {
-                let (t, l) = quest_lines(v.character, v.content);
-                let n = rows_for(&l, w).min(QUEST_CAP - 1) + 1;
-                (t, l, n)
+                let l = quest_lines(v.character, v.content);
+                let n = rows_for(&l, w).min(QUEST_CAP);
+                (l, n)
             }
-            Section::Map => (
-                format!("MAP · {}", v.stratum.label().to_lowercase()),
-                Vec::new(),
-                MINIMAP_H + 1,
-            ),
-            Section::Log => ("LOG".to_string(), Vec::new(), 0),
+            Section::Map => (Vec::new(), MINIMAP_H + 1),
+            Section::Log => (Vec::new(), 0),
             Section::Inspect => {
-                let l = inspector_lines(
+                let l: Vec<Line<'static>> = inspector_lines(
                     v.city,
                     v.stratum,
                     v.focus,
                     node,
                     v.ground.at(v.stratum, v.focus),
                     v.content,
-                );
-                let n = rows_for(&l, w).min(INSPECT_CAP - 1) + 1;
-                ("INSPECT".to_string(), l, n)
+                )
+                .into_iter()
+                .map(|l| {
+                    let mut spans = vec![Span::raw(" ")];
+                    spans.extend(l.spans);
+                    Line::from(spans)
+                })
+                .collect();
+                let n = rows_for(&l, w).min(INSPECT_CAP);
+                (l, n)
             }
             Section::Legend => {
                 let l = legend(v.stratum);
-                let n = l.len() as u16 + 1;
-                ("LEGEND".to_string(), l, n)
+                let n = l.len() as u16;
+                (l, n)
             }
         };
-        built.push((s, title, lines, need));
+        built.push((s, lines, need + sep));
     }
-    let needs: Vec<(Section, u16)> = built.iter().map(|(s, _, _, n)| (*s, *n)).collect();
-    let mut y = body.y;
+    let needs: Vec<(Section, u16)> = built.iter().map(|(s, _, n)| (*s, *n)).collect();
+    let mut y = area.y;
     let mut log_drawn = false;
-    for (s, rows) in budget(&needs, body.height) {
+    let mut first = true;
+    for (s, mut rows) in budget(&needs, area.height) {
         log_drawn |= s == Section::Log;
-        let (_, title, lines, _) = built.iter().find(|(x, ..)| *x == s).expect("budgeted");
-        Paragraph::new(rule(title, w)).render(Rect::new(body.x, y, w, 1), buf);
-        let content = Rect::new(body.x, y + 1, w, rows - 1);
+        if !first {
+            Paragraph::new(separator(w)).render(Rect::new(area.x, y, w, 1), buf);
+            y += 1;
+            rows -= 1;
+        }
+        first = false;
+        let (_, lines, _) = built.iter().find(|(x, ..)| *x == s).expect("budgeted");
+        let content = Rect::new(area.x, y, w, rows);
         match s {
-            Section::Map => Minimap {
-                city: v.city,
-                stratum: v.stratum,
-                view: v.view,
-                player: v.player,
-                style: v.style,
+            Section::Map => {
+                let map_rows = rows.saturating_sub(1);
+                Minimap {
+                    city: v.city,
+                    stratum: v.stratum,
+                    view: v.view,
+                    player: v.player,
+                    style: v.style,
+                }
+                .render(Rect::new(area.x, y, w, map_rows), buf);
+                let coord = format!("{},{} · {} ", v.focus.x, v.focus.y, v.stratum.label());
+                let pad = (w as usize).saturating_sub(coord.chars().count());
+                Paragraph::new(Line::from(Span::styled(
+                    format!("{}{coord}", " ".repeat(pad)),
+                    Style::default().fg(DIM),
+                )))
+                .render(Rect::new(area.x, y + map_rows, w, rows - map_rows), buf);
             }
-            .render(content, buf),
             Section::Log => draw_log(v.log, v.tick, content, buf),
             _ => Paragraph::new(lines.clone())
                 .wrap(Wrap { trim: false })
@@ -572,7 +631,7 @@ mod tests {
                 .map(|l| l.to_string())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(text(&st), vec!["nothing here"]);
+        assert_eq!(text(&st), vec![" nothing here"]);
         for (i, id) in [
             "copper_coil",
             "dead_phone",
@@ -589,13 +648,13 @@ mod tests {
         }
         let lines = text(&st);
         let coil = kind_icon(game::ItemKind::Component);
-        assert_eq!(lines[0], format!("{coil} Copper coil"));
+        assert_eq!(lines[0], format!(" {coil} Copper coil"));
         assert_eq!(
             lines[1],
-            format!("{} Dead phone ×2", kind_icon(game::ItemKind::Junk))
+            format!(" {} Dead phone ×2", kind_icon(game::ItemKind::Junk))
         );
         assert_eq!(lines.len(), 6, "{lines:?}");
-        assert_eq!(lines[5], "… and 2 more");
+        assert_eq!(lines[5], " … and 2 more");
         // The player spawns on a public connector: the stairs show there.
         let spawn = st.player.as_ref().unwrap().pos;
         let city = st.city.as_ref().unwrap();
@@ -715,28 +774,30 @@ mod tests {
             let p = st.player.as_ref().unwrap();
             (p.stratum, p.pos)
         };
-        for h in [10u16, 25, 40] {
+        for h in [1u16, 2, 10, 25, 40] {
             let text = draw_to(&view(&st, pos, k), &st.sidebar, width(100), h);
-            assert!(
-                text.contains("▣ here") && text.contains("▣ inspect"),
-                "{text}"
-            );
             assert_eq!(text.lines().count(), h as usize);
         }
         let text = draw_to(&view(&st, pos, k), &st.sidebar, width(100), 60);
         for needle in [
-            "── HERE",
-            "── THE DROP",
-            "── MAP · street",
-            "── LOG",
-            "── INSPECT",
-            "── LEGEND",
+            "THE DROP · Mama Sol",
+            "▰▱▱ 1/3",
+            "· Street",
+            "aaaa",
+            "pos ",
+            "terrain",
         ] {
             assert!(text.contains(needle), "{needle}: {text}");
         }
+        // Six panes on: five separators.
+        assert_eq!(text.matches(&"─".repeat(40)).count(), 5, "{text}");
         assert_eq!(text.lines().count(), 60);
         assert_eq!(
-            budget(&[(Section::Here, 3), (Section::Log, 0)], 4),
+            budget(&[(Section::Here, 1), (Section::Log, 0)], 1),
+            vec![(Section::Here, 1)]
+        );
+        assert_eq!(
+            budget(&[(Section::Here, 3), (Section::Quest, 2)], 4),
             vec![(Section::Here, 3)]
         );
     }
@@ -761,7 +822,7 @@ mod tests {
         assert_eq!(text.matches('x').count(), 70, "{text}");
         assert!(text.contains("short"), "{text}");
         // Four rows: the long entry does not fit whole, only "short" shows.
-        let text = draw_to(&view(&st, pos, k), &flags, width(100), 4);
+        let text = draw_to(&view(&st, pos, k), &flags, width(100), 3);
         assert_eq!(text.matches('x').count(), 0, "{text}");
         assert!(text.contains("short"), "{text}");
     }

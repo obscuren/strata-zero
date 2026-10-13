@@ -142,7 +142,10 @@ fn layout(area: Rect) -> Regions {
         .split(area);
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(20), Constraint::Length(sidebar::WIDTH)])
+        .constraints([
+            Constraint::Min(20),
+            Constraint::Length(sidebar::width(area.width)),
+        ])
         .split(rows[2]);
     Regions {
         header: rows[0],
@@ -1061,7 +1064,7 @@ mod tests {
         let mut s = MapScreen::explore(0);
         s.update(&mut st, &[]);
         let text = draw_screen(&s, &st, 120, 40);
-        let panel_x = 120 - sidebar::WIDTH as usize;
+        let panel_x = 120 - sidebar::width(120) as usize;
         let rows: Vec<(usize, usize)> = text
             .lines()
             .enumerate()
