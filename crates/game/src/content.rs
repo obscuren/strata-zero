@@ -25,6 +25,15 @@ pub enum ContentError {
     DuplicateId(String),
     #[error("quest `{quest}`: starter flags do not match its objectives")]
     ObjectiveCount { quest: String },
+    #[error("starter {what}: duplicate `{id}`")]
+    DuplicateStarter { what: String, id: String },
+    #[error("starter talent `{talent}` needs {skill} {need}; the starter has {have}")]
+    TalentLevel {
+        talent: String,
+        skill: String,
+        need: u8,
+        have: u8,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -90,6 +99,11 @@ impl Content {
         for (id, _) in &s.inventory {
             need_item("starter inventory".into(), id)?;
         }
+        let dup = |what: &str, id: String| ContentError::DuplicateStarter {
+            what: what.to_string(),
+            id,
+        };
+        let mut slots: HashSet<Slot> = HashSet::new();
         for (slot, id) in &s.equipped {
             let item = need_item("starter equipment".into(), id)?;
             if item.slot != Some(*slot) {
@@ -98,18 +112,38 @@ impl Content {
                     slot: *slot,
                 });
             }
+            if !slots.insert(*slot) {
+                return Err(dup("equipment", slot.label().to_string()));
+            }
         }
+        let mut skills: HashSet<&SkillId> = HashSet::new();
         for (id, _) in &s.skills {
             need_skill("starter skills".into(), id)?;
+            if !skills.insert(id) {
+                return Err(dup("skills", id.0.clone()));
+            }
         }
         for id in &s.talents {
-            if self.talent(id).is_none() {
-                return Err(ContentError::UnknownTalent {
-                    where_: "starter talents".into(),
-                    id: id.0.clone(),
+            let t = self.talent(id).ok_or_else(|| ContentError::UnknownTalent {
+                where_: "starter talents".into(),
+                id: id.0.clone(),
+            })?;
+            let have = s
+                .skills
+                .iter()
+                .find(|(sk, _)| sk == &t.skill)
+                .map(|(_, l)| *l)
+                .unwrap_or(0);
+            if have < t.level {
+                return Err(ContentError::TalentLevel {
+                    talent: id.0.clone(),
+                    skill: t.skill.0.clone(),
+                    need: t.level,
+                    have,
                 });
             }
         }
+        let mut quests: HashSet<&QuestId> = HashSet::new();
         for (id, flags) in &s.quests {
             let q = self.quest(id).ok_or_else(|| ContentError::UnknownQuest {
                 where_: "starter quests".into(),
@@ -119,6 +153,9 @@ impl Content {
                 return Err(ContentError::ObjectiveCount {
                     quest: id.0.clone(),
                 });
+            }
+            if !quests.insert(id) {
+                return Err(dup("quests", id.0.clone()));
             }
         }
         Ok(())
@@ -244,6 +281,37 @@ mod tests {
         assert!(matches!(
             c.validate(),
             Err(ContentError::UnknownQuest { .. })
+        ));
+
+        let mut c = good.clone();
+        let dup = c.starter.equipped[0].clone();
+        c.starter.equipped.push(dup);
+        assert!(matches!(
+            c.validate(),
+            Err(ContentError::DuplicateStarter { .. })
+        ));
+
+        let mut c = good.clone();
+        let dup = c.starter.skills[0].clone();
+        c.starter.skills.push(dup);
+        assert!(matches!(
+            c.validate(),
+            Err(ContentError::DuplicateStarter { .. })
+        ));
+
+        let mut c = good.clone();
+        let dup = c.starter.quests[0].clone();
+        c.starter.quests.push(dup);
+        assert!(matches!(
+            c.validate(),
+            Err(ContentError::DuplicateStarter { .. })
+        ));
+
+        let mut c = good.clone();
+        c.starter.talents.push(TalentId::new("deep_dive")); // hacking 4; the starter has 3
+        assert!(matches!(
+            c.validate(),
+            Err(ContentError::TalentLevel { .. })
         ));
 
         assert!(matches!(
