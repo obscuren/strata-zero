@@ -238,6 +238,18 @@ pub struct Stats {
     pub net: u8,
 }
 
+impl Stats {
+    pub fn get(&self, stat: Stat) -> u8 {
+        match stat {
+            Stat::Body => self.body,
+            Stat::Reflex => self.reflex,
+            Stat::Tech => self.tech,
+            Stat::Cool => self.cool,
+            Stat::Net => self.net,
+        }
+    }
+}
+
 /// What a new character starts with.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Starter {

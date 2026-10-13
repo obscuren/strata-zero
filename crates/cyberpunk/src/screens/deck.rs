@@ -437,7 +437,7 @@ impl Deck {
             .iter()
             .enumerate()
             .map(|(i, s)| {
-                let have = st.character.skill_level(&s.id);
+                let have = st.character.skill_level(&st.content, &s.id);
                 let lvl = have.min(5) as usize;
                 let bar = format!("{}{}", "▰".repeat(lvl), "▱".repeat(5 - lvl));
                 Row {
@@ -512,7 +512,7 @@ impl Deck {
                     .skill(&r.skill)
                     .map(|s| s.name.clone())
                     .unwrap_or_default();
-                let have = st.character.skill_level(&r.skill);
+                let have = st.character.skill_level(&st.content, &r.skill);
                 let mut out = vec![head(&r.name)];
                 let need = format!("needs {skill} {}  (you: {have})", r.level);
                 out.push(if have >= r.level {
@@ -677,7 +677,7 @@ impl Screen for Deck {
             "¤ {} · hp {}/{} · {:.1} kg",
             st.character.credits,
             st.character.hp,
-            st.character.hp_max,
+            st.character.hp_max(&st.content),
             st.character.weight(&st.content)
         );
         if area.height >= LOGO_MIN_ROWS {
@@ -892,7 +892,7 @@ mod tests {
         let text = draw(&d, &st, 120, 35);
         assert!(text.contains("▌QUESTS▐"), "{text}");
         assert!(
-            text.contains("VEX") && text.contains("¤ 320") && text.contains("hp 40/40"),
+            text.contains("VEX") && text.contains("¤ 320") && text.contains("hp 45/45"),
             "{text}"
         );
         assert!(
@@ -1028,7 +1028,7 @@ mod tests {
         d.changed = 0;
         let text = draw(&d, &st, 120, 35);
         assert!(
-            text.contains("Hacking") && text.contains("▰▰▰▱▱ 3"),
+            text.contains("Hacking") && text.contains("▰▰▰▰▱ 4"),
             "{text}"
         );
         let rows = d.rows(&st);
@@ -1135,9 +1135,9 @@ mod tests {
         d.update(&mut st, &[key(KeyCode::Char('6'))]);
         let rows = d.rows(&st);
         let hacking = rows.iter().find(|r| r.text.contains("Hacking")).unwrap();
-        assert!(hacking.text.contains("▰▰▰▰▰ 7"), "{:?}", hacking.text);
+        assert!(hacking.text.contains("▰▰▰▰▰ 8"), "{:?}", hacking.text);
         st.tick = 60;
-        assert!(draw(&d, &st, 120, 35).contains("▰▰▰▰▰ 7"));
+        assert!(draw(&d, &st, 120, 35).contains("▰▰▰▰▰ 8"));
     }
 
     #[test]
