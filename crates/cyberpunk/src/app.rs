@@ -34,9 +34,7 @@ pub struct AppState {
     pub rain: bool,
     /// FPS readout in the status bar (Settings).
     pub show_fps: bool,
-    #[allow(dead_code)] // read from Task 7
     pub content: game::Content,
-    #[allow(dead_code)] // read from Task 7
     pub character: game::Character,
     status: Option<(String, u64)>,
 }
@@ -82,7 +80,6 @@ impl AppState {
 pub use crate::ui::transition::{Transition, TransitionKind};
 
 /// What a screen asks the loop to do after an update.
-#[allow(dead_code)] // Push/Pop/Flash are constructed from Task 4 and Task 9
 pub enum ScreenCmd {
     Stay,
     /// Replace the whole stack with one screen.

@@ -7,6 +7,7 @@ use crate::render::traffic::Traffic;
 use crate::render::viewport::{Camera, MapView, Overlay, tile_to_screen};
 use crate::render::weather::Weather;
 use crate::screens::configure::Configure;
+use crate::screens::deck::Deck;
 use crate::screens::files::Files;
 use crate::screens::generating::Generating;
 use crate::screens::help;
@@ -181,6 +182,12 @@ impl MapScreen {
             KeyCode::Char('e') => self.show_legend = !self.show_legend,
             KeyCode::Char('d') => self.digital = !self.digital,
             KeyCode::Char('?') => self.help = !self.help,
+            KeyCode::Tab => {
+                return Some(ScreenCmd::Push {
+                    to: Box::new(Deck::new(st.tick)),
+                    fx: TransitionKind::Glitch,
+                });
+            }
             KeyCode::Char('s') => {
                 let name = st.city.as_ref().map(|c| c.name.clone())?;
                 return Some(ScreenCmd::Push {
@@ -254,7 +261,7 @@ impl MapScreen {
         let city = st.city.as_ref()?;
         let player = st.player.as_mut()?;
         match k.code {
-            KeyCode::Tab if dev => {
+            KeyCode::Char('c') if dev => {
                 self.cursor = player.pos;
                 self.mode = Mode::Explore;
             }
@@ -265,6 +272,7 @@ impl MapScreen {
                             self.stratum = player.stratum;
                             self.cam.snap(player.pos);
                             st.set_status("jacked out", 60);
+                            return Some(ScreenCmd::Flash(TransitionKind::Glitch));
                         }
                         Err(e) => st.set_status(e, 60),
                     }
@@ -275,6 +283,7 @@ impl MapScreen {
                             self.cam.snap(port);
                             let where_ = port_name(city, port);
                             st.set_status(format!("jacked in at {where_}"), 90);
+                            return Some(ScreenCmd::Flash(TransitionKind::Glitch));
                         }
                         Err(e) => st.set_status(e, 60),
                     }
@@ -509,15 +518,20 @@ impl Screen for MapScreen {
         }
 
         let jacked = st.player.as_ref().is_some_and(|p| p.jacked_in());
-        let cam = if st.dev { " · tab camera" } else { "" };
+        let cam = if st.dev { " · c camera" } else { "" };
         let hints = match (self.mode, jacked) {
             (Mode::Explore, _) => {
-                "hjkl pan · [] level · w walk · d overlay · e legend · s save · ? keys".to_string()
+                "hjkl pan · [] level · w walk · tab deck · d overlay · e legend · ? keys"
+                    .to_string()
             }
             (Mode::Walk, true) => {
-                format!("⚡ jacked in · hjkl move · enter jack out{cam} · d overlay · ? keys")
+                format!(
+                    "⚡ jacked in · hjkl move · enter jack out · tab deck · d overlay{cam} · ? keys"
+                )
             }
-            (Mode::Walk, false) => format!("hjkl move · <> stairs · enter jack in{cam} · ? keys"),
+            (Mode::Walk, false) => {
+                format!("hjkl move · <> stairs · enter jack in · tab deck{cam} · ? keys")
+            }
         };
         f.render_widget(
             Paragraph::new(status_bar(
@@ -610,7 +624,7 @@ mod tests {
             ScreenCmd::Push { .. }
         ));
         assert_eq!((s.mode, s.stratum), (Mode::Walk, StratumKind::Undercity));
-        s.update(&mut st, &[key(KeyCode::Tab)]);
+        s.update(&mut st, &[key(KeyCode::Char('c'))]);
         assert_eq!(s.mode, Mode::Explore);
         assert!(matches!(
             s.update(&mut st, &[key(KeyCode::Char('q'))]),
@@ -718,7 +732,10 @@ mod tests {
             p.pos = stand;
             p.stratum = StratumKind::Street;
         }
-        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert!(matches!(
+            s.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Flash(TransitionKind::Glitch)
+        ));
         let p = st.player.as_ref().unwrap();
         assert!(p.jacked_in());
         assert_eq!(s.stratum, StratumKind::Net);
@@ -741,7 +758,10 @@ mod tests {
         assert_eq!(t.backend().buffer()[(sx, sy)].symbol(), "@");
         s.mode = Mode::Walk;
         s.stratum = StratumKind::Net;
-        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert!(matches!(
+            s.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Flash(TransitionKind::Glitch)
+        ));
         let p = st.player.as_ref().unwrap();
         assert!(!p.jacked_in());
         assert_eq!((p.stratum, p.pos), (StratumKind::Street, stand));
@@ -767,12 +787,12 @@ mod tests {
         t.draw(|f| s.draw(&st, f)).unwrap();
         let text = buffer_text(t.backend().buffer());
         assert!(!text.contains("INSPECT"), "{text}");
-        assert!(!text.contains("tab camera"), "{text}");
+        assert!(!text.contains("c camera"), "{text}");
         assert!(!text.contains("DEV"), "{text}");
         // The backtick flips dev mode at runtime; the camera and inspector come back.
         s.update(&mut st, &[key(KeyCode::Char('`'))]);
         assert!(st.dev);
-        s.update(&mut st, &[key(KeyCode::Tab)]);
+        s.update(&mut st, &[key(KeyCode::Char('c'))]);
         assert_eq!(s.mode, Mode::Explore);
         st.tick += 500;
         t.draw(|f| s.draw(&st, f)).unwrap();
@@ -856,5 +876,42 @@ mod tests {
             s.update(&mut st, &[key(KeyCode::Char('q'))]),
             ScreenCmd::Push { .. }
         ));
+    }
+
+    #[test]
+    fn tab_opens_the_deck_and_c_is_the_dev_camera() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        s.update(&mut st, &[]);
+        assert!(matches!(
+            s.update(&mut st, &[key(KeyCode::Tab)]),
+            ScreenCmd::Push {
+                fx: TransitionKind::Glitch,
+                ..
+            }
+        ));
+        s.update(&mut st, &[key(KeyCode::Char('w'))]);
+        assert_eq!(s.mode, Mode::Walk);
+        s.update(&mut st, &[key(KeyCode::Char('c'))]);
+        assert_eq!(s.mode, Mode::Explore, "c returns to the camera in dev mode");
+        s.update(&mut st, &[key(KeyCode::Char('w'))]);
+        st.dev = false;
+        s.update(&mut st, &[key(KeyCode::Char('c'))]);
+        assert_eq!(s.mode, Mode::Walk, "no camera without dev mode");
+        assert!(
+            matches!(
+                s.update(&mut st, &[key(KeyCode::Tab)]),
+                ScreenCmd::Push { .. }
+            ),
+            "the deck opens in play too"
+        );
+        st.tick += 500;
+        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let text = buffer_text(t.backend().buffer());
+        assert!(
+            text.contains("tab deck") && !text.contains("c camera"),
+            "{text}"
+        );
     }
 }

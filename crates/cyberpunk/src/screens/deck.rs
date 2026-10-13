@@ -1,5 +1,4 @@
 //! The deck: the player's menu over the live map — quests, gear, inventory, workbench, map, skills.
-#![allow(dead_code)] // pushed from the map screen in Task 9
 
 use crate::anim::effects::{glitch_cells, pulse, typewriter};
 use crate::anim::{Easing, Tween};

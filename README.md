@@ -65,12 +65,20 @@ on `RANDOM SEED` / `GENERATE` · `esc` back
 end · `r` reseed after an error · `esc` back
 
 **Explore** `hjkl` / arrows pan the cursor (shift: fast) · `[` `]` stratum down / up (Net on top) ·
-`w` walk · `i` inspector · `m` minimap (inside the inspector) · `e` legend · `d` digital overlay ·
-`s` save · `r` regenerate · `g` configure · `?` keys · `q` title
+`w` walk · `tab` deck · `i` inspector · `m` minimap (inside the inspector) · `e` legend ·
+`d` digital overlay · `s` save · `r` regenerate · `g` configure · `?` keys · `esc` pause
 
 **Walk** `hjkl` `yubn` / arrows move · `<` `>` take stairs, lift, ladder or
 manhole · `enter` jack in at an adjacent terminal / jack out · `.` wait ·
-`tab` back to the free camera · panels as above
+`tab` deck · `c` back to the free camera (dev mode) · `esc` pause · panels as above
+
+**Pause** (`esc` or `q`) resume · save · load · settings (dev mode, rain, fps) ·
+quit to title · quit game
+
+**Deck** (`tab`) `←→` or `1`-`6` tabs · `↑↓` rows · `esc` close. Tabs: quests,
+gear, inventory, workbench, map (what you remember of this stratum) and skills.
+The starter character and every item, skill, talent, quest and recipe live in
+`flavor/content.ron`
 
 ## Layout
 

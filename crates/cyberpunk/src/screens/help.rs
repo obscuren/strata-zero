@@ -12,13 +12,14 @@ const EXPLORE: &[(&str, &str)] = &[
     ("↑↓←→ hjkl", "pan the camera (shift: fast)"),
     ("[ ]", "stratum down / up (Net on top)"),
     ("w", "walk: drop the @ into the city"),
+    ("tab", "open the deck"),
     ("i m e d", "inspector · minimap · legend · digital overlay"),
     ("s", "save city"),
     ("r", "regenerate with a fresh seed"),
     ("g", "configure"),
     ("`", "dev mode on / off"),
     ("?", "this help"),
-    ("q esc", "back to title"),
+    ("esc q", "pause menu"),
 ];
 
 const WALK: &[(&str, &str)] = &[
@@ -26,12 +27,13 @@ const WALK: &[(&str, &str)] = &[
     ("< >", "take stairs, lift, ladder or manhole"),
     ("enter", "jack in at an adjacent terminal / jack out"),
     (".", "wait a tick"),
-    ("tab", "back to free camera (dev mode)"),
+    ("tab", "open the deck"),
+    ("c", "back to free camera (dev mode)"),
     ("`", "dev mode on / off"),
     ("i m e d", "inspector · minimap · legend · digital overlay"),
     ("s", "save city"),
     ("?", "this help"),
-    ("q esc", "back to title"),
+    ("esc q", "pause menu"),
 ];
 
 /// Draws the key list for `mode` centred over whatever is already on screen.
