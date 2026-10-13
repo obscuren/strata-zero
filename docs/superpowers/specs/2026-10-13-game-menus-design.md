@@ -131,6 +131,31 @@ Palette: cyan `(0, 229, 255)` accents, magenta `(255, 0, 200)` for warnings
 | MAP | none; the pane is the map | the memory map (below) |
 | SKILLS | eight skills `name  ▰▰▰▱▱ 3` | governing stat, description, then the skill's talents; unlocked ones cyan, locked ones dim with the level required |
 
+**Chrome.** The deck must read as part of the city's interface, not a dialog:
+
+- Frame: heavy top and bottom rules (`━`) in cyan `(0, 229, 255)`; light sides.
+  When the terminal is at least 36 rows tall the handle is set in the title
+  block font (`ui::logo`) across the top; otherwise it is a bold caption.
+- Link line under the title: `▍ LINK · <district under the player or cursor> ·
+  <stratum>`, pulsing with `pulse(tick, 40)` like the strata selector; on the
+  right the readout `¤ <credits> · hp <hp>/<hp_max> · <weight> kg` in the
+  status-bar style.
+- Tab bar: the active tab in `▌…▐` half-block brackets, bold cyan with the menu
+  glow; a magenta `(255, 0, 200)` segment under the active tab on the rule
+  slides to the new tab over 6 ticks (`Tween`, `Easing::OutCubic`).
+- Selected row: a bar with background `(0, 60, 70)` and the `▸` marker, glowing
+  with `pulse(tick, 30)` like `MenuView`.
+- Detail pane: a typewriter reveal over 20 ticks from the last change with a
+  blinking magenta `▮` cursor at the end of the typed text while it types.
+- Jitter: every 90 ticks a 3-tick burst of `glitch_cells` over one random frame
+  row (the burst row and start from `hash64(tick / 90, 7)`), so the panel reads
+  as a live signal. Opened with `Glitch`, closed (`Pop`) with `Glitch`.
+- Icons by item kind, all glyphs the city already draws: weapon `/`, armor `▣`,
+  cyberware `◈`, deck `⌗`, consumable `◍`, component `▪`, junk `·`. Skill bars
+  `▰▱`, objectives `☑`/`☐`, done quests `✓`. Every glyph is one cell wide and
+  covered by the width test.
+- The map underneath keeps drawing (rain included) under the scanline wash.
+
 **Memory map.** Draws `player.vis()` for the current stratum scaled to fit the
 pane, one cell per block of tiles: unseen blocks are blank, remembered blocks
 take the district accent scaled 0.35, visible blocks 0.7; the player's block is
