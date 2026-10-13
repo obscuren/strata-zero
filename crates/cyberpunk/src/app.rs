@@ -85,13 +85,10 @@ impl AppState {
         }
     }
 
-    #[allow(dead_code)] // read by the HUD header
     pub const TICKS_PER_MINUTE: u64 = 90;
-    #[allow(dead_code)] // read by the HUD header
     pub const START_MINUTE: u64 = 22 * 60;
 
     /// The time of night as (hour, minute): real time, from the tick.
-    #[allow(dead_code)] // read by the HUD header
     pub fn clock(&self) -> (u8, u8) {
         let m = (Self::START_MINUTE + self.tick / Self::TICKS_PER_MINUTE) % (24 * 60);
         ((m / 60) as u8, (m % 60) as u8)

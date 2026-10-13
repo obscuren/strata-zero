@@ -6,6 +6,7 @@ use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::ui::chrome::{
     BAR_BG, CYAN, CYAN_RGB, DIM, MAGENTA, PANEL_BG, TEXT, frame, glass, put, put_paragraph, reveal,
 };
+use crate::ui::sidebar::Section;
 use crate::walker::port_name;
 use crossterm::event::{KeyCode, KeyEvent};
 use game::Action;
@@ -33,6 +34,8 @@ pub enum Pick {
     World(WorldAct),
     /// Shows these lines in place of the rows; Esc returns to the rows.
     Card(Vec<Line<'static>>),
+    /// Toggles a sidebar section and closes.
+    View(Section),
     Close,
 }
 
@@ -250,6 +253,12 @@ impl Popup {
                 self.card = Some(lines);
                 self.opened = st.tick;
                 ScreenCmd::Stay
+            }
+            Pick::View(section) => {
+                st.sidebar.toggle(section);
+                ScreenCmd::Pop {
+                    fx: TransitionKind::None,
+                }
             }
             Pick::Close => ScreenCmd::Pop {
                 fx: TransitionKind::None,

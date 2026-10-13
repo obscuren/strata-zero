@@ -1,5 +1,4 @@
 //! The play HUD's single rows: header, bars and the action bar.
-#![allow(dead_code)] // wired into the map screen by the HUD frame
 
 use crate::anim::effects::pulse;
 use crate::render::overlay::Digital;

@@ -1,5 +1,4 @@
 //! The sidebar beside the map: toggleable sections sharing one column.
-#![allow(dead_code)] // wired into the map screen by the HUD frame
 
 use crate::messages::{Entry, Kind, MessageLog};
 use crate::render::glyphs::kind_icon;
@@ -613,9 +612,7 @@ mod tests {
         assert_eq!(lines[0].to_string(), "Cross the corp core without a scan");
         let mut ch = st.character.clone();
         for q in &mut ch.quests {
-            for d in &mut q.done {
-                *d = true;
-            }
+            q.done.fill(true);
         }
         let (title, lines) = quest_lines(&ch, &st.content);
         assert_eq!(

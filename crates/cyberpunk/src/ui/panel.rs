@@ -1,9 +1,8 @@
 //! Side panels: tile inspector, legend, strata selector, status bar.
 
-use crate::anim::effects::pulse;
 use crate::render::tileset::legend_entries;
 use citygen::{City, Node, Pos, StratumKind, Terrain};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders};
 
@@ -144,88 +143,13 @@ pub fn legend(stratum: StratumKind) -> Vec<Line<'static>> {
         .collect()
 }
 
-/// Every stratum, top first (Net above Heights), with the current one marked.
-pub fn strata_selector(current: StratumKind, tick: u64) -> Vec<Line<'static>> {
-    StratumKind::ALL
-        .iter()
-        .rev()
-        .map(|k| {
-            let here = *k == current;
-            let marker = if here { "▌" } else { " " };
-            let style = if here {
-                let g = (160.0 + 95.0 * pulse(tick, 40)) as u8;
-                Style::default()
-                    .fg(Color::Rgb(0, g, 255))
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(DIM)
-            };
-            Line::from(Span::styled(format!("{marker} {}", k.label()), style))
-        })
-        .collect()
-}
-
-pub fn status_bar(
-    city: Option<&City>,
-    stratum: StratumKind,
-    fps: Option<f32>,
-    hints: &str,
-    status: Option<(&str, bool)>,
-    dev: bool,
-) -> Line<'static> {
-    let mut spans = Vec::new();
-    if dev {
-        spans.push(Span::styled(
-            " DEV ",
-            Style::default()
-                .fg(Color::Rgb(10, 11, 16))
-                .bg(Color::Rgb(255, 200, 80))
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-    if let Some(c) = city {
-        spans.push(Span::styled(
-            format!(" {} ", c.name),
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::styled(
-            format!("seed {} ", c.seed),
-            Style::default().fg(DIM),
-        ));
-    }
-    spans.push(Span::styled(
-        format!("· {} ", stratum.label()),
-        Style::default().fg(TEXT),
-    ));
-    if let Some(fps) = fps {
-        spans.push(Span::styled(
-            format!("· {fps:.0} fps "),
-            Style::default().fg(DIM),
-        ));
-    }
-    match status {
-        Some((msg, warn)) => spans.push(Span::styled(
-            format!("· {msg}"),
-            Style::default()
-                .fg(if warn {
-                    crate::ui::chrome::MAGENTA
-                } else {
-                    Color::Rgb(255, 200, 80)
-                })
-                .add_modifier(Modifier::BOLD),
-        )),
-        None => spans.push(Span::styled(format!("· {hints}"), Style::default().fg(DIM))),
-    }
-    Line::from(spans)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use citygen::{GenParams, Generator, Pos, SizePreset, StratumKind};
 
     #[test]
-    fn inspector_and_selector_have_content() {
+    fn inspector_and_legend_have_content() {
         let c = Generator::run(GenParams {
             seed: 3,
             size: SizePreset::Custom { w: 80, h: 40 },
@@ -266,31 +190,6 @@ mod tests {
             &content,
         );
         assert!(!off.is_empty());
-        let sel = strata_selector(StratumKind::Skyways, 0);
-        let text: String = sel.iter().map(|l| l.to_string() + "\n").collect();
-        assert!(text.contains("Skyways") && text.contains("▌"));
-        let bar = status_bar(
-            Some(&c),
-            StratumKind::Street,
-            Some(30.0),
-            "q quit",
-            None,
-            true,
-        );
-        assert!(bar.to_string().contains("fps"));
-        let bar = status_bar(Some(&c), StratumKind::Street, None, "q quit", None, true);
-        assert!(!bar.to_string().contains("fps"));
-        assert!(bar.to_string().contains("DEV"));
-        assert!(bar.to_string().contains(&c.name) && bar.to_string().contains("q quit"));
-        let bar = status_bar(
-            Some(&c),
-            StratumKind::Street,
-            Some(30.0),
-            "q quit",
-            Some(("saved x", false)),
-            false,
-        );
-        assert!(bar.to_string().contains("saved x") && !bar.to_string().contains("q quit"));
         assert!(!legend(StratumKind::Undercity).is_empty());
     }
 }
