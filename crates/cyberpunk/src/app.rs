@@ -31,10 +31,8 @@ pub struct AppState {
     /// Dev mode: free camera, stratum browsing and the inspector. Toggled with `` ` ``.
     pub dev: bool,
     /// Rain overlay on the map (Settings).
-    #[allow(dead_code)] // read from Task 5
     pub rain: bool,
     /// FPS readout in the status bar (Settings).
-    #[allow(dead_code)] // read from Task 5
     pub show_fps: bool,
     #[allow(dead_code)] // read from Task 7
     pub content: game::Content,

@@ -407,7 +407,12 @@ impl Screen for MapScreen {
             enabled: self.digital,
             focus,
         };
-        let overlays: [&dyn Overlay; 3] = [&Weather, &self.traffic, &digital];
+        let mut overlays: Vec<&dyn Overlay> = Vec::new();
+        if st.rain {
+            overlays.push(&Weather);
+        }
+        overlays.push(&self.traffic);
+        overlays.push(&digital);
         let walking = self.mode == Mode::Walk
             && st
                 .player
@@ -523,7 +528,7 @@ impl Screen for MapScreen {
             Paragraph::new(status_bar(
                 Some(city),
                 self.stratum,
-                self.fps.fps,
+                st.show_fps.then_some(self.fps.fps),
                 &hints,
                 st.status_text(),
                 st.dev,
@@ -810,5 +815,29 @@ mod tests {
         s.update(&mut st, &[key(KeyCode::Char('m'))]);
         t.draw(|f| s.draw(&st, f)).unwrap();
         assert!(!buffer_text(t.backend().buffer()).contains("map"));
+    }
+
+    #[test]
+    fn rain_and_fps_follow_the_settings() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        st.tick = 100;
+        s.update(&mut st, &[]);
+        let rain: Vec<char> = st.style.glyphs.rain.clone();
+        let count = |t: &Terminal<TestBackend>| {
+            buffer_text(t.backend().buffer())
+                .chars()
+                .filter(|c| rain.contains(c))
+                .count()
+        };
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        assert!(count(&t) > 0, "no rain on the street");
+        assert!(buffer_text(t.backend().buffer()).contains("fps"));
+        st.rain = false;
+        st.show_fps = false;
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        assert_eq!(count(&t), 0);
+        assert!(!buffer_text(t.backend().buffer()).contains("fps"));
     }
 }

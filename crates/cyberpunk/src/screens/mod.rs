@@ -5,6 +5,7 @@ pub mod explore;
 pub mod files;
 pub mod generating;
 pub mod help;
+pub mod settings;
 pub mod title;
 
 use crate::app::Screen;

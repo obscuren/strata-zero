@@ -149,7 +149,7 @@ pub fn strata_selector(current: StratumKind, tick: u64) -> Vec<Line<'static>> {
 pub fn status_bar(
     city: Option<&City>,
     stratum: StratumKind,
-    fps: f32,
+    fps: Option<f32>,
     hints: &str,
     status: Option<&str>,
     dev: bool,
@@ -178,10 +178,12 @@ pub fn status_bar(
         format!("· {} ", stratum.label()),
         Style::default().fg(TEXT),
     ));
-    spans.push(Span::styled(
-        format!("· {fps:.0} fps "),
-        Style::default().fg(DIM),
-    ));
+    if let Some(fps) = fps {
+        spans.push(Span::styled(
+            format!("· {fps:.0} fps "),
+            Style::default().fg(DIM),
+        ));
+    }
     match status {
         Some(msg) => spans.push(Span::styled(
             format!("· {msg}"),
@@ -219,13 +221,23 @@ mod tests {
         let sel = strata_selector(StratumKind::Skyways, 0);
         let text: String = sel.iter().map(|l| l.to_string() + "\n").collect();
         assert!(text.contains("Skyways") && text.contains("▌"));
-        let bar = status_bar(Some(&c), StratumKind::Street, 30.0, "q quit", None, true);
+        let bar = status_bar(
+            Some(&c),
+            StratumKind::Street,
+            Some(30.0),
+            "q quit",
+            None,
+            true,
+        );
+        assert!(bar.to_string().contains("fps"));
+        let bar = status_bar(Some(&c), StratumKind::Street, None, "q quit", None, true);
+        assert!(!bar.to_string().contains("fps"));
         assert!(bar.to_string().contains("DEV"));
         assert!(bar.to_string().contains(&c.name) && bar.to_string().contains("q quit"));
         let bar = status_bar(
             Some(&c),
             StratumKind::Street,
-            30.0,
+            Some(30.0),
             "q quit",
             Some("saved x"),
             false,
