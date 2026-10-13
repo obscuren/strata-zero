@@ -1,6 +1,7 @@
 //! Screens: one module per screen, plus shared test helpers.
 
 pub mod configure;
+pub mod deck;
 pub mod explore;
 pub mod files;
 pub mod generating;
