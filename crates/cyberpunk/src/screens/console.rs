@@ -1,4 +1,4 @@
-//! Dev console commands: spawn and drop items, give credits, heal, clear a pile.
+//! Dev console commands: spawn and drop items, give credits, heal, xp, focus, clear a pile.
 
 use crate::anim::effects::pulse;
 use crate::app::AppState;
@@ -9,7 +9,9 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 6] = ["spawn", "drop", "give", "heal", "clear", "help"];
+const COMMANDS: [&str; 8] = [
+    "spawn", "drop", "give", "heal", "xp", "focus", "clear", "help",
+];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
 pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
@@ -61,6 +63,29 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             st.character.hp = max;
             Ok(format!("hp {max}/{max}"))
         }
+        "xp" => {
+            let n: u32 = args
+                .first()
+                .and_then(|a| a.parse().ok())
+                .ok_or_else(|| "xp <points>".to_string())?;
+            let gained = st.character.gain_xp(n);
+            let level = st.character.level;
+            for l in (level - gained + 1)..=level {
+                st.story(format!("level {l}"));
+            }
+            Ok(format!("+{n} xp"))
+        }
+        "focus" => {
+            let n: u32 = args
+                .first()
+                .and_then(|a| a.parse().ok())
+                .ok_or_else(|| "focus <points>".to_string())?;
+            st.character.focus = n.min(st.character.focus_max);
+            Ok(format!(
+                "focus {}/{}",
+                st.character.focus, st.character.focus_max
+            ))
+        }
         "clear" => {
             let n = st.ground.at(focus.stratum, focus.pos).len();
             st.ground.clear(focus.stratum, focus.pos);
@@ -70,7 +95,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             ))
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),
@@ -203,5 +228,16 @@ mod tests {
             vec!["copper_coil".to_string()]
         );
         assert!(complete(&st, "give", "co").is_empty());
+        assert_eq!(run(&mut st, at, "xp 250").unwrap(), "+250 xp");
+        assert_eq!((st.character.level, st.character.xp), (2, 50));
+        assert_eq!(
+            st.log.latest().map(|e| e.marked()),
+            Some("▸ level 2".to_string())
+        );
+        assert_eq!(run(&mut st, at, "xp x").unwrap_err(), "xp <points>");
+        assert_eq!(run(&mut st, at, "focus 5").unwrap(), "focus 5/30");
+        assert_eq!(run(&mut st, at, "focus 99").unwrap(), "focus 30/30");
+        assert!(run(&mut st, at, "help").unwrap().contains("xp"));
+        assert_eq!(complete(&st, "", "fo"), vec!["focus".to_string()]);
     }
 }

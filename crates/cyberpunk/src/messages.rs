@@ -3,7 +3,6 @@
 use std::collections::VecDeque;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // Story is written by the dev console and read by the sidebar
 pub enum Kind {
     /// A plain result.
     Info,
@@ -33,12 +32,10 @@ impl Entry {
 }
 
 #[derive(Clone, Debug, Default)]
-#[allow(dead_code)] // read by the sidebar and the messages popup
 pub struct MessageLog {
     entries: VecDeque<Entry>,
 }
 
-#[allow(dead_code)] // read by the sidebar and the messages popup
 impl MessageLog {
     pub const CAP: usize = 200;
     /// How long the newest entry counts as recent.

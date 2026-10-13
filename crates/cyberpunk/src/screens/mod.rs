@@ -7,6 +7,7 @@ pub mod explore;
 pub mod files;
 pub mod generating;
 pub mod help;
+pub mod messages;
 pub mod pause;
 pub mod popup;
 pub mod settings;

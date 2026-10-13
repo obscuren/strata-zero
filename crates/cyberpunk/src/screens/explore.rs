@@ -14,6 +14,7 @@ use crate::screens::deck::Deck;
 use crate::screens::files::Files;
 use crate::screens::generating::Generating;
 use crate::screens::help;
+use crate::screens::messages::Messages;
 use crate::screens::pause::Pause;
 use crate::screens::popup::{Choice, Pick, Popup, WorldAct};
 use crate::screens::title::Title;
@@ -273,6 +274,12 @@ impl MapScreen {
             }
             KeyCode::Char(':') if st.dev => self.console = Some(Console::default()),
             KeyCode::Char('v') => return Some(self.view_popup(st)),
+            KeyCode::Char('m') => {
+                return Some(ScreenCmd::Push {
+                    to: Box::new(Messages::new(st.tick)),
+                    fx: TransitionKind::None,
+                });
+            }
             KeyCode::Char('d') => self.digital = !self.digital,
             KeyCode::Char('?') => self.help = !self.help,
             KeyCode::Tab => {
@@ -1744,5 +1751,25 @@ mod tests {
         st.sidebar.set(Section::Inspect, true);
         s.update(&mut st, &[key(KeyCode::Char('`'))]);
         assert!(!st.dev && !st.sidebar.is_on(Section::Inspect));
+    }
+
+    #[test]
+    fn m_opens_the_message_history() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        st.say("took it");
+        let ScreenCmd::Push { to: mut p, .. } = s.update(&mut st, &[key(KeyCode::Char('m'))])
+        else {
+            panic!("m opens messages")
+        };
+        let text = draw_screen(&*p, &st, 100, 30);
+        assert!(
+            text.contains("MESSAGES") && text.contains("took it"),
+            "{text}"
+        );
+        assert!(matches!(
+            p.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Pop { .. }
+        ));
     }
 }

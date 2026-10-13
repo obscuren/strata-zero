@@ -52,8 +52,8 @@ WezTerm). Saved cities go to `./cities/*.city`.
 ## Keys
 
 **Dev mode** is on by default for now (`DEV_DEFAULT` in `crates/cyberpunk/src/app.rs`)
-and shows a `DEV` badge in the status bar. It unlocks the free camera, stratum
-browsing and the inspector with its minimap. Press `` ` `` to flip it at runtime;
+and shows a `DEV` badge in the header. It unlocks the free camera, stratum
+browsing, the console and the inspect and legend sections. Press `` ` `` to flip it at runtime;
 with it off you are always on foot.
 
 **Title** `↑↓` select · `enter` confirm · `q` quit
@@ -65,18 +65,26 @@ on `RANDOM SEED` / `GENERATE` · `esc` back
 end · `r` reseed after an error · `esc` back
 
 **Explore** `hjkl` / arrows pan the cursor (shift: fast) · `[` `]` stratum down / up (Net on top) ·
-`w` walk · `tab` deck · `i` inspector · `m` minimap (inside the inspector) · `e` legend ·
+`w` walk · `tab` deck · `v` view: toggle sidebar sections · `m` messages ·
 `d` digital overlay · `s` save · `r` regenerate · `g` configure · `:` dev console (dev mode) · `?` keys · `esc` pause
 
 **Walk** `hjkl` `yubn` / arrows move · `<` `>` take stairs, lift, ladder or
 manhole · `space` interact: take what lies here, jack in at an adjacent terminal
-or out again, take the stairs, look · `a` fire an active ability · `enter` jack
-shortcut · `.` wait · `tab` deck · `c` back to the free camera (dev mode) · `:`
-dev console (dev mode: `spawn`, `drop`, `give`, `heal`, `clear`, `help`, with
-Tab completion and history) · `esc` pause · panels as above
+or out again, take the stairs, look · `1`-`5` fire the ability in that slot ·
+`a` the full ability list · `enter` jack shortcut · `.` wait · `tab` deck ·
+`v` view · `m` messages · `c` back to the free camera (dev mode) · `:` dev
+console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `clear`,
+`help`, with Tab completion and history) · `esc` pause
+
+The play HUD frames the map. The header shows level, credits, where you are and
+the clock; the bars show HP, focus and experience; the sidebar on the right
+holds sections you toggle with `v` (here, quest, map, log; inspect and legend in
+dev mode); the action bar lists your active abilities in numbered slots. Every
+result and refusal lands in the log, and `m` shows the whole history. With the
+log section hidden the newest line shows briefly over the map instead.
 
 Items lie where they are dropped: a pile shows its kind's icon in amber (`≡`
-when mixed), dimmed once out of sight, and the inspector lists what is on the
+when mixed), dimmed once out of sight, and the HERE section lists what is on the
 focused tile. A scan paints the map around you into memory; a ping lights the
 terminals and stairs in range for a while.
 

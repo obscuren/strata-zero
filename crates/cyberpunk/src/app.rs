@@ -105,7 +105,6 @@ impl AppState {
     }
 
     /// Logs a quest or level line.
-    #[allow(dead_code)] // wired up by the dev console
     pub fn story(&mut self, msg: impl Into<String>) {
         self.log.push(Kind::Story, msg, self.tick);
     }
