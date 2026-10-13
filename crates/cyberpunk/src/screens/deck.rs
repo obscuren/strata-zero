@@ -1136,6 +1136,8 @@ mod tests {
         let rows = d.rows(&st);
         let hacking = rows.iter().find(|r| r.text.contains("Hacking")).unwrap();
         assert!(hacking.text.contains("▰▰▰▰▰ 7"), "{:?}", hacking.text);
+        st.tick = 60;
+        assert!(draw(&d, &st, 120, 35).contains("▰▰▰▰▰ 7"));
     }
 
     #[test]
@@ -1152,10 +1154,12 @@ mod tests {
         };
         let left = pane(&draw(&d, &st, 100, 30));
         let footer = left.iter().find(|l| l.contains("kg · ¤")).expect("footer");
-        assert!(
-            !footer.contains('×'),
-            "footer shares a row with a stack: {footer:?}"
+        let expect = format!(
+            "{:.1} kg · ¤ {}",
+            st.character.weight(&st.content),
+            st.character.value(&st.content)
         );
+        assert_eq!(footer.trim_matches(|c: char| c == '│' || c == ' '), expect);
         d.update(&mut st, &[key(KeyCode::Down); 60]);
         let left = pane(&draw(&d, &st, 100, 30));
         let sel = left

@@ -35,16 +35,10 @@ pub enum Mode {
     Walk,
 }
 
-/// A gap longer than this between frames means the map was not being updated (a
-/// menu was open); the meter restarts its window instead of counting the gap.
-const FPS_GAP: f32 = 0.5;
-
 /// Frames per second over the last second.
 pub struct FpsMeter {
     /// Start of the current measuring window.
     last: Instant,
-    /// The previous frame, to spot gaps.
-    prev: Instant,
     frames: u32,
     pub fps: f32,
 }
@@ -59,7 +53,6 @@ impl FpsMeter {
     pub fn new(now: Instant) -> Self {
         FpsMeter {
             last: now,
-            prev: now,
             frames: 0,
             fps: 0.0,
         }
@@ -69,14 +62,14 @@ impl FpsMeter {
         self.frame_at(Instant::now());
     }
 
+    /// Restarts the window after frames stopped arriving (a menu was on top); the
+    /// last reading stands until a fresh second has been measured.
+    pub fn resume(&mut self, now: Instant) {
+        self.last = now;
+        self.frames = 0;
+    }
+
     pub fn frame_at(&mut self, now: Instant) {
-        let gap = now.saturating_duration_since(self.prev).as_secs_f32();
-        self.prev = now;
-        if gap > FPS_GAP {
-            self.last = now;
-            self.frames = 0;
-            return;
-        }
         self.frames += 1;
         let elapsed = now.saturating_duration_since(self.last).as_secs_f32();
         if elapsed >= 1.0 {
@@ -100,6 +93,8 @@ pub struct MapScreen {
     pub help: bool,
     traffic: Traffic,
     fps: FpsMeter,
+    /// Tick of the last update; a gap means a menu was on top.
+    last_tick: u64,
     cam_ready: bool,
     /// The map area of the last frame, so `update` knows the view size.
     last_map: Cell<Rect>,
@@ -133,6 +128,7 @@ impl MapScreen {
             help: false,
             traffic: Traffic::default(),
             fps: FpsMeter::default(),
+            last_tick: 0,
             cam_ready: false,
             last_map: Cell::new(Rect::new(0, 0, 100, 28)),
         }
@@ -358,6 +354,10 @@ fn port_name(city: &City, port: Pos) -> String {
 
 impl Screen for MapScreen {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+        if st.tick > self.last_tick + 1 {
+            self.fps.resume(Instant::now());
+        }
+        self.last_tick = st.tick;
         self.fps.frame();
         let Some(size) = st.city.as_ref().map(|c| c.size) else {
             if keys
@@ -946,12 +946,15 @@ mod tests {
             m.frame_at(t0 + Duration::from_millis(i * 1000 / 60 + 1));
         }
         assert!((m.fps - 60.0).abs() < 2.0, "{}", m.fps);
-        // Three seconds under a menu, then the first frame back on the map.
-        m.frame_at(t0 + Duration::from_millis(4001));
+        // Three seconds under a menu: the map resumes and the first frame back opens a
+        // new window instead of measuring one frame over the whole pause.
+        let back = t0 + Duration::from_millis(4001);
+        m.resume(back);
+        m.frame_at(back);
         assert!((m.fps - 60.0).abs() < 2.0, "after the gap: {}", m.fps);
         // A fresh second of frames measures normally again.
         for i in 1..=60u64 {
-            m.frame_at(t0 + Duration::from_millis(4001 + i * 1000 / 60 + 1));
+            m.frame_at(back + Duration::from_millis(i * 1000 / 60 + 1));
         }
         assert!((m.fps - 60.0).abs() < 2.0, "{}", m.fps);
     }
@@ -976,17 +979,22 @@ mod tests {
         let mut st = state();
         let mut s = MapScreen::explore(0);
         s.update(&mut st, &[]);
-        let (pos, name) = {
+        let (pos, name, other, other_name) = {
             let city = st.city.as_ref().unwrap();
             let street = StratumKind::Street;
-            (0..city.size.h as i32)
+            let mut tiles = (0..city.size.h as i32)
                 .flat_map(|y| (0..city.size.w as i32).map(move |x| Pos::new(x, y)))
-                .find_map(|p| {
-                    let d = city.tile(street, p)?.district?;
-                    Some((p, city.district(d).name.clone()))
-                })
-                .expect("a tile with a district")
+                .filter_map(|p| Some((p, city.tile(street, p)?.district?)));
+            let (pos, d) = tiles.next().expect("a tile with a district");
+            let (other, d2) = tiles.find(|(_, d2)| *d2 != d).expect("a second district");
+            let name = |d| city.district(d).name.clone();
+            (pos, name(d), other, name(d2))
         };
+        assert_ne!(name, other_name);
+        // The player stands in another district: under the free camera the cursor wins.
+        let mut p = crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1);
+        p.pos = other;
+        st.player = Some(p);
         s.cursor = pos;
         let ScreenCmd::Push { to, .. } = s.update(&mut st, &[key(KeyCode::Tab)]) else {
             panic!("tab opens the deck");
@@ -996,5 +1004,38 @@ mod tests {
         t.draw(|f| to.draw(&st, f)).unwrap();
         let text = buffer_text(t.backend().buffer());
         assert!(text.contains(&format!("LINK · {name} · Street")), "{text}");
+        assert!(!text.contains(&format!("LINK · {other_name}")), "{text}");
+    }
+
+    #[test]
+    fn fps_meter_counts_slow_frames() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let mut m = FpsMeter::new(t0);
+        for i in 1..=60u64 {
+            m.frame_at(t0 + Duration::from_millis(i * 1000 / 60 + 1));
+        }
+        assert!((m.fps - 60.0).abs() < 2.0, "{}", m.fps);
+        // Two frames seven tenths of a second apart are a stall, not a menu: they count.
+        m.frame_at(t0 + Duration::from_millis(1701));
+        m.frame_at(t0 + Duration::from_millis(2401));
+        assert!((m.fps - 1.43).abs() < 0.1, "{}", m.fps);
+    }
+
+    #[test]
+    fn a_tick_gap_restarts_the_fps_window() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        st.tick = 1;
+        s.update(&mut st, &[]);
+        st.tick = 2;
+        s.update(&mut st, &[]);
+        assert_eq!(s.fps.frames, 2);
+        st.tick = 50; // a menu was on top for 48 ticks
+        s.update(&mut st, &[]);
+        assert_eq!(
+            s.fps.frames, 1,
+            "the window restarts on the first frame back"
+        );
     }
 }
