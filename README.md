@@ -75,10 +75,16 @@ manhole · `enter` jack in at an adjacent terminal / jack out · `.` wait ·
 **Pause** (`esc` or `q`) resume · save · load · settings (dev mode, rain, fps) ·
 quit to title · quit game
 
-**Deck** (`tab`) `←→` or `1`-`6` tabs · `↑↓` rows · `esc` close. Tabs: quests,
-gear, inventory, workbench, map (what you remember of this stratum) and skills.
-The starter character and every item, skill, talent, quest and recipe live in
-`flavor/content.ron`
+**Deck** (`tab`) `←→` or `1`-`7` tabs · `↑↓` rows · `space` act on a row ·
+`esc` close. Tabs: quests, gear, inventory, workbench, map (what you remember of
+this stratum), skills and abilities. `space` on a gear slot picks what fits from
+the pack, or unequips and inspects what is worn; on an inventory item it opens
+the verbs: inspect, equip, use, drop one, drop all. In a popup the letter or
+`enter` fires a row and `esc` backs out one level. The readout shows hp and the
+carried weight over capacity (magenta when over, and nothing more can be picked
+up). Items carry perks while worn (stat, skill, sight, carry, max hp) and can
+grant abilities; consumables heal when used. The starter character and every
+item, ability, skill, talent, quest and recipe live in `flavor/content.ron`
 
 ## Layout
 
