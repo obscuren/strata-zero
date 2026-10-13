@@ -5,6 +5,7 @@ use crate::anim::effects::{glitch_cells, pulse, typewriter};
 use crate::anim::{Easing, Tween};
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::render::Rgb;
+use crate::render::memmap::MemoryMap;
 use crate::ui::logo::{self, Logo};
 use citygen::StratumKind;
 use citygen::rng::hash64;
@@ -358,13 +359,37 @@ impl Deck {
         rows
     }
 
-    // Task 8 fills these in.
-    fn workbench_rows(_st: &AppState) -> Vec<Row> {
-        Vec::new()
+    fn workbench_rows(st: &AppState) -> Vec<Row> {
+        st.content
+            .recipes
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let ok = st.character.can_craft(&st.content, r);
+                Row {
+                    text: format!("{} {}", if ok { "▪" } else { "▫" }, r.name),
+                    tone: if ok { Tone::Normal } else { Tone::Warn },
+                    detail: Some(Detail::Recipe(i)),
+                }
+            })
+            .collect()
     }
 
-    fn skill_rows(_st: &AppState) -> Vec<Row> {
-        Vec::new()
+    fn skill_rows(st: &AppState) -> Vec<Row> {
+        st.content
+            .skills
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let lvl = st.character.skill_level(&s.id).min(5) as usize;
+                let bar = format!("{}{}", "▰".repeat(lvl), "▱".repeat(5 - lvl));
+                Row {
+                    text: format!("{:<12} {bar} {lvl}", s.name),
+                    tone: Tone::Normal,
+                    detail: Some(Detail::Skill(i)),
+                }
+            })
+            .collect()
     }
 
     fn item_lines(st: &AppState, id: &ItemId) -> Vec<Line<'static>> {
@@ -423,7 +448,66 @@ impl Deck {
                 ],
             },
             Some(Detail::Item(id)) => Self::item_lines(st, id),
-            Some(Detail::Recipe(_)) | Some(Detail::Skill(_)) => Vec::new(), // Task 8
+            Some(Detail::Recipe(i)) => {
+                let r = &st.content.recipes[*i];
+                let skill = st
+                    .content
+                    .skill(&r.skill)
+                    .map(|s| s.name.clone())
+                    .unwrap_or_default();
+                let have = st.character.skill_level(&r.skill);
+                let mut out = vec![head(&r.name)];
+                let need = format!("needs {skill} {}  (you: {have})", r.level);
+                out.push(if have >= r.level {
+                    dim(need)
+                } else {
+                    warn(need)
+                });
+                out.push(plain(""));
+                for (id, n) in &r.inputs {
+                    let name = st
+                        .content
+                        .item(id)
+                        .map(|i| i.name.clone())
+                        .unwrap_or_else(|| id.to_string());
+                    let got = st.character.count(id);
+                    let line = format!("{got}/{n}  {name}");
+                    out.push(if got >= *n { plain(line) } else { warn(line) });
+                }
+                let out_name = st
+                    .content
+                    .item(&r.output.0)
+                    .map(|i| i.name.clone())
+                    .unwrap_or_default();
+                out.push(Line::from(Span::styled(
+                    format!("→ {}× {out_name}", r.output.1),
+                    Style::default().fg(CYAN),
+                )));
+                out.push(plain(""));
+                out.push(plain(r.desc.clone()));
+                out
+            }
+            Some(Detail::Skill(i)) => {
+                let s = &st.content.skills[*i];
+                let mut out = vec![head(&s.name)];
+                out.push(dim(format!("stat · {}", s.stat.label())));
+                out.push(plain(""));
+                out.push(plain(s.desc.clone()));
+                out.push(plain(""));
+                out.push(dim("talents"));
+                for t in st.content.talents_for(&s.id) {
+                    if st.character.has_talent(&t.id) {
+                        out.push(Line::from(Span::styled(
+                            format!("◈ {}", t.name),
+                            Style::default().fg(CYAN),
+                        )));
+                        out.push(dim(format!("   {}", t.desc)));
+                    } else {
+                        out.push(dim(format!("  {}  (needs {})", t.name, t.level)));
+                    }
+                }
+                out
+            }
         }
     }
 
@@ -446,19 +530,40 @@ impl Deck {
     }
 
     fn draw_map(&self, st: &AppState, body: Rect, buf: &mut Buffer) {
-        // Task 8 replaces this with the memory map; until then the pane states the fact.
-        let msg = match &st.player {
-            Some(_) => "map link pending",
-            None => "no signal — walk the city first",
-        };
-        put(
-            buf,
-            body.x + 1,
-            body.y + 1,
-            msg,
-            Style::default().fg(DIM),
-            body.right(),
-        );
+        match (&st.player, &st.city) {
+            (Some(p), Some(city)) => {
+                let inner = Rect::new(
+                    body.x + 1,
+                    body.y,
+                    body.width.saturating_sub(2),
+                    body.height,
+                );
+                MemoryMap {
+                    city,
+                    stratum: p.stratum,
+                    vis: p.vis(),
+                    player: Some(p.pos),
+                    style: &st.style,
+                }
+                .render(inner, buf);
+                put(
+                    buf,
+                    body.x + 1,
+                    body.y,
+                    &format!(" {} · what you remember ", p.stratum.label()),
+                    Style::default().fg(DIM).bg(PANEL_BG),
+                    body.right(),
+                );
+            }
+            _ => put(
+                buf,
+                body.x + 1,
+                body.y + 1,
+                "no signal — walk the city first",
+                Style::default().fg(DIM),
+                body.right(),
+            ),
+        }
     }
 }
 
@@ -825,5 +930,67 @@ mod tests {
         ] {
             assert_eq!(c.width(), Some(1), "{c:?}");
         }
+    }
+
+    #[test]
+    fn workbench_and_skills_show_what_you_can_and_cannot_do() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('4'))]);
+        st.tick = 60;
+        let rows = d.rows(&st);
+        let shiv = rows.iter().find(|r| r.text.contains("Wire shiv")).unwrap();
+        let optics = rows
+            .iter()
+            .find(|r| r.text.contains("Optics tune"))
+            .unwrap();
+        assert_eq!(shiv.tone, Tone::Normal);
+        assert_eq!(optics.tone, Tone::Warn);
+        d.row = rows
+            .iter()
+            .position(|r| r.text.contains("Optics tune"))
+            .unwrap();
+        d.changed = 0;
+        let text = draw(&d, &st, 120, 35);
+        assert!(
+            text.contains("needs Electronics 4") && text.contains("you: 2"),
+            "{text}"
+        );
+        assert!(
+            text.contains("1/1") || text.contains("0/1"),
+            "have/need: {text}"
+        );
+
+        d.update(&mut st, &[key(KeyCode::Char('6'))]);
+        d.changed = 0;
+        let text = draw(&d, &st, 120, 35);
+        assert!(
+            text.contains("Hacking") && text.contains("▰▰▰▱▱ 3"),
+            "{text}"
+        );
+        let rows = d.rows(&st);
+        d.row = rows
+            .iter()
+            .position(|r| r.text.contains("Hacking"))
+            .unwrap();
+        let text = draw(&d, &st, 120, 35);
+        assert!(
+            text.contains("◈ Ice pick") && text.contains("Deep dive") && text.contains("needs 4"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn map_tab_shows_memory_or_no_signal() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('5'))]);
+        let text = draw(&d, &st, 120, 35);
+        assert!(text.contains("no signal"), "{text}");
+        let city = st.city.as_ref().unwrap();
+        st.player = Some(crate::walker::Player::spawn(city, 1));
+        let text = draw(&d, &st, 120, 35);
+        assert!(text.contains('@'), "{text}");
+        assert!(!text.contains("no signal"));
     }
 }
