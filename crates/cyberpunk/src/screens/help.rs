@@ -13,7 +13,9 @@ const EXPLORE: &[(&str, &str)] = &[
     ("[ ]", "stratum down / up (Net on top)"),
     ("w", "walk: drop the @ into the city"),
     ("tab", "open the deck"),
-    ("i m e d", "inspector · minimap · legend · digital overlay"),
+    ("v", "view: toggle sidebar sections"),
+    ("m", "messages: the whole log"),
+    ("d", "digital overlay"),
     ("s", "save city"),
     ("r", "regenerate with a fresh seed"),
     ("g", "configure"),
@@ -27,14 +29,17 @@ const WALK: &[(&str, &str)] = &[
     ("hjkl yubn ↑↓←→", "move"),
     ("< >", "take stairs, lift, ladder or manhole"),
     ("space", "interact: take, jack in / out, stairs, look"),
-    ("a", "fire an active ability"),
+    ("1-5", "fire an ability from its slot"),
+    ("a", "abilities: the full list"),
     ("enter", "jack in at an adjacent terminal / jack out"),
     (".", "wait a tick"),
     ("tab", "open the deck"),
+    ("v", "view: toggle sidebar sections"),
+    ("m", "messages: the whole log"),
+    ("d", "digital overlay"),
     ("c", "back to free camera (dev mode)"),
     (":", "dev console (dev mode)"),
     ("`", "dev mode on / off"),
-    ("i m e d", "inspector · minimap · legend · digital overlay"),
     ("s", "save city"),
     ("?", "this help"),
     ("esc q", "pause menu"),
@@ -44,7 +49,7 @@ const WALK: &[(&str, &str)] = &[
 pub fn draw(f: &mut Frame, mode: Mode) {
     let area = f.area();
     let w = area.width.min(60);
-    let h = area.height.min(16);
+    let h = area.height.min(20);
     let rect = Rect::new(
         area.x + (area.width - w) / 2,
         area.y + (area.height - h) / 2,
@@ -95,5 +100,27 @@ mod tests {
             t.draw(|f| draw(f, Mode::Explore)).unwrap();
             t.draw(|f| draw(f, Mode::Walk)).unwrap();
         }
+    }
+
+    #[test]
+    fn help_lists_the_hud_keys() {
+        use crate::screens::testutil::buffer_text;
+        let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        t.draw(|f| draw(f, Mode::Walk)).unwrap();
+        let walk = buffer_text(t.backend().buffer());
+        assert!(
+            walk.contains("fire an ability") && walk.contains("messages") && walk.contains("view"),
+            "{walk}"
+        );
+        assert!(
+            !walk.contains("inspector") && walk.contains("pause menu"),
+            "{walk}"
+        );
+        t.draw(|f| draw(f, Mode::Explore)).unwrap();
+        let explore = buffer_text(t.backend().buffer());
+        assert!(
+            explore.contains("messages") && !explore.contains("inspector"),
+            "{explore}"
+        );
     }
 }

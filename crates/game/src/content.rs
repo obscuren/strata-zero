@@ -29,6 +29,8 @@ pub enum ContentError {
     SlotMismatch { item: String, slot: Slot },
     #[error("duplicate id `{0}`")]
     DuplicateId(String),
+    #[error("starter level must be at least 1")]
+    StarterLevel,
     #[error("quest `{quest}`: starter flags do not match its objectives")]
     ObjectiveCount { quest: String },
     #[error("starter {what}: duplicate `{id}`")]
@@ -132,6 +134,9 @@ impl Content {
             need_item(format!("recipe {} output", r.id), &r.output.0)?;
         }
         let s = &self.starter;
+        if s.level == 0 {
+            return Err(ContentError::StarterLevel);
+        }
         for (id, _) in &s.inventory {
             need_item("starter inventory".into(), id)?;
         }
@@ -280,6 +285,10 @@ mod tests {
     #[test]
     fn validation_catches_broken_content() {
         let good = Content::load().unwrap();
+
+        let mut c = good.clone();
+        c.starter.level = 0;
+        assert!(matches!(c.validate(), Err(ContentError::StarterLevel)));
 
         let mut c = good.clone();
         c.recipes[0].inputs[0].0 = ItemId::new("unobtainium");

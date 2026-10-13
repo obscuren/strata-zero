@@ -108,6 +108,8 @@ Content(
         handle: "Vex",
         credits: 320,
         hp: 40,
+        level: 1,
+        focus: 30,
         stats: Stats(body: 4, reflex: 6, tech: 5, cool: 5, net: 6),
         inventory: [("copper_coil", 3), ("scrap_servo", 2), ("burner_shard", 1), ("soy_noodle_cup", 2),
                     ("stim_patch", 1), ("bottle_caps", 12), ("dead_phone", 1)],

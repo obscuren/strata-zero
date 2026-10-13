@@ -56,8 +56,8 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
 /// Puts a result where the player sees it: the status strip, warnings in magenta.
 pub fn report(st: &mut AppState, result: Result<String, String>) {
     match result {
-        Ok(msg) => st.set_status(msg, 90),
-        Err(msg) => st.set_warning(msg, 90),
+        Ok(msg) => st.say(msg),
+        Err(msg) => st.warn(msg),
     }
 }
 
@@ -108,10 +108,15 @@ mod tests {
         let ping = st.ping.as_ref().unwrap();
         assert_eq!((ping.radius, ping.until), (24, 280));
         report(&mut st, Err("nope".into()));
-        assert_eq!(st.status_text(), Some("nope"));
-        assert!(st.status_is_warning());
+        assert_eq!(
+            st.log.latest().map(|e| e.marked()),
+            Some("! nope".to_string())
+        );
         report(&mut st, Ok("fine".into()));
-        assert!(!st.status_is_warning());
+        assert_eq!(
+            st.log.latest().map(|e| e.marked()),
+            Some("fine".to_string())
+        );
     }
 
     #[test]

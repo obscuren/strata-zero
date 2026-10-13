@@ -173,7 +173,7 @@ impl Screen for Configure {
                     let params = self.params();
                     if let Err(e) = params.validate() {
                         self.error = Some(e.to_string());
-                        st.set_status(e.to_string(), 90);
+                        st.warn(e.to_string());
                         continue;
                     }
                     match Generating::new(params.clone(), st.tick) {
@@ -186,7 +186,7 @@ impl Screen for Configure {
                         }
                         Err(e) => {
                             self.error = Some(e.to_string());
-                            st.set_status(e.to_string(), 90);
+                            st.warn(e.to_string());
                         }
                     }
                 }

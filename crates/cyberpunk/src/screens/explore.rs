@@ -1,9 +1,9 @@
 //! The map screen: free-camera Explore mode and the Walk mode with the `@`.
 
-use crate::actions::report;
+use crate::actions::{perform, report};
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
+use crate::messages::Kind;
 use crate::render::items::{GroundOverlay, PingOverlay};
-use crate::render::minimap::Minimap;
 use crate::render::overlay::Digital;
 use crate::render::traffic::Traffic;
 use crate::render::viewport::{Camera, MapView, Overlay, tile_to_screen};
@@ -14,11 +14,15 @@ use crate::screens::deck::Deck;
 use crate::screens::files::Files;
 use crate::screens::generating::Generating;
 use crate::screens::help;
+use crate::screens::messages::Messages;
 use crate::screens::pause::Pause;
 use crate::screens::popup::{Choice, Pick, Popup, WorldAct};
 use crate::screens::title::Title;
+use crate::ui::chrome::put;
 use crate::ui::console::{Console, ConsoleEvent};
-use crate::ui::panel::{boxed, inspector_lines, legend, status_bar, strata_selector};
+use crate::ui::hud;
+use crate::ui::panel::inspector_lines;
+use crate::ui::sidebar::{self, Section};
 use crate::walker::{Player, port_name};
 use citygen::rng::hash64;
 use citygen::{Dir, Pos, Rect as TileRect, StratumKind};
@@ -26,13 +30,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget};
 use std::cell::Cell;
 use std::time::Instant;
-
-const PANEL_W: u16 = 34;
-const MINIMAP_H: u16 = 13;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -94,9 +94,6 @@ pub struct MapScreen {
     pub cam: Camera,
     /// The tile under inspection in Explore mode; the camera follows it.
     pub cursor: Pos,
-    pub show_inspector: bool,
-    pub show_minimap: bool,
-    pub show_legend: bool,
     pub digital: bool,
     pub help: bool,
     traffic: Traffic,
@@ -124,6 +121,38 @@ fn dir_for(code: KeyCode) -> Option<Dir> {
     })
 }
 
+/// The frame: header and bars on top, the map beside the sidebar, the action bar below.
+struct Regions {
+    header: Rect,
+    bars: Rect,
+    map: Rect,
+    side: Rect,
+    action: Rect,
+}
+
+fn layout(area: Rect) -> Regions {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(5),
+            Constraint::Length(1),
+        ])
+        .split(area);
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(20), Constraint::Length(sidebar::WIDTH)])
+        .split(rows[2]);
+    Regions {
+        header: rows[0],
+        bars: rows[1],
+        map: cols[0],
+        side: cols[1],
+        action: rows[3],
+    }
+}
+
 impl MapScreen {
     pub fn explore(_tick: u64) -> Self {
         MapScreen {
@@ -131,9 +160,6 @@ impl MapScreen {
             stratum: StratumKind::Street,
             cam: Camera::default(),
             cursor: Pos::new(0, 0),
-            show_inspector: true,
-            show_minimap: true,
-            show_legend: false,
             digital: false,
             help: false,
             traffic: Traffic::default(),
@@ -153,20 +179,56 @@ impl MapScreen {
         }
     }
 
-    fn layout(&self, area: Rect, dev: bool) -> (Rect, Option<Rect>, Rect) {
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(5), Constraint::Length(1)])
-            .split(area);
-        let status = rows[1];
-        if self.show_inspector && dev && rows[0].width > PANEL_W + 20 {
-            let cols = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Min(20), Constraint::Length(PANEL_W)])
-                .split(rows[0]);
-            (cols[0], Some(cols[1]), status)
-        } else {
-            (rows[0], None, status)
+    /// Active abilities in slot order, for the action bar and the number keys.
+    fn actives(st: &AppState) -> Vec<game::AbilityId> {
+        st.character
+            .abilities(&st.content)
+            .into_iter()
+            .map(|(id, _)| id)
+            .filter(|id| {
+                st.content
+                    .ability(id)
+                    .is_some_and(|a| matches!(a.kind, game::AbilityKind::Active(_)))
+            })
+            .take(hud::SLOTS)
+            .collect()
+    }
+
+    fn slots(st: &AppState) -> Vec<hud::Slot> {
+        Self::actives(st)
+            .into_iter()
+            .filter_map(|id| {
+                let a = st.content.ability(&id)?;
+                let state = match st.character.cooling(&st.content, &id, st.tick) {
+                    Some(left) => hud::SlotState::Cooling(left.div_ceil(30)),
+                    None => hud::SlotState::Ready,
+                };
+                Some(hud::Slot {
+                    name: a.name.clone(),
+                    state,
+                })
+            })
+            .collect()
+    }
+
+    /// The VIEW popup: one row per sidebar section, its letter toggles it.
+    fn view_popup(&self, st: &AppState) -> ScreenCmd {
+        let choices = Section::ALL
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| st.dev || !s.dev_only())
+            .map(|(i, s)| {
+                let mark = if st.sidebar.is_on(*s) { "▣" } else { "▢" };
+                Choice::new(
+                    (b'a' + i as u8) as char,
+                    format!("{mark} {}", s.label()),
+                    Pick::View(*s),
+                )
+            })
+            .collect();
+        ScreenCmd::Push {
+            to: Box::new(Popup::verbs("VIEW", choices, st.tick)),
+            fx: TransitionKind::None,
         }
     }
 
@@ -200,20 +262,21 @@ impl MapScreen {
     fn handle_common(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
         match k.code {
             KeyCode::Char('`') => {
-                st.dev = !st.dev;
-                st.set_status(
-                    if st.dev {
-                        "dev mode on"
-                    } else {
-                        "dev mode off"
-                    },
-                    60,
-                );
+                st.set_dev(!st.dev);
+                st.say(if st.dev {
+                    "dev mode on"
+                } else {
+                    "dev mode off"
+                });
             }
-            KeyCode::Char('i') if st.dev => self.show_inspector = !self.show_inspector,
             KeyCode::Char(':') if st.dev => self.console = Some(Console::default()),
-            KeyCode::Char('m') => self.show_minimap = !self.show_minimap,
-            KeyCode::Char('e') => self.show_legend = !self.show_legend,
+            KeyCode::Char('v') => return Some(self.view_popup(st)),
+            KeyCode::Char('m') => {
+                return Some(ScreenCmd::Push {
+                    to: Box::new(Messages::new(st.tick)),
+                    fx: TransitionKind::None,
+                });
+            }
             KeyCode::Char('d') => self.digital = !self.digital,
             KeyCode::Char('?') => self.help = !self.help,
             KeyCode::Tab => {
@@ -274,7 +337,7 @@ impl MapScreen {
                         fx: TransitionKind::Glitch,
                     },
                     Err(e) => {
-                        st.set_status(e.to_string(), 90);
+                        st.warn(e.to_string());
                         ScreenCmd::Stay
                     }
                 });
@@ -406,7 +469,7 @@ impl MapScreen {
             });
         }
         if choices.is_empty() {
-            st.set_status("no active abilities", 90);
+            st.say("no active abilities");
             return ScreenCmd::Stay;
         }
         ScreenCmd::Push {
@@ -421,6 +484,19 @@ impl MapScreen {
         }
         if k.code == KeyCode::Char('a') {
             return Some(self.abilities(st));
+        }
+        if let KeyCode::Char(c) = k.code
+            && let Some(n) = c.to_digit(10)
+            && (1..=hud::SLOTS as u32).contains(&n)
+        {
+            match Self::actives(st).get(n as usize - 1).cloned() {
+                Some(id) => {
+                    let result = perform(st, game::Action::Fire(id));
+                    report(st, result);
+                }
+                None => st.warn(format!("nothing in slot {n}")),
+            }
+            return Some(ScreenCmd::Stay);
         }
         let dev = st.dev;
         let bonus = st.character.sight_bonus(&st.content);
@@ -437,10 +513,10 @@ impl MapScreen {
                         Ok(()) => {
                             self.stratum = player.stratum;
                             self.cam.snap(player.pos);
-                            st.set_status("jacked out", 60);
+                            st.say("jacked out");
                             return Some(ScreenCmd::Flash(TransitionKind::Glitch));
                         }
-                        Err(e) => st.set_status(e, 60),
+                        Err(e) => st.warn(e),
                     }
                 } else {
                     match player.jack_in(city, bonus) {
@@ -448,10 +524,10 @@ impl MapScreen {
                             self.stratum = StratumKind::Net;
                             self.cam.snap(port);
                             let where_ = port_name(city, port);
-                            st.set_status(format!("jacked in at {where_}"), 90);
+                            st.say(format!("jacked in at {where_}"));
                             return Some(ScreenCmd::Flash(TransitionKind::Glitch));
                         }
-                        Err(e) => st.set_status(e, 60),
+                        Err(e) => st.warn(e),
                     }
                 }
             }
@@ -461,16 +537,13 @@ impl MapScreen {
                     Some(dest) => {
                         self.stratum = dest;
                         player.update_fov(city, bonus);
-                        st.set_status(format!("now on {}", dest.label()), 60);
+                        st.say(format!("now on {}", dest.label()));
                     }
-                    None => st.set_status(
-                        if up {
-                            "nothing leads up from here"
-                        } else {
-                            "nothing leads down from here"
-                        },
-                        60,
-                    ),
+                    None => st.warn(if up {
+                        "nothing leads up from here"
+                    } else {
+                        "nothing leads down from here"
+                    }),
                 }
             }
             KeyCode::Char('.') => player.update_fov(city, bonus),
@@ -576,7 +649,8 @@ impl Screen for MapScreen {
             );
             return;
         };
-        let (map, panel, status) = self.layout(area, st.dev);
+        let r = layout(area);
+        let map = r.map;
         self.last_map.set(map);
         let origin = self.cam.origin(map.width, map.height);
         let cursor = self.focus_pos(st);
@@ -657,91 +731,87 @@ impl Screen for MapScreen {
             }
         }
 
-        if let Some(panel) = panel {
-            let block = boxed(if self.show_legend {
-                "LEGEND"
-            } else {
-                "INSPECT"
-            });
-            let inner = block.inner(panel);
-            f.render_widget(block, panel);
-            // The minimap takes the lower part of the panel when there is room for it.
-            let (text_area, map_area) = if self.show_minimap && inner.height > MINIMAP_H + 8 {
-                let rows = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([Constraint::Min(5), Constraint::Length(MINIMAP_H + 2)])
-                    .split(inner);
-                (rows[0], Some(rows[1]))
-            } else {
-                (inner, None)
-            };
-            let mut lines: Vec<Line> = strata_selector(self.stratum, st.tick);
-            lines.push(Line::from(""));
-            if self.show_legend {
-                lines.extend(legend(self.stratum));
-            } else {
-                let node = focus.map(|id| city.net.node(id));
-                lines.extend(inspector_lines(
-                    city,
-                    self.stratum,
-                    cursor,
-                    node,
-                    st.ground.at(self.stratum, cursor),
-                    &st.content,
-                ));
-            }
-            f.render_widget(
-                Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false }),
-                text_area,
-            );
-            if let Some(mm) = map_area {
-                let block = boxed("map");
-                let mi = block.inner(mm);
-                f.render_widget(block, mm);
-                Minimap {
-                    city,
-                    stratum: self.stratum,
-                    view: TileRect::new(origin.x, origin.y, map.width as i32, map.height as i32),
-                    player: st
-                        .player
-                        .as_ref()
-                        .filter(|p| p.stratum == self.stratum)
-                        .map(|p| p.pos),
-                    style: &st.style,
-                }
-                .render(mi, f.buffer_mut());
-            }
-        }
-
-        let jacked = st.player.as_ref().is_some_and(|p| p.jacked_in());
-        let cam = if st.dev { " · c camera" } else { "" };
-        let hints = match (self.mode, jacked) {
-            (Mode::Explore, _) => {
-                "hjkl pan · [] level · w walk · tab deck · d overlay · s save · ? keys".to_string()
-            }
-            (Mode::Walk, true) => {
-                format!("⚡ jacked in · space act · a abilities · tab deck{cam} · ? keys")
-            }
-            (Mode::Walk, false) => {
-                format!("hjkl move · space act · a abilities · tab deck{cam} · ? keys")
-            }
+        let location = hud::location(city, self.stratum, cursor);
+        let header = hud::header(
+            &hud::Header {
+                dev: st.dev,
+                level: st.character.level,
+                credits: st.character.credits,
+                location: &location,
+                seed: city.seed,
+                fps: st.show_fps.then_some(self.fps.fps),
+                clock: st.clock(),
+            },
+            r.header.width,
+        );
+        f.render_widget(Paragraph::new(header), r.header);
+        let bars = hud::bars(&hud::Bars {
+            hp: (st.character.hp, st.character.hp_max(&st.content)),
+            focus: (st.character.focus, st.character.focus_max),
+            xp: (
+                st.character.xp,
+                game::Character::xp_to_next(st.character.level),
+            ),
+            tick: st.tick,
+        });
+        f.render_widget(Paragraph::new(bars), r.bars);
+        let log_drawn = sidebar::draw(
+            &sidebar::SidebarView {
+                city,
+                stratum: self.stratum,
+                focus: cursor,
+                view: TileRect::new(origin.x, origin.y, map.width as i32, map.height as i32),
+                player: st
+                    .player
+                    .as_ref()
+                    .filter(|p| p.stratum == self.stratum)
+                    .map(|p| p.pos),
+                style: &st.style,
+                content: &st.content,
+                character: &st.character,
+                ground: &st.ground,
+                log: &st.log,
+                tick: st.tick,
+                dev: st.dev,
+            },
+            &st.sidebar,
+            r.side,
+            f.buffer_mut(),
+        );
+        let slots = Self::slots(st);
+        let bar = match self.mode {
+            Mode::Walk => hud::action_bar(&hud::BarMode::Walk(&slots), st.dev, r.action.width),
+            Mode::Explore => hud::action_bar(&hud::BarMode::Explore, st.dev, r.action.width),
         };
+        let recent = st.log.recent(st.tick);
         let bottom = match &self.console {
-            Some(con) => console::line(
-                con,
-                st.tick,
-                st.status_text().map(|s| (s, st.status_is_warning())),
-            ),
-            None => status_bar(
-                Some(city),
-                self.stratum,
-                st.show_fps.then_some(self.fps.fps),
-                &hints,
-                st.status_text().map(|s| (s, st.status_is_warning())),
-                st.dev,
-            ),
+            Some(con) => console::line(con, st.tick, recent),
+            None => bar,
         };
-        f.render_widget(Paragraph::new(bottom), status);
+        f.render_widget(Paragraph::new(bottom), r.action);
+        // With the LOG section off or squeezed out, the newest entry shows as a toast.
+        if !log_drawn
+            && self.console.is_none()
+            && let Some(e) = recent
+        {
+            let style = match e.kind {
+                Kind::Warn => Style::default()
+                    .fg(crate::ui::chrome::MAGENTA)
+                    .add_modifier(Modifier::BOLD),
+                Kind::Story => Style::default()
+                    .fg(crate::ui::chrome::CYAN)
+                    .add_modifier(Modifier::BOLD),
+                Kind::Info => Style::default().fg(crate::ui::chrome::CYAN),
+            };
+            put(
+                f.buffer_mut(),
+                map.x + 1,
+                map.bottom().saturating_sub(1),
+                &e.marked(),
+                style,
+                map.right(),
+            );
+        }
 
         if self.help {
             help::draw(f, self.mode);
@@ -752,6 +822,14 @@ impl Screen for MapScreen {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn last(st: &AppState) -> Option<&str> {
+        st.log.latest().map(|e| e.text.as_str())
+    }
+
+    fn last_is_warning(st: &AppState) -> bool {
+        st.log.latest().is_some_and(|e| e.kind == Kind::Warn)
+    }
     use crate::app::{AppState, Screen, ScreenCmd};
     use crate::screens::testutil::{buffer_text, key};
     use citygen::{GenParams, Generator, SizePreset, StratumKind};
@@ -800,15 +878,8 @@ mod tests {
         s.update(&mut st, &[key(KeyCode::Char('<'))]);
         t.draw(|f| s.draw(&st, f)).unwrap();
         assert!(buffer_text(t.backend().buffer()).contains('@'));
-        s.update(
-            &mut st,
-            &[
-                key(KeyCode::Char('d')),
-                key(KeyCode::Char('m')),
-                key(KeyCode::Char('i')),
-            ],
-        );
-        assert!(s.digital && !s.show_minimap && !s.show_inspector);
+        s.update(&mut st, &[key(KeyCode::Char('d'))]);
+        assert!(s.digital);
         t.draw(|f| s.draw(&st, f)).unwrap();
         s.update(&mut st, &[key(KeyCode::Char('?'))]);
         t.draw(|f| s.draw(&st, f)).unwrap();
@@ -886,6 +957,7 @@ mod tests {
             o.x + map.width as i32 <= 120 && o.y + map.height as i32 <= 60,
             "origin {o:?}"
         );
+        st.sidebar.set(Section::Inspect, true);
         t.draw(|f| s.draw(&st, f)).unwrap();
         let text = buffer_text(t.backend().buffer());
         assert!(text.contains("119,59"), "{text}");
@@ -905,7 +977,7 @@ mod tests {
         assert_eq!(s.stratum, StratumKind::Net);
         t.draw(|f| s.draw(&st, f)).unwrap();
         let text = buffer_text(t.backend().buffer());
-        assert!(text.contains("▌ Net"), "{text}");
+        assert!(text.contains("· Net"), "{text}");
         assert!(
             text.contains('═') || text.contains('┃') || text.contains('━'),
             "{text}"
@@ -942,7 +1014,10 @@ mod tests {
         t.draw(|f| s.draw(&st, f)).unwrap();
         let text = buffer_text(t.backend().buffer());
         assert!(text.contains("jacked in"), "{text}");
-        assert!(text.contains("space act"), "{text}");
+        assert!(
+            text.contains("· Net") && text.contains("tab deck"),
+            "{text}"
+        );
         // The body shows on the Street while the avatar is in the Net.
         s.mode = Mode::Explore;
         s.stratum = StratumKind::Street;
@@ -979,7 +1054,7 @@ mod tests {
         assert!(st.player.is_some());
         s.update(&mut st, &[key(KeyCode::Tab)]);
         assert_eq!(s.mode, Mode::Walk, "tab must not open the free camera");
-        s.update(&mut st, &[key(KeyCode::Char('i'))]);
+        st.sidebar.set(Section::Inspect, true);
         st.tick += 500;
         t.draw(|f| s.draw(&st, f)).unwrap();
         let text = buffer_text(t.backend().buffer());
@@ -991,10 +1066,14 @@ mod tests {
         assert!(st.dev);
         s.update(&mut st, &[key(KeyCode::Char('c'))]);
         assert_eq!(s.mode, Mode::Explore);
+        st.sidebar.set(Section::Inspect, true);
         st.tick += 500;
         t.draw(|f| s.draw(&st, f)).unwrap();
         let text = buffer_text(t.backend().buffer());
-        assert!(text.contains("INSPECT") && text.contains("DEV"), "{text}");
+        assert!(
+            text.contains("── INSPECT") && text.contains("DEV"),
+            "{text}"
+        );
         // Flipping it off again drops straight back into the walk.
         s.update(&mut st, &[key(KeyCode::Char('`'))]);
         assert!(!st.dev);
@@ -1002,31 +1081,24 @@ mod tests {
     }
 
     #[test]
-    fn minimap_lives_in_the_lower_part_of_the_inspector() {
+    fn minimap_lives_in_the_sidebar_map_section() {
         let mut st = state();
         let mut s = MapScreen::explore(0);
-        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
         s.update(&mut st, &[]);
-        t.draw(|f| s.draw(&st, f)).unwrap();
-        let text = buffer_text(t.backend().buffer());
-        let panel_x = 120 - PANEL_W as usize;
+        let text = draw_screen(&s, &st, 120, 40);
+        let panel_x = 120 - sidebar::WIDTH as usize;
         let rows: Vec<(usize, usize)> = text
             .lines()
             .enumerate()
-            .filter_map(|(y, l)| l.find("map").map(|x| (y, x)))
+            .filter_map(|(y, l)| l.find("MAP · street").map(|x| (y, x)))
             .collect();
-        assert!(!rows.is_empty(), "no minimap box: {text}");
+        assert_eq!(rows.len(), 1, "no map section: {text}");
         assert!(
-            rows.iter().all(|(_, x)| *x >= panel_x),
-            "minimap drawn outside the panel: {rows:?}"
+            rows[0].1 >= panel_x,
+            "map drawn outside the sidebar: {rows:?}"
         );
-        assert!(
-            rows.iter().all(|(y, _)| *y > 20),
-            "minimap not in the lower part: {rows:?}"
-        );
-        s.update(&mut st, &[key(KeyCode::Char('m'))]);
-        t.draw(|f| s.draw(&st, f)).unwrap();
-        assert!(!buffer_text(t.backend().buffer()).contains("map"));
+        st.sidebar.set(Section::Map, false);
+        assert!(!draw_screen(&s, &st, 120, 40).contains("MAP · street"));
     }
 
     #[test]
@@ -1135,7 +1207,7 @@ mod tests {
     }
 
     #[test]
-    fn explore_hints_mention_save() {
+    fn explore_action_bar_and_help_mention_save() {
         let mut st = state();
         let mut s = MapScreen::explore(0);
         s.update(&mut st, &[]);
@@ -1144,9 +1216,13 @@ mod tests {
         let text = buffer_text(t.backend().buffer());
         let status = text.lines().last().unwrap();
         assert!(
-            status.contains("s save") && status.contains("? keys"),
+            status.contains("w walk") && status.contains("? keys"),
             "{status:?}"
         );
+        s.update(&mut st, &[key(KeyCode::Char('?'))]);
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        assert!(buffer_text(t.backend().buffer()).contains("save city"));
+        s.update(&mut st, &[key(KeyCode::Char('?'))]);
     }
 
     #[test]
@@ -1290,7 +1366,7 @@ mod tests {
         assert_eq!(st.character.count(&game::ItemId::new("copper_coil")), 5);
         assert_eq!(st.character.count(&game::ItemId::new("dead_phone")), 2);
         assert!(st.ground.at(k, pos).is_empty());
-        assert_eq!(st.status_text(), Some("took 3 items"));
+        assert_eq!(last(&st), Some("took 3 items"));
         let ScreenCmd::Push { to: mut p, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
         else {
             panic!()
@@ -1340,7 +1416,7 @@ mod tests {
                 }
             ),
             "status: {:?}",
-            st.status_text()
+            last(&st)
         );
         assert!(st.player.as_ref().unwrap().jacked_in());
         s.update(&mut st, &[]);
@@ -1376,7 +1452,7 @@ mod tests {
         p.update(&mut st, &[key(KeyCode::Char('<'))]);
         s.update(&mut st, &[]);
         assert_eq!(s.stratum, StratumKind::Undercity);
-        assert_eq!(st.status_text(), Some("now on Undercity"));
+        assert_eq!(last(&st), Some("now on Undercity"));
     }
 
     #[test]
@@ -1405,7 +1481,7 @@ mod tests {
         let before = seen(&st);
         p.update(&mut st, &[key(KeyCode::Char('a'))]);
         assert!(seen(&st) > before, "the scan painted the map");
-        assert_eq!(st.status_text(), Some("Netscan: pulse sent"));
+        assert_eq!(last(&st), Some("Netscan: pulse sent"));
         let ScreenCmd::Push { to: mut p, .. } = s.update(&mut st, &[key(KeyCode::Char('a'))])
         else {
             panic!()
@@ -1413,18 +1489,18 @@ mod tests {
         st.tick += 40;
         let text = draw_screen(&*p, &st, 120, 40);
         assert!(text.contains("Netscan · cooling"), "{text}");
-        let msg = st.status_text().map(|m| m.to_string());
+        let msg = last(&st).map(|m| m.to_string());
         assert!(
             matches!(p.update(&mut st, &[key(KeyCode::Enter)]), ScreenCmd::Stay),
             "a cooling row cannot fire"
         );
-        assert_eq!(st.status_text().map(|m| m.to_string()), msg);
+        assert_eq!(last(&st).map(|m| m.to_string()), msg);
         st.character.equipment.clear();
         assert!(matches!(
             s.update(&mut st, &[key(KeyCode::Char('a'))]),
             ScreenCmd::Stay
         ));
-        assert_eq!(st.status_text(), Some("no active abilities"));
+        assert_eq!(last(&st), Some("no active abilities"));
     }
 
     #[test]
@@ -1439,8 +1515,8 @@ mod tests {
         s.update(&mut st, &[key(KeyCode::Char(':'))]);
         assert!(s.console.is_some());
         let text = draw_screen(&s, &st, 120, 40);
-        let last = text.lines().last().unwrap();
-        assert!(last.starts_with(": "), "{last:?}");
+        let prompt = text.lines().last().unwrap();
+        assert!(prompt.starts_with(": "), "{prompt:?}");
         st.character.hp = 1;
         for c in "heal".chars() {
             s.update(&mut st, &[key(KeyCode::Char(c))]);
@@ -1448,32 +1524,35 @@ mod tests {
         assert!(draw_screen(&s, &st, 120, 40).contains(": heal"));
         s.update(&mut st, &[key(KeyCode::Enter)]);
         assert_eq!(st.character.hp, 45);
-        assert_eq!(st.status_text(), Some("hp 45/45"));
-        let last = draw_screen(&s, &st, 120, 40);
-        let last = last.lines().last().unwrap();
+        assert_eq!(last(&st), Some("hp 45/45"));
+        let screen = draw_screen(&s, &st, 120, 40);
+        let last_row = screen.lines().last().unwrap();
         assert!(
-            last.starts_with(": ") && last.contains("hp 45/45"),
-            "the result shows beside the prompt: {last:?}"
+            last_row.starts_with(": ") && last_row.contains("hp 45/45"),
+            "the result shows beside the prompt: {last_row:?}"
         );
         for c in "fly".chars() {
             s.update(&mut st, &[key(KeyCode::Char(c))]);
         }
         s.update(&mut st, &[key(KeyCode::Enter)]);
-        let last = draw_screen(&s, &st, 120, 40);
-        assert!(last.lines().last().unwrap().contains("unknown command fly"));
+        let screen = draw_screen(&s, &st, 120, 40);
+        assert!(
+            screen
+                .lines()
+                .last()
+                .unwrap()
+                .contains("unknown command fly")
+        );
         s.update(&mut st, &[key(KeyCode::Esc)]);
         assert!(s.console.is_none());
     }
 
     #[test]
-    fn walk_hints_fit_120_columns_in_dev_mode() {
+    fn action_bar_keeps_its_hints_in_dev_mode() {
         let mut st = state();
         let mut s = MapScreen::explore(0);
         walking(&mut st, &mut s);
         st.dev = true;
-        st.show_fps = true;
-        st.city.as_mut().unwrap().name = "Neon Kowloon".to_string();
-        s.fps.fps = 60.0;
         let row = |s: &MapScreen, st: &AppState| {
             draw_screen(s, st, 120, 40)
                 .lines()
@@ -1483,40 +1562,17 @@ mod tests {
         };
         let r = row(&s, &st);
         assert!(
-            r.contains("space act")
-                && r.contains("a abilities")
-                && r.contains("c camera")
+            r.contains("1 netscan ●")
+                && r.contains(": console")
                 && r.trim_end().ends_with("? keys"),
             "{r:?}"
         );
-        let city = st.city.clone().unwrap();
-        let street = StratumKind::Street;
-        let beside_jack = city
-            .connectors
-            .iter()
-            .filter(|k| {
-                k.kind == citygen::ConnectorKind::Jack
-                    && k.serves.contains(&street)
-                    && city.walkable(StratumKind::Net, k.pos)
-            })
-            .find_map(|k| {
-                std::iter::once(k.pos)
-                    .chain(k.pos.neighbors8())
-                    .find(|q| city.walkable(street, *q))
-            })
-            .unwrap();
-        let p = st.player.as_mut().unwrap();
-        p.pos = beside_jack;
-        p.jack_in(&city, 0).unwrap();
-        s.update(&mut st, &[]);
+        s.mode = Mode::Explore;
         let r = row(&s, &st);
-        assert!(
-            r.contains("jacked in")
-                && r.contains("space act")
-                && r.contains("a abilities")
-                && r.trim_end().ends_with("? keys"),
-            "{r:?}"
-        );
+        assert!(r.contains("w walk") && !r.contains("netscan"), "{r:?}");
+        st.dev = false;
+        s.mode = Mode::Walk;
+        assert!(!row(&s, &st).contains("console"));
     }
 
     #[test]
@@ -1563,5 +1619,157 @@ mod tests {
             "s must not open the save screen"
         );
         assert_eq!(s.console.as_ref().map(|c| c.input.as_str()), Some("s"));
+    }
+
+    #[test]
+    fn frame_draws_header_bars_and_action_bar() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        s.update(&mut st, &[]);
+        let text = draw_screen(&s, &st, 100, 30);
+        for needle in [
+            "LVL 1",
+            "¤ 320",
+            "HP ",
+            "FOCUS",
+            "XP ",
+            "22:00",
+            "w walk",
+            "tab deck",
+            "▣ here",
+            "── HERE",
+            "── THE DROP",
+            "── LOG",
+            " DEV ",
+            "seed 6",
+        ] {
+            assert!(text.contains(needle), "{needle}: {text}");
+        }
+        walking(&mut st, &mut s);
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(text.contains("1 netscan ●   2 ──"), "{text}");
+        assert!(text.contains("· Street"), "{text}");
+        st.dev = false;
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(
+            !text.contains(" DEV ") && !text.contains("seed 6") && !text.contains("inspect"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn frame_fits_at_minimum_with_every_section() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        for sec in Section::ALL {
+            st.sidebar.set(sec, true);
+        }
+        for _ in 0..30 {
+            st.say("a long line of text that will need wrapping in the log");
+        }
+        st.warn("nothing leads up from here");
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(
+            text.contains("tab deck   ? keys") && text.contains("── HERE"),
+            "{text}"
+        );
+        // The LOG section lost its rows to the dev sections: the refusal still shows.
+        assert!(text.contains("! nothing leads up from here"), "{text}");
+        let text = draw_screen(&s, &st, 200, 60);
+        assert!(text.contains("── MAP · street"), "{text}");
+    }
+
+    #[test]
+    fn number_keys_fire_slots() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        assert_eq!(last(&st), Some("Netscan: pulse sent"));
+        st.tick += 200;
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(text.contains("Netscan: pulse sent"), "{text}");
+        assert!(text.contains("1 netscan 4s"), "{text}");
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        assert!(last_is_warning(&st));
+        s.update(&mut st, &[key(KeyCode::Char('3'))]);
+        assert_eq!(last(&st), Some("nothing in slot 3"));
+    }
+
+    #[test]
+    fn view_popup_toggles_sections() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let ScreenCmd::Push { to: mut p, .. } = s.update(&mut st, &[key(KeyCode::Char('v'))])
+        else {
+            panic!("v opens the view popup")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*p, &st, 100, 30);
+        assert!(
+            text.contains("VIEW") && text.contains("a  ▣ here") && text.contains("e  ▢ inspect"),
+            "{text}"
+        );
+        assert!(matches!(
+            p.update(&mut st, &[key(KeyCode::Char('a'))]),
+            ScreenCmd::Pop { .. }
+        ));
+        assert!(!st.sidebar.is_on(Section::Here));
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(
+            !text.contains("── HERE") && text.contains("▢ here"),
+            "{text}"
+        );
+        st.dev = false;
+        let ScreenCmd::Push { to: p, .. } = s.update(&mut st, &[key(KeyCode::Char('v'))]) else {
+            panic!()
+        };
+        let text = draw_screen(&*p, &st, 100, 30);
+        assert!(!text.contains("inspect"), "{text}");
+    }
+
+    #[test]
+    fn hidden_log_shows_a_toast() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        st.sidebar.set(Section::Log, false);
+        st.warn("nothing leads up from here");
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(text.contains("! nothing leads up from here"), "{text}");
+        st.tick += 100;
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(!text.contains("nothing leads up"), "{text}");
+    }
+
+    #[test]
+    fn dev_off_clears_dev_sections() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        st.sidebar.set(Section::Inspect, true);
+        s.update(&mut st, &[key(KeyCode::Char('`'))]);
+        assert!(!st.dev && !st.sidebar.is_on(Section::Inspect));
+    }
+
+    #[test]
+    fn m_opens_the_message_history() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        st.say("took it");
+        let ScreenCmd::Push { to: mut p, .. } = s.update(&mut st, &[key(KeyCode::Char('m'))])
+        else {
+            panic!("m opens messages")
+        };
+        let text = draw_screen(&*p, &st, 100, 30);
+        assert!(
+            text.contains("MESSAGES") && text.contains("took it"),
+            "{text}"
+        );
+        assert!(matches!(
+            p.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Pop { .. }
+        ));
     }
 }

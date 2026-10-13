@@ -122,7 +122,7 @@ impl Screen for Files {
                                 st.params = city.params.clone();
                                 st.city = Some(city);
                                 st.player = None;
-                                st.set_status(format!("loaded {}", entry.path.display()), 90);
+                                st.say(format!("loaded {}", entry.path.display()));
                                 return ScreenCmd::Switch {
                                     to: crate::screens::explore_screen(st.tick),
                                     fx: TransitionKind::Glitch,
@@ -150,7 +150,7 @@ impl Screen for Files {
                         let path = self.dir.join(format!("{name}.city"));
                         match save_city(&path, city) {
                             Ok(()) => {
-                                st.set_status(format!("saved {}", path.display()), 120);
+                                st.say(format!("saved {}", path.display()));
                                 return Self::done();
                             }
                             Err(e) => self.error = Some(e.to_string()),

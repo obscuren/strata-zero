@@ -1,7 +1,9 @@
 //! Application state, the screen trait and the fixed-rate frame loop.
 
+use crate::messages::{Kind, MessageLog};
 use crate::render::style::StylePack;
 use crate::term::{TerminalGuard, install_panic_hook};
+use crate::ui::sidebar::Sidebar;
 use anyhow::Result;
 use citygen::{City, GenParams};
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
@@ -40,16 +42,10 @@ pub struct AppState {
     pub ground: game::Ground,
     /// A ping in flight: lights terminals and stairs around it until `until`.
     pub ping: Option<Ping>,
-    status: Option<Status>,
-}
-
-/// A one-line message with its timing.
-#[derive(Clone, Debug)]
-struct Status {
-    text: String,
-    since: u64,
-    until: u64,
-    warn: bool,
+    /// What happened, newest last.
+    pub log: MessageLog,
+    /// Which sidebar sections are on.
+    pub sidebar: Sidebar,
 }
 
 /// A handshake burst from the `ping` ability.
@@ -84,45 +80,41 @@ impl AppState {
             character,
             ground: game::Ground::default(),
             ping: None,
-            status: None,
+            log: MessageLog::default(),
+            sidebar: Sidebar::default(),
         }
     }
 
-    /// Shows a one-line message for `ttl` ticks.
-    pub fn set_status(&mut self, msg: impl Into<String>, ttl: u64) {
-        self.status = Some(Status {
-            text: msg.into(),
-            since: self.tick,
-            until: self.tick + ttl,
-            warn: false,
-        });
+    pub const TICKS_PER_MINUTE: u64 = 90;
+    pub const START_MINUTE: u64 = 22 * 60;
+
+    /// The time of night as (hour, minute): real time, from the tick.
+    pub fn clock(&self) -> (u8, u8) {
+        let m = (Self::START_MINUTE + self.tick / Self::TICKS_PER_MINUTE) % (24 * 60);
+        ((m / 60) as u8, (m % 60) as u8)
     }
 
-    /// Shows a one-line refusal for `ttl` ticks; drawn in the warning colour.
-    pub fn set_warning(&mut self, msg: impl Into<String>, ttl: u64) {
-        self.status = Some(Status {
-            text: msg.into(),
-            since: self.tick,
-            until: self.tick + ttl,
-            warn: true,
-        });
+    /// Turns dev mode on or off; off also drops the dev-only sidebar sections.
+    pub fn set_dev(&mut self, on: bool) {
+        self.dev = on;
+        if !on {
+            self.sidebar.leave_dev();
+        }
     }
 
-    fn live_status(&self) -> Option<&Status> {
-        self.status.as_ref().filter(|s| s.until > self.tick)
+    /// Logs a plain result.
+    pub fn say(&mut self, msg: impl Into<String>) {
+        self.log.push(Kind::Info, msg, self.tick);
     }
 
-    pub fn status_text(&self) -> Option<&str> {
-        self.live_status().map(|s| s.text.as_str())
+    /// Logs a refusal.
+    pub fn warn(&mut self, msg: impl Into<String>) {
+        self.log.push(Kind::Warn, msg, self.tick);
     }
 
-    pub fn status_is_warning(&self) -> bool {
-        self.live_status().is_some_and(|s| s.warn)
-    }
-
-    /// The tick the current status appeared, for a reveal.
-    pub fn status_since(&self) -> Option<u64> {
-        self.live_status().map(|s| s.since)
+    /// Logs a quest or level line.
+    pub fn story(&mut self, msg: impl Into<String>) {
+        self.log.push(Kind::Story, msg, self.tick);
     }
 }
 
@@ -476,11 +468,40 @@ mod tests {
     }
 
     #[test]
-    fn app_state_status_expires() {
+    fn clock_runs_from_ten_pm_in_real_time() {
         let mut st = AppState::new();
-        st.set_status("hi", 10);
-        assert_eq!(st.status_text(), Some("hi"));
-        st.tick += 11;
-        assert_eq!(st.status_text(), None);
+        assert_eq!(st.clock(), (22, 0));
+        st.tick = 89;
+        assert_eq!(st.clock(), (22, 0));
+        st.tick = 90;
+        assert_eq!(st.clock(), (22, 1));
+        st.tick = 90 * 120;
+        assert_eq!(st.clock(), (0, 0));
+        st.tick = 90 * (24 * 60 + 61);
+        assert_eq!(st.clock(), (23, 1));
+    }
+
+    #[test]
+    fn app_state_logs_with_the_current_tick() {
+        let mut st = AppState::new();
+        st.tick = 5;
+        st.say("hi");
+        st.warn("no");
+        st.story("level 2");
+        let kinds: Vec<(String, Kind, u64)> = st
+            .log
+            .iter()
+            .map(|e| (e.text.clone(), e.kind, e.tick))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                ("hi".to_string(), Kind::Info, 5),
+                ("no".to_string(), Kind::Warn, 5),
+                ("level 2".to_string(), Kind::Story, 5)
+            ]
+        );
+        assert!(st.log.recent(94).is_some());
+        assert!(st.log.recent(95).is_none());
     }
 }

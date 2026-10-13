@@ -81,8 +81,9 @@ panel rule colour, padded to the panel width.
 
 - **HERE** describes the focus tile. First the feature, if any: a terminal as
   `╥ {port name}` (the same name `walker::port_name` gives), a connector as
-  `{glyph} {kind label}` with `>` for one that leads down and `<` for one that
-  leads up, a Net node as `◆ {node kind label}`. Then each item stack as
+  `> {kind label} up` for one that leads up and `< {kind label} down` for one
+  that leads down (both when both), matching the HERE popup's `>` up and `<`
+  down, a Net node as `◆ {node kind label}`. Then each item stack as
   `{kind icon} {name}` with ` ×{qty}` appended when qty > 1, at most five
   stacks, then `… and {n} more` when there are more. A tile with nothing says
   `nothing here`, dimmed. The section takes one header row plus its lines,
