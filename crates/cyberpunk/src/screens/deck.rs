@@ -1,4 +1,5 @@
-//! The deck: the player's menu over the live map — quests, gear, inventory, workbench, map, skills.
+//! The deck: the player's menu over the live map — quests, gear, inventory, workbench,
+//! map, skills, abilities.
 
 use crate::anim::effects::{glitch_cells, pulse, typewriter};
 use crate::anim::{Easing, Tween};
@@ -715,6 +716,11 @@ impl Deck {
 
 impl Screen for Deck {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+        // A popup may have removed the selected row: reselect before drawing, keys or not.
+        let rows = self.rows(st);
+        if self.row >= rows.len() || rows.get(self.row).is_some_and(|r| r.detail.is_none()) {
+            self.row = Self::first_selectable(&rows);
+        }
         for k in keys {
             let rows = self.rows(st);
             if self.row >= rows.len() || rows.get(self.row).is_some_and(|r| r.detail.is_none()) {
@@ -1600,5 +1606,27 @@ mod tests {
         };
         p.update(&mut st, &[key(KeyCode::Char('d'))]);
         assert!(st.status_is_warning());
+    }
+
+    #[test]
+    fn deck_reselects_after_a_popup_removes_the_row() {
+        let mut st = state();
+        walking(&mut st);
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('3'))]);
+        let rows = d.rows(&st);
+        d.row = rows.len() - 1;
+        let last = rows[d.row].text.clone();
+        assert!(last.contains("1×"), "the last row is a single item: {last}");
+        let ScreenCmd::Push { to: mut p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!()
+        };
+        p.update(&mut st, &[key(KeyCode::Char('d'))]);
+        d.update(&mut st, &[]);
+        st.tick = 60;
+        let text = draw(&d, &st, 120, 35);
+        assert!(!text.contains(&last), "{text}");
+        assert!(text.contains("▸ "), "selection restored: {text}");
     }
 }

@@ -56,6 +56,34 @@ impl Choice {
 }
 
 const REVEAL_TICKS: u64 = 10;
+
+/// Rows a line takes at `width` under the paragraph's word wrap: greedy, words
+/// joined by single spaces, a word longer than a row spilling into the next.
+fn wrapped_rows(line: &Line<'_>, width: usize) -> usize {
+    let width = width.max(1);
+    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    let mut rows = 1;
+    let mut used = 0usize;
+    for word in text.split(' ') {
+        let w = word.chars().count();
+        if w == 0 {
+            continue;
+        }
+        if used == 0 {
+            used = w;
+        } else if used + 1 + w <= width {
+            used += 1 + w;
+        } else {
+            rows += 1;
+            used = w;
+        }
+        while used > width {
+            rows += 1;
+            used -= width;
+        }
+    }
+    rows
+}
 const MIN_W: u16 = 24;
 const MAX_W: u16 = 48;
 
@@ -128,10 +156,7 @@ impl Popup {
                 let longest = lines.iter().map(|l| l.width()).max().unwrap_or(0);
                 let w = (longest.max(title_w) as u16 + 6).clamp(MIN_W, MAX_W);
                 let inner_w = w.saturating_sub(4).max(1) as usize;
-                let rows: usize = lines
-                    .iter()
-                    .map(|l| l.width().max(1).div_ceil(inner_w))
-                    .sum();
+                let rows: usize = lines.iter().map(|l| wrapped_rows(l, inner_w)).sum();
                 (w, rows as u16 + 4)
             }
             None => {
@@ -457,5 +482,18 @@ mod tests {
         for c in ['┍', '┑', '┕', '┙', '▸', '▮'] {
             assert_eq!(unicode_width::UnicodeWidthChar::width(c), Some(1));
         }
+    }
+
+    #[test]
+    fn card_fits_word_wrapped_lines() {
+        let mut st = state();
+        let line = format!("{} {} {}", "x".repeat(23), "y".repeat(23), "z".repeat(23));
+        let p = Popup::card("WRAP", vec![Line::from(line)], 0);
+        st.tick = 40;
+        let text = draw(&p, &st, 120, 35);
+        assert!(
+            text.contains(&"z".repeat(23)),
+            "last wrapped row cut: {text}"
+        );
     }
 }

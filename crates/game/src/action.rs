@@ -151,7 +151,7 @@ pub fn apply(
             remove_from_pack(ch, &id, 1);
             match on_use {
                 Use::Heal(n) => {
-                    let healed = (ch.hp + n).min(ch.hp_max(c)) - ch.hp;
+                    let healed = ch.hp_max(c).saturating_sub(ch.hp).min(n);
                     ch.hp += healed;
                     done(format!("used {} · +{healed} hp", item.name))
                 }
@@ -183,7 +183,7 @@ pub fn apply(
             if stacks.is_empty() {
                 return Err("nothing here".to_string());
             }
-            let n = stacks.len();
+            let n: u32 = stacks.iter().map(|s| s.qty).sum();
             for s in stacks {
                 ground.take(at.stratum, at.pos, &s.item, s.qty);
                 add_to_pack(ch, s.item, s.qty);
@@ -213,7 +213,7 @@ pub fn apply(
                 Active::Ping { radius, ticks } => Effect::Ping { radius, ticks },
             };
             Ok(Outcome {
-                message: format!("{id}: pulse sent"),
+                message: format!("{}: pulse sent", ability.name),
                 effects: vec![effect],
             })
         }
@@ -322,6 +322,15 @@ mod tests {
         .unwrap();
         assert_eq!(out.message, "used Soy-noodle cup · +0 hp");
         assert_eq!(ch.count(&id("soy_noodle_cup")), 0);
+        // Above the max (a console heal, a later buff): nothing happens, nothing panics.
+        ch.hp = 60;
+        ch.inventory.push(Stack {
+            item: id("stim_patch"),
+            qty: 1,
+        });
+        let out = apply(&mut ch, &mut g, &c, at, 0, Action::Use(id("stim_patch"))).unwrap();
+        assert_eq!(out.message, "used Stim patch · +0 hp");
+        assert_eq!(ch.hp, 60);
     }
 
     #[test]
@@ -348,9 +357,9 @@ mod tests {
             ..at
         };
         assert!(apply(&mut ch, &mut g, &c, elsewhere, 0, take(1)).is_err());
-        g.add(at.stratum, at.pos, id("dead_phone"), 1);
+        g.add(at.stratum, at.pos, id("dead_phone"), 2);
         let out = apply(&mut ch, &mut g, &c, at, 0, Action::TakeAll).unwrap();
-        assert_eq!(out.message, "took 2 items");
+        assert_eq!(out.message, "took 3 items", "units, not stacks");
         assert!(g.at(at.stratum, at.pos).is_empty());
         assert_eq!(ch.count(&id("copper_coil")), 3);
         ch.inventory.push(Stack {
@@ -380,7 +389,7 @@ mod tests {
         let scan = || Action::Fire(AbilityId::new("netscan"));
         let out = apply(&mut ch, &mut g, &c, at, 100, scan()).unwrap();
         assert_eq!(out.effects, vec![Effect::Reveal { radius: 12 }]);
-        assert_eq!(out.message, "netscan: pulse sent");
+        assert_eq!(out.message, "Netscan: pulse sent");
         let err = apply(&mut ch, &mut g, &c, at, 110, scan()).unwrap_err();
         assert_eq!(err, "Netscan cooling down · 10s");
         assert!(apply(&mut ch, &mut g, &c, at, 500, scan()).is_ok());

@@ -189,7 +189,7 @@ pub fn status_bar(
             format!("· {msg}"),
             Style::default()
                 .fg(if warn {
-                    Color::Rgb(255, 0, 200)
+                    crate::ui::chrome::MAGENTA
                 } else {
                     Color::Rgb(255, 200, 80)
                 })
