@@ -2,7 +2,7 @@
 
 use crate::anim::effects::pulse;
 use crate::app::AppState;
-use crate::ui::chrome::{CYAN, DIM, MAGENTA_RGB, TEXT};
+use crate::ui::chrome::{CYAN, DIM, MAGENTA, MAGENTA_RGB, TEXT};
 use crate::ui::console::Console;
 use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
@@ -97,8 +97,9 @@ pub fn complete(st: &AppState, head: &str, word: &str) -> Vec<String> {
     }
 }
 
-/// The console as the status row: prompt, input, a pulsing cursor, the completion hint.
-pub fn line(con: &Console, tick: u64) -> Line<'static> {
+/// The console as the status row: prompt, input, a pulsing cursor, then the completion
+/// hint or, without one, the last result (`status`, with its warning flag).
+pub fn line(con: &Console, tick: u64, status: Option<(&str, bool)>) -> Line<'static> {
     let mut spans = vec![
         Span::styled(": ", Style::default().fg(CYAN).add_modifier(Modifier::BOLD)),
         Span::styled(con.input.clone(), Style::default().fg(TEXT)),
@@ -109,6 +110,13 @@ pub fn line(con: &Console, tick: u64) -> Line<'static> {
     ];
     if let Some(hint) = &con.hint {
         spans.push(Span::styled(format!("  {hint}"), Style::default().fg(DIM)));
+    } else if let Some((msg, warn)) = status {
+        let style = if warn {
+            Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(CYAN)
+        };
+        spans.push(Span::styled(format!("  {msg}"), style));
     }
     Line::from(spans)
 }

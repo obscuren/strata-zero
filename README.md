@@ -69,8 +69,16 @@ end · `r` reseed after an error · `esc` back
 `d` digital overlay · `s` save · `r` regenerate · `g` configure · `?` keys · `esc` pause
 
 **Walk** `hjkl` `yubn` / arrows move · `<` `>` take stairs, lift, ladder or
-manhole · `enter` jack in at an adjacent terminal / jack out · `.` wait ·
-`tab` deck · `c` back to the free camera (dev mode) · `esc` pause · panels as above
+manhole · `space` interact: take what lies here, jack in at an adjacent terminal
+or out again, take the stairs, look · `a` fire an active ability · `enter` jack
+shortcut · `.` wait · `tab` deck · `c` back to the free camera (dev mode) · `:`
+dev console (dev mode: `spawn`, `drop`, `give`, `heal`, `clear`, `help`, with
+Tab completion and history) · `esc` pause · panels as above
+
+Items lie where they are dropped: a pile shows its kind's icon in amber (`≡`
+when mixed), dimmed once out of sight, and the inspector lists what is on the
+focused tile. A scan paints the map around you into memory; a ping lights the
+terminals and stairs in range for a while.
 
 **Pause** (`esc` or `q`) resume · save · load · settings (dev mode, rain, fps) ·
 quit to title · quit game

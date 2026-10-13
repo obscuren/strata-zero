@@ -705,16 +705,18 @@ impl Screen for MapScreen {
                 "hjkl pan · [] level · w walk · tab deck · d overlay · s save · ? keys".to_string()
             }
             (Mode::Walk, true) => {
-                format!(
-                    "⚡ jacked in · hjkl move · enter jack out · tab deck · d overlay{cam} · ? keys"
-                )
+                format!("⚡ jacked in · space act · a abilities · tab deck{cam} · ? keys")
             }
             (Mode::Walk, false) => {
-                format!("hjkl move · <> stairs · enter jack in · tab deck{cam} · ? keys")
+                format!("hjkl move · <> stairs · space act · a abilities · tab deck{cam} · ? keys")
             }
         };
         let bottom = match &self.console {
-            Some(con) => console::line(con, st.tick),
+            Some(con) => console::line(
+                con,
+                st.tick,
+                st.status_text().map(|s| (s, st.status_is_warning())),
+            ),
             None => status_bar(
                 Some(city),
                 self.stratum,
@@ -924,9 +926,8 @@ mod tests {
         st.tick += 500;
         t.draw(|f| s.draw(&st, f)).unwrap();
         let text = buffer_text(t.backend().buffer());
-        assert!(text.contains("jack out"), "{text}");
         assert!(text.contains("jacked in"), "{text}");
-        assert!(text.contains("d overlay"), "{text}");
+        assert!(text.contains("space act"), "{text}");
         // The body shows on the Street while the avatar is in the Net.
         s.mode = Mode::Explore;
         s.stratum = StratumKind::Street;
@@ -1433,7 +1434,71 @@ mod tests {
         s.update(&mut st, &[key(KeyCode::Enter)]);
         assert_eq!(st.character.hp, 45);
         assert_eq!(st.status_text(), Some("hp 45/45"));
+        let last = draw_screen(&s, &st, 120, 40);
+        let last = last.lines().last().unwrap();
+        assert!(
+            last.starts_with(": ") && last.contains("hp 45/45"),
+            "the result shows beside the prompt: {last:?}"
+        );
+        for c in "fly".chars() {
+            s.update(&mut st, &[key(KeyCode::Char(c))]);
+        }
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        let last = draw_screen(&s, &st, 120, 40);
+        assert!(last.lines().last().unwrap().contains("unknown command fly"));
         s.update(&mut st, &[key(KeyCode::Esc)]);
         assert!(s.console.is_none());
+    }
+
+    #[test]
+    fn walk_hints_fit_120_columns_in_dev_mode() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        st.dev = true;
+        st.show_fps = true;
+        let row = |s: &MapScreen, st: &AppState| {
+            draw_screen(s, st, 120, 40)
+                .lines()
+                .last()
+                .unwrap()
+                .to_string()
+        };
+        let r = row(&s, &st);
+        assert!(
+            r.contains("space act")
+                && r.contains("a abilities")
+                && r.contains("c camera")
+                && r.contains("? keys"),
+            "{r:?}"
+        );
+        let city = st.city.clone().unwrap();
+        let street = StratumKind::Street;
+        let beside_jack = city
+            .connectors
+            .iter()
+            .filter(|k| {
+                k.kind == citygen::ConnectorKind::Jack
+                    && k.serves.contains(&street)
+                    && city.walkable(StratumKind::Net, k.pos)
+            })
+            .find_map(|k| {
+                std::iter::once(k.pos)
+                    .chain(k.pos.neighbors8())
+                    .find(|q| city.walkable(street, *q))
+            })
+            .unwrap();
+        let p = st.player.as_mut().unwrap();
+        p.pos = beside_jack;
+        p.jack_in(&city, 0).unwrap();
+        s.update(&mut st, &[]);
+        let r = row(&s, &st);
+        assert!(
+            r.contains("jacked in")
+                && r.contains("space act")
+                && r.contains("a abilities")
+                && r.contains("? keys"),
+            "{r:?}"
+        );
     }
 }
