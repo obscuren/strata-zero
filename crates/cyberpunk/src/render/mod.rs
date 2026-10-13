@@ -1,5 +1,7 @@
 //! Rendering: colours, cells, the render context and the tileset.
 
+pub mod glyphs;
+pub mod items;
 pub mod lighting;
 pub mod memmap;
 pub mod minimap;

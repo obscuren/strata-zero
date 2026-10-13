@@ -1,6 +1,7 @@
 //! The map screen: free-camera Explore mode and the Walk mode with the `@`.
 
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
+use crate::render::items::{GroundOverlay, PingOverlay};
 use crate::render::minimap::Minimap;
 use crate::render::overlay::Digital;
 use crate::render::traffic::Traffic;
@@ -454,6 +455,16 @@ impl Screen for MapScreen {
         } else {
             None
         };
+        let ground = GroundOverlay {
+            ground: &st.ground,
+            content: &st.content,
+            vis,
+        };
+        let ping = PingOverlay {
+            ping: st.ping.as_ref(),
+        };
+        overlays.push(&ground);
+        overlays.push(&ping);
         MapView {
             city,
             stratum: self.stratum,
@@ -1040,6 +1051,42 @@ mod tests {
         assert_eq!(
             s.fps.frames, 1,
             "the window restarts on the first frame back"
+        );
+    }
+
+    #[test]
+    fn walk_draws_piles_around_the_player() {
+        let mut st = state();
+        st.rain = false;
+        let mut s = MapScreen::explore(0);
+        s.update(&mut st, &[]);
+        s.update(&mut st, &[key(KeyCode::Char('w'))]);
+        let (k, pos) = {
+            let p = st.player.as_ref().unwrap();
+            (p.stratum, p.pos)
+        };
+        let walkable: Vec<Pos> = {
+            let city = st.city.as_ref().unwrap();
+            pos.neighbors8().filter(|q| city.walkable(k, *q)).collect()
+        };
+        assert!(!walkable.is_empty());
+        for q in &walkable {
+            st.ground.add(k, *q, game::ItemId::new("scrap_servo"), 1);
+        }
+        st.ground.add(k, pos, game::ItemId::new("copper_coil"), 1);
+        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let buf = t.backend().buffer();
+        let cells: Vec<(u16, u16)> = (0..40u16)
+            .flat_map(|y| (0..120u16).map(move |x| (x, y)))
+            .collect();
+        assert!(cells.iter().any(|&(x, y)| buf[(x, y)].symbol() == "@"));
+        let amber = crate::render::items::AMBER.to_color();
+        assert!(
+            cells
+                .iter()
+                .any(|&(x, y)| buf[(x, y)].symbol() == "▪" && buf[(x, y)].fg == amber),
+            "a pile next to the player"
         );
     }
 }

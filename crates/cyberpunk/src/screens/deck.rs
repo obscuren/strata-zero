@@ -4,6 +4,7 @@
 use crate::anim::effects::{glitch_cells, pulse, typewriter};
 use crate::anim::{Easing, Tween};
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
+use crate::render::glyphs::kind_icon;
 use crate::render::memmap::MemoryMap;
 use crate::screens::popup::{Choice, Pick, Popup};
 use crate::ui::chrome::{
@@ -106,18 +107,6 @@ pub struct Deck {
     focus: Option<(StratumKind, Pos)>,
     /// The list pane and its first visible row at the last draw, to anchor popups.
     last_list: Cell<(Rect, usize)>,
-}
-
-pub(crate) fn kind_icon(kind: ItemKind) -> char {
-    match kind {
-        ItemKind::Weapon => '/',
-        ItemKind::Armor => '▣',
-        ItemKind::Cyberware => '◈',
-        ItemKind::Deck => '⌗',
-        ItemKind::Consumable => '◍',
-        ItemKind::Component => '▪',
-        ItemKind::Junk => '·',
-    }
 }
 
 fn tone_style(tone: Tone) -> Style {
