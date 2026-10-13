@@ -242,6 +242,7 @@ dependencies = [
  "citygen",
  "clap",
  "crossterm",
+ "game",
  "postcard",
  "ratatui",
  "ron",

@@ -30,6 +30,12 @@ pub struct AppState {
     pub tick: u64,
     /// Dev mode: free camera, stratum browsing and the inspector. Toggled with `` ` ``.
     pub dev: bool,
+    /// Rain overlay on the map (Settings).
+    pub rain: bool,
+    /// FPS readout in the status bar (Settings).
+    pub show_fps: bool,
+    pub content: game::Content,
+    pub character: game::Character,
     status: Option<(String, u64)>,
 }
 
@@ -41,6 +47,8 @@ impl Default for AppState {
 
 impl AppState {
     pub fn new() -> Self {
+        let content = game::Content::load().expect("embedded content pack is valid");
+        let character = game::Character::from_starter(&content);
         AppState {
             params: GenParams::default(),
             city: None,
@@ -48,6 +56,10 @@ impl AppState {
             style: StylePack::load().expect("embedded style pack is valid"),
             tick: 0,
             dev: DEV_DEFAULT,
+            rain: true,
+            show_fps: true,
+            content,
+            character,
             status: None,
         }
     }
@@ -70,10 +82,22 @@ pub use crate::ui::transition::{Transition, TransitionKind};
 /// What a screen asks the loop to do after an update.
 pub enum ScreenCmd {
     Stay,
+    /// Replace the whole stack with one screen.
     Switch {
         to: Box<dyn Screen>,
         fx: TransitionKind,
     },
+    /// Put a screen on top; the ones below keep drawing, washed, and stop updating.
+    Push {
+        to: Box<dyn Screen>,
+        fx: TransitionKind,
+    },
+    /// Remove the top screen. Ignored on the last one.
+    Pop {
+        fx: TransitionKind,
+    },
+    /// Run a transition in place without changing screens.
+    Flash(TransitionKind),
     Quit,
 }
 
@@ -99,9 +123,9 @@ pub fn draw_too_small(f: &mut Frame) {
     );
 }
 
-/// One screen plus the state the loop threads through frames.
+/// The screen stack plus the state the loop threads through frames.
 pub struct Runner {
-    screen: Box<dyn Screen>,
+    screens: Vec<Box<dyn Screen>>,
     pub st: AppState,
     transition: Option<Transition>,
     /// Our own copy of the last drawn frame; ratatui swaps buffers after every draw.
@@ -111,7 +135,7 @@ pub struct Runner {
 impl Runner {
     pub fn new(screen: Box<dyn Screen>, st: AppState) -> Self {
         Runner {
-            screen,
+            screens: vec![screen],
             st,
             transition: None,
             last_frame: None,
@@ -123,7 +147,19 @@ impl Runner {
         self.transition.as_ref()
     }
 
-    /// Runs one frame: tick, update with `keys`, draw. Returns false when the app quits.
+    #[cfg(test)]
+    pub fn depth(&self) -> usize {
+        self.screens.len()
+    }
+
+    fn snapshot(&self, area: Rect) -> Buffer {
+        self.last_frame
+            .clone()
+            .unwrap_or_else(|| Buffer::empty(area))
+    }
+
+    /// Runs one frame: tick, update the top screen with `keys`, draw the stack. Returns
+    /// false when the app quits.
     pub fn frame<B: Backend>(&mut self, term: &mut Terminal<B>, keys: &[KeyEvent]) -> Result<bool> {
         self.st.tick += 1;
         if self
@@ -134,27 +170,47 @@ impl Runner {
         {
             self.transition = None;
         }
-        match self.screen.update(&mut self.st, keys) {
+        let area = term.get_frame().area();
+        let top = self.screens.last_mut().expect("the stack is never empty");
+        match top.update(&mut self.st, keys) {
             ScreenCmd::Stay => {}
             ScreenCmd::Switch { to, fx } => {
-                let snapshot = self
-                    .last_frame
-                    .clone()
-                    .unwrap_or_else(|| Buffer::empty(term.get_frame().area()));
-                self.screen = to;
+                let snapshot = self.snapshot(area);
+                self.screens = vec![to];
                 self.transition = Some(Transition::new(fx, snapshot, self.st.tick));
+            }
+            ScreenCmd::Push { to, fx } => {
+                let snapshot = self.snapshot(area);
+                self.screens.push(to);
+                self.transition = Some(Transition::new(fx, snapshot, self.st.tick));
+            }
+            ScreenCmd::Pop { fx } => {
+                if self.screens.len() > 1 {
+                    let snapshot = self.snapshot(area);
+                    self.screens.pop();
+                    self.transition = Some(Transition::new(fx, snapshot, self.st.tick));
+                }
+            }
+            ScreenCmd::Flash(fx) => {
+                let snapshot = self.snapshot(area);
+                self.transition = Some(Transition::flash(fx, snapshot, self.st.tick));
             }
             ScreenCmd::Quit => return Ok(false),
         }
         let st = &self.st;
-        let screen = &self.screen;
+        let screens = &self.screens;
         let transition = &self.transition;
         let mut captured: Option<Buffer> = None;
         term.draw(|f| {
             if f.area().width < MIN_W || f.area().height < MIN_H {
                 draw_too_small(f);
             } else {
-                screen.draw(st, f);
+                for (i, screen) in screens.iter().enumerate() {
+                    if i > 0 {
+                        crate::ui::dim::wash(f.buffer_mut());
+                    }
+                    screen.draw(st, f);
+                }
                 if let Some(t) = transition {
                     t.apply(f, st.tick);
                 }
@@ -220,40 +276,146 @@ mod tests {
         assert!(text(&t).contains("100"));
     }
 
-    struct Says(&'static str, bool);
+    use std::cell::Cell;
+    use std::rc::Rc;
 
-    impl Screen for Says {
+    /// A screen that draws its name on row 0 (row 1 for TOP) and reacts to single letters.
+    struct Probe {
+        name: &'static str,
+        updates: Rc<Cell<u32>>,
+    }
+
+    impl Screen for Probe {
         fn update(&mut self, _st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
-            if self.1 && !keys.is_empty() {
-                return ScreenCmd::Switch {
-                    to: Box::new(Says("WORLD", false)),
+            self.updates.set(self.updates.get() + 1);
+            let Some(k) = keys.first() else {
+                return ScreenCmd::Stay;
+            };
+            match k.code {
+                crossterm::event::KeyCode::Char('p') => ScreenCmd::Push {
+                    to: Box::new(Probe {
+                        name: "TOP",
+                        updates: Rc::new(Cell::new(0)),
+                    }),
+                    fx: TransitionKind::None,
+                },
+                crossterm::event::KeyCode::Char('o') => ScreenCmd::Pop {
+                    fx: TransitionKind::None,
+                },
+                crossterm::event::KeyCode::Char('f') => ScreenCmd::Flash(TransitionKind::Glitch),
+                crossterm::event::KeyCode::Char('s') => ScreenCmd::Switch {
+                    to: Box::new(Probe {
+                        name: "WORLD",
+                        updates: Rc::new(Cell::new(0)),
+                    }),
                     fx: TransitionKind::SlideUp,
-                };
+                },
+                crossterm::event::KeyCode::Char('q') => ScreenCmd::Quit,
+                _ => ScreenCmd::Stay,
             }
-            ScreenCmd::Stay
         }
         fn draw(&self, _st: &AppState, f: &mut Frame) {
-            f.render_widget(ratatui::widgets::Paragraph::new(self.0), f.area());
+            let row = if self.name == "TOP" { 1 } else { 0 };
+            f.render_widget(
+                ratatui::widgets::Paragraph::new(self.name)
+                    .style(Style::default().fg(Color::Rgb(200, 200, 200))),
+                Rect::new(0, row, 10, 1),
+            );
         }
     }
 
-    #[test]
-    fn switch_snapshots_the_previous_frame() {
-        let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
-        let mut runner = Runner::new(Box::new(Says("HELLO", true)), AppState::new());
-        assert!(runner.frame(&mut t, &[]).unwrap());
-        assert!(text(&t).contains("HELLO"));
-        let key = KeyEvent::new(
-            crossterm::event::KeyCode::Enter,
+    fn key(c: char) -> KeyEvent {
+        KeyEvent::new(
+            crossterm::event::KeyCode::Char(c),
             crossterm::event::KeyModifiers::NONE,
-        );
-        assert!(runner.frame(&mut t, &[key]).unwrap());
+        )
+    }
+
+    fn fg_at(t: &Terminal<TestBackend>, x: u16, y: u16) -> Color {
+        t.backend().buffer()[(x, y)].fg
+    }
+
+    #[test]
+    fn stack_pushes_dims_updates_top_and_pops() {
+        let updates = Rc::new(Cell::new(0));
+        let base = Probe {
+            name: "BASE",
+            updates: updates.clone(),
+        };
+        let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let mut runner = Runner::new(Box::new(base), AppState::new());
+        assert!(runner.frame(&mut t, &[]).unwrap());
+        assert_eq!(runner.depth(), 1);
+        assert_eq!(fg_at(&t, 0, 0), Color::Rgb(200, 200, 200));
+        assert!(runner.frame(&mut t, &[key('p')]).unwrap());
+        assert_eq!(runner.depth(), 2);
+        assert_eq!(updates.get(), 2);
+        let text = text(&t);
+        assert!(text.contains("BASE") && text.contains("TOP"), "{text}");
+        let Color::Rgb(r, _, _) = fg_at(&t, 0, 0) else {
+            panic!("base row lost its colour");
+        };
+        assert!(r < 120, "base is not dimmed: {r}");
+        // Only the top screen updates while it is up.
+        assert!(runner.frame(&mut t, &[]).unwrap());
+        assert_eq!(updates.get(), 2);
+        assert!(runner.frame(&mut t, &[key('x')]).unwrap());
+        assert_eq!(runner.depth(), 2, "TOP stays on an unknown key");
+        assert!(runner.frame(&mut t, &[key('o')]).unwrap());
+        assert_eq!(runner.depth(), 1);
+        assert_eq!(fg_at(&t, 0, 0), Color::Rgb(200, 200, 200));
+        assert_eq!(updates.get(), 2);
+        assert!(runner.frame(&mut t, &[]).unwrap());
+        assert_eq!(updates.get(), 3);
+    }
+
+    #[test]
+    fn pop_on_last_screen_is_ignored_and_switch_clears() {
+        let base = Probe {
+            name: "BASE",
+            updates: Rc::new(Cell::new(0)),
+        };
+        let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let mut runner = Runner::new(Box::new(base), AppState::new());
+        assert!(runner.frame(&mut t, &[key('o')]).unwrap());
+        assert_eq!(runner.depth(), 1);
+        assert!(text(&t).contains("BASE"));
+        assert!(runner.frame(&mut t, &[key('p')]).unwrap());
+        assert!(runner.frame(&mut t, &[key('p')]).unwrap());
+        assert_eq!(runner.depth(), 3);
+        // Switch from the top replaces the whole stack and snapshots the frame.
+        assert!(runner.frame(&mut t, &[key('s')]).unwrap());
+        assert_eq!(runner.depth(), 1);
         let tr = runner.transition().expect("a transition is running");
-        let snapshot: String = (0..5)
+        let snapshot: String = (0..4)
             .map(|x| tr.from[(x, 0)].symbol().to_string())
             .collect();
-        assert_eq!(snapshot, "HELLO");
-        assert!(text(&t).contains("WORLD") || text(&t).contains("HELLO"));
+        assert_eq!(snapshot, "BASE");
+        for _ in 0..12 {
+            assert!(runner.frame(&mut t, &[]).unwrap());
+        }
+        assert!(text(&t).contains("WORLD"));
+        assert!(!runner.frame(&mut t, &[key('q')]).unwrap());
+    }
+
+    #[test]
+    fn flash_runs_a_transition_in_place() {
+        let base = Probe {
+            name: "BASE",
+            updates: Rc::new(Cell::new(0)),
+        };
+        let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let mut runner = Runner::new(Box::new(base), AppState::new());
+        assert!(runner.frame(&mut t, &[]).unwrap());
+        assert!(runner.frame(&mut t, &[key('f')]).unwrap());
+        assert_eq!(runner.depth(), 1);
+        let tr = runner.transition().expect("flash started a transition");
+        assert_eq!(tr.kind, TransitionKind::Glitch);
+        assert_eq!(tr.dur, 10);
+        // Drawing at another size while the flash runs must not touch the stale snapshot.
+        let mut small = Terminal::new(TestBackend::new(100, 31)).unwrap();
+        assert!(runner.frame(&mut small, &[]).unwrap());
+        assert!(text(&small).contains("BASE"));
     }
 
     #[test]

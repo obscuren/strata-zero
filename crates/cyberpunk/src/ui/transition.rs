@@ -36,6 +36,15 @@ impl Transition {
         }
     }
 
+    /// A transition that plays over the same screen (jack in / out): longer than a switch.
+    pub fn flash(kind: TransitionKind, from: Buffer, start: u64) -> Self {
+        let mut t = Self::new(kind, from, start);
+        if kind != TransitionKind::None {
+            t.dur = 10;
+        }
+        t
+    }
+
     pub fn active(&self, tick: u64) -> bool {
         self.dur > 0 && tick >= self.start && tick < self.start + self.dur
     }
@@ -120,5 +129,13 @@ mod tests {
         let big = Buffer::empty(Rect::new(0, 0, 80, 30));
         let tr = Transition::new(TransitionKind::SlideUp, big, 10);
         t.draw(|f| tr.apply(f, 12)).unwrap();
+    }
+
+    #[test]
+    fn flash_lasts_ten_ticks() {
+        let from = Buffer::empty(Rect::new(0, 0, 20, 5));
+        let tr = Transition::flash(TransitionKind::Glitch, from.clone(), 10);
+        assert!(tr.active(19) && !tr.active(20));
+        assert!(!Transition::flash(TransitionKind::None, from, 10).active(10));
     }
 }
