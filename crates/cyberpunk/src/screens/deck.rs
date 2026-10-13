@@ -427,10 +427,11 @@ impl Deck {
             .iter()
             .enumerate()
             .map(|(i, s)| {
-                let lvl = st.character.skill_level(&s.id).min(5) as usize;
+                let have = st.character.skill_level(&s.id);
+                let lvl = have.min(5) as usize;
                 let bar = format!("{}{}", "▰".repeat(lvl), "▱".repeat(5 - lvl));
                 Row {
-                    text: format!("{:<12} {bar} {lvl}", s.name),
+                    text: format!("{:<12} {bar} {have}", s.name),
                     tone: Tone::Normal,
                     detail: Some(Detail::Skill(i)),
                 }
@@ -580,9 +581,9 @@ impl Deck {
             (Some(p), Some(city)) => {
                 let inner = Rect::new(
                     body.x + 1,
-                    body.y,
+                    body.y + 1,
                     body.width.saturating_sub(2),
-                    body.height,
+                    body.height.saturating_sub(1),
                 );
                 MemoryMap {
                     city,
@@ -745,7 +746,14 @@ impl Screen for Deck {
             let list_w = (body.width * 2 / 5)
                 .max(28)
                 .min(body.width.saturating_sub(10));
-            let list = Rect::new(body.x, body.y, list_w, body.height);
+            // The inventory keeps two rows at the bottom: a rule and the weight/value footer.
+            let reserved = if self.tab == Tab::Inventory { 2 } else { 0 };
+            let list = Rect::new(
+                body.x,
+                body.y,
+                list_w,
+                body.height.saturating_sub(reserved),
+            );
             let detail = Rect::new(
                 body.x + list_w + 1,
                 body.y,
@@ -756,9 +764,9 @@ impl Screen for Deck {
                 buf[(body.x + list_w, cy)].set_char('║').set_fg(RULE);
             }
             let rows = self.rows(st);
-            let first = self
-                .row
-                .saturating_sub(list.height.saturating_sub(1) as usize / 2);
+            let half = list.height.saturating_sub(1) as usize / 2;
+            let max_first = rows.len().saturating_sub(list.height as usize);
+            let first = self.row.saturating_sub(half).min(max_first);
             for (i, row) in rows
                 .iter()
                 .enumerate()
@@ -786,10 +794,13 @@ impl Screen for Deck {
                     st.character.weight(&st.content),
                     st.character.value(&st.content)
                 );
+                for cx in list.x + 1..list.right() {
+                    buf[(cx, list.bottom())].set_char('─').set_fg(RULE);
+                }
                 put(
                     buf,
                     list.x + 1,
-                    list.bottom().saturating_sub(1),
+                    list.bottom() + 1,
                     &footer,
                     Style::default().fg(DIM),
                     list.right(),
@@ -969,7 +980,7 @@ mod tests {
         use unicode_width::UnicodeWidthChar;
         for c in [
             '▰', '▱', '☑', '☐', '✓', '▮', '◍', '┍', '┑', '┕', '┙', '▌', '▐', '║', '◈', '⌗', '▣',
-            '▪',
+            '▪', '▫',
         ] {
             assert_eq!(c.width(), Some(1), "{c:?}");
         }
@@ -1075,5 +1086,102 @@ mod tests {
         // Text rows sit on the solid panel colour so they stay legible.
         let row = buffer_text(buf);
         assert!(row.contains("The drop"));
+    }
+
+    /// Forty loose coils: more inventory rows than any pane has.
+    fn stuff(st: &mut AppState) {
+        use game::Stack;
+        st.character.inventory.extend((0..40).map(|_| Stack {
+            item: ItemId::new("copper_coil"),
+            qty: 1,
+        }));
+    }
+
+    #[test]
+    fn map_tab_ignores_row_keys() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(
+            &mut st,
+            &[
+                key(KeyCode::Char('5')),
+                key(KeyCode::Down),
+                key(KeyCode::Char('j')),
+                key(KeyCode::Up),
+            ],
+        );
+        assert_eq!((d.tab, d.row), (Tab::Map, 0));
+        assert!(draw(&d, &st, 100, 30).contains("no signal"));
+    }
+
+    #[test]
+    fn skills_row_shows_the_real_level() {
+        let mut st = state();
+        for (id, lvl) in &mut st.character.skills {
+            if id.0 == "hacking" {
+                *lvl = 7;
+            }
+        }
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('6'))]);
+        let rows = d.rows(&st);
+        let hacking = rows.iter().find(|r| r.text.contains("Hacking")).unwrap();
+        assert!(hacking.text.contains("▰▰▰▰▰ 7"), "{:?}", hacking.text);
+    }
+
+    #[test]
+    fn inventory_footer_keeps_its_own_row() {
+        let mut st = state();
+        stuff(&mut st);
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('3'))]);
+        st.tick = 60;
+        let pane = |text: &str| -> Vec<String> {
+            text.lines()
+                .map(|l| l.split('║').next().unwrap_or("").to_string())
+                .collect()
+        };
+        let left = pane(&draw(&d, &st, 100, 30));
+        let footer = left.iter().find(|l| l.contains("kg · ¤")).expect("footer");
+        assert!(!footer.contains('×'), "footer shares a row with a stack: {footer:?}");
+        d.update(&mut st, &[key(KeyCode::Down); 60]);
+        let left = pane(&draw(&d, &st, 100, 30));
+        let sel = left
+            .iter()
+            .find(|l| l.contains("▸ "))
+            .expect("the selected row is visible at the end of the list");
+        assert!(!sel.contains("kg"), "{sel:?}");
+        assert!(left.iter().any(|l| l.contains("kg · ¤")), "footer still there");
+    }
+
+    #[test]
+    fn list_scroll_fills_the_pane_at_the_end() {
+        let mut st = state();
+        stuff(&mut st);
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('3'))]);
+        d.update(&mut st, &[key(KeyCode::Down); 60]);
+        st.tick = 60;
+        let text = draw(&d, &st, 100, 30);
+        let visible = text.lines().filter(|l| l.contains("× ")).count();
+        assert!(visible >= 18, "only {visible} stacks visible at the end:\n{text}");
+    }
+
+    #[test]
+    fn memory_map_caption_sits_above_the_map() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('5'))]);
+        let mut p = crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1);
+        p.pos = citygen::Pos::new(0, 0);
+        st.player = Some(p);
+        let text = draw(&d, &st, 120, 35);
+        let lines: Vec<&str> = text.lines().collect();
+        let cap = lines
+            .iter()
+            .position(|l| l.contains("what you remember"))
+            .unwrap();
+        assert!(!lines[cap].contains('@'), "caption row: {:?}", lines[cap]);
+        assert!(lines[cap + 1].contains('@'), "{text}");
     }
 }
