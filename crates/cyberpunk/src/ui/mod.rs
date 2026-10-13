@@ -8,4 +8,5 @@ pub mod hud;
 pub mod logo;
 pub mod menu;
 pub mod panel;
+pub mod sidebar;
 pub mod transition;
