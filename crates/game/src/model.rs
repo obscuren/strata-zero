@@ -28,6 +28,7 @@ id_type!(SkillId);
 id_type!(TalentId);
 id_type!(QuestId);
 id_type!(RecipeId);
+id_type!(AbilityId);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Slot {
@@ -126,6 +127,24 @@ impl Stat {
     }
 }
 
+/// A modifier an item applies while it is equipped.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Perk {
+    Stat(Stat, i8),
+    Skill(SkillId, i8),
+    /// Field-of-view radius, in tiles.
+    Sight(i8),
+    /// Carry capacity, in kilograms.
+    Carry(f32),
+    HpMax(i32),
+}
+
+/// What a consumable does when used; one unit is consumed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Use {
+    Heal(u32),
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Item {
     pub id: ItemId,
@@ -136,6 +155,40 @@ pub struct Item {
     pub weight: f32,
     pub value: u32,
     pub desc: String,
+    /// Modifiers while equipped (slot items only).
+    #[serde(default)]
+    pub perks: Vec<Perk>,
+    /// Abilities conferred while equipped (slot items only).
+    #[serde(default)]
+    pub grants: Vec<AbilityId>,
+    /// What using it does (consumables only).
+    #[serde(default, rename = "use")]
+    pub on_use: Option<Use>,
+}
+
+/// What an active ability does when fired.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Active {
+    /// Paints the map within `radius` tiles into memory.
+    Scan { radius: i32 },
+    /// Lights terminals and stairs within `radius` tiles for `ticks`.
+    Ping { radius: i32, ticks: u64 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AbilityKind {
+    Passive,
+    Active(Active),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Ability {
+    pub id: AbilityId,
+    pub name: String,
+    pub desc: String,
+    /// Ticks between firings; 0 means none.
+    pub cooldown: u64,
+    pub kind: AbilityKind,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -196,5 +249,7 @@ pub struct Starter {
     pub equipped: Vec<(Slot, ItemId)>,
     pub skills: Vec<(SkillId, u8)>,
     pub talents: Vec<TalentId>,
+    #[serde(default)]
+    pub abilities: Vec<AbilityId>,
     pub quests: Vec<(QuestId, Vec<bool>)>,
 }

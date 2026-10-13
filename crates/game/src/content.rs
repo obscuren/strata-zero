@@ -19,6 +19,12 @@ pub enum ContentError {
     UnknownTalent { where_: String, id: String },
     #[error("{where_}: unknown quest `{id}`")]
     UnknownQuest { where_: String, id: String },
+    #[error("{where_}: unknown ability `{id}`")]
+    UnknownAbility { where_: String, id: String },
+    #[error("item `{item}` has a use but is not a consumable")]
+    UseOnNonConsumable { item: String },
+    #[error("item `{item}` has perks or grants but no slot")]
+    PerkWithoutSlot { item: String },
     #[error("item `{item}` cannot sit in slot {slot:?}")]
     SlotMismatch { item: String, slot: Slot },
     #[error("duplicate id `{0}`")]
@@ -43,6 +49,8 @@ pub struct Content {
     pub talents: Vec<Talent>,
     pub quests: Vec<Quest>,
     pub recipes: Vec<Recipe>,
+    #[serde(default)]
+    pub abilities: Vec<Ability>,
     pub starter: Starter,
 }
 
@@ -67,7 +75,8 @@ impl Content {
             .chain(self.skills.iter().map(|s| s.id.0.as_str()))
             .chain(self.talents.iter().map(|t| t.id.0.as_str()))
             .chain(self.quests.iter().map(|q| q.id.0.as_str()))
-            .chain(self.recipes.iter().map(|r| r.id.0.as_str()));
+            .chain(self.recipes.iter().map(|r| r.id.0.as_str()))
+            .chain(self.abilities.iter().map(|a| a.id.0.as_str()));
         for id in ids {
             if !seen.insert(id) {
                 return Err(ContentError::DuplicateId(id.to_string()));
@@ -85,6 +94,33 @@ impl Content {
                 id: id.0.clone(),
             })
         };
+        let need_ability = |where_: String, id: &AbilityId| -> Result<&Ability, ContentError> {
+            self.ability(id)
+                .ok_or_else(|| ContentError::UnknownAbility {
+                    where_,
+                    id: id.0.clone(),
+                })
+        };
+        for i in &self.items {
+            if i.on_use.is_some() && i.kind != ItemKind::Consumable {
+                return Err(ContentError::UseOnNonConsumable {
+                    item: i.id.0.clone(),
+                });
+            }
+            if (!i.perks.is_empty() || !i.grants.is_empty()) && i.slot.is_none() {
+                return Err(ContentError::PerkWithoutSlot {
+                    item: i.id.0.clone(),
+                });
+            }
+            for p in &i.perks {
+                if let Perk::Skill(id, _) = p {
+                    need_skill(format!("item {}", i.id), id)?;
+                }
+            }
+            for id in &i.grants {
+                need_ability(format!("item {}", i.id), id)?;
+            }
+        }
         for t in &self.talents {
             need_skill(format!("talent {}", t.id), &t.skill)?;
         }
@@ -143,6 +179,13 @@ impl Content {
                 });
             }
         }
+        let mut abilities: HashSet<&AbilityId> = HashSet::new();
+        for id in &s.abilities {
+            need_ability("starter abilities".into(), id)?;
+            if !abilities.insert(id) {
+                return Err(dup("abilities", id.0.clone()));
+            }
+        }
         let mut quests: HashSet<&QuestId> = HashSet::new();
         for (id, flags) in &s.quests {
             let q = self.quest(id).ok_or_else(|| ContentError::UnknownQuest {
@@ -179,6 +222,10 @@ impl Content {
 
     pub fn recipe(&self, id: &RecipeId) -> Option<&Recipe> {
         self.recipes.iter().find(|r| &r.id == id)
+    }
+
+    pub fn ability(&self, id: &AbilityId) -> Option<&Ability> {
+        self.abilities.iter().find(|a| &a.id == id)
     }
 
     /// Talents of one skill, in content order.
@@ -314,9 +361,110 @@ mod tests {
             Err(ContentError::TalentLevel { .. })
         ));
 
+        let mut c = good.clone();
+        let coil = c
+            .items
+            .iter()
+            .position(|i| i.id.0 == "copper_coil")
+            .unwrap();
+        c.items[coil].on_use = Some(Use::Heal(1));
+        assert!(matches!(
+            c.validate(),
+            Err(ContentError::UseOnNonConsumable { .. })
+        ));
+
+        let mut c = good.clone();
+        c.items[coil].perks.push(Perk::Sight(1));
+        assert!(matches!(
+            c.validate(),
+            Err(ContentError::PerkWithoutSlot { .. })
+        ));
+
+        let mut c = good.clone();
+        c.items[coil].grants.push(AbilityId::new("lowlight"));
+        assert!(matches!(
+            c.validate(),
+            Err(ContentError::PerkWithoutSlot { .. })
+        ));
+
+        let mut c = good.clone();
+        let optics = c
+            .items
+            .iter()
+            .position(|i| i.id.0 == "nightglass_optics")
+            .unwrap();
+        c.items[optics].grants.push(AbilityId::new("flight"));
+        assert!(matches!(
+            c.validate(),
+            Err(ContentError::UnknownAbility { .. })
+        ));
+
+        let mut c = good.clone();
+        c.items[optics]
+            .perks
+            .push(Perk::Skill(SkillId::new("origami"), 1));
+        assert!(matches!(
+            c.validate(),
+            Err(ContentError::UnknownSkill { .. })
+        ));
+
+        let mut c = good.clone();
+        c.starter.abilities.push(AbilityId::new("flight"));
+        assert!(matches!(
+            c.validate(),
+            Err(ContentError::UnknownAbility { .. })
+        ));
+
+        let mut c = good.clone();
+        c.starter.abilities.push(AbilityId::new("street_sense"));
+        assert!(matches!(
+            c.validate(),
+            Err(ContentError::DuplicateStarter { .. })
+        ));
+
+        let mut c = good.clone();
+        let dup = c.abilities[0].clone();
+        c.abilities.push(dup);
+        assert!(matches!(c.validate(), Err(ContentError::DuplicateId(_))));
+
         assert!(matches!(
             Content::parse("not ron"),
             Err(ContentError::Parse(_))
         ));
+    }
+
+    #[test]
+    fn items_carry_perks_grants_and_uses() {
+        let c = Content::load().unwrap();
+        let optics = c.item(&ItemId::new("nightglass_optics")).unwrap();
+        assert!(optics.perks.contains(&Perk::Sight(4)), "{:?}", optics.perks);
+        assert_eq!(optics.grants, vec![AbilityId::new("lowlight")]);
+        let stim = c.item(&ItemId::new("stim_patch")).unwrap();
+        assert_eq!(stim.on_use, Some(Use::Heal(15)));
+        let coil = c.item(&ItemId::new("copper_coil")).unwrap();
+        assert!(coil.perks.is_empty() && coil.grants.is_empty() && coil.on_use.is_none());
+        assert_eq!(
+            c.item(&ItemId::new("mirrorshades")).unwrap().slot,
+            Some(Slot::Eyes)
+        );
+        assert!(c.abilities.len() >= 4);
+        let scan = c.ability(&AbilityId::new("netscan")).unwrap();
+        assert!(matches!(
+            scan.kind,
+            AbilityKind::Active(Active::Scan { radius: 12 })
+        ));
+        assert_eq!(scan.cooldown, 300);
+        assert!(matches!(
+            c.ability(&AbilityId::new("ping")).unwrap().kind,
+            AbilityKind::Active(Active::Ping {
+                radius: 24,
+                ticks: 180
+            })
+        ));
+        assert!(matches!(
+            c.ability(&AbilityId::new("lowlight")).unwrap().kind,
+            AbilityKind::Passive
+        ));
+        assert_eq!(c.starter.abilities, vec![AbilityId::new("street_sense")]);
     }
 }
