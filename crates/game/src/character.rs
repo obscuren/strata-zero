@@ -38,6 +38,10 @@ pub struct Character {
     pub hp: u32,
     /// Max HP before equipment; see `hp_max`.
     pub hp_base: u32,
+    pub level: u8,
+    pub xp: u32,
+    pub focus: u32,
+    pub focus_max: u32,
     pub stats: Stats,
     pub skills: Vec<(SkillId, u8)>,
     pub talents: Vec<TalentId>,
@@ -59,6 +63,10 @@ impl Character {
             credits: s.credits,
             hp: s.hp,
             hp_base: s.hp,
+            level: s.level,
+            xp: 0,
+            focus: s.focus,
+            focus_max: s.focus,
             stats: s.stats.clone(),
             skills: s.skills.clone(),
             talents: s.talents.clone(),
@@ -104,6 +112,24 @@ impl Character {
             })
             .sum();
         (self.hp_base as i32 + bonus).max(1) as u32
+    }
+
+    /// Experience needed to leave `level`.
+    pub fn xp_to_next(level: u8) -> u32 {
+        200 * level as u32
+    }
+
+    /// Adds points and levels up while the threshold is crossed; returns the levels
+    /// gained. Level 255 never gains another; the points still add.
+    pub fn gain_xp(&mut self, points: u32) -> u8 {
+        self.xp = self.xp.saturating_add(points);
+        let mut gained = 0u8;
+        while self.level < u8::MAX && self.xp >= Self::xp_to_next(self.level) {
+            self.xp -= Self::xp_to_next(self.level);
+            self.level += 1;
+            gained += 1;
+        }
+        gained
     }
 
     pub fn stat(&self, c: &Content, stat: Stat) -> u8 {
@@ -262,6 +288,32 @@ impl Character {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn starter_has_level_and_focus() {
+        let c = Content::load().unwrap();
+        let ch = Character::from_starter(&c);
+        assert_eq!((ch.level, ch.xp, ch.focus, ch.focus_max), (1, 0, 30, 30));
+    }
+
+    #[test]
+    fn xp_levels_up_and_saturates() {
+        let c = Content::load().unwrap();
+        let mut ch = Character::from_starter(&c);
+        assert_eq!(Character::xp_to_next(1), 200);
+        assert_eq!(Character::xp_to_next(3), 600);
+        assert_eq!(ch.gain_xp(150), 0);
+        assert_eq!((ch.level, ch.xp), (1, 150));
+        assert_eq!(ch.gain_xp(100), 1);
+        assert_eq!((ch.level, ch.xp), (2, 50));
+        // 1050 points: 400 leaves level 2, 600 leaves level 3, 50 remain under 800.
+        assert_eq!(ch.gain_xp(1000), 2);
+        assert_eq!((ch.level, ch.xp), (4, 50));
+        ch.level = u8::MAX;
+        ch.xp = 0;
+        assert_eq!(ch.gain_xp(1_000_000), 0);
+        assert_eq!((ch.level, ch.xp), (u8::MAX, 1_000_000));
+    }
 
     #[test]
     fn starter_character_matches_the_content_file() {

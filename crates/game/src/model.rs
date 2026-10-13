@@ -256,6 +256,10 @@ pub struct Starter {
     pub handle: String,
     pub credits: u32,
     pub hp: u32,
+    #[serde(default = "one")]
+    pub level: u8,
+    #[serde(default)]
+    pub focus: u32,
     pub stats: Stats,
     pub inventory: Vec<(ItemId, u32)>,
     pub equipped: Vec<(Slot, ItemId)>,
@@ -264,4 +268,8 @@ pub struct Starter {
     #[serde(default)]
     pub abilities: Vec<AbilityId>,
     pub quests: Vec<(QuestId, Vec<bool>)>,
+}
+
+fn one() -> u8 {
+    1
 }
