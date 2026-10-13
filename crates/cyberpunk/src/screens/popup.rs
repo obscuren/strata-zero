@@ -1,8 +1,5 @@
 //! A popup of verbs over whatever opened it: hotkey letters, a selected row, a card view.
 
-// Constructed by the deck in Task 8; until then only tests build one.
-#![allow(dead_code)]
-
 use crate::actions::{perform, report};
 use crate::anim::effects::{pulse, typewriter};
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
@@ -24,6 +21,7 @@ pub enum Pick {
     Act(Action),
     /// Shows these lines in place of the rows; Esc returns to the rows.
     Card(Vec<Line<'static>>),
+    #[allow(dead_code)] // the abilities popup (world-interact spec) builds disabled rows
     Close,
 }
 
@@ -46,6 +44,7 @@ impl Choice {
     }
 
     /// A greyed row that cannot be fired; shown so the player knows it exists.
+    #[allow(dead_code)] // the abilities popup (world-interact spec) builds disabled rows
     pub fn disabled(key: char, label: impl Into<String>) -> Self {
         Choice {
             key,
@@ -87,6 +86,7 @@ impl Popup {
         }
     }
 
+    #[allow(dead_code)] // the world's `look` (world-interact spec) opens a plain card
     pub fn card(title: &str, lines: Vec<Line<'static>>, tick: u64) -> Self {
         Popup {
             title: title.to_string(),

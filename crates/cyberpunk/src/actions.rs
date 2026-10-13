@@ -3,7 +3,6 @@
 use crate::app::{AppState, Ping};
 use game::{Action, At, Effect};
 
-#[allow(dead_code)] // wired up by the popup in Task 6
 /// Applies an action at the player's feet and runs its effects on the world.
 /// The message is for the status strip; a refusal is the reason.
 pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
@@ -41,7 +40,6 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
     Ok(outcome.message)
 }
 
-#[allow(dead_code)] // wired up by the popup in Task 6
 /// Puts a result where the player sees it: the status strip, warnings in magenta.
 pub fn report(st: &mut AppState, result: Result<String, String>) {
     match result {

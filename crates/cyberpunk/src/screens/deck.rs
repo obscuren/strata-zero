@@ -4,6 +4,7 @@ use crate::anim::effects::{glitch_cells, pulse, typewriter};
 use crate::anim::{Easing, Tween};
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::render::memmap::MemoryMap;
+use crate::screens::popup::{Choice, Pick, Popup};
 use crate::ui::chrome::{
     BAR_BG, CYAN, CYAN_RGB, DIM, MAGENTA, MAGENTA_RGB, PANEL_BG, RULE, TEXT, dim, frame, glass,
     head, plain, put, put_paragraph, reveal, warn,
@@ -12,17 +13,20 @@ use crate::ui::logo::{self, Logo};
 use citygen::rng::hash64;
 use citygen::{Pos, StratumKind};
 use crossterm::event::{KeyCode, KeyEvent};
-use game::{AbilityKind, Active, ItemId, ItemKind, Perk, Slot, Source};
+use game::{AbilityKind, Action, Active, ItemId, ItemKind, Perk, Slot, Source};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
+use std::cell::Cell;
 
 const REVEAL_TICKS: u64 = 20;
 const JITTER_PERIOD: u64 = 90;
 const LOGO_MIN_ROWS: u16 = 36;
+/// Hotkey letters for picker rows; h j k l move, q closes, u and i are verbs.
+const LETTERS: &str = "abcdefgmnoprstvwxyz";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
@@ -99,6 +103,8 @@ pub struct Deck {
     /// The tile the link line describes: the map's focus when it opened the deck.
     /// Without one the deck falls back to the player.
     focus: Option<(StratumKind, Pos)>,
+    /// The list pane and its first visible row at the last draw, to anchor popups.
+    last_list: Cell<(Rect, usize)>,
 }
 
 pub(crate) fn kind_icon(kind: ItemKind) -> char {
@@ -131,6 +137,101 @@ impl Deck {
             tab_from: 0,
             tab_tween: Tween::new(tick, 1, Easing::OutCubic),
             focus: None,
+            last_list: Cell::new((Rect::new(0, 0, 0, 0), 0)),
+        }
+    }
+
+    /// The popup for the selected row: a picker for a gear slot, verbs for an item.
+    /// Rows with nothing to do give `None`; an empty slot nothing fits says so in the strip.
+    pub(crate) fn interact(&self, st: &mut AppState) -> Option<Popup> {
+        let rows = self.rows(st);
+        let row = rows.get(self.row)?;
+        let (list, first) = self.last_list.get();
+        let anchor = (
+            list.right() + 2,
+            list.y + self.row.saturating_sub(first) as u16,
+        );
+        match &row.detail {
+            Some(Detail::Slot(slot)) => {
+                let mut choices = Vec::new();
+                let mut letters = LETTERS.chars();
+                for s in &st.character.inventory {
+                    let Some(item) = st.content.item(&s.item) else {
+                        continue;
+                    };
+                    if item.slot != Some(*slot) {
+                        continue;
+                    }
+                    let Some(k) = letters.next() else { break };
+                    choices.push(Choice::new(
+                        k,
+                        item.name.clone(),
+                        Pick::Act(Action::Equip(s.item.clone())),
+                    ));
+                }
+                if let Some(id) = st.character.equipped(*slot) {
+                    choices.push(Choice::new(
+                        'u',
+                        "unequip",
+                        Pick::Act(Action::Unequip(*slot)),
+                    ));
+                    choices.push(Choice::new(
+                        'i',
+                        "inspect",
+                        Pick::Card(Self::item_card(st, id)),
+                    ));
+                }
+                if choices.is_empty() {
+                    st.set_status(format!("nothing in the pack fits {}", slot.label()), 90);
+                    return None;
+                }
+                Some(
+                    Popup::verbs(&slot.label().to_uppercase(), choices, st.tick)
+                        .anchored(anchor.0, anchor.1),
+                )
+            }
+            Some(Detail::Item(id)) => {
+                let item = st.content.item(id)?;
+                let qty = st.character.count(id);
+                let mut choices = vec![Choice::new(
+                    'i',
+                    "inspect",
+                    Pick::Card(Self::item_card(st, id)),
+                )];
+                if item.slot.is_some() {
+                    choices.push(Choice::new(
+                        'e',
+                        "equip",
+                        Pick::Act(Action::Equip(id.clone())),
+                    ));
+                }
+                if item.on_use.is_some() {
+                    choices.push(Choice::new('u', "use", Pick::Act(Action::Use(id.clone()))));
+                }
+                choices.push(Choice::new(
+                    'd',
+                    "drop one",
+                    Pick::Act(Action::Drop {
+                        item: id.clone(),
+                        qty: 1,
+                    }),
+                ));
+                if qty > 1 {
+                    choices.push(Choice::new(
+                        'D',
+                        "drop all",
+                        Pick::Act(Action::Drop {
+                            item: id.clone(),
+                            qty,
+                        }),
+                    ));
+                }
+                Some(
+                    Popup::verbs(&item.name.to_uppercase(), choices, st.tick)
+                        .anchored(anchor.0, anchor.1),
+                )
+            }
+            _ => None,
         }
     }
 
@@ -633,6 +734,14 @@ impl Screen for Deck {
                 }
                 KeyCode::Up | KeyCode::Char('k') => self.move_row(&rows, -1, st.tick),
                 KeyCode::Down | KeyCode::Char('j') => self.move_row(&rows, 1, st.tick),
+                KeyCode::Char(' ') | KeyCode::Enter => {
+                    if let Some(p) = self.interact(st) {
+                        return ScreenCmd::Push {
+                            to: Box::new(p),
+                            fx: TransitionKind::None,
+                        };
+                    }
+                }
                 _ => {}
             }
         }
@@ -778,6 +887,7 @@ impl Screen for Deck {
             let half = list.height.saturating_sub(1) as usize / 2;
             let max_first = rows.len().saturating_sub(list.height as usize);
             let first = self.row.saturating_sub(half).min(max_first);
+            self.last_list.set((list, first));
             for (i, row) in rows
                 .iter()
                 .enumerate()
@@ -897,10 +1007,15 @@ mod tests {
         st
     }
 
-    fn draw(d: &Deck, st: &AppState, w: u16, h: u16) -> String {
+    fn draw(d: &dyn Screen, st: &AppState, w: u16, h: u16) -> String {
         let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
         t.draw(|f| d.draw(st, f)).unwrap();
         buffer_text(t.backend().buffer())
+    }
+
+    fn walking(st: &mut AppState) {
+        let city = st.city.as_ref().unwrap();
+        st.player = Some(crate::walker::Player::spawn(city, 1));
     }
 
     #[test]
@@ -1355,5 +1470,135 @@ mod tests {
             text.contains("+4 sight") && text.contains("grants Low-light"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn gear_slot_picker_equips_what_fits() {
+        let mut st = state();
+        walking(&mut st);
+        st.character.inventory.push(game::Stack {
+            item: ItemId::new("mirrorshades"),
+            qty: 1,
+        });
+        st.character.inventory.push(game::Stack {
+            item: ItemId::new("hardhat"),
+            qty: 1,
+        });
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('2'))]);
+        let rows = d.rows(&st);
+        d.row = rows.iter().position(|r| r.text.contains("EYES")).unwrap();
+        let ScreenCmd::Push { to: mut p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens the picker")
+        };
+        st.tick = 40;
+        let mut t = Terminal::new(TestBackend::new(120, 35)).unwrap();
+        t.draw(|f| {
+            d.draw(&st, f);
+            p.draw(&st, f)
+        })
+        .unwrap();
+        let text = buffer_text(t.backend().buffer());
+        assert!(
+            text.contains("a  Mirrorshades")
+                && text.contains("u  unequip")
+                && text.contains("i  inspect"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("Hardhat with visor"),
+            "wrong slot must not be offered: {text}"
+        );
+        p.update(&mut st, &[key(KeyCode::Char('a'))]);
+        assert_eq!(
+            st.character.equipped(Slot::Eyes),
+            Some(&ItemId::new("mirrorshades"))
+        );
+        assert_eq!(
+            st.status_text(),
+            Some("swapped Nightglass optics for Mirrorshades")
+        );
+        d.row = rows.iter().position(|r| r.text.contains("LEGS")).unwrap();
+        assert!(matches!(
+            d.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Stay
+        ));
+        assert_eq!(st.status_text(), Some("nothing in the pack fits legs"));
+    }
+
+    #[test]
+    fn inventory_verbs_drop_use_and_inspect() {
+        let mut st = state();
+        walking(&mut st);
+        let at = {
+            let p = st.player.as_ref().unwrap();
+            (p.stratum, p.pos)
+        };
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('3'))]);
+        let rows = d.rows(&st);
+        d.row = rows
+            .iter()
+            .position(|r| r.text.contains("Copper coil"))
+            .unwrap();
+        let ScreenCmd::Push { to: mut p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens the verbs")
+        };
+        st.tick = 40;
+        let text = draw(&*p, &st, 120, 35);
+        assert!(
+            text.contains("i  inspect")
+                && text.contains("d  drop one")
+                && text.contains("D  drop all"),
+            "{text}"
+        );
+        assert!(!text.contains("equip") && !text.contains("use"), "{text}");
+        p.update(&mut st, &[key(KeyCode::Char('D'))]);
+        assert_eq!(st.ground.at(at.0, at.1)[0].qty, 3);
+        assert!(!d.rows(&st).iter().any(|r| r.text.contains("Copper coil")));
+        let rows = d.rows(&st);
+        d.row = rows
+            .iter()
+            .position(|r| r.text.contains("Stim patch"))
+            .unwrap();
+        let ScreenCmd::Push { to: mut p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!()
+        };
+        st.tick += 40;
+        let text = draw(&*p, &st, 120, 35);
+        assert!(
+            text.contains("u  use") && !text.contains("drop all"),
+            "{text}"
+        );
+        st.character.hp = 10;
+        p.update(&mut st, &[key(KeyCode::Char('u'))]);
+        assert_eq!(st.character.hp, 25);
+        d.row = d
+            .rows(&st)
+            .iter()
+            .position(|r| r.text.contains("Dead phone"))
+            .unwrap();
+        let ScreenCmd::Push { to: mut p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!()
+        };
+        p.update(&mut st, &[key(KeyCode::Char('i'))]);
+        st.tick += 40;
+        assert!(draw(&*p, &st, 120, 35).contains("Cracked screen"));
+        st.player = None;
+        d.row = d
+            .rows(&st)
+            .iter()
+            .position(|r| r.text.contains("Dead phone"))
+            .unwrap();
+        let ScreenCmd::Push { to: mut p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!()
+        };
+        p.update(&mut st, &[key(KeyCode::Char('d'))]);
+        assert!(st.status_is_warning());
     }
 }
