@@ -207,7 +207,7 @@ impl MapScreen {
             KeyCode::Char('?') => self.help = !self.help,
             KeyCode::Tab => {
                 return Some(ScreenCmd::Push {
-                    to: Box::new(Deck::new(st.tick)),
+                    to: Box::new(Deck::new(st.tick).focus(self.stratum, self.focus_pos(st))),
                     fx: TransitionKind::Glitch,
                 });
             }
@@ -969,5 +969,32 @@ mod tests {
             status.contains("s save") && status.contains("? keys"),
             "{status:?}"
         );
+    }
+
+    #[test]
+    fn deck_opened_from_the_free_camera_links_to_the_cursor() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        s.update(&mut st, &[]);
+        let (pos, name) = {
+            let city = st.city.as_ref().unwrap();
+            let street = StratumKind::Street;
+            (0..city.size.h as i32)
+                .flat_map(|y| (0..city.size.w as i32).map(move |x| Pos::new(x, y)))
+                .find_map(|p| {
+                    let d = city.tile(street, p)?.district?;
+                    Some((p, city.district(d).name.clone()))
+                })
+                .expect("a tile with a district")
+        };
+        s.cursor = pos;
+        let ScreenCmd::Push { to, .. } = s.update(&mut st, &[key(KeyCode::Tab)]) else {
+            panic!("tab opens the deck");
+        };
+        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        st.tick = 100;
+        t.draw(|f| to.draw(&st, f)).unwrap();
+        let text = buffer_text(t.backend().buffer());
+        assert!(text.contains(&format!("LINK · {name} · Street")), "{text}");
     }
 }

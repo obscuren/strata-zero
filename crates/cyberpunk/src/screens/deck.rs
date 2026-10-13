@@ -6,8 +6,8 @@ use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::render::Rgb;
 use crate::render::memmap::MemoryMap;
 use crate::ui::logo::{self, Logo};
-use citygen::StratumKind;
 use citygen::rng::hash64;
+use citygen::{Pos, StratumKind};
 use crossterm::event::{KeyCode, KeyEvent};
 use game::{ItemId, ItemKind, Slot};
 use ratatui::Frame;
@@ -100,6 +100,9 @@ pub struct Deck {
     pub(crate) changed: u64,
     tab_from: usize,
     tab_tween: Tween,
+    /// The tile the link line describes: the map's focus when it opened the deck.
+    /// Without one the deck falls back to the player.
+    focus: Option<(StratumKind, Pos)>,
 }
 
 pub(crate) fn kind_icon(kind: ItemKind) -> char {
@@ -272,7 +275,14 @@ impl Deck {
             changed: tick,
             tab_from: 0,
             tab_tween: Tween::new(tick, 1, Easing::OutCubic),
+            focus: None,
         }
+    }
+
+    /// Links the deck to a tile: the cursor under the free camera, the player when walking.
+    pub fn focus(mut self, stratum: StratumKind, pos: Pos) -> Self {
+        self.focus = Some((stratum, pos));
+        self
     }
 
     fn set_tab(&mut self, tab: Tab, st: &AppState) {
@@ -558,19 +568,23 @@ impl Deck {
         }
     }
 
-    fn link_line(st: &AppState) -> String {
-        let (pos, stratum) = match &st.player {
-            Some(p) => (Some(p.pos), p.stratum),
-            None => (None, StratumKind::Street),
+    fn link_line(&self, st: &AppState) -> String {
+        let at = self
+            .focus
+            .or_else(|| st.player.as_ref().map(|p| (p.stratum, p.pos)));
+        let Some((stratum, pos)) = at else {
+            return "▍ LINK · no fix".to_string();
         };
-        let district = pos
-            .and_then(|p| {
-                st.city.as_ref().and_then(|c| {
-                    c.tile(StratumKind::Street, p)
-                        .and_then(|t| t.district)
-                        .and_then(|d| c.district_opt(d))
-                        .map(|d| d.name.clone())
-                })
+        // Physical strata carry the district on every tile; the Net reads the ground below.
+        let district = st
+            .city
+            .as_ref()
+            .and_then(|c| {
+                c.tile(stratum, pos)
+                    .and_then(|t| t.district)
+                    .or_else(|| c.tile(StratumKind::Street, pos).and_then(|t| t.district))
+                    .and_then(|d| c.district_opt(d))
+                    .map(|d| d.name.clone())
             })
             .unwrap_or_else(|| "no fix".to_string());
         format!("▍ LINK · {district} · {}", stratum.label())
@@ -695,7 +709,7 @@ impl Screen for Deck {
             buf,
             inner.x + 1,
             y,
-            &Self::link_line(st),
+            &self.link_line(st),
             Style::default().fg(CYAN_RGB.scale(glow).to_color()),
             right,
         );
@@ -748,12 +762,7 @@ impl Screen for Deck {
                 .min(body.width.saturating_sub(10));
             // The inventory keeps two rows at the bottom: a rule and the weight/value footer.
             let reserved = if self.tab == Tab::Inventory { 2 } else { 0 };
-            let list = Rect::new(
-                body.x,
-                body.y,
-                list_w,
-                body.height.saturating_sub(reserved),
-            );
+            let list = Rect::new(body.x, body.y, list_w, body.height.saturating_sub(reserved));
             let detail = Rect::new(
                 body.x + list_w + 1,
                 body.y,
@@ -1143,7 +1152,10 @@ mod tests {
         };
         let left = pane(&draw(&d, &st, 100, 30));
         let footer = left.iter().find(|l| l.contains("kg · ¤")).expect("footer");
-        assert!(!footer.contains('×'), "footer shares a row with a stack: {footer:?}");
+        assert!(
+            !footer.contains('×'),
+            "footer shares a row with a stack: {footer:?}"
+        );
         d.update(&mut st, &[key(KeyCode::Down); 60]);
         let left = pane(&draw(&d, &st, 100, 30));
         let sel = left
@@ -1151,7 +1163,10 @@ mod tests {
             .find(|l| l.contains("▸ "))
             .expect("the selected row is visible at the end of the list");
         assert!(!sel.contains("kg"), "{sel:?}");
-        assert!(left.iter().any(|l| l.contains("kg · ¤")), "footer still there");
+        assert!(
+            left.iter().any(|l| l.contains("kg · ¤")),
+            "footer still there"
+        );
     }
 
     #[test]
@@ -1164,7 +1179,10 @@ mod tests {
         st.tick = 60;
         let text = draw(&d, &st, 100, 30);
         let visible = text.lines().filter(|l| l.contains("× ")).count();
-        assert!(visible >= 18, "only {visible} stacks visible at the end:\n{text}");
+        assert!(
+            visible >= 18,
+            "only {visible} stacks visible at the end:\n{text}"
+        );
     }
 
     #[test]
@@ -1183,5 +1201,37 @@ mod tests {
             .unwrap();
         assert!(!lines[cap].contains('@'), "caption row: {:?}", lines[cap]);
         assert!(lines[cap + 1].contains('@'), "{text}");
+    }
+
+    #[test]
+    fn link_line_follows_the_focus_then_the_player() {
+        use citygen::Pos;
+        let mut st = state();
+        st.tick = 60;
+        let (pos, name) = {
+            let city = st.city.as_ref().unwrap();
+            let street = StratumKind::Street;
+            (0..city.size.h as i32)
+                .flat_map(|y| (0..city.size.w as i32).map(move |x| Pos::new(x, y)))
+                .find_map(|p| {
+                    let d = city.tile(street, p)?.district?;
+                    Some((p, city.district(d).name.clone()))
+                })
+                .expect("a tile with a district")
+        };
+        assert!(draw(&Deck::new(0), &st, 120, 35).contains("LINK · no fix"));
+        let text = draw(&Deck::new(0).focus(StratumKind::Street, pos), &st, 120, 35);
+        assert!(text.contains(&format!("LINK · {name} · Street")), "{text}");
+        // A Net tile carries no district: the ground below names the link.
+        let text = draw(&Deck::new(0).focus(StratumKind::Net, pos), &st, 120, 35);
+        assert!(
+            text.contains(&format!("LINK · {name} · {}", StratumKind::Net.label())),
+            "{text}"
+        );
+        let mut p = crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1);
+        p.pos = pos;
+        st.player = Some(p);
+        let text = draw(&Deck::new(0), &st, 120, 35);
+        assert!(text.contains(&format!("LINK · {name} · Street")), "{text}");
     }
 }
