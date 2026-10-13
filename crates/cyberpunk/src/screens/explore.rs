@@ -41,6 +41,9 @@ pub enum Mode {
 }
 
 /// Frames per second over the last second.
+/// Hotkey letters for popup rows built here: h j k l q close or navigate, t is take all.
+const WORLD_LETTERS: &str = "abcdefgimnoprsuvwxyz";
+
 pub struct FpsMeter {
     /// Start of the current measuring window.
     last: Instant,
@@ -287,13 +290,34 @@ impl MapScreen {
         Some(ScreenCmd::Stay)
     }
 
+    /// Feeds keys to the open console; a run line goes through the commands.
+    fn feed_console(&mut self, st: &mut AppState, focus: game::At, keys: &[KeyEvent]) {
+        let Some(con) = self.console.as_mut() else {
+            return;
+        };
+        let mut close = false;
+        for k in keys {
+            match con.key(*k, &|head, word| console::complete(st, head, word)) {
+                ConsoleEvent::Run(line) => {
+                    let result = console::run(st, focus, &line);
+                    report(st, result);
+                }
+                ConsoleEvent::Close => close = true,
+                ConsoleEvent::None => {}
+            }
+        }
+        if close {
+            self.console = None;
+        }
+    }
+
     /// What Space offers where the player stands: take rows, jack, stairs, look.
     fn interact(&self, st: &AppState) -> Option<ScreenCmd> {
         let (city, player) = (st.city.as_ref()?, st.player.as_ref()?);
         let (k, pos) = (player.stratum, player.pos);
         let mut choices = Vec::new();
         // Letters for take rows; j k q h l t and the arrows are taken by the popup and verbs.
-        let mut letters = "abcdefgimnoprsuvwxyz".chars();
+        let mut letters = WORLD_LETTERS.chars();
         let stacks = st.ground.at(k, pos);
         for s in stacks {
             let Some(item) = st.content.item(&s.item) else {
@@ -326,9 +350,10 @@ impl MapScreen {
             .connectors_at(pos)
             .filter(|c| c.kind != citygen::ConnectorKind::Jack)
         {
+            // Only directions that lead somewhere walkable: a row never refuses after being offered.
             if let Some((below, above)) = c.serves_from(k) {
-                up = up.or(above);
-                down = down.or(below);
+                up = up.or(above.filter(|d| city.walkable(*d, pos)));
+                down = down.or(below.filter(|d| city.walkable(*d, pos)));
             }
         }
         if let Some(dest) = up {
@@ -360,7 +385,7 @@ impl MapScreen {
     /// The actives the character can fire, cooling ones greyed; none says so.
     fn abilities(&self, st: &mut AppState) -> ScreenCmd {
         let mut choices = Vec::new();
-        let mut letters = "abcdefgimnoprsuvwxyz".chars();
+        let mut letters = WORLD_LETTERS.chars();
         for (id, _) in st.character.abilities(&st.content) {
             let Some(a) = st.content.ability(&id) else {
                 continue;
@@ -483,21 +508,8 @@ impl Screen for MapScreen {
                 _ => self.cursor,
             },
         };
-        if let Some(con) = self.console.as_mut() {
-            let mut close = false;
-            for k in keys {
-                match con.key(*k, &|head, word| console::complete(st, head, word)) {
-                    ConsoleEvent::Run(line) => {
-                        let result = console::run(st, focus, &line);
-                        report(st, result);
-                    }
-                    ConsoleEvent::Close => close = true,
-                    ConsoleEvent::None => {}
-                }
-            }
-            if close {
-                self.console = None;
-            }
+        if self.console.is_some() {
+            self.feed_console(st, focus, keys);
             return ScreenCmd::Stay;
         }
         let Some(size) = st.city.as_ref().map(|c| c.size) else {
@@ -517,21 +529,23 @@ impl Screen for MapScreen {
             self.cursor = size.center();
             self.cam_ready = true;
         }
-        for k in keys {
-            if let Some(cmd) = self.handle_common(st, k) {
-                if !matches!(cmd, ScreenCmd::Stay) {
-                    return cmd;
-                }
-                continue;
-            }
-            let cmd = match self.mode {
-                Mode::Explore => self.handle_explore(st, k),
-                Mode::Walk => self.handle_walk(st, k),
+        for (i, k) in keys.iter().enumerate() {
+            let cmd = match self.handle_common(st, k) {
+                Some(cmd) => Some(cmd),
+                None => match self.mode {
+                    Mode::Explore => self.handle_explore(st, k),
+                    Mode::Walk => self.handle_walk(st, k),
+                },
             };
             if let Some(cmd) = cmd
                 && !matches!(cmd, ScreenCmd::Stay)
             {
                 return cmd;
+            }
+            // `:` just opened the console: the rest of this frame's keys are typing.
+            if self.console.is_some() {
+                self.feed_console(st, focus, &keys[i + 1..]);
+                return ScreenCmd::Stay;
             }
         }
         if !st.dev && self.mode == Mode::Explore {
@@ -598,6 +612,7 @@ impl Screen for MapScreen {
         };
         let ping = PingOverlay {
             ping: st.ping.as_ref(),
+            vis,
         };
         overlays.push(&ground);
         overlays.push(&ping);
@@ -708,7 +723,7 @@ impl Screen for MapScreen {
                 format!("⚡ jacked in · space act · a abilities · tab deck{cam} · ? keys")
             }
             (Mode::Walk, false) => {
-                format!("hjkl move · <> stairs · space act · a abilities · tab deck{cam} · ? keys")
+                format!("hjkl move · space act · a abilities · tab deck{cam} · ? keys")
             }
         };
         let bottom = match &self.console {
@@ -1457,6 +1472,8 @@ mod tests {
         walking(&mut st, &mut s);
         st.dev = true;
         st.show_fps = true;
+        st.city.as_mut().unwrap().name = "Neon Kowloon".to_string();
+        s.fps.fps = 60.0;
         let row = |s: &MapScreen, st: &AppState| {
             draw_screen(s, st, 120, 40)
                 .lines()
@@ -1469,7 +1486,7 @@ mod tests {
             r.contains("space act")
                 && r.contains("a abilities")
                 && r.contains("c camera")
-                && r.contains("? keys"),
+                && r.trim_end().ends_with("? keys"),
             "{r:?}"
         );
         let city = st.city.clone().unwrap();
@@ -1497,8 +1514,54 @@ mod tests {
             r.contains("jacked in")
                 && r.contains("space act")
                 && r.contains("a abilities")
-                && r.contains("? keys"),
+                && r.trim_end().ends_with("? keys"),
             "{r:?}"
         );
+    }
+
+    #[test]
+    fn stairs_are_offered_only_where_they_lead() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let city = st.city.clone().unwrap();
+        let street = StratumKind::Street;
+        let mut checked = 0;
+        for k in city.connectors.iter().filter(|k| {
+            k.kind != citygen::ConnectorKind::Jack
+                && k.serves.contains(&street)
+                && city.walkable(street, k.pos)
+        }) {
+            st.player.as_mut().unwrap().pos = k.pos;
+            let ScreenCmd::Push { to, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))]) else {
+                panic!()
+            };
+            st.tick += 40;
+            let text = draw_screen(&*to, &st, 120, 40);
+            let (below, above) = k.serves_from(street).unwrap_or((None, None));
+            let leads_down = below.is_some_and(|d| city.walkable(d, k.pos));
+            let leads_up = above.is_some_and(|d| city.walkable(d, k.pos));
+            assert_eq!(text.contains("go down"), leads_down, "{:?}\n{text}", k.pos);
+            assert_eq!(text.contains("go up"), leads_up, "{:?}\n{text}", k.pos);
+            checked += 1;
+            if checked == 40 {
+                break;
+            }
+        }
+        assert!(checked > 0);
+    }
+
+    #[test]
+    fn keys_after_colon_in_the_same_frame_go_to_the_console() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        s.update(&mut st, &[]);
+        st.dev = true;
+        let cmd = s.update(&mut st, &[key(KeyCode::Char(':')), key(KeyCode::Char('s'))]);
+        assert!(
+            matches!(cmd, ScreenCmd::Stay),
+            "s must not open the save screen"
+        );
+        assert_eq!(s.console.as_ref().map(|c| c.input.as_str()), Some("s"));
     }
 }

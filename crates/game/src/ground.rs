@@ -19,7 +19,7 @@ impl Ground {
         }
         let pile = self.piles.entry((k, p)).or_default();
         match pile.iter_mut().find(|s| s.item == item) {
-            Some(s) => s.qty += qty,
+            Some(s) => s.qty = s.qty.saturating_add(qty),
             None => pile.push(Stack { item, qty }),
         }
     }
@@ -90,5 +90,8 @@ mod tests {
         g.clear(k, p);
         assert!(g.at(k, p).is_empty());
         assert_eq!(g.on(k).count(), 0, "empty piles vanish");
+        g.add(k, p, coil.clone(), u32::MAX);
+        g.add(k, p, coil.clone(), 5);
+        assert_eq!(g.at(k, p)[0].qty, u32::MAX, "saturates");
     }
 }

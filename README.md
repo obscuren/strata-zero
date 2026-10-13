@@ -66,7 +66,7 @@ end · `r` reseed after an error · `esc` back
 
 **Explore** `hjkl` / arrows pan the cursor (shift: fast) · `[` `]` stratum down / up (Net on top) ·
 `w` walk · `tab` deck · `i` inspector · `m` minimap (inside the inspector) · `e` legend ·
-`d` digital overlay · `s` save · `r` regenerate · `g` configure · `?` keys · `esc` pause
+`d` digital overlay · `s` save · `r` regenerate · `g` configure · `:` dev console (dev mode) · `?` keys · `esc` pause
 
 **Walk** `hjkl` `yubn` / arrows move · `<` `>` take stairs, lift, ladder or
 manhole · `space` interact: take what lies here, jack in at an adjacent terminal

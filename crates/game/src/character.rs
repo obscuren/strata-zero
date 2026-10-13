@@ -197,7 +197,7 @@ impl Character {
             return;
         }
         match self.inventory.iter_mut().find(|s| s.item == item) {
-            Some(s) => s.qty += qty,
+            Some(s) => s.qty = s.qty.saturating_add(qty),
             None => self.inventory.push(Stack { item, qty }),
         }
     }
@@ -370,5 +370,14 @@ mod tests {
         ch.fired.insert(scan.clone(), 1000);
         assert_eq!(ch.cooling(&c, &scan, 1100), Some(200));
         assert_eq!(ch.cooling(&c, &scan, 1300), None);
+    }
+
+    #[test]
+    fn give_saturates_instead_of_overflowing() {
+        let c = Content::load().unwrap();
+        let mut ch = Character::from_starter(&c);
+        ch.give(ItemId::new("copper_coil"), u32::MAX);
+        ch.give(ItemId::new("copper_coil"), 1);
+        assert_eq!(ch.count(&ItemId::new("copper_coil")), u32::MAX);
     }
 }

@@ -52,7 +52,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 .first()
                 .and_then(|a| a.parse().ok())
                 .ok_or_else(|| "give <credits>".to_string())?;
-            st.character.credits += n;
+            st.character.credits = st.character.credits.saturating_add(n);
             Ok(format!("credits {}", st.character.credits))
         }
         "heal" => {
@@ -183,6 +183,12 @@ mod tests {
             "nothing can lie there"
         );
         assert_eq!(run(&mut st, at, "give 100").unwrap(), "credits 420");
+        run(&mut st, at, "give 4294967295").unwrap();
+        assert_eq!(
+            run(&mut st, at, "give 4294967295").unwrap(),
+            "credits 4294967295",
+            "saturates"
+        );
         st.character.hp = 1;
         assert_eq!(run(&mut st, at, "heal").unwrap(), "hp 45/45");
         assert_eq!(run(&mut st, at, "clear").unwrap(), "cleared 1 stack");

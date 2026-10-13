@@ -11,6 +11,7 @@ use citygen::{City, Grid, Pos, StratumKind};
 use game::{Content, Ground, ItemKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 
 /// The colour of things lying on the ground.
 pub const AMBER: Rgb = Rgb(255, 200, 80);
@@ -67,6 +68,8 @@ impl Overlay for GroundOverlay<'_> {
 /// pulses in the signal colour until it expires.
 pub struct PingOverlay<'a> {
     pub ping: Option<&'a Ping>,
+    /// Sight on the drawn stratum: connectors out of sight get a marker glyph.
+    pub vis: Option<&'a Grid<Visibility>>,
 }
 
 impl Overlay for PingOverlay<'_> {
@@ -90,9 +93,20 @@ impl Overlay for PingOverlay<'_> {
             .iter()
             .filter(|k| k.serves.contains(&stratum) && k.pos.chebyshev(ping.pos) <= ping.radius)
         {
-            if let Some((sx, sy)) = tile_to_screen(area, origin, k.pos) {
-                buf[(sx, sy)].set_fg(glow);
+            let Some((sx, sy)) = tile_to_screen(area, origin, k.pos) else {
+                continue;
+            };
+            let in_sight = match self.vis {
+                None => true,
+                Some(v) => v.get(k.pos).copied() == Some(Visibility::Visible),
+            };
+            let cell = &mut buf[(sx, sy)];
+            // Out of sight the tile is blank or dimmed: the ping draws its own marker.
+            if !in_sight {
+                cell.set_char('◆');
+                cell.modifier.remove(Modifier::DIM);
             }
+            cell.set_fg(glow);
         }
     }
 }
@@ -230,7 +244,17 @@ mod tests {
             until: 100,
         };
         let glow = |tick| SIGNAL.scale(0.5 + 0.5 * pulse(tick, 20)).to_color();
-        let buf = render(&c, &s, street, 10, None, &PingOverlay { ping: Some(&ping) });
+        let buf = render(
+            &c,
+            &s,
+            street,
+            10,
+            None,
+            &PingOverlay {
+                ping: Some(&ping),
+                vis: None,
+            },
+        );
         assert_eq!(buf[(jack.x as u16, jack.y as u16)].fg, glow(10));
         assert_ne!(buf[(other.x as u16, other.y as u16)].fg, glow(10));
         let buf = render(
@@ -239,7 +263,10 @@ mod tests {
             street,
             100,
             None,
-            &PingOverlay { ping: Some(&ping) },
+            &PingOverlay {
+                ping: Some(&ping),
+                vis: None,
+            },
         );
         assert_ne!(buf[(jack.x as u16, jack.y as u16)].fg, glow(100), "expired");
         let buf = render(
@@ -248,12 +275,54 @@ mod tests {
             StratumKind::Undercity,
             10,
             None,
-            &PingOverlay { ping: Some(&ping) },
+            &PingOverlay {
+                ping: Some(&ping),
+                vis: None,
+            },
         );
         assert_ne!(
             buf[(jack.x as u16, jack.y as u16)].fg,
             glow(10),
             "other stratum"
         );
+    }
+
+    #[test]
+    fn ping_overlay_marks_connectors_out_of_sight() {
+        let c = city();
+        let s = StylePack::load().unwrap();
+        let street = StratumKind::Street;
+        let mut p = Player::spawn(&c, 1);
+        p.update_fov(&c, 0);
+        let hidden = c
+            .connectors
+            .iter()
+            .find(|k| {
+                k.serves.contains(&street)
+                    && k.pos.chebyshev(p.pos) <= 24
+                    && p.vis()[k.pos] == Visibility::Unseen
+            })
+            .expect("a connector in ping range but out of sight")
+            .pos;
+        let ping = Ping {
+            stratum: street,
+            pos: p.pos,
+            radius: 24,
+            until: 100,
+        };
+        let overlay = PingOverlay {
+            ping: Some(&ping),
+            vis: Some(p.vis()),
+        };
+        let buf = render(&c, &s, street, 10, Some(p.vis()), &overlay);
+        let cell = &buf[(hidden.x as u16, hidden.y as u16)];
+        let glow = SIGNAL.scale(0.5 + 0.5 * pulse(10, 20)).to_color();
+        assert_eq!(cell.fg, glow);
+        assert_ne!(
+            cell.symbol(),
+            " ",
+            "a marker shows where sight does not reach"
+        );
+        assert!(!cell.modifier.contains(ratatui::style::Modifier::DIM));
     }
 }
