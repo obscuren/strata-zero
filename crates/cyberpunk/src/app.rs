@@ -81,6 +81,15 @@ impl AppState {
         }
     }
 
+    pub const TICKS_PER_MINUTE: u64 = 90;
+    pub const START_MINUTE: u64 = 22 * 60;
+
+    /// The time of night as (hour, minute): real time, from the tick.
+    pub fn clock(&self) -> (u8, u8) {
+        let m = (Self::START_MINUTE + self.tick / Self::TICKS_PER_MINUTE) % (24 * 60);
+        ((m / 60) as u8, (m % 60) as u8)
+    }
+
     /// Logs a plain result.
     pub fn say(&mut self, msg: impl Into<String>) {
         self.log.push(Kind::Info, msg, self.tick);
@@ -92,6 +101,7 @@ impl AppState {
     }
 
     /// Logs a quest or level line.
+    #[allow(dead_code)] // wired up by the dev console
     pub fn story(&mut self, msg: impl Into<String>) {
         self.log.push(Kind::Story, msg, self.tick);
     }
@@ -444,6 +454,20 @@ mod tests {
                 .is_none_or(|t| !t.active(runner.st.tick))
         );
         assert!(text(&small).contains("BASE"));
+    }
+
+    #[test]
+    fn clock_runs_from_ten_pm_in_real_time() {
+        let mut st = AppState::new();
+        assert_eq!(st.clock(), (22, 0));
+        st.tick = 89;
+        assert_eq!(st.clock(), (22, 0));
+        st.tick = 90;
+        assert_eq!(st.clock(), (22, 1));
+        st.tick = 90 * 120;
+        assert_eq!(st.clock(), (0, 0));
+        st.tick = 90 * (24 * 60 + 61);
+        assert_eq!(st.clock(), (23, 1));
     }
 
     #[test]
