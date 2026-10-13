@@ -1,8 +1,5 @@
 //! The dev console's state: a line of input, history and completion. Pure: no commands here.
 
-// Wired into the map in the next task.
-#![allow(dead_code)]
-
 use crossterm::event::{KeyCode, KeyEvent};
 
 /// What a key did.

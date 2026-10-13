@@ -1,6 +1,6 @@
 //! Item actions: everything a menu can do, applied by one function.
 
-use crate::character::{Character, Stack};
+use crate::character::Character;
 use crate::content::Content;
 use crate::ground::Ground;
 use crate::model::*;
@@ -66,16 +66,6 @@ fn remove_from_pack(ch: &mut Character, item: &ItemId, qty: u32) -> u32 {
     qty - left
 }
 
-fn add_to_pack(ch: &mut Character, item: ItemId, qty: u32) {
-    if qty == 0 {
-        return;
-    }
-    match ch.inventory.iter_mut().find(|s| s.item == item) {
-        Some(s) => s.qty += qty,
-        None => ch.inventory.push(Stack { item, qty }),
-    }
-}
-
 fn clamp_hp(ch: &mut Character, c: &Content) {
     let max = ch.hp_max(c);
     if ch.hp > max {
@@ -116,7 +106,7 @@ pub fn apply(
             match old {
                 Some(old) => {
                     let old_name = name(c, &old);
-                    add_to_pack(ch, old, 1);
+                    ch.give(old, 1);
                     done(format!("swapped {old_name} for {}", item.name))
                 }
                 None => done(format!("equipped {}", item.name)),
@@ -127,7 +117,7 @@ pub fn apply(
                 .equipment
                 .remove(&slot)
                 .ok_or_else(|| format!("nothing in the {} slot", slot.label()))?;
-            add_to_pack(ch, id.clone(), 1);
+            ch.give(id.clone(), 1);
             clamp_hp(ch, c);
             done(format!("unequipped {}", name(c, &id)))
         }
@@ -172,7 +162,7 @@ pub fn apply(
                 return Err(format!("no {} here", name(c, &item)));
             }
             ground.take(at.stratum, at.pos, &item, n);
-            add_to_pack(ch, item.clone(), n);
+            ch.give(item.clone(), n);
             done(format!("took {n}× {}", name(c, &item)))
         }
         Action::TakeAll => {
@@ -186,7 +176,7 @@ pub fn apply(
             let n: u32 = stacks.iter().map(|s| s.qty).sum();
             for s in stacks {
                 ground.take(at.stratum, at.pos, &s.item, s.qty);
-                add_to_pack(ch, s.item, s.qty);
+                ch.give(s.item, s.qty);
             }
             done(format!("took {n} items"))
         }
@@ -223,6 +213,7 @@ pub fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::character::Stack;
 
     fn setup() -> (Content, Character, Ground, At) {
         let c = Content::load().unwrap();

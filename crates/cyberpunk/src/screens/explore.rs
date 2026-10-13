@@ -1,5 +1,6 @@
 //! The map screen: free-camera Explore mode and the Walk mode with the `@`.
 
+use crate::actions::report;
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::render::items::{GroundOverlay, PingOverlay};
 use crate::render::minimap::Minimap;
@@ -8,6 +9,7 @@ use crate::render::traffic::Traffic;
 use crate::render::viewport::{Camera, MapView, Overlay, tile_to_screen};
 use crate::render::weather::Weather;
 use crate::screens::configure::Configure;
+use crate::screens::console;
 use crate::screens::deck::Deck;
 use crate::screens::files::Files;
 use crate::screens::generating::Generating;
@@ -15,6 +17,7 @@ use crate::screens::help;
 use crate::screens::pause::Pause;
 use crate::screens::popup::{Choice, Pick, Popup, WorldAct};
 use crate::screens::title::Title;
+use crate::ui::console::{Console, ConsoleEvent};
 use crate::ui::panel::{boxed, inspector_lines, legend, status_bar, strata_selector};
 use crate::walker::{Player, port_name};
 use citygen::rng::hash64;
@@ -95,6 +98,8 @@ pub struct MapScreen {
     pub help: bool,
     traffic: Traffic,
     fps: FpsMeter,
+    /// The dev console while it is open; it takes every key.
+    console: Option<Console>,
     /// Tick of the last update; a gap means a menu was on top.
     last_tick: u64,
     cam_ready: bool,
@@ -130,6 +135,7 @@ impl MapScreen {
             help: false,
             traffic: Traffic::default(),
             fps: FpsMeter::default(),
+            console: None,
             last_tick: 0,
             cam_ready: false,
             last_map: Cell::new(Rect::new(0, 0, 100, 28)),
@@ -202,6 +208,7 @@ impl MapScreen {
                 );
             }
             KeyCode::Char('i') if st.dev => self.show_inspector = !self.show_inspector,
+            KeyCode::Char(':') if st.dev => self.console = Some(Console::default()),
             KeyCode::Char('m') => self.show_minimap = !self.show_minimap,
             KeyCode::Char('e') => self.show_legend = !self.show_legend,
             KeyCode::Char('d') => self.digital = !self.digital,
@@ -468,6 +475,31 @@ impl Screen for MapScreen {
             self.stratum = p.stratum;
             self.cam.snap(p.pos);
         }
+        // The console takes every key while it is open.
+        let focus = game::At {
+            stratum: self.stratum,
+            pos: match (self.mode, &st.player) {
+                (Mode::Walk, Some(p)) => p.pos,
+                _ => self.cursor,
+            },
+        };
+        if let Some(con) = self.console.as_mut() {
+            let mut close = false;
+            for k in keys {
+                match con.key(*k, &|head, word| console::complete(st, head, word)) {
+                    ConsoleEvent::Run(line) => {
+                        let result = console::run(st, focus, &line);
+                        report(st, result);
+                    }
+                    ConsoleEvent::Close => close = true,
+                    ConsoleEvent::None => {}
+                }
+            }
+            if close {
+                self.console = None;
+            }
+            return ScreenCmd::Stay;
+        }
         let Some(size) = st.city.as_ref().map(|c| c.size) else {
             if keys
                 .iter()
@@ -681,17 +713,18 @@ impl Screen for MapScreen {
                 format!("hjkl move · <> stairs · enter jack in · tab deck{cam} · ? keys")
             }
         };
-        f.render_widget(
-            Paragraph::new(status_bar(
+        let bottom = match &self.console {
+            Some(con) => console::line(con, st.tick),
+            None => status_bar(
                 Some(city),
                 self.stratum,
                 st.show_fps.then_some(self.fps.fps),
                 &hints,
                 st.status_text().map(|s| (s, st.status_is_warning())),
                 st.dev,
-            )),
-            status,
-        );
+            ),
+        };
+        f.render_widget(Paragraph::new(bottom), status);
 
         if self.help {
             help::draw(f, self.mode);
@@ -1376,5 +1409,31 @@ mod tests {
             ScreenCmd::Stay
         ));
         assert_eq!(st.status_text(), Some("no active abilities"));
+    }
+
+    #[test]
+    fn colon_opens_the_console_in_dev_mode() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        s.update(&mut st, &[]);
+        st.dev = false;
+        s.update(&mut st, &[key(KeyCode::Char(':'))]);
+        assert!(s.console.is_none());
+        st.dev = true;
+        s.update(&mut st, &[key(KeyCode::Char(':'))]);
+        assert!(s.console.is_some());
+        let text = draw_screen(&s, &st, 120, 40);
+        let last = text.lines().last().unwrap();
+        assert!(last.starts_with(": "), "{last:?}");
+        st.character.hp = 1;
+        for c in "heal".chars() {
+            s.update(&mut st, &[key(KeyCode::Char(c))]);
+        }
+        assert!(draw_screen(&s, &st, 120, 40).contains(": heal"));
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert_eq!(st.character.hp, 45);
+        assert_eq!(st.status_text(), Some("hp 45/45"));
+        s.update(&mut st, &[key(KeyCode::Esc)]);
+        assert!(s.console.is_none());
     }
 }

@@ -191,6 +191,17 @@ impl Character {
         (ready > tick).then(|| ready - tick)
     }
 
+    /// Puts `qty` of an item in the pack, merging into a stack of the same item.
+    pub fn give(&mut self, item: ItemId, qty: u32) {
+        if qty == 0 {
+            return;
+        }
+        match self.inventory.iter_mut().find(|s| s.item == item) {
+            Some(s) => s.qty += qty,
+            None => self.inventory.push(Stack { item, qty }),
+        }
+    }
+
     /// How many of an item sit in the inventory (equipped items do not count).
     pub fn count(&self, id: &ItemId) -> u32 {
         self.inventory
