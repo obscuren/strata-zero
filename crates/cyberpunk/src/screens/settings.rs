@@ -1,5 +1,4 @@
 //! Settings: dev mode, rain and the FPS counter, flipped in place.
-#![allow(dead_code)] // pushed by the pause menu from Task 6
 
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::ui::panel::boxed;

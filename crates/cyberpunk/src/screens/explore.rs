@@ -10,6 +10,7 @@ use crate::screens::configure::Configure;
 use crate::screens::files::Files;
 use crate::screens::generating::Generating;
 use crate::screens::help;
+use crate::screens::pause::Pause;
 use crate::screens::title::Title;
 use crate::ui::panel::{boxed, inspector_lines, legend, status_bar, strata_selector};
 use crate::walker::Player;
@@ -187,19 +188,13 @@ impl MapScreen {
                     fx: TransitionKind::None,
                 });
             }
-            KeyCode::Char('q') => {
-                return Some(ScreenCmd::Switch {
-                    to: Box::new(Title::new(st.tick)),
-                    fx: TransitionKind::SlideUp,
-                });
-            }
-            KeyCode::Esc => {
+            KeyCode::Char('q') | KeyCode::Esc => {
                 if self.help {
                     self.help = false;
                 } else {
-                    return Some(ScreenCmd::Switch {
-                        to: Box::new(Title::new(st.tick)),
-                        fx: TransitionKind::SlideUp,
+                    return Some(ScreenCmd::Push {
+                        to: Box::new(Pause::new(st.tick)),
+                        fx: TransitionKind::None,
                     });
                 }
             }
@@ -619,7 +614,7 @@ mod tests {
         assert_eq!(s.mode, Mode::Explore);
         assert!(matches!(
             s.update(&mut st, &[key(KeyCode::Char('q'))]),
-            ScreenCmd::Switch { .. }
+            ScreenCmd::Push { .. }
         ));
     }
 
@@ -839,5 +834,27 @@ mod tests {
         t.draw(|f| s.draw(&st, f)).unwrap();
         assert_eq!(count(&t), 0);
         assert!(!buffer_text(t.backend().buffer()).contains("fps"));
+    }
+
+    #[test]
+    fn esc_closes_help_before_pausing() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        s.update(&mut st, &[]);
+        s.update(&mut st, &[key(KeyCode::Char('?'))]);
+        assert!(s.help);
+        assert!(matches!(
+            s.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Stay
+        ));
+        assert!(!s.help);
+        assert!(matches!(
+            s.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Push { .. }
+        ));
+        assert!(matches!(
+            s.update(&mut st, &[key(KeyCode::Char('q'))]),
+            ScreenCmd::Push { .. }
+        ));
     }
 }

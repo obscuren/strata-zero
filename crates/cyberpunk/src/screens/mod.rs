@@ -5,6 +5,7 @@ pub mod explore;
 pub mod files;
 pub mod generating;
 pub mod help;
+pub mod pause;
 pub mod settings;
 pub mod title;
 
