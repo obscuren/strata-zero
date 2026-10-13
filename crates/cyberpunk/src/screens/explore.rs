@@ -262,15 +262,12 @@ impl MapScreen {
     fn handle_common(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
         match k.code {
             KeyCode::Char('`') => {
-                st.dev = !st.dev;
+                st.set_dev(!st.dev);
                 st.say(if st.dev {
                     "dev mode on"
                 } else {
                     "dev mode off"
                 });
-                if !st.dev {
-                    st.sidebar.leave_dev();
-                }
             }
             KeyCode::Char(':') if st.dev => self.console = Some(Console::default()),
             KeyCode::Char('v') => return Some(self.view_popup(st)),
@@ -758,7 +755,7 @@ impl Screen for MapScreen {
             tick: st.tick,
         });
         f.render_widget(Paragraph::new(bars), r.bars);
-        sidebar::draw(
+        let log_drawn = sidebar::draw(
             &sidebar::SidebarView {
                 city,
                 stratum: self.stratum,
@@ -792,8 +789,8 @@ impl Screen for MapScreen {
             None => bar,
         };
         f.render_widget(Paragraph::new(bottom), r.action);
-        // With the LOG section off, the newest entry shows as a toast on the map.
-        if !st.sidebar.is_on(Section::Log)
+        // With the LOG section off or squeezed out, the newest entry shows as a toast.
+        if !log_drawn
             && self.console.is_none()
             && let Some(e) = recent
         {
@@ -1671,11 +1668,14 @@ mod tests {
         for _ in 0..30 {
             st.say("a long line of text that will need wrapping in the log");
         }
+        st.warn("nothing leads up from here");
         let text = draw_screen(&s, &st, 100, 30);
         assert!(
             text.contains("tab deck   ? keys") && text.contains("── HERE"),
             "{text}"
         );
+        // The LOG section lost its rows to the dev sections: the refusal still shows.
+        assert!(text.contains("! nothing leads up from here"), "{text}");
         let text = draw_screen(&s, &st, 200, 60);
         assert!(text.contains("── MAP · street"), "{text}");
     }

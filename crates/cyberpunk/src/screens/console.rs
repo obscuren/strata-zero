@@ -70,8 +70,8 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 .ok_or_else(|| "xp <points>".to_string())?;
             let gained = st.character.gain_xp(n);
             let level = st.character.level;
-            for l in (level - gained + 1)..=level {
-                st.story(format!("level {l}"));
+            for i in (0..gained).rev() {
+                st.story(format!("level {}", level - i));
             }
             Ok(format!("+{n} xp"))
         }
@@ -235,6 +235,10 @@ mod tests {
             Some("▸ level 2".to_string())
         );
         assert_eq!(run(&mut st, at, "xp x").unwrap_err(), "xp <points>");
+        st.character.level = u8::MAX;
+        let before = st.log.len();
+        assert_eq!(run(&mut st, at, "xp 1").unwrap(), "+1 xp");
+        assert_eq!((st.character.level, st.log.len()), (u8::MAX, before));
         assert_eq!(run(&mut st, at, "focus 5").unwrap(), "focus 5/30");
         assert_eq!(run(&mut st, at, "focus 99").unwrap(), "focus 30/30");
         assert!(run(&mut st, at, "help").unwrap().contains("xp"));

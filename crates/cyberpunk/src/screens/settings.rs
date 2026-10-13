@@ -33,7 +33,7 @@ impl Settings {
 
     fn flip(st: &mut AppState, i: usize) {
         match i {
-            0 => st.dev = !st.dev,
+            0 => st.set_dev(!st.dev),
             1 => st.rain = !st.rain,
             _ => st.show_fps = !st.show_fps,
         }
@@ -113,6 +113,18 @@ mod tests {
     use crate::screens::testutil::{buffer_text, key};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+
+    #[test]
+    fn settings_dev_off_clears_dev_sections() {
+        use crate::ui::sidebar::Section;
+        let mut st = AppState::new();
+        st.dev = true;
+        st.sidebar.set(Section::Inspect, true);
+        st.sidebar.set(Section::Legend, true);
+        Settings::flip(&mut st, 0);
+        assert!(!st.dev);
+        assert!(!st.sidebar.is_on(Section::Inspect) && !st.sidebar.is_on(Section::Legend));
+    }
 
     #[test]
     fn settings_flip_state_and_pop() {

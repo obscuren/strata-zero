@@ -94,6 +94,14 @@ impl AppState {
         ((m / 60) as u8, (m % 60) as u8)
     }
 
+    /// Turns dev mode on or off; off also drops the dev-only sidebar sections.
+    pub fn set_dev(&mut self, on: bool) {
+        self.dev = on;
+        if !on {
+            self.sidebar.leave_dev();
+        }
+    }
+
     /// Logs a plain result.
     pub fn say(&mut self, msg: impl Into<String>) {
         self.log.push(Kind::Info, msg, self.tick);

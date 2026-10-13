@@ -354,13 +354,14 @@ fn list_line(flags: &Sidebar, dev_row: bool) -> Line<'static> {
 }
 
 /// Draws the panel: the section list, then each active section within its budget.
-pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) {
+/// Returns whether the LOG section got any rows, so the map can toast when it did not.
+pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) -> bool {
     let title = v.character.handle.to_uppercase();
     let block = boxed(&title);
     let inner = block.inner(area);
     block.render(area, buf);
     if inner.width == 0 || inner.height == 0 {
-        return;
+        return false;
     }
     let w = inner.width;
     let mut list = vec![list_line(flags, false)];
@@ -412,7 +413,9 @@ pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) {
     }
     let needs: Vec<(Section, u16)> = built.iter().map(|(s, _, _, n)| (*s, *n)).collect();
     let mut y = body.y;
+    let mut log_drawn = false;
     for (s, rows) in budget(&needs, body.height) {
+        log_drawn |= s == Section::Log;
         let (_, title, lines, _) = built.iter().find(|(x, ..)| *x == s).expect("budgeted");
         Paragraph::new(rule(title, w)).render(Rect::new(body.x, y, w, 1), buf);
         let content = Rect::new(body.x, y + 1, w, rows - 1);
@@ -432,6 +435,7 @@ pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) {
         }
         y += rows;
     }
+    log_drawn
 }
 
 #[cfg(test)]
@@ -476,8 +480,10 @@ mod tests {
 
     fn draw_to(v: &SidebarView, flags: &Sidebar, w: u16, h: u16) -> String {
         let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
-        t.draw(|f| draw(v, flags, f.area(), f.buffer_mut()))
-            .unwrap();
+        t.draw(|f| {
+            draw(v, flags, f.area(), f.buffer_mut());
+        })
+        .unwrap();
         buffer_text(t.backend().buffer())
     }
 
