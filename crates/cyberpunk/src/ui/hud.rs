@@ -1,18 +1,36 @@
-//! The play HUD's single rows: header, bars and the action bar.
+//! The play HUD's rows: status, location, bars, tabs, the footer zones and the rules.
 
 use crate::anim::effects::pulse;
 use crate::render::overlay::Digital;
-use crate::ui::chrome::{CYAN, DIM, TEXT};
+use crate::ui::chrome::{CYAN, DIM, MAGENTA, RULE, TEXT};
+use crate::ui::sidebar::{Section, Sidebar};
 use citygen::{City, Pos, StratumKind, SubnetOwner};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-pub const BAR_CELLS: usize = 12;
 pub const SLOTS: usize = 5;
 pub const AMBER: Color = Color::Rgb(255, 200, 80);
 pub const GREEN: Color = Color::Rgb(80, 230, 120);
-const DIM_AMBER: Color = Color::Rgb(190, 150, 60);
+pub const DIM_AMBER: Color = Color::Rgb(190, 150, 60);
+pub const RULE_STYLE: Style = Style::new().fg(RULE);
 const BADGE_FG: Color = Color::Rgb(10, 11, 16);
+const TICKS_PER_MINUTE: u64 = 90;
+const START_MINUTE: u64 = 22 * 60;
+
+/// The clock at `tick`: 22:00 at tick 0, one minute per ninety ticks, wrapping at midnight.
+pub fn clock_at(tick: u64) -> (u8, u8) {
+    let m = (START_MINUTE + tick / TICKS_PER_MINUTE) % (24 * 60);
+    ((m / 60) as u8, (m % 60) as u8)
+}
+
+/// A moon from 18:00 to 05:59, a sun otherwise.
+pub fn clock_glyph(hour: u8) -> char {
+    if hour >= 18 || hour <= 5 {
+        '☾'
+    } else {
+        '☀'
+    }
+}
 
 /// Cuts `s` to `max` cells, ending in `…` when it was longer.
 pub fn cut(s: &str, max: usize) -> String {
@@ -27,21 +45,69 @@ pub fn cut(s: &str, max: usize) -> String {
     out
 }
 
-pub struct Header<'a> {
-    pub dev: bool,
-    pub level: u8,
-    pub credits: u32,
-    pub location: &'a str,
-    pub seed: u64,
-    pub fps: Option<f32>,
-    pub clock: (u8, u8),
+fn dim(s: impl Into<String>) -> Span<'static> {
+    Span::styled(s.into(), Style::default().fg(DIM))
 }
 
-/// Left: badge, level, credits. Centre: the location. Right: dev readouts and the clock.
-pub fn header(h: &Header, width: u16) -> Line<'static> {
-    let w = width as usize;
+fn text(s: impl Into<String>) -> Span<'static> {
+    Span::styled(s.into(), Style::default().fg(TEXT))
+}
+
+fn cyan(s: impl Into<String>) -> Span<'static> {
+    Span::styled(
+        s.into(),
+        Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+    )
+}
+
+fn width_of(spans: &[Span<'static>]) -> usize {
+    spans.iter().map(|s| s.width()).sum()
+}
+
+/// Cuts a span list to `max` cells, ending in `…` when it was longer.
+pub fn cut_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
+    if width_of(&spans) <= max {
+        return spans;
+    }
+    let mut out = Vec::new();
+    let mut left = max.saturating_sub(1);
+    for sp in spans {
+        let w = sp.width();
+        if w <= left {
+            left -= w;
+            out.push(sp);
+            continue;
+        }
+        let kept: String = sp.content.chars().take(left).collect();
+        out.push(Span::styled(kept, sp.style));
+        out.push(Span::styled("…", sp.style));
+        return out;
+    }
+    out
+}
+
+/// Pads a span list with spaces to exactly `width` cells.
+fn padded(mut spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
+    let w = width_of(&spans);
+    if w < width {
+        spans.push(Span::raw(" ".repeat(width - w)));
+    }
+    Line::from(spans)
+}
+
+pub struct Status<'a> {
+    pub dev: bool,
+    pub handle: &'a str,
+    pub level: u8,
+    pub credits: u32,
+    pub seed: u64,
+    pub fps: Option<f32>,
+}
+
+/// ` DEV  VEX :: LVL 2 :: ¤ 320 [:: seed N :: F fps]`, cut to `width`.
+pub fn status_line(s: &Status, width: u16) -> Line<'static> {
     let mut spans = vec![Span::raw(" ")];
-    if h.dev {
+    if s.dev {
         spans.push(Span::styled(
             " DEV ",
             Style::default()
@@ -51,55 +117,40 @@ pub fn header(h: &Header, width: u16) -> Line<'static> {
         ));
         spans.push(Span::raw(" "));
     }
-    spans.push(Span::styled(
-        format!("LVL {}   ¤ {}", h.level, h.credits),
-        Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
-    ));
-    let used: usize = spans.iter().map(|s| s.width()).sum();
-    let mut right = String::new();
-    if h.dev {
-        right.push_str(&format!("seed {} · ", h.seed));
-        if let Some(fps) = h.fps {
-            right.push_str(&format!("{fps:.0} fps · "));
+    spans.push(cyan(s.handle.to_uppercase()));
+    spans.push(dim(" :: LVL "));
+    spans.push(text(s.level.to_string()));
+    spans.push(dim(" :: ¤ "));
+    spans.push(text(s.credits.to_string()));
+    if s.dev {
+        spans.push(dim(format!(" :: seed {}", s.seed)));
+        if let Some(fps) = s.fps {
+            spans.push(dim(format!(" :: {fps:.0} fps")));
         }
     }
-    let clock = format!("{:02}:{:02}", h.clock.0, h.clock.1);
-    let right_w = right.chars().count() + clock.chars().count() + 1;
-    let room = w.saturating_sub(used + right_w);
-    let centre = cut(h.location, room.saturating_sub(2));
-    let cw = centre.chars().count();
-    let ideal = w.saturating_sub(cw) / 2;
-    let start = ideal.max(used + 1).min(used + room.saturating_sub(cw));
-    spans.push(Span::raw(" ".repeat(start.saturating_sub(used))));
-    spans.push(Span::styled(
-        centre,
-        Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
-    ));
-    spans.push(Span::raw(
-        " ".repeat(w.saturating_sub(start + cw + right_w)),
-    ));
-    spans.push(Span::styled(right, Style::default().fg(DIM)));
-    spans.push(Span::styled(
-        clock,
-        Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
-    ));
-    spans.push(Span::raw(" "));
-    Line::from(spans)
+    padded(cut_spans(spans, width as usize), width as usize)
 }
 
-pub struct Bars {
-    pub hp: (u32, u32),
-    pub focus: (u32, u32),
-    pub xp: (u32, u32),
-    pub tick: u64,
+/// The location on the left, the clock with its glyph at the right edge.
+pub fn location_line(location: &str, clock: (u8, u8), width: u16) -> Line<'static> {
+    let clock_text = format!("{} {:02}:{:02}", clock_glyph(clock.0), clock.0, clock.1);
+    let room = (width as usize).saturating_sub(clock_text.chars().count() + 2);
+    let loc = cut(location, room);
+    let gap = (width as usize).saturating_sub(1 + loc.chars().count() + clock_text.chars().count());
+    Line::from(vec![
+        Span::raw(" "),
+        cyan(loc),
+        Span::raw(" ".repeat(gap)),
+        text(clock_text),
+    ])
 }
 
-/// Filled cells for `cur` of `max`.
-pub fn bar_cells(cur: u32, max: u32) -> usize {
+/// Filled cells for `cur` of `max` out of `cells`.
+pub fn bar_cells_for(cur: u32, max: u32, cells: usize) -> usize {
     if max == 0 {
         return 0;
     }
-    ((BAR_CELLS as f64 * cur.min(max) as f64 / max as f64).round() as usize).min(BAR_CELLS)
+    ((cells as f64 * cur.min(max) as f64 / max as f64).round() as usize).min(cells)
 }
 
 /// Green above half, amber above a quarter, pulsing magenta at a quarter or below.
@@ -119,27 +170,153 @@ pub fn hp_colour(cur: u32, max: u32, tick: u64) -> Color {
     }
 }
 
-fn bar(label: &str, cur: u32, max: u32, colour: Color) -> Vec<Span<'static>> {
-    let filled = bar_cells(cur, max);
+fn bar_spans(filled: usize, cells: usize, colour: Color) -> Vec<Span<'static>> {
     vec![
-        Span::styled(format!("{label} "), Style::default().fg(DIM)),
         Span::styled("█".repeat(filled), Style::default().fg(colour)),
         Span::styled(
-            "░".repeat(BAR_CELLS - filled),
+            "░".repeat(cells.saturating_sub(filled)),
             Style::default().fg(colour).add_modifier(Modifier::DIM),
         ),
-        Span::styled(format!(" {cur}/{max}"), Style::default().fg(TEXT)),
     ]
 }
 
-pub fn bars(b: &Bars) -> Line<'static> {
-    let mut spans = vec![Span::raw(" ")];
-    spans.extend(bar("HP", b.hp.0, b.hp.1, hp_colour(b.hp.0, b.hp.1, b.tick)));
-    spans.push(Span::raw("    "));
-    spans.extend(bar("FOCUS", b.focus.0, b.focus.1, CYAN));
-    spans.push(Span::raw("    "));
-    spans.extend(bar("XP", b.xp.0, b.xp.1, DIM_AMBER));
-    Line::from(spans)
+/// ` {label:<5} {cur}/{max} ` then the bar to the column's edge but one.
+pub fn bar_row(label: &str, cur: u32, max: u32, colour: Color, width: u16) -> Line<'static> {
+    let cells = (width as usize).saturating_sub(16);
+    let mut spans = vec![
+        dim(format!(" {label:<5} ")),
+        text(format!("{:>7} ", format!("{cur}/{max}"))),
+    ];
+    spans.extend(bar_spans(bar_cells_for(cur, max, cells), cells, colour));
+    padded(spans, width as usize)
+}
+
+/// ` CARRY w/cap kg ` then the bar; magenta when over capacity.
+pub fn carry_row(weight: f32, cap: f32, width: u16) -> Line<'static> {
+    let head = format!(" {weight:.1}/{cap:.1} kg ");
+    let cells = (width as usize).saturating_sub(6 + head.chars().count() + 1);
+    let colour = if weight > cap { MAGENTA } else { CYAN };
+    let filled = if cap <= 0.0 {
+        0
+    } else {
+        ((cells as f32 * (weight / cap).min(1.0)).round() as usize).min(cells)
+    };
+    let mut spans = vec![dim(" CARRY"), text(head)];
+    spans.extend(bar_spans(filled, cells, colour));
+    padded(spans, width as usize)
+}
+
+fn tab(key: &str, label: &str, on: bool) -> Vec<Span<'static>> {
+    let word = if on {
+        format!("{label}*")
+    } else {
+        label.to_string()
+    };
+    let style = if on {
+        Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(DIM)
+    };
+    vec![
+        dim("["),
+        Span::styled(key.to_string(), Style::default().fg(CYAN)),
+        dim("]"),
+        Span::styled(word, style),
+    ]
+}
+
+fn capitalised(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => String::new(),
+    }
+}
+
+/// (dev row, main row); the dev row is blank outside dev mode.
+pub fn tab_rows(flags: &Sidebar, dev: bool) -> (Line<'static>, Line<'static>) {
+    let row = |sections: &[Section], first: usize| {
+        let mut spans = vec![Span::raw(" ")];
+        for (i, s) in sections.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw(" "));
+            }
+            spans.extend(tab(
+                &format!("F{}", first + i),
+                &capitalised(s.label()),
+                flags.is_on(*s),
+            ));
+        }
+        Line::from(spans)
+    };
+    let main = row(
+        &[Section::Here, Section::Quest, Section::Map, Section::Log],
+        1,
+    );
+    let dev_row = if dev {
+        row(&[Section::Inspect, Section::Legend], 5)
+    } else {
+        Line::from("")
+    };
+    (dev_row, main)
+}
+
+pub const WALK_VERBS: &[(&str, &str)] = &[
+    ("space", "act"),
+    ("enter", "jack"),
+    ("v", "iew"),
+    ("m", "sgs"),
+    ("?", "keys"),
+];
+pub const EXPLORE_VERBS: &[(&str, &str)] = &[
+    ("w", "alk"),
+    ("r", "egen"),
+    ("g", "configure"),
+    ("v", "iew"),
+    ("m", "sgs"),
+    ("?", "keys"),
+];
+
+fn verb_spans(verbs: &[(&str, &str)]) -> Vec<Span<'static>> {
+    let mut out = Vec::new();
+    for (i, (k, w)) in verbs.iter().enumerate() {
+        if i > 0 {
+            out.push(Span::raw(" "));
+        }
+        out.push(dim("["));
+        out.push(Span::styled(k.to_string(), Style::default().fg(CYAN)));
+        out.push(dim("]"));
+        out.push(dim(w.to_string()));
+    }
+    out
+}
+
+/// ` STATUS: …` at the left, `HERE: …` at 40% of the width, the verbs right-aligned;
+/// zones are cut so they never touch.
+pub fn footer_status(
+    status: Vec<Span<'static>>,
+    here: &str,
+    verbs: &[(&str, &str)],
+    width: u16,
+) -> Line<'static> {
+    let w = width as usize;
+    let verbs = verb_spans(verbs);
+    let verbs_x = w.saturating_sub(width_of(&verbs) + 1);
+    let here_x = w * 40 / 100;
+    let mut zone1 = vec![dim(" STATUS: ")];
+    zone1.extend(status);
+    let mut spans = cut_spans(zone1, here_x.saturating_sub(1));
+    let zone2 = cut_spans(
+        vec![dim("HERE: "), text(here.to_string())],
+        verbs_x.saturating_sub(here_x + 1),
+    );
+    let w1 = width_of(&spans);
+    spans.push(Span::raw(" ".repeat(here_x.saturating_sub(w1))));
+    spans.extend(zone2);
+    let w2 = width_of(&spans);
+    spans.push(Span::raw(" ".repeat(verbs_x.saturating_sub(w2))));
+    spans.extend(verbs);
+    padded(spans, w)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,61 +331,43 @@ pub struct Slot {
     pub state: SlotState,
 }
 
-pub enum BarMode<'a> {
-    Walk(&'a [Slot]),
-    Explore,
-}
-
-/// Slots or the camera verbs on the left, the fixed hints on the right.
-pub fn action_bar(mode: &BarMode, dev: bool, width: u16) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
-    match mode {
-        BarMode::Walk(slots) => {
-            for i in 0..SLOTS {
-                if i > 0 {
-                    spans.push(Span::raw("   "));
-                }
-                match slots.get(i) {
-                    Some(slot) => {
-                        spans.push(Span::styled(
-                            format!("{} ", i + 1),
-                            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
-                        ));
-                        spans.push(Span::styled(
-                            cut(&slot.name.to_lowercase(), 10),
-                            Style::default().fg(TEXT),
-                        ));
-                        match slot.state {
-                            SlotState::Ready => {
-                                spans.push(Span::styled(" ●", Style::default().fg(CYAN)))
-                            }
-                            SlotState::Cooling(secs) => spans
-                                .push(Span::styled(format!(" {secs}s"), Style::default().fg(DIM))),
-                        }
-                    }
-                    None => spans.push(Span::styled(
-                        format!("{} ──", i + 1),
-                        Style::default().fg(DIM),
-                    )),
+/// ` ABILITIES: ` then the five slots, then the deck (and console) hints at the right.
+pub fn footer_abilities(slots: &[Slot], dev: bool, width: u16) -> Line<'static> {
+    let mut spans = vec![dim(" ABILITIES: ")];
+    for i in 0..SLOTS {
+        if i > 0 {
+            spans.push(Span::raw("   "));
+        }
+        match slots.get(i) {
+            Some(slot) => {
+                spans.push(cyan(format!("{} ", i + 1)));
+                spans.push(text(cut(&slot.name.to_lowercase(), 10)));
+                match slot.state {
+                    SlotState::Ready => spans.push(Span::styled(" ●", Style::default().fg(CYAN))),
+                    SlotState::Cooling(secs) => spans.push(dim(format!(" {secs}s"))),
                 }
             }
+            None => spans.push(dim(format!("{} ──", i + 1))),
         }
-        BarMode::Explore => spans.push(Span::styled(
-            "w walk   r regen   g configure",
-            Style::default().fg(TEXT),
-        )),
     }
     let right = if dev {
-        ": console   tab deck   ? keys"
+        verb_spans(&[(":", "console"), ("tab", "deck")])
     } else {
-        "tab deck   ? keys"
+        verb_spans(&[("tab", "deck")])
     };
-    let used: usize = spans.iter().map(|s| s.width()).sum();
-    let gap = (width as usize).saturating_sub(used + right.chars().count() + 1);
+    let used = width_of(&spans);
+    let gap = (width as usize).saturating_sub(used + width_of(&right) + 1);
     spans.push(Span::raw(" ".repeat(gap)));
-    spans.push(Span::styled(right.to_string(), Style::default().fg(DIM)));
-    spans.push(Span::raw(" "));
-    Line::from(spans)
+    spans.extend(right);
+    padded(spans, width as usize)
+}
+
+/// A heavy rule with `glyph` where the vertical rule crosses it.
+pub fn rule_row(width: u16, cross: u16, glyph: char) -> Line<'static> {
+    let s: String = (0..width)
+        .map(|x| if x == cross { glyph } else { '━' })
+        .collect();
+    Line::from(Span::styled(s, RULE_STYLE))
 }
 
 /// Where a tile is, for the header: `Kowloon Noodle · Street`, `Helix Biotek · Net`.
@@ -244,6 +403,7 @@ pub fn location(city: &City, stratum: StratumKind, pos: Pos) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::sidebar::{Section, Sidebar};
     use citygen::{GenParams, Generator, SizePreset};
 
     fn city() -> City {
@@ -256,104 +416,154 @@ mod tests {
         .unwrap()
     }
 
-    fn base() -> Header<'static> {
-        Header {
+    fn status() -> Status<'static> {
+        Status {
             dev: false,
-            level: 3,
+            handle: "Vex",
+            level: 2,
             credits: 320,
-            location: "Night Market · Street",
             seed: 7,
             fps: Some(30.0),
-            clock: (22, 41),
         }
     }
 
     #[test]
-    fn header_has_three_zones() {
-        let s = header(&base(), 100).to_string();
-        assert_eq!(s.chars().count(), 100, "{s:?}");
-        assert!(s.starts_with(" LVL 3   ¤ 320"), "{s:?}");
-        assert!(s.trim_end().ends_with("22:41"), "{s:?}");
-        assert!(!s.contains("DEV") && !s.contains("seed"));
-        let at = s.find("Night Market").unwrap();
-        assert!((35..=45).contains(&at), "{at}");
-        let dev = header(
-            &Header {
+    fn clock_glyph_and_clock_at() {
+        assert_eq!(clock_at(0), (22, 0));
+        assert_eq!(clock_at(90 * 120), (0, 0));
+        assert_eq!(clock_glyph(17), '☀');
+        assert_eq!(clock_glyph(18), '☾');
+        assert_eq!(clock_glyph(5), '☾');
+        assert_eq!(clock_glyph(6), '☀');
+    }
+
+    #[test]
+    fn status_line_has_handle_level_credits_and_dev_readouts() {
+        let s = status_line(&status(), 79).to_string();
+        assert_eq!(s.trim_end(), " VEX :: LVL 2 :: ¤ 320", "{s:?}");
+        assert_eq!(s.chars().count(), 79);
+        let d = status_line(
+            &Status {
                 dev: true,
-                ..base()
+                ..status()
             },
-            100,
+            79,
         )
         .to_string();
+        assert!(d.starts_with("  DEV  "), "{d:?}");
         assert!(
-            dev.contains(" DEV ") && dev.contains("seed 7 · 30 fps · 22:41"),
-            "{dev:?}"
+            d.contains("VEX :: LVL 2 :: ¤ 320 :: seed 7 :: 30 fps"),
+            "{d:?}"
         );
-        let no_fps = header(
-            &Header {
+        let no_fps = status_line(
+            &Status {
                 dev: true,
                 fps: None,
-                ..base()
+                ..status()
             },
-            100,
+            79,
         )
         .to_string();
         assert!(
-            no_fps.contains("seed 7 · 22:41") && !no_fps.contains("fps"),
+            no_fps.contains("seed 7") && !no_fps.contains("fps"),
             "{no_fps:?}"
         );
     }
 
     #[test]
-    fn header_keeps_the_clock_when_the_location_is_long() {
-        let long = "A".repeat(120);
-        let s = header(
-            &Header {
+    fn status_line_cuts_to_width() {
+        let long = "A".repeat(80);
+        let s = status_line(
+            &Status {
                 dev: true,
-                location: &long,
-                ..base()
+                handle: &long,
+                ..status()
             },
+            59,
+        )
+        .to_string();
+        assert!(s.chars().count() <= 59 && s.contains('…'), "{s:?}");
+    }
+
+    #[test]
+    fn location_line_keeps_the_clock() {
+        let s = location_line("Night Market · Street", (22, 41), 40).to_string();
+        assert_eq!(s.chars().count(), 40, "{s:?}");
+        assert!(
+            s.starts_with(" Night Market · Street") && s.ends_with("☾ 22:41"),
+            "{s:?}"
+        );
+        let long = location_line(&"B".repeat(60), (9, 5), 36).to_string();
+        assert_eq!(long.chars().count(), 36, "{long:?}");
+        assert!(long.ends_with("… ☀ 09:05"), "{long:?}");
+    }
+
+    #[test]
+    fn bar_rows_fill_the_column() {
+        let s = bar_row("HP", 38, 45, GREEN, 79).to_string();
+        assert_eq!(s.chars().count(), 79, "{s:?}");
+        assert!(s.starts_with(" HP      38/45 "), "{s:?}");
+        let cells = 79 - 16;
+        assert_eq!(s.matches('█').count() + s.matches('░').count(), cells);
+        assert_eq!(s.matches('█').count(), bar_cells_for(38, 45, cells));
+        let x = bar_row("XP", 240, 600, AMBER, 59).to_string();
+        assert!(x.starts_with(" XP    240/600 "), "{x:?}");
+        let z = bar_row("FOCUS", 0, 0, CYAN, 59).to_string();
+        assert_eq!(z.matches('█').count(), 0);
+        let c = carry_row(11.6, 16.0, 40).to_string();
+        assert_eq!(c.chars().count(), 40, "{c:?}");
+        assert!(
+            c.starts_with(" CARRY 11.6/16.0 kg ") && c.contains('█'),
+            "{c:?}"
+        );
+        let over = carry_row(20.0, 16.0, 40);
+        assert!(over.spans.iter().any(|sp| sp.style.fg == Some(MAGENTA)));
+        assert_eq!(bar_cells_for(1, 0, 10), 0);
+        assert_eq!(bar_cells_for(99, 45, 10), 10);
+    }
+
+    #[test]
+    fn tab_rows_fit_the_narrow_column() {
+        let mut flags = Sidebar::default();
+        flags.set(Section::Quest, false);
+        let (dev, main) = tab_rows(&flags, true);
+        let m = main.to_string();
+        assert_eq!(
+            m.trim_end(),
+            " [F1]Here* [F2]Quest [F3]Map* [F4]Log*",
+            "{m:?}"
+        );
+        assert_eq!(m.chars().count(), 38);
+        assert_eq!(dev.to_string().trim_end(), " [F5]Inspect [F6]Legend");
+        let (dev, _) = tab_rows(&flags, false);
+        assert_eq!(dev.to_string().trim(), "");
+    }
+
+    #[test]
+    fn footer_rows_have_three_zones_and_slots() {
+        let status = vec![Span::raw("on foot · Street")];
+        let s = footer_status(status, "3 items · terminal", WALK_VERBS, 120).to_string();
+        assert_eq!(s.chars().count(), 120, "{s:?}");
+        assert!(s.starts_with(" STATUS: on foot · Street"), "{s:?}");
+        let chars: Vec<char> = s.chars().collect();
+        assert_eq!(chars[48..54].iter().collect::<String>(), "HERE: ", "{s:?}");
+        assert!(
+            s.trim_end()
+                .ends_with("[space]act [enter]jack [v]iew [m]sgs [?]keys"),
+            "{s:?}"
+        );
+        let narrow = footer_status(
+            vec![Span::raw("x".repeat(60))],
+            &"y".repeat(60),
+            EXPLORE_VERBS,
             100,
         )
         .to_string();
-        assert_eq!(s.chars().count(), 100, "{s:?}");
-        assert!(s.trim_end().ends_with("22:41") && s.contains('…'), "{s:?}");
-        assert!(s.contains("seed 7"), "{s:?}");
-    }
-
-    #[test]
-    fn bar_cells_round_and_handle_zero() {
-        assert_eq!(bar_cells(0, 45), 0);
-        assert_eq!(bar_cells(45, 45), 12);
-        assert_eq!(bar_cells(22, 45), 6);
-        assert_eq!(bar_cells(1, 0), 0);
-        assert_eq!(bar_cells(99, 45), 12);
-    }
-
-    #[test]
-    fn hp_colour_steps_at_half_and_quarter() {
-        assert_eq!(hp_colour(23, 45, 0), GREEN);
-        assert_eq!(hp_colour(22, 45, 0), AMBER);
-        assert_eq!(hp_colour(12, 45, 0), AMBER);
-        assert!(matches!(hp_colour(11, 45, 0), Color::Rgb(r, 0, _) if r > 100));
-        assert!(matches!(hp_colour(0, 0, 0), Color::Rgb(_, 0, _)));
-        let s = bars(&Bars {
-            hp: (38, 45),
-            focus: (12, 30),
-            xp: (240, 600),
-            tick: 0,
-        })
-        .to_string();
+        assert_eq!(narrow.chars().count(), 100, "{narrow:?}");
         assert!(
-            s.contains("HP ██████████░░ 38/45")
-                && s.contains("FOCUS █████░░░░░░░ 12/30")
-                && s.contains("XP █████░░░░░░░ 240/600"),
-            "{s:?}"
+            narrow.trim_end().ends_with("[?]keys") && narrow.matches('…').count() == 2,
+            "{narrow:?}"
         );
-    }
-
-    #[test]
-    fn action_bar_shows_slots_and_hints() {
         let slots = vec![
             Slot {
                 name: "Netscan".into(),
@@ -364,64 +574,39 @@ mod tests {
                 state: SlotState::Cooling(12),
             },
         ];
-        let s = action_bar(&BarMode::Walk(&slots), false, 100).to_string();
+        let a = footer_abilities(&slots, true, 120).to_string();
         assert!(
-            s.contains("1 netscan ●   2 ping 12s   3 ──   4 ──   5 ──"),
-            "{s:?}"
+            a.starts_with(" ABILITIES: 1 netscan ●   2 ping 12s   3 ──   4 ──   5 ──"),
+            "{a:?}"
         );
+        assert!(a.trim_end().ends_with("[:]console [tab]deck"), "{a:?}");
+        let a = footer_abilities(&slots, false, 100).to_string();
         assert!(
-            s.trim_end().ends_with("tab deck   ? keys") && !s.contains("console"),
-            "{s:?}"
+            a.trim_end().ends_with("[tab]deck") && !a.contains("console"),
+            "{a:?}"
         );
-        assert_eq!(s.chars().count(), 100);
-        let dev = action_bar(&BarMode::Walk(&slots), true, 100).to_string();
-        assert!(
-            dev.trim_end().ends_with(": console   tab deck   ? keys"),
-            "{dev:?}"
-        );
-        let ex = action_bar(&BarMode::Explore, false, 100).to_string();
-        assert!(ex.starts_with(" w walk   r regen   g configure"), "{ex:?}");
     }
 
     #[test]
-    fn action_bar_cuts_long_names() {
-        let slots = vec![Slot {
-            name: "Electromagnetic pulse".into(),
-            state: SlotState::Ready,
-        }];
-        let s = action_bar(&BarMode::Walk(&slots), false, 100).to_string();
-        assert!(s.contains("1 electroma… ●"), "{s:?}");
-        assert_eq!(s.chars().count(), 100);
-        assert_eq!(cut("abc", 3), "abc");
-        assert_eq!(cut("abcd", 3), "ab…");
-        assert_eq!(cut("abcd", 0), "");
+    fn rule_row_crosses_at_the_column() {
+        let r = rule_row(100, 63, '┳').to_string();
+        assert_eq!(r.chars().count(), 100);
+        assert_eq!(r.chars().nth(63), Some('┳'));
+        assert_eq!(r.matches('━').count(), 99);
     }
 
     #[test]
     fn location_names_building_district_and_net() {
         let c = city();
         let b = c.buildings.iter().find(|b| b.name.is_some()).unwrap();
-        let s = location(&c, StratumKind::Street, b.footprint.center());
-        assert_eq!(s, format!("{} · Street", b.name.clone().unwrap()));
-        let d = &c.districts[0];
-        let street = (0..c.size.h)
-            .flat_map(|y| (0..c.size.w).map(move |x| Pos::new(x as i32, y as i32)))
-            .find(|p| {
-                c.tile(StratumKind::Street, *p)
-                    .is_some_and(|t| t.building.is_none() && t.district == Some(d.id))
-            })
-            .unwrap();
         assert_eq!(
-            location(&c, StratumKind::Street, street),
-            format!("{} · Street", d.name)
+            location(&c, StratumKind::Street, b.footprint.center()),
+            format!("{} · Street", b.name.clone().unwrap())
         );
         assert_eq!(
             location(&c, StratumKind::Street, Pos::new(-5, -5)),
             "the outskirts · Street"
         );
-        let n = &c.net.nodes[0];
-        let s = location(&c, StratumKind::Net, n.cyber);
-        assert!(s.ends_with(" · Net") && s.len() > 6, "{s}");
         assert_eq!(
             location(&c, StratumKind::Net, Pos::new(-5, -5)),
             format!("{} · Net", c.name)

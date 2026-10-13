@@ -611,20 +611,96 @@ mod tests {
     }
 
     #[test]
-    fn quest_picks_the_first_open_objective() {
+    fn quest_shows_title_objective_and_pips() {
         let st = state();
-        let (title, lines) = quest_lines(&st.character, &st.content);
-        assert_eq!(title, "THE DROP");
-        assert_eq!(lines[0].to_string(), "Cross the corp core without a scan");
+        let lines: Vec<String> = quest_lines(&st.character, &st.content)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        assert_eq!(
+            lines,
+            vec![
+                " THE DROP · Mama Sol",
+                " » Cross the corp core without a scan",
+                " ▰▱▱ 1/3"
+            ]
+        );
         let mut ch = st.character.clone();
         for q in &mut ch.quests {
             q.done.fill(true);
         }
-        let (title, lines) = quest_lines(&ch, &st.content);
-        assert_eq!(
-            (title.as_str(), lines[0].to_string().as_str()),
-            ("QUEST", "no active quest")
+        let lines: Vec<String> = quest_lines(&ch, &st.content)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        assert_eq!(lines, vec![" no active quest"]);
+    }
+
+    #[test]
+    fn panes_are_separated_by_light_rules_and_have_no_titles() {
+        let mut st = state();
+        st.dev = false;
+        st.tick += 200;
+        let (k, pos) = {
+            let p = st.player.as_ref().unwrap();
+            (p.stratum, p.pos)
+        };
+        let text = draw_to(&view(&st, pos, k), &st.sidebar, width(120), 40);
+        assert!(
+            !text.contains("HERE")
+                && !text.contains("LOG")
+                && !text.contains("VEX")
+                && !text.contains('╭'),
+            "{text}"
         );
+        assert_eq!(text.matches(&"─".repeat(40)).count(), 3, "{text}");
+        assert!(text.contains("· Street"), "coordinate row: {text}");
+        assert_eq!(width(100), 40);
+        assert_eq!(width(120), 40);
+    }
+
+    #[test]
+    fn first_pane_has_no_separator() {
+        let mut st = state();
+        st.dev = false;
+        st.tick = 90 * 6;
+        st.say("hello");
+        st.tick += 200;
+        let (k, pos) = {
+            let p = st.player.as_ref().unwrap();
+            (p.stratum, p.pos)
+        };
+        let mut flags = Sidebar::default();
+        for s in [Section::Here, Section::Quest, Section::Map] {
+            flags.set(s, false);
+        }
+        let text = draw_to(&view(&st, pos, k), &flags, width(100), 10);
+        let first = text.lines().next().unwrap();
+        assert!(first.starts_with(" 22:06 hello"), "{text}");
+        assert!(!text.contains('─'), "{text}");
+    }
+
+    #[test]
+    fn log_lines_carry_stamps_and_hang_wraps() {
+        let mut st = state();
+        st.dev = false;
+        st.tick = 90 * 3;
+        st.say("x".repeat(50));
+        st.tick += 200;
+        let (k, pos) = {
+            let p = st.player.as_ref().unwrap();
+            (p.stratum, p.pos)
+        };
+        let mut flags = Sidebar::default();
+        for s in [Section::Here, Section::Quest, Section::Map] {
+            flags.set(s, false);
+        }
+        let text = draw_to(&view(&st, pos, k), &flags, width(100), 10);
+        let rows: Vec<&str> = text.lines().filter(|l| l.contains('x')).collect();
+        assert!(rows[0].starts_with(" 22:03 x"), "{text}");
+        assert!(rows[1].starts_with("       x"), "{text}");
+        assert_eq!(text.matches('x').count(), 50);
+        assert_eq!(here_summary(&view(&st, pos, k)).is_empty(), false);
     }
 
     #[test]
@@ -640,14 +716,14 @@ mod tests {
             (p.stratum, p.pos)
         };
         for h in [10u16, 25, 40] {
-            let text = draw_to(&view(&st, pos, k), &st.sidebar, WIDTH, h);
+            let text = draw_to(&view(&st, pos, k), &st.sidebar, width(100), h);
             assert!(
                 text.contains("▣ here") && text.contains("▣ inspect"),
                 "{text}"
             );
             assert_eq!(text.lines().count(), h as usize);
         }
-        let text = draw_to(&view(&st, pos, k), &st.sidebar, WIDTH, 60);
+        let text = draw_to(&view(&st, pos, k), &st.sidebar, width(100), 60);
         for needle in [
             "── HERE",
             "── THE DROP",
@@ -680,12 +756,12 @@ mod tests {
         for s in [Section::Here, Section::Quest, Section::Map] {
             flags.set(s, false);
         }
-        // 1 list row + 1 rule + 4 rows: the 70-cell entry needs 3 rows, "short" 1.
-        let text = draw_to(&view(&st, pos, k), &flags, WIDTH, 8);
+        // LOG is the only pane: 6 rows; the 70-cell entry wraps to 3 rows at 33 cells, "short" 1.
+        let text = draw_to(&view(&st, pos, k), &flags, width(100), 6);
         assert_eq!(text.matches('x').count(), 70, "{text}");
         assert!(text.contains("short"), "{text}");
-        // Three rows: the long entry does not fit whole, only "short" shows.
-        let text = draw_to(&view(&st, pos, k), &flags, WIDTH, 7);
+        // Four rows: the long entry does not fit whole, only "short" shows.
+        let text = draw_to(&view(&st, pos, k), &flags, width(100), 4);
         assert_eq!(text.matches('x').count(), 0, "{text}");
         assert!(text.contains("short"), "{text}");
     }

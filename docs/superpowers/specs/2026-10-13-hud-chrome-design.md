@@ -29,8 +29,8 @@ At every size from 100 by 30 up, both modes:
  ABILITIES: 1 netscan ●   2 ping 12s   3 ──   4 ──   5 ──                          [tab]deck [:]console
 ```
 
-Columns: the right column is `R` cells wide, 40 when the terminal is at least
-120 wide, else 36. One cell of light vertical rule `│` separates it from the
+Columns: the right column is `R` = 40 cells wide at every terminal width (the
+main tab row needs 38 cells). One cell of light vertical rule `│` separates it from the
 map, which takes the rest (`L = W - R - 1`). The vertical rule runs from the
 first row to the last.
 
@@ -147,8 +147,8 @@ bars, the old action bar hints.
 
 ## Edges
 
-- At 100 by 30: `R` is 36, bars are 47 cells, the main tab row fits with one
-  cell to spare, and the map keeps 22 rows.
+- At 100 by 30: `R` is 40, the map is 59 wide, bars are 43 cells, the main
+  tab row fits with one cell to spare, and the map keeps 22 rows.
 - Any text that would cross a zone or column edge is cut with `…`.
 - The CARRY bar with a zero capacity draws empty.
 - A quest with zero objectives draws `no active quest`.
@@ -160,7 +160,7 @@ bars, the old action bar hints.
   `bar_row(label, cur, max, width, colour)`, `carry_row`, `tab_rows`,
   `footer_status`, `footer_abilities`, `rule_row(width, cross_at,
   heavy)`; `clock_glyph(hour)`.
-- `ui/sidebar.rs`: `width(total)`, panes without titles, separators, quest
+- `ui/sidebar.rs`: `width(total)` (40), panes without titles, separators, quest
   pips, the map coordinate row, stamped log lines.
 - `app.rs`: `clock_at(tick) -> (u8, u8)` shared by the header and the stamps.
 - `screens/explore.rs`: the new layout, the F-keys, the vertical rule.

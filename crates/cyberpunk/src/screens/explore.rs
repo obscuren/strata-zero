@@ -731,30 +731,8 @@ impl Screen for MapScreen {
             }
         }
 
-        let location = hud::location(city, self.stratum, cursor);
-        let header = hud::header(
-            &hud::Header {
-                dev: st.dev,
-                level: st.character.level,
-                credits: st.character.credits,
-                location: &location,
-                seed: city.seed,
-                fps: st.show_fps.then_some(self.fps.fps),
-                clock: st.clock(),
-            },
-            r.header.width,
-        );
-        f.render_widget(Paragraph::new(header), r.header);
-        let bars = hud::bars(&hud::Bars {
-            hp: (st.character.hp, st.character.hp_max(&st.content)),
-            focus: (st.character.focus, st.character.focus_max),
-            xp: (
-                st.character.xp,
-                game::Character::xp_to_next(st.character.level),
-            ),
-            tick: st.tick,
-        });
-        f.render_widget(Paragraph::new(bars), r.bars);
+        // Rewired to the HUD chrome rows in the next task.
+        let _ = (r.header, r.bars);
         let log_drawn = sidebar::draw(
             &sidebar::SidebarView {
                 city,
@@ -779,10 +757,7 @@ impl Screen for MapScreen {
             f.buffer_mut(),
         );
         let slots = Self::slots(st);
-        let bar = match self.mode {
-            Mode::Walk => hud::action_bar(&hud::BarMode::Walk(&slots), st.dev, r.action.width),
-            Mode::Explore => hud::action_bar(&hud::BarMode::Explore, st.dev, r.action.width),
-        };
+        let bar = hud::footer_abilities(&slots, st.dev, r.action.width);
         let recent = st.log.recent(st.tick);
         let bottom = match &self.console {
             Some(con) => console::line(con, st.tick, recent),
