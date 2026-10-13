@@ -36,7 +36,21 @@ pub struct AppState {
     pub show_fps: bool,
     pub content: game::Content,
     pub character: game::Character,
-    status: Option<(String, u64)>,
+    /// Items lying in the city.
+    pub ground: game::Ground,
+    /// A ping in flight: lights terminals and stairs around it until `until`.
+    pub ping: Option<Ping>,
+    /// (message, expiry tick, is a warning)
+    status: Option<(String, u64, bool)>,
+}
+
+/// A handshake burst from the `ping` ability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ping {
+    pub stratum: citygen::StratumKind,
+    pub pos: citygen::Pos,
+    pub radius: i32,
+    pub until: u64,
 }
 
 impl Default for AppState {
@@ -60,20 +74,31 @@ impl AppState {
             show_fps: true,
             content,
             character,
+            ground: game::Ground::default(),
+            ping: None,
             status: None,
         }
     }
 
     /// Shows a one-line message for `ttl` ticks.
     pub fn set_status(&mut self, msg: impl Into<String>, ttl: u64) {
-        self.status = Some((msg.into(), self.tick + ttl));
+        self.status = Some((msg.into(), self.tick + ttl, false));
+    }
+
+    /// Shows a one-line refusal for `ttl` ticks; drawn in the warning colour.
+    pub fn set_warning(&mut self, msg: impl Into<String>, ttl: u64) {
+        self.status = Some((msg.into(), self.tick + ttl, true));
     }
 
     pub fn status_text(&self) -> Option<&str> {
         match &self.status {
-            Some((msg, until)) if *until > self.tick => Some(msg.as_str()),
+            Some((msg, until, _)) if *until > self.tick => Some(msg.as_str()),
             _ => None,
         }
+    }
+
+    pub fn status_is_warning(&self) -> bool {
+        matches!(&self.status, Some((_, until, true)) if *until > self.tick)
     }
 }
 

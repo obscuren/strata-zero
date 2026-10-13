@@ -63,7 +63,7 @@ impl Player {
                 .map(|_| Grid::filled(city.size, Visibility::Unseen))
                 .collect(),
         };
-        player.update_fov(city);
+        player.update_fov(city, 0);
         player
     }
 
@@ -80,7 +80,7 @@ impl Player {
     }
 
     /// Jacks in at a Jack connector on this tile or an 8-neighbour of it, leaving the body here.
-    pub fn jack_in(&mut self, city: &City) -> Result<Pos, &'static str> {
+    pub fn jack_in(&mut self, city: &City, sight_bonus: i32) -> Result<Pos, &'static str> {
         if self.jacked_in() {
             return Err("already jacked in");
         }
@@ -100,16 +100,16 @@ impl Player {
         self.body = Some((k, here));
         self.stratum = StratumKind::Net;
         self.pos = port;
-        self.update_fov(city);
+        self.update_fov(city, sight_bonus);
         Ok(port)
     }
 
     /// Returns to the body.
-    pub fn jack_out(&mut self, city: &City) -> Result<(), &'static str> {
+    pub fn jack_out(&mut self, city: &City, sight_bonus: i32) -> Result<(), &'static str> {
         let (k, p) = self.body.take().ok_or("not jacked in")?;
         self.stratum = k;
         self.pos = p;
-        self.update_fov(city);
+        self.update_fov(city, sight_bonus);
         Ok(())
     }
 
@@ -139,8 +139,9 @@ impl Player {
     }
 
     /// Recomputes what the player sees on the current stratum, demoting old sight to memory.
-    pub fn update_fov(&mut self, city: &City) {
-        let radius = self.radius();
+    /// `sight_bonus` is the character's equipment bonus to the stratum radius.
+    pub fn update_fov(&mut self, city: &City, sight_bonus: i32) {
+        let radius = (self.radius() + sight_bonus).max(1);
         let Some(st) = city.stratum(self.stratum) else {
             return;
         };
@@ -160,6 +161,21 @@ impl Player {
                 grid.set(p, Visibility::Visible);
             },
         );
+    }
+
+    /// Paints every tile within `radius` on the current stratum into memory, walls or not;
+    /// tiles in sight stay visible.
+    pub fn reveal(&mut self, city: &City, radius: i32) {
+        let size = city.size;
+        let grid = &mut self.memory[self.stratum.index()];
+        for y in (self.pos.y - radius)..=(self.pos.y + radius) {
+            for x in (self.pos.x - radius)..=(self.pos.x + radius) {
+                let p = Pos::new(x, y);
+                if size.contains(p) && grid.get(p) == Some(&Visibility::Unseen) {
+                    grid.set(p, Visibility::Remembered);
+                }
+            }
+        }
     }
 
     /// Visibility grid for the current stratum.
@@ -195,7 +211,7 @@ mod tests {
         assert_eq!(p.use_connector(&c, false), Some(StratumKind::Undercity));
         assert_eq!(p.use_connector(&c, false), None);
         assert_eq!(p.use_connector(&c, true), Some(StratumKind::Street));
-        p.update_fov(&c);
+        p.update_fov(&c, 0);
         assert_eq!(p.vis()[p.pos], Visibility::Visible);
         assert!(p.vis().count(|v| *v == Visibility::Visible) > 10);
         let moved = Dir::ALL.iter().any(|d| {
@@ -210,7 +226,7 @@ mod tests {
             }
         }
         assert_ne!(p.pos, before);
-        p.update_fov(&c);
+        p.update_fov(&c, 0);
         assert!(
             p.vis().count(|v| *v == Visibility::Remembered)
                 <= p.vis().count(|v| *v != Visibility::Unseen)
@@ -246,22 +262,22 @@ mod tests {
         p.pos = stand;
         p.stratum = StratumKind::Street;
         assert!(!p.jacked_in());
-        assert_eq!(p.jack_in(&c), Ok(jack.pos));
+        assert_eq!(p.jack_in(&c, 0), Ok(jack.pos));
         assert!(p.jacked_in());
         assert_eq!(p.stratum, StratumKind::Net);
         assert_eq!(p.pos, jack.pos);
         assert_eq!(p.body, Some((StratumKind::Street, stand)));
         assert_eq!(p.radius(), RADIUS_NET);
         assert!(p.vis().count(|v| *v == Visibility::Visible) > 10);
-        assert_eq!(p.jack_in(&c), Err("already jacked in"));
+        assert_eq!(p.jack_in(&c, 0), Err("already jacked in"));
         assert_eq!(p.use_connector(&c, false), None, "jacks are not stairs");
         assert_eq!(p.use_connector(&c, true), None);
-        assert_eq!(p.jack_out(&c), Ok(()));
+        assert_eq!(p.jack_out(&c, 0), Ok(()));
         assert_eq!(
             (p.stratum, p.pos, p.body),
             (StratumKind::Street, stand, None)
         );
-        assert_eq!(p.jack_out(&c), Err("not jacked in"));
+        assert_eq!(p.jack_out(&c, 0), Err("not jacked in"));
         // Far from any terminal.
         let far = c
             .stratum(StratumKind::Street)
@@ -278,6 +294,44 @@ mod tests {
             .map(|(q, _)| q)
             .unwrap();
         p.pos = far;
-        assert_eq!(p.jack_in(&c), Err("no terminal within reach"));
+        assert_eq!(p.jack_in(&c, 0), Err("no terminal within reach"));
+    }
+
+    fn city() -> City {
+        Generator::run(GenParams {
+            seed: 6,
+            size: SizePreset::Custom { w: 120, h: 60 },
+            districts: 5,
+            ..Default::default()
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn sight_bonus_widens_the_view() {
+        let c = city();
+        let mut p = Player::spawn(&c, 1);
+        p.update_fov(&c, 0);
+        let base = p.vis().count(|v| *v == Visibility::Visible);
+        p.update_fov(&c, 10);
+        let wide = p.vis().count(|v| *v == Visibility::Visible);
+        assert!(wide > base, "{wide} vs {base}");
+    }
+
+    #[test]
+    fn reveal_marks_memory_without_sight() {
+        let c = city();
+        let mut p = Player::spawn(&c, 1);
+        let far = (0..60)
+            .flat_map(|y| (0..120).map(move |x| Pos::new(x, y)))
+            .find(|q| q.chebyshev(p.pos) > 30 && p.vis()[*q] == Visibility::Unseen)
+            .expect("an unseen far tile");
+        p.reveal(&c, 6);
+        for q in citygen::Rect::new(p.pos.x - 6, p.pos.y - 6, 13, 13).iter() {
+            if c.size.contains(q) {
+                assert_ne!(p.vis()[q], Visibility::Unseen, "{q:?}");
+            }
+        }
+        assert_eq!(p.vis()[far], Visibility::Unseen);
     }
 }

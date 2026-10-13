@@ -172,9 +172,12 @@ impl MapScreen {
     }
 
     fn enter_walk(&mut self, st: &mut AppState) {
+        let bonus = st.character.sight_bonus(&st.content);
         let Some(city) = st.city.as_ref() else { return };
         if st.player.is_none() {
-            st.player = Some(Player::spawn(city, hash64(city.seed, st.tick)));
+            let mut p = Player::spawn(city, hash64(city.seed, st.tick));
+            p.update_fov(city, bonus);
+            st.player = Some(p);
         }
         if let Some(p) = &st.player {
             self.stratum = p.stratum;
@@ -277,6 +280,7 @@ impl MapScreen {
 
     fn handle_walk(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
         let dev = st.dev;
+        let bonus = st.character.sight_bonus(&st.content);
         let city = st.city.as_ref()?;
         let player = st.player.as_mut()?;
         match k.code {
@@ -286,7 +290,7 @@ impl MapScreen {
             }
             KeyCode::Enter => {
                 if player.jacked_in() {
-                    match player.jack_out(city) {
+                    match player.jack_out(city, bonus) {
                         Ok(()) => {
                             self.stratum = player.stratum;
                             self.cam.snap(player.pos);
@@ -296,7 +300,7 @@ impl MapScreen {
                         Err(e) => st.set_status(e, 60),
                     }
                 } else {
-                    match player.jack_in(city) {
+                    match player.jack_in(city, bonus) {
                         Ok(port) => {
                             self.stratum = StratumKind::Net;
                             self.cam.snap(port);
@@ -313,7 +317,7 @@ impl MapScreen {
                 match player.use_connector(city, up) {
                     Some(dest) => {
                         self.stratum = dest;
-                        player.update_fov(city);
+                        player.update_fov(city, bonus);
                         st.set_status(format!("now on {}", dest.label()), 60);
                     }
                     None => st.set_status(
@@ -326,11 +330,11 @@ impl MapScreen {
                     ),
                 }
             }
-            KeyCode::Char('.') => player.update_fov(city),
+            KeyCode::Char('.') => player.update_fov(city, bonus),
             code => {
                 let dir = dir_for(code)?;
                 if player.try_move(city, dir) {
-                    player.update_fov(city);
+                    player.update_fov(city, bonus);
                 }
             }
         }
@@ -561,7 +565,7 @@ impl Screen for MapScreen {
                 self.stratum,
                 st.show_fps.then_some(self.fps.fps),
                 &hints,
-                st.status_text(),
+                st.status_text().map(|s| (s, st.status_is_warning())),
                 st.dev,
             )),
             status,

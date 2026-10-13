@@ -1,5 +1,6 @@
 //! `cyberpunk`: a terminal roguelike in a multi-level cyberpunk city.
 
+mod actions;
 mod anim;
 mod app;
 mod cli;

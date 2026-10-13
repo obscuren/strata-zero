@@ -151,7 +151,7 @@ pub fn status_bar(
     stratum: StratumKind,
     fps: Option<f32>,
     hints: &str,
-    status: Option<&str>,
+    status: Option<(&str, bool)>,
     dev: bool,
 ) -> Line<'static> {
     let mut spans = Vec::new();
@@ -185,10 +185,14 @@ pub fn status_bar(
         ));
     }
     match status {
-        Some(msg) => spans.push(Span::styled(
+        Some((msg, warn)) => spans.push(Span::styled(
             format!("· {msg}"),
             Style::default()
-                .fg(Color::Rgb(255, 200, 80))
+                .fg(if warn {
+                    Color::Rgb(255, 0, 200)
+                } else {
+                    Color::Rgb(255, 200, 80)
+                })
                 .add_modifier(Modifier::BOLD),
         )),
         None => spans.push(Span::styled(format!("· {hints}"), Style::default().fg(DIM))),
@@ -239,7 +243,7 @@ mod tests {
             StratumKind::Street,
             Some(30.0),
             "q quit",
-            Some("saved x"),
+            Some(("saved x", false)),
             false,
         );
         assert!(bar.to_string().contains("saved x") && !bar.to_string().contains("q quit"));
