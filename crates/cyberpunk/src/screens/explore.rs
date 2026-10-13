@@ -18,7 +18,7 @@ use crate::screens::messages::Messages;
 use crate::screens::pause::Pause;
 use crate::screens::popup::{Choice, Pick, Popup, WorldAct};
 use crate::screens::title::Title;
-use crate::ui::chrome::put;
+use crate::ui::chrome::{CYAN, MAGENTA, PANEL_BG, TEXT, put};
 use crate::ui::console::{Console, ConsoleEvent};
 use crate::ui::hud;
 use crate::ui::panel::inspector_lines;
@@ -28,8 +28,9 @@ use citygen::rng::hash64;
 use citygen::{Dir, Pos, Rect as TileRect, StratumKind};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Span;
 use ratatui::widgets::{Paragraph, Widget};
 use std::cell::Cell;
 use std::time::Instant;
@@ -121,38 +122,56 @@ fn dir_for(code: KeyCode) -> Option<Dir> {
     })
 }
 
-/// The frame: header and bars on top, the map beside the sidebar, the action bar below.
+/// The grid: a four-row band, a heavy rule, the map beside the right column, a heavy
+/// rule, then the two footer rows. One light vertical rule separates the columns.
 struct Regions {
-    header: Rect,
-    bars: Rect,
+    band_l: [Rect; 4],
+    band_r: [Rect; 4],
+    top_rule: Rect,
     map: Rect,
     side: Rect,
-    action: Rect,
+    vrule_x: u16,
+    bottom_rule: Rect,
+    status: Rect,
+    abilities: Rect,
 }
 
 fn layout(area: Rect) -> Regions {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(5),
-            Constraint::Length(1),
-        ])
-        .split(area);
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Min(20),
-            Constraint::Length(sidebar::width(area.width)),
-        ])
-        .split(rows[2]);
+    let r = sidebar::width(area.width);
+    let l = area.width.saturating_sub(r + 1);
+    let x_rule = area.x + l;
+    let row = |y: u16, x: u16, w: u16| Rect::new(x, area.y + y, w, 1);
+    let main_y = area.y + 5;
+    let main_h = area.height.saturating_sub(8);
     Regions {
-        header: rows[0],
-        bars: rows[1],
-        map: cols[0],
-        side: cols[1],
-        action: rows[3],
+        band_l: [
+            row(0, area.x, l),
+            row(1, area.x, l),
+            row(2, area.x, l),
+            row(3, area.x, l),
+        ],
+        band_r: [
+            row(0, x_rule + 1, r),
+            row(1, x_rule + 1, r),
+            row(2, x_rule + 1, r),
+            row(3, x_rule + 1, r),
+        ],
+        top_rule: row(4, area.x, area.width),
+        map: Rect::new(area.x, main_y, l, main_h),
+        side: Rect::new(x_rule + 1, main_y, r, main_h),
+        vrule_x: x_rule,
+        bottom_rule: row(area.height.saturating_sub(3), area.x, area.width),
+        status: row(area.height.saturating_sub(2), area.x, area.width),
+        abilities: row(area.height.saturating_sub(1), area.x, area.width),
+    }
+}
+
+/// Paints the panel background under a band or column.
+fn fill(buf: &mut ratatui::buffer::Buffer, rect: Rect) {
+    for y in rect.y..rect.bottom() {
+        for x in rect.x..rect.right() {
+            buf[(x, y)].set_bg(PANEL_BG);
+        }
     }
 }
 
@@ -224,7 +243,7 @@ impl MapScreen {
                 let mark = if st.sidebar.is_on(*s) { "▣" } else { "▢" };
                 Choice::new(
                     (b'a' + i as u8) as char,
-                    format!("{mark} {}", s.label()),
+                    format!("{mark} {}  F{}", s.label(), i + 1),
                     Pick::View(*s),
                 )
             })
@@ -274,6 +293,12 @@ impl MapScreen {
             }
             KeyCode::Char(':') if st.dev => self.console = Some(Console::default()),
             KeyCode::Char('v') => return Some(self.view_popup(st)),
+            KeyCode::F(n @ 1..=6) => {
+                let section = Section::ALL[n as usize - 1];
+                if st.dev || !section.dev_only() {
+                    st.sidebar.toggle(section);
+                }
+            }
             KeyCode::Char('m') => {
                 return Some(ScreenCmd::Push {
                     to: Box::new(Messages::new(st.tick)),
@@ -734,52 +759,153 @@ impl Screen for MapScreen {
             }
         }
 
-        // Rewired to the HUD chrome rows in the next task.
-        let _ = (r.header, r.bars);
-        let log_drawn = sidebar::draw(
-            &sidebar::SidebarView {
-                city,
-                stratum: self.stratum,
-                focus: cursor,
-                view: TileRect::new(origin.x, origin.y, map.width as i32, map.height as i32),
-                player: st
-                    .player
-                    .as_ref()
-                    .filter(|p| p.stratum == self.stratum)
-                    .map(|p| p.pos),
-                style: &st.style,
-                content: &st.content,
-                character: &st.character,
-                ground: &st.ground,
-                log: &st.log,
-                tick: st.tick,
+        // Panel backgrounds, then the vertical rule on every row but the two rule rows.
+        {
+            let buf = f.buffer_mut();
+            for rect in r.band_l.iter().chain(r.band_r.iter()) {
+                fill(buf, *rect);
+            }
+            fill(buf, r.side);
+            fill(buf, r.status);
+            fill(buf, r.abilities);
+            for y in area.y..r.bottom_rule.y {
+                if y == r.top_rule.y {
+                    continue;
+                }
+                buf[(r.vrule_x, y)]
+                    .set_char('│')
+                    .set_style(hud::RULE_STYLE.bg(PANEL_BG));
+            }
+        }
+        // Top band.
+        let ch = &st.character;
+        let lw = r.band_l[0].width;
+        let rw = r.band_r[0].width;
+        let status = hud::status_line(
+            &hud::Status {
                 dev: st.dev,
+                handle: &ch.handle,
+                level: ch.level,
+                credits: ch.credits,
+                seed: city.seed,
+                fps: st.show_fps.then_some(self.fps.fps),
             },
-            &st.sidebar,
-            r.side,
-            f.buffer_mut(),
+            lw,
+        );
+        f.render_widget(Paragraph::new(status), r.band_l[0]);
+        let hp_max = ch.hp_max(&st.content);
+        let rows = [
+            hud::bar_row(
+                "HP",
+                ch.hp,
+                hp_max,
+                hud::hp_colour(ch.hp, hp_max, st.tick),
+                lw,
+            ),
+            hud::bar_row("FOCUS", ch.focus, ch.focus_max, CYAN, lw),
+            hud::bar_row(
+                "XP",
+                ch.xp,
+                game::Character::xp_to_next(ch.level),
+                hud::DIM_AMBER,
+                lw,
+            ),
+        ];
+        for (i, row) in rows.into_iter().enumerate() {
+            f.render_widget(Paragraph::new(row), r.band_l[i + 1]);
+        }
+        let location = hud::location(city, self.stratum, cursor);
+        f.render_widget(
+            Paragraph::new(hud::location_line(&location, st.clock(), rw)),
+            r.band_r[0],
+        );
+        f.render_widget(
+            Paragraph::new(hud::carry_row(
+                ch.weight(&st.content),
+                ch.carry_cap(&st.content),
+                rw,
+            )),
+            r.band_r[1],
+        );
+        let (dev_tabs, tabs) = hud::tab_rows(&st.sidebar, st.dev);
+        f.render_widget(Paragraph::new(dev_tabs), r.band_r[2]);
+        f.render_widget(Paragraph::new(tabs), r.band_r[3]);
+        let cross = r.vrule_x - area.x;
+        f.render_widget(
+            Paragraph::new(hud::rule_row(area.width, cross, '┳')),
+            r.top_rule,
+        );
+        f.render_widget(
+            Paragraph::new(hud::rule_row(area.width, cross, '┻')),
+            r.bottom_rule,
+        );
+        // Right column.
+        let view = sidebar::SidebarView {
+            city,
+            stratum: self.stratum,
+            focus: cursor,
+            view: TileRect::new(origin.x, origin.y, map.width as i32, map.height as i32),
+            player: st
+                .player
+                .as_ref()
+                .filter(|p| p.stratum == self.stratum)
+                .map(|p| p.pos),
+            style: &st.style,
+            content: &st.content,
+            character: &st.character,
+            ground: &st.ground,
+            log: &st.log,
+            tick: st.tick,
+            dev: st.dev,
+        };
+        let here = sidebar::here_summary(&view);
+        let log_drawn = sidebar::draw(&view, &st.sidebar, r.side, f.buffer_mut());
+        // Footer.
+        let jacked = st.player.as_ref().is_some_and(|p| p.jacked_in());
+        let mut status_spans = match (self.mode, jacked) {
+            (Mode::Walk, true) => vec![
+                Span::styled("⚡", Style::default().fg(CYAN)),
+                Span::styled(" jacked in · Net", Style::default().fg(TEXT)),
+            ],
+            (Mode::Walk, false) => vec![Span::styled(
+                format!("on foot · {}", self.stratum.label()),
+                Style::default().fg(TEXT),
+            )],
+            (Mode::Explore, _) => vec![Span::styled(
+                format!("camera · {}", self.stratum.label()),
+                Style::default().fg(TEXT),
+            )],
+        };
+        if ch.overburdened(&st.content) {
+            status_spans.push(Span::styled(
+                " · overburdened",
+                Style::default().fg(MAGENTA),
+            ));
+        }
+        let verbs = match self.mode {
+            Mode::Walk => hud::WALK_VERBS,
+            Mode::Explore => hud::EXPLORE_VERBS,
+        };
+        f.render_widget(
+            Paragraph::new(hud::footer_status(status_spans, &here, verbs, area.width)),
+            r.status,
         );
         let slots = Self::slots(st);
-        let bar = hud::footer_abilities(&slots, st.dev, r.action.width);
         let recent = st.log.recent(st.tick);
         let bottom = match &self.console {
             Some(con) => console::line(con, st.tick, recent),
-            None => bar,
+            None => hud::footer_abilities(&slots, st.dev, area.width),
         };
-        f.render_widget(Paragraph::new(bottom), r.action);
-        // With the LOG section off or squeezed out, the newest entry shows as a toast.
+        f.render_widget(Paragraph::new(bottom), r.abilities);
+        // With the LOG pane off or squeezed out, the newest entry shows as a toast.
         if !log_drawn
             && self.console.is_none()
             && let Some(e) = recent
         {
             let style = match e.kind {
-                Kind::Warn => Style::default()
-                    .fg(crate::ui::chrome::MAGENTA)
-                    .add_modifier(Modifier::BOLD),
-                Kind::Story => Style::default()
-                    .fg(crate::ui::chrome::CYAN)
-                    .add_modifier(Modifier::BOLD),
-                Kind::Info => Style::default().fg(crate::ui::chrome::CYAN),
+                Kind::Warn => Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD),
+                Kind::Story => Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+                Kind::Info => Style::default().fg(CYAN),
             };
             put(
                 f.buffer_mut(),
@@ -993,7 +1119,7 @@ mod tests {
         let text = buffer_text(t.backend().buffer());
         assert!(text.contains("jacked in"), "{text}");
         assert!(
-            text.contains("· Net") && text.contains("tab deck"),
+            text.contains("· Net") && text.contains("[tab]deck"),
             "{text}"
         );
         // The body shows on the Street while the avatar is in the Net.
@@ -1048,35 +1174,11 @@ mod tests {
         st.tick += 500;
         t.draw(|f| s.draw(&st, f)).unwrap();
         let text = buffer_text(t.backend().buffer());
-        assert!(
-            text.contains("── INSPECT") && text.contains("DEV"),
-            "{text}"
-        );
+        assert!(text.contains("pos ") && text.contains("DEV"), "{text}");
         // Flipping it off again drops straight back into the walk.
         s.update(&mut st, &[key(KeyCode::Char('`'))]);
         assert!(!st.dev);
         assert_eq!(s.mode, Mode::Walk);
-    }
-
-    #[test]
-    fn minimap_lives_in_the_sidebar_map_section() {
-        let mut st = state();
-        let mut s = MapScreen::explore(0);
-        s.update(&mut st, &[]);
-        let text = draw_screen(&s, &st, 120, 40);
-        let panel_x = 120 - sidebar::width(120) as usize;
-        let rows: Vec<(usize, usize)> = text
-            .lines()
-            .enumerate()
-            .filter_map(|(y, l)| l.find("MAP · street").map(|x| (y, x)))
-            .collect();
-        assert_eq!(rows.len(), 1, "no map section: {text}");
-        assert!(
-            rows[0].1 >= panel_x,
-            "map drawn outside the sidebar: {rows:?}"
-        );
-        st.sidebar.set(Section::Map, false);
-        assert!(!draw_screen(&s, &st, 120, 40).contains("MAP · street"));
     }
 
     #[test]
@@ -1157,7 +1259,7 @@ mod tests {
         t.draw(|f| s.draw(&st, f)).unwrap();
         let text = buffer_text(t.backend().buffer());
         assert!(
-            text.contains("tab deck") && !text.contains("c camera"),
+            text.contains("[tab]deck") && !text.contains("c camera"),
             "{text}"
         );
     }
@@ -1192,9 +1294,9 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
         t.draw(|f| s.draw(&st, f)).unwrap();
         let text = buffer_text(t.backend().buffer());
-        let status = text.lines().last().unwrap();
+        let status = text.lines().nth_back(1).unwrap();
         assert!(
-            status.contains("w walk") && status.contains("? keys"),
+            status.contains("[w]alk") && status.contains("[?]keys"),
             "{status:?}"
         );
         s.update(&mut st, &[key(KeyCode::Char('?'))]);
@@ -1526,34 +1628,6 @@ mod tests {
     }
 
     #[test]
-    fn action_bar_keeps_its_hints_in_dev_mode() {
-        let mut st = state();
-        let mut s = MapScreen::explore(0);
-        walking(&mut st, &mut s);
-        st.dev = true;
-        let row = |s: &MapScreen, st: &AppState| {
-            draw_screen(s, st, 120, 40)
-                .lines()
-                .last()
-                .unwrap()
-                .to_string()
-        };
-        let r = row(&s, &st);
-        assert!(
-            r.contains("1 netscan ●")
-                && r.contains(": console")
-                && r.trim_end().ends_with("? keys"),
-            "{r:?}"
-        );
-        s.mode = Mode::Explore;
-        let r = row(&s, &st);
-        assert!(r.contains("w walk") && !r.contains("netscan"), "{r:?}");
-        st.dev = false;
-        s.mode = Mode::Walk;
-        assert!(!row(&s, &st).contains("console"));
-    }
-
-    #[test]
     fn stairs_are_offered_only_where_they_lead() {
         let mut st = state();
         let mut s = MapScreen::explore(0);
@@ -1600,65 +1674,6 @@ mod tests {
     }
 
     #[test]
-    fn frame_draws_header_bars_and_action_bar() {
-        let mut st = state();
-        let mut s = MapScreen::explore(0);
-        s.update(&mut st, &[]);
-        let text = draw_screen(&s, &st, 100, 30);
-        for needle in [
-            "LVL 1",
-            "¤ 320",
-            "HP ",
-            "FOCUS",
-            "XP ",
-            "22:00",
-            "w walk",
-            "tab deck",
-            "▣ here",
-            "── HERE",
-            "── THE DROP",
-            "── LOG",
-            " DEV ",
-            "seed 6",
-        ] {
-            assert!(text.contains(needle), "{needle}: {text}");
-        }
-        walking(&mut st, &mut s);
-        let text = draw_screen(&s, &st, 100, 30);
-        assert!(text.contains("1 netscan ●   2 ──"), "{text}");
-        assert!(text.contains("· Street"), "{text}");
-        st.dev = false;
-        let text = draw_screen(&s, &st, 100, 30);
-        assert!(
-            !text.contains(" DEV ") && !text.contains("seed 6") && !text.contains("inspect"),
-            "{text}"
-        );
-    }
-
-    #[test]
-    fn frame_fits_at_minimum_with_every_section() {
-        let mut st = state();
-        let mut s = MapScreen::explore(0);
-        walking(&mut st, &mut s);
-        for sec in Section::ALL {
-            st.sidebar.set(sec, true);
-        }
-        for _ in 0..30 {
-            st.say("a long line of text that will need wrapping in the log");
-        }
-        st.warn("nothing leads up from here");
-        let text = draw_screen(&s, &st, 100, 30);
-        assert!(
-            text.contains("tab deck   ? keys") && text.contains("── HERE"),
-            "{text}"
-        );
-        // The LOG section lost its rows to the dev sections: the refusal still shows.
-        assert!(text.contains("! nothing leads up from here"), "{text}");
-        let text = draw_screen(&s, &st, 200, 60);
-        assert!(text.contains("── MAP · street"), "{text}");
-    }
-
-    #[test]
     fn number_keys_fire_slots() {
         let mut st = state();
         let mut s = MapScreen::explore(0);
@@ -1697,7 +1712,7 @@ mod tests {
         assert!(!st.sidebar.is_on(Section::Here));
         let text = draw_screen(&s, &st, 100, 30);
         assert!(
-            !text.contains("── HERE") && text.contains("▢ here"),
+            !text.contains("[F1]Here*") && text.contains("[F1]Here "),
             "{text}"
         );
         st.dev = false;
@@ -1706,20 +1721,6 @@ mod tests {
         };
         let text = draw_screen(&*p, &st, 100, 30);
         assert!(!text.contains("inspect"), "{text}");
-    }
-
-    #[test]
-    fn hidden_log_shows_a_toast() {
-        let mut st = state();
-        let mut s = MapScreen::explore(0);
-        walking(&mut st, &mut s);
-        st.sidebar.set(Section::Log, false);
-        st.warn("nothing leads up from here");
-        let text = draw_screen(&s, &st, 100, 30);
-        assert!(text.contains("! nothing leads up from here"), "{text}");
-        st.tick += 100;
-        let text = draw_screen(&s, &st, 100, 30);
-        assert!(!text.contains("nothing leads up"), "{text}");
     }
 
     #[test]
@@ -1749,5 +1750,169 @@ mod tests {
             p.update(&mut st, &[key(KeyCode::Esc)]),
             ScreenCmd::Pop { .. }
         ));
+    }
+
+    #[test]
+    fn grid_draws_bands_rules_and_the_column() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        s.update(&mut st, &[]);
+        for (w, h) in [(100u16, 30u16), (120, 40)] {
+            let text = draw_screen(&s, &st, w, h);
+            let lines: Vec<&str> = text.lines().collect();
+            let l = (w - sidebar::width(w) - 1) as usize;
+            let at = |y: usize, x: usize| lines[y].chars().nth(x);
+            assert!(
+                lines[0].contains(" DEV ") && lines[0].contains("VEX :: LVL 1 :: ¤ 320"),
+                "{text}"
+            );
+            assert!(
+                lines[0].contains("· Street") && lines[0].trim_end().ends_with("22:00"),
+                "{text}"
+            );
+            assert!(
+                lines[1].starts_with(" HP ") && lines[1].contains("CARRY"),
+                "{text}"
+            );
+            assert!(
+                lines[2].starts_with(" FOCUS") && lines[2].contains("[F5]Inspect [F6]Legend"),
+                "{text}"
+            );
+            assert!(
+                lines[3].starts_with(" XP ")
+                    && lines[3].contains("[F1]Here* [F2]Quest* [F3]Map* [F4]Log*"),
+                "{text}"
+            );
+            assert_eq!(at(4, l), Some('┳'), "{text}");
+            assert_eq!(at(h as usize - 3, l), Some('┻'), "{text}");
+            for y in (0..4).chain(5..h as usize - 3) {
+                assert_eq!(at(y, l), Some('│'), "row {y}: {text}");
+            }
+            assert_ne!(
+                at(h as usize - 2, l),
+                Some('│'),
+                "footer spans the width: {text}"
+            );
+            assert!(
+                lines[h as usize - 2].starts_with(" STATUS: camera · Street"),
+                "{text}"
+            );
+            assert!(
+                lines[h as usize - 2].contains("HERE: ")
+                    && lines[h as usize - 2].trim_end().ends_with("[?]keys"),
+                "{text}"
+            );
+            assert!(
+                lines[h as usize - 1].starts_with(" ABILITIES: 1 netscan ●"),
+                "{text}"
+            );
+            assert!(
+                !text.contains('╭') && !text.contains("── HERE") && !text.contains("── LOG"),
+                "{text}"
+            );
+        }
+        walking(&mut st, &mut s);
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(
+            text.contains(" STATUS: on foot · Street") && text.contains("[space]act"),
+            "{text}"
+        );
+        st.dev = false;
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(
+            !text.contains("[F5]") && !text.contains(" DEV ") && !text.contains("[:]console"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn frame_fits_at_minimum_with_every_section() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        for sec in Section::ALL {
+            st.sidebar.set(sec, true);
+        }
+        for _ in 0..30 {
+            st.say("a long line of text that will need wrapping in the log");
+        }
+        st.warn("nothing leads up from here");
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(
+            text.contains("[tab]deck") && text.contains("[F1]Here*"),
+            "{text}"
+        );
+        // The LOG pane lost its rows to the dev panes: the refusal still shows.
+        assert!(text.contains("! nothing leads up from here"), "{text}");
+        let text = draw_screen(&s, &st, 200, 60);
+        assert!(text.contains("· Street"), "{text}");
+    }
+
+    #[test]
+    fn hidden_log_shows_a_toast() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        st.sidebar.set(Section::Log, false);
+        st.warn("nothing leads up from here");
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(text.contains("! nothing leads up from here"), "{text}");
+        st.tick += 100;
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(!text.contains("nothing leads up"), "{text}");
+    }
+
+    #[test]
+    fn f_keys_toggle_sections() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        s.update(&mut st, &[]);
+        s.update(&mut st, &[key(KeyCode::F(1))]);
+        assert!(!st.sidebar.is_on(Section::Here));
+        assert!(draw_screen(&s, &st, 100, 30).contains("[F1]Here [F2]Quest*"));
+        s.update(&mut st, &[key(KeyCode::F(1)), key(KeyCode::F(5))]);
+        assert!(st.sidebar.is_on(Section::Here) && st.sidebar.is_on(Section::Inspect));
+        st.set_dev(false);
+        let before = st.log.len();
+        s.update(&mut st, &[key(KeyCode::F(5)), key(KeyCode::F(7))]);
+        assert!(!st.sidebar.is_on(Section::Inspect));
+        assert_eq!(st.log.len(), before);
+    }
+
+    #[test]
+    fn status_zone_follows_the_jack() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let city = st.city.clone().unwrap();
+        let street = StratumKind::Street;
+        let beside_jack = city
+            .connectors
+            .iter()
+            .filter(|k| {
+                k.kind == citygen::ConnectorKind::Jack
+                    && k.serves.contains(&street)
+                    && city.walkable(StratumKind::Net, k.pos)
+            })
+            .find_map(|k| {
+                std::iter::once(k.pos)
+                    .chain(k.pos.neighbors8())
+                    .find(|q| city.walkable(street, *q))
+            })
+            .unwrap();
+        let p = st.player.as_mut().unwrap();
+        p.pos = beside_jack;
+        p.jack_in(&city, 0).unwrap();
+        s.update(&mut st, &[]);
+        let text = draw_screen(&s, &st, 120, 40);
+        // The bolt is a double-width glyph in the buffer: match around it.
+        assert!(
+            text.contains("STATUS: ⚡") && text.contains("jacked in · Net"),
+            "{text}"
+        );
+        assert!(
+            text.contains("· Net") && text.contains("[enter]jack"),
+            "{text}"
+        );
     }
 }

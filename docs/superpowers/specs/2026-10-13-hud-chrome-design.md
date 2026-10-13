@@ -31,12 +31,12 @@ At every size from 100 by 30 up, both modes:
 
 Columns: the right column is `R` = 40 cells wide at every terminal width (the
 main tab row needs 38 cells). One cell of light vertical rule `│` separates it from the
-map, which takes the rest (`L = W - R - 1`). The vertical rule runs from the
-first row to the last.
+map, which takes the rest (`L = W - R - 1`).
 
 Rows: four band rows, one heavy rule, the main area, one heavy rule, two
 footer rows. Heavy rules are `━` with `┳` and `┻` where the vertical rule
-crosses them. At 100 by 30 the map keeps 22 rows.
+crosses them. The vertical rule runs through the band and the main area; the
+footer rows span the full width. At 100 by 30 the map keeps 22 rows.
 
 Rules are drawn in the chrome rule colour (`chrome::RULE`). The right column
 and both bands sit on the panel background (`chrome::PANEL_BG`); the map

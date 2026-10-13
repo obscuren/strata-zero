@@ -65,23 +65,28 @@ on `RANDOM SEED` / `GENERATE` · `esc` back
 end · `r` reseed after an error · `esc` back
 
 **Explore** `hjkl` / arrows pan the cursor (shift: fast) · `[` `]` stratum down / up (Net on top) ·
-`w` walk · `tab` deck · `v` view: toggle sidebar sections · `m` messages ·
+`w` walk · `tab` deck · `F1`-`F4` panes (here, quest, map, log; `F5` `F6` inspect and legend in dev mode) · `v` the same as a popup · `m` messages ·
 `d` digital overlay · `s` save · `r` regenerate · `g` configure · `:` dev console (dev mode) · `?` keys · `esc` pause
 
 **Walk** `hjkl` `yubn` / arrows move · `<` `>` take stairs, lift, ladder or
 manhole · `space` interact: take what lies here, jack in at an adjacent terminal
 or out again, take the stairs, look · `1`-`5` fire the ability in that slot ·
 `a` the full ability list · `enter` jack shortcut · `.` wait · `tab` deck ·
-`v` view · `m` messages · `c` back to the free camera (dev mode) · `:` dev
+`F1`-`F4` panes · `v` view popup · `m` messages · `d` digital overlay · `s` save ·
+`?` keys · `c` back to the free camera (dev mode) · `:` dev
 console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `clear`,
 `help`, with Tab completion and history) · `esc` pause
 
-The play HUD frames the map. The header shows level, credits, where you are and
-the clock; the bars show HP, focus and experience; the sidebar on the right
-holds sections you toggle with `v` (here, quest, map, log; inspect and legend in
-dev mode); the action bar lists your active abilities in numbered slots. Every
-result and refusal lands in the log, and `m` shows the whole history. With the
-log section hidden the newest line shows briefly over the map instead.
+The play HUD frames the map on one grid. The top band carries the handle,
+level, credits and dev readouts, then HP, FOCUS and XP bars that run the width
+of the map column; on the right, where you are and the clock, the CARRY bar and
+the pane tabs. The right column holds the panes you toggle with `F1`-`F4` (here,
+quest with its objective pips, the minimap with coordinates, the stamped log;
+`F5` `F6` inspect and legend in dev mode), separated by thin rules. The footer
+shows STATUS (on foot, jacked in, camera; overburdened in magenta), HERE (a
+summary of the tile) and the verbs, then the ABILITIES row with numbered slots.
+Every result and refusal lands in the log, and `m` shows the whole history. With
+the log pane hidden the newest line shows briefly over the map instead.
 
 Items lie where they are dropped: a pile shows its kind's icon in amber (`≡`
 when mixed), dimmed once out of sight, and the HERE section lists what is on the

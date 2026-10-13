@@ -759,7 +759,7 @@ mod tests {
         assert!(rows[0].starts_with(" 22:03 x"), "{text}");
         assert!(rows[1].starts_with("       x"), "{text}");
         assert_eq!(text.matches('x').count(), 50);
-        assert_eq!(here_summary(&view(&st, pos, k)).is_empty(), false);
+        assert!(!here_summary(&view(&st, pos, k)).is_empty());
     }
 
     #[test]
