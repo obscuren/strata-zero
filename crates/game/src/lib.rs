@@ -2,8 +2,10 @@
 
 pub mod character;
 pub mod content;
+pub mod ground;
 pub mod model;
 
 pub use character::*;
 pub use content::*;
+pub use ground::*;
 pub use model::*;
