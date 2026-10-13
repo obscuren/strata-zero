@@ -103,9 +103,13 @@ There are no pane titles.
 - **INSPECT**, **LEGEND**: as today, INSPECT capped at fourteen rows.
 
 **Budget**: as today, with each pane's need including its separator row. LOG
-takes the remainder; MAP drops when LOG would get fewer than three rows; a
-pane that would get fewer than two rows gets none. When LOG gets no rows the
-newest entry toasts on the map, as today.
+takes the remainder, and its floor of three rows includes its separator. When
+LOG would get fewer, MAP gives up rows first, down to seven (its separator, a
+squeezed minimap and the coordinate row), and drops only when that is not
+enough. A pane that would get only its separator row gets none; the first
+pane has no separator and may be one row. When LOG gets no rows the newest
+entry toasts on the map, as today. At 100 by 30 with the default panes the
+minimap draws squeezed rather than vanishing.
 
 ## Footer band
 

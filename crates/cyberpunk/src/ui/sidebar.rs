@@ -19,6 +19,8 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 pub const MINIMAP_H: u16 = 13;
 const LOG_MIN: u16 = 3;
+/// The fewest rows MAP keeps (separator, a squeezed minimap, the coordinate row).
+const MAP_MIN: u16 = 7;
 const HERE_CAP: u16 = 7;
 const QUEST_CAP: u16 = 4;
 const INSPECT_CAP: u16 = 14;
@@ -124,8 +126,9 @@ impl Sidebar {
 
 /// Rows per pane, in order; needs include each pane's separator row, which every
 /// pane but the first carries. Each non-LOG pane takes the smaller of its need and
-/// what is left; LOG takes the remainder; MAP drops when LOG would get under three
-/// rows. A pane that would get only its separator row gets nothing instead.
+/// what is left; LOG takes the remainder. When LOG would get under three rows, MAP
+/// gives up rows first, down to seven, and drops only when that is not enough. A pane
+/// that would get only its separator row gets nothing instead.
 pub fn budget(needs: &[(Section, u16)], height: u16) -> Vec<(Section, u16)> {
     let mut needs: Vec<(Section, u16)> = needs.to_vec();
     // The first pane has no separator: one row is a whole pane there, two elsewhere.
@@ -143,10 +146,19 @@ pub fn budget(needs: &[(Section, u16)], height: u16) -> Vec<(Section, u16)> {
             rows.push((*s, r));
         }
         let has_log = needs.iter().any(|(s, _)| *s == Section::Log);
-        let has_map = needs.iter().any(|(s, _)| *s == Section::Map);
-        if has_log && left < LOG_MIN && has_map {
-            needs.retain(|(s, _)| *s != Section::Map);
-            continue;
+        let map_at = needs.iter().position(|(s, _)| *s == Section::Map);
+        if has_log
+            && left < LOG_MIN
+            && let Some(i) = map_at
+        {
+            let short = LOG_MIN - left;
+            if rows[i].1 >= MAP_MIN + short {
+                rows[i].1 -= short;
+                left += short;
+            } else {
+                needs.retain(|(s, _)| *s != Section::Map);
+                continue;
+            }
         }
         if let Some(i) = needs.iter().position(|(s, _)| *s == Section::Log) {
             rows[i].1 = whole(i, left);
@@ -581,7 +593,7 @@ mod tests {
         );
         assert_eq!(
             budget(&[(Here, 3), (Quest, 4), (Map, 14), (Log, 0)], 22),
-            vec![(Here, 3), (Quest, 4), (Log, 15)]
+            vec![(Here, 3), (Quest, 4), (Map, 12), (Log, 3)]
         );
         assert_eq!(
             budget(&[(Here, 3), (Quest, 4), (Map, 14)], 10),
@@ -592,6 +604,19 @@ mod tests {
             vec![(Here, 3), (Log, 2), (Inspect, 15)]
         );
         assert_eq!(budget(&[(Here, 3), (Log, 0)], 3), vec![(Here, 3)]);
+        // MAP gives up rows to keep LOG at its floor, down to its own floor of seven.
+        assert_eq!(
+            budget(&[(Here, 2), (Quest, 4), (Map, 15), (Log, 0)], 22),
+            vec![(Here, 2), (Quest, 4), (Map, 13), (Log, 3)]
+        );
+        assert_eq!(
+            budget(&[(Here, 2), (Quest, 4), (Map, 15), (Log, 0)], 16),
+            vec![(Here, 2), (Quest, 4), (Map, 7), (Log, 3)]
+        );
+        assert_eq!(
+            budget(&[(Here, 2), (Quest, 4), (Map, 15), (Log, 0)], 15),
+            vec![(Here, 2), (Quest, 4), (Log, 9)]
+        );
         for h in 0..40u16 {
             let rows = budget(
                 &[

@@ -766,6 +766,8 @@ impl Screen for MapScreen {
                 fill(buf, *rect);
             }
             fill(buf, r.side);
+            fill(buf, r.top_rule);
+            fill(buf, r.bottom_rule);
             fill(buf, r.status);
             fill(buf, r.abilities);
             for y in area.y..r.bottom_rule.y {
@@ -1837,6 +1839,7 @@ mod tests {
             st.say("a long line of text that will need wrapping in the log");
         }
         st.warn("nothing leads up from here");
+        st.tick += 200;
         let text = draw_screen(&s, &st, 100, 30);
         assert!(
             text.contains("[tab]deck") && text.contains("[F1]Here*"),
@@ -1914,5 +1917,37 @@ mod tests {
             text.contains("· Net") && text.contains("[enter]jack"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn default_panes_all_draw_at_the_minimum() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        st.say("took it");
+        st.tick += 200;
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(text.contains("THE DROP"), "{text}");
+        assert!(text.contains("· Street "), "minimap coordinate row: {text}");
+        assert!(text.contains("took it"), "log pane: {text}");
+    }
+
+    #[test]
+    fn rule_rows_sit_on_the_panel_background() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        s.update(&mut st, &[]);
+        let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let buf = t.backend().buffer();
+        for y in [4u16, 27] {
+            for x in [0u16, 50, 99] {
+                assert_eq!(
+                    buf[(x, y)].bg,
+                    crate::ui::chrome::PANEL_BG,
+                    "rule row {y} col {x}"
+                );
+            }
+        }
     }
 }
