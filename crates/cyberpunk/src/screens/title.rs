@@ -47,7 +47,7 @@ impl Screen for Title {
                             to: Box::new(Configure::new(st.params.clone(), st.tick)),
                             fx: TransitionKind::Glitch,
                         },
-                        1 => ScreenCmd::Switch {
+                        1 => ScreenCmd::Push {
                             to: Box::new(Files::load(st.tick)),
                             fx: TransitionKind::SlideUp,
                         },
@@ -167,9 +167,12 @@ mod tests {
             ScreenCmd::Switch { .. }
         ));
         title.update(&mut st, &[key(KeyCode::Char('j'))]);
-        assert!(matches!(
-            title.update(&mut st, &[key(KeyCode::Enter)]),
-            ScreenCmd::Switch { .. }
-        ));
+        assert!(
+            matches!(
+                title.update(&mut st, &[key(KeyCode::Enter)]),
+                ScreenCmd::Push { .. }
+            ),
+            "load is pushed over the title"
+        );
     }
 }

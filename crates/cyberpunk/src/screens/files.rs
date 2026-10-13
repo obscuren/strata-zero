@@ -3,7 +3,6 @@
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::render::Rgb;
 use crate::save::{CityFileInfo, default_dir, list_cities, load_city, save_city};
-use crate::screens::title::Title;
 use crate::ui::form::{Field, Form, FormView};
 use crate::ui::panel::boxed;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -26,8 +25,6 @@ pub struct Files {
     entries: Vec<CityFileInfo>,
     selected: usize,
     error: Option<String>,
-    /// The screen to return to after saving; a fresh explore screen when absent.
-    back: Option<Box<dyn Screen>>,
 }
 
 /// `YYYY-MM-DD HH:MM` in UTC, without a date crate (civil-from-days algorithm).
@@ -60,8 +57,8 @@ impl Files {
         Self::load_in(default_dir(), _tick)
     }
 
-    pub fn save(tick: u64, name: &str, back: Option<Box<dyn Screen>>) -> Self {
-        Self::save_in(default_dir(), tick, name, back)
+    pub fn save(tick: u64, name: &str) -> Self {
+        Self::save_in(default_dir(), tick, name)
     }
 
     pub fn load_in(dir: PathBuf, _tick: u64) -> Self {
@@ -72,11 +69,10 @@ impl Files {
             entries,
             selected: 0,
             error: None,
-            back: None,
         }
     }
 
-    pub fn save_in(dir: PathBuf, _tick: u64, name: &str, back: Option<Box<dyn Screen>>) -> Self {
+    pub fn save_in(dir: PathBuf, _tick: u64, name: &str) -> Self {
         let form = Form {
             fields: vec![Field::Text {
                 label: "Name".into(),
@@ -92,17 +88,12 @@ impl Files {
             entries: Vec::new(),
             selected: 0,
             error: None,
-            back,
         }
     }
 
-    fn back_to_map(&mut self, st: &AppState) -> ScreenCmd {
-        let to = self
-            .back
-            .take()
-            .unwrap_or_else(|| crate::screens::explore_screen(st.tick));
-        ScreenCmd::Switch {
-            to,
+    /// Back to whatever pushed this screen.
+    fn done() -> ScreenCmd {
+        ScreenCmd::Pop {
             fx: TransitionKind::None,
         }
     }
@@ -121,12 +112,7 @@ impl Screen for Files {
                             self.selected += 1;
                         }
                     }
-                    KeyCode::Esc | KeyCode::Char('q') => {
-                        return ScreenCmd::Switch {
-                            to: Box::new(Title::new(st.tick)),
-                            fx: TransitionKind::SlideUp,
-                        };
-                    }
+                    KeyCode::Esc | KeyCode::Char('q') => return Self::done(),
                     KeyCode::Enter => {
                         let Some(entry) = self.entries.get(self.selected) else {
                             continue;
@@ -149,7 +135,7 @@ impl Screen for Files {
                 },
                 Mode::Save(form) => {
                     if k.code == KeyCode::Esc {
-                        return self.back_to_map(st);
+                        return Self::done();
                     }
                     if k.code == KeyCode::Enter {
                         let name = form.text("Name").unwrap_or("").trim().to_string();
@@ -159,13 +145,13 @@ impl Screen for Files {
                             name
                         };
                         let Some(city) = st.city.as_ref() else {
-                            return self.back_to_map(st);
+                            return Self::done();
                         };
                         let path = self.dir.join(format!("{name}.city"));
                         match save_city(&path, city) {
                             Ok(()) => {
                                 st.set_status(format!("saved {}", path.display()), 120);
-                                return self.back_to_map(st);
+                                return Self::done();
                             }
                             Err(e) => self.error = Some(e.to_string()),
                         }
@@ -307,13 +293,13 @@ mod tests {
             .unwrap(),
         );
         let name = st.city.as_ref().unwrap().name.clone();
-        let mut save = Files::save_in(dir.clone(), 0, &name, None);
+        let mut save = Files::save_in(dir.clone(), 0, &name);
         let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
         t.draw(|f| save.draw(&st, f)).unwrap();
         assert!(buffer_text(t.backend().buffer()).contains("SAVE"));
         assert!(matches!(
             save.update(&mut st, &[key(KeyCode::Enter)]),
-            ScreenCmd::Switch { .. }
+            ScreenCmd::Pop { .. }
         ));
         assert!(dir.join(format!("{name}.city")).exists());
 
@@ -327,24 +313,17 @@ mod tests {
             ScreenCmd::Switch { .. }
         ));
         assert_eq!(st.city.as_ref().map(|c| c.seed), Some(9));
-        // Saving from a live map screen hands that same screen back, state intact.
-        let mut map = crate::screens::explore::MapScreen::explore(0);
-        map.mode = crate::screens::explore::Mode::Walk;
-        map.stratum = citygen::StratumKind::Undercity;
-        map.digital = true;
-        st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
-        let mut save = Files::save_in(dir.clone(), 0, "again", Some(Box::new(map)));
-        let ScreenCmd::Switch { to, .. } = save.update(&mut st, &[key(KeyCode::Enter)]) else {
-            panic!("save should switch back");
-        };
-        st.tick += 500; // let the "saved" status expire so the mode hints show
-        let mut t3 = Terminal::new(TestBackend::new(120, 40)).unwrap();
-        t3.draw(|f| to.draw(&st, f)).unwrap();
-        let text = buffer_text(t3.backend().buffer());
-        assert!(
-            text.contains("tab camera") && text.contains("Undercity"),
-            "{text}"
-        );
+        // A second save under another name pops back to whatever pushed it.
+        let mut save = Files::save_in(dir.clone(), 0, "again");
+        assert!(matches!(
+            save.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Pop { .. }
+        ));
+        assert!(dir.join("again.city").exists());
+        assert!(matches!(
+            save.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Pop { .. }
+        ));
 
         let mut empty = Files::load_in(tmp("empty"), 0);
         t.draw(|f| empty.draw(&st, f)).unwrap();
@@ -355,7 +334,7 @@ mod tests {
         ));
         assert!(matches!(
             empty.update(&mut st, &[key(KeyCode::Esc)]),
-            ScreenCmd::Switch { .. }
+            ScreenCmd::Pop { .. }
         ));
     }
 }
