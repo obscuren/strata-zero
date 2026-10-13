@@ -13,11 +13,12 @@ use crate::screens::files::Files;
 use crate::screens::generating::Generating;
 use crate::screens::help;
 use crate::screens::pause::Pause;
+use crate::screens::popup::{Choice, Pick, Popup, WorldAct};
 use crate::screens::title::Title;
 use crate::ui::panel::{boxed, inspector_lines, legend, status_bar, strata_selector};
-use crate::walker::Player;
+use crate::walker::{Player, port_name};
 use citygen::rng::hash64;
-use citygen::{City, Dir, Pos, Rect as TileRect, StratumKind};
+use citygen::{Dir, Pos, Rect as TileRect, StratumKind};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -279,7 +280,80 @@ impl MapScreen {
         Some(ScreenCmd::Stay)
     }
 
+    /// What Space offers where the player stands: take rows, jack, stairs, look.
+    fn interact(&self, st: &AppState) -> Option<ScreenCmd> {
+        let (city, player) = (st.city.as_ref()?, st.player.as_ref()?);
+        let (k, pos) = (player.stratum, player.pos);
+        let mut choices = Vec::new();
+        // Letters for take rows; j k q h l t and the arrows are taken by the popup and verbs.
+        let mut letters = "abcdefgimnoprsuvwxyz".chars();
+        let stacks = st.ground.at(k, pos);
+        for s in stacks {
+            let Some(item) = st.content.item(&s.item) else {
+                continue;
+            };
+            let Some(key) = letters.next() else { break };
+            choices.push(Choice::new(
+                key,
+                format!("take {}× {}", s.qty, item.name),
+                Pick::Act(game::Action::Take {
+                    item: s.item.clone(),
+                    qty: s.qty,
+                }),
+            ));
+        }
+        if stacks.len() > 1 {
+            choices.push(Choice::new(
+                't',
+                "take all",
+                Pick::Act(game::Action::TakeAll),
+            ));
+        }
+        if player.jacked_in() {
+            choices.push(Choice::new('j', "jack out", Pick::World(WorldAct::JackOut)));
+        } else if player.terminal_in_reach(city).is_some() {
+            choices.push(Choice::new('j', "jack in", Pick::World(WorldAct::JackIn)));
+        }
+        let (mut up, mut down) = (None, None);
+        for c in city
+            .connectors_at(pos)
+            .filter(|c| c.kind != citygen::ConnectorKind::Jack)
+        {
+            if let Some((below, above)) = c.serves_from(k) {
+                up = up.or(above);
+                down = down.or(below);
+            }
+        }
+        if let Some(dest) = up {
+            choices.push(Choice::new(
+                '>',
+                format!("go up to {}", dest.label()),
+                Pick::World(WorldAct::Up),
+            ));
+        }
+        if let Some(dest) = down {
+            choices.push(Choice::new(
+                '<',
+                format!("go down to {}", dest.label()),
+                Pick::World(WorldAct::Down),
+            ));
+        }
+        let node = Digital::node_under(city, k, pos).map(|id| city.net.node(id));
+        choices.push(Choice::new(
+            'l',
+            "look",
+            Pick::Card(inspector_lines(city, k, pos, node, stacks, &st.content)),
+        ));
+        Some(ScreenCmd::Push {
+            to: Box::new(Popup::verbs("HERE", choices, st.tick)),
+            fx: TransitionKind::None,
+        })
+    }
+
     fn handle_walk(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
+        if k.code == KeyCode::Char(' ') {
+            return self.interact(st);
+        }
         let dev = st.dev;
         let bonus = st.character.sight_bonus(&st.content);
         let city = st.city.as_ref()?;
@@ -343,20 +417,6 @@ impl MapScreen {
     }
 }
 
-/// What a port is called in the status line: its building, else its district.
-fn port_name(city: &City, port: Pos) -> String {
-    let tile = city.tile(StratumKind::Street, port);
-    tile.and_then(|t| t.building)
-        .and_then(|b| city.building_opt(b))
-        .and_then(|b| b.name.clone())
-        .or_else(|| {
-            tile.and_then(|t| t.district)
-                .and_then(|d| city.district_opt(d))
-                .map(|d| d.name.clone())
-        })
-        .unwrap_or_else(|| "the Net".to_string())
-}
-
 impl Screen for MapScreen {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
         if st.tick > self.last_tick + 1 {
@@ -364,6 +424,14 @@ impl Screen for MapScreen {
         }
         self.last_tick = st.tick;
         self.fps.frame();
+        // The map follows the player: a popup may have jacked them or taken the stairs.
+        if self.mode == Mode::Walk
+            && let Some(p) = st.player.as_ref()
+            && p.stratum != self.stratum
+        {
+            self.stratum = p.stratum;
+            self.cam.snap(p.pos);
+        }
         let Some(size) = st.city.as_ref().map(|c| c.size) else {
             if keys
                 .iter()
@@ -1095,5 +1163,134 @@ mod tests {
                 .any(|&(x, y)| buf[(x, y)].symbol() == "▪" && buf[(x, y)].fg == amber),
             "a pile next to the player"
         );
+    }
+
+    fn walking(st: &mut AppState, s: &mut MapScreen) {
+        s.update(st, &[]);
+        s.update(st, &[key(KeyCode::Char('w'))]);
+        assert_eq!(s.mode, Mode::Walk);
+    }
+
+    fn draw_screen(scr: &dyn Screen, st: &AppState, w: u16, h: u16) -> String {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| scr.draw(st, f)).unwrap();
+        buffer_text(t.backend().buffer())
+    }
+
+    #[test]
+    fn space_offers_take_rows_and_takes() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let (k, pos) = {
+            let p = st.player.as_ref().unwrap();
+            (p.stratum, p.pos)
+        };
+        st.ground.add(k, pos, game::ItemId::new("copper_coil"), 2);
+        st.ground.add(k, pos, game::ItemId::new("dead_phone"), 1);
+        let ScreenCmd::Push { to: mut p, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens the interact popup")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*p, &st, 120, 40);
+        assert!(
+            text.contains("a  take 2× Copper coil")
+                && text.contains("b  take 1× Dead phone")
+                && text.contains("t  take all")
+                && text.contains("l  look"),
+            "{text}"
+        );
+        p.update(&mut st, &[key(KeyCode::Char('t'))]);
+        assert_eq!(st.character.count(&game::ItemId::new("copper_coil")), 5);
+        assert_eq!(st.character.count(&game::ItemId::new("dead_phone")), 2);
+        assert!(st.ground.at(k, pos).is_empty());
+        assert_eq!(st.status_text(), Some("took 3 items"));
+        let ScreenCmd::Push { to: mut p, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!()
+        };
+        st.tick += 40;
+        let text = draw_screen(&*p, &st, 120, 40);
+        assert!(text.contains("l  look") && !text.contains("take"), "{text}");
+        p.update(&mut st, &[key(KeyCode::Char('l'))]);
+        st.tick += 40;
+        assert!(draw_screen(&*p, &st, 120, 40).contains("terrain"));
+    }
+
+    #[test]
+    fn space_jacks_and_takes_stairs_and_the_map_follows() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let city = st.city.clone().unwrap();
+        let street = StratumKind::Street;
+        let beside_jack = city
+            .connectors
+            .iter()
+            .filter(|k| {
+                k.kind == citygen::ConnectorKind::Jack
+                    && k.serves.contains(&street)
+                    && city.walkable(StratumKind::Net, k.pos)
+            })
+            .find_map(|k| {
+                std::iter::once(k.pos)
+                    .chain(k.pos.neighbors8())
+                    .find(|q| city.walkable(street, *q))
+            })
+            .unwrap();
+        st.player.as_mut().unwrap().pos = beside_jack;
+        let ScreenCmd::Push { to: mut p, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens the interact popup")
+        };
+        st.tick += 40;
+        assert!(draw_screen(&*p, &st, 120, 40).contains("j  jack in"));
+        let cmd = p.update(&mut st, &[key(KeyCode::Char('j'))]);
+        assert!(
+            matches!(
+                cmd,
+                ScreenCmd::Pop {
+                    fx: crate::app::TransitionKind::Glitch
+                }
+            ),
+            "status: {:?}",
+            st.status_text()
+        );
+        assert!(st.player.as_ref().unwrap().jacked_in());
+        s.update(&mut st, &[]);
+        assert_eq!(s.stratum, StratumKind::Net, "the map follows the player");
+        let ScreenCmd::Push { to: mut p, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!()
+        };
+        st.tick += 40;
+        assert!(draw_screen(&*p, &st, 120, 40).contains("j  jack out"));
+        p.update(&mut st, &[key(KeyCode::Char('j'))]);
+        s.update(&mut st, &[]);
+        assert_eq!(s.stratum, street);
+        let stair = city
+            .connectors
+            .iter()
+            .find(|k| {
+                k.public
+                    && k.serves.contains(&StratumKind::Undercity)
+                    && k.serves.contains(&street)
+                    && city.walkable(street, k.pos)
+                    && city.walkable(StratumKind::Undercity, k.pos)
+            })
+            .unwrap()
+            .pos;
+        st.player.as_mut().unwrap().pos = stair;
+        let ScreenCmd::Push { to: mut p, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!()
+        };
+        st.tick += 40;
+        assert!(draw_screen(&*p, &st, 120, 40).contains("<  go down to Undercity"));
+        p.update(&mut st, &[key(KeyCode::Char('<'))]);
+        s.update(&mut st, &[]);
+        assert_eq!(s.stratum, StratumKind::Undercity);
+        assert_eq!(st.status_text(), Some("now on Undercity"));
     }
 }

@@ -6,6 +6,7 @@ use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::ui::chrome::{
     BAR_BG, CYAN, CYAN_RGB, DIM, MAGENTA, PANEL_BG, TEXT, frame, glass, put, put_paragraph, reveal,
 };
+use crate::walker::port_name;
 use crossterm::event::{KeyCode, KeyEvent};
 use game::Action;
 use ratatui::Frame;
@@ -14,14 +15,25 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 
+/// Something the popup does to the player in the world.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorldAct {
+    JackIn,
+    JackOut,
+    Up,
+    Down,
+}
+
 /// What a row does when fired.
 #[derive(Clone, Debug)]
 pub enum Pick {
     /// Runs through `actions::perform`; the result lands in the status strip.
     Act(Action),
+    /// Moves the player: jacks or stairs. Jacks pop with a glitch.
+    World(WorldAct),
     /// Shows these lines in place of the rows; Esc returns to the rows.
     Card(Vec<Line<'static>>),
-    #[allow(dead_code)] // the abilities popup (world-interact spec) builds disabled rows
+    #[allow(dead_code)] // the abilities popup (next task) builds disabled rows
     Close,
 }
 
@@ -44,7 +56,7 @@ impl Choice {
     }
 
     /// A greyed row that cannot be fired; shown so the player knows it exists.
-    #[allow(dead_code)] // the abilities popup (world-interact spec) builds disabled rows
+    #[allow(dead_code)] // the abilities popup (next task) builds disabled rows
     pub fn disabled(key: char, label: impl Into<String>) -> Self {
         Choice {
             key,
@@ -94,10 +106,8 @@ pub struct Popup {
     anchor: Option<(u16, u16)>,
     /// Tick the rows (or the card) appeared; drives the reveal.
     opened: u64,
-    /// When set, the card's lines replace the rows.
+    /// When set, the card's lines replace the rows; closing it returns to the rows.
     card: Option<Vec<Line<'static>>>,
-    /// Whether closing the card returns to rows (verbs) or closes the popup.
-    verbs_behind: bool,
 }
 
 impl Popup {
@@ -110,20 +120,54 @@ impl Popup {
             anchor: None,
             opened: tick,
             card: None,
-            verbs_behind: true,
         }
     }
 
-    #[allow(dead_code)] // the world's `look` (world-interact spec) opens a plain card
-    pub fn card(title: &str, lines: Vec<Line<'static>>, tick: u64) -> Self {
-        Popup {
-            title: title.to_string(),
-            choices: Vec::new(),
-            selected: 0,
-            anchor: None,
-            opened: tick,
-            card: Some(lines),
-            verbs_behind: false,
+    /// Applies a world act to the player and returns the transition to pop with.
+    fn world(&self, st: &mut AppState, act: WorldAct) -> TransitionKind {
+        let bonus = st.character.sight_bonus(&st.content);
+        let result: Result<(String, TransitionKind), String> =
+            match (st.city.as_ref(), st.player.as_mut()) {
+                (Some(city), Some(player)) => match act {
+                    WorldAct::JackIn => player
+                        .jack_in(city, bonus)
+                        .map(|port| {
+                            (
+                                format!("jacked in at {}", port_name(city, port)),
+                                TransitionKind::Glitch,
+                            )
+                        })
+                        .map_err(|e| e.to_string()),
+                    WorldAct::JackOut => player
+                        .jack_out(city, bonus)
+                        .map(|()| ("jacked out".to_string(), TransitionKind::Glitch))
+                        .map_err(|e| e.to_string()),
+                    WorldAct::Up | WorldAct::Down => {
+                        let up = act == WorldAct::Up;
+                        match player.use_connector(city, up) {
+                            Some(dest) => {
+                                player.update_fov(city, bonus);
+                                Ok((format!("now on {}", dest.label()), TransitionKind::None))
+                            }
+                            None => Err(if up {
+                                "nothing leads up from here".to_string()
+                            } else {
+                                "nothing leads down from here".to_string()
+                            }),
+                        }
+                    }
+                },
+                _ => Err("no body in the city".to_string()),
+            };
+        match result {
+            Ok((msg, fx)) => {
+                st.set_status(msg, 90);
+                fx
+            }
+            Err(e) => {
+                st.set_warning(e, 90);
+                TransitionKind::None
+            }
         }
     }
 
@@ -199,6 +243,10 @@ impl Popup {
                 ScreenCmd::Pop {
                     fx: TransitionKind::None,
                 }
+            }
+            Pick::World(act) => {
+                let fx = self.world(st, act);
+                ScreenCmd::Pop { fx }
             }
             Pick::Card(lines) => {
                 self.card = Some(lines);
@@ -276,16 +324,16 @@ impl Screen for Popup {
                     k.code,
                     KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter | KeyCode::Char(' ')
                 ) {
-                    if self.verbs_behind {
-                        self.card = None;
-                        self.opened = st.tick;
-                    } else {
-                        return ScreenCmd::Pop {
-                            fx: TransitionKind::None,
-                        };
-                    }
+                    self.card = None;
+                    self.opened = st.tick;
                 }
                 continue;
+            }
+            // A row's letter wins over j/k navigation; the arrows always navigate.
+            if let KeyCode::Char(c) = k.code
+                && let Some(i) = self.choices.iter().position(|ch| ch.enabled && ch.key == c)
+            {
+                return self.fire(st, i);
             }
             match k.code {
                 KeyCode::Up | KeyCode::Char('k') => self.move_sel(-1),
@@ -296,11 +344,6 @@ impl Screen for Popup {
                     };
                 }
                 KeyCode::Enter | KeyCode::Char(' ') => return self.fire(st, self.selected),
-                KeyCode::Char(c) => {
-                    if let Some(i) = self.choices.iter().position(|ch| ch.enabled && ch.key == c) {
-                        return self.fire(st, i);
-                    }
-                }
                 _ => {}
             }
         }
@@ -448,11 +491,6 @@ mod tests {
             p.update(&mut st, &[key(KeyCode::Esc)]),
             ScreenCmd::Pop { .. }
         ));
-        let mut c = Popup::card("CARD", vec![Line::from("x")], 0);
-        assert!(matches!(
-            c.update(&mut st, &[key(KeyCode::Char(' '))]),
-            ScreenCmd::Pop { .. }
-        ));
     }
 
     #[test]
@@ -488,12 +526,45 @@ mod tests {
     fn card_fits_word_wrapped_lines() {
         let mut st = state();
         let line = format!("{} {} {}", "x".repeat(23), "y".repeat(23), "z".repeat(23));
-        let p = Popup::card("WRAP", vec![Line::from(line)], 0);
+        let mut p = Popup::verbs(
+            "WRAP",
+            vec![Choice::new('l', "look", Pick::Card(vec![Line::from(line)]))],
+            0,
+        );
+        p.update(&mut st, &[key(KeyCode::Char('l'))]);
         st.tick = 40;
         let text = draw(&p, &st, 120, 35);
         assert!(
             text.contains(&"z".repeat(23)),
             "last wrapped row cut: {text}"
         );
+    }
+
+    #[test]
+    fn a_row_lettered_j_fires_instead_of_moving() {
+        let mut st = state();
+        let mut p = Popup::verbs(
+            "HERE",
+            vec![
+                Choice::new('a', "first", Pick::Close),
+                Choice::new('j', "jack in", Pick::World(WorldAct::JackIn)),
+            ],
+            0,
+        );
+        assert!(matches!(
+            p.update(&mut st, &[key(KeyCode::Char('j'))]),
+            ScreenCmd::Pop { .. }
+        ));
+        assert!(st.status_text().is_some(), "the jack was attempted");
+        let mut p = Popup::verbs(
+            "HERE",
+            vec![
+                Choice::new('a', "first", Pick::Close),
+                Choice::new('b', "second", Pick::Close),
+            ],
+            0,
+        );
+        p.update(&mut st, &[key(KeyCode::Char('j'))]);
+        assert_eq!(p.selected, 1, "j still moves when no row uses it");
     }
 }

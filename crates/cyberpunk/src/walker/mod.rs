@@ -79,6 +79,18 @@ impl Player {
         self.body.is_some()
     }
 
+    /// The port of a terminal on this tile or an 8-neighbour that serves this stratum.
+    pub fn terminal_in_reach(&self, city: &City) -> Option<Pos> {
+        let k = self.stratum;
+        std::iter::once(self.pos)
+            .chain(self.pos.neighbors8())
+            .find_map(|p| {
+                city.connectors_at(p)
+                    .find(|c| c.kind == ConnectorKind::Jack && c.serves.contains(&k))
+                    .map(|c| c.pos)
+            })
+    }
+
     /// Jacks in at a Jack connector on this tile or an 8-neighbour of it, leaving the body here.
     pub fn jack_in(&mut self, city: &City, sight_bonus: i32) -> Result<Pos, &'static str> {
         if self.jacked_in() {
@@ -86,13 +98,8 @@ impl Player {
         }
         let here = self.pos;
         let k = self.stratum;
-        let port = std::iter::once(here)
-            .chain(here.neighbors8())
-            .find_map(|p| {
-                city.connectors_at(p)
-                    .find(|c| c.kind == ConnectorKind::Jack && c.serves.contains(&k))
-                    .map(|c| c.pos)
-            })
+        let port = self
+            .terminal_in_reach(city)
             .ok_or("no terminal within reach")?;
         if !city.walkable(StratumKind::Net, port) {
             return Err("the port is dead");
@@ -182,6 +189,20 @@ impl Player {
     pub fn vis(&self) -> &Grid<Visibility> {
         &self.memory[self.stratum.index()]
     }
+}
+
+/// What a port is called in the status line: its building, else its district.
+pub fn port_name(city: &City, port: Pos) -> String {
+    let tile = city.tile(StratumKind::Street, port);
+    tile.and_then(|t| t.building)
+        .and_then(|b| city.building_opt(b))
+        .and_then(|b| b.name.clone())
+        .or_else(|| {
+            tile.and_then(|t| t.district)
+                .and_then(|d| city.district_opt(d))
+                .map(|d| d.name.clone())
+        })
+        .unwrap_or_else(|| "the Net".to_string())
 }
 
 #[cfg(test)]
