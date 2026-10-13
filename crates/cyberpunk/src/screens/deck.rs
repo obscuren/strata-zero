@@ -24,6 +24,9 @@ pub const TEXT: Color = Color::Rgb(205, 212, 222);
 const CYAN_RGB: Rgb = Rgb(0, 229, 255);
 const MAGENTA_RGB: Rgb = Rgb(255, 0, 200);
 const PANEL_BG: Color = Color::Rgb(4, 6, 10);
+const PANEL_BG_RGB: Rgb = Rgb(4, 6, 10);
+/// How far the washed map is pulled toward the panel colour; the rest shows through.
+const GLASS: f32 = 0.45;
 const RULE: Color = Color::Rgb(40, 60, 75);
 const BAR_BG: Color = Color::Rgb(0, 60, 70);
 const REVEAL_TICKS: u64 = 20;
@@ -165,10 +168,54 @@ fn frame(buf: &mut Buffer, area: Rect) {
         .set_style(style);
 }
 
-/// Writes `text` from `x`, stopping before `max_x`.
+/// Tints the panel area toward the panel colour, keeping the washed map as a ghost.
+fn glass(buf: &mut Buffer, area: Rect) {
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            let cell = &mut buf[(x, y)];
+            let bg = match cell.bg {
+                Color::Rgb(r, g, b) => Rgb(r, g, b).mix(PANEL_BG_RGB, GLASS).to_color(),
+                _ => PANEL_BG,
+            };
+            let fg = match cell.fg {
+                Color::Rgb(r, g, b) => Rgb(r, g, b).scale(0.6).to_color(),
+                other => other,
+            };
+            cell.set_bg(bg).set_fg(fg);
+        }
+    }
+}
+
+/// Writes `text` from `x`, stopping before `max_x`, on a solid backing unless the style
+/// brings its own background.
 fn put(buf: &mut Buffer, x: u16, y: u16, text: &str, style: Style, max_x: u16) {
+    let style = if style.bg.is_none() {
+        style.bg(PANEL_BG)
+    } else {
+        style
+    };
     for (cx, ch) in (x..max_x).zip(text.chars()) {
         buf[(cx, y)].set_char(ch).set_style(style);
+    }
+}
+
+/// Renders lines into `area`, backing only the cells that carry text.
+fn put_paragraph(buf: &mut Buffer, area: Rect, lines: Vec<Line<'static>>) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let mut tmp = Buffer::empty(area);
+    Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .render(area, &mut tmp);
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            let src = &tmp[(x, y)];
+            if src.symbol() != " " {
+                let style = src.style().bg(PANEL_BG);
+                buf[(x, y)].set_symbol(src.symbol()).set_style(style);
+            }
+        }
     }
 }
 
@@ -597,12 +644,8 @@ impl Screen for Deck {
         let area = f.area();
         let tick = st.tick;
         let buf = f.buffer_mut();
-        // Clear the panel so the washed map does not bleed through the text.
-        for y in area.y..area.bottom() {
-            for x in area.x..area.right() {
-                buf[(x, y)].set_char(' ').set_bg(PANEL_BG).set_fg(TEXT);
-            }
-        }
+        // The washed map stays visible as a ghost under the chrome; text gets a solid backing.
+        glass(buf, area);
         frame(buf, area);
         let inner = Rect::new(
             area.x + 1,
@@ -755,14 +798,15 @@ impl Screen for Deck {
             let lines = self.detail(st, &rows);
             let p = (tick.saturating_sub(self.changed)) as f32 / REVEAL_TICKS as f32;
             let shown = reveal(&lines, p, (tick / 4).is_multiple_of(2));
-            Paragraph::new(shown).wrap(Wrap { trim: false }).render(
+            put_paragraph(
+                buf,
                 Rect::new(
                     detail.x + 1,
                     detail.y,
                     detail.width.saturating_sub(2),
                     detail.height,
                 ),
-                buf,
+                shown,
             );
         }
 
@@ -991,5 +1035,45 @@ mod tests {
         let text = draw(&d, &st, 120, 35);
         assert!(text.contains('@'), "{text}");
         assert!(!text.contains("no signal"));
+    }
+
+    #[test]
+    fn deck_is_glass_over_the_washed_map() {
+        let mut st = state();
+        st.tick = 40;
+        let d = Deck::new(0);
+        let mut t = Terminal::new(TestBackend::new(120, 35)).unwrap();
+        t.draw(|f| {
+            let area = f.area();
+            let buf = f.buffer_mut();
+            for y in area.y..area.bottom() {
+                for x in area.x..area.right() {
+                    buf[(x, y)]
+                        .set_char('x')
+                        .set_fg(Color::Rgb(90, 90, 90))
+                        .set_bg(Color::Rgb(40, 40, 40));
+                }
+            }
+            d.draw(&st, f);
+        })
+        .unwrap();
+        let buf = t.backend().buffer();
+        // Somewhere inside the body, away from text, the map still shows through.
+        let ghosts = (6..33u16)
+            .flat_map(|y| (60..118u16).map(move |x| (x, y)))
+            .filter(|(x, y)| buf[(*x, *y)].symbol() == "x")
+            .count();
+        assert!(ghosts > 100, "ghosts {ghosts}: the deck is opaque");
+        let (gx, gy) = (110u16, 30u16);
+        assert_eq!(buf[(gx, gy)].symbol(), "x");
+        assert_ne!(
+            buf[(gx, gy)].bg,
+            Color::Rgb(40, 40, 40),
+            "bg is tinted, not raw"
+        );
+        assert_ne!(buf[(gx, gy)].bg, PANEL_BG, "bg is tinted, not solid");
+        // Text rows sit on the solid panel colour so they stay legible.
+        let row = buffer_text(buf);
+        assert!(row.contains("The drop"));
     }
 }
