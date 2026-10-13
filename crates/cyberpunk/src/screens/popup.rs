@@ -159,11 +159,11 @@ impl Popup {
             };
         match result {
             Ok((msg, fx)) => {
-                st.set_status(msg, 90);
+                st.say(msg);
                 fx
             }
             Err(e) => {
-                st.set_warning(e, 90);
+                st.warn(e);
                 TransitionKind::None
             }
         }
@@ -380,6 +380,15 @@ impl Screen for Popup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::messages::Kind;
+
+    fn last(st: &AppState) -> Option<&str> {
+        st.log.latest().map(|e| e.text.as_str())
+    }
+
+    fn last_is_warning(st: &AppState) -> bool {
+        st.log.latest().is_some_and(|e| e.kind == Kind::Warn)
+    }
     use crate::screens::testutil::{buffer_text, key};
     use citygen::{GenParams, Generator, SizePreset};
     use game::ItemId;
@@ -445,8 +454,8 @@ mod tests {
             ScreenCmd::Pop { .. }
         ));
         assert_eq!(st.character.hp, 35);
-        assert_eq!(st.status_text(), Some("used Stim patch · +15 hp"));
-        assert!(!st.status_is_warning());
+        assert_eq!(last(&st), Some("used Stim patch · +15 hp"));
+        assert!(!last_is_warning(&st));
     }
 
     #[test]
@@ -465,7 +474,7 @@ mod tests {
             p.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Pop { .. }
         ));
-        assert!(st.status_is_warning());
+        assert!(last_is_warning(&st));
         let mut p = Popup::verbs(
             "COIL",
             vec![Choice::new(
@@ -553,7 +562,7 @@ mod tests {
             p.update(&mut st, &[key(KeyCode::Char('j'))]),
             ScreenCmd::Pop { .. }
         ));
-        assert!(st.status_text().is_some(), "the jack was attempted");
+        assert!(last(&st).is_some(), "the jack was attempted");
         let mut p = Popup::verbs(
             "HERE",
             vec![

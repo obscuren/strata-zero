@@ -1,5 +1,6 @@
 //! Application state, the screen trait and the fixed-rate frame loop.
 
+use crate::messages::{Kind, MessageLog};
 use crate::render::style::StylePack;
 use crate::term::{TerminalGuard, install_panic_hook};
 use anyhow::Result;
@@ -40,16 +41,8 @@ pub struct AppState {
     pub ground: game::Ground,
     /// A ping in flight: lights terminals and stairs around it until `until`.
     pub ping: Option<Ping>,
-    status: Option<Status>,
-}
-
-/// A one-line message with its timing.
-#[derive(Clone, Debug)]
-struct Status {
-    text: String,
-    since: u64,
-    until: u64,
-    warn: bool,
+    /// What happened, newest last.
+    pub log: MessageLog,
 }
 
 /// A handshake burst from the `ping` ability.
@@ -84,45 +77,23 @@ impl AppState {
             character,
             ground: game::Ground::default(),
             ping: None,
-            status: None,
+            log: MessageLog::default(),
         }
     }
 
-    /// Shows a one-line message for `ttl` ticks.
-    pub fn set_status(&mut self, msg: impl Into<String>, ttl: u64) {
-        self.status = Some(Status {
-            text: msg.into(),
-            since: self.tick,
-            until: self.tick + ttl,
-            warn: false,
-        });
+    /// Logs a plain result.
+    pub fn say(&mut self, msg: impl Into<String>) {
+        self.log.push(Kind::Info, msg, self.tick);
     }
 
-    /// Shows a one-line refusal for `ttl` ticks; drawn in the warning colour.
-    pub fn set_warning(&mut self, msg: impl Into<String>, ttl: u64) {
-        self.status = Some(Status {
-            text: msg.into(),
-            since: self.tick,
-            until: self.tick + ttl,
-            warn: true,
-        });
+    /// Logs a refusal.
+    pub fn warn(&mut self, msg: impl Into<String>) {
+        self.log.push(Kind::Warn, msg, self.tick);
     }
 
-    fn live_status(&self) -> Option<&Status> {
-        self.status.as_ref().filter(|s| s.until > self.tick)
-    }
-
-    pub fn status_text(&self) -> Option<&str> {
-        self.live_status().map(|s| s.text.as_str())
-    }
-
-    pub fn status_is_warning(&self) -> bool {
-        self.live_status().is_some_and(|s| s.warn)
-    }
-
-    /// The tick the current status appeared, for a reveal.
-    pub fn status_since(&self) -> Option<u64> {
-        self.live_status().map(|s| s.since)
+    /// Logs a quest or level line.
+    pub fn story(&mut self, msg: impl Into<String>) {
+        self.log.push(Kind::Story, msg, self.tick);
     }
 }
 
@@ -476,11 +447,26 @@ mod tests {
     }
 
     #[test]
-    fn app_state_status_expires() {
+    fn app_state_logs_with_the_current_tick() {
         let mut st = AppState::new();
-        st.set_status("hi", 10);
-        assert_eq!(st.status_text(), Some("hi"));
-        st.tick += 11;
-        assert_eq!(st.status_text(), None);
+        st.tick = 5;
+        st.say("hi");
+        st.warn("no");
+        st.story("level 2");
+        let kinds: Vec<(String, Kind, u64)> = st
+            .log
+            .iter()
+            .map(|e| (e.text.clone(), e.kind, e.tick))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                ("hi".to_string(), Kind::Info, 5),
+                ("no".to_string(), Kind::Warn, 5),
+                ("level 2".to_string(), Kind::Story, 5)
+            ]
+        );
+        assert!(st.log.recent(94).is_some());
+        assert!(st.log.recent(95).is_none());
     }
 }

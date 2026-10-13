@@ -2,6 +2,7 @@
 
 use crate::actions::report;
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
+use crate::messages::Kind;
 use crate::render::items::{GroundOverlay, PingOverlay};
 use crate::render::minimap::Minimap;
 use crate::render::overlay::Digital;
@@ -201,14 +202,11 @@ impl MapScreen {
         match k.code {
             KeyCode::Char('`') => {
                 st.dev = !st.dev;
-                st.set_status(
-                    if st.dev {
-                        "dev mode on"
-                    } else {
-                        "dev mode off"
-                    },
-                    60,
-                );
+                st.say(if st.dev {
+                    "dev mode on"
+                } else {
+                    "dev mode off"
+                });
             }
             KeyCode::Char('i') if st.dev => self.show_inspector = !self.show_inspector,
             KeyCode::Char(':') if st.dev => self.console = Some(Console::default()),
@@ -274,7 +272,7 @@ impl MapScreen {
                         fx: TransitionKind::Glitch,
                     },
                     Err(e) => {
-                        st.set_status(e.to_string(), 90);
+                        st.warn(e.to_string());
                         ScreenCmd::Stay
                     }
                 });
@@ -406,7 +404,7 @@ impl MapScreen {
             });
         }
         if choices.is_empty() {
-            st.set_status("no active abilities", 90);
+            st.say("no active abilities");
             return ScreenCmd::Stay;
         }
         ScreenCmd::Push {
@@ -437,10 +435,10 @@ impl MapScreen {
                         Ok(()) => {
                             self.stratum = player.stratum;
                             self.cam.snap(player.pos);
-                            st.set_status("jacked out", 60);
+                            st.say("jacked out");
                             return Some(ScreenCmd::Flash(TransitionKind::Glitch));
                         }
-                        Err(e) => st.set_status(e, 60),
+                        Err(e) => st.warn(e),
                     }
                 } else {
                     match player.jack_in(city, bonus) {
@@ -448,10 +446,10 @@ impl MapScreen {
                             self.stratum = StratumKind::Net;
                             self.cam.snap(port);
                             let where_ = port_name(city, port);
-                            st.set_status(format!("jacked in at {where_}"), 90);
+                            st.say(format!("jacked in at {where_}"));
                             return Some(ScreenCmd::Flash(TransitionKind::Glitch));
                         }
-                        Err(e) => st.set_status(e, 60),
+                        Err(e) => st.warn(e),
                     }
                 }
             }
@@ -461,16 +459,13 @@ impl MapScreen {
                     Some(dest) => {
                         self.stratum = dest;
                         player.update_fov(city, bonus);
-                        st.set_status(format!("now on {}", dest.label()), 60);
+                        st.say(format!("now on {}", dest.label()));
                     }
-                    None => st.set_status(
-                        if up {
-                            "nothing leads up from here"
-                        } else {
-                            "nothing leads down from here"
-                        },
-                        60,
-                    ),
+                    None => st.warn(if up {
+                        "nothing leads up from here"
+                    } else {
+                        "nothing leads down from here"
+                    }),
                 }
             }
             KeyCode::Char('.') => player.update_fov(city, bonus),
@@ -726,18 +721,15 @@ impl Screen for MapScreen {
                 format!("hjkl move · space act · a abilities · tab deck{cam} · ? keys")
             }
         };
+        let recent = st.log.recent(st.tick);
         let bottom = match &self.console {
-            Some(con) => console::line(
-                con,
-                st.tick,
-                st.status_text().map(|s| (s, st.status_is_warning())),
-            ),
+            Some(con) => console::line(con, st.tick, recent),
             None => status_bar(
                 Some(city),
                 self.stratum,
                 st.show_fps.then_some(self.fps.fps),
                 &hints,
-                st.status_text().map(|s| (s, st.status_is_warning())),
+                recent.map(|e| (e.text.as_str(), e.kind == Kind::Warn)),
                 st.dev,
             ),
         };
@@ -752,6 +744,10 @@ impl Screen for MapScreen {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn last(st: &AppState) -> Option<&str> {
+        st.log.latest().map(|e| e.text.as_str())
+    }
     use crate::app::{AppState, Screen, ScreenCmd};
     use crate::screens::testutil::{buffer_text, key};
     use citygen::{GenParams, Generator, SizePreset, StratumKind};
@@ -1290,7 +1286,7 @@ mod tests {
         assert_eq!(st.character.count(&game::ItemId::new("copper_coil")), 5);
         assert_eq!(st.character.count(&game::ItemId::new("dead_phone")), 2);
         assert!(st.ground.at(k, pos).is_empty());
-        assert_eq!(st.status_text(), Some("took 3 items"));
+        assert_eq!(last(&st), Some("took 3 items"));
         let ScreenCmd::Push { to: mut p, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
         else {
             panic!()
@@ -1340,7 +1336,7 @@ mod tests {
                 }
             ),
             "status: {:?}",
-            st.status_text()
+            last(&st)
         );
         assert!(st.player.as_ref().unwrap().jacked_in());
         s.update(&mut st, &[]);
@@ -1376,7 +1372,7 @@ mod tests {
         p.update(&mut st, &[key(KeyCode::Char('<'))]);
         s.update(&mut st, &[]);
         assert_eq!(s.stratum, StratumKind::Undercity);
-        assert_eq!(st.status_text(), Some("now on Undercity"));
+        assert_eq!(last(&st), Some("now on Undercity"));
     }
 
     #[test]
@@ -1405,7 +1401,7 @@ mod tests {
         let before = seen(&st);
         p.update(&mut st, &[key(KeyCode::Char('a'))]);
         assert!(seen(&st) > before, "the scan painted the map");
-        assert_eq!(st.status_text(), Some("Netscan: pulse sent"));
+        assert_eq!(last(&st), Some("Netscan: pulse sent"));
         let ScreenCmd::Push { to: mut p, .. } = s.update(&mut st, &[key(KeyCode::Char('a'))])
         else {
             panic!()
@@ -1413,18 +1409,18 @@ mod tests {
         st.tick += 40;
         let text = draw_screen(&*p, &st, 120, 40);
         assert!(text.contains("Netscan · cooling"), "{text}");
-        let msg = st.status_text().map(|m| m.to_string());
+        let msg = last(&st).map(|m| m.to_string());
         assert!(
             matches!(p.update(&mut st, &[key(KeyCode::Enter)]), ScreenCmd::Stay),
             "a cooling row cannot fire"
         );
-        assert_eq!(st.status_text().map(|m| m.to_string()), msg);
+        assert_eq!(last(&st).map(|m| m.to_string()), msg);
         st.character.equipment.clear();
         assert!(matches!(
             s.update(&mut st, &[key(KeyCode::Char('a'))]),
             ScreenCmd::Stay
         ));
-        assert_eq!(st.status_text(), Some("no active abilities"));
+        assert_eq!(last(&st), Some("no active abilities"));
     }
 
     #[test]
@@ -1439,8 +1435,8 @@ mod tests {
         s.update(&mut st, &[key(KeyCode::Char(':'))]);
         assert!(s.console.is_some());
         let text = draw_screen(&s, &st, 120, 40);
-        let last = text.lines().last().unwrap();
-        assert!(last.starts_with(": "), "{last:?}");
+        let prompt = text.lines().last().unwrap();
+        assert!(prompt.starts_with(": "), "{prompt:?}");
         st.character.hp = 1;
         for c in "heal".chars() {
             s.update(&mut st, &[key(KeyCode::Char(c))]);
@@ -1448,19 +1444,25 @@ mod tests {
         assert!(draw_screen(&s, &st, 120, 40).contains(": heal"));
         s.update(&mut st, &[key(KeyCode::Enter)]);
         assert_eq!(st.character.hp, 45);
-        assert_eq!(st.status_text(), Some("hp 45/45"));
-        let last = draw_screen(&s, &st, 120, 40);
-        let last = last.lines().last().unwrap();
+        assert_eq!(last(&st), Some("hp 45/45"));
+        let screen = draw_screen(&s, &st, 120, 40);
+        let last_row = screen.lines().last().unwrap();
         assert!(
-            last.starts_with(": ") && last.contains("hp 45/45"),
-            "the result shows beside the prompt: {last:?}"
+            last_row.starts_with(": ") && last_row.contains("hp 45/45"),
+            "the result shows beside the prompt: {last_row:?}"
         );
         for c in "fly".chars() {
             s.update(&mut st, &[key(KeyCode::Char(c))]);
         }
         s.update(&mut st, &[key(KeyCode::Enter)]);
-        let last = draw_screen(&s, &st, 120, 40);
-        assert!(last.lines().last().unwrap().contains("unknown command fly"));
+        let screen = draw_screen(&s, &st, 120, 40);
+        assert!(
+            screen
+                .lines()
+                .last()
+                .unwrap()
+                .contains("unknown command fly")
+        );
         s.update(&mut st, &[key(KeyCode::Esc)]);
         assert!(s.console.is_none());
     }

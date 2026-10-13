@@ -2,6 +2,7 @@
 
 use crate::anim::effects::pulse;
 use crate::app::AppState;
+use crate::messages::{Entry, Kind};
 use crate::ui::chrome::{CYAN, DIM, MAGENTA, MAGENTA_RGB, TEXT};
 use crate::ui::console::Console;
 use game::{At, ItemId};
@@ -97,9 +98,9 @@ pub fn complete(st: &AppState, head: &str, word: &str) -> Vec<String> {
     }
 }
 
-/// The console as the status row: prompt, input, a pulsing cursor, then the completion
-/// hint or, without one, the last result (`status`, with its warning flag).
-pub fn line(con: &Console, tick: u64, status: Option<(&str, bool)>) -> Line<'static> {
+/// The console as the bottom row: prompt, input, a pulsing cursor, then the completion
+/// hint or, without one, the newest log entry while it is recent.
+pub fn line(con: &Console, tick: u64, recent: Option<&Entry>) -> Line<'static> {
     let mut spans = vec![
         Span::styled(": ", Style::default().fg(CYAN).add_modifier(Modifier::BOLD)),
         Span::styled(con.input.clone(), Style::default().fg(TEXT)),
@@ -110,13 +111,13 @@ pub fn line(con: &Console, tick: u64, status: Option<(&str, bool)>) -> Line<'sta
     ];
     if let Some(hint) = &con.hint {
         spans.push(Span::styled(format!("  {hint}"), Style::default().fg(DIM)));
-    } else if let Some((msg, warn)) = status {
-        let style = if warn {
+    } else if let Some(e) = recent {
+        let style = if e.kind == Kind::Warn {
             Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(CYAN)
         };
-        spans.push(Span::styled(format!("  {msg}"), style));
+        spans.push(Span::styled(format!("  {}", e.marked()), style));
     }
     Line::from(spans)
 }

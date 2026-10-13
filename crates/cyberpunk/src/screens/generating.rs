@@ -141,7 +141,7 @@ impl Screen for Generating {
                                 fx: TransitionKind::Glitch,
                             };
                         }
-                        Err(e) => st.set_status(e.to_string(), 90),
+                        Err(e) => st.warn(e.to_string()),
                     }
                 }
                 KeyCode::Esc => {

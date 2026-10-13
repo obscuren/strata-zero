@@ -4,6 +4,7 @@
 use crate::anim::effects::{glitch_cells, pulse, typewriter};
 use crate::anim::{Easing, Tween};
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
+use crate::messages::Kind;
 use crate::render::glyphs::kind_icon;
 use crate::render::memmap::MemoryMap;
 use crate::screens::popup::{Choice, Pick, Popup};
@@ -172,7 +173,7 @@ impl Deck {
                     ));
                 }
                 if choices.is_empty() {
-                    st.set_status(format!("nothing in the pack fits {}", slot.label()), 90);
+                    st.warn(format!("nothing in the pack fits {}", slot.label()));
                     return None;
                 }
                 Some(
@@ -938,17 +939,18 @@ impl Screen for Deck {
         }
 
         // Status strip: the last action's result, typed out; refusals in magenta.
-        if let (Some(text), Some(since)) = (st.status_text(), st.status_since()) {
-            let p = tick.saturating_sub(since) as f32 / 20.0;
+        if let Some(e) = st.log.recent(tick) {
+            let p = tick.saturating_sub(e.tick) as f32 / 20.0;
+            let text = e.marked();
             let shown = if p < 1.0 {
-                format!("{}▮", typewriter(text, p))
+                format!("{}▮", typewriter(&text, p))
             } else {
-                text.to_string()
+                text.clone()
             };
-            let style = if st.status_is_warning() {
-                Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(CYAN)
+            let style = match e.kind {
+                Kind::Warn => Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD),
+                Kind::Story => Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+                Kind::Info => Style::default().fg(CYAN),
             };
             put(buf, inner.x + 1, strip_y, &shown, style, right);
         }
@@ -982,6 +984,14 @@ impl Screen for Deck {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn last(st: &AppState) -> Option<&str> {
+        st.log.latest().map(|e| e.text.as_str())
+    }
+
+    fn last_is_warning(st: &AppState) -> bool {
+        st.log.latest().is_some_and(|e| e.kind == Kind::Warn)
+    }
     use crate::screens::testutil::{buffer_text, key};
     use citygen::{GenParams, Generator, SizePreset};
     use game::AbilityId;
@@ -1413,10 +1423,10 @@ mod tests {
             text.contains("hp 45/45") && text.contains("11.6/16.0 kg"),
             "{text}"
         );
-        st.set_status("equipped Hardhat with visor", 90);
+        st.say("equipped Hardhat with visor");
         st.tick += 30;
         assert!(draw(&d, &st, 120, 35).contains("equipped Hardhat with visor"));
-        st.set_warning("over capacity · 20.0/16.0 kg", 90);
+        st.warn("over capacity · 20.0/16.0 kg");
         st.tick += 30;
         let mut t = Terminal::new(TestBackend::new(120, 35)).unwrap();
         t.draw(|f| d.draw(&st, f)).unwrap();
@@ -1511,7 +1521,7 @@ mod tests {
             Some(&ItemId::new("mirrorshades"))
         );
         assert_eq!(
-            st.status_text(),
+            last(&st),
             Some("swapped Nightglass optics for Mirrorshades")
         );
         d.row = rows.iter().position(|r| r.text.contains("LEGS")).unwrap();
@@ -1519,7 +1529,7 @@ mod tests {
             d.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Stay
         ));
-        assert_eq!(st.status_text(), Some("nothing in the pack fits legs"));
+        assert_eq!(last(&st), Some("nothing in the pack fits legs"));
     }
 
     #[test]
@@ -1594,7 +1604,7 @@ mod tests {
             panic!()
         };
         p.update(&mut st, &[key(KeyCode::Char('d'))]);
-        assert!(st.status_is_warning());
+        assert!(last_is_warning(&st));
     }
 
     #[test]
