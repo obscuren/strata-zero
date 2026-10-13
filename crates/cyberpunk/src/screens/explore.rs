@@ -35,31 +35,54 @@ pub enum Mode {
     Walk,
 }
 
+/// A gap longer than this between frames means the map was not being updated (a
+/// menu was open); the meter restarts its window instead of counting the gap.
+const FPS_GAP: f32 = 0.5;
+
 /// Frames per second over the last second.
 pub struct FpsMeter {
+    /// Start of the current measuring window.
     last: Instant,
+    /// The previous frame, to spot gaps.
+    prev: Instant,
     frames: u32,
     pub fps: f32,
 }
 
 impl Default for FpsMeter {
     fn default() -> Self {
-        FpsMeter {
-            last: Instant::now(),
-            frames: 0,
-            fps: 0.0,
-        }
+        FpsMeter::new(Instant::now())
     }
 }
 
 impl FpsMeter {
+    pub fn new(now: Instant) -> Self {
+        FpsMeter {
+            last: now,
+            prev: now,
+            frames: 0,
+            fps: 0.0,
+        }
+    }
+
     pub fn frame(&mut self) {
+        self.frame_at(Instant::now());
+    }
+
+    pub fn frame_at(&mut self, now: Instant) {
+        let gap = now.saturating_duration_since(self.prev).as_secs_f32();
+        self.prev = now;
+        if gap > FPS_GAP {
+            self.last = now;
+            self.frames = 0;
+            return;
+        }
         self.frames += 1;
-        let elapsed = self.last.elapsed().as_secs_f32();
+        let elapsed = now.saturating_duration_since(self.last).as_secs_f32();
         if elapsed >= 1.0 {
             self.fps = self.frames as f32 / elapsed;
             self.frames = 0;
-            self.last = Instant::now();
+            self.last = now;
         }
     }
 }
@@ -521,8 +544,7 @@ impl Screen for MapScreen {
         let cam = if st.dev { " · c camera" } else { "" };
         let hints = match (self.mode, jacked) {
             (Mode::Explore, _) => {
-                "hjkl pan · [] level · w walk · tab deck · d overlay · e legend · ? keys"
-                    .to_string()
+                "hjkl pan · [] level · w walk · tab deck · d overlay · s save · ? keys".to_string()
             }
             (Mode::Walk, true) => {
                 format!(
@@ -912,6 +934,40 @@ mod tests {
         assert!(
             text.contains("tab deck") && !text.contains("c camera"),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn fps_meter_ignores_the_gap_while_a_menu_is_open() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let mut m = FpsMeter::new(t0);
+        for i in 1..=60u64 {
+            m.frame_at(t0 + Duration::from_millis(i * 1000 / 60 + 1));
+        }
+        assert!((m.fps - 60.0).abs() < 2.0, "{}", m.fps);
+        // Three seconds under a menu, then the first frame back on the map.
+        m.frame_at(t0 + Duration::from_millis(4001));
+        assert!((m.fps - 60.0).abs() < 2.0, "after the gap: {}", m.fps);
+        // A fresh second of frames measures normally again.
+        for i in 1..=60u64 {
+            m.frame_at(t0 + Duration::from_millis(4001 + i * 1000 / 60 + 1));
+        }
+        assert!((m.fps - 60.0).abs() < 2.0, "{}", m.fps);
+    }
+
+    #[test]
+    fn explore_hints_mention_save() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        s.update(&mut st, &[]);
+        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let text = buffer_text(t.backend().buffer());
+        let status = text.lines().last().unwrap();
+        assert!(
+            status.contains("s save") && status.contains("? keys"),
+            "{status:?}"
         );
     }
 }
