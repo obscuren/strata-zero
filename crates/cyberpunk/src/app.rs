@@ -31,10 +31,14 @@ pub struct AppState {
     /// Dev mode: free camera, stratum browsing and the inspector. Toggled with `` ` ``.
     pub dev: bool,
     /// Rain overlay on the map (Settings).
+    #[allow(dead_code)] // read from Task 5
     pub rain: bool,
     /// FPS readout in the status bar (Settings).
+    #[allow(dead_code)] // read from Task 5
     pub show_fps: bool,
+    #[allow(dead_code)] // read from Task 7
     pub content: game::Content,
+    #[allow(dead_code)] // read from Task 7
     pub character: game::Character,
     status: Option<(String, u64)>,
 }
@@ -80,6 +84,7 @@ impl AppState {
 pub use crate::ui::transition::{Transition, TransitionKind};
 
 /// What a screen asks the loop to do after an update.
+#[allow(dead_code)] // Push/Pop/Flash are constructed from Task 4 and Task 9
 pub enum ScreenCmd {
     Stay,
     /// Replace the whole stack with one screen.
@@ -412,9 +417,17 @@ mod tests {
         let tr = runner.transition().expect("flash started a transition");
         assert_eq!(tr.kind, TransitionKind::Glitch);
         assert_eq!(tr.dur, 10);
-        // Drawing at another size while the flash runs must not touch the stale snapshot.
+        // Drawing at another size while the flash runs must not touch the stale snapshot;
+        // once the flash is over the screen is still the same one.
         let mut small = Terminal::new(TestBackend::new(100, 31)).unwrap();
-        assert!(runner.frame(&mut small, &[]).unwrap());
+        for _ in 0..12 {
+            assert!(runner.frame(&mut small, &[]).unwrap());
+        }
+        assert!(
+            runner
+                .transition()
+                .is_none_or(|t| !t.active(runner.st.tick))
+        );
         assert!(text(&small).contains("BASE"));
     }
 
