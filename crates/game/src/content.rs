@@ -153,7 +153,6 @@ impl Content {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::*;
 
     #[test]
     fn embedded_content_parses_and_covers_the_kit() {
