@@ -636,6 +636,13 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("step 2 of 6"), "{text}");
+        for l in text.lines().filter(|l| l.contains("│")) {
+            let after = l.rsplit('│').next().unwrap_or("");
+            assert!(
+                after.trim().is_empty(),
+                "nothing spills past the dossier: {l:?}"
+            );
+        }
         assert_eq!(
             st.build
                 .as_ref()

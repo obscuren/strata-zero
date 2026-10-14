@@ -153,7 +153,13 @@ pub(super) fn draw(
         &e.name,
         Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
     );
-    buf.set_string(x + 10, y + 2, &e.line, Style::default().fg(DIM));
+    buf.set_stringn(
+        x + 10,
+        y + 2,
+        &e.line,
+        inner.right().saturating_sub(x + 11) as usize,
+        Style::default().fg(DIM),
+    );
     y += 4;
     let width = inner.width.saturating_sub(4) as usize;
     let lines: Vec<Line<'static>> = wrap(&e.desc, width).into_iter().map(plain).collect();

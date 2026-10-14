@@ -99,7 +99,13 @@ pub(super) fn draw(st: &AppState, b: &Build, body: Rect, tall: bool, tick: u64, 
             &o.name,
             Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
         );
-        buf.set_string(rx + 12, y + 1, &o.line, dim);
+        buf.set_stringn(
+            rx + 12,
+            y + 1,
+            &o.line,
+            body.right().saturating_sub(rx + 12) as usize,
+            dim,
+        );
         y += 3;
     }
     if let Some(p) = b.profession.as_ref().and_then(|id| c.profession(id)) {
@@ -110,7 +116,13 @@ pub(super) fn draw(st: &AppState, b: &Build, body: Rect, tall: bool, tick: u64, 
             &p.name,
             Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
         );
-        buf.set_string(rx + 12, y + 1, &p.line, dim);
+        buf.set_stringn(
+            rx + 12,
+            y + 1,
+            &p.line,
+            body.right().saturating_sub(rx + 12) as usize,
+            dim,
+        );
         y += 3;
         buf.set_string(rx, y, "KIT", dim);
         y += 1;
