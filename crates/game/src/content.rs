@@ -29,21 +29,26 @@ pub enum ContentError {
     SlotMismatch { item: String, slot: Slot },
     #[error("duplicate id `{0}`")]
     DuplicateId(String),
-    #[error("starter level must be at least 1")]
-    StarterLevel,
     #[error("ability `{ability}` is passive but has fx")]
     FxOnPassive { ability: String },
-    #[error("quest `{quest}`: starter flags do not match its objectives")]
-    ObjectiveCount { quest: String },
-    #[error("starter {what}: duplicate `{id}`")]
-    DuplicateStarter { what: String, id: String },
-    #[error("starter talent `{talent}` needs {skill} {need}; the starter has {have}")]
-    TalentLevel {
-        talent: String,
-        skill: String,
-        need: u8,
-        have: u8,
-    },
+    #[error("skill `{id}` belongs to no category")]
+    SkillInNoCategory { id: String },
+    #[error("skill `{id}` belongs to categories `{a}` and `{b}`")]
+    SkillInTwoCategories { id: String, a: String, b: String },
+    #[error("category `{category}`: its first skill `{skill}` must be free")]
+    FirstSkillCosts { category: String, skill: String },
+    #[error("{where_}: unknown origin `{id}`")]
+    UnknownOrigin { where_: String, id: String },
+    #[error("{where_}: unknown profession `{id}`")]
+    UnknownProfession { where_: String, id: String },
+    #[error("{where_}: unknown category `{id}`")]
+    UnknownCategory { where_: String, id: String },
+    #[error("{what} `{id}`: emblem must be three rows of seven glyphs")]
+    EmblemShape { what: String, id: String },
+    #[error("creation quest `{quest}`: flags do not match its objectives")]
+    CreationQuest { quest: String },
+    #[error("template `{id}`: {why}")]
+    TemplateInvalid { id: String, why: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -55,7 +60,12 @@ pub struct Content {
     pub recipes: Vec<Recipe>,
     #[serde(default)]
     pub abilities: Vec<Ability>,
-    pub starter: Starter,
+    pub creation: Creation,
+    pub origins: Vec<Origin>,
+    pub professions: Vec<Profession>,
+    pub categories: Vec<Category>,
+    pub templates: Vec<Template>,
+    pub stat_blurbs: Vec<(Stat, String)>,
 }
 
 impl Content {
@@ -116,11 +126,6 @@ impl Content {
                     item: i.id.0.clone(),
                 });
             }
-            for p in &i.perks {
-                if let Perk::Skill(id, _) = p {
-                    need_skill(format!("item {}", i.id), id)?;
-                }
-            }
             for id in &i.grants {
                 need_ability(format!("item {}", i.id), id)?;
             }
@@ -142,77 +147,130 @@ impl Content {
             }
             need_item(format!("recipe {} output", r.id), &r.output.0)?;
         }
-        let s = &self.starter;
-        if s.level == 0 {
-            return Err(ContentError::StarterLevel);
-        }
-        for (id, _) in &s.inventory {
-            need_item("starter inventory".into(), id)?;
-        }
-        let dup = |what: &str, id: String| ContentError::DuplicateStarter {
-            what: what.to_string(),
-            id,
-        };
-        let mut slots: HashSet<Slot> = HashSet::new();
-        for (slot, id) in &s.equipped {
-            let item = need_item("starter equipment".into(), id)?;
-            if item.slot != Some(*slot) {
-                return Err(ContentError::SlotMismatch {
-                    item: id.0.clone(),
-                    slot: *slot,
-                });
+        self.validate_creation(&need_item, &need_skill, &need_ability)?;
+        Ok(())
+    }
+
+    /// Origins, professions, categories and templates: ids unique within their kind,
+    /// every reference resolving, every skill in exactly one category with its first
+    /// skill free, emblems three rows of seven glyphs.
+    fn validate_creation<'a>(
+        &'a self,
+        need_item: &dyn Fn(String, &ItemId) -> Result<&'a Item, ContentError>,
+        need_skill: &dyn Fn(String, &SkillId) -> Result<&'a Skill, ContentError>,
+        need_ability: &dyn Fn(String, &AbilityId) -> Result<&'a Ability, ContentError>,
+    ) -> Result<(), ContentError> {
+        fn unique<'b>(ids: impl Iterator<Item = &'b str>) -> Result<(), ContentError> {
+            let mut seen: HashSet<&str> = HashSet::new();
+            for id in ids {
+                if !seen.insert(id) {
+                    return Err(ContentError::DuplicateId(id.to_string()));
+                }
             }
-            if !slots.insert(*slot) {
-                return Err(dup("equipment", slot.label().to_string()));
-            }
+            Ok(())
         }
-        let mut skills: HashSet<&SkillId> = HashSet::new();
-        for (id, _) in &s.skills {
-            need_skill("starter skills".into(), id)?;
-            if !skills.insert(id) {
-                return Err(dup("skills", id.0.clone()));
-            }
-        }
-        for id in &s.talents {
-            let t = self.talent(id).ok_or_else(|| ContentError::UnknownTalent {
-                where_: "starter talents".into(),
-                id: id.0.clone(),
-            })?;
-            let have = s
-                .skills
-                .iter()
-                .find(|(sk, _)| sk == &t.skill)
-                .map(|(_, l)| *l)
-                .unwrap_or(0);
-            if have < t.level {
-                return Err(ContentError::TalentLevel {
-                    talent: id.0.clone(),
-                    skill: t.skill.0.clone(),
-                    need: t.level,
-                    have,
+        unique(self.origins.iter().map(|o| o.id.0.as_str()))?;
+        unique(self.professions.iter().map(|p| p.id.0.as_str()))?;
+        unique(self.categories.iter().map(|c| c.id.0.as_str()))?;
+        unique(self.templates.iter().map(|t| t.id.0.as_str()))?;
+        let emblem_ok =
+            |rows: &[String]| rows.len() == 3 && rows.iter().all(|r| r.chars().count() == 7);
+        for o in &self.origins {
+            if !emblem_ok(&o.emblem) {
+                return Err(ContentError::EmblemShape {
+                    what: "origin".into(),
+                    id: o.id.0.clone(),
                 });
             }
         }
-        let mut abilities: HashSet<&AbilityId> = HashSet::new();
-        for id in &s.abilities {
-            need_ability("starter abilities".into(), id)?;
-            if !abilities.insert(id) {
-                return Err(dup("abilities", id.0.clone()));
+        for p in &self.professions {
+            if !emblem_ok(&p.emblem) {
+                return Err(ContentError::EmblemShape {
+                    what: "profession".into(),
+                    id: p.id.0.clone(),
+                });
+            }
+            for (id, _) in &p.kit {
+                need_item(format!("profession {}", p.id), id)?;
             }
         }
-        let mut quests: HashSet<&QuestId> = HashSet::new();
-        for (id, flags) in &s.quests {
+        let mut owner: std::collections::HashMap<&SkillId, &CategoryId> =
+            std::collections::HashMap::new();
+        for cat in &self.categories {
+            for (i, s) in cat.skills.iter().enumerate() {
+                need_skill(format!("category {}", cat.id), &s.id)?;
+                if i == 0 && s.cost != 0 {
+                    return Err(ContentError::FirstSkillCosts {
+                        category: cat.id.0.clone(),
+                        skill: s.id.0.clone(),
+                    });
+                }
+                if let Some(other) = owner.insert(&s.id, &cat.id) {
+                    return Err(ContentError::SkillInTwoCategories {
+                        id: s.id.0.clone(),
+                        a: other.0.clone(),
+                        b: cat.id.0.clone(),
+                    });
+                }
+            }
+            for id in &cat.grants {
+                need_ability(format!("category {}", cat.id), id)?;
+            }
+        }
+        for s in &self.skills {
+            if !owner.contains_key(&s.id) {
+                return Err(ContentError::SkillInNoCategory { id: s.id.0.clone() });
+            }
+        }
+        for t in &self.templates {
+            let where_ = format!("template {}", t.id);
+            self.origin(&t.origin)
+                .ok_or_else(|| ContentError::UnknownOrigin {
+                    where_: where_.clone(),
+                    id: t.origin.0.clone(),
+                })?;
+            self.profession(&t.profession)
+                .ok_or_else(|| ContentError::UnknownProfession {
+                    where_: where_.clone(),
+                    id: t.profession.0.clone(),
+                })?;
+            for id in &t.categories {
+                self.category(id)
+                    .ok_or_else(|| ContentError::UnknownCategory {
+                        where_: where_.clone(),
+                        id: id.0.clone(),
+                    })?;
+            }
+            for id in &t.skills {
+                need_skill(where_.clone(), id)?;
+            }
+            for id in &t.talents {
+                self.talent(id).ok_or_else(|| ContentError::UnknownTalent {
+                    where_: where_.clone(),
+                    id: id.0.clone(),
+                })?;
+            }
+            for (id, _) in &t.kit {
+                need_item(where_.clone(), id)?;
+            }
+        }
+        for t in &self.templates {
+            crate::build::Build::from_template(self, t)
+                .validate(self)
+                .map_err(|e| ContentError::TemplateInvalid {
+                    id: t.id.0.clone(),
+                    why: e.to_string(),
+                })?;
+        }
+        for (id, flags) in &self.creation.quests {
             let q = self.quest(id).ok_or_else(|| ContentError::UnknownQuest {
-                where_: "starter quests".into(),
+                where_: "creation quests".into(),
                 id: id.0.clone(),
             })?;
             if flags.len() != q.objectives.len() {
-                return Err(ContentError::ObjectiveCount {
+                return Err(ContentError::CreationQuest {
                     quest: id.0.clone(),
                 });
-            }
-            if !quests.insert(id) {
-                return Err(dup("quests", id.0.clone()));
             }
         }
         Ok(())
@@ -220,6 +278,39 @@ impl Content {
 
     pub fn item(&self, id: &ItemId) -> Option<&Item> {
         self.items.iter().find(|i| &i.id == id)
+    }
+    pub fn origin(&self, id: &OriginId) -> Option<&Origin> {
+        self.origins.iter().find(|o| &o.id == id)
+    }
+    pub fn profession(&self, id: &ProfessionId) -> Option<&Profession> {
+        self.professions.iter().find(|p| &p.id == id)
+    }
+    pub fn category(&self, id: &CategoryId) -> Option<&Category> {
+        self.categories.iter().find(|c| &c.id == id)
+    }
+    pub fn template(&self, id: &TemplateId) -> Option<&Template> {
+        self.templates.iter().find(|t| &t.id == id)
+    }
+    /// The category a skill sits in.
+    pub fn category_of(&self, skill: &SkillId) -> Option<&Category> {
+        self.categories
+            .iter()
+            .find(|c| c.skills.iter().any(|s| &s.id == skill))
+    }
+    /// What a skill costs in SP, by its category's listing.
+    pub fn skill_cost(&self, skill: &SkillId) -> Option<u32> {
+        self.category_of(skill)?
+            .skills
+            .iter()
+            .find(|s| &s.id == skill)
+            .map(|s| s.cost)
+    }
+    pub fn stat_blurb(&self, stat: Stat) -> &str {
+        self.stat_blurbs
+            .iter()
+            .find(|(s, _)| *s == stat)
+            .map(|(_, b)| b.as_str())
+            .unwrap_or("")
     }
 
     pub fn skill(&self, id: &SkillId) -> Option<&Skill> {
@@ -256,7 +347,7 @@ mod tests {
     fn embedded_content_parses_and_covers_the_kit() {
         let c = Content::load().unwrap();
         assert!(c.items.len() >= 14, "{} items", c.items.len());
-        assert_eq!(c.skills.len(), 8);
+        assert_eq!(c.skills.len(), 24);
         assert!(c.talents.len() >= 8);
         assert!(c.quests.len() >= 4);
         assert!(c.recipes.len() >= 6);
@@ -269,19 +360,14 @@ mod tests {
                 "no item for {slot:?}"
             );
         }
-        let s = &c.starter;
-        assert_eq!(s.handle, "Vex");
-        assert!((2..=4).contains(&s.equipped.len()));
+        let vex = c.template(&TemplateId::new("vex")).unwrap();
+        assert_eq!(vex.handle, "VEX");
         assert!(
-            s.equipped.len() < Slot::ALL.len(),
-            "at least one slot stays empty"
-        );
-        assert!(
-            s.quests.iter().any(|(_, d)| d.iter().all(|x| *x)),
+            c.creation.quests.iter().any(|(_, d)| d.iter().all(|x| *x)),
             "one quest is done"
         );
         assert!(
-            s.quests.iter().any(|(_, d)| d.iter().any(|x| !*x)),
+            c.creation.quests.iter().any(|(_, d)| d.iter().any(|x| !*x)),
             "one quest is active"
         );
         assert_eq!(
@@ -294,10 +380,6 @@ mod tests {
     #[test]
     fn validation_catches_broken_content() {
         let good = Content::load().unwrap();
-
-        let mut c = good.clone();
-        c.starter.level = 0;
-        assert!(matches!(c.validate(), Err(ContentError::StarterLevel)));
 
         let mut c = good.clone();
         c.abilities
@@ -319,24 +401,15 @@ mod tests {
         ));
 
         let mut c = good.clone();
-        c.starter.equipped[0].0 = Slot::Legs; // the first equipped item is not legwear
-        let first = c.starter.equipped[0].1.clone();
-        assert_ne!(c.item(&first).unwrap().slot, Some(Slot::Legs));
-        assert!(matches!(
-            c.validate(),
-            Err(ContentError::SlotMismatch { .. })
-        ));
-
-        let mut c = good.clone();
         let dup = c.items[0].clone();
         c.items.push(dup);
         assert!(matches!(c.validate(), Err(ContentError::DuplicateId(_))));
 
         let mut c = good.clone();
-        c.starter.quests[0].1.push(true);
+        c.creation.quests[0].1.push(true);
         assert!(matches!(
             c.validate(),
-            Err(ContentError::ObjectiveCount { .. })
+            Err(ContentError::CreationQuest { .. })
         ));
 
         let mut c = good.clone();
@@ -347,48 +420,25 @@ mod tests {
         ));
 
         let mut c = good.clone();
-        c.starter.talents.push(TalentId::new("levitation"));
+        c.templates[0].talents.push(TalentId::new("levitation"));
         assert!(matches!(
             c.validate(),
             Err(ContentError::UnknownTalent { .. })
         ));
 
         let mut c = good.clone();
-        c.starter.quests[0].0 = QuestId::new("the_grail");
+        c.creation.quests[0].0 = QuestId::new("the_grail");
         assert!(matches!(
             c.validate(),
             Err(ContentError::UnknownQuest { .. })
         ));
 
         let mut c = good.clone();
-        let dup = c.starter.equipped[0].clone();
-        c.starter.equipped.push(dup);
+        c.templates[0].stats.body = 8;
+        c.templates[0].stats.cool = 8;
         assert!(matches!(
             c.validate(),
-            Err(ContentError::DuplicateStarter { .. })
-        ));
-
-        let mut c = good.clone();
-        let dup = c.starter.skills[0].clone();
-        c.starter.skills.push(dup);
-        assert!(matches!(
-            c.validate(),
-            Err(ContentError::DuplicateStarter { .. })
-        ));
-
-        let mut c = good.clone();
-        let dup = c.starter.quests[0].clone();
-        c.starter.quests.push(dup);
-        assert!(matches!(
-            c.validate(),
-            Err(ContentError::DuplicateStarter { .. })
-        ));
-
-        let mut c = good.clone();
-        c.starter.talents.push(TalentId::new("deep_dive")); // hacking 4; the starter has 3
-        assert!(matches!(
-            c.validate(),
-            Err(ContentError::TalentLevel { .. })
+            Err(ContentError::TemplateInvalid { .. })
         ));
 
         let mut c = good.clone();
@@ -427,29 +477,6 @@ mod tests {
         assert!(matches!(
             c.validate(),
             Err(ContentError::UnknownAbility { .. })
-        ));
-
-        let mut c = good.clone();
-        c.items[optics]
-            .perks
-            .push(Perk::Skill(SkillId::new("origami"), 1));
-        assert!(matches!(
-            c.validate(),
-            Err(ContentError::UnknownSkill { .. })
-        ));
-
-        let mut c = good.clone();
-        c.starter.abilities.push(AbilityId::new("flight"));
-        assert!(matches!(
-            c.validate(),
-            Err(ContentError::UnknownAbility { .. })
-        ));
-
-        let mut c = good.clone();
-        c.starter.abilities.push(AbilityId::new("street_sense"));
-        assert!(matches!(
-            c.validate(),
-            Err(ContentError::DuplicateStarter { .. })
         ));
 
         let mut c = good.clone();
@@ -518,7 +545,6 @@ mod tests {
             c.ability(&AbilityId::new("lowlight")).unwrap().kind,
             AbilityKind::Passive
         ));
-        assert_eq!(c.starter.abilities, vec![AbilityId::new("street_sense")]);
         let trace = c.ability(&AbilityId::new("arc_trace")).unwrap();
         assert!(matches!(
             trace.kind,
@@ -542,5 +568,108 @@ mod tests {
             c.item(&ItemId::new("pawnshop_deck")).unwrap().grants,
             vec![AbilityId::new("netscan"), AbilityId::new("arc_trace")]
         );
+    }
+
+    #[test]
+    fn creation_content_loads_and_resolves() {
+        let c = Content::load().unwrap();
+        assert_eq!(
+            (
+                c.creation.stat_base,
+                c.creation.stat_cap,
+                c.creation.stat_points
+            ),
+            (3, 8, 20)
+        );
+        assert_eq!(
+            (c.creation.point_cost, c.creation.sp, c.creation.name_max),
+            (2, 6, 16)
+        );
+        assert_eq!(c.origins.len(), 4);
+        assert_eq!(c.professions.len(), 4);
+        assert_eq!(c.categories.len(), 8);
+        assert_eq!(c.templates.len(), 2);
+        assert_eq!(c.skills.len(), 24);
+        for o in &c.origins {
+            assert_eq!(
+                (o.cheap.len(), o.dear.len(), o.emblem.len()),
+                (2, 2, 3),
+                "{}",
+                o.id
+            );
+        }
+        for p in &c.professions {
+            assert_eq!(
+                (p.cheap.len(), p.dear.len(), p.emblem.len()),
+                (1, 1, 3),
+                "{}",
+                p.id
+            );
+        }
+        let net = c.category(&CategoryId::new("netrunner")).unwrap();
+        assert_eq!(net.cost, 2);
+        assert_eq!(net.skills[0].cost, 0);
+        assert_eq!(net.grants, vec![AbilityId::new("signal_ghost")]);
+        let wrench = c.category(&CategoryId::new("wrench")).unwrap();
+        assert_eq!(wrench.unlocks, vec![Unlock::Workbench]);
+        assert_eq!(c.category_of(&SkillId::new("hacking")).unwrap().id, net.id);
+        assert_eq!(c.skill_cost(&SkillId::new("ice_breaker")), Some(1));
+        assert_eq!(c.skill_cost(&SkillId::new("vault_run")), Some(2));
+        assert_eq!(c.skill_cost(&SkillId::new("origami")), None);
+        assert!(c.stat_blurb(Stat::Body).contains("meat"));
+        assert_eq!(c.template(&TemplateId::new("vex")).unwrap().handle, "VEX");
+        assert!(c.item(&ItemId::new("ballistic_weave")).is_some());
+        assert!(c.ability(&AbilityId::new("signal_ghost")).is_some());
+        assert!(c.talents.iter().all(|t| c.skill(&t.skill).is_some()));
+        assert!(c.recipes.iter().all(|r| c.skill(&r.skill).is_some()));
+    }
+
+    #[test]
+    fn creation_content_is_validated() {
+        let c = Content::load().unwrap();
+        let mut two = c.clone();
+        two.categories[1].skills.push(CategorySkill {
+            id: SkillId::new("hacking"),
+            cost: 1,
+        });
+        assert!(matches!(
+            two.validate(),
+            Err(ContentError::SkillInTwoCategories { .. })
+        ));
+        let mut none = c.clone();
+        none.skills.push(Skill {
+            id: SkillId::new("origami"),
+            name: "Origami".into(),
+            stat: Stat::Tech,
+            desc: "paper".into(),
+        });
+        assert!(matches!(
+            none.validate(),
+            Err(ContentError::SkillInNoCategory { .. })
+        ));
+        let mut costs = c.clone();
+        costs.categories[0].skills[0].cost = 1;
+        assert!(matches!(
+            costs.validate(),
+            Err(ContentError::FirstSkillCosts { .. })
+        ));
+        let mut kit = c.clone();
+        kit.professions[0].kit.push((ItemId::new("ghost_item"), 1));
+        assert!(matches!(
+            kit.validate(),
+            Err(ContentError::UnknownItem { .. })
+        ));
+        let mut t = c.clone();
+        t.templates[0].origin = OriginId::new("nowhere");
+        assert!(matches!(
+            t.validate(),
+            Err(ContentError::UnknownOrigin { .. })
+        ));
+        let mut e = c.clone();
+        e.origins[0].emblem.pop();
+        assert!(matches!(
+            e.validate(),
+            Err(ContentError::EmblemShape { .. })
+        ));
     }
 }

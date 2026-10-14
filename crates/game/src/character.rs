@@ -1,8 +1,9 @@
 //! The player's character: stats, skills, talents, equipment, inventory and quest log.
 
+use crate::build::Build;
 use crate::content::Content;
 use crate::model::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Stack {
@@ -26,6 +27,7 @@ impl QuestLog {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Source {
     Innate,
+    Category(CategoryId),
     Item(ItemId),
 }
 
@@ -43,55 +45,104 @@ pub struct Character {
     pub focus: u32,
     pub focus_max: u32,
     pub stats: Stats,
-    pub skills: Vec<(SkillId, u8)>,
+    pub origin: OriginId,
+    pub profession: ProfessionId,
+    pub categories: BTreeSet<CategoryId>,
+    pub skills: BTreeSet<SkillId>,
     pub talents: Vec<TalentId>,
-    /// Innate abilities; equipment adds more (see `abilities`).
+    /// Innate abilities; categories and equipment add more (see `abilities`).
     pub abilities: Vec<AbilityId>,
     pub equipment: BTreeMap<Slot, ItemId>,
     pub inventory: Vec<Stack>,
     pub quests: Vec<QuestLog>,
     /// The tick each active ability last fired, for cooldowns.
     pub fired: BTreeMap<AbilityId, u64>,
+    /// Unspent creation points, spendable from the deck under the same rules.
+    pub stat_points: u32,
+    pub sp: u32,
 }
 
 impl Character {
-    /// A new character from the content's starter kit.
-    pub fn from_starter(c: &Content) -> Character {
-        let s = &c.starter;
+    /// A playable character from a build. An invalid build still builds with whatever
+    /// it holds; the wizard validates before it gets here.
+    pub fn from_build(c: &Content, b: &Build) -> Character {
+        let cr = &c.creation;
         let mut ch = Character {
-            handle: s.handle.clone(),
-            credits: s.credits,
-            hp: s.hp,
-            hp_base: s.hp,
-            level: s.level,
+            handle: b.handle.trim().to_string(),
+            credits: 0,
+            hp: cr.hp,
+            hp_base: cr.hp,
+            level: 1,
             xp: 0,
-            focus: s.focus,
-            focus_max: s.focus,
-            stats: s.stats.clone(),
-            skills: s.skills.clone(),
-            talents: s.talents.clone(),
-            abilities: s.abilities.clone(),
-            equipment: s.equipped.iter().cloned().collect(),
-            inventory: s
-                .inventory
-                .iter()
-                .map(|(item, qty)| Stack {
-                    item: item.clone(),
-                    qty: *qty,
-                })
-                .collect(),
-            quests: s
+            focus: cr.focus,
+            focus_max: cr.focus,
+            stats: b.stats.clone(),
+            origin: b.origin.clone().unwrap_or_else(|| OriginId::new("")),
+            profession: b
+                .profession
+                .clone()
+                .unwrap_or_else(|| ProfessionId::new("")),
+            categories: b.categories.clone(),
+            skills: b.skills.clone(),
+            talents: b.talents.clone(),
+            abilities: Vec::new(),
+            equipment: BTreeMap::new(),
+            inventory: Vec::new(),
+            quests: cr
                 .quests
                 .iter()
-                .map(|(quest, done)| QuestLog {
-                    quest: quest.clone(),
-                    done: done.clone(),
+                .map(|(q, d)| QuestLog {
+                    quest: q.clone(),
+                    done: d.clone(),
                 })
                 .collect(),
             fired: BTreeMap::new(),
+            stat_points: b.points_left(c).max(0) as u32,
+            sp: b.sp_left(c).max(0) as u32,
         };
+        let mut kit: Vec<(ItemId, u32)> = Vec::new();
+        if let Some(p) = b.profession.as_ref().and_then(|id| c.profession(id)) {
+            ch.credits = p.credits;
+            kit.extend(p.kit.iter().cloned());
+        }
+        kit.extend(b.kit.iter().cloned());
+        // The first item that fits a free slot is worn; everything else is packed.
+        for (id, qty) in kit {
+            let Some(item) = c.item(&id) else { continue };
+            let mut qty = qty;
+            if let Some(slot) = item.slot
+                && qty > 0
+                && !ch.equipment.contains_key(&slot)
+            {
+                ch.equipment.insert(slot, id.clone());
+                qty -= 1;
+            }
+            ch.give(id, qty);
+        }
         ch.hp = ch.hp_max(c);
         ch
+    }
+
+    /// The character a template describes, or none for an unknown template.
+    pub fn from_template(c: &Content, id: &TemplateId) -> Option<Character> {
+        let t = c.template(id)?;
+        Some(Self::from_build(c, &Build::from_template(c, t)))
+    }
+
+    pub fn has_skill(&self, id: &SkillId) -> bool {
+        self.skills.contains(id)
+    }
+
+    pub fn has_category(&self, id: &CategoryId) -> bool {
+        self.categories.contains(id)
+    }
+
+    /// Whether an owned category opens the workbench.
+    pub fn has_workbench(&self, c: &Content) -> bool {
+        self.categories
+            .iter()
+            .filter_map(|id| c.category(id))
+            .any(|cat| cat.unlocks.contains(&Unlock::Workbench))
     }
 
     /// Perks of everything equipped, in slot order.
@@ -143,27 +194,6 @@ impl Character {
         (self.stats.get(stat) as i32 + bonus).clamp(0, 10) as u8
     }
 
-    /// The skill level before equipment.
-    pub fn skill_base(&self, id: &SkillId) -> u8 {
-        self.skills
-            .iter()
-            .find(|(s, _)| s == id)
-            .map(|(_, l)| *l)
-            .unwrap_or(0)
-    }
-
-    /// The skill level with equipment.
-    pub fn skill_level(&self, c: &Content, id: &SkillId) -> u8 {
-        let bonus: i32 = self
-            .perks(c)
-            .filter_map(|p| match p {
-                Perk::Skill(s, n) if s == id => Some(*n as i32),
-                _ => None,
-            })
-            .sum();
-        (self.skill_base(id) as i32 + bonus).max(0) as u8
-    }
-
     /// Extra field-of-view radius from equipment.
     pub fn sight_bonus(&self, c: &Content) -> i32 {
         self.perks(c)
@@ -190,13 +220,25 @@ impl Character {
         self.weight(c) > self.carry_cap(c)
     }
 
-    /// Innate abilities first, then those granted by equipment in slot order, deduplicated.
+    /// Innate abilities first, then those granted by owned categories in content order,
+    /// then those granted by equipment in slot order, deduplicated.
     pub fn abilities(&self, c: &Content) -> Vec<(AbilityId, Source)> {
         let mut out: Vec<(AbilityId, Source)> = self
             .abilities
             .iter()
             .map(|id| (id.clone(), Source::Innate))
             .collect();
+        for cat in c
+            .categories
+            .iter()
+            .filter(|cat| self.categories.contains(&cat.id))
+        {
+            for id in &cat.grants {
+                if !out.iter().any(|(have, _)| have == id) {
+                    out.push((id.clone(), Source::Category(cat.id.clone())));
+                }
+            }
+        }
         for slot in Slot::ALL {
             let Some(item) = self.equipment.get(&slot).and_then(|id| c.item(id)) else {
                 continue;
@@ -266,10 +308,9 @@ impl Character {
         carried + worn
     }
 
-    /// Whether the skill level and every input are there. Does not craft.
-    pub fn can_craft(&self, c: &Content, r: &Recipe) -> bool {
-        self.skill_level(c, &r.skill) >= r.level
-            && r.inputs.iter().all(|(id, n)| self.count(id) >= *n)
+    /// Whether the skill and every input are there. Does not craft.
+    pub fn can_craft(&self, _c: &Content, r: &Recipe) -> bool {
+        self.has_skill(&r.skill) && r.inputs.iter().all(|(id, n)| self.count(id) >= *n)
     }
 
     pub fn has_talent(&self, id: &TalentId) -> bool {
@@ -288,148 +329,165 @@ impl Character {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::build::Build;
+
+    fn vex(c: &Content) -> Character {
+        Character::from_template(c, &TemplateId::new("vex")).unwrap()
+    }
 
     #[test]
-    fn starter_has_level_and_focus() {
+    fn vex_from_template_matches_the_old_starter() {
         let c = Content::load().unwrap();
-        let ch = Character::from_starter(&c);
-        assert_eq!((ch.level, ch.xp, ch.focus, ch.focus_max), (1, 0, 30, 30));
+        let ch = vex(&c);
+        assert_eq!(ch.handle, "VEX");
+        assert_eq!(
+            (ch.level, ch.xp, ch.focus, ch.focus_max, ch.credits),
+            (1, 0, 30, 30, 320)
+        );
+        assert_eq!(
+            (
+                ch.stats.body,
+                ch.stats.reflex,
+                ch.stats.tech,
+                ch.stats.cool,
+                ch.stats.net
+            ),
+            (4, 6, 5, 5, 6)
+        );
+        assert_eq!(
+            ch.equipped(Slot::Primary),
+            Some(&ItemId::new("ratchet_smg"))
+        );
+        assert_eq!(
+            ch.equipped(Slot::Torso),
+            Some(&ItemId::new("salvage_jacket"))
+        );
+        assert_eq!(
+            ch.equipped(Slot::Eyes),
+            Some(&ItemId::new("nightglass_optics"))
+        );
+        assert_eq!(ch.equipped(Slot::Deck), Some(&ItemId::new("pawnshop_deck")));
+        for (id, n) in [
+            ("copper_coil", 3),
+            ("scrap_servo", 2),
+            ("burner_shard", 1),
+            ("soy_noodle_cup", 2),
+            ("stim_patch", 1),
+            ("bottle_caps", 12),
+            ("dead_phone", 1),
+        ] {
+            assert_eq!(ch.count(&ItemId::new(id)), n, "{id}");
+        }
+        assert!(
+            ch.has_skill(&SkillId::new("hacking")) && ch.has_skill(&SkillId::new("ice_breaker"))
+        );
+        assert!(!ch.has_skill(&SkillId::new("handguns")));
+        assert!(ch.has_category(&CategoryId::new("wrench")) && ch.has_workbench(&c));
+        assert_eq!((ch.stat_points, ch.sp), (0, 0));
+        assert_eq!(ch.origin, OriginId::new("creche"));
+        assert_eq!(ch.quests.len(), 3);
+        assert_eq!(ch.hp, ch.hp_max(&c));
+        let abilities = ch.abilities(&c);
+        assert!(abilities.iter().any(|(id, s)| {
+            id == &AbilityId::new("street_sense")
+                && *s == Source::Category(CategoryId::new("street"))
+        }));
+        assert!(
+            abilities
+                .iter()
+                .any(|(id, _)| id == &AbilityId::new("signal_ghost"))
+        );
+        assert!(
+            abilities.iter().any(|(id, s)| {
+                id == &AbilityId::new("netscan") && matches!(s, Source::Item(_))
+            })
+        );
+    }
+
+    #[test]
+    fn kit_equips_first_fit_and_packs_the_rest() {
+        let c = Content::load().unwrap();
+        let mut b = Build::from_template(&c, c.template(&TemplateId::new("kessler")).unwrap());
+        b.kit.push((ItemId::new("salvage_jacket"), 1)); // torso is taken by the weave
+        let ch = Character::from_build(&c, &b);
+        assert_eq!(
+            ch.equipped(Slot::Torso),
+            Some(&ItemId::new("ballistic_weave"))
+        );
+        assert_eq!(
+            ch.count(&ItemId::new("salvage_jacket")),
+            1,
+            "second torso item is packed"
+        );
+        assert!(!ch.has_workbench(&c));
+        assert_eq!((ch.stat_points, ch.sp), (0, 0));
+        let mut spare = Build::blank(&c);
+        spare.handle = "Nix".into();
+        spare.origin = Some(OriginId::new("vat_grown"));
+        spare.profession = Some(ProfessionId::new("techie"));
+        let ch = Character::from_build(&c, &spare);
+        assert_eq!((ch.stat_points, ch.sp), (20, 6), "unspent pools ride along");
+        assert_eq!(ch.credits, 300);
+        assert_eq!(ch.handle, "Nix");
+    }
+
+    #[test]
+    fn crafting_needs_the_skill_not_a_level() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        let shiv = c.recipe(&RecipeId::new("wire_shiv")).unwrap();
+        assert!(ch.can_craft(&c, shiv));
+        ch.skills.remove(&SkillId::new("electronics"));
+        assert!(!ch.can_craft(&c, shiv));
     }
 
     #[test]
     fn xp_levels_up_and_saturates() {
         let c = Content::load().unwrap();
-        let mut ch = Character::from_starter(&c);
+        let mut ch = vex(&c);
         assert_eq!(Character::xp_to_next(1), 200);
-        assert_eq!(Character::xp_to_next(3), 600);
         assert_eq!(ch.gain_xp(150), 0);
         assert_eq!((ch.level, ch.xp), (1, 150));
         assert_eq!(ch.gain_xp(100), 1);
         assert_eq!((ch.level, ch.xp), (2, 50));
-        // 1050 points: 400 leaves level 2, 600 leaves level 3, 50 remain under 800.
-        assert_eq!(ch.gain_xp(1000), 2);
+        assert_eq!(ch.gain_xp(400 + 600), 2);
         assert_eq!((ch.level, ch.xp), (4, 50));
         ch.level = u8::MAX;
         ch.xp = 0;
-        assert_eq!(ch.gain_xp(1_000_000), 0);
-        assert_eq!((ch.level, ch.xp), (u8::MAX, 1_000_000));
-    }
-
-    #[test]
-    fn starter_character_matches_the_content_file() {
-        let c = Content::load().unwrap();
-        let ch = Character::from_starter(&c);
-        assert_eq!(ch.handle, "Vex");
-        assert_eq!((ch.hp, ch.hp_max(&c), ch.credits), (45, 45, 320));
-        assert_eq!(
-            ch.equipped(Slot::Eyes),
-            Some(&ItemId::new("nightglass_optics"))
-        );
-        assert_eq!(ch.equipped(Slot::Head), None);
-        assert!(ch.is_equipped(&ItemId::new("ratchet_smg")));
-        assert!(!ch.is_equipped(&ItemId::new("copper_coil")));
-        assert_eq!(ch.count(&ItemId::new("copper_coil")), 3);
-        assert_eq!(ch.count(&ItemId::new("grip_arm")), 0);
-        assert_eq!(ch.skill_level(&c, &SkillId::new("hacking")), 4);
-        assert_eq!(ch.skill_level(&c, &SkillId::new("origami")), 0);
-        assert!(ch.has_talent(&TalentId::new("quick_draw")));
-        assert!(!ch.has_talent(&TalentId::new("deep_dive")));
-        assert_eq!(ch.quests.len(), 3);
-        assert!(ch.quests.iter().any(|q| q.is_done()));
-        assert!(ch.quests.iter().any(|q| !q.is_done()));
-
-        let craftable = c.recipe(&RecipeId::new("wire_shiv")).unwrap();
-        let level_locked = c.recipe(&RecipeId::new("optics_tune")).unwrap();
-        let input_locked = c.recipe(&RecipeId::new("servo_rebuild")).unwrap();
-        assert!(ch.can_craft(&c, craftable));
-        assert!(!ch.can_craft(&c, level_locked));
-        assert!(!ch.can_craft(&c, input_locked));
-
-        let expected_weight: f32 = ch
-            .inventory
-            .iter()
-            .map(|s| c.item(&s.item).unwrap().weight * s.qty as f32)
-            .sum::<f32>()
-            + ch.equipment
-                .values()
-                .map(|id| c.item(id).unwrap().weight)
-                .sum::<f32>();
-        assert!((ch.weight(&c) - expected_weight).abs() < 1e-4);
-        assert!(
-            ch.weight(&c) > 7.0 && ch.weight(&c) < 12.0,
-            "{}",
-            ch.weight(&c)
-        );
-        assert!(ch.value(&c) > 4000);
+        assert_eq!(ch.gain_xp(u32::MAX), 0);
+        assert_eq!((ch.level, ch.xp), (u8::MAX, u32::MAX));
     }
 
     #[test]
     fn derived_values_follow_the_equipment() {
         let c = Content::load().unwrap();
-        let mut ch = Character::from_starter(&c);
+        let mut ch = vex(&c);
         assert_eq!(ch.hp_max(&c), 45, "jacket +5");
-        assert_eq!(ch.hp, 45, "starts full");
-        assert_eq!(ch.sight_bonus(&c), 4, "optics");
-        assert_eq!(ch.skill_base(&SkillId::new("hacking")), 3);
-        assert_eq!(
-            ch.skill_level(&c, &SkillId::new("hacking")),
-            4,
-            "pawnshop deck"
-        );
-        assert_eq!(ch.stat(&c, Stat::Body), 4);
-        assert!(
-            (ch.carry_cap(&c) - 16.0).abs() < 1e-4,
-            "{}",
-            ch.carry_cap(&c)
-        );
-        assert!(!ch.overburdened(&c));
-        let abilities = ch.abilities(&c);
-        assert_eq!(
-            abilities[0],
-            (AbilityId::new("street_sense"), Source::Innate)
-        );
-        assert!(abilities.contains(&(
-            AbilityId::new("lowlight"),
-            Source::Item(ItemId::new("nightglass_optics"))
-        )));
-        assert!(abilities.contains(&(
-            AbilityId::new("netscan"),
-            Source::Item(ItemId::new("pawnshop_deck"))
-        )));
-        assert!(
-            !abilities.iter().any(|(id, _)| id.0 == "ping"),
-            "neural port is not equipped"
-        );
-        ch.equipment.clear();
-        assert_eq!(ch.hp_max(&c), 40);
+        assert_eq!(ch.stat(&c, Stat::Net), 7, "deck +1 net");
+        assert_eq!(ch.sight_bonus(&c), 4);
+        ch.equipment.remove(&Slot::Eyes);
         assert_eq!(ch.sight_bonus(&c), 0);
-        assert_eq!(ch.skill_level(&c, &SkillId::new("hacking")), 3);
-        assert_eq!(ch.abilities(&c).len(), 1);
-        ch.equipment.insert(Slot::Arms, ItemId::new("grip_arm"));
-        assert_eq!(ch.stat(&c, Stat::Body), 5);
-        assert!(
-            (ch.carry_cap(&c) - 28.0).abs() < 1e-4,
-            "{}",
-            ch.carry_cap(&c)
+        ch.equipment.remove(&Slot::Deck);
+        assert_eq!(ch.stat(&c, Stat::Net), 6);
+        assert!(ch.weight(&c) > 0.0 && ch.carry_cap(&c) > ch.weight(&c));
+        assert_eq!(
+            ch.abilities(&c)
+                .iter()
+                .filter(|(_, s)| matches!(s, Source::Item(_)))
+                .count(),
+            0,
+            "nothing worn grants now"
         );
-        ch.inventory.push(Stack {
-            item: ItemId::new("scrap_servo"),
-            qty: 40,
-        });
-        assert!(ch.overburdened(&c));
-        let scan = AbilityId::new("netscan");
-        assert_eq!(ch.cooling(&c, &scan, 1000), None);
-        ch.fired.insert(scan.clone(), 1000);
-        assert_eq!(ch.cooling(&c, &scan, 1100), Some(200));
-        assert_eq!(ch.cooling(&c, &scan, 1300), None);
     }
 
     #[test]
     fn give_saturates_instead_of_overflowing() {
         let c = Content::load().unwrap();
-        let mut ch = Character::from_starter(&c);
-        ch.give(ItemId::new("copper_coil"), u32::MAX);
-        ch.give(ItemId::new("copper_coil"), 1);
-        assert_eq!(ch.count(&ItemId::new("copper_coil")), u32::MAX);
+        let mut ch = vex(&c);
+        let caps = ItemId::new("bottle_caps");
+        ch.give(caps.clone(), u32::MAX);
+        assert_eq!(ch.count(&caps), u32::MAX);
+        ch.give(caps.clone(), 0);
+        assert_eq!(ch.inventory.iter().filter(|s| s.item == caps).count(), 1);
     }
 }

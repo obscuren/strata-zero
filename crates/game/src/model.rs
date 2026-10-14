@@ -29,6 +29,10 @@ id_type!(TalentId);
 id_type!(QuestId);
 id_type!(RecipeId);
 id_type!(AbilityId);
+id_type!(OriginId);
+id_type!(ProfessionId);
+id_type!(CategoryId);
+id_type!(TemplateId);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Slot {
@@ -116,6 +120,19 @@ pub enum Stat {
 }
 
 impl Stat {
+    pub const ALL: [Stat; 5] = [Stat::Body, Stat::Reflex, Stat::Tech, Stat::Cool, Stat::Net];
+
+    /// The label in caps, as the sheet sets it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Stat::Body => "BODY",
+            Stat::Reflex => "REFLEX",
+            Stat::Tech => "TECH",
+            Stat::Cool => "COOL",
+            Stat::Net => "NET",
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Stat::Body => "body",
@@ -131,7 +148,6 @@ impl Stat {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Perk {
     Stat(Stat, i8),
-    Skill(SkillId, i8),
     /// Field-of-view radius, in tiles.
     Sight(i8),
     /// Carry capacity, in kilograms.
@@ -224,7 +240,6 @@ pub struct Talent {
     pub id: TalentId,
     pub name: String,
     pub skill: SkillId,
-    pub level: u8,
     pub desc: String,
 }
 
@@ -243,10 +258,94 @@ pub struct Recipe {
     pub id: RecipeId,
     pub name: String,
     pub skill: SkillId,
-    pub level: u8,
     pub inputs: Vec<(ItemId, u32)>,
     pub output: (ItemId, u32),
     pub desc: String,
+}
+
+/// Where you were made. Cheap stats cost one less per point, dear ones one more.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Origin {
+    pub id: OriginId,
+    pub name: String,
+    pub line: String,
+    pub desc: String,
+    pub cheap: Vec<Stat>,
+    pub dear: Vec<Stat>,
+    /// Three rows of seven glyphs for the dossier.
+    pub emblem: Vec<String>,
+}
+
+/// What you did before this: affinity, a kit and credits.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Profession {
+    pub id: ProfessionId,
+    pub name: String,
+    pub line: String,
+    pub desc: String,
+    pub cheap: Vec<Stat>,
+    pub dear: Vec<Stat>,
+    pub kit: Vec<(ItemId, u32)>,
+    pub credits: u32,
+    pub emblem: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CategorySkill {
+    pub id: SkillId,
+    pub cost: u32,
+}
+
+/// What owning a category opens besides its skills.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Unlock {
+    Workbench,
+}
+
+/// A skill category: costs SP to own, then its skills cost SP each.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Category {
+    pub id: CategoryId,
+    pub name: String,
+    pub line: String,
+    pub cost: u32,
+    pub skills: Vec<CategorySkill>,
+    #[serde(default)]
+    pub grants: Vec<AbilityId>,
+    #[serde(default)]
+    pub unlocks: Vec<Unlock>,
+}
+
+/// A complete build the chooser offers.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Template {
+    pub id: TemplateId,
+    pub handle: String,
+    pub line: String,
+    pub origin: OriginId,
+    pub profession: ProfessionId,
+    pub stats: Stats,
+    pub categories: Vec<CategoryId>,
+    pub skills: Vec<SkillId>,
+    #[serde(default)]
+    pub talents: Vec<TalentId>,
+    /// Extra kit on top of the profession's.
+    #[serde(default)]
+    pub kit: Vec<(ItemId, u32)>,
+}
+
+/// The numbers every new character is built under.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Creation {
+    pub stat_base: u8,
+    pub stat_cap: u8,
+    pub stat_points: u32,
+    pub point_cost: u32,
+    pub sp: u32,
+    pub name_max: usize,
+    pub hp: u32,
+    pub focus: u32,
+    pub quests: Vec<(QuestId, Vec<bool>)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -268,28 +367,4 @@ impl Stats {
             Stat::Net => self.net,
         }
     }
-}
-
-/// What a new character starts with.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Starter {
-    pub handle: String,
-    pub credits: u32,
-    pub hp: u32,
-    #[serde(default = "one")]
-    pub level: u8,
-    #[serde(default)]
-    pub focus: u32,
-    pub stats: Stats,
-    pub inventory: Vec<(ItemId, u32)>,
-    pub equipped: Vec<(Slot, ItemId)>,
-    pub skills: Vec<(SkillId, u8)>,
-    pub talents: Vec<TalentId>,
-    #[serde(default)]
-    pub abilities: Vec<AbilityId>,
-    pub quests: Vec<(QuestId, Vec<bool>)>,
-}
-
-fn one() -> u8 {
-    1
 }

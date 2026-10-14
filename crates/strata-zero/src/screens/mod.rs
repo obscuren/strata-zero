@@ -2,6 +2,7 @@
 
 pub mod configure;
 pub mod console;
+pub mod create;
 pub mod deck;
 pub mod explore;
 pub mod files;

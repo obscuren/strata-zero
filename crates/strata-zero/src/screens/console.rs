@@ -9,8 +9,8 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 8] = [
-    "spawn", "drop", "give", "heal", "xp", "focus", "clear", "help",
+const COMMANDS: [&str; 10] = [
+    "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "clear", "help",
 ];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
@@ -86,6 +86,22 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 st.character.focus, st.character.focus_max
             ))
         }
+        "sp" => {
+            let n: u32 = args
+                .first()
+                .and_then(|a| a.parse().ok())
+                .ok_or_else(|| "sp <points>".to_string())?;
+            st.character.sp = st.character.sp.saturating_add(n);
+            Ok(format!("sp {}", st.character.sp))
+        }
+        "pts" => {
+            let n: u32 = args
+                .first()
+                .and_then(|a| a.parse().ok())
+                .ok_or_else(|| "pts <points>".to_string())?;
+            st.character.stat_points = st.character.stat_points.saturating_add(n);
+            Ok(format!("points {}", st.character.stat_points))
+        }
         "clear" => {
             let n = st.ground.at(focus.stratum, focus.pos).len();
             st.ground.clear(focus.stratum, focus.pos);
@@ -95,7 +111,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             ))
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),
@@ -222,7 +238,10 @@ mod tests {
         assert!(run(&mut st, at, "help").unwrap().contains("spawn"));
         assert_eq!(run(&mut st, at, "fly").unwrap_err(), "unknown command fly");
         assert_eq!(run(&mut st, at, "give x").unwrap_err(), "give <credits>");
-        assert_eq!(complete(&st, "", "sp"), vec!["spawn".to_string()]);
+        assert_eq!(
+            complete(&st, "", "sp"),
+            vec!["spawn".to_string(), "sp".to_string()]
+        );
         assert_eq!(
             complete(&st, "spawn", "co"),
             vec!["copper_coil".to_string()]
@@ -243,5 +262,10 @@ mod tests {
         assert_eq!(run(&mut st, at, "focus 99").unwrap(), "focus 30/30");
         assert!(run(&mut st, at, "help").unwrap().contains("xp"));
         assert_eq!(complete(&st, "", "fo"), vec!["focus".to_string()]);
+        assert_eq!(run(&mut st, at, "sp 2").unwrap(), "sp 2");
+        assert_eq!(run(&mut st, at, "pts 3").unwrap(), "points 3");
+        assert_eq!((st.character.sp, st.character.stat_points), (2, 3));
+        assert_eq!(run(&mut st, at, "sp x").unwrap_err(), "sp <points>");
+        assert!(run(&mut st, at, "help").unwrap().contains("pts"));
     }
 }

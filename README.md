@@ -59,8 +59,16 @@ and shows a `DEV` badge in the header. It unlocks the free camera, stratum
 browsing, the console and the inspect and legend sections. Press `` ` `` to flip it at runtime;
 with it off you are always on foot.
 
-**Title** `↑↓` select · `enter` confirm (new game generates a city and drops you on
-the street; load game opens the save list) · `q` quit
+**Title** `↑↓` select · `enter` confirm (new game opens the chooser; load game
+opens the save list) · `q` quit
+
+**New game** picks a template (VEX, KESSLER) or a custom build, then walks six
+steps: ORIGIN, PROFESSION, STATS, SKILLS, NAME, SUMMARY. `↑↓` choose · `enter`
+next · `esc` back. On STATS `→` buys a point and `←` refunds one; a point's cost
+follows your origin's and profession's affinity. On SKILLS `→` `←` unfold and
+fold a category and `space` buys or refunds it or a skill with SP. SUMMARY ends
+on `enter`, JACK IN, which builds the character and generates a city. Unspent
+points stay with you and can be spent from the deck.
 
 **Configure** `↑↓` field · `←→` adjust · type digits into the seed · `enter`
 on `RANDOM SEED` / `GENERATE` · `esc` back
@@ -78,7 +86,7 @@ or out again, take the stairs, look · `1`-`5` fire the ability in that slot ·
 `a` the full ability list · `enter` jack shortcut · `.` wait · `tab` deck ·
 `F1`-`F4` panes · `v` view popup · `m` messages · `d` digital overlay · `s` save ·
 `?` keys · `c` back to the free camera (dev mode) · `:` dev
-console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `clear`,
+console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `sp`, `pts`, `clear`,
 `help`, with Tab completion and history) · `esc` pause
 
 The play HUD frames the map on one grid. The top band carries the handle,
@@ -101,17 +109,20 @@ terminals and stairs in range for a while.
 rain, fps) · quit to title · quit game
 
 **Deck** (`tab`) `←→` or `1`-`9` tabs · `↑↓` rows · `space` act on a row ·
-`esc` close; it reopens where you left it. Tabs: skills (your abilities),
-attributes, gear, inventory, workbench, cyberdeck (the jacked deck and its
-programs), quests, journal (empty for now) and map (what you remember of this
-stratum). Every list wraps at both ends. `space` on a gear slot picks what fits from
-the pack, or unequips and inspects what is worn; on an inventory item it opens
-the verbs: inspect, equip, use, drop one, drop all. In a popup the letter or
+`esc` close; it reopens where you left it. Tabs: skills (the category board:
+`enter` folds and unfolds, `space` offers an unlock priced in SP), stats (the
+five stats and your pools; `space` buys a point outright), gear, inventory, workbench
+(WRENCH unlocks it), cyberdeck (the jacked deck and its programs), quests,
+journal (empty for now) and map (what you remember of this stratum). Every
+list wraps at both ends. `space` on a gear slot picks what fits from the pack,
+or unequips and inspects what is worn; on an inventory item it opens the
+verbs: inspect, equip, use, drop one, drop all. In a popup the letter or
 `enter` fires a row and `esc` backs out one level. The readout shows hp and the
 carried weight over capacity (magenta when over, and nothing more can be picked
-up). Items carry perks while worn (stat, skill, sight, carry, max hp) and can
-grant abilities; consumables heal when used. The starter character and every
-item, ability, skill, talent, quest and recipe live in `flavor/content.ron`
+up). Items carry perks while worn (stat, sight, carry, max hp) and can grant
+abilities; consumables heal when used. The templates, origins, professions,
+categories and every item, ability, skill, talent, quest and recipe live in
+`flavor/content.ron`.
 
 ## Layout
 
