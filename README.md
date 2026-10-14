@@ -51,6 +51,9 @@ WezTerm). Saved cities go to `./cities/*.city`.
 
 ## Keys
 
+The game captures the mouse, so dragging over it does not select text (in iTerm2,
+⌥-drag still selects). Mouse controls are not here yet; its events are dropped.
+
 **Dev mode** is on by default for now (`DEV_DEFAULT` in `crates/strata-zero/src/app.rs`)
 and shows a `DEV` badge in the header. It unlocks the free camera, stratum
 browsing, the console and the inspect and legend sections. Press `` ` `` to flip it at runtime;

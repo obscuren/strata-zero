@@ -835,11 +835,11 @@ impl Screen for MapScreen {
         );
         let cross = r.vrule_x - area.x;
         f.render_widget(
-            Paragraph::new(hud::rule_row(area.width, cross, '┳')),
+            Paragraph::new(hud::rule_row(area.width, cross, '┿')),
             r.top_rule,
         );
         f.render_widget(
-            Paragraph::new(hud::rule_row(area.width, cross, '┻')),
+            Paragraph::new(hud::rule_row(area.width, cross, '┷')),
             r.bottom_rule,
         );
         // Right column.
@@ -1812,8 +1812,16 @@ mod tests {
                     && lines[3].contains("[F1]Here* [F2]Quest* [F3]Map* [F4]Log*"),
                 "{text}"
             );
-            assert_eq!(at(4, l), Some('┳'), "{text}");
-            assert_eq!(at(h as usize - 3, l), Some('┻'), "{text}");
+            assert_eq!(
+                at(4, l),
+                Some('┿'),
+                "the light column rule crosses the heavy band rule: {text}"
+            );
+            assert_eq!(
+                at(h as usize - 3, l),
+                Some('┷'),
+                "and ends on the footer rule with a light stem: {text}"
+            );
             for y in (0..4).chain(5..h as usize - 3) {
                 assert_eq!(at(y, l), Some('│'), "row {y}: {text}");
             }
