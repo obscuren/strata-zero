@@ -717,23 +717,56 @@ mod tests {
     fn fx_draws_only_on_its_stratum() {
         let c = city();
         let s = StylePack::load().unwrap();
-        let mut inst = instance(Fx::Kick(4), Pos::new(10, 10), 0, Vec::new());
-        inst.stratum = StratumKind::Net;
+        let mut kick = instance(Fx::Kick(12), Pos::new(10, 10), 0, Vec::new());
+        kick.stratum = StratumKind::Net;
+        let mut bolt = aimed(
+            Fx::Bolt {
+                colour: BOLT,
+                ticks: 12,
+            },
+            Pos::new(40, 30),
+            vec![Pos::new(52, 21)],
+        );
+        bolt.stratum = StratumKind::Net;
+        let mut mark = aimed(
+            Fx::Mark {
+                colour: BOLT,
+                ticks: 600,
+            },
+            Pos::new(40, 30),
+            vec![Pos::new(52, 21)],
+        );
+        mark.stratum = StratumKind::Net;
+        let all = [kick, bolt, mark];
+        // Each shape really draws at this tick on its own stratum, so the Street
+        // check below cannot pass because a shape had already ended.
+        let plain_net = render(&c, &s, StratumKind::Net, 106, None, &[], (120, 60));
+        for (i, inst) in all.iter().enumerate() {
+            let alone = FxOverlay {
+                fx: std::slice::from_ref(inst),
+                vis: None,
+            };
+            let on_net = render(&c, &s, StratumKind::Net, 106, None, &[&alone], (120, 60));
+            assert_ne!(
+                on_net, plain_net,
+                "shape {i} is live on the Net at this tick"
+            );
+        }
         let overlay = FxOverlay {
-            fx: std::slice::from_ref(&inst),
+            fx: &all,
             vis: None,
         };
-        let plain = render(&c, &s, StratumKind::Street, 100, None, &[], (120, 60));
+        let plain = render(&c, &s, StratumKind::Street, 106, None, &[], (120, 60));
         let drawn = render(
             &c,
             &s,
             StratumKind::Street,
-            100,
+            106,
             None,
             &[&overlay],
             (120, 60),
         );
-        assert_eq!(drawn, plain);
+        assert_eq!(drawn, plain, "kick, bolt and mark all stay on the Net");
     }
 
     #[test]

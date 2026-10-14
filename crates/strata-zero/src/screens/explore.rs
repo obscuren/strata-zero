@@ -105,8 +105,6 @@ pub struct MapScreen {
     /// Tick of the last update; a gap means a menu was on top.
     last_tick: u64,
     cam_ready: bool,
-    /// Drop into Walk mode on the first update: a fresh or loaded city.
-    start_walking: bool,
     /// The map area of the last frame, so `update` knows the view size.
     last_map: Cell<Rect>,
 }
@@ -170,10 +168,13 @@ fn layout(area: Rect) -> Regions {
 }
 
 impl MapScreen {
-    /// The map screen that starts on foot, dev mode or not.
-    pub fn walking(tick: u64) -> Self {
-        let mut s = Self::explore(tick);
-        s.start_walking = true;
+    /// The map screen on foot from its first frame, dev mode or not: the walker spawns
+    /// here, not on the first update, so no camera-mode frame slips out under the
+    /// transition.
+    pub fn walking(st: &mut AppState) -> Self {
+        let mut s = Self::explore(st.tick);
+        s.enter_walk(st);
+        s.cam_ready = s.mode == Mode::Walk;
         s
     }
 
@@ -190,7 +191,6 @@ impl MapScreen {
             console: None,
             last_tick: 0,
             cam_ready: false,
-            start_walking: false,
             last_map: Cell::new(Rect::new(0, 0, 100, 28)),
         }
     }
@@ -642,10 +642,6 @@ impl Screen for MapScreen {
             self.cam.snap(size.center());
             self.cursor = size.center();
             self.cam_ready = true;
-        }
-        if self.start_walking {
-            self.start_walking = false;
-            self.enter_walk(st);
         }
         for (i, k) in keys.iter().enumerate() {
             let cmd = match self.handle_common(st, k) {
@@ -2053,10 +2049,24 @@ mod tests {
     fn a_fresh_city_starts_walking_even_in_dev_mode() {
         let mut st = state();
         st.dev = true;
-        let mut s = MapScreen::walking(0);
+        let mut s = MapScreen::walking(&mut st);
+        assert_eq!(
+            s.mode,
+            Mode::Walk,
+            "on foot from construction: no camera frame before the first update"
+        );
+        let p = st.player.as_ref().unwrap().pos;
+        assert_eq!(
+            (s.cam.tx, s.cam.ty),
+            (p.x, p.y),
+            "the camera opens on the walker"
+        );
+        assert!(
+            s.cam_ready,
+            "so the first update does not re-snap the camera to the city centre"
+        );
         s.update(&mut st, &[]);
         assert_eq!(s.mode, Mode::Walk);
-        assert!(st.player.is_some());
         s.update(&mut st, &[key(KeyCode::Char('c'))]);
         assert_eq!(s.mode, Mode::Explore, "the dev camera is still a key away");
     }

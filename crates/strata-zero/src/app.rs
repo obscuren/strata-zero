@@ -47,7 +47,7 @@ pub struct AppState {
     pub repaint: bool,
     /// Where the deck was last: its tab and the selected row per tab.
     pub deck_tab: Tab,
-    pub deck_rows: [usize; 9],
+    pub deck_rows: [usize; Tab::ALL.len()],
     /// What happened, newest last.
     pub log: MessageLog,
     /// Which sidebar sections are on.
@@ -109,7 +109,7 @@ impl AppState {
             fx: Vec::new(),
             repaint: false,
             deck_tab: Tab::Skills,
-            deck_rows: [0; 9],
+            deck_rows: [0; Tab::ALL.len()],
             log: MessageLog::default(),
             sidebar: Sidebar::default(),
         }
@@ -154,7 +154,7 @@ impl AppState {
         self.player = None;
         self.fx.clear();
         self.deck_tab = Tab::Skills;
-        self.deck_rows = [0; 9];
+        self.deck_rows = [0; Tab::ALL.len()];
     }
 
     /// Logs a plain result.
@@ -657,7 +657,7 @@ mod tests {
         assert_eq!(st.city.as_ref().map(|c| c.seed), Some(seed));
         assert_eq!(
             (st.deck_tab, st.deck_rows),
-            (Tab::Skills, [0; 9]),
+            (Tab::Skills, [0; Tab::ALL.len()]),
             "a new city forgets where the deck was"
         );
     }

@@ -21,8 +21,8 @@ pub fn initial() -> impl Screen {
 }
 
 /// The screen shown once a city exists: the map, on foot.
-pub fn explore_screen(tick: u64) -> Box<dyn Screen> {
-    Box::new(explore::MapScreen::walking(tick))
+pub fn explore_screen(st: &mut crate::app::AppState) -> Box<dyn Screen> {
+    Box::new(explore::MapScreen::walking(st))
 }
 
 #[cfg(test)]
