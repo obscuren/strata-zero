@@ -31,9 +31,9 @@ Content:
 
 ```ron
 Ability(id: "netscan", ..., kind: Active(Scan(radius: 12)),
-        fx: [Wave(colour: (0, 229, 255), ticks: 12)]),
+        fx: [Wave(colour: (0, 229, 255), ticks: 15)]),
 Ability(id: "ping", ..., kind: Active(Ping(radius: 24)),
-        fx: [Wave(colour: (255, 0, 200), ticks: 16), Glow(colour: (255, 0, 200), ticks: 180)]),
+        fx: [Wave(colour: (255, 0, 200), ticks: 20), Glow(colour: (255, 0, 200), ticks: 180)]),
 ```
 
 ## Firing
@@ -57,7 +57,7 @@ pub struct FxInstance {
 impl FxInstance {
     /// The tick from which the instance draws nothing.
     pub fn until(&self) -> u64;   // Kick: started + ticks; Wave: started + ticks + tail; Glow: started + ticks
-    // tail = ceil(6 * ticks / reach): the ticks the front needs to carry its ripple
+    // tail = ceil(9 * ticks / reach): the ticks the front needs to carry its ripple
     // band past the reach, so the ring fades out instead of popping.
 }
 ```
@@ -81,13 +81,13 @@ With `elapsed = tick - started`:
   widths, so the ring is round in the terminal; it travels to the corner of
   the ability's square radius (`reach = radius * sqrt 5` cell widths) so every
   revealed tile gets painted. The front is at `r = reach * elapsed / ticks`,
-  running on for `ceil(6 * ticks / reach)` ticks so the band clears. For every
+  running on for `ceil(9 * ticks / reach)` ticks so the band clears. For every
   screen cell within reach:
   - hidden, `p` in `revealed` and `d > r`: an unseen tile (space on black).
   - front, `r - 1 < d <= r`: foreground the colour, background the colour at
     35%; one cell in ten gets a spark glyph from `ｦ ｱ ﾂ ﾈ ╳ ≋`.
-  - ripple, `r - 6 < d <= r - 1`: with `u = r - d`, brightness
-    `b = (1 - u/6) * (0.5 + 0.5 cos(2π u / 3))`, so crests trail the front
+  - ripple, `r - 9 < d <= r - 1`: with `u = r - d`, brightness
+    `b = (1 - u/9) * (0.5 + 0.5 cos(2π u / 3))`, so crests trail the front
     every three cells and fade; alternate crests lean toward a deeper blue.
     Foreground the crest colour at `0.25 + 0.75 b`, background at `0.3 b`. Near
     a crest (`b > 0.55`) the cell shows the glyph one step further out from the

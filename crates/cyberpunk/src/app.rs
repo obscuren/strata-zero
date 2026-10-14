@@ -592,10 +592,10 @@ mod tests {
             colour: (0, 0, 0),
             ticks: 30,
         }));
-        // The wave's tail allowance is the ticks the front needs to carry its six-cell
-        // ripple band past the reach: ceil(6 * 10 / (5 * sqrt 5)) = 6.
+        // The wave's tail allowance is the ticks the front needs to carry its nine-cell
+        // ripple band past the reach: ceil(9 * 10 / (5 * sqrt 5)) = 9.
         let ends: Vec<u64> = st.fx.iter().map(|i| i.until()).collect();
-        assert_eq!(ends, vec![104, 116, 130]);
+        assert_eq!(ends, vec![104, 119, 130]);
         st.prune_fx(103);
         assert_eq!(st.fx.len(), 3);
         assert!(!st.repaint);
@@ -611,7 +611,7 @@ mod tests {
             ticks: 18,
         });
         wide.radius = 12;
-        assert_eq!(wide.until(), 100 + 18 + 5);
+        assert_eq!(wide.until(), 100 + 18 + 7);
         wide.radius = 0;
         assert_eq!(wide.until(), 100 + 18);
     }

@@ -16,7 +16,7 @@ use std::collections::HashSet;
 /// Glyphs that ride a wavefront.
 const SPARKS: &[char] = &['ｦ', 'ｱ', 'ﾂ', 'ﾈ', '╳', '≋'];
 /// Cells of ripple behind the front, front included.
-pub const BAND: f32 = 6.0;
+pub const BAND: f32 = 9.0;
 /// Cells from one ripple crest to the next.
 const WAVELENGTH: f32 = 3.0;
 /// The deeper blue alternate crests lean toward.
@@ -378,8 +378,8 @@ mod tests {
         // Round: the row directly above the origin reaches only half as far as the row.
         assert!((screen_dist(Pos::new(origin.x + 4, origin.y), origin) - 4.0).abs() < 1e-5);
         assert!((screen_dist(Pos::new(origin.x, origin.y + 2), origin) - 4.0).abs() < 1e-5);
-        assert_eq!(wave_tail_ticks(12, 12), 3);
-        assert_eq!(wave_tail_ticks(16, 24), 2);
+        assert_eq!(wave_tail_ticks(15, 12), 6);
+        assert_eq!(wave_tail_ticks(20, 24), 4);
         assert_eq!(wave_tail_ticks(10, 0), 0);
     }
 

@@ -492,7 +492,7 @@ mod tests {
             scan.fx,
             vec![Fx::Wave {
                 colour: (0, 229, 255),
-                ticks: 12
+                ticks: 15
             }]
         );
         assert_eq!(
@@ -500,7 +500,7 @@ mod tests {
             vec![
                 Fx::Wave {
                     colour: (255, 0, 200),
-                    ticks: 16
+                    ticks: 20
                 },
                 Fx::Glow {
                     colour: (255, 0, 200),
