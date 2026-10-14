@@ -65,7 +65,7 @@ mod tests {
     use super::*;
     use crate::render::viewport::MapView;
     use crate::walker::Player;
-    use citygen::{ConnectorKind, GenParams, Generator, SizePreset};
+    use citygen::{GenParams, Generator, SizePreset};
     use game::ItemId;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
