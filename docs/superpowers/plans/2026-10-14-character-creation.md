@@ -82,7 +82,7 @@ Append to the `tests` module in `crates/game/src/content.rs`:
         assert_eq!(wrench.unlocks, vec![Unlock::Workbench]);
         assert_eq!(c.category_of(&SkillId::new("hacking")).unwrap().id, net.id);
         assert_eq!(c.skill_cost(&SkillId::new("ice_breaker")), Some(1));
-        assert_eq!(c.skill_cost(&SkillId::new("deep_dive")), Some(2));
+        assert_eq!(c.skill_cost(&SkillId::new("vault_run")), Some(2));
         assert_eq!(c.skill_cost(&SkillId::new("origami")), None);
         assert!(c.stat_blurb(Stat::Body).contains("meat"));
         assert_eq!(c.template(&TemplateId::new("vex")).unwrap().handle, "VEX");
@@ -296,7 +296,7 @@ New skills (id · name · stat · desc), all in voice:
 
 ```
 ice_breaker   ICE breaker     Net   "You find the seam in the ICE before it finds you."
-deep_dive     Deep dive       Net   "You go past the vault door and come back with the vault."
+vault_run     Vault run       Net   "You go past the vault door and come back with the vault."
 scrapcraft    Scrapcraft      Tech  "Two broken things make one that works, mostly."
 overclock     Overclock       Tech  "Everything you touch runs hot and fast and short."
 longarm       Longarm         Reflex "Rifles and the patience to use them."
@@ -443,7 +443,7 @@ mod tests {
         assert_eq!(b.sp_left(&c), 4);
         assert_eq!(b.toggle_skill(&c, &ice), Ok(true));
         assert_eq!(b.sp_left(&c), 3);
-        assert_eq!(b.skill_cost(&c, &SkillId::new("deep_dive")), Some(2));
+        assert_eq!(b.skill_cost(&c, &SkillId::new("vault_run")), Some(2));
         assert_eq!(b.toggle_category(&c, &net), Ok(false));
         assert!(b.skills.is_empty() && b.sp_left(&c) == 6, "refunding the category drops its skills");
         b.toggle_category(&c, &CategoryId::new("wrench")).unwrap();

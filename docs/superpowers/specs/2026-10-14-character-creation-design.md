@@ -153,7 +153,7 @@ SKILLS, the board, drawn the same way in the wizard and in the deck:
   ◆ NETRUNNER      owned          ┐
     ├─ ◆ Hacking        free      │  ⚡ Signal ghost
     ├─ ◇ ICE breaker    1 SP      │
-    └─ ◇ Deep dive      2 SP      ┘
+    └─ ◇ Vault run      2 SP      ┘
   ◇ WRENCH         2 SP          ⚙ unlocks the workbench
   ◇ IRON           2 SP
   ◇ EDGE           2 SP
@@ -217,7 +217,7 @@ cost 2:
 
 | id | name | cost | skills | line | extra |
 |---|---|---|---|---|---|
-| netrunner | NETRUNNER | 2 | hacking, ice_breaker, deep_dive | the Net is a place and you live there | grants `signal_ghost` |
+| netrunner | NETRUNNER | 2 | hacking, ice_breaker, vault_run | the Net is a place and you live there | grants `signal_ghost` |
 | wrench | WRENCH | 2 | electronics, scrapcraft, overclock | nothing stays broken around you | unlocks Workbench |
 | iron | IRON | 2 | handguns, longarm, snapshot | you are the one holding it | |
 | edge | EDGE | 2 | blades, close_work, riposte | inside arm's reach is your reach | |
