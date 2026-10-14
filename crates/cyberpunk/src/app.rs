@@ -64,24 +64,12 @@ pub struct FxInstance {
 }
 
 impl FxInstance {
-    /// Tiles of fading tail behind a wave's front, plus the front itself.
-    const WAVE_TAIL_TILES: u64 = 4;
-
-    /// Ticks a wave keeps running past its radius so the tail clears: the ticks the
-    /// front takes to cover the tail's tiles.
-    pub fn wave_tail_ticks(ticks: u64, radius: i32) -> u64 {
-        if radius <= 0 {
-            return 0;
-        }
-        (Self::WAVE_TAIL_TILES * ticks).div_ceil(radius as u64)
-    }
-
     /// The tick from which the instance draws nothing.
     pub fn until(&self) -> u64 {
         match self.fx {
             game::Fx::Kick(ticks) => self.started + ticks,
             game::Fx::Wave { ticks, .. } => {
-                self.started + ticks + Self::wave_tail_ticks(ticks, self.radius)
+                self.started + ticks + crate::render::fx::wave_tail_ticks(ticks, self.radius)
             }
             game::Fx::Glow { ticks, .. } => self.started + ticks,
         }
@@ -604,9 +592,10 @@ mod tests {
             colour: (0, 0, 0),
             ticks: 30,
         }));
-        // The wave's tail allowance scales with ticks per tile: 4 * 10 / 5 = 8 ticks.
+        // The wave's tail allowance is the ticks the front needs to carry its six-cell
+        // ripple band past the reach: ceil(6 * 10 / (5 * sqrt 5)) = 6.
         let ends: Vec<u64> = st.fx.iter().map(|i| i.until()).collect();
-        assert_eq!(ends, vec![104, 118, 130]);
+        assert_eq!(ends, vec![104, 116, 130]);
         st.prune_fx(103);
         assert_eq!(st.fx.len(), 3);
         assert!(!st.repaint);
@@ -622,7 +611,7 @@ mod tests {
             ticks: 18,
         });
         wide.radius = 12;
-        assert_eq!(wide.until(), 100 + 18 + 6);
+        assert_eq!(wide.until(), 100 + 18 + 5);
         wide.radius = 0;
         assert_eq!(wide.until(), 100 + 18);
     }

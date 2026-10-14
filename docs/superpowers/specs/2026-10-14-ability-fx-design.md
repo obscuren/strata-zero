@@ -3,8 +3,7 @@
 Every active ability plays a visual effect when it fires. The effects come
 from a small vocabulary that abilities pick from in the content file, so a
 future ability gets its visuals by naming shapes and colours, not by code.
-Netscan is the first: a glitch kick and a cyan wavefront that paints the
-revealed map outward. Ping keeps its glowing markers and gains a magenta
+Netscan is the first: a cyan ripple that paints the revealed map outward. Ping keeps its glowing markers and gains a magenta
 wavefront.
 
 ## Vocabulary
@@ -32,9 +31,9 @@ Content:
 
 ```ron
 Ability(id: "netscan", ..., kind: Active(Scan(radius: 12)),
-        fx: [Kick(4), Wave(colour: (0, 229, 255), ticks: 18)]),
+        fx: [Wave(colour: (0, 229, 255), ticks: 12)]),
 Ability(id: "ping", ..., kind: Active(Ping(radius: 24)),
-        fx: [Wave(colour: (255, 0, 200), ticks: 24), Glow(colour: (255, 0, 200), ticks: 180)]),
+        fx: [Wave(colour: (255, 0, 200), ticks: 16), Glow(colour: (255, 0, 200), ticks: 180)]),
 ```
 
 ## Firing
@@ -58,8 +57,8 @@ pub struct FxInstance {
 impl FxInstance {
     /// The tick from which the instance draws nothing.
     pub fn until(&self) -> u64;   // Kick: started + ticks; Wave: started + ticks + tail; Glow: started + ticks
-    // tail = ceil(4 * ticks / radius): the ticks the front needs to carry its three-tile
-    // tail (plus itself) past the radius, so the ring fades out instead of popping.
+    // tail = ceil(6 * ticks / reach): the ticks the front needs to carry its ripple
+    // band past the reach, so the ring fades out instead of popping.
 }
 ```
 
@@ -78,18 +77,21 @@ With `elapsed = tick - started`:
 - **Kick(ticks)**: while `elapsed < ticks`, `glitch_cells(area, tick, p)`
   with `p = elapsed / ticks`, each cell's glyph replaced and tinted cyan or
   magenta by cell hash, as the jack-in flash does.
-- **Wave**: the front radius is `r = radius * elapsed / ticks` as a float,
-  running on past the radius for `ceil(4 * ticks / radius)` ticks so the tail
-  clears (six for Netscan, four for Ping). The front clears the DIM modifier
-  a remembered tile carries, so it is bright everywhere. For every
-  screen cell whose tile `p` has `d = chebyshev(p, origin) <= radius`:
-  - front, `r - 1 < d <= r`: foreground the colour, background the colour
-    at a quarter; one cell in six (by hash of x, y and tick) gets a spark
-    glyph from `ｦ ｱ ﾂ ﾈ ╳ ≋`.
-  - tail, `r - 4 < d <= r - 1`: foreground the colour scaled by
-    `0.8 * (1 - (r - d - 1) / 3)`, glyph kept.
-  - hidden, `p` in `revealed` and `d > r`: the cell becomes an unseen tile
-    (space on black), so the map paints outward as the front passes.
+- **Wave**: distances are measured on screen, a row counting as two cell
+  widths, so the ring is round in the terminal; it travels to the corner of
+  the ability's square radius (`reach = radius * sqrt 5` cell widths) so every
+  revealed tile gets painted. The front is at `r = reach * elapsed / ticks`,
+  running on for `ceil(6 * ticks / reach)` ticks so the band clears. For every
+  screen cell within reach:
+  - hidden, `p` in `revealed` and `d > r`: an unseen tile (space on black).
+  - front, `r - 1 < d <= r`: foreground the colour, background the colour at
+    35%; one cell in ten gets a spark glyph from `ｦ ｱ ﾂ ﾈ ╳ ≋`.
+  - ripple, `r - 6 < d <= r - 1`: with `u = r - d`, brightness
+    `b = (1 - u/6) * (0.5 + 0.5 cos(2π u / 3))`, so crests trail the front
+    every three cells and fade; alternate crests lean toward a deeper blue.
+    Foreground the crest colour at `0.25 + 0.75 b`, background at `0.3 b`. Near
+    a crest (`b > 0.55`) the cell shows the glyph one step further out from the
+    origin, a lens-like shimmer. The DIM modifier is cleared throughout.
 - **Glow**: what Ping draws today: every connector serving the stratum
   within the radius gets a pulsing foreground in the colour, and a `◆`
   marker when out of sight.

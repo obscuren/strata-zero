@@ -490,20 +490,17 @@ mod tests {
         ));
         assert_eq!(
             scan.fx,
-            vec![
-                Fx::Kick(4),
-                Fx::Wave {
-                    colour: (0, 229, 255),
-                    ticks: 18
-                }
-            ]
+            vec![Fx::Wave {
+                colour: (0, 229, 255),
+                ticks: 12
+            }]
         );
         assert_eq!(
             c.ability(&AbilityId::new("ping")).unwrap().fx,
             vec![
                 Fx::Wave {
                     colour: (255, 0, 200),
-                    ticks: 24
+                    ticks: 16
                 },
                 Fx::Glow {
                     colour: (255, 0, 200),

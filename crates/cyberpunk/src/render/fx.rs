@@ -15,11 +15,36 @@ use std::collections::HashSet;
 
 /// Glyphs that ride a wavefront.
 const SPARKS: &[char] = &['ｦ', 'ｱ', 'ﾂ', 'ﾈ', '╳', '≋'];
-/// Cells behind the front that still carry a fading tint.
-const TAIL: f32 = 3.0;
+/// Cells of ripple behind the front, front included.
+pub const BAND: f32 = 6.0;
+/// Cells from one ripple crest to the next.
+const WAVELENGTH: f32 = 3.0;
+/// The deeper blue alternate crests lean toward.
+const DEEP: Rgb = Rgb(60, 110, 255);
 const KICK_CYAN: Color = Color::Rgb(0, 255, 230);
 const KICK_MAGENTA: Color = Color::Rgb(255, 0, 200);
 const BLACK: Color = Color::Rgb(0, 0, 0);
+
+/// Distance from `origin` in cell widths, a row counting as two: round on screen.
+pub fn screen_dist(p: Pos, origin: Pos) -> f32 {
+    let dx = (p.x - origin.x) as f32;
+    let dy = (p.y - origin.y) as f32 * 2.0;
+    (dx * dx + dy * dy).sqrt()
+}
+
+/// How far a wave travels in cell widths: to the corner of the ability's square radius.
+pub fn reach(radius: i32) -> f32 {
+    radius.max(0) as f32 * 5f32.sqrt()
+}
+
+/// Ticks a wave keeps running past its reach so the ripple band clears.
+pub fn wave_tail_ticks(ticks: u64, radius: i32) -> u64 {
+    let reach = reach(radius);
+    if reach <= 0.0 {
+        return 0;
+    }
+    (BAND * ticks as f32 / reach).ceil() as u64
+}
 
 pub struct FxOverlay<'a> {
     pub fx: &'a [FxInstance],
@@ -85,8 +110,8 @@ impl Overlay for FxOverlay<'_> {
     }
 }
 
-/// The ring: a bright front, a fading tail behind it, and the scan's revealed tiles
-/// kept blank until the front reaches them.
+/// The ring: a bright front, a ripple of fading crests behind it that shimmer the
+/// glyphs outward, and the scan's revealed tiles kept blank until the front reaches them.
 #[allow(clippy::too_many_arguments)]
 fn wave(
     inst: &FxInstance,
@@ -98,21 +123,25 @@ fn wave(
     tick: u64,
     buf: &mut Buffer,
 ) {
-    let r = inst.radius as f32 * elapsed as f32 / ticks.max(1) as f32;
+    let reach = reach(inst.radius);
+    let r = reach * elapsed as f32 / ticks.max(1) as f32;
     let hidden: HashSet<Pos> = inst
         .revealed
         .iter()
         .copied()
-        .filter(|p| p.chebyshev(inst.origin) as f32 > r)
+        .filter(|p| screen_dist(*p, inst.origin) > r)
         .collect();
+    let alt = colour.mix(DEEP, 0.45);
+    // The lens samples glyphs before this wave touched them.
+    let before = buf.clone();
     for sy in area.y..area.bottom() {
         for sx in area.x..area.right() {
             let p = Pos::new(
                 origin.x + (sx - area.x) as i32,
                 origin.y + (sy - area.y) as i32,
             );
-            let d = p.chebyshev(inst.origin);
-            if d > inst.radius {
+            let d = screen_dist(p, inst.origin);
+            if d > reach {
                 continue;
             }
             let cell = &mut buf[(sx, sy)];
@@ -121,19 +150,47 @@ fn wave(
                 cell.modifier.remove(Modifier::DIM);
                 continue;
             }
-            let df = d as f32;
-            if df <= r && df > r - 1.0 {
+            if d > r {
+                continue;
+            }
+            let u = r - d;
+            if u >= BAND {
+                continue;
+            }
+            cell.modifier.remove(Modifier::DIM);
+            if u < 1.0 {
                 cell.set_fg(colour.to_color())
-                    .set_bg(colour.scale(0.25).to_color());
-                cell.modifier.remove(Modifier::DIM);
-                if hash64(hash64(sx as u64, sy as u64), tick).is_multiple_of(6) {
+                    .set_bg(colour.scale(0.35).to_color());
+                if hash64(hash64(sx as u64, sy as u64), tick).is_multiple_of(10) {
                     let i = (hash64(tick, sx as u64 + sy as u64) % SPARKS.len() as u64) as usize;
                     cell.set_char(SPARKS[i]);
                 }
-            } else if df <= r - 1.0 && df > r - 1.0 - TAIL {
-                let t = (r - df - 1.0) / TAIL;
-                cell.set_fg(colour.scale(0.8 * (1.0 - t)).to_color());
+                continue;
             }
+            let amp = 1.0 - u / BAND;
+            let phase = u / WAVELENGTH;
+            let ripple = 0.5 + 0.5 * (phase * std::f32::consts::TAU).cos();
+            let b = amp * ripple;
+            let tint = if (phase.round() as i64) % 2 == 0 {
+                colour
+            } else {
+                alt
+            };
+            if b > 0.55 {
+                // Near a crest the cell shows the glyph one step further out: a lens.
+                let nx = sx as i32 + (p.x - inst.origin.x).signum();
+                let ny = sy as i32 + (p.y - inst.origin.y).signum();
+                if nx >= area.x as i32
+                    && nx < area.right() as i32
+                    && ny >= area.y as i32
+                    && ny < area.bottom() as i32
+                {
+                    let symbol = before[(nx as u16, ny as u16)].symbol().to_string();
+                    cell.set_symbol(&symbol);
+                }
+            }
+            cell.set_fg(tint.scale(0.25 + 0.75 * b).to_color())
+                .set_bg(tint.scale(0.3 * b).to_color());
         }
     }
 }
@@ -240,25 +297,32 @@ mod tests {
     const CYAN: (u8, u8, u8) = (0, 229, 255);
 
     #[test]
-    fn wave_front_colours_and_hides_unreached_tiles() {
+    fn wave_is_round_on_screen_and_hides_unreached_tiles() {
         let c = city();
         let s = StylePack::load().unwrap();
         let mut p = Player::spawn(&c, 1);
         p.update_fov(&c, 0);
         let revealed = p.reveal(&c, 12);
         let origin = p.pos;
-        let at_distance = |d: i32| {
+        // Tick 106: elapsed 6 of 12, the front sits at half the reach, 13.4 cells.
+        let r = reach(12) * 6.0 / 12.0;
+        let pick = |lo: f32, hi: f32| {
             revealed
                 .iter()
                 .copied()
-                .find(|q| q.chebyshev(origin) == d)
-                .expect("a revealed tile at that distance")
+                .find(|q| {
+                    let d = screen_dist(*q, origin);
+                    d > lo && d <= hi
+                })
+                .expect("a revealed tile in that band")
         };
-        let (front, beyond, behind) = (at_distance(6), at_distance(10), at_distance(4));
+        let front = pick(r - 1.0, r);
+        let beyond = pick(r + 2.0, reach(12));
+        let behind = pick(r - 5.0, r - 1.5);
         let inst = instance(
             Fx::Wave {
                 colour: CYAN,
-                ticks: 18,
+                ticks: 12,
             },
             origin,
             12,
@@ -268,12 +332,11 @@ mod tests {
             fx: std::slice::from_ref(&inst),
             vis: Some(p.vis()),
         };
-        // Tick 109: elapsed 9 of 18, the front is at distance 6.
         let buf = render(
             &c,
             &s,
             p.stratum,
-            109,
+            106,
             Some(p.vis()),
             &[&overlay],
             (120, 60),
@@ -294,15 +357,13 @@ mod tests {
             "unreached revealed tile is hidden"
         );
         assert_eq!(cell(beyond).bg, Color::Rgb(0, 0, 0));
-        // A revealed tile the front has passed keeps the glyph the map draws for it.
-        let plain = render(&c, &s, p.stratum, 109, Some(p.vis()), &[], (120, 60));
-        let shown = plain[(behind.x as u16, behind.y as u16)].clone();
-        assert_eq!(
-            cell(behind).symbol(),
-            shown.symbol(),
-            "behind the front: not hidden"
+        assert_ne!(
+            cell(behind).fg,
+            Color::Rgb(0, 0, 0),
+            "the ripple tints what it passed"
         );
-        // Tick 200: the wave is over and the map is untouched.
+        // A square corner of the scan (chebyshev 12, screen distance beyond the front) is
+        // still hidden now and painted by the time the wave ends.
         let plain = render(&c, &s, p.stratum, 200, Some(p.vis()), &[], (120, 60));
         let after = render(
             &c,
@@ -314,6 +375,12 @@ mod tests {
             (120, 60),
         );
         assert_eq!(after, plain);
+        // Round: the row directly above the origin reaches only half as far as the row.
+        assert!((screen_dist(Pos::new(origin.x + 4, origin.y), origin) - 4.0).abs() < 1e-5);
+        assert!((screen_dist(Pos::new(origin.x, origin.y + 2), origin) - 4.0).abs() < 1e-5);
+        assert_eq!(wave_tail_ticks(12, 12), 3);
+        assert_eq!(wave_tail_ticks(16, 24), 2);
+        assert_eq!(wave_tail_ticks(10, 0), 0);
     }
 
     #[test]

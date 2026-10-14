@@ -118,18 +118,15 @@ mod tests {
         let after = seen(&st);
         assert!(after > before, "{after} vs {before}");
         let kinds: Vec<&game::Fx> = st.fx.iter().map(|i| &i.fx).collect();
+        assert!(matches!(kinds[..], [game::Fx::Wave { .. }]), "{kinds:?}");
         assert!(
-            matches!(kinds[..], [game::Fx::Kick(4), game::Fx::Wave { .. }]),
-            "{kinds:?}"
-        );
-        assert!(
-            !st.fx[1].revealed.is_empty(),
+            !st.fx[0].revealed.is_empty(),
             "the wave hides what the scan revealed"
         );
-        assert_eq!((st.fx[1].radius, st.fx[1].started), (12, st.tick));
+        assert_eq!((st.fx[0].radius, st.fx[0].started), (12, st.tick));
         // Cooling: refused, and nothing plays.
         assert!(perform(&mut st, Action::Fire(AbilityId::new("netscan"))).is_err());
-        assert_eq!(st.fx.len(), 2);
+        assert_eq!(st.fx.len(), 1);
         st.character
             .equipment
             .insert(Slot::Neural, ItemId::new("neural_port"));
@@ -137,13 +134,13 @@ mod tests {
         let kinds: Vec<&game::Fx> = st.fx.iter().map(|i| &i.fx).collect();
         assert!(
             matches!(
-                kinds[2..],
+                kinds[1..],
                 [game::Fx::Wave { .. }, game::Fx::Glow { ticks: 180, .. }]
             ),
             "{kinds:?}"
         );
-        assert_eq!(st.fx[3].until(), st.tick + 180);
-        assert!(st.fx[2].revealed.is_empty() && st.fx[2].radius == 24);
+        assert_eq!(st.fx[2].until(), st.tick + 180);
+        assert!(st.fx[1].revealed.is_empty() && st.fx[1].radius == 24);
         report(&mut st, Err("nope".into()));
         assert_eq!(
             st.log.latest().map(|e| e.marked()),

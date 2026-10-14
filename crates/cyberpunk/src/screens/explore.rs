@@ -1997,7 +1997,7 @@ mod tests {
         let mut s = MapScreen::explore(0);
         walking(&mut st, &mut s);
         s.update(&mut st, &[key(KeyCode::Char('1'))]);
-        assert_eq!(st.fx.len(), 2, "{:?}", st.fx);
+        assert_eq!(st.fx.len(), 1, "{:?}", st.fx);
         // Mid-wave the frame draws; the kick is live for its first ticks.
         st.tick += 2;
         draw_screen(&s, &st, 100, 30);
