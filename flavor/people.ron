@@ -25,7 +25,7 @@ People(
                     "I have a meeting in a meeting.",
                     "Don't ask what we make. I stopped."]),
         Profession(id: "line_worker", label: "line worker", works_at: [Factory, Warehouse, Depot],
-            hours: Shifts([(360, 840), (840, 1320), (1320, 360)]), staff: (6, 10),
+            hours: Shifts([(360, 840), (840, 1320), (1320, 360)]), staff: (2, 4),
             leisure: [(NoodleBar, 0.5), (Strip, 0.1)], car_nudge: 0.1,
             lines: ["Twelve hours on, the rest is noise.",
                     "The belt doesn't stop. Neither do I.",
