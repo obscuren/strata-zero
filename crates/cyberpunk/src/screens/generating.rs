@@ -223,7 +223,7 @@ impl Screen for Generating {
                 self.params.size.size().h,
                 self.params.districts
             ),
-            Style::default().fg(Color::Rgb(120, 130, 145)),
+            Style::default().fg(Color::Rgb(160, 170, 185)),
         )));
         lines.push(Line::from(""));
         for stage in Stage::ALL {
@@ -276,13 +276,13 @@ impl Screen for Generating {
             )));
             lines.push(Line::from(Span::styled(
                 " r reseed · esc back",
-                Style::default().fg(Color::Rgb(120, 130, 145)),
+                Style::default().fg(Color::Rgb(160, 170, 185)),
             )));
         } else {
             let state = if self.paused { "paused" } else { "running" };
             lines.push(Line::from(Span::styled(
                 format!(" {state} · x{} per frame", self.steps_per_frame),
-                Style::default().fg(Color::Rgb(120, 130, 145)),
+                Style::default().fg(Color::Rgb(160, 170, 185)),
             )));
         }
         let hint_y = inner.bottom().saturating_sub(1);

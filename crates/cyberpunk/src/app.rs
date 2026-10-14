@@ -167,6 +167,9 @@ pub struct Runner {
     transition: Option<Transition>,
     /// Our own copy of the last drawn frame; ratatui swaps buffers after every draw.
     last_frame: Option<Buffer>,
+    /// A screen change or transition asked for a full repaint once nothing is animating.
+    repaint_pending: bool,
+    full_repaints: u32,
 }
 
 impl Runner {
@@ -176,12 +179,20 @@ impl Runner {
             st,
             transition: None,
             last_frame: None,
+            repaint_pending: false,
+            full_repaints: 0,
         }
     }
 
     #[cfg(test)]
     pub fn transition(&self) -> Option<&Transition> {
         self.transition.as_ref()
+    }
+
+    #[cfg(test)]
+    /// How many full repaints the runner has forced; one follows every screen change.
+    pub fn full_repaints(&self) -> u32 {
+        self.full_repaints
     }
 
     #[cfg(test)]
@@ -215,24 +226,39 @@ impl Runner {
                 let snapshot = self.snapshot(area);
                 self.screens = vec![to];
                 self.transition = Some(Transition::new(fx, snapshot, self.st.tick));
+                self.repaint_pending = true;
             }
             ScreenCmd::Push { to, fx } => {
                 let snapshot = self.snapshot(area);
                 self.screens.push(to);
                 self.transition = Some(Transition::new(fx, snapshot, self.st.tick));
+                self.repaint_pending = true;
             }
             ScreenCmd::Pop { fx } => {
                 if self.screens.len() > 1 {
                     let snapshot = self.snapshot(area);
                     self.screens.pop();
                     self.transition = Some(Transition::new(fx, snapshot, self.st.tick));
+                    self.repaint_pending = true;
                 }
             }
             ScreenCmd::Flash(fx) => {
                 let snapshot = self.snapshot(area);
                 self.transition = Some(Transition::flash(fx, snapshot, self.st.tick));
+                self.repaint_pending = true;
             }
             ScreenCmd::Quit => return Ok(false),
+        }
+        // Once nothing animates, repaint every cell: a glitch or a wide glyph may have
+        // left the terminal out of step with what ratatui believes is on screen.
+        let animating = self
+            .transition
+            .as_ref()
+            .is_some_and(|t| t.active(self.st.tick));
+        if self.repaint_pending && !animating {
+            term.clear()?;
+            self.full_repaints += 1;
+            self.repaint_pending = false;
         }
         let st = &self.st;
         let screens = &self.screens;
@@ -461,6 +487,33 @@ mod tests {
                 .is_none_or(|t| !t.active(runner.st.tick))
         );
         assert!(text(&small).contains("BASE"));
+    }
+
+    #[test]
+    fn transition_end_and_stack_changes_force_a_full_repaint() {
+        let base = Probe {
+            name: "BASE",
+            updates: Rc::new(Cell::new(0)),
+        };
+        let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let mut runner = Runner::new(Box::new(base), AppState::new());
+        runner.frame(&mut t, &[]).unwrap();
+        assert_eq!(runner.full_repaints(), 0);
+        // A flash runs a ten-tick glitch: no repaint while it runs, one when it ends.
+        runner.frame(&mut t, &[key('f')]).unwrap();
+        for _ in 0..9 {
+            runner.frame(&mut t, &[]).unwrap();
+            assert_eq!(runner.full_repaints(), 0);
+        }
+        runner.frame(&mut t, &[]).unwrap();
+        assert_eq!(runner.full_repaints(), 1);
+        runner.frame(&mut t, &[]).unwrap();
+        assert_eq!(runner.full_repaints(), 1, "only once per transition");
+        // A push with no effect repaints on its next frame.
+        runner.frame(&mut t, &[key('p')]).unwrap();
+        assert_eq!(runner.full_repaints(), 2);
+        runner.frame(&mut t, &[key('o')]).unwrap();
+        assert_eq!(runner.full_repaints(), 3);
     }
 
     #[test]

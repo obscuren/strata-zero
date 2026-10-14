@@ -174,7 +174,7 @@ impl Screen for Files {
             w,
             h,
         );
-        let dim = Style::default().fg(Color::Rgb(120, 130, 145));
+        let dim = Style::default().fg(Color::Rgb(160, 170, 185));
         match &self.mode {
             Mode::Load => {
                 let block = boxed("LOAD CITY");

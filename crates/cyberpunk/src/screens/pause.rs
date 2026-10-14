@@ -5,6 +5,7 @@ use crate::render::Rgb;
 use crate::screens::files::Files;
 use crate::screens::settings::Settings;
 use crate::screens::title::Title;
+use crate::ui::chrome::glass;
 use crate::ui::menu::{Menu, MenuView};
 use crate::ui::panel::boxed;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -92,6 +93,7 @@ impl Screen for Pause {
             w,
             h,
         );
+        glass(f.buffer_mut(), panel);
         let block = boxed("PAUSED");
         let inner = block.inner(panel);
         f.render_widget(block, panel);
@@ -107,7 +109,7 @@ impl Screen for Pause {
         f.render_widget(
             Paragraph::new(Span::styled(
                 " ↑↓ select · enter confirm · esc resume",
-                Style::default().fg(Color::Rgb(120, 130, 145)),
+                Style::default().fg(Color::Rgb(160, 170, 185)),
             )),
             Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1),
         );
@@ -120,6 +122,33 @@ mod tests {
     use crate::screens::testutil::{buffer_text, key};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+
+    #[test]
+    fn pause_menu_is_opaque() {
+        let st = AppState::new();
+        let p = Pause::new(0);
+        let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        t.draw(|f| {
+            let area = f.area();
+            for y in area.y..area.bottom() {
+                for x in area.x..area.right() {
+                    f.buffer_mut()[(x, y)].set_char('x');
+                }
+            }
+            p.draw(&st, f);
+        })
+        .unwrap();
+        let buf = t.backend().buffer();
+        // The panel is 36x12 centred: nothing from beneath shows inside it.
+        let (x0, y0) = ((100 - 36) / 2, (30 - 12) / 2);
+        for y in y0..y0 + 12 {
+            for x in x0..x0 + 36 {
+                assert_ne!(buf[(x, y)].symbol(), "x", "({x},{y}) shows through");
+            }
+        }
+        assert_eq!(buf[(x0 + 1, y0 + 1)].bg, crate::ui::chrome::PANEL_BG);
+        assert_eq!(buf[(x0 - 1, y0)].symbol(), "x");
+    }
 
     #[test]
     fn pause_menu_routes_every_item() {

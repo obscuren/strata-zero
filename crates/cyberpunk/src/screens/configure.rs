@@ -224,7 +224,7 @@ impl Screen for Configure {
         let params = self.params();
         let size = params.size.size();
         let est = (size.area() as f32 / 150.0 * (params.density / 0.6)).round() as u32;
-        let dim = Style::default().fg(Color::Rgb(120, 130, 145));
+        let dim = Style::default().fg(Color::Rgb(160, 170, 185));
         let txt = Style::default().fg(Color::Rgb(205, 212, 222));
         let mut lines = vec![
             Line::from(vec![
