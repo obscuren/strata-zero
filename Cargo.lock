@@ -844,6 +844,7 @@ dependencies = [
  "ron",
  "serde",
  "serde_json",
+ "sim",
  "unicode-width 0.2.0",
 ]
 
