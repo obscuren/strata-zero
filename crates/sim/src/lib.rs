@@ -2,5 +2,9 @@
 //! stepped in game minutes.
 
 pub mod content;
+pub mod paths;
+pub mod places;
 
 pub use content::*;
+pub use paths::*;
+pub use places::*;
