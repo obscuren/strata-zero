@@ -50,10 +50,13 @@ impl Chooser {
         let i = self.menu.selected;
         let (build, step) = match st.content.templates.get(i) {
             Some(t) => (Build::from_template(&st.content, t), Step::Summary),
-            None => (Build::blank(&st.content), Step::Name),
+            None => (Build::blank(&st.content), Step::Origin),
         };
         st.build = Some(build);
-        Create::new(st, step, st.tick)
+        let mut c = Create::new(st, step, st.tick);
+        // A custom build opens on ORIGIN, where the cursor is the pick.
+        c.pick_under_cursor(st);
+        c
     }
 }
 
@@ -94,6 +97,7 @@ impl Screen for Chooser {
                 text: CAPTION,
                 tick: st.tick,
                 accent: CYAN_RGB,
+                steady: true,
             }
             .render(Rect::new(lx, y, w.min(area.width), logo::ROWS), buf);
             y += logo::ROWS + 2;

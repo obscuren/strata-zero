@@ -11,8 +11,27 @@ pub const CELL_W: u16 = 6;
 pub const ROWS: u16 = 5;
 
 /// Five rows of up to five cells for a letter; shorter rows are padded with spaces.
+/// Accented Latin letters draw as their base letter; everything else is itself.
+pub fn fold(c: char) -> char {
+    match c {
+        'À'..='Å' => 'A',
+        'Ç' => 'C',
+        'È'..='Ë' => 'E',
+        'Ì'..='Ï' => 'I',
+        'Ñ' => 'N',
+        'Ò'..='Ö' | 'Ø' => 'O',
+        'Ù'..='Ü' => 'U',
+        'Ý' => 'Y',
+        other => other,
+    }
+}
+
 pub fn glyph(c: char) -> [&'static str; 5] {
-    match c.to_ascii_uppercase() {
+    match fold(c.to_ascii_uppercase()) {
+        '\'' => [" █  ", " ▀  ", "    ", "    ", "    "],
+        '-' => ["    ", "    ", "▀▀▀▀", "    ", "    "],
+        '_' => ["    ", "    ", "    ", "    ", "▄▄▄▄"],
+        '.' => ["    ", "    ", "    ", "    ", " ▀  "],
         'A' => ["▄▀▀▄", "█  █", "█▀▀█", "█  █", "▀  ▀"],
         'B' => ["█▀▀▄", "█  █", "█▀▀▄", "█  █", "▀▀▀ "],
         'C' => ["▄▀▀▀", "█   ", "█   ", "█   ", "▀▀▀▀"],
@@ -68,6 +87,8 @@ pub struct Logo<'a> {
     pub text: &'a str,
     pub tick: u64,
     pub accent: Rgb,
+    /// No broken-neon flicker: every letter stays lit, as a caption should.
+    pub steady: bool,
 }
 
 impl Widget for Logo<'_> {
@@ -75,7 +96,11 @@ impl Widget for Logo<'_> {
         let scan = ((self.tick / 2) % (ROWS as u64 + 10)) as u16;
         for (i, c) in self.text.chars().enumerate() {
             let broken = i % 7 == 3;
-            let f = flicker(self.tick, i as u8, broken);
+            let f = if self.steady {
+                1.0
+            } else {
+                flicker(self.tick, i as u8, broken)
+            };
             let color = self.accent.scale(f);
             let rows = glyph(c);
             for (r, row) in rows.iter().enumerate() {
@@ -125,6 +150,7 @@ mod tests {
                 text: "CITY 9",
                 tick: 3,
                 accent: Rgb(255, 0, 200),
+                steady: false,
             }
             .render(f.area(), f.buffer_mut())
         })
@@ -136,9 +162,43 @@ mod tests {
                 text: "CITY",
                 tick: 3,
                 accent: Rgb(255, 0, 200),
+                steady: false,
             }
             .render(f.area(), f.buffer_mut())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn block_font_covers_marks_and_folds_accents() {
+        assert!(covers("D'SHAWN"));
+        assert!(covers("MARA-7 X_Y.Z"));
+        assert!(covers("ZOË ÑÚ"));
+        assert!(!covers("ZOЖ"), "no glyph outside Latin");
+        assert_eq!(glyph('Ë'), glyph('E'));
+        assert!(glyph('\'').iter().any(|r| !r.trim().is_empty()));
+        assert!(glyph('-').iter().any(|r| !r.trim().is_empty()));
+    }
+
+    #[test]
+    fn a_steady_logo_never_drops_a_letter() {
+        use ratatui::buffer::Buffer;
+        let area = Rect::new(0, 0, width("STATS"), ROWS);
+        let mut lit = 0;
+        for tick in 0..120u64 {
+            let mut buf = Buffer::empty(area);
+            Logo {
+                text: "STATS",
+                tick,
+                accent: Rgb(0, 229, 255),
+                steady: true,
+            }
+            .render(area, &mut buf);
+            let inked = (0..area.width)
+                .filter(|&x| (0..ROWS).any(|y| buf[(x, y)].symbol() != " "))
+                .count();
+            lit = lit.max(inked);
+            assert_eq!(inked, lit, "tick {tick}: a letter went dark");
+        }
     }
 }

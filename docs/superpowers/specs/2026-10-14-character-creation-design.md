@@ -421,3 +421,25 @@ Saves hold only the city, so nothing migrates.
 
 The talent tree and talent points; what a level-up grants; mechanics for the
 sixteen new skills and for Signal ghost; saving the character; mouse input.
+
+## Revisions
+
+2026-10-14, after Jeffrey played the first build:
+
+- Steps run ORIGIN, PROFESSION, STATS, SKILLS, NAME, SUMMARY. The name comes
+  last so the sheet beside it has something on it: NAME's right pane is THE
+  SHEET so far, with the name on top as you type it.
+- SUMMARY has no caption of its own: the character's name is set in the
+  block font where the step name was, with *the sheet* as the tagline. The
+  sheet lists what each owned category grants (`◈ Signal ghost`).
+- The block font knows the name marks `' - _ .` and folds accented Latin
+  letters onto their base glyph; it falls back to a plain line only for
+  scripts it has no glyphs for. Wizard captions do not flicker.
+- ORIGIN and PROFESSION rows take two lines: the name with its cheap and dear
+  stats at a glance, then the whole tagline. The list pane is 55 percent.
+- On the board a price the pool cannot cover reads `no SP`; a skill behind an
+  unowned category keeps its price.
+- In the deck, `space` on a stat buys a point outright; the refusal lands in
+  the status strip.
+- The step glitch stays.
+

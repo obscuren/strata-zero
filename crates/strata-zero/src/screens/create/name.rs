@@ -1,10 +1,9 @@
-//! Step 1: the handle, typed straight onto the sheet.
+//! Step 5: the handle, typed straight onto the sheet you have built.
 
-use super::{Panes, wrap};
+use super::{Panes, summary, wrap};
 use crate::anim::effects::pulse;
 use crate::app::AppState;
-use crate::ui::chrome::{CYAN, CYAN_RGB, DIM, MAGENTA_RGB, TEXT};
-use crate::ui::logo::{self, Logo};
+use crate::ui::chrome::{CYAN, DIM, MAGENTA_RGB, TEXT};
 use crate::ui::panel::boxed;
 use crossterm::event::KeyCode;
 use game::Build;
@@ -31,14 +30,7 @@ pub(super) fn key(st: &mut AppState, code: KeyCode) {
     }
 }
 
-pub(super) fn draw(
-    st: &AppState,
-    b: &Build,
-    panes: &Panes,
-    tall: bool,
-    tick: u64,
-    buf: &mut Buffer,
-) {
+pub(super) fn draw(st: &AppState, b: &Build, panes: &Panes, tick: u64, buf: &mut Buffer) {
     let left = panes.left;
     buf.set_string(left.x, left.y + 1, "handle", Style::default().fg(DIM));
     let y = left.y + 3;
@@ -55,9 +47,8 @@ pub(super) fn draw(
         );
         b.handle.chars().count() as u16
     };
-    let cursor_x = left.x + 2 + shown;
     buf.set_string(
-        cursor_x,
+        left.x + 2 + shown,
         y,
         "▮",
         Style::default().fg(MAGENTA_RGB.scale(0.5 + 0.5 * pulse(tick, 20)).to_color()),
@@ -73,35 +64,34 @@ pub(super) fn draw(
         buf.set_string(left.x, y + 2 + i as u16, l, Style::default().fg(DIM));
     }
 
-    // The sheet: the handle set large, so the limit is something you can see.
+    // The sheet so far, with the name going on top of it.
     let block = boxed("THE SHEET");
     let inner = block.inner(panes.right);
     block.render(panes.right, buf);
-    let name = b.handle.trim();
-    if name.is_empty() {
-        buf.set_string(
+    let name = b.handle.trim().to_uppercase();
+    buf.set_string(
+        inner.x + 2,
+        inner.y + 1,
+        if name.is_empty() {
+            "no name yet"
+        } else {
+            &name
+        },
+        if name.is_empty() {
+            Style::default().fg(DIM)
+        } else {
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+        },
+    );
+    summary::sheet(
+        st,
+        b,
+        Rect::new(
             inner.x + 2,
-            inner.y + 1,
-            "nothing on it yet",
-            Style::default().fg(DIM),
-        );
-        return;
-    }
-    let upper = name.to_uppercase();
-    let w = logo::width(&upper);
-    if tall && w + 4 <= inner.width && logo::covers(&upper) {
-        Logo {
-            text: &upper,
-            tick,
-            accent: CYAN_RGB,
-        }
-        .render(Rect::new(inner.x + 2, inner.y + 1, w, logo::ROWS), buf);
-    } else {
-        buf.set_string(
-            inner.x + 2,
-            inner.y + 1,
-            &upper,
-            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
-        );
-    }
+            inner.y + 3,
+            inner.width.saturating_sub(4),
+            inner.height.saturating_sub(4),
+        ),
+        buf,
+    );
 }

@@ -391,13 +391,20 @@ impl Screen for Create {
         );
         rule(buf, area, area.y + 1);
 
-        // Caption and tagline.
-        let body_y = if tall {
-            let w = logo::width(self.step.label());
+        // Caption and tagline: the step's name, or on the sheet the character's.
+        let handle = b.handle.trim().to_uppercase();
+        let caption: &str = if self.step == Step::Summary && !handle.is_empty() {
+            &handle
+        } else {
+            self.step.label()
+        };
+        let w = logo::width(caption);
+        let body_y = if tall && logo::covers(caption) && w + 4 <= area.width {
             Logo {
-                text: self.step.label(),
+                text: caption,
                 tick,
                 accent: CYAN_RGB,
+                steady: true,
             }
             .render(
                 Rect::new(area.x + 2, area.y + 2, w.min(area.width), logo::ROWS),
@@ -414,11 +421,11 @@ impl Screen for Create {
             buf.set_string(
                 area.x + 2,
                 area.y + 2,
-                self.step.label(),
+                caption,
                 Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
             );
             buf.set_string(
-                area.x + 2 + self.step.label().width() as u16 + 3,
+                area.x + 2 + caption.width() as u16 + 3,
                 area.y + 2,
                 self.step.tagline(),
                 Style::default().fg(DIM),
@@ -434,7 +441,8 @@ impl Screen for Create {
             area.width.saturating_sub(4),
             bottom_rule.saturating_sub(body_y),
         );
-        let split = body.width * 45 / 100;
+        // The lists want room for a tagline; the name wants room for the sheet.
+        let split = body.width * if self.step == Step::Name { 40 } else { 58 } / 100;
         let panes = Panes {
             left: Rect::new(body.x, body.y, split.saturating_sub(2), body.height),
             right: Rect::new(
@@ -445,7 +453,7 @@ impl Screen for Create {
             ),
         };
         match self.step {
-            Step::Name => name::draw(st, b, &panes, tall, tick, buf),
+            Step::Name => name::draw(st, b, &panes, tick, buf),
             Step::Origin => pick::draw(
                 &pick::origins(st),
                 self.cursor[Step::Origin.index()],
@@ -466,7 +474,7 @@ impl Screen for Create {
             ),
             Step::Stats => stats::draw(self, st, b, &panes, tick, buf),
             Step::Skills => skills::draw(self, st, b, &panes, buf),
-            Step::Summary => summary::draw(st, b, body, tall, tick, buf),
+            Step::Summary => summary::draw(st, b, body, tick, buf),
         }
 
         // Footer: keys or the live notice, and the step counter.
@@ -515,10 +523,35 @@ mod tests {
         buffer_text(t.backend().buffer())
     }
 
+    /// A custom build, landing on ORIGIN.
     fn custom(st: &mut AppState) -> Create {
         let mut ch = chooser::Chooser::new(st, 0);
         ch.update(st, &[key(KeyCode::Down), key(KeyCode::Down)]);
         ch.choose(st)
+    }
+
+    /// A custom build with origin and profession picked, opened on `step`.
+    fn picked(st: &mut AppState, step: Step) -> Create {
+        custom(st);
+        let b = st.build.as_mut().unwrap();
+        b.origin = Some(game::OriginId::new("creche"));
+        b.profession = Some(game::ProfessionId::new("netrunner"));
+        Create::new(st, step, 0)
+    }
+
+    #[test]
+    fn steps_run_origin_to_summary_with_the_name_last() {
+        assert_eq!(
+            Step::ALL,
+            [
+                Step::Origin,
+                Step::Profession,
+                Step::Stats,
+                Step::Skills,
+                Step::Name,
+                Step::Summary
+            ]
+        );
     }
 
     #[test]
@@ -548,14 +581,18 @@ mod tests {
         assert_eq!(c.step, Step::Summary, "a template lands on the sheet");
         ch.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Down)]);
         let c = ch.choose(&mut st);
-        assert_eq!(c.step, Step::Name);
+        assert_eq!(
+            c.step,
+            Step::Origin,
+            "a custom build starts where you were made"
+        );
         assert_eq!(st.build.as_ref().unwrap().handle, "");
     }
 
     #[test]
-    fn name_step_refuses_blank_names_and_moves_on() {
+    fn name_step_refuses_blank_names_and_shows_the_sheet() {
         let mut st = AppState::new();
-        let mut c = custom(&mut st);
+        let mut c = picked(&mut st, Step::Name);
         st.tick = 100;
         assert!(matches!(
             c.update(&mut st, &[key(KeyCode::Enter)]),
@@ -566,6 +603,14 @@ mod tests {
         assert!(
             text.contains("▮ type a name"),
             "the cursor sits before the placeholder: {text}"
+        );
+        assert!(
+            text.contains("THE SHEET")
+                && text.contains("ORIGIN")
+                && text.contains("CRÈCHE")
+                && text.contains("KIT")
+                && text.contains("STATS"),
+            "the sheet so far sits beside the name: {text}"
         );
         assert_eq!(c.step, Step::Name);
         c.update(
@@ -578,49 +623,43 @@ mod tests {
         );
         assert_eq!(c.step, Step::Name, "spaces are no name");
         c.update(&mut st, &[key(KeyCode::Backspace), key(KeyCode::Backspace)]);
-        for ch in "Mara".chars() {
+        for ch in "D'Shawn".chars() {
             c.update(&mut st, &[key(KeyCode::Char(ch))]);
         }
-        assert_eq!(st.build.as_ref().unwrap().handle, "Mara");
+        assert_eq!(st.build.as_ref().unwrap().handle, "D'Shawn");
         let text = draw(&c, &st, 120, 40);
-        assert!(text.contains("Mara"), "{text}");
+        assert!(text.contains("D'Shawn"), "{text}");
         assert!(matches!(
             c.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Flash(_)
         ));
-        assert_eq!(c.step, Step::Origin);
+        assert_eq!(c.step, Step::Summary);
         assert!(matches!(
             c.update(&mut st, &[key(KeyCode::Esc)]),
             ScreenCmd::Flash(_)
         ));
         assert_eq!(c.step, Step::Name);
-        assert!(
-            matches!(
-                c.update(&mut st, &[key(KeyCode::Esc)]),
-                ScreenCmd::Pop { .. }
-            ),
-            "esc on NAME leaves the wizard"
-        );
+        c.update(&mut st, &[key(KeyCode::Esc)]);
+        assert_eq!(c.step, Step::Skills, "esc on NAME goes back to SKILLS");
     }
 
     #[test]
     fn origin_step_draws_the_frame_list_and_dossier() {
         let mut st = AppState::new();
         let mut c = custom(&mut st);
-        st.build.as_mut().unwrap().handle = "Mara".into();
-        c.update(&mut st, &[key(KeyCode::Enter)]);
         assert_eq!(c.step, Step::Origin);
         st.tick = 200;
         let text = draw(&c, &st, 120, 40);
         let lines: Vec<&str> = text.lines().collect();
         assert!(
-            lines[0].contains("1 NAME ▸ ▌2 ORIGIN▐ ▸ 3 PROFESSION"),
+            lines[0]
+                .contains("▌1 ORIGIN▐ ▸ 2 PROFESSION ▸ 3 STATS ▸ 4 SKILLS ▸ 5 NAME ▸ 6 SUMMARY"),
             "{}",
             lines[0]
         );
         assert!(
-            lines[0].contains("Mara"),
-            "the strip shows the build so far: {}",
+            lines[0].contains("slab rat"),
+            "the cursor's pick shows in the strip from the first frame: {}",
             lines[0]
         );
         assert!(lines[1].starts_with('━'), "{}", lines[1]);
@@ -637,6 +676,18 @@ mod tests {
         for name in ["SLAB RAT", "CRÈCHE", "STOWAWAY", "VAT-GROWN"] {
             assert!(text.contains(name), "{name}: {text}");
         }
+        let slab = lines
+            .iter()
+            .find(|l| l.contains("SLAB RAT") && l.contains("▸"))
+            .expect("the selected row");
+        assert!(
+            slab.contains("BODY COOL") && slab.contains("TECH NET"),
+            "cheap and dear at a glance: {slab}"
+        );
+        assert!(
+            text.contains("born between the slabs, knew the alleys before the alphabet"),
+            "the whole tagline on its own row: {text}"
+        );
         assert!(
             text.contains("DOSSIER")
                 && text.contains("AFFINITY")
@@ -644,7 +695,7 @@ mod tests {
                 && text.contains("dear"),
             "{text}"
         );
-        assert!(text.contains("step 2 of 6"), "{text}");
+        assert!(text.contains("step 1 of 6"), "{text}");
         for l in text.lines().filter(|l| l.contains("│")) {
             let after = l.rsplit('│').next().unwrap_or("");
             assert!(
@@ -674,7 +725,7 @@ mod tests {
         );
         st.tick = 300;
         let text = draw(&c, &st, 120, 40);
-        assert!(text.contains("badge revoked"), "{text}");
+        assert!(text.contains("Filtered air"), "{text}");
         let short = draw(&c, &st, 100, 30);
         let lines: Vec<&str> = short.lines().collect();
         assert!(
@@ -687,16 +738,28 @@ mod tests {
             short.contains("ORIGIN") && short.contains("DOSSIER"),
             "{short}"
         );
+        assert!(
+            matches!(
+                c.update(&mut st, &[key(KeyCode::Esc)]),
+                ScreenCmd::Pop { .. }
+            ),
+            "esc on the first step leaves the wizard"
+        );
     }
 
     #[test]
-    fn summary_jacks_in_a_template() {
+    fn summary_wears_the_name_and_jacks_in_a_template() {
         let mut st = AppState::new();
         let ch = chooser::Chooser::new(&st, 0);
         let mut c = ch.choose(&mut st);
         assert_eq!(c.step, Step::Summary);
         st.tick = 100;
         let text = draw(&c, &st, 120, 40);
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(
+            lines[2..7].iter().any(|l| l.contains('█')) && lines[4].contains("the sheet"),
+            "the caption is the handle in block font with the tagline: {text}"
+        );
         assert!(
             text.contains("JACK IN")
                 && text.contains("CRÈCHE")
@@ -707,6 +770,10 @@ mod tests {
         assert!(
             text.contains("BODY") && text.contains("Pawnshop deck"),
             "{text}"
+        );
+        assert!(
+            text.contains("◈ Signal ghost") && text.contains("◈ Street sense"),
+            "what the categories grant is on the sheet: {text}"
         );
         let cmd = c.update(&mut st, &[key(KeyCode::Enter)]);
         assert!(
@@ -745,8 +812,9 @@ mod tests {
         let mut st = AppState::new();
         let ch = chooser::Chooser::new(&st, 0);
         let mut c = ch.choose(&mut st);
-        c.update(&mut st, &[key(KeyCode::Esc)]);
-        c.update(&mut st, &[key(KeyCode::Esc)]);
+        for _ in 0..3 {
+            c.update(&mut st, &[key(KeyCode::Esc)]);
+        }
         assert_eq!(c.step, Step::Stats);
         st.tick = 100;
         let text = draw(&c, &st, 120, 40);
@@ -781,7 +849,9 @@ mod tests {
         let mut st = AppState::new();
         let ch = chooser::Chooser::new(&st, 0);
         let mut c = ch.choose(&mut st);
-        c.update(&mut st, &[key(KeyCode::Esc)]);
+        for _ in 0..2 {
+            c.update(&mut st, &[key(KeyCode::Esc)]);
+        }
         assert_eq!(c.step, Step::Skills);
         st.tick = 100;
         let text = draw(&c, &st, 120, 40);
@@ -833,19 +903,19 @@ mod tests {
     #[test]
     fn letters_the_block_font_lacks_fall_back_to_a_plain_line() {
         let mut st = AppState::new();
-        let mut c = custom(&mut st);
-        for ch in "Zoë".chars() {
+        let mut c = picked(&mut st, Step::Name);
+        for ch in "Zoж".chars() {
             c.update(&mut st, &[key(KeyCode::Char(ch))]);
         }
         st.tick = 100;
         let text = draw(&c, &st, 120, 40);
-        assert!(text.contains("ZOË"), "the sheet keeps every letter: {text}");
-        let b = st.build.as_mut().unwrap();
-        b.origin = Some(game::OriginId::new("creche"));
-        b.profession = Some(game::ProfessionId::new("netrunner"));
+        assert!(text.contains("ZOЖ"), "the sheet keeps every letter: {text}");
         let s = Create::new(&st, Step::Summary, 0);
         let text = draw(&s, &st, 120, 40);
-        assert!(text.contains("ZOË"), "and so does the summary: {text}");
+        assert!(
+            text.contains("ZOЖ"),
+            "and so does the summary caption: {text}"
+        );
     }
 
     #[test]

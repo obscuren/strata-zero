@@ -83,6 +83,7 @@ impl Screen for Title {
             text: TITLE,
             tick: st.tick,
             accent: Rgb(255, 0, 200),
+            steady: false,
         }
         .render(
             Rect::new(x, y, w.min(area.width), logo::ROWS),

@@ -1,10 +1,13 @@
 //! Steps 2 and 3: a list to pick from, with a dossier that types itself out.
 
 use super::{Panes, stat_colour, wrap};
+
+/// Rows each list entry takes: the name, up to two rows of tagline, a blank.
+const STRIDE: u16 = 4;
 use crate::anim::effects::typewriter;
 use crate::anim::{Easing, Tween};
 use crate::app::AppState;
-use crate::ui::chrome::{CYAN, DIM, TEXT, plain, reveal};
+use crate::ui::chrome::{CYAN, DIM, MAGENTA, TEXT, plain, reveal};
 use crate::ui::panel::boxed;
 use game::Stat;
 use ratatui::buffer::Buffer;
@@ -112,14 +115,27 @@ pub(super) fn draw(
 ) {
     let left = panes.left;
     for (i, e) in entries.iter().enumerate() {
-        let y = left.y + 1 + i as u16 * 2;
-        if y >= left.bottom() {
+        let y = left.y + 1 + i as u16 * STRIDE;
+        if y + 1 >= left.bottom() {
             break;
         }
         let p = Tween::new(opened + i as u64 * 4, 8, Easing::OutCubic).progress(tick);
         let selected = i == cursor;
         let name = typewriter(&e.name, p).to_string();
         let line = typewriter(&e.line, p).to_string();
+        // The name, then what it makes cheap and dear at a glance.
+        let cheap: Vec<&str> = e
+            .shifts
+            .iter()
+            .filter(|(_, d)| *d < 0)
+            .map(|(s, _)| s.name())
+            .collect();
+        let dear: Vec<&str> = e
+            .shifts
+            .iter()
+            .filter(|(_, d)| *d > 0)
+            .map(|(s, _)| s.name())
+            .collect();
         let row = Line::from(vec![
             Span::styled(
                 if selected { "▸ " } else { "  " },
@@ -133,9 +149,16 @@ pub(super) fn draw(
                     Style::default().fg(TEXT)
                 },
             ),
-            Span::styled(line, Style::default().fg(DIM)),
+            Span::styled(cheap.join(" "), Style::default().fg(CYAN)),
+            Span::styled(" · ", Style::default().fg(DIM)),
+            Span::styled(dear.join(" "), Style::default().fg(MAGENTA)),
         ]);
         buf.set_line(left.x, y, &row, left.width);
+        let room = left.width.saturating_sub(2) as usize;
+        for (k, part) in wrap(&line, room).into_iter().take(2).enumerate() {
+            let tag = Line::from(Span::styled(part, Style::default().fg(DIM)));
+            buf.set_line(left.x + 2, y + 1 + k as u16, &tag, room as u16);
+        }
     }
 
     let Some(e) = entries.get(cursor) else { return };

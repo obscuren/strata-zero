@@ -52,6 +52,8 @@ pub fn board_rows(
         };
         let cost = if owned {
             "owned".to_string()
+        } else if s.sp_left < cat.cost as i64 {
+            "no SP".to_string()
         } else {
             format!("{} SP", cat.cost)
         };
@@ -88,6 +90,8 @@ pub fn board_rows(
             let joint = if i + 1 == n { "└─" } else { "├─" };
             let cost = if sk.cost == 0 {
                 "free".to_string()
+            } else if owned && !have && s.sp_left < sk.cost as i64 {
+                "no SP".to_string()
             } else {
                 format!("{} SP", sk.cost)
             };
@@ -188,8 +192,8 @@ mod tests {
             "{texts:?}"
         );
         assert!(
-            texts[3].contains("└─ ◇ Vault run") && texts[3].contains("2 SP"),
-            "{texts:?}"
+            texts[3].contains("└─ ◇ Vault run") && texts[3].contains("no SP"),
+            "a skill you could buy reads no SP when the pool is dry: {texts:?}"
         );
         assert!(texts[4].contains("◈ Signal ghost"), "{texts:?}");
         assert!(matches!(rows[4].kind, RowKind::Note) && !rows[4].selectable);
@@ -205,6 +209,25 @@ mod tests {
             iron.line.spans[0].style.fg,
             Some(DIM),
             "no SP: unowned reads dim"
+        );
+        assert!(iron.line.to_string().contains("no SP"), "{}", iron.line);
+        let mut open_iron = open.clone();
+        open_iron.insert(CategoryId::new("iron"));
+        let state = BoardState {
+            owned_cats: &ch.categories,
+            owned_skills: &ch.skills,
+            sp_left: 0,
+            open: &open_iron,
+        };
+        let rows = board_rows(&c, &state, 0, None);
+        let handguns = rows
+            .iter()
+            .find(|r| matches!(&r.kind, RowKind::Skill(id) if id.0 == "handguns"))
+            .unwrap();
+        assert!(
+            handguns.line.to_string().contains("free"),
+            "a locked skill keeps its price: {}",
+            handguns.line
         );
         let flashed = board_rows(&c, &state, 10, Some((0, 20)));
         assert!(

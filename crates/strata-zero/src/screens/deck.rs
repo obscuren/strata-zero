@@ -1,6 +1,7 @@
 //! The deck: the player's menu over the live map — skills, attributes, gear, inventory,
 //! workbench, cyberdeck, quests, journal, map. It reopens where it was closed.
 
+use crate::actions::{perform, report};
 use crate::anim::effects::{glitch_cells, pulse, typewriter};
 use crate::anim::{Easing, Tween};
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
@@ -244,18 +245,6 @@ impl Deck {
                     Popup::verbs(&item.name.to_uppercase(), choices, st.tick)
                         .anchored(anchor.0, anchor.1),
                 )
-            }
-            Some(Detail::Stat(stat)) => {
-                let b = Build::from_character(&st.content, &st.character);
-                let cost = b.stat_cost(&st.content, *stat);
-                let can = b.clone().buy_stat(&st.content, *stat).is_ok();
-                let mut buy = Choice::new(
-                    'b',
-                    format!("buy · {cost} pt{}", if cost == 1 { "" } else { "s" }),
-                    Pick::Act(Action::BuyStat(*stat)),
-                );
-                buy.enabled = can;
-                Some(Popup::verbs(stat.name(), vec![buy], st.tick).anchored(anchor.0, anchor.1))
             }
             Some(Detail::Category(id)) => {
                 let cat = st.content.category(id)?;
@@ -997,6 +986,19 @@ impl Deck {
                 KeyCode::Up | KeyCode::Char('k') => self.move_row(&rows, -1, st.tick),
                 KeyCode::Down | KeyCode::Char('j') => self.move_row(&rows, 1, st.tick),
                 KeyCode::Enter if self.tab == Tab::Skills => self.toggle_fold(st),
+                KeyCode::Char(' ') | KeyCode::Enter
+                    if matches!(
+                        rows.get(self.row).and_then(|r| r.detail.as_ref()),
+                        Some(Detail::Stat(_))
+                    ) =>
+                {
+                    // A point buys straight away; the refusal lands in the strip.
+                    if let Some(Detail::Stat(s)) = rows.get(self.row).and_then(|r| r.detail.clone())
+                    {
+                        let result = perform(st, Action::BuyStat(s));
+                        report(st, result);
+                    }
+                }
                 KeyCode::Char(' ') | KeyCode::Enter => {
                     if let Some(p) = self.interact(st) {
                         return ScreenCmd::Push {
@@ -1061,6 +1063,7 @@ impl Screen for Deck {
                 text: &handle,
                 tick,
                 accent: MAGENTA_RGB,
+                steady: false,
             }
             .render(Rect::new(inner.x + 1, y, w, logo::ROWS), buf);
             y += logo::ROWS;
@@ -2090,7 +2093,7 @@ mod tests {
     }
 
     #[test]
-    fn stats_tab_spends_points_through_a_verb() {
+    fn stats_tab_spends_points_on_space() {
         let mut st = state();
         st.character.stat_points = 3;
         let mut d = Deck::new(0);
@@ -2103,23 +2106,21 @@ mod tests {
         );
         let rows = d.rows(&st);
         d.row = rows.iter().position(|r| r.text.contains("BODY")).unwrap();
-        let ScreenCmd::Push { to: mut p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))])
-        else {
-            panic!("space opens the verbs")
-        };
-        st.tick += 30;
-        let ptext = draw(&*p, &st, 120, 35);
-        assert!(ptext.contains("b  buy · 3 pts"), "{ptext}");
-        p.update(&mut st, &[key(KeyCode::Char('b'))]);
+        assert!(matches!(
+            d.update(&mut st, &[key(KeyCode::Char(' '))]),
+            ScreenCmd::Stay
+        ));
         assert_eq!((st.character.stats.body, st.character.stat_points), (5, 0));
-        let ScreenCmd::Push { to: mut p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))])
-        else {
-            panic!()
-        };
-        p.update(&mut st, &[key(KeyCode::Char('b'))]);
+        assert_eq!(last(&st), Some("BODY 5"));
+        assert!(matches!(
+            d.update(&mut st, &[key(KeyCode::Char(' '))]),
+            ScreenCmd::Stay
+        ));
+        assert_eq!(st.character.stats.body, 5);
         assert_eq!(
-            st.character.stats.body, 5,
-            "no points: the verb is disabled"
+            last(&st),
+            Some("no points left"),
+            "the refusal lands in the strip"
         );
     }
 

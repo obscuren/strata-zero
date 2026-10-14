@@ -63,7 +63,7 @@ with it off you are always on foot.
 opens the save list) · `q` quit
 
 **New game** picks a template (VEX, KESSLER) or a custom build, then walks six
-steps: NAME, ORIGIN, PROFESSION, STATS, SKILLS, SUMMARY. `↑↓` choose · `enter`
+steps: ORIGIN, PROFESSION, STATS, SKILLS, NAME, SUMMARY. `↑↓` choose · `enter`
 next · `esc` back. On STATS `→` buys a point and `←` refunds one; a point's cost
 follows your origin's and profession's affinity. On SKILLS `→` `←` unfold and
 fold a category and `space` buys or refunds it or a skill with SP. SUMMARY ends
@@ -111,7 +111,7 @@ rain, fps) · quit to title · quit game
 **Deck** (`tab`) `←→` or `1`-`9` tabs · `↑↓` rows · `space` act on a row ·
 `esc` close; it reopens where you left it. Tabs: skills (the category board:
 `enter` folds and unfolds, `space` offers an unlock priced in SP), stats (the
-five stats and your pools; `space` buys a point), gear, inventory, workbench
+five stats and your pools; `space` buys a point outright), gear, inventory, workbench
 (WRENCH unlocks it), cyberdeck (the jacked deck and its programs), quests,
 journal (empty for now) and map (what you remember of this stratum). Every
 list wraps at both ends. `space` on a gear slot picks what fits from the pack,

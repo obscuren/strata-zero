@@ -18,11 +18,11 @@ pub enum Step {
 
 impl Step {
     pub const ALL: [Step; 6] = [
-        Step::Name,
         Step::Origin,
         Step::Profession,
         Step::Stats,
         Step::Skills,
+        Step::Name,
         Step::Summary,
     ];
 
