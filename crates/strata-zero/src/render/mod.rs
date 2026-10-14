@@ -7,9 +7,9 @@ pub mod lighting;
 pub mod memmap;
 pub mod minimap;
 pub mod overlay;
+pub mod people;
 pub mod style;
 pub mod tileset;
-pub mod traffic;
 pub mod viewport;
 pub mod weather;
 

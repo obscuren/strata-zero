@@ -1,4 +1,5 @@
-//! Dev console commands: spawn and drop items, give credits, heal, xp, focus, clear a pile.
+//! Dev console commands: spawn and drop items, give credits, heal, xp, focus, count the
+//! people, jump the clock, clear a pile.
 
 use crate::anim::effects::pulse;
 use crate::app::AppState;
@@ -9,8 +10,8 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 10] = [
-    "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "clear", "help",
+const COMMANDS: [&str; 12] = [
+    "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "who", "clock", "clear", "help",
 ];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
@@ -102,6 +103,62 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             st.character.stat_points = st.character.stat_points.saturating_add(n);
             Ok(format!("points {}", st.character.stat_points))
         }
+        "who" => {
+            let w = st
+                .world
+                .as_ref()
+                .ok_or_else(|| "no city, no people".to_string())?;
+            let (mut out, mut inside, mut driving) = (0, 0, 0);
+            for p in w.people() {
+                match &p.whereabouts {
+                    sim::Whereabouts::Inside(_) => inside += 1,
+                    sim::Whereabouts::At { .. } => out += 1,
+                    sim::Whereabouts::Travelling(t) => {
+                        if t.legs.iter().any(|l| l.car.is_some()) {
+                            driving += 1;
+                        } else {
+                            out += 1;
+                        }
+                    }
+                }
+            }
+            Ok(format!("{out} out · {inside} inside · {driving} driving"))
+        }
+        "clock" => {
+            // Jumps the clock forward to the next hh:mm and reseeds the city's day there.
+            let usage = "clock <hh:mm>".to_string();
+            let (h, m) = args
+                .first()
+                .and_then(|a| a.split_once(':'))
+                .and_then(|(h, m)| Some((h.parse::<u64>().ok()?, m.parse::<u64>().ok()?)))
+                .filter(|(h, m)| *h < 24 && *m < 60)
+                .ok_or(usage)?;
+            let world_tick = st
+                .world
+                .as_ref()
+                .map(|w| w.tick())
+                .ok_or_else(|| "no city, no clock".to_string())?;
+            let start = crate::ui::hud::START_MINUTE_OF_DAY as u64;
+            let per_minute = sim::TICKS_PER_MINUTE;
+            let from_start = (h * 60 + m + 1440 - start) % 1440;
+            let now = world_tick / per_minute;
+            let mut minute = now - now % 1440 + from_start;
+            if minute * per_minute < world_tick {
+                minute += 1440;
+            }
+            let city = st
+                .city
+                .as_ref()
+                .ok_or_else(|| "no city, no clock".to_string())?;
+            st.world = Some(sim::World::seed(
+                city,
+                &st.people,
+                &sim::SimParams::default(),
+                crate::ui::hud::START_MINUTE_OF_DAY,
+                minute * per_minute,
+            ));
+            Ok(format!("{h:02}:{m:02}"))
+        }
         "clear" => {
             let n = st.ground.at(focus.stratum, focus.pos).len();
             st.ground.clear(focus.stratum, focus.pos);
@@ -111,7 +168,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             ))
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · who · clock <hh:mm> · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),
@@ -267,5 +324,49 @@ mod tests {
         assert_eq!((st.character.sp, st.character.stat_points), (2, 3));
         assert_eq!(run(&mut st, at, "sp x").unwrap_err(), "sp <points>");
         assert!(run(&mut st, at, "help").unwrap().contains("pts"));
+    }
+
+    #[test]
+    fn who_counts_the_people() {
+        let (mut st, at) = setup();
+        let city = st.city.as_ref().unwrap();
+        st.world = Some(sim::World::seed(
+            city,
+            &st.people,
+            &sim::SimParams::default(),
+            22 * 60,
+            0,
+        ));
+        let msg = run(&mut st, at, "who").unwrap();
+        assert!(
+            msg.contains(" out · ") && msg.contains(" inside · ") && msg.contains(" driving"),
+            "{msg}"
+        );
+        st.world = None;
+        assert_eq!(run(&mut st, at, "who").unwrap_err(), "no city, no people");
+    }
+
+    #[test]
+    fn clock_sets_the_hour_and_reseeds_the_day() {
+        let (mut st, at) = setup();
+        let city = st.city.as_ref().unwrap();
+        st.world = Some(sim::World::seed(
+            city,
+            &st.people,
+            &sim::SimParams::default(),
+            22 * 60,
+            0,
+        ));
+        assert_eq!(run(&mut st, at, "clock 23:30").unwrap(), "23:30");
+        assert_eq!(st.clock(), (23, 30));
+        assert_eq!(st.tick, 0, "the frame tick is not the game's clock");
+        assert_eq!(st.world.as_ref().unwrap().minute_of_day(), 23 * 60 + 30);
+        assert_eq!(run(&mut st, at, "clock 12:00").unwrap(), "12:00");
+        assert_eq!(st.clock(), (12, 0));
+        assert_eq!(run(&mut st, at, "clock noon").unwrap_err(), "clock <hh:mm>");
+        assert_eq!(
+            run(&mut st, at, "clock 25:00").unwrap_err(),
+            "clock <hh:mm>"
+        );
     }
 }

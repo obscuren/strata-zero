@@ -39,6 +39,10 @@ pub struct AppState {
     pub show_fps: bool,
     pub content: game::Content,
     pub character: game::Character,
+    /// The professions and lines of the city's people.
+    pub people: sim::People,
+    /// The living city, once there is a city.
+    pub world: Option<sim::World>,
     /// Items lying in the city.
     pub ground: game::Ground,
     /// Ability effects in flight, oldest first.
@@ -97,6 +101,7 @@ impl AppState {
         let content = game::Content::load().expect("embedded content pack is valid");
         let character = game::Character::from_template(&content, &game::TemplateId::new("vex"))
             .expect("the vex template builds");
+        let people = sim::People::load().expect("the people pack is valid");
         AppState {
             params: GenParams::default(),
             city: None,
@@ -108,6 +113,8 @@ impl AppState {
             show_fps: true,
             content,
             character,
+            people,
+            world: None,
             ground: game::Ground::default(),
             fx: Vec::new(),
             repaint: false,
@@ -119,9 +126,15 @@ impl AppState {
         }
     }
 
-    /// The time of night as (hour, minute): real time, from the tick.
+    /// The game's tick: the world's own clock, which stops in overview and in
+    /// menus; the frame tick before there is a world.
+    pub fn clock_tick(&self) -> u64 {
+        self.world.as_ref().map_or(self.tick, |w| w.tick())
+    }
+
+    /// The time of night as (hour, minute), from the game's tick.
     pub fn clock(&self) -> (u8, u8) {
-        crate::ui::hud::clock_at(self.tick)
+        crate::ui::hud::clock_at(self.clock_tick())
     }
 
     /// Turns dev mode on or off; off also drops the dev-only sidebar sections.
@@ -154,6 +167,13 @@ impl AppState {
 
     /// Puts a city in place: no body, no effects in flight.
     pub fn enter_city(&mut self, city: City) {
+        self.world = Some(sim::World::seed(
+            &city,
+            &self.people,
+            &sim::SimParams::default(),
+            crate::ui::hud::START_MINUTE_OF_DAY,
+            self.tick,
+        ));
         self.city = Some(city);
         self.player = None;
         self.fx.clear();
@@ -163,17 +183,17 @@ impl AppState {
 
     /// Logs a plain result.
     pub fn say(&mut self, msg: impl Into<String>) {
-        self.log.push(Kind::Info, msg, self.tick);
+        self.log.push(Kind::Info, msg, self.clock_tick());
     }
 
     /// Logs a refusal.
     pub fn warn(&mut self, msg: impl Into<String>) {
-        self.log.push(Kind::Warn, msg, self.tick);
+        self.log.push(Kind::Warn, msg, self.clock_tick());
     }
 
     /// Logs a quest or level line.
     pub fn story(&mut self, msg: impl Into<String>) {
-        self.log.push(Kind::Story, msg, self.tick);
+        self.log.push(Kind::Story, msg, self.clock_tick());
     }
 }
 

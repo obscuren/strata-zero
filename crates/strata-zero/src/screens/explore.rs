@@ -6,7 +6,7 @@ use crate::messages::Kind;
 use crate::render::fx::FxOverlay;
 use crate::render::items::GroundOverlay;
 use crate::render::overlay::Digital;
-use crate::render::traffic::Traffic;
+use crate::render::people::{PeopleOverlay, card_lines};
 use crate::render::viewport::{Camera, MapView, Overlay, tile_to_screen};
 use crate::render::weather::Weather;
 use crate::screens::configure::Configure;
@@ -98,7 +98,6 @@ pub struct MapScreen {
     pub cursor: Pos,
     pub digital: bool,
     pub help: bool,
-    traffic: Traffic,
     fps: FpsMeter,
     /// The dev console while it is open; it takes every key.
     console: Option<Console>,
@@ -186,7 +185,6 @@ impl MapScreen {
             cursor: Pos::new(0, 0),
             digital: false,
             help: false,
-            traffic: Traffic::default(),
             fps: FpsMeter::default(),
             console: None,
             last_tick: 0,
@@ -473,11 +471,40 @@ impl MapScreen {
                 Pick::World(WorldAct::Down),
             ));
         }
+        if k == StratumKind::Street
+            && let Some(world) = st.world.as_ref()
+        {
+            for n in pos.neighbors4() {
+                let Some(id) = world.person_at(n) else {
+                    continue;
+                };
+                let Some(key) = letters.next() else { break };
+                let card = world.card(id, city);
+                choices.push(Choice::new(
+                    key,
+                    format!("talk to {}", card.name),
+                    Pick::Card(card_lines(&card)),
+                ));
+            }
+        }
         let node = Digital::node_under(city, k, pos).map(|id| city.net.node(id));
+        let person = st
+            .world
+            .as_ref()
+            .filter(|_| k == StratumKind::Street)
+            .and_then(|w| w.person_at(pos).map(|id| w.card(id, city)));
         choices.push(Choice::new(
             'l',
             "look",
-            Pick::Card(inspector_lines(city, k, pos, node, stacks, &st.content)),
+            Pick::Card(inspector_lines(
+                city,
+                k,
+                pos,
+                node,
+                stacks,
+                &st.content,
+                person.as_ref(),
+            )),
         ));
         Some(ScreenCmd::Push {
             to: Box::new(Popup::verbs("HERE", choices, st.tick)),
@@ -518,6 +545,29 @@ impl MapScreen {
         }
     }
 
+    /// A step into someone swaps places with them, and they drift back once the
+    /// player moves on; a step into a car goes nowhere.
+    fn bump(&self, st: &mut AppState, dir: Dir) -> Option<ScreenCmd> {
+        let player = st.player.as_ref()?;
+        let (from, target, stratum) = (player.pos, player.pos.step(dir), player.stratum);
+        if stratum != StratumKind::Street {
+            return None;
+        }
+        let city = st.city.as_ref()?;
+        let world = st.world.as_mut()?;
+        if let Some(id) = world.person_at(target) {
+            if city.walkable(stratum, target) {
+                world.swap(id, from, target);
+            }
+            return None;
+        }
+        if world.car_at(target).is_some() {
+            st.warn("a car is in the way");
+            return Some(ScreenCmd::Stay);
+        }
+        None
+    }
+
     fn handle_walk(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
         if k.code == KeyCode::Char(' ') {
             return self.interact(st);
@@ -537,6 +587,11 @@ impl MapScreen {
                 None => st.warn(format!("nothing in slot {n}")),
             }
             return Some(ScreenCmd::Stay);
+        }
+        if let Some(dir) = dir_for(k.code)
+            && let Some(cmd) = self.bump(st, dir)
+        {
+            return Some(cmd);
         }
         let dev = st.dev;
         let bonus = st.character.sight_bonus(&st.content);
@@ -603,6 +658,12 @@ impl Screen for MapScreen {
         if st.tick > self.last_tick + 1 {
             self.fps.resume(Instant::now());
         }
+        // The world runs only while walking, by the frames since the last update, a
+        // minute at most: overview and menus freeze it.
+        let elapsed = st
+            .tick
+            .saturating_sub(self.last_tick)
+            .min(sim::TICKS_PER_MINUTE);
         self.last_tick = st.tick;
         self.fps.frame();
         st.prune_fx(st.tick);
@@ -673,10 +734,18 @@ impl Screen for MapScreen {
         }
         self.cam.clamp(size, map.width, map.height);
         self.cam.update();
-        if let Some(city) = st.city.as_ref() {
-            let origin = self.cam.origin(map.width, map.height);
-            let view = TileRect::new(origin.x, origin.y, map.width as i32, map.height as i32);
-            self.traffic.update(city, self.stratum, view, st.tick);
+        // The city lives: a minute step when the clock turns, a few paths per frame,
+        // and nobody walks onto the player.
+        let standing = match (self.mode, &st.player) {
+            (Mode::Walk, Some(p)) if p.stratum == StratumKind::Street => Some(p.pos),
+            _ => None,
+        };
+        if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
+            world.set_blocker(standing);
+            if self.mode == Mode::Walk {
+                world.advance(city, world.tick() + elapsed);
+                world.path_some(city, 4);
+            }
         }
         ScreenCmd::Stay
     }
@@ -712,7 +781,6 @@ impl Screen for MapScreen {
         if st.rain {
             overlays.push(&Weather);
         }
-        overlays.push(&self.traffic);
         overlays.push(&digital);
         let walking = self.mode == Mode::Walk
             && st
@@ -730,6 +798,15 @@ impl Screen for MapScreen {
             vis,
         };
         overlays.push(&ground);
+        let (hour, _) = st.clock();
+        let people = st.world.as_ref().map(|world| PeopleOverlay {
+            world,
+            night: hour >= 18 || hour <= 5,
+            vis,
+        });
+        if let Some(p) = people.as_ref() {
+            overlays.push(p);
+        }
         let fx = FxOverlay { fx: &st.fx, vis };
         overlays.push(&fx);
         MapView {
@@ -843,10 +920,16 @@ impl Screen for MapScreen {
             r.bottom_rule,
         );
         // Right column.
+        let person = st
+            .world
+            .as_ref()
+            .filter(|_| self.stratum == StratumKind::Street)
+            .and_then(|w| w.person_at(cursor).map(|id| w.card(id, city)));
         let view = sidebar::SidebarView {
             city,
             stratum: self.stratum,
             focus: cursor,
+            person: person.as_ref(),
             view: TileRect::new(origin.x, origin.y, map.width as i32, map.height as i32),
             player: st
                 .player
@@ -2077,5 +2160,207 @@ mod tests {
         assert_eq!(s.mode, Mode::Walk);
         s.update(&mut st, &[key(KeyCode::Char('c'))]);
         assert_eq!(s.mode, Mode::Explore, "the dev camera is still a key away");
+    }
+
+    fn seed_world(st: &mut AppState) {
+        let city = st.city.as_ref().unwrap();
+        st.world = Some(sim::World::seed(
+            city,
+            &st.people,
+            &sim::SimParams::default(),
+            22 * 60,
+            st.tick,
+        ));
+    }
+
+    /// Runs the world an hour, pathing a few trips per frame as the app does.
+    fn run_an_hour(st: &mut AppState, s: &mut MapScreen) {
+        for _ in 0..240 {
+            st.tick += 90 / 4;
+            s.update(st, &[]);
+        }
+    }
+
+    #[test]
+    fn walking_into_someone_swaps_places_and_space_talks() {
+        let mut st = state();
+        seed_world(&mut st);
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        run_an_hour(&mut st, &mut s);
+        let city = st.city.as_ref().unwrap();
+        let whole = citygen::Rect::new(0, 0, city.size.w as i32, city.size.h as i32);
+        let world = st.world.as_ref().unwrap();
+        let walker = world
+            .visible(whole)
+            .into_iter()
+            .find(|m| matches!(m.kind, sim::MoverKind::Walker { .. }))
+            .expect("someone is out");
+        let beside = walker
+            .pos
+            .neighbors4()
+            .find(|n| city.walkable(StratumKind::Street, *n) && world.person_at(*n).is_none())
+            .expect("a free tile beside them");
+        {
+            let p = st.player.as_mut().unwrap();
+            p.pos = beside;
+        }
+        let bonus = st.character.sight_bonus(&st.content);
+        let city = st.city.as_ref().unwrap();
+        st.player.as_mut().unwrap().update_fov(city, bonus);
+        s.cam.snap(beside);
+        s.update(&mut st, &[]);
+        let text = draw_screen(&s, &st, 120, 40);
+        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let buf = t.backend().buffer();
+        let dim_ats = buf
+            .content
+            .iter()
+            .filter(|c| c.symbol() == "@" && c.fg == crate::ui::chrome::DIM)
+            .count();
+        assert!(dim_ats >= 1, "a walker draws as a dim @: {text}");
+        let bold_white = buf
+            .content
+            .iter()
+            .filter(|c| c.symbol() == "@" && c.modifier.contains(Modifier::BOLD))
+            .count();
+        assert_eq!(bold_white, 1, "the player stays the one bold @");
+        // Walking into them swaps places: no prompt, the player takes their tile and
+        // they take the player's.
+        let dir = match (walker.pos.x - beside.x, walker.pos.y - beside.y) {
+            (1, 0) => KeyCode::Char('l'),
+            (-1, 0) => KeyCode::Char('h'),
+            (0, 1) => KeyCode::Char('j'),
+            _ => KeyCode::Char('k'),
+        };
+        let cmd = s.update(&mut st, &[key(dir)]);
+        assert!(
+            matches!(cmd, ScreenCmd::Stay),
+            "a bump swaps, it does not prompt"
+        );
+        assert_eq!(
+            st.player.as_ref().unwrap().pos,
+            walker.pos,
+            "the player took their tile"
+        );
+        let sim::MoverKind::Walker { id, .. } = walker.kind else {
+            unreachable!()
+        };
+        let world = st.world.as_ref().unwrap();
+        assert_eq!(
+            world.person_at(beside),
+            Some(id),
+            "they took the player's old tile"
+        );
+        assert_eq!(world.person_at(walker.pos), None);
+        let card = world.card(id, st.city.as_ref().unwrap());
+        // Space lists them as well.
+        let ScreenCmd::Push { to: mut here, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens HERE")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*here, &st, 120, 40);
+        assert!(text.contains(&format!("talk to {}", card.name)), "{text}");
+        here.update(&mut st, &[key(KeyCode::Esc)]);
+    }
+
+    #[test]
+    fn nobody_stands_on_the_player() {
+        let mut st = state();
+        seed_world(&mut st);
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        run_an_hour(&mut st, &mut s);
+        let city = st.city.as_ref().unwrap();
+        let whole = citygen::Rect::new(0, 0, city.size.w as i32, city.size.h as i32);
+        let walker = st
+            .world
+            .as_ref()
+            .unwrap()
+            .visible(whole)
+            .into_iter()
+            .find(|m| matches!(m.kind, sim::MoverKind::Walker { .. }))
+            .expect("someone is out");
+        st.player.as_mut().unwrap().pos = walker.pos;
+        s.update(&mut st, &[]);
+        let pos = st.player.as_ref().unwrap().pos;
+        for _ in 0..3 {
+            st.tick += 9;
+            s.update(&mut st, &[]);
+            assert!(
+                st.world.as_ref().unwrap().person_at(pos).is_none(),
+                "held a tile back while the player stands there"
+            );
+        }
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(text.contains('@'));
+    }
+
+    #[test]
+    fn street_people_do_not_block_or_talk_on_the_undercity() {
+        let mut st = state();
+        seed_world(&mut st);
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let under = StratumKind::Undercity;
+        let mut found = None;
+        for _ in 0..8 {
+            run_an_hour(&mut st, &mut s);
+            let city = st.city.as_ref().unwrap();
+            let whole = citygen::Rect::new(0, 0, city.size.w as i32, city.size.h as i32);
+            found = st
+                .world
+                .as_ref()
+                .unwrap()
+                .visible(whole)
+                .into_iter()
+                .filter(|m| matches!(m.kind, sim::MoverKind::Walker { .. }))
+                .find_map(|m| {
+                    if !city.walkable(under, m.pos) {
+                        return None;
+                    }
+                    m.pos
+                        .neighbors4()
+                        .find(|n| city.walkable(under, *n))
+                        .map(|n| (m.pos, n))
+                });
+            if found.is_some() {
+                break;
+            }
+        }
+        let (person, beside) = found.expect("a tunnel under someone");
+        {
+            let p = st.player.as_mut().unwrap();
+            p.stratum = under;
+            p.pos = beside;
+        }
+        s.stratum = under;
+        s.update(&mut st, &[]);
+        let dir = match (person.x - beside.x, person.y - beside.y) {
+            (1, 0) => KeyCode::Char('l'),
+            (-1, 0) => KeyCode::Char('h'),
+            (0, 1) => KeyCode::Char('j'),
+            _ => KeyCode::Char('k'),
+        };
+        let ScreenCmd::Push { to: mut here, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens HERE")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*here, &st, 120, 40);
+        assert!(
+            !text.contains("talk to"),
+            "nobody to talk to down here: {text}"
+        );
+        here.update(&mut st, &[key(KeyCode::Esc)]);
+        let cmd = s.update(&mut st, &[key(dir)]);
+        assert!(matches!(cmd, ScreenCmd::Stay));
+        assert_eq!(
+            st.player.as_ref().unwrap().pos,
+            person,
+            "nobody upstairs blocks the tunnel"
+        );
     }
 }

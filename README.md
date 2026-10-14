@@ -29,6 +29,27 @@ again jacks out. In Explore mode `]` past Heights shows the Net.
 
 Same seed and parameters always produce a byte-identical city.
 
+The city is lived in. Every building is staffed and every bed is slept in: the
+`sim` crate seeds a population at jack-in, with professions of its own
+(shopkeepers, noodle cooks, barkeeps, corp drones, line workers, couriers,
+ripperdocs, sex workers, fixers, door muscle, monks, gangers) and a daily
+routine for each, so a shop is open when its keeper is behind the counter and
+the night shift at the factory relieves the day shift at ten. People walk to
+work along the sidewalks, and the ones who own a car take it from the kerb
+when the commute is long and park it near the door. The Neon Strip is the
+red-light district: its workers hold the sidewalk in front of the clubs from
+nine at night and take clients into the hotels. Off shift, people head for the
+bar they are known at, queue at the noodle bars at the rush, and stop for a
+word (`…`) when they meet. Nobody waits for you to be looking: the whole city
+moves on the clock, and only the people inside the screen's bubble are drawn;
+on foot you see the ones in your sight, and a parked car stays in memory like
+a pile. Walk into someone and you swap places, so a crowd never blocks the
+way; `space` lists whoever stands beside you, to talk. The clock is the city's
+own: it runs while you walk and stops in the free camera and in every menu, so
+the overview is a still of the city, and the inspector reads whoever is under
+the cursor there: who they are, what they are doing, what comes next for them,
+where they live and work, and where their car is.
+
 ## Run
 
 ```sh
@@ -83,11 +104,13 @@ end · `r` reseed after an error · `esc` back
 **Walk** `hjkl` `yubn` / arrows move · `<` `>` take stairs, lift, ladder or
 manhole · `space` interact: take what lies here, jack in at an adjacent terminal
 or out again, take the stairs, look · `1`-`5` fire the ability in that slot ·
-`a` the full ability list · `enter` jack shortcut · `.` wait · `tab` deck ·
+`a` the full ability list · walking into someone swaps places with them, and
+they step back once you move on · `enter` jack shortcut · `.` wait · `tab` deck ·
 `F1`-`F4` panes · `v` view popup · `m` messages · `d` digital overlay · `s` save ·
 `?` keys · `c` back to the free camera (dev mode) · `:` dev
-console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `sp`, `pts`, `clear`,
-`help`, with Tab completion and history) · `esc` pause
+console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `sp`, `pts`, `who`
+counts the people out, inside and driving, `clock hh:mm` jumps the day there,
+`clear`, `help`, with Tab completion and history) · `esc` pause
 
 The play HUD frames the map on one grid. The top band carries the handle,
 level, credits and dev readouts, then HP, FOCUS and XP bars that run the width
@@ -128,8 +151,10 @@ categories and every item, ability, skill, talent, quest and recipe live in
 
 ```
 crates/citygen       world model + city generator (no terminal dependencies)
+crates/game          characters, items, abilities, the build rules (no terminal dependencies)
+crates/sim           the living city: people, places, paths and the world's minute
 crates/strata-zero   the game: ratatui app, screens, renderer, walking and jacking in, the `gen` CLI
-flavor/              names.ron (names, signage glyphs) · style.ron (palettes, glyph sets)
+flavor/              names.ron (names, handles, signage glyphs) · style.ron (palettes, glyph sets) · content.ron (game content) · people.ron (professions and their lines)
 docs/superpowers/specs   design specs
 docs/superpowers/plans   implementation plans
 ```

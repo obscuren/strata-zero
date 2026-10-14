@@ -62,4 +62,10 @@ FlavorPack(
     ],
     landmarks: ["{corp} Tower", "{district} Terminal", "The {district} Arcology", "{corp} Plaza", "Old {district} Station"],
     signage: ['ｦ','ｧ','ｨ','ｩ','ｪ','ｫ','ｬ','ｭ','ｮ','ｯ','ｰ','ｱ','ｲ','ｳ','ｴ','ｵ','ｶ','ｷ','ｸ','ｹ','ｺ','ｻ','ｼ','ｽ','ｾ','ｿ','ﾀ','ﾁ','ﾂ','ﾃ','ﾄ','ﾅ','ﾆ','ﾇ','ﾈ','ﾉ','ﾊ','ﾋ','ﾌ','ﾍ','ﾎ','ﾏ','ﾐ','ﾑ','ﾒ','ﾓ','ﾔ','ﾕ','ﾖ','ﾗ','ﾘ','ﾙ','ﾚ','ﾛ','ﾜ','ﾝ','Ж','Ф','Ц','Ш','Я','Δ','Σ','Ψ','Ω','¥','$','€','§','¤'],
+    people: ["Juno", "Tamsin", "Rook", "Ngozi", "Hale", "Pike", "Mireille", "Dax", "Oyelaran", "Sable",
+             "Ferro", "Ines", "Kazuo", "Lotte", "Mbeki", "Nadia", "Oskar", "Priya", "Quill", "Rhee",
+             "Soren", "Teodora", "Ulf", "Vanja", "Wren", "Xiomara", "Yusuf", "Zadie", "Arlo", "Bexley",
+             "Cass", "Dmitri", "Esme", "Fenn", "Greta", "Hollis", "Idris", "Jax", "Kiri", "Lucan",
+             "Marlow", "Nico", "Odile", "Pavel", "Rina", "Sunny", "Tobiah", "Una", "Viggo", "Yara",
+             "Zeke", "Anouk", "Bram", "Cleo", "Dev", "Elke", "Faris", "Gwen", "Havel", "Imani"],
 )

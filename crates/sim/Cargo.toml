@@ -1,0 +1,13 @@
+[package]
+name = "sim"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+citygen = { path = "../citygen" }
+game = { path = "../game" }
+serde.workspace = true
+ron.workspace = true
+thiserror.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
