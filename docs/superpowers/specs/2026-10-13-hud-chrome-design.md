@@ -38,9 +38,10 @@ footer rows. Heavy rules are `━` with `┳` and `┻` where the vertical rule
 crosses them. The vertical rule runs through the band and the main area; the
 footer rows span the full width. At 100 by 30 the map keeps 22 rows.
 
-Rules are drawn in the chrome rule colour (`chrome::RULE`). The right column
-and both bands sit on the panel background (`chrome::PANEL_BG`); the map
-keeps its own background.
+Rules are drawn in the chrome rule colour (`chrome::RULE`). The right column,
+the bands and the footer carry no background of their own, so the terminal's
+(and its window transparency) shows through them; the map keeps its own
+background. Popups and the pause menu are solid; the deck is glass.
 
 ## Top band
 

@@ -4,7 +4,7 @@ use crate::actions::{perform, report};
 use crate::anim::effects::{pulse, typewriter};
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::ui::chrome::{
-    BAR_BG, CYAN, CYAN_RGB, DIM, MAGENTA, PANEL_BG, TEXT, frame, glass, put, put_paragraph, reveal,
+    BAR_BG, CYAN, CYAN_RGB, DIM, MAGENTA, PANEL_BG, TEXT, frame, put, put_paragraph, reveal, solid,
 };
 use crate::ui::sidebar::Section;
 use crate::walker::port_name;
@@ -363,7 +363,7 @@ impl Screen for Popup {
             return;
         }
         let buf = f.buffer_mut();
-        glass(buf, r);
+        solid(buf, r);
         frame(buf, r);
         put(
             buf,
