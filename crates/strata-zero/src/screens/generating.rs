@@ -108,7 +108,7 @@ impl Generating {
                 st.params = self.params.clone();
                 st.enter_city(city);
                 ScreenCmd::Switch {
-                    to: crate::screens::explore_screen(st.tick),
+                    to: crate::screens::explore_screen(st),
                     fx: TransitionKind::Glitch,
                 }
             }

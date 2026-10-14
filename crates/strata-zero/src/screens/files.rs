@@ -127,7 +127,7 @@ impl Screen for Files {
                                 st.enter_city(city);
                                 st.say(format!("loaded {}", entry.path.display()));
                                 return ScreenCmd::Switch {
-                                    to: crate::screens::explore_screen(st.tick),
+                                    to: crate::screens::explore_screen(st),
                                     fx: TransitionKind::Glitch,
                                 };
                             }

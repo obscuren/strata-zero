@@ -258,38 +258,50 @@ impl Deck {
     }
 
     /// The jacked deck, then the programs it grants.
+    /// The jacked deck, then the programs it grants. A deck the content does not know
+    /// reads as no deck at all.
     fn cyberdeck_rows(st: &AppState) -> Vec<Row> {
-        let Some(id) = st.character.equipped(Slot::Deck) else {
-            return vec![Row {
-                text: "no deck jacked".into(),
-                tone: Tone::Dim,
-                detail: None,
-            }];
+        let dim = |text: &str| Row {
+            text: text.into(),
+            tone: Tone::Dim,
+            detail: None,
         };
-        let Some(item) = st.content.item(id) else {
-            return Vec::new();
+        let Some((id, item)) = st
+            .character
+            .equipped(Slot::Deck)
+            .and_then(|id| st.content.item(id).map(|item| (id, item)))
+        else {
+            return vec![dim("no deck jacked")];
         };
         let mut rows = vec![Row {
             text: format!("▣ {}", item.name),
             tone: Tone::Normal,
             detail: Some(Detail::Item(id.clone())),
         }];
-        rows.push(Row {
-            text: "── programs ──".into(),
-            tone: Tone::Dim,
-            detail: None,
-        });
         let all = st.character.abilities(&st.content);
-        for gid in &item.grants {
-            if let Some(i) = all.iter().position(|(a, _)| a == gid)
-                && let Some(a) = st.content.ability(gid)
-            {
-                rows.push(Row {
-                    text: format!("◈ {}", a.name),
-                    tone: Tone::Normal,
-                    detail: Some(Detail::Ability(i)),
-                });
-            }
+        let programs: Vec<(usize, &game::Ability)> = item
+            .grants
+            .iter()
+            .filter_map(|gid| {
+                let i = all.iter().position(|(a, _)| a == gid)?;
+                Some((i, st.content.ability(gid)?))
+            })
+            .collect();
+        if programs.is_empty() {
+            rows.push(dim("no programs loaded"));
+            return rows;
+        }
+        rows.push(dim("── programs ──"));
+        for (i, a) in programs {
+            let icon = match a.kind {
+                AbilityKind::Passive => '·',
+                AbilityKind::Active(_) => '◈',
+            };
+            rows.push(Row {
+                text: format!("{icon} {}", a.name),
+                tone: Tone::Normal,
+                detail: Some(Detail::Ability(i)),
+            });
         }
         rows
     }
@@ -798,8 +810,9 @@ impl Deck {
                 KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => self.shift_tab(-1, st),
                 KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => self.shift_tab(1, st),
                 KeyCode::Char(c @ '1'..='9') => {
-                    let i = c as usize - '1' as usize;
-                    self.set_tab(Tab::ALL[i], st);
+                    if let Some(tab) = Tab::ALL.get(c as usize - '1' as usize) {
+                        self.set_tab(*tab, st);
+                    }
                 }
                 KeyCode::Up | KeyCode::Char('k') => self.move_row(&rows, -1, st.tick),
                 KeyCode::Down | KeyCode::Char('j') => self.move_row(&rows, 1, st.tick),
@@ -905,7 +918,7 @@ impl Screen for Deck {
 
         // Tab bar.
         let mut x = inner.x + 1;
-        let mut starts = [0u16; 9];
+        let mut starts = [0u16; Tab::ALL.len()];
         for (i, tab) in Tab::ALL.iter().enumerate() {
             let active = *tab == self.tab;
             let label = if active {
@@ -1800,10 +1813,88 @@ mod tests {
         );
         let again = Deck::new(5).restore(&st);
         assert_eq!((again.tab, again.row), (Tab::Gear, d.row));
-        // A remembered row past the end clamps to a selectable row.
-        st.deck_rows[Tab::Gear.index()] = 999;
-        let clamped = Deck::new(5).restore(&st);
+        assert_eq!(st.deck_rows.len(), Tab::ALL.len());
+        // Close on the last inventory row, lose most of the pack, reopen: the row clamps.
+        let mut d = Deck::new(6);
+        d.update(&mut st, &[key(KeyCode::Char('4')), key(KeyCode::Up)]);
+        let last = d.row;
+        assert!(last > 1, "wrapped up to the last item row: {last}");
+        st.character.inventory.truncate(1);
+        let clamped = Deck::new(7).restore(&st);
         let rows = clamped.rows(&st);
+        assert!(clamped.row < last, "{} rows left", rows.len());
         assert!(clamped.row < rows.len() && rows[clamped.row].detail.is_some());
+    }
+
+    fn cyberdeck_texts(st: &AppState) -> Vec<String> {
+        let mut d = Deck::new(0);
+        d.tab = Tab::Cyberdeck;
+        d.rows(st).iter().map(|r| r.text.clone()).collect()
+    }
+
+    #[test]
+    fn cyberdeck_tab_handles_odd_decks() {
+        let mut st = state();
+        st.character
+            .equipment
+            .insert(Slot::Deck, ItemId::new("ghost_deck"));
+        let mut d = Deck::new(0);
+        d.tab = Tab::Cyberdeck;
+        let rows = d.rows(&st);
+        assert_eq!(rows.len(), 1, "{:?}", cyberdeck_texts(&st));
+        assert!(
+            rows[0].text.contains("no deck jacked") && rows[0].detail.is_none(),
+            "a deck the content does not know reads as none: {}",
+            rows[0].text
+        );
+
+        let mut bare = st
+            .content
+            .item(&ItemId::new("pawnshop_deck"))
+            .unwrap()
+            .clone();
+        bare.id = ItemId::new("bare_deck");
+        bare.name = "Bare deck".into();
+        bare.grants.clear();
+        st.content.items.push(bare);
+        st.character
+            .equipment
+            .insert(Slot::Deck, ItemId::new("bare_deck"));
+        let texts = cyberdeck_texts(&st);
+        assert!(texts[0].contains("Bare deck"), "{texts:?}");
+        assert!(
+            !texts.iter().any(|t| t.contains("── programs ──")),
+            "no header over nothing: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("no programs loaded")),
+            "{texts:?}"
+        );
+
+        let passive = game::AbilityId::new("street_sense");
+        assert!(matches!(
+            st.content.ability(&passive).unwrap().kind,
+            AbilityKind::Passive
+        ));
+        let mut quiet = st
+            .content
+            .item(&ItemId::new("pawnshop_deck"))
+            .unwrap()
+            .clone();
+        quiet.id = ItemId::new("quiet_deck");
+        quiet.grants = vec![passive];
+        st.content.items.push(quiet);
+        st.character
+            .equipment
+            .insert(Slot::Deck, ItemId::new("quiet_deck"));
+        let texts = cyberdeck_texts(&st);
+        let row = texts
+            .iter()
+            .find(|t| t.contains("Street sense"))
+            .unwrap_or_else(|| panic!("{texts:?}"));
+        assert!(
+            row.starts_with("· "),
+            "a passive wears the passive icon, as on SKILLS: {row}"
+        );
     }
 }
