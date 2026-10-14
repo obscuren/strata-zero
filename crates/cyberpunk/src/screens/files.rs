@@ -105,11 +105,15 @@ impl Screen for Files {
             match &mut self.mode {
                 Mode::Load => match k.code {
                     KeyCode::Up | KeyCode::Char('k') => {
-                        self.selected = self.selected.saturating_sub(1)
+                        let n = self.entries.len();
+                        if n > 0 {
+                            self.selected = (self.selected + n - 1) % n;
+                        }
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
-                        if self.selected + 1 < self.entries.len() {
-                            self.selected += 1;
+                        let n = self.entries.len();
+                        if n > 0 {
+                            self.selected = (self.selected + 1) % n;
                         }
                     }
                     KeyCode::Esc | KeyCode::Char('q') => return Self::done(),
@@ -335,5 +339,26 @@ mod tests {
             empty.update(&mut st, &[key(KeyCode::Esc)]),
             ScreenCmd::Pop { .. }
         ));
+    }
+
+    #[test]
+    fn load_list_wraps() {
+        let dir = tmp("wrap");
+        let city = citygen::Generator::run(citygen::GenParams {
+            seed: 1,
+            size: citygen::SizePreset::Custom { w: 80, h: 40 },
+            districts: 4,
+            ..Default::default()
+        })
+        .unwrap();
+        crate::save::save_city(&dir.join("a.city"), &city).unwrap();
+        crate::save::save_city(&dir.join("b.city"), &city).unwrap();
+        let mut st = AppState::new();
+        let mut load = Files::load_in(dir, 0);
+        assert_eq!(load.entries.len(), 2);
+        load.update(&mut st, &[key(KeyCode::Up)]);
+        assert_eq!(load.selected, 1);
+        load.update(&mut st, &[key(KeyCode::Down)]);
+        assert_eq!(load.selected, 0);
     }
 }

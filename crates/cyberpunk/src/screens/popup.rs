@@ -178,14 +178,12 @@ impl Popup {
         self
     }
 
+    /// Wraps at both ends, landing on the next enabled row; none enabled, no move.
     fn move_sel(&mut self, delta: i32) {
         let n = self.choices.len() as i32;
         let mut i = self.selected as i32;
-        loop {
-            i += delta;
-            if i < 0 || i >= n {
-                return;
-            }
+        for _ in 0..n {
+            i = (i + delta).rem_euclid(n.max(1));
             if self.choices[i as usize].enabled {
                 self.selected = i as usize;
                 return;
@@ -454,8 +452,8 @@ mod tests {
             text.contains("STIM PATCH") && text.contains("u  use") && text.contains("d  drop one"),
             "{text}"
         );
-        p.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Down)]);
-        assert_eq!(p.selected, 2, "skips the disabled row and clamps");
+        p.update(&mut st, &[key(KeyCode::Down)]);
+        assert_eq!(p.selected, 2, "skips the disabled row");
         p.update(&mut st, &[key(KeyCode::Up)]);
         assert_eq!(p.selected, 0);
         assert!(matches!(
@@ -582,5 +580,34 @@ mod tests {
         );
         p.update(&mut st, &[key(KeyCode::Char('j'))]);
         assert_eq!(p.selected, 1, "j still moves when no row uses it");
+    }
+
+    #[test]
+    fn rows_wrap_and_skip_disabled() {
+        let mut st = state();
+        let mut p = Popup::verbs(
+            "T",
+            vec![
+                Choice::disabled('a', "a"),
+                Choice::new('b', "b", Pick::Close),
+                Choice::new('c', "c", Pick::Close),
+            ],
+            0,
+        );
+        assert_eq!(p.selected, 1);
+        p.update(&mut st, &[key(KeyCode::Up)]);
+        assert_eq!(
+            p.selected, 2,
+            "up from the first enabled row wraps to the last"
+        );
+        p.update(&mut st, &[key(KeyCode::Down)]);
+        assert_eq!(p.selected, 1);
+        let mut dead = Popup::verbs(
+            "T",
+            vec![Choice::disabled('a', "a"), Choice::disabled('b', "b")],
+            0,
+        );
+        dead.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Up)]);
+        assert_eq!(dead.selected, 0, "nothing to land on: no change, no hang");
     }
 }

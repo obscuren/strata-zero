@@ -25,12 +25,16 @@ impl Menu {
     }
 
     pub fn up(&mut self) {
-        self.selected = self.selected.saturating_sub(1);
+        let n = self.items.len();
+        if n > 0 {
+            self.selected = (self.selected + n - 1) % n;
+        }
     }
 
     pub fn down(&mut self) {
-        if self.selected + 1 < self.items.len() {
-            self.selected += 1;
+        let n = self.items.len();
+        if n > 0 {
+            self.selected = (self.selected + 1) % n;
         }
     }
 
@@ -126,12 +130,23 @@ mod tests {
         assert!(row(&t, 4).contains("QUIT"));
         m.down();
         m.down();
-        m.down();
         assert_eq!(m.selected, 2);
         m.up();
         assert_eq!(m.selected, 1);
         m.up();
-        m.up();
         assert_eq!(m.selected, 0);
+    }
+
+    #[test]
+    fn menu_wraps_at_both_ends() {
+        let mut m = Menu::new(vec!["A".into(), "B".into(), "C".into()], 0);
+        m.up();
+        assert_eq!(m.selected, 2);
+        m.down();
+        assert_eq!(m.selected, 0);
+        let mut one = Menu::new(vec!["A".into()], 0);
+        one.up();
+        one.down();
+        assert_eq!(one.selected, 0);
     }
 }

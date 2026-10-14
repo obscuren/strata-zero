@@ -255,12 +255,11 @@ impl Deck {
             self.row = 0;
             return;
         }
+        // Wrap at both ends, landing on the next row that has a detail.
+        let n = rows.len() as i32;
         let mut i = self.row as i32;
-        loop {
-            i += delta;
-            if i < 0 || i >= rows.len() as i32 {
-                return;
-            }
+        for _ in 0..n {
+            i = (i + delta).rem_euclid(n);
             if rows[i as usize].detail.is_some() {
                 self.row = i as usize;
                 self.changed = tick;
@@ -1305,7 +1304,7 @@ mod tests {
             st.character.value(&st.content)
         );
         assert_eq!(footer.trim_matches(|c: char| c == '│' || c == ' '), expect);
-        d.update(&mut st, &[key(KeyCode::Down); 60]);
+        d.update(&mut st, &[key(KeyCode::Up)]);
         let left = pane(&draw(&d, &st, 100, 30));
         let sel = left
             .iter()
@@ -1324,7 +1323,7 @@ mod tests {
         stuff(&mut st);
         let mut d = Deck::new(0);
         d.update(&mut st, &[key(KeyCode::Char('3'))]);
-        d.update(&mut st, &[key(KeyCode::Down); 60]);
+        d.update(&mut st, &[key(KeyCode::Up)]);
         st.tick = 60;
         let text = draw(&d, &st, 100, 30);
         let visible = text.lines().filter(|l| l.contains("× ")).count();
@@ -1630,5 +1629,21 @@ mod tests {
         let text = draw(&d, &st, 120, 35);
         assert!(!text.contains(&last), "{text}");
         assert!(text.contains("▸ "), "selection restored: {text}");
+    }
+
+    #[test]
+    fn rows_wrap_around() {
+        let mut st = state();
+        stuff(&mut st);
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('3'))]);
+        let rows = d.rows(&st);
+        let first = rows.iter().position(|r| r.detail.is_some()).unwrap();
+        let last = rows.iter().rposition(|r| r.detail.is_some()).unwrap();
+        assert_eq!(d.row, first);
+        d.update(&mut st, &[key(KeyCode::Up)]);
+        assert_eq!(d.row, last, "up from the first row wraps to the last");
+        d.update(&mut st, &[key(KeyCode::Down)]);
+        assert_eq!(d.row, first);
     }
 }

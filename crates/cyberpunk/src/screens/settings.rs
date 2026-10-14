@@ -50,9 +50,11 @@ impl Screen for Settings {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
         for k in keys {
             match k.code {
-                KeyCode::Up | KeyCode::Char('k') => self.selected = self.selected.saturating_sub(1),
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.selected = (self.selected + ROWS.len() - 1) % ROWS.len()
+                }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    self.selected = (self.selected + 1).min(ROWS.len() - 1)
+                    self.selected = (self.selected + 1) % ROWS.len()
                 }
                 KeyCode::Left | KeyCode::Right | KeyCode::Enter | KeyCode::Char(' ') => {
                     Self::flip(st, self.selected)
@@ -152,5 +154,15 @@ mod tests {
             s.update(&mut st, &[key(KeyCode::Esc)]),
             ScreenCmd::Pop { .. }
         ));
+    }
+
+    #[test]
+    fn settings_rows_wrap() {
+        let mut st = AppState::new();
+        let mut s = Settings::new();
+        s.update(&mut st, &[key(KeyCode::Up)]);
+        assert_eq!(s.selected, ROWS.len() - 1);
+        s.update(&mut st, &[key(KeyCode::Down)]);
+        assert_eq!(s.selected, 0);
     }
 }
