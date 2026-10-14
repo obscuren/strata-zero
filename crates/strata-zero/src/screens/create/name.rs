@@ -44,8 +44,8 @@ pub(super) fn draw(
     let y = left.y + 3;
     buf.set_string(left.x, y, "▸ ", Style::default().fg(CYAN));
     let shown = if b.handle.is_empty() {
-        buf.set_string(left.x + 2, y, "type a name", Style::default().fg(DIM));
-        11
+        buf.set_string(left.x + 4, y, "type a name", Style::default().fg(DIM));
+        0
     } else {
         buf.set_string(
             left.x + 2,
@@ -55,7 +55,7 @@ pub(super) fn draw(
         );
         b.handle.chars().count() as u16
     };
-    let cursor_x = left.x + 2 + if b.handle.is_empty() { 0 } else { shown };
+    let cursor_x = left.x + 2 + shown;
     buf.set_string(
         cursor_x,
         y,

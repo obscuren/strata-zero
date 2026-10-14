@@ -554,6 +554,10 @@ mod tests {
         ));
         let text = draw(&c, &st, 120, 40);
         assert!(text.contains("no name on the sheet"), "{text}");
+        assert!(
+            text.contains("▮ type a name"),
+            "the cursor sits before the placeholder: {text}"
+        );
         assert_eq!(c.step, Step::Name);
         c.update(
             &mut st,
