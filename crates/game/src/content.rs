@@ -31,6 +31,8 @@ pub enum ContentError {
     DuplicateId(String),
     #[error("starter level must be at least 1")]
     StarterLevel,
+    #[error("ability `{ability}` is passive but has fx")]
+    FxOnPassive { ability: String },
     #[error("quest `{quest}`: starter flags do not match its objectives")]
     ObjectiveCount { quest: String },
     #[error("starter {what}: duplicate `{id}`")]
@@ -125,6 +127,13 @@ impl Content {
         }
         for t in &self.talents {
             need_skill(format!("talent {}", t.id), &t.skill)?;
+        }
+        for a in &self.abilities {
+            if a.kind == AbilityKind::Passive && !a.fx.is_empty() {
+                return Err(ContentError::FxOnPassive {
+                    ability: a.id.0.clone(),
+                });
+            }
         }
         for r in &self.recipes {
             need_skill(format!("recipe {}", r.id), &r.skill)?;
@@ -289,6 +298,18 @@ mod tests {
         let mut c = good.clone();
         c.starter.level = 0;
         assert!(matches!(c.validate(), Err(ContentError::StarterLevel)));
+
+        let mut c = good.clone();
+        c.abilities
+            .iter_mut()
+            .find(|a| a.id == AbilityId::new("lowlight"))
+            .unwrap()
+            .fx
+            .push(Fx::Kick(1));
+        assert!(matches!(
+            c.validate(),
+            Err(ContentError::FxOnPassive { .. })
+        ));
 
         let mut c = good.clone();
         c.recipes[0].inputs[0].0 = ItemId::new("unobtainium");
@@ -465,11 +486,34 @@ mod tests {
         assert_eq!(scan.cooldown, 300);
         assert!(matches!(
             c.ability(&AbilityId::new("ping")).unwrap().kind,
-            AbilityKind::Active(Active::Ping {
-                radius: 24,
-                ticks: 180
-            })
+            AbilityKind::Active(Active::Ping { radius: 24 })
         ));
+        assert_eq!(
+            scan.fx,
+            vec![Fx::Wave {
+                colour: (0, 229, 255),
+                ticks: 15
+            }]
+        );
+        assert_eq!(
+            c.ability(&AbilityId::new("ping")).unwrap().fx,
+            vec![
+                Fx::Wave {
+                    colour: (255, 0, 200),
+                    ticks: 20
+                },
+                Fx::Glow {
+                    colour: (255, 0, 200),
+                    ticks: 180
+                }
+            ]
+        );
+        assert!(
+            c.ability(&AbilityId::new("lowlight"))
+                .unwrap()
+                .fx
+                .is_empty()
+        );
         assert!(matches!(
             c.ability(&AbilityId::new("lowlight")).unwrap().kind,
             AbilityKind::Passive

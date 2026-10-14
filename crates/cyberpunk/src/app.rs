@@ -40,21 +40,40 @@ pub struct AppState {
     pub character: game::Character,
     /// Items lying in the city.
     pub ground: game::Ground,
-    /// A ping in flight: lights terminals and stairs around it until `until`.
-    pub ping: Option<Ping>,
+    /// Ability effects in flight, oldest first.
+    pub fx: Vec<FxInstance>,
+    /// Set when the screen should be repainted in full, as after a glitch kick.
+    pub repaint: bool,
     /// What happened, newest last.
     pub log: MessageLog,
     /// Which sidebar sections are on.
     pub sidebar: Sidebar,
 }
 
-/// A handshake burst from the `ping` ability.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Ping {
+/// One ability effect playing on the map.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FxInstance {
+    pub fx: game::Fx,
     pub stratum: citygen::StratumKind,
-    pub pos: citygen::Pos,
+    pub origin: citygen::Pos,
+    /// The ability's radius: Scan or Ping.
     pub radius: i32,
-    pub until: u64,
+    pub started: u64,
+    /// For a scan, the tiles it revealed; the wave hides them until it passes.
+    pub revealed: Vec<citygen::Pos>,
+}
+
+impl FxInstance {
+    /// The tick from which the instance draws nothing.
+    pub fn until(&self) -> u64 {
+        match self.fx {
+            game::Fx::Kick(ticks) => self.started + ticks,
+            game::Fx::Wave { ticks, .. } => {
+                self.started + ticks + crate::render::fx::wave_tail_ticks(ticks, self.radius)
+            }
+            game::Fx::Glow { ticks, .. } => self.started + ticks,
+        }
+    }
 }
 
 impl Default for AppState {
@@ -79,7 +98,8 @@ impl AppState {
             content,
             character,
             ground: game::Ground::default(),
-            ping: None,
+            fx: Vec::new(),
+            repaint: false,
             log: MessageLog::default(),
             sidebar: Sidebar::default(),
         }
@@ -96,6 +116,33 @@ impl AppState {
         if !on {
             self.sidebar.leave_dev();
         }
+    }
+
+    /// Drops the effects that have finished by `tick`; a finished kick asks for a full
+    /// repaint, since its glyphs may have left the terminal out of step.
+    pub fn prune_fx(&mut self, tick: u64) {
+        let before = self.fx.len();
+        let kicks_before = self
+            .fx
+            .iter()
+            .filter(|i| matches!(i.fx, game::Fx::Kick(_)))
+            .count();
+        self.fx.retain(|i| tick < i.until());
+        let kicks_after = self
+            .fx
+            .iter()
+            .filter(|i| matches!(i.fx, game::Fx::Kick(_)))
+            .count();
+        if before != self.fx.len() && kicks_after < kicks_before {
+            self.repaint = true;
+        }
+    }
+
+    /// Puts a city in place: no body, no effects in flight.
+    pub fn enter_city(&mut self, city: City) {
+        self.city = Some(city);
+        self.player = None;
+        self.fx.clear();
     }
 
     /// Logs a plain result.
@@ -251,6 +298,10 @@ impl Runner {
         }
         // Once nothing animates, repaint every cell: a glitch or a wide glyph may have
         // left the terminal out of step with what ratatui believes is on screen.
+        if self.st.repaint {
+            self.repaint_pending = true;
+            self.st.repaint = false;
+        }
         let animating = self
             .transition
             .as_ref()
@@ -514,6 +565,80 @@ mod tests {
         assert_eq!(runner.full_repaints(), 2);
         runner.frame(&mut t, &[key('o')]).unwrap();
         assert_eq!(runner.full_repaints(), 3);
+        // The state can ask for one too, as when a kick ends.
+        runner.st.repaint = true;
+        runner.frame(&mut t, &[]).unwrap();
+        assert_eq!(runner.full_repaints(), 4);
+        assert!(!runner.st.repaint);
+    }
+
+    #[test]
+    fn fx_instances_end_and_prune() {
+        let mut st = AppState::new();
+        let at = |fx: game::Fx| FxInstance {
+            fx,
+            stratum: citygen::StratumKind::Street,
+            origin: citygen::Pos::new(0, 0),
+            radius: 5,
+            started: 100,
+            revealed: Vec::new(),
+        };
+        st.fx.push(at(game::Fx::Kick(4)));
+        st.fx.push(at(game::Fx::Wave {
+            colour: (0, 0, 0),
+            ticks: 10,
+        }));
+        st.fx.push(at(game::Fx::Glow {
+            colour: (0, 0, 0),
+            ticks: 30,
+        }));
+        // The wave's tail allowance is the ticks the front needs to carry its nine-cell
+        // ripple band past the reach: ceil(9 * 10 / (5 * sqrt 5)) = 9.
+        let ends: Vec<u64> = st.fx.iter().map(|i| i.until()).collect();
+        assert_eq!(ends, vec![104, 119, 130]);
+        st.prune_fx(103);
+        assert_eq!(st.fx.len(), 3);
+        assert!(!st.repaint);
+        st.prune_fx(104);
+        assert_eq!(st.fx.len(), 2);
+        assert!(st.repaint, "a finished kick asks for a full repaint");
+        st.repaint = false;
+        st.prune_fx(130);
+        assert!(st.fx.is_empty());
+        assert!(!st.repaint, "waves and glows do not");
+        let mut wide = at(game::Fx::Wave {
+            colour: (0, 0, 0),
+            ticks: 18,
+        });
+        wide.radius = 12;
+        assert_eq!(wide.until(), 100 + 18 + 7);
+        wide.radius = 0;
+        assert_eq!(wide.until(), 100 + 18);
+    }
+
+    #[test]
+    fn entering_a_city_clears_the_body_and_effects() {
+        let mut st = AppState::new();
+        let city = citygen::Generator::run(citygen::GenParams {
+            seed: 3,
+            size: citygen::SizePreset::Custom { w: 80, h: 40 },
+            districts: 4,
+            ..Default::default()
+        })
+        .unwrap();
+        st.player = Some(crate::walker::Player::spawn(&city, 1));
+        st.fx.push(FxInstance {
+            fx: game::Fx::Kick(4),
+            stratum: citygen::StratumKind::Street,
+            origin: citygen::Pos::new(0, 0),
+            radius: 0,
+            started: 0,
+            revealed: Vec::new(),
+        });
+        let seed = city.seed;
+        st.enter_city(city);
+        assert!(st.player.is_none() && st.fx.is_empty());
+        assert_eq!(st.city.as_ref().map(|c| c.seed), Some(seed));
     }
 
     #[test]

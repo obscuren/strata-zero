@@ -10,6 +10,8 @@ use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
 pub const SLOTS: usize = 5;
+/// Ticks a fired slot stays inverted.
+pub const FLASH_TICKS: u64 = 6;
 pub const AMBER: Color = Color::Rgb(255, 200, 80);
 pub const GREEN: Color = Color::Rgb(80, 230, 120);
 pub const DIM_AMBER: Color = Color::Rgb(190, 150, 60);
@@ -362,6 +364,8 @@ pub enum SlotState {
 pub struct Slot {
     pub name: String,
     pub state: SlotState,
+    /// Fired a moment ago: the slot draws inverted.
+    pub flash: bool,
 }
 
 /// ` ABILITIES: ` then the five slots, then the deck (and console) hints at the right.
@@ -373,8 +377,23 @@ pub fn footer_abilities(slots: &[Slot], dev: bool, width: u16) -> Line<'static> 
         }
         match slots.get(i) {
             Some(slot) => {
-                spans.push(cyan(format!("{} ", i + 1)));
-                spans.push(text(cut(&slot.name.to_lowercase(), 10)));
+                let (num, name) = if slot.flash {
+                    let hot = Style::default()
+                        .fg(BADGE_FG)
+                        .bg(CYAN)
+                        .add_modifier(Modifier::BOLD);
+                    (
+                        Span::styled(format!("{} ", i + 1), hot),
+                        Span::styled(cut(&slot.name.to_lowercase(), 10), hot),
+                    )
+                } else {
+                    (
+                        cyan(format!("{} ", i + 1)),
+                        text(cut(&slot.name.to_lowercase(), 10)),
+                    )
+                };
+                spans.push(num);
+                spans.push(name);
                 match slot.state {
                     SlotState::Ready => spans.push(Span::styled(" ●", Style::default().fg(CYAN))),
                     SlotState::Cooling(secs) => spans.push(dim(format!(" {secs}s"))),
@@ -603,10 +622,12 @@ mod tests {
             Slot {
                 name: "Netscan".into(),
                 state: SlotState::Ready,
+                flash: false,
             },
             Slot {
                 name: "Ping".into(),
                 state: SlotState::Cooling(12),
+                flash: false,
             },
         ];
         let a = footer_abilities(&slots, true, 120).to_string();
@@ -687,6 +708,38 @@ mod tests {
         assert_eq!(word.style.fg, Some(DIM));
         let bracket = s.spans.iter().find(|sp| sp.content == "]").unwrap();
         assert_eq!(bracket.style.fg, Some(FAINT));
+    }
+
+    #[test]
+    fn fired_slot_draws_inverted() {
+        let slots = vec![Slot {
+            name: "Netscan".into(),
+            state: SlotState::Cooling(10),
+            flash: true,
+        }];
+        let line = footer_abilities(&slots, false, 100);
+        let name = line
+            .spans
+            .iter()
+            .find(|sp| sp.content == "netscan")
+            .unwrap();
+        assert_eq!(name.style.bg, Some(CYAN), "{line:?}");
+        assert_eq!(name.style.fg, Some(Color::Rgb(10, 11, 16)));
+        let calm = footer_abilities(
+            &[Slot {
+                name: "Netscan".into(),
+                state: SlotState::Ready,
+                flash: false,
+            }],
+            false,
+            100,
+        );
+        let name = calm
+            .spans
+            .iter()
+            .find(|sp| sp.content == "netscan")
+            .unwrap();
+        assert_eq!(name.style.bg, None);
     }
 
     #[test]

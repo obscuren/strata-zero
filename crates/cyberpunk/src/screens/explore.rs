@@ -3,7 +3,8 @@
 use crate::actions::{perform, report};
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::messages::Kind;
-use crate::render::items::{GroundOverlay, PingOverlay};
+use crate::render::fx::FxOverlay;
+use crate::render::items::GroundOverlay;
 use crate::render::overlay::Digital;
 use crate::render::traffic::Traffic;
 use crate::render::viewport::{Camera, MapView, Overlay, tile_to_screen};
@@ -216,9 +217,15 @@ impl MapScreen {
                     Some(left) => hud::SlotState::Cooling(left.div_ceil(30)),
                     None => hud::SlotState::Ready,
                 };
+                let flash = st
+                    .character
+                    .fired
+                    .get(&id)
+                    .is_some_and(|f| st.tick.saturating_sub(*f) < hud::FLASH_TICKS);
                 Some(hud::Slot {
                     name: a.name.clone(),
                     state,
+                    flash,
                 })
             })
             .collect()
@@ -584,6 +591,7 @@ impl Screen for MapScreen {
         }
         self.last_tick = st.tick;
         self.fps.frame();
+        st.prune_fx(st.tick);
         // The map follows the player: a popup may have jacked them or taken the stairs.
         if self.mode == Mode::Walk
             && let Some(p) = st.player.as_ref()
@@ -707,12 +715,9 @@ impl Screen for MapScreen {
             content: &st.content,
             vis,
         };
-        let ping = PingOverlay {
-            ping: st.ping.as_ref(),
-            vis,
-        };
         overlays.push(&ground);
-        overlays.push(&ping);
+        let fx = FxOverlay { fx: &st.fx, vis };
+        overlays.push(&fx);
         MapView {
             city,
             stratum: self.stratum,
@@ -1984,5 +1989,22 @@ mod tests {
             "{}",
             cells.concat()
         );
+    }
+
+    #[test]
+    fn firing_a_slot_leaves_fx_that_prune() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        assert_eq!(st.fx.len(), 1, "{:?}", st.fx);
+        // Mid-wave the frame draws; the kick is live for its first ticks.
+        st.tick += 2;
+        draw_screen(&s, &st, 100, 30);
+        st.tick += 40;
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(text.contains("Netscan: pulse sent"), "{text}");
+        s.update(&mut st, &[]);
+        assert!(st.fx.is_empty());
     }
 }

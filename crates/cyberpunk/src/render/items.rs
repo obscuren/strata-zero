@@ -1,9 +1,6 @@
-//! Items in the world: piles on the ground and the ping that lights terminals.
+//! Items in the world: piles on the ground.
 
-use crate::anim::effects::pulse;
-use crate::app::Ping;
 use crate::render::glyphs::kind_icon;
-use crate::render::overlay::SIGNAL;
 use crate::render::style::StylePack;
 use crate::render::viewport::{Overlay, tile_to_screen};
 use crate::render::{Rgb, Visibility};
@@ -11,7 +8,6 @@ use citygen::{City, Grid, Pos, StratumKind};
 use game::{Content, Ground, ItemKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Modifier;
 
 /// The colour of things lying on the ground.
 pub const AMBER: Rgb = Rgb(255, 200, 80);
@@ -64,59 +60,12 @@ impl Overlay for GroundOverlay<'_> {
     }
 }
 
-/// A ping in flight: every connector serving the drawn stratum within its radius
-/// pulses in the signal colour until it expires.
-pub struct PingOverlay<'a> {
-    pub ping: Option<&'a Ping>,
-    /// Sight on the drawn stratum: connectors out of sight get a marker glyph.
-    pub vis: Option<&'a Grid<Visibility>>,
-}
-
-impl Overlay for PingOverlay<'_> {
-    fn draw(
-        &self,
-        city: &City,
-        stratum: StratumKind,
-        origin: Pos,
-        area: Rect,
-        tick: u64,
-        buf: &mut Buffer,
-        _style: &StylePack,
-    ) {
-        let Some(ping) = self.ping else { return };
-        if tick >= ping.until || stratum != ping.stratum {
-            return;
-        }
-        let glow = SIGNAL.scale(0.5 + 0.5 * pulse(tick, 20)).to_color();
-        for k in city
-            .connectors
-            .iter()
-            .filter(|k| k.serves.contains(&stratum) && k.pos.chebyshev(ping.pos) <= ping.radius)
-        {
-            let Some((sx, sy)) = tile_to_screen(area, origin, k.pos) else {
-                continue;
-            };
-            let in_sight = match self.vis {
-                None => true,
-                Some(v) => v.get(k.pos).copied() == Some(Visibility::Visible),
-            };
-            let cell = &mut buf[(sx, sy)];
-            // Out of sight the tile is blank or dimmed: the ping draws its own marker.
-            if !in_sight {
-                cell.set_char('◆');
-                cell.modifier.remove(Modifier::DIM);
-            }
-            cell.set_fg(glow);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::render::viewport::MapView;
     use crate::walker::Player;
-    use citygen::{ConnectorKind, GenParams, Generator, SizePreset};
+    use citygen::{GenParams, Generator, SizePreset};
     use game::ItemId;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -218,111 +167,5 @@ mod tests {
         );
         // A stratum without piles never panics.
         render(&c, &s, StratumKind::Net, 0, None, &overlay(None));
-    }
-
-    #[test]
-    fn ping_overlay_lights_connectors_in_range() {
-        let c = city();
-        let s = StylePack::load().unwrap();
-        let street = StratumKind::Street;
-        let jack = c
-            .connectors
-            .iter()
-            .find(|k| k.kind == ConnectorKind::Jack && k.serves.contains(&street))
-            .unwrap()
-            .pos;
-        let other = c
-            .connectors
-            .iter()
-            .find(|k| k.serves.contains(&street) && k.pos.chebyshev(jack) > 10)
-            .unwrap()
-            .pos;
-        let ping = Ping {
-            stratum: street,
-            pos: jack,
-            radius: 3,
-            until: 100,
-        };
-        let glow = |tick| SIGNAL.scale(0.5 + 0.5 * pulse(tick, 20)).to_color();
-        let buf = render(
-            &c,
-            &s,
-            street,
-            10,
-            None,
-            &PingOverlay {
-                ping: Some(&ping),
-                vis: None,
-            },
-        );
-        assert_eq!(buf[(jack.x as u16, jack.y as u16)].fg, glow(10));
-        assert_ne!(buf[(other.x as u16, other.y as u16)].fg, glow(10));
-        let buf = render(
-            &c,
-            &s,
-            street,
-            100,
-            None,
-            &PingOverlay {
-                ping: Some(&ping),
-                vis: None,
-            },
-        );
-        assert_ne!(buf[(jack.x as u16, jack.y as u16)].fg, glow(100), "expired");
-        let buf = render(
-            &c,
-            &s,
-            StratumKind::Undercity,
-            10,
-            None,
-            &PingOverlay {
-                ping: Some(&ping),
-                vis: None,
-            },
-        );
-        assert_ne!(
-            buf[(jack.x as u16, jack.y as u16)].fg,
-            glow(10),
-            "other stratum"
-        );
-    }
-
-    #[test]
-    fn ping_overlay_marks_connectors_out_of_sight() {
-        let c = city();
-        let s = StylePack::load().unwrap();
-        let street = StratumKind::Street;
-        let mut p = Player::spawn(&c, 1);
-        p.update_fov(&c, 0);
-        let hidden = c
-            .connectors
-            .iter()
-            .find(|k| {
-                k.serves.contains(&street)
-                    && k.pos.chebyshev(p.pos) <= 24
-                    && p.vis()[k.pos] == Visibility::Unseen
-            })
-            .expect("a connector in ping range but out of sight")
-            .pos;
-        let ping = Ping {
-            stratum: street,
-            pos: p.pos,
-            radius: 24,
-            until: 100,
-        };
-        let overlay = PingOverlay {
-            ping: Some(&ping),
-            vis: Some(p.vis()),
-        };
-        let buf = render(&c, &s, street, 10, Some(p.vis()), &overlay);
-        let cell = &buf[(hidden.x as u16, hidden.y as u16)];
-        let glow = SIGNAL.scale(0.5 + 0.5 * pulse(10, 20)).to_color();
-        assert_eq!(cell.fg, glow);
-        assert_ne!(
-            cell.symbol(),
-            " ",
-            "a marker shows where sight does not reach"
-        );
-        assert!(!cell.modifier.contains(ratatui::style::Modifier::DIM));
     }
 }
