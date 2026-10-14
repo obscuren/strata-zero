@@ -257,7 +257,6 @@ impl Deck {
         self
     }
 
-    /// The jacked deck, then the programs it grants.
     /// The jacked deck, then the programs it grants. A deck the content does not know
     /// reads as no deck at all.
     fn cyberdeck_rows(st: &AppState) -> Vec<Row> {

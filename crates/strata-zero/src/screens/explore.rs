@@ -2055,7 +2055,16 @@ mod tests {
             Mode::Walk,
             "on foot from construction: no camera frame before the first update"
         );
-        assert!(st.player.is_some());
+        let p = st.player.as_ref().unwrap().pos;
+        assert_eq!(
+            (s.cam.tx, s.cam.ty),
+            (p.x, p.y),
+            "the camera opens on the walker"
+        );
+        assert!(
+            s.cam_ready,
+            "so the first update does not re-snap the camera to the city centre"
+        );
         s.update(&mut st, &[]);
         assert_eq!(s.mode, Mode::Walk);
         s.update(&mut st, &[key(KeyCode::Char('c'))]);
