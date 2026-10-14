@@ -1563,8 +1563,12 @@ mod tests {
         let text = draw_screen(&*p, &st, 120, 40);
         assert!(text.contains("Netscan · cooling"), "{text}");
         let msg = last(&st).map(|m| m.to_string());
+        // The cooling row's own letter does nothing; Enter would fire the next ready one.
         assert!(
-            matches!(p.update(&mut st, &[key(KeyCode::Enter)]), ScreenCmd::Stay),
+            matches!(
+                p.update(&mut st, &[key(KeyCode::Char('a'))]),
+                ScreenCmd::Stay
+            ),
             "a cooling row cannot fire"
         );
         assert_eq!(last(&st).map(|m| m.to_string()), msg);

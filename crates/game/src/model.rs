@@ -173,6 +173,8 @@ pub enum Active {
     Scan { radius: i32 },
     /// Lights terminals and stairs within `radius` tiles; its glow is an `Fx`.
     Ping { radius: i32 },
+    /// Arcs to every net node within `radius` tiles and marks them; all `Fx`.
+    Trace { radius: i32 },
 }
 
 /// A visual effect an ability plays when it fires; the app draws it over the map.
@@ -184,6 +186,10 @@ pub enum Fx {
     Wave { colour: (u8, u8, u8), ticks: u64 },
     /// A pulsing marker on terminals and stairs within the radius for `ticks`.
     Glow { colour: (u8, u8, u8), ticks: u64 },
+    /// Snaking lines from the firer to every target, growing over `ticks`.
+    Bolt { colour: (u8, u8, u8), ticks: u64 },
+    /// A pulsing mark on every target tile, through walls, for `ticks`.
+    Mark { colour: (u8, u8, u8), ticks: u64 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -199,7 +199,7 @@ pub fn apply(
             ch.fired.insert(id.clone(), tick);
             let effects = match active {
                 Active::Scan { radius } => vec![Effect::Reveal { radius }],
-                Active::Ping { .. } => Vec::new(),
+                Active::Ping { .. } | Active::Trace { .. } => Vec::new(),
             };
             Ok(Outcome {
                 message: format!("{}: pulse sent", ability.name),
@@ -422,5 +422,16 @@ mod tests {
             "ping is visual only: {:?}",
             out.effects
         );
+        let out = apply(
+            &mut ch,
+            &mut g,
+            &c,
+            at,
+            0,
+            Action::Fire(AbilityId::new("arc_trace")),
+        )
+        .unwrap();
+        assert_eq!(out.message, "Arc Trace: pulse sent");
+        assert!(out.effects.is_empty(), "trace is visual only");
     }
 }

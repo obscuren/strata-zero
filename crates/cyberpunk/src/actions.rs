@@ -52,7 +52,9 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         && let Some(ability) = st.content.ability(&id)
     {
         let radius = match ability.kind {
-            AbilityKind::Active(Active::Scan { radius } | Active::Ping { radius }) => radius,
+            AbilityKind::Active(
+                Active::Scan { radius } | Active::Ping { radius } | Active::Trace { radius },
+            ) => radius,
             AbilityKind::Passive => 0,
         };
         for fx in &ability.fx {

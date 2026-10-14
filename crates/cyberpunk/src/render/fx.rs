@@ -105,6 +105,8 @@ impl Overlay for FxOverlay<'_> {
                         buf,
                     );
                 }
+                // Drawn by the next task.
+                Fx::Bolt { .. } | Fx::Mark { .. } => {}
             }
         }
     }

@@ -633,6 +633,9 @@ impl Deck {
                         Active::Ping { radius } => {
                             format!("ping: lights terminals and stairs within {radius} tiles")
                         }
+                        Active::Trace { radius } => {
+                            format!("trace: arcs to every node within {radius} tiles")
+                        }
                     };
                     out.push(Line::from(Span::styled(effect, Style::default().fg(CYAN))));
                 }

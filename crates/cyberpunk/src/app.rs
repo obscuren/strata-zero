@@ -71,7 +71,9 @@ impl FxInstance {
             game::Fx::Wave { ticks, .. } => {
                 self.started + ticks + crate::render::fx::wave_tail_ticks(ticks, self.radius)
             }
-            game::Fx::Glow { ticks, .. } => self.started + ticks,
+            game::Fx::Glow { ticks, .. }
+            | game::Fx::Bolt { ticks, .. }
+            | game::Fx::Mark { ticks, .. } => self.started + ticks,
         }
     }
 }
