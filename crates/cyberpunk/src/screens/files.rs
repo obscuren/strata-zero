@@ -180,7 +180,7 @@ impl Screen for Files {
         let dim = Style::default().fg(Color::Rgb(160, 170, 185));
         match &self.mode {
             Mode::Load => {
-                let block = boxed("LOAD CITY");
+                let block = boxed("LOAD GAME");
                 let inner = block.inner(panel);
                 f.render_widget(block, panel);
                 let mut lines: Vec<Line> = Vec::new();
@@ -226,7 +226,7 @@ impl Screen for Files {
                 f.render_widget(Paragraph::new(lines), inner);
             }
             Mode::Save(form) => {
-                let block = boxed("SAVE CITY");
+                let block = boxed("SAVE GAME");
                 let inner = block.inner(panel);
                 f.render_widget(block, panel);
                 FormView {
@@ -299,7 +299,11 @@ mod tests {
         let mut save = Files::save_in(dir.clone(), 0, &name);
         let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
         t.draw(|f| save.draw(&st, f)).unwrap();
-        assert!(buffer_text(t.backend().buffer()).contains("SAVE"));
+        let text = buffer_text(t.backend().buffer());
+        assert!(
+            text.contains("SAVE GAME") && !text.contains("CITY"),
+            "the save screen is titled like the menu that opened it: {text}"
+        );
         assert!(matches!(
             save.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Pop { .. }
@@ -360,5 +364,18 @@ mod tests {
         assert_eq!(load.selected, 1);
         load.update(&mut st, &[key(KeyCode::Down)]);
         assert_eq!(load.selected, 0);
+    }
+
+    #[test]
+    fn load_screen_is_titled_like_the_menu() {
+        let st = AppState::new();
+        let f = Files::load(0);
+        let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        t.draw(|fr| f.draw(&st, fr)).unwrap();
+        let text = buffer_text(t.backend().buffer());
+        assert!(
+            text.contains("LOAD GAME") && !text.contains("CITY"),
+            "{text}"
+        );
     }
 }

@@ -153,6 +153,8 @@ impl AppState {
         self.city = Some(city);
         self.player = None;
         self.fx.clear();
+        self.deck_tab = Tab::Skills;
+        self.deck_rows = [0; 9];
     }
 
     /// Logs a plain result.
@@ -647,10 +649,17 @@ mod tests {
             revealed: Vec::new(),
             targets: Vec::new(),
         });
+        st.deck_tab = Tab::Gear;
+        st.deck_rows[Tab::Gear.index()] = 3;
         let seed = city.seed;
         st.enter_city(city);
         assert!(st.player.is_none() && st.fx.is_empty());
         assert_eq!(st.city.as_ref().map(|c| c.seed), Some(seed));
+        assert_eq!(
+            (st.deck_tab, st.deck_rows),
+            (Tab::Skills, [0; 9]),
+            "a new city forgets where the deck was"
+        );
     }
 
     #[test]

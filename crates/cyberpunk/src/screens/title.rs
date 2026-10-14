@@ -29,7 +29,8 @@ impl Title {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0);
-        let mut seed = citygen::rng::hash64(tick, nanos);
+        // Capped like Configure's RANDOM SEED so the status line stays readable.
+        let mut seed = citygen::rng::hash64(tick, nanos) % 1_000_000_007;
         if seed == 0 {
             seed = 1;
         }
@@ -225,5 +226,9 @@ mod tests {
         assert_ne!(a.seed, 0);
         assert_ne!(a.seed, b.seed, "two new games are two cities");
         assert_eq!(a.size, st.params.size, "everything but the seed is kept");
+        assert!(
+            a.seed < 1_000_000_007 && b.seed < 1_000_000_007,
+            "capped like Configure's RANDOM SEED so the HUD stays readable"
+        );
     }
 }

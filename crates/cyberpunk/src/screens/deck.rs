@@ -1,5 +1,5 @@
-//! The deck: the player's menu over the live map — quests, gear, inventory, workbench,
-//! map, skills, abilities.
+//! The deck: the player's menu over the live map — skills, attributes, gear, inventory,
+//! workbench, cyberdeck, quests, journal, map. It reopens where it was closed.
 
 use crate::anim::effects::{glitch_cells, pulse, typewriter};
 use crate::anim::{Easing, Tween};
@@ -75,7 +75,7 @@ impl Tab {
         }
     }
 
-    fn index(self) -> usize {
+    pub fn index(self) -> usize {
         Tab::ALL.iter().position(|t| *t == self).unwrap_or(0)
     }
 }
@@ -319,7 +319,7 @@ impl Deck {
         self.set_tab(Tab::ALL[i], st);
     }
 
-    /// Moves the selection by `delta`, skipping header rows; clamps at the ends.
+    /// Moves the selection by `delta`, skipping header rows; wraps at both ends.
     fn move_row(&mut self, rows: &[Row], delta: i32, tick: u64) {
         if rows.is_empty() {
             self.row = 0;
