@@ -48,8 +48,6 @@ pub struct AppState {
     /// Where the deck was last: its tab and the selected row per tab.
     pub deck_tab: Tab,
     pub deck_rows: [usize; Tab::ALL.len()],
-    /// The character being built by the wizard, between the chooser and JACK IN.
-    pub build: Option<game::Build>,
     /// What happened, newest last.
     pub log: MessageLog,
     /// Which sidebar sections are on.
@@ -113,7 +111,6 @@ impl AppState {
             repaint: false,
             deck_tab: Tab::Skills,
             deck_rows: [0; Tab::ALL.len()],
-            build: None,
             log: MessageLog::default(),
             sidebar: Sidebar::default(),
         }
