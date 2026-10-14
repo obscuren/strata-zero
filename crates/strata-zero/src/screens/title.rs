@@ -3,8 +3,8 @@
 use crate::anim::effects::typewriter;
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::render::Rgb;
+use crate::screens::create::chooser::Chooser;
 use crate::screens::files::Files;
-use crate::screens::generating::Generating;
 use crate::ui::logo::{self, Logo};
 use crate::ui::menu::{Menu, MenuView};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -57,15 +57,9 @@ impl Screen for Title {
                 KeyCode::Char('q') | KeyCode::Esc => return ScreenCmd::Quit,
                 KeyCode::Enter => {
                     return match self.menu.selected {
-                        0 => match Generating::new(Self::fresh_params(st, st.tick), st.tick) {
-                            Ok(next) => ScreenCmd::Switch {
-                                to: Box::new(next),
-                                fx: TransitionKind::Glitch,
-                            },
-                            Err(e) => {
-                                st.warn(e.to_string());
-                                ScreenCmd::Stay
-                            }
+                        0 => ScreenCmd::Push {
+                            to: Box::new(Chooser::new(st, st.tick)),
+                            fx: TransitionKind::SlideUp,
                         },
                         1 => ScreenCmd::Push {
                             to: Box::new(Files::load(st.tick)),
@@ -189,7 +183,7 @@ mod tests {
         title.update(&mut st, &[key(KeyCode::Up), key(KeyCode::Up)]);
         assert!(matches!(
             title.update(&mut st, &[key(KeyCode::Enter)]),
-            ScreenCmd::Switch { .. }
+            ScreenCmd::Push { .. }
         ));
         title.update(&mut st, &[key(KeyCode::Char('j'))]);
         assert!(
@@ -202,18 +196,18 @@ mod tests {
     }
 
     #[test]
-    fn new_game_generates_at_once() {
+    fn new_game_opens_the_chooser() {
         let mut st = AppState::new();
         let mut t = Title::new(0);
         assert!(
             matches!(
                 t.update(&mut st, &[key(KeyCode::Enter)]),
-                ScreenCmd::Switch {
-                    fx: TransitionKind::Glitch,
+                ScreenCmd::Push {
+                    fx: TransitionKind::SlideUp,
                     ..
                 }
             ),
-            "new game goes straight to generation"
+            "new game opens the chooser"
         );
         let mut t = Title::new(0);
         t.update(&mut st, &[key(KeyCode::Down)]);
