@@ -14,7 +14,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 use ratatui::widgets::{Paragraph, Widget};
 
-pub const TITLE: &str = "CYBERPUNK";
+pub const TITLE: &str = "STRATA ZERO";
 const SUBTITLE: &str = "h i g h   t e c h   ·   l o w   l i f e";
 
 pub struct Title {
@@ -153,6 +153,11 @@ mod tests {
     use crossterm::event::KeyCode;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+
+    #[test]
+    fn title_logo_fits_an_80_column_terminal() {
+        assert!(logo::width(TITLE) <= 80);
+    }
 
     #[test]
     fn title_renders_logo_and_menu_and_quits() {
