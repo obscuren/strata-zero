@@ -25,13 +25,16 @@ radius. `FxInstance` gains `targets: Vec<Pos>`, empty for other abilities.
 **Shapes.** Two new `Fx` shapes:
 
 - `Bolt { colour, ticks }`: from the origin to every target, a line that
-  grows over `ticks` and snakes. The base path is a Bresenham line; every
-  point gets a lateral jitter of -1, 0 or 1 cells from a hash of the point's
-  index, the target and `tick / 2`, so the line flickers between frames. At
-  `elapsed` the first `len * elapsed / ticks` points of each line draw: a
-  glyph by the step's direction (`─` `│` `╱` `╲`), one point in five a `*`,
-  foreground the colour at full or 60% by hash, background the colour at
-  20%. The line ignores walls and sight: it draws over unseen tiles.
+  grows over `ticks` and snakes. The path only ever steps horizontally or
+  vertically and never away from the target: runs of one to four cells along
+  one axis, then a turn to the other, until it lands, so its length is the
+  Manhattan distance. The run lengths come from a hash of the target's
+  index, the instance and `tick / 4`, so the route is re-rolled every four
+  ticks and the arc crawls while it burns. At `elapsed` the first
+  `len * elapsed / ticks` points of each line draw: `─` or `│` along a run,
+  `┌` `┐` `└` `┘` at a turn, one run cell in five a `*`, foreground the
+  colour at full or 60% by hash, background the colour at 20%. The line
+  ignores walls and sight: it draws over unseen tiles.
 - `Mark { colour, ticks }`: every target tile draws `◉` in the colour pulsed
   with `pulse(tick, 20)` on a background of the colour at 20%, DIM cleared,
   whatever the tile's visibility, for `ticks`.

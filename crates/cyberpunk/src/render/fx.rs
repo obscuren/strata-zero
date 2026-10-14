@@ -213,34 +213,57 @@ fn wave(
     }
 }
 
-/// Every tile on the straight line from `a` to `b`, both included.
-fn line_points(a: Pos, b: Pos) -> Vec<Pos> {
-    let (dx, dy) = ((b.x - a.x).abs(), -(b.y - a.y).abs());
+/// A path from `a` to `b` that only ever steps horizontally or vertically and never
+/// away from `b`: runs of one to four cells along one axis, then a turn to the other,
+/// until it lands. `seed` picks the run lengths, so one seed gives one route.
+fn snake_points(a: Pos, b: Pos, seed: u64) -> Vec<Pos> {
     let (sx, sy) = ((b.x - a.x).signum(), (b.y - a.y).signum());
-    let mut err = dx + dy;
     let (mut x, mut y) = (a.x, a.y);
-    let mut out = Vec::new();
-    loop {
-        out.push(Pos::new(x, y));
-        if x == b.x && y == b.y {
-            break;
+    let mut out = vec![a];
+    let mut horizontal = hash64(seed, 0).is_multiple_of(2);
+    let mut k = 1u64;
+    while x != b.x || y != b.y {
+        let (rx, ry) = ((b.x - x).abs(), (b.y - y).abs());
+        if horizontal && rx == 0 {
+            horizontal = false;
+        } else if !horizontal && ry == 0 {
+            horizontal = true;
         }
-        let e2 = 2 * err;
-        if e2 >= dy {
-            err += dy;
-            x += sx;
+        let remaining = if horizontal { rx } else { ry };
+        let run = (1 + (hash64(seed, k) % 4) as i32).min(remaining);
+        k += 1;
+        for _ in 0..run {
+            if horizontal {
+                x += sx;
+            } else {
+                y += sy;
+            }
+            out.push(Pos::new(x, y));
         }
-        if e2 <= dx {
-            err += dx;
-            y += sy;
-        }
+        horizontal = !horizontal;
     }
     out
 }
 
-/// Snaking lines from the origin to every target, grown over `ticks`; they ignore
-/// walls and sight. Each point jitters one cell sideways on a hash that changes
-/// every two ticks, so the line flickers like a discharge.
+/// The glyph for a bolt cell: a run along its axis, or the corner joining the way in
+/// to the way out.
+fn bolt_glyph(came: (i32, i32), goes: (i32, i32)) -> char {
+    if came == goes {
+        return if came.0 == 0 { '│' } else { '─' };
+    }
+    let left = came.0 == 1 || goes.0 == -1;
+    let up = came.1 == 1 || goes.1 == -1;
+    match (left, up) {
+        (true, true) => '┘',
+        (true, false) => '┐',
+        (false, true) => '└',
+        (false, false) => '┌',
+    }
+}
+
+/// Lines from the origin to every target that only run horizontally or vertically,
+/// turning like a circuit trace, grown over `ticks`; they ignore walls and sight. The
+/// route is re-rolled every four ticks, so the arc crawls while it burns.
 #[allow(clippy::too_many_arguments)]
 fn bolt(
     inst: &FxInstance,
@@ -253,37 +276,20 @@ fn bolt(
     buf: &mut Buffer,
 ) {
     let frac = (elapsed as f32 / ticks.max(1) as f32).min(1.0);
-    let phase = tick / 2;
+    let phase = tick / 4;
     for (ti, target) in inst.targets.iter().enumerate() {
-        let pts = line_points(inst.origin, *target);
+        let seed = hash64(hash64(ti as u64, inst.started), phase);
+        let pts = snake_points(inst.origin, *target, seed);
         let n = ((pts.len() as f32) * frac).ceil() as usize;
-        let horizontal = (target.x - inst.origin.x).abs() >= (target.y - inst.origin.y).abs();
         for i in 1..n.min(pts.len()) {
             let p = pts[i];
-            let last = i + 1 == pts.len();
-            let j = (hash64(hash64(i as u64, ti as u64), phase) % 3) as i32 - 1;
-            let q = if last {
-                p
-            } else if horizontal {
-                Pos::new(p.x, p.y + j)
-            } else {
-                Pos::new(p.x + j, p.y)
-            };
-            let Some((sx, sy)) = tile_to_screen(area, origin, q) else {
+            let Some((sx, sy)) = tile_to_screen(area, origin, p) else {
                 continue;
             };
-            let (dx, dy) = (p.x - pts[i - 1].x, p.y - pts[i - 1].y);
-            let glyph = if hash64(i as u64 + 7, ti as u64 ^ phase).is_multiple_of(5) {
-                '*'
-            } else if dx == 0 {
-                '│'
-            } else if dy == 0 {
-                '─'
-            } else if dx * dy > 0 {
-                '╲'
-            } else {
-                '╱'
-            };
+            let came = (p.x - pts[i - 1].x, p.y - pts[i - 1].y);
+            let goes = pts.get(i + 1).map_or(came, |q| (q.x - p.x, q.y - p.y));
+            let spark = came == goes && hash64(i as u64 + 7, ti as u64 ^ phase).is_multiple_of(5);
+            let glyph = if spark { '*' } else { bolt_glyph(came, goes) };
             let bright = hash64(hash64(sx as u64, sy as u64), phase).is_multiple_of(3);
             let fg = if bright { colour } else { colour.scale(0.6) };
             let cell = &mut buf[(sx, sy)];
@@ -770,5 +776,96 @@ mod tests {
                 (120, 60),
             );
         }
+    }
+
+    fn step_is_orthogonal(a: Pos, b: Pos) -> bool {
+        (a.x - b.x).abs() + (a.y - b.y).abs() == 1
+    }
+
+    #[test]
+    fn snake_path_only_moves_horizontally_or_vertically() {
+        let a = Pos::new(40, 30);
+        let b = Pos::new(52, 21);
+        let pts = snake_points(a, b, 7);
+        assert_eq!((pts[0], *pts.last().unwrap()), (a, b));
+        assert_eq!(pts.len(), 12 + 9 + 1, "manhattan length: never a step away");
+        assert!(
+            pts.windows(2).all(|w| step_is_orthogonal(w[0], w[1])),
+            "{pts:?}"
+        );
+        assert_eq!(snake_points(a, b, 7), pts, "stable for a seed");
+        assert_ne!(
+            snake_points(a, b, 8),
+            pts,
+            "another seed snakes differently"
+        );
+        let turns = pts
+            .windows(3)
+            .filter(|w| (w[1].x - w[0].x) != (w[2].x - w[1].x))
+            .count();
+        assert!(
+            turns >= 3,
+            "runs of one to four cells: {turns} turns in {pts:?}"
+        );
+        assert_eq!(snake_points(a, a, 1), vec![a]);
+        let flat = snake_points(a, Pos::new(52, 30), 3);
+        assert!(
+            flat.iter().all(|p| p.y == 30),
+            "no room to snake on a flat line"
+        );
+    }
+
+    #[test]
+    fn bolt_snakes_with_corners_and_no_diagonals() {
+        let c = city();
+        let s = StylePack::load().unwrap();
+        let origin = Pos::new(40, 30);
+        let target = Pos::new(52, 21);
+        let inst = aimed(
+            Fx::Bolt {
+                colour: BOLT,
+                ticks: 12,
+            },
+            origin,
+            vec![target],
+        );
+        let overlay = FxOverlay {
+            fx: std::slice::from_ref(&inst),
+            vis: None,
+        };
+        let plain = render(&c, &s, StratumKind::Street, 111, None, &[], (120, 60));
+        let full = render(
+            &c,
+            &s,
+            StratumKind::Street,
+            111,
+            None,
+            &[&overlay],
+            (120, 60),
+        );
+        let mut glyphs = String::new();
+        let mut outside = 0;
+        for y in 0..60u16 {
+            for x in 0..120u16 {
+                if full[(x, y)] != plain[(x, y)] {
+                    glyphs.push_str(full[(x, y)].symbol());
+                    if !(40..=52).contains(&x) || !(21..=30).contains(&y) {
+                        outside += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            !glyphs.contains('╱') && !glyphs.contains('╲'),
+            "no diagonal glyphs: {glyphs}"
+        );
+        assert!(
+            glyphs.chars().any(|g| "┌┐└┘".contains(g)),
+            "corners where it turns: {glyphs}"
+        );
+        assert_eq!(
+            outside, 0,
+            "the bolt stays inside the box between firer and node"
+        );
     }
 }
