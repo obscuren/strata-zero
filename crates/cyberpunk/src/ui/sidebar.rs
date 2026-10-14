@@ -5,7 +5,7 @@ use crate::render::glyphs::kind_icon;
 use crate::render::minimap::Minimap;
 use crate::render::overlay::Digital;
 use crate::render::style::StylePack;
-use crate::ui::chrome::{CYAN, DIM, MAGENTA, PANEL_BG, TEXT, reveal};
+use crate::ui::chrome::{CYAN, DIM, MAGENTA, TEXT, reveal};
 use crate::ui::hud::{RULE_STYLE, clock_at};
 use crate::ui::panel::{inspector_lines, legend};
 use crate::walker::port_name;
@@ -419,11 +419,6 @@ fn draw_log(log: &MessageLog, tick: u64, area: Rect, buf: &mut Buffer) {
 pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) -> Vec<Section> {
     if area.width == 0 || area.height == 0 {
         return Vec::new();
-    }
-    for y in area.y..area.bottom() {
-        for x in area.x..area.right() {
-            buf[(x, y)].set_bg(PANEL_BG);
-        }
     }
     let w = area.width;
     let node = Digital::node_under(v.city, v.stratum, v.focus).map(|id| v.city.net.node(id));

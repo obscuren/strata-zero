@@ -5,7 +5,7 @@ use crate::render::Rgb;
 use crate::screens::files::Files;
 use crate::screens::settings::Settings;
 use crate::screens::title::Title;
-use crate::ui::chrome::glass;
+use crate::ui::chrome::solid;
 use crate::ui::menu::{Menu, MenuView};
 use crate::ui::panel::boxed;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -93,7 +93,7 @@ impl Screen for Pause {
             w,
             h,
         );
-        glass(f.buffer_mut(), panel);
+        solid(f.buffer_mut(), panel);
         let block = boxed("PAUSED");
         let inner = block.inner(panel);
         f.render_widget(block, panel);

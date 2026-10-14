@@ -18,7 +18,7 @@ use crate::screens::messages::Messages;
 use crate::screens::pause::Pause;
 use crate::screens::popup::{Choice, Pick, Popup, WorldAct};
 use crate::screens::title::Title;
-use crate::ui::chrome::{CYAN, MAGENTA, PANEL_BG, TEXT, put};
+use crate::ui::chrome::{CYAN, MAGENTA, TEXT, put};
 use crate::ui::console::{Console, ConsoleEvent};
 use crate::ui::hud;
 use crate::ui::panel::inspector_lines;
@@ -163,15 +163,6 @@ fn layout(area: Rect) -> Regions {
         bottom_rule: row(area.height.saturating_sub(3), area.x, area.width),
         status: row(area.height.saturating_sub(2), area.x, area.width),
         abilities: row(area.height.saturating_sub(1), area.x, area.width),
-    }
-}
-
-/// Paints the panel background under a band or column.
-fn fill(buf: &mut ratatui::buffer::Buffer, rect: Rect) {
-    for y in rect.y..rect.bottom() {
-        for x in rect.x..rect.right() {
-            buf[(x, y)].set_bg(PANEL_BG);
-        }
     }
 }
 
@@ -763,24 +754,14 @@ impl Screen for MapScreen {
             }
         }
 
-        // Panel backgrounds, then the vertical rule on every row but the two rule rows.
+        // The vertical rule on every row but the two rule rows.
         {
             let buf = f.buffer_mut();
-            for rect in r.band_l.iter().chain(r.band_r.iter()) {
-                fill(buf, *rect);
-            }
-            fill(buf, r.side);
-            fill(buf, r.top_rule);
-            fill(buf, r.bottom_rule);
-            fill(buf, r.status);
-            fill(buf, r.abilities);
             for y in area.y..r.bottom_rule.y {
                 if y == r.top_rule.y {
                     continue;
                 }
-                buf[(r.vrule_x, y)]
-                    .set_char('│')
-                    .set_style(hud::RULE_STYLE.bg(PANEL_BG));
+                buf[(r.vrule_x, y)].set_char('│').set_style(hud::RULE_STYLE);
             }
         }
         // Top band.
@@ -1938,21 +1919,29 @@ mod tests {
     }
 
     #[test]
-    fn rule_rows_sit_on_the_panel_background() {
+    fn frame_carries_no_explicit_background() {
         let mut st = state();
         let mut s = MapScreen::explore(0);
         s.update(&mut st, &[]);
         let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
         t.draw(|f| s.draw(&st, f)).unwrap();
         let buf = t.backend().buffer();
-        for y in [4u16, 27] {
-            for x in [0u16, 50, 99] {
-                assert_eq!(
-                    buf[(x, y)].bg,
-                    crate::ui::chrome::PANEL_BG,
-                    "rule row {y} col {x}"
-                );
-            }
+        // Rule rows, the right column and the footer keep the terminal's own background.
+        for (x, y) in [
+            (0u16, 4u16),
+            (50, 4),
+            (99, 27),
+            (70, 10),
+            (95, 6),
+            (5, 28),
+            (5, 29),
+        ] {
+            assert_eq!(
+                buf[(x, y)].bg,
+                Color::Reset,
+                "({x},{y}) bg {:?}",
+                buf[(x, y)].bg
+            );
         }
     }
 

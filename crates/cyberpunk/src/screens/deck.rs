@@ -1200,7 +1200,7 @@ mod tests {
     }
 
     #[test]
-    fn deck_is_opaque_over_the_washed_map() {
+    fn deck_is_glass_over_the_washed_map() {
         let mut st = state();
         st.tick = 40;
         let d = Deck::new(0);
@@ -1221,16 +1221,21 @@ mod tests {
         })
         .unwrap();
         let buf = t.backend().buffer();
-        // Nothing from beneath shows through the deck, and its body is the panel colour.
-        let ghosts: Vec<(u16, u16)> = (0..35u16)
-            .flat_map(|y| (0..120u16).map(move |x| (x, y)))
+        // Somewhere inside the body, away from text, the map still shows through.
+        let ghosts = (6..33u16)
+            .flat_map(|y| (60..118u16).map(move |x| (x, y)))
             .filter(|(x, y)| buf[(*x, *y)].symbol() == "Ж")
-            .collect();
-        assert!(
-            ghosts.is_empty(),
-            "the deck lets the map show through at {ghosts:?}"
+            .count();
+        assert!(ghosts > 100, "ghosts {ghosts}: the deck is opaque");
+        let (gx, gy) = (110u16, 30u16);
+        assert_eq!(buf[(gx, gy)].symbol(), "Ж");
+        assert_ne!(
+            buf[(gx, gy)].bg,
+            Color::Rgb(40, 40, 40),
+            "bg is tinted, not raw"
         );
-        assert_eq!(buf[(110u16, 30u16)].bg, PANEL_BG);
+        assert_ne!(buf[(gx, gy)].bg, PANEL_BG, "bg is tinted, not solid");
+        // Text rows sit on the solid panel colour so they stay legible.
         let row = buffer_text(buf);
         assert!(row.contains("The drop"));
     }

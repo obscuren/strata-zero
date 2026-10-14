@@ -2,7 +2,7 @@
 
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::messages::Kind;
-use crate::ui::chrome::{CYAN, DIM, MAGENTA, TEXT, frame, glass, put, put_paragraph};
+use crate::ui::chrome::{CYAN, DIM, MAGENTA, TEXT, frame, put, put_paragraph, solid};
 use crate::ui::sidebar::wrap_text;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
@@ -92,7 +92,7 @@ impl Screen for Messages {
             return;
         }
         let buf = f.buffer_mut();
-        glass(buf, r);
+        solid(buf, r);
         frame(buf, r);
         put(
             buf,

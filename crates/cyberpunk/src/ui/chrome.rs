@@ -18,6 +18,9 @@ pub(crate) const TEXT: Color = Color::Rgb(205, 212, 222);
 pub(crate) const CYAN_RGB: Rgb = Rgb(0, 229, 255);
 pub(crate) const MAGENTA_RGB: Rgb = Rgb(255, 0, 200);
 pub(crate) const PANEL_BG: Color = Color::Rgb(4, 6, 10);
+pub(crate) const PANEL_BG_RGB: Rgb = Rgb(4, 6, 10);
+/// How far the washed map is pulled toward the panel colour; the rest shows through.
+pub(crate) const GLASS: f32 = 0.45;
 pub(crate) const RULE: Color = Color::Rgb(40, 60, 75);
 pub(crate) const BAR_BG: Color = Color::Rgb(0, 60, 70);
 
@@ -66,8 +69,26 @@ pub(crate) fn frame(buf: &mut Buffer, area: Rect) {
         .set_style(style);
 }
 
-/// Blanks the panel area onto the panel colour: whatever was beneath no longer shows.
+/// Tints the panel area toward the panel colour, keeping the washed map as a ghost.
 pub(crate) fn glass(buf: &mut Buffer, area: Rect) {
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            let cell = &mut buf[(x, y)];
+            let bg = match cell.bg {
+                Color::Rgb(r, g, b) => Rgb(r, g, b).mix(PANEL_BG_RGB, GLASS).to_color(),
+                _ => PANEL_BG,
+            };
+            let fg = match cell.fg {
+                Color::Rgb(r, g, b) => Rgb(r, g, b).scale(0.6).to_color(),
+                other => other,
+            };
+            cell.set_bg(bg).set_fg(fg);
+        }
+    }
+}
+
+/// Blanks the panel area onto the panel colour: whatever was beneath no longer shows.
+pub(crate) fn solid(buf: &mut Buffer, area: Rect) {
     for y in area.y..area.bottom() {
         for x in area.x..area.right() {
             let cell = &mut buf[(x, y)];
@@ -159,8 +180,7 @@ pub(crate) fn reveal(lines: &[Line<'static>], p: f32, cursor_on: bool) -> Vec<Li
 mod tests {
     use super::*;
 
-    #[test]
-    fn glass_is_opaque() {
+    fn painted() -> Buffer {
         let mut buf = Buffer::empty(Rect::new(0, 0, 6, 3));
         for y in 0..3 {
             for x in 0..6 {
@@ -170,13 +190,37 @@ mod tests {
                     .set_bg(Color::Rgb(90, 10, 10));
             }
         }
-        glass(&mut buf, Rect::new(1, 1, 4, 1));
+        buf
+    }
+
+    #[test]
+    fn solid_is_opaque() {
+        let mut buf = painted();
+        solid(&mut buf, Rect::new(1, 1, 4, 1));
         for x in 1..5 {
             assert_eq!(buf[(x, 1)].symbol(), " ");
             assert_eq!(buf[(x, 1)].bg, PANEL_BG);
         }
         assert_eq!(buf[(0, 1)].symbol(), "x");
         assert_eq!(buf[(1, 0)].symbol(), "x");
+    }
+
+    #[test]
+    fn glass_ghosts_what_is_beneath() {
+        let mut buf = painted();
+        glass(&mut buf, Rect::new(1, 1, 4, 1));
+        let cell = &buf[(2, 1)];
+        assert_eq!(cell.symbol(), "x", "the glyph beneath stays as a ghost");
+        assert_ne!(
+            cell.bg,
+            Color::Rgb(90, 10, 10),
+            "bg is tinted toward the panel"
+        );
+        assert_ne!(cell.bg, PANEL_BG, "bg is not solid");
+        let Color::Rgb(r, _, _) = cell.fg else {
+            panic!()
+        };
+        assert!(r < 200, "fg is dimmed");
     }
 
     #[test]
