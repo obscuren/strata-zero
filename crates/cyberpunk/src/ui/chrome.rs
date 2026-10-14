@@ -11,14 +11,13 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 pub(crate) const CYAN: Color = Color::Rgb(0, 229, 255);
 pub(crate) const MAGENTA: Color = Color::Rgb(255, 0, 200);
-pub(crate) const DIM: Color = Color::Rgb(120, 130, 145);
+pub(crate) const DIM: Color = Color::Rgb(160, 170, 185);
+/// Brackets, rules and other furniture: darker than labels.
+pub(crate) const FAINT: Color = Color::Rgb(120, 130, 145);
 pub(crate) const TEXT: Color = Color::Rgb(205, 212, 222);
 pub(crate) const CYAN_RGB: Rgb = Rgb(0, 229, 255);
 pub(crate) const MAGENTA_RGB: Rgb = Rgb(255, 0, 200);
 pub(crate) const PANEL_BG: Color = Color::Rgb(4, 6, 10);
-pub(crate) const PANEL_BG_RGB: Rgb = Rgb(4, 6, 10);
-/// How far the washed map is pulled toward the panel colour; the rest shows through.
-pub(crate) const GLASS: f32 = 0.45;
 pub(crate) const RULE: Color = Color::Rgb(40, 60, 75);
 pub(crate) const BAR_BG: Color = Color::Rgb(0, 60, 70);
 
@@ -67,20 +66,13 @@ pub(crate) fn frame(buf: &mut Buffer, area: Rect) {
         .set_style(style);
 }
 
-/// Tints the panel area toward the panel colour, keeping the washed map as a ghost.
+/// Blanks the panel area onto the panel colour: whatever was beneath no longer shows.
 pub(crate) fn glass(buf: &mut Buffer, area: Rect) {
     for y in area.y..area.bottom() {
         for x in area.x..area.right() {
             let cell = &mut buf[(x, y)];
-            let bg = match cell.bg {
-                Color::Rgb(r, g, b) => Rgb(r, g, b).mix(PANEL_BG_RGB, GLASS).to_color(),
-                _ => PANEL_BG,
-            };
-            let fg = match cell.fg {
-                Color::Rgb(r, g, b) => Rgb(r, g, b).scale(0.6).to_color(),
-                other => other,
-            };
-            cell.set_bg(bg).set_fg(fg);
+            cell.reset();
+            cell.set_bg(PANEL_BG);
         }
     }
 }
@@ -161,4 +153,39 @@ pub(crate) fn reveal(lines: &[Line<'static>], p: f32, cursor_on: bool) -> Vec<Li
         out.push(Line::from(cursor()));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glass_is_opaque() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 3));
+        for y in 0..3 {
+            for x in 0..6 {
+                buf[(x, y)]
+                    .set_char('x')
+                    .set_fg(Color::Rgb(200, 200, 200))
+                    .set_bg(Color::Rgb(90, 10, 10));
+            }
+        }
+        glass(&mut buf, Rect::new(1, 1, 4, 1));
+        for x in 1..5 {
+            assert_eq!(buf[(x, 1)].symbol(), " ");
+            assert_eq!(buf[(x, 1)].bg, PANEL_BG);
+        }
+        assert_eq!(buf[(0, 1)].symbol(), "x");
+        assert_eq!(buf[(1, 0)].symbol(), "x");
+    }
+
+    #[test]
+    fn dim_reads_on_black_and_faint_is_darker() {
+        let Color::Rgb(r, g, b) = DIM else { panic!() };
+        assert!(r >= 150 && g >= 150 && b >= 150, "{DIM:?}");
+        let Color::Rgb(fr, fg, fb) = FAINT else {
+            panic!()
+        };
+        assert!(fr < r && fg < g && fb < b, "{FAINT:?}");
+    }
 }

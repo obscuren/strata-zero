@@ -2,7 +2,7 @@
 
 use crate::anim::effects::pulse;
 use crate::render::overlay::Digital;
-use crate::ui::chrome::{CYAN, DIM, MAGENTA, RULE, TEXT};
+use crate::ui::chrome::{CYAN, DIM, FAINT, MAGENTA, RULE, TEXT};
 use crate::ui::sidebar::{Section, Sidebar};
 use citygen::{City, Pos, StratumKind, SubnetOwner};
 use ratatui::style::{Color, Modifier, Style};
@@ -67,6 +67,10 @@ pub fn cut(s: &str, max: usize) -> String {
 
 fn dim(s: impl Into<String>) -> Span<'static> {
     Span::styled(s.into(), Style::default().fg(DIM))
+}
+
+fn faint(s: impl Into<String>) -> Span<'static> {
+    Span::styled(s.into(), Style::default().fg(FAINT))
 }
 
 fn text(s: impl Into<String>) -> Span<'static> {
@@ -243,9 +247,9 @@ fn tab(key: &str, label: &str, on: bool, shown: bool) -> Vec<Span<'static>> {
         Style::default().fg(DIM)
     };
     vec![
-        dim("["),
+        faint("["),
         Span::styled(key.to_string(), Style::default().fg(CYAN)),
-        dim("]"),
+        faint("]"),
         Span::styled(word, style),
     ]
 }
@@ -310,9 +314,9 @@ fn verb_spans(verbs: &[(&str, &str)]) -> Vec<Span<'static>> {
         if i > 0 {
             out.push(Span::raw(" "));
         }
-        out.push(dim("["));
+        out.push(faint("["));
         out.push(Span::styled(k.to_string(), Style::default().fg(CYAN)));
-        out.push(dim("]"));
+        out.push(faint("]"));
         out.push(dim(w.to_string()));
     }
     out
@@ -669,6 +673,20 @@ mod tests {
         .to_string();
         assert!(s.contains(":: 27 fps :: seed 71673"), "{s:?}");
         assert_eq!(s.chars().count(), 59);
+    }
+
+    #[test]
+    fn brackets_are_faint_and_words_dim() {
+        let (_, main) = tab_rows(&Sidebar::default(), false, &Section::ALL);
+        let open = main.spans.iter().find(|sp| sp.content == "[").unwrap();
+        assert_eq!(open.style.fg, Some(FAINT));
+        let key = main.spans.iter().find(|sp| sp.content == "F1").unwrap();
+        assert_eq!(key.style.fg, Some(CYAN));
+        let s = footer_status(vec![], "nothing", WALK_VERBS, 100);
+        let word = s.spans.iter().find(|sp| sp.content == "act").unwrap();
+        assert_eq!(word.style.fg, Some(DIM));
+        let bracket = s.spans.iter().find(|sp| sp.content == "]").unwrap();
+        assert_eq!(bracket.style.fg, Some(FAINT));
     }
 
     #[test]

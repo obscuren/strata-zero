@@ -11,7 +11,7 @@ use ratatui::widgets::Paragraph;
 
 const ROWS: [&str; 3] = ["Dev mode", "Rain", "FPS counter"];
 const ACCENT: Color = Color::Rgb(0, 229, 255);
-const DIM: Color = Color::Rgb(120, 130, 145);
+const DIM: Color = Color::Rgb(160, 170, 185);
 const TEXT: Color = Color::Rgb(205, 212, 222);
 
 pub struct Settings {

@@ -6,7 +6,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders};
 
-const DIM: Color = Color::Rgb(120, 130, 145);
+const DIM: Color = Color::Rgb(160, 170, 185);
 const TEXT: Color = Color::Rgb(205, 212, 222);
 const ACCENT: Color = Color::Rgb(0, 229, 255);
 
