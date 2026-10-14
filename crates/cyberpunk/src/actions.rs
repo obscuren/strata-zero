@@ -1,7 +1,7 @@
 //! Item actions on the app: `game::apply` plus its effects on the walker and the world.
 
 use crate::app::{AppState, FxInstance};
-use citygen::{Pos, StratumKind};
+use citygen::{City, Pos, StratumKind};
 use game::{AbilityKind, Action, Active, At, Effect};
 
 /// Applies an action at the player's feet and runs its effects on the world.
@@ -52,21 +52,62 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         && let Some(ability) = st.content.ability(&id)
     {
         let radius = match ability.kind {
-            AbilityKind::Active(Active::Scan { radius } | Active::Ping { radius }) => radius,
+            AbilityKind::Active(
+                Active::Scan { radius } | Active::Ping { radius } | Active::Trace { radius },
+            ) => radius,
             AbilityKind::Passive => 0,
         };
+        let targets = match (&ability.kind, st.city.as_ref()) {
+            (AbilityKind::Active(Active::Trace { radius }), Some(city)) => {
+                trace_targets(city, stratum, pos, *radius)
+            }
+            _ => Vec::new(),
+        };
+        // A mark lights when the arc lands: it waits out any bolt fired with it.
+        let landing = ability
+            .fx
+            .iter()
+            .find_map(|f| match f {
+                game::Fx::Bolt { ticks, .. } => Some(*ticks),
+                _ => None,
+            })
+            .unwrap_or(0);
         for fx in &ability.fx {
+            let started = match fx {
+                game::Fx::Mark { .. } => st.tick + landing,
+                _ => st.tick,
+            };
             st.fx.push(FxInstance {
                 fx: fx.clone(),
                 stratum,
                 origin: pos,
                 radius,
-                started: st.tick,
+                started,
                 revealed: revealed.clone(),
+                targets: targets.clone(),
             });
         }
     }
     Ok(outcome.message)
+}
+
+/// The node tiles a trace from `origin` reaches: cyber tiles on the Net, anchors
+/// elsewhere, within `radius`.
+pub fn trace_targets(city: &City, stratum: StratumKind, origin: Pos, radius: i32) -> Vec<Pos> {
+    if stratum == StratumKind::Net {
+        city.net
+            .nodes
+            .iter()
+            .map(|n| n.cyber)
+            .filter(|p| p.chebyshev(origin) <= radius)
+            .collect()
+    } else {
+        city.net
+            .nodes_on(stratum)
+            .map(|n| n.anchor.1)
+            .filter(|p| p.chebyshev(origin) <= radius)
+            .collect()
+    }
 }
 
 /// Puts a result where the player sees it: the status strip, warnings in magenta.
@@ -141,6 +182,36 @@ mod tests {
         );
         assert_eq!(st.fx[2].until(), st.tick + 180);
         assert!(st.fx[1].revealed.is_empty() && st.fx[1].radius == 24);
+        assert!(st.fx.iter().all(|i| i.targets.is_empty()));
+        perform(&mut st, Action::Fire(AbilityId::new("arc_trace"))).unwrap();
+        let kinds: Vec<&game::Fx> = st.fx.iter().map(|i| &i.fx).collect();
+        assert!(
+            matches!(kinds[3..], [game::Fx::Bolt { .. }, game::Fx::Mark { .. }]),
+            "{kinds:?}"
+        );
+        assert!(
+            !st.fx[3].targets.is_empty(),
+            "nodes within 20 tiles of the spawn"
+        );
+        assert_eq!(st.fx[3].targets, st.fx[4].targets);
+        assert_eq!(
+            (st.fx[3].started, st.fx[4].started),
+            (st.tick, st.tick + 36),
+            "the marks light when the arc lands"
+        );
+        let (k, pos) = (st.fx[3].stratum, st.fx[3].origin);
+        let city = st.city.as_ref().unwrap();
+        assert!(
+            st.fx[3]
+                .targets
+                .iter()
+                .all(|t| t.chebyshev(pos) <= 20 && city.net.node_at(k, *t).is_some())
+        );
+        // On the Net the targets are the nodes' cyber tiles.
+        let node = &city.net.nodes[0];
+        let net = trace_targets(city, StratumKind::Net, node.cyber, 3);
+        assert!(net.contains(&node.cyber));
+        assert!(net.iter().all(|t| t.chebyshev(node.cyber) <= 3));
         report(&mut st, Err("nope".into()));
         assert_eq!(
             st.log.latest().map(|e| e.marked()),

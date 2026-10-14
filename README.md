@@ -56,7 +56,8 @@ and shows a `DEV` badge in the header. It unlocks the free camera, stratum
 browsing, the console and the inspect and legend sections. Press `` ` `` to flip it at runtime;
 with it off you are always on foot.
 
-**Title** `↑↓` select · `enter` confirm · `q` quit
+**Title** `↑↓` select · `enter` confirm (new game generates a city and drops you on
+the street; load game opens the save list) · `q` quit
 
 **Configure** `↑↓` field · `←→` adjust · type digits into the seed · `enter`
 on `RANDOM SEED` / `GENERATE` · `esc` back
@@ -93,12 +94,14 @@ when mixed), dimmed once out of sight, and the HERE section lists what is on the
 focused tile. A scan paints the map around you into memory; a ping lights the
 terminals and stairs in range for a while.
 
-**Pause** (`esc` or `q`) resume · save · load · settings (dev mode, rain, fps) ·
-quit to title · quit game
+**Pause** (`esc` or `q`) resume · save game · load game · settings (dev mode,
+rain, fps) · quit to title · quit game
 
-**Deck** (`tab`) `←→` or `1`-`7` tabs · `↑↓` rows · `space` act on a row ·
-`esc` close. Tabs: quests, gear, inventory, workbench, map (what you remember of
-this stratum), skills and abilities. `space` on a gear slot picks what fits from
+**Deck** (`tab`) `←→` or `1`-`9` tabs · `↑↓` rows · `space` act on a row ·
+`esc` close; it reopens where you left it. Tabs: skills (your abilities),
+attributes, gear, inventory, workbench, cyberdeck (the jacked deck and its
+programs), quests, journal (empty for now) and map (what you remember of this
+stratum). Every list wraps at both ends. `space` on a gear slot picks what fits from
 the pack, or unequips and inspects what is worn; on an inventory item it opens
 the verbs: inspect, equip, use, drop one, drop all. In a popup the letter or
 `enter` fires a row and `esc` backs out one level. The readout shows hp and the

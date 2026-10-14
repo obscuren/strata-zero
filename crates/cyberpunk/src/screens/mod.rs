@@ -20,9 +20,9 @@ pub fn initial() -> impl Screen {
     title::Title::new(0)
 }
 
-/// The screen shown once a city exists: the map in explore mode.
+/// The screen shown once a city exists: the map, on foot.
 pub fn explore_screen(tick: u64) -> Box<dyn Screen> {
-    Box::new(explore::MapScreen::explore(tick))
+    Box::new(explore::MapScreen::walking(tick))
 }
 
 #[cfg(test)]

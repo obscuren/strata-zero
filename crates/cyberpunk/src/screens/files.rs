@@ -105,11 +105,15 @@ impl Screen for Files {
             match &mut self.mode {
                 Mode::Load => match k.code {
                     KeyCode::Up | KeyCode::Char('k') => {
-                        self.selected = self.selected.saturating_sub(1)
+                        let n = self.entries.len();
+                        if n > 0 {
+                            self.selected = (self.selected + n - 1) % n;
+                        }
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
-                        if self.selected + 1 < self.entries.len() {
-                            self.selected += 1;
+                        let n = self.entries.len();
+                        if n > 0 {
+                            self.selected = (self.selected + 1) % n;
                         }
                     }
                     KeyCode::Esc | KeyCode::Char('q') => return Self::done(),
@@ -176,7 +180,7 @@ impl Screen for Files {
         let dim = Style::default().fg(Color::Rgb(160, 170, 185));
         match &self.mode {
             Mode::Load => {
-                let block = boxed("LOAD CITY");
+                let block = boxed("LOAD GAME");
                 let inner = block.inner(panel);
                 f.render_widget(block, panel);
                 let mut lines: Vec<Line> = Vec::new();
@@ -222,7 +226,7 @@ impl Screen for Files {
                 f.render_widget(Paragraph::new(lines), inner);
             }
             Mode::Save(form) => {
-                let block = boxed("SAVE CITY");
+                let block = boxed("SAVE GAME");
                 let inner = block.inner(panel);
                 f.render_widget(block, panel);
                 FormView {
@@ -295,7 +299,11 @@ mod tests {
         let mut save = Files::save_in(dir.clone(), 0, &name);
         let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
         t.draw(|f| save.draw(&st, f)).unwrap();
-        assert!(buffer_text(t.backend().buffer()).contains("SAVE"));
+        let text = buffer_text(t.backend().buffer());
+        assert!(
+            text.contains("SAVE GAME") && !text.contains("CITY"),
+            "the save screen is titled like the menu that opened it: {text}"
+        );
         assert!(matches!(
             save.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Pop { .. }
@@ -335,5 +343,39 @@ mod tests {
             empty.update(&mut st, &[key(KeyCode::Esc)]),
             ScreenCmd::Pop { .. }
         ));
+    }
+
+    #[test]
+    fn load_list_wraps() {
+        let dir = tmp("wrap");
+        let city = citygen::Generator::run(citygen::GenParams {
+            seed: 1,
+            size: citygen::SizePreset::Custom { w: 80, h: 40 },
+            districts: 4,
+            ..Default::default()
+        })
+        .unwrap();
+        crate::save::save_city(&dir.join("a.city"), &city).unwrap();
+        crate::save::save_city(&dir.join("b.city"), &city).unwrap();
+        let mut st = AppState::new();
+        let mut load = Files::load_in(dir, 0);
+        assert_eq!(load.entries.len(), 2);
+        load.update(&mut st, &[key(KeyCode::Up)]);
+        assert_eq!(load.selected, 1);
+        load.update(&mut st, &[key(KeyCode::Down)]);
+        assert_eq!(load.selected, 0);
+    }
+
+    #[test]
+    fn load_screen_is_titled_like_the_menu() {
+        let st = AppState::new();
+        let f = Files::load(0);
+        let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        t.draw(|fr| f.draw(&st, fr)).unwrap();
+        let text = buffer_text(t.backend().buffer());
+        assert!(
+            text.contains("LOAD GAME") && !text.contains("CITY"),
+            "{text}"
+        );
     }
 }

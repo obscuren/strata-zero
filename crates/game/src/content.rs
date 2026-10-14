@@ -519,5 +519,28 @@ mod tests {
             AbilityKind::Passive
         ));
         assert_eq!(c.starter.abilities, vec![AbilityId::new("street_sense")]);
+        let trace = c.ability(&AbilityId::new("arc_trace")).unwrap();
+        assert!(matches!(
+            trace.kind,
+            AbilityKind::Active(Active::Trace { radius: 20 })
+        ));
+        assert_eq!(
+            trace.fx,
+            vec![
+                Fx::Bolt {
+                    colour: (255, 240, 150),
+                    ticks: 36
+                },
+                Fx::Mark {
+                    colour: (255, 240, 150),
+                    ticks: 600
+                }
+            ]
+        );
+        assert_eq!(trace.cooldown, 450);
+        assert_eq!(
+            c.item(&ItemId::new("pawnshop_deck")).unwrap().grants,
+            vec![AbilityId::new("netscan"), AbilityId::new("arc_trace")]
+        );
     }
 }

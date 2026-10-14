@@ -105,6 +105,24 @@ impl Overlay for FxOverlay<'_> {
                         buf,
                     );
                 }
+                Fx::Bolt { colour, ticks } => bolt(
+                    inst,
+                    Rgb(colour.0, colour.1, colour.2),
+                    ticks,
+                    elapsed,
+                    origin,
+                    area,
+                    tick,
+                    buf,
+                ),
+                Fx::Mark { colour, .. } => mark(
+                    inst,
+                    Rgb(colour.0, colour.1, colour.2),
+                    origin,
+                    area,
+                    tick,
+                    buf,
+                ),
             }
         }
     }
@@ -192,6 +210,109 @@ fn wave(
             cell.set_fg(tint.scale(0.25 + 0.75 * b).to_color())
                 .set_bg(tint.scale(0.3 * b).to_color());
         }
+    }
+}
+
+/// A path from `a` to `b` that only ever steps horizontally or vertically and never
+/// away from `b`: runs of one to four cells along one axis, then a turn to the other,
+/// until it lands. `seed` picks the run lengths, so one seed gives one route.
+fn snake_points(a: Pos, b: Pos, seed: u64) -> Vec<Pos> {
+    let (sx, sy) = ((b.x - a.x).signum(), (b.y - a.y).signum());
+    let (mut x, mut y) = (a.x, a.y);
+    let mut out = vec![a];
+    let mut horizontal = hash64(seed, 0).is_multiple_of(2);
+    let mut k = 1u64;
+    while x != b.x || y != b.y {
+        let (rx, ry) = ((b.x - x).abs(), (b.y - y).abs());
+        if horizontal && rx == 0 {
+            horizontal = false;
+        } else if !horizontal && ry == 0 {
+            horizontal = true;
+        }
+        let remaining = if horizontal { rx } else { ry };
+        let run = (1 + (hash64(seed, k) % 4) as i32).min(remaining);
+        k += 1;
+        for _ in 0..run {
+            if horizontal {
+                x += sx;
+            } else {
+                y += sy;
+            }
+            out.push(Pos::new(x, y));
+        }
+        horizontal = !horizontal;
+    }
+    out
+}
+
+/// The glyph for a bolt cell: a run along its axis, or the corner joining the way in
+/// to the way out.
+fn bolt_glyph(came: (i32, i32), goes: (i32, i32)) -> char {
+    if came == goes {
+        return if came.0 == 0 { '│' } else { '─' };
+    }
+    let left = came.0 == 1 || goes.0 == -1;
+    let up = came.1 == 1 || goes.1 == -1;
+    match (left, up) {
+        (true, true) => '┘',
+        (true, false) => '┐',
+        (false, true) => '└',
+        (false, false) => '┌',
+    }
+}
+
+/// Lines from the origin to every target that only run horizontally or vertically,
+/// turning like a circuit trace, grown over `ticks`; they ignore walls and sight. The
+/// route is re-rolled every four ticks, so the arc crawls while it burns.
+#[allow(clippy::too_many_arguments)]
+fn bolt(
+    inst: &FxInstance,
+    colour: Rgb,
+    ticks: u64,
+    elapsed: u64,
+    origin: Pos,
+    area: Rect,
+    tick: u64,
+    buf: &mut Buffer,
+) {
+    let frac = (elapsed as f32 / ticks.max(1) as f32).min(1.0);
+    let phase = tick / 4;
+    for (ti, target) in inst.targets.iter().enumerate() {
+        let seed = hash64(hash64(ti as u64, inst.started), phase);
+        let pts = snake_points(inst.origin, *target, seed);
+        let n = ((pts.len() as f32) * frac).ceil() as usize;
+        for i in 1..n.min(pts.len()) {
+            let p = pts[i];
+            let Some((sx, sy)) = tile_to_screen(area, origin, p) else {
+                continue;
+            };
+            let came = (p.x - pts[i - 1].x, p.y - pts[i - 1].y);
+            let goes = pts.get(i + 1).map_or(came, |q| (q.x - p.x, q.y - p.y));
+            let spark = came == goes && hash64(i as u64 + 7, ti as u64 ^ phase).is_multiple_of(5);
+            let glyph = if spark { '*' } else { bolt_glyph(came, goes) };
+            let bright = hash64(hash64(sx as u64, sy as u64), phase).is_multiple_of(3);
+            let fg = if bright { colour } else { colour.scale(0.6) };
+            let cell = &mut buf[(sx, sy)];
+            cell.set_char(glyph)
+                .set_fg(fg.to_color())
+                .set_bg(colour.scale(0.2).to_color());
+            cell.modifier.remove(Modifier::DIM);
+        }
+    }
+}
+
+/// A pulsing mark on every target tile, whatever its visibility.
+fn mark(inst: &FxInstance, colour: Rgb, origin: Pos, area: Rect, tick: u64, buf: &mut Buffer) {
+    let glow = colour.scale(0.55 + 0.45 * pulse(tick, 20)).to_color();
+    for t in &inst.targets {
+        let Some((sx, sy)) = tile_to_screen(area, origin, *t) else {
+            continue;
+        };
+        let cell = &mut buf[(sx, sy)];
+        cell.set_char('◉')
+            .set_fg(glow)
+            .set_bg(colour.scale(0.2).to_color());
+        cell.modifier.remove(Modifier::DIM);
     }
 }
 
@@ -291,7 +412,137 @@ mod tests {
             radius,
             started: 100,
             revealed,
+            targets: Vec::new(),
         }
+    }
+
+    fn aimed(fx: Fx, origin: Pos, targets: Vec<Pos>) -> FxInstance {
+        let mut i = instance(fx, origin, 0, Vec::new());
+        i.targets = targets;
+        i
+    }
+
+    const BOLT: (u8, u8, u8) = (255, 240, 150);
+
+    #[test]
+    fn bolt_grows_toward_its_targets() {
+        let c = city();
+        let s = StylePack::load().unwrap();
+        let origin = Pos::new(40, 30);
+        let target = Pos::new(52, 30);
+        let inst = aimed(
+            Fx::Bolt {
+                colour: BOLT,
+                ticks: 12,
+            },
+            origin,
+            vec![target],
+        );
+        let overlay = FxOverlay {
+            fx: std::slice::from_ref(&inst),
+            vis: None,
+        };
+        let plain = render(&c, &s, StratumKind::Street, 106, None, &[], (120, 60));
+        let half = render(
+            &c,
+            &s,
+            StratumKind::Street,
+            106,
+            None,
+            &[&overlay],
+            (120, 60),
+        );
+        let touched = |buf: &Buffer, x: i32| {
+            (29..=31).any(|y| buf[(x as u16, y as u16)] != plain[(x as u16, y as u16)])
+        };
+        assert!(
+            touched(&half, 44),
+            "the line has reached a third of the way"
+        );
+        assert!(!touched(&half, 51), "and not the far end yet");
+        let full = render(
+            &c,
+            &s,
+            StratumKind::Street,
+            111,
+            None,
+            &[&overlay],
+            (120, 60),
+        );
+        assert!(touched(&full, 51), "by its last tick it reaches the target");
+        assert_eq!(
+            half[(40, 30)],
+            plain[(40, 30)],
+            "the firer's own tile is untouched"
+        );
+    }
+
+    #[test]
+    fn mark_draws_through_walls_and_off_screen_targets_are_skipped() {
+        let c = city();
+        let s = StylePack::load().unwrap();
+        let mut p = Player::spawn(&c, 1);
+        p.update_fov(&c, 0);
+        let unseen = (0..60)
+            .flat_map(|y| (0..120).map(move |x| Pos::new(x, y)))
+            .find(|q| p.vis()[*q] == Visibility::Unseen)
+            .unwrap();
+        let inst = aimed(
+            Fx::Mark {
+                colour: BOLT,
+                ticks: 600,
+            },
+            p.pos,
+            vec![unseen, Pos::new(500, 500), Pos::new(-9, 3)],
+        );
+        let overlay = FxOverlay {
+            fx: std::slice::from_ref(&inst),
+            vis: Some(p.vis()),
+        };
+        let buf = render(
+            &c,
+            &s,
+            p.stratum,
+            150,
+            Some(p.vis()),
+            &[&overlay],
+            (120, 60),
+        );
+        assert_eq!(buf[(unseen.x as u16, unseen.y as u16)].symbol(), "◉");
+        let bolt = aimed(
+            Fx::Bolt {
+                colour: BOLT,
+                ticks: 12,
+            },
+            p.pos,
+            vec![Pos::new(500, 500), Pos::new(-9, 3)],
+        );
+        let overlay = FxOverlay {
+            fx: std::slice::from_ref(&bolt),
+            vis: None,
+        };
+        for tick in [100u64, 106, 111] {
+            render(&c, &s, p.stratum, tick, None, &[&overlay], (120, 60));
+            render(&c, &s, p.stratum, tick, None, &[&overlay], (20, 10));
+        }
+        // No targets: nothing drawn.
+        let none = aimed(
+            Fx::Bolt {
+                colour: BOLT,
+                ticks: 12,
+            },
+            p.pos,
+            Vec::new(),
+        );
+        let overlay = FxOverlay {
+            fx: std::slice::from_ref(&none),
+            vis: None,
+        };
+        let plain = render(&c, &s, p.stratum, 106, None, &[], (120, 60));
+        assert_eq!(
+            render(&c, &s, p.stratum, 106, None, &[&overlay], (120, 60)),
+            plain
+        );
     }
 
     const CYAN: (u8, u8, u8) = (0, 229, 255);
@@ -525,5 +776,96 @@ mod tests {
                 (120, 60),
             );
         }
+    }
+
+    fn step_is_orthogonal(a: Pos, b: Pos) -> bool {
+        (a.x - b.x).abs() + (a.y - b.y).abs() == 1
+    }
+
+    #[test]
+    fn snake_path_only_moves_horizontally_or_vertically() {
+        let a = Pos::new(40, 30);
+        let b = Pos::new(52, 21);
+        let pts = snake_points(a, b, 7);
+        assert_eq!((pts[0], *pts.last().unwrap()), (a, b));
+        assert_eq!(pts.len(), 12 + 9 + 1, "manhattan length: never a step away");
+        assert!(
+            pts.windows(2).all(|w| step_is_orthogonal(w[0], w[1])),
+            "{pts:?}"
+        );
+        assert_eq!(snake_points(a, b, 7), pts, "stable for a seed");
+        assert_ne!(
+            snake_points(a, b, 8),
+            pts,
+            "another seed snakes differently"
+        );
+        let turns = pts
+            .windows(3)
+            .filter(|w| (w[1].x - w[0].x) != (w[2].x - w[1].x))
+            .count();
+        assert!(
+            turns >= 3,
+            "runs of one to four cells: {turns} turns in {pts:?}"
+        );
+        assert_eq!(snake_points(a, a, 1), vec![a]);
+        let flat = snake_points(a, Pos::new(52, 30), 3);
+        assert!(
+            flat.iter().all(|p| p.y == 30),
+            "no room to snake on a flat line"
+        );
+    }
+
+    #[test]
+    fn bolt_snakes_with_corners_and_no_diagonals() {
+        let c = city();
+        let s = StylePack::load().unwrap();
+        let origin = Pos::new(40, 30);
+        let target = Pos::new(52, 21);
+        let inst = aimed(
+            Fx::Bolt {
+                colour: BOLT,
+                ticks: 12,
+            },
+            origin,
+            vec![target],
+        );
+        let overlay = FxOverlay {
+            fx: std::slice::from_ref(&inst),
+            vis: None,
+        };
+        let plain = render(&c, &s, StratumKind::Street, 111, None, &[], (120, 60));
+        let full = render(
+            &c,
+            &s,
+            StratumKind::Street,
+            111,
+            None,
+            &[&overlay],
+            (120, 60),
+        );
+        let mut glyphs = String::new();
+        let mut outside = 0;
+        for y in 0..60u16 {
+            for x in 0..120u16 {
+                if full[(x, y)] != plain[(x, y)] {
+                    glyphs.push_str(full[(x, y)].symbol());
+                    if !(40..=52).contains(&x) || !(21..=30).contains(&y) {
+                        outside += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            !glyphs.contains('╱') && !glyphs.contains('╲'),
+            "no diagonal glyphs: {glyphs}"
+        );
+        assert!(
+            glyphs.chars().any(|g| "┌┐└┘".contains(g)),
+            "corners where it turns: {glyphs}"
+        );
+        assert_eq!(
+            outside, 0,
+            "the bolt stays inside the box between firer and node"
+        );
     }
 }

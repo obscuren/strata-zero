@@ -2,6 +2,7 @@
 
 use crate::messages::{Kind, MessageLog};
 use crate::render::style::StylePack;
+use crate::screens::deck::Tab;
 use crate::term::{TerminalGuard, install_panic_hook};
 use crate::ui::sidebar::Sidebar;
 use anyhow::Result;
@@ -44,6 +45,9 @@ pub struct AppState {
     pub fx: Vec<FxInstance>,
     /// Set when the screen should be repainted in full, as after a glitch kick.
     pub repaint: bool,
+    /// Where the deck was last: its tab and the selected row per tab.
+    pub deck_tab: Tab,
+    pub deck_rows: [usize; 9],
     /// What happened, newest last.
     pub log: MessageLog,
     /// Which sidebar sections are on.
@@ -61,6 +65,8 @@ pub struct FxInstance {
     pub started: u64,
     /// For a scan, the tiles it revealed; the wave hides them until it passes.
     pub revealed: Vec<citygen::Pos>,
+    /// For a trace, the node tiles it found; bolts run to them and marks sit on them.
+    pub targets: Vec<citygen::Pos>,
 }
 
 impl FxInstance {
@@ -71,7 +77,9 @@ impl FxInstance {
             game::Fx::Wave { ticks, .. } => {
                 self.started + ticks + crate::render::fx::wave_tail_ticks(ticks, self.radius)
             }
-            game::Fx::Glow { ticks, .. } => self.started + ticks,
+            game::Fx::Glow { ticks, .. }
+            | game::Fx::Bolt { ticks, .. }
+            | game::Fx::Mark { ticks, .. } => self.started + ticks,
         }
     }
 }
@@ -100,6 +108,8 @@ impl AppState {
             ground: game::Ground::default(),
             fx: Vec::new(),
             repaint: false,
+            deck_tab: Tab::Skills,
+            deck_rows: [0; 9],
             log: MessageLog::default(),
             sidebar: Sidebar::default(),
         }
@@ -143,6 +153,8 @@ impl AppState {
         self.city = Some(city);
         self.player = None;
         self.fx.clear();
+        self.deck_tab = Tab::Skills;
+        self.deck_rows = [0; 9];
     }
 
     /// Logs a plain result.
@@ -582,6 +594,7 @@ mod tests {
             radius: 5,
             started: 100,
             revealed: Vec::new(),
+            targets: Vec::new(),
         };
         st.fx.push(at(game::Fx::Kick(4)));
         st.fx.push(at(game::Fx::Wave {
@@ -634,11 +647,19 @@ mod tests {
             radius: 0,
             started: 0,
             revealed: Vec::new(),
+            targets: Vec::new(),
         });
+        st.deck_tab = Tab::Gear;
+        st.deck_rows[Tab::Gear.index()] = 3;
         let seed = city.seed;
         st.enter_city(city);
         assert!(st.player.is_none() && st.fx.is_empty());
         assert_eq!(st.city.as_ref().map(|c| c.seed), Some(seed));
+        assert_eq!(
+            (st.deck_tab, st.deck_rows),
+            (Tab::Skills, [0; 9]),
+            "a new city forgets where the deck was"
+        );
     }
 
     #[test]

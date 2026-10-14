@@ -105,6 +105,8 @@ pub struct MapScreen {
     /// Tick of the last update; a gap means a menu was on top.
     last_tick: u64,
     cam_ready: bool,
+    /// Drop into Walk mode on the first update: a fresh or loaded city.
+    start_walking: bool,
     /// The map area of the last frame, so `update` knows the view size.
     last_map: Cell<Rect>,
 }
@@ -168,6 +170,13 @@ fn layout(area: Rect) -> Regions {
 }
 
 impl MapScreen {
+    /// The map screen that starts on foot, dev mode or not.
+    pub fn walking(tick: u64) -> Self {
+        let mut s = Self::explore(tick);
+        s.start_walking = true;
+        s
+    }
+
     pub fn explore(_tick: u64) -> Self {
         MapScreen {
             mode: Mode::Explore,
@@ -181,6 +190,7 @@ impl MapScreen {
             console: None,
             last_tick: 0,
             cam_ready: false,
+            start_walking: false,
             last_map: Cell::new(Rect::new(0, 0, 100, 28)),
         }
     }
@@ -307,7 +317,11 @@ impl MapScreen {
             KeyCode::Char('?') => self.help = !self.help,
             KeyCode::Tab => {
                 return Some(ScreenCmd::Push {
-                    to: Box::new(Deck::new(st.tick).focus(self.stratum, self.focus_pos(st))),
+                    to: Box::new(
+                        Deck::new(st.tick)
+                            .focus(self.stratum, self.focus_pos(st))
+                            .restore(st),
+                    ),
                     fx: TransitionKind::Glitch,
                 });
             }
@@ -629,6 +643,10 @@ impl Screen for MapScreen {
             self.cursor = size.center();
             self.cam_ready = true;
         }
+        if self.start_walking {
+            self.start_walking = false;
+            self.enter_walk(st);
+        }
         for (i, k) in keys.iter().enumerate() {
             let cmd = match self.handle_common(st, k) {
                 Some(cmd) => Some(cmd),
@@ -848,10 +866,21 @@ impl Screen for MapScreen {
             dev: st.dev,
         };
         let here = sidebar::here_summary(&view);
-        let drawn = sidebar::draw(&view, &st.sidebar, r.side, f.buffer_mut());
+        // In dev mode the column's last row holds the dev tabs, with an empty row above.
+        let side = if st.dev && r.side.height > 2 {
+            Rect::new(r.side.x, r.side.y, r.side.width, r.side.height - 2)
+        } else {
+            r.side
+        };
+        let drawn = sidebar::draw(&view, &st.sidebar, side, f.buffer_mut());
         let log_drawn = drawn.contains(&Section::Log);
         let (dev_tabs, tabs) = hud::tab_rows(&st.sidebar, st.dev, &drawn);
-        f.render_widget(Paragraph::new(dev_tabs), r.band_r[2]);
+        if st.dev && r.side.height > 2 {
+            f.render_widget(
+                Paragraph::new(dev_tabs),
+                Rect::new(r.side.x, r.side.bottom() - 1, r.side.width, 1),
+            );
+        }
         f.render_widget(Paragraph::new(tabs), r.band_r[3]);
         // Footer.
         let jacked = st.player.as_ref().is_some_and(|p| p.jacked_in());
@@ -1563,8 +1592,12 @@ mod tests {
         let text = draw_screen(&*p, &st, 120, 40);
         assert!(text.contains("Netscan · cooling"), "{text}");
         let msg = last(&st).map(|m| m.to_string());
+        // The cooling row's own letter does nothing; Enter would fire the next ready one.
         assert!(
-            matches!(p.update(&mut st, &[key(KeyCode::Enter)]), ScreenCmd::Stay),
+            matches!(
+                p.update(&mut st, &[key(KeyCode::Char('a'))]),
+                ScreenCmd::Stay
+            ),
             "a cooling row cannot fire"
         );
         assert_eq!(last(&st).map(|m| m.to_string()), msg);
@@ -1768,9 +1801,16 @@ mod tests {
                 "{text}"
             );
             assert!(
-                lines[2].starts_with(" FOCUS") && lines[2].contains("[F5]Inspect [F6]Legend"),
-                "{text}"
+                lines[2].starts_with(" FOCUS") && !lines[2].contains("[F5]"),
+                "the band row the dev tabs left stays blank: {text}"
             );
+            let last_main = h as usize - 4;
+            assert!(
+                lines[last_main].contains("[F5]Inspect [F6]Legend"),
+                "dev tabs sit on the column's last row: {text}"
+            );
+            let above: String = lines[last_main - 1].chars().skip(l + 1).collect();
+            assert!(above.trim().is_empty(), "one empty row above them: {text}");
             assert!(
                 lines[3].starts_with(" XP ")
                     && lines[3].contains("[F1]Here* [F2]Quest* [F3]Map* [F4]Log*"),
@@ -1976,7 +2016,8 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
         t.draw(|f| s.draw(&st, f)).unwrap();
         let buf = t.backend().buffer();
-        let row = 2u16;
+        // The dev tabs sit on the column's last row: 30 - 4.
+        let row = 26u16;
         let cells: Vec<String> = (0..100u16)
             .map(|x| buf[(x, row)].symbol().to_string())
             .collect();
@@ -2006,5 +2047,17 @@ mod tests {
         assert!(text.contains("Netscan: pulse sent"), "{text}");
         s.update(&mut st, &[]);
         assert!(st.fx.is_empty());
+    }
+
+    #[test]
+    fn a_fresh_city_starts_walking_even_in_dev_mode() {
+        let mut st = state();
+        st.dev = true;
+        let mut s = MapScreen::walking(0);
+        s.update(&mut st, &[]);
+        assert_eq!(s.mode, Mode::Walk);
+        assert!(st.player.is_some());
+        s.update(&mut st, &[key(KeyCode::Char('c'))]);
+        assert_eq!(s.mode, Mode::Explore, "the dev camera is still a key away");
     }
 }

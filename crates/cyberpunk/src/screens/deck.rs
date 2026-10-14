@@ -1,5 +1,5 @@
-//! The deck: the player's menu over the live map — quests, gear, inventory, workbench,
-//! map, skills, abilities.
+//! The deck: the player's menu over the live map — skills, attributes, gear, inventory,
+//! workbench, cyberdeck, quests, journal, map. It reopens where it was closed.
 
 use crate::anim::effects::{glitch_cells, pulse, typewriter};
 use crate::anim::{Easing, Tween};
@@ -33,39 +33,49 @@ const LETTERS: &str = "abcdefgmnoprstvwxyz";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
-    Quests,
+    /// Abilities, active and passive.
+    Skills,
+    /// The character's trained skills and their levels.
+    Attributes,
     Gear,
     Inventory,
     Workbench,
+    /// The jacked deck and the programs it carries.
+    Cyberdeck,
+    Quests,
+    /// Not written yet.
+    Journal,
     Map,
-    Skills,
-    Abilities,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 7] = [
-        Tab::Quests,
+    pub const ALL: [Tab; 9] = [
+        Tab::Skills,
+        Tab::Attributes,
         Tab::Gear,
         Tab::Inventory,
         Tab::Workbench,
+        Tab::Cyberdeck,
+        Tab::Quests,
+        Tab::Journal,
         Tab::Map,
-        Tab::Skills,
-        Tab::Abilities,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
-            Tab::Quests => "QUESTS",
+            Tab::Skills => "SKILLS",
+            Tab::Attributes => "ATTRIBUTES",
             Tab::Gear => "GEAR",
             Tab::Inventory => "INVENTORY",
             Tab::Workbench => "WORKBENCH",
+            Tab::Cyberdeck => "CYBERDECK",
+            Tab::Quests => "QUESTS",
+            Tab::Journal => "JOURNAL",
             Tab::Map => "MAP",
-            Tab::Skills => "SKILLS",
-            Tab::Abilities => "ABILITIES",
         }
     }
 
-    fn index(self) -> usize {
+    pub fn index(self) -> usize {
         Tab::ALL.iter().position(|t| *t == self).unwrap_or(0)
     }
 }
@@ -122,7 +132,7 @@ fn tone_style(tone: Tone) -> Style {
 impl Deck {
     pub fn new(tick: u64) -> Self {
         Deck {
-            tab: Tab::Quests,
+            tab: Tab::Skills,
             row: 0,
             changed: tick,
             tab_from: 0,
@@ -232,6 +242,66 @@ impl Deck {
         self
     }
 
+    /// Reopens where the deck was closed: the remembered tab and its row, clamped to a
+    /// row that still exists and can be selected.
+    pub fn restore(mut self, st: &AppState) -> Self {
+        self.tab = st.deck_tab;
+        self.tab_from = self.tab.index();
+        let rows = self.rows(st);
+        let want = st.deck_rows[self.tab.index()];
+        self.row = if rows.get(want).is_some_and(|r| r.detail.is_some()) {
+            want
+        } else {
+            Self::first_selectable(&rows)
+        };
+        self
+    }
+
+    /// The jacked deck, then the programs it grants.
+    fn cyberdeck_rows(st: &AppState) -> Vec<Row> {
+        let Some(id) = st.character.equipped(Slot::Deck) else {
+            return vec![Row {
+                text: "no deck jacked".into(),
+                tone: Tone::Dim,
+                detail: None,
+            }];
+        };
+        let Some(item) = st.content.item(id) else {
+            return Vec::new();
+        };
+        let mut rows = vec![Row {
+            text: format!("▣ {}", item.name),
+            tone: Tone::Normal,
+            detail: Some(Detail::Item(id.clone())),
+        }];
+        rows.push(Row {
+            text: "── programs ──".into(),
+            tone: Tone::Dim,
+            detail: None,
+        });
+        let all = st.character.abilities(&st.content);
+        for gid in &item.grants {
+            if let Some(i) = all.iter().position(|(a, _)| a == gid)
+                && let Some(a) = st.content.ability(gid)
+            {
+                rows.push(Row {
+                    text: format!("◈ {}", a.name),
+                    tone: Tone::Normal,
+                    detail: Some(Detail::Ability(i)),
+                });
+            }
+        }
+        rows
+    }
+
+    fn journal_rows() -> Vec<Row> {
+        vec![Row {
+            text: "nothing written yet".into(),
+            tone: Tone::Dim,
+            detail: None,
+        }]
+    }
+
     fn set_tab(&mut self, tab: Tab, st: &AppState) {
         if tab == self.tab {
             return;
@@ -249,18 +319,17 @@ impl Deck {
         self.set_tab(Tab::ALL[i], st);
     }
 
-    /// Moves the selection by `delta`, skipping header rows; clamps at the ends.
+    /// Moves the selection by `delta`, skipping header rows; wraps at both ends.
     fn move_row(&mut self, rows: &[Row], delta: i32, tick: u64) {
         if rows.is_empty() {
             self.row = 0;
             return;
         }
+        // Wrap at both ends, landing on the next row that has a detail.
+        let n = rows.len() as i32;
         let mut i = self.row as i32;
-        loop {
-            i += delta;
-            if i < 0 || i >= rows.len() as i32 {
-                return;
-            }
+        for _ in 0..n {
+            i = (i + delta).rem_euclid(n);
             if rows[i as usize].detail.is_some() {
                 self.row = i as usize;
                 self.changed = tick;
@@ -275,13 +344,15 @@ impl Deck {
 
     pub(crate) fn rows(&self, st: &AppState) -> Vec<Row> {
         match self.tab {
-            Tab::Quests => Self::quest_rows(st),
+            Tab::Skills => Self::ability_rows(st),
+            Tab::Attributes => Self::skill_rows(st),
             Tab::Gear => Self::gear_rows(st),
             Tab::Inventory => Self::inventory_rows(st),
             Tab::Workbench => Self::workbench_rows(st),
+            Tab::Cyberdeck => Self::cyberdeck_rows(st),
+            Tab::Quests => Self::quest_rows(st),
+            Tab::Journal => Self::journal_rows(),
             Tab::Map => Vec::new(),
-            Tab::Skills => Self::skill_rows(st),
-            Tab::Abilities => Self::ability_rows(st),
         }
     }
 
@@ -633,6 +704,9 @@ impl Deck {
                         Active::Ping { radius } => {
                             format!("ping: lights terminals and stairs within {radius} tiles")
                         }
+                        Active::Trace { radius } => {
+                            format!("trace: arcs to every node within {radius} tiles")
+                        }
                     };
                     out.push(Line::from(Span::styled(effect, Style::default().fg(CYAN))));
                 }
@@ -703,8 +777,8 @@ impl Deck {
     }
 }
 
-impl Screen for Deck {
-    fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+impl Deck {
+    fn handle(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
         // A popup may have removed the selected row: reselect before drawing, keys or not.
         let rows = self.rows(st);
         if self.row >= rows.len() || rows.get(self.row).is_some_and(|r| r.detail.is_none()) {
@@ -723,7 +797,7 @@ impl Screen for Deck {
                 }
                 KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => self.shift_tab(-1, st),
                 KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => self.shift_tab(1, st),
-                KeyCode::Char(c @ '1'..='7') => {
+                KeyCode::Char(c @ '1'..='9') => {
                     let i = c as usize - '1' as usize;
                     self.set_tab(Tab::ALL[i], st);
                 }
@@ -741,6 +815,15 @@ impl Screen for Deck {
             }
         }
         ScreenCmd::Stay
+    }
+}
+
+impl Screen for Deck {
+    fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+        let cmd = self.handle(st, keys);
+        st.deck_tab = self.tab;
+        st.deck_rows[self.tab.index()] = self.row;
+        cmd
     }
 
     fn draw(&self, st: &AppState, f: &mut Frame) {
@@ -822,7 +905,7 @@ impl Screen for Deck {
 
         // Tab bar.
         let mut x = inner.x + 1;
-        let mut starts = [0u16; 7];
+        let mut starts = [0u16; 9];
         for (i, tab) in Tab::ALL.iter().enumerate() {
             let active = *tab == self.tab;
             let label = if active {
@@ -959,7 +1042,7 @@ impl Screen for Deck {
             buf,
             inner.x + 1,
             hint_y,
-            "←→ tabs · ↑↓ select · 1-7 jump · space act · esc close",
+            "←→ tabs · ↑↓ select · 1-9 jump · space act · esc close",
             Style::default().fg(DIM),
             right,
         );
@@ -1028,11 +1111,14 @@ mod tests {
         let mut d = Deck::new(0);
         st.tick = 40;
         let text = draw(&d, &st, 120, 35);
-        assert!(text.contains("▌QUESTS▐"), "{text}");
+        assert!(text.contains("▌SKILLS▐"), "{text}");
         assert!(
             text.contains("VEX") && text.contains("¤ 320") && text.contains("hp 45/45"),
             "{text}"
         );
+        d.update(&mut st, &[key(KeyCode::Char('7'))]);
+        st.tick += 40;
+        let text = draw(&d, &st, 120, 35);
         assert!(
             text.contains("The drop") && text.contains("✓ First jack"),
             "{text}"
@@ -1043,7 +1129,7 @@ mod tests {
             "tall decks set the handle in block font"
         );
 
-        d.update(&mut st, &[key(KeyCode::Char('2'))]);
+        d.update(&mut st, &[key(KeyCode::Char('3'))]);
         assert_eq!(d.tab, Tab::Gear);
         st.tick += 30;
         let text = draw(&d, &st, 120, 35);
@@ -1077,15 +1163,12 @@ mod tests {
         d.update(&mut st, &[key(KeyCode::Down)]);
         assert!(rows[d.row].detail.is_some() && d.row > before);
 
-        d.update(
-            &mut st,
-            &[key(KeyCode::Left), key(KeyCode::Left), key(KeyCode::Left)],
-        );
-        assert_eq!(d.tab, Tab::Abilities, "left wraps around");
+        d.update(&mut st, &[key(KeyCode::Left); 4]);
+        assert_eq!(d.tab, Tab::Map, "left wraps around");
         d.update(&mut st, &[key(KeyCode::Tab)]);
-        assert_eq!(d.tab, Tab::Quests, "tab wraps forward");
+        assert_eq!(d.tab, Tab::Skills, "tab wraps forward");
         d.update(&mut st, &[key(KeyCode::BackTab)]);
-        assert_eq!(d.tab, Tab::Abilities);
+        assert_eq!(d.tab, Tab::Map);
         assert!(matches!(
             d.update(&mut st, &[key(KeyCode::Esc)]),
             ScreenCmd::Pop {
@@ -1112,11 +1195,11 @@ mod tests {
             lines[29]
         );
         assert!(
-            text.contains("▌QUESTS▐") && text.contains("SKILLS"),
+            text.contains("▌SKILLS▐") && text.contains("SKILLS"),
             "{text}"
         );
         assert!(
-            text.contains("1-7 jump") && text.contains("space act") && text.contains("esc close"),
+            text.contains("1-9 jump") && text.contains("space act") && text.contains("esc close"),
             "{text}"
         );
         assert!(text.contains("║"), "no pane divider: {text}");
@@ -1140,7 +1223,7 @@ mod tests {
     fn workbench_and_skills_show_what_you_can_and_cannot_do() {
         let mut st = state();
         let mut d = Deck::new(0);
-        d.update(&mut st, &[key(KeyCode::Char('4'))]);
+        d.update(&mut st, &[key(KeyCode::Char('5'))]);
         st.tick = 60;
         let rows = d.rows(&st);
         let shiv = rows.iter().find(|r| r.text.contains("Wire shiv")).unwrap();
@@ -1165,7 +1248,7 @@ mod tests {
             "have/need: {text}"
         );
 
-        d.update(&mut st, &[key(KeyCode::Char('6'))]);
+        d.update(&mut st, &[key(KeyCode::Char('2'))]);
         d.changed = 0;
         let text = draw(&d, &st, 120, 35);
         assert!(
@@ -1188,7 +1271,7 @@ mod tests {
     fn map_tab_shows_memory_or_no_signal() {
         let mut st = state();
         let mut d = Deck::new(0);
-        d.update(&mut st, &[key(KeyCode::Char('5'))]);
+        d.update(&mut st, &[key(KeyCode::Char('9'))]);
         let text = draw(&d, &st, 120, 35);
         assert!(text.contains("no signal"), "{text}");
         let city = st.city.as_ref().unwrap();
@@ -1236,7 +1319,7 @@ mod tests {
         assert_ne!(buf[(gx, gy)].bg, PANEL_BG, "bg is tinted, not solid");
         // Text rows sit on the solid panel colour so they stay legible.
         let row = buffer_text(buf);
-        assert!(row.contains("The drop"));
+        assert!(row.contains("Netscan"));
     }
 
     /// Forty loose coils: more inventory rows than any pane has.
@@ -1255,7 +1338,7 @@ mod tests {
         d.update(
             &mut st,
             &[
-                key(KeyCode::Char('5')),
+                key(KeyCode::Char('9')),
                 key(KeyCode::Down),
                 key(KeyCode::Char('j')),
                 key(KeyCode::Up),
@@ -1274,7 +1357,7 @@ mod tests {
             }
         }
         let mut d = Deck::new(0);
-        d.update(&mut st, &[key(KeyCode::Char('6'))]);
+        d.update(&mut st, &[key(KeyCode::Char('2'))]);
         let rows = d.rows(&st);
         let hacking = rows.iter().find(|r| r.text.contains("Hacking")).unwrap();
         assert!(hacking.text.contains("▰▰▰▰▰ 8"), "{:?}", hacking.text);
@@ -1287,7 +1370,7 @@ mod tests {
         let mut st = state();
         stuff(&mut st);
         let mut d = Deck::new(0);
-        d.update(&mut st, &[key(KeyCode::Char('3'))]);
+        d.update(&mut st, &[key(KeyCode::Char('4'))]);
         st.tick = 60;
         let pane = |text: &str| -> Vec<String> {
             text.lines()
@@ -1302,7 +1385,7 @@ mod tests {
             st.character.value(&st.content)
         );
         assert_eq!(footer.trim_matches(|c: char| c == '│' || c == ' '), expect);
-        d.update(&mut st, &[key(KeyCode::Down); 60]);
+        d.update(&mut st, &[key(KeyCode::Up)]);
         let left = pane(&draw(&d, &st, 100, 30));
         let sel = left
             .iter()
@@ -1320,8 +1403,8 @@ mod tests {
         let mut st = state();
         stuff(&mut st);
         let mut d = Deck::new(0);
-        d.update(&mut st, &[key(KeyCode::Char('3'))]);
-        d.update(&mut st, &[key(KeyCode::Down); 60]);
+        d.update(&mut st, &[key(KeyCode::Char('4'))]);
+        d.update(&mut st, &[key(KeyCode::Up)]);
         st.tick = 60;
         let text = draw(&d, &st, 100, 30);
         let visible = text.lines().filter(|l| l.contains("× ")).count();
@@ -1335,7 +1418,7 @@ mod tests {
     fn memory_map_caption_sits_above_the_map() {
         let mut st = state();
         let mut d = Deck::new(0);
-        d.update(&mut st, &[key(KeyCode::Char('5'))]);
+        d.update(&mut st, &[key(KeyCode::Char('9'))]);
         let mut p = crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1);
         p.pos = citygen::Pos::new(0, 0);
         st.player = Some(p);
@@ -1385,8 +1468,8 @@ mod tests {
     fn abilities_tab_lists_sources_and_cooldowns() {
         let mut st = state();
         let mut d = Deck::new(0);
-        d.update(&mut st, &[key(KeyCode::Char('7'))]);
-        assert_eq!(d.tab, Tab::Abilities);
+        d.update(&mut st, &[key(KeyCode::Char('1'))]);
+        assert_eq!(d.tab, Tab::Skills);
         st.character.fired.insert(AbilityId::new("netscan"), 0);
         st.tick = 60;
         let text = draw(&d, &st, 120, 35);
@@ -1453,7 +1536,7 @@ mod tests {
     fn skills_and_gear_show_perks() {
         let mut st = state();
         let mut d = Deck::new(0);
-        d.update(&mut st, &[key(KeyCode::Char('6'))]);
+        d.update(&mut st, &[key(KeyCode::Char('2'))]);
         let rows = d.rows(&st);
         d.row = rows
             .iter()
@@ -1466,7 +1549,7 @@ mod tests {
             text.contains("▰▰▰▰▱ 4") && text.contains("base 3 · +1 Pawnshop deck"),
             "{text}"
         );
-        d.update(&mut st, &[key(KeyCode::Char('2'))]);
+        d.update(&mut st, &[key(KeyCode::Char('3'))]);
         let rows = d.rows(&st);
         d.row = rows.iter().position(|r| r.text.contains("EYES")).unwrap();
         d.changed = 0;
@@ -1490,7 +1573,7 @@ mod tests {
             qty: 1,
         });
         let mut d = Deck::new(0);
-        d.update(&mut st, &[key(KeyCode::Char('2'))]);
+        d.update(&mut st, &[key(KeyCode::Char('3'))]);
         let rows = d.rows(&st);
         d.row = rows.iter().position(|r| r.text.contains("EYES")).unwrap();
         let ScreenCmd::Push { to: mut p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))])
@@ -1541,7 +1624,7 @@ mod tests {
             (p.stratum, p.pos)
         };
         let mut d = Deck::new(0);
-        d.update(&mut st, &[key(KeyCode::Char('3'))]);
+        d.update(&mut st, &[key(KeyCode::Char('4'))]);
         let rows = d.rows(&st);
         d.row = rows
             .iter()
@@ -1612,7 +1695,7 @@ mod tests {
         let mut st = state();
         walking(&mut st);
         let mut d = Deck::new(0);
-        d.update(&mut st, &[key(KeyCode::Char('3'))]);
+        d.update(&mut st, &[key(KeyCode::Char('4'))]);
         let rows = d.rows(&st);
         d.row = rows.len() - 1;
         let last = rows[d.row].text.clone();
@@ -1627,5 +1710,100 @@ mod tests {
         let text = draw(&d, &st, 120, 35);
         assert!(!text.contains(&last), "{text}");
         assert!(text.contains("▸ "), "selection restored: {text}");
+    }
+
+    #[test]
+    fn rows_wrap_around() {
+        let mut st = state();
+        stuff(&mut st);
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('4'))]);
+        let rows = d.rows(&st);
+        let first = rows.iter().position(|r| r.detail.is_some()).unwrap();
+        let last = rows.iter().rposition(|r| r.detail.is_some()).unwrap();
+        assert_eq!(d.row, first);
+        d.update(&mut st, &[key(KeyCode::Up)]);
+        assert_eq!(d.row, last, "up from the first row wraps to the last");
+        d.update(&mut st, &[key(KeyCode::Down)]);
+        assert_eq!(d.row, first);
+    }
+
+    #[test]
+    fn tabs_are_in_the_new_order_with_two_new_ones() {
+        let labels: Vec<&str> = Tab::ALL.iter().map(|t| t.label()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "SKILLS",
+                "ATTRIBUTES",
+                "GEAR",
+                "INVENTORY",
+                "WORKBENCH",
+                "CYBERDECK",
+                "QUESTS",
+                "JOURNAL",
+                "MAP"
+            ]
+        );
+        let mut st = state();
+        let mut d = Deck::new(0);
+        assert_eq!(d.tab, Tab::Skills);
+        // Past the signal-jitter burst of the first ticks.
+        st.tick = 40;
+        d.update(&mut st, &[key(KeyCode::Char('1'))]);
+        let text = draw(&d, &st, 120, 35);
+        assert!(text.contains("Netscan"), "SKILLS lists abilities: {text}");
+        d.update(&mut st, &[key(KeyCode::Char('2'))]);
+        let text = draw(&d, &st, 120, 35);
+        assert!(
+            text.contains("Hacking"),
+            "ATTRIBUTES lists the old skills: {text}"
+        );
+        d.update(&mut st, &[key(KeyCode::Char('6'))]);
+        assert_eq!(d.tab, Tab::Cyberdeck);
+        let rows: Vec<String> = d.rows(&st).iter().map(|r| r.text.clone()).collect();
+        assert!(rows[0].contains("Pawnshop deck"), "{rows:?}");
+        assert!(
+            rows.iter().any(|r| r.contains("Netscan"))
+                && rows.iter().any(|r| r.contains("Arc Trace")),
+            "{rows:?}"
+        );
+        st.tick += 40;
+        let text = draw(&d, &st, 120, 35);
+        assert!(
+            text.contains("▌CYBERDECK▐") && text.contains("PAWNSHOP DECK"),
+            "{text}"
+        );
+        d.update(&mut st, &[key(KeyCode::Char('8'))]);
+        assert_eq!(d.tab, Tab::Journal);
+        let rows = d.rows(&st);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].text.contains("nothing written yet") && rows[0].detail.is_none());
+        assert!(matches!(
+            d.update(&mut st, &[key(KeyCode::Char(' '))]),
+            ScreenCmd::Stay
+        ));
+        st.character.equipment.remove(&Slot::Deck);
+        d.update(&mut st, &[key(KeyCode::Char('6'))]);
+        let rows = d.rows(&st);
+        assert!(rows[0].text.contains("no deck jacked") && rows.len() == 1);
+    }
+
+    #[test]
+    fn deck_remembers_its_tab_and_row() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('3')), key(KeyCode::Down)]);
+        assert_eq!(
+            (st.deck_tab, st.deck_rows[Tab::Gear.index()]),
+            (Tab::Gear, d.row)
+        );
+        let again = Deck::new(5).restore(&st);
+        assert_eq!((again.tab, again.row), (Tab::Gear, d.row));
+        // A remembered row past the end clamps to a selectable row.
+        st.deck_rows[Tab::Gear.index()] = 999;
+        let clamped = Deck::new(5).restore(&st);
+        let rows = clamped.rows(&st);
+        assert!(clamped.row < rows.len() && rows[clamped.row].detail.is_some());
     }
 }
