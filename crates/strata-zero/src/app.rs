@@ -39,6 +39,10 @@ pub struct AppState {
     pub show_fps: bool,
     pub content: game::Content,
     pub character: game::Character,
+    /// The professions and lines of the city's people.
+    pub people: sim::People,
+    /// The living city, once there is a city.
+    pub world: Option<sim::World>,
     /// Items lying in the city.
     pub ground: game::Ground,
     /// Ability effects in flight, oldest first.
@@ -97,6 +101,7 @@ impl AppState {
         let content = game::Content::load().expect("embedded content pack is valid");
         let character = game::Character::from_template(&content, &game::TemplateId::new("vex"))
             .expect("the vex template builds");
+        let people = sim::People::load().expect("the people pack is valid");
         AppState {
             params: GenParams::default(),
             city: None,
@@ -108,6 +113,8 @@ impl AppState {
             show_fps: true,
             content,
             character,
+            people,
+            world: None,
             ground: game::Ground::default(),
             fx: Vec::new(),
             repaint: false,
@@ -154,6 +161,13 @@ impl AppState {
 
     /// Puts a city in place: no body, no effects in flight.
     pub fn enter_city(&mut self, city: City) {
+        self.world = Some(sim::World::seed(
+            &city,
+            &self.people,
+            &sim::SimParams::default(),
+            crate::ui::hud::START_MINUTE_OF_DAY,
+            self.tick,
+        ));
         self.city = Some(city);
         self.player = None;
         self.fx.clear();

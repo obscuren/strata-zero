@@ -17,10 +17,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Ticks in a game minute, as the HUD's clock keeps it.
 pub const TICKS_PER_MINUTE: u64 = 90;
-/// Ticks a walker spends per tile.
-pub const WALK_TICKS: u64 = 3;
-/// Ticks a car spends per tile.
-pub const DRIVE_TICKS: u64 = 1;
+/// Ticks a walker spends per tile: ten tiles a game minute, so a commute keeps
+/// someone on the street for minutes rather than seconds.
+pub const WALK_TICKS: u64 = 9;
+/// Ticks a car spends per tile: three times a walker.
+pub const DRIVE_TICKS: u64 = 3;
 /// A trip longer than this, on foot, is driven when there is a car.
 pub const DRIVE_FROM: i32 = 60;
 
@@ -90,11 +91,19 @@ pub struct World {
     chats: Vec<(Pos, u64)>,
     dates: Vec<Date>,
     rng: ChaCha8Rng,
+    /// A tile nobody may stand on: the player's. Walkers are held a tile back.
+    blocker: Option<Pos>,
 }
 
 impl World {
     /// The city's people at `start_minute` of the day, placed where their schedules say.
-    pub fn seed(city: &City, people: &People, params: &SimParams, start_minute: u16) -> World {
+    pub fn seed(
+        city: &City,
+        people: &People,
+        params: &SimParams,
+        start_minute: u16,
+        tick: u64,
+    ) -> World {
         let places = Places::derive(city);
         let names = FlavorPack::load(&city.params.flavor)
             .map(|f| f.people)
@@ -121,13 +130,14 @@ impl World {
                 .filter_map(|p| p.night_line.clone().map(|l| (p.id.clone(), l)))
                 .collect(),
             pending: VecDeque::new(),
-            tick: 0,
-            minute: 0,
+            tick,
+            minute: tick / TICKS_PER_MINUTE,
             start_minute,
             open: HashSet::new(),
             chats: Vec::new(),
             dates: Vec::new(),
             rng,
+            blocker: None,
         };
         w.place_everyone(city);
         w.refresh_open();
@@ -156,6 +166,25 @@ impl World {
 
     pub fn is_open(&self, building: BuildingId) -> bool {
         self.open.contains(&building)
+    }
+
+    /// Buildings with someone working inside right now.
+    pub fn open_buildings(&self) -> impl Iterator<Item = BuildingId> + '_ {
+        self.open.iter().copied()
+    }
+
+    /// A building's street doors.
+    pub fn doors(&self, building: BuildingId) -> &[Pos] {
+        self.places
+            .doors
+            .get(&building)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// The tile the player stands on; no walker is placed there.
+    pub fn set_blocker(&mut self, pos: Option<Pos>) {
+        self.blocker = pos;
     }
 
     /// Everyone goes straight to where the clock says, no trips: the seed state.
@@ -409,12 +438,28 @@ impl World {
         (last, None)
     }
 
-    /// Where a person is at `tick`, if on the street.
+    /// Where a person is at `tick`, if on the street. A walker due on the blocked
+    /// tile waits one tile back; a loiterer on it steps out of sight for the moment.
     fn position(&self, i: usize, tick: u64) -> Option<(Pos, Option<CarId>)> {
         match &self.people[i].whereabouts {
             Whereabouts::Inside(_) => None,
-            Whereabouts::At { pos, .. } => Some((*pos, None)),
-            Whereabouts::Travelling(t) => Some(Self::trip_pos(t, tick.saturating_sub(t.depart))),
+            Whereabouts::At { pos, .. } => {
+                if self.blocker == Some(*pos) {
+                    None
+                } else {
+                    Some((*pos, None))
+                }
+            }
+            Whereabouts::Travelling(t) => {
+                let elapsed = tick.saturating_sub(t.depart);
+                let (pos, car) = Self::trip_pos(t, elapsed);
+                if car.is_none() && self.blocker == Some(pos) {
+                    let (back, car) = Self::trip_pos(t, elapsed.saturating_sub(WALK_TICKS));
+                    if back == pos { None } else { Some((back, car)) }
+                } else {
+                    Some((pos, car))
+                }
+            }
         }
     }
 
@@ -856,7 +901,13 @@ mod tests {
     }
 
     fn world(c: &City) -> World {
-        World::seed(c, &People::load().unwrap(), &SimParams::default(), 22 * 60)
+        World::seed(
+            c,
+            &People::load().unwrap(),
+            &SimParams::default(),
+            22 * 60,
+            0,
+        )
     }
 
     /// Ticks from the 22:00 start to `hhmm` on day `day` (day 0 is the first night).

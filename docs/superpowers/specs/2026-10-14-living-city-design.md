@@ -53,8 +53,10 @@ Whereabouts is one of three states:
 - `At { pos, activity }`: standing on a street tile, doing something.
 - `Travelling(trip)`: on a path from A to B with a departure minute.
 
-Speeds in tiles per game minute: walking 30 (1 tile per 3 ticks), driving 90
-(1 tile per tick). A traveller's position is derived from the departure minute
+Speeds in tiles per game minute: walking 10 (1 tile per 9 ticks), driving 30
+(1 tile per 3 ticks). Revised down from 30 and 90 while building: at the faster
+pace a sixty-tile commute took six real seconds and the streets stood empty
+between departure bursts. A traveller's position is derived from the departure minute
 and the speed, so an NPC out of sight costs nothing per tick and one who walks
 into view mid-trip is exactly where the path says. Nobody teleports.
 

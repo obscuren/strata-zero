@@ -19,6 +19,8 @@ pub const RULE_STYLE: Style = Style::new().fg(RULE);
 const BADGE_FG: Color = Color::Rgb(10, 11, 16);
 const TICKS_PER_MINUTE: u64 = 90;
 const START_MINUTE: u64 = 22 * 60;
+/// The minute of the day the game starts at, for the simulation's clock.
+pub const START_MINUTE_OF_DAY: u16 = 22 * 60;
 
 /// The clock at `tick`: 22:00 at tick 0, one minute per ninety ticks, wrapping at midnight.
 pub fn clock_at(tick: u64) -> (u8, u8) {

@@ -9,8 +9,8 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 10] = [
-    "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "clear", "help",
+const COMMANDS: [&str; 11] = [
+    "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "who", "clear", "help",
 ];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
@@ -102,6 +102,27 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             st.character.stat_points = st.character.stat_points.saturating_add(n);
             Ok(format!("points {}", st.character.stat_points))
         }
+        "who" => {
+            let w = st
+                .world
+                .as_ref()
+                .ok_or_else(|| "no city, no people".to_string())?;
+            let (mut out, mut inside, mut driving) = (0, 0, 0);
+            for p in w.people() {
+                match &p.whereabouts {
+                    sim::Whereabouts::Inside(_) => inside += 1,
+                    sim::Whereabouts::At { .. } => out += 1,
+                    sim::Whereabouts::Travelling(t) => {
+                        if t.legs.iter().any(|l| l.car.is_some()) {
+                            driving += 1;
+                        } else {
+                            out += 1;
+                        }
+                    }
+                }
+            }
+            Ok(format!("{out} out · {inside} inside · {driving} driving"))
+        }
         "clear" => {
             let n = st.ground.at(focus.stratum, focus.pos).len();
             st.ground.clear(focus.stratum, focus.pos);
@@ -111,7 +132,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             ))
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · who · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),
@@ -267,5 +288,25 @@ mod tests {
         assert_eq!((st.character.sp, st.character.stat_points), (2, 3));
         assert_eq!(run(&mut st, at, "sp x").unwrap_err(), "sp <points>");
         assert!(run(&mut st, at, "help").unwrap().contains("pts"));
+    }
+
+    #[test]
+    fn who_counts_the_people() {
+        let (mut st, at) = setup();
+        let city = st.city.as_ref().unwrap();
+        st.world = Some(sim::World::seed(
+            city,
+            &st.people,
+            &sim::SimParams::default(),
+            22 * 60,
+            0,
+        ));
+        let msg = run(&mut st, at, "who").unwrap();
+        assert!(
+            msg.contains(" out · ") && msg.contains(" inside · ") && msg.contains(" driving"),
+            "{msg}"
+        );
+        st.world = None;
+        assert_eq!(run(&mut st, at, "who").unwrap_err(), "no city, no people");
     }
 }

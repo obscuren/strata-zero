@@ -37,8 +37,14 @@ pub fn inspector_lines(
     node: Option<&Node>,
     items: &[game::Stack],
     content: &game::Content,
+    person: Option<&sim::Card>,
 ) -> Vec<Line<'static>> {
     let mut out = vec![kv("pos", format!("{},{}  {}", p.x, p.y, stratum.label()))];
+    if let Some(c) = person {
+        out.push(kv("name", c.name.clone()));
+        out.push(kv("profession", c.profession.clone()));
+        out.push(kv("doing", c.doing.clone()));
+    }
     let Some(t) = city.tile(stratum, p) else {
         out.push(kv("terrain", "outside the map"));
         return out;
@@ -160,7 +166,7 @@ mod tests {
         let b = &c.buildings[0];
         let p = b.footprint.center();
         let content = game::Content::load().unwrap();
-        let lines = inspector_lines(&c, StratumKind::Street, p, None, &[], &content);
+        let lines = inspector_lines(&c, StratumKind::Street, p, None, &[], &content, None);
         let text: String = lines.iter().map(|l| l.to_string() + "\n").collect();
         assert!(text.contains(&format!("{},{}", p.x, p.y)));
         assert!(text.contains(b.kind.label()));
@@ -175,7 +181,7 @@ mod tests {
                 qty: 1,
             },
         ];
-        let lines = inspector_lines(&c, StratumKind::Street, p, None, &stacks, &content);
+        let lines = inspector_lines(&c, StratumKind::Street, p, None, &stacks, &content, None);
         let text: String = lines.iter().map(|l| l.to_string() + "\n").collect();
         assert!(
             text.contains("items") && text.contains("3× Copper coil, Dead phone"),
@@ -188,8 +194,42 @@ mod tests {
             None,
             &[],
             &content,
+            None,
         );
         assert!(!off.is_empty());
         assert!(!legend(StratumKind::Undercity).is_empty());
+    }
+
+    #[test]
+    fn the_inspector_reads_a_person() {
+        let content = game::Content::load().unwrap();
+        let city = citygen::Generator::run(citygen::GenParams {
+            seed: 6,
+            size: citygen::SizePreset::Custom { w: 120, h: 60 },
+            districts: 5,
+            ..Default::default()
+        })
+        .unwrap();
+        let card = sim::Card {
+            name: "Juno".into(),
+            profession: "fixer".into(),
+            doing: "holding the corner".into(),
+            line: "I know a guy.".into(),
+            relation: None,
+        };
+        let lines = inspector_lines(
+            &city,
+            StratumKind::Street,
+            Pos::new(5, 5),
+            None,
+            &[],
+            &content,
+            Some(&card),
+        );
+        let text: String = lines.iter().map(|l| l.to_string() + "\n").collect();
+        assert!(
+            text.contains("Juno") && text.contains("fixer") && text.contains("holding the corner"),
+            "{text}"
+        );
     }
 }

@@ -182,6 +182,8 @@ pub struct SidebarView<'a> {
     pub log: &'a MessageLog,
     pub tick: u64,
     pub dev: bool,
+    /// Whoever stands on the focus tile, for the inspector.
+    pub person: Option<&'a sim::Card>,
 }
 
 fn plain(text: impl Into<String>) -> Line<'static> {
@@ -446,6 +448,7 @@ pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) -> V
                     node,
                     v.ground.at(v.stratum, v.focus),
                     v.content,
+                    v.person,
                 )
                 .into_iter()
                 .map(|l| {
@@ -545,6 +548,7 @@ mod tests {
             log: &st.log,
             tick: st.tick,
             dev: st.dev,
+            person: None,
         }
     }
 

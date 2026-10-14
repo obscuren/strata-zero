@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Speeds: walking 30 tiles a game minute, driving 90. 90 ticks a game minute (`hud::clock_at`).
+- Speeds: walking 10 tiles a game minute (a tile every 9 ticks), driving 30 (a tile every 3 ticks). 90 ticks a game minute (`hud::clock_at`). Revised from 30/90 so a commute keeps the street busy for minutes.
 - Pedestrian terrain: Sidewalk, Plaza, Alley, Walkway, Bridge, Stair, Door at cost 1; Road at cost 3. Cars: Road and Bridge at cost 1, Alley at cost 2 (side streets are alleys), a pedestrian crossing (pavement with road on both opposite sides) at 4, nothing else.
 - Paths are computed once per trip, at most four per frame; a trip has not departed until its path exists.
 - Determinism: everything derives from `city.seed` through `ChaCha8Rng`; the same city gives the same people.

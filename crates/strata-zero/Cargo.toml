@@ -12,6 +12,7 @@ path = "src/main.rs"
 unicode-width.workspace = true
 citygen = { path = "../citygen" }
 game = { path = "../game" }
+sim = { path = "../sim" }
 serde.workspace = true
 postcard.workspace = true
 serde_json.workspace = true
