@@ -1,4 +1,4 @@
-# cyberpunk
+# Strata Zero
 
 A terminal roguelike in a full cyberpunk setting. You will play it on foot
 through a multi-level city, and later from inside the Net as well.
@@ -32,14 +32,14 @@ Same seed and parameters always produce a byte-identical city.
 ## Run
 
 ```sh
-cargo run --release -p cyberpunk
+cargo run --release -p strata-zero
 ```
 
 Headless generation, for scripts and tooling:
 
 ```sh
-cargo run --release -p cyberpunk -- gen --seed 42 --size medium --out cities/demo.city
-cargo run --release -p cyberpunk -- gen --seed 42 --size large --json --out /tmp/demo.json
+cargo run --release -p strata-zero -- gen --seed 42 --size medium --out cities/demo.city
+cargo run --release -p strata-zero -- gen --seed 42 --size large --json --out /tmp/demo.json
 ```
 
 Sizes: `small` (160x80), `medium` (240x120), `large` (320x160) or `WxH`.
@@ -51,7 +51,7 @@ WezTerm). Saved cities go to `./cities/*.city`.
 
 ## Keys
 
-**Dev mode** is on by default for now (`DEV_DEFAULT` in `crates/cyberpunk/src/app.rs`)
+**Dev mode** is on by default for now (`DEV_DEFAULT` in `crates/strata-zero/src/app.rs`)
 and shows a `DEV` badge in the header. It unlocks the free camera, stratum
 browsing, the console and the inspect and legend sections. Press `` ` `` to flip it at runtime;
 with it off you are always on foot.
@@ -113,9 +113,9 @@ item, ability, skill, talent, quest and recipe live in `flavor/content.ron`
 ## Layout
 
 ```
-crates/citygen     world model + city generator (no terminal dependencies)
-crates/cyberpunk   the game: ratatui app, screens, renderer, walking and jacking in, the `gen` CLI
-flavor/            names.ron (names, signage glyphs) · style.ron (palettes, glyph sets)
+crates/citygen       world model + city generator (no terminal dependencies)
+crates/strata-zero   the game: ratatui app, screens, renderer, walking and jacking in, the `gen` CLI
+flavor/              names.ron (names, signage glyphs) · style.ron (palettes, glyph sets)
 docs/superpowers/specs   design specs
 docs/superpowers/plans   implementation plans
 ```
