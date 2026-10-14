@@ -1,4 +1,5 @@
-//! Dev console commands: spawn and drop items, give credits, heal, xp, focus, clear a pile.
+//! Dev console commands: spawn and drop items, give credits, heal, xp, focus, count the
+//! people, jump the clock, clear a pile.
 
 use crate::anim::effects::pulse;
 use crate::app::AppState;
@@ -9,8 +10,8 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 11] = [
-    "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "who", "clear", "help",
+const COMMANDS: [&str; 12] = [
+    "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "who", "clock", "clear", "help",
 ];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
@@ -123,6 +124,35 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             }
             Ok(format!("{out} out · {inside} inside · {driving} driving"))
         }
+        "clock" => {
+            // Jumps the clock forward to the next hh:mm and reseeds the city's day there.
+            let usage = "clock <hh:mm>".to_string();
+            let (h, m) = args
+                .first()
+                .and_then(|a| a.split_once(':'))
+                .and_then(|(h, m)| Some((h.parse::<u64>().ok()?, m.parse::<u64>().ok()?)))
+                .filter(|(h, m)| *h < 24 && *m < 60)
+                .ok_or(usage)?;
+            let start = crate::ui::hud::START_MINUTE_OF_DAY as u64;
+            let per_minute = sim::TICKS_PER_MINUTE;
+            let from_start = (h * 60 + m + 1440 - start) % 1440;
+            let now = st.tick / per_minute;
+            let mut minute = now - now % 1440 + from_start;
+            if minute * per_minute < st.tick {
+                minute += 1440;
+            }
+            st.tick = minute * per_minute;
+            if let Some(city) = st.city.as_ref() {
+                st.world = Some(sim::World::seed(
+                    city,
+                    &st.people,
+                    &sim::SimParams::default(),
+                    crate::ui::hud::START_MINUTE_OF_DAY,
+                    st.tick,
+                ));
+            }
+            Ok(format!("{h:02}:{m:02}"))
+        }
         "clear" => {
             let n = st.ground.at(focus.stratum, focus.pos).len();
             st.ground.clear(focus.stratum, focus.pos);
@@ -132,7 +162,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             ))
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · who · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · who · clock <hh:mm> · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),
@@ -308,5 +338,29 @@ mod tests {
         );
         st.world = None;
         assert_eq!(run(&mut st, at, "who").unwrap_err(), "no city, no people");
+    }
+
+    #[test]
+    fn clock_sets_the_hour_and_reseeds_the_day() {
+        let (mut st, at) = setup();
+        let city = st.city.as_ref().unwrap();
+        st.world = Some(sim::World::seed(
+            city,
+            &st.people,
+            &sim::SimParams::default(),
+            22 * 60,
+            0,
+        ));
+        assert_eq!(run(&mut st, at, "clock 23:30").unwrap(), "23:30");
+        assert_eq!(crate::ui::hud::clock_at(st.tick), (23, 30));
+        assert_eq!(st.world.as_ref().unwrap().tick(), st.tick);
+        assert_eq!(st.world.as_ref().unwrap().minute_of_day(), 23 * 60 + 30);
+        assert_eq!(run(&mut st, at, "clock 12:00").unwrap(), "12:00");
+        assert_eq!(crate::ui::hud::clock_at(st.tick), (12, 0));
+        assert_eq!(run(&mut st, at, "clock noon").unwrap_err(), "clock <hh:mm>");
+        assert_eq!(
+            run(&mut st, at, "clock 25:00").unwrap_err(),
+            "clock <hh:mm>"
+        );
     }
 }

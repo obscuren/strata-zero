@@ -792,6 +792,7 @@ impl Screen for MapScreen {
         let people = st.world.as_ref().map(|world| PeopleOverlay {
             world,
             night: hour >= 18 || hour <= 5,
+            vis,
         });
         if let Some(p) = people.as_ref() {
             overlays.push(p);

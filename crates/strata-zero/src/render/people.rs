@@ -1,9 +1,10 @@
 //! The living city on screen: walkers, cars, chats and lit doors inside the bubble.
 
-use crate::render::Rgb;
 use crate::render::style::StylePack;
 use crate::render::viewport::{Overlay, tile_to_screen};
+use crate::render::{Rgb, Visibility};
 use crate::ui::chrome::{CYAN, DIM, MAGENTA, TEXT, head, plain};
+use citygen::Grid;
 use citygen::{City, Pos, Rect as TileRect, StratumKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -28,6 +29,8 @@ fn tint_colour(t: Tint) -> Color {
 pub struct PeopleOverlay<'a> {
     pub world: &'a World,
     pub night: bool,
+    /// The player's sight when on foot; the free camera sees everyone.
+    pub vis: Option<&'a Grid<Visibility>>,
 }
 
 impl Overlay for PeopleOverlay<'_> {
@@ -63,6 +66,17 @@ impl Overlay for PeopleOverlay<'_> {
             let Some((sx, sy)) = tile_to_screen(area, origin, m.pos) else {
                 continue;
             };
+            // On foot, people and moving cars are seen only in sight; a parked car is
+            // remembered like a pile.
+            let seen = match self.vis {
+                None => Visibility::Visible,
+                Some(v) => v.get(m.pos).copied().unwrap_or(Visibility::Unseen),
+            };
+            let remembered_car = matches!(m.kind, MoverKind::Car { parked: true, .. })
+                && seen == Visibility::Remembered;
+            if seen != Visibility::Visible && !remembered_car {
+                continue;
+            }
             match m.kind {
                 MoverKind::Walker { tint, .. } => {
                     let fg = tint.map(tint_colour).unwrap_or(DIM);
@@ -70,7 +84,11 @@ impl Overlay for PeopleOverlay<'_> {
                 }
                 MoverKind::Car { hue, parked, .. } => {
                     let colour = style.hue(hue);
-                    let fg = if parked { colour.scale(0.55) } else { colour };
+                    let fg = if parked || remembered_car {
+                        colour.scale(if remembered_car { 0.35 } else { 0.55 })
+                    } else {
+                        colour
+                    };
                     if !parked && self.night {
                         let c = &mut buf[(sx, sy)];
                         let bg = match c.bg {
@@ -161,6 +179,7 @@ mod tests {
         PeopleOverlay {
             world: &w,
             night: true,
+            vis: None,
         }
         .draw(&c, StratumKind::Street, origin, area, t, &mut buf, &style);
         let ats = buf
@@ -186,6 +205,7 @@ mod tests {
         PeopleOverlay {
             world: &w,
             night: false,
+            vis: None,
         }
         .draw(
             &c,
@@ -213,9 +233,73 @@ mod tests {
         PeopleOverlay {
             world: &w,
             night: true,
+            vis: None,
         }
         .draw(&c, StratumKind::Net, origin, area, t, &mut net, &style);
         assert!(net.content.iter().all(|cell| cell.symbol() == " "));
+    }
+
+    #[test]
+    fn on_foot_only_people_in_sight_are_drawn() {
+        let c = city();
+        let mut w = World::seed(
+            &c,
+            &People::load().unwrap(),
+            &SimParams::default(),
+            22 * 60,
+            0,
+        );
+        let mut t = 0;
+        while t < 60 * TICKS_PER_MINUTE {
+            t += TICKS_PER_MINUTE;
+            w.advance(&c, t);
+            w.path_some(&c, usize::MAX);
+        }
+        let whole = Rect::new(0, 0, c.size.w as u16, c.size.h as u16);
+        let origin = citygen::Pos::new(0, 0);
+        let style = StylePack::load().unwrap();
+        let mut all = Buffer::empty(whole);
+        PeopleOverlay {
+            world: &w,
+            night: true,
+            vis: None,
+        }
+        .draw(&c, StratumKind::Street, origin, whole, t, &mut all, &style);
+        let (i, _) = all
+            .content
+            .iter()
+            .enumerate()
+            .find(|(_, cell)| cell.symbol() == "@")
+            .expect("a walker");
+        let seen = citygen::Pos::new(
+            (i % whole.width as usize) as i32,
+            (i / whole.width as usize) as i32,
+        );
+        let mut vis = Grid::filled(c.size, Visibility::Unseen);
+        vis[seen] = Visibility::Visible;
+        let mut buf = Buffer::empty(whole);
+        PeopleOverlay {
+            world: &w,
+            night: true,
+            vis: Some(&vis),
+        }
+        .draw(&c, StratumKind::Street, origin, whole, t, &mut buf, &style);
+        let ats: Vec<usize> = buf
+            .content
+            .iter()
+            .enumerate()
+            .filter(|(_, cell)| cell.symbol() == "@")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(ats, vec![i], "only the walker in sight is drawn");
+        assert_eq!(
+            buf.content
+                .iter()
+                .filter(|cell| cell.symbol() == "▬")
+                .count(),
+            0,
+            "no car stands in sight"
+        );
     }
 
     #[test]
