@@ -30,7 +30,7 @@ const REVEAL_TICKS: u64 = 20;
 /// Cells a log line's clock stamp takes, continuation rows hang under the text.
 const STAMP_W: usize = 7;
 
-/// The right column's width: the main tab row needs 38 cells.
+/// The right column's width: the main tab row needs 39 cells.
 pub fn width(_total: u16) -> u16 {
     40
 }
@@ -254,10 +254,14 @@ pub fn here_summary(v: &SidebarView) -> String {
     } else if n > 1 {
         parts.push(format!("{n} items"));
     }
-    if v.stratum != StratumKind::Net
-        && v.city
-            .tile(v.stratum, v.focus)
-            .is_some_and(|t| t.feature == Some(Feature::Node(NodeKind::Terminal)))
+    if v.stratum == StratumKind::Net {
+        if let Some(id) = Digital::node_under(v.city, v.stratum, v.focus) {
+            parts.push(v.city.net.node(id).kind.label().to_string());
+        }
+    } else if v
+        .city
+        .tile(v.stratum, v.focus)
+        .is_some_and(|t| t.feature == Some(Feature::Node(NodeKind::Terminal)))
     {
         parts.push("terminal".to_string());
     }
@@ -410,11 +414,11 @@ fn draw_log(log: &MessageLog, tick: u64, area: Rect, buf: &mut Buffer) {
 }
 
 /// Draws the column: the active panes in order within their budget, a light rule
-/// before every pane but the first. Returns whether the LOG pane got any rows, so
-/// the map can toast when it did not.
-pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) -> bool {
+/// before every pane but the first. Returns the panes that got rows, so the tabs can
+/// dim a squeezed-out one and the map can toast when LOG is missing.
+pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) -> Vec<Section> {
     if area.width == 0 || area.height == 0 {
-        return false;
+        return Vec::new();
     }
     for y in area.y..area.bottom() {
         for x in area.x..area.right() {
@@ -468,10 +472,10 @@ pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) -> b
     }
     let needs: Vec<(Section, u16)> = built.iter().map(|(s, _, n)| (*s, *n)).collect();
     let mut y = area.y;
-    let mut log_drawn = false;
+    let mut drawn = Vec::new();
     let mut first = true;
     for (s, mut rows) in budget(&needs, area.height) {
-        log_drawn |= s == Section::Log;
+        drawn.push(s);
         if !first {
             Paragraph::new(separator(w)).render(Rect::new(area.x, y, w, 1), buf);
             y += 1;
@@ -506,7 +510,7 @@ pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) -> b
         }
         y += rows;
     }
-    log_drawn
+    drawn
 }
 
 #[cfg(test)]
@@ -850,5 +854,39 @@ mod tests {
         let text = draw_to(&view(&st, pos, k), &flags, width(100), 3);
         assert_eq!(text.matches('x').count(), 0, "{text}");
         assert!(text.contains("short"), "{text}");
+    }
+
+    #[test]
+    fn here_summary_names_the_net_node() {
+        let st = state();
+        let city = st.city.as_ref().unwrap();
+        let node = &city.net.nodes[0];
+        let v = view(&st, node.cyber, StratumKind::Net);
+        assert!(here_summary(&v).contains(node.kind.label()));
+    }
+
+    #[test]
+    fn draw_reports_the_panes_it_drew() {
+        let mut st = state();
+        st.dev = true;
+        st.tick += 200;
+        for s in [Section::Inspect, Section::Legend] {
+            st.sidebar.set(s, true);
+        }
+        st.sidebar.set(Section::Log, false);
+        let (k, pos) = {
+            let p = st.player.as_ref().unwrap();
+            (p.stratum, p.pos)
+        };
+        let mut t = Terminal::new(TestBackend::new(width(100), 22)).unwrap();
+        let mut drawn = Vec::new();
+        t.draw(|f| {
+            drawn = draw(&view(&st, pos, k), &st.sidebar, f.area(), f.buffer_mut());
+        })
+        .unwrap();
+        assert!(
+            drawn.contains(&Section::Map) && !drawn.contains(&Section::Legend),
+            "{drawn:?}"
+        );
     }
 }

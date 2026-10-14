@@ -30,7 +30,7 @@ At every size from 100 by 30 up, both modes:
 ```
 
 Columns: the right column is `R` = 40 cells wide at every terminal width (the
-main tab row needs 38 cells). One cell of light vertical rule `│` separates it from the
+main tab row needs 39 cells). One cell of light vertical rule `│` separates it from the
 map, which takes the rest (`L = W - R - 1`).
 
 Rows: four band rows, one heavy rule, the main area, one heavy rule, two
@@ -46,8 +46,9 @@ keeps its own background.
 
 **Row 1, left**: ` [DEV] ` badge in amber when dev mode is on (same badge as
 today), then `{HANDLE} :: LVL {level} :: ¤ {credits}` with the handle in cyan
-bold, labels and `::` dim, values in the text colour. In dev mode `:: seed
-{seed}` and, when the fps setting is on, `:: {fps} fps` follow, dimmed.
+bold, labels and `::` dim, values in the text colour. In dev mode `:: {fps}
+fps` (when the fps setting is on) and then `:: seed {seed}` follow, dimmed,
+so a long seed is what gets cut.
 
 **Row 1, right**: the location (same rule as today: building name, else
 district, else `the outskirts`, then ` · ` and the stratum; subnet owner in
@@ -76,7 +77,8 @@ rest of the column but the last cell, cyan, magenta when over capacity.
 **Row 3, right**: `[F5]Inspect [F6]Legend` in dev mode, empty otherwise.
 
 **Row 4, right**: `[F1]Here [F2]Quest [F3]Map [F4]Log`. A tab that is on
-reads `Here*` in cyan bold; one that is off reads `Here` dimmed. The key
+reads `Here*` in cyan bold, or dimmed when its pane got no rows; one that
+is off reads `Here` dimmed. The key
 inside the brackets is cyan, the brackets dim, in both states.
 
 ## Right column panes
@@ -120,9 +122,14 @@ minimap draws squeezed rather than vanishing.
   mode; ` · overburdened` in magenta appended when over capacity.
 - `HERE:` starting at 40% of the width: a summary of the focus tile. Parts
   joined by ` · `: `{n} item` or `{n} items` when stacks lie there,
-  `terminal` when one is on the tile, each connector's kind label; `nothing`
+  `terminal` when one is on the tile (the node's kind in the Net), each
+  connector's kind label; `nothing`
   when there are no parts.
 - The verbs, right-aligned, keys inside brackets in cyan and words dimmed.
+  When they would leave the HERE zone under twenty cells, HERE starts
+  earlier than 40%.
+  When they would leave the HERE zone under twenty cells, HERE starts
+  earlier than 40%.
   Walk: `[space]act [enter]jack [v]iew [m]sgs [?]keys`. Explore: `[w]alk
   [r]egen [g]configure [v]iew [m]sgs [?]keys`.
 
@@ -153,7 +160,10 @@ bars, the old action bar hints.
 
 - At 100 by 30: `R` is 40, the map is 59 wide, bars are 43 cells, the main
   tab row fits with one cell to spare, and the map keeps 22 rows.
-- Any text that would cross a zone or column edge is cut with `…`.
+- Any text that would cross a zone or column edge is cut with `…`, counting
+  cells, so a wide glyph never straddles a cut.
+- The map screen itself falls back to the too-small notice under 41 by 8,
+  independently of the app's 100 by 30 guard.
 - The CARRY bar with a zero capacity draws empty.
 - A quest with zero objectives draws `no active quest`.
 - Clock stamps use the same wrap at midnight as the header clock.

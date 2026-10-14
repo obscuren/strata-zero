@@ -677,6 +677,10 @@ impl Screen for MapScreen {
             );
             return;
         };
+        if area.width < 41 || area.height < 8 {
+            crate::app::draw_too_small(f);
+            return;
+        }
         let r = layout(area);
         let map = r.map;
         self.last_map.set(map);
@@ -829,9 +833,6 @@ impl Screen for MapScreen {
             )),
             r.band_r[1],
         );
-        let (dev_tabs, tabs) = hud::tab_rows(&st.sidebar, st.dev);
-        f.render_widget(Paragraph::new(dev_tabs), r.band_r[2]);
-        f.render_widget(Paragraph::new(tabs), r.band_r[3]);
         let cross = r.vrule_x - area.x;
         f.render_widget(
             Paragraph::new(hud::rule_row(area.width, cross, '┳')),
@@ -861,7 +862,11 @@ impl Screen for MapScreen {
             dev: st.dev,
         };
         let here = sidebar::here_summary(&view);
-        let log_drawn = sidebar::draw(&view, &st.sidebar, r.side, f.buffer_mut());
+        let drawn = sidebar::draw(&view, &st.sidebar, r.side, f.buffer_mut());
+        let log_drawn = drawn.contains(&Section::Log);
+        let (dev_tabs, tabs) = hud::tab_rows(&st.sidebar, st.dev, &drawn);
+        f.render_widget(Paragraph::new(dev_tabs), r.band_r[2]);
+        f.render_widget(Paragraph::new(tabs), r.band_r[3]);
         // Footer.
         let jacked = st.player.as_ref().is_some_and(|p| p.jacked_in());
         let mut status_spans = match (self.mode, jacked) {
@@ -1949,5 +1954,46 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn tiny_frame_falls_back_to_the_notice() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        s.update(&mut st, &[]);
+        for (w, h) in [(30u16, 5u16), (41, 8), (40, 30), (100, 7)] {
+            let text = draw_screen(&s, &st, w, h);
+            assert!(
+                text.contains("resize") || (w >= 41 && h >= 8),
+                "{w}x{h}: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn squeezed_out_pane_tab_reads_dim() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        for sec in Section::ALL {
+            st.sidebar.set(sec, true);
+        }
+        st.sidebar.set(Section::Log, false);
+        let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let buf = t.backend().buffer();
+        let row = 2u16;
+        let cells: Vec<String> = (0..100u16)
+            .map(|x| buf[(x, row)].symbol().to_string())
+            .collect();
+        let x = (0..cells.len() - 7)
+            .find(|&i| cells[i..i + 7].concat() == "Legend*")
+            .expect("legend tab") as u16;
+        assert_eq!(
+            buf[(x, row)].fg,
+            crate::ui::chrome::DIM,
+            "{}",
+            cells.concat()
+        );
     }
 }

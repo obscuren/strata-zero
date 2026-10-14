@@ -7,6 +7,7 @@ use crate::ui::sidebar::{Section, Sidebar};
 use citygen::{City, Pos, StratumKind, SubnetOwner};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use unicode_width::UnicodeWidthChar;
 
 pub const SLOTS: usize = 5;
 pub const AMBER: Color = Color::Rgb(255, 200, 80);
@@ -32,15 +33,34 @@ pub fn clock_glyph(hour: u8) -> char {
     }
 }
 
+fn cell_width(c: char) -> usize {
+    c.width().unwrap_or(0)
+}
+
+/// The first `max` cells of `s`, never splitting a wide glyph.
+fn take_cells(s: &str, max: usize) -> String {
+    let mut out = String::new();
+    let mut used = 0;
+    for c in s.chars() {
+        let w = cell_width(c);
+        if used + w > max {
+            break;
+        }
+        used += w;
+        out.push(c);
+    }
+    out
+}
+
 /// Cuts `s` to `max` cells, ending in `…` when it was longer.
 pub fn cut(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
+    if s.chars().map(cell_width).sum::<usize>() <= max {
         return s.to_string();
     }
     if max == 0 {
         return String::new();
     }
-    let mut out: String = s.chars().take(max - 1).collect();
+    let mut out = take_cells(s, max - 1);
     out.push('…');
     out
 }
@@ -69,8 +89,11 @@ pub fn cut_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
     if width_of(&spans) <= max {
         return spans;
     }
+    if max == 0 {
+        return Vec::new();
+    }
     let mut out = Vec::new();
-    let mut left = max.saturating_sub(1);
+    let mut left = max - 1;
     for sp in spans {
         let w = sp.width();
         if w <= left {
@@ -78,8 +101,10 @@ pub fn cut_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
             out.push(sp);
             continue;
         }
-        let kept: String = sp.content.chars().take(left).collect();
-        out.push(Span::styled(kept, sp.style));
+        let kept = take_cells(&sp.content, left);
+        if !kept.is_empty() {
+            out.push(Span::styled(kept, sp.style));
+        }
         out.push(Span::styled("…", sp.style));
         return out;
     }
@@ -123,10 +148,10 @@ pub fn status_line(s: &Status, width: u16) -> Line<'static> {
     spans.push(dim(" :: ¤ "));
     spans.push(text(s.credits.to_string()));
     if s.dev {
-        spans.push(dim(format!(" :: seed {}", s.seed)));
         if let Some(fps) = s.fps {
             spans.push(dim(format!(" :: {fps:.0} fps")));
         }
+        spans.push(dim(format!(" :: seed {}", s.seed)));
     }
     padded(cut_spans(spans, width as usize), width as usize)
 }
@@ -206,13 +231,13 @@ pub fn carry_row(weight: f32, cap: f32, width: u16) -> Line<'static> {
     padded(spans, width as usize)
 }
 
-fn tab(key: &str, label: &str, on: bool) -> Vec<Span<'static>> {
+fn tab(key: &str, label: &str, on: bool, shown: bool) -> Vec<Span<'static>> {
     let word = if on {
         format!("{label}*")
     } else {
         label.to_string()
     };
-    let style = if on {
+    let style = if on && shown {
         Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(DIM)
@@ -233,8 +258,9 @@ fn capitalised(s: &str) -> String {
     }
 }
 
-/// (dev row, main row); the dev row is blank outside dev mode.
-pub fn tab_rows(flags: &Sidebar, dev: bool) -> (Line<'static>, Line<'static>) {
+/// (dev row, main row); the dev row is blank outside dev mode. A tab that is on but
+/// whose pane got no rows (`drawn` lacks it) keeps its star and dims.
+pub fn tab_rows(flags: &Sidebar, dev: bool, drawn: &[Section]) -> (Line<'static>, Line<'static>) {
     let row = |sections: &[Section], first: usize| {
         let mut spans = vec![Span::raw(" ")];
         for (i, s) in sections.iter().enumerate() {
@@ -245,6 +271,7 @@ pub fn tab_rows(flags: &Sidebar, dev: bool) -> (Line<'static>, Line<'static>) {
                 &format!("F{}", first + i),
                 &capitalised(s.label()),
                 flags.is_on(*s),
+                drawn.contains(s),
             ));
         }
         Line::from(spans)
@@ -302,7 +329,9 @@ pub fn footer_status(
     let w = width as usize;
     let verbs = verb_spans(verbs);
     let verbs_x = w.saturating_sub(width_of(&verbs) + 1);
-    let here_x = w * 40 / 100;
+    // HERE starts at 40% of the width, or earlier when the verbs would leave it under
+    // twenty cells.
+    let here_x = (w * 40 / 100).min(verbs_x.saturating_sub(21));
     let mut zone1 = vec![dim(" STATUS: ")];
     zone1.extend(status);
     let mut spans = cut_spans(zone1, here_x.saturating_sub(1));
@@ -452,7 +481,7 @@ mod tests {
         .to_string();
         assert!(d.starts_with("  DEV  "), "{d:?}");
         assert!(
-            d.contains("VEX :: LVL 2 :: ¤ 320 :: seed 7 :: 30 fps"),
+            d.contains("VEX :: LVL 2 :: ¤ 320 :: 30 fps :: seed 7"),
             "{d:?}"
         );
         let no_fps = status_line(
@@ -526,7 +555,7 @@ mod tests {
     fn tab_rows_fit_the_narrow_column() {
         let mut flags = Sidebar::default();
         flags.set(Section::Quest, false);
-        let (dev, main) = tab_rows(&flags, true);
+        let (dev, main) = tab_rows(&flags, true, &Section::ALL);
         let m = main.to_string();
         assert_eq!(
             m.trim_end(),
@@ -535,7 +564,7 @@ mod tests {
         );
         assert_eq!(m.chars().count(), 38);
         assert_eq!(dev.to_string().trim_end(), " [F5]Inspect [F6]Legend");
-        let (dev, _) = tab_rows(&flags, false);
+        let (dev, _) = tab_rows(&flags, false, &Section::ALL);
         assert_eq!(dev.to_string().trim(), "");
     }
 
@@ -564,6 +593,8 @@ mod tests {
             narrow.trim_end().ends_with("[?]keys") && narrow.matches('…').count() == 2,
             "{narrow:?}"
         );
+        // At 100 columns the HERE zone keeps at least twenty cells even with the long explore verbs.
+        assert!(narrow.contains("HERE: yyyyyyyyyyyyy"), "{narrow:?}");
         let slots = vec![
             Slot {
                 name: "Netscan".into(),
@@ -611,5 +642,46 @@ mod tests {
             location(&c, StratumKind::Net, Pos::new(-5, -5)),
             format!("{} · Net", c.name)
         );
+    }
+
+    #[test]
+    fn cut_counts_cells_not_chars() {
+        assert_eq!(cut("⚡⚡⚡", 4), "⚡…");
+        assert_eq!(cut("⚡⚡", 4), "⚡⚡");
+        assert_eq!(cut("abc", 0), "");
+        let spans = cut_spans(vec![Span::raw("⚡⚡⚡")], 4);
+        assert_eq!(width_of(&spans), 3, "{spans:?}");
+        assert!(cut_spans(vec![Span::raw("abcd")], 0).is_empty());
+        assert_eq!(width_of(&cut_spans(vec![Span::raw("abcd")], 1)), 1);
+    }
+
+    #[test]
+    fn status_line_keeps_fps_before_the_seed() {
+        let s = status_line(
+            &Status {
+                dev: true,
+                seed: 7_167_344_703_327_711_647,
+                fps: Some(27.0),
+                ..status()
+            },
+            59,
+        )
+        .to_string();
+        assert!(s.contains(":: 27 fps :: seed 71673"), "{s:?}");
+        assert_eq!(s.chars().count(), 59);
+    }
+
+    #[test]
+    fn squeezed_pane_tab_is_dim() {
+        let flags = Sidebar::default();
+        let (_, main) = tab_rows(
+            &flags,
+            false,
+            &[Section::Here, Section::Quest, Section::Log],
+        );
+        let map = main.spans.iter().find(|sp| sp.content == "Map*").unwrap();
+        assert_eq!(map.style.fg, Some(DIM), "{main:?}");
+        let here = main.spans.iter().find(|sp| sp.content == "Here*").unwrap();
+        assert_eq!(here.style.fg, Some(CYAN), "{main:?}");
     }
 }

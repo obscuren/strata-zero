@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Right column `R` = 40 when the terminal is at least 120 wide, else 36; map `L = W - R - 1`; the vertical rule `│` is at `x = L`.
+- Right column `R` = 40 at every width (the spec's 36 under 120 columns was corrected during execution: the tab row needs 39 cells); map `L = W - R - 1`; the vertical rule `│` is at `x = L`.
 - Rows: 4 band rows, heavy rule (`━` with `┳`), main, heavy rule (`━` with `┻`), 2 footer rows. Minimum 100 by 30 keeps 22 map rows.
 - Bars: `" {label:<5} {num:>7} "` then `█`/`░` filling `width - 16` cells; count `round(cells * cur / max)`, 0 for max 0.
 - Tabs: `[F1]Here*` on (cyan bold), `[F1]Here` off (dim); keys cyan, brackets dim.
@@ -23,9 +23,9 @@
 
 ## Review Focus
 
-1. A terminal exactly 100 wide: the main tab row must fit the 36-cell column without cutting `[F4]Log*` (Task 1 `tab_rows_fit_the_narrow_column`).
+1. A terminal exactly 100 wide: the main tab row must fit the 40-cell column without cutting `[F4]Log*` (Task 1 `tab_rows_fit_the_narrow_column`).
 2. A handle longer than the status line leaves for it, with dev readouts on: the row must cut with `…` and never exceed the column (Task 1 `status_line_cuts_to_width`).
-3. A location long enough to reach the clock on the 36-cell column: one cell must separate them (Task 1 `location_line_keeps_the_clock`).
+3. A location long enough to reach the clock on the 40-cell column: one cell must separate them (Task 1 `location_line_keeps_the_clock`).
 4. The LOG pane as the first pane (HERE, QUEST and MAP off): no separator row and the first entry on the first row (Task 2 `first_pane_has_no_separator`).
 5. F5 outside dev mode and F7 anywhere: no toggle, no panic, no log line (Task 3 `f_keys_toggle_sections`).
 
