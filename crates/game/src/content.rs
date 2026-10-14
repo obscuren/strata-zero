@@ -529,7 +529,7 @@ mod tests {
             vec![
                 Fx::Bolt {
                     colour: (255, 240, 150),
-                    ticks: 12
+                    ticks: 36
                 },
                 Fx::Mark {
                     colour: (255, 240, 150),

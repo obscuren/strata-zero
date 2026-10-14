@@ -9,7 +9,7 @@ and a set of interface fixes Jeffrey listed after playing.
 
 ```ron
 Ability(id: "arc_trace", name: "Arc Trace", cooldown: 450, kind: Active(Trace(radius: 20)),
-        fx: [Bolt(colour: (255, 240, 150), ticks: 12), Mark(colour: (255, 240, 150), ticks: 600)],
+        fx: [Bolt(colour: (255, 240, 150), ticks: 36), Mark(colour: (255, 240, 150), ticks: 600)],
         desc: "The deck dumps a charge into the local grid. It arcs along whatever will carry it, lights every node it finds, and leaves them burning on your map for a while."),
 ```
 
@@ -37,7 +37,9 @@ radius. `FxInstance` gains `targets: Vec<Pos>`, empty for other abilities.
   ignores walls and sight: it draws over unseen tiles.
 - `Mark { colour, ticks }`: every target tile draws `◉` in the colour pulsed
   with `pulse(tick, 20)` on a background of the colour at 20%, DIM cleared,
-  whatever the tile's visibility, for `ticks`.
+  whatever the tile's visibility, for `ticks`. A Mark fired alongside a Bolt
+  lights when the Bolt lands: `perform` sets its `started` to the fire tick
+  plus the Bolt's `ticks`.
 
 Both only draw on the instance's stratum. `until` is `started + ticks` for
 both.

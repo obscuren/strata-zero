@@ -63,13 +63,26 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
             }
             _ => Vec::new(),
         };
+        // A mark lights when the arc lands: it waits out any bolt fired with it.
+        let landing = ability
+            .fx
+            .iter()
+            .find_map(|f| match f {
+                game::Fx::Bolt { ticks, .. } => Some(*ticks),
+                _ => None,
+            })
+            .unwrap_or(0);
         for fx in &ability.fx {
+            let started = match fx {
+                game::Fx::Mark { .. } => st.tick + landing,
+                _ => st.tick,
+            };
             st.fx.push(FxInstance {
                 fx: fx.clone(),
                 stratum,
                 origin: pos,
                 radius,
-                started: st.tick,
+                started,
                 revealed: revealed.clone(),
                 targets: targets.clone(),
             });
@@ -181,6 +194,11 @@ mod tests {
             "nodes within 20 tiles of the spawn"
         );
         assert_eq!(st.fx[3].targets, st.fx[4].targets);
+        assert_eq!(
+            (st.fx[3].started, st.fx[4].started),
+            (st.tick, st.tick + 36),
+            "the marks light when the arc lands"
+        );
         let (k, pos) = (st.fx[3].stratum, st.fx[3].origin);
         let city = st.city.as_ref().unwrap();
         assert!(
