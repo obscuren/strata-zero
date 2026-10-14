@@ -2,6 +2,7 @@
 
 use crate::messages::{Kind, MessageLog};
 use crate::render::style::StylePack;
+use crate::screens::deck::Tab;
 use crate::term::{TerminalGuard, install_panic_hook};
 use crate::ui::sidebar::Sidebar;
 use anyhow::Result;
@@ -44,6 +45,9 @@ pub struct AppState {
     pub fx: Vec<FxInstance>,
     /// Set when the screen should be repainted in full, as after a glitch kick.
     pub repaint: bool,
+    /// Where the deck was last: its tab and the selected row per tab.
+    pub deck_tab: Tab,
+    pub deck_rows: [usize; 9],
     /// What happened, newest last.
     pub log: MessageLog,
     /// Which sidebar sections are on.
@@ -104,6 +108,8 @@ impl AppState {
             ground: game::Ground::default(),
             fx: Vec::new(),
             repaint: false,
+            deck_tab: Tab::Skills,
+            deck_rows: [0; 9],
             log: MessageLog::default(),
             sidebar: Sidebar::default(),
         }

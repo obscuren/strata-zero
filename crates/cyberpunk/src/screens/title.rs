@@ -3,8 +3,8 @@
 use crate::anim::effects::typewriter;
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::render::Rgb;
-use crate::screens::configure::Configure;
 use crate::screens::files::Files;
+use crate::screens::generating::Generating;
 use crate::ui::logo::{self, Logo};
 use crate::ui::menu::{Menu, MenuView};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -26,7 +26,7 @@ impl Title {
     pub fn new(tick: u64) -> Self {
         Title {
             menu: Menu::new(
-                vec!["NEW CITY".into(), "LOAD CITY".into(), "QUIT".into()],
+                vec!["NEW GAME".into(), "LOAD GAME".into(), "QUIT".into()],
                 tick + 20,
             ),
             opened: tick,
@@ -43,9 +43,15 @@ impl Screen for Title {
                 KeyCode::Char('q') | KeyCode::Esc => return ScreenCmd::Quit,
                 KeyCode::Enter => {
                     return match self.menu.selected {
-                        0 => ScreenCmd::Switch {
-                            to: Box::new(Configure::new(st.params.clone(), st.tick)),
-                            fx: TransitionKind::Glitch,
+                        0 => match Generating::new(st.params.clone(), st.tick) {
+                            Ok(next) => ScreenCmd::Switch {
+                                to: Box::new(next),
+                                fx: TransitionKind::Glitch,
+                            },
+                            Err(e) => {
+                                st.warn(e.to_string());
+                                ScreenCmd::Stay
+                            }
                         },
                         1 => ScreenCmd::Push {
                             to: Box::new(Files::load(st.tick)),
@@ -143,7 +149,7 @@ mod tests {
         t.draw(|f| title.draw(&st, f)).unwrap();
         let text = buffer_text(t.backend().buffer());
         assert!(
-            text.contains("NEW CITY") && text.contains("LOAD CITY") && text.contains("QUIT"),
+            text.contains("NEW GAME") && text.contains("LOAD GAME") && text.contains("QUIT"),
             "{text}"
         );
         assert!(text.contains('█'));
@@ -174,5 +180,27 @@ mod tests {
             ),
             "load is pushed over the title"
         );
+    }
+
+    #[test]
+    fn new_game_generates_at_once() {
+        let mut st = AppState::new();
+        let mut t = Title::new(0);
+        assert!(
+            matches!(
+                t.update(&mut st, &[key(KeyCode::Enter)]),
+                ScreenCmd::Switch {
+                    fx: TransitionKind::Glitch,
+                    ..
+                }
+            ),
+            "new game goes straight to generation"
+        );
+        let mut t = Title::new(0);
+        t.update(&mut st, &[key(KeyCode::Down)]);
+        assert!(matches!(
+            t.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Push { .. }
+        ));
     }
 }

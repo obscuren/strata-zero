@@ -17,8 +17,8 @@ use ratatui::widgets::{Paragraph, Widget};
 
 const ITEMS: [&str; 6] = [
     "RESUME",
-    "SAVE CITY",
-    "LOAD CITY",
+    "SAVE GAME",
+    "LOAD GAME",
     "SETTINGS",
     "QUIT TO TITLE",
     "QUIT GAME",
@@ -159,7 +159,12 @@ mod tests {
         t.draw(|f| p.draw(&st, f)).unwrap();
         let text = buffer_text(t.backend().buffer());
         assert!(
-            text.contains("PAUSED") && text.contains("RESUME") && text.contains("QUIT GAME"),
+            text.contains("PAUSED")
+                && text.contains("RESUME")
+                && text.contains("SAVE GAME")
+                && text.contains("LOAD GAME")
+                && text.contains("QUIT GAME")
+                && !text.contains("CITY"),
             "{text}"
         );
         assert!(matches!(
