@@ -6,8 +6,6 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 /// `LABEL  ▮▮▮▮▯▯  2 left`, or `over by N` in magenta when `left` is negative.
-// The wizard's STATS and SKILLS steps read this; until they land it has no caller.
-#[allow(dead_code)]
 pub fn meter(label: &str, left: i64, total: u32, colour: Rgb) -> Line<'static> {
     let total_i = total as i64;
     let used = (total_i - left).clamp(0, total_i) as usize;

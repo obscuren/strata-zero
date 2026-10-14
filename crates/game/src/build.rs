@@ -195,11 +195,13 @@ impl Build {
         b
     }
 
-    fn points_total(&self, c: &Content) -> u32 {
+    /// The whole points pool this build draws on.
+    pub fn points_total(&self, c: &Content) -> u32 {
         self.pools.map_or(c.creation.stat_points, |p| p.0)
     }
 
-    fn sp_total(&self, c: &Content) -> u32 {
+    /// The whole SP pool this build draws on.
+    pub fn sp_total(&self, c: &Content) -> u32 {
         self.pools.map_or(c.creation.sp, |p| p.1)
     }
 

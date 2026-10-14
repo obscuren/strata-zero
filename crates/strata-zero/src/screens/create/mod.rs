@@ -7,23 +7,29 @@
 pub mod chooser;
 mod name;
 mod pick;
+mod skills;
+mod stats;
 mod summary;
 
-use crate::anim::effects::pulse;
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
+use crate::render::Rgb;
 use crate::screens::generating::Generating;
 use crate::screens::title::Title;
-use crate::ui::chrome::{CYAN, CYAN_RGB, DIM, FAINT, MAGENTA, RULE, TEXT, solid};
+use crate::ui::chrome::{CYAN, CYAN_RGB, DIM, FAINT, MAGENTA, MAGENTA_RGB, RULE, solid};
 use crate::ui::logo::{self, Logo};
 use crossterm::event::{KeyCode, KeyEvent};
-use game::{Build, Character, Stat, Step};
+use game::{Build, CategoryId, Character, Stat, Step};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
+use std::collections::BTreeSet;
 use unicode_width::UnicodeWidthStr;
+
+/// Ticks a bought segment or row stays lit.
+pub const FLASH_TICKS: u64 = 6;
 
 /// How long a refusal stays in the footer.
 pub const NOTICE_TICKS: u64 = 90;
@@ -31,14 +37,18 @@ pub const NOTICE_TICKS: u64 = 90;
 pub const TALL: u16 = 36;
 
 /// Each stat's colour, the HUD's where they overlap.
-pub(crate) fn stat_colour(s: Stat) -> Color {
+pub(crate) fn stat_rgb(s: Stat) -> Rgb {
     match s {
-        Stat::Body => Color::Rgb(120, 255, 120),
-        Stat::Reflex => CYAN,
-        Stat::Tech => Color::Rgb(230, 180, 60),
-        Stat::Cool => MAGENTA,
-        Stat::Net => Color::Rgb(110, 150, 255),
+        Stat::Body => Rgb(120, 255, 120),
+        Stat::Reflex => CYAN_RGB,
+        Stat::Tech => Rgb(230, 180, 60),
+        Stat::Cool => MAGENTA_RGB,
+        Stat::Net => Rgb(110, 150, 255),
     }
+}
+
+pub(crate) fn stat_colour(s: Stat) -> Color {
+    stat_rgb(s).to_color()
 }
 
 /// The wizard: which step is up, where each list's cursor sits, and the footer notice.
@@ -50,6 +60,12 @@ pub struct Create {
     changed: u64,
     cursor: [usize; 6],
     notice: Option<(String, u64)>,
+    /// Unfolded categories on the SKILLS board.
+    open: BTreeSet<CategoryId>,
+    /// A board row lit after a buy, until the tick.
+    flash: Option<(usize, u64)>,
+    /// A stat whose newest segment is lit after a buy, until the tick.
+    stat_flash: Option<(Stat, u64)>,
 }
 
 /// The two panes a step draws into.
@@ -66,9 +82,13 @@ impl Create {
             changed: tick,
             cursor: [0; 6],
             notice: None,
+            open: BTreeSet::new(),
+            flash: None,
+            stat_flash: None,
         };
         if let Some(b) = &st.build {
             c.sync_cursor(st, b);
+            c.open = b.categories.clone();
         }
         c
     }
@@ -197,7 +217,9 @@ impl Create {
                     self.changed = st.tick;
                 }
             }
-            Step::Stats | Step::Skills | Step::Summary => {}
+            Step::Stats => stats::key(self, st, code),
+            Step::Skills => skills::key(self, st, code),
+            Step::Summary => {}
         }
     }
 
@@ -436,14 +458,8 @@ impl Screen for Create {
                 &panes,
                 buf,
             ),
-            Step::Stats | Step::Skills => {
-                buf.set_string(
-                    panes.left.x + 2,
-                    panes.left.y + 1,
-                    "coming in the next task",
-                    Style::default().fg(DIM),
-                );
-            }
+            Step::Stats => stats::draw(self, st, b, &panes, tick, buf),
+            Step::Skills => skills::draw(self, st, b, &panes, tick, buf),
             Step::Summary => summary::draw(st, b, body, tall, tick, buf),
         }
 
@@ -477,7 +493,6 @@ impl Screen for Create {
                 Style::default().fg(DIM),
             )),
         );
-        let _ = (TEXT, pulse(tick, 30));
     }
 }
 
@@ -703,5 +718,95 @@ mod tests {
         let text = draw(&c, &st, 120, 40);
         assert!(text.contains("over by"), "{text}");
         assert!(st.build.is_some());
+    }
+
+    #[test]
+    fn stats_step_buys_refunds_and_shows_costs() {
+        let mut st = AppState::new();
+        let ch = chooser::Chooser::new(&st, 0);
+        let mut c = ch.choose(&mut st);
+        c.update(&mut st, &[key(KeyCode::Esc)]);
+        c.update(&mut st, &[key(KeyCode::Esc)]);
+        assert_eq!(c.step, Step::Stats);
+        st.tick = 100;
+        let text = draw(&c, &st, 120, 40);
+        assert!(text.contains("POINTS") && text.contains("0 left"), "{text}");
+        assert!(
+            text.contains("BODY") && text.contains("next 3 pts") && text.contains("dear"),
+            "{text}"
+        );
+        assert!(text.contains("TECH") && text.contains("cheap"), "{text}");
+        c.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Left)]);
+        assert_eq!(st.build.as_ref().unwrap().stats.reflex, 5);
+        let text = draw(&c, &st, 120, 40);
+        assert!(text.contains("2 left"), "{text}");
+        c.update(&mut st, &[key(KeyCode::Right)]);
+        assert_eq!(st.build.as_ref().unwrap().stats.reflex, 6);
+        c.update(&mut st, &[key(KeyCode::Right)]);
+        assert_eq!(st.build.as_ref().unwrap().stats.reflex, 6);
+        let text = draw(&c, &st, 120, 40);
+        assert!(text.contains("no points left"), "{text}");
+        st.build.as_mut().unwrap().origin = Some(game::OriginId::new("stowaway"));
+        let text = draw(&c, &st, 120, 40);
+        assert!(text.contains("over by"), "{text}");
+        assert!(matches!(
+            c.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Stay
+        ));
+        assert_eq!(c.step, Step::Stats);
+    }
+
+    #[test]
+    fn skills_step_folds_buys_and_refunds() {
+        let mut st = AppState::new();
+        let ch = chooser::Chooser::new(&st, 0);
+        let mut c = ch.choose(&mut st);
+        c.update(&mut st, &[key(KeyCode::Esc)]);
+        assert_eq!(c.step, Step::Skills);
+        st.tick = 100;
+        let text = draw(&c, &st, 120, 40);
+        assert!(text.contains("SP") && text.contains("0 left"), "{text}");
+        assert!(
+            text.contains("◆ NETRUNNER")
+                && text.contains("├─ ◆ Hacking")
+                && text.contains("◇ IRON"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("├─ ◇ Handguns"),
+            "unowned categories start folded: {text}"
+        );
+        c.update(&mut st, &[key(KeyCode::Down); 8]);
+        c.update(&mut st, &[key(KeyCode::Right)]);
+        let text = draw(&c, &st, 120, 40);
+        assert!(text.contains("├─ ◇ Handguns"), "unfolded: {text}");
+        c.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert!(
+            !st.build
+                .as_ref()
+                .unwrap()
+                .categories
+                .contains(&game::CategoryId::new("iron"))
+        );
+        assert!(draw(&c, &st, 120, 40).contains("no SP left"));
+        c.update(&mut st, &[key(KeyCode::Up); 8]);
+        c.update(&mut st, &[key(KeyCode::Char(' '))]);
+        let b = st.build.as_ref().unwrap();
+        assert!(
+            !b.categories.contains(&game::CategoryId::new("netrunner"))
+                && !b.skills.contains(&game::SkillId::new("ice_breaker")),
+            "refunding the category drops its skills"
+        );
+        assert_eq!(b.sp_left(&st.content), 3);
+        c.update(&mut st, &[key(KeyCode::Char(' '))]);
+        let b = st.build.as_ref().unwrap();
+        assert!(b.categories.contains(&game::CategoryId::new("netrunner")));
+        assert_eq!(b.sp_left(&st.content), 1);
+        c.update(&mut st, &[key(KeyCode::Left)]);
+        let text = draw(&c, &st, 120, 40);
+        assert!(
+            !text.contains("├─ ◆ Hacking") && text.contains("◆ Hacking · free"),
+            "folded in the list, still on the card: {text}"
+        );
     }
 }
