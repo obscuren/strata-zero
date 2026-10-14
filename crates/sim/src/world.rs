@@ -60,8 +60,25 @@ pub struct Card {
     pub name: String,
     pub profession: String,
     pub doing: String,
+    /// What comes next: an arrival, the next thing on the schedule, or nothing.
+    pub next: String,
+    pub lives: Option<String>,
+    pub works: Option<String>,
+    pub car: Option<String>,
     pub line: String,
     pub relation: Option<String>,
+}
+
+/// Someone the player swapped places with: drawn on `to` until the player moves on,
+/// then back on `back` (a spot) or on their path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Displaced {
+    /// The player's old tile, where they stand meanwhile.
+    to: Pos,
+    /// The tile the player took from them.
+    from: Pos,
+    /// A spot to return to; a walker just resumes their path.
+    back: Option<Pos>,
 }
 
 /// A client and a sex worker inside a hotel until a minute.
@@ -93,6 +110,7 @@ pub struct World {
     rng: ChaCha8Rng,
     /// A tile nobody may stand on: the player's. Walkers are held a tile back.
     blocker: Option<Pos>,
+    displaced: HashMap<PersonId, Displaced>,
 }
 
 impl World {
@@ -138,6 +156,7 @@ impl World {
             dates: Vec::new(),
             rng,
             blocker: None,
+            displaced: HashMap::new(),
         };
         w.place_everyone(city);
         w.refresh_open();
@@ -185,6 +204,52 @@ impl World {
     /// The tile the player stands on; no walker is placed there.
     pub fn set_blocker(&mut self, pos: Option<Pos>) {
         self.blocker = pos;
+    }
+
+    /// The player steps from `player_from` onto someone standing on `player_to`:
+    /// they take the player's old tile until the player moves on. Returns false for
+    /// someone inside a building.
+    pub fn swap(&mut self, id: PersonId, player_from: Pos, player_to: Pos) -> bool {
+        let i = id.0 as usize;
+        let back = match &self.people[i].whereabouts {
+            Whereabouts::Inside(_) => return false,
+            Whereabouts::At { pos, .. } => Some(*pos),
+            Whereabouts::Travelling(_) => None,
+        };
+        let back = self.displaced.get(&id).map(|d| d.back).unwrap_or(back);
+        if back == Some(player_from) {
+            self.displaced.remove(&id);
+        } else {
+            self.displaced.insert(
+                id,
+                Displaced {
+                    to: player_from,
+                    from: player_to,
+                    back,
+                },
+            );
+        }
+        true
+    }
+
+    /// Displaced people drift back once the player has left the tile they took.
+    fn settle(&mut self) {
+        let blocker = self.blocker;
+        let people = &mut self.people;
+        self.displaced.retain(|id, d| {
+            let p = &mut people[id.0 as usize];
+            let still = blocker == Some(d.from) && blocker != Some(d.to);
+            match (&mut p.whereabouts, d.back) {
+                (Whereabouts::At { pos, .. }, Some(back)) => {
+                    if !still {
+                        *pos = back;
+                    }
+                    still
+                }
+                (Whereabouts::Travelling(_), None) => still,
+                _ => false,
+            }
+        });
     }
 
     /// Everyone goes straight to where the clock says, no trips: the seed state.
@@ -440,7 +505,11 @@ impl World {
 
     /// Where a person is at `tick`, if on the street. A walker due on the blocked
     /// tile waits one tile back; a loiterer on it steps out of sight for the moment.
-    fn position(&self, i: usize, tick: u64) -> Option<(Pos, Option<CarId>)> {
+    fn position(&self, i: usize) -> Option<(Pos, Option<CarId>)> {
+        let tick = self.tick;
+        if let Some(d) = self.displaced.get(&self.people[i].id) {
+            return Some((d.to, None));
+        }
         match &self.people[i].whereabouts {
             Whereabouts::Inside(_) => None,
             Whereabouts::At { pos, .. } => {
@@ -471,6 +540,7 @@ impl World {
             self.minute += 1;
             self.step(city);
         }
+        self.settle();
     }
 
     fn refresh_open(&mut self) {
@@ -701,12 +771,12 @@ impl World {
         }
     }
 
-    /// Everyone and every car inside `bubble` at `tick`, with chat markers.
-    pub fn visible(&self, bubble: Rect, tick: u64) -> Vec<Mover> {
+    /// Everyone and every car inside `bubble` now, with chat markers.
+    pub fn visible(&self, bubble: Rect) -> Vec<Mover> {
         let mut out = Vec::new();
         let mut driving: HashMap<CarId, Pos> = HashMap::new();
         for (i, p) in self.people.iter().enumerate() {
-            let Some((pos, car)) = self.position(i, tick) else {
+            let Some((pos, car)) = self.position(i) else {
                 continue;
             };
             match car {
@@ -753,18 +823,18 @@ impl World {
         out
     }
 
-    /// The walker standing on `pos` at `tick`, if any.
-    pub fn person_at(&self, pos: Pos, tick: u64) -> Option<PersonId> {
-        (0..self.people.len()).find_map(|i| match self.position(i, tick) {
+    /// The walker standing on `pos` now, if any.
+    pub fn person_at(&self, pos: Pos) -> Option<PersonId> {
+        (0..self.people.len()).find_map(|i| match self.position(i) {
             Some((p, None)) if p == pos => Some(self.people[i].id),
             _ => None,
         })
     }
 
-    /// The car on `pos` at `tick`, parked or driving.
-    pub fn car_at(&self, pos: Pos, tick: u64) -> Option<CarId> {
+    /// The car on `pos` now, parked or driving.
+    pub fn car_at(&self, pos: Pos) -> Option<CarId> {
         for (i, p) in self.people.iter().enumerate() {
-            if let Some((cp, Some(c))) = self.position(i, tick)
+            if let Some((cp, Some(c))) = self.position(i)
                 && cp == pos
             {
                 let _ = p;
@@ -782,6 +852,34 @@ impl World {
             .get(profession)
             .cloned()
             .unwrap_or_else(|| profession.replace('_', " "))
+    }
+
+    fn goal_name(goal: Goal, p: &Person) -> &'static str {
+        match goal {
+            Goal::Home => "home",
+            Goal::Work => match p.work {
+                Work::Roaming => "deliveries",
+                _ => "work",
+            },
+            Goal::Leisure(Leisure::Bar) => "the bar",
+            Goal::Leisure(Leisure::NoodleBar) => "noodles",
+            Goal::Leisure(Leisure::Strip) => "the Strip",
+        }
+    }
+
+    /// Where a destination reads as: a building by name, or the kind of spot.
+    fn dest_name(city: &City, p: &Person, dest: Dest) -> String {
+        match dest {
+            Dest::Building(b) => Self::place_name(city, b),
+            Dest::Spot(_) => match p.profession.as_str() {
+                "sex_worker" => "the beat",
+                "fixer" => "the corner",
+                "ganger" => "the block",
+                "door_muscle" => "the door",
+                _ => "the street",
+            }
+            .to_string(),
+        }
     }
 
     fn place_name(city: &City, b: BuildingId) -> String {
@@ -871,10 +969,63 @@ impl World {
                 p.regular
                     .map(|b| format!("you'll find me at {} after", Self::place_name(city, b)))
             });
+        let hhmm = |m: u16| format!("{:02}:{:02}", m / 60, m % 60);
+        let next = if let Some(d) = self.dates.iter().find(|d| d.client == id || d.worker == id) {
+            let left = d.until.saturating_sub(self.minute).max(1);
+            format!("out of {} in {left} min", Self::place_name(city, d.hotel))
+        } else {
+            match &p.whereabouts {
+                Whereabouts::Travelling(t) => {
+                    let left =
+                        Self::trip_ticks(t).saturating_sub(self.tick.saturating_sub(t.depart));
+                    let mins = left.div_ceil(TICKS_PER_MINUTE).max(1);
+                    format!(
+                        "arrives at {} in {mins} min",
+                        Self::dest_name(city, p, t.dest)
+                    )
+                }
+                _ => {
+                    let mod_ = self.minute_of_day();
+                    let after = p
+                        .schedule
+                        .iter()
+                        .filter(|s| s.at > mod_)
+                        .min_by_key(|s| s.at)
+                        .or_else(|| p.schedule.iter().min_by_key(|s| s.at));
+                    match after {
+                        Some(s) if p.schedule.len() > 1 => {
+                            format!("{} at {}", Self::goal_name(s.goal, p), hhmm(s.at))
+                        }
+                        _ => "stays put".to_string(),
+                    }
+                }
+            }
+        };
+        let lives = Some(match p.home {
+            Some(h) => Self::place_name(city, h),
+            None => "the street".to_string(),
+        });
+        let works = Some(match p.work {
+            Work::Building(b) => Self::place_name(city, b),
+            Work::Spot(_) => Self::dest_name(city, p, Dest::Spot(Pos::new(0, 0))),
+            Work::Roaming => "the whole city".to_string(),
+        });
+        let car = p.car.map(|c| {
+            let car = &self.cars[c.0 as usize];
+            if car.parked {
+                format!("parked at {},{}", car.pos.x, car.pos.y)
+            } else {
+                "on the road".to_string()
+            }
+        });
         Card {
             name: p.name.clone(),
             profession: self.label(&p.profession),
             doing,
+            next,
+            lives,
+            works,
+            car,
             line,
             relation,
         }
@@ -969,6 +1120,12 @@ mod tests {
         let card = w.card(id, &c);
         assert_eq!(card.profession, "shopkeeper");
         assert!(card.doing.contains("shop"), "{}", card.doing);
+        assert!(
+            card.next.contains(" at "),
+            "the next thing on the schedule: {}",
+            card.next
+        );
+        assert!(card.lives.is_some() && card.works.is_some());
         assert!(!card.line.is_empty());
         run_to(&mut w, &c, tick_at(3 * 60, 2));
         assert!(!w.is_open(shop));
@@ -1147,8 +1304,7 @@ mod tests {
             .find(|d| d.theme == Theme::NeonStrip)
             .unwrap();
         let rect = strip.bounds.grow(10);
-        let tick = w.tick() + 30;
-        let movers = w.visible(rect, tick);
+        let movers = w.visible(rect);
         assert!(!movers.is_empty(), "the Strip has movers at eleven");
         let mut found_person = false;
         for m in &movers {
@@ -1162,7 +1318,7 @@ mod tests {
                     }
                     Whereabouts::Inside(_) => panic!("inside people are not drawn"),
                 }
-                let there = w.person_at(m.pos, tick).expect("someone stands there");
+                let there = w.person_at(m.pos).expect("someone stands there");
                 assert!(
                     movers.iter().any(|o| o.pos == m.pos
                         && matches!(o.kind, MoverKind::Walker { id: oid, .. } if oid == there)),
@@ -1174,7 +1330,102 @@ mod tests {
         }
         assert!(found_person);
         let far = Rect::new(0, 0, 1, 1);
-        assert!(w.visible(far, tick).iter().all(|m| far.contains(m.pos)));
+        assert!(w.visible(far).iter().all(|m| far.contains(m.pos)));
+    }
+
+    #[test]
+    fn a_bump_swaps_places_and_they_drift_back() {
+        let c = city();
+        let mut w = world(&c);
+        run_to(&mut w, &c, tick_at(23 * 60, 0));
+        let tick = w.tick();
+        let whole = Rect::new(0, 0, c.size.w as i32, c.size.h as i32);
+        // Someone standing on a spot takes the player's old tile, then drifts back.
+        let (id, spot) = w
+            .people()
+            .iter()
+            .find_map(|p| match p.whereabouts {
+                Whereabouts::At {
+                    pos,
+                    activity: Activity::Working,
+                } if p.profession == "sex_worker" => Some((p.id, pos)),
+                _ => None,
+            })
+            .expect("someone on the beat");
+        let from = spot
+            .neighbors4()
+            .find(|n| walk_cost(&c, *n, *n).is_some() && w.person_at(*n).is_none())
+            .expect("a free tile beside them");
+        assert!(w.swap(id, from, spot));
+        w.set_blocker(Some(spot));
+        assert_eq!(
+            w.person_at(from),
+            Some(id),
+            "they stand where the player stood"
+        );
+        assert_eq!(w.person_at(spot), None);
+        w.set_blocker(Some(Pos::new(0, 0)));
+        w.advance(&c, tick + 1);
+        assert_eq!(
+            w.person_at(spot),
+            Some(id),
+            "back on the spot once the player moves on"
+        );
+        assert_eq!(w.person_at(from), None);
+        // A walker steps aside the same way and is back on their path afterwards.
+        let on_foot = |w: &World| {
+            w.visible(whole).into_iter().find(|m| {
+                matches!(m.kind, MoverKind::Walker { id, .. }
+                    if matches!(w.people()[id.0 as usize].whereabouts, Whereabouts::Travelling(_)))
+            })
+        };
+        let walker = loop {
+            if let Some(m) = on_foot(&w) {
+                break m;
+            }
+            let t = w.tick() + TICKS_PER_MINUTE;
+            w.advance(&c, t);
+            w.path_some(&c, usize::MAX);
+            assert!(
+                w.tick() < tick + 120 * TICKS_PER_MINUTE,
+                "a walker within two hours"
+            );
+        };
+        let tick = w.tick();
+        let MoverKind::Walker { id: wid, .. } = walker.kind else {
+            unreachable!()
+        };
+        let old = walker
+            .pos
+            .neighbors4()
+            .find(|n| walk_cost(&c, *n, *n).is_some() && w.person_at(*n).is_none())
+            .expect("a free tile beside the walker");
+        assert!(w.swap(wid, old, walker.pos));
+        w.set_blocker(Some(walker.pos));
+        assert_eq!(w.person_at(old), Some(wid));
+        w.set_blocker(None);
+        w.advance(&c, tick + 1);
+        let back = w
+            .visible(whole)
+            .into_iter()
+            .find(|m| matches!(m.kind, MoverKind::Walker { id, .. } if id == wid))
+            .expect("still drawn")
+            .pos;
+        let Whereabouts::Travelling(trip) = &w.people()[wid.0 as usize].whereabouts else {
+            panic!("still walking")
+        };
+        assert!(
+            trip.legs.iter().any(|l| l.path.contains(&back)),
+            "back on the path: {back:?}"
+        );
+        // Nobody inside a building swaps.
+        let inside = w
+            .people()
+            .iter()
+            .find(|p| matches!(p.whereabouts, Whereabouts::Inside(_)))
+            .unwrap()
+            .id;
+        assert!(!w.swap(inside, from, spot));
     }
 
     #[test]

@@ -133,24 +133,30 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 .and_then(|(h, m)| Some((h.parse::<u64>().ok()?, m.parse::<u64>().ok()?)))
                 .filter(|(h, m)| *h < 24 && *m < 60)
                 .ok_or(usage)?;
+            let world_tick = st
+                .world
+                .as_ref()
+                .map(|w| w.tick())
+                .ok_or_else(|| "no city, no clock".to_string())?;
             let start = crate::ui::hud::START_MINUTE_OF_DAY as u64;
             let per_minute = sim::TICKS_PER_MINUTE;
             let from_start = (h * 60 + m + 1440 - start) % 1440;
-            let now = st.tick / per_minute;
+            let now = world_tick / per_minute;
             let mut minute = now - now % 1440 + from_start;
-            if minute * per_minute < st.tick {
+            if minute * per_minute < world_tick {
                 minute += 1440;
             }
-            st.tick = minute * per_minute;
-            if let Some(city) = st.city.as_ref() {
-                st.world = Some(sim::World::seed(
-                    city,
-                    &st.people,
-                    &sim::SimParams::default(),
-                    crate::ui::hud::START_MINUTE_OF_DAY,
-                    st.tick,
-                ));
-            }
+            let city = st
+                .city
+                .as_ref()
+                .ok_or_else(|| "no city, no clock".to_string())?;
+            st.world = Some(sim::World::seed(
+                city,
+                &st.people,
+                &sim::SimParams::default(),
+                crate::ui::hud::START_MINUTE_OF_DAY,
+                minute * per_minute,
+            ));
             Ok(format!("{h:02}:{m:02}"))
         }
         "clear" => {
@@ -352,11 +358,11 @@ mod tests {
             0,
         ));
         assert_eq!(run(&mut st, at, "clock 23:30").unwrap(), "23:30");
-        assert_eq!(crate::ui::hud::clock_at(st.tick), (23, 30));
-        assert_eq!(st.world.as_ref().unwrap().tick(), st.tick);
+        assert_eq!(st.clock(), (23, 30));
+        assert_eq!(st.tick, 0, "the frame tick is not the game's clock");
         assert_eq!(st.world.as_ref().unwrap().minute_of_day(), 23 * 60 + 30);
         assert_eq!(run(&mut st, at, "clock 12:00").unwrap(), "12:00");
-        assert_eq!(crate::ui::hud::clock_at(st.tick), (12, 0));
+        assert_eq!(st.clock(), (12, 0));
         assert_eq!(run(&mut st, at, "clock noon").unwrap_err(), "clock <hh:mm>");
         assert_eq!(
             run(&mut st, at, "clock 25:00").unwrap_err(),

@@ -473,7 +473,7 @@ impl MapScreen {
         }
         if let Some(world) = st.world.as_ref() {
             for n in pos.neighbors4() {
-                let Some(id) = world.person_at(n, st.tick) else {
+                let Some(id) = world.person_at(n) else {
                     continue;
                 };
                 let Some(key) = letters.next() else { break };
@@ -489,7 +489,7 @@ impl MapScreen {
         let person = st
             .world
             .as_ref()
-            .and_then(|w| w.person_at(pos, st.tick).map(|id| w.card(id, city)));
+            .and_then(|w| w.person_at(pos).map(|id| w.card(id, city)));
         choices.push(Choice::new(
             'l',
             "look",
@@ -542,28 +542,27 @@ impl MapScreen {
         }
     }
 
-    /// A step into someone is a word with them; a step into a car goes nowhere.
+    /// A step into someone swaps places with them, and they drift back once the
+    /// player moves on; a step into a car goes nowhere.
     fn bump(&self, st: &mut AppState, dir: Dir) -> Option<ScreenCmd> {
-        let target = st.player.as_ref()?.pos.step(dir);
-        let tick = st.tick;
-        let (city, world) = (st.city.as_ref()?, st.world.as_ref()?);
-        if let Some(id) = world.person_at(target, tick) {
-            let card = world.card(id, city);
-            return Some(Self::talk(&card, tick));
+        let player = st.player.as_ref()?;
+        let (from, target, stratum) = (player.pos, player.pos.step(dir), player.stratum);
+        if stratum != StratumKind::Street {
+            return None;
         }
-        if world.car_at(target, tick).is_some() {
+        let city = st.city.as_ref()?;
+        let world = st.world.as_mut()?;
+        if let Some(id) = world.person_at(target) {
+            if city.walkable(stratum, target) {
+                world.swap(id, from, target);
+            }
+            return None;
+        }
+        if world.car_at(target).is_some() {
             st.warn("a car is in the way");
             return Some(ScreenCmd::Stay);
         }
         None
-    }
-
-    fn talk(card: &sim::Card, tick: u64) -> ScreenCmd {
-        let choices = vec![Choice::new('t', "talk", Pick::Card(card_lines(card)))];
-        ScreenCmd::Push {
-            to: Box::new(Popup::verbs(&card.name.to_uppercase(), choices, tick)),
-            fx: TransitionKind::None,
-        }
     }
 
     fn handle_walk(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
@@ -656,6 +655,12 @@ impl Screen for MapScreen {
         if st.tick > self.last_tick + 1 {
             self.fps.resume(Instant::now());
         }
+        // The world runs only while walking, by the frames since the last update, a
+        // minute at most: overview and menus freeze it.
+        let elapsed = st
+            .tick
+            .saturating_sub(self.last_tick)
+            .min(sim::TICKS_PER_MINUTE);
         self.last_tick = st.tick;
         self.fps.frame();
         st.prune_fx(st.tick);
@@ -733,9 +738,11 @@ impl Screen for MapScreen {
             _ => None,
         };
         if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
-            world.advance(city, st.tick);
-            world.path_some(city, 4);
             world.set_blocker(standing);
+            if self.mode == Mode::Walk {
+                world.advance(city, world.tick() + elapsed);
+                world.path_some(city, 4);
+            }
         }
         ScreenCmd::Stay
     }
@@ -788,7 +795,7 @@ impl Screen for MapScreen {
             vis,
         };
         overlays.push(&ground);
-        let (hour, _) = hud::clock_at(st.tick);
+        let (hour, _) = st.clock();
         let people = st.world.as_ref().map(|world| PeopleOverlay {
             world,
             night: hour >= 18 || hour <= 5,
@@ -913,7 +920,7 @@ impl Screen for MapScreen {
         let person = st
             .world
             .as_ref()
-            .and_then(|w| w.person_at(cursor, st.tick).map(|id| w.card(id, city)));
+            .and_then(|w| w.person_at(cursor).map(|id| w.card(id, city)));
         let view = sidebar::SidebarView {
             city,
             stratum: self.stratum,
@@ -2171,7 +2178,7 @@ mod tests {
     }
 
     #[test]
-    fn people_walk_the_streets_block_the_player_and_talk() {
+    fn walking_into_someone_swaps_places_and_space_talks() {
         let mut st = state();
         seed_world(&mut st);
         let mut s = MapScreen::explore(0);
@@ -2181,16 +2188,14 @@ mod tests {
         let whole = citygen::Rect::new(0, 0, city.size.w as i32, city.size.h as i32);
         let world = st.world.as_ref().unwrap();
         let walker = world
-            .visible(whole, st.tick)
+            .visible(whole)
             .into_iter()
             .find(|m| matches!(m.kind, sim::MoverKind::Walker { .. }))
             .expect("someone is out");
         let beside = walker
             .pos
             .neighbors4()
-            .find(|n| {
-                city.walkable(StratumKind::Street, *n) && world.person_at(*n, st.tick).is_none()
-            })
+            .find(|n| city.walkable(StratumKind::Street, *n) && world.person_at(*n).is_none())
             .expect("a free tile beside them");
         {
             let p = st.player.as_mut().unwrap();
@@ -2217,7 +2222,8 @@ mod tests {
             .filter(|c| c.symbol() == "@" && c.modifier.contains(Modifier::BOLD))
             .count();
         assert_eq!(bold_white, 1, "the player stays the one bold @");
-        // Walking into them talks; the player does not move.
+        // Walking into them swaps places: no prompt, the player takes their tile and
+        // they take the player's.
         let dir = match (walker.pos.x - beside.x, walker.pos.y - beside.y) {
             (1, 0) => KeyCode::Char('l'),
             (-1, 0) => KeyCode::Char('h'),
@@ -2225,31 +2231,26 @@ mod tests {
             _ => KeyCode::Char('k'),
         };
         let cmd = s.update(&mut st, &[key(dir)]);
-        let ScreenCmd::Push { to: mut p, .. } = cmd else {
-            panic!("a bump talks")
-        };
-        assert_eq!(st.player.as_ref().unwrap().pos, beside, "blocked");
-        st.tick += 40;
-        let popup = draw_screen(&*p, &st, 120, 40);
+        assert!(
+            matches!(cmd, ScreenCmd::Stay),
+            "a bump swaps, it does not prompt"
+        );
+        assert_eq!(
+            st.player.as_ref().unwrap().pos,
+            walker.pos,
+            "the player took their tile"
+        );
         let sim::MoverKind::Walker { id, .. } = walker.kind else {
             unreachable!()
         };
-        let card = st
-            .world
-            .as_ref()
-            .unwrap()
-            .card(id, st.city.as_ref().unwrap());
-        assert!(
-            popup.contains(&card.name.to_uppercase()) && popup.contains("t  talk"),
-            "{popup}"
+        let world = st.world.as_ref().unwrap();
+        assert_eq!(
+            world.person_at(beside),
+            Some(id),
+            "they took the player's old tile"
         );
-        p.update(&mut st, &[key(KeyCode::Char('t'))]);
-        st.tick += 40;
-        let popup = draw_screen(&*p, &st, 120, 40);
-        assert!(
-            popup.contains(&card.profession) && popup.contains(&card.line),
-            "{popup}"
-        );
+        assert_eq!(world.person_at(walker.pos), None);
+        let card = world.card(id, st.city.as_ref().unwrap());
         // Space lists them as well.
         let ScreenCmd::Push { to: mut here, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
         else {
@@ -2274,7 +2275,7 @@ mod tests {
             .world
             .as_ref()
             .unwrap()
-            .visible(whole, st.tick)
+            .visible(whole)
             .into_iter()
             .find(|m| matches!(m.kind, sim::MoverKind::Walker { .. }))
             .expect("someone is out");
@@ -2284,7 +2285,7 @@ mod tests {
         let world = st.world.as_ref().unwrap();
         for _ in 0..3 {
             assert!(
-                world.person_at(pos, st.tick).is_none(),
+                world.person_at(pos).is_none(),
                 "held a tile back while the player stands there"
             );
         }

@@ -44,6 +44,16 @@ pub fn inspector_lines(
         out.push(kv("name", c.name.clone()));
         out.push(kv("profession", c.profession.clone()));
         out.push(kv("doing", c.doing.clone()));
+        out.push(kv("next", c.next.clone()));
+        if let Some(h) = &c.lives {
+            out.push(kv("lives", h.clone()));
+        }
+        if let Some(w) = &c.works {
+            out.push(kv("works", w.clone()));
+        }
+        if let Some(car) = &c.car {
+            out.push(kv("car", car.clone()));
+        }
     }
     let Some(t) = city.tile(stratum, p) else {
         out.push(kv("terrain", "outside the map"));
@@ -214,6 +224,10 @@ mod tests {
             name: "Juno".into(),
             profession: "fixer".into(),
             doing: "holding the corner".into(),
+            next: "the bar at 02:00".into(),
+            lives: Some("Sector 88".into()),
+            works: Some("the corner".into()),
+            car: Some("parked at 4,4".into()),
             line: "I know a guy.".into(),
             relation: None,
         };
@@ -229,6 +243,12 @@ mod tests {
         let text: String = lines.iter().map(|l| l.to_string() + "\n").collect();
         assert!(
             text.contains("Juno") && text.contains("fixer") && text.contains("holding the corner"),
+            "{text}"
+        );
+        assert!(
+            text.contains("the bar at 02:00")
+                && text.contains("Sector 88")
+                && text.contains("parked at 4,4"),
             "{text}"
         );
     }

@@ -126,9 +126,15 @@ impl AppState {
         }
     }
 
-    /// The time of night as (hour, minute): real time, from the tick.
+    /// The game's tick: the world's own clock, which stops in overview and in
+    /// menus; the frame tick before there is a world.
+    pub fn clock_tick(&self) -> u64 {
+        self.world.as_ref().map_or(self.tick, |w| w.tick())
+    }
+
+    /// The time of night as (hour, minute), from the game's tick.
     pub fn clock(&self) -> (u8, u8) {
-        crate::ui::hud::clock_at(self.tick)
+        crate::ui::hud::clock_at(self.clock_tick())
     }
 
     /// Turns dev mode on or off; off also drops the dev-only sidebar sections.
@@ -177,17 +183,17 @@ impl AppState {
 
     /// Logs a plain result.
     pub fn say(&mut self, msg: impl Into<String>) {
-        self.log.push(Kind::Info, msg, self.tick);
+        self.log.push(Kind::Info, msg, self.clock_tick());
     }
 
     /// Logs a refusal.
     pub fn warn(&mut self, msg: impl Into<String>) {
-        self.log.push(Kind::Warn, msg, self.tick);
+        self.log.push(Kind::Warn, msg, self.clock_tick());
     }
 
     /// Logs a quest or level line.
     pub fn story(&mut self, msg: impl Into<String>) {
-        self.log.push(Kind::Story, msg, self.tick);
+        self.log.push(Kind::Story, msg, self.clock_tick());
     }
 }
 

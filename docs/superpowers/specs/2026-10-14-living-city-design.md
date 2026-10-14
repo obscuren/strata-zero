@@ -271,3 +271,15 @@ run opens a city, waits a minute, and checks `who` reports people out.
 Combat, pickpocketing, following reactions, shops selling, dialogue trees,
 saving the world's state, interiors, garages, Skyways and Undercity life,
 weather and events, NPCs on other strata, relations beyond the three.
+
+## Revisions
+
+- 2026-10-14, after the build (user): walking into someone swaps places with
+  them instead of opening their card; they drift back once the player moves
+  on. `space` keeps the talk list.
+- 2026-10-14, after the build (user): the world keeps its own clock, which
+  runs only while the player walks; the free camera and every menu freeze
+  the city. The HUD clock and the log stamps read that clock.
+- 2026-10-14, after the build (user): the inspector's overview of a person
+  adds what comes next (an arrival, or the next thing on the schedule),
+  where they live and work, and where their car is.

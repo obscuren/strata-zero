@@ -43,8 +43,12 @@ bar they are known at, queue at the noodle bars at the rush, and stop for a
 word (`…`) when they meet. Nobody waits for you to be looking: the whole city
 moves on the clock, and only the people inside the screen's bubble are drawn;
 on foot you see the ones in your sight, and a parked car stays in memory like
-a pile. Walk into someone to talk; `space` lists whoever stands beside you; the
-inspector reads whoever is under the cursor.
+a pile. Walk into someone and you swap places, so a crowd never blocks the
+way; `space` lists whoever stands beside you, to talk. The clock is the city's
+own: it runs while you walk and stops in the free camera and in every menu, so
+the overview is a still of the city, and the inspector reads whoever is under
+the cursor there: who they are, what they are doing, what comes next for them,
+where they live and work, and where their car is.
 
 ## Run
 
@@ -100,8 +104,8 @@ end · `r` reseed after an error · `esc` back
 **Walk** `hjkl` `yubn` / arrows move · `<` `>` take stairs, lift, ladder or
 manhole · `space` interact: take what lies here, jack in at an adjacent terminal
 or out again, take the stairs, look · `1`-`5` fire the ability in that slot ·
-`a` the full ability list · walking into someone opens their card: `t` talk ·
-`enter` jack shortcut · `.` wait · `tab` deck ·
+`a` the full ability list · walking into someone swaps places with them, and
+they step back once you move on · `enter` jack shortcut · `.` wait · `tab` deck ·
 `F1`-`F4` panes · `v` view popup · `m` messages · `d` digital overlay · `s` save ·
 `?` keys · `c` back to the free camera (dev mode) · `:` dev
 console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `sp`, `pts`, `who`

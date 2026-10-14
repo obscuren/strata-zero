@@ -40,7 +40,7 @@ impl Overlay for PeopleOverlay<'_> {
         stratum: StratumKind,
         origin: Pos,
         area: Rect,
-        tick: u64,
+        _tick: u64,
         buf: &mut Buffer,
         style: &StylePack,
     ) {
@@ -62,7 +62,7 @@ impl Overlay for PeopleOverlay<'_> {
             area.width as i32 + 2 * MARGIN,
             area.height as i32 + 2 * MARGIN,
         );
-        for m in self.world.visible(bubble, tick) {
+        for m in self.world.visible(bubble) {
             let Some((sx, sy)) = tile_to_screen(area, origin, m.pos) else {
                 continue;
             };
@@ -308,6 +308,10 @@ mod tests {
             name: "Juno".into(),
             profession: "fixer".into(),
             doing: "holding the corner".into(),
+            next: "home at 04:00".into(),
+            lives: None,
+            works: None,
+            car: None,
             line: "I know a guy.".into(),
             relation: Some("you'll find me at the bar after".into()),
         };
