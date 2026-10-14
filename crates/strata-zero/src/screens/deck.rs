@@ -514,35 +514,6 @@ impl Deck {
         }
     }
 
-    fn ability_rows(st: &AppState) -> Vec<Row> {
-        st.character
-            .abilities(&st.content)
-            .iter()
-            .enumerate()
-            .filter_map(|(i, (id, _))| {
-                let a = st.content.ability(id)?;
-                let (icon, state, tone) = match a.kind {
-                    AbilityKind::Passive => ('·', "passive".to_string(), Tone::Dim),
-                    AbilityKind::Active(_) => {
-                        match st.character.cooling(&st.content, id, st.tick) {
-                            Some(left) => (
-                                '◈',
-                                format!("active · cooling {}s", left.div_ceil(30)),
-                                Tone::Warn,
-                            ),
-                            None => ('◈', "active · ready".to_string(), Tone::Normal),
-                        }
-                    }
-                };
-                Some(Row {
-                    text: format!("{icon} {:<12} {state}", a.name),
-                    tone,
-                    detail: Some(Detail::Ability(i)),
-                })
-            })
-            .collect()
-    }
-
     /// What an item does while worn: one line per perk, one per granted ability.
     pub(crate) fn perk_lines(st: &AppState, item: &game::Item) -> Vec<Line<'static>> {
         let cyan = |t: String| Line::from(Span::styled(t, Style::default().fg(CYAN)));
@@ -719,10 +690,10 @@ impl Deck {
             .map(|r| Row {
                 text: r.line.to_string(),
                 tone: Tone::Normal,
-                detail: match r.kind {
-                    RowKind::Category(id) => Some(Detail::Category(id)),
-                    RowKind::Skill(id) => Some(Detail::Skill(id)),
-                    RowKind::Note => None,
+                detail: match (r.selectable, r.kind) {
+                    (true, RowKind::Category(id)) => Some(Detail::Category(id)),
+                    (true, RowKind::Skill(id)) => Some(Detail::Skill(id)),
+                    _ => None,
                 },
             })
             .collect()
@@ -1325,7 +1296,6 @@ mod tests {
     }
     use crate::screens::testutil::{buffer_text, key};
     use citygen::{GenParams, Generator, SizePreset};
-    use game::AbilityId;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
