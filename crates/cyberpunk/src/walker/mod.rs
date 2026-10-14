@@ -172,17 +172,20 @@ impl Player {
 
     /// Paints every tile within `radius` on the current stratum into memory, walls or not;
     /// tiles in sight stay visible.
-    pub fn reveal(&mut self, city: &City, radius: i32) {
+    pub fn reveal(&mut self, city: &City, radius: i32) -> Vec<Pos> {
         let size = city.size;
         let grid = &mut self.memory[self.stratum.index()];
+        let mut newly = Vec::new();
         for y in (self.pos.y - radius)..=(self.pos.y + radius) {
             for x in (self.pos.x - radius)..=(self.pos.x + radius) {
                 let p = Pos::new(x, y);
                 if size.contains(p) && grid.get(p) == Some(&Visibility::Unseen) {
                     grid.set(p, Visibility::Remembered);
+                    newly.push(p);
                 }
             }
         }
+        newly
     }
 
     /// Visibility grid for the current stratum.
@@ -337,6 +340,28 @@ mod tests {
         p.update_fov(&c, 10);
         let wide = p.vis().count(|v| *v == Visibility::Visible);
         assert!(wide > base, "{wide} vs {base}");
+    }
+
+    #[test]
+    fn reveal_returns_newly_revealed_then_nothing() {
+        let city = Generator::run(GenParams {
+            seed: 6,
+            size: SizePreset::Custom { w: 120, h: 60 },
+            districts: 5,
+            ..Default::default()
+        })
+        .unwrap();
+        let mut p = Player::spawn(&city, 1);
+        p.update_fov(&city, 0);
+        let first = p.reveal(&city, 6);
+        assert!(!first.is_empty());
+        assert!(first.iter().all(|q| q.chebyshev(p.pos) <= 6));
+        assert!(
+            p.reveal(&city, 6).is_empty(),
+            "a second reveal finds nothing new"
+        );
+        let wider = p.reveal(&city, 8);
+        assert!(!wider.is_empty() && wider.iter().all(|q| q.chebyshev(p.pos) > 6));
     }
 
     #[test]

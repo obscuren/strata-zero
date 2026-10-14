@@ -62,8 +62,10 @@ Content(
     ],
     abilities: [
         Ability(id: "netscan", name: "Netscan", cooldown: 300, kind: Active(Scan(radius: 12)),
+                fx: [Kick(4), Wave(colour: (0, 229, 255), ticks: 18)],
                 desc: "The deck pulses the local grid and paints what it finds into your map."),
-        Ability(id: "ping", name: "Ping", cooldown: 240, kind: Active(Ping(radius: 24, ticks: 180)),
+        Ability(id: "ping", name: "Ping", cooldown: 240, kind: Active(Ping(radius: 24)),
+                fx: [Wave(colour: (255, 0, 200), ticks: 24), Glow(colour: (255, 0, 200), ticks: 180)],
                 desc: "A handshake burst lights every terminal and stair in range."),
         Ability(id: "lowlight", name: "Low-light", cooldown: 0, kind: Passive,
                 desc: "The dark is just another colour."),

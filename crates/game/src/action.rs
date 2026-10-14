@@ -29,7 +29,6 @@ pub struct At {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
     Reveal { radius: i32 },
-    Ping { radius: i32, ticks: u64 },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -198,13 +197,13 @@ pub fn apply(
                 ));
             }
             ch.fired.insert(id.clone(), tick);
-            let effect = match active {
-                Active::Scan { radius } => Effect::Reveal { radius },
-                Active::Ping { radius, ticks } => Effect::Ping { radius, ticks },
+            let effects = match active {
+                Active::Scan { radius } => vec![Effect::Reveal { radius }],
+                Active::Ping { .. } => Vec::new(),
             };
             Ok(Outcome {
                 message: format!("{}: pulse sent", ability.name),
-                effects: vec![effect],
+                effects,
             })
         }
     }
@@ -418,12 +417,10 @@ mod tests {
             Action::Fire(AbilityId::new("ping")),
         )
         .unwrap();
-        assert_eq!(
-            out.effects,
-            vec![Effect::Ping {
-                radius: 24,
-                ticks: 180
-            }]
+        assert!(
+            out.effects.is_empty(),
+            "ping is visual only: {:?}",
+            out.effects
         );
     }
 }

@@ -171,8 +171,19 @@ pub struct Item {
 pub enum Active {
     /// Paints the map within `radius` tiles into memory.
     Scan { radius: i32 },
-    /// Lights terminals and stairs within `radius` tiles for `ticks`.
-    Ping { radius: i32, ticks: u64 },
+    /// Lights terminals and stairs within `radius` tiles; its glow is an `Fx`.
+    Ping { radius: i32 },
+}
+
+/// A visual effect an ability plays when it fires; the app draws it over the map.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Fx {
+    /// A glitch burst over the map for this many ticks, thinning as it ends.
+    Kick(u64),
+    /// A ring that expands from the firer to the ability's radius over `ticks`.
+    Wave { colour: (u8, u8, u8), ticks: u64 },
+    /// A pulsing marker on terminals and stairs within the radius for `ticks`.
+    Glow { colour: (u8, u8, u8), ticks: u64 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,6 +200,9 @@ pub struct Ability {
     /// Ticks between firings; 0 means none.
     pub cooldown: u64,
     pub kind: AbilityKind,
+    /// What firing looks like, in order; empty plays nothing.
+    #[serde(default)]
+    pub fx: Vec<Fx>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

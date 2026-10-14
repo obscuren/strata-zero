@@ -1,8 +1,8 @@
 //! Item actions on the app: `game::apply` plus its effects on the walker and the world.
 
-use crate::app::{AppState, Ping};
+use crate::app::{AppState, FxInstance};
 use citygen::{Pos, StratumKind};
-use game::{Action, At, Effect};
+use game::{AbilityKind, Action, Active, At, Effect};
 
 /// Applies an action at the player's feet and runs its effects on the world.
 /// The message is for the status strip; a refusal is the reason.
@@ -18,6 +18,10 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         None => (StratumKind::Street, Pos::new(0, 0)),
     };
     let at = At { stratum, pos };
+    let fired = match &action {
+        Action::Fire(id) => Some(id.clone()),
+        _ => None,
+    };
     let refresh_sight = matches!(action, Action::Equip(_) | Action::Unequip(_));
     let outcome = game::apply(
         &mut st.character,
@@ -33,21 +37,33 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
             player.update_fov(city, bonus);
         }
     }
+    let mut revealed = Vec::new();
     for effect in outcome.effects {
         match effect {
             Effect::Reveal { radius } => {
                 if let (Some(city), Some(player)) = (st.city.as_ref(), st.player.as_mut()) {
-                    player.reveal(city, radius);
+                    revealed = player.reveal(city, radius);
                 }
             }
-            Effect::Ping { radius, ticks } => {
-                st.ping = Some(Ping {
-                    stratum,
-                    pos,
-                    radius,
-                    until: st.tick + ticks,
-                });
-            }
+        }
+    }
+    // The ability's effects start now, at the firer's feet.
+    if let Some(id) = fired
+        && let Some(ability) = st.content.ability(&id)
+    {
+        let radius = match ability.kind {
+            AbilityKind::Active(Active::Scan { radius } | Active::Ping { radius }) => radius,
+            AbilityKind::Passive => 0,
+        };
+        for fx in &ability.fx {
+            st.fx.push(FxInstance {
+                fx: fx.clone(),
+                stratum,
+                origin: pos,
+                radius,
+                started: st.tick,
+                revealed: revealed.clone(),
+            });
         }
     }
     Ok(outcome.message)
@@ -101,12 +117,30 @@ mod tests {
         assert_eq!(msg, "Netscan: pulse sent");
         let after = seen(&st);
         assert!(after > before, "{after} vs {before}");
+        let kinds: Vec<&game::Fx> = st.fx.iter().map(|i| &i.fx).collect();
+        assert!(
+            matches!(kinds[..], [game::Fx::Kick(4), game::Fx::Wave { .. }]),
+            "{kinds:?}"
+        );
+        assert!(
+            !st.fx[1].revealed.is_empty(),
+            "the wave hides what the scan revealed"
+        );
+        assert_eq!((st.fx[1].radius, st.fx[1].started), (12, st.tick));
         st.character
             .equipment
             .insert(Slot::Neural, ItemId::new("neural_port"));
         perform(&mut st, Action::Fire(AbilityId::new("ping"))).unwrap();
-        let ping = st.ping.as_ref().unwrap();
-        assert_eq!((ping.radius, ping.until), (24, 280));
+        let kinds: Vec<&game::Fx> = st.fx.iter().map(|i| &i.fx).collect();
+        assert!(
+            matches!(
+                kinds[2..],
+                [game::Fx::Wave { .. }, game::Fx::Glow { ticks: 180, .. }]
+            ),
+            "{kinds:?}"
+        );
+        assert_eq!(st.fx[3].until(), st.tick + 180);
+        assert!(st.fx[2].revealed.is_empty() && st.fx[2].radius == 24);
         report(&mut st, Err("nope".into()));
         assert_eq!(
             st.log.latest().map(|e| e.marked()),

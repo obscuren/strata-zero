@@ -3,7 +3,7 @@
 use crate::actions::{perform, report};
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::messages::Kind;
-use crate::render::items::{GroundOverlay, PingOverlay};
+use crate::render::items::GroundOverlay;
 use crate::render::overlay::Digital;
 use crate::render::traffic::Traffic;
 use crate::render::viewport::{Camera, MapView, Overlay, tile_to_screen};
@@ -707,12 +707,7 @@ impl Screen for MapScreen {
             content: &st.content,
             vis,
         };
-        let ping = PingOverlay {
-            ping: st.ping.as_ref(),
-            vis,
-        };
         overlays.push(&ground);
-        overlays.push(&ping);
         MapView {
             city,
             stratum: self.stratum,

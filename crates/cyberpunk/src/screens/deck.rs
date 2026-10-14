@@ -630,10 +630,9 @@ impl Deck {
                         Active::Scan { radius } => {
                             format!("scan: paints the map within {radius} tiles")
                         }
-                        Active::Ping { radius, ticks } => format!(
-                            "ping: lights terminals and stairs within {radius} tiles for {}s",
-                            ticks.div_ceil(30)
-                        ),
+                        Active::Ping { radius } => {
+                            format!("ping: lights terminals and stairs within {radius} tiles")
+                        }
                     };
                     out.push(Line::from(Span::styled(effect, Style::default().fg(CYAN))));
                 }

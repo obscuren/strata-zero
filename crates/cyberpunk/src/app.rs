@@ -40,21 +40,39 @@ pub struct AppState {
     pub character: game::Character,
     /// Items lying in the city.
     pub ground: game::Ground,
-    /// A ping in flight: lights terminals and stairs around it until `until`.
-    pub ping: Option<Ping>,
+    /// Ability effects in flight, oldest first.
+    pub fx: Vec<FxInstance>,
     /// What happened, newest last.
     pub log: MessageLog,
     /// Which sidebar sections are on.
     pub sidebar: Sidebar,
 }
 
-/// A handshake burst from the `ping` ability.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Ping {
+/// One ability effect playing on the map.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FxInstance {
+    pub fx: game::Fx,
     pub stratum: citygen::StratumKind,
-    pub pos: citygen::Pos,
+    pub origin: citygen::Pos,
+    /// The ability's radius: Scan or Ping.
     pub radius: i32,
-    pub until: u64,
+    pub started: u64,
+    /// For a scan, the tiles it revealed; the wave hides them until it passes.
+    pub revealed: Vec<citygen::Pos>,
+}
+
+impl FxInstance {
+    /// Ticks a wave keeps running past its radius so the tail clears.
+    pub const WAVE_TAIL: u64 = 3;
+
+    /// The tick from which the instance draws nothing.
+    pub fn until(&self) -> u64 {
+        match self.fx {
+            game::Fx::Kick(ticks) => self.started + ticks,
+            game::Fx::Wave { ticks, .. } => self.started + ticks + Self::WAVE_TAIL,
+            game::Fx::Glow { ticks, .. } => self.started + ticks,
+        }
+    }
 }
 
 impl Default for AppState {
@@ -79,7 +97,7 @@ impl AppState {
             content,
             character,
             ground: game::Ground::default(),
-            ping: None,
+            fx: Vec::new(),
             log: MessageLog::default(),
             sidebar: Sidebar::default(),
         }
@@ -96,6 +114,11 @@ impl AppState {
         if !on {
             self.sidebar.leave_dev();
         }
+    }
+
+    /// Drops the effects that have finished by `tick`.
+    pub fn prune_fx(&mut self, tick: u64) {
+        self.fx.retain(|i| tick < i.until());
     }
 
     /// Logs a plain result.
@@ -514,6 +537,36 @@ mod tests {
         assert_eq!(runner.full_repaints(), 2);
         runner.frame(&mut t, &[key('o')]).unwrap();
         assert_eq!(runner.full_repaints(), 3);
+    }
+
+    #[test]
+    fn fx_instances_end_and_prune() {
+        let mut st = AppState::new();
+        let at = |fx: game::Fx| FxInstance {
+            fx,
+            stratum: citygen::StratumKind::Street,
+            origin: citygen::Pos::new(0, 0),
+            radius: 5,
+            started: 100,
+            revealed: Vec::new(),
+        };
+        st.fx.push(at(game::Fx::Kick(4)));
+        st.fx.push(at(game::Fx::Wave {
+            colour: (0, 0, 0),
+            ticks: 10,
+        }));
+        st.fx.push(at(game::Fx::Glow {
+            colour: (0, 0, 0),
+            ticks: 30,
+        }));
+        let ends: Vec<u64> = st.fx.iter().map(|i| i.until()).collect();
+        assert_eq!(ends, vec![104, 113, 130]);
+        st.prune_fx(103);
+        assert_eq!(st.fx.len(), 3);
+        st.prune_fx(104);
+        assert_eq!(st.fx.len(), 2);
+        st.prune_fx(130);
+        assert!(st.fx.is_empty());
     }
 
     #[test]
