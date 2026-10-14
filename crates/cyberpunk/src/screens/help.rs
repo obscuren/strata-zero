@@ -13,7 +13,9 @@ const EXPLORE: &[(&str, &str)] = &[
     ("[ ]", "stratum down / up (Net on top)"),
     ("w", "walk: drop the @ into the city"),
     ("tab", "open the deck"),
-    ("v", "view: toggle sidebar sections"),
+    ("F1-F4", "panes: here · quest · map · log"),
+    ("F5 F6", "inspect · legend (dev mode)"),
+    ("v", "view: the pane toggles as a popup"),
     ("m", "messages: the whole log"),
     ("d", "digital overlay"),
     ("s", "save city"),
@@ -34,7 +36,9 @@ const WALK: &[(&str, &str)] = &[
     ("enter", "jack in at an adjacent terminal / jack out"),
     (".", "wait a tick"),
     ("tab", "open the deck"),
-    ("v", "view: toggle sidebar sections"),
+    ("F1-F4", "panes: here · quest · map · log"),
+    ("F5 F6", "inspect · legend (dev mode)"),
+    ("v", "view: the pane toggles as a popup"),
     ("m", "messages: the whole log"),
     ("d", "digital overlay"),
     ("c", "back to free camera (dev mode)"),
@@ -49,7 +53,7 @@ const WALK: &[(&str, &str)] = &[
 pub fn draw(f: &mut Frame, mode: Mode) {
     let area = f.area();
     let w = area.width.min(60);
-    let h = area.height.min(20);
+    let h = area.height.min(22);
     let rect = Rect::new(
         area.x + (area.width - w) / 2,
         area.y + (area.height - h) / 2,

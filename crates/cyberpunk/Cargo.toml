@@ -9,6 +9,7 @@ name = "cyberpunk"
 path = "src/main.rs"
 
 [dependencies]
+unicode-width.workspace = true
 citygen = { path = "../citygen" }
 game = { path = "../game" }
 serde.workspace = true
@@ -21,4 +22,3 @@ clap.workspace = true
 ron.workspace = true
 
 [dev-dependencies]
-unicode-width.workspace = true
