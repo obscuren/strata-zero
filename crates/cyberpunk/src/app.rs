@@ -42,6 +42,8 @@ pub struct AppState {
     pub ground: game::Ground,
     /// Ability effects in flight, oldest first.
     pub fx: Vec<FxInstance>,
+    /// Set when the screen should be repainted in full, as after a glitch kick.
+    pub repaint: bool,
     /// What happened, newest last.
     pub log: MessageLog,
     /// Which sidebar sections are on.
@@ -62,14 +64,25 @@ pub struct FxInstance {
 }
 
 impl FxInstance {
-    /// Ticks a wave keeps running past its radius so the tail clears.
-    pub const WAVE_TAIL: u64 = 3;
+    /// Tiles of fading tail behind a wave's front, plus the front itself.
+    const WAVE_TAIL_TILES: u64 = 4;
+
+    /// Ticks a wave keeps running past its radius so the tail clears: the ticks the
+    /// front takes to cover the tail's tiles.
+    pub fn wave_tail_ticks(ticks: u64, radius: i32) -> u64 {
+        if radius <= 0 {
+            return 0;
+        }
+        (Self::WAVE_TAIL_TILES * ticks).div_ceil(radius as u64)
+    }
 
     /// The tick from which the instance draws nothing.
     pub fn until(&self) -> u64 {
         match self.fx {
             game::Fx::Kick(ticks) => self.started + ticks,
-            game::Fx::Wave { ticks, .. } => self.started + ticks + Self::WAVE_TAIL,
+            game::Fx::Wave { ticks, .. } => {
+                self.started + ticks + Self::wave_tail_ticks(ticks, self.radius)
+            }
             game::Fx::Glow { ticks, .. } => self.started + ticks,
         }
     }
@@ -98,6 +111,7 @@ impl AppState {
             character,
             ground: game::Ground::default(),
             fx: Vec::new(),
+            repaint: false,
             log: MessageLog::default(),
             sidebar: Sidebar::default(),
         }
@@ -116,9 +130,31 @@ impl AppState {
         }
     }
 
-    /// Drops the effects that have finished by `tick`.
+    /// Drops the effects that have finished by `tick`; a finished kick asks for a full
+    /// repaint, since its glyphs may have left the terminal out of step.
     pub fn prune_fx(&mut self, tick: u64) {
+        let before = self.fx.len();
+        let kicks_before = self
+            .fx
+            .iter()
+            .filter(|i| matches!(i.fx, game::Fx::Kick(_)))
+            .count();
         self.fx.retain(|i| tick < i.until());
+        let kicks_after = self
+            .fx
+            .iter()
+            .filter(|i| matches!(i.fx, game::Fx::Kick(_)))
+            .count();
+        if before != self.fx.len() && kicks_after < kicks_before {
+            self.repaint = true;
+        }
+    }
+
+    /// Puts a city in place: no body, no effects in flight.
+    pub fn enter_city(&mut self, city: City) {
+        self.city = Some(city);
+        self.player = None;
+        self.fx.clear();
     }
 
     /// Logs a plain result.
@@ -274,6 +310,10 @@ impl Runner {
         }
         // Once nothing animates, repaint every cell: a glitch or a wide glyph may have
         // left the terminal out of step with what ratatui believes is on screen.
+        if self.st.repaint {
+            self.repaint_pending = true;
+            self.st.repaint = false;
+        }
         let animating = self
             .transition
             .as_ref()
@@ -537,6 +577,11 @@ mod tests {
         assert_eq!(runner.full_repaints(), 2);
         runner.frame(&mut t, &[key('o')]).unwrap();
         assert_eq!(runner.full_repaints(), 3);
+        // The state can ask for one too, as when a kick ends.
+        runner.st.repaint = true;
+        runner.frame(&mut t, &[]).unwrap();
+        assert_eq!(runner.full_repaints(), 4);
+        assert!(!runner.st.repaint);
     }
 
     #[test]
@@ -559,14 +604,52 @@ mod tests {
             colour: (0, 0, 0),
             ticks: 30,
         }));
+        // The wave's tail allowance scales with ticks per tile: 4 * 10 / 5 = 8 ticks.
         let ends: Vec<u64> = st.fx.iter().map(|i| i.until()).collect();
-        assert_eq!(ends, vec![104, 113, 130]);
+        assert_eq!(ends, vec![104, 118, 130]);
         st.prune_fx(103);
         assert_eq!(st.fx.len(), 3);
+        assert!(!st.repaint);
         st.prune_fx(104);
         assert_eq!(st.fx.len(), 2);
+        assert!(st.repaint, "a finished kick asks for a full repaint");
+        st.repaint = false;
         st.prune_fx(130);
         assert!(st.fx.is_empty());
+        assert!(!st.repaint, "waves and glows do not");
+        let mut wide = at(game::Fx::Wave {
+            colour: (0, 0, 0),
+            ticks: 18,
+        });
+        wide.radius = 12;
+        assert_eq!(wide.until(), 100 + 18 + 6);
+        wide.radius = 0;
+        assert_eq!(wide.until(), 100 + 18);
+    }
+
+    #[test]
+    fn entering_a_city_clears_the_body_and_effects() {
+        let mut st = AppState::new();
+        let city = citygen::Generator::run(citygen::GenParams {
+            seed: 3,
+            size: citygen::SizePreset::Custom { w: 80, h: 40 },
+            districts: 4,
+            ..Default::default()
+        })
+        .unwrap();
+        st.player = Some(crate::walker::Player::spawn(&city, 1));
+        st.fx.push(FxInstance {
+            fx: game::Fx::Kick(4),
+            stratum: citygen::StratumKind::Street,
+            origin: citygen::Pos::new(0, 0),
+            radius: 0,
+            started: 0,
+            revealed: Vec::new(),
+        });
+        let seed = city.seed;
+        st.enter_city(city);
+        assert!(st.player.is_none() && st.fx.is_empty());
+        assert_eq!(st.city.as_ref().map(|c| c.seed), Some(seed));
     }
 
     #[test]

@@ -120,8 +120,7 @@ impl Screen for Files {
                         match load_city(&entry.path) {
                             Ok(city) => {
                                 st.params = city.params.clone();
-                                st.city = Some(city);
-                                st.player = None;
+                                st.enter_city(city);
                                 st.say(format!("loaded {}", entry.path.display()));
                                 return ScreenCmd::Switch {
                                     to: crate::screens::explore_screen(st.tick),

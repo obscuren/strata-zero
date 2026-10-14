@@ -127,6 +127,9 @@ mod tests {
             "the wave hides what the scan revealed"
         );
         assert_eq!((st.fx[1].radius, st.fx[1].started), (12, st.tick));
+        // Cooling: refused, and nothing plays.
+        assert!(perform(&mut st, Action::Fire(AbilityId::new("netscan"))).is_err());
+        assert_eq!(st.fx.len(), 2);
         st.character
             .equipment
             .insert(Slot::Neural, ItemId::new("neural_port"));

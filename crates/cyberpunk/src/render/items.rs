@@ -1,4 +1,4 @@
-//! Items in the world: piles on the ground and the ping that lights terminals.
+//! Items in the world: piles on the ground.
 
 use crate::render::glyphs::kind_icon;
 use crate::render::style::StylePack;

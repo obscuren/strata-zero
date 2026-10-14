@@ -106,8 +106,7 @@ impl Generating {
         match generator.finish() {
             Ok(city) => {
                 st.params = self.params.clone();
-                st.city = Some(city);
-                st.player = None;
+                st.enter_city(city);
                 ScreenCmd::Switch {
                     to: crate::screens::explore_screen(st.tick),
                     fx: TransitionKind::Glitch,

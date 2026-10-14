@@ -56,13 +56,17 @@ pub struct FxInstance {
     pub revealed: Vec<Pos>,
 }
 impl FxInstance {
-    /// The tick after which the instance draws nothing.
-    pub fn until(&self) -> u64;   // Kick: started + ticks; Wave: started + ticks + 3; Glow: started + ticks
+    /// The tick from which the instance draws nothing.
+    pub fn until(&self) -> u64;   // Kick: started + ticks; Wave: started + ticks + tail; Glow: started + ticks
+    // tail = ceil(4 * ticks / radius): the ticks the front needs to carry its three-tile
+    // tail (plus itself) past the radius, so the ring fades out instead of popping.
 }
 ```
 
 `AppState::prune_fx(tick)` drops ended instances; the map screen calls it
-every update. The old `Ping` struct, `AppState::ping` and `PingOverlay` go
+every update. A kick that ends sets `AppState::repaint`, which the runner
+turns into a full repaint, as after a transition. Entering a city (new or
+loaded) clears the effects along with the body. The old `Ping` struct, `AppState::ping` and `PingOverlay` go
 away.
 
 ## Rendering
@@ -75,7 +79,9 @@ With `elapsed = tick - started`:
   with `p = elapsed / ticks`, each cell's glyph replaced and tinted cyan or
   magenta by cell hash, as the jack-in flash does.
 - **Wave**: the front radius is `r = radius * elapsed / ticks` as a float,
-  running on past the radius for three ticks so the tail clears. For every
+  running on past the radius for `ceil(4 * ticks / radius)` ticks so the tail
+  clears (six for Netscan, four for Ping). The front clears the DIM modifier
+  a remembered tile carries, so it is bright everywhere. For every
   screen cell whose tile `p` has `d = chebyshev(p, origin) <= radius`:
   - front, `r - 1 < d <= r`: foreground the colour, background the colour
     at a quarter; one cell in six (by hash of x, y and tick) gets a spark

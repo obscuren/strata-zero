@@ -125,6 +125,7 @@ fn wave(
             if df <= r && df > r - 1.0 {
                 cell.set_fg(colour.to_color())
                     .set_bg(colour.scale(0.25).to_color());
+                cell.modifier.remove(Modifier::DIM);
                 if hash64(hash64(sx as u64, sy as u64), tick).is_multiple_of(6) {
                     let i = (hash64(tick, sx as u64 + sy as u64) % SPARKS.len() as u64) as usize;
                     cell.set_char(SPARKS[i]);
@@ -185,7 +186,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
-    use ratatui::style::Color;
+    use ratatui::style::{Color, Modifier};
     use ratatui::widgets::Widget;
 
     fn city() -> City {
@@ -253,7 +254,7 @@ mod tests {
                 .find(|q| q.chebyshev(origin) == d)
                 .expect("a revealed tile at that distance")
         };
-        let (front, beyond) = (at_distance(6), at_distance(10));
+        let (front, beyond, behind) = (at_distance(6), at_distance(10), at_distance(4));
         let inst = instance(
             Fx::Wave {
                 colour: CYAN,
@@ -283,12 +284,24 @@ mod tests {
             Color::Rgb(0, 229, 255),
             "front tile carries the colour"
         );
+        assert!(
+            !cell(front).modifier.contains(Modifier::DIM),
+            "the front is bright even over remembered tiles"
+        );
         assert_eq!(
             cell(beyond).symbol(),
             " ",
             "unreached revealed tile is hidden"
         );
         assert_eq!(cell(beyond).bg, Color::Rgb(0, 0, 0));
+        // A revealed tile the front has passed keeps the glyph the map draws for it.
+        let plain = render(&c, &s, p.stratum, 109, Some(p.vis()), &[], (120, 60));
+        let shown = plain[(behind.x as u16, behind.y as u16)].clone();
+        assert_eq!(
+            cell(behind).symbol(),
+            shown.symbol(),
+            "behind the front: not hidden"
+        );
         // Tick 200: the wave is over and the map is untouched.
         let plain = render(&c, &s, p.stratum, 200, Some(p.vis()), &[], (120, 60));
         let after = render(
