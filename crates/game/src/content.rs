@@ -43,8 +43,6 @@ pub enum ContentError {
     UnknownProfession { where_: String, id: String },
     #[error("{where_}: unknown category `{id}`")]
     UnknownCategory { where_: String, id: String },
-    #[error("{where_}: unknown template `{id}`")]
-    UnknownTemplate { where_: String, id: String },
     #[error("{what} `{id}`: emblem must be three rows of seven glyphs")]
     EmblemShape { what: String, id: String },
     #[error("creation quest `{quest}`: flags do not match its objectives")]

@@ -116,14 +116,7 @@ pub(super) fn key(c: &mut Create, st: &mut AppState, code: KeyCode) {
     }
 }
 
-pub(super) fn draw(
-    c: &Create,
-    st: &AppState,
-    b: &Build,
-    panes: &Panes,
-    tick: u64,
-    buf: &mut Buffer,
-) {
+pub(super) fn draw(c: &Create, st: &AppState, b: &Build, panes: &Panes, buf: &mut Buffer) {
     let content = &st.content;
     let left = panes.left;
     let pool = meter("SP", b.sp_left(content), b.sp_total(content), CYAN_RGB);
@@ -153,7 +146,6 @@ pub(super) fn draw(
             buf.set_string(x, y, span.content.as_ref(), style);
             x += span.content.width() as u16;
         }
-        let _ = tick;
     }
 
     // The dossier for the row under the cursor.

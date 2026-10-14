@@ -3,7 +3,7 @@
 use super::Create;
 use crate::anim::effects::typewriter;
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
-use crate::ui::chrome::{CYAN, CYAN_RGB, DIM, FAINT, TEXT, solid};
+use crate::ui::chrome::{CYAN, CYAN_RGB, DIM, TEXT, solid};
 use crate::ui::logo::{self, Logo};
 use crate::ui::menu::Menu;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -71,7 +71,7 @@ impl Screen for Chooser {
                 KeyCode::Enter => {
                     return ScreenCmd::Push {
                         to: Box::new(self.choose(st)),
-                        fx: TransitionKind::Glitch,
+                        fx: TransitionKind::SlideUp,
                     };
                 }
                 _ => {}
@@ -137,6 +137,5 @@ impl Screen for Chooser {
             &hint,
             area.width.saturating_sub(2),
         );
-        let _ = FAINT;
     }
 }

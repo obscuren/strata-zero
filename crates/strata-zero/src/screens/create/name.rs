@@ -89,7 +89,7 @@ pub(super) fn draw(
     }
     let upper = name.to_uppercase();
     let w = logo::width(&upper);
-    if tall && w + 4 <= inner.width {
+    if tall && w + 4 <= inner.width && logo::covers(&upper) {
         Logo {
             text: &upper,
             tick,

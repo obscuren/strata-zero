@@ -53,6 +53,12 @@ pub fn glyph(c: char) -> [&'static str; 5] {
     }
 }
 
+/// Whether every character of `text` has a glyph; spaces count, the rest must have ink.
+pub fn covers(text: &str) -> bool {
+    text.chars()
+        .all(|c| c == ' ' || glyph(c).iter().any(|row| !row.trim().is_empty()))
+}
+
 /// Rendered width of `text` in cells.
 pub fn width(text: &str) -> u16 {
     text.chars().count() as u16 * CELL_W

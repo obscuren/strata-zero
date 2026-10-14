@@ -114,7 +114,15 @@ rain, fps) · quit to title · quit game
 five stats and your pools; `space` buys a point), gear, inventory, workbench
 (WRENCH unlocks it), cyberdeck (the jacked deck and its programs), quests,
 journal (empty for now) and map (what you remember of this stratum). Every
-list wraps at both ends.
+list wraps at both ends. `space` on a gear slot picks what fits from the pack,
+or unequips and inspects what is worn; on an inventory item it opens the
+verbs: inspect, equip, use, drop one, drop all. In a popup the letter or
+`enter` fires a row and `esc` backs out one level. The readout shows hp and the
+carried weight over capacity (magenta when over, and nothing more can be picked
+up). Items carry perks while worn (stat, sight, carry, max hp) and can grant
+abilities; consumables heal when used. The templates, origins, professions,
+categories and every item, ability, skill, talent, quest and recipe live in
+`flavor/content.ron`.
 
 ## Layout
 

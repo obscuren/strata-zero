@@ -5,7 +5,7 @@ use crate::anim::effects::pulse;
 use crate::app::AppState;
 use crate::ui::chrome::{CYAN, CYAN_RGB, DIM, MAGENTA, TEXT};
 use crate::ui::logo::{self, Logo};
-use game::{Build, Stat};
+use game::{Build, BuildError, Stat};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -17,7 +17,7 @@ pub(super) fn draw(st: &AppState, b: &Build, body: Rect, tall: bool, tick: u64, 
     let mut y = body.y;
     let handle = b.handle.trim().to_uppercase();
     let hw = logo::width(&handle);
-    if tall && !handle.is_empty() && hw <= body.width {
+    if tall && !handle.is_empty() && hw <= body.width && logo::covers(&handle) {
         Logo {
             text: &handle,
             tick,
@@ -149,10 +149,10 @@ pub(super) fn draw(st: &AppState, b: &Build, body: Rect, tall: bool, tick: u64, 
     if pl < 0 || sl < 0 {
         let mut parts = Vec::new();
         if pl < 0 {
-            parts.push(format!("over by {} points", -pl));
+            parts.push(BuildError::OverPoints((-pl) as u32).to_string());
         }
         if sl < 0 {
-            parts.push(format!("over by {} SP", -sl));
+            parts.push(BuildError::OverSp((-sl) as u32).to_string());
         }
         buf.set_string(
             body.x,

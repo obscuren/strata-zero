@@ -370,18 +370,24 @@ impl Screen for Create {
         let tick = st.tick;
         let tall = area.height >= TALL;
 
-        // Strip and the build so far.
+        // Strip and the build so far; a long handle wins over the picks when they collide.
+        let strip_line = strip(self.step);
+        let room = area.width.saturating_sub(4 + strip_line.width() as u16 + 1) as usize;
+        let mut summary = so_far(st, b);
+        if summary.width() > room {
+            summary = b.handle.trim().to_string();
+        }
         buf.set_line(
             area.x + 2,
             area.y,
-            &strip(self.step),
+            &strip_line,
             area.width.saturating_sub(2),
         );
         put_right(
             buf,
             area.right().saturating_sub(2),
             area.y,
-            Line::from(Span::styled(so_far(st, b), Style::default().fg(DIM))),
+            Line::from(Span::styled(summary, Style::default().fg(DIM))),
         );
         rule(buf, area, area.y + 1);
 
@@ -459,7 +465,7 @@ impl Screen for Create {
                 buf,
             ),
             Step::Stats => stats::draw(self, st, b, &panes, tick, buf),
-            Step::Skills => skills::draw(self, st, b, &panes, tick, buf),
+            Step::Skills => skills::draw(self, st, b, &panes, buf),
             Step::Summary => summary::draw(st, b, body, tall, tick, buf),
         }
 
@@ -532,7 +538,10 @@ mod tests {
         ));
         assert!(matches!(
             ch.update(&mut st, &[key(KeyCode::Enter)]),
-            ScreenCmd::Push { .. }
+            ScreenCmd::Push {
+                fx: TransitionKind::SlideUp,
+                ..
+            }
         ));
         assert_eq!(st.build.as_ref().map(|b| b.handle.as_str()), Some("VEX"));
         let c = ch.choose(&mut st);
@@ -818,6 +827,42 @@ mod tests {
         assert!(
             !text.contains("├─ ◆ Hacking") && text.contains("◆ Hacking · free"),
             "folded in the list, still on the card: {text}"
+        );
+    }
+
+    #[test]
+    fn letters_the_block_font_lacks_fall_back_to_a_plain_line() {
+        let mut st = AppState::new();
+        let mut c = custom(&mut st);
+        for ch in "Zoë".chars() {
+            c.update(&mut st, &[key(KeyCode::Char(ch))]);
+        }
+        st.tick = 100;
+        let text = draw(&c, &st, 120, 40);
+        assert!(text.contains("ZOË"), "the sheet keeps every letter: {text}");
+        let b = st.build.as_mut().unwrap();
+        b.origin = Some(game::OriginId::new("creche"));
+        b.profession = Some(game::ProfessionId::new("netrunner"));
+        let s = Create::new(&st, Step::Summary, 0);
+        let text = draw(&s, &st, 120, 40);
+        assert!(text.contains("ZOË"), "and so does the summary: {text}");
+    }
+
+    #[test]
+    fn strip_yields_to_a_long_handle_at_the_minimum_width() {
+        let mut st = AppState::new();
+        custom(&mut st);
+        let b = st.build.as_mut().unwrap();
+        b.handle = "Sixteen-char-nam".into();
+        b.origin = Some(game::OriginId::new("creche"));
+        b.profession = Some(game::ProfessionId::new("netrunner"));
+        let c = Create::new(&st, Step::Stats, 0);
+        st.tick = 100;
+        let text = draw(&c, &st, 100, 30);
+        let first = text.lines().next().unwrap_or("");
+        assert!(
+            first.contains("6 SUMMARY") && first.contains("Sixteen-char-nam"),
+            "{first:?}"
         );
     }
 }

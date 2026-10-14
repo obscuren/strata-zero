@@ -93,7 +93,7 @@ pub enum BuildError {
     NoPoints,
     OverSp(u32),
     NoSp,
-    CategoryLocked(SkillId),
+    CategoryLocked { skill: SkillId, category: String },
     Unknown(String),
 }
 
@@ -113,9 +113,7 @@ impl fmt::Display for BuildError {
             BuildError::NoPoints => write!(f, "no points left"),
             BuildError::OverSp(n) => write!(f, "over by {n} SP"),
             BuildError::NoSp => write!(f, "no SP left"),
-            BuildError::CategoryLocked(s) => {
-                write!(f, "unlock the category that holds {s} first")
-            }
+            BuildError::CategoryLocked { category, .. } => write!(f, "unlock {category} first"),
             BuildError::Unknown(id) => write!(f, "the content does not know {id}"),
         }
     }
@@ -342,7 +340,10 @@ impl Build {
             .category_of(id)
             .ok_or_else(|| BuildError::Unknown(id.to_string()))?;
         if !self.categories.contains(&cat.id) {
-            return Err(BuildError::CategoryLocked(id.clone()));
+            return Err(BuildError::CategoryLocked {
+                skill: id.clone(),
+                category: cat.name.clone(),
+            });
         }
         if self.skills.remove(id) {
             return Ok(false);
@@ -425,7 +426,10 @@ impl Build {
                 .category_of(id)
                 .ok_or_else(|| BuildError::Unknown(id.to_string()))?;
             if !self.categories.contains(&cat.id) {
-                return Err(BuildError::CategoryLocked(id.clone()));
+                return Err(BuildError::CategoryLocked {
+                    skill: id.clone(),
+                    category: cat.name.clone(),
+                });
             }
         }
         self.check_pools(c)
@@ -533,8 +537,8 @@ mod tests {
         let net = CategoryId::new("netrunner");
         let ice = SkillId::new("ice_breaker");
         assert_eq!(
-            b.toggle_skill(&c, &ice),
-            Err(BuildError::CategoryLocked(ice.clone()))
+            b.toggle_skill(&c, &ice).unwrap_err().to_string(),
+            "unlock NETRUNNER first"
         );
         assert_eq!(b.toggle_category(&c, &net), Ok(true));
         assert!(
@@ -588,6 +592,8 @@ mod tests {
         assert_eq!(BuildError::NoOrigin.to_string(), "pick where you were made");
         assert_eq!(BuildError::NoProfession.to_string(), "pick what you did");
         assert_eq!(BuildError::OverSp(1).to_string(), "over by 1 SP");
+        assert_eq!(BuildError::OverPoints(1).to_string(), "over by 1 point");
+        assert_eq!(BuildError::OverPoints(2).to_string(), "over by 2 points");
     }
 
     #[test]
