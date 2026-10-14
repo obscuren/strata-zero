@@ -29,6 +29,9 @@ pub struct FlavorPack {
     pub shops: Vec<(BuildingKind, Vec<String>)>,
     pub landmarks: Vec<String>,
     pub signage: Vec<char>,
+    /// Handles for the people of the city.
+    #[serde(default)]
+    pub people: Vec<String>,
 }
 
 fn pick<'a>(rng: &mut impl Rng, items: &'a [String]) -> &'a str {
@@ -154,5 +157,16 @@ mod tests {
         assert!(f.signage.iter().all(|c| unicode_single_width(*c)));
         assert!(f.signage.len() >= 40);
         let _ = f.sign_glyph(&mut a);
+    }
+
+    #[test]
+    fn default_flavor_has_people() {
+        let f = FlavorPack::load("default").unwrap();
+        assert!(f.people.len() >= 40, "{} handles", f.people.len());
+        let mut seen = std::collections::HashSet::new();
+        assert!(
+            f.people.iter().all(|n| seen.insert(n.as_str())),
+            "no duplicate handles"
+        );
     }
 }
