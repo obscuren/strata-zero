@@ -105,8 +105,24 @@ impl Overlay for FxOverlay<'_> {
                         buf,
                     );
                 }
-                // Drawn by the next task.
-                Fx::Bolt { .. } | Fx::Mark { .. } => {}
+                Fx::Bolt { colour, ticks } => bolt(
+                    inst,
+                    Rgb(colour.0, colour.1, colour.2),
+                    ticks,
+                    elapsed,
+                    origin,
+                    area,
+                    tick,
+                    buf,
+                ),
+                Fx::Mark { colour, .. } => mark(
+                    inst,
+                    Rgb(colour.0, colour.1, colour.2),
+                    origin,
+                    area,
+                    tick,
+                    buf,
+                ),
             }
         }
     }
@@ -194,6 +210,103 @@ fn wave(
             cell.set_fg(tint.scale(0.25 + 0.75 * b).to_color())
                 .set_bg(tint.scale(0.3 * b).to_color());
         }
+    }
+}
+
+/// Every tile on the straight line from `a` to `b`, both included.
+fn line_points(a: Pos, b: Pos) -> Vec<Pos> {
+    let (dx, dy) = ((b.x - a.x).abs(), -(b.y - a.y).abs());
+    let (sx, sy) = ((b.x - a.x).signum(), (b.y - a.y).signum());
+    let mut err = dx + dy;
+    let (mut x, mut y) = (a.x, a.y);
+    let mut out = Vec::new();
+    loop {
+        out.push(Pos::new(x, y));
+        if x == b.x && y == b.y {
+            break;
+        }
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            x += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            y += sy;
+        }
+    }
+    out
+}
+
+/// Snaking lines from the origin to every target, grown over `ticks`; they ignore
+/// walls and sight. Each point jitters one cell sideways on a hash that changes
+/// every two ticks, so the line flickers like a discharge.
+#[allow(clippy::too_many_arguments)]
+fn bolt(
+    inst: &FxInstance,
+    colour: Rgb,
+    ticks: u64,
+    elapsed: u64,
+    origin: Pos,
+    area: Rect,
+    tick: u64,
+    buf: &mut Buffer,
+) {
+    let frac = (elapsed as f32 / ticks.max(1) as f32).min(1.0);
+    let phase = tick / 2;
+    for (ti, target) in inst.targets.iter().enumerate() {
+        let pts = line_points(inst.origin, *target);
+        let n = ((pts.len() as f32) * frac).ceil() as usize;
+        let horizontal = (target.x - inst.origin.x).abs() >= (target.y - inst.origin.y).abs();
+        for i in 1..n.min(pts.len()) {
+            let p = pts[i];
+            let last = i + 1 == pts.len();
+            let j = (hash64(hash64(i as u64, ti as u64), phase) % 3) as i32 - 1;
+            let q = if last {
+                p
+            } else if horizontal {
+                Pos::new(p.x, p.y + j)
+            } else {
+                Pos::new(p.x + j, p.y)
+            };
+            let Some((sx, sy)) = tile_to_screen(area, origin, q) else {
+                continue;
+            };
+            let (dx, dy) = (p.x - pts[i - 1].x, p.y - pts[i - 1].y);
+            let glyph = if hash64(i as u64 + 7, ti as u64 ^ phase).is_multiple_of(5) {
+                '*'
+            } else if dx == 0 {
+                '│'
+            } else if dy == 0 {
+                '─'
+            } else if dx * dy > 0 {
+                '╲'
+            } else {
+                '╱'
+            };
+            let bright = hash64(hash64(sx as u64, sy as u64), phase).is_multiple_of(3);
+            let fg = if bright { colour } else { colour.scale(0.6) };
+            let cell = &mut buf[(sx, sy)];
+            cell.set_char(glyph)
+                .set_fg(fg.to_color())
+                .set_bg(colour.scale(0.2).to_color());
+            cell.modifier.remove(Modifier::DIM);
+        }
+    }
+}
+
+/// A pulsing mark on every target tile, whatever its visibility.
+fn mark(inst: &FxInstance, colour: Rgb, origin: Pos, area: Rect, tick: u64, buf: &mut Buffer) {
+    let glow = colour.scale(0.55 + 0.45 * pulse(tick, 20)).to_color();
+    for t in &inst.targets {
+        let Some((sx, sy)) = tile_to_screen(area, origin, *t) else {
+            continue;
+        };
+        let cell = &mut buf[(sx, sy)];
+        cell.set_char('◉')
+            .set_fg(glow)
+            .set_bg(colour.scale(0.2).to_color());
+        cell.modifier.remove(Modifier::DIM);
     }
 }
 
@@ -293,7 +406,137 @@ mod tests {
             radius,
             started: 100,
             revealed,
+            targets: Vec::new(),
         }
+    }
+
+    fn aimed(fx: Fx, origin: Pos, targets: Vec<Pos>) -> FxInstance {
+        let mut i = instance(fx, origin, 0, Vec::new());
+        i.targets = targets;
+        i
+    }
+
+    const BOLT: (u8, u8, u8) = (255, 240, 150);
+
+    #[test]
+    fn bolt_grows_toward_its_targets() {
+        let c = city();
+        let s = StylePack::load().unwrap();
+        let origin = Pos::new(40, 30);
+        let target = Pos::new(52, 30);
+        let inst = aimed(
+            Fx::Bolt {
+                colour: BOLT,
+                ticks: 12,
+            },
+            origin,
+            vec![target],
+        );
+        let overlay = FxOverlay {
+            fx: std::slice::from_ref(&inst),
+            vis: None,
+        };
+        let plain = render(&c, &s, StratumKind::Street, 106, None, &[], (120, 60));
+        let half = render(
+            &c,
+            &s,
+            StratumKind::Street,
+            106,
+            None,
+            &[&overlay],
+            (120, 60),
+        );
+        let touched = |buf: &Buffer, x: i32| {
+            (29..=31).any(|y| buf[(x as u16, y as u16)] != plain[(x as u16, y as u16)])
+        };
+        assert!(
+            touched(&half, 44),
+            "the line has reached a third of the way"
+        );
+        assert!(!touched(&half, 51), "and not the far end yet");
+        let full = render(
+            &c,
+            &s,
+            StratumKind::Street,
+            111,
+            None,
+            &[&overlay],
+            (120, 60),
+        );
+        assert!(touched(&full, 51), "by its last tick it reaches the target");
+        assert_eq!(
+            half[(40, 30)],
+            plain[(40, 30)],
+            "the firer's own tile is untouched"
+        );
+    }
+
+    #[test]
+    fn mark_draws_through_walls_and_off_screen_targets_are_skipped() {
+        let c = city();
+        let s = StylePack::load().unwrap();
+        let mut p = Player::spawn(&c, 1);
+        p.update_fov(&c, 0);
+        let unseen = (0..60)
+            .flat_map(|y| (0..120).map(move |x| Pos::new(x, y)))
+            .find(|q| p.vis()[*q] == Visibility::Unseen)
+            .unwrap();
+        let inst = aimed(
+            Fx::Mark {
+                colour: BOLT,
+                ticks: 600,
+            },
+            p.pos,
+            vec![unseen, Pos::new(500, 500), Pos::new(-9, 3)],
+        );
+        let overlay = FxOverlay {
+            fx: std::slice::from_ref(&inst),
+            vis: Some(p.vis()),
+        };
+        let buf = render(
+            &c,
+            &s,
+            p.stratum,
+            150,
+            Some(p.vis()),
+            &[&overlay],
+            (120, 60),
+        );
+        assert_eq!(buf[(unseen.x as u16, unseen.y as u16)].symbol(), "◉");
+        let bolt = aimed(
+            Fx::Bolt {
+                colour: BOLT,
+                ticks: 12,
+            },
+            p.pos,
+            vec![Pos::new(500, 500), Pos::new(-9, 3)],
+        );
+        let overlay = FxOverlay {
+            fx: std::slice::from_ref(&bolt),
+            vis: None,
+        };
+        for tick in [100u64, 106, 111] {
+            render(&c, &s, p.stratum, tick, None, &[&overlay], (120, 60));
+            render(&c, &s, p.stratum, tick, None, &[&overlay], (20, 10));
+        }
+        // No targets: nothing drawn.
+        let none = aimed(
+            Fx::Bolt {
+                colour: BOLT,
+                ticks: 12,
+            },
+            p.pos,
+            Vec::new(),
+        );
+        let overlay = FxOverlay {
+            fx: std::slice::from_ref(&none),
+            vis: None,
+        };
+        let plain = render(&c, &s, p.stratum, 106, None, &[], (120, 60));
+        assert_eq!(
+            render(&c, &s, p.stratum, 106, None, &[&overlay], (120, 60)),
+            plain
+        );
     }
 
     const CYAN: (u8, u8, u8) = (0, 229, 255);

@@ -61,6 +61,8 @@ pub struct FxInstance {
     pub started: u64,
     /// For a scan, the tiles it revealed; the wave hides them until it passes.
     pub revealed: Vec<citygen::Pos>,
+    /// For a trace, the node tiles it found; bolts run to them and marks sit on them.
+    pub targets: Vec<citygen::Pos>,
 }
 
 impl FxInstance {
@@ -584,6 +586,7 @@ mod tests {
             radius: 5,
             started: 100,
             revealed: Vec::new(),
+            targets: Vec::new(),
         };
         st.fx.push(at(game::Fx::Kick(4)));
         st.fx.push(at(game::Fx::Wave {
@@ -636,6 +639,7 @@ mod tests {
             radius: 0,
             started: 0,
             revealed: Vec::new(),
+            targets: Vec::new(),
         });
         let seed = city.seed;
         st.enter_city(city);
