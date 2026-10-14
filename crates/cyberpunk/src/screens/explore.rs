@@ -217,9 +217,15 @@ impl MapScreen {
                     Some(left) => hud::SlotState::Cooling(left.div_ceil(30)),
                     None => hud::SlotState::Ready,
                 };
+                let flash = st
+                    .character
+                    .fired
+                    .get(&id)
+                    .is_some_and(|f| st.tick.saturating_sub(*f) < hud::FLASH_TICKS);
                 Some(hud::Slot {
                     name: a.name.clone(),
                     state,
+                    flash,
                 })
             })
             .collect()
