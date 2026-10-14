@@ -23,6 +23,19 @@ pub struct Title {
 }
 
 impl Title {
+    /// The current parameters with a seed nobody has played: the tick and the clock.
+    pub fn fresh_params(st: &AppState, tick: u64) -> citygen::GenParams {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let mut seed = citygen::rng::hash64(tick, nanos);
+        if seed == 0 {
+            seed = 1;
+        }
+        st.params.clone().with_seed(seed)
+    }
+
     pub fn new(tick: u64) -> Self {
         Title {
             menu: Menu::new(
@@ -43,7 +56,7 @@ impl Screen for Title {
                 KeyCode::Char('q') | KeyCode::Esc => return ScreenCmd::Quit,
                 KeyCode::Enter => {
                     return match self.menu.selected {
-                        0 => match Generating::new(st.params.clone(), st.tick) {
+                        0 => match Generating::new(Self::fresh_params(st, st.tick), st.tick) {
                             Ok(next) => ScreenCmd::Switch {
                                 to: Box::new(next),
                                 fx: TransitionKind::Glitch,
@@ -202,5 +215,15 @@ mod tests {
             t.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Push { .. }
         ));
+    }
+
+    #[test]
+    fn new_game_rolls_a_fresh_seed() {
+        let st = AppState::new();
+        let a = Title::fresh_params(&st, 10);
+        let b = Title::fresh_params(&st, 11);
+        assert_ne!(a.seed, 0);
+        assert_ne!(a.seed, b.seed, "two new games are two cities");
+        assert_eq!(a.size, st.params.size, "everything but the seed is kept");
     }
 }
