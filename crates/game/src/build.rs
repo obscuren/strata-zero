@@ -135,6 +135,9 @@ pub struct Build {
     /// Extra kit on top of the profession's.
     pub kit: Vec<(ItemId, u32)>,
     pub template: Option<TemplateId>,
+    /// Pool totals when they are not the creation defaults: a played character's
+    /// spent points plus what it still holds.
+    pub pools: Option<(u32, u32)>,
 }
 
 const NAME_MARKS: &str = "-_.' ";
@@ -159,6 +162,7 @@ impl Build {
             talents: Vec::new(),
             kit: Vec::new(),
             template: None,
+            pools: None,
         }
     }
 
@@ -174,6 +178,29 @@ impl Build {
         b.kit = t.kit.clone();
         b.template = Some(t.id.clone());
         b
+    }
+
+    /// A played character as a build, with pools sized so that what is left equals
+    /// what the character holds.
+    pub fn from_character(c: &Content, ch: &crate::character::Character) -> Build {
+        let mut b = Build::blank(c);
+        b.handle = ch.handle.clone();
+        b.origin = Some(ch.origin.clone());
+        b.profession = Some(ch.profession.clone());
+        b.stats = ch.stats.clone();
+        b.categories = ch.categories.clone();
+        b.skills = ch.skills.clone();
+        b.talents = ch.talents.clone();
+        b.pools = Some((b.points_spent(c) + ch.stat_points, b.sp_spent(c) + ch.sp));
+        b
+    }
+
+    fn points_total(&self, c: &Content) -> u32 {
+        self.pools.map_or(c.creation.stat_points, |p| p.0)
+    }
+
+    fn sp_total(&self, c: &Content) -> u32 {
+        self.pools.map_or(c.creation.sp, |p| p.1)
     }
 
     fn shift(cheap: &[Stat], dear: &[Stat], s: Stat) -> i32 {
@@ -229,7 +256,7 @@ impl Build {
     /// Points left in the pool; negative when a change of origin or profession
     /// repriced what was already bought.
     pub fn points_left(&self, c: &Content) -> i64 {
-        c.creation.stat_points as i64 - self.points_spent(c) as i64
+        self.points_total(c) as i64 - self.points_spent(c) as i64
     }
 
     fn stat_mut(&mut self, s: Stat) -> &mut u8 {
@@ -273,7 +300,7 @@ impl Build {
     }
 
     pub fn sp_left(&self, c: &Content) -> i64 {
-        c.creation.sp as i64 - self.sp_spent(c) as i64
+        self.sp_total(c) as i64 - self.sp_spent(c) as i64
     }
 
     /// The SP a skill costs, or `None` while its category is not owned.
@@ -559,5 +586,21 @@ mod tests {
         assert_eq!(BuildError::NoOrigin.to_string(), "pick where you were made");
         assert_eq!(BuildError::NoProfession.to_string(), "pick what you did");
         assert_eq!(BuildError::OverSp(1).to_string(), "over by 1 SP");
+    }
+
+    #[test]
+    fn a_character_rebuilds_into_a_build_with_its_pools() {
+        let c = Content::load().unwrap();
+        let mut ch =
+            crate::character::Character::from_template(&c, &TemplateId::new("vex")).unwrap();
+        ch.stat_points = 3;
+        ch.sp = 1;
+        let b = Build::from_character(&c, &ch);
+        assert_eq!((b.points_left(&c), b.sp_left(&c)), (3, 1));
+        assert_eq!(b.stats, ch.stats);
+        assert_eq!(b.categories, ch.categories);
+        let mut b = b;
+        b.buy_stat(&c, Stat::Body).unwrap();
+        assert_eq!(b.points_left(&c), 0, "a point in BODY costs Vex 3");
     }
 }

@@ -1,5 +1,6 @@
 //! Item actions: everything a menu can do, applied by one function.
 
+use crate::build::Build;
 use crate::character::Character;
 use crate::content::Content;
 use crate::ground::Ground;
@@ -11,11 +12,23 @@ use citygen::{Pos, StratumKind};
 pub enum Action {
     Equip(ItemId),
     Unequip(Slot),
-    Drop { item: ItemId, qty: u32 },
+    Drop {
+        item: ItemId,
+        qty: u32,
+    },
     Use(ItemId),
-    Take { item: ItemId, qty: u32 },
+    Take {
+        item: ItemId,
+        qty: u32,
+    },
     TakeAll,
     Fire(AbilityId),
+    /// Spends a creation point on a stat.
+    BuyStat(Stat),
+    /// Spends SP on a category; its free skills come along.
+    Unlock(CategoryId),
+    /// Spends SP on a skill of an owned category.
+    UnlockSkill(SkillId),
 }
 
 /// Where the character stands: where drops land and takes come from.
@@ -178,6 +191,38 @@ pub fn apply(
                 ch.give(s.item, s.qty);
             }
             done(format!("took {n} items"))
+        }
+        Action::BuyStat(stat) => {
+            let mut b = Build::from_character(c, ch);
+            b.buy_stat(c, stat).map_err(|e| e.to_string())?;
+            ch.stats = b.stats.clone();
+            ch.stat_points = b.points_left(c).max(0) as u32;
+            done(format!("{} {}", stat.name(), ch.stats.get(stat)))
+        }
+        Action::Unlock(id) => {
+            let cat = c
+                .category(&id)
+                .ok_or_else(|| format!("unknown category {id}"))?;
+            if ch.has_category(&id) {
+                return Err(format!("{} is yours already", cat.name));
+            }
+            let mut b = Build::from_character(c, ch);
+            b.toggle_category(c, &id).map_err(|e| e.to_string())?;
+            ch.categories = b.categories.clone();
+            ch.skills = b.skills.clone();
+            ch.sp = b.sp_left(c).max(0) as u32;
+            done(format!("{} is yours", cat.name))
+        }
+        Action::UnlockSkill(id) => {
+            let skill = c.skill(&id).ok_or_else(|| format!("unknown skill {id}"))?;
+            if ch.has_skill(&id) {
+                return Err(format!("{} is yours already", skill.name));
+            }
+            let mut b = Build::from_character(c, ch);
+            b.toggle_skill(c, &id).map_err(|e| e.to_string())?;
+            ch.skills = b.skills.clone();
+            ch.sp = b.sp_left(c).max(0) as u32;
+            done(format!("{} is yours", skill.name))
         }
         Action::Fire(id) => {
             let ability = c
@@ -433,5 +478,79 @@ mod tests {
         .unwrap();
         assert_eq!(out.message, "Arc Trace: pulse sent");
         assert!(out.effects.is_empty(), "trace is visual only");
+    }
+
+    #[test]
+    fn spending_from_the_pools() {
+        let (c, mut ch, mut g, at) = setup();
+        assert!(
+            apply(&mut ch, &mut g, &c, at, 0, Action::BuyStat(Stat::Body)).is_err(),
+            "no points"
+        );
+        ch.stat_points = 3;
+        let out = apply(&mut ch, &mut g, &c, at, 0, Action::BuyStat(Stat::Body)).unwrap();
+        assert_eq!((ch.stats.body, ch.stat_points), (5, 0));
+        assert_eq!(out.message, "BODY 5");
+        ch.sp = 2;
+        assert!(
+            apply(
+                &mut ch,
+                &mut g,
+                &c,
+                at,
+                0,
+                Action::UnlockSkill(SkillId::new("handguns"))
+            )
+            .is_err(),
+            "IRON first"
+        );
+        let out = apply(
+            &mut ch,
+            &mut g,
+            &c,
+            at,
+            0,
+            Action::Unlock(CategoryId::new("iron")),
+        )
+        .unwrap();
+        assert!(
+            ch.has_category(&CategoryId::new("iron")) && ch.has_skill(&SkillId::new("handguns"))
+        );
+        assert_eq!((ch.sp, out.message.as_str()), (0, "IRON is yours"));
+        assert!(
+            apply(
+                &mut ch,
+                &mut g,
+                &c,
+                at,
+                0,
+                Action::UnlockSkill(SkillId::new("longarm"))
+            )
+            .is_err(),
+            "no SP"
+        );
+        ch.sp = 1;
+        let out = apply(
+            &mut ch,
+            &mut g,
+            &c,
+            at,
+            0,
+            Action::UnlockSkill(SkillId::new("longarm")),
+        )
+        .unwrap();
+        assert_eq!((ch.sp, out.message.as_str()), (0, "Longarm is yours"));
+        assert!(
+            apply(
+                &mut ch,
+                &mut g,
+                &c,
+                at,
+                0,
+                Action::Unlock(CategoryId::new("iron"))
+            )
+            .is_err(),
+            "already yours"
+        );
     }
 }
