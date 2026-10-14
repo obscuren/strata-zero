@@ -1,12 +1,14 @@
 //! The game model: content (items, skills, talents, quests, recipes) and the character.
 
 pub mod action;
+pub mod build;
 pub mod character;
 pub mod content;
 pub mod ground;
 pub mod model;
 
 pub use action::*;
+pub use build::*;
 pub use character::*;
 pub use content::*;
 pub use ground::*;

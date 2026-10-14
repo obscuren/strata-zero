@@ -29,21 +29,8 @@ pub enum ContentError {
     SlotMismatch { item: String, slot: Slot },
     #[error("duplicate id `{0}`")]
     DuplicateId(String),
-    #[error("starter level must be at least 1")]
-    StarterLevel,
     #[error("ability `{ability}` is passive but has fx")]
     FxOnPassive { ability: String },
-    #[error("quest `{quest}`: starter flags do not match its objectives")]
-    ObjectiveCount { quest: String },
-    #[error("starter {what}: duplicate `{id}`")]
-    DuplicateStarter { what: String, id: String },
-    #[error("starter talent `{talent}` needs {skill} {need}; the starter has {have}")]
-    TalentLevel {
-        talent: String,
-        skill: String,
-        need: u8,
-        have: u8,
-    },
     #[error("skill `{id}` belongs to no category")]
     SkillInNoCategory { id: String },
     #[error("skill `{id}` belongs to categories `{a}` and `{b}`")]
@@ -62,6 +49,8 @@ pub enum ContentError {
     EmblemShape { what: String, id: String },
     #[error("creation quest `{quest}`: flags do not match its objectives")]
     CreationQuest { quest: String },
+    #[error("template `{id}`: {why}")]
+    TemplateInvalid { id: String, why: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -73,7 +62,6 @@ pub struct Content {
     pub recipes: Vec<Recipe>,
     #[serde(default)]
     pub abilities: Vec<Ability>,
-    pub starter: Starter,
     pub creation: Creation,
     pub origins: Vec<Origin>,
     pub professions: Vec<Profession>,
@@ -140,11 +128,6 @@ impl Content {
                     item: i.id.0.clone(),
                 });
             }
-            for p in &i.perks {
-                if let Perk::Skill(id, _) = p {
-                    need_skill(format!("item {}", i.id), id)?;
-                }
-            }
             for id in &i.grants {
                 need_ability(format!("item {}", i.id), id)?;
             }
@@ -167,79 +150,6 @@ impl Content {
             need_item(format!("recipe {} output", r.id), &r.output.0)?;
         }
         self.validate_creation(&need_item, &need_skill, &need_ability)?;
-        let s = &self.starter;
-        if s.level == 0 {
-            return Err(ContentError::StarterLevel);
-        }
-        for (id, _) in &s.inventory {
-            need_item("starter inventory".into(), id)?;
-        }
-        let dup = |what: &str, id: String| ContentError::DuplicateStarter {
-            what: what.to_string(),
-            id,
-        };
-        let mut slots: HashSet<Slot> = HashSet::new();
-        for (slot, id) in &s.equipped {
-            let item = need_item("starter equipment".into(), id)?;
-            if item.slot != Some(*slot) {
-                return Err(ContentError::SlotMismatch {
-                    item: id.0.clone(),
-                    slot: *slot,
-                });
-            }
-            if !slots.insert(*slot) {
-                return Err(dup("equipment", slot.label().to_string()));
-            }
-        }
-        let mut skills: HashSet<&SkillId> = HashSet::new();
-        for (id, _) in &s.skills {
-            need_skill("starter skills".into(), id)?;
-            if !skills.insert(id) {
-                return Err(dup("skills", id.0.clone()));
-            }
-        }
-        for id in &s.talents {
-            let t = self.talent(id).ok_or_else(|| ContentError::UnknownTalent {
-                where_: "starter talents".into(),
-                id: id.0.clone(),
-            })?;
-            let have = s
-                .skills
-                .iter()
-                .find(|(sk, _)| sk == &t.skill)
-                .map(|(_, l)| *l)
-                .unwrap_or(0);
-            if have < t.level {
-                return Err(ContentError::TalentLevel {
-                    talent: id.0.clone(),
-                    skill: t.skill.0.clone(),
-                    need: t.level,
-                    have,
-                });
-            }
-        }
-        let mut abilities: HashSet<&AbilityId> = HashSet::new();
-        for id in &s.abilities {
-            need_ability("starter abilities".into(), id)?;
-            if !abilities.insert(id) {
-                return Err(dup("abilities", id.0.clone()));
-            }
-        }
-        let mut quests: HashSet<&QuestId> = HashSet::new();
-        for (id, flags) in &s.quests {
-            let q = self.quest(id).ok_or_else(|| ContentError::UnknownQuest {
-                where_: "starter quests".into(),
-                id: id.0.clone(),
-            })?;
-            if flags.len() != q.objectives.len() {
-                return Err(ContentError::ObjectiveCount {
-                    quest: id.0.clone(),
-                });
-            }
-            if !quests.insert(id) {
-                return Err(dup("quests", id.0.clone()));
-            }
-        }
         Ok(())
     }
 
@@ -346,6 +256,14 @@ impl Content {
                 need_item(where_.clone(), id)?;
             }
         }
+        for t in &self.templates {
+            crate::build::Build::from_template(self, t)
+                .validate(self)
+                .map_err(|e| ContentError::TemplateInvalid {
+                    id: t.id.0.clone(),
+                    why: e.to_string(),
+                })?;
+        }
         for (id, flags) in &self.creation.quests {
             let q = self.quest(id).ok_or_else(|| ContentError::UnknownQuest {
                 where_: "creation quests".into(),
@@ -444,19 +362,14 @@ mod tests {
                 "no item for {slot:?}"
             );
         }
-        let s = &c.starter;
-        assert_eq!(s.handle, "Vex");
-        assert!((2..=4).contains(&s.equipped.len()));
+        let vex = c.template(&TemplateId::new("vex")).unwrap();
+        assert_eq!(vex.handle, "VEX");
         assert!(
-            s.equipped.len() < Slot::ALL.len(),
-            "at least one slot stays empty"
-        );
-        assert!(
-            s.quests.iter().any(|(_, d)| d.iter().all(|x| *x)),
+            c.creation.quests.iter().any(|(_, d)| d.iter().all(|x| *x)),
             "one quest is done"
         );
         assert!(
-            s.quests.iter().any(|(_, d)| d.iter().any(|x| !*x)),
+            c.creation.quests.iter().any(|(_, d)| d.iter().any(|x| !*x)),
             "one quest is active"
         );
         assert_eq!(
@@ -469,10 +382,6 @@ mod tests {
     #[test]
     fn validation_catches_broken_content() {
         let good = Content::load().unwrap();
-
-        let mut c = good.clone();
-        c.starter.level = 0;
-        assert!(matches!(c.validate(), Err(ContentError::StarterLevel)));
 
         let mut c = good.clone();
         c.abilities
@@ -494,24 +403,15 @@ mod tests {
         ));
 
         let mut c = good.clone();
-        c.starter.equipped[0].0 = Slot::Legs; // the first equipped item is not legwear
-        let first = c.starter.equipped[0].1.clone();
-        assert_ne!(c.item(&first).unwrap().slot, Some(Slot::Legs));
-        assert!(matches!(
-            c.validate(),
-            Err(ContentError::SlotMismatch { .. })
-        ));
-
-        let mut c = good.clone();
         let dup = c.items[0].clone();
         c.items.push(dup);
         assert!(matches!(c.validate(), Err(ContentError::DuplicateId(_))));
 
         let mut c = good.clone();
-        c.starter.quests[0].1.push(true);
+        c.creation.quests[0].1.push(true);
         assert!(matches!(
             c.validate(),
-            Err(ContentError::ObjectiveCount { .. })
+            Err(ContentError::CreationQuest { .. })
         ));
 
         let mut c = good.clone();
@@ -522,48 +422,25 @@ mod tests {
         ));
 
         let mut c = good.clone();
-        c.starter.talents.push(TalentId::new("levitation"));
+        c.templates[0].talents.push(TalentId::new("levitation"));
         assert!(matches!(
             c.validate(),
             Err(ContentError::UnknownTalent { .. })
         ));
 
         let mut c = good.clone();
-        c.starter.quests[0].0 = QuestId::new("the_grail");
+        c.creation.quests[0].0 = QuestId::new("the_grail");
         assert!(matches!(
             c.validate(),
             Err(ContentError::UnknownQuest { .. })
         ));
 
         let mut c = good.clone();
-        let dup = c.starter.equipped[0].clone();
-        c.starter.equipped.push(dup);
+        c.templates[0].stats.body = 8;
+        c.templates[0].stats.cool = 8;
         assert!(matches!(
             c.validate(),
-            Err(ContentError::DuplicateStarter { .. })
-        ));
-
-        let mut c = good.clone();
-        let dup = c.starter.skills[0].clone();
-        c.starter.skills.push(dup);
-        assert!(matches!(
-            c.validate(),
-            Err(ContentError::DuplicateStarter { .. })
-        ));
-
-        let mut c = good.clone();
-        let dup = c.starter.quests[0].clone();
-        c.starter.quests.push(dup);
-        assert!(matches!(
-            c.validate(),
-            Err(ContentError::DuplicateStarter { .. })
-        ));
-
-        let mut c = good.clone();
-        c.starter.talents.push(TalentId::new("deep_dive")); // hacking 4; the starter has 3
-        assert!(matches!(
-            c.validate(),
-            Err(ContentError::TalentLevel { .. })
+            Err(ContentError::TemplateInvalid { .. })
         ));
 
         let mut c = good.clone();
@@ -602,29 +479,6 @@ mod tests {
         assert!(matches!(
             c.validate(),
             Err(ContentError::UnknownAbility { .. })
-        ));
-
-        let mut c = good.clone();
-        c.items[optics]
-            .perks
-            .push(Perk::Skill(SkillId::new("origami"), 1));
-        assert!(matches!(
-            c.validate(),
-            Err(ContentError::UnknownSkill { .. })
-        ));
-
-        let mut c = good.clone();
-        c.starter.abilities.push(AbilityId::new("flight"));
-        assert!(matches!(
-            c.validate(),
-            Err(ContentError::UnknownAbility { .. })
-        ));
-
-        let mut c = good.clone();
-        c.starter.abilities.push(AbilityId::new("street_sense"));
-        assert!(matches!(
-            c.validate(),
-            Err(ContentError::DuplicateStarter { .. })
         ));
 
         let mut c = good.clone();
@@ -693,7 +547,6 @@ mod tests {
             c.ability(&AbilityId::new("lowlight")).unwrap().kind,
             AbilityKind::Passive
         ));
-        assert_eq!(c.starter.abilities, vec![AbilityId::new("street_sense")]);
         let trace = c.ability(&AbilityId::new("arc_trace")).unwrap();
         assert!(matches!(
             trace.kind,

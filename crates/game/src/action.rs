@@ -216,7 +216,7 @@ mod tests {
 
     fn setup() -> (Content, Character, Ground, At) {
         let c = Content::load().unwrap();
-        let ch = Character::from_starter(&c);
+        let ch = Character::from_template(&c, &TemplateId::new("vex")).unwrap();
         let at = At {
             stratum: StratumKind::Street,
             pos: Pos::new(5, 5),

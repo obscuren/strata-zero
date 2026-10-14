@@ -16,7 +16,7 @@ use crate::ui::logo::{self, Logo};
 use citygen::rng::hash64;
 use citygen::{Pos, StratumKind};
 use crossterm::event::{KeyCode, KeyEvent};
-use game::{AbilityKind, Action, Active, ItemId, ItemKind, Perk, Slot, Source};
+use game::{AbilityKind, Action, Active, ItemId, ItemKind, Perk, Slot, Source, Stat};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -35,8 +35,8 @@ const LETTERS: &str = "abcdefgmnoprstvwxyz";
 pub enum Tab {
     /// Abilities, active and passive.
     Skills,
-    /// The character's trained skills and their levels.
-    Attributes,
+    /// The five stats and the points left to spend on them.
+    Stats,
     Gear,
     Inventory,
     Workbench,
@@ -51,7 +51,7 @@ pub enum Tab {
 impl Tab {
     pub const ALL: [Tab; 9] = [
         Tab::Skills,
-        Tab::Attributes,
+        Tab::Stats,
         Tab::Gear,
         Tab::Inventory,
         Tab::Workbench,
@@ -64,7 +64,7 @@ impl Tab {
     pub fn label(self) -> &'static str {
         match self {
             Tab::Skills => "SKILLS",
-            Tab::Attributes => "ATTRIBUTES",
+            Tab::Stats => "STATS",
             Tab::Gear => "GEAR",
             Tab::Inventory => "INVENTORY",
             Tab::Workbench => "WORKBENCH",
@@ -94,7 +94,7 @@ pub(crate) enum Detail {
     Slot(Slot),
     Item(ItemId),
     Recipe(usize),
-    Skill(usize),
+    Stat(Stat),
     /// Index into `Character::abilities`.
     Ability(usize),
 }
@@ -356,7 +356,7 @@ impl Deck {
     pub(crate) fn rows(&self, st: &AppState) -> Vec<Row> {
         match self.tab {
             Tab::Skills => Self::ability_rows(st),
-            Tab::Attributes => Self::skill_rows(st),
+            Tab::Stats => Self::stat_rows(st),
             Tab::Gear => Self::gear_rows(st),
             Tab::Inventory => Self::inventory_rows(st),
             Tab::Workbench => Self::workbench_rows(st),
@@ -403,13 +403,6 @@ impl Deck {
         for p in &item.perks {
             out.push(cyan(match p {
                 Perk::Stat(s, n) => format!("{n:+} {}", s.label()),
-                Perk::Skill(id, n) => format!(
-                    "{n:+} {}",
-                    st.content
-                        .skill(id)
-                        .map(|s| s.name.to_lowercase())
-                        .unwrap_or_else(|| id.to_string())
-                ),
                 Perk::Sight(n) => format!("{n:+} sight"),
                 Perk::Carry(kg) => format!("{kg:+.1} kg carry"),
                 Perk::HpMax(n) => format!("{n:+} max hp"),
@@ -520,19 +513,17 @@ impl Deck {
             .collect()
     }
 
-    fn skill_rows(st: &AppState) -> Vec<Row> {
-        st.content
-            .skills
+    fn stat_rows(st: &AppState) -> Vec<Row> {
+        Stat::ALL
             .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                let have = st.character.skill_level(&st.content, &s.id);
-                let lvl = have.min(5) as usize;
-                let bar = format!("{}{}", "▰".repeat(lvl), "▱".repeat(5 - lvl));
+            .map(|&s| {
+                let v = st.character.stats.get(s);
+                let lvl = (v as usize).min(10);
+                let bar = format!("{}{}", "▰".repeat(lvl), "▱".repeat(10 - lvl));
                 Row {
-                    text: format!("{:<12} {bar} {have}", s.name),
+                    text: format!("{:<8} {v:>2}  {bar}", s.name()),
                     tone: Tone::Normal,
-                    detail: Some(Detail::Skill(i)),
+                    detail: Some(Detail::Stat(s)),
                 }
             })
             .collect()
@@ -603,14 +594,14 @@ impl Deck {
                     .skill(&r.skill)
                     .map(|s| s.name.clone())
                     .unwrap_or_default();
-                let have = st.character.skill_level(&st.content, &r.skill);
+                let have = st.character.has_skill(&r.skill);
                 let mut out = vec![head(&r.name)];
-                let need = format!("needs {skill} {}  (you: {have})", r.level);
-                out.push(if have >= r.level {
-                    dim(need)
+                let need = if have {
+                    format!("needs {skill} · yours")
                 } else {
-                    warn(need)
-                });
+                    format!("needs {skill}")
+                };
+                out.push(if have { dim(need) } else { warn(need) });
                 out.push(plain(""));
                 for (id, n) in &r.inputs {
                     let name = st
@@ -635,48 +626,26 @@ impl Deck {
                 out.push(plain(r.desc.clone()));
                 out
             }
-            Some(Detail::Skill(i)) => {
-                let s = &st.content.skills[*i];
-                let mut out = vec![head(&s.name)];
-                out.push(dim(format!("stat · {}", s.stat.label())));
-                let mut bonus: Vec<String> = Vec::new();
-                for slot in Slot::ALL {
-                    let Some(item) = st
-                        .character
-                        .equipped(slot)
-                        .and_then(|id| st.content.item(id))
-                    else {
-                        continue;
-                    };
-                    for p in &item.perks {
-                        if let Perk::Skill(sid, n) = p
-                            && sid == &s.id
-                        {
-                            bonus.push(format!("{n:+} {}", item.name));
-                        }
-                    }
-                }
-                if !bonus.is_empty() {
-                    out.push(dim(format!(
-                        "base {} · {}",
-                        st.character.skill_base(&s.id),
-                        bonus.join(" · ")
-                    )));
-                }
+            Some(Detail::Stat(stat)) => {
+                let base = st.character.stats.get(*stat);
+                let with = st.character.stat(&st.content, *stat);
+                let mut out = vec![head(stat.name())];
+                out.push(dim(if with == base {
+                    format!("{base}")
+                } else {
+                    format!("{base} · {with} with gear")
+                }));
                 out.push(plain(""));
-                out.push(plain(s.desc.clone()));
+                out.push(plain(st.content.stat_blurb(*stat).to_string()));
                 out.push(plain(""));
-                out.push(dim("talents"));
-                for t in st.content.talents_for(&s.id) {
-                    if st.character.has_talent(&t.id) {
-                        out.push(Line::from(Span::styled(
-                            format!("◈ {}", t.name),
-                            Style::default().fg(CYAN),
-                        )));
-                        out.push(dim(format!("   {}", t.desc)));
+                out.push(dim("feeds"));
+                for s in st.content.skills.iter().filter(|s| s.stat == *stat) {
+                    let mark = if st.character.has_skill(&s.id) {
+                        "◆"
                     } else {
-                        out.push(dim(format!("  {}  (needs {})", t.name, t.level)));
-                    }
+                        "◇"
+                    };
+                    out.push(plain(format!("{mark} {}", s.name)));
                 }
                 out
             }
@@ -695,6 +664,13 @@ impl Deck {
                 };
                 let from = match source {
                     Source::Innate => "innate".to_string(),
+                    Source::Category(cat) => format!(
+                        "from {}",
+                        st.content
+                            .category(cat)
+                            .map(|c| c.name.clone())
+                            .unwrap_or_else(|| cat.to_string())
+                    ),
                     Source::Item(item) => format!(
                         "from {}",
                         st.content
@@ -1251,10 +1227,7 @@ mod tests {
             .unwrap();
         d.changed = 0;
         let text = draw(&d, &st, 120, 35);
-        assert!(
-            text.contains("needs Electronics 4") && text.contains("you: 2"),
-            "{text}"
-        );
+        assert!(text.contains("needs Electronics · yours"), "{text}");
         assert!(
             text.contains("1/1") || text.contains("0/1"),
             "have/need: {text}"
@@ -1262,20 +1235,16 @@ mod tests {
 
         d.update(&mut st, &[key(KeyCode::Char('2'))]);
         d.changed = 0;
+        let rows = d.rows(&st);
+        d.row = rows.iter().position(|r| r.text.contains("NET")).unwrap();
         let text = draw(&d, &st, 120, 35);
         assert!(
-            text.contains("Hacking") && text.contains("▰▰▰▰▱ 4"),
+            text.contains("NET       6  ▰▰▰▰▰▰▱▱▱▱") && text.contains("6 · 7 with gear"),
             "{text}"
         );
-        let rows = d.rows(&st);
-        d.row = rows
-            .iter()
-            .position(|r| r.text.contains("Hacking"))
-            .unwrap();
-        let text = draw(&d, &st, 120, 35);
         assert!(
-            text.contains("◈ Ice pick") && text.contains("Deep dive") && text.contains("needs 4"),
-            "{text}"
+            text.contains("◆ Hacking") && text.contains("◇ Vault run"),
+            "feeds: {text}"
         );
     }
 
@@ -1361,20 +1330,20 @@ mod tests {
     }
 
     #[test]
-    fn skills_row_shows_the_real_level() {
+    fn stats_rows_show_the_stat_and_its_bar() {
         let mut st = state();
-        for (id, lvl) in &mut st.character.skills {
-            if id.0 == "hacking" {
-                *lvl = 7;
-            }
-        }
+        st.character.stats.body = 7;
         let mut d = Deck::new(0);
         d.update(&mut st, &[key(KeyCode::Char('2'))]);
         let rows = d.rows(&st);
-        let hacking = rows.iter().find(|r| r.text.contains("Hacking")).unwrap();
-        assert!(hacking.text.contains("▰▰▰▰▰ 8"), "{:?}", hacking.text);
+        let body = rows.iter().find(|r| r.text.contains("BODY")).unwrap();
+        assert!(body.text.contains(" 7  ▰▰▰▰▰▰▰▱▱▱"), "{:?}", body.text);
         st.tick = 60;
-        assert!(draw(&d, &st, 120, 35).contains("▰▰▰▰▰ 8"));
+        let text = draw(&d, &st, 120, 35);
+        assert!(
+            text.contains("▰▰▰▰▰▰▰▱▱▱") && text.contains("meat"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -1550,16 +1519,13 @@ mod tests {
         let mut d = Deck::new(0);
         d.update(&mut st, &[key(KeyCode::Char('2'))]);
         let rows = d.rows(&st);
-        d.row = rows
-            .iter()
-            .position(|r| r.text.contains("Hacking"))
-            .unwrap();
+        d.row = rows.iter().position(|r| r.text.contains("NET")).unwrap();
         d.changed = 0;
         st.tick = 60;
         let text = draw(&d, &st, 120, 35);
         assert!(
-            text.contains("▰▰▰▰▱ 4") && text.contains("base 3 · +1 Pawnshop deck"),
-            "{text}"
+            text.contains("6 · 7 with gear"),
+            "the deck's +1 net: {text}"
         );
         d.update(&mut st, &[key(KeyCode::Char('3'))]);
         let rows = d.rows(&st);
@@ -1709,9 +1675,11 @@ mod tests {
         let mut d = Deck::new(0);
         d.update(&mut st, &[key(KeyCode::Char('4'))]);
         let rows = d.rows(&st);
-        d.row = rows.len() - 1;
+        d.row = rows
+            .iter()
+            .rposition(|r| r.text.contains("1×"))
+            .expect("a single item somewhere in the pack");
         let last = rows[d.row].text.clone();
-        assert!(last.contains("1×"), "the last row is a single item: {last}");
         let ScreenCmd::Push { to: mut p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))])
         else {
             panic!()
@@ -1747,7 +1715,7 @@ mod tests {
             labels,
             vec![
                 "SKILLS",
-                "ATTRIBUTES",
+                "STATS",
                 "GEAR",
                 "INVENTORY",
                 "WORKBENCH",
@@ -1767,10 +1735,7 @@ mod tests {
         assert!(text.contains("Netscan"), "SKILLS lists abilities: {text}");
         d.update(&mut st, &[key(KeyCode::Char('2'))]);
         let text = draw(&d, &st, 120, 35);
-        assert!(
-            text.contains("Hacking"),
-            "ATTRIBUTES lists the old skills: {text}"
-        );
+        assert!(text.contains("BODY"), "STATS lists the five stats: {text}");
         d.update(&mut st, &[key(KeyCode::Char('6'))]);
         assert_eq!(d.tab, Tab::Cyberdeck);
         let rows: Vec<String> = d.rows(&st).iter().map(|r| r.text.clone()).collect();

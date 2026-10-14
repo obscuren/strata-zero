@@ -148,7 +148,6 @@ impl Stat {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Perk {
     Stat(Stat, i8),
-    Skill(SkillId, i8),
     /// Field-of-view radius, in tiles.
     Sight(i8),
     /// Carry capacity, in kilograms.
@@ -241,7 +240,6 @@ pub struct Talent {
     pub id: TalentId,
     pub name: String,
     pub skill: SkillId,
-    pub level: u8,
     pub desc: String,
 }
 
@@ -260,7 +258,6 @@ pub struct Recipe {
     pub id: RecipeId,
     pub name: String,
     pub skill: SkillId,
-    pub level: u8,
     pub inputs: Vec<(ItemId, u32)>,
     pub output: (ItemId, u32),
     pub desc: String,
@@ -370,28 +367,4 @@ impl Stats {
             Stat::Net => self.net,
         }
     }
-}
-
-/// What a new character starts with.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Starter {
-    pub handle: String,
-    pub credits: u32,
-    pub hp: u32,
-    #[serde(default = "one")]
-    pub level: u8,
-    #[serde(default)]
-    pub focus: u32,
-    pub stats: Stats,
-    pub inventory: Vec<(ItemId, u32)>,
-    pub equipped: Vec<(Slot, ItemId)>,
-    pub skills: Vec<(SkillId, u8)>,
-    pub talents: Vec<TalentId>,
-    #[serde(default)]
-    pub abilities: Vec<AbilityId>,
-    pub quests: Vec<(QuestId, Vec<bool>)>,
-}
-
-fn one() -> u8 {
-    1
 }
