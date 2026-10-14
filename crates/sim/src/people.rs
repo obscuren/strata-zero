@@ -132,9 +132,12 @@ pub struct Person {
 pub struct Car {
     pub id: CarId,
     pub owner: PersonId,
+    /// Where the car stands, or stood when its owner set off for it.
     pub pos: Pos,
     pub hue: Hue,
     pub parked: bool,
+    /// The kerb a car in flight is bound for: reserved from dispatch.
+    pub bound: Option<Pos>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -208,13 +211,21 @@ pub fn seed_population(
         {
             let shifts = pr.hours.spans();
             let per_shift = matches!(pr.hours, Hours::Shifts(_));
-            let work = if pr.id == "courier" {
-                Work::Roaming
-            } else {
-                Work::Building(b.id)
+            let muscle = pr.id == "door_muscle";
+            let post = places.posts.get(&b.id).copied().filter(|_| muscle);
+            let work = match post {
+                Some(p) => Work::Spot(p),
+                None if pr.id == "courier" => Work::Roaming,
+                None => Work::Building(b.id),
             };
+            let at = post.unwrap_or(at);
             if per_shift {
                 for &shift in &shifts {
+                    // Muscle keep the tower and office doors by day, the club doors by night.
+                    let night = shift.0 >= 720;
+                    if muscle && night != (b.kind == BuildingKind::Club) {
+                        continue;
+                    }
                     for _ in 0..scaled(rng, pr.staff, density) {
                         openings.push(Opening {
                             profession: pr,
@@ -454,6 +465,7 @@ pub fn seed_population(
             pos: spot,
             hue: CAR_HUES[rng.random_range(0..CAR_HUES.len())],
             parked: true,
+            bound: None,
         });
         p.car = Some(id);
     }
@@ -550,6 +562,7 @@ mod tests {
     fn a_city_seeds_a_population_that_fits_its_buildings() {
         let c = city();
         let people = People::load().unwrap();
+        let places = Places::derive(&c);
         let pop = seed(&c, 1.0);
         let n = pop.people.len();
         assert!((80..=400).contains(&n), "{n} people");
@@ -564,7 +577,13 @@ mod tests {
                     p.name,
                     c.buildings[b.index()].kind
                 ),
-                Work::Spot(_) => assert!(pr.works_at.is_empty(), "{} has a spot job", p.profession),
+                Work::Spot(spot) => assert!(
+                    pr.works_at.is_empty()
+                        || (p.profession == "door_muscle"
+                            && places.posts.values().any(|q| q == spot)),
+                    "{} has a spot job at {spot:?}",
+                    p.profession
+                ),
                 Work::Roaming => assert_eq!(p.profession, "courier"),
             }
             if let Some(h) = p.home {

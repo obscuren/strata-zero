@@ -111,6 +111,11 @@ pub struct World {
     /// A tile nobody may stand on: the player's. Walkers are held a tile back.
     blocker: Option<Pos>,
     displaced: HashMap<PersonId, Displaced>,
+    /// What someone was doing before a chat, to take up again after.
+    chat_resume: HashMap<PersonId, Activity>,
+    /// A goal someone has finished with early (a client after a date); the schedule
+    /// does not send them back out for it.
+    satisfied: HashMap<PersonId, Goal>,
 }
 
 impl World {
@@ -157,6 +162,8 @@ impl World {
             rng,
             blocker: None,
             displaced: HashMap::new(),
+            chat_resume: HashMap::new(),
+            satisfied: HashMap::new(),
         };
         w.place_everyone(city);
         w.refresh_open();
@@ -371,11 +378,12 @@ impl World {
             })
     }
 
-    fn parked_tiles(&self) -> HashSet<Pos> {
+    /// Every tile a car stands on or is bound for: a car in flight keeps its kerb
+    /// until it leaves and holds its destination from the moment it is dispatched.
+    fn occupied_tiles(&self) -> HashSet<Pos> {
         self.cars
             .iter()
-            .filter(|c| c.parked)
-            .map(|c| c.pos)
+            .flat_map(|c| std::iter::once(c.pos).chain(c.bound))
             .collect()
     }
 
@@ -411,9 +419,10 @@ impl World {
                 && from.manhattan(to) > DRIVE_FROM
             {
                 let car_pos = self.cars[car_id.0 as usize].pos;
-                let mut occupied = self.parked_tiles();
+                let mut occupied = self.occupied_tiles();
                 occupied.remove(&car_pos);
                 if let Some(kerb) = self.free_kerb_near(city, to, &occupied)
+                    && kerb != car_pos
                     && let Some(a) = walk_path(city, from, car_pos)
                     && let Some(b) = drive_path(city, car_pos, kerb)
                     && let Some(c) = walk_path(city, kerb, to)
@@ -428,7 +437,7 @@ impl World {
                     ];
                     let car = &mut self.cars[car_id.0 as usize];
                     car.parked = false;
-                    car.pos = kerb;
+                    car.bound = Some(kerb);
                 }
             }
             if legs.is_empty() {
@@ -568,7 +577,10 @@ impl World {
                     if let Some(c) = l.car {
                         let car = &mut self.cars[c.0 as usize];
                         car.parked = true;
-                        car.pos = *l.path.last().unwrap_or(&car.pos);
+                        car.pos = car
+                            .bound
+                            .take()
+                            .unwrap_or(*l.path.last().unwrap_or(&car.pos));
                     }
                 }
                 // A noodle bar at its rush: queue a minute at the door first.
@@ -623,11 +635,23 @@ impl World {
                 activity: Activity::Working,
             };
             let door = self.places.doors[&d.hotel][0];
-            self.people[d.client.0 as usize].whereabouts = Whereabouts::At {
+            let ci = d.client.0 as usize;
+            self.people[ci].whereabouts = Whereabouts::At {
                 pos: door,
                 activity: Activity::Loitering,
             };
-            self.people[d.client.0 as usize].goal = Goal::Work; // re-evaluated below, sends them home
+            // Done for the night: home, and the schedule's Strip does not pull them
+            // back out.
+            self.people[ci].goal = Goal::Home;
+            self.satisfied
+                .insert(d.client, Goal::Leisure(Leisure::Strip));
+            if let Some(dest) = self.dest_for(city, ci, Goal::Home) {
+                self.pending.push_back(TripRequest {
+                    who: d.client,
+                    dest,
+                    goal: Goal::Home,
+                });
+            }
         }
         // Departures: the schedule changed its mind, and the person is free to go.
         for i in 0..self.people.len() {
@@ -642,6 +666,12 @@ impl World {
                 continue;
             }
             let goal = goal_at(&self.people[i].schedule, mod_);
+            if let Some(done) = self.satisfied.get(&PersonId(i as u32)) {
+                if *done == goal {
+                    continue;
+                }
+                self.satisfied.remove(&PersonId(i as u32));
+            }
             let roaming = self.people[i].work == Work::Roaming
                 && goal == Goal::Work
                 && self.rng.random::<f32>() < 0.2;
@@ -668,7 +698,10 @@ impl World {
             let pick = self.rng.random_range(0..5usize);
             if let Whereabouts::At { pos, activity } = &mut self.people[i].whereabouts {
                 if *activity == Activity::Chatting {
-                    *activity = Activity::Working;
+                    *activity = self
+                        .chat_resume
+                        .remove(&PersonId(i as u32))
+                        .unwrap_or(Activity::Working);
                 }
                 if let Some(a) = anchor
                     && *activity == Activity::Working
@@ -694,6 +727,9 @@ impl World {
             if who.len() >= 2 && self.rng.random::<f32>() < 0.2 {
                 for &i in who.iter().take(2) {
                     if let Whereabouts::At { activity, .. } = &mut self.people[i].whereabouts {
+                        if *activity != Activity::Chatting {
+                            self.chat_resume.insert(PersonId(i as u32), *activity);
+                        }
                         *activity = Activity::Chatting;
                     }
                 }
@@ -774,33 +810,23 @@ impl World {
     /// Everyone and every car inside `bubble` now, with chat markers.
     pub fn visible(&self, bubble: Rect) -> Vec<Mover> {
         let mut out = Vec::new();
-        let mut driving: HashMap<CarId, Pos> = HashMap::new();
         for (i, p) in self.people.iter().enumerate() {
-            let Some((pos, car)) = self.position(i) else {
+            let Some((pos, None)) = self.position(i) else {
                 continue;
             };
-            match car {
-                Some(c) => {
-                    driving.insert(c, pos);
-                }
-                None => {
-                    if bubble.contains(pos) {
-                        out.push(Mover {
-                            pos,
-                            kind: MoverKind::Walker {
-                                id: p.id,
-                                tint: p.tint,
-                            },
-                        });
-                    }
-                }
+            if bubble.contains(pos) {
+                out.push(Mover {
+                    pos,
+                    kind: MoverKind::Walker {
+                        id: p.id,
+                        tint: p.tint,
+                    },
+                });
             }
         }
         for car in &self.cars {
-            let (pos, parked) = match driving.get(&car.id) {
-                Some(p) => (*p, false),
-                None => (car.pos, true),
-            };
+            let (pos, moving) = self.car_spot(car.id);
+            let parked = !moving;
             if bubble.contains(pos) {
                 out.push(Mover {
                     pos,
@@ -831,19 +857,46 @@ impl World {
         })
     }
 
+    /// Where a car is drawn and whether it is moving: parked at its kerb, waiting
+    /// there while its owner walks to it, on the road, or at the kerb it was bound
+    /// for once the owner has got out.
+    pub fn car_spot(&self, id: CarId) -> (Pos, bool) {
+        let car = &self.cars[id.0 as usize];
+        if car.parked {
+            return (car.pos, false);
+        }
+        let bound = car.bound.unwrap_or(car.pos);
+        let Whereabouts::Travelling(t) = &self.people[car.owner.0 as usize].whereabouts else {
+            return (bound, false);
+        };
+        let elapsed = self.tick.saturating_sub(t.depart);
+        let mut start = 0;
+        for l in &t.legs {
+            let per = if l.car.is_some() {
+                DRIVE_TICKS
+            } else {
+                WALK_TICKS
+            };
+            let span = l.path.len().saturating_sub(1) as u64 * per;
+            if l.car == Some(id) {
+                return if elapsed < start {
+                    (car.pos, false)
+                } else if elapsed < start + span {
+                    (Self::trip_pos(t, elapsed).0, true)
+                } else {
+                    (bound, false)
+                };
+            }
+            start += span;
+        }
+        (bound, false)
+    }
+
     /// The car on `pos` now, parked or driving.
     pub fn car_at(&self, pos: Pos) -> Option<CarId> {
-        for (i, p) in self.people.iter().enumerate() {
-            if let Some((cp, Some(c))) = self.position(i)
-                && cp == pos
-            {
-                let _ = p;
-                return Some(c);
-            }
-        }
         self.cars
             .iter()
-            .find(|c| c.parked && c.pos == pos)
+            .find(|c| self.car_spot(c.id).0 == pos)
             .map(|c| c.id)
     }
 
@@ -1037,6 +1090,7 @@ mod tests {
     use super::*;
     use crate::content::People;
     use crate::paths::drive_cost;
+    use crate::people::Segment;
     use citygen::world::{BuildingKind, Theme};
     use citygen::{GenParams, Generator, Rect, SizePreset, StratumKind, Terrain};
     use std::collections::HashSet;
@@ -1179,16 +1233,41 @@ mod tests {
             unreachable!()
         };
         let mut drove = false;
+        let mut waited = false;
         let mut t = w.tick();
-        let end = tick_at(12 * 60, 1);
+        let end = tick_at(22 * 60, 1);
         while t < end {
             t += TICKS_PER_MINUTE;
             w.advance(&c, t);
             w.path_some(&c, usize::MAX);
+            // Cars that are not moving never share a tile, all day long.
+            let mut seen = HashSet::new();
+            for car in w.cars() {
+                let (spot, moving) = w.car_spot(car.id);
+                if !moving {
+                    assert!(
+                        seen.insert(spot),
+                        "two cars standing on {spot:?} at tick {t}"
+                    );
+                }
+            }
             if let Whereabouts::Travelling(trip) = &w.people()[driver.id.0 as usize].whereabouts
                 && trip.legs.iter().any(|l| l.car.is_some())
             {
                 drove = true;
+                // While the owner walks to the car, it waits where it was left.
+                let car_id = driver.car.unwrap();
+                let walk_to_car = trip.legs[0].path.len().saturating_sub(1) as u64 * WALK_TICKS;
+                if t.saturating_sub(trip.depart) < walk_to_car {
+                    let origin = *trip.legs[0].path.last().unwrap();
+                    assert_eq!(
+                        w.car_spot(car_id),
+                        (origin, false),
+                        "the car waits at its kerb"
+                    );
+                    assert_eq!(w.car_at(origin), Some(car_id));
+                    waited = true;
+                }
                 for l in &trip.legs {
                     for &p in &l.path {
                         if l.car.is_some() {
@@ -1199,22 +1278,257 @@ mod tests {
                     }
                 }
             }
-            let mut seen = HashSet::new();
-            for car in w.cars().iter().filter(|car| car.parked) {
-                assert!(seen.insert(car.pos), "two parked cars on {:?}", car.pos);
-            }
         }
         assert!(drove, "a long commute with a car is driven");
+        assert!(waited, "the walk to the car was seen");
         let p = &w.people()[driver.id.0 as usize];
-        assert_eq!(p.whereabouts, Whereabouts::Inside(work));
+        assert_eq!(
+            p.whereabouts,
+            Whereabouts::Inside(p.home.unwrap()),
+            "home by ten at night"
+        );
         let car = &w.cars()[driver.car.unwrap().0 as usize];
         assert!(car.parked);
         assert!(places.is_kerb(car.pos) || places.lots.iter().any(|(_, t)| t.contains(&car.pos)));
         assert!(
-            car.pos.manhattan(places.doors[&work][0]) <= 40,
-            "parked near work: {:?}",
-            car.pos
+            car.pos.manhattan(places.doors[&p.home.unwrap()][0]) <= 40,
+            "parked near home: {:?} (work {:?})",
+            car.pos,
+            work
         );
+    }
+
+    #[test]
+    fn cars_never_stack_on_the_default_city() {
+        let c = Generator::run(GenParams::default()).unwrap();
+        let mut w = world(&c);
+        let mut t = w.tick();
+        while t < tick_at(60, 1) {
+            t += TICKS_PER_MINUTE;
+            w.advance(&c, t);
+            w.path_some(&c, usize::MAX);
+            let mut seen = HashSet::new();
+            for car in w.cars() {
+                let (spot, moving) = w.car_spot(car.id);
+                if !moving {
+                    assert!(
+                        seen.insert(spot),
+                        "two cars standing on {spot:?} at tick {t}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn door_muscle_stands_at_the_post_and_towers_close_at_night() {
+        let c = city();
+        let mut w = world(&c);
+        let places = Places::derive(&c);
+        let posts: HashSet<Pos> = places.posts.values().copied().collect();
+        let muscle: Vec<&Person> = w
+            .people()
+            .iter()
+            .filter(|p| p.profession == "door_muscle")
+            .collect();
+        assert!(!muscle.is_empty());
+        for m in &muscle {
+            let Work::Spot(p) = m.work else {
+                panic!("{} works inside", m.name)
+            };
+            assert!(posts.contains(&p), "{} stands at a post", m.name);
+            let night = m.shift_start == 1140;
+            let kinds: Vec<BuildingKind> = places
+                .posts
+                .iter()
+                .filter(|(_, q)| **q == p)
+                .map(|(b, _)| c.buildings[b.index()].kind)
+                .collect();
+            assert!(
+                kinds.iter().all(|k| if night {
+                    *k == BuildingKind::Club
+                } else {
+                    matches!(k, BuildingKind::CorpTower | BuildingKind::Office)
+                }),
+                "{} ({}) at {:?}",
+                m.name,
+                if night { "night" } else { "day" },
+                kinds
+            );
+        }
+        run_to(&mut w, &c, tick_at(23 * 60, 0));
+        let on_the_door = |w: &World| {
+            w.people()
+                .iter()
+                .filter(|p| p.profession == "door_muscle")
+                .filter(|p| {
+                    matches!(
+                        p.whereabouts,
+                        Whereabouts::At {
+                            activity: Activity::Working,
+                            ..
+                        }
+                    )
+                })
+                .count()
+        };
+        assert!(on_the_door(&w) > 0, "muscle on the club doors at eleven");
+        run_to(&mut w, &c, tick_at(4 * 60, 1));
+        assert!(
+            w.open_buildings()
+                .all(|b| c.buildings[b.index()].kind != BuildingKind::CorpTower),
+            "no tower is open at four in the morning"
+        );
+        run_to(&mut w, &c, tick_at(12 * 60, 1));
+        assert!(on_the_door(&w) > 0, "muscle on the tower doors at noon");
+    }
+
+    #[test]
+    fn a_chat_hands_back_the_activity() {
+        let c = city();
+        let mut w = world(&c);
+        run_to(&mut w, &c, tick_at(23 * 60, 0));
+        // Two people whose schedule keeps them home till two, stood on one tile: one
+        // in a queue, one idling.
+        let stay: Vec<usize> = (0..w.people.len())
+            .filter(|&i| {
+                let p = &w.people[i];
+                !p.client
+                    && p.goal == Goal::Home
+                    && (0..=180).all(|m| goal_at(&p.schedule, m) == Goal::Home)
+                    && matches!(p.whereabouts, Whereabouts::Inside(_))
+            })
+            .take(2)
+            .collect();
+        let [a, b] = stay[..] else {
+            panic!("two people at home")
+        };
+        let tile = *w
+            .places
+            .kerbs
+            .iter()
+            .find(|k| walk_cost(&c, k.step(citygen::Dir::N), k.step(citygen::Dir::N)) == Some(1))
+            .map(|k| k.step(citygen::Dir::N))
+            .as_ref()
+            .expect("a sidewalk");
+        w.people[a].whereabouts = Whereabouts::At {
+            pos: tile,
+            activity: Activity::Queueing,
+        };
+        w.people[b].whereabouts = Whereabouts::At {
+            pos: tile,
+            activity: Activity::Loitering,
+        };
+        let act = |w: &World, i: usize| match w.people[i].whereabouts {
+            Whereabouts::At { activity, .. } => Some(activity),
+            ref other => panic!("moved: {other:?}"),
+        };
+        let mut chatted = false;
+        for _ in 0..120 {
+            let t = w.tick() + TICKS_PER_MINUTE;
+            w.advance(&c, t);
+            if act(&w, a) == Some(Activity::Chatting) {
+                assert_eq!(act(&w, b), Some(Activity::Chatting));
+                chatted = true;
+                continue;
+            }
+            if chatted {
+                assert_eq!(
+                    act(&w, a),
+                    Some(Activity::Queueing),
+                    "back in the queue after the chat"
+                );
+                assert_eq!(
+                    act(&w, b),
+                    Some(Activity::Loitering),
+                    "idling again after the chat"
+                );
+                return;
+            }
+        }
+        panic!("no chat in two hours on a shared tile");
+    }
+
+    #[test]
+    fn a_client_goes_home_after_a_date() {
+        let c = city();
+        let mut w = world(&c);
+        run_to(&mut w, &c, tick_at(23 * 60, 0));
+        let (wi, beat) = (0..w.people.len())
+            .find_map(|i| match w.people[i].whereabouts {
+                Whereabouts::At {
+                    pos,
+                    activity: Activity::Working,
+                } if w.people[i].profession == "sex_worker" => Some((i, pos)),
+                _ => None,
+            })
+            .expect("someone on the beat");
+        let ci = (0..w.people.len())
+            .find(|&i| w.people[i].client && w.people[i].home.is_some() && i != wi)
+            .expect("a client with a home");
+        w.people[ci].schedule = vec![Segment {
+            at: 0,
+            goal: Goal::Leisure(Leisure::Strip),
+        }];
+        w.people[ci].goal = Goal::Leisure(Leisure::Strip);
+        w.people[ci].whereabouts = Whereabouts::At {
+            pos: beat,
+            activity: Activity::Loitering,
+        };
+        let mut dated = false;
+        for _ in 0..40 {
+            let t = w.tick() + TICKS_PER_MINUTE;
+            w.advance(&c, t);
+            w.path_some(&c, usize::MAX);
+            if w.dates.iter().any(|d| d.client.0 as usize == ci) {
+                dated = true;
+                break;
+            }
+        }
+        assert!(dated, "a client beside a worker is taken in");
+        for _ in 0..45 {
+            let t = w.tick() + TICKS_PER_MINUTE;
+            w.advance(&c, t);
+            w.path_some(&c, usize::MAX);
+            if !w.dates.iter().any(|d| d.client.0 as usize == ci) {
+                break;
+            }
+        }
+        let client = &w.people[ci];
+        assert_eq!(
+            client.goal,
+            Goal::Home,
+            "done for the night: {:?}",
+            client.whereabouts
+        );
+        assert!(
+            matches!(&client.whereabouts, Whereabouts::Travelling(t) if t.goal == Goal::Home)
+                || client.whereabouts == Whereabouts::Inside(client.home.unwrap()),
+            "{:?}",
+            client.whereabouts
+        );
+        let worker = &w.people[wi];
+        assert!(
+            matches!(
+                worker.whereabouts,
+                Whereabouts::At {
+                    activity: Activity::Working,
+                    ..
+                }
+            ) || matches!(worker.whereabouts, Whereabouts::Inside(_)),
+            "{:?}",
+            worker.whereabouts
+        );
+        for _ in 0..60 {
+            let t = w.tick() + TICKS_PER_MINUTE;
+            w.advance(&c, t);
+            w.path_some(&c, usize::MAX);
+            assert_eq!(
+                w.people[ci].goal,
+                Goal::Home,
+                "the schedule's Strip does not pull them back out"
+            );
+        }
     }
 
     #[test]

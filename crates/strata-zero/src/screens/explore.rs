@@ -471,7 +471,9 @@ impl MapScreen {
                 Pick::World(WorldAct::Down),
             ));
         }
-        if let Some(world) = st.world.as_ref() {
+        if k == StratumKind::Street
+            && let Some(world) = st.world.as_ref()
+        {
             for n in pos.neighbors4() {
                 let Some(id) = world.person_at(n) else {
                     continue;
@@ -489,6 +491,7 @@ impl MapScreen {
         let person = st
             .world
             .as_ref()
+            .filter(|_| k == StratumKind::Street)
             .and_then(|w| w.person_at(pos).map(|id| w.card(id, city)));
         choices.push(Choice::new(
             'l',
@@ -920,6 +923,7 @@ impl Screen for MapScreen {
         let person = st
             .world
             .as_ref()
+            .filter(|_| self.stratum == StratumKind::Street)
             .and_then(|w| w.person_at(cursor).map(|id| w.card(id, city)));
         let view = sidebar::SidebarView {
             city,
@@ -2282,14 +2286,81 @@ mod tests {
         st.player.as_mut().unwrap().pos = walker.pos;
         s.update(&mut st, &[]);
         let pos = st.player.as_ref().unwrap().pos;
-        let world = st.world.as_ref().unwrap();
         for _ in 0..3 {
+            st.tick += 9;
+            s.update(&mut st, &[]);
             assert!(
-                world.person_at(pos).is_none(),
+                st.world.as_ref().unwrap().person_at(pos).is_none(),
                 "held a tile back while the player stands there"
             );
         }
         let text = draw_screen(&s, &st, 120, 40);
         assert!(text.contains('@'));
+    }
+
+    #[test]
+    fn street_people_do_not_block_or_talk_on_the_undercity() {
+        let mut st = state();
+        seed_world(&mut st);
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let under = StratumKind::Undercity;
+        let mut found = None;
+        for _ in 0..8 {
+            run_an_hour(&mut st, &mut s);
+            let city = st.city.as_ref().unwrap();
+            let whole = citygen::Rect::new(0, 0, city.size.w as i32, city.size.h as i32);
+            found = st
+                .world
+                .as_ref()
+                .unwrap()
+                .visible(whole)
+                .into_iter()
+                .filter(|m| matches!(m.kind, sim::MoverKind::Walker { .. }))
+                .find_map(|m| {
+                    if !city.walkable(under, m.pos) {
+                        return None;
+                    }
+                    m.pos
+                        .neighbors4()
+                        .find(|n| city.walkable(under, *n))
+                        .map(|n| (m.pos, n))
+                });
+            if found.is_some() {
+                break;
+            }
+        }
+        let (person, beside) = found.expect("a tunnel under someone");
+        {
+            let p = st.player.as_mut().unwrap();
+            p.stratum = under;
+            p.pos = beside;
+        }
+        s.stratum = under;
+        s.update(&mut st, &[]);
+        let dir = match (person.x - beside.x, person.y - beside.y) {
+            (1, 0) => KeyCode::Char('l'),
+            (-1, 0) => KeyCode::Char('h'),
+            (0, 1) => KeyCode::Char('j'),
+            _ => KeyCode::Char('k'),
+        };
+        let ScreenCmd::Push { to: mut here, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens HERE")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*here, &st, 120, 40);
+        assert!(
+            !text.contains("talk to"),
+            "nobody to talk to down here: {text}"
+        );
+        here.update(&mut st, &[key(KeyCode::Esc)]);
+        let cmd = s.update(&mut st, &[key(dir)]);
+        assert!(matches!(cmd, ScreenCmd::Stay));
+        assert_eq!(
+            st.player.as_ref().unwrap().pos,
+            person,
+            "nobody upstairs blocks the tunnel"
+        );
     }
 }
