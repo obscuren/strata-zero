@@ -116,11 +116,15 @@ impl Trace {
     pub fn add(&mut self, noise: u8, now: u64) -> TraceEvent {
         let was_alert = self.alert(now);
         self.heat = self.heat.saturating_add(noise).min(DUMP_HEAT);
+        // A jump straight past the alarm line still starts the alert.
+        let fresh_alarm = self.heat >= ALARM_HEAT && !was_alert;
+        if fresh_alarm {
+            self.alert_until = Some(now + ALERT_MINUTES);
+        }
         if self.heat >= DUMP_HEAT {
             return TraceEvent::Dump;
         }
-        if self.heat >= ALARM_HEAT && !was_alert {
-            self.alert_until = Some(now + ALERT_MINUTES);
+        if fresh_alarm {
             return TraceEvent::Alarm;
         }
         TraceEvent::None
@@ -226,6 +230,9 @@ mod tests {
             (0, None),
             "the alert ending resets the heat"
         );
+        let mut t = Trace::default();
+        assert_eq!(t.add(100, 0), TraceEvent::Dump);
+        assert!(t.alert(1), "a dump from cold starts the alert too");
         let mut t = Trace::default();
         t.add(5, 0);
         t.cool(1, true);

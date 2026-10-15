@@ -47,6 +47,8 @@ pub struct AppState {
     pub interiors: crate::interiors::Interiors,
     /// The constructs entered this session.
     pub constructs: crate::constructs::Constructs,
+    /// The Net's state: traces, hacks, backdoors, cooling, the program in flight.
+    pub net: crate::net::NetState,
     /// Items lying in the city.
     pub ground: game::Ground,
     /// Ability effects in flight, oldest first.
@@ -121,6 +123,7 @@ impl AppState {
             world: None,
             interiors: Default::default(),
             constructs: Default::default(),
+            net: Default::default(),
             ground: game::Ground::default(),
             fx: Vec::new(),
             repaint: false,

@@ -154,6 +154,10 @@ pub fn ride(st: &mut AppState, b: BuildingId, level: i32) -> Result<String, Stri
     if level < plan.lowest || level > plan.top {
         return Err("no such floor".to_string());
     }
+    let now = st.net.now(st);
+    if !st.net.lifts_answer(b, now) {
+        return Err("lifts locked down".to_string());
+    }
     st.interiors
         .ensure(city, b, level)
         .ok_or("that floor is missing")?;

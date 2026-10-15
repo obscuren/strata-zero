@@ -7,6 +7,7 @@ mod cli;
 mod constructs;
 mod interiors;
 mod messages;
+mod net;
 mod render;
 mod save;
 mod screens;

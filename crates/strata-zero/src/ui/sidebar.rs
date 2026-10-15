@@ -184,6 +184,10 @@ pub struct SidebarView<'a> {
     pub dev: bool,
     /// Whoever stands on the focus tile, for the inspector.
     pub person: Option<&'a sim::Card>,
+    /// The Net's state: the trace and the hacks inside a construct.
+    pub net: &'a crate::net::NetState,
+    /// The game minute, for the trace's alert and the hacks' windows.
+    pub now: u64,
 }
 
 fn plain(text: impl Into<String>) -> Line<'static> {
@@ -202,7 +206,44 @@ fn separator(width: u16) -> Line<'static> {
 pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
     let city = v.map.city();
     let mut out = Vec::new();
-    if v.map.stratum() == Some(StratumKind::Net) {
+    if let citygen::Place::Construct(b) = v.map.place() {
+        for (i, line) in crate::net::trace_lines(v.net, b, v.now)
+            .into_iter()
+            .enumerate()
+        {
+            let style = if i == 0 {
+                Style::default().fg(CYAN)
+            } else {
+                Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD)
+            };
+            out.push(Line::from(Span::styled(format!(" {line}"), style)));
+        }
+        if let Some(t) = v.map.tile(v.focus) {
+            match t.feature {
+                Some(Feature::Node(k)) => {
+                    let id = city
+                        .net
+                        .nodes
+                        .iter()
+                        .find(|n| {
+                            n.building == Some(b) && n.kind == k && v.net.copied(n.id, v.now)
+                                || n.building == Some(b)
+                                    && n.kind == k
+                                    && v.net.blinded(n.id, v.now)
+                        })
+                        .map(|n| n.id);
+                    let state = match (k, id) {
+                        (NodeKind::Camera, Some(_)) => " · blind",
+                        (NodeKind::DataVault | NodeKind::Server, Some(_)) => " · copied",
+                        _ => "",
+                    };
+                    out.push(plain(format!(" ◆ {}{state}", k.label())));
+                }
+                Some(Feature::Ice(g)) => out.push(plain(format!(" ▣ ICE · {}", g.label()))),
+                _ => {}
+            }
+        }
+    } else if v.map.stratum() == Some(StratumKind::Net) {
         if let Some(id) = v
             .map
             .stratum()
@@ -565,6 +606,8 @@ mod tests {
             tick: st.tick,
             dev: st.dev,
             person: None,
+            net: &st.net,
+            now: 0,
         }
     }
 
