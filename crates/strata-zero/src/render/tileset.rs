@@ -5,7 +5,9 @@ use crate::render::lighting::lit;
 use crate::render::overlay::SIGNAL;
 use crate::render::style::StylePack;
 use crate::render::{Cell, ConnDir, RenderCtx, Rgb, Visibility};
-use citygen::{BuildingKind, ConnectorKind, Feature, NodeKind, StratumKind, Terrain, Tile};
+use citygen::{
+    BuildingKind, ConnectorKind, Feature, Furniture, NodeKind, StratumKind, Terrain, Tile,
+};
 
 const LIGHT: [char; 16] = [
     '─', '│', '─', '└', '│', '│', '┌', '├', '─', '┘', '─', '┴', '┐', '┤', '┬', '┼',
@@ -106,6 +108,17 @@ pub fn glyph_for(
             Feature::Pipe => '╌',
             Feature::Cable => '╌',
             Feature::Node(k) => node_glyph(k, style),
+            Feature::Furniture(piece) => match piece {
+                Furniture::Desk => '▭',
+                Furniture::Counter => '═',
+                Furniture::Table => '○',
+                Furniture::Stool => '·',
+                Furniture::Shelf => '≣',
+                Furniture::Machine => '⚙',
+                Furniture::Bed => '▤',
+                Furniture::Shrine => '♦',
+                Furniture::Locker => '▮',
+            },
         };
     }
     let horizontal = mask & (MASK_E | MASK_W) != 0;
@@ -139,6 +152,7 @@ pub fn glyph_for(
         Terrain::Wall => wall_set(kind)[(mask & 15) as usize],
         Terrain::Door => '▯',
         Terrain::Window => '▫',
+        Terrain::Mass => pick(&g.mass, variant as u64),
         Terrain::Rooftop => pick(&g.mass, variant as u64),
         Terrain::Walkway => {
             if horizontal {
@@ -292,6 +306,7 @@ fn terrain_colors(terrain: Terrain, tile: &Tile, ctx: &RenderCtx, tick: u64) -> 
         Terrain::Wall => (ts.wall, bg0),
         Terrain::Door => (ts.accent2, ts.floor),
         Terrain::Window => (ts.accent.scale(0.75), bg0),
+        Terrain::Mass => (ts.wall.scale(0.45), bg0),
         Terrain::Rooftop => (ts.roof, ts.roof.scale(0.4)),
         Terrain::Walkway => (ts.accent.scale(0.85), Rgb(18, 22, 30)),
         Terrain::Bridge => (ts.wall.scale(1.3), Rgb(18, 22, 30)),
@@ -338,6 +353,8 @@ fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
         Feature::Node(_) => {
             Rgb(240, 255, 250).scale(0.7 + 0.3 * pulse(tick + tile.variant as u64, 30))
         }
+        Feature::Furniture(Furniture::Counter | Furniture::Shrine) => ts.accent2,
+        Feature::Furniture(_) => ts.wall.scale(1.2),
     }
 }
 

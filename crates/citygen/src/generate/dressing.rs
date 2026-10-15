@@ -366,7 +366,8 @@ mod tests {
         assert!(count(|f| matches!(f, Feature::Neon(_))) > 30);
         assert!(count(|f| matches!(f, Feature::Lamp)) > 30);
         assert!(count(|f| matches!(f, Feature::Sign(_))) > 5);
-        assert!(count(|f| matches!(f, Feature::Terminal)) >= c.buildings.len() / 2);
+        let open = c.buildings.iter().filter(|b| !b.kind.is_closed()).count();
+        assert!(count(|f| matches!(f, Feature::Terminal)) >= open / 2);
         assert!(st.light.as_slice().iter().any(|&l| l > 150));
         assert!(
             c.stratum(StratumKind::Undercity)

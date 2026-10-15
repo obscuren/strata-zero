@@ -76,9 +76,14 @@ pub fn inspector_lines(
         ));
     }
     if let Some(b) = t.building.and_then(|b| city.building_opt(b)) {
+        let name = b.name.clone().unwrap_or_else(|| b.kind.label().to_string());
         out.push(kv(
             "building",
-            b.name.clone().unwrap_or_else(|| b.kind.label().to_string()),
+            if t.terrain == Terrain::Mass {
+                format!("{name} · closed")
+            } else {
+                name
+            },
         ));
         out.push(kv(
             "kind",

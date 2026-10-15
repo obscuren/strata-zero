@@ -89,7 +89,7 @@ impl NetStage {
         let mut floors: Vec<Pos> = fp
             .inset(1)
             .iter()
-            .filter(|p| ctx.terrain(k, *p) == Terrain::Floor)
+            .filter(|p| matches!(ctx.terrain(k, *p), Terrain::Floor | Terrain::Mass))
             .collect();
         floors.sort_by_key(|p| std::cmp::Reverse(p.dist2(lobby)));
         let server_pos = floors
@@ -152,9 +152,15 @@ impl NetStage {
             }
         }
 
+        // A hub rings its anchor two tiles out, so prefer a terminal clear of the edge.
+        let size = ctx.size();
+        let clear =
+            |p: &Pos| p.x >= 2 && p.y >= 2 && p.x < size.w as i32 - 2 && p.y < size.h as i32 - 2;
         let backbone_anchor = street_terminals
-            .first()
+            .iter()
             .copied()
+            .find(clear)
+            .or_else(|| street_terminals.first().copied())
             .or_else(|| {
                 ctx.city
                     .buildings
@@ -211,7 +217,7 @@ impl NetStage {
         let anchor = fp
             .inset(1)
             .iter()
-            .filter(|p| ctx.terrain(k, *p) == Terrain::Floor)
+            .filter(|p| matches!(ctx.terrain(k, *p), Terrain::Floor | Terrain::Mass))
             .min_by_key(|p| p.dist2(fp.center()))
             .unwrap_or(fp.center());
         let building = Some(ctx.city.buildings[host_idx].id);
@@ -311,12 +317,15 @@ mod tests {
                 NodeKind::Server | NodeKind::DataVault | NodeKind::Ice => {
                     assert!(matches!(
                         t.terrain,
-                        Terrain::Floor | Terrain::Lift | Terrain::Stair
+                        Terrain::Floor | Terrain::Mass | Terrain::Lift | Terrain::Stair
                     ))
                 }
                 NodeKind::LampGrid => assert_eq!(t.feature, Some(Feature::Lamp)),
                 NodeKind::Backbone => {
-                    assert!(t.feature == Some(Feature::Terminal) || t.terrain == Terrain::Floor)
+                    assert!(
+                        t.feature == Some(Feature::Terminal)
+                            || matches!(t.terrain, Terrain::Floor | Terrain::Mass)
+                    )
                 }
             }
             assert!(c.net.subnets.iter().any(|s| s.id == n.subnet));

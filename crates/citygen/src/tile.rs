@@ -18,6 +18,8 @@ pub enum Terrain {
     Wall,
     Door,
     Window,
+    /// The solid bulk of a closed building behind its facade.
+    Mass,
     Rooftop,
     Walkway,
     Bridge,
@@ -34,7 +36,7 @@ pub enum Terrain {
     NetGate,
 }
 
-pub const ALL_TERRAIN: [Terrain; 25] = [
+pub const ALL_TERRAIN: [Terrain; 26] = [
     Terrain::Void,
     Terrain::Water,
     Terrain::Sewage,
@@ -46,6 +48,7 @@ pub const ALL_TERRAIN: [Terrain; 25] = [
     Terrain::Wall,
     Terrain::Door,
     Terrain::Window,
+    Terrain::Mass,
     Terrain::Rooftop,
     Terrain::Walkway,
     Terrain::Bridge,
@@ -78,6 +81,7 @@ impl Terrain {
             Wall => "wall",
             Door => "door",
             Window => "window",
+            Mass => "building",
             Rooftop => "rooftop",
             Walkway => "walkway",
             Bridge => "bridge",
@@ -136,9 +140,41 @@ pub enum Feature {
     Cable,
     /// A Net node standing on this cyberspace tile.
     Node(NodeKind),
+    /// A piece of furniture on an interior floor; nobody walks through it.
+    Furniture(Furniture),
 }
 
-pub const ALL_FEATURES: [Feature; 16] = [
+/// What stands in a room. A station is the floor tile beside it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Furniture {
+    Desk,
+    Counter,
+    Table,
+    Stool,
+    Shelf,
+    Machine,
+    Bed,
+    Shrine,
+    Locker,
+}
+
+impl Furniture {
+    pub fn label(self) -> &'static str {
+        match self {
+            Furniture::Desk => "desk",
+            Furniture::Counter => "counter",
+            Furniture::Table => "table",
+            Furniture::Stool => "stool",
+            Furniture::Shelf => "shelving",
+            Furniture::Machine => "machine",
+            Furniture::Bed => "bed",
+            Furniture::Shrine => "shrine",
+            Furniture::Locker => "lockers",
+        }
+    }
+}
+
+pub const ALL_FEATURES: [Feature; 17] = [
     Feature::Neon(Hue::Cyan),
     Feature::HoloAd,
     Feature::Lamp,
@@ -155,6 +191,7 @@ pub const ALL_FEATURES: [Feature; 16] = [
     Feature::Pipe,
     Feature::Cable,
     Feature::Node(NodeKind::Server),
+    Feature::Furniture(Furniture::Desk),
 ];
 
 /// One cell of a stratum.
@@ -215,6 +252,7 @@ impl Tile {
                     | Feature::AcUnit
                     | Feature::Pipe
                     | Feature::Terminal
+                    | Feature::Furniture(_)
             )
         );
         terrain_ok && feature_ok
@@ -223,7 +261,7 @@ impl Tile {
     pub fn blocks_sight(&self) -> bool {
         matches!(
             self.terrain,
-            Terrain::Wall | Terrain::Door | Terrain::NetWall
+            Terrain::Wall | Terrain::Door | Terrain::Mass | Terrain::NetWall
         )
     }
 
@@ -238,7 +276,7 @@ impl Tile {
     pub fn is_building_part(&self) -> bool {
         matches!(
             self.terrain,
-            Terrain::Wall | Terrain::Floor | Terrain::Door | Terrain::Window
+            Terrain::Wall | Terrain::Floor | Terrain::Door | Terrain::Window | Terrain::Mass
         )
     }
 
@@ -271,8 +309,15 @@ mod tests {
         assert!(!Tile::new(Terrain::Window).is_walkable());
         assert!(Tile::new(Terrain::Plaza).is_outdoor_ground());
         assert!(Tile::new(Terrain::Door).is_building_part());
-        assert_eq!(ALL_TERRAIN.len(), 25);
-        assert_eq!(ALL_FEATURES.len(), 16);
+        assert_eq!(ALL_TERRAIN.len(), 26);
+        assert_eq!(ALL_FEATURES.len(), 17);
+        assert!(!Tile::new(Terrain::Mass).is_walkable());
+        assert!(Tile::new(Terrain::Mass).blocks_sight());
+        assert!(Tile::new(Terrain::Mass).is_building_part());
+        assert_eq!(Terrain::Mass.label(), "building");
+        t.feature = Some(Feature::Furniture(Furniture::Desk));
+        assert!(!t.is_walkable(), "nobody walks through a desk");
+        assert_eq!(Furniture::Shelf.label(), "shelving");
     }
 
     #[test]
@@ -290,8 +335,8 @@ mod tests {
         assert_eq!(Terrain::NetWall.label(), "construct wall");
         assert_eq!(Terrain::Road.label(), "road");
         assert!(Terrain::NetLane.is_net() && !Terrain::Road.is_net());
-        assert_eq!(ALL_TERRAIN.len(), 25);
-        assert_eq!(ALL_FEATURES.len(), 16);
+        assert_eq!(ALL_TERRAIN.len(), 26);
+        assert_eq!(ALL_FEATURES.len(), 17);
         assert_eq!(crate::world::StratumKind::ALL.len(), 5);
         assert_eq!(
             crate::world::StratumKind::ALL[4],

@@ -177,6 +177,20 @@ pub enum BuildingKind {
 }
 
 impl BuildingKind {
+    /// Closed buildings are solid on the city maps and open as interiors; stalls,
+    /// small shops and lots stay walk-in.
+    pub fn is_closed(self) -> bool {
+        !matches!(
+            self,
+            BuildingKind::NoodleBar
+                | BuildingKind::Market
+                | BuildingKind::Shop
+                | BuildingKind::Pawn
+                | BuildingKind::Arcade
+                | BuildingKind::Parking
+        )
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             BuildingKind::CorpTower => "corp tower",
@@ -387,6 +401,34 @@ impl City {
     /// Panics if the id is unknown; use `building_opt` on a city that may still be generating.
     pub fn building(&self, id: BuildingId) -> &Building {
         &self.buildings[id.index()]
+    }
+
+    /// A closed building's doors on every stratum it spans: the tiles its interior
+    /// joins. Empty for an open building.
+    pub fn portals(&self, b: BuildingId) -> Vec<(StratumKind, Pos)> {
+        let Some(b) = self.building_opt(b) else {
+            return Vec::new();
+        };
+        if !b.kind.is_closed() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for k in b.span.iter() {
+            let tiles: Vec<Pos> = if k == StratumKind::Heights {
+                b.footprint.iter().collect()
+            } else {
+                b.footprint.border().collect()
+            };
+            for p in tiles {
+                if self
+                    .tile(k, p)
+                    .is_some_and(|t| t.terrain == crate::tile::Terrain::Door)
+                {
+                    out.push((k, p));
+                }
+            }
+        }
+        out
     }
 
     pub fn building_opt(&self, id: BuildingId) -> Option<&Building> {

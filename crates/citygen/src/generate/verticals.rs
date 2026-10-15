@@ -388,7 +388,7 @@ mod tests {
             if b.span.contains(StratumKind::Heights) {
                 assert!(matches!(
                     hi.tiles[p].terrain,
-                    Terrain::Rooftop | Terrain::Lift | Terrain::Stair
+                    Terrain::Rooftop | Terrain::Lift | Terrain::Stair | Terrain::Door
                 ));
             } else {
                 assert!(matches!(
