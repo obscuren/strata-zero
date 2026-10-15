@@ -3,10 +3,14 @@
 
 use crate::app::AppState;
 use crate::render::map::MapRef;
+use citygen::rng::hash64;
 use citygen::{
-    BuildingId, City, Exit, Floor, FloorPlan, Place, Pos, StratumKind, Terrain, generate_floor,
+    BuildingId, City, Exit, Floor, FloorPlan, Place, Pos, Role, RoomKind, StratumKind, Terrain,
+    generate_floor,
 };
+use sim::{OccupantRole, PersonId, World};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 
 #[derive(Default)]
@@ -211,6 +215,144 @@ pub fn floor_rows(plan: &FloorPlan, here: i32) -> Vec<(i32, String)> {
             (level, label)
         })
         .collect()
+}
+
+/// Where the building's occupants stand on one floor, worked out from the world's
+/// coarse `Inside` state the moment the floor is looked at.
+#[derive(Clone, Debug, Default)]
+pub struct Placement {
+    at: Vec<(Pos, PersonId)>,
+    /// A locked room's door and who is behind it.
+    owners: HashMap<Pos, PersonId>,
+}
+
+fn take_station(free: &mut Vec<(Pos, Role)>, wants: &[Role]) -> Option<Pos> {
+    for w in wants {
+        if let Some(i) = free.iter().position(|(_, r)| r == w) {
+            return Some(free.remove(i).0);
+        }
+    }
+    None
+}
+
+impl Placement {
+    pub fn new(plan: &FloorPlan, floor: &Floor, world: &World) -> Placement {
+        let mut free: Vec<(Pos, Role)> = floor.stations.iter().map(|s| (s.pos, s.role)).collect();
+        let mut at: Vec<(Pos, PersonId)> = Vec::new();
+        let mut owners = HashMap::new();
+        let mut extras = Vec::new();
+        let work_floors = plan.work_floors();
+        let corridor = plan.corridor_floors();
+        let flats: Vec<_> = floor
+            .rooms
+            .iter()
+            .filter(|r| r.kind == RoomKind::Flat)
+            .collect();
+        let hotel_rooms: Vec<_> = floor
+            .rooms
+            .iter()
+            .filter(|r| r.kind == RoomKind::HotelRoom)
+            .collect();
+        for o in world.inside(plan.building) {
+            let p = &world.people()[o.id.0 as usize];
+            let h = hash64(o.id.0 as u64, 0x0CC);
+            match o.role {
+                OccupantRole::Working => {
+                    let level = work_floors[(h % work_floors.len() as u64) as usize];
+                    if level != floor.level {
+                        continue;
+                    }
+                    let wants: &[Role] = match p.profession.as_str() {
+                        "barkeep" => &[Role::Bar, Role::Table],
+                        "corp_drone" => &[Role::Reception, Role::Desk],
+                        "line_worker" => &[Role::Machine],
+                        "ripperdoc" => &[Role::Surgery],
+                        "monk" => &[Role::Shrine],
+                        _ => &[
+                            Role::Desk,
+                            Role::Table,
+                            Role::Shelf,
+                            Role::Bay,
+                            Role::Machine,
+                            Role::Reception,
+                            Role::Bar,
+                            Role::Surgery,
+                            Role::Shrine,
+                        ],
+                    };
+                    match take_station(&mut free, wants) {
+                        Some(pos) => at.push((pos, o.id)),
+                        None => extras.push(o.id),
+                    }
+                }
+                OccupantRole::Living | OccupantRole::Guest => {
+                    if corridor.is_empty() {
+                        continue;
+                    }
+                    let level = corridor[(h % corridor.len() as u64) as usize];
+                    if level != floor.level {
+                        continue;
+                    }
+                    let rooms = if o.role == OccupantRole::Living {
+                        &flats
+                    } else {
+                        &hotel_rooms
+                    };
+                    if rooms.is_empty() {
+                        continue;
+                    }
+                    let r = rooms[(hash64(h, 1) % rooms.len() as u64) as usize];
+                    if let Some(d) = r.door {
+                        owners.entry(d).or_insert(o.id);
+                    }
+                }
+                OccupantRole::Visiting => {
+                    if floor.level != 0 {
+                        continue;
+                    }
+                    match take_station(&mut free, &[Role::Table]) {
+                        Some(pos) => at.push((pos, o.id)),
+                        None => extras.push(o.id),
+                    }
+                }
+            }
+        }
+        // Whoever found no station stands on open floor, nearest the lift.
+        let anchor = plan.lift.unwrap_or(plan.stair);
+        let used: HashSet<Pos> = at.iter().map(|(p, _)| *p).collect();
+        let doorsteps: HashSet<Pos> = floor.exits.iter().map(|e| floor.doorstep(e)).collect();
+        let mut spots: Vec<Pos> = floor
+            .tiles
+            .iter()
+            .filter(|(p, t)| {
+                t.is_walkable()
+                    && t.feature.is_none()
+                    && !matches!(t.terrain, Terrain::Lift | Terrain::Stair | Terrain::Door)
+                    && !used.contains(p)
+                    && !doorsteps.contains(p)
+                    && floor.room_at(*p).is_none_or(|r| !r.private)
+            })
+            .map(|(p, _)| p)
+            .collect();
+        spots.sort_by_key(|p| (p.manhattan(anchor), p.y, p.x));
+        for (id, p) in extras.into_iter().zip(spots) {
+            at.push((p, id));
+        }
+        Placement { at, owners }
+    }
+
+    pub fn person_at(&self, pos: Pos) -> Option<PersonId> {
+        self.at.iter().find(|(p, _)| *p == pos).map(|(_, id)| *id)
+    }
+
+    /// Who lives or stays behind a locked door.
+    pub fn owner_of(&self, door: Pos) -> Option<PersonId> {
+        self.owners.get(&door).copied()
+    }
+
+    pub fn people(&self) -> impl Iterator<Item = (Pos, PersonId)> + '_ {
+        self.at.iter().copied()
+    }
 }
 
 #[cfg(test)]

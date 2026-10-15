@@ -7,7 +7,7 @@ use crate::render::fx::FxOverlay;
 use crate::render::items::GroundOverlay;
 use crate::render::map::MapRef;
 use crate::render::overlay::Digital;
-use crate::render::people::{PeopleOverlay, card_lines};
+use crate::render::people::{InteriorPeople, PeopleOverlay, card_lines};
 use crate::render::viewport::{Camera, MapView, Overlay, tile_to_screen};
 use crate::render::weather::Weather;
 use crate::screens::configure::Configure;
@@ -108,6 +108,9 @@ pub struct MapScreen {
     cam_ready: bool,
     /// The map area of the last frame, so `update` knows the view size.
     last_map: Cell<Rect>,
+    /// Where the occupants of the floor the player walks stand, keyed by the place
+    /// and the world's minute it was worked out for.
+    placement: Option<(Place, u64, crate::interiors::Placement)>,
 }
 
 fn dir_for(code: KeyCode) -> Option<Dir> {
@@ -192,6 +195,7 @@ impl MapScreen {
             last_tick: 0,
             cam_ready: false,
             last_map: Cell::new(Rect::new(0, 0, 100, 28)),
+            placement: None,
         }
     }
 
@@ -281,6 +285,46 @@ impl MapScreen {
     fn map<'a>(&self, st: &'a AppState, city: &'a citygen::City) -> MapRef<'a> {
         MapRef::for_place(city, &st.interiors, self.place)
             .unwrap_or_else(|| MapRef::stratum_of(city, StratumKind::Street))
+    }
+
+    /// Works out where the occupants stand when the player is on a floor; once per
+    /// place and world minute.
+    fn refresh_placement(&mut self, st: &AppState) {
+        let Some(p) = st.player.as_ref() else {
+            self.placement = None;
+            return;
+        };
+        let Place::Floor { building, level } = p.place else {
+            self.placement = None;
+            return;
+        };
+        let Some(world) = st.world.as_ref() else {
+            return;
+        };
+        let minute = world.tick() / sim::TICKS_PER_MINUTE;
+        if self
+            .placement
+            .as_ref()
+            .is_some_and(|(pl, m, _)| *pl == p.place && *m == minute)
+        {
+            return;
+        }
+        let Some((plan, floor)) = st.interiors.floor(building, level) else {
+            return;
+        };
+        self.placement = Some((
+            p.place,
+            minute,
+            crate::interiors::Placement::new(plan, floor, world),
+        ));
+    }
+
+    /// Whoever stands on a tile of the floor the player walks.
+    fn inside_person_at(&self, place: Place, pos: Pos) -> Option<sim::PersonId> {
+        self.placement
+            .as_ref()
+            .filter(|(pl, _, _)| *pl == place)
+            .and_then(|(_, _, p)| p.person_at(pos))
     }
 
     /// What the status line calls the map.
@@ -548,6 +592,22 @@ impl MapScreen {
                 ));
             }
         }
+        if !place.is_street()
+            && let Some(world) = st.world.as_ref()
+        {
+            for n in pos.neighbors4() {
+                let Some(id) = self.inside_person_at(place, n) else {
+                    continue;
+                };
+                let Some(key) = letters.next() else { break };
+                let card = world.card(id, city);
+                choices.push(Choice::new(
+                    key,
+                    format!("talk to {}", card.name),
+                    Pick::Card(card_lines(&card)),
+                ));
+            }
+        }
         let node = k
             .and_then(|k| Digital::node_under(city, k, pos))
             .map(|id| city.net.node(id));
@@ -617,7 +677,12 @@ impl MapScreen {
         };
         let (from, target, place) = (player.pos, player.pos.step(dir), player.place);
         if !place.is_street() {
-            return Ok(false);
+            // Indoors people stand at their stations and are not swapped around.
+            return if self.inside_person_at(place, target).is_some() {
+                Err(ScreenCmd::Stay)
+            } else {
+                Ok(false)
+            };
         }
         let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) else {
             return Ok(false);
@@ -673,12 +738,25 @@ impl MapScreen {
                     st.say(msg);
                     return Some(ScreenCmd::Stay);
                 }
+                let owner = self
+                    .placement
+                    .as_ref()
+                    .filter(|(pl, _, _)| *pl == place)
+                    .and_then(|(_, _, p)| p.owner_of(target))
+                    .and_then(|id| {
+                        st.world
+                            .as_ref()
+                            .map(|w| w.people()[id.0 as usize].name.clone())
+                    });
                 let locked = floor.door_of(target).filter(|r| r.private).map(|r| {
                     let mut what = r.kind.label().to_string();
                     if r.number > 0 {
                         what = format!("{what} {}", r.number);
                     }
-                    what
+                    match &owner {
+                        Some(name) => format!("{name}'s {what}"),
+                        None => what,
+                    }
                 });
                 if let Some(what) = locked {
                     st.warn(format!("locked · {what}"));
@@ -938,6 +1016,7 @@ impl Screen for MapScreen {
                 world.path_some(city, 4);
             }
         }
+        self.refresh_placement(st);
         ScreenCmd::Stay
     }
 
@@ -996,6 +1075,17 @@ impl Screen for MapScreen {
         });
         if let Some(p) = people.as_ref() {
             overlays.push(p);
+        }
+        let inside = match (&self.placement, st.world.as_ref()) {
+            (Some((pl, _, placement)), Some(world)) if *pl == self.place => Some(InteriorPeople {
+                placement,
+                world,
+                vis,
+            }),
+            _ => None,
+        };
+        if let Some(o) = inside.as_ref() {
+            overlays.push(o);
         }
         let fx = FxOverlay { fx: &st.fx, vis };
         overlays.push(&fx);
@@ -1113,7 +1203,11 @@ impl Screen for MapScreen {
             .world
             .as_ref()
             .filter(|_| self.place.is_street())
-            .and_then(|w| w.person_at(cursor).map(|id| w.card(id, city)));
+            .and_then(|w| w.person_at(cursor).map(|id| w.card(id, city)))
+            .or_else(|| {
+                let id = self.inside_person_at(self.place, cursor)?;
+                st.world.as_ref().map(|w| w.card(id, city))
+            });
         let view = sidebar::SidebarView {
             map,
             focus: cursor,
@@ -2610,7 +2704,9 @@ mod tests {
             p.pos = pos;
         }
         s.place = place;
-        s.update(st, &[]);
+        s.cam.snap(pos);
+        // A wait refreshes sight on the new map.
+        s.update(st, &[key(KeyCode::Char('.'))]);
     }
 
     fn player(st: &AppState) -> (Place, Pos) {
@@ -2951,5 +3047,165 @@ mod tests {
         assert_eq!(player(&st).1, corridor, "the door does not open");
         assert!(last(&st).unwrap().contains("locked"), "{:?}", last(&st));
         assert!(last_is_warning(&st));
+    }
+
+    fn clock(st: &mut AppState, hhmm: &str) {
+        let at = {
+            let p = st.player.as_ref().unwrap();
+            game::At {
+                place: p.place,
+                pos: p.pos,
+            }
+        };
+        crate::screens::console::run(st, at, &format!("clock {hhmm}")).unwrap();
+    }
+
+    #[test]
+    fn occupants_stand_at_their_stations_and_space_talks_to_them() {
+        let mut st = state8();
+        seed_world(&mut st);
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        clock(&mut st, "23:00");
+        let city = st.city.as_ref().unwrap().clone();
+        let (b, keeper) = city
+            .buildings
+            .iter()
+            .filter(|b| b.kind == BuildingKind::Bar)
+            .find_map(|b| {
+                let world = st.world.as_ref().unwrap();
+                world
+                    .inside(b.id)
+                    .into_iter()
+                    .find(|o| world.people()[o.id.0 as usize].profession == "barkeep")
+                    .map(|o| (b.id, o.id))
+            })
+            .expect("a bar with its keeper behind the bar at eleven");
+        st.interiors.ensure(&city, b, 0).unwrap();
+        let step = {
+            let (_, f) = st.interiors.floor(b, 0).unwrap();
+            f.doorstep(&f.exits[0])
+        };
+        stand(
+            &mut st,
+            &mut s,
+            Place::Floor {
+                building: b,
+                level: 0,
+            },
+            step,
+        );
+        let placement = s
+            .placement
+            .as_ref()
+            .map(|(_, _, p)| p.clone())
+            .expect("a placement for the floor");
+        let pos = placement
+            .people()
+            .find(|(_, id)| *id == keeper)
+            .map(|(p, _)| p)
+            .expect("the barkeep is placed");
+        let (_, floor) = st.interiors.floor(b, 0).unwrap();
+        assert_eq!(
+            floor.station_at(pos).map(|s| s.role),
+            Some(citygen::Role::Bar)
+        );
+        let beside = pos
+            .neighbors4()
+            .find(|n| floor.tiles[*n].is_walkable() && placement.person_at(*n).is_none())
+            .expect("room beside the bar");
+        stand(
+            &mut st,
+            &mut s,
+            Place::Floor {
+                building: b,
+                level: 0,
+            },
+            beside,
+        );
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(
+            text.matches('@').count() >= 2,
+            "the keeper draws beside the player: {text}"
+        );
+        s.update(&mut st, &[key(dir_between(beside, pos))]);
+        assert_eq!(player(&st).1, beside, "people indoors are solid");
+        assert_eq!(
+            s.inside_person_at(player(&st).0, pos),
+            Some(keeper),
+            "and not swapped"
+        );
+        let ScreenCmd::Push { to: mut here, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens HERE")
+        };
+        st.tick += 40;
+        let popup = draw_screen(&*here, &st, 120, 40);
+        let world = st.world.as_ref().unwrap();
+        let card = world.card(keeper, &city);
+        assert!(popup.contains(&format!("talk to {}", card.name)), "{popup}");
+        assert_eq!(card.doing, "behind the bar");
+        here.update(&mut st, &[key(KeyCode::Esc)]);
+    }
+
+    #[test]
+    fn a_locked_flat_names_its_resident() {
+        let mut st = state8();
+        seed_world(&mut st);
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        clock(&mut st, "03:00");
+        let city = st.city.as_ref().unwrap().clone();
+        let b = {
+            let world = st.world.as_ref().unwrap();
+            city.buildings
+                .iter()
+                .find(|b| {
+                    b.kind == BuildingKind::Megablock
+                        && world
+                            .inside(b.id)
+                            .iter()
+                            .any(|o| o.role == sim::OccupantRole::Living)
+                })
+                .expect("a megablock with people home at three")
+                .id
+        };
+        let plan = st.interiors.plan(&city, b).unwrap().clone();
+        let mut found = None;
+        for level in plan.corridor_floors() {
+            st.interiors.ensure(&city, b, level).unwrap();
+            let (plan, floor) = st.interiors.floor(b, level).unwrap();
+            let placement =
+                crate::interiors::Placement::new(plan, floor, st.world.as_ref().unwrap());
+            let owned = floor.rooms.iter().filter(|r| r.private).find_map(|r| {
+                let d = r.door?;
+                let id = placement.owner_of(d)?;
+                let outside = d
+                    .neighbors4()
+                    .find(|n| !r.rect.contains(*n) && floor.tiles[*n].is_walkable())?;
+                Some((level, d, outside, id))
+            });
+            if owned.is_some() {
+                found = owned;
+                break;
+            }
+        }
+        let (level, door, outside, id) = found.expect("a flat with its resident home");
+        stand(
+            &mut st,
+            &mut s,
+            Place::Floor { building: b, level },
+            outside,
+        );
+        s.update(&mut st, &[key(dir_between(outside, door))]);
+        assert_eq!(player(&st).1, outside);
+        let name = st.world.as_ref().unwrap().people()[id.0 as usize]
+            .name
+            .clone();
+        assert!(
+            last(&st).is_some_and(|l| l.starts_with(&format!("locked · {name}'s flat"))),
+            "{:?}",
+            last(&st)
+        );
     }
 }

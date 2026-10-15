@@ -107,6 +107,40 @@ impl Overlay for PeopleOverlay<'_> {
     }
 }
 
+/// The building's occupants at their stations, drawn in sight.
+pub struct InteriorPeople<'a> {
+    pub placement: &'a crate::interiors::Placement,
+    pub world: &'a World,
+    pub vis: Option<&'a Grid<Visibility>>,
+}
+
+impl Overlay for InteriorPeople<'_> {
+    fn draw(
+        &self,
+        _map: &MapRef,
+        origin: Pos,
+        area: Rect,
+        _tick: u64,
+        buf: &mut Buffer,
+        _style: &StylePack,
+    ) {
+        for (pos, id) in self.placement.people() {
+            if let Some(v) = self.vis
+                && v.get(pos) != Some(&Visibility::Visible)
+            {
+                continue;
+            }
+            let Some((sx, sy)) = tile_to_screen(area, origin, pos) else {
+                continue;
+            };
+            let tint = self.world.people()[id.0 as usize].tint;
+            buf[(sx, sy)]
+                .set_char('@')
+                .set_fg(tint.map(tint_colour).unwrap_or(DIM));
+        }
+    }
+}
+
 /// A person's card as lines for the talk popup and the inspector.
 pub fn card_lines(card: &Card) -> Vec<Line<'static>> {
     let mut out = vec![
