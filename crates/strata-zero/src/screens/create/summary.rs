@@ -157,13 +157,29 @@ pub(super) fn draw(st: &AppState, b: &Build, body: Rect, tick: u64, buf: &mut Bu
             parts.join(" · "),
             Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD),
         );
-    } else if pl > 0 || sl > 0 {
-        buf.set_string(
-            body.x,
-            fy,
-            format!("unspent · {pl} points · {sl} SP"),
-            Style::default().fg(MAGENTA),
-        );
+    } else {
+        let tp = st.content.creation.talent_points;
+        let mut left = Vec::new();
+        if pl > 0 {
+            left.push(format!("{pl} points"));
+        }
+        if sl > 0 {
+            left.push(format!("{sl} SP"));
+        }
+        if tp > 0 {
+            left.push(format!(
+                "{tp} talent point{}",
+                if tp == 1 { "" } else { "s" }
+            ));
+        }
+        if !left.is_empty() {
+            buf.set_string(
+                body.x,
+                fy,
+                format!("unspent · {}", left.join(" · ")),
+                Style::default().fg(MAGENTA),
+            );
+        }
     }
     let confirm = "[enter] JACK IN";
     let cx = body.x + body.width.saturating_sub(confirm.len() as u16) / 2;

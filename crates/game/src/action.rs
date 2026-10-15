@@ -234,8 +234,8 @@ pub fn apply(
             done(format!("{} {}/{}", t.name, rank, t.ranks))
         }
         Action::Fire(id) => {
-            let ability = c
-                .ability(&id)
+            let ability = ch
+                .ability(c, &id)
                 .ok_or_else(|| format!("unknown ability {id}"))?;
             if !ch.abilities(c).iter().any(|(a, _)| a == &id) {
                 return Err(format!("you do not have {}", ability.name));
@@ -579,5 +579,18 @@ mod tests {
             apply(&mut ch, &mut g, &c, at, 0, Action::Learn(first)).unwrap_err(),
             "no points left"
         );
+    }
+
+    #[test]
+    fn fire_uses_the_sharpened_reach_and_cooldown() {
+        let (c, mut ch, mut g, at) = setup();
+        // Wide band at its best reaches six further; ice pick cools sixty ticks sooner.
+        ch.talents.insert(TalentId::new("wide_band"), 2);
+        ch.talents.insert(TalentId::new("ice_pick"), 2);
+        let scan = || Action::Fire(AbilityId::new("netscan"));
+        let out = apply(&mut ch, &mut g, &c, at, 100, scan()).unwrap();
+        assert_eq!(out.effects, vec![Effect::Reveal { radius: 18 }]);
+        assert!(apply(&mut ch, &mut g, &c, at, 339, scan()).is_err());
+        assert!(apply(&mut ch, &mut g, &c, at, 340, scan()).is_ok());
     }
 }

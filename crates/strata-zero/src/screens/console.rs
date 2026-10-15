@@ -11,9 +11,9 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 13] = [
-    "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "who", "clock", "tp", "clear",
-    "help",
+const COMMANDS: [&str; 15] = [
+    "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "talent", "tpts", "who", "clock",
+    "tp", "clear", "help",
 ];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
@@ -74,7 +74,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             let gained = st.character.gain_xp(n);
             let level = st.character.level;
             for i in (0..gained).rev() {
-                st.story(format!("level {}", level - i));
+                st.story(format!("level {} · a talent point", level - i));
             }
             Ok(format!("+{n} xp"))
         }
@@ -105,6 +105,26 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 .ok_or_else(|| "pts <points>".to_string())?;
             st.character.stat_points = st.character.stat_points.saturating_add(n);
             Ok(format!("points {}", st.character.stat_points))
+        }
+        "talent" => {
+            let id = args
+                .first()
+                .map(|a| game::TalentId::new(a))
+                .ok_or_else(|| "talent <id>".to_string())?;
+            let t = st
+                .content
+                .talent(&id)
+                .ok_or_else(|| format!("unknown talent {id}"))?;
+            let rank = st.character.learn(&st.content, &id)?;
+            Ok(format!("{} {}/{}", t.name, rank, t.ranks))
+        }
+        "tpts" => {
+            let n: u32 = args
+                .first()
+                .and_then(|a| a.parse().ok())
+                .ok_or_else(|| "tpts <points>".to_string())?;
+            st.character.talent_points = st.character.talent_points.saturating_add(n);
+            Ok(format!("{} talent points", st.character.talent_points))
         }
         "who" => {
             let w = st
@@ -201,7 +221,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             ))
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · who · clock <hh:mm> · tp <x> <y> · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · who · clock <hh:mm> · tp <x> <y> · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),
@@ -341,7 +361,7 @@ mod tests {
         assert_eq!((st.character.level, st.character.xp), (2, 50));
         assert_eq!(
             st.log.latest().map(|e| e.marked()),
-            Some("▸ level 2".to_string())
+            Some("▸ level 2 · a talent point".to_string())
         );
         assert_eq!(run(&mut st, at, "xp x").unwrap_err(), "xp <points>");
         st.character.level = u8::MAX;
@@ -430,6 +450,32 @@ mod tests {
         assert_eq!(
             run(&mut st, at, "tp 1 1").unwrap_err(),
             "no body in the city"
+        );
+    }
+
+    #[test]
+    fn talent_commands_learn_and_add_points() {
+        let (mut st, at) = setup();
+        assert_eq!(run(&mut st, at, "talent").unwrap_err(), "talent <id>");
+        assert_eq!(run(&mut st, at, "talent ice_pick").unwrap(), "Ice pick 1/2");
+        assert_eq!(
+            run(&mut st, at, "talent ice_pick").unwrap_err(),
+            "no points left"
+        );
+        assert_eq!(run(&mut st, at, "tpts 3").unwrap(), "3 talent points");
+        assert_eq!(st.character.talent_points, 3);
+        assert_eq!(run(&mut st, at, "talent ice_pick").unwrap(), "Ice pick 2/2");
+        assert_eq!(
+            run(&mut st, at, "talent ice_pick").unwrap_err(),
+            "already at its best"
+        );
+        // A level brings a point and the log says so.
+        let before = st.character.talent_points;
+        run(&mut st, at, "xp 200").unwrap();
+        assert_eq!(st.character.talent_points, before + 1);
+        assert_eq!(
+            st.log.latest().map(|e| e.text.as_str()),
+            Some("level 2 · a talent point")
         );
     }
 }

@@ -395,7 +395,7 @@ impl Character {
     /// Ticks until an ability is ready again; `None` when ready (or unknown).
     pub fn cooling(&self, c: &Content, id: &AbilityId, tick: u64) -> Option<u64> {
         let fired = *self.fired.get(id)?;
-        let ready = fired + c.ability(id)?.cooldown;
+        let ready = fired + self.ability(c, id)?.cooldown;
         (ready > tick).then(|| ready - tick)
     }
 
