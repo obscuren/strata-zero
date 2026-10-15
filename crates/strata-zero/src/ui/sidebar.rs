@@ -188,6 +188,8 @@ pub struct SidebarView<'a> {
     pub net: &'a crate::net::NetState,
     /// The game minute, for the trace's alert and the hacks' windows.
     pub now: u64,
+    /// The ICE the player can see in their construct, one line each.
+    pub ice_lines: Vec<String>,
 }
 
 fn plain(text: impl Into<String>) -> Line<'static> {
@@ -217,6 +219,12 @@ pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
                 Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD)
             };
             out.push(Line::from(Span::styled(format!(" {line}"), style)));
+        }
+        for line in &v.ice_lines {
+            out.push(Line::from(Span::styled(
+                format!(" {line}"),
+                Style::default().fg(MAGENTA),
+            )));
         }
         if let Some(t) = v.map.tile(v.focus) {
             match t.feature {
@@ -602,6 +610,7 @@ mod tests {
             person: None,
             net: &st.net,
             now: 0,
+            ice_lines: Vec::new(),
         }
     }
 

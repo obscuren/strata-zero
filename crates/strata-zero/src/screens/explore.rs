@@ -954,7 +954,7 @@ impl MapScreen {
             crate::net::step_run(st);
         }
         if k.code == KeyCode::Char('.') || after != before {
-            crate::net::turn_ends(st);
+            crate::net::ice_turn(st);
         }
         if st.player.as_ref().map(|p| p.place) != before.map(|b| b.0) {
             self.follow_player(st);
@@ -1405,6 +1405,16 @@ impl Screen for MapScreen {
             dev: st.dev,
             net: &st.net,
             now: st.net.now(st),
+            ice_lines: match (self.place, st.player.as_ref()) {
+                (Place::Construct(b), Some(p)) if p.place == self.place => {
+                    let vis = p.vis();
+                    crate::net::ice_lines(st, b, |q| {
+                        vis.get(q)
+                            .is_some_and(|v| *v != crate::render::Visibility::Unseen)
+                    })
+                }
+                _ => Vec::new(),
+            },
         };
         let here = sidebar::here_summary(&view);
         // In dev mode the column's last row holds the dev tabs, with an empty row above.
@@ -1491,7 +1501,7 @@ impl Screen for MapScreen {
 mod tests {
     use super::*;
     use crate::walker::Visibility;
-    use citygen::{BuildingKind, FloorPlan, NodeKind};
+    use citygen::{BuildingKind, FloorPlan, IceGrade, NodeKind};
     use game::ItemId;
 
     fn last(st: &AppState) -> Option<&str> {
@@ -3917,15 +3927,18 @@ mod tests {
         let now = st.net.now(&st);
         st.net.minute(now + 1, None, &mut st.constructs);
         assert_eq!(st.net.traces[&b].heat, heat.saturating_sub(2));
-        // On alert, a standing guard beside you dumps you at the end of a turn.
+        // On alert, a standing guard beside you hits you at the end of a turn.
         let guard = st.constructs.get(b).unwrap().guards[1].pos;
         let here = beside(&st, b, guard);
         stand(&mut st, &mut s, Place::Construct(b), here);
         crate::screens::console::run(&mut st, at, "alarm").unwrap();
         assert!(st.player.as_ref().unwrap().jacked_in());
         s.update(&mut st, &[key(KeyCode::Char('.'))]);
-        assert!(!st.player.as_ref().unwrap().jacked_in(), "{:?}", last(&st));
-        assert!(last(&st).is_some_and(|l| l.starts_with("DUMPED")));
+        assert!(
+            last(&st).is_some_and(|l| l.starts_with("grey ICE hits")),
+            "{:?}",
+            last(&st)
+        );
         // The alert ends: heat zero, the guards stand again but the backdoor's gate guard.
         let now = st.net.now(&st);
         st.net
@@ -4156,5 +4169,155 @@ mod tests {
         run.update(&mut st, &[key(KeyCode::Char('a'))]);
         assert_eq!(last(&st), Some("run aborted · crack starts · 3 turns"));
         assert_eq!(st.net.run.as_ref().map(|r| r.done), Some(0));
+    }
+
+    /// A room tile of the construct the gate guard cannot see into.
+    fn room_tile(st: &AppState, b: citygen::BuildingId) -> Pos {
+        let k = st.constructs.get(b).unwrap();
+        k.rooms[0]
+            .iter()
+            .find(|p| k.tiles[*p].terrain == citygen::Terrain::NetFloor && k.node_at(*p).is_none())
+            .unwrap()
+    }
+
+    #[test]
+    fn asleep_ice_walks_its_beat_and_turns_at_the_end() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let hide = room_tile(&st, b);
+        stand(&mut st, &mut s, Place::Construct(b), hide);
+        let beat = st.constructs.get(b).unwrap().guards[0].beat.clone();
+        assert!(beat.len() >= 3, "{beat:?}");
+        let mut seen = Vec::new();
+        for _ in 0..(2 * beat.len()) {
+            s.update(&mut st, &[key(KeyCode::Char('.'))]);
+            let k = st.constructs.get(b).unwrap();
+            seen.push(k.guards[0].pos);
+            assert_eq!(k.guard_at(k.guards[0].pos), Some(0), "the feature travels");
+            assert!(matches!(
+                st.net.ice[&b][0].mode,
+                crate::net::IceMode::Asleep
+            ));
+        }
+        // Every stop is on the beat, no stride is longer than a tile (a turn beside
+        // the other piece may hold it), and it reaches the far end and comes back.
+        assert!(seen.iter().all(|p| beat.contains(p)), "{seen:?}");
+        for w in seen.windows(2) {
+            assert!(w[0].chebyshev(w[1]) <= 1, "{seen:?}");
+        }
+        let far = seen
+            .iter()
+            .position(|p| *p == beat[beat.len() - 1])
+            .expect("the far end");
+        assert!(
+            seen[far + 1..].contains(&beat[beat.len() - 2]),
+            "and back: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn ice_sees_along_the_spine_not_into_rooms_and_less_under_a_mask() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let k = st.constructs.get(b).unwrap();
+        let g = k.guards[0].clone();
+        let sy = g.pos.y;
+        let on_spine = |dx: i32| Pos::new(g.pos.x + dx, sy);
+        assert!(crate::net::sees(k, g.pos, g.grade, on_spine(6), false));
+        assert!(!crate::net::sees(k, g.pos, g.grade, on_spine(7), false));
+        assert!(crate::net::sees(k, g.pos, g.grade, on_spine(3), true));
+        assert!(
+            !crate::net::sees(k, g.pos, g.grade, on_spine(4), true),
+            "masked: half"
+        );
+        let hide = room_tile(&st, b);
+        assert!(
+            !crate::net::sees(k, g.pos, g.grade, hide, false),
+            "rooms are not seen into"
+        );
+        assert!(!crate::net::sees(
+            k,
+            g.pos,
+            IceGrade::White,
+            on_spine(5),
+            false
+        ));
+    }
+
+    #[test]
+    fn seen_ice_wakes_hunts_loses_you_in_a_room_and_goes_home() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let (post, beat) = {
+            let g = st.constructs.get(b).unwrap().guards[0].clone();
+            (g.post, g.beat.clone())
+        };
+        let seen_at = Pos::new(post.x + 5, post.y);
+        stand(&mut st, &mut s, Place::Construct(b), seen_at);
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        let ice = &st.net.ice[&b][0];
+        assert!(
+            matches!(ice.mode, crate::net::IceMode::Awake { seen, .. } if seen == seen_at),
+            "{:?}",
+            ice.mode
+        );
+        let before = st.constructs.get(b).unwrap().guards[0].pos;
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        let after = st.constructs.get(b).unwrap().guards[0].pos;
+        assert_eq!(
+            after.chebyshev(seen_at),
+            before.chebyshev(seen_at) - 1,
+            "one tile a turn"
+        );
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(text.contains("grey ICE · hunting"), "{text}");
+        // Into a room: it reaches the last seen tile, loses you, and never enters.
+        let room = st.constructs.get(b).unwrap().rooms[0];
+        let hide = room_tile(&st, b);
+        stand(&mut st, &mut s, Place::Construct(b), hide);
+        for _ in 0..14 {
+            s.update(&mut st, &[key(KeyCode::Char('.'))]);
+            let p = st.constructs.get(b).unwrap().guards[0].pos;
+            assert!(!room.contains(p), "ICE in the room at {p:?}");
+        }
+        let ice = &st.net.ice[&b][0];
+        assert!(
+            matches!(ice.mode, crate::net::IceMode::Asleep),
+            "{:?}",
+            ice.mode
+        );
+        assert!(
+            beat.contains(&st.constructs.get(b).unwrap().guards[0].pos),
+            "back on its beat"
+        );
+        assert!(st.player.as_ref().unwrap().jacked_in(), "{:?}", last(&st));
+    }
+
+    #[test]
+    fn the_alarm_wakes_every_piece_and_two_hunters_never_share_a_tile() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let hide = room_tile(&st, b);
+        stand(&mut st, &mut s, Place::Construct(b), hide);
+        let at = game::At {
+            place: Place::Construct(b),
+            pos: hide,
+        };
+        crate::screens::console::run(&mut st, at, "alarm").unwrap();
+        assert!(
+            st.net.ice[&b]
+                .iter()
+                .all(|i| matches!(i.mode, crate::net::IceMode::Awake { .. }))
+        );
+        for _ in 0..10 {
+            s.update(&mut st, &[key(KeyCode::Char('.'))]);
+            let k = st.constructs.get(b).unwrap();
+            assert_ne!(k.guards[0].pos, k.guards[1].pos);
+            assert_ne!(k.guards[0].pos, hide);
+        }
     }
 }

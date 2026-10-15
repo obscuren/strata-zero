@@ -4,8 +4,9 @@
 use crate::app::{AppState, FxInstance};
 use crate::constructs::Constructs;
 use crate::render::map::MapRef;
+use citygen::pathing::{astar, bresenham};
 use citygen::rng::hash64;
-use citygen::{BuildingId, NodeId, NodeKind, Place};
+use citygen::{BuildingId, Construct, IceGrade, NodeId, NodeKind, Place, Pos, Terrain};
 use game::{
     ALERT_MINUTES, COOLING_MINUTES, Fx, HACK_MINUTES, HackTarget, ItemId, Op, Run, Target, Trace,
     TraceEvent, applies, difficulty, power, succeeds,
@@ -23,8 +24,32 @@ pub struct Hack {
     pub until: Option<u64>,
 }
 
+/// Turns an awake piece waits at the last seen tile before it gives up.
+pub const LOST_TURNS: u8 = 3;
+
+/// What a piece of ICE is doing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IceMode {
+    Asleep,
+    Awake { seen: Pos, lost: u8 },
+}
+
+/// A piece of ICE's state this session: its mode, what is left of it, and where it
+/// is on its beat.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Ice {
+    pub mode: IceMode,
+    pub integrity: u8,
+    pub step: usize,
+    pub forward: bool,
+}
+
 #[derive(Default)]
 pub struct NetState {
+    /// One state per guard of every construct entered.
+    pub ice: BTreeMap<BuildingId, Vec<Ice>>,
+    /// Turns the mask still holds.
+    pub mask: u8,
     pub traces: BTreeMap<BuildingId, Trace>,
     pub hacks: Vec<Hack>,
     pub backdoors: BTreeSet<BuildingId>,
@@ -171,6 +196,33 @@ impl NetState {
         self.hacks.retain(|h| h.until.is_none_or(|u| now < u));
         for b in buildings {
             self.sync_guards(constructs, b, now);
+        }
+    }
+
+    /// The ICE states of a construct, made on first ask.
+    pub fn ice_of(&mut self, k: &Construct) -> &mut Vec<Ice> {
+        let states = self.ice.entry(k.building).or_default();
+        while states.len() < k.guards.len() {
+            let g = &k.guards[states.len()];
+            // A piece starts on its beat where its post is: the gate guard at the near
+            // end walking forward, the vault guard at the far end walking back.
+            let step = g.beat.iter().position(|p| *p == g.pos).unwrap_or(0);
+            states.push(Ice {
+                mode: IceMode::Asleep,
+                integrity: g.grade.integrity(),
+                step,
+                forward: step + 1 < g.beat.len(),
+            });
+        }
+        states
+    }
+
+    /// Every piece of a construct wakes and heads for a tile.
+    pub fn wake_all(&mut self, b: BuildingId, seen: Pos) {
+        if let Some(states) = self.ice.get_mut(&b) {
+            for i in states {
+                i.mode = IceMode::Awake { seen, lost: 0 };
+            }
         }
     }
 
@@ -397,6 +449,17 @@ pub fn raise_alarm(st: &mut AppState, b: BuildingId) -> String {
     let now = st.net.now(st);
     st.net.alarm(b, now);
     st.net.sync_guards(&mut st.constructs, b, now);
+    if let Some(p) = st
+        .player
+        .as_ref()
+        .filter(|p| p.place == Place::Construct(b))
+    {
+        let pos = p.pos;
+        if let Some(k) = st.constructs.get(b) {
+            st.net.ice_of(k);
+        }
+        st.net.wake_all(b, pos);
+    }
     format!("ALARM · {} locks down", building_name(st, b))
 }
 
@@ -418,27 +481,181 @@ pub fn dump(st: &mut AppState, why: &str) {
     st.repaint = true;
 }
 
-/// A turn ends in a construct: awake ICE beside the player dumps them.
-pub fn turn_ends(st: &mut AppState) {
+/// Whether a piece at `from` sees a player: on the spine, in its row or column,
+/// within its sight (halved under a mask), with no wall between.
+pub fn sees(k: &Construct, from: Pos, grade: IceGrade, player: Pos, masked: bool) -> bool {
+    let Some(t) = k.tiles.get(player) else {
+        return false;
+    };
+    if !matches!(t.terrain, Terrain::NetLane | Terrain::NetGate) {
+        return false;
+    }
+    if from.x != player.x && from.y != player.y {
+        return false;
+    }
+    let range = if masked {
+        grade.sight() / 2
+    } else {
+        grade.sight()
+    };
+    if from.chebyshev(player) > range {
+        return false;
+    }
+    bresenham(from, player)
+        .into_iter()
+        .filter(|p| *p != from && *p != player)
+        .all(|p| {
+            k.tiles
+                .get(p)
+                .is_some_and(|t| t.terrain != Terrain::NetWall)
+        })
+}
+
+/// One step along the shortest walkable path from `from` to `goal`, never onto
+/// `avoid` (the player's tile) and never onto another standing piece.
+fn step_toward(k: &Construct, from: Pos, goal: Pos, avoid: Pos) -> Option<Pos> {
+    if from == goal {
+        return None;
+    }
+    let path = astar(k.tiles.size(), from, goal, |_, to| {
+        // The player's own tile may be the goal (the piece stops beside it) but is
+        // never crossed on the way somewhere else.
+        if to == avoid && to != goal {
+            return None;
+        }
+        let t = k.tiles.get(to)?;
+        (t.is_walkable() || (to == goal && t.feature.is_none())).then_some(1)
+    })?;
+    path.into_iter().find(|p| *p != from)
+}
+
+/// The ICE's turn in the construct the player stands in: every standing piece
+/// looks, then acts: walks its beat asleep, hunts awake, hits beside the player.
+pub fn ice_turn(st: &mut AppState) {
     let Some(player) = st.player.as_ref() else {
         return;
     };
     let Place::Construct(b) = player.place else {
         return;
     };
-    let now = st.net.now(st);
-    if !st.net.alert(b, now) {
-        return;
-    }
     let pos = player.pos;
-    let caught = st.constructs.get(b).is_some_and(|k| {
-        k.guards
-            .iter()
-            .any(|g| k.guard_at(g.pos).is_some() && g.pos.chebyshev(pos) <= 1)
-    });
-    if caught {
-        dump(st, "ICE caught you");
+    let masked = st.net.mask > 0;
+    let Some(k) = st.constructs.get(b) else {
+        return;
+    };
+    let n = k.guards.len();
+    st.net.ice_of(k);
+    for i in 0..n {
+        let Some(k) = st.constructs.get(b) else {
+            return;
+        };
+        let g = k.guards[i].clone();
+        if k.guard_at(g.pos).is_none() {
+            continue;
+        }
+        let mut ice = st.net.ice[&b][i].clone();
+        if sees(k, g.pos, g.grade, pos, masked) {
+            ice.mode = IceMode::Awake { seen: pos, lost: 0 };
+        }
+        let mut moved = None;
+        let mut hits = false;
+        match ice.mode {
+            IceMode::Asleep => {
+                if g.beat.len() >= 2 {
+                    let home = g.beat[ice.step.min(g.beat.len() - 1)];
+                    if g.pos != home {
+                        moved = step_toward(k, g.pos, home, pos);
+                    } else {
+                        let last = g.beat.len() - 1;
+                        if ice.forward && ice.step >= last {
+                            ice.forward = false;
+                        } else if !ice.forward && ice.step == 0 {
+                            ice.forward = true;
+                        }
+                        let next = if ice.forward {
+                            ice.step + 1
+                        } else {
+                            ice.step - 1
+                        };
+                        let target = g.beat[next];
+                        if target != pos && k.tiles[target].is_walkable() {
+                            moved = Some(target);
+                            ice.step = next;
+                        }
+                    }
+                }
+            }
+            IceMode::Awake { seen, lost } => {
+                if g.pos.chebyshev(pos) <= 1 {
+                    hits = true;
+                } else if g.pos == seen || step_toward(k, g.pos, seen, pos).is_none() {
+                    let lost = lost + 1;
+                    ice.mode = if lost >= LOST_TURNS {
+                        IceMode::Asleep
+                    } else {
+                        IceMode::Awake { seen, lost }
+                    };
+                } else {
+                    moved = step_toward(k, g.pos, seen, pos);
+                }
+            }
+        }
+        if let Some(to) = moved
+            && let Some(k) = st.constructs.get_mut(b)
+        {
+            k.move_guard(i, to);
+        }
+        if let Some(states) = st.net.ice.get_mut(&b)
+            && let Some(slot) = states.get_mut(i)
+        {
+            *slot = ice;
+        }
+        if hits {
+            hit(st, b, i);
+        }
+        if st
+            .player
+            .as_ref()
+            .is_none_or(|p| p.place != Place::Construct(b))
+        {
+            return;
+        }
     }
+}
+
+/// A standing piece beside the player hits them.
+fn hit(st: &mut AppState, b: BuildingId, i: usize) {
+    let Some(grade) = st.constructs.get(b).map(|k| k.guards[i].grade) else {
+        return;
+    };
+    st.warn(format!("{} ICE hits", grade.label()));
+}
+
+/// The HERE lines for the ICE of a construct the player can see.
+pub fn ice_lines(st: &AppState, b: BuildingId, seen: impl Fn(Pos) -> bool) -> Vec<String> {
+    let Some(k) = st.constructs.get(b) else {
+        return Vec::new();
+    };
+    let Some(states) = st.net.ice.get(&b) else {
+        return Vec::new();
+    };
+    k.guards
+        .iter()
+        .zip(states)
+        .filter(|(g, _)| k.guard_at(g.pos).is_some() && seen(g.pos))
+        .map(|(g, i)| {
+            let mode = match i.mode {
+                IceMode::Asleep => "asleep",
+                IceMode::Awake { .. } => "hunting",
+            };
+            format!(
+                "▣ {} ICE · {mode} · {}/{}",
+                g.grade.label(),
+                i.integrity,
+                g.grade.integrity()
+            )
+        })
+        .collect()
 }
 
 /// Why the port refuses to jack in right now: the deck cooling, or a lockdown.
