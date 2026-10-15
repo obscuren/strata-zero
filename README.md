@@ -46,7 +46,8 @@ the program's rating, against the security over eight), the turns it takes and
 the noise it makes; a program that cannot beat the construct reads `out of your
 reach`. Pick one and every `.` is a turn: a roll against the security, heat
 on the construct's trace (more on a slip), the hack landing on the last
-success; a move aborts it. The HERE section shows the trace. At 60 heat the
+success; a move aborts it. While a run is in flight the hint bar reads `. turn`
+and `space` offers `continue`. The HERE section shows the trace. At 60 heat the
 alarm trips: the building locks down for an hour (cracked locks relock, lifts
 stop, the ICE wakes, the gate and the ports beside it refuse); at 100, or at
 the end of a turn beside awake ICE, you are dumped to your body with no focus

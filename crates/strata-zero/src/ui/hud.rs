@@ -304,6 +304,13 @@ pub const WALK_VERBS: &[(&str, &str)] = &[
     ("m", "sgs"),
     ("?", "keys"),
 ];
+/// The verbs while a program runs: a wait is a turn, space continues it.
+pub const RUN_VERBS: &[(&str, &str)] = &[
+    (".", "turn"),
+    ("space", "continue"),
+    ("enter", "jack"),
+    ("?", "keys"),
+];
 pub const EXPLORE_VERBS: &[(&str, &str)] = &[
     ("w", "alk"),
     ("r", "egen"),
