@@ -332,6 +332,7 @@ impl MapScreen {
         match (self.place, st.city.as_ref()) {
             (Place::Stratum(k), _) => k.label().to_string(),
             (Place::Floor { level, .. }, _) => citygen::FloorPlan::label(level),
+            (Place::Construct(_), _) => "construct".to_string(),
         }
     }
 
@@ -768,6 +769,8 @@ impl MapScreen {
                 }
                 None
             }
+            // The gate in and out of a construct comes with the construct cache.
+            Place::Construct(_) => None,
         }
     }
 

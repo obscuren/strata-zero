@@ -57,6 +57,8 @@ impl<'a> MapRef<'a> {
                 let (plan, floor) = interiors.floor(building, level)?;
                 Some(MapRef::Floor(FloorMap { city, plan, floor }))
             }
+            // Constructs get their map with the cache that holds them.
+            Place::Construct(_) => None,
         }
     }
 

@@ -66,6 +66,7 @@ pub fn inspector_lines(
             out.push(kv("feature", format!("node · {}", k.label())));
         }
         Some(citygen::Feature::Furniture(f)) => out.push(kv("feature", f.label())),
+        Some(citygen::Feature::Ice(g)) => out.push(kv("feature", format!("ICE · {}", g.label()))),
         Some(f) => out.push(kv("feature", format!("{f:?}").to_lowercase())),
         None => {}
     }

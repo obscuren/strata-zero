@@ -273,14 +273,19 @@ impl StrataSpan {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Place {
     Stratum(StratumKind),
-    Floor { building: BuildingId, level: i32 },
+    Floor {
+        building: BuildingId,
+        level: i32,
+    },
+    /// Inside a building's construct, behind its gate on the Net.
+    Construct(BuildingId),
 }
 
 impl Place {
     pub fn stratum(self) -> Option<StratumKind> {
         match self {
             Place::Stratum(k) => Some(k),
-            Place::Floor { .. } => None,
+            Place::Floor { .. } | Place::Construct(_) => None,
         }
     }
 

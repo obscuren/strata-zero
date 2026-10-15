@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 pub const MAGIC: &[u8; 4] = b"CITY";
-/// 3: `Terrain::Mass` and `Feature::Furniture` joined the tile enums.
+/// 3: `Terrain::Mass` and `Feature::Furniture` joined the tile enums; `Feature::Ice` later joined
+///    at the end of the enum, which leaves every saved city's bytes as they were.
 pub const FORMAT_VERSION: u16 = 3;
 /// Versions whose header this build can read (for listing); only `FORMAT_VERSION` loads.
 const READABLE_VERSIONS: [u16; 3] = [1, 2, 3];
