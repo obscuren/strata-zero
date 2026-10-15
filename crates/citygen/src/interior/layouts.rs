@@ -380,6 +380,7 @@ impl<'a> Builder<'a> {
                 let last = a + span >= along - 2;
                 let (room_kind, private) = match kind {
                     FloorType::Suite => (RoomKind::OpenPlan, false),
+                    FloorType::Vip => (RoomKind::Vip, false),
                     _ => match self.plan.kind {
                         crate::world::BuildingKind::CorpTower
                         | crate::world::BuildingKind::Office => {
@@ -468,10 +469,25 @@ impl<'a> Builder<'a> {
                     x += 2;
                 }
             }
+            RoomKind::Vip => {
+                if self.put(centre, Furniture::Table) {
+                    self.station(centre.offset(0, 1), Role::Table);
+                    self.station(centre.offset(0, -1), Role::Table);
+                }
+            }
+            RoomKind::Lockers => {
+                for x in rect.x..rect.right() {
+                    self.put(Pos::new(x, rect.y), Furniture::Locker);
+                }
+            }
             RoomKind::Storage | RoomKind::Hall => {
                 let mut y = rect.y + 1;
                 while y < rect.bottom() - 1 {
+                    // Shelving with an aisle through it every six tiles.
                     for x in rect.x + 1..rect.right() - 1 {
+                        if (x - rect.x) % 6 == 3 {
+                            continue;
+                        }
                         self.put(Pos::new(x, y), Furniture::Shelf);
                     }
                     self.station(Pos::new(rect.x, y), Role::Shelf);
@@ -549,11 +565,377 @@ impl<'a> Builder<'a> {
         });
     }
 
-    /// An empty hall: the fallback until a kind has its own layout.
-    fn hall(&mut self) {
+    /// Whether every tile of a rect is bare floor nobody has claimed.
+    fn free(&self, r: Rect) -> bool {
+        r.iter().all(|p| {
+            self.frame().contains(p)
+                && !self.reserved.contains(&p)
+                && (self.tiles[p].terrain == Terrain::Floor
+                    || (self.frame().border().any(|q| q == p)))
+                && self.tiles[p].feature.is_none()
+        })
+    }
+
+    /// A walled room of `w`×`h` (walls included) in the first free corner, with a
+    /// door on a side facing the hall. Returns the room's interior.
+    fn corner_room(&mut self, w: i32, h: i32, kind: RoomKind, private: bool) -> Option<Room> {
+        let (fw, fh) = (self.w(), self.h());
+        let corners = [
+            Rect::new(0, 0, w, h),
+            Rect::new(fw - w, 0, w, h),
+            Rect::new(0, fh - h, w, h),
+            Rect::new(fw - w, fh - h, w, h),
+        ];
+        let rect = corners.into_iter().find(|r| self.free(*r))?;
+        for p in rect.border() {
+            if self.inner().contains(p) && self.tiles[p].terrain == Terrain::Floor {
+                self.tiles[p].terrain = Terrain::Wall;
+            }
+        }
+        // The door: on the inner side wall facing the hall's centre, at its middle.
+        let centre = self.frame().center();
+        let inside = rect.inset(1);
+        let east_west = if centre.x > rect.center().x {
+            Pos::new(rect.right() - 1, inside.y + inside.h / 2)
+        } else {
+            Pos::new(rect.x, inside.y + inside.h / 2)
+        };
+        let north_south = if centre.y > rect.center().y {
+            Pos::new(inside.x + inside.w / 2, rect.bottom() - 1)
+        } else {
+            Pos::new(inside.x + inside.w / 2, rect.y)
+        };
+        let door = [east_west, north_south]
+            .into_iter()
+            .find(|d| self.inner().contains(*d) && self.tiles[*d].terrain == Terrain::Wall)
+            .filter(|d| self.door(*d));
+        self.furnish_room(inside, kind, door);
+        let room = Room {
+            rect: inside,
+            kind,
+            door,
+            private: private && door.is_some(),
+            number: 0,
+        };
+        self.rooms.push(room.clone());
+        Some(room)
+    }
+
+    /// The edge the main door is on, else the south.
+    fn door_edge(&self) -> u8 {
+        self.exits
+            .first()
+            .map(|e| edge(self.frame(), e.at))
+            .unwrap_or(3)
+    }
+
+    /// A position by (along the wall opposite the door, in from that wall).
+    fn opposite(&self, along: i32, depth: i32) -> Pos {
+        let (w, h) = (self.w(), self.h());
+        match self.door_edge() {
+            0 => Pos::new(w - 1 - depth, along),
+            1 => Pos::new(depth, along),
+            2 => Pos::new(along, h - 1 - depth),
+            _ => Pos::new(along, depth),
+        }
+    }
+
+    /// How long the wall opposite the door is.
+    fn opposite_len(&self) -> i32 {
+        match self.door_edge() {
+            0 | 1 => self.h(),
+            _ => self.w(),
+        }
+    }
+
+    /// Tables with a stool on a loose grid over the open floor, a station at each.
+    fn tables(&mut self) {
+        let inner = self.inner();
+        let mut y = inner.y + 1;
+        while y < inner.bottom() - 1 {
+            let mut x = inner.x + 1;
+            while x < inner.right() - 1 {
+                let p = Pos::new(x, y);
+                if self.free(Rect::new(x, y, 2, 2)) && self.put(p, Furniture::Table) {
+                    self.put(p.offset(1, 0), Furniture::Stool);
+                    self.station(p.offset(0, 1), Role::Table);
+                }
+                x += 4;
+            }
+            y += 4;
+        }
+        // A tight floor: the first free pair anywhere.
+        if !self.stations.iter().any(|s| s.role == Role::Table) {
+            for p in inner.iter() {
+                if self.free(Rect::new(p.x, p.y, 2, 2)) && self.put(p, Furniture::Table) {
+                    self.put(p.offset(1, 0), Furniture::Stool);
+                    self.station(p.offset(0, 1), Role::Table);
+                    break;
+                }
+            }
+        }
+    }
+
+    /// The bar: a counter along the wall opposite the door with the staff behind it,
+    /// tables and stools, toilets, a locked back room; a club adds a stage.
+    fn bar(&mut self, club: bool) {
+        self.rooms.push(Room {
+            rect: self.inner(),
+            kind: RoomKind::Bar,
+            door: None,
+            private: false,
+            number: 0,
+        });
+        let len = self.opposite_len();
+        // A club's stage first: five along, three deep, as close to the wall opposite
+        // the door as a free block allows.
+        if club {
+            let mut spot = None;
+            'search: for depth in 1..=(self.h().max(self.w()) - 4) {
+                for along in (2..=len - 7).rev() {
+                    let tiles: Vec<Pos> = (along..along + 5)
+                        .flat_map(|a| (depth..depth + 3).map(move |d| (a, d)))
+                        .map(|(a, d)| self.opposite(a, d))
+                        .collect();
+                    let xs = tiles.iter().map(|p| p.x).min().unwrap_or(1);
+                    let ys = tiles.iter().map(|p| p.y).min().unwrap_or(1);
+                    let xe = tiles.iter().map(|p| p.x).max().unwrap_or(1);
+                    let ye = tiles.iter().map(|p| p.y).max().unwrap_or(1);
+                    let rect = Rect::new(xs, ys, xe - xs + 1, ye - ys + 1);
+                    if self.inner().contains(Pos::new(xs, ys))
+                        && self.inner().contains(Pos::new(xe, ye))
+                        && self.free(rect)
+                    {
+                        spot = Some(rect);
+                        break 'search;
+                    }
+                }
+            }
+            if let Some(rect) = spot {
+                for p in rect.iter() {
+                    self.reserved.insert(p);
+                    self.tiles[p].feature = Some(Feature::Lamp);
+                }
+                self.rooms.push(Room {
+                    rect,
+                    kind: RoomKind::Stage,
+                    door: None,
+                    private: false,
+                    number: 0,
+                });
+            }
+        }
+        // The counter: three fifths of the wall; it breaks around anything in its way.
+        let (from, to) = (2, 2 + (len - 4) * 3 / 5);
+        for a in from..=to {
+            let p = self.opposite(a, 2);
+            if self.put(p, Furniture::Counter) && (a - from) % 3 == 0 {
+                let behind = self.opposite(a, 1);
+                self.station(behind, Role::Bar);
+            }
+        }
+        self.corner_room(4, 4, RoomKind::Toilets, false);
+        self.corner_room(5, 4, RoomKind::BackRoom, true);
+        self.tables();
+    }
+
+    /// A waiting room by the door, the surgery beyond a wall, a locked back room.
+    fn clinic(&mut self) {
+        let (w, h) = (self.w(), self.h());
+        let edge = self.door_edge();
+        // The dividing wall runs parallel to the door's wall, halfway in.
+        let (waiting, surgery, wall_from, wall_to, door) = match edge {
+            0 => (
+                Rect::new(1, 1, w / 2 - 1, h - 2),
+                Rect::new(w / 2 + 1, 1, w - 2 - w / 2, h - 2),
+                Pos::new(w / 2, 1),
+                Pos::new(w / 2, h - 2),
+                Pos::new(w / 2, h / 2),
+            ),
+            1 => (
+                Rect::new(w / 2 + 1, 1, w - 2 - w / 2, h - 2),
+                Rect::new(1, 1, w / 2 - 1, h - 2),
+                Pos::new(w / 2, 1),
+                Pos::new(w / 2, h - 2),
+                Pos::new(w / 2, h / 2),
+            ),
+            2 => (
+                Rect::new(1, 1, w - 2, h / 2 - 1),
+                Rect::new(1, h / 2 + 1, w - 2, h - 2 - h / 2),
+                Pos::new(1, h / 2),
+                Pos::new(w - 2, h / 2),
+                Pos::new(w / 2 + 2, h / 2),
+            ),
+            _ => (
+                Rect::new(1, h / 2 + 1, w - 2, h - 2 - h / 2),
+                Rect::new(1, 1, w - 2, h / 2 - 1),
+                Pos::new(1, h / 2),
+                Pos::new(w - 2, h / 2),
+                Pos::new(w / 2 + 2, h / 2),
+            ),
+        };
+        self.wall_line(wall_from, wall_to);
+        let door = std::iter::once(door)
+            .chain(
+                Rect::new(
+                    wall_from.x.min(wall_to.x),
+                    wall_from.y.min(wall_to.y),
+                    (wall_from.x - wall_to.x).abs() + 1,
+                    (wall_from.y - wall_to.y).abs() + 1,
+                )
+                .iter(),
+            )
+            .find(|p| self.tiles[*p].terrain == Terrain::Wall)
+            .filter(|p| self.door(*p));
+        // Stools in rows along the waiting room's far wall.
+        let mut y = waiting.y + 1;
+        while y < waiting.bottom() {
+            let mut x = waiting.x + 1;
+            while x < waiting.right() - 1 {
+                self.put(Pos::new(x, y), Furniture::Stool);
+                x += 2;
+            }
+            y += 3;
+        }
+        self.rooms.push(Room {
+            rect: waiting,
+            kind: RoomKind::Waiting,
+            door: None,
+            private: false,
+            number: 0,
+        });
+        let bed = surgery.center();
+        if self.put(bed, Furniture::Bed) {
+            self.station(bed.offset(1, 0), Role::Surgery);
+            self.station(bed.offset(-1, 0), Role::Surgery);
+        }
+        self.rooms.push(Room {
+            rect: surgery,
+            kind: RoomKind::Surgery,
+            door,
+            private: false,
+            number: 0,
+        });
+        self.corner_room(4, 4, RoomKind::BackRoom, true);
+    }
+
+    /// A hall with the shrine at the far wall and a locked side room.
+    fn temple(&mut self) {
         self.rooms.push(Room {
             rect: self.inner(),
             kind: RoomKind::Hall,
+            door: None,
+            private: false,
+            number: 0,
+        });
+        self.corner_room(4, 4, RoomKind::BackRoom, true);
+        // The shrine on the wall opposite the door, as near its middle as a free
+        // span allows (the other door's doorstep may sit there).
+        let len = self.opposite_len();
+        let mid = len / 2;
+        let spot = (0..len)
+            .map(|k| {
+                if k % 2 == 0 {
+                    mid + k / 2
+                } else {
+                    mid - (k + 1) / 2
+                }
+            })
+            .filter(|a| *a >= 2 && *a <= len - 3)
+            .find(|a| {
+                [
+                    self.opposite(a - 1, 1),
+                    self.opposite(*a, 1),
+                    self.opposite(a + 1, 1),
+                    self.opposite(*a, 2),
+                ]
+                .into_iter()
+                .all(|p| self.free(Rect::new(p.x, p.y, 1, 1)))
+            });
+        if let Some(a) = spot {
+            let shrine = self.opposite(a, 1);
+            let before = self.opposite(a, 2);
+            self.put(shrine, Furniture::Shrine);
+            self.put(self.opposite(a - 1, 1), Furniture::Shrine);
+            self.put(self.opposite(a + 1, 1), Furniture::Shrine);
+            self.station(before, Role::Shrine);
+            let rect = Rect::new(shrine.x.min(before.x) - 1, shrine.y.min(before.y) - 1, 3, 3);
+            if let Some(r) = rect.intersection(self.inner()) {
+                self.rooms.push(Room {
+                    rect: r,
+                    kind: RoomKind::Shrine,
+                    door: None,
+                    private: false,
+                    number: 0,
+                });
+            }
+        }
+    }
+
+    /// Shelving rows and a locked office: a warehouse or a depot.
+    fn hall(&mut self) {
+        let inner = self.inner();
+        self.corner_room(5, 4, RoomKind::Office, true);
+        self.furnish_room(inner, RoomKind::Hall, None);
+        self.rooms.push(Room {
+            rect: inner,
+            kind: RoomKind::Hall,
+            door: None,
+            private: false,
+            number: 0,
+        });
+    }
+
+    /// Machine rows with a station at each, a lockers room, a locked office.
+    fn factory(&mut self) {
+        let inner = self.inner();
+        self.corner_room(5, 4, RoomKind::Office, true);
+        self.corner_room(5, 4, RoomKind::Lockers, false);
+        let mut y = inner.y + 2;
+        while y < inner.bottom() - 2 {
+            let mut x = inner.x + 1;
+            while x < inner.right() - 1 {
+                let p = Pos::new(x, y);
+                if self.free(Rect::new(x, y, 1, 2)) && self.put(p, Furniture::Machine) {
+                    self.station(p.offset(0, 1), Role::Machine);
+                }
+                x += 2;
+            }
+            y += 4;
+        }
+        self.rooms.push(Room {
+            rect: inner,
+            kind: RoomKind::Hall,
+            door: None,
+            private: false,
+            number: 0,
+        });
+    }
+
+    /// Bays three wide along the wall opposite the door, a locked office.
+    fn garage(&mut self) {
+        let inner = self.inner();
+        self.corner_room(5, 4, RoomKind::Office, true);
+        let len = self.opposite_len();
+        let mut a = 2;
+        while a + 3 <= len - 2 {
+            // A stub wall three deep marks the bay's side; the station is its mouth.
+            for d in 1..=3 {
+                let p = self.opposite(a, d);
+                if self.inner().contains(p)
+                    && !self.reserved.contains(&p)
+                    && self.tiles[p].terrain == Terrain::Floor
+                {
+                    self.tiles[p].terrain = Terrain::Wall;
+                }
+            }
+            let mouth = self.opposite(a + 2, 4);
+            self.station(mouth, Role::Bay);
+            a += 4;
+        }
+        self.rooms.push(Room {
+            rect: inner,
+            kind: RoomKind::Bays,
             door: None,
             private: false,
             number: 0,
@@ -655,7 +1037,12 @@ pub(super) fn generate(city: &City, plan: &FloorPlan, level: i32) -> Floor {
         FloorType::Suite => b.suite(),
         FloorType::Basement => b.basement(),
         FloorType::Vip => b.corridor(FloorType::Vip),
-        _ => b.hall(),
+        FloorType::Bar => b.bar(plan.kind == crate::world::BuildingKind::Club),
+        FloorType::Clinic => b.clinic(),
+        FloorType::Temple => b.temple(),
+        FloorType::Factory => b.factory(),
+        FloorType::Garage => b.garage(),
+        FloorType::Hall => b.hall(),
     }
     b.lamps();
     b.connect();

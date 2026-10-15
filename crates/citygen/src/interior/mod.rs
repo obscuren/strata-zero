@@ -305,6 +305,104 @@ mod tests {
         }
     }
 
+    #[test]
+    fn bars_clubs_clinics_temples_halls_factories_and_garages_have_their_rooms() {
+        let c = city();
+        let more: Vec<City> = [8u64, 9, 11]
+            .into_iter()
+            .map(|seed| {
+                Generator::run(GenParams {
+                    seed,
+                    size: SizePreset::Medium,
+                    districts: 7,
+                    ..Default::default()
+                })
+                .unwrap()
+            })
+            .collect();
+        let find = |kind: BuildingKind| -> (&City, &crate::world::Building) {
+            std::iter::once(&c)
+                .chain(more.iter())
+                .find_map(|city| {
+                    city.buildings
+                        .iter()
+                        .find(|b| b.kind == kind)
+                        .map(|b| (city, b))
+                })
+                .unwrap_or_else(|| panic!("a {kind:?} in four cities"))
+        };
+        let expect =
+            |kind: BuildingKind, rooms: &[RoomKind], roles: &[Role]| -> (FloorPlan, Floor) {
+                let (city, b) = find(kind);
+                let plan = FloorPlan::new(city, b.id).unwrap();
+                let f = generate_floor(city, &plan, 0);
+                validate_floor(&plan, &f).unwrap_or_else(|e| panic!("{kind:?}: {e}"));
+                for r in rooms {
+                    assert!(f.rooms.iter().any(|x| x.kind == *r), "{kind:?} lacks {r:?}");
+                }
+                for r in roles {
+                    assert!(
+                        f.stations.iter().any(|s| s.role == *r),
+                        "{kind:?} lacks {r:?}"
+                    );
+                }
+                assert!(
+                    f.rooms.iter().any(|r| r.private),
+                    "{kind:?} has a locked room"
+                );
+                (plan, f)
+            };
+        expect(
+            BuildingKind::Bar,
+            &[RoomKind::Bar, RoomKind::Toilets, RoomKind::BackRoom],
+            &[Role::Bar, Role::Table],
+        );
+        let (plan, _) = expect(
+            BuildingKind::Club,
+            &[RoomKind::Bar, RoomKind::Stage],
+            &[Role::Bar, Role::Table],
+        );
+        assert_eq!(plan.top, 1);
+        let (city, _) = find(BuildingKind::Club);
+        let vip = generate_floor(city, &plan, 1);
+        validate_floor(&plan, &vip).unwrap();
+        assert!(
+            vip.rooms
+                .iter()
+                .any(|r| r.kind == RoomKind::Vip && !r.private)
+        );
+        assert!(vip.stations.iter().any(|s| s.role == Role::Table));
+        expect(
+            BuildingKind::Clinic,
+            &[RoomKind::Waiting, RoomKind::Surgery],
+            &[Role::Surgery],
+        );
+        // Temples are rare (one weight in Old Town): lay one out on a bar's plan.
+        {
+            let (city, b) = find(BuildingKind::Bar);
+            let mut plan = FloorPlan::new(city, b.id).unwrap();
+            plan.kind = BuildingKind::Temple;
+            let f = generate_floor(city, &plan, 0);
+            validate_floor(&plan, &f).unwrap_or_else(|e| panic!("Temple: {e}"));
+            for r in [RoomKind::Hall, RoomKind::Shrine] {
+                assert!(f.rooms.iter().any(|x| x.kind == r), "Temple lacks {r:?}");
+            }
+            assert!(f.stations.iter().any(|s| s.role == Role::Shrine));
+            assert!(
+                f.rooms.iter().any(|r| r.private),
+                "Temple has a locked room"
+            );
+        }
+        expect(BuildingKind::Warehouse, &[RoomKind::Hall], &[Role::Shelf]);
+        expect(BuildingKind::Depot, &[RoomKind::Hall], &[Role::Shelf]);
+        expect(
+            BuildingKind::Factory,
+            &[RoomKind::Hall, RoomKind::Lockers],
+            &[Role::Machine],
+        );
+        expect(BuildingKind::Garage, &[RoomKind::Bays], &[Role::Bay]);
+    }
+
     /// A look at a few floors: `cargo test -p citygen print_floors -- --ignored --nocapture`.
     #[test]
     #[ignore]
@@ -357,6 +455,41 @@ mod tests {
             let plan = FloorPlan::new(&c, b.id).unwrap();
             for level in [plan.lowest, 0, 2.min(plan.top), plan.top] {
                 dump(&plan, &generate_floor(&c, &plan, level));
+            }
+        }
+        let more: Vec<City> = [8u64, 9, 11]
+            .into_iter()
+            .map(|seed| {
+                Generator::run(GenParams {
+                    seed,
+                    size: SizePreset::Medium,
+                    districts: 7,
+                    ..Default::default()
+                })
+                .unwrap()
+            })
+            .collect();
+        for kind in [
+            BuildingKind::Bar,
+            BuildingKind::Club,
+            BuildingKind::Clinic,
+            BuildingKind::Temple,
+            BuildingKind::Warehouse,
+            BuildingKind::Factory,
+            BuildingKind::Garage,
+        ] {
+            let Some((city, b)) = std::iter::once(&c).chain(more.iter()).find_map(|city| {
+                city.buildings
+                    .iter()
+                    .find(|b| b.kind == kind)
+                    .map(|b| (city, b))
+            }) else {
+                println!("no {kind:?} in four cities");
+                continue;
+            };
+            let plan = FloorPlan::new(city, b.id).unwrap();
+            for level in 0..=plan.top {
+                dump(&plan, &generate_floor(city, &plan, level));
             }
         }
     }
