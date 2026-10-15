@@ -875,7 +875,8 @@ impl Deck {
                 let Some((id, source)) = abilities.get(*i) else {
                     return Vec::new();
                 };
-                let Some(a) = st.content.ability(id) else {
+                // The sharpened copy: talents change the reach and the cooldown.
+                let Some(a) = st.character.ability(&st.content, id) else {
                     return Vec::new();
                 };
                 let mut out = vec![head(&a.name)];
@@ -1172,7 +1173,16 @@ impl Screen for Deck {
         );
         y += 1;
 
-        // Tab bar.
+        // Tab bar: two cells between labels, one when they would not all fit.
+        let labels_w: u16 = Tab::ALL
+            .iter()
+            .map(|t| t.label().chars().count() as u16 + 2)
+            .sum();
+        let gap = if labels_w + 2 * (Tab::ALL.len() as u16) < inner.width {
+            2
+        } else {
+            1
+        };
         let mut x = inner.x + 1;
         let mut starts = [0u16; Tab::ALL.len()];
         for (i, tab) in Tab::ALL.iter().enumerate() {
@@ -1191,7 +1201,7 @@ impl Screen for Deck {
                 Style::default().fg(DIM)
             };
             put(buf, x, y, &label, style, right);
-            x += label.chars().count() as u16 + 2;
+            x += label.chars().count() as u16 + gap;
         }
         y += 1;
         // Rule with the sliding magenta segment under the active tab.
@@ -2393,5 +2403,47 @@ mod tests {
             text.contains("▲ Thick sk ") && !text.contains("Thick skin"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn every_tab_label_fits_the_smallest_screen() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('0'))]);
+        st.tick = 60;
+        let text = draw(&d, &st, 100, 30);
+        assert!(text.contains("▌TALENTS▐"), "{text}");
+        assert!(
+            text.contains("▱▱▱ 0/3"),
+            "a box draws at the minimum: {text}"
+        );
+        d.update(&mut st, &[key(KeyCode::Char('1'))]);
+        let text = draw(&d, &st, 100, 30);
+        assert!(
+            text.contains(" TALENTS ") && text.contains("▌SKILLS▐"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn cyberdeck_detail_reads_the_sharpened_ability() {
+        let mut st = state();
+        st.character
+            .talents
+            .insert(game::TalentId::new("wide_band"), 2);
+        st.character
+            .talents
+            .insert(game::TalentId::new("ice_pick"), 2);
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('6'))]);
+        let rows = d.rows(&st);
+        d.row = rows
+            .iter()
+            .position(|r| r.text.contains("Netscan"))
+            .unwrap();
+        st.tick = 60;
+        let text = draw(&d, &st, 120, 35);
+        assert!(text.contains("cooldown 8s"), "{text}");
+        assert!(text.contains("18 tiles"), "{text}");
     }
 }

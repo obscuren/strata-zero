@@ -188,7 +188,7 @@ Content(
                effects: [[Flag("shadow_step")], [Perk(Stat(Cool, 1))]],
                desc: "You were never here, and the footage agrees."),
         Talent(id: "ear_to_the_ground", name: "Ear to the ground", icon: '◆', ranks: 2, requires: Some("silver_tongue"), skill: Some("fixers_ear"),
-               effects: [[Grant("street_sense")], [Flag("fixer_jobs")]],
+               effects: [[Grant("street_sense"), Flag("fixer_jobs")], [Perk(Stat(Cool, 1))]],
                desc: "You hear the job before it is posted."),
         Talent(id: "skeleton_key", name: "Skeleton key", icon: '✚', ranks: 1, skill: Some("lockpick"),
                effects: [[Flag("skeleton_key")]],

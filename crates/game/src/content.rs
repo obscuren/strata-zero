@@ -890,4 +890,23 @@ mod tests {
         bad.trees[1].tiers[0].push(dup);
         assert!(bad.validate().is_err());
     }
+
+    #[test]
+    fn no_rank_is_only_a_grant_a_category_already_makes() {
+        let c = Content::load().unwrap();
+        for t in &c.talents {
+            for (r, boons) in t.effects.iter().enumerate() {
+                let only_category_grants = boons.iter().all(|b| match b {
+                    Boon::Grant(a) => c.categories.iter().any(|cat| cat.grants.contains(a)),
+                    _ => false,
+                });
+                assert!(
+                    !only_category_grants,
+                    "{} rank {} does nothing for an owner of the category that grants it",
+                    t.id,
+                    r + 1
+                );
+            }
+        }
+    }
 }

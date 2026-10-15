@@ -804,20 +804,33 @@ mod tests {
         let eff = ch.ability(&sharp, &ability).unwrap();
         assert_eq!(eff.cooldown, 0);
         assert_eq!(reach(&eff), 1);
-        // An ability granted by a talent and an item lists once.
-        let item = c
-            .items
-            .iter()
-            .find(|i| i.grants.contains(&granted))
-            .cloned();
-        if let Some(item) = item {
-            ch.give(item.id.clone(), 1);
-            ch.equipment.insert(item.slot.unwrap(), item.id.clone());
-        }
+        // An ability granted by a talent and an item lists once, from the first source.
+        let mut ch = vex(&c);
+        let (handshake, ping, port) = (
+            TalentId::new("handshake"),
+            AbilityId::new("ping"),
+            ItemId::new("neural_port"),
+        );
+        assert!(!ch.abilities(&c).iter().any(|(a, _)| a == &ping));
+        ch.talents.insert(handshake.clone(), 1);
         let listed = ch.abilities(&c);
-        for (a, _) in &listed {
-            assert_eq!(listed.iter().filter(|(b, _)| b == a).count(), 1, "{a} once");
-        }
+        assert!(
+            listed.contains(&(ping.clone(), Source::Talent(handshake.clone()))),
+            "{listed:?}"
+        );
+        ch.give(port.clone(), 1);
+        ch.equipment.insert(Slot::Neural, port.clone());
+        let listed = ch.abilities(&c);
+        assert_eq!(
+            listed.iter().filter(|(a, _)| a == &ping).count(),
+            1,
+            "{listed:?}"
+        );
+        assert!(
+            listed.contains(&(ping.clone(), Source::Item(port))),
+            "the item comes first: {listed:?}"
+        );
+        let _ = granted;
     }
 
     #[test]
