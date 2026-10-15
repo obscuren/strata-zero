@@ -5,6 +5,7 @@ use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::messages::Kind;
 use crate::render::fx::FxOverlay;
 use crate::render::items::GroundOverlay;
+use crate::render::map::MapRef;
 use crate::render::overlay::Digital;
 use crate::render::people::{PeopleOverlay, card_lines};
 use crate::render::viewport::{Camera, MapView, Overlay, tile_to_screen};
@@ -26,7 +27,7 @@ use crate::ui::panel::inspector_lines;
 use crate::ui::sidebar::{self, Section};
 use crate::walker::{Player, port_name};
 use citygen::rng::hash64;
-use citygen::{Dir, Pos, Rect as TileRect, StratumKind};
+use citygen::{Dir, Place, Pos, Rect as TileRect, StratumKind};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
@@ -92,7 +93,8 @@ impl FpsMeter {
 
 pub struct MapScreen {
     pub mode: Mode,
-    pub stratum: StratumKind,
+    /// The map on screen: a stratum, or the floor the player walks.
+    pub place: Place,
     pub cam: Camera,
     /// The tile under inspection in Explore mode; the camera follows it.
     pub cursor: Pos,
@@ -180,7 +182,7 @@ impl MapScreen {
     pub fn explore(_tick: u64) -> Self {
         MapScreen {
             mode: Mode::Explore,
-            stratum: StratumKind::Street,
+            place: Place::Stratum(StratumKind::Street),
             cam: Camera::default(),
             cursor: Pos::new(0, 0),
             digital: false,
@@ -261,14 +263,31 @@ impl MapScreen {
     }
 
     fn change_stratum(&mut self, st: &AppState, delta: i32) {
+        let Place::Stratum(current) = self.place else {
+            return;
+        };
         let max = st
             .city
             .as_ref()
             .map(|c| c.strata.len() as i32 - 1)
             .unwrap_or(3);
-        let i = (self.stratum.index() as i32 + delta).clamp(0, max);
+        let i = (current.index() as i32 + delta).clamp(0, max);
         if let Some(k) = StratumKind::from_index(i as usize) {
-            self.stratum = k;
+            self.place = Place::Stratum(k);
+        }
+    }
+
+    /// The map at the screen's place; a floor not yet generated falls back to the street.
+    fn map<'a>(&self, st: &'a AppState, city: &'a citygen::City) -> MapRef<'a> {
+        MapRef::for_place(city, &st.interiors, self.place)
+            .unwrap_or_else(|| MapRef::stratum_of(city, StratumKind::Street))
+    }
+
+    /// What the status line calls the map.
+    fn place_label(&self, st: &AppState) -> String {
+        match (self.place, st.city.as_ref()) {
+            (Place::Stratum(k), _) => k.label().to_string(),
+            (Place::Floor { level, .. }, _) => citygen::FloorPlan::label(level),
         }
     }
 
@@ -277,11 +296,11 @@ impl MapScreen {
         let Some(city) = st.city.as_ref() else { return };
         if st.player.is_none() {
             let mut p = Player::spawn(city, hash64(city.seed, st.tick));
-            p.update_fov(city, bonus);
+            p.update_fov(&MapRef::stratum_of(city, StratumKind::Street), bonus);
             st.player = Some(p);
         }
         if let Some(p) = &st.player {
-            self.stratum = p.stratum;
+            self.place = p.place;
             self.cam.snap(p.pos);
         }
         self.mode = Mode::Walk;
@@ -317,7 +336,7 @@ impl MapScreen {
                 return Some(ScreenCmd::Push {
                     to: Box::new(
                         Deck::new(st.tick)
-                            .focus(self.stratum, self.focus_pos(st))
+                            .focus(self.place, self.focus_pos(st))
                             .restore(st),
                     ),
                     fx: TransitionKind::Glitch,
@@ -415,11 +434,13 @@ impl MapScreen {
     /// What Space offers where the player stands: take rows, jack, stairs, look.
     fn interact(&self, st: &AppState) -> Option<ScreenCmd> {
         let (city, player) = (st.city.as_ref()?, st.player.as_ref()?);
-        let (k, pos) = (player.stratum, player.pos);
+        let (place, pos) = (player.place, player.pos);
+        let k = place.stratum();
+        let map = self.map(st, city);
         let mut choices = Vec::new();
         // Letters for take rows; j k q h l t and the arrows are taken by the popup and verbs.
         let mut letters = WORLD_LETTERS.chars();
-        let stacks = st.ground.at(k, pos);
+        let stacks = st.ground.at(place, pos);
         for s in stacks {
             let Some(item) = st.content.item(&s.item) else {
                 continue;
@@ -447,14 +468,16 @@ impl MapScreen {
             choices.push(Choice::new('j', "jack in", Pick::World(WorldAct::JackIn)));
         }
         let (mut up, mut down) = (None, None);
-        for c in city
-            .connectors_at(pos)
-            .filter(|c| c.kind != citygen::ConnectorKind::Jack)
-        {
-            // Only directions that lead somewhere walkable: a row never refuses after being offered.
-            if let Some((below, above)) = c.serves_from(k) {
-                up = up.or(above.filter(|d| city.walkable(*d, pos)));
-                down = down.or(below.filter(|d| city.walkable(*d, pos)));
+        if let Some(k) = k {
+            for c in city
+                .connectors_at(pos)
+                .filter(|c| c.kind != citygen::ConnectorKind::Jack)
+            {
+                // Only directions that lead somewhere walkable: a row never refuses after being offered.
+                if let Some((below, above)) = c.serves_from(k) {
+                    up = up.or(above.filter(|d| city.walkable(*d, pos)));
+                    down = down.or(below.filter(|d| city.walkable(*d, pos)));
+                }
             }
         }
         if let Some(dest) = up {
@@ -471,7 +494,7 @@ impl MapScreen {
                 Pick::World(WorldAct::Down),
             ));
         }
-        if k == StratumKind::Street
+        if place.is_street()
             && let Some(world) = st.world.as_ref()
         {
             for n in pos.neighbors4() {
@@ -487,18 +510,19 @@ impl MapScreen {
                 ));
             }
         }
-        let node = Digital::node_under(city, k, pos).map(|id| city.net.node(id));
+        let node = k
+            .and_then(|k| Digital::node_under(city, k, pos))
+            .map(|id| city.net.node(id));
         let person = st
             .world
             .as_ref()
-            .filter(|_| k == StratumKind::Street)
+            .filter(|_| place.is_street())
             .and_then(|w| w.person_at(pos).map(|id| w.card(id, city)));
         choices.push(Choice::new(
             'l',
             "look",
             Pick::Card(inspector_lines(
-                city,
-                k,
+                &map,
                 pos,
                 node,
                 stacks,
@@ -549,14 +573,14 @@ impl MapScreen {
     /// player moves on; a step into a car goes nowhere.
     fn bump(&self, st: &mut AppState, dir: Dir) -> Option<ScreenCmd> {
         let player = st.player.as_ref()?;
-        let (from, target, stratum) = (player.pos, player.pos.step(dir), player.stratum);
-        if stratum != StratumKind::Street {
+        let (from, target, place) = (player.pos, player.pos.step(dir), player.place);
+        if !place.is_street() {
             return None;
         }
         let city = st.city.as_ref()?;
         let world = st.world.as_mut()?;
         if let Some(id) = world.person_at(target) {
-            if city.walkable(stratum, target) {
+            if city.walkable(StratumKind::Street, target) {
                 world.swap(id, from, target);
             }
             return None;
@@ -596,7 +620,10 @@ impl MapScreen {
         let dev = st.dev;
         let bonus = st.character.sight_bonus(&st.content);
         let city = st.city.as_ref()?;
+        let interiors = &st.interiors;
         let player = st.player.as_mut()?;
+        let map = MapRef::for_place(city, interiors, player.place)
+            .unwrap_or_else(|| MapRef::stratum_of(city, StratumKind::Street));
         match k.code {
             KeyCode::Char('c') if dev => {
                 self.cursor = player.pos;
@@ -606,7 +633,7 @@ impl MapScreen {
                 if player.jacked_in() {
                     match player.jack_out(city, bonus) {
                         Ok(()) => {
-                            self.stratum = player.stratum;
+                            self.place = player.place;
                             self.cam.snap(player.pos);
                             st.say("jacked out");
                             return Some(ScreenCmd::Flash(TransitionKind::Glitch));
@@ -616,7 +643,7 @@ impl MapScreen {
                 } else {
                     match player.jack_in(city, bonus) {
                         Ok(port) => {
-                            self.stratum = StratumKind::Net;
+                            self.place = Place::Stratum(StratumKind::Net);
                             self.cam.snap(port);
                             let where_ = port_name(city, port);
                             st.say(format!("jacked in at {where_}"));
@@ -630,8 +657,8 @@ impl MapScreen {
                 let up = k.code == KeyCode::Char('>');
                 match player.use_connector(city, up) {
                     Some(dest) => {
-                        self.stratum = dest;
-                        player.update_fov(city, bonus);
+                        self.place = Place::Stratum(dest);
+                        player.update_fov(&MapRef::stratum_of(city, dest), bonus);
                         st.say(format!("now on {}", dest.label()));
                     }
                     None => st.warn(if up {
@@ -641,11 +668,11 @@ impl MapScreen {
                     }),
                 }
             }
-            KeyCode::Char('.') => player.update_fov(city, bonus),
+            KeyCode::Char('.') => player.update_fov(&map, bonus),
             code => {
                 let dir = dir_for(code)?;
-                if player.try_move(city, dir) {
-                    player.update_fov(city, bonus);
+                if player.try_move(&map, dir) {
+                    player.update_fov(&map, bonus);
                 }
             }
         }
@@ -670,14 +697,14 @@ impl Screen for MapScreen {
         // The map follows the player: a popup may have jacked them or taken the stairs.
         if self.mode == Mode::Walk
             && let Some(p) = st.player.as_ref()
-            && p.stratum != self.stratum
+            && p.place != self.place
         {
-            self.stratum = p.stratum;
+            self.place = p.place;
             self.cam.snap(p.pos);
         }
         // The console takes every key while it is open.
         let focus = game::At {
-            stratum: self.stratum,
+            place: self.place,
             pos: match (self.mode, &st.player) {
                 (Mode::Walk, Some(p)) => p.pos,
                 _ => self.cursor,
@@ -737,7 +764,7 @@ impl Screen for MapScreen {
         // The city lives: a minute step when the clock turns, a few paths per frame,
         // and nobody walks onto the player.
         let standing = match (self.mode, &st.player) {
-            (Mode::Walk, Some(p)) if p.stratum == StratumKind::Street => Some(p.pos),
+            (Mode::Walk, Some(p)) if p.place.is_street() => Some(p.pos),
             _ => None,
         };
         if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
@@ -764,14 +791,16 @@ impl Screen for MapScreen {
             return;
         }
         let r = layout(area);
-        let map = r.map;
-        self.last_map.set(map);
-        let origin = self.cam.origin(map.width, map.height);
+        let map_area = r.map;
+        self.last_map.set(map_area);
+        let origin = self.cam.origin(map_area.width, map_area.height);
         let cursor = self.focus_pos(st);
-        let focus = if self.digital || self.stratum == StratumKind::Net {
-            Digital::node_under(city, self.stratum, cursor)
-        } else {
-            None
+        let map = self.map(st, city);
+        let focus = match self.place.stratum() {
+            Some(k) if self.digital || k == StratumKind::Net => {
+                Digital::node_under(city, k, cursor)
+            }
+            _ => None,
         };
         let digital = Digital {
             enabled: self.digital,
@@ -782,11 +811,8 @@ impl Screen for MapScreen {
             overlays.push(&Weather);
         }
         overlays.push(&digital);
-        let walking = self.mode == Mode::Walk
-            && st
-                .player
-                .as_ref()
-                .is_some_and(|p| p.stratum == self.stratum);
+        let walking =
+            self.mode == Mode::Walk && st.player.as_ref().is_some_and(|p| p.place == self.place);
         let vis = if walking {
             st.player.as_ref().map(|p| p.vis())
         } else {
@@ -810,8 +836,7 @@ impl Screen for MapScreen {
         let fx = FxOverlay { fx: &st.fx, vis };
         overlays.push(&fx);
         MapView {
-            city,
-            stratum: self.stratum,
+            map: &map,
             origin,
             tick: st.tick,
             style: &st.style,
@@ -823,12 +848,12 @@ impl Screen for MapScreen {
                 None
             },
         }
-        .render(map, f.buffer_mut());
+        .render(map_area, f.buffer_mut());
 
         if let Some(p) = &st.player {
             if let Some((bk, bp)) = p.body
-                && bk == self.stratum
-                && let Some((sx, sy)) = tile_to_screen(map, origin, bp)
+                && bk == self.place
+                && let Some((sx, sy)) = tile_to_screen(map_area, origin, bp)
             {
                 f.buffer_mut()[(sx, sy)].set_char('@').set_style(
                     Style::default()
@@ -836,10 +861,10 @@ impl Screen for MapScreen {
                         .add_modifier(Modifier::DIM),
                 );
             }
-            if p.stratum == self.stratum
-                && let Some((sx, sy)) = tile_to_screen(map, origin, p.pos)
+            if p.place == self.place
+                && let Some((sx, sy)) = tile_to_screen(map_area, origin, p.pos)
             {
-                let fg = if p.stratum == StratumKind::Net {
+                let fg = if p.place == Place::Stratum(StratumKind::Net) {
                     Color::Rgb(0, 255, 200)
                 } else {
                     Color::Rgb(255, 255, 255)
@@ -897,7 +922,7 @@ impl Screen for MapScreen {
         for (i, row) in rows.into_iter().enumerate() {
             f.render_widget(Paragraph::new(row), r.band_l[i + 1]);
         }
-        let location = hud::location(city, self.stratum, cursor);
+        let location = hud::location(city, &st.interiors, self.place, cursor);
         f.render_widget(
             Paragraph::new(hud::location_line(&location, st.clock(), rw)),
             r.band_r[0],
@@ -923,18 +948,22 @@ impl Screen for MapScreen {
         let person = st
             .world
             .as_ref()
-            .filter(|_| self.stratum == StratumKind::Street)
+            .filter(|_| self.place.is_street())
             .and_then(|w| w.person_at(cursor).map(|id| w.card(id, city)));
         let view = sidebar::SidebarView {
-            city,
-            stratum: self.stratum,
+            map,
             focus: cursor,
             person: person.as_ref(),
-            view: TileRect::new(origin.x, origin.y, map.width as i32, map.height as i32),
+            view: TileRect::new(
+                origin.x,
+                origin.y,
+                map_area.width as i32,
+                map_area.height as i32,
+            ),
             player: st
                 .player
                 .as_ref()
-                .filter(|p| p.stratum == self.stratum)
+                .filter(|p| p.place == self.place)
                 .map(|p| p.pos),
             style: &st.style,
             content: &st.content,
@@ -969,11 +998,11 @@ impl Screen for MapScreen {
                 Span::styled(" jacked in · Net", Style::default().fg(TEXT)),
             ],
             (Mode::Walk, false) => vec![Span::styled(
-                format!("on foot · {}", self.stratum.label()),
+                format!("on foot · {}", self.place_label(st)),
                 Style::default().fg(TEXT),
             )],
             (Mode::Explore, _) => vec![Span::styled(
-                format!("camera · {}", self.stratum.label()),
+                format!("camera · {}", self.place_label(st)),
                 Style::default().fg(TEXT),
             )],
         };
@@ -1010,11 +1039,11 @@ impl Screen for MapScreen {
             };
             put(
                 f.buffer_mut(),
-                map.x + 1,
-                map.bottom().saturating_sub(1),
+                map_area.x + 1,
+                map_area.bottom().saturating_sub(1),
                 &e.marked(),
                 style,
-                map.right(),
+                map_area.right(),
             );
         }
 
@@ -1065,16 +1094,16 @@ mod tests {
         let text = buffer_text(t.backend().buffer());
         assert!(text.contains("Street"), "{text}");
         s.update(&mut st, &[key(KeyCode::Char(']'))]);
-        assert_eq!(s.stratum, StratumKind::Skyways);
+        assert_eq!(s.place, Place::Stratum(StratumKind::Skyways));
         s.update(&mut st, &[key(KeyCode::Char('['))]);
         s.update(&mut st, &[key(KeyCode::Char('['))]);
-        assert_eq!(s.stratum, StratumKind::Undercity);
+        assert_eq!(s.place, Place::Stratum(StratumKind::Undercity));
         s.update(&mut st, &[key(KeyCode::Char('['))]);
-        assert_eq!(s.stratum, StratumKind::Undercity);
+        assert_eq!(s.place, Place::Stratum(StratumKind::Undercity));
         s.update(&mut st, &[key(KeyCode::Char('w'))]);
         assert!(st.player.is_some());
         assert_eq!(s.mode, Mode::Walk);
-        assert_eq!(s.stratum, StratumKind::Street);
+        assert_eq!(s.place, Place::Stratum(StratumKind::Street));
         for d in ['h', 'j', 'k', 'l', 'y', 'u', 'b', 'n'] {
             st.tick += 1;
             s.update(&mut st, &[key(KeyCode::Char(d))]);
@@ -1092,12 +1121,15 @@ mod tests {
         s.update(&mut st, &[key(KeyCode::Esc)]);
         assert!(!s.help);
         // Saving pushes the save screen over the live map; the map keeps its state.
-        s.stratum = StratumKind::Undercity;
+        s.place = Place::Stratum(StratumKind::Undercity);
         assert!(matches!(
             s.update(&mut st, &[key(KeyCode::Char('s'))]),
             ScreenCmd::Push { .. }
         ));
-        assert_eq!((s.mode, s.stratum), (Mode::Walk, StratumKind::Undercity));
+        assert_eq!(
+            (s.mode, s.place),
+            (Mode::Walk, Place::Stratum(StratumKind::Undercity))
+        );
         s.update(&mut st, &[key(KeyCode::Char('c'))]);
         assert_eq!(s.mode, Mode::Explore);
         assert!(matches!(
@@ -1177,9 +1209,9 @@ mod tests {
         for _ in 0..4 {
             s.update(&mut st, &[key(KeyCode::Char(']'))]);
         }
-        assert_eq!(s.stratum, StratumKind::Net);
+        assert_eq!(s.place, Place::Stratum(StratumKind::Net));
         s.update(&mut st, &[key(KeyCode::Char(']'))]);
-        assert_eq!(s.stratum, StratumKind::Net);
+        assert_eq!(s.place, Place::Stratum(StratumKind::Net));
         t.draw(|f| s.draw(&st, f)).unwrap();
         let text = buffer_text(t.backend().buffer());
         assert!(text.contains("· Net"), "{text}");
@@ -1205,7 +1237,7 @@ mod tests {
         {
             let p = st.player.as_mut().unwrap();
             p.pos = stand;
-            p.stratum = StratumKind::Street;
+            p.place = Place::Stratum(StratumKind::Street);
         }
         assert!(matches!(
             s.update(&mut st, &[key(KeyCode::Enter)]),
@@ -1213,7 +1245,7 @@ mod tests {
         ));
         let p = st.player.as_ref().unwrap();
         assert!(p.jacked_in());
-        assert_eq!(s.stratum, StratumKind::Net);
+        assert_eq!(s.place, Place::Stratum(StratumKind::Net));
         assert_eq!(p.pos, jack);
         st.tick += 500;
         t.draw(|f| s.draw(&st, f)).unwrap();
@@ -1225,7 +1257,7 @@ mod tests {
         );
         // The body shows on the Street while the avatar is in the Net.
         s.mode = Mode::Explore;
-        s.stratum = StratumKind::Street;
+        s.place = Place::Stratum(StratumKind::Street);
         s.cursor = stand;
         s.cam.snap(stand);
         t.draw(|f| s.draw(&st, f)).unwrap();
@@ -1234,15 +1266,18 @@ mod tests {
         let (sx, sy) = tile_to_screen(map, origin, stand).unwrap();
         assert_eq!(t.backend().buffer()[(sx, sy)].symbol(), "@");
         s.mode = Mode::Walk;
-        s.stratum = StratumKind::Net;
+        s.place = Place::Stratum(StratumKind::Net);
         assert!(matches!(
             s.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Flash(TransitionKind::Glitch)
         ));
         let p = st.player.as_ref().unwrap();
         assert!(!p.jacked_in());
-        assert_eq!((p.stratum, p.pos), (StratumKind::Street, stand));
-        assert_eq!(s.stratum, StratumKind::Street);
+        assert_eq!(
+            (p.place, p.pos),
+            (Place::Stratum(StratumKind::Street), stand)
+        );
+        assert_eq!(s.place, Place::Stratum(StratumKind::Street));
         s.update(&mut st, &[key(KeyCode::Char('?'))]);
         t.draw(|f| s.draw(&st, f)).unwrap();
         assert!(buffer_text(t.backend().buffer()).contains("jack in"));
@@ -1480,11 +1515,13 @@ mod tests {
         s.update(&mut st, &[key(KeyCode::Char('w'))]);
         let (k, pos) = {
             let p = st.player.as_ref().unwrap();
-            (p.stratum, p.pos)
+            (p.place, p.pos)
         };
         let walkable: Vec<Pos> = {
             let city = st.city.as_ref().unwrap();
-            pos.neighbors8().filter(|q| city.walkable(k, *q)).collect()
+            pos.neighbors8()
+                .filter(|q| city.walkable(k.stratum().unwrap(), *q))
+                .collect()
         };
         assert!(!walkable.is_empty());
         for q in &walkable {
@@ -1526,7 +1563,7 @@ mod tests {
         walking(&mut st, &mut s);
         let (k, pos) = {
             let p = st.player.as_ref().unwrap();
-            (p.stratum, p.pos)
+            (p.place, p.pos)
         };
         st.ground.add(k, pos, game::ItemId::new("copper_coil"), 2);
         st.ground.add(k, pos, game::ItemId::new("dead_phone"), 1);
@@ -1601,7 +1638,11 @@ mod tests {
         );
         assert!(st.player.as_ref().unwrap().jacked_in());
         s.update(&mut st, &[]);
-        assert_eq!(s.stratum, StratumKind::Net, "the map follows the player");
+        assert_eq!(
+            s.place,
+            Place::Stratum(StratumKind::Net),
+            "the map follows the player"
+        );
         let ScreenCmd::Push { to: mut p, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
         else {
             panic!()
@@ -1610,7 +1651,7 @@ mod tests {
         assert!(draw_screen(&*p, &st, 120, 40).contains("j  jack out"));
         p.update(&mut st, &[key(KeyCode::Char('j'))]);
         s.update(&mut st, &[]);
-        assert_eq!(s.stratum, street);
+        assert_eq!(s.place, Place::Stratum(street));
         let stair = city
             .connectors
             .iter()
@@ -1632,7 +1673,7 @@ mod tests {
         assert!(draw_screen(&*p, &st, 120, 40).contains("<  go down to Undercity"));
         p.update(&mut st, &[key(KeyCode::Char('<'))]);
         s.update(&mut st, &[]);
-        assert_eq!(s.stratum, StratumKind::Undercity);
+        assert_eq!(s.place, Place::Stratum(StratumKind::Undercity));
         assert_eq!(last(&st), Some("now on Undercity"));
     }
 
@@ -2207,7 +2248,10 @@ mod tests {
         }
         let bonus = st.character.sight_bonus(&st.content);
         let city = st.city.as_ref().unwrap();
-        st.player.as_mut().unwrap().update_fov(city, bonus);
+        st.player
+            .as_mut()
+            .unwrap()
+            .update_fov(&MapRef::stratum_of(city, StratumKind::Street), bonus);
         s.cam.snap(beside);
         s.update(&mut st, &[]);
         let text = draw_screen(&s, &st, 120, 40);
@@ -2333,10 +2377,10 @@ mod tests {
         let (person, beside) = found.expect("a tunnel under someone");
         {
             let p = st.player.as_mut().unwrap();
-            p.stratum = under;
+            p.place = Place::Stratum(under);
             p.pos = beside;
         }
-        s.stratum = under;
+        s.place = Place::Stratum(under);
         s.update(&mut st, &[]);
         let dir = match (person.x - beside.x, person.y - beside.y) {
             (1, 0) => KeyCode::Char('l'),

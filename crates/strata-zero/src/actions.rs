@@ -1,7 +1,8 @@
 //! Item actions on the app: `game::apply` plus its effects on the walker and the world.
 
 use crate::app::{AppState, FxInstance};
-use citygen::{City, Pos, StratumKind};
+use crate::render::map::MapRef;
+use citygen::{City, Place, Pos, StratumKind};
 use game::{AbilityKind, Action, Active, At, Effect};
 
 /// Applies an action at the player's feet and runs its effects on the world.
@@ -12,12 +13,12 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         action,
         Action::Drop { .. } | Action::Take { .. } | Action::TakeAll | Action::Fire(_)
     );
-    let (stratum, pos) = match st.player.as_ref().map(|p| (p.stratum, p.pos)) {
+    let (place, pos) = match st.player.as_ref().map(|p| (p.place, p.pos)) {
         Some(body) => body,
         None if needs_body => return Err("no body in the city".to_string()),
-        None => (StratumKind::Street, Pos::new(0, 0)),
+        None => (Place::Stratum(StratumKind::Street), Pos::new(0, 0)),
     };
-    let at = At { stratum, pos };
+    let at = At { place, pos };
     let fired = match &action {
         Action::Fire(id) => Some(id.clone()),
         _ => None,
@@ -31,18 +32,23 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         st.tick,
         action,
     )?;
+    let interiors = &st.interiors;
     if refresh_sight {
         let bonus = st.character.sight_bonus(&st.content);
-        if let (Some(city), Some(player)) = (st.city.as_ref(), st.player.as_mut()) {
-            player.update_fov(city, bonus);
+        if let (Some(city), Some(player)) = (st.city.as_ref(), st.player.as_mut())
+            && let Some(map) = MapRef::for_place(city, interiors, player.place)
+        {
+            player.update_fov(&map, bonus);
         }
     }
     let mut revealed = Vec::new();
     for effect in outcome.effects {
         match effect {
             Effect::Reveal { radius } => {
-                if let (Some(city), Some(player)) = (st.city.as_ref(), st.player.as_mut()) {
-                    revealed = player.reveal(city, radius);
+                if let (Some(city), Some(player)) = (st.city.as_ref(), st.player.as_mut())
+                    && let Some(map) = MapRef::for_place(city, interiors, player.place)
+                {
+                    revealed = player.reveal(&map, radius);
                 }
             }
         }
@@ -57,8 +63,8 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
             ) => radius,
             AbilityKind::Passive => 0,
         };
-        let targets = match (&ability.kind, st.city.as_ref()) {
-            (AbilityKind::Active(Active::Trace { radius }), Some(city)) => {
+        let targets = match (&ability.kind, st.city.as_ref(), place.stratum()) {
+            (AbilityKind::Active(Active::Trace { radius }), Some(city), Some(stratum)) => {
                 trace_targets(city, stratum, pos, *radius)
             }
             _ => Vec::new(),
@@ -79,7 +85,7 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
             };
             st.fx.push(FxInstance {
                 fx: fx.clone(),
-                stratum,
+                place,
                 origin: pos,
                 radius,
                 started,
@@ -199,7 +205,7 @@ mod tests {
             (st.tick, st.tick + 36),
             "the marks light when the arc lands"
         );
-        let (k, pos) = (st.fx[3].stratum, st.fx[3].origin);
+        let (k, pos) = (st.fx[3].place.stratum().unwrap(), st.fx[3].origin);
         let city = st.city.as_ref().unwrap();
         assert!(
             st.fx[3]

@@ -7,6 +7,7 @@ use crate::anim::{Easing, Tween};
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::messages::Kind;
 use crate::render::glyphs::kind_icon;
+use crate::render::map::MapRef;
 use crate::render::memmap::MemoryMap;
 use crate::screens::popup::{Choice, Pick, Popup};
 use crate::ui::board::{BoardState, RowKind, board_rows};
@@ -16,7 +17,7 @@ use crate::ui::chrome::{
 };
 use crate::ui::logo::{self, Logo};
 use citygen::rng::hash64;
-use citygen::{Pos, StratumKind};
+use citygen::{FloorPlan, Place, Pos, StratumKind};
 use crossterm::event::{KeyCode, KeyEvent};
 use game::{
     AbilityKind, Action, Active, Build, CategoryId, ItemId, ItemKind, Perk, SkillId, Slot, Source,
@@ -123,7 +124,7 @@ pub struct Deck {
     tab_tween: Tween,
     /// The tile the link line describes: the map's focus when it opened the deck.
     /// Without one the deck falls back to the player.
-    focus: Option<(StratumKind, Pos)>,
+    focus: Option<(Place, Pos)>,
     /// The list pane and its first visible row at the last draw, to anchor popups.
     last_list: Cell<(Rect, usize)>,
     /// Unfolded categories on the SKILLS board; starts as the owned ones.
@@ -368,8 +369,8 @@ impl Deck {
     }
 
     /// Links the deck to a tile: the cursor under the free camera, the player when walking.
-    pub fn focus(mut self, stratum: StratumKind, pos: Pos) -> Self {
-        self.focus = Some((stratum, pos));
+    pub fn focus(mut self, place: Place, pos: Pos) -> Self {
+        self.focus = Some((place, pos));
         self
     }
 
@@ -901,23 +902,31 @@ impl Deck {
     fn link_line(&self, st: &AppState) -> String {
         let at = self
             .focus
-            .or_else(|| st.player.as_ref().map(|p| (p.stratum, p.pos)));
-        let Some((stratum, pos)) = at else {
+            .or_else(|| st.player.as_ref().map(|p| (p.place, p.pos)));
+        let Some((place, pos)) = at else {
             return "▍ LINK · no fix".to_string();
         };
-        // Physical strata carry the district on every tile; the Net reads the ground below.
+        // Physical strata carry the district on every tile; the Net reads the ground
+        // below; a floor is its building's.
         let district = st
             .city
             .as_ref()
             .and_then(|c| {
-                c.tile(stratum, pos)
-                    .and_then(|t| t.district)
-                    .or_else(|| c.tile(StratumKind::Street, pos).and_then(|t| t.district))
-                    .and_then(|d| c.district_opt(d))
-                    .map(|d| d.name.clone())
+                let d = match place {
+                    Place::Stratum(k) => c
+                        .tile(k, pos)
+                        .and_then(|t| t.district)
+                        .or_else(|| c.tile(StratumKind::Street, pos).and_then(|t| t.district)),
+                    Place::Floor { building, .. } => c.building_opt(building).map(|b| b.district),
+                };
+                d.and_then(|d| c.district_opt(d)).map(|d| d.name.clone())
             })
             .unwrap_or_else(|| "no fix".to_string());
-        format!("▍ LINK · {district} · {}", stratum.label())
+        let label = match place {
+            Place::Stratum(k) => k.label().to_string(),
+            Place::Floor { level, .. } => FloorPlan::label(level),
+        };
+        format!("▍ LINK · {district} · {label}")
     }
 
     fn draw_map(&self, st: &AppState, body: Rect, buf: &mut Buffer) {
@@ -929,9 +938,10 @@ impl Deck {
                     body.width.saturating_sub(2),
                     body.height.saturating_sub(1),
                 );
+                let map = MapRef::for_place(city, &st.interiors, p.place)
+                    .unwrap_or_else(|| MapRef::stratum_of(city, StratumKind::Street));
                 MemoryMap {
-                    city,
-                    stratum: p.stratum,
+                    map: &map,
                     vis: p.vis(),
                     player: Some(p.pos),
                     style: &st.style,
@@ -941,7 +951,7 @@ impl Deck {
                     buf,
                     body.x + 1,
                     body.y,
-                    &format!(" {} · what you remember ", p.stratum.label()),
+                    &format!(" {} · what you remember ", map.label()),
                     Style::default().fg(DIM).bg(PANEL_BG),
                     body.right(),
                 );
@@ -1664,10 +1674,20 @@ mod tests {
                 .expect("a tile with a district")
         };
         assert!(draw(&Deck::new(0), &st, 120, 35).contains("LINK · no fix"));
-        let text = draw(&Deck::new(0).focus(StratumKind::Street, pos), &st, 120, 35);
+        let text = draw(
+            &Deck::new(0).focus(Place::Stratum(StratumKind::Street), pos),
+            &st,
+            120,
+            35,
+        );
         assert!(text.contains(&format!("LINK · {name} · Street")), "{text}");
         // A Net tile carries no district: the ground below names the link.
-        let text = draw(&Deck::new(0).focus(StratumKind::Net, pos), &st, 120, 35);
+        let text = draw(
+            &Deck::new(0).focus(Place::Stratum(StratumKind::Net), pos),
+            &st,
+            120,
+            35,
+        );
         assert!(
             text.contains(&format!("LINK · {name} · {}", StratumKind::Net.label())),
             "{text}"
@@ -1829,7 +1849,7 @@ mod tests {
         walking(&mut st);
         let at = {
             let p = st.player.as_ref().unwrap();
-            (p.stratum, p.pos)
+            (p.place, p.pos)
         };
         let mut d = Deck::new(0);
         d.update(&mut st, &[key(KeyCode::Char('4'))]);

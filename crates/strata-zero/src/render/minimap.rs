@@ -1,16 +1,16 @@
 //! A downscaled district map with the viewport rectangle and the player.
 
 use crate::render::Rgb;
+use crate::render::map::{MapRef, TileMap};
 use crate::render::style::StylePack;
-use citygen::{City, Pos, Rect as TileRect, StratumKind};
+use citygen::{Pos, Rect as TileRect};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::widgets::Widget;
 
 pub struct Minimap<'a> {
-    pub city: &'a City,
-    pub stratum: StratumKind,
+    pub map: &'a MapRef<'a>,
     /// The main viewport, in tiles.
     pub view: TileRect,
     pub player: Option<Pos>,
@@ -22,10 +22,7 @@ impl Widget for Minimap<'_> {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        let Some(st) = self.city.stratum(self.stratum) else {
-            return;
-        };
-        let size = self.city.size;
+        let size = self.map.size();
         let scale = (size.w as f32 / area.width as f32)
             .max(size.h as f32 / area.height as f32)
             .max(1.0)
@@ -47,7 +44,7 @@ impl Widget for Minimap<'_> {
                 let mut theme = None;
                 let mut water = 0usize;
                 for p in block.iter() {
-                    let Some(t) = st.tiles.get(p) else { continue };
+                    let Some(t) = self.map.tile(p) else { continue };
                     total += 1;
                     if t.is_walkable() {
                         walk += 1;
@@ -56,10 +53,7 @@ impl Widget for Minimap<'_> {
                         water += 1;
                     }
                     if theme.is_none() {
-                        theme = t
-                            .district
-                            .and_then(|d| self.city.district_opt(d))
-                            .map(|d| d.theme);
+                        theme = self.map.theme(p);
                     }
                 }
                 let cell = &mut buf[(area.x + cx, area.y + cy)];
@@ -138,8 +132,7 @@ mod tests {
             let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
             t.draw(|f| {
                 Minimap {
-                    city: &c,
-                    stratum: StratumKind::Street,
+                    map: &MapRef::stratum_of(&c, StratumKind::Street),
                     view: Rect::new(10, 10, 30, 15),
                     player: Some(Pos::new(20, 20)),
                     style: &s,

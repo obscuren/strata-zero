@@ -147,7 +147,10 @@ impl Popup {
                         let up = act == WorldAct::Up;
                         match player.use_connector(city, up) {
                             Some(dest) => {
-                                player.update_fov(city, bonus);
+                                player.update_fov(
+                                    &crate::render::map::MapRef::stratum_of(city, dest),
+                                    bonus,
+                                );
                                 Ok((format!("now on {}", dest.label()), TransitionKind::None))
                             }
                             None => Err(if up {

@@ -2,6 +2,7 @@
 
 use crate::messages::{Entry, Kind, MessageLog};
 use crate::render::glyphs::kind_icon;
+use crate::render::map::{MapRef, TileMap};
 use crate::render::minimap::Minimap;
 use crate::render::overlay::Digital;
 use crate::render::style::StylePack;
@@ -9,7 +10,7 @@ use crate::ui::chrome::{CYAN, DIM, MAGENTA, TEXT, reveal};
 use crate::ui::hud::{RULE_STYLE, clock_at};
 use crate::ui::panel::{inspector_lines, legend};
 use crate::walker::port_name;
-use citygen::{City, ConnectorKind, Feature, NodeKind, Pos, Rect as TileRect, StratumKind};
+use citygen::{ConnectorKind, Feature, NodeKind, Pos, Rect as TileRect, StratumKind};
 use game::{Character, Content, Ground};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -169,8 +170,7 @@ pub fn budget(needs: &[(Section, u16)], height: u16) -> Vec<(Section, u16)> {
 }
 
 pub struct SidebarView<'a> {
-    pub city: &'a City,
-    pub stratum: StratumKind,
+    pub map: MapRef<'a>,
     pub focus: Pos,
     /// The main viewport in tiles, for the minimap.
     pub view: TileRect,
@@ -200,13 +200,17 @@ fn separator(width: u16) -> Line<'static> {
 
 /// The focus tile: its feature, then what lies on it.
 pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
-    let city = v.city;
+    let city = v.map.city();
     let mut out = Vec::new();
-    if v.stratum == StratumKind::Net {
-        if let Some(id) = Digital::node_under(city, v.stratum, v.focus) {
+    if v.map.stratum() == Some(StratumKind::Net) {
+        if let Some(id) = v
+            .map
+            .stratum()
+            .and_then(|k| Digital::node_under(city, k, v.focus))
+        {
             out.push(plain(format!(" ◆ {}", city.net.node(id).kind.label())));
         }
-    } else if let Some(t) = city.tile(v.stratum, v.focus)
+    } else if let Some(t) = v.map.tile(v.focus)
         && t.feature == Some(Feature::Node(NodeKind::Terminal))
     {
         out.push(plain(format!(" ╥ {}", port_name(city, v.focus))));
@@ -215,7 +219,10 @@ pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
         .connectors_at(v.focus)
         .filter(|c| c.kind != ConnectorKind::Jack)
     {
-        let Some((below, above)) = c.serves_from(v.stratum) else {
+        let Some(k) = v.map.stratum() else {
+            continue;
+        };
+        let Some((below, above)) = c.serves_from(k) else {
             continue;
         };
         if above.is_some() {
@@ -225,7 +232,7 @@ pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
             out.push(plain(format!(" < {} down", c.kind.label())));
         }
     }
-    let stacks = v.ground.at(v.stratum, v.focus);
+    let stacks = v.ground.at(v.map.place(), v.focus);
     for s in stacks.iter().take(ITEM_ROWS) {
         let (name, icon) = match v.content.item(&s.item) {
             Some(i) => (i.name.clone(), kind_icon(i.kind)),
@@ -250,28 +257,30 @@ pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
 /// One line for the footer: `3 items · terminal · stairs`, or `nothing`.
 pub fn here_summary(v: &SidebarView) -> String {
     let mut parts = Vec::new();
-    let n = v.ground.at(v.stratum, v.focus).len();
+    let n = v.ground.at(v.map.place(), v.focus).len();
     if n == 1 {
         parts.push("1 item".to_string());
     } else if n > 1 {
         parts.push(format!("{n} items"));
     }
-    if v.stratum == StratumKind::Net {
-        if let Some(id) = Digital::node_under(v.city, v.stratum, v.focus) {
-            parts.push(v.city.net.node(id).kind.label().to_string());
+    if v.map.stratum() == Some(StratumKind::Net) {
+        if let Some(id) = v
+            .map
+            .stratum()
+            .and_then(|k| Digital::node_under(v.map.city(), k, v.focus))
+        {
+            parts.push(v.map.city().net.node(id).kind.label().to_string());
         }
     } else if v
-        .city
-        .tile(v.stratum, v.focus)
+        .map
+        .tile(v.focus)
         .is_some_and(|t| t.feature == Some(Feature::Node(NodeKind::Terminal)))
     {
         parts.push("terminal".to_string());
     }
-    for c in v
-        .city
-        .connectors_at(v.focus)
-        .filter(|c| c.kind != ConnectorKind::Jack && c.serves.contains(&v.stratum))
-    {
+    for c in v.map.city().connectors_at(v.focus).filter(|c| {
+        c.kind != ConnectorKind::Jack && v.map.stratum().is_some_and(|k| c.serves.contains(&k))
+    }) {
         parts.push(c.kind.label().to_string());
     }
     if parts.is_empty() {
@@ -423,7 +432,11 @@ pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) -> V
         return Vec::new();
     }
     let w = area.width;
-    let node = Digital::node_under(v.city, v.stratum, v.focus).map(|id| v.city.net.node(id));
+    let node = v
+        .map
+        .stratum()
+        .and_then(|k| Digital::node_under(v.map.city(), k, v.focus))
+        .map(|id| v.map.city().net.node(id));
     let mut built: Vec<(Section, Vec<Line<'static>>, u16)> = Vec::new();
     for (i, s) in flags.active(v.dev).into_iter().enumerate() {
         let sep = if i == 0 { 0 } else { 1 };
@@ -442,11 +455,10 @@ pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) -> V
             Section::Log => (Vec::new(), 0),
             Section::Inspect => {
                 let l: Vec<Line<'static>> = inspector_lines(
-                    v.city,
-                    v.stratum,
+                    &v.map,
                     v.focus,
                     node,
-                    v.ground.at(v.stratum, v.focus),
+                    v.ground.at(v.map.place(), v.focus),
                     v.content,
                     v.person,
                 )
@@ -461,7 +473,7 @@ pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) -> V
                 (l, n)
             }
             Section::Legend => {
-                let l = legend(v.stratum);
+                let l = legend(v.map.stratum().unwrap_or(StratumKind::Street));
                 let n = l.len() as u16;
                 (l, n)
             }
@@ -486,14 +498,13 @@ pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) -> V
             Section::Map => {
                 let map_rows = rows.saturating_sub(1);
                 Minimap {
-                    city: v.city,
-                    stratum: v.stratum,
+                    map: &v.map,
                     view: v.view,
                     player: v.player,
                     style: v.style,
                 }
                 .render(Rect::new(area.x, y, w, map_rows), buf);
-                let coord = format!("{},{} · {} ", v.focus.x, v.focus.y, v.stratum.label());
+                let coord = format!("{},{} · {} ", v.focus.x, v.focus.y, v.map.label());
                 let pad = (w as usize).saturating_sub(coord.chars().count());
                 Paragraph::new(Line::from(Span::styled(
                     format!("{}{coord}", " ".repeat(pad)),
@@ -534,10 +545,9 @@ mod tests {
         st
     }
 
-    fn view<'a>(st: &'a AppState, focus: Pos, stratum: StratumKind) -> SidebarView<'a> {
+    fn view<'a>(st: &'a AppState, focus: Pos, place: citygen::Place) -> SidebarView<'a> {
         SidebarView {
-            city: st.city.as_ref().unwrap(),
-            stratum,
+            map: MapRef::for_place(st.city.as_ref().unwrap(), &st.interiors, place).unwrap(),
             focus,
             view: TileRect::new(0, 0, 70, 25),
             player: Some(focus),
@@ -640,16 +650,18 @@ mod tests {
     #[test]
     fn here_lists_feature_and_items_capped() {
         let mut st = state();
-        let k = StratumKind::Street;
+        let k = citygen::Place::Stratum(StratumKind::Street);
         // A plain street tile: walkable, no connector, so HERE starts empty.
         let pos = {
             let city = st.city.as_ref().unwrap();
             (0..city.size.h)
                 .flat_map(|y| (0..city.size.w).map(move |x| Pos::new(x as i32, y as i32)))
                 .find(|p| {
-                    city.walkable(k, *p)
+                    city.walkable(k.stratum().unwrap(), *p)
                         && city.connectors_at(*p).next().is_none()
-                        && city.tile(k, *p).is_some_and(|t| t.feature.is_none())
+                        && city
+                            .tile(k.stratum().unwrap(), *p)
+                            .is_some_and(|t| t.feature.is_none())
                 })
                 .unwrap()
         };
@@ -688,7 +700,7 @@ mod tests {
         let city = st.city.as_ref().unwrap();
         let conn = city
             .connectors_at(spawn)
-            .find(|c| c.serves.contains(&k))
+            .find(|c| c.serves.contains(&k.stratum().unwrap()))
             .unwrap();
         let all: Vec<String> = here_lines(&view(&st, spawn, k))
             .iter()
@@ -730,7 +742,7 @@ mod tests {
         st.tick += 200;
         let (k, pos) = {
             let p = st.player.as_ref().unwrap();
-            (p.stratum, p.pos)
+            (p.place, p.pos)
         };
         let text = draw_to(&view(&st, pos, k), &st.sidebar, width(120), 40);
         assert!(
@@ -755,7 +767,7 @@ mod tests {
         st.tick += 200;
         let (k, pos) = {
             let p = st.player.as_ref().unwrap();
-            (p.stratum, p.pos)
+            (p.place, p.pos)
         };
         let mut flags = Sidebar::default();
         for s in [Section::Here, Section::Quest, Section::Map] {
@@ -776,7 +788,7 @@ mod tests {
         st.tick += 200;
         let (k, pos) = {
             let p = st.player.as_ref().unwrap();
-            (p.stratum, p.pos)
+            (p.place, p.pos)
         };
         let mut flags = Sidebar::default();
         for s in [Section::Here, Section::Quest, Section::Map] {
@@ -800,7 +812,7 @@ mod tests {
         st.tick += 200;
         let (k, pos) = {
             let p = st.player.as_ref().unwrap();
-            (p.stratum, p.pos)
+            (p.place, p.pos)
         };
         for h in [1u16, 2, 10, 25, 40] {
             let text = draw_to(&view(&st, pos, k), &st.sidebar, width(100), h);
@@ -839,7 +851,7 @@ mod tests {
         st.tick += 200;
         let (k, pos) = {
             let p = st.player.as_ref().unwrap();
-            (p.stratum, p.pos)
+            (p.place, p.pos)
         };
         let mut flags = Sidebar::default();
         for s in [Section::Here, Section::Quest, Section::Map] {
@@ -860,7 +872,7 @@ mod tests {
         let st = state();
         let city = st.city.as_ref().unwrap();
         let node = &city.net.nodes[0];
-        let v = view(&st, node.cyber, StratumKind::Net);
+        let v = view(&st, node.cyber, citygen::Place::Stratum(StratumKind::Net));
         assert!(here_summary(&v).contains(node.kind.label()));
     }
 
@@ -875,7 +887,7 @@ mod tests {
         st.sidebar.set(Section::Log, false);
         let (k, pos) = {
             let p = st.player.as_ref().unwrap();
-            (p.stratum, p.pos)
+            (p.place, p.pos)
         };
         let mut t = Terminal::new(TestBackend::new(width(100), 22)).unwrap();
         let mut drawn = Vec::new();

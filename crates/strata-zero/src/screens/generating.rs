@@ -198,8 +198,7 @@ impl Screen for Generating {
             cam.x += (cam.tx as f32 - cam.x) * 0.1;
             cam.y += (cam.ty as f32 - cam.y) * 0.1;
             MapView {
-                city,
-                stratum: StratumKind::Street,
+                map: &crate::render::map::MapRef::stratum_of(city, StratumKind::Street),
                 origin: cam.origin(map_area.width, map_area.height),
                 tick: st.tick,
                 style: &st.style,

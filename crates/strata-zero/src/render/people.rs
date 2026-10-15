@@ -1,11 +1,12 @@
 //! The living city on screen: walkers, cars, chats and lit doors inside the bubble.
 
+use crate::render::map::MapRef;
 use crate::render::style::StylePack;
 use crate::render::viewport::{Overlay, tile_to_screen};
 use crate::render::{Rgb, Visibility};
 use crate::ui::chrome::{CYAN, DIM, MAGENTA, TEXT, head, plain};
 use citygen::Grid;
-use citygen::{City, Pos, Rect as TileRect, StratumKind};
+use citygen::{Pos, Rect as TileRect};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -36,15 +37,14 @@ pub struct PeopleOverlay<'a> {
 impl Overlay for PeopleOverlay<'_> {
     fn draw(
         &self,
-        _city: &City,
-        stratum: StratumKind,
+        map: &MapRef,
         origin: Pos,
         area: Rect,
         _tick: u64,
         buf: &mut Buffer,
         style: &StylePack,
     ) {
-        if stratum != StratumKind::Street {
+        if !map.place().is_street() {
             return;
         }
         if self.night {
@@ -181,7 +181,14 @@ mod tests {
             night: true,
             vis: None,
         }
-        .draw(&c, StratumKind::Street, origin, area, t, &mut buf, &style);
+        .draw(
+            &MapRef::stratum_of(&c, StratumKind::Street),
+            origin,
+            area,
+            t,
+            &mut buf,
+            &style,
+        );
         let ats = buf
             .content
             .iter()
@@ -208,8 +215,7 @@ mod tests {
             vis: None,
         }
         .draw(
-            &c,
-            StratumKind::Street,
+            &MapRef::stratum_of(&c, StratumKind::Street),
             citygen::Pos::new(0, 0),
             whole,
             t,
@@ -235,7 +241,14 @@ mod tests {
             night: true,
             vis: None,
         }
-        .draw(&c, StratumKind::Net, origin, area, t, &mut net, &style);
+        .draw(
+            &MapRef::stratum_of(&c, StratumKind::Net),
+            origin,
+            area,
+            t,
+            &mut net,
+            &style,
+        );
         assert!(net.content.iter().all(|cell| cell.symbol() == " "));
     }
 
@@ -264,7 +277,14 @@ mod tests {
             night: true,
             vis: None,
         }
-        .draw(&c, StratumKind::Street, origin, whole, t, &mut all, &style);
+        .draw(
+            &MapRef::stratum_of(&c, StratumKind::Street),
+            origin,
+            whole,
+            t,
+            &mut all,
+            &style,
+        );
         let (i, _) = all
             .content
             .iter()
@@ -283,7 +303,14 @@ mod tests {
             night: true,
             vis: Some(&vis),
         }
-        .draw(&c, StratumKind::Street, origin, whole, t, &mut buf, &style);
+        .draw(
+            &MapRef::stratum_of(&c, StratumKind::Street),
+            origin,
+            whole,
+            t,
+            &mut buf,
+            &style,
+        );
         let ats: Vec<usize> = buf
             .content
             .iter()

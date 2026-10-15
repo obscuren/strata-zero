@@ -4,6 +4,7 @@ pub mod fx;
 pub mod glyphs;
 pub mod items;
 pub mod lighting;
+pub mod map;
 pub mod memmap;
 pub mod minimap;
 pub mod overlay;

@@ -1,9 +1,10 @@
 //! Rain and fog overlays, pure functions of tick and screen position.
 
+use crate::render::map::MapRef;
 use crate::render::style::StylePack;
 use crate::render::viewport::{Overlay, screen_to_tile};
 use citygen::rng::hash64;
-use citygen::{City, StratumKind, Terrain};
+use citygen::{Pos, Terrain};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
@@ -35,14 +36,18 @@ fn density_div(level: u8) -> u64 {
 impl Overlay for Weather {
     fn draw(
         &self,
-        city: &City,
-        stratum: StratumKind,
-        origin: citygen::Pos,
+        map: &MapRef,
+        origin: Pos,
         area: Rect,
         tick: u64,
         buf: &mut Buffer,
         style: &StylePack,
     ) {
+        // Rain falls on the city's strata, never indoors.
+        let Some(stratum) = map.stratum() else {
+            return;
+        };
+        let city = map.city();
         let ss = style.stratum(stratum);
         let div = density_div(ss.rain);
         let Some(st) = city.stratum(stratum) else {

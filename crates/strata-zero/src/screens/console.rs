@@ -39,15 +39,15 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 st.character.give(item.id.clone(), qty);
                 Ok(format!("spawned {qty}× {}", item.name))
             } else {
-                let lies = st
-                    .city
-                    .as_ref()
-                    .is_some_and(|c| c.walkable(focus.stratum, focus.pos));
+                let lies = st.city.as_ref().is_some_and(|c| {
+                    crate::render::map::MapRef::for_place(c, &st.interiors, focus.place)
+                        .is_some_and(|m| crate::render::map::TileMap::walkable(&m, focus.pos))
+                });
                 if !lies {
                     return Err("nothing can lie there".to_string());
                 }
                 st.ground
-                    .add(focus.stratum, focus.pos, item.id.clone(), qty);
+                    .add(focus.place, focus.pos, item.id.clone(), qty);
                 Ok(format!("dropped {qty}× {}", item.name))
             }
         }
@@ -160,8 +160,8 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             Ok(format!("{h:02}:{m:02}"))
         }
         "clear" => {
-            let n = st.ground.at(focus.stratum, focus.pos).len();
-            st.ground.clear(focus.stratum, focus.pos);
+            let n = st.ground.at(focus.place, focus.pos).len();
+            st.ground.clear(focus.place, focus.pos);
             Ok(format!(
                 "cleared {n} stack{}",
                 if n == 1 { "" } else { "s" }
@@ -237,7 +237,7 @@ mod tests {
         .unwrap();
         let p = crate::walker::Player::spawn(&city, 1);
         let at = At {
-            stratum: p.stratum,
+            place: p.place,
             pos: p.pos,
         };
         st.city = Some(city);
@@ -265,7 +265,7 @@ mod tests {
             run(&mut st, at, "drop dead_phone").unwrap(),
             "dropped 1× Dead phone"
         );
-        assert_eq!(st.ground.at(at.stratum, at.pos)[0].qty, 1);
+        assert_eq!(st.ground.at(at.place, at.pos)[0].qty, 1);
         let wall = {
             let city = st.city.as_ref().unwrap();
             let pos = (0..60)
@@ -273,7 +273,7 @@ mod tests {
                 .find(|q| !city.walkable(StratumKind::Street, *q))
                 .unwrap();
             At {
-                stratum: StratumKind::Street,
+                place: citygen::Place::Stratum(StratumKind::Street),
                 pos,
             }
         };
@@ -291,7 +291,7 @@ mod tests {
         st.character.hp = 1;
         assert_eq!(run(&mut st, at, "heal").unwrap(), "hp 45/45");
         assert_eq!(run(&mut st, at, "clear").unwrap(), "cleared 1 stack");
-        assert!(st.ground.at(at.stratum, at.pos).is_empty());
+        assert!(st.ground.at(at.place, at.pos).is_empty());
         assert!(run(&mut st, at, "help").unwrap().contains("spawn"));
         assert_eq!(run(&mut st, at, "fly").unwrap_err(), "unknown command fly");
         assert_eq!(run(&mut st, at, "give x").unwrap_err(), "give <credits>");

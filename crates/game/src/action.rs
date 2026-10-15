@@ -5,7 +5,7 @@ use crate::character::Character;
 use crate::content::Content;
 use crate::ground::Ground;
 use crate::model::*;
-use citygen::{Pos, StratumKind};
+use citygen::{Place, Pos};
 
 /// Everything a menu can ask for.
 #[derive(Clone, Debug, PartialEq)]
@@ -34,7 +34,7 @@ pub enum Action {
 /// Where the character stands: where drops land and takes come from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct At {
-    pub stratum: StratumKind,
+    pub place: Place,
     pub pos: Pos,
 }
 
@@ -139,7 +139,7 @@ pub fn apply(
                 return Err(format!("no {} to drop", name(c, &item)));
             }
             remove_from_pack(ch, &item, n);
-            ground.add(at.stratum, at.pos, item.clone(), n);
+            ground.add(at.place, at.pos, item.clone(), n);
             done(format!("dropped {n}× {}", name(c, &item)))
         }
         Action::Use(id) => {
@@ -164,7 +164,7 @@ pub fn apply(
                 return Err(over_capacity(ch, c));
             }
             let have = ground
-                .at(at.stratum, at.pos)
+                .at(at.place, at.pos)
                 .iter()
                 .find(|s| s.item == item)
                 .map(|s| s.qty)
@@ -173,7 +173,7 @@ pub fn apply(
             if n == 0 {
                 return Err(format!("no {} here", name(c, &item)));
             }
-            ground.take(at.stratum, at.pos, &item, n);
+            ground.take(at.place, at.pos, &item, n);
             ch.give(item.clone(), n);
             done(format!("took {n}× {}", name(c, &item)))
         }
@@ -181,13 +181,13 @@ pub fn apply(
             if ch.overburdened(c) {
                 return Err(over_capacity(ch, c));
             }
-            let stacks = ground.at(at.stratum, at.pos).to_vec();
+            let stacks = ground.at(at.place, at.pos).to_vec();
             if stacks.is_empty() {
                 return Err("nothing here".to_string());
             }
             let n: u32 = stacks.iter().map(|s| s.qty).sum();
             for s in stacks {
-                ground.take(at.stratum, at.pos, &s.item, s.qty);
+                ground.take(at.place, at.pos, &s.item, s.qty);
                 ch.give(s.item, s.qty);
             }
             done(format!("took {n} items"))
@@ -263,7 +263,7 @@ mod tests {
         let c = Content::load().unwrap();
         let ch = Character::from_template(&c, &TemplateId::new("vex")).unwrap();
         let at = At {
-            stratum: StratumKind::Street,
+            place: Place::Stratum(citygen::StratumKind::Street),
             pos: Pos::new(5, 5),
         };
         (c, ch, Ground::default(), at)
@@ -382,7 +382,7 @@ mod tests {
         let out = apply(&mut ch, &mut g, &c, at, 0, drop(5)).unwrap();
         assert_eq!(out.message, "dropped 3× Copper coil");
         assert_eq!(ch.count(&id("copper_coil")), 0);
-        assert_eq!(g.at(at.stratum, at.pos)[0].qty, 3);
+        assert_eq!(g.at(at.place, at.pos)[0].qty, 3);
         assert!(apply(&mut ch, &mut g, &c, at, 0, drop(1)).is_err());
         let out = apply(&mut ch, &mut g, &c, at, 0, take(2)).unwrap();
         assert_eq!(out.message, "took 2× Copper coil");
@@ -392,16 +392,16 @@ mod tests {
             ..at
         };
         assert!(apply(&mut ch, &mut g, &c, elsewhere, 0, take(1)).is_err());
-        g.add(at.stratum, at.pos, id("dead_phone"), 2);
+        g.add(at.place, at.pos, id("dead_phone"), 2);
         let out = apply(&mut ch, &mut g, &c, at, 0, Action::TakeAll).unwrap();
         assert_eq!(out.message, "took 3 items", "units, not stacks");
-        assert!(g.at(at.stratum, at.pos).is_empty());
+        assert!(g.at(at.place, at.pos).is_empty());
         assert_eq!(ch.count(&id("copper_coil")), 3);
         ch.inventory.push(Stack {
             item: id("scrap_servo"),
             qty: 40,
         });
-        g.add(at.stratum, at.pos, id("bottle_caps"), 1);
+        g.add(at.place, at.pos, id("bottle_caps"), 1);
         let err = apply(
             &mut ch,
             &mut g,

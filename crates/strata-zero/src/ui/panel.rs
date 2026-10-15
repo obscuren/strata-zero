@@ -1,7 +1,8 @@
 //! Side panels: tile inspector, legend, strata selector, status bar.
 
+use crate::render::map::{MapRef, TileMap};
 use crate::render::tileset::legend_entries;
-use citygen::{City, Node, Pos, StratumKind, Terrain};
+use citygen::{FloorPlan, Node, Pos, StratumKind, Terrain};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders};
@@ -31,15 +32,15 @@ pub fn boxed(title: &str) -> Block<'_> {
 
 /// Everything known about one tile, for the side panel.
 pub fn inspector_lines(
-    city: &City,
-    stratum: StratumKind,
+    map: &MapRef,
     p: Pos,
     node: Option<&Node>,
     items: &[game::Stack],
     content: &game::Content,
     person: Option<&sim::Card>,
 ) -> Vec<Line<'static>> {
-    let mut out = vec![kv("pos", format!("{},{}  {}", p.x, p.y, stratum.label()))];
+    let city = map.city();
+    let mut out = vec![kv("pos", format!("{},{}  {}", p.x, p.y, map.label()))];
     if let Some(c) = person {
         out.push(kv("name", c.name.clone()));
         out.push(kv("profession", c.profession.clone()));
@@ -55,7 +56,7 @@ pub fn inspector_lines(
             out.push(kv("car", car.clone()));
         }
     }
-    let Some(t) = city.tile(stratum, p) else {
+    let Some(t) = map.tile(p) else {
         out.push(kv("terrain", "outside the map"));
         return out;
     };
@@ -64,49 +65,82 @@ pub fn inspector_lines(
         Some(citygen::Feature::Node(k)) => {
             out.push(kv("feature", format!("node · {}", k.label())));
         }
+        Some(citygen::Feature::Furniture(f)) => out.push(kv("feature", f.label())),
         Some(f) => out.push(kv("feature", format!("{f:?}").to_lowercase())),
         None => {}
     }
-    if let Some(d) = t.district.and_then(|d| city.district_opt(d)) {
-        out.push(kv("district", d.name.clone()));
-        out.push(kv("theme", d.theme.label()));
-        out.push(kv(
-            "wealth",
-            format!("{:.0}%  decay {:.0}%", d.wealth * 100.0, d.decay * 100.0),
-        ));
-    }
-    if let Some(b) = t.building.and_then(|b| city.building_opt(b)) {
-        let name = b.name.clone().unwrap_or_else(|| b.kind.label().to_string());
-        out.push(kv(
-            "building",
-            if t.terrain == Terrain::Mass {
-                format!("{name} · closed")
-            } else {
-                name
-            },
-        ));
-        out.push(kv(
-            "kind",
-            format!("{}  {}x{}", b.kind.label(), b.footprint.w, b.footprint.h),
-        ));
-        out.push(kv(
-            "floors",
-            format!("{} → {}", b.span.lo.label(), b.span.hi.label()),
-        ));
-    }
-    for c in city.connectors_at(p) {
-        if !c.serves.contains(&stratum) {
-            continue;
+    // Inside: the room, then the building; nothing of the street applies.
+    if let Some((plan, floor)) = map.floor() {
+        if let Some(r) = floor.room_at(p) {
+            let mut what = r.kind.label().to_string();
+            if r.number > 0 {
+                what = format!("{what} {}", r.number);
+            }
+            if r.private {
+                what.push_str(" · locked");
+            }
+            out.push(kv("room", what));
         }
-        let served: Vec<&str> = c.serves.iter().map(|k| k.label()).collect();
-        out.push(kv(c.kind.label(), served.join(" · ")));
-        if c.kind == citygen::ConnectorKind::Lift {
-            for k in &c.serves {
-                let marker = if *k == stratum { "▸" } else { " " };
-                out.push(Line::from(Span::styled(
-                    format!("   {marker} {}", k.label()),
-                    Style::default().fg(if *k == stratum { ACCENT } else { DIM }),
-                )));
+        if let Some(s) = floor.station_at(p) {
+            out.push(kv("station", format!("{:?}", s.role).to_lowercase()));
+        }
+        if let Some(b) = city.building_opt(plan.building) {
+            out.push(kv(
+                "building",
+                b.name.clone().unwrap_or_else(|| b.kind.label().to_string()),
+            ));
+            out.push(kv(
+                "floors",
+                format!(
+                    "{} → {}",
+                    FloorPlan::label(plan.lowest),
+                    FloorPlan::label(plan.top)
+                ),
+            ));
+        }
+    }
+    if let Some(stratum) = map.stratum() {
+        if let Some(d) = t.district.and_then(|d| city.district_opt(d)) {
+            out.push(kv("district", d.name.clone()));
+            out.push(kv("theme", d.theme.label()));
+            out.push(kv(
+                "wealth",
+                format!("{:.0}%  decay {:.0}%", d.wealth * 100.0, d.decay * 100.0),
+            ));
+        }
+        if let Some(b) = t.building.and_then(|b| city.building_opt(b)) {
+            let name = b.name.clone().unwrap_or_else(|| b.kind.label().to_string());
+            out.push(kv(
+                "building",
+                if t.terrain == Terrain::Mass {
+                    format!("{name} · closed")
+                } else {
+                    name
+                },
+            ));
+            out.push(kv(
+                "kind",
+                format!("{}  {}x{}", b.kind.label(), b.footprint.w, b.footprint.h),
+            ));
+            out.push(kv(
+                "floors",
+                format!("{} → {}", b.span.lo.label(), b.span.hi.label()),
+            ));
+        }
+        for c in city.connectors_at(p) {
+            if !c.serves.contains(&stratum) {
+                continue;
+            }
+            let served: Vec<&str> = c.serves.iter().map(|k| k.label()).collect();
+            out.push(kv(c.kind.label(), served.join(" · ")));
+            if c.kind == citygen::ConnectorKind::Lift {
+                for k in &c.serves {
+                    let marker = if *k == stratum { "▸" } else { " " };
+                    out.push(Line::from(Span::styled(
+                        format!("   {marker} {}", k.label()),
+                        Style::default().fg(if *k == stratum { ACCENT } else { DIM }),
+                    )));
+                }
             }
         }
     }
@@ -181,7 +215,14 @@ mod tests {
         let b = &c.buildings[0];
         let p = b.footprint.center();
         let content = game::Content::load().unwrap();
-        let lines = inspector_lines(&c, StratumKind::Street, p, None, &[], &content, None);
+        let lines = inspector_lines(
+            &MapRef::stratum_of(&c, StratumKind::Street),
+            p,
+            None,
+            &[],
+            &content,
+            None,
+        );
         let text: String = lines.iter().map(|l| l.to_string() + "\n").collect();
         assert!(text.contains(&format!("{},{}", p.x, p.y)));
         assert!(text.contains(b.kind.label()));
@@ -196,15 +237,21 @@ mod tests {
                 qty: 1,
             },
         ];
-        let lines = inspector_lines(&c, StratumKind::Street, p, None, &stacks, &content, None);
+        let lines = inspector_lines(
+            &MapRef::stratum_of(&c, StratumKind::Street),
+            p,
+            None,
+            &stacks,
+            &content,
+            None,
+        );
         let text: String = lines.iter().map(|l| l.to_string() + "\n").collect();
         assert!(
             text.contains("items") && text.contains("3× Copper coil, Dead phone"),
             "{text}"
         );
         let off = inspector_lines(
-            &c,
-            StratumKind::Street,
+            &MapRef::stratum_of(&c, StratumKind::Street),
             Pos::new(-5, -5),
             None,
             &[],
@@ -237,8 +284,7 @@ mod tests {
             relation: None,
         };
         let lines = inspector_lines(
-            &city,
-            StratumKind::Street,
+            &MapRef::stratum_of(&city, StratumKind::Street),
             Pos::new(5, 5),
             None,
             &[],

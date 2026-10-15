@@ -1,10 +1,11 @@
 //! The play HUD's rows: status, location, bars, tabs, the footer zones and the rules.
 
 use crate::anim::effects::pulse;
+use crate::interiors::Interiors;
 use crate::render::overlay::Digital;
 use crate::ui::chrome::{CYAN, DIM, FAINT, MAGENTA, RULE, TEXT};
 use crate::ui::sidebar::{Section, Sidebar};
-use citygen::{City, Pos, StratumKind, SubnetOwner};
+use citygen::{City, FloorPlan, Place, Pos, StratumKind, SubnetOwner};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
@@ -425,7 +426,18 @@ pub fn rule_row(width: u16, cross: u16, glyph: char) -> Line<'static> {
 }
 
 /// Where a tile is, for the header: `Kowloon Noodle · Street`, `Helix Biotek · Net`.
-pub fn location(city: &City, stratum: StratumKind, pos: Pos) -> String {
+pub fn location(city: &City, interiors: &Interiors, place: Place, pos: Pos) -> String {
+    let stratum = match place {
+        Place::Stratum(k) => k,
+        Place::Floor { building, level } => {
+            let name = city
+                .building_opt(building)
+                .map(|b| b.name.clone().unwrap_or_else(|| b.kind.label().to_string()))
+                .unwrap_or_else(|| "inside".to_string());
+            let _ = interiors;
+            return format!("{name} · {}", FloorPlan::label(level));
+        }
+    };
     if stratum == StratumKind::Net {
         let owner = Digital::node_under(city, stratum, pos)
             .map(|id| city.net.node(id))
@@ -658,15 +670,30 @@ mod tests {
         let c = city();
         let b = c.buildings.iter().find(|b| b.name.is_some()).unwrap();
         assert_eq!(
-            location(&c, StratumKind::Street, b.footprint.center()),
+            location(
+                &c,
+                &Interiors::default(),
+                Place::Stratum(StratumKind::Street),
+                b.footprint.center()
+            ),
             format!("{} · Street", b.name.clone().unwrap())
         );
         assert_eq!(
-            location(&c, StratumKind::Street, Pos::new(-5, -5)),
+            location(
+                &c,
+                &Interiors::default(),
+                Place::Stratum(StratumKind::Street),
+                Pos::new(-5, -5)
+            ),
             "the outskirts · Street"
         );
         assert_eq!(
-            location(&c, StratumKind::Net, Pos::new(-5, -5)),
+            location(
+                &c,
+                &Interiors::default(),
+                Place::Stratum(StratumKind::Net),
+                Pos::new(-5, -5)
+            ),
             format!("{} · Net", c.name)
         );
     }
