@@ -42,6 +42,8 @@ pub enum Pick {
     View(Section),
     /// Starts a program against a target in the construct; the result lands in the strip.
     Run(game::ItemId, game::HackTarget),
+    /// One more turn of the program in flight.
+    Continue,
     Close,
 }
 
@@ -289,6 +291,13 @@ impl Popup {
             Pick::Run(program, target) => {
                 let result = crate::net::start_run(st, program, target);
                 report(st, result);
+                ScreenCmd::Pop {
+                    fx: TransitionKind::None,
+                }
+            }
+            Pick::Continue => {
+                crate::net::step_run(st);
+                crate::net::turn_ends(st);
                 ScreenCmd::Pop {
                     fx: TransitionKind::None,
                 }

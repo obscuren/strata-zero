@@ -609,8 +609,23 @@ impl MapScreen {
                 ));
             }
         }
-        // Inside a construct: the programs that apply to the node or the ICE at hand.
+        // Inside a construct: the run in flight first, then the programs that apply
+        // to the node or the ICE at hand.
         let mut title = "HERE";
+        if let (Place::Construct(_), Some(run)) = (place, st.net.run.as_ref()) {
+            let label = st
+                .content
+                .item(&run.program)
+                .and_then(|i| i.program)
+                .map(|p| p.op.label())
+                .unwrap_or("run");
+            title = "RUN";
+            choices.push(Choice::new(
+                'c',
+                format!("continue · {label} {}/{}", run.done, run.work),
+                Pick::Continue,
+            ));
+        }
         if let Place::Construct(b) = place
             && st.character.deck(&st.content).is_some()
         {
@@ -1431,6 +1446,7 @@ impl Screen for MapScreen {
             ));
         }
         let verbs = match self.mode {
+            Mode::Walk if st.net.run.is_some() => hud::RUN_VERBS,
             Mode::Walk => hud::WALK_VERBS,
             Mode::Explore => hud::EXPLORE_VERBS,
         };
@@ -4098,5 +4114,47 @@ mod tests {
             text.contains("crack · door lock · out of your reach"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn a_run_in_flight_shows_its_turn_hint_and_a_continue_row() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        st.net.force_roll = Some(10);
+        let (lock, lock_pos) = node_of(&st, b, NodeKind::DoorLock);
+        let here = beside(&st, b, lock_pos);
+        stand(&mut st, &mut s, Place::Construct(b), here);
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(
+            text.contains("[space]act") && !text.contains("[.]turn"),
+            "{text}"
+        );
+        crate::net::start_run(&mut st, ItemId::new("crack"), game::HackTarget::Node(lock)).unwrap();
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(
+            text.contains("[.]turn") && text.contains("[space]continue"),
+            "{text}"
+        );
+        // The popup leads with continue, and picking it is a turn.
+        let ScreenCmd::Push { to: mut run, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens RUN")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*run, &st, 120, 40);
+        assert!(text.contains("c  continue · crack 1/3"), "{text}");
+        run.update(&mut st, &[key(KeyCode::Char('c'))]);
+        assert_eq!(last(&st), Some("crack 2/3"));
+        assert_eq!(st.net.run.as_ref().map(|r| r.done), Some(2));
+        // Picking another program says the first run was dropped.
+        let ScreenCmd::Push { to: mut run, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens RUN")
+        };
+        run.update(&mut st, &[key(KeyCode::Char('a'))]);
+        assert_eq!(last(&st), Some("run aborted · crack starts · 3 turns"));
+        assert_eq!(st.net.run.as_ref().map(|r| r.done), Some(0));
     }
 }

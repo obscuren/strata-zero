@@ -258,13 +258,17 @@ pub fn start_run(st: &mut AppState, program: ItemId, target: HackTarget) -> Resu
     {
         return Err("nothing stands there".to_string());
     }
-    st.net.run = Some(Run {
+    let dropped = st.net.run.replace(Run {
         program: program.clone(),
         target,
         done: 0,
         work: spec.work,
     });
-    Ok(format!("{} starts · {} turns", spec.op.label(), spec.work))
+    let starts = format!("{} starts · {} turns", spec.op.label(), spec.work);
+    Ok(match dropped {
+        Some(_) => format!("run aborted · {starts}"),
+        None => starts,
+    })
 }
 
 fn node_of(target: HackTarget) -> Option<NodeId> {
