@@ -104,7 +104,7 @@ fn wrapped_rows(line: &Line<'_>, width: usize) -> usize {
     rows
 }
 const MIN_W: u16 = 24;
-const MAX_W: u16 = 48;
+const MAX_W: u16 = 60;
 
 pub struct Popup {
     title: String,

@@ -1329,7 +1329,7 @@ impl Screen for MapScreen {
             Place::Stratum(_) => None,
         };
         if alert_building.is_some_and(|b| st.net.alert(b, st.net.now(st))) {
-            location.push_str(" · ALERT");
+            location = format!("ALERT · {location}");
         }
         f.render_widget(
             Paragraph::new(hud::location_line(&location, st.clock(), rw)),
@@ -3773,7 +3773,7 @@ mod tests {
             "lifts locked down"
         );
         let text = draw_screen(&s, &st, 120, 40);
-        assert!(text.contains("· ALERT"), "{text}");
+        assert!(text.contains("ALERT · "), "{text}");
     }
 
     #[test]
