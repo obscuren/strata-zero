@@ -494,6 +494,44 @@ impl MapScreen {
                 Pick::World(WorldAct::Down),
             ));
         }
+        // Inside: the lift panel on a lift bank, the next floors on the stairs.
+        if let (Place::Floor { building, level }, Some((plan, floor))) = (
+            place,
+            place
+                .stratum()
+                .is_none()
+                .then(|| match place {
+                    Place::Floor { building, level } => st.interiors.floor(building, level),
+                    _ => None,
+                })
+                .flatten(),
+        ) {
+            match floor.tiles.get(pos).map(|t| t.terrain) {
+                Some(citygen::Terrain::Lift) => {
+                    if let Some(rows) = self.floor_rows(st) {
+                        choices.extend(rows);
+                    }
+                }
+                Some(citygen::Terrain::Stair) => {
+                    if level < plan.top {
+                        choices.push(Choice::new(
+                            '>',
+                            format!("up to {}", citygen::FloorPlan::label(level + 1)),
+                            Pick::World(WorldAct::Lift(level + 1)),
+                        ));
+                    }
+                    if level > plan.lowest {
+                        choices.push(Choice::new(
+                            '<',
+                            format!("down to {}", citygen::FloorPlan::label(level - 1)),
+                            Pick::World(WorldAct::Lift(level - 1)),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+            let _ = building;
+        }
         if place.is_street()
             && let Some(world) = st.world.as_ref()
         {
@@ -571,25 +609,131 @@ impl MapScreen {
 
     /// A step into someone swaps places with them, and they drift back once the
     /// player moves on; a step into a car goes nowhere.
-    fn bump(&self, st: &mut AppState, dir: Dir) -> Option<ScreenCmd> {
-        let player = st.player.as_ref()?;
+    /// `Err` blocks the step; `Ok(true)` swapped places with someone (the step goes
+    /// on, but not through a door); `Ok(false)` found nobody.
+    fn bump(&self, st: &mut AppState, dir: Dir) -> Result<bool, ScreenCmd> {
+        let Some(player) = st.player.as_ref() else {
+            return Ok(false);
+        };
         let (from, target, place) = (player.pos, player.pos.step(dir), player.place);
         if !place.is_street() {
-            return None;
+            return Ok(false);
         }
-        let city = st.city.as_ref()?;
-        let world = st.world.as_mut()?;
+        let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) else {
+            return Ok(false);
+        };
         if let Some(id) = world.person_at(target) {
             if city.walkable(StratumKind::Street, target) {
                 world.swap(id, from, target);
+                return Ok(true);
             }
-            return None;
+            return Ok(false);
         }
         if world.car_at(target).is_some() {
             st.warn("a car is in the way");
-            return Some(ScreenCmd::Stay);
+            return Err(ScreenCmd::Stay);
         }
-        None
+        Ok(false)
+    }
+
+    /// A step onto a closed building's door goes inside; onto an exit, back out; onto
+    /// a locked door, nowhere.
+    fn doorway(&mut self, st: &mut AppState, dir: Dir) -> Option<ScreenCmd> {
+        let player = st.player.as_ref()?;
+        let (target, place) = (player.pos.step(dir), player.place);
+        let city = st.city.as_ref()?;
+        match place {
+            Place::Stratum(k) => {
+                let here = player.pos;
+                let t = city.tile(k, target)?;
+                // Onto the door from outside, or from the door into the building's bulk.
+                let (b, door) = match t.terrain {
+                    citygen::Terrain::Door => (t.building?, target),
+                    citygen::Terrain::Mass => {
+                        let b = t.building?;
+                        let h = city.tile(k, here)?;
+                        if h.terrain != citygen::Terrain::Door || h.building != Some(b) {
+                            return None;
+                        }
+                        (b, here)
+                    }
+                    _ => return None,
+                };
+                if !city.building(b).kind.is_closed() || !city.portals(b).contains(&(k, door)) {
+                    return None;
+                }
+                let result = crate::interiors::enter(st, b, (k, door));
+                report(st, result);
+                Some(ScreenCmd::Stay)
+            }
+            Place::Floor { building, level } => {
+                let (_, floor) = st.interiors.floor(building, level)?;
+                if let Some(exit) = floor.exit_at(target).copied() {
+                    let msg = crate::interiors::leave(st, &exit);
+                    st.say(msg);
+                    return Some(ScreenCmd::Stay);
+                }
+                let locked = floor.door_of(target).filter(|r| r.private).map(|r| {
+                    let mut what = r.kind.label().to_string();
+                    if r.number > 0 {
+                        what = format!("{what} {}", r.number);
+                    }
+                    what
+                });
+                if let Some(what) = locked {
+                    st.warn(format!("locked · {what}"));
+                    return Some(ScreenCmd::Stay);
+                }
+                None
+            }
+        }
+    }
+
+    /// `>` and `<` inside: the lift panel on a lift, a floor on the stairs, nothing else.
+    fn vertical(&mut self, st: &mut AppState, up: bool) -> Option<ScreenCmd> {
+        let player = st.player.as_ref()?;
+        let Place::Floor { building, level } = player.place else {
+            return None;
+        };
+        let (_, floor) = st.interiors.floor(building, level)?;
+        match floor.tiles.get(player.pos)?.terrain {
+            citygen::Terrain::Lift => self.floors_popup(st),
+            _ => {
+                let result = crate::interiors::climb(st, up);
+                report(st, result);
+                Some(ScreenCmd::Stay)
+            }
+        }
+    }
+
+    /// The FLOORS popup: every floor of the building, the current one marked.
+    fn floors_popup(&self, st: &AppState) -> Option<ScreenCmd> {
+        let rows = self.floor_rows(st)?;
+        Some(ScreenCmd::Push {
+            to: Box::new(Popup::verbs("FLOORS", rows, st.tick)),
+            fx: TransitionKind::None,
+        })
+    }
+
+    fn floor_rows(&self, st: &AppState) -> Option<Vec<Choice>> {
+        let player = st.player.as_ref()?;
+        let Place::Floor { building, level } = player.place else {
+            return None;
+        };
+        let plan = st.interiors.plan_of(building)?;
+        let mut letters = WORLD_LETTERS.chars();
+        Some(
+            crate::interiors::floor_rows(plan, level)
+                .into_iter()
+                .rev()
+                .map(|(l, label)| {
+                    let key = letters.next().unwrap_or(' ');
+                    let mut c = Choice::new(key, label, Pick::World(WorldAct::Lift(l)));
+                    c.enabled = l != level;
+                    c
+                })
+                .collect(),
+        )
     }
 
     fn handle_walk(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
@@ -612,8 +756,19 @@ impl MapScreen {
             }
             return Some(ScreenCmd::Stay);
         }
-        if let Some(dir) = dir_for(k.code)
-            && let Some(cmd) = self.bump(st, dir)
+        if let Some(dir) = dir_for(k.code) {
+            match self.bump(st, dir) {
+                Err(cmd) => return Some(cmd),
+                Ok(true) => {}
+                Ok(false) => {
+                    if let Some(cmd) = self.doorway(st, dir) {
+                        return Some(cmd);
+                    }
+                }
+            }
+        }
+        if matches!(k.code, KeyCode::Char('<') | KeyCode::Char('>'))
+            && let Some(cmd) = self.vertical(st, k.code == KeyCode::Char('>'))
         {
             return Some(cmd);
         }
@@ -749,6 +904,15 @@ impl Screen for MapScreen {
                 self.feed_console(st, focus, &keys[i + 1..]);
                 return ScreenCmd::Stay;
             }
+        }
+        // A key may have taken the player through a door, up a lift or out again: the
+        // map follows before this frame draws.
+        if self.mode == Mode::Walk
+            && let Some(p) = st.player.as_ref()
+            && p.place != self.place
+        {
+            self.place = p.place;
+            self.cam.snap(p.pos);
         }
         if !st.dev && self.mode == Mode::Explore {
             // Without dev mode there is no free camera: the player is always on foot.
@@ -1056,6 +1220,8 @@ impl Screen for MapScreen {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::walker::Visibility;
+    use citygen::{BuildingKind, FloorPlan};
 
     fn last(st: &AppState) -> Option<&str> {
         st.log.latest().map(|e| e.text.as_str())
@@ -2406,5 +2572,384 @@ mod tests {
             person,
             "nobody upstairs blocks the tunnel"
         );
+    }
+
+    // ---- interiors ---------------------------------------------------------
+
+    fn state8() -> AppState {
+        let mut st = AppState::new();
+        st.city = Some(
+            Generator::run(GenParams {
+                seed: 6,
+                size: SizePreset::Custom { w: 120, h: 60 },
+                districts: 8,
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        st
+    }
+
+    fn dir_between(from: Pos, to: Pos) -> KeyCode {
+        match (to.x - from.x, to.y - from.y) {
+            (1, 0) => KeyCode::Char('l'),
+            (-1, 0) => KeyCode::Char('h'),
+            (0, 1) => KeyCode::Char('j'),
+            (0, -1) => KeyCode::Char('k'),
+            (1, -1) => KeyCode::Char('u'),
+            (-1, -1) => KeyCode::Char('y'),
+            (1, 1) => KeyCode::Char('n'),
+            _ => KeyCode::Char('b'),
+        }
+    }
+
+    fn stand(st: &mut AppState, s: &mut MapScreen, place: Place, pos: Pos) {
+        {
+            let p = st.player.as_mut().unwrap();
+            p.place = place;
+            p.pos = pos;
+        }
+        s.place = place;
+        s.update(st, &[]);
+    }
+
+    fn player(st: &AppState) -> (Place, Pos) {
+        let p = st.player.as_ref().unwrap();
+        (p.place, p.pos)
+    }
+
+    fn tower(st: &AppState) -> citygen::BuildingId {
+        st.city
+            .as_ref()
+            .unwrap()
+            .buildings
+            .iter()
+            .find(|b| b.kind == BuildingKind::CorpTower)
+            .unwrap()
+            .id
+    }
+
+    #[test]
+    fn a_street_door_enters_the_lobby_and_its_door_leaves_again() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let b = tower(&st);
+        let (door, outside, name) = {
+            let city = st.city.as_ref().unwrap();
+            let fp = city.building(b).footprint;
+            let (_, door) = city
+                .portals(b)
+                .into_iter()
+                .find(|(k, _)| *k == StratumKind::Street)
+                .unwrap();
+            let outside = door
+                .neighbors4()
+                .find(|n| !fp.contains(*n) && city.walkable(StratumKind::Street, *n))
+                .unwrap();
+            (door, outside, city.building(b).name.clone().unwrap())
+        };
+        stand(
+            &mut st,
+            &mut s,
+            Place::Stratum(StratumKind::Street),
+            outside,
+        );
+        let cmd = s.update(&mut st, &[key(dir_between(outside, door))]);
+        assert!(matches!(cmd, ScreenCmd::Stay));
+        let (place, pos) = player(&st);
+        assert_eq!(
+            place,
+            Place::Floor {
+                building: b,
+                level: 0
+            }
+        );
+        let (_, lobby) = st.interiors.floor(b, 0).expect("the lobby was generated");
+        let exit = lobby.exits.iter().find(|e| e.door == door).unwrap();
+        assert_eq!(pos, lobby.doorstep(exit));
+        assert!(last(&st).unwrap().contains(&name), "{:?}", last(&st));
+        assert_eq!(s.place, place, "the map follows");
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(text.contains(&format!("{name} · L")), "{text}");
+        assert!(text.contains("on foot · L"), "{text}");
+        // Back out through the door: onto the sidewalk in front of it, not the door.
+        let exit = *exit;
+        let cmd = s.update(&mut st, &[key(dir_between(pos, exit.at))]);
+        assert!(matches!(cmd, ScreenCmd::Stay));
+        let (place, pos) = player(&st);
+        assert_eq!(place, Place::Stratum(StratumKind::Street));
+        assert_eq!(pos, exit.landing);
+        assert_ne!(pos, door);
+        assert_eq!(s.place, place);
+    }
+
+    #[test]
+    fn the_lift_lists_floors_and_rides_and_stairs_climb() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let b = tower(&st);
+        let city = st.city.as_ref().unwrap().clone();
+        let plan = st.interiors.plan(&city, b).unwrap().clone();
+        st.interiors.ensure(&city, b, 0).unwrap();
+        let lift = plan.lift.expect("a tower has a lift bank");
+        stand(
+            &mut st,
+            &mut s,
+            Place::Floor {
+                building: b,
+                level: 0,
+            },
+            lift,
+        );
+        let ScreenCmd::Push { to: mut popup, .. } = s.update(&mut st, &[key(KeyCode::Char('>'))])
+        else {
+            panic!("the lift opens the FLOORS popup")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*popup, &st, 120, 40);
+        assert!(text.contains("FLOORS"), "{text}");
+        assert!(
+            text.contains(" L ") || text.contains(" L·") || text.contains("L · here"),
+            "{text}"
+        );
+        assert!(text.contains("2F"), "{text}");
+        assert!(text.contains(&FloorPlan::label(plan.top)), "{text}");
+        assert!(text.contains("roof"), "{text}");
+        popup.update(&mut st, &[key(KeyCode::Esc)]);
+        // A ride to a floor never generated before works (and generates it).
+        assert!(st.interiors.floor(b, plan.top).is_none());
+        crate::interiors::ride(&mut st, b, plan.top).unwrap();
+        s.update(&mut st, &[]);
+        let (place, pos) = player(&st);
+        assert_eq!(
+            place,
+            Place::Floor {
+                building: b,
+                level: plan.top
+            }
+        );
+        assert_eq!(pos, lift);
+        assert!(st.interiors.floor(b, plan.top).is_some());
+        assert_eq!(s.place, place);
+        // Stairs: one floor at a time, same tile.
+        stand(&mut st, &mut s, place, plan.stair);
+        s.update(&mut st, &[key(KeyCode::Char('<'))]);
+        let (place, pos) = player(&st);
+        assert_eq!(
+            place,
+            Place::Floor {
+                building: b,
+                level: plan.top - 1
+            }
+        );
+        assert_eq!(pos, plan.stair);
+        s.update(&mut st, &[key(KeyCode::Char('>'))]);
+        assert_eq!(
+            player(&st).0,
+            Place::Floor {
+                building: b,
+                level: plan.top
+            }
+        );
+        s.update(&mut st, &[key(KeyCode::Char('>'))]);
+        assert_eq!(
+            player(&st).0,
+            Place::Floor {
+                building: b,
+                level: plan.top
+            },
+            "no floor above the top"
+        );
+        assert!(
+            last(&st).unwrap().contains("nothing leads up"),
+            "{:?}",
+            last(&st)
+        );
+        // Off the stair, > and < lead nowhere inside.
+        let (_, floor) = st.interiors.floor(b, plan.top).unwrap();
+        let open = floor
+            .tiles
+            .iter()
+            .find(|(p, t)| {
+                t.terrain == citygen::Terrain::Floor && t.feature.is_none() && *p != plan.stair
+            })
+            .unwrap()
+            .0;
+        stand(
+            &mut st,
+            &mut s,
+            Place::Floor {
+                building: b,
+                level: plan.top,
+            },
+            open,
+        );
+        s.update(&mut st, &[key(KeyCode::Char('>'))]);
+        assert_eq!(player(&st).1, open);
+    }
+
+    #[test]
+    fn roof_bridge_and_basement_doors_enter_and_leave_on_their_strata() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let city = st.city.as_ref().unwrap().clone();
+        let mut covered = 0;
+        for b in city.buildings.iter().filter(|b| b.kind.is_closed()) {
+            for (k, door) in city.portals(b.id) {
+                if k == StratumKind::Street {
+                    continue;
+                }
+                // Stand on the walkable tile the door opens onto.
+                let beside = door.neighbors4().find(|n| {
+                    city.walkable(k, *n) && (k == StratumKind::Heights || !b.footprint.contains(*n))
+                });
+                let Some(beside) = beside else { continue };
+                stand(&mut st, &mut s, Place::Stratum(k), beside);
+                let seen_before = st
+                    .player
+                    .as_ref()
+                    .unwrap()
+                    .vis()
+                    .count(|v| *v != Visibility::Unseen);
+                s.update(&mut st, &[key(dir_between(beside, door))]);
+                let (place, pos) = player(&st);
+                let Place::Floor { building, level } = place else {
+                    panic!("{k:?} door of {:?} did not enter: {place:?}", b.id)
+                };
+                assert_eq!(building, b.id);
+                let plan = st.interiors.plan_of(b.id).unwrap().clone();
+                let expected = match k {
+                    StratumKind::Heights => plan.top,
+                    StratumKind::Skyways => plan.bridge.unwrap(),
+                    StratumKind::Undercity => -1,
+                    _ => unreachable!(),
+                };
+                assert_eq!(level, expected, "{k:?}");
+                let (_, floor) = st.interiors.floor(b.id, level).unwrap();
+                let exit = *floor.exits.iter().find(|e| e.door == door).unwrap();
+                assert_eq!(pos, floor.doorstep(&exit));
+                // And back out onto the same stratum.
+                s.update(&mut st, &[key(dir_between(pos, exit.at))]);
+                let (place, pos) = player(&st);
+                assert_eq!(place, Place::Stratum(k), "{k:?}");
+                assert_eq!(pos, exit.landing);
+                assert!(
+                    st.player
+                        .as_ref()
+                        .unwrap()
+                        .vis()
+                        .count(|v| *v != Visibility::Unseen)
+                        >= seen_before,
+                    "sight memory of {k:?} is kept"
+                );
+                covered |= match k {
+                    StratumKind::Heights => 1,
+                    StratumKind::Skyways => 2,
+                    _ => 4,
+                };
+                if covered == 7 {
+                    return;
+                }
+            }
+        }
+        assert_eq!(covered, 7, "roof, bridge and basement doors all tried");
+    }
+
+    #[test]
+    fn jacking_in_inside_finds_no_terminal_and_the_body_place_round_trips() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let b = tower(&st);
+        let city = st.city.as_ref().unwrap().clone();
+        st.interiors.ensure(&city, b, 0).unwrap();
+        let (_, lobby) = st.interiors.floor(b, 0).unwrap();
+        let step = lobby.doorstep(&lobby.exits[0]);
+        stand(
+            &mut st,
+            &mut s,
+            Place::Floor {
+                building: b,
+                level: 0,
+            },
+            step,
+        );
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert_eq!(last(&st), Some("no terminal within reach"));
+        let ScreenCmd::Push { to: mut here, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens HERE")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*here, &st, 120, 40);
+        assert!(!text.contains("jack in"), "{text}");
+        here.update(&mut st, &[key(KeyCode::Esc)]);
+        // Outside, beside a terminal, the body stays on the street while jacked in.
+        let (jack, beside) = {
+            let jack = city
+                .connectors
+                .iter()
+                .find(|k| k.kind == citygen::ConnectorKind::Jack && k.public)
+                .unwrap();
+            let beside = jack
+                .pos
+                .neighbors8()
+                .find(|n| city.walkable(StratumKind::Street, *n))
+                .unwrap();
+            (jack.pos, beside)
+        };
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), beside);
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        let p = st.player.as_ref().unwrap();
+        assert_eq!(p.place, Place::Stratum(StratumKind::Net));
+        assert_eq!(p.pos, jack);
+        assert_eq!(p.body, Some((Place::Stratum(StratumKind::Street), beside)));
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert_eq!(player(&st), (Place::Stratum(StratumKind::Street), beside));
+    }
+
+    #[test]
+    fn locked_doors_stay_shut_and_say_so() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let city = st.city.as_ref().unwrap().clone();
+        let b = city
+            .buildings
+            .iter()
+            .find(|b| b.kind == BuildingKind::Megablock)
+            .unwrap()
+            .id;
+        st.interiors.plan(&city, b).unwrap();
+        st.interiors.ensure(&city, b, 1).unwrap();
+        let (_, floor) = st.interiors.floor(b, 1).unwrap();
+        let (door, corridor) = floor
+            .rooms
+            .iter()
+            .filter(|r| r.private)
+            .find_map(|r| {
+                let d = r.door?;
+                let c = d
+                    .neighbors4()
+                    .find(|n| !r.rect.contains(*n) && floor.tiles[*n].is_walkable())?;
+                Some((d, c))
+            })
+            .expect("a locked room with a corridor outside its door");
+        stand(
+            &mut st,
+            &mut s,
+            Place::Floor {
+                building: b,
+                level: 1,
+            },
+            corridor,
+        );
+        s.update(&mut st, &[key(dir_between(corridor, door))]);
+        assert_eq!(player(&st).1, corridor, "the door does not open");
+        assert!(last(&st).unwrap().contains("locked"), "{:?}", last(&st));
+        assert!(last_is_warning(&st));
     }
 }
