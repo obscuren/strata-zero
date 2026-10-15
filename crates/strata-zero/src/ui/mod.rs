@@ -11,4 +11,5 @@ pub mod menu;
 pub mod meter;
 pub mod panel;
 pub mod sidebar;
+pub mod talents;
 pub mod transition;
