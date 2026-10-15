@@ -274,32 +274,9 @@ impl DressingStage {
     }
 
     fn lights(ctx: &mut GenCtx, k: StratumKind) {
-        let size = ctx.size();
         let base = base_light(k);
-        let sources: Vec<(Pos, i32, f32)> = {
-            let st = ctx.city.stratum(k).expect("stratum");
-            st.tiles
-                .iter()
-                .filter_map(|(p, t)| emission(t.terrain, t.feature, k).map(|(r, s)| (p, r, s)))
-                .collect()
-        };
-        let mut light = vec![base as f32; size.area()];
-        for (p, r, strength) in sources {
-            for q in Rect::new(p.x - r, p.y - r, 2 * r + 1, 2 * r + 1).iter() {
-                if !size.contains(q) {
-                    continue;
-                }
-                let d = (p.dist2(q) as f32).sqrt();
-                if d > r as f32 {
-                    continue;
-                }
-                light[size.index(q)] += strength * (1.0 - d / r as f32);
-            }
-        }
         let st = ctx.city.stratum_mut(k).expect("stratum");
-        for (slot, v) in st.light.as_mut_slice().iter_mut().zip(light) {
-            *slot = v.clamp(0.0, 255.0) as u8;
-        }
+        st.light = crate::lighting::compute(&st.tiles, base, |t| emission(t.terrain, t.feature, k));
     }
 
     fn variants(ctx: &mut GenCtx, k: StratumKind) {

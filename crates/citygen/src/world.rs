@@ -269,6 +269,26 @@ impl StrataSpan {
     }
 }
 
+/// Where a map is: a stratum of the city, or a floor inside a building.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Place {
+    Stratum(StratumKind),
+    Floor { building: BuildingId, level: i32 },
+}
+
+impl Place {
+    pub fn stratum(self) -> Option<StratumKind> {
+        match self {
+            Place::Stratum(k) => Some(k),
+            Place::Floor { .. } => None,
+        }
+    }
+
+    pub fn is_street(self) -> bool {
+        self == Place::Stratum(StratumKind::Street)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Building {
     pub id: BuildingId,
