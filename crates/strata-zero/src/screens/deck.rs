@@ -18,7 +18,7 @@ use crate::ui::chrome::{
 use crate::ui::logo::{self, Logo};
 use crate::ui::talents::{TalentsView, TreeCursor, step, talent_at};
 use citygen::rng::hash64;
-use citygen::{FloorPlan, Place, Pos, StratumKind};
+use citygen::{FloorPlan, NodeKind, Place, Pos, StratumKind};
 use crossterm::event::{KeyCode, KeyEvent};
 use game::{
     AbilityKind, Action, Active, Build, CategoryId, ItemId, ItemKind, Perk, SkillId, Slot, Source,
@@ -113,6 +113,8 @@ pub(crate) enum Detail {
     Skill(SkillId),
     /// Index into `Character::abilities`.
     Ability(usize),
+    /// A program on the cyberdeck tab, loaded or in the pack.
+    Program(ItemId),
 }
 
 /// One list row and what the detail pane shows for it (`None` = a header).
@@ -423,11 +425,51 @@ impl Deck {
         else {
             return vec![dim("no deck jacked")];
         };
+        let slots = item
+            .deck
+            .map(|d| {
+                format!(
+                    " · {}/{} slots · rating {}",
+                    st.character.loaded_size(&st.content),
+                    d.slots,
+                    d.rating
+                )
+            })
+            .unwrap_or_default();
         let mut rows = vec![Row {
-            text: format!("▣ {}", item.name),
+            text: format!("▣ {}{slots}", item.name),
             tone: Tone::Normal,
             detail: Some(Detail::Item(id.clone())),
         }];
+        // The programs loaded, then those in the pack waiting for a slot.
+        let loaded: Vec<&game::Item> = st.character.loaded_programs(&st.content).collect();
+        if !loaded.is_empty() {
+            rows.push(dim("── loaded ──"));
+            for p in &loaded {
+                rows.push(Row {
+                    text: format!("◆ {} · size {}", p.name, p.program.map_or(0, |s| s.size)),
+                    tone: Tone::Normal,
+                    detail: Some(Detail::Program(p.id.clone())),
+                });
+            }
+        }
+        let packed: Vec<&game::Item> = st
+            .character
+            .inventory
+            .iter()
+            .filter_map(|s| st.content.item(&s.item))
+            .filter(|i| i.kind == ItemKind::Program && !st.character.loaded.contains(&i.id))
+            .collect();
+        if !packed.is_empty() {
+            rows.push(dim("── in the pack ──"));
+            for p in packed {
+                rows.push(Row {
+                    text: format!("◇ {} · size {}", p.name, p.program.map_or(0, |s| s.size)),
+                    tone: Tone::Dim,
+                    detail: Some(Detail::Program(p.id.clone())),
+                });
+            }
+        }
         let all = st.character.abilities(&st.content);
         let programs: Vec<(usize, &game::Ability)> = item
             .grants
@@ -767,6 +809,50 @@ impl Deck {
                 Style::default().fg(CYAN),
             )));
         }
+        if st.character.loaded.contains(id) {
+            out.push(Line::from(Span::styled(
+                "loaded",
+                Style::default().fg(CYAN),
+            )));
+        }
+        out.push(plain(""));
+        out.push(plain(item.desc.clone()));
+        out
+    }
+
+    /// A program's card: what it does and to what, its numbers, the odds the
+    /// character brings against a mid-city construct.
+    fn program_card(st: &AppState, id: &ItemId) -> Vec<Line<'static>> {
+        let Some(item) = st.content.item(id) else {
+            return vec![warn(format!("unknown item {id}"))];
+        };
+        let Some(p) = item.program else {
+            return vec![warn(format!("{} is not a program", item.name))];
+        };
+        let (targets, typical) = match p.op {
+            game::Op::Crack => ("any node or ICE", NodeKind::DoorLock),
+            game::Op::Spoof => ("door locks and lift controls", NodeKind::DoorLock),
+            game::Op::Blind => ("cameras", NodeKind::Camera),
+            game::Op::Copy => ("servers and vaults", NodeKind::Server),
+            game::Op::Backdoor => ("servers", NodeKind::Server),
+        };
+        let pw = game::power(&st.character, &st.content, &p, game::Target::Node(typical));
+        let mut out = vec![head(&item.name)];
+        out.push(dim(format!("{} · {targets}", p.op.label())));
+        out.push(dim(format!(
+            "rating {} · size {} · noise {} · work {}",
+            p.rating, p.size, p.noise, p.work
+        )));
+        out.push(Line::from(Span::styled(
+            format!("your power {pw} vs {} mid-city", game::difficulty(110)),
+            Style::default().fg(CYAN),
+        )));
+        if st.character.loaded.contains(id) {
+            out.push(Line::from(Span::styled(
+                "loaded",
+                Style::default().fg(CYAN),
+            )));
+        }
         out.push(plain(""));
         out.push(plain(item.desc.clone()));
         out
@@ -806,6 +892,7 @@ impl Deck {
                 ],
             },
             Some(Detail::Item(id)) => Self::item_card(st, id),
+            Some(Detail::Program(id)) => Self::program_card(st, id),
             Some(Detail::Recipe(i)) => {
                 let r = &st.content.recipes[*i];
                 let skill = st
@@ -1070,6 +1157,24 @@ impl Deck {
                     if let Some(Detail::Stat(s)) = rows.get(self.row).and_then(|r| r.detail.clone())
                     {
                         let result = perform(st, Action::BuyStat(s));
+                        report(st, result);
+                    }
+                }
+                KeyCode::Char(' ') | KeyCode::Enter
+                    if matches!(
+                        rows.get(self.row).and_then(|r| r.detail.as_ref()),
+                        Some(Detail::Program(_))
+                    ) =>
+                {
+                    if let Some(Detail::Program(id)) =
+                        rows.get(self.row).and_then(|r| r.detail.clone())
+                    {
+                        let action = if st.character.loaded.contains(&id) {
+                            Action::Unload(id)
+                        } else {
+                            Action::Load(id)
+                        };
+                        let result = perform(st, action);
                         report(st, result);
                     }
                 }
@@ -2448,5 +2553,90 @@ mod tests {
         let text = draw(&d, &st, 120, 35);
         assert!(text.contains("cooldown 8s"), "{text}");
         assert!(text.contains("18 tiles"), "{text}");
+    }
+
+    #[test]
+    fn cyberdeck_tab_loads_and_unloads_programs() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('6'))]);
+        let texts = cyberdeck_texts(&st);
+        assert_eq!(texts[0], "▣ Pawnshop deck · 2/2 slots · rating 1");
+        assert_eq!(texts[1], "── loaded ──");
+        assert_eq!(texts[2], "◆ Crack · size 1");
+        assert_eq!(texts[3], "◆ Copy · size 1");
+        assert!(texts.iter().any(|t| t == "── programs ──"), "{texts:?}");
+        assert!(!texts.iter().any(|t| t == "── in the pack ──"), "{texts:?}");
+        // The detail of a program reads its numbers and the odds.
+        let rows = d.rows(&st);
+        d.row = rows.iter().position(|r| r.text.contains("Crack")).unwrap();
+        st.tick = 60;
+        let text = draw(&d, &st, 120, 35);
+        assert!(text.contains("crack · any node or ICE"), "{text}");
+        assert!(
+            text.contains("rating 1 · size 1 · noise 4 · work 3"),
+            "{text}"
+        );
+        assert!(text.contains("your power 19 vs 13 mid-city"), "{text}");
+        // Space unloads Copy; it moves to the pack rows; space loads it again.
+        d.row = rows.iter().position(|r| r.text.contains("Copy")).unwrap();
+        assert!(matches!(
+            d.update(&mut st, &[key(KeyCode::Char(' '))]),
+            ScreenCmd::Stay
+        ));
+        assert_eq!(last(&st), Some("Copy unloaded"));
+        let texts = cyberdeck_texts(&st);
+        let pack = texts.iter().position(|t| t == "── in the pack ──").unwrap();
+        assert_eq!(texts[pack + 1], "◇ Copy · size 1");
+        assert_eq!(texts[0], "▣ Pawnshop deck · 1/2 slots · rating 1");
+        let rows = d.rows(&st);
+        d.row = rows.iter().position(|r| r.text.contains("◇ Copy")).unwrap();
+        d.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(last(&st), Some("Copy loaded · 2/2 slots"));
+        // A spoof in the pack with the deck full refuses.
+        st.character.give(ItemId::new("spoof"), 1);
+        let rows = d.rows(&st);
+        d.row = rows
+            .iter()
+            .position(|r| r.text.contains("◇ Spoof"))
+            .unwrap();
+        d.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(last(&st), Some("no room: 2 of 2 slots"));
+        assert!(last_is_warning(&st));
+        // A loaded program dropped from the pack leaves the deck's rows.
+        let (c, mut g, at) = (
+            st.content.clone(),
+            game::Ground::default(),
+            game::At {
+                place: Place::Stratum(StratumKind::Street),
+                pos: Pos::new(1, 1),
+            },
+        );
+        game::apply(
+            &mut st.character,
+            &mut g,
+            &c,
+            at,
+            0,
+            Action::Drop {
+                item: ItemId::new("crack"),
+                qty: 1,
+            },
+        )
+        .unwrap();
+        let texts = cyberdeck_texts(&st);
+        assert!(!texts.iter().any(|t| t.contains("Crack")), "{texts:?}");
+        // The inventory groups programs and marks the loaded ones.
+        d.update(&mut st, &[key(KeyCode::Char('4'))]);
+        let rows = d.rows(&st);
+        assert!(
+            rows.iter().any(|r| r.text == "── program ──"),
+            "{:?}",
+            rows.iter().map(|r| r.text.clone()).collect::<Vec<_>>()
+        );
+        d.row = rows.iter().position(|r| r.text.contains("Copy")).unwrap();
+        st.tick += 40;
+        let text = draw(&d, &st, 120, 35);
+        assert!(text.contains("loaded"), "{text}");
     }
 }
