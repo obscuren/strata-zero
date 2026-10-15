@@ -11,7 +11,8 @@ use std::collections::HashMap;
 pub const RADIUS_STREET: i32 = 14;
 pub const RADIUS_UNDER: i32 = 8;
 pub const RADIUS_NET: i32 = 24;
-pub const RADIUS_INSIDE: i32 = 12;
+/// Indoors the walls do the limiting: a lit floor is seen across.
+pub const RADIUS_INSIDE: i32 = 30;
 
 #[derive(Clone, Debug)]
 pub struct Player {

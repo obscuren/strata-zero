@@ -403,6 +403,60 @@ mod tests {
         expect(BuildingKind::Garage, &[RoomKind::Bays], &[Role::Bay]);
     }
 
+    /// Coordinates the smoke and screenshot scripts drive to on seed 8, Medium:
+    /// `cargo test -p citygen print_seed8_spots -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn print_seed8_spots() {
+        let c = Generator::run(GenParams {
+            seed: 8,
+            size: SizePreset::Medium,
+            districts: 7,
+            ..Default::default()
+        })
+        .unwrap();
+        for kind in [
+            BuildingKind::CorpTower,
+            BuildingKind::Megablock,
+            BuildingKind::Club,
+            BuildingKind::Bar,
+        ] {
+            let b = c.buildings.iter().find(|b| b.kind == kind).unwrap();
+            let plan = FloorPlan::new(&c, b.id).unwrap();
+            let fp = b.footprint;
+            let doors: Vec<_> = c
+                .portals(b.id)
+                .into_iter()
+                .filter(|(k, _)| *k == StratumKind::Street)
+                .collect();
+            let (_, door) = doors[0];
+            let outside = door
+                .neighbors4()
+                .find(|n| !fp.contains(*n) && c.walkable(StratumKind::Street, *n))
+                .unwrap();
+            let lobby = generate_floor(&c, &plan, 0);
+            let exit = lobby.exits.iter().find(|e| e.door == door).unwrap();
+            println!(
+                "{kind:?} {} door {},{} outside {},{} doorstep {},{} lift {:?} stair {},{} top {} floors {}..={} bridge {:?} roof {}",
+                b.name.clone().unwrap_or_default(),
+                door.x,
+                door.y,
+                outside.x,
+                outside.y,
+                lobby.doorstep(exit).x,
+                lobby.doorstep(exit).y,
+                plan.lift,
+                plan.stair.x,
+                plan.stair.y,
+                plan.top,
+                plan.lowest,
+                plan.top,
+                plan.bridge,
+                plan.roof
+            );
+        }
+    }
+
     /// A look at a few floors: `cargo test -p citygen print_floors -- --ignored --nocapture`.
     #[test]
     #[ignore]

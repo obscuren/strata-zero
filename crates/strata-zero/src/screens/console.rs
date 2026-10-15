@@ -6,12 +6,14 @@ use crate::app::AppState;
 use crate::messages::{Entry, Kind};
 use crate::ui::chrome::{CYAN, DIM, MAGENTA, MAGENTA_RGB, TEXT};
 use crate::ui::console::Console;
+use citygen::Pos;
 use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 12] = [
-    "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "who", "clock", "clear", "help",
+const COMMANDS: [&str; 13] = [
+    "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "who", "clock", "tp", "clear",
+    "help",
 ];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
@@ -159,6 +161,36 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             ));
             Ok(format!("{h:02}:{m:02}"))
         }
+        "tp" => {
+            // Teleports the player on the map they are on.
+            let usage = "tp <x> <y>".to_string();
+            let (x, y) = match (args.first(), args.get(1)) {
+                (Some(x), Some(y)) => (
+                    x.parse::<i32>().map_err(|_| usage.clone())?,
+                    y.parse::<i32>().map_err(|_| usage.clone())?,
+                ),
+                _ => return Err(usage),
+            };
+            let place = st
+                .player
+                .as_ref()
+                .map(|p| p.place)
+                .ok_or_else(|| "no body in the city".to_string())?;
+            let city = st.city.as_ref().ok_or_else(|| "no city".to_string())?;
+            let target = Pos::new(x, y);
+            let map = crate::render::map::MapRef::for_place(city, &st.interiors, place)
+                .ok_or_else(|| "no map here".to_string())?;
+            if !crate::render::map::TileMap::walkable(&map, target) {
+                return Err("nothing to stand on there".to_string());
+            }
+            let label = map.label();
+            let bonus = st.character.sight_bonus(&st.content);
+            let player = st.player.as_mut().expect("checked above");
+            player.pos = target;
+            player.update_fov(&map, bonus);
+            st.repaint = true;
+            Ok(format!("{x},{y} · {label}"))
+        }
         "clear" => {
             let n = st.ground.at(focus.place, focus.pos).len();
             st.ground.clear(focus.place, focus.pos);
@@ -168,7 +200,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             ))
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · who · clock <hh:mm> · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · who · clock <hh:mm> · tp <x> <y> · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),
@@ -367,6 +399,36 @@ mod tests {
         assert_eq!(
             run(&mut st, at, "clock 25:00").unwrap_err(),
             "clock <hh:mm>"
+        );
+    }
+
+    #[test]
+    fn tp_moves_the_player_on_the_current_map() {
+        let (mut st, at) = setup();
+        let city = st.city.as_ref().unwrap().clone();
+        st.player = Some(crate::walker::Player::spawn(&city, 1));
+        let free = (0..city.size.h as i32)
+            .flat_map(|y| (0..city.size.w as i32).map(move |x| Pos::new(x, y)))
+            .find(|p| city.walkable(StratumKind::Street, *p))
+            .unwrap();
+        assert_eq!(
+            run(&mut st, at, &format!("tp {} {}", free.x, free.y)).unwrap(),
+            format!("{},{} · Street", free.x, free.y)
+        );
+        assert_eq!(st.player.as_ref().unwrap().pos, free);
+        let wall = (0..city.size.h as i32)
+            .flat_map(|y| (0..city.size.w as i32).map(move |x| Pos::new(x, y)))
+            .find(|p| !city.walkable(StratumKind::Street, *p))
+            .unwrap();
+        assert_eq!(
+            run(&mut st, at, &format!("tp {} {}", wall.x, wall.y)).unwrap_err(),
+            "nothing to stand on there"
+        );
+        assert_eq!(run(&mut st, at, "tp 3").unwrap_err(), "tp <x> <y>");
+        st.player = None;
+        assert_eq!(
+            run(&mut st, at, "tp 1 1").unwrap_err(),
+            "no body in the city"
         );
     }
 }

@@ -13,7 +13,7 @@ use rand_chacha::ChaCha8Rng;
 use std::collections::HashSet;
 
 /// Base light of a floor; ceiling lamps add to it.
-const BASE_LIGHT: u8 = 90;
+const BASE_LIGHT: u8 = 150;
 
 pub(super) struct Builder<'a> {
     city: &'a City,

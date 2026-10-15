@@ -253,11 +253,28 @@ impl Placement {
             .iter()
             .filter(|r| r.kind == RoomKind::HotelRoom)
             .collect();
-        for o in world.inside(plan.building) {
+        let occupants = world.inside(plan.building);
+        // The first drone at work minds the lobby desk; the rest spread over the floors.
+        let receptionist = occupants
+            .iter()
+            .find(|o| {
+                o.role == OccupantRole::Working
+                    && world.people()[o.id.0 as usize].profession == "corp_drone"
+            })
+            .map(|o| o.id);
+        for o in occupants {
             let p = &world.people()[o.id.0 as usize];
             let h = hash64(o.id.0 as u64, 0x0CC);
             match o.role {
                 OccupantRole::Working => {
+                    if Some(o.id) == receptionist {
+                        if floor.level == 0
+                            && let Some(pos) = take_station(&mut free, &[Role::Reception])
+                        {
+                            at.push((pos, o.id));
+                        }
+                        continue;
+                    }
                     let level = work_floors[(h % work_floors.len() as u64) as usize];
                     if level != floor.level {
                         continue;
@@ -387,5 +404,47 @@ mod tests {
         assert_eq!(i.generated(), 2);
         assert!(i.floor(tower.id, 1).is_none());
         assert!(i.floor(tower.id, top).is_some());
+    }
+
+    #[test]
+    fn the_first_drone_minds_the_lobby_desk() {
+        let c = Generator::run(GenParams {
+            seed: 6,
+            size: SizePreset::Custom { w: 120, h: 60 },
+            districts: 8,
+            ..Default::default()
+        })
+        .unwrap();
+        let people = sim::People::load().unwrap();
+        let mut w = sim::World::seed(&c, &people, &sim::SimParams::default(), 22 * 60, 0);
+        for m in 1..=12 * 60 {
+            w.advance(&c, m * sim::TICKS_PER_MINUTE);
+            w.path_some(&c, usize::MAX);
+        }
+        let tower = c
+            .buildings
+            .iter()
+            .find(|b| b.kind == BuildingKind::CorpTower)
+            .unwrap();
+        let mut i = Interiors::default();
+        i.ensure(&c, tower.id, 0).unwrap();
+        let (plan, lobby) = i.floor(tower.id, 0).unwrap();
+        let placement = Placement::new(plan, lobby, &w);
+        let desk = lobby
+            .stations
+            .iter()
+            .find(|s| s.role == citygen::Role::Reception)
+            .unwrap()
+            .pos;
+        let id = placement
+            .person_at(desk)
+            .expect("someone minds the desk at ten");
+        assert_eq!(w.people()[id.0 as usize].profession, "corp_drone");
+        // And that drone sits at no desk upstairs.
+        let top = plan.top;
+        i.ensure(&c, tower.id, top).unwrap();
+        let (plan, floor) = i.floor(tower.id, top).unwrap();
+        let upstairs = Placement::new(plan, floor, &w);
+        assert!(upstairs.people().all(|(_, who)| who != id));
     }
 }
