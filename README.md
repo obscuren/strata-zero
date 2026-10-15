@@ -60,6 +60,23 @@ each), and `backdoor` on the server keeps the gate open to you for good and
 cools the trace twice as fast. Programs are items that take slots on your
 deck; the CYBERDECK tab loads and unloads them.
 
+ICE hunts. White ICE keeps its post; grey and black ICE walk the spine on a
+beat, the gate guard the near half and the vault guard the far half. A piece
+sees along the spine, in its row or column, four tiles for white, six for
+grey, eight for black, and never into a room. Seen, it wakes and comes for you
+one tile a turn by the shortest path; lose it for three turns and it goes back
+to its beat. The alarm wakes every piece at once. Beside you a piece hits every
+turn: white adds five heat, grey drains ten focus (less your deck's rating)
+and dumps you at zero, black takes six hp through the jack, more over
+security 230. `attack`, loaded like any program, takes two integrity a turn
+off the piece you point it at (white 3, grey 6, black 10) and breaks it for an
+hour; `shield` soaks the next hit; `mask` halves how far you are seen for six
+turns at a heat a turn. The HERE section lists the ICE in sight with its mode
+and integrity. With the deck's failsafe on (the CYBERDECK tab, on by default)
+black ICE pulls you out at a quarter of your hp: a hard dump, thirty minutes
+of cooling, the hp stays lost. Off, black ICE can take you to zero, and that
+is the one way to die: FLATLINED, then the title.
+
 Same seed and parameters always produce a byte-identical city.
 
 The city is lived in. Every building is staffed and every bed is slept in: the
@@ -149,7 +166,7 @@ beside you, look · `1`-`5` fire the ability in that slot ·
 they step back once you move on · `enter` jack shortcut · `.` wait · `tab` deck ·
 `F1`-`F4` panes · `v` view popup · `m` messages · `d` digital overlay · `s` save ·
 `?` keys · `c` back to the free camera (dev mode) · `:` dev
-console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `sp`, `pts`, `talent`, `tpts`, `program`, `heat`, `alarm`, `who`
+console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `sp`, `pts`, `talent`, `tpts`, `program`, `heat`, `alarm`, `wake`, `ice`, `failsafe`, `who`
 counts the people out, inside and driving, `clock hh:mm` jumps the day there,
 `tp x y` teleports on the current map, `clear`, `help`, with Tab completion and
 history) · `esc` pause

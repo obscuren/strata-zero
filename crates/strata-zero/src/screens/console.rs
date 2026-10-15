@@ -11,9 +11,9 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 21] = [
+const COMMANDS: [&str; 22] = [
     "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "talent", "tpts", "program",
-    "heat", "alarm", "wake", "ice", "failsafe", "who", "clock", "tp", "clear", "help",
+    "heat", "alarm", "wake", "ice", "failsafe", "hp", "who", "clock", "tp", "clear", "help",
 ];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
@@ -65,6 +65,15 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             let max = st.character.hp_max(&st.content);
             st.character.hp = max;
             Ok(format!("hp {max}/{max}"))
+        }
+        "hp" => {
+            let n: u32 = args
+                .first()
+                .and_then(|a| a.parse().ok())
+                .ok_or_else(|| "hp <points>".to_string())?;
+            let max = st.character.hp_max(&st.content);
+            st.character.hp = n.min(max);
+            Ok(format!("hp {}/{max}", st.character.hp))
         }
         "xp" => {
             let n: u32 = args
@@ -325,7 +334,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             ))
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · ice · failsafe on|off · who · clock <hh:mm> · tp <x> <y> · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · ice · failsafe on|off · hp <points> · who · clock <hh:mm> · tp <x> <y> · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),

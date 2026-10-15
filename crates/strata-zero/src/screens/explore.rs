@@ -4672,5 +4672,10 @@ mod tests {
             crate::screens::console::run(&mut st, at, "failsafe").unwrap_err(),
             "failsafe on|off"
         );
+        assert_eq!(
+            crate::screens::console::run(&mut st, at, "hp 10").unwrap(),
+            "hp 10/45"
+        );
+        assert_eq!(st.character.hp, 10);
     }
 }
