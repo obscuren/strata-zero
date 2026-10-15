@@ -6,7 +6,7 @@ use crate::render::overlay::SIGNAL;
 use crate::render::style::StylePack;
 use crate::render::{Cell, ConnDir, RenderCtx, Rgb, Visibility};
 use citygen::{
-    BuildingKind, ConnectorKind, Feature, Furniture, NodeKind, StratumKind, Terrain, Tile,
+    BuildingKind, ConnectorKind, Feature, Furniture, IceGrade, NodeKind, StratumKind, Terrain, Tile,
 };
 
 const LIGHT: [char; 16] = [
@@ -80,6 +80,7 @@ pub fn glyph_for(
     let pick = |set: &[char], i: u64| set[(i % set.len() as u64) as usize];
     if let Some(f) = feature {
         return match f {
+            Feature::Ice(_) => '▣',
             Feature::Neon(_) => '▪',
             Feature::HoloAd => pick(&g.holo, tick / 8 + variant as u64),
             Feature::Lamp => '●',
@@ -329,6 +330,8 @@ fn terrain_colors(terrain: Terrain, tile: &Tile, ctx: &RenderCtx, tick: u64) -> 
 fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
     let ts = ctx.style.theme_or_neutral(ctx.theme);
     match f {
+        Feature::Ice(IceGrade::White) => Rgb(235, 240, 250).scale(0.7 + 0.3 * pulse(tick, 20)),
+        Feature::Ice(IceGrade::Grey) => Rgb(255, 0, 200).scale(0.7 + 0.3 * pulse(tick, 20)),
         Feature::Neon(h) => {
             ctx.style
                 .hue(h)

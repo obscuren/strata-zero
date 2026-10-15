@@ -283,7 +283,7 @@ impl MapScreen {
 
     /// The map at the screen's place; a floor not yet generated falls back to the street.
     fn map<'a>(&self, st: &'a AppState, city: &'a citygen::City) -> MapRef<'a> {
-        MapRef::for_place(city, &st.interiors, self.place)
+        MapRef::for_place(city, &st.interiors, &st.constructs, self.place)
             .unwrap_or_else(|| MapRef::stratum_of(city, StratumKind::Street))
     }
 
@@ -332,6 +332,7 @@ impl MapScreen {
         match (self.place, st.city.as_ref()) {
             (Place::Stratum(k), _) => k.label().to_string(),
             (Place::Floor { level, .. }, _) => citygen::FloorPlan::label(level),
+            (Place::Construct(_), _) => "construct".to_string(),
         }
     }
 
@@ -608,9 +609,66 @@ impl MapScreen {
                 ));
             }
         }
-        let node = k
-            .and_then(|k| Digital::node_under(city, k, pos))
-            .map(|id| city.net.node(id));
+        // Inside a construct: the programs that apply to the node or the ICE at hand.
+        let mut title = "HERE";
+        if let Place::Construct(b) = place
+            && st.character.deck(&st.content).is_some()
+        {
+            let now = st.net.now(st);
+            let security = st.constructs.get(b).map(|k| k.security).unwrap_or(0);
+            let targets = crate::net::targets_near(st, b, pos);
+            for (target, what) in targets {
+                let Some(kind) = crate::net::target_kind(st, b, target) else {
+                    continue;
+                };
+                for item in st.character.loaded_programs(&st.content) {
+                    let Some(spec) = item.program else { continue };
+                    if !game::applies(spec.op, kind) {
+                        continue;
+                    }
+                    let Some(key) = letters.next() else { break };
+                    title = "RUN";
+                    let label = spec.op.label();
+                    let copied = spec.op == game::Op::Copy
+                        && matches!(target, game::HackTarget::Node(id) if st.net.copied(id, now));
+                    let on = format!(" · {what}");
+                    if copied {
+                        choices.push(Choice::disabled(
+                            key,
+                            format!("{label}{on} · copied already"),
+                        ));
+                        continue;
+                    }
+                    let pw = game::power(&st.character, &st.content, &spec, kind);
+                    let odds = game::chance(pw, game::difficulty(security));
+                    if odds == 0 {
+                        choices.push(Choice::disabled(
+                            key,
+                            format!("{label}{on} · out of your reach"),
+                        ));
+                        continue;
+                    }
+                    choices.push(Choice::new(
+                        key,
+                        format!(
+                            "{label}{on} · {odds}% · {} turns · noise {}",
+                            spec.work, spec.noise
+                        ),
+                        Pick::Run(item.id.clone(), target),
+                    ));
+                }
+            }
+        }
+        let node = match place {
+            Place::Construct(b) => st
+                .constructs
+                .get(b)
+                .and_then(|k| k.node_at(pos))
+                .map(|id| city.net.node(id)),
+            _ => k
+                .and_then(|k| Digital::node_under(city, k, pos))
+                .map(|id| city.net.node(id)),
+        };
         let person = st
             .world
             .as_ref()
@@ -629,7 +687,7 @@ impl MapScreen {
             )),
         ));
         Some(ScreenCmd::Push {
-            to: Box::new(Popup::verbs("HERE", choices, st.tick)),
+            to: Box::new(Popup::verbs(title, choices, st.tick)),
             fx: TransitionKind::None,
         })
     }
@@ -749,9 +807,10 @@ impl MapScreen {
                             .map(|w| w.people()[id.0 as usize].name.clone())
                     });
                 let here = player.pos;
+                let open = st.net.unlocked(building, st.net.now(st));
                 let locked = floor
                     .door_of(target)
-                    .filter(|r| r.private && !r.rect.contains(here))
+                    .filter(|r| r.private && !r.rect.contains(here) && !open)
                     .map(|r| {
                         let mut what = r.kind.label().to_string();
                         if r.number > 0 {
@@ -768,6 +827,55 @@ impl MapScreen {
                 }
                 None
             }
+            // The gate in and out of a construct comes with the construct cache.
+            Place::Construct(_) => None,
+        }
+    }
+
+    /// A construct's gate on the Net, stepped onto from the open grid, leads inside; the
+    /// entry inside, stepped off outward, leads back onto the grid.
+    fn gateway(&mut self, st: &mut AppState, dir: Dir) -> Option<ScreenCmd> {
+        let player = st.player.as_ref()?;
+        let (here, target) = (player.pos, player.pos.step(dir));
+        let city = st.city.as_ref()?;
+        match player.place {
+            Place::Stratum(StratumKind::Net) => {
+                // Onto the gate from the grid, or from the gate into the construct's bulk.
+                let gate_of = |p: Pos| {
+                    city.tile(StratumKind::Net, p)
+                        .filter(|t| t.terrain == citygen::Terrain::NetGate)
+                        .and_then(|t| t.building)
+                };
+                let fp = |b: citygen::BuildingId| city.building_opt(b).map(|x| x.footprint);
+                let b = match (gate_of(target), gate_of(here)) {
+                    (Some(b), _) if fp(b).is_some_and(|f| !f.contains(here)) => b,
+                    (_, Some(b)) if fp(b).is_some_and(|f| f.contains(target)) => b,
+                    _ => return None,
+                };
+                let result = crate::constructs::enter_construct(st, b);
+                report(st, result);
+                self.follow_player(st);
+                Some(ScreenCmd::Stay)
+            }
+            Place::Construct(b) => {
+                let k = st.constructs.get(b)?;
+                if here != k.entry || k.tiles.in_bounds(target) {
+                    return None;
+                }
+                let result = crate::constructs::leave_construct(st);
+                report(st, result);
+                self.follow_player(st);
+                Some(ScreenCmd::Stay)
+            }
+            _ => None,
+        }
+    }
+
+    /// The screen's place and camera catch up with the player after a jump.
+    fn follow_player(&mut self, st: &AppState) {
+        if let Some(p) = st.player.as_ref() {
+            self.place = p.place;
+            self.cam.snap(p.pos);
         }
     }
 
@@ -819,8 +927,36 @@ impl MapScreen {
     }
 
     fn handle_walk(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
+        let before = st.player.as_ref().map(|p| (p.place, p.pos));
+        let cmd = self.handle_walk_inner(st, k);
+        let after = st.player.as_ref().map(|p| (p.place, p.pos));
+        // A turn in the Net: a wait steps the program in flight, a move aborts it, and
+        // either lets awake ICE beside you have its say.
+        if after != before && st.net.run.take().is_some() {
+            st.say("run aborted");
+        }
+        if k.code == KeyCode::Char('.') {
+            crate::net::step_run(st);
+        }
+        if k.code == KeyCode::Char('.') || after != before {
+            crate::net::turn_ends(st);
+        }
+        if st.player.as_ref().map(|p| p.place) != before.map(|b| b.0) {
+            self.follow_player(st);
+        }
+        cmd
+    }
+
+    fn handle_walk_inner(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
         if k.code == KeyCode::Char(' ') {
             return self.interact(st);
+        }
+        if k.code == KeyCode::Enter
+            && st.player.as_ref().is_some_and(|p| !p.jacked_in())
+            && let Some(why) = crate::net::jack_in_refusal(st)
+        {
+            st.warn(why);
+            return Some(ScreenCmd::Stay);
         }
         if k.code == KeyCode::Char('a') {
             return Some(self.abilities(st));
@@ -839,6 +975,9 @@ impl MapScreen {
             return Some(ScreenCmd::Stay);
         }
         if let Some(dir) = dir_for(k.code) {
+            if let Some(cmd) = self.gateway(st, dir) {
+                return Some(cmd);
+            }
             match self.bump(st, dir) {
                 Err(cmd) => return Some(cmd),
                 Ok(true) => {}
@@ -858,8 +997,9 @@ impl MapScreen {
         let bonus = st.character.sight_bonus(&st.content);
         let city = st.city.as_ref()?;
         let interiors = &st.interiors;
+        let constructs = &st.constructs;
         let player = st.player.as_mut()?;
-        let map = MapRef::for_place(city, interiors, player.place)
+        let map = MapRef::for_place(city, interiors, constructs, player.place)
             .unwrap_or_else(|| MapRef::stratum_of(city, StratumKind::Street));
         match k.code {
             KeyCode::Char('c') if dev => {
@@ -1020,6 +1160,13 @@ impl Screen for MapScreen {
                 world.path_some(city, 4);
             }
         }
+        // The Net's clock: traces cool, hacks expire, alerts end.
+        let now = st.net.now(st);
+        let inside = match st.player.as_ref().map(|p| p.place) {
+            Some(Place::Construct(b)) => Some(b),
+            _ => None,
+        };
+        st.net.minute(now, inside, &mut st.constructs);
         self.refresh_placement(st);
         ScreenCmd::Stay
     }
@@ -1180,7 +1327,14 @@ impl Screen for MapScreen {
         for (i, row) in rows.into_iter().enumerate() {
             f.render_widget(Paragraph::new(row), r.band_l[i + 1]);
         }
-        let location = hud::location(city, &st.interiors, self.place, cursor);
+        let mut location = hud::location(city, &st.interiors, self.place, cursor);
+        let alert_building = match self.place {
+            Place::Construct(b) | Place::Floor { building: b, .. } => Some(b),
+            Place::Stratum(_) => None,
+        };
+        if alert_building.is_some_and(|b| st.net.alert(b, st.net.now(st))) {
+            location = format!("ALERT · {location}");
+        }
         f.render_widget(
             Paragraph::new(hud::location_line(&location, st.clock(), rw)),
             r.band_r[0],
@@ -1234,6 +1388,8 @@ impl Screen for MapScreen {
             log: &st.log,
             tick: st.tick,
             dev: st.dev,
+            net: &st.net,
+            now: st.net.now(st),
         };
         let here = sidebar::here_summary(&view);
         // In dev mode the column's last row holds the dev tabs, with an empty row above.
@@ -1319,7 +1475,8 @@ impl Screen for MapScreen {
 mod tests {
     use super::*;
     use crate::walker::Visibility;
-    use citygen::{BuildingKind, FloorPlan};
+    use citygen::{BuildingKind, FloorPlan, NodeKind};
+    use game::ItemId;
 
     fn last(st: &AppState) -> Option<&str> {
         st.log.latest().map(|e| e.text.as_str())
@@ -3339,6 +3496,607 @@ mod tests {
             pos.manhattan(exit.door) <= 2,
             "{pos:?} beside the door {:?}",
             exit.door
+        );
+    }
+
+    #[test]
+    fn the_gate_leads_into_the_construct_and_back() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let city = st.city.as_ref().unwrap();
+        // A building's gate on the Net, approached from the open grid beside it.
+        let net = city.stratum(StratumKind::Net).unwrap();
+        let (b, gate, outside, dir) = city
+            .buildings
+            .iter()
+            .find_map(|b| {
+                let gate = b
+                    .footprint
+                    .border()
+                    .find(|p| net.tiles[*p].terrain == citygen::Terrain::NetGate)?;
+                [Dir::N, Dir::S, Dir::E, Dir::W].into_iter().find_map(|d| {
+                    let out = gate.step(d);
+                    (!b.footprint.contains(out) && city.walkable(StratumKind::Net, out))
+                        .then_some((b.id, gate, out, d.opposite()))
+                })
+            })
+            .expect("a gate with grid beside it");
+        let name = city.building(b).name.clone().unwrap();
+        {
+            let p = st.player.as_mut().unwrap();
+            p.body = Some((p.place, p.pos));
+            p.place = Place::Stratum(StratumKind::Net);
+            p.pos = outside;
+        }
+        s.place = Place::Stratum(StratumKind::Net);
+        let code = match dir {
+            Dir::N => KeyCode::Char('k'),
+            Dir::S => KeyCode::Char('j'),
+            Dir::E => KeyCode::Char('l'),
+            _ => KeyCode::Char('h'),
+        };
+        s.update(&mut st, &[key(code)]);
+        let p = st.player.as_ref().unwrap();
+        assert_eq!(p.place, Place::Construct(b), "{:?}", last(&st));
+        let k = st.constructs.get(b).expect("generated on entry");
+        assert_eq!(p.pos, k.entry);
+        assert_eq!(last(&st), Some(format!("into {name}").as_str()));
+        assert_eq!(s.place, Place::Construct(b));
+        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let text = buffer_text(t.backend().buffer());
+        assert!(text.contains(&format!("{name} · construct")), "{text}");
+        if !k.guards.is_empty() {
+            assert!(text.contains('▣'), "the gate guard draws: {text}");
+        }
+        // Out through the entry, back onto the grid at the gate.
+        s.update(&mut st, &[key(KeyCode::Char('h'))]);
+        let p = st.player.as_ref().unwrap();
+        assert_eq!(p.place, Place::Stratum(StratumKind::Net), "{:?}", last(&st));
+        assert_eq!(p.pos, gate);
+        assert_eq!(last(&st), Some("out onto the grid"));
+        // In again: the construct is generated once; jacking out from inside works.
+        s.update(&mut st, &[key(code)]);
+        assert_eq!(st.player.as_ref().unwrap().place, Place::Construct(b));
+        assert_eq!(st.constructs.generated(), 1);
+        assert!(matches!(
+            s.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Flash(TransitionKind::Glitch)
+        ));
+        let p = st.player.as_ref().unwrap();
+        assert!(!p.jacked_in() && p.place.is_street());
+    }
+
+    /// Puts the walking player inside the construct of a tower with a vault and
+    /// a lock, jacked in from the street beside it; returns the building.
+    fn in_construct(st: &mut AppState, s: &mut MapScreen) -> citygen::BuildingId {
+        walking(st, s);
+        let city = st.city.as_ref().unwrap().clone();
+        let b = city
+            .buildings
+            .iter()
+            .find(|b| {
+                b.kind == BuildingKind::CorpTower
+                    && city
+                        .net
+                        .nodes
+                        .iter()
+                        .any(|n| n.building == Some(b.id) && n.kind == NodeKind::DoorLock)
+                    && city
+                        .net
+                        .nodes
+                        .iter()
+                        .any(|n| n.building == Some(b.id) && n.kind == NodeKind::DataVault)
+            })
+            .expect("a tower with a lock and a vault")
+            .id;
+        let gate = crate::constructs::city_gate(&city, b).unwrap();
+        // Security 200: grey ICE at the gate and the vault, and a crack that lands on a ten.
+        st.city
+            .as_mut()
+            .unwrap()
+            .net
+            .subnets
+            .iter_mut()
+            .find(|s| s.owner == citygen::SubnetOwner::Building(b))
+            .unwrap()
+            .security = 200;
+        {
+            let p = st.player.as_mut().unwrap();
+            p.body = Some((Place::Stratum(StratumKind::Street), p.pos));
+            p.place = Place::Stratum(StratumKind::Net);
+            p.pos = gate;
+        }
+        s.place = Place::Stratum(StratumKind::Net);
+        let r = crate::constructs::enter_construct(st, b).unwrap();
+        assert!(r.starts_with("into "));
+        s.place = Place::Construct(b);
+        b
+    }
+
+    fn node_of(st: &AppState, b: citygen::BuildingId, kind: NodeKind) -> (citygen::NodeId, Pos) {
+        let city = st.city.as_ref().unwrap();
+        let k = st.constructs.get(b).unwrap();
+        k.nodes
+            .iter()
+            .find(|(id, _)| city.net.node(*id).kind == kind)
+            .copied()
+            .unwrap()
+    }
+
+    fn beside(st: &AppState, b: citygen::BuildingId, p: Pos) -> Pos {
+        let k = st.constructs.get(b).unwrap();
+        p.neighbors4()
+            .find(|n| k.tiles.get(*n).is_some_and(|t| t.is_walkable()))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_run_cracks_a_lock_in_turns_and_the_building_feels_it() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let (lock, lock_pos) = node_of(&st, b, NodeKind::DoorLock);
+        let here = beside(&st, b, lock_pos);
+        stand(&mut st, &mut s, Place::Construct(b), here);
+        st.net.force_roll = Some(10);
+        // The RUN popup lists crack against the lock, with the odds, and not blind.
+        let ScreenCmd::Push { to: mut run, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens RUN")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*run, &st, 120, 40);
+        assert!(text.contains("RUN"), "{text}");
+        assert!(text.contains("crack · door lock · 40%"), "{text}");
+        assert!(text.contains("3 turns · noise 4"), "{text}");
+        assert!(!text.contains("blind"), "{text}");
+        run.update(&mut st, &[key(KeyCode::Char('a'))]);
+        assert_eq!(last(&st), Some("crack starts · 3 turns"));
+        assert!(st.net.run.is_some());
+        // Three waits land it.
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(last(&st), Some("crack 1/3"));
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert!(
+            last(&st).is_some_and(|l| l.starts_with("lock cracked")),
+            "{:?}",
+            last(&st)
+        );
+        assert!(st.net.run.is_none());
+        let now = st.net.now(&st);
+        assert!(st.net.unlocked(b, now));
+        assert_eq!(st.net.traces[&b].heat, 12);
+        assert!(
+            st.net
+                .hacks
+                .iter()
+                .any(|h| h.target == game::HackTarget::Node(lock))
+        );
+        // A second run aborts on a move.
+        let ScreenCmd::Push { to: mut run, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens RUN")
+        };
+        run.update(&mut st, &[key(KeyCode::Char('a'))]);
+        assert!(st.net.run.is_some());
+        let dir = [Dir::N, Dir::S, Dir::E, Dir::W]
+            .into_iter()
+            .find(|d| {
+                st.constructs
+                    .get(b)
+                    .unwrap()
+                    .tiles
+                    .get(here.step(*d))
+                    .is_some_and(|t| t.is_walkable())
+            })
+            .unwrap();
+        let code = match dir {
+            Dir::N => KeyCode::Char('k'),
+            Dir::S => KeyCode::Char('j'),
+            Dir::E => KeyCode::Char('l'),
+            _ => KeyCode::Char('h'),
+        };
+        s.update(&mut st, &[key(code)]);
+        assert!(st.net.run.is_none());
+        assert_eq!(last(&st), Some("run aborted"));
+        // On the tower's first floor, the cracked lock lets the player into an office.
+        let city = st.city.as_ref().unwrap().clone();
+        st.interiors.ensure(&city, b, 1).unwrap();
+        let (_, floor) = st.interiors.floor(b, 1).unwrap();
+        let (door, outside) = floor
+            .rooms
+            .iter()
+            .filter(|r| r.private)
+            .find_map(|r| {
+                let door = r.door?;
+                let outside = door
+                    .neighbors4()
+                    .find(|n| !r.rect.contains(*n) && floor.tiles[*n].is_walkable())?;
+                Some((door, outside))
+            })
+            .expect("a locked office with a corridor outside");
+        let name = city.building(b).name.clone().unwrap();
+        {
+            let p = st.player.as_mut().unwrap();
+            p.body = None;
+        }
+        stand(
+            &mut st,
+            &mut s,
+            Place::Floor {
+                building: b,
+                level: 1,
+            },
+            outside,
+        );
+        let step = [Dir::N, Dir::S, Dir::E, Dir::W]
+            .into_iter()
+            .find(|d| outside.step(*d) == door)
+            .unwrap();
+        let code = match step {
+            Dir::N => KeyCode::Char('k'),
+            Dir::S => KeyCode::Char('j'),
+            Dir::E => KeyCode::Char('l'),
+            _ => KeyCode::Char('h'),
+        };
+        s.update(&mut st, &[key(code)]);
+        assert_eq!(st.player.as_ref().unwrap().pos, door, "{:?}", last(&st));
+        // The alarm locks it again, stops the lifts and shows on the HUD.
+        stand(
+            &mut st,
+            &mut s,
+            Place::Floor {
+                building: b,
+                level: 1,
+            },
+            outside,
+        );
+        let at = game::At {
+            place: Place::Floor {
+                building: b,
+                level: 1,
+            },
+            pos: outside,
+        };
+        assert_eq!(
+            crate::screens::console::run(&mut st, at, "alarm").unwrap(),
+            format!("ALARM · {name} locks down")
+        );
+        s.update(&mut st, &[key(code)]);
+        assert_eq!(st.player.as_ref().unwrap().pos, outside);
+        assert!(
+            last(&st).is_some_and(|l| l.starts_with("locked")),
+            "{:?}",
+            last(&st)
+        );
+        assert_eq!(
+            crate::interiors::ride(&mut st, b, 0).unwrap_err(),
+            "lifts locked down"
+        );
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(text.contains("ALERT · "), "{text}");
+    }
+
+    #[test]
+    fn the_trace_dumps_you_and_the_port_refuses_while_cooling_or_locked_down() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let name = st.city.as_ref().unwrap().building(b).name.clone().unwrap();
+        let (_, server) = node_of(&st, b, NodeKind::Server);
+        let here = beside(&st, b, server);
+        stand(&mut st, &mut s, Place::Construct(b), here);
+        let at = game::At {
+            place: Place::Construct(b),
+            pos: here,
+        };
+        let body = st.player.as_ref().unwrap().body.unwrap();
+        assert_eq!(
+            crate::screens::console::run(&mut st, at, "heat 100").unwrap(),
+            "heat 100"
+        );
+        let p = st.player.as_ref().unwrap();
+        assert!(!p.jacked_in(), "dumped");
+        assert_eq!((p.place, p.pos), body);
+        assert_eq!(st.character.focus, 0);
+        assert!(last_is_warning(&st) && last(&st).is_some_and(|l| l.starts_with("DUMPED")));
+        s.update(&mut st, &[]);
+        assert_eq!(s.place, body.0);
+        let now = st.net.now(&st);
+        assert_eq!(st.net.cooling(now), Some(game::COOLING_MINUTES));
+        // The port refuses while the deck cools.
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert_eq!(last(&st), Some("deck cooling · 10 min"));
+        st.net.cooling_until = None;
+        // And beside a building on alert.
+        st.net.trace(b).add(game::ALARM_HEAT, now);
+        st.net.alarm(b, now);
+        let city = st.city.as_ref().unwrap().clone();
+        let fp = city.building(b).footprint;
+        let port = city
+            .connectors
+            .iter()
+            .find(|k| k.kind == citygen::ConnectorKind::Jack && fp.grow(1).contains(k.pos))
+            .map(|k| k.pos);
+        if let Some(port) = port {
+            let beside = port
+                .neighbors8()
+                .find(|n| city.walkable(StratumKind::Street, *n))
+                .unwrap();
+            stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), beside);
+            s.update(&mut st, &[key(KeyCode::Enter)]);
+            assert_eq!(last(&st), Some("port locked down"));
+        }
+        // The gate refuses too.
+        {
+            let p = st.player.as_mut().unwrap();
+            p.body = Some((Place::Stratum(StratumKind::Street), p.pos));
+            p.place = Place::Stratum(StratumKind::Net);
+        }
+        assert_eq!(
+            crate::constructs::enter_construct(&mut st, b).unwrap_err(),
+            format!("gate closed · {name} on alert")
+        );
+    }
+
+    #[test]
+    fn copy_backdoor_and_awake_guards() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        st.net.force_roll = Some(10);
+        let (vault, vault_pos) = node_of(&st, b, NodeKind::DataVault);
+        let here = beside(&st, b, vault_pos);
+        stand(&mut st, &mut s, Place::Construct(b), here);
+        let at = game::At {
+            place: Place::Construct(b),
+            pos: here,
+        };
+        let copy = ItemId::new("copy");
+        let before = st.character.count(&ItemId::new("vault_data"));
+        crate::net::start_run(&mut st, copy.clone(), game::HackTarget::Node(vault)).unwrap();
+        for _ in 0..4 {
+            s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        }
+        assert_eq!(st.character.count(&ItemId::new("vault_data")), before + 1);
+        assert!(
+            last(&st).is_some_and(|l| l.starts_with("vault copied")),
+            "{:?}",
+            last(&st)
+        );
+        assert_eq!(
+            crate::net::start_run(&mut st, copy.clone(), game::HackTarget::Node(vault))
+                .unwrap_err(),
+            "copied already"
+        );
+        // A backdoor lifts the gate guard and cools faster.
+        let (server, server_pos) = node_of(&st, b, NodeKind::Server);
+        let here = beside(&st, b, server_pos);
+        stand(&mut st, &mut s, Place::Construct(b), here);
+        st.character.unload(&st.content, &copy).unwrap();
+        st.character
+            .unload(&st.content, &ItemId::new("crack"))
+            .unwrap();
+        assert_eq!(
+            crate::screens::console::run(&mut st, at, "program backdoor").unwrap(),
+            "Backdoor loaded · 2/2 slots"
+        );
+        crate::net::start_run(
+            &mut st,
+            ItemId::new("backdoor"),
+            game::HackTarget::Node(server),
+        )
+        .unwrap();
+        for _ in 0..5 {
+            s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        }
+        assert!(st.net.backdoors.contains(&b), "{:?}", last(&st));
+        let k = st.constructs.get(b).unwrap();
+        assert!(!k.guards.is_empty());
+        assert_eq!(k.guard_at(k.guards[0].pos), None, "the gate guard is down");
+        let heat = st.net.traces[&b].heat;
+        let now = st.net.now(&st);
+        st.net.minute(now + 1, None, &mut st.constructs);
+        assert_eq!(st.net.traces[&b].heat, heat.saturating_sub(2));
+        // On alert, a standing guard beside you dumps you at the end of a turn.
+        let guard = st.constructs.get(b).unwrap().guards[1].pos;
+        let here = beside(&st, b, guard);
+        stand(&mut st, &mut s, Place::Construct(b), here);
+        crate::screens::console::run(&mut st, at, "alarm").unwrap();
+        assert!(st.player.as_ref().unwrap().jacked_in());
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert!(!st.player.as_ref().unwrap().jacked_in(), "{:?}", last(&st));
+        assert!(last(&st).is_some_and(|l| l.starts_with("DUMPED")));
+        // The alert ends: heat zero, the guards stand again but the backdoor's gate guard.
+        let now = st.net.now(&st);
+        st.net
+            .minute(now + game::ALERT_MINUTES + 1, None, &mut st.constructs);
+        assert_eq!(st.net.traces[&b].heat, 0);
+        assert!(!st.net.alert(b, now + game::ALERT_MINUTES + 1));
+        let k = st.constructs.get(b).unwrap();
+        assert_eq!(k.guard_at(k.guards[0].pos), None);
+        assert_eq!(k.guard_at(k.guards[1].pos), Some(1));
+    }
+
+    #[test]
+    fn the_here_section_shows_the_trace_inside_a_construct() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let k = st.constructs.get(b).unwrap();
+        let entry = k.entry;
+        stand(&mut st, &mut s, Place::Construct(b), entry);
+        st.net.trace(b).heat = 34;
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(text.contains("TRACE ▰▰▰▱▱▱▱▱▱▱ 34"), "{text}");
+        let now = st.net.now(&st);
+        st.net.trace(b).add(game::ALARM_HEAT, now);
+        st.net.alarm(b, now);
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(text.contains("ALERT · 60 min"), "{text}");
+    }
+
+    #[test]
+    fn nothing_runs_without_a_deck() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let (lock, lock_pos) = node_of(&st, b, NodeKind::DoorLock);
+        let here = beside(&st, b, lock_pos);
+        stand(&mut st, &mut s, Place::Construct(b), here);
+        st.character.equipment.remove(&game::Slot::Deck);
+        assert_eq!(st.character.loaded.len(), 2, "the list is kept");
+        assert_eq!(
+            crate::net::start_run(&mut st, ItemId::new("crack"), game::HackTarget::Node(lock))
+                .unwrap_err(),
+            "no deck jacked"
+        );
+        let ScreenCmd::Push { to: here_popup, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens a popup")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*here_popup, &st, 120, 40);
+        assert!(!text.contains("crack ·") && text.contains("HERE"), "{text}");
+    }
+
+    #[test]
+    fn the_here_section_reads_the_node_under_you_not_its_kind() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let city = st.city.as_ref().unwrap().clone();
+        let b = city
+            .buildings
+            .iter()
+            .find(|b| {
+                city.net
+                    .nodes
+                    .iter()
+                    .filter(|n| n.building == Some(b.id) && n.kind == NodeKind::Camera)
+                    .count()
+                    >= 2
+            })
+            .expect("a building with two cameras")
+            .id;
+        {
+            let p = st.player.as_mut().unwrap();
+            p.body = Some((Place::Stratum(StratumKind::Street), p.pos));
+            p.place = Place::Stratum(StratumKind::Net);
+        }
+        crate::constructs::enter_construct(&mut st, b).unwrap();
+        s.place = Place::Construct(b);
+        let k = st.constructs.get(b).unwrap();
+        let cameras: Vec<(citygen::NodeId, Pos)> = k
+            .nodes
+            .iter()
+            .filter(|(id, _)| city.net.node(*id).kind == NodeKind::Camera)
+            .copied()
+            .collect();
+        assert!(cameras.len() >= 2);
+        let now = st.net.now(&st);
+        st.net.land(
+            b,
+            game::HackTarget::Node(cameras[0].0),
+            game::Target::Node(NodeKind::Camera),
+            game::Op::Blind,
+            now,
+        );
+        stand(&mut st, &mut s, Place::Construct(b), cameras[1].1);
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(
+            text.contains("◆ camera") && !text.contains("camera · blind"),
+            "{text}"
+        );
+        stand(&mut st, &mut s, Place::Construct(b), cameras[0].1);
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(text.contains("camera · blind"), "{text}");
+    }
+
+    #[test]
+    fn an_alarm_mid_run_keeps_the_run_and_a_jack_out_drops_it() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        st.net.force_roll = Some(10);
+        let (lock, _) = node_of(&st, b, NodeKind::DoorLock);
+        let (vault, vault_pos) = node_of(&st, b, NodeKind::DataVault);
+        let here = beside(&st, b, vault_pos);
+        stand(&mut st, &mut s, Place::Construct(b), here);
+        let now = st.net.now(&st);
+        st.net.land(
+            b,
+            game::HackTarget::Node(lock),
+            game::Target::Node(NodeKind::DoorLock),
+            game::Op::Crack,
+            now,
+        );
+        crate::net::start_run(&mut st, ItemId::new("copy"), game::HackTarget::Node(vault)).unwrap();
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        let at = game::At {
+            place: Place::Construct(b),
+            pos: here,
+        };
+        crate::screens::console::run(&mut st, at, "alarm").unwrap();
+        assert!(st.net.run.is_some(), "the alarm does not clear the run");
+        assert!(!st.net.unlocked(b, now), "the lock hack expired");
+        let until = st.net.traces[&b].alert_until;
+        crate::screens::console::run(&mut st, at, "alarm").unwrap();
+        assert_eq!(
+            st.net.traces[&b].alert_until, until,
+            "no second alarm while alert"
+        );
+        // Jacking out drops the run; the construct keeps its heat and its map.
+        let heat = st.net.traces[&b].heat;
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert!(!st.player.as_ref().unwrap().jacked_in());
+        assert!(st.net.run.is_none());
+        assert_eq!(st.net.traces[&b].heat, heat);
+        assert_eq!(st.constructs.generated(), 1);
+        // A server copy gives paydata.
+        {
+            let p = st.player.as_mut().unwrap();
+            p.body = Some((p.place, p.pos));
+            p.place = Place::Stratum(StratumKind::Net);
+        }
+        let (server, server_pos) = node_of(&st, b, NodeKind::Server);
+        let here = beside(&st, b, server_pos);
+        stand(&mut st, &mut s, Place::Construct(b), here);
+        let before = st.character.count(&ItemId::new("paydata"));
+        crate::net::start_run(&mut st, ItemId::new("copy"), game::HackTarget::Node(server))
+            .unwrap();
+        for _ in 0..4 {
+            s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        }
+        assert_eq!(
+            st.character.count(&ItemId::new("paydata")),
+            before + 1,
+            "{:?}",
+            last(&st)
+        );
+    }
+
+    #[test]
+    fn a_run_out_of_reach_reads_so_and_cannot_start() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        // Security 255: difficulty 31, beyond a rating-one crack with any roll.
+        st.constructs.get_mut(b).unwrap().security = 255;
+        let (_, lock_pos) = node_of(&st, b, NodeKind::DoorLock);
+        let here = beside(&st, b, lock_pos);
+        stand(&mut st, &mut s, Place::Construct(b), here);
+        let ScreenCmd::Push { to: run, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))]) else {
+            panic!("space opens RUN")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*run, &st, 120, 40);
+        assert!(
+            text.contains("crack · door lock · out of your reach"),
+            "{text}"
         );
     }
 }

@@ -51,6 +51,10 @@ pub enum ContentError {
     TemplateInvalid { id: String, why: String },
     #[error("talent `{id}`: {why}")]
     TalentInvalid { id: String, why: String },
+    #[error("program `{id}`: {why}")]
+    ProgramInvalid { id: String, why: String },
+    #[error("deck `{id}`: {why}")]
+    DeckInvalid { id: String, why: String },
     #[error("tree {name}: {why}")]
     TreeInvalid { name: String, why: String },
 }
@@ -122,6 +126,56 @@ impl Content {
                 })
         };
         for i in &self.items {
+            match (i.kind, i.program) {
+                (ItemKind::Program, None) => {
+                    return Err(ContentError::ProgramInvalid {
+                        id: i.id.0.clone(),
+                        why: "no program numbers".into(),
+                    });
+                }
+                (ItemKind::Program, Some(p)) => {
+                    if i.slot.is_some() {
+                        return Err(ContentError::ProgramInvalid {
+                            id: i.id.0.clone(),
+                            why: "a program has no slot; it is loaded".into(),
+                        });
+                    }
+                    if p.rating == 0 || p.size == 0 || p.work == 0 {
+                        return Err(ContentError::ProgramInvalid {
+                            id: i.id.0.clone(),
+                            why: "rating, size and work are at least one".into(),
+                        });
+                    }
+                }
+                (_, Some(_)) => {
+                    return Err(ContentError::ProgramInvalid {
+                        id: i.id.0.clone(),
+                        why: "program numbers on something that is not a program".into(),
+                    });
+                }
+                (_, None) => {}
+            }
+            match (i.kind, i.deck) {
+                (ItemKind::Deck, None) => {
+                    return Err(ContentError::DeckInvalid {
+                        id: i.id.0.clone(),
+                        why: "no slots".into(),
+                    });
+                }
+                (ItemKind::Deck, Some(d)) if d.slots == 0 => {
+                    return Err(ContentError::DeckInvalid {
+                        id: i.id.0.clone(),
+                        why: "a deck has at least one slot".into(),
+                    });
+                }
+                (k, Some(_)) if k != ItemKind::Deck => {
+                    return Err(ContentError::DeckInvalid {
+                        id: i.id.0.clone(),
+                        why: "deck slots on something that is not a deck".into(),
+                    });
+                }
+                _ => {}
+            }
             if i.on_use.is_some() && i.kind != ItemKind::Consumable {
                 return Err(ContentError::UseOnNonConsumable {
                     item: i.id.0.clone(),
@@ -908,5 +962,51 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn programs_and_decks_validate() {
+        let c = Content::load().unwrap();
+        for id in [
+            "crack", "spoof", "blind", "copy", "backdoor", "crack_2", "copy_2",
+        ] {
+            let i = c.item(&ItemId::new(id)).unwrap();
+            assert_eq!(i.kind, ItemKind::Program, "{id}");
+            assert!(i.program.is_some() && i.slot.is_none(), "{id}");
+        }
+        assert_eq!(
+            c.item(&ItemId::new("pawnshop_deck")).unwrap().deck,
+            Some(DeckSpec {
+                slots: 2,
+                rating: 1
+            })
+        );
+        let crack = c.item(&ItemId::new("crack")).unwrap().program.unwrap();
+        assert_eq!(
+            (crack.op, crack.rating, crack.size, crack.noise, crack.work),
+            (Op::Crack, 1, 1, 4, 3)
+        );
+        let at = |c: &Content, id: &str| c.items.iter().position(|i| i.id.0 == id).unwrap();
+        let mut bad = c.clone();
+        let i = at(&bad, "crack");
+        bad.items[i].slot = Some(Slot::Deck);
+        let err = bad.validate().unwrap_err().to_string();
+        assert!(err.contains("crack") && err.contains("slot"), "{err}");
+        let mut bad = c.clone();
+        let i = at(&bad, "crack");
+        bad.items[i].program = None;
+        assert!(bad.validate().is_err());
+        let mut bad = c.clone();
+        let i = at(&bad, "pawnshop_deck");
+        bad.items[i].deck = None;
+        assert!(bad.validate().is_err());
+        let mut bad = c.clone();
+        let i = at(&bad, "crack");
+        bad.items[i].program.as_mut().unwrap().size = 0;
+        assert!(bad.validate().is_err());
+        let mut bad = c.clone();
+        let i = at(&bad, "hardhat");
+        bad.items[i].program = Some(crack);
+        assert!(bad.validate().is_err(), "a hardhat is no program");
     }
 }

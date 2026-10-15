@@ -184,6 +184,10 @@ pub struct SidebarView<'a> {
     pub dev: bool,
     /// Whoever stands on the focus tile, for the inspector.
     pub person: Option<&'a sim::Card>,
+    /// The Net's state: the trace and the hacks inside a construct.
+    pub net: &'a crate::net::NetState,
+    /// The game minute, for the trace's alert and the hacks' windows.
+    pub now: u64,
 }
 
 fn plain(text: impl Into<String>) -> Line<'static> {
@@ -202,7 +206,38 @@ fn separator(width: u16) -> Line<'static> {
 pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
     let city = v.map.city();
     let mut out = Vec::new();
-    if v.map.stratum() == Some(StratumKind::Net) {
+    if let citygen::Place::Construct(b) = v.map.place() {
+        for (i, line) in crate::net::trace_lines(v.net, b, v.now)
+            .into_iter()
+            .enumerate()
+        {
+            let style = if i == 0 {
+                Style::default().fg(CYAN)
+            } else {
+                Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD)
+            };
+            out.push(Line::from(Span::styled(format!(" {line}"), style)));
+        }
+        if let Some(t) = v.map.tile(v.focus) {
+            match t.feature {
+                Some(Feature::Node(k)) => {
+                    // The node under the focus, not any node of its kind.
+                    let id = match &v.map {
+                        MapRef::Construct(m) => m.construct.node_at(v.focus),
+                        _ => None,
+                    };
+                    let state = match id {
+                        Some(id) if v.net.blinded(id, v.now) => " · blind",
+                        Some(id) if v.net.copied(id, v.now) => " · copied",
+                        _ => "",
+                    };
+                    out.push(plain(format!(" ◆ {}{state}", k.label())));
+                }
+                Some(Feature::Ice(g)) => out.push(plain(format!(" ▣ ICE · {}", g.label()))),
+                _ => {}
+            }
+        }
+    } else if v.map.stratum() == Some(StratumKind::Net) {
         if let Some(id) = v
             .map
             .stratum()
@@ -547,7 +582,13 @@ mod tests {
 
     fn view<'a>(st: &'a AppState, focus: Pos, place: citygen::Place) -> SidebarView<'a> {
         SidebarView {
-            map: MapRef::for_place(st.city.as_ref().unwrap(), &st.interiors, place).unwrap(),
+            map: MapRef::for_place(
+                st.city.as_ref().unwrap(),
+                &st.interiors,
+                &st.constructs,
+                place,
+            )
+            .unwrap(),
             focus,
             view: TileRect::new(0, 0, 70, 25),
             player: Some(focus),
@@ -559,6 +600,8 @@ mod tests {
             tick: st.tick,
             dev: st.dev,
             person: None,
+            net: &st.net,
+            now: 0,
         }
     }
 

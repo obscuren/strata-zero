@@ -437,6 +437,13 @@ pub fn location(city: &City, interiors: &Interiors, place: Place, pos: Pos) -> S
             let _ = interiors;
             return format!("{name} · {}", FloorPlan::label(level));
         }
+        Place::Construct(building) => {
+            let name = city
+                .building_opt(building)
+                .map(|b| b.name.clone().unwrap_or_else(|| b.kind.label().to_string()))
+                .unwrap_or_else(|| "inside".to_string());
+            return format!("{name} · construct");
+        }
     };
     if stratum == StratumKind::Net {
         let owner = Digital::node_under(city, stratum, pos)

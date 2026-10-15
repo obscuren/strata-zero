@@ -11,9 +11,9 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 15] = [
-    "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "talent", "tpts", "who", "clock",
-    "tp", "clear", "help",
+const COMMANDS: [&str; 18] = [
+    "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "talent", "tpts", "program",
+    "heat", "alarm", "who", "clock", "tp", "clear", "help",
 ];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
@@ -42,7 +42,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 Ok(format!("spawned {qty}× {}", item.name))
             } else {
                 let lies = st.city.as_ref().is_some_and(|c| {
-                    crate::render::map::MapRef::for_place(c, &st.interiors, focus.place)
+                    crate::render::map::MapRef::for_place(c, &st.interiors, &st.constructs, focus.place)
                         .is_some_and(|m| crate::render::map::TileMap::walkable(&m, focus.pos))
                 });
                 if !lies {
@@ -126,6 +126,59 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             st.character.talent_points = st.character.talent_points.saturating_add(n);
             Ok(format!("{} talent points", st.character.talent_points))
         }
+        "program" => {
+            let id = args
+                .first()
+                .map(|a| ItemId::new(a))
+                .ok_or_else(|| "program <id>".to_string())?;
+            let item = st
+                .content
+                .item(&id)
+                .ok_or_else(|| format!("unknown item {id}"))?;
+            if item.kind != game::ItemKind::Program {
+                return Err(format!("{} is not a program", item.name));
+            }
+            st.character.give(id.clone(), 1);
+            st.character.load(&st.content, &id)
+        }
+        "heat" => {
+            let n: u8 = args
+                .first()
+                .and_then(|a| a.parse().ok())
+                .ok_or_else(|| "heat <0-100>".to_string())?;
+            let b = crate::net::building_here(st).ok_or_else(|| "not in a construct".to_string())?;
+            let now = st.net.now(st);
+            let was_alert = st.net.alert(b, now);
+            let t = st.net.trace(b);
+            t.heat = 0;
+            match t.add(n, now) {
+                game::TraceEvent::Dump => {
+                    if !was_alert {
+                        let line = crate::net::raise_alarm(st, b);
+                        st.warn(line);
+                    }
+                    crate::net::dump(st, "the trace found you");
+                }
+                game::TraceEvent::Alarm => {
+                    let line = crate::net::raise_alarm(st, b);
+                    st.warn(line);
+                }
+                game::TraceEvent::None => {}
+            }
+            Ok(format!("heat {n}"))
+        }
+        "alarm" => {
+            let b = crate::net::building_here(st).ok_or_else(|| "not in a building".to_string())?;
+            let now = st.net.now(st);
+            let t = st.net.trace(b);
+            if t.heat < game::ALARM_HEAT {
+                t.heat = game::ALARM_HEAT;
+            }
+            t.alert_until = Some(now + game::ALERT_MINUTES);
+            let line = crate::net::raise_alarm(st, b);
+            st.warn(line.clone());
+            Ok(line)
+        }
         "who" => {
             let w = st
                 .world
@@ -199,7 +252,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 .ok_or_else(|| "no body in the city".to_string())?;
             let city = st.city.as_ref().ok_or_else(|| "no city".to_string())?;
             let target = Pos::new(x, y);
-            let map = crate::render::map::MapRef::for_place(city, &st.interiors, place)
+            let map = crate::render::map::MapRef::for_place(city, &st.interiors, &st.constructs, place)
                 .ok_or_else(|| "no map here".to_string())?;
             if !crate::render::map::TileMap::walkable(&map, target) {
                 return Err("nothing to stand on there".to_string());
@@ -221,7 +274,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             ))
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · who · clock <hh:mm> · tp <x> <y> · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · who · clock <hh:mm> · tp <x> <y> · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),
@@ -353,7 +406,7 @@ mod tests {
             vec!["spawn".to_string(), "sp".to_string()]
         );
         assert_eq!(
-            complete(&st, "spawn", "co"),
+            complete(&st, "spawn", "copp"),
             vec!["copper_coil".to_string()]
         );
         assert!(complete(&st, "give", "co").is_empty());

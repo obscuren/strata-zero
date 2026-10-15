@@ -73,7 +73,7 @@ fn land(st: &mut AppState, place: Place, pos: Pos) {
     };
     player.place = place;
     player.pos = pos;
-    if let Some(map) = MapRef::for_place(city, &st.interiors, place) {
+    if let Some(map) = MapRef::for_place(city, &st.interiors, &st.constructs, place) {
         player.update_fov(&map, bonus);
     }
     st.repaint = true;
@@ -153,6 +153,10 @@ pub fn ride(st: &mut AppState, b: BuildingId, level: i32) -> Result<String, Stri
     let lift = plan.lift.ok_or("no lift here")?;
     if level < plan.lowest || level > plan.top {
         return Err("no such floor".to_string());
+    }
+    let now = st.net.now(st);
+    if !st.net.lifts_answer(b, now) {
+        return Err("lifts locked down".to_string());
     }
     st.interiors
         .ensure(city, b, level)

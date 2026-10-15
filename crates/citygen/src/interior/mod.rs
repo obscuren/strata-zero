@@ -555,6 +555,66 @@ mod tests {
                 .unwrap();
             let lobby = generate_floor(&c, &plan, 0);
             let exit = lobby.exits.iter().find(|e| e.door == door).unwrap();
+            // The Net side: the gate, the nearest port, the construct's rooms.
+            if let Some(k) = crate::construct::generate_construct(&c, b.id) {
+                let gate = fp
+                    .border()
+                    .find(|p| {
+                        c.tile(StratumKind::Net, *p)
+                            .is_some_and(|t| t.terrain == crate::tile::Terrain::NetGate)
+                    })
+                    .unwrap();
+                let port = c
+                    .connectors
+                    .iter()
+                    .filter(|k| k.kind == crate::world::ConnectorKind::Jack)
+                    .min_by_key(|k| k.pos.dist2(gate))
+                    .map(|k| k.pos);
+                let nodes: Vec<String> = k
+                    .nodes
+                    .iter()
+                    .map(|(id, p)| format!("{}@{},{}", c.net.node(*id).kind.label(), p.x, p.y))
+                    .collect();
+                let outside = [
+                    crate::geom::Dir::N,
+                    crate::geom::Dir::S,
+                    crate::geom::Dir::E,
+                    crate::geom::Dir::W,
+                ]
+                .into_iter()
+                .find_map(|d| {
+                    let o = gate.step(d);
+                    (!fp.contains(o) && c.walkable(StratumKind::Net, o))
+                        .then_some((o, d.opposite()))
+                });
+                let port_stand =
+                    port.and_then(|p| p.neighbors8().find(|n| c.walkable(StratumKind::Street, *n)));
+                let beside = |pos: crate::geom::Pos| {
+                    pos.neighbors4()
+                        .find(|n| k.tiles.get(*n).is_some_and(|t| t.is_walkable()))
+                };
+                let lock_beside = k
+                    .nodes
+                    .iter()
+                    .find(|(id, _)| c.net.node(*id).kind == crate::net::NodeKind::DoorLock)
+                    .and_then(|(_, p)| beside(*p));
+                println!(
+                    "  gate outside {:?} step {:?} · stand by port {:?} · beside lock {:?}",
+                    outside.map(|(o, _)| (o.x, o.y)),
+                    outside.map(|(_, d)| d),
+                    port_stand.map(|p| (p.x, p.y)),
+                    lock_beside.map(|p| (p.x, p.y))
+                );
+                let guards: Vec<String> = k
+                    .guards
+                    .iter()
+                    .map(|g| format!("{}@{},{}", g.grade.label(), g.pos.x, g.pos.y))
+                    .collect();
+                println!(
+                    "  net gate {},{} port {:?} security {} size {:?} entry {},{} guards {:?} nodes {:?}",
+                    gate.x, gate.y, port, k.security, k.size, k.entry.x, k.entry.y, guards, nodes
+                );
+            }
             println!(
                 "{kind:?} {} door {},{} outside {},{} doorstep {},{} lift {:?} stair {},{} top {} floors {}..={} bridge {:?} roof {}",
                 b.name.clone().unwrap_or_default(),
@@ -665,5 +725,23 @@ mod tests {
                 dump(&plan, &generate_floor(city, &plan, level));
             }
         }
+    }
+
+    /// A cracked lock always opens something: every closed building keeps at least
+    /// one locked room on some floor.
+    #[test]
+    fn every_closed_building_keeps_a_locked_room() {
+        let c = crate::generate::cyberspace::tests::city();
+        let mut seen = std::collections::HashSet::new();
+        for b in &c.buildings {
+            let Some(plan) = FloorPlan::new(&c, b.id) else {
+                continue;
+            };
+            seen.insert(b.kind);
+            let any = (plan.lowest..=plan.top)
+                .any(|l| generate_floor(&c, &plan, l).rooms.iter().any(|r| r.private));
+            assert!(any, "{:?} ({:?}) has nothing locked", b.kind, b.id);
+        }
+        assert!(seen.len() >= 6, "{seen:?}");
     }
 }

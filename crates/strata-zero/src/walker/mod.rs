@@ -77,7 +77,7 @@ impl Player {
             Place::Stratum(StratumKind::Undercity) => RADIUS_UNDER,
             Place::Stratum(StratumKind::Net) => RADIUS_NET,
             Place::Stratum(_) => RADIUS_STREET,
-            Place::Floor { .. } => RADIUS_INSIDE,
+            Place::Floor { .. } | Place::Construct(_) => RADIUS_INSIDE,
         }
     }
 

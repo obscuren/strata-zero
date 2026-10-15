@@ -6,6 +6,7 @@ pub mod character;
 pub mod content;
 pub mod ground;
 pub mod model;
+pub mod run;
 
 pub use action::*;
 pub use build::*;
@@ -13,3 +14,4 @@ pub use character::*;
 pub use content::*;
 pub use ground::*;
 pub use model::*;
+pub use run::*;

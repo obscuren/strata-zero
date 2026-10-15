@@ -142,6 +142,24 @@ pub enum Feature {
     Node(NodeKind),
     /// A piece of furniture on an interior floor; nobody walks through it.
     Furniture(Furniture),
+    /// A piece of ICE standing in a construct; nobody walks through it while it stands.
+    Ice(IceGrade),
+}
+
+/// How hard a piece of ICE bites: white traces and alarms, grey dumps you.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum IceGrade {
+    White,
+    Grey,
+}
+
+impl IceGrade {
+    pub fn label(self) -> &'static str {
+        match self {
+            IceGrade::White => "white",
+            IceGrade::Grey => "grey",
+        }
+    }
 }
 
 /// What stands in a room. A station is the floor tile beside it.
@@ -174,7 +192,7 @@ impl Furniture {
     }
 }
 
-pub const ALL_FEATURES: [Feature; 17] = [
+pub const ALL_FEATURES: [Feature; 18] = [
     Feature::Neon(Hue::Cyan),
     Feature::HoloAd,
     Feature::Lamp,
@@ -192,6 +210,7 @@ pub const ALL_FEATURES: [Feature; 17] = [
     Feature::Cable,
     Feature::Node(NodeKind::Server),
     Feature::Furniture(Furniture::Desk),
+    Feature::Ice(IceGrade::White),
 ];
 
 /// One cell of a stratum.
@@ -253,6 +272,7 @@ impl Tile {
                     | Feature::Pipe
                     | Feature::Terminal
                     | Feature::Furniture(_)
+                    | Feature::Ice(_)
             )
         );
         terrain_ok && feature_ok
@@ -310,7 +330,7 @@ mod tests {
         assert!(Tile::new(Terrain::Plaza).is_outdoor_ground());
         assert!(Tile::new(Terrain::Door).is_building_part());
         assert_eq!(ALL_TERRAIN.len(), 26);
-        assert_eq!(ALL_FEATURES.len(), 17);
+        assert_eq!(ALL_FEATURES.len(), 18);
         assert!(!Tile::new(Terrain::Mass).is_walkable());
         assert!(Tile::new(Terrain::Mass).blocks_sight());
         assert!(Tile::new(Terrain::Mass).is_building_part());
@@ -336,7 +356,7 @@ mod tests {
         assert_eq!(Terrain::Road.label(), "road");
         assert!(Terrain::NetLane.is_net() && !Terrain::Road.is_net());
         assert_eq!(ALL_TERRAIN.len(), 26);
-        assert_eq!(ALL_FEATURES.len(), 17);
+        assert_eq!(ALL_FEATURES.len(), 18);
         assert_eq!(crate::world::StratumKind::ALL.len(), 5);
         assert_eq!(
             crate::world::StratumKind::ALL[4],

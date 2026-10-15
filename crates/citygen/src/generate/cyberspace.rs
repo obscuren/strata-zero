@@ -405,7 +405,7 @@ impl StageRunner for CyberspaceStage {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use crate::generate::Generator;
     use crate::geom::Pos;
     use crate::params::{GenParams, SizePreset};

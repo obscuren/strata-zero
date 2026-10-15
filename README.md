@@ -35,6 +35,30 @@ press `enter`): your body stays at the port and you emerge in the Net at the
 same spot, in a wireframe world laid out one to one with the city. `enter`
 again jacks out. In Explore mode `]` past Heights shows the Net.
 
+Every building's construct has an inside. Step onto its gate from the grid and
+you are in: a spine of lane with rooms off it holding the building's nodes
+(door locks, cameras, lift controls, terminals, the server, the data vault
+deepest), ICE standing at the gate from security 160 (white, grey from 200)
+and at the vault room's door from 200. `space` on or beside a node or a piece
+of ICE opens RUN: the programs loaded in your deck that apply to it, each with
+the chance a turn succeeds (a d10 plus your power, twice Net plus the skill and
+the program's rating, against the security over eight), the turns it takes and
+the noise it makes; a program that cannot beat the construct reads `out of your
+reach`. Pick one and every `.` is a turn: a roll against the security, heat
+on the construct's trace (more on a slip), the hack landing on the last
+success; a move aborts it. The HERE section shows the trace. At 60 heat the
+alarm trips: the building locks down for an hour (cracked locks relock, lifts
+stop, the ICE wakes, the gate and the ports beside it refuse); at 100, or at
+the end of a turn beside awake ICE, you are dumped to your body with no focus
+and a deck that will not jack in for ten minutes. What lands lasts an hour:
+`crack` opens anything (the only program that takes ICE down) and a cracked or
+`spoof`ed lock opens the building's private rooms, a spoofed lift control
+keeps the lifts answering through a lockdown, `blind` silences a camera,
+`copy` pulls a paydata shard off a server or a vault dump off a vault (once
+each), and `backdoor` on the server keeps the gate open to you for good and
+cools the trace twice as fast. Programs are items that take slots on your
+deck; the CYBERDECK tab loads and unloads them.
+
 Same seed and parameters always produce a byte-identical city.
 
 The city is lived in. Every building is staffed and every bed is slept in: the
@@ -124,7 +148,7 @@ beside you, look · `1`-`5` fire the ability in that slot ·
 they step back once you move on · `enter` jack shortcut · `.` wait · `tab` deck ·
 `F1`-`F4` panes · `v` view popup · `m` messages · `d` digital overlay · `s` save ·
 `?` keys · `c` back to the free camera (dev mode) · `:` dev
-console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `sp`, `pts`, `talent`, `tpts`, `who`
+console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `sp`, `pts`, `talent`, `tpts`, `program`, `heat`, `alarm`, `who`
 counts the people out, inside and driving, `clock hh:mm` jumps the day there,
 `tp x y` teleports on the current map, `clear`, `help`, with Tab completion and
 history) · `esc` pause
@@ -152,7 +176,8 @@ rain, fps) · quit to title · quit game
 `esc` close; it reopens where you left it. Tabs: skills (the category board:
 `enter` folds and unfolds, `space` offers an unlock priced in SP), stats (the
 five stats and your pools; `space` buys a point outright), gear, inventory, workbench
-(WRENCH unlocks it), cyberdeck (the jacked deck and its programs), quests,
+(WRENCH unlocks it), cyberdeck (the jacked deck, the programs loaded and in the
+pack, `space` loads or unloads one, and the deck's own abilities), quests,
 journal (empty for now), map (what you remember of this stratum) and talents
 (on `0`, below). Every list wraps at both ends. `space` on a gear slot picks what fits from the pack,
 or unequips and inspects what is worn; on an inventory item it opens the

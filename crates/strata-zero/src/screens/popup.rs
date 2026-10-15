@@ -40,6 +40,8 @@ pub enum Pick {
     Card(Vec<Line<'static>>),
     /// Toggles a sidebar section and closes.
     View(Section),
+    /// Starts a program against a target in the construct; the result lands in the strip.
+    Run(game::ItemId, game::HackTarget),
     Close,
 }
 
@@ -102,7 +104,7 @@ fn wrapped_rows(line: &Line<'_>, width: usize) -> usize {
     rows
 }
 const MIN_W: u16 = 24;
-const MAX_W: u16 = 48;
+const MAX_W: u16 = 60;
 
 pub struct Popup {
     title: String,
@@ -153,6 +155,12 @@ impl Popup {
             return TransitionKind::None;
         }
         let bonus = st.character.sight_bonus(&st.content);
+        if act == WorldAct::JackIn
+            && let Some(why) = crate::net::jack_in_refusal(st)
+        {
+            st.warn(why);
+            return TransitionKind::None;
+        }
         let result: Result<(String, TransitionKind), String> =
             match (st.city.as_ref(), st.player.as_mut()) {
                 (Some(city), Some(player)) => match act {
@@ -277,6 +285,13 @@ impl Popup {
             Pick::World(act) => {
                 let fx = self.world(st, act);
                 ScreenCmd::Pop { fx }
+            }
+            Pick::Run(program, target) => {
+                let result = crate::net::start_run(st, program, target);
+                report(st, result);
+                ScreenCmd::Pop {
+                    fx: TransitionKind::None,
+                }
             }
             Pick::Card(lines) => {
                 self.card = Some(lines);

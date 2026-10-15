@@ -12,5 +12,6 @@ pub fn kind_icon(kind: ItemKind) -> char {
         ItemKind::Consumable => '◍',
         ItemKind::Component => '▪',
         ItemKind::Junk => '·',
+        ItemKind::Program => '⌁',
     }
 }
