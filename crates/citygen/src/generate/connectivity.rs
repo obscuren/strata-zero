@@ -42,6 +42,14 @@ pub(crate) fn reachable_from_street(city: &City) -> Vec<Grid<bool>> {
     for c in &city.connectors {
         by_pos.entry(c.pos).or_default().push(c);
     }
+    // A closed building's doors join through its interior, which the maps do not show.
+    let mut portals: HashMap<(StratumKind, Pos), Vec<(StratumKind, Pos)>> = HashMap::new();
+    for b in &city.buildings {
+        let doors = city.portals(b.id);
+        for d in &doors {
+            portals.insert(*d, doors.clone());
+        }
+    }
 
     let mut queue: VecDeque<(StratumKind, Pos)> = VecDeque::new();
     for p in main {
@@ -69,6 +77,14 @@ pub(crate) fn reachable_from_street(city: &City) -> Vec<Grid<bool>> {
                         reach[s.index()].set(p, true);
                         queue.push_back((*s, p));
                     }
+                }
+            }
+        }
+        if let Some(doors) = portals.get(&(k, p)) {
+            for (s, q) in doors {
+                if city.walkable(*s, *q) && !reach[s.index()][*q] {
+                    reach[s.index()].set(*q, true);
+                    queue.push_back((*s, *q));
                 }
             }
         }

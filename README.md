@@ -17,7 +17,15 @@ The generator builds a city as walkable tile maps on four strata:
 | Undercity | tunnels under the roads, sewers, a rail line, basements, black clinics |
 
 Every building you see at street level is the same building you stand on at
-Heights. Districts have themes (corp core, night market, megablocks, combat
+Heights. Most of them are closed: the footprint is solid on the city maps and
+the door opens an interior of its own, with real floors (a corp tower has
+thirty-odd) reached by lift and stair, a lobby, corridors of locked flats or
+offices, a bar with its counter and tables, a factory's machine rows, and exits
+back onto the street, over a sky bridge onto the Skyways, onto the roof and
+down into the Undercity. Stalls and small shops (noodle bars, markets, shops,
+pawnbrokers, arcades) stay walk-in on the street. Interiors are generated from
+the seed the first time you walk in, a floor at a time, at three times the
+footprint's scale. Districts have themes (corp core, night market, megablocks, combat
 zone, docks, industrial, neon strip, old town) that drive street layout,
 building mix, palette and signage. A Net graph of subnets, nodes and links is
 anchored to the physical tiles and can be shown as a digital overlay.
@@ -44,7 +52,11 @@ word (`…`) when they meet. Nobody waits for you to be looking: the whole city
 moves on the clock, and only the people inside the screen's bubble are drawn;
 on foot you see the ones in your sight, and a parked car stays in memory like
 a pile. Walk into someone and you swap places, so a crowd never blocks the
-way; `space` lists whoever stands beside you, to talk. The clock is the city's
+way; `space` lists whoever stands beside you, to talk. Inside a building the
+people the simulation has there stand at their stations when you walk in: the
+barkeep behind the bar, drones at their desks across the floors, line workers
+at the machines, residents behind their locked doors; they are solid, and
+`space` talks to them too. The clock is the city's
 own: it runs while you walk and stops in the free camera and in every menu, so
 the overview is a still of the city, and the inspector reads whoever is under
 the cursor there: who they are, what they are doing, what comes next for them,
@@ -101,16 +113,21 @@ end · `r` reseed after an error · `esc` back
 `w` walk · `tab` deck · `F1`-`F4` panes (here, quest, map, log; `F5` `F6` inspect and legend in dev mode) · `v` the same as a popup · `m` messages ·
 `d` digital overlay · `s` save · `r` regenerate · `g` configure · `:` dev console (dev mode) · `?` keys · `esc` pause
 
-**Walk** `hjkl` `yubn` / arrows move · `<` `>` take stairs, lift, ladder or
-manhole · `space` interact: take what lies here, jack in at an adjacent terminal
-or out again, take the stairs, look · `1`-`5` fire the ability in that slot ·
+**Walk** `hjkl` `yubn` / arrows move · walking onto a closed building's door
+goes inside, onto an interior's door back out; a locked door says whose it is ·
+`<` `>` take stairs, lift, ladder or manhole; on a lift bank inside they open the
+FLOORS panel (every floor, the bridge and the roof marked), on a stairwell they
+climb one floor · `space` interact: take what lies here, jack in at an adjacent
+terminal or out again, take the stairs or the lift, talk to whoever stands
+beside you, look · `1`-`5` fire the ability in that slot ·
 `a` the full ability list · walking into someone swaps places with them, and
 they step back once you move on · `enter` jack shortcut · `.` wait · `tab` deck ·
 `F1`-`F4` panes · `v` view popup · `m` messages · `d` digital overlay · `s` save ·
 `?` keys · `c` back to the free camera (dev mode) · `:` dev
 console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `sp`, `pts`, `who`
 counts the people out, inside and driving, `clock hh:mm` jumps the day there,
-`clear`, `help`, with Tab completion and history) · `esc` pause
+`tp x y` teleports on the current map, `clear`, `help`, with Tab completion and
+history) · `esc` pause
 
 The play HUD frames the map on one grid. The top band carries the handle,
 level, credits and dev readouts, then HP, FOCUS and XP bars that run the width
@@ -150,7 +167,7 @@ categories and every item, ability, skill, talent, quest and recipe live in
 ## Layout
 
 ```
-crates/citygen       world model + city generator (no terminal dependencies)
+crates/citygen       world model + city generator + interiors (no terminal dependencies)
 crates/game          characters, items, abilities, the build rules (no terminal dependencies)
 crates/sim           the living city: people, places, paths and the world's minute
 crates/strata-zero   the game: ratatui app, screens, renderer, walking and jacking in, the `gen` CLI

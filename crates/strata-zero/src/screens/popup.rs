@@ -23,6 +23,10 @@ pub enum WorldAct {
     JackOut,
     Up,
     Down,
+    /// A lift ride to a floor of the building the player is in.
+    Lift(i32),
+    /// The stairwell, one floor up or down.
+    Climb(bool),
 }
 
 /// What a row does when fired.
@@ -126,6 +130,28 @@ impl Popup {
 
     /// Applies a world act to the player and returns the transition to pop with.
     fn world(&self, st: &mut AppState, act: WorldAct) -> TransitionKind {
+        if let WorldAct::Climb(up) = act {
+            match crate::interiors::climb(st, up) {
+                Ok(msg) => st.say(msg),
+                Err(e) => st.warn(e),
+            }
+            return TransitionKind::None;
+        }
+        if let WorldAct::Lift(level) = act {
+            let building = match st.player.as_ref().map(|p| p.place) {
+                Some(citygen::Place::Floor { building, .. }) => Some(building),
+                _ => None,
+            };
+            let result = match building {
+                Some(b) => crate::interiors::ride(st, b, level),
+                None => Err("no lift here".to_string()),
+            };
+            match result {
+                Ok(msg) => st.say(msg),
+                Err(e) => st.warn(e),
+            }
+            return TransitionKind::None;
+        }
         let bonus = st.character.sight_bonus(&st.content);
         let result: Result<(String, TransitionKind), String> =
             match (st.city.as_ref(), st.player.as_mut()) {
@@ -143,11 +169,16 @@ impl Popup {
                         .jack_out(city, bonus)
                         .map(|()| ("jacked out".to_string(), TransitionKind::Glitch))
                         .map_err(|e| e.to_string()),
+                    WorldAct::Lift(_) => Err("no lift here".to_string()),
+                    WorldAct::Climb(_) => Err("no stairs here".to_string()),
                     WorldAct::Up | WorldAct::Down => {
                         let up = act == WorldAct::Up;
                         match player.use_connector(city, up) {
                             Some(dest) => {
-                                player.update_fov(city, bonus);
+                                player.update_fov(
+                                    &crate::render::map::MapRef::stratum_of(city, dest),
+                                    bonus,
+                                );
                                 Ok((format!("now on {}", dest.label()), TransitionKind::None))
                             }
                             None => Err(if up {

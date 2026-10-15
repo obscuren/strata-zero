@@ -213,7 +213,10 @@ impl City {
                     NodeKind::DoorLock => t.terrain == Terrain::Door,
                     NodeKind::LiftCtrl => t.terrain == Terrain::Lift,
                     NodeKind::Server | NodeKind::DataVault | NodeKind::Ice => {
-                        matches!(t.terrain, Terrain::Floor | Terrain::Lift | Terrain::Stair)
+                        matches!(
+                            t.terrain,
+                            Terrain::Floor | Terrain::Mass | Terrain::Lift | Terrain::Stair
+                        )
                     }
                     NodeKind::Backbone => true,
                 },

@@ -1,10 +1,11 @@
 //! Items in the world: piles on the ground.
 
 use crate::render::glyphs::kind_icon;
+use crate::render::map::MapRef;
 use crate::render::style::StylePack;
 use crate::render::viewport::{Overlay, tile_to_screen};
 use crate::render::{Rgb, Visibility};
-use citygen::{City, Grid, Pos, StratumKind};
+use citygen::{Grid, Pos};
 use game::{Content, Ground, ItemKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -24,15 +25,14 @@ pub struct GroundOverlay<'a> {
 impl Overlay for GroundOverlay<'_> {
     fn draw(
         &self,
-        _city: &City,
-        stratum: StratumKind,
+        map: &MapRef,
         origin: Pos,
         area: Rect,
         _tick: u64,
         buf: &mut Buffer,
         _style: &StylePack,
     ) {
-        for (pos, stacks) in self.ground.on(stratum) {
+        for (pos, stacks) in self.ground.on(map.place()) {
             let Some((sx, sy)) = tile_to_screen(area, origin, pos) else {
                 continue;
             };
@@ -65,7 +65,7 @@ mod tests {
     use super::*;
     use crate::render::viewport::MapView;
     use crate::walker::Player;
-    use citygen::{GenParams, Generator, SizePreset};
+    use citygen::{City, GenParams, Generator, SizePreset, StratumKind};
     use game::ItemId;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -92,8 +92,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(120, 60)).unwrap();
         t.draw(|f| {
             MapView {
-                city: c,
-                stratum,
+                map: &MapRef::stratum_of(c, stratum),
                 origin: Pos::new(0, 0),
                 tick,
                 style: s,
@@ -113,28 +112,35 @@ mod tests {
         let content = Content::load().unwrap();
         let s = StylePack::load().unwrap();
         let mut p = Player::spawn(&c, 1);
-        p.update_fov(&c, 0);
+        p.update_fov(&MapRef::stratum_of(&c, StratumKind::Street), 0);
         let here = p.pos;
         let near = here
             .neighbors8()
-            .find(|q| c.walkable(p.stratum, *q))
+            .find(|q| c.walkable(StratumKind::Street, *q))
             .unwrap();
         let far = (0..60)
             .flat_map(|y| (0..120).map(move |x| Pos::new(x, y)))
-            .find(|q| p.vis()[*q] == Visibility::Unseen && c.walkable(p.stratum, *q))
+            .find(|q| p.vis()[*q] == Visibility::Unseen && c.walkable(StratumKind::Street, *q))
             .unwrap();
         let mut g = Ground::default();
-        g.add(p.stratum, here, ItemId::new("copper_coil"), 2);
-        g.add(p.stratum, near, ItemId::new("copper_coil"), 1);
-        g.add(p.stratum, near, ItemId::new("dead_phone"), 1);
-        g.add(p.stratum, far, ItemId::new("dead_phone"), 1);
+        g.add(p.place, here, ItemId::new("copper_coil"), 2);
+        g.add(p.place, near, ItemId::new("copper_coil"), 1);
+        g.add(p.place, near, ItemId::new("dead_phone"), 1);
+        g.add(p.place, far, ItemId::new("dead_phone"), 1);
         let at = |buf: &Buffer, q: Pos| buf[(q.x as u16, q.y as u16)].clone();
         let overlay = |vis| GroundOverlay {
             ground: &g,
             content: &content,
             vis,
         };
-        let buf = render(&c, &s, p.stratum, 0, Some(p.vis()), &overlay(Some(p.vis())));
+        let buf = render(
+            &c,
+            &s,
+            StratumKind::Street,
+            0,
+            Some(p.vis()),
+            &overlay(Some(p.vis())),
+        );
         assert_eq!(at(&buf, here).symbol(), "▪");
         assert_eq!(at(&buf, here).fg, AMBER.to_color());
         assert_eq!(at(&buf, near).symbol(), "≡");
@@ -145,11 +151,11 @@ mod tests {
         );
         let mut away = p.clone();
         away.pos = far;
-        away.update_fov(&c, 0);
+        away.update_fov(&MapRef::stratum_of(&c, StratumKind::Street), 0);
         let buf = render(
             &c,
             &s,
-            p.stratum,
+            StratumKind::Street,
             0,
             Some(away.vis()),
             &overlay(Some(away.vis())),
@@ -159,7 +165,7 @@ mod tests {
             AMBER.scale(0.45).to_color(),
             "remembered: dimmed"
         );
-        let buf = render(&c, &s, p.stratum, 0, None, &overlay(None));
+        let buf = render(&c, &s, StratumKind::Street, 0, None, &overlay(None));
         assert_eq!(
             at(&buf, far).fg,
             AMBER.to_color(),

@@ -1,16 +1,16 @@
 //! The player's memory of a stratum: only what has been seen, scaled to fit.
 
 use crate::render::Visibility;
+use crate::render::map::{MapRef, TileMap};
 use crate::render::style::StylePack;
-use citygen::{City, Grid, Pos, Rect as TileRect, StratumKind};
+use citygen::{Grid, Pos, Rect as TileRect};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::widgets::Widget;
 
 pub struct MemoryMap<'a> {
-    pub city: &'a City,
-    pub stratum: StratumKind,
+    pub map: &'a MapRef<'a>,
     pub vis: &'a Grid<Visibility>,
     pub player: Option<Pos>,
     pub style: &'a StylePack,
@@ -21,10 +21,7 @@ impl Widget for MemoryMap<'_> {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        let Some(st) = self.city.stratum(self.stratum) else {
-            return;
-        };
-        let size = self.city.size;
+        let size = self.map.size();
         let scale = (size.w as f32 / area.width as f32)
             .max(size.h as f32 / area.height as f32)
             .max(1.0)
@@ -36,7 +33,7 @@ impl Widget for MemoryMap<'_> {
                 let (mut total, mut seen, mut visible, mut walk) = (0usize, 0usize, 0usize, 0usize);
                 let mut theme = None;
                 for p in block.iter() {
-                    let Some(t) = st.tiles.get(p) else { continue };
+                    let Some(t) = self.map.tile(p) else { continue };
                     total += 1;
                     match self.vis.get(p).copied().unwrap_or(Visibility::Unseen) {
                         Visibility::Unseen => continue,
@@ -50,10 +47,7 @@ impl Widget for MemoryMap<'_> {
                         walk += 1;
                     }
                     if theme.is_none() {
-                        theme = t
-                            .district
-                            .and_then(|d| self.city.district_opt(d))
-                            .map(|d| d.theme);
+                        theme = self.map.theme(p);
                     }
                 }
                 let cell = &mut buf[(area.x + cx, area.y + cy)];
@@ -82,7 +76,7 @@ impl Widget for MemoryMap<'_> {
 mod tests {
     use super::*;
     use crate::walker::Player;
-    use citygen::{GenParams, Generator, SizePreset};
+    use citygen::{GenParams, Generator, SizePreset, StratumKind};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -100,8 +94,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(60, 30)).unwrap();
         t.draw(|f| {
             MemoryMap {
-                city: &c,
-                stratum: p.stratum,
+                map: &MapRef::stratum_of(&c, StratumKind::Street),
                 vis: p.vis(),
                 player: Some(p.pos),
                 style: &s,
@@ -120,8 +113,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(1, 1)).unwrap();
         t.draw(|f| {
             MemoryMap {
-                city: &c,
-                stratum: p.stratum,
+                map: &MapRef::stratum_of(&c, StratumKind::Street),
                 vis: p.vis(),
                 player: None,
                 style: &s,

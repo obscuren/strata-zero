@@ -81,6 +81,21 @@ struct Displaced {
     back: Option<Pos>,
 }
 
+/// Why someone is inside a building.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OccupantRole {
+    Working,
+    Living,
+    Guest,
+    Visiting,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Occupant {
+    pub id: PersonId,
+    pub role: OccupantRole,
+}
+
 /// A client and a sex worker inside a hotel until a minute.
 #[derive(Clone, Debug, PartialEq)]
 struct Date {
@@ -192,6 +207,30 @@ impl World {
 
     pub fn is_open(&self, building: BuildingId) -> bool {
         self.open.contains(&building)
+    }
+
+    /// Everyone inside a building now and what they are there for, by id.
+    pub fn inside(&self, b: BuildingId) -> Vec<Occupant> {
+        self.people
+            .iter()
+            .filter(|p| p.whereabouts == Whereabouts::Inside(b))
+            .map(|p| {
+                let on_a_date = self
+                    .dates
+                    .iter()
+                    .any(|d| d.hotel == b && (d.client == p.id || d.worker == p.id));
+                let role = if on_a_date {
+                    OccupantRole::Guest
+                } else if p.work == Work::Building(b) && p.goal == Goal::Work {
+                    OccupantRole::Working
+                } else if p.home == Some(b) {
+                    OccupantRole::Living
+                } else {
+                    OccupantRole::Visiting
+                };
+                Occupant { id: p.id, role }
+            })
+            .collect()
     }
 
     /// Buildings with someone working inside right now.
@@ -1740,6 +1779,54 @@ mod tests {
             .unwrap()
             .id;
         assert!(!w.swap(inside, from, spot));
+    }
+
+    #[test]
+    fn inside_lists_workers_residents_guests_and_visitors() {
+        let c = city();
+        let mut w = world(&c);
+        run_to(&mut w, &c, tick_at(12 * 60, 1));
+        let tower = c
+            .buildings
+            .iter()
+            .find(|b| b.kind == BuildingKind::CorpTower)
+            .unwrap()
+            .id;
+        let at_work = w.inside(tower);
+        assert!(!at_work.is_empty(), "a tower has people at noon");
+        assert!(at_work.iter().all(|o| o.role == OccupantRole::Working));
+        assert!(
+            at_work.windows(2).all(|p| p[0].id < p[1].id),
+            "sorted by id"
+        );
+        for o in &at_work {
+            let p = &w.people()[o.id.0 as usize];
+            assert_eq!(p.profession, "corp_drone");
+            assert_eq!(p.whereabouts, Whereabouts::Inside(tower));
+        }
+        run_to(&mut w, &c, tick_at(3 * 60, 2));
+        let block = c
+            .buildings
+            .iter()
+            .find(|b| {
+                b.kind == BuildingKind::Megablock
+                    && w.inside(b.id)
+                        .iter()
+                        .any(|o| o.role == OccupantRole::Living)
+            })
+            .expect("a megablock with people home at three");
+        let home = w.inside(block.id);
+        for o in home.iter().filter(|o| o.role == OccupantRole::Living) {
+            assert_eq!(w.people()[o.id.0 as usize].home, Some(block.id));
+        }
+        assert!(
+            w.inside(tower)
+                .iter()
+                .all(|o| o.role != OccupantRole::Working),
+            "nobody works the tower at three"
+        );
+        let shop = c.buildings.iter().find(|b| !b.kind.is_closed()).unwrap();
+        let _ = w.inside(shop.id);
     }
 
     #[test]

@@ -43,6 +43,8 @@ pub struct AppState {
     pub people: sim::People,
     /// The living city, once there is a city.
     pub world: Option<sim::World>,
+    /// The floors walked into this session.
+    pub interiors: crate::interiors::Interiors,
     /// Items lying in the city.
     pub ground: game::Ground,
     /// Ability effects in flight, oldest first.
@@ -64,7 +66,7 @@ pub struct AppState {
 #[derive(Clone, Debug, PartialEq)]
 pub struct FxInstance {
     pub fx: game::Fx,
-    pub stratum: citygen::StratumKind,
+    pub place: citygen::Place,
     pub origin: citygen::Pos,
     /// The ability's radius: Scan or Ping.
     pub radius: i32,
@@ -115,6 +117,7 @@ impl AppState {
             character,
             people,
             world: None,
+            interiors: Default::default(),
             ground: game::Ground::default(),
             fx: Vec::new(),
             repaint: false,
@@ -175,6 +178,7 @@ impl AppState {
             self.tick,
         ));
         self.city = Some(city);
+        self.interiors = Default::default();
         self.player = None;
         self.fx.clear();
         self.deck_tab = Tab::Skills;
@@ -613,7 +617,7 @@ mod tests {
         let mut st = AppState::new();
         let at = |fx: game::Fx| FxInstance {
             fx,
-            stratum: citygen::StratumKind::Street,
+            place: citygen::Place::Stratum(citygen::StratumKind::Street),
             origin: citygen::Pos::new(0, 0),
             radius: 5,
             started: 100,
@@ -666,7 +670,7 @@ mod tests {
         st.player = Some(crate::walker::Player::spawn(&city, 1));
         st.fx.push(FxInstance {
             fx: game::Fx::Kick(4),
-            stratum: citygen::StratumKind::Street,
+            place: citygen::Place::Stratum(citygen::StratumKind::Street),
             origin: citygen::Pos::new(0, 0),
             radius: 0,
             started: 0,

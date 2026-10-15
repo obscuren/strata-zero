@@ -1,23 +1,23 @@
-//! Items lying in the city: piles of stacks per stratum and position.
+//! Items lying in the city: piles of stacks per place and position.
 
 use crate::character::Stack;
 use crate::model::ItemId;
-use citygen::{Pos, StratumKind};
+use citygen::{Place, Pos};
 use std::collections::HashMap;
 
-/// Everything lying on the ground, keyed by stratum and tile.
+/// Everything lying on the ground, keyed by place (a stratum or a floor) and tile.
 #[derive(Clone, Debug, Default)]
 pub struct Ground {
-    piles: HashMap<(StratumKind, Pos), Vec<Stack>>,
+    piles: HashMap<(Place, Pos), Vec<Stack>>,
 }
 
 impl Ground {
     /// Puts `qty` of an item on a tile, merging into a stack of the same item.
-    pub fn add(&mut self, k: StratumKind, p: Pos, item: ItemId, qty: u32) {
+    pub fn add(&mut self, place: Place, p: Pos, item: ItemId, qty: u32) {
         if qty == 0 {
             return;
         }
-        let pile = self.piles.entry((k, p)).or_default();
+        let pile = self.piles.entry((place, p)).or_default();
         match pile.iter_mut().find(|s| s.item == item) {
             Some(s) => s.qty = s.qty.saturating_add(qty),
             None => pile.push(Stack { item, qty }),
@@ -26,8 +26,8 @@ impl Ground {
 
     /// Takes up to `qty` of an item from a tile and returns how many came away.
     /// Empty stacks and piles disappear.
-    pub fn take(&mut self, k: StratumKind, p: Pos, item: &ItemId, qty: u32) -> u32 {
-        let Some(pile) = self.piles.get_mut(&(k, p)) else {
+    pub fn take(&mut self, place: Place, p: Pos, item: &ItemId, qty: u32) -> u32 {
+        let Some(pile) = self.piles.get_mut(&(place, p)) else {
             return 0;
         };
         let Some(i) = pile.iter().position(|s| &s.item == item) else {
@@ -39,24 +39,27 @@ impl Ground {
             pile.remove(i);
         }
         if pile.is_empty() {
-            self.piles.remove(&(k, p));
+            self.piles.remove(&(place, p));
         }
         n
     }
 
-    pub fn at(&self, k: StratumKind, p: Pos) -> &[Stack] {
-        self.piles.get(&(k, p)).map(|v| v.as_slice()).unwrap_or(&[])
+    pub fn at(&self, place: Place, p: Pos) -> &[Stack] {
+        self.piles
+            .get(&(place, p))
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
-    pub fn clear(&mut self, k: StratumKind, p: Pos) {
-        self.piles.remove(&(k, p));
+    pub fn clear(&mut self, place: Place, p: Pos) {
+        self.piles.remove(&(place, p));
     }
 
-    /// Every pile on one stratum.
-    pub fn on(&self, k: StratumKind) -> impl Iterator<Item = (Pos, &[Stack])> {
+    /// Every pile on one map.
+    pub fn on(&self, place: Place) -> impl Iterator<Item = (Pos, &[Stack])> {
         self.piles
             .iter()
-            .filter(move |((s, _), _)| *s == k)
+            .filter(move |((s, _), _)| *s == place)
             .map(|((_, p), v)| (*p, v.as_slice()))
     }
 }
@@ -64,11 +67,12 @@ impl Ground {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use citygen::{BuildingId, StratumKind};
 
     #[test]
     fn piles_merge_take_and_vanish() {
         let mut g = Ground::default();
-        let (k, p) = (StratumKind::Street, Pos::new(3, 4));
+        let (k, p) = (Place::Stratum(StratumKind::Street), Pos::new(3, 4));
         let coil = ItemId::new("copper_coil");
         g.add(k, p, coil.clone(), 2);
         g.add(k, p, coil.clone(), 3);
@@ -84,7 +88,7 @@ mod tests {
         assert_eq!(g.take(k, p, &coil, 4), 4);
         assert_eq!(g.take(k, p, &coil, 4), 1, "only one left");
         assert_eq!(g.at(k, p).len(), 1, "empty stacks vanish");
-        assert!(g.at(StratumKind::Undercity, p).is_empty());
+        assert!(g.at(Place::Stratum(StratumKind::Undercity), p).is_empty());
         assert_eq!(g.on(k).count(), 1);
         assert_eq!(g.take(k, p, &coil, 1), 0, "nothing left to take");
         g.clear(k, p);
@@ -93,5 +97,27 @@ mod tests {
         g.add(k, p, coil.clone(), u32::MAX);
         g.add(k, p, coil.clone(), 5);
         assert_eq!(g.at(k, p)[0].qty, u32::MAX, "saturates");
+    }
+
+    #[test]
+    fn piles_are_kept_per_place() {
+        let mut g = Ground::default();
+        let p = Pos::new(3, 4);
+        let street = Place::Stratum(StratumKind::Street);
+        let lobby = Place::Floor {
+            building: BuildingId(2),
+            level: 0,
+        };
+        let upstairs = Place::Floor {
+            building: BuildingId(2),
+            level: 3,
+        };
+        g.add(street, p, ItemId::new("copper_coil"), 1);
+        g.add(lobby, p, ItemId::new("dead_phone"), 2);
+        assert_eq!(g.at(street, p)[0].item, ItemId::new("copper_coil"));
+        assert_eq!(g.at(lobby, p)[0].qty, 2);
+        assert!(g.at(upstairs, p).is_empty());
+        assert_eq!(g.on(lobby).count(), 1);
+        assert_eq!(g.on(street).count(), 1);
     }
 }

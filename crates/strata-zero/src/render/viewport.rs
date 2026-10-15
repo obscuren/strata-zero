@@ -1,14 +1,14 @@
 //! The map viewport: camera, screen/tile mapping and the MapView widget with overlays.
 
 use crate::render::lighting::apply_vis;
+use crate::render::map::{MapRef, TileMap};
 use crate::render::style::StylePack;
 use crate::render::tileset::{MASK_E, MASK_N, MASK_S, MASK_W, cell, connects};
-use crate::render::{Cell, ConnDir, RenderCtx, Visibility};
-use citygen::{City, Connector, Grid, Pos, Size, StratumKind};
+use crate::render::{Cell, RenderCtx, Visibility};
+use citygen::{Grid, Pos, Size, StratumKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
-use std::collections::HashMap;
 
 /// Eased camera centred on a tile.
 #[derive(Clone, Copy, Debug, Default)]
@@ -107,11 +107,9 @@ pub fn tile_to_screen(area: Rect, origin: Pos, p: Pos) -> Option<(u16, u16)> {
 
 /// Something drawn over the base tiles.
 pub trait Overlay {
-    #[allow(clippy::too_many_arguments)]
     fn draw(
         &self,
-        city: &City,
-        stratum: StratumKind,
+        map: &MapRef,
         origin: Pos,
         area: Rect,
         tick: u64,
@@ -120,10 +118,9 @@ pub trait Overlay {
     );
 }
 
-/// Draws one stratum of a city into an area, then the overlays, then the cursor.
+/// Draws one map into an area, then the overlays, then the cursor.
 pub struct MapView<'a> {
-    pub city: &'a City,
-    pub stratum: StratumKind,
+    pub map: &'a MapRef<'a>,
     pub origin: Pos,
     pub tick: u64,
     pub style: &'a StylePack,
@@ -134,9 +131,7 @@ pub struct MapView<'a> {
 
 impl Widget for MapView<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let Some(st) = self.city.stratum(self.stratum) else {
-            return;
-        };
+        let map = self.map;
         let background = Cell {
             ch: ' ',
             fg: self.style.background,
@@ -144,17 +139,12 @@ impl Widget for MapView<'_> {
             bold: false,
             dim: false,
         };
-        let conns: HashMap<Pos, &Connector> = self
-            .city
-            .connectors
-            .iter()
-            .filter(|c| c.serves.contains(&self.stratum))
-            .map(|c| (c.pos, c))
-            .collect();
+        // A floor takes the street's palette tint.
+        let stratum = map.stratum().unwrap_or(StratumKind::Street);
         for sy in area.y..area.bottom() {
             for sx in area.x..area.right() {
                 let p = screen_to_tile(area, self.origin, (sx, sy));
-                let Some(tile) = st.tiles.get(p) else {
+                let Some(tile) = map.tile(p) else {
                     background.write(buf, sx, sy);
                     continue;
                 };
@@ -165,53 +155,32 @@ impl Widget for MapView<'_> {
                     ((0, 1), MASK_S),
                     ((-1, 0), MASK_W),
                 ] {
-                    if let Some(n) = st.tiles.get(p.offset(d.0, d.1))
+                    if let Some(n) = map.tile(p.offset(d.0, d.1))
                         && connects(tile.terrain, n.terrain)
                     {
                         mask |= bit;
                     }
                 }
-                let connector = conns.get(&p).and_then(|c| {
-                    c.serves_from(self.stratum).map(|(below, above)| ConnDir {
-                        kind: c.kind,
-                        up: above.is_some(),
-                        down: below.is_some(),
-                    })
-                });
                 let vis = self
                     .vis
                     .and_then(|g| g.get(p).copied())
                     .unwrap_or(Visibility::Visible);
                 let ctx = RenderCtx {
                     style: self.style,
-                    theme: tile
-                        .district
-                        .and_then(|d| self.city.district_opt(d))
-                        .map(|d| d.theme),
-                    stratum: self.stratum,
-                    light: st.light.get(p).copied().unwrap_or(0),
+                    theme: map.theme(p),
+                    stratum,
+                    light: map.light(p),
                     tick: self.tick,
                     vis,
-                    connector,
-                    kind: tile
-                        .building
-                        .and_then(|b| self.city.building_opt(b))
-                        .map(|b| b.kind),
+                    connector: map.connector(p),
+                    kind: map.kind(p),
                     wall_mask: mask,
                 };
                 apply_vis(cell(tile, &ctx), vis).write(buf, sx, sy);
             }
         }
         for o in self.overlays {
-            o.draw(
-                self.city,
-                self.stratum,
-                self.origin,
-                area,
-                self.tick,
-                buf,
-                self.style,
-            );
+            o.draw(map, self.origin, area, self.tick, buf, self.style);
         }
         if let Some(c) = self.cursor
             && let Some((sx, sy)) = tile_to_screen(area, self.origin, c)
@@ -254,8 +223,7 @@ mod tests {
                 let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
                 t.draw(|f| {
                     MapView {
-                        city: &c,
-                        stratum: StratumKind::Street,
+                        map: &MapRef::stratum_of(&c, StratumKind::Street),
                         origin,
                         tick: 5,
                         style: &s,
@@ -303,8 +271,7 @@ mod tests {
                 for k in StratumKind::PHYSICAL {
                     t.draw(|f| {
                         MapView {
-                            city: g.city(),
-                            stratum: k,
+                            map: &MapRef::stratum_of(g.city(), k),
                             origin: Pos::new(-2, -2),
                             tick: steps as u64,
                             style: &s,

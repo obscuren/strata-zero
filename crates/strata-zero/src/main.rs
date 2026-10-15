@@ -4,6 +4,7 @@ mod actions;
 mod anim;
 mod app;
 mod cli;
+mod interiors;
 mod messages;
 mod render;
 mod save;

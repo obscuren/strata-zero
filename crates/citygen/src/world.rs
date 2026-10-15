@@ -177,6 +177,20 @@ pub enum BuildingKind {
 }
 
 impl BuildingKind {
+    /// Closed buildings are solid on the city maps and open as interiors; stalls,
+    /// small shops and lots stay walk-in.
+    pub fn is_closed(self) -> bool {
+        !matches!(
+            self,
+            BuildingKind::NoodleBar
+                | BuildingKind::Market
+                | BuildingKind::Shop
+                | BuildingKind::Pawn
+                | BuildingKind::Arcade
+                | BuildingKind::Parking
+        )
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             BuildingKind::CorpTower => "corp tower",
@@ -252,6 +266,26 @@ impl StrataSpan {
 
     pub fn is_empty(self) -> bool {
         false
+    }
+}
+
+/// Where a map is: a stratum of the city, or a floor inside a building.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Place {
+    Stratum(StratumKind),
+    Floor { building: BuildingId, level: i32 },
+}
+
+impl Place {
+    pub fn stratum(self) -> Option<StratumKind> {
+        match self {
+            Place::Stratum(k) => Some(k),
+            Place::Floor { .. } => None,
+        }
+    }
+
+    pub fn is_street(self) -> bool {
+        self == Place::Stratum(StratumKind::Street)
     }
 }
 
@@ -387,6 +421,55 @@ impl City {
     /// Panics if the id is unknown; use `building_opt` on a city that may still be generating.
     pub fn building(&self, id: BuildingId) -> &Building {
         &self.buildings[id.index()]
+    }
+
+    /// A closed building's doors on every stratum it spans: the tiles its interior
+    /// joins. Empty for an open building.
+    pub fn portals(&self, b: BuildingId) -> Vec<(StratumKind, Pos)> {
+        let Some(b) = self.building_opt(b) else {
+            return Vec::new();
+        };
+        if !b.kind.is_closed() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for k in b.span.iter() {
+            let tiles: Vec<Pos> = if k == StratumKind::Heights {
+                b.footprint.iter().collect()
+            } else {
+                b.footprint.border().collect()
+            };
+            for p in tiles {
+                if !self
+                    .tile(k, p)
+                    .is_some_and(|t| t.terrain == crate::tile::Terrain::Door)
+                {
+                    continue;
+                }
+                // A door the connectivity repair cut through a facade may face the void;
+                // only a door onto standable ground counts.
+                if k != StratumKind::Heights {
+                    let fp = b.footprint;
+                    let out = if p.x == fp.x {
+                        p.offset(-1, 0)
+                    } else if p.x == fp.right() - 1 {
+                        p.offset(1, 0)
+                    } else if p.y == fp.y {
+                        p.offset(0, -1)
+                    } else {
+                        p.offset(0, 1)
+                    };
+                    let standable = self
+                        .tile(k, out)
+                        .is_some_and(|t| crate::tile::Tile::new(t.terrain).is_walkable());
+                    if !standable {
+                        continue;
+                    }
+                }
+                out.push((k, p));
+            }
+        }
+        out
     }
 
     pub fn building_opt(&self, id: BuildingId) -> Option<&Building> {

@@ -2,6 +2,7 @@
 
 use crate::anim::effects::pulse;
 use crate::render::Rgb;
+use crate::render::map::MapRef;
 use crate::render::style::StylePack;
 use crate::render::tileset::node_glyph;
 use crate::render::viewport::{Overlay, tile_to_screen};
@@ -34,8 +35,7 @@ impl Digital {
 impl Overlay for Digital {
     fn draw(
         &self,
-        city: &City,
-        stratum: StratumKind,
+        map: &MapRef,
         origin: Pos,
         area: Rect,
         tick: u64,
@@ -45,6 +45,11 @@ impl Overlay for Digital {
         if !self.enabled {
             return;
         }
+        // Nodes anchor to the city's strata; a floor shows nothing digital.
+        let Some(stratum) = map.stratum() else {
+            return;
+        };
+        let city = map.city();
         let focus_subnet = self.focus.map(|id| city.net.node(id).subnet);
         if stratum == StratumKind::Net {
             // Nodes are tiles here; only the focused subnet's links are drawn.
@@ -167,8 +172,7 @@ mod tests {
         let draw = |t: &mut Terminal<TestBackend>, stratum, focus| {
             t.draw(|f| {
                 MapView {
-                    city: &c,
-                    stratum,
+                    map: &MapRef::stratum_of(&c, stratum),
                     origin: Pos::new(0, 0),
                     tick: 0,
                     style: &s,
@@ -201,8 +205,7 @@ mod tests {
         };
         t.draw(|f| {
             MapView {
-                city: &c,
-                stratum: k,
+                map: &MapRef::stratum_of(&c, k),
                 origin: Pos::new(0, 0),
                 tick: 0,
                 style: &s,
@@ -249,8 +252,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(80, 40)).unwrap();
         t.draw(|f| {
             MapView {
-                city: &c,
-                stratum: StratumKind::Net,
+                map: &MapRef::stratum_of(&c, StratumKind::Net),
                 origin: Pos::new(0, 0),
                 tick: 0,
                 style: &s,

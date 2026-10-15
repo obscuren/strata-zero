@@ -2,11 +2,12 @@
 
 use crate::anim::effects::{glitch_cells, pulse};
 use crate::app::FxInstance;
+use crate::render::map::MapRef;
 use crate::render::style::StylePack;
 use crate::render::viewport::{Overlay, tile_to_screen};
 use crate::render::{Rgb, Visibility};
 use citygen::rng::hash64;
-use citygen::{City, Grid, Pos, StratumKind};
+use citygen::{Grid, Pos};
 use game::Fx;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -55,8 +56,7 @@ pub struct FxOverlay<'a> {
 impl Overlay for FxOverlay<'_> {
     fn draw(
         &self,
-        city: &City,
-        stratum: StratumKind,
+        map: &MapRef,
         origin: Pos,
         area: Rect,
         tick: u64,
@@ -66,7 +66,7 @@ impl Overlay for FxOverlay<'_> {
         for inst in self
             .fx
             .iter()
-            .filter(|i| i.stratum == stratum && i.started <= tick && tick < i.until())
+            .filter(|i| i.place == map.place() && i.started <= tick && tick < i.until())
         {
             let elapsed = tick - inst.started;
             match inst.fx {
@@ -97,8 +97,7 @@ impl Overlay for FxOverlay<'_> {
                     self.glow(
                         inst,
                         Rgb(colour.0, colour.1, colour.2),
-                        city,
-                        stratum,
+                        map,
                         origin,
                         area,
                         tick,
@@ -323,13 +322,17 @@ impl FxOverlay<'_> {
         &self,
         inst: &FxInstance,
         colour: Rgb,
-        city: &City,
-        stratum: StratumKind,
+        map: &MapRef,
         origin: Pos,
         area: Rect,
         tick: u64,
         buf: &mut Buffer,
     ) {
+        // Connectors live on the city's strata; a floor's lifts get no marker yet.
+        let Some(stratum) = map.stratum() else {
+            return;
+        };
+        let city = map.city();
         let glow = colour.scale(0.5 + 0.5 * pulse(tick, 20)).to_color();
         for k in city
             .connectors
@@ -359,7 +362,7 @@ mod tests {
     use crate::render::style::StylePack;
     use crate::render::viewport::{MapView, Overlay};
     use crate::walker::Player;
-    use citygen::{City, GenParams, Generator, Pos, SizePreset, StratumKind};
+    use citygen::{City, GenParams, Generator, Place, Pos, SizePreset, StratumKind};
     use game::Fx;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -389,8 +392,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(size.0, size.1)).unwrap();
         t.draw(|f| {
             MapView {
-                city: c,
-                stratum,
+                map: &MapRef::stratum_of(c, stratum),
                 origin: Pos::new(0, 0),
                 tick,
                 style: s,
@@ -407,7 +409,7 @@ mod tests {
     fn instance(fx: Fx, origin: Pos, radius: i32, revealed: Vec<Pos>) -> FxInstance {
         FxInstance {
             fx,
-            stratum: StratumKind::Street,
+            place: Place::Stratum(StratumKind::Street),
             origin,
             radius,
             started: 100,
@@ -482,7 +484,7 @@ mod tests {
         let c = city();
         let s = StylePack::load().unwrap();
         let mut p = Player::spawn(&c, 1);
-        p.update_fov(&c, 0);
+        p.update_fov(&MapRef::stratum_of(&c, StratumKind::Street), 0);
         let unseen = (0..60)
             .flat_map(|y| (0..120).map(move |x| Pos::new(x, y)))
             .find(|q| p.vis()[*q] == Visibility::Unseen)
@@ -502,7 +504,7 @@ mod tests {
         let buf = render(
             &c,
             &s,
-            p.stratum,
+            StratumKind::Street,
             150,
             Some(p.vis()),
             &[&overlay],
@@ -522,8 +524,24 @@ mod tests {
             vis: None,
         };
         for tick in [100u64, 106, 111] {
-            render(&c, &s, p.stratum, tick, None, &[&overlay], (120, 60));
-            render(&c, &s, p.stratum, tick, None, &[&overlay], (20, 10));
+            render(
+                &c,
+                &s,
+                StratumKind::Street,
+                tick,
+                None,
+                &[&overlay],
+                (120, 60),
+            );
+            render(
+                &c,
+                &s,
+                StratumKind::Street,
+                tick,
+                None,
+                &[&overlay],
+                (20, 10),
+            );
         }
         // No targets: nothing drawn.
         let none = aimed(
@@ -538,9 +556,17 @@ mod tests {
             fx: std::slice::from_ref(&none),
             vis: None,
         };
-        let plain = render(&c, &s, p.stratum, 106, None, &[], (120, 60));
+        let plain = render(&c, &s, StratumKind::Street, 106, None, &[], (120, 60));
         assert_eq!(
-            render(&c, &s, p.stratum, 106, None, &[&overlay], (120, 60)),
+            render(
+                &c,
+                &s,
+                StratumKind::Street,
+                106,
+                None,
+                &[&overlay],
+                (120, 60)
+            ),
             plain
         );
     }
@@ -552,8 +578,8 @@ mod tests {
         let c = city();
         let s = StylePack::load().unwrap();
         let mut p = Player::spawn(&c, 1);
-        p.update_fov(&c, 0);
-        let revealed = p.reveal(&c, 12);
+        p.update_fov(&MapRef::stratum_of(&c, StratumKind::Street), 0);
+        let revealed = p.reveal(&MapRef::stratum_of(&c, StratumKind::Street), 12);
         let origin = p.pos;
         // Tick 106: elapsed 6 of 12, the front sits at half the reach, 13.4 cells.
         let r = reach(12) * 6.0 / 12.0;
@@ -586,7 +612,7 @@ mod tests {
         let buf = render(
             &c,
             &s,
-            p.stratum,
+            StratumKind::Street,
             106,
             Some(p.vis()),
             &[&overlay],
@@ -615,11 +641,19 @@ mod tests {
         );
         // A square corner of the scan (chebyshev 12, screen distance beyond the front) is
         // still hidden now and painted by the time the wave ends.
-        let plain = render(&c, &s, p.stratum, 200, Some(p.vis()), &[], (120, 60));
+        let plain = render(
+            &c,
+            &s,
+            StratumKind::Street,
+            200,
+            Some(p.vis()),
+            &[],
+            (120, 60),
+        );
         let after = render(
             &c,
             &s,
-            p.stratum,
+            StratumKind::Street,
             200,
             Some(p.vis()),
             &[&overlay],
@@ -672,12 +706,12 @@ mod tests {
         let c = city();
         let s = StylePack::load().unwrap();
         let mut p = Player::spawn(&c, 1);
-        p.update_fov(&c, 0);
+        p.update_fov(&MapRef::stratum_of(&c, StratumKind::Street), 0);
         let k = c
             .connectors
             .iter()
             .find(|k| {
-                k.serves.contains(&p.stratum)
+                k.serves.contains(&StratumKind::Street)
                     && k.pos.chebyshev(p.pos) <= 24
                     && p.vis()[k.pos] != Visibility::Visible
             })
@@ -698,7 +732,7 @@ mod tests {
         let buf = render(
             &c,
             &s,
-            p.stratum,
+            StratumKind::Street,
             110,
             Some(p.vis()),
             &[&overlay],
@@ -718,7 +752,7 @@ mod tests {
         let c = city();
         let s = StylePack::load().unwrap();
         let mut kick = instance(Fx::Kick(12), Pos::new(10, 10), 0, Vec::new());
-        kick.stratum = StratumKind::Net;
+        kick.place = Place::Stratum(StratumKind::Net);
         let mut bolt = aimed(
             Fx::Bolt {
                 colour: BOLT,
@@ -727,7 +761,7 @@ mod tests {
             Pos::new(40, 30),
             vec![Pos::new(52, 21)],
         );
-        bolt.stratum = StratumKind::Net;
+        bolt.place = Place::Stratum(StratumKind::Net);
         let mut mark = aimed(
             Fx::Mark {
                 colour: BOLT,
@@ -736,7 +770,7 @@ mod tests {
             Pos::new(40, 30),
             vec![Pos::new(52, 21)],
         );
-        mark.stratum = StratumKind::Net;
+        mark.place = Place::Stratum(StratumKind::Net);
         let all = [kick, bolt, mark];
         // Each shape really draws at this tick on its own stratum, so the Street
         // check below cannot pass because a shape had already ended.

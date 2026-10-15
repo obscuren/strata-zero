@@ -7,9 +7,10 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 pub const MAGIC: &[u8; 4] = b"CITY";
-pub const FORMAT_VERSION: u16 = 2;
+/// 3: `Terrain::Mass` and `Feature::Furniture` joined the tile enums.
+pub const FORMAT_VERSION: u16 = 3;
 /// Versions whose header this build can read (for listing); only `FORMAT_VERSION` loads.
-const READABLE_VERSIONS: [u16; 2] = [1, 2];
+const READABLE_VERSIONS: [u16; 3] = [1, 2, 3];
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Header {
@@ -295,7 +296,35 @@ mod tests {
             err.contains("older version") && err.contains("seed 42"),
             "{err}"
         );
-        assert_eq!(FORMAT_VERSION, 2);
+        assert_eq!(FORMAT_VERSION, 3);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn version_two_files_are_refused_as_older() {
+        let dir = std::env::temp_dir().join(format!("strata-zero-v2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("old.city");
+        let c = Generator::run(GenParams {
+            seed: 42,
+            size: SizePreset::Custom { w: 80, h: 40 },
+            districts: 4,
+            ..Default::default()
+        })
+        .unwrap();
+        save_city(&path, &c).unwrap();
+        let mut bytes = std::fs::read(&path).unwrap();
+        // The version sits right after the magic and the header length.
+        let pos = bytes
+            .windows(2)
+            .position(|w| w == FORMAT_VERSION.to_le_bytes())
+            .expect("the version bytes");
+        bytes[pos..pos + 2].copy_from_slice(&2u16.to_le_bytes());
+        std::fs::write(&path, bytes).unwrap();
+        let err = load_city(&path).unwrap_err().to_string();
+        assert!(
+            err.contains("older version") && err.contains("seed 42"),
+            "{err}"
+        );
     }
 }
