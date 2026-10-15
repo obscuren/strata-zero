@@ -33,6 +33,8 @@ pub struct Guard {
     pub pos: Pos,
     pub grade: IceGrade,
     pub beat: Vec<Pos>,
+    /// Standing, or lifted by a crack or a break.
+    pub standing: bool,
 }
 
 /// The inside of a construct.
@@ -59,9 +61,16 @@ impl Construct {
 
     /// The index of the guard standing on a tile; a lifted guard is not there.
     pub fn guard_at(&self, p: Pos) -> Option<usize> {
-        self.guards
-            .iter()
-            .position(|g| g.pos == p && matches!(self.tiles[p].feature, Some(Feature::Ice(_))))
+        self.guards.iter().position(|g| g.pos == p && g.standing)
+    }
+
+    /// The tile's feature follows whoever stands on it.
+    fn refresh_ice(&mut self, p: Pos) {
+        if !self.tiles.in_bounds(p) {
+            return;
+        }
+        let standing = self.guards.iter().find(|g| g.pos == p && g.standing);
+        self.tiles[p].feature = standing.map(|g| Feature::Ice(g.grade));
     }
 
     pub fn vault_room(&self) -> Option<Rect> {
@@ -78,27 +87,30 @@ impl Construct {
             .then_some(last)
     }
 
-    /// Lifts or restores a guard: its tile's feature, and with it its walkability.
+    /// Lifts or restores a guard: its tile's feature, and with it its walkability. A
+    /// guard never stands up under another standing guard.
     pub fn set_guard(&mut self, index: usize, standing: bool) {
-        let Some((pos, grade)) = self.guards.get(index).map(|g| (g.pos, g.grade)) else {
+        let Some(pos) = self.guards.get(index).map(|g| g.pos) else {
             return;
         };
-        self.tiles[pos].feature = standing.then_some(Feature::Ice(grade));
+        if standing && self.guard_at(pos).is_some_and(|i| i != index) {
+            return;
+        }
+        self.guards[index].standing = standing;
+        self.refresh_ice(pos);
     }
 
-    /// Walks a standing guard to a tile: the feature travels with it.
+    /// Walks a guard to a tile: the feature travels with it.
     pub fn move_guard(&mut self, index: usize, to: Pos) {
-        let Some((from, grade)) = self.guards.get(index).map(|g| (g.pos, g.grade)) else {
+        let Some(from) = self.guards.get(index).map(|g| g.pos) else {
             return;
         };
         if !self.tiles.in_bounds(to) || from == to {
             return;
         }
-        if matches!(self.tiles[from].feature, Some(Feature::Ice(_))) {
-            self.tiles[from].feature = None;
-            self.tiles[to].feature = Some(Feature::Ice(grade));
-        }
         self.guards[index].pos = to;
+        self.refresh_ice(from);
+        self.refresh_ice(to);
     }
 }
 
@@ -276,6 +288,7 @@ pub fn generate_construct(city: &City, b: BuildingId) -> Option<Construct> {
             } else {
                 spine[..=mid].to_vec()
             },
+            standing: true,
         });
         if has_vault && security >= GREY_THRESHOLD {
             let grade = if security >= BLACK_THRESHOLD {
@@ -288,6 +301,7 @@ pub fn generate_construct(city: &City, b: BuildingId) -> Option<Construct> {
                 pos: end_door,
                 grade,
                 beat: spine[mid..].to_vec(),
+                standing: true,
             });
         }
     }

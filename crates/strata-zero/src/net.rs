@@ -412,16 +412,35 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
             st.net.run = None;
             return None;
         };
+        // The piece must still stand beside you.
+        let in_reach = st
+            .player
+            .as_ref()
+            .zip(st.constructs.get(b))
+            .is_some_and(|(p, k)| {
+                k.guards
+                    .get(index)
+                    .is_some_and(|g| g.standing && g.pos.chebyshev(p.pos) <= 1)
+            });
+        if !in_reach {
+            st.net.run = None;
+            let line = "attack · out of reach".to_string();
+            st.say(line.clone());
+            return Some(line);
+        }
         let line = if ok {
             let mut damage = 2 * spec.rating;
             if st.character.flags(&st.content).contains("black_ice") {
                 damage += 1;
             }
             let grade = st.constructs.get(b).map(|k| k.guards[index].grade)?;
+            let seen = st.player.as_ref()?.pos;
             let left = {
                 let states = st.net.ice.get_mut(&b)?;
                 let ice = states.get_mut(index)?;
                 ice.integrity = ice.integrity.saturating_sub(damage);
+                // A hit piece turns on you.
+                ice.mode = IceMode::Awake { seen, lost: 0 };
                 ice.integrity
             };
             if left == 0 {
@@ -733,10 +752,11 @@ pub fn ice_turn(st: &mut AppState) {
         if hits {
             hit(st, b, i);
         }
-        if st
-            .player
-            .as_ref()
-            .is_none_or(|p| p.place != Place::Construct(b))
+        if st.net.death.is_some()
+            || st
+                .player
+                .as_ref()
+                .is_none_or(|p| p.place != Place::Construct(b))
         {
             return;
         }

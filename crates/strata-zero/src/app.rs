@@ -185,6 +185,8 @@ impl AppState {
         ));
         self.city = Some(city);
         self.interiors = Default::default();
+        self.constructs = Default::default();
+        self.net = Default::default();
         self.player = None;
         self.fx.clear();
         self.deck_tab = Tab::Skills;

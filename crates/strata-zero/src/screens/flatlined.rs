@@ -36,7 +36,15 @@ impl Screen for Flatlined {
         if keys.is_empty() || st.tick < self.opened + 10 {
             return ScreenCmd::Stay;
         }
-        st.net.death = None;
+        // The runner is gone with the session they ran: a fresh one stands ready.
+        st.net = Default::default();
+        st.constructs = Default::default();
+        if let Some(fresh) =
+            game::Character::from_template(&st.content, &game::TemplateId::new("vex"))
+        {
+            st.character = fresh;
+        }
+        st.player = None;
         ScreenCmd::Switch {
             to: Box::new(Title::new(st.tick)),
             fx: TransitionKind::Glitch,
