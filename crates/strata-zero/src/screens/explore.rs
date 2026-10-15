@@ -611,7 +611,9 @@ impl MapScreen {
         }
         // Inside a construct: the programs that apply to the node or the ICE at hand.
         let mut title = "HERE";
-        if let Place::Construct(b) = place {
+        if let Place::Construct(b) = place
+            && st.character.deck(&st.content).is_some()
+        {
             let now = st.net.now(st);
             let security = st.constructs.get(b).map(|k| k.security).unwrap_or(0);
             let targets = crate::net::targets_near(st, b, pos);
@@ -3933,5 +3935,145 @@ mod tests {
         st.net.alarm(b, now);
         let text = draw_screen(&s, &st, 120, 40);
         assert!(text.contains("ALERT · 60 min"), "{text}");
+    }
+
+    #[test]
+    fn nothing_runs_without_a_deck() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let (lock, lock_pos) = node_of(&st, b, NodeKind::DoorLock);
+        let here = beside(&st, b, lock_pos);
+        stand(&mut st, &mut s, Place::Construct(b), here);
+        st.character.equipment.remove(&game::Slot::Deck);
+        assert_eq!(st.character.loaded.len(), 2, "the list is kept");
+        assert_eq!(
+            crate::net::start_run(&mut st, ItemId::new("crack"), game::HackTarget::Node(lock))
+                .unwrap_err(),
+            "no deck jacked"
+        );
+        let ScreenCmd::Push { to: here_popup, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens a popup")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*here_popup, &st, 120, 40);
+        assert!(!text.contains("crack ·") && text.contains("HERE"), "{text}");
+    }
+
+    #[test]
+    fn the_here_section_reads_the_node_under_you_not_its_kind() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let city = st.city.as_ref().unwrap().clone();
+        let b = city
+            .buildings
+            .iter()
+            .find(|b| {
+                city.net
+                    .nodes
+                    .iter()
+                    .filter(|n| n.building == Some(b.id) && n.kind == NodeKind::Camera)
+                    .count()
+                    >= 2
+            })
+            .expect("a building with two cameras")
+            .id;
+        {
+            let p = st.player.as_mut().unwrap();
+            p.body = Some((Place::Stratum(StratumKind::Street), p.pos));
+            p.place = Place::Stratum(StratumKind::Net);
+        }
+        crate::constructs::enter_construct(&mut st, b).unwrap();
+        s.place = Place::Construct(b);
+        let k = st.constructs.get(b).unwrap();
+        let cameras: Vec<(citygen::NodeId, Pos)> = k
+            .nodes
+            .iter()
+            .filter(|(id, _)| city.net.node(*id).kind == NodeKind::Camera)
+            .copied()
+            .collect();
+        assert!(cameras.len() >= 2);
+        let now = st.net.now(&st);
+        st.net.land(
+            b,
+            game::HackTarget::Node(cameras[0].0),
+            game::Target::Node(NodeKind::Camera),
+            game::Op::Blind,
+            now,
+        );
+        stand(&mut st, &mut s, Place::Construct(b), cameras[1].1);
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(
+            text.contains("◆ camera") && !text.contains("camera · blind"),
+            "{text}"
+        );
+        stand(&mut st, &mut s, Place::Construct(b), cameras[0].1);
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(text.contains("camera · blind"), "{text}");
+    }
+
+    #[test]
+    fn an_alarm_mid_run_keeps_the_run_and_a_jack_out_drops_it() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        st.net.force_roll = Some(10);
+        let (lock, _) = node_of(&st, b, NodeKind::DoorLock);
+        let (vault, vault_pos) = node_of(&st, b, NodeKind::DataVault);
+        let here = beside(&st, b, vault_pos);
+        stand(&mut st, &mut s, Place::Construct(b), here);
+        let now = st.net.now(&st);
+        st.net.land(
+            b,
+            game::HackTarget::Node(lock),
+            game::Target::Node(NodeKind::DoorLock),
+            game::Op::Crack,
+            now,
+        );
+        crate::net::start_run(&mut st, ItemId::new("copy"), game::HackTarget::Node(vault)).unwrap();
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        let at = game::At {
+            place: Place::Construct(b),
+            pos: here,
+        };
+        crate::screens::console::run(&mut st, at, "alarm").unwrap();
+        assert!(st.net.run.is_some(), "the alarm does not clear the run");
+        assert!(!st.net.unlocked(b, now), "the lock hack expired");
+        let until = st.net.traces[&b].alert_until;
+        crate::screens::console::run(&mut st, at, "alarm").unwrap();
+        assert_eq!(
+            st.net.traces[&b].alert_until, until,
+            "no second alarm while alert"
+        );
+        // Jacking out drops the run; the construct keeps its heat and its map.
+        let heat = st.net.traces[&b].heat;
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert!(!st.player.as_ref().unwrap().jacked_in());
+        assert!(st.net.run.is_none());
+        assert_eq!(st.net.traces[&b].heat, heat);
+        assert_eq!(st.constructs.generated(), 1);
+        // A server copy gives paydata.
+        {
+            let p = st.player.as_mut().unwrap();
+            p.body = Some((p.place, p.pos));
+            p.place = Place::Stratum(StratumKind::Net);
+        }
+        let (server, server_pos) = node_of(&st, b, NodeKind::Server);
+        let here = beside(&st, b, server_pos);
+        stand(&mut st, &mut s, Place::Construct(b), here);
+        let before = st.character.count(&ItemId::new("paydata"));
+        crate::net::start_run(&mut st, ItemId::new("copy"), game::HackTarget::Node(server))
+            .unwrap();
+        for _ in 0..4 {
+            s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        }
+        assert_eq!(
+            st.character.count(&ItemId::new("paydata")),
+            before + 1,
+            "{:?}",
+            last(&st)
+        );
     }
 }

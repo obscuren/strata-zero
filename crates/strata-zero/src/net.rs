@@ -60,7 +60,14 @@ impl NetState {
 
     /// Records a landed hack; a backdoor is forever.
     pub fn land(&mut self, b: BuildingId, target: HackTarget, kind: Target, op: Op, now: u64) {
-        let until = (op != Op::Backdoor).then_some(now + HACK_MINUTES);
+        // A hack lasts an hour, or until the building's alert ends, whichever is sooner.
+        let alert_end = self
+            .traces
+            .get(&b)
+            .and_then(|t| t.alert_until)
+            .filter(|u| now < *u);
+        let until = (op != Op::Backdoor)
+            .then(|| alert_end.map_or(now + HACK_MINUTES, |u| u.min(now + HACK_MINUTES)));
         if op == Op::Backdoor {
             self.backdoors.insert(b);
         }
@@ -211,6 +218,9 @@ pub fn start_run(st: &mut AppState, program: ItemId, target: HackTarget) -> Resu
     let Some(Place::Construct(b)) = st.player.as_ref().map(|p| p.place) else {
         return Err("not in a construct".to_string());
     };
+    if st.character.deck(&st.content).is_none() {
+        return Err("no deck jacked".to_string());
+    }
     if !st.character.loaded.contains(&program) {
         return Err("that program is not loaded".to_string());
     }
@@ -539,6 +549,24 @@ mod tests {
         assert!(net.backdoors.contains(&b(1)));
         net.alarm(b(1), 30);
         assert!(net.backdoors.contains(&b(1)));
+        // A hack landed during the alert ends with the alert, a backdoor does not.
+        let mut net = NetState::default();
+        net.trace(b(1)).add(game::ALARM_HEAT, 20);
+        net.alarm(b(1), 20);
+        net.land(
+            b(1),
+            HackTarget::Guard {
+                building: b(1),
+                index: 1,
+            },
+            Target::Guard(IceGrade::Grey),
+            Op::Crack,
+            25,
+        );
+        assert_eq!(net.hacks[0].until, Some(20 + game::ALERT_MINUTES));
+        let mut constructs = crate::constructs::Constructs::default();
+        net.minute(20 + game::ALERT_MINUTES, None, &mut constructs);
+        assert!(net.hacks.is_empty(), "{:?}", net.hacks);
         // Cooling.
         assert_eq!(net.cooling(0), None);
         net.cooling_until = Some(15);

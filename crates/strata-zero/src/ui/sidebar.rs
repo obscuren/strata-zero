@@ -221,20 +221,14 @@ pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
         if let Some(t) = v.map.tile(v.focus) {
             match t.feature {
                 Some(Feature::Node(k)) => {
-                    let id = city
-                        .net
-                        .nodes
-                        .iter()
-                        .find(|n| {
-                            n.building == Some(b) && n.kind == k && v.net.copied(n.id, v.now)
-                                || n.building == Some(b)
-                                    && n.kind == k
-                                    && v.net.blinded(n.id, v.now)
-                        })
-                        .map(|n| n.id);
-                    let state = match (k, id) {
-                        (NodeKind::Camera, Some(_)) => " · blind",
-                        (NodeKind::DataVault | NodeKind::Server, Some(_)) => " · copied",
+                    // The node under the focus, not any node of its kind.
+                    let id = match &v.map {
+                        MapRef::Construct(m) => m.construct.node_at(v.focus),
+                        _ => None,
+                    };
+                    let state = match id {
+                        Some(id) if v.net.blinded(id, v.now) => " · blind",
+                        Some(id) if v.net.copied(id, v.now) => " · copied",
                         _ => "",
                     };
                     out.push(plain(format!(" ◆ {}{state}", k.label())));
