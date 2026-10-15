@@ -726,4 +726,22 @@ mod tests {
             }
         }
     }
+
+    /// A cracked lock always opens something: every closed building keeps at least
+    /// one locked room on some floor.
+    #[test]
+    fn every_closed_building_keeps_a_locked_room() {
+        let c = crate::generate::cyberspace::tests::city();
+        let mut seen = std::collections::HashSet::new();
+        for b in &c.buildings {
+            let Some(plan) = FloorPlan::new(&c, b.id) else {
+                continue;
+            };
+            seen.insert(b.kind);
+            let any = (plan.lowest..=plan.top)
+                .any(|l| generate_floor(&c, &plan, l).rooms.iter().any(|r| r.private));
+            assert!(any, "{:?} ({:?}) has nothing locked", b.kind, b.id);
+        }
+        assert!(seen.len() >= 6, "{seen:?}");
+    }
 }

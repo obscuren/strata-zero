@@ -345,11 +345,13 @@ fn land(
     let name = building_name(st, b);
     let line = match (op, kind) {
         (Op::Crack, Target::Guard(_)) => "ICE cracked · the way is open".to_string(),
-        (Op::Crack, Target::Node(NodeKind::DoorLock)) => {
-            format!("lock cracked · {name}'s doors open for an hour")
-        }
-        (Op::Spoof, Target::Node(NodeKind::DoorLock)) => {
-            format!("lock spoofed · {name}'s doors open for an hour")
+        (Op::Crack | Op::Spoof, Target::Node(NodeKind::DoorLock)) => {
+            let verb = if op == Op::Crack {
+                "cracked"
+            } else {
+                "spoofed"
+            };
+            format!("lock {verb} · {name}'s locked doors open for an hour")
         }
         (Op::Spoof, Target::Node(NodeKind::LiftCtrl)) => {
             "lift control spoofed · the lifts answer you".to_string()

@@ -617,7 +617,6 @@ impl MapScreen {
             let now = st.net.now(st);
             let security = st.constructs.get(b).map(|k| k.security).unwrap_or(0);
             let targets = crate::net::targets_near(st, b, pos);
-            let several = targets.len() > 1;
             for (target, what) in targets {
                 let Some(kind) = crate::net::target_kind(st, b, target) else {
                     continue;
@@ -632,11 +631,7 @@ impl MapScreen {
                     let label = spec.op.label();
                     let copied = spec.op == game::Op::Copy
                         && matches!(target, game::HackTarget::Node(id) if st.net.copied(id, now));
-                    let on = if several {
-                        format!(" · {what}")
-                    } else {
-                        String::new()
-                    };
+                    let on = format!(" · {what}");
                     if copied {
                         choices.push(Choice::disabled(
                             key,
@@ -3654,7 +3649,7 @@ mod tests {
         st.tick += 40;
         let text = draw_screen(&*run, &st, 120, 40);
         assert!(text.contains("RUN"), "{text}");
-        assert!(text.contains("crack · 40%"), "{text}");
+        assert!(text.contains("crack · door lock · 40%"), "{text}");
         assert!(text.contains("3 turns · noise 4"), "{text}");
         assert!(!text.contains("blind"), "{text}");
         run.update(&mut st, &[key(KeyCode::Char('a'))]);
@@ -4099,6 +4094,9 @@ mod tests {
         };
         st.tick += 40;
         let text = draw_screen(&*run, &st, 120, 40);
-        assert!(text.contains("crack · out of your reach"), "{text}");
+        assert!(
+            text.contains("crack · door lock · out of your reach"),
+            "{text}"
+        );
     }
 }
