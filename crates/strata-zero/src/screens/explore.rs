@@ -1081,6 +1081,18 @@ impl MapScreen {
 
 impl Screen for MapScreen {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+        // Black ICE killed: the screen reads the cause.
+        if let Some(cause) = st.net.death.clone() {
+            return ScreenCmd::Switch {
+                to: Box::new(crate::screens::flatlined::Flatlined::new(
+                    cause,
+                    &st.character.handle,
+                    st.character.level,
+                    st.tick,
+                )),
+                fx: TransitionKind::Glitch,
+            };
+        }
         if st.tick > self.last_tick + 1 {
             self.fps.resume(Instant::now());
         }
@@ -4512,5 +4524,68 @@ mod tests {
         assert!(!st.player.as_ref().unwrap().jacked_in());
         assert_eq!(st.character.focus, focus, "{:?}", last(&st));
         assert_eq!(last(&st), Some("jacked out"));
+    }
+
+    #[test]
+    fn black_ice_takes_hp_and_the_failsafe_pulls_you_out() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct_at(&mut st, &mut s, 230);
+        let vault_guard = st.constructs.get(b).unwrap().guards[1].clone();
+        assert_eq!(vault_guard.grade, IceGrade::Black);
+        let beside_vault = Pos::new(vault_guard.post.x - 1, vault_guard.post.y);
+        let hp_max = st.character.hp_max(&st.content);
+        assert_eq!(st.character.hp, hp_max);
+        stand(&mut st, &mut s, Place::Construct(b), beside_vault);
+        // 6 + (230 − 230) / 5, less the deck's rating.
+        assert_eq!(st.character.hp, hp_max - 5, "{:?}", last(&st));
+        assert_eq!(
+            last(&st),
+            Some(format!("black ICE hits · hp {}", hp_max - 5).as_str())
+        );
+        // Already under a quarter: the next hit dumps, it does not kill.
+        st.character.hp = hp_max / 4;
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(last(&st), Some("DUMPED · the failsafe pulled you out"));
+        assert!(!st.player.as_ref().unwrap().jacked_in());
+        assert_eq!(st.character.hp, hp_max / 4 - 5, "the hp stays lost");
+        let now = st.net.now(&st);
+        assert_eq!(st.net.cooling(now), Some(crate::net::FAILSAFE_COOLING));
+        assert!(st.net.death.is_none());
+    }
+
+    #[test]
+    fn with_the_failsafe_off_black_ice_kills_and_flatlined_leads_to_the_title() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct_at(&mut st, &mut s, 230);
+        let name = st.city.as_ref().unwrap().building(b).name.clone().unwrap();
+        let vault_guard = st.constructs.get(b).unwrap().guards[1].clone();
+        let beside_vault = Pos::new(vault_guard.post.x - 1, vault_guard.post.y);
+        st.net.failsafe = false;
+        st.character.hp = 4;
+        stand(&mut st, &mut s, Place::Construct(b), beside_vault);
+        assert_eq!(st.character.hp, 0);
+        assert_eq!(
+            st.net.death.as_deref(),
+            Some(format!("black ICE at {name}").as_str())
+        );
+        let ScreenCmd::Switch { to: dead, .. } = s.update(&mut st, &[]) else {
+            panic!("death switches the screen")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*dead, &st, 120, 40);
+        assert!(text.contains("FLATLINED") || text.contains('█'), "{text}");
+        assert!(text.contains(&format!("black ICE at {name}")), "{text}");
+        assert!(
+            text.contains("VEX · level 1") && text.contains("any key"),
+            "{text}"
+        );
+        let mut dead = dead;
+        assert!(matches!(
+            dead.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Switch { .. }
+        ));
+        assert!(st.net.death.is_none());
     }
 }

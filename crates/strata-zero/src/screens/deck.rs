@@ -115,6 +115,8 @@ pub(crate) enum Detail {
     Ability(usize),
     /// A program on the cyberdeck tab, loaded or in the pack.
     Program(ItemId),
+    /// The deck's failsafe toggle.
+    Failsafe,
 }
 
 /// One list row and what the detail pane shows for it (`None` = a header).
@@ -441,6 +443,19 @@ impl Deck {
             tone: Tone::Normal,
             detail: Some(Detail::Item(id.clone())),
         }];
+        rows.push(Row {
+            text: if st.net.failsafe {
+                "◉ failsafe · on".into()
+            } else {
+                "◌ failsafe · off (black ICE can kill you)".into()
+            },
+            tone: if st.net.failsafe {
+                Tone::Normal
+            } else {
+                Tone::Warn
+            },
+            detail: Some(Detail::Failsafe),
+        });
         // The programs loaded, then those in the pack waiting for a slot.
         let loaded: Vec<&game::Item> = st.character.loaded_programs(&st.content).collect();
         if !loaded.is_empty() {
@@ -902,6 +917,16 @@ impl Deck {
             },
             Some(Detail::Item(id)) => Self::item_card(st, id),
             Some(Detail::Program(id)) => Self::program_card(st, id),
+            Some(Detail::Failsafe) => vec![
+                head("FAILSAFE"),
+                dim(if st.net.failsafe { "on" } else { "off" }),
+                plain(""),
+                plain(
+                    "The deck pulls you out at a quarter of your hp when black ICE is on you: focus gone, thirty minutes of cooling, the hp stays lost.",
+                ),
+                plain(""),
+                warn("Off, black ICE can take you to zero. There is no coming back from that."),
+            ],
             Some(Detail::Recipe(i)) => {
                 let r = &st.content.recipes[*i];
                 let skill = st
@@ -1167,6 +1192,19 @@ impl Deck {
                     {
                         let result = perform(st, Action::BuyStat(s));
                         report(st, result);
+                    }
+                }
+                KeyCode::Char(' ') | KeyCode::Enter
+                    if matches!(
+                        rows.get(self.row).and_then(|r| r.detail.as_ref()),
+                        Some(Detail::Failsafe)
+                    ) =>
+                {
+                    st.net.failsafe = !st.net.failsafe;
+                    if st.net.failsafe {
+                        st.say("failsafe on");
+                    } else {
+                        st.warn("failsafe off · black ICE can kill you");
                     }
                 }
                 KeyCode::Char(' ') | KeyCode::Enter
@@ -2571,9 +2609,10 @@ mod tests {
         d.update(&mut st, &[key(KeyCode::Char('6'))]);
         let texts = cyberdeck_texts(&st);
         assert_eq!(texts[0], "▣ Pawnshop deck · 2/2 slots · rating 1");
-        assert_eq!(texts[1], "── loaded ──");
-        assert_eq!(texts[2], "◆ Crack · size 1");
-        assert_eq!(texts[3], "◆ Copy · size 1");
+        assert_eq!(texts[1], "◉ failsafe · on");
+        assert_eq!(texts[2], "── loaded ──");
+        assert_eq!(texts[3], "◆ Crack · size 1");
+        assert_eq!(texts[4], "◆ Copy · size 1");
         assert!(texts.iter().any(|t| t == "── programs ──"), "{texts:?}");
         // The kit's attack waits in the pack: the deck is full.
         let pack = texts.iter().position(|t| t == "── in the pack ──").unwrap();
@@ -2652,5 +2691,33 @@ mod tests {
         st.tick += 40;
         let text = draw(&d, &st, 120, 35);
         assert!(text.contains("loaded"), "{text}");
+    }
+
+    #[test]
+    fn the_cyberdeck_tab_toggles_the_failsafe() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('6'))]);
+        let texts = cyberdeck_texts(&st);
+        assert_eq!(texts[1], "◉ failsafe · on", "{texts:?}");
+        let rows = d.rows(&st);
+        d.row = rows
+            .iter()
+            .position(|r| r.text.contains("failsafe"))
+            .unwrap();
+        st.tick = 60;
+        let text = draw(&d, &st, 120, 35);
+        assert!(
+            text.contains("pulls you out at a quarter of your hp"),
+            "{text}"
+        );
+        d.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert!(!st.net.failsafe);
+        assert_eq!(last(&st), Some("failsafe off · black ICE can kill you"));
+        let texts = cyberdeck_texts(&st);
+        assert_eq!(texts[1], "◌ failsafe · off (black ICE can kill you)");
+        d.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert!(st.net.failsafe);
+        assert_eq!(last(&st), Some("failsafe on"));
     }
 }

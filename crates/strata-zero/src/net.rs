@@ -26,6 +26,8 @@ pub struct Hack {
 
 /// Turns an awake piece waits at the last seen tile before it gives up.
 pub const LOST_TURNS: u8 = 3;
+/// Minutes the deck cools after the failsafe pulls you out.
+pub const FAILSAFE_COOLING: u64 = 30;
 
 /// What a piece of ICE is doing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,7 +46,6 @@ pub struct Ice {
     pub forward: bool,
 }
 
-#[derive(Default)]
 pub struct NetState {
     /// One state per guard of every construct entered.
     pub ice: BTreeMap<BuildingId, Vec<Ice>>,
@@ -52,6 +53,10 @@ pub struct NetState {
     pub mask: u8,
     /// Shield charges: each soaks one hit.
     pub shield: u8,
+    /// The deck pulls you out at a quarter of your HP; off, black ICE can kill you.
+    pub failsafe: bool,
+    /// Set when black ICE killed: what did it. The screen reads and clears it.
+    pub death: Option<String>,
     pub traces: BTreeMap<BuildingId, Trace>,
     pub hacks: Vec<Hack>,
     pub backdoors: BTreeSet<BuildingId>,
@@ -63,6 +68,26 @@ pub struct NetState {
     /// Every roll comes out this way, for tests.
     #[cfg(test)]
     pub force_roll: Option<u8>,
+}
+
+impl Default for NetState {
+    fn default() -> Self {
+        NetState {
+            ice: BTreeMap::new(),
+            mask: 0,
+            shield: 0,
+            failsafe: true,
+            death: None,
+            traces: BTreeMap::new(),
+            hacks: Vec::new(),
+            backdoors: BTreeSet::new(),
+            cooling_until: None,
+            run: None,
+            last_minute: 0,
+            #[cfg(test)]
+            force_roll: None,
+        }
+    }
 }
 
 impl NetState {
@@ -517,10 +542,15 @@ pub fn raise_alarm(st: &mut AppState, b: BuildingId) -> String {
 
 /// Dumped: back to the body hard, the focus gone, the deck cooling.
 pub fn dump(st: &mut AppState, why: &str) {
+    dump_for(st, why, COOLING_MINUTES);
+}
+
+/// Dumped, with the deck cooling for a given stretch.
+pub fn dump_for(st: &mut AppState, why: &str, cooling: u64) {
     let bonus = st.character.sight_bonus(&st.content);
     let now = st.net.now(st);
     st.net.run = None;
-    st.net.cooling_until = Some(now + COOLING_MINUTES);
+    st.net.cooling_until = Some(now + cooling);
     st.character.focus = 0;
     if let (Some(city), Some(player)) = (st.city.as_ref(), st.player.as_mut())
         && player.jack_out(city, bonus).is_ok()
@@ -731,8 +761,21 @@ fn hit(st: &mut AppState, b: BuildingId, i: usize) {
             }
         }
         IceGrade::Black => {
-            let _ = security;
-            st.warn("black ICE hits".to_string());
+            let damage = (6 + security.saturating_sub(230) as u32 / 5)
+                .saturating_sub(armour)
+                .max(1);
+            st.character.hp = st.character.hp.saturating_sub(damage);
+            let hp = st.character.hp;
+            st.warn(format!("black ICE hits · hp {hp}"));
+            let quarter = st.character.hp_max(&st.content) / 4;
+            if st.net.failsafe {
+                if hp <= quarter {
+                    dump_for(st, "the failsafe pulled you out", FAILSAFE_COOLING);
+                }
+            } else if hp == 0 {
+                st.net.run = None;
+                st.net.death = Some(format!("black ICE at {}", building_name(st, b)));
+            }
         }
     }
 }
