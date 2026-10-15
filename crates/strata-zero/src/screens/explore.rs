@@ -645,11 +645,18 @@ impl MapScreen {
                         continue;
                     }
                     let pw = game::power(&st.character, &st.content, &spec, kind);
-                    let df = game::difficulty(security);
+                    let odds = game::chance(pw, game::difficulty(security));
+                    if odds == 0 {
+                        choices.push(Choice::disabled(
+                            key,
+                            format!("{label}{on} · out of your reach"),
+                        ));
+                        continue;
+                    }
                     choices.push(Choice::new(
                         key,
                         format!(
-                            "{label}{on} · {pw} vs {df} · {} turns · noise {}",
+                            "{label}{on} · {odds}% · {} turns · noise {}",
                             spec.work, spec.noise
                         ),
                         Pick::Run(item.id.clone(), target),
@@ -3647,7 +3654,7 @@ mod tests {
         st.tick += 40;
         let text = draw_screen(&*run, &st, 120, 40);
         assert!(text.contains("RUN"), "{text}");
-        assert!(text.contains("crack · 19 vs"), "{text}");
+        assert!(text.contains("crack · 40%"), "{text}");
         assert!(text.contains("3 turns · noise 4"), "{text}");
         assert!(!text.contains("blind"), "{text}");
         run.update(&mut st, &[key(KeyCode::Char('a'))]);
@@ -4075,5 +4082,23 @@ mod tests {
             "{:?}",
             last(&st)
         );
+    }
+
+    #[test]
+    fn a_run_out_of_reach_reads_so_and_cannot_start() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        // Security 255: difficulty 31, beyond a rating-one crack with any roll.
+        st.constructs.get_mut(b).unwrap().security = 255;
+        let (_, lock_pos) = node_of(&st, b, NodeKind::DoorLock);
+        let here = beside(&st, b, lock_pos);
+        stand(&mut st, &mut s, Place::Construct(b), here);
+        let ScreenCmd::Push { to: run, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))]) else {
+            panic!("space opens RUN")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*run, &st, 120, 40);
+        assert!(text.contains("crack · out of your reach"), "{text}");
     }
 }

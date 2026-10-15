@@ -86,6 +86,14 @@ pub fn succeeds(roll: u8, power: i32, difficulty: i32) -> bool {
     roll as i32 + power > difficulty
 }
 
+/// The chance a turn succeeds, in percent: how many of the ten rolls beat it.
+pub fn chance(power: i32, difficulty: i32) -> u8 {
+    (1..=10u8)
+        .filter(|r| succeeds(*r, power, difficulty))
+        .count() as u8
+        * 10
+}
+
 /// A program in flight: how many successful turns it has, of how many it needs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Run {
@@ -207,6 +215,10 @@ mod tests {
         assert!(succeeds(4, 17, 13));
         assert!(!succeeds(1, 8, 13));
         assert!(succeeds(6, 8, 13));
+        assert_eq!(chance(19, 14), 100);
+        assert_eq!(chance(19, 25), 40);
+        assert_eq!(chance(19, 31), 0);
+        assert_eq!(chance(8, 13), 50);
     }
 
     #[test]

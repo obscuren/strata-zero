@@ -233,6 +233,14 @@ pub fn start_run(st: &mut AppState, program: ItemId, target: HackTarget) -> Resu
     if !applies(spec.op, kind) {
         return Err(format!("{} does nothing there", item.name));
     }
+    let security = st.constructs.get(b).map(|k| k.security).unwrap_or(0);
+    if game::chance(
+        power(&st.character, &st.content, &spec, kind),
+        difficulty(security),
+    ) == 0
+    {
+        return Err(format!("{} is out of your reach here", item.name));
+    }
     let now = st.net.now(st);
     if spec.op == Op::Copy
         && st

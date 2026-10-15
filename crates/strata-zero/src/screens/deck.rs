@@ -843,8 +843,12 @@ impl Deck {
             "rating {} · size {} · noise {} · work {}",
             p.rating, p.size, p.noise, p.work
         )));
+        let df = game::difficulty(110);
         out.push(Line::from(Span::styled(
-            format!("your power {pw} vs {} mid-city", game::difficulty(110)),
+            format!(
+                "your power {pw} vs {df} mid-city · {}% a turn",
+                game::chance(pw, df)
+            ),
             Style::default().fg(CYAN),
         )));
         if st.character.loaded.contains(id) {

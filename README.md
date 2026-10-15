@@ -41,8 +41,10 @@ you are in: a spine of lane with rooms off it holding the building's nodes
 deepest), ICE standing at the gate from security 160 (white, grey from 200)
 and at the vault room's door from 200. `space` on or beside a node or a piece
 of ICE opens RUN: the programs loaded in your deck that apply to it, each with
-your power against the construct's difficulty, the turns it takes and the noise
-it makes. Pick one and every `.` is a turn: a roll against the security, heat
+the chance a turn succeeds (a d10 plus your power, twice Net plus the skill and
+the program's rating, against the security over eight), the turns it takes and
+the noise it makes; a program that cannot beat the construct reads `out of your
+reach`. Pick one and every `.` is a turn: a roll against the security, heat
 on the construct's trace (more on a slip), the hack landing on the last
 success; a move aborts it. The HERE section shows the trace. At 60 heat the
 alarm trips: the building locks down for an hour (cracked locks relock, lifts
