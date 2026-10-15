@@ -45,6 +45,8 @@ pub struct AppState {
     pub world: Option<sim::World>,
     /// The floors walked into this session.
     pub interiors: crate::interiors::Interiors,
+    /// The constructs entered this session.
+    pub constructs: crate::constructs::Constructs,
     /// Items lying in the city.
     pub ground: game::Ground,
     /// Ability effects in flight, oldest first.
@@ -118,6 +120,7 @@ impl AppState {
             people,
             world: None,
             interiors: Default::default(),
+            constructs: Default::default(),
             ground: game::Ground::default(),
             fx: Vec::new(),
             repaint: false,

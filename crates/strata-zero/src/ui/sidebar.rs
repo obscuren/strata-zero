@@ -547,7 +547,13 @@ mod tests {
 
     fn view<'a>(st: &'a AppState, focus: Pos, place: citygen::Place) -> SidebarView<'a> {
         SidebarView {
-            map: MapRef::for_place(st.city.as_ref().unwrap(), &st.interiors, place).unwrap(),
+            map: MapRef::for_place(
+                st.city.as_ref().unwrap(),
+                &st.interiors,
+                &st.constructs,
+                place,
+            )
+            .unwrap(),
             focus,
             view: TileRect::new(0, 0, 70, 25),
             player: Some(focus),

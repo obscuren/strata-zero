@@ -1,10 +1,12 @@
-//! One map to draw and walk: a stratum of the city, or a floor inside a building.
+//! One map to draw and walk: a stratum of the city, a floor inside a building, or the
+//! inside of a construct.
 
+use crate::constructs::Constructs;
 use crate::interiors::Interiors;
 use crate::render::ConnDir;
 use citygen::{
-    BuildingKind, City, ConnectorKind, Floor, FloorPlan, Place, Pos, Size, StratumKind, Terrain,
-    Theme, Tile,
+    BuildingKind, City, ConnectorKind, Construct, Floor, FloorPlan, Place, Pos, Size, StratumKind,
+    Terrain, Theme, Tile,
 };
 
 /// What the viewport, the field of view, the walker and the inspector need from a map.
@@ -42,6 +44,42 @@ pub struct FloorMap<'a> {
 pub enum MapRef<'a> {
     Stratum(StratumMap<'a>),
     Floor(FloorMap<'a>),
+    Construct(ConstructMap<'a>),
+}
+
+#[derive(Clone, Copy)]
+pub struct ConstructMap<'a> {
+    pub city: &'a City,
+    pub construct: &'a Construct,
+}
+
+impl TileMap for ConstructMap<'_> {
+    fn size(&self) -> Size {
+        self.construct.tiles.size()
+    }
+
+    fn tile(&self, p: Pos) -> Option<&Tile> {
+        self.construct.tiles.get(p)
+    }
+
+    fn light(&self, p: Pos) -> u8 {
+        self.construct.light.get(p).copied().unwrap_or(0)
+    }
+
+    fn theme(&self, _p: Pos) -> Option<Theme> {
+        let b = self.city.building_opt(self.construct.building)?;
+        Some(self.city.district(b.district).theme)
+    }
+
+    fn kind(&self, _p: Pos) -> Option<BuildingKind> {
+        self.city
+            .building_opt(self.construct.building)
+            .map(|b| b.kind)
+    }
+
+    fn connector(&self, _p: Pos) -> Option<ConnDir> {
+        None
+    }
 }
 
 impl<'a> MapRef<'a> {
@@ -49,16 +87,23 @@ impl<'a> MapRef<'a> {
         MapRef::Stratum(StratumMap { city, stratum })
     }
 
-    /// The map at a place, if its floor has been generated.
-    pub fn for_place(city: &'a City, interiors: &'a Interiors, place: Place) -> Option<Self> {
+    /// The map at a place, if its floor or construct has been generated.
+    pub fn for_place(
+        city: &'a City,
+        interiors: &'a Interiors,
+        constructs: &'a Constructs,
+        place: Place,
+    ) -> Option<Self> {
         match place {
             Place::Stratum(k) => Some(MapRef::stratum_of(city, k)),
             Place::Floor { building, level } => {
                 let (plan, floor) = interiors.floor(building, level)?;
                 Some(MapRef::Floor(FloorMap { city, plan, floor }))
             }
-            // Constructs get their map with the cache that holds them.
-            Place::Construct(_) => None,
+            Place::Construct(b) => {
+                let construct = constructs.get(b)?;
+                Some(MapRef::Construct(ConstructMap { city, construct }))
+            }
         }
     }
 
@@ -69,6 +114,7 @@ impl<'a> MapRef<'a> {
                 building: m.plan.building,
                 level: m.floor.level,
             },
+            MapRef::Construct(m) => Place::Construct(m.construct.building),
         }
     }
 
@@ -76,19 +122,20 @@ impl<'a> MapRef<'a> {
         match self {
             MapRef::Stratum(m) => m.city,
             MapRef::Floor(m) => m.city,
+            MapRef::Construct(m) => m.city,
         }
     }
 
     pub fn stratum(&self) -> Option<StratumKind> {
         match self {
             MapRef::Stratum(m) => Some(m.stratum),
-            MapRef::Floor(_) => None,
+            MapRef::Floor(_) | MapRef::Construct(_) => None,
         }
     }
 
     pub fn floor(&self) -> Option<(&'a FloorPlan, &'a Floor)> {
         match self {
-            MapRef::Stratum(_) => None,
+            MapRef::Stratum(_) | MapRef::Construct(_) => None,
             MapRef::Floor(m) => Some((m.plan, m.floor)),
         }
     }
@@ -98,6 +145,7 @@ impl<'a> MapRef<'a> {
         match self {
             MapRef::Stratum(m) => m.stratum.label().to_string(),
             MapRef::Floor(m) => FloorPlan::label(m.floor.level),
+            MapRef::Construct(_) => "construct".to_string(),
         }
     }
 }
@@ -186,6 +234,7 @@ impl TileMap for MapRef<'_> {
         match self {
             MapRef::Stratum(m) => m.size(),
             MapRef::Floor(m) => m.size(),
+            MapRef::Construct(m) => m.size(),
         }
     }
 
@@ -193,6 +242,7 @@ impl TileMap for MapRef<'_> {
         match self {
             MapRef::Stratum(m) => m.tile(p),
             MapRef::Floor(m) => m.tile(p),
+            MapRef::Construct(m) => m.tile(p),
         }
     }
 
@@ -200,6 +250,7 @@ impl TileMap for MapRef<'_> {
         match self {
             MapRef::Stratum(m) => m.light(p),
             MapRef::Floor(m) => m.light(p),
+            MapRef::Construct(m) => m.light(p),
         }
     }
 
@@ -207,6 +258,7 @@ impl TileMap for MapRef<'_> {
         match self {
             MapRef::Stratum(m) => m.theme(p),
             MapRef::Floor(m) => m.theme(p),
+            MapRef::Construct(m) => m.theme(p),
         }
     }
 
@@ -214,6 +266,7 @@ impl TileMap for MapRef<'_> {
         match self {
             MapRef::Stratum(m) => m.kind(p),
             MapRef::Floor(m) => m.kind(p),
+            MapRef::Construct(m) => m.kind(p),
         }
     }
 
@@ -221,6 +274,7 @@ impl TileMap for MapRef<'_> {
         match self {
             MapRef::Stratum(m) => m.connector(p),
             MapRef::Floor(m) => m.connector(p),
+            MapRef::Construct(m) => m.connector(p),
         }
     }
 }
@@ -349,6 +403,7 @@ mod tests {
             MapRef::for_place(
                 &c,
                 &interiors,
+                &Constructs::default(),
                 Place::Floor {
                     building: b.id,
                     level: 7

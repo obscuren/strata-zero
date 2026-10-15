@@ -42,7 +42,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 Ok(format!("spawned {qty}× {}", item.name))
             } else {
                 let lies = st.city.as_ref().is_some_and(|c| {
-                    crate::render::map::MapRef::for_place(c, &st.interiors, focus.place)
+                    crate::render::map::MapRef::for_place(c, &st.interiors, &st.constructs, focus.place)
                         .is_some_and(|m| crate::render::map::TileMap::walkable(&m, focus.pos))
                 });
                 if !lies {
@@ -199,7 +199,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 .ok_or_else(|| "no body in the city".to_string())?;
             let city = st.city.as_ref().ok_or_else(|| "no city".to_string())?;
             let target = Pos::new(x, y);
-            let map = crate::render::map::MapRef::for_place(city, &st.interiors, place)
+            let map = crate::render::map::MapRef::for_place(city, &st.interiors, &st.constructs, place)
                 .ok_or_else(|| "no map here".to_string())?;
             if !crate::render::map::TileMap::walkable(&map, target) {
                 return Err("nothing to stand on there".to_string());

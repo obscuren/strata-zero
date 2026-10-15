@@ -73,7 +73,7 @@ fn land(st: &mut AppState, place: Place, pos: Pos) {
     };
     player.place = place;
     player.pos = pos;
-    if let Some(map) = MapRef::for_place(city, &st.interiors, place) {
+    if let Some(map) = MapRef::for_place(city, &st.interiors, &st.constructs, place) {
         player.update_fov(&map, bonus);
     }
     st.repaint = true;

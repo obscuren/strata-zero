@@ -283,7 +283,7 @@ impl MapScreen {
 
     /// The map at the screen's place; a floor not yet generated falls back to the street.
     fn map<'a>(&self, st: &'a AppState, city: &'a citygen::City) -> MapRef<'a> {
-        MapRef::for_place(city, &st.interiors, self.place)
+        MapRef::for_place(city, &st.interiors, &st.constructs, self.place)
             .unwrap_or_else(|| MapRef::stratum_of(city, StratumKind::Street))
     }
 
@@ -774,6 +774,53 @@ impl MapScreen {
         }
     }
 
+    /// A construct's gate on the Net, stepped onto from the open grid, leads inside; the
+    /// entry inside, stepped off outward, leads back onto the grid.
+    fn gateway(&mut self, st: &mut AppState, dir: Dir) -> Option<ScreenCmd> {
+        let player = st.player.as_ref()?;
+        let (here, target) = (player.pos, player.pos.step(dir));
+        let city = st.city.as_ref()?;
+        match player.place {
+            Place::Stratum(StratumKind::Net) => {
+                // Onto the gate from the grid, or from the gate into the construct's bulk.
+                let gate_of = |p: Pos| {
+                    city.tile(StratumKind::Net, p)
+                        .filter(|t| t.terrain == citygen::Terrain::NetGate)
+                        .and_then(|t| t.building)
+                };
+                let fp = |b: citygen::BuildingId| city.building_opt(b).map(|x| x.footprint);
+                let b = match (gate_of(target), gate_of(here)) {
+                    (Some(b), _) if fp(b).is_some_and(|f| !f.contains(here)) => b,
+                    (_, Some(b)) if fp(b).is_some_and(|f| f.contains(target)) => b,
+                    _ => return None,
+                };
+                let result = crate::constructs::enter_construct(st, b);
+                report(st, result);
+                self.follow_player(st);
+                Some(ScreenCmd::Stay)
+            }
+            Place::Construct(b) => {
+                let k = st.constructs.get(b)?;
+                if here != k.entry || k.tiles.in_bounds(target) {
+                    return None;
+                }
+                let result = crate::constructs::leave_construct(st);
+                report(st, result);
+                self.follow_player(st);
+                Some(ScreenCmd::Stay)
+            }
+            _ => None,
+        }
+    }
+
+    /// The screen's place and camera catch up with the player after a jump.
+    fn follow_player(&mut self, st: &AppState) {
+        if let Some(p) = st.player.as_ref() {
+            self.place = p.place;
+            self.cam.snap(p.pos);
+        }
+    }
+
     /// `>` and `<` inside: the lift panel on a lift, a floor on the stairs, nothing else.
     fn vertical(&mut self, st: &mut AppState, up: bool) -> Option<ScreenCmd> {
         let player = st.player.as_ref()?;
@@ -842,6 +889,9 @@ impl MapScreen {
             return Some(ScreenCmd::Stay);
         }
         if let Some(dir) = dir_for(k.code) {
+            if let Some(cmd) = self.gateway(st, dir) {
+                return Some(cmd);
+            }
             match self.bump(st, dir) {
                 Err(cmd) => return Some(cmd),
                 Ok(true) => {}
@@ -861,8 +911,9 @@ impl MapScreen {
         let bonus = st.character.sight_bonus(&st.content);
         let city = st.city.as_ref()?;
         let interiors = &st.interiors;
+        let constructs = &st.constructs;
         let player = st.player.as_mut()?;
-        let map = MapRef::for_place(city, interiors, player.place)
+        let map = MapRef::for_place(city, interiors, constructs, player.place)
             .unwrap_or_else(|| MapRef::stratum_of(city, StratumKind::Street));
         match k.code {
             KeyCode::Char('c') if dev => {
@@ -3343,5 +3394,74 @@ mod tests {
             "{pos:?} beside the door {:?}",
             exit.door
         );
+    }
+
+    #[test]
+    fn the_gate_leads_into_the_construct_and_back() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let city = st.city.as_ref().unwrap();
+        // A building's gate on the Net, approached from the open grid beside it.
+        let net = city.stratum(StratumKind::Net).unwrap();
+        let (b, gate, outside, dir) = city
+            .buildings
+            .iter()
+            .find_map(|b| {
+                let gate = b
+                    .footprint
+                    .border()
+                    .find(|p| net.tiles[*p].terrain == citygen::Terrain::NetGate)?;
+                [Dir::N, Dir::S, Dir::E, Dir::W].into_iter().find_map(|d| {
+                    let out = gate.step(d);
+                    (!b.footprint.contains(out) && city.walkable(StratumKind::Net, out))
+                        .then_some((b.id, gate, out, d.opposite()))
+                })
+            })
+            .expect("a gate with grid beside it");
+        let name = city.building(b).name.clone().unwrap();
+        {
+            let p = st.player.as_mut().unwrap();
+            p.body = Some((p.place, p.pos));
+            p.place = Place::Stratum(StratumKind::Net);
+            p.pos = outside;
+        }
+        s.place = Place::Stratum(StratumKind::Net);
+        let code = match dir {
+            Dir::N => KeyCode::Char('k'),
+            Dir::S => KeyCode::Char('j'),
+            Dir::E => KeyCode::Char('l'),
+            _ => KeyCode::Char('h'),
+        };
+        s.update(&mut st, &[key(code)]);
+        let p = st.player.as_ref().unwrap();
+        assert_eq!(p.place, Place::Construct(b), "{:?}", last(&st));
+        let k = st.constructs.get(b).expect("generated on entry");
+        assert_eq!(p.pos, k.entry);
+        assert_eq!(last(&st), Some(format!("into {name}").as_str()));
+        assert_eq!(s.place, Place::Construct(b));
+        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let text = buffer_text(t.backend().buffer());
+        assert!(text.contains(&format!("{name} · construct")), "{text}");
+        if !k.guards.is_empty() {
+            assert!(text.contains('▣'), "the gate guard draws: {text}");
+        }
+        // Out through the entry, back onto the grid at the gate.
+        s.update(&mut st, &[key(KeyCode::Char('h'))]);
+        let p = st.player.as_ref().unwrap();
+        assert_eq!(p.place, Place::Stratum(StratumKind::Net), "{:?}", last(&st));
+        assert_eq!(p.pos, gate);
+        assert_eq!(last(&st), Some("out onto the grid"));
+        // In again: the construct is generated once; jacking out from inside works.
+        s.update(&mut st, &[key(code)]);
+        assert_eq!(st.player.as_ref().unwrap().place, Place::Construct(b));
+        assert_eq!(st.constructs.generated(), 1);
+        assert!(matches!(
+            s.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Flash(TransitionKind::Glitch)
+        ));
+        let p = st.player.as_ref().unwrap();
+        assert!(!p.jacked_in() && p.place.is_street());
     }
 }
