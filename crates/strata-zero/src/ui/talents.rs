@@ -12,8 +12,8 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-/// A column's width at most; a narrower pane shrinks it.
-pub const COL_W: u16 = 23;
+/// A column's width at most: two boxes of twelve; a narrower pane shrinks it.
+pub const COL_W: u16 = 27;
 /// Rows the dossier takes: a rule and four lines.
 pub const DOSSIER_ROWS: u16 = 5;
 /// Ticks the dossier takes to type itself out.

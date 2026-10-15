@@ -2379,4 +2379,19 @@ mod tests {
         assert_eq!(d2.tab, Tab::Talents);
         assert_eq!(d2.cursor, d.cursor);
     }
+
+    #[test]
+    fn talents_columns_widen_on_a_wide_screen() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('0'))]);
+        st.tick = 60;
+        let text = draw(&d, &st, 140, 40);
+        assert!(text.contains("▲ Thick skin"), "{text}");
+        let text = draw(&d, &st, 120, 35);
+        assert!(
+            text.contains("▲ Thick sk ") && !text.contains("Thick skin"),
+            "{text}"
+        );
+    }
 }
