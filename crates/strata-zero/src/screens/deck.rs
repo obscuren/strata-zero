@@ -1,5 +1,5 @@
 //! The deck: the player's menu over the live map — skills, attributes, gear, inventory,
-//! workbench, cyberdeck, quests, journal, map. It reopens where it was closed.
+//! workbench, cyberdeck, quests, journal, map, talents. It reopens where it was closed.
 
 use crate::actions::{perform, report};
 use crate::anim::effects::{glitch_cells, pulse, typewriter};
@@ -16,6 +16,7 @@ use crate::ui::chrome::{
     head, plain, put, put_paragraph, reveal, warn,
 };
 use crate::ui::logo::{self, Logo};
+use crate::ui::talents::{TalentsView, TreeCursor, step, talent_at};
 use citygen::rng::hash64;
 use citygen::{FloorPlan, Place, Pos, StratumKind};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -33,6 +34,8 @@ use std::cell::Cell;
 use std::collections::BTreeSet;
 
 const REVEAL_TICKS: u64 = 20;
+/// Ticks a talent's box stays lit after a rank goes in.
+const FLASH_TICKS: u64 = 6;
 const JITTER_PERIOD: u64 = 90;
 const LOGO_MIN_ROWS: u16 = 36;
 /// Hotkey letters for picker rows; h j k l move, q closes, u and i are verbs.
@@ -53,10 +56,12 @@ pub enum Tab {
     /// Not written yet.
     Journal,
     Map,
+    /// The five talent trees, on `0`.
+    Talents,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 9] = [
+    pub const ALL: [Tab; 10] = [
         Tab::Skills,
         Tab::Stats,
         Tab::Gear,
@@ -66,6 +71,7 @@ impl Tab {
         Tab::Quests,
         Tab::Journal,
         Tab::Map,
+        Tab::Talents,
     ];
 
     pub fn label(self) -> &'static str {
@@ -79,6 +85,7 @@ impl Tab {
             Tab::Quests => "QUESTS",
             Tab::Journal => "JOURNAL",
             Tab::Map => "MAP",
+            Tab::Talents => "TALENTS",
         }
     }
 
@@ -131,6 +138,10 @@ pub struct Deck {
     open: Option<BTreeSet<CategoryId>>,
     /// The owned categories at the last update, so a fresh unlock unfolds itself.
     owned_seen: Option<BTreeSet<CategoryId>>,
+    /// Where the TALENTS tab's cursor sits.
+    pub(crate) cursor: TreeCursor,
+    /// The talent box lit until its tick: the rank just learned.
+    flash: Option<(game::TalentId, u64)>,
 }
 
 fn tone_style(tone: Tone) -> Style {
@@ -154,6 +165,8 @@ impl Deck {
             last_list: Cell::new((Rect::new(0, 0, 0, 0), 0)),
             open: None,
             owned_seen: None,
+            cursor: TreeCursor::default(),
+            flash: None,
         }
     }
 
@@ -386,6 +399,12 @@ impl Deck {
         } else {
             Self::first_selectable(&rows)
         };
+        self.cursor = step(
+            &st.content,
+            TreeCursor::unpack(st.deck_rows[Tab::Talents.index()]),
+            0,
+            0,
+        );
         self
     }
 
@@ -485,6 +504,12 @@ impl Deck {
         rows.iter().position(|r| r.detail.is_some()).unwrap_or(0)
     }
 
+    /// Moves the TALENTS cursor along a tier, across trees or between tiers.
+    fn move_cursor(&mut self, st: &AppState, dx: i32, dy: i32) {
+        self.cursor = step(&st.content, self.cursor, dx, dy);
+        self.changed = st.tick;
+    }
+
     pub(crate) fn rows(&self, st: &AppState) -> Vec<Row> {
         match self.tab {
             Tab::Skills => self.board_list(st),
@@ -500,7 +525,7 @@ impl Deck {
             Tab::Cyberdeck => Self::cyberdeck_rows(st),
             Tab::Quests => Self::quest_rows(st),
             Tab::Journal => Self::journal_rows(),
-            Tab::Map => Vec::new(),
+            Tab::Map | Tab::Talents => Vec::new(),
         }
     }
 
@@ -514,6 +539,7 @@ impl Deck {
                 Perk::Sight(n) => format!("{n:+} sight"),
                 Perk::Carry(kg) => format!("{kg:+.1} kg carry"),
                 Perk::HpMax(n) => format!("{n:+} max hp"),
+                Perk::Focus(n) => format!("{n:+} focus"),
             }));
         }
         for id in &item.grants {
@@ -849,7 +875,8 @@ impl Deck {
                 let Some((id, source)) = abilities.get(*i) else {
                     return Vec::new();
                 };
-                let Some(a) = st.content.ability(id) else {
+                // The sharpened copy: talents change the reach and the cooldown.
+                let Some(a) = st.character.ability(&st.content, id) else {
                     return Vec::new();
                 };
                 let mut out = vec![head(&a.name)];
@@ -872,6 +899,13 @@ impl Deck {
                             .item(item)
                             .map(|i| i.name.clone())
                             .unwrap_or_else(|| item.to_string())
+                    ),
+                    Source::Talent(t) => format!(
+                        "from {}",
+                        st.content
+                            .talent(t)
+                            .map(|t| t.name.clone())
+                            .unwrap_or_else(|| t.to_string())
                     ),
                 };
                 out.push(dim(format!("{kind} · {from}")));
@@ -986,10 +1020,37 @@ impl Deck {
                         fx: TransitionKind::Glitch,
                     };
                 }
+                KeyCode::Left | KeyCode::Char('h') if self.tab == Tab::Talents => {
+                    self.move_cursor(st, -1, 0)
+                }
+                KeyCode::Right | KeyCode::Char('l') if self.tab == Tab::Talents => {
+                    self.move_cursor(st, 1, 0)
+                }
+                KeyCode::Up | KeyCode::Char('k') if self.tab == Tab::Talents => {
+                    self.move_cursor(st, 0, -1)
+                }
+                KeyCode::Down | KeyCode::Char('j') if self.tab == Tab::Talents => {
+                    self.move_cursor(st, 0, 1)
+                }
+                KeyCode::Char(' ') | KeyCode::Enter if self.tab == Tab::Talents => {
+                    // A rank goes in straight away; the refusal lands in the strip.
+                    if let Some(id) = talent_at(&st.content, self.cursor).cloned() {
+                        let result = perform(st, Action::Learn(id.clone()));
+                        if result.is_ok() {
+                            self.flash = Some((id, st.tick + FLASH_TICKS));
+                        }
+                        report(st, result);
+                    }
+                }
                 KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => self.shift_tab(-1, st),
                 KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => self.shift_tab(1, st),
-                KeyCode::Char(c @ '1'..='9') => {
-                    if let Some(tab) = Tab::ALL.get(c as usize - '1' as usize) {
+                KeyCode::Char(c @ '0'..='9') => {
+                    let i = if c == '0' {
+                        9
+                    } else {
+                        c as usize - '1' as usize
+                    };
+                    if let Some(tab) = Tab::ALL.get(i) {
                         self.set_tab(*tab, st);
                     }
                 }
@@ -1030,6 +1091,7 @@ impl Screen for Deck {
         let cmd = self.handle(st, keys);
         st.deck_tab = self.tab;
         st.deck_rows[self.tab.index()] = self.row;
+        st.deck_rows[Tab::Talents.index()] = self.cursor.pack();
         cmd
     }
 
@@ -1111,7 +1173,16 @@ impl Screen for Deck {
         );
         y += 1;
 
-        // Tab bar.
+        // Tab bar: two cells between labels, one when they would not all fit.
+        let labels_w: u16 = Tab::ALL
+            .iter()
+            .map(|t| t.label().chars().count() as u16 + 2)
+            .sum();
+        let gap = if labels_w + 2 * (Tab::ALL.len() as u16) < inner.width {
+            2
+        } else {
+            1
+        };
         let mut x = inner.x + 1;
         let mut starts = [0u16; Tab::ALL.len()];
         for (i, tab) in Tab::ALL.iter().enumerate() {
@@ -1130,7 +1201,7 @@ impl Screen for Deck {
                 Style::default().fg(DIM)
             };
             put(buf, x, y, &label, style, right);
-            x += label.chars().count() as u16 + 2;
+            x += label.chars().count() as u16 + gap;
         }
         y += 1;
         // Rule with the sliding magenta segment under the active tab.
@@ -1153,6 +1224,16 @@ impl Screen for Deck {
         let body = Rect::new(inner.x, y, inner.width, strip_y.saturating_sub(y));
         if self.tab == Tab::Map {
             self.draw_map(st, body, buf);
+        } else if self.tab == Tab::Talents {
+            TalentsView {
+                content: &st.content,
+                character: &st.character,
+                cursor: self.cursor,
+                tick,
+                changed: self.changed,
+                flash: self.flash.clone(),
+            }
+            .draw(body, buf);
         } else {
             let list_w = (body.width * 2 / 5)
                 .max(28)
@@ -1271,10 +1352,12 @@ impl Screen for Deck {
             buf,
             inner.x + 1,
             hint_y,
-            if self.tab == Tab::Skills {
-                "←→ tabs · ↑↓ select · enter fold · space act · esc close"
-            } else {
-                "←→ tabs · ↑↓ select · 1-9 jump · space act · esc close"
+            match self.tab {
+                Tab::Skills => "←→ tabs · ↑↓ select · enter fold · space act · esc close",
+                Tab::Talents => {
+                    "←→ along · ↑↓ tiers · tab tabs · 0-9 jump · space learn · esc close"
+                }
+                _ => "←→ tabs · ↑↓ select · 0-9 jump · space act · esc close",
             },
             Style::default().fg(DIM),
             right,
@@ -1396,10 +1479,10 @@ mod tests {
         assert!(rows[d.row].detail.is_some() && d.row > before);
 
         d.update(&mut st, &[key(KeyCode::Left); 4]);
-        assert_eq!(d.tab, Tab::Map, "left wraps around");
+        assert_eq!(d.tab, Tab::Talents, "left wraps around");
         d.update(&mut st, &[key(KeyCode::Tab)]);
         assert_eq!(d.tab, Tab::Skills, "tab wraps forward");
-        d.update(&mut st, &[key(KeyCode::BackTab)]);
+        d.update(&mut st, &[key(KeyCode::BackTab), key(KeyCode::BackTab)]);
         assert_eq!(d.tab, Tab::Map);
         assert!(matches!(
             d.update(&mut st, &[key(KeyCode::Esc)]),
@@ -1972,7 +2055,8 @@ mod tests {
                 "CYBERDECK",
                 "QUESTS",
                 "JOURNAL",
-                "MAP"
+                "MAP",
+                "TALENTS"
             ]
         );
         let mut st = state();
@@ -2214,5 +2298,152 @@ mod tests {
             d.update(&mut st, &[key(KeyCode::Char(' '))]),
             ScreenCmd::Stay
         ));
+    }
+
+    #[test]
+    fn talents_tab_draws_the_trees_and_moves_the_cursor() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('0'))]);
+        assert_eq!(d.tab, Tab::Talents);
+        st.tick = 60;
+        let text = draw(&d, &st, 120, 35);
+        assert!(text.contains("▌TALENTS▐"), "{text}");
+        for name in ["MEAT", "EDGE", "WRENCH", "STREET", "ICE"] {
+            assert!(text.contains(name), "{name}: {text}");
+        }
+        assert!(text.contains("TALENTS · 1 point"), "{text}");
+        assert!(
+            text.contains("THICK SKIN · MEAT · tier 1 · rank 0/3"),
+            "{text}"
+        );
+        assert!(text.contains("next: +3 max HP"), "{text}");
+        assert!(text.contains("3 more"), "a closed tier says so: {text}");
+        // The cursor's box is highlighted like a selected row.
+        let mut t = Terminal::new(TestBackend::new(120, 35)).unwrap();
+        t.draw(|f| d.draw(&st, f)).unwrap();
+        let lit = t
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .any(|c| c.symbol() == "▲" && c.bg == BAR_BG);
+        assert!(lit, "the first box is lit");
+        // Right past the tier's end lands in the next tree.
+        d.update(&mut st, &[key(KeyCode::Char('l')), key(KeyCode::Char('l'))]);
+        st.tick += 45;
+        let text = draw(&d, &st, 120, 35);
+        assert!(text.contains("QUICK DRAW · EDGE · tier 1"), "{text}");
+        // Down: the next tier; the dossier says why it is closed.
+        d.update(&mut st, &[key(KeyCode::Char('j'))]);
+        st.tick += 45;
+        let text = draw(&d, &st, 120, 35);
+        assert!(
+            text.contains("DOUBLE TAP · EDGE · tier 2") && text.contains("3 more points in EDGE"),
+            "{text}"
+        );
+        // Up wraps to the capstone; tab still changes tabs, l did not.
+        d.update(&mut st, &[key(KeyCode::Char('k')), key(KeyCode::Char('k'))]);
+        st.tick += 45;
+        let text = draw(&d, &st, 120, 35);
+        assert!(text.contains("THE HALF SECOND · EDGE · tier 5"), "{text}");
+        d.update(&mut st, &[key(KeyCode::Tab)]);
+        assert_eq!(d.tab, Tab::Skills);
+    }
+
+    #[test]
+    fn talents_tab_learns_on_space_and_shows_the_rank() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('0'))]);
+        assert!(matches!(
+            d.update(&mut st, &[key(KeyCode::Char(' '))]),
+            ScreenCmd::Stay
+        ));
+        assert_eq!(
+            st.character.talent_rank(&game::TalentId::new("thick_skin")),
+            1
+        );
+        assert_eq!(last(&st), Some("Thick skin 1/3"));
+        st.tick = 60;
+        let text = draw(&d, &st, 120, 35);
+        assert!(
+            text.contains("▰▱▱ 1/3")
+                && text.contains("TALENTS · 0 points")
+                && text.contains("MEAT 1"),
+            "{text}"
+        );
+        assert!(text.contains("now: +3 max HP"), "{text}");
+        d.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(last(&st), Some("no points left"));
+        assert!(last_is_warning(&st));
+        // The smallest screen still draws every tree and the dossier.
+        let text = draw(&d, &st, 100, 30);
+        assert!(
+            text.contains("THICK SKIN · MEAT") && text.contains("ICE") && text.contains("Bruises"),
+            "{text}"
+        );
+        // The cursor survives a reopen.
+        d.update(&mut st, &[key(KeyCode::Char('l')), key(KeyCode::Char('j'))]);
+        let d2 = Deck::new(0).restore(&st);
+        assert_eq!(d2.tab, Tab::Talents);
+        assert_eq!(d2.cursor, d.cursor);
+    }
+
+    #[test]
+    fn talents_columns_widen_on_a_wide_screen() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('0'))]);
+        st.tick = 60;
+        let text = draw(&d, &st, 140, 40);
+        assert!(text.contains("▲ Thick skin"), "{text}");
+        let text = draw(&d, &st, 120, 35);
+        assert!(
+            text.contains("▲ Thick sk ") && !text.contains("Thick skin"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn every_tab_label_fits_the_smallest_screen() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('0'))]);
+        st.tick = 60;
+        let text = draw(&d, &st, 100, 30);
+        assert!(text.contains("▌TALENTS▐"), "{text}");
+        assert!(
+            text.contains("▱▱▱ 0/3"),
+            "a box draws at the minimum: {text}"
+        );
+        d.update(&mut st, &[key(KeyCode::Char('1'))]);
+        let text = draw(&d, &st, 100, 30);
+        assert!(
+            text.contains(" TALENTS ") && text.contains("▌SKILLS▐"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn cyberdeck_detail_reads_the_sharpened_ability() {
+        let mut st = state();
+        st.character
+            .talents
+            .insert(game::TalentId::new("wide_band"), 2);
+        st.character
+            .talents
+            .insert(game::TalentId::new("ice_pick"), 2);
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('6'))]);
+        let rows = d.rows(&st);
+        d.row = rows
+            .iter()
+            .position(|r| r.text.contains("Netscan"))
+            .unwrap();
+        st.tick = 60;
+        let text = draw(&d, &st, 120, 35);
+        assert!(text.contains("cooldown 8s"), "{text}");
+        assert!(text.contains("18 tiles"), "{text}");
     }
 }

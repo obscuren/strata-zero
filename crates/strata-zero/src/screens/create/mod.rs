@@ -935,4 +935,17 @@ mod tests {
             "{first:?}"
         );
     }
+
+    #[test]
+    fn summary_counts_the_talent_point_among_the_unspent() {
+        let mut st = AppState::new();
+        let ch = chooser::Chooser::new(&st, 0);
+        let c = ch.choose(&mut st);
+        st.tick = 100;
+        let text = draw(&c, &st, 120, 40);
+        assert!(
+            text.contains("unspent") && text.contains("1 talent point"),
+            "{text}"
+        );
+    }
 }

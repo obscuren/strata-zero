@@ -49,6 +49,10 @@ pub enum ContentError {
     CreationQuest { quest: String },
     #[error("template `{id}`: {why}")]
     TemplateInvalid { id: String, why: String },
+    #[error("talent `{id}`: {why}")]
+    TalentInvalid { id: String, why: String },
+    #[error("tree {name}: {why}")]
+    TreeInvalid { name: String, why: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -56,6 +60,8 @@ pub struct Content {
     pub items: Vec<Item>,
     pub skills: Vec<Skill>,
     pub talents: Vec<Talent>,
+    #[serde(default)]
+    pub trees: Vec<Tree>,
     pub quests: Vec<Quest>,
     pub recipes: Vec<Recipe>,
     #[serde(default)]
@@ -130,8 +136,83 @@ impl Content {
                 need_ability(format!("item {}", i.id), id)?;
             }
         }
+        for tree in &self.trees {
+            let bad = |why: String| ContentError::TreeInvalid {
+                name: tree.name.clone(),
+                why,
+            };
+            if tree.tiers.is_empty() {
+                return Err(bad("no tiers".into()));
+            }
+            for (i, tier) in tree.tiers.iter().enumerate() {
+                if tier.is_empty() {
+                    return Err(bad(format!("tier {} is empty", i + 1)));
+                }
+                for id in tier {
+                    self.talent(id).ok_or_else(|| ContentError::UnknownTalent {
+                        where_: format!("tree {}", tree.name),
+                        id: id.0.clone(),
+                    })?;
+                }
+            }
+            if self.trees.iter().filter(|o| o.stat == tree.stat).count() > 1 {
+                return Err(bad(format!("two trees for {}", tree.stat.name())));
+            }
+        }
         for t in &self.talents {
-            need_skill(format!("talent {}", t.id), &t.skill)?;
+            if let Some(skill) = &t.skill {
+                need_skill(format!("talent {}", t.id), skill)?;
+            }
+            let bad = |why: String| ContentError::TalentInvalid {
+                id: t.id.0.clone(),
+                why,
+            };
+            if !(1..=3).contains(&t.ranks) {
+                return Err(bad(format!("{} ranks; one to three", t.ranks)));
+            }
+            if t.effects.len() != t.ranks as usize {
+                return Err(bad(format!(
+                    "{} ranks but {} effect lists",
+                    t.ranks,
+                    t.effects.len()
+                )));
+            }
+            for b in t.effects.iter().flatten() {
+                if let Boon::Grant(a) | Boon::Sharpen { ability: a, .. } = b {
+                    need_ability(format!("talent {}", t.id), a)?;
+                }
+            }
+            let places = self
+                .trees
+                .iter()
+                .flat_map(|tree| {
+                    tree.tiers.iter().enumerate().flat_map(move |(i, tier)| {
+                        tier.iter()
+                            .enumerate()
+                            .filter(|(_, id)| *id == &t.id)
+                            .map(move |(j, _)| (tree, i, j))
+                    })
+                })
+                .collect::<Vec<_>>();
+            let (tree, tier, col) = match places.as_slice() {
+                [] => return Err(bad("in no tree".into())),
+                [one] => *one,
+                _ => return Err(bad("in two trees".into())),
+            };
+            if let Some(req) = &t.requires {
+                let Some((rtree, rtier, rcol)) = self.tree_of(req) else {
+                    return Err(bad(format!("prerequisite {req} is in no tree")));
+                };
+                if rtree.stat != tree.stat || rtier >= tier || rcol != col {
+                    return Err(bad(format!(
+                        "prerequisite {req} must sit in the same column of a lower tier of {}",
+                        tree.name
+                    )));
+                }
+            }
+            if tier + 1 == tree.tiers.len() && t.ranks != 1 {
+                return Err(bad("a capstone has one rank".into()));
+            }
         }
         for a in &self.abilities {
             if a.kind == AbilityKind::Passive && !a.fx.is_empty() {
@@ -244,12 +325,6 @@ impl Content {
             for id in &t.skills {
                 need_skill(where_.clone(), id)?;
             }
-            for id in &t.talents {
-                self.talent(id).ok_or_else(|| ContentError::UnknownTalent {
-                    where_: where_.clone(),
-                    id: id.0.clone(),
-                })?;
-            }
             for (id, _) in &t.kit {
                 need_item(where_.clone(), id)?;
             }
@@ -335,7 +410,75 @@ impl Content {
 
     /// Talents of one skill, in content order.
     pub fn talents_for<'a>(&'a self, skill: &'a SkillId) -> impl Iterator<Item = &'a Talent> + 'a {
-        self.talents.iter().filter(move |t| &t.skill == skill)
+        self.talents
+            .iter()
+            .filter(move |t| t.skill.as_ref() == Some(skill))
+    }
+
+    /// The tree under a stat.
+    pub fn tree(&self, stat: Stat) -> Option<&Tree> {
+        self.trees.iter().find(|t| t.stat == stat)
+    }
+
+    /// Where a talent hangs: its tree, tier and column.
+    pub fn tree_of(&self, id: &TalentId) -> Option<(&Tree, usize, usize)> {
+        self.trees.iter().find_map(|tree| {
+            tree.tiers
+                .iter()
+                .enumerate()
+                .find_map(|(i, tier)| tier.iter().position(|t| t == id).map(|j| (tree, i, j)))
+        })
+    }
+}
+
+impl Boon {
+    /// The boon in words for the sheet: `+1 Reflex`, `ping reaches 4 further`.
+    pub fn words(&self, c: &Content) -> String {
+        let ability_name = |id: &AbilityId| {
+            c.ability(id)
+                .map(|a| a.name.clone())
+                .unwrap_or_else(|| id.to_string())
+        };
+        match self {
+            Boon::Perk(Perk::Stat(s, n)) => {
+                let mut name = s.name().to_ascii_lowercase();
+                if let Some(first) = name.get_mut(0..1) {
+                    first.make_ascii_uppercase();
+                }
+                format!("{n:+} {name}")
+            }
+            Boon::Perk(Perk::HpMax(n)) => format!("{n:+} max HP"),
+            Boon::Perk(Perk::Focus(n)) => format!("{n:+} focus"),
+            Boon::Perk(Perk::Sight(n)) => format!("sight {n:+}"),
+            Boon::Perk(Perk::Carry(kg)) => format!("carry {kg:+} kg"),
+            Boon::Grant(a) => format!("grants {}", ability_name(a)),
+            Boon::Sharpen {
+                ability,
+                radius,
+                cooldown,
+            } => {
+                let mut parts = Vec::new();
+                match radius.signum() {
+                    1 => parts.push(format!("reaches {radius} further")),
+                    -1 => parts.push(format!("reaches {} less", -radius)),
+                    _ => {}
+                }
+                match cooldown.signum() {
+                    -1 => parts.push(format!("cools {} ticks sooner", -cooldown)),
+                    1 => parts.push(format!("cools {cooldown} ticks later")),
+                    _ => {}
+                }
+                if parts.is_empty() {
+                    parts.push("unchanged".into());
+                }
+                format!(
+                    "{} {}",
+                    ability_name(ability).to_lowercase(),
+                    parts.join(", ")
+                )
+            }
+            Boon::Flag(f) => format!("later: {f}"),
+        }
     }
 }
 
@@ -413,14 +556,14 @@ mod tests {
         ));
 
         let mut c = good.clone();
-        c.talents[0].skill = SkillId::new("origami");
+        c.talents[0].skill = Some(SkillId::new("origami"));
         assert!(matches!(
             c.validate(),
             Err(ContentError::UnknownSkill { .. })
         ));
 
         let mut c = good.clone();
-        c.templates[0].talents.push(TalentId::new("levitation"));
+        c.trees[0].tiers[0].push(TalentId::new("levitation"));
         assert!(matches!(
             c.validate(),
             Err(ContentError::UnknownTalent { .. })
@@ -620,7 +763,11 @@ mod tests {
         assert_eq!(c.template(&TemplateId::new("vex")).unwrap().handle, "VEX");
         assert!(c.item(&ItemId::new("ballistic_weave")).is_some());
         assert!(c.ability(&AbilityId::new("signal_ghost")).is_some());
-        assert!(c.talents.iter().all(|t| c.skill(&t.skill).is_some()));
+        assert!(
+            c.talents
+                .iter()
+                .all(|t| t.skill.as_ref().is_none_or(|s| c.skill(s).is_some()))
+        );
         assert!(c.recipes.iter().all(|r| c.skill(&r.skill).is_some()));
     }
 
@@ -671,5 +818,95 @@ mod tests {
             e.validate(),
             Err(ContentError::EmblemShape { .. })
         ));
+    }
+
+    #[test]
+    fn the_trees_load_and_validate() {
+        let c = Content::load().unwrap();
+        assert_eq!(c.trees.len(), 5);
+        for t in &c.trees {
+            assert_eq!(t.tiers.len(), 5, "{}", t.name);
+            assert!(
+                t.tiers[..4].iter().all(|tier| tier.len() == 2),
+                "{}",
+                t.name
+            );
+            assert_eq!(t.tiers[4].len(), 1, "{} capstone", t.name);
+        }
+        assert!(c.talents.len() >= 40);
+        for id in [
+            "quick_draw",
+            "double_tap",
+            "backstab",
+            "ghost",
+            "ice_pick",
+            "deep_dive",
+            "solder_hand",
+            "field_medic",
+        ] {
+            assert!(c.tree_of(&TalentId::new(id)).is_some(), "{id} in a tree");
+        }
+        assert_eq!(c.creation.talent_points, 1);
+        assert_eq!(c.creation.tier_gate, 3);
+        for stat in [Stat::Body, Stat::Reflex, Stat::Tech, Stat::Cool, Stat::Net] {
+            assert_eq!(c.tree(stat).unwrap().stat, stat);
+        }
+    }
+
+    #[test]
+    fn validation_refuses_a_misplaced_prerequisite_and_bad_ranks() {
+        let c = Content::load().unwrap();
+        let dt = TalentId::new("double_tap");
+        let (stat, tier, col) = c.tree_of(&dt).map(|(t, i, j)| (t.stat, i, j)).unwrap();
+        assert!(tier >= 1);
+        let other = c.tree(stat).unwrap().tiers[tier - 1][1 - col.min(1)].clone();
+        let mut bad = c.clone();
+        bad.talents
+            .iter_mut()
+            .find(|t| t.id == dt)
+            .unwrap()
+            .requires = Some(other);
+        let err = bad.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("double_tap") && err.contains("column"),
+            "{err}"
+        );
+        let mut bad = c.clone();
+        bad.talents[0].ranks = 2;
+        bad.talents[0].effects = vec![vec![]];
+        let err = bad.validate().unwrap_err().to_string();
+        assert!(
+            err.contains(&c.talents[0].id.0) && err.contains("rank"),
+            "{err}"
+        );
+        let mut bad = c.clone();
+        bad.trees[0].tiers[1].clear();
+        assert!(bad.validate().unwrap_err().to_string().contains("tier"));
+        let mut bad = c.clone();
+        bad.talents[0].effects[0].push(Boon::Grant(AbilityId::new("nope")));
+        assert!(bad.validate().unwrap_err().to_string().contains("nope"));
+        let mut bad = c.clone();
+        let dup = bad.trees[0].tiers[0][0].clone();
+        bad.trees[1].tiers[0].push(dup);
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn no_rank_is_only_a_grant_a_category_already_makes() {
+        let c = Content::load().unwrap();
+        for t in &c.talents {
+            for (r, boons) in t.effects.iter().enumerate() {
+                let only_category_grants = boons.iter().all(|b| match b {
+                    Boon::Grant(a) => c.categories.iter().any(|cat| cat.grants.contains(a)),
+                    _ => false,
+                });
+                assert!(
+                    !only_category_grants,
+                    "{} rank {} does nothing for an owner of the category that grants it",
+                    t.id,
+                    r + 1
+                );
+            }
+        }
     }
 }

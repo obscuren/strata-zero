@@ -124,7 +124,7 @@ beside you, look · `1`-`5` fire the ability in that slot ·
 they step back once you move on · `enter` jack shortcut · `.` wait · `tab` deck ·
 `F1`-`F4` panes · `v` view popup · `m` messages · `d` digital overlay · `s` save ·
 `?` keys · `c` back to the free camera (dev mode) · `:` dev
-console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `sp`, `pts`, `who`
+console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `sp`, `pts`, `talent`, `tpts`, `who`
 counts the people out, inside and driving, `clock hh:mm` jumps the day there,
 `tp x y` teleports on the current map, `clear`, `help`, with Tab completion and
 history) · `esc` pause
@@ -148,13 +148,13 @@ terminals and stairs in range for a while.
 **Pause** (`esc` or `q`) resume · save game · load game · settings (dev mode,
 rain, fps) · quit to title · quit game
 
-**Deck** (`tab`) `←→` or `1`-`9` tabs · `↑↓` rows · `space` act on a row ·
+**Deck** (`tab`) `←→` or `0`-`9` tabs · `↑↓` rows · `space` act on a row ·
 `esc` close; it reopens where you left it. Tabs: skills (the category board:
 `enter` folds and unfolds, `space` offers an unlock priced in SP), stats (the
 five stats and your pools; `space` buys a point outright), gear, inventory, workbench
 (WRENCH unlocks it), cyberdeck (the jacked deck and its programs), quests,
-journal (empty for now) and map (what you remember of this stratum). Every
-list wraps at both ends. `space` on a gear slot picks what fits from the pack,
+journal (empty for now), map (what you remember of this stratum) and talents
+(on `0`, below). Every list wraps at both ends. `space` on a gear slot picks what fits from the pack,
 or unequips and inspects what is worn; on an inventory item it opens the
 verbs: inspect, equip, use, drop one, drop all. In a popup the letter or
 `enter` fires a row and `esc` backs out one level. The readout shows hp and the
@@ -163,6 +163,18 @@ up). Items carry perks while worn (stat, sight, carry, max hp) and can grant
 abilities; consumables heal when used. The templates, origins, professions,
 categories and every item, ability, skill, talent, quest and recipe live in
 `flavor/content.ron`.
+
+**Talents** (deck tab `0`) are five trees, one per stat: MEAT, EDGE, WRENCH,
+STREET and ICE, each a column of five tiers with two talents a tier and a
+capstone on top. A talent has up to three ranks; each rank adds something you
+can read on the sheet (a stat, max HP, focus, sight, carry), grants an
+ability, sharpens one (reach, cooldown) or sets a named flag the combat and
+shop systems will read later. A tier opens when the tree below it holds three
+points a tier; a talent with a prerequisite wants it at its best first. You
+start with one point and gain one a level. In the tab, `←→` walk a tier and
+on into the next tree, `↑↓` move between tiers, `space` learns a rank; the
+dossier at the bottom reads what the next rank brings or why it is locked.
+The dev console learns by id with `talent <id>` and adds points with `tpts`.
 
 ## Layout
 

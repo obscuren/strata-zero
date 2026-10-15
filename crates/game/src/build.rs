@@ -129,7 +129,6 @@ pub struct Build {
     pub stats: Stats,
     pub categories: BTreeSet<CategoryId>,
     pub skills: BTreeSet<SkillId>,
-    pub talents: Vec<TalentId>,
     /// Extra kit on top of the profession's.
     pub kit: Vec<(ItemId, u32)>,
     pub template: Option<TemplateId>,
@@ -157,7 +156,6 @@ impl Build {
             },
             categories: BTreeSet::new(),
             skills: BTreeSet::new(),
-            talents: Vec::new(),
             kit: Vec::new(),
             template: None,
             pools: None,
@@ -172,7 +170,6 @@ impl Build {
         b.stats = t.stats.clone();
         b.categories = t.categories.iter().cloned().collect();
         b.skills = t.skills.iter().cloned().collect();
-        b.talents = t.talents.clone();
         b.kit = t.kit.clone();
         b.template = Some(t.id.clone());
         b
@@ -188,7 +185,6 @@ impl Build {
         b.stats = ch.stats.clone();
         b.categories = ch.categories.clone();
         b.skills = ch.skills.clone();
-        b.talents = ch.talents.clone();
         b.pools = Some((b.points_spent(c) + ch.stat_points, b.sp_spent(c) + ch.sp));
         b
     }

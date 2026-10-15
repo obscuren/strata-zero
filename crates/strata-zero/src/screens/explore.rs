@@ -1168,7 +1168,7 @@ impl Screen for MapScreen {
                 hud::hp_colour(ch.hp, hp_max, st.tick),
                 lw,
             ),
-            hud::bar_row("FOCUS", ch.focus, ch.focus_max, CYAN, lw),
+            hud::bar_row("FOCUS", ch.focus, ch.focus_max(&st.content), CYAN, lw),
             hud::bar_row(
                 "XP",
                 ch.xp,

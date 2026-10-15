@@ -29,6 +29,8 @@ pub enum Action {
     Unlock(CategoryId),
     /// Spends SP on a skill of an owned category.
     UnlockSkill(SkillId),
+    /// Spends a talent point on a rank.
+    Learn(TalentId),
 }
 
 /// Where the character stands: where drops land and takes come from.
@@ -224,9 +226,16 @@ pub fn apply(
             ch.sp = b.sp_left(c).max(0) as u32;
             done(format!("{} is yours", skill.name))
         }
+        Action::Learn(id) => {
+            let t = c
+                .talent(&id)
+                .ok_or_else(|| format!("unknown talent {id}"))?;
+            let rank = ch.learn(c, &id)?;
+            done(format!("{} {}/{}", t.name, rank, t.ranks))
+        }
         Action::Fire(id) => {
-            let ability = c
-                .ability(&id)
+            let ability = ch
+                .ability(c, &id)
                 .ok_or_else(|| format!("unknown ability {id}"))?;
             if !ch.abilities(c).iter().any(|(a, _)| a == &id) {
                 return Err(format!("you do not have {}", ability.name));
@@ -552,5 +561,36 @@ mod tests {
             .is_err(),
             "already yours"
         );
+    }
+
+    #[test]
+    fn learn_spends_the_point_and_reports_the_rank() {
+        let (c, mut ch, mut g, at) = setup();
+        let first = c.tree(Stat::Net).unwrap().tiers[0][0].clone();
+        let name = c.talent(&first).unwrap().name.clone();
+        let out = apply(&mut ch, &mut g, &c, at, 0, Action::Learn(first.clone())).unwrap();
+        assert!(
+            out.message.starts_with(&format!("{name} 1/")),
+            "{}",
+            out.message
+        );
+        assert_eq!(ch.talent_rank(&first), 1);
+        assert_eq!(
+            apply(&mut ch, &mut g, &c, at, 0, Action::Learn(first)).unwrap_err(),
+            "no points left"
+        );
+    }
+
+    #[test]
+    fn fire_uses_the_sharpened_reach_and_cooldown() {
+        let (c, mut ch, mut g, at) = setup();
+        // Wide band at its best reaches six further; ice pick cools sixty ticks sooner.
+        ch.talents.insert(TalentId::new("wide_band"), 2);
+        ch.talents.insert(TalentId::new("ice_pick"), 2);
+        let scan = || Action::Fire(AbilityId::new("netscan"));
+        let out = apply(&mut ch, &mut g, &c, at, 100, scan()).unwrap();
+        assert_eq!(out.effects, vec![Effect::Reveal { radius: 18 }]);
+        assert!(apply(&mut ch, &mut g, &c, at, 339, scan()).is_err());
+        assert!(apply(&mut ch, &mut g, &c, at, 340, scan()).is_ok());
     }
 }

@@ -55,7 +55,7 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
     }
     // The ability's effects start now, at the firer's feet.
     if let Some(id) = fired
-        && let Some(ability) = st.content.ability(&id)
+        && let Some(ability) = st.character.ability(&st.content, &id)
     {
         let radius = match ability.kind {
             AbilityKind::Active(
@@ -274,5 +274,24 @@ mod tests {
             perform(&mut st, Action::Fire(AbilityId::new("netscan"))).unwrap_err(),
             no_body
         );
+    }
+
+    #[test]
+    fn firing_uses_the_sharpened_ability() {
+        let mut st = AppState::new();
+        st.city = Some(city());
+        st.player = Some(Player::spawn(st.city.as_ref().unwrap(), 1));
+        st.tick = 100;
+        // Handshake at its best grants ping and sharpens its reach by four.
+        st.character
+            .talents
+            .insert(game::TalentId::new("handshake"), 2);
+        let base = match st.content.ability(&AbilityId::new("ping")).unwrap().kind {
+            AbilityKind::Active(Active::Ping { radius }) => radius,
+            _ => unreachable!(),
+        };
+        perform(&mut st, Action::Fire(AbilityId::new("ping"))).unwrap();
+        let radii: Vec<i32> = st.fx.iter().map(|i| i.radius).collect();
+        assert!(radii.iter().all(|r| *r == base + 4), "{radii:?}");
     }
 }
