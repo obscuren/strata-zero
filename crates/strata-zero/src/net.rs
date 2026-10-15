@@ -50,6 +50,8 @@ pub struct NetState {
     pub ice: BTreeMap<BuildingId, Vec<Ice>>,
     /// Turns the mask still holds.
     pub mask: u8,
+    /// Shield charges: each soaks one hit.
+    pub shield: u8,
     pub traces: BTreeMap<BuildingId, Trace>,
     pub hacks: Vec<Hack>,
     pub backdoors: BTreeSet<BuildingId>,
@@ -159,7 +161,7 @@ impl NetState {
         let backdoor = self.backdoors.contains(&b);
         let lifted: Vec<usize> = self
             .live(now)
-            .filter(|h| h.op == Op::Crack)
+            .filter(|h| matches!(h.op, Op::Crack | Op::Attack))
             .filter_map(|h| match h.target {
                 HackTarget::Guard { building, index } if building == b => Some(index),
                 _ => None,
@@ -255,6 +257,7 @@ pub fn building_here(st: &AppState) -> Option<BuildingId> {
 pub fn target_kind(st: &AppState, b: BuildingId, target: HackTarget) -> Option<Target> {
     match target {
         HackTarget::Node(id) => Some(Target::Node(st.city.as_ref()?.net.node(id).kind)),
+        HackTarget::Deck => Some(Target::Deck),
         HackTarget::Guard { building, index } => {
             if building != b {
                 return None;
@@ -286,10 +289,11 @@ pub fn start_run(st: &mut AppState, program: ItemId, target: HackTarget) -> Resu
         return Err(format!("{} does nothing there", item.name));
     }
     let security = st.constructs.get(b).map(|k| k.security).unwrap_or(0);
-    if game::chance(
-        power(&st.character, &st.content, &spec, kind),
-        difficulty(security),
-    ) == 0
+    if kind != Target::Deck
+        && game::chance(
+            power(&st.character, &st.content, &spec, kind),
+            difficulty(security),
+        ) == 0
     {
         return Err(format!("{} is out of your reach here", item.name));
     }
@@ -326,7 +330,7 @@ pub fn start_run(st: &mut AppState, program: ItemId, target: HackTarget) -> Resu
 fn node_of(target: HackTarget) -> Option<NodeId> {
     match target {
         HackTarget::Node(id) => Some(id),
-        HackTarget::Guard { .. } => None,
+        HackTarget::Guard { .. } | HackTarget::Deck => None,
     }
 }
 
@@ -346,9 +350,11 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
     let seed = match run.target {
         HackTarget::Node(id) => id.index() as u64,
         HackTarget::Guard { index, .. } => 1000 + index as u64,
+        HackTarget::Deck => 2000,
     };
     let roll = st.net.roll(st, seed);
-    let ok = succeeds(roll, pw, df);
+    // A program on yourself never fails.
+    let ok = kind == Target::Deck || succeeds(roll, pw, df);
     let now = st.net.now(st);
     let noise = if ok { spec.noise } else { spec.noise + 2 };
     let was_alert = st.net.alert(b, now);
@@ -370,6 +376,43 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
         TraceEvent::None => {}
     }
     let label = spec.op.label();
+    // An attack is a hit a turn until the piece breaks; the run stays up.
+    if spec.op == Op::Attack {
+        let HackTarget::Guard { index, .. } = run.target else {
+            st.net.run = None;
+            return None;
+        };
+        let line = if ok {
+            let mut damage = 2 * spec.rating;
+            if st.character.flags(&st.content).contains("black_ice") {
+                damage += 1;
+            }
+            let grade = st.constructs.get(b).map(|k| k.guards[index].grade)?;
+            let left = {
+                let states = st.net.ice.get_mut(&b)?;
+                let ice = states.get_mut(index)?;
+                ice.integrity = ice.integrity.saturating_sub(damage);
+                ice.integrity
+            };
+            if left == 0 {
+                st.net.run = None;
+                st.net.land(b, run.target, kind, Op::Attack, now);
+                st.net.sync_guards(&mut st.constructs, b, now);
+                kick(st, 6);
+                format!("{} ICE broken", grade.label())
+            } else {
+                format!(
+                    "attack · {} ICE {left}/{}",
+                    grade.label(),
+                    grade.integrity()
+                )
+            }
+        } else {
+            format!("{label} slips · heat {heat}")
+        };
+        st.say(line.clone());
+        return Some(line);
+    }
     let line = if ok {
         let done = run.done + 1;
         if done >= run.work {
@@ -422,6 +465,15 @@ fn land(
             "server copied · a paydata shard in the pack".to_string()
         }
         (Op::Backdoor, _) => format!("backdoor planted · {name}'s gate is yours"),
+        (Op::Shield, _) => {
+            st.net.shield = (st.net.shield + 1).min(2);
+            let n = st.net.shield;
+            format!(
+                "shield raised · {n} charge{}",
+                if n == 1 { "" } else { "s" }
+            )
+        }
+        (Op::Mask, _) => "mask raised".to_string(),
         (Op::Crack, Target::Node(k)) => format!("{} cracked", k.label()),
         (op, _) => format!("{} landed", op.label()),
     };
@@ -554,6 +606,9 @@ pub fn ice_turn(st: &mut AppState) {
             continue;
         }
         let mut ice = st.net.ice[&b][i].clone();
+        if ice.integrity == 0 {
+            ice.integrity = g.grade.integrity();
+        }
         if sees(k, g.pos, g.grade, pos, masked) {
             ice.mode = IceMode::Awake { seen: pos, lost: 0 };
         }
@@ -623,12 +678,63 @@ pub fn ice_turn(st: &mut AppState) {
     }
 }
 
-/// A standing piece beside the player hits them.
+/// A standing piece beside the player hits them: white adds heat, grey drains
+/// focus and dumps at zero, black takes HP through the jack. A shield charge soaks
+/// a hit; the deck's rating comes off grey and black hits.
 fn hit(st: &mut AppState, b: BuildingId, i: usize) {
-    let Some(grade) = st.constructs.get(b).map(|k| k.guards[i].grade) else {
+    let Some((grade, security)) = st
+        .constructs
+        .get(b)
+        .map(|k| (k.guards[i].grade, k.security))
+    else {
         return;
     };
-    st.warn(format!("{} ICE hits", grade.label()));
+    if st.net.shield > 0 {
+        st.net.shield -= 1;
+        st.say("shield absorbs the hit");
+        return;
+    }
+    let armour = st
+        .character
+        .deck(&st.content)
+        .map(|(_, d)| d.rating as u32)
+        .unwrap_or(0);
+    let now = st.net.now(st);
+    match grade {
+        IceGrade::White => {
+            let was_alert = st.net.alert(b, now);
+            let event = st.net.trace(b).add(5, now);
+            let heat = st.net.traces[&b].heat;
+            st.warn(format!("white ICE hits · heat {heat}"));
+            match event {
+                TraceEvent::Dump => {
+                    if !was_alert {
+                        let line = raise_alarm(st, b);
+                        st.warn(line);
+                    }
+                    dump(st, "the trace found you");
+                }
+                TraceEvent::Alarm => {
+                    let line = raise_alarm(st, b);
+                    st.warn(line);
+                }
+                TraceEvent::None => {}
+            }
+        }
+        IceGrade::Grey => {
+            let drain = 10u32.saturating_sub(armour).max(1);
+            st.character.focus = st.character.focus.saturating_sub(drain);
+            let focus = st.character.focus;
+            st.warn(format!("grey ICE hits · focus {focus}"));
+            if focus == 0 {
+                dump(st, "grey ICE drained you");
+            }
+        }
+        IceGrade::Black => {
+            let _ = security;
+            st.warn("black ICE hits".to_string());
+        }
+    }
 }
 
 /// The HERE lines for the ICE of a construct the player can see.
@@ -676,7 +782,7 @@ pub fn jack_in_refusal(st: &AppState) -> Option<String> {
 
 /// The node on or beside a tile in a construct, and the standing guard beside it.
 pub fn targets_near(st: &AppState, b: BuildingId, pos: citygen::Pos) -> Vec<(HackTarget, String)> {
-    let mut out = Vec::new();
+    let mut out = vec![(HackTarget::Deck, "yourself".to_string())];
     let (Some(city), Some(k)) = (st.city.as_ref(), st.constructs.get(b)) else {
         return out;
     };

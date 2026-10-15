@@ -655,7 +655,12 @@ impl MapScreen {
                         continue;
                     }
                     let pw = game::power(&st.character, &st.content, &spec, kind);
-                    let odds = game::chance(pw, game::difficulty(security));
+                    // A program on yourself never fails.
+                    let odds = if kind == game::Target::Deck {
+                        100
+                    } else {
+                        game::chance(pw, game::difficulty(security))
+                    };
                     if odds == 0 {
                         choices.push(Choice::disabled(
                             key,
@@ -666,8 +671,10 @@ impl MapScreen {
                     choices.push(Choice::new(
                         key,
                         format!(
-                            "{label}{on} · {odds}% · {} turns · noise {}",
-                            spec.work, spec.noise
+                            "{label}{on} · {odds}% · {} turn{} · noise {}",
+                            spec.work,
+                            if spec.work == 1 { "" } else { "s" },
+                            spec.noise
                         ),
                         Pick::Run(item.id.clone(), target),
                     ));
@@ -3597,6 +3604,10 @@ mod tests {
     /// Puts the walking player inside the construct of a tower with a vault and
     /// a lock, jacked in from the street beside it; returns the building.
     fn in_construct(st: &mut AppState, s: &mut MapScreen) -> citygen::BuildingId {
+        in_construct_at(st, s, 200)
+    }
+
+    fn in_construct_at(st: &mut AppState, s: &mut MapScreen, security: u8) -> citygen::BuildingId {
         walking(st, s);
         let city = st.city.as_ref().unwrap().clone();
         let b = city
@@ -3627,7 +3638,7 @@ mod tests {
             .iter_mut()
             .find(|s| s.owner == citygen::SubnetOwner::Building(b))
             .unwrap()
-            .security = 200;
+            .security = security;
         {
             let p = st.player.as_mut().unwrap();
             p.body = Some((Place::Stratum(StratumKind::Street), p.pos));
@@ -4319,5 +4330,187 @@ mod tests {
             assert_ne!(k.guards[0].pos, k.guards[1].pos);
             assert_ne!(k.guards[0].pos, hide);
         }
+    }
+
+    #[test]
+    fn white_ice_adds_heat_and_grey_ice_drains_focus_to_a_dump() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct_at(&mut st, &mut s, 170);
+        let (post, grade) = {
+            let g = &st.constructs.get(b).unwrap().guards[0];
+            (g.post, g.grade)
+        };
+        assert_eq!(grade, IceGrade::White);
+        stand(
+            &mut st,
+            &mut s,
+            Place::Construct(b),
+            Pos::new(post.x - 1, post.y),
+        );
+        assert_eq!(
+            last(&st),
+            Some("white ICE hits · heat 5"),
+            "{:?}",
+            last(&st)
+        );
+        assert_eq!(st.net.traces[&b].heat, 5);
+        // Grey: ten less the deck's rating a hit, a dump at zero.
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let post = st.constructs.get(b).unwrap().guards[0].post;
+        stand(
+            &mut st,
+            &mut s,
+            Place::Construct(b),
+            Pos::new(post.x - 1, post.y),
+        );
+        assert_eq!(
+            last(&st),
+            Some("grey ICE hits · focus 21"),
+            "{:?}",
+            last(&st)
+        );
+        assert_eq!(st.character.focus, 21);
+        for _ in 0..2 {
+            s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        }
+        assert_eq!(st.character.focus, 3);
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(st.character.focus, 0);
+        assert_eq!(last(&st), Some("DUMPED · grey ICE drained you"));
+        assert!(!st.player.as_ref().unwrap().jacked_in());
+    }
+
+    #[test]
+    fn a_shield_absorbs_a_hit_and_an_attack_breaks_ice() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        st.net.force_roll = Some(10);
+        let post = st.constructs.get(b).unwrap().guards[0].post;
+        // Only the gate guard plays: the vault guard is down under a landed crack.
+        let now = st.net.now(&st);
+        st.net.land(
+            b,
+            game::HackTarget::Guard {
+                building: b,
+                index: 1,
+            },
+            game::Target::Guard(IceGrade::Grey),
+            game::Op::Crack,
+            now,
+        );
+        st.net.sync_guards(&mut st.constructs, b, now);
+        let hide = room_tile(&st, b);
+        stand(&mut st, &mut s, Place::Construct(b), hide);
+        let at = game::At {
+            place: Place::Construct(b),
+            pos: hide,
+        };
+        st.character
+            .unload(&st.content, &ItemId::new("copy"))
+            .unwrap();
+        st.character
+            .unload(&st.content, &ItemId::new("crack"))
+            .unwrap();
+        crate::screens::console::run(&mut st, at, "program shield").unwrap();
+        crate::screens::console::run(&mut st, at, "program attack").unwrap();
+        // Shield on yourself never fails and holds one charge.
+        crate::net::start_run(&mut st, ItemId::new("shield"), game::HackTarget::Deck).unwrap();
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(
+            last(&st),
+            Some("shield raised · 1 charge"),
+            "{:?}",
+            last(&st)
+        );
+        assert_eq!(st.net.shield, 1);
+        // Two tiles up the spine from the patrolling guard: it sees you and comes
+        // beside you. Then the shield takes its first hit and the attack breaks it.
+        let gate = st.constructs.get(b).unwrap().guards[0].pos;
+        let _ = post;
+        stand(
+            &mut st,
+            &mut s,
+            Place::Construct(b),
+            Pos::new(gate.x + 2, gate.y),
+        );
+        let gate = st.constructs.get(b).unwrap().guards[0].pos;
+        assert_eq!(
+            gate.chebyshev(st.player.as_ref().unwrap().pos),
+            1,
+            "{:?}",
+            last(&st)
+        );
+        let post = gate;
+        let target = game::HackTarget::Guard {
+            building: b,
+            index: 0,
+        };
+        crate::net::start_run(&mut st, ItemId::new("attack"), target).unwrap();
+        let focus = st.character.focus;
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        let log: Vec<String> = st
+            .log
+            .iter()
+            .rev()
+            .take(3)
+            .map(|e| e.text.clone())
+            .collect();
+        assert!(log.iter().any(|l| l == "attack · grey ICE 4/6"), "{log:?}");
+        assert!(log.iter().any(|l| l == "shield absorbs the hit"), "{log:?}");
+        assert_eq!(st.character.focus, focus);
+        assert_eq!(st.net.shield, 0);
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(st.character.focus, focus - 9);
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(last(&st), Some("grey ICE broken"), "{:?}", last(&st));
+        assert!(st.net.run.is_none());
+        let k = st.constructs.get(b).unwrap();
+        assert_eq!(k.guard_at(k.guards[0].pos), None);
+        assert!(k.tiles[k.guards[0].pos].is_walkable());
+        let now = st.net.now(&st);
+        st.net.sync_guards(&mut st.constructs, b, now);
+        assert_eq!(
+            st.constructs.get(b).unwrap().guard_at(post),
+            None,
+            "stays down"
+        );
+        // After the hour it stands where it was, whole again.
+        st.net
+            .minute(now + game::HACK_MINUTES, None, &mut st.constructs);
+        let k = st.constructs.get(b).unwrap();
+        assert_eq!(k.guard_at(k.guards[0].pos), Some(0));
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(st.net.ice[&b][0].integrity, 6, "whole again");
+        // The RUN popup offers the deck programs on yourself.
+        let ScreenCmd::Push { to: run, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))]) else {
+            panic!("space opens RUN")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*run, &st, 120, 40);
+        assert!(text.contains("shield · yourself · 100% · 1 turn"), "{text}");
+    }
+
+    #[test]
+    fn no_hit_lands_on_the_turn_you_jack_out() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let post = st.constructs.get(b).unwrap().guards[0].post;
+        stand(
+            &mut st,
+            &mut s,
+            Place::Construct(b),
+            Pos::new(post.x - 1, post.y),
+        );
+        let focus = st.character.focus;
+        assert!(focus < 30, "the first hit landed on the wait");
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert!(!st.player.as_ref().unwrap().jacked_in());
+        assert_eq!(st.character.focus, focus, "{:?}", last(&st));
+        assert_eq!(last(&st), Some("jacked out"));
     }
 }

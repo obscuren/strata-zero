@@ -830,13 +830,18 @@ impl Deck {
             return vec![warn(format!("{} is not a program", item.name))];
         };
         let (targets, typical) = match p.op {
-            game::Op::Crack => ("any node or ICE", NodeKind::DoorLock),
-            game::Op::Spoof => ("door locks and lift controls", NodeKind::DoorLock),
-            game::Op::Blind => ("cameras", NodeKind::Camera),
-            game::Op::Copy => ("servers and vaults", NodeKind::Server),
-            game::Op::Backdoor => ("servers", NodeKind::Server),
+            game::Op::Crack => ("any node or ICE", game::Target::Node(NodeKind::DoorLock)),
+            game::Op::Spoof => (
+                "door locks and lift controls",
+                game::Target::Node(NodeKind::DoorLock),
+            ),
+            game::Op::Blind => ("cameras", game::Target::Node(NodeKind::Camera)),
+            game::Op::Copy => ("servers and vaults", game::Target::Node(NodeKind::Server)),
+            game::Op::Backdoor => ("servers", game::Target::Node(NodeKind::Server)),
+            game::Op::Attack => ("ICE", game::Target::Guard(citygen::IceGrade::Grey)),
+            game::Op::Shield | game::Op::Mask => ("yourself", game::Target::Deck),
         };
-        let pw = game::power(&st.character, &st.content, &p, game::Target::Node(typical));
+        let pw = game::power(&st.character, &st.content, &p, typical);
         let mut out = vec![head(&item.name)];
         out.push(dim(format!("{} · {targets}", p.op.label())));
         out.push(dim(format!(
@@ -2570,7 +2575,9 @@ mod tests {
         assert_eq!(texts[2], "◆ Crack · size 1");
         assert_eq!(texts[3], "◆ Copy · size 1");
         assert!(texts.iter().any(|t| t == "── programs ──"), "{texts:?}");
-        assert!(!texts.iter().any(|t| t == "── in the pack ──"), "{texts:?}");
+        // The kit's attack waits in the pack: the deck is full.
+        let pack = texts.iter().position(|t| t == "── in the pack ──").unwrap();
+        assert_eq!(texts[pack + 1], "◇ Attack · size 1");
         // The detail of a program reads its numbers and the odds.
         let rows = d.rows(&st);
         d.row = rows.iter().position(|r| r.text.contains("Crack")).unwrap();
@@ -2591,7 +2598,10 @@ mod tests {
         assert_eq!(last(&st), Some("Copy unloaded"));
         let texts = cyberdeck_texts(&st);
         let pack = texts.iter().position(|t| t == "── in the pack ──").unwrap();
-        assert_eq!(texts[pack + 1], "◇ Copy · size 1");
+        assert!(
+            texts[pack + 1..].contains(&"◇ Copy · size 1".to_string()),
+            "{texts:?}"
+        );
         assert_eq!(texts[0], "▣ Pawnshop deck · 1/2 slots · rating 1");
         let rows = d.rows(&st);
         d.row = rows.iter().position(|r| r.text.contains("◇ Copy")).unwrap();

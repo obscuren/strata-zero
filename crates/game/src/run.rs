@@ -22,6 +22,8 @@ pub const COOLING_MINUTES: u64 = 10;
 pub enum Target {
     Node(NodeKind),
     Guard(IceGrade),
+    /// The runner's own deck: a program on yourself.
+    Deck,
 }
 
 /// The exact thing a run works on.
@@ -29,13 +31,16 @@ pub enum Target {
 pub enum HackTarget {
     Node(NodeId),
     Guard { building: BuildingId, index: usize },
+    Deck,
 }
 
 /// Whether an op does anything to a target.
 pub fn applies(op: Op, target: Target) -> bool {
     matches!(
         (op, target),
-        (Op::Crack, _)
+        (Op::Crack, Target::Node(_) | Target::Guard(_))
+            | (Op::Attack, Target::Guard(_))
+            | (Op::Shield | Op::Mask, Target::Deck)
             | (
                 Op::Spoof,
                 Target::Node(NodeKind::DoorLock | NodeKind::LiftCtrl)
@@ -52,7 +57,8 @@ pub fn applies(op: Op, target: Target) -> bool {
 /// The skill a run leans on.
 pub fn skill_for(op: Op, target: Target) -> SkillId {
     match (op, target) {
-        (Op::Crack, Target::Guard(_)) => SkillId::new("ice_breaker"),
+        (Op::Crack, Target::Guard(_)) | (Op::Attack | Op::Shield, _) => SkillId::new("ice_breaker"),
+        (Op::Mask, _) => SkillId::new("stealth"),
         (Op::Copy, _) => SkillId::new("vault_run"),
         _ => SkillId::new("hacking"),
     }
@@ -177,6 +183,28 @@ mod tests {
         assert!(applies(Op::Backdoor, Target::Node(NodeKind::Server)));
         assert!(!applies(Op::Backdoor, Target::Node(NodeKind::DataVault)));
         assert!(!applies(Op::Copy, Target::Guard(IceGrade::Grey)));
+        assert!(applies(Op::Attack, Target::Guard(IceGrade::Black)));
+        assert!(!applies(Op::Attack, Target::Node(NodeKind::Server)));
+        assert!(applies(Op::Shield, Target::Deck) && applies(Op::Mask, Target::Deck));
+        assert!(!applies(Op::Shield, Target::Guard(IceGrade::Grey)));
+        assert!(!applies(Op::Crack, Target::Deck));
+        assert_eq!(
+            skill_for(Op::Attack, Target::Guard(IceGrade::Grey)),
+            SkillId::new("ice_breaker")
+        );
+        assert_eq!(
+            skill_for(Op::Shield, Target::Deck),
+            SkillId::new("ice_breaker")
+        );
+        assert_eq!(skill_for(Op::Mask, Target::Deck), SkillId::new("stealth"));
+        assert_eq!(Op::ALL.len(), 8);
+        for id in ["attack", "shield", "mask"] {
+            assert!(
+                c.item(&ItemId::new(id))
+                    .is_some_and(|i| i.program.is_some()),
+                "{id}"
+            );
+        }
         assert_eq!(
             skill_for(Op::Crack, Target::Guard(IceGrade::White)),
             SkillId::new("ice_breaker")
