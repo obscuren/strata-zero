@@ -83,10 +83,11 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 .first()
                 .and_then(|a| a.parse().ok())
                 .ok_or_else(|| "focus <points>".to_string())?;
-            st.character.focus = n.min(st.character.focus_max);
+            st.character.focus = n.min(st.character.focus_max(&st.content));
             Ok(format!(
                 "focus {}/{}",
-                st.character.focus, st.character.focus_max
+                st.character.focus,
+                st.character.focus_max(&st.content)
             ))
         }
         "sp" => {

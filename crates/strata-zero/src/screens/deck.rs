@@ -514,6 +514,7 @@ impl Deck {
                 Perk::Sight(n) => format!("{n:+} sight"),
                 Perk::Carry(kg) => format!("{kg:+.1} kg carry"),
                 Perk::HpMax(n) => format!("{n:+} max hp"),
+                Perk::Focus(n) => format!("{n:+} focus"),
             }));
         }
         for id in &item.grants {
@@ -872,6 +873,13 @@ impl Deck {
                             .item(item)
                             .map(|i| i.name.clone())
                             .unwrap_or_else(|| item.to_string())
+                    ),
+                    Source::Talent(t) => format!(
+                        "from {}",
+                        st.content
+                            .talent(t)
+                            .map(|t| t.name.clone())
+                            .unwrap_or_else(|| t.to_string())
                     ),
                 };
                 out.push(dim(format!("{kind} · {from}")));

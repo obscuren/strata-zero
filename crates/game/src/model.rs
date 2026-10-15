@@ -153,6 +153,8 @@ pub enum Perk {
     /// Carry capacity, in kilograms.
     Carry(f32),
     HpMax(i32),
+    /// Max focus.
+    Focus(i32),
 }
 
 /// What a consumable does when used; one unit is consumed.
@@ -235,12 +237,49 @@ pub struct Skill {
     pub desc: String,
 }
 
+/// What one rank of a talent adds.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Boon {
+    Perk(Perk),
+    /// An ability the character gains.
+    Grant(AbilityId),
+    /// Reach added to an ability and ticks added to its cooldown (negative cools sooner).
+    Sharpen {
+        ability: AbilityId,
+        #[serde(default)]
+        radius: i32,
+        #[serde(default)]
+        cooldown: i64,
+    },
+    /// A named promise a later system reads.
+    Flag(String),
+}
+
+/// A talent in a tree: ranks, each with its boons, behind an optional prerequisite
+/// straight below it in the same column.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Talent {
     pub id: TalentId,
     pub name: String,
-    pub skill: SkillId,
+    pub icon: char,
+    pub ranks: u8,
+    #[serde(default)]
+    pub requires: Option<TalentId>,
+    /// One list per rank: what that rank adds.
+    pub effects: Vec<Vec<Boon>>,
+    /// The skill it flavours.
+    #[serde(default)]
+    pub skill: Option<SkillId>,
     pub desc: String,
+}
+
+/// A tree of talents under one stat: tiers from the bottom, each a row of talents.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Tree {
+    pub stat: Stat,
+    pub name: String,
+    pub line: String,
+    pub tiers: Vec<Vec<TalentId>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -327,8 +366,6 @@ pub struct Template {
     pub stats: Stats,
     pub categories: Vec<CategoryId>,
     pub skills: Vec<SkillId>,
-    #[serde(default)]
-    pub talents: Vec<TalentId>,
     /// Extra kit on top of the profession's.
     #[serde(default)]
     pub kit: Vec<(ItemId, u32)>,
@@ -346,6 +383,19 @@ pub struct Creation {
     pub hp: u32,
     pub focus: u32,
     pub quests: Vec<(QuestId, Vec<bool>)>,
+    /// Talent points at creation.
+    #[serde(default = "one")]
+    pub talent_points: u32,
+    /// Points a tree needs per tier below the one opening.
+    #[serde(default = "three")]
+    pub tier_gate: u32,
+}
+
+fn one() -> u32 {
+    1
+}
+fn three() -> u32 {
+    3
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

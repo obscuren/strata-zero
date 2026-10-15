@@ -29,6 +29,7 @@ pub enum Source {
     Innate,
     Category(CategoryId),
     Item(ItemId),
+    Talent(TalentId),
 }
 
 /// The character. Nothing derived is cached: every value that depends on equipment
@@ -43,13 +44,15 @@ pub struct Character {
     pub level: u8,
     pub xp: u32,
     pub focus: u32,
-    pub focus_max: u32,
+    /// Max focus before talents; see `focus_max`.
+    pub focus_base: u32,
     pub stats: Stats,
     pub origin: OriginId,
     pub profession: ProfessionId,
     pub categories: BTreeSet<CategoryId>,
     pub skills: BTreeSet<SkillId>,
-    pub talents: Vec<TalentId>,
+    /// Ranks held per talent; absent means none.
+    pub talents: BTreeMap<TalentId, u8>,
     /// Innate abilities; categories and equipment add more (see `abilities`).
     pub abilities: Vec<AbilityId>,
     pub equipment: BTreeMap<Slot, ItemId>,
@@ -60,6 +63,8 @@ pub struct Character {
     /// Unspent creation points, spendable from the deck under the same rules.
     pub stat_points: u32,
     pub sp: u32,
+    /// Unspent talent points: one at creation, one per level.
+    pub talent_points: u32,
 }
 
 impl Character {
@@ -75,7 +80,7 @@ impl Character {
             level: 1,
             xp: 0,
             focus: cr.focus,
-            focus_max: cr.focus,
+            focus_base: cr.focus,
             stats: b.stats.clone(),
             origin: b.origin.clone().unwrap_or_else(|| OriginId::new("")),
             profession: b
@@ -84,7 +89,7 @@ impl Character {
                 .unwrap_or_else(|| ProfessionId::new("")),
             categories: b.categories.clone(),
             skills: b.skills.clone(),
-            talents: b.talents.clone(),
+            talents: BTreeMap::new(),
             abilities: Vec::new(),
             equipment: BTreeMap::new(),
             inventory: Vec::new(),
@@ -99,6 +104,7 @@ impl Character {
             fired: BTreeMap::new(),
             stat_points: b.points_left(c).max(0) as u32,
             sp: b.sp_left(c).max(0) as u32,
+            talent_points: cr.talent_points,
         };
         let mut kit: Vec<(ItemId, u32)> = Vec::new();
         if let Some(p) = b.profession.as_ref().and_then(|id| c.profession(id)) {
@@ -145,13 +151,29 @@ impl Character {
             .any(|cat| cat.unlocks.contains(&Unlock::Workbench))
     }
 
-    /// Perks of everything equipped, in slot order.
+    /// Perks of everything equipped, in slot order, then those of every talent rank.
     pub fn perks<'a>(&'a self, c: &'a Content) -> impl Iterator<Item = &'a Perk> + 'a {
         Slot::ALL
             .iter()
             .filter_map(move |s| self.equipment.get(s))
             .filter_map(move |id| c.item(id))
             .flat_map(|i| i.perks.iter())
+            .chain(self.talent_effects(c).filter_map(|b| match b {
+                Boon::Perk(p) => Some(p),
+                _ => None,
+            }))
+    }
+
+    /// Max focus: the base plus talent perks, never below one.
+    pub fn focus_max(&self, c: &Content) -> u32 {
+        let bonus: i32 = self
+            .perks(c)
+            .filter_map(|p| match p {
+                Perk::Focus(n) => Some(*n),
+                _ => None,
+            })
+            .sum();
+        (self.focus_base as i32 + bonus).max(1) as u32
     }
 
     pub fn hp_max(&self, c: &Content) -> u32 {
@@ -180,6 +202,7 @@ impl Character {
             self.level += 1;
             gained += 1;
         }
+        self.talent_points += gained as u32;
         gained
     }
 
@@ -221,7 +244,8 @@ impl Character {
     }
 
     /// Innate abilities first, then those granted by owned categories in content order,
-    /// then those granted by equipment in slot order, deduplicated.
+    /// then those granted by equipment in slot order, then by talents; deduplicated,
+    /// the first source winning.
     pub fn abilities(&self, c: &Content) -> Vec<(AbilityId, Source)> {
         let mut out: Vec<(AbilityId, Source)> = self
             .abilities
@@ -249,7 +273,123 @@ impl Character {
                 }
             }
         }
+        for t in &c.talents {
+            let rank = self.talent_rank(&t.id) as usize;
+            for b in t.effects.iter().take(rank).flatten() {
+                if let Boon::Grant(id) = b
+                    && !out.iter().any(|(have, _)| have == id)
+                {
+                    out.push((id.clone(), Source::Talent(t.id.clone())));
+                }
+            }
+        }
         out
+    }
+
+    /// The content's ability with every sharpening the talents give it: reach added
+    /// (never below one), cooldown added (never below zero).
+    pub fn ability(&self, c: &Content, id: &AbilityId) -> Option<Ability> {
+        let mut a = c.ability(id)?.clone();
+        let (mut dr, mut dc) = (0i32, 0i64);
+        for b in self.talent_effects(c) {
+            if let Boon::Sharpen {
+                ability,
+                radius,
+                cooldown,
+            } = b
+                && ability == id
+            {
+                dr += radius;
+                dc += cooldown;
+            }
+        }
+        if let AbilityKind::Active(
+            Active::Scan { radius } | Active::Ping { radius } | Active::Trace { radius },
+        ) = &mut a.kind
+        {
+            *radius = (*radius + dr).max(1);
+        }
+        a.cooldown = (a.cooldown as i64 + dc).max(0) as u64;
+        Some(a)
+    }
+
+    /// The rank held in a talent; zero when unlearned.
+    pub fn talent_rank(&self, id: &TalentId) -> u8 {
+        self.talents.get(id).copied().unwrap_or(0)
+    }
+
+    /// Ranks held across one tree.
+    pub fn tree_points(&self, c: &Content, stat: Stat) -> u32 {
+        c.tree(stat)
+            .map(|t| {
+                t.tiers
+                    .iter()
+                    .flatten()
+                    .map(|id| self.talent_rank(id) as u32)
+                    .sum()
+            })
+            .unwrap_or(0)
+    }
+
+    /// Whether a tier (from zero) of a tree has opened: `tier_gate` points per tier
+    /// below it.
+    pub fn tier_open(&self, c: &Content, stat: Stat, tier: usize) -> bool {
+        self.tree_points(c, stat) >= c.creation.tier_gate * tier as u32
+    }
+
+    /// Why a talent cannot take a point now, in the order the sheet reports it:
+    /// no point left, the tier closed, the prerequisite short, already at its best.
+    pub fn can_learn(&self, c: &Content, id: &TalentId) -> Result<(), String> {
+        let t = c.talent(id).ok_or_else(|| format!("unknown talent {id}"))?;
+        let (tree, tier, _) = c
+            .tree_of(id)
+            .ok_or_else(|| format!("{} hangs in no tree", t.name))?;
+        if self.talent_points == 0 {
+            return Err("no points left".into());
+        }
+        let need = c.creation.tier_gate * tier as u32;
+        let have = self.tree_points(c, tree.stat);
+        if have < need {
+            let more = need - have;
+            let s = if more == 1 { "" } else { "s" };
+            return Err(format!("{more} more point{s} in {}", tree.name));
+        }
+        if let Some(req) = t.requires.as_ref().and_then(|r| c.talent(r))
+            && self.talent_rank(&req.id) < req.ranks
+        {
+            return Err(format!("needs {} {}/{}", req.name, req.ranks, req.ranks));
+        }
+        if self.talent_rank(id) >= t.ranks {
+            return Err("already at its best".into());
+        }
+        Ok(())
+    }
+
+    /// Spends a point on a talent under `can_learn`; returns the new rank.
+    pub fn learn(&mut self, c: &Content, id: &TalentId) -> Result<u8, String> {
+        self.can_learn(c, id)?;
+        self.talent_points -= 1;
+        let rank = self.talents.entry(id.clone()).or_insert(0);
+        *rank += 1;
+        Ok(*rank)
+    }
+
+    /// Every boon of every rank held, in content order.
+    pub fn talent_effects<'a>(&'a self, c: &'a Content) -> impl Iterator<Item = &'a Boon> + 'a {
+        c.talents.iter().flat_map(move |t| {
+            let rank = self.talent_rank(&t.id) as usize;
+            t.effects.iter().take(rank).flatten()
+        })
+    }
+
+    /// The named promises the talents hold.
+    pub fn flags(&self, c: &Content) -> BTreeSet<String> {
+        self.talent_effects(c)
+            .filter_map(|b| match b {
+                Boon::Flag(f) => Some(f.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Ticks until an ability is ready again; `None` when ready (or unknown).
@@ -314,7 +454,7 @@ impl Character {
     }
 
     pub fn has_talent(&self, id: &TalentId) -> bool {
-        self.talents.iter().any(|t| t == id)
+        self.talent_rank(id) >= 1
     }
 
     pub fn equipped(&self, slot: Slot) -> Option<&ItemId> {
@@ -341,7 +481,7 @@ mod tests {
         let ch = vex(&c);
         assert_eq!(ch.handle, "VEX");
         assert_eq!(
-            (ch.level, ch.xp, ch.focus, ch.focus_max, ch.credits),
+            (ch.level, ch.xp, ch.focus, ch.focus_base, ch.credits),
             (1, 0, 30, 30, 320)
         );
         assert_eq!(
@@ -489,5 +629,244 @@ mod tests {
         assert_eq!(ch.count(&caps), u32::MAX);
         ch.give(caps.clone(), 0);
         assert_eq!(ch.inventory.iter().filter(|s| s.item == caps).count(), 1);
+    }
+
+    #[test]
+    fn learning_follows_points_tiers_prerequisites_and_ranks() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        assert_eq!(ch.talent_points, 1);
+        assert!(ch.talents.is_empty());
+        let edge = c.tree(Stat::Reflex).unwrap();
+        let first = edge.tiers[0][0].clone();
+        let second = edge.tiers[1][0].clone();
+        assert_eq!(
+            ch.can_learn(&c, &second).unwrap_err(),
+            "3 more points in EDGE"
+        );
+        assert_eq!(ch.learn(&c, &first).unwrap(), 1);
+        assert!(ch.has_talent(&first));
+        assert_eq!(ch.talent_points, 0);
+        assert_eq!(ch.can_learn(&c, &first).unwrap_err(), "no points left");
+        ch.talent_points = 10;
+        let ranks = c.talent(&first).unwrap().ranks;
+        for r in 2..=ranks {
+            assert_eq!(ch.learn(&c, &first).unwrap(), r);
+        }
+        assert_eq!(ch.can_learn(&c, &first).unwrap_err(), "already at its best");
+        assert_eq!(ch.tree_points(&c, Stat::Reflex), ranks as u32);
+        let other = edge.tiers[0][1].clone();
+        while ch.tree_points(&c, Stat::Reflex) < 3 {
+            assert!(!ch.tier_open(&c, Stat::Reflex, 1));
+            ch.learn(&c, &other).unwrap();
+        }
+        assert!(ch.tier_open(&c, Stat::Reflex, 1));
+        // A prerequisite must be maxed before its dependant opens.
+        let needy = c.talents.iter().find(|t| t.requires.is_some()).unwrap();
+        let (tree, tier, _) = c.tree_of(&needy.id).unwrap();
+        let stat = tree.stat;
+        let req = c.talent(needy.requires.as_ref().unwrap()).unwrap();
+        let mut ch2 = vex(&c);
+        ch2.talent_points = 30;
+        for lower in 0..tier {
+            for id in &c.tree(stat).unwrap().tiers[lower] {
+                if id == &req.id {
+                    continue;
+                }
+                while ch2.can_learn(&c, id).is_ok() {
+                    ch2.learn(&c, id).unwrap();
+                }
+            }
+        }
+        while !ch2.tier_open(&c, stat, tier) {
+            ch2.talents
+                .insert(req.id.clone(), ch2.talent_rank(&req.id) + 1);
+            if ch2.talent_rank(&req.id) >= req.ranks {
+                break;
+            }
+        }
+        if ch2.talent_rank(&req.id) < req.ranks {
+            assert_eq!(
+                ch2.can_learn(&c, &needy.id).unwrap_err(),
+                format!("needs {} {}/{}", req.name, req.ranks, req.ranks)
+            );
+        }
+        ch2.talents.insert(req.id.clone(), req.ranks);
+        assert!(ch2.can_learn(&c, &needy.id).is_ok());
+    }
+
+    #[test]
+    fn ranks_carry_perks_grants_sharpening_and_flags() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        let with = |kind: fn(&Boon) -> bool| {
+            c.talents
+                .iter()
+                .find(|t| t.effects.iter().flatten().any(kind))
+                .unwrap()
+                .id
+                .clone()
+        };
+        let stat_t = with(|e| matches!(e, Boon::Perk(Perk::Stat(..))));
+        let focus_t = with(|e| matches!(e, Boon::Perk(Perk::Focus(_))));
+        let grant_t = with(|e| matches!(e, Boon::Grant(_)));
+        let sharp_t = with(|e| matches!(e, Boon::Sharpen { .. }));
+        let flag_t = with(|e| matches!(e, Boon::Flag(_)));
+        let force = |ch: &mut Character, id: &TalentId| {
+            let t = c.talent(id).unwrap();
+            ch.talents.insert(id.clone(), t.ranks);
+        };
+        let before = ch.focus_max(&c);
+        force(&mut ch, &focus_t);
+        assert!(ch.focus_max(&c) > before);
+        let first_stat = c
+            .talent(&stat_t)
+            .unwrap()
+            .effects
+            .iter()
+            .flatten()
+            .find_map(|e| match e {
+                Boon::Perk(Perk::Stat(s, n)) => Some((*s, *n)),
+                _ => None,
+            })
+            .unwrap();
+        let before = ch.stat(&c, first_stat.0);
+        force(&mut ch, &stat_t);
+        assert!(ch.stat(&c, first_stat.0) as i32 >= before as i32 + first_stat.1 as i32);
+        force(&mut ch, &grant_t);
+        let granted = c
+            .talent(&grant_t)
+            .unwrap()
+            .effects
+            .iter()
+            .flatten()
+            .find_map(|e| match e {
+                Boon::Grant(a) => Some(a.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(ch.abilities(&c).iter().any(|(a, _)| a == &granted));
+        force(&mut ch, &sharp_t);
+        let (ability, radius, cooldown) = c
+            .talent(&sharp_t)
+            .unwrap()
+            .effects
+            .iter()
+            .flatten()
+            .find_map(|e| match e {
+                Boon::Sharpen {
+                    ability,
+                    radius,
+                    cooldown,
+                } => Some((ability.clone(), *radius, *cooldown)),
+                _ => None,
+            })
+            .unwrap();
+        let base = c.ability(&ability).unwrap();
+        let eff = ch.ability(&c, &ability).unwrap();
+        let reach = |a: &Ability| match a.kind {
+            AbilityKind::Active(
+                Active::Scan { radius } | Active::Ping { radius } | Active::Trace { radius },
+            ) => radius,
+            AbilityKind::Passive => 0,
+        };
+        if radius != 0 {
+            assert_ne!(reach(&eff), reach(base));
+        }
+        if cooldown != 0 {
+            assert_ne!(eff.cooldown, base.cooldown);
+        }
+        force(&mut ch, &flag_t);
+        let flag = c
+            .talent(&flag_t)
+            .unwrap()
+            .effects
+            .iter()
+            .flatten()
+            .find_map(|e| match e {
+                Boon::Flag(f) => Some(f.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(ch.flags(&c).contains(&flag));
+        // Sharpening never takes a cooldown below zero or a reach below one.
+        let mut sharp = c.clone();
+        sharp
+            .talents
+            .iter_mut()
+            .find(|t| t.id == sharp_t)
+            .unwrap()
+            .effects[0] = vec![Boon::Sharpen {
+            ability: ability.clone(),
+            radius: -99,
+            cooldown: -99_999,
+        }];
+        let eff = ch.ability(&sharp, &ability).unwrap();
+        assert_eq!(eff.cooldown, 0);
+        assert_eq!(reach(&eff), 1);
+        // An ability granted by a talent and an item lists once.
+        let item = c
+            .items
+            .iter()
+            .find(|i| i.grants.contains(&granted))
+            .cloned();
+        if let Some(item) = item {
+            ch.give(item.id.clone(), 1);
+            ch.equipment.insert(item.slot.unwrap(), item.id.clone());
+        }
+        let listed = ch.abilities(&c);
+        for (a, _) in &listed {
+            assert_eq!(listed.iter().filter(|(b, _)| b == a).count(), 1, "{a} once");
+        }
+    }
+
+    #[test]
+    fn a_level_brings_a_talent_point() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        ch.talent_points = 0;
+        assert_eq!(ch.gain_xp(Character::xp_to_next(1)), 1);
+        assert_eq!(ch.talent_points, 1);
+        assert_eq!(
+            ch.gain_xp(Character::xp_to_next(2) + Character::xp_to_next(3)),
+            2
+        );
+        assert_eq!(ch.talent_points, 3);
+    }
+
+    #[test]
+    fn boons_read_in_words() {
+        let c = Content::load().unwrap();
+        assert_eq!(
+            Boon::Perk(Perk::Stat(Stat::Reflex, 1)).words(&c),
+            "+1 Reflex"
+        );
+        assert_eq!(Boon::Perk(Perk::HpMax(3)).words(&c), "+3 max HP");
+        assert_eq!(Boon::Perk(Perk::Focus(2)).words(&c), "+2 focus");
+        assert_eq!(Boon::Perk(Perk::Sight(2)).words(&c), "sight +2");
+        assert_eq!(Boon::Perk(Perk::Carry(4.0)).words(&c), "carry +4 kg");
+        assert_eq!(Boon::Grant(AbilityId::new("ping")).words(&c), "grants Ping");
+        assert_eq!(
+            Boon::Sharpen {
+                ability: AbilityId::new("ping"),
+                radius: 4,
+                cooldown: 0
+            }
+            .words(&c),
+            "ping reaches 4 further"
+        );
+        assert_eq!(
+            Boon::Sharpen {
+                ability: AbilityId::new("ping"),
+                radius: 0,
+                cooldown: -60
+            }
+            .words(&c),
+            "ping cools 60 ticks sooner"
+        );
+        assert_eq!(
+            Boon::Flag("quick_draw".into()).words(&c),
+            "later: quick_draw"
+        );
     }
 }
