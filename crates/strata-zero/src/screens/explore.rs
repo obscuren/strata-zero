@@ -4588,4 +4588,89 @@ mod tests {
         ));
         assert!(st.net.death.is_none());
     }
+
+    #[test]
+    fn a_mask_halves_sight_for_six_turns_and_warms_the_trace() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        st.net.force_roll = Some(10);
+        let hide = room_tile(&st, b);
+        stand(&mut st, &mut s, Place::Construct(b), hide);
+        let at = game::At {
+            place: Place::Construct(b),
+            pos: hide,
+        };
+        st.character
+            .unload(&st.content, &ItemId::new("copy"))
+            .unwrap();
+        crate::screens::console::run(&mut st, at, "program mask").unwrap();
+        crate::net::start_run(&mut st, ItemId::new("mask"), game::HackTarget::Deck).unwrap();
+        let heat = st.net.traces.get(&b).map_or(0, |t| t.heat);
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(last(&st), Some("mask raised · 6 turns"), "{:?}", last(&st));
+        assert_eq!(st.net.mask, crate::net::MASK_TURNS);
+        // A guard four tiles up the spine does not see a masked runner (half of six).
+        let g = st.constructs.get(b).unwrap().guards[0].clone();
+        let four = Pos::new(g.pos.x + 4, g.pos.y);
+        stand(&mut st, &mut s, Place::Construct(b), four);
+        assert!(
+            matches!(st.net.ice[&b][0].mode, crate::net::IceMode::Asleep),
+            "{:?}",
+            st.net.ice[&b][0].mode
+        );
+        stand(&mut st, &mut s, Place::Construct(b), hide);
+        for _ in 0..4 {
+            s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        }
+        assert_eq!(st.net.mask, 0, "six turns and it is gone");
+        assert_eq!(
+            st.net.traces[&b].heat,
+            heat + 1 + crate::net::MASK_TURNS,
+            "one heat a held turn"
+        );
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(!text.contains("MASK "), "{text}");
+    }
+
+    #[test]
+    fn the_console_wakes_lists_and_toggles() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let hide = room_tile(&st, b);
+        stand(&mut st, &mut s, Place::Construct(b), hide);
+        let at = game::At {
+            place: Place::Construct(b),
+            pos: hide,
+        };
+        let listed = crate::screens::console::run(&mut st, at, "ice").unwrap();
+        let g = st.constructs.get(b).unwrap().guards[0].pos;
+        assert!(
+            listed.starts_with(&format!("0 grey asleep 6/6 at {},{}", g.x, g.y)),
+            "{listed}"
+        );
+        assert_eq!(
+            crate::screens::console::run(&mut st, at, "wake").unwrap(),
+            "2 pieces awake"
+        );
+        assert!(
+            st.net.ice[&b]
+                .iter()
+                .all(|i| matches!(i.mode, crate::net::IceMode::Awake { .. }))
+        );
+        assert_eq!(
+            crate::screens::console::run(&mut st, at, "failsafe off").unwrap(),
+            "failsafe off"
+        );
+        assert!(!st.net.failsafe);
+        assert_eq!(
+            crate::screens::console::run(&mut st, at, "failsafe on").unwrap(),
+            "failsafe on"
+        );
+        assert_eq!(
+            crate::screens::console::run(&mut st, at, "failsafe").unwrap_err(),
+            "failsafe on|off"
+        );
+    }
 }

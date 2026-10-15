@@ -28,6 +28,8 @@ pub struct Hack {
 pub const LOST_TURNS: u8 = 3;
 /// Minutes the deck cools after the failsafe pulls you out.
 pub const FAILSAFE_COOLING: u64 = 30;
+/// Turns a mask holds once raised.
+pub const MASK_TURNS: u8 = 6;
 
 /// What a piece of ICE is doing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,6 +53,8 @@ pub struct NetState {
     pub ice: BTreeMap<BuildingId, Vec<Ice>>,
     /// Turns the mask still holds.
     pub mask: u8,
+    /// The mask was raised this turn: it does not wear on the turn that raised it.
+    mask_fresh: bool,
     /// Shield charges: each soaks one hit.
     pub shield: u8,
     /// The deck pulls you out at a quarter of your HP; off, black ICE can kill you.
@@ -75,6 +79,7 @@ impl Default for NetState {
         NetState {
             ice: BTreeMap::new(),
             mask: 0,
+            mask_fresh: false,
             shield: 0,
             failsafe: true,
             death: None,
@@ -498,7 +503,11 @@ fn land(
                 if n == 1 { "" } else { "s" }
             )
         }
-        (Op::Mask, _) => "mask raised".to_string(),
+        (Op::Mask, _) => {
+            st.net.mask = MASK_TURNS;
+            st.net.mask_fresh = true;
+            format!("mask raised · {MASK_TURNS} turns")
+        }
         (Op::Crack, Target::Node(k)) => format!("{} cracked", k.label()),
         (op, _) => format!("{} landed", op.label()),
     };
@@ -621,7 +630,33 @@ pub fn ice_turn(st: &mut AppState) {
         return;
     };
     let pos = player.pos;
+    // A held mask is a turn's noise, and it wears off.
     let masked = st.net.mask > 0;
+    if masked && std::mem::take(&mut st.net.mask_fresh) {
+        // Raised this turn: it starts wearing next turn.
+    } else if masked {
+        st.net.mask -= 1;
+        let now = st.net.now(st);
+        let was_alert = st.net.alert(b, now);
+        match st.net.trace(b).add(1, now) {
+            TraceEvent::Dump => {
+                if !was_alert {
+                    let line = raise_alarm(st, b);
+                    st.warn(line);
+                }
+                dump(st, "the trace found you");
+                return;
+            }
+            TraceEvent::Alarm => {
+                let line = raise_alarm(st, b);
+                st.warn(line);
+            }
+            TraceEvent::None => {}
+        }
+        if st.net.mask == 0 {
+            st.say("the mask is gone");
+        }
+    }
     let Some(k) = st.constructs.get(b) else {
         return;
     };
@@ -863,6 +898,12 @@ pub fn trace_lines(net: &NetState, b: BuildingId, now: u64) -> Vec<String> {
     )];
     if let Some(until) = t.alert_until.filter(|u| now < *u) {
         out.push(format!("ALERT · {} min", until - now));
+    }
+    if net.shield > 0 {
+        out.push(format!("SHIELD ×{}", net.shield));
+    }
+    if net.mask > 0 {
+        out.push(format!("MASK {}", net.mask));
     }
     out
 }
