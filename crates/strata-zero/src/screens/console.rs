@@ -353,7 +353,7 @@ mod tests {
             vec!["spawn".to_string(), "sp".to_string()]
         );
         assert_eq!(
-            complete(&st, "spawn", "co"),
+            complete(&st, "spawn", "copp"),
             vec!["copper_coil".to_string()]
         );
         assert!(complete(&st, "give", "co").is_empty());

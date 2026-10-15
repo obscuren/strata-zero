@@ -65,6 +65,8 @@ pub struct Character {
     pub sp: u32,
     /// Unspent talent points: one at creation, one per level.
     pub talent_points: u32,
+    /// Programs loaded into the jacked deck, in loading order; each is also in the pack.
+    pub loaded: Vec<ItemId>,
 }
 
 impl Character {
@@ -105,6 +107,7 @@ impl Character {
             stat_points: b.points_left(c).max(0) as u32,
             sp: b.sp_left(c).max(0) as u32,
             talent_points: cr.talent_points,
+            loaded: Vec::new(),
         };
         let mut kit: Vec<(ItemId, u32)> = Vec::new();
         if let Some(p) = b.profession.as_ref().and_then(|id| c.profession(id)) {
@@ -126,7 +129,79 @@ impl Character {
             ch.give(id, qty);
         }
         ch.hp = ch.hp_max(c);
+        // The kit's programs load in kit order while they fit.
+        let programs: Vec<ItemId> = ch
+            .inventory
+            .iter()
+            .map(|s| s.item.clone())
+            .filter(|id| c.item(id).is_some_and(|i| i.kind == ItemKind::Program))
+            .collect();
+        for id in programs {
+            let _ = ch.load(c, &id);
+        }
         ch
+    }
+
+    /// The jacked deck and its slots.
+    pub fn deck<'a>(&self, c: &'a Content) -> Option<(&'a Item, DeckSpec)> {
+        let item = c.item(self.equipment.get(&Slot::Deck)?)?;
+        Some((item, item.deck?))
+    }
+
+    /// Slots the loaded programs take.
+    pub fn loaded_size(&self, c: &Content) -> u8 {
+        self.loaded_programs(c)
+            .filter_map(|i| i.program)
+            .map(|p| p.size)
+            .sum()
+    }
+
+    /// The loaded programs, in loading order.
+    pub fn loaded_programs<'a>(&'a self, c: &'a Content) -> impl Iterator<Item = &'a Item> + 'a {
+        self.loaded.iter().filter_map(move |id| c.item(id))
+    }
+
+    /// Why a program cannot load now, in the order the deck reports it.
+    pub fn can_load(&self, c: &Content, id: &ItemId) -> Result<(), String> {
+        let item = c.item(id).ok_or_else(|| format!("unknown item {id}"))?;
+        let Some(program) = item.program.filter(|_| item.kind == ItemKind::Program) else {
+            return Err("that is not a program".into());
+        };
+        let (_, deck) = self.deck(c).ok_or_else(|| "no deck jacked".to_string())?;
+        if self.count(id) == 0 {
+            return Err("not in your pack".into());
+        }
+        if self.loaded.contains(id) {
+            return Err("already loaded".into());
+        }
+        let used = self.loaded_size(c);
+        if used + program.size > deck.slots {
+            return Err(format!("no room: {used} of {} slots", deck.slots));
+        }
+        Ok(())
+    }
+
+    /// Loads a program under `can_load`.
+    pub fn load(&mut self, c: &Content, id: &ItemId) -> Result<String, String> {
+        self.can_load(c, id)?;
+        self.loaded.push(id.clone());
+        let name = c.item(id).map(|i| i.name.as_str()).unwrap_or("?");
+        let slots = self.deck(c).map(|(_, d)| d.slots).unwrap_or(0);
+        Ok(format!(
+            "{name} loaded · {}/{slots} slots",
+            self.loaded_size(c)
+        ))
+    }
+
+    pub fn unload(&mut self, c: &Content, id: &ItemId) -> Result<String, String> {
+        let at = self
+            .loaded
+            .iter()
+            .position(|l| l == id)
+            .ok_or_else(|| "not loaded".to_string())?;
+        self.loaded.remove(at);
+        let name = c.item(id).map(|i| i.name.as_str()).unwrap_or("?");
+        Ok(format!("{name} unloaded"))
     }
 
     /// The character a template describes, or none for an unknown template.
@@ -881,5 +956,49 @@ mod tests {
             Boon::Flag("quick_draw".into()).words(&c),
             "later: quick_draw"
         );
+    }
+
+    #[test]
+    fn the_kit_loads_into_the_deck() {
+        let c = Content::load().unwrap();
+        let ch = vex(&c);
+        assert_eq!(ch.loaded, vec![ItemId::new("crack"), ItemId::new("copy")]);
+        assert_eq!(ch.loaded_size(&c), 2);
+        assert_eq!(
+            ch.deck(&c).map(|(i, s)| (i.id.clone(), s.slots)),
+            Some((ItemId::new("pawnshop_deck"), 2))
+        );
+        let k = Character::from_template(&c, &TemplateId::new("kessler")).unwrap();
+        assert!(k.loaded.is_empty() && k.deck(&c).is_none());
+    }
+
+    #[test]
+    fn loading_follows_the_rules_in_order() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        let (spoof, copy, crack) = (
+            ItemId::new("spoof"),
+            ItemId::new("copy"),
+            ItemId::new("crack"),
+        );
+        assert_eq!(ch.can_load(&c, &spoof).unwrap_err(), "not in your pack");
+        ch.give(spoof.clone(), 1);
+        assert_eq!(
+            ch.can_load(&c, &spoof).unwrap_err(),
+            "no room: 2 of 2 slots"
+        );
+        assert_eq!(ch.unload(&c, &copy).unwrap(), "Copy unloaded");
+        assert_eq!(ch.load(&c, &spoof).unwrap(), "Spoof loaded · 2/2 slots");
+        assert_eq!(ch.load(&c, &spoof).unwrap_err(), "already loaded");
+        assert_eq!(
+            ch.load(&c, &ItemId::new("hardhat")).unwrap_err(),
+            "that is not a program"
+        );
+        assert_eq!(ch.unload(&c, &copy).unwrap_err(), "not loaded");
+        let names: Vec<String> = ch.loaded_programs(&c).map(|i| i.name.clone()).collect();
+        assert_eq!(names, vec!["Crack", "Spoof"]);
+        let mut k = Character::from_template(&c, &TemplateId::new("kessler")).unwrap();
+        k.give(crack.clone(), 1);
+        assert_eq!(k.can_load(&c, &crack).unwrap_err(), "no deck jacked");
     }
 }

@@ -84,10 +84,12 @@ pub enum ItemKind {
     Consumable,
     Component,
     Junk,
+    /// Software for a deck's slots; never worn, loaded instead.
+    Program,
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 7] = [
+    pub const ALL: [ItemKind; 8] = [
         ItemKind::Weapon,
         ItemKind::Armor,
         ItemKind::Cyberware,
@@ -95,6 +97,7 @@ impl ItemKind {
         ItemKind::Consumable,
         ItemKind::Component,
         ItemKind::Junk,
+        ItemKind::Program,
     ];
 
     pub fn label(self) -> &'static str {
@@ -106,8 +109,56 @@ impl ItemKind {
             ItemKind::Consumable => "consumable",
             ItemKind::Component => "component",
             ItemKind::Junk => "junk",
+            ItemKind::Program => "program",
         }
     }
+}
+
+/// What a program does to a node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Op {
+    /// Opens anything that answers, loudly; the only op that takes ICE down.
+    Crack,
+    /// The quiet unlock: door locks and lift controls.
+    Spoof,
+    /// A camera stops seeing.
+    Blind,
+    /// Paydata off a server or a vault.
+    Copy,
+    /// A server keeps the construct open for you.
+    Backdoor,
+}
+
+impl Op {
+    pub const ALL: [Op; 5] = [Op::Crack, Op::Spoof, Op::Blind, Op::Copy, Op::Backdoor];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Op::Crack => "crack",
+            Op::Spoof => "spoof",
+            Op::Blind => "blind",
+            Op::Copy => "copy",
+            Op::Backdoor => "backdoor",
+        }
+    }
+}
+
+/// A program's numbers: what it does, how well, how much deck it takes, how loud
+/// a turn is and how many successful turns land it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Program {
+    pub op: Op,
+    pub rating: u8,
+    pub size: u8,
+    pub noise: u8,
+    pub work: u8,
+}
+
+/// A deck's slots for programs and its rating.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeckSpec {
+    pub slots: u8,
+    pub rating: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -182,6 +233,12 @@ pub struct Item {
     /// What using it does (consumables only).
     #[serde(default, rename = "use")]
     pub on_use: Option<Use>,
+    /// The program's numbers (programs only).
+    #[serde(default)]
+    pub program: Option<Program>,
+    /// The deck's slots and rating (decks only).
+    #[serde(default)]
+    pub deck: Option<DeckSpec>,
 }
 
 /// What an active ability does when fired.

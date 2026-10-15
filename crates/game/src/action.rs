@@ -31,6 +31,9 @@ pub enum Action {
     UnlockSkill(SkillId),
     /// Spends a talent point on a rank.
     Learn(TalentId),
+    /// Loads a program from the pack into the jacked deck.
+    Load(ItemId),
+    Unload(ItemId),
 }
 
 /// Where the character stands: where drops land and takes come from.
@@ -67,6 +70,10 @@ fn name(c: &Content, id: &ItemId) -> String {
 
 /// Removes up to `qty` of an item from the pack; returns how many came out.
 fn remove_from_pack(ch: &mut Character, item: &ItemId, qty: u32) -> u32 {
+    // A program that leaves the pack leaves the deck.
+    if ch.count(item) <= qty {
+        ch.loaded.retain(|l| l != item);
+    }
     let mut left = qty;
     for s in ch.inventory.iter_mut().filter(|s| &s.item == item) {
         let n = left.min(s.qty);
@@ -233,6 +240,8 @@ pub fn apply(
             let rank = ch.learn(c, &id)?;
             done(format!("{} {}/{}", t.name, rank, t.ranks))
         }
+        Action::Load(id) => ch.load(c, &id).and_then(done),
+        Action::Unload(id) => ch.unload(c, &id).and_then(done),
         Action::Fire(id) => {
             let ability = ch
                 .ability(c, &id)
@@ -592,5 +601,29 @@ mod tests {
         assert_eq!(out.effects, vec![Effect::Reveal { radius: 18 }]);
         assert!(apply(&mut ch, &mut g, &c, at, 339, scan()).is_err());
         assert!(apply(&mut ch, &mut g, &c, at, 340, scan()).is_ok());
+    }
+
+    #[test]
+    fn load_and_unload_actions_and_a_drop_unloads() {
+        let (c, mut ch, mut g, at) = setup();
+        let copy = ItemId::new("copy");
+        let out = apply(&mut ch, &mut g, &c, at, 0, Action::Unload(copy.clone())).unwrap();
+        assert_eq!(out.message, "Copy unloaded");
+        let out = apply(&mut ch, &mut g, &c, at, 0, Action::Load(copy.clone())).unwrap();
+        assert_eq!(out.message, "Copy loaded · 2/2 slots");
+        apply(
+            &mut ch,
+            &mut g,
+            &c,
+            at,
+            0,
+            Action::Drop {
+                item: copy.clone(),
+                qty: 1,
+            },
+        )
+        .unwrap();
+        assert!(!ch.loaded.contains(&copy), "{:?}", ch.loaded);
+        assert_eq!(ch.loaded_size(&c), 1);
     }
 }

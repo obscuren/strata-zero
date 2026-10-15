@@ -144,6 +144,22 @@ pub enum Feature {
     Furniture(Furniture),
 }
 
+/// How hard a piece of ICE bites: white traces and alarms, grey dumps you.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum IceGrade {
+    White,
+    Grey,
+}
+
+impl IceGrade {
+    pub fn label(self) -> &'static str {
+        match self {
+            IceGrade::White => "white",
+            IceGrade::Grey => "grey",
+        }
+    }
+}
+
 /// What stands in a room. A station is the floor tile beside it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Furniture {
