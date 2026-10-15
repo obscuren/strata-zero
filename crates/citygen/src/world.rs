@@ -440,12 +440,33 @@ impl City {
                 b.footprint.border().collect()
             };
             for p in tiles {
-                if self
+                if !self
                     .tile(k, p)
                     .is_some_and(|t| t.terrain == crate::tile::Terrain::Door)
                 {
-                    out.push((k, p));
+                    continue;
                 }
+                // A door the connectivity repair cut through a facade may face the void;
+                // only a door onto standable ground counts.
+                if k != StratumKind::Heights {
+                    let fp = b.footprint;
+                    let out = if p.x == fp.x {
+                        p.offset(-1, 0)
+                    } else if p.x == fp.right() - 1 {
+                        p.offset(1, 0)
+                    } else if p.y == fp.y {
+                        p.offset(0, -1)
+                    } else {
+                        p.offset(0, 1)
+                    };
+                    let standable = self
+                        .tile(k, out)
+                        .is_some_and(|t| crate::tile::Tile::new(t.terrain).is_walkable());
+                    if !standable {
+                        continue;
+                    }
+                }
+                out.push((k, p));
             }
         }
         out

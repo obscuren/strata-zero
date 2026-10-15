@@ -117,8 +117,21 @@ pub fn enter(st: &mut AppState, b: BuildingId, door: (StratumKind, Pos)) -> Resu
 }
 
 /// Steps out of an exit onto its landing on the city map.
-pub fn leave(st: &mut AppState, exit: &Exit) -> String {
-    land(st, Place::Stratum(exit.stratum), exit.landing);
+pub fn leave(st: &mut AppState, exit: &Exit) -> Result<String, String> {
+    let city = st.city.as_ref().ok_or("no city")?;
+    // The landing, or the nearest free tile beside the door when something stands on it.
+    let landing = std::iter::once(exit.landing)
+        .chain(exit.door.neighbors4())
+        .chain(exit.landing.neighbors8())
+        .find(|p| {
+            city.walkable(exit.stratum, *p)
+                && (*p == exit.landing
+                    || city
+                        .tile(exit.stratum, *p)
+                        .is_some_and(|t| t.terrain != Terrain::Door && !t.is_building_part()))
+        })
+        .ok_or("the way out is blocked")?;
+    land(st, Place::Stratum(exit.stratum), landing);
     let onto = match exit.stratum {
         StratumKind::Street => "the street",
         StratumKind::Skyways => "the walkway",
@@ -126,7 +139,7 @@ pub fn leave(st: &mut AppState, exit: &Exit) -> String {
         StratumKind::Undercity => "the tunnel",
         StratumKind::Net => "the Net",
     };
-    format!("out onto {onto}")
+    Ok(format!("out onto {onto}"))
 }
 
 /// Rides the lift to a floor: the player steps out at that floor's lift bank.

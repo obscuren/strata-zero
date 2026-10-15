@@ -561,14 +561,14 @@ impl MapScreen {
                         choices.push(Choice::new(
                             '>',
                             format!("up to {}", citygen::FloorPlan::label(level + 1)),
-                            Pick::World(WorldAct::Lift(level + 1)),
+                            Pick::World(WorldAct::Climb(true)),
                         ));
                     }
                     if level > plan.lowest {
                         choices.push(Choice::new(
                             '<',
                             format!("down to {}", citygen::FloorPlan::label(level - 1)),
-                            Pick::World(WorldAct::Lift(level - 1)),
+                            Pick::World(WorldAct::Climb(false)),
                         ));
                     }
                 }
@@ -734,8 +734,8 @@ impl MapScreen {
             Place::Floor { building, level } => {
                 let (_, floor) = st.interiors.floor(building, level)?;
                 if let Some(exit) = floor.exit_at(target).copied() {
-                    let msg = crate::interiors::leave(st, &exit);
-                    st.say(msg);
+                    let result = crate::interiors::leave(st, &exit);
+                    report(st, result);
                     return Some(ScreenCmd::Stay);
                 }
                 let owner = self
@@ -748,16 +748,20 @@ impl MapScreen {
                             .as_ref()
                             .map(|w| w.people()[id.0 as usize].name.clone())
                     });
-                let locked = floor.door_of(target).filter(|r| r.private).map(|r| {
-                    let mut what = r.kind.label().to_string();
-                    if r.number > 0 {
-                        what = format!("{what} {}", r.number);
-                    }
-                    match &owner {
-                        Some(name) => format!("{name}'s {what}"),
-                        None => what,
-                    }
-                });
+                let here = player.pos;
+                let locked = floor
+                    .door_of(target)
+                    .filter(|r| r.private && !r.rect.contains(here))
+                    .map(|r| {
+                        let mut what = r.kind.label().to_string();
+                        if r.number > 0 {
+                            what = format!("{what} {}", r.number);
+                        }
+                        match &owner {
+                            Some(name) => format!("{name}'s {what}"),
+                            None => what,
+                        }
+                    });
                 if let Some(what) = locked {
                     st.warn(format!("locked · {what}"));
                     return Some(ScreenCmd::Stay);
@@ -3206,6 +3210,135 @@ mod tests {
             last(&st).is_some_and(|l| l.starts_with(&format!("locked · {name}'s flat"))),
             "{:?}",
             last(&st)
+        );
+    }
+
+    #[test]
+    fn locked_doors_open_from_the_inside() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let city = st.city.as_ref().unwrap().clone();
+        let b = city
+            .buildings
+            .iter()
+            .find(|b| b.kind == BuildingKind::Megablock)
+            .unwrap()
+            .id;
+        st.interiors.plan(&city, b).unwrap();
+        st.interiors.ensure(&city, b, 1).unwrap();
+        let (_, floor) = st.interiors.floor(b, 1).unwrap();
+        let (door, inside) = floor
+            .rooms
+            .iter()
+            .filter(|r| r.private)
+            .find_map(|r| {
+                let d = r.door?;
+                let i = d
+                    .neighbors4()
+                    .find(|n| r.rect.contains(*n) && floor.tiles[*n].is_walkable())?;
+                Some((d, i))
+            })
+            .expect("a locked room with floor inside its door");
+        stand(
+            &mut st,
+            &mut s,
+            Place::Floor {
+                building: b,
+                level: 1,
+            },
+            inside,
+        );
+        s.update(&mut st, &[key(dir_between(inside, door))]);
+        assert_eq!(player(&st).1, door, "a door opens from the inside");
+    }
+
+    #[test]
+    fn space_on_a_stair_climbs_without_a_lift() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let city = st.city.as_ref().unwrap().clone();
+        let b = city
+            .buildings
+            .iter()
+            .filter(|b| b.kind.is_closed())
+            .find(|b| {
+                let plan = FloorPlan::new(&city, b.id).unwrap();
+                plan.lift.is_none() && plan.floors() >= 2
+            })
+            .expect("a two-floor building without a lift")
+            .id;
+        let plan = st.interiors.plan(&city, b).unwrap().clone();
+        st.interiors.ensure(&city, b, plan.lowest).unwrap();
+        stand(
+            &mut st,
+            &mut s,
+            Place::Floor {
+                building: b,
+                level: plan.lowest,
+            },
+            plan.stair,
+        );
+        let ScreenCmd::Push { to: mut here, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens HERE")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*here, &st, 120, 40);
+        assert!(
+            text.contains(&format!("up to {}", FloorPlan::label(plan.lowest + 1))),
+            "{text}"
+        );
+        here.update(&mut st, &[key(KeyCode::Char('>'))]);
+        s.update(&mut st, &[]);
+        let (place, pos) = player(&st);
+        assert_eq!(
+            place,
+            Place::Floor {
+                building: b,
+                level: plan.lowest + 1
+            }
+        );
+        assert_eq!(pos, plan.stair, "stairs keep the tile");
+    }
+
+    #[test]
+    fn leaving_lands_on_standable_ground_even_when_the_landing_is_blocked() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let b = tower(&st);
+        let city = st.city.as_ref().unwrap().clone();
+        st.interiors.ensure(&city, b, 0).unwrap();
+        let (_, lobby) = st.interiors.floor(b, 0).unwrap();
+        let exit = lobby.exits[0];
+        let step = lobby.doorstep(&exit);
+        // A barrier dropped on the landing.
+        st.city
+            .as_mut()
+            .unwrap()
+            .tile_mut(StratumKind::Street, exit.landing)
+            .unwrap()
+            .feature = Some(citygen::Feature::Barrier);
+        stand(
+            &mut st,
+            &mut s,
+            Place::Floor {
+                building: b,
+                level: 0,
+            },
+            step,
+        );
+        s.update(&mut st, &[key(dir_between(step, exit.at))]);
+        let (place, pos) = player(&st);
+        assert_eq!(place, Place::Stratum(StratumKind::Street));
+        assert_ne!(pos, exit.landing);
+        assert!(st.city.as_ref().unwrap().walkable(StratumKind::Street, pos));
+        assert!(
+            pos.manhattan(exit.door) <= 2,
+            "{pos:?} beside the door {:?}",
+            exit.door
         );
     }
 }

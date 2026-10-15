@@ -54,6 +54,7 @@ pub fn validate_floor(plan: &FloorPlan, floor: &Floor) -> Result<(), String> {
         ));
     }
     let frame = size.rect();
+    let doorsteps: Vec<crate::geom::Pos> = floor.exits.iter().map(|e| floor.doorstep(e)).collect();
     for e in &floor.exits {
         if floor.tiles[e.at].terrain != Terrain::Door {
             return Err(format!("exit at {:?} is not a door", e.at));
@@ -63,6 +64,7 @@ pub fn validate_floor(plan: &FloorPlan, floor: &Floor) -> Result<(), String> {
         }
         clear(floor.doorstep(e), "a doorstep")?;
     }
+    let private: Vec<&Room> = floor.rooms.iter().filter(|r| r.private).collect();
     for r in &floor.rooms {
         if r.private && r.door.is_none() {
             return Err(format!("locked {:?} without a door", r.kind));
@@ -75,9 +77,72 @@ pub fn validate_floor(plan: &FloorPlan, floor: &Floor) -> Result<(), String> {
         if r.rect.intersection(frame.inset(1)) != Some(r.rect) {
             return Err(format!("{:?} at {:?} leaves the floor", r.kind, r.rect));
         }
+        if r.private {
+            // Sealed: the ring around the room is wall, window or its one door.
+            let ring = r.rect.grow(1);
+            for p in ring.border() {
+                // A corner of the ring touches the room only diagonally.
+                if !frame.contains(p)
+                    || ((p.x == ring.x || p.x == ring.right() - 1)
+                        && (p.y == ring.y || p.y == ring.bottom() - 1))
+                {
+                    continue;
+                }
+                let t = &floor.tiles[p];
+                let ok = match t.terrain {
+                    Terrain::Wall | Terrain::Window => true,
+                    Terrain::Door => Some(p) == r.door,
+                    _ => false,
+                };
+                if !ok {
+                    return Err(format!(
+                        "locked {:?} {} at {:?} has a gap at {p:?} ({:?})",
+                        r.kind, r.number, r.rect, t.terrain
+                    ));
+                }
+            }
+            // And nothing of the open floor spills in: no doorstep, no station of
+            // another trade.
+            if doorsteps.iter().any(|d| r.rect.contains(*d)) {
+                return Err(format!("locked {:?} holds an exit's doorstep", r.kind));
+            }
+        }
     }
     for s in &floor.stations {
         clear(s.pos, "a station")?;
+        if doorsteps.contains(&s.pos) {
+            return Err(format!(
+                "a {:?} station on a doorstep at {:?}",
+                s.role, s.pos
+            ));
+        }
+        if s.role != Role::Desk && private.iter().any(|r| r.rect.contains(s.pos)) {
+            return Err(format!(
+                "a {:?} station inside a locked room at {:?}",
+                s.role, s.pos
+            ));
+        }
+    }
+    // Every exit reaches the shafts without crossing a locked room.
+    if plan.floors() >= 2 {
+        let shafts: Vec<crate::geom::Pos> =
+            plan.lift_bank().into_iter().chain([plan.stair]).collect();
+        for e in &floor.exits {
+            let step = floor.doorstep(e);
+            let reached = crate::pathing::bfs_nearest(
+                size,
+                step,
+                |p| floor.tiles[p].is_walkable() && !private.iter().any(|r| r.rect.contains(p)),
+                |p| shafts.contains(&p),
+                4096,
+            );
+            if reached.is_none() {
+                return Err(format!(
+                    "the {:?} exit at {:?} cannot reach the shafts without a locked room",
+                    e.stratum, e.at
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -401,6 +466,60 @@ mod tests {
             &[Role::Machine],
         );
         expect(BuildingKind::Garage, &[RoomKind::Bays], &[Role::Bay]);
+    }
+
+    #[test]
+    fn locked_rooms_are_sealed_and_every_exit_reaches_the_shafts() {
+        let mut cities = vec![city()];
+        for seed in [8u64, 9] {
+            cities.push(
+                Generator::run(GenParams {
+                    seed,
+                    size: SizePreset::Medium,
+                    districts: 7,
+                    ..Default::default()
+                })
+                .unwrap(),
+            );
+        }
+        let (mut floors, mut locked) = (0, 0);
+        for c in &cities {
+            for b in c.buildings.iter().filter(|b| b.kind.is_closed()) {
+                let plan = FloorPlan::new(c, b.id).unwrap();
+                let mut levels = vec![plan.lowest, 0, plan.top];
+                levels.extend(plan.bridge);
+                levels.push(1.min(plan.top));
+                levels.sort();
+                levels.dedup();
+                for level in levels {
+                    let f = generate_floor(c, &plan, level);
+                    validate_floor(&plan, &f).unwrap_or_else(|e| {
+                        panic!("seed {} {:?} {:?} {level}: {e}", c.seed, b.kind, b.id)
+                    });
+                    floors += 1;
+                    locked += f.rooms.iter().filter(|r| r.private).count();
+                }
+                // Every portal opens onto ground someone can stand on.
+                for (k, door) in c.portals(b.id) {
+                    if k == StratumKind::Heights {
+                        continue;
+                    }
+                    let out = super::layouts::outward(b.footprint, door);
+                    let t = c.tile(k, out).expect("outward tile in bounds");
+                    assert!(
+                        crate::tile::Tile::new(t.terrain).is_walkable(),
+                        "seed {} {:?} {k:?} door {door:?} faces {:?}",
+                        c.seed,
+                        b.id,
+                        t.terrain
+                    );
+                }
+            }
+        }
+        assert!(
+            floors > 300 && locked > 300,
+            "{floors} floors, {locked} locked rooms"
+        );
     }
 
     /// Coordinates the smoke and screenshot scripts drive to on seed 8, Medium:
