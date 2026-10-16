@@ -355,7 +355,10 @@ impl Runner {
             .as_ref()
             .is_some_and(|t| t.active(self.st.tick));
         if self.repaint_pending && !animating {
-            term.clear()?;
+            // Every cell is sent again on the next draw: an extra swap leaves an empty
+            // frame behind as "what is on screen", without clearing the screen itself,
+            // which showed as a blank pause on a big terminal.
+            term.swap_buffers();
             self.full_repaints += 1;
             self.repaint_pending = false;
         }

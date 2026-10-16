@@ -18,6 +18,33 @@ pub struct Entry {
     pub kind: Kind,
     /// The tick the entry arrived.
     pub tick: u64,
+    /// Names in the text, as char ranges, lit when the log draws: a place, an item,
+    /// a person. Writers mark them with backticks; the text keeps none.
+    pub marks: Vec<(usize, usize)>,
+}
+
+/// Strips the backticks that mark names and returns the plain text with the marks.
+pub fn parse_marks(raw: &str) -> (String, Vec<(usize, usize)>) {
+    let mut text = String::new();
+    let mut marks = Vec::new();
+    let mut open: Option<usize> = None;
+    let mut n = 0usize;
+    for ch in raw.chars() {
+        if ch == '`' {
+            match open.take() {
+                Some(start) => {
+                    if n > start {
+                        marks.push((start, n));
+                    }
+                }
+                None => open = Some(n),
+            }
+            continue;
+        }
+        text.push(ch);
+        n += 1;
+    }
+    (text, marks)
 }
 
 impl Entry {
@@ -45,10 +72,12 @@ impl MessageLog {
         if self.entries.len() == Self::CAP {
             self.entries.pop_front();
         }
+        let (text, marks) = parse_marks(&text.into());
         self.entries.push_back(Entry {
-            text: text.into(),
+            text,
             kind,
             tick,
+            marks,
         });
     }
 
@@ -103,5 +132,27 @@ mod tests {
         assert_eq!(log.len(), MessageLog::CAP);
         assert_eq!(log.iter().next().unwrap().text, "m0");
         assert_eq!(log.latest().unwrap().text, "m199");
+    }
+
+    #[test]
+    fn backticks_mark_names_and_leave_the_text_plain() {
+        let mut log = MessageLog::default();
+        log.push(Kind::Info, "Entering `Novbio Labs`", 5);
+        let e = log.latest().unwrap();
+        assert_eq!(e.text, "Entering Novbio Labs");
+        assert_eq!(e.marks, vec![(9, 20)]);
+        log.push(Kind::Warn, "took 2× `Copper coil` from `Mama Sol`", 6);
+        let e = log.latest().unwrap();
+        assert_eq!(e.text, "took 2× Copper coil from Mama Sol");
+        assert_eq!(
+            e.marks,
+            vec![(8, 19), (25, 33)],
+            "offsets in chars, after stripping"
+        );
+        assert_eq!(e.marked(), "! took 2× Copper coil from Mama Sol");
+        log.push(Kind::Info, "no marks here", 7);
+        assert!(log.latest().unwrap().marks.is_empty());
+        log.push(Kind::Info, "a lone ` tick", 8);
+        assert_eq!(log.latest().unwrap().text, "a lone  tick");
     }
 }

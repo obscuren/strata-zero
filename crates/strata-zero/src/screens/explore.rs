@@ -1053,7 +1053,7 @@ impl MapScreen {
                             self.place = Place::Stratum(StratumKind::Net);
                             self.cam.snap(port);
                             let where_ = port_name(city, port);
-                            st.say(format!("jacked in at {where_}"));
+                            st.say(format!("jacked in at `{where_}`"));
                             return Some(ScreenCmd::Flash(TransitionKind::Glitch));
                         }
                         Err(e) => st.warn(e),
@@ -1066,7 +1066,7 @@ impl MapScreen {
                     Some(dest) => {
                         self.place = Place::Stratum(dest);
                         player.update_fov(&MapRef::stratum_of(city, dest), bonus);
-                        st.say(format!("now on {}", dest.label()));
+                        st.say(format!("now on `{}`", dest.label()));
                     }
                     None => st.warn(if up {
                         "nothing leads up from here"
@@ -3603,7 +3603,7 @@ mod tests {
         assert_eq!(p.place, Place::Construct(b), "{:?}", last(&st));
         let k = st.constructs.get(b).expect("generated on entry");
         assert_eq!(p.pos, k.entry);
-        assert_eq!(last(&st), Some(format!("into {name}").as_str()));
+        assert_eq!(last(&st), Some(format!("Entering {name}").as_str()));
         assert_eq!(s.place, Place::Construct(b));
         let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
         t.draw(|f| s.draw(&st, f)).unwrap();
@@ -3617,7 +3617,10 @@ mod tests {
         let p = st.player.as_ref().unwrap();
         assert_eq!(p.place, Place::Stratum(StratumKind::Net), "{:?}", last(&st));
         assert_eq!(p.pos, gate);
-        assert_eq!(last(&st), Some("out onto the grid"));
+        assert_eq!(
+            last(&st),
+            Some(format!("Leaving {name} · onto the grid").as_str())
+        );
         // In again: the construct is generated once; jacking out from inside works.
         s.update(&mut st, &[key(code)]);
         assert_eq!(st.player.as_ref().unwrap().place, Place::Construct(b));
@@ -3676,7 +3679,7 @@ mod tests {
         }
         s.place = Place::Stratum(StratumKind::Net);
         let r = crate::constructs::enter_construct(st, b).unwrap();
-        assert!(r.starts_with("into "));
+        assert!(r.starts_with("Entering "));
         s.place = Place::Construct(b);
         b
     }
@@ -3829,7 +3832,7 @@ mod tests {
         };
         assert_eq!(
             crate::screens::console::run(&mut st, at, "alarm").unwrap(),
-            format!("ALARM · {name} locks down")
+            format!("ALARM · `{name}` locks down")
         );
         s.update(&mut st, &[key(code)]);
         assert_eq!(st.player.as_ref().unwrap().pos, outside);
@@ -3904,7 +3907,7 @@ mod tests {
         }
         assert_eq!(
             crate::constructs::enter_construct(&mut st, b).unwrap_err(),
-            format!("gate closed · {name} on alert")
+            format!("gate closed · `{name}` on alert")
         );
     }
 
@@ -3948,7 +3951,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             crate::screens::console::run(&mut st, at, "program backdoor").unwrap(),
-            "Backdoor loaded · 2/2 slots"
+            "`Backdoor` loaded · 2/2 slots"
         );
         crate::net::start_run(
             &mut st,

@@ -39,7 +39,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             }
             if cmd == "spawn" {
                 st.character.give(item.id.clone(), qty);
-                Ok(format!("spawned {qty}× {}", item.name))
+                Ok(format!("spawned {qty}× `{}`", item.name))
             } else {
                 let lies = st.city.as_ref().is_some_and(|c| {
                     crate::render::map::MapRef::for_place(c, &st.interiors, &st.constructs, focus.place)
@@ -50,7 +50,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 }
                 st.ground
                     .add(focus.place, focus.pos, item.id.clone(), qty);
-                Ok(format!("dropped {qty}× {}", item.name))
+                Ok(format!("dropped {qty}× `{}`", item.name))
             }
         }
         "give" => {
@@ -125,7 +125,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 .talent(&id)
                 .ok_or_else(|| format!("unknown talent {id}"))?;
             let rank = st.character.learn(&st.content, &id)?;
-            Ok(format!("{} {}/{}", t.name, rank, t.ranks))
+            Ok(format!("`{}` {}/{}", t.name, rank, t.ranks))
         }
         "tpts" => {
             let n: u32 = args
@@ -416,12 +416,12 @@ mod tests {
         let coil = ItemId::new("copper_coil");
         assert_eq!(
             run(&mut st, at, "spawn copper_coil 2").unwrap(),
-            "spawned 2× Copper coil"
+            "spawned 2× `Copper coil`"
         );
         assert_eq!(st.character.count(&coil), 5);
         assert_eq!(
             run(&mut st, at, "spawn copper_coil").unwrap(),
-            "spawned 1× Copper coil"
+            "spawned 1× `Copper coil`"
         );
         assert_eq!(
             run(&mut st, at, "spawn cop").unwrap_err(),
@@ -429,7 +429,7 @@ mod tests {
         );
         assert_eq!(
             run(&mut st, at, "drop dead_phone").unwrap(),
-            "dropped 1× Dead phone"
+            "dropped 1× `Dead phone`"
         );
         assert_eq!(st.ground.at(at.place, at.pos)[0].qty, 1);
         let wall = {
@@ -570,14 +570,20 @@ mod tests {
     fn talent_commands_learn_and_add_points() {
         let (mut st, at) = setup();
         assert_eq!(run(&mut st, at, "talent").unwrap_err(), "talent <id>");
-        assert_eq!(run(&mut st, at, "talent ice_pick").unwrap(), "Ice pick 1/2");
+        assert_eq!(
+            run(&mut st, at, "talent ice_pick").unwrap(),
+            "`Ice pick` 1/2"
+        );
         assert_eq!(
             run(&mut st, at, "talent ice_pick").unwrap_err(),
             "no points left"
         );
         assert_eq!(run(&mut st, at, "tpts 3").unwrap(), "3 talent points");
         assert_eq!(st.character.talent_points, 3);
-        assert_eq!(run(&mut st, at, "talent ice_pick").unwrap(), "Ice pick 2/2");
+        assert_eq!(
+            run(&mut st, at, "talent ice_pick").unwrap(),
+            "`Ice pick` 2/2"
+        );
         assert_eq!(
             run(&mut st, at, "talent ice_pick").unwrap_err(),
             "already at its best"

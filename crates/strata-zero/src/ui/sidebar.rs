@@ -410,20 +410,59 @@ fn entry_lines(e: &Entry, width: u16) -> Vec<Line<'static>> {
         Kind::Warn => Style::default().fg(MAGENTA),
         Kind::Story => Style::default().fg(CYAN),
     };
+    let lit = Style::default().fg(CYAN).add_modifier(Modifier::BOLD);
     let (h, m) = clock_at(e.tick);
     let stamp = format!(" {h:02}:{m:02} ");
-    wrap_text(&e.marked(), (width as usize).saturating_sub(STAMP_W))
+    // The kind's marker shifts every name by its width.
+    let marked = e.marked();
+    let shift = marked.chars().count() - e.text.chars().count();
+    let is_lit = |i: usize| {
+        i >= shift
+            && e.marks
+                .iter()
+                .any(|(a, b)| (a + shift..b + shift).contains(&i))
+    };
+    let chars: Vec<char> = marked.chars().collect();
+    let mut pos = 0usize;
+    wrap_text(&marked, (width as usize).saturating_sub(STAMP_W))
         .into_iter()
         .enumerate()
-        .map(|(i, s)| {
-            if i == 0 {
-                Line::from(vec![
-                    Span::styled(stamp.clone(), Style::default().fg(DIM)),
-                    Span::styled(s, style),
-                ])
-            } else {
-                Line::from(vec![Span::raw(" ".repeat(STAMP_W)), Span::styled(s, style)])
+        .map(|(i, row)| {
+            // Find the row's chars in the text from where the last row ended; wrapping
+            // only drops spaces between rows.
+            let row_chars: Vec<char> = row.chars().collect();
+            let mut start = pos;
+            while start + row_chars.len() <= chars.len()
+                && chars[start..start + row_chars.len()] != row_chars[..]
+            {
+                start += 1;
             }
+            if start + row_chars.len() > chars.len() {
+                start = pos;
+            }
+            let mut spans = vec![if i == 0 {
+                Span::styled(stamp.clone(), Style::default().fg(DIM))
+            } else {
+                Span::raw(" ".repeat(STAMP_W))
+            }];
+            let mut run = String::new();
+            let mut run_lit = false;
+            for (k, ch) in row_chars.iter().enumerate() {
+                let on = is_lit(start + k);
+                if on != run_lit && !run.is_empty() {
+                    spans.push(Span::styled(
+                        std::mem::take(&mut run),
+                        if run_lit { lit } else { style },
+                    ));
+                }
+                run_lit = on;
+                run.push(*ch);
+            }
+            if !run.is_empty() {
+                spans.push(Span::styled(run, if run_lit { lit } else { style }));
+            }
+            pos = start + row_chars.len();
+            Line::from(spans)
         })
         .collect()
 }
@@ -951,5 +990,37 @@ mod tests {
             drawn.contains(&Section::Map) && !drawn.contains(&Section::Legend),
             "{drawn:?}"
         );
+    }
+
+    #[test]
+    fn a_named_log_entry_lights_its_names() {
+        let mut log = MessageLog::default();
+        log.push(Kind::Info, "Entering `Novbio Labs`", 0);
+        let lines = entry_lines(log.latest().unwrap(), 40);
+        let spans: Vec<(String, bool)> = lines[0]
+            .spans
+            .iter()
+            .map(|s| {
+                (
+                    s.content.to_string(),
+                    s.style.fg == Some(CYAN) && s.style.add_modifier.contains(Modifier::BOLD),
+                )
+            })
+            .collect();
+        assert_eq!(spans[1], ("Entering ".to_string(), false), "{spans:?}");
+        assert_eq!(spans[2], ("Novbio Labs".to_string(), true), "{spans:?}");
+        // A name that wraps keeps its light on both rows.
+        log.push(Kind::Info, "lock cracked · `Hextek Holdings`'s doors", 0);
+        let lines = entry_lines(log.latest().unwrap(), 26);
+        assert!(lines.len() >= 2, "{lines:?}");
+        let lit = |l: &Line<'static>| {
+            l.spans
+                .iter()
+                .filter(|s| s.style.fg == Some(CYAN))
+                .map(|s| s.content.to_string())
+                .collect::<String>()
+        };
+        let all: String = lines.iter().map(lit).collect();
+        assert_eq!(all.replace(' ', ""), "HextekHoldings", "{lines:?}");
     }
 }
