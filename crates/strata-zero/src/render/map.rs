@@ -24,6 +24,11 @@ pub trait TileMap {
     fn walkable(&self, p: Pos) -> bool {
         self.tile(p).is_some_and(|t| t.is_walkable())
     }
+    /// What lies beyond the map's edge at `p`, drawn dim: a construct floats on the
+    /// Net's lattice, a floor sits in the building's mass, a stratum in nothing.
+    fn backdrop(&self, _p: Pos) -> Option<Tile> {
+        None
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -56,6 +61,18 @@ pub struct ConstructMap<'a> {
 impl TileMap for ConstructMap<'_> {
     fn size(&self) -> Size {
         self.construct.tiles.size()
+    }
+
+    fn backdrop(&self, p: Pos) -> Option<Tile> {
+        let mut t = Tile::new(Terrain::NetGrid);
+        t.district = self
+            .city
+            .building_opt(self.construct.building)
+            .map(|b| b.district);
+        // The lattice dots of the Net stage, with the hash in the other bits.
+        let lattice = u8::from(p.x.rem_euclid(4) == 0 && p.y.rem_euclid(2) == 0);
+        t.variant = (citygen::rng::tile_hash(self.city.seed, StratumKind::Net, p) & !1) | lattice;
+        Some(t)
     }
 
     fn tile(&self, p: Pos) -> Option<&Tile> {
@@ -199,6 +216,17 @@ impl TileMap for FloorMap<'_> {
         self.floor.tiles.size()
     }
 
+    fn backdrop(&self, p: Pos) -> Option<Tile> {
+        let mut t = Tile::new(Terrain::Mass);
+        t.building = Some(self.plan.building);
+        t.district = self
+            .city
+            .building_opt(self.plan.building)
+            .map(|b| b.district);
+        t.variant = citygen::rng::tile_hash(self.city.seed, StratumKind::Street, p);
+        Some(t)
+    }
+
     fn tile(&self, p: Pos) -> Option<&Tile> {
         self.floor.tiles.get(p)
     }
@@ -275,6 +303,14 @@ impl TileMap for MapRef<'_> {
             MapRef::Stratum(m) => m.connector(p),
             MapRef::Floor(m) => m.connector(p),
             MapRef::Construct(m) => m.connector(p),
+        }
+    }
+
+    fn backdrop(&self, p: Pos) -> Option<Tile> {
+        match self {
+            MapRef::Stratum(m) => m.backdrop(p),
+            MapRef::Floor(m) => m.backdrop(p),
+            MapRef::Construct(m) => m.backdrop(p),
         }
     }
 }

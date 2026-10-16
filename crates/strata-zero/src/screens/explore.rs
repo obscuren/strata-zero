@@ -4884,4 +4884,58 @@ mod tests {
         s.update(&mut st, &[key(KeyCode::Char('.'))]);
         assert_eq!(at(&s), Some(first));
     }
+
+    #[test]
+    fn the_void_around_a_small_map_reads_as_its_world() {
+        // A construct floats on the Net's lattice; a floor sits in the building's mass.
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        s.place = Place::Stratum(StratumKind::Net);
+        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        s.update(&mut st, &[]);
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let area = s.last_map.get();
+        let origin = s.cam.origin(area.width, area.height);
+        let size = st.constructs.get(b).unwrap().size;
+        let dots = (area.y..area.bottom())
+            .flat_map(|sy| (area.x..area.right()).map(move |sx| (sx, sy)))
+            .filter(|(sx, sy)| {
+                let p = crate::render::viewport::screen_to_tile(area, origin, (*sx, *sy));
+                p.x < 0 || p.y < 0 || p.x >= size.w as i32 || p.y >= size.h as i32
+            })
+            .filter(|(sx, sy)| t.backend().buffer()[(*sx, *sy)].symbol() == "·")
+            .count();
+        assert!(
+            dots > 20,
+            "the lattice shows around the construct: {dots} dots"
+        );
+        // A floor: the void is the building's mass, not black.
+        let city = st.city.as_ref().unwrap().clone();
+        let tower = tower(&st);
+        st.interiors.ensure(&city, tower, 0).unwrap();
+        let (_, lobby) = st.interiors.floor(tower, 0).unwrap();
+        let step = lobby.doorstep(&lobby.exits[0]);
+        {
+            let p = st.player.as_mut().unwrap();
+            p.body = None;
+        }
+        stand(
+            &mut st,
+            &mut s,
+            Place::Floor {
+                building: tower,
+                level: 0,
+            },
+            step,
+        );
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let corner = t.backend().buffer()[(area.right() - 1, area.bottom() - 1)].clone();
+        assert_ne!(
+            corner.symbol(),
+            " ",
+            "the corner outside a floor is not blank"
+        );
+    }
 }
