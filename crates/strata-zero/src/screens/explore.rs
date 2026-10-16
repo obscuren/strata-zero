@@ -4941,4 +4941,60 @@ mod tests {
             "the corner outside a floor is not blank"
         );
     }
+
+    #[test]
+    #[ignore]
+    fn fuzz_every_construct_entry_and_a_few_turns() {
+        for (seed, size, districts) in [
+            (8u64, SizePreset::Medium, 7u8),
+            (6, SizePreset::Custom { w: 120, h: 60 }, 8),
+            (3, SizePreset::Custom { w: 160, h: 80 }, 6),
+        ] {
+            let mut st = AppState::new();
+            st.city = Some(
+                Generator::run(GenParams {
+                    seed,
+                    size,
+                    districts,
+                    ..Default::default()
+                })
+                .unwrap(),
+            );
+            let mut s = MapScreen::explore(0);
+            walking(&mut st, &mut s);
+            let city = st.city.as_ref().unwrap().clone();
+            let mut t = Terminal::new(TestBackend::new(220, 60)).unwrap();
+            for b in &city.buildings {
+                {
+                    let p = st.player.as_mut().unwrap();
+                    p.body = Some((Place::Stratum(StratumKind::Street), p.pos));
+                    p.place = Place::Stratum(StratumKind::Net);
+                }
+                s.place = Place::Stratum(StratumKind::Net);
+                t.draw(|f| s.draw(&st, f)).unwrap();
+                if crate::constructs::enter_construct(&mut st, b.id).is_err() {
+                    let p = st.player.as_mut().unwrap();
+                    p.body = None;
+                    continue;
+                }
+                s.update(&mut st, &[]);
+                t.draw(|f| s.draw(&st, f)).unwrap();
+                for k in [
+                    KeyCode::Char('.'),
+                    KeyCode::Char('l'),
+                    KeyCode::Char('.'),
+                    KeyCode::Char(' '),
+                ] {
+                    if let ScreenCmd::Push { to: mut popup, .. } = s.update(&mut st, &[key(k)]) {
+                        t.draw(|f| popup.draw(&st, f)).unwrap();
+                        popup.update(&mut st, &[key(KeyCode::Esc)]);
+                    }
+                    t.draw(|f| s.draw(&st, f)).unwrap();
+                }
+                let p = st.player.as_mut().unwrap();
+                p.body = None;
+            }
+            eprintln!("seed {seed}: {} buildings ok", city.buildings.len());
+        }
+    }
 }
