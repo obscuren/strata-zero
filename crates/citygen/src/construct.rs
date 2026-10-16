@@ -16,6 +16,8 @@ use rand_chacha::ChaCha8Rng;
 pub const ICE_THRESHOLD: u8 = 160;
 /// Security from which the ICE is grey and the vault has its own guard.
 pub const GREY_THRESHOLD: u8 = 200;
+/// Security from which the vault's guard is black.
+pub const BLACK_THRESHOLD: u8 = 230;
 const MIN_W: i32 = 14;
 const MAX_W: i32 = 40;
 const MIN_H: i32 = 11;
@@ -23,11 +25,16 @@ const MAX_H: i32 = 24;
 const LANE_LIGHT: u8 = 255;
 const CONSTRUCT_SALT: u64 = 0xC0DE_5EED;
 
-/// A piece of ICE standing on a construct tile.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A piece of ICE: where it was made, where it stands now (the tile carrying
+/// `Feature::Ice`), and the spine it walks when asleep (empty for white).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Guard {
+    pub post: Pos,
     pub pos: Pos,
     pub grade: IceGrade,
+    pub beat: Vec<Pos>,
+    /// Standing, or lifted by a crack or a break.
+    pub standing: bool,
 }
 
 /// The inside of a construct.
@@ -54,9 +61,16 @@ impl Construct {
 
     /// The index of the guard standing on a tile; a lifted guard is not there.
     pub fn guard_at(&self, p: Pos) -> Option<usize> {
-        self.guards
-            .iter()
-            .position(|g| g.pos == p && matches!(self.tiles[p].feature, Some(Feature::Ice(_))))
+        self.guards.iter().position(|g| g.pos == p && g.standing)
+    }
+
+    /// The tile's feature follows whoever stands on it.
+    fn refresh_ice(&mut self, p: Pos) {
+        if !self.tiles.in_bounds(p) {
+            return;
+        }
+        let standing = self.guards.iter().find(|g| g.pos == p && g.standing);
+        self.tiles[p].feature = standing.map(|g| Feature::Ice(g.grade));
     }
 
     pub fn vault_room(&self) -> Option<Rect> {
@@ -73,12 +87,30 @@ impl Construct {
             .then_some(last)
     }
 
-    /// Lifts or restores a guard: its tile's feature, and with it its walkability.
+    /// Lifts or restores a guard: its tile's feature, and with it its walkability. A
+    /// guard never stands up under another standing guard.
     pub fn set_guard(&mut self, index: usize, standing: bool) {
-        let Some(g) = self.guards.get(index).copied() else {
+        let Some(pos) = self.guards.get(index).map(|g| g.pos) else {
             return;
         };
-        self.tiles[g.pos].feature = standing.then_some(Feature::Ice(g.grade));
+        if standing && self.guard_at(pos).is_some_and(|i| i != index) {
+            return;
+        }
+        self.guards[index].standing = standing;
+        self.refresh_ice(pos);
+    }
+
+    /// Walks a guard to a tile: the feature travels with it.
+    pub fn move_guard(&mut self, index: usize, to: Pos) {
+        let Some(from) = self.guards.get(index).map(|g| g.pos) else {
+            return;
+        };
+        if !self.tiles.in_bounds(to) || from == to {
+            return;
+        }
+        self.guards[index].pos = to;
+        self.refresh_ice(from);
+        self.refresh_ice(to);
     }
 }
 
@@ -235,22 +267,41 @@ pub fn generate_construct(city: &City, b: BuildingId) -> Option<Construct> {
         tiles[pos].feature = Some(Feature::Node(kind));
         nodes.push((id, pos));
     }
-    // Guards.
+    // Guards: the gate guard walks the near half of the spine, the vault guard the
+    // far half; they meet in the middle. White keeps its post.
     let mut guards = Vec::new();
     if security >= ICE_THRESHOLD {
+        let spine: Vec<Pos> = (2..=end_door.x).map(|x| Pos::new(x, sy)).collect();
+        let mid = spine.len() / 2;
         let grade = if security >= GREY_THRESHOLD {
             IceGrade::Grey
         } else {
             IceGrade::White
         };
+        let post = Pos::new(2, sy);
         guards.push(Guard {
-            pos: Pos::new(2, sy),
+            post,
+            pos: post,
             grade,
+            beat: if grade == IceGrade::White {
+                Vec::new()
+            } else {
+                spine[..=mid].to_vec()
+            },
+            standing: true,
         });
         if has_vault && security >= GREY_THRESHOLD {
+            let grade = if security >= BLACK_THRESHOLD {
+                IceGrade::Black
+            } else {
+                IceGrade::Grey
+            };
             guards.push(Guard {
+                post: end_door,
                 pos: end_door,
-                grade: IceGrade::Grey,
+                grade,
+                beat: spine[mid..].to_vec(),
+                standing: true,
             });
         }
     }
@@ -314,6 +365,11 @@ pub fn validate_construct(c: &Construct) -> Result<(), String> {
         t.feature = None;
         if !t.is_walkable() {
             return Err(format!("guard at {:?} stands in a wall", g.pos));
+        }
+        for p in &g.beat {
+            if !matches!(c.tiles[*p].terrain, Terrain::NetLane | Terrain::NetGate) {
+                return Err(format!("beat tile {p:?} is not spine"));
+            }
         }
     }
     Ok(())
@@ -400,7 +456,12 @@ mod tests {
                     );
                     if vault.is_some() {
                         assert_eq!(k.guards.len(), 2);
-                        assert_eq!(k.guards[1].grade, IceGrade::Grey);
+                        let want = if s >= 230 {
+                            IceGrade::Black
+                        } else {
+                            IceGrade::Grey
+                        };
+                        assert_eq!(k.guards[1].grade, want, "{:?} at {s}", b.id);
                         assert_eq!(k.tiles[k.guards[1].pos].terrain, Terrain::NetGate);
                     }
                 }
@@ -418,6 +479,29 @@ mod tests {
             for g in &k.guards {
                 assert_eq!(k.tiles[g.pos].feature, Some(Feature::Ice(g.grade)));
                 assert!(!k.tiles[g.pos].is_walkable());
+                assert_eq!(g.pos, g.post);
+                // A beat is walkable spine; white has none.
+                assert_eq!(g.beat.is_empty(), g.grade == IceGrade::White, "{:?}", b.id);
+                for p in &g.beat {
+                    assert!(
+                        matches!(k.tiles[*p].terrain, Terrain::NetLane | Terrain::NetGate),
+                        "{:?} beat tile {p:?} is {:?}",
+                        b.id,
+                        k.tiles[*p].terrain
+                    );
+                }
+            }
+            if k.guards.len() == 2 {
+                let (gate, vault_g) = (&k.guards[0], &k.guards[1]);
+                let mid = gate.beat.last().unwrap();
+                assert_eq!(gate.beat.first(), Some(&gate.post));
+                assert_eq!(
+                    vault_g.beat.first(),
+                    Some(mid),
+                    "the halves meet in the middle"
+                );
+                assert_eq!(vault_g.beat.last(), Some(&vault_g.post));
+                assert!(gate.beat.len() >= 2 && vault_g.beat.len() >= 2);
             }
             assert_eq!(k.tiles[k.entry].terrain, Terrain::NetGate);
             assert_eq!(generate_construct(&c, b.id).unwrap(), k, "deterministic");
@@ -454,6 +538,60 @@ mod tests {
             .find(|sn| sn.owner == SubnetOwner::Building(b))
             .unwrap()
             .security = s;
+    }
+
+    #[test]
+    fn black_ice_guards_the_vault_from_230() {
+        let mut c = city();
+        let b = c
+            .buildings
+            .iter()
+            .find(|b| {
+                c.net
+                    .nodes
+                    .iter()
+                    .any(|n| n.building == Some(b.id) && n.kind == NodeKind::DataVault)
+            })
+            .unwrap()
+            .id;
+        sn_security(&mut c, b, 229);
+        let k = generate_construct(&c, b).unwrap();
+        assert_eq!(
+            k.guards.iter().map(|g| g.grade).collect::<Vec<_>>(),
+            vec![IceGrade::Grey, IceGrade::Grey]
+        );
+        sn_security(&mut c, b, 230);
+        let k = generate_construct(&c, b).unwrap();
+        assert_eq!(
+            k.guards.iter().map(|g| g.grade).collect::<Vec<_>>(),
+            vec![IceGrade::Grey, IceGrade::Black]
+        );
+        validate_construct(&k).unwrap();
+        assert_eq!(IceGrade::Black.integrity(), 10);
+        assert_eq!(IceGrade::Grey.sight(), 6);
+        assert_eq!(IceGrade::White.sight(), 4);
+    }
+
+    #[test]
+    fn a_guard_moves_with_its_feature() {
+        let mut c = city();
+        let b = c.buildings[0].id;
+        sn_security(&mut c, b, 200);
+        let mut k = generate_construct(&c, b).unwrap();
+        let from = k.guards[0].pos;
+        let to = k.guards[0].beat[1];
+        k.move_guard(0, to);
+        assert_eq!(k.guards[0].pos, to);
+        assert_eq!(k.guards[0].post, from);
+        assert!(k.tiles[from].feature.is_none() && k.tiles[from].is_walkable());
+        assert_eq!(k.tiles[to].feature, Some(Feature::Ice(IceGrade::Grey)));
+        assert_eq!(k.guard_at(to), Some(0));
+        assert_eq!(k.guard_at(from), None);
+        // Lifting and standing again happen where the piece is.
+        k.set_guard(0, false);
+        assert!(k.tiles[to].is_walkable());
+        k.set_guard(0, true);
+        assert_eq!(k.guard_at(to), Some(0));
     }
 
     #[test]

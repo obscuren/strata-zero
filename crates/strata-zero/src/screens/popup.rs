@@ -297,7 +297,7 @@ impl Popup {
             }
             Pick::Continue => {
                 crate::net::step_run(st);
-                crate::net::turn_ends(st);
+                crate::net::ice_turn(st);
                 ScreenCmd::Pop {
                     fx: TransitionKind::None,
                 }

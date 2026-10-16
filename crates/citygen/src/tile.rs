@@ -151,6 +151,7 @@ pub enum Feature {
 pub enum IceGrade {
     White,
     Grey,
+    Black,
 }
 
 impl IceGrade {
@@ -158,6 +159,25 @@ impl IceGrade {
         match self {
             IceGrade::White => "white",
             IceGrade::Grey => "grey",
+            IceGrade::Black => "black",
+        }
+    }
+
+    /// Hits it takes to break.
+    pub fn integrity(self) -> u8 {
+        match self {
+            IceGrade::White => 3,
+            IceGrade::Grey => 6,
+            IceGrade::Black => 10,
+        }
+    }
+
+    /// How far along the spine it sees, in tiles.
+    pub fn sight(self) -> i32 {
+        match self {
+            IceGrade::White => 4,
+            IceGrade::Grey => 6,
+            IceGrade::Black => 8,
         }
     }
 }

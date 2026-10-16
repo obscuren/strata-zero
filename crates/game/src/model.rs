@@ -127,10 +127,25 @@ pub enum Op {
     Copy,
     /// A server keeps the construct open for you.
     Backdoor,
+    /// Takes integrity off a piece of ICE.
+    Attack,
+    /// Soaks the next hit on you.
+    Shield,
+    /// Halves how far ICE sees you, for a while.
+    Mask,
 }
 
 impl Op {
-    pub const ALL: [Op; 5] = [Op::Crack, Op::Spoof, Op::Blind, Op::Copy, Op::Backdoor];
+    pub const ALL: [Op; 8] = [
+        Op::Crack,
+        Op::Spoof,
+        Op::Blind,
+        Op::Copy,
+        Op::Backdoor,
+        Op::Attack,
+        Op::Shield,
+        Op::Mask,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -139,6 +154,9 @@ impl Op {
             Op::Blind => "blind",
             Op::Copy => "copy",
             Op::Backdoor => "backdoor",
+            Op::Attack => "attack",
+            Op::Shield => "shield",
+            Op::Mask => "mask",
         }
     }
 }

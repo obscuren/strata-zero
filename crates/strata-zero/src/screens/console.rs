@@ -11,9 +11,9 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 18] = [
+const COMMANDS: [&str; 22] = [
     "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "talent", "tpts", "program",
-    "heat", "alarm", "who", "clock", "tp", "clear", "help",
+    "heat", "alarm", "wake", "ice", "failsafe", "hp", "who", "clock", "tp", "clear", "help",
 ];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
@@ -65,6 +65,15 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             let max = st.character.hp_max(&st.content);
             st.character.hp = max;
             Ok(format!("hp {max}/{max}"))
+        }
+        "hp" => {
+            let n: u32 = args
+                .first()
+                .and_then(|a| a.parse().ok())
+                .ok_or_else(|| "hp <points>".to_string())?;
+            let max = st.character.hp_max(&st.content);
+            st.character.hp = n.min(max);
+            Ok(format!("hp {}/{max}", st.character.hp))
         }
         "xp" => {
             let n: u32 = args
@@ -179,6 +188,57 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             st.warn(line.clone());
             Ok(line)
         }
+        "wake" => {
+            let b = crate::net::building_here(st).ok_or_else(|| "not in a construct".to_string())?;
+            let pos = st.player.as_ref().map(|p| p.pos).ok_or("no body")?;
+            let k = st.constructs.get(b).ok_or("not in a construct")?;
+            st.net.ice_of(k);
+            st.net.wake_all(b, pos);
+            let n = st.net.ice.get(&b).map_or(0, |v| v.len());
+            Ok(format!("{n} piece{} awake", if n == 1 { "" } else { "s" }))
+        }
+        "ice" => {
+            let b = crate::net::building_here(st).ok_or_else(|| "not in a construct".to_string())?;
+            let k = st.constructs.get(b).ok_or("not in a construct")?;
+            st.net.ice_of(k);
+            let k = st.constructs.get(b).ok_or("not in a construct")?;
+            let lines: Vec<String> = k
+                .guards
+                .iter()
+                .zip(st.net.ice.get(&b).map(|v| v.as_slice()).unwrap_or(&[]))
+                .enumerate()
+                .map(|(i, (g, ice))| {
+                    let mode = match ice.mode {
+                        crate::net::IceMode::Asleep => "asleep".to_string(),
+                        crate::net::IceMode::Awake { seen, lost } => {
+                            format!("awake→{},{} lost {lost}", seen.x, seen.y)
+                        }
+                    };
+                    let down = if k.guard_at(g.pos).is_none() { " down" } else { "" };
+                    format!(
+                        "{i} {} {mode} {}/{} at {},{}{down}",
+                        g.grade.label(),
+                        ice.integrity,
+                        g.grade.integrity(),
+                        g.pos.x,
+                        g.pos.y
+                    )
+                })
+                .collect();
+            if lines.is_empty() {
+                return Ok("no ICE here".to_string());
+            }
+            Ok(lines.join(" · "))
+        }
+        "failsafe" => {
+            let on = match args.first().copied() {
+                Some("on") => true,
+                Some("off") => false,
+                _ => return Err("failsafe on|off".to_string()),
+            };
+            st.net.failsafe = on;
+            Ok(format!("failsafe {}", if on { "on" } else { "off" }))
+        }
         "who" => {
             let w = st
                 .world
@@ -274,7 +334,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             ))
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · who · clock <hh:mm> · tp <x> <y> · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · ice · failsafe on|off · hp <points> · who · clock <hh:mm> · tp <x> <y> · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),

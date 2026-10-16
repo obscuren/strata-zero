@@ -332,6 +332,7 @@ fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
     match f {
         Feature::Ice(IceGrade::White) => Rgb(235, 240, 250).scale(0.7 + 0.3 * pulse(tick, 20)),
         Feature::Ice(IceGrade::Grey) => Rgb(255, 0, 200).scale(0.7 + 0.3 * pulse(tick, 20)),
+        Feature::Ice(IceGrade::Black) => Rgb(255, 40, 40).scale(0.7 + 0.3 * pulse(tick, 12)),
         Feature::Neon(h) => {
             ctx.style
                 .hue(h)
