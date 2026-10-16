@@ -490,7 +490,7 @@ fn land(
             } else {
                 "spoofed"
             };
-            format!("lock {verb} · {name}'s locked doors open for an hour")
+            format!("lock {verb} · `{name}`'s locked doors open for an hour")
         }
         (Op::Spoof, Target::Node(NodeKind::LiftCtrl)) => {
             "lift control spoofed · the lifts answer you".to_string()
@@ -498,13 +498,13 @@ fn land(
         (Op::Blind, _) => "camera blinded".to_string(),
         (Op::Copy, Target::Node(NodeKind::DataVault)) => {
             st.character.give(ItemId::new("vault_data"), 1);
-            "vault copied · a vault dump in the pack".to_string()
+            "vault copied · a `Vault dump` in the pack".to_string()
         }
         (Op::Copy, _) => {
             st.character.give(ItemId::new("paydata"), 1);
-            "server copied · a paydata shard in the pack".to_string()
+            "server copied · a `Paydata shard` in the pack".to_string()
         }
-        (Op::Backdoor, _) => format!("backdoor planted · {name}'s gate is yours"),
+        (Op::Backdoor, _) => format!("backdoor planted · `{name}`'s gate is yours"),
         (Op::Shield, _) => {
             st.net.shield = (st.net.shield + 1).min(2);
             let n = st.net.shield;
@@ -556,7 +556,7 @@ pub fn raise_alarm(st: &mut AppState, b: BuildingId) -> String {
         }
         st.net.wake_all(b, pos);
     }
-    format!("ALARM · {} locks down", building_name(st, b))
+    format!("ALARM · `{}` locks down", building_name(st, b))
 }
 
 /// Dumped: back to the body hard, the focus gone, the deck cooling.

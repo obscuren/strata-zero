@@ -170,7 +170,7 @@ impl Popup {
                         .jack_in(city, bonus)
                         .map(|port| {
                             (
-                                format!("jacked in at {}", port_name(city, port)),
+                                format!("jacked in at `{}`", port_name(city, port)),
                                 TransitionKind::Glitch,
                             )
                         })
@@ -189,7 +189,7 @@ impl Popup {
                                     &crate::render::map::MapRef::stratum_of(city, dest),
                                     bonus,
                                 );
-                                Ok((format!("now on {}", dest.label()), TransitionKind::None))
+                                Ok((format!("now on `{}`", dest.label()), TransitionKind::None))
                             }
                             None => Err(if up {
                                 "nothing leads up from here".to_string()

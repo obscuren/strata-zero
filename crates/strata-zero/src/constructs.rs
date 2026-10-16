@@ -72,7 +72,10 @@ pub fn enter_construct(st: &mut AppState, b: BuildingId) -> Result<String, Strin
     let now = st.net.now(st);
     if st.net.alert(b, now) {
         let city = st.city.as_ref().ok_or("no city")?;
-        return Err(format!("gate closed · {} on alert", building_name(city, b)));
+        return Err(format!(
+            "gate closed · `{}` on alert",
+            building_name(city, b)
+        ));
     }
     let city = st.city.as_ref().ok_or("no city")?;
     let entry = st
@@ -82,7 +85,7 @@ pub fn enter_construct(st: &mut AppState, b: BuildingId) -> Result<String, Strin
         .entry;
     let name = building_name(city, b);
     land(st, Place::Construct(b), entry);
-    Ok(format!("into {name}"))
+    Ok(format!("Entering `{name}`"))
 }
 
 /// Out through the entry, onto the gate tile on the Net.
@@ -93,6 +96,7 @@ pub fn leave_construct(st: &mut AppState) -> Result<String, String> {
         return Err("not in a construct".to_string());
     };
     let gate = city_gate(city, b).ok_or("the gate is gone")?;
+    let name = building_name(city, b);
     land(st, Place::Stratum(StratumKind::Net), gate);
-    Ok("out onto the grid".to_string())
+    Ok(format!("Leaving `{name}` · onto the grid"))
 }

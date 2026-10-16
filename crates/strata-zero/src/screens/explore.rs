@@ -1053,7 +1053,7 @@ impl MapScreen {
                             self.place = Place::Stratum(StratumKind::Net);
                             self.cam.snap(port);
                             let where_ = port_name(city, port);
-                            st.say(format!("jacked in at {where_}"));
+                            st.say(format!("jacked in at `{where_}`"));
                             return Some(ScreenCmd::Flash(TransitionKind::Glitch));
                         }
                         Err(e) => st.warn(e),
@@ -1066,7 +1066,7 @@ impl MapScreen {
                     Some(dest) => {
                         self.place = Place::Stratum(dest);
                         player.update_fov(&MapRef::stratum_of(city, dest), bonus);
-                        st.say(format!("now on {}", dest.label()));
+                        st.say(format!("now on `{}`", dest.label()));
                     }
                     None => st.warn(if up {
                         "nothing leads up from here"
@@ -3603,7 +3603,7 @@ mod tests {
         assert_eq!(p.place, Place::Construct(b), "{:?}", last(&st));
         let k = st.constructs.get(b).expect("generated on entry");
         assert_eq!(p.pos, k.entry);
-        assert_eq!(last(&st), Some(format!("into {name}").as_str()));
+        assert_eq!(last(&st), Some(format!("Entering {name}").as_str()));
         assert_eq!(s.place, Place::Construct(b));
         let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
         t.draw(|f| s.draw(&st, f)).unwrap();
@@ -3617,7 +3617,10 @@ mod tests {
         let p = st.player.as_ref().unwrap();
         assert_eq!(p.place, Place::Stratum(StratumKind::Net), "{:?}", last(&st));
         assert_eq!(p.pos, gate);
-        assert_eq!(last(&st), Some("out onto the grid"));
+        assert_eq!(
+            last(&st),
+            Some(format!("Leaving {name} · onto the grid").as_str())
+        );
         // In again: the construct is generated once; jacking out from inside works.
         s.update(&mut st, &[key(code)]);
         assert_eq!(st.player.as_ref().unwrap().place, Place::Construct(b));
@@ -3676,7 +3679,7 @@ mod tests {
         }
         s.place = Place::Stratum(StratumKind::Net);
         let r = crate::constructs::enter_construct(st, b).unwrap();
-        assert!(r.starts_with("into "));
+        assert!(r.starts_with("Entering "));
         s.place = Place::Construct(b);
         b
     }
@@ -3829,7 +3832,7 @@ mod tests {
         };
         assert_eq!(
             crate::screens::console::run(&mut st, at, "alarm").unwrap(),
-            format!("ALARM · {name} locks down")
+            format!("ALARM · `{name}` locks down")
         );
         s.update(&mut st, &[key(code)]);
         assert_eq!(st.player.as_ref().unwrap().pos, outside);
@@ -3904,7 +3907,7 @@ mod tests {
         }
         assert_eq!(
             crate::constructs::enter_construct(&mut st, b).unwrap_err(),
-            format!("gate closed · {name} on alert")
+            format!("gate closed · `{name}` on alert")
         );
     }
 
@@ -3948,7 +3951,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             crate::screens::console::run(&mut st, at, "program backdoor").unwrap(),
-            "Backdoor loaded · 2/2 slots"
+            "`Backdoor` loaded · 2/2 slots"
         );
         crate::net::start_run(
             &mut st,
@@ -4937,5 +4940,61 @@ mod tests {
             " ",
             "the corner outside a floor is not blank"
         );
+    }
+
+    #[test]
+    #[ignore]
+    fn fuzz_every_construct_entry_and_a_few_turns() {
+        for (seed, size, districts) in [
+            (8u64, SizePreset::Medium, 7u8),
+            (6, SizePreset::Custom { w: 120, h: 60 }, 8),
+            (3, SizePreset::Custom { w: 160, h: 80 }, 6),
+        ] {
+            let mut st = AppState::new();
+            st.city = Some(
+                Generator::run(GenParams {
+                    seed,
+                    size,
+                    districts,
+                    ..Default::default()
+                })
+                .unwrap(),
+            );
+            let mut s = MapScreen::explore(0);
+            walking(&mut st, &mut s);
+            let city = st.city.as_ref().unwrap().clone();
+            let mut t = Terminal::new(TestBackend::new(220, 60)).unwrap();
+            for b in &city.buildings {
+                {
+                    let p = st.player.as_mut().unwrap();
+                    p.body = Some((Place::Stratum(StratumKind::Street), p.pos));
+                    p.place = Place::Stratum(StratumKind::Net);
+                }
+                s.place = Place::Stratum(StratumKind::Net);
+                t.draw(|f| s.draw(&st, f)).unwrap();
+                if crate::constructs::enter_construct(&mut st, b.id).is_err() {
+                    let p = st.player.as_mut().unwrap();
+                    p.body = None;
+                    continue;
+                }
+                s.update(&mut st, &[]);
+                t.draw(|f| s.draw(&st, f)).unwrap();
+                for k in [
+                    KeyCode::Char('.'),
+                    KeyCode::Char('l'),
+                    KeyCode::Char('.'),
+                    KeyCode::Char(' '),
+                ] {
+                    if let ScreenCmd::Push { to: mut popup, .. } = s.update(&mut st, &[key(k)]) {
+                        t.draw(|f| popup.draw(&st, f)).unwrap();
+                        popup.update(&mut st, &[key(KeyCode::Esc)]);
+                    }
+                    t.draw(|f| s.draw(&st, f)).unwrap();
+                }
+                let p = st.player.as_mut().unwrap();
+                p.body = None;
+            }
+            eprintln!("seed {seed}: {} buildings ok", city.buildings.len());
+        }
     }
 }

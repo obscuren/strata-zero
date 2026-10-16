@@ -113,12 +113,16 @@ pub fn enter(st: &mut AppState, b: BuildingId, door: (StratumKind, Pos)) -> Resu
     let step = floor.doorstep(&exit);
     let name = building_name(city, b);
     land(st, Place::Floor { building: b, level }, step);
-    Ok(format!("into {name}"))
+    Ok(format!("Entering `{name}`"))
 }
 
 /// Steps out of an exit onto its landing on the city map.
 pub fn leave(st: &mut AppState, exit: &Exit) -> Result<String, String> {
     let city = st.city.as_ref().ok_or("no city")?;
+    let name = match st.player.as_ref().map(|p| p.place) {
+        Some(Place::Floor { building, .. }) => building_name(city, building),
+        _ => "the building".to_string(),
+    };
     // The landing, or the nearest free tile beside the door when something stands on it.
     let landing = std::iter::once(exit.landing)
         .chain(exit.door.neighbors4())
@@ -139,7 +143,7 @@ pub fn leave(st: &mut AppState, exit: &Exit) -> Result<String, String> {
         StratumKind::Undercity => "the tunnel",
         StratumKind::Net => "the Net",
     };
-    Ok(format!("out onto {onto}"))
+    Ok(format!("Leaving `{name}` · onto {onto}"))
 }
 
 /// Rides the lift to a floor: the player steps out at that floor's lift bank.

@@ -355,7 +355,14 @@ impl Runner {
             .as_ref()
             .is_some_and(|t| t.active(self.st.tick));
         if self.repaint_pending && !animating {
-            term.clear()?;
+            // Every cell is sent again on the next draw, blanks included, without
+            // clearing the screen first (which showed as a blank pause on a big
+            // terminal): the buffer the next draw diffs against is filled with a glyph
+            // nothing real ever draws, then swapped into the "on screen" slot.
+            for cell in term.current_buffer_mut().content.iter_mut() {
+                cell.set_symbol("\u{0}");
+            }
+            term.swap_buffers();
             self.full_repaints += 1;
             self.repaint_pending = false;
         }
@@ -734,5 +741,37 @@ mod tests {
         );
         assert!(st.log.recent(94).is_some());
         assert!(st.log.recent(95).is_none());
+    }
+
+    /// Draws one glyph on its first frame and nothing after, like a glitch that ends.
+    struct Flicker;
+
+    impl Screen for Flicker {
+        fn update(&mut self, _st: &mut AppState, _keys: &[KeyEvent]) -> ScreenCmd {
+            ScreenCmd::Stay
+        }
+
+        fn draw(&self, st: &AppState, f: &mut Frame) {
+            if st.tick == 1 {
+                f.buffer_mut()[(3, 3)].set_char('▓');
+            }
+        }
+    }
+
+    #[test]
+    fn a_full_repaint_wipes_a_stale_glyph_without_clearing_the_screen() {
+        let mut t = Terminal::new(TestBackend::new(MIN_W, MIN_H)).unwrap();
+        let mut r = Runner::new(Box::new(Flicker), AppState::new());
+        r.frame(&mut t, &[]).unwrap();
+        assert_eq!(t.backend().buffer()[(3, 3)].symbol(), "▓");
+        // The screen draws nothing there now, and asks for a full repaint.
+        r.st.repaint = true;
+        r.frame(&mut t, &[]).unwrap();
+        assert_eq!(
+            t.backend().buffer()[(3, 3)].symbol(),
+            " ",
+            "the stale glyph is gone"
+        );
+        assert_eq!(r.full_repaints(), 1);
     }
 }

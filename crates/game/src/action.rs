@@ -128,9 +128,9 @@ pub fn apply(
                 Some(old) => {
                     let old_name = name(c, &old);
                     ch.give(old, 1);
-                    done(format!("swapped {old_name} for {}", item.name))
+                    done(format!("swapped `{old_name}` for `{}`", item.name))
                 }
-                None => done(format!("equipped {}", item.name)),
+                None => done(format!("equipped `{}`", item.name)),
             }
         }
         Action::Unequip(slot) => {
@@ -140,7 +140,7 @@ pub fn apply(
                 .ok_or_else(|| format!("nothing in the {} slot", slot.label()))?;
             ch.give(id.clone(), 1);
             clamp_hp(ch, c);
-            done(format!("unequipped {}", name(c, &id)))
+            done(format!("unequipped `{}`", name(c, &id)))
         }
         Action::Drop { item, qty } => {
             let n = qty.min(ch.count(&item));
@@ -149,7 +149,7 @@ pub fn apply(
             }
             remove_from_pack(ch, &item, n);
             ground.add(at.place, at.pos, item.clone(), n);
-            done(format!("dropped {n}× {}", name(c, &item)))
+            done(format!("dropped {n}× `{}`", name(c, &item)))
         }
         Action::Use(id) => {
             let item = c.item(&id).ok_or_else(|| format!("unknown item {id}"))?;
@@ -164,7 +164,7 @@ pub fn apply(
                 Use::Heal(n) => {
                     let healed = ch.hp_max(c).saturating_sub(ch.hp).min(n);
                     ch.hp += healed;
-                    done(format!("used {} · +{healed} hp", item.name))
+                    done(format!("used `{}` · +{healed} hp", item.name))
                 }
             }
         }
@@ -184,7 +184,7 @@ pub fn apply(
             }
             ground.take(at.place, at.pos, &item, n);
             ch.give(item.clone(), n);
-            done(format!("took {n}× {}", name(c, &item)))
+            done(format!("took {n}× `{}`", name(c, &item)))
         }
         Action::TakeAll => {
             if ch.overburdened(c) {
@@ -220,7 +220,7 @@ pub fn apply(
             ch.categories = b.categories.clone();
             ch.skills = b.skills.clone();
             ch.sp = b.sp_left(c).max(0) as u32;
-            done(format!("{} is yours", cat.name))
+            done(format!("`{}` is yours", cat.name))
         }
         Action::UnlockSkill(id) => {
             let skill = c.skill(&id).ok_or_else(|| format!("unknown skill {id}"))?;
@@ -231,14 +231,14 @@ pub fn apply(
             b.toggle_skill(c, &id).map_err(|e| e.to_string())?;
             ch.skills = b.skills.clone();
             ch.sp = b.sp_left(c).max(0) as u32;
-            done(format!("{} is yours", skill.name))
+            done(format!("`{}` is yours", skill.name))
         }
         Action::Learn(id) => {
             let t = c
                 .talent(&id)
                 .ok_or_else(|| format!("unknown talent {id}"))?;
             let rank = ch.learn(c, &id)?;
-            done(format!("{} {}/{}", t.name, rank, t.ranks))
+            done(format!("`{}` {}/{}", t.name, rank, t.ranks))
         }
         Action::Load(id) => ch.load(c, &id).and_then(done),
         Action::Unload(id) => ch.unload(c, &id).and_then(done),
@@ -307,7 +307,7 @@ mod tests {
             qty: 1,
         });
         let out = apply(&mut ch, &mut g, &c, at, 0, Action::Equip(id("hardhat"))).unwrap();
-        assert_eq!(out.message, "equipped Hardhat with visor");
+        assert_eq!(out.message, "equipped `Hardhat with visor`");
         assert_eq!(ch.equipped(Slot::Head), Some(&id("hardhat")));
         assert_eq!(ch.count(&id("hardhat")), 0);
         assert!(!ch.inventory.iter().any(|s| s.qty == 0));
@@ -324,7 +324,10 @@ mod tests {
             Action::Equip(id("mirrorshades")),
         )
         .unwrap();
-        assert_eq!(out.message, "swapped Nightglass optics for Mirrorshades");
+        assert_eq!(
+            out.message,
+            "swapped `Nightglass optics` for `Mirrorshades`"
+        );
         assert_eq!(ch.count(&id("nightglass_optics")), 1);
         assert_eq!(ch.sight_bonus(&c), 0);
         assert!(
@@ -333,7 +336,7 @@ mod tests {
         );
         ch.hp = 47;
         let out = apply(&mut ch, &mut g, &c, at, 0, Action::Unequip(Slot::Torso)).unwrap();
-        assert_eq!(out.message, "unequipped Salvage jacket");
+        assert_eq!(out.message, "unequipped `Salvage jacket`");
         assert_eq!(ch.count(&id("salvage_jacket")), 1);
         assert_eq!((ch.hp, ch.hp_max(&c)), (42, 42), "hp clamps to the new max");
     }
@@ -343,7 +346,7 @@ mod tests {
         let (c, mut ch, mut g, at) = setup();
         ch.hp = 20;
         let out = apply(&mut ch, &mut g, &c, at, 0, Action::Use(id("stim_patch"))).unwrap();
-        assert_eq!(out.message, "used Stim patch · +15 hp");
+        assert_eq!(out.message, "used `Stim patch` · +15 hp");
         assert_eq!((ch.hp, ch.count(&id("stim_patch"))), (35, 0));
         assert!(
             apply(&mut ch, &mut g, &c, at, 0, Action::Use(id("stim_patch"))).is_err(),
@@ -363,7 +366,7 @@ mod tests {
             Action::Use(id("soy_noodle_cup")),
         )
         .unwrap();
-        assert_eq!(out.message, "used Soy-noodle cup · +1 hp");
+        assert_eq!(out.message, "used `Soy-noodle cup` · +1 hp");
         let out = apply(
             &mut ch,
             &mut g,
@@ -373,7 +376,7 @@ mod tests {
             Action::Use(id("soy_noodle_cup")),
         )
         .unwrap();
-        assert_eq!(out.message, "used Soy-noodle cup · +0 hp");
+        assert_eq!(out.message, "used `Soy-noodle cup` · +0 hp");
         assert_eq!(ch.count(&id("soy_noodle_cup")), 0);
         // Above the max (a console heal, a later buff): nothing happens, nothing panics.
         ch.hp = 60;
@@ -382,7 +385,7 @@ mod tests {
             qty: 1,
         });
         let out = apply(&mut ch, &mut g, &c, at, 0, Action::Use(id("stim_patch"))).unwrap();
-        assert_eq!(out.message, "used Stim patch · +0 hp");
+        assert_eq!(out.message, "used `Stim patch` · +0 hp");
         assert_eq!(ch.hp, 60);
     }
 
@@ -398,12 +401,12 @@ mod tests {
             qty: n,
         };
         let out = apply(&mut ch, &mut g, &c, at, 0, drop(5)).unwrap();
-        assert_eq!(out.message, "dropped 3× Copper coil");
+        assert_eq!(out.message, "dropped 3× `Copper coil`");
         assert_eq!(ch.count(&id("copper_coil")), 0);
         assert_eq!(g.at(at.place, at.pos)[0].qty, 3);
         assert!(apply(&mut ch, &mut g, &c, at, 0, drop(1)).is_err());
         let out = apply(&mut ch, &mut g, &c, at, 0, take(2)).unwrap();
-        assert_eq!(out.message, "took 2× Copper coil");
+        assert_eq!(out.message, "took 2× `Copper coil`");
         assert_eq!(ch.count(&id("copper_coil")), 2);
         let elsewhere = At {
             pos: Pos::new(9, 9),
@@ -534,7 +537,7 @@ mod tests {
         assert!(
             ch.has_category(&CategoryId::new("iron")) && ch.has_skill(&SkillId::new("handguns"))
         );
-        assert_eq!((ch.sp, out.message.as_str()), (0, "IRON is yours"));
+        assert_eq!((ch.sp, out.message.as_str()), (0, "`IRON` is yours"));
         assert!(
             apply(
                 &mut ch,
@@ -557,7 +560,7 @@ mod tests {
             Action::UnlockSkill(SkillId::new("longarm")),
         )
         .unwrap();
-        assert_eq!((ch.sp, out.message.as_str()), (0, "Longarm is yours"));
+        assert_eq!((ch.sp, out.message.as_str()), (0, "`Longarm` is yours"));
         assert!(
             apply(
                 &mut ch,
@@ -579,7 +582,7 @@ mod tests {
         let name = c.talent(&first).unwrap().name.clone();
         let out = apply(&mut ch, &mut g, &c, at, 0, Action::Learn(first.clone())).unwrap();
         assert!(
-            out.message.starts_with(&format!("{name} 1/")),
+            out.message.starts_with(&format!("`{name}` 1/")),
             "{}",
             out.message
         );
@@ -608,9 +611,9 @@ mod tests {
         let (c, mut ch, mut g, at) = setup();
         let copy = ItemId::new("copy");
         let out = apply(&mut ch, &mut g, &c, at, 0, Action::Unload(copy.clone())).unwrap();
-        assert_eq!(out.message, "Copy unloaded");
+        assert_eq!(out.message, "`Copy` unloaded");
         let out = apply(&mut ch, &mut g, &c, at, 0, Action::Load(copy.clone())).unwrap();
-        assert_eq!(out.message, "Copy loaded · 2/2 slots");
+        assert_eq!(out.message, "`Copy` loaded · 2/2 slots");
         apply(
             &mut ch,
             &mut g,

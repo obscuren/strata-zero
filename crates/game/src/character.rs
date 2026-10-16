@@ -188,7 +188,7 @@ impl Character {
         let name = c.item(id).map(|i| i.name.as_str()).unwrap_or("?");
         let slots = self.deck(c).map(|(_, d)| d.slots).unwrap_or(0);
         Ok(format!(
-            "{name} loaded · {}/{slots} slots",
+            "`{name}` loaded · {}/{slots} slots",
             self.loaded_size(c)
         ))
     }
@@ -201,7 +201,7 @@ impl Character {
             .ok_or_else(|| "not loaded".to_string())?;
         self.loaded.remove(at);
         let name = c.item(id).map(|i| i.name.as_str()).unwrap_or("?");
-        Ok(format!("{name} unloaded"))
+        Ok(format!("`{name}` unloaded"))
     }
 
     /// The character a template describes, or none for an unknown template.
@@ -987,8 +987,8 @@ mod tests {
             ch.can_load(&c, &spoof).unwrap_err(),
             "no room: 2 of 2 slots"
         );
-        assert_eq!(ch.unload(&c, &copy).unwrap(), "Copy unloaded");
-        assert_eq!(ch.load(&c, &spoof).unwrap(), "Spoof loaded · 2/2 slots");
+        assert_eq!(ch.unload(&c, &copy).unwrap(), "`Copy` unloaded");
+        assert_eq!(ch.load(&c, &spoof).unwrap(), "`Spoof` loaded · 2/2 slots");
         assert_eq!(ch.load(&c, &spoof).unwrap_err(), "already loaded");
         assert_eq!(
             ch.load(&c, &ItemId::new("hardhat")).unwrap_err(),
