@@ -27,6 +27,12 @@ impl Camera {
         self.y = p.y as f32;
     }
 
+    /// Lands on the target at once: no easing across a map change.
+    pub fn settle(&mut self) {
+        self.x = self.tx as f32;
+        self.y = self.ty as f32;
+    }
+
     pub fn target(&mut self, p: Pos) {
         self.tx = p.x;
         self.ty = p.y;
@@ -145,7 +151,24 @@ impl Widget for MapView<'_> {
             for sx in area.x..area.right() {
                 let p = screen_to_tile(area, self.origin, (sx, sy));
                 let Some(tile) = map.tile(p) else {
-                    background.write(buf, sx, sy);
+                    // Beyond the edge: the map's own backdrop, remembered-dim, or nothing.
+                    match map.backdrop(p) {
+                        Some(back) => {
+                            let ctx = RenderCtx {
+                                style: self.style,
+                                theme: map.theme(p),
+                                stratum,
+                                light: 150,
+                                tick: self.tick,
+                                vis: Visibility::Remembered,
+                                connector: None,
+                                kind: None,
+                                wall_mask: 0,
+                            };
+                            apply_vis(cell(&back, &ctx), Visibility::Remembered).write(buf, sx, sy);
+                        }
+                        None => background.write(buf, sx, sy),
+                    }
                     continue;
                 };
                 let mut mask = 0u8;
