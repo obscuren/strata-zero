@@ -661,13 +661,6 @@ impl MapScreen {
                     } else {
                         game::chance(pw, game::difficulty(security))
                     };
-                    if odds == 0 {
-                        choices.push(Choice::disabled(
-                            key,
-                            format!("{label}{on} · out of your reach"),
-                        ));
-                        continue;
-                    }
                     choices.push(Choice::new(
                         key,
                         format!(
@@ -4132,7 +4125,7 @@ mod tests {
     }
 
     #[test]
-    fn a_run_out_of_reach_reads_so_and_cannot_start() {
+    fn a_run_with_no_chance_still_runs_and_slips() {
         let mut st = state8();
         let mut s = MapScreen::explore(0);
         let b = in_construct(&mut st, &mut s);
@@ -4147,8 +4140,20 @@ mod tests {
         st.tick += 40;
         let text = draw_screen(&*run, &st, 120, 40);
         assert!(
-            text.contains("crack · door lock · out of your reach"),
+            text.contains("crack · door lock · 0% · 3 turns · noise 4"),
             "{text}"
+        );
+        let (lock, _) = node_of(&st, b, NodeKind::DoorLock);
+        assert_eq!(
+            crate::net::start_run(&mut st, ItemId::new("crack"), game::HackTarget::Node(lock))
+                .unwrap(),
+            "crack starts · 3 turns"
+        );
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert!(
+            last(&st).is_some_and(|l| l.starts_with("crack slips")),
+            "{:?}",
+            last(&st)
         );
     }
 
