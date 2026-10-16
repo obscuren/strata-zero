@@ -27,6 +27,12 @@ impl Camera {
         self.y = p.y as f32;
     }
 
+    /// Lands on the target at once: no easing across a map change.
+    pub fn settle(&mut self) {
+        self.x = self.tx as f32;
+        self.y = self.ty as f32;
+    }
+
     pub fn target(&mut self, p: Pos) {
         self.tx = p.x;
         self.ty = p.y;

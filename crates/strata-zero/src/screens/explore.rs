@@ -5,7 +5,7 @@ use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::messages::Kind;
 use crate::render::fx::FxOverlay;
 use crate::render::items::GroundOverlay;
-use crate::render::map::MapRef;
+use crate::render::map::{MapRef, TileMap};
 use crate::render::overlay::Digital;
 use crate::render::people::{InteriorPeople, PeopleOverlay, card_lines};
 use crate::render::viewport::{Camera, MapView, Overlay, tile_to_screen};
@@ -890,7 +890,22 @@ impl MapScreen {
     fn follow_player(&mut self, st: &AppState) {
         if let Some(p) = st.player.as_ref() {
             self.place = p.place;
-            self.cam.snap(p.pos);
+            self.jump_to(st, p.pos);
+        }
+    }
+
+    /// Puts the camera on a tile of the current place at once: snapped, clamped to
+    /// that place's map (a small map sits centred), and settled, so a new map never
+    /// slides into view.
+    fn jump_to(&mut self, st: &AppState, pos: Pos) {
+        self.cam.snap(pos);
+        if let Some(city) = st.city.as_ref() {
+            let view = self.last_map.get();
+            if view.width > 0 && view.height > 0 {
+                let size = TileMap::size(&self.map(st, city));
+                self.cam.clamp(size, view.width, view.height);
+                self.cam.settle();
+            }
         }
     }
 
@@ -1103,8 +1118,9 @@ impl Screen for MapScreen {
             && let Some(p) = st.player.as_ref()
             && p.place != self.place
         {
+            let pos = p.pos;
             self.place = p.place;
-            self.cam.snap(p.pos);
+            self.jump_to(st, pos);
         }
         // The console takes every key while it is open.
         let focus = game::At {
@@ -1160,8 +1176,9 @@ impl Screen for MapScreen {
             && let Some(p) = st.player.as_ref()
             && p.place != self.place
         {
+            let pos = p.pos;
             self.place = p.place;
-            self.cam.snap(p.pos);
+            self.jump_to(st, pos);
         }
         if !st.dev && self.mode == Mode::Explore {
             // Without dev mode there is no free camera: the player is always on foot.
@@ -1172,7 +1189,14 @@ impl Screen for MapScreen {
             (Mode::Walk, Some(p)) => self.cam.follow(p.pos, map.width, map.height),
             _ => self.cam.follow(self.cursor, map.width, map.height),
         }
-        self.cam.clamp(size, map.width, map.height);
+        // The camera is bound by the map it shows, not the city: a floor or a construct
+        // smaller than the view sits centred.
+        let bounds = st
+            .city
+            .as_ref()
+            .map(|c| TileMap::size(&self.map(st, c)))
+            .unwrap_or(size);
+        self.cam.clamp(bounds, map.width, map.height);
         self.cam.update();
         // The city lives: a minute step when the clock turns, a few paths per frame,
         // and nobody walks onto the player.
@@ -4822,5 +4846,42 @@ mod tests {
             .sync_guards(&mut st.constructs, b, now + game::HACK_MINUTES);
         let k = st.constructs.get(b).unwrap();
         assert_eq!(k.guard_at(spot), Some(0), "and stands once it is free");
+    }
+
+    #[test]
+    fn a_small_map_sits_centred_and_does_not_slide() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let size = st.constructs.get(b).unwrap().size;
+        let centre = Pos::new(size.w as i32 / 2, size.h as i32 / 2);
+        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        // The helper put the player inside by hand; a frame on the grid, then the
+        // screen notices the change of place the way it does in play.
+        s.place = Place::Stratum(StratumKind::Net);
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        s.update(&mut st, &[]);
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let area = s.last_map.get();
+        let want = (area.x + area.width / 2, area.y + area.height / 2);
+        let at = |s: &MapScreen| {
+            let origin = s.cam.origin(area.width, area.height);
+            tile_to_screen(area, origin, centre)
+        };
+        let first = at(&s).expect("the centre is on screen");
+        assert!(
+            (first.0 as i32 - want.0 as i32).abs() <= 1
+                && (first.1 as i32 - want.1 as i32).abs() <= 1,
+            "{first:?} vs {want:?}"
+        );
+        for _ in 0..12 {
+            st.tick += 1;
+            s.update(&mut st, &[]);
+            t.draw(|f| s.draw(&st, f)).unwrap();
+            assert_eq!(at(&s), Some(first), "the map must not slide");
+        }
+        // Walking inside keeps it put too.
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(at(&s), Some(first));
     }
 }
