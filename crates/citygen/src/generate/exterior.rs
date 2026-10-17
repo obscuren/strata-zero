@@ -228,6 +228,62 @@ pub(crate) fn dress(ctx: &mut GenCtx, i: usize) {
     bikes(ctx, &mut rng, front);
 }
 
+/// Sets the building's name in sign letters along the main door's side, centred on
+/// the door. The door's tile is skipped and the name carries on past it. Only plain
+/// wall takes a letter: windows and corners are passed over (the letters sit on the
+/// wall between them), a space stays bare wall but uses up its slot, a wall carrying
+/// anything but neon, an ad or a camera is passed over too, and a name too long for
+/// the wall is cut. Draws no RNG; call it once the name is final.
+pub(crate) fn sign(ctx: &mut GenCtx, i: usize) {
+    let b = ctx.city.buildings[i].clone();
+    if b.kind != BuildingKind::Megablock {
+        return;
+    }
+    let Some(name) = b.name.as_deref() else {
+        return;
+    };
+    let Some(door) = main_door(&ctx.city, &b) else {
+        return;
+    };
+    let fp = b.footprint;
+    let front = Frame::new(fp, door);
+    // The wall tiles either side of the door, nearest first, short of the corners.
+    let walls = |dir: i32| -> Vec<Pos> {
+        (1..)
+            .map(|n| front.at(0, n * dir))
+            .take_while(|p| {
+                let corner = (p.x == fp.x || p.x == fp.right() - 1)
+                    && (p.y == fp.y || p.y == fp.bottom() - 1);
+                fp.contains(*p) && !corner
+            })
+            .filter(|p| {
+                ctx.tile(K, *p).is_some_and(|t| {
+                    t.terrain == Terrain::Wall
+                        && matches!(
+                            t.feature,
+                            None | Some(Feature::Neon(_) | Feature::HoloAd | Feature::Camera)
+                        )
+                })
+            })
+            .collect()
+    };
+    let (left, right) = (walls(-1), walls(1));
+    let letters: Vec<char> = name.to_uppercase().chars().collect();
+    // Slot `s` is the `s`-th wall tile right of the door, or `-s - 1`-th left of it.
+    let first = -(letters.len() as i32 / 2);
+    for (k, ch) in letters.iter().enumerate() {
+        let slot = first + k as i32;
+        let spot = if slot < 0 {
+            left.get((-slot - 1) as usize)
+        } else {
+            right.get(slot as usize)
+        };
+        if let Some(p) = spot.copied().filter(|_| *ch != ' ') {
+            ctx.set_feature(K, p, Some(Feature::Sign(*ch)));
+        }
+    }
+}
+
 /// Paves up to three rows of sidewalk, three columns either side of the door, in
 /// front of it. A row stops at the first tile that isn't sidewalk, and a column
 /// never reaches past a gap in the row before it. Returns the paved tiles.
@@ -629,6 +685,46 @@ mod tests {
             assert!(with.stratum(k) == without.stratum(k), "{k:?} changed");
         }
         assert_ne!(with.stratum(K), without.stratum(K));
+    }
+
+    /// The border tiles on the door's side, in reading order.
+    fn side_tiles(fp: crate::geom::Rect, door: Pos) -> impl Iterator<Item = Pos> {
+        let out = Frame::new(fp, door).out;
+        let mut tiles: Vec<Pos> = fp
+            .border()
+            .filter(|p| Frame::new(fp, *p).out == out)
+            .collect();
+        tiles.sort_by_key(|p| (p.y, p.x));
+        tiles.into_iter()
+    }
+
+    #[test]
+    fn the_name_reads_over_the_main_door() {
+        for Fixture { seed, city: c, .. } in mediums() {
+            for b in megablocks(c) {
+                let name = b.name.clone().expect("megablocks are named").to_uppercase();
+                let door = main_door(c, b).unwrap();
+                let letters: String = side_tiles(b.footprint, door)
+                    .filter_map(|p| match c.tile(K, p)?.feature {
+                        Some(Feature::Sign(ch)) => Some(ch),
+                        _ => None,
+                    })
+                    .collect();
+                let squeezed: String = name.chars().filter(|c| *c != ' ').collect();
+                assert!(letters.chars().count() >= 3, "seed {seed}: {letters}");
+                assert!(
+                    squeezed.contains(&letters),
+                    "seed {seed}: {letters} vs {name}"
+                );
+                assert_eq!(c.tile(K, door).unwrap().terrain, Terrain::Door);
+                for p in side_tiles(b.footprint, door) {
+                    let t = c.tile(K, p).unwrap();
+                    if matches!(t.feature, Some(Feature::Sign(_))) {
+                        assert_eq!(t.building, Some(b.id), "seed {seed}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
