@@ -5,6 +5,7 @@ mod anim;
 mod app;
 mod cli;
 mod constructs;
+mod home;
 mod interiors;
 mod messages;
 mod net;

@@ -33,11 +33,17 @@ impl Interiors {
     }
 
     /// A floor, generated if this is its first visit. `None` for an open building or
-    /// a level the plan does not have.
+    /// a level the plan does not have. An atrium floor brings the plaza below with it,
+    /// for the look-down.
     pub fn ensure(&mut self, city: &City, b: BuildingId, level: i32) -> Option<&Floor> {
         let plan = self.plan(city, b)?.clone();
         if level < plan.lowest || level > plan.top {
             return None;
+        }
+        if plan.atrium.is_some() && level >= 1 {
+            self.floors
+                .entry((b, 0))
+                .or_insert_with(|| generate_floor(city, &plan, 0));
         }
         Some(
             self.floors
@@ -247,6 +253,24 @@ pub struct Placement {
     owners: HashMap<Pos, PersonId>,
 }
 
+/// What a worker with no station of their own takes, in order.
+const ANY_STATION: &[Role] = &[
+    Role::Desk,
+    Role::Table,
+    Role::Shelf,
+    Role::Bay,
+    Role::Machine,
+    Role::Reception,
+    Role::Bar,
+    Role::Surgery,
+    Role::Shrine,
+];
+
+/// Whether a floor has shops on it: a megablock's plaza.
+fn has_shops(floor: &Floor) -> bool {
+    floor.rooms.iter().any(|r| r.kind == RoomKind::Shop)
+}
+
 fn take_station(free: &mut Vec<(Pos, Role)>, wants: &[Role]) -> Option<Pos> {
     for w in wants {
         if let Some(i) = free.iter().position(|(_, r)| r == w) {
@@ -300,25 +324,31 @@ impl Placement {
                     if level != floor.level {
                         continue;
                     }
+                    let shops = has_shops(floor);
                     let wants: &[Role] = match p.profession.as_str() {
-                        "barkeep" => &[Role::Bar, Role::Table],
+                        "barkeep" | "noodle_cook" => &[Role::Bar, Role::Table],
+                        // On a megablock plaza, a shop's counter (below), else these.
+                        "shopkeeper" if shops => &[Role::Shelf, Role::Desk],
                         "corp_drone" => &[Role::Reception, Role::Desk],
                         "line_worker" => &[Role::Machine],
                         "ripperdoc" => &[Role::Surgery],
                         "monk" => &[Role::Shrine],
-                        _ => &[
-                            Role::Desk,
-                            Role::Table,
-                            Role::Shelf,
-                            Role::Bay,
-                            Role::Machine,
-                            Role::Reception,
-                            Role::Bar,
-                            Role::Surgery,
-                            Role::Shrine,
-                        ],
+                        _ => ANY_STATION,
                     };
-                    match take_station(&mut free, wants) {
+                    // A shopkeeper on a megablock plaza minds a shop's counter, not
+                    // the lobby desk.
+                    let counter = (shops && p.profession == "shopkeeper")
+                        .then(|| {
+                            free.iter().position(|(pos, r)| {
+                                *r == Role::Reception
+                                    && floor.rooms.iter().any(|room| {
+                                        room.kind == RoomKind::Shop && room.rect.contains(*pos)
+                                    })
+                            })
+                        })
+                        .flatten()
+                        .map(|i| free.remove(i).0);
+                    match counter.or_else(|| take_station(&mut free, wants)) {
                         Some(pos) => at.push((pos, o.id)),
                         None => extras.push(o.id),
                     }
@@ -398,6 +428,25 @@ mod tests {
     use super::*;
     use citygen::{BuildingKind, GenParams, Generator, SizePreset};
 
+    /// A Medium city with a megablock and a home in it.
+    fn home_city() -> City {
+        Generator::run(GenParams {
+            seed: 8,
+            size: SizePreset::Medium,
+            districts: 7,
+            ..Default::default()
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn an_atrium_level_brings_the_plaza_with_it() {
+        let (city, mut ints) = (home_city(), Interiors::default());
+        let h = citygen::home(&city).unwrap();
+        ints.ensure(&city, h.building, h.level).unwrap();
+        assert!(ints.floor(h.building, 0).is_some());
+    }
+
     #[test]
     fn floors_are_made_once_and_only_inside_the_plan() {
         let c = Generator::run(GenParams {
@@ -461,11 +510,86 @@ mod tests {
             .person_at(desk)
             .expect("someone minds the desk at ten");
         assert_eq!(w.people()[id.0 as usize].profession, "corp_drone");
+        // No shops in a tower: a shopkeeper there would take any station as before.
+        assert!(!has_shops(lobby));
         // And that drone sits at no desk upstairs.
         let top = plan.top;
         i.ensure(&c, tower.id, top).unwrap();
         let (plan, floor) = i.floor(tower.id, top).unwrap();
         let upstairs = Placement::new(plan, floor, &w);
         assert!(upstairs.people().all(|(_, who)| who != id));
+    }
+
+    #[test]
+    fn nobody_else_lives_in_the_players_flat() {
+        let c = Generator::run(GenParams {
+            seed: 8,
+            size: SizePreset::Medium,
+            districts: 7,
+            ..Default::default()
+        })
+        .unwrap();
+        let home = citygen::home(&c).expect("a home");
+        let people = sim::People::load().unwrap();
+        let w = sim::World::seed(&c, &people, &sim::SimParams::default(), 2 * 60, 0);
+        let mut i = Interiors::default();
+        i.ensure(&c, home.building, home.level).unwrap();
+        let (plan, floor) = i.floor(home.building, home.level).unwrap();
+        let placement = Placement::new(plan, floor, &w);
+        let owned = floor
+            .rooms
+            .iter()
+            .filter_map(|r| r.door)
+            .filter(|d| placement.owner_of(*d).is_some())
+            .count();
+        assert!(owned > 0, "the neighbours are home at two");
+        assert_eq!(placement.owner_of(home.door), None);
+    }
+
+    #[test]
+    fn shopkeepers_mind_the_plaza_shops_by_day() {
+        let c = home_city();
+        let home = citygen::home(&c).expect("a home");
+        let people = sim::People::load().unwrap();
+        let mut w = sim::World::seed(&c, &people, &sim::SimParams::default(), 22 * 60, 0);
+        // On to half past twelve.
+        for m in 1..=(14 * 60 + 30) {
+            w.advance(&c, m * sim::TICKS_PER_MINUTE);
+            w.path_some(&c, usize::MAX);
+        }
+        let mut i = Interiors::default();
+        i.ensure(&c, home.building, 0).unwrap();
+        let (plan, plaza) = i.floor(home.building, 0).unwrap();
+        let placement = Placement::new(plan, plaza, &w);
+        let shop = |p: Pos| {
+            plaza
+                .rooms
+                .iter()
+                .find(|r| r.kind != RoomKind::Lobby && r.rect.contains(p))
+                .map(|r| r.kind)
+        };
+        let at_stations: Vec<_> = plaza
+            .stations
+            .iter()
+            .filter_map(|s| placement.person_at(s.pos).map(|id| (s.role, s.pos, id)))
+            .collect();
+        assert!(!at_stations.is_empty(), "nobody on the plaza at 12:30");
+        let seen: Vec<_> = at_stations
+            .iter()
+            .map(|(r, p, id)| (r, shop(*p), &w.people()[id.0 as usize].profession))
+            .collect();
+        // The shopkeepers stand behind their shops' counters, not at the lobby desk
+        // or the plaza tables.
+        let shopkeeper = |id: &sim::PersonId| w.people()[id.0 as usize].profession == "shopkeeper";
+        assert!(
+            at_stations.iter().any(|(_, _, id)| shopkeeper(id)),
+            "{seen:?}"
+        );
+        for (role, pos, id) in &at_stations {
+            if shopkeeper(id) {
+                assert_eq!(*role, citygen::Role::Reception, "{seen:?}");
+                assert_eq!(shop(*pos), Some(RoomKind::Shop), "{seen:?}");
+            }
+        }
     }
 }

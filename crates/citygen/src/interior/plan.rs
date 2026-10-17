@@ -13,6 +13,14 @@ use rand_chacha::ChaCha8Rng;
 pub const SCALE: i32 = 3;
 pub const MIN_W: i32 = 12;
 pub const MIN_H: i32 = 9;
+/// An atrium floor's flat band: the outer wall and seven rows of flats, the flat
+/// wall on row `BAND`.
+pub const BAND: i32 = 8;
+/// The walkway between the flat wall and the railing.
+pub const WALK: i32 = 2;
+/// The smallest Megablock floor that rings an atrium (a 13x9 footprint).
+const ATRIUM_W: i32 = 39;
+const ATRIUM_H: i32 = 27;
 
 /// What a floor is laid out as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,6 +36,10 @@ pub enum FloorType {
     Factory,
     Garage,
     Basement,
+    /// An upper floor of an atrium megablock: flats around a walkway around the drop.
+    Atrium,
+    /// The ground floor of an atrium megablock.
+    Plaza,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,6 +60,23 @@ pub struct FloorPlan {
     pub lift: Option<Pos>,
     /// The stairwell, on every floor.
     pub stair: Pos,
+    /// The railing ring around an atrium megablock's open drop, the same on every
+    /// floor above the ground; `None` for every other building.
+    pub atrium: Option<Rect>,
+    /// The floor with the player's flat: only on the city's first atrium megablock.
+    pub home_level: Option<i32>,
+}
+
+/// Whether a building plans an atrium.
+fn rings_an_atrium(kind: BuildingKind, size: Size) -> bool {
+    kind == BuildingKind::Megablock && size.w as i32 >= ATRIUM_W && size.h as i32 >= ATRIUM_H
+}
+
+fn floor_size(fp: Rect) -> Size {
+    Size {
+        w: (fp.w * SCALE).max(MIN_W) as u32,
+        h: (fp.h * SCALE).max(MIN_H) as u32,
+    }
 }
 
 impl FloorPlan {
@@ -59,10 +88,7 @@ impl FloorPlan {
         }
         let mut rng = ChaCha8Rng::seed_from_u64(hash64(city.seed, 0x1F00 ^ id.index() as u64));
         let fp = b.footprint;
-        let size = Size {
-            w: (fp.w * SCALE).max(MIN_W) as u32,
-            h: (fp.h * SCALE).max(MIN_H) as u32,
-        };
+        let size = floor_size(fp);
         let floors: i32 = match (b.span.hi, b.kind) {
             (StratumKind::Street, BuildingKind::Club) => 2,
             (StratumKind::Street, BuildingKind::Office | BuildingKind::Apartment) => {
@@ -90,10 +116,32 @@ impl FloorPlan {
         let roof = b.span.hi == StratumKind::Heights;
         let total = top - lowest + 1;
         let (w, h) = (size.w as i32, size.h as i32);
+        let atrium = rings_an_atrium(b.kind, size).then(|| size.rect().inset(BAND + 1 + WALK));
         // The lift bank and the stairwell sit on the corridor line of a corridor
-        // floor, which is open floor on every other type.
-        let lift = (total >= 3).then(|| Pos::new(w / 2 - 1, h / 2 - 1));
-        let stair = Pos::new(w / 2 - 1, h / 2);
+        // floor, which is open floor on every other type; an atrium floor keeps them
+        // in the lift lobby in the middle of its top band of flats.
+        let (lift_y, stair) = if atrium.is_some() {
+            (BAND - 3, Pos::new(w / 2 - 1, BAND - 2))
+        } else {
+            (h / 2 - 1, Pos::new(w / 2 - 1, h / 2))
+        };
+        let lift = (total >= 3).then(|| Pos::new(w / 2 - 1, lift_y));
+        // The home: high in the lowest-id atrium megablock, below the top floor and
+        // off the bridge floor.
+        let first_atrium = city
+            .buildings
+            .iter()
+            .filter(|b| rings_an_atrium(b.kind, floor_size(b.footprint)))
+            .map(|b| b.id)
+            .min_by_key(|b| b.index());
+        let home_level = if first_atrium == Some(id) {
+            let levels: Vec<i32> = (2.max(top * 2 / 3)..top)
+                .filter(|l| Some(*l) != bridge)
+                .collect();
+            (!levels.is_empty()).then(|| levels[rng.random_range(0..levels.len())])
+        } else {
+            None
+        };
         Some(FloorPlan {
             building: id,
             kind: b.kind,
@@ -106,6 +154,8 @@ impl FloorPlan {
             roof,
             lift,
             stair,
+            atrium,
+            home_level,
         })
     }
 
@@ -129,6 +179,13 @@ impl FloorPlan {
     pub fn floor_type(&self, level: i32) -> FloorType {
         if level < 0 {
             return FloorType::Basement;
+        }
+        if self.atrium.is_some() {
+            return if level == 0 {
+                FloorType::Plaza
+            } else {
+                FloorType::Atrium
+            };
         }
         match self.kind {
             BuildingKind::CorpTower
@@ -182,7 +239,7 @@ impl FloorPlan {
     /// The floors with flats or rooms: where residents and guests are.
     pub fn corridor_floors(&self) -> Vec<i32> {
         self.levels()
-            .filter(|l| self.floor_type(*l) == FloorType::Corridor)
+            .filter(|l| matches!(self.floor_type(*l), FloorType::Corridor | FloorType::Atrium))
             .collect()
     }
 

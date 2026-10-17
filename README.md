@@ -30,9 +30,23 @@ zone, docks, industrial, neon strip, old town) that drive street layout,
 building mix, palette and signage. A Net graph of subnets, nodes and links is
 anchored to the physical tiles and can be shown as a digital overlay.
 
-The same graph is cyberspace. Jack in at any street terminal (walk up to it and
-press `enter`): your body stays at the port and you emerge in the Net at the
-same spot, in a wireframe world laid out one to one with the city. `enter`
+A city has up to two megablocks, in its megablocks districts where a block is
+big enough: each a whole city block, an ordinary
+tall building from the street, a hollow one inside. Its upper floors ring an
+open atrium with a railing and a walkway, locked flats around them and the lifts
+and stairs in a lobby off the walkway; over the railing you look down on the
+ground plaza, dim and static, dimmer the higher you are. The plaza holds the
+reception inside the main door, stalls and tables under the drop, a diner and
+shopfronts. High up in the city's first megablock is your flat: a living room
+along the windows, a bedroom with the desk and your rig, a shower room and a
+storage room. A new game wakes you beside the bed, and so does loading a save;
+your front door opens onto the walkway with no change of map. A city without a
+megablock starts you on the street as before.
+
+The same graph is cyberspace. Jack in at any street terminal, or at the rig in
+your flat (walk up to it and press `enter`): your body stays at the port and you
+emerge in the Net at the same spot, in a wireframe world laid out one to one
+with the city; from home you come out beside your megablock's gate. `enter`
 again jacks out. In Explore mode `]` past Heights shows the Net.
 
 Every building's construct has an inside. Step onto its gate from the grid and
@@ -160,8 +174,8 @@ steps: ORIGIN, PROFESSION, STATS, SKILLS, NAME, SUMMARY. `↑↓` choose · `ent
 next · `esc` back. On STATS `→` buys a point and `←` refunds one; a point's cost
 follows your origin's and profession's affinity. On SKILLS `→` `←` unfold and
 fold a category and `space` buys or refunds it or a skill with SP. SUMMARY ends
-on `enter`, JACK IN, which builds the character and generates a city. Unspent
-points stay with you and can be spent from the deck.
+on `enter`, JACK IN, which builds the character, generates a city and wakes
+you in your flat. Unspent points stay with you and can be spent from the deck.
 
 **Configure** `↑↓` field · `←→` adjust · type digits into the seed · `enter`
 on `RANDOM SEED` / `GENERATE` · `esc` back
@@ -178,8 +192,8 @@ goes inside, onto an interior's door back out; a locked door says whose it is ·
 `<` `>` take stairs, lift, ladder or manhole; on a lift bank inside they open the
 FLOORS panel (every floor, the bridge and the roof marked), on a stairwell they
 climb one floor · `space` interact: take what lies here, jack in at an adjacent
-terminal or out again, take the stairs or the lift, talk to whoever stands
-beside you, look · `1`-`5` fire the ability in that slot ·
+terminal (or your home rig) or out again, take the stairs or the lift, talk to
+whoever stands beside you, look · `1`-`5` fire the ability in that slot ·
 `a` the full ability list · walking into someone swaps places with them, and
 they step back once you move on · `enter` jack shortcut, or walk the aim ·
 `.` wait; in a construct it hurries the beat, in a fight it ends your turn ·

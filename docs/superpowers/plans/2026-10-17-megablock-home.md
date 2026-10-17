@@ -16,11 +16,11 @@
 - New enum variants go at the **end** of `Terrain`, `Furniture` and `RoomKind`. `FORMAT_VERSION` stays 3, and old saves must load.
 - Same seed, same city, same floors, same home. Interiors are never saved.
 - One megablock per `Megablocks` district, at most two per city. A megablock takes its whole block.
-- An **atrium plan** is a Megablock plan whose floor is landscape and at least 48 wide and 36 high (`w >= 48 && h >= 36`, footprint at least 16×12). Every other Megablock keeps Lobby/Corridor floors.
+- An **atrium plan** is a Megablock plan whose floor is at least 39 wide and 27 high (`w >= 39 && h >= 27`, footprint at least 13×9). Every other Megablock keeps Lobby/Corridor floors. (Ruling during execution: medium cities often only have thin blocks such as 19×9.)
 - No transition between the flat and the walkway. They're one floor map.
 - The look-down shows terrain and furniture only. No people, no animation. The current level is always brighter.
 - Smoke builds use `--target-dir target/smoke` and run `target/smoke/release/strata`. Never rebuild `target/release/strata`.
-- Test fixture: `GenParams { seed: 6, size: Custom { w: 120, h: 60 }, districts: 8 }` (its biggest Megablocks block is about 23×19). Medium seeds 8, 11 and 42 have blocks up to 40×20.
+- Test fixtures: the 120×60 seed 6 city (`GenParams { seed: 6, size: Custom { w: 120, h: 60 }, districts: 8 }`) has **no** megablock now. Atrium and home tests use Medium cities (7 districts) that have one: seed 1 (38×20), seed 2 (40×20), seed 8 (20×20), and seed 11 (19×9, the thin case). Medium seeds 16 and 21 have none (the street-spawn case).
 - Commit attribution lines as in the session's system reminder.
 
 ## Review Focus
@@ -93,7 +93,7 @@ In `tileset.rs`: `glyph_for(Terrain::Floor, Some(Feature::Furniture(Furniture::C
 - Modify (fixtures): `crates/citygen/src/interior/mod.rs` (~:268), `crates/strata-zero/src/screens/explore.rs` (~:3922, :4067, :4124), `crates/sim/src/world.rs` (~:1812)
 
 **Interfaces:**
-- Produces: after the Lots stage, each `Megablocks` district (in district-id order, at most two per city) has at most one `BuildingKind::Megablock`. Its footprint is the rect of that district's largest block (by area) whose rect is at least 16 wide and 12 high (landscape, so its plan is an atrium plan). If no block qualifies, the district has none. Every other lot in a Megablocks district draws from the theme mix with Megablock removed. No other theme produces Megablocks.
+- Produces: after the Lots stage, each `Megablocks` district (in district-id order, at most two per city) has at most one `BuildingKind::Megablock`. Its footprint is the rect of that district's largest block (by area) whose rect is at least 16 wide and 12 high; failing that, its largest block at least 13 wide and 9 high (so its plan is always an atrium plan). If no block qualifies, the district has none. Every other lot in a Megablocks district draws from the theme mix with Megablock removed. No other theme produces Megablocks.
 - Produces: `sim::people::housing_capacity(b: &Building) -> usize`. Megablock gives `(fp.w * fp.h / 6).max(30)`; Apartment, Hotel and other kinds stay the same. The call site passes the building.
 
 - [ ] **Step 1: Failing tests in `lots.rs`**
@@ -107,7 +107,7 @@ fn megablocks_are_rare_and_take_a_whole_block() {
         assert!((1..=2).contains(&megas.len()), "seed {seed}: {} megablocks", megas.len());
         for m in &megas {
             assert_eq!(c.district(m.district).theme, Theme::Megablocks);
-            assert!(m.footprint.w >= 16 && m.footprint.h >= 12);
+            assert!(m.footprint.w >= 13 && m.footprint.h >= 9);
             // No other building shares its block: nothing of another building touches the footprint.
             assert!(c.buildings.iter().filter(|b| b.id != m.id).all(|b| b.footprint.grow(1).intersection(m.footprint).is_none()));
         }
@@ -256,7 +256,7 @@ fn the_plaza_has_a_diner_shops_and_something_to_see_from_above() {
 **Interfaces:**
 - Produces:
   - `FloorPlan.home_level: Option<i32>`. It's `Some` only on the **home building**: the atrium plan of the lowest-id Megablock that qualifies. The level is picked with the plan rng from `max(2, (top*2)/3) ..= top-1`, never `bridge`. If that range is empty after removing the bridge, use `None`.
-  - On that level, `atrium_floor` reserves a 37-wide run of the **bottom** flat band, walls included, before cutting flats. It's centred, and the band is at least 46 long since atrium plans are at least 48 wide. The lift lobby is always in the top band. `Builder::home_flat(&mut self, rect: Rect, door: Pos)` stamps layout A into that run's interior (35×7):
+  - On that level, `atrium_floor` reserves a 37-wide run of the **bottom** flat band, walls included, before cutting flats. It's centred, and the band is at least 37 long since atrium plans are at least 39 wide. The lift lobby is always in the top band. `Builder::home_flat(&mut self, rect: Rect, door: Pos)` stamps layout A into that run's interior (35×7):
     - A front door on the walkway wall.
     - A living room and kitchen along the window side with `Couch`, `Table` and `Counter`.
     - A walled bedroom with `Bed`, `Desk` and a `Feature::Terminal` on the desk row.
@@ -295,7 +295,7 @@ fn the_home_is_a_whole_flat_high_in_the_megablock() {
 }
 ```
 
-Plus: `Home` derives `Clone, Copy, Debug, PartialEq, Eq`. And sim `Placement` never assigns an owner to the home's door: the existing filter on `RoomKind::Flat` already excludes it, so assert it in `strata-zero/src/interiors.rs` tests.
+Plus: `Home` derives `Clone, Copy, Debug, PartialEq, Eq`. Task 3's `atrium_floors_validate_and_share_one_atrium` relaxes to `flats >= 4` on `plan.home_level`, since the home takes most of the bottom band there. And sim `Placement` never assigns an owner to the home's door: the existing filter on `RoomKind::Flat` already excludes it, so assert it in `strata-zero/src/interiors.rs` tests.
 
 - [ ] **Step 2: Run** `cargo test -p citygen home`. Expected: FAIL.
 - [ ] **Step 3: Implement** `home_level`, the reserved run, `home_flat` and `home()`.

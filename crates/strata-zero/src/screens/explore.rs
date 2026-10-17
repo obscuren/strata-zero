@@ -3,6 +3,7 @@
 use crate::actions::{perform, report};
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::messages::Kind;
+use crate::render::atrium::AtriumOverlay;
 use crate::render::fx::FxOverlay;
 use crate::render::items::GroundOverlay;
 use crate::render::map::{MapRef, TileMap};
@@ -25,7 +26,7 @@ use crate::ui::console::{Console, ConsoleEvent};
 use crate::ui::hud;
 use crate::ui::panel::inspector_lines;
 use crate::ui::sidebar::{self, Section};
-use crate::walker::{Player, port_name};
+use crate::walker::{Player, jacked_in_line};
 use citygen::rng::hash64;
 use citygen::{Dir, Place, Pos, Rect as TileRect, StratumKind};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -562,9 +563,14 @@ impl MapScreen {
         let bonus = st.sight_bonus();
         let Some(city) = st.city.as_ref() else { return };
         if st.player.is_none() {
-            let mut p = Player::spawn(city, hash64(city.seed, st.tick));
-            p.update_fov(&MapRef::stratum_of(city, StratumKind::Street), bonus);
-            st.player = Some(p);
+            let home = st
+                .home
+                .and_then(|rig| rig.wake(city, &mut st.interiors, &st.constructs, bonus));
+            st.player = Some(home.unwrap_or_else(|| {
+                let mut p = Player::spawn(city, hash64(city.seed, st.tick));
+                p.update_fov(&MapRef::stratum_of(city, StratumKind::Street), bonus);
+                p
+            }));
         }
         if let Some(p) = &st.player {
             self.place = p.place;
@@ -731,7 +737,7 @@ impl MapScreen {
         }
         if player.jacked_in() {
             choices.push(Choice::new('j', "jack out", Pick::World(WorldAct::JackOut)));
-        } else if player.terminal_in_reach(city).is_some() {
+        } else if player.terminal_in_reach(city, st.home.as_ref()).is_some() {
             choices.push(Choice::new('j', "jack in", Pick::World(WorldAct::JackIn)));
         }
         let (mut up, mut down) = (None, None);
@@ -1183,7 +1189,12 @@ impl MapScreen {
                 let open = st.net.unlocked(building, st.net.now(st));
                 let locked = floor
                     .door_of(target)
-                    .filter(|r| r.private && !r.rect.contains(here) && !open)
+                    .filter(|r| {
+                        r.private
+                            && r.kind != citygen::RoomKind::Home
+                            && !r.rect.contains(here)
+                            && !open
+                    })
                     .map(|r| {
                         let mut what = r.kind.label().to_string();
                         if r.number > 0 {
@@ -1197,6 +1208,14 @@ impl MapScreen {
                 if let Some(what) = locked {
                     st.warn(format!("locked · {what}"));
                     return Some(ScreenCmd::Stay);
+                }
+                // Your own door opens for you; the step onto it from outside names the flat.
+                let home = floor
+                    .door_of(target)
+                    .filter(|r| r.kind == citygen::RoomKind::Home && !r.rect.contains(here))
+                    .map(|r| r.number);
+                if let Some(n) = home {
+                    st.say(format!("home · flat {n}"));
                 }
                 None
             }
@@ -1636,8 +1655,24 @@ impl MapScreen {
         {
             return Some(cmd);
         }
+        if k.code == KeyCode::Enter && st.player.as_ref().is_some_and(|p| p.jacked_in()) {
+            match crate::net::jack_out(st) {
+                Ok(()) => {
+                    let p = st.player.as_ref()?;
+                    self.place = p.place;
+                    self.cam.snap(p.pos);
+                    st.say("jacked out");
+                    return Some(ScreenCmd::Flash(TransitionKind::Glitch));
+                }
+                Err(e) => {
+                    st.warn(e);
+                    return Some(ScreenCmd::Stay);
+                }
+            }
+        }
         let dev = st.dev;
         let bonus = st.sight_bonus();
+        let home = st.home;
         let city = st.city.as_ref()?;
         let interiors = &st.interiors;
         let constructs = &st.constructs;
@@ -1650,27 +1685,15 @@ impl MapScreen {
                 self.mode = Mode::Explore;
             }
             KeyCode::Enter => {
-                if player.jacked_in() {
-                    match player.jack_out(city, bonus) {
-                        Ok(()) => {
-                            self.place = player.place;
-                            self.cam.snap(player.pos);
-                            st.say("jacked out");
-                            return Some(ScreenCmd::Flash(TransitionKind::Glitch));
-                        }
-                        Err(e) => st.warn(e),
+                let from = player.place;
+                match player.jack_in(city, home.as_ref(), bonus) {
+                    Ok(port) => {
+                        self.place = Place::Stratum(StratumKind::Net);
+                        self.cam.snap(port);
+                        st.say(jacked_in_line(city, from, port));
+                        return Some(ScreenCmd::Flash(TransitionKind::Glitch));
                     }
-                } else {
-                    match player.jack_in(city, bonus) {
-                        Ok(port) => {
-                            self.place = Place::Stratum(StratumKind::Net);
-                            self.cam.snap(port);
-                            let where_ = port_name(city, port);
-                            st.say(format!("jacked in at `{where_}`"));
-                            return Some(ScreenCmd::Flash(TransitionKind::Glitch));
-                        }
-                        Err(e) => st.warn(e),
-                    }
+                    Err(e) => st.warn(e),
                 }
             }
             KeyCode::Char('<') | KeyCode::Char('>') => {
@@ -1919,11 +1942,6 @@ impl Screen for MapScreen {
             enabled: self.digital,
             focus,
         };
-        let mut overlays: Vec<&dyn Overlay> = Vec::new();
-        if st.rain {
-            overlays.push(&Weather);
-        }
-        overlays.push(&digital);
         let walking =
             self.mode == Mode::Walk && st.player.as_ref().is_some_and(|p| p.place == self.place);
         let vis = if walking {
@@ -1931,6 +1949,41 @@ impl Screen for MapScreen {
         } else {
             None
         };
+        // The look-down: the ground plaza under an upper level's atrium, drawn
+        // before anything else so the current level stays on top.
+        let atrium_floor = match (self.place, &map) {
+            (Place::Floor { building, level }, MapRef::Floor(m))
+                if level >= 1 && m.plan.atrium.is_some() =>
+            {
+                st.interiors
+                    .floor(building, 0)
+                    .map(|(_, ground)| (ground, level, m.floor.tiles.size()))
+            }
+            _ => None,
+        };
+        // Looking around without walking sees the whole map, the drop included.
+        let open_sight = match (atrium_floor, vis) {
+            (Some((_, _, size)), None) => Some(citygen::Grid::filled(
+                size,
+                crate::render::Visibility::Visible,
+            )),
+            _ => None,
+        };
+        let atrium = atrium_floor.and_then(|(ground, level, _)| {
+            Some(AtriumOverlay {
+                ground,
+                level,
+                vis: vis.or(open_sight.as_ref())?,
+            })
+        });
+        let mut overlays: Vec<&dyn Overlay> = Vec::new();
+        if let Some(o) = atrium.as_ref() {
+            overlays.push(o);
+        }
+        if st.rain {
+            overlays.push(&Weather);
+        }
+        overlays.push(&digital);
         let ground = GroundOverlay {
             ground: &st.ground,
             content: &st.content,
@@ -3217,7 +3270,7 @@ mod tests {
             .unwrap();
         let p = st.player.as_mut().unwrap();
         p.pos = beside_jack;
-        p.jack_in(&city, 0).unwrap();
+        p.jack_in(&city, None, 0).unwrap();
         s.update(&mut st, &[]);
         let text = draw_screen(&s, &st, 120, 40);
         // The bolt is a double-width glyph in the buffer: match around it.
@@ -3571,6 +3624,180 @@ mod tests {
         st
     }
 
+    /// A Medium city with a megablock and a home, put in place as a new game would.
+    fn state_home() -> AppState {
+        let mut st = AppState::new();
+        st.enter_city(
+            Generator::run(GenParams {
+                seed: 8,
+                size: SizePreset::Medium,
+                districts: 7,
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        st
+    }
+
+    #[test]
+    fn a_new_game_wakes_up_at_home() {
+        let mut st = state_home();
+        let s = MapScreen::walking(&mut st);
+        let h = st.home.unwrap();
+        let p = st.player.as_ref().unwrap();
+        assert_eq!(
+            p.place,
+            Place::Floor {
+                building: h.home.building,
+                level: h.home.level
+            }
+        );
+        assert_eq!(p.pos, h.home.bed_side);
+        assert_eq!(s.place, p.place);
+        assert_eq!(
+            p.vis().get(h.home.rig),
+            Some(&crate::walker::Visibility::Visible)
+        );
+    }
+
+    #[test]
+    fn a_city_without_a_home_starts_on_the_street() {
+        let mut st = state_home();
+        let mut city = st.city.take().unwrap();
+        for b in city
+            .buildings
+            .iter_mut()
+            .filter(|b| b.kind == citygen::BuildingKind::Megablock)
+        {
+            b.kind = citygen::BuildingKind::Apartment;
+        }
+        st.enter_city(city);
+        assert!(st.home.is_none());
+        MapScreen::walking(&mut st);
+        assert!(matches!(
+            st.player.as_ref().unwrap().place,
+            Place::Stratum(StratumKind::Street)
+        ));
+    }
+
+    #[test]
+    fn the_home_door_opens_for_you_and_a_flats_stays_locked() {
+        let mut st = state_home();
+        let mut s = MapScreen::walking(&mut st);
+        let h = st.home.unwrap().home;
+        let place = Place::Floor {
+            building: h.building,
+            level: h.level,
+        };
+        let (_, floor) = st.interiors.floor(h.building, h.level).unwrap();
+        let outside = h
+            .door
+            .neighbors4()
+            .find(|n| !h.rect.contains(*n) && floor.tiles[*n].is_walkable())
+            .expect("a walkway outside the home door");
+        let flat = floor
+            .rooms
+            .iter()
+            .filter(|r| r.private && r.kind == citygen::RoomKind::Flat)
+            .find_map(|r| {
+                let d = r.door?;
+                let o = d
+                    .neighbors4()
+                    .find(|n| !r.rect.contains(*n) && floor.tiles[*n].is_walkable())?;
+                Some((d, o))
+            })
+            .expect("a neighbouring flat");
+        stand(&mut st, &mut s, place, outside);
+        s.update(&mut st, &[key(dir_between(outside, h.door))]);
+        assert_eq!(player(&st).1, h.door);
+        assert_eq!(last(&st), Some(&*format!("home · flat {}", h.number)));
+        assert!(!last_is_warning(&st));
+        let (door, o) = flat;
+        stand(&mut st, &mut s, place, o);
+        s.update(&mut st, &[key(dir_between(o, door))]);
+        assert_eq!(player(&st).1, o);
+        assert!(last(&st).is_some_and(|l| l.starts_with("locked · ")));
+    }
+
+    #[test]
+    fn the_atrium_shows_the_plaza_below_and_nobody_on_it() {
+        let mut st = state_home();
+        let mut s = MapScreen::walking(&mut st);
+        let h = st.home.unwrap().home;
+        let place = Place::Floor {
+            building: h.building,
+            level: h.level,
+        };
+        let (_, floor) = st.interiors.floor(h.building, h.level).unwrap();
+        let rail = floor
+            .tiles
+            .iter()
+            .filter(|(_, t)| t.is_walkable())
+            .map(|(p, _)| p)
+            .find(|p| {
+                p.neighbors4().any(|n| {
+                    floor.tiles.get(n).map(|t| t.terrain) == Some(citygen::Terrain::Railing)
+                })
+            })
+            .expect("a walkway beside the railing");
+        stand(&mut st, &mut s, place, rail);
+        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let area = s.last_map.get();
+        let origin = s.cam.origin(area.width, area.height);
+        let (_, floor) = st.interiors.floor(h.building, h.level).unwrap();
+        let symbols: Vec<String> = (area.y..area.bottom())
+            .flat_map(|sy| (area.x..area.right()).map(move |sx| (sx, sy)))
+            .filter(|(sx, sy)| {
+                let p = crate::render::viewport::screen_to_tile(area, origin, (*sx, *sy));
+                floor.tiles.get(p).map(|t| t.terrain) == Some(citygen::Terrain::Atrium)
+            })
+            .map(|c| t.backend().buffer()[c].symbol().to_string())
+            .collect();
+        assert!(!symbols.is_empty(), "the atrium is on screen");
+        assert!(
+            symbols.iter().any(|c| c != " "),
+            "the plaza shows through the atrium"
+        );
+        assert!(symbols.iter().all(|c| c != "@"), "nobody stands in the air");
+    }
+
+    /// The walkable tile of the home within reach of its rig, nearest the bed.
+    fn beside_rig(st: &AppState) -> Pos {
+        let h = st.home.unwrap().home;
+        let (_, floor) = st.interiors.floor(h.building, h.level).unwrap();
+        std::iter::once(h.rig)
+            .chain(h.rig.neighbors8())
+            .filter(|p| h.rect.contains(*p) && floor.tiles[*p].is_walkable())
+            .min_by_key(|p| p.chebyshev(h.bed_side))
+            .expect("a tile beside the rig")
+    }
+
+    #[test]
+    fn enter_jacks_in_from_the_home_rig_and_back() {
+        let mut st = state_home();
+        let mut s = MapScreen::walking(&mut st);
+        let rig = st.home.unwrap();
+        let home = Place::Floor {
+            building: rig.home.building,
+            level: rig.home.level,
+        };
+        let at = beside_rig(&st);
+        stand(&mut st, &mut s, home, at);
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert_eq!(player(&st), (Place::Stratum(StratumKind::Net), rig.landing));
+        assert_eq!(s.place, Place::Stratum(StratumKind::Net));
+        assert_eq!(last(&st), Some("jacked in from home"));
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert_eq!(player(&st), (home, at));
+        assert_eq!(s.place, home);
+        assert_eq!(last(&st), Some("jacked out"));
+        assert_eq!(
+            st.player.as_ref().unwrap().vis().get(rig.home.rig),
+            Some(&crate::walker::Visibility::Visible)
+        );
+    }
+
     fn dir_between(from: Pos, to: Pos) -> KeyCode {
         match (to.x - from.x, to.y - from.y) {
             (1, 0) => KeyCode::Char('l'),
@@ -3919,7 +4146,7 @@ mod tests {
         let b = city
             .buildings
             .iter()
-            .find(|b| b.kind == BuildingKind::Megablock)
+            .find(|b| matches!(b.kind, BuildingKind::Megablock | BuildingKind::Apartment))
             .unwrap()
             .id;
         st.interiors.plan(&city, b).unwrap();
@@ -4064,13 +4291,13 @@ mod tests {
             city.buildings
                 .iter()
                 .find(|b| {
-                    b.kind == BuildingKind::Megablock
+                    matches!(b.kind, BuildingKind::Megablock | BuildingKind::Apartment)
                         && world
                             .inside(b.id)
                             .iter()
                             .any(|o| o.role == sim::OccupantRole::Living)
                 })
-                .expect("a megablock with people home at three")
+                .expect("a residential block with people home at three")
                 .id
         };
         let plan = st.interiors.plan(&city, b).unwrap().clone();
@@ -4121,7 +4348,7 @@ mod tests {
         let b = city
             .buildings
             .iter()
-            .find(|b| b.kind == BuildingKind::Megablock)
+            .find(|b| matches!(b.kind, BuildingKind::Megablock | BuildingKind::Apartment))
             .unwrap()
             .id;
         st.interiors.plan(&city, b).unwrap();

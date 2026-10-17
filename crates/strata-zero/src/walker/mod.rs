@@ -2,6 +2,7 @@
 
 pub mod fov;
 
+use crate::home::HomeRig;
 pub use crate::render::Visibility;
 use crate::render::map::{MapRef, TileMap};
 use citygen::rng::hash64;
@@ -61,15 +62,20 @@ impl Player {
         } else {
             pool[(hash64(seed, 0x5A17) % pool.len() as u64) as usize]
         };
-        let mut player = Player {
+        let mut player = Player::at(Place::Stratum(street), pos);
+        player.update_fov(&MapRef::stratum_of(city, street), 0);
+        player
+    }
+
+    /// A player standing at a tile of a place, having seen nothing yet.
+    pub fn at(place: Place, pos: Pos) -> Player {
+        Player {
             pos,
-            place: Place::Stratum(street),
+            place,
             body: None,
             memory: HashMap::new(),
             unseen: Grid::filled(Size { w: 0, h: 0 }, Visibility::Unseen),
-        };
-        player.update_fov(&MapRef::stratum_of(city, street), 0);
-        player
+        }
     }
 
     pub fn radius(&self) -> i32 {
@@ -86,8 +92,12 @@ impl Player {
     }
 
     /// The port of a terminal on this tile or an 8-neighbour that serves this stratum.
-    /// Nothing inside a building reaches the Net yet.
-    pub fn terminal_in_reach(&self, city: &City) -> Option<Pos> {
+    /// Inside, only the rig at home reaches the Net: its port is the landing outside.
+    pub fn terminal_in_reach(&self, city: &City, home: Option<&HomeRig>) -> Option<Pos> {
+        if let Place::Floor { .. } = self.place {
+            let h = home.filter(|h| h.place() == self.place)?;
+            return (self.pos.chebyshev(h.home.rig) <= 1).then_some(h.landing);
+        }
         let k = self.place.stratum()?;
         std::iter::once(self.pos)
             .chain(self.pos.neighbors8())
@@ -98,13 +108,19 @@ impl Player {
             })
     }
 
-    /// Jacks in at a Jack connector on this tile or an 8-neighbour of it, leaving the body here.
-    pub fn jack_in(&mut self, city: &City, sight_bonus: i32) -> Result<Pos, &'static str> {
+    /// Jacks in at a Jack connector, or the home rig, on this tile or an 8-neighbour of
+    /// it, leaving the body here.
+    pub fn jack_in(
+        &mut self,
+        city: &City,
+        home: Option<&HomeRig>,
+        sight_bonus: i32,
+    ) -> Result<Pos, &'static str> {
         if self.jacked_in() {
             return Err("already jacked in");
         }
         let port = self
-            .terminal_in_reach(city)
+            .terminal_in_reach(city, home)
             .ok_or("no terminal within reach")?;
         if !city.walkable(StratumKind::Net, port) {
             return Err("the port is dead");
@@ -213,6 +229,14 @@ impl Player {
     }
 }
 
+/// The log line for a jack-in from a body at `from`: home, or a named port.
+pub fn jacked_in_line(city: &City, from: Place, port: Pos) -> String {
+    match from {
+        Place::Floor { .. } => "jacked in from home".to_string(),
+        _ => format!("jacked in at `{}`", port_name(city, port)),
+    }
+}
+
 /// What a port is called in the status line: its building, else its district.
 pub fn port_name(city: &City, port: Pos) -> String {
     let tile = city.tile(StratumKind::Street, port);
@@ -318,14 +342,14 @@ mod tests {
         p.pos = stand;
         p.place = Place::Stratum(StratumKind::Street);
         assert!(!p.jacked_in());
-        assert_eq!(p.jack_in(&c, 0), Ok(jack.pos));
+        assert_eq!(p.jack_in(&c, None, 0), Ok(jack.pos));
         assert!(p.jacked_in());
         assert_eq!(p.place, Place::Stratum(StratumKind::Net));
         assert_eq!(p.pos, jack.pos);
         assert_eq!(p.body, Some((Place::Stratum(StratumKind::Street), stand)));
         assert_eq!(p.radius(), RADIUS_NET);
         assert!(p.vis().count(|v| *v == Visibility::Visible) > 10);
-        assert_eq!(p.jack_in(&c, 0), Err("already jacked in"));
+        assert_eq!(p.jack_in(&c, None, 0), Err("already jacked in"));
         assert_eq!(p.use_connector(&c, false), None, "jacks are not stairs");
         assert_eq!(p.use_connector(&c, true), None);
         assert_eq!(p.jack_out(&c, 0), Ok(()));
@@ -350,14 +374,61 @@ mod tests {
             .map(|(q, _)| q)
             .unwrap();
         p.pos = far;
-        assert_eq!(p.jack_in(&c, 0), Err("no terminal within reach"));
-        // Nothing reaches the Net from inside a building.
+        assert_eq!(p.jack_in(&c, None, 0), Err("no terminal within reach"));
+        // A floor that is not home reaches nothing, a street Jack beside it or not.
         p.pos = stand;
         p.place = Place::Floor {
             building: citygen::BuildingId(0),
             level: 0,
         };
-        assert_eq!(p.jack_in(&c, 0), Err("no terminal within reach"));
+        assert_eq!(p.jack_in(&c, None, 0), Err("no terminal within reach"));
+    }
+
+    #[test]
+    fn the_home_rig_jacks_in_and_the_body_stays_home() {
+        let c = Generator::run(GenParams {
+            seed: 8,
+            size: SizePreset::Medium,
+            districts: 7,
+            ..Default::default()
+        })
+        .unwrap();
+        let rig = crate::home::HomeRig::find(&c).expect("a home");
+        let home = Place::Floor {
+            building: rig.home.building,
+            level: rig.home.level,
+        };
+        let beside = rig.home.rig.neighbors8().next().unwrap();
+        // Another floor of the same megablock reaches nothing.
+        let mut p = Player::at(
+            Place::Floor {
+                building: rig.home.building,
+                level: rig.home.level + 1,
+            },
+            beside,
+        );
+        assert_eq!(p.terminal_in_reach(&c, Some(&rig)), None);
+        assert_eq!(
+            p.jack_in(&c, Some(&rig), 0),
+            Err("no terminal within reach")
+        );
+        // Home, but out of reach of the rig.
+        p.place = home;
+        p.pos = Pos::new(rig.home.rig.x + 2, rig.home.rig.y);
+        assert_eq!(
+            p.jack_in(&c, Some(&rig), 0),
+            Err("no terminal within reach")
+        );
+        // Beside it.
+        p.pos = beside;
+        assert_eq!(p.terminal_in_reach(&c, None), None, "no home, no rig");
+        assert_eq!(p.terminal_in_reach(&c, Some(&rig)), Some(rig.landing));
+        assert_eq!(p.jack_in(&c, Some(&rig), 0), Ok(rig.landing));
+        assert_eq!(p.place, Place::Stratum(StratumKind::Net));
+        assert_eq!(p.pos, rig.landing);
+        assert_eq!(p.body, Some((home, beside)));
+        assert_eq!(p.jack_out(&c, 0), Ok(()));
+        assert_eq!((p.place, p.pos, p.body), (home, beside, None));
     }
 
     #[test]

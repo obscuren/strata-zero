@@ -846,20 +846,26 @@ pub fn dump(st: &mut AppState, why: &str) {
 /// Dumped, with the deck cooling for a given stretch.
 pub fn dump_for(st: &mut AppState, why: &str, cooling: u64) {
     st.net.engaged = None;
-    let bonus = st.sight_bonus();
     let now = st.net.now(st);
     st.net.run = None;
     st.net.cooling_until = Some(now + cooling);
     st.character.focus = 0;
-    if let (Some(city), Some(player)) = (st.city.as_ref(), st.player.as_mut())
-        && player.jack_out(city, bonus).is_ok()
-        && let Some(map) = MapRef::for_place(city, &st.interiors, &st.constructs, player.place)
-    {
-        player.update_fov(&map, bonus);
-    }
+    let _ = jack_out(st);
     kick(st, 20);
     st.warn(format!("DUMPED · {why}"));
     st.repaint = true;
+}
+
+/// Back to the body, wherever it waits, seeing around it again.
+pub fn jack_out(st: &mut AppState) -> Result<(), &'static str> {
+    let bonus = st.sight_bonus();
+    let city = st.city.as_ref().ok_or("no body in the city")?;
+    let player = st.player.as_mut().ok_or("no body in the city")?;
+    player.jack_out(city, bonus)?;
+    if let Some(map) = MapRef::for_place(city, &st.interiors, &st.constructs, player.place) {
+        player.update_fov(&map, bonus);
+    }
+    Ok(())
 }
 
 /// Whether a piece at `from` sees a player: on the spine, in its row or column,
@@ -1702,7 +1708,11 @@ pub fn jack_in_refusal(st: &AppState) -> Option<String> {
     }
     let city = st.city.as_ref()?;
     let player = st.player.as_ref()?;
-    let port = player.terminal_in_reach(city)?;
+    let port = player.terminal_in_reach(city, st.home.as_ref())?;
+    // The rig at home is your own line: no building's lockdown reaches it.
+    if st.home.is_some_and(|h| h.place() == player.place) {
+        return None;
+    }
     let locked = city
         .buildings
         .iter()
@@ -1792,6 +1802,99 @@ mod tests {
 
     fn b(i: u32) -> BuildingId {
         BuildingId(i)
+    }
+
+    /// A Medium city with a home, the player woken up beside the bed and stepped to
+    /// the rig.
+    fn at_the_rig(seed: u64) -> (AppState, crate::home::HomeRig, citygen::Pos) {
+        let mut st = AppState::new();
+        st.enter_city(
+            citygen::Generator::run(citygen::GenParams {
+                seed,
+                size: citygen::SizePreset::Medium,
+                districts: 7,
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let rig = st.home.unwrap();
+        let city = st.city.as_ref().unwrap();
+        let mut p = rig
+            .wake(city, &mut st.interiors, &st.constructs, 0)
+            .unwrap();
+        let (_, floor) = st
+            .interiors
+            .floor(rig.home.building, rig.home.level)
+            .unwrap();
+        let at = rig
+            .home
+            .rig
+            .neighbors8()
+            .find(|q| rig.home.rect.contains(*q) && floor.tiles[*q].is_walkable())
+            .unwrap();
+        p.pos = at;
+        st.player = Some(p);
+        (st, rig, at)
+    }
+
+    #[test]
+    fn the_home_rig_jacks_in_through_a_lockdown() {
+        // Medium seed 2: a street Jack hugs the home megablock.
+        let (mut st, rig, _) = at_the_rig(2);
+        let b = rig.home.building;
+        let now = st.net.now(&st);
+        st.net.trace(b).add(game::ALARM_HEAT, now);
+        st.net.alarm(b, now);
+        assert!(st.net.alert(b, now));
+        assert_eq!(jack_in_refusal(&st), None);
+        // The deck cooling still refuses.
+        st.net.cooling_until = Some(now + 5);
+        assert_eq!(
+            jack_in_refusal(&st),
+            Some("deck cooling · 5 min".to_string())
+        );
+        st.net.cooling_until = None;
+        // A street Jack beside the same megablock is locked down.
+        let city = st.city.as_ref().unwrap().clone();
+        let fp = city.building(b).footprint;
+        let street = citygen::StratumKind::Street;
+        let beside_jack = city
+            .connectors
+            .iter()
+            .filter(|k| {
+                k.kind == citygen::ConnectorKind::Jack
+                    && k.serves.contains(&street)
+                    && fp.grow(1).contains(k.pos)
+            })
+            .find_map(|k| {
+                std::iter::once(k.pos)
+                    .chain(k.pos.neighbors8())
+                    .find(|q| city.walkable(street, *q))
+            })
+            .expect("a street Jack beside the megablock");
+        let p = st.player.as_mut().unwrap();
+        p.place = citygen::Place::Stratum(street);
+        p.pos = beside_jack;
+        assert_eq!(jack_in_refusal(&st), Some("port locked down".to_string()));
+    }
+
+    #[test]
+    fn a_dump_from_the_home_rig_wakes_at_the_rig() {
+        let (mut st, rig, at) = at_the_rig(8);
+        let city = st.city.as_ref().unwrap();
+        let p = st.player.as_mut().unwrap();
+        assert_eq!(p.jack_in(city, Some(&rig), 0), Ok(rig.landing));
+        dump_for(&mut st, "test", 5);
+        let p = st.player.as_ref().unwrap();
+        let home = citygen::Place::Floor {
+            building: rig.home.building,
+            level: rig.home.level,
+        };
+        assert_eq!((p.place, p.pos, p.body), (home, at, None));
+        assert_eq!(
+            p.vis().get(rig.home.rig),
+            Some(&crate::render::Visibility::Visible)
+        );
     }
 
     #[test]
