@@ -1,6 +1,7 @@
 //! Seeded randomness: per-stage RNG derivation and stable per-tile hashes.
 
 use crate::geom::Pos;
+use crate::ids::BuildingId;
 use crate::world::StratumKind;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -11,6 +12,15 @@ pub fn hash64(mut a: u64, b: u64) -> u64 {
     a = (a ^ (a >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     a = (a ^ (a >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     a ^ (a >> 31)
+}
+
+/// A flat's four-digit door code, fixed by the seed, the building and the flat.
+pub fn door_code(seed: u64, building: BuildingId, level: i32, number: u16) -> u16 {
+    let h = hash64(
+        hash64(seed, 0xD00D + building.index() as u64),
+        ((level as i64 as u64) << 16) ^ number as u64,
+    );
+    (h % 10_000) as u16
 }
 
 /// An RNG private to one generation stage: changing another stage never reshuffles it.
@@ -68,5 +78,15 @@ mod tests {
         assert_eq!(*picked, "b");
         assert!(!chance(&mut r, 0.0));
         assert!(chance(&mut r, 1.0));
+    }
+
+    #[test]
+    fn door_codes_are_four_digits_stable_and_differ_between_flats() {
+        use crate::ids::BuildingId;
+        let a = door_code(7, BuildingId(3), 12, 1204);
+        assert!(a <= 9999);
+        assert_eq!(a, door_code(7, BuildingId(3), 12, 1204));
+        assert_ne!(a, door_code(7, BuildingId(3), 12, 1205));
+        assert_ne!(a, door_code(8, BuildingId(3), 12, 1204));
     }
 }
