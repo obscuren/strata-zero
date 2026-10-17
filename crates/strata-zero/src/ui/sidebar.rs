@@ -297,42 +297,6 @@ pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
     out
 }
 
-/// One line for the footer: `3 items · terminal · stairs`, or `nothing`.
-pub fn here_summary(v: &SidebarView) -> String {
-    let mut parts = Vec::new();
-    let n = v.ground.at(v.map.place(), v.focus).len();
-    if n == 1 {
-        parts.push("1 item".to_string());
-    } else if n > 1 {
-        parts.push(format!("{n} items"));
-    }
-    if v.map.stratum() == Some(StratumKind::Net) {
-        if let Some(id) = v
-            .map
-            .stratum()
-            .and_then(|k| Digital::node_under(v.map.city(), k, v.focus))
-        {
-            parts.push(v.map.city().net.node(id).kind.label().to_string());
-        }
-    } else if v
-        .map
-        .tile(v.focus)
-        .is_some_and(|t| t.feature == Some(Feature::Node(NodeKind::Terminal)))
-    {
-        parts.push("terminal".to_string());
-    }
-    for c in v.map.city().connectors_at(v.focus).filter(|c| {
-        c.kind != ConnectorKind::Jack && v.map.stratum().is_some_and(|k| c.serves.contains(&k))
-    }) {
-        parts.push(c.kind.label().to_string());
-    }
-    if parts.is_empty() {
-        "nothing".to_string()
-    } else {
-        parts.join(" · ")
-    }
-}
-
 /// The first unfinished quest: title and giver, its first open objective, and pips.
 pub fn quest_lines(character: &Character, content: &Content) -> Vec<Line<'static>> {
     for q in &character.quests {
@@ -890,7 +854,6 @@ mod tests {
         assert!(rows[0].starts_with(" 22:03 x"), "{text}");
         assert!(rows[1].starts_with("       x"), "{text}");
         assert_eq!(text.matches('x').count(), 50);
-        assert!(!here_summary(&view(&st, pos, k)).is_empty());
     }
 
     #[test]
@@ -956,15 +919,6 @@ mod tests {
         let text = draw_to(&view(&st, pos, k), &flags, width(100), 3);
         assert_eq!(text.matches('x').count(), 0, "{text}");
         assert!(text.contains("short"), "{text}");
-    }
-
-    #[test]
-    fn here_summary_names_the_net_node() {
-        let st = state();
-        let city = st.city.as_ref().unwrap();
-        let node = &city.net.nodes[0];
-        let v = view(&st, node.cyber, citygen::Place::Stratum(StratumKind::Net));
-        assert!(here_summary(&v).contains(node.kind.label()));
     }
 
     #[test]

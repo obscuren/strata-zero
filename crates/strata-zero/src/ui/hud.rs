@@ -296,89 +296,6 @@ pub fn tab_rows(flags: &Sidebar, dev: bool, drawn: &[Section]) -> (Line<'static>
     (dev_row, main)
 }
 
-pub const WALK_VERBS: &[(&str, &str)] = &[
-    ("space", "act"),
-    ("enter", "jack"),
-    ("v", "iew"),
-    ("m", "sgs"),
-    ("?", "keys"),
-];
-/// The verbs while a program runs: a wait is a turn, space continues it.
-pub const RUN_VERBS: &[(&str, &str)] = &[
-    (".", "turn"),
-    ("space", "continue"),
-    ("1-5", "programs"),
-    ("enter", "jack"),
-];
-/// The verbs jacked in with nothing running.
-pub const NET_VERBS: &[(&str, &str)] = &[
-    ("space", "act"),
-    ("1-5", "programs"),
-    ("enter", "jack"),
-    ("v", "iew"),
-    ("m", "sgs"),
-    ("?", "keys"),
-];
-/// The verbs beside a standing piece of ICE.
-pub const ICE_VERBS: &[(&str, &str)] = &[
-    ("1-5", "attack"),
-    ("space", "act"),
-    ("enter", "jack"),
-    ("?", "keys"),
-];
-pub const EXPLORE_VERBS: &[(&str, &str)] = &[
-    ("w", "alk"),
-    ("r", "egen"),
-    ("g", "configure"),
-    ("v", "iew"),
-    ("m", "sgs"),
-    ("?", "keys"),
-];
-
-fn verb_spans(verbs: &[(&str, &str)]) -> Vec<Span<'static>> {
-    let mut out = Vec::new();
-    for (i, (k, w)) in verbs.iter().enumerate() {
-        if i > 0 {
-            out.push(Span::raw(" "));
-        }
-        out.push(faint("["));
-        out.push(Span::styled(k.to_string(), Style::default().fg(CYAN)));
-        out.push(faint("]"));
-        out.push(dim(w.to_string()));
-    }
-    out
-}
-
-/// ` STATUS: …` at the left, `HERE: …` at 40% of the width, the verbs right-aligned;
-/// zones are cut so they never touch.
-pub fn footer_status(
-    status: Vec<Span<'static>>,
-    here: &str,
-    verbs: &[(&str, &str)],
-    width: u16,
-) -> Line<'static> {
-    let w = width as usize;
-    let verbs = verb_spans(verbs);
-    let verbs_x = w.saturating_sub(width_of(&verbs) + 1);
-    // HERE starts at 40% of the width, or earlier when the verbs would leave it under
-    // twenty cells.
-    let here_x = (w * 40 / 100).min(verbs_x.saturating_sub(21));
-    let mut zone1 = vec![dim(" STATUS: ")];
-    zone1.extend(status);
-    let mut spans = cut_spans(zone1, here_x.saturating_sub(1));
-    let zone2 = cut_spans(
-        vec![dim("HERE: "), text(here.to_string())],
-        verbs_x.saturating_sub(here_x + 1),
-    );
-    let w1 = width_of(&spans);
-    spans.push(Span::raw(" ".repeat(here_x.saturating_sub(w1))));
-    spans.extend(zone2);
-    let w2 = width_of(&spans);
-    spans.push(Span::raw(" ".repeat(verbs_x.saturating_sub(w2))));
-    spans.extend(verbs);
-    padded(spans, w)
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SlotState {
     Ready,
@@ -393,51 +310,175 @@ pub struct Slot {
     pub flash: bool,
 }
 
-/// ` ABILITIES: ` (or ` PROGRAMS: ` jacked in) then the five slots, then the deck
-/// (and console) hints at the right.
-pub fn footer_abilities(label: &str, slots: &[Slot], dev: bool, width: u16) -> Line<'static> {
-    let mut spans = vec![dim(format!(" {label}: "))];
+/// Everything the four-row footer reads. Strings come formatted; the footer only
+/// places and cuts them.
+pub struct Footer<'a> {
+    /// `Night Market` on foot, `Hextek Holdings · Crown Circle` jacked in.
+    pub place: String,
+    pub jacked: bool,
+    pub camera: bool,
+    pub overburdened: bool,
+    /// `TRACE ▰▰▱▱▱▱▱▱▱▱ 23 · ALERT 58 min`, jacked in.
+    pub trace: Option<String>,
+    pub hunted: bool,
+    /// `TURN 3  YOU › grey ICE › black ICE`, engaged.
+    pub turn: Option<String>,
+    /// `RUN  crack · door lock  ▰▰▱ 2/3 · 40%` with the beat bar in calm.
+    pub run: Option<String>,
+    /// The ICE in sight, nearest first.
+    pub ice: Vec<String>,
+    pub slots_label: &'a str,
+    pub slots: &'a [Slot],
+    /// Not your turn: the keys draw hollow.
+    pub hollow: bool,
+    /// `(moves, moves max, ap, ap max)` while engaged.
+    pub budgets: Option<(u8, u8, u8, u8)>,
+}
+
+fn right_aligned(left: Vec<Span<'static>>, right: Vec<Span<'static>>, w: usize) -> Line<'static> {
+    // Neither side may eat the other: the right part keeps at most half the row.
+    let right = cut_spans(right, w / 2);
+    let rw = width_of(&right);
+    let mut spans = cut_spans(left, w.saturating_sub(rw + 1));
+    let used = width_of(&spans);
+    spans.push(Span::raw(" ".repeat(w.saturating_sub(used + rw))));
+    spans.extend(right);
+    padded(cut_spans(spans, w), w)
+}
+
+/// The footer's four rows: place and trace with the one hint left; a blank; the
+/// fight (turn, run, ICE); the slots with the budgets. Always four, so nothing
+/// moves between the street, a calm construct and a fight.
+pub fn footer_rows(f: &Footer, width: u16) -> [Line<'static>; 4] {
+    let w = width as usize;
+    // Row 1.
+    let mut row1 = Vec::new();
+    if f.jacked {
+        row1.push(Span::styled(" ⚡ ", Style::default().fg(CYAN)));
+        row1.push(text(f.place.clone()));
+    } else if f.camera {
+        row1.push(text(format!(" camera · {}", f.place)));
+    } else {
+        row1.push(text(format!(" on foot · {}", f.place)));
+    }
+    if f.overburdened {
+        row1.push(Span::styled(
+            " · overburdened",
+            Style::default().fg(MAGENTA),
+        ));
+    }
+    if let Some(trace) = &f.trace {
+        let at = w * 40 / 100;
+        let used = width_of(&row1);
+        row1.push(Span::raw(" ".repeat(at.saturating_sub(used).max(2))));
+        row1.push(Span::styled(trace.clone(), Style::default().fg(CYAN)));
+    }
+    let mut right1 = Vec::new();
+    if f.hunted {
+        right1.push(Span::styled(
+            "HUNTED",
+            Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD),
+        ));
+        right1.push(Span::raw("    "));
+    }
+    right1.push(faint("["));
+    right1.push(cyan("?"));
+    right1.push(faint("]"));
+    let line1 = right_aligned(row1, right1, w);
+    // Row 3: the fight.
+    let mut row3 = Vec::new();
+    if let Some(turn) = &f.turn {
+        row3.push(Span::styled(
+            format!(" {turn}"),
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        ));
+    }
+    if let Some(run) = &f.run {
+        row3.push(Span::raw(if row3.is_empty() { " " } else { "   " }));
+        let (head, rest) = run.split_once(' ').unwrap_or((run.as_str(), ""));
+        row3.push(Span::styled(
+            head.to_string(),
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        ));
+        row3.push(text(format!(" {rest}")));
+    }
+    let mut right3 = Vec::new();
+    for (i, l) in f.ice.iter().enumerate() {
+        if i > 0 {
+            right3.push(Span::raw("   "));
+        }
+        let colour = if l.contains("black ICE") {
+            Color::Rgb(255, 40, 40)
+        } else {
+            MAGENTA
+        };
+        right3.push(Span::styled(l.clone(), Style::default().fg(colour)));
+    }
+    let line3 = right_aligned(row3, right3, w);
+    // Row 4: the slots and the budgets.
+    let mut row4 = vec![dim(format!(" {:<9}  ", f.slots_label))];
+    let programs = f.slots_label == "PROGRAMS";
     for i in 0..SLOTS {
         if i > 0 {
-            spans.push(Span::raw("   "));
+            row4.push(Span::raw("    "));
         }
-        match slots.get(i) {
+        match f.slots.get(i) {
             Some(slot) => {
-                let (num, name) = if slot.flash {
+                let name = if programs {
+                    cut(&slot.name.to_uppercase(), 10)
+                } else {
+                    cut(&slot.name.to_lowercase(), 10)
+                };
+                let (key, label) = if slot.flash {
                     let hot = Style::default()
                         .fg(BADGE_FG)
                         .bg(CYAN)
                         .add_modifier(Modifier::BOLD);
                     (
-                        Span::styled(format!("{} ", i + 1), hot),
-                        Span::styled(cut(&slot.name.to_lowercase(), 10), hot),
+                        Span::styled(format!("[{}]", i + 1), hot),
+                        Span::styled(format!(" {name}"), hot),
                     )
+                } else if f.hollow {
+                    (dim(format!("[{}]", i + 1)), dim(format!(" {name}")))
                 } else {
-                    (
-                        cyan(format!("{} ", i + 1)),
-                        text(cut(&slot.name.to_lowercase(), 10)),
-                    )
+                    (cyan(format!("[{}]", i + 1)), text(format!(" {name}")))
                 };
-                spans.push(num);
-                spans.push(name);
-                match slot.state {
-                    SlotState::Ready => spans.push(Span::styled(" ●", Style::default().fg(CYAN))),
-                    SlotState::Cooling(secs) => spans.push(dim(format!(" {secs}s"))),
-                }
+                row4.push(key);
+                row4.push(label);
+                row4.push(match (slot.state, f.hollow) {
+                    (_, true) => dim(" ○"),
+                    (SlotState::Ready, false) => Span::styled(" ●", Style::default().fg(CYAN)),
+                    (SlotState::Cooling(secs), false) => dim(format!(" {secs}s")),
+                });
             }
-            None => spans.push(dim(format!("{} ──", i + 1))),
+            None => row4.push(dim(format!("[{}] ──", i + 1))),
         }
     }
-    let right = if dev {
-        verb_spans(&[(":", "console"), ("tab", "deck")])
-    } else {
-        verb_spans(&[("tab", "deck")])
-    };
-    let used = width_of(&spans);
-    let gap = (width as usize).saturating_sub(used + width_of(&right) + 1);
-    spans.push(Span::raw(" ".repeat(gap)));
-    spans.extend(right);
-    padded(spans, width as usize)
+    let mut right4 = Vec::new();
+    if let Some((mv, mv_max, ap, ap_max)) = f.budgets {
+        right4.push(dim("MOVE "));
+        right4.push(Span::styled(
+            format!(
+                "{}{}",
+                "▰".repeat(mv as usize),
+                "▱".repeat(mv_max.saturating_sub(mv) as usize)
+            ),
+            Style::default().fg(CYAN),
+        ));
+        right4.push(text(format!(" {mv}/{mv_max}    ")));
+        right4.push(dim("AP "));
+        right4.push(Span::styled(
+            format!(
+                "{}{}",
+                "●".repeat(ap as usize),
+                "○".repeat(ap_max.saturating_sub(ap) as usize)
+            ),
+            Style::default().fg(CYAN),
+        ));
+        right4.push(text(format!(" {ap}/{ap_max}")));
+    }
+    let line4 = right_aligned(row4, right4, w);
+    [line1, padded(Vec::new(), w), line3, line4]
 }
 
 /// A heavy rule with `glyph` where the vertical rule crosses it.
@@ -633,58 +674,6 @@ mod tests {
     }
 
     #[test]
-    fn footer_rows_have_three_zones_and_slots() {
-        let status = vec![Span::raw("on foot · Street")];
-        let s = footer_status(status, "3 items · terminal", WALK_VERBS, 120).to_string();
-        assert_eq!(s.chars().count(), 120, "{s:?}");
-        assert!(s.starts_with(" STATUS: on foot · Street"), "{s:?}");
-        let chars: Vec<char> = s.chars().collect();
-        assert_eq!(chars[48..54].iter().collect::<String>(), "HERE: ", "{s:?}");
-        assert!(
-            s.trim_end()
-                .ends_with("[space]act [enter]jack [v]iew [m]sgs [?]keys"),
-            "{s:?}"
-        );
-        let narrow = footer_status(
-            vec![Span::raw("x".repeat(60))],
-            &"y".repeat(60),
-            EXPLORE_VERBS,
-            100,
-        )
-        .to_string();
-        assert_eq!(narrow.chars().count(), 100, "{narrow:?}");
-        assert!(
-            narrow.trim_end().ends_with("[?]keys") && narrow.matches('…').count() == 2,
-            "{narrow:?}"
-        );
-        // At 100 columns the HERE zone keeps at least twenty cells even with the long explore verbs.
-        assert!(narrow.contains("HERE: yyyyyyyyyyyyy"), "{narrow:?}");
-        let slots = vec![
-            Slot {
-                name: "Netscan".into(),
-                state: SlotState::Ready,
-                flash: false,
-            },
-            Slot {
-                name: "Ping".into(),
-                state: SlotState::Cooling(12),
-                flash: false,
-            },
-        ];
-        let a = footer_abilities("ABILITIES", &slots, true, 120).to_string();
-        assert!(
-            a.starts_with(" ABILITIES: 1 netscan ●   2 ping 12s   3 ──   4 ──   5 ──"),
-            "{a:?}"
-        );
-        assert!(a.trim_end().ends_with("[:]console [tab]deck"), "{a:?}");
-        let a = footer_abilities("ABILITIES", &slots, false, 100).to_string();
-        assert!(
-            a.trim_end().ends_with("[tab]deck") && !a.contains("console"),
-            "{a:?}"
-        );
-    }
-
-    #[test]
     fn rule_row_crosses_at_the_column() {
         let r = rule_row(100, 63, '┳').to_string();
         assert_eq!(r.chars().count(), 100);
@@ -759,11 +748,6 @@ mod tests {
         assert_eq!(open.style.fg, Some(FAINT));
         let key = main.spans.iter().find(|sp| sp.content == "F1").unwrap();
         assert_eq!(key.style.fg, Some(CYAN));
-        let s = footer_status(vec![], "nothing", WALK_VERBS, 100);
-        let word = s.spans.iter().find(|sp| sp.content == "act").unwrap();
-        assert_eq!(word.style.fg, Some(DIM));
-        let bracket = s.spans.iter().find(|sp| sp.content == "]").unwrap();
-        assert_eq!(bracket.style.fg, Some(FAINT));
     }
 
     #[test]
@@ -773,28 +757,41 @@ mod tests {
             state: SlotState::Cooling(10),
             flash: true,
         }];
-        let line = footer_abilities("ABILITIES", &slots, false, 100);
+        let footer = |slots: &[Slot]| {
+            let f = Footer {
+                place: "Street".into(),
+                jacked: false,
+                camera: false,
+                overburdened: false,
+                trace: None,
+                hunted: false,
+                turn: None,
+                run: None,
+                ice: Vec::new(),
+                slots_label: "ABILITIES",
+                slots,
+                hollow: false,
+                budgets: None,
+            };
+            footer_rows(&f, 100)[3].clone()
+        };
+        let line = footer(&slots);
         let name = line
             .spans
             .iter()
-            .find(|sp| sp.content == "netscan")
+            .find(|sp| sp.content == " netscan")
             .unwrap();
         assert_eq!(name.style.bg, Some(CYAN), "{line:?}");
         assert_eq!(name.style.fg, Some(Color::Rgb(10, 11, 16)));
-        let calm = footer_abilities(
-            "ABILITIES",
-            &[Slot {
-                name: "Netscan".into(),
-                state: SlotState::Ready,
-                flash: false,
-            }],
-            false,
-            100,
-        );
+        let calm = footer(&[Slot {
+            name: "Netscan".into(),
+            state: SlotState::Ready,
+            flash: false,
+        }]);
         let name = calm
             .spans
             .iter()
-            .find(|sp| sp.content == "netscan")
+            .find(|sp| sp.content == " netscan")
             .unwrap();
         assert_eq!(name.style.bg, None);
     }
@@ -811,5 +808,175 @@ mod tests {
         assert_eq!(map.style.fg, Some(DIM), "{main:?}");
         let here = main.spans.iter().find(|sp| sp.content == "Here*").unwrap();
         assert_eq!(here.style.fg, Some(CYAN), "{main:?}");
+    }
+
+    fn slots_for_footer() -> Vec<Slot> {
+        vec![
+            Slot {
+                name: "Crack".into(),
+                state: SlotState::Ready,
+                flash: false,
+            },
+            Slot {
+                name: "Copy".into(),
+                state: SlotState::Ready,
+                flash: false,
+            },
+        ]
+    }
+
+    #[test]
+    fn the_footer_is_four_rows_in_every_state() {
+        let on_foot = Footer {
+            place: "Night Market".into(),
+            jacked: false,
+            camera: false,
+            overburdened: false,
+            trace: None,
+            hunted: false,
+            turn: None,
+            run: None,
+            ice: Vec::new(),
+            slots_label: "ABILITIES",
+            slots: &[Slot {
+                name: "Netscan".into(),
+                state: SlotState::Ready,
+                flash: false,
+            }],
+            hollow: false,
+            budgets: None,
+        };
+        let rows: Vec<String> = footer_rows(&on_foot, 120)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        assert_eq!(rows.len(), 4);
+        assert!(
+            rows[0].starts_with(" on foot · Night Market"),
+            "{:?}",
+            rows[0]
+        );
+        assert!(rows[0].trim_end().ends_with("[?]"), "{:?}", rows[0]);
+        assert!(!rows[0].contains("HERE"), "{:?}", rows[0]);
+        assert_eq!(rows[1].trim(), "");
+        assert_eq!(rows[2].trim(), "");
+        assert!(
+            rows[3].starts_with(" ABILITIES  [1] netscan ●    [2] ──"),
+            "{:?}",
+            rows[3]
+        );
+        for r in &rows {
+            assert_eq!(unicode_width::UnicodeWidthStr::width(r.as_str()), 120);
+        }
+        let calm = Footer {
+            place: "Hextek Holdings · Crown Circle".into(),
+            jacked: true,
+            camera: false,
+            overburdened: false,
+            trace: Some("TRACE ▰▰▱▱▱▱▱▱▱▱ 23".into()),
+            hunted: false,
+            turn: None,
+            run: Some("RUN  crack · door lock  ▰▰▱ 2/3 · 40%   ▓▓▓▓░░░░  next roll".into()),
+            ice: vec!["▣ grey ICE · asleep · 6/6 · 4 tiles".into()],
+            slots_label: "PROGRAMS",
+            slots: &slots_for_footer(),
+            hollow: false,
+            budgets: None,
+        };
+        let rows: Vec<String> = footer_rows(&calm, 130)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        assert!(
+            rows[0].starts_with(" ⚡ Hextek Holdings · Crown Circle"),
+            "{:?}",
+            rows[0]
+        );
+        assert!(rows[0].contains("TRACE ▰▰▱▱▱▱▱▱▱▱ 23"), "{:?}", rows[0]);
+        assert_eq!(rows[1].trim(), "");
+        assert!(
+            rows[2].starts_with(" RUN  crack · door lock"),
+            "{:?}",
+            rows[2]
+        );
+        assert!(rows[2].contains("next roll"), "{:?}", rows[2]);
+        assert!(
+            rows[2]
+                .trim_end()
+                .ends_with("▣ grey ICE · asleep · 6/6 · 4 tiles"),
+            "{:?}",
+            rows[2]
+        );
+        assert!(
+            rows[3].starts_with(" PROGRAMS   [1] CRACK ●    [2] COPY ●    [3] ──"),
+            "{:?}",
+            rows[3]
+        );
+        let engaged = Footer {
+            turn: Some("TURN 3  YOU › grey ICE › black ICE".into()),
+            run: Some("RUN  crack · door lock  ▰▰▱ 2/3 · 40%".into()),
+            hunted: true,
+            trace: Some("TRACE ▰▰▰▱▱▱▱▱▱▱ 34 · ALERT 58 min".into()),
+            ice: vec![
+                "▣ grey ICE · hunting · 2 tiles".into(),
+                "▣ black ICE · hunting · 5 tiles".into(),
+                "▣ white ICE · asleep · 9 tiles".into(),
+            ],
+            budgets: Some((3, 4, 2, 2)),
+            ..calm
+        };
+        let rows: Vec<String> = footer_rows(&engaged, 130)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        assert!(
+            rows[0].contains("HUNTED") && rows[0].trim_end().ends_with("[?]"),
+            "{:?}",
+            rows[0]
+        );
+        assert!(
+            rows[2].starts_with(" TURN 3  YOU › grey ICE › black ICE"),
+            "{:?}",
+            rows[2]
+        );
+        assert!(rows[2].contains("RUN  crack"), "{:?}", rows[2]);
+        assert!(
+            rows[3].trim_end().ends_with("MOVE ▰▰▰▱ 3/4    AP ●● 2/2"),
+            "{:?}",
+            rows[3]
+        );
+        // Narrow: every row is still one line of the width, cut, never wrapped.
+        let rows: Vec<String> = footer_rows(&engaged, 100)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        for r in &rows {
+            assert_eq!(
+                unicode_width::UnicodeWidthStr::width(r.as_str()),
+                100,
+                "{r:?}"
+            );
+        }
+        assert!(rows[2].starts_with(" TURN 3"), "{:?}", rows[2]);
+        assert!(
+            rows[3].contains("MOVE") && rows[3].contains("AP"),
+            "{:?}",
+            rows[3]
+        );
+        // An ICE turn: the keys go hollow.
+        let theirs = Footer {
+            hollow: true,
+            turn: Some("TURN 3  grey ICE moves 2 › black ICE › YOU".into()),
+            ..engaged
+        };
+        let rows: Vec<String> = footer_rows(&theirs, 130)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        assert!(
+            rows[3].contains("[1] CRACK ○    [2] COPY ○"),
+            "{:?}",
+            rows[3]
+        );
     }
 }

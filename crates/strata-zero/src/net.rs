@@ -6,7 +6,9 @@ use crate::constructs::Constructs;
 use crate::render::map::MapRef;
 use citygen::pathing::{astar, bresenham};
 use citygen::rng::hash64;
-use citygen::{BuildingId, Construct, IceGrade, NodeId, NodeKind, Place, Pos, Terrain};
+use citygen::{
+    BuildingId, City, Construct, IceGrade, NodeId, NodeKind, Place, Pos, StratumKind, Terrain,
+};
 use game::{
     ALERT_MINUTES, COOLING_MINUTES, Fx, HACK_MINUTES, HackTarget, ItemId, Op, Run, Target, Trace,
     TraceEvent, applies, difficulty, power, succeeds,
@@ -30,6 +32,8 @@ pub const LOST_TURNS: u8 = 3;
 pub const FAILSAFE_COOLING: u64 = 30;
 /// Turns a mask holds once raised.
 pub const MASK_TURNS: u8 = 6;
+/// How far from a gate the footer still reads that construct's trace on the grid.
+pub const TRACE_REACH: i32 = 12;
 /// Minutes the deck cools after the failsafe pulls out a runner in the deep end.
 pub const DEEP_END_COOLING: u64 = 10;
 /// Heat a ping makes inside a construct.
@@ -120,6 +124,27 @@ impl NetState {
 
     pub fn alert(&self, b: BuildingId, now: u64) -> bool {
         self.traces.get(&b).is_some_and(|t| t.alert(now))
+    }
+
+    /// The construct whose gate is nearest within `TRACE_REACH`, with its heat; a
+    /// construct never entered reads 0 and no state is made for it.
+    pub fn nearest_trace(&self, city: &City, pos: Pos) -> Option<(BuildingId, u8)> {
+        city.buildings
+            .iter()
+            .filter(|b| {
+                let r = b.footprint;
+                pos.x >= r.x - TRACE_REACH
+                    && pos.x < r.right() + TRACE_REACH
+                    && pos.y >= r.y - TRACE_REACH
+                    && pos.y < r.bottom() + TRACE_REACH
+            })
+            .filter_map(|b| {
+                let gate = crate::constructs::city_gate(city, b.id)?;
+                let d = gate.chebyshev(pos);
+                (d <= TRACE_REACH).then_some((d, b.id))
+            })
+            .min_by_key(|(d, _)| *d)
+            .map(|(_, b)| (b, self.traces.get(&b).map_or(0, |t| t.heat)))
     }
 
     /// Heat on a construct's trace. With the null route, the first dump in a
@@ -306,7 +331,7 @@ impl NetState {
     }
 }
 
-fn building_name(st: &AppState, b: BuildingId) -> String {
+pub(crate) fn building_name(st: &AppState, b: BuildingId) -> String {
     st.city
         .as_ref()
         .and_then(|c| c.building_opt(b))
@@ -977,6 +1002,56 @@ pub fn ghost_pieces(st: &AppState, b: BuildingId) -> Vec<Pos> {
         .collect()
 }
 
+/// The district a Net tile sits over, or the city's name.
+pub(crate) fn district_name(city: &City, pos: Pos) -> String {
+    city.tile(StratumKind::Net, pos)
+        .and_then(|t| t.district)
+        .or_else(|| city.tile(StratumKind::Street, pos).and_then(|t| t.district))
+        .and_then(|d| city.district_opt(d))
+        .map(|d| d.name.clone())
+        .unwrap_or_else(|| city.name.clone())
+}
+
+/// Ten cells of trace: a filled cell per ten heat.
+pub fn trace_bar(heat: u8) -> String {
+    let filled = (heat / 10).min(10) as usize;
+    format!("{}{}", "▰".repeat(filled), "▱".repeat(10 - filled))
+}
+
+/// The footer's run line: `RUN  crack · door lock  ▰▰▱ 2/3 · 40%`.
+pub fn run_readout(st: &AppState, b: BuildingId, run: &Run) -> Option<String> {
+    let city = st.city.as_ref()?;
+    let spec = st.content.item(&run.program)?.program?;
+    let kind = target_kind(st, b, run.target)?;
+    let target = match run.target {
+        HackTarget::Node(id) => city.net.node(id).kind.label().to_string(),
+        HackTarget::Guard { building, index } => st
+            .constructs
+            .get(building)
+            .and_then(|k| k.guards.get(index))
+            .map(|g| format!("{} ICE", g.grade.label()))
+            .unwrap_or_else(|| "ICE".to_string()),
+        HackTarget::Deck => "deck".to_string(),
+    };
+    let security = st.constructs.get(b).map_or(0, |k| k.security);
+    let pct = if kind == Target::Deck {
+        100
+    } else {
+        game::chance(
+            power(&st.character, &st.content, &spec, kind),
+            difficulty(security),
+        )
+    };
+    Some(format!(
+        "RUN  {} · {target}  {}{} {}/{} · {pct}%",
+        spec.op.label(),
+        "▰".repeat(run.done as usize),
+        "▱".repeat(run.work.saturating_sub(run.done) as usize),
+        run.done,
+        run.work
+    ))
+}
+
 /// An awake piece stands in the player's sight memory.
 pub fn hunted(st: &AppState) -> bool {
     let Some(p) = st.player.as_ref() else {
@@ -996,19 +1071,6 @@ pub fn hunted(st: &AppState) -> bool {
                 .get(g.pos)
                 .is_some_and(|v| *v != crate::render::Visibility::Unseen)
     })
-}
-
-/// A standing piece is beside the player.
-pub fn beside_ice(st: &AppState) -> bool {
-    let Some(p) = st.player.as_ref() else {
-        return false;
-    };
-    let Place::Construct(b) = p.place else {
-        return false;
-    };
-    st.constructs
-        .get(b)
-        .is_some_and(|k| p.pos.neighbors8().any(|q| k.guard_at(q).is_some()))
 }
 
 /// Why the port refuses to jack in right now: the deck cooling, or a lockdown.
