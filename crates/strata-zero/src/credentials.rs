@@ -28,6 +28,28 @@ pub fn parse_keycard(id: &ItemId) -> Option<(BuildingId, HouseholdId)> {
 pub enum Source {
     ServerCopy,
     Home,
+    /// Keyed by hand into the door's pad.
+    Keypad,
+}
+
+/// Minutes a keypad stays locked after the third miss.
+pub const LOCKOUT_MINUTES: u64 = 30;
+/// Misses in a row that lock a keypad.
+pub const MISSES: u8 = 3;
+
+/// A flat's keypad: misses so far, and the minute a lockout ends.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct KeypadState {
+    pub wrong: u8,
+    pub locked_until: Option<u64>,
+}
+
+/// What a keypad says to a code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    Open,
+    Denied { left: u8 },
+    Locked { until: u64 },
 }
 
 /// A door code the player knows.
@@ -49,6 +71,8 @@ pub struct Journal {
     codes: Vec<Code>,
     /// Buildings whose lost keycard already lies in the lobby.
     pub lost_cards: BTreeSet<BuildingId>,
+    /// Each flat's keypad, once it has been tried.
+    pub keypads: BTreeMap<(BuildingId, i32, u16), KeypadState>,
 }
 
 impl Journal {
@@ -73,6 +97,88 @@ impl Journal {
     pub fn codes(&self) -> &[Code] {
         &self.codes
     }
+
+    pub fn keypad(&self, b: BuildingId, level: i32, number: u16) -> KeypadState {
+        self.keypads
+            .get(&(b, level, number))
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// The minute a keypad's lockout ends, while it still holds.
+    pub fn keypad_locked_until(
+        &self,
+        b: BuildingId,
+        level: i32,
+        number: u16,
+        now: u64,
+    ) -> Option<u64> {
+        self.keypad(b, level, number)
+            .locked_until
+            .filter(|u| *u > now)
+    }
+}
+
+/// "Mara Voss's flat 1204", or "flat 1204" with nobody named.
+pub fn flat_label(st: &AppState, b: BuildingId, level: i32, number: u16) -> String {
+    match owner_name(st, b, level, number) {
+        Some(n) => format!("{n}'s flat {number}"),
+        None => format!("flat {number}"),
+    }
+}
+
+/// A code keyed into a flat's pad: learned on a hit, counted on a miss, locked on
+/// the third miss in a row. Writes the log.
+pub fn try_code(st: &mut AppState, b: BuildingId, level: i32, number: u16, typed: u16) -> Verdict {
+    let now = st.net.now(st);
+    if let Some(until) = st.journal.keypad_locked_until(b, level, number, now) {
+        return Verdict::Locked { until };
+    }
+    let Some(seed) = st.city.as_ref().map(|c| c.seed) else {
+        return Verdict::Denied { left: MISSES };
+    };
+    let key = (b, level, number);
+    if typed == citygen::rng::door_code(seed, b, level, number) {
+        st.journal.keypads.remove(&key);
+        let household = st
+            .interiors
+            .homes_of(b)
+            .and_then(|h| h.household_of(level, number));
+        st.journal.learn(Code {
+            building: b,
+            level,
+            number,
+            household,
+            code: typed,
+            source: Source::Keypad,
+            at: now,
+        });
+        let label = match owner_name(st, b, level, number) {
+            Some(n) => format!("`{n}`'s flat {number}"),
+            None => format!("flat {number}"),
+        };
+        st.say(format!("{label} · the keypad reads OPEN"));
+        return Verdict::Open;
+    }
+    let mut state = st.journal.keypad(b, level, number);
+    // A lockout that has passed starts the count over.
+    if state.locked_until.is_some() {
+        state = KeypadState::default();
+    }
+    state.wrong += 1;
+    st.say("the keypad buzzes");
+    let verdict = if state.wrong >= MISSES {
+        state.locked_until = Some(now + LOCKOUT_MINUTES);
+        Verdict::Locked {
+            until: now + LOCKOUT_MINUTES,
+        }
+    } else {
+        Verdict::Denied {
+            left: MISSES - state.wrong,
+        }
+    };
+    st.journal.keypads.insert(key, state);
+    verdict
 }
 
 /// How a locked door opened.
@@ -351,10 +457,11 @@ pub fn entries(st: &AppState) -> Vec<(BuildingId, String, Vec<Entry>)> {
     for c in st.journal.codes() {
         let whose = match c.source {
             Source::Home => "your flat".to_string(),
-            Source::ServerCopy => whose_flat(st, c.building, c.level, c.number),
+            Source::ServerCopy | Source::Keypad => whose_flat(st, c.building, c.level, c.number),
         };
         let from = match c.source {
             Source::ServerCopy => format!("copied off the server, {}", stamp(c.at)),
+            Source::Keypad => format!("keyed in at the door, {}", stamp(c.at)),
             Source::Home => "your own door".to_string(),
         };
         by.entry(c.building).or_default().push(Entry {
@@ -888,5 +995,80 @@ mod tests {
                 .next()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn the_keypad_learns_a_right_code_and_locks_after_three_wrong() {
+        let (mut st, b) = state();
+        prepare(&mut st, b);
+        let (level, number) = st.interiors.homes_of(b).unwrap().flats().next().unwrap();
+        let seed = st.city.as_ref().unwrap().seed;
+        let code = citygen::rng::door_code(seed, b, level, number);
+        let wrong = (code + 1) % 10_000;
+        assert_eq!(
+            try_code(&mut st, b, level, number, wrong),
+            Verdict::Denied { left: 2 }
+        );
+        assert_eq!(
+            try_code(&mut st, b, level, number, wrong),
+            Verdict::Denied { left: 1 }
+        );
+        assert_eq!(
+            st.log.latest().map(|e| e.text.as_str()),
+            Some("the keypad buzzes")
+        );
+        let now = st.net.now(&st);
+        let until = now + LOCKOUT_MINUTES;
+        assert_eq!(
+            try_code(&mut st, b, level, number, wrong),
+            Verdict::Locked { until }
+        );
+        assert_eq!(
+            try_code(&mut st, b, level, number, code),
+            Verdict::Locked { until },
+            "locked refuses the right code too"
+        );
+        assert_eq!(
+            st.journal.keypad_locked_until(b, level, number, now),
+            Some(until)
+        );
+        assert_eq!(
+            st.journal.keypad_locked_until(b, level, number, until),
+            None
+        );
+        // The lockout passes: the count is fresh, then the right code opens and is learned.
+        st.journal.keypads.insert(
+            (b, level, number),
+            KeypadState {
+                wrong: 3,
+                locked_until: Some(now),
+            },
+        );
+        assert_eq!(
+            try_code(&mut st, b, level, number, wrong),
+            Verdict::Denied { left: 2 }
+        );
+        assert_eq!(try_code(&mut st, b, level, number, code), Verdict::Open);
+        let learned = st.journal.code_for(b, level, number).unwrap();
+        assert_eq!(learned.source, Source::Keypad);
+        assert_eq!(st.journal.keypad(b, level, number), KeypadState::default());
+        assert!(matches!(opens(&st, b, level, number), Some(How::Code(_))));
+        // Keying a code the journal already has stays OPEN and keeps one entry.
+        assert_eq!(try_code(&mut st, b, level, number, code), Verdict::Open);
+        assert_eq!(
+            st.journal
+                .codes()
+                .iter()
+                .filter(|c| c.level == level && c.number == number)
+                .count(),
+            1
+        );
+        let (_, _, es) = &entries(&st)[0];
+        assert!(
+            es.iter()
+                .any(|e| e.text.contains("keyed in at the door, day")),
+            "{es:?}"
+        );
+        assert!(flat_label(&st, b, level, number).ends_with(&format!("flat {number}")));
     }
 }
