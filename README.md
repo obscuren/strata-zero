@@ -30,7 +30,8 @@ zone, docks, industrial, neon strip, old town) that drive street layout,
 building mix, palette and signage. A Net graph of subnets, nodes and links is
 anchored to the physical tiles and can be shown as a digital overlay.
 
-Each megablocks district has one megablock: a whole city block, an ordinary
+A city has up to two megablocks, in its megablocks districts where a block is
+big enough: each a whole city block, an ordinary
 tall building from the street, a hollow one inside. Its upper floors ring an
 open atrium with a railing and a walkway, locked flats around them and the lifts
 and stairs in a lobby off the walkway; over the railing you look down on the
