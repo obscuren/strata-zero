@@ -8,6 +8,11 @@ use ratatui::style::{Color, Style};
 
 pub const DEVICE_W: u16 = 25;
 pub const DEVICE_H: u16 = 19;
+/// The terminal's CRT: a bezel around a 68×20 screen.
+pub const CRT_W: u16 = 72;
+pub const CRT_H: u16 = 24;
+/// How much darker a scanline row is.
+const SCANLINE: f32 = 0.78;
 
 pub const BEIGE_LIGHT: Color = Color::Rgb(226, 214, 184);
 pub const BEIGE: Color = Color::Rgb(196, 184, 152);
@@ -129,6 +134,36 @@ pub fn lcd(buf: &mut Buffer, area: Rect, lines: &[(String, Style)]) {
     }
 }
 
+/// The bezel with a dark glass screen inset two cells; returns the screen rect.
+pub fn crt(buf: &mut Buffer, area: Rect, badge: &str, led: Led) -> Rect {
+    bezel(buf, area, badge, led);
+    let screen = Rect::new(
+        area.x + 2,
+        area.y + 2,
+        area.width.saturating_sub(4),
+        area.height.saturating_sub(4),
+    );
+    for y in screen.y..screen.bottom() {
+        for x in screen.x..screen.right() {
+            buf[(x, y)].set_char(' ').set_bg(LCD_BG);
+        }
+    }
+    screen
+}
+
+/// Darkens every other row of a screen a shade, the way a CRT's lines read.
+pub fn scanlines(buf: &mut Buffer, area: Rect) {
+    for y in (area.y..area.bottom()).skip(1).step_by(2) {
+        for x in area.x..area.right() {
+            let cell = &mut buf[(x, y)];
+            if let Color::Rgb(r, g, b) = cell.fg {
+                let d = crate::render::Rgb(r, g, b).scale(SCANLINE);
+                cell.set_fg(d.to_color());
+            }
+        }
+    }
+}
+
 /// One raised key, 5 wide and 3 tall, its label in the middle.
 pub fn keycap(buf: &mut Buffer, x: u16, y: u16, label: char, ink: Style) {
     let edge = Style::default().fg(BEIGE_LIGHT).bg(BEIGE);
@@ -197,5 +232,37 @@ mod tests {
         assert_eq!(buf[(14, 12)].symbol(), "┘");
         assert_eq!(buf[(12, 11)].symbol(), "7");
         assert_eq!(buf[(12, 11)].fg, INK_WORN);
+    }
+
+    #[test]
+    fn the_crt_has_a_dark_screen_inside_the_bezel_and_scanlines_dim_alternate_rows() {
+        let area = Rect::new(3, 2, CRT_W, CRT_H);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, 30));
+        let screen = crt(&mut buf, area, "MUNI-OS", Led::Amber);
+        assert_eq!(screen, Rect::new(5, 4, 68, 20));
+        assert_eq!(buf[(5, 4)].bg, LCD_BG);
+        assert_eq!(buf[(72, 23)].bg, LCD_BG);
+        assert_eq!(buf[(3, 2)].symbol(), "▄");
+        let row: String = (area.x..area.right())
+            .map(|x| buf[(x, 3)].symbol().to_string())
+            .collect();
+        assert!(row.contains("MUNI-OS"), "{row}");
+        assert_eq!(buf[(area.right() - 3, 3)].fg, LED_AMBER);
+        let green = Style::default().fg(PHOSPHOR).bg(LCD_BG);
+        buf[(10, 4)].set_char('A').set_style(green);
+        buf[(10, 5)].set_char('B').set_style(green);
+        scanlines(&mut buf, screen);
+        assert_eq!(buf[(10, 4)].fg, PHOSPHOR);
+        let Color::Rgb(r, g, b) = buf[(10, 5)].fg else {
+            panic!("rgb")
+        };
+        let Color::Rgb(pr, pg, pb) = PHOSPHOR else {
+            panic!()
+        };
+        assert!(
+            r < pr || g < pg || b < pb,
+            "row 5 is darker: {:?}",
+            buf[(10, 5)].fg
+        );
     }
 }
