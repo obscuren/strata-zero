@@ -475,6 +475,19 @@ pub fn start_run(st: &mut AppState, program: ItemId, target: HackTarget) -> Resu
     {
         return Err("nothing stands there".to_string());
     }
+    // The same program at the same target is the run already armed: it goes on
+    // where it stands, nothing is dropped.
+    if let Some(run) = st.net.run.as_ref()
+        && run.program == program
+        && run.target == target
+    {
+        return Ok(format!(
+            "{} goes on · {}/{}",
+            spec.op.label(),
+            run.done,
+            run.work
+        ));
+    }
     let dropped = st.net.run.replace(Run {
         program: program.clone(),
         target,

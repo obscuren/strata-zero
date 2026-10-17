@@ -4838,10 +4838,13 @@ mod tests {
         assert!(matches!(cmd, ScreenCmd::Stay), "space continues");
         assert_eq!(last(&st), Some("crack 2/3"));
         assert_eq!(st.net.run.as_ref().map(|r| r.done), Some(2));
-        // Running another program says the first run was dropped.
+        // Picking the same program at the same lock again goes on where it stood:
+        // the third roll lands it.
         s.update(&mut st, &[key(KeyCode::Char('1')), key(KeyCode::Char(' '))]);
-        assert!(logged(&st, "run aborted · crack starts · 3 turns"));
-        assert_eq!(st.net.run.as_ref().map(|r| r.done), Some(1));
+        assert!(logged(&st, "crack goes on · 2/3"));
+        assert!(!logged(&st, "run aborted"));
+        assert!(logged(&st, "lock cracked"), "{:?}", last(&st));
+        assert!(st.net.run.is_none());
     }
 
     /// A room tile of the construct the gate guard cannot see into.
@@ -7466,6 +7469,23 @@ mod tests {
         assert_eq!(last(&st), Some("attack · grey ICE 4/6"), "{:?}", last(&st));
         assert_eq!(st.net.engaged.as_ref().unwrap().ap, crate::net::BASE_AP - 1);
         assert_eq!(bolts(&st).len(), 1, "a white bolt to the piece");
+        // The same key, the same piece: the attack goes on, nothing is aborted.
+        let aborted = st
+            .log
+            .iter()
+            .filter(|e| e.text.contains("run aborted"))
+            .count();
+        s.update(&mut st, &[key(KeyCode::Char('2')), key(KeyCode::Char(' '))]);
+        assert_eq!(last(&st), Some("attack · grey ICE 2/6"), "{:?}", last(&st));
+        assert_eq!(st.net.engaged.as_ref().unwrap().ap, 0);
+        assert_eq!(
+            st.log
+                .iter()
+                .filter(|e| e.text.contains("run aborted"))
+                .count(),
+            aborted,
+            "the second pick continues the run"
+        );
         // Out of sight, out of reach: the next roll ends the attack.
         let hide = room_tile(&st, b);
         stand(&mut st, &mut s, Place::Construct(b), hide);
