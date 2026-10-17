@@ -254,6 +254,11 @@ pub enum ScreenCmd {
     Pop {
         fx: TransitionKind,
     },
+    /// Swap the top screen for another in one step; with one screen it only pushes.
+    Replace {
+        to: Box<dyn Screen>,
+        fx: TransitionKind,
+    },
     /// Run a transition in place without changing screens.
     Flash(TransitionKind),
     Quit,
@@ -362,6 +367,15 @@ impl Runner {
                     self.transition = Some(Transition::new(fx, snapshot, self.st.tick));
                     self.repaint_pending = true;
                 }
+            }
+            ScreenCmd::Replace { to, fx } => {
+                let snapshot = self.snapshot(area);
+                if self.screens.len() > 1 {
+                    self.screens.pop();
+                }
+                self.screens.push(to);
+                self.transition = Some(Transition::new(fx, snapshot, self.st.tick));
+                self.repaint_pending = true;
             }
             ScreenCmd::Flash(fx) => {
                 let snapshot = self.snapshot(area);
@@ -498,6 +512,13 @@ mod tests {
                     fx: TransitionKind::None,
                 },
                 crossterm::event::KeyCode::Char('f') => ScreenCmd::Flash(TransitionKind::Glitch),
+                crossterm::event::KeyCode::Char('r') => ScreenCmd::Replace {
+                    to: Box::new(Probe {
+                        name: "SWAP",
+                        updates: Rc::new(Cell::new(0)),
+                    }),
+                    fx: TransitionKind::None,
+                },
                 crossterm::event::KeyCode::Char('s') => ScreenCmd::Switch {
                     to: Box::new(Probe {
                         name: "WORLD",
@@ -591,6 +612,26 @@ mod tests {
         }
         assert!(text(&t).contains("WORLD"));
         assert!(!runner.frame(&mut t, &[key('q')]).unwrap());
+    }
+
+    #[test]
+    fn replace_swaps_the_top_and_never_pops_the_last_screen() {
+        let base = Probe {
+            name: "BASE",
+            updates: Rc::new(Cell::new(0)),
+        };
+        let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let mut runner = Runner::new(Box::new(base), AppState::new());
+        // With one screen, a replace only pushes: the base stays underneath.
+        assert!(runner.frame(&mut t, &[key('r')]).unwrap());
+        assert_eq!(runner.depth(), 2);
+        assert!(text(&t).contains("SWAP"));
+        // With two, it swaps the top: the height stays two.
+        assert!(runner.frame(&mut t, &[key('r')]).unwrap());
+        assert_eq!(runner.depth(), 2);
+        assert!(runner.frame(&mut t, &[key('o')]).unwrap());
+        assert_eq!(runner.depth(), 1);
+        assert!(text(&t).contains("BASE"));
     }
 
     #[test]

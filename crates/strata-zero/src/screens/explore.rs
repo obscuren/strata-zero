@@ -745,6 +745,47 @@ impl MapScreen {
         } else if player.terminal_in_reach(city, st.home.as_ref()).is_some() {
             choices.push(Choice::new('j', "jack in", Pick::World(WorldAct::JackIn)));
         }
+        // A locked flat's door beside you: its keypad.
+        if let Place::Floor { building, level } = place
+            && let Some((_, floor)) = st.interiors.floor(building, level)
+        {
+            let now = st.net.now(st);
+            let map_area = self.last_map.get();
+            let origin = self.cam.origin(map_area.width, map_area.height);
+            for d in pos.neighbors4() {
+                let Some(r) = floor.door_of(d).filter(|r| {
+                    r.private && r.kind == citygen::RoomKind::Flat && !r.rect.contains(pos)
+                }) else {
+                    continue;
+                };
+                let Some(key) = letters.next() else { break };
+                let text = match st
+                    .journal
+                    .keypad_locked_until(building, level, r.number, now)
+                {
+                    Some(until) => format!(
+                        "interact · keypad, locked {}m",
+                        until.saturating_sub(now).max(1)
+                    ),
+                    None => format!(
+                        "interact · keypad, {}",
+                        crate::credentials::flat_label(st, building, level, r.number)
+                    ),
+                };
+                let anchor =
+                    tile_to_screen(map_area, origin, d).map(|(x, y)| (x + 2, y.saturating_sub(2)));
+                choices.push(Choice::new(
+                    key,
+                    text,
+                    Pick::Keypad {
+                        building,
+                        level,
+                        number: r.number,
+                        anchor,
+                    },
+                ));
+            }
+        }
         let (mut up, mut down) = (None, None);
         if let Some(k) = k {
             for c in city
@@ -4497,6 +4538,92 @@ mod tests {
         stand(&mut st, &mut s, place, inside);
         s.update(&mut st, &[key(dir_between(inside, door))]);
         assert_eq!(player(&st).1, door);
+    }
+
+    #[test]
+    fn space_beside_a_locked_flat_offers_the_keypad_and_the_code_opens_the_door() {
+        let mut st = state8();
+        seed_world(&mut st);
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let (b, level, number, door, outside, _h, name) = a_flat(&mut st);
+        let place = Place::Floor { building: b, level };
+        stand(&mut st, &mut s, place, outside);
+        let ScreenCmd::Push { to: mut p, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens the popup")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*p, &st, 120, 40);
+        assert!(
+            text.contains(&format!("interact · keypad, {name}'s flat {number}")),
+            "{text}"
+        );
+        let row = text
+            .lines()
+            .find(|l| l.contains("interact · keypad"))
+            .unwrap();
+        let letter = row.chars().find(|c| c.is_ascii_alphabetic()).unwrap();
+        let ScreenCmd::Replace { to: mut pad, .. } =
+            p.update(&mut st, &[key(KeyCode::Char(letter))])
+        else {
+            panic!("the row replaces the popup with the keypad")
+        };
+        let code = citygen::rng::door_code(st.city.as_ref().unwrap().seed, b, level, number);
+        let keys: Vec<_> = format!("{code:04}")
+            .chars()
+            .map(|c| key(KeyCode::Char(c)))
+            .chain(std::iter::once(key(KeyCode::Char('v'))))
+            .collect();
+        pad.update(&mut st, &keys);
+        assert!(draw_screen(&*pad, &st, 120, 40).contains("OPEN"));
+        s.update(&mut st, &[key(dir_between(outside, door))]);
+        assert_eq!(player(&st).1, door);
+        assert!(
+            last(&st).is_some_and(|l| l.contains("you key in")),
+            "{:?}",
+            last(&st)
+        );
+        // Inside the room, Space offers no keypad.
+        let inside = {
+            let (_, floor) = st.interiors.floor(b, level).unwrap();
+            let r = floor.door_of(door).unwrap();
+            door.neighbors4()
+                .find(|n| r.rect.contains(*n) && floor.tiles[*n].is_walkable())
+                .unwrap()
+        };
+        stand(&mut st, &mut s, place, inside);
+        let ScreenCmd::Push { to: p2, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))]) else {
+            panic!()
+        };
+        assert!(!draw_screen(&*p2, &st, 120, 40).contains("keypad"));
+    }
+
+    #[test]
+    fn your_own_door_has_no_keypad() {
+        let mut st = state_home();
+        let mut s = MapScreen::walking(&mut st);
+        let h = st.home.unwrap().home;
+        let outside = {
+            let (_, floor) = st.interiors.floor(h.building, h.level).unwrap();
+            h.door
+                .neighbors4()
+                .find(|n| !h.rect.contains(*n) && floor.tiles[*n].is_walkable())
+                .unwrap()
+        };
+        stand(
+            &mut st,
+            &mut s,
+            Place::Floor {
+                building: h.building,
+                level: h.level,
+            },
+            outside,
+        );
+        let ScreenCmd::Push { to: p, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))]) else {
+            panic!()
+        };
+        assert!(!draw_screen(&*p, &st, 120, 40).contains("keypad"));
     }
 
     #[test]
