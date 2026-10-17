@@ -69,6 +69,8 @@ fn land(st: &mut AppState, place: Place, pos: Pos) {
 
 /// Through a building's gate on the Net, onto the entry inside its construct.
 pub fn enter_construct(st: &mut AppState, b: BuildingId) -> Result<String, String> {
+    // The first beat falls a full beat after the gate.
+    st.net.beat = st.clock_tick();
     let now = st.net.now(st);
     if st.net.alert(b, now) {
         let city = st.city.as_ref().ok_or("no city")?;

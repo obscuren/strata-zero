@@ -1133,16 +1133,19 @@ impl MapScreen {
         let before = st.player.as_ref().map(|p| (p.place, p.pos));
         let cmd = self.handle_walk_inner(st, k);
         let after = st.player.as_ref().map(|p| (p.place, p.pos));
-        // A turn in the Net: a wait steps the program in flight, a move aborts it, and
-        // either lets awake ICE beside you have its say.
+        // In the Net a move aborts the run in flight; the wait key hurries the next
+        // beat, which is when the run rolls and the ICE moves.
         if after != before && st.net.run.take().is_some() {
             st.say("run aborted");
         }
-        if k.code == KeyCode::Char('.') {
-            crate::net::step_run(st);
-        }
-        if k.code == KeyCode::Char('.') || after != before {
-            crate::net::ice_turn(st);
+        if k.code == KeyCode::Char('.')
+            && st
+                .player
+                .as_ref()
+                .is_some_and(|p| matches!(p.place, Place::Construct(_)))
+        {
+            st.net.beat = st.clock_tick();
+            crate::net::beat(st);
         }
         if st.player.as_ref().map(|p| p.place) != before.map(|b| b.0) {
             self.follow_player(st);
@@ -1401,6 +1404,15 @@ impl Screen for MapScreen {
             _ => None,
         };
         st.net.minute(now, inside, &mut st.constructs);
+        // The beat of a calm construct: one per frame at most, so a long menu is
+        // never a burst of rolls.
+        if self.mode == Mode::Walk
+            && inside.is_some()
+            && st.clock_tick() >= st.net.beat + crate::net::BEAT_TICKS
+        {
+            st.net.beat = st.clock_tick();
+            crate::net::beat(st);
+        }
         self.refresh_placement(st);
         ScreenCmd::Stay
     }
@@ -5136,6 +5148,15 @@ mod tests {
         }
     }
 
+    fn on_the_grid(st: &mut AppState, s: &mut MapScreen) -> citygen::BuildingId {
+        let b = in_construct(st, s);
+        let city = st.city.clone().unwrap();
+        let gate = crate::constructs::city_gate(&city, b).unwrap();
+        st.player.as_mut().unwrap().body = Some((Place::Stratum(StratumKind::Street), gate));
+        stand(st, s, Place::Stratum(StratumKind::Net), gate);
+        b
+    }
+
     fn lock_run(st: &mut AppState, s: &mut MapScreen) -> (citygen::BuildingId, citygen::NodeId) {
         let b = in_construct(st, s);
         let (lock, lock_pos) = node_of(st, b, NodeKind::DoorLock);
@@ -5773,5 +5794,103 @@ mod tests {
         for k in ["space", "enter", "tab", "v ", "m ", ". "] {
             assert!(text.contains(k), "{k:?} missing: {text}");
         }
+    }
+
+    #[test]
+    fn a_calm_construct_rolls_the_run_on_the_beat_once_per_frame() {
+        use crate::net::BEAT_TICKS;
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        lock_run(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        assert_eq!(last(&st), Some("crack starts · 3 turns"));
+        s.update(&mut st, &[]);
+        assert_eq!(last(&st), Some("crack starts · 3 turns"), "no beat yet");
+        st.tick += BEAT_TICKS;
+        s.update(&mut st, &[]);
+        assert_eq!(last(&st), Some("crack 1/3"), "the beat rolls once");
+        // A long gap (a menu was up) is still one beat, never a burst.
+        st.tick += BEAT_TICKS * 3;
+        s.update(&mut st, &[]);
+        assert_eq!(last(&st), Some("crack 2/3"));
+        assert_eq!(st.net.run.as_ref().map(|r| r.done), Some(2));
+    }
+
+    #[test]
+    fn asleep_ice_patrols_on_the_beat_and_not_when_you_move() {
+        use crate::net::BEAT_TICKS;
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let hide = room_tile(&st, b);
+        stand(&mut st, &mut s, Place::Construct(b), hide);
+        let k = st.constructs.get(b).unwrap().clone();
+        st.net.ice_of(&k);
+        for i in st.net.ice.get_mut(&b).unwrap() {
+            i.mode = crate::net::IceMode::Asleep;
+        }
+        let before = st.constructs.get(b).unwrap().guards[0].pos;
+        // A step inside the room gives the ICE no turn.
+        let step = hide
+            .neighbors4()
+            .find(|p| k.tiles.get(*p).is_some_and(|t| t.is_walkable()) && k.node_at(*p).is_none())
+            .expect("room to step in");
+        s.update(&mut st, &[key(dir_between(hide, step))]);
+        assert_eq!(player(&st).1, step);
+        assert_eq!(
+            st.constructs.get(b).unwrap().guards[0].pos,
+            before,
+            "a move is not a turn"
+        );
+        // The beat moves it along its beat.
+        st.tick += BEAT_TICKS;
+        s.update(&mut st, &[]);
+        assert_ne!(
+            st.constructs.get(b).unwrap().guards[0].pos,
+            before,
+            "a beat is a turn"
+        );
+    }
+
+    #[test]
+    fn nothing_beats_on_the_grid_and_the_wait_key_hurries_the_beat() {
+        use crate::net::BEAT_TICKS;
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = on_the_grid(&mut st, &mut s);
+        let k = st.constructs.get(b).unwrap().clone();
+        st.net.ice_of(&k);
+        let before = st.constructs.get(b).unwrap().guards[0].pos;
+        let beat = st.net.beat;
+        st.tick += BEAT_TICKS * 2;
+        s.update(&mut st, &[]);
+        assert_eq!(st.constructs.get(b).unwrap().guards[0].pos, before);
+        assert_eq!(st.net.beat, beat, "no beat outside a construct");
+        // Inside, the wait key is a beat now.
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        lock_run(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(last(&st), Some("crack 1/3"));
+        assert_eq!(st.net.beat, st.clock_tick(), "the beat phase restarts");
+    }
+
+    #[test]
+    fn the_beat_bar_fills_toward_the_next_roll() {
+        use crate::net::{BEAT_TICKS, beat_bar};
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        lock_run(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(beat_bar(&st, 8), "░░░░░░░░");
+        st.tick += BEAT_TICKS / 2;
+        assert_eq!(beat_bar(&st, 8), "▓▓▓▓░░░░");
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        let text = draw_screen(&s, &st, 140, 40);
+        assert!(
+            text.contains("RUN  crack · door lock  ▱▱▱ 0/3 · 40%   ▓▓▓▓░░░░  next roll"),
+            "{text}"
+        );
     }
 }

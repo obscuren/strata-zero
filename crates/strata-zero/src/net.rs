@@ -34,6 +34,8 @@ pub const FAILSAFE_COOLING: u64 = 30;
 pub const MASK_TURNS: u8 = 6;
 /// How far from a gate the footer still reads that construct's trace on the grid.
 pub const TRACE_REACH: i32 = 12;
+/// Ticks between beats in a calm construct: the run rolls, asleep ICE patrols.
+pub const BEAT_TICKS: u64 = 45;
 /// Minutes the deck cools after the failsafe pulls out a runner in the deep end.
 pub const DEEP_END_COOLING: u64 = 10;
 /// Heat a ping makes inside a construct.
@@ -84,6 +86,8 @@ pub struct NetState {
     pub cooling_until: Option<u64>,
     /// The program in flight.
     pub run: Option<Run>,
+    /// The tick of the last beat in a calm construct.
+    pub beat: u64,
     last_minute: u64,
     /// Every roll comes out this way, for tests.
     #[cfg(test)]
@@ -105,6 +109,7 @@ impl Default for NetState {
             backdoors: BTreeSet::new(),
             cooling_until: None,
             run: None,
+            beat: 0,
             last_minute: 0,
             #[cfg(test)]
             force_roll: None,
@@ -1018,7 +1023,21 @@ pub fn trace_bar(heat: u8) -> String {
     format!("{}{}", "▰".repeat(filled), "▱".repeat(10 - filled))
 }
 
-/// The footer's run line: `RUN  crack · door lock  ▰▰▱ 2/3 · 40%`.
+/// One beat of a calm construct: the run in flight rolls once, then every piece of
+/// ICE looks and takes one step or one hit.
+pub fn beat(st: &mut AppState) {
+    step_run(st);
+    ice_turn(st);
+}
+
+/// `▓▓▓▓░░░░`: how far the clock is toward the next beat.
+pub fn beat_bar(st: &AppState, cells: usize) -> String {
+    let phase = st.clock_tick().saturating_sub(st.net.beat).min(BEAT_TICKS);
+    let filled = ((phase * cells as u64 + BEAT_TICKS / 2) / BEAT_TICKS) as usize;
+    format!("{}{}", "▓".repeat(filled), "░".repeat(cells - filled))
+}
+
+/// The footer's run line: `RUN  crack · door lock  ▰▰▱ 2/3 · 40%   ▓▓▓▓░░░░  next roll`.
 pub fn run_readout(st: &AppState, b: BuildingId, run: &Run) -> Option<String> {
     let city = st.city.as_ref()?;
     let spec = st.content.item(&run.program)?.program?;
@@ -1043,12 +1062,13 @@ pub fn run_readout(st: &AppState, b: BuildingId, run: &Run) -> Option<String> {
         )
     };
     Some(format!(
-        "RUN  {} · {target}  {}{} {}/{} · {pct}%",
+        "RUN  {} · {target}  {}{} {}/{} · {pct}%   {}  next roll",
         spec.op.label(),
         "▰".repeat(run.done as usize),
         "▱".repeat(run.work.saturating_sub(run.done) as usize),
         run.done,
-        run.work
+        run.work,
+        beat_bar(st, 8)
     ))
 }
 
