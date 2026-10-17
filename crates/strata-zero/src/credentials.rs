@@ -6,7 +6,7 @@ use crate::app::AppState;
 use citygen::{BuildingId, Place, Role};
 use game::{Item, ItemId, ItemKind};
 use sim::HouseholdId;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The player's own front-door card.
 pub const HOME_KEYCARD: &str = "keycard:home";
@@ -268,6 +268,137 @@ pub fn copy_codes(st: &mut AppState, b: BuildingId, now: u64) -> Option<usize> {
     Some(new)
 }
 
+/// `day N HH:MM` for a game minute.
+pub fn stamp(minute: u64) -> String {
+    let tick = minute * sim::TICKS_PER_MINUTE;
+    let (h, m) = crate::ui::hud::clock_at(tick);
+    format!("day {} {h:02}:{m:02}", crate::ui::hud::day_at(tick))
+}
+
+/// What a journal line is about.
+#[derive(Clone, Debug, PartialEq)]
+pub enum EntryKind {
+    Code(Code),
+    Card(ItemId),
+    Backdoor,
+}
+
+/// One journal line.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Entry {
+    pub building: BuildingId,
+    pub kind: EntryKind,
+    /// One line, names in backticks.
+    pub text: String,
+    /// The game minute it dates from; a card has none.
+    pub at: Option<u64>,
+}
+
+fn owner_name(st: &AppState, b: BuildingId, level: i32, number: u16) -> Option<String> {
+    let owner = st.interiors.homes_of(b)?.owner_of(level, number)?;
+    Some(st.world.as_ref()?.people()[owner.0 as usize].name.clone())
+}
+
+fn whose_flat(st: &AppState, b: BuildingId, level: i32, number: u16) -> String {
+    owner_name(st, b, level, number)
+        .map(|n| format!("`{n}`'s flat"))
+        .unwrap_or_else(|| "a flat".to_string())
+}
+
+/// The journal, grouped per building: (building, header, entries). Codes first,
+/// then cards, then the backdoor; buildings with a dated entry first, newest first,
+/// then those known only by a card.
+pub fn entries(st: &AppState) -> Vec<(BuildingId, String, Vec<Entry>)> {
+    let mut by: BTreeMap<BuildingId, Vec<Entry>> = BTreeMap::new();
+    for c in st.journal.codes() {
+        let whose = whose_flat(st, c.building, c.level, c.number);
+        let from = match c.source {
+            Source::ServerCopy => format!("copied off the server, {}", stamp(c.at)),
+            Source::Home => "your own door".to_string(),
+        };
+        by.entry(c.building).or_default().push(Entry {
+            building: c.building,
+            kind: EntryKind::Code(c.clone()),
+            text: format!(
+                "door code {:04} · {whose} `{}`, level {} · {from}",
+                c.code, c.number, c.level
+            ),
+            at: Some(c.at),
+        });
+    }
+    for s in &st.character.inventory {
+        if s.item.0 == HOME_KEYCARD {
+            if let Some(rig) = st.home {
+                let h = rig.home;
+                by.entry(h.building).or_default().push(Entry {
+                    building: h.building,
+                    kind: EntryKind::Card(s.item.clone()),
+                    text: format!(
+                        "keycard · your flat `{}`, level {} · in your pack",
+                        h.number, h.level
+                    ),
+                    at: None,
+                });
+            }
+            continue;
+        }
+        let Some((b, h)) = parse_keycard(&s.item) else {
+            continue;
+        };
+        let Some((level, number)) = st.interiors.homes_of(b).and_then(|x| x.flat_of(h)) else {
+            continue;
+        };
+        let whose = whose_flat(st, b, level, number);
+        by.entry(b).or_default().push(Entry {
+            building: b,
+            kind: EntryKind::Card(s.item.clone()),
+            text: format!("keycard · {whose} `{number}`, level {level} · in your pack"),
+            at: None,
+        });
+    }
+    for b in &st.net.backdoors {
+        let at = st
+            .net
+            .hacks
+            .iter()
+            .find(|h| h.building == *b && h.op == game::Op::Backdoor)
+            .map(|h| h.at);
+        let name = crate::net::building_name(st, *b);
+        let when = at
+            .map(|a| format!(" · planted {}", stamp(a)))
+            .unwrap_or_default();
+        by.entry(*b).or_default().push(Entry {
+            building: *b,
+            kind: EntryKind::Backdoor,
+            text: format!("backdoor · `{name}`'s gate is yours{when}"),
+            at,
+        });
+    }
+    let district = |b: BuildingId| -> String {
+        st.city
+            .as_ref()
+            .and_then(|c| {
+                c.building_opt(b)
+                    .map(|x| c.district(x.district).name.clone())
+            })
+            .unwrap_or_default()
+    };
+    let mut groups: Vec<(BuildingId, String, Vec<Entry>)> = by
+        .into_iter()
+        .map(|(b, es)| {
+            let name = crate::net::building_name(st, b).to_uppercase();
+            (b, format!("{name} · {}", district(b)), es)
+        })
+        .collect();
+    groups.sort_by_key(|(b, _, es)| {
+        (
+            std::cmp::Reverse(es.iter().filter_map(|e| e.at).max()),
+            b.index(),
+        )
+    });
+    groups
+}
+
 /// Drops every keycard of a previous city from the catalogue.
 pub fn purge(content: &mut game::Content) {
     content.items.retain(|i| !i.id.0.starts_with("keycard:"));
@@ -513,5 +644,81 @@ mod tests {
             .unwrap()
             .id;
         assert_eq!(copy_codes(&mut st, office, 9), None);
+    }
+
+    #[test]
+    fn journal_entries_group_by_building_and_say_whose() {
+        let (mut st, b) = state();
+        copy_codes(&mut st, b, 130).unwrap();
+        let homes = st.interiors.homes_of(b).unwrap().clone();
+        let (h, (level, number)) = homes.households().next().unwrap();
+        st.character.give(keycard_id(b, h), 1);
+        let now = st.net.now(&st);
+        let server = st
+            .city
+            .as_ref()
+            .unwrap()
+            .net
+            .nodes
+            .iter()
+            .find(|n| n.building == Some(b) && n.kind == citygen::NodeKind::Server)
+            .map(|n| n.id)
+            .expect("a server");
+        st.net.land(
+            b,
+            game::HackTarget::Node(server),
+            game::Target::Node(citygen::NodeKind::Server),
+            game::Op::Backdoor,
+            now,
+        );
+        let groups = entries(&st);
+        assert_eq!(groups.len(), 1);
+        let (gb, header, es) = &groups[0];
+        assert_eq!(*gb, b);
+        let name = crate::net::building_name(&st, b);
+        assert!(header.starts_with(&name.to_uppercase()), "{header}");
+        assert!(header.contains(" · "), "{header}");
+        let owner = st.world.as_ref().unwrap().people()
+            [homes.owner_of(level, number).unwrap().0 as usize]
+            .name
+            .clone();
+        let code = es
+            .iter()
+            .find(|e| matches!(&e.kind, EntryKind::Code(c) if c.number == number))
+            .unwrap();
+        assert!(code.text.starts_with("door code "), "{}", code.text);
+        assert!(
+            code.text
+                .contains(&format!("`{owner}`'s flat `{number}`, level {level}")),
+            "{}",
+            code.text
+        );
+        assert!(
+            code.text.ends_with("copied off the server, day 2 00:10"),
+            "{}",
+            code.text
+        );
+        let card = es
+            .iter()
+            .find(|e| matches!(e.kind, EntryKind::Card(_)))
+            .unwrap();
+        assert!(
+            card.text.starts_with("keycard · ") && card.text.ends_with("in your pack"),
+            "{}",
+            card.text
+        );
+        let door = es
+            .iter()
+            .find(|e| matches!(e.kind, EntryKind::Backdoor))
+            .unwrap();
+        assert!(
+            door.text.starts_with(&format!(
+                "backdoor · `{name}`'s gate is yours · planted day"
+            )),
+            "{}",
+            door.text
+        );
+        assert_eq!(stamp(0), "day 1 22:00");
+        assert_eq!(stamp(120), "day 2 00:00");
     }
 }

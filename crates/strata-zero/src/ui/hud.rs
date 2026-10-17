@@ -28,6 +28,11 @@ pub fn clock_at(tick: u64) -> (u8, u8) {
     ((m / 60) as u8, (m % 60) as u8)
 }
 
+/// The day at `tick`, counting from day 1 at tick 0.
+pub fn day_at(tick: u64) -> u32 {
+    ((START_MINUTE + tick / TICKS_PER_MINUTE) / (24 * 60)) as u32 + 1
+}
+
 /// A moon from 18:00 to 05:59, a sun otherwise.
 pub fn clock_glyph(hour: u8) -> char {
     if hour >= 18 || hour <= 5 {

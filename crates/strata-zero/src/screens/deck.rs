@@ -117,6 +117,8 @@ pub(crate) enum Detail {
     Program(ItemId),
     /// The deck's failsafe toggle.
     Failsafe,
+    /// Index into the journal's flat list of entries.
+    Journal(usize),
 }
 
 /// One list row and what the detail pane shows for it (`None` = a header).
@@ -124,6 +126,8 @@ pub(crate) struct Row {
     pub text: String,
     pub tone: Tone,
     pub detail: Option<Detail>,
+    /// Styled text for the list, when the row lights parts of itself.
+    pub spans: Option<Line<'static>>,
 }
 
 pub struct Deck {
@@ -419,6 +423,7 @@ impl Deck {
             text: text.into(),
             tone: Tone::Dim,
             detail: None,
+            spans: None,
         };
         let Some((id, item)) = st
             .character
@@ -442,6 +447,7 @@ impl Deck {
             text: format!("▣ {}{slots}", item.name),
             tone: Tone::Normal,
             detail: Some(Detail::Item(id.clone())),
+            spans: None,
         }];
         rows.push(Row {
             text: if st.net.failsafe {
@@ -455,6 +461,7 @@ impl Deck {
                 Tone::Warn
             },
             detail: Some(Detail::Failsafe),
+            spans: None,
         });
         // The programs loaded, then those in the pack waiting for a slot.
         let loaded: Vec<&game::Item> = st.character.loaded_programs(&st.content).collect();
@@ -465,6 +472,7 @@ impl Deck {
                     text: format!("◆ {} · size {}", p.name, p.program.map_or(0, |s| s.size)),
                     tone: Tone::Normal,
                     detail: Some(Detail::Program(p.id.clone())),
+                    spans: None,
                 });
             }
         }
@@ -482,6 +490,7 @@ impl Deck {
                     text: format!("◇ {} · size {}", p.name, p.program.map_or(0, |s| s.size)),
                     tone: Tone::Dim,
                     detail: Some(Detail::Program(p.id.clone())),
+                    spans: None,
                 });
             }
         }
@@ -508,17 +517,110 @@ impl Deck {
                 text: format!("{icon} {}", a.name),
                 tone: Tone::Normal,
                 detail: Some(Detail::Ability(i)),
+                spans: None,
             });
         }
         rows
     }
 
-    fn journal_rows() -> Vec<Row> {
-        vec![Row {
-            text: "nothing written yet".into(),
-            tone: Tone::Dim,
-            detail: None,
-        }]
+    /// What you know and hold, by building: a dim header, then one lit line per entry.
+    fn journal_rows(st: &AppState) -> Vec<Row> {
+        let groups = crate::credentials::entries(st);
+        if groups.is_empty() {
+            return vec![Row {
+                text: "nothing known yet".into(),
+                tone: Tone::Dim,
+                detail: None,
+                spans: None,
+            }];
+        }
+        let lit = Style::default().fg(CYAN).add_modifier(Modifier::BOLD);
+        let plain = Style::default().fg(TEXT);
+        let mut rows = Vec::new();
+        let mut i = 0;
+        for (_, header, es) in groups {
+            rows.push(Row {
+                text: header,
+                tone: Tone::Dim,
+                detail: None,
+                spans: None,
+            });
+            for e in es {
+                let (text, marks) = crate::messages::parse_marks(&e.text);
+                let chars: Vec<char> = text.chars().collect();
+                let mut spans = Vec::new();
+                let mut at = 0;
+                for (a, b) in marks
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once((chars.len(), chars.len())))
+                {
+                    if at < a {
+                        spans.push(Span::styled(chars[at..a].iter().collect::<String>(), plain));
+                    }
+                    if a < b {
+                        spans.push(Span::styled(chars[a..b].iter().collect::<String>(), lit));
+                    }
+                    at = b;
+                }
+                rows.push(Row {
+                    text,
+                    tone: Tone::Normal,
+                    detail: Some(Detail::Journal(i)),
+                    spans: Some(Line::from(spans)),
+                });
+                i += 1;
+            }
+        }
+        rows
+    }
+
+    /// A journal entry's card: the building, the line, and what it points at.
+    fn journal_card(st: &AppState, i: usize) -> Vec<Line<'static>> {
+        use crate::credentials::EntryKind;
+        let all: Vec<crate::credentials::Entry> = crate::credentials::entries(st)
+            .into_iter()
+            .flat_map(|(_, _, es)| es)
+            .collect();
+        let Some(e) = all.get(i) else {
+            return vec![warn("nothing here")];
+        };
+        let name = crate::net::building_name(st, e.building);
+        let district = st
+            .city
+            .as_ref()
+            .and_then(|c| {
+                c.building_opt(e.building)
+                    .map(|b| c.district(b.district).name.clone())
+            })
+            .unwrap_or_default();
+        let mut out = vec![head(&name), dim(district)];
+        let (text, _) = crate::messages::parse_marks(&e.text);
+        out.push(plain(text));
+        match &e.kind {
+            EntryKind::Code(c) => {
+                if let Some(owner) = st
+                    .interiors
+                    .homes_of(c.building)
+                    .and_then(|h| h.owner_of(c.level, c.number))
+                    && let Some(w) = st.world.as_ref()
+                {
+                    let p = &w.people()[owner.0 as usize];
+                    out.push(plain(format!("{}, {}", p.name, p.profession)));
+                }
+                out.push(plain(format!(
+                    "flat {} on {}",
+                    c.number,
+                    FloorPlan::label(c.level)
+                )));
+                out.push(plain(format!("code {:04}", c.code)));
+            }
+            EntryKind::Card(id) => out.extend(Self::item_card(st, id)),
+            EntryKind::Backdoor => {
+                out.push(plain("reachable from any port; the alarm does not shut it"));
+            }
+        }
+        out
     }
 
     fn set_tab(&mut self, tab: Tab, st: &AppState) {
@@ -575,13 +677,14 @@ impl Deck {
                 text: "no bench. WRENCH unlocks it.".into(),
                 tone: Tone::Dim,
                 detail: None,
+                spans: None,
             }],
             Tab::Gear => Self::gear_rows(st),
             Tab::Inventory => Self::inventory_rows(st),
             Tab::Workbench => Self::workbench_rows(st),
             Tab::Cyberdeck => Self::cyberdeck_rows(st),
             Tab::Quests => Self::quest_rows(st),
-            Tab::Journal => Self::journal_rows(),
+            Tab::Journal => Self::journal_rows(st),
             Tab::Map | Tab::Talents => Vec::new(),
         }
     }
@@ -622,6 +725,7 @@ impl Deck {
                 text: format!("{} {}", if finished { "✓" } else { " " }, q.title),
                 tone: if finished { Tone::Done } else { Tone::Normal },
                 detail: Some(Detail::Quest(i)),
+                spans: None,
             };
             if finished {
                 done.push(row);
@@ -654,6 +758,7 @@ impl Deck {
                         name.unwrap_or_else(|| "— empty —".to_string())
                     ),
                     detail: Some(Detail::Slot(*slot)),
+                    spans: None,
                 }
             })
             .collect()
@@ -675,6 +780,7 @@ impl Deck {
                 text: format!("── {} ──", kind.label()),
                 tone: Tone::Dim,
                 detail: None,
+                spans: None,
             });
             for s in stacks {
                 let item = st.content.item(&s.item).expect("filtered above");
@@ -682,6 +788,7 @@ impl Deck {
                     text: format!("{} {:>2}× {}", kind_icon(kind), s.qty, item.name),
                     tone: Tone::Normal,
                     detail: Some(Detail::Item(s.item.clone())),
+                    spans: None,
                 });
             }
         }
@@ -699,6 +806,7 @@ impl Deck {
                     text: format!("{} {}", if ok { "▪" } else { "▫" }, r.name),
                     tone: if ok { Tone::Normal } else { Tone::Warn },
                     detail: Some(Detail::Recipe(i)),
+                    spans: None,
                 }
             })
             .collect()
@@ -713,6 +821,7 @@ impl Deck {
                 text: format!("points {} · sp {}", ch.stat_points, ch.sp),
                 tone: Tone::Dim,
                 detail: None,
+                spans: None,
             });
         }
         rows.extend(Stat::ALL.iter().map(|&s| {
@@ -729,6 +838,7 @@ impl Deck {
                 text: format!("{:<8} {v:>2}  {bar}{next}", s.name()),
                 tone: Tone::Normal,
                 detail: Some(Detail::Stat(s)),
+                spans: None,
             }
         }));
         rows
@@ -768,6 +878,7 @@ impl Deck {
                     (true, RowKind::Skill(id)) => Some(Detail::Skill(id)),
                     _ => None,
                 },
+                spans: None,
             })
             .collect()
     }
@@ -917,6 +1028,7 @@ impl Deck {
             },
             Some(Detail::Item(id)) => Self::item_card(st, id),
             Some(Detail::Program(id)) => Self::program_card(st, id),
+            Some(Detail::Journal(i)) => Self::journal_card(st, *i),
             Some(Detail::Failsafe) => vec![
                 head("FAILSAFE"),
                 dim(if st.net.failsafe { "on" } else { "off" }),
@@ -1429,7 +1541,12 @@ impl Screen for Deck {
                         buf[(cx, ry)].set_bg(BAR_BG);
                     }
                 }
-                if let Some(b) = board.as_ref().and_then(|b| b.get(i)) {
+                let styled = board
+                    .as_ref()
+                    .and_then(|b| b.get(i))
+                    .map(|b| &b.line)
+                    .or(row.spans.as_ref());
+                if let Some(line) = styled {
                     put(
                         buf,
                         list.x + 1,
@@ -1439,7 +1556,7 @@ impl Screen for Deck {
                         list.right(),
                     );
                     let mut x = list.x + 3;
-                    for span in &b.line.spans {
+                    for span in &line.spans {
                         let mut s = span.style;
                         if selected {
                             s = s.bg(BAR_BG).add_modifier(Modifier::BOLD);
@@ -2244,7 +2361,7 @@ mod tests {
         assert_eq!(d.tab, Tab::Journal);
         let rows = d.rows(&st);
         assert_eq!(rows.len(), 1);
-        assert!(rows[0].text.contains("nothing written yet") && rows[0].detail.is_none());
+        assert!(rows[0].text.contains("nothing known yet") && rows[0].detail.is_none());
         assert!(matches!(
             d.update(&mut st, &[key(KeyCode::Char(' '))]),
             ScreenCmd::Stay
@@ -2719,5 +2836,59 @@ mod tests {
         d.update(&mut st, &[key(KeyCode::Char(' '))]);
         assert!(st.net.failsafe);
         assert_eq!(last(&st), Some("failsafe on"));
+    }
+
+    #[test]
+    fn the_journal_tab_lists_what_you_know_with_lit_names() {
+        let mut st = state();
+        let city = st.city.take().unwrap();
+        st.enter_city(city);
+        walking(&mut st);
+        let b = {
+            let city = st.city.as_ref().unwrap();
+            let world = st.world.as_ref().unwrap();
+            city.buildings
+                .iter()
+                .find(|b| {
+                    matches!(
+                        b.kind,
+                        citygen::BuildingKind::Apartment | citygen::BuildingKind::Megablock
+                    ) && world.people().iter().any(|p| p.home == Some(b.id))
+                })
+                .unwrap()
+                .id
+        };
+        crate::credentials::copy_codes(&mut st, b, 5).unwrap();
+        let mut d = Deck::new(0);
+        d.set_tab(Tab::Journal, &st);
+        let rows = d.rows(&st);
+        assert!(rows[0].detail.is_none(), "a header first");
+        assert!(
+            rows[0]
+                .text
+                .starts_with(&crate::net::building_name(&st, b).to_uppercase()),
+            "{}",
+            rows[0].text
+        );
+        assert!(
+            rows.iter()
+                .any(|r| r.text.starts_with("door code ") && r.spans.is_some())
+        );
+        let text = draw(&d, &st, 120, 40);
+        assert!(text.contains("door code"), "{text}");
+        assert!(!text.contains('`'), "marks are stripped: {text}");
+        let lines = d.detail(&st, &rows);
+        assert!(
+            lines.iter().any(|l| l.to_string().contains("flat")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn an_empty_journal_says_so() {
+        let st = state();
+        let mut d = Deck::new(0);
+        d.set_tab(Tab::Journal, &st);
+        assert_eq!(d.rows(&st)[0].text, "nothing known yet");
     }
 }
