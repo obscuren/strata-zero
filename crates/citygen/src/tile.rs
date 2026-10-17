@@ -146,6 +146,8 @@ pub enum Feature {
     Helipad,
     Pipe,
     Cable,
+    /// A shopfront awning over the pavement; walkable, see-through.
+    Awning,
     /// A Net node standing on this cyberspace tile.
     Node(NodeKind),
     /// A piece of furniture on an interior floor; nobody walks through it.
@@ -204,6 +206,9 @@ pub enum Furniture {
     Locker,
     Couch,
     Shower,
+    Bench,
+    Vending,
+    Bike,
 }
 
 impl Furniture {
@@ -220,11 +225,14 @@ impl Furniture {
             Furniture::Locker => "lockers",
             Furniture::Couch => "couch",
             Furniture::Shower => "shower",
+            Furniture::Bench => "bench",
+            Furniture::Vending => "vending machine",
+            Furniture::Bike => "bike",
         }
     }
 }
 
-pub const ALL_FEATURES: [Feature; 18] = [
+pub const ALL_FEATURES: [Feature; 19] = [
     Feature::Neon(Hue::Cyan),
     Feature::HoloAd,
     Feature::Lamp,
@@ -240,6 +248,7 @@ pub const ALL_FEATURES: [Feature; 18] = [
     Feature::Helipad,
     Feature::Pipe,
     Feature::Cable,
+    Feature::Awning,
     Feature::Node(NodeKind::Server),
     Feature::Furniture(Furniture::Desk),
     Feature::Ice(IceGrade::White),
@@ -362,7 +371,7 @@ mod tests {
         assert!(Tile::new(Terrain::Plaza).is_outdoor_ground());
         assert!(Tile::new(Terrain::Door).is_building_part());
         assert_eq!(ALL_TERRAIN.len(), 28);
-        assert_eq!(ALL_FEATURES.len(), 18);
+        assert_eq!(ALL_FEATURES.len(), 19);
         assert!(!Tile::new(Terrain::Mass).is_walkable());
         assert!(Tile::new(Terrain::Mass).blocks_sight());
         assert!(Tile::new(Terrain::Mass).is_building_part());
@@ -387,6 +396,19 @@ mod tests {
     }
 
     #[test]
+    fn street_pieces_walk_and_block_as_intended() {
+        let mut t = Tile::new(Terrain::Plaza);
+        t.feature = Some(Feature::Awning);
+        assert!(t.is_walkable() && !t.blocks_sight());
+        for f in [Furniture::Bench, Furniture::Vending, Furniture::Bike] {
+            t.feature = Some(Feature::Furniture(f));
+            assert!(!t.is_walkable());
+        }
+        assert_eq!(Furniture::Vending.label(), "vending machine");
+        assert!(ALL_FEATURES.contains(&Feature::Awning));
+    }
+
+    #[test]
     fn net_tiles_walk_and_block_like_the_spec_says() {
         assert!(Tile::new(Terrain::NetGrid).is_walkable());
         assert!(Tile::new(Terrain::NetLane).is_walkable());
@@ -402,7 +424,7 @@ mod tests {
         assert_eq!(Terrain::Road.label(), "road");
         assert!(Terrain::NetLane.is_net() && !Terrain::Road.is_net());
         assert_eq!(ALL_TERRAIN.len(), 28);
-        assert_eq!(ALL_FEATURES.len(), 18);
+        assert_eq!(ALL_FEATURES.len(), 19);
         assert_eq!(crate::world::StratumKind::ALL.len(), 5);
         assert_eq!(
             crate::world::StratumKind::ALL[4],
