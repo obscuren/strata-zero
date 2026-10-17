@@ -268,6 +268,39 @@ pub fn copy_codes(st: &mut AppState, b: BuildingId, now: u64) -> Option<usize> {
     Some(new)
 }
 
+/// The player's own door: its code in the journal and its card in the pack, once.
+pub fn move_in(st: &mut AppState) {
+    let Some(rig) = st.home else {
+        return;
+    };
+    let Some(seed) = st.city.as_ref().map(|c| c.seed) else {
+        return;
+    };
+    let h = rig.home;
+    let now = st.net.now(st);
+    st.journal.learn(Code {
+        building: h.building,
+        level: h.level,
+        number: h.number,
+        household: None,
+        code: citygen::rng::door_code(seed, h.building, h.level, h.number),
+        source: Source::Home,
+        at: now,
+    });
+    let id = ItemId::new(HOME_KEYCARD);
+    if st.content.item(&id).is_none() {
+        let building = crate::net::building_name(st, h.building);
+        st.content.items.push(card(
+            id.clone(),
+            format!("Keycard · your flat, {building} {}", h.number),
+            format!("Your own door, {} at {building}. Do not lose it.", h.number),
+        ));
+    }
+    if st.character.count(&id) == 0 {
+        st.character.give(id, 1);
+    }
+}
+
 /// `day N HH:MM` for a game minute.
 pub fn stamp(minute: u64) -> String {
     let tick = minute * sim::TICKS_PER_MINUTE;

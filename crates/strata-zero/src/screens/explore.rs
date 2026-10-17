@@ -574,6 +574,7 @@ impl MapScreen {
             }));
             if let Some(rig) = st.home {
                 crate::credentials::prepare(st, rig.home.building);
+                crate::credentials::move_in(st);
             }
         }
         if let Some(p) = &st.player {
@@ -3644,6 +3645,44 @@ mod tests {
             .unwrap(),
         );
         st
+    }
+
+    #[test]
+    fn a_new_game_starts_with_your_own_card_and_code() {
+        let mut st = state_home();
+        let _ = MapScreen::walking(&mut st);
+        let h = st.home.unwrap().home;
+        let code = st
+            .journal
+            .code_for(h.building, h.level, h.number)
+            .expect("your own code");
+        assert_eq!(code.source, crate::credentials::Source::Home);
+        assert_eq!(
+            code.code,
+            citygen::rng::door_code(
+                st.city.as_ref().unwrap().seed,
+                h.building,
+                h.level,
+                h.number
+            )
+        );
+        let home_card = game::ItemId::new(crate::credentials::HOME_KEYCARD);
+        assert_eq!(st.character.count(&home_card), 1);
+        assert!(
+            st.content
+                .item(&home_card)
+                .unwrap()
+                .name
+                .starts_with("Keycard · your flat")
+        );
+        // Waking again (a load) does not stack a second card.
+        st.player = None;
+        let _ = MapScreen::walking(&mut st);
+        assert_eq!(st.character.count(&home_card), 1);
+        let groups = crate::credentials::entries(&st);
+        assert!(groups.iter().any(|(b, _, es)| {
+            *b == h.building && es.iter().any(|e| e.text.contains("your own door"))
+        }));
     }
 
     #[test]
