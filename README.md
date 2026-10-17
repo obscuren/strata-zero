@@ -55,6 +55,17 @@ flat's door has a keypad: stand beside it, press `space` and interact to key a
 code by hand; the worn keys show which digits it uses, a right code is written
 to the journal, and three wrong ones lock the pad for half an hour.
 
+Every terminal has a second way in. Beside a street terminal, `space` offers
+`access terminal`: a typed session in a beige CRT over the map. `SCAN` lists the
+district's buildings with their security and ICE, `CONNECT` picks one, `WHO`
+says who is inside, `PLAN` loads its ground floor into your map, `LOG` shows
+what has been done to it. Hold one of the building's keycards or codes and you
+are USER there: `DOOR UNLOCK`, `LIFT` and `CAM LOOP` work the building for an
+hour, the same way a Net spoof does. A backdoor on its server makes you ADMIN,
+and `ALARM OFF` ends an alert. Your own rig runs the same shell at home with
+`MAIL` and `JOURNAL`; the first mail is a fixer's favour, a neighbour's door
+code and a shard to fetch from the flat.
+
 The same graph is cyberspace. Jack in at any street terminal, or at the rig in
 your flat (walk up to it and press `enter`): your body stays at the port and you
 emerge in the Net at the same spot, in a wireframe world laid out one to one

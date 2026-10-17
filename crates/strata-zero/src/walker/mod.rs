@@ -229,6 +229,7 @@ impl Player {
     }
 
     /// What has been seen of another place, if anything.
+    #[cfg(test)]
     pub fn vis_at(&self, place: Place) -> Option<&Grid<Visibility>> {
         self.memory.get(&place)
     }

@@ -1,7 +1,8 @@
 # The Access Terminal: design
 
-Date: 2026-10-17. Status: approved in chat by Jeffrey (one screen, two sessions;
-tiers from what you hold; the first mail is a neighbour's code and a pickup).
+Date: 2026-10-17. Status: built on `feat/access-terminal` (one screen, two
+sessions; tiers from what you hold; the first mail is a neighbour's code and a
+pickup). HELP lists every verb and tags the ones above your tier.
 Builds on: `2026-10-17-credentials-journal-design.md` (cards, codes, the
 journal), `2026-10-17-keypads-design.md` (the device kit, `ScreenCmd::Replace`),
 `2026-10-15-constructs-and-programs-design.md` (hacks the Net state records),

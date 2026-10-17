@@ -91,7 +91,6 @@ impl Homes {
     }
 
     /// The flats somebody lives in, in level-then-number order.
-    #[cfg(test)]
     pub fn flats(&self) -> impl Iterator<Item = (i32, u16)> + '_ {
         self.residents.keys().copied()
     }
