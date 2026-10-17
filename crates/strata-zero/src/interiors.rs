@@ -8,7 +8,8 @@ use citygen::{
     BuildingId, City, Exit, Floor, FloorPlan, Place, Pos, Role, RoomKind, StratumKind, Terrain,
     generate_floor,
 };
-use sim::{OccupantRole, PersonId, World};
+use sim::{HouseholdId, OccupantRole, PersonId, World};
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
@@ -17,6 +18,71 @@ use std::collections::hash_map::Entry;
 pub struct Interiors {
     plans: HashMap<BuildingId, FloorPlan>,
     floors: HashMap<(BuildingId, i32), Floor>,
+    /// Who lives in which flat, per residential building.
+    homes: HashMap<BuildingId, Homes>,
+}
+
+/// Which household lives in which flat of one building: stable, in or out.
+#[derive(Clone, Debug, Default)]
+pub struct Homes {
+    by_household: BTreeMap<HouseholdId, (i32, u16)>,
+    /// The households in a flat; the first is the owner.
+    residents: BTreeMap<(i32, u16), Vec<HouseholdId>>,
+    /// The first member of each household, for naming the owner.
+    heads: BTreeMap<HouseholdId, PersonId>,
+}
+
+impl Homes {
+    /// Household `i` takes flat `i mod flats` of the given order; flats are shared
+    /// only once every flat has a household.
+    fn new(b: BuildingId, flats: Vec<(i32, u16)>, world: &World) -> Homes {
+        let mut homes = Homes::default();
+        if flats.is_empty() {
+            return homes;
+        }
+        let mut households: BTreeMap<HouseholdId, PersonId> = BTreeMap::new();
+        for p in world.people().iter().filter(|p| p.home == Some(b)) {
+            households.entry(p.household).or_insert(p.id);
+        }
+        for (i, (h, head)) in households.into_iter().enumerate() {
+            let flat = flats[i % flats.len()];
+            homes.by_household.insert(h, flat);
+            homes.residents.entry(flat).or_default().push(h);
+            homes.heads.insert(h, head);
+        }
+        homes
+    }
+
+    /// The flat (level, number) a household lives in.
+    pub fn flat_of(&self, household: HouseholdId) -> Option<(i32, u16)> {
+        self.by_household.get(&household).copied()
+    }
+
+    /// The household that owns a flat.
+    pub fn household_of(&self, level: i32, number: u16) -> Option<HouseholdId> {
+        self.residents
+            .get(&(level, number))
+            .and_then(|v| v.first().copied())
+    }
+
+    /// The person named at a flat's door.
+    pub fn owner_of(&self, level: i32, number: u16) -> Option<PersonId> {
+        self.household_of(level, number)
+            .and_then(|h| self.heads.get(&h).copied())
+    }
+
+    pub fn households(&self) -> impl Iterator<Item = (HouseholdId, (i32, u16))> + '_ {
+        self.by_household.iter().map(|(h, f)| (*h, *f))
+    }
+
+    /// The flats somebody lives in, in level-then-number order.
+    pub fn flats(&self) -> impl Iterator<Item = (i32, u16)> + '_ {
+        self.residents.keys().copied()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_household.is_empty()
+    }
 }
 
 impl Interiors {
@@ -55,6 +121,57 @@ impl Interiors {
     /// A floor already generated, with its plan.
     pub fn floor(&self, b: BuildingId, level: i32) -> Option<(&FloorPlan, &Floor)> {
         Some((self.plans.get(&b)?, self.floors.get(&(b, level))?))
+    }
+
+    /// Works out who lives where in a building, once; generates its flat floors to
+    /// count the flats. True when somebody lives there.
+    pub fn ensure_homes(&mut self, city: &City, world: &World, b: BuildingId) -> bool {
+        if let Some(h) = self.homes.get(&b) {
+            return !h.is_empty();
+        }
+        let Some(plan) = self.plan(city, b).cloned() else {
+            return false;
+        };
+        let mut flats = Vec::new();
+        for level in plan.corridor_floors() {
+            if let Some(floor) = self.ensure(city, b, level) {
+                flats.extend(
+                    floor
+                        .rooms
+                        .iter()
+                        .filter(|r| r.kind == RoomKind::Flat)
+                        .map(|r| (level, r.number)),
+                );
+            }
+        }
+        // Round-robin over the levels, so neighbours spread through the building
+        // instead of filling it from one floor up.
+        flats.sort_unstable();
+        let mut by_level: Vec<Vec<(i32, u16)>> = Vec::new();
+        for f in flats {
+            match by_level.last_mut() {
+                Some(l) if l[0].0 == f.0 => l.push(f),
+                _ => by_level.push(vec![f]),
+            }
+        }
+        // The seed picks which level the round starts on.
+        if !by_level.is_empty() {
+            let turn =
+                (hash64(city.seed, 0x40E5 + b.index() as u64) % by_level.len() as u64) as usize;
+            by_level.rotate_left(turn);
+        }
+        let most = by_level.iter().map(Vec::len).max().unwrap_or(0);
+        let spread: Vec<(i32, u16)> = (0..most)
+            .flat_map(|k| by_level.iter().filter_map(move |l| l.get(k).copied()))
+            .collect();
+        let homes = Homes::new(b, spread, world);
+        let lived_in = !homes.is_empty();
+        self.homes.insert(b, homes);
+        lived_in
+    }
+
+    pub fn homes_of(&self, b: BuildingId) -> Option<&Homes> {
+        self.homes.get(&b)
     }
 
     #[cfg(test)]
@@ -281,18 +398,19 @@ fn take_station(free: &mut Vec<(Pos, Role)>, wants: &[Role]) -> Option<Pos> {
 }
 
 impl Placement {
-    pub fn new(plan: &FloorPlan, floor: &Floor, world: &World) -> Placement {
+    pub fn new(plan: &FloorPlan, floor: &Floor, world: &World, homes: &Homes) -> Placement {
         let mut free: Vec<(Pos, Role)> = floor.stations.iter().map(|s| (s.pos, s.role)).collect();
         let mut at: Vec<(Pos, PersonId)> = Vec::new();
         let mut owners = HashMap::new();
+        // Residents own their flat whether they are in or out.
+        for r in floor.rooms.iter().filter(|r| r.kind == RoomKind::Flat) {
+            if let (Some(d), Some(owner)) = (r.door, homes.owner_of(floor.level, r.number)) {
+                owners.insert(d, owner);
+            }
+        }
         let mut extras = Vec::new();
         let work_floors = plan.work_floors();
         let corridor = plan.corridor_floors();
-        let flats: Vec<_> = floor
-            .rooms
-            .iter()
-            .filter(|r| r.kind == RoomKind::Flat)
-            .collect();
         let hotel_rooms: Vec<_> = floor
             .rooms
             .iter()
@@ -353,23 +471,17 @@ impl Placement {
                         None => extras.push(o.id),
                     }
                 }
-                OccupantRole::Living | OccupantRole::Guest => {
-                    if corridor.is_empty() {
+                // Residents are behind their own door, owned above.
+                OccupantRole::Living => {}
+                OccupantRole::Guest => {
+                    if corridor.is_empty() || hotel_rooms.is_empty() {
                         continue;
                     }
                     let level = corridor[(h % corridor.len() as u64) as usize];
                     if level != floor.level {
                         continue;
                     }
-                    let rooms = if o.role == OccupantRole::Living {
-                        &flats
-                    } else {
-                        &hotel_rooms
-                    };
-                    if rooms.is_empty() {
-                        continue;
-                    }
-                    let r = rooms[(hash64(h, 1) % rooms.len() as u64) as usize];
+                    let r = hotel_rooms[(hash64(h, 1) % hotel_rooms.len() as u64) as usize];
                     if let Some(d) = r.door {
                         owners.entry(d).or_insert(o.id);
                     }
@@ -499,7 +611,7 @@ mod tests {
         let mut i = Interiors::default();
         i.ensure(&c, tower.id, 0).unwrap();
         let (plan, lobby) = i.floor(tower.id, 0).unwrap();
-        let placement = Placement::new(plan, lobby, &w);
+        let placement = Placement::new(plan, lobby, &w, &Homes::default());
         let desk = lobby
             .stations
             .iter()
@@ -516,7 +628,7 @@ mod tests {
         let top = plan.top;
         i.ensure(&c, tower.id, top).unwrap();
         let (plan, floor) = i.floor(tower.id, top).unwrap();
-        let upstairs = Placement::new(plan, floor, &w);
+        let upstairs = Placement::new(plan, floor, &w, &Homes::default());
         assert!(upstairs.people().all(|(_, who)| who != id));
     }
 
@@ -534,8 +646,10 @@ mod tests {
         let w = sim::World::seed(&c, &people, &sim::SimParams::default(), 2 * 60, 0);
         let mut i = Interiors::default();
         i.ensure(&c, home.building, home.level).unwrap();
+        i.ensure_homes(&c, &w, home.building);
+        let homes = i.homes_of(home.building).unwrap().clone();
         let (plan, floor) = i.floor(home.building, home.level).unwrap();
-        let placement = Placement::new(plan, floor, &w);
+        let placement = Placement::new(plan, floor, &w, &homes);
         let owned = floor
             .rooms
             .iter()
@@ -560,7 +674,7 @@ mod tests {
         let mut i = Interiors::default();
         i.ensure(&c, home.building, 0).unwrap();
         let (plan, plaza) = i.floor(home.building, 0).unwrap();
-        let placement = Placement::new(plan, plaza, &w);
+        let placement = Placement::new(plan, plaza, &w, &Homes::default());
         let shop = |p: Pos| {
             plaza
                 .rooms
@@ -591,5 +705,77 @@ mod tests {
                 assert_eq!(shop(*pos), Some(RoomKind::Shop), "{seen:?}");
             }
         }
+    }
+
+    fn city6() -> City {
+        Generator::run(GenParams {
+            seed: 6,
+            size: SizePreset::Custom { w: 120, h: 60 },
+            districts: 8,
+            ..Default::default()
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn every_resident_has_a_stable_flat_and_flats_are_not_shared_while_free() {
+        let c = city6();
+        let people = sim::People::load().unwrap();
+        let w = sim::World::seed(&c, &people, &sim::SimParams::default(), 22 * 60, 0);
+        let b = c
+            .buildings
+            .iter()
+            .find(|b| {
+                matches!(b.kind, BuildingKind::Apartment | BuildingKind::Megablock)
+                    && w.people().iter().any(|p| p.home == Some(b.id))
+            })
+            .expect("a residential building with residents")
+            .id;
+        let mut a = Interiors::default();
+        assert!(a.ensure_homes(&c, &w, b));
+        let mut other = Interiors::default();
+        assert!(other.ensure_homes(&c, &w, b));
+        let (ha, hc) = (a.homes_of(b).unwrap(), other.homes_of(b).unwrap());
+        let mut seen: std::collections::BTreeMap<(i32, u16), std::collections::BTreeSet<_>> =
+            std::collections::BTreeMap::new();
+        for p in w.people().iter().filter(|p| p.home == Some(b)) {
+            let flat = ha.flat_of(p.household).expect("a flat");
+            assert_eq!(Some(flat), hc.flat_of(p.household), "stable");
+            seen.entry(flat).or_default().insert(p.household);
+        }
+        let households = ha.households().count();
+        let flats = ha.flats().count();
+        assert!(flats > 0);
+        if households <= flats {
+            assert!(
+                seen.values().all(|hs| hs.len() == 1),
+                "no sharing while flats remain: {seen:?}"
+            );
+        }
+        let (level, number) = ha.flats().next().unwrap();
+        let h = ha
+            .household_of(level, number)
+            .expect("the first flat is lived in");
+        assert_eq!(
+            ha.owner_of(level, number)
+                .map(|p| w.people()[p.0 as usize].household),
+            Some(h)
+        );
+    }
+
+    #[test]
+    fn a_building_without_flats_has_empty_homes() {
+        let c = city6();
+        let people = sim::People::load().unwrap();
+        let w = sim::World::seed(&c, &people, &sim::SimParams::default(), 22 * 60, 0);
+        let b = c
+            .buildings
+            .iter()
+            .find(|b| b.kind == BuildingKind::Office)
+            .unwrap()
+            .id;
+        let mut i = Interiors::default();
+        assert!(!i.ensure_homes(&c, &w, b));
+        assert!(i.homes_of(b).is_none_or(|h| h.is_empty()));
     }
 }

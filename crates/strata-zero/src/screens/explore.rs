@@ -532,13 +532,14 @@ impl MapScreen {
         {
             return;
         }
+        let homes = st.interiors.homes_of(building).cloned().unwrap_or_default();
         let Some((plan, floor)) = st.interiors.floor(building, level) else {
             return;
         };
         self.placement = Some((
             p.place,
             minute,
-            crate::interiors::Placement::new(plan, floor, world),
+            crate::interiors::Placement::new(plan, floor, world, &homes),
         ));
     }
 
@@ -4301,12 +4302,15 @@ mod tests {
                 .id
         };
         let plan = st.interiors.plan(&city, b).unwrap().clone();
+        st.interiors
+            .ensure_homes(&city, st.world.as_ref().unwrap(), b);
+        let homes = st.interiors.homes_of(b).unwrap().clone();
         let mut found = None;
         for level in plan.corridor_floors() {
             st.interiors.ensure(&city, b, level).unwrap();
             let (plan, floor) = st.interiors.floor(b, level).unwrap();
             let placement =
-                crate::interiors::Placement::new(plan, floor, st.world.as_ref().unwrap());
+                crate::interiors::Placement::new(plan, floor, st.world.as_ref().unwrap(), &homes);
             let owned = floor.rooms.iter().filter(|r| r.private).find_map(|r| {
                 let d = r.door?;
                 let id = placement.owner_of(d)?;
