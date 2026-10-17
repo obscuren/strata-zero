@@ -48,7 +48,11 @@ const WALK: &[(&str, &str)] = &[
     ),
     (
         "space",
-        "on turns: stay put (move half over) · then runs the armed program",
+        "on turns: stay put (move half over) · runs the picked program",
+    ),
+    (
+        "1-5",
+        "jacked in: pick a program, then its target (tab) · space runs it",
     ),
     ("tab", "open the deck"),
     ("F1-F4", "panes: here · quest · map · log"),

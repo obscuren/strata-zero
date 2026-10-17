@@ -97,6 +97,17 @@ pub struct Walk {
     pub next_at: u64,
 }
 
+/// A program key pressed: the target is being picked on the map.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Targeting {
+    pub program: game::ItemId,
+    /// The strip slot it came from, for the flash.
+    pub slot: usize,
+    /// What the program may run against, nearest first: target, tile, name.
+    pub candidates: Vec<(game::HackTarget, Pos, String)>,
+    pub picked: usize,
+}
+
 pub struct MapScreen {
     pub mode: Mode,
     /// The map on screen: a stratum, or the floor the player walks.
@@ -108,6 +119,8 @@ pub struct MapScreen {
     pub aim: Option<Pos>,
     /// The aimed walk being stepped, a tile per `WALK_TICKS`; keys wait for it.
     pub walking: Option<Walk>,
+    /// A program waiting for its target.
+    pub targeting: Option<Targeting>,
     pub digital: bool,
     pub help: bool,
     fps: FpsMeter,
@@ -205,6 +218,7 @@ impl MapScreen {
             cursor: Pos::new(0, 0),
             aim: None,
             walking: None,
+            targeting: None,
             digital: false,
             help: false,
             fps: FpsMeter::default(),
@@ -351,6 +365,24 @@ impl MapScreen {
     /// Row 2 of the footer on turns: whose turn, which half, and the keys for it.
     fn turn_prompt(&self, st: &AppState) -> Option<(String, String)> {
         use crate::net::{Actor, Phase};
+        if let Some(t) = self.targeting.as_ref() {
+            let (_, _, what) = &t.candidates[t.picked];
+            let op = st
+                .content
+                .item(&t.program)
+                .and_then(|i| i.program)
+                .map(|p| p.op.label().to_uppercase())
+                .unwrap_or_else(|| "RUN".to_string());
+            let cost = if st.net.engaged.is_some() {
+                " (1 AP)"
+            } else {
+                ""
+            };
+            return Some((
+                format!("{op} › {what}"),
+                format!("tab next target · space runs it{cost} · esc cancels"),
+            ));
+        }
         let e = st.net.engaged.as_ref()?;
         Some(match e.actor() {
             Actor::You => match e.phase {
@@ -927,31 +959,110 @@ impl MapScreen {
             st.warn("move first · space to stay");
             return ScreenCmd::Stay;
         }
-        let mut letters = WORLD_LETTERS.chars();
-        let rows = Self::run_choices(st, b, pos, Some(&id), &mut letters);
-        match rows.len() {
-            0 => {
-                st.warn(format!("{} · nothing to run it against", spec.op.label()));
-                ScreenCmd::Stay
+        // What it may run against, nearest first; the pick waits for space.
+        let now = st.net.now(st);
+        let mut copied = false;
+        let mut candidates = Vec::new();
+        for (target, what) in crate::net::targets_near(st, b, pos) {
+            let Some(kind) = crate::net::target_kind(st, b, target) else {
+                continue;
+            };
+            if !game::applies(spec.op, kind) {
+                continue;
             }
-            1 => {
-                let Pick::Run(program, target) = rows[0].pick.clone() else {
-                    // The one row is disabled (copied already): say why, not nothing.
-                    st.warn(rows[0].label.clone());
-                    return ScreenCmd::Stay;
-                };
-                let result = crate::net::start_run(st, program, target);
-                if result.is_ok() {
-                    self.program_flash = Some((n - 1, st.tick));
-                }
-                report(st, result);
-                ScreenCmd::Stay
+            if spec.op == game::Op::Copy
+                && matches!(target, game::HackTarget::Node(id) if st.net.copied(id, now))
+            {
+                copied = true;
+                continue;
             }
-            _ => ScreenCmd::Push {
-                to: Box::new(Popup::verbs("RUN", rows, st.tick)),
-                fx: TransitionKind::None,
-            },
+            let Some(at) = crate::net::target_pos(st, b, target) else {
+                continue;
+            };
+            candidates.push((target, at, what));
         }
+        if candidates.is_empty() {
+            st.warn(if copied {
+                format!("{} · copied already", spec.op.label())
+            } else {
+                format!("{} · nothing to run it against", spec.op.label())
+            });
+            return ScreenCmd::Stay;
+        }
+        candidates.sort_by_key(|(_, at, _)| at.chebyshev(pos));
+        self.aim = None;
+        self.targeting = Some(Targeting {
+            program: id,
+            slot: n - 1,
+            candidates,
+            picked: 0,
+        });
+        ScreenCmd::Stay
+    }
+
+    /// Keys while a target is being picked: next and previous, space or enter runs
+    /// it (an action point on turns), esc drops it, another number picks another
+    /// program, `.` drops it and goes on as the wait key.
+    fn handle_targeting(&mut self, st: &mut AppState, k: &KeyEvent) -> ScreenCmd {
+        let Some(t) = self.targeting.as_mut() else {
+            return ScreenCmd::Stay;
+        };
+        let n = t.candidates.len();
+        match k.code {
+            KeyCode::Tab | KeyCode::Right | KeyCode::Down | KeyCode::Char('l' | 'j' | 'n') => {
+                t.picked = (t.picked + 1) % n
+            }
+            KeyCode::BackTab | KeyCode::Left | KeyCode::Up | KeyCode::Char('h' | 'k' | 'p') => {
+                t.picked = (t.picked + n - 1) % n
+            }
+            KeyCode::Char(' ') | KeyCode::Enter => return self.confirm_target(st),
+            KeyCode::Esc => self.targeting = None,
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                self.targeting = None;
+                if let Some(d) = c.to_digit(10)
+                    && (1..=hud::SLOTS as u32).contains(&d)
+                {
+                    return self.program_key(st, d as usize);
+                }
+            }
+            KeyCode::Char('.') => {
+                self.targeting = None;
+                return self.handle_walk(st, k).unwrap_or(ScreenCmd::Stay);
+            }
+            _ => {}
+        }
+        ScreenCmd::Stay
+    }
+
+    /// The picked target: the run is armed and rolled once, for an action point on
+    /// turns.
+    fn confirm_target(&mut self, st: &mut AppState) -> ScreenCmd {
+        let Some(t) = self.targeting.take() else {
+            return ScreenCmd::Stay;
+        };
+        let (target, _, _) = t.candidates[t.picked].clone();
+        if st.net.engaged.is_some()
+            && let Err(why) = crate::net::spend_ap(st)
+        {
+            st.warn(why);
+            self.targeting = Some(t);
+            return ScreenCmd::Stay;
+        }
+        match crate::net::start_run(st, t.program.clone(), target) {
+            Ok(line) => {
+                st.say(line);
+                self.program_flash = Some((t.slot, st.tick));
+                crate::net::step_run(st);
+            }
+            Err(why) => {
+                // Nothing ran: the point comes back.
+                if let Some(e) = st.net.engaged.as_mut() {
+                    e.ap = (e.ap + 1).min(crate::net::BASE_AP);
+                }
+                st.warn(why);
+            }
+        }
+        ScreenCmd::Stay
     }
 
     /// The actives the character can fire, cooling ones greyed; none says so.
@@ -1622,6 +1733,14 @@ impl Screen for MapScreen {
                 if self.walking.is_some() && k.code != KeyCode::Esc {
                     continue;
                 }
+                // A target being picked takes every key.
+                if self.targeting.is_some() {
+                    let cmd = self.handle_targeting(st, k);
+                    if !matches!(cmd, ScreenCmd::Stay) {
+                        return cmd;
+                    }
+                    continue;
+                }
             }
             let cmd = match self.handle_common(st, k) {
                 Some(cmd) => Some(cmd),
@@ -1716,6 +1835,11 @@ impl Screen for MapScreen {
         if inside.is_none() {
             self.aim = None;
             self.walking = None;
+            self.targeting = None;
+        }
+        // The turn left you while you were picking: nothing to confirm now.
+        if self.targeting.is_some() && !crate::net::your_turn(st) {
+            self.targeting = None;
         }
         if self.mode == Mode::Walk {
             self.walk_step(st);
@@ -1809,6 +1933,21 @@ impl Screen for MapScreen {
             reachable: aimed.is_some(),
         });
         if let Some(o) = path.as_ref() {
+            overlays.push(o);
+        }
+        let picks: Vec<Pos> = self
+            .targeting
+            .as_ref()
+            .map(|t| t.candidates.iter().map(|c| c.1).collect())
+            .unwrap_or_default();
+        let targets = self
+            .targeting
+            .as_ref()
+            .map(|t| crate::render::path::TargetOverlay {
+                candidates: &picks,
+                picked: t.candidates[t.picked].1,
+            });
+        if let Some(o) = targets.as_ref() {
             overlays.push(o);
         }
         let fx = FxOverlay { fx: &st.fx, vis };
@@ -4699,10 +4838,10 @@ mod tests {
         assert!(matches!(cmd, ScreenCmd::Stay), "space continues");
         assert_eq!(last(&st), Some("crack 2/3"));
         assert_eq!(st.net.run.as_ref().map(|r| r.done), Some(2));
-        // Starting another program says the first run was dropped.
-        s.update(&mut st, &[key(KeyCode::Char('1'))]);
-        assert_eq!(last(&st), Some("run aborted · crack starts · 3 turns"));
-        assert_eq!(st.net.run.as_ref().map(|r| r.done), Some(0));
+        // Running another program says the first run was dropped.
+        s.update(&mut st, &[key(KeyCode::Char('1')), key(KeyCode::Char(' '))]);
+        assert!(logged(&st, "run aborted · crack starts · 3 turns"));
+        assert_eq!(st.net.run.as_ref().map(|r| r.done), Some(1));
     }
 
     /// A room tile of the construct the gate guard cannot see into.
@@ -5252,10 +5391,10 @@ mod tests {
             "a hit piece turns on you: {:?}",
             st.net.ice[&b][0].mode
         );
-        // Walked away: the attack cannot reach and ends.
-        let far = st.constructs.get(b).unwrap().guards[0].post;
-        st.constructs.get_mut(b).unwrap().move_guard(0, far);
+        // Out of sight: the attack cannot reach and ends.
         st.net.ice.get_mut(&b).unwrap()[0].mode = crate::net::IceMode::Asleep;
+        let hide = room_tile(&st, b);
+        stand(&mut st, &mut s, Place::Construct(b), hide);
         roll(&mut st, &mut s);
         assert_eq!(last(&st), Some("attack · out of reach"), "{:?}", last(&st));
         assert!(st.net.run.is_none());
@@ -5888,22 +6027,26 @@ mod tests {
         let mut st = state8();
         let mut s = MapScreen::explore(0);
         lock_run(&mut st, &mut s);
-        // Beside the lock and nothing else: crack starts at once, no popup.
+        // Beside the lock and nothing else: the lock is picked, no popup; space runs
+        // it, armed and rolled once.
         let cmd = s.update(&mut st, &[key(KeyCode::Char('1'))]);
         assert!(matches!(cmd, ScreenCmd::Stay), "no popup");
-        assert_eq!(last(&st), Some("crack starts · 3 turns"));
-        assert!(st.net.run.is_some());
-        // Space is a turn of it.
+        assert_eq!(s.targeting.as_ref().map(|t| t.candidates.len()), Some(1));
+        assert!(st.net.run.is_none());
         let cmd = s.update(&mut st, &[key(KeyCode::Char(' '))]);
-        assert!(matches!(cmd, ScreenCmd::Stay), "space continues, no popup");
+        assert!(matches!(cmd, ScreenCmd::Stay), "space runs it, no popup");
         assert_eq!(last(&st), Some("crack 1/3"));
+        assert!(st.net.run.is_some());
+        // Space again is another turn of it.
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(last(&st), Some("crack 2/3"));
         // Copy does nothing to a lock: the strip says so and nothing changes.
         s.update(&mut st, &[key(KeyCode::Char('2'))]);
         assert_eq!(last(&st), Some("copy · nothing to run it against"));
         assert!(last_is_warning(&st));
         assert_eq!(
             st.net.run.as_ref().map(|r| r.done),
-            Some(1),
+            Some(2),
             "the crack runs on"
         );
         s.update(&mut st, &[key(KeyCode::Char('3'))]);
@@ -5932,17 +6075,23 @@ mod tests {
                 .expect("a free tile beside the player")
         };
         st.constructs.get_mut(b).unwrap().move_guard(0, other);
-        let ScreenCmd::Push { to: mut popup, .. } = s.update(&mut st, &[key(KeyCode::Char('1'))])
-        else {
-            panic!("two targets: the short list opens")
-        };
-        st.tick += 40;
-        let text = draw_screen(&*popup, &st, 120, 40);
-        assert!(text.contains("crack · door lock"), "{text}");
-        assert!(text.contains("crack · ICE · grey"), "{text}");
-        assert!(!text.contains("copy"), "only crack's rows: {text}");
-        popup.update(&mut st, &[key(KeyCode::Char('a'))]);
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        let t = s.targeting.as_ref().expect("two targets: the pick is up");
+        assert_eq!(t.candidates.len(), 2, "{:?}", t.candidates);
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(text.contains("CRACK › door lock"), "{text}");
+        s.update(&mut st, &[key(KeyCode::Tab)]);
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(text.contains("CRACK › ICE · grey"), "{text}");
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
         assert!(st.net.run.is_some());
+        assert!(
+            matches!(
+                st.net.run.as_ref().unwrap().target,
+                game::HackTarget::Guard { .. }
+            ),
+            "the picked piece"
+        );
     }
 
     #[test]
@@ -5983,8 +6132,7 @@ mod tests {
         let mut st = state8();
         let mut s = MapScreen::explore(0);
         let (b, _) = lock_run(&mut st, &mut s);
-        s.update(&mut st, &[key(KeyCode::Char('1'))]);
-        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        s.update(&mut st, &[key(KeyCode::Char('1')), key(KeyCode::Char(' '))]);
         assert_eq!(last(&st), Some("crack 1/3"));
         let text = draw_screen(&s, &st, 180, 40);
         assert!(text.contains("TRACE ▱▱▱▱▱▱▱▱▱▱ 4"), "{text}");
@@ -6042,7 +6190,7 @@ mod tests {
             matches!(cmd, ScreenCmd::Stay),
             "no popup for one disabled row"
         );
-        assert_eq!(last(&st), Some("copy · server · copied already"));
+        assert_eq!(last(&st), Some("copy · copied already"));
         assert!(last_is_warning(&st));
         assert!(st.net.run.is_none());
     }
@@ -6081,12 +6229,12 @@ mod tests {
         );
         // Jacked in with a run: the run row and the programs row, same four rows.
         let (_, _) = lock_run(&mut st, &mut s);
-        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        s.update(&mut st, &[key(KeyCode::Char('1')), key(KeyCode::Char(' '))]);
         assert!(st.net.run.is_some());
         let text = draw_screen(&s, &st, 120, 40);
         let lines: Vec<&str> = text.lines().collect();
         assert!(lines[36].starts_with(" ⚡ "), "{:?}", lines[36]);
-        assert!(lines[36].contains("TRACE ▱▱▱▱▱▱▱▱▱▱ 0"), "{:?}", lines[36]);
+        assert!(lines[36].contains("TRACE ▱▱▱▱▱▱▱▱▱▱ 4"), "{:?}", lines[36]);
         assert_eq!(lines[37].trim(), "");
         assert!(
             lines[38].starts_with(" RUN  crack · door lock"),
@@ -6127,17 +6275,31 @@ mod tests {
         let mut st = state8();
         let mut s = MapScreen::explore(0);
         lock_run(&mut st, &mut s);
-        s.update(&mut st, &[key(KeyCode::Char('1'))]);
-        assert_eq!(last(&st), Some("crack starts · 3 turns"));
+        // The pick runs it once at once; the beat rolls it from there.
+        s.update(&mut st, &[key(KeyCode::Char('1')), key(KeyCode::Char(' '))]);
+        assert_eq!(last(&st), Some("crack 1/3"));
         s.update(&mut st, &[]);
-        assert_eq!(last(&st), Some("crack starts · 3 turns"), "no beat yet");
+        assert_eq!(last(&st), Some("crack 1/3"), "no beat yet");
         st.tick += BEAT_TICKS;
         s.update(&mut st, &[]);
-        assert_eq!(last(&st), Some("crack 1/3"), "the beat rolls once");
+        assert_eq!(last(&st), Some("crack 2/3"), "the beat rolls once");
         // A long gap (a menu was up) is still one beat, never a burst.
+        st.net.force_roll = Some(1);
         st.tick += BEAT_TICKS * 3;
         s.update(&mut st, &[]);
-        assert_eq!(last(&st), Some("crack 2/3"));
+        assert!(
+            last(&st).unwrap().starts_with("crack slips"),
+            "{:?}",
+            last(&st)
+        );
+        assert_eq!(
+            st.log
+                .iter()
+                .filter(|e| e.text.starts_with("crack slips"))
+                .count(),
+            1,
+            "one roll for three beats' worth of ticks"
+        );
         assert_eq!(st.net.run.as_ref().map(|r| r.done), Some(2));
     }
 
@@ -6195,8 +6357,7 @@ mod tests {
         let mut st = state8();
         let mut s = MapScreen::explore(0);
         lock_run(&mut st, &mut s);
-        s.update(&mut st, &[key(KeyCode::Char('1'))]);
-        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        s.update(&mut st, &[key(KeyCode::Char('1')), key(KeyCode::Char(' '))]);
         assert_eq!(last(&st), Some("crack 1/3"));
         assert_eq!(st.net.beat, st.clock_tick(), "the beat phase restarts");
     }
@@ -6211,10 +6372,10 @@ mod tests {
         assert_eq!(beat_bar(&st, 8), "░░░░░░░░");
         st.tick += BEAT_TICKS / 2;
         assert_eq!(beat_bar(&st, 8), "▓▓▓▓░░░░");
-        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        s.update(&mut st, &[key(KeyCode::Char('1')), key(KeyCode::Char(' '))]);
         let text = draw_screen(&s, &st, 140, 40);
         assert!(
-            text.contains("RUN  crack · door lock  ▱▱▱ 0/3 · 40%   ▓▓▓▓░░░░  next roll"),
+            text.contains("RUN  crack · door lock  ▰▱▱ 1/3 · 40%   ▓▓▓▓░░░░  next roll"),
             "{text}"
         );
     }
@@ -6341,10 +6502,14 @@ mod tests {
         assert_eq!(player(&st).1, here, "refused: not moved");
         // A program starts for free and rolls per action point.
         s.update(&mut st, &[key(KeyCode::Char('1'))]);
-        assert_eq!(last(&st), Some("crack starts · 3 turns"));
+        assert!(
+            s.targeting.is_some(),
+            "the lock is picked, nothing spent yet"
+        );
         assert_eq!(st.net.engaged.as_ref().unwrap().ap, BASE_AP);
         s.update(&mut st, &[key(KeyCode::Char(' '))]);
         assert_eq!(last(&st), Some("crack 1/3"));
+        assert_eq!(st.net.engaged.as_ref().unwrap().ap, BASE_AP - 1);
         s.update(&mut st, &[key(KeyCode::Char(' '))]);
         assert_eq!(last(&st), Some("crack 2/3"));
         s.update(&mut st, &[key(KeyCode::Char(' '))]);
@@ -6564,8 +6729,7 @@ mod tests {
         let mut st = state8();
         let mut s = MapScreen::explore(0);
         lock_run(&mut st, &mut s);
-        s.update(&mut st, &[key(KeyCode::Char('1'))]);
-        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        s.update(&mut st, &[key(KeyCode::Char('1')), key(KeyCode::Char(' '))]);
         assert_eq!(last(&st), Some("crack 1/3"));
         s.update(&mut st, &[key(KeyCode::Char('e'))]);
         s.update(&mut st, &[key(KeyCode::Char(' ')), key(KeyCode::Char(' '))]);
@@ -6809,7 +6973,7 @@ mod tests {
         let mut st = state8();
         let mut s = MapScreen::explore(0);
         let (b, _) = lock_run(&mut st, &mut s);
-        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        s.update(&mut st, &[key(KeyCode::Char('1')), key(KeyCode::Char(' '))]);
         assert!(st.net.run.is_some());
         // In calm `g` aims from where you stand.
         let here = player(&st).1;
@@ -6907,8 +7071,8 @@ mod tests {
         let _ = lock;
         s.update(&mut st, &[key(KeyCode::Char('1'))]);
         st.fx.clear();
-        // The beat's roll bolts from you to the lock.
-        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        // The roll bolts from you to the lock.
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
         assert_eq!(last(&st), Some("crack 1/3"));
         let me = player(&st).1;
         assert_eq!(
@@ -7028,8 +7192,8 @@ mod tests {
         let mut st = state8();
         let mut s = MapScreen::explore(0);
         let (b, _) = lock_run(&mut st, &mut s);
-        s.update(&mut st, &[key(KeyCode::Char('1'))]);
-        assert_eq!(last(&st), Some("crack starts · 3 turns"));
+        s.update(&mut st, &[key(KeyCode::Char('1')), key(KeyCode::Char(' '))]);
+        assert_eq!(last(&st), Some("crack 1/3"));
         st.net.trace(b).heat = game::ALARM_HEAT - 1;
         st.net.force_roll = Some(1);
         let before: Vec<Pos> = st
@@ -7166,18 +7330,19 @@ mod tests {
         assert_eq!(last(&st), Some("moves are done"));
         assert!(text.contains("1-5 pick a program"), "{text}");
         s.update(&mut st, &[key(KeyCode::Char('1'))]);
-        assert_eq!(last(&st), Some("crack starts · 3 turns"));
         let text = draw_screen(&s, &st, 140, 40);
-        assert!(
-            text.contains("space runs crack · door lock (1 AP)"),
-            "{text}"
-        );
+        assert!(text.contains("CRACK › door lock"), "{text}");
         s.update(&mut st, &[key(KeyCode::Char(' '))]);
         assert_eq!(last(&st), Some("crack 1/3"));
         assert_eq!(
             st.net.engaged.as_ref().unwrap().ap,
             1,
             "one action point spent"
+        );
+        let text = draw_screen(&s, &st, 140, 40);
+        assert!(
+            text.contains("space runs crack · door lock (1 AP)"),
+            "{text}"
         );
         // The next turn opens on the move again.
         pass_turn(&mut st, &mut s);
@@ -7216,5 +7381,95 @@ mod tests {
             Some(Phase::Act),
             "no move left: act"
         );
+    }
+
+    #[test]
+    fn a_program_key_picks_a_target_and_space_runs_it() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let (b, _) = lock_run(&mut st, &mut s);
+        let (_, lock_pos) = node_of(&st, b, NodeKind::DoorLock);
+        let before = st.log.len();
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        let t = s.targeting.as_ref().expect("picking a target");
+        assert_eq!(
+            t.candidates[t.picked].1, lock_pos,
+            "the lock beside you is picked"
+        );
+        assert!(st.net.run.is_none(), "nothing runs until space");
+        assert_eq!(st.log.len(), before);
+        let text = draw_screen(&s, &st, 140, 40);
+        assert!(text.contains("CRACK › door lock"), "{text}");
+        assert!(text.contains("space runs it"), "{text}");
+        assert!(text.contains('×'), "{text}");
+        // esc cancels; a key again picks again; space runs it: armed and rolled.
+        s.update(&mut st, &[key(KeyCode::Esc)]);
+        assert!(s.targeting.is_none());
+        s.update(&mut st, &[key(KeyCode::Char('1')), key(KeyCode::Char(' '))]);
+        assert!(s.targeting.is_none());
+        assert_eq!(last(&st), Some("crack 1/3"));
+        assert!(logged(&st, "crack starts · 3 turns"));
+        assert!(st.net.engaged.is_none(), "calm: no action point asked");
+        // On turns the run costs the action point as it is confirmed.
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        lock_run(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('e')), key(KeyCode::Char(' '))]);
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        let text = draw_screen(&s, &st, 140, 40);
+        assert!(text.contains("space runs it (1 AP)"), "{text}");
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(last(&st), Some("crack 1/3"));
+        assert_eq!(st.net.engaged.as_ref().unwrap().ap, crate::net::BASE_AP - 1);
+    }
+
+    #[test]
+    fn attack_reaches_a_piece_in_sight_at_range_and_tab_cycles_targets() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        st.net.force_roll = Some(10);
+        let entry = st.constructs.get(b).unwrap().entry;
+        {
+            let p = st.player.as_mut().unwrap();
+            p.place = Place::Construct(b);
+            p.pos = entry;
+        }
+        s.place = Place::Construct(b);
+        crate::net::raise_alarm(&mut st, b);
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        let me = player(&st).1;
+        let gate = st.constructs.get(b).unwrap().guards[0].pos;
+        assert!(gate.chebyshev(me) >= 2, "not beside you");
+        st.character
+            .unload(&st.content, &ItemId::new("copy"))
+            .unwrap();
+        st.character.give(ItemId::new("attack"), 1);
+        st.character
+            .load(&st.content, &ItemId::new("attack"))
+            .unwrap();
+        s.update(&mut st, &[key(KeyCode::Char('2'))]);
+        let t = s.targeting.as_ref().expect("picking a target");
+        let picks: Vec<Pos> = t.candidates.iter().map(|c| c.1).collect();
+        assert!(
+            picks.contains(&gate),
+            "the gate guard in sight at range: {picks:?}"
+        );
+        assert_eq!(t.candidates[t.picked].1, gate, "the nearest piece first");
+        let n = t.candidates.len();
+        s.update(&mut st, &[key(KeyCode::Tab)]);
+        assert_eq!(s.targeting.as_ref().unwrap().picked, 1 % n);
+        s.update(&mut st, &[key(KeyCode::BackTab)]);
+        assert_eq!(s.targeting.as_ref().unwrap().picked, 0);
+        st.fx.clear();
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(last(&st), Some("attack · grey ICE 4/6"), "{:?}", last(&st));
+        assert_eq!(st.net.engaged.as_ref().unwrap().ap, crate::net::BASE_AP - 1);
+        assert_eq!(bolts(&st).len(), 1, "a white bolt to the piece");
+        // Out of sight, out of reach: the next roll ends the attack.
+        let hide = room_tile(&st, b);
+        stand(&mut st, &mut s, Place::Construct(b), hide);
+        roll(&mut st, &mut s);
+        assert_eq!(last(&st), Some("attack · out of reach"), "{:?}", last(&st));
     }
 }

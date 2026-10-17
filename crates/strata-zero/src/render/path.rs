@@ -63,6 +63,43 @@ impl Overlay for PathOverlay<'_> {
     }
 }
 
+/// Picking a target for a program: every candidate marked, the picked one lit.
+pub struct TargetOverlay<'a> {
+    pub candidates: &'a [Pos],
+    pub picked: Pos,
+}
+
+impl Overlay for TargetOverlay<'_> {
+    fn draw(
+        &self,
+        _map: &MapRef,
+        origin: Pos,
+        area: Rect,
+        _tick: u64,
+        buf: &mut Buffer,
+        _style: &StylePack,
+    ) {
+        for c in self.candidates {
+            if *c == self.picked {
+                continue;
+            }
+            if let Some((sx, sy)) = tile_to_screen(area, origin, *c) {
+                buf[(sx, sy)]
+                    .set_char('◦')
+                    .set_style(Style::default().fg(CYAN).bg(LIT_BG));
+            }
+        }
+        if let Some((sx, sy)) = tile_to_screen(area, origin, self.picked) {
+            buf[(sx, sy)].set_char('×').set_style(
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(CYAN)
+                    .add_modifier(Modifier::BOLD),
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,6 +151,26 @@ mod tests {
             " ",
             "your own tile is not on the path"
         );
+    }
+
+    #[test]
+    fn targets_are_marked_and_the_picked_one_lit() {
+        let city = City::empty(GenParams::default());
+        let map = MapRef::stratum_of(&city, citygen::StratumKind::Street);
+        let area = Rect::new(0, 0, 10, 3);
+        let mut buf = Buffer::empty(area);
+        let style = StylePack::load().unwrap();
+        let cands = [Pos::new(2, 1), Pos::new(5, 1), Pos::new(8, 2)];
+        TargetOverlay {
+            candidates: &cands,
+            picked: Pos::new(5, 1),
+        }
+        .draw(&map, Pos::new(0, 0), area, 0, &mut buf, &style);
+        assert_eq!(buf[(2, 1)].symbol(), "◦");
+        assert_eq!(buf[(8, 2)].symbol(), "◦");
+        let picked = &buf[(5, 1)];
+        assert_eq!(picked.symbol(), "×");
+        assert_eq!(picked.style().bg, Some(CYAN));
     }
 
     #[test]

@@ -216,9 +216,12 @@ turn. Your turn has two halves and the footer's second row names the one you
 are in. MOVE first: the arrows aim a path from you, as far as your moves reach
 (a red cross on a piece nothing reaches), `enter` walks it a tile every 4 ticks
 with the keys waiting, `esc` drops the aim, and `space` stays put; the program
-keys draw hollow until you do. Then ACT: `1`-`5` pick a program (a target too
-when several fit), `space` runs it for one AP, a pulse, a shield or a mask cost
-one as well, and `.` ends your turn; spending the last move opens ACT by itself. An ICE turn plays out
+keys draw hollow until you do. Then ACT: `1`-`5` pick a program and the map
+marks what it can run against (nodes beside you; ICE beside you or in sight
+within 6 tiles), `tab` or the arrows move the pick, `space` runs it for one AP
+(the run stays armed, and `space` rolls it again), a pulse, a shield or a mask
+cost one as well, and `.` ends your turn; spending the last move opens ACT by
+itself. In calm the same pick works and costs nothing. An ICE turn plays out
 one action every 8 ticks so you watch it come: white 0 tiles and 1 hit, grey 2
 and 1, black 3 and 2. A stunned piece passes its turn. A round with nothing
 awake calms the board again unless `e` asked for turns by hand; jacking out, a

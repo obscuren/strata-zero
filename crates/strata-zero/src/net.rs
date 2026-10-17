@@ -46,6 +46,8 @@ pub const PACE_TICKS: u64 = 8;
 pub const WALK_TICKS: u64 = 4;
 /// Ticks a bolt takes from a roll or a hit to its target.
 pub const ROLL_TICKS: u64 = 12;
+/// How far a program reaches a piece of ICE in sight.
+pub const ATTACK_RANGE: i32 = 6;
 /// Ticks a slip's or a shield's mark sits on its tile.
 pub const MARK_TICKS: u64 = 20;
 /// A program's roll, cyan; an attack's, white; an ICE hit, magenta; black ICE, red.
@@ -563,17 +565,8 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
             st.net.run = None;
             return None;
         };
-        // The piece must still stand beside you.
-        let in_reach = st
-            .player
-            .as_ref()
-            .zip(st.constructs.get(b))
-            .is_some_and(|(p, k)| {
-                k.guards
-                    .get(index)
-                    .is_some_and(|g| g.standing && g.pos.chebyshev(p.pos) <= 1)
-            });
-        if !in_reach {
+        // The piece must still stand in reach: beside you or in sight at range.
+        if !piece_in_reach(st, b, index) {
             st.net.run = None;
             let line = "attack · out of reach".to_string();
             st.say(line.clone());
@@ -1688,17 +1681,41 @@ pub fn targets_near(st: &AppState, b: BuildingId, pos: citygen::Pos) -> Vec<(Hac
                 city.net.node(id).kind.label().to_string(),
             ));
         }
-        if let Some(i) = k.guard_at(p) {
-            out.push((
-                HackTarget::Guard {
-                    building: b,
-                    index: i,
-                },
-                format!("ICE · {}", k.guards[i].grade.label()),
-            ));
-        }
+    }
+    // Pieces: beside you or in sight within range, nearest first.
+    let mut pieces: Vec<(i32, usize)> = (0..k.guards.len())
+        .filter(|i| piece_in_reach(st, b, *i))
+        .map(|i| (k.guards[i].pos.chebyshev(pos), i))
+        .collect();
+    pieces.sort();
+    for (_, i) in pieces {
+        out.push((
+            HackTarget::Guard {
+                building: b,
+                index: i,
+            },
+            format!("ICE · {}", k.guards[i].grade.label()),
+        ));
     }
     out
+}
+
+/// A standing piece a program reaches: beside you, or in your sight within
+/// `ATTACK_RANGE`.
+pub fn piece_in_reach(st: &AppState, b: BuildingId, index: usize) -> bool {
+    let (Some(player), Some(k)) = (st.player.as_ref(), st.constructs.get(b)) else {
+        return false;
+    };
+    let Some(g) = k.guards.get(index) else {
+        return false;
+    };
+    if k.guard_at(g.pos) != Some(index) {
+        return false;
+    }
+    let d = g.pos.chebyshev(player.pos);
+    d <= 1
+        || (d <= ATTACK_RANGE
+            && player.vis().get(g.pos) == Some(&crate::render::Visibility::Visible))
 }
 
 /// The HERE section's trace lines inside a construct.
