@@ -20,7 +20,7 @@
 - No transition between the flat and the walkway. They're one floor map.
 - The look-down shows terrain and furniture only. No people, no animation. The current level is always brighter.
 - Smoke builds use `--target-dir target/smoke` and run `target/smoke/release/strata`. Never rebuild `target/release/strata`.
-- Test fixture: `GenParams { seed: 6, size: Custom { w: 120, h: 60 }, districts: 8 }` (its biggest Megablocks block is about 23×19). Medium seeds 8, 11 and 42 have blocks up to 40×20.
+- Test fixtures: the 120×60 seed 6 city (`GenParams { seed: 6, size: Custom { w: 120, h: 60 }, districts: 8 }`) has **no** megablock now. Atrium and home tests use Medium cities (7 districts) that have one: seed 1 (38×20), seed 2 (40×20), seed 8 (20×20), and seed 11 (19×9, the thin case). Medium seeds 16 and 21 have none (the street-spawn case).
 - Commit attribution lines as in the session's system reminder.
 
 ## Review Focus
