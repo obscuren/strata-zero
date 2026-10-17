@@ -3,6 +3,7 @@
 use crate::actions::{perform, report};
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::messages::Kind;
+use crate::render::atrium::AtriumOverlay;
 use crate::render::fx::FxOverlay;
 use crate::render::items::GroundOverlay;
 use crate::render::map::{MapRef, TileMap};
@@ -1941,11 +1942,6 @@ impl Screen for MapScreen {
             enabled: self.digital,
             focus,
         };
-        let mut overlays: Vec<&dyn Overlay> = Vec::new();
-        if st.rain {
-            overlays.push(&Weather);
-        }
-        overlays.push(&digital);
         let walking =
             self.mode == Mode::Walk && st.player.as_ref().is_some_and(|p| p.place == self.place);
         let vis = if walking {
@@ -1953,6 +1949,41 @@ impl Screen for MapScreen {
         } else {
             None
         };
+        // The look-down: the ground plaza under an upper level's atrium, drawn
+        // before anything else so the current level stays on top.
+        let atrium_floor = match (self.place, &map) {
+            (Place::Floor { building, level }, MapRef::Floor(m))
+                if level >= 1 && m.plan.atrium.is_some() =>
+            {
+                st.interiors
+                    .floor(building, 0)
+                    .map(|(_, ground)| (ground, level, m.floor.tiles.size()))
+            }
+            _ => None,
+        };
+        // Looking around without walking sees the whole map, the drop included.
+        let open_sight = match (atrium_floor, vis) {
+            (Some((_, _, size)), None) => Some(citygen::Grid::filled(
+                size,
+                crate::render::Visibility::Visible,
+            )),
+            _ => None,
+        };
+        let atrium = atrium_floor.and_then(|(ground, level, _)| {
+            Some(AtriumOverlay {
+                ground,
+                level,
+                vis: vis.or(open_sight.as_ref())?,
+            })
+        });
+        let mut overlays: Vec<&dyn Overlay> = Vec::new();
+        if let Some(o) = atrium.as_ref() {
+            overlays.push(o);
+        }
+        if st.rain {
+            overlays.push(&Weather);
+        }
+        overlays.push(&digital);
         let ground = GroundOverlay {
             ground: &st.ground,
             content: &st.content,
@@ -3686,6 +3717,49 @@ mod tests {
         s.update(&mut st, &[key(dir_between(o, door))]);
         assert_eq!(player(&st).1, o);
         assert!(last(&st).is_some_and(|l| l.starts_with("locked · ")));
+    }
+
+    #[test]
+    fn the_atrium_shows_the_plaza_below_and_nobody_on_it() {
+        let mut st = state_home();
+        let mut s = MapScreen::walking(&mut st);
+        let h = st.home.unwrap().home;
+        let place = Place::Floor {
+            building: h.building,
+            level: h.level,
+        };
+        let (_, floor) = st.interiors.floor(h.building, h.level).unwrap();
+        let rail = floor
+            .tiles
+            .iter()
+            .filter(|(_, t)| t.is_walkable())
+            .map(|(p, _)| p)
+            .find(|p| {
+                p.neighbors4().any(|n| {
+                    floor.tiles.get(n).map(|t| t.terrain) == Some(citygen::Terrain::Railing)
+                })
+            })
+            .expect("a walkway beside the railing");
+        stand(&mut st, &mut s, place, rail);
+        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let area = s.last_map.get();
+        let origin = s.cam.origin(area.width, area.height);
+        let (_, floor) = st.interiors.floor(h.building, h.level).unwrap();
+        let symbols: Vec<String> = (area.y..area.bottom())
+            .flat_map(|sy| (area.x..area.right()).map(move |sx| (sx, sy)))
+            .filter(|(sx, sy)| {
+                let p = crate::render::viewport::screen_to_tile(area, origin, (*sx, *sy));
+                floor.tiles.get(p).map(|t| t.terrain) == Some(citygen::Terrain::Atrium)
+            })
+            .map(|c| t.backend().buffer()[c].symbol().to_string())
+            .collect();
+        assert!(!symbols.is_empty(), "the atrium is on screen");
+        assert!(
+            symbols.iter().any(|c| c != " "),
+            "the plaza shows through the atrium"
+        );
+        assert!(symbols.iter().all(|c| c != "@"), "nobody stands in the air");
     }
 
     /// The walkable tile of the home within reach of its rig, nearest the bed.

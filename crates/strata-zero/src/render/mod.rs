@@ -1,5 +1,6 @@
 //! Rendering: colours, cells, the render context and the tileset.
 
+pub mod atrium;
 pub mod fx;
 pub mod ghost;
 pub mod glyphs;
