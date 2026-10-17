@@ -3,6 +3,7 @@
 pub mod board;
 pub mod chrome;
 pub mod console;
+pub mod device;
 pub mod dim;
 pub mod form;
 pub mod hud;
