@@ -7652,4 +7652,43 @@ mod tests {
         assert_eq!(crate::net::phase(&st), Some(Phase::Act));
         assert_eq!(player(&st).1, start.step(d));
     }
+
+    #[test]
+    fn an_alarm_with_every_piece_broken_leaves_the_beat_running() {
+        use crate::net::BEAT_TICKS;
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let (vault, vault_pos) = node_of(&st, b, NodeKind::DataVault);
+        let here = beside(&st, b, vault_pos);
+        stand(&mut st, &mut s, Place::Construct(b), here);
+        // Both pieces broken.
+        let now = st.net.now(&st);
+        for i in 0..2 {
+            let target = game::HackTarget::Guard {
+                building: b,
+                index: i,
+            };
+            let kind = crate::net::target_kind(&st, b, target).unwrap();
+            st.net.land(b, target, kind, game::Op::Attack, now);
+        }
+        st.net.sync_guards(&mut st.constructs, b, now);
+        st.net.force_roll = Some(10);
+        crate::net::start_run(&mut st, ItemId::new("copy"), game::HackTarget::Node(vault)).unwrap();
+        st.net.trace(b).heat = game::ALARM_HEAT - 1;
+        st.net.force_roll = Some(1);
+        st.net.beat = st.clock_tick();
+        st.tick += BEAT_TICKS;
+        s.update(&mut st, &[]);
+        assert!(logged(&st, "ALARM"), "{:?}", last(&st));
+        assert!(
+            st.net.engaged.is_none(),
+            "nobody stands to fight: the board stays calm"
+        );
+        // The copy rolls on with the beat, no key needed.
+        st.net.force_roll = Some(10);
+        st.tick += BEAT_TICKS;
+        s.update(&mut st, &[]);
+        assert_eq!(last(&st), Some("copy 1/4"), "{:?}", last(&st));
+    }
 }

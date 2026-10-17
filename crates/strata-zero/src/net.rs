@@ -772,13 +772,15 @@ pub fn raise_alarm(st: &mut AppState, b: BuildingId) -> String {
         }
         st.net.wake_all(b, pos);
     }
+    // Inside with ICE standing, the board goes to turns; with every piece broken
+    // there is nobody to fight and the beat runs on.
     if st
         .player
         .as_ref()
         .is_some_and(|p| p.place == Place::Construct(b))
+        && any_awake(st, b)
     {
         engage(st, b, false);
-        // The alarm ended the hacks that held pieces down: they stand and join.
         seat_standing(st, b);
     }
     format!("ALARM · `{}` locks down", building_name(st, b))
