@@ -77,6 +77,20 @@ black ICE pulls you out at a quarter of your hp: a hard dump, thirty minutes
 of cooling, the hp stays lost. Off, black ICE can take you to zero, and that
 is the one way to die: FLATLINED, then the title.
 
+The ICE tree's talents all land. Ice pick and Deep dive add to crack and copy;
+Deep dive also copies a vault quietly (a successful turn makes no heat, a slip
+is still loud). Null route turns the first dump in a construct away: the heat
+falls back to the alarm line, the alarm trips if it had not, and the next one
+is real. The deep end halves what black ICE takes through the jack, lets the
+failsafe wait for an eighth of your hp, and cools ten minutes after it pulls.
+Cold boot is focus; Wide band, Handshake and Arc welder reach and cool the
+deck's pulses. Inside a construct those pulses have teeth: Netscan paints the
+construct around you, Ping lights every node (two heat), Arc trace jumps to
+every piece of ICE in range and stuns it for two turns (five heat), the
+netrunner's way out of a hunt. Signal ghost, the netrunner's passive, feels
+awake ICE through the walls: it is listed and drawn wherever it is. Low-light,
+from the optics, sees two tiles further between 18:00 and 05:59.
+
 Same seed and parameters always produce a byte-identical city.
 
 The city is lived in. Every building is staffed and every bed is slept in: the

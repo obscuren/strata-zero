@@ -156,7 +156,7 @@ impl Popup {
             }
             return TransitionKind::None;
         }
-        let bonus = st.character.sight_bonus(&st.content);
+        let bonus = st.sight_bonus();
         if act == WorldAct::JackIn
             && let Some(why) = crate::net::jack_in_refusal(st)
         {

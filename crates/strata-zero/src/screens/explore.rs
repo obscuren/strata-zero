@@ -337,7 +337,7 @@ impl MapScreen {
     }
 
     fn enter_walk(&mut self, st: &mut AppState) {
-        let bonus = st.character.sight_bonus(&st.content);
+        let bonus = st.sight_bonus();
         let Some(city) = st.city.as_ref() else { return };
         if st.player.is_none() {
             let mut p = Player::spawn(city, hash64(city.seed, st.tick));
@@ -1024,7 +1024,7 @@ impl MapScreen {
             return Some(cmd);
         }
         let dev = st.dev;
-        let bonus = st.character.sight_bonus(&st.content);
+        let bonus = st.sight_bonus();
         let city = st.city.as_ref()?;
         let interiors = &st.interiors;
         let constructs = &st.constructs;
@@ -2738,7 +2738,7 @@ mod tests {
             let p = st.player.as_mut().unwrap();
             p.pos = beside;
         }
-        let bonus = st.character.sight_bonus(&st.content);
+        let bonus = st.sight_bonus();
         let city = st.city.as_ref().unwrap();
         st.player
             .as_mut()
@@ -5347,5 +5347,48 @@ mod tests {
         );
         assert!(crate::net::ice_lines(&st, b, |_| false).is_empty());
         assert!(crate::net::ghost_pieces(&st, b).is_empty());
+    }
+
+    #[test]
+    fn low_light_sees_two_more_tiles_between_eighteen_and_six() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        assert!(
+            st.character
+                .has_ability(&st.content, &game::AbilityId::new("lowlight")),
+            "the optics"
+        );
+        let base = st.character.sight_bonus(&st.content);
+        // The clock starts at 22:00 and runs ninety ticks a minute.
+        let at =
+            |h: u64, m: u64| ((h * 60 + m + 24 * 60 - 22 * 60) % (24 * 60)) * sim::TICKS_PER_MINUTE;
+        for (tick, bonus, when) in [
+            (at(22, 0), base + 2, "22:00"),
+            (at(5, 59), base + 2, "05:59"),
+            (at(6, 0), base, "06:00"),
+            (at(12, 0), base, "12:00"),
+            (at(18, 0), base + 2, "18:00"),
+            (at(17, 59), base, "17:59"),
+        ] {
+            st.tick = tick;
+            assert_eq!(
+                st.clock().0,
+                (tick / sim::TICKS_PER_MINUTE / 60 + 22) as u8 % 24,
+                "{when}"
+            );
+            assert_eq!(st.sight_bonus(), bonus, "{when}");
+        }
+        // Without the optics there is no low-light and no bonus at all.
+        let eyes = st
+            .character
+            .equipment
+            .iter()
+            .find(|(_, id)| id.0 == "nightglass_optics")
+            .map(|(slot, _)| *slot)
+            .unwrap();
+        st.character.equipment.remove(&eyes);
+        st.tick = at(22, 0);
+        assert_eq!(st.sight_bonus(), 0);
     }
 }

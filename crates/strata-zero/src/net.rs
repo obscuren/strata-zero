@@ -630,7 +630,7 @@ pub fn dump(st: &mut AppState, why: &str) {
 
 /// Dumped, with the deck cooling for a given stretch.
 pub fn dump_for(st: &mut AppState, why: &str, cooling: u64) {
-    let bonus = st.character.sight_bonus(&st.content);
+    let bonus = st.sight_bonus();
     let now = st.net.now(st);
     st.net.run = None;
     st.net.cooling_until = Some(now + cooling);

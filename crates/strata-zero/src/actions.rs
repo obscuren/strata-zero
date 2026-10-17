@@ -35,7 +35,7 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
     let interiors = &st.interiors;
     let constructs = &st.constructs;
     if refresh_sight {
-        let bonus = st.character.sight_bonus(&st.content);
+        let bonus = st.sight_bonus();
         if let (Some(city), Some(player)) = (st.city.as_ref(), st.player.as_mut())
             && let Some(map) = MapRef::for_place(city, interiors, constructs, player.place)
         {
