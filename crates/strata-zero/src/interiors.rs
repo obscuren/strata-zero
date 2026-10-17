@@ -307,7 +307,8 @@ impl Placement {
                         continue;
                     }
                     let wants: &[Role] = match p.profession.as_str() {
-                        "barkeep" => &[Role::Bar, Role::Table],
+                        "barkeep" | "noodle_cook" => &[Role::Bar, Role::Table],
+                        "shopkeeper" => &[Role::Shelf, Role::Desk],
                         "corp_drone" => &[Role::Reception, Role::Desk],
                         "line_worker" => &[Role::Machine],
                         "ripperdoc" => &[Role::Surgery],
@@ -324,7 +325,20 @@ impl Placement {
                             Role::Shrine,
                         ],
                     };
-                    match take_station(&mut free, wants) {
+                    // A shopkeeper on a megablock plaza minds a shop's counter, not
+                    // the lobby desk.
+                    let counter = (p.profession == "shopkeeper")
+                        .then(|| {
+                            free.iter().position(|(pos, r)| {
+                                *r == Role::Reception
+                                    && floor.rooms.iter().any(|room| {
+                                        room.kind == RoomKind::Shop && room.rect.contains(*pos)
+                                    })
+                            })
+                        })
+                        .flatten()
+                        .map(|i| free.remove(i).0);
+                    match counter.or_else(|| take_station(&mut free, wants)) {
                         Some(pos) => at.push((pos, o.id)),
                         None => extras.push(o.id),
                     }
@@ -518,5 +532,52 @@ mod tests {
             .count();
         assert!(owned > 0, "the neighbours are home at two");
         assert_eq!(placement.owner_of(home.door), None);
+    }
+
+    #[test]
+    fn shopkeepers_mind_the_plaza_shops_by_day() {
+        let c = home_city();
+        let home = citygen::home(&c).expect("a home");
+        let people = sim::People::load().unwrap();
+        let mut w = sim::World::seed(&c, &people, &sim::SimParams::default(), 22 * 60, 0);
+        // On to half past twelve.
+        for m in 1..=(14 * 60 + 30) {
+            w.advance(&c, m * sim::TICKS_PER_MINUTE);
+            w.path_some(&c, usize::MAX);
+        }
+        let mut i = Interiors::default();
+        i.ensure(&c, home.building, 0).unwrap();
+        let (plan, plaza) = i.floor(home.building, 0).unwrap();
+        let placement = Placement::new(plan, plaza, &w);
+        let shop = |p: Pos| {
+            plaza
+                .rooms
+                .iter()
+                .find(|r| r.kind != RoomKind::Lobby && r.rect.contains(p))
+                .map(|r| r.kind)
+        };
+        let at_stations: Vec<_> = plaza
+            .stations
+            .iter()
+            .filter_map(|s| placement.person_at(s.pos).map(|id| (s.role, s.pos, id)))
+            .collect();
+        assert!(!at_stations.is_empty(), "nobody on the plaza at 12:30");
+        let seen: Vec<_> = at_stations
+            .iter()
+            .map(|(r, p, id)| (r, shop(*p), &w.people()[id.0 as usize].profession))
+            .collect();
+        // The shopkeepers stand behind their shops' counters, not at the lobby desk
+        // or the plaza tables.
+        let shopkeeper = |id: &sim::PersonId| w.people()[id.0 as usize].profession == "shopkeeper";
+        assert!(
+            at_stations.iter().any(|(_, _, id)| shopkeeper(id)),
+            "{seen:?}"
+        );
+        for (role, pos, id) in &at_stations {
+            if shopkeeper(id) {
+                assert_eq!(*role, citygen::Role::Reception, "{seen:?}");
+                assert_eq!(shop(*pos), Some(RoomKind::Shop), "{seen:?}");
+            }
+        }
     }
 }

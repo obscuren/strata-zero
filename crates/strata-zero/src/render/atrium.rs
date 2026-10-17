@@ -6,7 +6,7 @@ use crate::render::map::{MapRef, TileMap};
 use crate::render::style::StylePack;
 use crate::render::tileset::{MASK_E, MASK_N, MASK_S, MASK_W, cell, connects};
 use crate::render::viewport::{Overlay, screen_to_tile};
-use crate::render::{Cell, RenderCtx};
+use crate::render::{Cell, RenderCtx, Rgb};
 use citygen::{Floor, Grid, StratumKind, Terrain};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -15,6 +15,25 @@ use ratatui::layout::Rect;
 /// floor, a little darker each floor up, never quite black.
 pub fn look_down_scale(level: i32) -> f32 {
     (0.35 - 0.02 * (level - 1).max(0) as f32).max(0.12)
+}
+
+/// The faintest a plaza glyph is drawn (luminance out of 255): the bare floor's dots
+/// still read from the top of the tallest megablock, well under a lit walkway.
+const MIN_LUMA: f32 = 22.0;
+
+fn luma(c: Rgb) -> f32 {
+    0.2126 * c.0 as f32 + 0.7152 * c.1 as f32 + 0.0722 * c.2 as f32
+}
+
+/// A plaza glyph's colour from `level`: scaled down by height, but never under
+/// [`MIN_LUMA`] (nor brighter than it was), so the floor stays faint, not black.
+pub fn look_down_fg(fg: Rgb, level: i32) -> Rgb {
+    let l = luma(fg);
+    if l <= 0.0 {
+        return fg;
+    }
+    let f = look_down_scale(level).max(MIN_LUMA / l).min(1.0);
+    fg.scale(f)
 }
 
 pub struct AtriumOverlay<'a> {
@@ -71,11 +90,12 @@ impl Overlay for AtriumOverlay<'_> {
                     wall_mask: mask,
                 };
                 let c = cell(tile, &ctx);
+                // Scaled once here; no DIM on top, which would halve it again.
                 Cell {
-                    fg: c.fg.scale(f),
+                    fg: look_down_fg(c.fg, self.level),
                     bg: c.bg.scale(f),
                     bold: false,
-                    dim: true,
+                    dim: false,
                     ..c
                 }
                 .write(buf, sx, sy);
@@ -192,5 +212,94 @@ mod tests {
         assert_eq!(u.symbol(), " ");
         assert_eq!(u.fg, Color::Rgb(0, 0, 0));
         assert_eq!(u.bg, Color::Rgb(0, 0, 0));
+    }
+
+    fn luma_of(c: Color) -> f32 {
+        match c {
+            Color::Rgb(r, g, b) => 0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32,
+            other => panic!("not truecolor: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_the_top_the_plaza_floor_is_faint_but_under_the_walkway() {
+        let city = Generator::run(GenParams {
+            seed: 8,
+            size: SizePreset::Medium,
+            districts: 7,
+            ..Default::default()
+        })
+        .unwrap();
+        let home = citygen::home(&city).expect("seed 8 has a home");
+        let mut interiors = Interiors::default();
+        interiors.ensure(&city, home.building, home.level).unwrap();
+        interiors.ensure(&city, home.building, 0).unwrap();
+        let (plan, upper) = interiors.floor(home.building, home.level).unwrap();
+        let (_, ground) = interiors.floor(home.building, 0).unwrap();
+        // The bare plaza floor under the drop, and the walkway beside the railing.
+        let floor = upper
+            .tiles
+            .iter()
+            .find(|(p, t)| {
+                t.terrain == Terrain::Atrium
+                    && ground.tiles[*p].terrain == Terrain::Floor
+                    && ground.tiles[*p].feature.is_none()
+            })
+            .map(|(p, _)| p)
+            .expect("bare plaza floor under the atrium");
+        let walkway = upper
+            .tiles
+            .iter()
+            .find(|(p, t)| {
+                t.terrain == Terrain::Floor
+                    && t.feature.is_none()
+                    && p.neighbors4().any(|n| {
+                        upper
+                            .tiles
+                            .get(n)
+                            .is_some_and(|u| u.terrain == Terrain::Railing)
+                    })
+                    && p.chebyshev(floor) < 25
+            })
+            .map(|(p, _)| p)
+            .expect("a walkway tile by the railing");
+        let vis = Grid::filled(upper.tiles.size(), Visibility::Visible);
+        let s = StylePack::load().unwrap();
+        let map = MapRef::Floor(FloorMap {
+            city: &city,
+            plan,
+            floor: upper,
+        });
+        // From the top of the building: the darkest the look-down gets here.
+        let overlay = AtriumOverlay {
+            ground,
+            level: plan.top,
+            vis: &vis,
+        };
+        let area = Rect::new(0, 0, 60, 60);
+        let origin = Pos::new(floor.x - 30, floor.y - 30);
+        let mut buf = Buffer::empty(area);
+        MapView {
+            map: &map,
+            origin,
+            tick: 0,
+            style: &s,
+            vis: Some(&vis),
+            overlays: &[&overlay],
+            cursor: None,
+        }
+        .render(area, &mut buf);
+        let at = |p: Pos| {
+            let (x, y) = tile_to_screen(area, origin, p).unwrap();
+            buf[(x, y)].clone()
+        };
+        let (f, w) = (at(floor), at(walkway));
+        assert!(
+            !f.modifier.contains(ratatui::style::Modifier::DIM),
+            "scaled once, not dimmed again"
+        );
+        let (lf, lw) = (luma_of(f.fg), luma_of(w.fg));
+        assert!(lf >= 20.0, "plaza floor {:?} reads as black ({lf})", f.fg);
+        assert!(lf < lw, "plaza floor {lf} not under the walkway {lw}");
     }
 }

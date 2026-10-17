@@ -2,13 +2,13 @@
 // Hours are minutes of the day; an end before its start wraps past midnight.
 People(
     professions: [
-        Profession(id: "shopkeeper", label: "shopkeeper", works_at: [Shop, Market, Pawn],
+        Profession(id: "shopkeeper", label: "shopkeeper", works_at: [Shop, Market, Pawn, Megablock],
             hours: Day(open: 540, close: 1200), staff: (1, 2),
             leisure: [(NoodleBar, 0.3)],
             lines: ["Browse all you like. Touch with money.",
                     "The sign says open. The door says otherwise after eight.",
                     "Everything's got a price. Yours is on the tag."]),
-        Profession(id: "noodle_cook", label: "noodle cook", works_at: [NoodleBar],
+        Profession(id: "noodle_cook", label: "noodle cook", works_at: [NoodleBar, Megablock],
             hours: Day(open: 1020, close: 180), staff: (2, 2),
             lines: ["Broth's been going since Tuesday. That's the secret.",
                     "Sit. Eat. Talk after.",
