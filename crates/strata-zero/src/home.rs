@@ -26,6 +26,14 @@ impl HomeRig {
         Some(HomeRig { home, landing })
     }
 
+    /// The floor the flat is on.
+    pub fn place(&self) -> Place {
+        Place::Floor {
+            building: self.home.building,
+            level: self.home.level,
+        }
+    }
+
     /// The player waking up beside the bed, the flat seen around them; the floor is
     /// generated if need be.
     pub fn wake(
@@ -35,9 +43,8 @@ impl HomeRig {
         constructs: &Constructs,
         sight_bonus: i32,
     ) -> Option<Player> {
-        let (building, level) = (self.home.building, self.home.level);
-        interiors.ensure(city, building, level)?;
-        let place = Place::Floor { building, level };
+        interiors.ensure(city, self.home.building, self.home.level)?;
+        let place = self.place();
         let map = MapRef::for_place(city, interiors, constructs, place)?;
         let mut p = Player::at(place, self.home.bed_side);
         p.update_fov(&map, sight_bonus);

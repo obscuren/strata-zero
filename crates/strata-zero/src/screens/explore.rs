@@ -25,7 +25,7 @@ use crate::ui::console::{Console, ConsoleEvent};
 use crate::ui::hud;
 use crate::ui::panel::inspector_lines;
 use crate::ui::sidebar::{self, Section};
-use crate::walker::{Player, port_name};
+use crate::walker::{Player, jacked_in_line};
 use citygen::rng::hash64;
 use citygen::{Dir, Place, Pos, Rect as TileRect, StratumKind};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -736,7 +736,7 @@ impl MapScreen {
         }
         if player.jacked_in() {
             choices.push(Choice::new('j', "jack out", Pick::World(WorldAct::JackOut)));
-        } else if player.terminal_in_reach(city).is_some() {
+        } else if player.terminal_in_reach(city, st.home.as_ref()).is_some() {
             choices.push(Choice::new('j', "jack in", Pick::World(WorldAct::JackIn)));
         }
         let (mut up, mut down) = (None, None);
@@ -1654,8 +1654,24 @@ impl MapScreen {
         {
             return Some(cmd);
         }
+        if k.code == KeyCode::Enter && st.player.as_ref().is_some_and(|p| p.jacked_in()) {
+            match crate::net::jack_out(st) {
+                Ok(()) => {
+                    let p = st.player.as_ref()?;
+                    self.place = p.place;
+                    self.cam.snap(p.pos);
+                    st.say("jacked out");
+                    return Some(ScreenCmd::Flash(TransitionKind::Glitch));
+                }
+                Err(e) => {
+                    st.warn(e);
+                    return Some(ScreenCmd::Stay);
+                }
+            }
+        }
         let dev = st.dev;
         let bonus = st.sight_bonus();
+        let home = st.home;
         let city = st.city.as_ref()?;
         let interiors = &st.interiors;
         let constructs = &st.constructs;
@@ -1668,27 +1684,15 @@ impl MapScreen {
                 self.mode = Mode::Explore;
             }
             KeyCode::Enter => {
-                if player.jacked_in() {
-                    match player.jack_out(city, bonus) {
-                        Ok(()) => {
-                            self.place = player.place;
-                            self.cam.snap(player.pos);
-                            st.say("jacked out");
-                            return Some(ScreenCmd::Flash(TransitionKind::Glitch));
-                        }
-                        Err(e) => st.warn(e),
+                let from = player.place;
+                match player.jack_in(city, home.as_ref(), bonus) {
+                    Ok(port) => {
+                        self.place = Place::Stratum(StratumKind::Net);
+                        self.cam.snap(port);
+                        st.say(jacked_in_line(city, from, port));
+                        return Some(ScreenCmd::Flash(TransitionKind::Glitch));
                     }
-                } else {
-                    match player.jack_in(city, bonus) {
-                        Ok(port) => {
-                            self.place = Place::Stratum(StratumKind::Net);
-                            self.cam.snap(port);
-                            let where_ = port_name(city, port);
-                            st.say(format!("jacked in at `{where_}`"));
-                            return Some(ScreenCmd::Flash(TransitionKind::Glitch));
-                        }
-                        Err(e) => st.warn(e),
-                    }
+                    Err(e) => st.warn(e),
                 }
             }
             KeyCode::Char('<') | KeyCode::Char('>') => {
@@ -3235,7 +3239,7 @@ mod tests {
             .unwrap();
         let p = st.player.as_mut().unwrap();
         p.pos = beside_jack;
-        p.jack_in(&city, 0).unwrap();
+        p.jack_in(&city, None, 0).unwrap();
         s.update(&mut st, &[]);
         let text = draw_screen(&s, &st, 120, 40);
         // The bolt is a double-width glyph in the buffer: match around it.
@@ -3682,6 +3686,42 @@ mod tests {
         s.update(&mut st, &[key(dir_between(o, door))]);
         assert_eq!(player(&st).1, o);
         assert!(last(&st).is_some_and(|l| l.starts_with("locked · ")));
+    }
+
+    /// The walkable tile of the home within reach of its rig, nearest the bed.
+    fn beside_rig(st: &AppState) -> Pos {
+        let h = st.home.unwrap().home;
+        let (_, floor) = st.interiors.floor(h.building, h.level).unwrap();
+        std::iter::once(h.rig)
+            .chain(h.rig.neighbors8())
+            .filter(|p| h.rect.contains(*p) && floor.tiles[*p].is_walkable())
+            .min_by_key(|p| p.chebyshev(h.bed_side))
+            .expect("a tile beside the rig")
+    }
+
+    #[test]
+    fn enter_jacks_in_from_the_home_rig_and_back() {
+        let mut st = state_home();
+        let mut s = MapScreen::walking(&mut st);
+        let rig = st.home.unwrap();
+        let home = Place::Floor {
+            building: rig.home.building,
+            level: rig.home.level,
+        };
+        let at = beside_rig(&st);
+        stand(&mut st, &mut s, home, at);
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert_eq!(player(&st), (Place::Stratum(StratumKind::Net), rig.landing));
+        assert_eq!(s.place, Place::Stratum(StratumKind::Net));
+        assert_eq!(last(&st), Some("jacked in from home"));
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert_eq!(player(&st), (home, at));
+        assert_eq!(s.place, home);
+        assert_eq!(last(&st), Some("jacked out"));
+        assert_eq!(
+            st.player.as_ref().unwrap().vis().get(rig.home.rig),
+            Some(&crate::walker::Visibility::Visible)
+        );
     }
 
     fn dir_between(from: Pos, to: Pos) -> KeyCode {
