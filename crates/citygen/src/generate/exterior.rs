@@ -180,20 +180,29 @@ pub(crate) fn dress(ctx: &mut GenCtx, i: usize) {
     }
     let paved = forecourt(ctx, front);
 
-    // The canopy: on the landing itself, whatever the street pass left there, and
-    // the pavement either side of it.
-    ctx.set_feature(K, land, Some(Feature::Awning));
+    // The canopy: on the landing itself, whatever the street pass left there, unless
+    // a connector stands there, and on the pavement either side of it.
+    if ctx.city.connectors_at(land).next().is_none() {
+        ctx.set_feature(K, land, Some(Feature::Awning));
+    }
     for col in [-1, 1] {
         place(ctx, front.at(1, col), Feature::Awning);
     }
+    // A lamp each side of the door: at three tiles out along the façade when the
+    // forecourt reaches that far, otherwise at two, and failing both a step out.
     for side in [-1, 1] {
         let far = front.at(1, 3 * side);
-        let lamp = if paved.contains(&far) {
-            far
-        } else {
-            front.at(1, 2 * side)
-        };
-        place(ctx, lamp, Feature::Lamp);
+        let first = if paved.contains(&far) { 3 } else { 2 };
+        let spots = [(1, first), (1, 5 - first), (2, first), (2, 5 - first)];
+        let lit = spots.iter().any(|(row, col)| {
+            ctx.tile(K, front.at(*row, col * side))
+                .is_some_and(|t| t.feature == Some(Feature::Lamp))
+        });
+        if !lit {
+            spots
+                .iter()
+                .any(|(row, col)| place(ctx, front.at(*row, col * side), Feature::Lamp));
+        }
     }
     for side in [-1, 1] {
         place(
@@ -442,18 +451,20 @@ mod tests {
                 let door = main_door(c, b).expect("a megablock has a street door");
                 let land = outward(b.footprint, door);
                 let t = c.tile(K, land).unwrap();
-                assert_eq!(t.feature, Some(Feature::Awning), "seed {seed}");
+                if c.connectors_at(land).next().is_some() {
+                    assert_ne!(t.feature, Some(Feature::Awning), "seed {seed}");
+                } else {
+                    assert_eq!(t.feature, Some(Feature::Awning), "seed {seed}");
+                }
                 assert!(t.is_walkable());
-                let lamps = b
-                    .footprint
-                    .grow(4)
+                let lamps = crate::geom::Rect::new(land.x - 3, land.y - 3, 7, 7)
                     .iter()
                     .filter(|p| {
                         c.tile(K, *p)
                             .is_some_and(|t| t.feature == Some(Feature::Lamp))
                     })
                     .count();
-                assert!(lamps >= 2, "seed {seed}");
+                assert!(lamps >= 2, "seed {seed}: {lamps} lamps by the door");
             }
         }
         assert!(seen >= 4, "{seen} megablocks");
