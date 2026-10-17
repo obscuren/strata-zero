@@ -1353,25 +1353,6 @@ impl MapScreen {
             }
             return Some(ScreenCmd::Stay);
         }
-        if let Some(dir) = dir_for(k.code) {
-            if let Some(cmd) = self.gateway(st, dir) {
-                return Some(cmd);
-            }
-            match self.bump(st, dir) {
-                Err(cmd) => return Some(cmd),
-                Ok(true) => {}
-                Ok(false) => {
-                    if let Some(cmd) = self.doorway(st, dir) {
-                        return Some(cmd);
-                    }
-                }
-            }
-        }
-        if matches!(k.code, KeyCode::Char('<') | KeyCode::Char('>'))
-            && let Some(cmd) = self.vertical(st, k.code == KeyCode::Char('>'))
-        {
-            return Some(cmd);
-        }
         // The aim: `g` starts it anywhere in a construct, the arrows move it while it
         // is up or while the board is on turns, enter walks it, esc drops it.
         let inside = match st.player.as_ref().map(|p| (p.place, p.pos)) {
@@ -1402,6 +1383,25 @@ impl MapScreen {
             {
                 return Some(self.start_walk(st, aim));
             }
+        }
+        if let Some(dir) = dir_for(k.code) {
+            if let Some(cmd) = self.gateway(st, dir) {
+                return Some(cmd);
+            }
+            match self.bump(st, dir) {
+                Err(cmd) => return Some(cmd),
+                Ok(true) => {}
+                Ok(false) => {
+                    if let Some(cmd) = self.doorway(st, dir) {
+                        return Some(cmd);
+                    }
+                }
+            }
+        }
+        if matches!(k.code, KeyCode::Char('<') | KeyCode::Char('>'))
+            && let Some(cmd) = self.vertical(st, k.code == KeyCode::Char('>'))
+        {
+            return Some(cmd);
         }
         let dev = st.dev;
         let bonus = st.sight_bonus();
@@ -6930,5 +6930,119 @@ mod tests {
             "{:?}",
             bolts(&st)
         );
+    }
+
+    #[test]
+    fn the_alarm_beat_gives_the_ice_no_free_action() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let (b, _) = lock_run(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        assert_eq!(last(&st), Some("crack starts · 3 turns"));
+        st.net.trace(b).heat = game::ALARM_HEAT - 1;
+        st.net.force_roll = Some(1);
+        let before: Vec<Pos> = st
+            .constructs
+            .get(b)
+            .unwrap()
+            .guards
+            .iter()
+            .map(|g| g.pos)
+            .collect();
+        let (hp, focus) = (st.character.hp, st.character.focus);
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert!(logged(&st, "ALARM"), "{:?}", last(&st));
+        assert!(
+            st.net
+                .engaged
+                .as_ref()
+                .is_some_and(|e| !e.manual && crate::net::your_turn(&st))
+        );
+        let after: Vec<Pos> = st
+            .constructs
+            .get(b)
+            .unwrap()
+            .guards
+            .iter()
+            .map(|g| g.pos)
+            .collect();
+        assert_eq!(
+            after, before,
+            "the fight starts on your turn: nothing moves outside the pace"
+        );
+        assert_eq!((st.character.hp, st.character.focus), (hp, focus));
+    }
+
+    #[test]
+    fn on_turns_the_arrows_never_walk_you_out_of_the_construct() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let entry = st.constructs.get(b).unwrap().entry;
+        {
+            let p = st.player.as_mut().unwrap();
+            p.place = Place::Construct(b);
+            p.pos = entry;
+        }
+        s.place = Place::Construct(b);
+        crate::net::raise_alarm(&mut st, b);
+        assert!(st.net.engaged.is_some() && crate::net::your_turn(&st));
+        for code in [
+            KeyCode::Char('h'),
+            KeyCode::Char('j'),
+            KeyCode::Char('k'),
+            KeyCode::Char('l'),
+        ] {
+            s.update(&mut st, &[key(code)]);
+            assert_eq!(
+                player(&st),
+                (Place::Construct(b), entry),
+                "{code:?} aims, it does not walk"
+            );
+            assert!(st.net.engaged.is_some(), "{code:?} left the fight");
+        }
+    }
+
+    #[test]
+    fn a_piece_that_stands_again_joins_the_end_of_the_order() {
+        use crate::net::Actor;
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let hide = room_tile(&st, b);
+        stand(&mut st, &mut s, Place::Construct(b), hide);
+        // The gate guard broken: lifted until the hour or the alert ends.
+        let target = game::HackTarget::Guard {
+            building: b,
+            index: 0,
+        };
+        let kind = crate::net::target_kind(&st, b, target).unwrap();
+        let now = st.net.now(&st);
+        st.net.land(b, target, kind, game::Op::Attack, now);
+        st.net.sync_guards(&mut st.constructs, b, now);
+        {
+            let k = st.constructs.get(b).unwrap();
+            assert_eq!(k.guard_at(k.guards[0].pos), None, "lifted");
+        }
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert_eq!(
+            st.net.engaged.as_ref().unwrap().order,
+            vec![Actor::You, Actor::Ice(1)]
+        );
+        // The alarm ends the hack: the piece stands, awake, and takes its place at the end.
+        crate::net::raise_alarm(&mut st, b);
+        {
+            let k = st.constructs.get(b).unwrap();
+            assert_eq!(k.guard_at(k.guards[0].pos), Some(0), "standing again");
+        }
+        assert_eq!(
+            st.net.engaged.as_ref().unwrap().order,
+            vec![Actor::You, Actor::Ice(1), Actor::Ice(0)]
+        );
+        // And it acts: a round passes and it has looked (it is hunting, not frozen).
+        let before = st.constructs.get(b).unwrap().guards[0].pos;
+        pass_turn(&mut st, &mut s);
+        let after = st.constructs.get(b).unwrap().guards[0].pos;
+        assert_ne!(before, after, "the seated piece hunts on its turn");
     }
 }

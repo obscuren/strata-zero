@@ -760,6 +760,8 @@ pub fn raise_alarm(st: &mut AppState, b: BuildingId) -> String {
         .is_some_and(|p| p.place == Place::Construct(b))
     {
         engage(st, b, false);
+        // The alarm ended the hacks that held pieces down: they stand and join.
+        seat_standing(st, b);
     }
     format!("ALARM · `{}` locks down", building_name(st, b))
 }
@@ -1127,6 +1129,30 @@ pub fn engage(st: &mut AppState, b: BuildingId, manual: bool) {
     start_ice_turn(st);
 }
 
+/// Every standing piece of the construct that the order does not hold yet takes
+/// its place at the end: a piece that stood again mid-fight.
+pub fn seat_standing(st: &mut AppState, b: BuildingId) {
+    let standing: Vec<usize> = match st.constructs.get(b) {
+        Some(k) => k
+            .guards
+            .iter()
+            .enumerate()
+            .filter(|(_, g)| k.guard_at(g.pos).is_some())
+            .map(|(i, _)| i)
+            .collect(),
+        None => return,
+    };
+    if let Some(e) = st.net.engaged.as_mut()
+        && e.building == b
+    {
+        for i in standing {
+            if !e.order.contains(&Actor::Ice(i)) {
+                e.order.push(Actor::Ice(i));
+            }
+        }
+    }
+}
+
 /// Back to the beat.
 pub fn disengage(st: &mut AppState) {
     if st.net.engaged.take().is_some() {
@@ -1188,7 +1214,9 @@ pub fn end_turn(st: &mut AppState) {
     if turn >= len {
         turn = 0;
         round += 1;
-        // A round passed: a held mask wears (and may dump you through the trace).
+        // A round passed: a held mask wears (and may dump you through the trace),
+        // and any piece that stood again since takes its seat.
+        seat_standing(st, b);
         mask_wears(st, b);
         if st.net.engaged.is_none() {
             return;
@@ -1494,8 +1522,19 @@ pub fn trace_bar(heat: u8) -> String {
 /// ICE looks and takes one step or one hit.
 pub fn beat(st: &mut AppState) {
     step_run(st);
+    // The roll may have tripped the alarm or dumped you: the fight (or the street)
+    // takes over from here, nothing acts outside the pace.
+    let Some(Place::Construct(b)) = st.player.as_ref().map(|p| p.place) else {
+        return;
+    };
+    if st.net.engaged.is_some() {
+        return;
+    }
     ice_turn(st);
-    if let Some(Place::Construct(b)) = st.player.as_ref().map(|p| p.place)
+    if st
+        .player
+        .as_ref()
+        .is_some_and(|p| p.place == Place::Construct(b))
         && st.net.death.is_none()
         && any_awake(st, b)
     {
