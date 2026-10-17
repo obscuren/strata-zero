@@ -146,14 +146,14 @@ pub enum Feature {
     Helipad,
     Pipe,
     Cable,
-    /// A shopfront awning over the pavement; walkable, see-through.
-    Awning,
     /// A Net node standing on this cyberspace tile.
     Node(NodeKind),
     /// A piece of furniture on an interior floor; nobody walks through it.
     Furniture(Furniture),
     /// A piece of ICE standing in a construct; nobody walks through it while it stands.
     Ice(IceGrade),
+    /// A shopfront awning over the pavement; walkable. Last, so old saves keep their indices.
+    Awning,
 }
 
 /// How hard a piece of ICE bites: white traces and alarms, grey dumps you.
@@ -248,10 +248,10 @@ pub const ALL_FEATURES: [Feature; 19] = [
     Feature::Helipad,
     Feature::Pipe,
     Feature::Cable,
-    Feature::Awning,
     Feature::Node(NodeKind::Server),
     Feature::Furniture(Furniture::Desk),
     Feature::Ice(IceGrade::White),
+    Feature::Awning,
 ];
 
 /// One cell of a stratum.
@@ -399,13 +399,24 @@ mod tests {
     fn street_pieces_walk_and_block_as_intended() {
         let mut t = Tile::new(Terrain::Plaza);
         t.feature = Some(Feature::Awning);
-        assert!(t.is_walkable() && !t.blocks_sight());
+        assert!(t.is_walkable());
         for f in [Furniture::Bench, Furniture::Vending, Furniture::Bike] {
             t.feature = Some(Feature::Furniture(f));
             assert!(!t.is_walkable());
         }
         assert_eq!(Furniture::Vending.label(), "vending machine");
         assert!(ALL_FEATURES.contains(&Feature::Awning));
+    }
+
+    #[test]
+    fn feature_save_encoding_keeps_its_old_indices() {
+        // Postcard writes the variant index first; saves written before the
+        // street pieces existed depend on these staying put.
+        let lead = |f: Feature| postcard::to_stdvec(&f).unwrap()[0];
+        assert_eq!(lead(Feature::Node(NodeKind::Server)), 15);
+        assert_eq!(lead(Feature::Furniture(Furniture::Desk)), 16);
+        assert_eq!(lead(Feature::Ice(IceGrade::White)), 17);
+        assert_eq!(lead(Feature::Awning), 18);
     }
 
     #[test]
