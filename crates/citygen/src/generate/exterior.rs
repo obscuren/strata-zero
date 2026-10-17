@@ -108,23 +108,36 @@ fn free(ctx: &GenCtx, p: Pos) -> bool {
     pavement(ctx, p) && bare(ctx, K, p) && !landing(ctx, p)
 }
 
-/// Where a pedestrian goes on foot without stepping into the road: walkable, not
-/// road, and clear of the lamp posts and bins people step round.
+/// Where a pedestrian goes on foot without stepping into the road.
 fn on_foot(t: &crate::tile::Tile) -> bool {
-    t.is_walkable()
-        && t.terrain != Terrain::Road
-        && !matches!(t.feature, Some(Feature::Lamp | Feature::Trash))
+    t.is_walkable() && t.terrain != Terrain::Road
 }
 
 fn on_foot_at(ctx: &GenCtx, p: Pos) -> bool {
     ctx.tile(K, p).is_some_and(on_foot)
 }
 
-/// A strip one tile wide: closed to pedestrians on both sides along an axis, like
-/// a sidewalk between a façade and the road.
-fn narrow(ctx: &GenCtx, p: Pos) -> bool {
-    let shut = |dx: i32, dy: i32| !on_foot_at(ctx, p.offset(dx, dy));
-    (shut(0, -1) && shut(0, 1)) || (shut(-1, 0) && shut(1, 0))
+/// With a blocker standing on `p`, are its pedestrian 4-neighbours still joined
+/// without the road? Searches out from one of them until it has met the others.
+fn still_joined(ctx: &GenCtx, p: Pos) -> bool {
+    let mut left: Vec<Pos> = p.neighbors4().filter(|n| on_foot_at(ctx, *n)).collect();
+    let Some(start) = left.pop() else {
+        return true;
+    };
+    let mut seen = std::collections::HashSet::from([p, start]);
+    let mut queue = std::collections::VecDeque::from([start]);
+    while let Some(q) = queue.pop_front() {
+        if left.is_empty() {
+            return true;
+        }
+        for n in q.neighbors4() {
+            if on_foot_at(ctx, n) && seen.insert(n) {
+                left.retain(|l| *l != n);
+                queue.push_back(n);
+            }
+        }
+    }
+    left.is_empty()
 }
 
 /// True when a piece on `p` would leave its pedestrian 4-neighbours joined by the
@@ -164,16 +177,17 @@ fn pinch_free(ctx: &GenCtx, p: Pos) -> bool {
     sides.all(|r| Some(r) == first)
 }
 
-/// Puts `f` on `p` if it is free. Everything but the canopy also keeps off
-/// one-tile strips and never pinches the pedestrian way.
+/// Puts `f` on `p` if it is free. A piece that blocks must also leave the
+/// pedestrian way joined, without sending anyone into the road.
 fn place(ctx: &mut GenCtx, p: Pos, f: Feature) -> bool {
     if !free(ctx, p) {
         return false;
     }
-    if f != Feature::Awning && (narrow(ctx, p) || !pinch_free(ctx, p)) {
+    ctx.set_feature(K, p, Some(f));
+    if !ctx.city.walkable(K, p) && !(pinch_free(ctx, p) || still_joined(ctx, p)) {
+        ctx.set_feature(K, p, None);
         return false;
     }
-    ctx.set_feature(K, p, Some(f));
     #[cfg(test)]
     if !ctx.city.walkable(K, p) {
         PLACED.with(|l| l.borrow_mut().push((p, f)));
@@ -599,12 +613,11 @@ mod tests {
                 }
                 assert!(t.is_walkable());
                 // Each side of the door is lit, by its own lamp or a street lamp
-                // within two tiles, wherever the pavement there is more than one
-                // tile deep (lamps keep off one-tile strips).
+                // within two tiles, wherever the pavement reaches that far.
                 let front = Frame::new(b.footprint, door);
                 for side in [-1, 1] {
-                    let deep = [2, 3].iter().all(|col| {
-                        c.tile(K, front.at(2, col * side))
+                    let deep = [2, 3].iter().any(|col| {
+                        c.tile(K, front.at(1, col * side))
                             .is_some_and(|t| t.is_outdoor_ground() && t.terrain != Terrain::Road)
                     });
                     if !deep {
@@ -651,6 +664,7 @@ mod tests {
                 }
             }
             // Verify never had to lift a blocker the pass put down.
+            assert!(!placed.is_empty(), "seed {seed}");
             for (p, f) in placed {
                 assert_eq!(sa.tiles[*p].feature, Some(*f), "seed {seed}: {p:?} lifted");
             }
@@ -734,15 +748,19 @@ mod tests {
                 }
             }
         }
-        // Most megablock fronts are one tile deep, and nothing but the canopy
-        // stands on such a strip, so the pieces are rare; the forecourt still paves.
+        // Narrow pavements squeeze pieces out, but most megablocks get them all.
         assert!(
             paved * 2 >= seen,
             "{paved} forecourts for {seen} megablocks"
         );
-        let _ = vending;
-        assert!(stalls >= 1, "{stalls} stalls for {seen} megablocks");
-        assert!(bikes >= 1, "{bikes} bikes for {seen} megablocks");
+        assert!(
+            vending * 2 >= seen,
+            "{vending} vending for {seen} megablocks"
+        );
+        assert!(stalls * 2 >= seen, "{stalls} stalls for {seen} megablocks");
+        // A one-tile kerb that loops round the block takes one blocker before
+        // the next would split it, so bikes are fewer than the 3 to 5 asked for.
+        assert!(bikes * 2 >= seen, "{bikes} bikes for {seen} megablocks");
     }
 
     #[test]
