@@ -742,8 +742,43 @@ impl MapScreen {
         }
         if player.jacked_in() {
             choices.push(Choice::new('j', "jack out", Pick::World(WorldAct::JackOut)));
-        } else if player.terminal_in_reach(city, st.home.as_ref()).is_some() {
+        } else if let Some(port) = player.terminal_in_reach(city, st.home.as_ref()) {
             choices.push(Choice::new('j', "jack in", Pick::World(WorldAct::JackIn)));
+            // The machine itself: the rig at home, a district terminal on the street.
+            let session = match (place, st.home) {
+                (Place::Floor { .. }, Some(rig)) => Some((
+                    crate::access::Session::Rig {
+                        building: rig.home.building,
+                    },
+                    rig.home.rig,
+                    "access rig",
+                )),
+                (Place::Stratum(k), _) => {
+                    crate::access::district_of_terminal(city, k, port).map(|district| {
+                        (
+                            crate::access::Session::District {
+                                district,
+                                connected: None,
+                            },
+                            port,
+                            "access terminal",
+                        )
+                    })
+                }
+                _ => None,
+            };
+            if let Some((session, tile, label)) = session
+                && let Some(key) = letters.next()
+            {
+                choices.push(Choice::new(
+                    key,
+                    label,
+                    Pick::Terminal {
+                        session,
+                        key: (place, tile),
+                    },
+                ));
+            }
         }
         // A locked flat's door beside you: its keypad.
         if let Place::Floor { building, level } = place
@@ -3853,6 +3888,96 @@ mod tests {
             .filter(|p| h.rect.contains(*p) && floor.tiles[*p].is_walkable())
             .min_by_key(|p| p.chebyshev(h.bed_side))
             .expect("a tile beside the rig")
+    }
+
+    #[test]
+    fn space_at_a_street_terminal_offers_access_terminal() {
+        let mut st = state8();
+        seed_world(&mut st);
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let (jack, at) = {
+            let city = st.city.as_ref().unwrap();
+            let jack = city
+                .connectors
+                .iter()
+                .find(|k| k.kind == citygen::ConnectorKind::Jack && k.public)
+                .unwrap()
+                .pos;
+            let at = jack
+                .neighbors8()
+                .find(|n| city.walkable(StratumKind::Street, *n))
+                .unwrap();
+            (jack, at)
+        };
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), at);
+        let ScreenCmd::Push { to: mut p, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens the popup")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*p, &st, 120, 40);
+        assert!(
+            text.contains("jack in") && text.contains("access terminal"),
+            "{text}"
+        );
+        let row = text
+            .lines()
+            .find(|l| l.contains("access terminal"))
+            .unwrap();
+        let letter = row.chars().find(|c| c.is_ascii_alphabetic()).unwrap();
+        let ScreenCmd::Replace { to: term, .. } = p.update(&mut st, &[key(KeyCode::Char(letter))])
+        else {
+            panic!("the row replaces the popup with the terminal")
+        };
+        st.tick += 10_000;
+        let drawn = draw_screen(&*term, &st, 120, 40);
+        assert!(
+            drawn.contains("MUNI-OS") && drawn.contains(" NET > "),
+            "{drawn}"
+        );
+        let _ = jack;
+    }
+
+    #[test]
+    fn space_at_the_rig_offers_access_rig() {
+        let mut st = state_home();
+        let mut s = MapScreen::walking(&mut st);
+        let rig = st.home.unwrap();
+        let home = Place::Floor {
+            building: rig.home.building,
+            level: rig.home.level,
+        };
+        let at = beside_rig(&st);
+        stand(&mut st, &mut s, home, at);
+        let ScreenCmd::Push { to: mut p, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens the popup")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*p, &st, 120, 40);
+        assert!(text.contains("access rig"), "{text}");
+        let row = text.lines().find(|l| l.contains("access rig")).unwrap();
+        let letter = row.chars().find(|c| c.is_ascii_alphabetic()).unwrap();
+        let ScreenCmd::Replace { to: mut term, .. } =
+            p.update(&mut st, &[key(KeyCode::Char(letter))])
+        else {
+            panic!("the row replaces the popup with the terminal")
+        };
+        st.tick += 10_000;
+        let keys: Vec<_> = "mail"
+            .chars()
+            .map(|c| key(KeyCode::Char(c)))
+            .chain(std::iter::once(key(KeyCode::Enter)))
+            .collect();
+        term.update(&mut st, &keys);
+        st.tick += 10_000;
+        let drawn = draw_screen(&*term, &st, 120, 40);
+        assert!(
+            drawn.contains("HOME RIG") && drawn.contains("RIG [HOME] > "),
+            "{drawn}"
+        );
+        assert!(drawn.contains("A FAVOUR"), "{drawn}");
     }
 
     #[test]

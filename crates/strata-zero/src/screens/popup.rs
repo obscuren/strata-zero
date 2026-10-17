@@ -48,6 +48,11 @@ pub enum Pick {
         level: i32,
         number: u16,
     },
+    /// Opens the access terminal in place of the popup, keyed by the machine's tile.
+    Terminal {
+        session: crate::access::Session,
+        key: (citygen::Place, citygen::Pos),
+    },
     Close,
 }
 
@@ -327,6 +332,10 @@ impl Popup {
                 to: Box::new(crate::screens::keypad::Keypad::open(
                     st, building, level, number,
                 )),
+                fx: TransitionKind::None,
+            },
+            Pick::Terminal { session, key } => ScreenCmd::Replace {
+                to: Box::new(crate::screens::terminal::Terminal::open(st, session, key)),
                 fx: TransitionKind::None,
             },
             Pick::Close => ScreenCmd::Pop {
