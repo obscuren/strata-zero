@@ -494,10 +494,40 @@ mod tests {
 
     #[test]
     fn the_service_door_is_a_real_street_exit() {
+        let street_doors = |c: &City, b: &Building| -> Vec<Pos> {
+            c.portals(b.id)
+                .into_iter()
+                .filter(|(k, _)| *k == K)
+                .map(|(_, p)| p)
+                .collect()
+        };
         for Fixture { seed, city: c, .. } in mediums() {
+            if megablocks(c).next().is_none() {
+                continue;
+            }
+            let (plain, _) = run(medium_params(*seed), true);
             for b in megablocks(c) {
-                let doors = c.portals(b.id).into_iter().filter(|(k, _)| *k == K).count();
-                assert!(doors >= 2, "seed {seed}: megablock {} has {doors}", b.id.0);
+                let (after, before) = (street_doors(c, b), street_doors(&plain, b));
+                assert!(
+                    after.len() > before.len(),
+                    "seed {seed}: megablock {} has {} street doors, {} before",
+                    b.id.0,
+                    after.len(),
+                    before.len()
+                );
+                let front = Frame::new(b.footprint, main_door(c, b).unwrap()).out;
+                for door in after.iter().filter(|p| !before.contains(p)) {
+                    assert_ne!(
+                        Frame::new(b.footprint, *door).out,
+                        front,
+                        "seed {seed}: the service door {door:?} is on the main door's side"
+                    );
+                    let t = c.tile(K, outward(b.footprint, *door)).unwrap();
+                    assert!(
+                        t.is_outdoor_ground() && t.is_walkable(),
+                        "seed {seed}: the service door {door:?} opens onto {t:?}"
+                    );
+                }
             }
         }
     }
@@ -568,6 +598,26 @@ mod tests {
                 "seed {seed}"
             );
         }
+    }
+
+    /// A megablock city: the pass changes the street (and so the Net), but no other
+    /// stage's stream moves, so everything else generates exactly as before.
+    #[test]
+    fn the_pass_draws_from_no_other_stream() {
+        let (with, _) = run(medium_params(8), false);
+        let (without, _) = run(medium_params(8), true);
+        assert!(megablocks(&with).count() > 0);
+        assert_eq!(with.name, without.name);
+        assert_eq!(with.buildings, without.buildings);
+        assert_eq!(with.districts, without.districts);
+        assert_eq!(with.arterials, without.arterials);
+        for k in StratumKind::PHYSICAL {
+            if k == K {
+                continue;
+            }
+            assert!(with.stratum(k) == without.stratum(k), "{k:?} changed");
+        }
+        assert_ne!(with.stratum(K), without.stratum(K));
     }
 
     #[test]
