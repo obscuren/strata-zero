@@ -1188,7 +1188,12 @@ impl MapScreen {
                 let open = st.net.unlocked(building, st.net.now(st));
                 let locked = floor
                     .door_of(target)
-                    .filter(|r| r.private && !r.rect.contains(here) && !open)
+                    .filter(|r| {
+                        r.private
+                            && r.kind != citygen::RoomKind::Home
+                            && !r.rect.contains(here)
+                            && !open
+                    })
                     .map(|r| {
                         let mut what = r.kind.label().to_string();
                         if r.number > 0 {
@@ -1202,6 +1207,14 @@ impl MapScreen {
                 if let Some(what) = locked {
                     st.warn(format!("locked · {what}"));
                     return Some(ScreenCmd::Stay);
+                }
+                // Your own door opens for you; the step onto it from outside names the flat.
+                let home = floor
+                    .door_of(target)
+                    .filter(|r| r.kind == citygen::RoomKind::Home && !r.rect.contains(here))
+                    .map(|r| r.number);
+                if let Some(n) = home {
+                    st.say(format!("home · flat {n}"));
                 }
                 None
             }
@@ -3630,6 +3643,45 @@ mod tests {
             st.player.as_ref().unwrap().place,
             Place::Stratum(StratumKind::Street)
         ));
+    }
+
+    #[test]
+    fn the_home_door_opens_for_you_and_a_flats_stays_locked() {
+        let mut st = state_home();
+        let mut s = MapScreen::walking(&mut st);
+        let h = st.home.unwrap().home;
+        let place = Place::Floor {
+            building: h.building,
+            level: h.level,
+        };
+        let (_, floor) = st.interiors.floor(h.building, h.level).unwrap();
+        let outside = h
+            .door
+            .neighbors4()
+            .find(|n| !h.rect.contains(*n) && floor.tiles[*n].is_walkable())
+            .expect("a walkway outside the home door");
+        let flat = floor
+            .rooms
+            .iter()
+            .filter(|r| r.private && r.kind == citygen::RoomKind::Flat)
+            .find_map(|r| {
+                let d = r.door?;
+                let o = d
+                    .neighbors4()
+                    .find(|n| !r.rect.contains(*n) && floor.tiles[*n].is_walkable())?;
+                Some((d, o))
+            })
+            .expect("a neighbouring flat");
+        stand(&mut st, &mut s, place, outside);
+        s.update(&mut st, &[key(dir_between(outside, h.door))]);
+        assert_eq!(player(&st).1, h.door);
+        assert_eq!(last(&st), Some(&*format!("home · flat {}", h.number)));
+        assert!(!last_is_warning(&st));
+        let (door, o) = flat;
+        stand(&mut st, &mut s, place, o);
+        s.update(&mut st, &[key(dir_between(o, door))]);
+        assert_eq!(player(&st).1, o);
+        assert!(last(&st).is_some_and(|l| l.starts_with("locked · ")));
     }
 
     fn dir_between(from: Pos, to: Pos) -> KeyCode {
