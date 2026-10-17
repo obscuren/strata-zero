@@ -7691,4 +7691,67 @@ mod tests {
         s.update(&mut st, &[]);
         assert_eq!(last(&st), Some("copy 1/4"), "{:?}", last(&st));
     }
+
+    #[test]
+    fn breaking_the_last_piece_clears_the_alarm_but_escaping_does_not() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        st.net.force_roll = Some(10);
+        // The vault guard already down; the gate guard beside you; the alarm on.
+        let now = st.net.now(&st);
+        let far = game::HackTarget::Guard {
+            building: b,
+            index: 1,
+        };
+        let kind = crate::net::target_kind(&st, b, far).unwrap();
+        st.net.land(b, far, kind, game::Op::Attack, now);
+        st.net.sync_guards(&mut st.constructs, b, now);
+        let gate = st.constructs.get(b).unwrap().guards[0].pos;
+        let near = beside(&st, b, gate);
+        stand(&mut st, &mut s, Place::Construct(b), near);
+        let now = st.net.now(&st);
+        st.net.trace(b).alert_until = Some(now + game::ALERT_MINUTES);
+        crate::net::raise_alarm(&mut st, b);
+        assert!(st.net.traces[&b].alert_until.is_some());
+        st.character
+            .unload(&st.content, &ItemId::new("copy"))
+            .unwrap();
+        st.character.give(ItemId::new("attack"), 1);
+        st.character
+            .load(&st.content, &ItemId::new("attack"))
+            .unwrap();
+        let target = game::HackTarget::Guard {
+            building: b,
+            index: 0,
+        };
+        crate::net::start_run(&mut st, ItemId::new("attack"), target).unwrap();
+        for _ in 0..6 {
+            if logged(&st, "grey ICE broken") {
+                break;
+            }
+            roll(&mut st, &mut s);
+        }
+        assert!(logged(&st, "grey ICE broken"), "{:?}", last(&st));
+        assert!(logged(&st, "ALARM cleared"), "{:?}", last(&st));
+        assert_eq!(st.net.traces[&b].alert_until, None, "the alert is over");
+        assert!(
+            st.net.traces[&b].heat < game::ALARM_HEAT,
+            "heat {}",
+            st.net.traces[&b].heat
+        );
+        // Escaping clears nothing: a fresh alarm outlives a jack-out.
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = engaged_at_the_gate(&mut st, &mut s);
+        let now = st.net.now(&st);
+        st.net.trace(b).alert_until = Some(now + game::ALERT_MINUTES);
+        crate::net::raise_alarm(&mut st, b);
+        let until = st.net.traces[&b].alert_until;
+        assert!(until.is_some());
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert!(!st.player.as_ref().unwrap().jacked_in());
+        s.update(&mut st, &[]);
+        assert_eq!(st.net.traces[&b].alert_until, until, "still on alert");
+    }
 }

@@ -608,7 +608,10 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
                 st.net.land(b, run.target, kind, Op::Attack, now);
                 st.net.sync_guards(&mut st.constructs, b, now);
                 kick(st, 6);
-                format!("{} ICE broken", grade.label())
+                let line = format!("{} ICE broken", grade.label());
+                st.say(line.clone());
+                alarm_clears(st, b);
+                return Some(line);
             } else {
                 format!(
                     "attack · {} ICE {left}/{}",
@@ -754,6 +757,27 @@ fn kick(st: &mut AppState, ticks: u64) {
         revealed: Vec::new(),
         targets: Vec::new(),
     });
+}
+
+/// The last standing piece broken: the alarm has nobody left to answer it, so the
+/// alert ends and the trace falls back under the line. Escaping clears nothing.
+pub fn alarm_clears(st: &mut AppState, b: BuildingId) {
+    let standing = st
+        .constructs
+        .get(b)
+        .is_some_and(|k| k.guards.iter().any(|g| k.guard_at(g.pos).is_some()));
+    if standing {
+        return;
+    }
+    let Some(t) = st.net.traces.get_mut(&b) else {
+        return;
+    };
+    if t.alert_until.is_none() {
+        return;
+    }
+    t.alert_until = None;
+    t.heat = t.heat.min(game::ALARM_HEAT / 2);
+    st.say("ALARM cleared · no ICE stands");
 }
 
 /// The alarm: the building locks down, its hacks expire, its ICE wakes.

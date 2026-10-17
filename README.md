@@ -227,7 +227,9 @@ itself. In calm the same pick works and costs nothing. An ICE turn plays out
 one action every 8 ticks so you watch it come: white 0 tiles and 1 hit, grey 2
 and 1, black 3 and 2. A stunned piece passes its turn. A round with nothing
 awake calms the board again unless `e` asked for turns by hand; jacking out, a
-dump, death and leaving end it too. Every roll draws a bolt to its target
+dump, death and leaving end it too. Breaking the last standing piece clears the
+alarm (the alert ends, the trace falls back under the line); escaping does not,
+and a broken piece stays down for its hour whatever the alarm does. Every roll draws a bolt to its target
 (white for an attack), a slip a magenta mark on it, every hit a bolt back to
 you (red from black ICE), and a shield that absorbs a cyan mark on you.
 
