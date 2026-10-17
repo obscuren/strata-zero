@@ -13,21 +13,50 @@ use ratatui::style::{Modifier, Style};
 
 /// Characters a reply types a second.
 pub const TYPE_CPS: u64 = 60;
-/// Ticks the LED stays red after a denial.
+/// Ticks the LED stays red after a denial has typed.
 const DENIED_TICKS: u64 = 30;
 const TICKS_PER_SECOND: u64 = 30;
+/// Characters a screen row holds: the glass less a cell each side.
+const COLUMNS: usize = (CRT_W - 4 - 2) as usize;
 
 /// A reply typing itself out: its lines, and the tick it started.
 struct Typing {
     lines: Vec<String>,
     started: u64,
+    /// A key pressed mid-reply: it shows whole from now on.
+    finished: bool,
     /// Set when the reply was EXIT: pop once it has typed.
     leaving: bool,
+    /// The reply refused something: the LED reads red while it types.
+    denied: bool,
 }
 
 impl Typing {
+    fn new(lines: Vec<String>, started: u64) -> Typing {
+        let lines = lines
+            .iter()
+            .flat_map(|l| {
+                if l.is_empty() {
+                    vec![String::new()]
+                } else {
+                    crate::ui::sidebar::wrap_text(l, COLUMNS)
+                }
+            })
+            .collect();
+        Typing {
+            lines,
+            started,
+            finished: false,
+            leaving: false,
+            denied: false,
+        }
+    }
+
     /// How many characters have appeared by `tick`.
     fn shown(&self, tick: u64) -> usize {
+        if self.finished {
+            return self.total();
+        }
         (tick.saturating_sub(self.started) * TYPE_CPS / TICKS_PER_SECOND) as usize
     }
 
@@ -66,24 +95,30 @@ pub struct Terminal {
     typing: Option<Typing>,
     console: Console,
     denied_at: Option<u64>,
+    /// Rows scrolled up from the bottom of the scrollback.
+    scroll: usize,
 }
 
 impl Terminal {
     /// Powers the terminal on: a boot the first time this tile is used in a session.
     pub fn open(st: &mut AppState, session: Session, key: (Place, Pos)) -> Terminal {
         let fresh = st.journal.booted.insert(key);
-        let typing = fresh.then(|| Typing {
-            lines: access::boot_lines(st, &session),
-            started: st.tick,
-            leaving: false,
-        });
+        let typing = fresh.then(|| Typing::new(access::boot_lines(st, &session), st.tick));
         Terminal {
             session,
             scrollback: Vec::new(),
             typing,
             console: Console::default(),
             denied_at: None,
+            scroll: 0,
         }
+    }
+
+    /// Puts lines on the screen as a reply would: wrapped, typed out.
+    #[cfg(test)]
+    pub(crate) fn show(&mut self, st: &AppState, lines: Vec<String>) {
+        self.typing = Some(Typing::new(lines, st.tick));
+        self.scroll = 0;
     }
 
     /// Everything on the screen at `tick`: the scrollback and the reply as far as typed.
@@ -117,8 +152,29 @@ impl Terminal {
             return false;
         }
         let t = self.typing.take().unwrap();
+        if t.denied {
+            self.denied_at = Some(tick);
+        }
         self.scrollback.extend(t.lines);
         t.leaving
+    }
+
+    /// The rows a screen of `height` shows, with its markers, given the typing so far.
+    fn page(&self, rows: &[String], height: usize) -> (Vec<String>, usize) {
+        let keep = height.max(1);
+        let max_scroll = rows.len().saturating_sub(keep);
+        let scroll = self.scroll.min(max_scroll);
+        let end = rows.len() - scroll;
+        let start = end.saturating_sub(keep);
+        let mut page: Vec<String> = rows[start..end].to_vec();
+        if start > 0 && !page.is_empty() {
+            page[0] = "▲ MORE ABOVE · PGUP".to_string();
+        }
+        if scroll > 0 && !page.is_empty() {
+            let last = page.len() - 1;
+            page[last] = "▼ MORE BELOW · PGDN".to_string();
+        }
+        (page, keep)
     }
 
     fn run(&mut self, st: &mut AppState, line: String) {
@@ -126,18 +182,14 @@ impl Terminal {
         self.scrollback
             .push(format!("{prompt}{}", line.to_uppercase()));
         let reply = access::run(st, &mut self.session, &line);
-        if reply.denied {
-            self.denied_at = Some(st.tick);
-        }
-        let leaving = line.trim().eq_ignore_ascii_case("exit");
-        self.typing = Some(Typing {
-            lines: reply.lines,
-            started: st.tick,
-            leaving,
-        });
+        let mut typing = Typing::new(reply.lines, st.tick);
+        typing.leaving = line.trim().eq_ignore_ascii_case("exit");
+        typing.denied = reply.denied;
+        self.typing = Some(typing);
+        self.scroll = 0;
     }
 
-    fn rect(area: Rect) -> Rect {
+    pub(crate) fn rect(area: Rect) -> Rect {
         let w = CRT_W.min(area.width);
         let h = CRT_H.min(area.height);
         Rect::new(
@@ -166,14 +218,26 @@ impl Screen for Terminal {
             if keys.is_empty() {
                 return ScreenCmd::Stay;
             }
-            t.started = 0;
+            t.finished = true;
             if self.settle(st.tick) {
                 return pop();
             }
             return ScreenCmd::Stay;
         }
         let verbs = access::verbs(st, &self.session);
+        let page = (CRT_H as usize).saturating_sub(6);
         for k in keys {
+            match k.code {
+                crossterm::event::KeyCode::PageUp => {
+                    self.scroll += page;
+                    continue;
+                }
+                crossterm::event::KeyCode::PageDown => {
+                    self.scroll = self.scroll.saturating_sub(page);
+                    continue;
+                }
+                _ => {}
+            }
             let complete = |head: &str, word: &str| -> Vec<String> {
                 if !head.is_empty() {
                     return Vec::new();
@@ -203,12 +267,12 @@ impl Screen for Terminal {
             return;
         }
         let tick = st.tick;
-        let led = if self.typing.as_ref().is_some_and(|t| !t.done(tick)) {
-            Led::Green
-        } else if self.denied_at.is_some_and(|d| tick <= d + DENIED_TICKS) {
-            Led::Red
-        } else {
-            Led::Amber
+        let typing_now = self.typing.as_ref().filter(|t| !t.done(tick));
+        let led = match typing_now {
+            Some(t) if t.denied => Led::Red,
+            Some(_) => Led::Green,
+            None if self.denied_at.is_some_and(|d| tick <= d + DENIED_TICKS) => Led::Red,
+            None => Led::Amber,
         };
         let buf = f.buffer_mut();
         let screen = device::crt(buf, r, self.badge(), led);
@@ -234,11 +298,10 @@ impl Screen for Terminal {
             ));
         }
         let avail = screen.height as usize;
-        let keep = avail.saturating_sub(tail.len());
-        let start = rows.len().saturating_sub(keep);
+        let (page, _) = self.page(&rows, avail.saturating_sub(tail.len()));
         let width = screen.width.saturating_sub(2) as usize;
         let mut y = screen.y;
-        for row in rows.iter().skip(start) {
+        for row in &page {
             let line: String = row.chars().take(width).collect();
             crate::ui::chrome::put(buf, screen.x + 1, y, &line, green, screen.right());
             y += 1;
@@ -387,7 +450,7 @@ mod tests {
             KEY_B,
         );
         st.tick += 1000;
-        let name = crate::net::building_name(&st, b).to_uppercase();
+        let name = crate::access::building_label(&st, b);
         assert!(draw(&c, &st).contains(&format!("{name} [GUEST] > ")));
         c.update(&mut st, &typed("exit"));
         st.tick += 1000;
@@ -401,7 +464,7 @@ mod tests {
         st.tick += 1000;
         t.update(&mut st, &typed("scan"));
         st.tick += 10_000;
-        let name = crate::net::building_name(&st, b).to_uppercase();
+        let name = crate::access::building_label(&st, b);
         let text = t.text(st.tick).join("\n");
         let row = text
             .lines()
@@ -418,5 +481,75 @@ mod tests {
             drawn.contains("AT HOME") || drawn.contains("NOBODY INSIDE"),
             "{drawn}"
         );
+    }
+
+    #[test]
+    fn long_replies_scroll_with_page_keys_and_wide_lines_wrap() {
+        let (mut st, d, _) = state();
+        let mut t = Terminal::open(&mut st, district(d), KEY_A);
+        st.tick += 1000;
+        // Forty numbered lines, one of them far wider than the screen.
+        let mut lines: Vec<String> = (1..=40).map(|i| format!("ROW {i:02}")).collect();
+        lines.push("W".repeat(150));
+        t.show(&st, lines);
+        st.tick += 100_000;
+        let drawn = draw(&t, &st);
+        assert!(
+            drawn.contains("ROW 40") && !drawn.contains("ROW 01"),
+            "{drawn}"
+        );
+        let all = t.text(st.tick);
+        let wide: Vec<&str> = all
+            .iter()
+            .filter(|l| l.starts_with("WWW"))
+            .map(|s| s.as_str())
+            .collect();
+        assert!(wide.len() >= 3, "wrapped into rows: {}", wide.len());
+        assert!(wide.iter().all(|l| l.chars().count() <= 66));
+        t.update(&mut st, &[key(KeyCode::PageUp)]);
+        let up = draw(&t, &st);
+        assert!(up.contains("▲"), "a more marker: {up}");
+        t.update(&mut st, &[key(KeyCode::PageUp), key(KeyCode::PageUp)]);
+        let top = draw(&t, &st);
+        assert!(top.contains("ROW 01"), "{top}");
+        t.update(
+            &mut st,
+            &[
+                key(KeyCode::PageDown),
+                key(KeyCode::PageDown),
+                key(KeyCode::PageDown),
+            ],
+        );
+        assert!(draw(&t, &st).contains("ROW 40"));
+    }
+
+    #[test]
+    fn a_denied_reply_lights_the_led_red_and_any_key_finishes_early_in_a_run() {
+        let (mut st, d, b) = state();
+        let mut t = Terminal::open(
+            &mut st,
+            Session::District {
+                district: d,
+                connected: Some(b),
+            },
+            KEY_A,
+        );
+        st.tick += 1000;
+        t.update(&mut st, &typed("door unlock"));
+        st.tick += 2;
+        let mut term = Term::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| t.draw(&st, f)).unwrap();
+        let r = Terminal::rect(Rect::new(0, 0, 120, 40));
+        let led = &term.backend().buffer()[(r.right() - 3, r.y + 1)];
+        assert_eq!(led.fg, device::LED_RED, "red while a denial types");
+        // A fresh run: tick 3, a long reply, one key finishes it.
+        let mut st2 = st;
+        st2.tick = 3;
+        let mut t2 = Terminal::open(&mut st2, district(d), KEY_B);
+        // The boot is still typing: one key finishes it, then HELP, then a key.
+        t2.update(&mut st2, &[key(KeyCode::Char(' '))]);
+        t2.update(&mut st2, &typed("help"));
+        t2.update(&mut st2, &[key(KeyCode::Char('x'))]);
+        assert!(t2.text(st2.tick).join("\n").contains("EXIT"));
     }
 }

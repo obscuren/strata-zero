@@ -143,8 +143,21 @@ fn district_name(st: &AppState, d: DistrictId) -> String {
         .unwrap_or_else(|| "UNKNOWN".to_string())
 }
 
+/// What the terminal calls a building: its name, or its kind and number when it has
+/// none, so two apartment blocks never read alike.
+pub fn building_label(st: &AppState, b: BuildingId) -> String {
+    st.city
+        .as_ref()
+        .and_then(|c| c.building_opt(b))
+        .map(|x| match &x.name {
+            Some(n) => n.to_uppercase(),
+            None => format!("{} {}", x.kind.label().to_uppercase(), b.index()),
+        })
+        .unwrap_or_else(|| "THE BUILDING".to_string())
+}
+
 fn building_name(st: &AppState, b: BuildingId) -> String {
-    crate::net::building_name(st, b).to_uppercase()
+    building_label(st, b)
 }
 
 fn security(city: &City, b: BuildingId) -> u8 {
@@ -416,21 +429,25 @@ fn connect(st: &AppState, s: &mut Session, arg: &[&str]) -> Reply {
     let Session::District { connected, .. } = s else {
         return Reply::one("?SYNTAX ERROR");
     };
-    let Some(what) = arg.first() else {
+    if arg.is_empty() {
         return match connected {
             Some(b) => Reply::one(format!("CONNECTED TO {}", building_name(st, *b))),
             None => Reply::one("NOT CONNECTED · SCAN THEN CONNECT <N>"),
         };
-    };
-    let pick = if let Ok(n) = what.parse::<usize>() {
-        match n.checked_sub(1).and_then(|i| list.get(i)) {
-            Some(b) => vec![*b],
-            None => Vec::new(),
-        }
+    }
+    let what = arg.join(" ");
+    let numbered = |b: &BuildingId| list.iter().position(|x| x == b).map_or(0, |i| i + 1);
+    let pick: Vec<BuildingId> = if let Ok(n) = what.parse::<usize>() {
+        n.checked_sub(1)
+            .and_then(|i| list.get(i))
+            .map(|b| vec![*b])
+            .unwrap_or_default()
+    } else if let Some(exact) = list.iter().copied().find(|b| building_name(st, *b) == what) {
+        vec![exact]
     } else {
         list.iter()
             .copied()
-            .filter(|b| building_name(st, *b).starts_with(what))
+            .filter(|b| building_name(st, *b).starts_with(&what))
             .collect()
     };
     match pick.as_slice() {
@@ -445,7 +462,10 @@ fn connect(st: &AppState, s: &mut Session, arg: &[&str]) -> Reply {
         }
         many => {
             let mut lines = vec!["AMBIGUOUS · DID YOU MEAN".to_string()];
-            lines.extend(many.iter().map(|b| format!("  {}", building_name(st, *b))));
+            lines.extend(
+                many.iter()
+                    .map(|b| format!("{:>2}  {}", numbered(b), building_name(st, *b))),
+            );
             Reply::say(lines)
         }
     }
@@ -585,6 +605,9 @@ fn door_unlock(st: &mut AppState, s: &Session, arg: &[&str]) -> Reply {
         return Reply::one("NO DOOR CONTROLLER");
     };
     let now = st.net.now(st);
+    if st.net.alert(b, now) {
+        return Reply::one("LOCKDOWN IN FORCE · THE LOCKS HOLD UNTIL THE ALERT ENDS");
+    }
     st.net.land(
         b,
         HackTarget::Node(lock),
@@ -811,7 +834,7 @@ mod tests {
         );
         assert_eq!(tier_on(&st, b), Tier::Admin);
         assert!(Tier::Guest < Tier::User && Tier::User < Tier::Admin);
-        let name = crate::net::building_name(&st, b).to_uppercase();
+        let name = building_label(&st, b);
         assert_eq!(prompt(&st, &connected(d, b)), format!("{name} [ADMIN] > "));
         let dn = st.city.as_ref().unwrap().district(d).name.to_uppercase();
         assert_eq!(prompt(&st, &district(d)), format!("{dn} NET > "));
@@ -827,7 +850,7 @@ mod tests {
         let (mut st, b, d) = state();
         let mut s = district(d);
         let scan = lines(&mut st, &mut s, "scan");
-        let name = crate::net::building_name(&st, b).to_uppercase();
+        let name = building_label(&st, b);
         let row = scan
             .lines()
             .find(|l| l.contains(&name))
@@ -1038,5 +1061,62 @@ mod tests {
             district_of_terminal(city, k, p),
             city.tile(k, p).unwrap().district
         );
+    }
+
+    #[test]
+    fn connect_takes_whole_names_exact_first_and_labels_unnamed_buildings_apart() {
+        let (mut st, _b, d) = state();
+        let mut s = district(d);
+        let scan = lines(&mut st, &mut s, "scan");
+        let names: Vec<String> = scan
+            .lines()
+            .map(|l| l[4..22].trim_end().to_string())
+            .collect();
+        let distinct: std::collections::BTreeSet<&String> = names.iter().collect();
+        assert_eq!(
+            distinct.len(),
+            names.len(),
+            "every row has its own label: {scan}"
+        );
+        // The whole name connects, spaces and all.
+        let full = names[0].clone();
+        let reply = lines(&mut st, &mut s, &format!("connect {full}"));
+        assert!(reply.contains("CONNECTED"), "{reply}");
+        // An exact name wins over longer names it prefixes.
+        let short = names
+            .iter()
+            .find(|n| names.iter().any(|m| m != *n && m.starts_with(n.as_str())));
+        if let Some(short) = short {
+            let reply = lines(&mut st, &mut s, &format!("connect {short}"));
+            assert!(reply.contains(&format!("CONNECTED TO {short}")), "{reply}");
+        }
+        // Ambiguity lists numbered candidates.
+        let first: String = names[0].chars().take(1).collect();
+        let hits = names.iter().filter(|n| n.starts_with(&first)).count();
+        if hits > 1 {
+            let reply = lines(&mut st, &mut s, &format!("connect {first}"));
+            assert!(reply.contains("AMBIGUOUS"), "{reply}");
+            assert!(
+                reply.lines().skip(1).all(|l| l
+                    .trim_start()
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_digit())),
+                "{reply}"
+            );
+        }
+    }
+
+    #[test]
+    fn door_unlock_during_an_alert_tells_the_truth() {
+        let (mut st, b, d) = state();
+        crate::credentials::prepare(&mut st, b);
+        crate::credentials::copy_codes(&mut st, b, 1);
+        let mut s = connected(d, b);
+        let now = st.net.now(&st);
+        st.net.trace(b).alert_until = Some(now + 30);
+        let reply = lines(&mut st, &mut s, "door unlock");
+        assert!(reply.contains("LOCKDOWN IN FORCE"), "{reply}");
+        assert!(!reply.contains("60 MIN"));
     }
 }
