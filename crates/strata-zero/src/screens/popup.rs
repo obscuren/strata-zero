@@ -42,8 +42,6 @@ pub enum Pick {
     View(Section),
     /// Starts a program against a target in the construct; the result lands in the strip.
     Run(game::ItemId, game::HackTarget),
-    /// One more turn of the program in flight.
-    Continue,
     Close,
 }
 
@@ -156,7 +154,7 @@ impl Popup {
             }
             return TransitionKind::None;
         }
-        let bonus = st.character.sight_bonus(&st.content);
+        let bonus = st.sight_bonus();
         if act == WorldAct::JackIn
             && let Some(why) = crate::net::jack_in_refusal(st)
         {
@@ -291,13 +289,6 @@ impl Popup {
             Pick::Run(program, target) => {
                 let result = crate::net::start_run(st, program, target);
                 report(st, result);
-                ScreenCmd::Pop {
-                    fx: TransitionKind::None,
-                }
-            }
-            Pick::Continue => {
-                crate::net::step_run(st);
-                crate::net::ice_turn(st);
                 ScreenCmd::Pop {
                     fx: TransitionKind::None,
                 }

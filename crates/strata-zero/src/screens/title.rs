@@ -5,6 +5,7 @@ use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::render::Rgb;
 use crate::screens::create::chooser::Chooser;
 use crate::screens::files::Files;
+use crate::screens::generating::Generating;
 use crate::ui::logo::{self, Logo};
 use crate::ui::menu::{Menu, MenuView};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -37,10 +38,30 @@ impl Title {
         st.params.clone().with_seed(seed)
     }
 
+    /// NEW GAME (DEBUG): D'SHAWN, maxed out, straight into a fresh city.
+    fn debug_game(&self, st: &mut AppState) -> ScreenCmd {
+        st.character = game::Character::debug_runner(&st.content);
+        match Generating::new(Title::fresh_params(st, st.tick), st.tick) {
+            Ok(g) => ScreenCmd::Switch {
+                to: Box::new(g),
+                fx: TransitionKind::Glitch,
+            },
+            Err(e) => {
+                st.warn(e.to_string());
+                ScreenCmd::Stay
+            }
+        }
+    }
+
     pub fn new(tick: u64) -> Self {
         Title {
             menu: Menu::new(
-                vec!["NEW GAME".into(), "LOAD GAME".into(), "QUIT".into()],
+                vec![
+                    "NEW GAME".into(),
+                    "NEW GAME (DEBUG)".into(),
+                    "LOAD GAME".into(),
+                    "QUIT".into(),
+                ],
                 tick + 20,
             ),
             opened: tick,
@@ -61,7 +82,8 @@ impl Screen for Title {
                             to: Box::new(Chooser::new(st, st.tick)),
                             fx: TransitionKind::SlideUp,
                         },
-                        1 => ScreenCmd::Push {
+                        1 => self.debug_game(st),
+                        2 => ScreenCmd::Push {
                             to: Box::new(Files::load(st.tick)),
                             fx: TransitionKind::SlideUp,
                         },
@@ -118,7 +140,7 @@ impl Screen for Title {
                 menu_x,
                 menu_y,
                 area.width.saturating_sub(menu_x - area.x),
-                3,
+                self.menu.items.len() as u16,
             ),
             f.buffer_mut(),
         );
@@ -159,11 +181,15 @@ mod tests {
         let mut st = AppState::new();
         let mut title = Title::new(0);
         let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
-        st.tick = 60;
+        // The menu types itself in: by tick 120 all four items stand.
+        st.tick = 120;
         t.draw(|f| title.draw(&st, f)).unwrap();
         let text = buffer_text(t.backend().buffer());
         assert!(
-            text.contains("NEW GAME") && text.contains("LOAD GAME") && text.contains("QUIT"),
+            text.contains("NEW GAME")
+                && text.contains("NEW GAME (DEBUG)")
+                && text.contains("LOAD GAME")
+                && text.contains("QUIT"),
             "{text}"
         );
         assert!(text.contains('█'));
@@ -176,17 +202,23 @@ mod tests {
             title.update(&mut st, &[key(KeyCode::Char('q'))]),
             ScreenCmd::Quit
         ));
-        title.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Down)]);
+        title.update(
+            &mut st,
+            &[key(KeyCode::Down), key(KeyCode::Down), key(KeyCode::Down)],
+        );
         assert!(matches!(
             title.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Quit
         ));
-        title.update(&mut st, &[key(KeyCode::Up), key(KeyCode::Up)]);
+        title.update(
+            &mut st,
+            &[key(KeyCode::Up), key(KeyCode::Up), key(KeyCode::Up)],
+        );
         assert!(matches!(
             title.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Push { .. }
         ));
-        title.update(&mut st, &[key(KeyCode::Char('j'))]);
+        title.update(&mut st, &[key(KeyCode::Char('j')), key(KeyCode::Char('j'))]);
         assert!(
             matches!(
                 title.update(&mut st, &[key(KeyCode::Enter)]),
@@ -211,11 +243,35 @@ mod tests {
             "new game opens the chooser"
         );
         let mut t = Title::new(0);
-        t.update(&mut st, &[key(KeyCode::Down)]);
+        t.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Down)]);
         assert!(matches!(
             t.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Push { .. }
         ));
+    }
+
+    #[test]
+    fn new_game_debug_starts_dshawn_maxed_out_in_a_fresh_city() {
+        let mut st = AppState::new();
+        let mut t = Title::new(0);
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        st.tick = 60;
+        term.draw(|f| t.draw(&st, f)).unwrap();
+        assert!(buffer_text(term.backend().buffer()).contains("NEW GAME (DEBUG)"));
+        t.update(&mut st, &[key(KeyCode::Down)]);
+        assert!(
+            matches!(
+                t.update(&mut st, &[key(KeyCode::Enter)]),
+                ScreenCmd::Switch {
+                    fx: TransitionKind::Glitch,
+                    ..
+                }
+            ),
+            "straight to generating"
+        );
+        assert_eq!(st.character.handle, "D'SHAWN");
+        assert_eq!(st.character.level, 50);
+        assert!(st.character.flags(&st.content).contains("deep_end"));
     }
 
     #[test]

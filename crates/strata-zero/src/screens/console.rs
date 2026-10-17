@@ -318,7 +318,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 return Err("nothing to stand on there".to_string());
             }
             let label = map.label();
-            let bonus = st.character.sight_bonus(&st.content);
+            let bonus = st.sight_bonus();
             let player = st.player.as_mut().expect("checked above");
             player.pos = target;
             player.update_fov(&map, bonus);

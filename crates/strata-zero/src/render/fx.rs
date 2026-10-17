@@ -328,23 +328,31 @@ impl FxOverlay<'_> {
         tick: u64,
         buf: &mut Buffer,
     ) {
-        // Connectors live on the city's strata; a floor's lifts get no marker yet.
-        let Some(stratum) = map.stratum() else {
-            return;
-        };
-        let city = map.city();
         let glow = colour.scale(0.5 + 0.5 * pulse(tick, 20)).to_color();
-        for k in city
-            .connectors
-            .iter()
-            .filter(|k| k.serves.contains(&stratum) && k.pos.chebyshev(inst.origin) <= inst.radius)
-        {
-            let Some((sx, sy)) = tile_to_screen(area, origin, k.pos) else {
+        // With targets (a construct's nodes) the glow sits on them; otherwise on the
+        // stratum's connectors. A floor's lifts get no marker yet.
+        let tiles: Vec<Pos> = if !inst.targets.is_empty() {
+            inst.targets.clone()
+        } else {
+            let Some(stratum) = map.stratum() else {
+                return;
+            };
+            map.city()
+                .connectors
+                .iter()
+                .filter(|k| {
+                    k.serves.contains(&stratum) && k.pos.chebyshev(inst.origin) <= inst.radius
+                })
+                .map(|k| k.pos)
+                .collect()
+        };
+        for p in tiles {
+            let Some((sx, sy)) = tile_to_screen(area, origin, p) else {
                 continue;
             };
             let in_sight = match self.vis {
                 None => true,
-                Some(v) => v.get(k.pos).copied() == Some(Visibility::Visible),
+                Some(v) => v.get(p).copied() == Some(Visibility::Visible),
             };
             let cell = &mut buf[(sx, sy)];
             if !in_sight {

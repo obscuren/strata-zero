@@ -30,6 +30,14 @@ pub const LOST_TURNS: u8 = 3;
 pub const FAILSAFE_COOLING: u64 = 30;
 /// Turns a mask holds once raised.
 pub const MASK_TURNS: u8 = 6;
+/// Minutes the deck cools after the failsafe pulls out a runner in the deep end.
+pub const DEEP_END_COOLING: u64 = 10;
+/// Heat a ping makes inside a construct.
+pub const PING_NOISE: u8 = 2;
+/// Heat an arc trace makes inside a construct.
+pub const TRACE_NOISE: u8 = 5;
+/// Turns a piece stands stunned after an arc trace.
+pub const STUN_TURNS: u8 = 2;
 
 /// What a piece of ICE is doing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,6 +54,8 @@ pub struct Ice {
     pub integrity: u8,
     pub step: usize,
     pub forward: bool,
+    /// Turns left standing stunned: it neither sees, moves nor hits.
+    pub stunned: u8,
 }
 
 pub struct NetState {
@@ -62,6 +72,8 @@ pub struct NetState {
     /// Set when black ICE killed: what did it. The screen reads and clears it.
     pub death: Option<String>,
     pub traces: BTreeMap<BuildingId, Trace>,
+    /// Constructs whose trace has already been routed away once this session.
+    pub null_routed: BTreeSet<BuildingId>,
     pub hacks: Vec<Hack>,
     pub backdoors: BTreeSet<BuildingId>,
     /// The game minute the dumped deck jacks in again.
@@ -84,6 +96,7 @@ impl Default for NetState {
             failsafe: true,
             death: None,
             traces: BTreeMap::new(),
+            null_routed: BTreeSet::new(),
             hacks: Vec::new(),
             backdoors: BTreeSet::new(),
             cooling_until: None,
@@ -107,6 +120,31 @@ impl NetState {
 
     pub fn alert(&self, b: BuildingId, now: u64) -> bool {
         self.traces.get(&b).is_some_and(|t| t.alert(now))
+    }
+
+    /// Heat on a construct's trace. With the null route, the first dump in a
+    /// construct is turned away: the heat falls to the alarm line and the event is
+    /// the alarm if it had not tripped yet. Returns the event and whether it routed.
+    pub fn add_heat(
+        &mut self,
+        b: BuildingId,
+        noise: u8,
+        now: u64,
+        null_route: bool,
+    ) -> (TraceEvent, bool) {
+        let was_alert = self.trace(b).alert(now);
+        let event = self.trace(b).add(noise, now);
+        if event == TraceEvent::Dump && null_route && !self.null_routed.contains(&b) {
+            self.trace(b).heat = game::ALARM_HEAT;
+            self.null_routed.insert(b);
+            let event = if was_alert {
+                TraceEvent::None
+            } else {
+                TraceEvent::Alarm
+            };
+            return (event, true);
+        }
+        (event, false)
     }
 
     fn live(&self, now: u64) -> impl Iterator<Item = &Hack> {
@@ -240,6 +278,7 @@ impl NetState {
             // end walking forward, the vault guard at the far end walking back.
             let step = g.beat.iter().position(|p| *p == g.pos).unwrap_or(0);
             states.push(Ice {
+                stunned: 0,
                 mode: IceMode::Asleep,
                 integrity: g.grade.integrity(),
                 step,
@@ -377,25 +416,22 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
     // A program on yourself never fails.
     let ok = kind == Target::Deck || succeeds(roll, pw, df);
     let now = st.net.now(st);
-    let noise = if ok { spec.noise } else { spec.noise + 2 };
-    let was_alert = st.net.alert(b, now);
-    let event = st.net.trace(b).add(noise, now);
-    let heat = st.net.traces[&b].heat;
-    match event {
-        TraceEvent::Dump => {
-            if !was_alert {
-                let line = raise_alarm(st, b);
-                st.warn(line);
-            }
-            dump(st, "the trace found you");
-            return Some("DUMPED".to_string());
-        }
-        TraceEvent::Alarm => {
-            let line = raise_alarm(st, b);
-            st.warn(line);
-        }
-        TraceEvent::None => {}
+    // Deep dive: a vault gives up its contents quietly; a slip is still loud.
+    let quiet = ok
+        && spec.op == Op::Copy
+        && kind == Target::Node(NodeKind::DataVault)
+        && st.character.flags(&st.content).contains("deep_dive");
+    let noise = if quiet {
+        0
+    } else if ok {
+        spec.noise
+    } else {
+        spec.noise + 2
+    };
+    if noise_on(st, b, noise) {
+        return Some("DUMPED".to_string());
     }
+    let heat = st.net.traces[&b].heat;
     let label = spec.op.label();
     // An attack is a hit a turn until the piece breaks; the run stays up.
     if spec.op == Op::Attack {
@@ -559,6 +595,34 @@ pub fn raise_alarm(st: &mut AppState, b: BuildingId) -> String {
     format!("ALARM · `{}` locks down", building_name(st, b))
 }
 
+/// Heat on the construct's trace with everything that follows: the alarm raised,
+/// the null route taken once, the dump. Returns whether the player was dumped.
+pub(crate) fn noise_on(st: &mut AppState, b: BuildingId, noise: u8) -> bool {
+    let now = st.net.now(st);
+    let was_alert = st.net.alert(b, now);
+    let null_route = st.character.flags(&st.content).contains("null_route");
+    let (event, routed) = st.net.add_heat(b, noise, now, null_route);
+    if routed {
+        st.warn("null route · the trace loses you");
+    }
+    match event {
+        TraceEvent::Dump => {
+            if !was_alert {
+                let line = raise_alarm(st, b);
+                st.warn(line);
+            }
+            dump(st, "the trace found you");
+            true
+        }
+        TraceEvent::Alarm => {
+            let line = raise_alarm(st, b);
+            st.warn(line);
+            false
+        }
+        TraceEvent::None => false,
+    }
+}
+
 /// Dumped: back to the body hard, the focus gone, the deck cooling.
 pub fn dump(st: &mut AppState, why: &str) {
     dump_for(st, why, COOLING_MINUTES);
@@ -566,7 +630,7 @@ pub fn dump(st: &mut AppState, why: &str) {
 
 /// Dumped, with the deck cooling for a given stretch.
 pub fn dump_for(st: &mut AppState, why: &str, cooling: u64) {
-    let bonus = st.character.sight_bonus(&st.content);
+    let bonus = st.sight_bonus();
     let now = st.net.now(st);
     st.net.run = None;
     st.net.cooling_until = Some(now + cooling);
@@ -646,22 +710,8 @@ pub fn ice_turn(st: &mut AppState) {
         // Raised this turn: it starts wearing next turn.
     } else if masked {
         st.net.mask -= 1;
-        let now = st.net.now(st);
-        let was_alert = st.net.alert(b, now);
-        match st.net.trace(b).add(1, now) {
-            TraceEvent::Dump => {
-                if !was_alert {
-                    let line = raise_alarm(st, b);
-                    st.warn(line);
-                }
-                dump(st, "the trace found you");
-                return;
-            }
-            TraceEvent::Alarm => {
-                let line = raise_alarm(st, b);
-                st.warn(line);
-            }
-            TraceEvent::None => {}
+        if noise_on(st, b, 1) {
+            return;
         }
         if st.net.mask == 0 {
             st.say("the mask is gone");
@@ -683,6 +733,16 @@ pub fn ice_turn(st: &mut AppState) {
         let mut ice = st.net.ice[&b][i].clone();
         if ice.integrity == 0 {
             ice.integrity = g.grade.integrity();
+        }
+        // Stunned: the turn passes it by.
+        if ice.stunned > 0 {
+            ice.stunned -= 1;
+            if let Some(states) = st.net.ice.get_mut(&b)
+                && let Some(slot) = states.get_mut(i)
+            {
+                *slot = ice;
+            }
+            continue;
         }
         if sees(k, g.pos, g.grade, pos, masked) {
             ice.mode = IceMode::Awake { seen: pos, lost: 0 };
@@ -775,27 +835,19 @@ fn hit(st: &mut AppState, b: BuildingId, i: usize) {
         .deck(&st.content)
         .map(|(_, d)| d.rating as u32)
         .unwrap_or(0);
-    let now = st.net.now(st);
     match grade {
         IceGrade::White => {
-            let was_alert = st.net.alert(b, now);
-            let event = st.net.trace(b).add(5, now);
-            let heat = st.net.traces[&b].heat;
-            st.warn(format!("white ICE hits · heat {heat}"));
-            match event {
-                TraceEvent::Dump => {
-                    if !was_alert {
-                        let line = raise_alarm(st, b);
-                        st.warn(line);
-                    }
-                    dump(st, "the trace found you");
-                }
-                TraceEvent::Alarm => {
-                    let line = raise_alarm(st, b);
-                    st.warn(line);
-                }
-                TraceEvent::None => {}
-            }
+            let heat = st
+                .net
+                .traces
+                .get(&b)
+                .map_or(0, |t| t.heat)
+                .saturating_add(5);
+            st.warn(format!(
+                "white ICE hits · heat {}",
+                heat.min(game::DUMP_HEAT)
+            ));
+            noise_on(st, b, 5);
         }
         IceGrade::Grey => {
             let drain = 10u32.saturating_sub(armour).max(1);
@@ -807,16 +859,28 @@ fn hit(st: &mut AppState, b: BuildingId, i: usize) {
             }
         }
         IceGrade::Black => {
-            let damage = (6 + security.saturating_sub(230) as u32 / 5)
+            // The deep end: half the damage through the jack, a failsafe that waits
+            // for an eighth, and a short cooling after.
+            let deep = st.character.flags(&st.content).contains("deep_end");
+            let mut damage = (6 + security.saturating_sub(230) as u32 / 5)
                 .saturating_sub(armour)
                 .max(1);
+            if deep {
+                damage = (damage / 2).max(1);
+            }
             st.character.hp = st.character.hp.saturating_sub(damage);
             let hp = st.character.hp;
             st.warn(format!("black ICE hits · hp {hp}"));
-            let quarter = st.character.hp_max(&st.content) / 4;
+            let hp_max = st.character.hp_max(&st.content);
+            let line = if deep { hp_max / 8 } else { hp_max / 4 };
+            let cooling = if deep {
+                DEEP_END_COOLING
+            } else {
+                FAILSAFE_COOLING
+            };
             if st.net.failsafe {
-                if hp <= quarter {
-                    dump_for(st, "the failsafe pulled you out", FAILSAFE_COOLING);
+                if hp <= line {
+                    dump_for(st, "the failsafe pulled you out", cooling);
                 }
             } else if hp == 0 {
                 st.net.run = None;
@@ -834,23 +898,117 @@ pub fn ice_lines(st: &AppState, b: BuildingId, seen: impl Fn(Pos) -> bool) -> Ve
     let Some(states) = st.net.ice.get(&b) else {
         return Vec::new();
     };
+    // Signal ghost: an awake piece is felt through the walls.
+    let ghost = st
+        .character
+        .has_ability(&st.content, &game::AbilityId::new("signal_ghost"));
     k.guards
         .iter()
         .zip(states)
-        .filter(|(g, _)| k.guard_at(g.pos).is_some() && seen(g.pos))
+        .filter(|(g, i)| {
+            k.guard_at(g.pos).is_some()
+                && (seen(g.pos) || (ghost && matches!(i.mode, IceMode::Awake { .. })))
+        })
         .map(|(g, i)| {
             let mode = match i.mode {
                 IceMode::Asleep => "asleep",
                 IceMode::Awake { .. } => "hunting",
             };
+            let stunned = if i.stunned > 0 {
+                format!(" · stunned {}", i.stunned)
+            } else {
+                String::new()
+            };
             format!(
-                "▣ {} ICE · {mode} · {}/{}",
+                "▣ {} ICE · {mode} · {}/{}{stunned}",
                 g.grade.label(),
                 i.integrity,
                 g.grade.integrity()
             )
         })
         .collect()
+}
+
+/// Every node tile of a construct, for a ping's glow.
+pub fn construct_nodes(st: &AppState, b: BuildingId) -> Vec<Pos> {
+    st.constructs
+        .get(b)
+        .map(|k| k.nodes.iter().map(|(_, p)| *p).collect())
+        .unwrap_or_default()
+}
+
+/// An arc trace inside a construct: every standing piece within `radius` of the
+/// origin is stunned for `STUN_TURNS`. Returns their tiles, for the bolts.
+pub fn stun_pieces(st: &mut AppState, b: BuildingId, origin: Pos, radius: i32) -> Vec<Pos> {
+    let Some(k) = st.constructs.get(b).cloned() else {
+        return Vec::new();
+    };
+    let states = st.net.ice_of(&k);
+    let mut hit = Vec::new();
+    for (i, g) in k.guards.iter().enumerate() {
+        if k.guard_at(g.pos).is_none() || g.pos.chebyshev(origin) > radius {
+            continue;
+        }
+        if let Some(ice) = states.get_mut(i) {
+            ice.stunned = STUN_TURNS;
+            hit.push(g.pos);
+        }
+    }
+    hit
+}
+
+/// The awake standing pieces a signal ghost feels through the walls; none without
+/// the ability.
+pub fn ghost_pieces(st: &AppState, b: BuildingId) -> Vec<Pos> {
+    if !st
+        .character
+        .has_ability(&st.content, &game::AbilityId::new("signal_ghost"))
+    {
+        return Vec::new();
+    }
+    let (Some(k), Some(states)) = (st.constructs.get(b), st.net.ice.get(&b)) else {
+        return Vec::new();
+    };
+    k.guards
+        .iter()
+        .zip(states)
+        .filter(|(g, i)| k.guard_at(g.pos).is_some() && matches!(i.mode, IceMode::Awake { .. }))
+        .map(|(g, _)| g.pos)
+        .collect()
+}
+
+/// An awake piece stands in the player's sight memory.
+pub fn hunted(st: &AppState) -> bool {
+    let Some(p) = st.player.as_ref() else {
+        return false;
+    };
+    let Place::Construct(b) = p.place else {
+        return false;
+    };
+    let (Some(k), Some(states)) = (st.constructs.get(b), st.net.ice.get(&b)) else {
+        return false;
+    };
+    let vis = p.vis();
+    k.guards.iter().zip(states).any(|(g, i)| {
+        g.standing
+            && matches!(i.mode, IceMode::Awake { .. })
+            && vis
+                .get(g.pos)
+                .is_some_and(|v| *v != crate::render::Visibility::Unseen)
+    })
+}
+
+/// A standing piece is beside the player.
+pub fn beside_ice(st: &AppState) -> bool {
+    let Some(p) = st.player.as_ref() else {
+        return false;
+    };
+    let Place::Construct(b) = p.place else {
+        return false;
+    };
+    st.constructs
+        .get(b)
+        .is_some_and(|k| p.pos.neighbors8().any(|q| k.guard_at(q).is_some()))
 }
 
 /// Why the port refuses to jack in right now: the deck cooling, or a lockdown.

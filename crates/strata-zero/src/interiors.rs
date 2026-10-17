@@ -66,7 +66,7 @@ fn building_name(city: &City, b: BuildingId) -> String {
 
 /// Puts the player on a floor at a tile and shows them around.
 fn land(st: &mut AppState, place: Place, pos: Pos) {
-    let bonus = st.character.sight_bonus(&st.content);
+    let bonus = st.sight_bonus();
     let Some(city) = st.city.as_ref() else { return };
     let Some(player) = st.player.as_mut() else {
         return;

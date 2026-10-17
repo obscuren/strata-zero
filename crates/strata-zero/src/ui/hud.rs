@@ -2,10 +2,9 @@
 
 use crate::anim::effects::pulse;
 use crate::interiors::Interiors;
-use crate::render::overlay::Digital;
 use crate::ui::chrome::{CYAN, DIM, FAINT, MAGENTA, RULE, TEXT};
 use crate::ui::sidebar::{Section, Sidebar};
-use citygen::{City, FloorPlan, Place, Pos, StratumKind, SubnetOwner};
+use citygen::{City, FloorPlan, Place, Pos, StratumKind};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
@@ -308,6 +307,22 @@ pub const WALK_VERBS: &[(&str, &str)] = &[
 pub const RUN_VERBS: &[(&str, &str)] = &[
     (".", "turn"),
     ("space", "continue"),
+    ("1-5", "programs"),
+    ("enter", "jack"),
+];
+/// The verbs jacked in with nothing running.
+pub const NET_VERBS: &[(&str, &str)] = &[
+    ("space", "act"),
+    ("1-5", "programs"),
+    ("enter", "jack"),
+    ("v", "iew"),
+    ("m", "sgs"),
+    ("?", "keys"),
+];
+/// The verbs beside a standing piece of ICE.
+pub const ICE_VERBS: &[(&str, &str)] = &[
+    ("1-5", "attack"),
+    ("space", "act"),
     ("enter", "jack"),
     ("?", "keys"),
 ];
@@ -378,9 +393,10 @@ pub struct Slot {
     pub flash: bool,
 }
 
-/// ` ABILITIES: ` then the five slots, then the deck (and console) hints at the right.
-pub fn footer_abilities(slots: &[Slot], dev: bool, width: u16) -> Line<'static> {
-    let mut spans = vec![dim(" ABILITIES: ")];
+/// ` ABILITIES: ` (or ` PROGRAMS: ` jacked in) then the five slots, then the deck
+/// (and console) hints at the right.
+pub fn footer_abilities(label: &str, slots: &[Slot], dev: bool, width: u16) -> Line<'static> {
+    let mut spans = vec![dim(format!(" {label}: "))];
     for i in 0..SLOTS {
         if i > 0 {
             spans.push(Span::raw("   "));
@@ -453,18 +469,15 @@ pub fn location(city: &City, interiors: &Interiors, place: Place, pos: Pos) -> S
         }
     };
     if stratum == StratumKind::Net {
-        let owner = Digital::node_under(city, stratum, pos)
-            .map(|id| city.net.node(id))
-            .map(|n| match city.net.subnet(n.subnet).owner {
-                SubnetOwner::Building(b) => {
-                    let b = city.building(b);
-                    b.name.clone().unwrap_or_else(|| b.kind.label().to_string())
-                }
-                SubnetOwner::District(d) => city.district(d).name.clone(),
-                SubnetOwner::City => city.name.clone(),
-            })
+        // The district the grid runs over, not the nearest node's owner.
+        let district = city
+            .tile(stratum, pos)
+            .and_then(|t| t.district)
+            .or_else(|| city.tile(StratumKind::Street, pos).and_then(|t| t.district))
+            .and_then(|d| city.district_opt(d))
+            .map(|d| d.name.clone())
             .unwrap_or_else(|| city.name.clone());
-        return format!("{owner} · Net");
+        return format!("{district} · Net");
     }
     let tile = city.tile(stratum, pos);
     let place = tile
@@ -658,13 +671,13 @@ mod tests {
                 flash: false,
             },
         ];
-        let a = footer_abilities(&slots, true, 120).to_string();
+        let a = footer_abilities("ABILITIES", &slots, true, 120).to_string();
         assert!(
             a.starts_with(" ABILITIES: 1 netscan ●   2 ping 12s   3 ──   4 ──   5 ──"),
             "{a:?}"
         );
         assert!(a.trim_end().ends_with("[:]console [tab]deck"), "{a:?}");
-        let a = footer_abilities(&slots, false, 100).to_string();
+        let a = footer_abilities("ABILITIES", &slots, false, 100).to_string();
         assert!(
             a.trim_end().ends_with("[tab]deck") && !a.contains("console"),
             "{a:?}"
@@ -760,7 +773,7 @@ mod tests {
             state: SlotState::Cooling(10),
             flash: true,
         }];
-        let line = footer_abilities(&slots, false, 100);
+        let line = footer_abilities("ABILITIES", &slots, false, 100);
         let name = line
             .spans
             .iter()
@@ -769,6 +782,7 @@ mod tests {
         assert_eq!(name.style.bg, Some(CYAN), "{line:?}");
         assert_eq!(name.style.fg, Some(Color::Rgb(10, 11, 16)));
         let calm = footer_abilities(
+            "ABILITIES",
             &[Slot {
                 name: "Netscan".into(),
                 state: SlotState::Ready,

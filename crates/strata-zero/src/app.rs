@@ -146,6 +146,22 @@ impl AppState {
         crate::ui::hud::clock_at(self.clock_tick())
     }
 
+    /// How far past the base the character sees: their perks, and two more tiles
+    /// with low-light between 18:00 and 05:59.
+    pub fn sight_bonus(&self) -> i32 {
+        let mut bonus = self.character.sight_bonus(&self.content);
+        let (hour, _) = self.clock();
+        let night = !(6..18).contains(&hour);
+        if night
+            && self
+                .character
+                .has_ability(&self.content, &game::AbilityId::new("lowlight"))
+        {
+            bonus += 2;
+        }
+        bonus
+    }
+
     /// Turns dev mode on or off; off also drops the dev-only sidebar sections.
     pub fn set_dev(&mut self, on: bool) {
         self.dev = on;

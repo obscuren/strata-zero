@@ -210,8 +210,29 @@ impl Character {
         Some(Self::from_build(c, &Build::from_template(c, t)))
     }
 
+    /// The debug runner: Vex's build as D'SHAWN at level 50 with every talent at
+    /// its best, full HP and focus. For the title's NEW GAME (DEBUG).
+    pub fn debug_runner(c: &Content) -> Character {
+        let mut d = Self::from_template(c, &TemplateId::new("vex"))
+            .expect("the vex template is in the content");
+        d.handle = "D'SHAWN".to_string();
+        d.level = 50;
+        d.xp = 0;
+        d.talent_points = 0;
+        d.talents = c.talents.iter().map(|t| (t.id.clone(), t.ranks)).collect();
+        d.hp = d.hp_max(c);
+        d.focus = d.focus_max(c);
+        d
+    }
+
     pub fn has_skill(&self, id: &SkillId) -> bool {
         self.skills.contains(id)
+    }
+
+    /// Whether the character has an ability from any source: an item, a category,
+    /// a talent.
+    pub fn has_ability(&self, c: &Content, id: &AbilityId) -> bool {
+        self.abilities(c).iter().any(|(a, _)| a == id)
     }
 
     pub fn has_category(&self, id: &CategoryId) -> bool {
@@ -954,7 +975,23 @@ mod tests {
         );
         assert_eq!(
             Boon::Flag("quick_draw".into()).words(&c),
-            "later: quick_draw"
+            "later: quick_draw",
+            "a flag nothing reads yet says so"
+        );
+        // The flags the Net reads say what they do.
+        assert_eq!(Boon::Flag("ice_pick".into()).words(&c), "+2 power to crack");
+        assert_eq!(
+            Boon::Flag("deep_dive".into()).words(&c),
+            "+2 power to copy · a vault copy makes no heat"
+        );
+        assert_eq!(Boon::Flag("black_ice".into()).words(&c), "+1 attack damage");
+        assert_eq!(
+            Boon::Flag("null_route".into()).words(&c),
+            "the first dump in a construct routes away"
+        );
+        assert_eq!(
+            Boon::Flag("deep_end".into()).words(&c),
+            "black ICE hits halved · the failsafe waits for an eighth · ten minutes cooling"
         );
     }
 
@@ -1000,5 +1037,36 @@ mod tests {
         let mut k = Character::from_template(&c, &TemplateId::new("kessler")).unwrap();
         k.give(crack.clone(), 1);
         assert_eq!(k.can_load(&c, &crack).unwrap_err(), "no deck jacked");
+    }
+
+    #[test]
+    fn has_ability_reads_every_source() {
+        let c = Content::load().unwrap();
+        let ch = vex(&c);
+        assert!(
+            ch.has_ability(&c, &AbilityId::new("signal_ghost")),
+            "the netrunner category"
+        );
+        assert!(ch.has_ability(&c, &AbilityId::new("netscan")), "the deck");
+        assert!(!ch.has_ability(&c, &AbilityId::new("ping")));
+    }
+
+    #[test]
+    fn the_debug_runner_is_vex_maxed_out_under_another_name() {
+        let c = Content::load().unwrap();
+        let d = Character::debug_runner(&c);
+        assert_eq!(d.handle, "D'SHAWN");
+        assert_eq!((d.level, d.xp, d.talent_points), (50, 0, 0));
+        for t in &c.talents {
+            assert_eq!(d.talent_rank(&t.id), t.ranks, "{}", t.id);
+        }
+        assert!(d.flags(&c).contains("deep_end") && d.flags(&c).contains("null_route"));
+        assert!(d.has_ability(&c, &AbilityId::new("arc_trace")));
+        assert!(d.has_ability(&c, &AbilityId::new("ping")));
+        assert_eq!(d.hp, d.hp_max(&c));
+        assert_eq!(d.focus, d.focus_max(&c));
+        let vex = vex(&c);
+        assert_eq!(d.inventory.len(), vex.inventory.len(), "Vex's kit");
+        assert_eq!(d.loaded, vex.loaded);
     }
 }
