@@ -304,4 +304,34 @@ mod tests {
             "{text}"
         );
     }
+
+    #[test]
+    fn looking_at_a_sign_letter_names_the_building() {
+        let c = Generator::run(GenParams {
+            seed: 8,
+            size: SizePreset::Medium,
+            districts: 7,
+            ..Default::default()
+        })
+        .unwrap();
+        let content = game::Content::load().unwrap();
+        let st = c.stratum(StratumKind::Street).unwrap();
+        let (p, t) = st
+            .tiles
+            .iter()
+            .find(|(_, t)| matches!(t.feature, Some(citygen::Feature::Sign(ch)) if ch.is_alphabetic()))
+            .expect("a megablock sign");
+        let name = c.building(t.building.expect("a sign tile has a building"));
+        let name = name.name.clone().unwrap();
+        let lines = inspector_lines(
+            &MapRef::stratum_of(&c, StratumKind::Street),
+            p,
+            None,
+            &[],
+            &content,
+            None,
+        );
+        let text: String = lines.iter().map(|l| l.to_string() + "\n").collect();
+        assert!(text.contains(&name), "{text}");
+    }
 }

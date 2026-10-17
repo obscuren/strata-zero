@@ -31,17 +31,20 @@ building mix, palette and signage. A Net graph of subnets, nodes and links is
 anchored to the physical tiles and can be shown as a digital overlay.
 
 A city has up to two megablocks, in its megablocks districts where a block is
-big enough: each a whole city block, an ordinary
-tall building from the street, a hollow one inside. Its upper floors ring an
-open atrium with a railing and a walkway, locked flats around them and the lifts
-and stairs in a lobby off the walkway; over the railing you look down on the
-ground plaza, dim and static, dimmer the higher you are. The plaza holds the
-reception inside the main door, stalls and tables under the drop, a diner and
-shopfronts. High up in the city's first megablock is your flat: a living room
-along the windows, a bedroom with the desk and your rig, a shower room and a
-storage room. A new game wakes you beside the bed, and so does loading a save;
-your front door opens onto the walkway with no change of map. A city without a
-megablock starts you on the street as before.
+big enough: each a whole city block, hollow inside. From the street its name
+runs in sign letters along the façade beside the main door, with a canopy and
+lamps on the paving in front. A street terminal you can jack into usually claims
+the forecourt; vending machines and a bench fill whatever room the pavement has
+left. A food stall and parked bikes stand nearby, and round the back a service
+door by the dumpsters lets you onto the ground plaza too. Its upper floors ring an open atrium with a railing and a walkway, locked
+flats around them and the lifts and stairs in a lobby off the walkway; over the
+railing you look down on the ground plaza, dim and static, dimmer the higher you
+are. The plaza holds the reception inside the main door, stalls and tables under
+the drop, a diner and shopfronts. High up in the city's first megablock is your
+flat: a living room along the windows, a bedroom with the desk and your rig, a
+shower room and a storage room. A new game wakes you beside the bed, and so does
+loading a save; your front door opens onto the walkway with no change of map. A
+city without a megablock starts you on the street as before.
 
 The same graph is cyberspace. Jack in at any street terminal, or at the rig in
 your flat (walk up to it and press `enter`): your body stays at the port and you

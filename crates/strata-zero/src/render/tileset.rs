@@ -110,6 +110,7 @@ pub fn glyph_for(
             Feature::Helipad => 'H',
             Feature::Pipe => '╌',
             Feature::Cable => '╌',
+            Feature::Awning => '▔',
             Feature::Node(k) => node_glyph(k, style),
             Feature::Furniture(piece) => match piece {
                 Furniture::Desk => '▭',
@@ -123,6 +124,9 @@ pub fn glyph_for(
                 Furniture::Locker => '▮',
                 Furniture::Couch => '▬',
                 Furniture::Shower => '≋',
+                Furniture::Bench => '╥',
+                Furniture::Vending => '◘',
+                Furniture::Bike => 'ꝺ',
             },
         };
     }
@@ -272,6 +276,10 @@ pub fn legend_entries(k: StratumKind) -> Vec<(char, &'static str)> {
             ('─', "railing"),
             ('▬', "couch"),
             ('≋', "shower"),
+            ('▔', "awning"),
+            ('╥', "bench"),
+            ('◘', "vending machine"),
+            ('ꝺ', "bike"),
             ('◉', "camera"),
             ('~', "puddle/water"),
         ],
@@ -371,6 +379,7 @@ fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
         Feature::Helipad => Rgb(230, 230, 130),
         Feature::Pipe => Rgb(125, 105, 85),
         Feature::Cable => Rgb(85, 85, 95),
+        Feature::Awning => ts.accent.scale(0.6),
         Feature::Node(_) => {
             Rgb(240, 255, 250).scale(0.7 + 0.3 * pulse(tick + tile.variant as u64, 30))
         }
@@ -527,7 +536,13 @@ mod tests {
     #[test]
     fn home_furniture_and_railings_have_glyphs() {
         let s = StylePack::load().unwrap();
-        for (piece, ch) in [(Furniture::Couch, '▬'), (Furniture::Shower, '≋')] {
+        for (piece, ch) in [
+            (Furniture::Couch, '▬'),
+            (Furniture::Shower, '≋'),
+            (Furniture::Bench, '╥'),
+            (Furniture::Vending, '◘'),
+            (Furniture::Bike, 'ꝺ'),
+        ] {
             let f = Some(Feature::Furniture(piece));
             assert_eq!(glyph_for(Terrain::Floor, f, None, None, 1, 0, 0, &s), ch);
         }

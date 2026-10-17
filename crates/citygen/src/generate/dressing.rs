@@ -1,13 +1,13 @@
 //! Stage 9: features, light maps and per-tile variants.
 
-use super::{GenCtx, Stage, StageRunner, StepOut};
+use super::{GenCtx, Stage, StageRunner, StepOut, exterior};
 use crate::generate::connectivity::reachable_from_street;
 use crate::geom::{Pos, Rect};
 use crate::params::GenError;
 use crate::pathing::components;
 use crate::rng::{chance, tile_hash};
 use crate::tile::{Feature, Terrain, Tile};
-use crate::world::{StratumKind, Theme};
+use crate::world::{BuildingKind, StratumKind, Theme};
 use rand::seq::IndexedRandom;
 use rand_chacha::ChaCha8Rng;
 use std::collections::VecDeque;
@@ -15,6 +15,7 @@ use std::collections::VecDeque;
 enum Work {
     Facade(usize),
     Streets(usize),
+    Exterior(usize),
     Verify,
     Lights(StratumKind),
     Variants(StratumKind),
@@ -51,7 +52,7 @@ fn emission(terrain: Terrain, feature: Option<Feature>, k: StratumKind) -> Optio
 }
 
 /// True when the tile may take a blocking feature without pinching a corridor.
-fn open_area(ctx: &GenCtx, k: StratumKind, p: Pos) -> bool {
+pub(crate) fn open_area(ctx: &GenCtx, k: StratumKind, p: Pos) -> bool {
     let t = ctx.tile(k, p);
     let Some(t) = t else { return false };
     if !t.is_walkable() || t.is_connector() || t.terrain == Terrain::Door {
@@ -64,7 +65,7 @@ fn open_area(ctx: &GenCtx, k: StratumKind, p: Pos) -> bool {
 }
 
 /// A feature may go here if the tile is bare and not a door or connector.
-fn bare(ctx: &GenCtx, k: StratumKind, p: Pos) -> bool {
+pub(crate) fn bare(ctx: &GenCtx, k: StratumKind, p: Pos) -> bool {
     ctx.tile(k, p).is_some_and(|t| {
         t.feature.is_none()
             && !t.is_connector()
@@ -298,6 +299,10 @@ impl StageRunner for DressingStage {
             .extend((0..ctx.city.buildings.len()).map(Work::Facade));
         self.queue
             .extend((0..ctx.city.districts.len()).map(Work::Streets));
+        // Megablocks get their outside after the street pass, before Verify checks it.
+        let megablocks = (0..ctx.city.buildings.len())
+            .filter(|i| ctx.city.buildings[*i].kind == BuildingKind::Megablock);
+        self.queue.extend(megablocks.map(Work::Exterior));
         self.queue.push_back(Work::Verify);
         self.queue
             .extend(StratumKind::PHYSICAL.into_iter().map(Work::Lights));
@@ -314,6 +319,7 @@ impl StageRunner for DressingStage {
         match work {
             Work::Facade(i) => self.facade(ctx, i),
             Work::Streets(d) => self.streets(ctx, d),
+            Work::Exterior(i) => exterior::dress(ctx, i),
             Work::Verify => Self::verify(ctx),
             Work::Lights(k) => Self::lights(ctx, k),
             Work::Variants(k) => Self::variants(ctx, k),

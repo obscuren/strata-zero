@@ -22,6 +22,10 @@ impl StageRunner for NamingStage {
     fn step(&mut self, ctx: &mut GenCtx) -> Result<StepOut, GenError> {
         let n = ctx.city.districts.len();
         if self.next >= n {
+            // Names are final only now: the landmark pass renames buildings.
+            for i in 0..ctx.city.buildings.len() {
+                super::exterior::sign(ctx, i);
+            }
             return Ok(StepOut::Finished);
         }
         let rng = self.rng.as_mut().expect("begin sets rng");
