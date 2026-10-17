@@ -42,6 +42,8 @@ pub const BASE_MOVE: u8 = 4;
 pub const BASE_AP: u8 = 2;
 /// Ticks between one piece's actions in its turn, so you watch it come.
 pub const PACE_TICKS: u64 = 8;
+/// Ticks between your own steps on an aimed walk.
+pub const WALK_TICKS: u64 = 4;
 
 /// Who acts in an engagement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -780,6 +782,19 @@ fn step_toward(k: &Construct, from: Pos, goal: Pos, avoid: Pos) -> Option<Pos> {
         (t.is_walkable() || (to == goal && t.feature.is_none())).then_some(1)
     })?;
     path.into_iter().find(|p| *p != from)
+}
+
+/// The tiles you would walk from `from` to `to`, after your own: the shortest way
+/// over the floor with standing pieces in the way. `None` when nothing reaches it.
+pub fn path_to(k: &Construct, from: Pos, to: Pos) -> Option<Vec<Pos>> {
+    if from == to {
+        return Some(Vec::new());
+    }
+    let path = astar(k.tiles.size(), from, to, |_, step| {
+        let t = k.tiles.get(step)?;
+        (t.is_walkable() && k.guard_at(step).is_none()).then_some(1)
+    })?;
+    Some(path.into_iter().filter(|p| *p != from).collect())
 }
 
 /// The ICE's turn in the construct the player stands in: every standing piece

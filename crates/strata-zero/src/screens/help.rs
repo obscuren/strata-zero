@@ -42,6 +42,10 @@ const WALK: &[(&str, &str)] = &[
         "e",
         "jacked in: turns by hand, and back when nothing hunts you",
     ),
+    (
+        "g",
+        "aim a walk (in a fight the arrows aim) · enter walks · esc drops",
+    ),
     ("tab", "open the deck"),
     ("F1-F4", "panes: here · quest · map · log"),
     ("F5 F6", "inspect · legend (dev mode)"),
@@ -59,8 +63,12 @@ const WALK: &[(&str, &str)] = &[
 /// Draws the key list for `mode` centred over whatever is already on screen.
 pub fn draw(f: &mut Frame, mode: Mode) {
     let area = f.area();
-    let w = area.width.min(60);
-    let h = area.height.min(22);
+    let rows = match mode {
+        Mode::Explore => EXPLORE,
+        Mode::Walk => WALK,
+    };
+    let w = area.width.min(72);
+    let h = area.height.min(rows.len() as u16 + 2);
     let rect = Rect::new(
         area.x + (area.width - w) / 2,
         area.y + (area.height - h) / 2,
@@ -75,10 +83,6 @@ pub fn draw(f: &mut Frame, mode: Mode) {
     let block = boxed(title);
     let inner = block.inner(rect);
     f.render_widget(block, rect);
-    let rows = match mode {
-        Mode::Explore => EXPLORE,
-        Mode::Walk => WALK,
-    };
     let lines: Vec<Line> = rows
         .iter()
         .map(|(k, what)| {

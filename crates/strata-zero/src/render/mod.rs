@@ -9,6 +9,7 @@ pub mod map;
 pub mod memmap;
 pub mod minimap;
 pub mod overlay;
+pub mod path;
 pub mod people;
 pub mod style;
 pub mod tileset;

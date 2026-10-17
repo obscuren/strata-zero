@@ -90,6 +90,13 @@ impl FpsMeter {
     }
 }
 
+/// A walk in flight: the tiles still to step, and when the next one falls.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Walk {
+    pub path: Vec<Pos>,
+    pub next_at: u64,
+}
+
 pub struct MapScreen {
     pub mode: Mode,
     /// The map on screen: a stratum, or the floor the player walks.
@@ -97,6 +104,10 @@ pub struct MapScreen {
     pub cam: Camera,
     /// The tile under inspection in Explore mode; the camera follows it.
     pub cursor: Pos,
+    /// The tile a walk is aimed at, in a construct.
+    pub aim: Option<Pos>,
+    /// The aimed walk being stepped, a tile per `WALK_TICKS`; keys wait for it.
+    pub walking: Option<Walk>,
     pub digital: bool,
     pub help: bool,
     fps: FpsMeter,
@@ -192,6 +203,8 @@ impl MapScreen {
             place: Place::Stratum(StratumKind::Street),
             cam: Camera::default(),
             cursor: Pos::new(0, 0),
+            aim: None,
+            walking: None,
             digital: false,
             help: false,
             fps: FpsMeter::default(),
@@ -1140,6 +1153,102 @@ impl MapScreen {
         )
     }
 
+    /// The path from the player to the aim and how many tiles the moves left cover;
+    /// `None` when nothing reaches the aim.
+    pub fn aim_path(&self, st: &AppState) -> Option<(Vec<Pos>, usize)> {
+        let aim = self.aim?;
+        let player = st.player.as_ref()?;
+        let Place::Construct(b) = player.place else {
+            return None;
+        };
+        let k = st.constructs.get(b)?;
+        let path = crate::net::path_to(k, player.pos, aim)?;
+        let lit = match st.net.engaged.as_ref() {
+            Some(e) => e.moves as usize,
+            None => path.len(),
+        };
+        Some((path, lit))
+    }
+
+    /// Enter on the aim: the walk starts if the moves left reach it.
+    fn start_walk(&mut self, st: &mut AppState, aim: Pos) -> ScreenCmd {
+        let Some((path, lit)) = self.aim_path(st) else {
+            st.warn("no way there");
+            return ScreenCmd::Stay;
+        };
+        if path.len() > lit {
+            if lit == 0 {
+                st.warn("no moves left");
+            } else {
+                st.warn(format!(
+                    "too far · {lit} move{}",
+                    if lit == 1 { "" } else { "s" }
+                ));
+            }
+            return ScreenCmd::Stay;
+        }
+        let _ = aim;
+        self.aim = None;
+        self.walking = Some(Walk {
+            path,
+            next_at: st.clock_tick() + crate::net::WALK_TICKS,
+        });
+        ScreenCmd::Stay
+    }
+
+    /// One tile of the walk in flight when its time has come: a move spent in a
+    /// fight, sight refreshed, the run aborted as any step aborts it.
+    fn walk_step(&mut self, st: &mut AppState) {
+        let Some(w) = self.walking.as_ref() else {
+            return;
+        };
+        if st.clock_tick() < w.next_at {
+            return;
+        }
+        let Some(&next) = w.path.first() else {
+            self.walking = None;
+            return;
+        };
+        let Some((Place::Construct(b), _)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
+            self.walking = None;
+            return;
+        };
+        let open = st.constructs.get(b).is_some_and(|k| {
+            k.tiles.get(next).is_some_and(|t| t.is_walkable()) && k.guard_at(next).is_none()
+        });
+        if !open {
+            self.walking = None;
+            st.warn("the way is blocked");
+            return;
+        }
+        if let Err(why) = crate::net::spend_move(st) {
+            self.walking = None;
+            st.warn(why);
+            return;
+        }
+        let bonus = st.sight_bonus();
+        if let Some(city) = st.city.as_ref()
+            && let Some(map) =
+                MapRef::for_place(city, &st.interiors, &st.constructs, Place::Construct(b))
+            && let Some(player) = st.player.as_mut()
+        {
+            player.pos = next;
+            player.update_fov(&map, bonus);
+        }
+        if st.net.run.take().is_some() {
+            st.say("run aborted");
+        }
+        let now = st.clock_tick();
+        if let Some(w) = self.walking.as_mut() {
+            w.path.remove(0);
+            if w.path.is_empty() {
+                self.walking = None;
+            } else {
+                w.next_at = now + crate::net::WALK_TICKS;
+            }
+        }
+    }
+
     fn handle_walk(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
         let before = st.player.as_ref().map(|p| (p.place, p.pos));
         let cmd = self.handle_walk_inner(st, k);
@@ -1263,19 +1372,35 @@ impl MapScreen {
         {
             return Some(cmd);
         }
-        // In a fight a step onto open ground costs a move.
-        if let Some(dir) = dir_for(k.code)
-            && st.net.engaged.is_some()
-        {
-            let open = {
-                let city = st.city.as_ref()?;
-                let player = st.player.as_ref()?;
-                MapRef::for_place(city, &st.interiors, &st.constructs, player.place)
-                    .is_some_and(|m| m.walkable(player.pos.step(dir)))
-            };
-            if open && let Err(why) = crate::net::spend_move(st) {
-                st.warn(why);
+        // The aim: `g` starts it anywhere in a construct, the arrows move it while it
+        // is up or while the board is on turns, enter walks it, esc drops it.
+        let inside = match st.player.as_ref().map(|p| (p.place, p.pos)) {
+            Some((Place::Construct(b), pos)) => Some((b, pos)),
+            _ => None,
+        };
+        if let Some((b, pos)) = inside {
+            if k.code == KeyCode::Char('g') {
+                self.aim = Some(pos);
                 return Some(ScreenCmd::Stay);
+            }
+            if let Some(dir) = dir_for(k.code)
+                && (self.aim.is_some() || st.net.engaged.is_some())
+            {
+                let from = self.aim.unwrap_or(pos);
+                let to = from.step(dir);
+                let open = st.constructs.get(b).is_some_and(|k| {
+                    k.tiles.get(to).is_some_and(|t| t.is_walkable()) || k.guard_at(to).is_some()
+                });
+                if open {
+                    self.aim = Some(to);
+                }
+                return Some(ScreenCmd::Stay);
+            }
+            if k.code == KeyCode::Enter
+                && let Some(aim) = self.aim
+                && aim != pos
+            {
+                return Some(self.start_walk(st, aim));
             }
         }
         let dev = st.dev;
@@ -1407,6 +1532,17 @@ impl Screen for MapScreen {
             self.cam_ready = true;
         }
         for (i, k) in keys.iter().enumerate() {
+            // An aim up: esc drops it and nothing else. A walk in flight: the keys
+            // wait for it, but esc still pauses.
+            if self.mode == Mode::Walk && self.console.is_none() {
+                if k.code == KeyCode::Esc && self.aim.is_some() {
+                    self.aim = None;
+                    continue;
+                }
+                if self.walking.is_some() && k.code != KeyCode::Esc {
+                    continue;
+                }
+            }
             let cmd = match self.handle_common(st, k) {
                 Some(cmd) => Some(cmd),
                 None => match self.mode {
@@ -1475,6 +1611,7 @@ impl Screen for MapScreen {
         st.net.minute(now, inside, &mut st.constructs);
         // The beat of a calm construct: one per frame at most, so a long menu is
         // never a burst of rolls.
+        let was_engaged = st.net.engaged.is_some();
         if self.mode == Mode::Walk && inside.is_some() {
             if st.net.engaged.is_some() {
                 crate::net::ice_pace(st);
@@ -1486,6 +1623,22 @@ impl Screen for MapScreen {
         // Out of the construct, out of the fight.
         if inside.is_none() && st.net.engaged.is_some() {
             crate::net::disengage(st);
+        }
+        // The walk: it stops where it is when a fight starts under it or the turn
+        // is no longer yours, else it steps on its ticks.
+        if self.walking.is_some()
+            && ((st.net.engaged.is_some() && !was_engaged) || !crate::net::your_turn(st))
+        {
+            self.walking = None;
+            self.aim = None;
+            st.say("the walk stops");
+        }
+        if inside.is_none() {
+            self.aim = None;
+            self.walking = None;
+        }
+        if self.mode == Mode::Walk {
+            self.walk_step(st);
         }
         self.refresh_placement(st);
         ScreenCmd::Stay
@@ -1566,6 +1719,16 @@ impl Screen for MapScreen {
             _ => None,
         };
         if let Some(o) = ghost.as_ref() {
+            overlays.push(o);
+        }
+        let aimed = self.aim_path(st);
+        let path = self.aim.map(|aim| crate::render::path::PathOverlay {
+            path: aimed.as_ref().map_or(&[][..], |(p, _)| p.as_slice()),
+            lit: aimed.as_ref().map_or(0, |(_, lit)| *lit),
+            aim,
+            reachable: aimed.is_some(),
+        });
+        if let Some(o) = path.as_ref() {
             overlays.push(o);
         }
         let fx = FxOverlay { fx: &st.fx, vis };
@@ -6068,7 +6231,8 @@ mod tests {
         let (b, _) = lock_run(&mut st, &mut s);
         s.update(&mut st, &[key(KeyCode::Char('e'))]);
         assert!(st.net.engaged.as_ref().is_some_and(|e| e.manual));
-        // Steps inside the room spend moves; the fifth is refused.
+        // Steps inside the room spend moves: the arrows aim, enter walks; the fifth
+        // is refused.
         let here = player(&st).1;
         let k = st.constructs.get(b).unwrap().clone();
         let there = here
@@ -6077,15 +6241,17 @@ mod tests {
             .expect("room to step in");
         let (go, back) = (dir_between(here, there), dir_between(there, here));
         for (n, d) in [go, back, go, back].into_iter().enumerate() {
-            s.update(&mut st, &[key(d)]);
+            s.update(&mut st, &[key(d), key(KeyCode::Enter)]);
+            walk_tick(&mut st, &mut s);
             assert_eq!(
                 st.net.engaged.as_ref().unwrap().moves,
                 BASE_MOVE - 1 - n as u8
             );
         }
-        s.update(&mut st, &[key(go)]);
+        s.update(&mut st, &[key(go), key(KeyCode::Enter)]);
         assert_eq!(last(&st), Some("no moves left"));
         assert_eq!(player(&st).1, here, "refused: not moved");
+        s.update(&mut st, &[key(KeyCode::Esc)]);
         // A program starts for free and rolls per action point.
         s.update(&mut st, &[key(KeyCode::Char('1'))]);
         assert_eq!(last(&st), Some("crack starts · 3 turns"));
@@ -6367,6 +6533,249 @@ mod tests {
         assert_eq!(
             crate::screens::console::run(&mut st, at, "engage").unwrap_err(),
             "not in a construct"
+        );
+    }
+
+    /// A start tile and a key whose direction has `len` open tiles after it: floor,
+    /// no node, no piece. Rooms first, where no piece patrols or looks, then the rest.
+    fn straight(st: &AppState, b: citygen::BuildingId, len: i32) -> (Pos, KeyCode, Dir) {
+        let k = st.constructs.get(b).unwrap();
+        let open = |p: Pos| {
+            k.tiles.get(p).is_some_and(|t| t.is_walkable())
+                && k.node_at(p).is_none()
+                && k.guard_at(p).is_none()
+        };
+        let size = k.tiles.size();
+        let mut tiles: Vec<Pos> = k.rooms.iter().flat_map(|r| r.iter()).collect();
+        tiles.extend(
+            (0..size.h as i32).flat_map(|y| (0..size.w as i32).map(move |x| Pos::new(x, y))),
+        );
+        for start in tiles {
+            {
+                if !open(start) {
+                    continue;
+                }
+                for (key, d) in [
+                    (KeyCode::Char('l'), Dir::E),
+                    (KeyCode::Char('h'), Dir::W),
+                    (KeyCode::Char('j'), Dir::S),
+                    (KeyCode::Char('k'), Dir::N),
+                ] {
+                    let mut p = start;
+                    let mut n = 0;
+                    while n < len {
+                        p = p.step(d);
+                        if !open(p) {
+                            break;
+                        }
+                        n += 1;
+                    }
+                    if n == len {
+                        return (start, key, d);
+                    }
+                }
+            }
+        }
+        panic!("no straight of {len} in the construct");
+    }
+
+    /// Stuns every piece for the rest of the test, so a scanned line stays open.
+    fn freeze_ice(st: &mut AppState, b: citygen::BuildingId) {
+        let k = st.constructs.get(b).unwrap().clone();
+        st.net.ice_of(&k);
+        for i in st.net.ice.get_mut(&b).unwrap() {
+            i.stunned = 99;
+        }
+    }
+
+    fn walk_tick(st: &mut AppState, s: &mut MapScreen) {
+        st.tick += crate::net::WALK_TICKS;
+        s.update(st, &[]);
+    }
+
+    #[test]
+    fn path_to_walks_the_floor_around_pieces() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let (start, _, d) = straight(&st, b, 3);
+        let k = st.constructs.get(b).unwrap();
+        let end = start.step(d).step(d).step(d);
+        assert_eq!(
+            crate::net::path_to(k, start, end),
+            Some(vec![start.step(d), start.step(d).step(d), end])
+        );
+        assert_eq!(crate::net::path_to(k, start, start), Some(vec![]));
+        let guard = k.guards[0].pos;
+        assert_eq!(
+            crate::net::path_to(k, start, guard),
+            None,
+            "a standing piece blocks"
+        );
+        let wall = (0..k.tiles.size().h as i32)
+            .flat_map(|y| (0..k.tiles.size().w as i32).map(move |x| Pos::new(x, y)))
+            .find(|p| !k.tiles[*p].is_walkable())
+            .unwrap();
+        assert_eq!(crate::net::path_to(k, start, wall), None);
+    }
+
+    #[test]
+    fn in_a_fight_the_arrows_aim_and_the_path_lights_to_your_moves() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        freeze_ice(&mut st, b);
+        let (start, go, d) = straight(&st, b, 4);
+        stand(&mut st, &mut s, Place::Construct(b), start);
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert!(st.net.engaged.is_some());
+        // Three moves left, four tiles aimed: the last is beyond them.
+        st.net.engaged.as_mut().unwrap().moves = 3;
+        for n in 1..=4 {
+            s.update(&mut st, &[key(go)]);
+            let mut want = start;
+            for _ in 0..n {
+                want = want.step(d);
+            }
+            assert_eq!(s.aim, Some(want), "step {n}");
+            assert_eq!(player(&st).1, start, "aiming does not move you");
+        }
+        let (path, lit) = s.aim_path(&st).expect("a path");
+        assert_eq!((path.len(), lit), (4, 3), "three moves light three tiles");
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(text.contains('×'), "{text}");
+        assert!(text.matches('·').count() >= 3, "{text}");
+        // Too far for this turn: enter refuses with the moves left.
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert_eq!(last(&st), Some("too far · 3 moves"));
+        assert!(s.walking.is_none());
+        // esc drops the aim and nothing else happens.
+        assert!(matches!(
+            s.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Stay
+        ));
+        assert_eq!(s.aim, None);
+        assert!(!text.contains("[space]"));
+        // Aimed onto a piece: no path, the cross stands alone.
+        let guard = st.constructs.get(b).unwrap().guards[0].pos;
+        let near = beside(&st, b, guard);
+        stand(&mut st, &mut s, Place::Construct(b), near);
+        s.update(&mut st, &[key(dir_between(near, guard))]);
+        assert_eq!(s.aim, Some(guard));
+        assert_eq!(s.aim_path(&st), None);
+        assert!(draw_screen(&s, &st, 120, 40).contains('×'));
+    }
+
+    #[test]
+    fn enter_walks_the_path_a_tile_per_walk_ticks_and_locks_the_keys() {
+        use crate::net::BASE_MOVE;
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        freeze_ice(&mut st, b);
+        let (start, go, d) = straight(&st, b, 3);
+        stand(&mut st, &mut s, Place::Construct(b), start);
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        s.update(&mut st, &[key(go), key(go), key(go)]);
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert!(s.walking.is_some());
+        assert_eq!(s.aim, None, "the aim is spent");
+        assert_eq!(player(&st).1, start, "nothing is instant");
+        walk_tick(&mut st, &mut s);
+        assert_eq!(player(&st).1, start.step(d));
+        assert_eq!(st.net.engaged.as_ref().unwrap().moves, BASE_MOVE - 1);
+        // A key during the walk is swallowed.
+        let logged_before = st.log.len();
+        s.update(&mut st, &[key(KeyCode::Char('.')), key(go)]);
+        assert_eq!(player(&st).1, start.step(d));
+        assert_eq!(st.log.len(), logged_before);
+        assert!(
+            crate::net::your_turn(&st),
+            "the wait key did not end the turn"
+        );
+        walk_tick(&mut st, &mut s);
+        walk_tick(&mut st, &mut s);
+        assert_eq!(player(&st).1, start.step(d).step(d).step(d));
+        assert_eq!(st.net.engaged.as_ref().unwrap().moves, BASE_MOVE - 3);
+        assert!(s.walking.is_none());
+        // One move left: a two-tile aim is too far, a one-tile aim walks.
+        let back = dir_between(start.step(d), start);
+        s.update(&mut st, &[key(back), key(back)]);
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert_eq!(last(&st), Some("too far · 1 move"));
+        s.update(&mut st, &[key(KeyCode::Esc)]);
+        s.update(&mut st, &[key(back), key(KeyCode::Enter)]);
+        walk_tick(&mut st, &mut s);
+        assert_eq!(player(&st).1, start.step(d).step(d));
+        assert_eq!(st.net.engaged.as_ref().unwrap().moves, 0);
+        s.update(&mut st, &[key(back), key(KeyCode::Enter)]);
+        assert_eq!(last(&st), Some("no moves left"));
+    }
+
+    #[test]
+    fn a_walk_aborts_the_run_and_a_wake_stops_the_walk_where_it_is() {
+        use crate::net::BEAT_TICKS;
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let (b, _) = lock_run(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        assert!(st.net.run.is_some());
+        // In calm `g` aims from where you stand.
+        let here = player(&st).1;
+        let k = st.constructs.get(b).unwrap().clone();
+        let step = here
+            .neighbors4()
+            .find(|p| {
+                k.tiles.get(*p).is_some_and(|t| t.is_walkable())
+                    && k.node_at(*p).is_none()
+                    && k.guard_at(*p).is_none()
+            })
+            .expect("an open tile beside the lock");
+        s.update(&mut st, &[key(KeyCode::Char('g'))]);
+        assert_eq!(s.aim, Some(here));
+        s.update(
+            &mut st,
+            &[key(dir_between(here, step)), key(KeyCode::Enter)],
+        );
+        walk_tick(&mut st, &mut s);
+        assert_eq!(player(&st).1, step);
+        assert!(st.net.run.is_none(), "a step aborts the run");
+        assert!(logged(&st, "run aborted"));
+        assert!(st.net.engaged.is_none(), "calm: the walk cost nothing");
+        // A longer walk in calm, and a wake on the beat stops it at the tile reached.
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        freeze_ice(&mut st, b);
+        let (start, go, d) = straight(&st, b, 3);
+        stand(&mut st, &mut s, Place::Construct(b), start);
+        assert!(st.net.engaged.is_none(), "stunned pieces see nothing");
+        st.net.beat = st.clock_tick();
+        s.update(
+            &mut st,
+            &[
+                key(KeyCode::Char('g')),
+                key(go),
+                key(go),
+                key(go),
+                key(KeyCode::Enter),
+            ],
+        );
+        walk_tick(&mut st, &mut s);
+        assert_eq!(player(&st).1, start.step(d));
+        st.net.wake_all(b, start.step(d));
+        st.tick += BEAT_TICKS;
+        s.update(&mut st, &[]);
+        assert!(st.net.engaged.is_some(), "the beat saw the awake piece");
+        assert!(s.walking.is_none(), "the walk stops");
+        assert_eq!(
+            player(&st).1,
+            start.step(d),
+            "at the tile reached, no double step"
+        );
+        assert_eq!(
+            st.net.engaged.as_ref().unwrap().moves,
+            crate::net::BASE_MOVE
         );
     }
 }
