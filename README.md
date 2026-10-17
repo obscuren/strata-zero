@@ -181,10 +181,13 @@ climb one floor · `space` interact: take what lies here, jack in at an adjacent
 terminal or out again, take the stairs or the lift, talk to whoever stands
 beside you, look · `1`-`5` fire the ability in that slot ·
 `a` the full ability list · walking into someone swaps places with them, and
-they step back once you move on · `enter` jack shortcut · `.` wait · `tab` deck ·
+they step back once you move on · `enter` jack shortcut, or walk the aim ·
+`.` wait; in a construct it hurries the beat, in a fight it ends your turn ·
+`e` jacked in: turns by hand, and back when nothing hunts you · `g` aim a
+walk · `tab` deck ·
 `F1`-`F4` panes · `v` view popup · `m` messages · `d` digital overlay · `s` save ·
 `?` keys · `c` back to the free camera (dev mode) · `:` dev
-console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `sp`, `pts`, `talent`, `tpts`, `program`, `heat`, `alarm`, `wake`, `ice`, `failsafe`, `who`
+console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `sp`, `pts`, `talent`, `tpts`, `program`, `heat`, `alarm`, `wake`, `engage`, `calm`, `ice`, `failsafe`, `who`
 counts the people out, inside and driving, `clock hh:mm` jumps the day there,
 `tp x y` teleports on the current map, `clear`, `help`, with Tab completion and
 history) · `esc` pause
@@ -195,10 +198,30 @@ of the map column; on the right, where you are and the clock, the CARRY bar and
 the pane tabs. The right column holds the panes you toggle with `F1`-`F4` (here,
 quest with its objective pips, the minimap with coordinates, the stamped log;
 `F5` `F6` inspect and legend in dev mode), separated by thin rules. The footer
-shows STATUS (on foot, jacked in, camera; overburdened in magenta), HERE (a
-summary of the tile) and the verbs, then the ABILITIES row with numbered slots.
-Every result and refusal lands in the log, and `m` shows the whole history. With
-the log pane hidden the newest line shows briefly over the map instead.
+is four rows that never resize: where you are (`on foot`, `camera` or `⚡` with
+the building and district; overburdened in magenta; jacked in, the TRACE heat
+and `HUNTED`) with `[?]` the only hint left; a blank row; the fight row (`TURN n`
+and the order, the `RUN` in flight with its beat bar in calm, the ICE in sight
+at the right); and the `ABILITIES` or `PROGRAMS` slots, with `MOVE` and `AP` at
+the right while engaged and hollow keys on an ICE turn. Every result and refusal
+lands in the log, and `m` shows the whole history. With the log pane hidden the
+newest line shows briefly over the map instead.
+
+**Jacked in** a construct runs on a beat: every 45 ticks the program in flight
+rolls once and asleep ICE walks a tile of its beat; `.` hurries the next one.
+ICE that sees you, the alarm, or a program pointed at a piece puts the
+construct on turns: an order rolled once (you by your Net, pieces by grade,
+black before grey before white, ties to you), then `MOVE` 4 tiles and `AP` 2 a
+turn. A tile costs a move; a program roll (`space`), a pulse, a shield or a mask
+an AP; `.` ends your turn. The arrows aim a path from you, lit as far as your
+moves reach and a red cross where nothing reaches, and `enter` walks it a tile
+every 4 ticks with the keys waiting; `esc` drops the aim. An ICE turn plays out
+one action every 8 ticks so you watch it come: white 0 tiles and 1 hit, grey 2
+and 1, black 3 and 2. A stunned piece passes its turn. A round with nothing
+awake calms the board again unless `e` asked for turns by hand; jacking out, a
+dump, death and leaving end it too. Every roll draws a bolt to its target
+(white for an attack), a slip a magenta mark on it, every hit a bolt back to
+you (red from black ICE), and a shield that absorbs a cyan mark on you.
 
 Items lie where they are dropped: a pile shows its kind's icon in amber (`≡`
 when mixed), dimmed once out of sight, and the HERE section lists what is on the

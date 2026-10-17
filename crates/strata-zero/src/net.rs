@@ -44,6 +44,18 @@ pub const BASE_AP: u8 = 2;
 pub const PACE_TICKS: u64 = 8;
 /// Ticks between your own steps on an aimed walk.
 pub const WALK_TICKS: u64 = 4;
+/// Ticks a bolt takes from a roll or a hit to its target.
+pub const ROLL_TICKS: u64 = 12;
+/// Ticks a slip's or a shield's mark sits on its tile.
+pub const MARK_TICKS: u64 = 20;
+/// A program's roll, cyan; an attack's, white; an ICE hit, magenta; black ICE, red.
+pub const BOLT_ROLL: (u8, u8, u8) = (0, 229, 255);
+pub const BOLT_ATTACK: (u8, u8, u8) = (240, 240, 240);
+pub const BOLT_HIT: (u8, u8, u8) = (255, 0, 200);
+pub const BOLT_BLACK: (u8, u8, u8) = (255, 40, 40);
+/// A slip marks its target magenta; a shield that absorbs marks you cyan.
+pub const MARK_SLIP: (u8, u8, u8) = (255, 0, 200);
+pub const MARK_SHIELD: (u8, u8, u8) = (0, 229, 255);
 
 /// Who acts in an engagement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -498,6 +510,27 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
     // A program on yourself never fails.
     let ok = kind == Target::Deck || succeeds(roll, pw, df);
     let now = st.net.now(st);
+    // The picture of the roll: a bolt to the target, a mark where it slipped.
+    if let Some((me, at)) = st
+        .player
+        .as_ref()
+        .map(|p| p.pos)
+        .zip(target_pos(st, b, run.target))
+    {
+        if at == me {
+            mark(st, at, BOLT_ROLL, ROLL_TICKS);
+        } else {
+            let colour = if spec.op == Op::Attack {
+                BOLT_ATTACK
+            } else {
+                BOLT_ROLL
+            };
+            bolt(st, me, at, colour, ROLL_TICKS);
+        }
+        if !ok {
+            mark(st, at, MARK_SLIP, MARK_TICKS);
+        }
+    }
     // Deep dive: a vault gives up its contents quietly; a slip is still loud.
     let quiet = ok
         && spec.op == Op::Copy
@@ -641,6 +674,53 @@ fn land(
     };
     st.net.sync_guards(&mut st.constructs, b, now);
     line
+}
+
+/// Where a hack target sits: a node's tile, a piece's tile, your own for the deck.
+pub fn target_pos(st: &AppState, b: BuildingId, target: HackTarget) -> Option<Pos> {
+    match target {
+        HackTarget::Node(id) => st
+            .constructs
+            .get(b)?
+            .nodes
+            .iter()
+            .find(|(n, _)| *n == id)
+            .map(|(_, p)| *p),
+        HackTarget::Guard { index, .. } => st.constructs.get(b)?.guards.get(index).map(|g| g.pos),
+        HackTarget::Deck => st.player.as_ref().map(|p| p.pos),
+    }
+}
+
+/// A bolt from one tile to another on the player's map.
+pub fn bolt(st: &mut AppState, from: Pos, to: Pos, colour: (u8, u8, u8), ticks: u64) {
+    let Some(place) = st.player.as_ref().map(|p| p.place) else {
+        return;
+    };
+    st.fx.push(FxInstance {
+        fx: Fx::Bolt { colour, ticks },
+        place,
+        origin: from,
+        radius: 0,
+        started: st.tick,
+        revealed: Vec::new(),
+        targets: vec![to],
+    });
+}
+
+/// A mark on a tile of the player's map.
+pub fn mark(st: &mut AppState, at: Pos, colour: (u8, u8, u8), ticks: u64) {
+    let Some(place) = st.player.as_ref().map(|p| p.place) else {
+        return;
+    };
+    st.fx.push(FxInstance {
+        fx: Fx::Mark { colour, ticks },
+        place,
+        origin: at,
+        radius: 0,
+        started: st.tick,
+        revealed: Vec::new(),
+        targets: vec![at],
+    });
 }
 
 fn kick(st: &mut AppState, ticks: u64) {
@@ -1224,13 +1304,24 @@ pub fn turn_readout(st: &AppState) -> Option<String> {
 /// focus and dumps at zero, black takes HP through the jack. A shield charge soaks
 /// a hit; the deck's rating comes off grey and black hits.
 fn hit(st: &mut AppState, b: BuildingId, i: usize) {
-    let Some((grade, security)) = st
+    let Some((grade, security, from)) = st
         .constructs
         .get(b)
-        .map(|k| (k.guards[i].grade, k.security))
+        .map(|k| (k.guards[i].grade, k.security, k.guards[i].pos))
     else {
         return;
     };
+    if let Some(me) = st.player.as_ref().map(|p| p.pos) {
+        let colour = if grade == IceGrade::Black {
+            BOLT_BLACK
+        } else {
+            BOLT_HIT
+        };
+        bolt(st, from, me, colour, ROLL_TICKS);
+        if st.net.shield > 0 {
+            mark(st, me, MARK_SHIELD, MARK_TICKS);
+        }
+    }
     if st.net.shield > 0 {
         st.net.shield -= 1;
         st.say("shield absorbs the hit");

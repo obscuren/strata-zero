@@ -6778,4 +6778,157 @@ mod tests {
             crate::net::BASE_MOVE
         );
     }
+
+    /// A bolt as the tests read it: colour, ticks, from, to.
+    type Bolt = ((u8, u8, u8), u64, Pos, Vec<Pos>);
+    /// A mark as the tests read it: colour, ticks, on.
+    type Mark = ((u8, u8, u8), u64, Vec<Pos>);
+
+    fn bolts(st: &AppState) -> Vec<Bolt> {
+        st.fx
+            .iter()
+            .filter_map(|f| match f.fx {
+                game::Fx::Bolt { colour, ticks } => {
+                    Some((colour, ticks, f.origin, f.targets.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn marks(st: &AppState) -> Vec<Mark> {
+        st.fx
+            .iter()
+            .filter_map(|f| match f.fx {
+                game::Fx::Mark { colour, ticks } => Some((colour, ticks, f.targets.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_program_turn_bolts_to_its_target_and_a_slip_marks_it() {
+        use crate::net::{BOLT_ROLL, MARK_SLIP, MARK_TICKS, ROLL_TICKS};
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let (b, lock) = lock_run(&mut st, &mut s);
+        let (_, lock_pos) = node_of(&st, b, NodeKind::DoorLock);
+        let _ = lock;
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        st.fx.clear();
+        // The beat's roll bolts from you to the lock.
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(last(&st), Some("crack 1/3"));
+        let me = player(&st).1;
+        assert_eq!(
+            bolts(&st),
+            vec![(BOLT_ROLL, ROLL_TICKS, me, vec![lock_pos])]
+        );
+        assert!(marks(&st).is_empty());
+        // A slip bolts and marks the target in magenta.
+        st.fx.clear();
+        st.net.force_roll = Some(1);
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert!(
+            last(&st).unwrap().starts_with("crack slips"),
+            "{:?}",
+            last(&st)
+        );
+        assert_eq!(bolts(&st).len(), 1);
+        assert_eq!(marks(&st), vec![(MARK_SLIP, MARK_TICKS, vec![lock_pos])]);
+        // A hurried roll by space in a fight bolts the same.
+        st.net.force_roll = Some(10);
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        st.fx.clear();
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(bolts(&st).len(), 1);
+    }
+
+    #[test]
+    fn an_attack_bolts_white_a_hit_bolts_back_and_a_shield_marks_you_cyan() {
+        use crate::net::{BOLT_HIT, MARK_SHIELD, MARK_TICKS, ROLL_TICKS};
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        st.net.force_roll = Some(10);
+        let gate = st.constructs.get(b).unwrap().guards[0].pos;
+        stand(
+            &mut st,
+            &mut s,
+            Place::Construct(b),
+            Pos::new(gate.x + 2, gate.y),
+        );
+        settle(&mut st, &mut s);
+        let gate = st.constructs.get(b).unwrap().guards[0].pos;
+        let me = player(&st).1;
+        assert_eq!(gate.chebyshev(me), 1, "{:?}", last(&st));
+        st.character
+            .unload(&st.content, &ItemId::new("copy"))
+            .unwrap();
+        st.character.give(ItemId::new("attack"), 1);
+        st.character
+            .load(&st.content, &ItemId::new("attack"))
+            .unwrap();
+        let target = game::HackTarget::Guard {
+            building: b,
+            index: 0,
+        };
+        crate::net::start_run(&mut st, ItemId::new("attack"), target).unwrap();
+        st.fx.clear();
+        roll(&mut st, &mut s);
+        assert!(
+            last(&st).unwrap().starts_with("attack · grey ICE"),
+            "{:?}",
+            last(&st)
+        );
+        assert_eq!(
+            bolts(&st),
+            vec![((240, 240, 240), ROLL_TICKS, me, vec![gate])]
+        );
+        // Its turn: the hit comes back as a magenta bolt; with a shield up, a cyan
+        // mark sits on you where it was absorbed. The pace outlives a bolt, so the
+        // fx are gathered as the turn plays.
+        st.net.shield = 1;
+        st.fx.clear();
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        let (mut seen_bolts, mut seen_marks) = (Vec::new(), Vec::new());
+        for _ in 0..80 {
+            if crate::net::your_turn(&st) {
+                break;
+            }
+            st.tick += crate::net::PACE_TICKS;
+            s.update(&mut st, &[]);
+            seen_bolts.extend(bolts(&st));
+            seen_marks.extend(marks(&st));
+        }
+        assert!(logged(&st, "shield absorbs the hit"));
+        let gate = st.constructs.get(b).unwrap().guards[0].pos;
+        assert!(
+            seen_bolts.contains(&(BOLT_HIT, ROLL_TICKS, gate, vec![me])),
+            "{seen_bolts:?}"
+        );
+        assert!(
+            seen_marks.contains(&(MARK_SHIELD, MARK_TICKS, vec![me])),
+            "{seen_marks:?}"
+        );
+    }
+
+    #[test]
+    fn black_ice_hits_with_a_red_bolt() {
+        use crate::net::ROLL_TICKS;
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct_at(&mut st, &mut s, 255);
+        let vault_guard = st.constructs.get(b).unwrap().guards[1].clone();
+        let beside_vault = Pos::new(vault_guard.post.x - 1, vault_guard.post.y);
+        st.fx.clear();
+        stand(&mut st, &mut s, Place::Construct(b), beside_vault);
+        assert!(logged(&st, "black ICE hits"), "{:?}", last(&st));
+        let from = st.constructs.get(b).unwrap().guards[1].pos;
+        assert!(
+            bolts(&st).contains(&((255, 40, 40), ROLL_TICKS, from, vec![beside_vault])),
+            "{:?}",
+            bolts(&st)
+        );
+    }
 }
