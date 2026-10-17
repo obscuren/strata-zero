@@ -818,6 +818,44 @@ mod tests {
     }
 
     #[test]
+    fn the_plaza_has_a_diner_shops_and_something_to_see_from_above() {
+        let cities = atrium_cities();
+        for c in &cities {
+            for plan in atrium_plans(c) {
+                let f = generate_floor(c, &plan, 0);
+                validate_floor(&plan, &f).unwrap_or_else(|e| panic!("seed {}: {e}", c.seed));
+                assert!(f.rooms.iter().any(|r| r.kind == RoomKind::Bar));
+                assert!(f.rooms.iter().filter(|r| r.kind == RoomKind::Shop).count() >= 2);
+                assert!(f.stations.iter().any(|s| s.role == Role::Bar));
+                assert!(f.stations.iter().any(|s| s.role == Role::Reception));
+                assert!(f.stations.iter().filter(|s| s.role == Role::Table).count() >= 2);
+                for r in f
+                    .rooms
+                    .iter()
+                    .filter(|r| matches!(r.kind, RoomKind::Bar | RoomKind::Shop))
+                {
+                    assert!(!r.private, "{:?} at {:?} is locked", r.kind, r.rect);
+                }
+                let under = plan.atrium.unwrap().inset(1);
+                let pieces = under
+                    .iter()
+                    .filter(|p| {
+                        f.tiles[*p]
+                            .feature
+                            .is_some_and(|x| matches!(x, Feature::Stall | Feature::Furniture(_)))
+                    })
+                    .count();
+                assert!(
+                    pieces as i32 >= under.w * under.h / 40,
+                    "seed {}: {pieces} pieces under the atrium",
+                    c.seed
+                );
+                assert!(under.iter().all(|p| f.tiles[p].terrain != Terrain::Atrium));
+            }
+        }
+    }
+
+    #[test]
     fn small_megablocks_keep_corridor_floors() {
         // A hand-shrunk copy: a Megablock under the threshold plans no atrium.
         let mut c = atrium_cities().swap_remove(3);

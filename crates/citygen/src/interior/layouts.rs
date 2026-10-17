@@ -1225,8 +1225,7 @@ pub(super) fn generate(city: &City, plan: &FloorPlan, level: i32) -> Floor {
         FloorType::Garage => b.garage(),
         FloorType::Hall => b.hall(),
         FloorType::Atrium => b.atrium_floor(),
-        // An open lobby until the plaza has a layout of its own.
-        FloorType::Plaza => b.lobby(),
+        FloorType::Plaza => b.plaza_floor(),
     }
     b.lamps();
     b.connect();
