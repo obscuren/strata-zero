@@ -30,8 +30,11 @@ const EXPLORE: &[(&str, &str)] = &[
 const WALK: &[(&str, &str)] = &[
     ("hjkl yubn ↑↓←→", "move"),
     ("< >", "take stairs, lift, ladder or manhole"),
-    ("space", "interact: take, jack in / out, stairs, look"),
-    ("1-5", "fire an ability from its slot"),
+    (
+        "space",
+        "interact: take, jack, stairs, look · continue a run",
+    ),
+    ("1-5", "fire an ability · jacked in: run a program"),
     ("a", "abilities: the full list"),
     ("enter", "jack in at an adjacent terminal / jack out"),
     (".", "wait a tick"),

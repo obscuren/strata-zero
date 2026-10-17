@@ -977,6 +977,40 @@ pub fn ghost_pieces(st: &AppState, b: BuildingId) -> Vec<Pos> {
         .collect()
 }
 
+/// An awake piece stands in the player's sight memory.
+pub fn hunted(st: &AppState) -> bool {
+    let Some(p) = st.player.as_ref() else {
+        return false;
+    };
+    let Place::Construct(b) = p.place else {
+        return false;
+    };
+    let (Some(k), Some(states)) = (st.constructs.get(b), st.net.ice.get(&b)) else {
+        return false;
+    };
+    let vis = p.vis();
+    k.guards.iter().zip(states).any(|(g, i)| {
+        g.standing
+            && matches!(i.mode, IceMode::Awake { .. })
+            && vis
+                .get(g.pos)
+                .is_some_and(|v| *v != crate::render::Visibility::Unseen)
+    })
+}
+
+/// A standing piece is beside the player.
+pub fn beside_ice(st: &AppState) -> bool {
+    let Some(p) = st.player.as_ref() else {
+        return false;
+    };
+    let Place::Construct(b) = p.place else {
+        return false;
+    };
+    st.constructs
+        .get(b)
+        .is_some_and(|k| p.pos.neighbors8().any(|q| k.guard_at(q).is_some()))
+}
+
 /// Why the port refuses to jack in right now: the deck cooling, or a lockdown.
 pub fn jack_in_refusal(st: &AppState) -> Option<String> {
     let now = st.net.now(st);

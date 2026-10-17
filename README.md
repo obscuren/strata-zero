@@ -39,15 +39,19 @@ Every building's construct has an inside. Step onto its gate from the grid and
 you are in: a spine of lane with rooms off it holding the building's nodes
 (door locks, cameras, lift controls, terminals, the server, the data vault
 deepest), ICE standing at the gate from security 160 (white, grey from 200)
-and at the vault room's door from 200. `space` on or beside a node or a piece
-of ICE opens RUN: the programs loaded in your deck that apply to it, each with
-the chance a turn succeeds (a d10 plus your power, twice Net plus the skill and
-the program's rating, against the security over eight), the turns it takes and
-the noise it makes; a program that cannot beat the construct reads `0%`, and
-you may still run it and pay the turns and the heat. Pick one and every `.` is a turn: a roll against the security, heat
-on the construct's trace (more on a slip), the hack landing on the last
-success; a move aborts it. While a run is in flight the hint bar reads `. turn`
-and `space` offers `continue`. The HERE section shows the trace. At 60 heat the
+and at the vault room's door from 200. Jacked in, the number keys `1`-`5` are
+the programs loaded in your deck, in slot order (the row under the map reads
+PROGRAMS, and abilities move to the `a` menu): press one on or beside a node or
+a piece of ICE and it runs at once against the one thing it applies to, or opens
+a short list when several are in reach; `space` opens the full RUN list, every
+program against every target, each with the chance a turn succeeds (a d10 plus
+your power, twice Net plus the skill and the program's rating, against the
+security over eight), the turns it takes and the noise it makes; a program that
+cannot beat the construct reads `0%`, and you may still run it and pay the
+turns and the heat. Every `.` or `space` is then a turn: a roll against the
+security, heat on the construct's trace (more on a slip), the hack landing on
+the last success; a move aborts it. While a run is in flight the status reads
+`RUN crack 1/3 · heat 4`, `HUNTED` first when an awake piece is in sight. The HERE section shows the trace. At 60 heat the
 alarm trips: the building locks down for an hour (cracked locks relock, lifts
 stop, the ICE wakes, the gate and the ports beside it refuse); at 100, or at
 the end of a turn beside awake ICE, you are dumped to your body with no focus

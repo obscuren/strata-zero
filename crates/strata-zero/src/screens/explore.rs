@@ -105,6 +105,8 @@ pub struct MapScreen {
     console: Option<Console>,
     /// Tick of the last update; a gap means a menu was on top.
     last_tick: u64,
+    /// The program slot fired a moment ago and when, for the strip's flash.
+    program_flash: Option<(usize, u64)>,
     cam_ready: bool,
     /// The map area of the last frame, so `update` knows the view size.
     last_map: Cell<Rect>,
@@ -193,6 +195,7 @@ impl MapScreen {
             fps: FpsMeter::default(),
             console: None,
             last_tick: 0,
+            program_flash: None,
             cam_ready: false,
             last_map: Cell::new(Rect::new(0, 0, 100, 28)),
             placement: None,
@@ -222,7 +225,29 @@ impl MapScreen {
             .collect()
     }
 
-    fn slots(st: &AppState) -> Vec<hud::Slot> {
+    /// The strip's slots: the deck's programs while jacked in, abilities otherwise.
+    fn slots(&self, st: &AppState) -> Vec<hud::Slot> {
+        if st.player.as_ref().is_some_and(|p| p.jacked_in()) {
+            return st
+                .character
+                .loaded
+                .iter()
+                .enumerate()
+                .filter_map(|(i, id)| {
+                    let spec = st.content.item(id)?.program?;
+                    let state = hud::SlotState::Ready;
+                    let flash = self.program_flash.is_some_and(|(slot, at)| {
+                        slot == i && st.tick.saturating_sub(at) < hud::FLASH_TICKS
+                    });
+                    Some(hud::Slot {
+                        name: spec.op.label().to_string(),
+                        state,
+                        flash,
+                    })
+                })
+                .take(hud::SLOTS)
+                .collect();
+        }
         Self::actives(st)
             .into_iter()
             .filter_map(|id| {
@@ -609,70 +634,16 @@ impl MapScreen {
                 ));
             }
         }
-        // Inside a construct: the run in flight first, then the programs that apply
-        // to the node or the ICE at hand.
+        // Inside a construct: the programs that apply to the node or the ICE at hand.
         let mut title = "HERE";
-        if let (Place::Construct(_), Some(run)) = (place, st.net.run.as_ref()) {
-            let label = st
-                .content
-                .item(&run.program)
-                .and_then(|i| i.program)
-                .map(|p| p.op.label())
-                .unwrap_or("run");
-            title = "RUN";
-            choices.push(Choice::new(
-                'c',
-                format!("continue · {label} {}/{}", run.done, run.work),
-                Pick::Continue,
-            ));
-        }
         if let Place::Construct(b) = place
             && st.character.deck(&st.content).is_some()
         {
-            let now = st.net.now(st);
-            let security = st.constructs.get(b).map(|k| k.security).unwrap_or(0);
-            let targets = crate::net::targets_near(st, b, pos);
-            for (target, what) in targets {
-                let Some(kind) = crate::net::target_kind(st, b, target) else {
-                    continue;
-                };
-                for item in st.character.loaded_programs(&st.content) {
-                    let Some(spec) = item.program else { continue };
-                    if !game::applies(spec.op, kind) {
-                        continue;
-                    }
-                    let Some(key) = letters.next() else { break };
-                    title = "RUN";
-                    let label = spec.op.label();
-                    let copied = spec.op == game::Op::Copy
-                        && matches!(target, game::HackTarget::Node(id) if st.net.copied(id, now));
-                    let on = format!(" · {what}");
-                    if copied {
-                        choices.push(Choice::disabled(
-                            key,
-                            format!("{label}{on} · copied already"),
-                        ));
-                        continue;
-                    }
-                    let pw = game::power(&st.character, &st.content, &spec, kind);
-                    // A program on yourself never fails.
-                    let odds = if kind == game::Target::Deck {
-                        100
-                    } else {
-                        game::chance(pw, game::difficulty(security))
-                    };
-                    choices.push(Choice::new(
-                        key,
-                        format!(
-                            "{label}{on} · {odds}% · {} turn{} · noise {}",
-                            spec.work,
-                            if spec.work == 1 { "" } else { "s" },
-                            spec.noise
-                        ),
-                        Pick::Run(item.id.clone(), target),
-                    ));
-                }
+            let rows = Self::run_choices(st, b, pos, None, &mut letters);
+            if !rows.is_empty() {
+                title = "RUN";
             }
+            choices.extend(rows);
         }
         let node = match place {
             Place::Construct(b) => st
@@ -705,6 +676,112 @@ impl MapScreen {
             to: Box::new(Popup::verbs(title, choices, st.tick)),
             fx: TransitionKind::None,
         })
+    }
+
+    /// One RUN row per program that applies to a target in reach, with the odds;
+    /// `only` keeps it to one program.
+    fn run_choices(
+        st: &AppState,
+        b: citygen::BuildingId,
+        pos: Pos,
+        only: Option<&game::ItemId>,
+        letters: &mut std::str::Chars,
+    ) -> Vec<Choice> {
+        let mut choices = Vec::new();
+        let now = st.net.now(st);
+        let security = st.constructs.get(b).map(|k| k.security).unwrap_or(0);
+        for (target, what) in crate::net::targets_near(st, b, pos) {
+            let Some(kind) = crate::net::target_kind(st, b, target) else {
+                continue;
+            };
+            for item in st.character.loaded_programs(&st.content) {
+                if only.is_some_and(|id| *id != item.id) {
+                    continue;
+                }
+                let Some(spec) = item.program else { continue };
+                if !game::applies(spec.op, kind) {
+                    continue;
+                }
+                let Some(key) = letters.next() else { break };
+                let label = spec.op.label();
+                let copied = spec.op == game::Op::Copy
+                    && matches!(target, game::HackTarget::Node(id) if st.net.copied(id, now));
+                let on = format!(" · {what}");
+                if copied {
+                    choices.push(Choice::disabled(
+                        key,
+                        format!("{label}{on} · copied already"),
+                    ));
+                    continue;
+                }
+                let pw = game::power(&st.character, &st.content, &spec, kind);
+                // A program on yourself never fails.
+                let odds = if kind == game::Target::Deck {
+                    100
+                } else {
+                    game::chance(pw, game::difficulty(security))
+                };
+                choices.push(Choice::new(
+                    key,
+                    format!(
+                        "{label}{on} · {odds}% · {} turn{} · noise {}",
+                        spec.work,
+                        if spec.work == 1 { "" } else { "s" },
+                        spec.noise
+                    ),
+                    Pick::Run(item.id.clone(), target),
+                ));
+            }
+        }
+        choices
+    }
+
+    /// A number key jacked in: the deck's program in that slot, run at once against
+    /// the one target it applies to, or the short list when there are several.
+    fn program_key(&mut self, st: &mut AppState, n: usize) -> ScreenCmd {
+        let Some((place, pos)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
+            return ScreenCmd::Stay;
+        };
+        let Place::Construct(b) = place else {
+            st.warn("programs run inside a construct");
+            return ScreenCmd::Stay;
+        };
+        if st.character.deck(&st.content).is_none() {
+            st.warn("no deck jacked");
+            return ScreenCmd::Stay;
+        }
+        let Some(id) = st.character.loaded.get(n - 1).cloned() else {
+            st.warn(format!("nothing in slot {n}"));
+            return ScreenCmd::Stay;
+        };
+        let Some(spec) = st.content.item(&id).and_then(|i| i.program) else {
+            return ScreenCmd::Stay;
+        };
+        let mut letters = WORLD_LETTERS.chars();
+        let rows = Self::run_choices(st, b, pos, Some(&id), &mut letters);
+        match rows.len() {
+            0 => {
+                st.warn(format!("{} · nothing to run it against", spec.op.label()));
+                ScreenCmd::Stay
+            }
+            1 => {
+                let Pick::Run(program, target) = rows[0].pick.clone() else {
+                    // The one row is disabled (copied already): say why, not nothing.
+                    st.warn(rows[0].label.clone());
+                    return ScreenCmd::Stay;
+                };
+                let result = crate::net::start_run(st, program, target);
+                if result.is_ok() {
+                    self.program_flash = Some((n - 1, st.tick));
+                }
+                report(st, result);
+                ScreenCmd::Stay
+            }
+            _ => ScreenCmd::Push {
+                to: Box::new(Popup::verbs("RUN", rows, st.tick)),
+                fx: TransitionKind::None,
+            },
+        }
     }
 
     /// The actives the character can fire, cooling ones greyed; none says so.
@@ -978,7 +1055,14 @@ impl MapScreen {
     }
 
     fn handle_walk_inner(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
+        let jacked = st.player.as_ref().is_some_and(|p| p.jacked_in());
         if k.code == KeyCode::Char(' ') {
+            // A run in flight: space is one more turn of it.
+            if jacked && st.net.run.is_some() {
+                crate::net::step_run(st);
+                crate::net::ice_turn(st);
+                return Some(ScreenCmd::Stay);
+            }
             return self.interact(st);
         }
         if k.code == KeyCode::Enter
@@ -995,6 +1079,9 @@ impl MapScreen {
             && let Some(n) = c.to_digit(10)
             && (1..=hud::SLOTS as u32).contains(&n)
         {
+            if jacked {
+                return Some(self.program_key(st, n as usize));
+            }
             match Self::actives(st).get(n as usize - 1).cloned() {
                 Some(id) => {
                     let result = perform(st, game::Action::Fire(id));
@@ -1481,11 +1568,41 @@ impl Screen for MapScreen {
         f.render_widget(Paragraph::new(tabs), r.band_r[3]);
         // Footer.
         let jacked = st.player.as_ref().is_some_and(|p| p.jacked_in());
+        let run_status = match (
+            jacked,
+            st.net.run.as_ref(),
+            st.player.as_ref().map(|p| p.place),
+        ) {
+            (true, Some(run), Some(Place::Construct(b))) => st
+                .content
+                .item(&run.program)
+                .and_then(|i| i.program)
+                .map(|spec| {
+                    let heat = st.net.traces.get(&b).map_or(0, |t| t.heat);
+                    format!(
+                        " RUN {} {}/{} · heat {heat}",
+                        spec.op.label(),
+                        run.done,
+                        run.work
+                    )
+                }),
+            _ => None,
+        };
         let mut status_spans = match (self.mode, jacked) {
-            (Mode::Walk, true) => vec![
-                Span::styled("⚡", Style::default().fg(CYAN)),
-                Span::styled(" jacked in · Net", Style::default().fg(TEXT)),
-            ],
+            (Mode::Walk, true) => {
+                let mut spans = vec![Span::styled("⚡", Style::default().fg(CYAN))];
+                if crate::net::hunted(st) {
+                    spans.push(Span::styled(
+                        " HUNTED ·",
+                        Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD),
+                    ));
+                }
+                spans.push(Span::styled(
+                    run_status.unwrap_or_else(|| " jacked in · Net".to_string()),
+                    Style::default().fg(TEXT),
+                ));
+                spans
+            }
             (Mode::Walk, false) => vec![Span::styled(
                 format!("on foot · {}", self.place_label(st)),
                 Style::default().fg(TEXT),
@@ -1502,7 +1619,9 @@ impl Screen for MapScreen {
             ));
         }
         let verbs = match self.mode {
-            Mode::Walk if st.net.run.is_some() => hud::RUN_VERBS,
+            Mode::Walk if jacked && st.net.run.is_some() => hud::RUN_VERBS,
+            Mode::Walk if jacked && crate::net::beside_ice(st) => hud::ICE_VERBS,
+            Mode::Walk if jacked => hud::NET_VERBS,
             Mode::Walk => hud::WALK_VERBS,
             Mode::Explore => hud::EXPLORE_VERBS,
         };
@@ -1510,11 +1629,16 @@ impl Screen for MapScreen {
             Paragraph::new(hud::footer_status(status_spans, &here, verbs, area.width)),
             r.status,
         );
-        let slots = Self::slots(st);
+        let slots = self.slots(st);
         let recent = st.log.recent(st.tick);
         let bottom = match &self.console {
             Some(con) => console::line(con, st.tick, recent),
-            None => hud::footer_abilities(&slots, st.dev, area.width),
+            None => hud::footer_abilities(
+                if jacked { "PROGRAMS" } else { "ABILITIES" },
+                &slots,
+                st.dev,
+                area.width,
+            ),
         };
         f.render_widget(Paragraph::new(bottom), r.abilities);
         // With the LOG pane off or squeezed out, the newest entry shows as a toast.
@@ -4215,23 +4339,13 @@ mod tests {
             text.contains("[.]turn") && text.contains("[space]continue"),
             "{text}"
         );
-        // The popup leads with continue, and picking it is a turn.
-        let ScreenCmd::Push { to: mut run, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
-        else {
-            panic!("space opens RUN")
-        };
-        st.tick += 40;
-        let text = draw_screen(&*run, &st, 120, 40);
-        assert!(text.contains("c  continue · crack 1/3"), "{text}");
-        run.update(&mut st, &[key(KeyCode::Char('c'))]);
+        // Space is a turn of the run in flight, with no popup in between.
+        let cmd = s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert!(matches!(cmd, ScreenCmd::Stay), "space continues");
         assert_eq!(last(&st), Some("crack 2/3"));
         assert_eq!(st.net.run.as_ref().map(|r| r.done), Some(2));
-        // Picking another program says the first run was dropped.
-        let ScreenCmd::Push { to: mut run, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
-        else {
-            panic!("space opens RUN")
-        };
-        run.update(&mut st, &[key(KeyCode::Char('a'))]);
+        // Starting another program says the first run was dropped.
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
         assert_eq!(last(&st), Some("run aborted · crack starts · 3 turns"));
         assert_eq!(st.net.run.as_ref().map(|r| r.done), Some(0));
     }
@@ -5391,5 +5505,191 @@ mod tests {
         st.character.equipment.remove(&eyes);
         st.tick = at(22, 0);
         assert_eq!(st.sight_bonus(), 0);
+    }
+
+    #[test]
+    fn the_slots_row_reads_programs_while_jacked_in() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(text.contains(" ABILITIES: 1 netscan"), "{text}");
+        lock_run(&mut st, &mut s);
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(
+            text.contains(" PROGRAMS: 1 crack ●   2 copy ●   3 ──"),
+            "{text}"
+        );
+        assert!(!text.contains("ABILITIES"), "{text}");
+    }
+
+    #[test]
+    fn a_number_key_fires_the_program_at_the_one_target_in_reach() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        lock_run(&mut st, &mut s);
+        // Beside the lock and nothing else: crack starts at once, no popup.
+        let cmd = s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        assert!(matches!(cmd, ScreenCmd::Stay), "no popup");
+        assert_eq!(last(&st), Some("crack starts · 3 turns"));
+        assert!(st.net.run.is_some());
+        // Space is a turn of it.
+        let cmd = s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert!(matches!(cmd, ScreenCmd::Stay), "space continues, no popup");
+        assert_eq!(last(&st), Some("crack 1/3"));
+        // Copy does nothing to a lock: the strip says so and nothing changes.
+        s.update(&mut st, &[key(KeyCode::Char('2'))]);
+        assert_eq!(last(&st), Some("copy · nothing to run it against"));
+        assert!(last_is_warning(&st));
+        assert_eq!(
+            st.net.run.as_ref().map(|r| r.done),
+            Some(1),
+            "the crack runs on"
+        );
+        s.update(&mut st, &[key(KeyCode::Char('3'))]);
+        assert_eq!(last(&st), Some("nothing in slot 3"));
+    }
+
+    #[test]
+    fn a_number_key_with_several_targets_opens_the_short_list() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        st.net.force_roll = Some(10);
+        // Beside the lock, with the gate guard moved to the other side of it: two
+        // things crack applies to.
+        let (_, lock_pos) = node_of(&st, b, NodeKind::DoorLock);
+        let here = beside(&st, b, lock_pos);
+        stand(&mut st, &mut s, Place::Construct(b), here);
+        let other = {
+            let k = st.constructs.get(b).unwrap();
+            here.neighbors8()
+                .find(|p| {
+                    *p != lock_pos
+                        && k.tiles.get(*p).is_some_and(|t| t.is_walkable())
+                        && k.node_at(*p).is_none()
+                })
+                .expect("a free tile beside the player")
+        };
+        st.constructs.get_mut(b).unwrap().move_guard(0, other);
+        let ScreenCmd::Push { to: mut popup, .. } = s.update(&mut st, &[key(KeyCode::Char('1'))])
+        else {
+            panic!("two targets: the short list opens")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*popup, &st, 120, 40);
+        assert!(text.contains("crack · door lock"), "{text}");
+        assert!(text.contains("crack · ICE · grey"), "{text}");
+        assert!(!text.contains("copy"), "only crack's rows: {text}");
+        popup.update(&mut st, &[key(KeyCode::Char('a'))]);
+        assert!(st.net.run.is_some());
+    }
+
+    #[test]
+    fn number_keys_on_the_grid_and_without_a_deck_say_so() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let city = st.city.as_ref().unwrap().clone();
+        let gate = crate::constructs::city_gate(&city, b).unwrap();
+        st.player.as_mut().unwrap().body = Some((Place::Stratum(StratumKind::Street), gate));
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), gate);
+        let cmd = s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        assert!(matches!(cmd, ScreenCmd::Stay));
+        assert_eq!(last(&st), Some("programs run inside a construct"));
+        assert!(st.net.run.is_none());
+        // Back inside without a deck.
+        let entry = st.constructs.get(b).unwrap().entry;
+        stand(&mut st, &mut s, Place::Construct(b), entry);
+        let deck_slot = st
+            .character
+            .equipment
+            .iter()
+            .find(|(_, id)| {
+                st.content
+                    .item(id)
+                    .is_some_and(|i| i.kind == game::ItemKind::Deck)
+            })
+            .map(|(slot, _)| *slot)
+            .expect("a deck is jacked");
+        st.character.equipment.remove(&deck_slot);
+        let cmd = s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        assert!(matches!(cmd, ScreenCmd::Stay));
+        assert_eq!(last(&st), Some("no deck jacked"));
+    }
+
+    #[test]
+    fn the_strip_reads_the_run_the_heat_and_the_hunt() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let (b, _) = lock_run(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(last(&st), Some("crack 1/3"));
+        let text = draw_screen(&s, &st, 180, 40);
+        assert!(text.contains("RUN crack 1/3 · heat 4"), "{text}");
+        assert!(
+            text.contains("[.]turn [space]continue [1-5]programs [enter]jack"),
+            "{text}"
+        );
+        // Every piece asleep: no hunt in the strip.
+        for i in st.net.ice.get_mut(&b).unwrap() {
+            i.mode = crate::net::IceMode::Asleep;
+        }
+        let text = draw_screen(&s, &st, 180, 40);
+        assert!(!text.contains("HUNTED"), "{text}");
+        let pos = player(&st).1;
+        st.net.wake_all(b, pos);
+        let text = draw_screen(&s, &st, 180, 40);
+        assert!(text.contains("⚡  HUNTED · RUN crack 1/3"), "{text}");
+        // No run: the Net verbs.
+        st.net.run = None;
+        let text = draw_screen(&s, &st, 180, 40);
+        assert!(
+            text.contains("[space]act") && !text.contains("RUN crack"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_location_on_the_net_is_the_district() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let city = st.city.as_ref().unwrap().clone();
+        let gate = crate::constructs::city_gate(&city, b).unwrap();
+        let district = city.district(city.building(b).district).name.clone();
+        st.player.as_mut().unwrap().body = Some((Place::Stratum(StratumKind::Street), gate));
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), gate);
+        assert_eq!(
+            hud::location(&city, &st.interiors, Place::Stratum(StratumKind::Net), gate),
+            format!("{district} · Net")
+        );
+    }
+
+    #[test]
+    fn a_hotkey_whose_only_row_is_disabled_says_why() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let (server, server_pos) = node_of(&st, b, NodeKind::Server);
+        let here = beside(&st, b, server_pos);
+        stand(&mut st, &mut s, Place::Construct(b), here);
+        let now = st.net.now(&st);
+        st.net.land(
+            b,
+            game::HackTarget::Node(server),
+            game::Target::Node(NodeKind::Server),
+            game::Op::Copy,
+            now,
+        );
+        let cmd = s.update(&mut st, &[key(KeyCode::Char('2'))]);
+        assert!(
+            matches!(cmd, ScreenCmd::Stay),
+            "no popup for one disabled row"
+        );
+        assert_eq!(last(&st), Some("copy · server · copied already"));
+        assert!(last_is_warning(&st));
+        assert!(st.net.run.is_none());
     }
 }
