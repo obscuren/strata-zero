@@ -244,6 +244,30 @@ pub fn carries(st: &AppState, person: sim::PersonId) -> Vec<ItemId> {
     vec![keycard_id(b, p.household)]
 }
 
+/// A server copy on a residential building: every flat's code into the journal.
+/// `None` when nobody lives there, else how many codes were new.
+pub fn copy_codes(st: &mut AppState, b: BuildingId, now: u64) -> Option<usize> {
+    prepare(st, b);
+    let homes = st.interiors.homes_of(b).filter(|h| !h.is_empty())?.clone();
+    let seed = st.city.as_ref()?.seed;
+    let mut new = 0;
+    for (h, (level, number)) in homes.households() {
+        let learned = st.journal.learn(Code {
+            building: b,
+            level,
+            number,
+            household: Some(h),
+            code: citygen::rng::door_code(seed, b, level, number),
+            source: Source::ServerCopy,
+            at: now,
+        });
+        if learned {
+            new += 1;
+        }
+    }
+    Some(new)
+}
+
 /// Drops every keycard of a previous city from the catalogue.
 pub fn purge(content: &mut game::Content) {
     content.items.retain(|i| !i.id.0.starts_with("keycard:"));
@@ -461,5 +485,33 @@ mod tests {
                 vec![keycard_id(b, world.people()[o.0 as usize].household)]
             );
         }
+    }
+
+    #[test]
+    fn a_server_copy_learns_every_flats_code_once() {
+        let (mut st, b) = state();
+        // Never walked in: copy_codes prepares the building itself.
+        assert!(st.interiors.homes_of(b).is_none());
+        let n = copy_codes(&mut st, b, 7).expect("a residential building");
+        let flats = st.interiors.homes_of(b).unwrap().flats().count();
+        assert_eq!(n, flats);
+        assert_eq!(st.journal.codes().len(), flats);
+        assert!(
+            st.journal
+                .codes()
+                .iter()
+                .all(|c| { c.source == Source::ServerCopy && c.at == 7 && c.household.is_some() })
+        );
+        assert_eq!(copy_codes(&mut st, b, 8), Some(0));
+        let office = st
+            .city
+            .as_ref()
+            .unwrap()
+            .buildings
+            .iter()
+            .find(|x| x.kind == BuildingKind::Office)
+            .unwrap()
+            .id;
+        assert_eq!(copy_codes(&mut st, office, 9), None);
     }
 }

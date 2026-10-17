@@ -674,7 +674,12 @@ fn land(
         }
         (Op::Copy, _) => {
             st.character.give(ItemId::new("paydata"), 1);
-            "server copied · a `Paydata shard` in the pack".to_string()
+            let base = "server copied · a `Paydata shard` in the pack";
+            match crate::credentials::copy_codes(st, b, now) {
+                Some(n) if n > 0 => format!("{base} · `{name}`'s door codes are in the journal"),
+                Some(_) => format!("{base} · the door codes were already yours"),
+                None => base.to_string(),
+            }
         }
         (Op::Backdoor, _) => format!("backdoor planted · `{name}`'s gate is yours"),
         (Op::Shield, _) => {

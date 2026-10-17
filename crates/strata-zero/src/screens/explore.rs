@@ -5173,6 +5173,20 @@ mod tests {
             "{:?}",
             last(&st)
         );
+        // And, for a building people live in, its door codes.
+        let base = "server copied · a Paydata shard in the pack";
+        if st.interiors.homes_of(b).is_some_and(|h| !h.is_empty()) {
+            assert!(!st.journal.codes().is_empty());
+            assert!(
+                last(&st).is_some_and(
+                    |l| l.starts_with(base) && l.ends_with("'s door codes are in the journal")
+                ),
+                "{:?}",
+                last(&st)
+            );
+        } else {
+            assert_eq!(last(&st), Some(base));
+        }
     }
 
     #[test]
