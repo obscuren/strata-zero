@@ -50,7 +50,10 @@ Other people's flats are locked. They open for the resident's keycard, an item
 one household per building has left at the lobby desk, or for the flat's
 four-digit door code, which a server copy in the building's construct writes to
 the JOURNAL tab beside the keycards you hold and the backdoors you have planted.
-Your own door code and keycard are yours from the first minute.
+Your own door code and keycard are yours from the first minute. Every other
+flat's door has a keypad: stand beside it, press `space` and interact to key a
+code by hand; the worn keys show which digits it uses, a right code is written
+to the journal, and three wrong ones lock the pad for half an hour.
 
 The same graph is cyberspace. Jack in at any street terminal, or at the rig in
 your flat (walk up to it and press `enter`): your body stays at the port and you

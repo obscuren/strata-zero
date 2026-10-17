@@ -68,6 +68,7 @@ impl Keypad {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn typed(&self) -> &[u8] {
         &self.typed
     }

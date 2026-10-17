@@ -1,7 +1,8 @@
 # Keypads on flat doors: design
 
-Date: 2026-10-17. Status: approved in chat by Jeffrey (moulded-buttons mockup,
-a right code is learned, three wrong codes lock the pad and nothing more).
+Date: 2026-10-17. Status: built on `feat/keypads` (moulded-buttons mockup, a
+right code is learned, three wrong codes lock the pad and nothing more). The
+LCD's second line reads "flat 1204" alone; the owner's name is on the Space row.
 Builds on: `2026-10-17-credentials-journal-design.md` (door codes, the journal,
 `credentials::opens`) and `2026-10-15-interiors-design.md` (locked flats).
 Riff notes this came out of: `docs/ideas/2026-10-17-terminals-access-apartment.md`
