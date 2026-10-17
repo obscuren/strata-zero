@@ -56,7 +56,8 @@ code by hand; the worn keys show which digits it uses, a right code is written
 to the journal, and three wrong ones lock the pad for half an hour.
 
 Every terminal has a second way in. Beside a street terminal, `space` offers
-`access terminal`: a typed session in a beige CRT over the map. `SCAN` lists the
+`access terminal`: a typed session on a gunmetal CRT over the map, edged in the
+district's colour. `SCAN` lists the
 district's buildings with their security and ICE, `CONNECT` picks one, `WHO`
 says who is inside, `PLAN` loads its ground floor into your map, `LOG` shows
 what has been done to it. Hold one of the building's keycards or codes and you

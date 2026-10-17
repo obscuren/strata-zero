@@ -4,7 +4,7 @@
 use crate::access::{self, Session};
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::ui::console::{Console, ConsoleEvent};
-use crate::ui::device::{self, CRT_H, CRT_W, Led};
+use crate::ui::device::{self, CRT_H, CRT_W, Led, Skin};
 use citygen::{Place, Pos};
 use crossterm::event::KeyEvent;
 use ratatui::Frame;
@@ -36,8 +36,9 @@ impl Typing {
         let lines = lines
             .iter()
             .flat_map(|l| {
-                if l.is_empty() {
-                    vec![String::new()]
+                // Short lines keep their spacing (SCAN's columns); long ones wrap.
+                if l.chars().count() <= COLUMNS {
+                    vec![l.clone()]
                 } else {
                     crate::ui::sidebar::wrap_text(l, COLUMNS)
                 }
@@ -90,6 +91,7 @@ impl Typing {
 }
 
 pub struct Terminal {
+    skin: Skin,
     session: Session,
     scrollback: Vec<String>,
     typing: Option<Typing>,
@@ -104,7 +106,19 @@ impl Terminal {
     pub fn open(st: &mut AppState, session: Session, key: (Place, Pos)) -> Terminal {
         let fresh = st.journal.booted.insert(key);
         let typing = fresh.then(|| Typing::new(access::boot_lines(st, &session), st.tick));
+        let district = match session {
+            Session::District { district, .. } => Some(district),
+            Session::Rig { building } => st
+                .city
+                .as_ref()
+                .and_then(|c| c.building_opt(building))
+                .map(|b| b.district),
+        };
+        let skin = district.map(|d| Skin::for_district(st, d)).unwrap_or(Skin {
+            accent: crate::render::Rgb(0, 229, 255),
+        });
         Terminal {
+            skin,
             session,
             scrollback: Vec::new(),
             typing,
@@ -268,25 +282,30 @@ impl Screen for Terminal {
         }
         let tick = st.tick;
         let typing_now = self.typing.as_ref().filter(|t| !t.done(tick));
+        let denied_typing = typing_now.is_some_and(|t| t.denied);
         let led = match typing_now {
-            Some(t) if t.denied => Led::Red,
-            Some(_) => Led::Green,
-            None if self.denied_at.is_some_and(|d| tick <= d + DENIED_TICKS) => Led::Red,
-            None => Led::Amber,
+            Some(t) if t.denied => Led::Fail,
+            Some(_) => Led::Ok,
+            None if self.denied_at.is_some_and(|d| tick <= d + DENIED_TICKS) => Led::Fail,
+            None => Led::Idle,
         };
         let buf = f.buffer_mut();
-        let screen = device::crt(buf, r, self.badge(), led);
-        let green = Style::default().fg(device::PHOSPHOR).bg(device::LCD_BG);
-        let dim = green.add_modifier(Modifier::DIM);
-        let mut rows: Vec<String> = self.scrollback.clone();
+        let screen = device::crt(buf, r, self.badge(), led, &self.skin);
+        let live = Style::default().fg(device::TEXT).bg(device::GLASS_BG);
+        let deny = Style::default().fg(device::DENY).bg(device::GLASS_BG);
+        let quiet = Style::default().fg(device::TEXT_DIM).bg(device::GLASS_BG);
+        let bold = live.add_modifier(Modifier::BOLD);
+        let mut rows: Vec<(String, Style)> =
+            self.scrollback.iter().map(|l| (l.clone(), live)).collect();
         if let Some(t) = &self.typing {
-            rows.extend(t.visible(tick));
+            let style = if t.denied { deny } else { live };
+            rows.extend(t.visible(tick).into_iter().map(|l| (l, style)));
         }
-        let typing = self.typing.as_ref().is_some_and(|t| !t.done(tick));
+        let typing = typing_now.is_some();
         let mut tail = Vec::new();
         if !typing {
             if let Some(h) = &self.console.hint {
-                tail.push((h.clone(), dim));
+                tail.push((h.clone(), quiet));
             }
             tail.push((
                 format!(
@@ -294,22 +313,43 @@ impl Screen for Terminal {
                     access::prompt(st, &self.session),
                     self.console.input
                 ),
-                green,
+                bold,
             ));
         }
         let avail = screen.height as usize;
-        let (page, _) = self.page(&rows, avail.saturating_sub(tail.len()));
+        let texts: Vec<String> = rows.iter().map(|(l, _)| l.clone()).collect();
+        let (page, _) = self.page(&texts, avail.saturating_sub(tail.len()));
+        // The page's rows carry the style of the row they came from; markers are quiet.
+        let styles: Vec<Style> = page
+            .iter()
+            .map(|l| {
+                if l.starts_with('▲') || l.starts_with('▼') {
+                    quiet
+                } else {
+                    rows.iter()
+                        .rev()
+                        .find(|(t, _)| t == l)
+                        .map(|(_, s)| *s)
+                        .unwrap_or(live)
+                }
+            })
+            .collect();
         let width = screen.width.saturating_sub(2) as usize;
         let mut y = screen.y;
-        for row in &page {
+        for (row, style) in page.iter().zip(styles) {
             let line: String = row.chars().take(width).collect();
-            crate::ui::chrome::put(buf, screen.x + 1, y, &line, green, screen.right());
+            crate::ui::chrome::put(buf, screen.x + 1, y, &line, style, screen.right());
             y += 1;
         }
         for (text, style) in tail {
             let line: String = text.chars().take(width).collect();
             crate::ui::chrome::put(buf, screen.x + 1, y, &line, style, screen.right());
             y += 1;
+        }
+        // A refusal scatters a little garbage over the glass, fading as it types.
+        if denied_typing && let Some(t) = typing_now {
+            let progress = (tick.saturating_sub(t.started)) as f32 / DENIED_TICKS as f32;
+            device::glitch(buf, screen, tick, 0.7 + 0.3 * progress.min(1.0));
         }
         device::scanlines(buf, screen);
     }
@@ -541,7 +581,7 @@ mod tests {
         term.draw(|f| t.draw(&st, f)).unwrap();
         let r = Terminal::rect(Rect::new(0, 0, 120, 40));
         let led = &term.backend().buffer()[(r.right() - 3, r.y + 1)];
-        assert_eq!(led.fg, device::LED_RED, "red while a denial types");
+        assert_eq!(led.fg, device::DENY, "magenta while a denial types");
         // A fresh run: tick 3, a long reply, one key finishes it.
         let mut st2 = st;
         st2.tick = 3;

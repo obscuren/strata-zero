@@ -3,6 +3,10 @@
 Date: 2026-10-17. Status: built on `feat/keypads` (moulded-buttons mockup, a
 right code is learned, three wrong codes lock the pad and nothing more). The
 LCD's second line reads "flat 1204" alone; the owner's name is on the Space row.
+Restyled the same evening at Jeffrey's request from cassette beige to "corp
+gloss": a gunmetal unit with a heavy hairline edge in the district's accent, dark
+glass with cyan text, flat backlit keys a row tall, magenta for refusals; the
+look lives in `ui/device.rs` (`Skin`, `Led::{Idle, Ok, Fail}`, `KeyLit`).
 Builds on: `2026-10-17-credentials-journal-design.md` (door codes, the journal,
 `credentials::opens`) and `2026-10-15-interiors-design.md` (locked flats).
 Riff notes this came out of: `docs/ideas/2026-10-17-terminals-access-apartment.md`

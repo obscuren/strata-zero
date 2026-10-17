@@ -49,3 +49,6 @@ pub(crate) mod testutil {
         s
     }
 }
+
+#[cfg(test)]
+mod shots;

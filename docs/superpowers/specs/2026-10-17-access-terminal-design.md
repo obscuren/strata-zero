@@ -2,7 +2,9 @@
 
 Date: 2026-10-17. Status: built on `feat/access-terminal` (one screen, two
 sessions; tiers from what you hold; the first mail is a neighbour's code and a
-pickup). HELP lists every verb and tags the ones above your tier.
+pickup). HELP lists every verb and tags the ones above your tier. Restyled the
+same evening to "corp gloss" with the keypad: gunmetal, the district's accent on
+the edge, cyan text, magenta refusals with a light glitch; no beige anywhere.
 Builds on: `2026-10-17-credentials-journal-design.md` (cards, codes, the
 journal), `2026-10-17-keypads-design.md` (the device kit, `ScreenCmd::Replace`),
 `2026-10-15-constructs-and-programs-design.md` (hacks the Net state records),

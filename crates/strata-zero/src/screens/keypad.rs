@@ -3,7 +3,7 @@
 
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::credentials::{self, Verdict};
-use crate::ui::device::{self, DEVICE_H, DEVICE_W, Led};
+use crate::ui::device::{self, DEVICE_H, DEVICE_W, KeyLit, Led, Skin};
 use citygen::BuildingId;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
@@ -28,6 +28,7 @@ enum Flash {
 }
 
 pub struct Keypad {
+    skin: Skin,
     building: BuildingId,
     level: i32,
     number: u16,
@@ -40,15 +41,25 @@ pub struct Keypad {
     flash: Flash,
 }
 
-/// Where key `i` of the grid sits inside the device rect.
+/// Where key `i` of the grid sits inside the device rect: three a row, a row of
+/// air between the rows.
 pub(crate) fn key_at(r: Rect, i: usize) -> (u16, u16) {
-    (r.x + 4 + (i as u16 % 3) * 6, r.y + 6 + (i as u16 / 3) * 3)
+    (r.x + 4 + (i as u16 % 3) * 6, r.y + 9 + (i as u16 / 3) * 2)
 }
 
 impl Keypad {
     pub fn open(st: &AppState, building: BuildingId, level: i32, number: u16) -> Keypad {
         let seed = st.city.as_ref().map(|c| c.seed).unwrap_or(0);
+        let skin = st
+            .city
+            .as_ref()
+            .and_then(|c| c.building_opt(building))
+            .map(|b| Skin::for_district(st, b.district))
+            .unwrap_or(Skin {
+                accent: crate::render::Rgb(0, 229, 255),
+            });
         Keypad {
+            skin,
             building,
             level,
             number,
@@ -156,24 +167,29 @@ impl Screen for Keypad {
         let tick = st.tick;
         let now = st.net.now(st);
         let locked = self.locked_until(st);
-        let (led, reading) = match (self.flash, locked) {
-            (Flash::Open(_), _) => (Led::Green, Some(("OPEN".to_string(), device::PHOSPHOR))),
-            (Flash::Denied(t), _) if tick <= t + DENIED_TICKS => {
-                (Led::Red, Some(("DENIED".to_string(), device::LED_RED)))
-            }
+        // The reading on the glass, its colour, and whether the glass glitches.
+        let (led, reading, glitch) = match (self.flash, locked) {
+            (Flash::Open(_), _) => (Led::Ok, Some(("OPEN".to_string(), device::TEXT)), None),
+            (Flash::Denied(t), _) if tick <= t + DENIED_TICKS => (
+                Led::Fail,
+                Some(("DENIED".to_string(), device::DENY)),
+                Some((tick.saturating_sub(t)) as f32 / DENIED_TICKS as f32),
+            ),
             (_, Some(until)) => (
-                Led::Red,
+                Led::Fail,
                 Some((
                     format!("LOCKED {}m", until.saturating_sub(now).max(1)),
-                    device::LED_RED,
+                    device::DENY,
                 )),
+                None,
             ),
-            (Flash::Refused(t), _) if tick <= t + REFUSED_TICKS => (Led::Red, None),
-            _ => (Led::Amber, None),
+            (Flash::Refused(t), _) if tick <= t + REFUSED_TICKS => (Led::Fail, None, None),
+            _ => (Led::Idle, None, None),
         };
         let buf = f.buffer_mut();
-        device::bezel(buf, r, "SECURLOK", led);
-        let green = Style::default().fg(device::PHOSPHOR);
+        device::bezel(buf, r, "SECURLOK", led, &self.skin);
+        let live = Style::default().fg(device::TEXT);
+        let quiet = Style::default().fg(device::TEXT_DIM);
         let first = match &reading {
             Some((text, colour)) => (
                 text.clone(),
@@ -186,7 +202,7 @@ impl Screen for Keypad {
                         None => "[_]".to_string(),
                     })
                     .collect(),
-                green,
+                live,
             ),
         };
         let second = match self
@@ -196,18 +212,24 @@ impl Screen for Keypad {
             Some(code) => format!("journal {code:04}"),
             None => self.label.clone(),
         };
-        let lines = [first, (second, green.add_modifier(Modifier::DIM))];
-        device::lcd(buf, Rect::new(r.x + 2, r.y + 2, r.width - 4, 4), &lines);
+        let lines = [first, (second, quiet)];
+        let glass = Rect::new(r.x + 2, r.y + 3, r.width - 4, 4);
+        device::glass(buf, glass, &lines, &self.skin);
+        // The refusal scrambles the label row under the reading, not the reading.
+        if let Some(p) = glitch {
+            let under = Rect::new(glass.x + 1, glass.y + 2, glass.width - 2, 1);
+            device::glitch(buf, under, tick, p);
+        }
         let worn: Vec<char> = format!("{:04}", self.code).chars().collect();
         for (i, ch) in KEYS.iter().enumerate() {
             let (x, y) = key_at(r, i);
-            let ink = match ch {
-                'X' => Style::default().fg(device::LED_RED),
-                'V' => Style::default().fg(device::LED_GREEN),
-                c if worn.contains(c) => Style::default().fg(device::INK_WORN),
-                _ => Style::default().fg(device::INK),
+            let lit = match ch {
+                'X' => KeyLit::Deny,
+                'V' => KeyLit::Accept,
+                c if worn.contains(c) => KeyLit::Worn,
+                _ => KeyLit::Normal,
             };
-            device::keycap(buf, x, y, *ch, ink);
+            device::key(buf, x, y, *ch, lit, &self.skin);
         }
     }
 }
@@ -364,16 +386,13 @@ mod tests {
         let buf = t.backend().buffer();
         let worn: Vec<char> = format!("{code:04}").chars().collect();
         let r = k.rect(Rect::new(0, 0, 120, 40));
+        let (_, worn_fg) = k.skin.key_colours(KeyLit::Worn);
         for (i, ch) in KEYS.iter().enumerate() {
             let (x, y) = key_at(r, i);
-            let cell = &buf[(x + 2, y + 1)];
+            let cell = &buf[(x + 2, y)];
             assert_eq!(cell.symbol(), ch.to_string());
             let expect_worn = ch.is_ascii_digit() && worn.contains(ch);
-            assert_eq!(
-                cell.fg == crate::ui::device::INK_WORN,
-                expect_worn,
-                "key {ch}"
-            );
+            assert_eq!(cell.fg == worn_fg, expect_worn, "key {ch}");
         }
     }
 
