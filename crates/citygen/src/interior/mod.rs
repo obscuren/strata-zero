@@ -265,8 +265,11 @@ mod tests {
         let b = c
             .buildings
             .iter()
-            .find(|b| b.kind == BuildingKind::Megablock && b.span.contains(StratumKind::Skyways))
-            .expect("a megablock with a skyways level");
+            .find(|b| {
+                matches!(b.kind, BuildingKind::Megablock | BuildingKind::Apartment)
+                    && b.span.contains(StratumKind::Skyways)
+            })
+            .expect("a residential block with a skyways level");
         let plan = FloorPlan::new(&c, b.id).unwrap();
         let f = generate_floor(&c, &plan, 2);
         validate_floor(&plan, &f).unwrap();

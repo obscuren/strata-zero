@@ -3919,7 +3919,7 @@ mod tests {
         let b = city
             .buildings
             .iter()
-            .find(|b| b.kind == BuildingKind::Megablock)
+            .find(|b| matches!(b.kind, BuildingKind::Megablock | BuildingKind::Apartment))
             .unwrap()
             .id;
         st.interiors.plan(&city, b).unwrap();
@@ -4064,13 +4064,13 @@ mod tests {
             city.buildings
                 .iter()
                 .find(|b| {
-                    b.kind == BuildingKind::Megablock
+                    matches!(b.kind, BuildingKind::Megablock | BuildingKind::Apartment)
                         && world
                             .inside(b.id)
                             .iter()
                             .any(|o| o.role == sim::OccupantRole::Living)
                 })
-                .expect("a megablock with people home at three")
+                .expect("a residential block with people home at three")
                 .id
         };
         let plan = st.interiors.plan(&city, b).unwrap().clone();
@@ -4121,7 +4121,7 @@ mod tests {
         let b = city
             .buildings
             .iter()
-            .find(|b| b.kind == BuildingKind::Megablock)
+            .find(|b| matches!(b.kind, BuildingKind::Megablock | BuildingKind::Apartment))
             .unwrap()
             .id;
         st.interiors.plan(&city, b).unwrap();

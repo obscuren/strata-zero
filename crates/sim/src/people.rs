@@ -2,7 +2,7 @@
 
 use crate::content::{DAY, Hours, Leisure, People, Profession, Tint};
 use crate::places::Places;
-use citygen::world::{BuildingKind, City, Theme};
+use citygen::world::{Building, BuildingKind, City, Theme};
 use citygen::{BuildingId, Hue, Pos};
 use rand::Rng;
 use rand::seq::SliceRandom;
@@ -168,10 +168,11 @@ fn scaled(rng: &mut ChaCha8Rng, range: (u8, u8), density: f32) -> usize {
     (whole + extra) as usize
 }
 
-fn housing_capacity(kind: BuildingKind) -> usize {
-    match kind {
+/// How many residents a building houses; a megablock scales with its footprint.
+fn housing_capacity(b: &Building) -> usize {
+    match b.kind {
         BuildingKind::Apartment => 8,
-        BuildingKind::Megablock => 30,
+        BuildingKind::Megablock => (b.footprint.w as usize * b.footprint.h as usize / 6).max(30),
         BuildingKind::Hotel => 6,
         _ => 0,
     }
@@ -313,11 +314,11 @@ pub fn seed_population(
     let mut housing: Vec<(BuildingId, Pos, usize)> = city
         .buildings
         .iter()
-        .filter(|b| housing_capacity(b.kind) > 0)
+        .filter(|b| housing_capacity(b) > 0)
         .filter(|b| city.district(b.district).theme != Theme::NeonStrip)
         .filter_map(|b| {
             let door = *places.doors.get(&b.id)?.first()?;
-            let cap = ((housing_capacity(b.kind) as f32 * density).round() as usize).max(1);
+            let cap = ((housing_capacity(b) as f32 * density).round() as usize).max(1);
             Some((b.id, door, cap))
         })
         .collect();
@@ -609,13 +610,12 @@ mod tests {
             *m.entry(p.profession.as_str()).or_default() += 1;
             m
         });
-        for id in [
-            "shopkeeper",
-            "sex_worker",
-            "corp_drone",
-            "line_worker",
-            "ganger",
-        ] {
+        // Gangers hold megablock turf, so only a city with a megablock has them.
+        let mut expected = vec!["shopkeeper", "sex_worker", "corp_drone", "line_worker"];
+        if !places.turf.is_empty() {
+            expected.push("ganger");
+        }
+        for id in expected {
             assert!(by_prof.get(id).is_some_and(|n| *n > 0), "{id}: {by_prof:?}");
         }
         let housed = pop.people.iter().filter(|p| p.home.is_some()).count();
@@ -768,5 +768,22 @@ mod tests {
             };
             assert!(places.beats.values().any(|v| v.contains(&pos)));
         }
+    }
+
+    #[test]
+    fn housing_capacity_of_a_megablock_scales_with_its_footprint() {
+        use citygen::geom::Rect;
+        use citygen::ids::{BuildingId, DistrictId};
+        use citygen::world::{HeightClass, StrataSpan};
+        let mega = |w, h| Building {
+            id: BuildingId(0),
+            kind: BuildingKind::Megablock,
+            district: DistrictId(0),
+            footprint: Rect::new(0, 0, w, h),
+            span: StrataSpan::from_class(HeightClass::Tall, false),
+            name: None,
+        };
+        assert_eq!(housing_capacity(&mega(20, 18)), 60);
+        assert_eq!(housing_capacity(&mega(6, 5)), 30);
     }
 }

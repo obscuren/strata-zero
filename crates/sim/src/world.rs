@@ -1809,12 +1809,12 @@ mod tests {
             .buildings
             .iter()
             .find(|b| {
-                b.kind == BuildingKind::Megablock
+                matches!(b.kind, BuildingKind::Megablock | BuildingKind::Apartment)
                     && w.inside(b.id)
                         .iter()
                         .any(|o| o.role == OccupantRole::Living)
             })
-            .expect("a megablock with people home at three");
+            .expect("a residential block with people home at three");
         let home = w.inside(block.id);
         for o in home.iter().filter(|o| o.role == OccupantRole::Living) {
             assert_eq!(w.people()[o.id.0 as usize].home, Some(block.id));

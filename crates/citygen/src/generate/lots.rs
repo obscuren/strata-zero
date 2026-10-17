@@ -2,20 +2,28 @@
 
 use super::{GenCtx, Lot, LotUse, Stage, StageRunner, StepOut};
 use crate::geom::{Pos, Rect};
-use crate::ids::BuildingId;
+use crate::ids::{BuildingId, DistrictId};
 use crate::params::GenError;
 use crate::rng::{chance, pick_weighted};
 use crate::theme::{StreetStyle, ThemeSpec};
 use crate::tile::Terrain;
-use crate::world::{Building, BuildingKind, HeightClass, StrataSpan, StratumKind};
+use crate::world::{Building, BuildingKind, HeightClass, StrataSpan, StratumKind, Theme};
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
+use std::collections::HashSet;
+
+/// At most this many megablocks per city.
+const MAX_MEGABLOCKS: usize = 2;
+/// A megablock's block must be at least this wide and high, room for an atrium plan.
+const MEGABLOCK_MIN: (i32, i32) = (16, 12);
 
 #[derive(Default)]
 pub(crate) struct LotsStage {
     next: usize,
     filled: bool,
     rng: Option<ChaCha8Rng>,
+    /// Indices into `scratch.blocks` that become one whole-block megablock each.
+    mega_blocks: HashSet<usize>,
 }
 
 /// Splits a run `[lo, hi)` into pieces of length in `[min, 2*min)` with jittered cuts.
@@ -83,6 +91,68 @@ fn choose_class(rng: &mut ChaCha8Rng, kind: BuildingKind, spec: &ThemeSpec) -> H
     }
 }
 
+/// Raises one building on `lot`: class, basement, walls and floor, and its strata span.
+fn place_building(
+    ctx: &mut GenCtx,
+    rng: &mut ChaCha8Rng,
+    lot: Rect,
+    kind: BuildingKind,
+    spec: &ThemeSpec,
+    district: DistrictId,
+) {
+    let class = choose_class(rng, kind, spec);
+    let basement = chance(rng, spec.basement);
+    let mut footprint = lot;
+    if matches!(spec.street_style, StreetStyle::Organic | StreetStyle::Strip) && chance(rng, 0.3) {
+        footprint = match rng.random_range(0..4) {
+            0 if lot.w > 4 => Rect::new(lot.x + 1, lot.y, lot.w - 1, lot.h),
+            1 if lot.w > 4 => Rect::new(lot.x, lot.y, lot.w - 1, lot.h),
+            2 if lot.h > 3 => Rect::new(lot.x, lot.y + 1, lot.w, lot.h - 1),
+            3 if lot.h > 3 => Rect::new(lot.x, lot.y, lot.w, lot.h - 1),
+            _ => lot,
+        };
+    }
+    let id = BuildingId(ctx.city.buildings.len() as u32);
+    let span = StrataSpan::from_class(class, basement);
+    for p in footprint.iter() {
+        let on_border = p.x == footprint.x
+            || p.y == footprint.y
+            || p.x == footprint.right() - 1
+            || p.y == footprint.bottom() - 1;
+        ctx.set_terrain(
+            StratumKind::Street,
+            p,
+            if on_border {
+                Terrain::Wall
+            } else {
+                Terrain::Floor
+            },
+        );
+        for k in span.iter() {
+            if let Some(t) = ctx.city.tile_mut(k, p) {
+                t.building = Some(id);
+            }
+        }
+    }
+    ctx.city.buildings.push(Building {
+        id,
+        kind,
+        district,
+        footprint,
+        span,
+        name: None,
+    });
+    ctx.scratch.lots.push(Lot {
+        rect: lot,
+        district,
+        use_: LotUse::Building {
+            kind,
+            class,
+            basement,
+        },
+    });
+}
+
 impl LotsStage {
     fn place_block(&mut self, ctx: &mut GenCtx, idx: usize) {
         let block = ctx.scratch.blocks[idx];
@@ -91,6 +161,25 @@ impl LotsStage {
         let density = ctx.params().density;
         let rng = self.rng.as_mut().expect("begin sets rng");
 
+        if self.mega_blocks.contains(&idx) {
+            place_building(
+                ctx,
+                rng,
+                block.rect,
+                BuildingKind::Megablock,
+                spec,
+                district.id,
+            );
+            return;
+        }
+
+        // Megablocks are landmarks chosen whole-block in `begin`, never drawn per lot.
+        let mix: Vec<(BuildingKind, u32)> = spec
+            .mix
+            .iter()
+            .copied()
+            .filter(|(k, _)| *k != BuildingKind::Megablock)
+            .collect();
         let mut lots = Vec::new();
         bsp(rng, block.rect, spec.min_lot, &mut lots);
         for lot in lots {
@@ -107,10 +196,8 @@ impl LotsStage {
             let has_building = ctx.city.buildings.iter().any(|b| b.district == district.id);
             let plaza_p = spec.plaza * (1.3 - density);
             if has_building && chance(rng, plaza_p) {
-                let parking = matches!(
-                    district.theme,
-                    crate::world::Theme::CorpCore | crate::world::Theme::Industrial
-                ) && rng.random_bool(0.5);
+                let parking = matches!(district.theme, Theme::CorpCore | Theme::Industrial)
+                    && rng.random_bool(0.5);
                 ctx.stratum_fill(StratumKind::Street, lot, Terrain::Plaza);
                 ctx.scratch.lots.push(Lot {
                     rect: lot,
@@ -123,60 +210,8 @@ impl LotsStage {
                 });
                 continue;
             }
-            let kind = *pick_weighted(rng, spec.mix);
-            let class = choose_class(rng, kind, spec);
-            let basement = chance(rng, spec.basement);
-            let mut footprint = lot;
-            if matches!(spec.street_style, StreetStyle::Organic | StreetStyle::Strip)
-                && chance(rng, 0.3)
-            {
-                footprint = match rng.random_range(0..4) {
-                    0 if lot.w > 4 => Rect::new(lot.x + 1, lot.y, lot.w - 1, lot.h),
-                    1 if lot.w > 4 => Rect::new(lot.x, lot.y, lot.w - 1, lot.h),
-                    2 if lot.h > 3 => Rect::new(lot.x, lot.y + 1, lot.w, lot.h - 1),
-                    3 if lot.h > 3 => Rect::new(lot.x, lot.y, lot.w, lot.h - 1),
-                    _ => lot,
-                };
-            }
-            let id = BuildingId(ctx.city.buildings.len() as u32);
-            let span = StrataSpan::from_class(class, basement);
-            for p in footprint.iter() {
-                let on_border = p.x == footprint.x
-                    || p.y == footprint.y
-                    || p.x == footprint.right() - 1
-                    || p.y == footprint.bottom() - 1;
-                ctx.set_terrain(
-                    StratumKind::Street,
-                    p,
-                    if on_border {
-                        Terrain::Wall
-                    } else {
-                        Terrain::Floor
-                    },
-                );
-                for k in span.iter() {
-                    if let Some(t) = ctx.city.tile_mut(k, p) {
-                        t.building = Some(id);
-                    }
-                }
-            }
-            ctx.city.buildings.push(Building {
-                id,
-                kind,
-                district: district.id,
-                footprint,
-                span,
-                name: None,
-            });
-            ctx.scratch.lots.push(Lot {
-                rect: lot,
-                district: district.id,
-                use_: LotUse::Building {
-                    kind,
-                    class,
-                    basement,
-                },
-            });
+            let kind = *pick_weighted(rng, &mix);
+            place_building(ctx, rng, lot, kind, spec, district.id);
         }
     }
 
@@ -209,6 +244,28 @@ impl GenCtx {
 impl StageRunner for LotsStage {
     fn begin(&mut self, ctx: &mut GenCtx) -> Result<(), GenError> {
         self.rng = Some(ctx.rng(Stage::Lots));
+        // Each Megablocks district gets its largest big-enough block as one megablock.
+        self.mega_blocks.clear();
+        for d in ctx
+            .city
+            .districts
+            .iter()
+            .filter(|d| d.theme == Theme::Megablocks)
+        {
+            if self.mega_blocks.len() == MAX_MEGABLOCKS {
+                break;
+            }
+            let best = ctx
+                .scratch
+                .blocks
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| b.district == d.id)
+                .filter(|(_, b)| b.rect.w >= MEGABLOCK_MIN.0 && b.rect.h >= MEGABLOCK_MIN.1)
+                .max_by_key(|(i, b)| (b.rect.area(), std::cmp::Reverse(*i)))
+                .map(|(i, _)| i);
+            self.mega_blocks.extend(best);
+        }
         self.next = 0;
         self.filled = false;
         ctx.scratch.lots.clear();
@@ -237,7 +294,7 @@ mod tests {
     use crate::generate::testutil::small;
     use crate::params::{GenParams, SizePreset, WaterMode};
     use crate::tile::Terrain;
-    use crate::world::{StratumKind, Theme};
+    use crate::world::{BuildingKind, StratumKind, Theme};
 
     #[test]
     fn buildings_fit_blocks_and_do_not_overlap() {
@@ -325,5 +382,71 @@ mod tests {
             lo < hi,
             "low density {lo} should yield fewer buildings than high {hi}"
         );
+    }
+
+    #[test]
+    fn megablocks_are_rare_and_take_a_whole_block() {
+        for (seed, size, districts) in [
+            (6, SizePreset::Custom { w: 120, h: 60 }, 8),
+            (8, SizePreset::Medium, 7),
+            (11, SizePreset::Medium, 7),
+            (42, SizePreset::Medium, 7),
+            (1, SizePreset::Medium, 7),
+            (2, SizePreset::Medium, 7),
+        ] {
+            let c = Generator::run(GenParams {
+                seed,
+                size,
+                districts,
+                ..Default::default()
+            })
+            .unwrap();
+            let megas: Vec<_> = c
+                .buildings
+                .iter()
+                .filter(|b| b.kind == BuildingKind::Megablock)
+                .collect();
+            // Seeds 6, 11 and 42 cut their Megablocks district into blocks too small to qualify.
+            let expected = if matches!(seed, 6 | 11 | 42) {
+                0..=2
+            } else {
+                1..=2
+            };
+            assert!(
+                expected.contains(&megas.len()),
+                "seed {seed}: {} megablocks",
+                megas.len()
+            );
+            for m in &megas {
+                assert_eq!(c.district(m.district).theme, Theme::Megablocks);
+                assert!(m.footprint.w >= 16 && m.footprint.h >= 12);
+                // No other building shares its block: nothing of another building touches the footprint.
+                assert!(
+                    c.buildings.iter().filter(|b| b.id != m.id).all(|b| b
+                        .footprint
+                        .grow(1)
+                        .intersection(m.footprint)
+                        .is_none())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_city_too_small_for_a_megablocks_district_has_no_megablock() {
+        let c = Generator::run(GenParams {
+            seed: 3,
+            size: SizePreset::Small,
+            districts: 4,
+            ..Default::default()
+        })
+        .unwrap();
+        if !c.districts.iter().any(|d| d.theme == Theme::Megablocks) {
+            assert!(
+                c.buildings
+                    .iter()
+                    .all(|b| b.kind != BuildingKind::Megablock)
+            );
+        }
     }
 }
