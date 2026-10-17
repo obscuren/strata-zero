@@ -1292,6 +1292,7 @@ impl Screen for MapScreen {
         let ghost = match self.place {
             Place::Construct(b) => Some(crate::render::ghost::GhostOverlay {
                 pieces: crate::net::ghost_pieces(st, b),
+                vis,
             }),
             _ => None,
         };
