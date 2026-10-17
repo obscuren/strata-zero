@@ -32,6 +32,12 @@ pub const FAILSAFE_COOLING: u64 = 30;
 pub const MASK_TURNS: u8 = 6;
 /// Minutes the deck cools after the failsafe pulls out a runner in the deep end.
 pub const DEEP_END_COOLING: u64 = 10;
+/// Heat a ping makes inside a construct.
+pub const PING_NOISE: u8 = 2;
+/// Heat an arc trace makes inside a construct.
+pub const TRACE_NOISE: u8 = 5;
+/// Turns a piece stands stunned after an arc trace.
+pub const STUN_TURNS: u8 = 2;
 
 /// What a piece of ICE is doing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,6 +54,8 @@ pub struct Ice {
     pub integrity: u8,
     pub step: usize,
     pub forward: bool,
+    /// Turns left standing stunned: it neither sees, moves nor hits.
+    pub stunned: u8,
 }
 
 pub struct NetState {
@@ -270,6 +278,7 @@ impl NetState {
             // end walking forward, the vault guard at the far end walking back.
             let step = g.beat.iter().position(|p| *p == g.pos).unwrap_or(0);
             states.push(Ice {
+                stunned: 0,
                 mode: IceMode::Asleep,
                 integrity: g.grade.integrity(),
                 step,
@@ -588,7 +597,7 @@ pub fn raise_alarm(st: &mut AppState, b: BuildingId) -> String {
 
 /// Heat on the construct's trace with everything that follows: the alarm raised,
 /// the null route taken once, the dump. Returns whether the player was dumped.
-fn noise_on(st: &mut AppState, b: BuildingId, noise: u8) -> bool {
+pub(crate) fn noise_on(st: &mut AppState, b: BuildingId, noise: u8) -> bool {
     let now = st.net.now(st);
     let was_alert = st.net.alert(b, now);
     let null_route = st.character.flags(&st.content).contains("null_route");
@@ -724,6 +733,16 @@ pub fn ice_turn(st: &mut AppState) {
         let mut ice = st.net.ice[&b][i].clone();
         if ice.integrity == 0 {
             ice.integrity = g.grade.integrity();
+        }
+        // Stunned: the turn passes it by.
+        if ice.stunned > 0 {
+            ice.stunned -= 1;
+            if let Some(states) = st.net.ice.get_mut(&b)
+                && let Some(slot) = states.get_mut(i)
+            {
+                *slot = ice;
+            }
+            continue;
         }
         if sees(k, g.pos, g.grade, pos, masked) {
             ice.mode = IceMode::Awake { seen: pos, lost: 0 };
@@ -879,22 +898,82 @@ pub fn ice_lines(st: &AppState, b: BuildingId, seen: impl Fn(Pos) -> bool) -> Ve
     let Some(states) = st.net.ice.get(&b) else {
         return Vec::new();
     };
+    // Signal ghost: an awake piece is felt through the walls.
+    let ghost = st
+        .character
+        .has_ability(&st.content, &game::AbilityId::new("signal_ghost"));
     k.guards
         .iter()
         .zip(states)
-        .filter(|(g, _)| k.guard_at(g.pos).is_some() && seen(g.pos))
+        .filter(|(g, i)| {
+            k.guard_at(g.pos).is_some()
+                && (seen(g.pos) || (ghost && matches!(i.mode, IceMode::Awake { .. })))
+        })
         .map(|(g, i)| {
             let mode = match i.mode {
                 IceMode::Asleep => "asleep",
                 IceMode::Awake { .. } => "hunting",
             };
+            let stunned = if i.stunned > 0 {
+                format!(" · stunned {}", i.stunned)
+            } else {
+                String::new()
+            };
             format!(
-                "▣ {} ICE · {mode} · {}/{}",
+                "▣ {} ICE · {mode} · {}/{}{stunned}",
                 g.grade.label(),
                 i.integrity,
                 g.grade.integrity()
             )
         })
+        .collect()
+}
+
+/// Every node tile of a construct, for a ping's glow.
+pub fn construct_nodes(st: &AppState, b: BuildingId) -> Vec<Pos> {
+    st.constructs
+        .get(b)
+        .map(|k| k.nodes.iter().map(|(_, p)| *p).collect())
+        .unwrap_or_default()
+}
+
+/// An arc trace inside a construct: every standing piece within `radius` of the
+/// origin is stunned for `STUN_TURNS`. Returns their tiles, for the bolts.
+pub fn stun_pieces(st: &mut AppState, b: BuildingId, origin: Pos, radius: i32) -> Vec<Pos> {
+    let Some(k) = st.constructs.get(b).cloned() else {
+        return Vec::new();
+    };
+    let states = st.net.ice_of(&k);
+    let mut hit = Vec::new();
+    for (i, g) in k.guards.iter().enumerate() {
+        if k.guard_at(g.pos).is_none() || g.pos.chebyshev(origin) > radius {
+            continue;
+        }
+        if let Some(ice) = states.get_mut(i) {
+            ice.stunned = STUN_TURNS;
+            hit.push(g.pos);
+        }
+    }
+    hit
+}
+
+/// The awake standing pieces a signal ghost feels through the walls; none without
+/// the ability.
+pub fn ghost_pieces(st: &AppState, b: BuildingId) -> Vec<Pos> {
+    if !st
+        .character
+        .has_ability(&st.content, &game::AbilityId::new("signal_ghost"))
+    {
+        return Vec::new();
+    }
+    let (Some(k), Some(states)) = (st.constructs.get(b), st.net.ice.get(&b)) else {
+        return Vec::new();
+    };
+    k.guards
+        .iter()
+        .zip(states)
+        .filter(|(g, i)| k.guard_at(g.pos).is_some() && matches!(i.mode, IceMode::Awake { .. }))
+        .map(|(g, _)| g.pos)
         .collect()
 }
 

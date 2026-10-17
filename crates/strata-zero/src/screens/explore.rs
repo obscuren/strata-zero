@@ -1289,6 +1289,15 @@ impl Screen for MapScreen {
         if let Some(o) = inside.as_ref() {
             overlays.push(o);
         }
+        let ghost = match self.place {
+            Place::Construct(b) => Some(crate::render::ghost::GhostOverlay {
+                pieces: crate::net::ghost_pieces(st, b),
+            }),
+            _ => None,
+        };
+        if let Some(o) = ghost.as_ref() {
+            overlays.push(o);
+        }
         let fx = FxOverlay { fx: &st.fx, vis };
         overlays.push(&fx);
         MapView {
@@ -5186,5 +5195,157 @@ mod tests {
         stand(&mut st, &mut s, Place::Construct(b), beside_vault);
         assert_eq!(st.character.hp, 0);
         assert!(st.net.death.is_some());
+    }
+
+    fn fire(st: &mut AppState, id: &str) -> Result<String, String> {
+        crate::actions::perform(st, game::Action::Fire(game::AbilityId::new(id)))
+    }
+
+    #[test]
+    fn ping_inside_a_construct_lights_every_node_and_warms_the_trace() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        learn(&mut st, "handshake");
+        let nodes: Vec<Pos> = st
+            .constructs
+            .get(b)
+            .unwrap()
+            .nodes
+            .iter()
+            .map(|(_, p)| *p)
+            .collect();
+        let heat = st.net.traces.get(&b).map_or(0, |t| t.heat);
+        let msg = fire(&mut st, "ping").unwrap();
+        assert_eq!(msg, format!("Ping: {} nodes answer", nodes.len()));
+        assert_eq!(st.net.traces[&b].heat, heat + crate::net::PING_NOISE);
+        let glow = st
+            .fx
+            .iter()
+            .find(|f| matches!(f.fx, game::Fx::Glow { .. }))
+            .expect("the ping's glow");
+        let mut lit = glow.targets.clone();
+        lit.sort_by_key(|p| (p.y, p.x));
+        let mut expect = nodes;
+        expect.sort_by_key(|p| (p.y, p.x));
+        assert_eq!(lit, expect);
+        // On the street the ping is the old ping: no heat, no node targets.
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        learn(&mut st, "handshake");
+        assert_eq!(fire(&mut st, "ping").unwrap(), "Ping: pulse sent");
+        assert!(st.net.traces.is_empty());
+    }
+
+    #[test]
+    fn arc_trace_inside_a_construct_stuns_the_ice_in_range() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let k = st.constructs.get(b).unwrap().clone();
+        assert_eq!(k.guards.len(), 2);
+        st.net.ice_of(&k);
+        let post = k.guards[0].post;
+        let beside_post = Pos::new(post.x + 1, post.y);
+        st.net.wake_all(b, beside_post);
+        // Stand beside the awake gate guard without a turn passing.
+        {
+            let p = st.player.as_mut().unwrap();
+            p.place = Place::Construct(b);
+            p.pos = beside_post;
+        }
+        s.place = Place::Construct(b);
+        let heat = st.net.traces.get(&b).map_or(0, |t| t.heat);
+        let msg = fire(&mut st, "arc_trace").unwrap();
+        assert_eq!(msg, "Arc Trace: 2 pieces stunned");
+        assert_eq!(st.net.traces[&b].heat, heat + crate::net::TRACE_NOISE);
+        assert_eq!(st.net.ice[&b][0].stunned, crate::net::STUN_TURNS);
+        assert_eq!(st.net.ice[&b][1].stunned, crate::net::STUN_TURNS);
+        let bolt = st
+            .fx
+            .iter()
+            .find(|f| matches!(f.fx, game::Fx::Bolt { .. }))
+            .unwrap();
+        assert_eq!(bolt.targets.len(), 2);
+        let lines = crate::net::ice_lines(&st, b, |_| true);
+        assert!(lines.iter().any(|l| l.contains("· stunned 2")), "{lines:?}");
+        // Two turns beside it and it does nothing; the third it hits.
+        let hp = st.character.hp;
+        let focus = st.character.focus;
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(st.net.ice[&b][0].stunned, 1);
+        assert!(
+            last(&st).is_none_or(|l| !l.contains("ICE hits")),
+            "{:?}",
+            last(&st)
+        );
+        // The alarm wakes a stunned piece, and it still waits out the stun.
+        crate::net::raise_alarm(&mut st, b);
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(st.net.ice[&b][0].stunned, 0);
+        assert!(
+            last(&st).is_none_or(|l| !l.contains("ICE hits")),
+            "{:?}",
+            last(&st)
+        );
+        assert_eq!((st.character.hp, st.character.focus), (hp, focus));
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert!(
+            last(&st).unwrap().contains("grey ICE hits"),
+            "{:?}",
+            last(&st)
+        );
+    }
+
+    #[test]
+    fn arc_trace_on_the_grid_is_the_old_arc_trace() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let city = st.city.clone().unwrap();
+        let gate = crate::constructs::city_gate(&city, b).unwrap();
+        st.player.as_mut().unwrap().body = Some((Place::Stratum(StratumKind::Street), gate));
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), gate);
+        let heat = st.net.traces.get(&b).map_or(0, |t| t.heat);
+        assert_eq!(fire(&mut st, "arc_trace").unwrap(), "Arc Trace: pulse sent");
+        assert_eq!(st.net.traces.get(&b).map_or(0, |t| t.heat), heat);
+        assert!(
+            st.net
+                .ice
+                .get(&b)
+                .is_none_or(|v| v.iter().all(|i| i.stunned == 0))
+        );
+    }
+
+    #[test]
+    fn signal_ghost_feels_awake_ice_through_walls() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let k = st.constructs.get(b).unwrap().clone();
+        st.net.ice_of(&k);
+        let hide = room_tile(&st, b);
+        stand(&mut st, &mut s, Place::Construct(b), hide);
+        assert!(
+            crate::net::ice_lines(&st, b, |_| false).is_empty(),
+            "asleep and unseen: nothing"
+        );
+        assert!(crate::net::ghost_pieces(&st, b).is_empty());
+        st.net.wake_all(b, hide);
+        let lines = crate::net::ice_lines(&st, b, |_| false);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines.iter().all(|l| l.contains("hunting")));
+        let felt = crate::net::ghost_pieces(&st, b);
+        assert_eq!(felt.len(), 2);
+        // Without the ability, nothing through walls.
+        st.character =
+            game::Character::from_template(&st.content, &game::TemplateId::new("kessler")).unwrap();
+        assert!(
+            !st.character
+                .has_ability(&st.content, &game::AbilityId::new("signal_ghost"))
+        );
+        assert!(crate::net::ice_lines(&st, b, |_| false).is_empty());
+        assert!(crate::net::ghost_pieces(&st, b).is_empty());
     }
 }

@@ -214,6 +214,12 @@ impl Character {
         self.skills.contains(id)
     }
 
+    /// Whether the character has an ability from any source: an item, a category,
+    /// a talent.
+    pub fn has_ability(&self, c: &Content, id: &AbilityId) -> bool {
+        self.abilities(c).iter().any(|(a, _)| a == id)
+    }
+
     pub fn has_category(&self, id: &CategoryId) -> bool {
         self.categories.contains(id)
     }
@@ -1000,5 +1006,17 @@ mod tests {
         let mut k = Character::from_template(&c, &TemplateId::new("kessler")).unwrap();
         k.give(crack.clone(), 1);
         assert_eq!(k.can_load(&c, &crack).unwrap_err(), "no deck jacked");
+    }
+
+    #[test]
+    fn has_ability_reads_every_source() {
+        let c = Content::load().unwrap();
+        let ch = vex(&c);
+        assert!(
+            ch.has_ability(&c, &AbilityId::new("signal_ghost")),
+            "the netrunner category"
+        );
+        assert!(ch.has_ability(&c, &AbilityId::new("netscan")), "the deck");
+        assert!(!ch.has_ability(&c, &AbilityId::new("ping")));
     }
 }

@@ -55,6 +55,7 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         }
     }
     // The ability's effects start now, at the firer's feet.
+    let mut message = outcome.message.clone();
     if let Some(id) = fired
         && let Some(ability) = st.character.ability(&st.content, &id)
     {
@@ -64,12 +65,33 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
             ) => radius,
             AbilityKind::Passive => 0,
         };
-        let targets = match (&ability.kind, st.city.as_ref(), place.stratum()) {
+        let mut targets = match (&ability.kind, st.city.as_ref(), place.stratum()) {
             (AbilityKind::Active(Active::Trace { radius }), Some(city), Some(stratum)) => {
                 trace_targets(city, stratum, pos, *radius)
             }
             _ => Vec::new(),
         };
+        // Inside a construct the deck's pulses have teeth: a ping lights every node
+        // and an arc trace stuns the ICE it reaches; both warm the trace.
+        if let Place::Construct(b) = place {
+            match ability.kind {
+                AbilityKind::Active(Active::Ping { .. }) => {
+                    targets = crate::net::construct_nodes(st, b);
+                    message = format!("Ping: {} nodes answer", targets.len());
+                    crate::net::noise_on(st, b, crate::net::PING_NOISE);
+                }
+                AbilityKind::Active(Active::Trace { radius }) => {
+                    targets = crate::net::stun_pieces(st, b, pos, radius);
+                    message = match targets.len() {
+                        0 => "Arc Trace: nothing to arc to".to_string(),
+                        1 => "Arc Trace: 1 piece stunned".to_string(),
+                        n => format!("Arc Trace: {n} pieces stunned"),
+                    };
+                    crate::net::noise_on(st, b, crate::net::TRACE_NOISE);
+                }
+                _ => {}
+            }
+        }
         // A mark lights when the arc lands: it waits out any bolt fired with it.
         let landing = ability
             .fx
@@ -95,7 +117,7 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
             });
         }
     }
-    Ok(outcome.message)
+    Ok(message)
 }
 
 /// The node tiles a trace from `origin` reaches: cyber tiles on the Net, anchors
