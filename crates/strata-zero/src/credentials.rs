@@ -89,7 +89,7 @@ pub struct Journal {
     /// The rig's inbox, oldest first.
     pub mails: Vec<Mail>,
     /// Terminals already powered on this session, by their tile.
-    pub booted: BTreeSet<(Place, Pos)>,
+    pub booted: std::collections::HashSet<(Place, Pos)>,
     /// The fixer's first job: a neighbour's flat and the shard in it.
     pub favour: Option<Favour>,
 }

@@ -14,6 +14,7 @@ pub mod messages;
 pub mod pause;
 pub mod popup;
 pub mod settings;
+pub mod terminal;
 pub mod title;
 
 use crate::app::Screen;
