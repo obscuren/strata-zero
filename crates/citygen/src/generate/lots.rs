@@ -14,8 +14,9 @@ use std::collections::HashSet;
 
 /// At most this many megablocks per city.
 const MAX_MEGABLOCKS: usize = 2;
-/// A megablock's block must be at least this wide and high, room for an atrium plan.
-const MEGABLOCK_MIN: (i32, i32) = (16, 12);
+/// Minimum block width and height for a megablock, tried in order: the first tier with
+/// a block wins.
+const MEGABLOCK_MIN: [(i32, i32); 2] = [(16, 12), (13, 9)];
 
 #[derive(Default)]
 pub(crate) struct LotsStage {
@@ -255,15 +256,16 @@ impl StageRunner for LotsStage {
             if self.mega_blocks.len() == MAX_MEGABLOCKS {
                 break;
             }
-            let best = ctx
-                .scratch
-                .blocks
-                .iter()
-                .enumerate()
-                .filter(|(_, b)| b.district == d.id)
-                .filter(|(_, b)| b.rect.w >= MEGABLOCK_MIN.0 && b.rect.h >= MEGABLOCK_MIN.1)
-                .max_by_key(|(i, b)| (b.rect.area(), std::cmp::Reverse(*i)))
-                .map(|(i, _)| i);
+            let best = MEGABLOCK_MIN.iter().find_map(|&(w, h)| {
+                ctx.scratch
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, b)| b.district == d.id)
+                    .filter(|(_, b)| b.rect.w >= w && b.rect.h >= h)
+                    .max_by_key(|(i, b)| (b.rect.area(), std::cmp::Reverse(*i)))
+                    .map(|(i, _)| i)
+            });
             self.mega_blocks.extend(best);
         }
         self.next = 0;
@@ -406,12 +408,8 @@ mod tests {
                 .iter()
                 .filter(|b| b.kind == BuildingKind::Megablock)
                 .collect();
-            // Seeds 6, 11 and 42 cut their Megablocks district into blocks too small to qualify.
-            let expected = if matches!(seed, 6 | 11 | 42) {
-                0..=2
-            } else {
-                1..=2
-            };
+            // Seed 6 cuts its Megablocks district into blocks too small to qualify.
+            let expected = if seed == 6 { 0..=2 } else { 1..=2 };
             assert!(
                 expected.contains(&megas.len()),
                 "seed {seed}: {} megablocks",
@@ -419,7 +417,7 @@ mod tests {
             );
             for m in &megas {
                 assert_eq!(c.district(m.district).theme, Theme::Megablocks);
-                assert!(m.footprint.w >= 16 && m.footprint.h >= 12);
+                assert!(m.footprint.w >= 13 && m.footprint.h >= 9);
                 // No other building shares its block: nothing of another building touches the footprint.
                 assert!(
                     c.buildings.iter().filter(|b| b.id != m.id).all(|b| b
