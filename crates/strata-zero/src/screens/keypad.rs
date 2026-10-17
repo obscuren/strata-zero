@@ -36,7 +36,6 @@ pub struct Keypad {
     code: u16,
     /// The code as the journal knows it.
     known: Option<u16>,
-    anchor: Option<(u16, u16)>,
     typed: Vec<u8>,
     flash: Flash,
 }
@@ -47,13 +46,7 @@ pub(crate) fn key_at(r: Rect, i: usize) -> (u16, u16) {
 }
 
 impl Keypad {
-    pub fn open(
-        st: &AppState,
-        building: BuildingId,
-        level: i32,
-        number: u16,
-        anchor: Option<(u16, u16)>,
-    ) -> Keypad {
+    pub fn open(st: &AppState, building: BuildingId, level: i32, number: u16) -> Keypad {
         let seed = st.city.as_ref().map(|c| c.seed).unwrap_or(0);
         Keypad {
             building,
@@ -62,7 +55,6 @@ impl Keypad {
             label: format!("flat {number}"),
             code: citygen::rng::door_code(seed, building, level, number),
             known: st.journal.code_for(building, level, number).map(|c| c.code),
-            anchor,
             typed: Vec::new(),
             flash: Flash::None,
         }
@@ -73,21 +65,16 @@ impl Keypad {
         &self.typed
     }
 
-    /// Beside the door when anchored, else in the middle; always inside the area.
+    /// In the middle of the screen, always inside the area.
     pub(crate) fn rect(&self, area: Rect) -> Rect {
         let w = DEVICE_W.min(area.width);
         let h = DEVICE_H.min(area.height);
-        let (x, y) = match self.anchor {
-            Some((ax, ay)) => (
-                ax.clamp(area.x, area.right().saturating_sub(w).max(area.x)),
-                ay.clamp(area.y, area.bottom().saturating_sub(h).max(area.y)),
-            ),
-            None => (
-                area.x + area.width.saturating_sub(w) / 2,
-                area.y + area.height.saturating_sub(h) / 2,
-            ),
-        };
-        Rect::new(x, y, w, h)
+        Rect::new(
+            area.x + area.width.saturating_sub(w) / 2,
+            area.y + area.height.saturating_sub(h) / 2,
+            w,
+            h,
+        )
     }
 
     fn locked_until(&self, st: &AppState) -> Option<u64> {
@@ -144,6 +131,10 @@ impl Screen for Keypad {
                 KeyCode::Esc | KeyCode::Char('q') => return pop(),
                 KeyCode::Char(c @ '0'..='9') if !locked && self.typed.len() < 4 => {
                     self.typed.push(c as u8 - b'0');
+                    // Typing again puts the slots back in place of DENIED.
+                    if matches!(self.flash, Flash::Denied(_)) {
+                        self.flash = Flash::None;
+                    }
                 }
                 KeyCode::Char('0'..='9') => self.flash = Flash::Refused(st.tick),
                 KeyCode::Char('x' | 'X') | KeyCode::Backspace => self.typed.clear(),
@@ -276,7 +267,7 @@ mod tests {
     #[test]
     fn digits_fill_four_slots_and_x_clears() {
         let (mut st, b, level, number, _) = state();
-        let mut k = Keypad::open(&st, b, level, number, None);
+        let mut k = Keypad::open(&st, b, level, number);
         k.update(
             &mut st,
             &[
@@ -305,7 +296,7 @@ mod tests {
     #[test]
     fn the_right_code_opens_and_the_next_key_pops() {
         let (mut st, b, level, number, code) = state();
-        let mut k = Keypad::open(&st, b, level, number, None);
+        let mut k = Keypad::open(&st, b, level, number);
         k.update(&mut st, &digits(code));
         assert!(matches!(
             k.update(&mut st, &[key(KeyCode::Char('v'))]),
@@ -322,7 +313,7 @@ mod tests {
     #[test]
     fn the_beat_pops_the_open_pad_by_itself() {
         let (mut st, b, level, number, code) = state();
-        let mut k = Keypad::open(&st, b, level, number, None);
+        let mut k = Keypad::open(&st, b, level, number);
         k.update(&mut st, &digits(code));
         k.update(&mut st, &[key(KeyCode::Enter)]);
         st.tick += OPEN_TICKS + 1;
@@ -333,7 +324,7 @@ mod tests {
     fn wrong_codes_deny_then_lock_and_locked_refuses_digits() {
         let (mut st, b, level, number, code) = state();
         let wrong = (code + 1) % 10_000;
-        let mut k = Keypad::open(&st, b, level, number, None);
+        let mut k = Keypad::open(&st, b, level, number);
         for _ in 0..2 {
             k.update(&mut st, &digits(wrong));
             k.update(&mut st, &[key(KeyCode::Char('v'))]);
@@ -350,7 +341,7 @@ mod tests {
             ScreenCmd::Pop { .. }
         ));
         // A fresh pad on the same door still shows the countdown.
-        let k2 = Keypad::open(&st, b, level, number, None);
+        let k2 = Keypad::open(&st, b, level, number);
         assert!(draw(&k2, &st).contains("LOCKED"));
     }
 
@@ -358,7 +349,7 @@ mod tests {
     fn v_on_empty_slots_keys_the_journals_code() {
         let (mut st, b, level, number, code) = state();
         crate::credentials::copy_codes(&mut st, b, 1);
-        let mut k = Keypad::open(&st, b, level, number, None);
+        let mut k = Keypad::open(&st, b, level, number);
         assert!(draw(&k, &st).contains(&format!("journal {code:04}")));
         k.update(&mut st, &[key(KeyCode::Char('v'))]);
         assert!(draw(&k, &st).contains("OPEN"));
@@ -367,7 +358,7 @@ mod tests {
     #[test]
     fn worn_keys_are_the_codes_digits() {
         let (st, b, level, number, code) = state();
-        let k = Keypad::open(&st, b, level, number, None);
+        let k = Keypad::open(&st, b, level, number);
         let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
         t.draw(|f| k.draw(&st, f)).unwrap();
         let buf = t.backend().buffer();
@@ -384,5 +375,31 @@ mod tests {
                 "key {ch}"
             );
         }
+    }
+
+    #[test]
+    fn the_pad_is_centred_on_the_screen() {
+        let (st, b, level, number, _) = state();
+        let k = Keypad::open(&st, b, level, number);
+        let r = k.rect(Rect::new(0, 0, 120, 40));
+        assert_eq!((r.x, r.y, r.width, r.height), (47, 10, DEVICE_W, DEVICE_H));
+        let r = k.rect(Rect::new(0, 0, 101, 31));
+        assert_eq!((r.x, r.y), (38, 6));
+    }
+
+    #[test]
+    fn typing_again_after_denied_shows_the_digits() {
+        let (mut st, b, level, number, code) = state();
+        let wrong = (code + 1) % 10_000;
+        let mut k = Keypad::open(&st, b, level, number);
+        k.update(&mut st, &digits(wrong));
+        k.update(&mut st, &[key(KeyCode::Char('v'))]);
+        assert!(draw(&k, &st).contains("DENIED"));
+        k.update(&mut st, &[key(KeyCode::Char('1'))]);
+        let text = draw(&k, &st);
+        assert!(
+            text.contains("[1][_][_][_]") && !text.contains("DENIED"),
+            "{text}"
+        );
     }
 }

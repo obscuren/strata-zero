@@ -42,12 +42,11 @@ pub enum Pick {
     View(Section),
     /// Starts a program against a target in the construct; the result lands in the strip.
     Run(game::ItemId, game::HackTarget),
-    /// Opens a flat's keypad in place of the popup, anchored on screen when given.
+    /// Opens a flat's keypad in place of the popup.
     Keypad {
         building: citygen::BuildingId,
         level: i32,
         number: u16,
-        anchor: Option<(u16, u16)>,
     },
     Close,
 }
@@ -324,10 +323,9 @@ impl Popup {
                 building,
                 level,
                 number,
-                anchor,
             } => ScreenCmd::Replace {
                 to: Box::new(crate::screens::keypad::Keypad::open(
-                    st, building, level, number, anchor,
+                    st, building, level, number,
                 )),
                 fx: TransitionKind::None,
             },

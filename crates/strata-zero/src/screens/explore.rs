@@ -750,8 +750,6 @@ impl MapScreen {
             && let Some((_, floor)) = st.interiors.floor(building, level)
         {
             let now = st.net.now(st);
-            let map_area = self.last_map.get();
-            let origin = self.cam.origin(map_area.width, map_area.height);
             for d in pos.neighbors4() {
                 let Some(r) = floor.door_of(d).filter(|r| {
                     r.private && r.kind == citygen::RoomKind::Flat && !r.rect.contains(pos)
@@ -772,8 +770,6 @@ impl MapScreen {
                         crate::credentials::flat_label(st, building, level, r.number)
                     ),
                 };
-                let anchor =
-                    tile_to_screen(map_area, origin, d).map(|(x, y)| (x + 2, y.saturating_sub(2)));
                 choices.push(Choice::new(
                     key,
                     text,
@@ -781,7 +777,6 @@ impl MapScreen {
                         building,
                         level,
                         number: r.number,
-                        anchor,
                     },
                 ));
             }

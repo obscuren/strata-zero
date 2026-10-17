@@ -28,8 +28,8 @@ terminal's CRT frame in the Access Terminal slice is built from the same kit.
   nobody is named). Firing it replaces the popup with the keypad overlay.
   Bumping the door still says "locked · ...", unchanged. Your own door and
   hotel rooms have no keypad.
-- **The overlay.** Drawn over the washed map, anchored just right of the
-  door's tile and clamped to the map area; never full screen.
+- **The overlay.** Drawn over the washed map, centred on the screen; never
+  full screen. (Jeffrey, after playing it: centred, not beside the door.)
 - **The device look**, the moulded mockup:
 
 ```
