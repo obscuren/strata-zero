@@ -63,6 +63,20 @@ pub struct FloorPlan {
     /// The railing ring around an atrium megablock's open drop, the same on every
     /// floor above the ground; `None` for every other building.
     pub atrium: Option<Rect>,
+    /// The floor with the player's flat: only on the city's first atrium megablock.
+    pub home_level: Option<i32>,
+}
+
+/// Whether a building plans an atrium.
+fn rings_an_atrium(kind: BuildingKind, size: Size) -> bool {
+    kind == BuildingKind::Megablock && size.w as i32 >= ATRIUM_W && size.h as i32 >= ATRIUM_H
+}
+
+fn floor_size(fp: Rect) -> Size {
+    Size {
+        w: (fp.w * SCALE).max(MIN_W) as u32,
+        h: (fp.h * SCALE).max(MIN_H) as u32,
+    }
 }
 
 impl FloorPlan {
@@ -74,10 +88,7 @@ impl FloorPlan {
         }
         let mut rng = ChaCha8Rng::seed_from_u64(hash64(city.seed, 0x1F00 ^ id.index() as u64));
         let fp = b.footprint;
-        let size = Size {
-            w: (fp.w * SCALE).max(MIN_W) as u32,
-            h: (fp.h * SCALE).max(MIN_H) as u32,
-        };
+        let size = floor_size(fp);
         let floors: i32 = match (b.span.hi, b.kind) {
             (StratumKind::Street, BuildingKind::Club) => 2,
             (StratumKind::Street, BuildingKind::Office | BuildingKind::Apartment) => {
@@ -105,8 +116,7 @@ impl FloorPlan {
         let roof = b.span.hi == StratumKind::Heights;
         let total = top - lowest + 1;
         let (w, h) = (size.w as i32, size.h as i32);
-        let atrium = (b.kind == BuildingKind::Megablock && w >= ATRIUM_W && h >= ATRIUM_H)
-            .then(|| size.rect().inset(BAND + 1 + WALK));
+        let atrium = rings_an_atrium(b.kind, size).then(|| size.rect().inset(BAND + 1 + WALK));
         // The lift bank and the stairwell sit on the corridor line of a corridor
         // floor, which is open floor on every other type; an atrium floor keeps them
         // in the lift lobby in the middle of its top band of flats.
@@ -116,6 +126,22 @@ impl FloorPlan {
             (h / 2 - 1, Pos::new(w / 2 - 1, h / 2))
         };
         let lift = (total >= 3).then(|| Pos::new(w / 2 - 1, lift_y));
+        // The home: high in the lowest-id atrium megablock, below the top floor and
+        // off the bridge floor.
+        let first_atrium = city
+            .buildings
+            .iter()
+            .filter(|b| rings_an_atrium(b.kind, floor_size(b.footprint)))
+            .map(|b| b.id)
+            .min_by_key(|b| b.index());
+        let home_level = if first_atrium == Some(id) {
+            let levels: Vec<i32> = (2.max(top * 2 / 3)..top)
+                .filter(|l| Some(*l) != bridge)
+                .collect();
+            (!levels.is_empty()).then(|| levels[rng.random_range(0..levels.len())])
+        } else {
+            None
+        };
         Some(FloorPlan {
             building: id,
             kind: b.kind,
@@ -129,6 +155,7 @@ impl FloorPlan {
             lift,
             stair,
             atrium,
+            home_level,
         })
     }
 

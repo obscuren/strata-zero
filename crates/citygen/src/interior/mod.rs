@@ -2,10 +2,12 @@
 //! deterministically from the city seed, the building and the floor.
 
 mod floor;
+mod home;
 mod layouts;
 mod plan;
 
 pub use floor::*;
+pub use home::{Home, home};
 pub use plan::*;
 
 use crate::pathing::components;
@@ -802,7 +804,13 @@ mod tests {
                             .iter()
                             .filter(|r| r.kind == RoomKind::Flat && r.private)
                             .collect();
-                        assert!(flats.len() >= 8, "level {level} has {} flats", flats.len());
+                        // The home takes most of the bottom band on its floor.
+                        let least = if plan.home_level == Some(level) { 4 } else { 8 };
+                        assert!(
+                            flats.len() >= least,
+                            "level {level} has {} flats",
+                            flats.len()
+                        );
                         for r in &flats {
                             assert_eq!(r.number as i32 / 100, level, "{}", r.number);
                         }

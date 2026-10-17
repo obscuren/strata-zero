@@ -13,6 +13,7 @@ use rand_chacha::ChaCha8Rng;
 use std::collections::HashSet;
 
 mod atrium;
+mod home;
 
 /// Base light of a floor; ceiling lamps add to it.
 const BASE_LIGHT: u8 = 150;

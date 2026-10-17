@@ -2,15 +2,20 @@
 //! the railing and the open drop in the middle.
 
 use super::Builder;
+use super::home::HOME_DOOR;
 use crate::geom::{Pos, Rect};
 use crate::interior::floor::{Role, Room, RoomKind};
 use crate::interior::plan::{BAND, WALK};
 use crate::tile::{Feature, Furniture, Terrain};
 use rand::Rng;
 
+/// The home's run of the bottom band, its end walls included.
+const HOME_RUN: i32 = 37;
+
 /// A run of flats along one side: tiles `lo..=hi` along it, `c0..=c1` across, the
 /// flat wall on line `wall` with the walkway on line `out`, which runs along
 /// `dlo..=dhi`.
+#[derive(Clone, Copy)]
 struct Band {
     horizontal: bool,
     lo: i32,
@@ -115,10 +120,54 @@ impl Builder<'_> {
         });
         let bands = self.bands();
         let mut number = 0u16;
-        for (i, band) in bands.iter().enumerate() {
+        for (i, band) in bands.into_iter().enumerate() {
             let laundry = i == 3 && self.level.rem_euclid(3) == 0;
-            self.flats(band, laundry, &mut number);
+            if i == 3 && self.plan.home_level == Some(self.level) {
+                self.home_band(band, laundry, &mut number);
+            } else {
+                self.flats(&band, laundry, &mut number);
+            }
         }
+    }
+
+    /// The bottom band of the home floor: the home in a centred run of `HOME_RUN`,
+    /// walls included, flats either side; a side too short to reach the walkway is
+    /// solid wall.
+    fn home_band(&mut self, band: Band, laundry: bool, number: &mut u16) {
+        let x0 = (self.w() - HOME_RUN) / 2;
+        let x1 = x0 + HOME_RUN - 1;
+        let left = Band { hi: x0 - 1, ..band };
+        let right = Band { lo: x1 + 1, ..band };
+        self.side_flats(&left, false, number);
+        for x in [x0, x1] {
+            self.wall_line(Pos::new(x, band.c0), Pos::new(x, band.c1));
+        }
+        *number += 1;
+        let rect = Rect::new(x0 + 1, band.c0, HOME_RUN - 2, band.c1 - band.c0 + 1);
+        let door = Pos::new(rect.x + HOME_DOOR, band.wall);
+        self.home_flat(rect, door);
+        self.rooms.push(Room {
+            rect,
+            kind: RoomKind::Home,
+            door: Some(door),
+            private: true,
+            number: (self.level.max(0) as u16) * 100 + *number,
+        });
+        self.side_flats(&right, laundry, number);
+    }
+
+    /// Flats on one side of the home, or solid wall where no door could reach the
+    /// walkway.
+    fn side_flats(&mut self, band: &Band, laundry: bool, number: &mut u16) {
+        if band.lo > band.hi {
+            return;
+        }
+        if band.hi < band.dlo || band.lo > band.dhi {
+            let r = band.rect(band.lo, band.hi + 1);
+            self.wall_line(Pos::new(r.x, r.y), Pos::new(r.right() - 1, r.bottom() - 1));
+            return;
+        }
+        self.flats(band, laundry, number);
     }
 
     /// The ground floor under the atrium: an open plaza with the reception inside

@@ -468,4 +468,30 @@ mod tests {
         let upstairs = Placement::new(plan, floor, &w);
         assert!(upstairs.people().all(|(_, who)| who != id));
     }
+
+    #[test]
+    fn nobody_else_lives_in_the_players_flat() {
+        let c = Generator::run(GenParams {
+            seed: 8,
+            size: SizePreset::Medium,
+            districts: 7,
+            ..Default::default()
+        })
+        .unwrap();
+        let home = citygen::home(&c).expect("a home");
+        let people = sim::People::load().unwrap();
+        let w = sim::World::seed(&c, &people, &sim::SimParams::default(), 2 * 60, 0);
+        let mut i = Interiors::default();
+        i.ensure(&c, home.building, home.level).unwrap();
+        let (plan, floor) = i.floor(home.building, home.level).unwrap();
+        let placement = Placement::new(plan, floor, &w);
+        let owned = floor
+            .rooms
+            .iter()
+            .filter_map(|r| r.door)
+            .filter(|d| placement.owner_of(*d).is_some())
+            .count();
+        assert!(owned > 0, "the neighbours are home at two");
+        assert_eq!(placement.owner_of(home.door), None);
+    }
 }
