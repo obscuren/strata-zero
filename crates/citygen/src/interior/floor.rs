@@ -27,6 +27,8 @@ pub enum RoomKind {
     Lockers,
     Storage,
     Bays,
+    Home,
+    Shop,
 }
 
 impl RoomKind {
@@ -52,6 +54,8 @@ impl RoomKind {
             RoomKind::Lockers => "lockers",
             RoomKind::Storage => "storage",
             RoomKind::Bays => "bays",
+            RoomKind::Home => "home",
+            RoomKind::Shop => "shop",
         }
     }
 }

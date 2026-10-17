@@ -29,10 +29,12 @@ pub fn connects(a: Terrain, b: Terrain) -> bool {
     use Terrain::*;
     let wallish = |t| matches!(t, Wall | Door | Window);
     let spanish = |t| matches!(t, Walkway | Bridge);
+    let railing = |t| matches!(t, Railing);
     let netwall = |t| matches!(t, NetWall | NetGate);
     let lane = |t| matches!(t, NetLane | NetGate);
     (wallish(a) && wallish(b))
         || (spanish(a) && (spanish(b) || matches!(b, Door | Floor | Stair | Lift | Ladder)))
+        || (railing(a) && railing(b))
         || (netwall(a) && netwall(b))
         || (lane(a) && lane(b))
 }
@@ -119,6 +121,8 @@ pub fn glyph_for(
                 Furniture::Bed => '▤',
                 Furniture::Shrine => '♦',
                 Furniture::Locker => '▮',
+                Furniture::Couch => '▬',
+                Furniture::Shower => '≋',
             },
         };
     }
@@ -225,6 +229,14 @@ pub fn glyph_for(
         }
         Terrain::NetFloor => ' ',
         Terrain::NetGate => '▯',
+        Terrain::Atrium => ' ',
+        Terrain::Railing => {
+            if horizontal {
+                '─'
+            } else {
+                '│'
+            }
+        }
     }
 }
 
@@ -257,6 +269,9 @@ pub fn legend_entries(k: StratumKind) -> Vec<(char, &'static str)> {
             ('▣', "holo ad"),
             ('▬', "barrier"),
             ('▤', "stall"),
+            ('─', "railing"),
+            ('▬', "couch"),
+            ('≋', "shower"),
             ('◉', "camera"),
             ('~', "puddle/water"),
         ],
@@ -323,6 +338,8 @@ fn terrain_colors(terrain: Terrain, tile: &Tile, ctx: &RenderCtx, tick: u64) -> 
         Terrain::NetWall => (SIGNAL, Rgb(3, 6, 10)),
         Terrain::NetFloor => (Rgb(10, 40, 44), Rgb(6, 18, 22)),
         Terrain::NetGate => (Rgb(200, 255, 245), Rgb(6, 18, 22)),
+        Terrain::Atrium => (bg0, bg0),
+        Terrain::Railing => (ts.wall, ts.floor),
     }
 }
 
@@ -505,6 +522,34 @@ mod tests {
         assert!(connects(Terrain::Wall, Terrain::Door));
         assert!(!connects(Terrain::Wall, Terrain::Floor));
         assert!(connects(Terrain::Walkway, Terrain::Bridge));
+    }
+
+    #[test]
+    fn home_furniture_and_railings_have_glyphs() {
+        let s = StylePack::load().unwrap();
+        for (piece, ch) in [(Furniture::Couch, '▬'), (Furniture::Shower, '≋')] {
+            let f = Some(Feature::Furniture(piece));
+            assert_eq!(glyph_for(Terrain::Floor, f, None, None, 1, 0, 0, &s), ch);
+        }
+        assert!(connects(Terrain::Railing, Terrain::Railing));
+        assert!(!connects(Terrain::Railing, Terrain::Wall));
+        assert_eq!(
+            glyph_for(
+                Terrain::Railing,
+                None,
+                None,
+                None,
+                0,
+                0,
+                MASK_E | MASK_W,
+                &s
+            ),
+            '─'
+        );
+        assert_eq!(
+            glyph_for(Terrain::Atrium, None, None, None, 0, 0, 0, &s),
+            ' '
+        );
     }
 
     #[test]

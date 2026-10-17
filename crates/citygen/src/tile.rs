@@ -34,9 +34,13 @@ pub enum Terrain {
     NetWall,
     NetFloor,
     NetGate,
+    /// The open drop of a megablock atrium; the overlay draws it.
+    Atrium,
+    /// The edge of an atrium floor: you see past it, you do not walk through it.
+    Railing,
 }
 
-pub const ALL_TERRAIN: [Terrain; 26] = [
+pub const ALL_TERRAIN: [Terrain; 28] = [
     Terrain::Void,
     Terrain::Water,
     Terrain::Sewage,
@@ -63,6 +67,8 @@ pub const ALL_TERRAIN: [Terrain; 26] = [
     Terrain::NetWall,
     Terrain::NetFloor,
     Terrain::NetGate,
+    Terrain::Atrium,
+    Terrain::Railing,
 ];
 
 impl Terrain {
@@ -96,6 +102,8 @@ impl Terrain {
             NetWall => "construct wall",
             NetFloor => "construct floor",
             NetGate => "gate",
+            Atrium => "atrium",
+            Railing => "railing",
         }
     }
 
@@ -194,6 +202,8 @@ pub enum Furniture {
     Bed,
     Shrine,
     Locker,
+    Couch,
+    Shower,
 }
 
 impl Furniture {
@@ -208,6 +218,8 @@ impl Furniture {
             Furniture::Bed => "bed",
             Furniture::Shrine => "shrine",
             Furniture::Locker => "lockers",
+            Furniture::Couch => "couch",
+            Furniture::Shower => "shower",
         }
     }
 }
@@ -349,7 +361,7 @@ mod tests {
         assert!(!Tile::new(Terrain::Window).is_walkable());
         assert!(Tile::new(Terrain::Plaza).is_outdoor_ground());
         assert!(Tile::new(Terrain::Door).is_building_part());
-        assert_eq!(ALL_TERRAIN.len(), 26);
+        assert_eq!(ALL_TERRAIN.len(), 28);
         assert_eq!(ALL_FEATURES.len(), 18);
         assert!(!Tile::new(Terrain::Mass).is_walkable());
         assert!(Tile::new(Terrain::Mass).blocks_sight());
@@ -358,6 +370,20 @@ mod tests {
         t.feature = Some(Feature::Furniture(Furniture::Desk));
         assert!(!t.is_walkable(), "nobody walks through a desk");
         assert_eq!(Furniture::Shelf.label(), "shelving");
+    }
+
+    #[test]
+    fn atrium_and_railing_are_open_to_sight_but_not_to_feet() {
+        for t in [Terrain::Atrium, Terrain::Railing] {
+            let tile = Tile::new(t);
+            assert!(!tile.is_walkable());
+            assert!(!tile.blocks_sight());
+            assert!(!tile.is_building_part());
+        }
+        assert_eq!(ALL_TERRAIN.len(), 28);
+        assert_eq!(*ALL_TERRAIN.last().unwrap(), Terrain::Railing);
+        assert_eq!(Furniture::Couch.label(), "couch");
+        assert_eq!(Furniture::Shower.label(), "shower");
     }
 
     #[test]
@@ -375,7 +401,7 @@ mod tests {
         assert_eq!(Terrain::NetWall.label(), "construct wall");
         assert_eq!(Terrain::Road.label(), "road");
         assert!(Terrain::NetLane.is_net() && !Terrain::Road.is_net());
-        assert_eq!(ALL_TERRAIN.len(), 26);
+        assert_eq!(ALL_TERRAIN.len(), 28);
         assert_eq!(ALL_FEATURES.len(), 18);
         assert_eq!(crate::world::StratumKind::ALL.len(), 5);
         assert_eq!(

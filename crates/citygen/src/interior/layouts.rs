@@ -66,6 +66,7 @@ fn walled(r: &Room) -> bool {
             | RoomKind::OpenPlan
             | RoomKind::Waiting
             | RoomKind::Surgery
+            | RoomKind::Shop
     )
 }
 
