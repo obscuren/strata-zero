@@ -485,6 +485,21 @@ impl Content {
     }
 }
 
+/// What a talent flag does today, for the talents tab; a flag nothing reads yet
+/// has no words and shows as a promise.
+pub fn flag_words(flag: &str) -> Option<&'static str> {
+    Some(match flag {
+        "ice_pick" => "+2 power to crack",
+        "deep_dive" => "+2 power to copy · a vault copy makes no heat",
+        "black_ice" => "+1 attack damage",
+        "null_route" => "the first dump in a construct routes away",
+        "deep_end" => {
+            "black ICE hits halved · the failsafe waits for an eighth · ten minutes cooling"
+        }
+        _ => return None,
+    })
+}
+
 impl Boon {
     /// The boon in words for the sheet: `+1 Reflex`, `ping reaches 4 further`.
     pub fn words(&self, c: &Content) -> String {
@@ -531,7 +546,9 @@ impl Boon {
                     parts.join(", ")
                 )
             }
-            Boon::Flag(f) => format!("later: {f}"),
+            Boon::Flag(f) => flag_words(f)
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("later: {f}")),
         }
     }
 }

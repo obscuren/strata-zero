@@ -960,7 +960,23 @@ mod tests {
         );
         assert_eq!(
             Boon::Flag("quick_draw".into()).words(&c),
-            "later: quick_draw"
+            "later: quick_draw",
+            "a flag nothing reads yet says so"
+        );
+        // The flags the Net reads say what they do.
+        assert_eq!(Boon::Flag("ice_pick".into()).words(&c), "+2 power to crack");
+        assert_eq!(
+            Boon::Flag("deep_dive".into()).words(&c),
+            "+2 power to copy · a vault copy makes no heat"
+        );
+        assert_eq!(Boon::Flag("black_ice".into()).words(&c), "+1 attack damage");
+        assert_eq!(
+            Boon::Flag("null_route".into()).words(&c),
+            "the first dump in a construct routes away"
+        );
+        assert_eq!(
+            Boon::Flag("deep_end".into()).words(&c),
+            "black ICE hits halved · the failsafe waits for an eighth · ten minutes cooling"
         );
     }
 
