@@ -4997,4 +4997,194 @@ mod tests {
             eprintln!("seed {seed}: {} buildings ok", city.buildings.len());
         }
     }
+
+    fn lock_run(st: &mut AppState, s: &mut MapScreen) -> (citygen::BuildingId, citygen::NodeId) {
+        let b = in_construct(st, s);
+        let (lock, lock_pos) = node_of(st, b, NodeKind::DoorLock);
+        let here = beside(st, b, lock_pos);
+        stand(st, s, Place::Construct(b), here);
+        st.net.force_roll = Some(10);
+        (b, lock)
+    }
+
+    fn learn(st: &mut AppState, talent: &str) {
+        st.character.talents.insert(game::TalentId::new(talent), 1);
+    }
+
+    #[test]
+    fn deep_dive_copies_a_vault_without_heat_on_a_success() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let (vault, vault_pos) = node_of(&st, b, NodeKind::DataVault);
+        let here = beside(&st, b, vault_pos);
+        stand(&mut st, &mut s, Place::Construct(b), here);
+        learn(&mut st, "deep_dive");
+        st.net.force_roll = Some(10);
+        let heat = st.net.traces.get(&b).map_or(0, |t| t.heat);
+        crate::net::start_run(&mut st, ItemId::new("copy"), game::HackTarget::Node(vault)).unwrap();
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(last(&st), Some("copy 1/4"));
+        assert_eq!(
+            st.net.traces.get(&b).map_or(0, |t| t.heat),
+            heat,
+            "a quiet success"
+        );
+        // A slip is still loud: copy's noise 3 plus 2.
+        st.net.force_roll = Some(1);
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert!(
+            last(&st).unwrap().starts_with("copy slips"),
+            "{:?}",
+            last(&st)
+        );
+        assert_eq!(st.net.traces[&b].heat, heat + 5);
+        // Without the flag a success costs copy's noise.
+        st.character.talents.clear();
+        st.net.force_roll = Some(10);
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(st.net.traces[&b].heat, heat + 5 + 3);
+    }
+
+    #[test]
+    fn null_route_turns_the_first_dump_away_once() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let (b, lock) = lock_run(&mut st, &mut s);
+        learn(&mut st, "null_route");
+        let now = st.net.now(&st);
+        crate::net::start_run(&mut st, ItemId::new("crack"), game::HackTarget::Node(lock)).unwrap();
+        st.net.trace(b).heat = 98;
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert!(st.player.as_ref().unwrap().jacked_in(), "not dumped");
+        assert_eq!(st.net.traces[&b].heat, game::ALARM_HEAT);
+        assert!(st.net.null_routed.contains(&b));
+        assert!(st.net.run.is_some(), "the run goes on");
+        let routed: Vec<String> = st
+            .log
+            .iter()
+            .rev()
+            .take(3)
+            .map(|e| e.text.clone())
+            .collect();
+        assert!(
+            routed
+                .iter()
+                .any(|l| l == "null route · the trace loses you"),
+            "{routed:?}"
+        );
+        assert!(st.net.alert(b, now), "the alarm had tripped on the way up");
+        // The second time is real.
+        st.net.trace(b).heat = 98;
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert!(!st.player.as_ref().unwrap().jacked_in(), "dumped");
+    }
+
+    #[test]
+    fn null_route_on_the_turn_that_also_crosses_the_alarm_line() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let (b, lock) = lock_run(&mut st, &mut s);
+        learn(&mut st, "null_route");
+        // A slip is crack's noise 4 plus 2: from 94 that is the dump line, and the
+        // alarm line was never crossed before.
+        st.net.force_roll = Some(1);
+        crate::net::start_run(&mut st, ItemId::new("crack"), game::HackTarget::Node(lock)).unwrap();
+        st.net.trace(b).heat = 94;
+        st.net.trace(b).alert_until = None;
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        let now = st.net.now(&st);
+        assert!(st.player.as_ref().unwrap().jacked_in(), "not dumped");
+        assert_eq!(st.net.traces[&b].heat, game::ALARM_HEAT);
+        assert!(st.net.alert(b, now), "the alarm trips");
+        let recent: Vec<String> = st
+            .log
+            .iter()
+            .rev()
+            .take(4)
+            .map(|e| e.text.clone())
+            .collect();
+        assert_eq!(
+            recent
+                .iter()
+                .filter(|l| l.as_str() == "null route · the trace loses you")
+                .count(),
+            1,
+            "{recent:?}"
+        );
+        assert!(recent.iter().any(|l| l.starts_with("ALARM")), "{recent:?}");
+    }
+
+    #[test]
+    fn a_white_hit_and_a_held_mask_route_away_too() {
+        // A white hit at 96 (+5) routes; a held mask's heat at 99 (+1) routes.
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct_at(&mut st, &mut s, 170);
+        assert_eq!(
+            st.constructs.get(b).unwrap().guards[0].grade,
+            IceGrade::White
+        );
+        learn(&mut st, "null_route");
+        let post = st.constructs.get(b).unwrap().guards[0].post;
+        let k = st.constructs.get(b).unwrap().clone();
+        st.net.ice_of(&k);
+        let beside_post = Pos::new(post.x + 1, post.y);
+        st.net.trace(b).heat = 96;
+        st.net.wake_all(b, beside_post);
+        stand(&mut st, &mut s, Place::Construct(b), beside_post);
+        assert!(st.player.as_ref().unwrap().jacked_in(), "{:?}", last(&st));
+        assert_eq!(st.net.traces[&b].heat, game::ALARM_HEAT);
+        // Fresh construct state for the mask: a second building would do, but the
+        // route is per construct, so reset it.
+        st.net.null_routed.clear();
+        st.net.mask = 2;
+        st.net.trace(b).heat = 99;
+        let far = room_tile(&st, b);
+        stand(&mut st, &mut s, Place::Construct(b), far);
+        assert!(st.player.as_ref().unwrap().jacked_in(), "{:?}", last(&st));
+        assert_eq!(st.net.traces[&b].heat, game::ALARM_HEAT);
+    }
+
+    #[test]
+    fn the_deep_end_halves_black_hits_and_moves_the_failsafe_line() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct_at(&mut st, &mut s, 255);
+        learn(&mut st, "deep_end");
+        let vault_guard = st.constructs.get(b).unwrap().guards[1].clone();
+        assert_eq!(vault_guard.grade, IceGrade::Black);
+        let beside_vault = Pos::new(vault_guard.post.x - 1, vault_guard.post.y);
+        let hp_max = st.character.hp_max(&st.content);
+        stand(&mut st, &mut s, Place::Construct(b), beside_vault);
+        // 6 + (255 − 230) / 5 = 11, less the deck's rating 1, halved: 5.
+        assert_eq!(st.character.hp, hp_max - 5, "{:?}", last(&st));
+        // Under a quarter but over an eighth: no failsafe yet.
+        st.character.hp = hp_max / 4;
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert!(st.player.as_ref().unwrap().jacked_in(), "{:?}", last(&st));
+        assert_eq!(st.character.hp, hp_max / 4 - 5);
+        // At the eighth it pulls, and cools ten minutes.
+        st.character.hp = hp_max / 8 + 5;
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(last(&st), Some("DUMPED · the failsafe pulled you out"));
+        let now = st.net.now(&st);
+        assert_eq!(st.net.cooling(now), Some(crate::net::DEEP_END_COOLING));
+        assert_eq!(crate::net::DEEP_END_COOLING, 10);
+    }
+
+    #[test]
+    fn the_deep_end_with_the_failsafe_off_still_flatlines_at_zero() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct_at(&mut st, &mut s, 255);
+        learn(&mut st, "deep_end");
+        st.net.failsafe = false;
+        let vault_guard = st.constructs.get(b).unwrap().guards[1].clone();
+        let beside_vault = Pos::new(vault_guard.post.x - 1, vault_guard.post.y);
+        st.character.hp = 3;
+        stand(&mut st, &mut s, Place::Construct(b), beside_vault);
+        assert_eq!(st.character.hp, 0);
+        assert!(st.net.death.is_some());
+    }
 }

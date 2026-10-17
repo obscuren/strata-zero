@@ -30,6 +30,8 @@ pub const LOST_TURNS: u8 = 3;
 pub const FAILSAFE_COOLING: u64 = 30;
 /// Turns a mask holds once raised.
 pub const MASK_TURNS: u8 = 6;
+/// Minutes the deck cools after the failsafe pulls out a runner in the deep end.
+pub const DEEP_END_COOLING: u64 = 10;
 
 /// What a piece of ICE is doing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,6 +64,8 @@ pub struct NetState {
     /// Set when black ICE killed: what did it. The screen reads and clears it.
     pub death: Option<String>,
     pub traces: BTreeMap<BuildingId, Trace>,
+    /// Constructs whose trace has already been routed away once this session.
+    pub null_routed: BTreeSet<BuildingId>,
     pub hacks: Vec<Hack>,
     pub backdoors: BTreeSet<BuildingId>,
     /// The game minute the dumped deck jacks in again.
@@ -84,6 +88,7 @@ impl Default for NetState {
             failsafe: true,
             death: None,
             traces: BTreeMap::new(),
+            null_routed: BTreeSet::new(),
             hacks: Vec::new(),
             backdoors: BTreeSet::new(),
             cooling_until: None,
@@ -107,6 +112,31 @@ impl NetState {
 
     pub fn alert(&self, b: BuildingId, now: u64) -> bool {
         self.traces.get(&b).is_some_and(|t| t.alert(now))
+    }
+
+    /// Heat on a construct's trace. With the null route, the first dump in a
+    /// construct is turned away: the heat falls to the alarm line and the event is
+    /// the alarm if it had not tripped yet. Returns the event and whether it routed.
+    pub fn add_heat(
+        &mut self,
+        b: BuildingId,
+        noise: u8,
+        now: u64,
+        null_route: bool,
+    ) -> (TraceEvent, bool) {
+        let was_alert = self.trace(b).alert(now);
+        let event = self.trace(b).add(noise, now);
+        if event == TraceEvent::Dump && null_route && !self.null_routed.contains(&b) {
+            self.trace(b).heat = game::ALARM_HEAT;
+            self.null_routed.insert(b);
+            let event = if was_alert {
+                TraceEvent::None
+            } else {
+                TraceEvent::Alarm
+            };
+            return (event, true);
+        }
+        (event, false)
     }
 
     fn live(&self, now: u64) -> impl Iterator<Item = &Hack> {
@@ -377,25 +407,22 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
     // A program on yourself never fails.
     let ok = kind == Target::Deck || succeeds(roll, pw, df);
     let now = st.net.now(st);
-    let noise = if ok { spec.noise } else { spec.noise + 2 };
-    let was_alert = st.net.alert(b, now);
-    let event = st.net.trace(b).add(noise, now);
-    let heat = st.net.traces[&b].heat;
-    match event {
-        TraceEvent::Dump => {
-            if !was_alert {
-                let line = raise_alarm(st, b);
-                st.warn(line);
-            }
-            dump(st, "the trace found you");
-            return Some("DUMPED".to_string());
-        }
-        TraceEvent::Alarm => {
-            let line = raise_alarm(st, b);
-            st.warn(line);
-        }
-        TraceEvent::None => {}
+    // Deep dive: a vault gives up its contents quietly; a slip is still loud.
+    let quiet = ok
+        && spec.op == Op::Copy
+        && kind == Target::Node(NodeKind::DataVault)
+        && st.character.flags(&st.content).contains("deep_dive");
+    let noise = if quiet {
+        0
+    } else if ok {
+        spec.noise
+    } else {
+        spec.noise + 2
+    };
+    if noise_on(st, b, noise) {
+        return Some("DUMPED".to_string());
     }
+    let heat = st.net.traces[&b].heat;
     let label = spec.op.label();
     // An attack is a hit a turn until the piece breaks; the run stays up.
     if spec.op == Op::Attack {
@@ -559,6 +586,34 @@ pub fn raise_alarm(st: &mut AppState, b: BuildingId) -> String {
     format!("ALARM · `{}` locks down", building_name(st, b))
 }
 
+/// Heat on the construct's trace with everything that follows: the alarm raised,
+/// the null route taken once, the dump. Returns whether the player was dumped.
+fn noise_on(st: &mut AppState, b: BuildingId, noise: u8) -> bool {
+    let now = st.net.now(st);
+    let was_alert = st.net.alert(b, now);
+    let null_route = st.character.flags(&st.content).contains("null_route");
+    let (event, routed) = st.net.add_heat(b, noise, now, null_route);
+    if routed {
+        st.warn("null route · the trace loses you");
+    }
+    match event {
+        TraceEvent::Dump => {
+            if !was_alert {
+                let line = raise_alarm(st, b);
+                st.warn(line);
+            }
+            dump(st, "the trace found you");
+            true
+        }
+        TraceEvent::Alarm => {
+            let line = raise_alarm(st, b);
+            st.warn(line);
+            false
+        }
+        TraceEvent::None => false,
+    }
+}
+
 /// Dumped: back to the body hard, the focus gone, the deck cooling.
 pub fn dump(st: &mut AppState, why: &str) {
     dump_for(st, why, COOLING_MINUTES);
@@ -646,22 +701,8 @@ pub fn ice_turn(st: &mut AppState) {
         // Raised this turn: it starts wearing next turn.
     } else if masked {
         st.net.mask -= 1;
-        let now = st.net.now(st);
-        let was_alert = st.net.alert(b, now);
-        match st.net.trace(b).add(1, now) {
-            TraceEvent::Dump => {
-                if !was_alert {
-                    let line = raise_alarm(st, b);
-                    st.warn(line);
-                }
-                dump(st, "the trace found you");
-                return;
-            }
-            TraceEvent::Alarm => {
-                let line = raise_alarm(st, b);
-                st.warn(line);
-            }
-            TraceEvent::None => {}
+        if noise_on(st, b, 1) {
+            return;
         }
         if st.net.mask == 0 {
             st.say("the mask is gone");
@@ -775,27 +816,19 @@ fn hit(st: &mut AppState, b: BuildingId, i: usize) {
         .deck(&st.content)
         .map(|(_, d)| d.rating as u32)
         .unwrap_or(0);
-    let now = st.net.now(st);
     match grade {
         IceGrade::White => {
-            let was_alert = st.net.alert(b, now);
-            let event = st.net.trace(b).add(5, now);
-            let heat = st.net.traces[&b].heat;
-            st.warn(format!("white ICE hits · heat {heat}"));
-            match event {
-                TraceEvent::Dump => {
-                    if !was_alert {
-                        let line = raise_alarm(st, b);
-                        st.warn(line);
-                    }
-                    dump(st, "the trace found you");
-                }
-                TraceEvent::Alarm => {
-                    let line = raise_alarm(st, b);
-                    st.warn(line);
-                }
-                TraceEvent::None => {}
-            }
+            let heat = st
+                .net
+                .traces
+                .get(&b)
+                .map_or(0, |t| t.heat)
+                .saturating_add(5);
+            st.warn(format!(
+                "white ICE hits · heat {}",
+                heat.min(game::DUMP_HEAT)
+            ));
+            noise_on(st, b, 5);
         }
         IceGrade::Grey => {
             let drain = 10u32.saturating_sub(armour).max(1);
@@ -807,16 +840,28 @@ fn hit(st: &mut AppState, b: BuildingId, i: usize) {
             }
         }
         IceGrade::Black => {
-            let damage = (6 + security.saturating_sub(230) as u32 / 5)
+            // The deep end: half the damage through the jack, a failsafe that waits
+            // for an eighth, and a short cooling after.
+            let deep = st.character.flags(&st.content).contains("deep_end");
+            let mut damage = (6 + security.saturating_sub(230) as u32 / 5)
                 .saturating_sub(armour)
                 .max(1);
+            if deep {
+                damage = (damage / 2).max(1);
+            }
             st.character.hp = st.character.hp.saturating_sub(damage);
             let hp = st.character.hp;
             st.warn(format!("black ICE hits · hp {hp}"));
-            let quarter = st.character.hp_max(&st.content) / 4;
+            let hp_max = st.character.hp_max(&st.content);
+            let line = if deep { hp_max / 8 } else { hp_max / 4 };
+            let cooling = if deep {
+                DEEP_END_COOLING
+            } else {
+                FAILSAFE_COOLING
+            };
             if st.net.failsafe {
-                if hp <= quarter {
-                    dump_for(st, "the failsafe pulled you out", FAILSAFE_COOLING);
+                if hp <= line {
+                    dump_for(st, "the failsafe pulled you out", cooling);
                 }
             } else if hp == 0 {
                 st.net.run = None;
