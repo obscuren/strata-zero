@@ -329,7 +329,10 @@ impl MapScreen {
             ice,
             slots_label: if jacked { "PROGRAMS" } else { "ABILITIES" },
             slots,
-            hollow: !crate::net::your_turn(st),
+            hollow: !crate::net::your_turn(st)
+                || crate::net::phase(st) == Some(crate::net::Phase::Move),
+            acting: crate::net::phase(st).map(|p| p == crate::net::Phase::Act),
+            prompt: self.turn_prompt(st),
             budgets: st.net.engaged.as_ref().map(|e| {
                 if e.actor() == crate::net::Actor::You {
                     (e.moves, crate::net::BASE_MOVE, e.ap, crate::net::BASE_AP)
@@ -343,6 +346,48 @@ impl MapScreen {
                 }
             }),
         }
+    }
+
+    /// Row 2 of the footer on turns: whose turn, which half, and the keys for it.
+    fn turn_prompt(&self, st: &AppState) -> Option<(String, String)> {
+        use crate::net::{Actor, Phase};
+        let e = st.net.engaged.as_ref()?;
+        Some(match e.actor() {
+            Actor::You => match e.phase {
+                Phase::Move => (
+                    "YOUR TURN · MOVE".to_string(),
+                    "arrows aim · enter walks · space stays".to_string(),
+                ),
+                // Act: pick a program (and a target when several fit), then space
+                // runs it for an action point; `.` ends the turn.
+                Phase::Act => (
+                    "YOUR TURN · ACT".to_string(),
+                    match st
+                        .net
+                        .run
+                        .as_ref()
+                        .and_then(|r| crate::net::run_label(st, r))
+                    {
+                        Some(label) => {
+                            format!(
+                                "space runs {label} (1 AP) · 1-5 another program · . ends the turn"
+                            )
+                        }
+                        None => "1-5 pick a program · then space runs it (1 AP) · . ends the turn"
+                            .to_string(),
+                    },
+                ),
+            },
+            Actor::Ice(i) => {
+                let grade = st
+                    .constructs
+                    .get(e.building)
+                    .and_then(|k| k.guards.get(i))
+                    .map(|g| g.grade.label())
+                    .unwrap_or("the");
+                (format!("{grade} ICE ACTS"), "wait".to_string())
+            }
+        })
     }
 
     /// The strip's slots: the deck's programs while jacked in, abilities otherwise.
@@ -877,6 +922,11 @@ impl MapScreen {
         let Some(spec) = st.content.item(&id).and_then(|i| i.program) else {
             return ScreenCmd::Stay;
         };
+        // Your turn's move half: programs wait for the act half.
+        if crate::net::phase(st) == Some(crate::net::Phase::Move) {
+            st.warn("move first · space to stay");
+            return ScreenCmd::Stay;
+        }
         let mut letters = WORLD_LETTERS.chars();
         let rows = Self::run_choices(st, b, pos, Some(&id), &mut letters);
         match rows.len() {
@@ -1213,9 +1263,11 @@ impl MapScreen {
             self.walking = None;
             return;
         };
-        let open = st.constructs.get(b).is_some_and(|k| {
-            k.tiles.get(next).is_some_and(|t| t.is_walkable()) && k.guard_at(next).is_none()
-        });
+        let here = st.player.as_ref().map(|p| p.pos);
+        let open = here.is_some_and(|me| me.chebyshev(next) <= 1)
+            && st.constructs.get(b).is_some_and(|k| {
+                k.tiles.get(next).is_some_and(|t| t.is_walkable()) && k.guard_at(next).is_none()
+            });
         if !open {
             self.walking = None;
             st.warn("the way is blocked");
@@ -1246,6 +1298,10 @@ impl MapScreen {
             } else {
                 w.next_at = now + crate::net::WALK_TICKS;
             }
+        }
+        // The last move spent: the act half opens by itself.
+        if st.net.engaged.as_ref().is_some_and(|e| e.moves == 0) && crate::net::stay(st) {
+            self.walking = None;
         }
     }
 
@@ -1283,6 +1339,12 @@ impl MapScreen {
     fn handle_walk_inner(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
         let jacked = st.player.as_ref().is_some_and(|p| p.jacked_in());
         if k.code == KeyCode::Char(' ') {
+            // On your turn's move half, space stays put and opens the act half.
+            if crate::net::stay(st) {
+                self.aim = None;
+                st.say("staying put · act");
+                return Some(ScreenCmd::Stay);
+            }
             // A run in flight: space rolls it, an action point in a fight, the next
             // beat hurried in calm.
             if jacked && st.net.run.is_some() {
@@ -1334,7 +1396,12 @@ impl MapScreen {
             st.warn(why);
             return Some(ScreenCmd::Stay);
         }
+        let moving = crate::net::phase(st) == Some(crate::net::Phase::Move);
         if k.code == KeyCode::Char('a') {
+            if moving {
+                st.warn("move first · space to stay");
+                return Some(ScreenCmd::Stay);
+            }
             return Some(self.abilities(st));
         }
         if let KeyCode::Char(c) = k.code
@@ -1360,17 +1427,30 @@ impl MapScreen {
             _ => None,
         };
         if let Some((b, pos)) = inside {
+            let acting = crate::net::phase(st) == Some(crate::net::Phase::Act);
             if k.code == KeyCode::Char('g') {
-                self.aim = Some(pos);
+                if acting {
+                    st.warn("moves are done");
+                } else {
+                    self.aim = Some(pos);
+                }
                 return Some(ScreenCmd::Stay);
             }
             if let Some(dir) = dir_for(k.code)
                 && (self.aim.is_some() || st.net.engaged.is_some())
             {
+                if acting {
+                    st.warn("moves are done");
+                    return Some(ScreenCmd::Stay);
+                }
+                // The aim reaches as far as the moves do; a piece within that reach
+                // may be aimed at (no path: a red cross).
                 let from = self.aim.unwrap_or(pos);
                 let to = from.step(dir);
+                let cap = crate::net::aim_cap(st);
                 let open = st.constructs.get(b).is_some_and(|k| {
-                    k.tiles.get(to).is_some_and(|t| t.is_walkable()) || k.guard_at(to).is_some()
+                    crate::net::path_to(k, pos, to).is_some_and(|p| p.len() <= cap)
+                        || (k.guard_at(to).is_some() && pos.chebyshev(to) as usize <= cap)
                 });
                 if open {
                     self.aim = Some(to);
@@ -4919,7 +4999,11 @@ mod tests {
         assert_eq!(k.guard_at(k.guards[0].pos), Some(0));
         advance(&mut st, &mut s);
         assert_eq!(st.net.ice[&b][0].integrity, 6, "whole again");
-        // The RUN popup offers the deck programs on yourself.
+        // The piece stood again awake, so the beat put the board on turns: stay
+        // first. Then the RUN popup offers the deck programs on yourself.
+        if crate::net::phase(&st) == Some(crate::net::Phase::Move) {
+            s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        }
         let ScreenCmd::Push { to: run, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))]) else {
             panic!("space opens RUN")
         };
@@ -6150,6 +6234,10 @@ mod tests {
             pass_turn(st, s);
         }
         if st.net.engaged.is_some() {
+            // The move half first: a space stays, the next rolls.
+            if crate::net::phase(st) == Some(crate::net::Phase::Move) {
+                s.update(st, &[key(KeyCode::Char(' '))]);
+            }
             s.update(st, &[key(KeyCode::Char(' '))]);
         } else {
             s.update(st, &[key(KeyCode::Char('.'))]);
@@ -6248,10 +6336,9 @@ mod tests {
                 BASE_MOVE - 1 - n as u8
             );
         }
-        s.update(&mut st, &[key(go), key(KeyCode::Enter)]);
-        assert_eq!(last(&st), Some("no moves left"));
+        s.update(&mut st, &[key(go)]);
+        assert_eq!(last(&st), Some("moves are done"));
         assert_eq!(player(&st).1, here, "refused: not moved");
-        s.update(&mut st, &[key(KeyCode::Esc)]);
         // A program starts for free and rolls per action point.
         s.update(&mut st, &[key(KeyCode::Char('1'))]);
         assert_eq!(last(&st), Some("crack starts · 3 turns"));
@@ -6365,6 +6452,11 @@ mod tests {
         let b = engaged_at_the_gate(&mut st, &mut s);
         let focus = st.character.focus;
         assert_eq!(
+            fire(&mut st, "arc_trace").unwrap_err(),
+            "move first · space to stay"
+        );
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(
             fire(&mut st, "arc_trace").unwrap(),
             "Arc Trace: 2 pieces stunned"
         );
@@ -6454,7 +6546,7 @@ mod tests {
         let mut s = MapScreen::explore(0);
         let b = engaged_at_the_gate(&mut st, &mut s);
         st.net.trace(b).heat = 99;
-        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        s.update(&mut st, &[key(KeyCode::Char(' ')), key(KeyCode::Char('1'))]);
         s.update(&mut st, &[key(KeyCode::Char(' '))]);
         assert!(!st.player.as_ref().unwrap().jacked_in(), "{:?}", last(&st));
         assert!(st.net.engaged.is_none());
@@ -6476,7 +6568,7 @@ mod tests {
         s.update(&mut st, &[key(KeyCode::Char('.'))]);
         assert_eq!(last(&st), Some("crack 1/3"));
         s.update(&mut st, &[key(KeyCode::Char('e'))]);
-        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        s.update(&mut st, &[key(KeyCode::Char(' ')), key(KeyCode::Char(' '))]);
         assert_eq!(st.net.run.as_ref().map(|r| r.done), Some(2));
         let text = draw_screen(&s, &st, 140, 40);
         assert!(
@@ -6629,9 +6721,9 @@ mod tests {
         stand(&mut st, &mut s, Place::Construct(b), start);
         s.update(&mut st, &[key(KeyCode::Char('e'))]);
         assert!(st.net.engaged.is_some());
-        // Three moves left, four tiles aimed: the last is beyond them.
+        // Three moves left: the aim walks three tiles out and no further.
         st.net.engaged.as_mut().unwrap().moves = 3;
-        for n in 1..=4 {
+        for n in 1..=3 {
             s.update(&mut st, &[key(go)]);
             let mut want = start;
             for _ in 0..n {
@@ -6640,22 +6732,21 @@ mod tests {
             assert_eq!(s.aim, Some(want), "step {n}");
             assert_eq!(player(&st).1, start, "aiming does not move you");
         }
+        let three = s.aim;
+        s.update(&mut st, &[key(go)]);
+        assert_eq!(s.aim, three, "the fourth tile is out of reach");
         let (path, lit) = s.aim_path(&st).expect("a path");
-        assert_eq!((path.len(), lit), (4, 3), "three moves light three tiles");
+        assert_eq!((path.len(), lit), (3, 3), "three moves light three tiles");
         let text = draw_screen(&s, &st, 120, 40);
         assert!(text.contains('×'), "{text}");
-        assert!(text.matches('·').count() >= 3, "{text}");
-        // Too far for this turn: enter refuses with the moves left.
-        s.update(&mut st, &[key(KeyCode::Enter)]);
-        assert_eq!(last(&st), Some("too far · 3 moves"));
-        assert!(s.walking.is_none());
+        assert!(text.matches('•').count() >= 2, "{text}");
+        assert!(!text.contains("[space]"));
         // esc drops the aim and nothing else happens.
         assert!(matches!(
             s.update(&mut st, &[key(KeyCode::Esc)]),
             ScreenCmd::Stay
         ));
         assert_eq!(s.aim, None);
-        assert!(!text.contains("[space]"));
         // Aimed onto a piece: no path, the cross stands alone.
         let guard = st.constructs.get(b).unwrap().guards[0].pos;
         let near = beside(&st, b, guard);
@@ -6698,18 +6789,18 @@ mod tests {
         assert_eq!(player(&st).1, start.step(d).step(d).step(d));
         assert_eq!(st.net.engaged.as_ref().unwrap().moves, BASE_MOVE - 3);
         assert!(s.walking.is_none());
-        // One move left: a two-tile aim is too far, a one-tile aim walks.
+        // One move left: the aim reaches one tile back, no more; walking it spends
+        // the last move and the act half opens.
         let back = dir_between(start.step(d), start);
         s.update(&mut st, &[key(back), key(back)]);
+        assert_eq!(s.aim, Some(start.step(d).step(d)));
         s.update(&mut st, &[key(KeyCode::Enter)]);
-        assert_eq!(last(&st), Some("too far · 1 move"));
-        s.update(&mut st, &[key(KeyCode::Esc)]);
-        s.update(&mut st, &[key(back), key(KeyCode::Enter)]);
         walk_tick(&mut st, &mut s);
         assert_eq!(player(&st).1, start.step(d).step(d));
         assert_eq!(st.net.engaged.as_ref().unwrap().moves, 0);
-        s.update(&mut st, &[key(back), key(KeyCode::Enter)]);
-        assert_eq!(last(&st), Some("no moves left"));
+        assert_eq!(crate::net::phase(&st), Some(crate::net::Phase::Act));
+        s.update(&mut st, &[key(back)]);
+        assert_eq!(last(&st), Some("moves are done"));
     }
 
     #[test]
@@ -6838,7 +6929,7 @@ mod tests {
         assert_eq!(marks(&st), vec![(MARK_SLIP, MARK_TICKS, vec![lock_pos])]);
         // A hurried roll by space in a fight bolts the same.
         st.net.force_roll = Some(10);
-        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        s.update(&mut st, &[key(KeyCode::Char('e')), key(KeyCode::Char(' '))]);
         st.fx.clear();
         s.update(&mut st, &[key(KeyCode::Char(' '))]);
         assert_eq!(bolts(&st).len(), 1);
@@ -7044,5 +7135,86 @@ mod tests {
         pass_turn(&mut st, &mut s);
         let after = st.constructs.get(b).unwrap().guards[0].pos;
         assert_ne!(before, after, "the seated piece hunts on its turn");
+    }
+
+    #[test]
+    fn your_turn_is_move_then_act() {
+        use crate::net::Phase;
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        lock_run(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert_eq!(crate::net::phase(&st), Some(Phase::Move));
+        // Programs wait for the move: the keys draw hollow and refuse.
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        assert_eq!(last(&st), Some("move first · space to stay"));
+        assert!(st.net.run.is_none());
+        let text = draw_screen(&s, &st, 140, 40);
+        assert!(text.contains("YOUR TURN · MOVE"), "{text}");
+        assert!(text.contains("[1] CRACK ○"), "{text}");
+        s.update(&mut st, &[key(KeyCode::Char('a'))]);
+        assert_eq!(last(&st), Some("move first · space to stay"));
+        // Space stays put: the act phase, programs live, no more moving.
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(crate::net::phase(&st), Some(Phase::Act));
+        let text = draw_screen(&s, &st, 140, 40);
+        assert!(text.contains("YOUR TURN · ACT"), "{text}");
+        assert!(text.contains("[1] CRACK ●"), "{text}");
+        s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        assert_eq!(last(&st), Some("moves are done"));
+        s.update(&mut st, &[key(KeyCode::Char('g'))]);
+        assert_eq!(last(&st), Some("moves are done"));
+        assert!(text.contains("1-5 pick a program"), "{text}");
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        assert_eq!(last(&st), Some("crack starts · 3 turns"));
+        let text = draw_screen(&s, &st, 140, 40);
+        assert!(
+            text.contains("space runs crack · door lock (1 AP)"),
+            "{text}"
+        );
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(last(&st), Some("crack 1/3"));
+        assert_eq!(
+            st.net.engaged.as_ref().unwrap().ap,
+            1,
+            "one action point spent"
+        );
+        // The next turn opens on the move again.
+        pass_turn(&mut st, &mut s);
+        assert_eq!(crate::net::phase(&st), Some(Phase::Move));
+        assert_eq!(st.net.engaged.as_ref().unwrap().round, 2);
+    }
+
+    #[test]
+    fn the_aim_stops_at_your_moves_and_the_last_move_opens_act() {
+        use crate::net::Phase;
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        freeze_ice(&mut st, b);
+        let (start, go, d) = straight(&st, b, 3);
+        stand(&mut st, &mut s, Place::Construct(b), start);
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        st.net.engaged.as_mut().unwrap().moves = 2;
+        s.update(&mut st, &[key(go), key(go), key(go)]);
+        assert_eq!(
+            s.aim,
+            Some(start.step(d).step(d)),
+            "two moves: two tiles, no further"
+        );
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        walk_tick(&mut st, &mut s);
+        assert_eq!(
+            crate::net::phase(&st),
+            Some(Phase::Move),
+            "a move left: still moving"
+        );
+        walk_tick(&mut st, &mut s);
+        assert_eq!(player(&st).1, start.step(d).step(d));
+        assert_eq!(
+            crate::net::phase(&st),
+            Some(Phase::Act),
+            "no move left: act"
+        );
     }
 }

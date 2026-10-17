@@ -333,6 +333,11 @@ pub struct Footer<'a> {
     pub hollow: bool,
     /// `(moves, moves max, ap, ap max)` while engaged.
     pub budgets: Option<(u8, u8, u8, u8)>,
+    /// On your turn: `Some(false)` while you move, `Some(true)` while you act; the
+    /// live pool's label lights.
+    pub acting: Option<bool>,
+    /// Row 2 while engaged: what is happening and the keys for it.
+    pub prompt: Option<(String, String)>,
 }
 
 fn right_aligned(left: Vec<Span<'static>>, right: Vec<Span<'static>>, w: usize) -> Line<'static> {
@@ -456,7 +461,20 @@ pub fn footer_rows(f: &Footer, width: u16) -> [Line<'static>; 4] {
     }
     let mut right4 = Vec::new();
     if let Some((mv, mv_max, ap, ap_max)) = f.budgets {
-        right4.push(dim("MOVE "));
+        let badge = |label: &str, live: bool| {
+            if live {
+                Span::styled(
+                    format!(" {label} "),
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(CYAN)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                dim(format!(" {label} "))
+            }
+        };
+        right4.push(badge("MOVE", f.acting == Some(false)));
         right4.push(Span::styled(
             format!(
                 "{}{}",
@@ -465,8 +483,8 @@ pub fn footer_rows(f: &Footer, width: u16) -> [Line<'static>; 4] {
             ),
             Style::default().fg(CYAN),
         ));
-        right4.push(text(format!(" {mv}/{mv_max}    ")));
-        right4.push(dim("AP "));
+        right4.push(text(format!(" {mv}/{mv_max}   ")));
+        right4.push(badge("AP", f.acting == Some(true)));
         right4.push(Span::styled(
             format!(
                 "{}{}",
@@ -478,7 +496,18 @@ pub fn footer_rows(f: &Footer, width: u16) -> [Line<'static>; 4] {
         right4.push(text(format!(" {ap}/{ap_max}")));
     }
     let line4 = right_aligned(row4, right4, w);
-    [line1, padded(Vec::new(), w), line3, line4]
+    // Row 2: what is happening on turns, and the keys for it.
+    let row2 = match &f.prompt {
+        Some((what, keys)) => vec![
+            Span::styled(
+                format!(" ▸ {what}"),
+                Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+            ),
+            dim(format!("   {keys}")),
+        ],
+        None => Vec::new(),
+    };
+    [line1, padded(row2, w), line3, line4]
 }
 
 /// A heavy rule with `glyph` where the vertical rule crosses it.
@@ -772,6 +801,8 @@ mod tests {
                 slots,
                 hollow: false,
                 budgets: None,
+                acting: None,
+                prompt: None,
             };
             footer_rows(&f, 100)[3].clone()
         };
@@ -845,6 +876,8 @@ mod tests {
             }],
             hollow: false,
             budgets: None,
+            acting: None,
+            prompt: None,
         };
         let rows: Vec<String> = footer_rows(&on_foot, 120)
             .iter()
@@ -882,6 +915,8 @@ mod tests {
             slots: &slots_for_footer(),
             hollow: false,
             budgets: None,
+            acting: None,
+            prompt: None,
         };
         let rows: Vec<String> = footer_rows(&calm, 130)
             .iter()

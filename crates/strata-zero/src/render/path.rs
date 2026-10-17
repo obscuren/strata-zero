@@ -11,6 +11,8 @@ use ratatui::style::{Color, Modifier, Style};
 
 /// The cross of an aim no path reaches.
 pub const NO_WAY: Color = Color::Rgb(255, 40, 40);
+/// Under the tiles your moves reach, so the path stands off the floor.
+pub const LIT_BG: Color = Color::Rgb(0, 70, 90);
 
 pub struct PathOverlay<'a> {
     /// The tiles after your own, in walking order, ending on the aim.
@@ -47,12 +49,15 @@ impl Overlay for PathOverlay<'_> {
             };
             let lit = i < self.lit;
             let style = if lit {
-                Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(CYAN)
+                    .bg(LIT_BG)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(CYAN).add_modifier(Modifier::DIM)
             };
             buf[(sx, sy)]
-                .set_char(if i == last { '×' } else { '·' })
+                .set_char(if i == last { '×' } else { '•' })
                 .set_style(style);
         }
     }
@@ -85,14 +90,15 @@ mod tests {
         });
         for x in 1..=4 {
             let c = &buf[(x as u16, 1)];
-            assert_eq!(c.symbol(), "·", "tile {x}");
+            assert_eq!(c.symbol(), "•", "tile {x}");
             assert!(
                 c.style().add_modifier.contains(Modifier::BOLD),
                 "tile {x} lit"
             );
+            assert_eq!(c.style().bg, Some(LIT_BG), "tile {x} stands off the floor");
         }
         let c = &buf[(5, 1)];
-        assert_eq!(c.symbol(), "·");
+        assert_eq!(c.symbol(), "•");
         assert!(
             c.style().add_modifier.contains(Modifier::DIM),
             "beyond the moves: dim"

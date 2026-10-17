@@ -44,7 +44,11 @@ const WALK: &[(&str, &str)] = &[
     ),
     (
         "g",
-        "aim a walk (in a fight the arrows aim) · enter walks · esc drops",
+        "aim a walk (on turns the arrows aim) · enter walks · esc drops",
+    ),
+    (
+        "space",
+        "on turns: stay put (move half over) · then runs the armed program",
     ),
     ("tab", "open the deck"),
     ("F1-F4", "panes: here · quest · map · log"),

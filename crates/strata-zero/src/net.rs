@@ -64,6 +64,13 @@ pub enum Actor {
     Ice(usize),
 }
 
+/// Your turn in two halves: you move (or stay), then you act.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Phase {
+    Move,
+    Act,
+}
+
 /// A construct on turns: the order rolled once, whose turn it is, and the pools
 /// left to the actor acting.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,6 +81,8 @@ pub struct Engagement {
     pub turn: usize,
     pub moves: u8,
     pub ap: u8,
+    /// Where your turn stands: moving first, acting after.
+    pub phase: Phase,
     /// Switched on by `e`; it does not end when the ICE calms.
     pub manual: bool,
     /// The tick the current ICE action started, for the pace.
@@ -1118,6 +1127,7 @@ pub fn engage(st: &mut AppState, b: BuildingId, manual: bool) {
         turn: 0,
         moves,
         ap,
+        phase: Phase::Move,
         manual,
         acting_since: st.clock_tick(),
     });
@@ -1161,6 +1171,33 @@ pub fn disengage(st: &mut AppState) {
     }
 }
 
+/// The half of your turn you are in, on your turn.
+pub fn phase(st: &AppState) -> Option<Phase> {
+    let e = st.net.engaged.as_ref()?;
+    (e.actor() == Actor::You).then_some(e.phase)
+}
+
+/// You stay where you are: the move half is over, the act half opens. True when
+/// that happened.
+pub fn stay(st: &mut AppState) -> bool {
+    if let Some(e) = st.net.engaged.as_mut()
+        && e.actor() == Actor::You
+        && e.phase == Phase::Move
+    {
+        e.phase = Phase::Act;
+        return true;
+    }
+    false
+}
+
+/// How far an aim reaches: the moves left on turns, a turn's worth in calm.
+pub fn aim_cap(st: &AppState) -> usize {
+    match st.net.engaged.as_ref() {
+        Some(e) if e.actor() == Actor::You => e.moves as usize,
+        _ => BASE_MOVE as usize,
+    }
+}
+
 pub fn your_turn(st: &AppState) -> bool {
     st.net
         .engaged
@@ -1176,6 +1213,9 @@ pub fn spend_ap(st: &mut AppState) -> Result<(), String> {
     if e.actor() != Actor::You {
         return Err("not your turn".to_string());
     }
+    if e.phase == Phase::Move {
+        return Err("move first · space to stay".to_string());
+    }
     if e.ap == 0 {
         return Err("no AP left".to_string());
     }
@@ -1190,6 +1230,9 @@ pub fn spend_move(st: &mut AppState) -> Result<(), String> {
     };
     if e.actor() != Actor::You {
         return Err("not your turn".to_string());
+    }
+    if e.phase == Phase::Act {
+        return Err("moves are done".to_string());
     }
     if e.moves == 0 {
         return Err("no moves left".to_string());
@@ -1241,6 +1284,7 @@ pub fn end_turn(st: &mut AppState) {
         e.round = round;
         e.moves = moves;
         e.ap = ap;
+        e.phase = Phase::Move;
         e.acting_since = now;
     }
     start_ice_turn(st);
@@ -1550,10 +1594,10 @@ pub fn beat_bar(st: &AppState, cells: usize) -> String {
 }
 
 /// The footer's run line: `RUN  crack · door lock  ▰▰▱ 2/3 · 40%   ▓▓▓▓░░░░  next roll`.
-pub fn run_readout(st: &AppState, b: BuildingId, run: &Run) -> Option<String> {
+/// `crack · door lock`: the run's program and target, as the footer names them.
+pub fn run_label(st: &AppState, run: &Run) -> Option<String> {
     let city = st.city.as_ref()?;
     let spec = st.content.item(&run.program)?.program?;
-    let kind = target_kind(st, b, run.target)?;
     let target = match run.target {
         HackTarget::Node(id) => city.net.node(id).kind.label().to_string(),
         HackTarget::Guard { building, index } => st
@@ -1564,6 +1608,13 @@ pub fn run_readout(st: &AppState, b: BuildingId, run: &Run) -> Option<String> {
             .unwrap_or_else(|| "ICE".to_string()),
         HackTarget::Deck => "deck".to_string(),
     };
+    Some(format!("{} · {target}", spec.op.label()))
+}
+
+pub fn run_readout(st: &AppState, b: BuildingId, run: &Run) -> Option<String> {
+    let spec = st.content.item(&run.program)?.program?;
+    let kind = target_kind(st, b, run.target)?;
+    let label = run_label(st, run)?;
     let security = st.constructs.get(b).map_or(0, |k| k.security);
     let pct = if kind == Target::Deck {
         100
@@ -1579,8 +1630,7 @@ pub fn run_readout(st: &AppState, b: BuildingId, run: &Run) -> Option<String> {
         format!("   {}  next roll", beat_bar(st, 8))
     };
     Some(format!(
-        "RUN  {} · {target}  {}{} {}/{} · {pct}%{tail}",
-        spec.op.label(),
+        "RUN  {label}  {}{} {}/{} · {pct}%{tail}",
         "▰".repeat(run.done as usize),
         "▱".repeat(run.work.saturating_sub(run.done) as usize),
         run.done,

@@ -212,10 +212,13 @@ rolls once and asleep ICE walks a tile of its beat; `.` hurries the next one.
 ICE that sees you, the alarm, or a program pointed at a piece puts the
 construct on turns: an order rolled once (you by your Net, pieces by grade,
 black before grey before white, ties to you), then `MOVE` 4 tiles and `AP` 2 a
-turn. A tile costs a move; a program roll (`space`), a pulse, a shield or a mask
-an AP; `.` ends your turn. The arrows aim a path from you, lit as far as your
-moves reach and a red cross where nothing reaches, and `enter` walks it a tile
-every 4 ticks with the keys waiting; `esc` drops the aim. An ICE turn plays out
+turn. Your turn has two halves and the footer's second row names the one you
+are in. MOVE first: the arrows aim a path from you, as far as your moves reach
+(a red cross on a piece nothing reaches), `enter` walks it a tile every 4 ticks
+with the keys waiting, `esc` drops the aim, and `space` stays put; the program
+keys draw hollow until you do. Then ACT: `1`-`5` pick a program (a target too
+when several fit), `space` runs it for one AP, a pulse, a shield or a mask cost
+one as well, and `.` ends your turn; spending the last move opens ACT by itself. An ICE turn plays out
 one action every 8 ticks so you watch it come: white 0 tiles and 1 hit, grey 2
 and 1, black 3 and 2. A stunned piece passes its turn. A round with nothing
 awake calms the board again unless `e` asked for turns by hand; jacking out, a
