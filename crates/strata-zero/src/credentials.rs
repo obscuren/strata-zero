@@ -251,12 +251,12 @@ pub fn copy_codes(st: &mut AppState, b: BuildingId, now: u64) -> Option<usize> {
     let homes = st.interiors.homes_of(b).filter(|h| !h.is_empty())?.clone();
     let seed = st.city.as_ref()?.seed;
     let mut new = 0;
-    for (h, (level, number)) in homes.households() {
+    for (level, number) in homes.flats() {
         let learned = st.journal.learn(Code {
             building: b,
             level,
             number,
-            household: Some(h),
+            household: homes.household_of(level, number),
             code: citygen::rng::door_code(seed, b, level, number),
             source: Source::ServerCopy,
             at: now,

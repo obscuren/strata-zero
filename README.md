@@ -46,6 +46,12 @@ shower room and a storage room. A new game wakes you beside the bed, and so does
 loading a save; your front door opens onto the walkway with no change of map. A
 city without a megablock starts you on the street as before.
 
+Other people's flats are locked. They open for the resident's keycard, an item
+one household per building has left at the lobby desk, or for the flat's
+four-digit door code, which a server copy in the building's construct writes to
+the JOURNAL tab beside the keycards you hold and the backdoors you have planted.
+Your own door code and keycard are yours from the first minute.
+
 The same graph is cyberspace. Jack in at any street terminal, or at the rig in
 your flat (walk up to it and press `enter`): your body stays at the port and you
 emerge in the Net at the same spot, in a wireframe world laid out one to one

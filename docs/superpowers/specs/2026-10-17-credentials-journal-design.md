@@ -1,7 +1,10 @@
 # Credentials and the journal: design
 
-Date: 2026-10-17. Status: approved in chat by Jeffrey (approach A: a small store
-of learned codes, the rest derived; stable homes fixed as part of it).
+Date: 2026-10-17. Status: built on `feat/credentials-journal` (approach A: a small
+store of learned codes, the rest derived; stable homes fixed as part of it).
+Built as specified except: households spread round-robin over the levels with the
+seed picking the first level, so neighbours are on every floor; the lost card's
+drop generates the lobby itself.
 Builds on: `2026-10-15-interiors-design.md` (floors, locked flats, placement),
 `2026-10-15-constructs-and-programs-design.md` (the run, the copy op, the
 lock crack) and `2026-10-17-megablock-home-design.md` (the player's flat,
