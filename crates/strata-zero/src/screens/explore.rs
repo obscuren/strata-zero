@@ -388,7 +388,7 @@ impl MapScreen {
             Actor::You => match e.phase {
                 Phase::Move => (
                     "YOUR TURN · MOVE".to_string(),
-                    "arrows aim · enter walks · space stays".to_string(),
+                    "arrows aim · space or enter walks · space on yourself stays".to_string(),
                 ),
                 // Act: pick a program (and a target when several fit), then space
                 // runs it for an action point; `.` ends the turn.
@@ -1478,6 +1478,16 @@ impl MapScreen {
     fn handle_walk_inner(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
         let jacked = st.player.as_ref().is_some_and(|p| p.jacked_in());
         if k.code == KeyCode::Char(' ') {
+            // An aim on another tile: space confirms the walk, as enter does.
+            if let Some(aim) = self.aim
+                && st.player.as_ref().is_some_and(|p| p.pos != aim)
+                && matches!(
+                    st.player.as_ref().map(|p| p.place),
+                    Some(Place::Construct(_))
+                )
+            {
+                return Some(self.start_walk(st, aim));
+            }
             // On your turn's move half, space stays put and opens the act half.
             if crate::net::stay(st) {
                 self.aim = None;
@@ -7615,5 +7625,31 @@ mod tests {
         st.net
             .minute(now + game::HACK_MINUTES, Some(b), &mut st.constructs);
         assert!(!down(&st), "whole again after the hour");
+    }
+
+    #[test]
+    fn space_on_an_aimed_tile_walks_and_on_your_own_tile_stays() {
+        use crate::net::Phase;
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        freeze_ice(&mut st, b);
+        let (start, go, d) = straight(&st, b, 2);
+        stand(&mut st, &mut s, Place::Construct(b), start);
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        // Aimed one tile out, space confirms the walk like enter does.
+        s.update(&mut st, &[key(go), key(KeyCode::Char(' '))]);
+        assert!(s.walking.is_some(), "space walks the aim");
+        assert_eq!(crate::net::phase(&st), Some(Phase::Move));
+        walk_tick(&mut st, &mut s);
+        assert_eq!(player(&st).1, start.step(d));
+        // Aimed back onto your own tile, space stays put: the act half opens.
+        let back = dir_between(start.step(d), start);
+        s.update(&mut st, &[key(go), key(back)]);
+        assert_eq!(s.aim, Some(start.step(d)), "the aim is back on you");
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert!(s.walking.is_none());
+        assert_eq!(crate::net::phase(&st), Some(Phase::Act));
+        assert_eq!(player(&st).1, start.step(d));
     }
 }

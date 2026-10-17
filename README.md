@@ -214,8 +214,9 @@ construct on turns: an order rolled once (you by your Net, pieces by grade,
 black before grey before white, ties to you), then `MOVE` 4 tiles and `AP` 2 a
 turn. Your turn has two halves and the footer's second row names the one you
 are in. MOVE first: the arrows aim a path from you, as far as your moves reach
-(a red cross on a piece nothing reaches), `enter` walks it a tile every 4 ticks
-with the keys waiting, `esc` drops the aim, and `space` stays put; from the
+(a red cross on a piece nothing reaches), `space` or `enter` walks it a tile
+every 4 ticks with the keys waiting, `esc` drops the aim, and `space` with the
+aim on your own tile stays put; from the
 entry, aiming one tile off the map is the gate, and the walk leaves the
 construct; the program keys draw hollow until you do. Then ACT: `1`-`5` pick a program and the map
 marks what it can run against (nodes beside you; ICE beside you or in sight
