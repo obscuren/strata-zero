@@ -183,15 +183,26 @@ pub fn prompt(st: &AppState, s: &Session) -> String {
     }
 }
 
-/// What a terminal types when it powers on.
-pub fn boot_lines(st: &AppState, s: &Session) -> Vec<String> {
-    let first = match s {
-        Session::District { district, .. } => {
-            format!("MUNI-OS 4.1 · {} SUBNET", district_name(st, *district))
-        }
-        Session::Rig { .. } => "HOME RIG · STRATA/OS".to_string(),
+/// What a terminal types when it powers on: the theme's boot with the place filled
+/// in; the rig names itself first.
+pub fn boot_lines(st: &AppState, s: &Session, look: &crate::ui::device::Look) -> Vec<String> {
+    let place = match s {
+        Session::District { district, .. } => district_name(st, *district),
+        Session::Rig { building } => building_name(st, *building),
     };
-    vec![first, "MEMORY CHECK OK".to_string(), "READY".to_string()]
+    let mut lines: Vec<String> = look
+        .style
+        .boot
+        .iter()
+        .map(|l| l.replace("{PLACE}", &place))
+        .collect();
+    if matches!(s, Session::Rig { .. }) {
+        if lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines[0] = "HOME RIG · STRATA/OS".to_string();
+    }
+    lines
 }
 
 /// A verb, its gloss, the tier it needs, and whether it needs a connection.
@@ -412,7 +423,7 @@ fn scan(st: &AppState, s: &Session) -> Reply {
             .map(|(i, b)| {
                 let sec = security(city, *b);
                 format!(
-                    "{:>2}  {:<18} {:<10} SEC {sec:>3}  ICE {:<5} {}",
+                    "{:>2}  {:<22} {:<10} SEC {sec:>3}  ICE {:<5} {}",
                     i + 1,
                     building_name(st, *b),
                     city.building(*b).kind.label().to_uppercase(),
@@ -1041,14 +1052,23 @@ mod tests {
         assert!(verbs(&st, &c).contains(&"PLAN"));
         assert!(!verbs(&st, &s).contains(&"WHO"));
         assert_eq!(lines(&mut st, &mut s, "exit"), "BYE");
-        let boot = boot_lines(&st, &s);
+        let muni = crate::ui::device::Look::named(&st, "municipal", Some(d), 1);
+        let boot = boot_lines(&st, &s, &muni);
         assert_eq!(boot.len(), 3);
         assert!(
             boot[0].contains("MUNI-OS") && boot[2] == "READY",
             "{boot:?}"
         );
-        let rig = boot_lines(&st, &Session::Rig { building: b });
-        assert!(rig[0].contains("HOME RIG"));
+        let dn = st.city.as_ref().unwrap().district(d).name.to_uppercase();
+        assert!(boot[0].contains(&dn), "{boot:?}");
+        let street = crate::ui::device::Look::named(&st, "street", Some(d), 1);
+        let boot = boot_lines(&st, &s, &street);
+        assert_eq!(boot[2], "REDY");
+        let rig = boot_lines(&st, &Session::Rig { building: b }, &street);
+        assert!(
+            rig[0].contains("HOME RIG") && rig[0].contains("STRATA/OS"),
+            "{rig:?}"
+        );
         let city = st.city.as_ref().unwrap();
         let term = city
             .net
@@ -1070,7 +1090,7 @@ mod tests {
         let scan = lines(&mut st, &mut s, "scan");
         let names: Vec<String> = scan
             .lines()
-            .map(|l| l[4..22].trim_end().to_string())
+            .map(|l| l[4..26].trim_end().to_string())
             .collect();
         let distinct: std::collections::BTreeSet<&String> = names.iter().collect();
         assert_eq!(

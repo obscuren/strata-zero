@@ -3932,10 +3932,7 @@ mod tests {
         };
         st.tick += 10_000;
         let drawn = draw_screen(&*term, &st, 120, 40);
-        assert!(
-            drawn.contains("MUNI-OS") && drawn.contains(" NET > "),
-            "{drawn}"
-        );
+        assert!(drawn.contains(" NET > "), "{drawn}");
         let _ = jack;
     }
 

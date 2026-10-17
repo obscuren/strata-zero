@@ -26,6 +26,34 @@ pub struct StratumStyle {
     pub rain: u8,
 }
 
+/// How a device looks and speaks: a keypad or a terminal in a theme.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DeviceStyle {
+    /// The maker's mark on the unit.
+    pub badge: String,
+    pub body: Rgb,
+    /// The edge; `None` takes the district's accent.
+    pub edge: Option<Rgb>,
+    pub glass: Rgb,
+    /// Live text on the glass; `None` is the game's cyan.
+    pub text: Option<Rgb>,
+    pub text_dim: Rgb,
+    pub keys_lit: bool,
+    pub scanlines: bool,
+    /// The edge has gaps.
+    pub cracked: bool,
+    /// Dead cells drawn on the unit.
+    pub dead: u8,
+    /// Ticks between flickers of the glass; 0 never.
+    pub flicker: u64,
+    /// Characters a second a reply types.
+    pub cps: u64,
+    /// The boot, `{PLACE}` for the district or building.
+    pub boot: Vec<String>,
+    /// A first line on refusals.
+    pub denied: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GlyphSets {
     pub holo: Vec<char>,
@@ -44,6 +72,9 @@ pub struct StylePack {
     pub strata: Vec<(StratumKind, StratumStyle)>,
     pub hues: Vec<(Hue, Rgb)>,
     pub glyphs: GlyphSets,
+    /// Device themes by name: municipal, megacorp, neon, street.
+    #[serde(default)]
+    pub devices: Vec<(String, DeviceStyle)>,
 }
 
 impl StylePack {
@@ -61,6 +92,11 @@ impl StylePack {
             anyhow::ensure!(!set.is_empty(), "style.ron: a glyph set is empty");
         }
         Ok(pack)
+    }
+
+    /// A device theme by name.
+    pub fn device(&self, name: &str) -> Option<&DeviceStyle> {
+        self.devices.iter().find(|(n, _)| n == name).map(|(_, d)| d)
     }
 
     pub fn theme(&self, t: Theme) -> &ThemeStyle {

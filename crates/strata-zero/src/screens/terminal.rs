@@ -4,15 +4,13 @@
 use crate::access::{self, Session};
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::ui::console::{Console, ConsoleEvent};
-use crate::ui::device::{self, CRT_H, CRT_W, Led, Skin};
+use crate::ui::device::{self, CRT_H, CRT_W, Device, Led, Look};
 use citygen::{Place, Pos};
 use crossterm::event::KeyEvent;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
-/// Characters a reply types a second.
-pub const TYPE_CPS: u64 = 60;
 /// Ticks the LED stays red after a denial has typed.
 const DENIED_TICKS: u64 = 30;
 const TICKS_PER_SECOND: u64 = 30;
@@ -23,6 +21,8 @@ const COLUMNS: usize = (CRT_W - 4 - 2) as usize;
 struct Typing {
     lines: Vec<String>,
     started: u64,
+    /// Characters a second.
+    cps: u64,
     /// A key pressed mid-reply: it shows whole from now on.
     finished: bool,
     /// Set when the reply was EXIT: pop once it has typed.
@@ -32,7 +32,7 @@ struct Typing {
 }
 
 impl Typing {
-    fn new(lines: Vec<String>, started: u64) -> Typing {
+    fn new(lines: Vec<String>, started: u64, cps: u64) -> Typing {
         let lines = lines
             .iter()
             .flat_map(|l| {
@@ -47,6 +47,7 @@ impl Typing {
         Typing {
             lines,
             started,
+            cps: cps.max(1),
             finished: false,
             leaving: false,
             denied: false,
@@ -58,7 +59,7 @@ impl Typing {
         if self.finished {
             return self.total();
         }
-        (tick.saturating_sub(self.started) * TYPE_CPS / TICKS_PER_SECOND) as usize
+        (tick.saturating_sub(self.started) * self.cps / TICKS_PER_SECOND) as usize
     }
 
     fn total(&self) -> usize {
@@ -91,7 +92,7 @@ impl Typing {
 }
 
 pub struct Terminal {
-    skin: Skin,
+    look: Look,
     session: Session,
     scrollback: Vec<String>,
     typing: Option<Typing>,
@@ -104,21 +105,31 @@ pub struct Terminal {
 impl Terminal {
     /// Powers the terminal on: a boot the first time this tile is used in a session.
     pub fn open(st: &mut AppState, session: Session, key: (Place, Pos)) -> Terminal {
-        let fresh = st.journal.booted.insert(key);
-        let typing = fresh.then(|| Typing::new(access::boot_lines(st, &session), st.tick));
-        let district = match session {
-            Session::District { district, .. } => Some(district),
-            Session::Rig { building } => st
-                .city
-                .as_ref()
-                .and_then(|c| c.building_opt(building))
-                .map(|b| b.district),
+        let device = match session {
+            Session::District { district, .. } => Device::Terminal(district),
+            Session::Rig { .. } => Device::Rig,
         };
-        let skin = district.map(|d| Skin::for_district(st, d)).unwrap_or(Skin {
-            accent: crate::render::Rgb(0, 229, 255),
+        let look = Look::pick(st, device);
+        Self::with_look(st, session, key, look)
+    }
+
+    /// Powers on with a given look.
+    pub fn with_look(
+        st: &mut AppState,
+        session: Session,
+        key: (Place, Pos),
+        look: Look,
+    ) -> Terminal {
+        let fresh = st.journal.booted.insert(key);
+        let typing = fresh.then(|| {
+            Typing::new(
+                access::boot_lines(st, &session, &look),
+                st.tick,
+                look.style.cps,
+            )
         });
         Terminal {
-            skin,
+            look,
             session,
             scrollback: Vec::new(),
             typing,
@@ -131,7 +142,7 @@ impl Terminal {
     /// Puts lines on the screen as a reply would: wrapped, typed out.
     #[cfg(test)]
     pub(crate) fn show(&mut self, st: &AppState, lines: Vec<String>) {
-        self.typing = Some(Typing::new(lines, st.tick));
+        self.typing = Some(Typing::new(lines, st.tick, self.look.style.cps));
         self.scroll = 0;
     }
 
@@ -150,9 +161,9 @@ impl Terminal {
         &self.console.input
     }
 
-    fn badge(&self) -> &'static str {
+    fn badge(&self) -> &str {
         match self.session {
-            Session::District { .. } => "MUNI-OS",
+            Session::District { .. } => &self.look.style.badge,
             Session::Rig { .. } => "HOME RIG",
         }
     }
@@ -196,7 +207,13 @@ impl Terminal {
         self.scrollback
             .push(format!("{prompt}{}", line.to_uppercase()));
         let reply = access::run(st, &mut self.session, &line);
-        let mut typing = Typing::new(reply.lines, st.tick);
+        let mut lines = reply.lines;
+        if reply.denied
+            && let Some(first) = &self.look.style.denied
+        {
+            lines.insert(0, first.clone());
+        }
+        let mut typing = Typing::new(lines, st.tick, self.look.style.cps);
         typing.leaving = line.trim().eq_ignore_ascii_case("exit");
         typing.denied = reply.denied;
         self.typing = Some(typing);
@@ -290,10 +307,16 @@ impl Screen for Terminal {
             None => Led::Idle,
         };
         let buf = f.buffer_mut();
-        let screen = device::crt(buf, r, self.badge(), led, &self.skin);
-        let live = Style::default().fg(device::TEXT).bg(device::GLASS_BG);
-        let deny = Style::default().fg(device::DENY).bg(device::GLASS_BG);
-        let quiet = Style::default().fg(device::TEXT_DIM).bg(device::GLASS_BG);
+        let screen = device::crt(buf, r, self.badge(), led, &self.look);
+        let glass = self.look.glass();
+        let flicker = self.look.flickering(tick);
+        let tone = |c: ratatui::style::Color| {
+            let s = Style::default().fg(c).bg(glass);
+            if flicker { device::dimmed(s) } else { s }
+        };
+        let live = tone(self.look.text());
+        let deny = tone(device::DENY);
+        let quiet = tone(self.look.text_dim());
         let bold = live.add_modifier(Modifier::BOLD);
         let mut rows: Vec<(String, Style)> =
             self.scrollback.iter().map(|l| (l.clone(), live)).collect();
@@ -351,7 +374,10 @@ impl Screen for Terminal {
             let progress = (tick.saturating_sub(t.started)) as f32 / DENIED_TICKS as f32;
             device::glitch(buf, screen, tick, 0.7 + 0.3 * progress.min(1.0));
         }
-        device::scanlines(buf, screen);
+        if self.look.style.scanlines {
+            device::scanlines(buf, screen);
+        }
+        device::dead_cells(buf, r, screen, &self.look);
     }
 }
 
@@ -429,28 +455,21 @@ mod tests {
     #[test]
     fn boots_once_per_terminal_and_types_the_reply() {
         let (mut st, d, _) = state();
+        let boot = crate::access::boot_lines(
+            &st,
+            &district(d),
+            &crate::ui::device::Look::pick(&st, crate::ui::device::Device::Terminal(d)),
+        );
         let t = Terminal::open(&mut st, district(d), KEY_A);
         assert!(
-            t.text(st.tick + 10_000)
-                .iter()
-                .any(|l| l.contains("MUNI-OS")),
+            t.text(st.tick + 10_000).iter().any(|l| *l == boot[0]),
             "{:?}",
             t.text(st.tick + 10_000)
         );
         let again = Terminal::open(&mut st, district(d), KEY_A);
-        assert!(
-            !again
-                .text(st.tick + 10_000)
-                .iter()
-                .any(|l| l.contains("MUNI-OS"))
-        );
+        assert!(!again.text(st.tick + 10_000).iter().any(|l| *l == boot[0]));
         let other = Terminal::open(&mut st, district(d), KEY_B);
-        assert!(
-            other
-                .text(st.tick + 10_000)
-                .iter()
-                .any(|l| l.contains("MUNI-OS"))
-        );
+        assert!(other.text(st.tick + 10_000).iter().any(|l| *l == boot[0]));
         let mut t = again;
         st.tick += 1000;
         t.update(&mut st, &typed("help"));
@@ -591,5 +610,52 @@ mod tests {
         t2.update(&mut st2, &typed("help"));
         t2.update(&mut st2, &[key(KeyCode::Char('x'))]);
         assert!(t2.text(st2.tick).join("\n").contains("EXIT"));
+    }
+
+    #[test]
+    fn the_theme_sets_the_voice_and_the_speed() {
+        let (mut st, d, b) = state();
+        let corp = crate::ui::device::Look::named(&st, "megacorp", Some(d), 1);
+        let mut t = Terminal::with_look(
+            &mut st,
+            Session::District {
+                district: d,
+                connected: Some(b),
+            },
+            KEY_A,
+            corp,
+        );
+        st.tick += 10_000;
+        t.update(&mut st, &typed("door unlock"));
+        st.tick += 10_000;
+        let text = t.text(st.tick).join("\n");
+        assert!(
+            text.contains("YOUR CLEARANCE DOES NOT PERMIT THIS ACTION"),
+            "{text}"
+        );
+        assert!(text.contains("ACCESS DENIED"), "{text}");
+        let street = crate::ui::device::Look::named(&st, "street", Some(d), 1);
+        let slow = Terminal::with_look(&mut st, district(d), KEY_B, street);
+        let corp = crate::ui::device::Look::named(&st, "megacorp", Some(d), 1);
+        let fast = Terminal::with_look(
+            &mut st,
+            district(d),
+            (
+                citygen::Place::Stratum(StratumKind::Street),
+                citygen::Pos { x: 5, y: 5 },
+            ),
+            corp,
+        );
+        let t0 = st.tick;
+        let shown = |t: &Terminal| {
+            t.text(t0 + 10)
+                .iter()
+                .map(|l| l.chars().count())
+                .sum::<usize>()
+        };
+        assert!(
+            shown(&slow) < shown(&fast),
+            "street types slower than megacorp"
+        );
     }
 }

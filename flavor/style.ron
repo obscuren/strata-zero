@@ -32,4 +32,18 @@ StylePack(
         mass: ['█', '▓', '▒', '░'],
         net: ['◇', '◆', '⬡', '⌗', '▪', '◈'],
     ),
+    devices: [
+        ("municipal", DeviceStyle(badge: "MUNI-OS", body: (40, 46, 54), edge: None, glass: (6, 18, 22), text: None, text_dim: (0, 120, 135),
+            keys_lit: true, scanlines: true, cracked: false, dead: 0, flicker: 0, cps: 60,
+            boot: ["MUNI-OS 4.1 · {PLACE} SUBNET", "MEMORY CHECK OK", "READY"], denied: None)),
+        ("megacorp", DeviceStyle(badge: "CORP/OS", body: (206, 212, 220), edge: Some((244, 248, 252)), glass: (2, 4, 8), text: Some((200, 230, 255)), text_dim: (110, 140, 170),
+            keys_lit: true, scanlines: false, cracked: false, dead: 0, flicker: 0, cps: 80,
+            boot: ["{PLACE} SECURE NODE · CORP/OS 9", "INTEGRITY VERIFIED", "WELCOME"], denied: Some("YOUR CLEARANCE DOES NOT PERMIT THIS ACTION"))),
+        ("neon", DeviceStyle(badge: "NEON NET", body: (34, 12, 44), edge: None, glass: (18, 0, 28), text: Some((255, 160, 230)), text_dim: (140, 70, 130),
+            keys_lit: true, scanlines: true, cracked: false, dead: 0, flicker: 0, cps: 60,
+            boot: ["{PLACE} NET ~ STAY A WHILE ~", "ALL SYSTEMS LIT", "READY"], denied: None)),
+        ("street", DeviceStyle(badge: "MUNI-OS", body: (28, 26, 30), edge: Some((120, 62, 40)), glass: (20, 14, 6), text: Some((255, 176, 0)), text_dim: (140, 96, 20),
+            keys_lit: false, scanlines: true, cracked: true, dead: 3, flicker: 110, cps: 40,
+            boot: ["SYS BOOT.. OK?", "MEM CHK 64K", "REDY"], denied: None)),
+    ],
 )

@@ -126,6 +126,75 @@ fn keypad_over_the_home_floor() {
     shot("keypad", &st, &map, &pad);
 }
 
+/// A terminal session in a district, after SCAN, CONNECT 1 and a denied DOOR UNLOCK.
+fn terminal_shot(name: &str, d: citygen::DistrictId) {
+    let mut st = state_home();
+    let map = MapScreen::walking(&mut st);
+    let mut term = Terminal::open(
+        &mut st,
+        Session::District {
+            district: d,
+            connected: None,
+        },
+        (Place::Stratum(StratumKind::Street), Pos::new(1, 1)),
+    );
+    for line in ["scan", "connect 1", "door unlock"] {
+        st.tick += 10_000;
+        term.update(&mut st, &[]);
+        let keys: Vec<_> = line
+            .chars()
+            .map(|c| key(KeyCode::Char(c)))
+            .chain(std::iter::once(key(KeyCode::Enter)))
+            .collect();
+        term.update(&mut st, &keys);
+    }
+    st.tick += 400;
+    term.update(&mut st, &[]);
+    shot(name, &st, &map, &term);
+}
+
+#[test]
+#[ignore]
+fn terminals_by_theme() {
+    let st = state_home();
+    let city = st.city.as_ref().unwrap();
+    for (name, theme) in [
+        ("terminal_megacorp", citygen::Theme::CorpCore),
+        ("terminal_street", citygen::Theme::CombatZone),
+        ("terminal_neon", citygen::Theme::NightMarket),
+    ] {
+        if let Some(d) = city.districts.iter().find(|d| d.theme == theme) {
+            terminal_shot(name, d.id);
+        }
+    }
+}
+
+#[test]
+#[ignore]
+fn the_rig_at_home() {
+    let mut st = state_home();
+    let map = MapScreen::walking(&mut st);
+    let home = st.home.unwrap().home;
+    let mut term = Terminal::open(
+        &mut st,
+        Session::Rig {
+            building: home.building,
+        },
+        (map.place, home.rig),
+    );
+    st.tick += 10_000;
+    term.update(&mut st, &[]);
+    let keys: Vec<_> = "mail 1"
+        .chars()
+        .map(|c| key(KeyCode::Char(c)))
+        .chain(std::iter::once(key(KeyCode::Enter)))
+        .collect();
+    term.update(&mut st, &keys);
+    st.tick += 10_000;
+    term.update(&mut st, &[]);
+    shot("rig", &st, &map, &term);
+}
+
 #[test]
 #[ignore]
 fn terminal_on_the_street() {

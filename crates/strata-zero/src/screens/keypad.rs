@@ -3,7 +3,7 @@
 
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::credentials::{self, Verdict};
-use crate::ui::device::{self, DEVICE_H, DEVICE_W, KeyLit, Led, Skin};
+use crate::ui::device::{self, DEVICE_H, DEVICE_W, Device, KeyLit, Led, Look};
 use citygen::BuildingId;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
@@ -28,7 +28,7 @@ enum Flash {
 }
 
 pub struct Keypad {
-    skin: Skin,
+    look: Look,
     building: BuildingId,
     level: i32,
     number: u16,
@@ -50,16 +50,9 @@ pub(crate) fn key_at(r: Rect, i: usize) -> (u16, u16) {
 impl Keypad {
     pub fn open(st: &AppState, building: BuildingId, level: i32, number: u16) -> Keypad {
         let seed = st.city.as_ref().map(|c| c.seed).unwrap_or(0);
-        let skin = st
-            .city
-            .as_ref()
-            .and_then(|c| c.building_opt(building))
-            .map(|b| Skin::for_district(st, b.district))
-            .unwrap_or(Skin {
-                accent: crate::render::Rgb(0, 229, 255),
-            });
+        let look = Look::pick(st, Device::Keypad(building));
         Keypad {
-            skin,
+            look,
             building,
             level,
             number,
@@ -169,7 +162,7 @@ impl Screen for Keypad {
         let locked = self.locked_until(st);
         // The reading on the glass, its colour, and whether the glass glitches.
         let (led, reading, glitch) = match (self.flash, locked) {
-            (Flash::Open(_), _) => (Led::Ok, Some(("OPEN".to_string(), device::TEXT)), None),
+            (Flash::Open(_), _) => (Led::Ok, Some(("OPEN".to_string(), self.look.text())), None),
             (Flash::Denied(t), _) if tick <= t + DENIED_TICKS => (
                 Led::Fail,
                 Some(("DENIED".to_string(), device::DENY)),
@@ -187,9 +180,9 @@ impl Screen for Keypad {
             _ => (Led::Idle, None, None),
         };
         let buf = f.buffer_mut();
-        device::bezel(buf, r, "SECURLOK", led, &self.skin);
-        let live = Style::default().fg(device::TEXT);
-        let quiet = Style::default().fg(device::TEXT_DIM);
+        device::bezel(buf, r, "SECURLOK", led, &self.look);
+        let live = Style::default().fg(self.look.text());
+        let quiet = Style::default().fg(self.look.text_dim());
         let first = match &reading {
             Some((text, colour)) => (
                 text.clone(),
@@ -214,7 +207,7 @@ impl Screen for Keypad {
         };
         let lines = [first, (second, quiet)];
         let glass = Rect::new(r.x + 2, r.y + 3, r.width - 4, 4);
-        device::glass(buf, glass, &lines, &self.skin);
+        device::glass(buf, glass, &lines, &self.look, tick);
         // The refusal scrambles the label row under the reading, not the reading.
         if let Some(p) = glitch {
             let under = Rect::new(glass.x + 1, glass.y + 2, glass.width - 2, 1);
@@ -229,8 +222,9 @@ impl Screen for Keypad {
                 c if worn.contains(c) => KeyLit::Worn,
                 _ => KeyLit::Normal,
             };
-            device::key(buf, x, y, *ch, lit, &self.skin);
+            device::key(buf, x, y, *ch, lit, &self.look);
         }
+        device::dead_cells(buf, r, glass, &self.look);
     }
 }
 
@@ -386,7 +380,7 @@ mod tests {
         let buf = t.backend().buffer();
         let worn: Vec<char> = format!("{code:04}").chars().collect();
         let r = k.rect(Rect::new(0, 0, 120, 40));
-        let (_, worn_fg) = k.skin.key_colours(KeyLit::Worn);
+        let (_, worn_fg) = k.look.key_colours(KeyLit::Worn);
         for (i, ch) in KEYS.iter().enumerate() {
             let (x, y) = key_at(r, i);
             let cell = &buf[(x + 2, y)];
