@@ -210,6 +210,21 @@ impl Character {
         Some(Self::from_build(c, &Build::from_template(c, t)))
     }
 
+    /// The debug runner: Vex's build as D'SHAWN at level 50 with every talent at
+    /// its best, full HP and focus. For the title's NEW GAME (DEBUG).
+    pub fn debug_runner(c: &Content) -> Character {
+        let mut d = Self::from_template(c, &TemplateId::new("vex"))
+            .expect("the vex template is in the content");
+        d.handle = "D'SHAWN".to_string();
+        d.level = 50;
+        d.xp = 0;
+        d.talent_points = 0;
+        d.talents = c.talents.iter().map(|t| (t.id.clone(), t.ranks)).collect();
+        d.hp = d.hp_max(c);
+        d.focus = d.focus_max(c);
+        d
+    }
+
     pub fn has_skill(&self, id: &SkillId) -> bool {
         self.skills.contains(id)
     }
@@ -1034,5 +1049,24 @@ mod tests {
         );
         assert!(ch.has_ability(&c, &AbilityId::new("netscan")), "the deck");
         assert!(!ch.has_ability(&c, &AbilityId::new("ping")));
+    }
+
+    #[test]
+    fn the_debug_runner_is_vex_maxed_out_under_another_name() {
+        let c = Content::load().unwrap();
+        let d = Character::debug_runner(&c);
+        assert_eq!(d.handle, "D'SHAWN");
+        assert_eq!((d.level, d.xp, d.talent_points), (50, 0, 0));
+        for t in &c.talents {
+            assert_eq!(d.talent_rank(&t.id), t.ranks, "{}", t.id);
+        }
+        assert!(d.flags(&c).contains("deep_end") && d.flags(&c).contains("null_route"));
+        assert!(d.has_ability(&c, &AbilityId::new("arc_trace")));
+        assert!(d.has_ability(&c, &AbilityId::new("ping")));
+        assert_eq!(d.hp, d.hp_max(&c));
+        assert_eq!(d.focus, d.focus_max(&c));
+        let vex = vex(&c);
+        assert_eq!(d.inventory.len(), vex.inventory.len(), "Vex's kit");
+        assert_eq!(d.loaded, vex.loaded);
     }
 }
