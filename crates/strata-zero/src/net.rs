@@ -256,12 +256,13 @@ impl NetState {
 
     /// Records a landed hack; a backdoor is forever.
     pub fn land(&mut self, b: BuildingId, target: HackTarget, kind: Target, op: Op, now: u64) {
-        // A hack lasts an hour, or until the building's alert ends, whichever is sooner.
+        // A hack lasts an hour, or until the building's alert ends, whichever is
+        // sooner; a broken piece stays down the whole hour whatever the alert does.
         let alert_end = self
             .traces
             .get(&b)
             .and_then(|t| t.alert_until)
-            .filter(|u| now < *u);
+            .filter(|u| now < *u && op != Op::Attack);
         let until = (op != Op::Backdoor)
             .then(|| alert_end.map_or(now + HACK_MINUTES, |u| u.min(now + HACK_MINUTES)));
         if op == Op::Backdoor {
@@ -319,10 +320,12 @@ impl NetState {
     }
 
     /// The alarm: every hack on the building but a backdoor expires now.
+    /// The alarm resets the building's locks, cameras and lifts; a backdoor holds,
+    /// and a broken piece of ICE stays broken for its hour.
     pub fn alarm(&mut self, b: BuildingId, now: u64) {
         let _ = now;
         self.hacks
-            .retain(|h| h.building != b || h.op == Op::Backdoor);
+            .retain(|h| h.building != b || matches!(h.op, Op::Backdoor | Op::Attack));
     }
 
     /// Sets every guard of a generated construct standing or lifted by the hacks.

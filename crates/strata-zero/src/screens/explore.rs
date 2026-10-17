@@ -7319,21 +7319,34 @@ mod tests {
             st.net.engaged.as_ref().unwrap().order,
             vec![Actor::You, Actor::Ice(1)]
         );
-        // The alarm ends the hack: the piece stands, awake, and takes its place at the end.
-        crate::net::raise_alarm(&mut st, b);
+        // The hour ends the hack: the piece stands and, at the round's wrap, takes
+        // its place at the end of the order.
+        st.net
+            .minute(now + game::HACK_MINUTES, Some(b), &mut st.constructs);
+        st.net
+            .sync_guards(&mut st.constructs, b, now + game::HACK_MINUTES);
         {
             let k = st.constructs.get(b).unwrap();
             assert_eq!(k.guard_at(k.guards[0].pos), Some(0), "standing again");
         }
+        st.net.wake_all(b, hide);
+        pass_turn(&mut st, &mut s);
         assert_eq!(
             st.net.engaged.as_ref().unwrap().order,
             vec![Actor::You, Actor::Ice(1), Actor::Ice(0)]
         );
-        // And it acts: a round passes and it has looked (it is hunting, not frozen).
+        // And it acts: a round passes and it has hunted, a step toward you or a
+        // turn counted lost where no path leads into your room.
         let before = st.constructs.get(b).unwrap().guards[0].pos;
         pass_turn(&mut st, &mut s);
         let after = st.constructs.get(b).unwrap().guards[0].pos;
-        assert_ne!(before, after, "the seated piece hunts on its turn");
+        let hunted = before != after
+            || matches!(st.net.ice[&b][0].mode, crate::net::IceMode::Awake { lost, .. } if lost > 0);
+        assert!(
+            hunted,
+            "the seated piece acts on its turn: {:?}",
+            st.net.ice[&b][0]
+        );
     }
 
     #[test]
@@ -7568,5 +7581,39 @@ mod tests {
         assert!(logged(&st, "Leaving"), "{:?}", last(&st));
         s.update(&mut st, &[]);
         assert!(st.net.engaged.is_none() && s.walking.is_none() && s.aim.is_none());
+    }
+
+    #[test]
+    fn broken_ice_stays_down_through_the_alarm_and_the_alert() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let hide = room_tile(&st, b);
+        stand(&mut st, &mut s, Place::Construct(b), hide);
+        // On alert already, the gate guard is broken.
+        crate::net::raise_alarm(&mut st, b);
+        let target = game::HackTarget::Guard {
+            building: b,
+            index: 0,
+        };
+        let kind = crate::net::target_kind(&st, b, target).unwrap();
+        let now = st.net.now(&st);
+        st.net.land(b, target, kind, game::Op::Attack, now);
+        st.net.sync_guards(&mut st.constructs, b, now);
+        let down = |st: &AppState| {
+            let k = st.constructs.get(b).unwrap();
+            k.guard_at(k.guards[0].pos).is_none()
+        };
+        assert!(down(&st), "broken");
+        // A second alarm does not stand it; an alert ending early does not either.
+        crate::net::raise_alarm(&mut st, b);
+        assert!(down(&st), "the alarm leaves a broken piece broken");
+        st.net.trace(b).alert_until = Some(now + 10);
+        st.net.minute(now + 11, Some(b), &mut st.constructs);
+        assert!(down(&st), "the alert's end leaves it broken");
+        // The hour brings it back.
+        st.net
+            .minute(now + game::HACK_MINUTES, Some(b), &mut st.constructs);
+        assert!(!down(&st), "whole again after the hour");
     }
 }
