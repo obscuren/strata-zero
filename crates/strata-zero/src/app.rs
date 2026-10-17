@@ -66,6 +66,8 @@ pub struct AppState {
     pub sidebar: Sidebar,
     /// The player's flat and its rig, when the city has one.
     pub home: Option<crate::home::HomeRig>,
+    /// What the player knows: door codes, and the lost cards already laid out.
+    pub journal: crate::credentials::Journal,
 }
 
 /// One ability effect playing on the map.
@@ -135,6 +137,7 @@ impl AppState {
             log: MessageLog::default(),
             sidebar: Sidebar::default(),
             home: None,
+            journal: Default::default(),
         }
     }
 
@@ -207,6 +210,8 @@ impl AppState {
         self.interiors = Default::default();
         self.constructs = Default::default();
         self.net = Default::default();
+        self.journal = Default::default();
+        crate::credentials::purge(&mut self.content);
         self.player = None;
         self.fx.clear();
         self.deck_tab = Tab::Skills;
