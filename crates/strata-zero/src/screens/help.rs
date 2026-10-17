@@ -37,7 +37,11 @@ const WALK: &[(&str, &str)] = &[
     ("1-5", "fire an ability · jacked in: run a program"),
     ("a", "abilities: the full list"),
     ("enter", "jack in at an adjacent terminal / jack out"),
-    (".", "wait a tick"),
+    (".", "hurry the beat · in a fight: end your turn"),
+    (
+        "e",
+        "jacked in: turns by hand, and back when nothing hunts you",
+    ),
     ("tab", "open the deck"),
     ("F1-F4", "panes: here · quest · map · log"),
     ("F5 F6", "inspect · legend (dev mode)"),

@@ -311,13 +311,24 @@ impl MapScreen {
             overburdened: st.character.overburdened(&st.content),
             trace,
             hunted: jacked && crate::net::hunted(st),
-            turn: None,
+            turn: crate::net::turn_readout(st),
             run,
             ice,
             slots_label: if jacked { "PROGRAMS" } else { "ABILITIES" },
             slots,
-            hollow: false,
-            budgets: None,
+            hollow: !crate::net::your_turn(st),
+            budgets: st.net.engaged.as_ref().map(|e| {
+                if e.actor() == crate::net::Actor::You {
+                    (e.moves, crate::net::BASE_MOVE, e.ap, crate::net::BASE_AP)
+                } else {
+                    (
+                        crate::net::BASE_MOVE,
+                        crate::net::BASE_MOVE,
+                        crate::net::BASE_AP,
+                        crate::net::BASE_AP,
+                    )
+                }
+            }),
         }
     }
 
@@ -1144,8 +1155,15 @@ impl MapScreen {
                 .as_ref()
                 .is_some_and(|p| matches!(p.place, Place::Construct(_)))
         {
-            st.net.beat = st.clock_tick();
-            crate::net::beat(st);
+            if st.net.engaged.is_some() {
+                // Only your own turn ends on the key; the ICE's turns run on the pace.
+                if crate::net::your_turn(st) {
+                    crate::net::end_turn(st);
+                }
+            } else {
+                st.net.beat = st.clock_tick();
+                crate::net::beat(st);
+            }
         }
         if st.player.as_ref().map(|p| p.place) != before.map(|b| b.0) {
             self.follow_player(st);
@@ -1156,13 +1174,49 @@ impl MapScreen {
     fn handle_walk_inner(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
         let jacked = st.player.as_ref().is_some_and(|p| p.jacked_in());
         if k.code == KeyCode::Char(' ') {
-            // A run in flight: space is one more turn of it.
+            // A run in flight: space rolls it, an action point in a fight, the next
+            // beat hurried in calm.
             if jacked && st.net.run.is_some() {
-                crate::net::step_run(st);
-                crate::net::ice_turn(st);
+                if st.net.engaged.is_some() {
+                    if let Err(why) = crate::net::spend_ap(st) {
+                        st.warn(why);
+                        return Some(ScreenCmd::Stay);
+                    }
+                    crate::net::step_run(st);
+                } else {
+                    st.net.beat = st.clock_tick();
+                    crate::net::beat(st);
+                }
                 return Some(ScreenCmd::Stay);
             }
             return self.interact(st);
+        }
+        // `e`: turns by hand, and back to the beat when nothing hunts you.
+        if k.code == KeyCode::Char('e') {
+            match st.player.as_ref().map(|p| p.place) {
+                Some(Place::Construct(b)) => match st.net.engaged.as_ref() {
+                    None => crate::net::engage(st, b, true),
+                    Some(e) if e.actor() != crate::net::Actor::You => st.warn("not your turn"),
+                    Some(_) if crate::net::any_awake(st, b) => st.warn("still hunted"),
+                    Some(_) => crate::net::disengage(st),
+                },
+                _ => st.warn("nothing to engage"),
+            }
+            return Some(ScreenCmd::Stay);
+        }
+        // Not your turn: the board belongs to the ICE.
+        if st
+            .net
+            .engaged
+            .as_ref()
+            .is_some_and(|e| e.actor() != crate::net::Actor::You)
+            && !matches!(
+                k.code,
+                KeyCode::Esc | KeyCode::Char('q' | '?' | 'm' | ':' | '`')
+            )
+        {
+            st.warn("not your turn");
+            return Some(ScreenCmd::Stay);
         }
         if k.code == KeyCode::Enter
             && st.player.as_ref().is_some_and(|p| !p.jacked_in())
@@ -1208,6 +1262,21 @@ impl MapScreen {
             && let Some(cmd) = self.vertical(st, k.code == KeyCode::Char('>'))
         {
             return Some(cmd);
+        }
+        // In a fight a step onto open ground costs a move.
+        if let Some(dir) = dir_for(k.code)
+            && st.net.engaged.is_some()
+        {
+            let open = {
+                let city = st.city.as_ref()?;
+                let player = st.player.as_ref()?;
+                MapRef::for_place(city, &st.interiors, &st.constructs, player.place)
+                    .is_some_and(|m| m.walkable(player.pos.step(dir)))
+            };
+            if open && let Err(why) = crate::net::spend_move(st) {
+                st.warn(why);
+                return Some(ScreenCmd::Stay);
+            }
         }
         let dev = st.dev;
         let bonus = st.sight_bonus();
@@ -1406,12 +1475,17 @@ impl Screen for MapScreen {
         st.net.minute(now, inside, &mut st.constructs);
         // The beat of a calm construct: one per frame at most, so a long menu is
         // never a burst of rolls.
-        if self.mode == Mode::Walk
-            && inside.is_some()
-            && st.clock_tick() >= st.net.beat + crate::net::BEAT_TICKS
-        {
-            st.net.beat = st.clock_tick();
-            crate::net::beat(st);
+        if self.mode == Mode::Walk && inside.is_some() {
+            if st.net.engaged.is_some() {
+                crate::net::ice_pace(st);
+            } else if st.clock_tick() >= st.net.beat + crate::net::BEAT_TICKS {
+                st.net.beat = st.clock_tick();
+                crate::net::beat(st);
+            }
+        }
+        // Out of the construct, out of the fight.
+        if inside.is_none() && st.net.engaged.is_some() {
+            crate::net::disengage(st);
         }
         self.refresh_placement(st);
         ScreenCmd::Stay
@@ -3094,8 +3168,24 @@ mod tests {
         }
         s.place = place;
         s.cam.snap(pos);
-        // A wait refreshes sight on the new map.
+        // A wait refreshes sight on the new map; in a fight it ends your turn and the
+        // ICE plays its turns out, so a stand is a round as a wait is a beat.
         s.update(st, &[key(KeyCode::Char('.'))]);
+        settle(st, s);
+    }
+
+    /// Lets the ICE play its turns out on the pace until the order is back to you
+    /// or the fight ends.
+    fn settle(st: &mut AppState, s: &mut MapScreen) {
+        use crate::net::PACE_TICKS;
+        for _ in 0..80 {
+            if crate::net::your_turn(st) {
+                return;
+            }
+            st.tick += PACE_TICKS;
+            s.update(st, &[]);
+        }
+        panic!("the ICE never gave the turn back: {:?}", st.net.engaged);
     }
 
     fn player(st: &AppState) -> (Place, Pos) {
@@ -4142,12 +4232,8 @@ mod tests {
         stand(&mut st, &mut s, Place::Construct(b), here);
         crate::screens::console::run(&mut st, at, "alarm").unwrap();
         assert!(st.player.as_ref().unwrap().jacked_in());
-        s.update(&mut st, &[key(KeyCode::Char('.'))]);
-        assert!(
-            last(&st).is_some_and(|l| l.starts_with("grey ICE hits")),
-            "{:?}",
-            last(&st)
-        );
+        advance(&mut st, &mut s);
+        assert!(logged(&st, "grey ICE hits"), "{:?}", last(&st));
         // The alert ends: heat zero, the guards stand again but the backdoor's gate guard.
         let now = st.net.now(&st);
         st.net
@@ -4307,7 +4393,7 @@ mod tests {
         crate::net::start_run(&mut st, ItemId::new("copy"), game::HackTarget::Node(server))
             .unwrap();
         for _ in 0..4 {
-            s.update(&mut st, &[key(KeyCode::Char('.'))]);
+            roll(&mut st, &mut s);
         }
         assert_eq!(
             st.character.count(&ItemId::new("paydata")),
@@ -4470,12 +4556,13 @@ mod tests {
             ice.mode
         );
         let before = st.constructs.get(b).unwrap().guards[0].pos;
-        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert!(st.net.engaged.is_some(), "seen: the fight is on");
+        pass_turn(&mut st, &mut s);
         let after = st.constructs.get(b).unwrap().guards[0].pos;
         assert_eq!(
             after.chebyshev(seen_at),
-            before.chebyshev(seen_at) - 1,
-            "one tile a turn"
+            (before.chebyshev(seen_at) - 2).max(1),
+            "two tiles a turn, stopping beside you"
         );
         let text = draw_screen(&s, &st, 120, 40);
         assert!(text.contains("grey ICE · hunting"), "{text}");
@@ -4484,7 +4571,7 @@ mod tests {
         let hide = room_tile(&st, b);
         stand(&mut st, &mut s, Place::Construct(b), hide);
         for _ in 0..14 {
-            s.update(&mut st, &[key(KeyCode::Char('.'))]);
+            advance(&mut st, &mut s);
             let p = st.constructs.get(b).unwrap().guards[0].pos;
             assert!(!room.contains(p), "ICE in the room at {p:?}");
         }
@@ -4542,12 +4629,7 @@ mod tests {
             Place::Construct(b),
             Pos::new(post.x - 1, post.y),
         );
-        assert_eq!(
-            last(&st),
-            Some("white ICE hits · heat 5"),
-            "{:?}",
-            last(&st)
-        );
+        assert!(logged(&st, "white ICE hits · heat 5"), "{:?}", last(&st));
         assert_eq!(st.net.traces[&b].heat, 5);
         // Grey: ten less the deck's rating a hit, a dump at zero.
         let mut st = state8();
@@ -4560,20 +4642,15 @@ mod tests {
             Place::Construct(b),
             Pos::new(post.x - 1, post.y),
         );
-        assert_eq!(
-            last(&st),
-            Some("grey ICE hits · focus 21"),
-            "{:?}",
-            last(&st)
-        );
+        assert!(logged(&st, "grey ICE hits · focus 21"), "{:?}", last(&st));
         assert_eq!(st.character.focus, 21);
         for _ in 0..2 {
-            s.update(&mut st, &[key(KeyCode::Char('.'))]);
+            pass_turn(&mut st, &mut s);
         }
         assert_eq!(st.character.focus, 3);
-        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        pass_turn(&mut st, &mut s);
         assert_eq!(st.character.focus, 0);
-        assert_eq!(last(&st), Some("DUMPED · grey ICE drained you"));
+        assert!(logged(&st, "DUMPED · grey ICE drained you"));
         assert!(!st.player.as_ref().unwrap().jacked_in());
     }
 
@@ -4644,22 +4721,22 @@ mod tests {
             index: 0,
         };
         crate::net::start_run(&mut st, ItemId::new("attack"), target).unwrap();
+        assert!(
+            st.net.engaged.is_some(),
+            "pointing an attack at a piece is the fight"
+        );
         let focus = st.character.focus;
-        s.update(&mut st, &[key(KeyCode::Char('.'))]);
-        let log: Vec<String> = st
-            .log
-            .iter()
-            .rev()
-            .take(3)
-            .map(|e| e.text.clone())
-            .collect();
-        assert!(log.iter().any(|l| l == "attack · grey ICE 4/6"), "{log:?}");
-        assert!(log.iter().any(|l| l == "shield absorbs the hit"), "{log:?}");
+        roll(&mut st, &mut s);
+        assert_eq!(last(&st), Some("attack · grey ICE 4/6"));
+        pass_turn(&mut st, &mut s);
+        assert!(logged(&st, "shield absorbs the hit"));
         assert_eq!(st.character.focus, focus);
         assert_eq!(st.net.shield, 0);
-        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        roll(&mut st, &mut s);
+        assert_eq!(last(&st), Some("attack · grey ICE 2/6"));
+        pass_turn(&mut st, &mut s);
         assert_eq!(st.character.focus, focus - 9);
-        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        roll(&mut st, &mut s);
         assert_eq!(last(&st), Some("grey ICE broken"), "{:?}", last(&st));
         assert!(st.net.run.is_none());
         let k = st.constructs.get(b).unwrap();
@@ -4677,7 +4754,7 @@ mod tests {
             .minute(now + game::HACK_MINUTES, None, &mut st.constructs);
         let k = st.constructs.get(b).unwrap();
         assert_eq!(k.guard_at(k.guards[0].pos), Some(0));
-        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        advance(&mut st, &mut s);
         assert_eq!(st.net.ice[&b][0].integrity, 6, "whole again");
         // The RUN popup offers the deck programs on yourself.
         let ScreenCmd::Push { to: run, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))]) else {
@@ -4721,14 +4798,15 @@ mod tests {
         stand(&mut st, &mut s, Place::Construct(b), beside_vault);
         // 6 + (230 − 230) / 5, less the deck's rating.
         assert_eq!(st.character.hp, hp_max - 5, "{:?}", last(&st));
-        assert_eq!(
-            last(&st),
-            Some(format!("black ICE hits · hp {}", hp_max - 5).as_str())
-        );
+        assert!(logged(&st, &format!("black ICE hits · hp {}", hp_max - 5)));
         // Already under a quarter: the next hit dumps, it does not kill.
         st.character.hp = hp_max / 4;
-        s.update(&mut st, &[key(KeyCode::Char('.'))]);
-        assert_eq!(last(&st), Some("DUMPED · the failsafe pulled you out"));
+        pass_turn(&mut st, &mut s);
+        assert!(
+            logged(&st, "DUMPED · the failsafe pulled you out"),
+            "{:?}",
+            last(&st)
+        );
         assert!(!st.player.as_ref().unwrap().jacked_in());
         assert_eq!(st.character.hp, hp_max / 4 - 5, "the hp stays lost");
         let now = st.net.now(&st);
@@ -4803,7 +4881,7 @@ mod tests {
         );
         stand(&mut st, &mut s, Place::Construct(b), hide);
         for _ in 0..4 {
-            s.update(&mut st, &[key(KeyCode::Char('.'))]);
+            advance(&mut st, &mut s);
         }
         assert_eq!(st.net.mask, 0, "six turns and it is gone");
         assert_eq!(
@@ -4920,7 +4998,7 @@ mod tests {
             index: 0,
         };
         crate::net::start_run(&mut st, ItemId::new("attack"), target).unwrap();
-        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        roll(&mut st, &mut s);
         assert_eq!(st.net.ice[&b][0].integrity, 4, "{:?}", last(&st));
         assert!(
             matches!(st.net.ice[&b][0].mode, crate::net::IceMode::Awake { seen, .. } if seen == door_side),
@@ -4931,7 +5009,7 @@ mod tests {
         let far = st.constructs.get(b).unwrap().guards[0].post;
         st.constructs.get_mut(b).unwrap().move_guard(0, far);
         st.net.ice.get_mut(&b).unwrap()[0].mode = crate::net::IceMode::Asleep;
-        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        roll(&mut st, &mut s);
         assert_eq!(last(&st), Some("attack · out of reach"), "{:?}", last(&st));
         assert!(st.net.run.is_none());
         assert_eq!(st.net.ice[&b][0].integrity, 4);
@@ -4949,7 +5027,8 @@ mod tests {
         stand(&mut st, &mut s, Place::Construct(b), beside_vault);
         assert!(st.net.death.is_some());
         // No piece acts on a corpse: no dump, the body stays where it fell this frame.
-        assert_eq!(last(&st), Some("black ICE hits · hp 0"));
+        assert!(logged(&st, "black ICE hits · hp 0"), "{:?}", last(&st));
+        assert!(st.net.engaged.is_none(), "no fight over a corpse");
         let ScreenCmd::Switch { to: mut dead, .. } = s.update(&mut st, &[]) else {
             panic!("death switches the screen")
         };
@@ -5223,7 +5302,7 @@ mod tests {
             .log
             .iter()
             .rev()
-            .take(3)
+            .take(6)
             .map(|e| e.text.clone())
             .collect();
         assert!(
@@ -5235,7 +5314,7 @@ mod tests {
         assert!(st.net.alert(b, now), "the alarm had tripped on the way up");
         // The second time is real.
         st.net.trace(b).heat = 98;
-        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        roll(&mut st, &mut s);
         assert!(!st.player.as_ref().unwrap().jacked_in(), "dumped");
     }
 
@@ -5300,7 +5379,9 @@ mod tests {
         st.net.mask = 2;
         st.net.trace(b).heat = 99;
         let far = room_tile(&st, b);
-        stand(&mut st, &mut s, Place::Construct(b), far);
+        st.player.as_mut().unwrap().pos = far;
+        // The mask wears at the start of your next turn: the round routes it away.
+        advance(&mut st, &mut s);
         assert!(st.player.as_ref().unwrap().jacked_in(), "{:?}", last(&st));
         assert_eq!(st.net.traces[&b].heat, game::ALARM_HEAT);
     }
@@ -5318,15 +5399,20 @@ mod tests {
         stand(&mut st, &mut s, Place::Construct(b), beside_vault);
         // 6 + (255 − 230) / 5 = 11, less the deck's rating 1, halved: 5.
         assert_eq!(st.character.hp, hp_max - 5, "{:?}", last(&st));
-        // Under a quarter but over an eighth: no failsafe yet.
-        st.character.hp = hp_max / 4;
-        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        // Two hits a turn, ten in all: from a quarter plus five you land over the
+        // eighth, no failsafe yet.
+        st.character.hp = hp_max / 4 + 5;
+        pass_turn(&mut st, &mut s);
         assert!(st.player.as_ref().unwrap().jacked_in(), "{:?}", last(&st));
         assert_eq!(st.character.hp, hp_max / 4 - 5);
         // At the eighth it pulls, and cools ten minutes.
         st.character.hp = hp_max / 8 + 5;
-        s.update(&mut st, &[key(KeyCode::Char('.'))]);
-        assert_eq!(last(&st), Some("DUMPED · the failsafe pulled you out"));
+        pass_turn(&mut st, &mut s);
+        assert!(
+            logged(&st, "DUMPED · the failsafe pulled you out"),
+            "{:?}",
+            last(&st)
+        );
         let now = st.net.now(&st);
         assert_eq!(st.net.cooling(now), Some(crate::net::DEEP_END_COOLING));
         assert_eq!(crate::net::DEEP_END_COOLING, 10);
@@ -5432,20 +5518,12 @@ mod tests {
         );
         // The alarm wakes a stunned piece, and it still waits out the stun.
         crate::net::raise_alarm(&mut st, b);
-        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        advance(&mut st, &mut s);
         assert_eq!(st.net.ice[&b][0].stunned, 0);
-        assert!(
-            last(&st).is_none_or(|l| !l.contains("ICE hits")),
-            "{:?}",
-            last(&st)
-        );
+        assert!(!logged(&st, "ICE hits"), "{:?}", last(&st));
         assert_eq!((st.character.hp, st.character.focus), (hp, focus));
-        s.update(&mut st, &[key(KeyCode::Char('.'))]);
-        assert!(
-            last(&st).unwrap().contains("grey ICE hits"),
-            "{:?}",
-            last(&st)
-        );
+        advance(&mut st, &mut s);
+        assert!(logged(&st, "grey ICE hits"), "{:?}", last(&st));
     }
 
     #[test]
@@ -5891,6 +5969,404 @@ mod tests {
         assert!(
             text.contains("RUN  crack · door lock  ▱▱▱ 0/3 · 40%   ▓▓▓▓░░░░  next roll"),
             "{text}"
+        );
+    }
+
+    fn logged(st: &AppState, needle: &str) -> bool {
+        st.log.iter().any(|e| e.text.contains(needle))
+    }
+
+    /// One roll of the run in flight: a hurried beat in calm, an action point in a
+    /// fight (the turn passes first when none is left).
+    fn roll(st: &mut AppState, s: &mut MapScreen) {
+        if st.net.engaged.is_none() {
+            s.update(st, &[key(KeyCode::Char('.'))]);
+            return;
+        }
+        if st.net.engaged.as_ref().is_some_and(|e| e.ap == 0) || !crate::net::your_turn(st) {
+            pass_turn(st, s);
+        }
+        if st.net.engaged.is_some() {
+            s.update(st, &[key(KeyCode::Char(' '))]);
+        } else {
+            s.update(st, &[key(KeyCode::Char('.'))]);
+        }
+    }
+
+    /// Time passes: a beat in calm, a whole round in a fight.
+    fn advance(st: &mut AppState, s: &mut MapScreen) {
+        if st.net.engaged.is_some() {
+            pass_turn(st, s);
+        } else {
+            s.update(st, &[key(KeyCode::Char('.'))]);
+        }
+    }
+
+    /// Ends your turn and lets the ICE play its turns out on the pace until the
+    /// order comes back to you or the fight ends.
+    fn pass_turn(st: &mut AppState, s: &mut MapScreen) {
+        s.update(st, &[key(KeyCode::Char('.'))]);
+        settle(st, s);
+    }
+
+    fn engaged_at_the_gate(st: &mut AppState, s: &mut MapScreen) -> citygen::BuildingId {
+        let b = in_construct(st, s);
+        let entry = st.constructs.get(b).unwrap().entry;
+        // On the spine in the gate guard's sight: the first beat wakes it.
+        stand(st, s, Place::Construct(b), entry);
+        assert!(st.net.engaged.is_some(), "{:?}", last(st));
+        b
+    }
+
+    #[test]
+    fn a_wake_puts_the_construct_on_turns_with_an_order() {
+        use crate::net::{Actor, BASE_AP, BASE_MOVE};
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = engaged_at_the_gate(&mut st, &mut s);
+        let e = st.net.engaged.clone().unwrap();
+        assert_eq!(e.building, b);
+        assert_eq!(e.round, 1);
+        assert_eq!(e.order.len(), 3, "{:?}", e.order);
+        assert_eq!(e.order[0], Actor::You, "ties go to you: {:?}", e.order);
+        assert_eq!(&e.order[1..], &[Actor::Ice(0), Actor::Ice(1)]);
+        assert_eq!((e.moves, e.ap), (BASE_MOVE, BASE_AP));
+        assert!(!e.manual);
+        let text = draw_screen(&s, &st, 140, 40);
+        assert!(text.contains("TURN 1  YOU › grey ICE › grey ICE"), "{text}");
+        assert!(text.contains("MOVE ▰▰▰▰ 4/4    AP ●● 2/2"), "{text}");
+        assert!(logged(&st, "ENGAGED · the ICE is on you"));
+    }
+
+    #[test]
+    fn initiative_puts_black_ice_before_grey_and_you_before_a_tie() {
+        use crate::net::{Actor, initiative};
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct_at(&mut st, &mut s, 255);
+        // The deck adds one Net: at a base of 0 you score 1, under grey's 2 and black's 3.
+        st.character.stats.net = 0;
+        let order = initiative(&st, b);
+        assert_eq!(
+            order,
+            vec![Actor::Ice(1), Actor::Ice(0), Actor::You],
+            "black 3, grey 2, you 1"
+        );
+        // At 3 you tie black and the tie is yours.
+        st.character.stats.net = 2;
+        assert_eq!(
+            initiative(&st, b),
+            vec![Actor::You, Actor::Ice(1), Actor::Ice(0)]
+        );
+    }
+
+    #[test]
+    fn your_keys_spend_the_pools_and_the_dot_ends_your_turn() {
+        use crate::net::{BASE_AP, BASE_MOVE};
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let (b, _) = lock_run(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert!(st.net.engaged.as_ref().is_some_and(|e| e.manual));
+        // Steps inside the room spend moves; the fifth is refused.
+        let here = player(&st).1;
+        let k = st.constructs.get(b).unwrap().clone();
+        let there = here
+            .neighbors4()
+            .find(|p| k.tiles.get(*p).is_some_and(|t| t.is_walkable()) && k.node_at(*p).is_none())
+            .expect("room to step in");
+        let (go, back) = (dir_between(here, there), dir_between(there, here));
+        for (n, d) in [go, back, go, back].into_iter().enumerate() {
+            s.update(&mut st, &[key(d)]);
+            assert_eq!(
+                st.net.engaged.as_ref().unwrap().moves,
+                BASE_MOVE - 1 - n as u8
+            );
+        }
+        s.update(&mut st, &[key(go)]);
+        assert_eq!(last(&st), Some("no moves left"));
+        assert_eq!(player(&st).1, here, "refused: not moved");
+        // A program starts for free and rolls per action point.
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        assert_eq!(last(&st), Some("crack starts · 3 turns"));
+        assert_eq!(st.net.engaged.as_ref().unwrap().ap, BASE_AP);
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(last(&st), Some("crack 1/3"));
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(last(&st), Some("crack 2/3"));
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(last(&st), Some("no AP left"));
+        assert_eq!(st.net.run.as_ref().map(|r| r.done), Some(2));
+        // Ending the turn brings a fresh turn back, nothing awake, still engaged by hand.
+        pass_turn(&mut st, &mut s);
+        let e = st.net.engaged.as_ref().unwrap();
+        assert_eq!((e.moves, e.ap, e.round), (BASE_MOVE, BASE_AP, 2));
+    }
+
+    #[test]
+    fn an_ice_turn_steps_on_the_pace_then_hits_per_action_point() {
+        use crate::net::{Actor, PACE_TICKS};
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        // At the gate, two tiles from the guard's post, with no beat yet: the alarm
+        // wakes it and the fight starts with it still at its post.
+        let me = st.constructs.get(b).unwrap().entry;
+        {
+            let p = st.player.as_mut().unwrap();
+            p.place = Place::Construct(b);
+            p.pos = me;
+        }
+        s.place = Place::Construct(b);
+        crate::net::raise_alarm(&mut st, b);
+        assert!(st.net.engaged.is_some());
+        assert!(crate::net::your_turn(&st));
+        // Your turn: do nothing, end it. The gate guard (grey: 2 moves, 1 AP) comes.
+        let start = st.constructs.get(b).unwrap().guards[0].pos;
+        let d0 = start.chebyshev(me);
+        assert_eq!(d0, 2, "the guard starts {d0} tiles off");
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(st.net.engaged.as_ref().unwrap().actor(), Actor::Ice(0));
+        s.update(&mut st, &[]);
+        assert_eq!(
+            st.constructs.get(b).unwrap().guards[0].pos,
+            start,
+            "nothing before the pace"
+        );
+        st.tick += PACE_TICKS;
+        s.update(&mut st, &[]);
+        let after_one = st.constructs.get(b).unwrap().guards[0].pos;
+        assert_eq!(after_one.chebyshev(me), d0 - 1, "one tile a pace");
+        let text = draw_screen(&s, &st, 140, 40);
+        assert!(
+            text.contains("grey ICE moves 1") || text.contains("grey ICE hits"),
+            "{text}"
+        );
+        assert!(
+            text.contains("[1] CRACK ○"),
+            "hollow keys on its turn: {text}"
+        );
+        s.update(&mut st, &[key(KeyCode::Char('h'))]);
+        assert_eq!(last(&st), Some("not your turn"));
+        let focus = st.character.focus;
+        for _ in 0..3 {
+            st.tick += PACE_TICKS;
+            s.update(&mut st, &[]);
+        }
+        if d0 <= 3 {
+            assert_eq!(
+                st.character.focus,
+                focus - 9,
+                "beside you at the end of its moves: one hit"
+            );
+        }
+        // The second grey's turn and then back to you.
+        for _ in 0..8 {
+            if crate::net::your_turn(&st) {
+                break;
+            }
+            st.tick += PACE_TICKS;
+            s.update(&mut st, &[]);
+        }
+        assert!(crate::net::your_turn(&st));
+        assert_eq!(st.net.engaged.as_ref().unwrap().round, 2);
+    }
+
+    #[test]
+    fn black_ice_hits_twice_a_turn() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct_at(&mut st, &mut s, 255);
+        let hp_max = st.character.hp_max(&st.content);
+        let vault_guard = st.constructs.get(b).unwrap().guards[1].clone();
+        let beside_vault = Pos::new(vault_guard.post.x - 1, vault_guard.post.y);
+        // The beat that lands you there is one hit; the engagement follows.
+        stand(&mut st, &mut s, Place::Construct(b), beside_vault);
+        assert!(st.net.engaged.is_some());
+        let hp = st.character.hp;
+        assert!(hp < hp_max);
+        pass_turn(&mut st, &mut s);
+        // Black (2 AP) hit twice, the other grey once if it reached you; the failsafe
+        // did not fire above a quarter.
+        assert!(hp - st.character.hp >= 20, "{} -> {}", hp, st.character.hp);
+        assert!(st.player.as_ref().unwrap().jacked_in());
+    }
+
+    #[test]
+    fn a_stunned_piece_passes_its_turn_and_a_calm_round_ends_the_fight() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = engaged_at_the_gate(&mut st, &mut s);
+        let focus = st.character.focus;
+        assert_eq!(
+            fire(&mut st, "arc_trace").unwrap(),
+            "Arc Trace: 2 pieces stunned"
+        );
+        assert_eq!(
+            st.net.engaged.as_ref().unwrap().ap,
+            crate::net::BASE_AP - 1,
+            "a pulse is an action"
+        );
+        let before: Vec<Pos> = st
+            .constructs
+            .get(b)
+            .unwrap()
+            .guards
+            .iter()
+            .map(|g| g.pos)
+            .collect();
+        pass_turn(&mut st, &mut s);
+        let after: Vec<Pos> = st
+            .constructs
+            .get(b)
+            .unwrap()
+            .guards
+            .iter()
+            .map(|g| g.pos)
+            .collect();
+        assert_eq!(before, after, "stunned pieces neither move nor hit");
+        assert_eq!(st.character.focus, focus);
+        assert_eq!(st.net.ice[&b][0].stunned, 1);
+        // Hidden in a room with everything asleep, a round passes: back to the beat.
+        let hide = room_tile(&st, b);
+        st.player.as_mut().unwrap().pos = hide;
+        for i in st.net.ice.get_mut(&b).unwrap() {
+            i.mode = crate::net::IceMode::Asleep;
+            i.stunned = 0;
+        }
+        pass_turn(&mut st, &mut s);
+        assert!(st.net.engaged.is_none(), "calm again");
+        assert_eq!(last(&st), Some("calm"));
+    }
+
+    #[test]
+    fn e_switches_by_hand_and_is_refused_while_hunted() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let hide = room_tile(&st, b);
+        stand(&mut st, &mut s, Place::Construct(b), hide);
+        assert!(st.net.engaged.is_none());
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert!(st.net.engaged.as_ref().is_some_and(|e| e.manual));
+        pass_turn(&mut st, &mut s);
+        assert!(st.net.engaged.is_some(), "by hand it stays on");
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert!(st.net.engaged.is_none());
+        // Hunted: no way back to calm by hand.
+        st.net.wake_all(b, hide);
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert!(st.net.engaged.is_some());
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert_eq!(last(&st), Some("still hunted"));
+        assert!(st.net.engaged.is_some());
+        // During a piece's turn the key is refused too.
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert!(!crate::net::your_turn(&st));
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert_eq!(last(&st), Some("not your turn"));
+        assert!(st.net.engaged.is_some());
+        // On the grid there is nothing to engage.
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        on_the_grid(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert_eq!(last(&st), Some("nothing to engage"));
+    }
+
+    #[test]
+    fn jacking_out_a_dump_and_leaving_end_the_engagement() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        engaged_at_the_gate(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert!(!st.player.as_ref().unwrap().jacked_in());
+        s.update(&mut st, &[]);
+        assert!(st.net.engaged.is_none(), "jacked out: no fight");
+        // A dump mid-turn: nobody acts on a body on the street.
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = engaged_at_the_gate(&mut st, &mut s);
+        st.net.trace(b).heat = 99;
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert!(!st.player.as_ref().unwrap().jacked_in(), "{:?}", last(&st));
+        assert!(st.net.engaged.is_none());
+        let hp = st.character.hp;
+        for _ in 0..5 {
+            st.tick += crate::net::PACE_TICKS;
+            s.update(&mut st, &[]);
+        }
+        assert_eq!(st.character.hp, hp);
+    }
+
+    #[test]
+    fn the_run_keeps_its_progress_across_calm_and_turns() {
+        use crate::net::BEAT_TICKS;
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        lock_run(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(last(&st), Some("crack 1/3"));
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(st.net.run.as_ref().map(|r| r.done), Some(2));
+        let text = draw_screen(&s, &st, 140, 40);
+        assert!(
+            text.contains("RUN  crack · door lock  ▰▰▱ 2/3") && !text.contains("next roll"),
+            "{text}"
+        );
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert!(st.net.engaged.is_none());
+        st.tick += BEAT_TICKS;
+        s.update(&mut st, &[]);
+        assert!(
+            last(&st).unwrap().contains("lock cracked"),
+            "{:?}",
+            last(&st)
+        );
+    }
+
+    #[test]
+    fn the_console_engages_and_calms_by_hand() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let hide = room_tile(&st, b);
+        stand(&mut st, &mut s, Place::Construct(b), hide);
+        let at = game::At {
+            place: Place::Construct(b),
+            pos: hide,
+        };
+        assert_eq!(
+            crate::screens::console::run(&mut st, at, "engage").unwrap(),
+            "engaged by hand"
+        );
+        assert!(st.net.engaged.as_ref().is_some_and(|e| e.manual));
+        assert_eq!(
+            crate::screens::console::run(&mut st, at, "engage").unwrap(),
+            "already engaged"
+        );
+        assert_eq!(
+            crate::screens::console::run(&mut st, at, "calm").unwrap(),
+            "calm"
+        );
+        assert!(st.net.engaged.is_none());
+        assert_eq!(
+            crate::screens::console::run(&mut st, at, "calm").unwrap(),
+            "already calm"
+        );
+        st.net.wake_all(b, hide);
+        crate::screens::console::run(&mut st, at, "engage").unwrap();
+        assert_eq!(
+            crate::screens::console::run(&mut st, at, "calm").unwrap_err(),
+            "still hunted"
+        );
+        on_the_grid(&mut st, &mut s);
+        assert_eq!(
+            crate::screens::console::run(&mut st, at, "engage").unwrap_err(),
+            "not in a construct"
         );
     }
 }

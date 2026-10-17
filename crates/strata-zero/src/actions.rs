@@ -24,6 +24,9 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         _ => None,
     };
     let refresh_sight = matches!(action, Action::Equip(_) | Action::Unequip(_));
+    if fired.is_some() {
+        crate::net::spend_ap(st)?;
+    }
     let outcome = game::apply(
         &mut st.character,
         &mut st.ground,
