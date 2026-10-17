@@ -125,7 +125,7 @@ pub fn glyph_for(
                 Furniture::Couch => '▬',
                 Furniture::Shower => '≋',
                 Furniture::Bench => '╥',
-                Furniture::Vending => '▣',
+                Furniture::Vending => '◘',
                 Furniture::Bike => 'ꝺ',
             },
         };
@@ -278,7 +278,7 @@ pub fn legend_entries(k: StratumKind) -> Vec<(char, &'static str)> {
             ('≋', "shower"),
             ('▔', "awning"),
             ('╥', "bench"),
-            ('▣', "vending machine"),
+            ('◘', "vending machine"),
             ('ꝺ', "bike"),
             ('◉', "camera"),
             ('~', "puddle/water"),
@@ -540,7 +540,7 @@ mod tests {
             (Furniture::Couch, '▬'),
             (Furniture::Shower, '≋'),
             (Furniture::Bench, '╥'),
-            (Furniture::Vending, '▣'),
+            (Furniture::Vending, '◘'),
             (Furniture::Bike, 'ꝺ'),
         ] {
             let f = Some(Feature::Furniture(piece));
