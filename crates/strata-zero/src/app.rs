@@ -211,7 +211,8 @@ impl AppState {
         self.constructs = Default::default();
         self.net = Default::default();
         self.journal = Default::default();
-        crate::credentials::purge(&mut self.content);
+        crate::credentials::purge(&mut self.content, &mut self.character);
+        self.ground = Default::default();
         self.player = None;
         self.fx.clear();
         self.deck_tab = Tab::Skills;

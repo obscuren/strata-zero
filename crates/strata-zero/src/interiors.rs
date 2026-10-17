@@ -25,6 +25,8 @@ pub struct Interiors {
 /// Which household lives in which flat of one building: stable, in or out.
 #[derive(Clone, Debug, Default)]
 pub struct Homes {
+    /// Every flat in the building, lived in or not, in assignment order.
+    all: Vec<(i32, u16)>,
     by_household: BTreeMap<HouseholdId, (i32, u16)>,
     /// The households in a flat; the first is the owner.
     residents: BTreeMap<(i32, u16), Vec<HouseholdId>>,
@@ -35,8 +37,11 @@ pub struct Homes {
 impl Homes {
     /// Household `i` takes flat `i mod flats` of the given order; flats are shared
     /// only once every flat has a household.
-    fn new(b: BuildingId, flats: Vec<(i32, u16)>, world: &World) -> Homes {
-        let mut homes = Homes::default();
+    pub(crate) fn new(b: BuildingId, flats: Vec<(i32, u16)>, world: &World) -> Homes {
+        let mut homes = Homes {
+            all: flats.clone(),
+            ..Homes::default()
+        };
         if flats.is_empty() {
             return homes;
         }
@@ -75,7 +80,18 @@ impl Homes {
         self.by_household.iter().map(|(h, f)| (*h, *f))
     }
 
+    /// The person a household's card is named after.
+    pub fn head_of(&self, household: HouseholdId) -> Option<PersonId> {
+        self.heads.get(&household).copied()
+    }
+
+    /// Every flat in the building, lived in or not.
+    pub fn all_flats(&self) -> impl Iterator<Item = (i32, u16)> + '_ {
+        self.all.iter().copied()
+    }
+
     /// The flats somebody lives in, in level-then-number order.
+    #[cfg(test)]
     pub fn flats(&self) -> impl Iterator<Item = (i32, u16)> + '_ {
         self.residents.keys().copied()
     }
@@ -172,6 +188,11 @@ impl Interiors {
 
     pub fn homes_of(&self, b: BuildingId) -> Option<&Homes> {
         self.homes.get(&b)
+    }
+
+    #[cfg(test)]
+    pub fn set_homes(&mut self, b: BuildingId, homes: Homes) {
+        self.homes.insert(b, homes);
     }
 
     #[cfg(test)]

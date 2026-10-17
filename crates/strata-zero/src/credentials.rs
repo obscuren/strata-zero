@@ -89,11 +89,16 @@ pub fn opens(st: &AppState, b: BuildingId, level: i32, number: u16) -> Option<Ho
     if st.net.unlocked(b, st.net.now(st)) {
         return Some(How::Cracked);
     }
-    let household = st
-        .interiors
-        .homes_of(b)
-        .and_then(|h| h.household_of(level, number));
-    if household.is_some_and(|h| st.character.count(&keycard_id(b, h)) > 0) {
+    let held = st
+        .character
+        .inventory
+        .iter()
+        .filter_map(|s| parse_keycard(&s.item));
+    if let Some(homes) = st.interiors.homes_of(b)
+        && held
+            .into_iter()
+            .any(|(cb, h)| cb == b && homes.flat_of(h) == Some((level, number)))
+    {
         return Some(How::Keycard);
     }
     st.journal
@@ -125,12 +130,12 @@ pub fn stock(st: &mut AppState, b: BuildingId) {
         return;
     };
     let building = crate::net::building_name(st, b);
-    for (h, (level, number)) in homes.households() {
+    for (h, (_, number)) in homes.households() {
         let id = keycard_id(b, h);
         if st.content.item(&id).is_some() {
             continue;
         }
-        let Some(owner) = homes.owner_of(level, number) else {
+        let Some(owner) = homes.head_of(h) else {
             continue;
         };
         let Some(name) = st
@@ -251,7 +256,7 @@ pub fn copy_codes(st: &mut AppState, b: BuildingId, now: u64) -> Option<usize> {
     let homes = st.interiors.homes_of(b).filter(|h| !h.is_empty())?.clone();
     let seed = st.city.as_ref()?.seed;
     let mut new = 0;
-    for (level, number) in homes.flats() {
+    for (level, number) in homes.all_flats() {
         let learned = st.journal.learn(Code {
             building: b,
             level,
@@ -335,7 +340,7 @@ fn owner_name(st: &AppState, b: BuildingId, level: i32, number: u16) -> Option<S
 fn whose_flat(st: &AppState, b: BuildingId, level: i32, number: u16) -> String {
     owner_name(st, b, level, number)
         .map(|n| format!("`{n}`'s flat"))
-        .unwrap_or_else(|| "a flat".to_string())
+        .unwrap_or_else(|| "empty flat".to_string())
 }
 
 /// The journal, grouped per building: (building, header, entries). Codes first,
@@ -344,7 +349,10 @@ fn whose_flat(st: &AppState, b: BuildingId, level: i32, number: u16) -> String {
 pub fn entries(st: &AppState) -> Vec<(BuildingId, String, Vec<Entry>)> {
     let mut by: BTreeMap<BuildingId, Vec<Entry>> = BTreeMap::new();
     for c in st.journal.codes() {
-        let whose = whose_flat(st, c.building, c.level, c.number);
+        let whose = match c.source {
+            Source::Home => "your flat".to_string(),
+            Source::ServerCopy => whose_flat(st, c.building, c.level, c.number),
+        };
         let from = match c.source {
             Source::ServerCopy => format!("copied off the server, {}", stamp(c.at)),
             Source::Home => "your own door".to_string(),
@@ -432,9 +440,12 @@ pub fn entries(st: &AppState) -> Vec<(BuildingId, String, Vec<Entry>)> {
     groups
 }
 
-/// Drops every keycard of a previous city from the catalogue.
-pub fn purge(content: &mut game::Content) {
+/// Drops every keycard of a previous city from the catalogue and the pack.
+pub fn purge(content: &mut game::Content, character: &mut game::Character) {
     content.items.retain(|i| !i.id.0.starts_with("keycard:"));
+    character
+        .inventory
+        .retain(|s| !s.item.0.starts_with("keycard:"));
 }
 
 #[cfg(test)]
@@ -753,5 +764,129 @@ mod tests {
         );
         assert_eq!(stamp(0), "day 1 22:00");
         assert_eq!(stamp(120), "day 2 00:00");
+    }
+
+    #[test]
+    fn a_server_copy_covers_empty_flats_too() {
+        let (mut st, b) = state();
+        copy_codes(&mut st, b, 3).unwrap();
+        let plan = st.interiors.plan_of(b).unwrap().clone();
+        let mut flats = 0;
+        for level in plan.corridor_floors() {
+            let (_, floor) = st.interiors.floor(b, level).unwrap();
+            for r in floor
+                .rooms
+                .iter()
+                .filter(|r| r.kind == citygen::RoomKind::Flat)
+            {
+                flats += 1;
+                assert!(
+                    matches!(opens(&st, b, level, r.number), Some(How::Code(_))),
+                    "flat {} on level {level} has no code",
+                    r.number
+                );
+            }
+        }
+        assert_eq!(st.journal.codes().len(), flats);
+        let homes = st.interiors.homes_of(b).unwrap().clone();
+        let empty = homes
+            .all_flats()
+            .find(|f| homes.household_of(f.0, f.1).is_none());
+        if let Some((level, number)) = empty {
+            let (_, _, es) = &entries(&st)[0];
+            let e = es
+                .iter()
+                .find(|e| matches!(&e.kind, EntryKind::Code(c) if c.level == level && c.number == number))
+                .unwrap();
+            assert!(
+                e.text.contains(&format!("empty flat `{number}`")),
+                "{}",
+                e.text
+            );
+        }
+    }
+
+    #[test]
+    fn every_household_sharing_a_flat_has_a_card_that_opens_it() {
+        let (mut st, b) = state();
+        prepare(&mut st, b);
+        let (level, number) = st.interiors.homes_of(b).unwrap().flats().next().unwrap();
+        // Squeeze every household into that one flat.
+        let crowded =
+            crate::interiors::Homes::new(b, vec![(level, number)], st.world.as_ref().unwrap());
+        assert!(
+            crowded.households().count() > 1,
+            "a building with several households"
+        );
+        st.interiors.set_homes(b, crowded.clone());
+        stock(&mut st, b);
+        let second = crowded.households().map(|(h, _)| h).nth(1).unwrap();
+        assert_ne!(Some(second), crowded.household_of(level, number));
+        let world = st.world.as_ref().unwrap();
+        let head = crowded.head_of(second).unwrap();
+        let name = world.people()[head.0 as usize].name.clone();
+        let item = st.content.item(&keycard_id(b, second)).unwrap();
+        assert!(
+            item.name.contains(&name),
+            "{} should name {name}",
+            item.name
+        );
+        st.character.give(keycard_id(b, second), 1);
+        assert_eq!(opens(&st, b, level, number), Some(How::Keycard));
+    }
+
+    #[test]
+    fn a_new_city_takes_the_old_cards_out_of_the_pack_and_off_the_ground() {
+        let (mut st, b) = state();
+        prepare(&mut st, b);
+        let h = st
+            .interiors
+            .homes_of(b)
+            .unwrap()
+            .households()
+            .next()
+            .unwrap()
+            .0;
+        st.character.give(keycard_id(b, h), 1);
+        st.character.give(ItemId::new(HOME_KEYCARD), 1);
+        st.character.give(ItemId::new("paydata"), 1);
+        assert!(
+            st.ground
+                .on(citygen::Place::Floor {
+                    building: b,
+                    level: 0
+                })
+                .next()
+                .is_some()
+        );
+        st.enter_city(
+            Generator::run(GenParams {
+                seed: 9,
+                size: SizePreset::Custom { w: 120, h: 60 },
+                districts: 8,
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        assert!(
+            st.character
+                .inventory
+                .iter()
+                .all(|s| !s.item.0.starts_with("keycard:"))
+        );
+        assert_eq!(
+            st.character.count(&ItemId::new("paydata")),
+            1,
+            "other items stay"
+        );
+        assert!(
+            st.ground
+                .on(citygen::Place::Floor {
+                    building: b,
+                    level: 0
+                })
+                .next()
+                .is_none()
+        );
     }
 }
