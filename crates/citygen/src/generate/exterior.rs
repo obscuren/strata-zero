@@ -242,6 +242,15 @@ pub(crate) fn dress(ctx: &mut GenCtx, i: usize) {
             }
         }
     }
+    // Bench and terminal stand in the second row; on a pavement too narrow for
+    // one they move to the façade, a step past the lamps. The terminal, the one
+    // piece people use (it jacks into the Net), claims its spot before anything
+    // else that blocks; the vending machines and the bench take what is left.
+    let side = if rng.random_bool(0.5) { 1 } else { -1 };
+    let stand = |ctx: &mut GenCtx, f: Feature, side: i32| {
+        place(ctx, front.at(2, 3 * side), f) || place(ctx, front.at(1, 4 * side), f)
+    };
+    stand(ctx, Feature::Terminal, -side);
     for side in [-1, 1] {
         place(
             ctx,
@@ -249,15 +258,7 @@ pub(crate) fn dress(ctx: &mut GenCtx, i: usize) {
             Feature::Furniture(Furniture::Vending),
         );
     }
-    // Bench and terminal stand in the second row; on a pavement too narrow for
-    // one they move to the façade, a step past the lamps.
-    let side = if rng.random_bool(0.5) { 1 } else { -1 };
-    for (f, side) in [
-        (Feature::Furniture(Furniture::Bench), side),
-        (Feature::Terminal, -side),
-    ] {
-        let _ = place(ctx, front.at(2, 3 * side), f) || place(ctx, front.at(1, 4 * side), f);
-    }
+    stand(ctx, Feature::Furniture(Furniture::Bench), side);
 
     if let Some(back) = service_door(ctx, &b, front) {
         service(ctx, &mut rng, back);
@@ -713,7 +714,8 @@ mod tests {
 
     #[test]
     fn the_street_pieces_are_there_and_off_the_landings() {
-        let (mut seen, mut paved, mut vending, mut stalls, mut bikes) = (0, 0, 0, 0, 0);
+        let (mut seen, mut paved, mut vending, mut stalls, mut bikes, mut terminals) =
+            (0, 0, 0, 0, 0, 0);
         for Fixture { seed, city: c, .. } in mediums() {
             let st = c.stratum(K).unwrap();
             for b in megablocks(c) {
@@ -735,6 +737,14 @@ mod tests {
                 paved += usize::from(plaza >= 3);
                 vending += count(Feature::Furniture(Furniture::Vending)).min(1);
                 stalls += count(Feature::Stall).min(1);
+                let by_door = main_door(c, b).map(|d| outward(b.footprint, d)).unwrap();
+                terminals += usize::from(near.iter().any(|p| {
+                    p.chebyshev(by_door) <= 4
+                        && st
+                            .tiles
+                            .get(p)
+                            .is_some_and(|t| t.feature == Some(Feature::Terminal))
+                }));
                 bikes += count(Feature::Furniture(Furniture::Bike));
                 // The megablock's door landings stay walkable.
                 for p in b.footprint.border() {
@@ -753,11 +763,18 @@ mod tests {
             paved * 2 >= seen,
             "{paved} forecourts for {seen} megablocks"
         );
+        // The terminal takes the one blocker a one-tile kerb loop has room for,
+        // so vending machines only fit on the deeper fronts: about one in four.
         assert!(
-            vending * 2 >= seen,
+            vending * 4 >= seen,
             "{vending} vending for {seen} megablocks"
         );
         assert!(stalls * 2 >= seen, "{stalls} stalls for {seen} megablocks");
+        // The terminal claims the forecourt first, so most megablocks can jack in.
+        assert!(
+            terminals * 2 >= seen,
+            "{terminals} forecourt terminals for {seen} megablocks"
+        );
         // A one-tile kerb that loops round the block takes one blocker before
         // the next would split it, so bikes are fewer than the 3 to 5 asked for.
         assert!(bikes * 2 >= seen, "{bikes} bikes for {seen} megablocks");
