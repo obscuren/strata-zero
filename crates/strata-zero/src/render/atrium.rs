@@ -2,6 +2,7 @@
 //! through the open drop, dimmer the higher you stand. Terrain and furniture only.
 
 use crate::render::Visibility;
+use crate::render::lighting::apply_vis;
 use crate::render::map::{MapRef, TileMap};
 use crate::render::style::StylePack;
 use crate::render::tileset::{MASK_E, MASK_N, MASK_S, MASK_W, cell, connects};
@@ -17,16 +18,20 @@ pub fn look_down_scale(level: i32) -> f32 {
     (0.35 - 0.02 * (level - 1).max(0) as f32).max(0.12)
 }
 
-/// The faintest a plaza glyph is drawn (luminance out of 255): the bare floor's dots
-/// still read from the top of the tallest megablock, well under a lit walkway.
+/// The faintest a plaza glyph seen right now is drawn (luminance out of 255): the
+/// bare floor's dots still read from the top of the tallest megablock.
 const MIN_LUMA: f32 = 22.0;
+
+/// How far under the walkway at the same spot a plaza glyph may reach, as a share
+/// of the walkway's luminance.
+const UNDER_WALKWAY: f32 = 0.85;
 
 fn luma(c: Rgb) -> f32 {
     0.2126 * c.0 as f32 + 0.7152 * c.1 as f32 + 0.0722 * c.2 as f32
 }
 
-/// A plaza glyph's colour from `level`: scaled down by height, but never under
-/// [`MIN_LUMA`] (nor brighter than it was), so the floor stays faint, not black.
+/// A plaza glyph's colour from `level`, seen now: scaled down by height, but never
+/// under [`MIN_LUMA`] (nor brighter than it was), so the floor stays faint, not black.
 pub fn look_down_fg(fg: Rgb, level: i32) -> Rgb {
     let l = luma(fg);
     if l <= 0.0 {
@@ -34,6 +39,16 @@ pub fn look_down_fg(fg: Rgb, level: i32) -> Rgb {
     }
     let f = look_down_scale(level).max(MIN_LUMA / l).min(1.0);
     fg.scale(f)
+}
+
+/// `fg` darkened, if need be, to sit clearly under `walkway`.
+fn under(fg: Rgb, walkway: Rgb) -> Rgb {
+    let (l, cap) = (luma(fg), luma(walkway) * UNDER_WALKWAY);
+    if l <= cap || l <= 0.0 {
+        fg
+    } else {
+        fg.scale(cap / l)
+    }
 }
 
 pub struct AtriumOverlay<'a> {
@@ -90,14 +105,46 @@ impl Overlay for AtriumOverlay<'_> {
                     wall_mask: mask,
                 };
                 let c = cell(tile, &ctx);
-                // Scaled once here; no DIM on top, which would halve it again.
-                Cell {
-                    fg: look_down_fg(c.fg, self.level),
-                    bg: c.bg.scale(f),
-                    bold: false,
-                    dim: false,
-                    ..c
-                }
+                // The walkway this level would show here, at this tile's light: the
+                // look-down always sits under it.
+                let walkway = map.tile(p).map(|t| {
+                    let bare = citygen::Tile {
+                        terrain: Terrain::Floor,
+                        feature: None,
+                        ..*t
+                    };
+                    let wctx = RenderCtx {
+                        style,
+                        theme: map.theme(p),
+                        stratum: map.stratum().unwrap_or(StratumKind::Street),
+                        light: map.light(p),
+                        tick: 0,
+                        vis: Visibility::Visible,
+                        connector: None,
+                        kind: map.kind(p),
+                        wall_mask: 0,
+                    };
+                    cell(&bare, &wctx).fg
+                });
+                let vis = self.vis.get(p).copied().unwrap_or(Visibility::Visible);
+                // Only what is seen right now keeps the legible minimum.
+                let fg = if vis == Visibility::Visible {
+                    look_down_fg(c.fg, self.level)
+                } else {
+                    c.fg.scale(f)
+                };
+                let fg = walkway.map_or(fg, |w| under(fg, w));
+                // Scaled once here, then remembered the way the rest of the level is.
+                apply_vis(
+                    Cell {
+                        fg,
+                        bg: c.bg.scale(f),
+                        bold: false,
+                        dim: false,
+                        ..c
+                    },
+                    vis,
+                )
                 .write(buf, sx, sy);
             }
         }
@@ -221,23 +268,18 @@ mod tests {
         }
     }
 
-    #[test]
-    fn from_the_top_the_plaza_floor_is_faint_but_under_the_walkway() {
-        let city = Generator::run(GenParams {
-            seed: 8,
-            size: SizePreset::Medium,
-            districts: 7,
-            ..Default::default()
-        })
-        .unwrap();
-        let home = citygen::home(&city).expect("seed 8 has a home");
-        let mut interiors = Interiors::default();
-        interiors.ensure(&city, home.building, home.level).unwrap();
-        interiors.ensure(&city, home.building, 0).unwrap();
-        let (plan, upper) = interiors.floor(home.building, home.level).unwrap();
-        let (_, ground) = interiors.floor(home.building, 0).unwrap();
-        // The bare plaza floor under the drop, and the walkway beside the railing.
-        let floor = upper
+    /// The bare plaza floor and the walkway beside the railing, drawn from `level`
+    /// with both at `vis` on `floor` (the upper level): the two fg colours and
+    /// whether the plaza cell carries DIM.
+    fn plaza_and_walkway(
+        city: &citygen::City,
+        plan: &citygen::FloorPlan,
+        upper: &Floor,
+        ground: &Floor,
+        level: i32,
+        vis: Visibility,
+    ) -> (Color, Color, bool) {
+        let plaza = upper
             .tiles
             .iter()
             .find(|(p, t)| {
@@ -259,25 +301,24 @@ mod tests {
                             .get(n)
                             .is_some_and(|u| u.terrain == Terrain::Railing)
                     })
-                    && p.chebyshev(floor) < 25
+                    && p.chebyshev(plaza) < 25
             })
             .map(|(p, _)| p)
             .expect("a walkway tile by the railing");
-        let vis = Grid::filled(upper.tiles.size(), Visibility::Visible);
+        let vis = Grid::filled(upper.tiles.size(), vis);
         let s = StylePack::load().unwrap();
         let map = MapRef::Floor(FloorMap {
-            city: &city,
+            city,
             plan,
             floor: upper,
         });
-        // From the top of the building: the darkest the look-down gets here.
         let overlay = AtriumOverlay {
             ground,
-            level: plan.top,
+            level,
             vis: &vis,
         };
         let area = Rect::new(0, 0, 60, 60);
-        let origin = Pos::new(floor.x - 30, floor.y - 30);
+        let origin = Pos::new(plaza.x - 30, plaza.y - 30);
         let mut buf = Buffer::empty(area);
         MapView {
             map: &map,
@@ -293,13 +334,62 @@ mod tests {
             let (x, y) = tile_to_screen(area, origin, p).unwrap();
             buf[(x, y)].clone()
         };
-        let (f, w) = (at(floor), at(walkway));
+        let (f, w) = (at(plaza), at(walkway));
+        (
+            f.fg,
+            w.fg,
+            f.modifier.contains(ratatui::style::Modifier::DIM),
+        )
+    }
+
+    #[test]
+    fn from_the_top_the_plaza_floor_is_faint_but_under_the_walkway() {
+        let city = Generator::run(GenParams {
+            seed: 8,
+            size: SizePreset::Medium,
+            districts: 7,
+            ..Default::default()
+        })
+        .unwrap();
+        let home = citygen::home(&city).expect("seed 8 has a home");
+        let mut interiors = Interiors::default();
+        interiors.ensure(&city, home.building, home.level).unwrap();
+        interiors.ensure(&city, home.building, 0).unwrap();
+        let (plan, upper) = interiors.floor(home.building, home.level).unwrap();
+        let (_, ground) = interiors.floor(home.building, 0).unwrap();
+        // From the top of the building, the darkest the look-down gets here: seen
+        // now, the floor is faint but legible, scaled once, under the walkway.
+        let (f, w, dim) =
+            plaza_and_walkway(&city, plan, upper, ground, plan.top, Visibility::Visible);
+        assert!(!dim, "scaled once, not dimmed again");
+        let (lf, lw) = (luma_of(f), luma_of(w));
         assert!(
-            !f.modifier.contains(ratatui::style::Modifier::DIM),
-            "scaled once, not dimmed again"
+            lf >= MIN_LUMA - 0.5,
+            "plaza floor {f:?} reads as black ({lf})"
         );
-        let (lf, lw) = (luma_of(f.fg), luma_of(w.fg));
-        assert!(lf >= 20.0, "plaza floor {:?} reads as black ({lf})", f.fg);
         assert!(lf < lw, "plaza floor {lf} not under the walkway {lw}");
+        // Remembered, from any height, it stays under the remembered walkway.
+        for level in [1, home.level, plan.top] {
+            let (f, w, _) =
+                plaza_and_walkway(&city, plan, upper, ground, level, Visibility::Remembered);
+            let (lf, lw) = (luma_of(f), luma_of(w));
+            assert!(
+                lf < lw,
+                "remembered from {level}: plaza {lf} over walkway {lw}"
+            );
+        }
+        // And over an unlit walkway, seen or remembered.
+        let mut dark = upper.clone();
+        dark.light = Grid::filled(dark.light.size(), 0);
+        for vis in [Visibility::Visible, Visibility::Remembered] {
+            for level in [1, plan.top] {
+                let (f, w, _) = plaza_and_walkway(&city, plan, &dark, ground, level, vis);
+                let (lf, lw) = (luma_of(f), luma_of(w));
+                assert!(
+                    lf < lw,
+                    "unlit {vis:?} from {level}: plaza {lf} over walkway {lw}"
+                );
+            }
+        }
     }
 }

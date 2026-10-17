@@ -253,6 +253,24 @@ pub struct Placement {
     owners: HashMap<Pos, PersonId>,
 }
 
+/// What a worker with no station of their own takes, in order.
+const ANY_STATION: &[Role] = &[
+    Role::Desk,
+    Role::Table,
+    Role::Shelf,
+    Role::Bay,
+    Role::Machine,
+    Role::Reception,
+    Role::Bar,
+    Role::Surgery,
+    Role::Shrine,
+];
+
+/// Whether a floor has shops on it: a megablock's plaza.
+fn has_shops(floor: &Floor) -> bool {
+    floor.rooms.iter().any(|r| r.kind == RoomKind::Shop)
+}
+
 fn take_station(free: &mut Vec<(Pos, Role)>, wants: &[Role]) -> Option<Pos> {
     for w in wants {
         if let Some(i) = free.iter().position(|(_, r)| r == w) {
@@ -306,28 +324,20 @@ impl Placement {
                     if level != floor.level {
                         continue;
                     }
+                    let shops = has_shops(floor);
                     let wants: &[Role] = match p.profession.as_str() {
                         "barkeep" | "noodle_cook" => &[Role::Bar, Role::Table],
-                        "shopkeeper" => &[Role::Shelf, Role::Desk],
+                        // On a megablock plaza, a shop's counter (below), else these.
+                        "shopkeeper" if shops => &[Role::Shelf, Role::Desk],
                         "corp_drone" => &[Role::Reception, Role::Desk],
                         "line_worker" => &[Role::Machine],
                         "ripperdoc" => &[Role::Surgery],
                         "monk" => &[Role::Shrine],
-                        _ => &[
-                            Role::Desk,
-                            Role::Table,
-                            Role::Shelf,
-                            Role::Bay,
-                            Role::Machine,
-                            Role::Reception,
-                            Role::Bar,
-                            Role::Surgery,
-                            Role::Shrine,
-                        ],
+                        _ => ANY_STATION,
                     };
                     // A shopkeeper on a megablock plaza minds a shop's counter, not
                     // the lobby desk.
-                    let counter = (p.profession == "shopkeeper")
+                    let counter = (shops && p.profession == "shopkeeper")
                         .then(|| {
                             free.iter().position(|(pos, r)| {
                                 *r == Role::Reception
@@ -500,6 +510,8 @@ mod tests {
             .person_at(desk)
             .expect("someone minds the desk at ten");
         assert_eq!(w.people()[id.0 as usize].profession, "corp_drone");
+        // No shops in a tower: a shopkeeper there would take any station as before.
+        assert!(!has_shops(lobby));
         // And that drone sits at no desk upstairs.
         let top = plan.top;
         i.ensure(&c, tower.id, top).unwrap();

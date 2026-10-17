@@ -174,8 +174,7 @@ next · `esc` back. On STATS `→` buys a point and `←` refunds one; a point's
 follows your origin's and profession's affinity. On SKILLS `→` `←` unfold and
 fold a category and `space` buys or refunds it or a skill with SP. SUMMARY ends
 on `enter`, JACK IN, which builds the character, generates a city and wakes
-you in your flat. Unspent
-points stay with you and can be spent from the deck.
+you in your flat. Unspent points stay with you and can be spent from the deck.
 
 **Configure** `↑↓` field · `←→` adjust · type digits into the seed · `enter`
 on `RANDOM SEED` / `GENERATE` · `esc` back
@@ -192,8 +191,8 @@ goes inside, onto an interior's door back out; a locked door says whose it is ·
 `<` `>` take stairs, lift, ladder or manhole; on a lift bank inside they open the
 FLOORS panel (every floor, the bridge and the roof marked), on a stairwell they
 climb one floor · `space` interact: take what lies here, jack in at an adjacent
-terminal (or your home rig) or out again, take the stairs or the lift, talk to whoever stands
-beside you, look · `1`-`5` fire the ability in that slot ·
+terminal (or your home rig) or out again, take the stairs or the lift, talk to
+whoever stands beside you, look · `1`-`5` fire the ability in that slot ·
 `a` the full ability list · walking into someone swaps places with them, and
 they step back once you move on · `enter` jack shortcut, or walk the aim ·
 `.` wait; in a construct it hurries the beat, in a fight it ends your turn ·
