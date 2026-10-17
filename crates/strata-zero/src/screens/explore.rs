@@ -1314,8 +1314,14 @@ impl MapScreen {
         )
     }
 
+    /// Tiles from `pos` to the construct's entry, none when it cannot be reached.
+    fn steps_to_entry(k: &citygen::Construct, pos: Pos) -> Option<usize> {
+        crate::net::path_to(k, pos, k.entry).map(|p| p.len())
+    }
+
     /// The path from the player to the aim and how many tiles the moves left cover;
-    /// `None` when nothing reaches the aim.
+    /// `None` when nothing reaches the aim. An aim off the map past the entry is
+    /// the gate: the path runs to the entry and one tile out.
     pub fn aim_path(&self, st: &AppState) -> Option<(Vec<Pos>, usize)> {
         let aim = self.aim?;
         let player = st.player.as_ref()?;
@@ -1323,7 +1329,13 @@ impl MapScreen {
             return None;
         };
         let k = st.constructs.get(b)?;
-        let path = crate::net::path_to(k, player.pos, aim)?;
+        let path = if k.tiles.in_bounds(aim) {
+            crate::net::path_to(k, player.pos, aim)?
+        } else {
+            let mut path = crate::net::path_to(k, player.pos, k.entry)?;
+            path.push(aim);
+            path
+        };
         let lit = match st.net.engaged.as_ref() {
             Some(e) => e.moves as usize,
             None => path.len(),
@@ -1375,6 +1387,22 @@ impl MapScreen {
             return;
         };
         let here = st.player.as_ref().map(|p| p.pos);
+        // The last tile off the map from the entry is the gate: out onto the grid.
+        let leaving = st
+            .constructs
+            .get(b)
+            .is_some_and(|k| !k.tiles.in_bounds(next) && here == Some(k.entry));
+        if leaving {
+            self.walking = None;
+            if let Err(why) = crate::net::spend_move(st) {
+                st.warn(why);
+                return;
+            }
+            let result = crate::constructs::leave_construct(st);
+            report(st, result);
+            self.follow_player(st);
+            return;
+        }
         let open = here.is_some_and(|me| me.chebyshev(next) <= 1)
             && st.constructs.get(b).is_some_and(|k| {
                 k.tiles.get(next).is_some_and(|t| t.is_walkable()) && k.guard_at(next).is_none()
@@ -1562,6 +1590,10 @@ impl MapScreen {
                 let open = st.constructs.get(b).is_some_and(|k| {
                     crate::net::path_to(k, pos, to).is_some_and(|p| p.len() <= cap)
                         || (k.guard_at(to).is_some() && pos.chebyshev(to) as usize <= cap)
+                        // Off the map from the entry: the gate, one tile past it.
+                        || (from == k.entry
+                            && !k.tiles.in_bounds(to)
+                            && Self::steps_to_entry(k, pos).is_some_and(|n| n < cap))
                 });
                 if open {
                     self.aim = Some(to);
@@ -7491,5 +7523,50 @@ mod tests {
         stand(&mut st, &mut s, Place::Construct(b), hide);
         roll(&mut st, &mut s);
         assert_eq!(last(&st), Some("attack · out of reach"), "{:?}", last(&st));
+    }
+
+    #[test]
+    fn on_turns_the_aim_reaches_the_gate_and_the_walk_leaves_the_construct() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        freeze_ice(&mut st, b);
+        let k = st.constructs.get(b).unwrap().clone();
+        let entry = k.entry;
+        let (out_key, out) = [
+            (KeyCode::Char('h'), Dir::W),
+            (KeyCode::Char('l'), Dir::E),
+            (KeyCode::Char('k'), Dir::N),
+            (KeyCode::Char('j'), Dir::S),
+        ]
+        .into_iter()
+        .map(|(key, d)| (key, entry.step(d)))
+        .find(|(_, p)| !k.tiles.in_bounds(*p))
+        .expect("the gate lies off the map beside the entry");
+        // One tile in from the entry, on turns by hand: the aim walks back onto the
+        // entry and one more onto the gate.
+        let inside = entry
+            .neighbors4()
+            .find(|p| k.tiles.get(*p).is_some_and(|t| t.is_walkable()) && k.guard_at(*p).is_none())
+            .expect("a tile inside the entry");
+        stand(&mut st, &mut s, Place::Construct(b), inside);
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        s.update(&mut st, &[key(dir_between(inside, entry)), key(out_key)]);
+        assert_eq!(s.aim, Some(out), "the gate is aimed at");
+        let (path, lit) = s.aim_path(&st).expect("a path out");
+        assert_eq!(path, vec![entry, out]);
+        assert_eq!(lit, 4);
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        walk_tick(&mut st, &mut s);
+        assert_eq!(player(&st), (Place::Construct(b), entry));
+        walk_tick(&mut st, &mut s);
+        assert_eq!(
+            player(&st).0,
+            Place::Stratum(StratumKind::Net),
+            "out on the grid"
+        );
+        assert!(logged(&st, "Leaving"), "{:?}", last(&st));
+        s.update(&mut st, &[]);
+        assert!(st.net.engaged.is_none() && s.walking.is_none() && s.aim.is_none());
     }
 }
