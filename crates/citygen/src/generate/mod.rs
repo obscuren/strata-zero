@@ -5,6 +5,7 @@ pub mod connectivity;
 pub mod cyberspace;
 pub mod districts;
 pub mod dressing;
+pub mod exterior;
 pub mod interiors;
 pub mod lots;
 pub mod naming;
@@ -212,6 +213,20 @@ impl GenCtx {
 
     pub fn is_land(&self, p: Pos) -> bool {
         self.scratch.land.get(p).copied().unwrap_or(false)
+    }
+}
+
+/// The tile just outside a footprint border tile. A corner counts as part of its
+/// left or right side.
+pub(crate) fn outward(r: Rect, p: Pos) -> Pos {
+    if p.x == r.x {
+        p.offset(-1, 0)
+    } else if p.x == r.right() - 1 {
+        p.offset(1, 0)
+    } else if p.y == r.y {
+        p.offset(0, -1)
+    } else {
+        p.offset(0, 1)
     }
 }
 

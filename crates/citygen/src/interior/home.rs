@@ -122,6 +122,13 @@ mod tests {
         }
     }
 
+    /// The fixture the smoke scripts and saves lean on: medium seed 8 lives on 18F, flat 1814.
+    #[test]
+    fn medium_seed_8_lives_in_flat_1814() {
+        let h = home(&medium(8)).expect("a home");
+        assert_eq!((h.level, h.number), (18, 1814));
+    }
+
     #[test]
     fn only_the_first_atrium_megablock_has_a_home_level() {
         for c in [medium(1), medium(8)] {

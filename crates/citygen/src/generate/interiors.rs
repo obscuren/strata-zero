@@ -1,6 +1,6 @@
 //! Stage 7: rooms, doors, windows and internal shafts.
 
-use super::{GenCtx, Stage, StageRunner, StepOut};
+use super::{GenCtx, Stage, StageRunner, StepOut, outward};
 use crate::geom::{Pos, Rect};
 use crate::params::GenError;
 use crate::pathing::{bfs_nearest, components};
@@ -31,11 +31,6 @@ fn inward(r: Rect, p: Pos) -> Pos {
     } else {
         p.offset(0, -1)
     }
-}
-
-fn outward(r: Rect, p: Pos) -> Pos {
-    let i = inward(r, p);
-    Pos::new(2 * p.x - i.x, 2 * p.y - i.y)
 }
 
 impl InteriorsStage {
