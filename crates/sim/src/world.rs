@@ -1853,6 +1853,15 @@ mod tests {
                 .count();
             assert!(doors >= 2, "{b:?} has {doors} street doors");
         }
+        // The service door the exterior cuts on the north side, (178,57), is one
+        // of the megablock's doors for the sim.
+        let places = crate::places::Places::derive(&c);
+        assert!(
+            blocks
+                .iter()
+                .any(|b| places.doors[b].contains(&Pos::new(178, 57))),
+            "the service door is a sim door"
+        );
         let mut w = world(&c);
         let mut seen_inside = false;
         for hour in 1..=24u16 {

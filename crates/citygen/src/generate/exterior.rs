@@ -28,6 +28,15 @@ thread_local! {
     static PLACED: std::cell::RefCell<Vec<(Pos, Feature)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// Test-only: generates a city as if this pass did not exist.
+#[cfg(test)]
+pub(crate) fn generate_without(p: crate::params::GenParams) -> City {
+    SKIP.with(|s| s.set(true));
+    let c = crate::Generator::run(p);
+    SKIP.with(|s| s.set(false));
+    c.expect("valid params")
+}
+
 #[cfg(test)]
 fn skipped() -> bool {
     SKIP.with(std::cell::Cell::get)
@@ -214,7 +223,8 @@ pub(crate) fn dress(ctx: &mut GenCtx, i: usize) {
 
     // The canopy: on the landing itself, whatever the street pass left there, unless
     // a connector stands there, and on the pavement either side of it.
-    if ctx.city.connectors_at(land).next().is_none() {
+    let canopy = ctx.city.connectors_at(land).next().is_none();
+    if canopy {
         ctx.set_feature(K, land, Some(Feature::Awning));
     }
     for col in [-1, 1] {
@@ -260,7 +270,9 @@ pub(crate) fn dress(ctx: &mut GenCtx, i: usize) {
     }
     stand(ctx, Feature::Furniture(Furniture::Bench), side);
 
-    if let Some(back) = service_door(ctx, &b, front) {
+    // Only the canopy marks the main door once the city is built, so without it a
+    // cut door could pass for the main one: no service door then.
+    if let Some(back) = canopy.then(|| service_door(ctx, &b, front)).flatten() {
         service(ctx, &mut rng, back);
     }
     stall(ctx, &mut rng, front, &paved);

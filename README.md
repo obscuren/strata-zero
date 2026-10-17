@@ -32,11 +32,11 @@ anchored to the physical tiles and can be shown as a digital overlay.
 
 A city has up to two megablocks, in its megablocks districts where a block is
 big enough: each a whole city block, hollow inside. From the street its name
-runs in sign letters along the façade beside the main door, with a canopy, lamps
-and vending machines on the paving in front and, where the pavement allows, a
-bench and a street terminal; a food stall and parked bikes stand nearby, and
-round the back a service door by the dumpsters lets you onto the ground plaza
-too. Its upper floors ring an open atrium with a railing and a walkway, locked
+runs in sign letters along the façade beside the main door, with a canopy and
+lamps on the paving in front. A street terminal you can jack into usually claims
+the forecourt; vending machines and a bench fill whatever room the pavement has
+left. A food stall and parked bikes stand nearby, and round the back a service
+door by the dumpsters lets you onto the ground plaza too. Its upper floors ring an open atrium with a railing and a walkway, locked
 flats around them and the lifts and stairs in a lobby off the walkway; over the
 railing you look down on the ground plaza, dim and static, dimmer the higher you
 are. The plaza holds the reception inside the main door, stalls and tables under

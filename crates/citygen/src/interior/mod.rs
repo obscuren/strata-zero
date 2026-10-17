@@ -175,6 +175,12 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
+            let plain = crate::generate::exterior::generate_without(GenParams {
+                seed,
+                size: SizePreset::Medium,
+                districts: 7,
+                ..Default::default()
+            });
             for b in c
                 .buildings
                 .iter()
@@ -184,6 +190,30 @@ mod tests {
                 let ground = generate_floor(&c, &plan, 0);
                 assert!(ground.exits.len() >= 2, "seed {seed}");
                 validate_floor(&plan, &ground).unwrap();
+                // Every street door has its exit on the ground floor, the service
+                // door the exterior pass cut included.
+                let street = |c: &City| -> Vec<crate::geom::Pos> {
+                    c.portals(b.id)
+                        .into_iter()
+                        .filter(|(k, _)| *k == StratumKind::Street)
+                        .map(|(_, p)| p)
+                        .collect()
+                };
+                let doors = street(&c);
+                for d in &doors {
+                    assert!(
+                        ground
+                            .exits
+                            .iter()
+                            .any(|e| e.door == *d && e.stratum == StratumKind::Street),
+                        "seed {seed}: no exit for the door at {d:?}"
+                    );
+                }
+                let before = street(&plain);
+                assert!(
+                    doors.iter().any(|d| !before.contains(d)),
+                    "seed {seed}: no service door"
+                );
                 for e in &ground.exits {
                     let step = ground.doorstep(e);
                     let open = step
