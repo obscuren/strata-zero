@@ -1,5 +1,6 @@
 //! `strata`: Strata Zero, a terminal roguelike in a multi-level cyberpunk city.
 
+mod access;
 mod actions;
 mod anim;
 mod app;

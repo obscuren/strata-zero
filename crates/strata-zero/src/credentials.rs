@@ -3,7 +3,7 @@
 //! lock crack is still the third way in.
 
 use crate::app::AppState;
-use citygen::{BuildingId, Place, Role};
+use citygen::{BuildingId, Place, Pos, Role};
 use game::{Item, ItemId, ItemKind};
 use sim::HouseholdId;
 use std::collections::{BTreeMap, BTreeSet};
@@ -30,6 +30,19 @@ pub enum Source {
     Home,
     /// Keyed by hand into the door's pad.
     Keypad,
+    /// Read in a mail on the rig.
+    Mail,
+}
+
+/// A message in the rig's inbox.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Mail {
+    pub from: String,
+    pub subject: String,
+    pub body: Vec<String>,
+    pub read: bool,
+    /// The game minute it arrived.
+    pub at: u64,
 }
 
 /// Minutes a keypad stays locked after the third miss.
@@ -73,6 +86,17 @@ pub struct Journal {
     pub lost_cards: BTreeSet<BuildingId>,
     /// Each flat's keypad, once it has been tried.
     pub keypads: BTreeMap<(BuildingId, i32, u16), KeypadState>,
+    /// The rig's inbox, oldest first.
+    pub mails: Vec<Mail>,
+    /// Terminals already powered on this session, by their tile.
+    pub booted: BTreeSet<(Place, Pos)>,
+}
+
+/// A mail has been read: marks it.
+pub fn mail_read(st: &mut AppState, index: usize) {
+    if let Some(m) = st.journal.mails.get_mut(index) {
+        m.read = true;
+    }
 }
 
 impl Journal {
@@ -457,11 +481,14 @@ pub fn entries(st: &AppState) -> Vec<(BuildingId, String, Vec<Entry>)> {
     for c in st.journal.codes() {
         let whose = match c.source {
             Source::Home => "your flat".to_string(),
-            Source::ServerCopy | Source::Keypad => whose_flat(st, c.building, c.level, c.number),
+            Source::ServerCopy | Source::Keypad | Source::Mail => {
+                whose_flat(st, c.building, c.level, c.number)
+            }
         };
         let from = match c.source {
             Source::ServerCopy => format!("copied off the server, {}", stamp(c.at)),
             Source::Keypad => format!("keyed in at the door, {}", stamp(c.at)),
+            Source::Mail => format!("from a mail on the rig, {}", stamp(c.at)),
             Source::Home => "your own door".to_string(),
         };
         by.entry(c.building).or_default().push(Entry {

@@ -227,6 +227,28 @@ impl Player {
     pub fn vis(&self) -> &Grid<Visibility> {
         self.memory.get(&self.place).unwrap_or(&self.unseen)
     }
+
+    /// What has been seen of another place, if anything.
+    pub fn vis_at(&self, place: Place) -> Option<&Grid<Visibility>> {
+        self.memory.get(&place)
+    }
+
+    /// Paints tiles of any place into memory, as a plan does; what is in sight stays
+    /// visible.
+    pub fn remember_place(&mut self, place: Place, size: Size, tiles: impl Iterator<Item = Pos>) {
+        let grid = self
+            .memory
+            .entry(place)
+            .or_insert_with(|| Grid::filled(size, Visibility::Unseen));
+        if grid.size() != size {
+            *grid = Grid::filled(size, Visibility::Unseen);
+        }
+        for p in tiles {
+            if grid.get(p) == Some(&Visibility::Unseen) {
+                grid.set(p, Visibility::Remembered);
+            }
+        }
+    }
 }
 
 /// The log line for a jack-in from a body at `from`: home, or a named port.
