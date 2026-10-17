@@ -235,6 +235,7 @@ pub fn enter(st: &mut AppState, b: BuildingId, door: (StratumKind, Pos)) -> Resu
         .ok_or("no way in here")?;
     let step = floor.doorstep(&exit);
     let name = building_name(city, b);
+    crate::credentials::prepare(st, b);
     land(st, Place::Floor { building: b, level }, step);
     Ok(format!("Entering `{name}`"))
 }
@@ -288,6 +289,7 @@ pub fn ride(st: &mut AppState, b: BuildingId, level: i32) -> Result<String, Stri
     st.interiors
         .ensure(city, b, level)
         .ok_or("that floor is missing")?;
+    crate::credentials::prepare(st, b);
     land(st, Place::Floor { building: b, level }, lift);
     Ok(FloorPlan::label(level))
 }
@@ -327,6 +329,7 @@ pub fn climb(st: &mut AppState, up: bool) -> Result<String, String> {
     st.interiors
         .ensure(city, b, next)
         .ok_or("that floor is missing")?;
+    crate::credentials::prepare(st, b);
     land(
         st,
         Place::Floor {

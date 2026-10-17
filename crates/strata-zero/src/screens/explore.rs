@@ -572,6 +572,9 @@ impl MapScreen {
                 p.update_fov(&MapRef::stratum_of(city, StratumKind::Street), bonus);
                 p
             }));
+            if let Some(rig) = st.home {
+                crate::credentials::prepare(st, rig.home.building);
+            }
         }
         if let Some(p) = &st.player {
             self.place = p.place;
@@ -1176,45 +1179,54 @@ impl MapScreen {
                     report(st, result);
                     return Some(ScreenCmd::Stay);
                 }
-                let owner = self
-                    .placement
-                    .as_ref()
-                    .filter(|(pl, _, _)| *pl == place)
-                    .and_then(|(_, _, p)| p.owner_of(target))
-                    .and_then(|id| {
-                        st.world
-                            .as_ref()
-                            .map(|w| w.people()[id.0 as usize].name.clone())
-                    });
                 let here = player.pos;
-                let open = st.net.unlocked(building, st.net.now(st));
-                let locked = floor
+                let room = floor
                     .door_of(target)
                     .filter(|r| {
-                        r.private
-                            && r.kind != citygen::RoomKind::Home
-                            && !r.rect.contains(here)
-                            && !open
+                        r.private && r.kind != citygen::RoomKind::Home && !r.rect.contains(here)
                     })
-                    .map(|r| {
-                        let mut what = r.kind.label().to_string();
-                        if r.number > 0 {
-                            what = format!("{what} {}", r.number);
-                        }
-                        match &owner {
-                            Some(name) => format!("{name}'s {what}"),
-                            None => what,
-                        }
-                    });
-                if let Some(what) = locked {
-                    st.warn(format!("locked · {what}"));
-                    return Some(ScreenCmd::Stay);
-                }
+                    .cloned();
                 // Your own door opens for you; the step onto it from outside names the flat.
                 let home = floor
                     .door_of(target)
                     .filter(|r| r.kind == citygen::RoomKind::Home && !r.rect.contains(here))
                     .map(|r| r.number);
+                if let Some(r) = room {
+                    use crate::credentials::How;
+                    let how = crate::credentials::opens(st, building, level, r.number);
+                    let owner = st
+                        .interiors
+                        .homes_of(building)
+                        .and_then(|h| h.owner_of(level, r.number))
+                        .or_else(|| {
+                            self.placement
+                                .as_ref()
+                                .filter(|(pl, _, _)| *pl == place)
+                                .and_then(|(_, _, p)| p.owner_of(target))
+                        })
+                        .and_then(|id| {
+                            st.world
+                                .as_ref()
+                                .map(|w| w.people()[id.0 as usize].name.clone())
+                        });
+                    let mut what = r.kind.label().to_string();
+                    if r.number > 0 {
+                        what = format!("{what} {}", r.number);
+                    }
+                    let (whose, lit) = match &owner {
+                        Some(name) => (format!("{name}'s {what}"), format!("`{name}`'s {what}")),
+                        None => (what.clone(), what.clone()),
+                    };
+                    match how {
+                        None => {
+                            st.warn(format!("locked · {whose}"));
+                            return Some(ScreenCmd::Stay);
+                        }
+                        Some(How::Cracked) => {}
+                        Some(How::Keycard) => st.say(format!("{lit} · the keycard opens it")),
+                        Some(How::Code(c)) => st.say(format!("{lit} · you key in {c:04}")),
+                    }
+                }
                 if let Some(n) = home {
                     st.say(format!("home · flat {n}"));
                 }
@@ -4341,6 +4353,117 @@ mod tests {
             "{:?}",
             last(&st)
         );
+    }
+
+    /// A residential building, a flat on one of its floors, its door, a tile outside it,
+    /// the household and the owner's name.
+    fn a_flat(
+        st: &mut AppState,
+    ) -> (
+        citygen::BuildingId,
+        i32,
+        u16,
+        Pos,
+        Pos,
+        sim::HouseholdId,
+        String,
+    ) {
+        let city = st.city.as_ref().unwrap().clone();
+        let b = {
+            let world = st.world.as_ref().unwrap();
+            city.buildings
+                .iter()
+                .find(|b| {
+                    matches!(b.kind, BuildingKind::Megablock | BuildingKind::Apartment)
+                        && world.people().iter().any(|p| p.home == Some(b.id))
+                })
+                .expect("a residential block")
+                .id
+        };
+        crate::credentials::prepare(st, b);
+        let homes = st.interiors.homes_of(b).unwrap().clone();
+        for (h, (level, number)) in homes.households() {
+            let (_, floor) = st.interiors.floor(b, level).unwrap();
+            let Some(r) = floor
+                .rooms
+                .iter()
+                .find(|r| r.kind == citygen::RoomKind::Flat && r.number == number)
+            else {
+                continue;
+            };
+            let Some(d) = r.door else { continue };
+            let Some(outside) = d
+                .neighbors4()
+                .find(|n| !r.rect.contains(*n) && floor.tiles[*n].is_walkable())
+            else {
+                continue;
+            };
+            let owner = homes.owner_of(level, number).unwrap();
+            let name = st.world.as_ref().unwrap().people()[owner.0 as usize]
+                .name
+                .clone();
+            return (b, level, number, d, outside, h, name);
+        }
+        panic!("a flat with a door and a corridor outside");
+    }
+
+    #[test]
+    fn a_keycard_or_a_code_opens_a_locked_flat() {
+        let mut st = state8();
+        seed_world(&mut st);
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let (b, level, number, door, outside, h, name) = a_flat(&mut st);
+        let place = Place::Floor { building: b, level };
+        // Without anything: locked.
+        stand(&mut st, &mut s, place, outside);
+        s.update(&mut st, &[key(dir_between(outside, door))]);
+        assert_eq!(player(&st).1, outside);
+        assert!(
+            last(&st).is_some_and(|l| l.starts_with(&format!("locked · {name}'s flat {number}"))),
+            "{:?}",
+            last(&st)
+        );
+        // With the code: in, and the log says you keyed it.
+        let seed = st.city.as_ref().unwrap().seed;
+        let code = citygen::rng::door_code(seed, b, level, number);
+        st.journal.learn(crate::credentials::Code {
+            building: b,
+            level,
+            number,
+            household: Some(h),
+            code,
+            source: crate::credentials::Source::ServerCopy,
+            at: 0,
+        });
+        s.update(&mut st, &[key(dir_between(outside, door))]);
+        assert_eq!(player(&st).1, door);
+        assert_eq!(
+            last(&st),
+            Some(format!("{name}'s flat {number} · you key in {code:04}").as_str())
+        );
+        // Back out, forget the code, hold the card instead: the card wins.
+        stand(&mut st, &mut s, place, outside);
+        st.journal = Default::default();
+        st.character.give(crate::credentials::keycard_id(b, h), 1);
+        s.update(&mut st, &[key(dir_between(outside, door))]);
+        assert_eq!(player(&st).1, door);
+        assert_eq!(
+            last(&st),
+            Some(format!("{name}'s flat {number} · the keycard opens it").as_str())
+        );
+        // From inside the room the door opens whatever you hold.
+        st.character.inventory.clear();
+        let inside = {
+            let (_, floor) = st.interiors.floor(b, level).unwrap();
+            let r = floor.door_of(door).unwrap();
+            door.neighbors4()
+                .find(|n| r.rect.contains(*n) && floor.tiles[*n].is_walkable())
+                .unwrap()
+        };
+        stand(&mut st, &mut s, place, inside);
+        s.update(&mut st, &[key(dir_between(inside, door))]);
+        assert_eq!(player(&st).1, door);
     }
 
     #[test]
