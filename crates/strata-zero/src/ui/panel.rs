@@ -11,7 +11,7 @@ const DIM: Color = Color::Rgb(160, 170, 185);
 const TEXT: Color = Color::Rgb(205, 212, 222);
 const ACCENT: Color = Color::Rgb(0, 229, 255);
 
-fn kv(key: &str, value: impl Into<String>) -> Line<'static> {
+pub(crate) fn kv(key: &str, value: impl Into<String>) -> Line<'static> {
     Line::from(vec![
         Span::styled(format!("{key:<10}"), Style::default().fg(DIM)),
         Span::styled(value.into(), Style::default().fg(TEXT)),

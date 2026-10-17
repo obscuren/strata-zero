@@ -862,23 +862,17 @@ impl MapScreen {
                 .and_then(|k| Digital::node_under(city, k, pos))
                 .map(|id| city.net.node(id)),
         };
-        let person = st
+        let who = st
             .world
             .as_ref()
             .filter(|_| place.is_street())
-            .and_then(|w| w.person_at(pos).map(|id| w.card(id, city)));
-        choices.push(Choice::new(
-            'l',
-            "look",
-            Pick::Card(inspector_lines(
-                &map,
-                pos,
-                node,
-                stacks,
-                &st.content,
-                person.as_ref(),
-            )),
-        ));
+            .and_then(|w| w.person_at(pos));
+        let person = who.and_then(|id| st.world.as_ref().map(|w| w.card(id, city)));
+        let mut card = inspector_lines(&map, pos, node, stacks, &st.content, person.as_ref());
+        if who.is_some_and(|id| !crate::credentials::carries(st, id).is_empty()) {
+            card.push(crate::ui::panel::kv("carries", "a keycard on a lanyard"));
+        }
+        choices.push(Choice::new('l', "look", Pick::Card(card)));
         Some(ScreenCmd::Push {
             to: Box::new(Popup::verbs(title, choices, st.tick)),
             fx: TransitionKind::None,

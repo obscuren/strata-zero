@@ -3,7 +3,7 @@
 //! lock crack is still the third way in.
 
 use crate::app::AppState;
-use citygen::BuildingId;
+use citygen::{BuildingId, Place, Role};
 use game::{Item, ItemId, ItemKind};
 use sim::HouseholdId;
 use std::collections::BTreeSet;
@@ -164,8 +164,85 @@ pub fn prepare(st: &mut AppState, b: BuildingId) {
     drop_lost_card(st, b);
 }
 
-/// Lays the lost card on the lobby floor the first time the lobby exists.
-pub fn drop_lost_card(_st: &mut AppState, _b: BuildingId) {}
+/// The household that left its card at the lobby desk.
+pub fn lost_household(st: &AppState, b: BuildingId) -> Option<HouseholdId> {
+    let homes = st.interiors.homes_of(b)?;
+    let hs: Vec<HouseholdId> = homes.households().map(|(h, _)| h).collect();
+    if hs.is_empty() {
+        return None;
+    }
+    let seed = st.city.as_ref()?.seed;
+    let pick = citygen::rng::hash64(seed, b.index() as u64 ^ 0xCA2D) % hs.len() as u64;
+    Some(hs[pick as usize])
+}
+
+/// Lays the lost card on the lobby floor, once: on the reception desk, else a table,
+/// else the first free floor tile. The lobby is generated for it if need be.
+pub fn drop_lost_card(st: &mut AppState, b: BuildingId) {
+    if st.journal.lost_cards.contains(&b) {
+        return;
+    }
+    let Some(h) = lost_household(st, b) else {
+        return;
+    };
+    let Some(city) = st.city.as_ref() else {
+        return;
+    };
+    if st.interiors.ensure(city, b, 0).is_none() {
+        return;
+    }
+    let Some((_, floor)) = st.interiors.floor(b, 0) else {
+        return;
+    };
+    let station = |role: Role| {
+        floor
+            .stations
+            .iter()
+            .find(|s| s.role == role)
+            .map(|s| s.pos)
+    };
+    let tile = station(Role::Reception)
+        .or_else(|| station(Role::Table))
+        .filter(|p| floor.tiles[*p].is_walkable())
+        .or_else(|| {
+            floor
+                .tiles
+                .iter()
+                .find(|(_, t)| t.is_walkable() && t.feature.is_none())
+                .map(|(p, _)| p)
+        });
+    let Some(tile) = tile else {
+        return;
+    };
+    st.ground.add(
+        Place::Floor {
+            building: b,
+            level: 0,
+        },
+        tile,
+        keycard_id(b, h),
+        1,
+    );
+    st.journal.lost_cards.insert(b);
+}
+
+/// What a person has on them: their flat's keycard, unless it is the lost one.
+pub fn carries(st: &AppState, person: sim::PersonId) -> Vec<ItemId> {
+    let Some(world) = st.world.as_ref() else {
+        return Vec::new();
+    };
+    let p = &world.people()[person.0 as usize];
+    let Some(b) = p.home else {
+        return Vec::new();
+    };
+    let Some(homes) = st.interiors.homes_of(b) else {
+        return Vec::new();
+    };
+    if homes.flat_of(p.household).is_none() || lost_household(st, b) == Some(p.household) {
+        return Vec::new();
+    }
+    vec![keycard_id(b, p.household)]
+}
 
 /// Drops every keycard of a previous city from the catalogue.
 pub fn purge(content: &mut game::Content) {
@@ -328,5 +405,61 @@ mod tests {
             now,
         );
         assert_eq!(opens(&st, b, level, number), Some(How::Cracked));
+    }
+
+    #[test]
+    fn one_lost_card_lies_in_the_lobby_once_and_its_owner_goes_without() {
+        let (mut st, b) = state();
+        prepare(&mut st, b);
+        let lost = lost_household(&st, b).expect("a household lost its card");
+        let id = keycard_id(b, lost);
+        let lobby = citygen::Place::Floor {
+            building: b,
+            level: 0,
+        };
+        let on_floor = |st: &crate::app::AppState| {
+            st.ground
+                .on(lobby)
+                .map(|(_, s)| {
+                    s.iter()
+                        .filter(|s| s.item == id)
+                        .map(|s| s.qty)
+                        .sum::<u32>()
+                })
+                .sum::<u32>()
+        };
+        assert_eq!(on_floor(&st), 1);
+        let (pos, _) = st
+            .ground
+            .on(lobby)
+            .find(|(_, s)| s.iter().any(|s| s.item == id))
+            .unwrap();
+        let (_, floor) = st.interiors.floor(b, 0).unwrap();
+        assert!(floor.tiles[pos].is_walkable());
+        prepare(&mut st, b);
+        assert_eq!(on_floor(&st), 1, "no second card");
+        st.ground.take(lobby, pos, &id, 1);
+        prepare(&mut st, b);
+        assert_eq!(on_floor(&st), 0, "picked up stays picked up");
+        let homes = st.interiors.homes_of(b).unwrap().clone();
+        let world = st.world.as_ref().unwrap();
+        let loser = world
+            .people()
+            .iter()
+            .find(|p| p.household == lost)
+            .unwrap()
+            .id;
+        assert!(carries(&st, loser).is_empty());
+        let other = homes
+            .households()
+            .map(|(h, _)| h)
+            .find(|h| *h != lost)
+            .map(|h| world.people().iter().find(|p| p.household == h).unwrap().id);
+        if let Some(o) = other {
+            assert_eq!(
+                carries(&st, o),
+                vec![keycard_id(b, world.people()[o.0 as usize].household)]
+            );
+        }
     }
 }
