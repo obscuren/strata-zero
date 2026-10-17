@@ -228,12 +228,13 @@ pub(crate) fn dress(ctx: &mut GenCtx, i: usize) {
     bikes(ctx, &mut rng, front);
 }
 
-/// Sets the building's name in sign letters along the main door's side, centred on
-/// the door. The door's tile is skipped and the name carries on past it. Only plain
-/// wall takes a letter: windows and corners are passed over (the letters sit on the
-/// wall between them), a space stays bare wall but uses up its slot, a wall carrying
-/// anything but neon, an ad or a camera is passed over too, and a name too long for
-/// the wall is cut. Draws no RNG; call it once the name is final.
+/// Sets the building's name in sign letters along the main door's side, as one
+/// board: letters take consecutive border tiles, skipping the door's tile and
+/// stopping at the corners. A window under the sign becomes wall. A name that fits
+/// is centred on the door; one that doesn't keeps its start and loses its tail. A
+/// space stays bare wall, and a tile carrying anything but neon, an ad or a camera
+/// stays as it is; both use up their slot. Draws no RNG; call it once the name is
+/// final.
 pub(crate) fn sign(ctx: &mut GenCtx, i: usize) {
     let b = ctx.city.buildings[i].clone();
     if b.kind != BuildingKind::Megablock {
@@ -247,8 +248,8 @@ pub(crate) fn sign(ctx: &mut GenCtx, i: usize) {
     };
     let fp = b.footprint;
     let front = Frame::new(fp, door);
-    // The wall tiles either side of the door, nearest first, short of the corners.
-    let walls = |dir: i32| -> Vec<Pos> {
+    // The border tiles either side of the door, nearest first, short of the corners.
+    let run = |dir: i32| -> Vec<Pos> {
         (1..)
             .map(|n| front.at(0, n * dir))
             .take_while(|p| {
@@ -256,21 +257,18 @@ pub(crate) fn sign(ctx: &mut GenCtx, i: usize) {
                     && (p.y == fp.y || p.y == fp.bottom() - 1);
                 fp.contains(*p) && !corner
             })
-            .filter(|p| {
-                ctx.tile(K, *p).is_some_and(|t| {
-                    t.terrain == Terrain::Wall
-                        && matches!(
-                            t.feature,
-                            None | Some(Feature::Neon(_) | Feature::HoloAd | Feature::Camera)
-                        )
-                })
-            })
             .collect()
     };
-    let (left, right) = (walls(-1), walls(1));
+    let (left, right) = (run(-1), run(1));
     let letters: Vec<char> = name.to_uppercase().chars().collect();
-    // Slot `s` is the `s`-th wall tile right of the door, or `-s - 1`-th left of it.
-    let first = -(letters.len() as i32 / 2);
+    // Slot `s` is the `s`-th tile right of the door, or the `-s - 1`-th left of it.
+    // Centred when it fits, else from the far end of the left run.
+    let (lo, hi) = (-(left.len() as i32), right.len() as i32);
+    let first = if letters.len() as i32 <= hi - lo {
+        (-(letters.len() as i32 / 2)).clamp(lo, hi - letters.len() as i32)
+    } else {
+        lo
+    };
     for (k, ch) in letters.iter().enumerate() {
         let slot = first + k as i32;
         let spot = if slot < 0 {
@@ -278,7 +276,17 @@ pub(crate) fn sign(ctx: &mut GenCtx, i: usize) {
         } else {
             right.get(slot as usize)
         };
-        if let Some(p) = spot.copied().filter(|_| *ch != ' ') {
+        let Some(p) = spot.copied().filter(|_| *ch != ' ') else {
+            continue;
+        };
+        let Some(t) = ctx.tile(K, p) else { continue };
+        if matches!(t.terrain, Terrain::Wall | Terrain::Window)
+            && matches!(
+                t.feature,
+                None | Some(Feature::Neon(_) | Feature::HoloAd | Feature::Camera)
+            )
+        {
+            ctx.set_terrain(K, p, Terrain::Wall);
             ctx.set_feature(K, p, Some(Feature::Sign(*ch)));
         }
     }
@@ -702,26 +710,55 @@ mod tests {
     fn the_name_reads_over_the_main_door() {
         for Fixture { seed, city: c, .. } in mediums() {
             for b in megablocks(c) {
-                let name = b.name.clone().expect("megablocks are named").to_uppercase();
+                let name: Vec<char> = b
+                    .name
+                    .clone()
+                    .expect("megablocks are named")
+                    .to_uppercase()
+                    .chars()
+                    .collect();
                 let door = main_door(c, b).unwrap();
-                let letters: String = side_tiles(b.footprint, door)
-                    .filter_map(|p| match c.tile(K, p)?.feature {
-                        Some(Feature::Sign(ch)) => Some(ch),
+                assert_eq!(c.tile(K, door).unwrap().terrain, Terrain::Door);
+                // The side's tiles in reading order, the door and corners left out.
+                let fp = b.footprint;
+                let slots: Vec<Pos> = side_tiles(fp, door)
+                    .filter(|p| *p != door)
+                    .filter(|p| {
+                        !((p.x == fp.x || p.x == fp.right() - 1)
+                            && (p.y == fp.y || p.y == fp.bottom() - 1))
+                    })
+                    .collect();
+                let signs: Vec<(usize, char)> = slots
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, p)| match c.tile(K, *p)?.feature {
+                        Some(Feature::Sign(ch)) => Some((i, ch)),
                         _ => None,
                     })
                     .collect();
-                let squeezed: String = name.chars().filter(|c| *c != ' ').collect();
-                assert!(letters.chars().count() >= 3, "seed {seed}: {letters}");
-                assert!(
-                    squeezed.contains(&letters),
-                    "seed {seed}: {letters} vs {name}"
-                );
-                assert_eq!(c.tile(K, door).unwrap().terrain, Terrain::Door);
-                for p in side_tiles(b.footprint, door) {
-                    let t = c.tile(K, p).unwrap();
-                    if matches!(t.feature, Some(Feature::Sign(_))) {
-                        assert_eq!(t.building, Some(b.id), "seed {seed}");
-                    }
+                assert!(signs.len() >= 3, "seed {seed}: {signs:?}");
+                // The letters are the name, in order, from one start slot.
+                let start = signs[0].0 as i32;
+                let aligned = (0..name.len() as i32).find(|k| {
+                    let s0 = start - k;
+                    signs
+                        .iter()
+                        .all(|(i, ch)| name.get((*i as i32 - s0) as usize) == Some(ch))
+                });
+                let s0 =
+                    start - aligned.unwrap_or_else(|| panic!("seed {seed}: {signs:?} vs {name:?}"));
+                if name.len() > slots.len() {
+                    assert_eq!(s0, 0, "seed {seed}: a long name keeps its start");
+                } else {
+                    assert!(
+                        s0 >= 0 && s0 as usize + name.len() <= slots.len(),
+                        "seed {seed}"
+                    );
+                }
+                for (i, _) in &signs {
+                    let t = c.tile(K, slots[*i]).unwrap();
+                    assert_eq!(t.terrain, Terrain::Wall, "seed {seed}");
+                    assert_eq!(t.building, Some(b.id), "seed {seed}");
                 }
             }
         }
