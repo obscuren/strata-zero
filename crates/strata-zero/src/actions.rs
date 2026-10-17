@@ -27,6 +27,7 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
     if fired.is_some() {
         crate::net::spend_ap(st)?;
     }
+    let took = matches!(action, Action::Take { .. } | Action::TakeAll);
     let outcome = game::apply(
         &mut st.character,
         &mut st.ground,
@@ -35,6 +36,9 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         st.tick,
         action,
     )?;
+    if took {
+        crate::credentials::shard_taken(st, place, pos);
+    }
     let interiors = &st.interiors;
     let constructs = &st.constructs;
     if refresh_sight {

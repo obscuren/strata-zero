@@ -299,6 +299,9 @@ Content(
         Quest(id: "the_vault", title: "The vault", giver: "Unknown", location: "Corp core",
               desc: "A data vault in the core has a buyer. Nobody knows what is in it.",
               objectives: ["Locate the vault in the Net", "Get past the ICE", "Copy the vault"]),
+        Quest(id: "first_favour", title: "A favour", giver: "A fixer", location: "Your block",
+              desc: "A mail on your rig: a neighbour owes the fixer, and there is a shard in the flat with the fixer's name on it. The door code came with the mail.",
+              objectives: ["Read the mail on your rig", "Pick up the shard in the neighbour's flat"]),
     ],
     recipes: [
         Recipe(id: "wire_shiv", name: "Wire shiv", skill: "electronics",

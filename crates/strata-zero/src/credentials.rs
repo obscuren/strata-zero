@@ -90,12 +90,184 @@ pub struct Journal {
     pub mails: Vec<Mail>,
     /// Terminals already powered on this session, by their tile.
     pub booted: BTreeSet<(Place, Pos)>,
+    /// The fixer's first job: a neighbour's flat and the shard in it.
+    pub favour: Option<Favour>,
 }
 
-/// A mail has been read: marks it.
+/// The first job: a shard to fetch from a neighbour's flat.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Favour {
+    pub flat: (BuildingId, i32, u16),
+    pub tile: Pos,
+    pub fixer: String,
+}
+
+pub const FAVOUR_QUEST: &str = "first_favour";
+
+fn favour_log(st: &mut AppState) -> Option<&mut game::QuestLog> {
+    st.character
+        .quests
+        .iter_mut()
+        .find(|q| q.quest == game::QuestId::new(FAVOUR_QUEST))
+}
+
+/// A mail has been read: marks it; the favour's mail ticks its first objective.
 pub fn mail_read(st: &mut AppState, index: usize) {
     if let Some(m) = st.journal.mails.get_mut(index) {
         m.read = true;
+    }
+    if index == 0
+        && st.journal.favour.is_some()
+        && let Some(log) = favour_log(st)
+        && let Some(first) = log.done.first_mut()
+        && !*first
+    {
+        *first = true;
+        st.story("a favour · the mail is read");
+    }
+}
+
+/// Something was taken here: when it was the favour's shard, the job is done.
+pub fn shard_taken(st: &mut AppState, place: Place, pos: Pos) {
+    let Some(f) = st.journal.favour.clone() else {
+        return;
+    };
+    let (b, level, _) = f.flat;
+    if place != (Place::Floor { building: b, level }) || pos != f.tile {
+        return;
+    }
+    let still_there = st
+        .ground
+        .at(place, pos)
+        .iter()
+        .any(|s| s.item == ItemId::new("paydata"));
+    if still_there {
+        return;
+    }
+    if let Some(log) = favour_log(st)
+        && let Some(second) = log.done.get_mut(1)
+        && !*second
+    {
+        *second = true;
+        let fixer = f.fixer.clone();
+        st.story(format!("the shard is yours · `{fixer}` will want it"));
+    }
+}
+
+/// The fixer nearest the building's door, by the corner they hold.
+fn nearest_fixer(st: &AppState, b: BuildingId) -> Option<String> {
+    let city = st.city.as_ref()?;
+    let world = st.world.as_ref()?;
+    let door = city.portals(b).first().map(|(_, p)| *p)?;
+    world
+        .people()
+        .iter()
+        .filter(|p| p.profession == "fixer")
+        .filter_map(|p| match p.work {
+            sim::Work::Spot(pos) => Some((pos.manhattan(door), &p.name)),
+            _ => None,
+        })
+        .min_by_key(|(d, _)| *d)
+        .map(|(_, name)| name.clone())
+}
+
+/// The first mail: a neighbour's door code and a shard to fetch, once.
+pub fn first_mail(st: &mut AppState) {
+    if st.journal.favour.is_some() {
+        return;
+    }
+    let Some(rig) = st.home else {
+        return;
+    };
+    let home = rig.home;
+    let b = home.building;
+    prepare(st, b);
+    let Some(fixer) = nearest_fixer(st, b) else {
+        return;
+    };
+    let Some(seed) = st.city.as_ref().map(|c| c.seed) else {
+        return;
+    };
+    let Some(homes) = st.interiors.homes_of(b).cloned() else {
+        return;
+    };
+    let flats: Vec<(i32, u16)> = homes
+        .flats()
+        .filter(|f| *f != (home.level, home.number))
+        .collect();
+    if flats.is_empty() {
+        return;
+    }
+    let (level, number) = flats
+        [(citygen::rng::hash64(seed, b.index() as u64 ^ 0xFA50) % flats.len() as u64) as usize];
+    let Some(city) = st.city.as_ref() else {
+        return;
+    };
+    let Some(floor) = st.interiors.ensure(city, b, level) else {
+        return;
+    };
+    let Some(room) = floor
+        .rooms
+        .iter()
+        .find(|r| r.kind == citygen::RoomKind::Flat && r.number == number)
+    else {
+        return;
+    };
+    let Some(tile) = room
+        .rect
+        .iter()
+        .find(|p| floor.tiles[*p].is_walkable() && floor.tiles[*p].feature.is_none())
+    else {
+        return;
+    };
+    let code = citygen::rng::door_code(seed, b, level, number);
+    let now = st.net.now(st);
+    st.journal.learn(Code {
+        building: b,
+        level,
+        number,
+        household: homes.household_of(level, number),
+        code,
+        source: Source::Mail,
+        at: now,
+    });
+    st.ground.add(
+        Place::Floor { building: b, level },
+        tile,
+        ItemId::new("paydata"),
+        1,
+    );
+    let first = fixer
+        .split_whitespace()
+        .next()
+        .unwrap_or(&fixer)
+        .to_string();
+    st.journal.mails.push(Mail {
+        from: first.clone(),
+        subject: "a favour".to_string(),
+        body: vec![
+            format!(
+                "Welcome to the block, choom. {number} on {} belongs to a guy who owes me.",
+                citygen::FloorPlan::label(level)
+            ),
+            format!("Door code {code:04}. There's a shard in there with my name on it."),
+            "Bring it.".to_string(),
+            first.clone(),
+        ],
+        read: false,
+        at: now,
+    });
+    st.journal.favour = Some(Favour {
+        flat: (b, level, number),
+        tile,
+        fixer: first,
+    });
+    let id = game::QuestId::new(FAVOUR_QUEST);
+    if !st.character.quests.iter().any(|q| q.quest == id) {
+        st.character.quests.push(game::QuestLog {
+            quest: id,
+            done: vec![false, false],
+        });
     }
 }
 
@@ -434,6 +606,7 @@ pub fn move_in(st: &mut AppState) {
     if st.character.count(&id) == 0 {
         st.character.give(id, 1);
     }
+    first_mail(st);
 }
 
 /// `day N HH:MM` for a game minute.
@@ -1097,5 +1270,126 @@ mod tests {
             "{es:?}"
         );
         assert!(flat_label(&st, b, level, number).ends_with(&format!("flat {number}")));
+    }
+
+    fn state_home() -> crate::app::AppState {
+        let mut st = crate::app::AppState::new();
+        st.enter_city(
+            Generator::run(GenParams {
+                seed: 8,
+                size: SizePreset::Medium,
+                districts: 7,
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        st
+    }
+
+    #[test]
+    fn the_first_mail_names_a_neighbour_and_drops_the_shard() {
+        let mut st = state_home();
+        let home = st.home.unwrap().home;
+        prepare(&mut st, home.building);
+        move_in(&mut st);
+        assert_eq!(st.journal.mails.len(), 1);
+        let m = st.journal.mails[0].clone();
+        assert!(!m.read);
+        let favour = st.journal.favour.clone().expect("a favour");
+        let (b, level, number) = favour.flat;
+        assert_eq!(b, home.building);
+        assert_ne!((level, number), (home.level, home.number));
+        let code = st
+            .journal
+            .code_for(b, level, number)
+            .expect("the neighbour's code");
+        assert_eq!(code.source, Source::Mail);
+        assert!(
+            m.body
+                .iter()
+                .any(|l| l.contains(&format!("{:04}", code.code))),
+            "{:?}",
+            m.body
+        );
+        assert!(m.body.iter().any(|l| l.contains(&number.to_string())));
+        assert_eq!(m.from, favour.fixer);
+        let (_, floor) = st.interiors.floor(b, level).unwrap();
+        let room = floor
+            .rooms
+            .iter()
+            .find(|r| r.kind == citygen::RoomKind::Flat && r.number == number)
+            .unwrap();
+        assert!(room.rect.contains(favour.tile));
+        assert!(floor.tiles[favour.tile].is_walkable());
+        let place = Place::Floor { building: b, level };
+        assert!(
+            st.ground
+                .at(place, favour.tile)
+                .iter()
+                .any(|s| s.item == ItemId::new("paydata"))
+        );
+        let log = st
+            .character
+            .quests
+            .iter()
+            .find(|q| q.quest == game::QuestId::new("first_favour"))
+            .expect("the favour in the log");
+        assert_eq!(log.done, vec![false, false]);
+        // A load wakes you again: nothing doubles.
+        move_in(&mut st);
+        assert_eq!(st.journal.mails.len(), 1);
+        assert_eq!(
+            st.character
+                .quests
+                .iter()
+                .filter(|q| q.quest == game::QuestId::new("first_favour"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            st.ground
+                .at(place, favour.tile)
+                .iter()
+                .map(|s| s.qty)
+                .sum::<u32>(),
+            1
+        );
+    }
+
+    #[test]
+    fn reading_and_taking_tick_the_favour() {
+        let mut st = state_home();
+        let home = st.home.unwrap().home;
+        prepare(&mut st, home.building);
+        move_in(&mut st);
+        let favour = st.journal.favour.clone().unwrap();
+        let (b, level, _) = favour.flat;
+        let place = Place::Floor { building: b, level };
+        mail_read(&mut st, 0);
+        assert!(st.journal.mails[0].read);
+        let done = |st: &crate::app::AppState| {
+            st.character
+                .quests
+                .iter()
+                .find(|q| q.quest == game::QuestId::new("first_favour"))
+                .unwrap()
+                .done
+                .clone()
+        };
+        assert_eq!(done(&st), vec![true, false]);
+        // Taking it elsewhere, or before it is gone from the floor, ticks nothing.
+        shard_taken(&mut st, place, favour.tile);
+        assert_eq!(done(&st), vec![true, false]);
+        st.ground
+            .take(place, favour.tile, &ItemId::new("paydata"), 1);
+        shard_taken(&mut st, place, favour.tile);
+        assert_eq!(done(&st), vec![true, true]);
+        assert!(
+            st.log
+                .latest()
+                .is_some_and(|e| e.text.contains("the shard is yours")),
+            "{:?}",
+            st.log.latest()
+        );
     }
 }
