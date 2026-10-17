@@ -61,15 +61,20 @@ impl Player {
         } else {
             pool[(hash64(seed, 0x5A17) % pool.len() as u64) as usize]
         };
-        let mut player = Player {
+        let mut player = Player::at(Place::Stratum(street), pos);
+        player.update_fov(&MapRef::stratum_of(city, street), 0);
+        player
+    }
+
+    /// A player standing at a tile of a place, having seen nothing yet.
+    pub fn at(place: Place, pos: Pos) -> Player {
+        Player {
             pos,
-            place: Place::Stratum(street),
+            place,
             body: None,
             memory: HashMap::new(),
             unseen: Grid::filled(Size { w: 0, h: 0 }, Visibility::Unseen),
-        };
-        player.update_fov(&MapRef::stratum_of(city, street), 0);
-        player
+        }
     }
 
     pub fn radius(&self) -> i32 {

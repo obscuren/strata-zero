@@ -33,11 +33,17 @@ impl Interiors {
     }
 
     /// A floor, generated if this is its first visit. `None` for an open building or
-    /// a level the plan does not have.
+    /// a level the plan does not have. An atrium floor brings the plaza below with it,
+    /// for the look-down.
     pub fn ensure(&mut self, city: &City, b: BuildingId, level: i32) -> Option<&Floor> {
         let plan = self.plan(city, b)?.clone();
         if level < plan.lowest || level > plan.top {
             return None;
+        }
+        if plan.atrium.is_some() && level >= 1 {
+            self.floors
+                .entry((b, 0))
+                .or_insert_with(|| generate_floor(city, &plan, 0));
         }
         Some(
             self.floors
@@ -397,6 +403,25 @@ impl Placement {
 mod tests {
     use super::*;
     use citygen::{BuildingKind, GenParams, Generator, SizePreset};
+
+    /// A Medium city with a megablock and a home in it.
+    fn home_city() -> City {
+        Generator::run(GenParams {
+            seed: 8,
+            size: SizePreset::Medium,
+            districts: 7,
+            ..Default::default()
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn an_atrium_level_brings_the_plaza_with_it() {
+        let (city, mut ints) = (home_city(), Interiors::default());
+        let h = citygen::home(&city).unwrap();
+        ints.ensure(&city, h.building, h.level).unwrap();
+        assert!(ints.floor(h.building, 0).is_some());
+    }
 
     #[test]
     fn floors_are_made_once_and_only_inside_the_plan() {

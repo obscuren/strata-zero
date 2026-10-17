@@ -259,19 +259,30 @@ mod tests {
         term.draw(|f| t.draw(&st, f)).unwrap();
         assert!(buffer_text(term.backend().buffer()).contains("NEW GAME (DEBUG)"));
         t.update(&mut st, &[key(KeyCode::Down)]);
-        assert!(
-            matches!(
-                t.update(&mut st, &[key(KeyCode::Enter)]),
-                ScreenCmd::Switch {
-                    fx: TransitionKind::Glitch,
-                    ..
-                }
-            ),
-            "straight to generating"
-        );
+        let ScreenCmd::Switch {
+            to: mut generating,
+            fx: TransitionKind::Glitch,
+        } = t.update(&mut st, &[key(KeyCode::Enter)])
+        else {
+            panic!("straight to generating")
+        };
         assert_eq!(st.character.handle, "D'SHAWN");
         assert_eq!(st.character.level, 50);
         assert!(st.character.flags(&st.content).contains("deep_end"));
+        let ScreenCmd::Switch { .. } = generating.update(&mut st, &[key(KeyCode::Enter)]) else {
+            panic!("ENTER skips to the city")
+        };
+        let p = st.player.as_ref().expect("walking in the new city");
+        if let Some(h) = st.home {
+            assert_eq!(
+                p.place,
+                citygen::Place::Floor {
+                    building: h.home.building,
+                    level: h.home.level
+                },
+                "a new game wakes up at home"
+            );
+        }
     }
 
     #[test]

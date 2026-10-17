@@ -64,6 +64,8 @@ pub struct AppState {
     pub log: MessageLog,
     /// Which sidebar sections are on.
     pub sidebar: Sidebar,
+    /// The player's flat and its rig, when the city has one.
+    pub home: Option<crate::home::HomeRig>,
 }
 
 /// One ability effect playing on the map.
@@ -132,6 +134,7 @@ impl AppState {
             build: None,
             log: MessageLog::default(),
             sidebar: Sidebar::default(),
+            home: None,
         }
     }
 
@@ -190,8 +193,9 @@ impl AppState {
         }
     }
 
-    /// Puts a city in place: no body, no effects in flight.
+    /// Puts a city in place: no body, no effects in flight, the home found.
     pub fn enter_city(&mut self, city: City) {
+        self.home = crate::home::HomeRig::find(&city);
         self.world = Some(sim::World::seed(
             &city,
             &self.people,

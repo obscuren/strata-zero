@@ -562,9 +562,14 @@ impl MapScreen {
         let bonus = st.sight_bonus();
         let Some(city) = st.city.as_ref() else { return };
         if st.player.is_none() {
-            let mut p = Player::spawn(city, hash64(city.seed, st.tick));
-            p.update_fov(&MapRef::stratum_of(city, StratumKind::Street), bonus);
-            st.player = Some(p);
+            let home = st
+                .home
+                .and_then(|rig| rig.wake(city, &mut st.interiors, &st.constructs, bonus));
+            st.player = Some(home.unwrap_or_else(|| {
+                let mut p = Player::spawn(city, hash64(city.seed, st.tick));
+                p.update_fov(&MapRef::stratum_of(city, StratumKind::Street), bonus);
+                p
+            }));
         }
         if let Some(p) = &st.player {
             self.place = p.place;
@@ -3569,6 +3574,62 @@ mod tests {
             .unwrap(),
         );
         st
+    }
+
+    /// A Medium city with a megablock and a home, put in place as a new game would.
+    fn state_home() -> AppState {
+        let mut st = AppState::new();
+        st.enter_city(
+            Generator::run(GenParams {
+                seed: 8,
+                size: SizePreset::Medium,
+                districts: 7,
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        st
+    }
+
+    #[test]
+    fn a_new_game_wakes_up_at_home() {
+        let mut st = state_home();
+        let s = MapScreen::walking(&mut st);
+        let h = st.home.unwrap();
+        let p = st.player.as_ref().unwrap();
+        assert_eq!(
+            p.place,
+            Place::Floor {
+                building: h.home.building,
+                level: h.home.level
+            }
+        );
+        assert_eq!(p.pos, h.home.bed_side);
+        assert_eq!(s.place, p.place);
+        assert_eq!(
+            p.vis().get(h.home.rig),
+            Some(&crate::walker::Visibility::Visible)
+        );
+    }
+
+    #[test]
+    fn a_city_without_a_home_starts_on_the_street() {
+        let mut st = state_home();
+        let mut city = st.city.take().unwrap();
+        for b in city
+            .buildings
+            .iter_mut()
+            .filter(|b| b.kind == citygen::BuildingKind::Megablock)
+        {
+            b.kind = citygen::BuildingKind::Apartment;
+        }
+        st.enter_city(city);
+        assert!(st.home.is_none());
+        MapScreen::walking(&mut st);
+        assert!(matches!(
+            st.player.as_ref().unwrap().place,
+            Place::Stratum(StratumKind::Street)
+        ));
     }
 
     fn dir_between(from: Pos, to: Pos) -> KeyCode {
