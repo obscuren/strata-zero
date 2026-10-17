@@ -1830,6 +1830,40 @@ mod tests {
     }
 
     #[test]
+    fn a_two_door_megablock_seeds_and_steps() {
+        let c = Generator::run(GenParams {
+            seed: 8,
+            size: SizePreset::Medium,
+            districts: 7,
+            ..Default::default()
+        })
+        .unwrap();
+        let blocks: Vec<_> = c
+            .buildings
+            .iter()
+            .filter(|b| b.kind == BuildingKind::Megablock)
+            .map(|b| b.id)
+            .collect();
+        assert!(!blocks.is_empty());
+        for b in &blocks {
+            let doors = c
+                .portals(*b)
+                .iter()
+                .filter(|(k, _)| *k == StratumKind::Street)
+                .count();
+            assert!(doors >= 2, "{b:?} has {doors} street doors");
+        }
+        let mut w = world(&c);
+        let mut seen_inside = false;
+        for hour in 1..=24u16 {
+            let t = tick_at(hour % 24 * 60, if hour == 24 { 2 } else { 1 });
+            run_to(&mut w, &c, t);
+            seen_inside |= blocks.iter().any(|b| !w.inside(*b).is_empty());
+        }
+        assert!(seen_inside, "someone goes inside a megablock");
+    }
+
+    #[test]
     fn the_same_seed_gives_the_same_day() {
         let c = city();
         let mut a = world(&c);

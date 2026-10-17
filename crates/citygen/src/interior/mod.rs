@@ -166,6 +166,37 @@ mod tests {
     }
 
     #[test]
+    fn megablock_ground_floors_validate_with_the_service_exit() {
+        for seed in [1u64, 2, 8, 11] {
+            let c = Generator::run(GenParams {
+                seed,
+                size: SizePreset::Medium,
+                districts: 7,
+                ..Default::default()
+            })
+            .unwrap();
+            for b in c
+                .buildings
+                .iter()
+                .filter(|b| b.kind == BuildingKind::Megablock)
+            {
+                let plan = FloorPlan::new(&c, b.id).unwrap();
+                let ground = generate_floor(&c, &plan, 0);
+                assert!(ground.exits.len() >= 2, "seed {seed}");
+                validate_floor(&plan, &ground).unwrap();
+                for e in &ground.exits {
+                    let step = ground.doorstep(e);
+                    let open = step
+                        .neighbors4()
+                        .filter(|n| ground.tiles.get(*n).is_some_and(|t| t.is_walkable()))
+                        .count();
+                    assert!(open >= 2, "seed {seed}: exit {:?} is pinched", e.at);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn plans_follow_height_class_span_and_kind() {
         let c = city();
         let mut seen_tall = false;
