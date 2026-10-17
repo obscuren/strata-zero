@@ -747,4 +747,90 @@ mod tests {
         }
         assert!(seen.len() >= 6, "{seen:?}");
     }
+
+    /// The Medium cities with a megablock big enough for an atrium.
+    fn atrium_cities() -> Vec<City> {
+        [1u64, 2, 8, 11]
+            .into_iter()
+            .map(|seed| {
+                Generator::run(GenParams {
+                    seed,
+                    size: SizePreset::Medium,
+                    districts: 7,
+                    ..Default::default()
+                })
+                .unwrap()
+            })
+            .collect()
+    }
+
+    fn atrium_plans(c: &City) -> Vec<FloorPlan> {
+        c.buildings
+            .iter()
+            .filter_map(|b| FloorPlan::new(c, b.id))
+            .filter(|p| p.atrium.is_some())
+            .collect()
+    }
+
+    #[test]
+    fn atrium_floors_validate_and_share_one_atrium() {
+        let cities = atrium_cities();
+        let mut seen = 0;
+        for c in &cities {
+            for plan in atrium_plans(c) {
+                seen += 1;
+                let a = plan.atrium.unwrap();
+                assert_eq!(a, plan.size.rect().inset(BAND + 1 + WALK));
+                assert!(
+                    !a.contains(plan.stair) && plan.lift_bank().iter().all(|p| !a.contains(*p))
+                );
+                assert_eq!(plan.floor_type(0), FloorType::Plaza);
+                for level in plan.levels() {
+                    let f = generate_floor(c, &plan, level);
+                    validate_floor(&plan, &f)
+                        .unwrap_or_else(|e| panic!("seed {} level {level}: {e}", c.seed));
+                    if level >= 1 {
+                        assert_eq!(plan.floor_type(level), FloorType::Atrium);
+                        for p in a.border() {
+                            assert_eq!(f.tiles[p].terrain, Terrain::Railing, "{p:?}");
+                        }
+                        for p in a.inset(1).iter() {
+                            assert_eq!(f.tiles[p].terrain, Terrain::Atrium);
+                        }
+                        let flats: Vec<&Room> = f
+                            .rooms
+                            .iter()
+                            .filter(|r| r.kind == RoomKind::Flat && r.private)
+                            .collect();
+                        assert!(flats.len() >= 8, "level {level} has {} flats", flats.len());
+                        for r in &flats {
+                            assert_eq!(r.number as i32 / 100, level, "{}", r.number);
+                        }
+                    }
+                }
+                assert!(plan.corridor_floors().len() as i32 >= plan.top);
+            }
+        }
+        assert_eq!(
+            seen, 4,
+            "one atrium megablock in each of seeds 1, 2, 8 and 11"
+        );
+    }
+
+    #[test]
+    fn small_megablocks_keep_corridor_floors() {
+        // A hand-shrunk copy: a Megablock under the threshold plans no atrium.
+        let mut c = atrium_cities().swap_remove(3);
+        let b = c
+            .buildings
+            .iter()
+            .position(|b| b.kind == BuildingKind::Megablock)
+            .unwrap();
+        c.buildings[b].footprint.w = 10;
+        c.buildings[b].footprint.h = 8;
+        let plan = FloorPlan::new(&c, c.buildings[b].id).unwrap();
+        assert!(plan.atrium.is_none());
+        assert_eq!(plan.floor_type(0), FloorType::Lobby);
+        assert_eq!(plan.floor_type(1), FloorType::Corridor);
+    }
 }

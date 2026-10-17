@@ -40,6 +40,34 @@ fn medium_seeds() {
     sweep(SizePreset::Medium, 1000..1010);
 }
 
+/// Every level of every atrium megablock validates, on the Medium cities that have
+/// one.
+#[test]
+fn medium_atrium_floors_validate() {
+    let mut seen = 0;
+    for seed in [1u64, 2, 8, 11] {
+        let c = Generator::run(GenParams {
+            seed,
+            size: SizePreset::Medium,
+            districts: 7,
+            ..Default::default()
+        })
+        .unwrap();
+        for b in &c.buildings {
+            let Some(plan) = FloorPlan::new(&c, b.id).filter(|p| p.atrium.is_some()) else {
+                continue;
+            };
+            seen += 1;
+            for level in plan.levels() {
+                let f = generate_floor(&c, &plan, level);
+                validate_floor(&plan, &f)
+                    .unwrap_or_else(|e| panic!("seed {seed} {:?} level {level}: {e}", b.id));
+            }
+        }
+    }
+    assert!(seen >= 4, "{seen} atrium megablocks");
+}
+
 #[test]
 fn large_seeds() {
     sweep(SizePreset::Large, 2000..2003);

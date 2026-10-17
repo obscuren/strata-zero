@@ -12,6 +12,8 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use std::collections::HashSet;
 
+mod atrium;
+
 /// Base light of a floor; ceiling lamps add to it.
 const BASE_LIGHT: u8 = 150;
 
@@ -1222,6 +1224,9 @@ pub(super) fn generate(city: &City, plan: &FloorPlan, level: i32) -> Floor {
         FloorType::Factory => b.factory(),
         FloorType::Garage => b.garage(),
         FloorType::Hall => b.hall(),
+        FloorType::Atrium => b.atrium_floor(),
+        // An open lobby until the plaza has a layout of its own.
+        FloorType::Plaza => b.lobby(),
     }
     b.lamps();
     b.connect();
