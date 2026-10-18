@@ -158,7 +158,7 @@ Row by row (rows of the drawing, 0 at the top):
 - **14, ROM.** `ROM▸` dim, then each ability the deck grants as a strip:
   black text on dark amber, ` NETSCAN `, ` ARC TRACE `.
 - **15-16, the keyboard.** One row of `▆▆` keycaps in the body's key grey with
-  one missing (`··`) and one magenta replacement, then a space bar.
+  one magenta replacement cap, then a space bar.
 - **17**: the deck's bottom edge.
 - **18-20, WAREZ** (Jeffrey's name for the row). `WAREZ` bold dim, then the programs in the pack and
   not loaded, as carts lying flat: two rows each, darker tape, name and
