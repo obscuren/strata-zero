@@ -422,6 +422,15 @@ pub fn run_rows(
                 choices.push(c);
                 continue;
             }
+            if spec.op == game::Op::Backdoor
+                && let Some(why) = crate::net::plant_net_refusal(st, b)
+            {
+                let mut c = Choice::on(key, verb, what.clone(), colour, Pick::Close)
+                    .tail(format!(" · {why}"));
+                c.enabled = false;
+                choices.push(c);
+                continue;
+            }
             let pw = game::power(&st.character, &st.content, &spec, kind);
             // A program on yourself never fails.
             let odds = if kind == game::Target::Deck {

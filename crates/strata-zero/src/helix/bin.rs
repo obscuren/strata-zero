@@ -692,6 +692,7 @@ mod tests {
             game::Op::Backdoor,
             now,
         );
+        st.backdoors.plant_net(b, 1, 0, now);
         let mut sh = new_shell(&mut st, HostId::Building(b));
         assert_eq!(sh.user, "root");
         let quiet = go(&mut st, &mut sh, "alarm off");

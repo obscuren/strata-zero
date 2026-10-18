@@ -617,8 +617,20 @@ impl Deck {
                 out.push(plain(format!("code {:04}", c.code)));
             }
             EntryKind::Card(id) => out.extend(Self::item_card(st, id)),
-            EntryKind::Backdoor => {
-                out.push(plain("reachable from any port; the alarm does not shut it"));
+            EntryKind::Backdoor(i) => {
+                if let Some(d) = st.backdoors.list.get(*i) {
+                    let now = st.net.now(st);
+                    let kind = match d.kind {
+                        crate::backdoors::Kind::Key { .. } => "a key",
+                        crate::backdoors::Kind::Net { .. } => "a Net backdoor",
+                    };
+                    out.push(plain(kind));
+                    out.push(plain(format!("login as {}", d.user_label())));
+                    out.push(plain(format!("health {}", d.health(now).label())));
+                    if let crate::backdoors::State::Burned { why, .. } = d.state {
+                        out.push(plain(format!("burned · {}", why.label())));
+                    }
+                }
             }
         }
         out

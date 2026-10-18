@@ -128,6 +128,11 @@ pub fn user_for(st: &AppState, id: HostId) -> String {
             Tier::Admin => ROOT.to_string(),
             Tier::Guest => GUEST.to_string(),
             Tier::User => {
+                if let Some(crate::backdoors::Kind::Key { user }) =
+                    st.backdoors.live(b).map(|d| d.kind.clone())
+                {
+                    return user;
+                }
                 let card = st
                     .character
                     .inventory
@@ -1059,7 +1064,7 @@ mod tests {
         assert!(host.users.iter().any(|u| u.name == user_for(&st, id)));
         let _ = r;
         // the backdoor
-        st.net.backdoors.insert(b);
+        st.backdoors.plant_net(b, 1, 0, 0);
         assert_eq!(user_for(&st, id), "root");
         // a street terminal
         let d = st.city.as_ref().unwrap().districts[0].id;
