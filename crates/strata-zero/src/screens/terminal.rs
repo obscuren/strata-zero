@@ -125,7 +125,8 @@ impl Terminal {
     pub fn with_look(st: &mut AppState, origin: HostId, key: (Place, Pos), look: Look) -> Terminal {
         let shell = new_shell(st, origin);
         let seized = origin == HostId::Rig && st.backdoors.seized(st.net.now(st));
-        let fresh = st.journal.booted.insert(key);
+        // A seized rig does not spend its first boot on the warrant.
+        let fresh = !seized && st.journal.booted.insert(key);
         let typing = if seized {
             Some(Typing::new(
                 vec![
@@ -312,6 +313,7 @@ fn pop() -> ScreenCmd {
 
 impl Screen for Terminal {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+        crate::net::tick_backdoors(st);
         // A reply that has finished typing settles; EXIT leaves once typed.
         if self.settle(st.tick) {
             return pop();
@@ -810,6 +812,7 @@ mod tests {
             home.rig,
         );
         let mut t = Terminal::open(&mut st, HostId::Rig, spot);
+        assert!(!st.journal.booted.contains(&spot), "the real boot waits");
         let text = t.text(st.tick + 100_000);
         assert!(
             text.iter()

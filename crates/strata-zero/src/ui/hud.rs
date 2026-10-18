@@ -325,6 +325,8 @@ pub struct Footer<'a> {
     pub overburdened: bool,
     /// `TRACE ▰▰▱▱▱▱▱▱▱▱ 23 · ALERT 58 min`, jacked in.
     pub trace: Option<String>,
+    /// `TRACE ▸ hollis-court · 40 min`: the trace walking home from your last run.
+    pub home_trace: Option<String>,
     pub hunted: bool,
     /// `TURN 3  YOU › grey ICE › black ICE`, engaged.
     pub turn: Option<String>,
@@ -382,6 +384,13 @@ pub fn footer_rows(f: &Footer, width: u16) -> [Line<'static>; 4] {
         let used = width_of(&row1);
         row1.push(Span::raw(" ".repeat(at.saturating_sub(used).max(2))));
         row1.push(Span::styled(trace.clone(), Style::default().fg(CYAN)));
+    }
+    if let Some(home) = &f.home_trace {
+        row1.push(Span::raw("  "));
+        row1.push(Span::styled(
+            home.clone(),
+            Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD),
+        ));
     }
     let mut right1 = Vec::new();
     if f.hunted {
@@ -798,6 +807,7 @@ mod tests {
                 camera: false,
                 overburdened: false,
                 trace: None,
+                home_trace: None,
                 hunted: false,
                 turn: None,
                 run: None,
@@ -869,6 +879,7 @@ mod tests {
             camera: false,
             overburdened: false,
             trace: None,
+            home_trace: None,
             hunted: false,
             turn: None,
             run: None,
@@ -912,6 +923,7 @@ mod tests {
             camera: false,
             overburdened: false,
             trace: Some("TRACE ▰▰▱▱▱▱▱▱▱▱ 23".into()),
+            home_trace: None,
             hunted: false,
             turn: None,
             run: Some("RUN  crack · door lock  ▰▰▱ 2/3 · 40%   ▓▓▓▓░░░░  next roll".into()),
@@ -957,6 +969,7 @@ mod tests {
             run: Some("RUN  crack · door lock  ▰▰▱ 2/3 · 40%".into()),
             hunted: true,
             trace: Some("TRACE ▰▰▰▱▱▱▱▱▱▱ 34 · ALERT 58 min".into()),
+            home_trace: None,
             ice: vec![
                 "▣ grey ICE · hunting · 2 tiles".into(),
                 "▣ black ICE · hunting · 5 tiles".into(),

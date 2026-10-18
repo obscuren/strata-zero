@@ -521,7 +521,16 @@ impl Deck {
     /// What you know and hold, by building: a dim header, then one lit line per entry.
     fn journal_rows(st: &AppState) -> Vec<Row> {
         let groups = crate::credentials::entries(st);
-        if groups.is_empty() {
+        let mut rows: Vec<Row> = crate::credentials::extra_lines(st)
+            .into_iter()
+            .map(|text| Row {
+                text,
+                tone: Tone::Dim,
+                detail: None,
+                spans: None,
+            })
+            .collect();
+        if groups.is_empty() && rows.is_empty() {
             return vec![Row {
                 text: "nothing known yet".into(),
                 tone: Tone::Dim,
@@ -531,7 +540,6 @@ impl Deck {
         }
         let lit = Style::default().fg(CYAN).add_modifier(Modifier::BOLD);
         let plain = Style::default().fg(TEXT);
-        let mut rows = Vec::new();
         let mut i = 0;
         for (_, header, es) in groups {
             rows.push(Row {

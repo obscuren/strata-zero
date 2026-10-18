@@ -11,10 +11,10 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 24] = [
+const COMMANDS: [&str; 27] = [
     "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "talent", "tpts", "program",
     "heat", "alarm", "wake", "engage", "calm", "ice", "failsafe", "hp", "who", "clock", "tp",
-    "clear", "help",
+    "clear", "help", "trace", "seize", "backdoor",
 ];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
@@ -316,6 +316,45 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             ));
             Ok(format!("{h:02}:{m:02}"))
         }
+        "trace" => {
+            let now = st.net.now(st);
+            if st.backdoors.route.is_none() {
+                st.backdoors.start_route(None);
+            }
+            st.backdoors.start_trace(now);
+            Ok("a trace runs home".to_string())
+        }
+        "seize" => {
+            let now = st.net.now(st);
+            st.backdoors.rig_seized_until = Some(now + crate::backdoors::SEIZED_MINUTES);
+            Ok("the rig is seized for a day".to_string())
+        }
+        "backdoor" => {
+            let what = args.first().ok_or("backdoor <host>")?;
+            let hosts: Vec<(citygen::BuildingId, String)> = st
+                .city
+                .as_ref()
+                .map(|c| c.buildings.iter().map(|x| x.id).collect::<Vec<_>>())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|id| {
+                    (
+                        id,
+                        crate::helix::hosts::hostname(st, crate::helix::shell::HostId::Building(id)),
+                    )
+                })
+                .collect();
+            let b = hosts
+                .iter()
+                .find(|(_, n)| n.starts_with(what))
+                .map(|(id, _)| *id)
+                .ok_or_else(|| format!("no host {what}"))?;
+            let now = st.net.now(st);
+            let seed = st.city.as_ref().map_or(0, |c| c.seed);
+            st.backdoors.can_plant(b, now).map_err(|r| r.words())?;
+            st.backdoors.plant_net(b, 1, seed, now);
+            Ok(format!("backdoor on `{}`", crate::net::building_name(st, b)))
+        }
         "tp" => {
             // Teleports the player on the map they are on.
             let usage = "tp <x> <y>".to_string();
@@ -355,7 +394,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             ))
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> · tp <x> <y> · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> · tp <x> <y> · trace · seize · backdoor <host> · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),
@@ -511,6 +550,21 @@ mod tests {
         assert_eq!((st.character.sp, st.character.stat_points), (2, 3));
         assert_eq!(run(&mut st, at, "sp x").unwrap_err(), "sp <points>");
         assert!(run(&mut st, at, "help").unwrap().contains("pts"));
+    }
+
+    #[test]
+    fn backdoor_trace_and_seize_drive_the_backdoor_state() {
+        let (mut st, at) = setup();
+        let b = st.city.as_ref().unwrap().buildings[0].id;
+        let host = crate::helix::hosts::hostname(&st, crate::helix::shell::HostId::Building(b));
+        assert!(run(&mut st, at, "backdoor").is_err());
+        assert!(run(&mut st, at, "backdoor zzzz-no-such").is_err());
+        run(&mut st, at, &format!("backdoor {host}")).unwrap();
+        assert!(st.backdoors.held(b).is_some());
+        assert_eq!(run(&mut st, at, "trace").unwrap(), "a trace runs home");
+        assert!(st.backdoors.trace.is_some());
+        run(&mut st, at, "seize").unwrap();
+        assert!(st.backdoors.seized(st.net.now(&st)));
     }
 
     #[test]

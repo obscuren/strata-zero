@@ -344,6 +344,23 @@ impl MapScreen {
             }),
             _ => None,
         };
+        // On a rig run the route you came by rides the same line.
+        let trace = match (trace, st.backdoors.route.as_ref()) {
+            (Some(t), Some(r)) if jacked => {
+                let names: Vec<String> = r
+                    .relays
+                    .iter()
+                    .map(|b| {
+                        crate::helix::hosts::hostname(st, crate::helix::shell::HostId::Building(*b))
+                    })
+                    .collect();
+                Some(format!(
+                    "{t} · ROUTE {}",
+                    crate::backdoors::route_line(&names)
+                ))
+            }
+            (t, _) => t,
+        };
         let run = match (
             jacked,
             st.net.run.as_ref(),
@@ -371,6 +388,9 @@ impl MapScreen {
             camera: self.mode == Mode::Explore,
             overburdened: st.character.overburdened(&st.content),
             trace,
+            home_trace: st.backdoors.trace_line(now, &|b| {
+                crate::helix::hosts::hostname(st, crate::helix::shell::HostId::Building(b))
+            }),
             hunted: jacked && crate::net::hunted(st),
             turn: crate::net::turn_readout(st),
             run,
@@ -1883,6 +1903,7 @@ impl Screen for MapScreen {
         };
         let roots = st.backdoors.roots();
         st.net.minute(now, inside, &mut st.constructs, &roots);
+        crate::net::tick_backdoors(st);
         // The beat of a calm construct: one per frame at most, so a long menu is
         // never a burst of rolls.
         let was_engaged = st.net.engaged.is_some();
@@ -9162,6 +9183,95 @@ mod tests {
                     })
             })
             .expect("a building with a construct and a server")
+    }
+
+    /// The world clock moves on by `n` game minutes.
+    fn advance_minutes(st: &mut AppState, n: u64) {
+        let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) else {
+            panic!("no city, no clock")
+        };
+        world.advance(city, world.tick() + n * sim::TICKS_PER_MINUTE);
+    }
+
+    fn log_text(st: &AppState) -> String {
+        st.log
+            .iter()
+            .map(|e| e.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_trace_burns_relays_on_the_minute_and_the_raid_takes_the_rig() {
+        let (mut st, _screen) = home_screen();
+        let seed = st.city.as_ref().unwrap().seed;
+        let home = st.home.unwrap().home.building;
+        let a = other_construct(&mut st, &[home]);
+        st.backdoors.plant_net(a, 1, seed, 0);
+        // one you keep, to lose in the raid
+        let kept = other_construct(&mut st, &[home, a]);
+        st.backdoors.plant_net(kept, 1, seed, 0);
+        crate::net::land_at(&mut st, a).unwrap();
+        crate::net::dump(&mut st, "the trace found you");
+        advance_minutes(&mut st, crate::backdoors::HOLD_NET);
+        crate::net::tick_backdoors(&mut st);
+        assert!(log_text(&st).contains("trace passes"), "{}", log_text(&st));
+        assert!(st.backdoors.held(a).is_none());
+        assert!(st.backdoors.held(kept).is_some());
+        advance_minutes(&mut st, crate::backdoors::LAST_LEG);
+        crate::net::tick_backdoors(&mut st);
+        assert!(log_text(&st).contains("they kicked your door in"));
+        assert!(st.backdoors.held(kept).is_none());
+        assert!(st.backdoors.seized(st.net.now(&st)));
+        assert_eq!(
+            crate::net::jack_in_refusal(&st),
+            Some("the rig is gone · evidence".to_string())
+        );
+        let mails = st.journal.mails.len();
+        advance_minutes(&mut st, crate::backdoors::SEIZED_MINUTES);
+        crate::net::tick_backdoors(&mut st);
+        assert_eq!(st.journal.mails.len(), mails + 1);
+        let m = st.journal.mails.last().unwrap();
+        assert_eq!(m.subject, "lose this number");
+        assert!(!st.backdoors.seized(st.net.now(&st)));
+    }
+
+    #[test]
+    fn the_raid_while_jacked_in_ends_the_run_cleanly() {
+        let (mut st, _screen) = home_screen();
+        let seed = st.city.as_ref().unwrap().seed;
+        let home = st.home.unwrap().home.building;
+        let a = other_construct(&mut st, &[home]);
+        st.backdoors.plant_net(a, 1, seed, 0);
+        // a trace already on its last leg, then jack in from the rig
+        st.backdoors.start_route(None);
+        let now = st.net.now(&st);
+        st.backdoors.start_trace(now);
+        st.backdoors.end_route();
+        crate::net::land_at(&mut st, a).unwrap();
+        advance_minutes(&mut st, crate::backdoors::LAST_LEG);
+        crate::net::tick_backdoors(&mut st);
+        let p = st.player.as_ref().unwrap();
+        assert!(!p.jacked_in(), "dumped home");
+        assert!(st.net.run.is_none() && st.net.engaged.is_none());
+        assert!(st.backdoors.trace.is_none(), "no second trace");
+        assert!(log_text(&st).contains("the line went dead"));
+    }
+
+    #[test]
+    fn the_footer_shows_the_home_trace_and_the_route() {
+        let (mut st, screen) = home_screen();
+        let seed = st.city.as_ref().unwrap().seed;
+        let home = st.home.unwrap().home.building;
+        let a = other_construct(&mut st, &[home]);
+        st.backdoors.plant_net(a, 1, seed, 0);
+        crate::net::land_at(&mut st, a).unwrap();
+        let text = draw_screen(&screen, &st, 120, 40);
+        let name = crate::helix::hosts::hostname(&st, crate::helix::shell::HostId::Building(a));
+        assert!(text.contains(&format!("ROUTE zenbo ▸ {name}")), "{text}");
+        crate::net::dump(&mut st, "the trace found you");
+        let text = draw_screen(&screen, &st, 120, 40);
+        assert!(text.contains(&format!("TRACE ▸ {name} ·")), "{text}");
     }
 
     fn server_tile(st: &AppState, b: citygen::BuildingId) -> Pos {

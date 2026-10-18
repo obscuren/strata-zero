@@ -907,6 +907,35 @@ pub fn dump_for(st: &mut AppState, why: &str, cooling: u64) {
     st.repaint = true;
 }
 
+/// The backdoor clock: the trace walks, relays burn, the raid lands, the rig returns.
+pub fn tick_backdoors(st: &mut AppState) {
+    let now = st.net.now(st);
+    for ev in st.backdoors.minute(now) {
+        match ev {
+            crate::backdoors::Event::RelayBurned(b) => {
+                let line = format!(
+                    "trace passes `{}` · the backdoor is gone",
+                    building_name(st, b)
+                );
+                st.warn(line);
+            }
+            crate::backdoors::Event::LastLeg => {
+                st.warn("trace · nothing left between them and your door");
+            }
+            crate::backdoors::Event::Raid => {
+                // The route ends first, so the dump starts no second trace.
+                st.backdoors.end_route();
+                if st.player.as_ref().is_some_and(|p| p.jacked_in()) {
+                    dump_for(st, "the line went dead", COOLING_MINUTES);
+                }
+                st.story("they kicked your door in · the rig is evidence · every backdoor is gone");
+                kick(st, 20);
+            }
+            crate::backdoors::Event::RigReturned => crate::credentials::fixer_mail(st),
+        }
+    }
+}
+
 /// Back to the body, wherever it waits, seeing around it again.
 pub fn jack_out(st: &mut AppState) -> Result<(), &'static str> {
     let bonus = st.sight_bonus();
