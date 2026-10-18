@@ -125,7 +125,7 @@ keeps the lifts answering through a lockdown, `blind` silences a camera,
 `copy` pulls a paydata shard off a server or a vault dump off a vault (once
 each), and `backdoor` on the server keeps the gate open to you for good and
 cools the trace twice as fast. Programs are items that take slots on your
-deck; the CYBERDECK tab loads and unloads them; the deck is locked while you're jacked in.
+deck; the deck's blueprint (Inspect it in GEAR) loads and unloads them; the deck is locked while you're jacked in.
 
 ICE hunts. White ICE keeps its post; grey and black ICE walk the spine on a
 beat, the gate guard the near half and the vault guard the far half. A piece
@@ -139,7 +139,7 @@ security 230. `attack`, loaded like any program, takes two integrity a turn
 off the piece you point it at (white 3, grey 6, black 10) and breaks it for an
 hour; `shield` soaks the next hit; `mask` halves how far you are seen for six
 turns at a heat a turn. The HERE section lists the ICE in sight with its mode
-and integrity. With the deck's failsafe on (the CYBERDECK tab, on by default)
+and integrity. With the deck's failsafe on (on its blueprint, on by default)
 black ICE pulls you out at a quarter of your hp: a hard dump, thirty minutes
 of cooling, the hp stays lost. Off, black ICE can take you to zero, and that
 is the one way to die: FLATLINED, then the title.
@@ -355,27 +355,30 @@ terminals and stairs in range for a while.
 **Pause** (`esc` or `q`) resume · save game · load game · settings (dev mode,
 rain, fps) · quit to title · quit game
 
-**Deck** (`tab`) `←→` or `0`-`9` tabs · `↑↓` rows · `space` act on a row ·
+**Deck** (`tab`) `←→` or `1`-`9` tabs (`0` is talents too) · `↑↓` rows · `space` act on a row ·
 `esc` close; it reopens where you left it. Tabs: skills (the category board:
 `enter` folds and unfolds, `space` offers an unlock priced in SP), stats (the
 five stats and your pools; `space` buys a point outright), gear, inventory, workbench
-(WRENCH unlocks it), cyberdeck (the jacked deck drawn as hardware: arrows point
-at a slot, a ROM strip, the failsafe or a program in your warez and the deck's
-glass reads it out; `space` picks a program up and drops it in a slot, ejects
-one, or lifts the failsafe's cover and throws it; `tab` switches tabs here),
-jobs (in hand, on offer, done),
-journal (empty for now), map (what you remember of this stratum) and talents
-(on `0`, below). Every list wraps at both ends. `space` on a gear slot picks what fits from the pack,
+(WRENCH unlocks it), jobs (in hand, on offer, done), journal (empty for now), map
+(what you remember of this stratum) and talents (below). Every list wraps at both ends. `space` on a gear slot picks what fits from the pack,
 or unequips and inspects what is worn; on an inventory item it opens the
 verbs: Inspect, Equip, Use, Drop one, Drop all. In a popup the letter or
-`enter` fires a row and `esc` closes it; a card a row shows closes the popup too. The readout shows hp and the
+`enter` fires a row and `esc` closes it; a card a row shows closes the popup too.
+Inspect on an item opens its blueprint in a window over the deck. The jacked
+deck's blueprint is the deck drawn as hardware: arrows point at a slot, a ROM
+strip, the failsafe or a program in your warez and the deck's glass reads it
+out; `space` picks a program up and drops it in a slot, ejects one, or lifts
+the failsafe's cover and throws it. A deck you carry shows its own blueprint
+but can't be worked until you equip it; anything else reads MISSING BLUEPRINT
+for now. `esc` puts a carried program back, shuts a lifted cover, then closes
+the window. Skills and categories inspect as cards. The readout shows hp and the
 carried weight over capacity (magenta when over, and nothing more can be picked
 up). Items carry perks while worn (stat, sight, carry, max hp) and can grant
 abilities; consumables heal when used. The templates, origins, professions,
 categories and every item, ability, skill, talent and recipe live in
 `flavor/content.ron`.
 
-**Talents** (deck tab `0`) are five trees, one per stat: MEAT, EDGE, WRENCH,
+**Talents** (deck tab `9` or `0`) are five trees, one per stat: MEAT, EDGE, WRENCH,
 STREET and ICE, each a column of five tiers with two talents a tier and a
 capstone on top. A talent has up to three ranks; each rank adds something you
 can read on the sheet (a stat, max HP, focus, sight, carry), grants an
