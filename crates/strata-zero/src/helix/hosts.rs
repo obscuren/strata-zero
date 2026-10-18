@@ -31,7 +31,7 @@ pub fn slug(s: &str) -> String {
 }
 
 /// The rig user: your handle slugged.
-fn rig_user(st: &AppState) -> String {
+pub(super) fn rig_user(st: &AppState) -> String {
     let s = slug(&st.character.handle);
     if s.is_empty() {
         "runner".to_string()
@@ -119,12 +119,21 @@ fn residents(st: &AppState, b: BuildingId) -> Vec<Resident> {
     out
 }
 
+fn trapped(st: &AppState, b: BuildingId) -> Option<String> {
+    st.backdoors
+        .trap_login
+        .as_ref()
+        .filter(|(tb, _)| *tb == b)
+        .map(|(_, u)| u.clone())
+}
+
 /// The login user by tier: root, a resident's user, `user` or `guest`; on the rig, you.
 pub fn user_for(st: &AppState, id: HostId) -> String {
     match id {
         HostId::Rig => rig_user(st),
         HostId::District(_) => GUEST.to_string(),
         HostId::Building(b) => match tier_on(st, b) {
+            _ if trapped(st, b).is_some() => trapped(st, b).unwrap_or_default(),
             Tier::Admin => ROOT.to_string(),
             Tier::Guest => GUEST.to_string(),
             Tier::User => {

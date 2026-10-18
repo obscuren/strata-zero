@@ -3,13 +3,12 @@
 
 use super::hosts::{self, ensure_host, hostname, user_for};
 use super::shell::{HostId, Io, Output, Shell};
-use super::vfs::{Dev, Vfs};
+use super::vfs::{Dev, GUEST, Mode, ROOT, Vfs};
 use crate::access::{self, Tier, building_label, tier_on};
 use crate::app::AppState;
 use crate::ui::device::Look;
 use citygen::BuildingId;
 
-#[cfg(test)]
 use super::vfs::Kind;
 
 /// The shell's window on the game: every device and program reads and writes `st`.
@@ -20,6 +19,7 @@ pub struct AppIo<'a> {
 /// The programs the world adds to the builtins.
 const PROGRAMS: &[&str] = &[
     "scan", "ssh", "connect", "mail", "journal", "door", "lift", "cam", "alarm", "plan",
+    "backdoor", "burn", "route",
 ];
 
 /// A shell logged in on `host`: the user the host's tier gives you, in their home.
@@ -33,6 +33,7 @@ pub fn new_shell(st: &mut AppState, host: HostId) -> Shell {
 /// their home, or at `/` when the home is the shared `/tmp` (guest, `user`).
 fn login(st: &mut AppState, shell: &mut Shell, host: HostId) {
     let user = user_for(st, host);
+    st.backdoors.trap_login = None;
     let home = ensure_host(st, host)
         .users
         .iter()
@@ -46,6 +47,23 @@ fn login(st: &mut AppState, shell: &mut Shell, host: HostId) {
         home.clone()
     };
     shell.home = home;
+}
+
+fn key_path(user: &str) -> String {
+    if user == ROOT {
+        "/root/.ssh/authorized_keys".to_string()
+    } else {
+        format!("/home/{user}/.ssh/authorized_keys")
+    }
+}
+
+fn key_line(st: &AppState) -> String {
+    let seed = st.city.as_ref().map_or(0, |c| c.seed);
+    let me = hosts::rig_user(st);
+    format!(
+        "helix-ed25519 {:016x} {me}@zenbo",
+        citygen::rng::hash64(seed, 0x6B65)
+    )
 }
 
 fn lines(lines: Vec<String>) -> Output {
@@ -156,12 +174,61 @@ impl AppIo<'_> {
             [] => Err(format!("ssh: {what}: no such host")),
             [i] => {
                 let b = list[*i];
+                let via = self.st.backdoors.held(b).is_some();
+                let mut audit = false;
+                if via {
+                    let now = self.st.net.now(self.st);
+                    let seed = self.st.city.as_ref().map_or(0, |c| c.seed);
+                    let security = access::security_of(self.st, b);
+                    let who = self.st.backdoors.held(b).map(|d| d.user_label());
+                    match self.st.backdoors.check(b, security, seed, now) {
+                        crate::backdoors::Use::Refused => {
+                            return Err(format!(
+                                "ssh: {}: connection refused · key rejected",
+                                hostname(self.st, HostId::Building(b))
+                            ));
+                        }
+                        crate::backdoors::Use::Trap => {
+                            audit = true;
+                            self.st.backdoors.trap_login = who.map(|u| (b, u));
+                            let line = crate::net::raise_alarm(self.st, b);
+                            self.st.warn(line);
+                            let _ = self.st.net.add_heat(
+                                b,
+                                crate::backdoors::HONEYPOT_NOISE,
+                                now,
+                                false,
+                            );
+                            if shell.origin == HostId::Rig {
+                                self.st.backdoors.start_route(None);
+                                self.st.backdoors.start_trace(now);
+                                self.st.backdoors.end_route();
+                                self.st.warn("honeypot · they were waiting · trace running");
+                            }
+                        }
+                        crate::backdoors::Use::Works => {
+                            self.st.backdoors.spend(b, crate::backdoors::COST_SSH);
+                        }
+                    }
+                }
                 login(self.st, shell, HostId::Building(b));
-                Ok(one(format!(
-                    "CONNECTED TO {} · CLEARANCE {}",
+                if via {
+                    let now = self.st.net.now(self.st);
+                    self.st.backdoors.logins.push((now, b, shell.user.clone()));
+                }
+                let mut lines = vec![format!(
+                    "CONNECTED TO {} · CLEARANCE {}{}",
                     building_label(self.st, b),
-                    tier_on(self.st, b).label()
-                )))
+                    tier_on(self.st, b).label(),
+                    if via { " · via your backdoor" } else { "" }
+                )];
+                if audit {
+                    lines.push("AUDIT · THIS SESSION IS BEING RECORDED".to_string());
+                }
+                Ok(Output {
+                    lines,
+                    ..Output::default()
+                })
             }
             many => Err(format!(
                 "ssh: {what}: ambiguous: {}",
@@ -171,6 +238,79 @@ impl AppIo<'_> {
                     .join(", ")
             )),
         }
+    }
+
+    /// A device write through a backdoor spends some of its life.
+    fn spend_write(&mut self, host: HostId, user: &str) {
+        let HostId::Building(b) = host else { return };
+        if self
+            .st
+            .backdoors
+            .live(b)
+            .is_some_and(|d| d.user_label() == user)
+        {
+            self.st.backdoors.spend(b, crate::backdoors::COST_WRITE);
+        }
+    }
+
+    fn backdoor(&mut self, shell: &Shell) -> Result<Output, String> {
+        let HostId::Building(b) = shell.host else {
+            return Err("backdoor: no server here".to_string());
+        };
+        if shell.user == GUEST {
+            return Ok(Output {
+                lines: vec!["backdoor: Permission denied".into()],
+                status: 1,
+                denied: true,
+                ..Default::default()
+            });
+        }
+        let now = self.st.net.now(self.st);
+        if let Err(r) = self.st.backdoors.can_plant(b, now) {
+            return Err(format!("backdoor: {}", r.words()));
+        }
+        let path = key_path(&shell.user);
+        let line = key_line(self.st);
+        let security = access::security_of(self.st, b);
+        let seed = self.st.city.as_ref().map_or(0, |c| c.seed);
+        {
+            let fs = self.fs(shell.host);
+            let dir = path
+                .rsplit_once('/')
+                .map(|(d, _)| d.to_string())
+                .unwrap_or_default();
+            if fs.resolve("/", "/", &dir).is_err() {
+                fs.mkdir_as(&dir, &shell.user, Mode::RW_NONE);
+            }
+            let existing = match fs.read(ROOT, "/", "/", &path) {
+                Ok(Kind::File(t)) => t.clone(),
+                _ => String::new(),
+            };
+            fs.put(
+                &path,
+                &format!("{existing}{line}\n"),
+                &shell.user,
+                Mode::RW_NONE,
+            );
+        }
+        self.st
+            .backdoors
+            .plant_key(b, &shell.user, security, seed, now);
+        let (event, _) = self
+            .st
+            .net
+            .add_heat(b, crate::backdoors::PLANT_NOISE, now, false);
+        if event == game::TraceEvent::Alarm {
+            let line = crate::net::raise_alarm(self.st, b);
+            self.st.warn(line);
+        }
+        Ok(one(format!(
+            "KEY PLANTED · {}@{} · the rig holds {} of {}",
+            shell.user,
+            hostname(self.st, shell.host),
+            self.st.backdoors.slots_used(),
+            crate::backdoors::SLOTS
+        )))
     }
 
     fn exit(&mut self, shell: &mut Shell) -> Option<Result<Output, String>> {
@@ -223,6 +363,9 @@ impl AppIo<'_> {
             "cam" => access::loop_cams(self.st, b),
             _ => access::alarm_off(self.st, b),
         };
+        if done.is_ok() {
+            self.spend_write(shell.host, &shell.user);
+        }
         done.map(one).map_err(|e| format!("{cmd}: {e}"))
     }
 
@@ -287,7 +430,7 @@ impl Io for AppIo<'_> {
         &mut self,
         host: HostId,
         dev: &Dev,
-        _user: &str,
+        user: &str,
         text: &str,
     ) -> Result<Vec<String>, String> {
         let Some(b) = self.block(host) else {
@@ -305,6 +448,9 @@ impl Io for AppIo<'_> {
             (Dev::Alarm, _) => return Err("alarm: unknown request".to_string()),
             _ => return Err("helix: device is read-only".to_string()),
         };
+        if done.is_ok() {
+            self.spend_write(host, user);
+        }
         done.map(|l| vec![l]).map_err(|e| format!("{name}: {e}"))
     }
 
@@ -319,6 +465,9 @@ impl Io for AppIo<'_> {
             "scan" => self.scan(shell),
             "ssh" | "connect" => self.ssh(shell, args),
             "exit" => return self.exit(shell),
+            "backdoor" => self.backdoor(shell),
+            "burn" => Err("burn: rig only".to_string()),
+            "route" => Err("route: rig only".to_string()),
             "mail" => self.mail(shell, args),
             "journal" if shell.host == HostId::Rig => Ok(lines(access::journal_lines(self.st))),
             "journal" => Err("journal: no journal on this host".to_string()),
@@ -348,6 +497,22 @@ impl Io for AppIo<'_> {
 
     fn on_read(&mut self, host: HostId, path: &str, text: &str) {
         hosts::note_codes(self.st, host, path, text);
+    }
+
+    fn removed(&mut self, host: HostId, path: &str) {
+        let HostId::Building(b) = host else { return };
+        let Some(d) = self.st.backdoors.held(b) else {
+            return;
+        };
+        let crate::backdoors::Kind::Key { user } = &d.kind else {
+            return;
+        };
+        let key = key_path(user);
+        let dir = key.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+        if path == key || path == dir {
+            let now = self.st.net.now(self.st);
+            self.st.backdoors.burn(b, crate::backdoors::Why::You, now);
+        }
     }
 }
 
@@ -856,5 +1021,199 @@ mod tests {
         let denied = go(&mut st, &mut guest, &format!("cat {home}/notes.txt"));
         assert!(denied.denied, "{denied:?}");
         assert_eq!(st.journal.codes().len(), n);
+    }
+
+    #[test]
+    fn backdoor_plants_a_key_as_a_resident_and_refuses_in_order() {
+        let (mut st, b, d) = state();
+        // guest: denied
+        let mut sh = new_shell(&mut st, HostId::Building(b));
+        let out = go(&mut st, &mut sh, "backdoor");
+        assert!(
+            out.denied && text(&out) == "backdoor: Permission denied",
+            "{out:?}"
+        );
+        // a district host has no server
+        let mut dh = new_shell(&mut st, HostId::District(d));
+        assert_eq!(
+            text(&go(&mut st, &mut dh, "backdoor")),
+            "backdoor: no server here"
+        );
+        // a resident plants
+        crate::credentials::copy_codes(&mut st, b, 1);
+        let mut sh = new_shell(&mut st, HostId::Building(b));
+        let me = sh.user.clone();
+        let out = go(&mut st, &mut sh, "backdoor");
+        assert_eq!(
+            text(&out),
+            format!(
+                "KEY PLANTED · {me}@{} · the rig holds 1 of 3",
+                hostname(&st, HostId::Building(b))
+            )
+        );
+        let key = text(&go(&mut st, &mut sh, "cat ~/.ssh/authorized_keys"));
+        assert!(
+            key.starts_with("helix-ed25519 ") && key.ends_with("@zenbo"),
+            "{key}"
+        );
+        let ls = text(&go(&mut st, &mut sh, "ls -l ~/.ssh"));
+        assert!(
+            ls.contains(&format!("rw---- {me:<7}")) || ls.contains(&me),
+            "{ls}"
+        );
+        assert!(st.backdoors.held(b).is_some());
+        assert!(
+            st.net
+                .traces
+                .get(&b)
+                .is_some_and(|t| t.heat >= crate::backdoors::PLANT_NOISE)
+        );
+        // again: already here
+        assert_eq!(
+            text(&go(&mut st, &mut sh, "backdoor")),
+            "backdoor: already planted here"
+        );
+        // fill the rig, then the cap
+        st.backdoors.plant_net(BuildingId(9000), 1, 0, 0);
+        st.backdoors.plant_net(BuildingId(9001), 1, 0, 0);
+        st.backdoors.plant_net(BuildingId(9002), 1, 0, 0);
+        st.backdoors.burn(b, crate::backdoors::Why::Decay, 0);
+        let out = go(&mut st, &mut sh, "backdoor");
+        assert_eq!(
+            text(&out),
+            "backdoor: the rig holds 3 lines · burn one first"
+        );
+        assert_eq!(out.status, 1);
+        // patched beats full; seized beats patched
+        st.backdoors
+            .burn(BuildingId(9000), crate::backdoors::Why::You, 0);
+        st.backdoors.patched.insert(b, 10_000);
+        assert_eq!(
+            text(&go(&mut st, &mut sh, "backdoor")),
+            "backdoor: hole patched · try again tomorrow"
+        );
+        st.backdoors.rig_seized_until = Some(10_000);
+        assert_eq!(
+            text(&go(&mut st, &mut sh, "backdoor")),
+            "backdoor: the rig is seized · no line home"
+        );
+        // man knows it
+        assert!(text(&go(&mut st, &mut sh, "man backdoor")).starts_with("backdoor - "));
+    }
+
+    #[test]
+    fn rm_of_the_key_file_burns_the_key_once() {
+        let (mut st, b, _) = state();
+        crate::credentials::copy_codes(&mut st, b, 1);
+        let mut sh = new_shell(&mut st, HostId::Building(b));
+        go(&mut st, &mut sh, "backdoor");
+        assert!(st.backdoors.held(b).is_some());
+        assert_eq!(go(&mut st, &mut sh, "rm ~/.ssh/authorized_keys").status, 0);
+        assert!(st.backdoors.held(b).is_none());
+        assert!(matches!(
+            st.backdoors.list[0].state,
+            crate::backdoors::State::Burned {
+                why: crate::backdoors::Why::You,
+                ..
+            }
+        ));
+        // the directory may go too, and nothing double-burns
+        assert_eq!(go(&mut st, &mut sh, "rm -r ~/.ssh").status, 0);
+        assert_eq!(st.backdoors.list.len(), 1);
+        // patched: planting again is refused
+        assert_eq!(
+            text(&go(&mut st, &mut sh, "backdoor")),
+            "backdoor: hole patched · try again tomorrow"
+        );
+    }
+
+    #[test]
+    fn ssh_rides_a_key_from_the_rig_and_is_refused_once_it_burns() {
+        let mut st = state_home();
+        let home = st.home.unwrap().home.building;
+        // a key on the home block as a resident other than you: use copy_codes then plant as that user
+        crate::credentials::copy_codes(&mut st, home, 1);
+        let user = crate::helix::hosts::user_for(&st, HostId::Building(home));
+        let seed = st.city.as_ref().unwrap().seed;
+        st.backdoors.plant_key(home, &user, 100, seed, 0);
+        // forget the codes, so only the key gets us in
+        st.journal = Default::default();
+        crate::credentials::move_in(&mut st);
+        let mut sh = new_shell(&mut st, HostId::Rig);
+        let out = text(&go(&mut st, &mut sh, "ssh 1"));
+        assert!(out.ends_with("· via your backdoor"), "{out}");
+        assert_eq!(sh.user, user);
+        assert_eq!(
+            st.backdoors.held(home).unwrap().spent,
+            crate::backdoors::COST_SSH
+        );
+        let log = text(&go(&mut st, &mut sh, "cat /var/log/auth.log"));
+        assert!(log.contains(&format!("login  {user} via key")), "{log}");
+        go(&mut st, &mut sh, "exit");
+        // a device write through the key costs too
+        go(&mut st, &mut sh, "ssh 1");
+        let before = st.backdoors.held(home).unwrap().spent;
+        go(&mut st, &mut sh, "door release");
+        assert_eq!(
+            st.backdoors.held(home).unwrap().spent,
+            before + crate::backdoors::COST_WRITE
+        );
+        go(&mut st, &mut sh, "exit");
+        // burned by time: refused, and the journal knows
+        let d = st
+            .backdoors
+            .list
+            .iter_mut()
+            .find(|d| d.building == home)
+            .unwrap();
+        d.spent = d.nominal * 2;
+        let out = go(&mut st, &mut sh, "ssh 1");
+        assert_eq!(out.status, 1);
+        assert_eq!(
+            text(&out),
+            format!(
+                "ssh: {}: connection refused · key rejected",
+                hostname(&st, HostId::Building(home))
+            )
+        );
+        assert_eq!(sh.host, HostId::Rig);
+        assert_eq!(
+            st.backdoors.list[0].health(0),
+            crate::backdoors::Health::Burned
+        );
+    }
+
+    #[test]
+    fn a_honeypot_logs_you_in_and_rings_the_alarm() {
+        let (mut st, b, d) = state();
+        let seed = st.city.as_ref().unwrap().seed;
+        st.backdoors.plant_net(b, 1, seed, 0);
+        st.backdoors.list[0].state = crate::backdoors::State::Honeypot;
+        let mut sh = new_shell(&mut st, HostId::District(d));
+        // the clue is in the log before you use it
+        let mut peek = new_shell(&mut st, HostId::Building(b));
+        let log = text(&go(&mut st, &mut peek, "cat /var/log/auth.log"));
+        assert!(log.contains("audit  key flagged · monitoring"), "{log}");
+        let n = hostname(&st, HostId::Building(b));
+        let out = text(&go(&mut st, &mut sh, &format!("ssh {n}")));
+        assert!(
+            out.contains("AUDIT · THIS SESSION IS BEING RECORDED"),
+            "{out}"
+        );
+        assert_eq!(sh.user, "root");
+        let now = st.net.now(&st);
+        assert!(st.net.alert(b, now));
+        // from a street terminal no trace runs home
+        assert!(st.backdoors.trace.is_none());
+        // from the rig it does
+        let mut st = state_home();
+        let home = st.home.unwrap().home.building;
+        let seed = st.city.as_ref().unwrap().seed;
+        st.backdoors.plant_net(home, 1, seed, 0);
+        st.backdoors.list[0].state = crate::backdoors::State::Honeypot;
+        let mut sh = new_shell(&mut st, HostId::Rig);
+        go(&mut st, &mut sh, "ssh 1");
+        assert!(st.backdoors.trace.is_some());
+        assert!(st.backdoors.trace.as_ref().unwrap().relays.is_empty());
     }
 }
