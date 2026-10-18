@@ -252,3 +252,39 @@ Jeffrey: "lock up the deck when we are in the net. We should not be able to swit
 - [ ] **Step 3: Implement** a private `fn locked(st: &AppState) -> bool` (the same test as `link`); in `key()`, before acting: space/enter while locked → `st.warn("the deck is locked while you're jacked in")`, `Some(Stay)`, nothing else; pointing, PgUp/PgDn, esc/q and the tab keys are untouched. The glass's pinned row is `("locked · jacked in", GlassTone::Warn)` for every part while locked. README's CYBERDECK line gains "; the deck is locked while you're jacked in".
 - [ ] **Step 4: Run** `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings`.
 - [ ] **Step 5: Commit** `feat(app): the deck is locked while you're jacked in`
+
+### Task 9: The deck moves from its tab into the blueprint window (added at Jeffrey's request after Task 8)
+
+Spec: section "Update: the deck moves into the blueprint window" and "Keys in the window" (read both first). Jeffrey chose the half-block frame.
+
+**Files:**
+- Create: `crates/strata-zero/src/screens/blueprint.rs` (the window: a `Screen`)
+- Modify: `crates/strata-zero/src/screens/mod.rs` (`pub mod blueprint;`)
+- Modify: `crates/strata-zero/src/screens/cyberdeck.rs` (`DeckTab` learns which deck it shows; the no-deck path goes; tab keys go; hint without `tab tabs`)
+- Modify: `crates/strata-zero/src/screens/deck.rs` (drop `Tab::Cyberdeck`, the `cyber` field and every CYBERDECK branch; `0` → last tab; GEAR's and INVENTORY's Inspect verbs push the window; move the CYBERDECK tests to the window)
+- Modify: `crates/strata-zero/src/screens/popup.rs` (a `Pick` that opens the window, e.g. `Pick::Blueprint(ItemId)` returning `ScreenCmd::Replace` with the window, as `Pick::Keypad` does)
+- Modify: `crates/strata-zero/src/app.rs` (`AppState.deck_part: usize` remembers the pointed part of the equipped deck; `deck_rows` shrinks with `Tab::ALL`)
+- Modify: `crates/strata-zero/src/ui/cyberdeck/mod.rs` (drop the no-deck message drawing if nothing uses it)
+- Modify: `crates/strata-zero/src/screens/shots.rs` (shots of the window over the deck screen: the equipped pawnshop deck at 100×30 and 120×40, D'SHAWN's rebuilt deck, a MISSING BLUEPRINT)
+- Modify: `README.md` (tab list, `0`, the CYBERDECK line becomes a line on Inspect and the blueprint window)
+
+**Interfaces:**
+- Consumes: Tasks 1-8 (`DeckTab`, `ui::cyberdeck::draw`, `Part`, `DeckView`, the glass, the lock).
+- Produces: `screens::blueprint::Blueprint` (`Blueprint::open(st: &AppState, item: ItemId) -> Blueprint`, implements `Screen`); `DeckTab::for_deck(tick: u64, item: ItemId, equipped: bool, st: &AppState) -> DeckTab` (or an equivalent field on `DeckTab`): `equipped == false` → read-only: empty bay, pinned `not jacked · equip it first` (tone `Warn`) for every part, space/enter warn "equip the deck to work on it".
+
+- [ ] **Step 1: Write the failing tests.**
+  - `screens/blueprint.rs`:
+    - `the_window_frames_the_deck`: open on the equipped pawnshop deck at 100×30 over a `Deck` screen: the frame's top row starts `▗▄` and ends `▄▖`, its sides are `▐` / `▌` in cyan (`CYAN`), the bottom `▝▀…▀▘`; the title ` BLUEPRINT · PAWNSHOP DECK ` from frame column 3; the window is 88×28 centred (`x = (100-88)/2`, `y = (30-28)/2`); the drawing shows `K▒ROK▒WA KX-2`, `CRACK`, `WAREZ`, `FAILSAFE`; the hint row reads `↑↓←→ point · space act · esc close`.
+    - `the_window_works_the_deck`: the pick-up/carry/drop swap, eject, the failsafe's two presses and the jacked-in lock, each driven through the window's `update` (keys), asserting `st.character.loaded`, `st.net.failsafe` and the status row text ("Attack slotted · Copy to inventory", "failsafe off · black ICE can kill you", "the deck is locked while you're jacked in").
+    - `esc_unwinds_then_closes`: carrying → esc puts back (`Stay`); cover up → esc shuts (`Stay`); then esc → `Pop`. `q` the same. `Tab` and `5` do nothing (`Stay`, nothing changed).
+    - `a_carried_deck_is_read_only`: D'SHAWN (`Character::debug_runner`): open on `pawnshop_deck` (in his pack): the drawing shows `2 SLOT · R1`, no cart names in the bay (`empty` twice), pinned `not jacked · equip it first`; space on `Slot(0)` and on a WAREZ cart and on `Failsafe` change nothing and warn "equip the deck to work on it".
+    - `anything_else_is_a_missing_blueprint`: open on `copper_coil`: `MISSING BLUEPRINT` centred in the window's inside (row `y + 28/2`, column centred), hint `esc close`, no `FAILSAFE`; arrows and space change nothing; esc pops.
+    - `the_equipped_deck_remembers_its_part`: point `Failsafe`, esc out, reopen: `Failsafe`; a carried deck opens on `Slot(0)`.
+  - `screens/deck.rs`:
+    - `tabs_are_in_the_new_order_with_two_new_ones` → nine tabs, no `CYBERDECK` in the bar; `9` and `0` both jump to TALENTS; `st.deck_rows.len() == 9`.
+    - `inspect_opens_the_blueprint_window`: GEAR, the DECK slot row, space opens the slot popup, `i` → `ScreenCmd::Replace` (or `Push`) with a `Blueprint` on `pawnshop_deck`; INVENTORY, an item row's `i` → a `Blueprint` on that item; a skill's `i` still shows its text card.
+    - Delete the CYBERDECK tab tests whose behaviour now lives in `blueprint.rs` tests (keep what they checked there: odd decks — a deck the content does not know reads as a missing blueprint, a deck with no grants draws `ROM▸` alone, a passive grant reads `passive`; the sharpened ability; loading and unloading; the failsafe; the minimum terminal; the lock).
+- [ ] **Step 2: Run** `cargo test -p strata-zero blueprint deck::` — fails.
+- [ ] **Step 3: Implement.** The window draws the screen under it first (the app draws the stack; follow how the keypad overlay draws over the washed map: `ui::dim::wash`), then fills its 88×28 rect with the deck screen's background, the half-block frame in `CYAN`, the title, the blueprint centred in the inside (`ui::cyberdeck::draw` with the inside rect), the status row (`st.log.recent(tick)`, typed as the deck's strip is, magenta for warnings) and the hint row. Keys go to `DeckTab::key` except tab keys (ignored) and the close (esc/q when `DeckTab` has nothing to undo → `Pop`). `DeckTab` keeps its rules; the no-deck guard and the "No CYBERDECK equipped" view are deleted with the tab; `hint()` drops `tab tabs`. The equipped deck's part persists in `AppState.deck_part` (read on open, written on update). The deck item's look decides the drawing; an item that is a deck with an unknown look or no `deck` spec reads as MISSING BLUEPRINT.
+- [ ] **Step 4: Run** `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings`; render the shots and look at them.
+- [ ] **Step 5: Commit** `feat(app): inspect opens the blueprint window; the deck lives there now`

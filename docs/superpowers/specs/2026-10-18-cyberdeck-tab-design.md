@@ -22,6 +22,58 @@ Decks will come in different kinds later, each drawn its own way. So a deck
 says which drawing it wears, and this one, the pawnshop deck's, is the first:
 the **pawn** look.
 
+## Update: the deck moves into the blueprint window
+
+Jeffrey, after the build (2026-10-18): "Instead of having a tab for the
+cyberdeck we're going to use the inspect action from the item (inventory or
+gear). This should be the case for all items. We'll only implement the
+cyberdeck for now … It should open a window, borders with block characters,
+maybe a good cyan color we already use … add the cyberdeck in there and allow
+the interaction we have now. Esc closes the window. This window isn't special
+to the cyberdeck, it's meant for all items. For anything we don't have these
+graphics for will simply show MISSING BLUEPRINT centered."
+
+- **The CYBERDECK tab is gone.** The deck screen has nine tabs: SKILLS, STATS,
+  GEAR, INVENTORY, WORKBENCH, QUESTS, JOURNAL, MAP, TALENTS. `1`-`9` jump by
+  position (TALENTS lands on `9`) and `0` still jumps to TALENTS, the last tab.
+- **Inspect opens the blueprint window, for every item.** In GEAR (the `i`
+  Inspect verb on an equipped slot) and in INVENTORY (the `i` Inspect verb on
+  an item) Inspect no longer shows the text card: it pushes one window, the same
+  for every item. Skills and categories keep their text-card Inspect (they are
+  not items). The selected row's detail pane still shows the item's card as
+  today.
+- **The window.** A fixed 88×28 window, centred over the deck screen, which is
+  washed out behind it (as the map is behind the keypad). Its frame is a thin
+  bezel of half blocks in the chrome's cyan (`▗▄…▄▖` top, `▐` left, `▌` right,
+  `▝▀…▀▘` bottom; Jeffrey chose this over full blocks), the inside the deck
+  screen's dark background. The title sits on the top edge from column 3, bold
+  cyan on the dark background: ` BLUEPRINT · <ITEM NAME IN CAPITALS> `. Inside,
+  the item's blueprint is centred; the last row inside the frame holds the
+  hint line, and the row above it the latest status message while it is fresh
+  (as the deck screen's strip does), so slotting and refusals still read out.
+  88×28 fits the smallest terminal (100×30); the deck's 84×22 drawing sits in
+  it with a column to spare on each side.
+- **The blueprint of the equipped deck** is the deck as this spec describes:
+  bay, glass, failsafe, HEAT, ROM, WAREZ, corner brackets, pick-up/carry/drop,
+  the failsafe's two presses, the lock while jacked in, and every key below
+  except the tab keys (there is no tab bar in the window). Esc puts a carried
+  cart back, else shuts a lifted cover, else closes the window (back to the
+  deck screen on the tab it was opened from).
+- **A deck you carry but have not equipped** shows its own blueprint (its look,
+  its slots, its ROM) with an empty bay and its WAREZ row as for the equipped
+  deck, but nothing on it can be changed: the glass reads the pointed part as
+  usual and its pinned row reads `not jacked · equip it first` for every part;
+  space or enter warns "equip the deck to work on it" in the status row.
+  Pointing and reading work.
+- **Anything else** (no blueprint drawn for it yet): `MISSING BLUEPRINT`,
+  bold, in the chrome's dim colour, centred horizontally and vertically in the
+  window's inside. Esc closes; no other key does anything.
+- **No deck equipped** needs no view of its own any more: an empty DECK slot in
+  GEAR has nothing to inspect. The "No CYBERDECK equipped" tab view goes.
+
+The sections below describe the deck inside the window; where they say "the
+tab", read "the window".
+
 ## Goals
 
 ### Deck looks
@@ -248,28 +300,24 @@ the failsafe's cover or throwing it. The glass's pinned row reads
 while you're jacked in" in the strip as a warning and does nothing else. A cart
 cannot be in hand while jacked in (the deck screen is opened fresh each time).
 
-### Keys on this tab
+### Keys in the window
 
-As the TALENTS tab does, the arrows belong to the tab:
+The window owns every key while it is open:
 
 - `↑↓←→` / `hjkl` point (between slots only while holding).
 - `space` / `enter` act on the pointed part.
-- `esc` puts a held cart back, else shuts a lifted cover, else closes the
-  deck as on every tab.
-- `tab` / `shift-tab` switch tabs; `0`-`9` jump, as today.
+- `esc` / `q` put a held cart back, else shut a lifted cover, else close the
+  window.
 - `PgUp` / `PgDn` scroll the glass.
-- The hint line: `↑↓←→ point · space act · tab tabs · esc close`, and while
-  holding `↑↓←→ carry · space drop · esc put back`.
+- Every other key does nothing (no tab keys: the window has no tabs).
+- The hint line: `↑↓←→ point · space act · esc close`, and while holding
+  `↑↓←→ carry · space drop · esc put back`; for MISSING BLUEPRINT, `esc close`.
 
 ### No deck
 
-With no deck equipped (or one the content does not know) the tab shows one
-line, `No CYBERDECK equipped`, centred in the tab's body in the chrome's dim
-colour, and nothing else: no deck, no glass, no WAREZ, no brackets.
-Nothing can be pointed at; arrows and space do nothing; esc closes the deck and
-`tab` / digits switch tabs as usual. (Jeffrey, after the build: "When no
-cyberdeck is installed we should simply display a message … The chrome,
-display, programs etc should be hidden.")
+Superseded by the blueprint window (see the update at the top): with no deck
+equipped there is nothing to inspect in the DECK slot, and the tab that showed
+"No CYBERDECK equipped" is gone.
 
 ## Non-goals
 
