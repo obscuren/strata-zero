@@ -263,10 +263,6 @@ pub fn enter(st: &mut AppState, b: BuildingId, door: (StratumKind, Pos)) -> Resu
 /// Steps out of an exit onto its landing on the city map.
 pub fn leave(st: &mut AppState, exit: &Exit) -> Result<String, String> {
     let city = st.city.as_ref().ok_or("no city")?;
-    let name = match st.player.as_ref().map(|p| p.place) {
-        Some(Place::Floor { building, .. }) => building_name(city, building),
-        _ => "the building".to_string(),
-    };
     // The landing, or the nearest free tile beside the door when something stands on it.
     let landing = std::iter::once(exit.landing)
         .chain(exit.door.neighbors4())
@@ -279,15 +275,22 @@ pub fn leave(st: &mut AppState, exit: &Exit) -> Result<String, String> {
                         .is_some_and(|t| t.terrain != Terrain::Door && !t.is_building_part()))
         })
         .ok_or("the way out is blocked")?;
-    land(st, Place::Stratum(exit.stratum), landing);
+    // Where you are entering: the district on the street, the kind of way elsewhere.
     let onto = match exit.stratum {
-        StratumKind::Street => "the street",
-        StratumKind::Skyways => "the walkway",
-        StratumKind::Heights => "the roof",
-        StratumKind::Undercity => "the tunnel",
-        StratumKind::Net => "the Net",
+        StratumKind::Street => city
+            .tile(exit.stratum, landing)
+            .and_then(|t| t.district)
+            .map_or_else(
+                || "the `STREET`".to_string(),
+                |d| format!("`{}`", city.district(d).name),
+            ),
+        StratumKind::Skyways => "the `WALKWAY`".to_string(),
+        StratumKind::Heights => "the `ROOF`".to_string(),
+        StratumKind::Undercity => "the `TUNNEL`".to_string(),
+        StratumKind::Net => "the `GRID`".to_string(),
     };
-    Ok(format!("Leaving `{name}` · onto {onto}"))
+    land(st, Place::Stratum(exit.stratum), landing);
+    Ok(format!("Entering {onto}"))
 }
 
 /// Rides the lift to a floor: the player steps out at that floor's lift bank.
@@ -800,5 +803,35 @@ mod tests {
         let mut i = Interiors::default();
         assert!(!i.ensure_homes(&c, &w, b));
         assert!(i.homes_of(b).is_none_or(|h| h.is_empty()));
+    }
+
+    #[test]
+    fn stepping_out_says_where_you_are_entering() {
+        let mut st = AppState::new();
+        st.enter_city(home_city());
+        st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
+        let b = st.home.unwrap().home.building;
+        let door = {
+            let city = st.city.as_ref().unwrap();
+            city.portals(b)
+                .into_iter()
+                .find(|(k, _)| *k == StratumKind::Street)
+                .expect("a street door")
+        };
+        enter(&mut st, b, door).unwrap();
+        let exit = st
+            .interiors
+            .floor(b, 0)
+            .unwrap()
+            .1
+            .exits
+            .iter()
+            .find(|e| e.door == door.1)
+            .copied()
+            .unwrap();
+        let line = leave(&mut st, &exit).unwrap();
+        assert!(line.starts_with("Entering `"), "{line}");
+        assert!(!line.contains("Leaving"), "{line}");
+        assert!(!line.contains("the building"), "{line}");
     }
 }
