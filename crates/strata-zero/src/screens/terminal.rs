@@ -184,14 +184,23 @@ impl Terminal {
         t.leaving
     }
 
-    /// The rows a screen of `height` shows, given the scroll.
+    /// The rows a screen of `height` shows, with a marker row at either end when
+    /// there is more that way.
     fn page(&self, rows: &[String], height: usize) -> (Vec<String>, usize) {
         let keep = height.max(1);
         let max_scroll = rows.len().saturating_sub(keep);
         let scroll = self.scroll.min(max_scroll);
         let end = rows.len() - scroll;
         let start = end.saturating_sub(keep);
-        (rows[start..end].to_vec(), keep)
+        let mut page: Vec<String> = rows[start..end].to_vec();
+        if start > 0 && !page.is_empty() {
+            page[0] = "▲ PGUP".to_string();
+        }
+        if scroll > 0 && !page.is_empty() {
+            let last = page.len() - 1;
+            page[last] = "▼ PGDN".to_string();
+        }
+        (page, keep)
     }
 
     fn run(&mut self, st: &mut AppState, line: String) {
@@ -397,11 +406,13 @@ impl Screen for Terminal {
         let avail = screen.height as usize;
         let texts: Vec<String> = rows.iter().map(|(l, _)| l.clone()).collect();
         let (page, _) = self.page(&texts, avail.saturating_sub(tail.len()));
-        // The page's rows carry the style of the row they came from.
+        // The page's rows carry the style of the row they came from; markers are quiet.
         let styles: Vec<Style> = page
             .iter()
             .map(|l| {
-                {
+                if l == "▲ PGUP" || l == "▼ PGDN" {
+                    quiet
+                } else {
                     rows.iter()
                         .rev()
                         .find(|(t, _)| t == l)
@@ -815,9 +826,10 @@ mod tests {
         t.update(&mut st, &[key(KeyCode::PageUp)]);
         let up = draw(&t, &st);
         assert!(
-            !up.contains("MORE ABOVE") && !up.contains("MORE BELOW"),
-            "no markers: {up}"
+            up.contains("▲ PGUP") && up.contains("▼ PGDN"),
+            "marker rows, no words: {up}"
         );
+        assert!(!up.contains("MORE"), "{up}");
         assert!(
             !up.contains("ROW 40") && up.contains("ROW 20"),
             "scrolled up a page: {up}"

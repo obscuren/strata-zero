@@ -205,7 +205,8 @@ Generated per host from the seed, deterministic:
   that the devices and programs call; its verb table and `run` are deleted.
 - Replies land on the glass at once (Jeffrey, 2026-10-18: no typing effect on
   output); only the one-time boot types itself. The LED, PgUp/PgDn scrolling
-  without markers, wrapping and the denial glitch stay as they are.
+  with `▲ PGUP` / `▼ PGDN` marker rows, wrapping and the denial glitch stay as
+  they are.
 
 ## Non-goals
 
