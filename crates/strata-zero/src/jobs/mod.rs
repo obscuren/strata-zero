@@ -2,9 +2,11 @@
 //! of you. Runtime data, never content; the rest of the app reports events here.
 
 pub mod flavor;
+pub mod generate;
 pub mod ui;
 
 pub use flavor::*;
+pub use generate::*;
 
 use citygen::{BuildingId, Place, Pos};
 use game::ItemId;

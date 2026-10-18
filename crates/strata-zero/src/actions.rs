@@ -36,9 +36,6 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         st.tick,
         action,
     )?;
-    if took {
-        crate::credentials::shard_taken(st, place, pos);
-    }
     let minute = st.minute_of_day();
     let interiors = &st.interiors;
     let constructs = &st.constructs;

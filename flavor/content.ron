@@ -80,6 +80,8 @@ Content(
              desc: "Somebody's quarter, somebody's passwords, somebody's problem. A fixer will know whose."),
         Item(id: "vault_data", name: "Vault dump", kind: Component, weight: 0.05, value: 1500,
              desc: "A whole vault on one shard. Warm to the touch, which it should not be."),
+        Item(id: "sealed_package", name: "Sealed package", kind: Component, weight: 0.5, value: 0,
+             desc: "Taped shut. Heavier than it looks. Not yours to open."),
     ],
     skills: [
         Skill(id: "blades", name: "Blades", stat: Reflex, desc: "Knives, shivs and anything with an edge."),

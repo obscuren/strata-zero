@@ -120,7 +120,7 @@ fn keypad_over_the_home_floor() {
     let mut st = state_home();
     let map = MapScreen::walking(&mut st);
     st.tick += 200;
-    let (b, level, number) = st.journal.favour.clone().expect("the favour").flat;
+    let (b, level, number, _) = crate::jobs::first_fetch(&st).expect("the favour");
     let mut pad = Keypad::open(&st, b, level, number);
     pad.update(&mut st, &[key(KeyCode::Char('4')), key(KeyCode::Char('4'))]);
     shot("keypad", &st, &map, &pad);
