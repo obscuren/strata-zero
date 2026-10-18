@@ -3,6 +3,7 @@ name = "strata-zero"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "strata"
