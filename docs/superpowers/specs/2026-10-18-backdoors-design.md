@@ -404,3 +404,14 @@ nothing on the HUD.
 - One ignored fuzz run: across three cities, plant a key on every scannable
   building of one district, land at each, hop between two, burn them all, and
   check `slots_used` never exceeds `SLOTS` and nothing panics.
+
+## Addendum (2026-10-18, in chat during the build)
+
+- **A cracked server is root.** A live Crack on a building's server node makes
+  `tier_on` ADMIN for the hack's hour (or until the alarm expires it), so a
+  shell on that host logs in as `root` and `backdoor` plants a root key that
+  outlives the crack. Crack on a server did nothing before. The chain Jeffrey
+  asked for: crack the server from the Net, walk to any terminal, `ssh` in as
+  root, `backdoor`.
+- **D'SHAWN carries Backdoor.** The debug runner's pack gains one `backdoor`
+  program, so NEW GAME (DEBUG) can cut a Net backdoor without finding one.

@@ -27,9 +27,10 @@ impl Tier {
     }
 }
 
-/// Your standing on a building: a Net backdoor makes you ADMIN, a key, a card or a code USER.
+/// Your standing on a building: a Net backdoor or a cracked server makes you ADMIN, a key, a card or a code USER.
 pub fn tier_on(st: &AppState, b: BuildingId) -> Tier {
-    if st.backdoors.root_on(b) {
+    let now = st.net.now(st);
+    if st.backdoors.root_on(b) || st.net.server_cracked(b, now) {
         return Tier::Admin;
     }
     let key = st
@@ -582,6 +583,63 @@ mod tests {
         };
         st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
         (st, b, d)
+    }
+
+    #[test]
+    fn a_cracked_server_is_root_for_its_hour() {
+        let (mut st, b, _) = state();
+        assert_eq!(tier_on(&st, b), Tier::Guest);
+        let now = st.net.now(&st);
+        let server = st
+            .city
+            .as_ref()
+            .unwrap()
+            .net
+            .nodes
+            .iter()
+            .find(|n| n.building == Some(b) && n.kind == NodeKind::Server)
+            .map(|n| n.id)
+            .expect("a server");
+        st.net.land(
+            b,
+            HackTarget::Node(server),
+            Target::Node(NodeKind::Server),
+            Op::Crack,
+            now,
+        );
+        assert!(st.net.server_cracked(b, now));
+        assert_eq!(tier_on(&st, b), Tier::Admin);
+        assert_eq!(
+            crate::helix::hosts::user_for(&st, crate::helix::shell::HostId::Building(b)),
+            "root"
+        );
+        // the hour runs out: guest again
+        let roots = st.backdoors.roots();
+        st.net
+            .minute(now + game::HACK_MINUTES, None, &mut st.constructs, &roots);
+        assert!(!st.net.server_cracked(b, now + game::HACK_MINUTES));
+        assert_eq!(tier_on(&st, b), Tier::Guest);
+        // a cracked door lock is not a cracked server
+        let lock = st
+            .city
+            .as_ref()
+            .unwrap()
+            .net
+            .nodes
+            .iter()
+            .find(|n| n.building == Some(b) && n.kind == NodeKind::DoorLock)
+            .map(|n| n.id);
+        if let Some(lock) = lock {
+            let now = st.net.now(&st);
+            st.net.land(
+                b,
+                HackTarget::Node(lock),
+                Target::Node(NodeKind::DoorLock),
+                Op::Crack,
+                now,
+            );
+            assert_eq!(tier_on(&st, b), Tier::Guest);
+        }
     }
 
     #[test]
