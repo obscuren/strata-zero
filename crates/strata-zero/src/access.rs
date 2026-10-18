@@ -167,6 +167,54 @@ pub fn log_lines(st: &AppState, b: BuildingId) -> Vec<String> {
     rows
 }
 
+/// The rig's line on a backdoored host: `LINE  root  STABLE  planted day 2 03:12`.
+pub fn line_row(st: &AppState, b: BuildingId) -> Option<String> {
+    let d = st.backdoors.list.iter().rev().find(|d| d.building == b)?;
+    let now = st.net.now(st);
+    Some(format!(
+        "LINE  {}  {}  planted {}",
+        d.user_label(),
+        d.health(now).label(),
+        crate::credentials::stamp(d.planted)
+    ))
+}
+
+/// What `route` and the rig's net.log say: the route, the trace, the lines held.
+pub fn rig_net_lines(st: &AppState) -> Vec<String> {
+    let now = st.net.now(st);
+    let name =
+        |b: BuildingId| crate::helix::hosts::hostname(st, crate::helix::shell::HostId::Building(b));
+    let mut out = Vec::new();
+    match st.backdoors.route.as_ref() {
+        Some(r) => {
+            let names: Vec<String> = r.relays.iter().map(|b| name(*b)).collect();
+            out.push(format!("ROUTE  {}", crate::backdoors::route_line(&names)));
+            for b in &r.relays {
+                if let Some(d) = st.backdoors.list.iter().rev().find(|d| d.building == *b) {
+                    out.push(format!(
+                        "  {:<16} {:<10} {}",
+                        name(*b),
+                        d.user_label(),
+                        d.health(now).label()
+                    ));
+                }
+            }
+        }
+        None => out.push("NO ROUTE · you are home".to_string()),
+    }
+    out.push(
+        st.backdoors
+            .trace_line(now, &name)
+            .unwrap_or_else(|| "TRACE  none".to_string()),
+    );
+    out.push(format!(
+        "LINES  {} of {}",
+        st.backdoors.slots_used(),
+        crate::backdoors::SLOTS
+    ));
+    out
+}
+
 fn hack_rows(st: &AppState, b: BuildingId) -> Vec<String> {
     st.net
         .hacks

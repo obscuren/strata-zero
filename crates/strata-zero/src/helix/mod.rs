@@ -6,8 +6,9 @@ pub mod nano;
 pub mod shell;
 pub mod vfs;
 
+use citygen::BuildingId;
 use shell::HostId;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use vfs::Vfs;
 
 /// One account on a host.
@@ -32,6 +33,8 @@ pub struct Host {
     /// On the rig: how many of the journal's mails have had a file put down for them,
     /// so a mail you delete stays deleted.
     pub mails_placed: usize,
+    /// On the rig: the buildings that have had a `/net` entry put down.
+    pub nets_placed: BTreeSet<BuildingId>,
 }
 
 /// A door code written into a notes file: the flat it opens, the code, the file and

@@ -110,6 +110,8 @@ pub struct Terminal {
     denied_at: Option<u64>,
     /// Rows scrolled up from the bottom of the scrollback.
     scroll: usize,
+    /// The rig is held under warrant: a notice, no shell.
+    seized: bool,
 }
 
 impl Terminal {
@@ -122,12 +124,24 @@ impl Terminal {
     /// Powers on with a given look: logged in on `origin` as your standing allows.
     pub fn with_look(st: &mut AppState, origin: HostId, key: (Place, Pos), look: Look) -> Terminal {
         let shell = new_shell(st, origin);
+        let seized = origin == HostId::Rig && st.backdoors.seized(st.net.now(st));
         let fresh = st.journal.booted.insert(key);
-        let typing = fresh.then(|| {
-            let mut lines = access::boot_lines(st, origin, &look);
-            lines.extend(motd(st, &shell));
-            Typing::new(lines, st.tick, look.style.cps)
-        });
+        let typing = if seized {
+            Some(Typing::new(
+                vec![
+                    "EVIDENCE · THIS UNIT IS HELD UNDER WARRANT".to_string(),
+                    "CONTACT THE DISTRICT OFFICE".to_string(),
+                ],
+                st.tick,
+                look.style.cps,
+            ))
+        } else {
+            fresh.then(|| {
+                let mut lines = access::boot_lines(st, origin, &look);
+                lines.extend(motd(st, &shell));
+                Typing::new(lines, st.tick, look.style.cps)
+            })
+        };
         let prompt = shell::prompt(&AppIo { st }, &shell);
         Terminal {
             look,
@@ -139,6 +153,7 @@ impl Terminal {
             console: Console::default(),
             denied_at: None,
             scroll: 0,
+            seized,
         }
     }
 
@@ -312,6 +327,17 @@ impl Screen for Terminal {
             }
             return ScreenCmd::Stay;
         }
+        // Held under warrant: the notice stays, Esc leaves, nothing else answers.
+        if self.seized {
+            return if keys
+                .iter()
+                .any(|k| k.code == crossterm::event::KeyCode::Esc)
+            {
+                pop()
+            } else {
+                ScreenCmd::Stay
+            };
+        }
         // nano open: every key is nano's until it closes.
         if self.nano.is_some() {
             for k in keys {
@@ -397,7 +423,7 @@ impl Screen for Terminal {
         }
         let typing = typing_now.is_some();
         let mut tail = Vec::new();
-        if !typing {
+        if !typing && !self.seized {
             if let Some(h) = &self.console.hint {
                 tail.push((h.clone(), quiet));
             }
@@ -758,6 +784,48 @@ mod tests {
             "{:?}",
             t.text(st.tick)
         );
+    }
+
+    #[test]
+    fn a_seized_rig_boots_to_the_warrant_and_takes_no_commands() {
+        let mut st = AppState::new();
+        st.enter_city(
+            Generator::run(GenParams {
+                seed: 8,
+                size: SizePreset::Medium,
+                districts: 7,
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let home = st.home.unwrap().home;
+        crate::credentials::prepare(&mut st, home.building);
+        crate::credentials::move_in(&mut st);
+        st.backdoors.rig_seized_until = Some(u64::MAX);
+        let spot = (
+            citygen::Place::Floor {
+                building: home.building,
+                level: home.level,
+            },
+            home.rig,
+        );
+        let mut t = Terminal::open(&mut st, HostId::Rig, spot);
+        let text = t.text(st.tick + 100_000);
+        assert!(
+            text.iter()
+                .any(|l| l == "EVIDENCE · THIS UNIT IS HELD UNDER WARRANT"),
+            "{text:?}"
+        );
+        assert!(text.iter().any(|l| l == "CONTACT THE DISTRICT OFFICE"));
+        st.tick += 100_000;
+        assert!(!draw(&t, &st).contains("@zenbo"));
+        // typing does nothing; Esc leaves
+        let cmd = t.update(&mut st, &typed("ls"));
+        assert!(matches!(cmd, ScreenCmd::Stay));
+        assert!(t.text(st.tick).iter().all(|l| !l.contains("ls")));
+        assert!(!draw(&t, &st).contains("@zenbo"));
+        let cmd = t.update(&mut st, &[key(KeyCode::Esc)]);
+        assert!(matches!(cmd, ScreenCmd::Pop { .. }));
     }
 
     #[test]

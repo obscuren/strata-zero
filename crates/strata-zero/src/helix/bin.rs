@@ -91,7 +91,17 @@ impl AppIo<'_> {
     fn net_of(&self, host: HostId) -> Vec<BuildingId> {
         match host {
             HostId::District(d) => access::scannable(self.st, d),
-            HostId::Rig => self.block(host).into_iter().collect(),
+            HostId::Rig => {
+                let mut list: Vec<BuildingId> = self.block(host).into_iter().collect();
+                for d in &self.st.backdoors.list {
+                    if !matches!(d.state, crate::backdoors::State::Burned { .. })
+                        && !list.contains(&d.building)
+                    {
+                        list.push(d.building);
+                    }
+                }
+                list
+            }
             HostId::Building(_) => Vec::new(),
         }
     }
@@ -234,6 +244,60 @@ impl AppIo<'_> {
                 "ssh: {what}: ambiguous: {}",
                 many.iter()
                     .map(|i| names[*i].as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
+    }
+
+    /// `burn <line>`: cuts one of the rig's lines, by number, name or prefix.
+    fn burn(&mut self, shell: &Shell, args: &[String]) -> Result<Output, String> {
+        if shell.host != HostId::Rig {
+            return Err("burn: rig only".to_string());
+        }
+        let [what] = args else {
+            return Err("usage: burn <host>".to_string());
+        };
+        let what = what.to_lowercase();
+        // only the lines you hold: the home block is no backdoor unless it holds one
+        let all = self.net_of(HostId::Rig);
+        let held: Vec<(BuildingId, String)> = all
+            .iter()
+            .filter(|b| self.st.backdoors.held(**b).is_some())
+            .map(|b| (*b, hostname(self.st, HostId::Building(*b))))
+            .collect();
+        let pick: Vec<&(BuildingId, String)> = if let Ok(n) = what.parse::<usize>() {
+            n.checked_sub(1)
+                .and_then(|i| all.get(i))
+                .and_then(|b| held.iter().find(|(x, _)| x == b))
+                .into_iter()
+                .collect()
+        } else if let Some(h) = held.iter().find(|(_, n)| *n == what) {
+            vec![h]
+        } else {
+            held.iter().filter(|(_, n)| n.starts_with(&what)).collect()
+        };
+        match pick.as_slice() {
+            [] => Err(format!("burn: {what}: no such backdoor")),
+            [(b, name)] => {
+                let now = self.st.net.now(self.st);
+                let r = self.st.backdoors.burn(*b, crate::backdoors::Why::You, now);
+                let mut line = format!("BURNED · {name}");
+                if r.cut_trace {
+                    line.push_str(" · TRACE CUT");
+                    // the building sees the line go: it alarms as a console alarm does
+                    let t = self.st.net.trace(*b);
+                    t.heat = t.heat.max(game::ALARM_HEAT);
+                    t.alert_until = Some(now + game::ALERT_MINUTES);
+                    let alarm = crate::net::raise_alarm(self.st, *b);
+                    self.st.warn(alarm);
+                }
+                Ok(one(line))
+            }
+            many => Err(format!(
+                "burn: {what}: ambiguous: {}",
+                many.iter()
+                    .map(|(_, n)| n.as_str())
                     .collect::<Vec<_>>()
                     .join(", ")
             )),
@@ -407,8 +471,13 @@ impl Io for AppIo<'_> {
             Dev::Passwd => return Ok(self.render_passwd(host)),
             Dev::NetHost(b) => {
                 let i = self.net_of(host).iter().position(|x| x == b).unwrap_or(0);
-                return Ok(vec![access::scan_row(self.st, i, *b)]);
+                let mut rows = vec![access::scan_row(self.st, i, *b)];
+                if host == HostId::Rig {
+                    rows.extend(access::line_row(self.st, *b));
+                }
+                return Ok(rows);
             }
+            Dev::NetLog if host == HostId::Rig => return Ok(access::rig_net_lines(self.st)),
             _ => {}
         }
         let Some(b) = self.block(host) else {
@@ -466,7 +535,8 @@ impl Io for AppIo<'_> {
             "ssh" | "connect" => self.ssh(shell, args),
             "exit" => return self.exit(shell),
             "backdoor" => self.backdoor(shell),
-            "burn" => Err("burn: rig only".to_string()),
+            "burn" => self.burn(shell, args),
+            "route" if shell.host == HostId::Rig => Ok(lines(access::rig_net_lines(self.st))),
             "route" => Err("route: rig only".to_string()),
             "mail" => self.mail(shell, args),
             "journal" if shell.host == HostId::Rig => Ok(lines(access::journal_lines(self.st))),
@@ -509,7 +579,8 @@ impl Io for AppIo<'_> {
         };
         let key = key_path(user);
         let dir = key.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
-        if path == key || path == dir {
+        let under = |p: &str| key == p || key.starts_with(&format!("{p}/"));
+        if path == dir || under(path) {
             let now = self.st.net.now(self.st);
             self.st.backdoors.burn(b, crate::backdoors::Why::You, now);
         }
@@ -1058,7 +1129,8 @@ mod tests {
         );
         let ls = text(&go(&mut st, &mut sh, "ls -l ~/.ssh"));
         assert!(
-            ls.contains(&format!("rw---- {me:<7}")) || ls.contains(&me),
+            ls.lines()
+                .any(|l| l.contains("authorized_keys") && l.starts_with(&format!("-rw---- {me}"))),
             "{ls}"
         );
         assert!(st.backdoors.held(b).is_some());
@@ -1099,6 +1171,66 @@ mod tests {
         );
         // man knows it
         assert!(text(&go(&mut st, &mut sh, "man backdoor")).starts_with("backdoor - "));
+    }
+
+    #[test]
+    fn the_rig_lists_lines_and_burns_them() {
+        let mut st = state_home();
+        let home = st.home.unwrap().home.building;
+        let seed = st.city.as_ref().unwrap().seed;
+        // a backdoor on some other scannable building
+        let other = st
+            .city
+            .as_ref()
+            .unwrap()
+            .buildings
+            .iter()
+            .find(|x| x.id != home && x.kind.is_closed())
+            .map(|x| x.id)
+            .unwrap();
+        st.backdoors.plant_net(other, 1, seed, 0);
+        let mut sh = new_shell(&mut st, HostId::Rig);
+        let ls = text(&go(&mut st, &mut sh, "ls /net"));
+        let other_name = hostname(&st, HostId::Building(other));
+        assert!(ls.contains(&other_name), "{ls}");
+        let cat = text(&go(&mut st, &mut sh, &format!("cat /net/{other_name}")));
+        assert!(cat.contains("LINE  root  STABLE  planted day"), "{cat}");
+        let route = text(&go(&mut st, &mut sh, "route"));
+        assert!(
+            route.contains("NO ROUTE · you are home")
+                && route.contains("TRACE  none")
+                && route.contains("LINES  1 of 3"),
+            "{route}"
+        );
+        let log = text(&go(&mut st, &mut sh, "cat /var/log/net.log"));
+        assert_eq!(log, route);
+        // burn by prefix
+        let out = text(&go(&mut st, &mut sh, &format!("burn {}", &other_name[..3])));
+        assert_eq!(out, format!("BURNED · {other_name}"));
+        assert!(st.backdoors.held(other).is_none());
+        let ls = text(&go(&mut st, &mut sh, "ls /net"));
+        assert!(!ls.contains(&other_name), "{ls}");
+        let bad = go(&mut st, &mut sh, "burn nope");
+        assert_eq!(
+            (text(&bad).as_str(), bad.status),
+            ("burn: nope: no such backdoor", 1)
+        );
+        // a trace on the relay: burning cuts it and the building alarms
+        st.backdoors.plant_net(other, 1, seed, 5_000);
+        st.backdoors.patched.clear();
+        st.backdoors.start_route(Some(other));
+        st.backdoors.start_trace(5_000);
+        st.backdoors.end_route();
+        let route = text(&go(&mut st, &mut sh, "route"));
+        assert!(route.contains(&format!("TRACE ▸ {other_name}")), "{route}");
+        let out = text(&go(&mut st, &mut sh, &format!("burn {other_name}")));
+        assert_eq!(out, format!("BURNED · {other_name} · TRACE CUT"));
+        let now = st.net.now(&st);
+        assert!(st.net.alert(other, now));
+        assert!(st.backdoors.trace.is_none());
+        // not on a building host
+        let mut bh = new_shell(&mut st, HostId::Building(home));
+        assert_eq!(go(&mut st, &mut bh, "route").status, 1);
     }
 
     #[test]

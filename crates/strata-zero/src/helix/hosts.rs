@@ -129,11 +129,15 @@ fn trapped(st: &AppState, b: BuildingId) -> Option<String> {
 
 /// The login user by tier: root, a resident's user, `user` or `guest`; on the rig, you.
 pub fn user_for(st: &AppState, id: HostId) -> String {
+    if let HostId::Building(b) = id
+        && let Some(user) = trapped(st, b)
+    {
+        return user;
+    }
     match id {
         HostId::Rig => rig_user(st),
         HostId::District(_) => GUEST.to_string(),
         HostId::Building(b) => match tier_on(st, b) {
-            _ if trapped(st, b).is_some() => trapped(st, b).unwrap_or_default(),
             Tier::Admin => ROOT.to_string(),
             Tier::Guest => GUEST.to_string(),
             Tier::User => {
@@ -179,6 +183,9 @@ pub fn ensure_host(st: &mut AppState, id: HostId) -> &mut Host {
     } else {
         Vec::new()
     };
+    if id == HostId::Rig {
+        sync_rig_net(st);
+    }
     let host = st.helix.hosts.entry(id).or_default();
     // only mails that arrived since the last look: one you deleted stays deleted
     for (path, index, owner) in adds.into_iter().skip(host.mails_placed) {
@@ -189,6 +196,48 @@ pub fn ensure_host(st: &mut AppState, id: HostId) -> &mut Host {
         host.mails_placed = index + 1;
     }
     host
+}
+
+/// Keeps the rig's `/net` in step with its lines: the home block and every backdoor
+/// not burned, one entry each; a burned one's entry goes.
+fn sync_rig_net(st: &mut AppState) {
+    let want: BTreeSet<BuildingId> = st
+        .home
+        .map(|h| h.home.building)
+        .into_iter()
+        .chain(
+            st.backdoors
+                .list
+                .iter()
+                .filter(|d| !matches!(d.state, crate::backdoors::State::Burned { .. }))
+                .map(|d| d.building),
+        )
+        .collect();
+    let Some(placed) = st
+        .helix
+        .hosts
+        .get(&HostId::Rig)
+        .map(|h| h.nets_placed.clone())
+    else {
+        return;
+    };
+    // every name needed, worked out before the host is borrowed mutably
+    let names: Vec<(BuildingId, String)> = want
+        .union(&placed)
+        .map(|b| (*b, hostname(st, HostId::Building(*b))))
+        .collect();
+    let Some(host) = st.helix.hosts.get_mut(&HostId::Rig) else {
+        return;
+    };
+    for (b, name) in &names {
+        let path = format!("/net/{name}");
+        if want.contains(b) && !host.nets_placed.contains(b) {
+            host.fs.put_dev(&path, Dev::NetHost(*b), USERS, Mode::RW_R);
+            host.nets_placed.insert(*b);
+        } else if !want.contains(b) && host.nets_placed.remove(b) {
+            let _ = host.fs.remove(ROOT, "/", "/", &path, false);
+        }
+    }
 }
 
 /// (path, mail index, owner) for every mail in the rig's inbox.
@@ -228,6 +277,7 @@ pub fn generate(st: &AppState, id: HostId) -> Host {
         theme,
         planted: Vec::new(),
         mails_placed: 0,
+        nets_placed: BTreeSet::new(),
     };
     let fs = &mut host.fs;
     fs.mkdir_as("/bin", ROOT, Mode::RW_R);
@@ -301,6 +351,8 @@ fn rig_disk(st: &AppState, look: &Look, host: &mut Host) {
     }
     let fs = &mut host.fs;
     fs.mkdir_as("/net", &me, Mode::RW_R);
+    fs.mkdir_as("/var/log", &me, Mode::RW_R);
+    fs.put_dev("/var/log/net.log", Dev::NetLog, &me, Mode::RW_R);
     if let Some(rig) = st.home {
         let b = rig.home.building;
         fs.put_dev(
@@ -309,6 +361,7 @@ fn rig_disk(st: &AppState, look: &Look, host: &mut Host) {
             USERS,
             Mode::RW_R,
         );
+        host.nets_placed.insert(b);
     }
 }
 
