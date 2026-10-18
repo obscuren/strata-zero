@@ -255,7 +255,8 @@ pub fn generate(st: &mut AppState, fixer: PersonId, kind: KindTag, counter: u32)
             if servers.is_empty() {
                 return None;
             }
-            let vault = standing >= VAULT_AT && roll(seed, fixer, counter, SALT_VAULT) % 3 == 0;
+            let vault =
+                standing >= VAULT_AT && roll(seed, fixer, counter, SALT_VAULT).is_multiple_of(3);
             let pool: Vec<BuildingId> = if vault {
                 servers
                     .iter()
@@ -493,6 +494,7 @@ pub fn first_favour(st: &mut AppState) {
 }
 
 /// The first job's flat and tile, for the tests and shots that used the favour.
+#[cfg(test)]
 pub fn first_fetch(st: &AppState) -> Option<(BuildingId, i32, u16, Pos)> {
     st.jobs.list.first().and_then(|j| match j.kind {
         Kind::Fetch {

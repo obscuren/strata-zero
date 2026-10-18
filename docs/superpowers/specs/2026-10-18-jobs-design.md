@@ -1,10 +1,15 @@
 # Jobs: generated work from the fixers — design
 
-Date: 2026-10-18. Status: approved in chat by Jeffrey (shape: a job board plus an
-authored chain, cut into two specs with the board first; jobs given in person
-with the brief mailed after; all four kinds with the kind enum left open for
-eliminate and pick-up; deadlines and a standing per fixer). Spec, plan and
-build run without check-ins in the worktree `jobs`; merging is his call.
+Date: 2026-10-18. Status: built in the worktree `jobs`; approved in chat by
+Jeffrey (shape: a job board plus an authored chain, cut into two specs with the
+board first; jobs given in person with the brief mailed after; all four kinds
+with the kind enum left open for eliminate and pick-up; deadlines and a standing
+per fixer). Spec, plan and build ran without check-ins; merging is his call.
+Built as specified except: the player-facing word is **jobs** everywhere
+(Jeffrey, mid-build: the JOBS pane, the JOBS tab, the help); offers are rolled
+from the walk tick for the fixers beside you, not when the window opens; the
+flavor's line enum is `Say`, not `Line`; `jobs.ron` keeps the `Jobs(...)` name
+and the Rust struct is renamed to it; `World::park` is a plain test aid.
 Builds on: `2026-10-17-credentials-journal-design.md` (homes, codes, the
 journal's mails), `2026-10-17-access-terminal-design.md` (the first mail),
 `2026-10-18-helix-os-design.md` (the rig's mail as files),

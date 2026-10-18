@@ -1170,20 +1170,6 @@ mod tests {
         assert!(flat_label(&st, b, level, number).ends_with(&format!("flat {number}")));
     }
 
-    fn state_home() -> crate::app::AppState {
-        let mut st = crate::app::AppState::new();
-        st.enter_city(
-            Generator::run(GenParams {
-                seed: 8,
-                size: SizePreset::Medium,
-                districts: 7,
-                ..Default::default()
-            })
-            .unwrap(),
-        );
-        st
-    }
-
     #[test]
     fn the_journal_lists_the_route_the_trace_and_the_seizure() {
         let (mut st, b) = state();

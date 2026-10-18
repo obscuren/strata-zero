@@ -88,9 +88,9 @@ building's gate on the Net; the Backdoor program does the same for days, as
 and a run from home that gets dumped sends a trace back along the backdoors you
 came through, burning each one it passes; cut it with `burn`, or they kick your
 door in and take the rig for a day. Your own rig is a HELIX box too, and its
-files are yours: `cat ~/mail/001-a-favour.txt` opens the first mail, a fixer's
-favour, a neighbour's door code and a shard to fetch from the flat, and `nano
-~/notes.txt` keeps whatever you write there.
+files are yours: `cat ~/mail/001-a-favour.txt` opens the first mail, your first
+job: a fixer's favour, a neighbour's door code and a shard to fetch from the
+flat, and `nano ~/notes.txt` keeps whatever you write there.
 
 The same graph is cyberspace. Jack in at any street terminal, or at the rig in
 your flat (walk up to it, press `space`, then `j`): your body stays at the port and you
@@ -194,6 +194,20 @@ the overview is a still of the city, and the inspector reads whoever is under
 the cursor there: who they are, what they are doing, what comes next for them,
 where they live and work, and where their car is.
 
+The city has work. Fixers hold the corners of the Night Market and the Neon
+Strip from six in the evening to four in the morning (a city without either
+still has one somewhere), and drink in a bar after. Stand beside one and `space`
+opens their rows: `w Work` offers a job rolled from the city around them, a
+shard to fetch from a locked flat, a server or a vault to copy, a backdoor to
+leave on a named host, a sealed package to put into a named person's hands at
+their station. Take it and the brief lands as a mail on your rig with the
+deadline; the JOBS pane shows the job, its next step and the clock, red under
+an hour. Everything ends back at the fixer: `h Hand in` pays in credits, `d
+Drop` gives it up. Miss the clock and the job fails and the fixer remembers:
+each one keeps a standing with you that opens copy work at two and plant work
+at four, and closes the door at minus three. The welcome mail is the first of
+them.
+
 ## Install
 
 Builds for macOS, Linux and Windows are on the
@@ -262,7 +276,7 @@ on `RANDOM SEED` / `GENERATE` · `esc` back
 end · `r` reseed after an error · `esc` back
 
 **Explore** `hjkl` / arrows pan the cursor (shift: fast) · `[` `]` stratum down / up (Net on top) ·
-`w` walk · `tab` deck · `F1`-`F4` panes (here, quest, map, log; `F5` `F6` inspect and legend in dev mode) · `v` the same as a popup · `m` messages ·
+`w` walk · `tab` deck · `F1`-`F4` panes (here, jobs, map, log; `F5` `F6` inspect and legend in dev mode) · `v` the same as a popup · `m` messages ·
 `d` digital overlay · `s` save · `r` regenerate · `g` configure · `:` dev console (dev mode) · `?` keys · `esc` pause
 
 **Walk** `hjkl` `yubn` / arrows move · walking onto a closed building's door
@@ -288,14 +302,15 @@ walk · `tab` deck ·
 console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `sp`, `pts`, `talent`, `tpts`, `program`, `heat`, `alarm`, `wake`, `engage`, `calm`, `ice`, `failsafe`, `who`
 counts the people out, inside and driving, `clock hh:mm` (or `time hh:mm`) jumps the day there,
 `tp x y` teleports on the current map, `eyes` tints the walkers who see you,
-`light` paints the map grey by its light, `clear`, `help`, with Tab completion
+`light` paints the map grey by its light, `job fetch|copy|plant|deliver` rolls and takes one from the nearest fixer,
+`standing n` sets every fixer's opinion of you, `jobs` lists them, `clear`, `help`, with Tab completion
 and history) · `esc` pause
 
 The play HUD frames the map on one grid. The top band carries the handle,
 level, credits and dev readouts, then HP, FOCUS and XP bars that run the width
 of the map column; on the right, where you are and the clock, the CARRY bar and
 the pane tabs. The right column holds the panes you toggle with `F1`-`F4` (here,
-quest with its objective pips, the minimap with coordinates, the stamped log;
+jobs with its objective pips and the clock, the minimap with coordinates, the stamped log;
 `F5` `F6` inspect and legend in dev mode), separated by thin rules. The footer
 is four rows that never resize: where you are (`on foot`, `camera` or `⚡` with
 the building and district; overburdened in magenta; jacked in, the TRACE heat
@@ -345,7 +360,8 @@ rain, fps) · quit to title · quit game
 `enter` folds and unfolds, `space` offers an unlock priced in SP), stats (the
 five stats and your pools; `space` buys a point outright), gear, inventory, workbench
 (WRENCH unlocks it), cyberdeck (the jacked deck, the programs loaded and in the
-pack, `space` loads or unloads one, and the deck's own abilities), quests,
+pack, `space` loads or unloads one, and the deck's own abilities), jobs (in
+hand, on offer, done),
 journal (empty for now), map (what you remember of this stratum) and talents
 (on `0`, below). Every list wraps at both ends. `space` on a gear slot picks what fits from the pack,
 or unequips and inspects what is worn; on an inventory item it opens the
@@ -354,7 +370,7 @@ verbs: Inspect, Equip, Use, Drop one, Drop all. In a popup the letter or
 carried weight over capacity (magenta when over, and nothing more can be picked
 up). Items carry perks while worn (stat, sight, carry, max hp) and can grant
 abilities; consumables heal when used. The templates, origins, professions,
-categories and every item, ability, skill, talent, quest and recipe live in
+categories and every item, ability, skill, talent and recipe live in
 `flavor/content.ron`.
 
 **Talents** (deck tab `0`) are five trees, one per stat: MEAT, EDGE, WRENCH,

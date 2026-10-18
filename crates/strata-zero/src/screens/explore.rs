@@ -2301,7 +2301,6 @@ impl Screen for MapScreen {
                 .map(|p| p.pos),
             style: &st.style,
             content: &st.content,
-            character: &st.character,
             ground: &st.ground,
             log: &st.log,
             tick: st.tick,

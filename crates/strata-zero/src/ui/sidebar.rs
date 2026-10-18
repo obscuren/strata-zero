@@ -11,7 +11,7 @@ use crate::ui::hud::{RULE_STYLE, clock_at};
 use crate::ui::panel::{inspector_lines, legend};
 use crate::walker::port_name;
 use citygen::{ConnectorKind, Feature, NodeKind, Pos, Rect as TileRect, StratumKind};
-use game::{Character, Content, Ground};
+use game::{Content, Ground};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -180,7 +180,6 @@ pub struct SidebarView<'a> {
     pub player: Option<Pos>,
     pub style: &'a StylePack,
     pub content: &'a Content,
-    pub character: &'a Character,
     pub ground: &'a Ground,
     pub log: &'a MessageLog,
     pub tick: u64,
@@ -576,7 +575,6 @@ mod tests {
             player: Some(focus),
             style: &st.style,
             content: &st.content,
-            character: &st.character,
             ground: &st.ground,
             log: &st.log,
             tick: st.tick,
