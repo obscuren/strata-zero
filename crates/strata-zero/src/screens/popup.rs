@@ -7,7 +7,6 @@ use crate::ui::chrome::{
     BAR_BG, CYAN, CYAN_RGB, DIM, MAGENTA, PANEL_BG, TEXT, frame, put, put_paragraph, reveal, solid,
 };
 use crate::ui::sidebar::Section;
-use crate::walker::jacked_in_line;
 use crossterm::event::{KeyCode, KeyEvent};
 use game::Action;
 use ratatui::Frame;
@@ -244,6 +243,7 @@ impl Popup {
         )
     }
 
+    #[cfg(test)]
     pub fn choices(&self) -> &[Choice] {
         &self.choices
     }
@@ -277,11 +277,17 @@ impl Popup {
             }
             return TransitionKind::None;
         }
-        if act == WorldAct::JackIn
-            && let Some(why) = crate::net::jack_in_refusal(st)
-        {
-            st.warn(why);
-            return TransitionKind::None;
+        if act == WorldAct::JackIn {
+            return match crate::net::jack_in_here(st) {
+                Ok(line) => {
+                    st.say(line);
+                    TransitionKind::Glitch
+                }
+                Err(e) => {
+                    st.warn(e);
+                    TransitionKind::None
+                }
+            };
         }
         if act == WorldAct::JackOut {
             return match crate::net::jack_out(st) {
@@ -296,18 +302,11 @@ impl Popup {
             };
         }
         let bonus = st.sight_bonus();
-        let home = st.home;
         let result: Result<(String, TransitionKind), String> =
             match (st.city.as_ref(), st.player.as_mut()) {
                 (Some(city), Some(player)) => match act {
-                    WorldAct::JackIn => {
-                        let from = player.place;
-                        player
-                            .jack_in(city, home.as_ref(), bonus)
-                            .map(|port| (jacked_in_line(city, from, port), TransitionKind::Glitch))
-                            .map_err(|e| e.to_string())
-                    }
-                    // Taken above, with the floor seen again.
+                    // Taken above.
+                    WorldAct::JackIn => Err("no terminal within reach".to_string()),
                     WorldAct::JackOut => Err("not jacked in".to_string()),
                     WorldAct::Lift(_) => Err("no lift here".to_string()),
                     WorldAct::Climb(_) => Err("no stairs here".to_string()),

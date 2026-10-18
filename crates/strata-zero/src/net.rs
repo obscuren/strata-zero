@@ -870,6 +870,10 @@ pub fn jack_out(st: &mut AppState) -> Result<(), &'static str> {
     if let Some(map) = MapRef::for_place(city, &st.interiors, &st.constructs, player.place) {
         player.update_fov(&map, bonus);
     }
+    // A run in flight stays in the Net.
+    if st.net.run.take().is_some() {
+        st.say("run aborted");
+    }
     Ok(())
 }
 
@@ -1723,6 +1727,24 @@ pub fn jack_in_refusal(st: &AppState) -> Option<String> {
         .iter()
         .any(|b| b.footprint.grow(1).contains(port) && st.net.alert(b.id, now));
     locked.then(|| "port locked down".to_string())
+}
+
+/// Jacks in at the terminal in reach: the refusal when the port refuses, else the
+/// line the log reads.
+pub fn jack_in_here(st: &mut AppState) -> Result<String, String> {
+    if let Some(why) = jack_in_refusal(st) {
+        return Err(why);
+    }
+    let bonus = st.sight_bonus();
+    let home = st.home;
+    let (Some(city), Some(player)) = (st.city.as_ref(), st.player.as_mut()) else {
+        return Err("no body in the city".to_string());
+    };
+    let from = player.place;
+    player
+        .jack_in(city, home.as_ref(), bonus)
+        .map(|port| crate::walker::jacked_in_line(city, from, port))
+        .map_err(|e| e.to_string())
 }
 
 /// The node on or beside a tile in a construct, and the standing guard beside it.

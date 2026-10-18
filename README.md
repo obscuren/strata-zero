@@ -85,10 +85,10 @@ favour, a neighbour's door code and a shard to fetch from the flat, and `nano
 ~/notes.txt` keeps whatever you write there.
 
 The same graph is cyberspace. Jack in at any street terminal, or at the rig in
-your flat (walk up to it and press `enter`): your body stays at the port and you
+your flat (walk up to it, press `space`, then `j`): your body stays at the port and you
 emerge in the Net at the same spot, in a wireframe world laid out one to one
-with the city; from home you come out beside your megablock's gate. `enter`
-again jacks out. In Explore mode `]` past Heights shows the Net.
+with the city; from home you come out beside your megablock's gate. `J` jacks
+out, after asking. In Explore mode `]` past Heights shows the Net.
 
 Every building's construct has an inside. Step onto its gate from the grid and
 you are in: a spine of lane with rooms off it holding the building's nodes
@@ -231,12 +231,14 @@ end · `r` reseed after an error · `esc` back
 **Walk** `hjkl` `yubn` / arrows move · walking onto a closed building's door
 goes inside, onto an interior's door back out; a locked door says whose it is ·
 `<` `>` take stairs, lift, ladder or manhole; on a lift bank inside they open the
-FLOORS panel (every floor, the bridge and the roof marked), on a stairwell they
-climb one floor · `space` interact: take what lies here, jack in at an adjacent
-terminal (or your home rig) or out again, take the stairs or the lift, talk to
-whoever stands beside you, look · `1`-`5` fire the ability in that slot ·
+Floors panel (every floor, the bridge and the roof marked), on a stairwell they
+climb one floor · `space` opens the window of the thing in reach, named in its
+header, with fixed verbs: `x` look, `t` talk, `i` interact (a terminal, a
+keypad), `j` jack in or out, `g` take, `>` `<` go up or down; with several
+things in reach it asks which way first, and a direction opens that one ·
+`J` jacked in: jack out, after asking · `1`-`5` fire the ability in that slot ·
 `a` the full ability list · walking into someone swaps places with them, and
-they step back once you move on · `enter` jack shortcut, or walk the aim ·
+they step back once you move on · `enter` walks the aim ·
 `.` wait; in a construct it hurries the beat, in a fight it ends your turn ·
 `e` jacked in: turns by hand, and back when nothing hunts you · `g` aim a
 walk · `tab` deck ·
@@ -305,8 +307,8 @@ pack, `space` loads or unloads one, and the deck's own abilities), quests,
 journal (empty for now), map (what you remember of this stratum) and talents
 (on `0`, below). Every list wraps at both ends. `space` on a gear slot picks what fits from the pack,
 or unequips and inspects what is worn; on an inventory item it opens the
-verbs: inspect, equip, use, drop one, drop all. In a popup the letter or
-`enter` fires a row and `esc` backs out one level. The readout shows hp and the
+verbs: Inspect, Equip, Use, Drop one, Drop all. In a popup the letter or
+`enter` fires a row and `esc` closes it; a card a row shows closes the popup too. The readout shows hp and the
 carried weight over capacity (magenta when over, and nothing more can be picked
 up). Items carry perks while worn (stat, sight, carry, max hp) and can grant
 abilities; consumables heal when used. The templates, origins, professions,

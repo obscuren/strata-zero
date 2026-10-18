@@ -26,7 +26,7 @@ use crate::ui::chrome::{CYAN, MAGENTA, put};
 use crate::ui::console::{Console, ConsoleEvent};
 use crate::ui::hud;
 use crate::ui::sidebar::{self, Section};
-use crate::walker::{Player, jacked_in_line};
+use crate::walker::Player;
 use citygen::rng::hash64;
 use citygen::{Dir, Place, Pos, Rect as TileRect, StratumKind};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -44,7 +44,6 @@ pub enum Mode {
 }
 
 /// Frames per second over the last second.
-
 pub struct FpsMeter {
     /// Start of the current measuring window.
     last: Instant,
@@ -1410,18 +1409,22 @@ impl MapScreen {
             .is_some_and(|e| e.actor() != crate::net::Actor::You)
             && !matches!(
                 k.code,
-                KeyCode::Esc | KeyCode::Char('q' | '?' | 'm' | ':' | '`')
+                KeyCode::Esc | KeyCode::Char('q' | '?' | 'm' | ':' | '`' | 'x')
             )
         {
             st.warn("not your turn");
             return Some(ScreenCmd::Stay);
         }
-        if k.code == KeyCode::Enter
-            && st.player.as_ref().is_some_and(|p| !p.jacked_in())
-            && let Some(why) = crate::net::jack_in_refusal(st)
-        {
-            st.warn(why);
-            return Some(ScreenCmd::Stay);
+        // `J`: pulling the plug, after asking. Enter no longer jacks either way.
+        if k.code == KeyCode::Char('J') {
+            if !jacked {
+                st.warn("not jacked in");
+                return Some(ScreenCmd::Stay);
+            }
+            return Some(ScreenCmd::Push {
+                to: Box::new(Popup::jack_out_confirm(st.tick)),
+                fx: TransitionKind::None,
+            });
         }
         let moving = crate::net::phase(st) == Some(crate::net::Phase::Move);
         if k.code == KeyCode::Char('a') {
@@ -1514,24 +1517,8 @@ impl MapScreen {
         {
             return Some(cmd);
         }
-        if k.code == KeyCode::Enter && st.player.as_ref().is_some_and(|p| p.jacked_in()) {
-            match crate::net::jack_out(st) {
-                Ok(()) => {
-                    let p = st.player.as_ref()?;
-                    self.place = p.place;
-                    self.cam.snap(p.pos);
-                    st.say("jacked out");
-                    return Some(ScreenCmd::Flash(TransitionKind::Glitch));
-                }
-                Err(e) => {
-                    st.warn(e);
-                    return Some(ScreenCmd::Stay);
-                }
-            }
-        }
         let dev = st.dev;
         let bonus = st.sight_bonus();
-        let home = st.home;
         let city = st.city.as_ref()?;
         let interiors = &st.interiors;
         let constructs = &st.constructs;
@@ -1542,18 +1529,6 @@ impl MapScreen {
             KeyCode::Char('c') if dev => {
                 self.cursor = player.pos;
                 self.mode = Mode::Explore;
-            }
-            KeyCode::Enter => {
-                let from = player.place;
-                match player.jack_in(city, home.as_ref(), bonus) {
-                    Ok(port) => {
-                        self.place = Place::Stratum(StratumKind::Net);
-                        self.cam.snap(port);
-                        st.say(jacked_in_line(city, from, port));
-                        return Some(ScreenCmd::Flash(TransitionKind::Glitch));
-                    }
-                    Err(e) => st.warn(e),
-                }
             }
             KeyCode::Char('<') | KeyCode::Char('>') => {
                 let up = k.code == KeyCode::Char('>');
@@ -2303,7 +2278,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_jacks_in_and_the_net_is_the_fifth_stratum() {
+    fn space_jacks_in_and_the_net_is_the_fifth_stratum() {
         let mut st = state();
         let mut s = MapScreen::explore(0);
         let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
@@ -2342,8 +2317,10 @@ mod tests {
             p.place = Place::Stratum(StratumKind::Street);
         }
         assert!(matches!(
-            s.update(&mut st, &[key(KeyCode::Enter)]),
-            ScreenCmd::Flash(TransitionKind::Glitch)
+            jack_in(&mut st, &mut s),
+            ScreenCmd::Pop {
+                fx: TransitionKind::Glitch
+            }
         ));
         let p = st.player.as_ref().unwrap();
         assert!(p.jacked_in());
@@ -2369,8 +2346,10 @@ mod tests {
         s.mode = Mode::Walk;
         s.place = Place::Stratum(StratumKind::Net);
         assert!(matches!(
-            s.update(&mut st, &[key(KeyCode::Enter)]),
-            ScreenCmd::Flash(TransitionKind::Glitch)
+            jack_out(&mut st, &mut s),
+            ScreenCmd::Pop {
+                fx: TransitionKind::Glitch
+            }
         ));
         let p = st.player.as_ref().unwrap();
         assert!(!p.jacked_in());
@@ -2842,6 +2821,52 @@ mod tests {
         st.ground.add(k, at, game::ItemId::new("copper_coil"), 2);
         st.ground.add(k, at, game::ItemId::new("dead_phone"), 1);
         (at, jack)
+    }
+
+    /// The key that steps in `d`.
+    fn dir_key(d: Dir) -> KeyCode {
+        KeyCode::Char(match d {
+            Dir::N => 'k',
+            Dir::S => 'j',
+            Dir::E => 'l',
+            Dir::W => 'h',
+            Dir::NE => 'u',
+            Dir::NW => 'y',
+            Dir::SE => 'n',
+            Dir::SW => 'b',
+        })
+    }
+
+    /// Jacks in as the player does: Space, the terminal's window (through the
+    /// which-way pick when several things are in reach), `j`. Returns what the window
+    /// answered; the map has followed.
+    fn jack_in(st: &mut AppState, s: &mut MapScreen) -> ScreenCmd {
+        let mut cmd = s.update(st, &[key(KeyCode::Char(' '))]);
+        if let Some(w) = s.which_way.as_ref() {
+            let d = w
+                .subjects
+                .iter()
+                .find(|x| x.choices.iter().any(|c| c.key == 'j'))
+                .expect("a terminal in reach")
+                .dir;
+            cmd = s.update(st, &[key(d.map_or(KeyCode::Char(' '), dir_key))]);
+        }
+        let ScreenCmd::Push { to: mut w, .. } = cmd else {
+            panic!("space opens the terminal's window")
+        };
+        let out = w.update(st, &[key(KeyCode::Char('j'))]);
+        s.update(st, &[]);
+        out
+    }
+
+    /// Jacks out as the player does: `J`, then `y`. Returns what the confirm answered.
+    fn jack_out(st: &mut AppState, s: &mut MapScreen) -> ScreenCmd {
+        let ScreenCmd::Push { to: mut ask, .. } = s.update(st, &[key(KeyCode::Char('J'))]) else {
+            panic!("J asks: {:?}", last(st))
+        };
+        let out = ask.update(st, &[key(KeyCode::Char('y'))]);
+        s.update(st, &[]);
+        out
     }
 
     #[test]
@@ -4056,7 +4081,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_jacks_in_from_the_home_rig_and_back() {
+    fn jacking_in_from_the_home_rig_and_back() {
         let mut st = state_home();
         let mut s = MapScreen::walking(&mut st);
         let rig = st.home.unwrap();
@@ -4066,11 +4091,11 @@ mod tests {
         };
         let at = beside_rig(&st);
         stand(&mut st, &mut s, home, at);
-        s.update(&mut st, &[key(KeyCode::Enter)]);
+        jack_in(&mut st, &mut s);
         assert_eq!(player(&st), (Place::Stratum(StratumKind::Net), rig.landing));
         assert_eq!(s.place, Place::Stratum(StratumKind::Net));
         assert_eq!(last(&st), Some("jacked in from home"));
-        s.update(&mut st, &[key(KeyCode::Enter)]);
+        jack_out(&mut st, &mut s);
         assert_eq!(player(&st), (home, at));
         assert_eq!(s.place, home);
         assert_eq!(last(&st), Some("jacked out"));
@@ -4385,8 +4410,10 @@ mod tests {
             },
             step,
         );
-        s.update(&mut st, &[key(KeyCode::Enter)]);
-        assert_eq!(last(&st), Some("no terminal within reach"));
+        assert_eq!(
+            crate::net::jack_in_here(&mut st).unwrap_err(),
+            "no terminal within reach"
+        );
         let ScreenCmd::Push { to: mut here, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
         else {
             panic!("space opens HERE")
@@ -4410,12 +4437,12 @@ mod tests {
             (jack.pos, beside)
         };
         stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), beside);
-        s.update(&mut st, &[key(KeyCode::Enter)]);
+        jack_in(&mut st, &mut s);
         let p = st.player.as_ref().unwrap();
         assert_eq!(p.place, Place::Stratum(StratumKind::Net));
         assert_eq!(p.pos, jack);
         assert_eq!(p.body, Some((Place::Stratum(StratumKind::Street), beside)));
-        s.update(&mut st, &[key(KeyCode::Enter)]);
+        jack_out(&mut st, &mut s);
         assert_eq!(player(&st), (Place::Stratum(StratumKind::Street), beside));
     }
 
@@ -5020,8 +5047,10 @@ mod tests {
         assert_eq!(st.player.as_ref().unwrap().place, Place::Construct(b));
         assert_eq!(st.constructs.generated(), 1);
         assert!(matches!(
-            s.update(&mut st, &[key(KeyCode::Enter)]),
-            ScreenCmd::Flash(TransitionKind::Glitch)
+            jack_out(&mut st, &mut s),
+            ScreenCmd::Pop {
+                fx: TransitionKind::Glitch
+            }
         ));
         let p = st.player.as_ref().unwrap();
         assert!(!p.jacked_in() && p.place.is_street());
@@ -5271,8 +5300,10 @@ mod tests {
         let now = st.net.now(&st);
         assert_eq!(st.net.cooling(now), Some(game::COOLING_MINUTES));
         // The port refuses while the deck cools.
-        s.update(&mut st, &[key(KeyCode::Enter)]);
-        assert_eq!(last(&st), Some("deck cooling · 10 min"));
+        assert_eq!(
+            crate::net::jack_in_here(&mut st).unwrap_err(),
+            "deck cooling · 10 min"
+        );
         st.net.cooling_until = None;
         // And beside a building on alert.
         st.net.trace(b).add(game::ALARM_HEAT, now);
@@ -5290,8 +5321,10 @@ mod tests {
                 .find(|n| city.walkable(StratumKind::Street, *n))
                 .unwrap();
             stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), beside);
-            s.update(&mut st, &[key(KeyCode::Enter)]);
-            assert_eq!(last(&st), Some("port locked down"));
+            assert_eq!(
+                crate::net::jack_in_here(&mut st).unwrap_err(),
+                "port locked down"
+            );
         }
         // The gate refuses too.
         {
@@ -5513,7 +5546,7 @@ mod tests {
         );
         // Jacking out drops the run; the construct keeps its heat and its map.
         let heat = st.net.traces[&b].heat;
-        s.update(&mut st, &[key(KeyCode::Enter)]);
+        jack_out(&mut st, &mut s);
         assert!(!st.player.as_ref().unwrap().jacked_in());
         assert!(st.net.run.is_none());
         assert_eq!(st.net.traces[&b].heat, heat);
@@ -5938,10 +5971,10 @@ mod tests {
         );
         let focus = st.character.focus;
         assert!(focus < 30, "the first hit landed on the wait");
-        s.update(&mut st, &[key(KeyCode::Enter)]);
+        jack_out(&mut st, &mut s);
         assert!(!st.player.as_ref().unwrap().jacked_in());
         assert_eq!(st.character.focus, focus, "{:?}", last(&st));
-        assert_eq!(last(&st), Some("jacked out"));
+        assert!(logged(&st, "jacked out"));
     }
 
     #[test]
@@ -7037,7 +7070,7 @@ mod tests {
         walking(&mut st, &mut s);
         s.update(&mut st, &[key(KeyCode::Char('?'))]);
         let text = draw_screen(&s, &st, 140, 45);
-        for k in ["space", "enter", "tab", "v ", "m ", ". "] {
+        for k in ["space", "enter", "tab", "v ", "m ", ". ", "J ", "jack out (asks first)"] {
             assert!(text.contains(k), "{k:?} missing: {text}");
         }
     }
@@ -7192,6 +7225,97 @@ mod tests {
     fn pass_turn(st: &mut AppState, s: &mut MapScreen) {
         s.update(st, &[key(KeyCode::Char('.'))]);
         settle(st, s);
+    }
+
+    #[test]
+    fn enter_no_longer_jacks_in() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let (_, _) = by_the_terminal_with_stacks(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert!(!st.player.as_ref().unwrap().jacked_in());
+    }
+
+    #[test]
+    fn j_asks_before_jacking_out_and_n_stays() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        by_the_terminal_with_stacks(&mut st, &mut s);
+        crate::net::jack_in_here(&mut st).unwrap();
+        s.update(&mut st, &[]);
+        assert_eq!(s.place, Place::Stratum(StratumKind::Net));
+        let ScreenCmd::Push { to: mut ask, .. } = s.update(&mut st, &[key(KeyCode::Char('J'))])
+        else {
+            panic!("J asks")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*ask, &st, 120, 40);
+        assert!(
+            text.contains("Jack out?") && text.contains("y  Jack out") && text.contains("n  Stay in"),
+            "{text}"
+        );
+        assert!(matches!(
+            ask.update(&mut st, &[key(KeyCode::Char('n'))]),
+            ScreenCmd::Pop { .. }
+        ));
+        assert!(st.player.as_ref().unwrap().jacked_in());
+        let ScreenCmd::Push { to: mut ask, .. } = s.update(&mut st, &[key(KeyCode::Char('J'))])
+        else {
+            panic!("J asks again")
+        };
+        ask.update(&mut st, &[key(KeyCode::Enter)]);
+        assert!(!st.player.as_ref().unwrap().jacked_in());
+        assert_eq!(last(&st), Some("jacked out"));
+    }
+
+    #[test]
+    fn j_when_not_jacked_in_says_so() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        assert!(matches!(
+            s.update(&mut st, &[key(KeyCode::Char('J'))]),
+            ScreenCmd::Stay
+        ));
+        assert_eq!(last(&st), Some("not jacked in"));
+    }
+
+    #[test]
+    fn j_jacks_out_mid_fight_with_a_run_armed() {
+        use crate::net::Phase;
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        in_construct_at(&mut st, &mut s, 255);
+        lock_run(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(crate::net::phase(&st), Some(Phase::Act));
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert!(st.net.run.is_some(), "a run is armed: {:?}", last(&st));
+        let ScreenCmd::Push { to: mut ask, .. } = s.update(&mut st, &[key(KeyCode::Char('J'))])
+        else {
+            panic!("J asks mid-fight: {:?}", last(&st))
+        };
+        ask.update(&mut st, &[key(KeyCode::Char('J'))]);
+        assert!(!st.player.as_ref().unwrap().jacked_in());
+    }
+
+    #[test]
+    fn j_on_the_ice_turn_says_not_your_turn() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        engaged_at_the_gate(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert!(!crate::net::your_turn(&st), "the ICE acts");
+        assert!(matches!(
+            s.update(&mut st, &[key(KeyCode::Char('J'))]),
+            ScreenCmd::Stay
+        ));
+        assert_eq!(last(&st), Some("not your turn"));
+        assert!(st.player.as_ref().unwrap().jacked_in());
     }
 
     fn engaged_at_the_gate(st: &mut AppState, s: &mut MapScreen) -> citygen::BuildingId {
@@ -7475,7 +7599,7 @@ mod tests {
         let mut st = state8();
         let mut s = MapScreen::explore(0);
         engaged_at_the_gate(&mut st, &mut s);
-        s.update(&mut st, &[key(KeyCode::Enter)]);
+        jack_out(&mut st, &mut s);
         assert!(!st.player.as_ref().unwrap().jacked_in());
         s.update(&mut st, &[]);
         assert!(st.net.engaged.is_none(), "jacked out: no fight");
@@ -8477,7 +8601,7 @@ mod tests {
         crate::net::raise_alarm(&mut st, b);
         let until = st.net.traces[&b].alert_until;
         assert!(until.is_some());
-        s.update(&mut st, &[key(KeyCode::Enter)]);
+        jack_out(&mut st, &mut s);
         assert!(!st.player.as_ref().unwrap().jacked_in());
         s.update(&mut st, &[]);
         assert_eq!(st.net.traces[&b].alert_until, until, "still on alert");

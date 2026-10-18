@@ -32,11 +32,11 @@ const WALK: &[(&str, &str)] = &[
     ("< >", "take stairs, lift, ladder or manhole"),
     (
         "space",
-        "interact: take, jack, stairs, look · continue a run",
+        "the thing in reach: look, talk, take, jack in, stairs · continue a run",
     ),
     ("1-5", "fire an ability · jacked in: run a program"),
     ("a", "abilities: the full list"),
-    ("enter", "jack in at an adjacent terminal / jack out"),
+    ("J", "jacked in: jack out (asks first)"),
     (".", "hurry the beat · in a fight: end your turn"),
     (
         "e",
@@ -44,7 +44,7 @@ const WALK: &[(&str, &str)] = &[
     ),
     (
         "g",
-        "aim a walk (on turns the arrows aim) · enter walks · esc drops",
+        "aim a walk (on turns the arrows aim) · space or enter walks · esc drops",
     ),
     (
         "space",
