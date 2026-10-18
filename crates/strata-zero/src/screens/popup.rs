@@ -561,8 +561,10 @@ impl Screen for Popup {
                 }
                 continue;
             }
-            // A row's letter wins over j/k navigation; the arrows always navigate.
+            // A row's letter wins over j/k navigation; the arrows always navigate. Space
+            // is the confirm key, never a letter: rows past the letters carry a blank.
             if let KeyCode::Char(c) = k.code
+                && c != ' '
                 && let Some(i) = self
                     .choices
                     .iter()
@@ -923,6 +925,30 @@ mod tests {
             p.update(&mut st, &[key(KeyCode::Esc)]),
             ScreenCmd::Pop { .. }
         ));
+    }
+
+    #[test]
+    fn space_fires_the_selected_row_not_an_unlettered_one() {
+        let mut st = state();
+        let at = |x: i32| citygen::Pos::new(x, 0);
+        let rows = || {
+            vec![
+                Choice::new('x', "Look", Pick::Look(at(0))),
+                Choice::on('a', "Ride", "12F", TEXT, Pick::Look(at(12))),
+                Choice::on(' ', "Ride", "11F", TEXT, Pick::Look(at(11))),
+                Choice::on(' ', "Ride", "10F", TEXT, Pick::Look(at(10))),
+            ]
+        };
+        // Space on the default row fires it.
+        let mut p = Popup::verbs("Lift", rows(), 0);
+        p.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(st.look_at, Some(at(0)), "space fires Look, the selected row");
+        // Space on an unlettered row fires that row, not the first unlettered one.
+        let mut p = Popup::verbs("Lift", rows(), 0);
+        p.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Down), key(KeyCode::Down)]);
+        assert_eq!(p.selected, 3);
+        p.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(st.look_at, Some(at(10)), "space fires 10F, the selected row");
     }
 
     #[test]
