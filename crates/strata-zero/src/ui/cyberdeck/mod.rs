@@ -5,7 +5,7 @@
 pub mod pawn;
 
 use crate::anim::effects::pulse;
-use crate::ui::chrome::CYAN_RGB;
+use crate::ui::chrome::{CYAN_RGB, DIM};
 use game::DeckLook;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -122,28 +122,28 @@ pub struct DeckView {
     pub tick: u64,
 }
 
-/// The row the no-deck drawing's inventory carts sit on.
-const NO_DECK_INV_Y: u16 = 10;
+/// What the tab says with no deck, and all it shows.
+const NO_DECK: &str = "No CYBERDECK equipped";
 
-/// The drawing's size for a look; no deck is just the glass and the inventory, with
-/// a row under them for the pointer's corners.
+/// The drawing's size for a look; with no deck, the one line that says so.
 pub fn size(look: Option<DeckLook>) -> (u16, u16) {
     match look {
         Some(DeckLook::Pawn) => (pawn::W, pawn::H),
-        None => (pawn::W, 13),
+        None => (NO_DECK.chars().count() as u16, 1),
     }
 }
 
-/// The parts of the deck and where they sit, relative to the drawing's origin.
+/// The parts of the deck and where they sit, relative to the drawing's origin. With
+/// no deck there is nothing to point at.
 pub fn parts(view: &DeckView) -> Vec<(Part, Rect)> {
     match view.look {
         Some(DeckLook::Pawn) => pawn::parts(view),
-        None => pawn::inventory(view, NO_DECK_INV_Y),
+        None => Vec::new(),
     }
 }
 
 /// Draws the deck centred in `area`, then the pointer's corners round the pointed
-/// part. Nothing is written outside `area`.
+/// part; with no deck, one dim line saying so. Nothing is written outside `area`.
 pub fn draw(view: &DeckView, area: Rect, buf: &mut Buffer) {
     let (w, h) = size(view.look);
     let ox = area.x + area.width.saturating_sub(w) / 2;
@@ -156,7 +156,7 @@ pub fn draw(view: &DeckView, area: Rect, buf: &mut Buffer) {
     };
     match view.look {
         Some(DeckLook::Pawn) => pawn::draw_with(view, &mut pen),
-        None => pawn::draw_bare(view, &mut pen, NO_DECK_INV_Y),
+        None => pen.put(0, 0, NO_DECK, DIM, None, false),
     }
     if let Some((_, r)) = parts(view).into_iter().find(|(p, _)| *p == view.point) {
         let r = Rect::new(ox + r.x, oy + r.y, r.width, r.height);
@@ -349,23 +349,32 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn no_deck_draws_the_glass_and_inventory() {
+    fn no_deck_says_so_and_nothing_else() {
+        // Carts in the pack, glass text and a pointed cart: none of it is drawn.
         let mut v = kit_view();
         v.look = None;
         v.point = Part::Inv(0);
-        v.glass = vec![("no deck jacked".into(), GlassTone::Dim)];
-        let buf = render(&v);
-        let t = text(&buf);
-        assert!(t.contains("no deck jacked"));
-        assert!(t.contains("INVENTORY"));
-        assert!(!t.contains("FAILSAFE"));
-        assert_eq!(size(None), (84, 13));
-        // 13 rows centred in 22: origin row 4; label on drawing row 9, carts on 10.
-        assert!(row(&buf, 4 + 9).contains("INVENTORY"));
-        assert!(row(&buf, 4 + 10).contains("ATTACK"));
-        // The pointer's corners sit one cell outside the cart.
-        assert_eq!(buf[(7 + 1, 4 + 9)].symbol(), "┏");
-        assert_eq!(buf[(7 + 14, 4 + 12)].symbol(), "┛");
+        v.glass = vec![("ATTACK".into(), GlassTone::Head)];
+        v.pinned = ("[space] pick up".into(), GlassTone::Body);
+        assert!(parts(&v).is_empty());
+        let area = Rect::new(5, 3, 90, 21);
+        let blank = Buffer::empty(Rect::new(0, 0, 100, 30));
+        let mut buf = blank.clone();
+        draw(&v, area, &mut buf);
+        // One dim line in the middle of the area.
+        let (x, y) = (5 + (90 - 21) / 2, 3 + (21 - 1) / 2);
+        assert_eq!(
+            row(&buf, y).find("No CYBERDECK equipped"),
+            Some(usize::from(x))
+        );
+        assert_eq!(buf[(x, y)].fg, DIM);
+        for yy in 0..30 {
+            for xx in 0..100 {
+                if yy != y || !(x..x + 21).contains(&xx) {
+                    assert_eq!(buf[(xx, yy)], blank[(xx, yy)], "({xx},{yy})");
+                }
+            }
+        }
     }
 
     #[test]

@@ -1481,7 +1481,7 @@ impl Screen for Deck {
                 Tab::Talents => {
                     "←→ along · ↑↓ tiers · tab tabs · 0-9 jump · space learn · esc close"
                 }
-                Tab::Cyberdeck => self.cyber.hint(),
+                Tab::Cyberdeck => self.cyber.hint(st),
                 _ => "←→ tabs · ↑↓ select · 0-9 jump · space act · esc close",
             },
             Style::default().fg(DIM),
@@ -2269,7 +2269,7 @@ mod tests {
         d.update(&mut st, &[key(KeyCode::Char('6'))]);
         st.tick += 40;
         let text = draw(&d, &st, 120, 35);
-        assert!(text.contains("no deck jacked"), "{text}");
+        assert!(text.contains("No CYBERDECK equipped"), "{text}");
     }
 
     #[test]
@@ -2306,10 +2306,53 @@ mod tests {
         d.update(&mut st, &[key(KeyCode::Char('6'))]);
         st.tick = 40;
         let text = draw(&d, &st, 120, 35);
+        // A deck the content does not know reads as none: one line in the middle of
+        // the body, under the rule below the tabs and above the status strip.
+        let lines: Vec<&str> = text.lines().collect();
+        let tabs = lines
+            .iter()
+            .position(|l| l.contains("▌CYBERDECK▐"))
+            .unwrap();
+        let (top, bottom) = (tabs + 2, 35 - 3);
+        let y = top + (bottom - top - 1) / 2;
+        let at = lines[y]
+            .find("No CYBERDECK equipped")
+            .map(|b| lines[y][..b].chars().count());
+        assert_eq!(at, Some(1 + (118 - 21) / 2), "{text}");
+        // No deck, no glass, no inventory, no brackets, though the pack holds programs.
+        let body = lines[top..bottom].join("\n");
+        for gone in [
+            "K▒ROK▒WA",
+            "INVENTORY",
+            "FAILSAFE",
+            "ROM▸",
+            "┏",
+            "ATTACK",
+            "CRACK",
+        ] {
+            assert!(!body.contains(gone), "{gone}: {text}");
+        }
         assert!(
-            text.contains("no deck jacked") && !text.contains("K▒ROK▒WA"),
-            "a deck the content does not know reads as none: {text}"
+            text.contains("tab tabs · 0-9 jump · esc close") && !text.contains("space act"),
+            "{text}"
         );
+        // Nothing to point at: the arrows and space change nothing and keep the tab.
+        let before = st.character.clone();
+        d.update(
+            &mut st,
+            &[
+                key(KeyCode::Left),
+                key(KeyCode::Right),
+                key(KeyCode::Down),
+                key(KeyCode::Char(' ')),
+            ],
+        );
+        assert_eq!(d.tab, Tab::Cyberdeck);
+        assert_eq!(st.character, before);
+        assert!(matches!(
+            d.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Pop { .. }
+        ));
 
         let mut bare = st
             .content
@@ -2823,7 +2866,8 @@ mod tests {
                 assert!(drawn || *c == ' ', "({x},{y}) {c:?}");
             }
         }
-        // Outside the body only the chrome: the screen with no deck to draw matches it.
+        // Outside the body only the chrome: it matches the screen with no deck, whose
+        // body is empty but for the one line that says so.
         st.content
             .items
             .iter_mut()
@@ -2831,9 +2875,21 @@ mod tests {
             .unwrap()
             .deck = None;
         let bare = draw(&d, &st, 200, 60);
-        assert!(bare.contains("no deck jacked"), "{bare}");
+        let message = top + (bottom - top - 1) / 2;
+        for (y, row) in bare.lines().enumerate().take(bottom).skip(top) {
+            let inner: String = row.chars().skip(1).take(198).collect();
+            if y == message {
+                assert_eq!(inner.trim(), "No CYBERDECK equipped", "row {y}");
+            } else {
+                assert_eq!(inner.trim(), "", "row {y}");
+            }
+        }
         for (y, (a, b)) in text.lines().zip(bare.lines()).enumerate() {
-            if !(top..bottom).contains(&y) {
+            if y == 60 - 2 {
+                // The hint row: each says its own keys.
+                assert!(a.contains("space act"), "{a}");
+                assert!(b.contains("tab tabs · 0-9 jump · esc close"), "{b}");
+            } else if !(top..bottom).contains(&y) {
                 assert_eq!(a, b, "row {y}");
             }
         }

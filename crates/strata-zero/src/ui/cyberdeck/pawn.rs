@@ -44,13 +44,13 @@ pub fn parts(view: &DeckView) -> Vec<(Part, Rect)> {
         x += w + 1;
     }
     out.push((Part::Failsafe, Rect::new(69, 7, 10, 5)));
-    out.extend(inventory(view, INV_Y));
+    out.extend(inventory(view));
     out
 }
 
-/// The inventory row at `y`: carts two apart from x 2, starting at `inv_offset`,
+/// The inventory row on `INV_Y`: carts two apart from x 2, starting at `inv_offset`,
 /// stopping once one would end past the edge.
-pub fn inventory(view: &DeckView, y: u16) -> Vec<(Part, Rect)> {
+fn inventory(view: &DeckView) -> Vec<(Part, Rect)> {
     let mut out = Vec::new();
     let mut x = 2u16;
     for (k, cart) in view.inventory.iter().enumerate().skip(view.inv_offset) {
@@ -58,7 +58,7 @@ pub fn inventory(view: &DeckView, y: u16) -> Vec<(Part, Rect)> {
         if x + w > INV_END {
             break;
         }
-        out.push((Part::Inv(k), Rect::new(x, y, w, 2)));
+        out.push((Part::Inv(k), Rect::new(x, INV_Y, w, 2)));
         x += w + 2;
     }
     out
@@ -103,7 +103,7 @@ const MAKER: &str = " K▒ROK▒WA KX-2 ";
 const STICKER: &str = " NO FUTURE ";
 const SKULL: &str = " x‿x ";
 
-/// The row the glass's bezel starts on in the full drawing.
+/// The row the glass's bezel starts on.
 const GLASS_Y: u16 = 6;
 /// Where the tag starts beside the sticker, and the column it must stop before.
 const TAG_X: u16 = 63;
@@ -117,21 +117,14 @@ pub(super) fn draw_with(view: &DeckView, p: &mut Pen) {
     p.fill(0, 0, W, H, PANEL_BG);
     bay(p, view);
     slab(p, view);
-    glass(p, view, GLASS_Y);
+    glass(p, view);
     p.put(45, 13, SKULL, BLACK, Some(HAZARD), true);
     gauge(p, view);
     tag(p, view);
     failsafe(p, view.switch);
     keyboard(p);
-    inventory_row(p, view, INV_Y);
+    inventory_row(p, view);
     landing(p, view);
-}
-
-/// The drawing without a deck: the glass at the top and the inventory.
-pub(super) fn draw_bare(view: &DeckView, p: &mut Pen, inv_y: u16) {
-    p.fill(0, 0, W, inv_y + 3, PANEL_BG);
-    glass(p, view, 0);
-    inventory_row(p, view, inv_y);
 }
 
 /// The carts standing in the bay and the empty slots.
@@ -196,13 +189,13 @@ fn slab(p: &mut Pen, view: &DeckView) {
     p.put(50, 10, STICKER, WHITE, Some(MAGENTA), true);
 }
 
-/// The glass: a bezel from row `by`, amber text on dark amber, alternate rows darker,
+/// The glass: a bezel from `GLASS_Y`, amber text on dark amber, alternate rows darker,
 /// the pinned line last. Characters past `typed` are not shown yet.
-pub(super) fn glass(p: &mut Pen, view: &DeckView, by: u16) {
-    p.frame((3, by, 42, 8), BEZEL, ['┏', '┓', '┗', '┛', '━', '┃']);
-    p.fill(4, by + 1, 40, 6, GLASS);
+fn glass(p: &mut Pen, view: &DeckView) {
+    p.frame((3, GLASS_Y, 42, 8), BEZEL, ['┏', '┓', '┗', '┛', '━', '┃']);
+    p.fill(4, GLASS_Y + 1, 40, 6, GLASS);
     for r in (0..6).step_by(2) {
-        p.tint(4, by + 1 + r, 40, 1, GLASS_LO);
+        p.tint(4, GLASS_Y + 1 + r, 40, 1, GLASS_LO);
     }
     let mut left = view.typed;
     let lines = view
@@ -221,13 +214,13 @@ pub(super) fn glass(p: &mut Pen, view: &DeckView, by: u16) {
             GlassTone::Dim => (AMBER_DIM, false),
             GlassTone::Warn => (WARN, true),
         };
-        p.put(5, by + 1 + k, &shown, fg, None, bold);
+        p.put(5, GLASS_Y + 1 + k, &shown, fg, None, bold);
     }
     if view.more_above {
-        p.put(43, by + 1, "▲", AMBER_DIM, None, false);
+        p.put(43, GLASS_Y + 1, "▲", AMBER_DIM, None, false);
     }
     if view.more_below {
-        p.put(43, by + GLASS_ROWS as u16, "▼", AMBER_DIM, None, false);
+        p.put(43, GLASS_Y + GLASS_ROWS as u16, "▼", AMBER_DIM, None, false);
     }
 }
 
@@ -306,12 +299,12 @@ fn keyboard(p: &mut Pen) {
     p.put(11, 16, &"▆".repeat(56), KEYS, Some(BODY), false);
 }
 
-/// The carts lying in the pack on rows `y` and `y + 1` with the label above them,
+/// The carts lying in the pack on `INV_Y` and the row under it, the label above them,
 /// `‹` and `›` where more lie off either side, and the outline of a held cart's
 /// landing in the bay.
-pub(super) fn inventory_row(p: &mut Pen, view: &DeckView, y: u16) {
-    p.put(2, y - 1, "INVENTORY", LABEL_DIM, None, true);
-    let shown = inventory(view, y);
+fn inventory_row(p: &mut Pen, view: &DeckView) {
+    p.put(2, INV_Y - 1, "INVENTORY", LABEL_DIM, None, true);
+    let shown = inventory(view);
     for (part, r) in &shown {
         let Part::Inv(k) = part else { continue };
         let cart = &view.inventory[*k];
@@ -328,10 +321,10 @@ pub(super) fn inventory_row(p: &mut Pen, view: &DeckView, y: u16) {
         p.put(r.x + r.width - 1, r.y, "▐", EMPTY, Some(CART_DIM), false);
     }
     if view.inv_offset > 0 {
-        p.put(0, y, "‹", LABEL, None, true);
+        p.put(0, INV_Y, "‹", LABEL, None, true);
     }
     if view.inv_offset + shown.len() < view.inventory.len() {
-        p.put(W - 1, y, "›", LABEL, None, true);
+        p.put(W - 1, INV_Y, "›", LABEL, None, true);
     }
 }
 
@@ -365,7 +358,7 @@ mod tests {
     use super::*;
     use crate::ui::cyberdeck::tests::{cart, kit_view};
     use crate::ui::cyberdeck::tests::{render, row, text};
-    use crate::ui::cyberdeck::{GlassTone, Held, Switch, draw, size};
+    use crate::ui::cyberdeck::{GlassTone, Held, Switch, draw};
     use ratatui::buffer::Buffer;
     use ratatui::style::{Color, Modifier};
 
@@ -697,15 +690,11 @@ mod tests {
             letter: 'B',
         });
         v.point = Part::Slot(1);
-        views.push(v.clone());
-        v.look = None;
         views.push(v);
         for v in &views {
             let buf = render(v);
-            let (w, h) = size(v.look);
-            let (ox, oy) = ((98 - w) / 2, (22 - h) / 2);
-            for y in oy..oy + h {
-                for x in ox..ox + w {
+            for y in 0..H {
+                for x in OX..OX + W {
                     let c = &buf[(x, y)];
                     assert!(
                         matches!((c.fg, c.bg), (Color::Rgb(..), Color::Rgb(..))),

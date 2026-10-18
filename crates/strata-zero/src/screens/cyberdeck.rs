@@ -56,8 +56,10 @@ impl DeckTab {
         self.point.pack()
     }
 
-    pub fn hint(&self) -> &'static str {
-        if self.held.is_some() {
+    pub fn hint(&self, st: &AppState) -> &'static str {
+        if st.character.deck(&st.content).is_none() {
+            "tab tabs · 0-9 jump · esc close"
+        } else if self.held.is_some() {
             "↑↓←→ carry · space drop · esc put back"
         } else {
             "↑↓←→ point · space act · tab tabs · esc close"
@@ -67,6 +69,16 @@ impl DeckTab {
     /// One key: `Stay` when the tab used it, `Pop` for esc with nothing to undo, `None`
     /// for the keys the deck handles.
     pub fn key(&mut self, st: &mut AppState, code: KeyCode) -> Option<ScreenCmd> {
+        // No deck: nothing to point at or act on. Esc closes; the tab keys pass.
+        if st.character.deck(&st.content).is_none() {
+            return match code {
+                KeyCode::Esc | KeyCode::Char('q') => Some(ScreenCmd::Pop {
+                    fx: TransitionKind::Glitch,
+                }),
+                KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('0'..='9') => None,
+                _ => Some(ScreenCmd::Stay),
+            };
+        }
         // The pack may have changed under the tab: let go of a cart no longer in it and
         // put the brackets on a part that is still there.
         if self
@@ -194,8 +206,12 @@ impl DeckTab {
     }
 
     /// `point` if the deck still has it, else slot A, else the first cart, else the plate.
+    /// With no deck there is nothing to point at, and `point` is kept for its return.
     fn clamp(&self, st: &AppState, point: Part) -> Part {
         let parts = parts(&self.layout(st, point));
+        if parts.is_empty() {
+            return point;
+        }
         [point, Part::Slot(0), Part::Inv(0)]
             .into_iter()
             .find(|p| parts.iter().any(|(q, _)| q == p))
@@ -320,17 +336,16 @@ impl DeckTab {
     }
 }
 
-/// Programs in the pack in pack order, one per id: with a deck the ones not loaded,
-/// with none all of them, since nothing sits in a slot.
+/// Programs in the pack and not loaded, in pack order, one per id: the carts in
+/// INVENTORY.
 pub(crate) fn inventory(st: &AppState) -> Vec<ItemId> {
-    let deck = st.character.deck(&st.content).is_some();
     let mut out: Vec<ItemId> = Vec::new();
     for s in &st.character.inventory {
         let program = st
             .content
             .item(&s.item)
             .is_some_and(|i| i.kind == ItemKind::Program);
-        let slotted = deck && st.character.loaded.contains(&s.item);
+        let slotted = st.character.loaded.contains(&s.item);
         if program && !slotted && !out.contains(&s.item) {
             out.push(s.item.clone());
         }
@@ -356,20 +371,8 @@ pub(crate) fn heat(st: &AppState) -> Option<u8> {
 pub(crate) fn glass(st: &AppState, tab: &DeckTab) -> (Glass, (String, GlassTone)) {
     let line = |text: &str, tone| (text.to_string(), tone);
     let Some((deck, spec)) = st.character.deck(&st.content) else {
-        // No deck: the carts can still be read.
-        let read = match tab.point {
-            Part::Inv(k) => inventory(st)
-                .get(k)
-                .map(|id| program(st, id, upper(st, id))),
-            _ => None,
-        };
-        return match read {
-            Some(body) => (body, line("no deck jacked", GlassTone::Dim)),
-            None => (
-                vec![line("no deck jacked", GlassTone::Dim)],
-                line("", GlassTone::Dim),
-            ),
-        };
+        // No deck: the tab shows no glass.
+        return (Vec::new(), line("", GlassTone::Dim));
     };
     if let (Some(id), Part::Slot(k)) = (&tab.held, tab.point) {
         return carrying(st, id, k);
@@ -591,11 +594,7 @@ fn rows(st: &AppState, tab: &DeckTab) -> (Glass, (String, GlassTone)) {
 }
 
 /// The loaded programs the content knows, in loaded order: the carts in the bay.
-/// Without a deck nothing is in a slot.
 fn bay(st: &AppState) -> Vec<&Item> {
-    if st.character.deck(&st.content).is_none() {
-        return Vec::new();
-    }
     st.character.loaded_programs(&st.content).collect()
 }
 
@@ -871,7 +870,7 @@ mod tests {
         space(&mut tab, &mut st);
         assert_eq!(tab.held, Some(id("attack")));
         assert_eq!(tab.point, Part::Slot(0), "the bay is full: the first cart");
-        assert_eq!(tab.hint(), "↑↓←→ carry · space drop · esc put back");
+        assert_eq!(tab.hint(&st), "↑↓←→ carry · space drop · esc put back");
         tab.key(&mut st, KeyCode::Right);
         assert_eq!(tab.point, Part::Slot(1));
         tab.key(&mut st, KeyCode::Down);
@@ -894,7 +893,10 @@ mod tests {
         assert_eq!(tab.held, None);
         assert_eq!(last(&st), Some("Attack slotted · Copy to inventory"));
         assert_eq!(tab.point, Part::Slot(1));
-        assert_eq!(tab.hint(), "↑↓←→ point · space act · tab tabs · esc close");
+        assert_eq!(
+            tab.hint(&st),
+            "↑↓←→ point · space act · tab tabs · esc close"
+        );
     }
 
     #[test]
@@ -1089,26 +1091,67 @@ mod tests {
             tab.point
         );
         assert_eq!(DeckTab::restore(Part::Failsafe.pack(), &st).pack(), 300);
+        // With no deck nothing can be pointed at, so the point is kept for its return.
         st.character.equipment.remove(&game::Slot::Deck);
-        let tab = DeckTab::restore(Part::Slot(0).pack(), &st);
-        assert_eq!(tab.point, Part::Inv(0));
+        let tab = DeckTab::restore(Part::Inv(9).pack(), &st);
+        assert_eq!(tab.point, Part::Inv(9));
+        assert!(parts(&tab.view(&st)).is_empty());
     }
 
     #[test]
-    fn no_deck_refuses_to_pick_up() {
+    fn no_deck_points_at_nothing() {
         let mut st = state();
         st.character.equipment.remove(&game::Slot::Deck);
-        // With no deck every program lies in the inventory, loaded or not.
-        assert_eq!(inventory(&st), vec![id("crack"), id("copy"), id("attack")]);
-        let mut tab = DeckTab::restore(0, &st);
-        assert_eq!(tab.point, Part::Inv(0));
-        let v = tab.view(&st);
-        assert_eq!(v.look, None);
-        assert_eq!(v.glass[0].0, "CRACK");
-        assert_eq!(v.pinned.0, "no deck jacked");
-        space(&mut tab, &mut st);
-        assert_eq!(last(&st), Some("no deck jacked"));
-        assert!(last_is_warning(&st));
-        assert_eq!(tab.held, None);
+        let pointing = [
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Left,
+            KeyCode::Right,
+            KeyCode::Char('h'),
+            KeyCode::Char('j'),
+            KeyCode::Char('k'),
+            KeyCode::Char('l'),
+            KeyCode::Char(' '),
+            KeyCode::Enter,
+            KeyCode::PageUp,
+            KeyCode::PageDown,
+        ];
+        // From a cart in the pack and from the failsafe, as a deck had left them.
+        for from in [Part::Inv(0), Part::Failsafe] {
+            let mut tab = DeckTab::restore(from.pack(), &st);
+            let v = tab.view(&st);
+            assert_eq!(v.look, None);
+            assert!(parts(&v).is_empty());
+            assert_eq!(tab.hint(&st), "tab tabs · 0-9 jump · esc close");
+            let before = (
+                tab.clone(),
+                st.character.clone(),
+                st.net.failsafe,
+                last(&st).map(String::from),
+            );
+            for code in pointing {
+                assert!(
+                    matches!(tab.key(&mut st, code), Some(ScreenCmd::Stay)),
+                    "{code:?}"
+                );
+            }
+            let after = (
+                tab.clone(),
+                st.character.clone(),
+                st.net.failsafe,
+                last(&st).map(String::from),
+            );
+            assert_eq!(after, before, "nothing changes from {from:?}");
+            // The tab keys pass to the deck screen; esc and q close it.
+            for code in [KeyCode::Tab, KeyCode::BackTab, KeyCode::Char('3')] {
+                assert!(tab.key(&mut st, code).is_none(), "{code:?}");
+            }
+            for code in [KeyCode::Esc, KeyCode::Char('q')] {
+                assert!(matches!(
+                    tab.key(&mut st, code),
+                    Some(ScreenCmd::Pop { .. })
+                ));
+            }
+        }
     }
 }
