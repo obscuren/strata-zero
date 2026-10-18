@@ -267,9 +267,6 @@ impl MapScreen {
 
     /// The tile the inspector describes: the player in Walk mode, the cursor otherwise.
     fn focus_pos(&self, st: &AppState) -> Pos {
-        if let (Mode::Walk, Some(l)) = (self.mode, self.looking.as_ref()) {
-            return l.cursor;
-        }
         match (self.mode, &st.player) {
             (Mode::Walk, Some(p)) => p.pos,
             _ => self.cursor,
@@ -2205,19 +2202,21 @@ impl Screen for MapScreen {
             Paragraph::new(hud::rule_row(area.width, cross, '┷')),
             r.bottom_rule,
         );
-        // Right column.
+        // Right column. The dev inspector follows the look cursor; HERE stays on you.
+        let inspect = self.looking.map_or(cursor, |l| l.cursor);
         let person = st
             .world
             .as_ref()
             .filter(|_| self.place.is_street())
-            .and_then(|w| w.person_at(cursor).map(|id| w.card(id, city)))
+            .and_then(|w| w.person_at(inspect).map(|id| w.card(id, city)))
             .or_else(|| {
-                let id = self.inside_person_at(self.place, cursor)?;
+                let id = self.inside_person_at(self.place, inspect)?;
                 st.world.as_ref().map(|w| w.card(id, city))
             });
         let view = sidebar::SidebarView {
             map,
             focus: cursor,
+            inspect,
             person: person.as_ref(),
             view: TileRect::new(
                 origin.x,
@@ -7328,7 +7327,7 @@ mod tests {
         walking(&mut st, &mut s);
         s.update(&mut st, &[key(KeyCode::Char('?'))]);
         let text = draw_screen(&s, &st, 140, 45);
-        for k in ["space", "enter", "tab", "v ", "m ", ". ", "J ", "jack out (asks first)"] {
+        for k in ["space", "enter", "tab", "v ", "m ", ". ", "J ", "jack out (asks first)", "x ", "look: a cursor"] {
             assert!(text.contains(k), "{k:?} missing: {text}");
         }
     }
@@ -7507,6 +7506,34 @@ mod tests {
         s.update(&mut st, &[key(KeyCode::Char('x'))]);
         s.update(&mut st, &[key(KeyCode::Char('x'))]);
         assert!(s.looking.is_none(), "x again puts it away");
+    }
+
+    #[test]
+    fn looking_at_unseen_or_remembered_tiles_names_nothing_on_them() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let at = bare_sidewalk(&st);
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), at);
+        let there = at.offset(2, 0);
+        let k = Place::Stratum(StratumKind::Street);
+        st.ground.add(k, there, game::ItemId::new("copper_coil"), 2);
+        s.update(&mut st, &[key(KeyCode::Char('x'))]);
+        s.update(&mut st, &[key(KeyCode::Char('l')), key(KeyCode::Char('l'))]);
+        assert_eq!(s.looking.as_ref().unwrap().cursor, there);
+        for v in [Visibility::Unseen, Visibility::Remembered] {
+            st.player.as_mut().unwrap().set_vis(there, v);
+            st.tick += 40;
+            let text = draw_screen(&s, &st, 140, 40);
+            assert!(
+                !text.contains("Copper coil"),
+                "{v:?}: nothing names the coil: {text}"
+            );
+        }
+        // In sight, the box names it.
+        st.player.as_mut().unwrap().set_vis(there, Visibility::Visible);
+        st.tick += 40;
+        assert!(draw_screen(&s, &st, 140, 40).contains("Copper coil"));
     }
 
     #[test]

@@ -236,7 +236,11 @@ climb one floor · `space` opens the window of the thing in reach, named in its
 header, with fixed verbs: `x` look, `t` talk, `i` interact (a terminal, a
 keypad), `j` jack in or out, `g` take, `>` `<` go up or down; with several
 things in reach it asks which way first, and a direction opens that one ·
-`J` jacked in: jack out, after asking · `1`-`5` fire the ability in that slot ·
+`J` jacked in: jack out, after asking · `x` look: a cursor on the map (the walk
+keys move it, shift by eight; `tab` and `shift-tab` step through what is worth a
+look) and a window beside it that never covers it, saying what your eyes can tell
+you; `space` opens the window of what it is on when that is in reach, `esc` or `x`
+puts it away · `1`-`5` fire the ability in that slot ·
 `a` the full ability list · walking into someone swaps places with them, and
 they step back once you move on · `enter` walks the aim ·
 `.` wait; in a construct it hurries the beat, in a fight it ends your turn ·

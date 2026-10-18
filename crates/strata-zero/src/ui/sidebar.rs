@@ -171,7 +171,10 @@ pub fn budget(needs: &[(Section, u16)], height: u16) -> Vec<(Section, u16)> {
 
 pub struct SidebarView<'a> {
     pub map: MapRef<'a>,
+    /// The tile HERE describes: where the player stands.
     pub focus: Pos,
+    /// The tile the dev inspector describes: the look cursor while looking.
+    pub inspect: Pos,
     /// The main viewport in tiles, for the minimap.
     pub view: TileRect,
     pub player: Option<Pos>,
@@ -182,7 +185,7 @@ pub struct SidebarView<'a> {
     pub log: &'a MessageLog,
     pub tick: u64,
     pub dev: bool,
-    /// Whoever stands on the focus tile, for the inspector.
+    /// Whoever stands on the inspected tile, for the inspector.
     pub person: Option<&'a sim::Card>,
     /// The Net's state: the trace and the hacks inside a construct.
     pub net: &'a crate::net::NetState,
@@ -481,7 +484,7 @@ pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) -> V
     let node = v
         .map
         .stratum()
-        .and_then(|k| Digital::node_under(v.map.city(), k, v.focus))
+        .and_then(|k| Digital::node_under(v.map.city(), k, v.inspect))
         .map(|id| v.map.city().net.node(id));
     let mut built: Vec<(Section, Vec<Line<'static>>, u16)> = Vec::new();
     for (i, s) in flags.active(v.dev).into_iter().enumerate() {
@@ -502,9 +505,9 @@ pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) -> V
             Section::Inspect => {
                 let l: Vec<Line<'static>> = inspector_lines(
                     &v.map,
-                    v.focus,
+                    v.inspect,
                     node,
-                    v.ground.at(v.map.place(), v.focus),
+                    v.ground.at(v.map.place(), v.inspect),
                     v.content,
                     v.person,
                 )
@@ -601,6 +604,7 @@ mod tests {
             )
             .unwrap(),
             focus,
+            inspect: focus,
             view: TileRect::new(0, 0, 70, 25),
             player: Some(focus),
             style: &st.style,
