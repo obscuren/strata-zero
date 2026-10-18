@@ -11,10 +11,11 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 30] = [
+const COMMANDS: [&str; 33] = [
     "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "talent", "tpts", "program",
     "heat", "alarm", "wake", "engage", "calm", "ice", "failsafe", "hp", "who", "clock", "tp",
-    "clear", "help", "trace", "seize", "backdoor", "eyes", "light", "time",
+    "clear", "help", "trace", "seize", "backdoor", "eyes", "light", "time", "job", "standing",
+    "jobs",
 ];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
@@ -420,8 +421,64 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 if n == 1 { "" } else { "s" }
             ))
         }
+        "job" => {
+            let kind = match args.first().copied() {
+                Some("fetch") => crate::jobs::KindTag::Fetch,
+                Some("copy") => crate::jobs::KindTag::Copy,
+                Some("plant") => crate::jobs::KindTag::Plant,
+                Some("deliver") => crate::jobs::KindTag::Deliver,
+                _ => return Err("job fetch|copy|plant|deliver".to_string()),
+            };
+            let from = st.player.as_ref().map(|p| p.pos).unwrap_or(Pos::new(0, 0));
+            let fixer = crate::jobs::nearest_fixer(st, from).ok_or("no fixer in this city")?;
+            let counter = st.jobs.fixer_mut(fixer).rolled;
+            st.jobs.fixer_mut(fixer).rolled += 1;
+            let job = crate::jobs::generate(st, fixer, kind, counter)
+                .ok_or("nothing to roll for that kind")?;
+            let title = job.title.clone();
+            let id = st.jobs.push(job);
+            crate::jobs::take_job(st, id)?;
+            Ok(format!("{} · `{title}` taken", kind.label()))
+        }
+        "standing" => {
+            let n: i32 = args
+                .first()
+                .and_then(|a| a.parse().ok())
+                .ok_or_else(|| "standing <n>".to_string())?;
+            let fixers: Vec<sim::PersonId> = st
+                .world
+                .as_ref()
+                .map(|w| {
+                    w.people()
+                        .iter()
+                        .filter(|p| p.profession == "fixer")
+                        .map(|p| p.id)
+                        .collect()
+                })
+                .unwrap_or_default();
+            for f in &fixers {
+                st.jobs.fixer_mut(*f).standing = n;
+            }
+            Ok(format!(
+                "standing {n} with {} fixer{}",
+                fixers.len(),
+                if fixers.len() == 1 { "" } else { "s" }
+            ))
+        }
+        "jobs" => {
+            if st.jobs.list.is_empty() {
+                return Ok("no jobs".to_string());
+            }
+            Ok(st
+                .jobs
+                .list
+                .iter()
+                .map(|j| format!("{} `{}` {:?} ¤{}", j.id.0, j.title, j.state, j.pay))
+                .collect::<Vec<_>>()
+                .join(" · "))
+        }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · eyes · light · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · job fetch|copy|plant|deliver · standing <n> · jobs · eyes · light · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),

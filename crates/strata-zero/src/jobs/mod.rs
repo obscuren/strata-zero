@@ -8,6 +8,7 @@ pub mod ui;
 pub use flavor::*;
 pub use generate::*;
 
+use crate::app::AppState;
 use citygen::{BuildingId, Place, Pos};
 use game::ItemId;
 use sim::PersonId;
@@ -390,6 +391,76 @@ impl Jobs {
     }
 }
 
+/// Logs what an event ticked.
+pub fn report(st: &mut AppState, changes: Vec<Change>) {
+    for Change::Ticked { job, objective } in changes {
+        if let Some(j) = st.jobs.get(job) {
+            let line = format!("`{}` · {}", j.title, j.objectives[objective].text);
+            st.story(line);
+        }
+    }
+}
+
+/// Tells the jobs what the world did, and logs what it ticked.
+pub fn send(st: &mut AppState, ev: Event) {
+    let changes = st.jobs.on(ev);
+    report(st, changes);
+}
+
+/// The job clock: late jobs fail, the fixer writes.
+pub fn tick(st: &mut AppState) {
+    let now = st.net.now(st);
+    for Late { job } in st.jobs.minute(now) {
+        let Some(j) = st.jobs.get(job).cloned() else {
+            continue;
+        };
+        let fixer = ui::fixer_name(st, j.fixer);
+        st.warn(format!(
+            "`{}` · too late · {fixer} will hear of it",
+            j.title
+        ));
+        let line = st.flavor.line(Say::Late, job.0 as u64).to_string();
+        st.journal.mails.push(crate::credentials::Mail {
+            from: fixer,
+            subject: format!("{} · late", j.title.to_lowercase()),
+            body: vec![line],
+            read: false,
+            at: now,
+        });
+    }
+}
+
+/// Takes an offered job: the state, the mail, a Deliver's package. Logs the line.
+pub fn take_job(st: &mut AppState, id: JobId) -> Result<String, String> {
+    let now = st.net.now(st);
+    let Some(j) = st.jobs.get(id).cloned() else {
+        return Err("no such job".into());
+    };
+    if !st.jobs.take(id, now) {
+        return Err("not on offer".into());
+    }
+    if let Kind::Deliver { item, .. } = &j.kind {
+        st.character.give(item.clone(), 1);
+    }
+    let fixer = ui::fixer_name(st, j.fixer);
+    let mut body = j.brief.clone();
+    body.push(generate::where_line(st, j.fixer));
+    let by = now + j.hours * 60;
+    body.push(format!("By {:02}:{:02}.", (by / 60) % 24, by % 60));
+    body.push(fixer.clone());
+    st.journal.mails.push(crate::credentials::Mail {
+        from: fixer.clone(),
+        subject: j.title.to_lowercase(),
+        body,
+        read: false,
+        at: now,
+    });
+    let said = st.flavor.line(Say::Taken, id.0 as u64).to_string();
+    let line = format!("`{}` · taken · {fixer}: \u{201c}{said}\u{201d}", j.title);
+    st.story(line.clone());
+    Ok(line)
+}
+
 #[cfg(test)]
 pub(crate) mod testutil {
     use super::{HOURS_FETCH, Job, JobId, Kind, Objective, PAY_FETCH, State};
@@ -724,5 +795,127 @@ mod tests {
             }),
             None
         );
+    }
+
+    use super::testutil::{a_fixer, state_home};
+
+    #[test]
+    fn taking_the_welcome_shard_ticks_the_job() {
+        let mut st = state_home();
+        let (b, level, _, tile) = crate::jobs::first_fetch(&st).unwrap();
+        let id = st.jobs.active().unwrap().id;
+        // Stand on the shard and take it the way the Space window does.
+        let city = st.city.clone().unwrap();
+        st.interiors.ensure(&city, b, level);
+        let mut p = st
+            .player
+            .take()
+            .unwrap_or_else(|| crate::walker::Player::spawn(&city, 1));
+        p.place = Place::Floor { building: b, level };
+        p.pos = tile;
+        st.player = Some(p);
+        crate::actions::perform(&mut st, game::Action::TakeAll).unwrap();
+        assert!(st.jobs.get(id).unwrap().objectives[0].done);
+        assert_eq!(st.character.count(&ItemId::new("paydata")), 1);
+        assert!(
+            st.log
+                .latest()
+                .is_some_and(|e| e.text.contains("Take the shard")),
+            "{:?}",
+            st.log.latest().map(|e| e.text.clone())
+        );
+    }
+
+    #[test]
+    fn a_server_copy_and_a_backdoor_tick_their_jobs() {
+        let mut st = state_home();
+        let fx = a_fixer(&st);
+        st.jobs.fixer_mut(fx).standing = PLANT_AT;
+        let copy = crate::jobs::generate(&mut st, fx, KindTag::Copy, 0).unwrap();
+        let Kind::Copy { building: cb, .. } = copy.kind else {
+            panic!()
+        };
+        let cid = st.jobs.push(copy);
+        st.jobs.take(cid, 0);
+        let plant = crate::jobs::generate(&mut st, fx, KindTag::Plant, 1).unwrap();
+        let Kind::Plant { building: pb } = plant.kind else {
+            panic!()
+        };
+        let pid = st.jobs.push(plant);
+        st.jobs.take(pid, 0);
+        crate::jobs::send(
+            &mut st,
+            Event::Copied {
+                building: cb,
+                vault: false,
+            },
+        );
+        assert!(st.jobs.get(cid).unwrap().objectives[0].done);
+        let seed = st.city.as_ref().unwrap().seed;
+        st.backdoors.plant_net(pb, 1, seed, 0);
+        crate::jobs::send(&mut st, Event::Planted { building: pb });
+        assert!(st.jobs.get(pid).unwrap().objectives[0].done);
+        let stands = |b: BuildingId| st.backdoors.standing().any(|d| d.building == b);
+        assert_eq!(st.jobs.ready(pid, &stands, &|_| true), Ok(()));
+        st.backdoors.burn(pb, crate::backdoors::Why::You, 1);
+        let stands = |b: BuildingId| st.backdoors.standing().any(|d| d.building == b);
+        assert!(st.jobs.ready(pid, &stands, &|_| true).is_err());
+    }
+
+    #[test]
+    fn a_deadline_passing_mails_once() {
+        let mut st = state_home();
+        let id = st.jobs.active().unwrap().id;
+        let deadline = st.jobs.get(id).unwrap().deadline.unwrap();
+        let mails = st.journal.mails.len();
+        // Jump the world's clock past the deadline in one step, as a long menu would.
+        let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) else {
+            panic!()
+        };
+        world.advance(city, (deadline + 5) * sim::TICKS_PER_MINUTE);
+        crate::jobs::tick(&mut st);
+        crate::jobs::tick(&mut st);
+        assert_eq!(st.jobs.get(id).unwrap().state, State::Failed);
+        assert_eq!(st.journal.mails.len(), mails + 1);
+        let last = st.journal.mails.last().unwrap();
+        assert!(
+            last.body[0].contains("window") || last.body[0].contains("Late"),
+            "{:?}",
+            last.body
+        );
+        assert_eq!(st.jobs.standing(st.jobs.get(id).unwrap().fixer), LOSS_LATE);
+        assert!(st.log.latest().is_some_and(|e| e.text.contains("too late")));
+    }
+
+    #[test]
+    fn console_rolls_a_job_and_sets_the_standing() {
+        let mut st = state_home();
+        let at = game::At {
+            place: Place::Stratum(StratumKind::Street),
+            pos: Pos::new(0, 0),
+        };
+        let out = crate::screens::console::run(&mut st, at, "job deliver").unwrap();
+        assert!(out.contains("deliver"), "{out}");
+        assert_eq!(st.character.count(&ItemId::new("sealed_package")), 1);
+        assert!(
+            st.jobs
+                .list
+                .iter()
+                .any(|j| matches!(j.kind, Kind::Deliver { .. }) && j.state == State::Taken)
+        );
+        assert!(
+            st.journal
+                .mails
+                .last()
+                .unwrap()
+                .body
+                .iter()
+                .any(|l| l.starts_with("By "))
+        );
+        let out = crate::screens::console::run(&mut st, at, "standing 4").unwrap();
+        assert!(out.contains('4'), "{out}");
+        assert_eq!(st.jobs.standing(a_fixer(&st)), 4);
+        let out = crate::screens::console::run(&mut st, at, "jobs").unwrap();
+        assert!(out.contains("A favour"), "{out}");
     }
 }

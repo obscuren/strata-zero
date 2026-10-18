@@ -356,6 +356,7 @@ impl AppIo<'_> {
         self.st
             .backdoors
             .plant_key(b, &shell.user, security, seed, now);
+        crate::jobs::send(self.st, crate::jobs::Event::Planted { building: b });
         let (event, _) = self
             .st
             .net

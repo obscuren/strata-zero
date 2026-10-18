@@ -1919,6 +1919,7 @@ impl Screen for MapScreen {
         let roots = st.backdoors.roots();
         st.net.minute(now, inside, &mut st.constructs, &roots);
         crate::net::tick_backdoors(st);
+        crate::jobs::tick(st);
         // The beat of a calm construct: one per frame at most, so a long menu is
         // never a burst of rolls.
         let was_engaged = st.net.engaged.is_some();

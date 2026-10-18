@@ -698,10 +698,24 @@ fn land(
         (Op::Blind, _) => "camera blinded".to_string(),
         (Op::Copy, Target::Node(NodeKind::DataVault)) => {
             st.character.give(ItemId::new("vault_data"), 1);
+            crate::jobs::send(
+                st,
+                crate::jobs::Event::Copied {
+                    building: b,
+                    vault: true,
+                },
+            );
             "vault copied · a `Vault dump` in the pack".to_string()
         }
         (Op::Copy, _) => {
             st.character.give(ItemId::new("paydata"), 1);
+            crate::jobs::send(
+                st,
+                crate::jobs::Event::Copied {
+                    building: b,
+                    vault: false,
+                },
+            );
             let base = "server copied · a `Paydata shard` in the pack";
             match crate::credentials::copy_codes(st, b, now) {
                 Some(n) if n > 0 => format!("{base} · `{name}`'s door codes are in the journal"),
@@ -712,6 +726,7 @@ fn land(
         (Op::Backdoor, _) => {
             let seed = st.city.as_ref().map_or(0, |c| c.seed);
             st.backdoors.plant_net(b, rating, seed, now);
+            crate::jobs::send(st, crate::jobs::Event::Planted { building: b });
             format!(
                 "backdoor planted · `{name}`'s gate is yours · {} of {}",
                 st.backdoors.slots_used(),
