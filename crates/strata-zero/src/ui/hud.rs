@@ -188,6 +188,13 @@ pub fn location_line(location: &str, clock: (u8, u8), width: u16) -> Line<'stati
     ])
 }
 
+/// How exposed you are, on its own band row: `dim · 2 eyes`, `bright · unseen`.
+/// Empty off the strata.
+pub fn exposure_row(exposure: &str, width: u16) -> Line<'static> {
+    let body = cut(exposure, (width as usize).saturating_sub(1));
+    padded(vec![Span::raw(" "), dim(body)], width as usize)
+}
+
 /// Filled cells for `cur` of `max` out of `cells`.
 pub fn bar_cells_for(cur: u32, max: u32, cells: usize) -> usize {
     if max == 0 {
@@ -690,6 +697,17 @@ mod tests {
         let long = location_line(&"B".repeat(60), (9, 5), 36).to_string();
         assert_eq!(long.chars().count(), 36, "{long:?}");
         assert!(long.ends_with("… ☀ 09:05"), "{long:?}");
+    }
+
+    #[test]
+    fn exposure_row_fills_its_width_and_cuts() {
+        let s = exposure_row("dim · 2 eyes", 20).to_string();
+        assert_eq!(s.chars().count(), 20, "{s:?}");
+        assert!(s.starts_with(" dim · 2 eyes"), "{s:?}");
+        let short = exposure_row("bright · unseen", 10).to_string();
+        assert_eq!(short.chars().count(), 10, "{short:?}");
+        assert!(short.ends_with("…"), "{short:?}");
+        assert_eq!(exposure_row("", 8).to_string(), " ".repeat(8));
     }
 
     #[test]

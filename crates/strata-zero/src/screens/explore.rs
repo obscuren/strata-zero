@@ -2227,6 +2227,15 @@ impl Screen for MapScreen {
             Paragraph::new(hud::location_line(&location, st.clock(), rw)),
             r.band_r[0],
         );
+        let exposure = if matches!(self.place, Place::Stratum(_)) {
+            crate::exposure::text(&crate::exposure::of(st))
+        } else {
+            String::new()
+        };
+        f.render_widget(
+            Paragraph::new(hud::exposure_row(&exposure, rw)),
+            r.band_r[2],
+        );
         f.render_widget(
             Paragraph::new(hud::carry_row(
                 ch.weight(&st.content),
@@ -3551,8 +3560,10 @@ mod tests {
                 "{text}"
             );
             assert!(
-                lines[2].starts_with(" FOCUS") && !lines[2].contains("[F5]"),
-                "the band row the dev tabs left stays blank: {text}"
+                lines[2].starts_with(" FOCUS")
+                    && !lines[2].contains("[F5]")
+                    && lines[2].contains("· unseen"),
+                "the band row the dev tabs left carries the exposure: {text}"
             );
             let last_main = h as usize - 6;
             assert!(
