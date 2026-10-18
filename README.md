@@ -177,7 +177,27 @@ the overview is a still of the city, and the inspector reads whoever is under
 the cursor there: who they are, what they are doing, what comes next for them,
 where they live and work, and where their car is.
 
+## Install
+
+Builds for macOS, Linux and Windows are on the
+[releases page](https://github.com/obscuren/strata-zero/releases). Or, on
+macOS and Linux:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/obscuren/strata-zero/releases/latest/download/strata-zero-installer.sh | sh
+```
+
+and on Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/obscuren/strata-zero/releases/latest/download/strata-zero-installer.ps1 | iex"
+```
+
+Either puts `strata` in `~/.cargo/bin`.
+
 ## Run
+
+`strata`, or from a checkout:
 
 ```sh
 cargo run --release -p strata-zero
@@ -351,3 +371,15 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo test -p citygen --test seeds -- --ignored   # 250-seed sweep
 ```
+
+## Release
+
+Bump `version` in the workspace `Cargo.toml`, commit, tag `vX.Y.Z` and push
+the tag. The GitHub mirror runs `.github/workflows/release.yml`, built by
+[dist](https://opensource.axo.dev/cargo-dist/), which builds every target in
+`dist-workspace.toml` and publishes them with the installers as a GitHub
+Release. After changing `dist-workspace.toml`, run `dist generate`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
