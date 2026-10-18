@@ -35,6 +35,11 @@ use std::cell::Cell;
 use std::collections::BTreeSet;
 
 const REVEAL_TICKS: u64 = 20;
+/// What the failsafe does, on its card and on the deck's glass.
+pub(crate) const FAILSAFE_TEXT: &str = "The deck pulls you out at a quarter of your hp when black ICE is on you: focus gone, thirty minutes of cooling, the hp stays lost.";
+/// What turning it off costs.
+pub(crate) const FAILSAFE_WARN: &str =
+    "Off, black ICE can take you to zero. There is no coming back from that.";
 /// Ticks a talent's box stays lit after a rank goes in.
 const FLASH_TICKS: u64 = 6;
 const JITTER_PERIOD: u64 = 90;
@@ -939,7 +944,7 @@ impl Deck {
 
     /// A program's card: what it does and to what, its numbers, the odds the
     /// character brings against a mid-city construct.
-    fn program_card(st: &AppState, id: &ItemId) -> Vec<Line<'static>> {
+    pub(crate) fn program_card(st: &AppState, id: &ItemId) -> Vec<Line<'static>> {
         let Some(item) = st.content.item(id) else {
             return vec![warn(format!("unknown item {id}"))];
         };
@@ -1005,11 +1010,9 @@ impl Deck {
                 head("FAILSAFE"),
                 dim(if st.net.failsafe { "on" } else { "off" }),
                 plain(""),
-                plain(
-                    "The deck pulls you out at a quarter of your hp when black ICE is on you: focus gone, thirty minutes of cooling, the hp stays lost.",
-                ),
+                plain(FAILSAFE_TEXT),
                 plain(""),
-                warn("Off, black ICE can take you to zero. There is no coming back from that."),
+                warn(FAILSAFE_WARN),
             ],
             Some(Detail::Recipe(i)) => {
                 let r = &st.content.recipes[*i];
@@ -1075,67 +1078,71 @@ impl Deck {
                 }
                 out
             }
-            Some(Detail::Ability(i)) => {
-                let abilities = st.character.abilities(&st.content);
-                let Some((id, source)) = abilities.get(*i) else {
-                    return Vec::new();
-                };
-                // The sharpened copy: talents change the reach and the cooldown.
-                let Some(a) = st.character.ability(&st.content, id) else {
-                    return Vec::new();
-                };
-                let mut out = vec![head(&a.name)];
-                let kind = match a.kind {
-                    AbilityKind::Passive => "passive",
-                    AbilityKind::Active(_) => "active",
-                };
-                let from = match source {
-                    Source::Innate => "innate".to_string(),
-                    Source::Category(cat) => format!(
-                        "from {}",
-                        st.content
-                            .category(cat)
-                            .map(|c| c.name.clone())
-                            .unwrap_or_else(|| cat.to_string())
-                    ),
-                    Source::Item(item) => format!(
-                        "from {}",
-                        st.content
-                            .item(item)
-                            .map(|i| i.name.clone())
-                            .unwrap_or_else(|| item.to_string())
-                    ),
-                    Source::Talent(t) => format!(
-                        "from {}",
-                        st.content
-                            .talent(t)
-                            .map(|t| t.name.clone())
-                            .unwrap_or_else(|| t.to_string())
-                    ),
-                };
-                out.push(dim(format!("{kind} · {from}")));
-                if a.cooldown > 0 {
-                    out.push(dim(format!("cooldown {}s", a.cooldown.div_ceil(30))));
-                }
-                if let AbilityKind::Active(active) = a.kind {
-                    let effect = match active {
-                        Active::Scan { radius } => {
-                            format!("scan: paints the map within {radius} tiles")
-                        }
-                        Active::Ping { radius } => {
-                            format!("ping: lights terminals and stairs within {radius} tiles")
-                        }
-                        Active::Trace { radius } => {
-                            format!("trace: arcs to every node within {radius} tiles")
-                        }
-                    };
-                    out.push(Line::from(Span::styled(effect, Style::default().fg(CYAN))));
-                }
-                out.push(plain(""));
-                out.push(plain(a.desc.clone()));
-                out
-            }
+            Some(Detail::Ability(i)) => Self::ability_card(st, *i),
         }
+    }
+
+    /// An ability's card, `i` an index into `Character::abilities`: the sharpened
+    /// copy, where it comes from, its cooldown and its effect.
+    pub(crate) fn ability_card(st: &AppState, i: usize) -> Vec<Line<'static>> {
+        let abilities = st.character.abilities(&st.content);
+        let Some((id, source)) = abilities.get(i) else {
+            return Vec::new();
+        };
+        // The sharpened copy: talents change the reach and the cooldown.
+        let Some(a) = st.character.ability(&st.content, id) else {
+            return Vec::new();
+        };
+        let mut out = vec![head(&a.name)];
+        let kind = match a.kind {
+            AbilityKind::Passive => "passive",
+            AbilityKind::Active(_) => "active",
+        };
+        let from = match source {
+            Source::Innate => "innate".to_string(),
+            Source::Category(cat) => format!(
+                "from {}",
+                st.content
+                    .category(cat)
+                    .map(|c| c.name.clone())
+                    .unwrap_or_else(|| cat.to_string())
+            ),
+            Source::Item(item) => format!(
+                "from {}",
+                st.content
+                    .item(item)
+                    .map(|i| i.name.clone())
+                    .unwrap_or_else(|| item.to_string())
+            ),
+            Source::Talent(t) => format!(
+                "from {}",
+                st.content
+                    .talent(t)
+                    .map(|t| t.name.clone())
+                    .unwrap_or_else(|| t.to_string())
+            ),
+        };
+        out.push(dim(format!("{kind} · {from}")));
+        if a.cooldown > 0 {
+            out.push(dim(format!("cooldown {}s", a.cooldown.div_ceil(30))));
+        }
+        if let AbilityKind::Active(active) = a.kind {
+            let effect = match active {
+                Active::Scan { radius } => {
+                    format!("scan: paints the map within {radius} tiles")
+                }
+                Active::Ping { radius } => {
+                    format!("ping: lights terminals and stairs within {radius} tiles")
+                }
+                Active::Trace { radius } => {
+                    format!("trace: arcs to every node within {radius} tiles")
+                }
+            };
+            out.push(Line::from(Span::styled(effect, Style::default().fg(CYAN))));
+        }
+        out.push(plain(""));
+        out.push(plain(a.desc.clone()));
+        out
     }
 
     fn link_line(&self, st: &AppState) -> String {
