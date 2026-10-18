@@ -1228,7 +1228,7 @@ impl MapScreen {
                     }
                 }
                 if let Some(n) = home {
-                    st.say(format!("home · flat {n}"));
+                    st.say(format!("Entering `home` · flat {n}"));
                 }
                 None
             }
@@ -2287,16 +2287,31 @@ impl Screen for MapScreen {
             let style = match e.kind {
                 Kind::Warn => Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD),
                 Kind::Story => Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
-                Kind::Info => Style::default().fg(CYAN),
+                Kind::Info => Style::default().fg(crate::ui::chrome::TEXT),
             };
-            put(
-                f.buffer_mut(),
-                map_area.x + 1,
-                map_area.bottom().saturating_sub(1),
-                &e.marked(),
-                style,
-                map_area.right(),
-            );
+            // Marked names lit, as the LOG pane draws them.
+            let lit = Style::default().fg(CYAN).add_modifier(Modifier::BOLD);
+            let marked = e.marked();
+            let shift = marked.chars().count() - e.text.chars().count();
+            let y = map_area.bottom().saturating_sub(1);
+            for (i, ch) in marked.chars().enumerate() {
+                let x = map_area.x + 1 + i as u16;
+                if x >= map_area.right() {
+                    break;
+                }
+                let on = i >= shift
+                    && e.marks
+                        .iter()
+                        .any(|(a, b)| (a + shift..b + shift).contains(&i));
+                put(
+                    f.buffer_mut(),
+                    x,
+                    y,
+                    &ch.to_string(),
+                    if on { lit } else { style },
+                    map_area.right(),
+                );
+            }
         }
 
         // Look: the info window, kept off the cursor.
@@ -3584,6 +3599,28 @@ mod tests {
     }
 
     #[test]
+    fn the_toast_lights_the_names_it_marks() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        st.sidebar.set(Section::Log, false);
+        st.say("Entering `Novbio Labs`");
+        let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let buf = t.backend().buffer();
+        let text = buffer_text(buf);
+        let (y, line) = text
+            .lines()
+            .enumerate()
+            .find(|(_, l)| l.contains("Entering Novbio Labs"))
+            .unwrap_or_else(|| panic!("{text}"));
+        let x = line.chars().position(|c| c == 'N').unwrap() as u16;
+        let e = line.chars().position(|c| c == 'E').unwrap() as u16;
+        assert_eq!(buf[(x, y as u16)].fg, CYAN, "the name is lit");
+        assert_ne!(buf[(e, y as u16)].fg, CYAN, "the rest is not");
+    }
+
+    #[test]
     fn f_keys_toggle_sections() {
         let mut st = state();
         let mut s = MapScreen::explore(0);
@@ -4116,7 +4153,11 @@ mod tests {
         stand(&mut st, &mut s, place, outside);
         s.update(&mut st, &[key(dir_between(outside, h.door))]);
         assert_eq!(player(&st).1, h.door);
-        assert_eq!(last(&st), Some(&*format!("home · flat {}", h.number)));
+        assert_eq!(
+            last(&st),
+            Some(&*format!("Entering home · flat {}", h.number))
+        );
+        assert_eq!(st.log.latest().unwrap().marks.len(), 1, "home is lit");
         assert!(!last_is_warning(&st));
         let (door, o) = flat;
         stand(&mut st, &mut s, place, o);
@@ -4452,7 +4493,10 @@ mod tests {
         popup.update(&mut st, &[key(KeyCode::Esc)]);
         // A ride to a floor never generated before works (and generates it).
         assert!(st.interiors.floor(b, plan.top).is_none());
-        crate::interiors::ride(&mut st, b, plan.top).unwrap();
+        assert_eq!(
+            crate::interiors::ride(&mut st, b, plan.top).unwrap(),
+            format!("Entering `{}`", FloorPlan::label(plan.top))
+        );
         s.update(&mut st, &[]);
         let (place, pos) = player(&st);
         assert_eq!(
@@ -4468,6 +4512,11 @@ mod tests {
         // Stairs: one floor at a time, same tile.
         stand(&mut st, &mut s, place, plan.stair);
         s.update(&mut st, &[key(KeyCode::Char('<'))]);
+        assert_eq!(
+            last(&st),
+            Some(format!("Entering {}", FloorPlan::label(plan.top - 1)).as_str())
+        );
+        assert_eq!(st.log.latest().unwrap().marks.len(), 1, "the floor is lit");
         let (place, pos) = player(&st);
         assert_eq!(
             place,

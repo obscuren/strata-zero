@@ -311,7 +311,7 @@ pub fn ride(st: &mut AppState, b: BuildingId, level: i32) -> Result<String, Stri
         .ok_or("that floor is missing")?;
     crate::credentials::prepare(st, b);
     land(st, Place::Floor { building: b, level }, lift);
-    Ok(FloorPlan::label(level))
+    Ok(format!("Entering `{}`", FloorPlan::label(level)))
 }
 
 /// Takes the stairwell one floor up or down, staying on the same tile.
@@ -358,7 +358,7 @@ pub fn climb(st: &mut AppState, up: bool) -> Result<String, String> {
         },
         pos,
     );
-    Ok(FloorPlan::label(next))
+    Ok(format!("Entering `{}`", FloorPlan::label(next)))
 }
 
 /// The lift panel's rows: every floor, marked where it opens somewhere.
