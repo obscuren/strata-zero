@@ -222,6 +222,7 @@ impl Character {
         d.talents = c.talents.iter().map(|t| (t.id.clone(), t.ranks)).collect();
         d.hp = d.hp_max(c);
         d.focus = d.focus_max(c);
+        d.give(ItemId::new("backdoor"), 1);
         d
     }
 
@@ -1056,6 +1057,11 @@ mod tests {
         let c = Content::load().unwrap();
         let d = Character::debug_runner(&c);
         assert_eq!(d.handle, "D'SHAWN");
+        assert!(
+            d.inventory
+                .iter()
+                .any(|s| s.item == ItemId::new("backdoor"))
+        );
         assert_eq!((d.level, d.xp, d.talent_points), (50, 0, 0));
         for t in &c.talents {
             assert_eq!(d.talent_rank(&t.id), t.ranks, "{}", t.id);
@@ -1066,7 +1072,8 @@ mod tests {
         assert_eq!(d.hp, d.hp_max(&c));
         assert_eq!(d.focus, d.focus_max(&c));
         let vex = vex(&c);
-        assert_eq!(d.inventory.len(), vex.inventory.len(), "Vex's kit");
+        // Vex's kit, plus the one Backdoor program
+        assert_eq!(d.inventory.len(), vex.inventory.len() + 1, "Vex's kit");
         assert_eq!(d.loaded, vex.loaded);
     }
 }

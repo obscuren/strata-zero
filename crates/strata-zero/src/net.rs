@@ -273,6 +273,14 @@ impl NetState {
         });
     }
 
+    /// Whether the server itself stands cracked: a live Crack on the server node.
+    /// For its hour you are root on that building's host.
+    pub fn server_cracked(&self, b: BuildingId, now: u64) -> bool {
+        self.live(now).any(|h| {
+            h.building == b && h.op == Op::Crack && h.kind == Target::Node(NodeKind::Server)
+        })
+    }
+
     /// Whether the building's private rooms stand open: a lock cracked or spoofed,
     /// and no alert.
     pub fn unlocked(&self, b: BuildingId, now: u64) -> bool {

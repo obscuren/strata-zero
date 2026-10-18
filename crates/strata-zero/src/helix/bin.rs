@@ -656,6 +656,41 @@ mod tests {
     }
 
     #[test]
+    fn a_cracked_server_lets_the_shell_plant_as_root() {
+        let (mut st, b, _) = state();
+        let now = st.net.now(&st);
+        let server = st
+            .city
+            .as_ref()
+            .unwrap()
+            .net
+            .nodes
+            .iter()
+            .find(|n| n.building == Some(b) && n.kind == NodeKind::Server)
+            .map(|n| n.id)
+            .unwrap();
+        st.net.land(
+            b,
+            game::HackTarget::Node(server),
+            game::Target::Node(NodeKind::Server),
+            game::Op::Crack,
+            now,
+        );
+        let mut sh = new_shell(&mut st, HostId::Building(b));
+        assert_eq!(sh.user, "root");
+        let out = text(&go(&mut st, &mut sh, "backdoor"));
+        assert!(out.starts_with("KEY PLANTED · root@"), "{out}");
+        assert!(
+            text(&go(&mut st, &mut sh, "cat /root/.ssh/authorized_keys"))
+                .starts_with("helix-ed25519 ")
+        );
+        assert!(matches!(
+            st.backdoors.held(b).map(|d| d.kind.clone()),
+            Some(crate::backdoors::Kind::Key { user }) if user == "root"
+        ));
+    }
+
+    #[test]
     fn devices_read_the_building_and_writes_need_a_user() {
         let (mut st, b, _) = state();
         let mut sh = new_shell(&mut st, HostId::Building(b));

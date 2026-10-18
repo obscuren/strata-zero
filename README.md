@@ -78,7 +78,8 @@ spoof does, and the same goes for the lifts, the cameras and the alarm.
 `/var/log/auth.log` shows what has been done to the place and `plan` loads its
 ground floor into your map. Hold one of the building's keycards or codes and you
 log in as that resident, with their home and their notes, where a door code
-may be waiting; a backdoor on the server makes you `root`; otherwise you are a
+may be waiting; a backdoor on the server, or a server you cracked within the hour,
+makes you `root`; otherwise you are a
 `guest` who may look but not touch. `backdoor`, run as a resident or root,
 writes your rig's key into their `~/.ssh/authorized_keys`: for a couple of
 hours you can `ssh` in from home, and the rig can jack you in at that
