@@ -567,7 +567,13 @@ fn builtin(
                 .collect()
         }
         "clear" => out.clear = true,
-        "exit" => out.exit = true,
+        // The world may take `exit` first (leaving a remote host); only when it does not
+        // does the shell itself end.
+        "exit" => match io.program(shell, "exit", args, stdin) {
+            Some(Ok(o)) => out.out = o,
+            Some(Err(m)) => fail_msg(&mut out, m),
+            None => out.exit = true,
+        },
         "nano" => match args.first() {
             Some(p) => out.open_nano = Some(me.abs(p)),
             None => fail_msg(&mut out, "usage: nano file".to_string()),

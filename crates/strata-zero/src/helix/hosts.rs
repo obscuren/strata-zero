@@ -168,7 +168,7 @@ fn rig_mails(st: &AppState) -> Vec<(String, usize, String)> {
         .collect()
 }
 
-fn device_of(id: HostId) -> Device {
+pub fn device_of(id: HostId) -> Device {
     match id {
         HostId::Rig => Device::Rig,
         HostId::Building(b) => Device::Keypad(b),

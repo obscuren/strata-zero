@@ -341,7 +341,7 @@ pub fn run(st: &mut AppState, s: &mut Session, line: &str) -> Reply {
     match verb {
         "HELP" => help(st, s),
         "EXIT" => Reply::one("BYE"),
-        "SCAN" => scan(st, s),
+        "SCAN" => scan_verb(st, s),
         "CONNECT" => connect(st, s, &arg),
         "DISCONNECT" => {
             if let Session::District { connected, .. } = s {
@@ -349,15 +349,15 @@ pub fn run(st: &mut AppState, s: &mut Session, line: &str) -> Reply {
             }
             Reply::one("DISCONNECTED")
         }
-        "WHO" => who(st, s),
-        "PLAN" => plan(st, s),
-        "LOG" => log(st, s),
-        "DOOR" => door_unlock(st, s, &arg),
-        "LIFT" => lift(st, s),
-        "CAM" => cam_loop(st, s, &arg),
-        "ALARM" => alarm_off(st, s, &arg),
-        "MAIL" => mail(st, &arg),
-        "JOURNAL" => journal(st),
+        "WHO" => who_verb(st, s),
+        "PLAN" => plan_verb(st, s),
+        "LOG" => log_verb(st, s),
+        "DOOR" => door_verb(st, s, &arg),
+        "LIFT" => lift_verb(st, s),
+        "CAM" => cam_verb(st, s, &arg),
+        "ALARM" => alarm_verb(st, s, &arg),
+        "MAIL" => mail_verb(st, &arg),
+        "JOURNAL" => journal_verb(st),
         _ => Reply::one("?SYNTAX ERROR"),
     }
 }
@@ -379,56 +379,409 @@ fn help(st: &AppState, s: &Session) -> Reply {
     )
 }
 
-/// The buildings a session can see: the district's constructs, or the rig's block.
-fn scannable(st: &AppState, s: &Session) -> Vec<BuildingId> {
+// ---- the world actions: what the HELIX/OS devices and programs call ----
+
+/// The buildings a district terminal can see: its closed buildings with a server.
+pub fn scannable(st: &AppState, district: DistrictId) -> Vec<BuildingId> {
     let Some(city) = st.city.as_ref() else {
         return Vec::new();
     };
-    match s {
-        Session::Rig { building } => vec![*building],
-        Session::District { district, .. } => city
-            .buildings
-            .iter()
-            .filter(|b| b.district == *district && b.kind.is_closed())
-            .filter(|b| {
-                city.net
-                    .nodes
-                    .iter()
-                    .any(|n| n.building == Some(b.id) && n.kind == NodeKind::Server)
-            })
-            .map(|b| b.id)
-            .collect(),
+    city.buildings
+        .iter()
+        .filter(|b| b.district == district && b.kind.is_closed())
+        .filter(|b| {
+            city.net
+                .nodes
+                .iter()
+                .any(|n| n.building == Some(b.id) && n.kind == NodeKind::Server)
+        })
+        .map(|b| b.id)
+        .collect()
+}
+
+/// One row of a scan: its number, the building, its security and ICE, and your standing.
+pub fn scan_row(st: &AppState, i: usize, b: BuildingId) -> String {
+    let Some(city) = st.city.as_ref() else {
+        return String::new();
+    };
+    let sec = security(city, b);
+    format!(
+        "{:>2}  {:<22} {:<10} SEC {sec:>3}  ICE {:<5} {}",
+        i + 1,
+        building_name(st, b),
+        city.building(b).kind.label().to_uppercase(),
+        ice_grade(sec).to_uppercase(),
+        tier_on(st, b).label()
+    )
+}
+
+fn stamp(minute: u64) -> String {
+    let (h, m) = crate::ui::hud::clock_at(minute * sim::TICKS_PER_MINUTE);
+    format!("{h:02}:{m:02}")
+}
+
+/// The auth log: the hacks on this building, newest first.
+pub fn log_lines(st: &AppState, b: BuildingId) -> Vec<String> {
+    st.net
+        .hacks
+        .iter()
+        .rev()
+        .filter(|h| h.building == b)
+        .map(|h| {
+            let target = match h.kind {
+                Target::Node(k) => k.label().to_lowercase(),
+                Target::Guard(_) => "ice".to_string(),
+                Target::Deck => "deck".to_string(),
+            };
+            let op = match h.op {
+                Op::Crack => "cracked",
+                Op::Spoof => "spoofed",
+                Op::Blind => "blinded",
+                Op::Copy => "copied",
+                Op::Backdoor => "backdoor planted",
+                Op::Attack => "attacked",
+                _ => "touched",
+            };
+            let until = h
+                .until
+                .map(|u| format!("  (expires {})", stamp(u)))
+                .unwrap_or_default();
+            format!("{}  {target}  {op}{until}", stamp(h.at))
+        })
+        .collect()
+}
+
+/// The trace: heat and the alert.
+pub fn trace_lines(st: &AppState, b: BuildingId) -> Vec<String> {
+    let now = st.net.now(st);
+    let trace = st.net.traces.get(&b);
+    let heat = trace.map_or(0, |t| t.heat);
+    let alert = trace
+        .and_then(|t| t.alert_until)
+        .filter(|u| now < *u)
+        .map_or_else(
+            || "quiet".to_string(),
+            |u| format!("alert until {}", stamp(u)),
+        );
+    vec![format!("heat {heat}"), alert]
+}
+
+/// Who is inside: a name and what they are doing there.
+pub fn who_lines(st: &AppState, b: BuildingId) -> Vec<String> {
+    let Some(world) = st.world.as_ref() else {
+        return Vec::new();
+    };
+    world
+        .inside(b)
+        .iter()
+        .map(|o| {
+            let p = &world.people()[o.id.0 as usize];
+            let role = match o.role {
+                OccupantRole::Working => "at work",
+                OccupantRole::Living => "at home",
+                OccupantRole::Guest => "a guest",
+                OccupantRole::Visiting => "visiting",
+            };
+            format!("{:<16} {role}", crate::helix::hosts::slug(&p.name))
+        })
+        .collect()
+}
+
+/// Loads the ground floor into the player's map.
+pub fn load_plan(st: &mut AppState, b: BuildingId) -> Result<String, String> {
+    let Some(city) = st.city.as_ref() else {
+        return Err("NO CITY".to_string());
+    };
+    let Some(floor) = st.interiors.ensure(city, b, 0) else {
+        return Err("NO PLAN ON FILE".to_string());
+    };
+    let size = floor.tiles.size();
+    let tiles: Vec<Pos> = floor.tiles.iter().map(|(p, _)| p).collect();
+    let Some(player) = st.player.as_mut() else {
+        return Err("NO PLAN ON FILE".to_string());
+    };
+    player.remember_place(
+        Place::Floor {
+            building: b,
+            level: 0,
+        },
+        size,
+        tiles.into_iter(),
+    );
+    Ok("GROUND FLOOR PLAN LOADED".to_string())
+}
+
+fn nodes_of(st: &AppState, b: BuildingId, kind: NodeKind) -> Vec<citygen::NodeId> {
+    st.city
+        .as_ref()
+        .map(|c| {
+            c.net
+                .nodes
+                .iter()
+                .filter(|n| n.building == Some(b) && n.kind == kind)
+                .map(|n| n.id)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub fn release_doors(st: &mut AppState, b: BuildingId) -> Result<String, String> {
+    let Some(lock) = nodes_of(st, b, NodeKind::DoorLock).first().copied() else {
+        return Err("NO DOOR CONTROLLER".to_string());
+    };
+    let now = st.net.now(st);
+    if st.net.alert(b, now) {
+        return Err("LOCKDOWN IN FORCE · THE LOCKS HOLD UNTIL THE ALERT ENDS".to_string());
+    }
+    st.net.land(
+        b,
+        HackTarget::Node(lock),
+        Target::Node(NodeKind::DoorLock),
+        Op::Spoof,
+        now,
+    );
+    let name = crate::net::building_name(st, b);
+    st.say(format!("`{name}`'s locked doors open for an hour"));
+    Ok("DOOR LOCKS RELEASED · 60 MIN".to_string())
+}
+
+pub fn answer_lifts(st: &mut AppState, b: BuildingId) -> Result<String, String> {
+    let Some(ctl) = nodes_of(st, b, NodeKind::LiftCtrl).first().copied() else {
+        return Err("NO LIFT CONTROLLER".to_string());
+    };
+    let now = st.net.now(st);
+    st.net.land(
+        b,
+        HackTarget::Node(ctl),
+        Target::Node(NodeKind::LiftCtrl),
+        Op::Spoof,
+        now,
+    );
+    let name = crate::net::building_name(st, b);
+    st.say(format!("`{name}`'s lifts answer you"));
+    Ok("LIFTS ANSWERING · 60 MIN".to_string())
+}
+
+/// Loops every camera of the building.
+pub fn loop_cams(st: &mut AppState, b: BuildingId) -> Result<String, String> {
+    loop_some(st, b, None)
+}
+
+/// Loops camera `i` alone.
+pub fn loop_cam(st: &mut AppState, b: BuildingId, i: usize) -> Result<String, String> {
+    loop_some(st, b, Some(i))
+}
+
+fn loop_some(st: &mut AppState, b: BuildingId, only: Option<usize>) -> Result<String, String> {
+    let mut cams = nodes_of(st, b, NodeKind::Camera);
+    if let Some(i) = only {
+        cams = cams.get(i).copied().into_iter().collect();
+    }
+    if cams.is_empty() {
+        return Err("NO CAMERAS".to_string());
+    }
+    let now = st.net.now(st);
+    for c in &cams {
+        st.net.land(
+            b,
+            HackTarget::Node(*c),
+            Target::Node(NodeKind::Camera),
+            Op::Blind,
+            now,
+        );
+    }
+    let name = crate::net::building_name(st, b);
+    st.say(format!("`{name}`'s cameras loop for an hour"));
+    let n = cams.len();
+    Ok(format!(
+        "{n} CAMERA{} LOOPED · 60 MIN",
+        if n == 1 { "" } else { "S" }
+    ))
+}
+
+pub fn alarm_off(st: &mut AppState, b: BuildingId) -> Result<String, String> {
+    let now = st.net.now(st);
+    if !st.net.alert(b, now) {
+        return Err("NO ALARM".to_string());
+    }
+    st.net.trace(b).alert_until = Some(now);
+    let name = crate::net::building_name(st, b);
+    st.say(format!("`{name}`'s alarm falls silent"));
+    Ok("ALARM CLEARED".to_string())
+}
+
+/// When the latest live hack of this op on this kind of node runs out.
+fn live_until(st: &AppState, b: BuildingId, kind: NodeKind, ops: &[Op], now: u64) -> Option<u64> {
+    st.net
+        .hacks
+        .iter()
+        .filter(|h| h.building == b && h.kind == Target::Node(kind) && ops.contains(&h.op))
+        .filter(|h| h.until.is_none_or(|u| now < u))
+        .filter_map(|h| h.until)
+        .max()
+}
+
+pub fn door_state(st: &AppState, b: BuildingId) -> String {
+    let now = st.net.now(st);
+    if st.net.alert(b, now) {
+        "lockdown".to_string()
+    } else if st.net.unlocked(b, now) {
+        match live_until(st, b, NodeKind::DoorLock, &[Op::Crack, Op::Spoof], now) {
+            Some(u) => format!("locks: released (until {})", stamp(u)),
+            None => "locks: released".to_string(),
+        }
+    } else {
+        "locks: engaged".to_string()
     }
 }
 
-fn scan(st: &AppState, s: &Session) -> Reply {
-    let Some(city) = st.city.as_ref() else {
-        return Reply::one("NO CITY");
+pub fn lift_state(st: &AppState, b: BuildingId) -> String {
+    let now = st.net.now(st);
+    if !st.net.lifts_answer(b, now) {
+        "lifts: stopped".to_string()
+    } else if live_until(st, b, NodeKind::LiftCtrl, &[Op::Spoof], now).is_some() {
+        "lifts: answering".to_string()
+    } else {
+        "lifts: normal".to_string()
+    }
+}
+
+pub fn cam_state(st: &AppState, b: BuildingId, i: usize) -> String {
+    let now = st.net.now(st);
+    let Some(node) = nodes_of(st, b, NodeKind::Camera).get(i).copied() else {
+        return format!("cam{i}: absent");
     };
-    let list = scannable(st, s);
+    if !st.net.blinded(node, now) {
+        return format!("cam{i}: live");
+    }
+    let until = st
+        .net
+        .hacks
+        .iter()
+        .filter(|h| h.target == HackTarget::Node(node) && h.op == Op::Blind)
+        .filter(|h| h.until.is_none_or(|u| now < u))
+        .filter_map(|h| h.until)
+        .max();
+    match until {
+        Some(u) => format!("cam{i}: looped (until {})", stamp(u)),
+        None => format!("cam{i}: looped"),
+    }
+}
+
+pub fn alarm_state(st: &AppState, b: BuildingId) -> String {
+    let now = st.net.now(st);
+    if st.net.alert(b, now) {
+        "alarm: RINGING".to_string()
+    } else {
+        "alarm: quiet".to_string()
+    }
+}
+
+/// The rig's inbox, one row a mail, `*` for unread.
+pub fn mail_inbox(st: &AppState) -> Vec<String> {
+    st.journal
+        .mails
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            format!(
+                "{:>2}  {} {:<10} {}",
+                i + 1,
+                if m.read { " " } else { "*" },
+                m.from.to_uppercase(),
+                m.subject.to_uppercase()
+            )
+        })
+        .collect()
+}
+
+/// A mail's text, read: it is marked read and the favour ticks.
+pub fn mail_open(st: &mut AppState, i: usize) -> Result<Vec<String>, String> {
+    let Some(m) = st.journal.mails.get(i) else {
+        return Err("NO SUCH MESSAGE".to_string());
+    };
+    let mut lines = vec![
+        format!("From: {}", m.from),
+        format!("Subject: {}", m.subject),
+        String::new(),
+    ];
+    lines.extend(m.body.iter().cloned());
+    credentials::mail_read(st, i);
+    Ok(lines)
+}
+
+/// What you know, by building, with the marks stripped.
+pub fn journal_lines(st: &AppState) -> Vec<String> {
+    let groups = credentials::entries(st);
+    if groups.is_empty() {
+        return vec!["NOTHING KNOWN YET".to_string()];
+    }
+    let mut lines = Vec::new();
+    for (_, header, es) in groups {
+        lines.push(header);
+        for e in es {
+            let (text, _) = crate::messages::parse_marks(&e.text);
+            lines.push(format!("  {text}"));
+        }
+    }
+    lines
+}
+
+/// What a HELIX/OS host types when it powers on: the theme's boot with the OS and the
+/// place filled in.
+// Task 6 boots the terminal through this.
+#[allow(dead_code)]
+pub fn boot_for_host(
+    st: &AppState,
+    host: crate::helix::shell::HostId,
+    look: &crate::ui::device::Look,
+) -> Vec<String> {
+    use crate::helix::shell::HostId;
+    let place = match host {
+        HostId::District(d) => district_name(st, d),
+        HostId::Building(b) => building_name(st, b),
+        HostId::Rig => st.home.as_ref().map_or_else(
+            || "ZENBO".to_string(),
+            |h| building_name(st, h.home.building),
+        ),
+    };
+    look.style
+        .boot
+        .iter()
+        .map(|l| l.replace("{PLACE}", &place).replace("{OS}", &look.os()))
+        .collect()
+}
+
+// ---- Task 6 removes the verb table: the old verbs call the actions above ----
+
+fn reply_of(r: Result<String, String>) -> Reply {
+    Reply::one(match r {
+        Ok(l) | Err(l) => l,
+    })
+}
+
+fn session_scannable(st: &AppState, s: &Session) -> Vec<BuildingId> {
+    match s {
+        Session::Rig { building } => vec![*building],
+        Session::District { district, .. } => scannable(st, *district),
+    }
+}
+
+fn scan_verb(st: &AppState, s: &Session) -> Reply {
+    let list = session_scannable(st, s);
     if list.is_empty() {
         return Reply::one("NO CONSTRUCTS ON THIS SUBNET");
     }
     Reply::say(
         list.iter()
             .enumerate()
-            .map(|(i, b)| {
-                let sec = security(city, *b);
-                format!(
-                    "{:>2}  {:<22} {:<10} SEC {sec:>3}  ICE {:<5} {}",
-                    i + 1,
-                    building_name(st, *b),
-                    city.building(*b).kind.label().to_uppercase(),
-                    ice_grade(sec).to_uppercase(),
-                    tier_on(st, *b).label()
-                )
-            })
+            .map(|(i, b)| scan_row(st, i, *b))
             .collect(),
     )
 }
 
 fn connect(st: &AppState, s: &mut Session, arg: &[&str]) -> Reply {
-    let list = scannable(st, s);
+    let list = session_scannable(st, s);
     let Session::District { connected, .. } = s else {
         return Reply::one("?SYNTAX ERROR");
     };
@@ -478,102 +831,30 @@ fn not_connected() -> Reply {
     Reply::one("NOT CONNECTED · SCAN THEN CONNECT <N>")
 }
 
-fn who(st: &AppState, s: &Session) -> Reply {
+fn who_verb(st: &AppState, s: &Session) -> Reply {
     let Some(b) = s.building() else {
         return not_connected();
     };
-    let Some(world) = st.world.as_ref() else {
-        return Reply::one("NOBODY INSIDE");
-    };
-    let inside = world.inside(b);
-    if inside.is_empty() {
+    let lines = who_lines(st, b);
+    if lines.is_empty() {
         return Reply::one("NOBODY INSIDE");
     }
-    Reply::say(
-        inside
-            .iter()
-            .map(|o| {
-                let p = &world.people()[o.id.0 as usize];
-                let role = match o.role {
-                    OccupantRole::Working => "AT WORK",
-                    OccupantRole::Living => "AT HOME",
-                    OccupantRole::Guest => "A GUEST",
-                    OccupantRole::Visiting => "VISITING",
-                };
-                format!(
-                    "{:<18} {:<12} {role}",
-                    p.name.to_uppercase(),
-                    p.profession.replace('_', " ").to_uppercase()
-                )
-            })
-            .collect(),
-    )
+    Reply::say(lines.iter().map(|l| l.to_uppercase()).collect())
 }
 
-fn plan(st: &mut AppState, s: &Session) -> Reply {
+fn plan_verb(st: &mut AppState, s: &Session) -> Reply {
     let Some(b) = s.building() else {
         return not_connected();
     };
-    let Some(city) = st.city.as_ref() else {
-        return Reply::one("NO CITY");
-    };
-    let Some(floor) = st.interiors.ensure(city, b, 0) else {
-        return Reply::one("NO PLAN ON FILE");
-    };
-    let size = floor.tiles.size();
-    let tiles: Vec<Pos> = floor.tiles.iter().map(|(p, _)| p).collect();
-    let Some(player) = st.player.as_mut() else {
-        return Reply::one("NO PLAN ON FILE");
-    };
-    player.remember_place(
-        Place::Floor {
-            building: b,
-            level: 0,
-        },
-        size,
-        tiles.into_iter(),
-    );
-    Reply::one("GROUND FLOOR PLAN LOADED")
+    reply_of(load_plan(st, b))
 }
 
-fn stamp(minute: u64) -> String {
-    let (h, m) = crate::ui::hud::clock_at(minute * sim::TICKS_PER_MINUTE);
-    format!("{h:02}:{m:02}")
-}
-
-fn log(st: &AppState, s: &Session) -> Reply {
+fn log_verb(st: &AppState, s: &Session) -> Reply {
     let Some(b) = s.building() else {
         return not_connected();
     };
     let now = st.net.now(st);
-    let mut lines: Vec<String> = st
-        .net
-        .hacks
-        .iter()
-        .rev()
-        .filter(|h| h.building == b)
-        .map(|h| {
-            let target = match h.kind {
-                Target::Node(k) => k.label().to_uppercase(),
-                Target::Guard(_) => "ICE".to_string(),
-                Target::Deck => "DECK".to_string(),
-            };
-            let op = match h.op {
-                Op::Crack => "CRACKED",
-                Op::Spoof => "SPOOFED",
-                Op::Blind => "BLINDED",
-                Op::Copy => "COPIED",
-                Op::Backdoor => "BACKDOOR PLANTED",
-                Op::Attack => "ATTACKED",
-                _ => "TOUCHED",
-            };
-            let until = h
-                .until
-                .map(|u| format!("  (EXPIRES {})", stamp(u)))
-                .unwrap_or_default();
-            format!("{}  {target}  {op}{until}", stamp(h.at))
-        })
-        .collect();
+    let mut lines: Vec<String> = log_lines(st, b).iter().map(|l| l.to_uppercase()).collect();
     if st.net.alert(b, now) {
         lines.insert(0, format!("{}  TRACE ALERT", stamp(now)));
     }
@@ -583,161 +864,62 @@ fn log(st: &AppState, s: &Session) -> Reply {
     Reply::say(lines)
 }
 
-fn nodes_of(st: &AppState, b: BuildingId, kind: NodeKind) -> Vec<citygen::NodeId> {
-    st.city
-        .as_ref()
-        .map(|c| {
-            c.net
-                .nodes
-                .iter()
-                .filter(|n| n.building == Some(b) && n.kind == kind)
-                .map(|n| n.id)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn door_unlock(st: &mut AppState, s: &Session, arg: &[&str]) -> Reply {
+fn door_verb(st: &mut AppState, s: &Session, arg: &[&str]) -> Reply {
     let Some(b) = s.building() else {
         return not_connected();
     };
     if arg.first() != Some(&"UNLOCK") {
         return Reply::one("?SYNTAX ERROR · DOOR UNLOCK");
     }
-    let Some(lock) = nodes_of(st, b, NodeKind::DoorLock).first().copied() else {
-        return Reply::one("NO DOOR CONTROLLER");
-    };
-    let now = st.net.now(st);
-    if st.net.alert(b, now) {
-        return Reply::one("LOCKDOWN IN FORCE · THE LOCKS HOLD UNTIL THE ALERT ENDS");
-    }
-    st.net.land(
-        b,
-        HackTarget::Node(lock),
-        Target::Node(NodeKind::DoorLock),
-        Op::Spoof,
-        now,
-    );
-    let name = crate::net::building_name(st, b);
-    st.say(format!("`{name}`'s locked doors open for an hour"));
-    Reply::one("DOOR LOCKS RELEASED · 60 MIN")
+    reply_of(release_doors(st, b))
 }
 
-fn lift(st: &mut AppState, s: &Session) -> Reply {
+fn lift_verb(st: &mut AppState, s: &Session) -> Reply {
     let Some(b) = s.building() else {
         return not_connected();
     };
-    let Some(ctl) = nodes_of(st, b, NodeKind::LiftCtrl).first().copied() else {
-        return Reply::one("NO LIFT CONTROLLER");
-    };
-    let now = st.net.now(st);
-    st.net.land(
-        b,
-        HackTarget::Node(ctl),
-        Target::Node(NodeKind::LiftCtrl),
-        Op::Spoof,
-        now,
-    );
-    let name = crate::net::building_name(st, b);
-    st.say(format!("`{name}`'s lifts answer you"));
-    Reply::one("LIFTS ANSWERING · 60 MIN")
+    reply_of(answer_lifts(st, b))
 }
 
-fn cam_loop(st: &mut AppState, s: &Session, arg: &[&str]) -> Reply {
+fn cam_verb(st: &mut AppState, s: &Session, arg: &[&str]) -> Reply {
     let Some(b) = s.building() else {
         return not_connected();
     };
     if arg.first() != Some(&"LOOP") {
         return Reply::one("?SYNTAX ERROR · CAM LOOP");
     }
-    let cams = nodes_of(st, b, NodeKind::Camera);
-    if cams.is_empty() {
-        return Reply::one("NO CAMERAS");
-    }
-    let now = st.net.now(st);
-    for c in &cams {
-        st.net.land(
-            b,
-            HackTarget::Node(*c),
-            Target::Node(NodeKind::Camera),
-            Op::Blind,
-            now,
-        );
-    }
-    let name = crate::net::building_name(st, b);
-    st.say(format!("`{name}`'s cameras loop for an hour"));
-    Reply::one(format!("{} CAMERAS LOOPED · 60 MIN", cams.len()))
+    reply_of(loop_cams(st, b))
 }
 
-fn alarm_off(st: &mut AppState, s: &Session, arg: &[&str]) -> Reply {
+fn alarm_verb(st: &mut AppState, s: &Session, arg: &[&str]) -> Reply {
     let Some(b) = s.building() else {
         return not_connected();
     };
     if arg.first() != Some(&"OFF") {
         return Reply::one("?SYNTAX ERROR · ALARM OFF");
     }
-    let now = st.net.now(st);
-    if !st.net.alert(b, now) {
-        return Reply::one("NO ALARM");
-    }
-    st.net.trace(b).alert_until = Some(now);
-    let name = crate::net::building_name(st, b);
-    st.say(format!("`{name}`'s alarm falls silent"));
-    Reply::one("ALARM CLEARED")
+    reply_of(alarm_off(st, b))
 }
 
-fn mail(st: &mut AppState, arg: &[&str]) -> Reply {
+fn mail_verb(st: &mut AppState, arg: &[&str]) -> Reply {
     if st.journal.mails.is_empty() {
         return Reply::one("NO MAIL");
     }
     match arg.first().and_then(|a| a.parse::<usize>().ok()) {
-        None => Reply::say(
-            st.journal
-                .mails
-                .iter()
-                .enumerate()
-                .map(|(i, m)| {
-                    format!(
-                        "{:>2}  {} {:<10} {}",
-                        i + 1,
-                        if m.read { " " } else { "*" },
-                        m.from.to_uppercase(),
-                        m.subject.to_uppercase()
-                    )
-                })
-                .collect(),
-        ),
-        Some(n) => {
-            let Some(i) = n.checked_sub(1).filter(|i| *i < st.journal.mails.len()) else {
-                return Reply::one("NO SUCH MESSAGE");
-            };
-            let m = &st.journal.mails[i];
-            let mut lines = vec![
-                format!("FROM: {}", m.from.to_uppercase()),
-                format!("SUBJECT: {}", m.subject.to_uppercase()),
-                String::new(),
-            ];
-            lines.extend(m.body.iter().cloned());
-            credentials::mail_read(st, i);
-            Reply::say(lines)
-        }
+        None => Reply::say(mail_inbox(st)),
+        Some(n) => match n.checked_sub(1).map(|i| mail_open(st, i)) {
+            Some(Ok(mut lines)) => {
+                lines[0] = lines[0].to_uppercase();
+                lines[1] = lines[1].to_uppercase();
+                Reply::say(lines)
+            }
+            _ => Reply::one("NO SUCH MESSAGE"),
+        },
     }
 }
 
-fn journal(st: &AppState) -> Reply {
-    let groups = credentials::entries(st);
-    if groups.is_empty() {
-        return Reply::one("NOTHING KNOWN YET");
-    }
-    let mut lines = Vec::new();
-    for (_, header, es) in groups {
-        lines.push(header);
-        for e in es {
-            let (text, _) = crate::messages::parse_marks(&e.text);
-            lines.push(format!("  {text}"));
-        }
-    }
-    Reply::say(lines)
+fn journal_verb(st: &AppState) -> Reply {
+    Reply::say(journal_lines(st))
 }
 
 #[cfg(test)]
@@ -910,7 +1092,8 @@ mod tests {
             .into_iter()
             .find(|o| o.role == sim::OccupantRole::Living)
             .expect("a resident home at ten at night");
-        let name = world.people()[home.id.0 as usize].name.to_uppercase();
+        let name =
+            crate::helix::hosts::slug(&world.people()[home.id.0 as usize].name).to_uppercase();
         assert!(who.contains(&name) && who.contains("AT HOME"), "{who}");
         assert!(lines(&mut st, &mut s, "plan").contains("GROUND FLOOR PLAN LOADED"));
         let floor_place = citygen::Place::Floor {
@@ -1128,5 +1311,78 @@ mod tests {
         let reply = lines(&mut st, &mut s, "door unlock");
         assert!(reply.contains("LOCKDOWN IN FORCE"), "{reply}");
         assert!(!reply.contains("60 MIN"));
+    }
+
+    #[test]
+    fn world_actions_land_hacks_and_the_states_read_them_back() {
+        let (mut st, b, d) = state();
+        crate::credentials::prepare(&mut st, b);
+        let now = st.net.now(&st);
+        assert_eq!(door_state(&st, b), "locks: engaged");
+        assert_eq!(lift_state(&st, b), "lifts: normal");
+        assert_eq!(alarm_state(&st, b), "alarm: quiet");
+        assert_eq!(trace_lines(&st, b), vec!["heat 0", "quiet"]);
+        assert!(log_lines(&st, b).is_empty());
+        assert_eq!(
+            release_doors(&mut st, b).as_deref(),
+            Ok("DOOR LOCKS RELEASED · 60 MIN")
+        );
+        assert!(st.net.unlocked(b, now));
+        assert!(door_state(&st, b).starts_with("locks: released (until "));
+        assert!(log_lines(&st, b)[0].contains("door lock  spoofed"));
+        match answer_lifts(&mut st, b) {
+            Ok(r) => {
+                assert_eq!(r, "LIFTS ANSWERING · 60 MIN");
+                assert_eq!(lift_state(&st, b), "lifts: answering");
+            }
+            Err(e) => assert_eq!(e, "NO LIFT CONTROLLER"),
+        }
+        let cams = nodes_of(&st, b, NodeKind::Camera);
+        match loop_cams(&mut st, b) {
+            Ok(r) => {
+                assert!(r.ends_with("LOOPED · 60 MIN"), "{r}");
+                assert!(cams.iter().all(|c| st.net.blinded(*c, now)));
+                assert!(cam_state(&st, b, 0).starts_with("cam0: looped (until "));
+            }
+            Err(e) => assert_eq!((e.as_str(), cams.len()), ("NO CAMERAS", 0)),
+        }
+        assert_eq!(alarm_off(&mut st, b), Err("NO ALARM".to_string()));
+        // an alert: the locks hold, the states say so, the alarm can be cleared
+        st.net.trace(b).alert_until = Some(now + 30);
+        assert_eq!(
+            release_doors(&mut st, b).unwrap_err(),
+            "LOCKDOWN IN FORCE · THE LOCKS HOLD UNTIL THE ALERT ENDS"
+        );
+        assert_eq!(door_state(&st, b), "lockdown");
+        assert_eq!(alarm_state(&st, b), "alarm: RINGING");
+        assert!(trace_lines(&st, b)[1].starts_with("alert until "));
+        assert_eq!(alarm_off(&mut st, b).as_deref(), Ok("ALARM CLEARED"));
+        assert!(!st.net.alert(b, now));
+        // the district lists the building and its row carries grade and standing
+        let list = scannable(&st, d);
+        let i = list.iter().position(|x| *x == b).expect("listed");
+        let row = scan_row(&st, i, b);
+        assert!(
+            row.contains(&building_label(&st, b)) && row.contains("ICE "),
+            "{row}"
+        );
+        assert_eq!(
+            load_plan(&mut st, b).as_deref(),
+            Ok("GROUND FLOOR PLAN LOADED")
+        );
+    }
+
+    #[test]
+    fn who_lines_name_the_people_inside_and_boot_names_the_host() {
+        use crate::helix::shell::HostId;
+        let (st, b, d) = state();
+        let inside = who_lines(&st, b);
+        assert!(inside.iter().any(|l| l.ends_with("at home")), "{inside:?}");
+        let muni = crate::ui::device::Look::named(&st, "municipal", Some(d), 1);
+        let boot = boot_for_host(&st, HostId::District(d), &muni);
+        let dn = st.city.as_ref().unwrap().district(d).name.to_uppercase();
+        assert!(boot[0].contains(&dn), "{boot:?}");
+        let boot = boot_for_host(&st, HostId::Building(b), &muni);
+        assert!(boot[0].contains(&building_label(&st, b)), "{boot:?}");
     }
 }
