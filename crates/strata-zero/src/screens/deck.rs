@@ -34,7 +34,8 @@ use ratatui::widgets::Widget;
 use std::cell::Cell;
 use std::collections::BTreeSet;
 
-const REVEAL_TICKS: u64 = 20;
+/// Ticks the detail pane, and the deck's glass, take to type a whole readout.
+pub(crate) const REVEAL_TICKS: u64 = 20;
 /// What the failsafe does, on its card and on the deck's glass.
 pub(crate) const FAILSAFE_TEXT: &str = "The deck pulls you out at a quarter of your hp when black ICE is on you: focus gone, thirty minutes of cooling, the hp stays lost.";
 /// What turning it off costs.

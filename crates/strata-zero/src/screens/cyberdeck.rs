@@ -3,7 +3,7 @@
 
 use crate::actions::{perform, report};
 use crate::app::{AppState, ScreenCmd, TransitionKind};
-use crate::screens::deck::{Deck, FAILSAFE_TEXT, FAILSAFE_WARN};
+use crate::screens::deck::{Deck, FAILSAFE_TEXT, FAILSAFE_WARN, REVEAL_TICKS};
 use crate::ui::chrome::{DIM, MAGENTA};
 use crate::ui::cyberdeck::{
     Cart, DeckView, Dir, GLASS_ROWS, GLASS_TEXT_W, GlassTone, Held, Part, Switch, parts, step,
@@ -14,9 +14,6 @@ use crossterm::event::KeyCode;
 use game::{Action, Item, ItemId, ItemKind, SlotPlan};
 use ratatui::style::Modifier;
 use ratatui::text::Line;
-
-/// Glass characters typed a tick.
-const TYPE_RATE: usize = 3;
 
 /// Glass lines and how each is lit.
 type Glass = Vec<(String, GlassTone)>;
@@ -119,14 +116,15 @@ impl DeckTab {
         view.glass = rows.iter().skip(top).take(GLASS_ROWS).cloned().collect();
         view.more_above = top > 0;
         view.more_below = top + GLASS_ROWS < rows.len();
-        let total = view
+        // The whole readout types on in the detail pane's reveal time.
+        let total: usize = view
             .glass
             .iter()
             .chain([&pinned])
             .map(|(t, _)| t.chars().count())
             .sum();
-        let ticks = usize::try_from(st.tick.saturating_sub(self.changed)).unwrap_or(usize::MAX);
-        view.typed = ticks.saturating_mul(TYPE_RATE).min(total);
+        let ticks = st.tick.saturating_sub(self.changed).min(REVEAL_TICKS) as usize;
+        view.typed = total * ticks / REVEAL_TICKS as usize;
         view.pinned = pinned;
         view
     }
@@ -998,18 +996,25 @@ mod tests {
         assert_eq!((v.heat, v.link), (Some(60), true));
         assert_eq!(v.handle, st.character.handle);
 
-        // The glass types on three characters a tick.
-        st.tick = 2;
-        assert_eq!(tab.view(&st).typed, 6);
-        st.tick = 10_000;
+        // The whole glass types on in the detail pane's reveal time, however long.
+        let total = |v: &DeckView| -> usize {
+            v.glass
+                .iter()
+                .chain([&v.pinned])
+                .map(|(t, _)| t.chars().count())
+                .sum()
+        };
+        st.tick = 0;
+        assert_eq!(tab.view(&st).typed, 0);
+        st.tick = REVEAL_TICKS / 2;
         let v = tab.view(&st);
-        let total: usize = v
-            .glass
-            .iter()
-            .chain([&v.pinned])
-            .map(|(t, _)| t.chars().count())
-            .sum();
-        assert_eq!(v.typed, total);
+        assert!(total(&v) > 0);
+        assert_eq!(v.typed, total(&v) / 2);
+        for tick in [REVEAL_TICKS, 10_000] {
+            st.tick = tick;
+            let v = tab.view(&st);
+            assert_eq!(v.typed, total(&v));
+        }
     }
 
     #[test]
