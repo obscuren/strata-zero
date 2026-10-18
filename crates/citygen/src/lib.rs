@@ -2,6 +2,7 @@
 
 pub mod construct;
 pub mod flavor;
+pub mod fov;
 pub mod generate;
 pub mod geom;
 pub mod ids;
