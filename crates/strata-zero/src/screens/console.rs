@@ -556,7 +556,7 @@ mod tests {
     fn backdoor_trace_and_seize_drive_the_backdoor_state() {
         let (mut st, at) = setup();
         let b = st.city.as_ref().unwrap().buildings[0].id;
-        let host = crate::helix::hosts::hostname(&st, crate::helix::shell::HostId::Building(b));
+        let host = crate::helix::hosts::building_hostname(&st, b);
         assert!(run(&mut st, at, "backdoor").is_err());
         assert!(run(&mut st, at, "backdoor zzzz-no-such").is_err());
         run(&mut st, at, &format!("backdoor {host}")).unwrap();

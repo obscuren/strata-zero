@@ -40,6 +40,11 @@ pub(super) fn rig_user(st: &AppState) -> String {
     }
 }
 
+/// The name a building's server goes by on the Net.
+pub fn building_hostname(st: &AppState, b: citygen::BuildingId) -> String {
+    hostname(st, HostId::Building(b))
+}
+
 pub fn hostname(st: &AppState, id: HostId) -> String {
     match id {
         HostId::Rig => "zenbo".to_string(),

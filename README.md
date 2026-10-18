@@ -79,7 +79,14 @@ spoof does, and the same goes for the lifts, the cameras and the alarm.
 ground floor into your map. Hold one of the building's keycards or codes and you
 log in as that resident, with their home and their notes, where a door code
 may be waiting; a backdoor on the server makes you `root`; otherwise you are a
-`guest` who may look but not touch. Your own rig is a HELIX box too, and its
+`guest` who may look but not touch. `backdoor`, run as a resident or root,
+writes your rig's key into their `~/.ssh/authorized_keys`: for a couple of
+hours you can `ssh` in from home, and the rig can jack you in at that
+building's gate on the Net; the Backdoor program does the same for days, as
+`root`. Your rig keeps three such lines (`ls /net`, `route`, `burn <host>`),
+and a run from home that gets dumped sends a trace back along the backdoors you
+came through, burning each one it passes; cut it with `burn`, or they kick your
+door in and take the rig for a day. Your own rig is a HELIX box too, and its
 files are yours: `cat ~/mail/001-a-favour.txt` opens the first mail, a fixer's
 favour, a neighbour's door code and a shard to fetch from the flat, and `nano
 ~/notes.txt` keeps whatever you write there.

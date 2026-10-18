@@ -743,4 +743,86 @@ mod tests {
         bd.plant_key(b(3), "mara-voss", 100, 1, 0);
         assert_eq!(bd.held(b(3)).unwrap().user_label(), "mara-voss");
     }
+
+    #[test]
+    #[ignore = "slow: three cities"]
+    fn plant_land_hop_and_burn_across_three_cities() {
+        use citygen::{GenParams, Generator, SizePreset};
+        let (mut landed, mut hopped) = (0, 0);
+        for seed in [3u64, 8, 21] {
+            let mut st = crate::app::AppState::new();
+            st.enter_city(
+                Generator::run(GenParams {
+                    seed,
+                    size: SizePreset::Medium,
+                    districts: 7,
+                    ..Default::default()
+                })
+                .unwrap(),
+            );
+            let Some(rig) = st.home else { continue };
+            let mut p = rig
+                .wake(
+                    st.city.as_ref().unwrap(),
+                    &mut st.interiors,
+                    &st.constructs,
+                    0,
+                )
+                .unwrap();
+            let at = {
+                let (_, floor) = st
+                    .interiors
+                    .floor(rig.home.building, rig.home.level)
+                    .unwrap();
+                rig.home
+                    .rig
+                    .neighbors8()
+                    .find(|q| rig.home.rect.contains(*q) && floor.tiles[*q].is_walkable())
+                    .unwrap()
+            };
+            p.pos = at;
+            st.player = Some(p);
+            crate::credentials::move_in(&mut st);
+            let district = st
+                .city
+                .as_ref()
+                .unwrap()
+                .building(rig.home.building)
+                .district;
+            let targets = crate::access::scannable(&st, district);
+            let city_seed = st.city.as_ref().unwrap().seed;
+            let mut planted = Vec::new();
+            for b in targets.iter().copied() {
+                if st.backdoors.can_plant(b, 0).is_ok() {
+                    st.backdoors.plant_key(b, "user", 100, city_seed, 0);
+                    planted.push(b);
+                }
+                assert!(st.backdoors.slots_used() <= SLOTS);
+            }
+            assert!(!planted.is_empty(), "seed {seed}: nothing planted");
+            for b in planted.iter().copied() {
+                if crate::constructs::city_gate(st.city.as_ref().unwrap(), b).is_none() {
+                    continue;
+                }
+                if crate::net::land_at(&mut st, b).is_err() {
+                    continue;
+                }
+                landed += 1;
+                if let Some(other) = planted.iter().copied().find(|o| *o != b)
+                    && crate::constructs::enter_construct(&mut st, b).is_ok()
+                    && crate::net::hop(&mut st, other).is_ok()
+                {
+                    hopped += 1;
+                }
+                assert!(st.backdoors.slots_used() <= SLOTS);
+                let _ = crate::net::jack_out(&mut st);
+            }
+            for b in planted {
+                st.backdoors.burn(b, Why::You, 1);
+            }
+            assert_eq!(st.backdoors.slots_used(), 0);
+        }
+        assert!(landed > 0, "never landed");
+        eprintln!("landed {landed}, hopped {hopped}");
+    }
 }

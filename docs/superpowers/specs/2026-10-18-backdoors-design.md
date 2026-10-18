@@ -1,8 +1,14 @@
 # Backdoors: lifetimes, chaining and the trace home — design
 
-Date: 2026-10-18. Status: approved in chat by Jeffrey, every question answered
-"A" (the `backdoor` program instead of `ssh-copy-id`; a way to list the chain
-added at his ask). Spec, plan and build run without check-ins; merging is his call.
+Date: 2026-10-18. Status: built on `worktree-backdoors`; approved in chat by Jeffrey, every question
+answered "A" (the `backdoor` program instead of `ssh-copy-id`; a way to list the
+chain added at his ask). Spec, plan and build ran without check-ins; merging is
+his call. Built as specified except: the `LINE` row uses two-space separators;
+`burn` and the honeypot spring go through one `net::lock_down` helper; `land_at`
+refuses unless you stand at the rig; the trace skips a relay that already burned
+without an event; a seized rig does not mark the tile as booted; the journal's
+route, trace and seizure lines sit above the groups rather than under the rig's
+group.
 Builds on: `2026-10-18-helix-os-design.md` (hosts, the shell, programs, the
 rig's `/net`), `2026-10-15-constructs-and-programs-design.md` (the Backdoor
 program, the trace, the dump), `2026-10-17-credentials-journal-design.md` (the
