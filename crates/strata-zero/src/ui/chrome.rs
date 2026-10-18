@@ -21,6 +21,8 @@ pub(crate) const PANEL_BG: Color = Color::Rgb(4, 6, 10);
 pub(crate) const PANEL_BG_RGB: Rgb = Rgb(4, 6, 10);
 /// How far the washed map is pulled toward the panel colour; the rest shows through.
 pub(crate) const GLASS: f32 = 0.45;
+/// What a terminal's faint attribute does to a colour, roughly; the glass bakes it in.
+const FAINT_GHOST: f32 = 0.5;
 pub(crate) const RULE: Color = Color::Rgb(40, 60, 75);
 pub(crate) const BAR_BG: Color = Color::Rgb(0, 60, 70);
 
@@ -70,6 +72,8 @@ pub(crate) fn frame(buf: &mut Buffer, area: Rect) {
 }
 
 /// Tints the panel area toward the panel colour, keeping the washed map as a ghost.
+/// The ghost is colour only: a faint cell is darkened instead, and every modifier goes,
+/// or text written over it later (`set_style` only adds modifiers) would inherit them.
 pub(crate) fn glass(buf: &mut Buffer, area: Rect) {
     for y in area.y..area.bottom() {
         for x in area.x..area.right() {
@@ -78,11 +82,17 @@ pub(crate) fn glass(buf: &mut Buffer, area: Rect) {
                 Color::Rgb(r, g, b) => Rgb(r, g, b).mix(PANEL_BG_RGB, GLASS).to_color(),
                 _ => PANEL_BG,
             };
+            let ghost = if cell.modifier.contains(Modifier::DIM) {
+                0.6 * FAINT_GHOST
+            } else {
+                0.6
+            };
             let fg = match cell.fg {
-                Color::Rgb(r, g, b) => Rgb(r, g, b).scale(0.6).to_color(),
+                Color::Rgb(r, g, b) => Rgb(r, g, b).scale(ghost).to_color(),
                 other => other,
             };
             cell.set_bg(bg).set_fg(fg);
+            cell.modifier = Modifier::empty();
         }
     }
 }
@@ -221,6 +231,28 @@ mod tests {
             panic!()
         };
         assert!(r < 200, "fg is dimmed");
+    }
+
+    #[test]
+    fn glass_bakes_a_faint_ghost_into_its_colour_and_text_over_it_is_clean() {
+        let mut buf = painted();
+        buf[(2, 1)].modifier.insert(Modifier::DIM | Modifier::BOLD);
+        glass(&mut buf, Rect::new(1, 1, 4, 1));
+        let Color::Rgb(faint, _, _) = buf[(2, 1)].fg else {
+            panic!()
+        };
+        let Color::Rgb(plain, _, _) = buf[(3, 1)].fg else {
+            panic!()
+        };
+        assert!(
+            faint < plain,
+            "a faint ghost stays fainter: {faint} vs {plain}"
+        );
+        assert_eq!(buf[(2, 1)].modifier, Modifier::empty());
+        put(&mut buf, 1, 1, "abcd", Style::default().fg(TEXT), 5);
+        for x in 1..5 {
+            assert_eq!(buf[(x, 1)].modifier, Modifier::empty(), "x {x}");
+        }
     }
 
     #[test]

@@ -1923,6 +1923,48 @@ mod tests {
         assert!(row.contains("NETRUNNER"));
     }
 
+    #[test]
+    fn deck_text_over_a_dim_map_is_not_dimmed() {
+        let mut st = state();
+        st.tick = 40;
+        let d = Deck::new(0);
+        let mut t = Terminal::new(TestBackend::new(120, 35)).unwrap();
+        // A remembered map: every cell faint.
+        t.draw(|f| {
+            let area = f.area();
+            let buf = f.buffer_mut();
+            for y in area.y..area.bottom() {
+                for x in area.x..area.right() {
+                    buf[(x, y)]
+                        .set_char('Ж')
+                        .set_fg(Color::Rgb(90, 90, 90))
+                        .set_bg(Color::Rgb(40, 40, 40))
+                        .modifier
+                        .insert(Modifier::DIM);
+                }
+            }
+            d.draw(&st, f);
+        })
+        .unwrap();
+        let buf = t.backend().buffer();
+        let faint: Vec<(u16, u16, String)> = buf
+            .content
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.symbol() != "Ж" && c.modifier.contains(Modifier::DIM))
+            .map(|(i, c)| {
+                let (x, y) = buf.pos_of(i);
+                (x, y, c.symbol().to_string())
+            })
+            .collect();
+        assert!(
+            faint.is_empty(),
+            "{} deck cells dimmed by the map, first {:?}",
+            faint.len(),
+            &faint[..faint.len().min(8)]
+        );
+    }
+
     /// Forty loose coils: more inventory rows than any pane has.
     fn stuff(st: &mut AppState) {
         use game::Stack;
