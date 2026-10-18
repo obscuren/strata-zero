@@ -23,7 +23,7 @@ Content(
              perks: [Carry(12.0), Stat(Body, 1)],
              desc: "Hydraulic forearm with a clamp hand. Built for cargo, fine for doors."),
         Item(id: "pawnshop_deck", name: "Pawnshop deck", kind: Deck, slot: Some(Deck), weight: 1.8, value: 1200,
-             perks: [Stat(Net, 1)], grants: ["netscan", "arc_trace"], deck: Some(DeckSpec(slots: 2, rating: 1)),
+             perks: [Stat(Net, 1)], grants: ["netscan", "arc_trace"], deck: Some(DeckSpec(slots: 2, rating: 1, look: Pawn)),
              desc: "Three previous owners, one of them dead. Boots in four seconds and runs hot."),
         Item(id: "soy_noodle_cup", name: "Soy-noodle cup", kind: Consumable, weight: 0.3, value: 8, use: Some(Heal(3)),
              desc: "Just add water. Water sold separately."),

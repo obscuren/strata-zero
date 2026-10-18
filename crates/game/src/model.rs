@@ -172,11 +172,42 @@ pub struct Program {
     pub work: u8,
 }
 
-/// A deck's slots for programs and its rating.
+/// Which drawing a deck wears on the CYBERDECK tab.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DeckLook {
+    #[default]
+    Pawn,
+}
+
+impl DeckLook {
+    pub fn name(self) -> &'static str {
+        match self {
+            DeckLook::Pawn => "pawn",
+        }
+    }
+
+    /// Program slots the drawing has room for.
+    pub fn max_slots(self) -> u8 {
+        match self {
+            DeckLook::Pawn => 4,
+        }
+    }
+
+    /// ROM abilities the drawing has room for.
+    pub fn max_grants(self) -> usize {
+        match self {
+            DeckLook::Pawn => 3,
+        }
+    }
+}
+
+/// A deck's slots for programs, its rating and the look it wears.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeckSpec {
     pub slots: u8,
     pub rating: u8,
+    #[serde(default)]
+    pub look: DeckLook,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

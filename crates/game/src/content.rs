@@ -178,6 +178,26 @@ impl Content {
                         why: "a deck has at least one slot".into(),
                     });
                 }
+                (ItemKind::Deck, Some(d)) if d.slots > d.look.max_slots() => {
+                    return Err(ContentError::DeckInvalid {
+                        id: i.id.0.clone(),
+                        why: format!(
+                            "a {} deck has room for {} slots",
+                            d.look.name(),
+                            d.look.max_slots()
+                        ),
+                    });
+                }
+                (ItemKind::Deck, Some(d)) if i.grants.len() > d.look.max_grants() => {
+                    return Err(ContentError::DeckInvalid {
+                        id: i.id.0.clone(),
+                        why: format!(
+                            "a {} deck has room for {} ROM abilities",
+                            d.look.name(),
+                            d.look.max_grants()
+                        ),
+                    });
+                }
                 (k, Some(_)) if k != ItemKind::Deck => {
                     return Err(ContentError::DeckInvalid {
                         id: i.id.0.clone(),
@@ -972,7 +992,8 @@ mod tests {
             c.item(&ItemId::new("pawnshop_deck")).unwrap().deck,
             Some(DeckSpec {
                 slots: 2,
-                rating: 1
+                rating: 1,
+                look: DeckLook::Pawn
             })
         );
         let crack = c.item(&ItemId::new("crack")).unwrap().program.unwrap();
@@ -1002,5 +1023,44 @@ mod tests {
         let i = at(&bad, "hardhat");
         bad.items[i].program = Some(crack);
         assert!(bad.validate().is_err(), "a hardhat is no program");
+    }
+
+    #[test]
+    fn deck_look_defaults_to_pawn() {
+        let text = DEFAULT_CONTENT.replace(", look: Pawn", "");
+        assert!(!text.contains("look:"));
+        let c = Content::parse(&text).unwrap();
+        let d = c.item(&ItemId::new("pawnshop_deck")).unwrap().deck.unwrap();
+        assert_eq!(d.look, DeckLook::Pawn);
+    }
+
+    #[test]
+    fn pawn_decks_have_room_for_four_slots_and_three_grants() {
+        let c = Content::load().unwrap();
+        let i = c
+            .items
+            .iter()
+            .position(|i| i.id.0 == "pawnshop_deck")
+            .unwrap();
+        let mut bad = c.clone();
+        bad.items[i].deck.as_mut().unwrap().slots = 5;
+        assert!(matches!(
+            bad.validate(),
+            Err(ContentError::DeckInvalid { .. })
+        ));
+        let mut bad = c.clone();
+        bad.items[i].grants = ["netscan", "arc_trace", "netscan", "arc_trace"]
+            .map(AbilityId::new)
+            .to_vec();
+        assert!(matches!(
+            bad.validate(),
+            Err(ContentError::DeckInvalid { .. })
+        ));
+        let mut ok = c.clone();
+        ok.items[i].deck.as_mut().unwrap().slots = 4;
+        ok.items[i].grants = ["netscan", "arc_trace", "netscan"]
+            .map(AbilityId::new)
+            .to_vec();
+        assert!(ok.validate().is_ok());
     }
 }
