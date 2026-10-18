@@ -169,11 +169,10 @@ impl AppState {
     }
 
     /// How far past the base the character sees: their perks, and two more tiles
-    /// with low-light between 18:00 and 05:59.
+    /// with low-light while the lamps are on, 18:00 to 05:59.
     pub fn sight_bonus(&self) -> i32 {
         let mut bonus = self.character.sight_bonus(&self.content);
-        let (hour, _) = self.clock();
-        let night = !(6..18).contains(&hour);
+        let night = citygen::lighting::lamps_on(self.minute_of_day());
         if night
             && self
                 .character

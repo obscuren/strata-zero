@@ -10,6 +10,9 @@ pub const DAWN_END: u16 = 7 * 60;
 /// Dusk ramps from 17:00 to 19:00; the midpoint 18:00 is when lamps come on.
 pub const DUSK_START: u16 = 17 * 60;
 pub const DUSK_END: u16 = 19 * 60;
+/// The lamp switch: off at the middle of dawn, on at the middle of dusk.
+pub const DAWN_MID: u16 = (DAWN_START + DAWN_END) / 2;
+pub const DUSK_MID: u16 = (DUSK_START + DUSK_END) / 2;
 
 /// Ambient light per stratum as (night, day). The Undercity and the Net have no sky.
 pub const fn ambient_range(k: StratumKind) -> (u8, u8) {

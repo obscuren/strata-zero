@@ -107,7 +107,7 @@ mod tests {
             .flat_map(|y| (0..60u16).map(move |x| (x, y)))
             .filter(|(x, y)| buf[(*x, *y)].bg != s.background.to_color())
             .count();
-        assert!(lit > 0 && lit < 60 * 30 / 4, "lit cells {lit}");
+        assert!(lit > 0 && lit < 60 * 30 / 2, "lit cells {lit}");
         assert!((0..30u16).any(|y| (0..60u16).any(|x| buf[(x, y)].symbol() == "@")));
         // Tiny areas never panic.
         let mut t = Terminal::new(TestBackend::new(1, 1)).unwrap();

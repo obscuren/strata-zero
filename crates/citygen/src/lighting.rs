@@ -23,9 +23,11 @@ pub fn daylight(minute: u16) -> f32 {
     }
 }
 
-/// Street lamps burn while the sun is down past the middle of the ramp.
+/// Street lamps burn from the middle of dusk to the middle of dawn: on at 18:00,
+/// off at 06:00, the night window the rest of the game keeps.
 pub fn lamps_on(minute: u16) -> bool {
-    daylight(minute) < 0.5
+    let m = minute % (24 * 60);
+    !(DAWN_MID..DUSK_MID).contains(&m)
 }
 
 /// Whether a stratum sees the sky.
@@ -158,8 +160,8 @@ mod tests {
         assert!((daylight(6 * 60) - 0.5).abs() < 1e-6);
         assert!((daylight(18 * 60) - 0.5).abs() < 1e-6);
         assert!(daylight(5 * 60 + 30) > 0.0 && daylight(5 * 60 + 30) < 0.5);
-        assert!(lamps_on(5 * 60 + 59) && !lamps_on(6 * 60 + 1));
-        assert!(lamps_on(18 * 60 + 1) && !lamps_on(17 * 60 + 59));
+        assert!(lamps_on(5 * 60 + 59) && !lamps_on(6 * 60));
+        assert!(lamps_on(18 * 60) && !lamps_on(17 * 60 + 59));
     }
 
     #[test]
