@@ -186,11 +186,13 @@ impl AppIo<'_> {
                 let b = list[*i];
                 let via = self.st.backdoors.held(b).is_some();
                 let mut audit = false;
+                let mut key_user = None;
                 if via {
                     let now = self.st.net.now(self.st);
                     let seed = self.st.city.as_ref().map_or(0, |c| c.seed);
                     let security = access::security_of(self.st, b);
                     let who = self.st.backdoors.held(b).map(|d| d.user_label());
+                    key_user = who.clone();
                     match self.st.backdoors.check(b, security, seed, now) {
                         crate::backdoors::Use::Refused => {
                             return Err(format!(
@@ -224,7 +226,8 @@ impl AppIo<'_> {
                 login(self.st, shell, HostId::Building(b));
                 if via {
                     let now = self.st.net.now(self.st);
-                    self.st.backdoors.logins.push((now, b, shell.user.clone()));
+                    let user = key_user.unwrap_or_else(|| shell.user.clone());
+                    self.st.backdoors.logins.push((now, b, user));
                 }
                 let mut lines = vec![format!(
                     "CONNECTED TO {} · CLEARANCE {}{}",
