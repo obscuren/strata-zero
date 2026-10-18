@@ -80,6 +80,8 @@ Content(
              desc: "Somebody's quarter, somebody's passwords, somebody's problem. A fixer will know whose."),
         Item(id: "vault_data", name: "Vault dump", kind: Component, weight: 0.05, value: 1500,
              desc: "A whole vault on one shard. Warm to the touch, which it should not be."),
+        Item(id: "sealed_package", name: "Sealed package", kind: Component, weight: 0.5, value: 0,
+             desc: "Taped shut. Heavier than it looks. Not yours to open."),
     ],
     skills: [
         Skill(id: "blades", name: "Blades", stat: Reflex, desc: "Knives, shivs and anything with an edge."),
@@ -286,23 +288,7 @@ Content(
         Ability(id: "signal_ghost", name: "Signal ghost", cooldown: 0, kind: Passive,
                 desc: "You feel the Net's weather change before the ICE does."),
     ],
-    quests: [
-        Quest(id: "the_drop", title: "The drop", giver: "Mama Sol", location: "Night market",
-              desc: "A package needs to cross three districts without being scanned. Mama Sol says it is noodles. It is not noodles.",
-              objectives: ["Pick up the package at the noodle stall", "Cross the corp core without a scan", "Hand it to the docks fixer"]),
-        Quest(id: "noodle_debt", title: "Noodle debt", giver: "Mama Sol", location: "Night market",
-              desc: "You owe for three weeks of dinners. She will take credits, or a favour.",
-              objectives: ["Pay 120 credits, or run the drop"]),
-        Quest(id: "first_jack", title: "First jack", giver: "Yourself", location: "Anywhere with a terminal",
-              desc: "Find a public terminal and jack in. Come back out.",
-              objectives: ["Jack in at a street terminal", "Jack out again"]),
-        Quest(id: "the_vault", title: "The vault", giver: "Unknown", location: "Corp core",
-              desc: "A data vault in the core has a buyer. Nobody knows what is in it.",
-              objectives: ["Locate the vault in the Net", "Get past the ICE", "Copy the vault"]),
-        Quest(id: "first_favour", title: "A favour", giver: "A fixer", location: "Your block",
-              desc: "A mail on your rig: a neighbour owes the fixer, and there is a shard in the flat with the fixer's name on it. The door code came with the mail.",
-              objectives: ["Read the mail on your rig", "Pick up the shard in the neighbour's flat"]),
-    ],
+    quests: [],
     recipes: [
         Recipe(id: "wire_shiv", name: "Wire shiv", skill: "electronics",
                inputs: [("copper_coil", 1), ("scrap_servo", 1)], output: ("shiv_blade", 1),
@@ -326,7 +312,6 @@ Content(
     creation: Creation(
         stat_base: 3, stat_cap: 8, stat_points: 20, point_cost: 2,
         sp: 6, name_max: 16, hp: 40, focus: 30, talent_points: 1, tier_gate: 3,
-        quests: [("the_drop", [true, false, false]), ("noodle_debt", [false]), ("first_jack", [true, true])],
     ),
     stat_blurbs: [
         (Body, "What the meat can take, and how much of it there is."),

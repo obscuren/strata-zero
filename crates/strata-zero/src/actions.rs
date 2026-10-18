@@ -37,7 +37,14 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         action,
     )?;
     if took {
-        crate::credentials::shard_taken(st, place, pos);
+        let left = st
+            .ground
+            .at(place, pos)
+            .iter()
+            .any(|s| s.item == game::ItemId::new("paydata"));
+        if !left {
+            crate::jobs::send(st, crate::jobs::Event::Taken { place, pos });
+        }
     }
     let minute = st.minute_of_day();
     let interiors = &st.interiors;

@@ -356,6 +356,7 @@ impl AppIo<'_> {
         self.st
             .backdoors
             .plant_key(b, &shell.user, security, seed, now);
+        crate::jobs::send(self.st, crate::jobs::Event::Planted { building: b });
         let (event, _) = self
             .st
             .net
@@ -823,17 +824,9 @@ mod tests {
         assert_eq!(sh.home, format!("/home/{me}"));
         let inbox = text(&go(&mut st, &mut sh, "mail"));
         assert!(inbox.contains('*'), "{inbox}");
-        let done = |st: &AppState| {
-            st.character
-                .quests
-                .iter()
-                .find(|q| q.quest == game::QuestId::new("first_favour"))
-                .map(|q| q.done[0])
-        };
-        assert_eq!(done(&st), Some(false));
+        assert!(!st.journal.mails[0].read);
         let mail = text(&go(&mut st, &mut sh, "cat ~/mail/001-a-favour.txt"));
         assert!(mail.contains("Door code"), "{mail}");
-        assert_eq!(done(&st), Some(true));
         assert!(st.journal.mails[0].read);
         let inbox = text(&go(&mut st, &mut sh, "mail"));
         assert!(!inbox.contains('*'), "{inbox}");

@@ -1755,6 +1755,16 @@ impl Screen for MapScreen {
                 fx: TransitionKind::Glitch,
             };
         }
+        // The console's `target`: the free camera on the tile, the inspector reading it.
+        if let Some(pos) = st.jump_to.take() {
+            st.dev = true;
+            self.mode = Mode::Explore;
+            self.place = Place::Stratum(StratumKind::Street);
+            self.cursor = pos;
+            self.cam.snap(pos);
+            st.sidebar.set(Section::Inspect, true);
+            st.repaint = true;
+        }
         // A popup's Look row: the cursor goes on its tile.
         if let Some(pos) = st.look_at.take()
             && self.mode == Mode::Walk
@@ -1919,6 +1929,11 @@ impl Screen for MapScreen {
         let roots = st.backdoors.roots();
         st.net.minute(now, inside, &mut st.constructs, &roots);
         crate::net::tick_backdoors(st);
+        crate::jobs::tick(st);
+        // A fixer beside you has their offer ready before you talk.
+        if self.mode == Mode::Walk {
+            crate::jobs::ui::prepare_offers(st, &|pl, p| self.inside_person_at(pl, p));
+        }
         // The beat of a calm construct: one per frame at most, so a long menu is
         // never a burst of rolls.
         let was_engaged = st.net.engaged.is_some();
@@ -2296,13 +2311,13 @@ impl Screen for MapScreen {
                 .map(|p| p.pos),
             style: &st.style,
             content: &st.content,
-            character: &st.character,
             ground: &st.ground,
             log: &st.log,
             tick: st.tick,
             dev: st.dev,
             net: &st.net,
             now: st.net.now(st),
+            jobs: crate::jobs::ui::pane_lines(st),
             ice_lines: match (self.place, st.player.as_ref()) {
                 (Place::Construct(b), Some(p)) if p.place == self.place => {
                     let vis = p.vis();
@@ -3637,7 +3652,7 @@ mod tests {
             assert!(above.trim().is_empty(), "one empty row above them: {text}");
             assert!(
                 lines[3].starts_with(" XP ")
-                    && lines[3].contains("[F1]Here* [F2]Quest* [F3]Map* [F4]Log*"),
+                    && lines[3].contains("[F1]Here* [F2]Jobs* [F3]Map* [F4]Log*"),
                 "{text}"
             );
             assert_eq!(
@@ -3754,7 +3769,7 @@ mod tests {
         s.update(&mut st, &[]);
         s.update(&mut st, &[key(KeyCode::F(1))]);
         assert!(!st.sidebar.is_on(Section::Here));
-        assert!(draw_screen(&s, &st, 100, 30).contains("[F1]Here [F2]Quest*"));
+        assert!(draw_screen(&s, &st, 100, 30).contains("[F1]Here [F2]Jobs*"));
         s.update(&mut st, &[key(KeyCode::F(1)), key(KeyCode::F(5))]);
         assert!(st.sidebar.is_on(Section::Here) && st.sidebar.is_on(Section::Inspect));
         st.set_dev(false);
@@ -3800,6 +3815,7 @@ mod tests {
         let mut st = state();
         let mut s = MapScreen::explore(0);
         walking(&mut st, &mut s);
+        crate::jobs::testutil::sample_jobs(&mut st);
         st.say("took it");
         st.tick += 200;
         let text = draw_screen(&s, &st, 100, 30);
@@ -3811,6 +3827,7 @@ mod tests {
     #[test]
     fn frame_carries_no_explicit_background() {
         let mut st = state();
+        crate::jobs::testutil::sample_jobs(&mut st);
         let mut s = MapScreen::explore(0);
         s.update(&mut st, &[]);
         let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
@@ -9752,5 +9769,23 @@ mod tests {
         let all = rows(&st);
         assert!(all.iter().find(|c| c.label == "Backdoor").unwrap().enabled);
         assert!(crate::net::start_run(&mut st, ItemId::new("backdoor"), target).is_ok());
+    }
+
+    #[test]
+    fn a_jump_puts_the_free_camera_on_the_tile_with_the_inspector_on() {
+        let mut st = state();
+        let city = st.city.take().unwrap();
+        st.enter_city(city);
+        let mut s = MapScreen::walking(&mut st);
+        assert_eq!(s.mode, Mode::Walk);
+        let target = Pos::new(40, 20);
+        st.jump_to = Some(target);
+        s.update(&mut st, &[]);
+        assert_eq!(s.mode, Mode::Explore);
+        assert_eq!(s.place, Place::Stratum(StratumKind::Street));
+        assert_eq!(s.cursor, target);
+        assert!(st.dev);
+        assert!(st.sidebar.is_on(Section::Inspect));
+        assert_eq!(st.jump_to, None);
     }
 }

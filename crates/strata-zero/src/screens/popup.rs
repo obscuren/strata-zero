@@ -13,7 +13,7 @@ use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 
 /// Something the popup does to the player in the world.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,6 +65,17 @@ pub enum Pick {
     JackOutAsk,
     /// Hops from a server to another backdoor's gate.
     Hop(citygen::BuildingId),
+    /// A fixer's offer, in place of their window.
+    Offer(crate::jobs::JobId),
+    /// Takes the offered job.
+    Take(crate::jobs::JobId),
+    /// Hands a finished job in to its fixer, for the pay.
+    HandIn(crate::jobs::JobId),
+    /// Asks before dropping a job, in place of the window.
+    DropAsk(crate::jobs::JobId),
+    Drop(crate::jobs::JobId),
+    /// Puts a Deliver's package into the person's hands.
+    Hand(crate::jobs::JobId),
     Close,
 }
 
@@ -199,6 +210,8 @@ pub struct Popup {
     header: Option<Header>,
     /// A dim line under the header, before the rows.
     subtitle: Option<String>,
+    /// A paragraph between the subtitle and the rows, word-wrapped.
+    body: Vec<String>,
     choices: Vec<Choice>,
     pub selected: usize,
     anchor: Option<(u16, u16)>,
@@ -226,12 +239,32 @@ impl Popup {
         Popup {
             header,
             subtitle,
+            body: Vec::new(),
             choices,
             selected,
             anchor: None,
             opened: tick,
             card: None,
         }
+    }
+
+    /// A paragraph between the subtitle and the rows.
+    pub fn with_body(mut self, lines: Vec<String>) -> Self {
+        self.body = lines;
+        self
+    }
+
+    /// Rows the body takes at this inner width, its blank row after included.
+    fn body_rows(&self, inner_w: usize) -> u16 {
+        if self.body.is_empty() {
+            return 0;
+        }
+        let rows: usize = self
+            .body
+            .iter()
+            .map(|l| wrapped_rows(&Line::from(l.as_str()), inner_w))
+            .sum();
+        rows as u16 + 1
     }
 
     /// The confirm before leaving the Net: Jack out starts selected, so `J` then
@@ -252,9 +285,9 @@ impl Popup {
         &self.choices
     }
 
-    /// Rows above the choices: the subtitle and the blank row under it.
-    fn lead(&self) -> u16 {
-        if self.subtitle.is_some() { 2 } else { 0 }
+    /// Rows above the choices: the subtitle and the blank row under it, then the body.
+    fn lead(&self, inner_w: usize) -> u16 {
+        (if self.subtitle.is_some() { 2 } else { 0 }) + self.body_rows(inner_w)
     }
 
     /// Whether this is the landing list a rig offers before it jacks in.
@@ -395,10 +428,12 @@ impl Popup {
                     .iter()
                     .map(|c| c.text().chars().count() + 5)
                     .chain(self.subtitle.iter().map(|s| s.chars().count()))
+                    .chain(self.body.iter().map(|s| s.chars().count()))
                     .max()
                     .unwrap_or(0);
                 let w = (longest.max(title_w) as u16 + 6).clamp(MIN_W, MAX_W);
-                (w, self.choices.len() as u16 + 4 + self.lead())
+                let inner_w = w.saturating_sub(4).max(1) as usize;
+                (w, self.choices.len() as u16 + 4 + self.lead(inner_w))
             }
         };
         let w = w.min(area.width);
@@ -496,6 +531,49 @@ impl Popup {
                 report(st, result);
                 ScreenCmd::Pop {
                     fx: TransitionKind::Glitch,
+                }
+            }
+            Pick::Offer(id) => ScreenCmd::Replace {
+                to: Box::new(crate::jobs::ui::offer_popup(st, id, st.tick)),
+                fx: TransitionKind::None,
+            },
+            Pick::Take(id) => {
+                if let Err(e) = crate::jobs::take_job(st, id) {
+                    st.warn(e);
+                }
+                ScreenCmd::Pop {
+                    fx: TransitionKind::None,
+                }
+            }
+            Pick::HandIn(id) => {
+                if let Err(e) = crate::jobs::ui::hand_in(st, id) {
+                    st.warn(e);
+                }
+                ScreenCmd::Pop {
+                    fx: TransitionKind::None,
+                }
+            }
+            Pick::DropAsk(id) => {
+                let title = st.jobs.get(id).map(|j| j.title.clone()).unwrap_or_default();
+                ScreenCmd::Replace {
+                    to: Box::new(crate::jobs::ui::drop_confirm(id, &title, st.tick)),
+                    fx: TransitionKind::None,
+                }
+            }
+            Pick::Drop(id) => {
+                if let Err(e) = crate::jobs::ui::drop(st, id) {
+                    st.warn(e);
+                }
+                ScreenCmd::Pop {
+                    fx: TransitionKind::None,
+                }
+            }
+            Pick::Hand(id) => {
+                if let Err(e) = crate::jobs::ui::hand_over(st, id) {
+                    st.warn(e);
+                }
+                ScreenCmd::Pop {
+                    fx: TransitionKind::None,
                 }
             }
             Pick::Close => ScreenCmd::Pop {
@@ -670,7 +748,23 @@ impl Screen for Popup {
                         inner.right(),
                     );
                 }
-                let lead = self.lead().min(inner.height);
+                if !self.body.is_empty() {
+                    let top = if self.subtitle.is_some() { 2 } else { 0 };
+                    let body_h = self.body_rows(inner.width as usize).saturating_sub(1);
+                    let area = Rect::new(
+                        inner.x,
+                        inner.y + top,
+                        inner.width,
+                        body_h.min(inner.height.saturating_sub(top)),
+                    );
+                    let lines: Vec<Line<'static>> = self
+                        .body
+                        .iter()
+                        .map(|l| Line::from(Span::styled(l.clone(), Style::default().fg(TEXT))))
+                        .collect();
+                    put_paragraph(buf, area, lines);
+                }
+                let lead = self.lead(inner.width as usize).min(inner.height);
                 let rows = Rect::new(inner.x, inner.y + lead, inner.width, inner.height - lead);
                 let bar = Rect::new(r.x + 1, rows.y, r.width - 2, rows.height);
                 self.draw_rows(st, rows, bar, buf);

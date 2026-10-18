@@ -11,18 +11,6 @@ pub struct Stack {
     pub qty: u32,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct QuestLog {
-    pub quest: QuestId,
-    pub done: Vec<bool>,
-}
-
-impl QuestLog {
-    pub fn is_done(&self) -> bool {
-        !self.done.is_empty() && self.done.iter().all(|d| *d)
-    }
-}
-
 /// Where an ability comes from.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Source {
@@ -57,7 +45,6 @@ pub struct Character {
     pub abilities: Vec<AbilityId>,
     pub equipment: BTreeMap<Slot, ItemId>,
     pub inventory: Vec<Stack>,
-    pub quests: Vec<QuestLog>,
     /// The tick each active ability last fired, for cooldowns.
     pub fired: BTreeMap<AbilityId, u64>,
     /// Unspent creation points, spendable from the deck under the same rules.
@@ -95,14 +82,6 @@ impl Character {
             abilities: Vec::new(),
             equipment: BTreeMap::new(),
             inventory: Vec::new(),
-            quests: cr
-                .quests
-                .iter()
-                .map(|(q, d)| QuestLog {
-                    quest: q.clone(),
-                    done: d.clone(),
-                })
-                .collect(),
             fired: BTreeMap::new(),
             stat_points: b.points_left(c).max(0) as u32,
             sp: b.sp_left(c).max(0) as u32,
@@ -622,7 +601,6 @@ mod tests {
         assert!(ch.has_category(&CategoryId::new("wrench")) && ch.has_workbench(&c));
         assert_eq!((ch.stat_points, ch.sp), (0, 0));
         assert_eq!(ch.origin, OriginId::new("creche"));
-        assert_eq!(ch.quests.len(), 3);
         assert_eq!(ch.hp, ch.hp_max(&c));
         let abilities = ch.abilities(&c);
         assert!(abilities.iter().any(|(id, s)| {

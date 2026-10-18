@@ -11,10 +11,11 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 30] = [
+const COMMANDS: [&str; 34] = [
     "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "talent", "tpts", "program",
     "heat", "alarm", "wake", "engage", "calm", "ice", "failsafe", "hp", "who", "clock", "tp",
-    "clear", "help", "trace", "seize", "backdoor", "eyes", "light", "time",
+    "clear", "help", "trace", "seize", "backdoor", "eyes", "light", "time", "job", "standing",
+    "jobs", "target",
 ];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
@@ -420,8 +421,126 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 if n == 1 { "" } else { "s" }
             ))
         }
+        "job" => {
+            let kind = match args.first().copied() {
+                Some("fetch") => crate::jobs::KindTag::Fetch,
+                Some("copy") => crate::jobs::KindTag::Copy,
+                Some("plant") => crate::jobs::KindTag::Plant,
+                Some("deliver") => crate::jobs::KindTag::Deliver,
+                _ => return Err("job fetch|copy|plant|deliver".to_string()),
+            };
+            let from = st.player.as_ref().map(|p| p.pos).unwrap_or(Pos::new(0, 0));
+            let fixer = crate::jobs::nearest_fixer(st, from).ok_or("no fixer in this city")?;
+            let counter = st.jobs.fixer_mut(fixer).rolled;
+            st.jobs.fixer_mut(fixer).rolled += 1;
+            let job = crate::jobs::generate(st, fixer, kind, counter)
+                .ok_or("nothing to roll for that kind")?;
+            let title = job.title.clone();
+            let id = st.jobs.push(job);
+            crate::jobs::take_job(st, id)?;
+            Ok(format!("{} · `{title}` taken", kind.label()))
+        }
+        "standing" => {
+            let n: i32 = args
+                .first()
+                .and_then(|a| a.parse().ok())
+                .ok_or_else(|| "standing <n>".to_string())?;
+            let fixers: Vec<sim::PersonId> = st
+                .world
+                .as_ref()
+                .map(|w| {
+                    w.people()
+                        .iter()
+                        .filter(|p| p.profession == "fixer")
+                        .map(|p| p.id)
+                        .collect()
+                })
+                .unwrap_or_default();
+            for f in &fixers {
+                st.jobs.fixer_mut(*f).standing = n;
+            }
+            Ok(format!(
+                "standing {n} with {} fixer{}",
+                fixers.len(),
+                if fixers.len() == 1 { "" } else { "s" }
+            ))
+        }
+        "jobs" => {
+            if st.jobs.list.is_empty() {
+                return Ok("no jobs".to_string());
+            }
+            Ok(st
+                .jobs
+                .list
+                .iter()
+                .map(|j| format!("{} `{}` {:?} ¤{}", j.id.0, j.title, j.state, j.pay))
+                .collect::<Vec<_>>()
+                .join(" · "))
+        }
+        "target" => {
+            let want = args.join(" ").to_lowercase();
+            if want.is_empty() {
+                return Err("target <name>".to_string());
+            }
+            let (pos, line) = {
+                let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_ref()) else {
+                    return Err("no city".to_string());
+                };
+                let people = world.people();
+                let exact: Vec<&sim::Person> =
+                    people.iter().filter(|p| p.name.to_lowercase() == want).collect();
+                let found: Vec<&sim::Person> = if exact.is_empty() {
+                    people
+                        .iter()
+                        .filter(|p| p.name.to_lowercase().starts_with(&want))
+                        .collect()
+                } else {
+                    exact
+                };
+                let p = match found.as_slice() {
+                    [] => return Err(format!("no one called {want}")),
+                    [p] => *p,
+                    many => {
+                        return Err(format!(
+                            "several: {}",
+                            many.iter()
+                                .take(3)
+                                .map(|p| p.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ));
+                    }
+                };
+                let label = world.card(p.id, city).profession;
+                match world.pos_of(p.id) {
+                    Some(pos) => (pos, format!("`{}` · {label} · {},{}", p.name, pos.x, pos.y)),
+                    None => {
+                        let sim::Whereabouts::Inside(b) = p.whereabouts else {
+                            return Err(format!("`{}` is nowhere to be seen", p.name));
+                        };
+                        let door = city
+                            .portals(b)
+                            .first()
+                            .map(|(_, d)| *d)
+                            .ok_or_else(|| "no door to stand at".to_string())?;
+                        (
+                            door,
+                            format!(
+                                "`{}` · {label} · inside {} · door {},{}",
+                                p.name,
+                                crate::net::building_name(st, b),
+                                door.x,
+                                door.y
+                            ),
+                        )
+                    }
+                }
+            };
+            st.jump_to = Some(pos);
+            Ok(line)
+        }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · eyes · light · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · job fetch|copy|plant|deliver · standing <n> · jobs · target <name> · eyes · light · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),
@@ -444,6 +563,18 @@ pub fn complete(st: &AppState, head: &str, word: &str) -> Vec<String> {
             .map(|i| i.id.0.clone())
             .filter(|id| id.starts_with(word))
             .collect()
+    } else if head.trim() == "target" {
+        let want = word.to_lowercase();
+        st.world
+            .as_ref()
+            .map(|w| {
+                w.people()
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .filter(|n| n.to_lowercase().starts_with(&want))
+                    .collect()
+            })
+            .unwrap_or_default()
     } else {
         Vec::new()
     }
@@ -738,5 +869,79 @@ mod tests {
             st.log.latest().map(|e| e.text.as_str()),
             Some("level 2 · a talent point")
         );
+    }
+
+    fn city_state() -> AppState {
+        let mut st = AppState::new();
+        st.enter_city(
+            Generator::run(GenParams {
+                seed: 6,
+                size: SizePreset::Custom { w: 120, h: 60 },
+                districts: 5,
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        st
+    }
+
+    #[test]
+    fn target_finds_a_person_and_asks_the_map_to_jump() {
+        let mut st = city_state();
+        let at = At {
+            place: citygen::Place::Stratum(StratumKind::Street),
+            pos: Pos::new(0, 0),
+        };
+        // Someone on the street right now, found by a lower-case prefix of their name.
+        let (name, pos) = {
+            let w = st.world.as_ref().unwrap();
+            w.people()
+                .iter()
+                .find_map(|p| w.pos_of(p.id).map(|pos| (p.name.clone(), pos)))
+                .expect("someone outside")
+        };
+        let whole = run(&mut st, at, &format!("target {}", name.to_lowercase())).unwrap();
+        assert!(whole.contains(&name), "{whole}");
+        assert_eq!(st.jump_to, Some(pos));
+        // Nobody by that name; a prefix shared by several is refused with names.
+        assert!(run(&mut st, at, "target zzzzzz").is_err());
+        let first: char = name.chars().next().unwrap();
+        let shared = st
+            .world
+            .as_ref()
+            .unwrap()
+            .people()
+            .iter()
+            .filter(|p| {
+                p.name
+                    .to_lowercase()
+                    .starts_with(first.to_ascii_lowercase())
+            })
+            .count();
+        if shared > 1 {
+            let err = run(&mut st, at, &format!("target {first}")).unwrap_err();
+            assert!(err.contains("several"), "{err}");
+        }
+        assert!(run(&mut st, at, "target").is_err());
+        // Someone indoors: the cursor goes to their building's street door.
+        let (inside_name, b) = {
+            let w = st.world.as_ref().unwrap();
+            w.people()
+                .iter()
+                .find_map(|p| match p.whereabouts {
+                    sim::Whereabouts::Inside(b) => Some((p.name.clone(), b)),
+                    _ => None,
+                })
+                .expect("someone inside")
+        };
+        let out = run(&mut st, at, &format!("target {inside_name}")).unwrap();
+        assert!(out.contains("inside"), "{out}");
+        let door = st.city.as_ref().unwrap().portals(b)[0].1;
+        assert_eq!(st.jump_to, Some(door));
+        // Tab completion offers names after `target`, whatever the case typed.
+        let lower = name.to_lowercase();
+        let prefix: String = lower.chars().take(2).collect();
+        let names = complete(&st, "target", &prefix);
+        assert!(names.iter().any(|n| n == &name), "{names:?}");
     }
 }

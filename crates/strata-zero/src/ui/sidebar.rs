@@ -11,7 +11,7 @@ use crate::ui::hud::{RULE_STYLE, clock_at};
 use crate::ui::panel::{inspector_lines, legend};
 use crate::walker::port_name;
 use citygen::{ConnectorKind, Feature, NodeKind, Pos, Rect as TileRect, StratumKind};
-use game::{Character, Content, Ground};
+use game::{Content, Ground};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -23,7 +23,7 @@ const LOG_MIN: u16 = 3;
 /// The fewest rows MAP keeps (separator, a squeezed minimap, the coordinate row).
 const MAP_MIN: u16 = 7;
 const HERE_CAP: u16 = 7;
-const QUEST_CAP: u16 = 4;
+const JOBS_CAP: u16 = 4;
 const INSPECT_CAP: u16 = 14;
 const ITEM_ROWS: usize = 5;
 /// Ticks the newest log entry takes to type out.
@@ -39,7 +39,7 @@ pub fn width(_total: u16) -> u16 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
     Here,
-    Quest,
+    Jobs,
     Map,
     Log,
     Inspect,
@@ -49,7 +49,7 @@ pub enum Section {
 impl Section {
     pub const ALL: [Section; 6] = [
         Section::Here,
-        Section::Quest,
+        Section::Jobs,
         Section::Map,
         Section::Log,
         Section::Inspect,
@@ -59,7 +59,7 @@ impl Section {
     pub fn label(self) -> &'static str {
         match self {
             Section::Here => "here",
-            Section::Quest => "quest",
+            Section::Jobs => "jobs",
             Section::Map => "map",
             Section::Log => "log",
             Section::Inspect => "inspect",
@@ -180,7 +180,6 @@ pub struct SidebarView<'a> {
     pub player: Option<Pos>,
     pub style: &'a StylePack,
     pub content: &'a Content,
-    pub character: &'a Character,
     pub ground: &'a Ground,
     pub log: &'a MessageLog,
     pub tick: u64,
@@ -193,6 +192,8 @@ pub struct SidebarView<'a> {
     pub now: u64,
     /// The ICE the player can see in their construct, one line each.
     pub ice_lines: Vec<String>,
+    /// The JOBS pane: the job in hand, from `jobs::ui::pane_lines`.
+    pub jobs: Vec<Line<'static>>,
 }
 
 fn plain(text: impl Into<String>) -> Line<'static> {
@@ -298,42 +299,6 @@ pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
         out.push(dim(" nothing here"));
     }
     out
-}
-
-/// The first unfinished quest: title and giver, its first open objective, and pips.
-pub fn quest_lines(character: &Character, content: &Content) -> Vec<Line<'static>> {
-    for q in &character.quests {
-        if q.is_done() {
-            continue;
-        }
-        let Some(quest) = content.quest(&q.quest) else {
-            continue;
-        };
-        let Some(i) = q.done.iter().position(|d| !*d) else {
-            continue;
-        };
-        let done = q.done.iter().filter(|d| **d).count();
-        let total = q.done.len();
-        let objective = quest.objectives.get(i).cloned().unwrap_or_default();
-        return vec![
-            Line::from(vec![
-                Span::raw(" "),
-                Span::styled(
-                    quest.title.to_uppercase(),
-                    Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(format!(" · {}", quest.giver), Style::default().fg(TEXT)),
-            ]),
-            plain(format!(" » {objective}")),
-            Line::from(vec![
-                Span::raw(" "),
-                Span::styled("▰".repeat(done), Style::default().fg(CYAN)),
-                Span::styled("▱".repeat(total - done), Style::default().fg(DIM)),
-                Span::styled(format!(" {done}/{total}"), Style::default().fg(DIM)),
-            ]),
-        ];
-    }
-    vec![dim(" no active quest")]
 }
 
 /// Word-wraps `text` to `width` cells; words longer than a row are broken.
@@ -495,9 +460,9 @@ pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) -> V
                 let n = rows_for(&l, w).min(HERE_CAP);
                 (l, n)
             }
-            Section::Quest => {
-                let l = quest_lines(v.character, v.content);
-                let n = rows_for(&l, w).min(QUEST_CAP);
+            Section::Jobs => {
+                let l = v.jobs.clone();
+                let n = rows_for(&l, w).min(JOBS_CAP);
                 (l, n)
             }
             Section::Map => (Vec::new(), MINIMAP_H + 1),
@@ -610,7 +575,6 @@ mod tests {
             player: Some(focus),
             style: &st.style,
             content: &st.content,
-            character: &st.character,
             ground: &st.ground,
             log: &st.log,
             tick: st.tick,
@@ -619,6 +583,7 @@ mod tests {
             net: &st.net,
             now: 0,
             ice_lines: Vec::new(),
+            jobs: crate::jobs::ui::pane_lines(st),
         }
     }
 
@@ -641,12 +606,12 @@ mod tests {
         s.set(Section::Legend, true);
         assert_eq!(
             s.active(false),
-            vec![Section::Quest, Section::Map, Section::Log]
+            vec![Section::Jobs, Section::Map, Section::Log]
         );
         assert_eq!(
             s.active(true),
             vec![
-                Section::Quest,
+                Section::Jobs,
                 Section::Map,
                 Section::Log,
                 Section::Inspect,
@@ -661,16 +626,16 @@ mod tests {
     fn budget_gives_log_the_rest_and_drops_map_first() {
         use Section::*;
         assert_eq!(
-            budget(&[(Here, 3), (Quest, 4), (Map, 14), (Log, 0)], 25),
-            vec![(Here, 3), (Quest, 4), (Map, 14), (Log, 4)]
+            budget(&[(Here, 3), (Jobs, 4), (Map, 14), (Log, 0)], 25),
+            vec![(Here, 3), (Jobs, 4), (Map, 14), (Log, 4)]
         );
         assert_eq!(
-            budget(&[(Here, 3), (Quest, 4), (Map, 14), (Log, 0)], 22),
-            vec![(Here, 3), (Quest, 4), (Map, 12), (Log, 3)]
+            budget(&[(Here, 3), (Jobs, 4), (Map, 14), (Log, 0)], 22),
+            vec![(Here, 3), (Jobs, 4), (Map, 12), (Log, 3)]
         );
         assert_eq!(
-            budget(&[(Here, 3), (Quest, 4), (Map, 14)], 10),
-            vec![(Here, 3), (Quest, 4), (Map, 3)]
+            budget(&[(Here, 3), (Jobs, 4), (Map, 14)], 10),
+            vec![(Here, 3), (Jobs, 4), (Map, 3)]
         );
         assert_eq!(
             budget(&[(Here, 3), (Log, 0), (Inspect, 15)], 20),
@@ -679,22 +644,22 @@ mod tests {
         assert_eq!(budget(&[(Here, 3), (Log, 0)], 3), vec![(Here, 3)]);
         // MAP gives up rows to keep LOG at its floor, down to its own floor of seven.
         assert_eq!(
-            budget(&[(Here, 2), (Quest, 4), (Map, 15), (Log, 0)], 22),
-            vec![(Here, 2), (Quest, 4), (Map, 13), (Log, 3)]
+            budget(&[(Here, 2), (Jobs, 4), (Map, 15), (Log, 0)], 22),
+            vec![(Here, 2), (Jobs, 4), (Map, 13), (Log, 3)]
         );
         assert_eq!(
-            budget(&[(Here, 2), (Quest, 4), (Map, 15), (Log, 0)], 16),
-            vec![(Here, 2), (Quest, 4), (Map, 7), (Log, 3)]
+            budget(&[(Here, 2), (Jobs, 4), (Map, 15), (Log, 0)], 16),
+            vec![(Here, 2), (Jobs, 4), (Map, 7), (Log, 3)]
         );
         assert_eq!(
-            budget(&[(Here, 2), (Quest, 4), (Map, 15), (Log, 0)], 15),
-            vec![(Here, 2), (Quest, 4), (Log, 9)]
+            budget(&[(Here, 2), (Jobs, 4), (Map, 15), (Log, 0)], 15),
+            vec![(Here, 2), (Jobs, 4), (Log, 9)]
         );
         for h in 0..40u16 {
             let rows = budget(
                 &[
                     (Here, 3),
-                    (Quest, 4),
+                    (Jobs, 4),
                     (Map, 14),
                     (Log, 0),
                     (Inspect, 15),
@@ -770,34 +735,9 @@ mod tests {
     }
 
     #[test]
-    fn quest_shows_title_objective_and_pips() {
-        let st = state();
-        let lines: Vec<String> = quest_lines(&st.character, &st.content)
-            .iter()
-            .map(|l| l.to_string())
-            .collect();
-        assert_eq!(
-            lines,
-            vec![
-                " THE DROP · Mama Sol",
-                " » Cross the corp core without a scan",
-                " ▰▱▱ 1/3"
-            ]
-        );
-        let mut ch = st.character.clone();
-        for q in &mut ch.quests {
-            q.done.fill(true);
-        }
-        let lines: Vec<String> = quest_lines(&ch, &st.content)
-            .iter()
-            .map(|l| l.to_string())
-            .collect();
-        assert_eq!(lines, vec![" no active quest"]);
-    }
-
-    #[test]
     fn panes_are_separated_by_light_rules_and_have_no_titles() {
         let mut st = state();
+        crate::jobs::testutil::sample_jobs(&mut st);
         st.dev = false;
         st.tick += 200;
         let (k, pos) = {
@@ -830,7 +770,7 @@ mod tests {
             (p.place, p.pos)
         };
         let mut flags = Sidebar::default();
-        for s in [Section::Here, Section::Quest, Section::Map] {
+        for s in [Section::Here, Section::Jobs, Section::Map] {
             flags.set(s, false);
         }
         let text = draw_to(&view(&st, pos, k), &flags, width(100), 10);
@@ -851,7 +791,7 @@ mod tests {
             (p.place, p.pos)
         };
         let mut flags = Sidebar::default();
-        for s in [Section::Here, Section::Quest, Section::Map] {
+        for s in [Section::Here, Section::Jobs, Section::Map] {
             flags.set(s, false);
         }
         let text = draw_to(&view(&st, pos, k), &flags, width(100), 10);
@@ -864,6 +804,7 @@ mod tests {
     #[test]
     fn draw_fits_every_section_and_wraps_log_entries() {
         let mut st = state();
+        crate::jobs::testutil::sample_jobs(&mut st);
         st.dev = true;
         st.sidebar.set(Section::Inspect, true);
         st.sidebar.set(Section::Legend, true);
@@ -879,7 +820,7 @@ mod tests {
         }
         let text = draw_to(&view(&st, pos, k), &st.sidebar, width(100), 60);
         for needle in [
-            "THE DROP · Mama Sol",
+            "THE DROP · the fixer",
             "▰▱▱ 1/3",
             "· Street",
             "aaaa",
@@ -896,7 +837,7 @@ mod tests {
             vec![(Section::Here, 1)]
         );
         assert_eq!(
-            budget(&[(Section::Here, 3), (Section::Quest, 2)], 4),
+            budget(&[(Section::Here, 3), (Section::Jobs, 2)], 4),
             vec![(Section::Here, 3)]
         );
     }
@@ -913,7 +854,7 @@ mod tests {
             (p.place, p.pos)
         };
         let mut flags = Sidebar::default();
-        for s in [Section::Here, Section::Quest, Section::Map] {
+        for s in [Section::Here, Section::Jobs, Section::Map] {
             flags.set(s, false);
         }
         // LOG is the only pane: 6 rows; the 70-cell entry wraps to 3 rows at 33 cells, "short" 1.

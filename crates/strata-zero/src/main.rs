@@ -13,6 +13,7 @@ mod helix;
 mod home;
 mod interact;
 mod interiors;
+mod jobs;
 mod look;
 mod messages;
 mod net;

@@ -120,7 +120,7 @@ fn keypad_over_the_home_floor() {
     let mut st = state_home();
     let map = MapScreen::walking(&mut st);
     st.tick += 200;
-    let (b, level, number) = st.journal.favour.clone().expect("the favour").flat;
+    let (b, level, number, _) = crate::jobs::first_fetch(&st).expect("the favour");
     let mut pad = Keypad::open(&st, b, level, number);
     pad.update(&mut st, &[key(KeyCode::Char('4')), key(KeyCode::Char('4'))]);
     shot("keypad", &st, &map, &pad);
@@ -234,4 +234,27 @@ fn a_neon_keypad() {
     st.tick += 200;
     let pad = Keypad::open(&st, b, level, number);
     shot("keypad_neon", &st, &map, &pad);
+}
+
+#[test]
+#[ignore]
+fn offer_window() {
+    let mut st = state_home();
+    let map = MapScreen::walking(&mut st);
+    let welcome = st.jobs.active().unwrap().id;
+    st.jobs.drop_job(welcome);
+    let fx = st
+        .world
+        .as_ref()
+        .unwrap()
+        .people()
+        .iter()
+        .find(|p| p.profession == "fixer")
+        .unwrap()
+        .id;
+    st.jobs.fixer_mut(fx).standing = 0;
+    let id = crate::jobs::offer(&mut st, fx).expect("an offer");
+    let popup = crate::jobs::ui::offer_popup(&st, id, st.tick);
+    st.tick += 200;
+    shot("offer", &st, &map, &popup);
 }

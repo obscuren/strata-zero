@@ -43,6 +43,8 @@ pub struct AppState {
     pub show_light: bool,
     /// A popup asked the map for its look cursor on this tile; the map takes it.
     pub look_at: Option<citygen::Pos>,
+    /// The console's `target`: a Street tile the free camera should jump to.
+    pub jump_to: Option<citygen::Pos>,
     pub content: game::Content,
     pub character: game::Character,
     /// The professions and lines of the city's people.
@@ -77,6 +79,10 @@ pub struct AppState {
     /// What the player knows: door codes, and the lost cards already laid out.
     pub journal: crate::credentials::Journal,
     pub helix: crate::helix::Helix,
+    /// The fixers' jobs and what each fixer thinks of you.
+    pub jobs: crate::jobs::Jobs,
+    /// The fixers' voice.
+    pub flavor: crate::jobs::Flavor,
 }
 
 /// One ability effect playing on the map.
@@ -133,6 +139,7 @@ impl AppState {
             show_eyes: false,
             show_light: false,
             look_at: None,
+            jump_to: None,
             content,
             character,
             people,
@@ -152,6 +159,8 @@ impl AppState {
             home: None,
             journal: Default::default(),
             helix: Default::default(),
+            jobs: Default::default(),
+            flavor: crate::jobs::Flavor::load().expect("the jobs pack is valid"),
         }
     }
 
@@ -234,6 +243,7 @@ impl AppState {
         self.backdoors = Default::default();
         self.journal = Default::default();
         self.helix = Default::default();
+        self.jobs = Default::default();
         crate::credentials::purge(&mut self.content, &mut self.character);
         self.ground = Default::default();
         self.player = None;
@@ -252,7 +262,7 @@ impl AppState {
         self.log.push(Kind::Warn, msg, self.clock_tick());
     }
 
-    /// Logs a quest or level line.
+    /// Logs a job or level line.
     pub fn story(&mut self, msg: impl Into<String>) {
         self.log.push(Kind::Story, msg, self.clock_tick());
     }

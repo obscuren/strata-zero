@@ -1,0 +1,47 @@
+// The fixers' work: titles, briefs and what they say. Slots in braces are filled
+// from the job: {building} {floor} {number} {how} {host} {security} {name}
+// {profession} {place} {hours} {district}.
+Jobs(
+    titles: [
+        (Fetch,   ["The {building} shard", "A flat on {floor}", "Somebody's quarter"]),
+        (Copy,    ["{host}, copied", "What {host} keeps", "A quiet read"]),
+        (Plant,   ["A door into {host}", "Leave it open", "{host}, later"]),
+        (Deliver, ["A parcel for {name}", "Across town", "No questions"]),
+    ],
+    briefs: [
+        (Fetch, [
+            ["{number} on {floor} of {building}. {how}.",
+             "There's a shard on the floor with my name on it. Bring it."],
+            ["Flat {number}, {floor}, {building}. {how}.",
+             "Somebody left a shard behind. I'd like it back before they notice."],
+        ]),
+        (Copy, [
+            ["{host}. Security {security}. The server, nothing else.",
+             "Copy it and walk. I pay for the shard, not the story."],
+            ["{host}, security {security}. A buyer wants what the server knows.",
+             "Quiet is worth more than fast. Bring me the copy."],
+        ]),
+        (Plant, [
+            ["I need a way into {host} that isn't the front door.",
+             "Leave me a backdoor and come tell me while it still stands."],
+            ["{host}. Security {security}. I want a key under the mat.",
+             "Plant it, then find me before it burns."],
+        ]),
+        (Deliver, [
+            ["{name}, the {profession} at {place}. Works {hours}.",
+             "Package into their hands. Not a counter, not a colleague. Hands."],
+            ["Find {name}. {profession}, {place}, {hours}.",
+             "They're expecting it. Don't open it. Don't be late."],
+        ]),
+    ],
+    how: (card: "the lobby desk keeps a card", server: "the server knows the code"),
+    where: "I hold the corner on {district} from 18:00.",
+    offer:    ["Got something. Interested?", "Work found you. Want it?"],
+    taken:    ["Mail's on your rig.", "Details on your rig. Don't lose them."],
+    handed:   ["Good. Here.", "Clean. Here's yours."],
+    dropped:  ["Fine. Someone hungrier will.", "Noted."],
+    late:     ["You had a window. It closed.", "Late is the same as never."],
+    refused:  ["Lose this number.", "I don't know you."],
+    nothing:  ["Nothing right now. Come back.", "Dry. Try me tomorrow."],
+    receiver: ["About time.", "Took you long enough.", "Not a word. Thanks."],
+)
