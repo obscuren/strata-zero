@@ -164,15 +164,41 @@ impl Vfs {
         format!("/{}", out.join("/"))
     }
 
-    fn lookup(&self, abs: &str) -> Result<usize, VfsError> {
+    /// Walk to `abs`. With a user, every directory passed through must be readable by
+    /// them (the final node's own permission is the caller's to check).
+    fn walk(&self, user: Option<&str>, abs: &str) -> Result<usize, VfsError> {
         let mut at = 0;
         for part in parts(abs) {
             match &self.nodes[at].kind {
-                Kind::Dir(children) => at = *children.get(part).ok_or(VfsError::NotFound)?,
+                Kind::Dir(children) => {
+                    if user.is_some_and(|u| !self.can_read(at, u)) {
+                        return Err(VfsError::Denied);
+                    }
+                    at = *children.get(part).ok_or(VfsError::NotFound)?
+                }
                 _ => return Err(VfsError::NotADirectory),
             }
         }
         Ok(at)
+    }
+
+    fn lookup(&self, abs: &str) -> Result<usize, VfsError> {
+        self.walk(None, abs)
+    }
+
+    fn lookup_as(&self, user: &str, abs: &str) -> Result<usize, VfsError> {
+        self.walk(Some(user), abs)
+    }
+
+    /// Like `resolve`, but denied when a directory on the way is unreadable by `user`.
+    pub fn resolve_as(
+        &self,
+        user: &str,
+        cwd: &str,
+        home: &str,
+        path: &str,
+    ) -> Result<usize, VfsError> {
+        self.lookup_as(user, &Vfs::normalize(cwd, home, path))
     }
 
     pub fn resolve(&self, cwd: &str, home: &str, path: &str) -> Result<usize, VfsError> {
@@ -248,9 +274,12 @@ impl Vfs {
     }
 
     /// The directory that holds `abs` and the final name, with the directory checked.
-    fn parent_of(&self, abs: &str) -> Result<(usize, String), VfsError> {
+    fn parent_of(&self, user: &str, abs: &str) -> Result<(usize, String), VfsError> {
         let (dir, name) = split_last(abs).ok_or(VfsError::Denied)?;
-        let pid = self.lookup(&dir)?;
+        let pid = self.lookup_as(user, &dir)?;
+        if self.children(pid).is_some() && !self.can_read(pid, user) {
+            return Err(VfsError::Denied);
+        }
         if self.children(pid).is_none() {
             return Err(VfsError::NotADirectory);
         }
@@ -349,7 +378,7 @@ impl Vfs {
         append: bool,
     ) -> Result<(), VfsError> {
         let abs = Vfs::normalize(cwd, home, path);
-        match self.lookup(&abs) {
+        match self.lookup_as(user, &abs) {
             Ok(id) => {
                 if self.children(id).is_some() {
                     return Err(VfsError::IsADirectory);
@@ -366,7 +395,7 @@ impl Vfs {
                 Ok(())
             }
             Err(VfsError::NotFound) => {
-                let (pid, name) = self.parent_of(&abs)?;
+                let (pid, name) = self.parent_of(user, &abs)?;
                 if !self.can_write(pid, user) {
                     return Err(VfsError::Denied);
                 }
@@ -419,7 +448,7 @@ impl Vfs {
     }
 
     pub fn read(&self, user: &str, cwd: &str, home: &str, path: &str) -> Result<&Kind, VfsError> {
-        let id = self.resolve(cwd, home, path)?;
+        let id = self.resolve_as(user, cwd, home, path)?;
         if !self.can_read(id, user) {
             return Err(VfsError::Denied);
         }
@@ -437,14 +466,12 @@ impl Vfs {
         home: &str,
         path: &str,
     ) -> Result<Vec<usize>, VfsError> {
-        let id = self.resolve(cwd, home, path)?;
+        let id = self.resolve_as(user, cwd, home, path)?;
+        if !self.can_read(id, user) {
+            return Err(VfsError::Denied);
+        }
         match &self.nodes[id].kind {
-            Kind::Dir(children) => {
-                if !self.can_read(id, user) {
-                    return Err(VfsError::Denied);
-                }
-                Ok(children.values().copied().collect())
-            }
+            Kind::Dir(children) => Ok(children.values().copied().collect()),
             _ => Ok(vec![id]),
         }
     }
@@ -458,8 +485,8 @@ impl Vfs {
         recursive: bool,
     ) -> Result<(), VfsError> {
         let abs = Vfs::normalize(cwd, home, path);
-        let id = self.lookup(&abs)?;
-        let (pid, name) = self.parent_of(&abs)?;
+        let id = self.lookup_as(user, &abs)?;
+        let (pid, name) = self.parent_of(user, &abs)?;
         if !self.can_write(pid, user) {
             return Err(VfsError::Denied);
         }
@@ -484,7 +511,7 @@ impl Vfs {
         src: &str,
         dst: &str,
     ) -> Result<(), VfsError> {
-        let sid = self.resolve(cwd, home, src)?;
+        let sid = self.resolve_as(user, cwd, home, src)?;
         let text = match &self.nodes[sid].kind {
             Kind::File(t) => t.clone(),
             Kind::Dir(_) => return Err(VfsError::IsADirectory),
@@ -495,14 +522,14 @@ impl Vfs {
         }
         let name = self.nodes[sid].name.clone();
         let abs = self.landing(user, cwd, home, dst, &name)?;
-        match self.lookup(&abs) {
+        match self.lookup_as(user, &abs) {
             Ok(id) => match &mut self.nodes[id].kind {
                 Kind::File(body) => *body = text,
                 Kind::Dir(_) => return Err(VfsError::IsADirectory),
                 Kind::Dev(_) => return Err(VfsError::Denied),
             },
             Err(VfsError::NotFound) => {
-                let (pid, n) = self.parent_of(&abs)?;
+                let (pid, n) = self.parent_of(user, &abs)?;
                 self.add(pid, &n, Kind::File(text), user, Mode::RW_R);
             }
             Err(e) => return Err(e),
@@ -521,7 +548,7 @@ impl Vfs {
         name: &str,
     ) -> Result<String, VfsError> {
         let mut abs = Vfs::normalize(cwd, home, dst);
-        if let Ok(id) = self.lookup(&abs)
+        if let Ok(id) = self.lookup_as(user, &abs)
             && self.children(id).is_some()
         {
             if !self.can_write(id, user) {
@@ -529,11 +556,11 @@ impl Vfs {
             }
             abs = format!("{}/{}", abs.trim_end_matches('/'), name);
         }
-        match self.lookup(&abs) {
+        match self.lookup_as(user, &abs) {
             Ok(id) if !self.can_write(id, user) => Err(VfsError::Denied),
             Ok(_) => Ok(abs),
             Err(VfsError::NotFound) => {
-                let (pid, _) = self.parent_of(&abs)?;
+                let (pid, _) = self.parent_of(user, &abs)?;
                 if self.can_write(pid, user) {
                     Ok(abs)
                 } else {
@@ -553,8 +580,8 @@ impl Vfs {
         dst: &str,
     ) -> Result<(), VfsError> {
         let sabs = Vfs::normalize(cwd, home, src);
-        let sid = self.lookup(&sabs)?;
-        let (spid, sname) = self.parent_of(&sabs)?;
+        let sid = self.lookup_as(user, &sabs)?;
+        let (spid, sname) = self.parent_of(user, &sabs)?;
         if !self.can_write(spid, user) {
             return Err(VfsError::Denied);
         }
@@ -565,7 +592,7 @@ impl Vfs {
         if dabs.starts_with(&format!("{sabs}/")) {
             return Err(VfsError::Denied);
         }
-        let (dpid, dname) = self.parent_of(&dabs)?;
+        let (dpid, dname) = self.parent_of(user, &dabs)?;
         if let Some(&old) = self.children(dpid).and_then(|c| c.get(&dname))
             && self.children(old).is_some()
         {
@@ -803,6 +830,42 @@ mod tests {
         );
         assert_eq!(
             v.rename(ROOT, "/", "/", "/home", "/home/mara/h"),
+            Err(VfsError::Denied)
+        );
+    }
+
+    #[test]
+    fn a_private_directory_guards_the_path() {
+        let mut v = world();
+        assert_eq!(
+            v.write("mara", "/home/mara", "/home/mara", "new", "secret", false),
+            Ok(())
+        );
+        for p in ["/home/mara/new", "/home/mara/notes"] {
+            assert_eq!(v.read(GUEST, "/", "/", p), Err(VfsError::Denied));
+            assert_eq!(v.list(GUEST, "/", "/", p), Err(VfsError::Denied));
+            assert!(v.read("mara", "/", "/", p).is_ok());
+            assert!(v.read(ROOT, "/", "/", p).is_ok());
+        }
+        assert_eq!(v.list(GUEST, "/", "/", "/home/mara"), Err(VfsError::Denied));
+        assert_eq!(
+            v.copy(GUEST, "/", "/", "/home/mara/new", "/tmp"),
+            Err(VfsError::Denied)
+        );
+        assert_eq!(
+            v.remove(GUEST, "/", "/", "/home/mara/new", false),
+            Err(VfsError::Denied)
+        );
+        assert_eq!(
+            v.write(GUEST, "/", "/", "/home/mara/x", "x", false),
+            Err(VfsError::Denied)
+        );
+        assert_eq!(
+            v.mkdir(GUEST, "/", "/", "/home/mara/d", false),
+            Err(VfsError::Denied)
+        );
+        assert_eq!(
+            v.rename(GUEST, "/", "/", "/home/mara/new", "/tmp/n"),
             Err(VfsError::Denied)
         );
     }
