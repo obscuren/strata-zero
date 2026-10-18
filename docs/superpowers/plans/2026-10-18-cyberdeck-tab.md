@@ -230,3 +230,25 @@ Jeffrey: "create another cyberdeck, same chrome, with 5 slots. give that by defa
 - [ ] **Step 5: Commit** `feat(app): a rebuilt five-slot pawn deck, jacked on D'SHAWN`
 
 **Task 7 also (Jeffrey, same evening):** the row under the deck is labelled `WAREZ`, not `INVENTORY` (the label only; the glass and strip copy keep "back to inventory" / "to inventory", where the program really goes). Change the label in `pawn.rs` and every test that reads it (`ui/cyberdeck`, `screens/cyberdeck.rs`, `screens/deck.rs`: assertions on `INVENTORY` in the CYBERDECK draw become `WAREZ`; the INVENTORY *tab* label stays). README's CYBERDECK line says "a program in your warez" if it names the row.
+
+### Task 8: The deck is locked while jacked in (added at Jeffrey's request after Task 7)
+
+Jeffrey: "lock up the deck when we are in the net. We should not be able to switch in/out programs while we are in net space. interacting with the deck is meatspace only". Spec: section "Jacked in: the deck is locked".
+
+**Files:**
+- Modify: `crates/strata-zero/src/screens/cyberdeck.rs` (key handling, the glass's pinned row)
+- Modify: `crates/strata-zero/src/screens/deck.rs` (one draw test)
+- Modify: `README.md` (the CYBERDECK line)
+
+**Interfaces:**
+- Consumes: Tasks 1-7 as built; the jacked-in test the view already uses for `link` (`st.player` is jacked in, `walker::Player::jacked_in`).
+- Produces: nothing new.
+
+- [ ] **Step 1: Write the failing tests** in `screens/cyberdeck.rs` (jack the player in as `view_reports_heat_link_and_switch` does):
+  - `jacked_in_the_deck_is_locked`: point `Slot(0)` → pinned `locked · jacked in` (tone `Warn`), the glass head and body unchanged from jacked out; space → `loaded` unchanged, strip warn "the deck is locked while you're jacked in" (`last_is_warning`); enter does the same; point a WAREZ cart (give spoof), space → `held == None`; point `Failsafe`, space → `cover_up == false` and `st.net.failsafe` unchanged; `Right` from `Slot(0)` still reaches `Slot(1)`; PgDn on `Rom(1)` still scrolls; esc returns `Some(Pop { .. })`.
+  - `jacking_out_unlocks_the_deck`: jacked in, then jacked out (`body = None` as the net tests do): space on `Slot(0)` ejects as before and the pinned row is `[space] eject` again.
+  - `screens/deck.rs` `cyberdeck_locks_in_the_net`: jacked in, the CYBERDECK draw (after the glass has typed, `st.tick` ≥ 20 past the change) contains `locked · jacked in`.
+- [ ] **Step 2: Run** `cargo test -p strata-zero cyberdeck` — the new tests fail.
+- [ ] **Step 3: Implement** a private `fn locked(st: &AppState) -> bool` (the same test as `link`); in `key()`, before acting: space/enter while locked → `st.warn("the deck is locked while you're jacked in")`, `Some(Stay)`, nothing else; pointing, PgUp/PgDn, esc/q and the tab keys are untouched. The glass's pinned row is `("locked · jacked in", GlassTone::Warn)` for every part while locked. README's CYBERDECK line gains "; the deck is locked while you're jacked in".
+- [ ] **Step 4: Run** `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings`.
+- [ ] **Step 5: Commit** `feat(app): the deck is locked while you're jacked in`

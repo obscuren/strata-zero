@@ -206,7 +206,7 @@ the rest left. Empty slots are always on the right.
   displacing says what it needs ("needs 2 slots · eject one").
 - **Put back.** Esc while holding puts it back where it lay; nothing changes.
 - Loading rules are today's (`can_load`): the deck reports refusals the same
-  way. Nothing new about when you may load (jacked in or not stays as it is).
+  way. One new rule, below: nothing changes on the deck while you are jacked in.
 
 ### The failsafe
 
@@ -235,6 +235,18 @@ construct's heat; on the grid, the nearest gate's trace within reach
 (`NetState::nearest_trace`); anywhere else, cold (no cells lit). Seven cells
 over 0 to `DUMP_HEAT`, a cell lit for each seventh begun. Cells at or past
 `ALARM_HEAT` may be drawn a hotter shade; builder's call.
+
+### Jacked in: the deck is locked
+
+Jeffrey, after the build: "lock up the deck when we are in the net … interacting
+with the deck is meatspace only". While the player is jacked in
+(`Player::jacked_in`, the same test that lights LINK), the tab still draws the
+deck and the brackets still move, and the glass still reads out the pointed
+part, but nothing on the deck changes: no eject, no pick-up or drop, no lifting
+the failsafe's cover or throwing it. The glass's pinned row reads
+`locked · jacked in` for every part, and space or enter puts "the deck is locked
+while you're jacked in" in the strip as a warning and does nothing else. A cart
+cannot be in hand while jacked in (the deck screen is opened fresh each time).
 
 ### Keys on this tab
 
