@@ -11,10 +11,10 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 29] = [
+const COMMANDS: [&str; 30] = [
     "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "talent", "tpts", "program",
     "heat", "alarm", "wake", "engage", "calm", "ice", "failsafe", "hp", "who", "clock", "tp",
-    "clear", "help", "trace", "seize", "backdoor", "eyes", "light",
+    "clear", "help", "trace", "seize", "backdoor", "eyes", "light", "time",
 ];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
@@ -281,9 +281,9 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             }
             Ok(format!("{out} out · {inside} inside · {driving} driving"))
         }
-        "clock" => {
+        "clock" | "time" => {
             // Jumps the clock forward to the next hh:mm and reseeds the city's day there.
-            let usage = "clock <hh:mm>".to_string();
+            let usage = format!("{cmd} <hh:mm>");
             let (h, m) = args
                 .first()
                 .and_then(|a| a.split_once(':'))
@@ -406,7 +406,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             ))
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> · tp <x> <y> · trace · seize · backdoor <host> · eyes · light · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · eyes · light · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),
@@ -633,6 +633,10 @@ mod tests {
             run(&mut st, at, "clock 25:00").unwrap_err(),
             "clock <hh:mm>"
         );
+        // `time` is the same command by another name.
+        assert_eq!(run(&mut st, at, "time 08:00").unwrap(), "08:00");
+        assert_eq!(st.clock(), (8, 0));
+        assert_eq!(run(&mut st, at, "time 8").unwrap_err(), "time <hh:mm>");
     }
 
     #[test]

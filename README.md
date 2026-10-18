@@ -286,7 +286,7 @@ walk · `tab` deck ·
 `F1`-`F4` panes · `v` view popup · `m` messages · `d` digital overlay · `s` save ·
 `?` keys · `c` back to the free camera (dev mode) · `:` dev
 console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `sp`, `pts`, `talent`, `tpts`, `program`, `heat`, `alarm`, `wake`, `engage`, `calm`, `ice`, `failsafe`, `who`
-counts the people out, inside and driving, `clock hh:mm` jumps the day there,
+counts the people out, inside and driving, `clock hh:mm` (or `time hh:mm`) jumps the day there,
 `tp x y` teleports on the current map, `eyes` tints the walkers who see you,
 `light` paints the map grey by its light, `clear`, `help`, with Tab completion
 and history) · `esc` pause
