@@ -519,7 +519,16 @@ pub fn note_codes(st: &mut AppState, host: HostId, path: &str, text: &str) {
         return;
     };
     let mut numbers: Vec<u16> = Vec::new();
-    let bytes: Vec<char> = text.chars().collect();
+    // Only lines that talk about a door or a code count: a year in a mail is not a code.
+    let relevant: String = text
+        .lines()
+        .filter(|l| {
+            let l = l.to_lowercase();
+            l.contains("door") || l.contains("code")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let bytes: Vec<char> = relevant.chars().collect();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i].is_ascii_digit() {
@@ -721,6 +730,38 @@ mod tests {
         assert_eq!(c.code, citygen::rng::door_code(seed, b, c.level, c.number));
         let said = st.log.iter().filter(|e| e.text.contains("notes")).count();
         assert_eq!(said, n);
+    }
+
+    #[test]
+    fn only_door_and_code_lines_teach_codes() {
+        let mut st = state();
+        let mut found = None;
+        'all: for b in residential(&st) {
+            let h = ensure_host(&mut st, HostId::Building(b)).clone();
+            for u in h.users.iter().filter(|u| u.person.is_some()) {
+                let path = format!("{}/notes.txt", u.home);
+                if exists(&h, &path) && text(&h, &path).contains("door is") {
+                    found = Some((b, path.clone(), text(&h, &path)));
+                    break 'all;
+                }
+            }
+        }
+        let (b, path, body) = found.expect("a notes file with a code");
+        let code = body
+            .split(|c: char| !c.is_ascii_digit())
+            .find(|w| w.len() == 4)
+            .expect("a four-digit code")
+            .to_string();
+        let year = format!("Back in 2087 we met, ref {code}.");
+        note_codes(&mut st, HostId::Building(b), &path, &year);
+        assert!(st.journal.codes().is_empty(), "a year line taught a code");
+        note_codes(
+            &mut st,
+            HostId::Building(b),
+            &path,
+            &format!("the door code is {code}"),
+        );
+        assert!(!st.journal.codes().is_empty());
     }
 
     #[test]
