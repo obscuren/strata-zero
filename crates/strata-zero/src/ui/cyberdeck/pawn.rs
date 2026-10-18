@@ -3,6 +3,7 @@
 
 use super::{DeckView, GLASS_ROWS, GLASS_TEXT_W, GlassTone, Part, Pen, Switch};
 use crate::ui::chrome::{CYAN, MAGENTA, PANEL_BG};
+use game::DUMP_HEAT;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
@@ -226,9 +227,9 @@ fn glass(p: &mut Pen, view: &DeckView) {
 
 /// HEAT: seven cells, one lit for each seventh of the trace begun.
 fn gauge(p: &mut Pen, view: &DeckView) {
-    let lit = view
-        .heat
-        .map_or(0, |h| (usize::from(h.min(100)) * 7).div_ceil(100));
+    let lit = view.heat.map_or(0, |h| {
+        (usize::from(h.min(DUMP_HEAT)) * 7).div_ceil(usize::from(DUMP_HEAT))
+    });
     p.put(50, 7, "HEAT", LABEL, Some(BODY), true);
     p.put(50, 8, &"▮".repeat(lit), HOT, Some(BODY), false);
     let off = "▯".repeat(7 - lit);
@@ -291,9 +292,9 @@ fn failsafe(p: &mut Pen, switch: Switch) {
     }
 }
 
-/// Two rows of keycaps, one missing and one replaced, and a space bar.
+/// Two rows of keycaps, one of them a magenta replacement, and a space bar.
 fn keyboard(p: &mut Pen) {
-    let caps = "▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ··  ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆";
+    let caps = "▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆  ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆";
     p.put(5, 15, caps, KEYS, Some(BODY), false);
     p.put(20, 15, "▆▆", MAGENTA, Some(BODY), false);
     p.put(11, 16, &"▆".repeat(56), KEYS, Some(BODY), false);
@@ -348,8 +349,15 @@ fn ghost(p: &mut Pen, r: Rect, fg: Color, label: Option<&str>) {
         ['┌', '┐', '└', '┘', '┄', '┆'],
     );
     if let Some(label) = label {
-        let label: String = label.chars().take(usize::from(r.width) - 3).collect();
-        p.put(r.x + 2, r.y + 1, &label, fg, None, true);
+        // Inside the borders there are `width - 2` cells; the label sits one in
+        // from the left when it fills them. A long name gives way, never the tail.
+        let room = usize::from(r.width) - 2;
+        let (name, tail) = label.split_at(label.rfind(" ▸ ").unwrap_or(label.len()));
+        let tail_w = tail.chars().count();
+        let name: String = name.chars().take(room.saturating_sub(tail_w)).collect();
+        let label = format!("{name}{tail}");
+        let x = if label.chars().count() < room { 2 } else { 1 };
+        p.put(r.x + x, r.y + 1, &label, fg, None, true);
     }
 }
 
@@ -607,6 +615,37 @@ mod tests {
         assert_eq!(buf[(OX + 2, 19)].symbol(), "┌");
         assert_eq!(buf[(OX + 2, 20)].symbol(), "└");
         assert!(!row(&buf, 19).contains("ATTACK"));
+    }
+
+    #[test]
+    fn a_long_carry_name_gives_way_to_the_slot_letter() {
+        let mut v = lit_kit();
+        v.point = Part::Slot(1);
+        v.held = Some(Held {
+            from: 0,
+            cart: cart("ATTACK", 1),
+            start: 1,
+            letter: 'B',
+        });
+        assert!(row(&render(&v), 2).contains("ATTACK ▸ B"));
+        v.held = Some(Held {
+            from: 0,
+            cart: cart("BACKDOOR", 1),
+            start: 1,
+            letter: 'B',
+        });
+        let line = row(&render(&v), 2);
+        assert!(line.contains("▸ B"), "{line}");
+        assert!(!line.contains("BACKDOOR"));
+        assert!(line.contains("BACKD"), "{line}");
+    }
+
+    #[test]
+    fn the_heat_gauge_runs_to_the_dump_threshold() {
+        let mut v = lit_kit();
+        v.heat = Some(game::DUMP_HEAT / 2);
+        let line = row(&render(&v), 8);
+        assert_eq!(line.matches('▮').count(), 4, "{line}");
     }
 
     #[test]
