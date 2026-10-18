@@ -1026,14 +1026,25 @@ pub fn land_at(st: &mut AppState, b: BuildingId) -> Result<String, String> {
     if let Some(why) = jack_in_refusal(st) {
         return Err(why);
     }
-    let trap = use_backdoor(st, b)?;
-    let gate = st
-        .city
-        .as_ref()
-        .and_then(|c| crate::constructs::city_gate(c, b))
-        .ok_or("that gate is gone")?;
-    let bonus = st.sight_bonus();
+    // Everything that can stop the landing is settled before the key is used.
     let home = st.home;
+    let city = st.city.as_ref().ok_or("no city")?;
+    let player = st.player.as_ref().ok_or("no body")?;
+    if player.jacked_in() {
+        return Err("already jacked in".to_string());
+    }
+    if !home.is_some_and(|h| h.place() == player.place) {
+        return Err("only the rig lands you at a backdoor".to_string());
+    }
+    let port = player
+        .terminal_in_reach(city, home.as_ref())
+        .ok_or("no terminal within reach")?;
+    if !city.walkable(StratumKind::Net, port) {
+        return Err("the port is dead".to_string());
+    }
+    let gate = crate::constructs::city_gate(city, b).ok_or("that gate is gone")?;
+    let trap = use_backdoor(st, b)?;
+    let bonus = st.sight_bonus();
     let city = st.city.as_ref().ok_or("no city")?;
     let player = st.player.as_mut().ok_or("no body")?;
     let from = player.place;
@@ -1058,12 +1069,12 @@ pub fn hop(st: &mut AppState, b: BuildingId) -> Result<String, String> {
     if st.backdoors.route.is_none() {
         return Err("no route home".to_string());
     }
-    let trap = use_backdoor(st, b)?;
     let gate = st
         .city
         .as_ref()
         .and_then(|c| crate::constructs::city_gate(c, b))
         .ok_or("that gate is gone")?;
+    let trap = use_backdoor(st, b)?;
     if st.net.run.take().is_some() {
         st.say("run aborted");
     }
