@@ -629,7 +629,7 @@ pub fn stamp(minute: u64) -> String {
 pub enum EntryKind {
     Code(Code),
     Card(ItemId),
-    Backdoor,
+    Backdoor(usize),
 }
 
 /// One journal line.
@@ -716,22 +716,36 @@ pub fn entries(st: &AppState) -> Vec<(BuildingId, String, Vec<Entry>)> {
             at: None,
         });
     }
-    for b in &st.net.backdoors {
-        let at = st
-            .net
-            .hacks
-            .iter()
-            .find(|h| h.building == *b && h.op == game::Op::Backdoor)
-            .map(|h| h.at);
-        let name = crate::net::building_name(st, *b);
-        let when = at
-            .map(|a| format!(" · planted {}", stamp(a)))
-            .unwrap_or_default();
-        by.entry(*b).or_default().push(Entry {
-            building: *b,
-            kind: EntryKind::Backdoor,
-            text: format!("backdoor · `{name}`'s gate is yours{when}"),
-            at,
+    for (i, d) in st.backdoors.list.iter().enumerate() {
+        let name = crate::net::building_name(st, d.building);
+        let who = match &d.kind {
+            crate::backdoors::Kind::Net { .. } => format!("backdoor · root on `{name}`"),
+            crate::backdoors::Kind::Key { user } => {
+                let display = st
+                    .helix
+                    .hosts
+                    .get(&crate::helix::shell::HostId::Building(d.building))
+                    .and_then(|h| h.users.iter().find(|u| u.name == *user))
+                    .map(|u| u.display.clone())
+                    .unwrap_or_else(|| user.clone());
+                format!("key · `{display}`'s login on `{name}`")
+            }
+        };
+        let tail = match d.state {
+            crate::backdoors::State::Burned { at, why } => {
+                format!("BURNED {} · {}", stamp(at), why.label())
+            }
+            _ => format!(
+                "planted {} · {}",
+                stamp(d.planted),
+                d.health(st.net.now(st)).label()
+            ),
+        };
+        by.entry(d.building).or_default().push(Entry {
+            building: d.building,
+            kind: EntryKind::Backdoor(i),
+            text: format!("{who} · {tail}"),
+            at: Some(d.planted),
         });
     }
     let district = |b: BuildingId| -> String {
@@ -1036,6 +1050,8 @@ mod tests {
             game::Op::Backdoor,
             now,
         );
+        let seed = st.city.as_ref().unwrap().seed;
+        st.backdoors.plant_net(b, 1, seed, now);
         let groups = entries(&st);
         assert_eq!(groups.len(), 1);
         let (gb, header, es) = &groups[0];
@@ -1074,12 +1090,11 @@ mod tests {
         );
         let door = es
             .iter()
-            .find(|e| matches!(e.kind, EntryKind::Backdoor))
+            .find(|e| matches!(e.kind, EntryKind::Backdoor(_)))
             .unwrap();
         assert!(
-            door.text.starts_with(&format!(
-                "backdoor · `{name}`'s gate is yours · planted day"
-            )),
+            door.text
+                .starts_with(&format!("backdoor · root on `{name}` · planted day")),
             "{}",
             door.text
         );

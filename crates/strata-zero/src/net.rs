@@ -1,5 +1,5 @@
 //! The Net's state this session: every construct's trace, the hacks that landed,
-//! the backdoors, the deck's cooling after a dump, and the program in flight.
+//! the deck's cooling after a dump, and the program in flight.
 
 use crate::app::{AppState, FxInstance};
 use crate::constructs::Constructs;
@@ -149,7 +149,6 @@ pub struct NetState {
     /// Constructs whose trace has already been routed away once this session.
     pub null_routed: BTreeSet<BuildingId>,
     pub hacks: Vec<Hack>,
-    pub backdoors: BTreeSet<BuildingId>,
     /// The game minute the dumped deck jacks in again.
     pub cooling_until: Option<u64>,
     /// The program in flight.
@@ -176,7 +175,6 @@ impl Default for NetState {
             traces: BTreeMap::new(),
             null_routed: BTreeSet::new(),
             hacks: Vec::new(),
-            backdoors: BTreeSet::new(),
             cooling_until: None,
             run: None,
             beat: 0,
@@ -254,7 +252,7 @@ impl NetState {
             .filter(move |h| h.until.is_none_or(|u| now < u))
     }
 
-    /// Records a landed hack; a backdoor is forever.
+    /// Records a landed hack; a backdoor's hack is logged without an end.
     pub fn land(&mut self, b: BuildingId, target: HackTarget, kind: Target, op: Op, now: u64) {
         // A hack lasts an hour, or until the building's alert ends, whichever is
         // sooner; a broken piece stays down the whole hour whatever the alert does.
@@ -265,9 +263,6 @@ impl NetState {
             .filter(|u| now < *u && op != Op::Attack);
         let until = (op != Op::Backdoor)
             .then(|| alert_end.map_or(now + HACK_MINUTES, |u| u.min(now + HACK_MINUTES)));
-        if op == Op::Backdoor {
-            self.backdoors.insert(b);
-        }
         self.hacks.push(Hack {
             building: b,
             target,
@@ -329,8 +324,14 @@ impl NetState {
     }
 
     /// Sets every guard of a generated construct standing or lifted by the hacks.
-    pub fn sync_guards(&self, constructs: &mut Constructs, b: BuildingId, now: u64) {
-        let backdoor = self.backdoors.contains(&b);
+    pub fn sync_guards(
+        &self,
+        constructs: &mut Constructs,
+        b: BuildingId,
+        now: u64,
+        roots: &BTreeSet<BuildingId>,
+    ) {
+        let backdoor = roots.contains(&b);
         let lifted: Vec<usize> = self
             .live(now)
             .filter(|h| matches!(h.op, Op::Crack | Op::Attack))
@@ -350,7 +351,13 @@ impl NetState {
 
     /// The game minutes up to `now` pass: hacks expire, every trace the player is
     /// not inside cools, alerts end and their guards stand again.
-    pub fn minute(&mut self, now: u64, inside: Option<BuildingId>, constructs: &mut Constructs) {
+    pub fn minute(
+        &mut self,
+        now: u64,
+        inside: Option<BuildingId>,
+        constructs: &mut Constructs,
+        roots: &BTreeSet<BuildingId>,
+    ) {
         if now <= self.last_minute {
             return;
         }
@@ -359,7 +366,7 @@ impl NetState {
         let buildings: Vec<BuildingId> = self.traces.keys().copied().collect();
         for m in from..=now {
             for b in &buildings {
-                let backdoor = self.backdoors.contains(b);
+                let backdoor = roots.contains(b);
                 let t = self.traces.get_mut(b).expect("traced");
                 let ending = t.alert_until.is_some_and(|u| m >= u);
                 if ending || inside != Some(*b) {
@@ -369,7 +376,7 @@ impl NetState {
         }
         self.hacks.retain(|h| h.until.is_none_or(|u| now < u));
         for b in buildings {
-            self.sync_guards(constructs, b, now);
+            self.sync_guards(constructs, b, now, roots);
         }
     }
 
@@ -441,6 +448,12 @@ pub fn target_kind(st: &AppState, b: BuildingId, target: HackTarget) -> Option<T
     }
 }
 
+/// Why a Backdoor program may not be planted here, in the shell's words.
+pub fn plant_net_refusal(st: &AppState, b: BuildingId) -> Option<String> {
+    let now = st.net.now(st);
+    st.backdoors.can_plant(b, now).err().map(|r| r.words())
+}
+
 /// Starts a program against a target in the construct the player stands in.
 pub fn start_run(st: &mut AppState, program: ItemId, target: HackTarget) -> Result<String, String> {
     let Some(Place::Construct(b)) = st.player.as_ref().map(|p| p.place) else {
@@ -468,6 +481,11 @@ pub fn start_run(st: &mut AppState, program: ItemId, target: HackTarget) -> Resu
             .copied(node_of(target).unwrap_or(NodeId(u32::MAX)), now)
     {
         return Err("copied already".to_string());
+    }
+    if spec.op == Op::Backdoor
+        && let Some(why) = plant_net_refusal(st, b)
+    {
+        return Err(why);
     }
     if let HackTarget::Guard { building, index } = target
         && st.constructs.get(building).is_none_or(|k| {
@@ -606,7 +624,8 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
             if left == 0 {
                 st.net.run = None;
                 st.net.land(b, run.target, kind, Op::Attack, now);
-                st.net.sync_guards(&mut st.constructs, b, now);
+                let roots = st.backdoors.roots();
+                st.net.sync_guards(&mut st.constructs, b, now, &roots);
                 kick(st, 6);
                 let line = format!("{} ICE broken", grade.label());
                 st.say(line.clone());
@@ -629,7 +648,7 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
         let done = run.done + 1;
         if done >= run.work {
             st.net.run = None;
-            let line = land(st, b, run.target, kind, spec.op, now);
+            let line = land(st, b, run.target, kind, spec.op, spec.rating, now);
             st.say(line.clone());
             kick(st, 6);
             return Some(line);
@@ -650,6 +669,7 @@ fn land(
     target: HackTarget,
     kind: Target,
     op: Op,
+    rating: u8,
     now: u64,
 ) -> String {
     st.net.land(b, target, kind, op, now);
@@ -681,7 +701,15 @@ fn land(
                 None => base.to_string(),
             }
         }
-        (Op::Backdoor, _) => format!("backdoor planted · `{name}`'s gate is yours"),
+        (Op::Backdoor, _) => {
+            let seed = st.city.as_ref().map_or(0, |c| c.seed);
+            st.backdoors.plant_net(b, rating, seed, now);
+            format!(
+                "backdoor planted · `{name}`'s gate is yours · {} of {}",
+                st.backdoors.slots_used(),
+                crate::backdoors::SLOTS
+            )
+        }
         (Op::Shield, _) => {
             st.net.shield = (st.net.shield + 1).min(2);
             let n = st.net.shield;
@@ -698,7 +726,8 @@ fn land(
         (Op::Crack, Target::Node(k)) => format!("{} cracked", k.label()),
         (op, _) => format!("{} landed", op.label()),
     };
-    st.net.sync_guards(&mut st.constructs, b, now);
+    let roots = st.backdoors.roots();
+    st.net.sync_guards(&mut st.constructs, b, now, &roots);
     line
 }
 
@@ -789,7 +818,8 @@ pub fn alarm_clears(st: &mut AppState, b: BuildingId) {
 pub fn raise_alarm(st: &mut AppState, b: BuildingId) -> String {
     let now = st.net.now(st);
     st.net.alarm(b, now);
-    st.net.sync_guards(&mut st.constructs, b, now);
+    let roots = st.backdoors.roots();
+    st.net.sync_guards(&mut st.constructs, b, now, &roots);
     if let Some(p) = st
         .player
         .as_ref()
@@ -1973,9 +2003,8 @@ mod tests {
             Op::Backdoor,
             30,
         );
-        assert!(net.backdoors.contains(&b(1)));
         net.alarm(b(1), 30);
-        assert!(net.backdoors.contains(&b(1)));
+        assert!(net.hacks.iter().any(|h| h.op == Op::Backdoor));
         // A hack landed during the alert ends with the alert, a backdoor does not.
         let mut net = NetState::default();
         net.trace(b(1)).add(game::ALARM_HEAT, 20);
@@ -1992,7 +2021,12 @@ mod tests {
         );
         assert_eq!(net.hacks[0].until, Some(20 + game::ALERT_MINUTES));
         let mut constructs = crate::constructs::Constructs::default();
-        net.minute(20 + game::ALERT_MINUTES, None, &mut constructs);
+        net.minute(
+            20 + game::ALERT_MINUTES,
+            None,
+            &mut constructs,
+            &BTreeSet::new(),
+        );
         assert!(net.hacks.is_empty(), "{:?}", net.hacks);
         // Cooling.
         assert_eq!(net.cooling(0), None);

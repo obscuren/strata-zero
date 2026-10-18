@@ -27,11 +27,15 @@ impl Tier {
     }
 }
 
-/// Your standing on a building: a backdoor makes you ADMIN, a card or a code USER.
+/// Your standing on a building: a Net backdoor makes you ADMIN, a key, a card or a code USER.
 pub fn tier_on(st: &AppState, b: BuildingId) -> Tier {
-    if st.net.backdoors.contains(&b) {
+    if st.backdoors.root_on(b) {
         return Tier::Admin;
     }
+    let key = st
+        .backdoors
+        .live(b)
+        .is_some_and(|d| matches!(d.kind, crate::backdoors::Kind::Key { .. }));
     let card = st
         .character
         .inventory
@@ -39,7 +43,7 @@ pub fn tier_on(st: &AppState, b: BuildingId) -> Tier {
         .filter_map(|s| credentials::parse_keycard(&s.item))
         .any(|(cb, _)| cb == b);
     let code = st.journal.codes().iter().any(|c| c.building == b);
-    if card || code {
+    if key || card || code {
         Tier::User
     } else {
         Tier::Guest
@@ -510,6 +514,36 @@ mod tests {
     }
 
     #[test]
+    fn a_key_keeps_the_tier_and_the_user_after_the_card_is_gone() {
+        use crate::helix::hosts::user_for;
+        use crate::helix::shell::HostId;
+        let (mut st, b, _) = state();
+        crate::credentials::prepare(&mut st, b);
+        let h = st
+            .interiors
+            .homes_of(b)
+            .unwrap()
+            .households()
+            .next()
+            .unwrap()
+            .0;
+        st.character.give(crate::credentials::keycard_id(b, h), 1);
+        let user = user_for(&st, HostId::Building(b));
+        assert_ne!(user, "guest");
+        st.backdoors.plant_key(b, &user, 100, 0, 0);
+        st.character
+            .inventory
+            .retain(|s| crate::credentials::parse_keycard(&s.item).is_none());
+        assert_eq!(tier_on(&st, b), Tier::User);
+        assert_eq!(user_for(&st, HostId::Building(b)), user);
+        st.backdoors.burn(b, crate::backdoors::Why::You, 1);
+        assert_eq!(tier_on(&st, b), Tier::Guest);
+        st.backdoors.plant_net(b, 1, 0, 2);
+        assert_eq!(tier_on(&st, b), Tier::Admin);
+        assert_eq!(user_for(&st, HostId::Building(b)), "root");
+    }
+
+    #[test]
     fn tiers_come_from_what_you_hold() {
         let (mut st, b, _) = state();
         crate::credentials::prepare(&mut st, b);
@@ -545,6 +579,7 @@ mod tests {
             Op::Backdoor,
             now,
         );
+        st.backdoors.plant_net(b, 1, 0, now);
         assert_eq!(tier_on(&st, b), Tier::Admin);
         assert!(Tier::Guest < Tier::User && Tier::User < Tier::Admin);
     }

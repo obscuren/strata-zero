@@ -1874,7 +1874,8 @@ impl Screen for MapScreen {
             Some(Place::Construct(b)) => Some(b),
             _ => None,
         };
-        st.net.minute(now, inside, &mut st.constructs);
+        let roots = st.backdoors.roots();
+        st.net.minute(now, inside, &mut st.constructs, &roots);
         // The beat of a calm construct: one per frame at most, so a long menu is
         // never a burst of rolls.
         let was_engaged = st.net.engaged.is_some();
@@ -5646,13 +5647,14 @@ mod tests {
         for _ in 0..5 {
             s.update(&mut st, &[key(KeyCode::Char('.'))]);
         }
-        assert!(st.net.backdoors.contains(&b), "{:?}", last(&st));
+        assert!(st.backdoors.root_on(b), "{:?}", last(&st));
         let k = st.constructs.get(b).unwrap();
         assert!(!k.guards.is_empty());
         assert_eq!(k.guard_at(k.guards[0].pos), None, "the gate guard is down");
         let heat = st.net.traces[&b].heat;
         let now = st.net.now(&st);
-        st.net.minute(now + 1, None, &mut st.constructs);
+        st.net
+            .minute(now + 1, None, &mut st.constructs, &st.backdoors.roots());
         assert_eq!(st.net.traces[&b].heat, heat.saturating_sub(2));
         // On alert, a standing guard beside you hits you at the end of a turn.
         let guard = st.constructs.get(b).unwrap().guards[1].pos;
@@ -5664,8 +5666,12 @@ mod tests {
         assert!(logged(&st, "grey ICE hits"), "{:?}", last(&st));
         // The alert ends: heat zero, the guards stand again but the backdoor's gate guard.
         let now = st.net.now(&st);
-        st.net
-            .minute(now + game::ALERT_MINUTES + 1, None, &mut st.constructs);
+        st.net.minute(
+            now + game::ALERT_MINUTES + 1,
+            None,
+            &mut st.constructs,
+            &st.backdoors.roots(),
+        );
         assert_eq!(st.net.traces[&b].heat, 0);
         assert!(!st.net.alert(b, now + game::ALERT_MINUTES + 1));
         let k = st.constructs.get(b).unwrap();
@@ -6118,7 +6124,8 @@ mod tests {
             game::Op::Crack,
             now,
         );
-        st.net.sync_guards(&mut st.constructs, b, now);
+        st.net
+            .sync_guards(&mut st.constructs, b, now, &st.backdoors.roots());
         let hide = room_tile(&st, b);
         stand(&mut st, &mut s, Place::Construct(b), hide);
         let at = game::At {
@@ -6188,15 +6195,20 @@ mod tests {
         assert_eq!(k.guard_at(k.guards[0].pos), None);
         assert!(k.tiles[k.guards[0].pos].is_walkable());
         let now = st.net.now(&st);
-        st.net.sync_guards(&mut st.constructs, b, now);
+        st.net
+            .sync_guards(&mut st.constructs, b, now, &st.backdoors.roots());
         assert_eq!(
             st.constructs.get(b).unwrap().guard_at(post),
             None,
             "stays down"
         );
         // After the hour it stands where it was, whole again.
-        st.net
-            .minute(now + game::HACK_MINUTES, None, &mut st.constructs);
+        st.net.minute(
+            now + game::HACK_MINUTES,
+            None,
+            &mut st.constructs,
+            &st.backdoors.roots(),
+        );
         let k = st.constructs.get(b).unwrap();
         assert_eq!(k.guard_at(k.guards[0].pos), Some(0));
         advance(&mut st, &mut s);
@@ -6405,7 +6417,8 @@ mod tests {
             game::Op::Crack,
             now,
         );
-        st.net.sync_guards(&mut st.constructs, b, now);
+        st.net
+            .sync_guards(&mut st.constructs, b, now, &st.backdoors.roots());
         // From a room tile diagonal to the spine, with the asleep gate guard parked on
         // the spine tile beside it: the attack lands and the piece wakes to you.
         let room = st.constructs.get(b).unwrap().rooms[0];
@@ -6509,11 +6522,16 @@ mod tests {
             game::Op::Attack,
             now,
         );
-        st.net.sync_guards(&mut st.constructs, b, now);
+        st.net
+            .sync_guards(&mut st.constructs, b, now, &st.backdoors.roots());
         let spot = st.constructs.get(b).unwrap().guards[0].pos;
         st.constructs.get_mut(b).unwrap().move_guard(1, spot);
-        st.net
-            .minute(now + game::HACK_MINUTES, None, &mut st.constructs);
+        st.net.minute(
+            now + game::HACK_MINUTES,
+            None,
+            &mut st.constructs,
+            &st.backdoors.roots(),
+        );
         let k = st.constructs.get(b).unwrap();
         assert_eq!(
             k.guard_at(spot),
@@ -6523,8 +6541,12 @@ mod tests {
         assert_eq!(k.guards[0].pos, spot);
         let away = k.guards[1].post;
         st.constructs.get_mut(b).unwrap().move_guard(1, away);
-        st.net
-            .sync_guards(&mut st.constructs, b, now + game::HACK_MINUTES);
+        st.net.sync_guards(
+            &mut st.constructs,
+            b,
+            now + game::HACK_MINUTES,
+            &st.backdoors.roots(),
+        );
         let k = st.constructs.get(b).unwrap();
         assert_eq!(k.guard_at(spot), Some(0), "and stands once it is free");
     }
@@ -8610,7 +8632,8 @@ mod tests {
         let kind = crate::net::target_kind(&st, b, target).unwrap();
         let now = st.net.now(&st);
         st.net.land(b, target, kind, game::Op::Attack, now);
-        st.net.sync_guards(&mut st.constructs, b, now);
+        st.net
+            .sync_guards(&mut st.constructs, b, now, &st.backdoors.roots());
         {
             let k = st.constructs.get(b).unwrap();
             assert_eq!(k.guard_at(k.guards[0].pos), None, "lifted");
@@ -8622,10 +8645,18 @@ mod tests {
         );
         // The hour ends the hack: the piece stands and, at the round's wrap, takes
         // its place at the end of the order.
-        st.net
-            .minute(now + game::HACK_MINUTES, Some(b), &mut st.constructs);
-        st.net
-            .sync_guards(&mut st.constructs, b, now + game::HACK_MINUTES);
+        st.net.minute(
+            now + game::HACK_MINUTES,
+            Some(b),
+            &mut st.constructs,
+            &st.backdoors.roots(),
+        );
+        st.net.sync_guards(
+            &mut st.constructs,
+            b,
+            now + game::HACK_MINUTES,
+            &st.backdoors.roots(),
+        );
         {
             let k = st.constructs.get(b).unwrap();
             assert_eq!(k.guard_at(k.guards[0].pos), Some(0), "standing again");
@@ -8900,7 +8931,8 @@ mod tests {
         let kind = crate::net::target_kind(&st, b, target).unwrap();
         let now = st.net.now(&st);
         st.net.land(b, target, kind, game::Op::Attack, now);
-        st.net.sync_guards(&mut st.constructs, b, now);
+        st.net
+            .sync_guards(&mut st.constructs, b, now, &st.backdoors.roots());
         let down = |st: &AppState| {
             let k = st.constructs.get(b).unwrap();
             k.guard_at(k.guards[0].pos).is_none()
@@ -8910,11 +8942,16 @@ mod tests {
         crate::net::raise_alarm(&mut st, b);
         assert!(down(&st), "the alarm leaves a broken piece broken");
         st.net.trace(b).alert_until = Some(now + 10);
-        st.net.minute(now + 11, Some(b), &mut st.constructs);
+        st.net
+            .minute(now + 11, Some(b), &mut st.constructs, &st.backdoors.roots());
         assert!(down(&st), "the alert's end leaves it broken");
         // The hour brings it back.
-        st.net
-            .minute(now + game::HACK_MINUTES, Some(b), &mut st.constructs);
+        st.net.minute(
+            now + game::HACK_MINUTES,
+            Some(b),
+            &mut st.constructs,
+            &st.backdoors.roots(),
+        );
         assert!(!down(&st), "whole again after the hour");
     }
 
@@ -8963,7 +9000,8 @@ mod tests {
             let kind = crate::net::target_kind(&st, b, target).unwrap();
             st.net.land(b, target, kind, game::Op::Attack, now);
         }
-        st.net.sync_guards(&mut st.constructs, b, now);
+        st.net
+            .sync_guards(&mut st.constructs, b, now, &st.backdoors.roots());
         st.net.force_roll = Some(10);
         crate::net::start_run(&mut st, ItemId::new("copy"), game::HackTarget::Node(vault)).unwrap();
         st.net.trace(b).heat = game::ALARM_HEAT - 1;
@@ -8997,7 +9035,8 @@ mod tests {
         };
         let kind = crate::net::target_kind(&st, b, far).unwrap();
         st.net.land(b, far, kind, game::Op::Attack, now);
-        st.net.sync_guards(&mut st.constructs, b, now);
+        st.net
+            .sync_guards(&mut st.constructs, b, now, &st.backdoors.roots());
         let gate = st.constructs.get(b).unwrap().guards[0].pos;
         let near = beside(&st, b, gate);
         stand(&mut st, &mut s, Place::Construct(b), near);
