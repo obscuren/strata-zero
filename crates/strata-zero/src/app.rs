@@ -68,6 +68,7 @@ pub struct AppState {
     pub home: Option<crate::home::HomeRig>,
     /// What the player knows: door codes, and the lost cards already laid out.
     pub journal: crate::credentials::Journal,
+    pub helix: crate::helix::Helix,
 }
 
 /// One ability effect playing on the map.
@@ -138,6 +139,7 @@ impl AppState {
             sidebar: Sidebar::default(),
             home: None,
             journal: Default::default(),
+            helix: Default::default(),
         }
     }
 
@@ -211,6 +213,7 @@ impl AppState {
         self.constructs = Default::default();
         self.net = Default::default();
         self.journal = Default::default();
+        self.helix = Default::default();
         crate::credentials::purge(&mut self.content, &mut self.character);
         self.ground = Default::default();
         self.player = None;

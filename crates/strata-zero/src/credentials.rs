@@ -32,6 +32,8 @@ pub enum Source {
     Keypad,
     /// Read in a mail on the rig.
     Mail,
+    /// Read in someone's notes in a shell.
+    Shell,
 }
 
 /// A message in the rig's inbox.
@@ -654,7 +656,7 @@ pub fn entries(st: &AppState) -> Vec<(BuildingId, String, Vec<Entry>)> {
     for c in st.journal.codes() {
         let whose = match c.source {
             Source::Home => "your flat".to_string(),
-            Source::ServerCopy | Source::Keypad | Source::Mail => {
+            Source::ServerCopy | Source::Keypad | Source::Mail | Source::Shell => {
                 whose_flat(st, c.building, c.level, c.number)
             }
         };
@@ -662,6 +664,10 @@ pub fn entries(st: &AppState) -> Vec<(BuildingId, String, Vec<Entry>)> {
             Source::ServerCopy => format!("copied off the server, {}", stamp(c.at)),
             Source::Keypad => format!("keyed in at the door, {}", stamp(c.at)),
             Source::Mail => format!("from a mail on the rig, {}", stamp(c.at)),
+            Source::Shell => match owner_name(st, c.building, c.level, c.number) {
+                Some(n) => format!("read in `{n}`'s notes, {}", stamp(c.at)),
+                None => format!("read in someone's notes, {}", stamp(c.at)),
+            },
             Source::Home => "your own door".to_string(),
         };
         by.entry(c.building).or_default().push(Entry {

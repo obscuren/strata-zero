@@ -408,4 +408,14 @@ Content(
                  categories: ["iron", "edge", "meat"], skills: ["handguns", "blades", "athletics"],
                  kit: [("cargo_pants", 1)]),
     ],
+    lore: [
+        Lore(path: "/etc/security-policy.txt", theme: Some("megacorp"), kind: None,
+             text: "HALCYON GROUP · SECURITY POLICY 11-C\nBadges are personal. Tailgating is a terminable offence.\nLifts answer to Security first and to you second.\nReport lost cards to the desk, never to a colleague.\n"),
+        Lore(path: "/etc/notice.txt", theme: Some("municipal"), kind: None,
+             text: "CIVITAS HOUSING AUTHORITY · NOTICE TO RESIDENTS\nThe lift is being serviced. Please use the stairs.\nDoor codes are the responsibility of the household.\nDo not share them with the super.\n"),
+        Lore(path: "/home/{resident}/flyer.txt", theme: Some("neon"), kind: None,
+             text: "LOTUS ROOM · FRIDAY · ALL NIGHT\ndoors at nine, glow-paint at the bar\nbring a friend, bring a bad idea\n"),
+        Lore(path: "/tmp/zine.txt", theme: Some("street"), kind: None,
+             text: "GRIT #14\nthe cameras on 3rd have been looping since Tuesday.\nask who benefits. ask who pays.\npass it on, don't keep it.\n"),
+    ],
 )

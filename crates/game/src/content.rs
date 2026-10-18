@@ -76,6 +76,20 @@ pub struct Content {
     pub categories: Vec<Category>,
     pub templates: Vec<Template>,
     pub stat_blurbs: Vec<(Stat, String)>,
+    /// Files that land on a host's disk when its theme and building kind match.
+    #[serde(default)]
+    pub lore: Vec<Lore>,
+}
+
+/// A file written on matching hosts. `{resident}` in the path is the first resident's user.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Lore {
+    pub path: String,
+    /// The device theme name; `None` matches any.
+    pub theme: Option<String>,
+    /// The building kind label; `None` matches any.
+    pub kind: Option<String>,
+    pub text: String,
 }
 
 impl Content {
