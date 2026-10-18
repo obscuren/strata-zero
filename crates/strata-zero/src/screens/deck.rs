@@ -210,7 +210,11 @@ impl Deck {
                         "Unequip",
                         Pick::Act(Action::Unequip(*slot)),
                     ));
-                    choices.push(Choice::new('i', "Inspect", Pick::Blueprint(id.clone())));
+                    let worn = Pick::Blueprint {
+                        item: id.clone(),
+                        equipped: true,
+                    };
+                    choices.push(Choice::new('i', "Inspect", worn));
                 }
                 if choices.is_empty() {
                     st.warn(format!("nothing in the pack fits {}", slot.label()));
@@ -224,7 +228,12 @@ impl Deck {
             Some(Detail::Item(id)) => {
                 let item = st.content.item(id)?;
                 let qty = st.character.count(id);
-                let mut choices = vec![Choice::new('i', "Inspect", Pick::Blueprint(id.clone()))];
+                // In the pack, so never the jacked deck: equipping takes it out.
+                let carried = Pick::Blueprint {
+                    item: id.clone(),
+                    equipped: false,
+                };
+                let mut choices = vec![Choice::new('i', "Inspect", carried)];
                 if item.slot.is_some() {
                     choices.push(Choice::new(
                         'e',
@@ -2544,6 +2553,66 @@ mod tests {
             text.contains("HACKING") && !text.contains("BLUEPRINT"),
             "{text}"
         );
+    }
+
+    /// Inspect on the first row of tab `tab` that `pick` takes: space, then `i`.
+    fn inspect(
+        d: &mut Deck,
+        st: &mut AppState,
+        tab: char,
+        pick: impl Fn(&Row) -> bool,
+    ) -> Box<dyn Screen> {
+        d.update(st, &[key(KeyCode::Char(tab))]);
+        d.row = d.rows(st).iter().position(pick).unwrap();
+        let ScreenCmd::Push { to: mut p, .. } = d.update(st, &[key(KeyCode::Char(' '))]) else {
+            panic!("space opens the popup")
+        };
+        let ScreenCmd::Replace { to, .. } = p.update(st, &[key(KeyCode::Char('i'))]) else {
+            panic!("inspect opens the blueprint window")
+        };
+        to
+    }
+
+    #[test]
+    fn inspect_follows_where_the_deck_lies() {
+        let mut st = state();
+        st.character = game::Character::debug_runner(&st.content);
+        // A spare of the model he wears, beside the pawnshop deck in his pack.
+        st.character.give(ItemId::new("rebuilt_deck"), 1);
+        let loaded = st.character.loaded.clone();
+        let mut d = Deck::new(0);
+        // From INVENTORY a deck is carried: its blueprint only reads.
+        for name in ["Pawnshop deck", "Rebuilt pawn deck"] {
+            let mut bp = inspect(&mut d, &mut st, '4', |r| r.text.contains(name));
+            st.tick += 40;
+            let text = draw(&*bp, &st, 100, 30);
+            let title = format!(" BLUEPRINT · {} ", name.to_uppercase());
+            assert!(
+                text.contains(&title) && text.contains("not jacked · equip it first"),
+                "{name}: {text}"
+            );
+            assert!(matches!(
+                bp.update(&mut st, &[key(KeyCode::Char(' '))]),
+                ScreenCmd::Stay
+            ));
+            assert_eq!(last(&st), Some("equip the deck to work on it"));
+            assert!(last_is_warning(&st));
+            assert_eq!(st.character.loaded, loaded);
+        }
+        // From GEAR's DECK slot it is the jacked deck, and works.
+        let mut bp = inspect(&mut d, &mut st, '3', |r| {
+            r.detail == Some(Detail::Slot(Slot::Deck))
+        });
+        st.tick += 40;
+        let text = draw(&*bp, &st, 100, 30);
+        assert!(
+            text.contains(" BLUEPRINT · REBUILT PAWN DECK ")
+                && text.contains("[space] eject")
+                && !text.contains("not jacked"),
+            "{text}"
+        );
+        bp.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(st.character.loaded, loaded[1..].to_vec());
     }
 
     #[test]

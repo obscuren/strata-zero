@@ -224,13 +224,13 @@ fn terminal_on_the_street() {
     shot("terminal", &st, &map, &term);
 }
 
-/// The blueprint window on `item`, opened from the deck screen's tab `tab`, over the
-/// map, at each size.
+/// The blueprint window on `item`, opened from the deck screen's tab `tab` (GEAR, `3`,
+/// opens what is worn), over the map, at each size.
 fn blueprint_shots(st: &mut AppState, tab: char, item: &str, name: &str, sizes: &[(u16, u16)]) {
     let map = MapScreen::walking(st);
     let mut deck = Deck::new(st.tick);
     deck.update(st, &[key(KeyCode::Char(tab))]);
-    let window = Blueprint::open(st, ItemId::new(item));
+    let window = Blueprint::open(st, ItemId::new(item), tab == '3');
     // The glass typed out, clear of the deck's signal jitter (three ticks in ninety).
     st.tick += 200;
     if st.tick % 90 < 3 {

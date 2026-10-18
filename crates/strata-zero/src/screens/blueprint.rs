@@ -27,15 +27,16 @@ pub struct Blueprint {
 }
 
 impl Blueprint {
-    /// The window on `item`. A deck the content knows draws as its look: the jacked
-    /// one works, a carried one only reads. Anything else has no blueprint yet.
-    pub fn open(st: &AppState, item: ItemId) -> Blueprint {
+    /// The window on `item`, `equipped` when Inspect was on the item worn (GEAR) rather
+    /// than one in the pack. A deck the content knows draws as its look: the jacked one
+    /// works, any other copy only reads. Anything else has no blueprint yet.
+    pub fn open(st: &AppState, item: ItemId, equipped: bool) -> Blueprint {
         let known = st.content.item(&item);
         let name = known.map_or_else(|| item.to_string(), |i| i.name.clone());
         let title = format!(" BLUEPRINT · {} ", name.to_uppercase());
         let deck = known.and_then(|i| i.deck).map(|_| {
-            let equipped = st.character.equipped(Slot::Deck) == Some(&item);
-            DeckTab::for_deck(st.tick, item, equipped, st)
+            let jacked = equipped && st.character.equipped(Slot::Deck) == Some(&item);
+            DeckTab::for_deck(st.tick, item, jacked, st)
         });
         Blueprint { title, deck }
     }
@@ -223,7 +224,7 @@ mod tests {
     fn the_window_frames_the_deck() {
         let mut st = state();
         st.tick = 40;
-        let bp = Blueprint::open(&st, id("pawnshop_deck"));
+        let bp = Blueprint::open(&st, id("pawnshop_deck"), true);
         st.tick += 40;
         let buf = screen(&bp, &st, 100, 30);
         let (x, y) = corner(100, 30);
@@ -289,7 +290,7 @@ mod tests {
     #[test]
     fn the_window_works_the_deck() {
         let mut st = state();
-        let mut bp = Blueprint::open(&st, id("pawnshop_deck"));
+        let mut bp = Blueprint::open(&st, id("pawnshop_deck"), true);
         // Down from slot A: the plate, the first ROM strip, then the attack in WAREZ.
         press(
             &mut bp,
@@ -349,7 +350,7 @@ mod tests {
     fn esc_unwinds_then_closes() {
         for close in [KeyCode::Esc, KeyCode::Char('q')] {
             let mut st = state();
-            let mut bp = Blueprint::open(&st, id("pawnshop_deck"));
+            let mut bp = Blueprint::open(&st, id("pawnshop_deck"), true);
             // Carrying: esc puts the cart back.
             press(
                 &mut bp,
@@ -391,8 +392,11 @@ mod tests {
         st.character = Character::debug_runner(&st.content);
         st.character.give(id("spoof"), 1);
         st.tick = 40;
-        let mut bp = Blueprint::open(&st, id("pawnshop_deck"));
+        let mut bp = Blueprint::open(&st, id("pawnshop_deck"), false);
         assert!(!deck(&bp).equipped);
+        // Opened as the jacked deck, a deck not in the DECK slot still only reads.
+        let guarded = Blueprint::open(&st, id("pawnshop_deck"), true);
+        assert!(!deck(&guarded).equipped);
         st.tick += 40;
         let buf = screen(&bp, &st, 100, 30);
         let (_, y) = corner(100, 30);
@@ -447,7 +451,7 @@ mod tests {
     fn anything_else_is_a_missing_blueprint() {
         let mut st = state();
         st.tick = 40;
-        let mut bp = Blueprint::open(&st, id("copper_coil"));
+        let mut bp = Blueprint::open(&st, id("copper_coil"), false);
         assert!(bp.deck.is_none());
         let buf = screen(&bp, &st, 100, 30);
         let (x, y) = corner(100, 30);
@@ -500,7 +504,7 @@ mod tests {
         // A deck the content does not know has no blueprint; nor has one without a spec.
         st.character.equipment.insert(Slot::Deck, id("ghost_deck"));
         st.tick = 40;
-        let bp = Blueprint::open(&st, id("ghost_deck"));
+        let bp = Blueprint::open(&st, id("ghost_deck"), true);
         let text = buffer_text(&screen(&bp, &st, 100, 30));
         assert!(
             text.contains(" BLUEPRINT · GHOST_DECK ") && text.contains("MISSING BLUEPRINT"),
@@ -510,7 +514,11 @@ mod tests {
         specless.id = id("specless_deck");
         specless.deck = None;
         st.content.items.push(specless);
-        assert!(Blueprint::open(&st, id("specless_deck")).deck.is_none());
+        assert!(
+            Blueprint::open(&st, id("specless_deck"), false)
+                .deck
+                .is_none()
+        );
 
         // No grants: the ROM row holds its label alone; the plate reads the deck's name.
         let mut bare = st.content.item(&id("pawnshop_deck")).unwrap().clone();
@@ -519,7 +527,7 @@ mod tests {
         bare.grants.clear();
         st.content.items.push(bare);
         st.character.equipment.insert(Slot::Deck, id("bare_deck"));
-        let mut bp = Blueprint::open(&st, id("bare_deck"));
+        let mut bp = Blueprint::open(&st, id("bare_deck"), true);
         assert!(deck(&bp).equipped);
         st.tick += 40;
         let text = buffer_text(&screen(&bp, &st, 100, 30));
@@ -544,7 +552,7 @@ mod tests {
         st.content.items.push(quiet);
         st.character.equipment.insert(Slot::Deck, id("quiet_deck"));
         // The jacked deck's part is remembered across decks: it opens on the plate.
-        let mut bp = Blueprint::open(&st, id("quiet_deck"));
+        let mut bp = Blueprint::open(&st, id("quiet_deck"), true);
         assert_eq!(deck(&bp).point, Part::Plate);
         press(&mut bp, &mut st, &[KeyCode::Down]);
         assert_eq!(deck(&bp).point, Part::Rom(0));
@@ -562,7 +570,7 @@ mod tests {
         for t in ["wide_band", "ice_pick"] {
             st.character.talents.insert(game::TalentId::new(t), 2);
         }
-        let mut bp = Blueprint::open(&st, id("pawnshop_deck"));
+        let mut bp = Blueprint::open(&st, id("pawnshop_deck"), true);
         press(&mut bp, &mut st, &[KeyCode::Down, KeyCode::Down]);
         assert_eq!(deck(&bp).point, Part::Rom(0));
         st.tick += 60;
@@ -574,22 +582,22 @@ mod tests {
     #[test]
     fn the_equipped_deck_remembers_its_part() {
         let mut st = state();
-        let mut bp = Blueprint::open(&st, id("pawnshop_deck"));
+        let mut bp = Blueprint::open(&st, id("pawnshop_deck"), true);
         press(&mut bp, &mut st, &[KeyCode::Right, KeyCode::Right]);
         assert_eq!(deck(&bp).point, Part::Failsafe);
         assert!(matches!(
             press(&mut bp, &mut st, &[KeyCode::Esc]),
             ScreenCmd::Pop { .. }
         ));
-        let again = Blueprint::open(&st, id("pawnshop_deck"));
+        let again = Blueprint::open(&st, id("pawnshop_deck"), true);
         assert_eq!(deck(&again).point, Part::Failsafe);
 
         // A carried deck opens on slot A and leaves the jacked deck's part alone.
         st.character.give(id("rebuilt_deck"), 1);
-        let mut carried = Blueprint::open(&st, id("rebuilt_deck"));
+        let mut carried = Blueprint::open(&st, id("rebuilt_deck"), false);
         assert_eq!(deck(&carried).point, Part::Slot(0));
         press(&mut carried, &mut st, &[KeyCode::Down, KeyCode::Esc]);
-        let again = Blueprint::open(&st, id("pawnshop_deck"));
+        let again = Blueprint::open(&st, id("pawnshop_deck"), true);
         assert_eq!(deck(&again).point, Part::Failsafe);
     }
 }
