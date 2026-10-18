@@ -507,10 +507,10 @@ pub fn mail_open(st: &mut AppState, i: usize) -> Result<Vec<String>, String> {
 /// What you know, by building, with the marks stripped.
 pub fn journal_lines(st: &AppState) -> Vec<String> {
     let groups = credentials::entries(st);
-    if groups.is_empty() {
+    let mut lines = credentials::extra_lines(st);
+    if groups.is_empty() && lines.is_empty() {
         return vec!["NOTHING KNOWN YET".to_string()];
     }
-    let mut lines = Vec::new();
     for (_, header, es) in groups {
         lines.push(header);
         for e in es {

@@ -426,8 +426,11 @@ impl Backdoors {
         {
             match t.relays.get(t.at).copied() {
                 Some(b) => {
-                    self.burn(b, Why::Trace, t.moves_at);
-                    events.push(Event::RelayBurned(b));
+                    // A relay already burned (checked, honeypot, raid) costs the trace nothing.
+                    if self.held(b).is_some() {
+                        self.burn(b, Why::Trace, t.moves_at);
+                        events.push(Event::RelayBurned(b));
+                    }
                     let at = t.at + 1;
                     let next = match t.relays.get(at) {
                         Some(n) => self.hold_of(*n),
@@ -701,6 +704,30 @@ mod tests {
         bd.start_trace(1);
         assert!(bd.trace.as_ref().unwrap().relays.is_empty());
         assert_eq!(bd.minute(1 + LAST_LEG), vec![Event::Raid]);
+    }
+
+    #[test]
+    fn the_trace_walks_past_a_relay_that_burned_already() {
+        let mut bd = Backdoors::default();
+        bd.plant_net(b(1), 1, 1, 0);
+        bd.plant_key(b(2), "u", 100, 1, 0);
+        bd.start_route(Some(b(1)));
+        bd.hop(b(2));
+        bd.start_trace(100);
+        // the relay it reaches first is burned before the trace gets there
+        bd.burn(b(2), Why::Honeypot, 101);
+        assert!(
+            bd.minute(100 + HOLD_KEY).is_empty(),
+            "no burn event, no patch"
+        );
+        assert!(!bd.patched.contains_key(&b(2)));
+        // the next relay's hold runs from the same moment
+        let at = 100 + HOLD_KEY + HOLD_NET;
+        assert_eq!(bd.trace.as_ref().unwrap().moves_at, at);
+        assert_eq!(
+            bd.minute(at),
+            vec![Event::RelayBurned(b(1)), Event::LastLeg]
+        );
     }
 
     #[test]

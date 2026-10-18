@@ -180,6 +180,9 @@ pub fn first_mail(st: &mut AppState) {
     if st.journal.favour.is_some() {
         return;
     }
+    if st.backdoors.fixer_quiet(st.net.now(st)) {
+        return;
+    }
     let Some(rig) = st.home else {
         return;
     };
@@ -615,6 +618,49 @@ pub fn move_in(st: &mut AppState) {
         st.character.give(id, 1);
     }
     first_mail(st);
+}
+
+/// The fixer's mail when the rig comes back from the raid.
+pub fn fixer_mail(st: &mut AppState) {
+    let from = st
+        .journal
+        .favour
+        .as_ref()
+        .map(|f| f.fixer.clone())
+        .unwrap_or_else(|| "Dez".to_string());
+    let now = st.net.now(st);
+    st.journal.mails.push(Mail {
+        from,
+        subject: "lose this number".to_string(),
+        body: vec![
+            "They came to your door. I don't know you for a while.".to_string(),
+            "Don't call.".to_string(),
+        ],
+        read: false,
+        at: now,
+    });
+}
+
+/// The dim lines above the journal's groups: the route, the trace, the seizure.
+pub fn extra_lines(st: &AppState) -> Vec<String> {
+    let now = st.net.now(st);
+    let name =
+        |b: BuildingId| crate::helix::hosts::hostname(st, crate::helix::shell::HostId::Building(b));
+    let mut out = Vec::new();
+    if let Some(r) = st.backdoors.route.as_ref() {
+        let names: Vec<String> = r.relays.iter().map(|b| name(*b)).collect();
+        out.push(format!("route · {}", crate::backdoors::route_line(&names)));
+    }
+    if let Some(t) = st.backdoors.trace_line(now, &name) {
+        out.push(t.replacen("TRACE", "trace", 1));
+    }
+    if let Some(u) = st.backdoors.rig_seized_until.filter(|u| now < *u) {
+        out.push(format!("rig seized · back {}", stamp(u)));
+    }
+    if let Some(u) = st.backdoors.fixer_quiet_until.filter(|u| now < *u) {
+        out.push(format!("fixers quiet until {}", stamp(u)));
+    }
+    out
 }
 
 /// `day N HH:MM` for a game minute.
@@ -1382,6 +1428,30 @@ mod tests {
                 .map(|s| s.qty)
                 .sum::<u32>(),
             1
+        );
+    }
+
+    #[test]
+    fn the_journal_lists_the_route_the_trace_and_the_seizure() {
+        let (mut st, b) = state();
+        st.backdoors.plant_net(b, 1, 0, 0);
+        st.backdoors.start_route(Some(b));
+        let lines = extra_lines(&st);
+        let name = crate::helix::hosts::hostname(&st, crate::helix::shell::HostId::Building(b));
+        assert_eq!(lines[0], format!("route · zenbo ▸ {name}"));
+        st.backdoors.start_trace(0);
+        st.backdoors.end_route();
+        assert!(extra_lines(&st)[0].starts_with(&format!("trace ▸ {name} · ")));
+        st.backdoors.rig_seized_until = Some(120);
+        st.backdoors.fixer_quiet_until = Some(240);
+        let lines = extra_lines(&st);
+        assert!(
+            lines.iter().any(|l| l == "rig seized · back day 2 00:00"),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "fixers quiet until day 2 02:00"),
+            "{lines:?}"
         );
     }
 
