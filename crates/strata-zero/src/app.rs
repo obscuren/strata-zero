@@ -259,7 +259,7 @@ impl AppState {
         self.log.push(Kind::Warn, msg, self.clock_tick());
     }
 
-    /// Logs a quest or level line.
+    /// Logs a job or level line.
     pub fn story(&mut self, msg: impl Into<String>) {
         self.log.push(Kind::Story, msg, self.clock_tick());
     }

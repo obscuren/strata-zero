@@ -1,5 +1,5 @@
 //! The deck: the player's menu over the live map — skills, attributes, gear, inventory,
-//! workbench, cyberdeck, quests, journal, map, talents. It reopens where it was closed.
+//! workbench, cyberdeck, jobs, journal, map, talents. It reopens where it was closed.
 
 use crate::actions::{perform, report};
 use crate::anim::effects::{glitch_cells, pulse, typewriter};
@@ -53,7 +53,7 @@ pub enum Tab {
     Workbench,
     /// The jacked deck and the programs it carries.
     Cyberdeck,
-    Quests,
+    Jobs,
     /// Not written yet.
     Journal,
     Map,
@@ -69,7 +69,7 @@ impl Tab {
         Tab::Inventory,
         Tab::Workbench,
         Tab::Cyberdeck,
-        Tab::Quests,
+        Tab::Jobs,
         Tab::Journal,
         Tab::Map,
         Tab::Talents,
@@ -83,7 +83,7 @@ impl Tab {
             Tab::Inventory => "INVENTORY",
             Tab::Workbench => "WORKBENCH",
             Tab::Cyberdeck => "CYBERDECK",
-            Tab::Quests => "QUESTS",
+            Tab::Jobs => "JOBS",
             Tab::Journal => "JOURNAL",
             Tab::Map => "MAP",
             Tab::Talents => "TALENTS",
@@ -698,7 +698,7 @@ impl Deck {
             Tab::Inventory => Self::inventory_rows(st),
             Tab::Workbench => Self::workbench_rows(st),
             Tab::Cyberdeck => Self::cyberdeck_rows(st),
-            Tab::Quests => crate::jobs::ui::deck_rows(st),
+            Tab::Jobs => crate::jobs::ui::deck_rows(st),
             Tab::Journal => Self::journal_rows(st),
             Tab::Map | Tab::Talents => Vec::new(),
         }
@@ -2346,7 +2346,7 @@ mod tests {
                 "INVENTORY",
                 "WORKBENCH",
                 "CYBERDECK",
-                "QUESTS",
+                "JOBS",
                 "JOURNAL",
                 "MAP",
                 "TALENTS"

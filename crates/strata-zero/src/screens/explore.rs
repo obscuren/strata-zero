@@ -2304,7 +2304,7 @@ impl Screen for MapScreen {
             dev: st.dev,
             net: &st.net,
             now: st.net.now(st),
-            quest: crate::jobs::ui::pane_lines(st),
+            jobs: crate::jobs::ui::pane_lines(st),
             ice_lines: match (self.place, st.player.as_ref()) {
                 (Place::Construct(b), Some(p)) if p.place == self.place => {
                     let vis = p.vis();
@@ -3639,7 +3639,7 @@ mod tests {
             assert!(above.trim().is_empty(), "one empty row above them: {text}");
             assert!(
                 lines[3].starts_with(" XP ")
-                    && lines[3].contains("[F1]Here* [F2]Quest* [F3]Map* [F4]Log*"),
+                    && lines[3].contains("[F1]Here* [F2]Jobs* [F3]Map* [F4]Log*"),
                 "{text}"
             );
             assert_eq!(
@@ -3756,7 +3756,7 @@ mod tests {
         s.update(&mut st, &[]);
         s.update(&mut st, &[key(KeyCode::F(1))]);
         assert!(!st.sidebar.is_on(Section::Here));
-        assert!(draw_screen(&s, &st, 100, 30).contains("[F1]Here [F2]Quest*"));
+        assert!(draw_screen(&s, &st, 100, 30).contains("[F1]Here [F2]Jobs*"));
         s.update(&mut st, &[key(KeyCode::F(1)), key(KeyCode::F(5))]);
         assert!(st.sidebar.is_on(Section::Here) && st.sidebar.is_on(Section::Inspect));
         st.set_dev(false);

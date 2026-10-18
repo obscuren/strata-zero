@@ -302,7 +302,7 @@ pub fn tab_rows(flags: &Sidebar, dev: bool, drawn: &[Section]) -> (Line<'static>
         Line::from(spans)
     };
     let main = row(
-        &[Section::Here, Section::Quest, Section::Map, Section::Log],
+        &[Section::Here, Section::Jobs, Section::Map, Section::Log],
         1,
     );
     let dev_row = if dev {
@@ -737,15 +737,15 @@ mod tests {
     #[test]
     fn tab_rows_fit_the_narrow_column() {
         let mut flags = Sidebar::default();
-        flags.set(Section::Quest, false);
+        flags.set(Section::Jobs, false);
         let (dev, main) = tab_rows(&flags, true, &Section::ALL);
         let m = main.to_string();
         assert_eq!(
             m.trim_end(),
-            " [F1]Here* [F2]Quest [F3]Map* [F4]Log*",
+            " [F1]Here* [F2]Jobs [F3]Map* [F4]Log*",
             "{m:?}"
         );
-        assert_eq!(m.chars().count(), 38);
+        assert_eq!(m.chars().count(), 37);
         assert_eq!(dev.to_string().trim_end(), " [F5]Inspect [F6]Legend");
         let (dev, _) = tab_rows(&flags, false, &Section::ALL);
         assert_eq!(dev.to_string().trim(), "");
@@ -896,11 +896,7 @@ mod tests {
     #[test]
     fn squeezed_pane_tab_is_dim() {
         let flags = Sidebar::default();
-        let (_, main) = tab_rows(
-            &flags,
-            false,
-            &[Section::Here, Section::Quest, Section::Log],
-        );
+        let (_, main) = tab_rows(&flags, false, &[Section::Here, Section::Jobs, Section::Log]);
         let map = main.spans.iter().find(|sp| sp.content == "Map*").unwrap();
         assert_eq!(map.style.fg, Some(DIM), "{main:?}");
         let here = main.spans.iter().find(|sp| sp.content == "Here*").unwrap();

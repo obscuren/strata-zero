@@ -8,7 +8,7 @@ pub enum Kind {
     Info,
     /// A refusal; magenta with a leading `!`.
     Warn,
-    /// Quest and level lines; accent with a leading `▸`.
+    /// Job and level lines; accent with a leading `▸`.
     Story,
 }
 
