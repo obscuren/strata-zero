@@ -182,8 +182,7 @@ pub fn line_row(st: &AppState, b: BuildingId) -> Option<String> {
 /// What `route` and the rig's net.log say: the route, the trace, the lines held.
 pub fn rig_net_lines(st: &AppState) -> Vec<String> {
     let now = st.net.now(st);
-    let name =
-        |b: BuildingId| crate::helix::hosts::hostname(st, crate::helix::shell::HostId::Building(b));
+    let name = |b: BuildingId| crate::helix::hosts::building_hostname(st, b);
     let mut out = Vec::new();
     match st.backdoors.route.as_ref() {
         Some(r) => {

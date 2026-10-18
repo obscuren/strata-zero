@@ -350,9 +350,7 @@ impl MapScreen {
                 let names: Vec<String> = r
                     .relays
                     .iter()
-                    .map(|b| {
-                        crate::helix::hosts::hostname(st, crate::helix::shell::HostId::Building(*b))
-                    })
+                    .map(|b| crate::helix::hosts::building_hostname(st, *b))
                     .collect();
                 Some(format!(
                     "{t} · ROUTE {}",
@@ -388,9 +386,9 @@ impl MapScreen {
             camera: self.mode == Mode::Explore,
             overburdened: st.character.overburdened(&st.content),
             trace,
-            home_trace: st.backdoors.trace_line(now, &|b| {
-                crate::helix::hosts::hostname(st, crate::helix::shell::HostId::Building(b))
-            }),
+            home_trace: st
+                .backdoors
+                .trace_line(now, &|b| crate::helix::hosts::building_hostname(st, b)),
             hunted: jacked && crate::net::hunted(st),
             turn: crate::net::turn_readout(st),
             run,
@@ -9267,7 +9265,7 @@ mod tests {
         st.backdoors.plant_net(a, 1, seed, 0);
         crate::net::land_at(&mut st, a).unwrap();
         let text = draw_screen(&screen, &st, 120, 40);
-        let name = crate::helix::hosts::hostname(&st, crate::helix::shell::HostId::Building(a));
+        let name = crate::helix::hosts::building_hostname(&st, a);
         assert!(text.contains(&format!("ROUTE zenbo ▸ {name}")), "{text}");
         crate::net::dump(&mut st, "the trace found you");
         let text = draw_screen(&screen, &st, 120, 40);

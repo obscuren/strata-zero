@@ -644,8 +644,7 @@ pub fn fixer_mail(st: &mut AppState) {
 /// The dim lines above the journal's groups: the route, the trace, the seizure.
 pub fn extra_lines(st: &AppState) -> Vec<String> {
     let now = st.net.now(st);
-    let name =
-        |b: BuildingId| crate::helix::hosts::hostname(st, crate::helix::shell::HostId::Building(b));
+    let name = |b: BuildingId| crate::helix::hosts::building_hostname(st, b);
     let mut out = Vec::new();
     if let Some(r) = st.backdoors.route.as_ref() {
         let names: Vec<String> = r.relays.iter().map(|b| name(*b)).collect();
@@ -1437,7 +1436,7 @@ mod tests {
         st.backdoors.plant_net(b, 1, 0, 0);
         st.backdoors.start_route(Some(b));
         let lines = extra_lines(&st);
-        let name = crate::helix::hosts::hostname(&st, crate::helix::shell::HostId::Building(b));
+        let name = crate::helix::hosts::building_hostname(&st, b);
         assert_eq!(lines[0], format!("route · zenbo ▸ {name}"));
         st.backdoors.start_trace(0);
         st.backdoors.end_route();
