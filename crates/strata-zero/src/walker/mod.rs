@@ -228,6 +228,14 @@ impl Player {
         self.memory.get(&self.place).unwrap_or(&self.unseen)
     }
 
+    /// Sets what is known of one tile of the current place.
+    #[cfg(test)]
+    pub fn set_vis(&mut self, p: Pos, v: Visibility) {
+        if let Some(g) = self.memory.get_mut(&self.place) {
+            g.set(p, v);
+        }
+    }
+
     /// What has been seen of another place, if anything.
     #[cfg(test)]
     pub fn vis_at(&self, place: Place) -> Option<&Grid<Visibility>> {

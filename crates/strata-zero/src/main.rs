@@ -10,6 +10,7 @@ mod credentials;
 mod helix;
 mod home;
 mod interact;
+mod look;
 mod interiors;
 mod messages;
 mod net;

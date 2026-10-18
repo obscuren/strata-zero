@@ -13,21 +13,6 @@ use citygen::{Place, Pos, StratumKind};
 use game::ItemKind;
 use ratatui::style::Color;
 
-/// What the map draws on `pos`: the person there, else the pile on the ground,
-/// else the tile itself.
-pub fn mark(
-    st: &AppState,
-    map: &MapRef,
-    place: Place,
-    pos: Pos,
-    person: Option<sim::PersonId>,
-) -> Option<(char, Color)> {
-    person
-        .map(|id| mark_person(st, id))
-        .or_else(|| mark_items(st, place, pos))
-        .or_else(|| mark_tile(st, map, pos))
-}
-
 /// A person: `@` in their tint.
 pub fn mark_person(st: &AppState, id: sim::PersonId) -> (char, Color) {
     let tint = st

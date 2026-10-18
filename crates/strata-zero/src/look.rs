@@ -1,0 +1,642 @@
+//! Look: what the player's eyes can tell them about one tile, in the house voice.
+
+use crate::app::AppState;
+use crate::render::Visibility;
+use crate::render::map::{MapRef, TileMap};
+use crate::render::mark::{mark_items, mark_person, mark_tile};
+use crate::ui::chrome::TEXT;
+use crate::ui::hud::capitalised;
+use citygen::{ConnectorKind, Feature, FloorPlan, Place, Pos, Terrain};
+use ratatui::style::Color;
+use serde::Deserialize;
+use std::collections::BTreeMap;
+use std::sync::OnceLock;
+
+const DEFAULT_LOOKS: &str = include_str!("../../../flavor/looks.ron");
+
+/// What the look window says about one tile.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LookCard {
+    pub glyph: Option<(char, Color)>,
+    /// None on a tile the player cannot see.
+    pub header: Option<String>,
+    pub header_fg: Color,
+    /// Dim: what the thing is and its state.
+    pub second: Option<String>,
+    pub body: Vec<String>,
+    /// The other things on the tile, by name.
+    pub also: Vec<String>,
+    /// Space would open a window for it from where the player stands.
+    pub hint: bool,
+}
+
+/// The flavour lines, by group and key.
+#[derive(Debug, Deserialize)]
+pub struct Looks {
+    feature: BTreeMap<String, Vec<String>>,
+    furniture: BTreeMap<String, Vec<String>>,
+    building: BTreeMap<String, Vec<String>>,
+    fixture: BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Group {
+    Feature,
+    Furniture,
+    Building,
+    Fixture,
+}
+
+impl Looks {
+    /// The embedded `flavor/looks.ron`, parsed once.
+    pub fn load() -> &'static Looks {
+        static LOOKS: OnceLock<Looks> = OnceLock::new();
+        LOOKS.get_or_init(|| ron::from_str(DEFAULT_LOOKS).expect("embedded looks are valid"))
+    }
+
+    fn group(&self, g: Group) -> &BTreeMap<String, Vec<String>> {
+        match g {
+            Group::Feature => &self.feature,
+            Group::Furniture => &self.furniture,
+            Group::Building => &self.building,
+            Group::Fixture => &self.fixture,
+        }
+    }
+
+    /// One of the key's lines, the same one every time for this tile.
+    pub fn line(&self, g: Group, key: &str, seed: u64, pos: Pos) -> Option<&str> {
+        let lines = self.group(g).get(key)?;
+        if lines.is_empty() {
+            return None;
+        }
+        let h = citygen::rng::hash64(seed, ((pos.x as u64) << 32) ^ (pos.y as u32 as u64));
+        Some(lines[(h % lines.len() as u64) as usize].as_str())
+    }
+
+    #[cfg(test)]
+    pub fn all_lines(&self) -> Vec<&str> {
+        [Group::Feature, Group::Furniture, Group::Building, Group::Fixture]
+            .into_iter()
+            .flat_map(|g| self.group(g).values().flatten().map(|s| s.as_str()))
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub fn has(&self, key: &str) -> bool {
+        [Group::Feature, Group::Furniture, Group::Building, Group::Fixture]
+            .into_iter()
+            .any(|g| self.group(g).contains_key(key))
+    }
+}
+
+/// A feature's name and its key in the flavour file.
+fn feature_name(f: Feature) -> Option<(&'static str, &'static str)> {
+    Some(match f {
+        Feature::Lamp => ("Street lamp", "lamp"),
+        Feature::Neon(_) => ("Neon sign", "neon"),
+        Feature::HoloAd => ("Holo ad", "holo_ad"),
+        Feature::Vent => ("Vent", "vent"),
+        Feature::Puddle => ("Puddle", "puddle"),
+        Feature::Trash => ("Trash", "trash"),
+        Feature::Barrier => ("Barrier", "barrier"),
+        Feature::Stall => ("Stall", "stall"),
+        Feature::Sign(_) => ("Sign", "sign"),
+        Feature::Camera => ("Camera", "camera"),
+        Feature::AcUnit => ("AC unit", "ac_unit"),
+        Feature::Helipad => ("Helipad", "helipad"),
+        Feature::Pipe => ("Pipe", "pipe"),
+        Feature::Cable => ("Cable", "cable"),
+        Feature::Awning => ("Awning", "awning"),
+        _ => return None,
+    })
+}
+
+/// A fixture on the tile: header, second line and its flavour key.
+struct Fixture {
+    name: String,
+    second: Option<String>,
+    key: &'static str,
+}
+
+/// "up to Skyways · down to Undercity", leaving out a missing side.
+fn leads(up: Option<String>, down: Option<String>) -> Option<String> {
+    let parts: Vec<String> = up
+        .map(|u| format!("up to {u}"))
+        .into_iter()
+        .chain(down.map(|d| format!("down to {d}")))
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+fn fixture_at(st: &AppState, map: &MapRef, place: Place, pos: Pos) -> Option<Fixture> {
+    let city = st.city.as_ref()?;
+    let tile = map.tile(pos)?;
+    match place {
+        Place::Floor { building, level } => {
+            if let Some(rig) = st.home
+                && rig.place() == place
+                && rig.home.rig == pos
+            {
+                return Some(Fixture {
+                    name: "Access rig".into(),
+                    second: Some("your rig".into()),
+                    key: "rig",
+                });
+            }
+            let (plan, floor) = st.interiors.floor(building, level)?;
+            if let Some(r) = floor
+                .door_of(pos)
+                .filter(|r| r.private && r.kind == citygen::RoomKind::Flat)
+            {
+                let now = st.net.now(st);
+                let state = match st.journal.keypad_locked_until(building, level, r.number, now) {
+                    Some(until) => format!("keypad locked {}m", until.saturating_sub(now).max(1)),
+                    None if crate::credentials::opens(st, building, level, r.number).is_some() => {
+                        "unlocked".to_string()
+                    }
+                    None => "locked, keypad".to_string(),
+                };
+                return Some(Fixture {
+                    name: capitalised(&crate::credentials::flat_label(
+                        st, building, level, r.number,
+                    )),
+                    second: Some(format!("front door · {state}")),
+                    key: "flat_door",
+                });
+            }
+            match tile.terrain {
+                Terrain::Stair => Some(Fixture {
+                    name: "Stairwell".into(),
+                    second: leads(
+                        (level < plan.top).then(|| FloorPlan::label(level + 1)),
+                        (level > plan.lowest).then(|| FloorPlan::label(level - 1)),
+                    ),
+                    key: "stairwell",
+                }),
+                Terrain::Lift => Some(Fixture {
+                    name: "Lift".into(),
+                    second: Some(format!(
+                        "{} to {}",
+                        FloorPlan::label(plan.lowest),
+                        FloorPlan::label(plan.top)
+                    )),
+                    key: "lift",
+                }),
+                _ => None,
+            }
+        }
+        Place::Stratum(k) => {
+            let mut conns = city.connectors_at(pos);
+            if let Some(c) = conns.find(|c| c.kind == ConnectorKind::Jack && c.serves.contains(&k))
+            {
+                let district = tile
+                    .district
+                    .and_then(|d| city.district_opt(d))
+                    .map(|d| d.name.clone());
+                return Some(Fixture {
+                    name: "Access terminal".into(),
+                    second: Some(match district {
+                        Some(d) => format!("public · {d}"),
+                        None => "public".into(),
+                    }),
+                    key: "terminal",
+                })
+                .filter(|_| c.public || true);
+            }
+            let c = city
+                .connectors_at(pos)
+                .find(|c| c.kind != ConnectorKind::Jack)?;
+            let (below, above) = c.serves_from(k)?;
+            let (name, key) = match c.kind {
+                ConnectorKind::Stair => ("Stairs", "stairs"),
+                ConnectorKind::Lift => ("Lift", "lift"),
+                ConnectorKind::Ladder => ("Ladder", "ladder"),
+                _ => ("Manhole", "manhole"),
+            };
+            Some(Fixture {
+                name: name.into(),
+                second: leads(
+                    above.map(|s| s.label().to_string()),
+                    below.map(|s| s.label().to_string()),
+                ),
+                key,
+            })
+        }
+        Place::Construct(_) => None,
+    }
+}
+
+/// What the player's eyes can tell them about `pos` on the map they walk.
+pub fn look_card(
+    st: &AppState,
+    map: &MapRef,
+    place: Place,
+    pos: Pos,
+    inside_person: &dyn Fn(Place, Pos) -> Option<sim::PersonId>,
+    reachable: &[Pos],
+) -> LookCard {
+    let Some(city) = st.city.as_ref() else {
+        return LookCard::default();
+    };
+    let player = st.player.as_ref().filter(|p| p.place == place);
+    let seen = player
+        .map(|p| p.vis().get(pos).copied().unwrap_or(Visibility::Unseen))
+        .unwrap_or(Visibility::Visible);
+    if seen == Visibility::Unseen || map.tile(pos).is_none() {
+        return LookCard {
+            body: vec!["You can't see there.".to_string()],
+            header_fg: TEXT,
+            ..LookCard::default()
+        };
+    }
+    let visible = seen == Visibility::Visible;
+    let looks = Looks::load();
+    let tile = map.tile(pos).expect("checked");
+    let own = player.is_some_and(|p| p.pos == pos);
+    let mut card = LookCard {
+        header_fg: TEXT,
+        hint: visible && reachable.contains(&pos),
+        ..LookCard::default()
+    };
+
+    // What is there, best first.
+    let person = visible
+        .then(|| {
+            if place.is_street() {
+                st.world.as_ref().and_then(|w| w.person_at(pos))
+            } else {
+                inside_person(place, pos)
+            }
+        })
+        .flatten();
+    let fixture = fixture_at(st, map, place, pos);
+    let stacks: Vec<String> = if visible {
+        st.ground
+            .at(place, pos)
+            .iter()
+            .filter_map(|s| {
+                let item = st.content.item(&s.item)?;
+                Some(if s.qty > 1 {
+                    format!("{} ×{}", item.name, s.qty)
+                } else {
+                    item.name.clone()
+                })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let set_head = |card: &mut LookCard, name: String, glyph: Option<(char, Color)>| {
+        card.header_fg = glyph.map_or(TEXT, |(_, c)| c);
+        card.glyph = glyph;
+        card.header = Some(name);
+    };
+
+    if let (Some(id), Some(world)) = (person, st.world.as_ref()) {
+        let c = world.card(id, city);
+        set_head(&mut card, c.name.clone(), Some(mark_person(st, id)));
+        card.second = Some(format!("{} · {}", c.profession, c.doing));
+        if !crate::credentials::carries(st, id).is_empty() {
+            card.body
+                .push("A keycard swings on a lanyard at their belt.".to_string());
+        }
+        card.also.extend(fixture.iter().map(|f| f.name.clone()));
+        card.also.extend(stacks);
+    } else if let Some(f) = fixture {
+        set_head(&mut card, f.name, mark_tile(st, map, pos));
+        card.second = f.second;
+        if visible {
+            card.body
+                .extend(looks.line(Group::Fixture, f.key, city.seed, pos).map(String::from));
+            card.also.extend(stacks);
+        }
+    } else if let Some((first, rest)) = stacks.split_first() {
+        let s = &st.ground.at(place, pos)[0];
+        let item = st.content.item(&s.item);
+        set_head(&mut card, first.clone(), mark_items(st, place, pos));
+        card.second = item.map(|i| format!("{} · on the ground", i.kind.label()));
+        card.body.extend(item.map(|i| i.desc.clone()));
+        card.also.extend(rest.iter().cloned());
+    } else if let Some(f) = tile.feature {
+        let glyph = mark_tile(st, map, pos);
+        match f {
+            Feature::Furniture(fu) => {
+                set_head(&mut card, capitalised(fu.label()), glyph);
+                if visible {
+                    card.body.extend(
+                        looks
+                            .line(Group::Furniture, fu.label(), city.seed, pos)
+                            .map(String::from),
+                    );
+                }
+            }
+            Feature::Node(k) => {
+                set_head(&mut card, capitalised(k.label()), glyph);
+                card.second = Some("node".to_string());
+            }
+            Feature::Ice(g) => {
+                set_head(&mut card, format!("{} ICE", capitalised(g.label())), glyph);
+            }
+            f => match feature_name(f) {
+                Some((name, key)) => {
+                    set_head(&mut card, name.to_string(), glyph);
+                    if visible {
+                        card.body
+                            .extend(looks.line(Group::Feature, key, city.seed, pos).map(String::from));
+                    }
+                }
+                None => ground(st, map, place, pos, own, &mut card),
+            },
+        }
+    } else if let Place::Construct(b) = place
+        && let Some(i) = st.constructs.get(b).and_then(|k| k.guard_at(pos))
+    {
+        let g = &st.constructs.get(b).expect("checked").guards[i];
+        set_head(
+            &mut card,
+            format!("{} ICE", capitalised(g.grade.label())),
+            mark_tile(st, map, pos),
+        );
+        card.second = Some(if g.standing { "standing" } else { "broken" }.to_string());
+    } else if let Some(b) = tile.building.filter(|_| {
+        place.stratum().is_some() && matches!(tile.terrain, Terrain::Wall | Terrain::Window | Terrain::Mass)
+    }) {
+        let bl = city.building(b);
+        let name = bl
+            .name
+            .clone()
+            .unwrap_or_else(|| capitalised(bl.kind.label()));
+        set_head(&mut card, name, mark_tile(st, map, pos));
+        let district = city.district(bl.district).name.clone();
+        card.second = Some(format!("{} · {district}", bl.kind.label()));
+        if visible {
+            card.body.extend(
+                looks
+                    .line(Group::Building, bl.kind.label(), city.seed, pos)
+                    .map(String::from),
+            );
+        }
+    } else {
+        ground(st, map, place, pos, own, &mut card);
+    }
+    if !visible {
+        card.second = Some("as you last saw it".to_string());
+        card.body.clear();
+        card.also.clear();
+    }
+    card
+}
+
+/// The bare ground: its name and where it is, or "You" on your own tile.
+fn ground(st: &AppState, map: &MapRef, place: Place, pos: Pos, own: bool, card: &mut LookCard) {
+    let Some(city) = st.city.as_ref() else { return };
+    let location = crate::ui::hud::location(city, &st.interiors, place, pos);
+    if own {
+        card.glyph = Some(('@', Color::Rgb(255, 255, 255)));
+        card.header_fg = TEXT;
+        card.header = Some("You".to_string());
+    } else if let Some(t) = map.tile(pos) {
+        card.glyph = mark_tile(st, map, pos);
+        card.header_fg = card.glyph.map_or(TEXT, |(_, c)| c);
+        card.header = Some(capitalised(t.terrain.label()));
+    }
+    card.second = Some(location);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::map::MapRef;
+    use crate::walker::{Player, Visibility};
+    use citygen::{GenParams, Generator, SizePreset, StratumKind};
+
+    const STREET: Place = Place::Stratum(StratumKind::Street);
+
+    fn state(world: bool) -> AppState {
+        let mut st = AppState::new();
+        let city = Generator::run(GenParams {
+            seed: 6,
+            size: SizePreset::Custom { w: 120, h: 60 },
+            districts: 5,
+            ..Default::default()
+        })
+        .unwrap();
+        if world {
+            st.world = Some(sim::World::seed(
+                &city,
+                &st.people,
+                &sim::SimParams::default(),
+                22 * 60,
+                st.tick,
+            ));
+        }
+        st.player = Some(Player::spawn(&city, 1));
+        st.city = Some(city);
+        st
+    }
+
+    /// Puts the player on `pos` and lets them look around.
+    fn stand(st: &mut AppState, pos: Pos) {
+        let city = st.city.as_ref().unwrap();
+        let p = st.player.as_mut().unwrap();
+        p.place = STREET;
+        p.pos = pos;
+        p.update_fov(&MapRef::stratum_of(city, StratumKind::Street), 0);
+    }
+
+    fn card(st: &AppState, pos: Pos) -> LookCard {
+        let city = st.city.as_ref().unwrap();
+        let map = MapRef::stratum_of(city, StratumKind::Street);
+        look_card(st, &map, STREET, pos, &|_, _| None, &[])
+    }
+
+    /// A walkable street tile with nothing on it: no connector, no feature, no building.
+    fn bare(st: &AppState) -> Pos {
+        let city = st.city.as_ref().unwrap();
+        let map = MapRef::stratum_of(city, StratumKind::Street);
+        (0..60)
+            .flat_map(|y| (0..120).map(move |x| Pos::new(x, y)))
+            .find(|p| {
+                city.walkable(StratumKind::Street, *p)
+                    && city.connectors_at(*p).next().is_none()
+                    && map
+                        .tile(*p)
+                        .is_some_and(|t| t.feature.is_none() && t.building.is_none())
+            })
+            .unwrap()
+    }
+
+    /// Someone on the street and a free tile beside them.
+    fn someone(st: &AppState) -> (sim::PersonId, Pos, Pos) {
+        let city = st.city.as_ref().unwrap();
+        let world = st.world.as_ref().unwrap();
+        (0..60)
+            .flat_map(|y| (0..120).map(move |x| Pos::new(x, y)))
+            .find_map(|p| {
+                let id = world.person_at(p)?;
+                let beside = p.neighbors4().find(|n| {
+                    city.walkable(StratumKind::Street, *n) && world.person_at(*n).is_none()
+                })?;
+                Some((id, p, beside))
+            })
+            .expect("someone out at ten")
+    }
+
+    fn all_text(c: &LookCard) -> String {
+        let mut s = String::new();
+        for t in c.header.iter().chain(c.second.iter()).chain(&c.body).chain(&c.also) {
+            s.push_str(t);
+            s.push('\n');
+        }
+        s
+    }
+
+    #[test]
+    fn a_person_reads_name_job_doing_and_never_a_number() {
+        let mut st = state(true);
+        let (id, at, beside) = someone(&st);
+        stand(&mut st, beside);
+        let c = card(&st, at);
+        let person = st
+            .world
+            .as_ref()
+            .unwrap()
+            .card(id, st.city.as_ref().unwrap());
+        assert_eq!(c.header.as_deref(), Some(person.name.as_str()));
+        assert_eq!(
+            c.second,
+            Some(format!("{} · {}", person.profession, person.doing))
+        );
+        assert_eq!(c.glyph.map(|g| g.0), Some('@'));
+        // Names are data (some carry a number); everything else has none.
+        let rest = LookCard {
+            header: None,
+            ..c.clone()
+        };
+        let text = all_text(&rest);
+        assert!(!text.chars().any(|ch| ch.is_ascii_digit()), "{text}");
+    }
+
+    #[test]
+    fn an_item_reads_its_desc() {
+        let mut st = state(false);
+        let at = bare(&st);
+        stand(&mut st, at);
+        st.ground.add(STREET, at, game::ItemId::new("stim_patch"), 2);
+        let c = card(&st, at);
+        assert_eq!(c.header.as_deref(), Some("Stim patch ×2"));
+        assert_eq!(c.second.as_deref(), Some("consumable · on the ground"));
+        assert_eq!(c.body, ["Twelve minutes of clarity, then the bill."]);
+        st.ground.add(STREET, at, game::ItemId::new("dead_phone"), 1);
+        let c = card(&st, at);
+        assert_eq!(c.also, ["Dead phone"]);
+    }
+
+    #[test]
+    fn remembered_tiles_hide_people_and_items() {
+        let mut st = state(true);
+        let (_, at, beside) = someone(&st);
+        stand(&mut st, beside);
+        st.ground.add(STREET, at, game::ItemId::new("stim_patch"), 2);
+        st.player.as_mut().unwrap().set_vis(at, Visibility::Remembered);
+        let c = card(&st, at);
+        let ground = st
+            .city
+            .as_ref()
+            .unwrap()
+            .tile(StratumKind::Street, at)
+            .unwrap()
+            .terrain;
+        assert_eq!(
+            c.header,
+            Some(crate::ui::hud::capitalised(ground.label())),
+            "the ground, as remembered"
+        );
+        assert_eq!(c.second.as_deref(), Some("as you last saw it"));
+        assert!(c.body.is_empty() && c.also.is_empty(), "{c:?}");
+        assert!(!c.hint);
+    }
+
+    #[test]
+    fn unseen_tiles_say_one_line() {
+        let mut st = state(false);
+        let at = bare(&st);
+        stand(&mut st, at);
+        let far = Pos::new(at.x + 1, at.y);
+        st.player.as_mut().unwrap().set_vis(far, Visibility::Unseen);
+        let c = card(&st, far);
+        assert_eq!(c.header, None);
+        assert_eq!(c.second, None);
+        assert_eq!(c.body, ["You can't see there."]);
+    }
+
+    #[test]
+    fn your_own_tile_shows_what_else_is_there() {
+        let mut st = state(false);
+        let at = bare(&st);
+        stand(&mut st, at);
+        let c = card(&st, at);
+        assert_eq!(c.header.as_deref(), Some("You"));
+        let k = st
+            .city
+            .as_ref()
+            .unwrap()
+            .connectors
+            .iter()
+            .find(|k| {
+                k.kind != citygen::ConnectorKind::Jack
+                    && k.serves.contains(&StratumKind::Street)
+                    && st
+                        .city
+                        .as_ref()
+                        .unwrap()
+                        .walkable(StratumKind::Street, k.pos)
+            })
+            .unwrap()
+            .clone();
+        stand(&mut st, k.pos);
+        let c = card(&st, k.pos);
+        assert!(
+            matches!(
+                c.header.as_deref(),
+                Some("Stairs" | "Lift" | "Ladder" | "Manhole")
+            ),
+            "{c:?}"
+        );
+        let second = c.second.unwrap_or_default();
+        assert!(
+            second.contains("up to") || second.contains("down to"),
+            "{second}"
+        );
+    }
+
+    #[test]
+    fn a_hint_shows_only_within_reach() {
+        let mut st = state(false);
+        let at = bare(&st);
+        stand(&mut st, at);
+        let city = st.city.as_ref().unwrap();
+        let map = MapRef::stratum_of(city, StratumKind::Street);
+        assert!(look_card(&st, &map, STREET, at, &|_, _| None, &[at]).hint);
+        assert!(!look_card(&st, &map, STREET, at, &|_, _| None, &[]).hint);
+    }
+
+    #[test]
+    fn every_flavour_line_is_house_voice() {
+        let l = Looks::load();
+        let lines = l.all_lines();
+        assert!(lines.len() > 40, "{}", lines.len());
+        for line in lines {
+            assert!(!line.chars().any(|c| c.is_ascii_digit()), "{line}");
+            assert!(!line.starts_with("You see"), "{line}");
+            assert!(line.ends_with('.'), "{line}");
+        }
+        for k in ["lamp", "neon", "holo_ad", "terminal", "stairwell", "flat_door", "club"] {
+            assert!(l.has(k), "{k}");
+        }
+        assert_eq!(
+            l.line(Group::Feature, "lamp", 0, Pos::new(0, 0)).is_some(),
+            true
+        );
+    }
+}

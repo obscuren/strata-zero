@@ -1,0 +1,117 @@
+// What the look cursor says about a thing: one or two short sentences in the voice of
+// the item descriptions, picked per tile. No numbers, never "You see".
+// Keys: features by name, furniture and building kinds by their labels, fixtures by name.
+Looks(
+    feature: {
+        "lamp": [
+            "Sodium light and a hum you stop hearing.",
+            "A streetlamp bent by a truck years ago, still trying.",
+        ],
+        "neon": [
+            "Neon tubes buzzing in a colour nobody owns.",
+            "Half the letters are dead. The rest still sell something.",
+        ],
+        "holo_ad": [
+            "A smiling face the size of a van, selling what you cannot afford.",
+            "The ad loops forever. The model in it retired long ago.",
+        ],
+        "vent": [
+            "Warm air that smells of somebody else's kitchen.",
+            "A grille breathing out the building's bad breath.",
+        ],
+        "puddle": [
+            "Rain, oil and a little neon, going nowhere.",
+            "Deeper than it looks. They always are.",
+        ],
+        "trash": [
+            "Bags stacked against the wall, one of them moving.",
+            "Takeaway boxes and a shoe. Just the one shoe.",
+        ],
+        "barrier": [
+            "Concrete and hazard stripes. Somebody wanted this road closed.",
+            "A crash barrier with more dents than paint.",
+        ],
+        "stall": [
+            "A folding counter under a tarp, open whenever someone stands behind it.",
+            "Steam, a hand-painted price list and a stool for the owner.",
+        ],
+        "sign": [
+            "Hand-painted letters over older letters.",
+            "A shop sign, the bulbs behind it mostly gone.",
+        ],
+        "camera": [
+            "A lens on a bracket, turning slowly. It has already seen you.",
+            "Somebody's eye on the street, wired to somebody's server.",
+        ],
+        "ac_unit": [
+            "A rusted box rattling on its bracket and dripping on the pavement.",
+            "It cools a room upstairs and heats everything else.",
+        ],
+        "helipad": [
+            "A painted circle, scorch marks and a windsock nobody replaces.",
+            "Flat, empty and owned by people who never take the stairs.",
+        ],
+        "pipe": [
+            "Old pipe, sweating, painted over so often it has lost its corners.",
+            "Something runs through it. Best not to ask what.",
+        ],
+        "cable": [
+            "Cable sagging between buildings, tied up with whatever was handy.",
+            "Power, data and a few lines that lead nowhere anymore.",
+        ],
+        "awning": [
+            "Torn canvas over the shopfront, holding a pool of rain.",
+            "Shade by day, and a roof for whoever sleeps under it by night.",
+        ],
+    },
+    furniture: {
+        "desk": ["A desk with a cold monitor and a mug ring nobody wiped."],
+        "counter": ["A counter worn pale where the elbows rest."],
+        "table": ["A table with one short leg and a folded coaster under it."],
+        "stool": ["A stool with the foam showing through the vinyl."],
+        "shelving": ["Steel shelving, the top row out of reach on purpose."],
+        "machine": ["A machine that hums, blinks and does not explain itself."],
+        "bed": ["A narrow bed, made in a hurry or not at all."],
+        "shrine": ["Incense, a photograph and a bowl of coins nobody steals."],
+        "lockers": ["A bank of lockers, some locked, most dented."],
+        "couch": ["A couch that has been slept on more than sat on."],
+        "shower": ["A shower stall with a curtain that used to be white."],
+        "bench": ["A bench bolted down so it stays where it is."],
+        "vending machine": ["Drinks behind scratched glass, prices taped over prices."],
+        "bike": ["A bike chained to itself, missing its front wheel."],
+    },
+    building: {
+        "corp tower": ["Mirrored glass to the clouds. The lobby has more guards than chairs."],
+        "office": ["Rows of lit windows, every one of them working late."],
+        "megablock": ["A whole district stacked into one block, every window a different life."],
+        "apartment": ["Balconies full of laundry and satellite dishes."],
+        "hotel": ["A lit sign, a revolving door and rooms by the hour or the week."],
+        "shop": ["Shutters half down, the light still on inside."],
+        "noodle bar": ["Steam on the window and a queue on the pavement."],
+        "bar": ["Low light, loud music and a door that never quite shuts."],
+        "club": ["Bass through the wall, and a queue that doesn't move."],
+        "arcade": ["Coloured light pouring out and the rattle of old cabinets."],
+        "pawn shop": ["Everything in the window used to belong to someone."],
+        "clinic": ["Clean glass, a red cross and a waiting room that never empties."],
+        "temple": ["Lanterns over the door and incense drifting into the street."],
+        "warehouse": ["Corrugated walls and a loading bay that smells of diesel."],
+        "factory": ["Chimneys, a gate and a shift change you can hear from here."],
+        "depot": ["Vans in and vans out, all night."],
+        "garage": ["A roller door, oil stains and a radio playing to nobody."],
+        "parking": ["Concrete ramps, flickering lights and nobody you want to meet."],
+        "market": ["Tarps, crates and a hundred voices haggling at once."],
+    },
+    fixture: {
+        "terminal": [
+            "A municipal box bolted to the wall, its screen scratched to fog.",
+            "A public terminal, its jack port worn shiny.",
+        ],
+        "rig": ["Your rig, humming under the desk, its fans full of dust."],
+        "stairwell": ["Concrete steps, a handrail rubbed bright."],
+        "lift": ["Steel doors, a panel of buttons and a smell of old cigarettes."],
+        "stairs": ["Steps worn hollow by the whole city going up and down."],
+        "ladder": ["Rungs bolted into the wall, cold and slick."],
+        "manhole": ["A cast-iron lid, pried loose often enough to sit crooked."],
+        "flat_door": ["Steel door, a peephole, a keypad under a cracked cover."],
+    },
+)
