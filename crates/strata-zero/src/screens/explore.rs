@@ -1755,6 +1755,16 @@ impl Screen for MapScreen {
                 fx: TransitionKind::Glitch,
             };
         }
+        // The console's `target`: the free camera on the tile, the inspector reading it.
+        if let Some(pos) = st.jump_to.take() {
+            st.dev = true;
+            self.mode = Mode::Explore;
+            self.place = Place::Stratum(StratumKind::Street);
+            self.cursor = pos;
+            self.cam.snap(pos);
+            st.sidebar.set(Section::Inspect, true);
+            st.repaint = true;
+        }
         // A popup's Look row: the cursor goes on its tile.
         if let Some(pos) = st.look_at.take()
             && self.mode == Mode::Walk
@@ -9759,5 +9769,23 @@ mod tests {
         let all = rows(&st);
         assert!(all.iter().find(|c| c.label == "Backdoor").unwrap().enabled);
         assert!(crate::net::start_run(&mut st, ItemId::new("backdoor"), target).is_ok());
+    }
+
+    #[test]
+    fn a_jump_puts_the_free_camera_on_the_tile_with_the_inspector_on() {
+        let mut st = state();
+        let city = st.city.take().unwrap();
+        st.enter_city(city);
+        let mut s = MapScreen::walking(&mut st);
+        assert_eq!(s.mode, Mode::Walk);
+        let target = Pos::new(40, 20);
+        st.jump_to = Some(target);
+        s.update(&mut st, &[]);
+        assert_eq!(s.mode, Mode::Explore);
+        assert_eq!(s.place, Place::Stratum(StratumKind::Street));
+        assert_eq!(s.cursor, target);
+        assert!(st.dev);
+        assert!(st.sidebar.is_on(Section::Inspect));
+        assert_eq!(st.jump_to, None);
     }
 }

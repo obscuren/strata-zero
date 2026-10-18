@@ -226,6 +226,11 @@ impl World {
         (p.work != Work::Roaming).then_some(p.shift)
     }
 
+    /// Where this person is drawn on the street right now; none indoors.
+    pub fn pos_of(&self, id: PersonId) -> Option<Pos> {
+        self.position(id.0 as usize).map(|(p, _)| p)
+    }
+
     /// Where a spot worker stands.
     pub fn spot_of(&self, id: PersonId) -> Option<Pos> {
         match self.people.get(id.0 as usize)?.work {
@@ -1929,5 +1934,27 @@ mod tests {
             .unwrap();
         assert_eq!(w.spot_of(drone.id), None);
         assert_eq!(w.work_hours(drone.id), Some(drone.shift));
+    }
+
+    #[test]
+    fn pos_of_reads_the_street_and_not_the_indoors() {
+        let c = city();
+        let mut w = world(&c);
+        let fx = w
+            .people()
+            .iter()
+            .find(|p| p.profession == "fixer")
+            .unwrap()
+            .id;
+        let spot = w.spot_of(fx).unwrap();
+        w.park(fx, spot);
+        assert_eq!(w.pos_of(fx), Some(spot));
+        let home = w
+            .people()
+            .iter()
+            .find(|p| matches!(p.whereabouts, Whereabouts::Inside(_)))
+            .unwrap()
+            .id;
+        assert_eq!(w.pos_of(home), None);
     }
 }

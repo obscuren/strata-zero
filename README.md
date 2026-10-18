@@ -303,7 +303,7 @@ console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `sp`, `pts`, 
 counts the people out, inside and driving, `clock hh:mm` (or `time hh:mm`) jumps the day there,
 `tp x y` teleports on the current map, `eyes` tints the walkers who see you,
 `light` paints the map grey by its light, `job fetch|copy|plant|deliver` rolls and takes one from the nearest fixer,
-`standing n` sets every fixer's opinion of you, `jobs` lists them, `clear`, `help`, with Tab completion
+`standing n` sets every fixer's opinion of you, `jobs` lists them, `target name` puts the free camera and the inspector on that person (their building's door when they are inside), `clear`, `help`, with Tab completion
 and history) · `esc` pause
 
 The play HUD frames the map on one grid. The top band carries the handle,

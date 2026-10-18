@@ -43,6 +43,8 @@ pub struct AppState {
     pub show_light: bool,
     /// A popup asked the map for its look cursor on this tile; the map takes it.
     pub look_at: Option<citygen::Pos>,
+    /// The console's `target`: a Street tile the free camera should jump to.
+    pub jump_to: Option<citygen::Pos>,
     pub content: game::Content,
     pub character: game::Character,
     /// The professions and lines of the city's people.
@@ -137,6 +139,7 @@ impl AppState {
             show_eyes: false,
             show_light: false,
             look_at: None,
+            jump_to: None,
             content,
             character,
             people,
