@@ -37,6 +37,10 @@ pub struct AppState {
     pub rain: bool,
     /// FPS readout in the status bar (Settings).
     pub show_fps: bool,
+    /// Dev: tint the walkers who can see you.
+    pub show_eyes: bool,
+    /// Dev: paint each visible tile grey by its light.
+    pub show_light: bool,
     /// A popup asked the map for its look cursor on this tile; the map takes it.
     pub look_at: Option<citygen::Pos>,
     pub content: game::Content,
@@ -126,6 +130,8 @@ impl AppState {
             dev: DEV_DEFAULT,
             rain: true,
             show_fps: true,
+            show_eyes: false,
+            show_light: false,
             look_at: None,
             content,
             character,
@@ -160,12 +166,19 @@ impl AppState {
         crate::ui::hud::clock_at(self.clock_tick())
     }
 
+    /// The minute of the day: the living city's clock, or the tick's before there is one.
+    pub fn minute_of_day(&self) -> u16 {
+        self.world.as_ref().map_or_else(
+            || crate::ui::hud::minute_at(self.tick),
+            |w| w.minute_of_day(),
+        )
+    }
+
     /// How far past the base the character sees: their perks, and two more tiles
-    /// with low-light between 18:00 and 05:59.
+    /// with low-light while the lamps are on, 18:00 to 05:59.
     pub fn sight_bonus(&self) -> i32 {
         let mut bonus = self.character.sight_bonus(&self.content);
-        let (hour, _) = self.clock();
-        let night = !(6..18).contains(&hour);
+        let night = citygen::lighting::lamps_on(self.minute_of_day());
         if night
             && self
                 .character

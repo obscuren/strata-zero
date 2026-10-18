@@ -1223,8 +1223,14 @@ impl Deck {
                     body.width.saturating_sub(2),
                     body.height.saturating_sub(1),
                 );
-                let map = MapRef::for_place(city, &st.interiors, &st.constructs, p.place)
-                    .unwrap_or_else(|| MapRef::stratum_of(city, StratumKind::Street));
+                let map = MapRef::for_place(
+                    city,
+                    &st.interiors,
+                    &st.constructs,
+                    p.place,
+                    st.minute_of_day(),
+                )
+                .unwrap_or_else(|| MapRef::stratum_of(city, StratumKind::Street));
                 MemoryMap {
                     map: &map,
                     vis: p.vis(),

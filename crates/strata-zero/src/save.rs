@@ -9,9 +9,10 @@ use std::time::SystemTime;
 pub const MAGIC: &[u8; 4] = b"CITY";
 /// 3: `Terrain::Mass` and `Feature::Furniture` joined the tile enums; `Feature::Ice` later joined
 ///    at the end of the enum, which leaves every saved city's bytes as they were.
-pub const FORMAT_VERSION: u16 = 3;
+/// 4: a stratum carries `steady` and `lamps` emitter grids in place of one baked `light`.
+pub const FORMAT_VERSION: u16 = 4;
 /// Versions whose header this build can read (for listing); only `FORMAT_VERSION` loads.
-const READABLE_VERSIONS: [u16; 3] = [1, 2, 3];
+const READABLE_VERSIONS: [u16; 4] = [1, 2, 3, 4];
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Header {
@@ -106,10 +107,11 @@ pub fn load_city(path: &Path) -> Result<City> {
         );
     }
     let strata_ok = city.strata.len() == citygen::StratumKind::ALL.len()
-        && city
-            .strata
-            .iter()
-            .all(|s| s.tiles.size() == city.size && s.light.size() == city.size);
+        && city.strata.iter().all(|s| {
+            s.tiles.size() == city.size
+                && s.steady.size() == city.size
+                && s.lamps.size() == city.size
+        });
     if !strata_ok {
         bail!("{}: strata do not match the city size", path.display());
     }
@@ -196,8 +198,18 @@ mod tests {
             postcard::to_allocvec(&c).unwrap(),
             postcard::to_allocvec(&back).unwrap()
         );
+        let st = back.stratum(citygen::StratumKind::Street).unwrap();
+        assert_eq!(st.lamps.size(), back.size);
+        assert_eq!(st.steady.size(), back.size);
+        // A version 3 file is listed but refused.
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[4..6].copy_from_slice(&3u16.to_le_bytes());
+        let old = dir.join("old.city");
+        std::fs::write(&old, &bytes).unwrap();
+        let err = load_city(&old).unwrap_err().to_string();
+        assert!(err.contains("older version"), "{err}");
         let list = list_cities(&dir).unwrap();
-        assert_eq!(list.len(), 1);
+        assert_eq!(list.len(), 2);
         assert_eq!(list[0].seed, 5);
         assert_eq!(list[0].name, c.name);
         assert_eq!(list[0].size.w, 80);
@@ -297,7 +309,7 @@ mod tests {
             err.contains("older version") && err.contains("seed 42"),
             "{err}"
         );
-        assert_eq!(FORMAT_VERSION, 3);
+        assert_eq!(FORMAT_VERSION, 4);
         std::fs::remove_dir_all(&dir).ok();
     }
 

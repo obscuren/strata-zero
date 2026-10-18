@@ -949,10 +949,12 @@ pub fn tick_backdoors(st: &mut AppState) {
 /// Back to the body, wherever it waits, seeing around it again.
 pub fn jack_out(st: &mut AppState) -> Result<(), &'static str> {
     let bonus = st.sight_bonus();
+    let minute = st.minute_of_day();
     let city = st.city.as_ref().ok_or("no body in the city")?;
     let player = st.player.as_mut().ok_or("no body in the city")?;
-    player.jack_out(city, bonus)?;
-    if let Some(map) = MapRef::for_place(city, &st.interiors, &st.constructs, player.place) {
+    player.jack_out(city, bonus, minute)?;
+    if let Some(map) = MapRef::for_place(city, &st.interiors, &st.constructs, player.place, minute)
+    {
         player.update_fov(&map, bonus);
     }
     // A run in flight stays in the Net.

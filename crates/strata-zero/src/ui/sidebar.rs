@@ -601,6 +601,7 @@ mod tests {
                 &st.interiors,
                 &st.constructs,
                 place,
+                st.minute_of_day(),
             )
             .unwrap(),
             focus,

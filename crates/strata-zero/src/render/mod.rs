@@ -109,6 +109,10 @@ pub struct RenderCtx<'a> {
     pub kind: Option<BuildingKind>,
     /// Bits N=1, E=2, S=4, W=8: neighbours that connect to this tile (see `tileset::connects`).
     pub wall_mask: u8,
+    /// Whether street lamps burn; a lamp that is off is lit like any other tile.
+    pub lamps_on: bool,
+    /// The sky's cast and its weight, on a sunlit stratum by day.
+    pub sky: Option<(Rgb, f32)>,
 }
 
 #[cfg(test)]

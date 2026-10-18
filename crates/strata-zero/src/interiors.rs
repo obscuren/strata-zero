@@ -210,13 +210,14 @@ fn building_name(city: &City, b: BuildingId) -> String {
 /// Puts the player on a floor at a tile and shows them around.
 fn land(st: &mut AppState, place: Place, pos: Pos) {
     let bonus = st.sight_bonus();
+    let minute = st.minute_of_day();
     let Some(city) = st.city.as_ref() else { return };
     let Some(player) = st.player.as_mut() else {
         return;
     };
     player.place = place;
     player.pos = pos;
-    if let Some(map) = MapRef::for_place(city, &st.interiors, &st.constructs, place) {
+    if let Some(map) = MapRef::for_place(city, &st.interiors, &st.constructs, place, minute) {
         player.update_fov(&map, bonus);
     }
     st.repaint = true;

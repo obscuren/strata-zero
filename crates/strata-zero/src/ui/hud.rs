@@ -24,8 +24,13 @@ pub const START_MINUTE_OF_DAY: u16 = 22 * 60;
 
 /// The clock at `tick`: 22:00 at tick 0, one minute per ninety ticks, wrapping at midnight.
 pub fn clock_at(tick: u64) -> (u8, u8) {
-    let m = (START_MINUTE + tick / TICKS_PER_MINUTE) % (24 * 60);
+    let m = minute_at(tick) as u64;
     ((m / 60) as u8, (m % 60) as u8)
+}
+
+/// The minute of the day at `tick`, from the 22:00 start.
+pub fn minute_at(tick: u64) -> u16 {
+    ((START_MINUTE + tick / TICKS_PER_MINUTE) % (24 * 60)) as u16
 }
 
 /// The day at `tick`, counting from day 1 at tick 0.
@@ -181,6 +186,13 @@ pub fn location_line(location: &str, clock: (u8, u8), width: u16) -> Line<'stati
         Span::raw(" ".repeat(gap)),
         text(clock_text),
     ])
+}
+
+/// How exposed you are, on its own band row: `dim · 2 eyes`, `bright · unseen`.
+/// Empty off the strata.
+pub fn exposure_row(exposure: &str, width: u16) -> Line<'static> {
+    let body = cut(exposure, (width as usize).saturating_sub(1));
+    padded(vec![Span::raw(" "), dim(body)], width as usize)
 }
 
 /// Filled cells for `cur` of `max` out of `cells`.
@@ -685,6 +697,17 @@ mod tests {
         let long = location_line(&"B".repeat(60), (9, 5), 36).to_string();
         assert_eq!(long.chars().count(), 36, "{long:?}");
         assert!(long.ends_with("… ☀ 09:05"), "{long:?}");
+    }
+
+    #[test]
+    fn exposure_row_fills_its_width_and_cuts() {
+        let s = exposure_row("dim · 2 eyes", 20).to_string();
+        assert_eq!(s.chars().count(), 20, "{s:?}");
+        assert!(s.starts_with(" dim · 2 eyes"), "{s:?}");
+        let short = exposure_row("bright · unseen", 10).to_string();
+        assert_eq!(short.chars().count(), 10, "{short:?}");
+        assert!(short.ends_with("…"), "{short:?}");
+        assert_eq!(exposure_row("", 8).to_string(), " ".repeat(8));
     }
 
     #[test]

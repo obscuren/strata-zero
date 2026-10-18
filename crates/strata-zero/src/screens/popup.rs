@@ -317,6 +317,7 @@ impl Popup {
             };
         }
         let bonus = st.sight_bonus();
+        let minute = st.minute_of_day();
         let result: Result<(String, TransitionKind), String> =
             match (st.city.as_ref(), st.player.as_mut()) {
                 (Some(city), Some(player)) => match act {
@@ -331,7 +332,7 @@ impl Popup {
                         match player.use_connector(city, up) {
                             Some(dest) => {
                                 player.update_fov(
-                                    &crate::render::map::MapRef::stratum_of(city, dest),
+                                    &crate::render::map::MapRef::stratum_at(city, dest, minute),
                                     bonus,
                                 );
                                 Ok((format!("now on `{}`", dest.label()), TransitionKind::None))

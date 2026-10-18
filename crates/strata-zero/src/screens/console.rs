@@ -1,5 +1,5 @@
 //! Dev console commands: spawn and drop items, give credits, heal, xp, focus, count the
-//! people, jump the clock, clear a pile.
+//! people, jump the clock, clear a pile, show who sees you and how lit the map is.
 
 use crate::anim::effects::pulse;
 use crate::app::AppState;
@@ -11,10 +11,10 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 27] = [
+const COMMANDS: [&str; 30] = [
     "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "talent", "tpts", "program",
     "heat", "alarm", "wake", "engage", "calm", "ice", "failsafe", "hp", "who", "clock", "tp",
-    "clear", "help", "trace", "seize", "backdoor",
+    "clear", "help", "trace", "seize", "backdoor", "eyes", "light", "time",
 ];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
@@ -43,7 +43,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 Ok(format!("spawned {qty}× `{}`", item.name))
             } else {
                 let lies = st.city.as_ref().is_some_and(|c| {
-                    crate::render::map::MapRef::for_place(c, &st.interiors, &st.constructs, focus.place)
+                    crate::render::map::MapRef::for_place(c, &st.interiors, &st.constructs, focus.place, st.minute_of_day())
                         .is_some_and(|m| crate::render::map::TileMap::walkable(&m, focus.pos))
                 });
                 if !lies {
@@ -281,9 +281,9 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             }
             Ok(format!("{out} out · {inside} inside · {driving} driving"))
         }
-        "clock" => {
+        "clock" | "time" => {
             // Jumps the clock forward to the next hh:mm and reseeds the city's day there.
-            let usage = "clock <hh:mm>".to_string();
+            let usage = format!("{cmd} <hh:mm>");
             let (h, m) = args
                 .first()
                 .and_then(|a| a.split_once(':'))
@@ -314,6 +314,21 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 crate::ui::hud::START_MINUTE_OF_DAY,
                 minute * per_minute,
             ));
+            // Sight follows the sun: see the new hour at once.
+            let bonus = st.sight_bonus();
+            let now = st.minute_of_day();
+            if let (Some(city), Some(player)) = (st.city.as_ref(), st.player.as_mut())
+                && let Some(map) = crate::render::map::MapRef::for_place(
+                    city,
+                    &st.interiors,
+                    &st.constructs,
+                    player.place,
+                    now,
+                )
+            {
+                player.update_fov(&map, bonus);
+            }
+            st.repaint = true;
             Ok(format!("{h:02}:{m:02}"))
         }
         "trace" => {
@@ -376,7 +391,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 .ok_or_else(|| "no body in the city".to_string())?;
             let city = st.city.as_ref().ok_or_else(|| "no city".to_string())?;
             let target = Pos::new(x, y);
-            let map = crate::render::map::MapRef::for_place(city, &st.interiors, &st.constructs, place)
+            let map = crate::render::map::MapRef::for_place(city, &st.interiors, &st.constructs, place, st.minute_of_day())
                 .ok_or_else(|| "no map here".to_string())?;
             if !crate::render::map::TileMap::walkable(&map, target) {
                 return Err("nothing to stand on there".to_string());
@@ -389,6 +404,14 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             st.repaint = true;
             Ok(format!("{x},{y} · {label}"))
         }
+        "eyes" => {
+            st.show_eyes = !st.show_eyes;
+            Ok(format!("eyes {}", if st.show_eyes { "on" } else { "off" }))
+        }
+        "light" => {
+            st.show_light = !st.show_light;
+            Ok(format!("light {}", if st.show_light { "on" } else { "off" }))
+        }
         "clear" => {
             let n = st.ground.at(focus.place, focus.pos).len();
             st.ground.clear(focus.place, focus.pos);
@@ -398,7 +421,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             ))
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> · tp <x> <y> · trace · seize · backdoor <host> · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · eyes · light · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),
@@ -593,6 +616,17 @@ mod tests {
     }
 
     #[test]
+    fn eyes_and_light_toggle() {
+        let (mut st, at) = setup();
+        assert!(!st.show_eyes && !st.show_light);
+        assert_eq!(run(&mut st, at, "eyes").unwrap(), "eyes on");
+        assert_eq!(run(&mut st, at, "light").unwrap(), "light on");
+        assert!(st.show_eyes && st.show_light);
+        assert_eq!(run(&mut st, at, "eyes").unwrap(), "eyes off");
+        assert!(!st.show_eyes);
+    }
+
+    #[test]
     fn clock_sets_the_hour_and_reseeds_the_day() {
         let (mut st, at) = setup();
         let city = st.city.as_ref().unwrap();
@@ -614,6 +648,34 @@ mod tests {
             run(&mut st, at, "clock 25:00").unwrap_err(),
             "clock <hh:mm>"
         );
+        // The clock refreshes sight: noon sees the whole street at once.
+        {
+            let city = st.city.as_ref().unwrap();
+            let mut p = crate::walker::Player::spawn(city, 1);
+            p.update_fov(
+                &crate::render::map::MapRef::stratum_of(city, StratumKind::Street),
+                0,
+            );
+            st.player = Some(p);
+        }
+        let night = st
+            .player
+            .as_ref()
+            .unwrap()
+            .vis()
+            .count(|v| *v == crate::walker::Visibility::Visible);
+        assert_eq!(run(&mut st, at, "time 12:00").unwrap(), "12:00");
+        let noon = st
+            .player
+            .as_ref()
+            .unwrap()
+            .vis()
+            .count(|v| *v == crate::walker::Visibility::Visible);
+        assert!(noon > 2 * night, "{noon} at noon vs {night} at night");
+        // `time` is the same command by another name.
+        assert_eq!(run(&mut st, at, "time 08:00").unwrap(), "08:00");
+        assert_eq!(st.clock(), (8, 0));
+        assert_eq!(run(&mut st, at, "time 8").unwrap_err(), "time <hh:mm>");
     }
 
     #[test]

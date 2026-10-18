@@ -11,7 +11,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use sim::{Card, MoverKind, Tint, World};
+use sim::{Card, MoverKind, PersonId, Tint, World};
 
 /// Tiles beyond the viewport the bubble reaches.
 pub const MARGIN: i32 = 20;
@@ -32,6 +32,8 @@ pub struct PeopleOverlay<'a> {
     pub night: bool,
     /// The player's sight when on foot; the free camera sees everyone.
     pub vis: Option<&'a Grid<Visibility>>,
+    /// Dev: the walkers who can see you, drawn red.
+    pub eyes: &'a [PersonId],
 }
 
 impl Overlay for PeopleOverlay<'_> {
@@ -78,8 +80,12 @@ impl Overlay for PeopleOverlay<'_> {
                 continue;
             }
             match m.kind {
-                MoverKind::Walker { tint, .. } => {
-                    let fg = tint.map(tint_colour).unwrap_or(DIM);
+                MoverKind::Walker { id, tint } => {
+                    let fg = if self.eyes.contains(&id) {
+                        Rgb(255, 70, 70).to_color()
+                    } else {
+                        tint.map(tint_colour).unwrap_or(DIM)
+                    };
                     buf[(sx, sy)].set_char('@').set_fg(fg);
                 }
                 MoverKind::Car { hue, parked, .. } => {
@@ -214,6 +220,7 @@ mod tests {
             world: &w,
             night: true,
             vis: None,
+            eyes: &[],
         }
         .draw(
             &MapRef::stratum_of(&c, StratumKind::Street),
@@ -247,6 +254,7 @@ mod tests {
             world: &w,
             night: false,
             vis: None,
+            eyes: &[],
         }
         .draw(
             &MapRef::stratum_of(&c, StratumKind::Street),
@@ -274,6 +282,7 @@ mod tests {
             world: &w,
             night: true,
             vis: None,
+            eyes: &[],
         }
         .draw(
             &MapRef::stratum_of(&c, StratumKind::Net),
@@ -310,6 +319,7 @@ mod tests {
             world: &w,
             night: true,
             vis: None,
+            eyes: &[],
         }
         .draw(
             &MapRef::stratum_of(&c, StratumKind::Street),
@@ -336,6 +346,7 @@ mod tests {
             world: &w,
             night: true,
             vis: Some(&vis),
+            eyes: &[],
         }
         .draw(
             &MapRef::stratum_of(&c, StratumKind::Street),

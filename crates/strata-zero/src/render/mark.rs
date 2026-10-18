@@ -3,6 +3,7 @@
 use crate::app::AppState;
 use crate::render::glyphs::kind_icon;
 use crate::render::items::AMBER;
+use crate::render::lighting::sky_of;
 use crate::render::map::{MapRef, TileMap};
 use crate::render::people::tint_colour;
 use crate::render::tileset::cell;
@@ -53,6 +54,8 @@ pub fn mark_tile(st: &AppState, map: &MapRef, pos: Pos) -> Option<(char, Color)>
         connector: map.connector(pos),
         kind: map.kind(pos),
         wall_mask: wall_mask(map, pos, tile.terrain),
+        lamps_on: map.lamps_on(),
+        sky: sky_of(map),
     };
     let c = cell(tile, &ctx);
     Some((c.ch, c.fg.to_color()))

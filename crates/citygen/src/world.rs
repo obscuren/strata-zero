@@ -85,13 +85,16 @@ impl StratumKind {
     }
 }
 
-/// One full tile map plus its precomputed light.
+/// One full tile map plus its baked emitters; ambient comes from the clock.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Stratum {
     pub kind: StratumKind,
     pub tiles: Grid<Tile>,
-    /// 0 dark .. 255 bright.
-    pub light: Grid<u8>,
+    /// Light from fixtures that run all day: neon, holo ads, helipads, windows, the
+    /// Net's grid. 0 dark .. 255 bright, no ambient.
+    pub steady: Grid<u8>,
+    /// Light from street lamps, which switch off by day. No ambient.
+    pub lamps: Grid<u8>,
 }
 
 impl Stratum {
@@ -99,8 +102,25 @@ impl Stratum {
         Stratum {
             kind,
             tiles: Grid::filled(size, Tile::VOID),
-            light: Grid::filled(size, 0),
+            steady: Grid::filled(size, 0),
+            lamps: Grid::filled(size, 0),
         }
+    }
+
+    /// Light the tile throws on its own at `minute`: steady fixtures plus lamps while on.
+    pub fn emitted(&self, p: Pos, minute: u16) -> u8 {
+        let steady = self.steady.get(p).copied().unwrap_or(0);
+        let lamps = if crate::lighting::lamps_on_at(self.kind, minute) {
+            self.lamps.get(p).copied().unwrap_or(0)
+        } else {
+            0
+        };
+        steady.saturating_add(lamps)
+    }
+
+    /// The light on a tile at `minute`: ambient for the stratum plus what it emits.
+    pub fn light_at(&self, p: Pos, minute: u16) -> u8 {
+        crate::lighting::ambient(self.kind, minute).saturating_add(self.emitted(p, minute))
     }
 }
 

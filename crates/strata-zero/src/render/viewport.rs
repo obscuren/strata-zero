@@ -1,6 +1,6 @@
 //! The map viewport: camera, screen/tile mapping and the MapView widget with overlays.
 
-use crate::render::lighting::apply_vis;
+use crate::render::lighting::{apply_vis, sky_of};
 use crate::render::map::{MapRef, TileMap};
 use crate::render::style::StylePack;
 use crate::render::tileset::{MASK_E, MASK_N, MASK_S, MASK_W, cell, connects};
@@ -182,6 +182,8 @@ impl Widget for MapView<'_> {
                                 connector: None,
                                 kind: None,
                                 wall_mask: 0,
+                                lamps_on: map.lamps_on(),
+                                sky: sky_of(map),
                             };
                             apply_vis(cell(&back, &ctx), Visibility::Remembered).write(buf, sx, sy);
                         }
@@ -204,6 +206,8 @@ impl Widget for MapView<'_> {
                     connector: map.connector(p),
                     kind: map.kind(p),
                     wall_mask: mask,
+                    lamps_on: map.lamps_on(),
+                    sky: sky_of(map),
                 };
                 apply_vis(cell(tile, &ctx), vis).write(buf, sx, sy);
             }

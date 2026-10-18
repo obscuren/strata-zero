@@ -12,10 +12,8 @@ use crate::world::{Connector, ConnectorKind, Stratum, StratumKind};
 use std::collections::VecDeque;
 
 const K: StratumKind = StratumKind::Net;
-const GRID_LIGHT: u8 = 200;
 const HUB_RADIUS: i32 = 2;
 const NODE_SEARCH: i32 = 6;
-const LANE_LIGHT: u8 = 255;
 /// How far a lane may stray from the box spanned by its endpoints.
 const LANE_MARGIN: i32 = 16;
 
@@ -48,7 +46,7 @@ pub(crate) fn set(ctx: &mut GenCtx, p: Pos, t: Terrain, b: Option<BuildingId>, l
         tile.building = b;
     }
     if let Some(st) = ctx.city.stratum_mut(K) {
-        st.light.set(p, light);
+        st.steady.set(p, light);
     }
 }
 
@@ -134,7 +132,7 @@ impl CyberspaceStage {
                         variant,
                     },
                 );
-                st.light.set(p, GRID_LIGHT);
+                st.steady.set(p, crate::lighting::tuning::NET_GRID_LIGHT);
             }
         }
         ctx.city.strata.push(st);
@@ -335,7 +333,7 @@ impl CyberspaceStage {
             if ctx.terrain(K, p) == Terrain::NetGrid {
                 ctx.set_terrain(K, p, Terrain::NetLane);
                 if let Some(st) = ctx.city.stratum_mut(K) {
-                    st.light.set(p, LANE_LIGHT);
+                    st.steady.set(p, crate::lighting::tuning::NET_LANE_LIGHT);
                 }
             }
         }
@@ -458,7 +456,7 @@ pub(crate) mod tests {
             for p in fp.inset(1).iter() {
                 assert_eq!(net.tiles[p].terrain, Terrain::NetFloor);
             }
-            let light = net.light[fp.center()];
+            let light = net.steady[fp.center()];
             assert!(light >= 96, "construct light {light}");
         }
         assert!(net.tiles.count(|t| t.terrain == Terrain::NetGrid) > c.size.area() / 4);

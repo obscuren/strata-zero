@@ -29,12 +29,38 @@ pub trait TileMap {
     fn backdrop(&self, _p: Pos) -> Option<Tile> {
         None
     }
+    /// Light the tile throws on its own, ambient excluded; 0 off the strata.
+    fn emitted(&self, _p: Pos) -> u8 {
+        0
+    }
+    /// Whether the tile is a fixture glowing right now.
+    fn emits(&self, _p: Pos) -> bool {
+        false
+    }
+    /// How much sun: 0 at night, 1 by day; 0 wherever there is no sky.
+    fn daylight(&self) -> f32 {
+        0.0
+    }
+    /// Whether street lamps burn; always, where there is no clock.
+    fn lamps_on(&self) -> bool {
+        true
+    }
+    /// Whether light past the dark radius is seen here: the physical strata only.
+    fn lit_sight(&self) -> bool {
+        false
+    }
+    /// The sky's colour and weight on a sunlit stratum by day; none elsewhere.
+    fn sky(&self) -> Option<((u8, u8, u8), f32)> {
+        None
+    }
 }
 
 #[derive(Clone, Copy)]
 pub struct StratumMap<'a> {
     pub city: &'a City,
     pub stratum: StratumKind,
+    /// The minute of the day the stratum is seen at; ambient and lamps follow it.
+    pub minute: u16,
 }
 
 #[derive(Clone, Copy)]
@@ -100,19 +126,31 @@ impl TileMap for ConstructMap<'_> {
 }
 
 impl<'a> MapRef<'a> {
+    /// A stratum at the night the game starts, for tests and screens before a world exists.
     pub fn stratum_of(city: &'a City, stratum: StratumKind) -> Self {
-        MapRef::Stratum(StratumMap { city, stratum })
+        Self::stratum_at(city, stratum, crate::ui::hud::START_MINUTE_OF_DAY)
     }
 
-    /// The map at a place, if its floor or construct has been generated.
+    /// A stratum at `minute` of the day.
+    pub fn stratum_at(city: &'a City, stratum: StratumKind, minute: u16) -> Self {
+        MapRef::Stratum(StratumMap {
+            city,
+            stratum,
+            minute,
+        })
+    }
+
+    /// The map at a place at `minute` of the day, if its floor or construct has been
+    /// generated.
     pub fn for_place(
         city: &'a City,
         interiors: &'a Interiors,
         constructs: &'a Constructs,
         place: Place,
+        minute: u16,
     ) -> Option<Self> {
         match place {
-            Place::Stratum(k) => Some(MapRef::stratum_of(city, k)),
+            Place::Stratum(k) => Some(MapRef::stratum_at(city, k, minute)),
             Place::Floor { building, level } => {
                 let (plan, floor) = interiors.floor(building, level)?;
                 Some(MapRef::Floor(FloorMap { city, plan, floor }))
@@ -179,8 +217,39 @@ impl TileMap for StratumMap<'_> {
     fn light(&self, p: Pos) -> u8 {
         self.city
             .stratum(self.stratum)
-            .and_then(|s| s.light.get(p).copied())
-            .unwrap_or(0)
+            .map_or(0, |s| s.light_at(p, self.minute))
+    }
+
+    fn emitted(&self, p: Pos) -> u8 {
+        self.city
+            .stratum(self.stratum)
+            .map_or(0, |s| s.emitted(p, self.minute))
+    }
+
+    fn emits(&self, p: Pos) -> bool {
+        self.tile(p).is_some_and(|t| {
+            citygen::lighting::emits(t.terrain, t.feature, self.stratum, self.lamps_on())
+        })
+    }
+
+    fn daylight(&self) -> f32 {
+        if citygen::lighting::sunlit(self.stratum) {
+            citygen::lighting::daylight(self.minute)
+        } else {
+            0.0
+        }
+    }
+
+    fn lamps_on(&self) -> bool {
+        citygen::lighting::lamps_on_at(self.stratum, self.minute)
+    }
+
+    fn lit_sight(&self) -> bool {
+        self.stratum != StratumKind::Net
+    }
+
+    fn sky(&self) -> Option<((u8, u8, u8), f32)> {
+        citygen::lighting::sky(self.stratum, self.minute)
     }
 
     fn theme(&self, p: Pos) -> Option<Theme> {
@@ -279,6 +348,54 @@ impl TileMap for MapRef<'_> {
             MapRef::Stratum(m) => m.light(p),
             MapRef::Floor(m) => m.light(p),
             MapRef::Construct(m) => m.light(p),
+        }
+    }
+
+    fn emitted(&self, p: Pos) -> u8 {
+        match self {
+            MapRef::Stratum(m) => m.emitted(p),
+            MapRef::Floor(m) => m.emitted(p),
+            MapRef::Construct(m) => m.emitted(p),
+        }
+    }
+
+    fn emits(&self, p: Pos) -> bool {
+        match self {
+            MapRef::Stratum(m) => m.emits(p),
+            MapRef::Floor(m) => m.emits(p),
+            MapRef::Construct(m) => m.emits(p),
+        }
+    }
+
+    fn daylight(&self) -> f32 {
+        match self {
+            MapRef::Stratum(m) => m.daylight(),
+            MapRef::Floor(m) => m.daylight(),
+            MapRef::Construct(m) => m.daylight(),
+        }
+    }
+
+    fn lamps_on(&self) -> bool {
+        match self {
+            MapRef::Stratum(m) => m.lamps_on(),
+            MapRef::Floor(m) => m.lamps_on(),
+            MapRef::Construct(m) => m.lamps_on(),
+        }
+    }
+
+    fn lit_sight(&self) -> bool {
+        match self {
+            MapRef::Stratum(m) => m.lit_sight(),
+            MapRef::Floor(m) => m.lit_sight(),
+            MapRef::Construct(m) => m.lit_sight(),
+        }
+    }
+
+    fn sky(&self) -> Option<((u8, u8, u8), f32)> {
+        match self {
+            MapRef::Stratum(m) => m.sky(),
+            MapRef::Floor(m) => m.sky(),
+            MapRef::Construct(m) => m.sky(),
         }
     }
 
@@ -443,7 +560,8 @@ mod tests {
                 Place::Floor {
                     building: b.id,
                     level: 7
-                }
+                },
+                crate::ui::hud::START_MINUTE_OF_DAY,
             )
             .is_none()
         );

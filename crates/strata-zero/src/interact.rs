@@ -101,7 +101,13 @@ pub fn gather(
     if matches!(place, Place::Construct(_)) {
         return Vec::new();
     }
-    let Some(map) = MapRef::for_place(city, &st.interiors, &st.constructs, place) else {
+    let Some(map) = MapRef::for_place(
+        city,
+        &st.interiors,
+        &st.constructs,
+        place,
+        st.minute_of_day(),
+    ) else {
         return Vec::new();
     };
     let mut subs: Vec<Subject> = Vec::new();

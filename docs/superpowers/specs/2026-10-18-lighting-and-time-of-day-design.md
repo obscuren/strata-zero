@@ -66,8 +66,11 @@ Both hold emitted light only; base is zero. The light at a tile is
 light(kind, p, minute) = clamp(ambient(kind, minute) + steady[p] + lamps[p] * lamps_on(minute))
 ```
 
-where `lamps_on(minute)` is true while `daylight(minute) < 0.5`. Lamps snap on
-at 18:00 and off at 06:00. `Stratum::light_at(p, minute)` and
+where `lamps_on(minute)` is the minute window from the middle of dusk to the
+middle of dawn: lamps snap on at 18:00 and off at 06:00, the night window the
+perk and the sim keep. Where there is no sky (the Undercity, the Net) the
+lamps burn all day: `lamps_on_at(kind, minute)` is what the grids and the map
+read. `Stratum::light_at(p, minute)` and
 `Stratum::emitted(p, minute)` (steady plus active lamps, no ambient) are the
 two reads.
 
@@ -173,12 +176,14 @@ true. Off the strata it is `{ light: 0, eyes: [] }`.
 
 ### The HUD
 
-`hud::location_line` gains a third segment between the location and the
-clock: a light word and the eye count. The word comes from
-`lighting::tuning::EXPOSURE_BANDS`: `dark` below 40, `dim` below 100, `lit`
-below 180, `bright` otherwise. The count reads `unseen` at zero and `N eyes`
-otherwise, so a line reads `dim · 2 eyes` or `bright · unseen`. Plain text,
-no colour, cut before the location when the width is short.
+`hud::exposure_row` draws on the right band's spare third row, under the
+location line and the carry row: a light word and the eye count. (The design
+first put it on the location line; at a 120-column terminal the 40-column
+band then cut the district name, so it took the empty row instead.) The word
+comes from `lighting::tuning::EXPOSURE_BANDS`: `dark` below 40, `dim` below
+100, `lit` below 180, `bright` otherwise. The count reads `unseen` at zero,
+`1 eye`, and `N eyes` otherwise, so the row reads `dim · 2 eyes` or `bright ·
+unseen`. Plain dim text, no colour; empty off the strata.
 
 ### Dev overlays
 

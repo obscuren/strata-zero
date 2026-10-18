@@ -39,12 +39,13 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
     if took {
         crate::credentials::shard_taken(st, place, pos);
     }
+    let minute = st.minute_of_day();
     let interiors = &st.interiors;
     let constructs = &st.constructs;
     if refresh_sight {
         let bonus = st.sight_bonus();
         if let (Some(city), Some(player)) = (st.city.as_ref(), st.player.as_mut())
-            && let Some(map) = MapRef::for_place(city, interiors, constructs, player.place)
+            && let Some(map) = MapRef::for_place(city, interiors, constructs, player.place, minute)
         {
             player.update_fov(&map, bonus);
         }
@@ -54,7 +55,8 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         match effect {
             Effect::Reveal { radius } => {
                 if let (Some(city), Some(player)) = (st.city.as_ref(), st.player.as_mut())
-                    && let Some(map) = MapRef::for_place(city, interiors, constructs, player.place)
+                    && let Some(map) =
+                        MapRef::for_place(city, interiors, constructs, player.place, minute)
                 {
                     revealed = player.reveal(&map, radius);
                 }

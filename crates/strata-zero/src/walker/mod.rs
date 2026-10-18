@@ -5,10 +5,13 @@ pub mod fov;
 use crate::home::HomeRig;
 pub use crate::render::Visibility;
 use crate::render::map::{MapRef, TileMap};
+use citygen::lighting::tuning::{DAY_RADIUS, LIT_RADIUS};
 use citygen::rng::hash64;
-use citygen::{City, ConnectorKind, Dir, Grid, Place, Pos, Size, StratumKind, Theme};
+use citygen::{City, ConnectorKind, Dir, Grid, Place, Pos, Size, StratumKind, Theme, sight};
 use std::collections::HashMap;
 
+/// How far you see in the dark, per place. By day on a sunlit stratum the radius
+/// grows toward `DAY_RADIUS`; lit tiles past it are seen regardless.
 pub const RADIUS_STREET: i32 = 14;
 pub const RADIUS_UNDER: i32 = 8;
 pub const RADIUS_NET: i32 = 24;
@@ -78,12 +81,24 @@ impl Player {
         }
     }
 
+    /// The dark radius at night for the current place.
     pub fn radius(&self) -> i32 {
         match self.place {
             Place::Stratum(StratumKind::Undercity) => RADIUS_UNDER,
             Place::Stratum(StratumKind::Net) => RADIUS_NET,
             Place::Stratum(_) => RADIUS_STREET,
             Place::Floor { .. } | Place::Construct(_) => RADIUS_INSIDE,
+        }
+    }
+
+    /// The dark radius with `daylight` (0..=1) on it: night on strata with no sky.
+    pub fn radius_at(&self, daylight: f32) -> i32 {
+        let night = self.radius();
+        match self.place {
+            Place::Stratum(k) if citygen::lighting::sunlit(k) => {
+                night + ((DAY_RADIUS - night) as f32 * daylight).round() as i32
+            }
+            _ => night,
         }
     }
 
@@ -132,14 +147,19 @@ impl Player {
         Ok(port)
     }
 
-    /// Returns to the body. A body left on a stratum sees again at once; one left on a
-    /// floor is refreshed by the caller, who holds the floor.
-    pub fn jack_out(&mut self, city: &City, sight_bonus: i32) -> Result<(), &'static str> {
+    /// Returns to the body. A body left on a stratum sees again at once, at `minute`
+    /// of the day; one left on a floor is refreshed by the caller, who holds the floor.
+    pub fn jack_out(
+        &mut self,
+        city: &City,
+        sight_bonus: i32,
+        minute: u16,
+    ) -> Result<(), &'static str> {
         let (place, p) = self.body.take().ok_or("not jacked in")?;
         self.place = place;
         self.pos = p;
         if let Some(k) = place.stratum() {
-            self.update_fov(&MapRef::stratum_of(city, k), sight_bonus);
+            self.update_fov(&MapRef::stratum_at(city, k, minute), sight_bonus);
         }
         Ok(())
     }
@@ -182,9 +202,13 @@ impl Player {
     }
 
     /// Recomputes what the player sees on the current map, demoting old sight to memory.
-    /// `sight_bonus` is the character's equipment bonus to the radius.
+    /// `sight_bonus` is the character's equipment bonus to the dark radius. On a
+    /// physical stratum the cast reaches `LIT_RADIUS` and keeps lit tiles past the dark
+    /// radius; the Net and interiors see the plain radius.
     pub fn update_fov(&mut self, map: &dyn TileMap, sight_bonus: i32) {
-        let radius = (self.radius() + sight_bonus).max(1);
+        let dark = (self.radius_at(map.daylight()) + sight_bonus).max(1);
+        let lit = map.lit_sight();
+        let cast = if lit { dark.max(LIT_RADIUS) } else { dark };
         let size = map.size();
         let pos = self.pos;
         let grid = self.memory_for(size);
@@ -195,11 +219,13 @@ impl Player {
         }
         fov::compute(
             pos,
-            radius,
+            cast,
             |p| map.tile(p).is_none_or(|t| t.blocks_sight()),
             |p| size.contains(p),
             |p| {
-                grid.set(p, Visibility::Visible);
+                if !lit || sight::lit_or_near(pos, p, dark, |q| map.emitted(q), |q| map.emits(q)) {
+                    grid.set(p, Visibility::Visible);
+                }
             },
         );
     }
@@ -383,12 +409,18 @@ mod tests {
         assert_eq!(p.jack_in(&c, None, 0), Err("already jacked in"));
         assert_eq!(p.use_connector(&c, false), None, "jacks are not stairs");
         assert_eq!(p.use_connector(&c, true), None);
-        assert_eq!(p.jack_out(&c, 0), Ok(()));
+        assert_eq!(p.jack_out(&c, 0, 22 * 60), Ok(()));
         assert_eq!(
             (p.place, p.pos, p.body),
             (Place::Stratum(StratumKind::Street), stand, None)
         );
-        assert_eq!(p.jack_out(&c, 0), Err("not jacked in"));
+        assert_eq!(p.jack_out(&c, 0, 22 * 60), Err("not jacked in"));
+        // The body left on the street at noon sees the noon street.
+        let night = p.vis().count(|v| *v == Visibility::Visible);
+        assert!(p.jack_in(&c, None, 0).is_ok());
+        assert_eq!(p.jack_out(&c, 0, 12 * 60), Ok(()));
+        let day = p.vis().count(|v| *v == Visibility::Visible);
+        assert!(day > night, "{day} by day vs {night} at night");
         // Far from any terminal.
         let far = c
             .stratum(StratumKind::Street)
@@ -458,7 +490,7 @@ mod tests {
         assert_eq!(p.place, Place::Stratum(StratumKind::Net));
         assert_eq!(p.pos, rig.landing);
         assert_eq!(p.body, Some((home, beside)));
-        assert_eq!(p.jack_out(&c, 0), Ok(()));
+        assert_eq!(p.jack_out(&c, 0, 22 * 60), Ok(()));
         assert_eq!((p.place, p.pos, p.body), (home, beside, None));
     }
 
@@ -471,6 +503,51 @@ mod tests {
         p.update_fov(&street(&c), 10);
         let wide = p.vis().count(|v| *v == Visibility::Visible);
         assert!(wide > base, "{wide} vs {base}");
+    }
+
+    #[test]
+    fn a_lamp_pulls_its_pool_into_view_past_the_dark_radius() {
+        let c = city();
+        let st = c.stratum(StratumKind::Street).unwrap();
+        let mut p = Player::spawn(&c, 1);
+        p.update_fov(&street(&c), 0);
+        let far_lit = p
+            .vis()
+            .iter()
+            .filter(|(q, v)| **v == Visibility::Visible && q.chebyshev(p.pos) > RADIUS_STREET)
+            .filter(|(q, _)| st.emitted(*q, 22 * 60) >= citygen::lighting::tuning::LIT_SIGHT)
+            .count();
+        assert!(
+            far_lit > 0,
+            "something lit beyond {RADIUS_STREET} tiles is seen"
+        );
+        let far_dark = p
+            .vis()
+            .iter()
+            .filter(|(q, v)| **v == Visibility::Visible && q.chebyshev(p.pos) > RADIUS_STREET)
+            .filter(|(q, _)| st.emitted(*q, 22 * 60) == 0 && !street(&c).emits(*q))
+            .count();
+        assert_eq!(far_dark, 0, "nothing dark beyond the radius is seen");
+    }
+
+    #[test]
+    fn noon_on_the_street_sees_to_the_horizon_and_the_net_does_not_care() {
+        let c = city();
+        let mut p = Player::spawn(&c, 1);
+        let noon = MapRef::stratum_at(&c, StratumKind::Street, 12 * 60);
+        assert_eq!(
+            p.radius_at(noon.daylight()),
+            citygen::lighting::tuning::DAY_RADIUS
+        );
+        p.update_fov(&noon, 0);
+        let day = p.vis().count(|v| *v == Visibility::Visible);
+        p.update_fov(&street(&c), 0);
+        let night = p.vis().count(|v| *v == Visibility::Visible);
+        assert!(day > 2 * night, "{day} by day vs {night} at night");
+        p.place = Place::Stratum(StratumKind::Net);
+        assert_eq!(p.radius_at(1.0), RADIUS_NET);
+        p.place = Place::Stratum(StratumKind::Undercity);
+        assert_eq!(p.radius_at(1.0), RADIUS_UNDER);
     }
 
     #[test]

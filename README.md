@@ -158,6 +158,13 @@ netrunner's way out of a hunt. Signal ghost, the netrunner's passive, feels
 awake ICE through the walls: it is listed and drawn wherever it is. Low-light,
 from the optics, sees two tiles further between 18:00 and 05:59.
 
+Darkness limits how far you see; light does not. A lamp or a neon sign in your
+line of sight is seen from across the dark with the pool it lights, and light
+stops at walls. The city has a day: from 05:00 the Street, the Skyways and the
+Heights brighten toward noon under a pale sky, the lamps go off at 06:00 and
+sight runs to the edge of the screen; dusk comes amber at 17:00 and the lamps
+come back at 18:00. The Undercity never sees the sun and the Net has none.
+
 Same seed and parameters always produce a byte-identical city.
 
 The city is lived in. Every building is staffed and every bed is slept in: the
@@ -173,7 +180,9 @@ nine at night and take clients into the hotels. Off shift, people head for the
 bar they are known at, queue at the noodle bars at the rush, and stop for a
 word (`…`) when they meet. Nobody waits for you to be looking: the whole city
 moves on the clock, and only the people inside the screen's bubble are drawn;
-on foot you see the ones in your sight, and a parked car stays in memory like
+on foot you see the ones in your sight, and they see you by the same rule: the
+HUD's `dim · 2 eyes` row says how lit your tile is and how many have you in
+sight, which is what stealth will read. A parked car stays in memory like
 a pile. Walk into someone and you swap places, so a crowd never blocks the
 way; `space` lists whoever stands beside you, to talk. Inside a building the
 people the simulation has there stand at their stations when you walk in: the
@@ -277,9 +286,10 @@ walk · `tab` deck ·
 `F1`-`F4` panes · `v` view popup · `m` messages · `d` digital overlay · `s` save ·
 `?` keys · `c` back to the free camera (dev mode) · `:` dev
 console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `sp`, `pts`, `talent`, `tpts`, `program`, `heat`, `alarm`, `wake`, `engage`, `calm`, `ice`, `failsafe`, `who`
-counts the people out, inside and driving, `clock hh:mm` jumps the day there,
-`tp x y` teleports on the current map, `clear`, `help`, with Tab completion and
-history) · `esc` pause
+counts the people out, inside and driving, `clock hh:mm` (or `time hh:mm`) jumps the day there,
+`tp x y` teleports on the current map, `eyes` tints the walkers who see you,
+`light` paints the map grey by its light, `clear`, `help`, with Tab completion
+and history) · `esc` pause
 
 The play HUD frames the map on one grid. The top band carries the handle,
 level, credits and dev readouts, then HP, FOCUS and XP bars that run the width

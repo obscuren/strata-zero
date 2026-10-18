@@ -8,6 +8,7 @@ mod backdoors;
 mod cli;
 mod constructs;
 mod credentials;
+mod exposure;
 mod helix;
 mod home;
 mod interact;
