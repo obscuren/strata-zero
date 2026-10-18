@@ -1,6 +1,6 @@
 //! HELIX/OS: the small Unix every machine in the city runs.
 
-pub mod r#gen;
+pub mod hosts;
 pub mod shell;
 pub mod vfs;
 
