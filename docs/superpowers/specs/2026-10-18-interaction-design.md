@@ -1,6 +1,14 @@
 # Interaction: the Space window, its verbs, and look: design
 
-Date: 2026-10-18. Status: design, not built. Brainstormed with Jeffrey; the
+Date: 2026-10-18. Status: built on `feat/interaction` (plan
+`docs/superpowers/plans/2026-10-18-interaction.md`). Rulings made while building:
+items and keypads share amber in rows; the program window's header is always
+blank; the Floors panel and the lift window share the 16 free letters (tall
+towers leave the lowest floors to the arrows); jacking out drops an armed run
+("run aborted"); names may carry digits in look text. Added mid-build at
+Jeffrey's request: entering a building, a floor or home logs "Entering
+`name`" / "Entering `11F`" / "Entering `home` · flat N", and the map's toast
+lights marked names as the LOG pane does. Brainstormed with Jeffrey; the
 mockups below are the ones he approved ("Yep, that's it", then "Great" for
 look, with "the window should also be slightly larger"). Calls Claude made
 without asking are marked **(Claude's call)**.
