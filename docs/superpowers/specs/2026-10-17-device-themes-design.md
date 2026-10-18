@@ -2,7 +2,11 @@
 
 Date: 2026-10-17. Status: built on `feat/corp-gloss` right after the corp-gloss
 restyle (approved in chat: "Go theme and megacorp"). Built as specified, plus a
-`badge` per theme (MUNI-OS, CORP/OS, NEON NET) and dark ink on light bodies.
+maker and models per theme and dark ink on light bodies. Named on 2026-10-18 with
+Jeffrey: one OS for every device, **HELIX/OS**, at a version per maker; makers
+and models Civitas K-40 / Kiosk 9 (HELIX/OS 4.1), Halcyon SG-7 / Node 9 (9.4),
+Lotus Luxpad / Marquee (8.0, the badge alternates the district's two accents),
+Zenbo ZK-2 / 64 (2.2, also your rig). Boots use `{OS}`.
 Builds on: `2026-10-17-keypads-design.md` and `2026-10-17-access-terminal-design.md`
 (the device kit in `ui/device.rs`).
 

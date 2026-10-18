@@ -29,8 +29,17 @@ pub struct StratumStyle {
 /// How a device looks and speaks: a keypad or a terminal in a theme.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DeviceStyle {
-    /// The maker's mark on the unit.
-    pub badge: String,
+    /// Who built it: CIVITAS, HALCYON, LOTUS, ZENBO.
+    pub maker: String,
+    /// The keypad's model, after the maker's name.
+    pub keypad: String,
+    /// The terminal's model, after the maker's name.
+    pub terminal: String,
+    /// The HELIX/OS version this hardware runs.
+    pub os_version: String,
+    /// The badge's letters alternate the district's two accents.
+    #[serde(default)]
+    pub alternate: bool,
     pub body: Rgb,
     /// The edge; `None` takes the district's accent.
     pub edge: Option<Rgb>,

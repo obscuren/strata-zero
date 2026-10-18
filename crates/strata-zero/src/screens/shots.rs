@@ -239,3 +239,31 @@ fn terminal_on_the_street() {
     term.update(&mut st, &[]);
     shot("terminal", &st, &map, &term);
 }
+
+#[test]
+#[ignore]
+fn a_neon_keypad() {
+    let mut st = state_home();
+    let map = MapScreen::walking(&mut st);
+    let b = {
+        let city = st.city.as_ref().unwrap();
+        city.buildings
+            .iter()
+            .find(|b| {
+                b.kind == citygen::BuildingKind::Apartment
+                    && matches!(
+                        city.district(b.district).theme,
+                        citygen::Theme::NightMarket | citygen::Theme::NeonStrip
+                    )
+            })
+            .map(|b| b.id)
+    };
+    let Some(b) = b else { return };
+    crate::credentials::prepare(&mut st, b);
+    let Some((level, number)) = st.interiors.homes_of(b).and_then(|h| h.flats().next()) else {
+        return;
+    };
+    st.tick += 200;
+    let pad = Keypad::open(&st, b, level, number);
+    shot("keypad_neon", &st, &map, &pad);
+}

@@ -58,11 +58,14 @@ to the journal, and three wrong ones lock the pad for half an hour.
 Every terminal has a second way in. Beside a street terminal, `space` offers
 `access terminal`: a typed session on a CRT over the map. Every machine wears its
 district's theme: municipal gunmetal in the Megablocks, white and chrome in the
-Corp Core with a corp OS and polite refusals, neon in the markets, and cracked
+Corp Core with polite refusals, neon in the markets, and cracked
 plastic with amber glass, dead cells and a flicker in the Combat Zone, Old Town,
 the Docks and the industrial blocks. Keypads follow their building, corp towers
 and offices in chrome; your own rig is a battered street box until you upgrade
-it. `SCAN` lists the
+it. Every one of them runs HELIX/OS, at whatever version its maker shipped:
+Civitas kiosks and K-40 keypads, Halcyon nodes and SG-7s in the towers, Lotus
+Marquees and Luxpads in the markets with their names in two neon colours, and
+thirty-year-old Zenbo 64s and ZK-2s on the street. `SCAN` lists the
 district's buildings with their security and ICE, `CONNECT` picks one, `WHO`
 says who is inside, `PLAN` loads its ground floor into your map, `LOG` shows
 what has been done to it. Hold one of the building's keycards or codes and you

@@ -161,10 +161,10 @@ impl Terminal {
         &self.console.input
     }
 
-    fn badge(&self) -> &str {
+    fn badge(&self) -> String {
         match self.session {
-            Session::District { .. } => &self.look.style.badge,
-            Session::Rig { .. } => "HOME RIG",
+            Session::District { .. } => self.look.terminal_badge(),
+            Session::Rig { .. } => format!("{} · HOME RIG", self.look.terminal_badge()),
         }
     }
 
@@ -307,7 +307,7 @@ impl Screen for Terminal {
             None => Led::Idle,
         };
         let buf = f.buffer_mut();
-        let screen = device::crt(buf, r, self.badge(), led, &self.look);
+        let screen = device::crt(buf, r, &self.badge(), led, &self.look);
         let glass = self.look.glass();
         let flicker = self.look.flickering(tick);
         let tone = |c: ratatui::style::Color| {
@@ -495,7 +495,7 @@ mod tests {
         let text = draw(&t, &st);
         let dn = st.city.as_ref().unwrap().district(d).name.to_uppercase();
         assert!(text.contains(&format!("{dn} NET > ")), "{text}");
-        assert!(text.contains("MUNI-OS"), "{text}");
+        assert!(text.contains(&t.look.terminal_badge()), "{text}");
         assert!(matches!(
             t.update(&mut st, &[key(KeyCode::Esc)]),
             ScreenCmd::Pop { .. }

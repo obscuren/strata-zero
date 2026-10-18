@@ -194,13 +194,13 @@ pub fn boot_lines(st: &AppState, s: &Session, look: &crate::ui::device::Look) ->
         .style
         .boot
         .iter()
-        .map(|l| l.replace("{PLACE}", &place))
+        .map(|l| l.replace("{PLACE}", &place).replace("{OS}", &look.os()))
         .collect();
     if matches!(s, Session::Rig { .. }) {
         if lines.is_empty() {
             lines.push(String::new());
         }
-        lines[0] = "HOME RIG · STRATA/OS".to_string();
+        lines[0] = format!("{} · HOME RIG", look.os());
     }
     lines
 }
@@ -1056,7 +1056,7 @@ mod tests {
         let boot = boot_lines(&st, &s, &muni);
         assert_eq!(boot.len(), 3);
         assert!(
-            boot[0].contains("MUNI-OS") && boot[2] == "READY",
+            boot[0].starts_with("HELIX/OS 4.1") && boot[2] == "READY",
             "{boot:?}"
         );
         let dn = st.city.as_ref().unwrap().district(d).name.to_uppercase();
@@ -1066,7 +1066,7 @@ mod tests {
         assert_eq!(boot[2], "REDY");
         let rig = boot_lines(&st, &Session::Rig { building: b }, &street);
         assert!(
-            rig[0].contains("HOME RIG") && rig[0].contains("STRATA/OS"),
+            rig[0].starts_with("HELIX/OS 2.2") && rig[0].contains("HOME RIG"),
             "{rig:?}"
         );
         let city = st.city.as_ref().unwrap();

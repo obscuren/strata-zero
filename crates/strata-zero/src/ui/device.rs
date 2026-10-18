@@ -25,6 +25,8 @@ const FLICKER_TICKS: u64 = 3;
 
 /// Refusals on the glass.
 pub const DENY: Color = MAGENTA;
+/// The one operating system every machine in the city runs, by version.
+pub const OS_NAME: &str = "HELIX/OS";
 
 /// The status light.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,7 +67,11 @@ pub fn theme_name(t: citygen::Theme) -> &'static str {
 /// The built-in look when the style file has none: municipal.
 fn municipal() -> DeviceStyle {
     DeviceStyle {
-        badge: "MUNI-OS".to_string(),
+        maker: "CIVITAS".to_string(),
+        keypad: "K-40".to_string(),
+        terminal: "KIOSK 9".to_string(),
+        os_version: "4.1".to_string(),
+        alternate: false,
         body: Rgb(40, 46, 54),
         edge: None,
         glass: Rgb(6, 18, 22),
@@ -78,7 +84,7 @@ fn municipal() -> DeviceStyle {
         flicker: 0,
         cps: 60,
         boot: vec![
-            "MUNI-OS 4.1 · {PLACE} SUBNET".to_string(),
+            "{OS} · {PLACE} SUBNET".to_string(),
             "MEMORY CHECK OK".to_string(),
             "READY".to_string(),
         ],
@@ -152,6 +158,21 @@ impl Look {
                 Look::named(st, "street", district, 0x5160)
             }
         }
+    }
+
+    /// "HELIX/OS 4.1": the city's one OS at this hardware's version.
+    pub fn os(&self) -> String {
+        format!("{OS_NAME} {}", self.style.os_version)
+    }
+
+    /// The maker and model on a keypad: "CIVITAS K-40".
+    pub fn keypad_badge(&self) -> String {
+        format!("{} {}", self.style.maker, self.style.keypad)
+    }
+
+    /// The maker and model on a terminal: "CIVITAS KIOSK 9".
+    pub fn terminal_badge(&self) -> String {
+        format!("{} {}", self.style.maker, self.style.terminal)
     }
 
     pub fn body(&self) -> Color {
@@ -279,13 +300,23 @@ pub fn bezel(buf: &mut Buffer, area: Rect, badge: &str, led: Led, look: &Look) {
         .fg(look.label())
         .bg(body)
         .add_modifier(Modifier::BOLD);
+    // Neon badges alternate the district's two accents, letter by letter.
+    let second = label.fg(look.accent2.to_color());
+    let first = label.fg(look.accent.to_color());
     let text = format!("▸ {badge}");
+    let mut lit = 0usize;
     for (i, ch) in text.chars().enumerate() {
         let x = area.x + 2 + i as u16;
         if x >= area.right() - 4 {
             break;
         }
-        buf[(x, area.y + 1)].set_char(ch).set_style(label);
+        let style = if look.style.alternate && i >= 2 && ch != ' ' {
+            lit += 1;
+            if lit % 2 == 1 { first } else { second }
+        } else {
+            label
+        };
+        buf[(x, area.y + 1)].set_char(ch).set_style(style);
     }
     buf[(area.right() - 3, area.y + 1)]
         .set_char('●')
@@ -505,7 +536,7 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 24));
         let street = look("street");
         assert!(street.style.cracked && street.style.dead > 0);
-        bezel(&mut buf, area, "SECURLOK", Led::Idle, &street);
+        bezel(&mut buf, area, &street.keypad_badge(), Led::Idle, &street);
         let edge_cells = (area.x..area.right())
             .filter(|x| buf[(*x, area.y)].symbol() == "━")
             .count();
@@ -525,7 +556,7 @@ mod tests {
         );
         let mut clean = Buffer::empty(Rect::new(0, 0, 40, 24));
         let corp = look("megacorp");
-        bezel(&mut clean, area, "SECURLOK", Led::Idle, &corp);
+        bezel(&mut clean, area, &corp.keypad_badge(), Led::Idle, &corp);
         let full = (area.x..area.right())
             .filter(|x| clean[(*x, area.y)].symbol() == "━")
             .count();
@@ -557,7 +588,7 @@ mod tests {
         let area = Rect::new(3, 2, CRT_W, CRT_H);
         let mut buf = Buffer::empty(Rect::new(0, 0, 100, 30));
         let muni = look("municipal");
-        let screen = crt(&mut buf, area, "MUNI-OS", Led::Idle, &muni);
+        let screen = crt(&mut buf, area, &muni.terminal_badge(), Led::Idle, &muni);
         assert_eq!(screen, Rect::new(5, 4, 68, 20));
         assert_eq!(buf[(5, 4)].bg, muni.glass());
         assert_eq!(buf[(3, 2)].symbol(), "┏");
@@ -576,10 +607,49 @@ mod tests {
         let row: String = (area.x..area.right())
             .map(|x| buf[(x, 3)].symbol().to_string())
             .collect();
-        assert!(row.contains("▸ MUNI-OS"), "{row}");
-        bezel(&mut buf, area, "MUNI-OS", Led::Fail, &muni);
+        assert!(row.contains("▸ CIVITAS KIOSK 9"), "{row}");
+        bezel(&mut buf, area, &muni.terminal_badge(), Led::Fail, &muni);
         assert_eq!(buf[(area.right() - 3, 3)].fg, MAGENTA);
-        bezel(&mut buf, area, "MUNI-OS", Led::Ok, &muni);
+        bezel(&mut buf, area, &muni.terminal_badge(), Led::Ok, &muni);
         assert_eq!(buf[(area.right() - 3, 3)].fg, CYAN);
+    }
+
+    #[test]
+    fn every_device_runs_helix_under_its_makers_name() {
+        for (name, keypad, terminal, version) in [
+            ("municipal", "CIVITAS K-40", "CIVITAS KIOSK 9", "4.1"),
+            ("megacorp", "HALCYON SG-7", "HALCYON NODE 9", "9.4"),
+            ("neon", "LOTUS LUXPAD", "LOTUS MARQUEE", "8.0"),
+            ("street", "ZENBO ZK-2", "ZENBO 64", "2.2"),
+        ] {
+            let l = look(name);
+            assert_eq!(l.keypad_badge(), keypad);
+            assert_eq!(l.terminal_badge(), terminal);
+            assert_eq!(l.os(), format!("{OS_NAME} {version}"));
+            assert!(
+                l.keypad_badge().chars().count() + 2 <= DEVICE_W as usize - 6,
+                "{keypad} fits the keypad"
+            );
+        }
+        assert_eq!(OS_NAME, "HELIX/OS");
+    }
+
+    #[test]
+    fn the_neon_badge_alternates_two_colours_and_the_others_do_not() {
+        let area = Rect::new(2, 1, DEVICE_W, DEVICE_H);
+        let badge_colours = |l: &Look| {
+            let mut buf = Buffer::empty(Rect::new(0, 0, 40, 24));
+            bezel(&mut buf, area, &l.keypad_badge(), Led::Idle, l);
+            (area.x + 4..area.x + 4 + l.keypad_badge().chars().count() as u16)
+                .filter(|x| buf[(*x, area.y + 1)].symbol() != " ")
+                .map(|x| buf[(x, area.y + 1)].fg)
+                .collect::<Vec<_>>()
+        };
+        let neon = badge_colours(&look("neon"));
+        assert!(neon.len() > 4);
+        assert!(neon.windows(2).all(|w| w[0] != w[1]), "{neon:?}");
+        assert_eq!(neon[0], neon[2]);
+        let muni = badge_colours(&look("municipal"));
+        assert!(muni.windows(2).all(|w| w[0] == w[1]), "{muni:?}");
     }
 }

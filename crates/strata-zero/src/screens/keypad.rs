@@ -180,7 +180,7 @@ impl Screen for Keypad {
             _ => (Led::Idle, None, None),
         };
         let buf = f.buffer_mut();
-        device::bezel(buf, r, "SECURLOK", led, &self.look);
+        device::bezel(buf, r, &self.look.keypad_badge(), led, &self.look);
         let live = Style::default().fg(self.look.text());
         let quiet = Style::default().fg(self.look.text_dim());
         let first = match &reading {
@@ -298,7 +298,7 @@ mod tests {
         let text = draw(&k, &st);
         assert!(text.contains("[1][2][3][4]"), "{text}");
         assert!(
-            text.contains("SECURLOK") && text.contains(&format!("flat {number}")),
+            text.contains(&k.look.keypad_badge()) && text.contains(&format!("flat {number}")),
             "{text}"
         );
         assert!(!text.contains('`'));
