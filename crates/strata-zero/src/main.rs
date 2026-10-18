@@ -7,6 +7,7 @@ mod app;
 mod cli;
 mod constructs;
 mod credentials;
+mod helix;
 mod home;
 mod interiors;
 mod messages;
