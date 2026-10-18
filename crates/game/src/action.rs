@@ -34,6 +34,11 @@ pub enum Action {
     /// Loads a program from the pack into the jacked deck.
     Load(ItemId),
     Unload(ItemId),
+    /// Slots a program at a position in the deck, sending back what it covers.
+    Slot {
+        id: ItemId,
+        at: usize,
+    },
 }
 
 /// Where the character stands: where drops land and takes come from.
@@ -242,6 +247,7 @@ pub fn apply(
         }
         Action::Load(id) => ch.load(c, &id).and_then(done),
         Action::Unload(id) => ch.unload(c, &id).and_then(done),
+        Action::Slot { id, at } => ch.slot_at(c, &id, at).and_then(done),
         Action::Fire(id) => {
             let ability = ch
                 .ability(c, &id)
@@ -628,5 +634,22 @@ mod tests {
         .unwrap();
         assert!(!ch.loaded.contains(&copy), "{:?}", ch.loaded);
         assert_eq!(ch.loaded_size(&c), 1);
+    }
+
+    #[test]
+    fn apply_slot_action() {
+        let (c, mut ch, mut g, at) = setup();
+        let spoof = ItemId::new("spoof");
+        ch.give(spoof.clone(), 1);
+        let out = apply(
+            &mut ch,
+            &mut g,
+            &c,
+            at,
+            0,
+            Action::Slot { id: spoof, at: 0 },
+        )
+        .unwrap();
+        assert_eq!(out.message, "`Spoof` slotted · `Crack` to inventory");
     }
 }
