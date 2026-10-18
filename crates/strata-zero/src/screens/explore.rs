@@ -9146,7 +9146,7 @@ mod tests {
         (st, s)
     }
 
-    /// A building with a gate and a server (and no bait in it), not one of `not`.
+    /// A building with a gate and a server, not one of `not`.
     fn other_construct(st: &mut AppState, not: &[citygen::BuildingId]) -> citygen::BuildingId {
         let city = st.city.clone().unwrap();
         city.buildings
@@ -9155,7 +9155,6 @@ mod tests {
             .filter(|b| !not.contains(b))
             .find(|b| {
                 crate::constructs::city_gate(&city, *b).is_some()
-                    && crate::access::security_of(st, *b) < citygen::construct::GREY_THRESHOLD
                     && st.constructs.ensure(&city, *b).is_some_and(|k| {
                         k.nodes
                             .iter()
@@ -9236,14 +9235,16 @@ mod tests {
         // jacking out ends the route
         crate::net::jack_out(&mut st).unwrap();
         assert!(st.backdoors.route.is_none());
-        // a burned one is refused and the journal learns it
-        let d = st
-            .backdoors
+        // a burned one is refused and the journal shows it
+        st.backdoors
             .list
             .iter_mut()
             .find(|d| d.building == other)
-            .unwrap();
-        d.spent = d.nominal * 2;
+            .unwrap()
+            .state = crate::backdoors::State::Burned {
+            at: 0,
+            why: crate::backdoors::Why::Decay,
+        };
         assert_eq!(
             crate::net::land_at(&mut st, other),
             Err("connection refused · key rejected".to_string())
@@ -9378,5 +9379,108 @@ mod tests {
             crate::net::jack_in_refusal(&st),
             Some("the rig is gone · evidence".to_string())
         );
+    }
+
+    #[test]
+    fn a_landing_that_cannot_happen_spends_nothing() {
+        let (mut st, _s) = home_screen();
+        let h = st.home.unwrap();
+        let seed = st.city.as_ref().unwrap().seed;
+        let a = other_construct(&mut st, &[h.home.building]);
+        st.backdoors.plant_net(a, 1, seed, 0);
+        // away from the rig
+        let at = st.player.as_ref().unwrap().pos;
+        st.player.as_mut().unwrap().pos = Pos::new(at.x + 20, at.y + 20);
+        assert!(crate::net::land_at(&mut st, a).is_err());
+        st.player.as_mut().unwrap().pos = at;
+        // already jacked in
+        crate::net::land_at(&mut st, a).unwrap();
+        let spent = st.backdoors.held(a).unwrap().spent;
+        assert_eq!(
+            crate::net::land_at(&mut st, a),
+            Err("already jacked in".to_string())
+        );
+        assert_eq!(st.backdoors.held(a).unwrap().spent, spent);
+        // a street port is no rig
+        crate::net::jack_out(&mut st).unwrap();
+        st.player.as_mut().unwrap().place = Place::Stratum(StratumKind::Street);
+        assert!(crate::net::land_at(&mut st, a).is_err());
+        let d = st.backdoors.held(a).unwrap();
+        assert_eq!(d.spent, spent);
+        assert_eq!(d.state, crate::backdoors::State::Live);
+    }
+
+    #[test]
+    fn a_honeypot_landing_springs_the_trap() {
+        let (mut st, _s) = home_screen();
+        let h = st.home.unwrap();
+        let seed = st.city.as_ref().unwrap().seed;
+        let a = other_construct(&mut st, &[h.home.building]);
+        st.backdoors.plant_net(a, 1, seed, 0);
+        st.backdoors.list[0].state = crate::backdoors::State::Honeypot;
+        crate::net::land_at(&mut st, a).unwrap();
+        let p = st.player.as_ref().unwrap();
+        assert_eq!(
+            p.pos,
+            crate::constructs::city_gate(st.city.as_ref().unwrap(), a).unwrap()
+        );
+        let now = st.net.now(&st);
+        assert!(st.net.alert(a, now));
+        assert!(st.net.trace(a).heat >= 60);
+        let t = st.backdoors.trace.as_ref().expect("a trace");
+        assert!(t.relays.is_empty(), "{:?}", t.relays);
+        assert!(
+            st.log
+                .iter()
+                .any(|e| e.text == "honeypot · they were waiting · trace running")
+        );
+    }
+
+    #[test]
+    fn a_key_landing_costs_twenty() {
+        let (mut st, _s) = home_screen();
+        let h = st.home.unwrap();
+        let seed = st.city.as_ref().unwrap().seed;
+        let a = other_construct(&mut st, &[h.home.building]);
+        st.backdoors.plant_key(a, "ana", 0, seed, 0);
+        crate::net::land_at(&mut st, a).unwrap();
+        assert_eq!(
+            st.backdoors.held(a).unwrap().spent,
+            crate::backdoors::COST_LAND
+        );
+    }
+
+    #[test]
+    fn a_hop_aborts_a_run_and_costs_an_action() {
+        let (mut st, _s) = home_screen();
+        let h = st.home.unwrap();
+        let seed = st.city.as_ref().unwrap().seed;
+        let a = other_construct(&mut st, &[h.home.building]);
+        let b2 = other_construct(&mut st, &[h.home.building, a]);
+        st.backdoors.plant_net(a, 1, seed, 0);
+        st.backdoors.plant_net(b2, 1, seed, 0);
+        crate::net::land_at(&mut st, a).unwrap();
+        crate::constructs::enter_construct(&mut st, a).unwrap();
+        st.net.run = Some(game::Run {
+            program: ItemId::new("copper_coil"),
+            target: game::HackTarget::Deck,
+            done: 0,
+            work: 2,
+        });
+        st.net.engaged = Some(crate::net::Engagement {
+            building: a,
+            round: 1,
+            order: vec![crate::net::Actor::You],
+            turn: 0,
+            moves: 1,
+            ap: 2,
+            phase: crate::net::Phase::Act,
+            manual: false,
+            acting_since: 0,
+        });
+        crate::net::hop(&mut st, b2).unwrap();
+        assert!(st.net.run.is_none());
+        assert_eq!(st.net.engaged.as_ref().unwrap().ap, 1);
+        assert!(st.log.iter().any(|e| e.text == "run aborted"));
     }
 }
