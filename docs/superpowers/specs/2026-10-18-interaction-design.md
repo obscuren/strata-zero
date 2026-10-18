@@ -235,7 +235,8 @@ Space then does one of three things:
 
 From a window opened this way, Esc returns to the game, not to the pick.
 **(Claude's call)** The clock keeps running during the pick, as it does in
-look mode and in the windows today.
+look mode: both are layers on walking, where the world runs. (A window on
+top freezes the world, as every popup does today.)
 
 ### Space acts, Enter confirms
 
