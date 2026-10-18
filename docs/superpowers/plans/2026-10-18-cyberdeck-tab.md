@@ -203,3 +203,30 @@
 - [ ] **Step 3: Implement.** `Deck` gets `pub(crate) cyber: DeckTab` (new in `Deck::new`; `restore` sets it from `st.deck_rows[Tab::Cyberdeck.index()]`). `rows()` returns empty for `Tab::Cyberdeck` (join the MAP/TALENTS arm). In `handle`, before the shared match: on CYBERDECK, `if let Some(cmd) = self.cyber.key(st, k.code) { match cmd { ScreenCmd::Stay => continue, other => return other } }`. In `update`, store `self.cyber.pack()` for CYBERDECK instead of `self.row`. In `draw`, CYBERDECK draws `ui::cyberdeck::draw(&self.cyber.view(st), body, buf)` like MAP/TALENTS (no list, no divider); its hint is `self.cyber.hint()`. Delete `cyberdeck_rows`, `Detail::Program`, `Detail::Failsafe` and their `detail()`/`handle()` arms once nothing uses them; keep `program_card`, `ability_card`, the failsafe consts. Add `the_cyberdeck_tab` to `shots.rs`: `state_home()`, a `Deck` on CYBERDECK, written at 100×30 and 120×40 (extend `shot` with a size parameter or add a sized variant). README: the CYBERDECK line becomes "cyberdeck (the jacked deck drawn as hardware: arrows point at a slot, a ROM strip, the failsafe or a program in inventory and the deck's glass reads it out; `space` picks a program up and drops it in a slot, ejects one, or lifts the failsafe's cover and throws it; `tab` switches tabs here)". Spec status: "built on `worktree-cyberdeck`".
 - [ ] **Step 4: Run** `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings` — all pass, clippy clean. Run `SHOT_DIR=<scratch dir> cargo test -p strata-zero shots:: -- --ignored` and look at the SVGs.
 - [ ] **Step 5: Commit** `feat(app): the CYBERDECK tab is the deck now`
+
+### Task 7: A five-slot pawn deck for D'SHAWN (added at Jeffrey's request after Task 6)
+
+Jeffrey: "create another cyberdeck, same chrome, with 5 slots. give that by default to d'shawn dev character and have it equipped".
+
+**Files:**
+- Modify: `crates/game/src/model.rs` (`DeckLook::max_slots`: Pawn 4 → 5) and the validation wording in `crates/game/src/content.rs` ("a pawn deck has room for 5 slots"), with Task 1's test moved to 6 rejected / 5 accepted
+- Modify: `flavor/content.ron` (new item after `pawnshop_deck`)
+- Modify: `crates/game/src/character.rs` (`debug_runner`)
+- Modify: `crates/strata-zero/src/ui/cyberdeck/pawn.rs` (the bay mouth and its letters span every slot, A-E)
+- Modify: `crates/strata-zero/src/screens/shots.rs` (a D'SHAWN shot)
+- Modify: `docs/superpowers/specs/2026-10-18-cyberdeck-tab-design.md` ("up to 4 slots (A-D)" → "up to 5 slots (A-E)"; the validation line; a line naming the rebuilt deck)
+
+**Interfaces:**
+- Consumes: Tasks 1-6 as built.
+- Produces: content item `rebuilt_deck`.
+
+- [ ] **Step 1: Write the failing tests.**
+  - `content.rs`: `pawn_decks_have_room_for_five_slots_and_three_grants` (rename of Task 1's test): 6 slots → `DeckInvalid`; 5 slots with 3 grants → `Ok`; 4 grants → `DeckInvalid`.
+  - `character.rs`: `debug_runner_jacks_the_rebuilt_deck`: `Character::debug_runner(&c)` has `equipment[Slot::Deck] == rebuilt_deck`, `count(pawnshop_deck) == 1` (in the pack), `loaded == [crack, copy, attack, backdoor]`, `loaded_size == 5`, and `deck(c).unwrap().1 == DeckSpec { slots: 5, rating: 3, look: Pawn }`.
+  - `pawn.rs`: `five_slots_fill_the_back_edge`: slots 5 with five size-1 carts → `Slot(4)` = `Rect::new(64, 1, 12, 3)`, row 4 shows `A`, `B`, `C`, `D`, `E` in the mouth at x 8, 22, 36, 50, 64 (one right of each slot's `x - 1` label start, as A and B are drawn today), the mouth's `▀` run covers x 7..76, and nothing in rows 1-4 is drawn past x 77; with one cart, `empty` four times.
+- [ ] **Step 2: Run** `cargo test -p game` and `cargo test -p strata-zero cyberdeck` — the new tests fail.
+- [ ] **Step 3: Implement.** Content: `Item(id: "rebuilt_deck", name: "Rebuilt pawn deck", kind: Deck, slot: Some(Deck), weight: 1.8, value: 6000, perks: [Stat(Net, 2)], grants: ["netscan", "arc_trace"], deck: Some(DeckSpec(slots: 5, rating: 3, look: Pawn)), desc: "The pawnshop shell, gutted and rebuilt by someone who knew what they were doing. Five slots, and it still runs hot.")`. `debug_runner`: put `rebuilt_deck` in the deck slot, give the replaced `pawnshop_deck` back to the pack, then load every program in the pack that fits, in pack order, as `from_template` does (after the `backdoor` give). The pawn bay mouth and letters run over `view.slots` slots. Shots: an ignored `the_cyberdeck_tab_for_dshawn` writing `cyberdeck_dshawn_120x40.svg` with `Character::debug_runner`.
+- [ ] **Step 4: Run** `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings`; render the shots and look at `cyberdeck_dshawn_120x40.svg`.
+- [ ] **Step 5: Commit** `feat(app): a rebuilt five-slot pawn deck, jacked on D'SHAWN`
+
+**Task 7 also (Jeffrey, same evening):** the row under the deck is labelled `WAREZ`, not `INVENTORY` (the label only; the glass and strip copy keep "back to inventory" / "to inventory", where the program really goes). Change the label in `pawn.rs` and every test that reads it (`ui/cyberdeck`, `screens/cyberdeck.rs`, `screens/deck.rs`: assertions on `INVENTORY` in the CYBERDECK draw become `WAREZ`; the INVENTORY *tab* label stays). README's CYBERDECK line says "a program in your warez" if it names the row.

@@ -66,7 +66,7 @@ slot A:
  │   ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆  ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆     │
  │         ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆               │
  ╰────────────────────────────────────────────────────────────────────────────────╯
-  INVENTORY
+  WAREZ
     SPOOF    ▐    BLIND    ▐    MASK     ▐    BACKDOOR       ▐
     r1 · s1       r1 · s1       r1 · s1       r1 · s2
 ```
@@ -105,7 +105,7 @@ Row by row (rows of the drawing, 0 at the top):
 - **15-16, the keyboard.** One row of `▆▆` keycaps in the body's key grey with
   one missing (`··`) and one magenta replacement, then a space bar.
 - **17**: the deck's bottom edge.
-- **18-20, INVENTORY.** `INVENTORY` bold dim, then the programs in the pack and
+- **18-20, WAREZ** (Jeffrey's name for the row). `WAREZ` bold dim, then the programs in the pack and
   not loaded, as carts lying flat: two rows each, darker tape, name and
   `r · s`, 12 columns for size 1 and 18 for size 2, two columns apart. When
   they do not fit the 84 columns the row scrolls to keep the pointed cart in
@@ -129,7 +129,7 @@ tape `#d9c9a0`, loose tape `#8a8270`, ink `#1a1612`, glass `#140e06` and
   its size; the brackets frame the whole cart) and the first empty slot if
   there is one (the only empty slot a program can land in, since the bay
   packs left; further empty slots are drawn but are not stops). Then the
-  maker plate, each ROM strip, the failsafe, and each cart in INVENTORY.
+  maker plate, each ROM strip, the failsafe, and each cart in WAREZ.
   Stickers, lights, HEAT and the keyboard are decoration. (Builder-check
   call: bay stops are landing places, so pointing and landing never disagree.)
 - **Moving.** Arrows and `hjkl` move to the nearest part in that direction
@@ -174,16 +174,16 @@ The bay packs left: loaded programs fill the slots from A in their loaded
 order, which is also the order of the `1`-`5` program keys. Ejecting one slides
 the rest left. Empty slots are always on the right.
 
-- **Eject.** Space on a loaded cart unloads it; it joins INVENTORY.
-- **Pick up.** Space on a cart in INVENTORY picks it up. The brackets jump to
-  the first empty slot, else the first loaded cart. Its place in INVENTORY
+- **Eject.** Space on a loaded cart unloads it; it joins WAREZ.
+- **Pick up.** Space on a cart in WAREZ picks it up. The brackets jump to
+  the first empty slot, else the first loaded cart. Its place in WAREZ
   shows a dim dashed outline. While holding, the arrows move between the bay's
   stops only.
 - **Where it lands.** A bay stop is a position in the loaded order: loaded
   cart *k* is position *k*, the first empty slot is position `loaded.len()`.
   Dropping at position *k* on a loaded cart takes that cart out and puts the
   held one in its place; dropping on the empty slot appends. If the deck is
-  then over its slots, carts after the new one go back to INVENTORY, nearest
+  then over its slots, carts after the new one go back to WAREZ, nearest
   first, then carts before it, nearest first, until it fits. The others keep
   their order. Every check is made before anything changes.
 - **Carry.** The held cart's dashed cyan outline is drawn where it will land
@@ -198,7 +198,7 @@ the rest left. Empty slots are always on the right.
 - **Refusals happen before anything moves.** If the drop cannot be done (the
   deck is too small for the cart even with everything displaced), nothing
   changes, the strip says why in magenta, and the cart stays held. Pointing
-  at a cart in INVENTORY that can never fit says so on the glass before it is
+  at a cart in WAREZ that can never fit says so on the glass before it is
   picked up ("needs 2 slots · this deck has 1"); one that fits only by
   displacing says what it needs ("needs 2 slots · eject one").
 - **Put back.** Esc while holding puts it back where it lay; nothing changes.
@@ -250,7 +250,7 @@ As the TALENTS tab does, the arrows belong to the tab:
 
 With no deck equipped (or one the content does not know) the tab shows one
 line, `No CYBERDECK equipped`, centred in the tab's body in the chrome's dim
-colour, and nothing else: no deck, no glass, no INVENTORY, no brackets.
+colour, and nothing else: no deck, no glass, no WAREZ, no brackets.
 Nothing can be pointed at; arrows and space do nothing; esc closes the deck and
 `tab` / digits switch tabs as usual. (Jeffrey, after the build: "When no
 cyberdeck is installed we should simply display a message … The chrome,
@@ -312,7 +312,7 @@ display, programs etc should be hidden.")
   the ability (sharpened when sharpened); long text shows `▼` and PgDn
   scrolls.
 - Slotting through the tab: pick up SPOOF, move to B, space: `loaded` is
-  CRACK, SPOOF and ATTACK is in INVENTORY; esc while holding changes
+  CRACK, SPOOF and ATTACK is in WAREZ; esc while holding changes
   nothing; BACKDOOR on a 2-slot deck displaces both.
 - Failsafe: one space leaves `st.net.failsafe` on with the cover up; a second
   turns it off with the warning; esc between them shuts the cover; space when
@@ -320,9 +320,9 @@ display, programs etc should be hidden.")
 - Heat: in a construct with heat 60 the gauge lights 5 cells; off the Net it
   lights none.
 - Draw: at 100×30 the drawing fits the body with nothing clipped; it shows
-  the plate, the carts' names, `FAILSAFE`, `INVENTORY` and the handle; at
+  the plate, the carts' names, `FAILSAFE`, `WAREZ` and the handle; at
   120×40 it is centred; no deck draws `No CYBERDECK equipped` and no deck
-  parts, glass or INVENTORY.
+  parts, glass or WAREZ.
 - Existing deck tests that read the CYBERDECK list rows are rewritten against
   the new tab, keeping what they checked (odd decks, loading and unloading,
   the failsafe toggle, the sharpened ability).
