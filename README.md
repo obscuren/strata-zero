@@ -125,7 +125,7 @@ keeps the lifts answering through a lockdown, `blind` silences a camera,
 `copy` pulls a paydata shard off a server or a vault dump off a vault (once
 each), and `backdoor` on the server keeps the gate open to you for good and
 cools the trace twice as fast. Programs are items that take slots on your
-deck; the CYBERDECK tab loads and unloads them.
+deck; the CYBERDECK tab loads and unloads them; the deck is locked while you're jacked in.
 
 ICE hunts. White ICE keeps its post; grey and black ICE walk the spine on a
 beat, the gate guard the near half and the vault guard the far half. A piece

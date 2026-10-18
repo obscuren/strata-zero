@@ -96,6 +96,10 @@ impl DeckTab {
             KeyCode::Left | KeyCode::Char('h') => Dir::Left,
             KeyCode::Right | KeyCode::Char('l') => Dir::Right,
             KeyCode::Char(' ') | KeyCode::Enter => {
+                if locked(st) {
+                    st.warn("the deck is locked while you're jacked in");
+                    return Some(ScreenCmd::Stay);
+                }
                 self.act(st);
                 return Some(ScreenCmd::Stay);
             }
@@ -183,7 +187,7 @@ impl DeckTab {
                 Switch::On
             },
             heat: heat(st),
-            link: st.player.as_ref().is_some_and(|p| p.jacked_in()),
+            link: locked(st),
             handle: st.character.handle.clone(),
             glass: Vec::new(),
             pinned: (String::new(), GlassTone::Dim),
@@ -334,6 +338,11 @@ impl DeckTab {
         }
         self.touch(st.tick);
     }
+}
+
+/// Jacked in: the deck is meatspace only, so pointing and reading work and acting does not.
+fn locked(st: &AppState) -> bool {
+    st.player.as_ref().is_some_and(|p| p.jacked_in())
 }
 
 /// Programs in the pack and not loaded, in pack order, one per id: the carts in
@@ -581,7 +590,10 @@ fn lines(card: &[Line<'static>]) -> Glass {
 
 /// The glass's lines wrapped to its width, and the pinned row.
 fn rows(st: &AppState, tab: &DeckTab) -> (Glass, (String, GlassTone)) {
-    let (body, pinned) = glass(st, tab);
+    let (body, mut pinned) = glass(st, tab);
+    if locked(st) && st.character.deck(&st.content).is_some() {
+        pinned = ("locked · jacked in".into(), GlassTone::Warn);
+    }
     let rows = body
         .into_iter()
         .flat_map(|(text, tone)| {
@@ -1017,6 +1029,68 @@ mod tests {
             let v = tab.view(&st);
             assert_eq!(v.typed, total(&v));
         }
+    }
+
+    /// Jacks the player into the construct of the first building, body on the street.
+    fn jack_in(st: &mut AppState) {
+        let b = st.city.as_ref().unwrap().buildings[0].id;
+        let mut p = crate::walker::Player::at(Place::Construct(b), Pos::new(1, 1));
+        p.body = Some((Place::Stratum(StratumKind::Street), Pos::new(1, 1)));
+        st.player = Some(p);
+    }
+
+    #[test]
+    fn jacked_in_the_deck_is_locked() {
+        let mut st = state();
+        let mut tab = DeckTab::new(0);
+        let out = tab.view(&st);
+        jack_in(&mut st);
+        let v = tab.view(&st);
+        assert_eq!(v.pinned, ("locked · jacked in".into(), GlassTone::Warn));
+        assert_eq!(v.glass, out.glass);
+
+        for code in [KeyCode::Char(' '), KeyCode::Enter] {
+            assert!(matches!(tab.key(&mut st, code), Some(ScreenCmd::Stay)));
+            assert_eq!(st.character.loaded, vec![id("crack"), id("copy")]);
+            assert_eq!(last(&st), Some("the deck is locked while you're jacked in"));
+            assert!(last_is_warning(&st));
+        }
+
+        st.character.give(id("spoof"), 1);
+        tab.point = inv_of(&st, "spoof");
+        assert_eq!(tab.view(&st).pinned.0, "locked · jacked in");
+        space(&mut tab, &mut st);
+        assert_eq!(tab.held, None);
+
+        tab.point = Part::Failsafe;
+        assert_eq!(tab.view(&st).pinned.0, "locked · jacked in");
+        space(&mut tab, &mut st);
+        assert!(!tab.cover_up && st.net.failsafe);
+
+        // Pointing, scrolling and closing still work.
+        tab.point = Part::Slot(0);
+        tab.key(&mut st, KeyCode::Right);
+        assert_eq!(tab.point, Part::Slot(1));
+        tab.point = Part::Rom(1);
+        tab.key(&mut st, KeyCode::PageDown);
+        assert_eq!(tab.scroll, 1);
+        assert!(matches!(
+            tab.key(&mut st, KeyCode::Esc),
+            Some(ScreenCmd::Pop { .. })
+        ));
+    }
+
+    #[test]
+    fn jacking_out_unlocks_the_deck() {
+        let mut st = state();
+        let mut tab = DeckTab::new(0);
+        jack_in(&mut st);
+        space(&mut tab, &mut st);
+        assert_eq!(st.character.loaded, vec![id("crack"), id("copy")]);
+        st.player.as_mut().unwrap().body = None;
+        assert_eq!(tab.view(&st).pinned.0, "[space] eject");
+        space(&mut tab, &mut st);
+        assert_eq!(st.character.loaded, vec![id("copy")]);
     }
 
     #[test]

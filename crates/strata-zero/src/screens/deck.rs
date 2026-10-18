@@ -2896,6 +2896,24 @@ mod tests {
     }
 
     #[test]
+    fn cyberdeck_locks_in_the_net() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('6'))]);
+        let b = st.city.as_ref().unwrap().buildings[0].id;
+        let mut p =
+            crate::walker::Player::at(citygen::Place::Construct(b), citygen::Pos::new(1, 1));
+        p.body = Some((
+            citygen::Place::Stratum(citygen::StratumKind::Street),
+            citygen::Pos::new(1, 1),
+        ));
+        st.player = Some(p);
+        st.tick = 40;
+        let text = draw(&d, &st, 100, 30);
+        assert!(text.contains("locked · jacked in"), "{text}");
+    }
+
+    #[test]
     fn cyberdeck_remembers_its_part() {
         let mut st = state();
         let mut d = Deck::new(0);
