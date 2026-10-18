@@ -325,8 +325,6 @@ pub struct Footer<'a> {
     pub overburdened: bool,
     /// `TRACE ▰▰▱▱▱▱▱▱▱▱ 23 · ALERT 58 min`, jacked in.
     pub trace: Option<String>,
-    /// `TRACE ▸ hollis-court · 40 min`: the trace walking home from your last run.
-    pub home_trace: Option<String>,
     pub hunted: bool,
     /// `TURN 3  YOU › grey ICE › black ICE`, engaged.
     pub turn: Option<String>,
@@ -358,6 +356,27 @@ fn right_aligned(left: Vec<Span<'static>>, right: Vec<Span<'static>>, w: usize) 
     padded(cut_spans(spans, w), w)
 }
 
+/// The row under the top rule: the route of a rig run on the left, the trace walking
+/// home on the right. An empty `route` leaves its side blank.
+pub fn route_row(route: &str, trace: Option<&str>, width: u16) -> Line<'static> {
+    let mut left = Vec::new();
+    if !route.is_empty() {
+        left.push(dim(" ROUTE  "));
+        left.push(cyan(route.to_string()));
+    }
+    let right = match trace {
+        Some(t) => vec![
+            Span::styled(
+                t.to_string(),
+                Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+        ],
+        None => Vec::new(),
+    };
+    right_aligned(left, right, width as usize)
+}
+
 /// The footer's four rows: place and trace with the one hint left; a blank; the
 /// fight (turn, run, ICE); the slots with the budgets. Always four, so nothing
 /// moves between the street, a calm construct and a fight.
@@ -384,13 +403,6 @@ pub fn footer_rows(f: &Footer, width: u16) -> [Line<'static>; 4] {
         let used = width_of(&row1);
         row1.push(Span::raw(" ".repeat(at.saturating_sub(used).max(2))));
         row1.push(Span::styled(trace.clone(), Style::default().fg(CYAN)));
-    }
-    if let Some(home) = &f.home_trace {
-        row1.push(Span::raw("  "));
-        row1.push(Span::styled(
-            home.clone(),
-            Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD),
-        ));
     }
     let mut right1 = Vec::new();
     if f.hunted {
@@ -794,6 +806,23 @@ mod tests {
     }
 
     #[test]
+    fn the_route_row_carries_the_route_and_the_trace_home() {
+        let flat = |l: Line| {
+            l.spans
+                .iter()
+                .map(|s| s.content.to_string())
+                .collect::<String>()
+        };
+        let r = flat(route_row("zenbo ▸ a", None, 60));
+        assert!(r.starts_with(" ROUTE  zenbo ▸ a"), "{r:?}");
+        let t = flat(route_row("", Some("TRACE ▸ a · 3 min"), 60));
+        assert!(t.trim_end().ends_with("TRACE ▸ a · 3 min"), "{t:?}");
+        assert!(!t.contains("ROUTE"));
+        let both = flat(route_row("zenbo ▸ a", Some("TRACE ▸ a · 3 min"), 60));
+        assert!(both.contains("ROUTE  zenbo ▸ a") && both.contains("TRACE ▸ a · 3 min"));
+    }
+
+    #[test]
     fn fired_slot_draws_inverted() {
         let slots = vec![Slot {
             name: "Netscan".into(),
@@ -807,7 +836,6 @@ mod tests {
                 camera: false,
                 overburdened: false,
                 trace: None,
-                home_trace: None,
                 hunted: false,
                 turn: None,
                 run: None,
@@ -879,7 +907,6 @@ mod tests {
             camera: false,
             overburdened: false,
             trace: None,
-            home_trace: None,
             hunted: false,
             turn: None,
             run: None,
@@ -923,7 +950,6 @@ mod tests {
             camera: false,
             overburdened: false,
             trace: Some("TRACE ▰▰▱▱▱▱▱▱▱▱ 23".into()),
-            home_trace: None,
             hunted: false,
             turn: None,
             run: Some("RUN  crack · door lock  ▰▰▱ 2/3 · 40%   ▓▓▓▓░░░░  next roll".into()),
@@ -969,7 +995,6 @@ mod tests {
             run: Some("RUN  crack · door lock  ▰▰▱ 2/3 · 40%".into()),
             hunted: true,
             trace: Some("TRACE ▰▰▰▱▱▱▱▱▱▱ 34 · ALERT 58 min".into()),
-            home_trace: None,
             ice: vec![
                 "▣ grey ICE · hunting · 2 tiles".into(),
                 "▣ black ICE · hunting · 5 tiles".into(),

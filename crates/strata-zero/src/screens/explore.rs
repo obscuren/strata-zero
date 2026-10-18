@@ -190,6 +190,8 @@ struct Regions {
     band_l: [Rect; 4],
     band_r: [Rect; 4],
     top_rule: Rect,
+    /// The route and the trace home, under the rule; only when there is something to say.
+    route: Option<Rect>,
     map: Rect,
     side: Rect,
     vrule_x: u16,
@@ -197,13 +199,14 @@ struct Regions {
     footer: [Rect; 4],
 }
 
-fn layout(area: Rect) -> Regions {
+fn layout(area: Rect, show_route: bool) -> Regions {
     let r = sidebar::width(area.width);
     let l = area.width.saturating_sub(r + 1);
     let x_rule = area.x + l;
     let row = |y: u16, x: u16, w: u16| Rect::new(x, area.y + y, w, 1);
     let main_y = area.y + 5;
     let main_h = area.height.saturating_sub(10);
+    let give = u16::from(show_route && main_h > 0);
     Regions {
         band_l: [
             row(0, area.x, l),
@@ -218,7 +221,8 @@ fn layout(area: Rect) -> Regions {
             row(3, x_rule + 1, r),
         ],
         top_rule: row(4, area.x, area.width),
-        map: Rect::new(area.x, main_y, l, main_h),
+        route: (give == 1).then(|| row(5, area.x, l)),
+        map: Rect::new(area.x, main_y + give, l, main_h - give),
         side: Rect::new(x_rule + 1, main_y, r, main_h),
         vrule_x: x_rule,
         bottom_rule: row(area.height.saturating_sub(5), area.x, area.width),
@@ -288,6 +292,21 @@ impl MapScreen {
             .collect()
     }
 
+    /// The route row's two halves: the route you came by while jacked in on a rig run,
+    /// and the trace walking home, wherever you stand.
+    fn route_parts(&self, st: &AppState, jacked: bool) -> (String, Option<String>) {
+        let name = |b| crate::helix::hosts::building_hostname(st, b);
+        let route = match st.backdoors.route.as_ref() {
+            Some(r) if jacked => {
+                let names: Vec<String> = r.relays.iter().map(|b| name(*b)).collect();
+                crate::backdoors::route_line(&names)
+            }
+            _ => String::new(),
+        };
+        let trace = st.backdoors.trace_line(st.net.now(st), &name);
+        (route, trace)
+    }
+
     /// What the footer reads this frame.
     fn footer<'a>(
         &self,
@@ -344,21 +363,6 @@ impl MapScreen {
             }),
             _ => None,
         };
-        // On a rig run the route you came by rides the same line.
-        let trace = match (trace, st.backdoors.route.as_ref()) {
-            (Some(t), Some(r)) if jacked => {
-                let names: Vec<String> = r
-                    .relays
-                    .iter()
-                    .map(|b| crate::helix::hosts::building_hostname(st, *b))
-                    .collect();
-                Some(format!(
-                    "{t} · ROUTE {}",
-                    crate::backdoors::route_line(&names)
-                ))
-            }
-            (t, _) => t,
-        };
         let run = match (
             jacked,
             st.net.run.as_ref(),
@@ -386,9 +390,6 @@ impl MapScreen {
             camera: self.mode == Mode::Explore,
             overburdened: st.character.overburdened(&st.content),
             trace,
-            home_trace: st
-                .backdoors
-                .trace_line(now, &|b| crate::helix::hosts::building_hostname(st, b)),
             hunted: jacked && crate::net::hunted(st),
             turn: crate::net::turn_readout(st),
             run,
@@ -1970,7 +1971,9 @@ impl Screen for MapScreen {
             crate::app::draw_too_small(f);
             return;
         }
-        let r = layout(area);
+        let jacked = st.player.as_ref().is_some_and(|p| p.jacked_in());
+        let (route, home_trace) = self.route_parts(st, jacked);
+        let r = layout(area, !route.is_empty() || home_trace.is_some());
         let map_area = r.map;
         self.last_map.set(map_area);
         let origin = self.cam.origin(map_area.width, map_area.height);
@@ -2292,8 +2295,13 @@ impl Screen for MapScreen {
             );
         }
         f.render_widget(Paragraph::new(tabs), r.band_r[3]);
+        if let Some(rr) = r.route {
+            f.render_widget(
+                Paragraph::new(hud::route_row(&route, home_trace.as_deref(), rr.width)),
+                rr,
+            );
+        }
         // Footer: four rows, the same four in every state.
-        let jacked = st.player.as_ref().is_some_and(|p| p.jacked_in());
         let slots = self.slots(st);
         let footer = self.footer(st, city, jacked, &slots);
         let rows = hud::footer_rows(&footer, area.width);
@@ -7324,7 +7332,7 @@ mod tests {
 
     #[test]
     fn the_layout_gives_the_footer_four_rows() {
-        let r = layout(Rect::new(0, 0, 100, 30));
+        let r = layout(Rect::new(0, 0, 100, 30), false);
         assert_eq!(r.bottom_rule.y, 25);
         assert_eq!(
             [r.footer[0].y, r.footer[1].y, r.footer[2].y, r.footer[3].y],
@@ -9257,19 +9265,49 @@ mod tests {
     }
 
     #[test]
-    fn the_footer_shows_the_home_trace_and_the_route() {
+    fn the_route_row_sits_under_the_rule_and_only_when_it_matters() {
         let (mut st, screen) = home_screen();
         let seed = st.city.as_ref().unwrap().seed;
         let home = st.home.unwrap().home.building;
         let a = other_construct(&mut st, &[home]);
         st.backdoors.plant_net(a, 1, seed, 0);
         crate::net::land_at(&mut st, a).unwrap();
-        let text = draw_screen(&screen, &st, 120, 40);
         let name = crate::helix::hosts::building_hostname(&st, a);
-        assert!(text.contains(&format!("ROUTE zenbo ▸ {name}")), "{text}");
+        let text = draw_screen(&screen, &st, 120, 40);
+        let row = text.lines().nth(5).unwrap();
+        assert!(row.contains(&format!("ROUTE  zenbo ▸ {name}")), "{text}");
+        let foot: Vec<&str> = text.lines().rev().take(4).collect();
+        assert!(foot.iter().all(|l| !l.contains("ROUTE")), "{text}");
         crate::net::dump(&mut st, "the trace found you");
         let text = draw_screen(&screen, &st, 120, 40);
-        assert!(text.contains(&format!("TRACE ▸ {name} ·")), "{text}");
+        let row = text.lines().nth(5).unwrap();
+        assert!(row.contains(&format!("TRACE ▸ {name} ·")), "{text}");
+        let foot: Vec<&str> = text.lines().rev().take(4).collect();
+        assert!(foot.iter().all(|l| !l.contains("TRACE ▸")), "{text}");
+
+        // On the street with nothing running the map takes the line back.
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let text = draw_screen(&s, &st, 120, 40);
+        let row = text.lines().nth(5).unwrap();
+        assert!(!row.contains("ROUTE") && !row.contains("TRACE"), "{text}");
+        assert_eq!(layout(Rect::new(0, 0, 120, 40), false).map.height, 30);
+    }
+
+    #[test]
+    fn the_route_row_takes_one_line_from_the_map() {
+        let area = Rect::new(0, 0, 120, 40);
+        let with = layout(area, true);
+        assert_eq!((with.map.y, with.map.height), (6, 29));
+        assert_eq!(
+            with.route.map(|r| (r.y, r.width)),
+            Some((5, with.map.width))
+        );
+        assert_eq!(with.side.y, 5);
+        let without = layout(area, false);
+        assert_eq!((without.map.y, without.map.height), (5, 30));
+        assert!(without.route.is_none());
     }
 
     fn server_tile(st: &AppState, b: citygen::BuildingId) -> Pos {
