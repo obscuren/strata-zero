@@ -15,9 +15,6 @@ use std::collections::HashSet;
 mod atrium;
 mod home;
 
-/// Base light of a floor; ceiling lamps add to it.
-const BASE_LIGHT: u8 = 150;
-
 pub(super) struct Builder<'a> {
     city: &'a City,
     plan: &'a FloorPlan,
@@ -1192,10 +1189,16 @@ impl<'a> Builder<'a> {
     }
 
     fn finish(self) -> Floor {
-        let light = lighting::compute(&self.tiles, BASE_LIGHT, |t| match t.feature {
-            Some(Feature::Lamp) => Some((6, 120.0)),
-            _ => None,
-        });
+        let tiles = &self.tiles;
+        let light = lighting::compute(
+            tiles,
+            lighting::tuning::INTERIOR_BASE,
+            |p| tiles.get(p).is_none_or(|t| t.blocks_sight()),
+            |t| match t.feature {
+                Some(Feature::Lamp) => Some(lighting::tuning::INTERIOR_LAMP),
+                _ => None,
+            },
+        );
         let mut stations = self.stations;
         stations.retain(|s| self.tiles[s.pos].is_walkable());
         Floor {

@@ -2,7 +2,7 @@
 
 pub mod tuning;
 
-use crate::geom::{Grid, Rect};
+use crate::geom::{Grid, Pos};
 use crate::tile::{Feature, Terrain, Tile};
 use crate::world::StratumKind;
 use tuning::*;
@@ -66,10 +66,13 @@ pub fn emits(terrain: Terrain, feature: Option<Feature>, k: StratumKind, lamps_o
 }
 
 /// Adds every emitter's cone of `strength` over `radius` tiles to `base`, clamped to
-/// 0..=255. `emission` gives (radius, strength) for a tile that glows.
+/// 0..=255, reaching only the tiles the emitter can see through `blocks`. A blocking
+/// tile takes the light that hits it, so walls and facades glow. `emission` gives
+/// (radius, strength) for a tile that glows.
 pub fn compute(
     tiles: &Grid<Tile>,
     base: u8,
+    blocks: impl Fn(Pos) -> bool,
     emission: impl Fn(&Tile) -> Option<(i32, f32)>,
 ) -> Grid<u8> {
     let size = tiles.size();
@@ -78,16 +81,18 @@ pub fn compute(
         let Some((r, strength)) = emission(t) else {
             continue;
         };
-        for q in Rect::new(p.x - r, p.y - r, 2 * r + 1, 2 * r + 1).iter() {
-            if !size.contains(q) {
-                continue;
-            }
-            let d = (p.dist2(q) as f32).sqrt();
-            if d > r as f32 {
-                continue;
-            }
-            light[size.index(q)] += strength * (1.0 - d / r as f32);
-        }
+        crate::fov::compute(
+            p,
+            r,
+            &blocks,
+            |q| size.contains(q),
+            |q| {
+                let d = (p.dist2(q) as f32).sqrt();
+                if d <= r as f32 {
+                    light[size.index(q)] += strength * (1.0 - d / r as f32);
+                }
+            },
+        );
     }
     let mut out = Grid::filled(size, 0u8);
     for (slot, v) in out.as_mut_slice().iter_mut().zip(light) {
@@ -106,10 +111,15 @@ mod tests {
     fn a_lamp_lights_its_surroundings_and_fades_with_distance() {
         let mut tiles = Grid::filled(Size { w: 20, h: 10 }, Tile::new(Terrain::Floor));
         tiles[Pos::new(10, 5)].feature = Some(Feature::Lamp);
-        let light = compute(&tiles, 40, |t| match t.feature {
-            Some(Feature::Lamp) => Some((4, 120.0)),
-            _ => None,
-        });
+        let light = compute(
+            &tiles,
+            40,
+            |_| false,
+            |t| match t.feature {
+                Some(Feature::Lamp) => Some((4, 120.0)),
+                _ => None,
+            },
+        );
         assert_eq!(light[Pos::new(0, 0)], 40);
         assert!(light[Pos::new(10, 5)] > light[Pos::new(12, 5)]);
         assert!(light[Pos::new(12, 5)] > light[Pos::new(14, 5)]);
@@ -118,6 +128,28 @@ mod tests {
 
     use crate::tile::Hue;
     use crate::world::StratumKind;
+
+    #[test]
+    fn a_wall_takes_the_light_and_shades_what_stands_behind_it() {
+        let mut tiles = Grid::filled(Size { w: 20, h: 10 }, Tile::new(Terrain::Floor));
+        tiles[Pos::new(10, 5)].feature = Some(Feature::Lamp);
+        for y in 0..10 {
+            tiles[Pos::new(12, y)].terrain = Terrain::Wall;
+        }
+        tiles[Pos::new(12, 5)].terrain = Terrain::Window;
+        let light = compute(
+            &tiles,
+            0,
+            |p| tiles[p].blocks_sight(),
+            |t| match t.feature {
+                Some(Feature::Lamp) => Some((6, 120.0)),
+                _ => None,
+            },
+        );
+        assert!(light[Pos::new(12, 3)] > 0, "the wall glows");
+        assert_eq!(light[Pos::new(13, 3)], 0, "nothing behind the wall");
+        assert!(light[Pos::new(13, 5)] > 0, "the window lets it through");
+    }
 
     #[test]
     fn the_ramp_is_night_at_ten_noon_at_twelve_and_half_at_the_edges() {

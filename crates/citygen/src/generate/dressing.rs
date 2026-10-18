@@ -277,7 +277,14 @@ impl DressingStage {
     fn lights(ctx: &mut GenCtx, k: StratumKind) {
         let base = base_light(k);
         let st = ctx.city.stratum_mut(k).expect("stratum");
-        st.light = crate::lighting::compute(&st.tiles, base, |t| emission(t.terrain, t.feature, k));
+        let tiles = &st.tiles;
+        let light = crate::lighting::compute(
+            tiles,
+            base,
+            |p| tiles.get(p).is_none_or(|t| t.blocks_sight()),
+            |t| emission(t.terrain, t.feature, k),
+        );
+        st.light = light;
     }
 
     fn variants(ctx: &mut GenCtx, k: StratumKind) {
