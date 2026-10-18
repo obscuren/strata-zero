@@ -455,5 +455,49 @@ pub fn run_rows(
             );
         }
     }
+    choices.extend(hop_rows(st, b, pos, letters));
     choices
+}
+
+/// On the server of a construct you hold a backdoor on: `Hop: <building>` to every
+/// other backdoor's gate. A street run has no way home, so its rows are greyed.
+fn hop_rows(
+    st: &AppState,
+    b: citygen::BuildingId,
+    pos: Pos,
+    letters: &mut std::str::Chars,
+) -> Vec<Choice> {
+    let on_server = st.constructs.get(b).is_some_and(|k| {
+        k.nodes.iter().any(|(id, p)| {
+            st.city
+                .as_ref()
+                .is_some_and(|c| c.net.node(*id).kind == citygen::NodeKind::Server)
+                && p.chebyshev(pos) <= 1
+        })
+    });
+    if !on_server || st.backdoors.held(b).is_none() {
+        return Vec::new();
+    }
+    let now = st.net.now(st);
+    let home_run = st.backdoors.route.is_some();
+    let mut rows = Vec::new();
+    for d in
+        st.backdoors.list.iter().filter(|d| {
+            d.building != b && !matches!(d.state, crate::backdoors::State::Burned { .. })
+        })
+    {
+        let Some(key) = letters.next() else { break };
+        let name = crate::net::building_name(st, d.building);
+        let state = format!(" · {} · {}", d.user_label(), d.health(now).label());
+        let mut row = Choice::on(key, "Hop", name, CYAN, Pick::Hop(d.building));
+        if home_run {
+            row = row.tail(state);
+        } else {
+            row = row.tail(format!("{state} · no route home"));
+            row.pick = Pick::Close;
+            row.enabled = false;
+        }
+        rows.push(row);
+    }
+    rows
 }

@@ -53,7 +53,7 @@ pub fn city_gate(city: &City, b: BuildingId) -> Option<Pos> {
 }
 
 /// Puts the player at a place and tile and shows them around.
-fn land(st: &mut AppState, place: Place, pos: Pos) {
+pub(crate) fn land(st: &mut AppState, place: Place, pos: Pos) {
     let bonus = st.sight_bonus();
     let Some(city) = st.city.as_ref() else { return };
     let Some(player) = st.player.as_mut() else {

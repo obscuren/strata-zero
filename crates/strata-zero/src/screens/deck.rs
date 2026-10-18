@@ -11,11 +11,11 @@ use crate::render::map::MapRef;
 use crate::render::memmap::MemoryMap;
 use crate::screens::popup::{Choice, Pick, Popup};
 use crate::ui::board::{BoardState, RowKind, board_rows};
-use crate::ui::hud::capitalised;
 use crate::ui::chrome::{
     BAR_BG, CYAN, CYAN_RGB, DIM, MAGENTA, MAGENTA_RGB, PANEL_BG, RULE, TEXT, dim, frame, glass,
     head, plain, put, put_paragraph, reveal, warn,
 };
+use crate::ui::hud::capitalised;
 use crate::ui::logo::{self, Logo};
 use crate::ui::talents::{TalentsView, TreeCursor, step, talent_at};
 use citygen::rng::hash64;
@@ -264,10 +264,7 @@ impl Deck {
                         }),
                     ));
                 }
-                Some(
-                    Popup::verbs(&item.name, choices, st.tick)
-                        .anchored(anchor.0, anchor.1),
-                )
+                Some(Popup::verbs(&item.name, choices, st.tick).anchored(anchor.0, anchor.1))
             }
             Some(Detail::Category(id)) => {
                 let cat = st.content.category(id)?;
@@ -310,10 +307,7 @@ impl Deck {
                     unlock.enabled = b.clone().toggle_skill(&st.content, id).is_ok();
                     choices.push(unlock);
                 }
-                Some(
-                    Popup::verbs(&skill.name, choices, st.tick)
-                        .anchored(anchor.0, anchor.1),
-                )
+                Some(Popup::verbs(&skill.name, choices, st.tick).anchored(anchor.0, anchor.1))
             }
             _ => None,
         }

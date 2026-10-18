@@ -286,11 +286,7 @@ impl AppIo<'_> {
                 if r.cut_trace {
                     line.push_str(" · TRACE CUT");
                     // the building sees the line go: it alarms as a console alarm does
-                    let t = self.st.net.trace(*b);
-                    t.heat = t.heat.max(game::ALARM_HEAT);
-                    t.alert_until = Some(now + game::ALERT_MINUTES);
-                    let alarm = crate::net::raise_alarm(self.st, *b);
-                    self.st.warn(alarm);
+                    crate::net::lock_down(self.st, *b);
                 }
                 Ok(one(line))
             }

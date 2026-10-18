@@ -885,6 +885,22 @@ pub fn dump_for(st: &mut AppState, why: &str, cooling: u64) {
     st.net.run = None;
     st.net.cooling_until = Some(now + cooling);
     st.character.focus = 0;
+    // A dump on a rig run starts the trace home from the relay nearest you.
+    if st.backdoors.route.is_some() {
+        st.backdoors.start_trace(now);
+        let first = st
+            .backdoors
+            .trace
+            .as_ref()
+            .and_then(|t| t.relays.first().copied());
+        match first {
+            Some(b) => st.warn(format!(
+                "trace running · it starts at `{}`",
+                building_name(st, b)
+            )),
+            None => st.warn("trace running · straight to your door"),
+        }
+    }
     let _ = jack_out(st);
     kick(st, 20);
     st.warn(format!("DUMPED · {why}"));
@@ -904,7 +920,162 @@ pub fn jack_out(st: &mut AppState) -> Result<(), &'static str> {
     if st.net.run.take().is_some() {
         st.say("run aborted");
     }
+    st.backdoors.end_route();
     Ok(())
+}
+
+/// The building's trace at the alarm line, its gate on alert, its line warned.
+pub fn lock_down(st: &mut AppState, b: BuildingId) {
+    let now = st.net.now(st);
+    let t = st.net.trace(b);
+    t.heat = t.heat.max(game::ALARM_HEAT);
+    if t.alert_until.is_none() {
+        t.alert_until = Some(now + game::ALERT_MINUTES);
+    }
+    let line = raise_alarm(st, b);
+    st.warn(line);
+}
+
+/// The not-burned backdoors as landing rows: `Hollis Court · root · STABLE`.
+pub fn landings(st: &AppState) -> Vec<(BuildingId, String)> {
+    let now = st.net.now(st);
+    st.backdoors
+        .list
+        .iter()
+        .filter(|d| !matches!(d.state, crate::backdoors::State::Burned { .. }))
+        .map(|d| {
+            (
+                d.building,
+                format!(
+                    "{} · {} · {}",
+                    building_name(st, d.building),
+                    d.user_label(),
+                    d.health(now).label()
+                ),
+            )
+        })
+        .collect()
+}
+
+/// Whether Space on the rig should offer the landing list rather than jack in.
+pub fn wants_landing_list(st: &AppState) -> bool {
+    jack_in_refusal(st).is_none()
+        && st
+            .home
+            .is_some_and(|h| st.player.as_ref().is_some_and(|p| p.place == h.place()))
+        && !landings(st).is_empty()
+}
+
+/// The landing list: your block, then each backdoor you hold.
+pub fn landing_popup(st: &AppState) -> crate::screens::popup::Popup {
+    use crate::screens::popup::{Choice, Pick, Popup, WorldAct};
+    let mut choices = vec![Choice::new(
+        'a',
+        "your block",
+        Pick::World(WorldAct::JackIn),
+    )];
+    let mut letters = "bcdefgimnoprsuvwxyz".chars();
+    for (b, label) in landings(st) {
+        let Some(k) = letters.next() else { break };
+        choices.push(Choice::new(k, label, Pick::World(WorldAct::Land(b))));
+    }
+    Popup::verbs("JACK IN", choices, st.tick)
+}
+
+/// A rig run begins: an empty route from your block, or one relay when you landed
+/// through a backdoor. A street jack-in leaves the route alone.
+pub fn after_jack_in(st: &mut AppState, from: Place, via: Option<BuildingId>) {
+    if st.home.is_some_and(|h| h.place() == from) {
+        st.backdoors.start_route(via);
+    }
+}
+
+/// Checks and spends a use of the backdoor on `b`; whether it was a honeypot.
+fn use_backdoor(st: &mut AppState, b: BuildingId) -> Result<bool, String> {
+    let now = st.net.now(st);
+    let seed = st.city.as_ref().map_or(0, |c| c.seed);
+    let security = crate::access::security_of(st, b);
+    match st.backdoors.check(b, security, seed, now) {
+        crate::backdoors::Use::Refused => Err("connection refused · key rejected".to_string()),
+        crate::backdoors::Use::Trap => Ok(true),
+        crate::backdoors::Use::Works => {
+            let cost = match st.backdoors.held(b).map(|d| &d.kind) {
+                Some(crate::backdoors::Kind::Net { .. }) => crate::backdoors::COST_LAND_NET,
+                _ => crate::backdoors::COST_LAND,
+            };
+            st.backdoors.spend(b, cost);
+            Ok(false)
+        }
+    }
+}
+
+/// Springs a honeypot you just landed on: the alarm, the heat, a trace with that
+/// relay already gone.
+fn spring(st: &mut AppState, b: BuildingId) {
+    let now = st.net.now(st);
+    lock_down(st, b);
+    let _ = st
+        .net
+        .add_heat(b, crate::backdoors::HONEYPOT_NOISE, now, false);
+    st.backdoors.start_trace(now);
+    st.warn("honeypot · they were waiting · trace running");
+}
+
+/// Jack in from the rig and land at a backdoor's gate.
+pub fn land_at(st: &mut AppState, b: BuildingId) -> Result<String, String> {
+    if let Some(why) = jack_in_refusal(st) {
+        return Err(why);
+    }
+    let trap = use_backdoor(st, b)?;
+    let gate = st
+        .city
+        .as_ref()
+        .and_then(|c| crate::constructs::city_gate(c, b))
+        .ok_or("that gate is gone")?;
+    let bonus = st.sight_bonus();
+    let home = st.home;
+    let city = st.city.as_ref().ok_or("no city")?;
+    let player = st.player.as_mut().ok_or("no body")?;
+    let from = player.place;
+    player
+        .jack_in(city, home.as_ref(), bonus)
+        .map_err(|e| e.to_string())?;
+    player.pos = gate;
+    player.update_fov(&MapRef::stratum_of(city, StratumKind::Net), bonus);
+    after_jack_in(st, from, Some(b));
+    st.repaint = true;
+    if trap {
+        spring(st, b);
+    }
+    Ok(format!(
+        "jacked in · `{}`'s gate · via your backdoor",
+        building_name(st, b)
+    ))
+}
+
+/// From the server of a construct you hold, onto another backdoor's gate.
+pub fn hop(st: &mut AppState, b: BuildingId) -> Result<String, String> {
+    if st.backdoors.route.is_none() {
+        return Err("no route home".to_string());
+    }
+    let trap = use_backdoor(st, b)?;
+    let gate = st
+        .city
+        .as_ref()
+        .and_then(|c| crate::constructs::city_gate(c, b))
+        .ok_or("that gate is gone")?;
+    if st.net.run.take().is_some() {
+        st.say("run aborted");
+    }
+    if let Some(e) = st.net.engaged.as_mut() {
+        e.ap = e.ap.saturating_sub(1);
+    }
+    crate::constructs::land(st, Place::Stratum(StratumKind::Net), gate);
+    st.backdoors.hop(b);
+    if trap {
+        spring(st, b);
+    }
+    Ok(format!("hop · `{}`'s gate", building_name(st, b)))
 }
 
 /// Whether a piece at `from` sees a player: on the spine, in its row or column,
@@ -1747,6 +1918,9 @@ pub fn jack_in_refusal(st: &AppState) -> Option<String> {
     }
     let city = st.city.as_ref()?;
     let player = st.player.as_ref()?;
+    if st.home.is_some_and(|h| h.place() == player.place) && st.backdoors.seized(now) {
+        return Some("the rig is gone · evidence".to_string());
+    }
     let port = player.terminal_in_reach(city, st.home.as_ref())?;
     // The rig at home is your own line: no building's lockdown reaches it.
     if st.home.is_some_and(|h| h.place() == player.place) {
@@ -1771,10 +1945,13 @@ pub fn jack_in_here(st: &mut AppState) -> Result<String, String> {
         return Err("no body in the city".to_string());
     };
     let from = player.place;
-    player
+    let line = player
         .jack_in(city, home.as_ref(), bonus)
         .map(|port| crate::walker::jacked_in_line(city, from, port))
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // From the rig, the run has a route home: empty, until you hop.
+    after_jack_in(st, from, None);
+    Ok(line)
 }
 
 /// The node on or beside a tile in a construct, and the standing guard beside it.

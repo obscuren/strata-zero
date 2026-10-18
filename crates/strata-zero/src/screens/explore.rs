@@ -2,6 +2,7 @@
 
 use crate::actions::{perform, report};
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
+use crate::interact::{self, FREE_LETTERS};
 use crate::messages::Kind;
 use crate::render::atrium::AtriumOverlay;
 use crate::render::fx::FxOverlay;
@@ -19,7 +20,6 @@ use crate::screens::generating::Generating;
 use crate::screens::help;
 use crate::screens::messages::Messages;
 use crate::screens::pause::Pause;
-use crate::interact::{self, FREE_LETTERS};
 use crate::screens::popup::{Choice, Pick, Popup};
 use crate::screens::title::Title;
 use crate::ui::chrome::{CYAN, MAGENTA, put};
@@ -531,7 +531,11 @@ impl MapScreen {
                 let mark = if st.sidebar.is_on(*s) { "▣" } else { "▢" };
                 Choice::new(
                     (b'a' + i as u8) as char,
-                    format!("{mark} {}  F{}", crate::ui::hud::capitalised(s.label()), i + 1),
+                    format!(
+                        "{mark} {}  F{}",
+                        crate::ui::hud::capitalised(s.label()),
+                        i + 1
+                    ),
                     Pick::View(*s),
                 )
             })
@@ -942,7 +946,10 @@ impl MapScreen {
             return ScreenCmd::Stay;
         };
         let fast = k.modifiers.contains(KeyModifiers::SHIFT)
-            || matches!(k.code, KeyCode::Char('H' | 'J' | 'K' | 'L' | 'Y' | 'U' | 'B' | 'N'));
+            || matches!(
+                k.code,
+                KeyCode::Char('H' | 'J' | 'K' | 'L' | 'Y' | 'U' | 'B' | 'N')
+            );
         let code = match k.code {
             KeyCode::Char(c) => KeyCode::Char(c.to_ascii_lowercase()),
             other => other,
@@ -2986,7 +2993,11 @@ mod tests {
         let mut unique = keys.clone();
         unique.sort();
         unique.dedup();
-        assert_eq!(unique.len(), keys.len(), "every row has its own key: {keys:?}");
+        assert_eq!(
+            unique.len(),
+            keys.len(),
+            "every row has its own key: {keys:?}"
+        );
         assert_eq!(keys[0], 'g');
     }
 
@@ -3136,7 +3147,10 @@ mod tests {
             s.update(&mut st, &[key(dir_between(at, empty))]),
             ScreenCmd::Stay
         ));
-        assert!(s.which_way.is_some(), "a direction with nothing keeps the pick");
+        assert!(
+            s.which_way.is_some(),
+            "a direction with nothing keeps the pick"
+        );
         assert_eq!(player(&st).1, at, "and never walks");
         assert!(matches!(
             s.update(&mut st, &[key(KeyCode::Esc)]),
@@ -3910,7 +3924,10 @@ mod tests {
             last(&st)
         );
         assert!(
-            matches!(here.update(&mut st, &[key(KeyCode::Esc)]), ScreenCmd::Pop { .. }),
+            matches!(
+                here.update(&mut st, &[key(KeyCode::Esc)]),
+                ScreenCmd::Pop { .. }
+            ),
             "the talk card closes to the game"
         );
     }
@@ -4493,7 +4510,10 @@ mod tests {
         // The 2F row rides there, and the log says so.
         for _ in 0..80 {
             let text = draw_screen(&*popup, &st, 120, 60);
-            if text.lines().any(|l| l.contains("▸") && l.contains("Ride: 2F")) {
+            if text
+                .lines()
+                .any(|l| l.contains("▸") && l.contains("Ride: 2F"))
+            {
                 break;
             }
             popup.update(&mut st, &[key(KeyCode::Down)]);
@@ -5718,7 +5738,10 @@ mod tests {
         };
         st.tick += 40;
         let text = draw_screen(&*here_popup, &st, 120, 40);
-        assert!(!text.contains("Crack") && text.contains("x  Look"), "{text}");
+        assert!(
+            !text.contains("Crack") && text.contains("x  Look"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -7349,7 +7372,18 @@ mod tests {
         walking(&mut st, &mut s);
         s.update(&mut st, &[key(KeyCode::Char('?'))]);
         let text = draw_screen(&s, &st, 140, 45);
-        for k in ["space", "enter", "tab", "v ", "m ", ". ", "J ", "jack out (asks first)", "x ", "look: a cursor"] {
+        for k in [
+            "space",
+            "enter",
+            "tab",
+            "v ",
+            "m ",
+            ". ",
+            "J ",
+            "jack out (asks first)",
+            "x ",
+            "look: a cursor",
+        ] {
             assert!(text.contains(k), "{k:?} missing: {text}");
         }
     }
@@ -7519,7 +7553,11 @@ mod tests {
         assert_eq!(s.looking.as_ref().unwrap().cursor, at.offset(1, 0));
         assert_eq!(player(&st).1, at, "looking never moves you");
         s.update(&mut st, &[key(KeyCode::Char('L'))]);
-        assert_eq!(s.looking.as_ref().unwrap().cursor, at.offset(9, 0), "shift moves eight");
+        assert_eq!(
+            s.looking.as_ref().unwrap().cursor,
+            at.offset(9, 0),
+            "shift moves eight"
+        );
         st.tick += 40;
         let text = draw_screen(&s, &st, 120, 40);
         assert!(text.contains("LOOK") && text.contains("esc back"), "{text}");
@@ -7553,7 +7591,10 @@ mod tests {
             );
         }
         // In sight, the box names it.
-        st.player.as_mut().unwrap().set_vis(there, Visibility::Visible);
+        st.player
+            .as_mut()
+            .unwrap()
+            .set_vis(there, Visibility::Visible);
         st.tick += 40;
         assert!(draw_screen(&s, &st, 140, 40).contains("Copper coil"));
     }
@@ -7601,7 +7642,8 @@ mod tests {
                 .unwrap()
         };
         stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), at);
-        let ScreenCmd::Push { to: mut w, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))]) else {
+        let ScreenCmd::Push { to: mut w, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
             panic!("space opens the terminal")
         };
         assert!(matches!(
@@ -7666,7 +7708,10 @@ mod tests {
             crate::look::points_of_interest(&st, &m, place, view, from, &|_, _| None)
         };
         assert!(pois.len() >= 2, "{pois:?}");
-        assert!(pois.windows(2).all(|w| w[0].chebyshev(from) <= w[1].chebyshev(from)));
+        assert!(
+            pois.windows(2)
+                .all(|w| w[0].chebyshev(from) <= w[1].chebyshev(from))
+        );
         s.update(&mut st, &[key(KeyCode::Tab)]);
         assert_eq!(s.looking.as_ref().unwrap().cursor, pois[0]);
         s.update(&mut st, &[key(KeyCode::Tab)]);
@@ -7714,7 +7759,9 @@ mod tests {
         st.tick += 40;
         let text = draw_screen(&*ask, &st, 120, 40);
         assert!(
-            text.contains("Jack out?") && text.contains("y  Jack out") && text.contains("n  Stay in"),
+            text.contains("Jack out?")
+                && text.contains("y  Jack out")
+                && text.contains("n  Stay in"),
             "{text}"
         );
         assert!(matches!(
@@ -9083,5 +9130,253 @@ mod tests {
         assert!(!st.player.as_ref().unwrap().jacked_in());
         s.update(&mut st, &[]);
         assert_eq!(st.net.traces[&b].alert_until, until, "still on alert");
+    }
+
+    /// The player in the flat beside the rig, the screen walking.
+    fn home_screen() -> (AppState, MapScreen) {
+        let mut st = state_home();
+        let mut s = MapScreen::walking(&mut st);
+        let h = st.home.unwrap();
+        let flat = Place::Floor {
+            building: h.home.building,
+            level: h.home.level,
+        };
+        let at = beside_rig(&st);
+        stand(&mut st, &mut s, flat, at);
+        (st, s)
+    }
+
+    /// A building with a gate and a server (and no bait in it), not one of `not`.
+    fn other_construct(st: &mut AppState, not: &[citygen::BuildingId]) -> citygen::BuildingId {
+        let city = st.city.clone().unwrap();
+        city.buildings
+            .iter()
+            .map(|b| b.id)
+            .filter(|b| !not.contains(b))
+            .find(|b| {
+                crate::constructs::city_gate(&city, *b).is_some()
+                    && crate::access::security_of(st, *b) < citygen::construct::GREY_THRESHOLD
+                    && st.constructs.ensure(&city, *b).is_some_and(|k| {
+                        k.nodes
+                            .iter()
+                            .any(|(id, _)| city.net.node(*id).kind == NodeKind::Server)
+                    })
+            })
+            .expect("a building with a construct and a server")
+    }
+
+    fn server_tile(st: &AppState, b: citygen::BuildingId) -> Pos {
+        let city = st.city.as_ref().unwrap();
+        st.constructs
+            .get(b)
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|(id, _)| city.net.node(*id).kind == NodeKind::Server)
+            .unwrap()
+            .1
+    }
+
+    /// Fires the row whose text contains `what` on a popup, returning the command.
+    fn fire_row(st: &mut AppState, p: &mut dyn Screen, what: &str) -> ScreenCmd {
+        st.tick += 40;
+        let text = draw_screen(&*p, st, 120, 40);
+        let row = text
+            .lines()
+            .find(|l| l.contains(what))
+            .unwrap_or_else(|| panic!("no row {what}: {text}"));
+        let letter = row.chars().find(|c| c.is_ascii_alphabetic()).unwrap();
+        p.update(st, &[key(KeyCode::Char(letter))])
+    }
+
+    #[test]
+    fn the_rig_offers_landings_and_lands_at_a_gate() {
+        let (mut st, mut s) = home_screen();
+        let h = st.home.unwrap();
+        let seed = st.city.as_ref().unwrap().seed;
+        let other = other_construct(&mut st, &[h.home.building]);
+        st.backdoors.plant_net(other, 1, seed, 0);
+        let ScreenCmd::Push { to: mut popup, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens the popup")
+        };
+        // jack in opens the landing list in its place
+        let ScreenCmd::Replace { to: mut list, .. } = fire_row(&mut st, &mut *popup, "Jack in")
+        else {
+            panic!("jack in replaces the popup with the landings")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*list, &st, 120, 40);
+        assert!(
+            text.contains("JACK IN") && text.contains("your block"),
+            "{text}"
+        );
+        let row = format!("{} · root · STABLE", crate::net::building_name(&st, other));
+        assert!(text.contains(&row), "{text}");
+        // land through the list
+        let cmd = fire_row(&mut st, &mut *list, &row);
+        assert!(matches!(cmd, ScreenCmd::Pop { .. }));
+        assert!(
+            last(&st).unwrap().contains("via your backdoor"),
+            "{:?}",
+            last(&st)
+        );
+        let p = st.player.as_ref().unwrap();
+        assert_eq!(p.place, Place::Stratum(StratumKind::Net));
+        assert_eq!(
+            p.pos,
+            crate::constructs::city_gate(st.city.as_ref().unwrap(), other).unwrap()
+        );
+        assert_eq!(p.body.map(|(pl, _)| pl), Some(h.place()));
+        assert_eq!(st.backdoors.route.as_ref().unwrap().relays, vec![other]);
+        assert_eq!(
+            st.backdoors.held(other).unwrap().spent,
+            crate::backdoors::COST_LAND_NET
+        );
+        // jacking out ends the route
+        crate::net::jack_out(&mut st).unwrap();
+        assert!(st.backdoors.route.is_none());
+        // a burned one is refused and the journal learns it
+        let d = st
+            .backdoors
+            .list
+            .iter_mut()
+            .find(|d| d.building == other)
+            .unwrap();
+        d.spent = d.nominal * 2;
+        assert_eq!(
+            crate::net::land_at(&mut st, other),
+            Err("connection refused · key rejected".to_string())
+        );
+        assert!(st.player.as_ref().unwrap().body.is_none());
+        assert_eq!(
+            st.backdoors.list[0].health(0),
+            crate::backdoors::Health::Burned
+        );
+    }
+
+    #[test]
+    fn jacking_in_at_your_block_from_the_rig_starts_an_empty_route() {
+        let (mut st, _s) = home_screen();
+        crate::net::jack_in_here(&mut st).unwrap();
+        assert!(st.player.as_ref().unwrap().jacked_in());
+        assert_eq!(st.backdoors.route, Some(crate::backdoors::Route::default()));
+        // the same at a street port starts none
+        let mut st = state8();
+        seed_world(&mut st);
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let at = {
+            let city = st.city.as_ref().unwrap();
+            let jack = city
+                .connectors
+                .iter()
+                .find(|k| k.kind == citygen::ConnectorKind::Jack && k.public)
+                .unwrap()
+                .pos;
+            jack.neighbors8()
+                .find(|n| city.walkable(StratumKind::Street, *n))
+                .unwrap()
+        };
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), at);
+        crate::net::jack_in_here(&mut st).unwrap();
+        assert!(st.player.as_ref().unwrap().jacked_in());
+        assert!(st.backdoors.route.is_none());
+        // and a dump there starts no trace
+        crate::net::dump(&mut st, "the trace found you");
+        assert!(st.backdoors.trace.is_none());
+    }
+
+    #[test]
+    fn a_hop_from_the_server_re_lands_at_another_gate() {
+        let (mut st, _s) = home_screen();
+        let seed = st.city.as_ref().unwrap().seed;
+        let home = st.home.unwrap().home.building;
+        let a = other_construct(&mut st, &[home]);
+        let b2 = other_construct(&mut st, &[home, a]);
+        st.backdoors.plant_net(a, 1, seed, 0);
+        st.backdoors.plant_net(b2, 1, seed, 0);
+        crate::net::land_at(&mut st, a).unwrap();
+        crate::constructs::enter_construct(&mut st, a).unwrap();
+        let server = server_tile(&st, a);
+        st.player.as_mut().unwrap().pos = server;
+        let rows = crate::interact::run_rows(
+            &st,
+            a,
+            server,
+            None,
+            &mut crate::interact::FREE_LETTERS.chars(),
+        );
+        let hop = rows.iter().find(|c| c.label == "Hop").expect("a hop row");
+        let name = crate::net::building_name(&st, b2);
+        assert!(
+            hop.thing.as_ref().is_some_and(|(t, _)| *t == name) && hop.enabled,
+            "{:?}",
+            hop.thing
+        );
+        assert_eq!(rows.iter().filter(|c| c.label == "Hop").count(), 1);
+        crate::net::hop(&mut st, b2).unwrap();
+        let p = st.player.as_ref().unwrap();
+        assert_eq!(p.place, Place::Stratum(StratumKind::Net));
+        assert_eq!(
+            p.pos,
+            crate::constructs::city_gate(st.city.as_ref().unwrap(), b2).unwrap()
+        );
+        assert_eq!(st.backdoors.route.as_ref().unwrap().relays, vec![a, b2]);
+        // away from the server: no hop rows
+        crate::constructs::enter_construct(&mut st, b2).unwrap();
+        let entry = st.constructs.get(b2).unwrap().entry;
+        let rows = crate::interact::run_rows(
+            &st,
+            b2,
+            entry,
+            None,
+            &mut crate::interact::FREE_LETTERS.chars(),
+        );
+        assert!(rows.iter().all(|c| c.label != "Hop"));
+        // on a street run the rows are greyed
+        st.backdoors.route = None;
+        let rows = crate::interact::run_rows(
+            &st,
+            a,
+            server,
+            None,
+            &mut crate::interact::FREE_LETTERS.chars(),
+        );
+        let hop = rows.iter().find(|c| c.label == "Hop").unwrap();
+        assert!(
+            !hop.enabled && hop.tail.ends_with("no route home"),
+            "{}",
+            hop.tail
+        );
+    }
+
+    #[test]
+    fn a_dump_on_a_rig_run_starts_the_trace() {
+        let (mut st, _s) = home_screen();
+        let seed = st.city.as_ref().unwrap().seed;
+        let home = st.home.unwrap().home.building;
+        let a = other_construct(&mut st, &[home]);
+        st.backdoors.plant_net(a, 1, seed, 0);
+        crate::net::land_at(&mut st, a).unwrap();
+        crate::net::dump(&mut st, "the trace found you");
+        assert!(st.backdoors.route.is_none());
+        let t = st.backdoors.trace.as_ref().expect("a trace");
+        assert_eq!(t.relays, vec![a]);
+        assert!(
+            st.log
+                .iter()
+                .any(|e| e.text.contains("trace running · it starts at")),
+        );
+    }
+
+    #[test]
+    fn a_seized_rig_refuses_to_jack_in() {
+        let (mut st, _s) = home_screen();
+        st.backdoors.rig_seized_until = Some(u64::MAX);
+        assert_eq!(
+            crate::net::jack_in_refusal(&st),
+            Some("the rig is gone · evidence".to_string())
+        );
     }
 }
