@@ -2050,10 +2050,16 @@ impl Screen for MapScreen {
         };
         overlays.push(&ground);
         let (hour, _) = st.clock();
+        let eyes = if st.show_eyes {
+            crate::exposure::of(st).eyes
+        } else {
+            Vec::new()
+        };
         let people = st.world.as_ref().map(|world| PeopleOverlay {
             world,
             night: hour >= 18 || hour <= 5,
             vis,
+            eyes: &eyes,
         });
         if let Some(p) = people.as_ref() {
             overlays.push(p);
@@ -2128,6 +2134,10 @@ impl Screen for MapScreen {
         }
         let fx = FxOverlay { fx: &st.fx, vis };
         overlays.push(&fx);
+        let light = crate::render::lighting::LightOverlay { vis };
+        if st.show_light {
+            overlays.push(&light);
+        }
         MapView {
             map: &map,
             origin,

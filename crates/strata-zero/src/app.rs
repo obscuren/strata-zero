@@ -37,6 +37,10 @@ pub struct AppState {
     pub rain: bool,
     /// FPS readout in the status bar (Settings).
     pub show_fps: bool,
+    /// Dev: tint the walkers who can see you.
+    pub show_eyes: bool,
+    /// Dev: paint each visible tile grey by its light.
+    pub show_light: bool,
     /// A popup asked the map for its look cursor on this tile; the map takes it.
     pub look_at: Option<citygen::Pos>,
     pub content: game::Content,
@@ -126,6 +130,8 @@ impl AppState {
             dev: DEV_DEFAULT,
             rain: true,
             show_fps: true,
+            show_eyes: false,
+            show_light: false,
             look_at: None,
             content,
             character,

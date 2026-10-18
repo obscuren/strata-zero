@@ -1,5 +1,5 @@
 //! Dev console commands: spawn and drop items, give credits, heal, xp, focus, count the
-//! people, jump the clock, clear a pile.
+//! people, jump the clock, clear a pile, show who sees you and how lit the map is.
 
 use crate::anim::effects::pulse;
 use crate::app::AppState;
@@ -11,10 +11,10 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 27] = [
+const COMMANDS: [&str; 29] = [
     "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "talent", "tpts", "program",
     "heat", "alarm", "wake", "engage", "calm", "ice", "failsafe", "hp", "who", "clock", "tp",
-    "clear", "help", "trace", "seize", "backdoor",
+    "clear", "help", "trace", "seize", "backdoor", "eyes", "light",
 ];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
@@ -389,6 +389,14 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             st.repaint = true;
             Ok(format!("{x},{y} · {label}"))
         }
+        "eyes" => {
+            st.show_eyes = !st.show_eyes;
+            Ok(format!("eyes {}", if st.show_eyes { "on" } else { "off" }))
+        }
+        "light" => {
+            st.show_light = !st.show_light;
+            Ok(format!("light {}", if st.show_light { "on" } else { "off" }))
+        }
         "clear" => {
             let n = st.ground.at(focus.place, focus.pos).len();
             st.ground.clear(focus.place, focus.pos);
@@ -398,7 +406,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             ))
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> · tp <x> <y> · trace · seize · backdoor <host> · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> · tp <x> <y> · trace · seize · backdoor <host> · eyes · light · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),
@@ -590,6 +598,17 @@ mod tests {
         );
         st.world = None;
         assert_eq!(run(&mut st, at, "who").unwrap_err(), "no city, no people");
+    }
+
+    #[test]
+    fn eyes_and_light_toggle() {
+        let (mut st, at) = setup();
+        assert!(!st.show_eyes && !st.show_light);
+        assert_eq!(run(&mut st, at, "eyes").unwrap(), "eyes on");
+        assert_eq!(run(&mut st, at, "light").unwrap(), "light on");
+        assert!(st.show_eyes && st.show_light);
+        assert_eq!(run(&mut st, at, "eyes").unwrap(), "eyes off");
+        assert!(!st.show_eyes);
     }
 
     #[test]
