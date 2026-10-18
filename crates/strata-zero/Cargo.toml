@@ -22,5 +22,6 @@ ratatui.workspace = true
 crossterm.workspace = true
 clap.workspace = true
 ron.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
