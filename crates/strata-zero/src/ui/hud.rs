@@ -263,7 +263,7 @@ fn tab(key: &str, label: &str, on: bool, shown: bool) -> Vec<Span<'static>> {
     ]
 }
 
-fn capitalised(s: &str) -> String {
+pub(crate) fn capitalised(s: &str) -> String {
     let mut c = s.chars();
     match c.next() {
         Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),

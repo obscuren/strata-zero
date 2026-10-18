@@ -478,13 +478,13 @@ impl MapScreen {
                 let mark = if st.sidebar.is_on(*s) { "▣" } else { "▢" };
                 Choice::new(
                     (b'a' + i as u8) as char,
-                    format!("{mark} {}  F{}", s.label(), i + 1),
+                    format!("{mark} {}  F{}", crate::ui::hud::capitalised(s.label()), i + 1),
                     Pick::View(*s),
                 )
             })
             .collect();
         ScreenCmd::Push {
-            to: Box::new(Popup::verbs("VIEW", choices, st.tick)),
+            to: Box::new(Popup::verbs("View", choices, st.tick)),
             fx: TransitionKind::None,
         }
     }
@@ -1154,7 +1154,7 @@ impl MapScreen {
             return ScreenCmd::Stay;
         }
         ScreenCmd::Push {
-            to: Box::new(Popup::verbs("ABILITIES", choices, st.tick)),
+            to: Box::new(Popup::verbs("Abilities", choices, st.tick)),
             fx: TransitionKind::None,
         }
     }
@@ -1371,7 +1371,7 @@ impl MapScreen {
     fn floors_popup(&self, st: &AppState) -> Option<ScreenCmd> {
         let rows = self.floor_rows(st)?;
         Some(ScreenCmd::Push {
-            to: Box::new(Popup::verbs("FLOORS", rows, st.tick)),
+            to: Box::new(Popup::verbs("Floors", rows, st.tick)),
             fx: TransitionKind::None,
         })
     }
@@ -2963,7 +2963,7 @@ mod tests {
         st.tick += 40;
         let text = draw_screen(&*p, &st, 120, 40);
         assert!(
-            text.contains("ABILITIES") && text.contains("a  Netscan · ready"),
+            text.contains("Abilities") && text.contains("a  Netscan · ready"),
             "{text}"
         );
         let seen = |st: &AppState| {
@@ -3121,7 +3121,7 @@ mod tests {
         st.tick += 40;
         let text = draw_screen(&*p, &st, 100, 30);
         assert!(
-            text.contains("VIEW") && text.contains("a  ▣ here") && text.contains("e  ▢ inspect"),
+            text.contains("View") && text.contains("a  ▣ Here") && text.contains("e  ▢ Inspect"),
             "{text}"
         );
         assert!(matches!(
@@ -4129,7 +4129,7 @@ mod tests {
         };
         st.tick += 40;
         let text = draw_screen(&*popup, &st, 120, 40);
-        assert!(text.contains("FLOORS"), "{text}");
+        assert!(text.contains("Floors"), "{text}");
         assert!(
             text.contains(" L ") || text.contains(" L·") || text.contains("L · here"),
             "{text}"

@@ -11,6 +11,7 @@ use crate::render::map::MapRef;
 use crate::render::memmap::MemoryMap;
 use crate::screens::popup::{Choice, Pick, Popup};
 use crate::ui::board::{BoardState, RowKind, board_rows};
+use crate::ui::hud::capitalised;
 use crate::ui::chrome::{
     BAR_BG, CYAN, CYAN_RGB, DIM, MAGENTA, MAGENTA_RGB, PANEL_BG, RULE, TEXT, dim, frame, glass,
     head, plain, put, put_paragraph, reveal, warn,
@@ -209,12 +210,12 @@ impl Deck {
                 if let Some(id) = st.character.equipped(*slot) {
                     choices.push(Choice::new(
                         'u',
-                        "unequip",
+                        "Unequip",
                         Pick::Act(Action::Unequip(*slot)),
                     ));
                     choices.push(Choice::new(
                         'i',
-                        "inspect",
+                        "Inspect",
                         Pick::Card(Self::item_card(st, id)),
                     ));
                 }
@@ -223,7 +224,7 @@ impl Deck {
                     return None;
                 }
                 Some(
-                    Popup::verbs(&slot.label().to_uppercase(), choices, st.tick)
+                    Popup::verbs(&capitalised(slot.label()), choices, st.tick)
                         .anchored(anchor.0, anchor.1),
                 )
             }
@@ -232,22 +233,22 @@ impl Deck {
                 let qty = st.character.count(id);
                 let mut choices = vec![Choice::new(
                     'i',
-                    "inspect",
+                    "Inspect",
                     Pick::Card(Self::item_card(st, id)),
                 )];
                 if item.slot.is_some() {
                     choices.push(Choice::new(
                         'e',
-                        "equip",
+                        "Equip",
                         Pick::Act(Action::Equip(id.clone())),
                     ));
                 }
                 if item.on_use.is_some() {
-                    choices.push(Choice::new('u', "use", Pick::Act(Action::Use(id.clone()))));
+                    choices.push(Choice::new('u', "Use", Pick::Act(Action::Use(id.clone()))));
                 }
                 choices.push(Choice::new(
                     'd',
-                    "drop one",
+                    "Drop one",
                     Pick::Act(Action::Drop {
                         item: id.clone(),
                         qty: 1,
@@ -256,7 +257,7 @@ impl Deck {
                 if qty > 1 {
                     choices.push(Choice::new(
                         'D',
-                        "drop all",
+                        "Drop all",
                         Pick::Act(Action::Drop {
                             item: id.clone(),
                             qty,
@@ -264,7 +265,7 @@ impl Deck {
                     ));
                 }
                 Some(
-                    Popup::verbs(&item.name.to_uppercase(), choices, st.tick)
+                    Popup::verbs(&item.name, choices, st.tick)
                         .anchored(anchor.0, anchor.1),
                 )
             }
@@ -273,13 +274,13 @@ impl Deck {
                 let b = Build::from_character(&st.content, &st.character);
                 let mut choices = vec![Choice::new(
                     'i',
-                    "inspect",
+                    "Inspect",
                     Pick::Card(Self::category_card(st, id)),
                 )];
                 if !st.character.has_category(id) {
                     let mut unlock = Choice::new(
                         'u',
-                        format!("unlock · {} SP", cat.cost),
+                        format!("Unlock · {} SP", cat.cost),
                         Pick::Act(Action::Unlock(id.clone())),
                     );
                     unlock.enabled = b.clone().toggle_category(&st.content, id).is_ok();
@@ -292,7 +293,7 @@ impl Deck {
                 let b = Build::from_character(&st.content, &st.character);
                 let mut choices = vec![Choice::new(
                     'i',
-                    "inspect",
+                    "Inspect",
                     Pick::Card(Self::skill_card(st, id)),
                 )];
                 if !st.character.has_skill(id) {
@@ -300,9 +301,9 @@ impl Deck {
                     let mut unlock = Choice::new(
                         'u',
                         if cost == 0 {
-                            "unlock · free".to_string()
+                            "Unlock · free".to_string()
                         } else {
-                            format!("unlock · {cost} SP")
+                            format!("Unlock · {cost} SP")
                         },
                         Pick::Act(Action::UnlockSkill(id.clone())),
                     );
@@ -310,7 +311,7 @@ impl Deck {
                     choices.push(unlock);
                 }
                 Some(
-                    Popup::verbs(&skill.name.to_uppercase(), choices, st.tick)
+                    Popup::verbs(&skill.name, choices, st.tick)
                         .anchored(anchor.0, anchor.1),
                 )
             }
@@ -2173,8 +2174,8 @@ mod tests {
         let text = buffer_text(t.backend().buffer());
         assert!(
             text.contains("a  Mirrorshades")
-                && text.contains("u  unequip")
-                && text.contains("i  inspect"),
+                && text.contains("u  Unequip")
+                && text.contains("i  Inspect"),
             "{text}"
         );
         assert!(
@@ -2220,12 +2221,12 @@ mod tests {
         st.tick = 40;
         let text = draw(&*p, &st, 120, 35);
         assert!(
-            text.contains("i  inspect")
-                && text.contains("d  drop one")
-                && text.contains("D  drop all"),
+            text.contains("i  Inspect")
+                && text.contains("d  Drop one")
+                && text.contains("D  Drop all"),
             "{text}"
         );
-        assert!(!text.contains("equip") && !text.contains("use"), "{text}");
+        assert!(!text.contains("Equip") && !text.contains("Use"), "{text}");
         p.update(&mut st, &[key(KeyCode::Char('D'))]);
         assert_eq!(st.ground.at(at.0, at.1)[0].qty, 3);
         assert!(!d.rows(&st).iter().any(|r| r.text.contains("Copper coil")));
@@ -2241,7 +2242,7 @@ mod tests {
         st.tick += 40;
         let text = draw(&*p, &st, 120, 35);
         assert!(
-            text.contains("u  use") && !text.contains("drop all"),
+            text.contains("u  Use") && !text.contains("Drop all"),
             "{text}"
         );
         st.character.hp = 10;

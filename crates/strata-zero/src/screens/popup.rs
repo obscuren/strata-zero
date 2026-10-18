@@ -13,7 +13,7 @@ use game::Action;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 
 /// Something the popup does to the player in the world.
@@ -56,10 +56,42 @@ pub enum Pick {
     Close,
 }
 
+/// What the top border names: the window's one subject, or the list it holds.
+#[derive(Clone, Debug)]
+pub struct Header {
+    /// The glyph the map draws for the subject, in its colour.
+    pub glyph: Option<(char, Color)>,
+    pub name: String,
+    pub fg: Color,
+}
+
+impl Header {
+    /// A plain title: a menu named by what it lists.
+    pub fn title(name: &str) -> Header {
+        Header {
+            glyph: None,
+            name: name.to_string(),
+            fg: CYAN,
+        }
+    }
+
+    /// Columns the header takes on the border, its padding included.
+    fn width(&self) -> usize {
+        self.name.chars().count() + 2 + if self.glyph.is_some() { 2 } else { 0 }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Choice {
     pub key: char,
+    /// The verb, capitalised.
     pub label: String,
+    /// What the verb acts on, drawn after ": " in its kind's colour.
+    pub thing: Option<(String, Color)>,
+    /// Plain text after the thing: odds, a lock's time left.
+    pub tail: String,
+    /// A second key that fires the row.
+    pub alias: Option<char>,
     pub pick: Pick,
     pub enabled: bool,
 }
@@ -69,18 +101,51 @@ impl Choice {
         Choice {
             key,
             label: label.into(),
+            thing: None,
+            tail: String::new(),
+            alias: None,
             pick,
             enabled: true,
         }
     }
 
+    /// `Verb: Thing`, the thing in its kind's colour.
+    pub fn on(
+        key: char,
+        verb: impl Into<String>,
+        thing: impl Into<String>,
+        colour: Color,
+        pick: Pick,
+    ) -> Self {
+        Choice {
+            thing: Some((thing.into(), colour)),
+            ..Choice::new(key, verb, pick)
+        }
+    }
+
+    pub fn tail(mut self, tail: impl Into<String>) -> Self {
+        self.tail = tail.into();
+        self
+    }
+
+    pub fn alias(mut self, key: char) -> Self {
+        self.alias = Some(key);
+        self
+    }
+
     /// A greyed row that cannot be fired; shown so the player knows it exists.
     pub fn disabled(key: char, label: impl Into<String>) -> Self {
         Choice {
-            key,
-            label: label.into(),
-            pick: Pick::Close,
             enabled: false,
+            ..Choice::new(key, label, Pick::Close)
+        }
+    }
+
+    /// The row's whole text after the key: verb, thing, tail.
+    fn text(&self) -> String {
+        match &self.thing {
+            Some((t, _)) => format!("{}: {t}{}", self.label, self.tail),
+            None => format!("{}{}", self.label, self.tail),
         }
     }
 }
@@ -114,31 +179,52 @@ fn wrapped_rows(line: &Line<'_>, width: usize) -> usize {
     }
     rows
 }
-const MIN_W: u16 = 24;
+pub(crate) const MIN_W: u16 = 40;
 const MAX_W: u16 = 60;
 
 pub struct Popup {
-    title: String,
+    /// None: the top border is blank.
+    header: Option<Header>,
+    /// A dim line under the header, before the rows.
+    subtitle: Option<String>,
     choices: Vec<Choice>,
     pub selected: usize,
     anchor: Option<(u16, u16)>,
     /// Tick the rows (or the card) appeared; drives the reveal.
     opened: u64,
-    /// When set, the card's lines replace the rows; closing it returns to the rows.
+    /// When set, the card's lines replace the rows; closing it closes the popup.
     card: Option<Vec<Line<'static>>>,
 }
 
 impl Popup {
+    /// A list under a plain title; an empty title leaves the border blank.
     pub fn verbs(title: &str, choices: Vec<Choice>, tick: u64) -> Self {
+        let header = (!title.is_empty()).then(|| Header::title(title));
+        Popup::about(header, None, choices, tick)
+    }
+
+    /// A window about one subject: its header, a dim subtitle, its rows.
+    pub fn about(
+        header: Option<Header>,
+        subtitle: Option<String>,
+        choices: Vec<Choice>,
+        tick: u64,
+    ) -> Self {
         let selected = choices.iter().position(|c| c.enabled).unwrap_or(0);
         Popup {
-            title: title.to_string(),
+            header,
+            subtitle,
             choices,
             selected,
             anchor: None,
             opened: tick,
             card: None,
         }
+    }
+
+    /// Rows above the choices: the subtitle and the blank row under it.
+    fn lead(&self) -> u16 {
+        if self.subtitle.is_some() { 2 } else { 0 }
     }
 
     /// Applies a world act to the player and returns the transition to pop with.
@@ -252,7 +338,7 @@ impl Popup {
 
     /// Where the panel goes inside `area`.
     pub(crate) fn rect(&self, area: Rect) -> Rect {
-        let title_w = self.title.chars().count() + 2;
+        let title_w = self.header.as_ref().map_or(0, |h| h.width());
         let (w, h) = match &self.card {
             Some(lines) => {
                 let longest = lines.iter().map(|l| l.width()).max().unwrap_or(0);
@@ -265,11 +351,12 @@ impl Popup {
                 let longest = self
                     .choices
                     .iter()
-                    .map(|c| c.label.chars().count() + 5)
+                    .map(|c| c.text().chars().count() + 5)
+                    .chain(self.subtitle.iter().map(|s| s.chars().count()))
                     .max()
                     .unwrap_or(0);
                 let w = (longest.max(title_w) as u16 + 6).clamp(MIN_W, MAX_W);
-                (w, self.choices.len() as u16 + 4)
+                (w, self.choices.len() as u16 + 4 + self.lead())
             }
         };
         let w = w.min(area.width);
@@ -389,14 +476,31 @@ impl Popup {
                 inner.right(),
             );
             put(buf, inner.x + 2, ry, &key, key_style.bg(bg), inner.right());
-            put(
-                buf,
-                inner.x + 3,
-                ry,
-                &format!("  {}", typewriter(&c.label, frac)),
-                label_style.bg(bg),
-                inner.right(),
-            );
+            put(buf, inner.x + 3, ry, "  ", label_style.bg(bg), inner.right());
+            // The revealed text in three runs: verb and colon, the thing in its
+            // colour, the tail.
+            let text = c.text();
+            let shown: Vec<char> = typewriter(&text, frac).chars().collect();
+            let verb = c.label.chars().count() + if c.thing.is_some() { 2 } else { 0 };
+            let thing = c.thing.as_ref().map_or(0, |(t, _)| t.chars().count());
+            let thing_style = match &c.thing {
+                Some((_, colour)) if c.enabled => Style::default()
+                    .fg(*colour)
+                    .add_modifier(Modifier::BOLD),
+                _ => label_style,
+            };
+            for (j, ch) in shown.iter().enumerate() {
+                let x = inner.x + 5 + j as u16;
+                if x >= inner.right() {
+                    break;
+                }
+                let style = if (verb..verb + thing).contains(&j) {
+                    thing_style
+                } else {
+                    label_style
+                };
+                buf[(x, ry)].set_char(*ch).set_style(style.bg(bg));
+            }
         }
     }
 }
@@ -404,19 +508,24 @@ impl Popup {
 impl Screen for Popup {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
         for k in keys {
+            // A card closes the whole popup: back to whatever lies under it.
             if self.card.is_some() {
                 if matches!(
                     k.code,
                     KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter | KeyCode::Char(' ')
                 ) {
-                    self.card = None;
-                    self.opened = st.tick;
+                    return ScreenCmd::Pop {
+                        fx: TransitionKind::None,
+                    };
                 }
                 continue;
             }
             // A row's letter wins over j/k navigation; the arrows always navigate.
             if let KeyCode::Char(c) = k.code
-                && let Some(i) = self.choices.iter().position(|ch| ch.enabled && ch.key == c)
+                && let Some(i) = self
+                    .choices
+                    .iter()
+                    .position(|ch| ch.enabled && (ch.key == c || ch.alias == Some(c)))
             {
                 return self.fire(st, i);
             }
@@ -443,23 +552,47 @@ impl Screen for Popup {
         let buf = f.buffer_mut();
         solid(buf, r);
         frame(buf, r);
-        put(
-            buf,
-            r.x + 2,
-            r.y,
-            &format!(" {} ", self.title),
-            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
-            r.right() - 1,
-        );
+        if let Some(h) = &self.header {
+            let max = r.right() - 1;
+            let name_style = Style::default().fg(h.fg).add_modifier(Modifier::BOLD);
+            put(buf, r.x + 2, r.y, " ", name_style, max);
+            let mut x = r.x + 3;
+            if let Some((g, colour)) = h.glyph {
+                put(
+                    buf,
+                    x,
+                    r.y,
+                    &format!("{g} "),
+                    Style::default().fg(colour).add_modifier(Modifier::BOLD),
+                    max,
+                );
+                x += 2;
+            }
+            put(buf, x, r.y, &format!("{} ", h.name), name_style, max);
+        }
         let inner = Rect::new(r.x + 2, r.y + 2, r.width - 4, r.height - 4);
-        let bar = Rect::new(r.x + 1, r.y + 2, r.width - 2, r.height - 4);
         match &self.card {
             Some(lines) => {
                 let p = st.tick.saturating_sub(self.opened) as f32 / REVEAL_TICKS as f32;
                 let shown = reveal(lines, p, (st.tick / 4).is_multiple_of(2));
                 put_paragraph(buf, inner, shown);
             }
-            None => self.draw_rows(st, inner, bar, buf),
+            None => {
+                if let Some(s) = &self.subtitle {
+                    put(
+                        buf,
+                        inner.x,
+                        inner.y,
+                        s,
+                        Style::default().fg(DIM),
+                        inner.right(),
+                    );
+                }
+                let lead = self.lead().min(inner.height);
+                let rows = Rect::new(inner.x, inner.y + lead, inner.width, inner.height - lead);
+                let bar = Rect::new(r.x + 1, rows.y, r.width - 2, rows.height);
+                self.draw_rows(st, rows, bar, buf);
+            }
         }
     }
 }
@@ -578,13 +711,12 @@ mod tests {
         st.tick = 40;
         assert!(draw(&p, &st, 120, 35).contains("a spool"));
         assert!(
-            matches!(p.update(&mut st, &[key(KeyCode::Esc)]), ScreenCmd::Stay),
-            "esc leaves the card"
+            matches!(
+                p.update(&mut st, &[key(KeyCode::Esc)]),
+                ScreenCmd::Pop { .. }
+            ),
+            "esc on the card closes the popup"
         );
-        assert!(matches!(
-            p.update(&mut st, &[key(KeyCode::Esc)]),
-            ScreenCmd::Pop { .. }
-        ));
     }
 
     #[test]
@@ -660,6 +792,113 @@ mod tests {
         );
         p.update(&mut st, &[key(KeyCode::Char('j'))]);
         assert_eq!(p.selected, 1, "j still moves when no row uses it");
+    }
+
+    /// The cell where `needle` starts in the drawn buffer.
+    fn find(b: &Buffer, needle: &str) -> (u16, u16) {
+        let text = buffer_text(b);
+        for (y, line) in text.lines().enumerate() {
+            let chars: Vec<char> = line.chars().collect();
+            let n: Vec<char> = needle.chars().collect();
+            if let Some(x) = chars.windows(n.len()).position(|w| w == n.as_slice()) {
+                return (x as u16, y as u16);
+            }
+        }
+        panic!("{needle} not drawn: {text}")
+    }
+
+    #[test]
+    fn a_header_names_the_subject_and_a_blank_one_draws_nothing() {
+        let mut st = state();
+        st.tick = 40;
+        let p = Popup::about(
+            Some(Header {
+                glyph: Some(('@', CYAN)),
+                name: "Mara Chen".into(),
+                fg: CYAN,
+            }),
+            Some("door muscle · on the door".into()),
+            vec![
+                Choice::new('x', "Look", Pick::Close),
+                Choice::new('t', "Talk", Pick::Close),
+            ],
+            0,
+        );
+        let text = draw(&p, &st, 120, 35);
+        assert!(text.contains("@ Mara Chen"), "{text}");
+        assert!(text.contains("door muscle · on the door"), "{text}");
+        assert!(
+            text.contains("x  Look") && text.contains("t  Talk"),
+            "{text}"
+        );
+        let blank = Popup::verbs("", vec![Choice::new('x', "Look", Pick::Close)], 0);
+        let r = blank.rect(Rect::new(0, 0, 120, 35));
+        assert!(r.width >= 40, "{r:?}");
+        let text = draw(&blank, &st, 120, 35);
+        let top = text.lines().nth(r.y as usize).unwrap();
+        assert!(
+            !top.chars().any(|c| c.is_alphabetic()),
+            "blank header: {top}"
+        );
+    }
+
+    #[test]
+    fn a_row_draws_verb_colon_thing_and_tail() {
+        let mut st = state();
+        st.tick = 40;
+        let p = Popup::verbs(
+            "",
+            vec![
+                Choice::on('i', "Interact", "Keypad", crate::ui::hud::AMBER, Pick::Close)
+                    .tail(" · locked 4m"),
+            ],
+            0,
+        );
+        let mut t = Terminal::new(TestBackend::new(120, 35)).unwrap();
+        t.draw(|f| p.draw(&st, f)).unwrap();
+        let text = buffer_text(t.backend().buffer());
+        assert!(text.contains("i  Interact: Keypad · locked 4m"), "{text}");
+        let (x, y) = find(t.backend().buffer(), "Keypad");
+        assert_eq!(t.backend().buffer()[(x, y)].fg, crate::ui::hud::AMBER);
+    }
+
+    #[test]
+    fn a_card_closes_the_whole_popup() {
+        let mut st = state();
+        let mut p = Popup::verbs(
+            "",
+            vec![Choice::new(
+                'i',
+                "Inspect",
+                Pick::Card(vec![Line::from("a spool")]),
+            )],
+            0,
+        );
+        assert!(matches!(
+            p.update(&mut st, &[key(KeyCode::Char('i'))]),
+            ScreenCmd::Stay
+        ));
+        assert!(matches!(
+            p.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Pop { .. }
+        ));
+    }
+
+    #[test]
+    fn an_alias_fires_its_row() {
+        let mut st = state();
+        let mut p = Popup::verbs(
+            "Jack out?",
+            vec![
+                Choice::new('y', "Jack out", Pick::Close).alias('J'),
+                Choice::new('n', "Stay in", Pick::Close),
+            ],
+            0,
+        );
+        assert!(matches!(
+            p.update(&mut st, &[key(KeyCode::Char('J'))]),
+            ScreenCmd::Pop { .. }
+        ));
     }
 
     #[test]
