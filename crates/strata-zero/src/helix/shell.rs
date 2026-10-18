@@ -345,8 +345,9 @@ fn report(out: &mut Res, cmd: &str, path: &str, e: ReadErr) {
     }
 }
 
-/// A file's lines, or a device's through the world. `notify` tells the world (`cat`).
-fn read_text(io: &mut dyn Io, me: &Me, path: &str, notify: bool) -> Result<Vec<String>, ReadErr> {
+/// A file's lines, or a device's through the world. A plain file read is told to the
+/// world, whichever builtin reads it: what you saw, you learn.
+fn read_text(io: &mut dyn Io, me: &Me, path: &str) -> Result<Vec<String>, ReadErr> {
     let kind = io
         .fs(me.host)
         .read(&me.user, &me.cwd, &me.home, path)
@@ -354,9 +355,7 @@ fn read_text(io: &mut dyn Io, me: &Me, path: &str, notify: bool) -> Result<Vec<S
         .clone();
     match kind {
         Kind::File(text) => {
-            if notify {
-                io.on_read(me.host, &me.abs(path), &text);
-            }
+            io.on_read(me.host, &me.abs(path), &text);
             Ok(text_lines(&text))
         }
         Kind::Dev(dev) => io.read_dev(me.host, &dev, &me.user).map_err(ReadErr::Msg),
@@ -378,7 +377,7 @@ fn inputs(
     }
     let mut got = Vec::new();
     for f in files {
-        match read_text(io, me, f, false) {
+        match read_text(io, me, f) {
             Ok(lines) => got.push((Some((*f).to_string()), lines)),
             Err(e) => report(out, cmd, f, e),
         }
@@ -654,7 +653,7 @@ fn cat(io: &mut dyn Io, me: &Me, args: &[String], stdin: &[String], out: &mut Re
         return;
     }
     for path in args {
-        match read_text(io, me, path, true) {
+        match read_text(io, me, path) {
             Ok(lines) => out.lines.extend(lines),
             Err(e) => report(out, "cat", path, e),
         }

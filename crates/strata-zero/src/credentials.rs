@@ -76,6 +76,8 @@ pub struct Code {
     pub household: Option<HouseholdId>,
     pub code: u16,
     pub source: Source,
+    /// Read in a shell: whose notes it was written in, which need not be the flat's owner.
+    pub noted_by: Option<String>,
     /// The game minute it was learned.
     pub at: u64,
 }
@@ -231,6 +233,7 @@ pub fn first_mail(st: &mut AppState) {
         household: homes.household_of(level, number),
         code,
         source: Source::Mail,
+        noted_by: None,
         at: now,
     });
     st.ground.add(
@@ -349,6 +352,7 @@ pub fn try_code(st: &mut AppState, b: BuildingId, level: i32, number: u16, typed
             household,
             code: typed,
             source: Source::Keypad,
+            noted_by: None,
             at: now,
         });
         let label = match owner_name(st, b, level, number) {
@@ -568,6 +572,7 @@ pub fn copy_codes(st: &mut AppState, b: BuildingId, now: u64) -> Option<usize> {
             household: homes.household_of(level, number),
             code: citygen::rng::door_code(seed, b, level, number),
             source: Source::ServerCopy,
+            noted_by: None,
             at: now,
         });
         if learned {
@@ -594,6 +599,7 @@ pub fn move_in(st: &mut AppState) {
         household: None,
         code: citygen::rng::door_code(seed, h.building, h.level, h.number),
         source: Source::Home,
+        noted_by: None,
         at: now,
     });
     let id = ItemId::new(HOME_KEYCARD);
@@ -664,7 +670,7 @@ pub fn entries(st: &AppState) -> Vec<(BuildingId, String, Vec<Entry>)> {
             Source::ServerCopy => format!("copied off the server, {}", stamp(c.at)),
             Source::Keypad => format!("keyed in at the door, {}", stamp(c.at)),
             Source::Mail => format!("from a mail on the rig, {}", stamp(c.at)),
-            Source::Shell => match owner_name(st, c.building, c.level, c.number) {
+            Source::Shell => match &c.noted_by {
                 Some(n) => format!("read in `{n}`'s notes, {}", stamp(c.at)),
                 None => format!("read in someone's notes, {}", stamp(c.at)),
             },
@@ -814,6 +820,7 @@ mod tests {
             household: None,
             code: 1234,
             source: Source::ServerCopy,
+            noted_by: None,
             at: 5,
         };
         assert!(j.learn(c.clone()));
@@ -893,6 +900,7 @@ mod tests {
             household: Some(h),
             code: citygen::rng::door_code(seed, b, level, number),
             source: Source::ServerCopy,
+            noted_by: None,
             at: 0,
         });
         assert!(matches!(opens(&st, b, level, number), Some(How::Code(_))));

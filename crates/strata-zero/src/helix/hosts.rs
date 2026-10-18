@@ -2,7 +2,7 @@
 
 use super::shell::HostId;
 use super::vfs::*;
-use super::{Host, User};
+use super::{Host, Planted, User};
 use crate::access::{Tier, building_label, tier_on};
 use crate::app::AppState;
 use crate::credentials::{self, Code, Source};
@@ -43,7 +43,17 @@ fn rig_user(st: &AppState) -> String {
 pub fn hostname(st: &AppState, id: HostId) -> String {
     match id {
         HostId::Rig => "zenbo".to_string(),
-        HostId::Building(b) => slug(&building_label(st, b)),
+        HostId::Building(b) => st
+            .city
+            .as_ref()
+            .and_then(|c| c.building_opt(b))
+            .and_then(|x| {
+                net_names(st, x.district)
+                    .into_iter()
+                    .find(|(y, _)| *y == b)
+                    .map(|(_, n)| n)
+            })
+            .unwrap_or_else(|| slug(&building_label(st, b))),
         HostId::District(d) => st
             .city
             .as_ref()
@@ -51,6 +61,22 @@ pub fn hostname(st: &AppState, id: HostId) -> String {
             .map(|d| slug(&d.name))
             .unwrap_or_else(|| "terminal".to_string()),
     }
+}
+
+/// The names a district's constructs go by on its net, in building order: the slug of
+/// the building's name, and for a second building of the same name `-<its index>` after.
+pub fn net_names(st: &AppState, district: DistrictId) -> Vec<(BuildingId, String)> {
+    let mut used = BTreeSet::new();
+    crate::access::scannable(st, district)
+        .into_iter()
+        .map(|b| {
+            let mut name = slug(&building_label(st, b));
+            if !used.insert(name.clone()) {
+                name = format!("{name}-{}", b.index());
+            }
+            (b, name)
+        })
+        .collect()
 }
 
 /// A resident household of a building host: who, where and under which user name.
@@ -140,11 +166,13 @@ pub fn ensure_host(st: &mut AppState, id: HostId) -> &mut Host {
         Vec::new()
     };
     let host = st.helix.hosts.entry(id).or_default();
-    for (path, index, owner) in adds {
+    // only mails that arrived since the last look: one you deleted stays deleted
+    for (path, index, owner) in adds.into_iter().skip(host.mails_placed) {
         if host.fs.resolve("/", "/", &path).is_err() {
             host.fs
                 .put_dev(&path, Dev::Mail(index), &owner, Mode::RW_NONE);
         }
+        host.mails_placed = index + 1;
     }
     host
 }
@@ -184,6 +212,8 @@ pub fn generate(st: &AppState, id: HostId) -> Host {
         fs: Vfs::new(),
         users: Vec::new(),
         theme,
+        planted: Vec::new(),
+        mails_placed: 0,
     };
     let fs = &mut host.fs;
     fs.mkdir_as("/bin", ROOT, Mode::RW_R);
@@ -251,13 +281,16 @@ fn rig_disk(st: &AppState, look: &Look, host: &mut Host) {
     );
     fs.put(&format!("{home}/notes.txt"), "", &me, Mode::RW_NONE);
     for (path, index, owner) in rig_mails(st) {
-        fs.put_dev(&path, Dev::Mail(index), &owner, Mode::RW_NONE);
+        host.fs
+            .put_dev(&path, Dev::Mail(index), &owner, Mode::RW_NONE);
+        host.mails_placed = index + 1;
     }
+    let fs = &mut host.fs;
     fs.mkdir_as("/net", &me, Mode::RW_R);
     if let Some(rig) = st.home {
         let b = rig.home.building;
         fs.put_dev(
-            &format!("/net/{}", slug(&building_label(st, b))),
+            &format!("/net/{}", hostname(st, HostId::Building(b))),
             Dev::NetHost(b),
             USERS,
             Mode::RW_R,
@@ -281,31 +314,8 @@ fn district_disk(st: &AppState, d: DistrictId, look: &Look, host: &mut Host) {
     let fs = &mut host.fs;
     fs.put("/etc/motd", &motd(st, look, &place), ROOT, Mode::RW_R);
     fs.mkdir_as("/net", ROOT, Mode::RW_R);
-    let Some(city) = st.city.as_ref() else {
-        return;
-    };
-    let servers: BTreeSet<BuildingId> = city
-        .net
-        .nodes
-        .iter()
-        .filter(|n| n.kind == NodeKind::Server)
-        .filter_map(|n| n.building)
-        .collect();
-    let mut used = BTreeSet::new();
-    for b in &city.buildings {
-        if b.district != d || !b.kind.is_closed() || !servers.contains(&b.id) {
-            continue;
-        }
-        let mut entry = slug(&building_label(st, b.id));
-        if !used.insert(entry.clone()) {
-            entry = format!("{entry}-{}", b.id.index());
-        }
-        fs.put_dev(
-            &format!("/net/{entry}"),
-            Dev::NetHost(b.id),
-            USERS,
-            Mode::RW_R,
-        );
+    for (b, entry) in net_names(st, d) {
+        fs.put_dev(&format!("/net/{entry}"), Dev::NetHost(b), USERS, Mode::RW_R);
     }
 }
 
@@ -387,8 +397,16 @@ fn building_disk(st: &AppState, b: BuildingId, look: &Look, host: &mut Host) -> 
         )
         .is_multiple_of(3)
         {
-            let text = notes_for(seed, b, r, neighbour);
-            fs.put(&format!("{home}/notes.txt"), &text, &r.user, Mode::RW_NONE);
+            let path = format!("{home}/notes.txt");
+            let (text, codes) = notes_for(seed, b, r, neighbour);
+            fs.put(&path, &text, &r.user, Mode::RW_NONE);
+            host.planted
+                .extend(codes.into_iter().map(|(flat, code)| Planted {
+                    flat,
+                    code,
+                    path: path.clone(),
+                    by: r.name.clone(),
+                }));
         }
     }
     // /etc/passwd is rendered from `users`; nothing more to store
@@ -444,28 +462,40 @@ const NOTE_LINES: &[&str] = &[
     "stop leaving the window open",
 ];
 
+/// A flat, as (level, number), and its door code.
+type FlatCode = ((i32, u16), u16);
+
 /// A few lines in the resident's voice; maybe their door code, maybe a neighbour's.
-fn notes_for(seed: u64, b: BuildingId, r: &Resident, neighbour: Option<&Resident>) -> String {
+/// The text, and the (flat, code) pairs it gives away.
+fn notes_for(
+    seed: u64,
+    b: BuildingId,
+    r: &Resident,
+    neighbour: Option<&Resident>,
+) -> (String, Vec<FlatCode>) {
     let h = hash64(
         seed ^ 0x707E,
         r.household.0 as u64 ^ ((b.index() as u64) << 20),
     );
     let mut lines: Vec<String> = Vec::new();
+    let mut codes = Vec::new();
     for k in 0..2 {
         lines.push(NOTE_LINES[(hash64(h, k) % NOTE_LINES.len() as u64) as usize].to_string());
     }
     if (h >> 8).is_multiple_of(3) {
         let code = door_code(seed, b, r.flat.0, r.flat.1);
         lines.push(format!("door is {code:04}, don't tell the super"));
+        codes.push((r.flat, code));
         if (h >> 16).is_multiple_of(3)
             && let Some(n) = neighbour
         {
             let code = door_code(seed, b, n.flat.0, n.flat.1);
-            lines.push(format!("{}'s is {code:04}", n.name));
+            lines.push(format!("{}'s door is {code:04}", n.name));
+            codes.push((n.flat, code));
         }
     }
     lines.push(String::new());
-    lines.join("\n")
+    (lines.join("\n"), codes)
 }
 
 /// Lore from the content file whose theme and kind match the host.
@@ -504,18 +534,31 @@ fn lore(st: &AppState, id: HostId, resident: Option<&str>, host: &mut Host) {
     }
 }
 
-/// Reading a file on a building host: every four-digit run that is the door code of one
-/// of its flats is learned, once, as read in the file owner's notes.
+/// Reading a file on a building host: every four-digit run on a line about a door or a
+/// code that the generator planted in that very file is learned, once, as read in its
+/// writer's notes. A file you wrote yourself, full of guesses, teaches nothing.
 pub fn note_codes(st: &mut AppState, host: HostId, path: &str, text: &str) {
     let HostId::Building(b) = host else {
-        return;
-    };
-    let Some(seed) = st.city.as_ref().map(|c| c.seed) else {
         return;
     };
     let Some(homes) = st.interiors.homes_of(b).cloned() else {
         return;
     };
+    let planted: Vec<Planted> = st
+        .helix
+        .hosts
+        .get(&host)
+        .map(|h| {
+            h.planted
+                .iter()
+                .filter(|p| p.path == path)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if planted.is_empty() {
+        return;
+    }
     let mut numbers: Vec<u16> = Vec::new();
     // Only lines that talk about a door or a code count: a year in a mail is not a code.
     let relevant: String = text
@@ -543,17 +586,10 @@ pub fn note_codes(st: &mut AppState, host: HostId, path: &str, text: &str) {
             i += 1;
         }
     }
-    let owner = path
-        .strip_prefix("/home/")
-        .and_then(|p| p.split('/').next())
-        .and_then(|u| residents(st, b).into_iter().find(|r| r.user == u))
-        .map(|r| r.name);
     let now = st.net.now(st);
     for n in numbers {
-        for (level, number) in homes.flats() {
-            if door_code(seed, b, level, number) != n {
-                continue;
-            }
+        for p in planted.iter().filter(|p| p.code == n) {
+            let (level, number) = p.flat;
             let learned = st.journal.learn(Code {
                 building: b,
                 level,
@@ -561,14 +597,35 @@ pub fn note_codes(st: &mut AppState, host: HostId, path: &str, text: &str) {
                 household: homes.household_of(level, number),
                 code: n,
                 source: Source::Shell,
+                noted_by: Some(p.by.clone()),
                 at: now,
             });
             if learned {
-                let whose = owner.clone().unwrap_or_else(|| "someone".to_string());
-                st.say(format!("a code in `{whose}`'s notes"));
+                st.say(format!("a code in `{}`'s notes", p.by));
             }
         }
     }
+}
+
+/// Test only: gives two scannable buildings of one district the same name;
+/// (district, the first, the second) in building order.
+#[cfg(test)]
+pub(crate) fn twins(st: &mut AppState, name: &str) -> (DistrictId, BuildingId, BuildingId) {
+    let city = st.city.as_ref().expect("a city");
+    let (d, a, b) = city
+        .districts
+        .iter()
+        .find_map(|d| match crate::access::scannable(st, d.id)[..] {
+            [a, b, ..] => Some((d.id, a, b)),
+            _ => None,
+        })
+        .expect("a district with two constructs");
+    let city = st.city.as_mut().unwrap();
+    for x in [a, b] {
+        assert_eq!(city.buildings[x.index()].id, x);
+        city.buildings[x.index()].name = Some(name.to_string());
+    }
+    (d, a, b)
 }
 
 #[cfg(test)]
@@ -762,6 +819,144 @@ mod tests {
         assert!(!st.journal.codes().is_empty());
     }
 
+    /// A four-digit run in `line`.
+    fn four_digits(line: &str) -> Option<u16> {
+        line.split(|c: char| !c.is_ascii_digit())
+            .find(|w| w.len() == 4)
+            .and_then(|w| w.parse().ok())
+    }
+
+    /// The first generated notes file that names a neighbour's code:
+    /// (building, path, text, the notes' owner, the neighbour line).
+    fn neighbour_notes(st: &mut AppState) -> Option<(BuildingId, String, String, String, String)> {
+        for b in residential(st) {
+            let h = ensure_host(st, HostId::Building(b)).clone();
+            for u in h.users.iter().filter(|u| u.person.is_some()) {
+                let path = format!("{}/notes.txt", u.home);
+                if !exists(&h, &path) {
+                    continue;
+                }
+                let body = text(&h, &path);
+                let line = body
+                    .lines()
+                    .find(|l| l.contains("'s ") && four_digits(l).is_some());
+                if let Some(line) = line {
+                    return Some((b, path, body.clone(), u.display.clone(), line.to_string()));
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn a_neighbours_code_in_notes_is_learned_and_credited_to_the_notes() {
+        let mut st = state_home();
+        let (b, path, body, owner, line) =
+            neighbour_notes(&mut st).expect("a notes file with a neighbour's code");
+        let code = four_digits(&line).unwrap();
+        note_codes(&mut st, HostId::Building(b), &path, &body);
+        let c = st
+            .journal
+            .codes()
+            .iter()
+            .find(|c| c.code == code)
+            .unwrap_or_else(|| panic!("`{line}` taught nothing: {:?}", st.journal.codes()))
+            .clone();
+        assert_eq!(c.source, Source::Shell);
+        let seed = st.city.as_ref().unwrap().seed;
+        assert_eq!(c.code, citygen::rng::door_code(seed, b, c.level, c.number));
+        // the journal says whose notes it was read in, not whose flat it opens
+        let entry = credentials::entries(&st)
+            .into_iter()
+            .flat_map(|(_, _, es)| es)
+            .find(|e| matches!(&e.kind, credentials::EntryKind::Code(k) if *k == c))
+            .expect("a journal line");
+        assert!(
+            entry.text.contains(&format!("read in `{owner}`'s notes")),
+            "{}",
+            entry.text
+        );
+    }
+
+    #[test]
+    fn a_file_of_guesses_teaches_nothing() {
+        let mut st = state();
+        let mut found = None;
+        'all: for b in residential(&st) {
+            let h = ensure_host(&mut st, HostId::Building(b)).clone();
+            for u in h.users.iter().filter(|u| u.person.is_some()) {
+                let path = format!("{}/notes.txt", u.home);
+                if exists(&h, &path) && text(&h, &path).contains("door is") {
+                    found = Some((b, path.clone(), text(&h, &path), u.home.clone()));
+                    break 'all;
+                }
+            }
+        }
+        let (b, path, body, home) = found.expect("a notes file with a code");
+        let seed = st.city.as_ref().unwrap().seed;
+        let homes = st.interiors.homes_of(b).unwrap().clone();
+        let every: Vec<String> = homes
+            .flats()
+            .map(|(l, n)| format!("door code {:04}", citygen::rng::door_code(seed, b, l, n)))
+            .collect();
+        let guesses = every.join("\n");
+        for at in ["/tmp/g", &format!("{home}/guess.txt")] {
+            note_codes(&mut st, HostId::Building(b), at, &guesses);
+            assert!(
+                st.journal.codes().is_empty(),
+                "{at} taught {:?}",
+                st.journal.codes()
+            );
+        }
+        // the planted notes still teach
+        note_codes(&mut st, HostId::Building(b), &path, &body);
+        assert!(!st.journal.codes().is_empty());
+    }
+
+    #[test]
+    fn a_deleted_mail_stays_deleted() {
+        let mut st = state_home();
+        let home = st.home.unwrap().home;
+        crate::credentials::prepare(&mut st, home.building);
+        crate::credentials::move_in(&mut st);
+        let me = user_for(&st, HostId::Rig);
+        let mail = format!("/home/{me}/mail/001-a-favour.txt");
+        ensure_host(&mut st, HostId::Rig)
+            .fs
+            .remove(&me, "/", "/", &mail, false)
+            .unwrap();
+        let host = ensure_host(&mut st, HostId::Rig).clone();
+        assert!(!exists(&host, &mail), "the mail came back");
+        assert!(names(&host, &format!("/home/{me}/mail")).is_empty());
+        st.journal.mails.push(crate::credentials::Mail {
+            from: "Kit".into(),
+            subject: "Re: Drinks".into(),
+            body: vec![],
+            read: false,
+            at: 9,
+        });
+        let host = ensure_host(&mut st, HostId::Rig).clone();
+        assert_eq!(
+            names(&host, &format!("/home/{me}/mail")),
+            vec!["002-re-drinks.txt".to_string()]
+        );
+    }
+
+    #[test]
+    fn twin_names_on_one_subnet_get_distinct_hostnames() {
+        let mut st = state();
+        let (d, a, b) = twins(&mut st, "Twin Tower");
+        let listed = net_names(&st, d);
+        let of = |x: BuildingId| listed.iter().find(|(y, _)| *y == x).unwrap().1.clone();
+        assert_eq!(of(a), "twin-tower");
+        assert_eq!(of(b), format!("twin-tower-{}", b.index()));
+        assert_eq!(hostname(&st, HostId::Building(a)), of(a));
+        assert_eq!(hostname(&st, HostId::Building(b)), of(b));
+        let host = ensure_host(&mut st, HostId::District(d)).clone();
+        let net = names(&host, "/net");
+        assert!(net.contains(&of(a)) && net.contains(&of(b)), "{net:?}");
+    }
+
     #[test]
     fn the_rig_has_your_mail_and_journal() {
         let mut st = state_home();
@@ -851,6 +1046,7 @@ mod tests {
             household: None,
             code: 1,
             source: Source::Keypad,
+            noted_by: None,
             at: 0,
         });
         assert_eq!(user_for(&st, id), "user");

@@ -4615,6 +4615,7 @@ mod tests {
             household: Some(h),
             code,
             source: crate::credentials::Source::ServerCopy,
+            noted_by: None,
             at: 0,
         });
         s.update(&mut st, &[key(dir_between(outside, door))]);

@@ -6,7 +6,7 @@ use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::helix::bin::{AppIo, new_shell};
 use crate::helix::hosts::{device_of, ensure_host};
 use crate::helix::nano::{Nano, NanoEvent};
-use crate::helix::shell::{self, HostId, Shell};
+use crate::helix::shell::{self, HostId, Io, Shell};
 use crate::helix::vfs::Kind;
 use crate::ui::console::{Console, ConsoleEvent};
 use crate::ui::device::{self, CRT_H, CRT_W, Led, Look};
@@ -223,7 +223,20 @@ impl Terminal {
                 &sh.home,
                 &path,
             ) {
-                Ok(n) => self.nano = Some(n),
+                Ok(n) => {
+                    // what nano shows is read: the world learns from it as from `cat`
+                    let read = match ensure_host(st, sh.host)
+                        .fs
+                        .read(&sh.user, "/", "/", &n.path)
+                    {
+                        Ok(Kind::File(text)) => Some(text.clone()),
+                        _ => None,
+                    };
+                    if let Some(text) = read {
+                        AppIo { st }.on_read(sh.host, &n.path, &text);
+                    }
+                    self.nano = Some(n);
+                }
                 Err(e) => lines.push(e),
             }
         }
@@ -650,6 +663,47 @@ mod tests {
         say(&mut t, &mut st, "nano /tmp");
         assert!(t.nano.is_none());
         assert!(reply(&t, &st, "nano /tmp").contains("is a directory"));
+    }
+
+    #[test]
+    fn nano_on_notes_learns_their_code() {
+        let (mut st, ..) = state();
+        let mut found = None;
+        let ids: Vec<citygen::BuildingId> = st
+            .city
+            .as_ref()
+            .unwrap()
+            .buildings
+            .iter()
+            .filter(|b| matches!(b.kind, BuildingKind::Apartment | BuildingKind::Megablock))
+            .map(|b| b.id)
+            .collect();
+        'all: for b in ids {
+            let h = crate::helix::hosts::ensure_host(&mut st, HostId::Building(b)).clone();
+            for u in h.users.iter().filter(|u| u.person.is_some()) {
+                let Ok(id) = h.fs.resolve("/", "/", &format!("{}/notes.txt", u.home)) else {
+                    continue;
+                };
+                if let crate::helix::vfs::Kind::File(t) = &h.fs.node(id).kind
+                    && t.contains("door is")
+                {
+                    found = Some((b, u.name.clone(), u.home.clone()));
+                    break 'all;
+                }
+            }
+        }
+        let (b, user, home) = found.expect("a notes file with a code");
+        let mut t = Terminal::open(&mut st, HostId::Building(b), KEY_A);
+        t.shell.user = user;
+        t.shell.cwd = home.clone();
+        t.shell.home = home;
+        assert!(st.journal.codes().is_empty());
+        say(&mut t, &mut st, "nano ~/notes.txt");
+        assert!(t.nano.is_some(), "{:?}", t.text(st.tick));
+        assert!(
+            !st.journal.codes().is_empty(),
+            "nano showed a code unlearned"
+        );
     }
 
     #[test]

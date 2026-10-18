@@ -28,7 +28,9 @@ pub struct Nano {
     pub cut: Vec<String>,
     pub mode: Mode,
     pub status: String,
-    last_cut_row: Option<usize>,
+    /// Where the last `^K` left the cursor, and whether it climbed off the end: then
+    /// the next cut is the line above and goes in front, so the buffer keeps file order.
+    last_cut: Option<(usize, bool)>,
     /// The last `[ Wrote N lines ]`: what the shell's scrollback gets on `^X`.
     wrote: Option<String>,
     cwd: String,
@@ -69,7 +71,7 @@ impl Nano {
             cut: Vec::new(),
             mode: Mode::Edit,
             status: String::new(),
-            last_cut_row: None,
+            last_cut: None,
             wrote: None,
             cwd: cwd.to_string(),
             home: home.to_string(),
@@ -272,7 +274,7 @@ impl Nano {
     }
 
     fn edit_key(&mut self, k: KeyEvent) -> NanoEvent {
-        let was_cut = self.last_cut_row.take();
+        let was_cut = self.last_cut.take();
         if k.modifiers.contains(KeyModifiers::CONTROL) {
             match k.code {
                 KeyCode::Char('x') => {
@@ -286,11 +288,12 @@ impl Nano {
                 KeyCode::Char('w') => self.mode = Mode::Search(String::new()),
                 KeyCode::Char('g') => self.mode = Mode::Help,
                 KeyCode::Char('k') => {
+                    let climbs = self.row > 0 && self.row + 1 == self.lines.len();
                     let line = self.lines.remove(self.row);
-                    if was_cut == Some(self.row) {
-                        self.cut.push(line);
-                    } else {
-                        self.cut = vec![line];
+                    match was_cut {
+                        Some((row, true)) if row == self.row => self.cut.insert(0, line),
+                        Some((row, false)) if row == self.row => self.cut.push(line),
+                        _ => self.cut = vec![line],
                     }
                     if self.lines.is_empty() {
                         self.lines.push(String::new());
@@ -298,7 +301,7 @@ impl Nano {
                     self.col = 0;
                     self.modified = true;
                     self.clamp();
-                    self.last_cut_row = Some(self.row);
+                    self.last_cut = Some((self.row, climbs));
                 }
                 KeyCode::Char('u') => {
                     if self.cut.is_empty() {
@@ -591,6 +594,29 @@ mod tests {
         // a cut after another key starts a new buffer
         n.key(&mut fs, "mara", ctrl('k'));
         assert_eq!(n.cut, vec!["three"]);
+    }
+
+    #[test]
+    fn cutting_up_from_the_last_line_keeps_the_order() {
+        let mut fs = fixture();
+        let mut n = open(&fs, "notes.txt");
+        n.key(&mut fs, "mara", k(KeyCode::Down));
+        n.key(&mut fs, "mara", k(KeyCode::Down));
+        assert_eq!(n.row, 2);
+        n.key(&mut fs, "mara", ctrl('k'));
+        n.key(&mut fs, "mara", ctrl('k'));
+        assert_eq!(n.cut, vec!["two", "three"]);
+        assert_eq!(n.lines, vec!["one"]);
+        n.key(&mut fs, "mara", ctrl('u'));
+        assert_eq!(n.lines, vec!["two", "three", "one"]);
+        // and once more up to the top: the whole file, in order
+        let mut n = open(&fs, "notes.txt");
+        n.key(&mut fs, "mara", k(KeyCode::Down));
+        n.key(&mut fs, "mara", k(KeyCode::Down));
+        for _ in 0..3 {
+            n.key(&mut fs, "mara", ctrl('k'));
+        }
+        assert_eq!(n.cut, vec!["one", "two", "three"]);
     }
 
     #[test]

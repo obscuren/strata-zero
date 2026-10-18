@@ -27,6 +27,21 @@ pub struct Host {
     pub users: Vec<User>,
     /// The device theme the machine wears: municipal, megacorp, neon or street.
     pub theme: String,
+    /// The door codes the generator wrote into residents' notes: only these teach.
+    pub planted: Vec<Planted>,
+    /// On the rig: how many of the journal's mails have had a file put down for them,
+    /// so a mail you delete stays deleted.
+    pub mails_placed: usize,
+}
+
+/// A door code written into a notes file: the flat it opens, the code, the file and
+/// the resident whose notes they are.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Planted {
+    pub flat: (i32, u16),
+    pub code: u16,
+    pub path: String,
+    pub by: String,
 }
 
 /// Every host touched this run, kept like the journal.

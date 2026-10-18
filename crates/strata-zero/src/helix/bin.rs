@@ -129,10 +129,17 @@ impl AppIo<'_> {
         };
         let what = what.to_lowercase();
         let list = self.net_of(shell.origin);
-        let names: Vec<String> = list
-            .iter()
-            .map(|b| hostname(self.st, HostId::Building(*b)))
-            .collect();
+        // the names /net lists, twins told apart
+        let names: Vec<String> = match shell.origin {
+            HostId::District(d) => hosts::net_names(self.st, d)
+                .into_iter()
+                .map(|(_, n)| n)
+                .collect(),
+            _ => list
+                .iter()
+                .map(|b| hostname(self.st, HostId::Building(*b)))
+                .collect(),
+        };
         let pick: Vec<usize> = if let Ok(n) = what.parse::<usize>() {
             n.checked_sub(1)
                 .filter(|i| *i < list.len())
@@ -704,6 +711,101 @@ mod tests {
         assert!(net.contains("alert until"), "{net}");
         assert_eq!(text(&go(&mut st, &mut sh, "alarm off")), "ALARM CLEARED");
         assert!(!st.net.alert(b, now));
+    }
+
+    /// A resident with a code in their notes: (building, user, home).
+    fn noted(st: &mut AppState) -> (BuildingId, String, String) {
+        let ids: Vec<BuildingId> = st
+            .city
+            .as_ref()
+            .unwrap()
+            .buildings
+            .iter()
+            .filter(|b| matches!(b.kind, BuildingKind::Apartment | BuildingKind::Megablock))
+            .map(|b| b.id)
+            .collect();
+        for b in ids {
+            let h = ensure_host(st, HostId::Building(b)).clone();
+            for u in h.users.iter().filter(|u| u.person.is_some()) {
+                let Ok(id) = h.fs.resolve("/", "/", &format!("{}/notes.txt", u.home)) else {
+                    continue;
+                };
+                if let Kind::File(t) = &h.fs.node(id).kind
+                    && t.contains("door is")
+                {
+                    return (b, u.name.clone(), u.home.clone());
+                }
+            }
+        }
+        panic!("a notes file with a code")
+    }
+
+    #[test]
+    fn every_reader_learns_a_code_not_only_cat() {
+        for line in [
+            "grep door ~/notes.txt",
+            "head -n 1 ~/notes.txt",
+            "tail -n 1 ~/notes.txt",
+            "wc ~/notes.txt",
+        ] {
+            let (mut st, ..) = state();
+            let (b, user, home) = noted(&mut st);
+            let mut sh = Shell::new(HostId::Building(b), &user, &home);
+            go(&mut st, &mut sh, line);
+            assert!(!st.journal.codes().is_empty(), "{line} learned nothing");
+            let n = st.journal.codes().len();
+            go(&mut st, &mut sh, line);
+            assert_eq!(st.journal.codes().len(), n, "{line}: learned once");
+        }
+    }
+
+    #[test]
+    fn a_file_of_every_code_written_by_hand_teaches_nothing() {
+        let (mut st, ..) = state();
+        let (b, user, home) = noted(&mut st);
+        let seed = st.city.as_ref().unwrap().seed;
+        let every: Vec<String> = st
+            .interiors
+            .homes_of(b)
+            .unwrap()
+            .flats()
+            .map(|(l, n)| format!("{:04}", citygen::rng::door_code(seed, b, l, n)))
+            .collect();
+        let mut sh = Shell::new(HostId::Building(b), &user, &home);
+        go(
+            &mut st,
+            &mut sh,
+            &format!("echo door code {} > /tmp/g", every.join(" ")),
+        );
+        let out = go(&mut st, &mut sh, "cat /tmp/g");
+        assert!(text(&out).contains(&every[0]), "{out:?}");
+        assert!(
+            st.journal.codes().is_empty(),
+            "guessed: {:?}",
+            st.journal.codes()
+        );
+        go(&mut st, &mut sh, "cat ~/notes.txt");
+        assert!(!st.journal.codes().is_empty());
+    }
+
+    #[test]
+    fn twin_names_each_ssh_to_their_own_building() {
+        let (mut st, ..) = state();
+        let (d, a, b) = crate::helix::hosts::twins(&mut st, "Twin Tower");
+        let mut sh = new_shell(&mut st, HostId::District(d));
+        let ls = go(&mut st, &mut sh, "ls /net");
+        let second = format!("twin-tower-{}", b.index());
+        assert!(
+            ls.lines.iter().any(|l| l == "twin-tower") && ls.lines.contains(&second),
+            "{ls:?}"
+        );
+        for (name, want) in [("twin-tower".to_string(), a), (second, b)] {
+            let out = go(&mut st, &mut sh, &format!("ssh {name}"));
+            assert!(text(&out).contains("CONNECTED TO"), "{name}: {out:?}");
+            assert_eq!(sh.host, HostId::Building(want), "ssh {name}");
+            assert_eq!(at(&mut st, &sh), format!("guest@{name}:/$ "));
+            go(&mut st, &mut sh, "exit");
+        }
     }
 
     #[test]
