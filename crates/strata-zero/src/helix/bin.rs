@@ -93,10 +93,8 @@ impl AppIo<'_> {
             HostId::District(d) => access::scannable(self.st, d),
             HostId::Rig => {
                 let mut list: Vec<BuildingId> = self.block(host).into_iter().collect();
-                for d in &self.st.backdoors.list {
-                    if !matches!(d.state, crate::backdoors::State::Burned { .. })
-                        && !list.contains(&d.building)
-                    {
+                for d in self.st.backdoors.standing() {
+                    if !list.contains(&d.building) {
                         list.push(d.building);
                     }
                 }
@@ -203,8 +201,7 @@ impl AppIo<'_> {
                         crate::backdoors::Use::Trap => {
                             audit = true;
                             self.st.backdoors.trap_login = who.map(|u| (b, u));
-                            let line = crate::net::raise_alarm(self.st, b);
-                            self.st.warn(line);
+                            crate::net::lock_down(self.st, b);
                             let _ = self.st.net.add_heat(
                                 b,
                                 crate::backdoors::HONEYPOT_NOISE,
@@ -568,7 +565,7 @@ impl Io for AppIo<'_> {
         hosts::note_codes(self.st, host, path, text);
     }
 
-    fn removed(&mut self, host: HostId, path: &str) {
+    fn changed(&mut self, host: HostId, path: &str) {
         let HostId::Building(b) = host else { return };
         let Some(d) = self.st.backdoors.held(b) else {
             return;
@@ -579,7 +576,16 @@ impl Io for AppIo<'_> {
         let key = key_path(user);
         let dir = key.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
         let under = |p: &str| key == p || key.starts_with(&format!("{p}/"));
-        if path == dir || under(path) {
+        if path != dir && !under(path) {
+            return;
+        }
+        // look at the file: the key may well still be there
+        let line = key_line(self.st);
+        let kept = matches!(
+            ensure_host(self.st, host).fs.read("root", "/", "/", &key),
+            Ok(Kind::File(text)) if text.lines().any(|l| l == line)
+        );
+        if !kept {
             let now = self.st.net.now(self.st);
             self.st.backdoors.burn(b, crate::backdoors::Why::You, now);
         }
@@ -1291,6 +1297,43 @@ mod tests {
             text(&go(&mut st, &mut sh, "backdoor")),
             "backdoor: hole patched · try again tomorrow"
         );
+    }
+
+    #[test]
+    fn moving_or_overwriting_the_key_file_burns_the_key_too() {
+        let planted = || {
+            let (mut st, b, _) = state();
+            crate::credentials::copy_codes(&mut st, b, 1);
+            let mut sh = new_shell(&mut st, HostId::Building(b));
+            go(&mut st, &mut sh, "backdoor");
+            assert!(st.backdoors.held(b).is_some());
+            (st, b, sh)
+        };
+        let (mut st, b, mut sh) = planted();
+        assert_eq!(
+            go(&mut st, &mut sh, "mv ~/.ssh/authorized_keys ~/x").status,
+            0
+        );
+        assert!(st.backdoors.held(b).is_none());
+        let (mut st, b, mut sh) = planted();
+        assert_eq!(
+            go(&mut st, &mut sh, "echo nothing > ~/.ssh/authorized_keys").status,
+            0
+        );
+        assert!(st.backdoors.held(b).is_none());
+        // an append keeps the line, so the key stands
+        let (mut st, b, mut sh) = planted();
+        assert_eq!(
+            go(&mut st, &mut sh, "echo note >> ~/.ssh/authorized_keys").status,
+            0
+        );
+        assert!(st.backdoors.held(b).is_some());
+        // a copy of the key file elsewhere touches nothing
+        assert_eq!(
+            go(&mut st, &mut sh, "cp ~/.ssh/authorized_keys ~/y").status,
+            0
+        );
+        assert!(st.backdoors.held(b).is_some());
     }
 
     #[test]

@@ -979,9 +979,7 @@ pub fn lock_down(st: &mut AppState, b: BuildingId) {
 pub fn landings(st: &AppState) -> Vec<(BuildingId, String)> {
     let now = st.net.now(st);
     st.backdoors
-        .list
-        .iter()
-        .filter(|d| !matches!(d.state, crate::backdoors::State::Burned { .. }))
+        .standing()
         .map(|d| {
             (
                 d.building,
@@ -1116,9 +1114,6 @@ pub fn hop(st: &mut AppState, b: BuildingId) -> Result<String, String> {
     let trap = use_backdoor(st, b)?;
     if st.net.run.take().is_some() {
         st.say("run aborted");
-    }
-    if let Some(e) = st.net.engaged.as_mut() {
-        e.ap = e.ap.saturating_sub(1);
     }
     crate::constructs::land(st, Place::Stratum(StratumKind::Net), gate);
     st.backdoors.hop(b);

@@ -74,8 +74,8 @@ pub trait Io {
     fn who(&mut self, host: HostId) -> Vec<String>;
     /// Called by `cat` after it read a plain file: absolute path and text.
     fn on_read(&mut self, _host: HostId, _path: &str, _text: &str) {}
-    /// Called by `rm` after it removed something: absolute path.
-    fn removed(&mut self, _host: HostId, _path: &str) {}
+    /// Something at `path` was removed, moved, overwritten or written: absolute path.
+    fn changed(&mut self, _host: HostId, _path: &str) {}
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -481,6 +481,8 @@ fn redirect(io: &mut dyn Io, me: &Me, path: &str, append: bool, lines: &[String]
         .write(&me.user, &me.cwd, &me.home, path, &text, append)
     {
         fail(&mut out, "helix", path, &e);
+    } else {
+        io.changed(me.host, &me.abs(path));
     }
     out
 }
@@ -713,7 +715,7 @@ fn rm(io: &mut dyn Io, me: &Me, args: &[String], out: &mut Res) {
         match r {
             Err(VfsError::NotFound) if flags.contains('f') => {}
             Err(e) => fail(out, "rm", path, &e),
-            Ok(()) => io.removed(me.host, &abs),
+            Ok(()) => io.changed(me.host, &abs),
         }
     }
 }
@@ -762,6 +764,19 @@ fn cp_mv(io: &mut dyn Io, me: &Me, cmd: &str, args: &[String], out: &mut Res) {
             src
         };
         fail(out, cmd, at, &e);
+        return;
+    }
+    if cmd == "mv" {
+        io.changed(me.host, &me.abs(src));
+    }
+    let dst_abs = me.abs(dst);
+    io.changed(me.host, &dst_abs);
+    // a destination that was a directory received the file under its own name
+    if let Some(name) = me.abs(src).rsplit('/').next() {
+        io.changed(
+            me.host,
+            &format!("{}/{name}", dst_abs.trim_end_matches('/')),
+        );
     }
 }
 

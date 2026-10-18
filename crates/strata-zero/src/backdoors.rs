@@ -208,8 +208,13 @@ fn factor_for(seed: u64, b: BuildingId, planted: u64) -> u8 {
 }
 
 impl Backdoors {
+    /// Every backdoor that still stands: live or bait, not burned.
+    pub fn standing(&self) -> impl Iterator<Item = &Backdoor> {
+        self.list.iter().filter(|d| !d.burned())
+    }
+
     pub fn live(&self, b: BuildingId) -> Option<&Backdoor> {
-        self.list.iter().find(|d| d.building == b && !d.burned())
+        self.standing().find(|d| d.building == b)
     }
 
     pub fn held(&self, b: BuildingId) -> Option<&Backdoor> {
@@ -228,15 +233,14 @@ impl Backdoors {
     }
 
     pub fn roots(&self) -> BTreeSet<BuildingId> {
-        self.list
-            .iter()
-            .filter(|d| !d.burned() && matches!(d.kind, Kind::Net { .. }))
+        self.standing()
+            .filter(|d| matches!(d.kind, Kind::Net { .. }))
             .map(|d| d.building)
             .collect()
     }
 
     pub fn slots_used(&self) -> usize {
-        self.list.iter().filter(|d| !d.burned()).count()
+        self.standing().count()
     }
 
     pub fn can_plant(&self, b: BuildingId, now: u64) -> Result<(), Refusal> {

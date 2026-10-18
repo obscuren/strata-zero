@@ -210,13 +210,7 @@ fn sync_rig_net(st: &mut AppState) {
         .home
         .map(|h| h.home.building)
         .into_iter()
-        .chain(
-            st.backdoors
-                .list
-                .iter()
-                .filter(|d| !matches!(d.state, crate::backdoors::State::Burned { .. }))
-                .map(|d| d.building),
-        )
+        .chain(st.backdoors.standing().map(|d| d.building))
         .collect();
     let Some(placed) = st
         .helix

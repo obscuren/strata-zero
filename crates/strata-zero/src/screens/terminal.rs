@@ -273,7 +273,13 @@ impl Terminal {
             return true;
         };
         let fs = &mut ensure_host(st, self.shell.host).fs;
-        match nano.key(fs, &self.shell.user, k) {
+        let event = nano.key(fs, &self.shell.user, k);
+        let saved = std::mem::take(&mut nano.saved);
+        let host = self.shell.host;
+        for path in saved {
+            AppIo { st }.changed(host, &path);
+        }
+        match event {
             NanoEvent::Stay => false,
             NanoEvent::Closed(lines) => {
                 self.nano = None;
@@ -747,6 +753,23 @@ mod tests {
             !st.journal.codes().is_empty(),
             "nano showed a code unlearned"
         );
+    }
+
+    #[test]
+    fn cutting_the_key_line_in_nano_burns_the_key() {
+        let (mut st, _, b) = state();
+        crate::credentials::copy_codes(&mut st, b, 1);
+        let mut t = Terminal::open(&mut st, HostId::Building(b), KEY_A);
+        say(&mut t, &mut st, "backdoor");
+        assert!(st.backdoors.held(b).is_some(), "{:?}", t.text(st.tick));
+        say(&mut t, &mut st, "nano ~/.ssh/authorized_keys");
+        assert!(t.nano.is_some(), "{:?}", t.text(st.tick));
+        t.update(&mut st, &[ctrl('k')]);
+        assert!(st.backdoors.held(b).is_some(), "not saved yet");
+        t.update(&mut st, &[ctrl('o'), key(KeyCode::Enter)]);
+        assert!(st.backdoors.held(b).is_none(), "saved without the line");
+        t.update(&mut st, &[ctrl('x')]);
+        assert!(t.nano.is_none());
     }
 
     #[test]

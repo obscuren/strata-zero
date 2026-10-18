@@ -33,6 +33,8 @@ pub struct Nano {
     last_cut: Option<(usize, bool)>,
     /// The last `[ Wrote N lines ]`: what the shell's scrollback gets on `^X`.
     wrote: Option<String>,
+    /// Absolute paths written since the screen last drained them.
+    pub saved: Vec<String>,
     cwd: String,
     home: String,
 }
@@ -73,6 +75,7 @@ impl Nano {
             status: String::new(),
             last_cut: None,
             wrote: None,
+            saved: Vec::new(),
             cwd: cwd.to_string(),
             home: home.to_string(),
         };
@@ -152,6 +155,7 @@ impl Nano {
                     self.lines.len()
                 };
                 self.path = path.clone();
+                self.saved.push(path.clone());
                 self.modified = false;
                 self.readonly = false;
                 self.status = format!("[ Wrote {n} lines ]");
