@@ -1,5 +1,6 @@
 //! Screens: one module per screen, plus shared test helpers.
 
+pub mod blueprint;
 pub mod configure;
 pub mod console;
 pub mod create;

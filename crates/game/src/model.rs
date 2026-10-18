@@ -172,7 +172,7 @@ pub struct Program {
     pub work: u8,
 }
 
-/// Which drawing a deck wears on the CYBERDECK tab.
+/// Which drawing a deck wears on its blueprint.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DeckLook {
     #[default]

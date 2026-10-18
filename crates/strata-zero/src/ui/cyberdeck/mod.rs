@@ -1,11 +1,11 @@
-//! The CYBERDECK tab's deck as hardware: what it is made of, where its parts sit
+//! A deck's blueprint: the deck as hardware, what it is made of, where its parts sit
 //! and how the pointer moves between them. It works on a `DeckView` snapshot, never
 //! on the game state.
 
 pub mod pawn;
 
 use crate::anim::effects::pulse;
-use crate::ui::chrome::{CYAN_RGB, DIM};
+use crate::ui::chrome::CYAN_RGB;
 use game::DeckLook;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -98,8 +98,7 @@ pub struct Held {
 /// Everything the deck draws, taken from the game once a frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeckView {
-    /// `None`: no deck equipped.
-    pub look: Option<DeckLook>,
+    pub look: DeckLook,
     pub slots: u8,
     pub rating: u8,
     pub bay: Vec<Cart>,
@@ -122,28 +121,22 @@ pub struct DeckView {
     pub tick: u64,
 }
 
-/// What the tab says with no deck, and all it shows.
-const NO_DECK: &str = "No CYBERDECK equipped";
-
-/// The drawing's size for a look; with no deck, the one line that says so.
-pub fn size(look: Option<DeckLook>) -> (u16, u16) {
+/// The drawing's size for a look.
+pub fn size(look: DeckLook) -> (u16, u16) {
     match look {
-        Some(DeckLook::Pawn) => (pawn::W, pawn::H),
-        None => (NO_DECK.chars().count() as u16, 1),
+        DeckLook::Pawn => (pawn::W, pawn::H),
     }
 }
 
-/// The parts of the deck and where they sit, relative to the drawing's origin. With
-/// no deck there is nothing to point at.
+/// The parts of the deck and where they sit, relative to the drawing's origin.
 pub fn parts(view: &DeckView) -> Vec<(Part, Rect)> {
     match view.look {
-        Some(DeckLook::Pawn) => pawn::parts(view),
-        None => Vec::new(),
+        DeckLook::Pawn => pawn::parts(view),
     }
 }
 
 /// Draws the deck centred in `area`, then the pointer's corners round the pointed
-/// part; with no deck, one dim line saying so. Nothing is written outside `area`.
+/// part. Nothing is written outside `area`.
 pub fn draw(view: &DeckView, area: Rect, buf: &mut Buffer) {
     let (w, h) = size(view.look);
     let ox = area.x + area.width.saturating_sub(w) / 2;
@@ -155,8 +148,7 @@ pub fn draw(view: &DeckView, area: Rect, buf: &mut Buffer) {
         oy,
     };
     match view.look {
-        Some(DeckLook::Pawn) => pawn::draw_with(view, &mut pen),
-        None => pen.put(0, 0, NO_DECK, DIM, None, false),
+        DeckLook::Pawn => pawn::draw_with(view, &mut pen),
     }
     if let Some((_, r)) = parts(view).into_iter().find(|(p, _)| *p == view.point) {
         let r = Rect::new(ox + r.x, oy + r.y, r.width, r.height);
@@ -309,7 +301,7 @@ pub(crate) mod tests {
 
     pub fn kit_view() -> DeckView {
         DeckView {
-            look: Some(DeckLook::Pawn),
+            look: DeckLook::Pawn,
             slots: 2,
             rating: 1,
             bay: vec![cart("CRACK", 1), cart("COPY", 1)],
@@ -346,35 +338,6 @@ pub(crate) mod tests {
             .map(|y| row(buf, y))
             .collect::<Vec<_>>()
             .join("\n")
-    }
-
-    #[test]
-    fn no_deck_says_so_and_nothing_else() {
-        // Carts in the pack, glass text and a pointed cart: none of it is drawn.
-        let mut v = kit_view();
-        v.look = None;
-        v.point = Part::Inv(0);
-        v.glass = vec![("ATTACK".into(), GlassTone::Head)];
-        v.pinned = ("[space] pick up".into(), GlassTone::Body);
-        assert!(parts(&v).is_empty());
-        let area = Rect::new(5, 3, 90, 21);
-        let blank = Buffer::empty(Rect::new(0, 0, 100, 30));
-        let mut buf = blank.clone();
-        draw(&v, area, &mut buf);
-        // One dim line in the middle of the area.
-        let (x, y) = (5 + (90 - 21) / 2, 3 + (21 - 1) / 2);
-        assert_eq!(
-            row(&buf, y).find("No CYBERDECK equipped"),
-            Some(usize::from(x))
-        );
-        assert_eq!(buf[(x, y)].fg, DIM);
-        for yy in 0..30 {
-            for xx in 0..100 {
-                if yy != y || !(x..x + 21).contains(&xx) {
-                    assert_eq!(buf[(xx, yy)], blank[(xx, yy)], "({xx},{yy})");
-                }
-            }
-        }
     }
 
     #[test]
