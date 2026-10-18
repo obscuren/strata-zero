@@ -31,6 +31,8 @@ pub struct Nano {
     pub mode: Mode,
     pub status: String,
     last_cut_row: Option<usize>,
+    cwd: String,
+    home: String,
 }
 
 pub enum NanoEvent {
@@ -68,6 +70,8 @@ impl Nano {
             mode: Mode::Edit,
             status: String::new(),
             last_cut_row: None,
+            cwd: cwd.to_string(),
+            home: home.to_string(),
         };
         match fs.read(user, "/", "/", &abs) {
             Ok(Kind::File(text)) => {
@@ -131,7 +135,8 @@ impl Nano {
     }
 
     /// Write the buffer to `path`; the status says how it went.
-    fn save(&mut self, fs: &mut Vfs, user: &str, path: &str) -> bool {
+    fn save(&mut self, fs: &mut Vfs, user: &str, name: &str) -> bool {
+        let path = &Vfs::normalize(&self.cwd, &self.home, name);
         if matches!(fs.read(user, "/", "/", path), Ok(Kind::Dev(_))) {
             self.status = format!("[ Error writing {path}: File is unwritable ]");
             return false;
@@ -143,7 +148,7 @@ impl Nano {
                 } else {
                     self.lines.len()
                 };
-                self.path = Vfs::normalize("/", "/", path);
+                self.path = path.clone();
                 self.modified = false;
                 self.readonly = false;
                 self.status = format!("[ Wrote {n} lines ]");
@@ -660,9 +665,38 @@ mod tests {
     }
 
     #[test]
+    fn renamed_saves_land_in_cwd_and_home() {
+        let mut fs = fixture();
+        fs.mkdir_as("/tmp", ROOT, FsMode::RW_RW);
+        fs.put("/tmp/a.txt", "hi\n", "mara", FsMode::RW_R);
+        for (typed, want) in [("b.txt", "/tmp/b.txt"), ("~/c.txt", "/home/mara/c.txt")] {
+            let mut n = Nano::open(&fs, "mara", "/tmp", "/home/mara", "a.txt").unwrap();
+            assert_eq!(n.path, "/tmp/a.txt");
+            n.key(&mut fs, "mara", ctrl('o'));
+            for _ in 0..30 {
+                n.key(&mut fs, "mara", k(KeyCode::Backspace));
+            }
+            for c in typed.chars() {
+                n.key(&mut fs, "mara", k(KeyCode::Char(c)));
+            }
+            n.key(&mut fs, "mara", k(KeyCode::Enter));
+            assert_eq!(n.status, "[ Wrote 1 lines ]");
+            assert_eq!(n.path, want);
+            match fs.read("mara", "/", "/", want).unwrap() {
+                Kind::File(t) => assert_eq!(t, "hi\n"),
+                _ => panic!("not a file"),
+            }
+        }
+        assert!(fs.read(ROOT, "/", "/", "/b.txt").is_err());
+    }
+
+    #[test]
     fn readonly_and_device_files_cannot_save() {
         let mut fs = fixture();
-        for (user, path) in [("mara", "/dev/door"), ("mara", "journal.txt")] {
+        for (user, path, abs) in [
+            ("mara", "/dev/door", "/dev/door"),
+            ("mara", "journal.txt", "/home/mara/journal.txt"),
+        ] {
             let mut n = Nano::open(&fs, user, "/home/mara", "/home/mara", path).unwrap();
             assert!(n.readonly);
             assert!(n.status.contains("is unwritable"), "{}", n.status);
@@ -671,8 +705,14 @@ mod tests {
             n.key(&mut fs, user, k(KeyCode::Enter));
             assert_eq!(n.mode, Mode::Edit);
             assert!(n.modified, "the failed save keeps the buffer dirty");
-            assert!(n.status.starts_with("[ "), "{}", n.status);
-            assert!(!n.status.contains("Wrote"), "{}", n.status);
+            assert_eq!(
+                n.status,
+                format!("[ Error writing {abs}: File is unwritable ]")
+            );
+            assert!(matches!(
+                fs.read(ROOT, "/", "/", abs),
+                Ok(Kind::Dev(Dev::Door | Dev::Journal))
+            ));
         }
         let mut g = Nano::open(&fs, GUEST, "/", "/", "/etc/motd").unwrap();
         assert!(g.readonly);
