@@ -120,17 +120,18 @@ over 4) within two; a holo ad (100 over 5) within three.
 
 ### Dark radius by daylight
 
-`walker::Player::radius(minute)` keeps the night constants (Street 14,
-Undercity 8, Net 24, interiors 30) and, on the three sunlit strata,
-interpolates toward `DAY_RADIUS` (60) by `daylight`. The constants keep their
+`walker::Player::radius()` keeps the night constants (Street 14,
+Undercity 8, Net 24, interiors 30); `radius_at(daylight)` interpolates toward
+`DAY_RADIUS` (60) on the three sunlit strata. The constants keep their
 names; their doc comment says "in the dark". The Undercity, the Net and
 interiors never change.
 
 ### The player
 
-`Player::update_fov(map, sight_bonus, minute)` casts over
-`max(dark_radius + sight_bonus, LIT_RADIUS)` with `LIT_RADIUS` 40, and the
-mark closure applies the predicate with `dark_radius + sight_bonus`. Perks add
+`Player::update_fov(map, sight_bonus)` keeps its signature: the map carries
+the minute and answers `daylight()`, `emitted(p)` and `emits(p)`. It casts
+over `max(dark_radius + sight_bonus, LIT_RADIUS)` with `LIT_RADIUS` 40, and
+the mark closure applies the predicate with `dark_radius + sight_bonus`. Perks add
 to the dark radius as today. The lowlight ability keeps its two tiles.
 
 ### Exemptions
