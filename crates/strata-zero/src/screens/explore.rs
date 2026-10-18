@@ -5343,10 +5343,7 @@ mod tests {
         let p = st.player.as_ref().unwrap();
         assert_eq!(p.place, Place::Stratum(StratumKind::Net), "{:?}", last(&st));
         assert_eq!(p.pos, gate);
-        assert_eq!(
-            last(&st),
-            Some(format!("Leaving {name} · onto the grid").as_str())
-        );
+        assert_eq!(last(&st), Some("Entering the GRID"));
         // In again: the construct is generated once; jacking out from inside works.
         s.update(&mut st, &[key(code)]);
         assert_eq!(st.player.as_ref().unwrap().place, Place::Construct(b));
@@ -8984,7 +8981,7 @@ mod tests {
             Place::Stratum(StratumKind::Net),
             "out on the grid"
         );
-        assert!(logged(&st, "Leaving"), "{:?}", last(&st));
+        assert!(logged(&st, "Entering the GRID"), "{:?}", last(&st));
         s.update(&mut st, &[]);
         assert!(st.net.engaged.is_none() && s.walking.is_none() && s.aim.is_none());
     }

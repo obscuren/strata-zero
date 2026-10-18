@@ -98,7 +98,6 @@ pub fn leave_construct(st: &mut AppState) -> Result<String, String> {
         return Err("not in a construct".to_string());
     };
     let gate = city_gate(city, b).ok_or("the gate is gone")?;
-    let name = building_name(city, b);
     land(st, Place::Stratum(StratumKind::Net), gate);
-    Ok(format!("Leaving `{name}` · onto the grid"))
+    Ok("Entering the `GRID`".to_string())
 }
