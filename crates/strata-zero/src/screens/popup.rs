@@ -50,7 +50,7 @@ pub enum Pick {
     },
     /// Opens the access terminal in place of the popup, keyed by the machine's tile.
     Terminal {
-        session: crate::access::Session,
+        origin: crate::helix::shell::HostId,
         key: (citygen::Place, citygen::Pos),
     },
     Close,
@@ -334,8 +334,8 @@ impl Popup {
                 )),
                 fx: TransitionKind::None,
             },
-            Pick::Terminal { session, key } => ScreenCmd::Replace {
-                to: Box::new(crate::screens::terminal::Terminal::open(st, session, key)),
+            Pick::Terminal { origin, key } => ScreenCmd::Replace {
+                to: Box::new(crate::screens::terminal::Terminal::open(st, origin, key)),
                 fx: TransitionKind::None,
             },
             Pick::Close => ScreenCmd::Pop {

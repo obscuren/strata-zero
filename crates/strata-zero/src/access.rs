@@ -1,6 +1,6 @@
-//! The Access Terminal: a typed session on the machine itself. A district terminal
-//! sees its subnet's buildings; the home rig sees your mail, your journal and your
-//! block. Commands are plain functions over the app state that answer in text.
+//! The world behind the Access Terminal: your standing on a building, the constructs a
+//! district terminal sees, and the actions and states the HELIX/OS devices and
+//! programs call. Plain functions over the app state that answer in text.
 
 use crate::app::AppState;
 use crate::credentials;
@@ -25,70 +25,6 @@ impl Tier {
             Tier::Admin => "ADMIN",
         }
     }
-
-    fn needs(self) -> &'static str {
-        match self {
-            Tier::Guest => "nothing",
-            Tier::User => "A RESIDENT'S CARD OR CODE",
-            Tier::Admin => "A BACKDOOR ON THE SERVER",
-        }
-    }
-}
-
-/// Where a session sits and what it is connected to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Session {
-    District {
-        district: DistrictId,
-        connected: Option<BuildingId>,
-    },
-    Rig {
-        building: BuildingId,
-    },
-}
-
-impl Session {
-    /// The building commands act on, if any.
-    fn building(&self) -> Option<BuildingId> {
-        match self {
-            Session::District { connected, .. } => *connected,
-            Session::Rig { building } => Some(*building),
-        }
-    }
-}
-
-/// What a command answered.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Reply {
-    pub lines: Vec<String>,
-    pub denied: bool,
-}
-
-impl Reply {
-    fn say(lines: Vec<String>) -> Reply {
-        Reply {
-            lines,
-            denied: false,
-        }
-    }
-
-    fn one(line: impl Into<String>) -> Reply {
-        Reply::say(vec![line.into()])
-    }
-
-    fn denied(have: Tier, need: Tier) -> Reply {
-        Reply {
-            lines: vec![
-                format!(
-                    "ACCESS DENIED · CLEARANCE: {} · REQUIRED: {}",
-                    have.label(),
-                    need.label()
-                ),
-                format!("IT TAKES {}", need.needs()),
-            ],
-            denied: true,
-        }
-    }
 }
 
 /// Your standing on a building: a backdoor makes you ADMIN, a card or a code USER.
@@ -107,14 +43,6 @@ pub fn tier_on(st: &AppState, b: BuildingId) -> Tier {
         Tier::User
     } else {
         Tier::Guest
-    }
-}
-
-/// The tier a session acts with: the rig is at least USER on your own block.
-pub fn tier_on_session(st: &AppState, s: &Session) -> Tier {
-    match s {
-        Session::District { connected, .. } => connected.map_or(Tier::Guest, |b| tier_on(st, b)),
-        Session::Rig { building } => tier_on(st, *building).max(Tier::User),
     }
 }
 
@@ -167,216 +95,6 @@ fn security(city: &City, b: BuildingId) -> u8 {
         .find(|s| s.owner == SubnetOwner::Building(b))
         .map(|s| s.security)
         .unwrap_or(0)
-}
-
-/// The prompt: where you are and your tier.
-pub fn prompt(st: &AppState, s: &Session) -> String {
-    match s {
-        Session::District {
-            district,
-            connected: None,
-        } => format!("{} NET > ", district_name(st, *district)),
-        Session::District {
-            connected: Some(b), ..
-        } => format!("{} [{}] > ", building_name(st, *b), tier_on(st, *b).label()),
-        Session::Rig { .. } => "RIG [HOME] > ".to_string(),
-    }
-}
-
-/// What a terminal types when it powers on: the theme's boot with the OS and the
-/// place filled in.
-pub fn boot_lines(st: &AppState, s: &Session, look: &crate::ui::device::Look) -> Vec<String> {
-    let place = match s {
-        Session::District { district, .. } => district_name(st, *district),
-        Session::Rig { building } => building_name(st, *building),
-    };
-    look.style
-        .boot
-        .iter()
-        .map(|l| l.replace("{PLACE}", &place).replace("{OS}", &look.os()))
-        .collect()
-}
-
-/// A verb, its gloss, the tier it needs, and whether it needs a connection.
-struct Verb {
-    name: &'static str,
-    gloss: &'static str,
-    tier: Tier,
-    connected: bool,
-}
-
-const VERBS: &[Verb] = &[
-    Verb {
-        name: "HELP",
-        gloss: "this list",
-        tier: Tier::Guest,
-        connected: false,
-    },
-    Verb {
-        name: "SCAN",
-        gloss: "the buildings on this subnet",
-        tier: Tier::Guest,
-        connected: false,
-    },
-    Verb {
-        name: "CONNECT",
-        gloss: "CONNECT <n|name>: pick a building",
-        tier: Tier::Guest,
-        connected: false,
-    },
-    Verb {
-        name: "DISCONNECT",
-        gloss: "back to the subnet",
-        tier: Tier::Guest,
-        connected: true,
-    },
-    Verb {
-        name: "WHO",
-        gloss: "who is inside now",
-        tier: Tier::Guest,
-        connected: true,
-    },
-    Verb {
-        name: "PLAN",
-        gloss: "load the ground floor plan",
-        tier: Tier::Guest,
-        connected: true,
-    },
-    Verb {
-        name: "LOG",
-        gloss: "the system log",
-        tier: Tier::Guest,
-        connected: true,
-    },
-    Verb {
-        name: "DOOR",
-        gloss: "DOOR UNLOCK: release the door locks",
-        tier: Tier::User,
-        connected: true,
-    },
-    Verb {
-        name: "LIFT",
-        gloss: "the lifts answer",
-        tier: Tier::User,
-        connected: true,
-    },
-    Verb {
-        name: "CAM",
-        gloss: "CAM LOOP: loop every camera",
-        tier: Tier::User,
-        connected: true,
-    },
-    Verb {
-        name: "ALARM",
-        gloss: "ALARM OFF: clear the alert",
-        tier: Tier::Admin,
-        connected: true,
-    },
-    Verb {
-        name: "MAIL",
-        gloss: "MAIL [n]: the inbox, or a message",
-        tier: Tier::Guest,
-        connected: false,
-    },
-    Verb {
-        name: "JOURNAL",
-        gloss: "what you know, by building",
-        tier: Tier::Guest,
-        connected: false,
-    },
-    Verb {
-        name: "EXIT",
-        gloss: "leave the terminal",
-        tier: Tier::Guest,
-        connected: false,
-    },
-];
-
-fn verb_table(s: &Session) -> Vec<&'static Verb> {
-    let rig = matches!(s, Session::Rig { .. });
-    let connected = s.building().is_some();
-    VERBS
-        .iter()
-        .filter(|v| match v.name {
-            "CONNECT" | "DISCONNECT" => !rig && (v.name == "CONNECT" || connected),
-            "MAIL" | "JOURNAL" => rig,
-            _ => !v.connected || connected,
-        })
-        .collect()
-}
-
-/// The verbs this session offers, for HELP and completion.
-pub fn verbs(st: &AppState, s: &Session) -> Vec<&'static str> {
-    let _ = st;
-    verb_table(s).iter().map(|v| v.name).collect()
-}
-
-/// Runs one typed line.
-pub fn run(st: &mut AppState, s: &mut Session, line: &str) -> Reply {
-    let upper = line.trim().to_uppercase();
-    let mut words = upper.split_whitespace();
-    let Some(verb) = words.next() else {
-        return Reply::say(Vec::new());
-    };
-    let arg: Vec<&str> = words.collect();
-    let rig = matches!(s, Session::Rig { .. });
-    let known = VERBS.iter().find(|v| {
-        v.name == verb
-            && match v.name {
-                "CONNECT" | "DISCONNECT" => !rig,
-                "MAIL" | "JOURNAL" => rig,
-                _ => true,
-            }
-    });
-    let Some(v) = known else {
-        return Reply::one("?SYNTAX ERROR");
-    };
-    if v.connected && s.building().is_none() {
-        return not_connected();
-    }
-    let have = tier_on_session(st, s);
-    if have < v.tier {
-        return Reply::denied(have, v.tier);
-    }
-    match verb {
-        "HELP" => help(st, s),
-        "EXIT" => Reply::one("BYE"),
-        "SCAN" => scan_verb(st, s),
-        "CONNECT" => connect(st, s, &arg),
-        "DISCONNECT" => {
-            if let Session::District { connected, .. } = s {
-                *connected = None;
-            }
-            Reply::one("DISCONNECTED")
-        }
-        "WHO" => who_verb(st, s),
-        "PLAN" => plan_verb(st, s),
-        "LOG" => log_verb(st, s),
-        "DOOR" => door_verb(st, s, &arg),
-        "LIFT" => lift_verb(st, s),
-        "CAM" => cam_verb(st, s, &arg),
-        "ALARM" => alarm_verb(st, s, &arg),
-        "MAIL" => mail_verb(st, &arg),
-        "JOURNAL" => journal_verb(st),
-        _ => Reply::one("?SYNTAX ERROR"),
-    }
-}
-
-fn help(st: &AppState, s: &Session) -> Reply {
-    let have = tier_on_session(st, s);
-    Reply::say(
-        verb_table(s)
-            .iter()
-            .map(|v| {
-                let tag = if v.tier > have {
-                    format!(" ({})", v.tier.label())
-                } else {
-                    String::new()
-                };
-                format!("{:<10} {}{tag}", v.name, v.gloss.to_uppercase())
-            })
-            .collect(),
-    )
 }
 
 // ---- the world actions: what the HELIX/OS devices and programs call ----
@@ -729,9 +447,7 @@ pub fn journal_lines(st: &AppState) -> Vec<String> {
 
 /// What a HELIX/OS host types when it powers on: the theme's boot with the OS and the
 /// place filled in.
-// Task 6 boots the terminal through this.
-#[allow(dead_code)]
-pub fn boot_for_host(
+pub fn boot_lines(
     st: &AppState,
     host: crate::helix::shell::HostId,
     look: &crate::ui::device::Look,
@@ -750,176 +466,6 @@ pub fn boot_for_host(
         .iter()
         .map(|l| l.replace("{PLACE}", &place).replace("{OS}", &look.os()))
         .collect()
-}
-
-// ---- Task 6 removes the verb table: the old verbs call the actions above ----
-
-fn reply_of(r: Result<String, String>) -> Reply {
-    Reply::one(match r {
-        Ok(l) | Err(l) => l,
-    })
-}
-
-fn session_scannable(st: &AppState, s: &Session) -> Vec<BuildingId> {
-    match s {
-        Session::Rig { building } => vec![*building],
-        Session::District { district, .. } => scannable(st, *district),
-    }
-}
-
-fn scan_verb(st: &AppState, s: &Session) -> Reply {
-    let list = session_scannable(st, s);
-    if list.is_empty() {
-        return Reply::one("NO CONSTRUCTS ON THIS SUBNET");
-    }
-    Reply::say(
-        list.iter()
-            .enumerate()
-            .map(|(i, b)| scan_row(st, i, *b))
-            .collect(),
-    )
-}
-
-fn connect(st: &AppState, s: &mut Session, arg: &[&str]) -> Reply {
-    let list = session_scannable(st, s);
-    let Session::District { connected, .. } = s else {
-        return Reply::one("?SYNTAX ERROR");
-    };
-    if arg.is_empty() {
-        return match connected {
-            Some(b) => Reply::one(format!("CONNECTED TO {}", building_name(st, *b))),
-            None => Reply::one("NOT CONNECTED · SCAN THEN CONNECT <N>"),
-        };
-    }
-    let what = arg.join(" ");
-    let numbered = |b: &BuildingId| list.iter().position(|x| x == b).map_or(0, |i| i + 1);
-    let pick: Vec<BuildingId> = if let Ok(n) = what.parse::<usize>() {
-        n.checked_sub(1)
-            .and_then(|i| list.get(i))
-            .map(|b| vec![*b])
-            .unwrap_or_default()
-    } else if let Some(exact) = list.iter().copied().find(|b| building_name(st, *b) == what) {
-        vec![exact]
-    } else {
-        list.iter()
-            .copied()
-            .filter(|b| building_name(st, *b).starts_with(&what))
-            .collect()
-    };
-    match pick.as_slice() {
-        [] => Reply::one("NO SUCH BUILDING"),
-        [b] => {
-            *connected = Some(*b);
-            Reply::one(format!(
-                "CONNECTED TO {} · CLEARANCE {}",
-                building_name(st, *b),
-                tier_on(st, *b).label()
-            ))
-        }
-        many => {
-            let mut lines = vec!["AMBIGUOUS · DID YOU MEAN".to_string()];
-            lines.extend(
-                many.iter()
-                    .map(|b| format!("{:>2}  {}", numbered(b), building_name(st, *b))),
-            );
-            Reply::say(lines)
-        }
-    }
-}
-
-fn not_connected() -> Reply {
-    Reply::one("NOT CONNECTED · SCAN THEN CONNECT <N>")
-}
-
-fn who_verb(st: &AppState, s: &Session) -> Reply {
-    let Some(b) = s.building() else {
-        return not_connected();
-    };
-    let lines = who_lines(st, b);
-    if lines.is_empty() {
-        return Reply::one("NOBODY INSIDE");
-    }
-    Reply::say(lines.iter().map(|l| l.to_uppercase()).collect())
-}
-
-fn plan_verb(st: &mut AppState, s: &Session) -> Reply {
-    let Some(b) = s.building() else {
-        return not_connected();
-    };
-    reply_of(load_plan(st, b))
-}
-
-fn log_verb(st: &AppState, s: &Session) -> Reply {
-    let Some(b) = s.building() else {
-        return not_connected();
-    };
-    let now = st.net.now(st);
-    let mut lines: Vec<String> = log_lines(st, b).iter().map(|l| l.to_uppercase()).collect();
-    if st.net.alert(b, now) {
-        lines.insert(0, format!("{}  TRACE ALERT", stamp(now)));
-    }
-    if lines.is_empty() {
-        lines.push("NO ENTRIES".to_string());
-    }
-    Reply::say(lines)
-}
-
-fn door_verb(st: &mut AppState, s: &Session, arg: &[&str]) -> Reply {
-    let Some(b) = s.building() else {
-        return not_connected();
-    };
-    if arg.first() != Some(&"UNLOCK") {
-        return Reply::one("?SYNTAX ERROR · DOOR UNLOCK");
-    }
-    reply_of(release_doors(st, b))
-}
-
-fn lift_verb(st: &mut AppState, s: &Session) -> Reply {
-    let Some(b) = s.building() else {
-        return not_connected();
-    };
-    reply_of(answer_lifts(st, b))
-}
-
-fn cam_verb(st: &mut AppState, s: &Session, arg: &[&str]) -> Reply {
-    let Some(b) = s.building() else {
-        return not_connected();
-    };
-    if arg.first() != Some(&"LOOP") {
-        return Reply::one("?SYNTAX ERROR · CAM LOOP");
-    }
-    reply_of(loop_cams(st, b))
-}
-
-fn alarm_verb(st: &mut AppState, s: &Session, arg: &[&str]) -> Reply {
-    let Some(b) = s.building() else {
-        return not_connected();
-    };
-    if arg.first() != Some(&"OFF") {
-        return Reply::one("?SYNTAX ERROR · ALARM OFF");
-    }
-    reply_of(alarm_off(st, b))
-}
-
-fn mail_verb(st: &mut AppState, arg: &[&str]) -> Reply {
-    if st.journal.mails.is_empty() {
-        return Reply::one("NO MAIL");
-    }
-    match arg.first().and_then(|a| a.parse::<usize>().ok()) {
-        None => Reply::say(mail_inbox(st)),
-        Some(n) => match n.checked_sub(1).map(|i| mail_open(st, i)) {
-            Some(Ok(mut lines)) => {
-                lines[0] = lines[0].to_uppercase();
-                lines[1] = lines[1].to_uppercase();
-                Reply::say(lines)
-            }
-            _ => Reply::one("NO SUCH MESSAGE"),
-        },
-    }
-}
-
-fn journal_verb(st: &AppState) -> Reply {
-    Reply::say(journal_lines(st))
 }
 
 #[cfg(test)]
@@ -963,27 +509,9 @@ mod tests {
         (st, b, d)
     }
 
-    fn district(d: citygen::DistrictId) -> Session {
-        Session::District {
-            district: d,
-            connected: None,
-        }
-    }
-
-    fn connected(d: citygen::DistrictId, b: BuildingId) -> Session {
-        Session::District {
-            district: d,
-            connected: Some(b),
-        }
-    }
-
-    fn lines(st: &mut AppState, s: &mut Session, line: &str) -> String {
-        run(st, s, line).lines.join("\n")
-    }
-
     #[test]
     fn tiers_come_from_what_you_hold() {
-        let (mut st, b, d) = state();
+        let (mut st, b, _) = state();
         crate::credentials::prepare(&mut st, b);
         assert_eq!(tier_on(&st, b), Tier::Guest);
         let h = st
@@ -1019,298 +547,6 @@ mod tests {
         );
         assert_eq!(tier_on(&st, b), Tier::Admin);
         assert!(Tier::Guest < Tier::User && Tier::User < Tier::Admin);
-        let name = building_label(&st, b);
-        assert_eq!(prompt(&st, &connected(d, b)), format!("{name} [ADMIN] > "));
-        let dn = st.city.as_ref().unwrap().district(d).name.to_uppercase();
-        assert_eq!(prompt(&st, &district(d)), format!("{dn} NET > "));
-        assert_eq!(prompt(&st, &Session::Rig { building: b }), "RIG [HOME] > ");
-        assert_eq!(
-            tier_on_session(&st, &Session::Rig { building: b }),
-            Tier::Admin
-        );
-    }
-
-    #[test]
-    fn scan_lists_constructs_with_grades_and_connect_picks_one() {
-        let (mut st, b, d) = state();
-        let mut s = district(d);
-        let scan = lines(&mut st, &mut s, "scan");
-        let name = building_label(&st, b);
-        let row = scan
-            .lines()
-            .find(|l| l.contains(&name))
-            .unwrap_or_else(|| panic!("{scan}"));
-        assert!(
-            row.contains("SEC ") && row.contains("ICE ") && row.contains("GUEST"),
-            "{row}"
-        );
-        let n: usize = row.split_whitespace().next().unwrap().parse().unwrap();
-        assert!(lines(&mut st, &mut s, &format!("connect {n}")).contains("CONNECTED"));
-        assert!(matches!(s, Session::District { connected: Some(x), .. } if x == b));
-        assert!(lines(&mut st, &mut s, "disconnect").contains("DISCONNECTED"));
-        assert!(matches!(
-            s,
-            Session::District {
-                connected: None,
-                ..
-            }
-        ));
-        let prefix: String = name.chars().take(4).collect();
-        let reply = lines(&mut st, &mut s, &format!("connect {prefix}"));
-        let matching = scan
-            .lines()
-            .filter(|l| l.contains(&format!("  {prefix}")))
-            .count();
-        if matching == 1 {
-            assert!(reply.contains("CONNECTED"), "{reply}");
-        } else {
-            assert!(reply.contains("AMBIGUOUS"), "{reply}");
-            assert!(matches!(
-                s,
-                Session::District {
-                    connected: None,
-                    ..
-                }
-            ));
-        }
-        assert!(lines(&mut st, &mut s, "connect zzzzzz").contains("NO SUCH BUILDING"));
-        assert!(lines(&mut st, &mut s, "who").contains("NOT CONNECTED"));
-        assert_eq!(ice_grade(0), "none");
-        assert_eq!(ice_grade(160), "white");
-        assert_eq!(ice_grade(200), "grey");
-        assert_eq!(ice_grade(230), "black");
-    }
-
-    #[test]
-    fn who_plan_and_log_read_the_building() {
-        let (mut st, b, d) = state();
-        let mut s = connected(d, b);
-        let who = lines(&mut st, &mut s, "who");
-        let world = st.world.as_ref().unwrap();
-        let home = world
-            .inside(b)
-            .into_iter()
-            .find(|o| o.role == sim::OccupantRole::Living)
-            .expect("a resident home at ten at night");
-        let name =
-            crate::helix::hosts::slug(&world.people()[home.id.0 as usize].name).to_uppercase();
-        assert!(who.contains(&name) && who.contains("AT HOME"), "{who}");
-        assert!(lines(&mut st, &mut s, "plan").contains("GROUND FLOOR PLAN LOADED"));
-        let floor_place = citygen::Place::Floor {
-            building: b,
-            level: 0,
-        };
-        let vis = st
-            .player
-            .as_ref()
-            .unwrap()
-            .vis_at(floor_place)
-            .expect("a plan");
-        assert!(
-            vis.iter()
-                .any(|(_, v)| *v == crate::walker::Visibility::Remembered)
-        );
-        assert!(lines(&mut st, &mut s, "log").contains("NO ENTRIES"));
-        let lock = st
-            .city
-            .as_ref()
-            .unwrap()
-            .net
-            .nodes
-            .iter()
-            .find(|n| n.building == Some(b) && n.kind == NodeKind::DoorLock)
-            .map(|n| n.id)
-            .unwrap();
-        let now = st.net.now(&st);
-        st.net.land(
-            b,
-            HackTarget::Node(lock),
-            Target::Node(NodeKind::DoorLock),
-            Op::Crack,
-            now,
-        );
-        let log = lines(&mut st, &mut s, "log");
-        assert!(
-            log.contains("DOOR LOCK") && log.contains("CRACKED"),
-            "{log}"
-        );
-    }
-
-    #[test]
-    fn world_commands_need_user_and_land_hacks() {
-        let (mut st, b, d) = state();
-        crate::credentials::prepare(&mut st, b);
-        let mut s = connected(d, b);
-        let denied = run(&mut st, &mut s, "door unlock");
-        assert!(denied.denied);
-        assert_eq!(
-            denied.lines[0],
-            "ACCESS DENIED · CLEARANCE: GUEST · REQUIRED: USER"
-        );
-        crate::credentials::copy_codes(&mut st, b, 1);
-        let now = st.net.now(&st);
-        assert!(!st.net.unlocked(b, now));
-        assert!(lines(&mut st, &mut s, "door unlock").contains("DOOR LOCKS RELEASED"));
-        assert!(st.net.unlocked(b, now));
-        let has_lift = !nodes_of(&st, b, NodeKind::LiftCtrl).is_empty();
-        let reply = lines(&mut st, &mut s, "lift");
-        assert!(
-            reply.contains(if has_lift {
-                "LIFTS ANSWERING"
-            } else {
-                "NO LIFT CONTROLLER"
-            }),
-            "{reply}"
-        );
-        let cams: Vec<_> = st
-            .city
-            .as_ref()
-            .unwrap()
-            .net
-            .nodes
-            .iter()
-            .filter(|n| n.building == Some(b) && n.kind == NodeKind::Camera)
-            .map(|n| n.id)
-            .collect();
-        let reply = lines(&mut st, &mut s, "cam loop");
-        if cams.is_empty() {
-            assert!(reply.contains("NO CAMERAS"), "{reply}");
-        } else {
-            assert!(reply.contains("LOOPED"), "{reply}");
-            assert!(cams.iter().all(|c| st.net.blinded(*c, now)));
-        }
-        let denied = run(&mut st, &mut s, "alarm off");
-        assert_eq!(
-            denied.lines[0],
-            "ACCESS DENIED · CLEARANCE: USER · REQUIRED: ADMIN"
-        );
-        let server = st
-            .city
-            .as_ref()
-            .unwrap()
-            .net
-            .nodes
-            .iter()
-            .find(|n| n.building == Some(b) && n.kind == NodeKind::Server)
-            .map(|n| n.id)
-            .unwrap();
-        st.net.land(
-            b,
-            HackTarget::Node(server),
-            Target::Node(NodeKind::Server),
-            Op::Backdoor,
-            now,
-        );
-        assert!(lines(&mut st, &mut s, "alarm off").contains("NO ALARM"));
-        st.net.trace(b).alert_until = Some(now + 30);
-        assert!(st.net.alert(b, now));
-        assert!(lines(&mut st, &mut s, "alarm off").contains("ALARM CLEARED"));
-        assert!(!st.net.alert(b, now));
-    }
-
-    #[test]
-    fn syntax_help_exit_and_boot() {
-        let (mut st, b, d) = state();
-        let mut s = district(d);
-        assert!(lines(&mut st, &mut s, "frobnicate").contains("?SYNTAX ERROR"));
-        let help = lines(&mut st, &mut s, "help");
-        assert!(
-            help.contains("SCAN") && help.contains("CONNECT") && !help.contains("DOOR"),
-            "{help}"
-        );
-        let mut c = connected(d, b);
-        let help = lines(&mut st, &mut c, "help");
-        assert!(
-            help.contains("WHO") && help.contains("DOOR") && help.contains("ALARM"),
-            "{help}"
-        );
-        assert!(verbs(&st, &c).contains(&"PLAN"));
-        assert!(!verbs(&st, &s).contains(&"WHO"));
-        assert_eq!(lines(&mut st, &mut s, "exit"), "BYE");
-        let muni = crate::ui::device::Look::named(&st, "municipal", Some(d), 1);
-        let boot = boot_lines(&st, &s, &muni);
-        assert_eq!(boot.len(), 3);
-        assert!(
-            boot[0].starts_with("HELIX/OS 4.1") && boot[2] == "READY",
-            "{boot:?}"
-        );
-        let dn = st.city.as_ref().unwrap().district(d).name.to_uppercase();
-        assert!(boot[0].contains(&dn), "{boot:?}");
-        let street = crate::ui::device::Look::named(&st, "street", Some(d), 1);
-        let boot = boot_lines(&st, &s, &street);
-        assert_eq!(boot[2], "REDY");
-        let rig = boot_lines(&st, &Session::Rig { building: b }, &street);
-        assert_eq!(rig, boot, "the rig boots like any Zenbo");
-        assert!(rig.iter().all(|l| !l.contains("HOME RIG")), "{rig:?}");
-        let city = st.city.as_ref().unwrap();
-        let term = city
-            .net
-            .nodes
-            .iter()
-            .find(|n| n.kind == NodeKind::Terminal && n.building.is_none())
-            .unwrap();
-        let (k, p) = term.anchor;
-        assert_eq!(
-            district_of_terminal(city, k, p),
-            city.tile(k, p).unwrap().district
-        );
-    }
-
-    #[test]
-    fn connect_takes_whole_names_exact_first_and_labels_unnamed_buildings_apart() {
-        let (mut st, _b, d) = state();
-        let mut s = district(d);
-        let scan = lines(&mut st, &mut s, "scan");
-        let names: Vec<String> = scan
-            .lines()
-            .map(|l| l[4..26].trim_end().to_string())
-            .collect();
-        let distinct: std::collections::BTreeSet<&String> = names.iter().collect();
-        assert_eq!(
-            distinct.len(),
-            names.len(),
-            "every row has its own label: {scan}"
-        );
-        // The whole name connects, spaces and all.
-        let full = names[0].clone();
-        let reply = lines(&mut st, &mut s, &format!("connect {full}"));
-        assert!(reply.contains("CONNECTED"), "{reply}");
-        // An exact name wins over longer names it prefixes.
-        let short = names
-            .iter()
-            .find(|n| names.iter().any(|m| m != *n && m.starts_with(n.as_str())));
-        if let Some(short) = short {
-            let reply = lines(&mut st, &mut s, &format!("connect {short}"));
-            assert!(reply.contains(&format!("CONNECTED TO {short}")), "{reply}");
-        }
-        // Ambiguity lists numbered candidates.
-        let first: String = names[0].chars().take(1).collect();
-        let hits = names.iter().filter(|n| n.starts_with(&first)).count();
-        if hits > 1 {
-            let reply = lines(&mut st, &mut s, &format!("connect {first}"));
-            assert!(reply.contains("AMBIGUOUS"), "{reply}");
-            assert!(
-                reply.lines().skip(1).all(|l| l
-                    .trim_start()
-                    .chars()
-                    .next()
-                    .is_some_and(|c| c.is_ascii_digit())),
-                "{reply}"
-            );
-        }
-    }
-
-    #[test]
-    fn door_unlock_during_an_alert_tells_the_truth() {
-        let (mut st, b, d) = state();
-        crate::credentials::prepare(&mut st, b);
-        crate::credentials::copy_codes(&mut st, b, 1);
-        let mut s = connected(d, b);
-        let now = st.net.now(&st);
-        st.net.trace(b).alert_until = Some(now + 30);
-        let reply = lines(&mut st, &mut s, "door unlock");
-        assert!(reply.contains("LOCKDOWN IN FORCE"), "{reply}");
-        assert!(!reply.contains("60 MIN"));
     }
 
     #[test]
@@ -1379,10 +615,55 @@ mod tests {
         let inside = who_lines(&st, b);
         assert!(inside.iter().any(|l| l.ends_with("at home")), "{inside:?}");
         let muni = crate::ui::device::Look::named(&st, "municipal", Some(d), 1);
-        let boot = boot_for_host(&st, HostId::District(d), &muni);
+        let boot = boot_lines(&st, HostId::District(d), &muni);
+        assert_eq!(boot.len(), 3);
+        assert!(
+            boot[0].starts_with("HELIX/OS 4.1") && boot[2] == "READY",
+            "{boot:?}"
+        );
         let dn = st.city.as_ref().unwrap().district(d).name.to_uppercase();
         assert!(boot[0].contains(&dn), "{boot:?}");
-        let boot = boot_for_host(&st, HostId::Building(b), &muni);
+        let boot = boot_lines(&st, HostId::Building(b), &muni);
         assert!(boot[0].contains(&building_label(&st, b)), "{boot:?}");
+        let street = crate::ui::device::Look::named(&st, "street", Some(d), 1);
+        let boot = boot_lines(&st, HostId::District(d), &street);
+        assert_eq!(boot[2], "REDY");
+        let rig = boot_lines(&st, HostId::Rig, &street);
+        assert!(rig.iter().all(|l| !l.contains("HOME RIG")), "{rig:?}");
+    }
+
+    #[test]
+    fn grades_terminals_and_the_log_read_the_city() {
+        let (mut st, b, _) = state();
+        assert_eq!(ice_grade(0), "none");
+        assert_eq!(ice_grade(160), "white");
+        assert_eq!(ice_grade(200), "grey");
+        assert_eq!(ice_grade(230), "black");
+        let city = st.city.as_ref().unwrap();
+        let term = city
+            .net
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Terminal && n.building.is_none())
+            .unwrap();
+        let (k, p) = term.anchor;
+        assert_eq!(
+            district_of_terminal(city, k, p),
+            city.tile(k, p).unwrap().district
+        );
+        let lock = nodes_of(&st, b, NodeKind::DoorLock)[0];
+        let now = st.net.now(&st);
+        st.net.land(
+            b,
+            HackTarget::Node(lock),
+            Target::Node(NodeKind::DoorLock),
+            Op::Crack,
+            now,
+        );
+        let log = log_lines(&st, b).join("\n");
+        assert!(
+            log.contains("door lock") && log.contains("cracked"),
+            "{log}"
+        );
     }
 }

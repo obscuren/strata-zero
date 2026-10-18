@@ -1,10 +1,6 @@
 //! The world behind HELIX/OS: the building as `/dev`, the district as `/net`, the
 //! old terminal verbs as programs. `AppIo` is the `Io` the game gives the shell.
 
-// Nothing outside the tests builds an `AppIo` until Task 6 wires the terminal screen to
-// it; marking this module live keeps everything it calls live too.
-#![allow(dead_code)]
-
 use super::hosts::{self, ensure_host, hostname, user_for};
 use super::shell::{HostId, Io, Output, Shell};
 use super::vfs::{Dev, Vfs};
@@ -33,7 +29,8 @@ pub fn new_shell(st: &mut AppState, host: HostId) -> Shell {
     shell
 }
 
-/// Moves `shell` onto `host`, logged in as the user your standing there allows.
+/// Moves `shell` onto `host`, logged in as the user your standing there allows: in
+/// their home, or at `/` when the home is the shared `/tmp` (guest, `user`).
 fn login(st: &mut AppState, shell: &mut Shell, host: HostId) {
     let user = user_for(st, host);
     let home = ensure_host(st, host)
@@ -43,8 +40,12 @@ fn login(st: &mut AppState, shell: &mut Shell, host: HostId) {
         .map_or_else(|| "/tmp".to_string(), |u| u.home.clone());
     shell.host = host;
     shell.user = user;
-    shell.home = home.clone();
-    shell.cwd = home;
+    shell.cwd = if home == "/tmp" {
+        "/".to_string()
+    } else {
+        home.clone()
+    };
+    shell.home = home;
 }
 
 fn lines(lines: Vec<String>) -> Output {
@@ -498,7 +499,7 @@ mod tests {
         let out = go(&mut st, &mut sh, &format!("ssh {prefix}"));
         assert!(text(&out).contains("CONNECTED TO"), "{out:?}");
         assert_eq!(sh.host, HostId::Building(b));
-        assert_eq!(at(&mut st, &sh), format!("guest@{name}:~$ "));
+        assert_eq!(at(&mut st, &sh), format!("guest@{name}:/$ "));
         let out = go(&mut st, &mut sh, "exit");
         assert!(!out.exit);
         assert_eq!(sh.host, HostId::District(d));

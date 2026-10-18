@@ -1,6 +1,4 @@
 //! nano on HELIX: a small editor over the vfs, drawn on the CRT's glass.
-// hosted by the terminal screen in Task 6
-#![allow(dead_code)]
 
 use super::vfs::{Kind, Vfs, VfsError};
 use crate::ui::chrome;
@@ -31,6 +29,8 @@ pub struct Nano {
     pub mode: Mode,
     pub status: String,
     last_cut_row: Option<usize>,
+    /// The last `[ Wrote N lines ]`: what the shell's scrollback gets on `^X`.
+    wrote: Option<String>,
     cwd: String,
     home: String,
 }
@@ -70,6 +70,7 @@ impl Nano {
             mode: Mode::Edit,
             status: String::new(),
             last_cut_row: None,
+            wrote: None,
             cwd: cwd.to_string(),
             home: home.to_string(),
         };
@@ -152,6 +153,7 @@ impl Nano {
                 self.modified = false;
                 self.readonly = false;
                 self.status = format!("[ Wrote {n} lines ]");
+                self.wrote = Some(self.status.clone());
                 true
             }
             Err(e) => {
@@ -205,7 +207,7 @@ impl Nano {
                     KeyCode::Char('y') | KeyCode::Char('Y') => {
                         let p = self.path.clone();
                         if self.save(fs, user, &p) {
-                            return NanoEvent::Closed(vec![self.status.clone()]);
+                            return NanoEvent::Closed(self.wrote.take().into_iter().collect());
                         }
                         self.mode = Mode::Edit;
                     }
@@ -277,7 +279,7 @@ impl Nano {
                     if self.modified {
                         self.mode = Mode::ExitPrompt;
                     } else {
-                        return NanoEvent::Closed(Vec::new());
+                        return NanoEvent::Closed(self.wrote.take().into_iter().collect());
                     }
                 }
                 KeyCode::Char('o') => self.mode = Mode::SavePrompt(self.path.clone()),
@@ -629,6 +631,11 @@ mod tests {
         match fs.read("mara", "/", "/", "/home/mara/fresh.txt").unwrap() {
             Kind::File(t) => assert_eq!(t, "a\nb\n"),
             _ => panic!("not a file"),
+        }
+        // ^X after the write hands the shell the last write's line
+        match n.key(&mut fs, "mara", ctrl('x')) {
+            NanoEvent::Closed(l) => assert_eq!(l, vec!["[ Wrote 2 lines ]"]),
+            NanoEvent::Stay => panic!("should close"),
         }
     }
 

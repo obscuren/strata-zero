@@ -1,6 +1,4 @@
 //! Generating a host's disk from the city: residents, mail, notes, devices and lore.
-// consumed by the terminal and the world in later tasks
-#![allow(dead_code)]
 
 use super::shell::HostId;
 use super::vfs::*;

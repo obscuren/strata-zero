@@ -745,36 +745,21 @@ impl MapScreen {
         } else if let Some(port) = player.terminal_in_reach(city, st.home.as_ref()) {
             choices.push(Choice::new('j', "jack in", Pick::World(WorldAct::JackIn)));
             // The machine itself: the rig at home, a district terminal on the street.
-            let session = match (place, st.home) {
-                (Place::Floor { .. }, Some(rig)) => Some((
-                    crate::access::Session::Rig {
-                        building: rig.home.building,
-                    },
-                    rig.home.rig,
-                    "access rig",
-                )),
-                (Place::Stratum(k), _) => {
-                    crate::access::district_of_terminal(city, k, port).map(|district| {
-                        (
-                            crate::access::Session::District {
-                                district,
-                                connected: None,
-                            },
-                            port,
-                            "access terminal",
-                        )
-                    })
-                }
+            use crate::helix::shell::HostId;
+            let origin = match (place, st.home) {
+                (Place::Floor { .. }, Some(rig)) => Some((HostId::Rig, rig.home.rig, "access rig")),
+                (Place::Stratum(k), _) => crate::access::district_of_terminal(city, k, port)
+                    .map(|d| (HostId::District(d), port, "access terminal")),
                 _ => None,
             };
-            if let Some((session, tile, label)) = session
+            if let Some((origin, tile, label)) = origin
                 && let Some(key) = letters.next()
             {
                 choices.push(Choice::new(
                     key,
                     label,
                     Pick::Terminal {
-                        session,
+                        origin,
                         key: (place, tile),
                     },
                 ));
@@ -3932,7 +3917,10 @@ mod tests {
         };
         st.tick += 10_000;
         let drawn = draw_screen(&*term, &st, 120, 40);
-        assert!(drawn.contains(" NET > "), "{drawn}");
+        assert!(
+            drawn.contains("guest@") && drawn.contains(":/$ "),
+            "{drawn}"
+        );
         let _ = jack;
     }
 
@@ -3962,7 +3950,7 @@ mod tests {
             panic!("the row replaces the popup with the terminal")
         };
         st.tick += 10_000;
-        let keys: Vec<_> = "mail"
+        let keys: Vec<_> = "cat ~/mail/001-a-favour.txt"
             .chars()
             .map(|c| key(KeyCode::Char(c)))
             .chain(std::iter::once(key(KeyCode::Enter)))
@@ -3973,10 +3961,10 @@ mod tests {
         assert!(
             drawn.contains("ZENBO 64")
                 && !drawn.contains("HOME RIG")
-                && drawn.contains("RIG [HOME] > "),
+                && drawn.contains("@zenbo:~$ "),
             "{drawn}"
         );
-        assert!(drawn.contains("A FAVOUR"), "{drawn}");
+        assert!(drawn.contains("Subject: a favour"), "{drawn}");
     }
 
     #[test]

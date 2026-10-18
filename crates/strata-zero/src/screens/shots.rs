@@ -2,8 +2,8 @@
 //! washed map and write it as an SVG. Run with `SHOT_DIR=... cargo test -p strata-zero
 //! shots:: -- --ignored`.
 
-use crate::access::Session;
 use crate::app::{AppState, Screen};
+use crate::helix::shell::HostId;
 use crate::screens::explore::MapScreen;
 use crate::screens::keypad::Keypad;
 use crate::screens::terminal::Terminal;
@@ -126,28 +126,30 @@ fn keypad_over_the_home_floor() {
     shot("keypad", &st, &map, &pad);
 }
 
-/// A terminal session in a district, after SCAN, CONNECT 1 and a denied DOOR UNLOCK.
-fn terminal_shot(name: &str, d: citygen::DistrictId) {
-    let mut st = state_home();
-    let map = MapScreen::walking(&mut st);
-    let mut term = Terminal::open(
-        &mut st,
-        Session::District {
-            district: d,
-            connected: None,
-        },
-        (Place::Stratum(StratumKind::Street), Pos::new(1, 1)),
-    );
-    for line in ["scan", "connect 1", "door unlock"] {
+/// Types each line into the terminal, letting the one before settle first.
+fn type_lines(st: &mut AppState, term: &mut Terminal, lines: &[&str]) {
+    for line in lines {
         st.tick += 10_000;
-        term.update(&mut st, &[]);
+        term.update(st, &[]);
         let keys: Vec<_> = line
             .chars()
             .map(|c| key(KeyCode::Char(c)))
             .chain(std::iter::once(key(KeyCode::Enter)))
             .collect();
-        term.update(&mut st, &keys);
+        term.update(st, &keys);
     }
+}
+
+/// A shell on a district terminal, after `ls /net`, `ssh 1` and a denied `door release`.
+fn terminal_shot(name: &str, d: citygen::DistrictId) {
+    let mut st = state_home();
+    let map = MapScreen::walking(&mut st);
+    let mut term = Terminal::open(
+        &mut st,
+        HostId::District(d),
+        (Place::Stratum(StratumKind::Street), Pos::new(1, 1)),
+    );
+    type_lines(&mut st, &mut term, &["ls /net", "ssh 1", "door release"]);
     st.tick += 400;
     term.update(&mut st, &[]);
     shot(name, &st, &map, &term);
@@ -175,21 +177,8 @@ fn the_rig_at_home() {
     let mut st = state_home();
     let map = MapScreen::walking(&mut st);
     let home = st.home.unwrap().home;
-    let mut term = Terminal::open(
-        &mut st,
-        Session::Rig {
-            building: home.building,
-        },
-        (map.place, home.rig),
-    );
-    st.tick += 10_000;
-    term.update(&mut st, &[]);
-    let keys: Vec<_> = "mail 1"
-        .chars()
-        .map(|c| key(KeyCode::Char(c)))
-        .chain(std::iter::once(key(KeyCode::Enter)))
-        .collect();
-    term.update(&mut st, &keys);
+    let mut term = Terminal::open(&mut st, HostId::Rig, (map.place, home.rig));
+    type_lines(&mut st, &mut term, &["cat ~/mail/001-a-favour.txt"]);
     st.tick += 10_000;
     term.update(&mut st, &[]);
     shot("rig", &st, &map, &term);
@@ -206,35 +195,14 @@ fn terminal_on_the_street() {
     };
     let mut term = Terminal::open(
         &mut st,
-        Session::District {
-            district: d,
-            connected: None,
-        },
+        HostId::District(d),
         (Place::Stratum(StratumKind::Street), Pos::new(1, 1)),
     );
-    st.tick += 10_000;
-    let keys: Vec<_> = "scan"
-        .chars()
-        .map(|c| key(KeyCode::Char(c)))
-        .chain(std::iter::once(key(KeyCode::Enter)))
-        .collect();
-    term.update(&mut st, &keys);
-    st.tick += 10_000;
-    term.update(&mut st, &[]);
-    let keys: Vec<_> = "connect 1"
-        .chars()
-        .map(|c| key(KeyCode::Char(c)))
-        .chain(std::iter::once(key(KeyCode::Enter)))
-        .collect();
-    term.update(&mut st, &keys);
-    st.tick += 10_000;
-    term.update(&mut st, &[]);
-    let keys: Vec<_> = "door unlock"
-        .chars()
-        .map(|c| key(KeyCode::Char(c)))
-        .chain(std::iter::once(key(KeyCode::Enter)))
-        .collect();
-    term.update(&mut st, &keys);
+    type_lines(
+        &mut st,
+        &mut term,
+        &["ls /net", "ssh 1", "echo release > /dev/door"],
+    );
     st.tick += 200;
     term.update(&mut st, &[]);
     shot("terminal", &st, &map, &term);

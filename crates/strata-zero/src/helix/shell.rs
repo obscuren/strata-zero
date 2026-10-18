@@ -1,10 +1,9 @@
 //! The HELIX/OS shell: a tokenizer, a pipeline runner and the builtins. Everything it
 //! knows of the world comes through the `Io` trait.
-// consumed by the terminal screen and the world in later tasks
-#![allow(dead_code)]
 
 use super::vfs::{Dev, Kind, ROOT, Vfs, VfsError};
 use citygen::{BuildingId, DistrictId};
+#[cfg(test)]
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -90,10 +89,12 @@ pub const BUILTINS: &[&str] = &[
 ];
 
 /// The test double: one vfs per host, devices read `dev:<name>`, writes echo back.
+#[cfg(test)]
 pub struct MemIo {
     pub fs: HashMap<HostId, Vfs>,
 }
 
+#[cfg(test)]
 impl Io for MemIo {
     fn fs(&mut self, host: HostId) -> &mut Vfs {
         self.fs.entry(host).or_default()

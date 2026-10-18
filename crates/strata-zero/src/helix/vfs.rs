@@ -1,7 +1,5 @@
 //! The virtual filesystem: a tree of directories, files and device nodes with owners and
 //! modes. Pure: no app state. Device nodes are only stored here; the shell renders them.
-// used by the shell, the generator and nano in later tasks
-#![allow(dead_code)]
 
 use citygen::BuildingId;
 use std::collections::BTreeMap;

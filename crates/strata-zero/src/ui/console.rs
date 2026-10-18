@@ -81,7 +81,9 @@ impl Console {
                 match candidates.as_slice() {
                     [] => {}
                     [one] => {
-                        self.input = format!("{head}{one} ");
+                        // a directory stays open for the next part of the path
+                        let gap = if one.ends_with('/') { "" } else { " " };
+                        self.input = format!("{head}{one}{gap}");
                         self.hint = None;
                     }
                     many => {
