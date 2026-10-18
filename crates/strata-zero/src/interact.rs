@@ -133,13 +133,20 @@ pub fn gather(
         let card = world.card(id, city);
         let said = format!("{}: \u{201c}{}\u{201d}", card.name, card.line);
         let lines = card_lines(&card).into_iter().skip(1).collect();
+        // A fixer talks work; anyone may be the hands a package is bound for.
+        let mut rows = if world.people()[id.0 as usize].profession == "fixer" {
+            crate::jobs::ui::rows(st, id)
+        } else {
+            vec![Choice::new('t', "Talk", Pick::Talk { lines, said })]
+        };
+        rows.extend(crate::jobs::ui::receiver_rows(st, id));
         add(
             &mut subs,
             &mut here,
             n,
             Some(header(card.name.clone(), Some(mark_person(st, id)))),
             Some(format!("{} · {}", card.profession, card.doing)),
-            vec![Choice::new('t', "Talk", Pick::Talk { lines, said })],
+            rows,
         );
     }
 
@@ -502,4 +509,55 @@ fn hop_rows(
         rows.push(row);
     }
     rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::Screen;
+    use crate::jobs::testutil::{a_fixer, state_home};
+    use crate::screens::testutil::buffer_text;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    /// The window of the one subject beside the player, as drawn.
+    fn window_text(st: &AppState, subjects: &[Subject]) -> String {
+        // Opened a while ago, so the rows' typewriter has finished.
+        let popup = subjects[0].window(st.tick.saturating_sub(200));
+        let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        t.draw(|f| popup.draw(st, f)).unwrap();
+        buffer_text(t.backend().buffer())
+    }
+
+    #[test]
+    fn a_fixer_beside_you_has_work_rows() {
+        let mut st = state_home();
+        let fx = a_fixer(&st);
+        // The welcome may be theirs; clear it so the window shows an offer.
+        let welcome = st.jobs.active().unwrap().id;
+        st.jobs.drop_job(welcome);
+        st.jobs.fixer_mut(fx).standing = 0;
+        let spot = st.world.as_ref().unwrap().spot_of(fx).unwrap();
+        let city = st.city.clone().unwrap();
+        let beside = spot
+            .neighbors4()
+            .find(|p| city.walkable(citygen::StratumKind::Street, *p))
+            .unwrap();
+        let mut p = crate::walker::Player::spawn(&city, 1);
+        p.place = Place::Stratum(citygen::StratumKind::Street);
+        p.pos = beside;
+        st.player = Some(p);
+        st.world.as_mut().unwrap().park(fx, spot);
+        st.tick += 200;
+        crate::jobs::ui::prepare_offers(&mut st);
+        let subjects = gather(&st, &|_, _| None);
+        let beside_fixer: Vec<&Subject> = subjects.iter().filter(|s| s.pos == spot).collect();
+        assert_eq!(beside_fixer.len(), 1, "{subjects:?}");
+        let text = window_text(&st, &[beside_fixer[0].clone()]);
+        assert!(
+            text.contains("t  Talk") && text.contains("w  Work: "),
+            "{text}"
+        );
+        assert!(text.contains("¤"), "{text}");
+    }
 }

@@ -209,6 +209,17 @@ impl World {
         self.open.contains(&building)
     }
 
+    /// Stands a person on a tile, working, with no trip in flight: a test aid for
+    /// putting someone beside the player (another crate's tests cannot see a `cfg(test)` item).
+    pub fn park(&mut self, id: PersonId, pos: Pos) {
+        self.displaced.remove(&id);
+        let p = &mut self.people[id.0 as usize];
+        p.whereabouts = Whereabouts::At {
+            pos,
+            activity: Activity::Working,
+        };
+    }
+
     /// The span this person works, from their own shift; none for a roamer.
     pub fn work_hours(&self, id: PersonId) -> Option<(u16, u16)> {
         let p = self.people.get(id.0 as usize)?;

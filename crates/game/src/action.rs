@@ -69,7 +69,7 @@ fn name(c: &Content, id: &ItemId) -> String {
 }
 
 /// Removes up to `qty` of an item from the pack; returns how many came out.
-fn remove_from_pack(ch: &mut Character, item: &ItemId, qty: u32) -> u32 {
+pub fn remove_from_pack(ch: &mut Character, item: &ItemId, qty: u32) -> u32 {
     // A program that leaves the pack leaves the deck.
     if ch.count(item) <= qty {
         ch.loaded.retain(|l| l != item);

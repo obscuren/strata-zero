@@ -1920,6 +1920,10 @@ impl Screen for MapScreen {
         st.net.minute(now, inside, &mut st.constructs, &roots);
         crate::net::tick_backdoors(st);
         crate::jobs::tick(st);
+        // A fixer beside you has their offer ready before you talk.
+        if self.mode == Mode::Walk {
+            crate::jobs::ui::prepare_offers(st);
+        }
         // The beat of a calm construct: one per frame at most, so a long menu is
         // never a burst of rolls.
         let was_engaged = st.net.engaged.is_some();
