@@ -209,6 +209,20 @@ impl World {
         self.open.contains(&building)
     }
 
+    /// The span this person works, from their own shift; none for a roamer.
+    pub fn work_hours(&self, id: PersonId) -> Option<(u16, u16)> {
+        let p = self.people.get(id.0 as usize)?;
+        (p.work != Work::Roaming).then_some(p.shift)
+    }
+
+    /// Where a spot worker stands.
+    pub fn spot_of(&self, id: PersonId) -> Option<Pos> {
+        match self.people.get(id.0 as usize)?.work {
+            Work::Spot(p) => Some(p),
+            _ => None,
+        }
+    }
+
     /// Everyone inside a building now and what they are there for, by id.
     pub fn inside(&self, b: BuildingId) -> Vec<Occupant> {
         self.people
@@ -1881,5 +1895,28 @@ mod tests {
         run_to(&mut b, &c, tick_at(12 * 60, 1));
         assert_eq!(a.people(), b.people());
         assert_eq!(a.cars(), b.cars());
+    }
+
+    #[test]
+    fn work_hours_and_spot_read_the_person() {
+        let c = city();
+        let w = world(&c);
+        let fx = w.people().iter().find(|p| p.profession == "fixer").unwrap();
+        assert_eq!(w.work_hours(fx.id), Some((1080, 240)));
+        assert!(matches!(fx.work, Work::Spot(_)));
+        assert_eq!(
+            w.spot_of(fx.id),
+            match fx.work {
+                Work::Spot(p) => Some(p),
+                _ => None,
+            }
+        );
+        let drone = w
+            .people()
+            .iter()
+            .find(|p| p.profession == "corp_drone")
+            .unwrap();
+        assert_eq!(w.spot_of(drone.id), None);
+        assert_eq!(w.work_hours(drone.id), Some(drone.shift));
     }
 }

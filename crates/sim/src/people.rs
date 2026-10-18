@@ -121,6 +121,8 @@ pub struct Person {
     pub client: bool,
     /// Start minute of the shift or day this person keeps; colleagues share it.
     pub shift_start: u16,
+    /// The span they work, as the profession's hours give it.
+    pub shift: (u16, u16),
     pub schedule: Vec<Segment>,
     pub goal: Goal,
     pub whereabouts: Whereabouts,
@@ -293,6 +295,28 @@ pub fn seed_population(
             }
         }
     }
+    // A city without a Strip or a Market still has one fixer, on the busiest corners.
+    if let Some(fx) = people.profession("fixer")
+        && !openings.iter().any(|o| o.profession.id == "fixer")
+    {
+        let best = city
+            .districts
+            .iter()
+            .map(|d| (d.id, places.corners.get(&d.id).map_or(0, Vec::len)))
+            .max_by_key(|(id, n)| (*n, std::cmp::Reverse(id.index())))
+            .filter(|(_, n)| *n > 0)
+            .map(|(id, _)| places.corners[&id].clone())
+            .or_else(|| places.beats.values().find(|v| !v.is_empty()).cloned());
+        if let Some(tiles) = best {
+            let spot = tiles[rng.random_range(0..tiles.len())];
+            openings.push(Opening {
+                profession: fx,
+                work: Work::Spot(spot),
+                shift: fx.hours.spans()[0],
+                at: spot,
+            });
+        }
+    }
     if let Some(g) = people.profession("ganger") {
         let mut blocks: Vec<_> = places.turf.keys().copied().collect();
         blocks.sort_by_key(|b| b.index());
@@ -386,6 +410,7 @@ pub fn seed_population(
             regular: None,
             client,
             shift_start: o.shift.0,
+            shift: o.shift,
             schedule,
             goal: Goal::Home,
             whereabouts,
@@ -785,5 +810,46 @@ mod tests {
         };
         assert_eq!(housing_capacity(&mega(20, 18)), 60);
         assert_eq!(housing_capacity(&mega(6, 5)), 30);
+    }
+
+    #[test]
+    fn every_city_has_a_fixer() {
+        // Cities whose districts hold no Neon Strip or Night Market used to have none;
+        // sweep a handful at four districts and demand a fixer in each.
+        let mut without = 0;
+        for s in [1u64, 2, 3, 4, 5, 6, 7, 11, 13, 17] {
+            let c = Generator::run(GenParams {
+                seed: s,
+                size: SizePreset::Custom { w: 120, h: 60 },
+                districts: 4,
+                ..Default::default()
+            })
+            .unwrap();
+            if !c
+                .districts
+                .iter()
+                .any(|d| matches!(d.theme, Theme::NeonStrip | Theme::NightMarket))
+            {
+                without += 1;
+            }
+            let p = seed(&c, 1.0);
+            assert!(
+                p.people.iter().any(|x| x.profession == "fixer"),
+                "seed {s} has no fixer"
+            );
+        }
+        assert!(
+            without > 0,
+            "no seed in the sweep lacks a Strip and a Market"
+        );
+    }
+
+    #[test]
+    fn a_person_keeps_their_shift() {
+        let c = city();
+        let p = seed(&c, 1.0);
+        let fx = p.people.iter().find(|x| x.profession == "fixer").unwrap();
+        assert_eq!(fx.shift, (1080, 240));
+        assert_eq!(fx.shift_start, 1080);
     }
 }

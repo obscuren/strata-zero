@@ -29,12 +29,7 @@ pub fn district_of_fixer(st: &AppState, id: PersonId) -> String {
         return "the street".to_string();
     };
     world
-        .people()
-        .get(id.0 as usize)
-        .and_then(|p| match p.work {
-            sim::Work::Spot(pos) => Some(pos),
-            _ => None,
-        })
+        .spot_of(id)
         .and_then(|pos| city.districts.iter().find(|d| d.bounds.contains(pos)))
         .map(|d| d.name.clone())
         .unwrap_or_else(|| "the street".to_string())
