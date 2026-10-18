@@ -9,6 +9,7 @@ use crate::messages::Kind;
 use crate::render::glyphs::kind_icon;
 use crate::render::map::MapRef;
 use crate::render::memmap::MemoryMap;
+use crate::screens::cyberdeck::DeckTab;
 use crate::screens::popup::{Choice, Pick, Popup};
 use crate::ui::board::{BoardState, RowKind, board_rows};
 use crate::ui::chrome::{
@@ -36,7 +37,7 @@ use std::collections::BTreeSet;
 
 /// Ticks the detail pane, and the deck's glass, take to type a whole readout.
 pub(crate) const REVEAL_TICKS: u64 = 20;
-/// What the failsafe does, on its card and on the deck's glass.
+/// What the failsafe does, on the deck's glass.
 pub(crate) const FAILSAFE_TEXT: &str = "The deck pulls you out at a quarter of your hp when black ICE is on you: focus gone, thirty minutes of cooling, the hp stays lost.";
 /// What turning it off costs.
 pub(crate) const FAILSAFE_WARN: &str =
@@ -118,12 +119,6 @@ pub(crate) enum Detail {
     Stat(Stat),
     Category(CategoryId),
     Skill(SkillId),
-    /// Index into `Character::abilities`.
-    Ability(usize),
-    /// A program on the cyberdeck tab, loaded or in the pack.
-    Program(ItemId),
-    /// The deck's failsafe toggle.
-    Failsafe,
     /// Index into the journal's flat list of entries.
     Journal(usize),
 }
@@ -157,6 +152,8 @@ pub struct Deck {
     pub(crate) cursor: TreeCursor,
     /// The talent box lit until its tick: the rank just learned.
     flash: Option<(game::TalentId, u64)>,
+    /// The CYBERDECK tab: the part pointed at, a cart carried, the failsafe's cover.
+    pub(crate) cyber: DeckTab,
 }
 
 fn tone_style(tone: Tone) -> Style {
@@ -182,6 +179,7 @@ impl Deck {
             owned_seen: None,
             cursor: TreeCursor::default(),
             flash: None,
+            cyber: DeckTab::new(tick),
         }
     }
 
@@ -414,114 +412,8 @@ impl Deck {
             0,
             0,
         );
+        self.cyber = DeckTab::restore(st.deck_rows[Tab::Cyberdeck.index()], st);
         self
-    }
-
-    /// The jacked deck, then the programs it grants. A deck the content does not know
-    /// reads as no deck at all.
-    fn cyberdeck_rows(st: &AppState) -> Vec<Row> {
-        let dim = |text: &str| Row {
-            text: text.into(),
-            tone: Tone::Dim,
-            detail: None,
-            spans: None,
-        };
-        let Some((id, item)) = st
-            .character
-            .equipped(Slot::Deck)
-            .and_then(|id| st.content.item(id).map(|item| (id, item)))
-        else {
-            return vec![dim("no deck jacked")];
-        };
-        let slots = item
-            .deck
-            .map(|d| {
-                format!(
-                    " · {}/{} slots · rating {}",
-                    st.character.loaded_size(&st.content),
-                    d.slots,
-                    d.rating
-                )
-            })
-            .unwrap_or_default();
-        let mut rows = vec![Row {
-            text: format!("▣ {}{slots}", item.name),
-            tone: Tone::Normal,
-            detail: Some(Detail::Item(id.clone())),
-            spans: None,
-        }];
-        rows.push(Row {
-            text: if st.net.failsafe {
-                "◉ failsafe · on".into()
-            } else {
-                "◌ failsafe · off (black ICE can kill you)".into()
-            },
-            tone: if st.net.failsafe {
-                Tone::Normal
-            } else {
-                Tone::Warn
-            },
-            detail: Some(Detail::Failsafe),
-            spans: None,
-        });
-        // The programs loaded, then those in the pack waiting for a slot.
-        let loaded: Vec<&game::Item> = st.character.loaded_programs(&st.content).collect();
-        if !loaded.is_empty() {
-            rows.push(dim("── loaded ──"));
-            for p in &loaded {
-                rows.push(Row {
-                    text: format!("◆ {} · size {}", p.name, p.program.map_or(0, |s| s.size)),
-                    tone: Tone::Normal,
-                    detail: Some(Detail::Program(p.id.clone())),
-                    spans: None,
-                });
-            }
-        }
-        let packed: Vec<&game::Item> = st
-            .character
-            .inventory
-            .iter()
-            .filter_map(|s| st.content.item(&s.item))
-            .filter(|i| i.kind == ItemKind::Program && !st.character.loaded.contains(&i.id))
-            .collect();
-        if !packed.is_empty() {
-            rows.push(dim("── in the pack ──"));
-            for p in packed {
-                rows.push(Row {
-                    text: format!("◇ {} · size {}", p.name, p.program.map_or(0, |s| s.size)),
-                    tone: Tone::Dim,
-                    detail: Some(Detail::Program(p.id.clone())),
-                    spans: None,
-                });
-            }
-        }
-        let all = st.character.abilities(&st.content);
-        let programs: Vec<(usize, &game::Ability)> = item
-            .grants
-            .iter()
-            .filter_map(|gid| {
-                let i = all.iter().position(|(a, _)| a == gid)?;
-                Some((i, st.content.ability(gid)?))
-            })
-            .collect();
-        if programs.is_empty() {
-            rows.push(dim("no programs loaded"));
-            return rows;
-        }
-        rows.push(dim("── programs ──"));
-        for (i, a) in programs {
-            let icon = match a.kind {
-                AbilityKind::Passive => '·',
-                AbilityKind::Active(_) => '◈',
-            };
-            rows.push(Row {
-                text: format!("{icon} {}", a.name),
-                tone: Tone::Normal,
-                detail: Some(Detail::Ability(i)),
-                spans: None,
-            });
-        }
-        rows
     }
 
     /// What you know and hold, by building: a dim header, then one lit line per entry.
@@ -648,10 +540,14 @@ impl Deck {
         if tab == self.tab {
             return;
         }
+        // A cart carried off the CYBERDECK tab goes back where it lay.
+        self.cyber.held = None;
         self.tab_from = self.tab.index();
         self.tab = tab;
         self.row = Self::first_selectable(&self.rows(st));
+        // The detail pane and the deck's glass type on again.
         self.changed = st.tick;
+        self.cyber.changed = st.tick;
         self.tab_tween = Tween::new(st.tick, 6, Easing::OutCubic);
     }
 
@@ -703,10 +599,9 @@ impl Deck {
             Tab::Gear => Self::gear_rows(st),
             Tab::Inventory => Self::inventory_rows(st),
             Tab::Workbench => Self::workbench_rows(st),
-            Tab::Cyberdeck => Self::cyberdeck_rows(st),
             Tab::Jobs => crate::jobs::ui::deck_rows(st),
             Tab::Journal => Self::journal_rows(st),
-            Tab::Map | Tab::Talents => Vec::new(),
+            Tab::Cyberdeck | Tab::Map | Tab::Talents => Vec::new(),
         }
     }
 
@@ -1005,16 +900,7 @@ impl Deck {
                 ],
             },
             Some(Detail::Item(id)) => Self::item_card(st, id),
-            Some(Detail::Program(id)) => Self::program_card(st, id),
             Some(Detail::Journal(i)) => Self::journal_card(st, *i),
-            Some(Detail::Failsafe) => vec![
-                head("FAILSAFE"),
-                dim(if st.net.failsafe { "on" } else { "off" }),
-                plain(""),
-                plain(FAILSAFE_TEXT),
-                plain(""),
-                warn(FAILSAFE_WARN),
-            ],
             Some(Detail::Recipe(i)) => {
                 let r = &st.content.recipes[*i];
                 let skill = st
@@ -1079,7 +965,6 @@ impl Deck {
                 }
                 out
             }
-            Some(Detail::Ability(i)) => Self::ability_card(st, *i),
         }
     }
 
@@ -1232,6 +1117,15 @@ impl Deck {
             self.row = Self::first_selectable(&rows);
         }
         for k in keys {
+            // The CYBERDECK tab takes its keys first and hands back the ones it leaves.
+            if self.tab == Tab::Cyberdeck
+                && let Some(cmd) = self.cyber.key(st, k.code)
+            {
+                match cmd {
+                    ScreenCmd::Stay => continue,
+                    other => return other,
+                }
+            }
             let rows = self.rows(st);
             if self.row >= rows.len() || rows.get(self.row).is_some_and(|r| r.detail.is_none()) {
                 self.row = Self::first_selectable(&rows);
@@ -1292,37 +1186,6 @@ impl Deck {
                         report(st, result);
                     }
                 }
-                KeyCode::Char(' ') | KeyCode::Enter
-                    if matches!(
-                        rows.get(self.row).and_then(|r| r.detail.as_ref()),
-                        Some(Detail::Failsafe)
-                    ) =>
-                {
-                    st.net.failsafe = !st.net.failsafe;
-                    if st.net.failsafe {
-                        st.say("failsafe on");
-                    } else {
-                        st.warn("failsafe off · black ICE can kill you");
-                    }
-                }
-                KeyCode::Char(' ') | KeyCode::Enter
-                    if matches!(
-                        rows.get(self.row).and_then(|r| r.detail.as_ref()),
-                        Some(Detail::Program(_))
-                    ) =>
-                {
-                    if let Some(Detail::Program(id)) =
-                        rows.get(self.row).and_then(|r| r.detail.clone())
-                    {
-                        let action = if st.character.loaded.contains(&id) {
-                            Action::Unload(id)
-                        } else {
-                            Action::Load(id)
-                        };
-                        let result = perform(st, action);
-                        report(st, result);
-                    }
-                }
                 KeyCode::Char(' ') | KeyCode::Enter => {
                     if let Some(p) = self.interact(st) {
                         return ScreenCmd::Push {
@@ -1344,6 +1207,7 @@ impl Screen for Deck {
         let cmd = self.handle(st, keys);
         st.deck_tab = self.tab;
         st.deck_rows[self.tab.index()] = self.row;
+        st.deck_rows[Tab::Cyberdeck.index()] = self.cyber.pack();
         st.deck_rows[Tab::Talents.index()] = self.cursor.pack();
         cmd
     }
@@ -1487,6 +1351,8 @@ impl Screen for Deck {
                 flash: self.flash.clone(),
             }
             .draw(body, buf);
+        } else if self.tab == Tab::Cyberdeck {
+            crate::ui::cyberdeck::draw(&self.cyber.view(st), body, buf);
         } else {
             let list_w = (body.width * 2 / 5)
                 .max(28)
@@ -1615,6 +1481,7 @@ impl Screen for Deck {
                 Tab::Talents => {
                     "←→ along · ↑↓ tiers · tab tabs · 0-9 jump · space learn · esc close"
                 }
+                Tab::Cyberdeck => self.cyber.hint(),
                 _ => "←→ tabs · ↑↓ select · 0-9 jump · space act · esc close",
             },
             Style::default().fg(DIM),
@@ -1648,7 +1515,9 @@ mod tests {
     fn last_is_warning(st: &AppState) -> bool {
         st.log.latest().is_some_and(|e| e.kind == Kind::Warn)
     }
+    use crate::screens::cyberdeck;
     use crate::screens::testutil::{buffer_text, key};
+    use crate::ui::cyberdeck::Part;
     use citygen::{GenParams, Generator, SizePreset};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -2095,13 +1964,17 @@ mod tests {
             text.contains("◈ Street sense") && text.contains("◈ Signal ghost"),
             "category grants read as notes under their category: {text}"
         );
-        d.update(&mut st, &[key(KeyCode::Char('6'))]);
-        let rows = d.rows(&st);
-        d.row = rows
-            .iter()
-            .position(|r| r.text.contains("Netscan"))
-            .unwrap();
-        d.changed = 0;
+        // Down from slot A is the plate, then the first ROM strip.
+        d.update(
+            &mut st,
+            &[
+                key(KeyCode::Char('6')),
+                key(KeyCode::Down),
+                key(KeyCode::Down),
+            ],
+        );
+        assert_eq!(d.cyber.point, Part::Rom(0));
+        st.tick += 40;
         let text = draw(&d, &st, 120, 35);
         assert!(
             text.contains("from Pawnshop deck")
@@ -2373,18 +2246,15 @@ mod tests {
         assert!(text.contains("BODY"), "STATS lists the five stats: {text}");
         d.update(&mut st, &[key(KeyCode::Char('6'))]);
         assert_eq!(d.tab, Tab::Cyberdeck);
-        let rows: Vec<String> = d.rows(&st).iter().map(|r| r.text.clone()).collect();
-        assert!(rows[0].contains("Pawnshop deck"), "{rows:?}");
-        assert!(
-            rows.iter().any(|r| r.contains("Netscan"))
-                && rows.iter().any(|r| r.contains("Arc Trace")),
-            "{rows:?}"
-        );
         st.tick += 40;
         let text = draw(&d, &st, 120, 35);
         assert!(
-            text.contains("▌CYBERDECK▐") && text.contains("PAWNSHOP DECK"),
+            text.contains("▌CYBERDECK▐") && text.contains("K▒ROK▒WA KX-2"),
             "{text}"
+        );
+        assert!(
+            text.contains("NETSCAN") && text.contains("ARC TRACE"),
+            "the deck's ROM: {text}"
         );
         d.update(&mut st, &[key(KeyCode::Char('8'))]);
         assert_eq!(d.tab, Tab::Journal);
@@ -2397,8 +2267,9 @@ mod tests {
         ));
         st.character.equipment.remove(&Slot::Deck);
         d.update(&mut st, &[key(KeyCode::Char('6'))]);
-        let rows = d.rows(&st);
-        assert!(rows[0].text.contains("no deck jacked") && rows.len() == 1);
+        st.tick += 40;
+        let text = draw(&d, &st, 120, 35);
+        assert!(text.contains("no deck jacked"), "{text}");
     }
 
     #[test]
@@ -2425,12 +2296,6 @@ mod tests {
         assert!(clamped.row < rows.len() && rows[clamped.row].detail.is_some());
     }
 
-    fn cyberdeck_texts(st: &AppState) -> Vec<String> {
-        let mut d = Deck::new(0);
-        d.tab = Tab::Cyberdeck;
-        d.rows(st).iter().map(|r| r.text.clone()).collect()
-    }
-
     #[test]
     fn cyberdeck_tab_handles_odd_decks() {
         let mut st = state();
@@ -2438,13 +2303,12 @@ mod tests {
             .equipment
             .insert(Slot::Deck, ItemId::new("ghost_deck"));
         let mut d = Deck::new(0);
-        d.tab = Tab::Cyberdeck;
-        let rows = d.rows(&st);
-        assert_eq!(rows.len(), 1, "{:?}", cyberdeck_texts(&st));
+        d.update(&mut st, &[key(KeyCode::Char('6'))]);
+        st.tick = 40;
+        let text = draw(&d, &st, 120, 35);
         assert!(
-            rows[0].text.contains("no deck jacked") && rows[0].detail.is_none(),
-            "a deck the content does not know reads as none: {}",
-            rows[0].text
+            text.contains("no deck jacked") && !text.contains("K▒ROK▒WA"),
+            "a deck the content does not know reads as none: {text}"
         );
 
         let mut bare = st
@@ -2459,16 +2323,18 @@ mod tests {
         st.character
             .equipment
             .insert(Slot::Deck, ItemId::new("bare_deck"));
-        let texts = cyberdeck_texts(&st);
-        assert!(texts[0].contains("Bare deck"), "{texts:?}");
+        st.tick += 40;
+        let text = draw(&d, &st, 120, 35);
         assert!(
-            !texts.iter().any(|t| t.contains("── programs ──")),
-            "no header over nothing: {texts:?}"
+            text.contains("ROM▸") && !text.contains("NETSCAN"),
+            "no strips without grants: {text}"
         );
-        assert!(
-            texts.iter().any(|t| t.contains("no programs loaded")),
-            "{texts:?}"
-        );
+        // The plate reads the deck's own name.
+        d.update(&mut st, &[key(KeyCode::Down)]);
+        assert_eq!(d.cyber.point, Part::Plate);
+        st.tick += 40;
+        let text = draw(&d, &st, 120, 35);
+        assert!(text.contains("BARE DECK"), "{text}");
 
         let passive = game::AbilityId::new("street_sense");
         assert!(matches!(
@@ -2486,14 +2352,13 @@ mod tests {
         st.character
             .equipment
             .insert(Slot::Deck, ItemId::new("quiet_deck"));
-        let texts = cyberdeck_texts(&st);
-        let row = texts
-            .iter()
-            .find(|t| t.contains("Street sense"))
-            .unwrap_or_else(|| panic!("{texts:?}"));
+        d.update(&mut st, &[key(KeyCode::Down)]);
+        assert_eq!(d.cyber.point, Part::Rom(0));
+        st.tick += 40;
+        let text = draw(&d, &st, 120, 35);
         assert!(
-            row.starts_with("· "),
-            "a passive wears the passive icon, as on SKILLS: {row}"
+            text.contains("ROM ▸ STREET SENSE") && text.contains("passive"),
+            "a passive reads as passive, as on SKILLS: {text}"
         );
     }
 
@@ -2736,12 +2601,15 @@ mod tests {
             .talents
             .insert(game::TalentId::new("ice_pick"), 2);
         let mut d = Deck::new(0);
-        d.update(&mut st, &[key(KeyCode::Char('6'))]);
-        let rows = d.rows(&st);
-        d.row = rows
-            .iter()
-            .position(|r| r.text.contains("Netscan"))
-            .unwrap();
+        d.update(
+            &mut st,
+            &[
+                key(KeyCode::Char('6')),
+                key(KeyCode::Down),
+                key(KeyCode::Down),
+            ],
+        );
+        assert_eq!(d.cyber.point, Part::Rom(0));
         st.tick = 60;
         let text = draw(&d, &st, 120, 35);
         assert!(text.contains("cooldown 8s"), "{text}");
@@ -2753,56 +2621,57 @@ mod tests {
         let mut st = state();
         let mut d = Deck::new(0);
         d.update(&mut st, &[key(KeyCode::Char('6'))]);
-        let texts = cyberdeck_texts(&st);
-        assert_eq!(texts[0], "▣ Pawnshop deck · 2/2 slots · rating 1");
-        assert_eq!(texts[1], "◉ failsafe · on");
-        assert_eq!(texts[2], "── loaded ──");
-        assert_eq!(texts[3], "◆ Crack · size 1");
-        assert_eq!(texts[4], "◆ Copy · size 1");
-        assert!(texts.iter().any(|t| t == "── programs ──"), "{texts:?}");
-        // The kit's attack waits in the pack: the deck is full.
-        let pack = texts.iter().position(|t| t == "── in the pack ──").unwrap();
-        assert_eq!(texts[pack + 1], "◇ Attack · size 1");
-        // The detail of a program reads its numbers and the odds.
-        let rows = d.rows(&st);
-        d.row = rows.iter().position(|r| r.text.contains("Crack")).unwrap();
         st.tick = 60;
         let text = draw(&d, &st, 120, 35);
-        assert!(text.contains("crack · any node or ICE"), "{text}");
+        // Crack and Copy in the bay; the kit's attack waits in the pack: the deck is full.
+        for want in ["2 SLOT · R1", "CRACK", "COPY", "INVENTORY", "ATTACK"] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+        // The glass reads the pointed program's numbers.
         assert!(
             text.contains("rating 1 · size 1 · noise 4 · work 3"),
             "{text}"
         );
-        assert!(text.contains("your power 19 vs 13 mid-city"), "{text}");
-        // Space unloads Copy; it moves to the pack rows; space loads it again.
-        d.row = rows.iter().position(|r| r.text.contains("Copy")).unwrap();
+        // Space on slot B ejects Copy to the inventory.
+        d.update(&mut st, &[key(KeyCode::Right)]);
+        assert_eq!(d.cyber.point, Part::Slot(1));
         assert!(matches!(
             d.update(&mut st, &[key(KeyCode::Char(' '))]),
             ScreenCmd::Stay
         ));
         assert_eq!(last(&st), Some("Copy unloaded"));
-        let texts = cyberdeck_texts(&st);
-        let pack = texts.iter().position(|t| t == "── in the pack ──").unwrap();
-        assert!(
-            texts[pack + 1..].contains(&"◇ Copy · size 1".to_string()),
-            "{texts:?}"
+        assert_eq!(st.character.loaded, vec![ItemId::new("crack")]);
+        // Picked up, it lands on the empty stop.
+        let inv = |st: &AppState, id: &str| {
+            let at = cyberdeck::inventory(st).iter().position(|i| i.0 == id);
+            Part::Inv(at.unwrap())
+        };
+        d.cyber.point = inv(&st, "copy");
+        d.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(d.cyber.held, Some(ItemId::new("copy")));
+        assert_eq!(
+            d.cyber.point,
+            Part::Slot(1),
+            "the brackets go to the empty slot"
         );
-        assert_eq!(texts[0], "▣ Pawnshop deck · 1/2 slots · rating 1");
-        let rows = d.rows(&st);
-        d.row = rows.iter().position(|r| r.text.contains("◇ Copy")).unwrap();
         d.update(&mut st, &[key(KeyCode::Char(' '))]);
         assert_eq!(last(&st), Some("Copy loaded · 2/2 slots"));
-        // A spoof in the pack with the deck full refuses.
+        // A spoof dropped on slot A takes Crack's place and sends it back.
         st.character.give(ItemId::new("spoof"), 1);
-        let rows = d.rows(&st);
-        d.row = rows
-            .iter()
-            .position(|r| r.text.contains("◇ Spoof"))
-            .unwrap();
+        d.cyber.point = inv(&st, "spoof");
         d.update(&mut st, &[key(KeyCode::Char(' '))]);
-        assert_eq!(last(&st), Some("no room: 2 of 2 slots"));
-        assert!(last_is_warning(&st));
-        // A loaded program dropped from the pack leaves the deck's rows.
+        assert_eq!(
+            d.cyber.point,
+            Part::Slot(0),
+            "the bay is full: the first cart"
+        );
+        d.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(last(&st), Some("Spoof slotted · Crack to inventory"));
+        assert_eq!(
+            st.character.loaded,
+            vec![ItemId::new("spoof"), ItemId::new("copy")]
+        );
+        // A program dropped from the pack leaves the deck.
         let (c, mut g, at) = (
             st.content.clone(),
             game::Ground::default(),
@@ -2823,8 +2692,9 @@ mod tests {
             },
         )
         .unwrap();
-        let texts = cyberdeck_texts(&st);
-        assert!(!texts.iter().any(|t| t.contains("Crack")), "{texts:?}");
+        st.tick += 40;
+        let text = draw(&d, &st, 120, 35);
+        assert!(!text.contains("CRACK"), "{text}");
         // The inventory groups programs and marks the loaded ones.
         d.update(&mut st, &[key(KeyCode::Char('4'))]);
         let rows = d.rows(&st);
@@ -2843,28 +2713,162 @@ mod tests {
     fn the_cyberdeck_tab_toggles_the_failsafe() {
         let mut st = state();
         let mut d = Deck::new(0);
-        d.update(&mut st, &[key(KeyCode::Char('6'))]);
-        let texts = cyberdeck_texts(&st);
-        assert_eq!(texts[1], "◉ failsafe · on", "{texts:?}");
-        let rows = d.rows(&st);
-        d.row = rows
-            .iter()
-            .position(|r| r.text.contains("failsafe"))
-            .unwrap();
+        // Right from slot A is slot B, then the failsafe.
+        d.update(
+            &mut st,
+            &[
+                key(KeyCode::Char('6')),
+                key(KeyCode::Right),
+                key(KeyCode::Right),
+            ],
+        );
+        assert_eq!(d.cyber.point, Part::Failsafe);
         st.tick = 60;
         let text = draw(&d, &st, 120, 35);
         assert!(
-            text.contains("pulls you out at a quarter of your hp"),
+            text.contains("FAILSAFE ▸ ON") && text.contains("pulls you out"),
             "{text}"
         );
+        // The first press only lifts the cover; the second throws it.
+        d.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert!(st.net.failsafe && d.cyber.cover_up);
         d.update(&mut st, &[key(KeyCode::Char(' '))]);
         assert!(!st.net.failsafe);
         assert_eq!(last(&st), Some("failsafe off · black ICE can kill you"));
-        let texts = cyberdeck_texts(&st);
-        assert_eq!(texts[1], "◌ failsafe · off (black ICE can kill you)");
+        assert!(last_is_warning(&st));
+        st.tick += 40;
+        let text = draw(&d, &st, 120, 35);
+        assert!(text.contains("FAILSAFE ▸ OFF"), "{text}");
         d.update(&mut st, &[key(KeyCode::Char(' '))]);
         assert!(st.net.failsafe);
         assert_eq!(last(&st), Some("failsafe on"));
+    }
+
+    #[test]
+    fn cyberdeck_tab_owns_the_arrows() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('6'))]);
+        st.tick = 40;
+        let text = draw(&d, &st, 120, 35);
+        assert!(
+            text.contains("↑↓←→ point · space act · tab tabs · esc close"),
+            "{text}"
+        );
+        // Nothing left of slot A: the arrow stays on the tab.
+        d.update(&mut st, &[key(KeyCode::Left)]);
+        assert_eq!((d.tab, d.cyber.point), (Tab::Cyberdeck, Part::Slot(0)));
+        d.update(&mut st, &[key(KeyCode::Right)]);
+        assert_eq!((d.tab, d.cyber.point), (Tab::Cyberdeck, Part::Slot(1)));
+        d.update(&mut st, &[key(KeyCode::Tab)]);
+        assert_eq!(d.tab, Tab::Jobs);
+        st.tick += 10;
+        d.update(&mut st, &[key(KeyCode::Char('6'))]);
+        assert_eq!((d.tab, d.cyber.point), (Tab::Cyberdeck, Part::Slot(1)));
+        assert_eq!(d.cyber.changed, st.tick, "the glass types on again");
+        d.update(&mut st, &[key(KeyCode::BackTab)]);
+        assert_eq!(d.tab, Tab::Workbench);
+        d.update(&mut st, &[key(KeyCode::Char('6'))]);
+
+        // Carrying, the hint says so; leaving the tab puts the cart back.
+        let loaded = st.character.loaded.clone();
+        d.cyber.point = Part::Inv(0);
+        d.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(d.cyber.held, Some(ItemId::new("attack")));
+        let text = draw(&d, &st, 120, 35);
+        assert!(
+            text.contains("↑↓←→ carry · space drop · esc put back"),
+            "{text}"
+        );
+        d.update(&mut st, &[key(KeyCode::Tab), key(KeyCode::Char('6'))]);
+        assert_eq!(d.tab, Tab::Cyberdeck);
+        assert_eq!(d.cyber.held, None);
+        assert_eq!(st.character.loaded, loaded);
+    }
+
+    #[test]
+    fn cyberdeck_fits_the_minimum_terminal() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('6'))]);
+        st.tick = 40;
+        let text = draw(&d, &st, 100, 30);
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, l) in lines.iter().enumerate().take(29).skip(1) {
+            assert!(l.starts_with('│') && l.ends_with('│'), "row {i}: {l:?}");
+        }
+        assert!(
+            text.contains("INVENTORY") && text.contains("FAILSAFE"),
+            "{text}"
+        );
+
+        // A big terminal: the drawing sits in the middle of the body, under the rule
+        // below the tabs and above the status strip.
+        let text = draw(&d, &st, 200, 60);
+        let lines: Vec<Vec<char>> = text.lines().map(|l| l.chars().collect()).collect();
+        let has = |y: usize, s: &str| lines[y].iter().collect::<String>().contains(s);
+        let tabs = (0..60).find(|y| has(*y, "▌CYBERDECK▐")).unwrap();
+        let (top, bottom) = (tabs + 2, 60 - 3);
+        let (ox, oy) = (1 + (198 - 84) / 2, top + (bottom - top - 22) / 2);
+        let plate = (0..60).find(|y| has(*y, "K▒ROK▒WA")).unwrap();
+        assert_eq!(plate, oy + 5);
+        // The slab's top edge, just above the plate, starts at the slab's x 1.
+        assert_eq!(
+            lines[plate - 1].iter().position(|c| *c == '╭'),
+            Some((198 - 84) / 2 + 1 + 1)
+        );
+        for (y, row) in lines.iter().enumerate().take(bottom).skip(top) {
+            for (x, c) in row.iter().enumerate().take(199).skip(1) {
+                let drawn = (ox..ox + 84).contains(&x) && (oy..oy + 22).contains(&y);
+                assert!(drawn || *c == ' ', "({x},{y}) {c:?}");
+            }
+        }
+        // Outside the body only the chrome: the screen with no deck to draw matches it.
+        st.content
+            .items
+            .iter_mut()
+            .find(|i| i.id == ItemId::new("pawnshop_deck"))
+            .unwrap()
+            .deck = None;
+        let bare = draw(&d, &st, 200, 60);
+        assert!(bare.contains("no deck jacked"), "{bare}");
+        for (y, (a, b)) in text.lines().zip(bare.lines()).enumerate() {
+            if !(top..bottom).contains(&y) {
+                assert_eq!(a, b, "row {y}");
+            }
+        }
+    }
+
+    #[test]
+    fn cyberdeck_remembers_its_part() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(
+            &mut st,
+            &[
+                key(KeyCode::Char('6')),
+                key(KeyCode::Right),
+                key(KeyCode::Right),
+            ],
+        );
+        assert_eq!(d.cyber.point, Part::Failsafe);
+        assert!(matches!(
+            d.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Pop { .. }
+        ));
+        let again = Deck::new(5).restore(&st);
+        assert_eq!(
+            (again.tab, again.cyber.point),
+            (Tab::Cyberdeck, Part::Failsafe)
+        );
+        // Closed from another tab, the deck still remembers the part.
+        let mut d = again;
+        d.update(&mut st, &[key(KeyCode::Tab), key(KeyCode::Esc)]);
+        let again = Deck::new(6).restore(&st);
+        assert_eq!(
+            (again.tab, again.cyber.point),
+            (Tab::Jobs, Part::Failsafe)
+        );
     }
 
     #[test]

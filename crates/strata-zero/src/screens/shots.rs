@@ -4,6 +4,7 @@
 
 use crate::app::{AppState, Screen};
 use crate::helix::shell::HostId;
+use crate::screens::deck::Deck;
 use crate::screens::explore::MapScreen;
 use crate::screens::keypad::Keypad;
 use crate::screens::terminal::Terminal;
@@ -99,10 +100,15 @@ fn state_home() -> AppState {
 }
 
 fn shot(name: &str, st: &AppState, map: &MapScreen, top: &dyn Screen) {
+    shot_at(name, st, map, top, (120, 40));
+}
+
+/// `shot` on a terminal of `w` by `h` cells.
+fn shot_at(name: &str, st: &AppState, map: &MapScreen, top: &dyn Screen, (w, h): (u16, u16)) {
     let Ok(dir) = std::env::var("SHOT_DIR") else {
         return;
     };
-    let mut t = Term::new(TestBackend::new(120, 40)).unwrap();
+    let mut t = Term::new(TestBackend::new(w, h)).unwrap();
     t.draw(|f| {
         map.draw(st, f);
         crate::ui::dim::wash(f.buffer_mut());
@@ -206,6 +212,23 @@ fn terminal_on_the_street() {
     st.tick += 200;
     term.update(&mut st, &[]);
     shot("terminal", &st, &map, &term);
+}
+
+#[test]
+#[ignore]
+fn the_cyberdeck_tab() {
+    let mut st = state_home();
+    let map = MapScreen::walking(&mut st);
+    let mut deck = Deck::new(st.tick);
+    deck.update(&mut st, &[key(KeyCode::Char('6'))]);
+    // The glass typed out, clear of the deck's signal jitter (three ticks in ninety).
+    st.tick += 200;
+    if st.tick % 90 < 3 {
+        st.tick += 3;
+    }
+    for (w, h) in [(100, 30), (120, 40)] {
+        shot_at(&format!("cyberdeck_{w}x{h}"), &st, &map, &deck, (w, h));
+    }
 }
 
 #[test]

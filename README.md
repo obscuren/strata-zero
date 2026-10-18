@@ -359,9 +359,11 @@ rain, fps) · quit to title · quit game
 `esc` close; it reopens where you left it. Tabs: skills (the category board:
 `enter` folds and unfolds, `space` offers an unlock priced in SP), stats (the
 five stats and your pools; `space` buys a point outright), gear, inventory, workbench
-(WRENCH unlocks it), cyberdeck (the jacked deck, the programs loaded and in the
-pack, `space` loads or unloads one, and the deck's own abilities), jobs (in
-hand, on offer, done),
+(WRENCH unlocks it), cyberdeck (the jacked deck drawn as hardware: arrows point
+at a slot, a ROM strip, the failsafe or a program in inventory and the deck's
+glass reads it out; `space` picks a program up and drops it in a slot, ejects
+one, or lifts the failsafe's cover and throws it; `tab` switches tabs here),
+jobs (in hand, on offer, done),
 journal (empty for now), map (what you remember of this stratum) and talents
 (on `0`, below). Every list wraps at both ends. `space` on a gear slot picks what fits from the pack,
 or unequips and inspects what is worn; on an inventory item it opens the

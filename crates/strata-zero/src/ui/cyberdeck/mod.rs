@@ -160,20 +160,14 @@ pub fn draw(view: &DeckView, area: Rect, buf: &mut Buffer) {
     }
     if let Some((_, r)) = parts(view).into_iter().find(|(p, _)| *p == view.point) {
         let r = Rect::new(ox + r.x, oy + r.y, r.width, r.height);
-        brackets_in(pen.buf, r, view.tick, pen.clip);
+        brackets(pen.buf, r, view.tick, pen.clip);
     }
 }
 
 /// Four cyan heavy corners one cell outside `r`, pulsing like the selected rows on
-/// the other tabs. Corners that fall off the buffer are skipped; the cells keep
+/// the other tabs. Corners that fall outside `clip` are skipped; the cells keep
 /// whatever they sat on.
-pub fn brackets(buf: &mut Buffer, r: Rect, tick: u64) {
-    let clip = buf.area;
-    brackets_in(buf, r, tick, clip);
-}
-
-/// `brackets`, leaving out corners that fall outside `clip`.
-fn brackets_in(buf: &mut Buffer, r: Rect, tick: u64, clip: Rect) {
+fn brackets(buf: &mut Buffer, r: Rect, tick: u64, clip: Rect) {
     let fg = CYAN_RGB.scale(0.7 + 0.3 * pulse(tick, 30)).to_color();
     let (x1, y1) = (r.x.checked_sub(1), r.y.checked_sub(1));
     let (x2, y2) = (r.x + r.width, r.y + r.height);
@@ -424,16 +418,17 @@ pub(crate) mod tests {
     #[test]
     fn brackets_pulse_and_stay_on_the_buffer() {
         let mut buf = Buffer::empty(Rect::new(0, 0, 20, 10));
-        brackets(&mut buf, Rect::new(5, 3, 4, 2), 0);
+        let clip = buf.area;
+        brackets(&mut buf, Rect::new(5, 3, 4, 2), 0, clip);
         assert_eq!(buf[(4, 2)].symbol(), "┏");
         assert_eq!(buf[(9, 2)].symbol(), "┓");
         assert_eq!(buf[(4, 5)].symbol(), "┗");
         assert_eq!(buf[(9, 5)].symbol(), "┛");
         let a = buf[(4, 2)].fg;
-        brackets(&mut buf, Rect::new(5, 3, 4, 2), 8);
+        brackets(&mut buf, Rect::new(5, 3, 4, 2), 8, clip);
         assert_ne!(buf[(4, 2)].fg, a);
         // At the buffer's edge the corners that fall outside are skipped.
-        brackets(&mut buf, Rect::new(0, 0, 4, 2), 0);
+        brackets(&mut buf, Rect::new(0, 0, 4, 2), 0, clip);
         assert_eq!(buf[(4, 2)].symbol(), "┛");
     }
 

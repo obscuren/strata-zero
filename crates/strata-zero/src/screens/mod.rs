@@ -3,7 +3,6 @@
 pub mod configure;
 pub mod console;
 pub mod create;
-#[allow(dead_code)] // wired into the deck screen in Task 6
 pub mod cyberdeck;
 pub mod deck;
 pub mod explore;

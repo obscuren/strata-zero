@@ -3,7 +3,6 @@
 
 use super::{DeckView, GLASS_ROWS, GLASS_TEXT_W, GlassTone, Part, Pen, Switch};
 use crate::ui::chrome::{CYAN, MAGENTA, PANEL_BG};
-use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
@@ -110,12 +109,7 @@ const TAG_END: u16 = 68;
 const FX: u16 = 69;
 const FY: u16 = 7;
 
-/// Draws the pawn deck with its origin at (`ox`, `oy`), clipped to `buf`.
-pub fn draw(view: &DeckView, ox: u16, oy: u16, buf: &mut Buffer) {
-    let clip = buf.area;
-    draw_with(view, &mut Pen { buf, ox, oy, clip });
-}
-
+/// Draws the pawn deck from the pen's origin, clipped to the pen's area.
 pub(super) fn draw_with(view: &DeckView, p: &mut Pen) {
     p.fill(0, 0, W, H, PANEL_BG);
     bay(p, view);

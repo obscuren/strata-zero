@@ -1,7 +1,7 @@
 # The CYBERDECK tab as a deck: design
 
 Date: 2026-10-18. Status: designed with Jeffrey in the visual companion (three
-concepts; he chose "the slab" and trimmed it), not built. Worktree
+concepts; he chose "the slab" and trimmed it), built on `worktree-cyberdeck`. Worktree
 `.claude/worktrees/cyberdeck`, branch `worktree-cyberdeck`.
 Builds on: `2026-10-17-keypads-design.md` and `2026-10-17-device-themes-design.md`
 (diegetic hardware drawn in cells), `2026-10-15-constructs-and-programs-design.md`
