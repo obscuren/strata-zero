@@ -107,6 +107,28 @@ pub struct Targeting {
     pub picked: usize,
 }
 
+/// Space with several things in reach: a direction opens one.
+#[derive(Clone, Debug)]
+pub struct WhichWay {
+    pub subjects: Vec<interact::Subject>,
+    /// Where the player stood when it was asked; a move drops it.
+    pub from: (Place, Pos),
+}
+
+/// The arrow a direction reads as in the which-way prompt.
+fn arrow(d: Dir) -> char {
+    match d {
+        Dir::N => '↑',
+        Dir::NE => '↗',
+        Dir::E => '→',
+        Dir::SE => '↘',
+        Dir::S => '↓',
+        Dir::SW => '↙',
+        Dir::W => '←',
+        Dir::NW => '↖',
+    }
+}
+
 pub struct MapScreen {
     pub mode: Mode,
     /// The map on screen: a stratum, or the floor the player walks.
@@ -120,6 +142,8 @@ pub struct MapScreen {
     pub walking: Option<Walk>,
     /// A program waiting for its target.
     pub targeting: Option<Targeting>,
+    /// Space asked which way.
+    pub which_way: Option<WhichWay>,
     pub digital: bool,
     pub help: bool,
     fps: FpsMeter,
@@ -218,6 +242,7 @@ impl MapScreen {
             aim: None,
             walking: None,
             targeting: None,
+            which_way: None,
             digital: false,
             help: false,
             fps: FpsMeter::default(),
@@ -364,6 +389,20 @@ impl MapScreen {
     /// Row 2 of the footer on turns: whose turn, which half, and the keys for it.
     fn turn_prompt(&self, st: &AppState) -> Option<(String, String)> {
         use crate::net::{Actor, Phase};
+        if let Some(w) = self.which_way.as_ref() {
+            let mut parts: Vec<String> = w
+                .subjects
+                .iter()
+                .filter_map(|s| s.dir.map(|d| format!("{} {}", arrow(d), s.name())))
+                .collect();
+            if let Some(here) = w.subjects.iter().find(|s| s.dir.is_none()) {
+                parts.push(match &here.header {
+                    Some(h) => format!("· here: {}", h.name),
+                    None => "· here".to_string(),
+                });
+            }
+            return Some(("WHICH WAY?".to_string(), parts.join("   ")));
+        }
         if let Some(t) = self.targeting.as_ref() {
             let (_, _, what) = &t.candidates[t.picked];
             let op = st
@@ -709,7 +748,7 @@ impl MapScreen {
 
     /// What Space opens: one thing in reach goes straight to its window, none gives a
     /// window with Look alone; a construct lists the programs that apply.
-    fn interact(&self, st: &AppState) -> Option<ScreenCmd> {
+    fn interact(&mut self, st: &AppState) -> Option<ScreenCmd> {
         let player = st.player.as_ref()?;
         let (place, pos) = (player.place, player.pos);
         let look = Choice::new('x', "Look", Pick::Look(pos));
@@ -726,9 +765,16 @@ impl MapScreen {
             });
         }
         let subjects = interact::gather(st, &|pl, p| self.inside_person_at(pl, p));
-        let popup = match subjects.first() {
-            None => Popup::verbs("", vec![look], st.tick),
-            Some(s) => s.window(st.tick),
+        let popup = match subjects.as_slice() {
+            [] => Popup::verbs("", vec![look], st.tick),
+            [s] => s.window(st.tick),
+            _ => {
+                self.which_way = Some(WhichWay {
+                    subjects,
+                    from: (place, pos),
+                });
+                return Some(ScreenCmd::Stay);
+            }
         };
         Some(ScreenCmd::Push {
             to: Box::new(popup),
@@ -835,6 +881,34 @@ impl MapScreen {
             _ => {}
         }
         ScreenCmd::Stay
+    }
+
+    /// Keys while Space asks which way: a direction with something there opens its
+    /// window, space or `.` opens your own tile, esc puts the pick away.
+    fn handle_which_way(&mut self, st: &mut AppState, k: &KeyEvent) -> ScreenCmd {
+        let Some(w) = self.which_way.as_ref() else {
+            return ScreenCmd::Stay;
+        };
+        let pick = match k.code {
+            KeyCode::Esc => {
+                self.which_way = None;
+                return ScreenCmd::Stay;
+            }
+            KeyCode::Char(' ' | '.') => w.subjects.iter().find(|s| s.dir.is_none()),
+            code => match dir_for(code) {
+                Some(d) => w.subjects.iter().find(|s| s.dir == Some(d)),
+                None => None,
+            },
+        };
+        let Some(s) = pick else {
+            return ScreenCmd::Stay;
+        };
+        let to = Box::new(s.window(st.tick));
+        self.which_way = None;
+        ScreenCmd::Push {
+            to,
+            fx: TransitionKind::None,
+        }
     }
 
     /// The picked target: the run is armed and rolled once, for an action point on
@@ -1593,6 +1667,14 @@ impl Screen for MapScreen {
                     }
                     continue;
                 }
+                // So does the which-way pick.
+                if self.which_way.is_some() {
+                    let cmd = self.handle_which_way(st, k);
+                    if !matches!(cmd, ScreenCmd::Stay) {
+                        return cmd;
+                    }
+                    continue;
+                }
             }
             let cmd = match self.handle_common(st, k) {
                 Some(cmd) => Some(cmd),
@@ -1692,6 +1774,14 @@ impl Screen for MapScreen {
         // The turn left you while you were picking: nothing to confirm now.
         if self.targeting.is_some() && !crate::net::your_turn(st) {
             self.targeting = None;
+        }
+        // Moved off, or carried away: the pick no longer points anywhere.
+        if self
+            .which_way
+            .as_ref()
+            .is_some_and(|w| st.player.as_ref().map(|p| (p.place, p.pos)) != Some(w.from))
+        {
+            self.which_way = None;
         }
         if self.mode == Mode::Walk {
             self.walk_step(st);
@@ -1831,6 +1921,18 @@ impl Screen for MapScreen {
             });
         if let Some(o) = targets.as_ref() {
             overlays.push(o);
+        }
+        let ways: Vec<Pos> = self
+            .which_way
+            .as_ref()
+            .map(|w| w.subjects.iter().map(|s| s.pos).collect())
+            .unwrap_or_default();
+        let way_blocks = crate::render::path::BlockOverlay {
+            tiles: &ways,
+            bg: crate::render::path::WAY_BG,
+        };
+        if !ways.is_empty() {
+            overlays.push(&way_blocks);
         }
         let fx = FxOverlay { fx: &st.fx, vis };
         overlays.push(&fx);
@@ -2714,6 +2816,117 @@ mod tests {
         assert_eq!(w.choices()[0].key, 'x');
         assert!(matches!(w.choices()[0].pick, Pick::Look(p) if p == pos));
         assert_eq!(row_text(&w.choices()[1]), "g Take: Copper coil ×2");
+    }
+
+    /// Beside a public terminal with two stacks underfoot: two subjects, here and the
+    /// terminal. Returns the player's tile and the terminal's.
+    fn by_the_terminal_with_stacks(st: &mut AppState, s: &mut MapScreen) -> (Pos, Pos) {
+        let (jack, at) = {
+            let city = st.city.as_ref().unwrap();
+            city.connectors
+                .iter()
+                .filter(|k| k.kind == citygen::ConnectorKind::Jack && k.public)
+                .find_map(|k| {
+                    k.pos
+                        .neighbors4()
+                        .find(|n| {
+                            city.walkable(StratumKind::Street, *n)
+                                && city.connectors_at(*n).next().is_none()
+                        })
+                        .map(|n| (k.pos, n))
+                })
+                .unwrap()
+        };
+        stand(st, s, Place::Stratum(StratumKind::Street), at);
+        let k = Place::Stratum(StratumKind::Street);
+        st.ground.add(k, at, game::ItemId::new("copper_coil"), 2);
+        st.ground.add(k, at, game::ItemId::new("dead_phone"), 1);
+        (at, jack)
+    }
+
+    #[test]
+    fn several_subjects_ask_which_way_and_a_direction_opens_one() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let (at, jack) = by_the_terminal_with_stacks(&mut st, &mut s);
+        assert!(matches!(
+            s.update(&mut st, &[key(KeyCode::Char(' '))]),
+            ScreenCmd::Stay
+        ));
+        assert!(s.which_way.is_some(), "two subjects: the pick is up");
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(
+            text.contains("WHICH WAY?")
+                && text.contains("Access terminal")
+                && text.contains("· here: "),
+            "{text}"
+        );
+        let ScreenCmd::Push { to: w, .. } = s.update(&mut st, &[key(dir_between(at, jack))]) else {
+            panic!("the terminal's direction opens its window")
+        };
+        assert!(s.which_way.is_none());
+        st.tick += 40;
+        let text = draw_screen(&*w, &st, 120, 40);
+        assert!(
+            text.contains("Access terminal") && text.contains("i  Interact: Terminal"),
+            "{text}"
+        );
+        // Space opens your own tile.
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        let ScreenCmd::Push { to: w, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))]) else {
+            panic!("space opens here")
+        };
+        st.tick += 40;
+        assert!(draw_screen(&*w, &st, 120, 40).contains("g  Take all"));
+    }
+
+    #[test]
+    fn which_way_opens_the_direction_and_ignores_empty_ones() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let (at, jack) = by_the_terminal_with_stacks(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        let empty = Dir::ALL
+            .into_iter()
+            .map(|d| at.step(d))
+            .find(|p| *p != jack && p.chebyshev(jack) > 0)
+            .unwrap();
+        assert!(matches!(
+            s.update(&mut st, &[key(dir_between(at, empty))]),
+            ScreenCmd::Stay
+        ));
+        assert!(s.which_way.is_some(), "a direction with nothing keeps the pick");
+        assert_eq!(player(&st).1, at, "and never walks");
+        assert!(matches!(
+            s.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Stay
+        ));
+        assert!(s.which_way.is_none(), "esc puts it away, no pause menu");
+    }
+
+    #[test]
+    fn one_subject_opens_at_once_and_none_opens_look_only() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let at = bare_sidewalk(&st);
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), at);
+        let ScreenCmd::Push { to: w, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))]) else {
+            panic!("space opens a window")
+        };
+        assert!(s.which_way.is_none());
+        st.tick += 40;
+        let text = draw_screen(&*w, &st, 120, 40);
+        assert!(text.contains("x  Look"), "{text}");
+        assert!(
+            text.lines()
+                .filter(|l| l.contains("  ") && l.chars().any(|c| c.is_alphabetic()))
+                .count()
+                == 1,
+            "look is the only row, no header: {text}"
+        );
     }
 
     #[test]

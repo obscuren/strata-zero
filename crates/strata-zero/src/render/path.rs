@@ -13,6 +13,33 @@ use ratatui::style::{Color, Modifier, Style};
 pub const NO_WAY: Color = Color::Rgb(255, 40, 40);
 /// Under the tiles your moves reach, so the path stands off the floor.
 pub const LIT_BG: Color = Color::Rgb(0, 70, 90);
+/// Under the things Space could open when it asks which way.
+pub const WAY_BG: Color = Color::Rgb(0, 45, 55);
+
+/// A background block on tiles, their glyphs kept: the look cursor, the which-way
+/// candidates.
+pub struct BlockOverlay<'a> {
+    pub tiles: &'a [Pos],
+    pub bg: Color,
+}
+
+impl Overlay for BlockOverlay<'_> {
+    fn draw(
+        &self,
+        _map: &MapRef,
+        origin: Pos,
+        area: Rect,
+        _tick: u64,
+        buf: &mut Buffer,
+        _style: &StylePack,
+    ) {
+        for t in self.tiles {
+            if let Some((sx, sy)) = tile_to_screen(area, origin, *t) {
+                buf[(sx, sy)].set_bg(self.bg);
+            }
+        }
+    }
+}
 
 pub struct PathOverlay<'a> {
     /// The tiles after your own, in walking order, ending on the aim.
@@ -151,6 +178,26 @@ mod tests {
             " ",
             "your own tile is not on the path"
         );
+    }
+
+    #[test]
+    fn block_overlay_keeps_the_glyph_and_sets_the_background() {
+        let city = City::empty(GenParams::default());
+        let map = MapRef::stratum_of(&city, citygen::StratumKind::Street);
+        let area = Rect::new(0, 0, 10, 3);
+        let mut buf = Buffer::empty(area);
+        buf[(4, 1)].set_char('@').set_fg(Color::White);
+        let style = StylePack::load().unwrap();
+        BlockOverlay {
+            tiles: &[Pos::new(4, 1)],
+            bg: WAY_BG,
+        }
+        .draw(&map, Pos::new(0, 0), area, 0, &mut buf, &style);
+        let c = &buf[(4, 1)];
+        assert_eq!(c.symbol(), "@");
+        assert_eq!(c.fg, Color::White);
+        assert_eq!(c.bg, WAY_BG);
+        assert_ne!(buf[(5, 1)].bg, WAY_BG);
     }
 
     #[test]
