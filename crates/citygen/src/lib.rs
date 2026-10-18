@@ -12,6 +12,7 @@ pub mod net;
 pub mod params;
 pub mod pathing;
 pub mod rng;
+pub mod sight;
 pub mod theme;
 pub mod tile;
 pub mod validate;
