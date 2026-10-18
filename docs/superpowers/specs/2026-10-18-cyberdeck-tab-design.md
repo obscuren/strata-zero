@@ -248,12 +248,13 @@ As the TALENTS tab does, the arrows belong to the tab:
 
 ### No deck
 
-With no deck equipped (or one the content does not know) the tab draws no
-deck: the glass alone, centred, reading `no deck jacked`, and INVENTORY under
-it, holding every program in the pack (loaded or not: `loaded` survives taking
-the deck off, but with no deck nothing is in a slot). Carts there can be
-pointed at and read; space says "no deck jacked" in the strip and picks
-nothing up.
+With no deck equipped (or one the content does not know) the tab shows one
+line, `No CYBERDECK equipped`, centred in the tab's body in the chrome's dim
+colour, and nothing else: no deck, no glass, no INVENTORY, no brackets.
+Nothing can be pointed at; arrows and space do nothing; esc closes the deck and
+`tab` / digits switch tabs as usual. (Jeffrey, after the build: "When no
+cyberdeck is installed we should simply display a message … The chrome,
+display, programs etc should be hidden.")
 
 ## Non-goals
 
@@ -320,7 +321,8 @@ nothing up.
   lights none.
 - Draw: at 100×30 the drawing fits the body with nothing clipped; it shows
   the plate, the carts' names, `FAILSAFE`, `INVENTORY` and the handle; at
-  120×40 it is centred; no deck draws `no deck jacked`.
+  120×40 it is centred; no deck draws `No CYBERDECK equipped` and no deck
+  parts, glass or INVENTORY.
 - Existing deck tests that read the CYBERDECK list rows are rewritten against
   the new tab, keeping what they checked (odd decks, loading and unloading,
   the failsafe toggle, the sharpened ability).
