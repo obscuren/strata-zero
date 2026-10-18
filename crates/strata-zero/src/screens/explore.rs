@@ -3971,7 +3971,9 @@ mod tests {
         st.tick += 10_000;
         let drawn = draw_screen(&*term, &st, 120, 40);
         assert!(
-            drawn.contains("HOME RIG") && drawn.contains("RIG [HOME] > "),
+            drawn.contains("ZENBO 64")
+                && !drawn.contains("HOME RIG")
+                && drawn.contains("RIG [HOME] > "),
             "{drawn}"
         );
         assert!(drawn.contains("A FAVOUR"), "{drawn}");

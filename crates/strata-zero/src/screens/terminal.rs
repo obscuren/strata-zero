@@ -162,10 +162,7 @@ impl Terminal {
     }
 
     fn badge(&self) -> String {
-        match self.session {
-            Session::District { .. } => self.look.terminal_badge(),
-            Session::Rig { .. } => format!("{} · HOME RIG", self.look.terminal_badge()),
-        }
+        self.look.terminal_badge()
     }
 
     /// Moves a finished reply into the scrollback.

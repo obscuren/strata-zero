@@ -183,26 +183,18 @@ pub fn prompt(st: &AppState, s: &Session) -> String {
     }
 }
 
-/// What a terminal types when it powers on: the theme's boot with the place filled
-/// in; the rig names itself first.
+/// What a terminal types when it powers on: the theme's boot with the OS and the
+/// place filled in.
 pub fn boot_lines(st: &AppState, s: &Session, look: &crate::ui::device::Look) -> Vec<String> {
     let place = match s {
         Session::District { district, .. } => district_name(st, *district),
         Session::Rig { building } => building_name(st, *building),
     };
-    let mut lines: Vec<String> = look
-        .style
+    look.style
         .boot
         .iter()
         .map(|l| l.replace("{PLACE}", &place).replace("{OS}", &look.os()))
-        .collect();
-    if matches!(s, Session::Rig { .. }) {
-        if lines.is_empty() {
-            lines.push(String::new());
-        }
-        lines[0] = format!("{} · HOME RIG", look.os());
-    }
-    lines
+        .collect()
 }
 
 /// A verb, its gloss, the tier it needs, and whether it needs a connection.
@@ -1065,10 +1057,8 @@ mod tests {
         let boot = boot_lines(&st, &s, &street);
         assert_eq!(boot[2], "REDY");
         let rig = boot_lines(&st, &Session::Rig { building: b }, &street);
-        assert!(
-            rig[0].starts_with("HELIX/OS 2.2") && rig[0].contains("HOME RIG"),
-            "{rig:?}"
-        );
+        assert_eq!(rig, boot, "the rig boots like any Zenbo");
+        assert!(rig.iter().all(|l| !l.contains("HOME RIG")), "{rig:?}");
         let city = st.city.as_ref().unwrap();
         let term = city
             .net
