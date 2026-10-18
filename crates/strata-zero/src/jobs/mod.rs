@@ -430,6 +430,54 @@ pub fn tick(st: &mut AppState) {
     }
 }
 
+/// Work the city already holds against a job taken just now: a shard fetched, a
+/// backdoor planted or a copy made while it was only on offer counts.
+fn credit_done_work(st: &mut AppState, id: JobId) {
+    let Some(j) = st.jobs.get(id).cloned() else {
+        return;
+    };
+    let now = st.net.now(st);
+    match j.kind {
+        Kind::Fetch {
+            building,
+            level,
+            tile,
+            ..
+        } => {
+            let place = Place::Floor { building, level };
+            let left = st
+                .ground
+                .at(place, tile)
+                .iter()
+                .any(|s| s.item == ItemId::new("paydata"));
+            if !left {
+                send(st, Event::Taken { place, pos: tile });
+            }
+        }
+        Kind::Plant { building } => {
+            if st.backdoors.held(building).is_some() {
+                send(st, Event::Planted { building });
+            }
+        }
+        Kind::Copy { building, vault } => {
+            let kind = if vault {
+                citygen::net::NodeKind::DataVault
+            } else {
+                citygen::net::NodeKind::Server
+            };
+            let copied = st.city.as_ref().is_some_and(|c| {
+                c.net.nodes.iter().any(|n| {
+                    n.building == Some(building) && n.kind == kind && st.net.copied(n.id, now)
+                })
+            });
+            if copied {
+                send(st, Event::Copied { building, vault });
+            }
+        }
+        Kind::Deliver { .. } => {}
+    }
+}
+
 /// Takes an offered job: the state, the mail, a Deliver's package. Logs the line.
 pub fn take_job(st: &mut AppState, id: JobId) -> Result<String, String> {
     let now = st.net.now(st);
@@ -439,14 +487,15 @@ pub fn take_job(st: &mut AppState, id: JobId) -> Result<String, String> {
     if !st.jobs.take(id, now) {
         return Err("not on offer".into());
     }
+    credit_done_work(st, id);
     if let Kind::Deliver { item, .. } = &j.kind {
         st.character.give(item.clone(), 1);
     }
     let fixer = ui::fixer_name(st, j.fixer);
     let mut body = j.brief.clone();
     body.push(generate::where_line(st, j.fixer));
-    let by = now + j.hours * 60;
-    body.push(format!("By {:02}:{:02}.", (by / 60) % 24, by % 60));
+    let by = crate::ui::hud::minute_at((now + j.hours * 60) * sim::TICKS_PER_MINUTE);
+    body.push(format!("By {:02}:{:02}.", by / 60, by % 60));
     body.push(fixer.clone());
     st.journal.mails.push(crate::credentials::Mail {
         from: fixer.clone(),
@@ -917,5 +966,66 @@ mod tests {
         assert_eq!(st.jobs.standing(a_fixer(&st)), 4);
         let out = crate::screens::console::run(&mut st, at, "jobs").unwrap();
         assert!(out.contains("A favour"), "{out}");
+    }
+
+    #[test]
+    fn the_mail_says_the_deadline_on_the_clock() {
+        let mut st = state_home();
+        let fx = a_fixer(&st);
+        let welcome = st.jobs.active().unwrap().id;
+        st.jobs.drop_job(welcome);
+        st.jobs.fixer_mut(fx).standing = 0;
+        let id = crate::jobs::offer(&mut st, fx).unwrap();
+        let hours = st.jobs.get(id).unwrap().hours;
+        let (h, m) = st.clock();
+        let by = (h as u64 * 60 + m as u64 + hours * 60) % (24 * 60);
+        crate::jobs::take_job(&mut st, id).unwrap();
+        let line = format!("By {:02}:{:02}.", by / 60, by % 60);
+        let body = &st.journal.mails.last().unwrap().body;
+        assert!(body.contains(&line), "wanted {line:?} in {body:?}");
+    }
+
+    #[test]
+    fn work_done_before_taking_counts() {
+        let mut st = state_home();
+        let fx = a_fixer(&st);
+        st.jobs.fixer_mut(fx).standing = PLANT_AT;
+        // The shard fetched while the job was only on offer.
+        let fetch = crate::jobs::generate(&mut st, fx, KindTag::Fetch, 0).unwrap();
+        let Kind::Fetch {
+            building,
+            level,
+            tile,
+            ..
+        } = fetch.kind
+        else {
+            panic!()
+        };
+        let f = st.jobs.push(fetch);
+        st.ground.take(
+            Place::Floor { building, level },
+            tile,
+            &ItemId::new("paydata"),
+            1,
+        );
+        crate::jobs::take_job(&mut st, f).unwrap();
+        assert!(
+            st.jobs.get(f).unwrap().objectives[0].done,
+            "the shard already taken counts"
+        );
+        // The backdoor planted while the job was only on offer.
+        let plant = crate::jobs::generate(&mut st, fx, KindTag::Plant, 1).unwrap();
+        let Kind::Plant { building: pb } = plant.kind else {
+            panic!()
+        };
+        let p = st.jobs.push(plant);
+        let seed = st.city.as_ref().unwrap().seed;
+        st.backdoors.plant_net(pb, 1, seed, 0);
+        st.jobs.drop_job(f);
+        crate::jobs::take_job(&mut st, p).unwrap();
+        assert!(
+            st.jobs.get(p).unwrap().objectives[0].done,
+            "the standing backdoor counts"
+        );
     }
 }

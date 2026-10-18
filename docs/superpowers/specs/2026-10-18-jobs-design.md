@@ -10,6 +10,14 @@ Built as specified except: the player-facing word is **jobs** everywhere
 from the walk tick for the fixers beside you, not when the window opens; the
 flavor's line enum is `Say`, not `Line`; `jobs.ron` keeps the `Jobs(...)` name
 and the Rust struct is renamed to it; `World::park` is a plain test aid.
+After the whole-branch review: a Fetch's candidates are lived-in closed
+buildings other than hotels (a server alone gives no flat), the roll picks among
+the ones in `FETCH_RANGE` and the nearest beyond follow, so a Strip corner with
+no homes near it still offers one; a Deliver names only someone whose shift is
+on at some point inside `HOURS_DELIVER` of taking it; taking a job credits work
+already done while it was on offer (the shard gone from its tile, a backdoor
+standing, a copy made); the mail's `By hh:mm` is the clock, not minutes from
+tick zero; offers are rolled for a fixer beside you indoors too.
 Builds on: `2026-10-17-credentials-journal-design.md` (homes, codes, the
 journal's mails), `2026-10-17-access-terminal-design.md` (the first mail),
 `2026-10-18-helix-os-design.md` (the rig's mail as files),

@@ -165,21 +165,28 @@ use citygen::BuildingId;
 use game::ItemId;
 
 /// Rolls an offer for every fixer beside the player, so their window has it the
-/// first time you talk. Nothing for a fixer who refuses you.
-pub fn prepare_offers(st: &mut AppState) {
+/// first time you talk: on the street the city's walkers, indoors whoever `inside`
+/// places on the tile. Nothing for a fixer who refuses you.
+pub fn prepare_offers(
+    st: &mut AppState,
+    inside: &dyn Fn(citygen::Place, citygen::Pos) -> Option<PersonId>,
+) {
     let Some(player) = st.player.as_ref() else {
         return;
     };
     let (place, pos) = (player.place, player.pos);
-    if !place.is_street() {
-        return;
-    }
     let Some(world) = st.world.as_ref() else {
         return;
     };
     let fixers: Vec<PersonId> = pos
         .neighbors4()
-        .filter_map(|n| world.person_at(n))
+        .filter_map(|n| {
+            if place.is_street() {
+                world.person_at(n)
+            } else {
+                inside(place, n)
+            }
+        })
         .filter(|id| world.people()[id.0 as usize].profession == "fixer")
         .collect();
     for f in fixers {
@@ -486,7 +493,7 @@ mod tests {
         let id = st.jobs.active().unwrap().id;
         let fx = st.jobs.get(id).unwrap().fixer;
         stand_beside(&mut st, fx);
-        prepare_offers(&mut st);
+        prepare_offers(&mut st, &|_, _| None);
         let rs = rows(&st, fx);
         let keys: Vec<char> = rs.iter().map(|c| c.key).collect();
         assert_eq!(
@@ -519,7 +526,7 @@ mod tests {
         assert_eq!(st.character.credits, credits + PAY_FETCH);
         assert_eq!(st.character.count(&ItemId::new("paydata")), 0);
         assert_eq!(st.jobs.standing(fx), GAIN_DONE);
-        prepare_offers(&mut st);
+        prepare_offers(&mut st, &|_, _| None);
         let rs = rows(&st, fx);
         assert_eq!(
             rs.iter().map(|c| c.key).collect::<Vec<_>>(),
@@ -613,7 +620,7 @@ mod tests {
         let mut st = state_home();
         let fx = a_fixer(&st);
         st.jobs.fixer_mut(fx).standing = REFUSE_AT;
-        prepare_offers(&mut st);
+        prepare_offers(&mut st, &|_, _| None);
         let rs = rows(&st, fx);
         assert_eq!(rs.len(), 1);
         let Pick::Talk { said, .. } = &rs[0].pick else {
@@ -624,5 +631,28 @@ mod tests {
             "{said}"
         );
         assert!(st.jobs.offered(fx).is_none());
+    }
+
+    #[test]
+    fn a_fixer_met_indoors_offers_too() {
+        let mut st = state_home();
+        let fx = a_fixer(&st);
+        let welcome = st.jobs.active().unwrap().id;
+        st.jobs.drop_job(welcome);
+        st.jobs.fixer_mut(fx).standing = 0;
+        let home = st.home.unwrap().home;
+        let city = st.city.clone().unwrap();
+        let mut p = crate::walker::Player::spawn(&city, 1);
+        p.place = Place::Floor {
+            building: home.building,
+            level: home.level,
+        };
+        p.pos = home.bed_side;
+        st.player = Some(p);
+        prepare_offers(&mut st, &|_, _| Some(fx));
+        assert!(
+            st.jobs.offered(fx).is_some(),
+            "the fixer at the bar has work too"
+        );
     }
 }

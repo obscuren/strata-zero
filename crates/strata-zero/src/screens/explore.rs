@@ -1922,7 +1922,7 @@ impl Screen for MapScreen {
         crate::jobs::tick(st);
         // A fixer beside you has their offer ready before you talk.
         if self.mode == Mode::Walk {
-            crate::jobs::ui::prepare_offers(st);
+            crate::jobs::ui::prepare_offers(st, &|pl, p| self.inside_person_at(pl, p));
         }
         // The beat of a calm construct: one per frame at most, so a long menu is
         // never a burst of rolls.

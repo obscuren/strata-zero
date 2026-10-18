@@ -549,7 +549,7 @@ mod tests {
         st.player = Some(p);
         st.world.as_mut().unwrap().park(fx, spot);
         st.tick += 200;
-        crate::jobs::ui::prepare_offers(&mut st);
+        crate::jobs::ui::prepare_offers(&mut st, &|_, _| None);
         let subjects = gather(&st, &|_, _| None);
         let beside_fixer: Vec<&Subject> = subjects.iter().filter(|s| s.pos == spot).collect();
         assert_eq!(beside_fixer.len(), 1, "{subjects:?}");

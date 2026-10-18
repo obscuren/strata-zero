@@ -69,6 +69,21 @@ fn lived_in(st: &AppState, b: BuildingId) -> bool {
         .is_some_and(|w| w.people().iter().any(|p| p.home == Some(b)))
 }
 
+/// Whether a shift `(from, to)` in minutes of the day is on at some point within
+/// `window` minutes after minute `start` of the day. A shift whose end is before its
+/// start wraps past midnight.
+pub fn on_shift_within((from, to): (u16, u16), start: u64, window: u64) -> bool {
+    const DAY: u64 = 24 * 60;
+    let (from, to) = (from as u64, to as u64);
+    let end = if to > from { to } else { to + DAY };
+    // Lay the window a day in, so the shift's previous occurrence can be tried too.
+    let (s, e) = (start % DAY + DAY, start % DAY + DAY + window);
+    (0..=2).any(|k| {
+        let (a, b) = (from + k * DAY, end + k * DAY);
+        a < e && b > s
+    })
+}
+
 /// `09:00–20:00`.
 pub fn hours_text((from, to): (u16, u16)) -> String {
     format!(
@@ -228,19 +243,28 @@ pub fn generate(st: &mut AppState, fixer: PersonId, kind: KindTag, counter: u32)
     match kind {
         KindTag::Fetch => {
             let city = st.city.as_ref()?;
-            let mut cands: Vec<BuildingId> = city
+            // Somebody must live there: a flat to lay the shard in, and a lost card or
+            // a server copy to get its code. By distance from the fixer's corner.
+            let mut lived: Vec<(i32, BuildingId)> = city
                 .buildings
                 .iter()
-                .filter(|x| x.kind.is_closed())
-                .filter(|x| door_of(st, x.id).is_some_and(|d| d.manhattan(spot) <= FETCH_RANGE))
-                .filter(|x| has_node(st, x.id, NodeKind::Server) || lived_in(st, x.id))
-                .map(|x| x.id)
+                .filter(|x| x.kind.is_closed() && x.kind != citygen::BuildingKind::Hotel)
+                .filter(|x| lived_in(st, x.id))
+                .filter_map(|x| Some((door_of(st, x.id)?.manhattan(spot), x.id)))
                 .collect();
+            lived.sort_by_key(|(d, id)| (*d, id.index()));
+            // The roll picks among the buildings in range; the ones beyond follow, nearest
+            // first, so a corner with no homes near it (the Strip keeps none) still works.
+            let (near, far): (Vec<_>, Vec<_>) = lived.iter().partition(|(d, _)| *d <= FETCH_RANGE);
+            let mut cands: Vec<BuildingId> = near.iter().map(|(_, id)| *id).collect();
+            if !cands.is_empty() {
+                let start = (r_target % cands.len() as u64) as usize;
+                cands.rotate_left(start);
+            }
+            cands.extend(far.iter().map(|(_, id)| *id));
             if cands.is_empty() {
                 return None;
             }
-            let start = (r_target % cands.len() as u64) as usize;
-            cands.rotate_left(start);
             for (i, b) in cands.into_iter().take(FETCH_TRIES).enumerate() {
                 let r_flat = roll(seed, fixer, counter, SALT_FLAT ^ i as u64);
                 if let Some(k) = fetch_in(st, b, r_flat) {
@@ -343,10 +367,13 @@ pub fn generate(st: &mut AppState, fixer: PersonId, kind: KindTag, counter: u32)
                     .homes_of(h.home.building)?
                     .household_of(h.home.level, h.home.number)
             });
+            let start = st.minute_of_day() as u64;
             let pool: Vec<(PersonId, Pos)> = world
                 .people()
                 .iter()
                 .filter(|p| p.profession != "fixer" && p.id != fixer && Some(p.household) != mine)
+                // At their station at some point inside the window.
+                .filter(|p| on_shift_within(p.shift, start, HOURS_DELIVER * 60))
                 .filter_map(|p| match p.work {
                     Work::Spot(pos) => Some((p.id, pos)),
                     Work::Building(b)
@@ -769,5 +796,55 @@ mod tests {
             }
         }
         panic!("no swept seed had a megablock and no Strip; widen the sweep");
+    }
+
+    #[test]
+    fn deliver_names_someone_on_shift_inside_the_window() {
+        let mut st = state_home();
+        let fx = a_fixer(&st);
+        let start = st.minute_of_day() as u64;
+        for counter in 0..30 {
+            let j = generate(&mut st, fx, KindTag::Deliver, counter).expect("a deliver");
+            let Kind::Deliver { to, .. } = j.kind else {
+                panic!()
+            };
+            let shift = st.world.as_ref().unwrap().work_hours(to).unwrap();
+            assert!(
+                on_shift_within(shift, start, crate::jobs::HOURS_DELIVER * 60),
+                "counter {counter}: {shift:?} is never on inside {start} + 8h"
+            );
+        }
+        assert!(
+            on_shift_within((1080, 240), 1320, 480),
+            "a night beat at 22:00"
+        );
+        assert!(
+            !on_shift_within((360, 840), 1320, 480),
+            "the 06–14 shift at 22:00"
+        );
+        assert!(
+            on_shift_within((360, 840), 1320, 600),
+            "but it is at 22:00 + 10h"
+        );
+        assert!(on_shift_within((480, 1080), 600, 60), "mid-shift");
+    }
+
+    #[test]
+    fn every_fixer_can_offer_a_fetch() {
+        let mut st = state_home();
+        let fixers: Vec<sim::PersonId> = st
+            .world
+            .as_ref()
+            .unwrap()
+            .people()
+            .iter()
+            .filter(|p| p.profession == "fixer")
+            .map(|p| p.id)
+            .collect();
+        assert!(fixers.len() >= 2, "seed 8 has a Market and a Strip");
+        for fx in fixers {
+            let j = generate(&mut st, fx, KindTag::Fetch, 0);
+            assert!(j.is_some(), "fixer {fx:?} rolls no fetch");
+        }
     }
 }
