@@ -4490,7 +4490,17 @@ mod tests {
         assert!(text.contains("2F"), "{text}");
         assert!(text.contains(&FloorPlan::label(plan.top)), "{text}");
         assert!(text.contains("roof"), "{text}");
-        popup.update(&mut st, &[key(KeyCode::Esc)]);
+        // The 2F row rides there, and the log says so.
+        for _ in 0..80 {
+            let text = draw_screen(&*popup, &st, 120, 60);
+            if text.lines().any(|l| l.contains("▸") && l.contains("Ride: 2F")) {
+                break;
+            }
+            popup.update(&mut st, &[key(KeyCode::Down)]);
+        }
+        popup.update(&mut st, &[key(KeyCode::Enter)]);
+        assert_eq!(last(&st), Some("Entering 2F"));
+        s.update(&mut st, &[]);
         // A ride to a floor never generated before works (and generates it).
         assert!(st.interiors.floor(b, plan.top).is_none());
         assert_eq!(
