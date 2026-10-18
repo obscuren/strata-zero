@@ -77,17 +77,27 @@ impl Looks {
 
     #[cfg(test)]
     pub fn all_lines(&self) -> Vec<&str> {
-        [Group::Feature, Group::Furniture, Group::Building, Group::Fixture]
-            .into_iter()
-            .flat_map(|g| self.group(g).values().flatten().map(|s| s.as_str()))
-            .collect()
+        [
+            Group::Feature,
+            Group::Furniture,
+            Group::Building,
+            Group::Fixture,
+        ]
+        .into_iter()
+        .flat_map(|g| self.group(g).values().flatten().map(|s| s.as_str()))
+        .collect()
     }
 
     #[cfg(test)]
     pub fn has(&self, key: &str) -> bool {
-        [Group::Feature, Group::Furniture, Group::Building, Group::Fixture]
-            .into_iter()
-            .any(|g| self.group(g).contains_key(key))
+        [
+            Group::Feature,
+            Group::Furniture,
+            Group::Building,
+            Group::Fixture,
+        ]
+        .into_iter()
+        .any(|g| self.group(g).contains_key(key))
     }
 }
 
@@ -151,7 +161,10 @@ fn fixture_at(st: &AppState, map: &MapRef, place: Place, pos: Pos) -> Option<Fix
                 .filter(|r| r.private && r.kind == citygen::RoomKind::Flat)
             {
                 let now = st.net.now(st);
-                let state = match st.journal.keypad_locked_until(building, level, r.number, now) {
+                let state = match st
+                    .journal
+                    .keypad_locked_until(building, level, r.number, now)
+                {
                     Some(until) => format!("keypad locked {}m", until.saturating_sub(now).max(1)),
                     None if crate::credentials::opens(st, building, level, r.number).is_some() => {
                         "unlocked".to_string()
@@ -484,8 +497,11 @@ pub fn look_card(
         set_head(&mut card, f.name, mark_tile(st, map, pos));
         card.second = f.second;
         if visible {
-            card.body
-                .extend(looks.line(Group::Fixture, f.key, city.seed, pos).map(String::from));
+            card.body.extend(
+                looks
+                    .line(Group::Fixture, f.key, city.seed, pos)
+                    .map(String::from),
+            );
             card.also.extend(stacks);
         }
     } else if let Some((first, rest)) = stacks.split_first() {
@@ -519,8 +535,11 @@ pub fn look_card(
                 Some((name, key)) => {
                     set_head(&mut card, name.to_string(), glyph);
                     if visible {
-                        card.body
-                            .extend(looks.line(Group::Feature, key, city.seed, pos).map(String::from));
+                        card.body.extend(
+                            looks
+                                .line(Group::Feature, key, city.seed, pos)
+                                .map(String::from),
+                        );
                     }
                 }
                 None => ground(st, map, place, pos, own, &mut card),
@@ -537,7 +556,11 @@ pub fn look_card(
         );
         card.second = Some(if g.standing { "standing" } else { "broken" }.to_string());
     } else if let Some(b) = tile.building.filter(|_| {
-        place.stratum().is_some() && matches!(tile.terrain, Terrain::Wall | Terrain::Window | Terrain::Mass)
+        place.stratum().is_some()
+            && matches!(
+                tile.terrain,
+                Terrain::Wall | Terrain::Window | Terrain::Mass
+            )
     }) {
         let bl = city.building(b);
         let name = bl
@@ -662,7 +685,13 @@ mod tests {
 
     fn all_text(c: &LookCard) -> String {
         let mut s = String::new();
-        for t in c.header.iter().chain(c.second.iter()).chain(&c.body).chain(&c.also) {
+        for t in c
+            .header
+            .iter()
+            .chain(c.second.iter())
+            .chain(&c.body)
+            .chain(&c.also)
+        {
             s.push_str(t);
             s.push('\n');
         }
@@ -700,12 +729,14 @@ mod tests {
         let mut st = state(false);
         let at = bare(&st);
         stand(&mut st, at);
-        st.ground.add(STREET, at, game::ItemId::new("stim_patch"), 2);
+        st.ground
+            .add(STREET, at, game::ItemId::new("stim_patch"), 2);
         let c = card(&st, at);
         assert_eq!(c.header.as_deref(), Some("Stim patch ×2"));
         assert_eq!(c.second.as_deref(), Some("consumable · on the ground"));
         assert_eq!(c.body, ["Twelve minutes of clarity, then the bill."]);
-        st.ground.add(STREET, at, game::ItemId::new("dead_phone"), 1);
+        st.ground
+            .add(STREET, at, game::ItemId::new("dead_phone"), 1);
         let c = card(&st, at);
         assert_eq!(c.also, ["Dead phone"]);
     }
@@ -715,8 +746,12 @@ mod tests {
         let mut st = state(true);
         let (_, at, beside) = someone(&st);
         stand(&mut st, beside);
-        st.ground.add(STREET, at, game::ItemId::new("stim_patch"), 2);
-        st.player.as_mut().unwrap().set_vis(at, Visibility::Remembered);
+        st.ground
+            .add(STREET, at, game::ItemId::new("stim_patch"), 2);
+        st.player
+            .as_mut()
+            .unwrap()
+            .set_vis(at, Visibility::Remembered);
         let c = card(&st, at);
         let ground = st
             .city
@@ -801,7 +836,11 @@ mod tests {
 
     #[test]
     fn look_box_never_covers_the_cursor() {
-        for map in [Rect::new(0, 5, 100, 30), Rect::new(0, 5, 60, 20), Rect::new(3, 2, 97, 25)] {
+        for map in [
+            Rect::new(0, 5, 100, 30),
+            Rect::new(0, 5, 60, 20),
+            Rect::new(3, 2, 97, 25),
+        ] {
             for y in map.y..map.bottom() {
                 for x in map.x..map.right() {
                     for h in [4, 8, 30] {
@@ -838,7 +877,10 @@ mod tests {
         assert!(text.contains("public · Halvorsen"), "{text}");
         assert!(text.contains("scratched to fog."), "{text}");
         assert!(text.contains("space · interact"), "{text}");
-        assert_eq!(h, 8, "border, second, blank, two body rows, blank, hint, border: {text}");
+        assert_eq!(
+            h, 8,
+            "border, second, blank, two body rows, blank, hint, border: {text}"
+        );
     }
 
     #[test]
@@ -851,7 +893,15 @@ mod tests {
             assert!(!line.starts_with("You see"), "{line}");
             assert!(line.ends_with('.'), "{line}");
         }
-        for k in ["lamp", "neon", "holo_ad", "terminal", "stairwell", "flat_door", "club"] {
+        for k in [
+            "lamp",
+            "neon",
+            "holo_ad",
+            "terminal",
+            "stairwell",
+            "flat_door",
+            "club",
+        ] {
             assert!(l.has(k), "{k}");
         }
         assert!(l.line(Group::Feature, "lamp", 0, Pos::new(0, 0)).is_some());

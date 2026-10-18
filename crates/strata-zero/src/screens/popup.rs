@@ -19,6 +19,8 @@ use ratatui::text::Line;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorldAct {
     JackIn,
+    /// Jack in from the rig and land at this building's gate.
+    Land(citygen::BuildingId),
     JackOut,
     Up,
     Down,
@@ -61,6 +63,8 @@ pub enum Pick {
     },
     /// Asks before jacking out, in place of the popup.
     JackOutAsk,
+    /// Hops from a server to another backdoor's gate.
+    Hop(citygen::BuildingId),
     Close,
 }
 
@@ -253,6 +257,11 @@ impl Popup {
         if self.subtitle.is_some() { 2 } else { 0 }
     }
 
+    /// Whether this is the landing list a rig offers before it jacks in.
+    pub fn is_landing(&self) -> bool {
+        self.header.as_ref().is_some_and(|h| h.name == "JACK IN")
+    }
+
     /// Applies a world act to the player and returns the transition to pop with.
     fn world(&self, st: &mut AppState, act: WorldAct) -> TransitionKind {
         if let WorldAct::Climb(up) = act {
@@ -277,8 +286,14 @@ impl Popup {
             }
             return TransitionKind::None;
         }
-        if act == WorldAct::JackIn {
-            return match crate::net::jack_in_here(st) {
+        // The two jacks from here: the port in reach, or a backdoor's gate from the rig.
+        let jacked = match act {
+            WorldAct::JackIn => Some(crate::net::jack_in_here(st)),
+            WorldAct::Land(b) => Some(crate::net::land_at(st, b)),
+            _ => None,
+        };
+        if let Some(result) = jacked {
+            return match result {
                 Ok(line) => {
                     st.say(line);
                     TransitionKind::Glitch
@@ -307,6 +322,7 @@ impl Popup {
                 (Some(city), Some(player)) => match act {
                     // Taken above.
                     WorldAct::JackIn => Err("no terminal within reach".to_string()),
+                    WorldAct::Land(_) => Err("not from here".to_string()),
                     WorldAct::JackOut => Err("not jacked in".to_string()),
                     WorldAct::Lift(_) => Err("no lift here".to_string()),
                     WorldAct::Climb(_) => Err("no stairs here".to_string()),
@@ -414,6 +430,14 @@ impl Popup {
                     fx: TransitionKind::None,
                 }
             }
+            Pick::World(WorldAct::JackIn)
+                if !self.is_landing() && crate::net::wants_landing_list(st) =>
+            {
+                ScreenCmd::Replace {
+                    to: Box::new(crate::net::landing_popup(st)),
+                    fx: TransitionKind::None,
+                }
+            }
             Pick::World(act) => {
                 let fx = self.world(st, act);
                 ScreenCmd::Pop { fx }
@@ -466,6 +490,13 @@ impl Popup {
                 to: Box::new(Popup::jack_out_confirm(st.tick)),
                 fx: TransitionKind::None,
             },
+            Pick::Hop(b) => {
+                let result = crate::net::hop(st, b);
+                report(st, result);
+                ScreenCmd::Pop {
+                    fx: TransitionKind::Glitch,
+                }
+            }
             Pick::Close => ScreenCmd::Pop {
                 fx: TransitionKind::None,
             },
@@ -517,7 +548,14 @@ impl Popup {
                 inner.right(),
             );
             put(buf, inner.x + 2, ry, &key, key_style.bg(bg), inner.right());
-            put(buf, inner.x + 3, ry, "  ", label_style.bg(bg), inner.right());
+            put(
+                buf,
+                inner.x + 3,
+                ry,
+                "  ",
+                label_style.bg(bg),
+                inner.right(),
+            );
             // The revealed text in three runs: verb and colon, the thing in its
             // colour, the tail.
             let text = c.text();
@@ -525,9 +563,9 @@ impl Popup {
             let verb = c.label.chars().count() + if c.thing.is_some() { 2 } else { 0 };
             let thing = c.thing.as_ref().map_or(0, |(t, _)| t.chars().count());
             let thing_style = match &c.thing {
-                Some((_, colour)) if c.enabled => Style::default()
-                    .fg(*colour)
-                    .add_modifier(Modifier::BOLD),
+                Some((_, colour)) if c.enabled => {
+                    Style::default().fg(*colour).add_modifier(Modifier::BOLD)
+                }
                 _ => label_style,
             };
             for (j, ch) in shown.iter().enumerate() {
@@ -892,8 +930,14 @@ mod tests {
         let p = Popup::verbs(
             "",
             vec![
-                Choice::on('i', "Interact", "Keypad", crate::ui::hud::AMBER, Pick::Close)
-                    .tail(" · locked 4m"),
+                Choice::on(
+                    'i',
+                    "Interact",
+                    "Keypad",
+                    crate::ui::hud::AMBER,
+                    Pick::Close,
+                )
+                .tail(" · locked 4m"),
             ],
             0,
         );
@@ -942,13 +986,24 @@ mod tests {
         // Space on the default row fires it.
         let mut p = Popup::verbs("Lift", rows(), 0);
         p.update(&mut st, &[key(KeyCode::Char(' '))]);
-        assert_eq!(st.look_at, Some(at(0)), "space fires Look, the selected row");
+        assert_eq!(
+            st.look_at,
+            Some(at(0)),
+            "space fires Look, the selected row"
+        );
         // Space on an unlettered row fires that row, not the first unlettered one.
         let mut p = Popup::verbs("Lift", rows(), 0);
-        p.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Down), key(KeyCode::Down)]);
+        p.update(
+            &mut st,
+            &[key(KeyCode::Down), key(KeyCode::Down), key(KeyCode::Down)],
+        );
         assert_eq!(p.selected, 3);
         p.update(&mut st, &[key(KeyCode::Char(' '))]);
-        assert_eq!(st.look_at, Some(at(10)), "space fires 10F, the selected row");
+        assert_eq!(
+            st.look_at,
+            Some(at(10)),
+            "space fires 10F, the selected row"
+        );
     }
 
     #[test]
