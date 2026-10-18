@@ -412,19 +412,25 @@ pub fn cell(tile: &Tile, ctx: &RenderCtx) -> Cell {
     let (dr, dg, db) = ctx.style.stratum(ctx.stratum).tint;
     fg = fg.tint(dr, dg, db);
     bg = bg.tint(dr, dg, db);
-    let emits = matches!(
-        tile.feature,
+    let emits = match tile.feature {
+        Some(Feature::Lamp) => ctx.lamps_on,
         Some(
             Feature::Neon(_)
-                | Feature::HoloAd
-                | Feature::Lamp
-                | Feature::Terminal
-                | Feature::Camera
-                | Feature::Node(_)
-        )
-    );
-    let fg = if emits { fg } else { lit(fg, ctx.light) };
-    let bg = lit(bg, ctx.light);
+            | Feature::HoloAd
+            | Feature::Terminal
+            | Feature::Camera
+            | Feature::Node(_),
+        ) => true,
+        _ => false,
+    };
+    let mut fg = if emits { fg } else { lit(fg, ctx.light) };
+    let mut bg = lit(bg, ctx.light);
+    if let Some((sky, w)) = ctx.sky {
+        if !emits {
+            fg = fg.mix(sky, w);
+        }
+        bg = bg.mix(sky, w);
+    }
     let jack = ctx.connector.is_some_and(|c| c.kind == ConnectorKind::Jack);
     let bold = tile.is_connector()
         || matches!(tile.feature, Some(Feature::Sign(_) | Feature::Neon(_)))
@@ -500,6 +506,8 @@ mod tests {
             connector: None,
             kind: None,
             wall_mask: 0,
+            lamps_on: true,
+            sky: None,
         };
         let wall = Tile::new(Terrain::Wall);
         assert_eq!(cell(&wall, &ctx(255, 0)), cell(&wall, &ctx(255, 0)));
@@ -568,6 +576,36 @@ mod tests {
     }
 
     #[test]
+    fn a_lamp_glows_at_night_and_is_furniture_by_day_and_the_sky_tints() {
+        let s = StylePack::load().unwrap();
+        let ctx = |lamps_on, sky| RenderCtx {
+            style: &s,
+            theme: Some(Theme::CorpCore),
+            stratum: StratumKind::Street,
+            light: 40,
+            tick: 0,
+            vis: Visibility::Visible,
+            connector: None,
+            kind: None,
+            wall_mask: 0,
+            lamps_on,
+            sky,
+        };
+        let mut lamp = Tile::new(Terrain::Sidewalk);
+        lamp.feature = Some(Feature::Lamp);
+        let night = cell(&lamp, &ctx(true, None));
+        let day = cell(&lamp, &ctx(false, None));
+        assert_ne!(
+            night.fg, day.fg,
+            "a lit lamp keeps its colour; an unlit one is scaled"
+        );
+        let floor = Tile::new(Terrain::Sidewalk);
+        let plain = cell(&floor, &ctx(true, None));
+        let tinted = cell(&floor, &ctx(true, Some((Rgb(255, 0, 0), 0.5))));
+        assert!(tinted.bg.0 > plain.bg.0, "the sky pulls toward red");
+    }
+
+    #[test]
     fn net_tiles_render_in_the_signal_palette() {
         let s = StylePack::load().unwrap();
         let ctx = |stratum| RenderCtx {
@@ -580,6 +618,8 @@ mod tests {
             connector: None,
             kind: None,
             wall_mask: MASK_E | MASK_W,
+            lamps_on: true,
+            sky: None,
         };
         let wall = cell(&Tile::new(Terrain::NetWall), &ctx(StratumKind::Net));
         assert_eq!(wall.ch, '━');

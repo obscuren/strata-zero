@@ -103,6 +103,8 @@ impl Overlay for AtriumOverlay<'_> {
                     connector: None,
                     kind: map.kind(p),
                     wall_mask: mask,
+                    lamps_on: true,
+                    sky: None,
                 };
                 let c = cell(tile, &ctx);
                 // The walkway this level would show here, at this tile's light: the
@@ -123,6 +125,8 @@ impl Overlay for AtriumOverlay<'_> {
                         connector: None,
                         kind: map.kind(p),
                         wall_mask: 0,
+                        lamps_on: true,
+                        sky: None,
                     };
                     cell(&bare, &wctx).fg
                 });
@@ -246,6 +250,8 @@ mod tests {
                 connector: None,
                 kind: Some(plan.kind),
                 wall_mask: 0,
+                lamps_on: true,
+                sky: None,
             },
         );
         assert!(

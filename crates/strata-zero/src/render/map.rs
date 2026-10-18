@@ -49,6 +49,10 @@ pub trait TileMap {
     fn lit_sight(&self) -> bool {
         false
     }
+    /// The sky's colour and weight on a sunlit stratum by day; none elsewhere.
+    fn sky(&self) -> Option<((u8, u8, u8), f32)> {
+        None
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -244,6 +248,10 @@ impl TileMap for StratumMap<'_> {
         self.stratum != StratumKind::Net
     }
 
+    fn sky(&self) -> Option<((u8, u8, u8), f32)> {
+        citygen::lighting::sky(self.stratum, self.minute)
+    }
+
     fn theme(&self, p: Pos) -> Option<Theme> {
         self.tile(p)
             .and_then(|t| t.district)
@@ -380,6 +388,14 @@ impl TileMap for MapRef<'_> {
             MapRef::Stratum(m) => m.lit_sight(),
             MapRef::Floor(m) => m.lit_sight(),
             MapRef::Construct(m) => m.lit_sight(),
+        }
+    }
+
+    fn sky(&self) -> Option<((u8, u8, u8), f32)> {
+        match self {
+            MapRef::Stratum(m) => m.sky(),
+            MapRef::Floor(m) => m.sky(),
+            MapRef::Construct(m) => m.sky(),
         }
     }
 

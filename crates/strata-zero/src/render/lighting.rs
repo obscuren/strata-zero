@@ -1,6 +1,12 @@
 //! Light and visibility applied to cells.
 
+use crate::render::map::TileMap;
 use crate::render::{Cell, Rgb, Visibility};
+
+/// The sky's cast on this map right now, as the tileset mixes it.
+pub fn sky_of(map: &dyn TileMap) -> Option<(Rgb, f32)> {
+    map.sky().map(|((r, g, b), w)| (Rgb(r, g, b), w))
+}
 
 /// Darkens a colour by the tile's light level; never below a quarter so the map stays legible.
 pub fn lit(c: Rgb, light: u8) -> Rgb {
