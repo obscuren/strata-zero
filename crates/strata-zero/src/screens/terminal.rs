@@ -184,22 +184,14 @@ impl Terminal {
         t.leaving
     }
 
-    /// The rows a screen of `height` shows, with its markers, given the typing so far.
+    /// The rows a screen of `height` shows, given the scroll.
     fn page(&self, rows: &[String], height: usize) -> (Vec<String>, usize) {
         let keep = height.max(1);
         let max_scroll = rows.len().saturating_sub(keep);
         let scroll = self.scroll.min(max_scroll);
         let end = rows.len() - scroll;
         let start = end.saturating_sub(keep);
-        let mut page: Vec<String> = rows[start..end].to_vec();
-        if start > 0 && !page.is_empty() {
-            page[0] = "▲ MORE ABOVE · PGUP".to_string();
-        }
-        if scroll > 0 && !page.is_empty() {
-            let last = page.len() - 1;
-            page[last] = "▼ MORE BELOW · PGDN".to_string();
-        }
-        (page, keep)
+        (rows[start..end].to_vec(), keep)
     }
 
     fn run(&mut self, st: &mut AppState, line: String) {
@@ -240,7 +232,9 @@ impl Terminal {
                 Err(e) => lines.push(e),
             }
         }
+        // Replies land at once; only the power-on boot types itself out.
         let mut typing = Typing::new(lines, st.tick, self.look.style.cps);
+        typing.finished = true;
         typing.leaving = out.exit;
         typing.denied = out.denied;
         self.typing = Some(typing);
@@ -403,13 +397,11 @@ impl Screen for Terminal {
         let avail = screen.height as usize;
         let texts: Vec<String> = rows.iter().map(|(l, _)| l.clone()).collect();
         let (page, _) = self.page(&texts, avail.saturating_sub(tail.len()));
-        // The page's rows carry the style of the row they came from; markers are quiet.
+        // The page's rows carry the style of the row they came from.
         let styles: Vec<Style> = page
             .iter()
             .map(|l| {
-                if l.starts_with('▲') || l.starts_with('▼') {
-                    quiet
-                } else {
+                {
                     rows.iter()
                         .rev()
                         .find(|(t, _)| t == l)
@@ -554,19 +546,31 @@ mod tests {
         let drawn = draw(&t, &st);
         assert!(drawn.contains(&format!("guest@{slug}:/$ ")), "{drawn}");
         assert!(drawn.contains(&t.look.terminal_badge()), "{drawn}");
-        // what you type stays as typed, and the reply types out
+        // what you type stays as typed, and the reply is there at once
         t.update(&mut st, &typed("help"));
         let early = t.text(st.tick).join("\n");
         assert!(early.contains(&format!("guest@{slug}:/$ help")), "{early}");
+        assert!(early.contains("ssh") && early.contains("whoami"), "{early}");
         st.tick += 1000;
         let late = t.text(st.tick).join("\n");
-        assert!(late.len() > early.len(), "the reply types out");
-        assert!(late.contains("ssh"), "{late}");
-        // mid-reply, a key finishes it rather than typing
-        let mut t2 = Terminal::open(&mut st, origin, KEY_A);
-        t2.update(&mut st, &typed("help"));
+        assert_eq!(late, early, "nothing types out after a reply");
+        // the one-time boot still types, and a key finishes it
+        let mut t2 = Terminal::open(
+            &mut st,
+            origin,
+            (
+                citygen::Place::Stratum(StratumKind::Street),
+                citygen::Pos { x: 6, y: 6 },
+            ),
+        );
+        let mid = t2.text(st.tick).join("\n");
+        assert!(!mid.contains("Authorised users only"), "{mid}");
         t2.update(&mut st, &[key(KeyCode::Char('x'))]);
-        assert!(t2.text(st.tick).join("\n").contains("whoami"));
+        assert!(
+            t2.text(st.tick)
+                .join("\n")
+                .contains("Authorised users only")
+        );
         assert_eq!(t2.input(), "");
         // Tab completes through the shell: a path, as typed
         let mut keys: Vec<KeyEvent> = "ls /ne".chars().map(|c| key(KeyCode::Char(c))).collect();
@@ -810,7 +814,14 @@ mod tests {
         assert!(wide.iter().all(|l| l.chars().count() <= 66));
         t.update(&mut st, &[key(KeyCode::PageUp)]);
         let up = draw(&t, &st);
-        assert!(up.contains("▲"), "a more marker: {up}");
+        assert!(
+            !up.contains("MORE ABOVE") && !up.contains("MORE BELOW"),
+            "no markers: {up}"
+        );
+        assert!(
+            !up.contains("ROW 40") && up.contains("ROW 20"),
+            "scrolled up a page: {up}"
+        );
         t.update(&mut st, &[key(KeyCode::PageUp), key(KeyCode::PageUp)]);
         let top = draw(&t, &st);
         assert!(top.contains("ROW 01"), "{top}");
@@ -833,11 +844,13 @@ mod tests {
         st.tick += 1000;
         t.update(&mut st, &typed("door release"));
         st.tick += 2;
+        // The next frame settles the reply and lights the LED.
+        t.update(&mut st, &[]);
         let mut term = Term::new(TestBackend::new(120, 40)).unwrap();
         term.draw(|f| t.draw(&st, f)).unwrap();
         let r = Terminal::rect(Rect::new(0, 0, 120, 40));
         let led = &term.backend().buffer()[(r.right() - 3, r.y + 1)];
-        assert_eq!(led.fg, device::DENY, "magenta while a denial types");
+        assert_eq!(led.fg, device::DENY, "magenta after a denial");
         // A fresh run: tick 3, a long reply, one key finishes it.
         let mut st2 = st;
         st2.tick = 3;

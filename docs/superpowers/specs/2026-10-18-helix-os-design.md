@@ -203,8 +203,9 @@ Generated per host from the seed, deterministic:
   `building_label` and the world actions (`release_doors`, `answer_lifts`,
   `loop_cams`, `alarm_off`, `load_plan`, `log_lines`, `who_lines`, `scan_row`)
   that the devices and programs call; its verb table and `run` are deleted.
-- The typed-out reply and the LED, scrolling, wrapping and the denial glitch
-  stay as they are.
+- Replies land on the glass at once (Jeffrey, 2026-10-18: no typing effect on
+  output); only the one-time boot types itself. The LED, PgUp/PgDn scrolling
+  without markers, wrapping and the denial glitch stay as they are.
 
 ## Non-goals
 
