@@ -306,6 +306,9 @@ impl Vfs {
         }
         for (i, name) in comps.iter().enumerate() {
             let last = i + 1 == comps.len();
+            if !self.can_read(at, user) {
+                return Err(VfsError::Denied);
+            }
             let next = self
                 .children(at)
                 .ok_or(VfsError::NotADirectory)?
