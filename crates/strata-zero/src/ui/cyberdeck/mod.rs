@@ -4,8 +4,12 @@
 
 pub mod pawn;
 
+use crate::anim::effects::pulse;
+use crate::ui::chrome::CYAN_RGB;
 use game::DeckLook;
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier};
 
 /// Characters a line of the glass holds.
 pub const GLASS_TEXT_W: usize = 38;
@@ -118,11 +122,15 @@ pub struct DeckView {
     pub tick: u64,
 }
 
-/// The drawing's size for a look; no deck is just the glass and the inventory.
+/// The row the no-deck drawing's inventory carts sit on.
+const NO_DECK_INV_Y: u16 = 10;
+
+/// The drawing's size for a look; no deck is just the glass and the inventory, with
+/// a row under them for the pointer's corners.
 pub fn size(look: Option<DeckLook>) -> (u16, u16) {
     match look {
         Some(DeckLook::Pawn) => (pawn::W, pawn::H),
-        None => (pawn::W, 12),
+        None => (pawn::W, 13),
     }
 }
 
@@ -130,7 +138,119 @@ pub fn size(look: Option<DeckLook>) -> (u16, u16) {
 pub fn parts(view: &DeckView) -> Vec<(Part, Rect)> {
     match view.look {
         Some(DeckLook::Pawn) => pawn::parts(view),
-        None => pawn::inventory(view, 9),
+        None => pawn::inventory(view, NO_DECK_INV_Y),
+    }
+}
+
+/// Draws the deck centred in `area`, then the pointer's corners round the pointed
+/// part. Nothing is written outside `area`.
+pub fn draw(view: &DeckView, area: Rect, buf: &mut Buffer) {
+    let (w, h) = size(view.look);
+    let ox = area.x + area.width.saturating_sub(w) / 2;
+    let oy = area.y + area.height.saturating_sub(h) / 2;
+    let mut pen = Pen {
+        clip: area.intersection(buf.area),
+        buf,
+        ox,
+        oy,
+    };
+    match view.look {
+        Some(DeckLook::Pawn) => pawn::draw_with(view, &mut pen),
+        None => pawn::draw_bare(view, &mut pen, NO_DECK_INV_Y),
+    }
+    if let Some((_, r)) = parts(view).into_iter().find(|(p, _)| *p == view.point) {
+        let r = Rect::new(ox + r.x, oy + r.y, r.width, r.height);
+        brackets(pen.buf, r, view.tick);
+    }
+}
+
+/// Four cyan heavy corners one cell outside `r`, pulsing like the selected rows on
+/// the other tabs. Corners that fall off the buffer are skipped; the cells keep
+/// whatever they sat on.
+pub fn brackets(buf: &mut Buffer, r: Rect, tick: u64) {
+    let fg = CYAN_RGB.scale(0.7 + 0.3 * pulse(tick, 30)).to_color();
+    let (x1, y1) = (r.x.checked_sub(1), r.y.checked_sub(1));
+    let (x2, y2) = (r.x + r.width, r.y + r.height);
+    for (x, y, glyph) in [
+        (x1, y1, '┏'),
+        (Some(x2), y1, '┓'),
+        (x1, Some(y2), '┗'),
+        (Some(x2), Some(y2), '┛'),
+    ] {
+        if let (Some(x), Some(y)) = (x, y)
+            && buf.area.contains((x, y).into())
+        {
+            buf[(x, y)].set_char(glyph).set_fg(fg);
+        }
+    }
+}
+
+/// A drawing's pen: cells addressed from the drawing's origin, clipped to a rect so a
+/// drawing never spills past the area it was given.
+pub(crate) struct Pen<'a> {
+    pub buf: &'a mut Buffer,
+    pub ox: u16,
+    pub oy: u16,
+    pub clip: Rect,
+}
+
+impl Pen<'_> {
+    /// Writes `text` from (x, y); `bg` of `None` keeps the cell's own.
+    pub fn put(&mut self, x: u16, y: u16, text: &str, fg: Color, bg: Option<Color>, bold: bool) {
+        let y = self.oy + y;
+        for (i, ch) in text.chars().enumerate() {
+            let x = self.ox + x + i as u16;
+            if !self.clip.contains((x, y).into()) {
+                continue;
+            }
+            let cell = &mut self.buf[(x, y)];
+            cell.set_char(ch).set_fg(fg);
+            if let Some(bg) = bg {
+                cell.set_bg(bg);
+            }
+            cell.modifier = if bold {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            };
+        }
+    }
+
+    /// Paints a block's background, clearing what was written there.
+    pub fn fill(&mut self, x: u16, y: u16, w: u16, h: u16, bg: Color) {
+        for yy in y..y + h {
+            self.put(
+                x,
+                yy,
+                &" ".repeat(usize::from(w)),
+                Color::Reset,
+                Some(bg),
+                false,
+            );
+        }
+    }
+
+    /// Changes a block's background and nothing else.
+    pub fn tint(&mut self, x: u16, y: u16, w: u16, h: u16, bg: Color) {
+        for yy in self.oy + y..self.oy + y + h {
+            for xx in self.ox + x..self.ox + x + w {
+                if self.clip.contains((xx, yy).into()) {
+                    self.buf[(xx, yy)].set_bg(bg);
+                }
+            }
+        }
+    }
+
+    /// A box outline from the given corner and edge glyphs, keeping the backgrounds.
+    pub fn frame(&mut self, (x, y, w, h): (u16, u16, u16, u16), fg: Color, g: [char; 6]) {
+        let [tl, tr, bl, br, hz, vt] = g;
+        let run = |a: char, b: char| format!("{a}{}{b}", hz.to_string().repeat(usize::from(w) - 2));
+        self.put(x, y, &run(tl, tr), fg, None, false);
+        self.put(x, y + h - 1, &run(bl, br), fg, None, false);
+        for yy in y + 1..y + h - 1 {
+            self.put(x, yy, &vt.to_string(), fg, None, false);
+            self.put(x + w - 1, yy, &vt.to_string(), fg, None, false);
+        }
     }
 }
 
@@ -215,6 +335,80 @@ pub(crate) mod tests {
             typed: usize::MAX,
             tick: 0,
         }
+    }
+
+    pub fn render(view: &DeckView) -> Buffer {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 98, 22));
+        draw(view, Rect::new(0, 0, 98, 22), &mut buf);
+        buf
+    }
+
+    pub fn row(buf: &Buffer, y: u16) -> String {
+        (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect()
+    }
+
+    pub fn text(buf: &Buffer) -> String {
+        (0..buf.area.height)
+            .map(|y| row(buf, y))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn no_deck_draws_the_glass_and_inventory() {
+        let mut v = kit_view();
+        v.look = None;
+        v.point = Part::Inv(0);
+        v.glass = vec![("no deck jacked".into(), GlassTone::Dim)];
+        let buf = render(&v);
+        let t = text(&buf);
+        assert!(t.contains("no deck jacked"));
+        assert!(t.contains("INVENTORY"));
+        assert!(!t.contains("FAILSAFE"));
+        assert_eq!(size(None), (84, 13));
+        // 13 rows centred in 22: origin row 4; label on drawing row 9, carts on 10.
+        assert!(row(&buf, 4 + 9).contains("INVENTORY"));
+        assert!(row(&buf, 4 + 10).contains("ATTACK"));
+        // The pointer's corners sit one cell outside the cart.
+        assert_eq!(buf[(7 + 1, 4 + 9)].symbol(), "┏");
+        assert_eq!(buf[(7 + 14, 4 + 12)].symbol(), "┛");
+    }
+
+    #[test]
+    fn draw_centres_in_a_bigger_body() {
+        let v = kit_view();
+        let area = Rect::new(5, 3, 120, 30);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 140, 40));
+        draw(&v, area, &mut buf);
+        let (ox, oy) = (5 + (120 - 84) / 2, 3 + (30 - 22) / 2);
+        assert_eq!(buf[(ox + 4, oy + 5)].symbol(), " ");
+        assert_eq!(buf[(ox + 5, oy + 5)].symbol(), "K");
+        let blank = Buffer::empty(Rect::new(0, 0, 140, 40));
+        for y in 0..40 {
+            for x in 0..140 {
+                if !area.contains((x, y).into()) {
+                    assert_eq!(buf[(x, y)], blank[(x, y)], "({x},{y})");
+                }
+            }
+        }
+        let buf = render(&v);
+        assert_eq!(row(&buf, 5).chars().nth(7 + 5), Some('K'));
+    }
+
+    #[test]
+    fn brackets_pulse_and_stay_on_the_buffer() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 10));
+        brackets(&mut buf, Rect::new(5, 3, 4, 2), 0);
+        assert_eq!(buf[(4, 2)].symbol(), "┏");
+        assert_eq!(buf[(9, 2)].symbol(), "┓");
+        assert_eq!(buf[(4, 5)].symbol(), "┗");
+        assert_eq!(buf[(9, 5)].symbol(), "┛");
+        let a = buf[(4, 2)].fg;
+        brackets(&mut buf, Rect::new(5, 3, 4, 2), 8);
+        assert_ne!(buf[(4, 2)].fg, a);
+        // At the buffer's edge the corners that fall outside are skipped.
+        brackets(&mut buf, Rect::new(0, 0, 4, 2), 0);
+        assert_eq!(buf[(4, 2)].symbol(), "┛");
     }
 
     #[test]
