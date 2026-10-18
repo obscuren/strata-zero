@@ -74,6 +74,9 @@ const CART_DIM: Color = Color::Rgb(0x2a, 0x28, 0x30);
 const TAPE: Color = Color::Rgb(0xd9, 0xc9, 0xa0);
 const LOOSE_TAPE: Color = Color::Rgb(0x8a, 0x82, 0x70);
 const INK: Color = Color::Rgb(0x1a, 0x16, 0x12);
+/// Exact black, not the terminal's: the skull sticker's ink, the ROM strips' text and
+/// the hazard stripes' ground.
+const BLACK: Color = Color::Rgb(0, 0, 0);
 const GLASS: Color = Color::Rgb(0x14, 0x0e, 0x06);
 const GLASS_LO: Color = Color::Rgb(0x10, 0x0b, 0x04);
 const AMBER: Color = Color::Rgb(0xff, 0xb0, 0x00);
@@ -115,7 +118,7 @@ pub(super) fn draw_with(view: &DeckView, p: &mut Pen) {
     bay(p, view);
     slab(p, view);
     glass(p, view, GLASS_Y);
-    p.put(45, 13, SKULL, Color::Black, Some(HAZARD), true);
+    p.put(45, 13, SKULL, BLACK, Some(HAZARD), true);
     gauge(p, view);
     tag(p, view);
     failsafe(p, view.switch);
@@ -188,14 +191,7 @@ fn slab(p: &mut Pen, view: &DeckView) {
         .into_iter()
         .filter_map(|(q, r)| matches!(q, Part::Rom(_)).then_some(r));
     for (rom, r) in view.roms.iter().zip(strips) {
-        p.put(
-            r.x,
-            r.y,
-            &format!(" {rom} "),
-            Color::Black,
-            Some(AMBER_DIM),
-            false,
-        );
+        p.put(r.x, r.y, &format!(" {rom} "), BLACK, Some(AMBER_DIM), false);
     }
     p.put(50, 10, STICKER, WHITE, Some(MAGENTA), true);
 }
@@ -260,7 +256,7 @@ fn tag(p: &mut Pen, view: &DeckView) {
 
 /// The failsafe: a hazard frame round a well, the cover shut over it or flipped up.
 fn failsafe(p: &mut Pen, switch: Switch) {
-    let black = Some(Color::Black);
+    let black = Some(BLACK);
     let stripes = "▞".repeat(10);
     p.put(FX, FY, &stripes, HAZARD, black, false);
     p.put(FX, FY + 4, &stripes, HAZARD, black, false);
@@ -369,7 +365,7 @@ mod tests {
     use super::*;
     use crate::ui::cyberdeck::tests::{cart, kit_view};
     use crate::ui::cyberdeck::tests::{render, row, text};
-    use crate::ui::cyberdeck::{GlassTone, Held, Switch, draw};
+    use crate::ui::cyberdeck::{GlassTone, Held, Switch, draw, size};
     use ratatui::buffer::Buffer;
     use ratatui::style::{Color, Modifier};
 
@@ -677,6 +673,49 @@ mod tests {
             draw(&v, Rect::new(0, 0, 98, 22), &mut buf);
             for cell in &buf.content {
                 assert_eq!(cell.symbol().width(), 1, "{:?}", cell.symbol());
+            }
+        }
+    }
+
+    #[test]
+    fn every_colour_is_exact() {
+        // A named colour follows the terminal's palette; the look's are its own.
+        let mut v = lit_kit();
+        v.more_above = true;
+        v.more_below = true;
+        let mut views: Vec<DeckView> = [Switch::On, Switch::Lifted, Switch::Off]
+            .into_iter()
+            .map(|switch| DeckView {
+                switch,
+                ..v.clone()
+            })
+            .collect();
+        v.held = Some(Held {
+            from: 0,
+            cart: cart("SPOOF", 1),
+            start: 1,
+            letter: 'B',
+        });
+        v.point = Part::Slot(1);
+        views.push(v.clone());
+        v.look = None;
+        views.push(v);
+        for v in &views {
+            let buf = render(v);
+            let (w, h) = size(v.look);
+            let (ox, oy) = ((98 - w) / 2, (22 - h) / 2);
+            for y in oy..oy + h {
+                for x in ox..ox + w {
+                    let c = &buf[(x, y)];
+                    assert!(
+                        matches!((c.fg, c.bg), (Color::Rgb(..), Color::Rgb(..))),
+                        "{:?} {:?} ({x},{y}) {:?} on {:?}",
+                        v.switch,
+                        c.symbol(),
+                        c.fg,
+                        c.bg
+                    );
+                }
             }
         }
     }

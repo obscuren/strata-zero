@@ -216,17 +216,11 @@ impl Pen<'_> {
         }
     }
 
-    /// Paints a block's background, clearing what was written there.
+    /// Paints a block's background, clearing what was written there. The blanks are
+    /// inked in the same colour, so no cell is left to the terminal's own.
     pub fn fill(&mut self, x: u16, y: u16, w: u16, h: u16, bg: Color) {
         for yy in y..y + h {
-            self.put(
-                x,
-                yy,
-                &" ".repeat(usize::from(w)),
-                Color::Reset,
-                Some(bg),
-                false,
-            );
+            self.put(x, yy, &" ".repeat(usize::from(w)), bg, Some(bg), false);
         }
     }
 
