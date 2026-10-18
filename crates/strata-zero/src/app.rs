@@ -77,6 +77,10 @@ pub struct AppState {
     /// What the player knows: door codes, and the lost cards already laid out.
     pub journal: crate::credentials::Journal,
     pub helix: crate::helix::Helix,
+    /// The fixers' jobs and what each fixer thinks of you.
+    pub jobs: crate::jobs::Jobs,
+    /// The fixers' voice.
+    pub flavor: crate::jobs::Flavor,
 }
 
 /// One ability effect playing on the map.
@@ -152,6 +156,8 @@ impl AppState {
             home: None,
             journal: Default::default(),
             helix: Default::default(),
+            jobs: Default::default(),
+            flavor: crate::jobs::Flavor::load().expect("the jobs pack is valid"),
         }
     }
 
@@ -234,6 +240,7 @@ impl AppState {
         self.backdoors = Default::default();
         self.journal = Default::default();
         self.helix = Default::default();
+        self.jobs = Default::default();
         crate::credentials::purge(&mut self.content, &mut self.character);
         self.ground = Default::default();
         self.player = None;

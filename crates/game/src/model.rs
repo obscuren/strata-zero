@@ -457,7 +457,6 @@ pub struct Creation {
     pub name_max: usize,
     pub hp: u32,
     pub focus: u32,
-    pub quests: Vec<(QuestId, Vec<bool>)>,
     /// Talent points at creation.
     #[serde(default = "one")]
     pub talent_points: u32,

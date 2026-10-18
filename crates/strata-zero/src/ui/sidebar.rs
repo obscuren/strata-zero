@@ -193,6 +193,8 @@ pub struct SidebarView<'a> {
     pub now: u64,
     /// The ICE the player can see in their construct, one line each.
     pub ice_lines: Vec<String>,
+    /// The QUEST pane: the job in hand, from `jobs::ui::pane_lines`.
+    pub quest: Vec<Line<'static>>,
 }
 
 fn plain(text: impl Into<String>) -> Line<'static> {
@@ -298,42 +300,6 @@ pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
         out.push(dim(" nothing here"));
     }
     out
-}
-
-/// The first unfinished quest: title and giver, its first open objective, and pips.
-pub fn quest_lines(character: &Character, content: &Content) -> Vec<Line<'static>> {
-    for q in &character.quests {
-        if q.is_done() {
-            continue;
-        }
-        let Some(quest) = content.quest(&q.quest) else {
-            continue;
-        };
-        let Some(i) = q.done.iter().position(|d| !*d) else {
-            continue;
-        };
-        let done = q.done.iter().filter(|d| **d).count();
-        let total = q.done.len();
-        let objective = quest.objectives.get(i).cloned().unwrap_or_default();
-        return vec![
-            Line::from(vec![
-                Span::raw(" "),
-                Span::styled(
-                    quest.title.to_uppercase(),
-                    Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(format!(" · {}", quest.giver), Style::default().fg(TEXT)),
-            ]),
-            plain(format!(" » {objective}")),
-            Line::from(vec![
-                Span::raw(" "),
-                Span::styled("▰".repeat(done), Style::default().fg(CYAN)),
-                Span::styled("▱".repeat(total - done), Style::default().fg(DIM)),
-                Span::styled(format!(" {done}/{total}"), Style::default().fg(DIM)),
-            ]),
-        ];
-    }
-    vec![dim(" no active quest")]
 }
 
 /// Word-wraps `text` to `width` cells; words longer than a row are broken.
@@ -496,7 +462,7 @@ pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) -> V
                 (l, n)
             }
             Section::Quest => {
-                let l = quest_lines(v.character, v.content);
+                let l = v.quest.clone();
                 let n = rows_for(&l, w).min(QUEST_CAP);
                 (l, n)
             }
@@ -619,6 +585,7 @@ mod tests {
             net: &st.net,
             now: 0,
             ice_lines: Vec::new(),
+            quest: crate::jobs::ui::pane_lines(st),
         }
     }
 
@@ -770,34 +737,9 @@ mod tests {
     }
 
     #[test]
-    fn quest_shows_title_objective_and_pips() {
-        let st = state();
-        let lines: Vec<String> = quest_lines(&st.character, &st.content)
-            .iter()
-            .map(|l| l.to_string())
-            .collect();
-        assert_eq!(
-            lines,
-            vec![
-                " THE DROP · Mama Sol",
-                " » Cross the corp core without a scan",
-                " ▰▱▱ 1/3"
-            ]
-        );
-        let mut ch = st.character.clone();
-        for q in &mut ch.quests {
-            q.done.fill(true);
-        }
-        let lines: Vec<String> = quest_lines(&ch, &st.content)
-            .iter()
-            .map(|l| l.to_string())
-            .collect();
-        assert_eq!(lines, vec![" no active quest"]);
-    }
-
-    #[test]
     fn panes_are_separated_by_light_rules_and_have_no_titles() {
         let mut st = state();
+        crate::jobs::testutil::sample_jobs(&mut st);
         st.dev = false;
         st.tick += 200;
         let (k, pos) = {
@@ -864,6 +806,7 @@ mod tests {
     #[test]
     fn draw_fits_every_section_and_wraps_log_entries() {
         let mut st = state();
+        crate::jobs::testutil::sample_jobs(&mut st);
         st.dev = true;
         st.sidebar.set(Section::Inspect, true);
         st.sidebar.set(Section::Legend, true);
@@ -879,7 +822,7 @@ mod tests {
         }
         let text = draw_to(&view(&st, pos, k), &st.sidebar, width(100), 60);
         for needle in [
-            "THE DROP · Mama Sol",
+            "THE DROP · the fixer",
             "▰▱▱ 1/3",
             "· Street",
             "aaaa",

@@ -105,7 +105,7 @@ pub(crate) enum Tone {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Detail {
-    Quest(usize),
+    Job(crate::jobs::JobId),
     Slot(Slot),
     Item(ItemId),
     Recipe(usize),
@@ -698,7 +698,7 @@ impl Deck {
             Tab::Inventory => Self::inventory_rows(st),
             Tab::Workbench => Self::workbench_rows(st),
             Tab::Cyberdeck => Self::cyberdeck_rows(st),
-            Tab::Quests => Self::quest_rows(st),
+            Tab::Quests => crate::jobs::ui::deck_rows(st),
             Tab::Journal => Self::journal_rows(st),
             Tab::Map | Tab::Talents => Vec::new(),
         }
@@ -726,30 +726,6 @@ impl Deck {
             out.push(cyan(format!("grants {name}")));
         }
         out
-    }
-
-    fn quest_rows(st: &AppState) -> Vec<Row> {
-        let mut active = Vec::new();
-        let mut done = Vec::new();
-        for (i, log) in st.character.quests.iter().enumerate() {
-            let Some(q) = st.content.quest(&log.quest) else {
-                continue;
-            };
-            let finished = log.is_done();
-            let row = Row {
-                text: format!("{} {}", if finished { "✓" } else { " " }, q.title),
-                tone: if finished { Tone::Done } else { Tone::Normal },
-                detail: Some(Detail::Quest(i)),
-                spans: None,
-            };
-            if finished {
-                done.push(row);
-            } else {
-                active.push(row);
-            }
-        }
-        active.extend(done);
-        active
     }
 
     fn gear_rows(st: &AppState) -> Vec<Row> {
@@ -1014,26 +990,7 @@ impl Deck {
         };
         match &row.detail {
             None => Vec::new(),
-            Some(Detail::Quest(i)) => {
-                let log = &st.character.quests[*i];
-                let Some(q) = st.content.quest(&log.quest) else {
-                    return Vec::new();
-                };
-                let mut out = vec![head(&q.title)];
-                out.push(dim(format!("from {} · {}", q.giver, q.location)));
-                out.push(plain(""));
-                out.push(plain(q.desc.clone()));
-                out.push(plain(""));
-                for (j, text) in q.objectives.iter().enumerate() {
-                    let done = log.done.get(j).copied().unwrap_or(false);
-                    out.push(if done {
-                        Line::from(Span::styled(format!("☑ {text}"), tone_style(Tone::Done)))
-                    } else {
-                        plain(format!("☐ {text}"))
-                    });
-                }
-                out
-            }
+            Some(Detail::Job(id)) => crate::jobs::ui::detail(st, *id),
             Some(Detail::Slot(slot)) => match st.character.equipped(*slot) {
                 Some(id) => Self::item_card(st, id),
                 None => vec![
@@ -1724,6 +1681,7 @@ mod tests {
             text.contains("VEX") && text.contains("¤ 320") && text.contains("hp 45/45"),
             "{text}"
         );
+        crate::jobs::testutil::sample_jobs(&mut st);
         d.update(&mut st, &[key(KeyCode::Char('7'))]);
         st.tick += 40;
         let text = draw(&d, &st, 120, 35);

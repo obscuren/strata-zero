@@ -17,8 +17,6 @@ pub enum ContentError {
     UnknownSkill { where_: String, id: String },
     #[error("{where_}: unknown talent `{id}`")]
     UnknownTalent { where_: String, id: String },
-    #[error("{where_}: unknown quest `{id}`")]
-    UnknownQuest { where_: String, id: String },
     #[error("{where_}: unknown ability `{id}`")]
     UnknownAbility { where_: String, id: String },
     #[error("item `{item}` has a use but is not a consumable")]
@@ -45,8 +43,6 @@ pub enum ContentError {
     UnknownCategory { where_: String, id: String },
     #[error("{what} `{id}`: emblem must be three rows of seven glyphs")]
     EmblemShape { what: String, id: String },
-    #[error("creation quest `{quest}`: flags do not match its objectives")]
-    CreationQuest { quest: String },
     #[error("template `{id}`: {why}")]
     TemplateInvalid { id: String, why: String },
     #[error("talent `{id}`: {why}")]
@@ -405,17 +401,6 @@ impl Content {
                     why: e.to_string(),
                 })?;
         }
-        for (id, flags) in &self.creation.quests {
-            let q = self.quest(id).ok_or_else(|| ContentError::UnknownQuest {
-                where_: "creation quests".into(),
-                id: id.0.clone(),
-            })?;
-            if flags.len() != q.objectives.len() {
-                return Err(ContentError::CreationQuest {
-                    quest: id.0.clone(),
-                });
-            }
-        }
         Ok(())
     }
 
@@ -577,7 +562,7 @@ mod tests {
         assert!(c.items.len() >= 14, "{} items", c.items.len());
         assert_eq!(c.skills.len(), 24);
         assert!(c.talents.len() >= 8);
-        assert!(c.quests.len() >= 4);
+        assert!(c.quests.is_empty(), "authored quests come with spec 2");
         assert!(c.recipes.len() >= 6);
         for kind in ItemKind::ALL {
             assert!(c.items.iter().any(|i| i.kind == kind), "no {kind:?} item");
@@ -590,14 +575,6 @@ mod tests {
         }
         let vex = c.template(&TemplateId::new("vex")).unwrap();
         assert_eq!(vex.handle, "VEX");
-        assert!(
-            c.creation.quests.iter().any(|(_, d)| d.iter().all(|x| *x)),
-            "one quest is done"
-        );
-        assert!(
-            c.creation.quests.iter().any(|(_, d)| d.iter().any(|x| !*x)),
-            "one quest is active"
-        );
         assert_eq!(
             c.item(&ItemId::new("copper_coil")).unwrap().kind,
             ItemKind::Component
@@ -634,13 +611,6 @@ mod tests {
         assert!(matches!(c.validate(), Err(ContentError::DuplicateId(_))));
 
         let mut c = good.clone();
-        c.creation.quests[0].1.push(true);
-        assert!(matches!(
-            c.validate(),
-            Err(ContentError::CreationQuest { .. })
-        ));
-
-        let mut c = good.clone();
         c.talents[0].skill = Some(SkillId::new("origami"));
         assert!(matches!(
             c.validate(),
@@ -652,13 +622,6 @@ mod tests {
         assert!(matches!(
             c.validate(),
             Err(ContentError::UnknownTalent { .. })
-        ));
-
-        let mut c = good.clone();
-        c.creation.quests[0].0 = QuestId::new("the_grail");
-        assert!(matches!(
-            c.validate(),
-            Err(ContentError::UnknownQuest { .. })
         ));
 
         let mut c = good.clone();

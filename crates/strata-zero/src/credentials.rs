@@ -106,28 +106,10 @@ pub struct Favour {
     pub fixer: String,
 }
 
-pub const FAVOUR_QUEST: &str = "first_favour";
-
-fn favour_log(st: &mut AppState) -> Option<&mut game::QuestLog> {
-    st.character
-        .quests
-        .iter_mut()
-        .find(|q| q.quest == game::QuestId::new(FAVOUR_QUEST))
-}
-
-/// A mail has been read: marks it; the favour's mail ticks its first objective.
+/// A mail has been read: marks it.
 pub fn mail_read(st: &mut AppState, index: usize) {
     if let Some(m) = st.journal.mails.get_mut(index) {
         m.read = true;
-    }
-    if index == 0
-        && st.journal.favour.is_some()
-        && let Some(log) = favour_log(st)
-        && let Some(first) = log.done.first_mut()
-        && !*first
-    {
-        *first = true;
-        st.story("a favour · the mail is read");
     }
 }
 
@@ -148,14 +130,8 @@ pub fn shard_taken(st: &mut AppState, place: Place, pos: Pos) {
     if still_there {
         return;
     }
-    if let Some(log) = favour_log(st)
-        && let Some(second) = log.done.get_mut(1)
-        && !*second
-    {
-        *second = true;
-        let fixer = f.fixer.clone();
-        st.story(format!("the shard is yours · `{fixer}` will want it"));
-    }
+    let fixer = f.fixer.clone();
+    st.story(format!("the shard is yours · `{fixer}` will want it"));
 }
 
 /// The fixer nearest the building's door, by the corner they hold.
@@ -270,13 +246,6 @@ pub fn first_mail(st: &mut AppState) {
         tile,
         fixer: first,
     });
-    let id = game::QuestId::new(FAVOUR_QUEST);
-    if !st.character.quests.iter().any(|q| q.quest == id) {
-        st.character.quests.push(game::QuestLog {
-            quest: id,
-            done: vec![false, false],
-        });
-    }
 }
 
 impl Journal {
@@ -1402,24 +1371,9 @@ mod tests {
                 .iter()
                 .any(|s| s.item == ItemId::new("paydata"))
         );
-        let log = st
-            .character
-            .quests
-            .iter()
-            .find(|q| q.quest == game::QuestId::new("first_favour"))
-            .expect("the favour in the log");
-        assert_eq!(log.done, vec![false, false]);
         // A load wakes you again: nothing doubles.
         move_in(&mut st);
         assert_eq!(st.journal.mails.len(), 1);
-        assert_eq!(
-            st.character
-                .quests
-                .iter()
-                .filter(|q| q.quest == game::QuestId::new("first_favour"))
-                .count(),
-            1
-        );
         assert_eq!(
             st.ground
                 .at(place, favour.tile)
@@ -1451,43 +1405,6 @@ mod tests {
         assert!(
             lines.iter().any(|l| l == "fixers quiet until day 2 02:00"),
             "{lines:?}"
-        );
-    }
-
-    #[test]
-    fn reading_and_taking_tick_the_favour() {
-        let mut st = state_home();
-        let home = st.home.unwrap().home;
-        prepare(&mut st, home.building);
-        move_in(&mut st);
-        let favour = st.journal.favour.clone().unwrap();
-        let (b, level, _) = favour.flat;
-        let place = Place::Floor { building: b, level };
-        mail_read(&mut st, 0);
-        assert!(st.journal.mails[0].read);
-        let done = |st: &crate::app::AppState| {
-            st.character
-                .quests
-                .iter()
-                .find(|q| q.quest == game::QuestId::new("first_favour"))
-                .unwrap()
-                .done
-                .clone()
-        };
-        assert_eq!(done(&st), vec![true, false]);
-        // Taking it elsewhere, or before it is gone from the floor, ticks nothing.
-        shard_taken(&mut st, place, favour.tile);
-        assert_eq!(done(&st), vec![true, false]);
-        st.ground
-            .take(place, favour.tile, &ItemId::new("paydata"), 1);
-        shard_taken(&mut st, place, favour.tile);
-        assert_eq!(done(&st), vec![true, true]);
-        assert!(
-            st.log
-                .latest()
-                .is_some_and(|e| e.text.contains("the shard is yours")),
-            "{:?}",
-            st.log.latest()
         );
     }
 }

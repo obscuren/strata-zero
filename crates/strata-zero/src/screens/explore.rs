@@ -2303,6 +2303,7 @@ impl Screen for MapScreen {
             dev: st.dev,
             net: &st.net,
             now: st.net.now(st),
+            quest: crate::jobs::ui::pane_lines(st),
             ice_lines: match (self.place, st.player.as_ref()) {
                 (Place::Construct(b), Some(p)) if p.place == self.place => {
                     let vis = p.vis();
@@ -3800,6 +3801,7 @@ mod tests {
         let mut st = state();
         let mut s = MapScreen::explore(0);
         walking(&mut st, &mut s);
+        crate::jobs::testutil::sample_jobs(&mut st);
         st.say("took it");
         st.tick += 200;
         let text = draw_screen(&s, &st, 100, 30);
@@ -3811,6 +3813,7 @@ mod tests {
     #[test]
     fn frame_carries_no_explicit_background() {
         let mut st = state();
+        crate::jobs::testutil::sample_jobs(&mut st);
         let mut s = MapScreen::explore(0);
         s.update(&mut st, &[]);
         let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
