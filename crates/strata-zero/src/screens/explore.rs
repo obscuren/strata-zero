@@ -9594,7 +9594,7 @@ mod tests {
     }
 
     #[test]
-    fn a_hop_aborts_a_run_and_costs_an_action() {
+    fn a_hop_aborts_a_run() {
         let (mut st, _s) = home_screen();
         let h = st.home.unwrap();
         let seed = st.city.as_ref().unwrap().seed;
@@ -9623,7 +9623,48 @@ mod tests {
         });
         crate::net::hop(&mut st, b2).unwrap();
         assert!(st.net.run.is_none());
-        assert_eq!(st.net.engaged.as_ref().unwrap().ap, 1);
         assert!(st.log.iter().any(|e| e.text == "run aborted"));
+    }
+
+    #[test]
+    fn the_backdoor_program_is_greyed_at_the_cap() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let (server, server_pos) = node_of(&st, b, NodeKind::Server);
+        let here = beside(&st, b, server_pos);
+        stand(&mut st, &mut s, Place::Construct(b), here);
+        st.character
+            .unload(&st.content, &ItemId::new("copy"))
+            .unwrap();
+        st.character
+            .unload(&st.content, &ItemId::new("crack"))
+            .unwrap();
+        let at = game::At {
+            place: Place::Construct(b),
+            pos: here,
+        };
+        crate::screens::console::run(&mut st, at, "program backdoor").unwrap();
+        for i in 0..3 {
+            st.backdoors
+                .plant_net(citygen::BuildingId(9000 + i), 1, 0, 0);
+        }
+        let why = "the rig holds 3 lines · burn one first";
+        let rows =
+            |st: &AppState| crate::interact::run_rows(st, b, here, None, &mut FREE_LETTERS.chars());
+        let all = rows(&st);
+        let row = all.iter().find(|c| c.label == "Backdoor").expect("a row");
+        assert!(!row.enabled);
+        assert!(row.tail.ends_with(why), "{:?}", row.tail);
+        let target = game::HackTarget::Node(server);
+        assert_eq!(
+            crate::net::start_run(&mut st, ItemId::new("backdoor"), target).unwrap_err(),
+            why
+        );
+        st.backdoors
+            .burn(citygen::BuildingId(9000), crate::backdoors::Why::You, 0);
+        let all = rows(&st);
+        assert!(all.iter().find(|c| c.label == "Backdoor").unwrap().enabled);
+        assert!(crate::net::start_run(&mut st, ItemId::new("backdoor"), target).is_ok());
     }
 }

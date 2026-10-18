@@ -481,11 +481,7 @@ fn hop_rows(
     let now = st.net.now(st);
     let home_run = st.backdoors.route.is_some();
     let mut rows = Vec::new();
-    for d in
-        st.backdoors.list.iter().filter(|d| {
-            d.building != b && !matches!(d.state, crate::backdoors::State::Burned { .. })
-        })
-    {
+    for d in st.backdoors.standing().filter(|d| d.building != b) {
         let Some(key) = letters.next() else { break };
         let name = crate::net::building_name(st, d.building);
         let state = format!(" · {} · {}", d.user_label(), d.health(now).label());
