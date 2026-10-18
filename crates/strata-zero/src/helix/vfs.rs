@@ -868,6 +868,21 @@ mod tests {
             Err(VfsError::Denied)
         );
         assert_eq!(
+            v.mkdir(GUEST, "/", "/tmp", "/home/mara/notes", false),
+            Err(VfsError::Denied)
+        );
+        v.mkdir("mara", "/", "/home/mara", "/home/mara/pub", false)
+            .unwrap();
+        v.mkdir_as("/home/mara/pub", "mara", Mode::RW_RW);
+        assert_eq!(
+            v.mkdir(GUEST, "/", "/tmp", "/home/mara/pub/z", true),
+            Err(VfsError::Denied)
+        );
+        assert_eq!(
+            v.mkdir(GUEST, "/", "/tmp", "/home/mara/pub", true),
+            Err(VfsError::Denied)
+        );
+        assert_eq!(
             v.rename(GUEST, "/", "/", "/home/mara/new", "/tmp/n"),
             Err(VfsError::Denied)
         );
