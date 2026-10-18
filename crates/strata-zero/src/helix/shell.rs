@@ -280,17 +280,38 @@ fn is_denied(msg: &str) -> bool {
     msg.ends_with("Permission denied")
 }
 
-fn fail(out: &mut Output, cmd: &str, path: &str, e: &VfsError) {
-    out.lines.push(format!("{cmd}: {path}: {e}"));
+/// A stage's result: `out` is its stdout (and flags); `err` is what it complains about.
+/// Only stdout flows down a pipe or into a redirect; errors go to the screen.
+#[derive(Default)]
+struct Res {
+    out: Output,
+    err: Vec<String>,
+}
+
+impl std::ops::Deref for Res {
+    type Target = Output;
+    fn deref(&self) -> &Output {
+        &self.out
+    }
+}
+
+impl std::ops::DerefMut for Res {
+    fn deref_mut(&mut self) -> &mut Output {
+        &mut self.out
+    }
+}
+
+fn fail(out: &mut Res, cmd: &str, path: &str, e: &VfsError) {
+    out.err.push(format!("{cmd}: {path}: {e}"));
     out.status = 1;
     if *e == VfsError::Denied {
         out.denied = true;
     }
 }
 
-fn fail_msg(out: &mut Output, msg: String) {
+fn fail_msg(out: &mut Res, msg: String) {
     out.denied |= is_denied(&msg);
-    out.lines.push(msg);
+    out.err.push(msg);
     out.status = 1;
 }
 
@@ -316,7 +337,7 @@ enum ReadErr {
     Msg(String),
 }
 
-fn report(out: &mut Output, cmd: &str, path: &str, e: ReadErr) {
+fn report(out: &mut Res, cmd: &str, path: &str, e: ReadErr) {
     match e {
         ReadErr::Fs(e) => fail(out, cmd, path, &e),
         ReadErr::Msg(m) => fail_msg(out, m),
@@ -349,7 +370,7 @@ fn inputs(
     cmd: &str,
     files: &[&str],
     stdin: &[String],
-    out: &mut Output,
+    out: &mut Res,
 ) -> Vec<(Option<String>, Vec<String>)> {
     if files.is_empty() {
         return vec![(None, stdin.to_vec())];
@@ -400,34 +421,38 @@ pub fn run(io: &mut dyn Io, shell: &mut Shell, line: &str) -> Output {
 
 fn run_pipeline(io: &mut dyn Io, shell: &mut Shell, p: &Pipeline) -> Output {
     let mut acc = Output::default();
+    let mut errs: Vec<String> = Vec::new();
     let mut stdin: Vec<String> = Vec::new();
     for stage in &p.stages {
-        let o = exec(io, shell, stage, &stdin);
-        acc.status = o.status;
-        acc.clear |= o.clear;
-        acc.exit |= o.exit;
-        acc.denied |= o.denied;
-        if o.open_nano.is_some() {
-            acc.open_nano = o.open_nano;
+        let r = exec(io, shell, stage, &stdin);
+        acc.status = r.out.status;
+        acc.clear |= r.out.clear;
+        acc.exit |= r.out.exit;
+        acc.denied |= r.out.denied;
+        if r.out.open_nano.is_some() {
+            acc.open_nano = r.out.open_nano;
         }
-        stdin = o.lines;
+        errs.extend(r.err);
+        stdin = r.out.lines;
     }
     acc.lines = stdin;
     if let Some((path, append)) = &p.redirect {
         let me = Me::of(shell);
         let r = redirect(io, &me, path, *append, &acc.lines);
-        acc.lines = r.lines;
-        acc.denied |= r.denied;
-        if r.status != 0 {
-            acc.status = r.status;
+        acc.lines = r.out.lines;
+        acc.denied |= r.out.denied;
+        if r.out.status != 0 {
+            acc.status = r.out.status;
         }
+        errs.extend(r.err);
     }
+    acc.lines.extend(errs);
     acc
 }
 
 /// Write a pipeline's lines onto a file, or hand them to a device after the check.
-fn redirect(io: &mut dyn Io, me: &Me, path: &str, append: bool, lines: &[String]) -> Output {
-    let mut out = Output::default();
+fn redirect(io: &mut dyn Io, me: &Me, path: &str, append: bool, lines: &[String]) -> Res {
+    let mut out = Res::default();
     let node = {
         let fs = io.fs(me.host);
         fs.resolve_as(&me.user, &me.cwd, &me.home, path)
@@ -458,23 +483,28 @@ fn redirect(io: &mut dyn Io, me: &Me, path: &str, append: bool, lines: &[String]
     out
 }
 
-fn exec(io: &mut dyn Io, shell: &mut Shell, argv: &[String], stdin: &[String]) -> Output {
+fn exec(io: &mut dyn Io, shell: &mut Shell, argv: &[String], stdin: &[String]) -> Res {
     let name = argv[0].as_str();
     let args = &argv[1..];
     if BUILTINS.contains(&name) {
         return builtin(io, shell, name, args, stdin);
     }
     match io.program(shell, name, args, stdin) {
-        Some(Ok(out)) => out,
+        Some(Ok(out)) => Res {
+            out,
+            err: Vec::new(),
+        },
         Some(Err(m)) => {
-            let mut out = Output::default();
+            let mut out = Res::default();
             fail_msg(&mut out, m);
             out
         }
-        None => Output {
-            lines: vec![format!("helix: {name}: command not found")],
-            status: 127,
-            ..Output::default()
+        None => Res {
+            out: Output {
+                status: 127,
+                ..Output::default()
+            },
+            err: vec![format!("helix: {name}: command not found")],
         },
     }
 }
@@ -487,9 +517,9 @@ fn builtin(
     name: &str,
     args: &[String],
     stdin: &[String],
-) -> Output {
+) -> Res {
     let me = Me::of(shell);
-    let mut out = Output::default();
+    let mut out = Res::default();
     match name {
         "ls" => ls(io, &me, args, &mut out),
         "cd" => cd(io, shell, &me, args, &mut out),
@@ -547,7 +577,7 @@ fn builtin(
     out
 }
 
-fn ls(io: &mut dyn Io, me: &Me, args: &[String], out: &mut Output) {
+fn ls(io: &mut dyn Io, me: &Me, args: &[String], out: &mut Res) {
     let (flags, mut paths) = split_args(args);
     let long = flags.contains('l');
     let all = flags.contains('a');
@@ -594,7 +624,7 @@ fn ls(io: &mut dyn Io, me: &Me, args: &[String], out: &mut Output) {
     }
 }
 
-fn cd(io: &mut dyn Io, shell: &mut Shell, me: &Me, args: &[String], out: &mut Output) {
+fn cd(io: &mut dyn Io, shell: &mut Shell, me: &Me, args: &[String], out: &mut Res) {
     if args.len() > 1 {
         fail_msg(out, "cd: too many arguments".to_string());
         return;
@@ -611,7 +641,7 @@ fn cd(io: &mut dyn Io, shell: &mut Shell, me: &Me, args: &[String], out: &mut Ou
     }
 }
 
-fn cat(io: &mut dyn Io, me: &Me, args: &[String], stdin: &[String], out: &mut Output) {
+fn cat(io: &mut dyn Io, me: &Me, args: &[String], stdin: &[String], out: &mut Res) {
     if args.is_empty() {
         out.lines = stdin.to_vec();
         return;
@@ -624,7 +654,7 @@ fn cat(io: &mut dyn Io, me: &Me, args: &[String], stdin: &[String], out: &mut Ou
     }
 }
 
-fn touch(io: &mut dyn Io, me: &Me, args: &[String], out: &mut Output) {
+fn touch(io: &mut dyn Io, me: &Me, args: &[String], out: &mut Res) {
     if args.is_empty() {
         fail_msg(out, "touch: missing file operand".to_string());
     }
@@ -641,7 +671,7 @@ fn touch(io: &mut dyn Io, me: &Me, args: &[String], out: &mut Output) {
     }
 }
 
-fn mkdir(io: &mut dyn Io, me: &Me, args: &[String], out: &mut Output) {
+fn mkdir(io: &mut dyn Io, me: &Me, args: &[String], out: &mut Res) {
     let (flags, paths) = split_args(args);
     if paths.is_empty() {
         fail_msg(out, "mkdir: missing operand".to_string());
@@ -656,7 +686,7 @@ fn mkdir(io: &mut dyn Io, me: &Me, args: &[String], out: &mut Output) {
     }
 }
 
-fn rm(io: &mut dyn Io, me: &Me, args: &[String], out: &mut Output) {
+fn rm(io: &mut dyn Io, me: &Me, args: &[String], out: &mut Res) {
     let (flags, paths) = split_args(args);
     let recursive = flags.contains('r') || flags.contains('R');
     if paths.is_empty() {
@@ -699,7 +729,7 @@ fn dst_to_blame(fs: &Vfs, me: &Me, src: &str, dst: &str) -> bool {
     }
 }
 
-fn cp_mv(io: &mut dyn Io, me: &Me, cmd: &str, args: &[String], out: &mut Output) {
+fn cp_mv(io: &mut dyn Io, me: &Me, cmd: &str, args: &[String], out: &mut Res) {
     let (_, ops) = split_args(args);
     let [src, dst] = ops[..] else {
         let msg = if ops.len() < 2 {
@@ -726,7 +756,7 @@ fn cp_mv(io: &mut dyn Io, me: &Me, cmd: &str, args: &[String], out: &mut Output)
     }
 }
 
-fn grep(io: &mut dyn Io, me: &Me, args: &[String], stdin: &[String], out: &mut Output) {
+fn grep(io: &mut dyn Io, me: &Me, args: &[String], stdin: &[String], out: &mut Res) {
     let (flags, ops) = split_args(args);
     let Some((pat, files)) = ops.split_first() else {
         fail_msg(out, "usage: grep [-i] pattern [file..]".to_string());
@@ -768,7 +798,7 @@ fn head_tail(
     cmd: &str,
     args: &[String],
     stdin: &[String],
-    out: &mut Output,
+    out: &mut Res,
 ) {
     let mut n = 10usize;
     let mut files: Vec<&str> = Vec::new();
@@ -807,7 +837,7 @@ fn head_tail(
     };
 }
 
-fn wc(io: &mut dyn Io, me: &Me, args: &[String], stdin: &[String], out: &mut Output) {
+fn wc(io: &mut dyn Io, me: &Me, args: &[String], stdin: &[String], out: &mut Res) {
     let (flags, files) = split_args(args);
     let any = flags.contains(['l', 'w', 'c']);
     let want = |c: char| !any || flags.contains(c);
@@ -1316,6 +1346,38 @@ mod tests {
         // a pipeline redirected: the file gets the lines
         sh(&mut io, &mut s, "cat /etc/motd | grep block > b.txt");
         assert_eq!(sh(&mut io, &mut s, "cat b.txt"), vec!["to the block"]);
+    }
+
+    #[test]
+    fn errors_go_to_the_screen_never_into_a_pipe_or_a_file() {
+        let mut io = io();
+        let mut s = guest();
+        s.cwd = "/tmp".to_string();
+        // a failed stage still creates the (empty) target, as Unix does
+        let out = run(&mut io, &mut s, "cat /nope > out");
+        assert_eq!(out.lines, vec!["cat: /nope: No such file or directory"]);
+        assert_ne!(out.status, 0);
+        let id = io.fs(H).resolve("/", "/", "/tmp/out").unwrap();
+        assert_eq!(io.fs(H).node(id).kind, Kind::File(String::new()));
+        // a denied read appends nothing and shows the player the refusal
+        let out = run(&mut io, &mut s, "cat /home/mara/notes.txt >> /tmp/log");
+        assert_eq!(
+            out.lines,
+            vec!["cat: /home/mara/notes.txt: Permission denied"]
+        );
+        assert!(out.denied);
+        let id = io.fs(H).resolve("/", "/", "/tmp/log").unwrap();
+        assert_eq!(io.fs(H).node(id).kind, Kind::File(String::new()));
+        // errors are not data for the next stage
+        let out = run(&mut io, &mut s, "ls /nope | wc -l");
+        assert_eq!(out.lines, vec!["0", "ls: /nope: No such file or directory"]);
+        // good output still reaches the file while the error shows
+        let out = run(&mut io, &mut s, "cat /etc/motd /nope > m");
+        assert_eq!(out.lines, vec!["cat: /nope: No such file or directory"]);
+        assert_eq!(
+            sh(&mut io, &mut s, "cat m"),
+            vec!["welcome", "to the block"]
+        );
     }
 
     #[test]
