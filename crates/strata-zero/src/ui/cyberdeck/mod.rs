@@ -160,7 +160,7 @@ pub fn draw(view: &DeckView, area: Rect, buf: &mut Buffer) {
     }
     if let Some((_, r)) = parts(view).into_iter().find(|(p, _)| *p == view.point) {
         let r = Rect::new(ox + r.x, oy + r.y, r.width, r.height);
-        brackets(pen.buf, r, view.tick);
+        brackets_in(pen.buf, r, view.tick, pen.clip);
     }
 }
 
@@ -168,6 +168,12 @@ pub fn draw(view: &DeckView, area: Rect, buf: &mut Buffer) {
 /// the other tabs. Corners that fall off the buffer are skipped; the cells keep
 /// whatever they sat on.
 pub fn brackets(buf: &mut Buffer, r: Rect, tick: u64) {
+    let clip = buf.area;
+    brackets_in(buf, r, tick, clip);
+}
+
+/// `brackets`, leaving out corners that fall outside `clip`.
+fn brackets_in(buf: &mut Buffer, r: Rect, tick: u64, clip: Rect) {
     let fg = CYAN_RGB.scale(0.7 + 0.3 * pulse(tick, 30)).to_color();
     let (x1, y1) = (r.x.checked_sub(1), r.y.checked_sub(1));
     let (x2, y2) = (r.x + r.width, r.y + r.height);
@@ -178,7 +184,7 @@ pub fn brackets(buf: &mut Buffer, r: Rect, tick: u64) {
         (Some(x2), Some(y2), '┛'),
     ] {
         if let (Some(x), Some(y)) = (x, y)
-            && buf.area.contains((x, y).into())
+            && clip.contains((x, y).into())
         {
             buf[(x, y)].set_char(glyph).set_fg(fg);
         }
@@ -393,6 +399,26 @@ pub(crate) mod tests {
         }
         let buf = render(&v);
         assert_eq!(row(&buf, 5).chars().nth(7 + 5), Some('K'));
+    }
+
+    #[test]
+    fn a_small_area_is_never_spilled_past() {
+        // The failsafe's right corners and the inventory's bottom ones fall outside.
+        let area = Rect::new(10, 6, 60, 12);
+        let blank = Buffer::empty(Rect::new(0, 0, 98, 30));
+        for point in [Part::Slot(0), Part::Plate, Part::Failsafe, Part::Inv(0)] {
+            let mut v = kit_view();
+            v.point = point;
+            let mut buf = blank.clone();
+            draw(&v, area, &mut buf);
+            for y in 0..30 {
+                for x in 0..98 {
+                    if !area.contains((x, y).into()) {
+                        assert_eq!(buf[(x, y)], blank[(x, y)], "{point:?} ({x},{y})");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

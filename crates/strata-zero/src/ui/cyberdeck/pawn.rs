@@ -159,9 +159,9 @@ fn bay(p: &mut Pen, view: &DeckView) {
         p.put(x + 2, 3, &stats, INK, Some(tape), false);
         start += size;
     }
-    // Only the first empty slot says so: it is the one a program can land in.
-    if start < u16::from(view.slots) {
-        p.put(8 + 14 * start + 3, 3, "empty", EMPTY, None, false);
+    // Every empty slot says so, though only the first is a stop.
+    for i in start..u16::from(view.slots) {
+        p.put(8 + 14 * i + 3, 3, "empty", EMPTY, None, false);
     }
 }
 
@@ -566,7 +566,7 @@ mod tests {
         for l in ["A", "B", "C", "D"] {
             assert!(r4.contains(&format!(" {l} ")), "{l}");
         }
-        assert_eq!(row(&buf, 3).matches("empty").count(), 1);
+        assert_eq!(row(&buf, 3).matches("empty").count(), 3);
         assert!(row(&buf, 5).contains("4 SLOT · R1"));
     }
 
