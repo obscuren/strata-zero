@@ -155,10 +155,10 @@ ever uses `factor`.
 - `check(b, security, seed, now) -> Use`: what using it now does. `Use::Works`
   when the real moment has not passed; else, the first time, the roll:
   `hash64(seed, building ^ 0xB00B) % 3 == 0` on a grey-or-worse host makes it
-  `Honeypot` (state set, `Use::Trap`), otherwise `Burned { why: Decay }`
-  (`Use::Refused`). A `Honeypot` state answers `Trap` and becomes
-  `Burned { why: Honeypot }`: bait springs once. A `Burned` one answers
-  `Refused`.
+  `Honeypot` and the use still `Works` (the host's `auth.log` now shows the
+  audit line), otherwise `Burned { why: Decay }` (`Use::Refused`). A `Honeypot`
+  state answers `Trap` and becomes `Burned { why: Honeypot }`: bait springs
+  once. A `Burned` one answers `Refused`.
 - `burn(b, why, now) -> Burnt` with `Burnt { cut_trace: bool }`: marks the
   backdoor; `You` and `Trace` also patch the host for `PATCH_MINUTES`; `You`
   on the relay the trace sits on removes the trace and reports `cut_trace`.
@@ -415,3 +415,23 @@ nothing on the HUD.
   root, `backdoor`.
 - **D'SHAWN carries Backdoor.** The debug runner's pack gains one `backdoor`
   program, so NEW GAME (DEBUG) can cut a Net backdoor without finding one.
+- **The route row.** Jeffrey, playing the branch: the footer was too cramped.
+  The route and the home trace now have their own row directly under the top
+  rule, spanning the map's width, present only while they have content (a rig
+  run's route while jacked in; a running trace wherever you are); the map gives
+  up that one line. The footer no longer carries ` · ROUTE ...` or the home
+  trace, and §5's HUD paragraph is superseded by this.
+- **Entering, never leaving.** Stepping out of a construct logs
+  `Entering the `GRID``; out of a building, `Entering `<District>`` on the
+  street (fallback `the `STREET``), `the `WALKWAY``, `the `ROOF``,
+  `the `TUNNEL``. No line starts with "Leaving" any more.
+- **Honeypots are live bait.** As ruled above: the first use after the hidden
+  burn moment on a grey-or-worse host may turn the backdoor into a honeypot
+  that still works, and the host's `auth.log` shows
+  `audit  key flagged · monitoring` from then on; the next use springs it.
+- **One trace at a time.** A dump or a sprung honeypot while a home trace is
+  already walking does not reset it.
+- **The clock in the shell.** The world clock stands still while a terminal is
+  open (the game's menu rule), so the trace does not count down while you type;
+  `burn` from the rig is a calm decision. `tick_backdoors` still runs there for
+  the day the clock changes.

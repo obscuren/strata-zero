@@ -895,6 +895,7 @@ pub fn dump_for(st: &mut AppState, why: &str, cooling: u64) {
     st.character.focus = 0;
     // A dump on a rig run starts the trace home from the relay nearest you.
     if st.backdoors.route.is_some() {
+        let running = st.backdoors.trace.is_some();
         st.backdoors.start_trace(now);
         let first = st
             .backdoors
@@ -902,6 +903,7 @@ pub fn dump_for(st: &mut AppState, why: &str, cooling: u64) {
             .as_ref()
             .and_then(|t| t.relays.first().copied());
         match first {
+            _ if running => st.warn("trace running · already on its way"),
             Some(b) => st.warn(format!(
                 "trace running · it starts at `{}`",
                 building_name(st, b)

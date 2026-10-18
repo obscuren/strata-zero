@@ -318,10 +318,14 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
         }
         "trace" => {
             let now = st.net.now(st);
-            if st.backdoors.route.is_none() {
+            let made = st.backdoors.route.is_none();
+            if made {
                 st.backdoors.start_route(None);
             }
             st.backdoors.start_trace(now);
+            if made {
+                st.backdoors.end_route();
+            }
             Ok("a trace runs home".to_string())
         }
         "seize" => {
@@ -563,6 +567,7 @@ mod tests {
         assert!(st.backdoors.held(b).is_some());
         assert_eq!(run(&mut st, at, "trace").unwrap(), "a trace runs home");
         assert!(st.backdoors.trace.is_some());
+        assert!(st.backdoors.route.is_none());
         run(&mut st, at, "seize").unwrap();
         assert!(st.backdoors.seized(st.net.now(&st)));
     }

@@ -296,7 +296,10 @@ impl Backdoors {
     }
 
     /// What using the backdoor on `b` does now: it works, it is refused (and the
-    /// journal learns it is burned), or it is bait and springs.
+    /// journal learns it is burned), or it is bait and springs. At the hidden
+    /// burn moment a grey-or-worse host may turn the key into a honeypot: that
+    /// use still works, the host's `auth.log` shows the audit line from then on,
+    /// and the next use springs it.
     pub fn check(&mut self, b: BuildingId, security: u8, seed: u64, now: u64) -> Use {
         let Some(d) = self.held_mut(b) else {
             return Use::Refused;
@@ -314,11 +317,8 @@ impl Backdoors {
                 let bait = security >= citygen::construct::GREY_THRESHOLD
                     && citygen::rng::hash64(seed, b.index() as u64 ^ 0xB00B).is_multiple_of(3);
                 if bait {
-                    d.state = State::Burned {
-                        at: now,
-                        why: Why::Honeypot,
-                    };
-                    Use::Trap
+                    d.state = State::Honeypot;
+                    Use::Works
                 } else {
                     d.state = State::Burned {
                         at: now,
@@ -367,7 +367,11 @@ impl Backdoors {
     }
 
     /// The trace starts at the relay nearest the target and walks home.
+    /// A trace already walking keeps its countdown.
     pub fn start_trace(&mut self, now: u64) {
+        if self.trace.is_some() {
+            return;
+        }
         let relays: Vec<BuildingId> = self
             .route
             .as_ref()
@@ -551,7 +555,10 @@ mod tests {
         let mut bd = Backdoors::default();
         bd.plant_key(b(5), "mara", 200, seed, 0);
         let real = bd.held(b(5)).unwrap().nominal * bd.held(b(5)).unwrap().factor as u64 / 100;
-        assert_eq!(bd.check(b(5), 200, seed, real), Use::Trap);
+        assert_eq!(bd.check(b(5), 200, seed, real), Use::Works);
+        assert_eq!(bd.list[0].state, State::Honeypot);
+        assert!(bd.live(b(5)).is_some());
+        assert_eq!(bd.check(b(5), 200, seed, real + 1), Use::Trap);
         assert!(matches!(
             bd.list[0].state,
             State::Burned {
@@ -559,7 +566,7 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(bd.check(b(5), 200, seed, real), Use::Refused);
+        assert_eq!(bd.check(b(5), 200, seed, real + 2), Use::Refused);
         // a honeypot still showed as whatever the clock said before it sprang
         let mut bd = Backdoors::default();
         bd.plant_key(b(5), "mara", 200, seed, 0);
@@ -686,6 +693,17 @@ mod tests {
         // a second burn of a burned one is a no-op
         assert_eq!(bd.burn(b(2), Why::You, 3), Burnt { cut_trace: false });
         assert_eq!(Why::You.label(), "by you");
+    }
+
+    #[test]
+    fn a_running_trace_is_never_reset() {
+        let mut bd = Backdoors::default();
+        bd.plant_key(b(1), "u", 100, 1, 0);
+        bd.start_route(Some(b(1)));
+        bd.start_trace(0);
+        let before = bd.trace.as_ref().unwrap().moves_at;
+        bd.start_trace(50);
+        assert_eq!(bd.trace.as_ref().unwrap().moves_at, before);
     }
 
     #[test]
