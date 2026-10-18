@@ -30,6 +30,12 @@ pub fn lamps_on(minute: u16) -> bool {
     !(DAWN_MID..DUSK_MID).contains(&m)
 }
 
+/// Whether the lamps burn on a stratum at `minute`: by the clock under the sky, always
+/// where there is none.
+pub fn lamps_on_at(k: StratumKind, minute: u16) -> bool {
+    !sunlit(k) || lamps_on(minute)
+}
+
 /// Whether a stratum sees the sky.
 pub fn sunlit(k: StratumKind) -> bool {
     let (night, day) = ambient_range(k);
@@ -162,6 +168,14 @@ mod tests {
         assert!(daylight(5 * 60 + 30) > 0.0 && daylight(5 * 60 + 30) < 0.5);
         assert!(lamps_on(5 * 60 + 59) && !lamps_on(6 * 60));
         assert!(lamps_on(18 * 60) && !lamps_on(17 * 60 + 59));
+    }
+
+    #[test]
+    fn lamps_burn_all_day_where_there_is_no_sky() {
+        assert!(!lamps_on_at(StratumKind::Street, 12 * 60));
+        assert!(lamps_on_at(StratumKind::Street, 22 * 60));
+        assert!(lamps_on_at(StratumKind::Undercity, 12 * 60));
+        assert!(lamps_on_at(StratumKind::Net, 12 * 60));
     }
 
     #[test]

@@ -66,8 +66,11 @@ Both hold emitted light only; base is zero. The light at a tile is
 light(kind, p, minute) = clamp(ambient(kind, minute) + steady[p] + lamps[p] * lamps_on(minute))
 ```
 
-where `lamps_on(minute)` is true while `daylight(minute) < 0.5`. Lamps snap on
-at 18:00 and off at 06:00. `Stratum::light_at(p, minute)` and
+where `lamps_on(minute)` is the minute window from the middle of dusk to the
+middle of dawn: lamps snap on at 18:00 and off at 06:00, the night window the
+perk and the sim keep. Where there is no sky (the Undercity, the Net) the
+lamps burn all day: `lamps_on_at(kind, minute)` is what the grids and the map
+read. `Stratum::light_at(p, minute)` and
 `Stratum::emitted(p, minute)` (steady plus active lamps, no ambient) are the
 two reads.
 

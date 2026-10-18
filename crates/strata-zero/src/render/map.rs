@@ -241,7 +241,7 @@ impl TileMap for StratumMap<'_> {
     }
 
     fn lamps_on(&self) -> bool {
-        citygen::lighting::lamps_on(self.minute)
+        citygen::lighting::lamps_on_at(self.stratum, self.minute)
     }
 
     fn lit_sight(&self) -> bool {

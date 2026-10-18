@@ -4,7 +4,7 @@
 use crate::app::AppState;
 use crate::render::map::{MapRef, TileMap};
 use citygen::lighting::tuning::{DAY_RADIUS, EXPOSURE_BANDS};
-use citygen::{Place, Rect, sight};
+use citygen::{Place, Rect, StratumKind, sight};
 use sim::{MoverKind, PersonId};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -24,9 +24,13 @@ pub fn of(st: &AppState) -> Exposure {
     let Place::Stratum(k) = player.place else {
         return Exposure::default();
     };
+    if k == StratumKind::Net {
+        return Exposure::default();
+    }
     let map = MapRef::stratum_at(city, k, st.minute_of_day());
     let light = map.light(player.pos);
-    let Some(world) = st.world.as_ref() else {
+    // The city's walkers are on the Street; above and below it nobody looks.
+    let Some(world) = st.world.as_ref().filter(|_| k == StratumKind::Street) else {
         return Exposure {
             light,
             eyes: vec![],
@@ -154,6 +158,23 @@ mod tests {
                 .expect("an eye is a walker on the stratum");
             assert!(m.pos.chebyshev(p.pos) <= 60);
         }
+        // Walkers live on the Street: above or below it nobody has eyes on you, and
+        // the Net has neither light of yours nor eyes.
+        let walker = world
+            .visible(citygen::Rect::new(0, 0, 1000, 1000))
+            .into_iter()
+            .find(|m| matches!(m.kind, sim::MoverKind::Walker { .. }))
+            .expect("someone is out");
+        for k in [citygen::StratumKind::Heights, citygen::StratumKind::Skyways] {
+            let p = st.player.as_mut().unwrap();
+            p.place = citygen::Place::Stratum(k);
+            p.pos = walker.pos;
+            assert!(of(&st).eyes.is_empty(), "{k:?} has no walkers to see you");
+        }
+        let p = st.player.as_mut().unwrap();
+        p.place = citygen::Place::Stratum(citygen::StratumKind::Net);
+        p.pos = walker.pos;
+        assert_eq!(of(&st), Exposure::default(), "the Net has no eyes");
         // Off the strata there is nothing to see you.
         st.player.as_mut().unwrap().place = citygen::Place::Floor {
             building: citygen::BuildingId(0),

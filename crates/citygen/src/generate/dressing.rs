@@ -361,6 +361,17 @@ mod tests {
             "the lamp is off by day"
         );
         let under = c.stratum(StratumKind::Undercity).unwrap();
+        let tunnel_lamp = under
+            .tiles
+            .iter()
+            .find(|(_, t)| t.feature == Some(Feature::Lamp))
+            .map(|(p, _)| p)
+            .unwrap();
+        assert_eq!(
+            under.light_at(tunnel_lamp, 12 * 60),
+            under.light_at(tunnel_lamp, 22 * 60),
+            "no sun down there: the tunnel lamp burns at noon"
+        );
         let dark = under
             .tiles
             .iter()

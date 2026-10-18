@@ -952,7 +952,7 @@ pub fn jack_out(st: &mut AppState) -> Result<(), &'static str> {
     let minute = st.minute_of_day();
     let city = st.city.as_ref().ok_or("no body in the city")?;
     let player = st.player.as_mut().ok_or("no body in the city")?;
-    player.jack_out(city, bonus)?;
+    player.jack_out(city, bonus, minute)?;
     if let Some(map) = MapRef::for_place(city, &st.interiors, &st.constructs, player.place, minute)
     {
         player.update_fov(&map, bonus);

@@ -314,6 +314,21 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 crate::ui::hud::START_MINUTE_OF_DAY,
                 minute * per_minute,
             ));
+            // Sight follows the sun: see the new hour at once.
+            let bonus = st.sight_bonus();
+            let now = st.minute_of_day();
+            if let (Some(city), Some(player)) = (st.city.as_ref(), st.player.as_mut())
+                && let Some(map) = crate::render::map::MapRef::for_place(
+                    city,
+                    &st.interiors,
+                    &st.constructs,
+                    player.place,
+                    now,
+                )
+            {
+                player.update_fov(&map, bonus);
+            }
+            st.repaint = true;
             Ok(format!("{h:02}:{m:02}"))
         }
         "trace" => {
@@ -633,6 +648,30 @@ mod tests {
             run(&mut st, at, "clock 25:00").unwrap_err(),
             "clock <hh:mm>"
         );
+        // The clock refreshes sight: noon sees the whole street at once.
+        {
+            let city = st.city.as_ref().unwrap();
+            let mut p = crate::walker::Player::spawn(city, 1);
+            p.update_fov(
+                &crate::render::map::MapRef::stratum_of(city, StratumKind::Street),
+                0,
+            );
+            st.player = Some(p);
+        }
+        let night = st
+            .player
+            .as_ref()
+            .unwrap()
+            .vis()
+            .count(|v| *v == crate::walker::Visibility::Visible);
+        assert_eq!(run(&mut st, at, "time 12:00").unwrap(), "12:00");
+        let noon = st
+            .player
+            .as_ref()
+            .unwrap()
+            .vis()
+            .count(|v| *v == crate::walker::Visibility::Visible);
+        assert!(noon > 2 * night, "{noon} at noon vs {night} at night");
         // `time` is the same command by another name.
         assert_eq!(run(&mut st, at, "time 08:00").unwrap(), "08:00");
         assert_eq!(st.clock(), (8, 0));

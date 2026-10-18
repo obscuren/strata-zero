@@ -110,7 +110,7 @@ impl Stratum {
     /// Light the tile throws on its own at `minute`: steady fixtures plus lamps while on.
     pub fn emitted(&self, p: Pos, minute: u16) -> u8 {
         let steady = self.steady.get(p).copied().unwrap_or(0);
-        let lamps = if crate::lighting::lamps_on(minute) {
+        let lamps = if crate::lighting::lamps_on_at(self.kind, minute) {
             self.lamps.get(p).copied().unwrap_or(0)
         } else {
             0

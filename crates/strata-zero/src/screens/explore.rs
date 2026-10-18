@@ -644,6 +644,7 @@ impl MapScreen {
 
     fn enter_walk(&mut self, st: &mut AppState) {
         let bonus = st.sight_bonus();
+        let minute = st.minute_of_day();
         let Some(city) = st.city.as_ref() else { return };
         if st.player.is_none() {
             let home = st
@@ -651,7 +652,10 @@ impl MapScreen {
                 .and_then(|rig| rig.wake(city, &mut st.interiors, &st.constructs, bonus));
             st.player = Some(home.unwrap_or_else(|| {
                 let mut p = Player::spawn(city, hash64(city.seed, st.tick));
-                p.update_fov(&MapRef::stratum_of(city, StratumKind::Street), bonus);
+                p.update_fov(
+                    &MapRef::stratum_at(city, StratumKind::Street, minute),
+                    bonus,
+                );
                 p
             }));
             if let Some(rig) = st.home {
@@ -1715,7 +1719,7 @@ impl MapScreen {
                 match player.use_connector(city, up) {
                     Some(dest) => {
                         self.place = Place::Stratum(dest);
-                        player.update_fov(&MapRef::stratum_of(city, dest), bonus);
+                        player.update_fov(&MapRef::stratum_at(city, dest, minute), bonus);
                         st.say(format!("now on `{}`", dest.label()));
                     }
                     None => st.warn(if up {
@@ -2439,6 +2443,55 @@ mod tests {
             .unwrap(),
         );
         st
+    }
+
+    #[test]
+    fn the_stairs_see_the_new_stratum_by_the_minute() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let city = st.city.as_ref().unwrap();
+        st.world = Some(sim::World::seed(
+            city,
+            &st.people,
+            &sim::SimParams::default(),
+            hud::START_MINUTE_OF_DAY,
+            (12 * 60 + 24 * 60 - 22 * 60) as u64 * sim::TICKS_PER_MINUTE,
+        ));
+        assert_eq!(st.clock(), (12, 0));
+        let stair = city
+            .connectors
+            .iter()
+            .filter(|c| c.kind != citygen::ConnectorKind::Jack)
+            .find(|c| {
+                c.serves_from(StratumKind::Street)
+                    .is_some_and(|(_, above)| above == Some(StratumKind::Skyways))
+                    && city.walkable(StratumKind::Skyways, c.pos)
+            })
+            .expect("a public way up")
+            .pos;
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), stair);
+        s.update(&mut st, &[key(KeyCode::Char('>'))]);
+        let (place, _) = player(&st);
+        assert_eq!(place, Place::Stratum(StratumKind::Skyways));
+        let on_arrival = st
+            .player
+            .as_ref()
+            .unwrap()
+            .vis()
+            .count(|v| *v == Visibility::Visible);
+        let bonus = st.sight_bonus();
+        let minute = st.minute_of_day();
+        let city = st.city.as_ref().unwrap();
+        let noon = MapRef::stratum_at(city, StratumKind::Skyways, minute);
+        st.player.as_mut().unwrap().update_fov(&noon, bonus);
+        let fresh = st
+            .player
+            .as_ref()
+            .unwrap()
+            .vis()
+            .count(|v| *v == Visibility::Visible);
+        assert_eq!(on_arrival, fresh, "the stairs already saw noon");
     }
 
     #[test]

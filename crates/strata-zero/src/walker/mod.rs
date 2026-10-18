@@ -147,14 +147,19 @@ impl Player {
         Ok(port)
     }
 
-    /// Returns to the body. A body left on a stratum sees again at once; one left on a
-    /// floor is refreshed by the caller, who holds the floor.
-    pub fn jack_out(&mut self, city: &City, sight_bonus: i32) -> Result<(), &'static str> {
+    /// Returns to the body. A body left on a stratum sees again at once, at `minute`
+    /// of the day; one left on a floor is refreshed by the caller, who holds the floor.
+    pub fn jack_out(
+        &mut self,
+        city: &City,
+        sight_bonus: i32,
+        minute: u16,
+    ) -> Result<(), &'static str> {
         let (place, p) = self.body.take().ok_or("not jacked in")?;
         self.place = place;
         self.pos = p;
         if let Some(k) = place.stratum() {
-            self.update_fov(&MapRef::stratum_of(city, k), sight_bonus);
+            self.update_fov(&MapRef::stratum_at(city, k, minute), sight_bonus);
         }
         Ok(())
     }
@@ -404,12 +409,18 @@ mod tests {
         assert_eq!(p.jack_in(&c, None, 0), Err("already jacked in"));
         assert_eq!(p.use_connector(&c, false), None, "jacks are not stairs");
         assert_eq!(p.use_connector(&c, true), None);
-        assert_eq!(p.jack_out(&c, 0), Ok(()));
+        assert_eq!(p.jack_out(&c, 0, 22 * 60), Ok(()));
         assert_eq!(
             (p.place, p.pos, p.body),
             (Place::Stratum(StratumKind::Street), stand, None)
         );
-        assert_eq!(p.jack_out(&c, 0), Err("not jacked in"));
+        assert_eq!(p.jack_out(&c, 0, 22 * 60), Err("not jacked in"));
+        // The body left on the street at noon sees the noon street.
+        let night = p.vis().count(|v| *v == Visibility::Visible);
+        assert!(p.jack_in(&c, None, 0).is_ok());
+        assert_eq!(p.jack_out(&c, 0, 12 * 60), Ok(()));
+        let day = p.vis().count(|v| *v == Visibility::Visible);
+        assert!(day > night, "{day} by day vs {night} at night");
         // Far from any terminal.
         let far = c
             .stratum(StratumKind::Street)
@@ -479,7 +490,7 @@ mod tests {
         assert_eq!(p.place, Place::Stratum(StratumKind::Net));
         assert_eq!(p.pos, rig.landing);
         assert_eq!(p.body, Some((home, beside)));
-        assert_eq!(p.jack_out(&c, 0), Ok(()));
+        assert_eq!(p.jack_out(&c, 0, 22 * 60), Ok(()));
         assert_eq!((p.place, p.pos, p.body), (home, beside, None));
     }
 
