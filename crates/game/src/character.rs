@@ -119,17 +119,21 @@ impl Character {
             ch.give(id, qty);
         }
         ch.hp = ch.hp_max(c);
-        // The kit's programs load in kit order while they fit.
-        let programs: Vec<ItemId> = ch
+        ch.load_all(c);
+        ch
+    }
+
+    /// Loads the pack's programs in pack order while they fit.
+    fn load_all(&mut self, c: &Content) {
+        let programs: Vec<ItemId> = self
             .inventory
             .iter()
             .map(|s| s.item.clone())
             .filter(|id| c.item(id).is_some_and(|i| i.kind == ItemKind::Program))
             .collect();
         for id in programs {
-            let _ = ch.load(c, &id);
+            let _ = self.load(c, &id);
         }
-        ch
     }
 
     /// The jacked deck and its slots.
@@ -278,7 +282,8 @@ impl Character {
     }
 
     /// The debug runner: Vex's build as D'SHAWN at level 50 with every talent at
-    /// its best, full HP and focus. For the title's NEW GAME (DEBUG).
+    /// its best, full HP and focus, a rebuilt five-slot deck jacked in and every
+    /// program that fits loaded. For the title's NEW GAME (DEBUG).
     pub fn debug_runner(c: &Content) -> Character {
         let mut d = Self::from_template(c, &TemplateId::new("vex"))
             .expect("the vex template is in the content");
@@ -290,6 +295,11 @@ impl Character {
         d.hp = d.hp_max(c);
         d.focus = d.focus_max(c);
         d.give(ItemId::new("backdoor"), 1);
+        // The pawnshop deck goes back to the pack; the rebuilt one takes its slot.
+        if let Some(old) = d.equipment.insert(Slot::Deck, ItemId::new("rebuilt_deck")) {
+            d.give(old, 1);
+        }
+        d.load_all(c);
         d
     }
 
@@ -1063,6 +1073,26 @@ mod tests {
     }
 
     #[test]
+    fn debug_runner_jacks_the_rebuilt_deck() {
+        let c = Content::load().unwrap();
+        let d = Character::debug_runner(&c);
+        assert_eq!(d.equipped(Slot::Deck), Some(&ItemId::new("rebuilt_deck")));
+        assert_eq!(d.count(&ItemId::new("pawnshop_deck")), 1);
+        assert_eq!(d.count(&ItemId::new("rebuilt_deck")), 0);
+        let ids = ["crack", "copy", "attack", "backdoor"].map(ItemId::new);
+        assert_eq!(d.loaded, ids);
+        assert_eq!(d.loaded_size(&c), 5);
+        assert_eq!(
+            d.deck(&c).unwrap().1,
+            DeckSpec {
+                slots: 5,
+                rating: 3,
+                look: DeckLook::Pawn
+            }
+        );
+    }
+
+    #[test]
     fn the_kit_loads_into_the_deck() {
         let c = Content::load().unwrap();
         let ch = vex(&c);
@@ -1246,8 +1276,8 @@ mod tests {
         assert_eq!(d.hp, d.hp_max(&c));
         assert_eq!(d.focus, d.focus_max(&c));
         let vex = vex(&c);
-        // Vex's kit, plus the one Backdoor program
-        assert_eq!(d.inventory.len(), vex.inventory.len() + 1, "Vex's kit");
-        assert_eq!(d.loaded, vex.loaded);
+        // Vex's kit, plus the Backdoor program and the pawnshop deck set aside
+        assert_eq!(d.inventory.len(), vex.inventory.len() + 2, "Vex's kit");
+        assert!(d.loaded.starts_with(&vex.loaded));
     }
 }

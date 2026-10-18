@@ -189,7 +189,7 @@ impl DeckLook {
     /// Program slots the drawing has room for.
     pub fn max_slots(self) -> u8 {
         match self {
-            DeckLook::Pawn => 4,
+            DeckLook::Pawn => 5,
         }
     }
 

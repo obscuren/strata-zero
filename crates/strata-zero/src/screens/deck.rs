@@ -2319,11 +2319,11 @@ mod tests {
             .find("No CYBERDECK equipped")
             .map(|b| lines[y][..b].chars().count());
         assert_eq!(at, Some(1 + (118 - 21) / 2), "{text}");
-        // No deck, no glass, no inventory, no brackets, though the pack holds programs.
+        // No deck, no glass, no WAREZ, no brackets, though the pack holds programs.
         let body = lines[top..bottom].join("\n");
         for gone in [
             "K▒ROK▒WA",
-            "INVENTORY",
+            "WAREZ",
             "FAILSAFE",
             "ROM▸",
             "┏",
@@ -2667,7 +2667,7 @@ mod tests {
         st.tick = 60;
         let text = draw(&d, &st, 120, 35);
         // Crack and Copy in the bay; the kit's attack waits in the pack: the deck is full.
-        for want in ["2 SLOT · R1", "CRACK", "COPY", "INVENTORY", "ATTACK"] {
+        for want in ["2 SLOT · R1", "CRACK", "COPY", "WAREZ", "ATTACK"] {
             assert!(text.contains(want), "{want}: {text}");
         }
         // The glass reads the pointed program's numbers.
@@ -2841,7 +2841,7 @@ mod tests {
             assert!(l.starts_with('│') && l.ends_with('│'), "row {i}: {l:?}");
         }
         assert!(
-            text.contains("INVENTORY") && text.contains("FAILSAFE"),
+            text.contains("WAREZ") && text.contains("FAILSAFE"),
             "{text}"
         );
 

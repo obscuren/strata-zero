@@ -28,13 +28,16 @@ the **pawn** look.
 
 - `DeckSpec` gains `look: DeckLook`, an enum with one variant today, `Pawn`.
   Missing from a content entry it defaults to `Pawn` (`#[serde(default)]`).
-  `flavor/content.ron`: the pawnshop deck says `look: Pawn` explicitly.
+  `flavor/content.ron`: the pawnshop deck says `look: Pawn` explicitly. A second
+  deck, `rebuilt_deck` (5 slots, rating 3, same look), is equipped on the debug
+  character D'SHAWN with every program that fits loaded; the pawnshop deck
+  waits in his pack.
 - A look owns its drawing and the places on it: where the slots, the ROM
   strips, the failsafe, the glass and the maker plate are. The parts, the
   pointer, the keys and every rule below are shared by all looks; only the
   drawing and the positions differ. A second look later is a second drawing
   and a second set of positions, nothing else.
-- The pawn drawing places up to 4 slots along the back edge (A-D, 14 columns
+- The pawn drawing places up to 5 slots along the back edge (A-E, 14 columns
   each) and up to 3 ROM strips in its ROM row. Content validation refuses a
   `Pawn` deck with more slots or grants than that.
 
@@ -80,7 +83,7 @@ Row by row (rows of the drawing, 0 at the top):
   size-1 cart is 12 columns, a size-2 cart 26 (it spans two slots). An empty
   slot shows `empty` in dim on row 3.
 - **4, the back edge.** The deck's rounded outline in rust, the bay's mouth a
-  dark `▀` run under the slots, `A`, `B` (… `D`) labels in the mouth.
+  dark `▀` run under the slots, `A`, `B` (… `E`) labels in the mouth.
 - **5, the maker plate and lights.** `K▒ROK▒WA KX-2` bold on a lighter body
   patch (the `▒` are scratches), then `<slots> SLOT · R<rating>` dim. Lights:
   `● PWR` green; `● LINK` cyan while jacked in, dark teal otherwise; `● HOT`
@@ -272,7 +275,7 @@ display, programs etc should be hidden.")
 
 - `game::model`: `DeckLook { Pawn }` (serde, `Default` = `Pawn`); `DeckSpec {
   slots, rating, #[serde(default)] look }`. Validation: a `Pawn` deck has at
-  most 4 slots and grants at most 3 abilities.
+  most 5 slots and grants at most 3 abilities.
 - `game::character` / `game::action`: `Action::Slot { id, at }` over
   `Character::slot_at(c, id, at)`, where `at` is a position in `loaded` (see
   *Where it lands*), returning what it displaced, every check made before any
@@ -296,7 +299,7 @@ display, programs etc should be hidden.")
 ## Testing
 
 - `model`: a deck entry without `look` reads as `Pawn`; validation refuses a
-  `Pawn` deck with 5 slots or 4 grants.
+  `Pawn` deck with 6 slots or 4 grants; the rebuilt deck's 5 slots are accepted.
 - `character` / `action`: slotting at `loaded.len()` loads; at a loaded
   program's position swaps and keeps the position (the slotted program is at
   that index of `loaded`); a size-2 program at position 0 over two size-1

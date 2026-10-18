@@ -303,7 +303,7 @@ fn keyboard(p: &mut Pen) {
 /// `‹` and `›` where more lie off either side, and the outline of a held cart's
 /// landing in the bay.
 fn inventory_row(p: &mut Pen, view: &DeckView) {
-    p.put(2, INV_Y - 1, "INVENTORY", LABEL_DIM, None, true);
+    p.put(2, INV_Y - 1, "WAREZ", LABEL_DIM, None, true);
     let shown = inventory(view);
     for (part, r) in &shown {
         let Part::Inv(k) = part else { continue };
@@ -397,7 +397,7 @@ mod tests {
             "ON",
             "NETSCAN",
             "ARC TRACE",
-            "INVENTORY",
+            "WAREZ",
             "ATTACK",
             "HEAT",
             "NO FUTURE",
@@ -551,6 +551,40 @@ mod tests {
         }
         assert_eq!(row(&buf, 3).matches("empty").count(), 3);
         assert!(row(&buf, 5).contains("4 SLOT · R1"));
+    }
+
+    #[test]
+    fn five_slots_fill_the_back_edge() {
+        let mut v = lit_kit();
+        v.slots = 5;
+        v.point = Part::Failsafe;
+        v.bay = (0..5).map(|k| cart(&format!("P{k}"), 1)).collect();
+        let p = parts(&v);
+        assert_eq!(rect(&p, Part::Slot(4)), Some(Rect::new(64, 1, 12, 3)));
+        let buf = render(&v);
+        let r4: Vec<&str> = (OX..OX + W).map(|x| buf[(x, 4)].symbol()).collect();
+        for (l, x) in ["A", "B", "C", "D", "E"]
+            .into_iter()
+            .zip([8, 22, 36, 50, 64])
+        {
+            assert_eq!(r4[x], l);
+        }
+        for (x, cell) in r4.iter().enumerate().take(77).skip(7) {
+            // The letters sit in padded labels cut out of the run.
+            assert!(
+                matches!(*cell, "▀" | " " | "A" | "B" | "C" | "D" | "E"),
+                "{x} {cell}"
+            );
+        }
+        assert_eq!(buf[(OX + 6, 4)].symbol(), "─");
+        for y in 1..=4 {
+            for x in 78..82 {
+                assert_ne!(buf[(OX + x, y)].symbol(), "▀", "({x},{y})");
+            }
+            assert_eq!(buf[(OX + 77, y)].symbol(), if y == 4 { "─" } else { " " });
+        }
+        v.bay = vec![cart("P0", 1)];
+        assert_eq!(row(&render(&v), 3).matches("empty").count(), 4);
     }
 
     #[test]

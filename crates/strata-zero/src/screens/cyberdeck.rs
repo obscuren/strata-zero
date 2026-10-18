@@ -337,7 +337,7 @@ impl DeckTab {
 }
 
 /// Programs in the pack and not loaded, in pack order, one per id: the carts in
-/// INVENTORY.
+/// WAREZ.
 pub(crate) fn inventory(st: &AppState) -> Vec<ItemId> {
     let mut out: Vec<ItemId> = Vec::new();
     for s in &st.character.inventory {

@@ -1035,7 +1035,7 @@ mod tests {
     }
 
     #[test]
-    fn pawn_decks_have_room_for_four_slots_and_three_grants() {
+    fn pawn_decks_have_room_for_five_slots_and_three_grants() {
         let c = Content::load().unwrap();
         let i = c
             .items
@@ -1043,7 +1043,7 @@ mod tests {
             .position(|i| i.id.0 == "pawnshop_deck")
             .unwrap();
         let mut bad = c.clone();
-        bad.items[i].deck.as_mut().unwrap().slots = 5;
+        bad.items[i].deck.as_mut().unwrap().slots = 6;
         assert!(matches!(
             bad.validate(),
             Err(ContentError::DeckInvalid { .. })
@@ -1057,7 +1057,7 @@ mod tests {
             Err(ContentError::DeckInvalid { .. })
         ));
         let mut ok = c.clone();
-        ok.items[i].deck.as_mut().unwrap().slots = 4;
+        ok.items[i].deck.as_mut().unwrap().slots = 5;
         ok.items[i].grants = ["netscan", "arc_trace", "netscan"]
             .map(AbilityId::new)
             .to_vec();

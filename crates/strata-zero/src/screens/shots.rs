@@ -233,6 +233,21 @@ fn the_cyberdeck_tab() {
 
 #[test]
 #[ignore]
+fn the_cyberdeck_tab_for_dshawn() {
+    let mut st = state_home();
+    st.character = game::Character::debug_runner(&st.content);
+    let map = MapScreen::walking(&mut st);
+    let mut deck = Deck::new(st.tick);
+    deck.update(&mut st, &[key(KeyCode::Char('6'))]);
+    st.tick += 200;
+    if st.tick % 90 < 3 {
+        st.tick += 3;
+    }
+    shot_at("cyberdeck_dshawn_120x40", &st, &map, &deck, (120, 40));
+}
+
+#[test]
+#[ignore]
 fn a_neon_keypad() {
     let mut st = state_home();
     let map = MapScreen::walking(&mut st);
