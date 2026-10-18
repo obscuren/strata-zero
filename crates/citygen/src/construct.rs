@@ -22,7 +22,6 @@ const MIN_W: i32 = 14;
 const MAX_W: i32 = 40;
 const MIN_H: i32 = 11;
 const MAX_H: i32 = 24;
-const LANE_LIGHT: u8 = 255;
 const CONSTRUCT_SALT: u64 = 0xC0DE_5EED;
 
 /// A piece of ICE: where it was made, where it stands now (the tile carrying
@@ -152,7 +151,7 @@ pub fn generate_construct(city: &City, b: BuildingId) -> Option<Construct> {
     let carve = |tiles: &mut Grid<Tile>, light: &mut Grid<u8>, p: Pos, terrain: Terrain| {
         tiles[p].terrain = terrain;
         if matches!(terrain, Terrain::NetLane | Terrain::NetGate) {
-            light[p] = LANE_LIGHT;
+            light[p] = crate::lighting::tuning::NET_LANE_LIGHT;
         }
     };
     // The end room closes the spine; side rooms open off it on both sides.

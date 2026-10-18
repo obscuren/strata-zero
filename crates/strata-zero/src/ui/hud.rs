@@ -24,8 +24,13 @@ pub const START_MINUTE_OF_DAY: u16 = 22 * 60;
 
 /// The clock at `tick`: 22:00 at tick 0, one minute per ninety ticks, wrapping at midnight.
 pub fn clock_at(tick: u64) -> (u8, u8) {
-    let m = (START_MINUTE + tick / TICKS_PER_MINUTE) % (24 * 60);
+    let m = minute_at(tick) as u64;
     ((m / 60) as u8, (m % 60) as u8)
+}
+
+/// The minute of the day at `tick`, from the 22:00 start.
+pub fn minute_at(tick: u64) -> u16 {
+    ((START_MINUTE + tick / TICKS_PER_MINUTE) % (24 * 60)) as u16
 }
 
 /// The day at `tick`, counting from day 1 at tick 0.

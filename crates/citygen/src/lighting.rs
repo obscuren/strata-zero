@@ -12,7 +12,7 @@ use tuning::*;
 pub fn daylight(minute: u16) -> f32 {
     let m = minute % (24 * 60);
     let ramp = |from: u16, to: u16| (m - from) as f32 / (to - from) as f32;
-    if m < DAWN_START || m >= DUSK_END {
+    if !(DAWN_START..DUSK_END).contains(&m) {
         0.0
     } else if m < DAWN_END {
         ramp(DAWN_START, DAWN_END)

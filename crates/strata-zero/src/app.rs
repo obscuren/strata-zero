@@ -160,6 +160,14 @@ impl AppState {
         crate::ui::hud::clock_at(self.clock_tick())
     }
 
+    /// The minute of the day: the living city's clock, or the tick's before there is one.
+    pub fn minute_of_day(&self) -> u16 {
+        self.world.as_ref().map_or_else(
+            || crate::ui::hud::minute_at(self.tick),
+            |w| w.minute_of_day(),
+        )
+    }
+
     /// How far past the base the character sees: their perks, and two more tiles
     /// with low-light between 18:00 and 05:59.
     pub fn sight_bonus(&self) -> i32 {

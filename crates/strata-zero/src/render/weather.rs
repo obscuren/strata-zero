@@ -1,6 +1,6 @@
 //! Rain and fog overlays, pure functions of tick and screen position.
 
-use crate::render::map::MapRef;
+use crate::render::map::{MapRef, TileMap};
 use crate::render::style::StylePack;
 use crate::render::viewport::{Overlay, screen_to_tile};
 use citygen::rng::hash64;
@@ -74,7 +74,7 @@ impl Overlay for Weather {
                     continue;
                 }
                 if ss.fog {
-                    let light = st.light.get(p).copied().unwrap_or(0);
+                    let light = map.light(p);
                     if light < 40 && hash64(sx as u64 * 31 + sy as u64, tick / 8).is_multiple_of(6)
                     {
                         buf[(sx, sy)].set_char('░').set_fg(Color::Rgb(40, 62, 46));

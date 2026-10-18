@@ -35,6 +35,8 @@ pub trait TileMap {
 pub struct StratumMap<'a> {
     pub city: &'a City,
     pub stratum: StratumKind,
+    /// The minute of the day the stratum is seen at; ambient and lamps follow it.
+    pub minute: u16,
 }
 
 #[derive(Clone, Copy)]
@@ -100,19 +102,31 @@ impl TileMap for ConstructMap<'_> {
 }
 
 impl<'a> MapRef<'a> {
+    /// A stratum at the night the game starts, for tests and screens before a world exists.
     pub fn stratum_of(city: &'a City, stratum: StratumKind) -> Self {
-        MapRef::Stratum(StratumMap { city, stratum })
+        Self::stratum_at(city, stratum, crate::ui::hud::START_MINUTE_OF_DAY)
     }
 
-    /// The map at a place, if its floor or construct has been generated.
+    /// A stratum at `minute` of the day.
+    pub fn stratum_at(city: &'a City, stratum: StratumKind, minute: u16) -> Self {
+        MapRef::Stratum(StratumMap {
+            city,
+            stratum,
+            minute,
+        })
+    }
+
+    /// The map at a place at `minute` of the day, if its floor or construct has been
+    /// generated.
     pub fn for_place(
         city: &'a City,
         interiors: &'a Interiors,
         constructs: &'a Constructs,
         place: Place,
+        minute: u16,
     ) -> Option<Self> {
         match place {
-            Place::Stratum(k) => Some(MapRef::stratum_of(city, k)),
+            Place::Stratum(k) => Some(MapRef::stratum_at(city, k, minute)),
             Place::Floor { building, level } => {
                 let (plan, floor) = interiors.floor(building, level)?;
                 Some(MapRef::Floor(FloorMap { city, plan, floor }))
@@ -179,8 +193,7 @@ impl TileMap for StratumMap<'_> {
     fn light(&self, p: Pos) -> u8 {
         self.city
             .stratum(self.stratum)
-            .and_then(|s| s.light.get(p).copied())
-            .unwrap_or(0)
+            .map_or(0, |s| s.light_at(p, self.minute))
     }
 
     fn theme(&self, p: Pos) -> Option<Theme> {
@@ -443,7 +456,8 @@ mod tests {
                 Place::Floor {
                     building: b.id,
                     level: 7
-                }
+                },
+                crate::ui::hud::START_MINUTE_OF_DAY,
             )
             .is_none()
         );

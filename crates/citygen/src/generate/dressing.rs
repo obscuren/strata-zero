@@ -1,4 +1,4 @@
-//! Stage 9: features, light maps and per-tile variants.
+//! Stage 9: features, emitter grids and per-tile variants.
 
 use super::{GenCtx, Stage, StageRunner, StepOut, exterior};
 use crate::generate::connectivity::reachable_from_street;
@@ -26,29 +26,6 @@ pub(crate) struct DressingStage {
     queue: VecDeque<Work>,
     total: usize,
     rng: Option<ChaCha8Rng>,
-}
-
-/// Base light per stratum before any source is added.
-fn base_light(k: StratumKind) -> u8 {
-    match k {
-        StratumKind::Undercity => 20,
-        StratumKind::Street => 60,
-        StratumKind::Skyways => 80,
-        StratumKind::Heights => 110,
-        StratumKind::Net => 0,
-    }
-}
-
-/// Radius and strength of a light-emitting tile.
-fn emission(terrain: Terrain, feature: Option<Feature>, k: StratumKind) -> Option<(i32, f32)> {
-    match feature {
-        Some(Feature::Lamp) => Some((6, 120.0)),
-        Some(Feature::Neon(_)) => Some((4, 90.0)),
-        Some(Feature::HoloAd) => Some((5, 100.0)),
-        Some(Feature::Helipad) => Some((3, 60.0)),
-        _ if terrain == Terrain::Window && k == StratumKind::Street => Some((2, 30.0)),
-        _ => None,
-    }
 }
 
 /// True when the tile may take a blocking feature without pinching a corridor.
@@ -275,16 +252,16 @@ impl DressingStage {
     }
 
     fn lights(ctx: &mut GenCtx, k: StratumKind) {
-        let base = base_light(k);
+        use crate::lighting::{compute, tuning};
         let st = ctx.city.stratum_mut(k).expect("stratum");
         let tiles = &st.tiles;
-        let light = crate::lighting::compute(
-            tiles,
-            base,
-            |p| tiles.get(p).is_none_or(|t| t.blocks_sight()),
-            |t| emission(t.terrain, t.feature, k),
-        );
-        st.light = light;
+        let blocks = |p: Pos| tiles.get(p).is_none_or(|t| t.blocks_sight());
+        let steady = compute(tiles, 0, blocks, |t| {
+            tuning::steady_emission(t.terrain, t.feature, k)
+        });
+        let lamps = compute(tiles, 0, blocks, |t| tuning::lamp_emission(t.feature));
+        st.steady = steady;
+        st.lamps = lamps;
     }
 
     fn variants(ctx: &mut GenCtx, k: StratumKind) {
@@ -358,17 +335,38 @@ mod tests {
         assert!(count(|f| matches!(f, Feature::Sign(_))) > 5);
         let open = c.buildings.iter().filter(|b| !b.kind.is_closed()).count();
         assert!(count(|f| matches!(f, Feature::Terminal)) >= open / 2);
-        assert!(st.light.as_slice().iter().any(|&l| l > 150));
         assert!(
-            c.stratum(StratumKind::Undercity)
-                .unwrap()
-                .light
-                .as_slice()
-                .iter()
-                .filter(|&&l| l < 40)
-                .count()
-                > 100
+            st.lamps.as_slice().iter().any(|&l| l > 100),
+            "lamps are baked"
         );
+        assert!(
+            st.steady.as_slice().iter().any(|&l| l > 60),
+            "neon is baked"
+        );
+        let lamp = st
+            .tiles
+            .iter()
+            .find(|(_, t)| t.feature == Some(Feature::Lamp))
+            .map(|(p, _)| p)
+            .unwrap();
+        assert!(st.light_at(lamp, 22 * 60) > 150);
+        assert_eq!(
+            st.light_at(lamp, 12 * 60),
+            255,
+            "noon on the street is full sun"
+        );
+        assert_eq!(
+            st.emitted(lamp, 12 * 60),
+            st.steady[lamp],
+            "the lamp is off by day"
+        );
+        let under = c.stratum(StratumKind::Undercity).unwrap();
+        let dark = under
+            .tiles
+            .iter()
+            .filter(|(p, _)| under.light_at(*p, 22 * 60) < 40)
+            .count();
+        assert!(dark > 100);
         for k in c
             .connectors
             .iter()

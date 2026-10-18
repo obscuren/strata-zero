@@ -45,7 +45,9 @@ impl HomeRig {
     ) -> Option<Player> {
         interiors.ensure(city, self.home.building, self.home.level)?;
         let place = self.place();
-        let map = MapRef::for_place(city, interiors, constructs, place)?;
+        // The flat is a floor: it has no sky, so the minute does not matter.
+        let minute = crate::ui::hud::START_MINUTE_OF_DAY;
+        let map = MapRef::for_place(city, interiors, constructs, place, minute)?;
         let mut p = Player::at(place, self.home.bed_side);
         p.update_fov(&map, sight_bonus);
         Some(p)

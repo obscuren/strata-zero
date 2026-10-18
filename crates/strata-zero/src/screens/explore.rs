@@ -582,8 +582,14 @@ impl MapScreen {
 
     /// The map at the screen's place; a floor not yet generated falls back to the street.
     fn map<'a>(&self, st: &'a AppState, city: &'a citygen::City) -> MapRef<'a> {
-        MapRef::for_place(city, &st.interiors, &st.constructs, self.place)
-            .unwrap_or_else(|| MapRef::stratum_of(city, StratumKind::Street))
+        MapRef::for_place(
+            city,
+            &st.interiors,
+            &st.constructs,
+            self.place,
+            st.minute_of_day(),
+        )
+        .unwrap_or_else(|| MapRef::stratum_of(city, StratumKind::Street))
     }
 
     /// Works out where the occupants stand when the player is on a floor; once per
@@ -1453,8 +1459,13 @@ impl MapScreen {
         }
         let bonus = st.sight_bonus();
         if let Some(city) = st.city.as_ref()
-            && let Some(map) =
-                MapRef::for_place(city, &st.interiors, &st.constructs, Place::Construct(b))
+            && let Some(map) = MapRef::for_place(
+                city,
+                &st.interiors,
+                &st.constructs,
+                Place::Construct(b),
+                st.minute_of_day(),
+            )
             && let Some(player) = st.player.as_mut()
         {
             player.pos = next;
@@ -1687,11 +1698,12 @@ impl MapScreen {
         }
         let dev = st.dev;
         let bonus = st.sight_bonus();
+        let minute = st.minute_of_day();
         let city = st.city.as_ref()?;
         let interiors = &st.interiors;
         let constructs = &st.constructs;
         let player = st.player.as_mut()?;
-        let map = MapRef::for_place(city, interiors, constructs, player.place)
+        let map = MapRef::for_place(city, interiors, constructs, player.place, minute)
             .unwrap_or_else(|| MapRef::stratum_of(city, StratumKind::Street));
         match k.code {
             KeyCode::Char('c') if dev => {
