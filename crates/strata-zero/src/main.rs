@@ -4,6 +4,7 @@ mod access;
 mod actions;
 mod anim;
 mod app;
+mod backdoors;
 mod cli;
 mod constructs;
 mod credentials;

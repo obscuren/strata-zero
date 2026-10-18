@@ -51,6 +51,8 @@ pub struct AppState {
     pub constructs: crate::constructs::Constructs,
     /// The Net's state: traces, hacks, backdoors, cooling, the program in flight.
     pub net: crate::net::NetState,
+    /// Your backdoors, the route of a rig run, the trace home and the raid.
+    pub backdoors: crate::backdoors::Backdoors,
     /// Items lying in the city.
     pub ground: game::Ground,
     /// Ability effects in flight, oldest first.
@@ -132,6 +134,7 @@ impl AppState {
             interiors: Default::default(),
             constructs: Default::default(),
             net: Default::default(),
+            backdoors: Default::default(),
             ground: game::Ground::default(),
             fx: Vec::new(),
             repaint: false,
@@ -215,6 +218,7 @@ impl AppState {
         self.interiors = Default::default();
         self.constructs = Default::default();
         self.net = Default::default();
+        self.backdoors = Default::default();
         self.journal = Default::default();
         self.helix = Default::default();
         crate::credentials::purge(&mut self.content, &mut self.character);
