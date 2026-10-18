@@ -53,6 +53,15 @@ pub enum Pick {
         origin: crate::helix::shell::HostId,
         key: (citygen::Place, citygen::Pos),
     },
+    /// Closes and asks the map for its look cursor on this tile.
+    Look(citygen::Pos),
+    /// Shows what someone says as a card, and logs their line.
+    Talk {
+        lines: Vec<Line<'static>>,
+        said: String,
+    },
+    /// Asks before jacking out, in place of the popup.
+    JackOutAsk,
     Close,
 }
 
@@ -220,6 +229,23 @@ impl Popup {
             opened: tick,
             card: None,
         }
+    }
+
+    /// The confirm before leaving the Net: Jack out starts selected, so `J` then
+    /// enter or space leaves at once; `J` again confirms too.
+    pub fn jack_out_confirm(tick: u64) -> Self {
+        Popup::verbs(
+            "Jack out?",
+            vec![
+                Choice::new('y', "Jack out", Pick::World(WorldAct::JackOut)).alias('J'),
+                Choice::new('n', "Stay in", Pick::Close),
+            ],
+            tick,
+        )
+    }
+
+    pub fn choices(&self) -> &[Choice] {
+        &self.choices
     }
 
     /// Rows above the choices: the subtitle and the blank row under it.
@@ -423,6 +449,22 @@ impl Popup {
             },
             Pick::Terminal { origin, key } => ScreenCmd::Replace {
                 to: Box::new(crate::screens::terminal::Terminal::open(st, origin, key)),
+                fx: TransitionKind::None,
+            },
+            Pick::Look(pos) => {
+                st.look_at = Some(pos);
+                ScreenCmd::Pop {
+                    fx: TransitionKind::None,
+                }
+            }
+            Pick::Talk { lines, said } => {
+                st.say(said);
+                self.card = Some(lines);
+                self.opened = st.tick;
+                ScreenCmd::Stay
+            }
+            Pick::JackOutAsk => ScreenCmd::Replace {
+                to: Box::new(Popup::jack_out_confirm(st.tick)),
                 fx: TransitionKind::None,
             },
             Pick::Close => ScreenCmd::Pop {

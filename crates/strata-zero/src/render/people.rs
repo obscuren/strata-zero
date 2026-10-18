@@ -18,7 +18,7 @@ pub const MARGIN: i32 = 20;
 /// An open building's door at night.
 pub const DOOR_LIT: Color = Color::Rgb(255, 200, 90);
 
-fn tint_colour(t: Tint) -> Color {
+pub(crate) fn tint_colour(t: Tint) -> Color {
     match t {
         Tint::Magenta => MAGENTA,
         Tint::Amber => Color::Rgb(230, 180, 60),

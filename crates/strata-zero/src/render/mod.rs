@@ -6,6 +6,7 @@ pub mod ghost;
 pub mod glyphs;
 pub mod items;
 pub mod lighting;
+pub mod mark;
 pub mod map;
 pub mod memmap;
 pub mod minimap;

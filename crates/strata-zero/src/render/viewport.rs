@@ -124,6 +124,24 @@ pub trait Overlay {
     );
 }
 
+/// Bits N=1, E=2, S=4, W=8 for the neighbours of `p` whose terrain joins `terrain`.
+pub(crate) fn wall_mask(map: &MapRef, p: Pos, terrain: citygen::Terrain) -> u8 {
+    let mut mask = 0u8;
+    for (d, bit) in [
+        ((0, -1), MASK_N),
+        ((1, 0), MASK_E),
+        ((0, 1), MASK_S),
+        ((-1, 0), MASK_W),
+    ] {
+        if let Some(n) = map.tile(p.offset(d.0, d.1))
+            && connects(terrain, n.terrain)
+        {
+            mask |= bit;
+        }
+    }
+    mask
+}
+
 /// Draws one map into an area, then the overlays, then the cursor.
 pub struct MapView<'a> {
     pub map: &'a MapRef<'a>,
@@ -171,19 +189,7 @@ impl Widget for MapView<'_> {
                     }
                     continue;
                 };
-                let mut mask = 0u8;
-                for (d, bit) in [
-                    ((0, -1), MASK_N),
-                    ((1, 0), MASK_E),
-                    ((0, 1), MASK_S),
-                    ((-1, 0), MASK_W),
-                ] {
-                    if let Some(n) = map.tile(p.offset(d.0, d.1))
-                        && connects(tile.terrain, n.terrain)
-                    {
-                        mask |= bit;
-                    }
-                }
+                let mask = wall_mask(map, p, tile.terrain);
                 let vis = self
                     .vis
                     .and_then(|g| g.get(p).copied())

@@ -8,7 +8,7 @@ use crate::render::fx::FxOverlay;
 use crate::render::items::GroundOverlay;
 use crate::render::map::{MapRef, TileMap};
 use crate::render::overlay::Digital;
-use crate::render::people::{InteriorPeople, PeopleOverlay, card_lines};
+use crate::render::people::{InteriorPeople, PeopleOverlay};
 use crate::render::viewport::{Camera, MapView, Overlay, tile_to_screen};
 use crate::render::weather::Weather;
 use crate::screens::configure::Configure;
@@ -19,12 +19,12 @@ use crate::screens::generating::Generating;
 use crate::screens::help;
 use crate::screens::messages::Messages;
 use crate::screens::pause::Pause;
-use crate::screens::popup::{Choice, Pick, Popup, WorldAct};
+use crate::interact::{self, FREE_LETTERS};
+use crate::screens::popup::{Choice, Pick, Popup};
 use crate::screens::title::Title;
 use crate::ui::chrome::{CYAN, MAGENTA, put};
 use crate::ui::console::{Console, ConsoleEvent};
 use crate::ui::hud;
-use crate::ui::panel::inspector_lines;
 use crate::ui::sidebar::{self, Section};
 use crate::walker::{Player, jacked_in_line};
 use citygen::rng::hash64;
@@ -44,8 +44,6 @@ pub enum Mode {
 }
 
 /// Frames per second over the last second.
-/// Hotkey letters for popup rows built here: h j k l q close or navigate, t is take all.
-const WORLD_LETTERS: &str = "abcdefgimnoprsuvwxyz";
 
 pub struct FpsMeter {
     /// Start of the current measuring window.
@@ -709,289 +707,33 @@ impl MapScreen {
         }
     }
 
-    /// What Space offers where the player stands: take rows, jack, stairs, look.
+    /// What Space opens: one thing in reach goes straight to its window, none gives a
+    /// window with Look alone; a construct lists the programs that apply.
     fn interact(&self, st: &AppState) -> Option<ScreenCmd> {
-        let (city, player) = (st.city.as_ref()?, st.player.as_ref()?);
+        let player = st.player.as_ref()?;
         let (place, pos) = (player.place, player.pos);
-        let k = place.stratum();
-        let map = self.map(st, city);
-        let mut choices = Vec::new();
-        // Letters for take rows; j k q h l t and the arrows are taken by the popup and verbs.
-        let mut letters = WORLD_LETTERS.chars();
-        let stacks = st.ground.at(place, pos);
-        for s in stacks {
-            let Some(item) = st.content.item(&s.item) else {
-                continue;
-            };
-            let Some(key) = letters.next() else { break };
-            choices.push(Choice::new(
-                key,
-                format!("take {}× {}", s.qty, item.name),
-                Pick::Act(game::Action::Take {
-                    item: s.item.clone(),
-                    qty: s.qty,
-                }),
-            ));
-        }
-        if stacks.len() > 1 {
-            choices.push(Choice::new(
-                't',
-                "take all",
-                Pick::Act(game::Action::TakeAll),
-            ));
-        }
-        if player.jacked_in() {
-            choices.push(Choice::new('j', "jack out", Pick::World(WorldAct::JackOut)));
-        } else if let Some(port) = player.terminal_in_reach(city, st.home.as_ref()) {
-            choices.push(Choice::new('j', "jack in", Pick::World(WorldAct::JackIn)));
-            // The machine itself: the rig at home, a district terminal on the street.
-            use crate::helix::shell::HostId;
-            let origin = match (place, st.home) {
-                (Place::Floor { .. }, Some(rig)) => Some((HostId::Rig, rig.home.rig, "access rig")),
-                (Place::Stratum(k), _) => crate::access::district_of_terminal(city, k, port)
-                    .map(|d| (HostId::District(d), port, "access terminal")),
-                _ => None,
-            };
-            if let Some((origin, tile, label)) = origin
-                && let Some(key) = letters.next()
-            {
-                choices.push(Choice::new(
-                    key,
-                    label,
-                    Pick::Terminal {
-                        origin,
-                        key: (place, tile),
-                    },
-                ));
-            }
-        }
-        // A locked flat's door beside you: its keypad.
-        if let Place::Floor { building, level } = place
-            && let Some((_, floor)) = st.interiors.floor(building, level)
-        {
-            let now = st.net.now(st);
-            for d in pos.neighbors4() {
-                let Some(r) = floor.door_of(d).filter(|r| {
-                    r.private && r.kind == citygen::RoomKind::Flat && !r.rect.contains(pos)
-                }) else {
-                    continue;
-                };
-                let Some(key) = letters.next() else { break };
-                let text = match st
-                    .journal
-                    .keypad_locked_until(building, level, r.number, now)
-                {
-                    Some(until) => format!(
-                        "interact · keypad, locked {}m",
-                        until.saturating_sub(now).max(1)
-                    ),
-                    None => format!(
-                        "interact · keypad, {}",
-                        crate::credentials::flat_label(st, building, level, r.number)
-                    ),
-                };
-                choices.push(Choice::new(
-                    key,
-                    text,
-                    Pick::Keypad {
-                        building,
-                        level,
-                        number: r.number,
-                    },
-                ));
-            }
-        }
-        let (mut up, mut down) = (None, None);
-        if let Some(k) = k {
-            for c in city
-                .connectors_at(pos)
-                .filter(|c| c.kind != citygen::ConnectorKind::Jack)
-            {
-                // Only directions that lead somewhere walkable: a row never refuses after being offered.
-                if let Some((below, above)) = c.serves_from(k) {
-                    up = up.or(above.filter(|d| city.walkable(*d, pos)));
-                    down = down.or(below.filter(|d| city.walkable(*d, pos)));
-                }
-            }
-        }
-        if let Some(dest) = up {
-            choices.push(Choice::new(
-                '>',
-                format!("go up to {}", dest.label()),
-                Pick::World(WorldAct::Up),
-            ));
-        }
-        if let Some(dest) = down {
-            choices.push(Choice::new(
-                '<',
-                format!("go down to {}", dest.label()),
-                Pick::World(WorldAct::Down),
-            ));
-        }
-        // Inside: the lift panel on a lift bank, the next floors on the stairs.
-        if let (Place::Floor { building, level }, Some((plan, floor))) = (
-            place,
-            place
-                .stratum()
-                .is_none()
-                .then(|| match place {
-                    Place::Floor { building, level } => st.interiors.floor(building, level),
-                    _ => None,
-                })
-                .flatten(),
-        ) {
-            match floor.tiles.get(pos).map(|t| t.terrain) {
-                Some(citygen::Terrain::Lift) => {
-                    if let Some(rows) = self.floor_rows(st) {
-                        choices.extend(rows);
-                    }
-                }
-                Some(citygen::Terrain::Stair) => {
-                    if level < plan.top {
-                        choices.push(Choice::new(
-                            '>',
-                            format!("up to {}", citygen::FloorPlan::label(level + 1)),
-                            Pick::World(WorldAct::Climb(true)),
-                        ));
-                    }
-                    if level > plan.lowest {
-                        choices.push(Choice::new(
-                            '<',
-                            format!("down to {}", citygen::FloorPlan::label(level - 1)),
-                            Pick::World(WorldAct::Climb(false)),
-                        ));
-                    }
-                }
-                _ => {}
-            }
-            let _ = building;
-        }
-        if place.is_street()
-            && let Some(world) = st.world.as_ref()
-        {
-            for n in pos.neighbors4() {
-                let Some(id) = world.person_at(n) else {
-                    continue;
-                };
-                let Some(key) = letters.next() else { break };
-                let card = world.card(id, city);
-                choices.push(Choice::new(
-                    key,
-                    format!("talk to {}", card.name),
-                    Pick::Card(card_lines(&card)),
-                ));
-            }
-        }
-        if !place.is_street()
-            && let Some(world) = st.world.as_ref()
-        {
-            for n in pos.neighbors4() {
-                let Some(id) = self.inside_person_at(place, n) else {
-                    continue;
-                };
-                let Some(key) = letters.next() else { break };
-                let card = world.card(id, city);
-                choices.push(Choice::new(
-                    key,
-                    format!("talk to {}", card.name),
-                    Pick::Card(card_lines(&card)),
-                ));
-            }
-        }
-        // Inside a construct: the programs that apply to the node or the ICE at hand.
-        let mut title = "HERE";
+        let look = Choice::new('x', "Look", Pick::Look(pos));
         if let Place::Construct(b) = place
             && st.character.deck(&st.content).is_some()
         {
-            let rows = Self::run_choices(st, b, pos, None, &mut letters);
-            if !rows.is_empty() {
-                title = "RUN";
-            }
+            let mut letters = FREE_LETTERS.chars();
+            let rows = interact::run_rows(st, b, pos, None, &mut letters);
+            let mut choices = vec![look];
             choices.extend(rows);
+            return Some(ScreenCmd::Push {
+                to: Box::new(Popup::verbs("", choices, st.tick)),
+                fx: TransitionKind::None,
+            });
         }
-        let node = match place {
-            Place::Construct(b) => st
-                .constructs
-                .get(b)
-                .and_then(|k| k.node_at(pos))
-                .map(|id| city.net.node(id)),
-            _ => k
-                .and_then(|k| Digital::node_under(city, k, pos))
-                .map(|id| city.net.node(id)),
+        let subjects = interact::gather(st, &|pl, p| self.inside_person_at(pl, p));
+        let popup = match subjects.first() {
+            None => Popup::verbs("", vec![look], st.tick),
+            Some(s) => s.window(st.tick),
         };
-        let who = st
-            .world
-            .as_ref()
-            .filter(|_| place.is_street())
-            .and_then(|w| w.person_at(pos));
-        let person = who.and_then(|id| st.world.as_ref().map(|w| w.card(id, city)));
-        let mut card = inspector_lines(&map, pos, node, stacks, &st.content, person.as_ref());
-        if who.is_some_and(|id| !crate::credentials::carries(st, id).is_empty()) {
-            card.push(crate::ui::panel::kv("carries", "a keycard on a lanyard"));
-        }
-        choices.push(Choice::new('l', "look", Pick::Card(card)));
         Some(ScreenCmd::Push {
-            to: Box::new(Popup::verbs(title, choices, st.tick)),
+            to: Box::new(popup),
             fx: TransitionKind::None,
         })
-    }
-
-    /// One RUN row per program that applies to a target in reach, with the odds;
-    /// `only` keeps it to one program.
-    fn run_choices(
-        st: &AppState,
-        b: citygen::BuildingId,
-        pos: Pos,
-        only: Option<&game::ItemId>,
-        letters: &mut std::str::Chars,
-    ) -> Vec<Choice> {
-        let mut choices = Vec::new();
-        let now = st.net.now(st);
-        let security = st.constructs.get(b).map(|k| k.security).unwrap_or(0);
-        for (target, what) in crate::net::targets_near(st, b, pos) {
-            let Some(kind) = crate::net::target_kind(st, b, target) else {
-                continue;
-            };
-            for item in st.character.loaded_programs(&st.content) {
-                if only.is_some_and(|id| *id != item.id) {
-                    continue;
-                }
-                let Some(spec) = item.program else { continue };
-                if !game::applies(spec.op, kind) {
-                    continue;
-                }
-                let Some(key) = letters.next() else { break };
-                let label = spec.op.label();
-                let copied = spec.op == game::Op::Copy
-                    && matches!(target, game::HackTarget::Node(id) if st.net.copied(id, now));
-                let on = format!(" · {what}");
-                if copied {
-                    choices.push(Choice::disabled(
-                        key,
-                        format!("{label}{on} · copied already"),
-                    ));
-                    continue;
-                }
-                let pw = game::power(&st.character, &st.content, &spec, kind);
-                // A program on yourself never fails.
-                let odds = if kind == game::Target::Deck {
-                    100
-                } else {
-                    game::chance(pw, game::difficulty(security))
-                };
-                choices.push(Choice::new(
-                    key,
-                    format!(
-                        "{label}{on} · {odds}% · {} turn{} · noise {}",
-                        spec.work,
-                        if spec.work == 1 { "" } else { "s" },
-                        spec.noise
-                    ),
-                    Pick::Run(item.id.clone(), target),
-                ));
-            }
-        }
-        choices
     }
 
     /// A number key jacked in: the deck's program in that slot, run at once against
@@ -1129,7 +871,7 @@ impl MapScreen {
     /// The actives the character can fire, cooling ones greyed; none says so.
     fn abilities(&self, st: &mut AppState) -> ScreenCmd {
         let mut choices = Vec::new();
-        let mut letters = WORLD_LETTERS.chars();
+        let mut letters = FREE_LETTERS.chars();
         for (id, _) in st.character.abilities(&st.content) {
             let Some(a) = st.content.ability(&id) else {
                 continue;
@@ -1369,32 +1111,11 @@ impl MapScreen {
 
     /// The FLOORS popup: every floor of the building, the current one marked.
     fn floors_popup(&self, st: &AppState) -> Option<ScreenCmd> {
-        let rows = self.floor_rows(st)?;
+        let rows = interact::ride_rows(st, &mut FREE_LETTERS.chars())?;
         Some(ScreenCmd::Push {
             to: Box::new(Popup::verbs("Floors", rows, st.tick)),
             fx: TransitionKind::None,
         })
-    }
-
-    fn floor_rows(&self, st: &AppState) -> Option<Vec<Choice>> {
-        let player = st.player.as_ref()?;
-        let Place::Floor { building, level } = player.place else {
-            return None;
-        };
-        let plan = st.interiors.plan_of(building)?;
-        let mut letters = WORLD_LETTERS.chars();
-        Some(
-            crate::interiors::floor_rows(plan, level)
-                .into_iter()
-                .rev()
-                .map(|(l, label)| {
-                    let key = letters.next().unwrap_or(' ');
-                    let mut c = Choice::new(key, label, Pick::World(WorldAct::Lift(l)));
-                    c.enabled = l != level;
-                    c
-                })
-                .collect(),
-        )
     }
 
     /// Tiles from `pos` to the construct's entry, none when it cannot be reached.
@@ -1801,6 +1522,8 @@ impl Screen for MapScreen {
                 fx: TransitionKind::Glitch,
             };
         }
+        // A popup asked for look mode; until look lands, the ask is dropped.
+        let _ = st.look_at.take();
         if st.tick > self.last_tick + 1 {
             self.fps.resume(Instant::now());
         }
@@ -2847,13 +2570,14 @@ mod tests {
         st.tick += 40;
         let text = draw_screen(&*p, &st, 120, 40);
         assert!(
-            text.contains("a  take 2× Copper coil")
-                && text.contains("b  take 1× Dead phone")
-                && text.contains("t  take all")
-                && text.contains("l  look"),
+            text.contains("x  Look")
+                && text.contains("g  Take all")
+                && text.contains("a  Take: Copper coil ×2")
+                && text.contains("b  Take: Dead phone"),
             "{text}"
         );
-        p.update(&mut st, &[key(KeyCode::Char('t'))]);
+        assert!(!text.contains("HERE"), "{text}");
+        p.update(&mut st, &[key(KeyCode::Char('g'))]);
         assert_eq!(st.character.count(&game::ItemId::new("copper_coil")), 5);
         assert_eq!(st.character.count(&game::ItemId::new("dead_phone")), 2);
         assert!(st.ground.at(k, pos).is_empty());
@@ -2864,10 +2588,132 @@ mod tests {
         };
         st.tick += 40;
         let text = draw_screen(&*p, &st, 120, 40);
-        assert!(text.contains("l  look") && !text.contains("take"), "{text}");
-        p.update(&mut st, &[key(KeyCode::Char('l'))]);
-        st.tick += 40;
-        assert!(draw_screen(&*p, &st, 120, 40).contains("terrain"));
+        assert!(text.contains("x  Look") && !text.contains("Take"), "{text}");
+        // Look asks the map for its cursor on the tile and closes.
+        assert!(matches!(
+            p.update(&mut st, &[key(KeyCode::Char('x'))]),
+            ScreenCmd::Pop { .. }
+        ));
+        assert_eq!(st.look_at, Some(pos));
+    }
+
+    /// A row as the window prints it, without the spacing: "i Interact: Terminal".
+    fn row_text(c: &Choice) -> String {
+        let thing = c
+            .thing
+            .as_ref()
+            .map(|(t, _)| format!(": {t}"))
+            .unwrap_or_default();
+        format!("{} {}{thing}{}", c.key, c.label, c.tail)
+    }
+
+    /// A street tile with nothing in reach: no jack, no connector, no one, nothing
+    /// on the ground.
+    fn bare_sidewalk(st: &AppState) -> Pos {
+        let city = st.city.as_ref().unwrap();
+        let k = StratumKind::Street;
+        let size = city.size;
+        (0..size.h as i32)
+            .flat_map(|y| (0..size.w as i32).map(move |x| Pos::new(x, y)))
+            .find(|p| {
+                city.walkable(k, *p)
+                    && std::iter::once(*p)
+                        .chain(p.neighbors8())
+                        .all(|q| city.connectors_at(q).next().is_none())
+            })
+            .expect("a bare sidewalk")
+    }
+
+    #[test]
+    fn nothing_in_reach_gathers_no_subjects() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let at = bare_sidewalk(&st);
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), at);
+        assert!(crate::interact::gather(&st, &|_, _| None).is_empty());
+    }
+
+    #[test]
+    fn a_terminal_beside_you_is_one_subject_with_interact_and_jack() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let at = {
+            let city = st.city.as_ref().unwrap();
+            let jack = city
+                .connectors
+                .iter()
+                .find(|k| k.kind == citygen::ConnectorKind::Jack && k.public)
+                .unwrap()
+                .pos;
+            jack.neighbors8()
+                .find(|n| city.walkable(StratumKind::Street, *n))
+                .unwrap()
+        };
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), at);
+        let subs = crate::interact::gather(&st, &|_, _| None);
+        let t = subs
+            .iter()
+            .find(|s| {
+                s.header
+                    .as_ref()
+                    .is_some_and(|h| h.name == "Access terminal")
+            })
+            .expect("the terminal is a subject");
+        let rows: Vec<String> = t.choices.iter().map(row_text).collect();
+        assert_eq!(rows, ["i Interact: Terminal", "j Jack in"]);
+        assert!(t.dir.is_some());
+    }
+
+    #[test]
+    fn take_rows_stop_when_the_letters_run_out() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let (k, pos) = player(&st);
+        let ids: Vec<game::ItemId> = st
+            .content
+            .items
+            .iter()
+            .map(|i| i.id.clone())
+            .take(crate::interact::FREE_LETTERS.len() + 3)
+            .collect();
+        assert!(ids.len() > crate::interact::FREE_LETTERS.len());
+        for id in ids {
+            st.ground.add(k, pos, id, 1);
+        }
+        let here = crate::interact::gather(&st, &|_, _| None)
+            .into_iter()
+            .find(|s| s.dir.is_none())
+            .expect("the stacks make a here subject");
+        let keys: Vec<char> = here.choices.iter().map(|c| c.key).collect();
+        let mut unique = keys.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), keys.len(), "every row has its own key: {keys:?}");
+        assert_eq!(keys[0], 'g');
+    }
+
+    #[test]
+    fn the_window_puts_look_first_on_x() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let at = bare_sidewalk(&st);
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), at);
+        let (k, pos) = player(&st);
+        st.ground.add(k, pos, game::ItemId::new("copper_coil"), 2);
+        let here = crate::interact::gather(&st, &|_, _| None).remove(0);
+        assert_eq!(here.dir, None);
+        assert_eq!(
+            here.header.as_ref().map(|h| h.name.as_str()),
+            Some("Copper coil ×2")
+        );
+        let w = here.window(0);
+        assert_eq!(w.choices()[0].key, 'x');
+        assert!(matches!(w.choices()[0].pick, Pick::Look(p) if p == pos));
+        assert_eq!(row_text(&w.choices()[1]), "g Take: Copper coil ×2");
     }
 
     #[test]
@@ -2897,7 +2743,7 @@ mod tests {
             panic!("space opens the interact popup")
         };
         st.tick += 40;
-        assert!(draw_screen(&*p, &st, 120, 40).contains("j  jack in"));
+        assert!(draw_screen(&*p, &st, 120, 40).contains("j  Jack in"));
         let cmd = p.update(&mut st, &[key(KeyCode::Char('j'))]);
         assert!(
             matches!(
@@ -2921,8 +2767,14 @@ mod tests {
             panic!()
         };
         st.tick += 40;
-        assert!(draw_screen(&*p, &st, 120, 40).contains("j  jack out"));
-        p.update(&mut st, &[key(KeyCode::Char('j'))]);
+        assert!(draw_screen(&*p, &st, 120, 40).contains("j  Jack out"));
+        let ScreenCmd::Replace { to: mut ask, .. } = p.update(&mut st, &[key(KeyCode::Char('j'))])
+        else {
+            panic!("jack out asks first")
+        };
+        st.tick += 40;
+        assert!(draw_screen(&*ask, &st, 120, 40).contains("Jack out?"));
+        ask.update(&mut st, &[key(KeyCode::Char('y'))]);
         s.update(&mut st, &[]);
         assert_eq!(s.place, Place::Stratum(street));
         let stair = city
@@ -2943,7 +2795,7 @@ mod tests {
             panic!()
         };
         st.tick += 40;
-        assert!(draw_screen(&*p, &st, 120, 40).contains("<  go down to Undercity"));
+        assert!(draw_screen(&*p, &st, 120, 40).contains("<  Go down: Undercity"));
         p.update(&mut st, &[key(KeyCode::Char('<'))]);
         s.update(&mut st, &[]);
         assert_eq!(s.place, Place::Stratum(StratumKind::Undercity));
@@ -3068,8 +2920,8 @@ mod tests {
             let (below, above) = k.serves_from(street).unwrap_or((None, None));
             let leads_down = below.is_some_and(|d| city.walkable(d, k.pos));
             let leads_up = above.is_some_and(|d| city.walkable(d, k.pos));
-            assert_eq!(text.contains("go down"), leads_down, "{:?}\n{text}", k.pos);
-            assert_eq!(text.contains("go up"), leads_up, "{:?}\n{text}", k.pos);
+            assert_eq!(text.contains("Go down"), leads_down, "{:?}\n{text}", k.pos);
+            assert_eq!(text.contains("Go up"), leads_up, "{:?}\n{text}", k.pos);
             checked += 1;
             if checked == 40 {
                 break;
@@ -3570,8 +3422,23 @@ mod tests {
         };
         st.tick += 40;
         let text = draw_screen(&*here, &st, 120, 40);
-        assert!(text.contains(&format!("talk to {}", card.name)), "{text}");
-        here.update(&mut st, &[key(KeyCode::Esc)]);
+        assert!(
+            text.contains(&card.name) && text.contains("t  Talk") && !text.contains("HERE"),
+            "{text}"
+        );
+        assert!(matches!(
+            here.update(&mut st, &[key(KeyCode::Char('t'))]),
+            ScreenCmd::Stay
+        ));
+        assert!(
+            last(&st).is_some_and(|l| l.starts_with(&format!("{}: \u{201c}", card.name))),
+            "what they say is logged: {:?}",
+            last(&st)
+        );
+        assert!(
+            matches!(here.update(&mut st, &[key(KeyCode::Esc)]), ScreenCmd::Pop { .. }),
+            "the talk card closes to the game"
+        );
     }
 
     #[test]
@@ -3659,7 +3526,7 @@ mod tests {
         st.tick += 40;
         let text = draw_screen(&*here, &st, 120, 40);
         assert!(
-            !text.contains("talk to"),
+            !text.contains("Talk"),
             "nobody to talk to down here: {text}"
         );
         here.update(&mut st, &[key(KeyCode::Esc)]);
@@ -3903,12 +3770,14 @@ mod tests {
         st.tick += 40;
         let text = draw_screen(&*p, &st, 120, 40);
         assert!(
-            text.contains("jack in") && text.contains("access terminal"),
+            text.contains("Access terminal")
+                && text.contains("i  Interact: Terminal")
+                && text.contains("j  Jack in"),
             "{text}"
         );
         let row = text
             .lines()
-            .find(|l| l.contains("access terminal"))
+            .find(|l| l.contains("Interact: Terminal"))
             .unwrap();
         let letter = row.chars().find(|c| c.is_ascii_alphabetic()).unwrap();
         let ScreenCmd::Replace { to: term, .. } = p.update(&mut st, &[key(KeyCode::Char(letter))])
@@ -3941,8 +3810,14 @@ mod tests {
         };
         st.tick += 40;
         let text = draw_screen(&*p, &st, 120, 40);
-        assert!(text.contains("access rig"), "{text}");
-        let row = text.lines().find(|l| l.contains("access rig")).unwrap();
+        assert!(
+            text.contains("Access rig") && text.contains("i  Interact: Terminal"),
+            "{text}"
+        );
+        let row = text
+            .lines()
+            .find(|l| l.contains("Interact: Terminal"))
+            .unwrap();
         let letter = row.chars().find(|c| c.is_ascii_alphabetic()).unwrap();
         let ScreenCmd::Replace { to: mut term, .. } =
             p.update(&mut st, &[key(KeyCode::Char(letter))])
@@ -4305,7 +4180,7 @@ mod tests {
         };
         st.tick += 40;
         let text = draw_screen(&*here, &st, 120, 40);
-        assert!(!text.contains("jack in"), "{text}");
+        assert!(!text.contains("Jack in"), "{text}");
         here.update(&mut st, &[key(KeyCode::Esc)]);
         // Outside, beside a terminal, the body stays on the street while jacked in.
         let (jack, beside) = {
@@ -4467,7 +4342,10 @@ mod tests {
         let popup = draw_screen(&*here, &st, 120, 40);
         let world = st.world.as_ref().unwrap();
         let card = world.card(keeper, &city);
-        assert!(popup.contains(&format!("talk to {}", card.name)), "{popup}");
+        assert!(
+            popup.contains(&card.name) && popup.contains("t  Talk"),
+            "{popup}"
+        );
         assert_eq!(card.doing, "behind the bar");
         here.update(&mut st, &[key(KeyCode::Esc)]);
     }
@@ -4664,12 +4542,13 @@ mod tests {
         st.tick += 40;
         let text = draw_screen(&*p, &st, 120, 40);
         assert!(
-            text.contains(&format!("interact · keypad, {name}'s flat {number}")),
+            text.contains(&format!("{name}'s flat {number}"))
+                && text.contains("i  Interact: Keypad"),
             "{text}"
         );
         let row = text
             .lines()
-            .find(|l| l.contains("interact · keypad"))
+            .find(|l| l.contains("Interact: Keypad"))
             .unwrap();
         let letter = row.chars().find(|c| c.is_ascii_alphabetic()).unwrap();
         let ScreenCmd::Replace { to: mut pad, .. } =
@@ -4808,7 +4687,7 @@ mod tests {
         st.tick += 40;
         let text = draw_screen(&*here, &st, 120, 40);
         assert!(
-            text.contains(&format!("up to {}", FloorPlan::label(plan.lowest + 1))),
+            text.contains(&format!(">  Go up: {}", FloorPlan::label(plan.lowest + 1))),
             "{text}"
         );
         here.update(&mut st, &[key(KeyCode::Char('>'))]);
@@ -5019,8 +4898,8 @@ mod tests {
         };
         st.tick += 40;
         let text = draw_screen(&*run, &st, 120, 40);
-        assert!(text.contains("RUN"), "{text}");
-        assert!(text.contains("crack · door lock · 40%"), "{text}");
+        assert!(!text.contains("RUN") && text.contains("x  Look"), "{text}");
+        assert!(text.contains("Crack: door lock · 40%"), "{text}");
         assert!(text.contains("3 turns · noise 4"), "{text}");
         assert!(!text.contains("blind"), "{text}");
         run.update(&mut st, &[key(KeyCode::Char('a'))]);
@@ -5330,7 +5209,7 @@ mod tests {
         };
         st.tick += 40;
         let text = draw_screen(&*here_popup, &st, 120, 40);
-        assert!(!text.contains("crack ·") && text.contains("HERE"), "{text}");
+        assert!(!text.contains("Crack") && text.contains("x  Look"), "{text}");
     }
 
     #[test]
@@ -5479,7 +5358,7 @@ mod tests {
         st.tick += 40;
         let text = draw_screen(&*run, &st, 120, 40);
         assert!(
-            text.contains("crack · door lock · 0% · 3 turns · noise 4"),
+            text.contains("Crack: door lock · 0% · 3 turns · noise 4"),
             "{text}"
         );
         let (lock, _) = node_of(&st, b, NodeKind::DoorLock);
@@ -5829,7 +5708,7 @@ mod tests {
         };
         st.tick += 40;
         let text = draw_screen(&*run, &st, 120, 40);
-        assert!(text.contains("shield · yourself · 100% · 1 turn"), "{text}");
+        assert!(text.contains("Shield: yourself · 100% · 1 turn"), "{text}");
     }
 
     #[test]

@@ -9,6 +9,7 @@ mod constructs;
 mod credentials;
 mod helix;
 mod home;
+mod interact;
 mod interiors;
 mod messages;
 mod net;

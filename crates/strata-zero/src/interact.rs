@@ -1,0 +1,450 @@
+//! What Space offers: the things in reach, one window each, with fixed verbs on fixed
+//! letters (`x` look, `t` talk, `i` interact, `j` jack, `g` take, `>` `<` go).
+
+use crate::app::AppState;
+use crate::render::map::MapRef;
+use crate::render::mark::{mark_items, mark_person, mark_tile};
+use crate::render::people::card_lines;
+use crate::screens::popup::{Choice, Header, Pick, Popup, WorldAct};
+use crate::ui::chrome::{CYAN, MAGENTA, TEXT};
+use crate::ui::hud::{AMBER, capitalised};
+use citygen::{Dir, FloorPlan, Place, Pos};
+use ratatui::style::Color;
+
+/// Letters for take, ride and program rows: no verb letter, none of the window's
+/// own keys (`h j k l q`).
+pub const FREE_LETTERS: &str = "abcdefmnopsuvwyz";
+
+/// One thing in reach and what can be done to it.
+#[derive(Clone, Debug)]
+pub struct Subject {
+    pub pos: Pos,
+    /// Where it lies from the player; `None` for the player's own tile.
+    pub dir: Option<Dir>,
+    pub header: Option<Header>,
+    pub subtitle: Option<String>,
+    /// Its verbs, Look not included: `window` puts Look first.
+    pub choices: Vec<Choice>,
+}
+
+impl Subject {
+    /// What the which-way prompt calls it.
+    pub fn name(&self) -> String {
+        self.header
+            .as_ref()
+            .map_or_else(|| "here".to_string(), |h| h.name.clone())
+    }
+
+    /// Its window: Look first, then its verbs.
+    pub fn window(&self, tick: u64) -> Popup {
+        let mut rows = vec![Choice::new('x', "Look", Pick::Look(self.pos))];
+        rows.extend(self.choices.iter().cloned());
+        Popup::about(self.header.clone(), self.subtitle.clone(), rows, tick)
+    }
+}
+
+/// A header named for a thing, in the colour its glyph is drawn in.
+fn header(name: impl Into<String>, glyph: Option<(char, Color)>) -> Header {
+    Header {
+        glyph,
+        name: name.into(),
+        fg: glyph.map_or(TEXT, |(_, c)| c),
+    }
+}
+
+/// A stack as rows and headers name it: "Copper coil ×2", the count only above one.
+fn stack_name(name: &str, qty: u32) -> String {
+    if qty > 1 {
+        format!("{name} ×{qty}")
+    } else {
+        name.to_string()
+    }
+}
+
+/// Adds rows for a thing at `at`: onto the player's own tile, onto a subject already
+/// on that tile, or as a new subject.
+fn add(
+    subs: &mut Vec<Subject>,
+    here: &mut Subject,
+    at: Pos,
+    head: Option<Header>,
+    subtitle: Option<String>,
+    rows: Vec<Choice>,
+) {
+    if at == here.pos {
+        here.choices.extend(rows);
+        return;
+    }
+    if let Some(s) = subs.iter_mut().find(|s| s.pos == at) {
+        s.choices.extend(rows);
+        return;
+    }
+    subs.push(Subject {
+        pos: at,
+        dir: Dir::ALL.into_iter().find(|d| here.pos.step(*d) == at),
+        header: head,
+        subtitle,
+        choices: rows,
+    });
+}
+
+/// The things in reach of the player, their own tile first, then by direction.
+/// Constructs have none: their window is the program list.
+pub fn gather(
+    st: &AppState,
+    inside_person: &dyn Fn(Place, Pos) -> Option<sim::PersonId>,
+) -> Vec<Subject> {
+    let (Some(city), Some(player)) = (st.city.as_ref(), st.player.as_ref()) else {
+        return Vec::new();
+    };
+    let (place, pos) = (player.place, player.pos);
+    if matches!(place, Place::Construct(_)) {
+        return Vec::new();
+    }
+    let Some(map) = MapRef::for_place(city, &st.interiors, &st.constructs, place) else {
+        return Vec::new();
+    };
+    let mut subs: Vec<Subject> = Vec::new();
+    let mut here = Subject {
+        pos,
+        dir: None,
+        header: None,
+        subtitle: None,
+        choices: Vec::new(),
+    };
+    let mut letters = FREE_LETTERS.chars();
+
+    // People beside you: on the street the city's walkers, indoors the occupants.
+    for n in pos.neighbors4() {
+        let id = if place.is_street() {
+            st.world.as_ref().and_then(|w| w.person_at(n))
+        } else {
+            inside_person(place, n)
+        };
+        let (Some(id), Some(world)) = (id, st.world.as_ref()) else {
+            continue;
+        };
+        let card = world.card(id, city);
+        let said = format!("{}: \u{201c}{}\u{201d}", card.name, card.line);
+        let lines = card_lines(&card).into_iter().skip(1).collect();
+        add(
+            &mut subs,
+            &mut here,
+            n,
+            Some(header(card.name.clone(), Some(mark_person(st, id)))),
+            Some(format!("{} · {}", card.profession, card.doing)),
+            vec![Choice::new('t', "Talk", Pick::Talk { lines, said })],
+        );
+    }
+
+    // A locked flat's door beside you: its keypad.
+    if let Place::Floor { building, level } = place
+        && let Some((_, floor)) = st.interiors.floor(building, level)
+    {
+        let now = st.net.now(st);
+        for d in pos.neighbors4() {
+            let Some(r) = floor.door_of(d).filter(|r| {
+                r.private && r.kind == citygen::RoomKind::Flat && !r.rect.contains(pos)
+            }) else {
+                continue;
+            };
+            let mut row = Choice::on(
+                'i',
+                "Interact",
+                "Keypad",
+                AMBER,
+                Pick::Keypad {
+                    building,
+                    level,
+                    number: r.number,
+                },
+            );
+            if let Some(until) = st
+                .journal
+                .keypad_locked_until(building, level, r.number, now)
+            {
+                row = row.tail(format!(" · locked {}m", until.saturating_sub(now).max(1)));
+            }
+            let name = capitalised(&crate::credentials::flat_label(
+                st, building, level, r.number,
+            ));
+            add(
+                &mut subs,
+                &mut here,
+                d,
+                Some(header(name, mark_tile(st, &map, d))),
+                None,
+                vec![row],
+            );
+        }
+    }
+
+    // The machine within reach: the rig at home, a district terminal on the street.
+    if !player.jacked_in()
+        && let Some(port) = player.terminal_in_reach(city, st.home.as_ref())
+    {
+        use crate::helix::shell::HostId;
+        let (origin, tile, name) = match (place, st.home) {
+            (Place::Floor { .. }, Some(rig)) => (Some(HostId::Rig), rig.home.rig, "Access rig"),
+            (Place::Stratum(k), _) => (
+                crate::access::district_of_terminal(city, k, port).map(HostId::District),
+                port,
+                "Access terminal",
+            ),
+            _ => (None, port, "Access terminal"),
+        };
+        let mut rows = Vec::new();
+        if let Some(origin) = origin {
+            rows.push(Choice::on(
+                'i',
+                "Interact",
+                "Terminal",
+                CYAN,
+                Pick::Terminal {
+                    origin,
+                    key: (place, tile),
+                },
+            ));
+        }
+        rows.push(Choice::new('j', "Jack in", Pick::World(WorldAct::JackIn)));
+        add(
+            &mut subs,
+            &mut here,
+            tile,
+            Some(header(name, mark_tile(st, &map, tile))),
+            None,
+            rows,
+        );
+    }
+
+    // Your own tile: jack out, what lies there, the ways up and down.
+    let mut here_rows = Vec::new();
+    let mut fixture: Option<&str> = None;
+    if player.jacked_in() {
+        here_rows.push(Choice::new('j', "Jack out", Pick::JackOutAsk));
+    }
+    let stacks = st.ground.at(place, pos);
+    if let [s] = stacks
+        && let Some(item) = st.content.item(&s.item)
+    {
+        here_rows.push(Choice::on(
+            'g',
+            "Take",
+            stack_name(&item.name, s.qty),
+            AMBER,
+            Pick::Act(game::Action::Take {
+                item: s.item.clone(),
+                qty: s.qty,
+            }),
+        ));
+    } else if stacks.len() > 1 {
+        here_rows.push(Choice::new(
+            'g',
+            "Take all",
+            Pick::Act(game::Action::TakeAll),
+        ));
+        for s in stacks {
+            let Some(item) = st.content.item(&s.item) else {
+                continue;
+            };
+            let Some(key) = letters.next() else { break };
+            here_rows.push(Choice::on(
+                key,
+                "Take",
+                stack_name(&item.name, s.qty),
+                AMBER,
+                Pick::Act(game::Action::Take {
+                    item: s.item.clone(),
+                    qty: s.qty,
+                }),
+            ));
+        }
+    }
+    if let Some(k) = place.stratum() {
+        let (mut up, mut down) = (None, None);
+        for c in city
+            .connectors_at(pos)
+            .filter(|c| c.kind != citygen::ConnectorKind::Jack)
+        {
+            // Only directions that lead somewhere walkable: a row never refuses after being offered.
+            if let Some((below, above)) = c.serves_from(k) {
+                let (u, d) = (
+                    above.filter(|d| city.walkable(*d, pos)),
+                    below.filter(|d| city.walkable(*d, pos)),
+                );
+                if (u.is_some() || d.is_some()) && fixture.is_none() {
+                    fixture = Some(match c.kind {
+                        citygen::ConnectorKind::Stair => "Stairs",
+                        citygen::ConnectorKind::Lift => "Lift",
+                        citygen::ConnectorKind::Ladder => "Ladder",
+                        _ => "Manhole",
+                    });
+                }
+                up = up.or(u);
+                down = down.or(d);
+            }
+        }
+        if let Some(dest) = up {
+            here_rows.push(Choice::on(
+                '>',
+                "Go up",
+                dest.label(),
+                TEXT,
+                Pick::World(WorldAct::Up),
+            ));
+        }
+        if let Some(dest) = down {
+            here_rows.push(Choice::on(
+                '<',
+                "Go down",
+                dest.label(),
+                TEXT,
+                Pick::World(WorldAct::Down),
+            ));
+        }
+    }
+    // Inside: the lift panel on a lift bank, the next floors on the stairs.
+    if let Place::Floor { building, level } = place
+        && let Some((plan, floor)) = st.interiors.floor(building, level)
+    {
+        match floor.tiles.get(pos).map(|t| t.terrain) {
+            Some(citygen::Terrain::Lift) => {
+                fixture = Some("Lift");
+                here_rows.extend(ride_rows(st, &mut letters).unwrap_or_default());
+            }
+            Some(citygen::Terrain::Stair) => {
+                fixture = Some("Stairwell");
+                if level < plan.top {
+                    here_rows.push(Choice::on(
+                        '>',
+                        "Go up",
+                        FloorPlan::label(level + 1),
+                        TEXT,
+                        Pick::World(WorldAct::Climb(true)),
+                    ));
+                }
+                if level > plan.lowest {
+                    here_rows.push(Choice::on(
+                        '<',
+                        "Go down",
+                        FloorPlan::label(level - 1),
+                        TEXT,
+                        Pick::World(WorldAct::Climb(false)),
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    here.choices.splice(0..0, here_rows);
+    if !here.choices.is_empty() {
+        here.header = match fixture {
+            Some(name) => Some(header(name, mark_tile(st, &map, pos))),
+            None => stacks.first().and_then(|s| {
+                let item = st.content.item(&s.item)?;
+                Some(header(
+                    stack_name(&item.name, s.qty),
+                    mark_items(st, place, pos),
+                ))
+            }),
+        };
+    }
+    subs.sort_by_key(|s| s.dir.and_then(|d| Dir::ALL.iter().position(|x| *x == d)));
+    if !here.choices.is_empty() {
+        subs.insert(0, here);
+    }
+    subs
+}
+
+/// The lift panel's rows: every floor of the building, the current one greyed.
+pub fn ride_rows(st: &AppState, letters: &mut std::str::Chars) -> Option<Vec<Choice>> {
+    let player = st.player.as_ref()?;
+    let Place::Floor { building, level } = player.place else {
+        return None;
+    };
+    let plan = st.interiors.plan_of(building)?;
+    Some(
+        crate::interiors::floor_rows(plan, level)
+            .into_iter()
+            .rev()
+            .map(|(l, label)| {
+                let key = letters.next().unwrap_or(' ');
+                let (floor, marks) = match label.split_once(" · ") {
+                    Some((f, m)) => (f.to_string(), format!(" · {m}")),
+                    None => (label, String::new()),
+                };
+                let mut c = Choice::on(key, "Ride", floor, TEXT, Pick::World(WorldAct::Lift(l)))
+                    .tail(marks);
+                c.enabled = l != level;
+                c
+            })
+            .collect(),
+    )
+}
+
+/// One row per program that applies to a target in reach, with the odds; `only`
+/// keeps it to one program. The program is the verb, the target the thing.
+pub fn run_rows(
+    st: &AppState,
+    b: citygen::BuildingId,
+    pos: Pos,
+    only: Option<&game::ItemId>,
+    letters: &mut std::str::Chars,
+) -> Vec<Choice> {
+    let mut choices = Vec::new();
+    let now = st.net.now(st);
+    let security = st.constructs.get(b).map(|k| k.security).unwrap_or(0);
+    for (target, what) in crate::net::targets_near(st, b, pos) {
+        let Some(kind) = crate::net::target_kind(st, b, target) else {
+            continue;
+        };
+        let colour = match target {
+            game::HackTarget::Node(_) => CYAN,
+            game::HackTarget::Guard { .. } => MAGENTA,
+            _ => TEXT,
+        };
+        for item in st.character.loaded_programs(&st.content) {
+            if only.is_some_and(|id| *id != item.id) {
+                continue;
+            }
+            let Some(spec) = item.program else { continue };
+            if !game::applies(spec.op, kind) {
+                continue;
+            }
+            let Some(key) = letters.next() else { break };
+            let verb = capitalised(spec.op.label());
+            let copied = spec.op == game::Op::Copy
+                && matches!(target, game::HackTarget::Node(id) if st.net.copied(id, now));
+            if copied {
+                let mut c = Choice::on(key, verb, what.clone(), colour, Pick::Close)
+                    .tail(" · copied already");
+                c.enabled = false;
+                choices.push(c);
+                continue;
+            }
+            let pw = game::power(&st.character, &st.content, &spec, kind);
+            // A program on yourself never fails.
+            let odds = if kind == game::Target::Deck {
+                100
+            } else {
+                game::chance(pw, game::difficulty(security))
+            };
+            choices.push(
+                Choice::on(
+                    key,
+                    verb,
+                    what.clone(),
+                    colour,
+                    Pick::Run(item.id.clone(), target),
+                )
+                .tail(format!(
+                    " · {odds}% · {} turn{} · noise {}",
+                    spec.work,
+                    if spec.work == 1 { "" } else { "s" },
+                    spec.noise
+                )),
+            );
+        }
+    }
+    choices
+}

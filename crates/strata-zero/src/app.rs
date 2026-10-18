@@ -37,6 +37,8 @@ pub struct AppState {
     pub rain: bool,
     /// FPS readout in the status bar (Settings).
     pub show_fps: bool,
+    /// A popup asked the map for its look cursor on this tile; the map takes it.
+    pub look_at: Option<citygen::Pos>,
     pub content: game::Content,
     pub character: game::Character,
     /// The professions and lines of the city's people.
@@ -122,6 +124,7 @@ impl AppState {
             dev: DEV_DEFAULT,
             rain: true,
             show_fps: true,
+            look_at: None,
             content,
             character,
             people,
