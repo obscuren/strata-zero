@@ -74,6 +74,8 @@ pub trait Io {
     fn who(&mut self, host: HostId) -> Vec<String>;
     /// Called by `cat` after it read a plain file: absolute path and text.
     fn on_read(&mut self, _host: HostId, _path: &str, _text: &str) {}
+    /// Called by `rm` after it removed something: absolute path.
+    fn removed(&mut self, _host: HostId, _path: &str) {}
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -699,6 +701,7 @@ fn rm(io: &mut dyn Io, me: &Me, args: &[String], out: &mut Res) {
         fail_msg(out, "rm: missing operand".to_string());
     }
     for path in paths {
+        let abs = me.abs(path);
         let fs = io.fs(me.host);
         let r = match fs.resolve_as(&me.user, &me.cwd, &me.home, path) {
             Ok(id) if !recursive && matches!(fs.node(id).kind, Kind::Dir(_)) => {
@@ -710,7 +713,7 @@ fn rm(io: &mut dyn Io, me: &Me, args: &[String], out: &mut Res) {
         match r {
             Err(VfsError::NotFound) if flags.contains('f') => {}
             Err(e) => fail(out, "rm", path, &e),
-            Ok(()) => {}
+            Ok(()) => io.removed(me.host, &abs),
         }
     }
 }
@@ -1029,6 +1032,21 @@ const PAGES: &[(&str, &str, &str)] = &[
         "cam",
         "blind a camera",
         "cam loop [n] loops a camera feed for a while. It writes /dev/camN.",
+    ),
+    (
+        "backdoor",
+        "plant a key on this host",
+        "backdoor writes your rig's key into this user's ~/.ssh/authorized_keys, so you can ssh in as them from home or any terminal for a while, and your rig can put you on the Net at this building's gate. The rig keeps three lines at most. rm the file to burn it.",
+    ),
+    (
+        "burn",
+        "burn one of your backdoors",
+        "burn <host> destroys a backdoor of yours by its /net name, a prefix or its number. The hole is patched for a day. If the trace is sitting on it, the trace dies there and the building goes on alert.",
+    ),
+    (
+        "route",
+        "your route and the trace",
+        "route prints the chain of backdoors between the rig and you while you are jacked in from home, each with its health, and the trace walking it back when there is one. Rig only.",
     ),
     (
         "alarm",

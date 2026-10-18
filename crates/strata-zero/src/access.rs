@@ -101,6 +101,10 @@ fn security(city: &City, b: BuildingId) -> u8 {
         .unwrap_or(0)
 }
 
+pub fn security_of(st: &AppState, b: BuildingId) -> u8 {
+    st.city.as_ref().map_or(0, |c| security(c, b))
+}
+
 // ---- the world actions: what the HELIX/OS devices and programs call ----
 
 /// The buildings a district terminal can see: its closed buildings with a server.
@@ -144,6 +148,26 @@ fn stamp(minute: u64) -> String {
 
 /// The auth log: the hacks on this building, newest first.
 pub fn log_lines(st: &AppState, b: BuildingId) -> Vec<String> {
+    let now = st.net.now(st);
+    let mut rows = Vec::new();
+    if st
+        .backdoors
+        .list
+        .iter()
+        .any(|d| d.building == b && d.state == crate::backdoors::State::Honeypot)
+    {
+        rows.push(format!("{}  audit  key flagged · monitoring", stamp(now)));
+    }
+    for (at, lb, user) in st.backdoors.logins.iter().rev() {
+        if *lb == b {
+            rows.push(format!("{}  login  {user} via key", stamp(*at)));
+        }
+    }
+    rows.extend(hack_rows(st, b));
+    rows
+}
+
+fn hack_rows(st: &AppState, b: BuildingId) -> Vec<String> {
     st.net
         .hacks
         .iter()
