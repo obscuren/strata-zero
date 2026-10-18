@@ -65,15 +65,24 @@ and offices in chrome; your own rig is a battered street box until you upgrade
 it. Every one of them runs HELIX/OS, at whatever version its maker shipped:
 Civitas kiosks and K-40 keypads, Halcyon nodes and SG-7s in the towers, Lotus
 Marquees and Luxpads in the markets with their names in two neon colours, and
-thirty-year-old Zenbo 64s and ZK-2s on the street. `SCAN` lists the
-district's buildings with their security and ICE, `CONNECT` picks one, `WHO`
-says who is inside, `PLAN` loads its ground floor into your map, `LOG` shows
-what has been done to it. Hold one of the building's keycards or codes and you
-are USER there: `DOOR UNLOCK`, `LIFT` and `CAM LOOP` work the building for an
-hour, the same way a Net spoof does. A backdoor on its server makes you ADMIN,
-and `ALARM OFF` ends an alert. Your own rig runs the same shell at home with
-`MAIL` and `JOURNAL`; the first mail is a fixer's favour, a neighbour's door
-code and a shard to fetch from the flat.
+thirty-year-old Zenbo 64s and ZK-2s on the street.
+
+HELIX/OS is a small Unix: a prompt like `guest@rust-flats:/$`, a filesystem with
+owners and permissions, `ls`, `cd`, `cat`, `grep`, pipes and `>` redirects, `man`
+and `help`, all in lower case as you type it. `ls /net` lists the district's
+buildings, `ssh` (by name, a prefix or the number `scan` gives) logs you in to
+one as whoever your standing there allows, and `exit` brings you back. On a
+building the hardware is in `/dev`: `cat /dev/door` reads the locks, `echo
+release > /dev/door` (or `door release`) opens them for an hour the way a Net
+spoof does, and the same goes for the lifts, the cameras and the alarm.
+`/var/log/auth.log` shows what has been done to the place and `plan` loads its
+ground floor into your map. Hold one of the building's keycards or codes and you
+log in as that resident, with their home and their notes, where a door code
+may be waiting; a backdoor on the server makes you `root`; otherwise you are a
+`guest` who may look but not touch. Your own rig is a HELIX box too, and its
+files are yours: `cat ~/mail/001-a-favour.txt` opens the first mail, a fixer's
+favour, a neighbour's door code and a shard to fetch from the flat, and `nano
+~/notes.txt` keeps whatever you write there.
 
 The same graph is cyberspace. Jack in at any street terminal, or at the rig in
 your flat (walk up to it and press `enter`): your body stays at the port and you

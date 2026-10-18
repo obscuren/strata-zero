@@ -1,6 +1,6 @@
 # HELIX/OS: a real operating system on every machine
 
-Date: 2026-10-18. Status: approved in chat by Jeffrey ("Yes, go"): the world's
+Date: 2026-10-18. Status: built on `feat/helix-os`; approved in chat by Jeffrey ("Yes, go"): the world's
 verbs become programs, every machine has a generated filesystem, your rig's
 files are yours, everything you may write is writable, lore files, and nano in
 the same slice.
