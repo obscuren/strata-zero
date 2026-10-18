@@ -114,6 +114,14 @@ pub struct WhichWay {
     pub from: (Place, Pos),
 }
 
+/// Look mode: a free cursor on the map the player walks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Looking {
+    pub cursor: Pos,
+    /// The map it looks at; carried elsewhere, the look ends.
+    pub place: Place,
+}
+
 /// The arrow a direction reads as in the which-way prompt.
 fn arrow(d: Dir) -> char {
     match d {
@@ -143,6 +151,8 @@ pub struct MapScreen {
     pub targeting: Option<Targeting>,
     /// Space asked which way.
     pub which_way: Option<WhichWay>,
+    /// Look mode's cursor.
+    pub looking: Option<Looking>,
     pub digital: bool,
     pub help: bool,
     fps: FpsMeter,
@@ -242,6 +252,7 @@ impl MapScreen {
             walking: None,
             targeting: None,
             which_way: None,
+            looking: None,
             digital: false,
             help: false,
             fps: FpsMeter::default(),
@@ -256,6 +267,9 @@ impl MapScreen {
 
     /// The tile the inspector describes: the player in Walk mode, the cursor otherwise.
     fn focus_pos(&self, st: &AppState) -> Pos {
+        if let (Mode::Walk, Some(l)) = (self.mode, self.looking.as_ref()) {
+            return l.cursor;
+        }
         match (self.mode, &st.player) {
             (Mode::Walk, Some(p)) => p.pos,
             _ => self.cursor,
@@ -388,6 +402,12 @@ impl MapScreen {
     /// Row 2 of the footer on turns: whose turn, which half, and the keys for it.
     fn turn_prompt(&self, st: &AppState) -> Option<(String, String)> {
         use crate::net::{Actor, Phase};
+        if self.looking.is_some() {
+            return Some((
+                "LOOK".to_string(),
+                "arrows move · tab next · esc back".to_string(),
+            ));
+        }
         if let Some(w) = self.which_way.as_ref() {
             let mut parts: Vec<String> = w
                 .subjects
@@ -910,6 +930,120 @@ impl MapScreen {
         }
     }
 
+    /// The map tiles on screen.
+    fn view_rect(&self) -> TileRect {
+        let map = self.last_map.get();
+        let origin = self.cam.origin(map.width, map.height);
+        TileRect::new(origin.x, origin.y, map.width as i32, map.height as i32)
+    }
+
+    /// Keys in look mode: the walk keys move the cursor (shift by eight), tab and
+    /// shift-tab step through what is worth a look, space opens what is in reach,
+    /// esc or `x` puts the cursor away.
+    fn handle_looking(&mut self, st: &mut AppState, k: &KeyEvent) -> ScreenCmd {
+        let Some(cursor) = self.looking.as_ref().map(|l| l.cursor) else {
+            return ScreenCmd::Stay;
+        };
+        let fast = k.modifiers.contains(KeyModifiers::SHIFT)
+            || matches!(k.code, KeyCode::Char('H' | 'J' | 'K' | 'L' | 'Y' | 'U' | 'B' | 'N'));
+        let code = match k.code {
+            KeyCode::Char(c) => KeyCode::Char(c.to_ascii_lowercase()),
+            other => other,
+        };
+        let moved = match code {
+            KeyCode::Esc | KeyCode::Char('x') => {
+                self.looking = None;
+                return ScreenCmd::Stay;
+            }
+            KeyCode::Char(' ') => return self.open_looked_at(st, cursor),
+            KeyCode::Tab | KeyCode::BackTab => {
+                let Some(city) = st.city.as_ref() else {
+                    return ScreenCmd::Stay;
+                };
+                let from = st.player.as_ref().map_or(cursor, |p| p.pos);
+                let map = self.map(st, city);
+                let pois = crate::look::points_of_interest(
+                    st,
+                    &map,
+                    self.place,
+                    self.view_rect(),
+                    from,
+                    &|pl, p| self.inside_person_at(pl, p),
+                );
+                let n = pois.len();
+                if n == 0 {
+                    return ScreenCmd::Stay;
+                }
+                let at = pois.iter().position(|p| *p == cursor);
+                let next = if code == KeyCode::Tab {
+                    at.map_or(0, |i| (i + 1) % n)
+                } else {
+                    at.map_or(n - 1, |i| (i + n - 1) % n)
+                };
+                pois[next]
+            }
+            c => match dir_for(c) {
+                Some(d) => {
+                    let step = if fast { 8 } else { 1 };
+                    let (dx, dy) = d.delta();
+                    let view = self.view_rect();
+                    let size = st
+                        .city
+                        .as_ref()
+                        .map(|city| TileMap::size(&self.map(st, city)));
+                    let (w, h) = size.map_or((i32::MAX, i32::MAX), |s| (s.w as i32, s.h as i32));
+                    let lo_x = view.x.max(0);
+                    let hi_x = (view.x + view.w - 1).min(w - 1).max(lo_x);
+                    let lo_y = view.y.max(0);
+                    let hi_y = (view.y + view.h - 1).min(h - 1).max(lo_y);
+                    Pos::new(
+                        (cursor.x + dx * step).clamp(lo_x, hi_x),
+                        (cursor.y + dy * step).clamp(lo_y, hi_y),
+                    )
+                }
+                None => return ScreenCmd::Stay,
+            },
+        };
+        if let Some(l) = self.looking.as_mut() {
+            l.cursor = moved;
+        }
+        ScreenCmd::Stay
+    }
+
+    /// Space in look mode: the window of what is under the cursor, when it is in
+    /// reach; in a construct, the programs that apply to it.
+    fn open_looked_at(&mut self, st: &AppState, cursor: Pos) -> ScreenCmd {
+        let Some((place, pos)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
+            return ScreenCmd::Stay;
+        };
+        let popup = if let Place::Construct(b) = place {
+            let mut letters = FREE_LETTERS.chars();
+            let rows: Vec<Choice> = interact::run_rows(st, b, pos, None, &mut letters)
+                .into_iter()
+                .filter(|c| {
+                    matches!(c.pick, Pick::Run(_, t) if crate::net::target_pos(st, b, t) == Some(cursor))
+                })
+                .collect();
+            if rows.is_empty() {
+                return ScreenCmd::Stay;
+            }
+            let mut choices = vec![Choice::new('x', "Look", Pick::Look(cursor))];
+            choices.extend(rows);
+            Popup::verbs("", choices, st.tick)
+        } else {
+            let subjects = interact::gather(st, &|pl, p| self.inside_person_at(pl, p));
+            match subjects.iter().find(|s| s.pos == cursor) {
+                Some(s) => s.window(st.tick),
+                None => return ScreenCmd::Stay,
+            }
+        };
+        self.looking = None;
+        ScreenCmd::Push {
+            to: Box::new(popup),
+            fx: TransitionKind::None,
+        }
+    }
+
     /// The picked target: the run is armed and rolled once, for an action point on
     /// turns.
     fn confirm_target(&mut self, st: &mut AppState) -> ScreenCmd {
@@ -1415,6 +1549,17 @@ impl MapScreen {
             st.warn("not your turn");
             return Some(ScreenCmd::Stay);
         }
+        // `x`: look, the cursor on you.
+        if k.code == KeyCode::Char('x') {
+            if let Some(p) = st.player.as_ref() {
+                self.which_way = None;
+                self.looking = Some(Looking {
+                    cursor: p.pos,
+                    place: p.place,
+                });
+            }
+            return Some(ScreenCmd::Stay);
+        }
         // `J`: pulling the plug, after asking. Enter no longer jacks either way.
         if k.code == KeyCode::Char('J') {
             if !jacked {
@@ -1571,8 +1716,16 @@ impl Screen for MapScreen {
                 fx: TransitionKind::Glitch,
             };
         }
-        // A popup asked for look mode; until look lands, the ask is dropped.
-        let _ = st.look_at.take();
+        // A popup's Look row: the cursor goes on its tile.
+        if let Some(pos) = st.look_at.take()
+            && self.mode == Mode::Walk
+        {
+            self.which_way = None;
+            self.looking = Some(Looking {
+                cursor: pos,
+                place: self.place,
+            });
+        }
         if st.tick > self.last_tick + 1 {
             self.fps.resume(Instant::now());
         }
@@ -1637,6 +1790,14 @@ impl Screen for MapScreen {
                 // A target being picked takes every key.
                 if self.targeting.is_some() {
                     let cmd = self.handle_targeting(st, k);
+                    if !matches!(cmd, ScreenCmd::Stay) {
+                        return cmd;
+                    }
+                    continue;
+                }
+                // So does look mode.
+                if self.looking.is_some() {
+                    let cmd = self.handle_looking(st, k);
                     if !matches!(cmd, ScreenCmd::Stay) {
                         return cmd;
                     }
@@ -1749,6 +1910,13 @@ impl Screen for MapScreen {
         // The turn left you while you were picking: nothing to confirm now.
         if self.targeting.is_some() && !crate::net::your_turn(st) {
             self.targeting = None;
+        }
+        // Carried to another map: the look ends.
+        if self
+            .looking
+            .is_some_and(|l| st.player.as_ref().map(|p| p.place) != Some(l.place))
+        {
+            self.looking = None;
         }
         // Moved off, or carried away: the pick no longer points anywhere.
         if self
@@ -1908,6 +2076,16 @@ impl Screen for MapScreen {
         };
         if !ways.is_empty() {
             overlays.push(&way_blocks);
+        }
+        let looked: Vec<Pos> = self.looking.iter().map(|l| l.cursor).collect();
+        let look_block = crate::render::path::BlockOverlay {
+            tiles: &looked,
+            bg: crate::look::LOOK_BG
+                .scale(0.8 + 0.4 * crate::anim::effects::pulse(st.tick, 30))
+                .to_color(),
+        };
+        if !looked.is_empty() {
+            overlays.push(&look_block);
         }
         let fx = FxOverlay { fx: &st.fx, vis };
         overlays.push(&fx);
@@ -2121,6 +2299,27 @@ impl Screen for MapScreen {
             );
         }
 
+        // Look: the info window, kept off the cursor.
+        if let Some(l) = self.looking.as_ref()
+            && let Some(at) = tile_to_screen(map_area, origin, l.cursor)
+        {
+            let reachable: Vec<Pos> = interact::gather(st, &|pl, p| self.inside_person_at(pl, p))
+                .iter()
+                .map(|s| s.pos)
+                .collect();
+            let map = self.map(st, city);
+            let card = crate::look::look_card(
+                st,
+                &map,
+                self.place,
+                l.cursor,
+                &|pl, p| self.inside_person_at(pl, p),
+                &reachable,
+            );
+            let h = crate::look::box_height(&card, crate::look::LOOK_W);
+            let r = crate::look::place_box(map_area, at, h);
+            crate::look::draw_box(&card, r, f.buffer_mut());
+        }
         if self.help {
             help::draw(f, self.mode);
         }
@@ -7225,6 +7424,160 @@ mod tests {
     fn pass_turn(st: &mut AppState, s: &mut MapScreen) {
         s.update(st, &[key(KeyCode::Char('.'))]);
         settle(st, s);
+    }
+
+    #[test]
+    fn x_looks_and_esc_or_x_puts_it_away() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let at = bare_sidewalk(&st);
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), at);
+        s.update(&mut st, &[key(KeyCode::Char('x'))]);
+        assert_eq!(s.looking.as_ref().map(|l| l.cursor), Some(at));
+        s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        assert_eq!(s.looking.as_ref().unwrap().cursor, at.offset(1, 0));
+        assert_eq!(player(&st).1, at, "looking never moves you");
+        s.update(&mut st, &[key(KeyCode::Char('L'))]);
+        assert_eq!(s.looking.as_ref().unwrap().cursor, at.offset(9, 0), "shift moves eight");
+        st.tick += 40;
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(text.contains("LOOK") && text.contains("esc back"), "{text}");
+        s.update(&mut st, &[key(KeyCode::Esc)]);
+        assert!(s.looking.is_none(), "esc puts it away");
+        s.update(&mut st, &[key(KeyCode::Char('x'))]);
+        s.update(&mut st, &[key(KeyCode::Char('x'))]);
+        assert!(s.looking.is_none(), "x again puts it away");
+    }
+
+    #[test]
+    fn the_look_cursor_stays_in_view() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let at = bare_sidewalk(&st);
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), at);
+        draw_screen(&s, &st, 120, 40);
+        s.update(&mut st, &[key(KeyCode::Char('x'))]);
+        for _ in 0..40 {
+            s.update(&mut st, &[key(KeyCode::Char('L'))]);
+        }
+        let map = s.last_map.get();
+        let origin = s.cam.origin(map.width, map.height);
+        let c = s.looking.as_ref().unwrap().cursor;
+        assert!(
+            tile_to_screen(map, origin, c).is_some(),
+            "the cursor stays on screen: {c:?}"
+        );
+    }
+
+    #[test]
+    fn look_from_a_window_starts_on_its_subject() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let (at, jack) = {
+            let city = st.city.as_ref().unwrap();
+            city.connectors
+                .iter()
+                .filter(|k| k.kind == citygen::ConnectorKind::Jack && k.public)
+                .find_map(|k| {
+                    k.pos
+                        .neighbors4()
+                        .find(|n| {
+                            city.walkable(StratumKind::Street, *n)
+                                && city.connectors_at(*n).next().is_none()
+                        })
+                        .map(|n| (n, k.pos))
+                })
+                .unwrap()
+        };
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), at);
+        let ScreenCmd::Push { to: mut w, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))]) else {
+            panic!("space opens the terminal")
+        };
+        assert!(matches!(
+            w.update(&mut st, &[key(KeyCode::Char('x'))]),
+            ScreenCmd::Pop { .. }
+        ));
+        s.update(&mut st, &[]);
+        assert_eq!(s.looking.as_ref().map(|l| l.cursor), Some(jack));
+        st.tick += 40;
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(
+            text.contains("Access terminal") && text.contains("space · interact"),
+            "{text}"
+        );
+        // Space on it opens its window again; looking ends.
+        let ScreenCmd::Push { to: w, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))]) else {
+            panic!("space in look opens the subject's window")
+        };
+        assert!(s.looking.is_none());
+        st.tick += 40;
+        assert!(draw_screen(&*w, &st, 120, 40).contains("i  Interact: Terminal"));
+    }
+
+    #[test]
+    fn space_in_look_on_nothing_in_reach_does_nothing() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        let at = bare_sidewalk(&st);
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), at);
+        s.update(&mut st, &[key(KeyCode::Char('x'))]);
+        s.update(&mut st, &[key(KeyCode::Char('l')), key(KeyCode::Char('l'))]);
+        assert!(matches!(
+            s.update(&mut st, &[key(KeyCode::Char(' '))]),
+            ScreenCmd::Stay
+        ));
+        assert!(s.looking.is_some());
+    }
+
+    #[test]
+    fn tab_walks_the_points_of_interest_nearest_first() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        walking(&mut st, &mut s);
+        // On a bare tile, so the cursor does not start on something worth a look.
+        let at = bare_sidewalk(&st);
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), at);
+        draw_screen(&s, &st, 120, 40);
+        // Let the camera settle on the player before reading the view.
+        for _ in 0..60 {
+            st.tick += 1;
+            s.update(&mut st, &[]);
+        }
+        s.update(&mut st, &[key(KeyCode::Char('x'))]);
+        let (place, from) = player(&st);
+        let map = s.last_map.get();
+        let origin = s.cam.origin(map.width, map.height);
+        let view = TileRect::new(origin.x, origin.y, map.width as i32, map.height as i32);
+        let pois = {
+            let city = st.city.as_ref().unwrap();
+            let m = s.map(&st, city);
+            crate::look::points_of_interest(&st, &m, place, view, from, &|_, _| None)
+        };
+        assert!(pois.len() >= 2, "{pois:?}");
+        assert!(pois.windows(2).all(|w| w[0].chebyshev(from) <= w[1].chebyshev(from)));
+        s.update(&mut st, &[key(KeyCode::Tab)]);
+        assert_eq!(s.looking.as_ref().unwrap().cursor, pois[0]);
+        s.update(&mut st, &[key(KeyCode::Tab)]);
+        assert_eq!(s.looking.as_ref().unwrap().cursor, pois[1]);
+        s.update(&mut st, &[key(KeyCode::BackTab)]);
+        assert_eq!(s.looking.as_ref().unwrap().cursor, pois[0]);
+    }
+
+    #[test]
+    fn look_is_free_on_the_ice_turn() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        engaged_at_the_gate(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert!(!crate::net::your_turn(&st), "the ICE acts");
+        let before = last(&st).map(String::from);
+        s.update(&mut st, &[key(KeyCode::Char('x'))]);
+        assert!(s.looking.is_some());
+        assert_ne!(last(&st), Some("not your turn"), "was {before:?}");
     }
 
     #[test]

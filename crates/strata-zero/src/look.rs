@@ -4,10 +4,12 @@ use crate::app::AppState;
 use crate::render::Visibility;
 use crate::render::map::{MapRef, TileMap};
 use crate::render::mark::{mark_items, mark_person, mark_tile};
-use crate::ui::chrome::TEXT;
+use crate::ui::chrome::{DIM, TEXT, frame, put, solid};
 use crate::ui::hud::capitalised;
-use citygen::{ConnectorKind, Feature, FloorPlan, Place, Pos, Terrain};
-use ratatui::style::Color;
+use citygen::{ConnectorKind, Feature, FloorPlan, Place, Pos, Rect as TileRect, Terrain};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier, Style};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -186,8 +188,9 @@ fn fixture_at(st: &AppState, map: &MapRef, place: Place, pos: Pos) -> Option<Fix
             }
         }
         Place::Stratum(k) => {
-            let mut conns = city.connectors_at(pos);
-            if let Some(c) = conns.find(|c| c.kind == ConnectorKind::Jack && c.serves.contains(&k))
+            if city
+                .connectors_at(pos)
+                .any(|c| c.kind == ConnectorKind::Jack && c.serves.contains(&k))
             {
                 let district = tile
                     .district
@@ -200,8 +203,7 @@ fn fixture_at(st: &AppState, map: &MapRef, place: Place, pos: Pos) -> Option<Fix
                         None => "public".into(),
                     }),
                     key: "terminal",
-                })
-                .filter(|_| c.public || true);
+                });
             }
             let c = city
                 .connectors_at(pos)
@@ -224,6 +226,182 @@ fn fixture_at(st: &AppState, map: &MapRef, place: Place, pos: Pos) -> Option<Fix
         }
         Place::Construct(_) => None,
     }
+}
+
+/// The info window's width.
+pub const LOOK_W: u16 = 48;
+/// Under the look cursor: a dark amber block, the glyph kept.
+pub const LOOK_BG: crate::render::Rgb = crate::render::Rgb(90, 70, 0);
+
+/// Greedy word wrap at `width`; a word longer than a row is cut.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut out: Vec<String> = Vec::new();
+    let mut row = String::new();
+    for word in text.split(' ').filter(|w| !w.is_empty()) {
+        let used = row.chars().count();
+        let w = word.chars().count();
+        if used > 0 && used + 1 + w > width {
+            out.push(std::mem::take(&mut row));
+        }
+        if !row.is_empty() {
+            row.push(' ');
+        }
+        row.push_str(word);
+        while row.chars().count() > width {
+            let head: String = row.chars().take(width).collect();
+            row = row.chars().skip(width).collect();
+            out.push(head);
+        }
+    }
+    if !row.is_empty() {
+        out.push(row);
+    }
+    out
+}
+
+/// The card's rows inside the frame, each with its style.
+fn rows(card: &LookCard, width: u16) -> Vec<(String, Style)> {
+    let inner = width.saturating_sub(4) as usize;
+    let dim = Style::default().fg(DIM);
+    let text = Style::default().fg(TEXT);
+    let mut out: Vec<(String, Style)> = Vec::new();
+    if let Some(s) = &card.second {
+        out.extend(wrap(s, inner).into_iter().map(|l| (l, dim)));
+    }
+    if !card.body.is_empty() {
+        if !out.is_empty() {
+            out.push((String::new(), text));
+        }
+        for b in &card.body {
+            out.extend(wrap(b, inner).into_iter().map(|l| (l, text)));
+        }
+    }
+    let mut foot: Vec<(String, Style)> = Vec::new();
+    if !card.also.is_empty() {
+        let also = format!("also here: {}", card.also.join(", "));
+        foot.extend(wrap(&also, inner).into_iter().map(|l| (l, dim)));
+    }
+    if card.hint {
+        foot.push(("space · interact".to_string(), dim));
+    }
+    if !foot.is_empty() {
+        if !out.is_empty() {
+            out.push((String::new(), text));
+        }
+        out.extend(foot);
+    }
+    out
+}
+
+/// Rows the box takes at `width`, its frame included.
+pub fn box_height(card: &LookCard, width: u16) -> u16 {
+    rows(card, width).len().max(1) as u16 + 2
+}
+
+/// Where the box goes in the map area: a top corner on the half away from the
+/// cursor, or with a narrow map the top or bottom half away from it. Never over
+/// the cursor.
+pub fn place_box(map: Rect, cursor: (u16, u16), h: u16) -> Rect {
+    if map.width >= 2 * LOOK_W + 2 {
+        let h = h.min(map.height);
+        let x = if cursor.0 < map.x + map.width / 2 {
+            map.right() - LOOK_W - 1
+        } else {
+            map.x + 1
+        };
+        return Rect::new(x, map.y, LOOK_W, h);
+    }
+    let h = h.min(map.height / 2).max(1);
+    let w = LOOK_W.min(map.width);
+    let x = map.right() - w;
+    let y = if cursor.1 >= map.y + map.height / 2 {
+        map.y
+    } else {
+        map.bottom() - h
+    };
+    Rect::new(x, y, w, h)
+}
+
+/// Draws the card into `r`: the header on the top border, then its rows.
+pub fn draw_box(card: &LookCard, r: Rect, buf: &mut Buffer) {
+    if r.width < 6 || r.height < 2 {
+        return;
+    }
+    solid(buf, r);
+    frame(buf, r);
+    let max = r.right() - 1;
+    if let Some(name) = &card.header {
+        let style = Style::default()
+            .fg(card.header_fg)
+            .add_modifier(Modifier::BOLD);
+        let mut x = r.x + 2;
+        put(buf, x, r.y, " ", style, max);
+        x += 1;
+        if let Some((g, colour)) = card.glyph {
+            put(
+                buf,
+                x,
+                r.y,
+                &format!("{g} "),
+                Style::default().fg(colour).add_modifier(Modifier::BOLD),
+                max,
+            );
+            x += 2;
+        }
+        put(buf, x, r.y, &format!("{name} "), style, max);
+    }
+    for (i, (line, style)) in rows(card, r.width).into_iter().enumerate() {
+        let y = r.y + 1 + i as u16;
+        if y >= r.bottom() - 1 {
+            break;
+        }
+        put(buf, r.x + 2, y, &line, style, max);
+    }
+}
+
+/// The things worth a look in `view`, nearest to `from` first: people, fixtures,
+/// piles, and lamps, neon, signs and holo ads. Only what is in sight.
+pub fn points_of_interest(
+    st: &AppState,
+    map: &MapRef,
+    place: Place,
+    view: TileRect,
+    from: Pos,
+    inside_person: &dyn Fn(Place, Pos) -> Option<sim::PersonId>,
+) -> Vec<Pos> {
+    let player = st.player.as_ref().filter(|p| p.place == place);
+    let mut out: Vec<Pos> = Vec::new();
+    for y in view.y..view.y + view.h {
+        for x in view.x..view.x + view.w {
+            let p = Pos::new(x, y);
+            let Some(tile) = map.tile(p) else { continue };
+            let seen = player
+                .map(|pl| pl.vis().get(p).copied().unwrap_or(Visibility::Unseen))
+                .unwrap_or(Visibility::Visible);
+            if seen != Visibility::Visible {
+                continue;
+            }
+            let person = if place.is_street() {
+                st.world.as_ref().and_then(|w| w.person_at(p)).is_some()
+            } else {
+                inside_person(place, p).is_some()
+            };
+            let lit = matches!(
+                tile.feature,
+                Some(Feature::Lamp | Feature::Neon(_) | Feature::Sign(_) | Feature::HoloAd)
+            );
+            if person
+                || lit
+                || !st.ground.at(place, p).is_empty()
+                || fixture_at(st, map, place, p).is_some()
+            {
+                out.push(p);
+            }
+        }
+    }
+    out.sort_by_key(|p| (p.chebyshev(from), p.y, p.x));
+    out
 }
 
 /// What the player's eyes can tell them about `pos` on the map they walk.
@@ -622,6 +800,48 @@ mod tests {
     }
 
     #[test]
+    fn look_box_never_covers_the_cursor() {
+        for map in [Rect::new(0, 5, 100, 30), Rect::new(0, 5, 60, 20), Rect::new(3, 2, 97, 25)] {
+            for y in map.y..map.bottom() {
+                for x in map.x..map.right() {
+                    for h in [4, 8, 30] {
+                        let r = place_box(map, (x, y), h);
+                        assert!(
+                            !(r.x <= x && x < r.right() && r.y <= y && y < r.bottom()),
+                            "{map:?} {x},{y} h{h} {r:?}"
+                        );
+                        assert!(r.right() <= map.right() && r.bottom() <= map.bottom());
+                        assert!(r.x >= map.x && r.y >= map.y);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_box_draws_header_second_body_and_hint() {
+        let c = LookCard {
+            glyph: Some(('▣', Color::Cyan)),
+            header: Some("Access terminal".into()),
+            header_fg: Color::Cyan,
+            second: Some("public · Halvorsen".into()),
+            body: vec!["A municipal box bolted to the wall, its screen scratched to fog.".into()],
+            also: vec![],
+            hint: true,
+        };
+        let h = box_height(&c, LOOK_W);
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        draw_box(&c, Rect::new(0, 0, LOOK_W, h), &mut buf);
+        let text = crate::screens::testutil::buffer_text(&buf);
+        assert!(text.contains("▣ Access terminal"), "{text}");
+        assert!(text.contains("public · Halvorsen"), "{text}");
+        assert!(text.contains("scratched to fog."), "{text}");
+        assert!(text.contains("space · interact"), "{text}");
+        assert_eq!(h, 8, "border, second, blank, two body rows, blank, hint, border: {text}");
+    }
+
+    #[test]
     fn every_flavour_line_is_house_voice() {
         let l = Looks::load();
         let lines = l.all_lines();
@@ -634,9 +854,6 @@ mod tests {
         for k in ["lamp", "neon", "holo_ad", "terminal", "stairwell", "flat_door", "club"] {
             assert!(l.has(k), "{k}");
         }
-        assert_eq!(
-            l.line(Group::Feature, "lamp", 0, Pos::new(0, 0)).is_some(),
-            true
-        );
+        assert!(l.line(Group::Feature, "lamp", 0, Pos::new(0, 0)).is_some());
     }
 }
