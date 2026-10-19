@@ -427,7 +427,7 @@ fn outline(buf: &mut Buffer, r: Rect, clip: Rect) {
 /// The line above the status row, from the inside's second column: what is pointed
 /// at, bold cyan; where it is or what it holds, white; then the rest, each part
 /// after a ` · `, dim.
-fn readout(buf: &mut Buffer, body: Rect, head: &str, what: &str, rest: &[String]) {
+pub(crate) fn readout(buf: &mut Buffer, body: Rect, head: &str, what: &str, rest: &[String]) {
     let tail: String = rest.iter().map(|part| format!(" · {part}")).collect();
     let runs = [
         (head, Style::default().fg(CYAN).add_modifier(Modifier::BOLD)),

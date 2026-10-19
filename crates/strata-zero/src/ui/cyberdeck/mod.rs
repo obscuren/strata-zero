@@ -3,7 +3,8 @@
 
 pub mod pawn;
 
-use crate::ui::art::{SocketPlace, brackets};
+use crate::ui::art::{SocketPlace, StickerArea, brackets};
+use crate::ui::stickers::Placed;
 use game::{DeckLook, HardwareLook};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -119,6 +120,8 @@ pub struct DeckView {
     /// The deck alone, for modding: its glass blank, no WAREZ, no carried cart and
     /// no brackets.
     pub bare: bool,
+    /// The stickers on the copy drawn, oldest first.
+    pub stickers: Vec<Placed>,
 }
 
 /// The drawing's size for a look.
@@ -148,6 +151,13 @@ pub fn parts(view: &DeckView) -> Vec<(Part, Rect)> {
 pub fn sockets(view: &DeckView) -> Vec<SocketPlace> {
     match view.look {
         DeckLook::Pawn => pawn::sockets(view),
+    }
+}
+
+/// Where stickers may lie on the deck, relative to the drawing's origin.
+pub fn sticker_area(view: &DeckView) -> StickerArea {
+    match view.look {
+        DeckLook::Pawn => pawn::sticker_area(view),
     }
 }
 
@@ -317,6 +327,7 @@ pub(crate) mod tests {
             tick: 0,
             sockets: Vec::new(),
             bare: false,
+            stickers: Vec::new(),
         }
     }
 

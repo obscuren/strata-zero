@@ -2973,7 +2973,7 @@ mod tests {
             .position(|t| *t == "── hardware ──")
             .expect("a hardware header");
         assert_eq!(
-            texts[h + 1..],
+            texts[h + 1..h + 6],
             [
                 "≡  1× Coldfin vI",
                 "≡  1× Coldfin vII",
@@ -2981,11 +2981,14 @@ mod tests {
                 "≡  1× Hushcan",
                 "≡  1× Redeye sight"
             ],
-            "after programs, last"
+            "after programs"
         );
+        // Then his stickers, last: plain stacks, not copies.
+        assert_eq!(texts[h + 6], "── sticker ──");
+        assert_eq!(texts[h + 7], "◪  2× No Future");
         assert!(texts.iter().position(|t| *t == "── program ──").unwrap() < h);
         assert!(
-            rows[h + 1..]
+            rows[h + 1..h + 6]
                 .iter()
                 .all(|r| matches!(r.detail, Some(Detail::Copy(_))))
         );
@@ -2997,7 +3000,8 @@ mod tests {
                 && text.contains("⌗  1× Rebuilt pawn deck □□□□□ · □□"),
             "{text}"
         );
-        d.kit.state.row = rows.len() - 1;
+        // Among the hardware, which his stickers follow now: its header in view.
+        d.kit.state.row = h + 3;
         let text = draw(&d, &st, 100, 30);
         assert!(
             text.contains("── hardware ──")

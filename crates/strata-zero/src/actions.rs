@@ -32,6 +32,8 @@ pub fn handles_items(action: &Action) -> bool {
             | Action::Slot { .. }
             | Action::Fit { .. }
             | Action::Unfit { .. }
+            | Action::Stick { .. }
+            | Action::Peel { .. }
     )
 }
 
@@ -267,6 +269,17 @@ mod tests {
             Action::Unfit {
                 host: Host::Worn(Slot::Deck),
                 socket: 0,
+            },
+            Action::Stick {
+                host: Host::Worn(Slot::Deck),
+                sticker: ItemId::new("sticker_neko"),
+                x: 54,
+                y: 12,
+                turn: game::Turn::Level,
+            },
+            Action::Peel {
+                host: Host::Worn(Slot::Deck),
+                index: 0,
             },
         ] {
             let refused = perform(&mut st, action.clone());

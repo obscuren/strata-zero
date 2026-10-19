@@ -65,6 +65,20 @@ pub enum Action {
         host: Host,
         socket: usize,
     },
+    /// Sticks one of a sticker from the pack on the host's drawing, at its top-left
+    /// cell as turned. Where it may go is the drawing's business, not this.
+    Stick {
+        host: Host,
+        sticker: ItemId,
+        x: u16,
+        y: u16,
+        turn: Turn,
+    },
+    /// Peels a stuck sticker off the host; it tears.
+    Peel {
+        host: Host,
+        index: usize,
+    },
 }
 
 /// Where the character stands: where drops land and takes come from.
@@ -425,6 +439,61 @@ pub fn apply(
             ch.stow(out);
             done(message)
         }
+        Action::Stick {
+            host,
+            sticker,
+            x,
+            y,
+            turn,
+        } => {
+            // Every refusal comes before the first change.
+            let takes = ch
+                .host_item(host)
+                .and_then(|h| c.item(h))
+                .is_some_and(Item::takes_stickers);
+            if !takes {
+                return Err("takes no stickers".to_string());
+            }
+            let item = c
+                .item(&sticker)
+                .ok_or_else(|| format!("unknown item {sticker}"))?;
+            if item.kind != ItemKind::Sticker {
+                return Err(format!("`{}` is not a sticker", item.name));
+            }
+            let loose = ch
+                .inventory
+                .iter()
+                .any(|s| s.item == sticker && s.copy.is_none() && s.qty > 0);
+            if !loose {
+                return Err("not in your pack".to_string());
+            }
+            if ch.host_copy_mut(c, host).is_none() {
+                return Err("takes no stickers".to_string());
+            }
+            remove_from_pack(ch, &sticker, 1);
+            let message = format!("`{}` stuck", item.name);
+            let copy = ch
+                .host_copy_mut(c, host)
+                .ok_or_else(|| "takes no stickers".to_string())?;
+            copy.stickers.push(Stuck {
+                sticker,
+                x,
+                y,
+                turn,
+            });
+            done(message)
+        }
+        Action::Peel { host, index } => {
+            let in_range = ch.host_copy(host).is_some_and(|k| index < k.stickers.len());
+            if !in_range {
+                return Err("no such sticker".to_string());
+            }
+            let copy = ch
+                .host_copy_mut(c, host)
+                .ok_or_else(|| "no such sticker".to_string())?;
+            let torn = copy.stickers.remove(index);
+            done(format!("`{}` peeled · it tore", name(c, &torn.sticker)))
+        }
         Action::Fire(id) => {
             let ability = ch
                 .ability(c, &id)
@@ -458,7 +527,7 @@ pub fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::character::{CopyId, Stack};
+    use crate::character::{CopyId, ItemCopy, Stack};
 
     #[test]
     fn sockets_are_named_by_their_drawing() {
@@ -961,7 +1030,7 @@ mod tests {
         let back = ch.copy_in_pack(ids[0]).expect("the old worn deck returns");
         assert_eq!((back.qty, back.item.clone()), (1, id("rebuilt_deck")));
         assert_eq!(ch.count(&id("rebuilt_deck")), 1);
-        // Back to the plain deck: no copy is left worn.
+        // Back to the pawnshop deck: it is worn with its own copy, stickers and all.
         apply(
             &mut ch,
             &mut g,
@@ -971,7 +1040,8 @@ mod tests {
             Action::Equip(id("pawnshop_deck")),
         )
         .unwrap();
-        assert!(ch.worn_copy(Slot::Deck).is_none());
+        let worn = ch.worn_copy(Slot::Deck).map(|k| k.id);
+        assert!(worn.is_some() && worn != Some(ids[0]) && worn != Some(ids[1]));
         assert!(ch.copy_in_pack(ids[1]).is_some());
         // A copy without a slot is refused before anything moves.
         let piece = ch.new_copy(&c, &id("sidecar"));
@@ -1318,5 +1388,119 @@ mod tests {
             .map(|s| (s.qty, s.copy.is_some()))
             .collect::<Vec<_>>();
         assert_eq!(copies, vec![(1, true), (1, true)]);
+    }
+
+    fn stick(host: Host, sticker: &str, x: u16, y: u16, turn: Turn) -> Action {
+        Action::Stick {
+            host,
+            sticker: id(sticker),
+            x,
+            y,
+            turn,
+        }
+    }
+
+    #[test]
+    fn stick_takes_one_from_the_pack_onto_the_copy() {
+        let (c, mut ch, mut g, at) = runner();
+        let before = ch.count(&id("sticker_neko"));
+        let action = stick(
+            Host::Worn(Slot::Deck),
+            "sticker_neko",
+            54,
+            12,
+            Turn::Quarter,
+        );
+        let out = apply(&mut ch, &mut g, &c, at, 0, action).unwrap();
+        assert_eq!(out.message, "`Neko` stuck");
+        assert_eq!(ch.count(&id("sticker_neko")), before - 1);
+        let last = ch.worn_copy(Slot::Deck).unwrap().stickers.last().cloned();
+        assert_eq!(
+            last,
+            Some(Stuck {
+                sticker: id("sticker_neko"),
+                x: 54,
+                y: 12,
+                turn: Turn::Quarter
+            })
+        );
+    }
+
+    #[test]
+    fn stick_refuses_and_changes_nothing() {
+        let (c, mut ch, mut g, at) = runner();
+        let hushcan = pack_id(&ch, "hushcan");
+        remove_from_pack(&mut ch, &id("sticker_flatline"), 99);
+        let deck = Host::Worn(Slot::Deck);
+        for (action, why) in [
+            (
+                stick(Host::Pack(hushcan), "sticker_neko", 0, 0, Turn::Level),
+                "takes no stickers",
+            ),
+            (
+                stick(deck, "crack", 50, 10, Turn::Level),
+                "`Crack` is not a sticker",
+            ),
+            (
+                stick(deck, "nope", 50, 10, Turn::Level),
+                "unknown item nope",
+            ),
+            (
+                stick(deck, "sticker_flatline", 50, 10, Turn::Level),
+                "not in your pack",
+            ),
+        ] {
+            let before = ch.clone();
+            assert_eq!(
+                apply(&mut ch, &mut g, &c, at, 0, action),
+                Err(why.to_string())
+            );
+            assert_eq!(ch, before, "{why}");
+        }
+    }
+
+    #[test]
+    fn peel_destroys_the_sticker() {
+        let (c, mut ch, mut g, at) = runner();
+        let n = ch.count(&id("sticker_no_future"));
+        let deck = Host::Worn(Slot::Deck);
+        let peel = |index| Action::Peel { host: deck, index };
+        let out = apply(&mut ch, &mut g, &c, at, 0, peel(0)).unwrap();
+        assert_eq!(out.message, "`No Future` peeled · it tore");
+        let left: Vec<ItemId> = ch
+            .worn_copy(Slot::Deck)
+            .unwrap()
+            .stickers
+            .iter()
+            .map(|s| s.sticker.clone())
+            .collect();
+        assert_eq!(left, [id("sticker_dead_face")]);
+        assert_eq!(
+            ch.count(&id("sticker_no_future")),
+            n,
+            "not back in the pack"
+        );
+        let before = ch.clone();
+        let err = apply(&mut ch, &mut g, &c, at, 0, peel(5));
+        assert_eq!(err, Err("no such sticker".to_string()));
+        assert_eq!(ch, before);
+    }
+
+    #[test]
+    fn stickers_follow_their_copy() {
+        let (c, mut ch, mut g, at) = runner();
+        let pawn = pack_id(&ch, "pawnshop_deck");
+        let action = stick(Host::Pack(pawn), "sticker_oni", 54, 9, Turn::Level);
+        apply(&mut ch, &mut g, &c, at, 0, action).unwrap();
+        let oni = |k: &ItemCopy| k.stickers.last().map(|s| s.sticker.clone());
+        apply(&mut ch, &mut g, &c, at, 0, Action::EquipCopy(pawn)).unwrap();
+        assert_eq!(ch.worn_copy(Slot::Deck).map(|k| k.id), Some(pawn));
+        assert_eq!(
+            ch.worn_copy(Slot::Deck).and_then(oni),
+            Some(id("sticker_oni"))
+        );
+        apply(&mut ch, &mut g, &c, at, 0, Action::Unequip(Slot::Deck)).unwrap();
+        let back = ch.copy_in_pack(pawn).and_then(|s| s.copy.as_ref());
+        assert_eq!(back.and_then(oni), Some(id("sticker_oni")));
     }
 }

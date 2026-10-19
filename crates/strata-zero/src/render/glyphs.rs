@@ -14,5 +14,7 @@ pub fn kind_icon(kind: ItemKind) -> char {
         ItemKind::Junk => '·',
         ItemKind::Program => '⌁',
         ItemKind::Hardware => '≡',
+        // A square with a corner lifting, as a sticker peels.
+        ItemKind::Sticker => '◪',
     }
 }

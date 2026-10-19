@@ -1,17 +1,19 @@
 //! The blueprint window: Inspect on an item draws it as what it is, over the deck
-//! screen. Every item opens the same window, in one of two modes: inspect, the item's
-//! own view, and modding, where any item with sockets and a drawing has them worked
-//! on. Decks, hardware and items with a look have drawings so far; anything else reads
+//! screen. Every item opens the same window, in one of three modes: inspect, the
+//! item's own view; modding, where any item with sockets and a drawing has them
+//! worked on; and stickers, where anything worn with a drawing has stickers stuck on. Decks, hardware and items with a look have drawings so far; anything else reads
 //! MISSING BLUEPRINT.
 
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::screens::bench::Bench;
 use crate::screens::cyberdeck::DeckTab;
 use crate::screens::deck::status_strip;
+use crate::screens::stickers::StickerBench;
 use crate::ui::art::Art;
 use crate::ui::chrome::{CYAN, DIM, PANEL_BG, put, solid};
 use crate::ui::hardware::HardwareArt;
 use crate::ui::looks::ItemArt;
+use crate::ui::stickers::{Loose, Placed, placed};
 use crossterm::event::{KeyCode, KeyEvent};
 use game::{CopyId, HardwareLook, Host, Item, ItemId, ItemLook, Slot};
 use ratatui::Frame;
@@ -38,7 +40,9 @@ pub struct Blueprint {
     inspect: Inspect,
     /// Modding's state, kept while inspect is up.
     bench: Bench,
-    mode: Mode,
+    /// The sticker mode's state, kept likewise.
+    pub(crate) stickers: StickerBench,
+    pub(crate) mode: Mode,
     /// Where the item's sockets are: the copy worn, or the one in the pack it was
     /// opened on. `None` for an item held without a copy.
     host: Option<Host>,
@@ -57,6 +61,13 @@ fn fitted_looks(st: &AppState, host: Option<Host>, item: &Item) -> Vec<Option<Ha
         .collect()
 }
 
+/// The stickers on the host's copy, with their art; none for an item held without one.
+fn stuck_on(st: &AppState, host: Option<Host>) -> Vec<Placed> {
+    host.and_then(|h| st.character.host_copy(h))
+        .map(|k| placed(&st.content, &k.stickers))
+        .unwrap_or_default()
+}
+
 /// What inspect shows.
 enum Inspect {
     /// The deck as hardware: the jacked one works, any other copy only reads.
@@ -65,17 +76,20 @@ enum Inspect {
     Hardware(HardwareArt),
     /// An item drawn by its look, with its fitted pieces.
     Drawn(ItemLook),
+    /// A sticker, drawn as it is.
+    Sticker(Loose),
     /// No drawing yet.
     Missing,
 }
 
-/// The mode the window is in. Each has its own pointer, and switching resets
-/// neither: inspect's lives in `Inspect`, modding's in the bench, which starts on
-/// the first socket.
+/// The mode the window is in. Each has its own pointer, and switching resets none:
+/// inspect's lives in `Inspect`, modding's in the bench, which starts on the first
+/// socket, and the sticker mode's in its own bench, which starts on the tray.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Mode {
+pub(crate) enum Mode {
     Inspect,
     Mod,
+    Stickers,
 }
 
 impl Inspect {
@@ -87,27 +101,31 @@ impl Inspect {
             Inspect::Drawn(look) => Some(Box::new(ItemArt {
                 look: *look,
                 fitted: fitted_looks(st, host, st.content.item(item)?),
+                stickers: stuck_on(st, host),
             })),
+            Inspect::Sticker(art) => Some(Box::new(art.clone())),
             Inspect::Missing => None,
         }
     }
 }
 
 /// What the window shows for an item: a deck the content knows as its look, hardware
-/// as itself, any other item with a look as that, anything else nothing.
+/// as itself, any other item with a look as that, a sticker as it is, anything else
+/// nothing.
 fn inspect_for(st: &AppState, item: &ItemId, equipped: bool, copy: Option<CopyId>) -> Inspect {
     match st.content.item(item) {
         Some(i) if i.deck.is_some() => {
             let jacked = equipped && st.character.equipped(Slot::Deck) == Some(item);
             Inspect::Deck(DeckTab::for_deck(st.tick, item.clone(), jacked, copy, st))
         }
-        Some(i) => match (&i.hardware, i.look) {
-            (Some(h), _) => Inspect::Hardware(HardwareArt {
+        Some(i) => match (&i.hardware, i.look, &i.sticker) {
+            (Some(h), _, _) => Inspect::Hardware(HardwareArt {
                 look: h.look,
                 mods: h.mods.clone(),
             }),
-            (None, Some(look)) => Inspect::Drawn(look),
-            (None, None) => Inspect::Missing,
+            (None, Some(look), _) => Inspect::Drawn(look),
+            (None, None, Some(art)) => Inspect::Sticker(Loose { art: art.clone() }),
+            (None, None, None) => Inspect::Missing,
         },
         None => Inspect::Missing,
     }
@@ -154,6 +172,7 @@ impl Blueprint {
             title_name,
             inspect,
             bench: Bench::default(),
+            stickers: StickerBench::default(),
             mode: Mode::Inspect,
             host,
             item,
@@ -172,10 +191,25 @@ impl Blueprint {
         drawn && !carrying && self.host.is_some() && sockets > 0
     }
 
-    /// One key: `m` switches mode, the rest go to the mode that is up. While a
-    /// piece is being chosen `m` does nothing: esc goes back first.
+    /// `s` opens the sticker mode on an item whose drawing takes stickers and that
+    /// has a copy to stick them on, unless a cart is being carried.
+    fn stickerable(&self, st: &AppState) -> bool {
+        let carrying = matches!(&self.inspect, Inspect::Deck(tab) if tab.holding());
+        let area = self.drawing(st).is_some_and(|a| a.sticker_area().is_some());
+        area && !carrying && self.host.is_some()
+    }
+
+    /// The item's drawing as the modes work on it; none when there is no drawing.
+    pub(crate) fn drawing(&self, st: &AppState) -> Option<Box<dyn Art>> {
+        self.inspect.art(st, self.host, &self.item)
+    }
+
+    /// One key: `m` and `s` switch modes (the mode's own key back to inspect), the
+    /// rest go to the mode that is up. While a piece is being chosen, a sticker held
+    /// or a peel armed, they go to the mode instead: esc goes back first.
     fn key(&mut self, st: &mut AppState, code: KeyCode) -> ScreenCmd {
-        if code == KeyCode::Char('m') && self.bench.choosing.is_none() {
+        let busy = self.bench.choosing.is_some() || self.stickers.busy();
+        if code == KeyCode::Char('m') && !busy {
             if self.mode == Mode::Mod {
                 self.mode = Mode::Inspect;
             } else if self.moddable(st) {
@@ -183,10 +217,22 @@ impl Blueprint {
             }
             return ScreenCmd::Stay;
         }
-        if self.mode == Mode::Mod
-            && let Some(art) = self.inspect.art(st, self.host, &self.item)
+        if code == KeyCode::Char('s') && !busy {
+            if self.mode == Mode::Stickers {
+                self.mode = Mode::Inspect;
+            } else if self.stickerable(st) {
+                self.stickers.enter(st, self.host);
+                self.mode = Mode::Stickers;
+            }
+            return ScreenCmd::Stay;
+        }
+        if self.mode != Mode::Inspect
+            && let Some(art) = self.drawing(st)
         {
-            return self.bench.key(st, art.as_ref(), self.host, code);
+            return match self.mode {
+                Mode::Mod => self.bench.key(st, art.as_ref(), self.host, code),
+                _ => self.stickers.key(st, art.as_ref(), self.host, code),
+            };
         }
         match &mut self.inspect {
             Inspect::Deck(tab) => tab.key(st, code),
@@ -199,7 +245,7 @@ impl Blueprint {
     }
 
     /// Inspect's view of the item in `body`; the hint row: the item's keys, `m mod`
-    /// when modding is open to it, then the esc part.
+    /// and `s stickers` when those modes are open to it, then the esc part.
     fn draw_inspect(&self, st: &AppState, r: Rect, body: Rect, buf: &mut Buffer) -> String {
         let (keys, esc) = match &self.inspect {
             Inspect::Deck(tab) => {
@@ -208,6 +254,10 @@ impl Blueprint {
                 (Some(keys), esc)
             }
             Inspect::Hardware(art) => {
+                art.draw(art.origin(body), body, buf);
+                (None, "esc close")
+            }
+            Inspect::Sticker(art) => {
                 art.draw(art.origin(body), body, buf);
                 (None, "esc close")
             }
@@ -225,12 +275,13 @@ impl Blueprint {
             }
         };
         let m = self.moddable(st).then_some("m mod");
-        let parts: Vec<&str> = keys.into_iter().chain(m).chain([esc]).collect();
+        let s = self.stickerable(st).then_some("s stickers");
+        let parts: Vec<&str> = keys.into_iter().chain(m).chain(s).chain([esc]).collect();
         parts.join(" · ")
     }
 
     /// In the middle of the screen, always inside the area.
-    fn rect(area: Rect) -> Rect {
+    pub(crate) fn rect(area: Rect) -> Rect {
         let fit = |most: u16, least: u16, room: u16, margin: u16| {
             most.min(room.saturating_sub(2 * margin))
                 .max(least)
@@ -296,13 +347,13 @@ impl Screen for Blueprint {
         solid(buf, r);
         bezel(buf, r);
         let art = match self.mode {
-            Mode::Mod => self.inspect.art(st, self.host, &self.item),
             Mode::Inspect => None,
+            Mode::Mod | Mode::Stickers => self.drawing(st),
         };
-        let mode = if art.is_some() {
-            "MODDING"
-        } else {
-            "BLUEPRINT"
+        let mode = match (self.mode, &art) {
+            (Mode::Mod, Some(_)) => "MODDING",
+            (Mode::Stickers, Some(_)) => "STICKERS",
+            _ => "BLUEPRINT",
         };
         let title = format!(" {mode} · {} ", self.title_name.to_uppercase());
         let style = Style::default().fg(CYAN).add_modifier(Modifier::BOLD);
@@ -313,9 +364,13 @@ impl Screen for Blueprint {
         let strip_y = hint_y - 1;
         let body = Rect::new(inside.x, inside.y, inside.width, strip_y - inside.y);
         let hint = match art {
-            Some(art) => {
+            Some(art) if self.mode == Mode::Mod => {
                 self.bench.draw(st, art.as_ref(), self.host, body, buf);
                 self.bench.hint().to_string()
+            }
+            Some(art) => {
+                self.stickers.draw(st, art.as_ref(), self.host, body, buf);
+                self.stickers.hint(st, self.host)
             }
             None => self.draw_inspect(st, r, body, buf),
         };
@@ -497,7 +552,7 @@ mod tests {
         assert_eq!(buf[(ox + 1, oy + 4)].symbol(), "╭");
         assert_eq!(buf[(ox + 82, oy + 17)].symbol(), "╯");
         assert_eq!(buf[(ox + 5, oy + 5)].symbol(), "K");
-        assert!(row(&buf, bottom - 1).contains("↑↓←→ point · space act · esc close"));
+        assert!(row(&buf, bottom - 1).contains("↑↓←→ point · space act · s stickers · esc close"));
         // Worn, not jacked: the player's cable snakes out under the frame on the left;
         // the terminal's jack stays empty.
         assert_eq!(buf[(ox, oy + 16)].symbol(), "▐");
@@ -963,6 +1018,35 @@ mod tests {
     }
 
     #[test]
+    fn a_sticker_has_its_own_blueprint() {
+        let mut st = state();
+        st.character = Character::debug_runner(&st.content);
+        st.tick = 40;
+        let mut bp = Blueprint::open(&st, id("sticker_no_future"), false, None);
+        let (title, _, hint) = rows_of(100, 30);
+        let buf = screen(&bp, &st, 100, 30);
+        let line = inside(&buf, 100, 30, title);
+        assert!(line.contains(" BLUEPRINT · NO FUTURE "), "{line}");
+        let text = buffer_text(&buf);
+        assert!(!text.contains("MISSING BLUEPRINT"), "{text}");
+        // Level, at its size, centred in the body.
+        let r = window(100, 30);
+        let body = Rect::new(r.x + 1, r.y + 1, r.width - 2, r.height - 4);
+        let (ox, oy) = (
+            body.x + (body.width - 11) / 2,
+            body.y + (body.height - 1) / 2,
+        );
+        let at: String = (ox..ox + 11).map(|x| buf[(x, oy)].symbol()).collect();
+        assert_eq!(at, " NO FUTURE ");
+        assert_eq!(buf[(ox, oy)].bg, MAGENTA);
+        assert_eq!(inside(&buf, 100, 30, hint), "esc close");
+        for code in [KeyCode::Char('m'), KeyCode::Char('s'), KeyCode::Char(' ')] {
+            assert!(matches!(press(&mut bp, &mut st, &[code]), ScreenCmd::Stay));
+        }
+        assert_eq!(buffer_text(&screen(&bp, &st, 100, 30)), text);
+    }
+
+    #[test]
     fn m_switches_modes_on_an_item_with_sockets() {
         let mut st = state();
         let mut bp = dshawns_deck(&mut st);
@@ -970,7 +1054,10 @@ mod tests {
         let (title, readout, hint) = rows_of(w, h);
         let buf = screen(&bp, &st, w, h);
         let line = inside(&buf, w, h, hint);
-        assert!(line.contains("space act · m mod · esc close"), "{line}");
+        assert!(
+            line.contains("space act · m mod · s stickers · esc close"),
+            "{line}"
+        );
         // The inspect pointer to the plate; modding has a pointer of its own.
         press(&mut bp, &mut st, &[KeyCode::Down]);
         assert_eq!(deck(&bp).point, Part::Plate);
@@ -1599,6 +1686,7 @@ mod tests {
     /// The gun's drawing origin in the window on a terminal of `w` by `h`.
     fn gun_origin(w: u16, h: u16) -> (u16, u16) {
         let art = ItemArt {
+            stickers: Vec::new(),
             look: ItemLook::Ratchet,
             fitted: Vec::new(),
         };
@@ -1620,7 +1708,7 @@ mod tests {
         let buf = screen(&bp, &st, w, h);
         let line = inside(&buf, w, h, title);
         assert!(line.contains(" BLUEPRINT · RATCHET SMG "), "{line}");
-        assert_eq!(inside(&buf, w, h, hint), "m mod · esc close");
+        assert_eq!(inside(&buf, w, h, hint), "m mod · s stickers · esc close");
         assert!(!buffer_text(&buf).contains("MISSING BLUEPRINT"));
         let (ox, oy) = gun_origin(w, h);
         assert_eq!((ox, oy), (6, 6));
@@ -1717,6 +1805,7 @@ mod tests {
                 // Drawn on the whole terminal, nothing may land outside the room.
                 let mut buf = Buffer::empty(Rect::new(0, 0, w, h));
                 let art = ItemArt {
+                    stickers: Vec::new(),
                     look: ItemLook::Ratchet,
                     fitted,
                 };

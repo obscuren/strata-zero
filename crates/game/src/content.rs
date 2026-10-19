@@ -57,6 +57,8 @@ pub enum ContentError {
     HardwareInvalid { id: String, why: String },
     #[error("item `{id}`: {why}")]
     LookInvalid { id: String, why: String },
+    #[error("sticker `{id}`: {why}")]
+    StickerInvalid { id: String, why: String },
     #[error("tree {name}: {why}")]
     TreeInvalid { name: String, why: String },
 }
@@ -92,6 +94,62 @@ pub struct Lore {
     /// The building kind label; `None` matches any.
     pub kind: Option<String>,
     pub text: String,
+}
+
+/// Lettering a sticker may carry, in cells, and a picture's size in pixels.
+const LETTERED_MAX: usize = 18;
+const PICTURE_MAX: (usize, usize) = (14, 12);
+
+/// A sticker is art and nothing else, and its art draws; anything else has no art.
+fn sticker_ok(i: &Item) -> Result<(), String> {
+    let art = match (i.kind, &i.sticker) {
+        (ItemKind::Sticker, Some(art)) => art,
+        (ItemKind::Sticker, None) => return Err("no art".into()),
+        (_, Some(_)) => return Err("sticker art on something that is not a sticker".into()),
+        (_, None) => return Ok(()),
+    };
+    let more = i.slot.is_some()
+        || !i.sockets.is_empty()
+        || i.hardware.is_some()
+        || i.deck.is_some()
+        || i.program.is_some()
+        || i.look.is_some()
+        || !i.stickers.is_empty();
+    if more {
+        return Err("a sticker is its art and nothing else".into());
+    }
+    match art {
+        StickerArt::Lettered { text, .. } => {
+            let n = text.chars().count();
+            if n == 0 || n > LETTERED_MAX {
+                return Err(format!("lettering runs 1 to {LETTERED_MAX} cells"));
+            }
+        }
+        StickerArt::Picture { rows, colours } => {
+            let w = rows.first().map_or(0, |r| r.chars().count());
+            let (most_w, most_h) = PICTURE_MAX;
+            if w == 0 || w > most_w || rows.is_empty() || rows.len() > most_h {
+                return Err(format!(
+                    "a picture is 1 to {most_w} pixels wide and 1 to {most_h} tall"
+                ));
+            }
+            if rows.iter().any(|r| r.chars().count() != w) {
+                return Err("its rows differ in length".into());
+            }
+            let pixels: Vec<char> = rows
+                .iter()
+                .flat_map(|r| r.chars())
+                .filter(|&c| c != '.')
+                .collect();
+            if let Some(c) = pixels.iter().find(|c| !colours.contains_key(c)) {
+                return Err(format!("pixel `{c}` has no colour"));
+            }
+            if pixels.is_empty() {
+                return Err("no pixel is set".into());
+            }
+        }
+    }
+    Ok(())
 }
 
 impl Content {
@@ -263,6 +321,27 @@ impl Content {
                     });
                 }
                 _ => {}
+            }
+            if let Err(why) = sticker_ok(i) {
+                return Err(ContentError::StickerInvalid {
+                    id: i.id.0.clone(),
+                    why,
+                });
+            }
+            if !i.stickers.is_empty() && !i.takes_stickers() {
+                return Err(ContentError::StickerInvalid {
+                    id: i.id.0.clone(),
+                    why: "stickers on something that takes none".into(),
+                });
+            }
+            for s in &i.stickers {
+                let on = need_item(format!("item {} stickers", i.id), &s.sticker)?;
+                if on.kind != ItemKind::Sticker {
+                    return Err(ContentError::StickerInvalid {
+                        id: i.id.0.clone(),
+                        why: format!("`{}` is not a sticker", on.id),
+                    });
+                }
             }
             if i.on_use.is_some() && i.kind != ItemKind::Consumable {
                 return Err(ContentError::UseOnNonConsumable {
@@ -1173,7 +1252,8 @@ mod tests {
         }
         assert!(get("rebuilt_deck").per_copy());
         assert!(get("coldfin_1").per_copy());
-        assert!(!get("pawnshop_deck").per_copy());
+        // It carries stickers, so it is held per copy too.
+        assert!(get("pawnshop_deck").per_copy());
         assert!(!get("crack").per_copy());
     }
 
@@ -1227,6 +1307,150 @@ mod tests {
             );
             assert_eq!(look.kind(), fits);
         }
+    }
+
+    #[test]
+    fn stickers_load() {
+        let c = Content::load().unwrap();
+        let get = |id: &str| c.item(&ItemId::new(id)).unwrap();
+        let stickers: Vec<_> = c
+            .items
+            .iter()
+            .filter(|i| i.kind == ItemKind::Sticker)
+            .collect();
+        assert_eq!(stickers.len(), 29);
+        for s in &stickers {
+            assert!(s.sticker.is_some() && s.slot.is_none(), "{}", s.id);
+            assert_eq!((s.weight, s.value), (0.0, 5), "{}", s.id);
+            assert!(!s.per_copy() && !s.takes_stickers(), "{}", s.id);
+        }
+        assert_eq!(get("sticker_no_future").name, "No Future");
+        assert_eq!(
+            get("sticker_no_future").sticker,
+            Some(StickerArt::Lettered {
+                text: " NO FUTURE ".into(),
+                ink: (0xe8, 0xe8, 0xec),
+                ground: (0xff, 0x00, 0xc8),
+                bold: true,
+            })
+        );
+        let Some(StickerArt::Picture { rows, colours }) = &get("sticker_chrome_skull").sticker
+        else {
+            panic!("a picture");
+        };
+        assert_eq!(rows[0], "..wwwwww..");
+        assert_eq!(colours[&'r'], (0xff, 0x2a, 0x3c));
+        let factory = vec![
+            Stuck {
+                sticker: ItemId::new("sticker_no_future"),
+                x: 50,
+                y: 10,
+                turn: Turn::Level,
+            },
+            Stuck {
+                sticker: ItemId::new("sticker_dead_face"),
+                x: 45,
+                y: 13,
+                turn: Turn::Level,
+            },
+        ];
+        for deck in ["pawnshop_deck", "rebuilt_deck"] {
+            assert_eq!(get(deck).stickers, factory, "{deck}");
+            assert!(get(deck).takes_stickers() && get(deck).per_copy(), "{deck}");
+        }
+        assert!(get("ratchet_smg").takes_stickers());
+        for id in ["coldfin_1", "crack", "salvage_jacket", "stim_patch"] {
+            assert!(!get(id).takes_stickers(), "{id}");
+        }
+    }
+
+    #[test]
+    fn turns_go_clockwise() {
+        assert_eq!(Turn::Level.cw(), Turn::Quarter);
+        assert_eq!(Turn::Quarter.cw(), Turn::Half);
+        assert_eq!(Turn::Half.cw(), Turn::ThreeQuarter);
+        assert_eq!(Turn::ThreeQuarter.cw(), Turn::Level);
+        assert_eq!(Turn::ALL.map(Turn::degrees), [0, 90, 180, 270]);
+    }
+
+    #[test]
+    fn validation_refuses_bad_stickers() {
+        let c = Content::load().unwrap();
+        let at = |c: &Content, id: &str| c.items.iter().position(|i| i.id.0 == id).unwrap();
+        let broken = |id: &str, f: &dyn Fn(&mut Item)| {
+            let mut bad = c.clone();
+            let i = at(&bad, id);
+            f(&mut bad.items[i]);
+            bad.validate()
+        };
+        let invalid =
+            |r: Result<(), ContentError>| matches!(r, Err(ContentError::StickerInvalid { .. }));
+        let lettered = |text: &str| StickerArt::Lettered {
+            text: text.into(),
+            ink: (1, 2, 3),
+            ground: (4, 5, 6),
+            bold: true,
+        };
+        let picture = |rows: &[&str]| StickerArt::Picture {
+            rows: rows.iter().map(|r| r.to_string()).collect(),
+            colours: [('a', (1, 2, 3))].into_iter().collect(),
+        };
+        assert!(invalid(
+            broken("sticker_neko", &|i| i.slot = Some(Slot::Deck))
+        ));
+        assert!(invalid(broken("sticker_neko", &|i| i.sticker = None)));
+        assert!(invalid(
+            broken("crack", &|i| i.sticker = Some(lettered(" X ")))
+        ));
+        assert!(invalid(broken("sticker_flatline", &|i| {
+            i.sticker = Some(lettered(&"x".repeat(19)))
+        })));
+        assert!(
+            broken("sticker_flatline", &|i| i.sticker =
+                Some(lettered(&"x".repeat(18))))
+            .is_ok()
+        );
+        assert!(invalid(
+            broken("sticker_flatline", &|i| i.sticker = Some(lettered("")))
+        ));
+        assert!(invalid(broken("sticker_neko", &|i| {
+            i.sticker = Some(picture(&["aa", "a"]))
+        })));
+        assert!(invalid(broken("sticker_neko", &|i| {
+            i.sticker = Some(picture(&["ab"]))
+        })));
+        assert!(invalid(broken("sticker_neko", &|i| {
+            i.sticker = Some(picture(&[&"a".repeat(15)]))
+        })));
+        assert!(
+            broken("sticker_neko", &|i| i.sticker =
+                Some(picture(&[&"a".repeat(14)])))
+            .is_ok()
+        );
+        let tall: Vec<&str> = vec!["a"; 13];
+        assert!(invalid(
+            broken("sticker_neko", &|i| i.sticker = Some(picture(&tall)))
+        ));
+        assert!(broken("sticker_neko", &|i| i.sticker = Some(picture(&tall[..12]))).is_ok());
+        assert!(invalid(broken("sticker_neko", &|i| {
+            i.sticker = Some(picture(&["..", ".."]))
+        })));
+        let factory = c
+            .item(&ItemId::new("pawnshop_deck"))
+            .unwrap()
+            .stickers
+            .clone();
+        assert!(invalid(
+            broken("salvage_jacket", &|i| i.stickers = factory.clone())
+        ));
+        assert!(invalid(broken("pawnshop_deck", &|i| {
+            i.stickers[0].sticker = ItemId::new("crack")
+        })));
+        assert!(matches!(
+            broken("pawnshop_deck", &|i| i.stickers[0].sticker =
+                ItemId::new("nope")),
+            Err(ContentError::UnknownItem { .. })
+        ));
     }
 
     #[test]

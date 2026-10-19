@@ -441,6 +441,83 @@ fn modding_the_ratchet() {
     }
 }
 
+/// The blueprint window on what D'SHAWN wears in `slot`, opened from GEAR, the
+/// glass typed out.
+fn worn_window(st: &mut AppState, item: &str, slot: game::Slot) -> (MapScreen, Deck, Blueprint) {
+    st.character = game::Character::debug_runner(&st.content);
+    let map = MapScreen::walking(st);
+    let mut deck = Deck::new(st.tick);
+    deck.update(st, &[key(KeyCode::Char('3'))]);
+    let copy = st.character.worn_copy(slot).map(|k| k.id);
+    let window = Blueprint::open(st, ItemId::new(item), true, copy);
+    st.tick += 200;
+    if st.tick % 90 < 3 {
+        st.tick += 3;
+    }
+    (map, deck, window)
+}
+
+/// D'SHAWN's rebuilt deck in the sticker mode: the tray risen, ARASAKA placed level
+/// and turned, a peel armed; and the deck inspected with what was stuck.
+#[test]
+#[ignore]
+fn stickers_on_dshawns_deck() {
+    let mut st = state_home();
+    let (map, deck, mut window) = worn_window(&mut st, "rebuilt_deck", game::Slot::Deck);
+    let sizes = [(100, 30), (120, 40)];
+    let snap = |name: &str, st: &AppState, window: &Blueprint| {
+        for (w, h) in sizes {
+            shot_stack(
+                &format!("stickers_deck_{name}_{w}x{h}"),
+                st,
+                &[&map, &deck, window],
+                (w, h),
+            );
+        }
+    };
+    snap("inspect", &st, &window);
+    window.update(&mut st, &[key(KeyCode::Char('s'))]);
+    snap("tray", &st, &window);
+    let right = key(KeyCode::Right);
+    window.update(&mut st, &[right, right, key(KeyCode::Char(' '))]);
+    snap("placing", &st, &window);
+    window.update(&mut st, &[key(KeyCode::Char('r'))]);
+    snap("turned", &st, &window);
+    window.update(
+        &mut st,
+        &[
+            key(KeyCode::Char(' ')),
+            key(KeyCode::Up),
+            key(KeyCode::Char(' ')),
+        ],
+    );
+    snap("peel", &st, &window);
+    window.update(&mut st, &[key(KeyCode::Esc), key(KeyCode::Char('s'))]);
+    snap("stuck", &st, &window);
+}
+
+/// The Ratchet in the sticker mode: the tray, then FLATLINE placed on the receiver.
+#[test]
+#[ignore]
+fn stickers_on_the_ratchet() {
+    let mut st = state_home();
+    let (map, deck, mut window) = worn_window(&mut st, "ratchet_smg", game::Slot::Primary);
+    window.update(&mut st, &[key(KeyCode::Char('s'))]);
+    for (w, h) in [(100, 30), (120, 40)] {
+        let name = format!("stickers_ratchet_tray_{w}x{h}");
+        shot_stack(&name, &st, &[&map, &deck, &window], (w, h));
+    }
+    let right = key(KeyCode::Right);
+    window.update(
+        &mut st,
+        &[right, right, right, right, right, key(KeyCode::Char(' '))],
+    );
+    for (w, h) in [(100, 30), (120, 40)] {
+        let name = format!("stickers_ratchet_placing_{w}x{h}");
+        shot_stack(&name, &st, &[&map, &deck, &window], (w, h));
+    }
+}
+
 /// Each piece of weapon hardware on its blueprint.
 #[test]
 #[ignore]
