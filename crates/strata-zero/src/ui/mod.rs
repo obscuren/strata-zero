@@ -18,5 +18,8 @@ pub mod panel;
 pub mod pixels;
 pub mod preview;
 pub mod sidebar;
+// TEMP(stickers plan): callers arrive in Tasks 4-5.
+#[allow(dead_code)]
+pub mod stickers;
 pub mod talents;
 pub mod transition;

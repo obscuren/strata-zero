@@ -4,7 +4,8 @@
 
 use crate::anim::effects::pulse;
 use crate::ui::chrome::CYAN_RGB;
-use game::SocketKind;
+use crate::ui::stickers;
+use game::{SocketKind, StickerArt, Turn};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
@@ -38,6 +39,118 @@ pub trait Art {
 
     /// The item's sockets in their order, in drawing coordinates.
     fn sockets(&self) -> Vec<SocketPlace>;
+
+    // TEMP(stickers plan): callers arrive in Tasks 4-5.
+    #[allow(dead_code)]
+    /// Where stickers may lie on the drawing; `None` for one that takes none.
+    fn sticker_area(&self) -> Option<StickerArea> {
+        None
+    }
+}
+
+// TEMP(stickers plan): callers arrive in Tasks 4-5.
+#[allow(dead_code)]
+/// The drawing cells a sticker may cover: the drawing's body, less its working parts.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StickerArea {
+    w: u16,
+    h: u16,
+    on: Vec<bool>,
+}
+
+// TEMP(stickers plan): callers arrive in Tasks 4-5.
+#[allow(dead_code)]
+impl StickerArea {
+    /// A `w` by `h` drawing's area: the cells of every `keep` rect less those of every
+    /// `drop` rect, each rect as inclusive x0, y0, x1, y1. Cells past the drawing are
+    /// never on it.
+    pub fn new(
+        w: u16,
+        h: u16,
+        keep: &[(u16, u16, u16, u16)],
+        drop: &[(u16, u16, u16, u16)],
+    ) -> Self {
+        let mut area = StickerArea {
+            w,
+            h,
+            on: vec![false; usize::from(w) * usize::from(h)],
+        };
+        for (rects, on) in [(keep, true), (drop, false)] {
+            for &(x0, y0, x1, y1) in rects {
+                for y in y0..=y1.min(h.saturating_sub(1)) {
+                    for x in x0..=x1.min(w.saturating_sub(1)) {
+                        area.on[usize::from(y) * usize::from(w) + usize::from(x)] = on;
+                    }
+                }
+            }
+        }
+        area
+    }
+
+    pub fn contains(&self, x: i32, y: i32) -> bool {
+        let (Ok(x), Ok(y)) = (u16::try_from(x), u16::try_from(y)) else {
+            return false;
+        };
+        x < self.w && y < self.h && self.on[usize::from(y) * usize::from(self.w) + usize::from(x)]
+    }
+
+    /// Every cell the sticker writes, with its top-left at (x, y), lies on the area.
+    pub fn fits(&self, art: &StickerArt, turn: Turn, x: i32, y: i32) -> bool {
+        self.covers(&stickers::footprint(art, turn), x, y)
+    }
+
+    fn covers(&self, cells: &[(u16, u16)], x: i32, y: i32) -> bool {
+        cells
+            .iter()
+            .all(|&(cx, cy)| self.contains(x + i32::from(cx), y + i32::from(cy)))
+    }
+
+    /// The top-left where the sticker fits whose centre lies nearest `to`, in square
+    /// units (a row counts twice a column); ties go to the first in reading order.
+    pub fn nearest(&self, art: &StickerArt, turn: Turn, to: (f32, f32)) -> Option<(u16, u16)> {
+        let cells = stickers::footprint(art, turn);
+        let (w, h) = stickers::size(art, turn);
+        let mut best: Option<(f32, (u16, u16))> = None;
+        for y in 0..self.h {
+            for x in 0..self.w {
+                if !self.covers(&cells, i32::from(x), i32::from(y)) {
+                    continue;
+                }
+                let dx = f32::from(x) + f32::from(w) / 2.0 - to.0;
+                let dy = 2.0 * (f32::from(y) + f32::from(h) / 2.0 - to.1);
+                let d = dx * dx + dy * dy;
+                if best.is_none_or(|(b, _)| d < b) {
+                    best = Some((d, (x, y)));
+                }
+            }
+        }
+        best.map(|(_, at)| at)
+    }
+}
+
+// TEMP(stickers plan): callers arrive in Tasks 4-5.
+#[allow(dead_code)]
+/// Greys every cell of `body` whose drawing cell (from `origin`) is off the area, as
+/// `grey_area` does: the stickers' mode shows where they may go.
+pub fn grey_outside(
+    buf: &mut Buffer,
+    body: Rect,
+    (ox, oy): (u16, u16),
+    area: &StickerArea,
+    panel: Color,
+) {
+    let body = body.intersection(buf.area);
+    for y in body.top()..body.bottom() {
+        for x in body.left()..body.right() {
+            if area.contains(i32::from(x) - i32::from(ox), i32::from(y) - i32::from(oy)) {
+                continue;
+            }
+            let cell = &mut buf[(x, y)];
+            let (fg, bg) = (grey(cell.fg, Color::Reset), grey(cell.bg, panel));
+            cell.set_fg(fg).set_bg(bg);
+            cell.modifier.remove(Modifier::BOLD);
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -201,6 +314,54 @@ mod tests {
     }
 
     const PANEL: Color = Color::Rgb(4, 6, 10);
+
+    #[test]
+    fn a_sticker_fits_only_wholly_on_the_area() {
+        let area = StickerArea::new(10, 4, &[(0, 0, 9, 3)], &[(4, 1, 5, 2)]);
+        let two = crate::ui::stickers::tests::lettered("ab");
+        assert!(area.contains(0, 0) && area.contains(9, 3));
+        assert!(!area.contains(4, 1) && !area.contains(10, 0) && !area.contains(-1, 0));
+        assert!(area.fits(&two, Turn::Level, 0, 0));
+        assert!(!area.fits(&two, Turn::Level, 3, 1), "over the hole");
+        assert!(!area.fits(&two, Turn::Level, 9, 0), "off the edge");
+        assert!(!area.fits(&two, Turn::Level, -1, 0));
+        // Stood up it is three wide and two tall, which the hole's rows refuse.
+        assert!(area.fits(&two, Turn::Quarter, 0, 0));
+        assert!(!area.fits(&two, Turn::Quarter, 3, 0));
+        // Nearest by its centre, a row counting twice a column.
+        assert_eq!(area.nearest(&two, Turn::Level, (4.5, 1.5)), Some((2, 1)));
+        let wide = crate::ui::stickers::tests::lettered("abcdefghijk");
+        assert_eq!(area.nearest(&wide, Turn::Level, (4.5, 1.5)), None);
+    }
+
+    #[test]
+    fn grey_outside_spares_the_area() {
+        let red = Color::Rgb(255, 0, 0);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 3));
+        for cell in &mut buf.content {
+            cell.set_char('x').set_fg(red).set_bg(red);
+            cell.modifier = Modifier::BOLD;
+        }
+        buf[(5, 2)].set_bg(PANEL);
+        // A 2×1 area at drawing (1, 1), the drawing's origin at (2, 0).
+        let area = StickerArea::new(4, 3, &[(1, 1, 2, 1)], &[]);
+        grey_outside(&mut buf, Rect::new(0, 0, 6, 3), (2, 0), &area, PANEL);
+        for (x, y) in [(3, 1), (4, 1)] {
+            let cell = &buf[(x, y)];
+            assert_eq!((cell.fg, cell.bg), (red, red), "({x},{y})");
+            assert!(cell.modifier.contains(Modifier::BOLD));
+        }
+        for (x, y) in [(0, 0), (2, 1), (5, 1), (3, 2)] {
+            let cell = &buf[(x, y)];
+            assert_eq!(
+                (cell.fg, cell.bg),
+                (grey(red, PANEL), grey(red, PANEL)),
+                "({x},{y})"
+            );
+            assert!(!cell.modifier.contains(Modifier::BOLD));
+        }
+        assert_eq!(buf[(5, 2)].bg, PANEL);
+    }
 
     #[test]
     fn grey_reads_luminance_and_spares_the_panel() {
