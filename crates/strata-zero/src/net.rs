@@ -1819,6 +1819,74 @@ pub fn pace(st: &mut AppState) {
     }
 }
 
+/// The turn column's view: every standing actor in the rolled order with its chip,
+/// your pools on your turn, the acting enemy's plan on theirs.
+pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
+    use crate::render::turns::{Chip, TurnView};
+    let e = st.net.engaged.as_ref()?;
+    let k = e.construct().and_then(|b| st.constructs.get(b));
+    let states = e.construct().and_then(|b| st.net.ice.get(&b));
+    let actor = e.actor();
+    let mut chips = Vec::new();
+    for a in &e.order {
+        let chip = match *a {
+            Actor::You => Chip {
+                name: "YOU".to_string(),
+                hp: String::new(),
+                acting: actor == Actor::You,
+            },
+            Actor::Ice(i) => {
+                let Some((g, ice)) = k
+                    .and_then(|k| k.guards.get(i).filter(|g| k.guard_at(g.pos).is_some()))
+                    .zip(states.and_then(|s| s.get(i)))
+                else {
+                    continue;
+                };
+                Chip {
+                    name: format!("{} ICE", g.grade.label()),
+                    hp: format!("{}/{}", ice.integrity, g.grade.integrity()),
+                    acting: actor == *a,
+                }
+            }
+            Actor::Foe(i) => {
+                let Some(f) = st.foes.get(i).filter(|f| f.standing()) else {
+                    continue;
+                };
+                Chip {
+                    name: f.name.clone(),
+                    hp: f.hp.to_string(),
+                    acting: actor == *a,
+                }
+            }
+        };
+        chips.push(chip);
+    }
+    let yours =
+        (actor == Actor::You).then_some((e.moves, BASE_MOVE, e.ap, BASE_AP, e.phase == Phase::Act));
+    let theirs = match actor {
+        Actor::You => None,
+        Actor::Ice(_) | Actor::Foe(_) => {
+            let verb = if matches!(actor, Actor::Ice(_)) {
+                "hits"
+            } else {
+                "fires"
+            };
+            Some(match (e.moves, e.ap) {
+                (0, 0) => "done".to_string(),
+                (0, _) => verb.to_string(),
+                (m, 0) => format!("moves {m}"),
+                (m, _) => format!("moves {m} › {verb}"),
+            })
+        }
+    };
+    Some(TurnView {
+        round: e.round,
+        chips,
+        yours,
+        theirs,
+    })
+}
+
 /// The footer's turn line: `TURN 3  YOU › grey ICE › black ICE`, the actor acting first.
 pub fn turn_readout(st: &AppState) -> Option<String> {
     let e = st.net.engaged.as_ref()?;

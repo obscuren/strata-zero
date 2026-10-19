@@ -2540,11 +2540,24 @@ impl Screen for MapScreen {
         if !looked.is_empty() {
             overlays.push(&look_block);
         }
+        // The turn column, on the map that is on turns.
+        let turns = st
+            .net
+            .engaged
+            .as_ref()
+            .filter(|e| e.place == self.place)
+            .and_then(|_| crate::net::turn_view(st));
+        let turn_overlay = turns
+            .as_ref()
+            .map(|view| crate::render::turns::TurnOverlay { view });
         let fx = FxOverlay { fx: &st.fx, vis };
         overlays.push(&fx);
         let light = crate::render::lighting::LightOverlay { vis };
         if st.show_light {
             overlays.push(&light);
+        }
+        if let Some(o) = turn_overlay.as_ref() {
+            overlays.push(o);
         }
         MapView {
             map: &map,
@@ -3031,6 +3044,51 @@ mod tests {
         st.tick += 2;
         s.update(&mut st, &[]);
         assert!(!crate::net::your_turn(&st), "the turn passed on its own");
+    }
+
+    #[test]
+    fn the_turn_column_sits_top_right_and_lights_the_live_half() {
+        let (mut st, mut s) = lot(Pos::new(14, 8));
+        s.update(&mut st, &[]);
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(text.contains(" TURN 1 "), "{text}");
+        assert!(text.contains(" ▶ YOU            "), "{text}");
+        assert!(text.contains(" ◆ MOVE ▰▰▰▰  4/4 "), "{text}");
+        assert!(text.contains("   AP   ●●    2/2 "), "{text}");
+        assert!(text.contains("   goon        30 "), "{text}");
+        // The column's right edge is the map's right edge, its top the map's top row.
+        let rows: Vec<&str> = text.lines().collect();
+        let r = rows.iter().position(|l| l.contains(" TURN 1 ")).unwrap();
+        assert_eq!(r, 5, "the map's first row");
+        assert!(
+            rows[r + 1].find(" ▶ YOU").is_some_and(|c| c + 18 == 59),
+            "{:?}",
+            rows[r + 1]
+        );
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(text.contains("   MOVE ▰▰▰▰  4/4 "), "{text}");
+        assert!(text.contains(" ◆ AP   ●●    2/2 "), "{text}");
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(text.contains("   YOU            "), "{text}");
+        assert!(text.contains(" ▶ goon        30 "), "{text}");
+        assert!(text.contains("   moves 3 › fires"), "{text}");
+        // Calm: no column.
+        st.foes[0].down = true;
+        crate::net::disengage(&mut st);
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(!text.contains("TURN 1"), "{text}");
+    }
+
+    #[test]
+    fn the_turn_column_reads_the_ice_in_a_construct() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        engaged_at_the_gate(&mut st, &mut s);
+        let text = draw_screen(&s, &st, 140, 40);
+        assert!(text.contains(" ▶ YOU            "), "{text}");
+        assert!(text.contains("   grey ICE   6/6 "), "{text}");
     }
 
     #[test]
