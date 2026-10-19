@@ -358,7 +358,6 @@ pub fn draw_side(look: HardwareLook, side: Side, p: &mut Pen, x: i32, y: i32) {
 }
 
 /// A piece's tray tile: its background, its ink and its swatch colours.
-#[allow(dead_code)] // until the modding tray wears it
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tile {
     pub bg: Color,
@@ -367,7 +366,6 @@ pub struct Tile {
 }
 
 /// The tile of a socket with nothing in it.
-#[allow(dead_code)] // until the modding tray wears it
 pub const EMPTY_TILE: Tile = Tile {
     bg: EMPTY_BG,
     ink: rgb(0xa0aab9),
@@ -375,7 +373,6 @@ pub const EMPTY_TILE: Tile = Tile {
 };
 
 /// The tile a piece of hardware wears in the tray.
-#[allow(dead_code)] // until the modding tray wears it
 pub fn tile(look: HardwareLook) -> Tile {
     match look {
         HardwareLook::ColdfinI | HardwareLook::ColdfinII => Tile {

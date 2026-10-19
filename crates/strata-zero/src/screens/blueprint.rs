@@ -34,6 +34,8 @@ pub struct Blueprint {
     title_name: String,
     /// The item's own view.
     inspect: Inspect,
+    /// Modding's state, kept while inspect is up.
+    bench: Bench,
     mode: Mode,
     /// Where the item's sockets are: the copy worn, or the one in the pack it was
     /// opened on. `None` for an item held without a copy.
@@ -51,11 +53,13 @@ enum Inspect {
     Missing,
 }
 
-/// The mode the window is in. Each has its own pointer: inspect's lives in
-/// `Inspect`, so modding never moves it, and modding starts on the first socket.
+/// The mode the window is in. Each has its own pointer, and switching resets
+/// neither: inspect's lives in `Inspect`, modding's in the bench, which starts on
+/// the first socket.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
     Inspect,
-    Mod(Bench),
+    Mod,
 }
 
 impl Inspect {
@@ -98,6 +102,7 @@ impl Blueprint {
         Blueprint {
             title_name,
             inspect,
+            bench: Bench::default(),
             mode: Mode::Inspect,
             host,
             item,
@@ -116,20 +121,21 @@ impl Blueprint {
         drawn && !carrying && sockets > 0
     }
 
-    /// One key: `m` switches mode, the rest go to the mode that is up.
+    /// One key: `m` switches mode, the rest go to the mode that is up. While a
+    /// piece is being chosen `m` does nothing: esc goes back first.
     fn key(&mut self, st: &mut AppState, code: KeyCode) -> ScreenCmd {
-        if code == KeyCode::Char('m') {
-            if matches!(self.mode, Mode::Mod(_)) {
+        if code == KeyCode::Char('m') && self.bench.choosing.is_none() {
+            if self.mode == Mode::Mod {
                 self.mode = Mode::Inspect;
             } else if self.moddable(st) {
-                self.mode = Mode::Mod(Bench::default());
+                self.mode = Mode::Mod;
             }
             return ScreenCmd::Stay;
         }
-        if let Mode::Mod(bench) = &mut self.mode
+        if self.mode == Mode::Mod
             && let Some(art) = self.inspect.art(st)
         {
-            return bench.key(art.as_ref(), code);
+            return self.bench.key(st, art.as_ref(), self.host, code);
         }
         match &mut self.inspect {
             Inspect::Deck(tab) => tab.key(st, code),
@@ -232,11 +238,11 @@ impl Screen for Blueprint {
         let buf = f.buffer_mut();
         solid(buf, r);
         bezel(buf, r);
-        let bench = match &self.mode {
-            Mode::Mod(bench) => self.inspect.art(st).map(|art| (bench, art)),
+        let art = match self.mode {
+            Mode::Mod => self.inspect.art(st),
             Mode::Inspect => None,
         };
-        let mode = if bench.is_some() {
+        let mode = if art.is_some() {
             "MODDING"
         } else {
             "BLUEPRINT"
@@ -249,10 +255,10 @@ impl Screen for Blueprint {
         let hint_y = inside.bottom() - 1;
         let strip_y = hint_y - 1;
         let body = Rect::new(inside.x, inside.y, inside.width, strip_y - inside.y);
-        let hint = match bench {
-            Some((bench, art)) => {
-                bench.draw(st, art.as_ref(), self.host, body, buf);
-                bench.hint().to_string()
+        let hint = match art {
+            Some(art) => {
+                self.bench.draw(st, art.as_ref(), self.host, body, buf);
+                self.bench.hint().to_string()
             }
             None => self.draw_inspect(st, r, body, buf),
         };
@@ -325,7 +331,7 @@ mod tests {
     }
 
     fn modding(bp: &Blueprint) -> bool {
-        matches!(bp.mode, Mode::Mod(_))
+        bp.mode == Mode::Mod
     }
 
     /// The window over the washed deck screen, as the app draws the stack.
@@ -1130,5 +1136,379 @@ mod tests {
         // Put back, m works again.
         press(&mut bp, &mut st, &[KeyCode::Esc, KeyCode::Char('m')]);
         assert!(modding(&bp));
+    }
+
+    fn choosing(bp: &Blueprint) -> bool {
+        bp.bench.choosing.is_some()
+    }
+
+    /// The tray's two tile rows, from the window's top edge.
+    fn tile_rows(w: u16, h: u16) -> (u16, u16) {
+        let r = window(w, h);
+        (r.height - 7, r.height - 6)
+    }
+
+    /// The deck's drawing origin in the window on a terminal of `w` by `h`.
+    fn deck_origin(w: u16, h: u16) -> (u16, u16) {
+        let r = window(w, h);
+        let body = Rect::new(r.x + 1, r.y + 1, r.width - 2, r.height - 4);
+        crate::ui::cyberdeck::origin(DeckLook::Pawn, body)
+    }
+
+    /// The text across the deck drawing's own columns on row `dy` from the window's
+    /// top edge, trimmed: the tray's rows, without the cables either side.
+    fn across(buf: &Buffer, w: u16, h: u16, dy: u16) -> String {
+        let (ox, _) = deck_origin(w, h);
+        let width = crate::ui::cyberdeck::size(DeckLook::Pawn).0;
+        let y = window(w, h).y + dy;
+        let line: String = (ox..ox + width).map(|x| buf[(x, y)].symbol()).collect();
+        line.trim().to_string()
+    }
+
+    /// What each socket of a host holds.
+    fn fitted(st: &AppState, host: Host) -> Vec<Option<ItemId>> {
+        let copy = st.character.host_copy(host).expect("a copy");
+        copy.fitted
+            .iter()
+            .map(|s| s.as_ref().map(|s| s.item.clone()))
+            .collect()
+    }
+
+    fn in_pack(st: &AppState, item: &str) -> usize {
+        let item = id(item);
+        st.character
+            .inventory
+            .iter()
+            .filter(|s| s.item == item)
+            .count()
+    }
+
+    const SOCKET_HINT: &str = "↑↓←→ socket · space choose · m inspect · esc close";
+    const TRAY_HINT: &str = "←→ hardware · space fit · esc back";
+    const ALU: Color = Color::Rgb(0xb4, 0xbe, 0xc8);
+    const ALU_DK: Color = Color::Rgb(0x2b, 0x31, 0x38);
+    const TRAY_INK: Color = Color::Rgb(0x1a, 0x1e, 0x24);
+    const TRAY_LABEL: Color = Color::Rgb(0x6b, 0x65, 0x75);
+
+    #[test]
+    fn choosing_fits_the_pointed_piece() {
+        let mut st = state();
+        let mut bp = dshawns_deck(&mut st);
+        let (w, h) = (100, 30);
+        let (_, readout, hint) = rows_of(w, h);
+        let (names, lines) = tile_rows(w, h);
+        let (ox, oy) = deck_origin(w, h);
+        let y = window(w, h).y + names;
+        press(&mut bp, &mut st, &[KeyCode::Char('m')]);
+        // Not choosing yet: the tray lies there, no brackets in it.
+        let buf = screen(&bp, &st, w, h);
+        assert!(across(&buf, w, h, names).starts_with("HARDWARE"));
+        assert_ne!(buf[(ox + 12, y - 1)].symbol(), "┏");
+        press(&mut bp, &mut st, &[KeyCode::Char(' ')]);
+        assert!(choosing(&bp));
+        let buf = screen(&bp, &st, w, h);
+        let row = across(&buf, w, h, names);
+        assert!(row.starts_with("HARDWARE"), "{row}");
+        for want in ["COLDFIN VI ", "COLDFIN VII"] {
+            assert!(row.contains(want), "{want}: {row}");
+        }
+        // The third tile would end past the drawing: the row is cut, `›` at its end.
+        assert!(row.ends_with('›') && !row.contains("SIDECAR"), "{row}");
+        let second = across(&buf, w, h, lines);
+        assert!(second.contains("trace per cast −10%"), "{second}");
+        assert!(second.contains("trace per cast −20%"), "{second}");
+        assert_eq!(inside(&buf, w, h, hint), TRAY_HINT);
+        assert_eq!(
+            inside(&buf, w, h, readout),
+            "COLDFIN VI ▸ socket L · trace per cast −10%"
+        );
+        // The label at the drawing's column 2; the first tile 11 later: its swatch,
+        // then its name bold on the tile's colours, its mod under it.
+        let label = &buf[(ox + 2, y)];
+        assert_eq!((label.symbol(), label.fg), ("H", TRAY_LABEL));
+        assert!(label.modifier.contains(Modifier::BOLD));
+        for (x, dy) in [(ox + 13, 0), (ox + 14, 1)] {
+            let cell = &buf[(x, y + dy)];
+            assert_eq!((cell.symbol(), cell.fg, cell.bg), ("▀", ALU, ALU_DK));
+        }
+        let c = &buf[(ox + 16, y)];
+        assert_eq!((c.symbol(), c.fg, c.bg), ("C", TRAY_INK, ALU));
+        assert!(c.modifier.contains(Modifier::BOLD));
+        let t = &buf[(ox + 16, y + 1)];
+        assert_eq!((t.symbol(), t.fg, t.bg), ("t", TRAY_INK, ALU));
+        assert!(!t.modifier.contains(Modifier::BOLD));
+        // 23 wide: the swatch, a space, the mod line, a space.
+        assert_eq!(buf[(ox + 35, y + 1)].bg, ALU);
+        assert_eq!(buf[(ox + 36, y + 1)].bg, PANEL_BG);
+        // The brackets drop onto that tile; the socket gets a dashed outline.
+        for (x, cy, glyph) in [
+            (ox + 12, y - 1, "┏"),
+            (ox + 36, y - 1, "┓"),
+            (ox + 12, y + 2, "┗"),
+            (ox + 36, y + 2, "┛"),
+        ] {
+            assert_eq!(buf[(x, cy)].symbol(), glyph, "({x},{cy})");
+        }
+        let (left, right, top, bottom) = (ox - 5, ox + 2, oy + 5, oy + 13);
+        for (x, cy, glyph) in [
+            (left, top, "┌"),
+            (right, top, "┐"),
+            (left, bottom, "└"),
+            (right, bottom, "┘"),
+            (ox - 2, top, "╌"),
+            (ox, bottom, "╌"),
+            (left, oy + 9, "╎"),
+            (right, oy + 6, "╎"),
+        ] {
+            let cell = &buf[(x, cy)];
+            assert_eq!((cell.symbol(), cell.fg), (glyph, CYAN), "({x},{cy})");
+        }
+        assert_ne!(buf[(ox - 5, oy + 5)].symbol(), "┏");
+
+        press(&mut bp, &mut st, &[KeyCode::Right]);
+        let buf = screen(&bp, &st, w, h);
+        assert_eq!(
+            inside(&buf, w, h, readout),
+            "COLDFIN VII ▸ socket L · trace per cast −20%"
+        );
+        // On to the third: the row scrolls to show it, `‹` at its start.
+        press(&mut bp, &mut st, &[KeyCode::Char('l')]);
+        let buf = screen(&bp, &st, w, h);
+        let row = across(&buf, w, h, names);
+        assert!(row.contains("SIDECAR CO-PROCESSOR"), "{row}");
+        assert!(row.contains("‹") && !row.contains("COLDFIN VI "), "{row}");
+        assert_eq!(buf[(ox + 11, y)].symbol(), "‹");
+        assert_eq!(
+            inside(&buf, w, h, readout),
+            "SIDECAR CO-PROCESSOR ▸ socket L · program power +1"
+        );
+        // The end of the row: no further.
+        press(&mut bp, &mut st, &[KeyCode::Right]);
+        assert!(inside(&screen(&bp, &st, w, h), w, h, readout).starts_with("SIDECAR"));
+        press(&mut bp, &mut st, &[KeyCode::Left]);
+        press(&mut bp, &mut st, &[KeyCode::Char(' ')]);
+        assert!(!choosing(&bp));
+        assert_eq!(status(&bp, &mut st), "Coldfin vII fitted · socket L");
+        assert_eq!(
+            fitted(&st, Host::Worn(Slot::Deck)),
+            vec![Some(id("coldfin_2")), None]
+        );
+        let buf = screen(&bp, &st, w, h);
+        assert_eq!(
+            inside(&buf, w, h, readout),
+            "SOCKET L ▸ Coldfin vII · trace per cast −20%"
+        );
+        assert_eq!(inside(&buf, w, h, hint), SOCKET_HINT);
+        let row = across(&buf, w, h, names);
+        assert!(
+            row.contains("COLDFIN VI ") && row.contains("SIDECAR"),
+            "{row}"
+        );
+        assert!(!row.contains("COLDFIN VII"), "{row}");
+        // The brackets are back on the socket.
+        assert_eq!(buf[(ox - 5, oy + 5)].symbol(), "┏");
+    }
+
+    #[test]
+    fn a_filled_socket_offers_empty_and_swaps() {
+        let mut st = state();
+        let mut bp = dshawns_deck(&mut st);
+        let (w, h) = (100, 30);
+        let (_, readout, _) = rows_of(w, h);
+        let (names, lines) = tile_rows(w, h);
+        let (ox, _) = deck_origin(w, h);
+        let y = window(w, h).y + names;
+        let space = KeyCode::Char(' ');
+        press(
+            &mut bp,
+            &mut st,
+            &[KeyCode::Char('m'), space, KeyCode::Right, space],
+        );
+        assert_eq!(
+            fitted(&st, Host::Worn(Slot::Deck)),
+            vec![Some(id("coldfin_2")), None]
+        );
+        press(&mut bp, &mut st, &[space]);
+        assert!(choosing(&bp));
+        let buf = screen(&bp, &st, w, h);
+        let row = across(&buf, w, h, names);
+        assert!(row.starts_with("HARDWARE   ▀▀ EMPTY"), "{row}");
+        assert!(across(&buf, w, h, lines).contains("take it out"));
+        // EMPTY on its own tile colours.
+        let e = &buf[(ox + 16, y)];
+        assert_eq!(e.symbol(), "E");
+        assert_eq!(e.bg, Color::Rgb(0x2a, 0x28, 0x30));
+        assert_eq!(e.fg, DIM);
+        assert_eq!(
+            inside(&buf, w, h, readout),
+            "EMPTY ▸ socket L · Coldfin vII back to the pack"
+        );
+        press(&mut bp, &mut st, &[KeyCode::Right]);
+        let buf = screen(&bp, &st, w, h);
+        assert_eq!(
+            inside(&buf, w, h, readout),
+            "COLDFIN VI ▸ socket L · trace per cast −10% · Coldfin vII back to the pack"
+        );
+        // Space swaps: vI in, vII back to the pack.
+        press(&mut bp, &mut st, &[space]);
+        assert_eq!(
+            status(&bp, &mut st),
+            "Coldfin vI fitted · socket L · Coldfin vII to the pack"
+        );
+        assert_eq!(
+            fitted(&st, Host::Worn(Slot::Deck)),
+            vec![Some(id("coldfin_1")), None]
+        );
+        assert_eq!(
+            (in_pack(&st, "coldfin_1"), in_pack(&st, "coldfin_2")),
+            (0, 1)
+        );
+        // EMPTY takes it out.
+        press(&mut bp, &mut st, &[space]);
+        let buf = screen(&bp, &st, w, h);
+        assert!(inside(&buf, w, h, readout).starts_with("EMPTY ▸ socket L"));
+        press(&mut bp, &mut st, &[space]);
+        assert!(!choosing(&bp));
+        assert_eq!(status(&bp, &mut st), "Coldfin vI out · to the pack");
+        assert_eq!(fitted(&st, Host::Worn(Slot::Deck)), vec![None, None]);
+        assert_eq!(
+            (in_pack(&st, "coldfin_1"), in_pack(&st, "coldfin_2")),
+            (1, 1)
+        );
+        let buf = screen(&bp, &st, w, h);
+        assert_eq!(
+            inside(&buf, w, h, readout),
+            "SOCKET L ▸ empty · takes deck hardware"
+        );
+    }
+
+    #[test]
+    fn esc_while_choosing_changes_nothing() {
+        for back in [KeyCode::Esc, KeyCode::Char('q')] {
+            let mut st = state();
+            let mut bp = dshawns_deck(&mut st);
+            let (w, h) = (100, 30);
+            let (_, readout, hint) = rows_of(w, h);
+            let before = st.character.clone();
+            press(&mut bp, &mut st, &[KeyCode::Char('m'), KeyCode::Char(' ')]);
+            press(&mut bp, &mut st, &[KeyCode::Right]);
+            // Up, down, j, k and m do nothing while choosing.
+            let buf = screen(&bp, &st, w, h);
+            for code in [
+                KeyCode::Up,
+                KeyCode::Down,
+                KeyCode::Char('j'),
+                KeyCode::Char('k'),
+                KeyCode::Char('m'),
+                KeyCode::Enter,
+            ] {
+                assert!(matches!(press(&mut bp, &mut st, &[code]), ScreenCmd::Stay));
+                assert!(modding(&bp) && choosing(&bp), "{code:?}");
+                assert_eq!(buffer_text(&screen(&bp, &st, w, h)), buffer_text(&buf));
+            }
+            assert!(matches!(press(&mut bp, &mut st, &[back]), ScreenCmd::Stay));
+            assert!(modding(&bp) && !choosing(&bp));
+            assert_eq!(st.character, before);
+            assert_eq!(bp.bench.point, 0);
+            let buf = screen(&bp, &st, w, h);
+            assert_eq!(inside(&buf, w, h, hint), SOCKET_HINT);
+            assert_eq!(
+                inside(&buf, w, h, readout),
+                "SOCKET L ▸ empty · takes deck hardware"
+            );
+            // Not choosing, esc closes.
+            assert!(matches!(
+                press(&mut bp, &mut st, &[back]),
+                ScreenCmd::Pop { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn jacked_in_modding_only_looks() {
+        let mut st = state();
+        let mut bp = dshawns_deck(&mut st);
+        jack_in(&mut st);
+        let before = st.character.clone();
+        press(&mut bp, &mut st, &[KeyCode::Char('m')]);
+        assert!(modding(&bp));
+        press(&mut bp, &mut st, &[KeyCode::Char(' ')]);
+        assert!(!choosing(&bp));
+        assert!(last_is_warning(&st));
+        assert_eq!(last(&st), Some(crate::actions::JACKED_IN));
+        assert_eq!(
+            status(&bp, &mut st),
+            format!("! {}", crate::actions::JACKED_IN)
+        );
+        assert_eq!(st.character, before);
+        let (_, _, hint) = rows_of(100, 30);
+        assert_eq!(
+            inside(&screen(&bp, &st, 100, 30), 100, 30, hint),
+            SOCKET_HINT
+        );
+    }
+
+    #[test]
+    fn an_empty_tray_says_so() {
+        let mut st = state();
+        st.character.give_item(&st.content, id("rebuilt_deck"), 1);
+        let copy = pack_copy(&st, "rebuilt_deck");
+        perform(&mut st, Action::EquipCopy(copy)).unwrap();
+        let mut bp = Blueprint::open(&st, id("rebuilt_deck"), true, Some(copy));
+        press(&mut bp, &mut st, &[KeyCode::Char('m')]);
+        assert!(modding(&bp));
+        let (names, _) = tile_rows(100, 30);
+        let (_, _, hint) = rows_of(100, 30);
+        let buf = screen(&bp, &st, 100, 30);
+        let row = across(&buf, 100, 30, names);
+        assert!(row.starts_with("HARDWARE"), "{row}");
+        assert!(row.contains("nothing in your pack fits"), "{row}");
+        let (ox, _) = deck_origin(100, 30);
+        let y = window(100, 30).y + names;
+        assert_eq!(buf[(ox + 13, y)].symbol(), "n");
+        assert_eq!(buf[(ox + 13, y)].fg, DIM);
+        let (log, before) = (st.log.len(), st.character.clone());
+        press(&mut bp, &mut st, &[KeyCode::Char(' ')]);
+        assert!(!choosing(&bp));
+        assert_eq!((st.log.len(), &st.character), (log, &before));
+        let buf = screen(&bp, &st, 100, 30);
+        assert!(across(&buf, 100, 30, names).contains("nothing in your pack fits"));
+        assert_eq!(inside(&buf, 100, 30, hint), SOCKET_HINT);
+    }
+
+    #[test]
+    fn a_carried_deck_can_be_modded() {
+        let mut st = state();
+        st.character = Character::debug_runner(&st.content);
+        st.character.give_item(&st.content, id("rebuilt_deck"), 1);
+        let copy = pack_copy(&st, "rebuilt_deck");
+        let mut bp = Blueprint::open(&st, id("rebuilt_deck"), false, Some(copy));
+        let space = KeyCode::Char(' ');
+        press(&mut bp, &mut st, &[KeyCode::Char('m'), space]);
+        press(&mut bp, &mut st, &[KeyCode::Right, KeyCode::Right, space]);
+        assert_eq!(
+            status(&bp, &mut st),
+            "Sidecar co-processor fitted · socket L"
+        );
+        assert_eq!(
+            fitted(&st, Host::Pack(copy)),
+            vec![Some(id("sidecar")), None]
+        );
+        assert_eq!(fitted(&st, Host::Worn(Slot::Deck)), vec![None, None]);
+        assert_eq!(in_pack(&st, "sidecar"), 0);
+    }
+
+    #[test]
+    fn the_modding_pointer_is_kept_across_m() {
+        let mut st = state();
+        let mut bp = dshawns_deck(&mut st);
+        let (_, readout, _) = rows_of(100, 30);
+        press(&mut bp, &mut st, &[KeyCode::Char('m'), KeyCode::Right]);
+        assert_eq!(bp.bench.point, 1);
+        press(&mut bp, &mut st, &[KeyCode::Char('m'), KeyCode::Char('m')]);
+        assert!(modding(&bp));
+        assert_eq!(bp.bench.point, 1);
+        let buf = screen(&bp, &st, 100, 30);
+        assert!(inside(&buf, 100, 30, readout).starts_with("SOCKET R "));
     }
 }
