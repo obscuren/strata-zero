@@ -11,7 +11,7 @@ use crate::anim::Easing;
 use crate::app::AppState;
 use crate::render::glyphs::kind_icon;
 use crate::ui::art::{Art, Dir, PartPlace, brackets, grey_at};
-use crate::ui::chrome::{BAR_BG, CYAN, DIM, MAGENTA, PANEL_BG, RULE, TEXT, solid};
+use crate::ui::chrome::{BAR_BG, CYAN, DIM, FAINTER, MAGENTA, PANEL_BG, RULE, TEXT, solid};
 use crate::ui::hud::cut;
 use crate::ui::looks::ItemArt;
 use crossterm::event::KeyCode;
@@ -20,9 +20,6 @@ use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
-/// Zone marks, the header in the rule, the drawing number, the process lines and the
-/// centre lines.
-const FAINTER: Color = Color::Rgb(0x5c, 0x66, 0x73);
 /// Every part on hand.
 const GREEN: Color = Color::Rgb(0x5a, 0xc8, 0x8c);
 /// Behind the balloon of a part that is short.
