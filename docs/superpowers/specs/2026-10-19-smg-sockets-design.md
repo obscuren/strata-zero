@@ -82,6 +82,11 @@ from socket kinds, never from piece names.
   and `ItemLook::sockets()` each return the drawing's socket places as `(name,
   SocketKind)` in order. Pawn: `[("L", Deck), ("R", Deck)]` (replaces
   `socket_names`). Ratchet: `[("MUZZLE", Muzzle), ("RAIL", Rail)]`.
+- **One way to ask an item for its drawing's sockets**: `Item::drawn_sockets()` (name
+  the builder's) returns the deck look's places for a deck, the `look`'s for an item
+  with one, else none. Validation, the action's `socket_name` (today it reads only the
+  deck look and falls back to the socket's number, so the gun would read `socket 1`)
+  and the pawn drawing's place names all read it.
 
 ### Content and validation (`game::content`)
 
@@ -111,8 +116,10 @@ from socket kinds, never from piece names.
   pieces' mods, in slot order). `trace_cut` and `deck_power` read it unchanged: only
   deck hardware carries those mods, so every deck number is what it is today.
 - `Character::stat` adds `Mod::Stat` from `worn_mods` to the perks' bonus, inside the
-  same 0..10 clamp. So D'SHAWN's Cool reads one higher on STATS (`5 · 6 with gear`)
-  with a Hushcan on the Ratchet he wears.
+  same 0..10 clamp. Vex's Cool reads one higher on STATS (`5 · 6 with gear`) with a
+  Hushcan on the Ratchet Vex wears. D'SHAWN's maxed talents already hold his Cool and
+  Reflex at 10, so on him neither piece moves a number; Jeffrey asked for nothing to
+  be noticed yet, so the clamp stays and the effect is tested on Vex.
 
 ### The Ratchet's drawing (`strata-zero`)
 
@@ -149,11 +156,17 @@ from socket kinds, never from piece names.
   item-look case is one generic arm, no gun names in the window.
 - `m` opens modding on the Ratchet exactly as on the deck (the copy has sockets, the
   item has a drawing, there is a host). Title ` MODDING · RATCHET SMG `.
+- **Moving between the sockets** keeps the shared `step` rule. On the gun RAIL lies
+  far left of MUZZLE and a little up, so ←/→ move between them and ↑/↓ stay put; the
+  rule does not change (it would move the deck's approved pointer).
 - **The tray filter.** Not choosing: the pack's hardware that fits any socket of the
   item (unchanged). While choosing for a socket: only the pack's hardware whose
-  `fits` is that socket's kind; EMPTY first on a filled socket as today. With nothing
-  of that kind in the pack, space on the socket opens nothing (as an empty tray does
-  today) and the tray row reads `nothing in your pack fits`.
+  `fits` is that socket's kind; EMPTY first on a filled socket as today.
+- **Space on an empty socket with nothing of its kind in the pack** opens nothing and
+  says so in the status row, dim, from the kind: `no muzzle hardware in your pack`
+  (`no {takes} in your pack`). That happens on the gun when the pack holds only rail
+  hardware; the not-choosing tray still shows that rail piece. `nothing in your pack
+  fits` stays what the tray row reads when nothing fits any socket of the item.
 - The readout and status read as today, from the socket's name and kind and the
   piece's name and mods: `SOCKET MUZZLE ▸ empty · takes muzzle hardware`, `HUSHCAN ▸
   socket MUZZLE · cool +1`, `Hushcan fitted · socket MUZZLE`.
@@ -205,9 +218,9 @@ Nothing new to build; they are generic and the tests prove it on the gun: GEAR s
   sockets, the pieces with their numbers. Validation refuses: sockets of the wrong
   kind for the drawing's place, more sockets than places, sockets with no drawing,
   hardware whose `fits` is not its look's kind, a `look` on a deck or on hardware.
-- **Effects**: Cool is unchanged with the Hushcan in the pack; +1 with it on the worn
-  Ratchet; +0 with it on a Ratchet in the pack; the clamp at 10 holds; Reflex +1 with
-  the Redeye; trace cut and deck power are unchanged by weapon hardware, and every
+- **Effects** (on Vex's start): Cool is unchanged with the Hushcan in the pack; +1
+  with it on the worn Ratchet; +0 with it on a Ratchet in the pack; the clamp at 10
+  holds (D'SHAWN stays at 10); Reflex +1 with the Redeye; trace cut and deck power are unchanged by weapon hardware, and every
   existing deck-mod test still passes.
 - **Copies**: Vex's start and D'SHAWN wear the Ratchet as a copy with two empty
   sockets; D'SHAWN's pack holds a Hushcan and a Redeye sight.
@@ -222,7 +235,9 @@ Nothing new to build; they are generic and the tests prove it on the gun: GEAR s
   close`; `m` switches to modding and the title says so; the stops are MUZZLE then
   RAIL and the arrows move between them; the readout on an empty MUZZLE reads `takes
   muzzle hardware`; choosing for MUZZLE offers only the Hushcan and for RAIL only the
-  Redeye; fitting each and the status line; on the deck the tray still offers its
+  Redeye; fitting each and the status line names the socket (`· socket MUZZLE`); with
+  only a Redeye in the pack, space on an empty MUZZLE opens nothing and the status
+  reads `no muzzle hardware in your pack`; on the deck the tray still offers its
   three pieces (and no weapon hardware); the grey covers the gun but the socket
   rectangles.
 - **Large blueprints**: the Hushcan draws 72×14 and the Redeye 52×18 without clipping
@@ -241,3 +256,9 @@ Nothing new to build; they are generic and the tests prove it on the gun: GEAR s
   deck nor hardware.
 - The Redeye's large blueprint is 52×18, the deck hardware's size; the Hushcan's
   72×14.
+- D'SHAWN's Cool and Reflex are capped by his talents, so the pieces show no number
+  on him; the clamp is kept (from the builder check).
+- ↑/↓ do not move between the gun's two sockets under the shared pointer rule; ←/→
+  do (from the builder check).
+- With only the other kind in the pack, space says `no muzzle hardware in your pack`
+  (from the builder check).
