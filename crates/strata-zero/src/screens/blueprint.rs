@@ -29,7 +29,7 @@ const MIN_H: u16 = 28;
 /// The screen under the window that shows round it: columns, rows.
 const MARGIN: (u16, u16) = (2, 1);
 /// What an item with no drawing yet shows.
-const MISSING: &str = "MISSING BLUEPRINT";
+pub(crate) const MISSING: &str = "MISSING BLUEPRINT";
 
 pub struct Blueprint {
     /// The item's name, for the title on the top edge.
@@ -93,34 +93,63 @@ impl Inspect {
     }
 }
 
+/// What the window shows for an item: a deck the content knows as its look, hardware
+/// as itself, any other item with a look as that, anything else nothing.
+fn inspect_for(st: &AppState, item: &ItemId, equipped: bool, copy: Option<CopyId>) -> Inspect {
+    match st.content.item(item) {
+        Some(i) if i.deck.is_some() => {
+            let jacked = equipped && st.character.equipped(Slot::Deck) == Some(item);
+            Inspect::Deck(DeckTab::for_deck(st.tick, item.clone(), jacked, copy, st))
+        }
+        Some(i) => match (&i.hardware, i.look) {
+            (Some(h), _) => Inspect::Hardware(HardwareArt {
+                look: h.look,
+                mods: h.mods.clone(),
+            }),
+            (None, Some(look)) => Inspect::Drawn(look),
+            (None, None) => Inspect::Missing,
+        },
+        None => Inspect::Missing,
+    }
+}
+
+/// Where the item is fitted from: worn only when the slot still wears it, else the
+/// copy in the pack.
+fn host_for(st: &AppState, item: &ItemId, equipped: bool, copy: Option<CopyId>) -> Option<Host> {
+    let worn = st
+        .content
+        .item(item)
+        .and_then(|i| i.slot)
+        .filter(|s| equipped && st.character.equipped(*s) == Some(item));
+    worn.map(Host::Worn).or(copy.map(Host::Pack))
+}
+
+/// The drawing the window would show for the same arguments, with the deck unplugged
+/// so no cable runs out of it. `None` when the item has no drawing.
+pub fn preview_art(
+    st: &AppState,
+    item: &ItemId,
+    equipped: bool,
+    copy: Option<CopyId>,
+) -> Option<Box<dyn Art>> {
+    let inspect = inspect_for(st, item, equipped, copy);
+    let host = host_for(st, item, equipped, copy);
+    match &inspect {
+        Inspect::Deck(tab) => Some(Box::new(tab.art(st).unplugged())),
+        _ => inspect.art(st, host, item),
+    }
+}
+
 impl Blueprint {
-    /// The window on `item`, `equipped` when Inspect was on the item worn (GEAR) rather
-    /// than one in the pack, `copy` the copy it was on when the item is held per copy.
-    /// A deck the content knows draws as its look, hardware as itself, any other item
-    /// with a look as that; anything else has no blueprint yet. It opens in inspect.
+    /// The window on `item`, `equipped` when Inspect was on the item worn (the rack)
+    /// rather than one in the pack, `copy` the copy it was on when the item is held per
+    /// copy. A deck the content knows draws as its look, hardware as itself, any other
+    /// item with a look as that; anything else has no blueprint yet. It opens in inspect.
     pub fn open(st: &AppState, item: ItemId, equipped: bool, copy: Option<CopyId>) -> Blueprint {
         let known = st.content.item(&item);
         let title_name = known.map_or_else(|| item.to_string(), |i| i.name.clone());
-        let inspect = match known {
-            Some(i) if i.deck.is_some() => {
-                let jacked = equipped && st.character.equipped(Slot::Deck) == Some(&item);
-                Inspect::Deck(DeckTab::for_deck(st.tick, item.clone(), jacked, copy, st))
-            }
-            Some(i) => match (&i.hardware, i.look) {
-                (Some(h), _) => Inspect::Hardware(HardwareArt {
-                    look: h.look,
-                    mods: h.mods.clone(),
-                }),
-                (None, Some(look)) => Inspect::Drawn(look),
-                (None, None) => Inspect::Missing,
-            },
-            None => Inspect::Missing,
-        };
-        // Worn only when the slot still wears it; else the copy in the pack.
-        let worn = known
-            .and_then(|i| i.slot)
-            .filter(|s| equipped && st.character.equipped(*s) == Some(&item));
-        let host = worn.map(Host::Worn).or(copy.map(Host::Pack));
+        let inspect = inspect_for(st, &item, equipped, copy);
+        let host = host_for(st, &item, equipped, copy);
         Blueprint {
             title_name,
             inspect,
@@ -873,7 +902,7 @@ mod tests {
         })
     }
 
-    /// D'SHAWN's jacked deck, inspected from GEAR: the rebuilt one, with two sockets.
+    /// D'SHAWN's jacked deck, inspected from the rack: the rebuilt one, with two sockets.
     fn dshawns_deck(st: &mut AppState) -> Blueprint {
         st.character = Character::debug_runner(&st.content);
         st.tick = 40;
@@ -1576,7 +1605,7 @@ mod tests {
         art.origin(body_of(w, h))
     }
 
-    /// Vex's Ratchet, inspected from GEAR.
+    /// Vex's Ratchet, inspected from the rack.
     fn vexs_gun(st: &AppState) -> Blueprint {
         let copy = st.character.worn_copy(Slot::Primary).map(|k| k.id);
         Blueprint::open(st, id("ratchet_smg"), true, copy)
@@ -1843,5 +1872,66 @@ mod tests {
         assert_eq!(last(&st), Some(crate::actions::JACKED_IN));
         assert!(last_is_warning(&st));
         assert_eq!(st.character, before);
+    }
+
+    #[test]
+    fn the_preview_draws_what_the_window_draws() {
+        let mut st = state();
+        st.character = Character::debug_runner(&st.content);
+        for (socket, piece) in [(0, "hushcan"), (1, "redeye")] {
+            let piece = pack_copy(&st, piece);
+            let host = Host::Worn(Slot::Primary);
+            perform(
+                &mut st,
+                Action::Fit {
+                    host,
+                    socket,
+                    piece,
+                },
+            )
+            .unwrap();
+        }
+        let shape = |art: Option<Box<dyn Art>>| {
+            let art = art.expect("a drawing");
+            (art.extent(), crate::ui::preview::half(art.as_ref()).cells())
+        };
+        let gun = st.character.worn_copy(Slot::Primary).map(|k| k.id);
+        let got = shape(preview_art(&st, &id("ratchet_smg"), true, gun));
+        assert_eq!(got, ((0, 0, 88, 15), (44, 8)));
+        let cold = Some(pack_copy(&st, "coldfin_1"));
+        let got = shape(preview_art(&st, &id("coldfin_1"), false, cold));
+        assert_eq!(got, ((0, 0, 52, 18), (26, 9)));
+        let got = shape(preview_art(&st, &id("pawnshop_deck"), false, None));
+        assert_eq!(got, ((0, 0, 84, 22), (42, 11)));
+        assert!(preview_art(&st, &id("scrap_servo"), false, None).is_none());
+    }
+
+    #[test]
+    fn the_decks_preview_takes_its_cradles_and_not_its_cables() {
+        let mut st = state();
+        st.character = Character::debug_runner(&st.content);
+        let copy = st.character.worn_copy(Slot::Deck).map(|k| k.id);
+        let art = preview_art(&st, &id("rebuilt_deck"), true, copy).unwrap();
+        assert_eq!(art.extent(), (-4, 0, 92, 22));
+        assert_eq!(crate::ui::preview::half(art.as_ref()).cells(), (46, 11));
+        let whole = Rect::new(0, 0, 140, 30);
+        let mut buf = Buffer::empty(whole);
+        art.draw((30, 4), whole, &mut buf);
+        let outside = |buf: &Buffer| {
+            (0..30).any(|y| {
+                (0..140)
+                    .filter(|x| *x < 26 || *x > 117)
+                    .any(|x| buf[(x, y)] != Cell::default())
+            })
+        };
+        assert!(
+            !outside(&buf),
+            "the preview reaches only as far as its cradles"
+        );
+        // The window's own drawing runs the player's cable out to the left.
+        let tab = DeckTab::for_deck(st.tick, id("rebuilt_deck"), true, copy, &st);
+        let mut buf = Buffer::empty(whole);
+        tab.art(&st).draw((30, 4), whole, &mut buf);
+        assert!(outside(&buf), "the worn deck's cable is drawn");
     }
 }

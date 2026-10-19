@@ -15,6 +15,13 @@ pub trait Art {
     /// The drawing's width and height.
     fn size(&self) -> (u16, u16);
 
+    /// The x, y, width and height the drawing covers, from its origin. Most drawings
+    /// stay inside their size, and one that reaches past it says so here.
+    fn extent(&self) -> (i32, i32, u16, u16) {
+        let (w, h) = self.size();
+        (0, 0, w, h)
+    }
+
     /// Where the drawing's origin goes in `body`: centred. Both modes draw from here,
     /// so switching never moves the item.
     fn origin(&self, body: Rect) -> (u16, u16) {
@@ -164,6 +171,17 @@ pub(crate) fn brackets(buf: &mut Buffer, r: Rect, tick: u64, clip: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::hardware::HardwareArt;
+    use game::HardwareLook;
+
+    #[test]
+    fn extent_defaults_to_the_size() {
+        let art = HardwareArt {
+            look: HardwareLook::Redeye,
+            mods: Vec::new(),
+        };
+        assert_eq!(art.extent(), (0, 0, 52, 18));
+    }
 
     #[test]
     fn brackets_pulse_and_stay_on_the_buffer() {

@@ -14,6 +14,8 @@ pub(crate) const MAGENTA: Color = Color::Rgb(255, 0, 200);
 pub(crate) const DIM: Color = Color::Rgb(160, 170, 185);
 /// Brackets, rules and other furniture: darker than labels.
 pub(crate) const FAINT: Color = Color::Rgb(120, 130, 145);
+/// Darker than FAINT: what is there but empty or out of reach.
+pub(crate) const FAINTER: Color = Color::Rgb(0x5c, 0x66, 0x73);
 pub(crate) const TEXT: Color = Color::Rgb(205, 212, 222);
 pub(crate) const CYAN_RGB: Rgb = Rgb(0, 229, 255);
 pub(crate) const MAGENTA_RGB: Rgb = Rgb(255, 0, 200);

@@ -52,7 +52,7 @@ fn header(name: impl Into<String>, glyph: Option<(char, Color)>) -> Header {
     }
 }
 
-/// What a Take row calls a stack. A copy carries the GEAR picker's marks, so two
+/// What a Take row calls a stack. A copy carries the slot picker's marks, so two
 /// copies of one item read apart.
 fn ground_name(st: &AppState, item: &game::Item, s: &game::Stack) -> String {
     let name = stack_name(&item.name, s.qty);

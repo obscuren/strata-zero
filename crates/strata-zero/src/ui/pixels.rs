@@ -21,6 +21,11 @@ impl Pixels {
         }
     }
 
+    /// The canvas's width and rows in cells.
+    pub fn cells(&self) -> (u16, u16) {
+        (self.w as u16, (self.h / 2) as u16)
+    }
+
     /// Sets one pixel; a pixel off the canvas is dropped.
     pub fn px(&mut self, x: i32, y: i32, c: Option<Color>) {
         if (0..self.w).contains(&x) && (0..self.h).contains(&y) {
