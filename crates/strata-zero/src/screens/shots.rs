@@ -276,6 +276,95 @@ fn dshawns_decks_on_their_blueprints() {
     );
 }
 
+/// D'SHAWN's rebuilt deck in the blueprint window's modding mode.
+#[test]
+#[ignore]
+fn modding_the_rebuilt_deck() {
+    let mut st = state_home();
+    st.character = game::Character::debug_runner(&st.content);
+    let map = MapScreen::walking(&mut st);
+    let mut deck = Deck::new(st.tick);
+    deck.update(&mut st, &[key(KeyCode::Char('3'))]);
+    let copy = st.character.worn_copy(game::Slot::Deck).map(|k| k.id);
+    let mut window = Blueprint::open(&st, ItemId::new("rebuilt_deck"), true, copy);
+    st.tick += 200;
+    if st.tick % 90 < 3 {
+        st.tick += 3;
+    }
+    window.update(&mut st, &[key(KeyCode::Char('m'))]);
+    for (w, h) in [(100, 30), (120, 40)] {
+        let name = format!("modding_the_rebuilt_deck_{w}x{h}");
+        shot_stack(&name, &st, &[&map, &deck, &window], (w, h));
+    }
+    // The HARDWARE tray open on the left socket.
+    window.update(&mut st, &[key(KeyCode::Char('l')), key(KeyCode::Char(' '))]);
+    for (w, h) in [(100, 30), (120, 40)] {
+        let name = format!("modding_the_rebuilt_deck_tray_{w}x{h}");
+        shot_stack(&name, &st, &[&map, &deck, &window], (w, h));
+    }
+    // A Coldfin vII fitted on the left, a Sidecar on the right.
+    for (socket, item) in [(0, "coldfin_2"), (1, "sidecar")] {
+        let piece = st
+            .character
+            .inventory
+            .iter()
+            .find(|s| s.item == ItemId::new(item))
+            .and_then(|s| s.copy_id())
+            .unwrap();
+        let fit = game::Action::Fit {
+            host: game::Host::Worn(game::Slot::Deck),
+            socket,
+            piece,
+        };
+        crate::actions::perform(&mut st, fit).unwrap();
+    }
+    window.update(&mut st, &[key(KeyCode::Esc)]);
+    for (w, h) in [(100, 30), (120, 40)] {
+        let name = format!("modding_the_rebuilt_deck_fitted_{w}x{h}");
+        shot_stack(&name, &st, &[&map, &deck, &window], (w, h));
+    }
+}
+
+/// Each piece of deck hardware on its blueprint.
+#[test]
+#[ignore]
+fn hardware_blueprints() {
+    let mut st = state_home();
+    st.character = game::Character::debug_runner(&st.content);
+    for item in ["coldfin_1", "coldfin_2", "sidecar"] {
+        let name = format!("hardware_{item}");
+        blueprint_shots(&mut st, '4', item, &name, &[(100, 30)]);
+    }
+}
+
+/// GEAR and INVENTORY with a Coldfin vII fitted: the marks after the names.
+#[test]
+#[ignore]
+fn gear_and_inventory_marks() {
+    let mut st = state_home();
+    st.character = game::Character::debug_runner(&st.content);
+    let piece = st
+        .character
+        .inventory
+        .iter()
+        .find(|s| s.item == ItemId::new("coldfin_2"))
+        .and_then(|s| s.copy_id())
+        .unwrap();
+    let fit = game::Action::Fit {
+        host: game::Host::Worn(game::Slot::Deck),
+        socket: 0,
+        piece,
+    };
+    crate::actions::perform(&mut st, fit).unwrap();
+    let map = MapScreen::walking(&mut st);
+    st.tick += 200;
+    for (tab, name) in [('3', "gear_marks"), ('4', "inventory_marks")] {
+        let mut deck = Deck::new(st.tick);
+        deck.update(&mut st, &[key(KeyCode::Char(tab))]);
+        shot_stack(&format!("{name}_100x30"), &st, &[&map, &deck], (100, 30));
+    }
+}
+
 #[test]
 #[ignore]
 fn a_missing_blueprint() {
