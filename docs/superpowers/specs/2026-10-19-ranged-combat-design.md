@@ -208,8 +208,10 @@ On the engagement's pace (`PACE_TICKS`), through `foe_step`, the twin of
 
 1. Stunned: the stun counts down one, the turn passes (`goon · stunned`).
 2. Look. Idle and seeing you → Hunting.
-3. Hunting with AP, you in `range` of its weapon with a clear line of fire: **fire**
-   (one round, the weapon's `rounds`), spend the AP.
+3. Hunting, you in `range` of its weapon with a clear line of fire: **fire**
+   (one round, the weapon's `rounds`), spend the AP; with no AP left it holds
+   where it stands (Jeffrey, after playing: "if he's in range there's no point
+   in moving in").
 4. Else with moves: one A* step toward `seen` over walkable tiles not held by you
    or another foe; look again after the step.
 5. Nothing to do: the turn ends. A foe with both pools spent ends its turn as a
@@ -239,6 +241,10 @@ pub struct Engagement { pub place: Place, /* was building: BuildingId */ ... }
   foe hunts, else `still hunted`. The console's `engage` / `calm` work on the street.
 - `spend_ap`, `spend_move`, `stay`, `phase`, `aim_cap`, `your_turn` are place-blind
   already and stay so.
+- **Your turn ends on its own** `AUTO_END_TICKS = 20` ticks after your last action
+  point goes (`Engagement.spent_at`), on the street and in the net alike, so the
+  numbers can be read before the board moves on (Jeffrey, after playing). `.`
+  still ends it at once.
 - Jacking in while engaged on the street is refused: `not with a gun on you`.
   Entering a building door while engaged: refused, `not now`. Saving does not
   touch an engagement (it never did in the net either).

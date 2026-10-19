@@ -242,11 +242,17 @@ pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate
     let Some(city) = st.city.as_ref() else {
         return Step::Nothing;
     };
-    let in_reach =
-        foe.pos.chebyshev(me) <= weapon_range(st, &foe) && line_clear(city, foe.place, foe.pos, me);
-    if can_hit && sees(city, &foe, me) && in_reach {
-        crate::combat::fire_at_you(st, i);
-        return Step::Hit;
+    let in_reach = foe.pos.chebyshev(me) <= weapon_range(st, &foe)
+        && line_clear(city, foe.place, foe.pos, me)
+        && sees(city, &foe, me);
+    // In reach it fires, and with its shots gone it holds where it stands: no
+    // point closing in on what it can already hit.
+    if in_reach {
+        if can_hit {
+            crate::combat::fire_at_you(st, i);
+            return Step::Hit;
+        }
+        return Step::Nothing;
     }
     if !can_move {
         return Step::Nothing;
@@ -542,12 +548,23 @@ mod tests {
         settle(&mut st);
         assert_eq!(st.foes[0].pos, Pos::new(15, 8));
         assert!(!logged(&st, "fires"));
-        // Next turn: three more steps, then it fires.
+        // Next turn: one step brings you into its reach; it fires and holds there.
         crate::net::end_turn(&mut st);
         settle(&mut st);
-        assert_eq!(st.foes[0].pos, Pos::new(12, 8));
+        assert_eq!(st.foes[0].pos, Pos::new(14, 8));
         assert!(logged(&st, "goon fires"), "{:?}", st.log.latest());
         assert!(crate::net::your_turn(&st));
+    }
+
+    #[test]
+    fn a_foe_in_reach_fires_and_does_not_close_in() {
+        let mut st = testutil::lot(Pos::new(12, 8));
+        hunting_from(&mut st, Pos::new(6, 8));
+        crate::net::engage(&mut st, STREET, true);
+        crate::net::end_turn(&mut st);
+        settle(&mut st);
+        assert!(logged(&st, "goon fires"), "{:?}", st.log.latest());
+        assert_eq!(st.foes[0].pos, Pos::new(12, 8), "six tiles is close enough");
     }
 
     #[test]

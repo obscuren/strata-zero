@@ -2274,6 +2274,10 @@ impl Screen for MapScreen {
                 crate::net::engage(st, place, false);
             }
         }
+        // Your last action point gone: the turn passes on its own a beat later.
+        if self.mode == Mode::Walk {
+            crate::net::auto_end(st);
+        }
         // The fire cursor: opens on the nearest foe as your act half opens, goes
         // when the half does.
         let phase = crate::net::phase(st).filter(|_| crate::net::engaged_on_foot(st));
@@ -2482,9 +2486,12 @@ impl Screen for MapScreen {
         }
         // The fire cursor: the line to it, the foe under it inverted, the readout.
         let fire_line: Vec<Pos> = match (self.target, st.player.as_ref()) {
+            // Whoever stands on the way is drawn over the tether, not under it.
             (Some(t), Some(p)) if self.firing(st) => citygen::pathing::bresenham(p.pos, t)
                 .into_iter()
-                .filter(|q| *q != p.pos && *q != t)
+                .filter(|q| {
+                    *q != p.pos && *q != t && crate::foes::foe_at(st, self.place, *q).is_none()
+                })
                 .collect(),
             _ => Vec::new(),
         };
@@ -2964,6 +2971,26 @@ mod tests {
     }
 
     #[test]
+    fn the_line_of_fire_leaves_a_foe_in_between_drawn() {
+        let (mut st, mut s) = lot(Pos::new(14, 8));
+        st.foes.push(crate::foes::Foe::goon(
+            Place::Stratum(StratumKind::Street),
+            Pos::new(9, 8),
+        ));
+        s.update(&mut st, &[]);
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        s.update(&mut st, &[key(KeyCode::Char('t'))]);
+        assert_eq!(s.target, Some(Pos::new(14, 8)));
+        let buf = draw_buffer(&s, &st, 100, 30);
+        assert_eq!(
+            cell_of(&s, &st, &buf, Pos::new(9, 8)),
+            ("@".to_string(), Color::Rgb(255, 80, 80)),
+            "the nearer goon stands over the tether"
+        );
+        assert_eq!(cell_of(&s, &st, &buf, Pos::new(10, 8)).0, "·");
+    }
+
+    #[test]
     fn tab_cycles_foes_nearest_first() {
         let (mut st, mut s) = lot(Pos::new(14, 8));
         st.foes.push(crate::foes::Foe::goon(
@@ -2982,6 +3009,22 @@ mod tests {
             s.update(&mut st, &[key(KeyCode::Tab)]),
             ScreenCmd::Push { .. }
         ));
+    }
+
+    #[test]
+    fn your_turn_ends_on_its_own_when_the_ap_is_spent() {
+        let (mut st, mut s) = act_half(Pos::new(14, 8));
+        st.force_hit = Some(true);
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(st.net.engaged.as_ref().unwrap().ap, 0);
+        assert!(crate::net::your_turn(&st), "a beat to read the numbers");
+        st.tick += crate::net::AUTO_END_TICKS - 1;
+        s.update(&mut st, &[]);
+        assert!(crate::net::your_turn(&st));
+        st.tick += 2;
+        s.update(&mut st, &[]);
+        assert!(!crate::net::your_turn(&st), "the turn passed on its own");
     }
 
     #[test]
@@ -10527,6 +10570,7 @@ mod tests {
         });
         st.net.engaged = Some(crate::net::Engagement {
             place: Place::Construct(a),
+            spent_at: None,
             round: 1,
             order: vec![crate::net::Actor::You],
             turn: 0,

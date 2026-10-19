@@ -90,7 +90,12 @@ pub struct Engagement {
     pub manual: bool,
     /// The tick the current ICE action started, for the pace.
     pub acting_since: u64,
+    /// The tick your last action point went; the turn ends on its own a beat later.
+    pub spent_at: Option<u64>,
 }
+
+/// Ticks after your last action point before your turn ends on its own.
+pub const AUTO_END_TICKS: u64 = 20;
 
 impl Engagement {
     pub fn actor(&self) -> Actor {
@@ -1523,6 +1528,7 @@ pub fn engage(st: &mut AppState, place: Place, manual: bool) {
         phase: Phase::Move,
         manual,
         acting_since: st.clock_tick(),
+        spent_at: None,
     });
     let line = if manual {
         "engaged".to_string()
@@ -1639,6 +1645,7 @@ pub fn your_turn(st: &AppState) -> bool {
 
 /// One action point of yours; free in calm.
 pub fn spend_ap(st: &mut AppState) -> Result<(), String> {
+    let now = st.clock_tick();
     let Some(e) = st.net.engaged.as_mut() else {
         return Ok(());
     };
@@ -1652,7 +1659,24 @@ pub fn spend_ap(st: &mut AppState) -> Result<(), String> {
         return Err("no AP left".to_string());
     }
     e.ap -= 1;
+    if e.ap == 0 {
+        e.spent_at = Some(now);
+    }
     Ok(())
+}
+
+/// From the frame loop: your turn ends on its own a beat after the last action
+/// point went, so the numbers can be read before the board moves on.
+pub fn auto_end(st: &mut AppState) {
+    let now = st.clock_tick();
+    let due = st.net.engaged.as_ref().is_some_and(|e| {
+        e.actor() == Actor::You
+            && e.ap == 0
+            && e.spent_at.is_some_and(|at| now >= at + AUTO_END_TICKS)
+    });
+    if due {
+        end_turn(st);
+    }
 }
 
 /// One tile of yours; free in calm.
@@ -1723,6 +1747,7 @@ pub fn end_turn(st: &mut AppState) {
         e.ap = ap;
         e.phase = Phase::Move;
         e.acting_since = now;
+        e.spent_at = None;
     }
     start_turn(st);
 }
