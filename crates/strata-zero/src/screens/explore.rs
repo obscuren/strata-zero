@@ -3061,7 +3061,7 @@ mod tests {
         s.update(&mut st, &[key(KeyCode::Char(' '))]);
         assert_eq!(st.net.engaged.as_ref().unwrap().ap, 1);
         assert!(logged(&st, "you fire · goon 4 · 4 · 4"), "{:?}", last(&st));
-        assert_eq!(st.fx.len(), 12);
+        assert_eq!(st.fx.len(), 15, "five shapes a round");
         let text = draw_screen(&s, &st, 100, 30);
         assert!(text.contains("AP ●○ 1/2"), "{text}");
     }

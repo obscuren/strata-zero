@@ -27,6 +27,8 @@ pub const IMPACT_TICKS: u64 = 3;
 pub const NUMBER_TICKS: u64 = 14;
 /// Ticks a number takes to rise one row.
 pub const NUMBER_RISE: u64 = 4;
+/// Ticks a spent casing lies on the ground before it is gone.
+pub const CASING_TICKS: u64 = 60;
 
 /// Ticks a tracer takes from the muzzle to its impact: `speed` tiles a tick, at
 /// least one tick.
@@ -161,6 +163,7 @@ impl Overlay for FxOverlay<'_> {
                 Fx::Spark => spark(inst, elapsed, origin, area, buf),
                 Fx::Tear => tear(inst, tick, origin, area, buf),
                 Fx::Number { tag } => number(inst, tag, elapsed, origin, area, buf),
+                Fx::Casing => casing(inst, elapsed, origin, area, buf),
                 Fx::Mark { colour, .. } => mark(
                     inst,
                     Rgb(colour.0, colour.1, colour.2),
@@ -709,6 +712,46 @@ fn number(inst: &FxInstance, tag: bool, elapsed: u64, origin: Pos, area: Rect, b
     }
 }
 
+/// A spent casing: out of the muzzle to the shooter's side on the first tick, a
+/// hop of a cell or two, then lying there as brass that dims to the ground's tone.
+fn casing(inst: &FxInstance, elapsed: u64, origin: Pos, area: Rect, buf: &mut Buffer) {
+    let Some(target) = inst.targets.first().copied() else {
+        return;
+    };
+    if elapsed >= CASING_TICKS {
+        return;
+    }
+    let from = inst.origin;
+    let dir = ((target.x - from.x).signum(), (target.y - from.y).signum());
+    let (dir, side) = if dir == (0, 0) {
+        ((1, 0), (0, -1))
+    } else {
+        (dir, (dir.1, -dir.0))
+    };
+    let h = hash64(inst.started, hash64(from.x as u64, from.y as u64));
+    let hop = 1 + (h % 2) as i32;
+    let back = ((h >> 1) % 2) as i32;
+    let out = from.offset(side.0, side.1);
+    let landing = from.offset(side.0 * hop - dir.0 * back, side.1 * hop - dir.1 * back);
+    let brass = Rgb(240, 200, 90);
+    match elapsed {
+        0 => paint(origin, area, buf, out, |c| {
+            c.set_char('\'').set_fg(brass.to_color());
+        }),
+        1 => paint(origin, area, buf, landing, |c| {
+            c.set_char('\'').set_fg(brass.to_color());
+        }),
+        _ => {
+            // Lying there: brass at first, the ground's tone by the end.
+            let t = (elapsed - 2) as f32 / (CASING_TICKS - 2) as f32;
+            let tint = Rgb(200, 160, 60).mix(Rgb(70, 60, 40), t);
+            paint(origin, area, buf, landing, |c| {
+                c.set_char(',').set_fg(tint.to_color());
+            });
+        }
+    }
+}
+
 /// A pulsing mark on every target tile, whatever its visibility.
 fn mark(inst: &FxInstance, colour: Rgb, origin: Pos, area: Rect, tick: u64, buf: &mut Buffer) {
     let glow = colour.scale(0.55 + 0.45 * pulse(tick, 20)).to_color();
@@ -972,6 +1015,37 @@ mod tests {
             at(&plain, 44, 28).2,
             "two rows up is dark"
         );
+    }
+
+    #[test]
+    fn a_casing_pops_out_beside_the_muzzle_and_lies_there_dimming() {
+        let (c, s) = (city(), StylePack::load().unwrap());
+        let inst = shot(Fx::Casing, FIRER, TARGET, "");
+        // Shot along +x: the casing flies out above the shooter.
+        let (b, _) = drawn(&c, &s, &inst, 100);
+        assert_eq!(at(&b, 40, 29).0, "'");
+        assert_eq!(at(&b, 40, 29).1, rgb((240, 200, 90)));
+        // Landed: a `,` within two cells above and one behind, where it stays.
+        let (b, plain) = drawn(&c, &s, &inst, 102);
+        let landed: Vec<(i32, i32)> = (38..=40)
+            .flat_map(|x| (28..=29).map(move |y| (x, y)))
+            .filter(|(x, y)| at(&b, *x, *y).0 == "," && at(&plain, *x, *y).0 != ",")
+            .collect();
+        assert_eq!(landed.len(), 1, "{landed:?}");
+        let (lx, ly) = landed[0];
+        assert_eq!(at(&b, lx, ly).1, rgb((200, 160, 60)));
+        let (b, _) = drawn(&c, &s, &inst, 100 + CASING_TICKS - 1);
+        assert_eq!(at(&b, lx, ly).0, ",");
+        let Color::Rgb(r, ..) = at(&b, lx, ly).1 else {
+            panic!()
+        };
+        assert!(r < 120, "faded to the ground's tone: {r}");
+        let (b, plain) = drawn(&c, &s, &inst, 100 + CASING_TICKS);
+        assert_eq!(b, plain, "gone");
+        // Shot straight down: it flies out to the right.
+        let inst = shot(Fx::Casing, FIRER, Pos::new(40, 40), "");
+        let (b, _) = drawn(&c, &s, &inst, 100);
+        assert_eq!(at(&b, 41, 30).0, "'");
     }
 
     #[test]

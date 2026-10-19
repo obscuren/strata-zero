@@ -574,6 +574,9 @@ pub enum Fx {
     Tear,
     /// The damage lifting off the target; `tag` draws it white on a red field.
     Number { tag: bool },
+    /// A spent casing out of the muzzle: it hops a cell or two to the side and lies
+    /// there, dimming.
+    Casing,
 }
 
 impl Fx {
@@ -589,7 +592,7 @@ impl Fx {
 
     /// Any shape a shot is made of; only weapons and strike abilities play them.
     pub fn is_shot(&self) -> bool {
-        self.is_flight() || self.is_impact() || matches!(self, Fx::Flash { .. })
+        self.is_flight() || self.is_impact() || matches!(self, Fx::Flash { .. } | Fx::Casing)
     }
 }
 

@@ -122,7 +122,7 @@ impl FxInstance {
     /// The tick from which the instance draws nothing.
     pub fn until(&self) -> u64 {
         use crate::render::fx::{
-            FLASH_TICKS, IMPACT_TICKS, NUMBER_TICKS, STREAK_TICKS, tracer_ticks,
+            CASING_TICKS, FLASH_TICKS, IMPACT_TICKS, NUMBER_TICKS, STREAK_TICKS, tracer_ticks,
         };
         match self.fx {
             game::Fx::Kick(ticks) => self.started + ticks,
@@ -143,6 +143,7 @@ impl FxInstance {
             game::Fx::Flash { .. } => self.started + FLASH_TICKS,
             game::Fx::Chips | game::Fx::Spark | game::Fx::Tear => self.started + IMPACT_TICKS,
             game::Fx::Number { .. } => self.started + NUMBER_TICKS,
+            game::Fx::Casing => self.started + CASING_TICKS,
         }
     }
 }

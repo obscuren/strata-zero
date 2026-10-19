@@ -470,6 +470,7 @@ mod tests {
                     format!(
                         "Tracer {{ colour: (255, 170, 40), speed: 3 }}@{t}→Pos {{ x: 14, y: 8 }}"
                     ),
+                    format!("Casing@{t}→Pos {{ x: 14, y: 8 }}"),
                     format!("Chips@{}→Pos {{ x: 14, y: 8 }}", t + 3),
                     format!(
                         "Number {{ tag: false }}@{}→Pos {{ x: {}, y: 8 }}",
@@ -681,6 +682,7 @@ mod tests {
                 [
                     Fx::Flash { big: false },
                     Fx::Tracer { .. },
+                    Fx::Casing,
                     Fx::Chips,
                     Fx::Number { .. }
                 ]
