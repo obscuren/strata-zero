@@ -47,6 +47,8 @@ pub enum ContentError {
     TemplateInvalid { id: String, why: String },
     #[error("talent `{id}`: {why}")]
     TalentInvalid { id: String, why: String },
+    #[error("recipe `{id}`: {why}")]
+    RecipeInvalid { id: String, why: String },
     #[error("program `{id}`: {why}")]
     ProgramInvalid { id: String, why: String },
     #[error("deck `{id}`: {why}")]
@@ -448,6 +450,21 @@ impl Content {
                 need_item(format!("recipe {}", r.id), id)?;
             }
             need_item(format!("recipe {} output", r.id), &r.output.0)?;
+            let bad = |why: String| ContentError::RecipeInvalid {
+                id: r.id.0.clone(),
+                why,
+            };
+            if r.steps.len() > 4 {
+                return Err(bad("at most four steps".into()));
+            }
+            if let Some(s) = r.steps.iter().find(|s| s.chars().count() > 16) {
+                return Err(bad(format!("step `{s}` is longer than 16 characters")));
+            }
+            for (id, _) in &r.inputs {
+                if self.item(id).is_some_and(Item::per_copy) {
+                    return Err(bad(format!("input `{id}` is held per copy")));
+                }
+            }
         }
         self.validate_creation(&need_item, &need_skill, &need_ability)?;
         Ok(())
@@ -712,6 +729,49 @@ impl Boon {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_ratchet_builds_from_five_parts_and_older_recipes_have_steps() {
+        let c = Content::load().unwrap();
+        let r = c.recipe(&RecipeId::new("ratchet_build")).unwrap();
+        assert_eq!(r.skill, SkillId::new("scrapcraft"));
+        let parts = [
+            "ratchet_receiver",
+            "ratchet_stock",
+            "ratchet_barrel",
+            "ratchet_mag",
+            "ratchet_trigger",
+        ];
+        assert_eq!(r.inputs, parts.map(|p| (ItemId::new(p), 1)).to_vec());
+        assert_eq!(r.output, (ItemId::new("ratchet_smg"), 1));
+        assert!(r.steps.is_empty());
+        for r in c.recipes.iter().filter(|r| r.id.0 != "ratchet_build") {
+            assert!((2..=4).contains(&r.steps.len()), "{}", r.id);
+        }
+    }
+
+    #[test]
+    fn validate_refuses_bad_recipes() {
+        let good = Content::load().unwrap();
+        let mut c = good.clone();
+        c.recipes[0].steps = vec!["a".into(); 5];
+        assert!(matches!(
+            c.validate(),
+            Err(ContentError::RecipeInvalid { .. })
+        ));
+        let mut c = good.clone();
+        c.recipes[0].steps = vec!["x".repeat(17)];
+        assert!(matches!(
+            c.validate(),
+            Err(ContentError::RecipeInvalid { .. })
+        ));
+        let mut c = good.clone();
+        c.recipes[0].inputs[0].0 = ItemId::new("ratchet_smg");
+        assert!(matches!(
+            c.validate(),
+            Err(ContentError::RecipeInvalid { .. })
+        ));
+    }
 
     #[test]
     fn embedded_content_parses_and_covers_the_kit() {

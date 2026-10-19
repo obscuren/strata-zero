@@ -639,6 +639,10 @@ pub struct Recipe {
     pub inputs: Vec<(ItemId, u32)>,
     pub output: (ItemId, u32),
     pub desc: String,
+    /// What the bench shows while it builds: two to four short lines, or none for a
+    /// recipe the sheet draws itself.
+    #[serde(default)]
+    pub steps: Vec<String>,
 }
 
 /// Where you were made. Cheap stats cost one less per point, dear ones one more.

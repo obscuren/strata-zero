@@ -32,6 +32,7 @@ pub fn handles_items(action: &Action) -> bool {
             | Action::Slot { .. }
             | Action::Fit { .. }
             | Action::Unfit { .. }
+            | Action::Build(_)
             | Action::Stick { .. }
             | Action::Peel { .. }
     )
@@ -215,7 +216,7 @@ mod tests {
     use crate::render::Visibility;
     use crate::walker::Player;
     use citygen::{City, GenParams, Generator, SizePreset};
-    use game::{AbilityId, CopyId, Host, ItemId, Slot};
+    use game::{AbilityId, CopyId, Host, ItemId, RecipeId, Slot};
 
     fn city() -> City {
         Generator::run(GenParams {
@@ -258,6 +259,7 @@ mod tests {
                 id: ItemId::new("attack"),
                 at: 0,
             },
+            Action::Build(RecipeId::new("wire_shiv")),
             Action::EquipCopy(CopyId(1)),
             Action::DropCopy(CopyId(1)),
             Action::TakeCopy(CopyId(1)),

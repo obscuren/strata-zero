@@ -65,6 +65,8 @@ pub enum Action {
         host: Host,
         socket: usize,
     },
+    /// Builds a recipe at the bench: its inputs leave the pack, its output arrives.
+    Build(RecipeId),
     /// Sticks one of a sticker from the pack on the host's drawing, at its top-left
     /// cell as turned. Where it may go is the drawing's business, not this.
     Stick {
@@ -415,6 +417,38 @@ pub fn apply(
             }
             done(message)
         }
+        Action::Build(id) => {
+            // Every refusal comes before the first change.
+            let r = c
+                .recipe(&id)
+                .ok_or_else(|| format!("unknown recipe {id}"))?;
+            if !ch.has_workbench(c) {
+                return Err("no workbench".to_string());
+            }
+            if !ch.has_skill(&r.skill) {
+                let skill = c
+                    .skill(&r.skill)
+                    .map_or_else(|| r.skill.to_string(), |s| s.name.clone());
+                return Err(format!("needs {skill}"));
+            }
+            if let Some((item, need)) = r.inputs.iter().find(|(i, n)| ch.count(i) < *n) {
+                return Err(format!(
+                    "needs {} more {}",
+                    need - ch.count(item),
+                    name(c, item)
+                ));
+            }
+            for (item, n) in &r.inputs {
+                take_from_pack(ch, item, *n);
+            }
+            let (out, n) = &r.output;
+            ch.give_item(c, out.clone(), *n);
+            if *n == 1 {
+                done(format!("built `{}`", name(c, out)))
+            } else {
+                done(format!("built {n}× `{}`", name(c, out)))
+            }
+        }
         Action::Unfit { host, socket } => {
             let host_id = ch
                 .host_item(host)
@@ -549,6 +583,111 @@ mod tests {
 
     fn id(s: &str) -> ItemId {
         ItemId::new(s)
+    }
+
+    fn build(c: &Content, ch: &mut Character, recipe: &str) -> Result<Outcome, String> {
+        let at = At {
+            place: Place::Stratum(citygen::StratumKind::Street),
+            pos: Pos::new(5, 5),
+        };
+        apply(
+            ch,
+            &mut Ground::default(),
+            c,
+            at,
+            0,
+            Action::Build(RecipeId::new(recipe)),
+        )
+    }
+
+    #[test]
+    fn build_spends_the_inputs_and_gives_the_output() {
+        let (c, mut ch, _, _) = setup();
+        ch.inventory.retain(|s| s.item != id("copper_coil"));
+        ch.give(id("copper_coil"), 1);
+        let out = build(&c, &mut ch, "wire_shiv").unwrap();
+        assert_eq!(
+            out.message,
+            format!("built `{}`", name(&c, &id("shiv_blade")))
+        );
+        assert_eq!(ch.count(&id("copper_coil")), 0);
+        assert_eq!(ch.count(&id("scrap_servo")), 1);
+        assert_eq!(ch.count(&id("shiv_blade")), 1);
+    }
+
+    #[test]
+    fn build_of_a_batch_names_its_count() {
+        let (c, mut ch, _, _) = setup();
+        ch.skills.insert(SkillId::new("medtech"));
+        ch.give(id("copper_coil"), 1);
+        let out = build(&c, &mut ch, "stim_batch").unwrap();
+        assert_eq!(out.message, "built 2× `Stim patch`");
+    }
+
+    #[test]
+    fn build_refuses_before_changing_anything() {
+        let (c, mut ch, _, _) = setup();
+        assert_eq!(
+            build(&c, &mut ch, "ratchet_build").unwrap_err(),
+            "needs Scrapcraft"
+        );
+        ch.skills.insert(SkillId::new("scrapcraft"));
+        for part in [
+            "ratchet_receiver",
+            "ratchet_stock",
+            "ratchet_mag",
+            "ratchet_trigger",
+        ] {
+            ch.give_item(&c, id(part), 1);
+        }
+        let before = ch.clone();
+        assert_eq!(
+            build(&c, &mut ch, "ratchet_build").unwrap_err(),
+            "needs 1 more Barrel 9×19"
+        );
+        assert_eq!(ch, before);
+        assert_eq!(
+            build(&c, &mut ch, "nope").unwrap_err(),
+            "unknown recipe nope"
+        );
+        let mut kessler = Character::from_template(&c, &TemplateId::new("kessler")).unwrap();
+        assert_eq!(
+            build(&c, &mut kessler, "wire_shiv").unwrap_err(),
+            "no workbench"
+        );
+    }
+
+    #[test]
+    fn build_of_an_item_with_sockets_makes_an_empty_copy() {
+        let (c, mut ch, _, _) = setup();
+        ch.skills.insert(SkillId::new("scrapcraft"));
+        let parts = [
+            "ratchet_receiver",
+            "ratchet_stock",
+            "ratchet_barrel",
+            "ratchet_mag",
+            "ratchet_trigger",
+        ];
+        for part in parts {
+            ch.give_item(&c, id(part), 1);
+        }
+        let had = ch.count(&id("ratchet_smg"));
+        let out = build(&c, &mut ch, "ratchet_build").unwrap();
+        assert_eq!(out.message, "built `Ratchet SMG`");
+        assert_eq!(ch.count(&id("ratchet_smg")), had + 1);
+        let sockets = c.item(&id("ratchet_smg")).unwrap().sockets.len();
+        let copy = ch
+            .inventory
+            .iter()
+            .rev()
+            .find(|s| s.item == id("ratchet_smg"))
+            .and_then(|s| s.copy.as_ref())
+            .expect("a copy");
+        assert_eq!(copy.fitted.len(), sockets);
+        assert!(sockets > 0 && copy.fitted.iter().all(Option::is_none));
+        for part in parts {
+            assert_eq!(ch.count(&id(part)), 0, "{part}");
+        }
     }
 
     #[test]

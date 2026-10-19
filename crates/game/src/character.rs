@@ -361,6 +361,16 @@ impl Character {
         d.hp = d.hp_max(c);
         d.focus = d.focus_max(c);
         d.give(ItemId::new("backdoor"), 1);
+        // Enough of the Ratchet to build it at the bench, short of the barrel.
+        d.skills.insert(SkillId::new("scrapcraft"));
+        for (id, n) in [
+            ("ratchet_receiver", 1),
+            ("ratchet_stock", 1),
+            ("ratchet_trigger", 1),
+            ("ratchet_mag", 2),
+        ] {
+            d.give_item(c, ItemId::new(id), n);
+        }
         // The pawnshop deck goes back to the pack; the rebuilt one takes its slot.
         let deck = ItemId::new("rebuilt_deck");
         let copy = d.new_copy(c, &deck);
@@ -1560,8 +1570,8 @@ mod tests {
         assert_eq!(d.focus, d.focus_max(&c));
         let vex = vex(&c);
         // Vex's kit, plus the Backdoor program, the pawnshop deck set aside, the
-        // three pieces of deck hardware, the two weapon pieces and a stack of every
-        // sticker.
+        // three pieces of deck hardware, the two weapon pieces, four stacks of
+        // Ratchet parts and a stack of every sticker.
         let stickers = c
             .items
             .iter()
@@ -1569,7 +1579,7 @@ mod tests {
             .count();
         assert_eq!(
             d.inventory.len(),
-            vex.inventory.len() + 7 + stickers,
+            vex.inventory.len() + 11 + stickers,
             "Vex's kit"
         );
         assert!(d.loaded.starts_with(&vex.loaded));
@@ -1597,6 +1607,22 @@ mod tests {
         assert_eq!(ch.count(&crack), 3);
         assert_eq!(ch.inventory.iter().filter(|s| s.item == crack).count(), 1);
         assert_eq!(ch.count(&deck), 2);
+    }
+
+    #[test]
+    fn debug_runner_has_the_ratchet_parts_but_no_barrel() {
+        let c = Content::load().unwrap();
+        let d = Character::debug_runner(&c);
+        assert!(d.has_skill(&SkillId::new("scrapcraft")));
+        for (id, n) in [
+            ("ratchet_receiver", 1),
+            ("ratchet_stock", 1),
+            ("ratchet_trigger", 1),
+            ("ratchet_mag", 2),
+            ("ratchet_barrel", 0),
+        ] {
+            assert_eq!(d.count(&ItemId::new(id)), n, "{id}");
+        }
     }
 
     #[test]
