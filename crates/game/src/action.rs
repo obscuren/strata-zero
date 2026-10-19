@@ -34,6 +34,11 @@ pub enum Action {
     /// Loads a program from the pack into the jacked deck.
     Load(ItemId),
     Unload(ItemId),
+    /// Slots a program at a position in the deck, sending back what it covers.
+    Slot {
+        id: ItemId,
+        at: usize,
+    },
 }
 
 /// Where the character stands: where drops land and takes come from.
@@ -124,14 +129,28 @@ pub fn apply(
             remove_from_pack(ch, &id, 1);
             let old = ch.equipment.insert(slot, id.clone());
             clamp_hp(ch, c);
-            match old {
+            let mut message = match old {
                 Some(old) => {
                     let old_name = name(c, &old);
                     ch.give(old, 1);
-                    done(format!("swapped `{old_name}` for `{}`", item.name))
+                    format!("swapped `{old_name}` for `{}`", item.name)
                 }
-                None => done(format!("equipped `{}`", item.name)),
+                None => format!("equipped `{}`", item.name),
+            };
+            // What is loaded always fits the jacked deck: a smaller one sends
+            // the last loaded back to the pack.
+            if let Some(deck) = item.deck {
+                let mut unloaded = Vec::new();
+                while ch.loaded_size(c) > deck.slots
+                    && let Some(last) = ch.loaded.pop()
+                {
+                    unloaded.push(format!("`{}`", name(c, &last)));
+                }
+                if !unloaded.is_empty() {
+                    message.push_str(&format!(" · {} to inventory", unloaded.join(", ")));
+                }
             }
+            done(message)
         }
         Action::Unequip(slot) => {
             let id = ch
@@ -242,6 +261,7 @@ pub fn apply(
         }
         Action::Load(id) => ch.load(c, &id).and_then(done),
         Action::Unload(id) => ch.unload(c, &id).and_then(done),
+        Action::Slot { id, at } => ch.slot_at(c, &id, at).and_then(done),
         Action::Fire(id) => {
             let ability = ch
                 .ability(c, &id)
@@ -339,6 +359,49 @@ mod tests {
         assert_eq!(out.message, "unequipped `Salvage jacket`");
         assert_eq!(ch.count(&id("salvage_jacket")), 1);
         assert_eq!((ch.hp, ch.hp_max(&c)), (42, 42), "hp clamps to the new max");
+    }
+
+    #[test]
+    fn equipping_a_smaller_deck_unloads_what_no_longer_fits() {
+        let (c, _, mut g, at) = setup();
+        let mut ch = Character::debug_runner(&c);
+        assert_eq!(ch.loaded.len(), 4);
+        let out = apply(
+            &mut ch,
+            &mut g,
+            &c,
+            at,
+            0,
+            Action::Equip(id("pawnshop_deck")),
+        )
+        .unwrap();
+        assert_eq!(ch.loaded, vec![id("crack"), id("copy")]);
+        assert_eq!(
+            out.message,
+            "swapped `Rebuilt pawn deck` for `Pawnshop deck` · `Backdoor`, `Attack` to inventory"
+        );
+        assert!(ch.loaded_size(&c) <= 2);
+    }
+
+    #[test]
+    fn equipping_a_deck_that_fits_keeps_what_is_loaded() {
+        let (c, mut ch, mut g, at) = setup();
+        let loaded = ch.loaded.clone();
+        ch.give(id("rebuilt_deck"), 1);
+        let out = apply(
+            &mut ch,
+            &mut g,
+            &c,
+            at,
+            0,
+            Action::Equip(id("rebuilt_deck")),
+        )
+        .unwrap();
+        assert_eq!(ch.loaded, loaded);
+        assert_eq!(
+            out.message,
+            "swapped `Pawnshop deck` for `Rebuilt pawn deck`"
+        );
     }
 
     #[test]
@@ -628,5 +691,22 @@ mod tests {
         .unwrap();
         assert!(!ch.loaded.contains(&copy), "{:?}", ch.loaded);
         assert_eq!(ch.loaded_size(&c), 1);
+    }
+
+    #[test]
+    fn apply_slot_action() {
+        let (c, mut ch, mut g, at) = setup();
+        let spoof = ItemId::new("spoof");
+        ch.give(spoof.clone(), 1);
+        let out = apply(
+            &mut ch,
+            &mut g,
+            &c,
+            at,
+            0,
+            Action::Slot { id: spoof, at: 0 },
+        )
+        .unwrap();
+        assert_eq!(out.message, "`Spoof` slotted · `Crack` to inventory");
     }
 }

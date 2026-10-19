@@ -68,6 +68,8 @@ pub struct AppState {
     /// Where the deck was last: its tab and the selected row per tab.
     pub deck_tab: Tab,
     pub deck_rows: [usize; Tab::ALL.len()],
+    /// The part the jacked deck's blueprint points at, kept between openings.
+    pub deck_part: usize,
     /// The character being built, between the chooser and JACK IN.
     pub build: Option<game::Build>,
     /// What happened, newest last.
@@ -153,6 +155,7 @@ impl AppState {
             repaint: false,
             deck_tab: Tab::Skills,
             deck_rows: [0; Tab::ALL.len()],
+            deck_part: 0,
             build: None,
             log: MessageLog::default(),
             sidebar: Sidebar::default(),
@@ -250,6 +253,7 @@ impl AppState {
         self.fx.clear();
         self.deck_tab = Tab::Skills;
         self.deck_rows = [0; Tab::ALL.len()];
+        self.deck_part = 0;
     }
 
     /// Logs a plain result.
@@ -794,13 +798,14 @@ mod tests {
         });
         st.deck_tab = Tab::Gear;
         st.deck_rows[Tab::Gear.index()] = 3;
+        st.deck_part = 300;
         let seed = city.seed;
         st.enter_city(city);
         assert!(st.player.is_none() && st.fx.is_empty());
         assert_eq!(st.city.as_ref().map(|c| c.seed), Some(seed));
         assert_eq!(
-            (st.deck_tab, st.deck_rows),
-            (Tab::Skills, [0; Tab::ALL.len()]),
+            (st.deck_tab, st.deck_rows, st.deck_part),
+            (Tab::Skills, [0; Tab::ALL.len()], 0),
             "a new city forgets where the deck was"
         );
     }

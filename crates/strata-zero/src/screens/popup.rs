@@ -39,6 +39,12 @@ pub enum Pick {
     World(WorldAct),
     /// Shows these lines in place of the rows; Esc returns to the rows.
     Card(Vec<Line<'static>>),
+    /// Opens an item's blueprint window in place of the popup: from GEAR the item worn,
+    /// from INVENTORY one in the pack.
+    Blueprint {
+        item: game::ItemId,
+        equipped: bool,
+    },
     /// Toggles a sidebar section and closes.
     View(Section),
     /// Starts a program against a target in the construct; the result lands in the strip.
@@ -496,6 +502,12 @@ impl Popup {
                     fx: TransitionKind::None,
                 }
             }
+            Pick::Blueprint { item, equipped } => ScreenCmd::Replace {
+                to: Box::new(crate::screens::blueprint::Blueprint::open(
+                    st, item, equipped,
+                )),
+                fx: TransitionKind::None,
+            },
             Pick::Keypad {
                 building,
                 level,

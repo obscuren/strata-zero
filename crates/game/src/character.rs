@@ -20,6 +20,17 @@ pub enum Source {
     Talent(TalentId),
 }
 
+/// Where a program lands among the loaded ones, and what it sends back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SlotPlan {
+    /// The loaded order after the slot.
+    pub loaded: Vec<ItemId>,
+    /// The slotted program's index in `loaded`.
+    pub at: usize,
+    /// What goes back to the pack, in removal order.
+    pub displaced: Vec<ItemId>,
+}
+
 /// The character. Nothing derived is cached: every value that depends on equipment
 /// is computed on read from what is equipped right now.
 #[derive(Clone, Debug, PartialEq)]
@@ -108,17 +119,21 @@ impl Character {
             ch.give(id, qty);
         }
         ch.hp = ch.hp_max(c);
-        // The kit's programs load in kit order while they fit.
-        let programs: Vec<ItemId> = ch
+        ch.load_all(c);
+        ch
+    }
+
+    /// Loads the pack's programs in pack order while they fit.
+    fn load_all(&mut self, c: &Content) {
+        let programs: Vec<ItemId> = self
             .inventory
             .iter()
             .map(|s| s.item.clone())
             .filter(|id| c.item(id).is_some_and(|i| i.kind == ItemKind::Program))
             .collect();
         for id in programs {
-            let _ = ch.load(c, &id);
+            let _ = self.load(c, &id);
         }
-        ch
     }
 
     /// The jacked deck and its slots.
@@ -183,6 +198,83 @@ impl Character {
         Ok(format!("`{name}` unloaded"))
     }
 
+    /// Where a program would land at `at` in the loaded order, and what it sends
+    /// back to the pack. Changes nothing.
+    pub fn plan_slot(&self, c: &Content, id: &ItemId, at: usize) -> Result<SlotPlan, String> {
+        let item = c.item(id).ok_or_else(|| format!("unknown item {id}"))?;
+        let Some(program) = item.program.filter(|_| item.kind == ItemKind::Program) else {
+            return Err("that is not a program".into());
+        };
+        let (_, deck) = self.deck(c).ok_or_else(|| "no deck jacked".to_string())?;
+        if self.count(id) == 0 {
+            return Err("not in your pack".into());
+        }
+        if self.loaded.contains(id) {
+            return Err("already loaded".into());
+        }
+        if at > self.loaded.len() {
+            return Err("no such slot".into());
+        }
+        if program.size > deck.slots {
+            return Err(format!(
+                "too big for this deck: needs {} of {} slots",
+                program.size, deck.slots
+            ));
+        }
+        let size_of = |p: &ItemId| c.item(p).and_then(|i| i.program).map_or(0, |p| p.size);
+        let mut loaded = self.loaded.clone();
+        let mut displaced = Vec::new();
+        if at < loaded.len() {
+            displaced.push(loaded.remove(at));
+        }
+        loaded.insert(at, id.clone());
+        let mut at = at;
+        // Over the deck: the program after it goes first, then the one before.
+        while loaded.iter().map(size_of).sum::<u8>() > deck.slots {
+            if at + 1 < loaded.len() {
+                displaced.push(loaded.remove(at + 1));
+            } else {
+                displaced.push(loaded.remove(at - 1));
+                at -= 1;
+            }
+        }
+        Ok(SlotPlan {
+            loaded,
+            at,
+            displaced,
+        })
+    }
+
+    /// Slots a program at `at` under `plan_slot`; what it covers goes back to the pack.
+    pub fn slot_at(&mut self, c: &Content, id: &ItemId, at: usize) -> Result<String, String> {
+        let plan = self.plan_slot(c, id, at)?;
+        self.loaded = plan.loaded;
+        let name = |id: &ItemId| {
+            c.item(id)
+                .map(|i| i.name.as_str())
+                .unwrap_or("?")
+                .to_string()
+        };
+        if plan.displaced.is_empty() {
+            let slots = self.deck(c).map(|(_, d)| d.slots).unwrap_or(0);
+            return Ok(format!(
+                "`{}` loaded · {}/{slots} slots",
+                name(id),
+                self.loaded_size(c)
+            ));
+        }
+        let back: Vec<String> = plan
+            .displaced
+            .iter()
+            .map(|d| format!("`{}`", name(d)))
+            .collect();
+        Ok(format!(
+            "`{}` slotted · {} to inventory",
+            name(id),
+            back.join(", ")
+        ))
+    }
+
     /// The character a template describes, or none for an unknown template.
     pub fn from_template(c: &Content, id: &TemplateId) -> Option<Character> {
         let t = c.template(id)?;
@@ -190,7 +282,8 @@ impl Character {
     }
 
     /// The debug runner: Vex's build as D'SHAWN at level 50 with every talent at
-    /// its best, full HP and focus. For the title's NEW GAME (DEBUG).
+    /// its best, full HP and focus, a rebuilt five-slot deck jacked in and every
+    /// program that fits loaded. For the title's NEW GAME (DEBUG).
     pub fn debug_runner(c: &Content) -> Character {
         let mut d = Self::from_template(c, &TemplateId::new("vex"))
             .expect("the vex template is in the content");
@@ -202,6 +295,11 @@ impl Character {
         d.hp = d.hp_max(c);
         d.focus = d.focus_max(c);
         d.give(ItemId::new("backdoor"), 1);
+        // The pawnshop deck goes back to the pack; the rebuilt one takes its slot.
+        if let Some(old) = d.equipment.insert(Slot::Deck, ItemId::new("rebuilt_deck")) {
+            d.give(old, 1);
+        }
+        d.load_all(c);
         d
     }
 
@@ -975,6 +1073,26 @@ mod tests {
     }
 
     #[test]
+    fn debug_runner_jacks_the_rebuilt_deck() {
+        let c = Content::load().unwrap();
+        let d = Character::debug_runner(&c);
+        assert_eq!(d.equipped(Slot::Deck), Some(&ItemId::new("rebuilt_deck")));
+        assert_eq!(d.count(&ItemId::new("pawnshop_deck")), 1);
+        assert_eq!(d.count(&ItemId::new("rebuilt_deck")), 0);
+        let ids = ["crack", "copy", "attack", "backdoor"].map(ItemId::new);
+        assert_eq!(d.loaded, ids);
+        assert_eq!(d.loaded_size(&c), 5);
+        assert_eq!(
+            d.deck(&c).unwrap().1,
+            DeckSpec {
+                slots: 5,
+                rating: 3,
+                look: DeckLook::Pawn
+            }
+        );
+    }
+
+    #[test]
     fn the_kit_loads_into_the_deck() {
         let c = Content::load().unwrap();
         let ch = vex(&c);
@@ -1018,6 +1136,114 @@ mod tests {
         assert_eq!(k.can_load(&c, &crack).unwrap_err(), "no deck jacked");
     }
 
+    fn ids(names: &[&str]) -> Vec<ItemId> {
+        names.iter().map(|n| ItemId::new(n)).collect()
+    }
+
+    #[test]
+    fn slot_at_the_end_loads() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        let spoof = ItemId::new("spoof");
+        ch.give(spoof.clone(), 1);
+        ch.unload(&c, &ItemId::new("copy")).unwrap();
+        assert_eq!(
+            ch.slot_at(&c, &spoof, 1).unwrap(),
+            "`Spoof` loaded · 2/2 slots"
+        );
+        assert_eq!(ch.loaded, ids(&["crack", "spoof"]));
+    }
+
+    #[test]
+    fn slot_onto_a_program_swaps_in_place() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        let spoof = ItemId::new("spoof");
+        ch.give(spoof.clone(), 1);
+        assert_eq!(
+            ch.slot_at(&c, &spoof, 0).unwrap(),
+            "`Spoof` slotted · `Crack` to inventory"
+        );
+        assert_eq!(ch.loaded, ids(&["spoof", "copy"]));
+    }
+
+    #[test]
+    fn a_size_two_program_over_two_sends_both_back() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        let backdoor = ItemId::new("backdoor");
+        ch.give(backdoor.clone(), 1);
+        let plan = ch.plan_slot(&c, &backdoor, 0).unwrap();
+        assert_eq!(plan.loaded, ids(&["backdoor"]));
+        assert_eq!(plan.at, 0);
+        assert_eq!(plan.displaced, ids(&["crack", "copy"]));
+        assert_eq!(
+            ch.slot_at(&c, &backdoor, 0).unwrap(),
+            "`Backdoor` slotted · `Crack`, `Copy` to inventory"
+        );
+        assert_eq!(ch.loaded, ids(&["backdoor"]));
+    }
+
+    #[test]
+    fn a_size_two_program_appended_displaces_the_one_before() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        let backdoor = ItemId::new("backdoor");
+        ch.give(backdoor.clone(), 1);
+        ch.unload(&c, &ItemId::new("copy")).unwrap();
+        let plan = ch.plan_slot(&c, &backdoor, 1).unwrap();
+        assert_eq!(plan.loaded, ids(&["backdoor"]));
+        assert_eq!(plan.at, 0);
+        assert_eq!(plan.displaced, ids(&["crack"]));
+    }
+
+    #[test]
+    fn plan_order_after_then_before() {
+        let mut c = Content::load().unwrap();
+        let mut deck = c.item(&ItemId::new("pawnshop_deck")).unwrap().clone();
+        deck.id = ItemId::new("test_deck");
+        deck.deck.as_mut().unwrap().slots = 3;
+        c.items.push(deck);
+        let mut ch = vex(&c);
+        ch.equipment.insert(Slot::Deck, ItemId::new("test_deck"));
+        ch.give(ItemId::new("backdoor"), 1);
+        ch.loaded = ids(&["crack", "copy", "attack"]);
+        let plan = ch.plan_slot(&c, &ItemId::new("backdoor"), 1).unwrap();
+        assert_eq!(plan.displaced, ids(&["copy", "attack"]));
+        assert_eq!(plan.loaded, ids(&["crack", "backdoor"]));
+        assert_eq!(plan.at, 1);
+    }
+
+    #[test]
+    fn slot_refusals_change_nothing() {
+        let mut c = Content::load().unwrap();
+        let mut big = c.item(&ItemId::new("backdoor")).unwrap().clone();
+        big.id = ItemId::new("big");
+        big.program.as_mut().unwrap().size = 3;
+        c.items.push(big);
+        let mut ch = vex(&c);
+        ch.give(ItemId::new("copper_coil"), 1);
+        ch.give(ItemId::new("big"), 1);
+        let refuse = |ch: &mut Character, id: &str, at: usize, msg: &str| {
+            let (loaded, inventory) = (ch.loaded.clone(), ch.inventory.clone());
+            assert_eq!(ch.slot_at(&c, &ItemId::new(id), at).unwrap_err(), msg);
+            assert_eq!((&ch.loaded, &ch.inventory), (&loaded, &inventory));
+        };
+        refuse(&mut ch, "copper_coil", 0, "that is not a program");
+        refuse(&mut ch, "spoof", 0, "not in your pack");
+        refuse(&mut ch, "crack", 0, "already loaded");
+        ch.give(ItemId::new("spoof"), 1);
+        refuse(&mut ch, "spoof", 3, "no such slot");
+        refuse(
+            &mut ch,
+            "big",
+            0,
+            "too big for this deck: needs 3 of 2 slots",
+        );
+        ch.equipment.remove(&Slot::Deck);
+        refuse(&mut ch, "spoof", 0, "no deck jacked");
+    }
+
     #[test]
     fn has_ability_reads_every_source() {
         let c = Content::load().unwrap();
@@ -1050,8 +1276,8 @@ mod tests {
         assert_eq!(d.hp, d.hp_max(&c));
         assert_eq!(d.focus, d.focus_max(&c));
         let vex = vex(&c);
-        // Vex's kit, plus the one Backdoor program
-        assert_eq!(d.inventory.len(), vex.inventory.len() + 1, "Vex's kit");
-        assert_eq!(d.loaded, vex.loaded);
+        // Vex's kit, plus the Backdoor program and the pawnshop deck set aside
+        assert_eq!(d.inventory.len(), vex.inventory.len() + 2, "Vex's kit");
+        assert!(d.loaded.starts_with(&vex.loaded));
     }
 }

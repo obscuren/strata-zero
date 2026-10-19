@@ -4,12 +4,15 @@
 
 use crate::app::{AppState, Screen};
 use crate::helix::shell::HostId;
+use crate::screens::blueprint::Blueprint;
+use crate::screens::deck::Deck;
 use crate::screens::explore::MapScreen;
 use crate::screens::keypad::Keypad;
 use crate::screens::terminal::Terminal;
 use crate::screens::testutil::key;
 use citygen::{GenParams, Generator, Place, Pos, SizePreset, StratumKind};
 use crossterm::event::KeyCode;
+use game::ItemId;
 use ratatui::Terminal as Term;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -99,14 +102,27 @@ fn state_home() -> AppState {
 }
 
 fn shot(name: &str, st: &AppState, map: &MapScreen, top: &dyn Screen) {
+    shot_at(name, st, map, top, (120, 40));
+}
+
+/// `shot` on a terminal of `w` by `h` cells.
+fn shot_at(name: &str, st: &AppState, map: &MapScreen, top: &dyn Screen, size: (u16, u16)) {
+    shot_stack(name, st, &[map, top], size);
+}
+
+/// A stack of screens, each over the one below it washed, as the app draws it.
+fn shot_stack(name: &str, st: &AppState, stack: &[&dyn Screen], (w, h): (u16, u16)) {
     let Ok(dir) = std::env::var("SHOT_DIR") else {
         return;
     };
-    let mut t = Term::new(TestBackend::new(120, 40)).unwrap();
+    let mut t = Term::new(TestBackend::new(w, h)).unwrap();
     t.draw(|f| {
-        map.draw(st, f);
-        crate::ui::dim::wash(f.buffer_mut());
-        top.draw(st, f);
+        for (i, screen) in stack.iter().enumerate() {
+            if i > 0 {
+                crate::ui::dim::wash(f.buffer_mut());
+            }
+            screen.draw(st, f);
+        }
     })
     .unwrap();
     let bg = hex(st.style.background.to_color(), "#04060a");
@@ -206,6 +222,62 @@ fn terminal_on_the_street() {
     st.tick += 200;
     term.update(&mut st, &[]);
     shot("terminal", &st, &map, &term);
+}
+
+/// The blueprint window on `item`, opened from the deck screen's tab `tab` (GEAR, `3`,
+/// opens what is worn), over the map, at each size.
+fn blueprint_shots(st: &mut AppState, tab: char, item: &str, name: &str, sizes: &[(u16, u16)]) {
+    let map = MapScreen::walking(st);
+    let mut deck = Deck::new(st.tick);
+    deck.update(st, &[key(KeyCode::Char(tab))]);
+    let window = Blueprint::open(st, ItemId::new(item), tab == '3');
+    // The glass typed out, clear of the deck's signal jitter (three ticks in ninety).
+    st.tick += 200;
+    if st.tick % 90 < 3 {
+        st.tick += 3;
+    }
+    for (w, h) in sizes {
+        let name = format!("{name}_{w}x{h}");
+        shot_stack(&name, st, &[&map, &deck, &window], (*w, *h));
+    }
+}
+
+#[test]
+#[ignore]
+fn the_deck_on_its_blueprint() {
+    let mut st = state_home();
+    let sizes = [(100, 30), (120, 40)];
+    blueprint_shots(&mut st, '3', "pawnshop_deck", "blueprint_deck", &sizes);
+}
+
+#[test]
+#[ignore]
+fn dshawns_decks_on_their_blueprints() {
+    let mut st = state_home();
+    st.character = game::Character::debug_runner(&st.content);
+    let at = [(120, 40)];
+    blueprint_shots(&mut st, '3', "rebuilt_deck", "blueprint_dshawn", &at);
+    // The pawnshop deck he carries: its own blueprint, read only.
+    blueprint_shots(
+        &mut st,
+        '4',
+        "pawnshop_deck",
+        "blueprint_dshawn_carried",
+        &at,
+    );
+}
+
+#[test]
+#[ignore]
+fn a_missing_blueprint() {
+    let mut st = state_home();
+    blueprint_shots(
+        &mut st,
+        '4',
+        "copper_coil",
+        "blueprint_missing",
+        &[(100, 30)],
+    );
 }
 
 #[test]
