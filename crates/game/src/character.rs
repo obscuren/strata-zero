@@ -346,8 +346,8 @@ impl Character {
 
     /// The debug runner: Vex's build as D'SHAWN at level 50 with every talent at
     /// its best, full HP and focus, a rebuilt five-slot deck jacked in with its
-    /// sockets empty, the deck hardware in the pack and every program that fits
-    /// loaded. For the title's NEW GAME (DEBUG).
+    /// sockets empty, the deck hardware and the weapon pieces in the pack and
+    /// every program that fits loaded. For the title's NEW GAME (DEBUG).
     pub fn debug_runner(c: &Content) -> Character {
         let mut d = Self::from_template(c, &TemplateId::new("vex"))
             .expect("the vex template is in the content");
@@ -365,7 +365,7 @@ impl Character {
         if let Some(old) = d.wear(Slot::Deck, deck, Some(copy)) {
             d.stow(old);
         }
-        for id in ["coldfin_1", "coldfin_2", "sidecar"] {
+        for id in ["coldfin_1", "coldfin_2", "sidecar", "hushcan", "redeye"] {
             d.give_item(c, ItemId::new(id), 1);
         }
         d.load_all(c);
@@ -450,13 +450,22 @@ impl Character {
     }
 
     pub fn stat(&self, c: &Content, stat: Stat) -> u8 {
-        let bonus: i32 = self
+        let perks: i32 = self
             .perks(c)
             .filter_map(|p| match p {
                 Perk::Stat(s, n) if *s == stat => Some(*n as i32),
                 _ => None,
             })
             .sum();
+        let fitted: i32 = self
+            .worn_mods(c)
+            .iter()
+            .filter_map(|m| match m {
+                Mod::Stat(s, n) if *s == stat => Some(*n as i32),
+                _ => None,
+            })
+            .sum();
+        let bonus = perks + fitted;
         (self.stats.get(stat) as i32 + bonus).clamp(0, 10) as u8
     }
 
@@ -742,15 +751,14 @@ impl Character {
         self.worn.get(&slot)
     }
 
-    /// The mods of the hardware fitted in the worn deck. A deck in the pack, or
-    /// none, fits nothing that counts.
-    pub fn deck_mods(&self, c: &Content) -> Vec<Mod> {
-        let Some(copy) = self.worn_copy(Slot::Deck) else {
-            return Vec::new();
-        };
-        copy.fitted
+    /// The mods of the hardware fitted in anything worn, slots in order and
+    /// sockets in order. Hardware in the pack, or in an item taken off, counts
+    /// for nothing.
+    pub fn worn_mods(&self, c: &Content) -> Vec<Mod> {
+        Slot::ALL
             .iter()
-            .flatten()
+            .filter_map(|slot| self.worn_copy(*slot))
+            .flat_map(|copy| copy.fitted.iter().flatten())
             .filter_map(|s| c.item(&s.item)?.hardware.as_ref())
             .flat_map(|h| h.mods.iter().copied())
             .collect()
@@ -759,7 +767,7 @@ impl Character {
     /// Percent off each trace the deck makes; stacked hardware cuts no more than half.
     pub fn trace_cut(&self, c: &Content) -> u8 {
         let sum: u32 = self
-            .deck_mods(c)
+            .worn_mods(c)
             .iter()
             .map(|m| match m {
                 Mod::TraceCut(n) => *n as u32,
@@ -771,7 +779,7 @@ impl Character {
 
     /// Added to every program turn's power.
     pub fn deck_power(&self, c: &Content) -> i32 {
-        self.deck_mods(c)
+        self.worn_mods(c)
             .iter()
             .map(|m| match m {
                 Mod::Power(n) => *n as i32,
@@ -1514,8 +1522,8 @@ mod tests {
         assert_eq!(d.focus, d.focus_max(&c));
         let vex = vex(&c);
         // Vex's kit, plus the Backdoor program, the pawnshop deck set aside and the
-        // three pieces of hardware
-        assert_eq!(d.inventory.len(), vex.inventory.len() + 5, "Vex's kit");
+        // three pieces of deck hardware and the two weapon pieces
+        assert_eq!(d.inventory.len(), vex.inventory.len() + 7, "Vex's kit");
         assert!(d.loaded.starts_with(&vex.loaded));
     }
 
@@ -1575,13 +1583,70 @@ mod tests {
     }
 
     fn fit_direct(ch: &mut Character, item: &str, socket: usize) {
+        fit_worn(ch, Slot::Deck, item, socket);
+    }
+
+    /// Puts a pack piece straight into a socket of what the slot wears.
+    fn fit_worn(ch: &mut Character, slot: Slot, item: &str, socket: usize) {
         let at = ch
             .inventory
             .iter()
             .position(|s| s.item == ItemId::new(item))
             .unwrap();
         let piece = ch.inventory.remove(at);
-        ch.worn.get_mut(&Slot::Deck).unwrap().fitted[socket] = Some(piece);
+        ch.worn.get_mut(&slot).unwrap().fitted[socket] = Some(piece);
+    }
+
+    #[test]
+    fn hardware_in_any_worn_item_counts() {
+        let c = Content::load().unwrap();
+        let mut vex = Character::from_template(&c, &TemplateId::new("vex")).unwrap();
+        assert_eq!(
+            vex.equipped(Slot::Primary),
+            Some(&ItemId::new("ratchet_smg"))
+        );
+        let gun = vex
+            .worn_copy(Slot::Primary)
+            .expect("the Ratchet, worn as a copy");
+        assert_eq!(gun.fitted, vec![None, None]);
+        let (cool, reflex) = (vex.stat(&c, Stat::Cool), vex.stat(&c, Stat::Reflex));
+        vex.give_item(&c, ItemId::new("hushcan"), 1);
+        vex.give_item(&c, ItemId::new("redeye"), 1);
+        assert_eq!(
+            vex.stat(&c, Stat::Cool),
+            cool,
+            "in the pack it does nothing"
+        );
+        fit_worn(&mut vex, Slot::Primary, "hushcan", 0);
+        assert_eq!(vex.stat(&c, Stat::Cool), cool + 1);
+        fit_worn(&mut vex, Slot::Primary, "redeye", 1);
+        assert_eq!(vex.stat(&c, Stat::Reflex), reflex + 1);
+        assert_eq!((vex.trace_cut(&c), vex.deck_power(&c)), (0, 0));
+        // The gun off the body: its pieces count for nothing.
+        let mut off = vex.clone();
+        off.equipment.remove(&Slot::Primary);
+        assert_eq!(off.stat(&c, Stat::Cool), cool);
+    }
+
+    #[test]
+    fn dshawn_carries_the_weapon_pieces_and_stays_capped() {
+        let c = Content::load().unwrap();
+        let mut d = Character::debug_runner(&c);
+        assert_eq!(d.equipped(Slot::Primary), Some(&ItemId::new("ratchet_smg")));
+        let gun = d
+            .worn_copy(Slot::Primary)
+            .expect("the Ratchet, worn as a copy");
+        assert_eq!(gun.fitted, vec![None, None]);
+        assert_eq!(
+            (
+                d.count(&ItemId::new("hushcan")),
+                d.count(&ItemId::new("redeye"))
+            ),
+            (1, 1)
+        );
+        assert_eq!(d.stat(&c, Stat::Cool), 10);
+        fit_worn(&mut d, Slot::Primary, "hushcan", 0);
+        assert_eq!(d.stat(&c, Stat::Cool), 10, "the clamp holds");
     }
 
     #[test]

@@ -3074,7 +3074,9 @@ mod tests {
             [
                 "≡  1× Coldfin vI",
                 "≡  1× Coldfin vII",
-                "≡  1× Sidecar co-processor"
+                "≡  1× Sidecar co-processor",
+                "≡  1× Hushcan",
+                "≡  1× Redeye sight"
             ],
             "after programs, last"
         );
