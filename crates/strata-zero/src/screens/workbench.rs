@@ -6,6 +6,8 @@
 //! Otherwise it shows the build as a process: the inputs flow into a box with the
 //! skill and its steps, and out to the result.
 
+use crate::actions::{perform, report};
+use crate::anim::Easing;
 use crate::app::AppState;
 use crate::render::glyphs::kind_icon;
 use crate::ui::art::{Art, Dir, PartPlace, brackets, grey_at};
@@ -13,7 +15,7 @@ use crate::ui::chrome::{BAR_BG, CYAN, DIM, MAGENTA, PANEL_BG, RULE, TEXT, solid}
 use crate::ui::hud::cut;
 use crate::ui::looks::ItemArt;
 use crossterm::event::KeyCode;
-use game::{Content, ItemId, Recipe};
+use game::{Action, Content, ItemId, Recipe};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -48,6 +50,9 @@ const PIXELS: [&str; 6] = [" ", "▀", "▄", "█", "▌", "▐"];
 /// How far the selected part's brackets stand off its rectangle: columns, then rows,
 /// before the corners' own cell.
 const BRACKET_ROOM: (i32, i32) = (2, 1);
+/// How long the parts take to close, then how long the finished build is held, in ticks.
+const CLOSE_TICKS: u64 = 15;
+const HOLD_TICKS: u64 = 30;
 const HINTS: &str = "←→ drawings · ↑↓ parts · space build · tab tabs · esc close";
 const HINTS_ASSEMBLY: &str = "←→ drawings · ↑↓ parts · space assemble · tab tabs · esc close";
 
@@ -59,6 +64,9 @@ pub struct Workbench {
     drawing: usize,
     /// Which input of that drawing's recipe.
     part: usize,
+    /// The build being shown closing: the tick it started and the drawing it was on.
+    /// It is not remembered across closing.
+    anim: Option<(u64, usize)>,
 }
 
 impl Workbench {
@@ -71,6 +79,7 @@ impl Workbench {
         Workbench {
             drawing: v >> 16,
             part: v & 0xffff,
+            anim: None,
         }
     }
 
@@ -86,6 +95,7 @@ impl Workbench {
         Workbench {
             drawing,
             part: if self.part < inputs { self.part } else { 0 },
+            anim: self.anim,
         }
     }
 
@@ -113,13 +123,14 @@ impl Workbench {
         let r = &st.content.recipes[list[at.drawing]];
         let ins = inputs(st, r);
         let art = assembly(st, r);
+        let t = self.running(st).map(|start| st.tick.saturating_sub(start));
         let mut field = Pen {
             buf: &mut *p.buf,
             clip: l.field().intersection(sheet),
         };
         match &art {
-            Some(art) => exploded(&mut field, st, art, &ins, at.part),
-            None => process(&mut field, st, r, &ins, at.part),
+            Some(art) => exploded(&mut field, st, art, &ins, (at.part, t)),
+            None => process(&mut field, st, r, &ins, (at.part, t)),
         }
         parts_list(&mut p, &l, &ins, at.part);
         let sheet_no = (at.drawing, list.len());
@@ -128,8 +139,15 @@ impl Workbench {
 
     /// Takes the sheet's keys; false for any other, which the deck then handles.
     pub fn key(&mut self, st: &mut AppState, code: KeyCode) -> bool {
+        // A build closing takes any key, which only ends it.
+        let running = self.running(st).is_some();
+        self.anim = None;
+        if running {
+            return true;
+        }
         let c = &st.content;
         match code {
+            KeyCode::Char(' ') | KeyCode::Enter => self.build(st),
             KeyCode::Left | KeyCode::Char('h') => self.flip(c, -1),
             KeyCode::Right | KeyCode::Char('l') => self.flip(c, 1),
             KeyCode::Up | KeyCode::Char('k') => self.walk(c, -1),
@@ -147,6 +165,31 @@ impl Workbench {
             Some(i) if assembly(st, &c.recipes[i]).is_some() => HINTS_ASSEMBLY,
             _ => HINTS,
         }
+    }
+
+    /// The tick the build on the sheet shown started, while it is still closing or held.
+    fn running(&self, st: &AppState) -> Option<u64> {
+        let shown = self.clamped(&st.content).drawing;
+        self.anim
+            .filter(|&(start, at)| {
+                at == shown && st.tick.saturating_sub(start) < CLOSE_TICKS + HOLD_TICKS
+            })
+            .map(|(start, _)| start)
+    }
+
+    /// Builds the recipe on the sheet, logging the result, and starts the animation
+    /// when it was made.
+    fn build(&mut self, st: &mut AppState) {
+        let at = self.clamped(&st.content).drawing;
+        let Some(&i) = drawings(&st.content).get(at) else {
+            return;
+        };
+        let id = st.content.recipes[i].id.clone();
+        let result = perform(st, Action::Build(id));
+        if result.is_ok() {
+            self.anim = Some((st.tick, at));
+        }
+        report(st, result);
     }
 
     /// The next or previous drawing, wrapping, on its first part.
@@ -576,7 +619,7 @@ fn junction(up: bool, down: bool, left: bool, right: bool) -> char {
 /// The process diagram in the field: the inputs stacked down the left, lines from
 /// them meeting at a junction and running into the process (the skill on its top
 /// edge, the steps inside), and on out to the result.
-fn process(p: &mut Pen, st: &AppState, r: &Recipe, ins: &[Input], sel: usize) {
+fn process(p: &mut Pen, st: &AppState, r: &Recipe, ins: &[Input], (sel, t): (usize, Option<u64>)) {
     let f = p.clip;
     if f.is_empty() {
         return;
@@ -608,7 +651,10 @@ fn process(p: &mut Pen, st: &AppState, r: &Recipe, ins: &[Input], sel: usize) {
             }
         }
     }
-    let faint = fg(FAINTER);
+    // The three runs light as the build passes thirds of the closing, and stay lit.
+    let lit = |k: u64| t.is_some_and(|t| t * 3 >= k * CLOSE_TICKS);
+    let run = |k: u64| fg(if lit(k) { CYAN } else { FAINTER });
+    let faint = run(1);
     let mid = match (lines.first(), lines.last()) {
         (Some(&a), Some(&b)) => (a + b) / 2,
         _ => centre,
@@ -640,7 +686,11 @@ fn process(p: &mut Pen, st: &AppState, r: &Recipe, ins: &[Input], sel: usize) {
     let w = PROCESS_W.max(longest + 4).max(width(&skill) + 4);
     let inset = if longest + 5 <= w { 3 } else { 2 };
     let (px0, px1) = (jx + 7, jx + 6 + w);
-    p.outline((px0, mid - 3, px1, mid + 3), DOUBLE, DIM);
+    p.outline(
+        (px0, mid - 3, px1, mid + 3),
+        DOUBLE,
+        if lit(2) { CYAN } else { DIM },
+    );
     p.put(
         px0 + (px1 - px0 - width(&skill)) / 2 + 1,
         mid - 3,
@@ -653,7 +703,7 @@ fn process(p: &mut Pen, st: &AppState, r: &Recipe, ins: &[Input], sel: usize) {
 
     // Out to the result: the icon, then how many of what, wrapped onto as many lines
     // as it needs, the box growing round the middle row.
-    p.put(px1 + 1, mid, "────▶", faint);
+    p.put(px1 + 1, mid, "────▶", run(3));
     let ox0 = px1 + 7;
     let ox1 = f.right() as i32 - 2;
     if ox1 <= ox0 + 2 {
@@ -672,6 +722,14 @@ fn process(p: &mut Pen, st: &AppState, r: &Recipe, ins: &[Input], sel: usize) {
     for (i, line) in lines.iter().enumerate() {
         p.put_to(ox0 + 4, first + i as i32, line, bold(CYAN), ox1);
     }
+    if t.is_some_and(|t| t >= CLOSE_TICKS) {
+        banner(p, " BUILT ", (ox0 + ox1) / 2, first + rows);
+    }
+}
+
+/// A banner centred on column `mid` of row `y`: bold, the panel's colour on cyan.
+fn banner(p: &mut Pen, text: &str, mid: i32, y: i32) {
+    p.put(mid - width(text) / 2, y, text, bold(PANEL_BG).bg(CYAN));
 }
 
 /// `text` broken at spaces into lines of at most `room` cells; a word longer than
@@ -853,7 +911,13 @@ fn exploded_origin(shown: &[Shown], f: Rect) -> Option<(i32, i32)> {
 /// centre lines through the gaps they leave, a balloon with its number on each part
 /// the recipe takes, a part short as a ghost in a dashed box, and the selected part in
 /// brackets. When that doesn't fit, the item is drawn whole, centred and clipped.
-fn exploded(p: &mut Pen, st: &AppState, art: &ItemArt, ins: &[Input], sel: usize) {
+fn exploded(
+    p: &mut Pen,
+    st: &AppState,
+    art: &ItemArt,
+    ins: &[Input],
+    (sel, t): (usize, Option<u64>),
+) {
     let f = p.clip;
     if f.is_empty() {
         return;
@@ -873,9 +937,21 @@ fn exploded(p: &mut Pen, st: &AppState, art: &ItemArt, ins: &[Input], sel: usize
             let ((ox, oy), _) = centre(b, f);
             let cell = |v: i32| u16::try_from(v.max(0)).unwrap_or(u16::MAX);
             art.draw((cell(ox), cell(oy)), f, p.buf);
+            if t.is_some_and(|t| t >= CLOSE_TICKS) {
+                banner(
+                    p,
+                    " ASSEMBLED ",
+                    ox + (b.0 + b.2) / 2,
+                    (oy + b.3).min(last_row(f)),
+                );
+            }
         }
         return;
     };
+    if let Some(t) = t {
+        close_up(p, st, art, &shown, (ox, oy), t);
+        return;
+    }
     // The centre lines first: a part drawn over one keeps its own cells.
     for s in &shown {
         centre_lines(p, s, (ox, oy));
@@ -920,6 +996,49 @@ fn exploded(p: &mut Pen, st: &AppState, art: &ItemArt, ins: &[Input], sel: usize
         let room = (ox + x0 - cx, oy + y0 - cy, ox + x1 + cx, oy + y1 + cy);
         brackets(p.buf, inside_corners(room, f), st.tick, f);
     }
+}
+
+/// The field's last row.
+fn last_row(f: Rect) -> i32 {
+    i32::from(f.bottom()) - 1
+}
+
+/// The parts closing on the drawing's origin `(ox, oy)` as the build runs `t` ticks,
+/// all in colour with nothing else drawn; then the item whole, in brackets with its
+/// banner under it.
+fn close_up(
+    p: &mut Pen,
+    st: &AppState,
+    art: &ItemArt,
+    shown: &[Shown],
+    (ox, oy): (i32, i32),
+    t: u64,
+) {
+    let f = p.clip;
+    let cell = |v: i32| u16::try_from(v.max(0)).unwrap_or(u16::MAX);
+    if t < CLOSE_TICKS {
+        let left = 1.0 - Easing::InOutCubic.apply(t as f32 / CLOSE_TICKS as f32);
+        for s in shown {
+            let (dx, dy) = s.apart();
+            let step = |v: i32| (v as f32 * left).round() as i32;
+            let origin = (cell(ox + step(dx)), cell(oy + step(dy)));
+            art.draw_part(s.place.index, origin, f, p.buf);
+        }
+        return;
+    }
+    art.draw((cell(ox), cell(oy)), f, p.buf);
+    let home = shown.iter().map(|s| {
+        let pl = &s.place;
+        (pl.x, pl.y, pl.x + i32::from(pl.w), pl.y + i32::from(pl.h))
+    });
+    let Some((x0, y0, x1, y1)) = bounds(home) else {
+        return;
+    };
+    let (x0, y0, x1, y1) = (ox + x0, oy + y0, ox + x1, oy + y1);
+    let (cx, cy) = BRACKET_ROOM;
+    let room = (x0 - cx, y0 - cy, x1 + cx, y1 + cy);
+    brackets(p.buf, inside_corners(room, f), st.tick, f);
+    banner(p, " ASSEMBLED ", (x0 + x1) / 2, y1.min(last_row(f)));
 }
 
 /// The rectangle to hand `brackets` for corners round `room` that never fall past the
@@ -1286,6 +1405,7 @@ mod tests {
         st.deck_rows[Tab::Workbench.index()] = Workbench {
             drawing: 40,
             part: 9,
+            anim: None,
         }
         .pack();
         let clamped = Deck::new(6).restore(&st);
@@ -1293,7 +1413,8 @@ mod tests {
             clamped.workbench,
             Workbench {
                 drawing: 6,
-                part: 0
+                part: 0,
+                anim: None
             }
         );
     }
@@ -1805,5 +1926,183 @@ mod tests {
             }
             press(&mut d, &mut st, KeyCode::Right, 1);
         }
+    }
+
+    /// The newest log line's text and whether it is a warning.
+    fn latest(st: &AppState) -> (String, bool) {
+        let e = st.log.latest().expect("a log line");
+        (e.text.clone(), e.kind == crate::messages::Kind::Warn)
+    }
+
+    /// The Ratchet's sheet with every part in the pack, `tick` set to a round number.
+    fn ready_ratchet() -> (AppState, Deck) {
+        let mut st = dshawn();
+        st.character.give(ItemId::new("ratchet_barrel"), 1);
+        st.tick = 100;
+        let d = on_the_ratchet(&mut st);
+        (st, d)
+    }
+
+    #[test]
+    fn space_assembles_and_the_parts_close() {
+        let (mut st, mut d) = ready_ratchet();
+        let smg = ItemId::new("ratchet_smg");
+        let had = st.character.count(&smg);
+        press(&mut d, &mut st, KeyCode::Char(' '), 1);
+        // The log keeps the backticks as marks, not text.
+        assert_eq!(latest(&st), ("built Ratchet SMG".to_string(), false));
+        assert_eq!(st.character.count(&smg), had + 1);
+        assert_eq!(st.character.count(&ItemId::new("ratchet_barrel")), 0);
+        let copy = st
+            .character
+            .inventory
+            .iter()
+            .rev()
+            .find(|s| s.item == smg)
+            .and_then(|s| s.copy.as_ref())
+            .expect("a copy");
+        assert!(copy.fitted.iter().all(Option::is_none));
+
+        // Seven ticks in the parts are part way home and no balloon shows.
+        st.tick = 107;
+        let b = render(&d, &st, 100, 30);
+        let field = area(&b, 3, 97, 6, 20);
+        for (n, x, y) in [(1, 38, 6), (2, 17, 6), (3, 83, 6), (4, 42, 17), (5, 77, 16)] {
+            assert_ne!(cells(&b, x, y, 3), format!(" {n} "), "{field}");
+        }
+        let art = output_art(&st, &d);
+        let mut whole = panel();
+        art.draw(MOCK_ORIGIN, FIELD, &mut whole);
+        let stock = art.parts()[1];
+        let mine = drawn(|buf| art.draw_part(stock.index, MOCK_ORIGIN, FIELD, buf));
+        let e = crate::anim::Easing::InOutCubic.apply(7.0 / CLOSE_TICKS as f32);
+        let step = |v: i16| (f32::from(v) * (1.0 - e)).round() as i16;
+        let (dx, dy) = (step(stock.apart.0), step(stock.apart.1));
+        assert!(
+            dx.abs() < stock.apart.0.abs() && dx.abs() > 0,
+            "{dx} of {}",
+            stock.apart.0
+        );
+        assert_eq!(
+            b[moved(mine[0], (dx, dy))],
+            whole[mine[0]],
+            "stock part way:\n{field}"
+        );
+        assert!(!field.contains("ASSEMBLED"), "{field}");
+
+        // Twenty ticks in it is whole, with its banner.
+        st.tick = 120;
+        let b = render(&d, &st, 100, 30);
+        let field = area(&b, 3, 97, 6, 20);
+        assert!(field.contains(" ASSEMBLED "), "{field}");
+        let at = (3..97)
+            .flat_map(|x| (6..20).map(move |y| (x, y)))
+            .find(|&(x, y)| cells(&b, x, y, 11) == " ASSEMBLED ")
+            .unwrap();
+        assert_eq!((b[at].fg, b[at].bg), (PANEL_BG, CYAN));
+        assert!(b[at].modifier.contains(Modifier::BOLD));
+        assert_eq!(b[mine[0]], whole[mine[0]], "home:\n{field}");
+
+        // Forty-six ticks in it is over: the sheet shows what is short.
+        st.tick = 146;
+        let b = render(&d, &st, 100, 30);
+        let field = area(&b, 3, 97, 6, 20);
+        assert!(!field.contains("ASSEMBLED"), "{field}");
+        let parts = area(&b, 3, 61, 21, 26);
+        assert!(parts.contains("not in pack"), "{parts}");
+    }
+
+    #[test]
+    fn space_again_ends_it_and_builds_nothing() {
+        let (mut st, mut d) = ready_ratchet();
+        let smg = ItemId::new("ratchet_smg");
+        let had = st.character.count(&smg);
+        press(&mut d, &mut st, KeyCode::Char(' '), 1);
+        st.tick = 105;
+        press(&mut d, &mut st, KeyCode::Char(' '), 1);
+        assert_eq!(st.character.count(&smg), had + 1);
+        assert_eq!(d.workbench.anim, None);
+        let b = render(&d, &st, 100, 30);
+        let field = area(&b, 3, 97, 6, 20);
+        assert!(!field.contains("ASSEMBLED"), "{field}");
+        assert_eq!(cells(&b, 17, 6, 3), " 2 ", "the sheet is back:\n{field}");
+
+        // Esc ends it too, and leaves the deck open.
+        for part in ["barrel", "receiver", "stock", "trigger"] {
+            st.character
+                .give(ItemId::new(&format!("ratchet_{part}")), 1);
+        }
+        st.tick = 200;
+        press(&mut d, &mut st, KeyCode::Enter, 1);
+        assert!(d.workbench.anim.is_some());
+        st.tick = 205;
+        let cmd = d.update(&mut st, &[key(KeyCode::Esc)]);
+        assert!(!matches!(cmd, ScreenCmd::Pop { .. }));
+        assert_eq!(d.workbench.anim, None);
+        assert_eq!(d.tab, Tab::Workbench);
+        // With nothing running, esc closes as before.
+        assert!(matches!(
+            d.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Pop { .. }
+        ));
+    }
+
+    #[test]
+    fn a_refusal_starts_nothing() {
+        let mut st = dshawn();
+        st.tick = 100;
+        let mut d = on_the_ratchet(&mut st);
+        press(&mut d, &mut st, KeyCode::Char(' '), 1);
+        assert_eq!(latest(&st), ("needs 1 more Barrel 9×19".to_string(), true));
+        assert_eq!(d.workbench.anim, None);
+        st.tick = 107;
+        let b = render(&d, &st, 100, 30);
+        assert!(!area(&b, 3, 97, 6, 20).contains("ASSEMBLED"));
+    }
+
+    #[test]
+    fn a_process_builds_and_lights() {
+        let mut st = dshawn();
+        st.character.skills.insert(SkillId::new("medtech"));
+        st.character.give(ItemId::new("copper_coil"), 1);
+        st.tick = 100;
+        let mut d = bench(&mut st);
+        press(&mut d, &mut st, KeyCode::Right, 5);
+        assert_eq!(recipe_id(&st, &d), "stim_batch");
+        let stims = ItemId::new("stim_patch");
+        let had = st.character.count(&stims);
+        let before = render(&d, &st, 100, 30);
+        assert_eq!(before[(51, 8)].fg, DIM, "the process box rests");
+        press(&mut d, &mut st, KeyCode::Char(' '), 1);
+        assert_eq!(st.character.count(&stims), had + 2);
+
+        // A third in, the lines in are lit and the rest not yet.
+        st.tick = 106;
+        let b = render(&d, &st, 100, 30);
+        assert_eq!(b[(40, 8)].fg, CYAN, "{}", row(&b, 8));
+        assert_eq!(b[(51, 8)].fg, DIM);
+        assert!(!area(&b, 3, 97, 6, 20).contains("BUILT"));
+
+        st.tick = 120;
+        let b = render(&d, &st, 100, 30);
+        let field = area(&b, 3, 97, 6, 20);
+        assert!(field.contains(" BUILT "), "{field}");
+        // Every run is lit; the result box's edges are cyan with the banner on its
+        // bottom edge.
+        assert_eq!(b[(51, 8)].fg, CYAN);
+        assert_eq!(b[(40, 8)].fg, CYAN);
+        assert_eq!(b[(72, 11)].fg, CYAN, "{}", row(&b, 11));
+        for (x, y) in [(77, 10), (95, 10), (77, 12), (95, 12)] {
+            assert_eq!(b[(x, y)].fg, CYAN, "({x}, {y})");
+        }
+        let at = (77..96u16)
+            .find(|&x| cells(&b, x, 12, 7) == " BUILT ")
+            .unwrap();
+        assert_eq!((b[(at, 12)].fg, b[(at, 12)].bg), (PANEL_BG, CYAN));
+
+        st.tick = 146;
+        let b = render(&d, &st, 100, 30);
+        assert!(!area(&b, 3, 97, 6, 20).contains("BUILT"));
+        assert_eq!(b[(51, 8)].fg, DIM);
     }
 }
