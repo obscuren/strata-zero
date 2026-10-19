@@ -55,6 +55,8 @@ pub enum ContentError {
     SocketsInvalid { id: String, why: String },
     #[error("hardware `{id}`: {why}")]
     HardwareInvalid { id: String, why: String },
+    #[error("item `{id}`: {why}")]
+    LookInvalid { id: String, why: String },
     #[error("tree {name}: {why}")]
     TreeInvalid { name: String, why: String },
 }
@@ -211,17 +213,35 @@ impl Content {
                 _ => {}
             }
             if !i.sockets.is_empty() {
-                // Only a drawing can place sockets, and only so many.
-                let room = match (i.kind, i.deck) {
-                    (ItemKind::Deck, Some(d)) => d.look.socket_names().len(),
-                    _ => 0,
-                };
-                if i.sockets.len() > room {
+                // Only a drawing can place sockets, and each kind must sit where it is drawn.
+                let drawn = i.drawn_sockets();
+                for (n, kind) in i.sockets.iter().enumerate() {
+                    let why = match drawn.get(n) {
+                        None => format!("its drawing places no socket {}", n + 1),
+                        Some(&(_, want)) if want != *kind => {
+                            format!("socket {} is a {} on its drawing", n + 1, want.fits())
+                        }
+                        _ => continue,
+                    };
                     return Err(ContentError::SocketsInvalid {
                         id: i.id.0.clone(),
-                        why: format!("no drawing places {} sockets for it", i.sockets.len()),
+                        why,
                     });
                 }
+            }
+            if i.look.is_some() && (i.deck.is_some() || i.hardware.is_some()) {
+                return Err(ContentError::LookInvalid {
+                    id: i.id.0.clone(),
+                    why: "a deck or hardware wears its own look".into(),
+                });
+            }
+            if let Some(h) = &i.hardware
+                && h.look.kind() != h.fits
+            {
+                return Err(ContentError::HardwareInvalid {
+                    id: i.id.0.clone(),
+                    why: format!("its look is drawn for a {}", h.look.kind().fits()),
+                });
             }
             match (i.kind, &i.hardware) {
                 (ItemKind::Hardware, None) => {
@@ -1158,6 +1178,58 @@ mod tests {
     }
 
     #[test]
+    fn weapon_sockets_and_hardware_load() {
+        let c = Content::load().unwrap();
+        let get = |id: &str| c.item(&ItemId::new(id)).unwrap();
+        let smg = get("ratchet_smg");
+        assert_eq!(smg.look, Some(ItemLook::Ratchet));
+        assert_eq!(smg.sockets, vec![SocketKind::Muzzle, SocketKind::Rail]);
+        assert!(smg.per_copy());
+        assert_eq!(smg.drawn_sockets()[0], ("MUZZLE", SocketKind::Muzzle));
+        assert_eq!(
+            get("rebuilt_deck").drawn_sockets()[1],
+            ("R", SocketKind::Deck)
+        );
+        assert!(get("salvage_jacket").drawn_sockets().is_empty());
+        for (id, name, weight, value, m, fits, look) in [
+            (
+                "hushcan",
+                "Hushcan",
+                0.5,
+                700,
+                Mod::Stat(Stat::Cool, 1),
+                SocketKind::Muzzle,
+                HardwareLook::Hushcan,
+            ),
+            (
+                "redeye",
+                "Redeye sight",
+                0.2,
+                550,
+                Mod::Stat(Stat::Reflex, 1),
+                SocketKind::Rail,
+                HardwareLook::Redeye,
+            ),
+        ] {
+            let i = get(id);
+            assert_eq!(
+                (i.kind, i.name.as_str(), i.weight, i.value),
+                (ItemKind::Hardware, name, weight, value)
+            );
+            assert_eq!(
+                i.hardware,
+                Some(Hardware {
+                    fits,
+                    mods: vec![m],
+                    look
+                }),
+                "{id}"
+            );
+            assert_eq!(look.kind(), fits);
+        }
+    }
+
+    #[test]
     fn mod_lines_read_as_the_card_does() {
         assert_eq!(Mod::TraceCut(10).line(), "trace per cast \u{2212}10%");
         assert_eq!(Mod::Power(1).line(), "program power +1");
@@ -1167,6 +1239,12 @@ mod tests {
         assert_eq!(Mod::Power(-1).sticker(), "POWER \u{2212}1");
         assert_eq!(SocketKind::Deck.takes(), "deck hardware");
         assert_eq!(SocketKind::Deck.fits(), "deck socket");
+        assert_eq!(Mod::Stat(Stat::Cool, 1).line(), "cool +1");
+        assert_eq!(Mod::Stat(Stat::Cool, 1).sticker(), "COOL +1");
+        assert_eq!(Mod::Stat(Stat::Reflex, -1).line(), "reflex \u{2212}1");
+        assert_eq!(Mod::Stat(Stat::Reflex, -1).sticker(), "REFLEX \u{2212}1");
+        assert_eq!(SocketKind::Muzzle.takes(), "muzzle hardware");
+        assert_eq!(SocketKind::Rail.fits(), "rail socket");
     }
 
     #[test]
@@ -1214,5 +1292,48 @@ mod tests {
             bad.validate(),
             Err(ContentError::SocketsInvalid { .. })
         ));
+
+        let smg_sockets = |sockets: Vec<SocketKind>| {
+            let mut bad = c.clone();
+            let i = at(&bad, "ratchet_smg");
+            bad.items[i].sockets = sockets;
+            bad.validate()
+        };
+        use SocketKind::{Muzzle, Rail};
+        assert!(matches!(
+            smg_sockets(vec![Rail, Muzzle]),
+            Err(ContentError::SocketsInvalid { .. })
+        ));
+        assert!(matches!(
+            smg_sockets(vec![Muzzle, Rail, Rail]),
+            Err(ContentError::SocketsInvalid { .. })
+        ));
+        assert!(smg_sockets(vec![Muzzle]).is_ok());
+
+        let mut bad = c.clone();
+        let i = at(&bad, "ratchet_smg");
+        bad.items[i].look = None;
+        assert!(matches!(
+            bad.validate(),
+            Err(ContentError::SocketsInvalid { .. })
+        ));
+
+        let mut bad = c.clone();
+        let i = at(&bad, "hushcan");
+        bad.items[i].hardware.as_mut().unwrap().fits = Rail;
+        assert!(matches!(
+            bad.validate(),
+            Err(ContentError::HardwareInvalid { .. })
+        ));
+
+        for id in ["rebuilt_deck", "coldfin_1"] {
+            let mut bad = c.clone();
+            let i = at(&bad, id);
+            bad.items[i].look = Some(ItemLook::Ratchet);
+            assert!(
+                matches!(bad.validate(), Err(ContentError::LookInvalid { .. })),
+                "{id}"
+            );
+        }
     }
 }

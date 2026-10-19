@@ -1,17 +1,25 @@
-//! The deck hardware drawn: large for the blueprint window, small in a deck's socket,
-//! and as a swatch for the tray. All shapes are half blocks in exact colours.
+//! The hardware drawn: large for the blueprint window, small in a deck's socket,
+//! fitted in a gun's muzzle or rail socket, and as a swatch for the tray. All shapes are half blocks in exact colours.
 
 use super::art::{Art, SocketPlace};
 use super::cyberdeck::Pen;
-use game::{HardwareLook, Mod};
+use game::{HardwareLook, Mod, SocketKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
-/// The large drawing's width.
-pub const W: u16 = 52;
-/// The large drawing's height.
-pub const H: u16 = 18;
+mod weapon;
+
+/// A piece's large drawing: its width and height in cells.
+pub fn large_size(look: HardwareLook) -> (u16, u16) {
+    match look {
+        HardwareLook::Hushcan => (72, 14),
+        HardwareLook::ColdfinI
+        | HardwareLook::ColdfinII
+        | HardwareLook::Sidecar
+        | HardwareLook::Redeye => (52, 18),
+    }
+}
 
 /// A piece on its own blueprint: drawn large, centred, with no sockets of its own.
 #[derive(Clone, Debug, PartialEq)]
@@ -23,7 +31,7 @@ pub struct HardwareArt {
 
 impl Art for HardwareArt {
     fn size(&self) -> (u16, u16) {
-        (W, H)
+        large_size(self.look)
     }
 
     fn draw(&self, (ox, oy): (u16, u16), clip: Rect, buf: &mut Buffer) {
@@ -41,7 +49,7 @@ impl Art for HardwareArt {
     }
 }
 
-const fn rgb(hex: u32) -> Color {
+pub(crate) const fn rgb(hex: u32) -> Color {
     Color::Rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
 }
 
@@ -97,12 +105,50 @@ fn run(p: &mut Pen, y: i32, xs: std::ops::Range<i32>, ch: char, fg: Color, bg: O
     }
 }
 
-/// The large drawing at the pen's origin, 52 by 18.
+/// The large drawing at the pen's origin, of the size `large_size` gives.
 pub fn draw_large(look: HardwareLook, mods: &[Mod], p: &mut Pen) {
     match look {
         HardwareLook::ColdfinI => coldfin(p, mods, false),
         HardwareLook::ColdfinII => coldfin(p, mods, true),
         HardwareLook::Sidecar => sidecar(p, mods),
+        HardwareLook::Hushcan => weapon::hushcan_large(p, mods),
+        HardwareLook::Redeye => weapon::redeye_large(p, mods),
+    }
+}
+
+/// Where a piece of this kind draws inside its socket place: the offset from the
+/// place's corner and the size. The deck draws its own sides, so it has none.
+/// A footprint's cells belong to the piece alone: the host's drawing puts neither
+/// pixels nor text there, because pieces are folded over the finished host drawing.
+pub fn footprint(kind: SocketKind) -> Option<(i32, i32, u16, u16)> {
+    match kind {
+        SocketKind::Muzzle => Some((4, 0, 18, 5)),
+        SocketKind::Rail => Some((0, 0, 24, 3)),
+        SocketKind::Deck => None,
+    }
+}
+
+/// Draws the piece in the footprint of `place`; nothing for a deck socket.
+pub fn draw_fitted(look: HardwareLook, place: &SocketPlace, p: &mut Pen) {
+    let Some((dx, dy, _, _)) = footprint(place.kind) else {
+        return;
+    };
+    let (Ok(ox), Ok(oy)) = (
+        u16::try_from(i32::from(p.ox) + place.x + dx),
+        u16::try_from(i32::from(p.oy) + place.y + dy),
+    ) else {
+        return;
+    };
+    let mut at = Pen {
+        buf: &mut *p.buf,
+        ox,
+        oy,
+        clip: p.clip,
+    };
+    match look {
+        HardwareLook::Hushcan => weapon::hushcan(&mut at),
+        HardwareLook::Redeye => weapon::redeye(&mut at),
+        HardwareLook::ColdfinI | HardwareLook::ColdfinII | HardwareLook::Sidecar => {}
     }
 }
 
@@ -275,7 +321,8 @@ type Cell = (char, Color, Color);
 
 /// The side drawing as drawn, rows 7-11, left to right, and the side it is drawn for.
 /// The Coldfins read from the outer end in; the Sidecar from the inner end out.
-fn native(look: HardwareLook) -> ([[Cell; 5]; 5], Side) {
+/// Weapon pieces have no side drawing.
+fn native(look: HardwareLook) -> Option<([[Cell; 5]; 5], Side)> {
     let blank: Cell = (' ', PCB, PCB);
     match look {
         HardwareLook::ColdfinI | HardwareLook::ColdfinII => {
@@ -310,7 +357,7 @@ fn native(look: HardwareLook) -> ([[Cell; 5]; 5], Side) {
                     }
                 }
             }
-            (g, Side::Left)
+            Some((g, Side::Left))
         }
         HardwareLook::Sidecar => {
             let mut g = [[blank; 5]; 5];
@@ -330,14 +377,17 @@ fn native(look: HardwareLook) -> ([[Cell; 5]; 5], Side) {
             g[4][1] = ('▪', TAN, PCB);
             g[4][2] = ('╌', TRACE_LINE, PCB);
             g[4][4] = ('●', LED, PCB);
-            (g, Side::Right)
+            Some((g, Side::Right))
         }
+        HardwareLook::Hushcan | HardwareLook::Redeye => None,
     }
 }
 
 /// The 5 by 5 drawing for a socket whose top-left is (x, y) in pen coordinates.
 pub fn draw_side(look: HardwareLook, side: Side, p: &mut Pen, x: i32, y: i32) {
-    let (mut g, drawn) = native(look);
+    let Some((mut g, drawn)) = native(look) else {
+        return;
+    };
     if side != drawn {
         for line in &mut g {
             line.reverse();
@@ -385,12 +435,23 @@ pub fn tile(look: HardwareLook) -> Tile {
             ink: SILK,
             swatch: (GOLD, PCB),
         },
+        HardwareLook::Hushcan => Tile {
+            bg: rgb(0x3a3f47),
+            ink: rgb(0xe8ecf0),
+            swatch: (rgb(0x3a3f47), rgb(0x1c1f24)),
+        },
+        HardwareLook::Redeye => Tile {
+            bg: rgb(0x5a0c14),
+            ink: rgb(0xffd8dc),
+            swatch: (rgb(0xff2a3c), rgb(0x15171b)),
+        },
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use game::Stat;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
 
@@ -411,7 +472,89 @@ mod tests {
     }
 
     fn large(look: HardwareLook, mods: &[Mod]) -> Buffer {
-        drawn(W, 0, |p| draw_large(look, mods, p))
+        drawn(large_size(look).0, 0, |p| draw_large(look, mods, p))
+    }
+
+    fn place(x: i32, y: i32, w: u16, h: u16, kind: SocketKind) -> SocketPlace {
+        SocketPlace {
+            index: 0,
+            x,
+            y,
+            w,
+            h,
+            name: "X",
+            kind,
+        }
+    }
+
+    #[test]
+    fn hushcan_large_matches_the_reference() {
+        let b = large(HardwareLook::Hushcan, &[Mod::Stat(Stat::Cool, 1)]);
+        assert_eq!(
+            (b[(17, 2)].symbol(), b[(17, 2)].fg, b[(17, 2)].bg),
+            ("H", rgb(0x6b7480), rgb(0x1c1f24))
+        );
+        assert_eq!(text(&b, 52, 2, 9), " COOL +1 ");
+        assert_eq!(b[(53, 2)].bg, rgb(0xe8e8ec));
+        assert_eq!(
+            (b[(0, 7)].symbol(), b[(0, 7)].fg, b[(0, 7)].bg),
+            ("▀", rgb(0x8d939c), rgb(0xe8c54a))
+        );
+        assert_eq!(b[(1, 8)].bg, rgb(0x8a6d14));
+        assert_eq!(text(&b, 26, 13, 14), "▲ BAFFLE STACK");
+        assert_eq!(text(&b, 0, 13, 8), "▲ THREAD");
+    }
+
+    #[test]
+    fn redeye_large_matches_the_reference() {
+        let b = large(HardwareLook::Redeye, &[Mod::Stat(Stat::Reflex, 1)]);
+        assert_eq!(text(&b, 23, 7, 6), "REDEYE");
+        assert_eq!(text(&b, 37, 5, 11), " REFLEX +1 ");
+        assert_eq!((b[(31, 10)].symbol(), b[(31, 10)].fg), ("●", rgb(0xff2a3c)));
+        assert_eq!(
+            (b[(48, 6)].bg, b[(48, 12)].bg),
+            (rgb(0xff2a3c), rgb(0xff2a3c))
+        );
+        assert_eq!(
+            (b[(2, 16)].symbol(), b[(2, 16)].fg, b[(2, 16)].bg),
+            ("▀", rgb(0xb4bec8), rgb(0x7d8893))
+        );
+    }
+
+    #[test]
+    fn weapon_pieces_draw_in_their_footprints() {
+        // A muzzle place at (66, 4): the footprint starts 4 cells in, at (70, 4).
+        let muzzle = place(66, 4, 22, 5, SocketKind::Muzzle);
+        let b = drawn(100, 0, |p| draw_fitted(HardwareLook::Hushcan, &muzzle, p));
+        assert_eq!((b[(74, 6)].symbol(), b[(74, 6)].bg), ("H", rgb(0x1c1f24)));
+        assert_eq!(
+            (b[(70, 4)].symbol(), b[(70, 4)].fg, b[(70, 4)].bg),
+            ("▀", rgb(0x3a3f47), rgb(0x5d6570))
+        );
+        assert_eq!((b[(87, 4)].symbol(), b[(87, 4)].fg), ("▄", rgb(0x0e1013)));
+        let rail = place(34, 0, 24, 4, SocketKind::Rail);
+        let b = drawn(100, 0, |p| draw_fitted(HardwareLook::Redeye, &rail, p));
+        assert_eq!(
+            (b[(49, 1)].symbol(), b[(49, 1)].fg, b[(49, 1)].bg),
+            ("●", rgb(0xff2a3c), rgb(0x15171b))
+        );
+        assert_eq!(
+            (b[(55, 0)].bg, b[(55, 1)].bg),
+            (rgb(0xff2a3c), rgb(0xff2a3c))
+        );
+        assert_eq!(
+            (b[(41, 2)].fg, b[(41, 2)].bg),
+            (rgb(0x7d8893), rgb(0xb4bec8))
+        );
+        assert_eq!(
+            b[(34, 3)].symbol(),
+            " ",
+            "the rail row is the gun's, not the piece's"
+        );
+        // A deck socket's piece is drawn by the deck, not here.
+        let deck = place(-4, 6, 6, 7, SocketKind::Deck);
+        let b = drawn(100, 10, |p| draw_fitted(HardwareLook::ColdfinI, &deck, p));
+        assert!(b.content.iter().all(|c| c.symbol() == " "));
     }
 
     #[test]
@@ -482,13 +625,20 @@ mod tests {
             HardwareLook::ColdfinI,
             HardwareLook::ColdfinII,
             HardwareLook::Sidecar,
+            HardwareLook::Hushcan,
+            HardwareLook::Redeye,
         ] {
             let mut bufs = vec![large(look, &[Mod::TraceCut(10)])];
             bufs.push(drawn(30, 10, |p| draw_side(look, Side::Left, p, -4, 7)));
+            for (kind, at) in [(SocketKind::Muzzle, 66), (SocketKind::Rail, 34)] {
+                let place = place(at, 0, 24, 5, kind);
+                bufs.push(drawn(100, 0, |p| draw_fitted(look, &place, p)));
+            }
             for b in bufs {
                 for c in &b.content {
                     assert_eq!(c.symbol().width(), 1, "{:?}", c.symbol());
                     assert!(matches!(c.fg, Color::Rgb(..) | Color::Reset));
+                    assert!(matches!(c.bg, Color::Rgb(..) | Color::Reset));
                 }
             }
         }

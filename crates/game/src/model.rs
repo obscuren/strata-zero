@@ -197,10 +197,10 @@ impl DeckLook {
         }
     }
 
-    /// Names of the sockets the drawing places; its length is the room for them.
-    pub fn socket_names(self) -> &'static [&'static str] {
+    /// The sockets the drawing places, by name and kind; its length is the room for them.
+    pub fn sockets(self) -> &'static [(&'static str, SocketKind)] {
         match self {
-            DeckLook::Pawn => &["L", "R"],
+            DeckLook::Pawn => &[("L", SocketKind::Deck), ("R", SocketKind::Deck)],
         }
     }
 
@@ -212,10 +212,27 @@ impl DeckLook {
     }
 }
 
+/// Which drawing a non-deck item wears on its blueprint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ItemLook {
+    Ratchet,
+}
+
+impl ItemLook {
+    /// The sockets the drawing places, by name and kind; its length is the room for them.
+    pub fn sockets(self) -> &'static [(&'static str, SocketKind)] {
+        match self {
+            ItemLook::Ratchet => &[("MUZZLE", SocketKind::Muzzle), ("RAIL", SocketKind::Rail)],
+        }
+    }
+}
+
 /// What a socket takes and what a piece of hardware fits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SocketKind {
     Deck,
+    Muzzle,
+    Rail,
 }
 
 impl SocketKind {
@@ -223,6 +240,8 @@ impl SocketKind {
     pub fn takes(self) -> &'static str {
         match self {
             SocketKind::Deck => "deck hardware",
+            SocketKind::Muzzle => "muzzle hardware",
+            SocketKind::Rail => "rail hardware",
         }
     }
 
@@ -230,6 +249,8 @@ impl SocketKind {
     pub fn fits(self) -> &'static str {
         match self {
             SocketKind::Deck => "deck socket",
+            SocketKind::Muzzle => "muzzle socket",
+            SocketKind::Rail => "rail socket",
         }
     }
 }
@@ -241,6 +262,8 @@ pub enum Mod {
     TraceCut(u8),
     /// Added to every program turn's power.
     Power(i8),
+    /// Added to one of the wearer's stats.
+    Stat(Stat, i8),
 }
 
 /// A number with its sign always shown; a negative takes a real minus, as the
@@ -259,6 +282,7 @@ impl Mod {
         match self {
             Mod::TraceCut(n) => format!("trace per cast \u{2212}{n}%"),
             Mod::Power(n) => format!("program power {}", signed(*n)),
+            Mod::Stat(s, n) => format!("{} {}", s.label(), signed(*n)),
         }
     }
 
@@ -267,6 +291,7 @@ impl Mod {
         match self {
             Mod::TraceCut(n) => format!("TRACE \u{2212}{n}%"),
             Mod::Power(n) => format!("POWER {}", signed(*n)),
+            Mod::Stat(s, n) => format!("{} {}", s.name(), signed(*n)),
         }
     }
 }
@@ -277,6 +302,21 @@ pub enum HardwareLook {
     ColdfinI,
     ColdfinII,
     Sidecar,
+    Hushcan,
+    Redeye,
+}
+
+impl HardwareLook {
+    /// The kind of socket the drawing is made for.
+    pub fn kind(self) -> SocketKind {
+        match self {
+            HardwareLook::ColdfinI | HardwareLook::ColdfinII | HardwareLook::Sidecar => {
+                SocketKind::Deck
+            }
+            HardwareLook::Hushcan => SocketKind::Muzzle,
+            HardwareLook::Redeye => SocketKind::Rail,
+        }
+    }
 }
 
 /// A piece of hardware: the socket it fits, what it does, how it looks.
@@ -377,6 +417,9 @@ pub struct Item {
     /// The sockets a new copy is made with.
     #[serde(default)]
     pub sockets: Vec<SocketKind>,
+    /// The drawing a non-deck item wears on its blueprint.
+    #[serde(default)]
+    pub look: Option<ItemLook>,
     /// What the piece fits and does (hardware only).
     #[serde(default)]
     pub hardware: Option<Hardware>,
@@ -386,6 +429,15 @@ impl Item {
     /// Held per copy, since it can carry state: it has sockets or is hardware.
     pub fn per_copy(&self) -> bool {
         !self.sockets.is_empty() || self.hardware.is_some()
+    }
+
+    /// The places its drawing sockets: the deck look's, else the item look's.
+    pub fn drawn_sockets(&self) -> &'static [(&'static str, SocketKind)] {
+        match (self.deck, self.look) {
+            (Some(d), _) => d.look.sockets(),
+            (None, Some(l)) => l.sockets(),
+            (None, None) => &[],
+        }
     }
 }
 
