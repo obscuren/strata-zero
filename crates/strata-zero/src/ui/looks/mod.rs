@@ -257,16 +257,34 @@ mod tests {
         }
     }
 
-    /// A hash of every cell's symbol, colours and modifier.
+    /// An FNV-1a hash of every cell's symbol, colours and modifier, the same on every
+    /// Rust release. The drawings use only `Rgb` and `Reset`.
     fn hash_of(buf: &Buffer) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        for c in &buf.content {
-            (c.symbol(), c.fg, c.bg, c.modifier).hash(&mut h);
+        fn colour(c: Color) -> [u8; 4] {
+            match c {
+                Color::Rgb(r, g, b) => [1, r, g, b],
+                _ => [0; 4],
+            }
         }
-        h.finish()
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut eat = |bytes: &[u8]| {
+            for &b in bytes {
+                h ^= u64::from(b);
+                h = h.wrapping_mul(0x0100_0000_01b3);
+            }
+        };
+        for c in &buf.content {
+            eat(c.symbol().as_bytes());
+            eat(&[0]);
+            eat(&colour(c.fg));
+            eat(&colour(c.bg));
+            eat(&c.modifier.bits().to_le_bytes());
+        }
+        h
     }
 
+    /// The bare gun, nothing fitted and no stickers, cell for cell as it was drawn
+    /// before it was cut into parts.
     #[test]
     fn the_whole_gun_is_unchanged() {
         let art = ItemArt {
@@ -277,7 +295,7 @@ mod tests {
         let area = Rect::new(0, 0, 88, 15);
         let mut buf = Buffer::empty(area);
         art.draw((0, 0), area, &mut buf);
-        assert_eq!(hash_of(&buf), 1074754067890159654);
+        assert_eq!(hash_of(&buf), 3885222701974628240);
     }
 
     fn blank_gun() -> (ItemArt, Rect, Buffer) {
