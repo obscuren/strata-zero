@@ -72,18 +72,19 @@ impl Title {
     /// COMBAT on the Net: D'SHAWN into a fresh city, and as it opens, jacked into a
     /// construct with grey ICE on patrol.
     fn net_game(&self, st: &mut AppState) -> ScreenCmd {
+        use citygen::{Place, Pos, StratumKind};
         st.character = game::Character::combat_runner(&st.content);
-        st.start = Some(crate::app::Start::Net);
-        match Generating::new(Title::fresh_params(st, st.tick), st.tick) {
-            Ok(g) => ScreenCmd::Switch {
-                to: Box::new(g),
-                fx: TransitionKind::Glitch,
-            },
-            Err(e) => {
-                st.start = None;
-                st.warn(e.to_string());
-                ScreenCmd::Stay
-            }
+        let seed = Title::fresh_params(st, st.tick).seed;
+        st.enter_city_at(citygen::City::lot(seed), 18 * 60 + 15);
+        st.player = Some(crate::walker::Player::at(
+            Place::Stratum(StratumKind::Street),
+            Pos::new(6, 8),
+        ));
+        let result = crate::net::start_in_net_lot(st);
+        crate::actions::report(st, result);
+        ScreenCmd::Switch {
+            to: crate::screens::explore_screen(st),
+            fx: TransitionKind::Glitch,
         }
     }
 
@@ -461,28 +462,29 @@ mod tests {
         t.update(&mut st, &[key(KeyCode::Right)]);
         assert_eq!(t.combat, CombatMap::Net);
         t.update(&mut st, &[key(KeyCode::Down)]);
-        let ScreenCmd::Switch {
-            to: mut generating, ..
-        } = t.update(&mut st, &[key(KeyCode::Enter)])
-        else {
-            panic!("straight to generating")
+        // NET: straight onto the lot's construct, no generating screen.
+        let ScreenCmd::Switch { to: map, .. } = t.update(&mut st, &[key(KeyCode::Enter)]) else {
+            panic!("straight to the map")
         };
         assert_eq!(st.character.handle, "D'SHAWN");
-        let ScreenCmd::Switch { .. } = generating.update(&mut st, &[key(KeyCode::Enter)]) else {
-            panic!("ENTER skips to the city")
-        };
+        assert!(st.city.as_ref().is_some_and(|c| c.is_lot()));
         let p = st.player.as_ref().expect("jacked in");
         assert!(p.jacked_in());
         let Place::Construct(b) = p.place else {
             panic!("inside a construct: {:?}", p.place)
         };
         let k = st.constructs.get(b).expect("the construct stands");
-        assert!(!k.guards.is_empty(), "ICE to fight");
         assert_eq!(p.pos, k.entry);
+        assert_eq!(k.guards.len(), 2, "a grey ICE and a dummy");
+        assert!(!k.guards[0].inert && k.guards[1].inert);
         assert!(
             st.character.loaded.contains(&game::ItemId::new("attack")),
             "attack loaded"
         );
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        term.draw(|f| map.draw(&st, f)).unwrap();
+        let text = buffer_text(term.backend().buffer());
+        assert!(text.contains("the lot"), "{text}");
     }
 
     #[test]

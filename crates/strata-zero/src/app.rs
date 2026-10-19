@@ -24,13 +24,6 @@ pub const FRAME: Duration = Duration::from_micros(33_333);
 /// Whether the app starts in dev mode: free camera, map browsing and the inspector.
 pub const DEV_DEFAULT: bool = true;
 
-/// A place the title drops you as a fresh city opens.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Start {
-    /// Jacked into a construct with ICE on patrol.
-    Net,
-}
-
 /// State shared by every screen.
 pub struct AppState {
     pub params: GenParams,
@@ -74,8 +67,6 @@ pub struct AppState {
     pub foes: Vec<crate::foes::Foe>,
     /// Rounds fired this session: the roll's seed.
     pub shots: u64,
-    /// Where the next city puts you as it opens, for the title's COMBAT start.
-    pub start: Option<Start>,
     /// Every round lands, or none; for tests.
     #[cfg(test)]
     pub force_hit: Option<bool>,
@@ -194,7 +185,6 @@ impl AppState {
             fx: Vec::new(),
             foes: Vec::new(),
             shots: 0,
-            start: None,
             #[cfg(test)]
             force_hit: None,
             repaint: false,

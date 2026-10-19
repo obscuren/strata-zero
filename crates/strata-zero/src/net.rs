@@ -47,25 +47,23 @@ pub const WALK_TICKS: u64 = 4;
 /// Ticks a bolt takes from a roll or a hit to its target.
 pub const ROLL_TICKS: u64 = 12;
 /// How far a program reaches a piece of ICE in sight.
-pub const ATTACK_RANGE: i32 = 6;
+pub const ATTACK_RANGE: i32 = 8;
 /// Ticks a slip's or a shield's mark sits on its tile.
 pub const MARK_TICKS: u64 = 20;
-/// A program's roll, cyan; an attack's, white; an ICE hit, magenta; black ICE, red.
+/// A program's roll and an attack, cyan; an ICE hit, magenta; black ICE, red.
 pub const BOLT_ROLL: (u8, u8, u8) = (0, 229, 255);
-pub const BOLT_ATTACK: (u8, u8, u8) = (240, 240, 240);
 pub const BOLT_HIT: (u8, u8, u8) = (255, 0, 200);
 pub const BOLT_BLACK: (u8, u8, u8) = (255, 40, 40);
-/// What an attack program looks like: a shot in the attack's white, the net's tear
-/// where it lands, the damage as a tag; a slip sparks.
-pub const ATTACK_FX: [Fx; 5] = [
-    Fx::Flash { big: false },
-    Fx::Streak {
-        colour: BOLT_ATTACK,
-    },
+/// What an attack program looks like: a shot in the net's cyan (no muzzle, nothing
+/// burns here), the tear where it lands in cyan and deep blue, the damage as a
+/// blue tag; a slip sparks cyan. The whole shot carries `ATTACK_TINT`.
+pub const ATTACK_FX: [Fx; 4] = [
+    Fx::Streak { colour: BOLT_ROLL },
     Fx::Tear,
     Fx::Spark,
     Fx::Number { tag: true },
 ];
+pub const ATTACK_TINT: (u8, u8, u8) = BOLT_ROLL;
 /// A slip marks its target magenta; a shield that absorbs marks you cyan.
 pub const MARK_SLIP: (u8, u8, u8) = (255, 0, 200);
 pub const MARK_SHIELD: (u8, u8, u8) = (0, 229, 255);
@@ -452,11 +450,16 @@ impl NetState {
 }
 
 pub(crate) fn building_name(st: &AppState, b: BuildingId) -> String {
-    st.city
-        .as_ref()
-        .and_then(|c| c.building_opt(b))
+    let city = st.city.as_ref();
+    city.and_then(|c| c.building_opt(b))
         .map(|x| x.name.clone().unwrap_or_else(|| x.kind.label().to_string()))
-        .unwrap_or_else(|| "the building".to_string())
+        .unwrap_or_else(|| {
+            if city.is_some_and(|c| c.is_lot()) {
+                "the lot".to_string()
+            } else {
+                "the building".to_string()
+            }
+        })
 }
 
 /// The building whose construct or floor the player is in.
@@ -604,12 +607,27 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
             if st.character.flags(&st.content).contains("black_ice") {
                 damage += 1;
             }
-            crate::combat::play_shot(st, Place::Construct(b), &ATTACK_FX, me, at, ok, damage);
+            crate::combat::play_shot(
+                st,
+                Place::Construct(b),
+                &ATTACK_FX,
+                me,
+                at,
+                ok,
+                damage,
+                Some(ATTACK_TINT),
+            );
         } else {
             bolt(st, me, at, BOLT_ROLL, ROLL_TICKS);
         }
         if !ok {
-            mark(st, at, MARK_SLIP, MARK_TICKS);
+            // A slipped attack marks in its own cyan; every other slip in magenta.
+            let colour = if spec.op == Op::Attack {
+                ATTACK_TINT
+            } else {
+                MARK_SLIP
+            };
+            mark(st, at, colour, MARK_TICKS);
         }
     }
     // Deep dive: a vault gives up its contents quietly; a slip is still loud.
@@ -647,14 +665,22 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
             if st.character.flags(&st.content).contains("black_ice") {
                 damage += 1;
             }
-            let grade = st.constructs.get(b).map(|k| k.guards[index].grade)?;
+            let (grade, label, inert) = st.constructs.get(b).map(|k| {
+                (
+                    k.guards[index].grade,
+                    k.guards[index].label(),
+                    k.guards[index].inert,
+                )
+            })?;
             let seen = st.player.as_ref()?.pos;
             let left = {
                 let states = st.net.ice.get_mut(&b)?;
                 let ice = states.get_mut(index)?;
-                ice.integrity = ice.integrity.saturating_sub(damage);
-                // A hit piece turns on you.
-                ice.mode = IceMode::Awake { seen, lost: 0 };
+                // A dummy takes the hit and keeps standing; a piece turns on you.
+                if !inert {
+                    ice.integrity = ice.integrity.saturating_sub(damage);
+                    ice.mode = IceMode::Awake { seen, lost: 0 };
+                }
                 ice.integrity
             };
             if left == 0 {
@@ -663,16 +689,12 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
                 let roots = st.backdoors.roots();
                 st.net.sync_guards(&mut st.constructs, b, now, &roots);
                 kick(st, 6);
-                let line = format!("{} ICE broken", grade.label());
+                let line = format!("{label} ICE broken");
                 st.say(line.clone());
                 alarm_clears(st, b);
                 return Some(line);
             } else {
-                format!(
-                    "attack · {} ICE {left}/{}",
-                    grade.label(),
-                    grade.integrity()
-                )
+                format!("attack · {label} ICE {left}/{}", grade.integrity())
             }
         } else {
             format!("{label} slips · heat {heat}")
@@ -1349,6 +1371,10 @@ pub fn ice_look(st: &mut AppState, b: BuildingId, i: usize) -> bool {
         ice.stunned -= 1;
         return false;
     }
+    // A dummy never looks, never wakes, never acts.
+    if g.inert {
+        return false;
+    }
     if sees(k, g.pos, g.grade, pos, masked) {
         ice.mode = IceMode::Awake { seen: pos, lost: 0 };
     }
@@ -1403,7 +1429,7 @@ pub fn ice_step(st: &mut AppState, b: BuildingId, i: usize, can_move: bool, can_
         }
         IceMode::Awake { seen, lost } => {
             if g.pos.chebyshev(pos) <= 1 {
-                hits = can_hit;
+                hits = can_hit && !g.inert;
             } else if !can_move {
                 // Out of steps: it waits where it stands.
             } else if g.pos == seen || step_toward(k, g.pos, seen, pos).is_none() {
@@ -1836,49 +1862,29 @@ pub fn ice_card(st: &AppState, b: BuildingId, i: usize) -> Option<(String, Strin
     }
     let ice = st.net.ice.get(&b)?.get(i)?;
     Some((
-        format!("{} ICE", g.grade.label()),
+        format!("{} ICE", g.label()),
         format!("{}/{}", ice.integrity, g.grade.integrity()),
         g.pos,
     ))
 }
 
-/// The COMBAT start on the Net: the body at the gate of a corp tower's construct
-/// on the grid, jacked in, and inside, where the gate guard sees you on the first
-/// beat. Security 200 at least: grey ICE at the gate and the vault.
-pub fn start_in_construct(st: &mut AppState) -> Result<String, String> {
-    let city = st.city.as_ref().ok_or("no city")?;
-    let b = city
-        .buildings
-        .iter()
-        .find(|b| {
-            b.kind == citygen::BuildingKind::CorpTower
-                && city
-                    .net
-                    .nodes
-                    .iter()
-                    .any(|n| n.building == Some(b.id) && n.kind == NodeKind::DataVault)
-        })
-        .or_else(|| {
-            city.buildings
-                .iter()
-                .find(|b| city.net.nodes.iter().any(|n| n.building == Some(b.id)))
-        })
-        .map(|b| b.id)
-        .ok_or("no construct in this city")?;
-    let gate = crate::constructs::city_gate(city, b).ok_or("the construct has no gate")?;
-    if let Some(sub) = st.city.as_mut().and_then(|c| {
-        c.net
-            .subnets
-            .iter_mut()
-            .find(|s| s.owner == citygen::SubnetOwner::Building(b))
-    }) {
-        sub.security = sub.security.max(200);
+/// The COMBAT start on the Net: the lot's construct (a lane with a grey ICE at the
+/// far end and a dummy near the gate), the body left on the street, jacked in and
+/// landed on the gate.
+pub fn start_in_net_lot(st: &mut AppState) -> Result<String, String> {
+    let k = citygen::lot_construct();
+    let (b, entry) = (k.building, k.entry);
+    st.constructs.insert(k);
+    if let Some(k) = st.constructs.get(b) {
+        st.net.ice_of(k);
     }
     let p = st.player.as_mut().ok_or("no body")?;
     p.body = Some((p.place, p.pos));
     p.place = Place::Stratum(StratumKind::Net);
-    p.pos = gate;
-    crate::constructs::enter_construct(st, b)
+    p.pos = entry;
+    st.net.beat = st.clock_tick();
+    crate::constructs::land(st, Place::Construct(b), entry);
+    Ok("Entering `the lot`".to_string())
 }
 
 /// The turn column's view: every standing actor in the rolled order with its chip,
@@ -1905,7 +1911,7 @@ pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
                     continue;
                 };
                 Chip {
-                    name: format!("{} ICE", g.grade.label()),
+                    name: format!("{} ICE", g.label()),
                     hp: format!("{}/{}", ice.integrity, g.grade.integrity()),
                     acting: actor == *a,
                 }
@@ -1957,7 +1963,7 @@ pub fn turn_readout(st: &AppState) -> Option<String> {
         Actor::You => "YOU".to_string(),
         Actor::Ice(i) => k
             .and_then(|k| k.guards.get(i))
-            .map(|g| format!("{} ICE", g.grade.label()))
+            .map(|g| format!("{} ICE", g.label()))
             .unwrap_or_else(|| "ICE".to_string()),
         Actor::Foe(i) => st
             .foes
@@ -2128,7 +2134,7 @@ pub fn ice_lines(st: &AppState, b: BuildingId, seen: impl Fn(Pos) -> bool) -> Ve
             };
             format!(
                 "▣ {} ICE · {mode} · {}/{}{stunned}",
-                g.grade.label(),
+                g.label(),
                 i.integrity,
                 g.grade.integrity()
             )
@@ -2242,7 +2248,7 @@ pub fn run_label(st: &AppState, run: &Run) -> Option<String> {
             .constructs
             .get(building)
             .and_then(|k| k.guards.get(index))
-            .map(|g| format!("{} ICE", g.grade.label()))
+            .map(|g| format!("{} ICE", g.label()))
             .unwrap_or_else(|| "ICE".to_string()),
         HackTarget::Deck => "deck".to_string(),
     };
@@ -2371,7 +2377,7 @@ pub fn targets_near(st: &AppState, b: BuildingId, pos: citygen::Pos) -> Vec<(Hac
                 building: b,
                 index: i,
             },
-            format!("ICE · {}", k.guards[i].grade.label()),
+            format!("ICE · {}", k.guards[i].label()),
         ));
     }
     out
@@ -2433,6 +2439,72 @@ mod tests {
 
     fn logged(st: &AppState, needle: &str) -> bool {
         st.log.iter().any(|e| e.text.contains(needle))
+    }
+
+    /// The lot's construct with you on its gate, as the COMBAT · NET start opens.
+    fn net_lot() -> AppState {
+        let mut st = AppState::new();
+        st.enter_city(citygen::City::lot(1));
+        st.player = Some(crate::walker::Player::at(STREET, Pos::new(6, 8)));
+        start_in_net_lot(&mut st).unwrap();
+        st
+    }
+
+    #[test]
+    fn the_dummy_ice_never_wakes_hits_or_breaks() {
+        let mut st = net_lot();
+        let b = BuildingId(0);
+        let dummy = st.constructs.get(b).unwrap().guards[1].pos;
+        assert_eq!(dummy, Pos::new(6, 3));
+        // Stand beside it and run the attack at it with a sure roll.
+        st.player.as_mut().unwrap().pos = Pos::new(5, 3);
+        st.net.force_roll = Some(10);
+        st.character
+            .unload(&st.content, &ItemId::new("copy"))
+            .unwrap();
+        st.character.give(ItemId::new("attack"), 1);
+        st.character
+            .load(&st.content, &ItemId::new("attack"))
+            .unwrap();
+        let target = HackTarget::Guard {
+            building: b,
+            index: 1,
+        };
+        start_run(&mut st, ItemId::new("attack"), target).unwrap();
+        assert!(st.net.engaged.is_some());
+        let line = step_run(&mut st).unwrap();
+        assert_eq!(line, "attack · dummy ICE 6/6");
+        assert_eq!(st.net.ice[&b][1].integrity, 6, "nothing gets through");
+        assert_eq!(st.net.ice[&b][1].mode, IceMode::Asleep, "it never wakes");
+        assert!(
+            st.fx
+                .iter()
+                .any(|i| matches!(i.fx, Fx::Number { tag: true })),
+            "the number still lifts"
+        );
+        // Its turn passes at once, and standing beside you it never hits.
+        let hp = st.character.hp;
+        let focus = st.character.focus;
+        for _ in 0..3 {
+            end_turn(&mut st);
+            for _ in 0..40 {
+                if your_turn(&st) {
+                    break;
+                }
+                st.tick += PACE_TICKS;
+                if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
+                    world.advance(city, world.tick() + PACE_TICKS);
+                }
+                pace(&mut st);
+            }
+        }
+        assert_eq!((st.character.hp, st.character.focus), (hp, focus));
+        assert!(!logged(&st, "ICE hits"));
+        assert!(
+            ice_lines(&st, b, |_| true).contains(&"▣ dummy ICE · asleep · 6/6".to_string()),
+            "{:?}",
+            ice_lines(&st, b, |_| true)
+        );
     }
 
     #[test]

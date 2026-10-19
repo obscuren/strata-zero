@@ -586,7 +586,7 @@ pub fn look_card(
         let g = &st.constructs.get(b).expect("checked").guards[i];
         set_head(
             &mut card,
-            format!("{} ICE", capitalised(g.grade.label())),
+            format!("{} ICE", capitalised(g.label())),
             mark_tile(st, map, pos),
         );
         card.second = Some(if g.standing { "standing" } else { "broken" }.to_string());

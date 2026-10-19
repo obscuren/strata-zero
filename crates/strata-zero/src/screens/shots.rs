@@ -174,16 +174,10 @@ fn combat_net_start() {
         &mut st,
         &[key(KeyCode::Down), key(KeyCode::Down), key(KeyCode::Left)],
     );
-    let crate::app::ScreenCmd::Switch {
-        to: mut generating, ..
-    } = title.update(&mut st, &[key(KeyCode::Enter)])
-    else {
-        panic!("generating")
-    };
     let crate::app::ScreenCmd::Switch { to: mut map, .. } =
-        generating.update(&mut st, &[key(KeyCode::Enter)])
+        title.update(&mut st, &[key(KeyCode::Enter)])
     else {
-        panic!("the city")
+        panic!("straight to the lot's construct")
     };
     for _ in 0..60 {
         st.tick += 1;
@@ -194,6 +188,32 @@ fn combat_net_start() {
     }
     let buf = draw_stack(&st, &[&*map], (100, 30));
     write_svg(&dir, "combat_net", &st, &buf, false);
+    // Then an attack on the dummy from two tiles off: the streak, then the tear
+    // and the tag where it lands.
+    st.player.as_mut().unwrap().pos = citygen::Pos::new(4, 4);
+    crate::net::engage(
+        &mut st,
+        citygen::Place::Construct(citygen::BuildingId(0)),
+        true,
+    );
+    crate::net::stay(&mut st);
+    st.net.force_roll = Some(10);
+    map.update(&mut st, &[]);
+    map.update(&mut st, &[key(KeyCode::Char(' '))]);
+    for (name, ticks) in [("combat_net_attack_1", 1), ("combat_net_attack_4", 3)] {
+        st.tick += ticks;
+        if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
+            world.advance(city, world.tick() + ticks);
+        }
+        map.update(&mut st, &[]);
+        write_svg(
+            &dir,
+            name,
+            &st,
+            &draw_stack(&st, &[&*map], (100, 30)),
+            false,
+        );
+    }
 }
 
 #[test]

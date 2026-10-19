@@ -34,6 +34,75 @@ pub struct Guard {
     pub beat: Vec<Pos>,
     /// Standing, or lifted by a crack or a break.
     pub standing: bool,
+    /// A dummy: it never wakes, hits or breaks; a target to practise on.
+    pub inert: bool,
+}
+
+impl Guard {
+    /// `grey`, `black`; `dummy` for an inert piece.
+    pub fn label(&self) -> &'static str {
+        if self.inert {
+            "dummy"
+        } else {
+            self.grade.label()
+        }
+    }
+}
+
+/// The lot's construct, for practice: a lane the width of the lot with a grey ICE
+/// at the far end and a dummy near the gate, nothing else inside.
+pub fn lot_construct() -> Construct {
+    let size = Size { w: 41, h: 19 };
+    let wall = Tile {
+        terrain: Terrain::NetWall,
+        feature: None,
+        district: None,
+        building: None,
+        variant: 0,
+    };
+    let mut tiles = Grid::filled(size, wall);
+    let lane = Tile {
+        terrain: Terrain::NetLane,
+        ..wall
+    };
+    tiles.fill_rect(Rect::new(1, 1, 39, 17), lane);
+    let entry = Pos::new(0, 9);
+    tiles[entry] = Tile {
+        terrain: Terrain::NetGate,
+        ..wall
+    };
+    let guards = vec![
+        Guard {
+            post: Pos::new(38, 9),
+            pos: Pos::new(38, 9),
+            grade: IceGrade::Grey,
+            beat: Vec::new(),
+            standing: true,
+            inert: false,
+        },
+        Guard {
+            post: Pos::new(6, 3),
+            pos: Pos::new(6, 3),
+            grade: IceGrade::Grey,
+            beat: Vec::new(),
+            standing: true,
+            inert: true,
+        },
+    ];
+    for g in &guards {
+        tiles[g.pos].feature = Some(Feature::Ice(g.grade));
+    }
+    Construct {
+        building: BuildingId(0),
+        security: 200,
+        size,
+        tiles,
+        light: Grid::filled(size, 255),
+        entry,
+        rooms: Vec::new(),
+        nodes: Vec::new(),
+        guards,
+    }
 }
 
 /// The inside of a construct.
@@ -288,6 +357,7 @@ pub fn generate_construct(city: &City, b: BuildingId) -> Option<Construct> {
                 spine[..=mid].to_vec()
             },
             standing: true,
+            inert: false,
         });
         if has_vault && security >= GREY_THRESHOLD {
             let grade = if security >= BLACK_THRESHOLD {
@@ -301,6 +371,7 @@ pub fn generate_construct(city: &City, b: BuildingId) -> Option<Construct> {
                 grade,
                 beat: spine[mid..].to_vec(),
                 standing: true,
+                inert: false,
             });
         }
     }
@@ -376,6 +447,33 @@ pub fn validate_construct(c: &Construct) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_lot_construct_is_a_lane_with_a_grey_ice_and_a_dummy() {
+        use super::*;
+        let k = lot_construct();
+        assert!(
+            validate_construct(&k).is_ok(),
+            "{:?}",
+            validate_construct(&k)
+        );
+        assert_eq!(k.entry, Pos::new(0, 9));
+        assert_eq!(k.tiles[k.entry].terrain, Terrain::NetGate);
+        assert_eq!(k.tiles[Pos::new(20, 9)].terrain, Terrain::NetLane);
+        assert_eq!(k.tiles[Pos::new(40, 9)].terrain, Terrain::NetWall);
+        assert_eq!(k.guards.len(), 2);
+        assert_eq!(
+            (k.guards[0].pos, k.guards[0].inert, k.guards[0].label()),
+            (Pos::new(38, 9), false, "grey")
+        );
+        assert_eq!(
+            (k.guards[1].pos, k.guards[1].inert, k.guards[1].label()),
+            (Pos::new(6, 3), true, "dummy")
+        );
+        assert_eq!(k.guard_at(Pos::new(6, 3)), Some(1));
+        assert!(k.nodes.is_empty() && k.rooms.is_empty());
+        assert_eq!(k.security, 200);
+    }
+
     use super::*;
     use crate::generate::cyberspace::tests::city;
     use crate::geom::Pos;

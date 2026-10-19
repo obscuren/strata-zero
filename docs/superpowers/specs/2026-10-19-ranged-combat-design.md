@@ -253,10 +253,23 @@ pub struct Engagement { pub place: Place, /* was building: BuildingId */ ... }
   The turn column (`render/turns.rs`) sits top-right of the map on both maps.
 - **The title's COMBAT row** carries a `NET · STREET` pick, flipped with the
   arrows on that row, the pick in pink `(255, 0, 200)`, the other in grey
-  `(120, 125, 135)`: STREET is the lot; NET generates a city with
-  `AppState.start = Some(Start::Net)`, and as the map opens
-  `net::start_in_construct` jacks the body in at a corp tower's gate (security
-  raised to 200 at least) and enters the construct.
+  `(120, 125, 135)`: STREET is the lot; NET is the lot too, with the body left on
+  the street and jacked into `citygen::lot_construct()` (`net::start_in_net_lot`):
+  a 41×19 construct, a `NetLane` floor inside a `NetWall` ring, the gate at
+  `(0, 9)`, security 200, a grey ICE at `(38, 9)` with no beat and a **dummy ICE**
+  at `(6, 3)` (`Guard.inert`: it never looks, wakes, hits or breaks; the attack's
+  number still lifts; labelled `dummy ICE` wherever a grade would read). Jeffrey
+  asked for "a similar test level for the net, with a dummy ICE that doesn't die
+  or attack me". `ATTACK_RANGE` went from 6 to 8 tiles at the same time.
+- **The net's attack reads blue.** Jeffrey: "spell effects in the net need to
+  read more like blue'ish rather than the purple and muscle flash". `ATTACK_FX`
+  lost its `Flash` (nothing burns in the net) and its streak is `BOLT_ROLL` cyan
+  `(0, 229, 255)`; the shot carries `ATTACK_TINT` (the same cyan) on every
+  `FxInstance`, and a tinted shot's `Tear` scrambles in that colour and the
+  renderer's deep blue instead of magenta/cyan, its `Spark` burns in it instead
+  of amber, and its `Number` tag sits on a field of it instead of red. A slipped
+  attack marks in cyan; other slips keep `MARK_SLIP` magenta. Guns pass no tint
+  and look as before. `BOLT_ATTACK` (white) is gone.
 - **Your turn ends on its own** `AUTO_END_TICKS = 20` ticks after your last action
   point goes (`Engagement.spent_at`), on the street and in the net alike, so the
   numbers can be read before the board moves on (Jeffrey, after playing). `.`

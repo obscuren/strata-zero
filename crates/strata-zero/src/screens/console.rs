@@ -265,7 +265,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                     let down = if k.guard_at(g.pos).is_none() { " down" } else { "" };
                     format!(
                         "{i} {} {mode} {}/{} at {},{}{down}",
-                        g.grade.label(),
+                        g.label(),
                         ice.integrity,
                         g.grade.integrity(),
                         g.pos.x,

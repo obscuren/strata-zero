@@ -593,7 +593,11 @@ impl MapScreen {
                     .building_opt(b)
                     .map(|bl| city.district(bl.district).name.clone())
                     .unwrap_or_else(|| city.name.clone());
-                format!("{} · {district}", crate::net::building_name(st, b))
+                if city.is_lot() {
+                    "the lot · construct".to_string()
+                } else {
+                    format!("{} · {district}", crate::net::building_name(st, b))
+                }
             }
             (true, Some(_)) => {
                 let pos = st.player.as_ref().map(|q| q.pos).unwrap_or(Pos::new(0, 0));
@@ -779,7 +783,7 @@ impl MapScreen {
                     .construct()
                     .and_then(|b| st.constructs.get(b))
                     .and_then(|k| k.guards.get(i))
-                    .map(|g| g.grade.label())
+                    .map(|g| g.label())
                     .unwrap_or("the");
                 (format!("{grade} ICE ACTS"), "wait".to_string())
             }
@@ -962,11 +966,6 @@ impl MapScreen {
                 crate::credentials::prepare(st, rig.home.building);
                 crate::credentials::move_in(st);
             }
-        }
-        // The COMBAT start on the Net: straight into a construct.
-        if st.start.take() == Some(crate::app::Start::Net) {
-            let result = crate::net::start_in_construct(st);
-            report(st, result);
         }
         if let Some(p) = &st.player {
             self.place = p.place;
@@ -7452,11 +7451,11 @@ mod tests {
             .expect("a number for the attack");
         assert_eq!(
             (number.label.as_str(), number.tint, number.targets[0]),
-            ("-2", None, gate)
+            ("-2", Some(crate::net::ATTACK_TINT), gate)
         );
         assert_eq!(number.started, st.tick + 1);
         assert!(st.fx.iter().any(
-            |i| matches!(i.fx, game::Fx::Streak { colour } if colour == crate::net::BOLT_ATTACK)
+            |i| matches!(i.fx, game::Fx::Streak { colour } if colour == crate::net::ATTACK_TINT)
         ));
         pass_turn(&mut st, &mut s);
         assert!(logged(&st, "shield absorbs the hit"));
@@ -9815,7 +9814,7 @@ mod tests {
         let streaks: Vec<(Pos, Pos)> = st
             .fx
             .iter()
-            .filter(|i| matches!(i.fx, game::Fx::Streak { colour } if colour == (240, 240, 240)))
+            .filter(|i| matches!(i.fx, game::Fx::Streak { colour } if colour == (0, 229, 255)))
             .map(|i| (i.origin, i.targets[0]))
             .collect();
         assert_eq!(streaks, vec![(me, gate)]);

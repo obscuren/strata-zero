@@ -112,6 +112,8 @@ struct Round {
     hit: bool,
     damage: u8,
     k: usize,
+    /// A colour the whole shot takes (the net's attacks); `None` for a gun's own.
+    tint: Option<(u8, u8, u8)>,
 }
 
 /// Pushes the shapes of one round, offset `k` gaps into the burst: the flash and
@@ -164,7 +166,7 @@ fn play_round(st: &mut AppState, place: Place, fx: &[Fx], r: Round) {
                 String::new()
             },
             hit: r.hit,
-            tint: None,
+            tint: r.tint,
         });
     }
 }
@@ -172,6 +174,7 @@ fn play_round(st: &mut AppState, place: Place, fx: &[Fx], r: Round) {
 /// The shapes of one shot from `from` to `impact`, pushed from `now`: the flash and
 /// the flight at once, the impact shapes when the flight lands. For the net's
 /// attack program, which rolls its own way but looks like a shot.
+#[allow(clippy::too_many_arguments)]
 pub fn play_shot(
     st: &mut AppState,
     place: Place,
@@ -180,6 +183,7 @@ pub fn play_shot(
     impact: Pos,
     hit: bool,
     damage: u8,
+    tint: Option<(u8, u8, u8)>,
 ) {
     play_round(
         st,
@@ -191,6 +195,7 @@ pub fn play_shot(
             hit,
             damage,
             k: 0,
+            tint,
         },
     );
 }
@@ -345,6 +350,7 @@ fn volley(
                 hit,
                 damage: w.damage,
                 k,
+                tint: None,
             },
         );
         out.push(hit.then_some(w.damage));
@@ -422,6 +428,7 @@ pub fn fire_at_you(st: &mut AppState, foe: usize) {
                 hit,
                 damage: w.damage,
                 k,
+                tint: None,
             },
         );
         rounds.push(hit.then_some(w.damage));

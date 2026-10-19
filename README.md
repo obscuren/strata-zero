@@ -263,9 +263,9 @@ with it off you are always on foot.
 (debug) drops D'SHAWN, maxed out, into a fresh city; new game · combat has a
 `NET · STREET` pick on its row, `←→` to flip it, the pick in pink: STREET puts
 him on an empty lot at dusk with a goon in the far corner and a training dummy
-(`&`, stands still, shrugs every round off) six north, NET jacks him straight
-into a corp tower's construct with grey ICE on patrol; load game opens the save
-list) · `q` quit
+(`&`, stands still, shrugs every round off) six north, NET jacks him into the
+lot's construct, a lane with a grey ICE at the far end and a dummy ICE near the
+gate (never wakes, hits or breaks); load game opens the save list) · `q` quit
 
 **New game** picks a template (VEX, KESSLER) or a custom build, then walks six
 steps: ORIGIN, PROFESSION, STATS, SKILLS, NAME, SUMMARY. `↑↓` choose · `enter`
@@ -340,7 +340,7 @@ aim on your own tile stays put; from the
 entry, aiming one tile off the map is the gate, and the walk leaves the
 construct; the program keys draw hollow until you do. Then ACT: `1`-`5` pick a program and the map
 marks what it can run against (nodes beside you; ICE beside you or in sight
-within 6 tiles), `tab` or the arrows move the pick, `space` runs it for one AP
+within 8 tiles), `tab` or the arrows move the pick, `space` runs it for one AP
 (the run stays armed, and `space` rolls it again), a pulse, a shield or a mask
 cost one as well, and `.` ends your turn; spending the last move opens ACT by
 itself. In calm the same pick works and costs nothing. An ICE turn plays out

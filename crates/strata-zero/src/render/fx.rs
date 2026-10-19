@@ -616,10 +616,30 @@ fn spark(inst: &FxInstance, elapsed: u64, origin: Pos, area: Rect, buf: &mut Buf
         return;
     }
     let back = -away(inst, target);
-    let (glyph, tint) = match elapsed {
-        0 => ('✶', Rgb(255, 240, 160)),
-        1 => ('×', Rgb(255, 170, 40)),
-        _ => ('·', Rgb(120, 60, 10)),
+    // A tinted shot sparks in its own colour; a gun's in hot amber.
+    let (glyph, tint, fleck, ember) = match (elapsed, inst.tint) {
+        (0, None) => (
+            '✶',
+            Rgb(255, 240, 160),
+            Rgb(255, 220, 120),
+            Rgb(200, 110, 20),
+        ),
+        (1, None) => (
+            '×',
+            Rgb(255, 170, 40),
+            Rgb(255, 220, 120),
+            Rgb(200, 110, 20),
+        ),
+        (_, None) => ('·', Rgb(120, 60, 10), Rgb(255, 220, 120), Rgb(200, 110, 20)),
+        (e, Some(t)) => {
+            let t = Rgb(t.0, t.1, t.2);
+            let (glyph, main) = match e {
+                0 => ('✶', t.mix(WHITE, 0.4)),
+                1 => ('×', t),
+                _ => ('·', t.scale(0.45)),
+            };
+            (glyph, main, t.scale(0.85), t.scale(0.6))
+        }
     };
     paint(origin, area, buf, target, |c| {
         c.set_char(glyph).set_fg(tint.to_color());
@@ -629,7 +649,7 @@ fn spark(inst: &FxInstance, elapsed: u64, origin: Pos, area: Rect, buf: &mut Buf
     });
     match elapsed {
         0 => {
-            let fleck = Rgb(255, 220, 120).to_color();
+            let fleck = fleck.to_color();
             paint(origin, area, buf, target.offset(back, -1), |c| {
                 c.set_char('`').set_fg(fleck);
             });
@@ -638,7 +658,7 @@ fn spark(inst: &FxInstance, elapsed: u64, origin: Pos, area: Rect, buf: &mut Buf
             });
         }
         1 => paint(origin, area, buf, target.offset(2 * back, 1), |c| {
-            c.set_char('·').set_fg(Rgb(200, 110, 20).to_color());
+            c.set_char('·').set_fg(ember.to_color());
         }),
         _ => {}
     }
@@ -662,10 +682,13 @@ fn tear(inst: &FxInstance, tick: u64, origin: Pos, area: Rect, buf: &mut Buffer)
                 continue;
             }
             let glyph = SPARKS[(h % SPARKS.len() as u64) as usize];
-            let tint = if h.is_multiple_of(2) {
-                KICK_MAGENTA
-            } else {
-                TEAR_CYAN
+            // The net's cyan and magenta; a tinted shot tears in its colour and the
+            // deep blue behind it.
+            let tint = match (inst.tint, h.is_multiple_of(2)) {
+                (None, true) => KICK_MAGENTA,
+                (None, false) => TEAR_CYAN,
+                (Some(t), true) => Rgb(t.0, t.1, t.2).mix(DEEP, 0.6).to_color(),
+                (Some(t), false) => Rgb(t.0, t.1, t.2).to_color(),
             };
             paint(origin, area, buf, target.offset(dx, dy), |c| {
                 c.set_char(glyph).set_fg(tint);
@@ -686,10 +709,12 @@ fn number(inst: &FxInstance, tag: bool, elapsed: u64, origin: Pos, area: Rect, b
     let y = target.y - 1 - (elapsed / NUMBER_RISE) as i32;
     let fade = elapsed >= 10;
     let (fg, bg, text, x0) = if tag {
-        let (fg, bg) = if fade {
-            (Rgb(200, 120, 120), Rgb(80, 10, 10))
-        } else {
-            (WHITE, Rgb(170, 20, 20))
+        // A red field for a gun's tag; a tinted shot's tag sits on its own colour.
+        let (fg, bg) = match (inst.tint, fade) {
+            (None, false) => (WHITE, Rgb(170, 20, 20)),
+            (None, true) => (Rgb(200, 120, 120), Rgb(80, 10, 10)),
+            (Some(t), false) => (WHITE, Rgb(t.0, t.1, t.2).scale(0.45)),
+            (Some(t), true) => (Rgb(t.0, t.1, t.2).scale(0.8), Rgb(t.0, t.1, t.2).scale(0.2)),
         };
         (fg, Some(bg), format!(" {} ", inst.label), target.x - 1)
     } else {
@@ -1268,6 +1293,47 @@ mod tests {
         let (b, _) = drawn(&c, &s, &inst, 110);
         assert_eq!(at(&b, 52, 27).1, rgb((200, 120, 120)));
         assert_eq!(at(&b, 52, 27).2, rgb((80, 10, 10)));
+    }
+
+    #[test]
+    fn a_tinted_shot_tears_sparks_and_tags_in_its_colour() {
+        let (c, s) = (city(), StylePack::load().unwrap());
+        let cyan = (0, 229, 255);
+        let mut tear = shot(Fx::Tear, FIRER, TARGET, "");
+        tear.tint = Some(cyan);
+        let (b, plain) = drawn(&c, &s, &tear, 100);
+        let deep = Rgb(0, 229, 255).mix(DEEP, 0.6).to_color();
+        let mut torn = 0;
+        for y in 29..=31 {
+            for x in 49..=55 {
+                if at(&b, x, y) != at(&plain, x, y) {
+                    torn += 1;
+                    let fg = at(&b, x, y).1;
+                    assert!(
+                        fg == rgb(cyan) || fg == deep,
+                        "{fg:?}: no magenta in a tinted tear"
+                    );
+                }
+            }
+        }
+        assert!(torn > 0);
+        let mut spark = shot(Fx::Spark, FIRER, TARGET, "");
+        spark.tint = Some(cyan);
+        let (b, _) = drawn(&c, &s, &spark, 101);
+        assert_eq!(
+            at(&b, 52, 30).1,
+            rgb(cyan),
+            "the spark in the shot's colour"
+        );
+        let mut tag = shot(Fx::Number { tag: true }, FIRER, TARGET, "-2");
+        tag.tint = Some(cyan);
+        let (b, _) = drawn(&c, &s, &tag, 100);
+        assert_eq!(
+            at(&b, 52, 29).2,
+            Rgb(0, 229, 255).scale(0.45).to_color(),
+            "a blue field"
+        );
+        assert_eq!(at(&b, 52, 29).1, rgb((255, 255, 255)));
     }
 
     #[test]
