@@ -262,6 +262,16 @@ impl Input {
     fn on_hand(&self) -> bool {
         self.have >= self.need
     }
+
+    /// How an input short reads: `none` when the pack holds none of it, else how many
+    /// more the build takes.
+    fn shortfall(&self, none: &str) -> String {
+        if self.have == 0 {
+            none.to_string()
+        } else {
+            format!("{} short", self.need.saturating_sub(self.have))
+        }
+    }
 }
 
 fn inputs(st: &AppState, r: &Recipe) -> Vec<Input> {
@@ -512,7 +522,8 @@ fn parts_list(p: &mut Pen, l: &Layout, ins: &[Input], sel: usize) {
         let mark = if ok { ("■", CYAN) } else { ("□", MAGENTA) };
         p.put(x0 + 42, y, mark.0, fg(mark.1).bg(bg));
         if !ok {
-            p.put_to(x0 + 45, y, "not in pack", fg(MAGENTA).bg(bg), l.divider);
+            let tail = input.shortfall("not in pack");
+            p.put_to(x0 + 45, y, &tail, fg(MAGENTA).bg(bg), l.divider);
         }
     }
 }
@@ -985,7 +996,7 @@ fn exploded(
             art.draw_part(s.place.index, origin, f, p.buf);
         }
     }
-    // A part short in a dashed box a column wider than it, `none on hand` under it.
+    // A part short in a dashed box a column wider than it, what it lacks under it.
     for s in shown.iter().filter(|s| s.short(ins)) {
         let (x0, y0, x1, y1) = s.rect;
         p.outline(
@@ -993,7 +1004,13 @@ fn exploded(
             DASHED,
             MAGENTA,
         );
-        p.put(ox + x0 - 1, oy + y1 + 1, "none on hand", fg(MAGENTA));
+        let label = s.input.map(|i| ins[i].shortfall("none on hand"));
+        p.put(
+            ox + x0 - 1,
+            oy + y1 + 1,
+            &label.unwrap_or_default(),
+            fg(MAGENTA),
+        );
     }
     for s in &shown {
         let (Some(i), Some((x, y, w))) = (s.input, s.balloon()) else {
@@ -1340,10 +1357,12 @@ mod tests {
         assert_eq!(b[(12, 8)].symbol(), "╎", "{field}");
         assert_eq!(cells(&b, 13, 13, 3), "───", "{field}");
         assert_eq!(cells(&b, 63, 21, 13), "SERVO REBUILD");
-        assert_eq!(cells(&b, 48, 21, 11), "not in pack", "{}", row(&b, 21));
+        // Two servos held of four: two short, not missing from the pack.
+        assert_eq!(cells(&b, 39, 21, 1), "2", "{}", row(&b, 21));
+        assert_eq!(cells(&b, 48, 21, 11), "2 short    ", "{}", row(&b, 21));
         assert_eq!(b[(48, 21)].fg, MAGENTA);
         assert_eq!(b[(45, 21)].symbol(), "□");
-        assert_ne!(cells(&b, 48, 22, 11), "not in pack", "{}", row(&b, 22));
+        assert_eq!(cells(&b, 48, 22, 11), " ".repeat(11), "{}", row(&b, 22));
         assert_eq!(
             cells(&b, 63, 24, 18),
             "2 more Scrap servo",
@@ -1811,6 +1830,28 @@ mod tests {
         assert_eq!((b[(84, 6)].fg, b[(84, 6)].bg), (PANEL_BG, MAGENTA));
         assert_eq!((b[(39, 6)].fg, b[(39, 6)].bg), (CYAN, BAR_BG));
         assert_ne!(b[(35, 14)].symbol(), "┗", "the receiver's brackets go");
+    }
+
+    #[test]
+    fn a_part_short_but_held_says_how_many_it_lacks() {
+        let mut st = dshawn();
+        // The build takes two barrels and the pack holds one.
+        let barrel = ItemId::new("ratchet_barrel");
+        let r = st
+            .content
+            .recipes
+            .iter_mut()
+            .find(|r| r.id.0 == "ratchet_build")
+            .unwrap();
+        r.inputs.iter_mut().find(|(id, _)| *id == barrel).unwrap().1 = 2;
+        st.character.give(barrel, 1);
+        let d = on_the_ratchet(&mut st);
+        let b = render(&d, &st, 100, 30);
+        let field = area(&b, 3, 97, 6, 20);
+        assert_eq!(cells(&b, 78, 9, 1), "┌", "still a ghost:\n{field}");
+        assert_eq!(cells(&b, 78, 13, 12), "1 short     ", "{field}");
+        assert_eq!(b[(78, 13)].fg, MAGENTA);
+        assert_eq!(cells(&b, 48, 23, 11), "1 short    ", "{}", row(&b, 23));
     }
 
     #[test]
