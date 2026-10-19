@@ -1148,4 +1148,183 @@ mod tests {
         assert_eq!(gun.stickers.at, At::Tray);
         assert_eq!(last_log(&st), "Scan me doesn't fit on the Ratchet SMG");
     }
+    /// Jacks the player into the construct of the first building, body on the street.
+    fn jack_in(st: &mut AppState) {
+        use citygen::{Place, Pos, StratumKind};
+        let b = st.city.as_ref().unwrap().buildings[0].id;
+        let mut p = crate::walker::Player::at(Place::Construct(b), Pos::new(1, 1));
+        p.body = Some((Place::Stratum(StratumKind::Street), Pos::new(1, 1)));
+        st.player = Some(p);
+    }
+
+    fn at(bp: &Blueprint) -> At {
+        bp.stickers.at.clone()
+    }
+
+    fn on(index: usize) -> At {
+        At::Stuck {
+            index,
+            armed: false,
+        }
+    }
+
+    #[test]
+    fn up_from_the_tray_points_at_the_stuck_stickers() {
+        let mut st = dshawn();
+        let mut bp = worn(&st, "rebuilt_deck", Slot::Deck);
+        press(&mut bp, &mut st, &[KeyCode::Char('s'), KeyCode::Up]);
+        // From the first tile, the nearer factory sticker is x‿x at (45, 13).
+        assert_eq!(at(&bp), on(1));
+        let buf = screen(&bp, &st, 100, 30);
+        let (ox, oy) = (8, 3);
+        for (x, y, corner) in [
+            (ox + 44, oy + 12, "┏"),
+            (ox + 50, oy + 12, "┓"),
+            (ox + 44, oy + 14, "┗"),
+            (ox + 50, oy + 14, "┛"),
+        ] {
+            assert_eq!(buf[(x, y)].symbol(), corner, "({x},{y})");
+        }
+        // The tray has sunk to the readout row: the keys show.
+        assert_eq!(buf[(ox + 40, oy + 15)].symbol(), "▆");
+        assert_eq!(readout(&buf), "DEAD FACE ▸ stuck · lettered");
+        assert_eq!(
+            hint(&buf),
+            "↑↓←→ sticker · space peel · ↓ tray · s inspect · esc close"
+        );
+        // Right to NO FUTURE, down again to x‿x, down once more to the tray.
+        press(&mut bp, &mut st, &[KeyCode::Right]);
+        assert_eq!(at(&bp), on(0));
+        assert_eq!(
+            readout(&screen(&bp, &st, 100, 30)),
+            "NO FUTURE ▸ stuck · lettered"
+        );
+        press(&mut bp, &mut st, &[KeyCode::Char('j')]);
+        assert_eq!(at(&bp), on(1));
+        press(&mut bp, &mut st, &[KeyCode::Down]);
+        assert_eq!((at(&bp), bp.stickers.tile), (At::Tray, 0));
+    }
+
+    #[test]
+    fn peeling_takes_two_spaces_and_tears_it() {
+        let mut st = dshawn();
+        let mut bp = worn(&st, "rebuilt_deck", Slot::Deck);
+        let faces = st.character.count(&id("sticker_dead_face"));
+        press(
+            &mut bp,
+            &mut st,
+            &[KeyCode::Char('s'), KeyCode::Up, KeyCode::Char(' ')],
+        );
+        assert_eq!(
+            at(&bp),
+            At::Stuck {
+                index: 1,
+                armed: true
+            }
+        );
+        assert_eq!(stuck(&st, Slot::Deck).len(), 2, "armed is not peeled");
+        assert_eq!(
+            readout(&screen(&bp, &st, 100, 30)),
+            "DEAD FACE ▸ space again peels it · it tears · any other key keeps it"
+        );
+        // Mode keys go to the mode while armed.
+        press(&mut bp, &mut st, &[KeyCode::Char('s')]);
+        assert_eq!(bp.mode, Mode::Stickers);
+        // Any other key keeps it, and does what it does: → moves on.
+        assert_eq!(at(&bp), on(1), "s disarmed it");
+        press(&mut bp, &mut st, &[KeyCode::Char(' '), KeyCode::Right]);
+        assert_eq!(at(&bp), on(0));
+        // Esc only disarms; the window stays.
+        press(&mut bp, &mut st, &[KeyCode::Char(' ')]);
+        assert!(matches!(
+            press(&mut bp, &mut st, &[KeyCode::Esc]),
+            ScreenCmd::Stay
+        ));
+        assert_eq!(at(&bp), on(0));
+        assert_eq!(stuck(&st, Slot::Deck).len(), 2);
+        // Two spaces on x‿x: it is gone, and not back in the pack.
+        press(
+            &mut bp,
+            &mut st,
+            &[KeyCode::Down, KeyCode::Char(' '), KeyCode::Char(' ')],
+        );
+        let left: Vec<ItemId> = stuck(&st, Slot::Deck)
+            .into_iter()
+            .map(|s| s.sticker)
+            .collect();
+        assert_eq!(left, [id("sticker_no_future")]);
+        assert_eq!(st.character.count(&id("sticker_dead_face")), faces);
+        assert_eq!(last_log(&st), "Dead face peeled · it tore");
+        assert_eq!(at(&bp), on(0), "on the sticker left");
+        assert!(!buffer_text(&screen(&bp, &st, 100, 30)).contains("x‿x"));
+    }
+
+    #[test]
+    fn jacked_in_browses_but_never_changes() {
+        let mut st = dshawn();
+        let mut bp = worn(&st, "rebuilt_deck", Slot::Deck);
+        jack_in(&mut st);
+        let before = st.character.clone();
+        press(&mut bp, &mut st, &[KeyCode::Char('s'), KeyCode::Char(' ')]);
+        assert_eq!(at(&bp), At::Tray);
+        assert_eq!(last_log(&st), crate::actions::JACKED_IN);
+        press(&mut bp, &mut st, &[KeyCode::Right]);
+        assert_eq!(bp.stickers.tile, 1, "the tray still browses");
+        press(&mut bp, &mut st, &[KeyCode::Up, KeyCode::Char(' ')]);
+        assert!(
+            matches!(at(&bp), At::Stuck { armed: false, .. }),
+            "not armed"
+        );
+        assert_eq!(last_log(&st), crate::actions::JACKED_IN);
+        let was = at(&bp);
+        press(&mut bp, &mut st, &[KeyCode::Right]);
+        assert_ne!(at(&bp), was, "the arrows still move");
+        assert_eq!(st.character, before);
+    }
+
+    #[test]
+    fn a_stuck_sticker_off_the_area_still_draws_and_peels() {
+        let mut st = dshawn();
+        let mut bp = worn(&st, "rebuilt_deck", Slot::Deck);
+        let plain = screen(&bp, &st, 100, 30);
+        // Over the glass, where the mode would never put it.
+        let over = Stuck {
+            sticker: id("sticker_neko"),
+            x: 10,
+            y: 8,
+            turn: Turn::Level,
+        };
+        let copy = st.character.worn.get_mut(&Slot::Deck).unwrap();
+        copy.stickers.push(over);
+        let buf = screen(&bp, &st, 100, 30);
+        let (ox, oy) = (8, 3);
+        let neko = Color::Rgb(0xff, 0x00, 0xc8);
+        let cells: Vec<(u16, u16)> = (oy + 8..oy + 13)
+            .flat_map(|y| (ox + 10..ox + 22).map(move |x| (x, y)))
+            .collect();
+        assert!(
+            cells
+                .iter()
+                .any(|&(x, y)| buf[(x, y)].fg == neko || buf[(x, y)].bg == neko)
+        );
+        assert!(cells.iter().any(|&(x, y)| buf[(x, y)] != plain[(x, y)]));
+        // The mode points at it and peels it like any other.
+        press(
+            &mut bp,
+            &mut st,
+            &[KeyCode::Char('s'), KeyCode::Up, KeyCode::Left],
+        );
+        assert_eq!(at(&bp), on(2));
+        assert_eq!(
+            readout(&screen(&bp, &st, 100, 30)),
+            "NEKO ▸ stuck · picture"
+        );
+        press(&mut bp, &mut st, &[KeyCode::Char(' '), KeyCode::Char(' ')]);
+        assert_eq!(stuck(&st, Slot::Deck).len(), 2);
+        assert!(
+            stuck(&st, Slot::Deck)
+                .iter()
+                .all(|s| s.sticker != id("sticker_neko"))
+        );
+    }
 }
