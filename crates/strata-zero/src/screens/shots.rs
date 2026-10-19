@@ -419,7 +419,7 @@ fn weapon_hardware_blueprints() {
     st.character = game::Character::debug_runner(&st.content);
     for item in ["hushcan", "redeye"] {
         let name = format!("hardware_{item}");
-        blueprint_shots(&mut st, '4', item, &name, &[(100, 30)]);
+        blueprint_shots(&mut st, '4', item, &name, &[(100, 30), (120, 40)]);
     }
 }
 

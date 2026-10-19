@@ -1,5 +1,5 @@
-//! The deck hardware drawn: large for the blueprint window, small in a deck's socket,
-//! and as a swatch for the tray. All shapes are half blocks in exact colours.
+//! The hardware drawn: large for the blueprint window, small in a deck's socket,
+//! fitted in a gun's muzzle or rail socket, and as a swatch for the tray. All shapes are half blocks in exact colours.
 
 use super::art::{Art, SocketPlace};
 use super::cyberdeck::Pen;
@@ -14,7 +14,10 @@ mod weapon;
 pub fn large_size(look: HardwareLook) -> (u16, u16) {
     match look {
         HardwareLook::Hushcan => (72, 14),
-        _ => (52, 18),
+        HardwareLook::ColdfinI
+        | HardwareLook::ColdfinII
+        | HardwareLook::Sidecar
+        | HardwareLook::Redeye => (52, 18),
     }
 }
 
@@ -115,6 +118,8 @@ pub fn draw_large(look: HardwareLook, mods: &[Mod], p: &mut Pen) {
 
 /// Where a piece of this kind draws inside its socket place: the offset from the
 /// place's corner and the size. The deck draws its own sides, so it has none.
+/// A footprint's cells belong to the piece alone: the host's drawing puts neither
+/// pixels nor text there, because pieces are folded over the finished host drawing.
 pub fn footprint(kind: SocketKind) -> Option<(i32, i32, u16, u16)> {
     match kind {
         SocketKind::Muzzle => Some((4, 0, 18, 5)),
@@ -633,6 +638,7 @@ mod tests {
                 for c in &b.content {
                     assert_eq!(c.symbol().width(), 1, "{:?}", c.symbol());
                     assert!(matches!(c.fg, Color::Rgb(..) | Color::Reset));
+                    assert!(matches!(c.bg, Color::Rgb(..) | Color::Reset));
                 }
             }
         }

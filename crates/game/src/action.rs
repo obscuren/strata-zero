@@ -1215,6 +1215,50 @@ mod tests {
     }
 
     #[test]
+    fn fitting_the_gun_checks_the_socket_kind() {
+        let (c, mut ch, mut g, at) = setup();
+        ch.give_item(&c, id("hushcan"), 1);
+        ch.give_item(&c, id("redeye"), 1);
+        let hushcan = pack_id(&ch, "hushcan");
+        let redeye = pack_id(&ch, "redeye");
+        let on_gun = |socket, piece| Action::Fit {
+            host: Host::Worn(Slot::Primary),
+            socket,
+            piece,
+        };
+        for (socket, piece, message) in [
+            (1, hushcan, "does not fit a rail socket"),
+            (0, redeye, "does not fit a muzzle socket"),
+        ] {
+            let before = ch.clone();
+            let err = apply(&mut ch, &mut g, &c, at, 0, on_gun(socket, piece)).unwrap_err();
+            assert!(err.contains(message), "{err}");
+            assert_eq!(ch, before);
+        }
+    }
+
+    #[test]
+    fn fit_into_a_carried_gun() {
+        let (c, mut ch, mut g, at) = setup();
+        ch.give_item(&c, id("ratchet_smg"), 1);
+        ch.give_item(&c, id("hushcan"), 1);
+        let gun = pack_id(&ch, "ratchet_smg");
+        let piece = pack_id(&ch, "hushcan");
+        let action = Action::Fit {
+            host: Host::Pack(gun),
+            socket: 0,
+            piece,
+        };
+        apply(&mut ch, &mut g, &c, at, 0, action).unwrap();
+        let held = ch.copy_in_pack(gun).unwrap().copy.as_ref().unwrap();
+        assert_eq!(
+            held.fitted[0].as_ref().and_then(Stack::copy_id),
+            Some(piece)
+        );
+        assert_eq!(ch.count(&id("hushcan")), 0, "fitted is not in the pack");
+    }
+
+    #[test]
     fn a_deck_worn_without_a_copy_comes_back_as_one() {
         let (c, mut ch, mut g, at) = setup();
         ch.equipment.insert(Slot::Deck, id("rebuilt_deck"));

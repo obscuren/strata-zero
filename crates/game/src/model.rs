@@ -436,7 +436,7 @@ impl Item {
         match (self.deck, self.look) {
             (Some(d), _) => d.look.sockets(),
             (None, Some(l)) => l.sockets(),
-            _ => &[],
+            (None, None) => &[],
         }
     }
 }

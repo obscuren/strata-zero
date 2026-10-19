@@ -9,6 +9,8 @@ use crate::ui::hardware::draw_fitted;
 use game::{HardwareLook, ItemLook};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+#[cfg(test)]
+use ratatui::style::Color;
 
 /// An item drawn by its look, with the pieces fitted in its sockets.
 #[derive(Clone, Debug, PartialEq)]
@@ -76,5 +78,43 @@ impl Art for ItemArt {
 
     fn sockets(&self) -> Vec<SocketPlace> {
         places(self.look, self.fitted.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unicode_width::UnicodeWidthStr;
+
+    const LOOKS: [ItemLook; 1] = [ItemLook::Ratchet];
+    const PIECES: [HardwareLook; 2] = [HardwareLook::Hushcan, HardwareLook::Redeye];
+
+    #[test]
+    fn every_socket_of_a_look_has_a_rect() {
+        for look in LOOKS {
+            assert_eq!(rects(look).len(), look.sockets().len(), "{look:?}");
+        }
+    }
+
+    #[test]
+    fn the_gun_draws_single_width_glyphs_in_exact_colours() {
+        for fitted in [
+            vec![None, None],
+            PIECES.iter().map(|&p| Some(p)).collect::<Vec<_>>(),
+        ] {
+            let art = ItemArt {
+                look: ItemLook::Ratchet,
+                fitted,
+            };
+            let (w, h) = art.size();
+            let area = Rect::new(0, 0, w, h);
+            let mut buf = Buffer::empty(area);
+            art.draw((0, 0), area, &mut buf);
+            for c in &buf.content {
+                assert_eq!(c.symbol().width(), 1, "{:?}", c.symbol());
+                assert!(matches!(c.fg, Color::Rgb(..) | Color::Reset));
+                assert!(matches!(c.bg, Color::Rgb(..) | Color::Reset));
+            }
+        }
     }
 }

@@ -1650,7 +1650,7 @@ mod tests {
     }
 
     #[test]
-    fn deck_mods_come_from_the_worn_deck() {
+    fn deck_hardware_counts_in_the_worn_deck() {
         let mut c = Content::load().unwrap();
         let mut ch = Character::debug_runner(&c);
         assert_eq!((ch.trace_cut(&c), ch.deck_power(&c)), (0, 0));
