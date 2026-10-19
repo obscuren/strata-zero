@@ -12,7 +12,7 @@ use crate::ui::cyberdeck::{
 use crate::ui::sidebar::wrap_text;
 use citygen::Place;
 use crossterm::event::KeyCode;
-use game::{AbilityId, Action, DeckSpec, Item, ItemId, ItemKind, SlotPlan, Source};
+use game::{AbilityId, Action, DeckSpec, Item, ItemId, ItemKind, Slot, SlotPlan, Source};
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 
@@ -408,13 +408,20 @@ pub(crate) fn glass(st: &AppState, tab: &DeckTab) -> (Glass, (String, GlassTone)
                 ),
             }
         }
-        Part::Plate => (
-            lines(&Deck::item_card(st, &deck.id)),
+        Part::Plate => {
+            // The jacked deck's card reads its worn copy, what is fitted in it included.
+            let copy = tab
+                .equipped
+                .then(|| st.character.worn_copy(Slot::Deck))
+                .flatten();
             (
-                format!("{used}/{} slots · rating {}", spec.slots, spec.rating),
-                GlassTone::Dim,
-            ),
-        ),
+                lines(&Deck::item_card_of(st, &deck.id, copy)),
+                (
+                    format!("{used}/{} slots · rating {}", spec.slots, spec.rating),
+                    GlassTone::Dim,
+                ),
+            )
+        }
         Part::Rom(k) => {
             let Some((id, name)) = roms(st, tab).into_iter().nth(k) else {
                 return (Vec::new(), line("", GlassTone::Dim));

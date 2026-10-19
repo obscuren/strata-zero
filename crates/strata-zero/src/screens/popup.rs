@@ -40,10 +40,11 @@ pub enum Pick {
     /// Shows these lines in place of the rows; Esc returns to the rows.
     Card(Vec<Line<'static>>),
     /// Opens an item's blueprint window in place of the popup: from GEAR the item worn,
-    /// from INVENTORY one in the pack.
+    /// from INVENTORY one in the pack; `copy` names which, for an item held per copy.
     Blueprint {
         item: game::ItemId,
         equipped: bool,
+        copy: Option<game::CopyId>,
     },
     /// Toggles a sidebar section and closes.
     View(Section),
@@ -502,9 +503,13 @@ impl Popup {
                     fx: TransitionKind::None,
                 }
             }
-            Pick::Blueprint { item, equipped } => ScreenCmd::Replace {
+            Pick::Blueprint {
+                item,
+                equipped,
+                copy,
+            } => ScreenCmd::Replace {
                 to: Box::new(crate::screens::blueprint::Blueprint::open(
-                    st, item, equipped,
+                    st, item, equipped, copy,
                 )),
                 fx: TransitionKind::None,
             },

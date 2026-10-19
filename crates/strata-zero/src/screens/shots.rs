@@ -230,7 +230,16 @@ fn blueprint_shots(st: &mut AppState, tab: char, item: &str, name: &str, sizes: 
     let map = MapScreen::walking(st);
     let mut deck = Deck::new(st.tick);
     deck.update(st, &[key(KeyCode::Char(tab))]);
-    let window = Blueprint::open(st, ItemId::new(item), tab == '3');
+    // The copy the deck screen would pass: the one worn from GEAR, else the first carried.
+    let id = ItemId::new(item);
+    let copy = if tab == '3' {
+        let slot = st.content.item(&id).and_then(|i| i.slot);
+        slot.and_then(|s| st.character.worn_copy(s)).map(|k| k.id)
+    } else {
+        let carried = st.character.inventory.iter().find(|s| s.item == id);
+        carried.and_then(|s| s.copy_id())
+    };
+    let window = Blueprint::open(st, id, tab == '3', copy);
     // The glass typed out, clear of the deck's signal jitter (three ticks in ninety).
     st.tick += 200;
     if st.tick % 90 < 3 {
