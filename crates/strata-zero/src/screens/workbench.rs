@@ -61,9 +61,17 @@ pub struct Workbench {
     drawing: usize,
     /// Which input of that drawing's recipe.
     part: usize,
-    /// The build being shown closing: the tick it started and the drawing it was on.
-    /// It is not remembered across closing.
-    anim: Option<(u64, usize)>,
+    /// The build being shown closing. It is not remembered across closing.
+    anim: Option<Built>,
+}
+
+/// A build the sheet is showing: the tick it started, the drawing it was on, and what
+/// the pack held of each input before it, which the sheet reads until it is over.
+#[derive(Clone, Debug, PartialEq)]
+struct Built {
+    start: u64,
+    drawing: usize,
+    had: Vec<u32>,
 }
 
 impl Workbench {
@@ -92,7 +100,7 @@ impl Workbench {
         Workbench {
             drawing,
             part: if self.part < inputs { self.part } else { 0 },
-            anim: self.anim,
+            anim: self.anim.clone(),
         }
     }
 
@@ -118,9 +126,16 @@ impl Workbench {
         }
         let at = self.clamped(&st.content);
         let r = &st.content.recipes[list[at.drawing]];
-        let ins = inputs(st, r);
+        let mut ins = inputs(st, r);
+        let run = self.running(st);
+        // While the build runs the whole sheet reads the pack as it was before it.
+        if let Some(b) = run {
+            for (input, &had) in ins.iter_mut().zip(&b.had) {
+                input.have = had;
+            }
+        }
         let art = assembly(st, r);
-        let t = self.running(st).map(|start| st.tick.saturating_sub(start));
+        let t = run.map(|b| st.tick.saturating_sub(b.start));
         let mut field = Pen {
             buf: &mut *p.buf,
             clip: l.field().intersection(sheet),
@@ -164,14 +179,12 @@ impl Workbench {
         }
     }
 
-    /// The tick the build on the sheet shown started, while it is still closing or held.
-    fn running(&self, st: &AppState) -> Option<u64> {
+    /// The build on the sheet shown, while it is still closing or held.
+    fn running(&self, st: &AppState) -> Option<&Built> {
         let shown = self.clamped(&st.content).drawing;
-        self.anim
-            .filter(|&(start, at)| {
-                at == shown && st.tick.saturating_sub(start) < CLOSE_TICKS + HOLD_TICKS
-            })
-            .map(|(start, _)| start)
+        self.anim.as_ref().filter(|b| {
+            b.drawing == shown && st.tick.saturating_sub(b.start) < CLOSE_TICKS + HOLD_TICKS
+        })
     }
 
     /// Builds the recipe on the sheet, logging the result, and starts the animation
@@ -181,10 +194,20 @@ impl Workbench {
         let Some(&i) = drawings(&st.content).get(at) else {
             return;
         };
-        let id = st.content.recipes[i].id.clone();
+        let r = &st.content.recipes[i];
+        let id = r.id.clone();
+        let had = r
+            .inputs
+            .iter()
+            .map(|(id, _)| st.character.count(id))
+            .collect();
         let result = perform(st, Action::Build(id));
         if result.is_ok() {
-            self.anim = Some((st.tick, at));
+            self.anim = Some(Built {
+                start: st.tick,
+                drawing: at,
+                had,
+            });
         }
         report(st, result);
     }
@@ -2007,6 +2030,77 @@ mod tests {
         assert!(!field.contains("ASSEMBLED"), "{field}");
         let parts = area(&b, 3, 61, 21, 26);
         assert!(parts.contains("not in pack"), "{parts}");
+    }
+
+    #[test]
+    fn the_sheet_shows_the_counts_from_before_until_it_is_over() {
+        let (mut st, mut d) = ready_ratchet();
+        let r = st.content.recipes[drawings(&st.content)[d.workbench.drawing]].clone();
+        let counts = |st: &AppState| -> Vec<String> {
+            r.inputs
+                .iter()
+                .map(|(id, _)| st.character.count(id).to_string())
+                .collect()
+        };
+        // The ON HAND column of the five rows.
+        let shown = |b: &Buffer| -> Vec<String> {
+            (21..26)
+                .map(|y| cells(b, 39, y, 5).trim_end().to_string())
+                .collect()
+        };
+        let before = counts(&st);
+        press(&mut d, &mut st, KeyCode::Char(' '), 1);
+        let after = counts(&st);
+        assert_ne!(before, after);
+
+        // Twenty ticks in, the item whole: the sheet still reads as it did.
+        st.tick = 120;
+        let b = render(&d, &st, 100, 30);
+        let parts = area(&b, 3, 61, 21, 26);
+        assert!(area(&b, 3, 97, 6, 20).contains(" ASSEMBLED "));
+        assert_eq!(shown(&b), before, "{parts}");
+        assert!(!parts.contains("not in pack"), "{parts}");
+        assert_eq!(cells(&b, 63, 24, 18), "every part on hand");
+
+        // Forty-six ticks in, it is over and the sheet shows the pack as it is.
+        st.tick = 146;
+        let b = render(&d, &st, 100, 30);
+        let parts = area(&b, 3, 61, 21, 26);
+        assert_eq!(shown(&b), after, "{parts}");
+        assert!(parts.contains("not in pack"), "{parts}");
+    }
+
+    #[test]
+    fn a_process_shows_the_counts_from_before_until_it_is_over() {
+        let mut st = dshawn();
+        st.character.skills.insert(SkillId::new("medtech"));
+        // One coil, which the build takes.
+        let coils = ItemId::new("copper_coil");
+        st.character.inventory.retain(|s| s.item != coils);
+        st.character.give(coils.clone(), 1);
+        st.tick = 100;
+        let mut d = bench(&mut st);
+        press(&mut d, &mut st, KeyCode::Right, 5);
+        assert_eq!(recipe_id(&st, &d), "stim_batch");
+        press(&mut d, &mut st, KeyCode::Char(' '), 1);
+        assert_eq!(st.character.count(&coils), 0);
+
+        // While BUILT shows, the coil's box is solid and the pack held one.
+        st.tick = 120;
+        let b = render(&d, &st, 100, 30);
+        let field = area(&b, 3, 97, 6, 20);
+        assert!(field.contains(" BUILT "), "{field}");
+        assert_eq!(cells(&b, 13, 7, 3), "───", "{field}");
+        assert_eq!(cells(&b, 39, 21, 1), "1", "{}", row(&b, 21));
+        assert!(!row(&b, 21).contains("not in pack"), "{}", row(&b, 21));
+
+        // Over, it is dashed and none is left.
+        st.tick = 146;
+        let b = render(&d, &st, 100, 30);
+        let field = area(&b, 3, 97, 6, 20);
+        assert_eq!(cells(&b, 13, 7, 3), "╌╌╌", "{field}");
+        assert_eq!(cells(&b, 39, 21, 1), "0", "{}", row(&b, 21));
+        assert!(row(&b, 21).contains("not in pack"), "{}", row(&b, 21));
     }
 
     #[test]
