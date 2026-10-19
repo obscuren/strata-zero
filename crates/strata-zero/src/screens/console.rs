@@ -11,11 +11,11 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 34] = [
+const COMMANDS: [&str; 36] = [
     "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "talent", "tpts", "program",
     "heat", "alarm", "wake", "engage", "calm", "ice", "failsafe", "hp", "who", "clock", "tp",
     "clear", "help", "trace", "seize", "backdoor", "eyes", "light", "time", "job", "standing",
-    "jobs", "target",
+    "jobs", "target", "foe", "foes",
 ];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
@@ -265,6 +265,49 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 .collect();
             if lines.is_empty() {
                 return Ok("no ICE here".to_string());
+            }
+            Ok(lines.join(" · "))
+        }
+        "foe" => {
+            let n: i32 = args.first().and_then(|a| a.parse().ok()).unwrap_or(6);
+            let (place, pos) = st
+                .player
+                .as_ref()
+                .map(|p| (p.place, p.pos))
+                .ok_or("no body")?;
+            let at = pos.offset(n, 0);
+            let open = place.stratum().is_some_and(|k| {
+                st.city.as_ref().is_some_and(|c| c.walkable(k, at))
+            }) && crate::foes::foe_at(st, place, at).is_none();
+            if !open {
+                return Err("no room there".to_string());
+            }
+            let foe = crate::foes::Foe::goon(place, at);
+            let line = format!("a {} at {},{}", foe.name, at.x, at.y);
+            st.foes.push(foe);
+            Ok(line)
+        }
+        "foes" => {
+            let lines: Vec<String> = st
+                .foes
+                .iter()
+                .enumerate()
+                .map(|(i, f)| {
+                    let mode = match f.mode {
+                        crate::foes::FoeMode::Idle => "idle".to_string(),
+                        crate::foes::FoeMode::Hunting { seen, lost } => {
+                            format!("hunting→{},{} lost {lost}", seen.x, seen.y)
+                        }
+                    };
+                    let down = if f.down { " down" } else { "" };
+                    format!(
+                        "{i} {} {mode} {}/{} at {},{}{down}",
+                        f.name, f.hp, f.hp_max, f.pos.x, f.pos.y
+                    )
+                })
+                .collect();
+            if lines.is_empty() {
+                return Ok("no foes".to_string());
             }
             Ok(lines.join(" · "))
         }
@@ -732,7 +775,10 @@ mod tests {
         assert_eq!(run(&mut st, at, "focus 5").unwrap(), "focus 5/30");
         assert_eq!(run(&mut st, at, "focus 99").unwrap(), "focus 30/30");
         assert!(run(&mut st, at, "help").unwrap().contains("xp"));
-        assert_eq!(complete(&st, "", "fo"), vec!["focus".to_string()]);
+        assert_eq!(
+            complete(&st, "", "fo"),
+            vec!["focus".to_string(), "foe".to_string(), "foes".to_string()]
+        );
         assert_eq!(run(&mut st, at, "sp 2").unwrap(), "sp 2");
         assert_eq!(run(&mut st, at, "pts 3").unwrap(), "points 3");
         assert_eq!((st.character.sp, st.character.stat_points), (2, 3));

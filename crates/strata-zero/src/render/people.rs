@@ -1,5 +1,6 @@
 //! The living city on screen: walkers, cars, chats and lit doors inside the bubble.
 
+use crate::foes::Foe;
 use crate::render::map::MapRef;
 use crate::render::style::StylePack;
 use crate::render::viewport::{Overlay, tile_to_screen};
@@ -34,7 +35,14 @@ pub struct PeopleOverlay<'a> {
     pub vis: Option<&'a Grid<Visibility>>,
     /// Dev: the walkers who can see you, drawn red.
     pub eyes: &'a [PersonId],
+    /// Who stands against you; a down one is remembered where it fell.
+    pub foes: &'a [Foe],
 }
+
+/// A standing foe.
+pub const FOE: Color = Color::Rgb(255, 80, 80);
+/// A foe down.
+pub const FOE_DOWN: Color = Color::Rgb(120, 30, 30);
 
 impl Overlay for PeopleOverlay<'_> {
     fn draw(
@@ -46,6 +54,36 @@ impl Overlay for PeopleOverlay<'_> {
         buf: &mut Buffer,
         style: &StylePack,
     ) {
+        for f in self.foes.iter().filter(|f| f.place == map.place()) {
+            let Some((sx, sy)) = tile_to_screen(area, origin, f.pos) else {
+                continue;
+            };
+            let seen = match self.vis {
+                None => Visibility::Visible,
+                Some(v) => v.get(f.pos).copied().unwrap_or(Visibility::Unseen),
+            };
+            let cell = &mut buf[(sx, sy)];
+            if f.down {
+                if seen != Visibility::Unseen {
+                    cell.set_char('%').set_fg(FOE_DOWN);
+                }
+                continue;
+            }
+            if seen != Visibility::Visible {
+                continue;
+            }
+            let fg = if f.stunned > 0 {
+                Rgb(255, 80, 80).scale(0.5).to_color()
+            } else {
+                FOE
+            };
+            cell.set_char('@').set_fg(fg);
+            if f.hunting() {
+                cell.modifier.insert(Modifier::BOLD);
+            } else {
+                cell.modifier.remove(Modifier::BOLD);
+            }
+        }
         if !map.place().is_street() {
             return;
         }
@@ -221,6 +259,7 @@ mod tests {
             night: true,
             vis: None,
             eyes: &[],
+            foes: &[],
         }
         .draw(
             &MapRef::stratum_of(&c, StratumKind::Street),
@@ -255,6 +294,7 @@ mod tests {
             night: false,
             vis: None,
             eyes: &[],
+            foes: &[],
         }
         .draw(
             &MapRef::stratum_of(&c, StratumKind::Street),
@@ -283,6 +323,7 @@ mod tests {
             night: true,
             vis: None,
             eyes: &[],
+            foes: &[],
         }
         .draw(
             &MapRef::stratum_of(&c, StratumKind::Net),
@@ -320,6 +361,7 @@ mod tests {
             night: true,
             vis: None,
             eyes: &[],
+            foes: &[],
         }
         .draw(
             &MapRef::stratum_of(&c, StratumKind::Street),
@@ -347,6 +389,7 @@ mod tests {
             night: true,
             vis: Some(&vis),
             eyes: &[],
+            foes: &[],
         }
         .draw(
             &MapRef::stratum_of(&c, StratumKind::Street),

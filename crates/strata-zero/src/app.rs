@@ -63,6 +63,8 @@ pub struct AppState {
     pub ground: game::Ground,
     /// Ability effects in flight, oldest first.
     pub fx: Vec<FxInstance>,
+    /// Who stands against you on foot this session; cleared with the city.
+    pub foes: Vec<crate::foes::Foe>,
     /// Set when the screen should be repainted in full, as after a glitch kick.
     pub repaint: bool,
     /// Where the deck was last: its tab and the selected row per tab.
@@ -175,6 +177,7 @@ impl AppState {
             backdoors: Default::default(),
             ground: game::Ground::default(),
             fx: Vec::new(),
+            foes: Vec::new(),
             repaint: false,
             deck_tab: Tab::Skills,
             deck_rows: [0; Tab::ALL.len()],
@@ -275,6 +278,7 @@ impl AppState {
         self.ground = Default::default();
         self.player = None;
         self.fx.clear();
+        self.foes.clear();
         self.deck_tab = Tab::Skills;
         self.deck_rows = [0; Tab::ALL.len()];
         self.deck_kit = Default::default();

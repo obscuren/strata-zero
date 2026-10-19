@@ -1,0 +1,418 @@
+//! Foes on foot: who stands against you on a map, what they see, how they read
+//! and how they are listed. Their turns are in `net` (the engine) and here (the step).
+
+use crate::app::AppState;
+use crate::render::Visibility;
+use citygen::pathing::{astar, bresenham};
+use citygen::{City, Place, Pos, Terrain, Tile};
+use game::ItemId;
+
+pub const GOON_HP: u8 = 20;
+pub const GOON_REFLEX: u8 = 4;
+pub const GOON_SIGHT: i32 = 8;
+pub const GOON_MOVE: u8 = 3;
+pub const GOON_AP: u8 = 1;
+
+/// What a foe is doing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FoeMode {
+    Idle,
+    Hunting { seen: Pos, lost: u8 },
+}
+
+/// Someone with a gun on your map this session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Foe {
+    pub name: String,
+    pub place: Place,
+    pub pos: Pos,
+    pub hp: u8,
+    pub hp_max: u8,
+    pub reflex: u8,
+    pub weapon: ItemId,
+    pub sight: i32,
+    pub mode: FoeMode,
+    /// Turns left standing stunned: it neither looks, moves nor fires.
+    pub stunned: u8,
+    pub down: bool,
+}
+
+impl Foe {
+    /// A street goon with a pistol.
+    pub fn goon(place: Place, pos: Pos) -> Foe {
+        Foe {
+            name: "goon".to_string(),
+            place,
+            pos,
+            hp: GOON_HP,
+            hp_max: GOON_HP,
+            reflex: GOON_REFLEX,
+            weapon: ItemId::new("scrap_nine"),
+            sight: GOON_SIGHT,
+            mode: FoeMode::Idle,
+            stunned: 0,
+            down: false,
+        }
+    }
+
+    pub fn standing(&self) -> bool {
+        !self.down
+    }
+
+    pub fn hunting(&self) -> bool {
+        matches!(self.mode, FoeMode::Hunting { .. })
+    }
+}
+
+/// A tile nothing is seen or shot through.
+pub fn blocks_sight(t: &Tile) -> bool {
+    matches!(
+        t.terrain,
+        Terrain::Wall | Terrain::Door | Terrain::Window | Terrain::Mass
+    )
+}
+
+/// Nothing blocks the line between two tiles of a stratum, the ends excluded.
+/// False off a stratum (floors are not shot across yet) or off the map.
+pub fn line_clear(city: &City, place: Place, from: Pos, to: Pos) -> bool {
+    let Some(k) = place.stratum() else {
+        return false;
+    };
+    bresenham(from, to)
+        .into_iter()
+        .filter(|p| *p != from && *p != to)
+        .all(|p| city.tile(k, p).is_some_and(|t| !blocks_sight(t)))
+}
+
+/// A standing foe sees a tile within its sight with a clear line to it.
+pub fn sees(city: &City, foe: &Foe, to: Pos) -> bool {
+    foe.standing() && foe.pos.chebyshev(to) <= foe.sight && line_clear(city, foe.place, foe.pos, to)
+}
+
+/// The standing foe on a tile.
+pub fn foe_at(st: &AppState, place: Place, pos: Pos) -> Option<usize> {
+    st.foes
+        .iter()
+        .position(|f| f.standing() && f.place == place && f.pos == pos)
+}
+
+/// Every standing foe of a place.
+pub fn standing(st: &AppState, place: Place) -> Vec<usize> {
+    st.foes
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.standing() && f.place == place)
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Standing foes on the player's map whose tile is seen at least as well as
+/// `least`, nearest first.
+fn known(st: &AppState, least: Visibility) -> Vec<usize> {
+    let Some(p) = st.player.as_ref() else {
+        return Vec::new();
+    };
+    let vis = p.vis();
+    let mut out: Vec<usize> = standing(st, p.place)
+        .into_iter()
+        .filter(|i| {
+            vis.get(st.foes[*i].pos).is_some_and(|v| match least {
+                Visibility::Visible => *v == Visibility::Visible,
+                _ => *v != Visibility::Unseen,
+            })
+        })
+        .collect();
+    out.sort_by_key(|i| (st.foes[*i].pos.chebyshev(p.pos), *i));
+    out
+}
+
+/// Standing foes in the player's sight, nearest first.
+pub fn in_sight(st: &AppState) -> Vec<usize> {
+    known(st, Visibility::Visible)
+}
+
+/// Standing foes in the player's sight memory, nearest first.
+pub fn in_memory(st: &AppState) -> Vec<usize> {
+    known(st, Visibility::Remembered)
+}
+
+/// Any standing foe of the place hunts.
+pub fn any_hunting(st: &AppState, place: Place) -> bool {
+    st.foes
+        .iter()
+        .any(|f| f.standing() && f.place == place && f.hunting())
+}
+
+/// A foe looks: idle and seeing you, it hunts; hunting and seeing you, it marks
+/// where. Returns whether it hunts after looking. A stunned or down foe sees nothing.
+pub fn look(st: &mut AppState, i: usize) -> bool {
+    let Some((city, me)) = st
+        .city
+        .as_ref()
+        .zip(st.player.as_ref().map(|p| (p.place, p.pos)))
+    else {
+        return false;
+    };
+    let Some(foe) = st.foes.get(i) else {
+        return false;
+    };
+    if foe.down || foe.stunned > 0 || foe.place != me.0 {
+        return foe.hunting();
+    }
+    if sees(city, foe, me.1) {
+        st.foes[i].mode = FoeMode::Hunting {
+            seen: me.1,
+            lost: 0,
+        };
+        return true;
+    }
+    foe.hunting()
+}
+
+/// Every standing foe on the player's map looks; true when any hunts.
+pub fn look_all(st: &mut AppState) -> bool {
+    let Some(place) = st.player.as_ref().map(|p| p.place) else {
+        return false;
+    };
+    let mut any = false;
+    for i in standing(st, place) {
+        any |= look(st, i);
+    }
+    any
+}
+
+/// One step along the shortest walkable path from `from` to `goal`, never onto a
+/// tile in `avoid` (the player's, other foes') unless it is the goal itself.
+pub fn step_toward(city: &City, place: Place, from: Pos, goal: Pos, avoid: &[Pos]) -> Option<Pos> {
+    if from == goal {
+        return None;
+    }
+    let k = place.stratum()?;
+    let path = astar(city.size, from, goal, |_, to| {
+        if avoid.contains(&to) && to != goal {
+            return None;
+        }
+        city.walkable(k, to).then_some(1)
+    })?;
+    path.into_iter().find(|p| *p != from)
+}
+
+/// The weapon's name a foe carries, for the readouts.
+pub fn weapon_name(st: &AppState, foe: &Foe) -> String {
+    st.content
+        .item(&foe.weapon)
+        .map(|i| i.name.clone())
+        .unwrap_or_else(|| foe.weapon.0.clone())
+}
+
+/// The footer's and HERE's lines for the standing foes on the player's map that
+/// `seen` admits, nearest first: `▣ goon · hunting · 14/20 · 9 tiles`.
+pub fn lines(st: &AppState, seen: impl Fn(Pos) -> bool) -> Vec<String> {
+    let Some(p) = st.player.as_ref() else {
+        return Vec::new();
+    };
+    let mut foes: Vec<&Foe> = st
+        .foes
+        .iter()
+        .filter(|f| f.standing() && f.place == p.place && seen(f.pos))
+        .collect();
+    foes.sort_by_key(|f| f.pos.chebyshev(p.pos));
+    foes.into_iter()
+        .map(|f| {
+            let mode = if f.hunting() { "hunting" } else { "idle" };
+            let stunned = if f.stunned > 0 {
+                format!(" · stunned {}", f.stunned)
+            } else {
+                String::new()
+            };
+            format!(
+                "▣ {} · {mode} · {}/{} · {} tiles{stunned}",
+                f.name,
+                f.hp,
+                f.hp_max,
+                f.pos.chebyshev(p.pos)
+            )
+        })
+        .collect()
+}
+
+#[cfg(test)]
+pub(crate) mod testutil {
+    use super::*;
+    use crate::render::map::MapRef;
+    use citygen::StratumKind;
+
+    /// The lot with you at (6,8) and one goon at `goon`, sight refreshed.
+    pub fn lot(goon: Pos) -> AppState {
+        let mut st = AppState::new();
+        st.enter_city(City::lot(1));
+        let place = Place::Stratum(StratumKind::Street);
+        let mut p = crate::walker::Player::at(place, Pos::new(6, 8));
+        let minute = st.minute_of_day();
+        let bonus = st.sight_bonus();
+        p.update_fov(
+            &MapRef::stratum_at(st.city.as_ref().unwrap(), StratumKind::Street, minute),
+            bonus,
+        );
+        st.player = Some(p);
+        st.foes.push(Foe::goon(place, goon));
+        st
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use citygen::StratumKind;
+
+    const STREET: Place = Place::Stratum(StratumKind::Street);
+
+    #[test]
+    fn a_goon_sees_you_at_eight_not_nine() {
+        let st = testutil::lot(Pos::new(14, 8));
+        let city = st.city.as_ref().unwrap();
+        assert!(sees(city, &st.foes[0], Pos::new(6, 8)));
+        let mut far = st.foes[0].clone();
+        far.pos = Pos::new(15, 8);
+        assert!(!sees(city, &far, Pos::new(6, 8)));
+        far.pos = Pos::new(14, 16);
+        assert!(
+            sees(city, &far, Pos::new(6, 8)),
+            "chebyshev: 8 on both axes"
+        );
+        let mut down = st.foes[0].clone();
+        down.down = true;
+        assert!(!sees(city, &down, Pos::new(6, 8)));
+    }
+
+    #[test]
+    fn a_wall_blocks_sight() {
+        let st = testutil::lot(Pos::new(14, 8));
+        let city = st.city.as_ref().unwrap();
+        assert!(line_clear(city, STREET, Pos::new(2, 2), Pos::new(38, 2)));
+        // Across the wall ring at x = 0.
+        assert!(!line_clear(city, STREET, Pos::new(-1, 8), Pos::new(2, 8)));
+        assert!(!line_clear(
+            city,
+            Place::Construct(citygen::BuildingId(0)),
+            Pos::new(2, 2),
+            Pos::new(3, 2)
+        ));
+    }
+
+    #[test]
+    fn look_marks_hunting_and_refreshes_seen() {
+        let mut st = testutil::lot(Pos::new(14, 8));
+        assert!(look(&mut st, 0));
+        assert_eq!(
+            st.foes[0].mode,
+            FoeMode::Hunting {
+                seen: Pos::new(6, 8),
+                lost: 0
+            }
+        );
+        st.player.as_mut().unwrap().pos = Pos::new(7, 8);
+        assert!(look_all(&mut st));
+        assert!(matches!(st.foes[0].mode, FoeMode::Hunting { seen, .. } if seen == Pos::new(7, 8)));
+        // Out of sight it keeps hunting where it last saw you.
+        st.player.as_mut().unwrap().pos = Pos::new(30, 16);
+        st.foes[0].pos = Pos::new(2, 2);
+        assert!(look(&mut st, 0));
+        assert!(matches!(st.foes[0].mode, FoeMode::Hunting { seen, .. } if seen == Pos::new(7, 8)));
+        // An idle foe far away stays idle; a stunned one sees nothing.
+        let mut st = testutil::lot(Pos::new(18, 8));
+        assert!(!look(&mut st, 0));
+        assert_eq!(st.foes[0].mode, FoeMode::Idle);
+        st.foes[0].pos = Pos::new(10, 8);
+        st.foes[0].stunned = 1;
+        assert!(!look(&mut st, 0));
+    }
+
+    #[test]
+    fn step_toward_walks_the_shortest_way_and_never_onto_you() {
+        let st = testutil::lot(Pos::new(14, 8));
+        let city = st.city.as_ref().unwrap();
+        let me = Pos::new(6, 8);
+        assert_eq!(
+            step_toward(city, STREET, Pos::new(14, 8), me, &[me]),
+            Some(Pos::new(13, 8))
+        );
+        // Beside you the only step left is onto your tile, which the goal allows;
+        // the turn engine never asks for it (it fires instead).
+        assert_eq!(
+            step_toward(city, STREET, Pos::new(7, 8), me, &[me]),
+            Some(me)
+        );
+        assert_eq!(step_toward(city, STREET, me, me, &[]), None);
+        // Another foe's tile is walked around.
+        let block = Pos::new(13, 8);
+        let next = step_toward(city, STREET, Pos::new(14, 8), me, &[me, block]).unwrap();
+        assert_ne!(next, block);
+        assert_eq!(next.chebyshev(Pos::new(14, 8)), 1);
+        assert!(
+            step_toward(
+                city,
+                Place::Construct(citygen::BuildingId(0)),
+                me,
+                Pos::new(7, 8),
+                &[]
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn in_sight_is_nearest_first() {
+        let mut st = testutil::lot(Pos::new(14, 8));
+        st.foes.push(Foe::goon(STREET, Pos::new(9, 8)));
+        assert_eq!(in_sight(&st), vec![1, 0]);
+        assert_eq!(in_memory(&st), vec![1, 0]);
+        assert_eq!(foe_at(&st, STREET, Pos::new(9, 8)), Some(1));
+        st.foes[1].down = true;
+        assert_eq!(in_sight(&st), vec![0]);
+        assert_eq!(foe_at(&st, STREET, Pos::new(9, 8)), None);
+        // Remembered but not visible: in memory, not in sight.
+        st.player
+            .as_mut()
+            .unwrap()
+            .set_vis(Pos::new(14, 8), Visibility::Remembered);
+        assert!(in_sight(&st).is_empty());
+        assert_eq!(in_memory(&st), vec![0]);
+        st.player
+            .as_mut()
+            .unwrap()
+            .set_vis(Pos::new(14, 8), Visibility::Unseen);
+        assert!(in_memory(&st).is_empty());
+    }
+
+    #[test]
+    fn lines_read_the_spec_format() {
+        let mut st = testutil::lot(Pos::new(15, 8));
+        assert_eq!(
+            lines(&st, |_| true),
+            vec!["▣ goon · idle · 20/20 · 9 tiles"]
+        );
+        st.foes[0].mode = FoeMode::Hunting {
+            seen: Pos::new(6, 8),
+            lost: 0,
+        };
+        st.foes[0].hp = 14;
+        st.foes[0].stunned = 1;
+        assert_eq!(
+            lines(&st, |_| true),
+            vec!["▣ goon · hunting · 14/20 · 9 tiles · stunned 1"]
+        );
+        assert!(lines(&st, |_| false).is_empty());
+        assert!(any_hunting(&st, STREET));
+    }
+
+    #[test]
+    fn a_down_foe_is_not_standing_and_not_listed() {
+        let mut st = testutil::lot(Pos::new(14, 8));
+        st.foes[0].down = true;
+        assert!(standing(&st, STREET).is_empty());
+        assert!(lines(&st, |_| true).is_empty());
+        assert!(!any_hunting(&st, STREET));
+        assert_eq!(weapon_name(&st, &st.foes[0]), "Scrap nine");
+    }
+}

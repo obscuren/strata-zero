@@ -1150,6 +1150,12 @@ impl MapScreen {
             return Ok(false);
         };
         let (from, target, place) = (player.pos, player.pos.step(dir), player.place);
+        // A standing foe holds its tile on any map.
+        if let Some(i) = crate::foes::foe_at(st, place, target) {
+            let name = st.foes[i].name.clone();
+            st.warn(format!("the {name} is in the way"));
+            return Err(ScreenCmd::Stay);
+        }
         if !place.is_street() {
             // Indoors people stand at their stations and are not swapped around.
             return if self.inside_person_at(place, target).is_some() {
@@ -2079,6 +2085,7 @@ impl Screen for MapScreen {
             night: hour >= 18 || hour <= 5,
             vis,
             eyes: &eyes,
+            foes: &st.foes,
         });
         if let Some(p) = people.as_ref() {
             overlays.push(p);
@@ -2434,6 +2441,92 @@ mod tests {
 
     fn last(st: &AppState) -> Option<&str> {
         st.log.latest().map(|e| e.text.as_str())
+    }
+
+    /// The lot with you at (6,8), the goon at `goon`, the map on foot.
+    fn lot(goon: Pos) -> (AppState, MapScreen) {
+        let mut st = crate::foes::testutil::lot(goon);
+        let s = MapScreen::walking(&mut st);
+        (st, s)
+    }
+
+    fn draw_buffer(scr: &dyn Screen, st: &AppState, w: u16, h: u16) -> ratatui::buffer::Buffer {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| scr.draw(st, f)).unwrap();
+        t.backend().buffer().clone()
+    }
+
+    /// The screen cell a tile is drawn on: the map's origin is read back from
+    /// where your own `@` sits.
+    fn cell_of(
+        s: &MapScreen,
+        st: &AppState,
+        buf: &ratatui::buffer::Buffer,
+        p: Pos,
+    ) -> (String, Color) {
+        let me = st.player.as_ref().unwrap().pos;
+        let area = s.last_map.get();
+        let mut found = None;
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                if buf[(x, y)].symbol() == "@" && buf[(x, y)].fg == Color::Rgb(255, 255, 255) {
+                    found = Some((x as i32, y as i32));
+                }
+            }
+        }
+        let (mx, my) = found.expect("your @ is on the map");
+        let (sx, sy) = ((mx + p.x - me.x) as u16, (my + p.y - me.y) as u16);
+        (buf[(sx, sy)].symbol().to_string(), buf[(sx, sy)].fg)
+    }
+
+    #[test]
+    fn a_standing_foe_blocks_a_step_and_a_down_one_does_not() {
+        let (mut st, mut s) = lot(Pos::new(7, 8));
+        s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(6, 8));
+        assert_eq!(last(&st), Some("the goon is in the way"));
+        st.foes[0].down = true;
+        s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(7, 8));
+    }
+
+    #[test]
+    fn the_goon_is_drawn_red_and_down_as_a_percent() {
+        let (mut st, mut s) = lot(Pos::new(14, 8));
+        s.update(&mut st, &[]);
+        let buf = draw_buffer(&s, &st, 100, 30);
+        assert_eq!(
+            cell_of(&s, &st, &buf, Pos::new(14, 8)),
+            ("@".to_string(), Color::Rgb(255, 80, 80))
+        );
+        st.foes[0].down = true;
+        let buf = draw_buffer(&s, &st, 100, 30);
+        assert_eq!(
+            cell_of(&s, &st, &buf, Pos::new(14, 8)),
+            ("%".to_string(), Color::Rgb(120, 30, 30))
+        );
+    }
+
+    #[test]
+    fn console_foe_and_foes() {
+        let (mut st, _s) = lot(Pos::new(14, 8));
+        let at = game::At {
+            place: Place::Stratum(StratumKind::Street),
+            pos: Pos::new(6, 8),
+        };
+        assert_eq!(
+            crate::screens::console::run(&mut st, at, "foe").unwrap(),
+            "a goon at 12,8"
+        );
+        assert_eq!(st.foes.len(), 2);
+        assert_eq!(st.foes[1].pos, Pos::new(12, 8));
+        assert_eq!(
+            crate::screens::console::run(&mut st, at, "foe 40").unwrap_err(),
+            "no room there"
+        );
+        let listed = crate::screens::console::run(&mut st, at, "foes").unwrap();
+        assert!(listed.contains("0 goon idle 20/20 at 14,8"), "{listed}");
+        assert!(listed.contains("1 goon idle 20/20 at 12,8"), "{listed}");
     }
 
     fn last_is_warning(st: &AppState) -> bool {

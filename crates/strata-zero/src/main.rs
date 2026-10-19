@@ -9,6 +9,7 @@ mod cli;
 mod constructs;
 mod credentials;
 mod exposure;
+mod foes;
 mod helix;
 mod home;
 mod interact;
