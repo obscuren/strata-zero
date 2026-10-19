@@ -42,7 +42,7 @@ graphics for will simply show MISSING BLUEPRINT centered."
   for every item. Skills and categories keep their text-card Inspect (they are
   not items). The selected row's detail pane still shows the item's card as
   today.
-- **The window.** A fixed 88×28 window, centred over the deck screen, which is
+- **The window.** One window, centred over the deck screen, which is
   washed out behind it (as the map is behind the keypad). Its frame is a thin
   bezel of half blocks in the chrome's cyan (`▗▄…▄▖` top, `▐` left, `▌` right,
   `▝▀…▀▘` bottom; Jeffrey chose this over full blocks), the inside the deck
@@ -51,8 +51,11 @@ graphics for will simply show MISSING BLUEPRINT centered."
   the item's blueprint is centred; the last row inside the frame holds the
   hint line, and the row above it the latest status message while it is fresh
   (as the deck screen's strip does), so slotting and refusals still read out.
-  88×28 fits the smallest terminal (100×30); the deck's 84×22 drawing sits in
-  it with a column to spare on each side.
+  It is 100×32 where the terminal has room for that and a margin of two
+  columns and one row of the screen under it all round; on a smaller terminal
+  it is the terminal less that margin, never under 88×28 (96×28 at the
+  smallest terminal, 100×30). The deck's 84×22 drawing sits in the middle of
+  the inside. (Jeffrey asked for it a little bigger than the first 88×28.)
 - **The blueprint of the equipped deck** is the deck as this spec describes:
   bay, glass, failsafe, HEAT, ROM, WAREZ, corner brackets, pick-up/carry/drop,
   the failsafe's two presses, the lock while jacked in, and every key below

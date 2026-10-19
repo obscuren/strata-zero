@@ -13,9 +13,15 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
-/// The window's size, the same for every item; the smallest terminal holds it.
-const W: u16 = 88;
-const H: u16 = 28;
+/// The window's size, the same for every item: this big where the terminal has room
+/// for it and a margin of the screen under it, else the terminal less that margin.
+const W: u16 = 100;
+const H: u16 = 32;
+/// Never smaller than this; the smallest terminal holds it with the margin to spare.
+const MIN_W: u16 = 88;
+const MIN_H: u16 = 28;
+/// The screen under the window that shows round it: columns, rows.
+const MARGIN: (u16, u16) = (2, 1);
 /// What an item with no drawing yet shows.
 const MISSING: &str = "MISSING BLUEPRINT";
 
@@ -43,8 +49,11 @@ impl Blueprint {
 
     /// In the middle of the screen, always inside the area.
     fn rect(area: Rect) -> Rect {
-        let w = W.min(area.width);
-        let h = H.min(area.height);
+        let fit = |most: u16, least: u16, room: u16, margin: u16| {
+            most.min(room.saturating_sub(2 * margin)).max(least).min(room)
+        };
+        let w = fit(W, MIN_W, area.width, MARGIN.0);
+        let h = fit(H, MIN_H, area.height, MARGIN.1);
         Rect::new(
             area.x + area.width.saturating_sub(w) / 2,
             area.y + area.height.saturating_sub(h) / 2,
@@ -101,7 +110,7 @@ impl Screen for Blueprint {
 
     fn draw(&self, st: &AppState, f: &mut Frame) {
         let r = Self::rect(f.area());
-        if r.width < W || r.height < H {
+        if r.width < MIN_W || r.height < MIN_H {
             return;
         }
         let buf = f.buffer_mut();
@@ -196,18 +205,24 @@ mod tests {
         (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect()
     }
 
+    /// The window on a terminal of `w` by `h`.
+    fn window(w: u16, h: u16) -> Rect {
+        Blueprint::rect(Rect::new(0, 0, w, h))
+    }
+
     /// The window's corner on a terminal of `w` by `h`.
     fn corner(w: u16, h: u16) -> (u16, u16) {
-        ((w - 88) / 2, (h - 28) / 2)
+        let r = window(w, h);
+        (r.x, r.y)
     }
 
     /// The status row inside the window, at the smallest terminal, once it has typed.
     fn status(bp: &Blueprint, st: &mut AppState) -> String {
         st.tick += 30;
-        let (x, y) = corner(100, 30);
+        let r = window(100, 30);
         let buf = screen(bp, st, 100, 30);
-        let inside: String = (x + 1..x + 87)
-            .map(|cx| buf[(cx, y + 25)].symbol())
+        let inside: String = (r.x + 1..r.right() - 1)
+            .map(|cx| buf[(cx, r.bottom() - 3)].symbol())
             .collect();
         inside.trim().to_string()
     }
@@ -227,21 +242,24 @@ mod tests {
         let bp = Blueprint::open(&st, id("pawnshop_deck"), true);
         st.tick += 40;
         let buf = screen(&bp, &st, 100, 30);
-        let (x, y) = corner(100, 30);
-        assert_eq!((x, y), (6, 1));
-        let edge = |y: u16| -> String { (x..x + 88).map(|cx| buf[(cx, y)].symbol()).collect() };
+        // The smallest terminal: as wide as leaves two columns of the screen each side.
+        let r = window(100, 30);
+        assert_eq!(r, Rect::new(2, 1, 96, 28));
+        let (x, y) = (r.x, r.y);
+        let (right, bottom) = (r.right() - 1, r.bottom() - 1);
+        let edge = |y: u16| -> String { (x..=right).map(|cx| buf[(cx, y)].symbol()).collect() };
         let top = edge(y);
         assert!(top.starts_with("▗▄") && top.ends_with("▄▖"), "{top}");
-        assert_eq!(edge(y + 27), format!("▝{}▘", "▀".repeat(86)));
-        for cy in y + 1..y + 27 {
-            for (cx, side) in [(x, "▐"), (x + 87, "▌")] {
+        assert_eq!(edge(bottom), format!("▝{}▘", "▀".repeat(94)));
+        for cy in y + 1..bottom {
+            for (cx, side) in [(x, "▐"), (right, "▌")] {
                 assert_eq!(buf[(cx, cy)].symbol(), side, "({cx},{cy})");
                 assert_eq!(buf[(cx, cy)].fg, CYAN, "({cx},{cy})");
             }
         }
-        for cx in [x, x + 40, x + 87] {
+        for cx in [x, x + 40, right] {
             assert_eq!(buf[(cx, y)].fg, CYAN);
-            assert_eq!(buf[(cx, y + 27)].fg, CYAN);
+            assert_eq!(buf[(cx, bottom)].fg, CYAN);
         }
         // The title on the top edge from column 3, bold cyan.
         let title = " BLUEPRINT · PAWNSHOP DECK ";
@@ -259,32 +277,37 @@ mod tests {
         })
         .unwrap();
         let under = t.backend().buffer();
-        let window = Rect::new(x, y, 88, 28);
         for cy in 0..30 {
             for cx in 0..100 {
-                if !window.contains((cx, cy).into()) {
+                if !r.contains((cx, cy).into()) {
                     assert_eq!(buf[(cx, cy)], under[(cx, cy)], "({cx},{cy})");
                 }
             }
         }
-        // The deck is drawn inside with a column to spare on each side: the slab's
-        // corners sit at the drawing's x 1 and 82, its rows 4 and 17.
+        // The deck is drawn in the middle of the inside, five columns to spare on each
+        // side: the slab's corners sit at the drawing's x 1 and 82, its rows 4 and 17.
         let text = buffer_text(&buf);
         for want in ["K▒ROK▒WA KX-2", "CRACK", "WAREZ", "FAILSAFE"] {
             assert!(text.contains(want), "{want}: {text}");
         }
-        let (ox, oy) = (x + 2, y + 2);
+        let (ox, oy) = (x + 6, y + 2);
         assert_eq!(buf[(ox + 1, oy + 4)].symbol(), "╭");
         assert_eq!(buf[(ox + 82, oy + 17)].symbol(), "╯");
         assert_eq!(buf[(ox + 5, oy + 5)].symbol(), "K");
-        assert!(row(&buf, y + 26).contains("↑↓←→ point · space act · esc close"));
+        assert!(row(&buf, bottom - 1).contains("↑↓←→ point · space act · esc close"));
 
-        // A bigger terminal: the same window, centred.
+        // A bigger terminal: the full size, centred, with more room round the deck.
         let buf = screen(&bp, &st, 120, 40);
-        let (x, y) = corner(120, 40);
+        let r = window(120, 40);
+        assert_eq!(r, Rect::new(10, 4, 100, 32));
+        let (x, y) = (r.x, r.y);
         assert_eq!(buf[(x, y)].symbol(), "▗");
-        assert_eq!(buf[(x + 87, y + 27)].symbol(), "▘");
-        assert_eq!(buf[(x + 2 + 1, y + 2 + 4)].symbol(), "╭");
+        assert_eq!(buf[(r.right() - 1, r.bottom() - 1)].symbol(), "▘");
+        assert_eq!(buf[(x + 8 + 1, y + 4 + 4)].symbol(), "╭");
+        // Never smaller than the smallest terminal holds, and never past the screen.
+        assert_eq!(window(92, 29), Rect::new(2, 0, 88, 28));
+        assert_eq!(window(200, 60).width, 100);
+        assert_eq!(window(200, 60).height, 32);
     }
 
     #[test]
@@ -454,12 +477,13 @@ mod tests {
         let mut bp = Blueprint::open(&st, id("copper_coil"), false);
         assert!(bp.deck.is_none());
         let buf = screen(&bp, &st, 100, 30);
-        let (x, y) = corner(100, 30);
-        let line = row(&buf, y + 28 / 2);
+        let r = window(100, 30);
+        let (x, y) = (r.x, r.y);
+        let line = row(&buf, y + r.height / 2);
         let at = line
             .find("MISSING BLUEPRINT")
             .map(|b| line[..b].chars().count() as u16);
-        assert_eq!(at, Some(x + (88 - 17) / 2), "{line}");
+        assert_eq!(at, Some(x + (r.width - 17) / 2), "{line}");
         let cell = &buf[(at.unwrap(), y + 14)];
         assert_eq!(cell.fg, DIM);
         assert!(cell.modifier.contains(Modifier::BOLD));
