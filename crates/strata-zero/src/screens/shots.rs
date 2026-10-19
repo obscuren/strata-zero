@@ -562,7 +562,11 @@ fn workbench_sheets() {
     let deck = sheet(&mut st, &ratchet);
     let name = "workbench_ratchet_whole_100x30";
     shot_stack(name, &st, &[&map, &deck], (100, 30));
-    let deck = sheet(&mut st, &[KeyCode::Right; 5]);
+    let stim = crate::screens::workbench::drawings(&st.content)
+        .iter()
+        .position(|&i| st.content.recipes[i].id.0 == "stim_batch")
+        .expect("a Stim batch sheet");
+    let deck = sheet(&mut st, &vec![KeyCode::Right; stim]);
     shot_stack("workbench_stim_100x30", &st, &[&map, &deck], (100, 30));
 }
 
