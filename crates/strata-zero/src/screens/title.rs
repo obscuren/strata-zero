@@ -53,12 +53,38 @@ impl Title {
         }
     }
 
+    /// NEW GAME (COMBAT): D'SHAWN on the lot at dusk, a goon twelve tiles off,
+    /// just outside its sight.
+    fn combat_game(&self, st: &mut AppState) -> ScreenCmd {
+        use citygen::{Place, Pos, StratumKind};
+        st.character = game::Character::combat_runner(&st.content);
+        let seed = Title::fresh_params(st, st.tick).seed;
+        st.enter_city_at(citygen::City::lot(seed), 18 * 60 + 15);
+        let place = Place::Stratum(StratumKind::Street);
+        let mut p = crate::walker::Player::at(place, Pos::new(6, 8));
+        let minute = st.minute_of_day();
+        let bonus = st.sight_bonus();
+        if let Some(city) = st.city.as_ref() {
+            p.update_fov(
+                &crate::render::map::MapRef::stratum_at(city, StratumKind::Street, minute),
+                bonus,
+            );
+        }
+        st.player = Some(p);
+        st.foes.push(crate::foes::Foe::goon(place, Pos::new(18, 8)));
+        ScreenCmd::Switch {
+            to: crate::screens::explore_screen(st),
+            fx: TransitionKind::Glitch,
+        }
+    }
+
     pub fn new(tick: u64) -> Self {
         Title {
             menu: Menu::new(
                 vec![
                     "NEW GAME".into(),
                     "NEW GAME (DEBUG)".into(),
+                    "NEW GAME (COMBAT)".into(),
                     "LOAD GAME".into(),
                     "QUIT".into(),
                 ],
@@ -83,7 +109,8 @@ impl Screen for Title {
                             fx: TransitionKind::SlideUp,
                         },
                         1 => self.debug_game(st),
-                        2 => ScreenCmd::Push {
+                        2 => self.combat_game(st),
+                        3 => ScreenCmd::Push {
                             to: Box::new(Files::load(st.tick)),
                             fx: TransitionKind::SlideUp,
                         },
@@ -204,7 +231,12 @@ mod tests {
         ));
         title.update(
             &mut st,
-            &[key(KeyCode::Down), key(KeyCode::Down), key(KeyCode::Down)],
+            &[
+                key(KeyCode::Down),
+                key(KeyCode::Down),
+                key(KeyCode::Down),
+                key(KeyCode::Down),
+            ],
         );
         assert!(matches!(
             title.update(&mut st, &[key(KeyCode::Enter)]),
@@ -212,13 +244,25 @@ mod tests {
         ));
         title.update(
             &mut st,
-            &[key(KeyCode::Up), key(KeyCode::Up), key(KeyCode::Up)],
+            &[
+                key(KeyCode::Up),
+                key(KeyCode::Up),
+                key(KeyCode::Up),
+                key(KeyCode::Up),
+            ],
         );
         assert!(matches!(
             title.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Push { .. }
         ));
-        title.update(&mut st, &[key(KeyCode::Char('j')), key(KeyCode::Char('j'))]);
+        title.update(
+            &mut st,
+            &[
+                key(KeyCode::Char('j')),
+                key(KeyCode::Char('j')),
+                key(KeyCode::Char('j')),
+            ],
+        );
         assert!(
             matches!(
                 title.update(&mut st, &[key(KeyCode::Enter)]),
@@ -243,11 +287,56 @@ mod tests {
             "new game opens the chooser"
         );
         let mut t = Title::new(0);
-        t.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Down)]);
+        t.update(
+            &mut st,
+            &[key(KeyCode::Down), key(KeyCode::Down), key(KeyCode::Down)],
+        );
         assert!(matches!(
             t.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Push { .. }
         ));
+    }
+
+    #[test]
+    fn the_combat_entry_opens_the_lot_at_dusk_with_a_goon_twelve_tiles_off() {
+        use citygen::{Place, Pos, StratumKind};
+        let mut st = AppState::new();
+        let mut t = Title::new(0);
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        st.tick = 60;
+        term.draw(|f| t.draw(&st, f)).unwrap();
+        let text = buffer_text(term.backend().buffer());
+        assert!(text.contains("NEW GAME (COMBAT)"), "{text}");
+        t.update(&mut st, &[key(KeyCode::Down)]);
+        t.update(&mut st, &[key(KeyCode::Down)]);
+        let ScreenCmd::Switch {
+            to: map,
+            fx: TransitionKind::Glitch,
+        } = t.update(&mut st, &[key(KeyCode::Enter)])
+        else {
+            panic!("straight to the lot")
+        };
+        assert_eq!(st.character.handle, "D'SHAWN");
+        assert!(st.character.has_skill(&game::SkillId::new("handguns")));
+        assert!(st.city.as_ref().is_some_and(|c| c.is_lot()));
+        assert_eq!(st.minute_of_day(), 18 * 60 + 15);
+        let p = st.player.as_ref().expect("on the lot");
+        assert_eq!(
+            (p.place, p.pos),
+            (Place::Stratum(StratumKind::Street), Pos::new(6, 8))
+        );
+        assert_eq!(st.foes.len(), 1);
+        assert_eq!(st.foes[0].pos, Pos::new(18, 8));
+        assert!(!st.foes[0].hunting());
+        assert!(
+            st.world.as_ref().is_some_and(|w| w.people().is_empty()),
+            "nobody lives on the lot"
+        );
+        assert!(st.net.engaged.is_none());
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        term.draw(|f| map.draw(&st, f)).unwrap();
+        let text = buffer_text(term.backend().buffer());
+        assert!(text.contains("on foot · the lot"), "{text}");
     }
 
     #[test]

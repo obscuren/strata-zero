@@ -264,14 +264,20 @@ impl AppState {
         }
     }
 
-    /// Puts a city in place: no body, no effects in flight, the home found.
+    /// Puts a city in place: no body, no effects in flight, the home found. The
+    /// clock starts at the city's usual hour.
     pub fn enter_city(&mut self, city: City) {
+        self.enter_city_at(city, crate::ui::hud::START_MINUTE_OF_DAY);
+    }
+
+    /// Puts a city in place with its clock at `minute` of the day.
+    pub fn enter_city_at(&mut self, city: City, minute: u16) {
         self.home = crate::home::HomeRig::find(&city);
         self.world = Some(sim::World::seed(
             &city,
             &self.people,
             &sim::SimParams::default(),
-            crate::ui::hud::START_MINUTE_OF_DAY,
+            minute,
             self.tick,
         ));
         self.city = Some(city);

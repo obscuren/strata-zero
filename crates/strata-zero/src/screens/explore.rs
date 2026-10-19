@@ -644,6 +644,7 @@ impl MapScreen {
     /// What the status line calls the map.
     fn place_label(&self, st: &AppState) -> String {
         match (self.place, st.city.as_ref()) {
+            (Place::Stratum(_), Some(c)) if c.is_lot() => c.name.clone(),
             (Place::Stratum(k), _) => k.label().to_string(),
             (Place::Floor { level, .. }, _) => citygen::FloorPlan::label(level),
             (Place::Construct(_), _) => "construct".to_string(),

@@ -53,6 +53,10 @@ impl Screen for Pause {
                             fx: TransitionKind::None,
                         },
                         1 => {
+                            if st.city.as_ref().is_some_and(|c| c.is_lot()) {
+                                st.warn("nothing to save on the lot");
+                                return ScreenCmd::Stay;
+                            }
                             let name = st
                                 .city
                                 .as_ref()
@@ -148,6 +152,22 @@ mod tests {
         }
         assert_eq!(buf[(x0 + 1, y0 + 1)].bg, crate::ui::chrome::PANEL_BG);
         assert_eq!(buf[(x0 - 1, y0)].symbol(), "x");
+    }
+
+    #[test]
+    fn save_is_refused_on_the_lot() {
+        let mut st = AppState::new();
+        st.enter_city(citygen::City::lot(1));
+        let mut p = Pause::new(0);
+        p.update(&mut st, &[key(KeyCode::Down)]);
+        assert!(matches!(
+            p.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Stay
+        ));
+        assert_eq!(
+            st.log.latest().map(|e| e.text.as_str()),
+            Some("nothing to save on the lot")
+        );
     }
 
     #[test]
