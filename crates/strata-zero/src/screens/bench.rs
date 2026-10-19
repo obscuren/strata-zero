@@ -6,9 +6,9 @@
 
 use crate::actions::{JACKED_IN, jacked_in, perform, report};
 use crate::app::{AppState, ScreenCmd, TransitionKind};
-use crate::ui::art::{Art, Dir, SocketPlace, grey_area, step};
+use crate::ui::art::{Art, Dir, SocketPlace, brackets, grey_area, step};
 use crate::ui::chrome::{CYAN, DIM, PANEL_BG, put, solid};
-use crate::ui::cyberdeck::brackets;
+
 use crate::ui::hardware::{EMPTY_TILE, Tile, tile};
 use crossterm::event::KeyCode;
 use game::{Action, CopyId, Host, ItemId, Mod, Stack};

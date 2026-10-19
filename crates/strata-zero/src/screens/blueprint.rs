@@ -110,7 +110,7 @@ impl Blueprint {
     }
 
     /// `m` opens modding on an item with a drawing and sockets (its copy's, else the
-    /// content's), unless a cart is being carried.
+    /// content's) and a host to fit into, unless a cart is being carried.
     fn moddable(&self, st: &AppState) -> bool {
         let carrying = matches!(&self.inspect, Inspect::Deck(tab) if tab.holding());
         let drawn = !matches!(self.inspect, Inspect::Missing);
@@ -118,7 +118,7 @@ impl Blueprint {
             Some(copy) => copy.fitted.len(),
             None => st.content.item(&self.item).map_or(0, |i| i.sockets.len()),
         };
-        drawn && !carrying && sockets > 0
+        drawn && !carrying && self.host.is_some() && sockets > 0
     }
 
     /// One key: `m` switches mode, the rest go to the mode that is up. While a
@@ -636,7 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn the_worn_deck_shows_its_cradles() {
+    fn the_worn_deck_shows_its_connectors() {
         let mut st = state();
         st.character = Character::debug_runner(&st.content);
         st.tick = 40;

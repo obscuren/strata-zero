@@ -378,17 +378,19 @@ Some items have sockets: the pawn deck has two, one on each side. Press `m` in
 its blueprint for the modding mode. The deck turns grey and only the sockets
 stay in colour; arrows move between them and `space` opens a HARDWARE tray of
 the pieces in your pack that fit. Pick one to fit it, pick another to swap it,
-or pick empty to take it out. You can only do this out of the Net. An empty
-socket shows just its gold connector and says what it takes; a fitted piece sits
-between two steel rails. Deck hardware: Coldfin vI cuts the trace of each cast
-by 10%, Coldfin vII by 20%, and the Sidecar co-processor adds 1 to program
-power. In GEAR and INVENTORY an item's marks follow its name: a deck shows its
-program slots, then its sockets, as in `■■■■■ · ■□` (a filled box is a program
-in use or a piece fitted, an empty one is free). The same marks tell two copies
-of one item apart in the slot popup. Skills and categories inspect as cards. The readout shows hp and the
-carried weight over capacity (magenta when over, and nothing more can be picked
-up). Items carry perks while worn (stat, sight, carry, max hp) and can grant
-abilities; consumables heal when used. The templates, origins, professions,
+or pick empty to take it out; `esc` backs out of a choice, then closes the
+window. You can only do this out of the Net. Hardware only counts in the deck you
+wear. An empty socket shows just its gold connector and says what it takes; a
+fitted piece sits between two steel rails. Deck hardware: Coldfin vI cuts the
+trace of each cast by 10%, Coldfin vII by 20%, and the Sidecar co-processor adds
+1 to program power. In GEAR and INVENTORY an item's marks follow its name: a deck
+shows its program slots, then its sockets, as in `■■■■■ · ■□` (a filled box is a
+program in use or a piece fitted, an empty one is free). The same marks tell two
+copies of one item apart in the slot popup and on the ground. Skills and
+categories inspect as cards. The readout shows hp and the carried weight over
+capacity (magenta when over, and nothing more can be picked up). Items carry
+perks while worn (stat, sight, carry, max hp) and can grant abilities;
+consumables heal when used. The templates, origins, professions,
 categories and every item, ability, skill, talent and recipe live in
 `flavor/content.ron`.
 

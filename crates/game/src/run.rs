@@ -330,7 +330,8 @@ mod tests {
         let piece = ch.inventory.remove(at);
         ch.worn.get_mut(&crate::model::Slot::Deck).unwrap().fitted[0] = Some(piece);
         assert_eq!(power(&ch, &c, &p, target), bare + 1);
-        let (a, b) = (chance(bare, 12), chance(bare + 1, 12));
-        assert!(a == 0 || a == 100 || b == a + 10, "{a} {b}");
+        // Five over the bare power: mid-range, so the extra point shows.
+        let hard = bare + 5;
+        assert_eq!(chance(bare + 1, hard), chance(bare, hard) + 10);
     }
 }

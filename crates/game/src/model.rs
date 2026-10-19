@@ -243,12 +243,22 @@ pub enum Mod {
     Power(i8),
 }
 
+/// A number with its sign always shown; a negative takes a real minus, as the
+/// other mod text does.
+fn signed(n: i8) -> String {
+    if n < 0 {
+        format!("\u{2212}{}", n.unsigned_abs())
+    } else {
+        format!("+{n}")
+    }
+}
+
 impl Mod {
     /// The line the item card reads.
     pub fn line(&self) -> String {
         match self {
             Mod::TraceCut(n) => format!("trace per cast \u{2212}{n}%"),
-            Mod::Power(n) => format!("program power {n:+}"),
+            Mod::Power(n) => format!("program power {}", signed(*n)),
         }
     }
 
@@ -256,7 +266,7 @@ impl Mod {
     pub fn sticker(&self) -> String {
         match self {
             Mod::TraceCut(n) => format!("TRACE \u{2212}{n}%"),
-            Mod::Power(n) => format!("POWER {n:+}"),
+            Mod::Power(n) => format!("POWER {}", signed(*n)),
         }
     }
 }

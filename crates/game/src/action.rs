@@ -146,7 +146,7 @@ fn equip_stack(ch: &mut Character, c: &Content, item: &Item, slot: Slot, s: Stac
     let mut message = match old {
         Some(old) => {
             let old_name = name(c, &old.item);
-            ch.stow(old);
+            ch.stow_item(c, old);
             format!("swapped `{old_name}` for `{}`", item.name)
         }
         None => format!("equipped `{}`", item.name),
@@ -229,7 +229,7 @@ pub fn apply(
                 .take_off(slot)
                 .ok_or_else(|| format!("nothing in the {} slot", slot.label()))?;
             let message = format!("unequipped `{}`", name(c, &s.item));
-            ch.stow(s);
+            ch.stow_item(c, s);
             clamp_hp(ch, c);
             done(message)
         }
@@ -377,6 +377,11 @@ pub fn apply(
             }
             let sockets = host_item.sockets.len();
             let host_id = host_item.id.clone();
+            // The host copy is found before the piece leaves the pack, and a piece is
+            // never its own host.
+            if host == Host::Pack(piece) || ch.host_copy_mut(c, host).is_none() {
+                return Err("no such socket".to_string());
+            }
             let stack = ch.inventory.remove(i);
             let copy = ch
                 .host_copy_mut(c, host)
@@ -1132,7 +1137,7 @@ mod tests {
         let (c, mut ch, mut g, at) = runner();
         let one = pack_id(&ch, "coldfin_1");
         ch.give_item(&c, id("rebuilt_deck"), 1);
-        let sidecar = pack_id(&ch, "rebuilt_deck");
+        let deck = pack_id(&ch, "rebuilt_deck");
         ch.wear(Slot::Torso, id("salvage_jacket"), None);
         let jacket = Action::Fit {
             host: Host::Worn(Slot::Torso),
@@ -1142,7 +1147,7 @@ mod tests {
         for action in [
             fit(2, one),
             fit(0, CopyId(999)),
-            fit(0, sidecar),
+            fit(0, deck),
             jacket,
             Action::Fit {
                 host: Host::Worn(Slot::Legs),
@@ -1172,12 +1177,12 @@ mod tests {
     fn fit_refusal_messages() {
         let (c, mut ch, mut g, at) = runner();
         ch.give_item(&c, id("rebuilt_deck"), 1);
-        let sidecar = pack_id(&ch, "rebuilt_deck");
+        let deck = pack_id(&ch, "rebuilt_deck");
         let refused =
             |ch: &mut Character, g: &mut Ground, a| apply(ch, g, &c, at, 0, a).unwrap_err();
-        assert_eq!(refused(&mut ch, &mut g, fit(2, sidecar)), "no such socket");
+        assert_eq!(refused(&mut ch, &mut g, fit(2, deck)), "no such socket");
         assert_eq!(
-            refused(&mut ch, &mut g, fit(0, sidecar)),
+            refused(&mut ch, &mut g, fit(0, deck)),
             "`Rebuilt pawn deck` is not hardware"
         );
     }
@@ -1200,6 +1205,17 @@ mod tests {
             held.fitted[1].as_ref().and_then(Stack::copy_id),
             Some(piece)
         );
+    }
+
+    #[test]
+    fn a_deck_worn_without_a_copy_comes_back_as_one() {
+        let (c, mut ch, mut g, at) = setup();
+        ch.equipment.insert(Slot::Deck, id("rebuilt_deck"));
+        ch.worn.clear();
+        apply(&mut ch, &mut g, &c, at, 0, Action::Unequip(Slot::Deck)).unwrap();
+        let back = pack_id(&ch, "rebuilt_deck");
+        let held = ch.copy_in_pack(back).unwrap().copy.as_ref().unwrap();
+        assert_eq!(held.fitted, vec![None, None]);
     }
 
     #[test]

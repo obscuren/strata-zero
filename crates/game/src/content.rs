@@ -1163,6 +1163,8 @@ mod tests {
         assert_eq!(Mod::Power(1).line(), "program power +1");
         assert_eq!(Mod::TraceCut(20).sticker(), "TRACE \u{2212}20%");
         assert_eq!(Mod::Power(1).sticker(), "POWER +1");
+        assert_eq!(Mod::Power(-1).line(), "program power \u{2212}1");
+        assert_eq!(Mod::Power(-1).sticker(), "POWER \u{2212}1");
         assert_eq!(SocketKind::Deck.takes(), "deck hardware");
         assert_eq!(SocketKind::Deck.fits(), "deck socket");
     }

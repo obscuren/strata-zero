@@ -3,9 +3,7 @@
 
 pub mod pawn;
 
-use crate::anim::effects::pulse;
-use crate::ui::art::SocketPlace;
-use crate::ui::chrome::CYAN_RGB;
+use crate::ui::art::{SocketPlace, brackets};
 use game::{DeckLook, HardwareLook};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -178,27 +176,6 @@ pub fn draw_at(view: &DeckView, (ox, oy): (u16, u16), clip: Rect, buf: &mut Buff
     if let Some((_, r)) = parts(view).into_iter().find(|(p, _)| *p == view.point) {
         let r = Rect::new(ox + r.x, oy + r.y, r.width, r.height);
         brackets(pen.buf, r, view.tick, pen.clip);
-    }
-}
-
-/// Four cyan heavy corners one cell outside `r`, pulsing like the selected rows on
-/// the other tabs. Corners that fall outside `clip` are skipped; the cells keep
-/// whatever they sat on.
-pub(crate) fn brackets(buf: &mut Buffer, r: Rect, tick: u64, clip: Rect) {
-    let fg = CYAN_RGB.scale(0.7 + 0.3 * pulse(tick, 30)).to_color();
-    let (x1, y1) = (r.x.checked_sub(1), r.y.checked_sub(1));
-    let (x2, y2) = (r.x + r.width, r.y + r.height);
-    for (x, y, glyph) in [
-        (x1, y1, '┏'),
-        (Some(x2), y1, '┓'),
-        (x1, Some(y2), '┗'),
-        (Some(x2), Some(y2), '┛'),
-    ] {
-        if let (Some(x), Some(y)) = (x, y)
-            && clip.contains((x, y).into())
-        {
-            buf[(x, y)].set_char(glyph).set_fg(fg);
-        }
     }
 }
 
@@ -392,23 +369,6 @@ pub(crate) mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn brackets_pulse_and_stay_on_the_buffer() {
-        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 10));
-        let clip = buf.area;
-        brackets(&mut buf, Rect::new(5, 3, 4, 2), 0, clip);
-        assert_eq!(buf[(4, 2)].symbol(), "┏");
-        assert_eq!(buf[(9, 2)].symbol(), "┓");
-        assert_eq!(buf[(4, 5)].symbol(), "┗");
-        assert_eq!(buf[(9, 5)].symbol(), "┛");
-        let a = buf[(4, 2)].fg;
-        brackets(&mut buf, Rect::new(5, 3, 4, 2), 8, clip);
-        assert_ne!(buf[(4, 2)].fg, a);
-        // At the buffer's edge the corners that fall outside are skipped.
-        brackets(&mut buf, Rect::new(0, 0, 4, 2), 0, clip);
-        assert_eq!(buf[(4, 2)].symbol(), "┛");
     }
 
     #[test]
