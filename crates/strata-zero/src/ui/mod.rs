@@ -1,5 +1,6 @@
 //! Widgets built on the animation primitives: logo, menu, form, panels, transitions.
 
+pub mod art;
 pub mod board;
 pub mod chrome;
 pub mod console;

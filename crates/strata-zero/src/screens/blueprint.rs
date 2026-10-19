@@ -28,12 +28,9 @@ const MISSING: &str = "MISSING BLUEPRINT";
 pub struct Blueprint {
     /// ` BLUEPRINT · <NAME> `, on the top edge.
     title: String,
-    /// The deck on its blueprint; `None` for an item that has none yet.
+    /// The deck on its blueprint, with the copy it was opened on; `None` for an item
+    /// that has none yet.
     deck: Option<DeckTab>,
-    /// Which copy of the item, for one held per copy: what modding fits hardware into.
-    /// Nothing reads it until the modding mode does.
-    #[allow(dead_code)]
-    copy: Option<CopyId>,
 }
 
 impl Blueprint {
@@ -47,9 +44,9 @@ impl Blueprint {
         let title = format!(" BLUEPRINT · {} ", name.to_uppercase());
         let deck = known.and_then(|i| i.deck).map(|_| {
             let jacked = equipped && st.character.equipped(Slot::Deck) == Some(&item);
-            DeckTab::for_deck(st.tick, item, jacked, st)
+            DeckTab::for_deck(st.tick, item, jacked, copy, st)
         });
-        Blueprint { title, deck, copy }
+        Blueprint { title, deck }
     }
 
     /// In the middle of the screen, always inside the area.
@@ -303,7 +300,7 @@ mod tests {
         assert_eq!(buf[(ox + 5, oy + 5)].symbol(), "K");
         assert!(row(&buf, bottom - 1).contains("↑↓←→ point · space act · esc close"));
         // Worn, not jacked: the player's cable snakes out under the frame on the left;
-        // the terminal's socket stays empty.
+        // the terminal's jack stays empty.
         assert_eq!(buf[(ox, oy + 16)].symbol(), "▐");
         assert_eq!(buf[(x + 1, oy + 20)].symbol(), "▌");
         assert_eq!(buf[(x, oy + 20)].symbol(), "▐");
@@ -382,7 +379,7 @@ mod tests {
             "! the deck is locked while you're jacked in"
         );
         assert!(buffer_text(&screen(&bp, &st, 100, 30)).contains("locked · jacked in"));
-        // ... and the terminal's cyan cable is in the right socket, out under the frame.
+        // ... and the terminal's cyan cable is in the right jack, out under the frame.
         let buf = screen(&bp, &st, 100, 30);
         let cell = &buf[(x + 94, y + 22)];
         assert_eq!((cell.symbol(), cell.fg), ("▌", CYAN));
@@ -442,9 +439,9 @@ mod tests {
         st.tick += 40;
         let buf = screen(&bp, &st, 100, 30);
         let (x, y) = corner(100, 30);
-        // In the pack: both sockets empty, no cables.
-        for (socket, plug) in [(x + 7, x + 6), (x + 88, x + 89)] {
-            assert_eq!(buf[(socket, y + 18)].symbol(), "█");
+        // In the pack: both jacks empty, no cables.
+        for (jack, plug) in [(x + 7, x + 6), (x + 88, x + 89)] {
+            assert_eq!(buf[(jack, y + 18)].symbol(), "█");
             assert_eq!(buf[(plug, y + 18)].symbol(), " ");
         }
         for cx in [x + 1, x + 94] {
@@ -495,6 +492,38 @@ mod tests {
         st.tick += 40;
         let text = buffer_text(&screen(&bp, &st, 100, 30));
         assert!(text.contains("from Pawnshop deck"), "{text}");
+    }
+
+    #[test]
+    fn the_worn_deck_shows_its_cradles() {
+        let mut st = state();
+        st.character = Character::debug_runner(&st.content);
+        st.tick = 40;
+        let copy = st.character.worn_copy(Slot::Deck).map(|k| k.id);
+        let mut bp = Blueprint::open(&st, id("rebuilt_deck"), true, copy);
+        assert!(deck(&bp).equipped);
+        st.tick += 40;
+        let buf = screen(&bp, &st, 100, 30);
+        // The window at x 2, its inside from 3; the drawing's origin at x 8.
+        let (x, y) = corner(100, 30);
+        let (ox, oy) = (x + 6, y + 2);
+        assert_eq!(ox, 8);
+        assert_eq!(buf[(ox + 1, oy + 4)].symbol(), "╭");
+        // Each socket's outer rail end: L at drawing x -4, one column in from the
+        // inside's first; R at drawing x 87.
+        assert_eq!(buf[(4, oy + 6)].symbol(), "▄");
+        assert_eq!(buf[(95, oy + 6)].symbol(), "▄");
+        assert_eq!(buf[(4, oy + 12)].symbol(), "▀");
+        assert_eq!(buf[(95, oy + 12)].symbol(), "▀");
+        // The maker plate's card lists both sockets, empty.
+        press(&mut bp, &mut st, &[KeyCode::Down]);
+        assert_eq!(deck(&bp).point, Part::Plate);
+        let (body, _) = crate::screens::cyberdeck::glass(&st, deck(&bp));
+        let empty = body
+            .iter()
+            .filter(|(t, _)| t == "□ empty socket · deck hardware")
+            .count();
+        assert_eq!(empty, 2, "{body:?}");
     }
 
     #[test]

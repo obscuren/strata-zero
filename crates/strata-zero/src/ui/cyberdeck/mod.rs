@@ -1,12 +1,12 @@
-//! A deck's blueprint: the deck as hardware, what it is made of, where its parts sit
-//! and how the pointer moves between them. It works on a `DeckView` snapshot, never
-//! on the game state.
+//! A deck's blueprint: the deck as hardware, what it is made of, and where its parts
+//! and sockets sit. It works on a `DeckView` snapshot, never on the game state.
 
 pub mod pawn;
 
 use crate::anim::effects::pulse;
+use crate::ui::art::SocketPlace;
 use crate::ui::chrome::CYAN_RGB;
-use game::DeckLook;
+use game::{DeckLook, HardwareLook};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
@@ -49,14 +49,6 @@ impl Part {
             _ => Part::Inv(n - 1000),
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Dir {
-    Up,
-    Down,
-    Left,
-    Right,
 }
 
 /// The failsafe switch's position.
@@ -110,9 +102,9 @@ pub struct DeckView {
     pub switch: Switch,
     /// The trace the HUD reads, `None` with none in reach or the deck not jacked.
     pub trace: Option<u8>,
-    /// Jacked in: the LINK lamp lit and the terminal's cable in the right socket.
+    /// Jacked in: the LINK lamp lit and the terminal's cable in the right jack.
     pub link: bool,
-    /// Worn: the player's cable in the left socket.
+    /// Worn: the player's cable in the left jack.
     pub plugged: bool,
     pub handle: String,
     /// The glass rows to show, already wrapped and scrolled, at most `GLASS_ROWS`.
@@ -123,6 +115,12 @@ pub struct DeckView {
     /// Glass characters typed so far; `usize::MAX` is all of them.
     pub typed: usize,
     pub tick: u64,
+    /// One per socket the deck has: the look of the piece fitted in it, if any. A
+    /// deck without sockets draws no cradles.
+    pub sockets: Vec<Option<HardwareLook>>,
+    /// The deck alone, for modding: its glass blank, no WAREZ, no carried cart and
+    /// no brackets.
+    pub bare: bool,
 }
 
 /// The drawing's size for a look.
@@ -139,12 +137,29 @@ pub fn parts(view: &DeckView) -> Vec<(Part, Rect)> {
     }
 }
 
+/// The deck's sockets and where they sit, relative to the drawing's origin. Only
+/// modding points at them; they are not parts.
+#[allow(dead_code)] // until the modding mode points at them
+pub fn sockets(view: &DeckView) -> Vec<SocketPlace> {
+    match view.look {
+        DeckLook::Pawn => pawn::sockets(view),
+    }
+}
+
+/// Where `draw` puts the drawing's origin in `area`: centred. Both of the window's
+/// modes draw from here, so switching never moves the deck.
+pub fn origin(look: DeckLook, area: Rect) -> (u16, u16) {
+    let (w, h) = size(look);
+    (
+        area.x + area.width.saturating_sub(w) / 2,
+        area.y + area.height.saturating_sub(h) / 2,
+    )
+}
+
 /// Draws the deck centred in `area`, then the pointer's corners round the pointed
-/// part. Nothing is written outside `area`.
+/// part unless the view is bare. Nothing is written outside `area`.
 pub fn draw(view: &DeckView, area: Rect, buf: &mut Buffer) {
-    let (w, h) = size(view.look);
-    let ox = area.x + area.width.saturating_sub(w) / 2;
-    let oy = area.y + area.height.saturating_sub(h) / 2;
+    let (ox, oy) = origin(view.look, area);
     let mut pen = Pen {
         clip: area.intersection(buf.area),
         buf,
@@ -153,6 +168,9 @@ pub fn draw(view: &DeckView, area: Rect, buf: &mut Buffer) {
     };
     match view.look {
         DeckLook::Pawn => pawn::draw_with(view, &mut pen),
+    }
+    if view.bare {
+        return;
     }
     if let Some((_, r)) = parts(view).into_iter().find(|(p, _)| *p == view.point) {
         let r = Rect::new(ox + r.x, oy + r.y, r.width, r.height);
@@ -273,56 +291,11 @@ impl Pen<'_> {
     }
 }
 
-/// The part nearest `from` in `dir` that `allow` lets the pointer rest on, or
-/// `from` when there is none. Distances run in square units (a cell is twice as
-/// tall as wide). A part in the 45 degree cone wins by `primary + perp`; only when
-/// that cone holds none does a wider one (`perp <= 2 * primary`) count, by
-/// `primary + 2 * perp`. Ties go to the earlier part.
-pub fn step(parts: &[(Part, Rect)], from: Part, dir: Dir, allow: impl Fn(Part) -> bool) -> Part {
-    let centre = |r: &Rect| {
-        (
-            f32::from(r.x) + f32::from(r.width) / 2.0,
-            2.0 * (f32::from(r.y) + f32::from(r.height) / 2.0),
-        )
-    };
-    let Some((_, here)) = parts.iter().find(|(p, _)| *p == from) else {
-        return from;
-    };
-    let (fx, fy) = centre(here);
-    let mut tight: Option<(f32, Part)> = None;
-    let mut wide: Option<(f32, Part)> = None;
-    for (p, r) in parts {
-        if *p == from || !allow(*p) {
-            continue;
-        }
-        let (cx, cy) = centre(r);
-        let (dx, dy) = (cx - fx, cy - fy);
-        let (primary, perp) = match dir {
-            Dir::Right => (dx, dy.abs()),
-            Dir::Left => (-dx, dy.abs()),
-            Dir::Down => (dy, dx.abs()),
-            Dir::Up => (-dy, dx.abs()),
-        };
-        if primary <= 0.0 {
-            continue;
-        }
-        let (tier, score) = if perp <= primary {
-            (&mut tight, primary + perp)
-        } else if perp <= 2.0 * primary {
-            (&mut wide, primary + 2.0 * perp)
-        } else {
-            continue;
-        };
-        if tier.is_none_or(|(best, _)| score < best) {
-            *tier = Some((score, *p));
-        }
-    }
-    tight.or(wide).map_or(from, |(_, p)| p)
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::ui::art::{Dir, step};
+    use game::{HardwareLook, SocketKind};
 
     pub fn cart(name: &str, size: u8) -> Cart {
         Cart {
@@ -354,6 +327,8 @@ pub(crate) mod tests {
             more_below: false,
             typed: usize::MAX,
             tick: 0,
+            sockets: Vec::new(),
+            bare: false,
         }
     }
 
@@ -381,6 +356,7 @@ pub(crate) mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, 140, 40));
         draw(&v, area, &mut buf);
         let (ox, oy) = (5 + (120 - 84) / 2, 3 + (30 - 22) / 2);
+        assert_eq!(origin(DeckLook::Pawn, area), (ox, oy));
         assert_eq!(buf[(ox + 4, oy + 5)].symbol(), " ");
         assert_eq!(buf[(ox + 5, oy + 5)].symbol(), "K");
         let blank = Buffer::empty(Rect::new(0, 0, 140, 40));
@@ -459,6 +435,34 @@ pub(crate) mod tests {
             step(&p, Part::Slot(0), Dir::Down, slots_only),
             Part::Slot(0)
         );
+    }
+
+    #[test]
+    fn socket_places_and_generic_step() {
+        let mut v = kit_view();
+        assert!(
+            sockets(&v).is_empty(),
+            "a deck without sockets has none to place"
+        );
+        v.sockets = vec![None, Some(HardwareLook::Sidecar)];
+        let places: Vec<_> = sockets(&v)
+            .into_iter()
+            .map(|s| (s.index, s.name, (s.x, s.y, s.w, s.h), s.kind))
+            .collect();
+        assert_eq!(
+            places,
+            vec![
+                (0, "L", (-4, 6, 6, 7), SocketKind::Deck),
+                (1, "R", (82, 6, 6, 7), SocketKind::Deck),
+            ]
+        );
+        // The pointer's rule works on any places, here two sockets by their index.
+        let two = [(0usize, Rect::new(0, 6, 6, 7)), (1, Rect::new(86, 6, 6, 7))];
+        let any = |_| true;
+        assert_eq!(step(&two, 0, Dir::Right, any), 1);
+        assert_eq!(step(&two, 1, Dir::Left, any), 0);
+        assert_eq!(step(&two, 0, Dir::Left, any), 0);
+        assert_eq!(step(&two, 0, Dir::Right, |p| p != 1), 0);
     }
 
     #[test]

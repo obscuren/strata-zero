@@ -1,16 +1,15 @@
 //! The deck hardware drawn: large for the blueprint window, small in a deck's socket,
 //! and as a swatch for the tray. All shapes are half blocks in exact colours.
 
-// The deck, the blueprint window and the tray call these as they land.
-#![allow(dead_code)]
-
 use super::cyberdeck::Pen;
 use game::{HardwareLook, Mod};
 use ratatui::style::Color;
 
 /// The large drawing's width.
+#[allow(dead_code)] // until the blueprint window opens on hardware
 pub const W: u16 = 52;
 /// The large drawing's height.
+#[allow(dead_code)] // until the blueprint window opens on hardware
 pub const H: u16 = 18;
 
 const fn rgb(hex: u32) -> Color {
@@ -70,6 +69,7 @@ fn run(p: &mut Pen, y: i32, xs: std::ops::Range<i32>, ch: char, fg: Color, bg: O
 }
 
 /// The large drawing at the pen's origin, 52 by 18.
+#[allow(dead_code)] // until the blueprint window opens on hardware
 pub fn draw_large(look: HardwareLook, mods: &[Mod], p: &mut Pen) {
     match look {
         HardwareLook::ColdfinI => coldfin(p, mods, false),
@@ -330,6 +330,7 @@ pub fn draw_side(look: HardwareLook, side: Side, p: &mut Pen, x: i32, y: i32) {
 }
 
 /// A piece's tray tile: its background, its ink and its swatch colours.
+#[allow(dead_code)] // until the modding tray wears it
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tile {
     pub bg: Color,
@@ -338,6 +339,7 @@ pub struct Tile {
 }
 
 /// The tile of a socket with nothing in it.
+#[allow(dead_code)] // until the modding tray wears it
 pub const EMPTY_TILE: Tile = Tile {
     bg: EMPTY_BG,
     ink: rgb(0xa0aab9),
@@ -345,6 +347,7 @@ pub const EMPTY_TILE: Tile = Tile {
 };
 
 /// The tile a piece of hardware wears in the tray.
+#[allow(dead_code)] // until the modding tray wears it
 pub fn tile(look: HardwareLook) -> Tile {
     match look {
         HardwareLook::ColdfinI | HardwareLook::ColdfinII => Tile {
