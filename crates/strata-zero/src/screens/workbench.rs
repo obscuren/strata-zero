@@ -40,6 +40,9 @@ const BOX_X: i32 = 9;
 const MAX_GAP: i32 = 3;
 /// The narrowest process box.
 const PROCESS_W: i32 = 20;
+/// The field the process diagram is laid out for, 100×30's. A wider one keeps the
+/// diagram this size and centres it.
+const PROCESS_FIELD: i32 = 94;
 /// A part short, greyed as the modding mode greys but darker: its luminance times this.
 const GHOST: f64 = 0.26;
 /// The glyphs a ghost keeps; any other is text, and blanked.
@@ -656,6 +659,13 @@ fn process(p: &mut Pen, st: &AppState, r: &Recipe, ins: &[Input], (sel, t): (usi
         return;
     }
     let (fx, fy, fh) = (f.x as i32, f.y as i32, f.height as i32);
+    // Laid out for `PROCESS_FIELD`, the diagram runs from the balloons, four left of
+    // the boxes, to the result box's edge, a column in from the field's. A wider field
+    // moves it right until it sits centred.
+    let lead = BOX_X - 4;
+    let span = PROCESS_FIELD - lead - 1;
+    let fw = i32::from(f.width);
+    let fx = fx + ((fw - span) / 2 - lead).max(0);
     let bx = fx + BOX_X;
     let jx = bx + BOX_W + 6;
     // The diagram hangs a row above the field's middle, where it reads as centred.
@@ -736,7 +746,7 @@ fn process(p: &mut Pen, st: &AppState, r: &Recipe, ins: &[Input], (sel, t): (usi
     // as it needs, the box growing round the middle row.
     p.put(px1 + 1, mid, "────▶", run(3));
     let ox0 = px1 + 7;
-    let ox1 = f.right() as i32 - 2;
+    let ox1 = fx + fw.min(PROCESS_FIELD) - 2;
     if ox1 <= ox0 + 2 {
         return;
     }
@@ -1353,6 +1363,58 @@ mod tests {
         assert_eq!(b[(77, 10)].symbol(), "┌", "{field}");
         assert_eq!(b[(95, 12)].symbol(), "┘", "{field}");
         assert_eq!(cells(&b, 81, 11, 13), "2× Stim patch", "{field}");
+    }
+
+    /// A process sheet's result box width, then the room the diagram leaves in the
+    /// field on its left and on its right.
+    fn process_geometry(b: &Buffer) -> (u16, u16, u16) {
+        let (w, h) = (b.area.width, b.area.height);
+        let top = (0..h).find(|&y| b[(2, y)].symbol() == "┌").unwrap();
+        let rule = (top..h).find(|&y| b[(w - 3, y)].symbol() == "┤").unwrap();
+        // The field's columns, the sheet's side edges outside them.
+        let (x0, x1) = (3, w - 3);
+        let drawn: Vec<(u16, u16)> = (top + 1..rule)
+            .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+            .filter(|&at| b[at].symbol() != " " || b[at].bg != PANEL_BG)
+            .collect();
+        let left = drawn.iter().map(|at| at.0).min().unwrap();
+        let right = drawn.iter().map(|at| at.0).max().unwrap();
+        // The result box is the rightmost: its top right corner, then its top left.
+        let (cx, cy) = drawn
+            .iter()
+            .copied()
+            .filter(|&at| b[at].symbol() == "┐")
+            .max_by_key(|at| at.0)
+            .unwrap();
+        let ox0 = (x0..cx)
+            .rev()
+            .find(|&x| b[(x, cy)].symbol() == "┌")
+            .unwrap();
+        (cx - ox0 + 1, left - x0, x1 - 1 - right)
+    }
+
+    #[test]
+    fn a_process_keeps_its_size_and_is_centred_on_a_wide_sheet() {
+        let mut st = dshawn();
+        let mut d = bench(&mut st);
+        let mut seen = 0;
+        for &i in &drawings(&st.content) {
+            if assembly(&st, &st.content.recipes[i]).is_none() {
+                seen += 1;
+                let id = recipe_id(&st, &d);
+                let (box_w, ..) = process_geometry(&render(&d, &st, 100, 30));
+                for (w, h) in [(120, 40), (200, 50)] {
+                    let (wide_w, left, right) = process_geometry(&render(&d, &st, w, h));
+                    assert_eq!(wide_w, box_w, "{id} at {w}×{h}");
+                    assert!(
+                        left.abs_diff(right) <= 1,
+                        "{id} at {w}×{h}: {left} left, {right} right"
+                    );
+                }
+            }
+            press(&mut d, &mut st, KeyCode::Right, 1);
+        }
+        assert_eq!(seen, 6);
     }
 
     #[test]
