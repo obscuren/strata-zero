@@ -996,21 +996,21 @@ fn exploded(
             art.draw_part(s.place.index, origin, f, p.buf);
         }
     }
-    // A part short in a dashed box a column wider than it, what it lacks under it.
-    for s in shown.iter().filter(|s| s.short(ins)) {
+    // A part short in a dashed box a column wider than it, what it lacks under it; set
+    // into the box's bottom edge when the row under it is past the field.
+    for s in &shown {
+        let Some(input) = s.input.map(|i| &ins[i]).filter(|i| !i.on_hand()) else {
+            continue;
+        };
         let (x0, y0, x1, y1) = s.rect;
-        p.outline(
-            (ox + x0 - 1, oy + y0, ox + x1, oy + y1 - 1),
-            DASHED,
-            MAGENTA,
-        );
-        let label = s.input.map(|i| ins[i].shortfall("none on hand"));
-        p.put(
-            ox + x0 - 1,
-            oy + y1 + 1,
-            &label.unwrap_or_default(),
-            fg(MAGENTA),
-        );
+        let (left, top, right, bottom) = (ox + x0 - 1, oy + y0, ox + x1, oy + y1 - 1);
+        p.outline((left, top, right, bottom), DASHED, MAGENTA);
+        let label = input.shortfall("none on hand");
+        if bottom + 2 <= last_row(f) {
+            p.put(left, bottom + 2, &label, fg(MAGENTA));
+        } else {
+            in_edge(p, &label, (left, right), bottom, fg(MAGENTA));
+        }
     }
     for s in &shown {
         let (Some(i), Some((x, y, w))) = (s.input, s.balloon()) else {
@@ -1033,6 +1033,18 @@ fn exploded(
         let room = (ox + x0 - cx, oy + y0 - cy, ox + x1 + cx, oy + y1 + cy);
         brackets(p.buf, inside_corners(room, f), st.tick, f);
     }
+}
+
+/// `text` set into a box's edge on row `y` between corner columns `left` and `right`,
+/// centred: a space each side when there is room, cut to the edge when it is short.
+fn in_edge(p: &mut Pen, text: &str, (left, right): (i32, i32), y: i32, style: Style) {
+    let room = (right - left - 1).max(0);
+    let text = if width(text) + 2 <= room {
+        format!(" {text} ")
+    } else {
+        cut(text, room as usize)
+    };
+    p.put(left + 1 + (room - width(&text)) / 2, y, &text, style);
 }
 
 /// The field's last row.
@@ -1830,6 +1842,30 @@ mod tests {
         assert_eq!((b[(84, 6)].fg, b[(84, 6)].bg), (PANEL_BG, MAGENTA));
         assert_eq!((b[(39, 6)].fg, b[(39, 6)].bg), (CYAN, BAR_BG));
         assert_ne!(b[(35, 14)].symbol(), "┗", "the receiver's brackets go");
+    }
+
+    #[test]
+    fn a_label_with_no_room_under_its_box_sits_in_the_bottom_edge() {
+        let mut st = dshawn();
+        let mag = ItemId::new("ratchet_mag");
+        st.character.inventory.retain(|s| s.item != mag);
+        let d = on_the_ratchet(&mut st);
+        let b = render(&d, &st, 100, 30);
+        let field = area(&b, 3, 97, 6, 20);
+        // The magazine's box: its rect moved a row down, a column out each side, from
+        // the origin (14, 4): columns 48-65, rows 14-19, the field's last row.
+        assert_eq!(b[(48, 14)].symbol(), "┌", "{field}");
+        assert_eq!(b[(48, 19)].symbol(), "└", "{field}");
+        assert_eq!(b[(65, 19)].symbol(), "┘", "{field}");
+        assert_eq!(
+            cells(&b, 48, 19, 18),
+            "└╌ none on hand ╌┘",
+            "{}",
+            row(&b, 19)
+        );
+        assert_eq!(b[(51, 19)].fg, MAGENTA);
+        // The barrel's has room under it, as before.
+        assert_eq!(cells(&b, 78, 13, 12), "none on hand", "{field}");
     }
 
     #[test]
