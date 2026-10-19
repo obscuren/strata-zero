@@ -251,7 +251,9 @@ impl Kit {
             .iter()
             .position(|r| r.detail.is_some())
             .unwrap_or(0);
-        self.changed = tick;
+        if self.state.pane == Pane::Pack {
+            self.changed = tick;
+        }
     }
 
     /// Handles a key; true when it was the kit's.
@@ -275,12 +277,12 @@ impl Kit {
                         let t = self.state.tile;
                         if up && t >= 3 {
                             self.state.tile -= 3;
-                        } else if down && t < 6 {
+                        } else if down && t + 3 < Slot::ALL.len() {
                             self.state.tile += 3;
                         } else if left && !t.is_multiple_of(3) {
                             self.state.tile -= 1;
                         } else if !(up || down || left) {
-                            if t % 3 < 2 {
+                            if t % 3 < 2 && t + 1 < Slot::ALL.len() {
                                 self.state.tile += 1;
                             } else {
                                 self.set_pane(Pane::Pack, tick);
@@ -485,8 +487,8 @@ impl Kit {
     }
 
     /// The divider between the panes and the rule under them, with the cyan segment
-    /// under the focused pane sliding as the tab's does, and the pack's weight and
-    /// worth set into the rule's right end.
+    /// under the focused pane sliding as the tab's does, and the weight and worth
+    /// of everything carried, worn included, set into the rule's right end.
     fn draw_rule(&self, st: &AppState, body: Rect, l: &Layout, buf: &mut Buffer) {
         for cy in body.y..l.rule {
             buf[(l.divider, cy)].set_char('║').set_fg(RULE);
@@ -506,6 +508,7 @@ impl Kit {
         for cx in between(a0, b0)..between(a1, b1) {
             buf[(cx, l.rule)].set_char('━').set_fg(CYAN);
         }
+        buf[(l.divider, l.rule)].set_char('╩').set_fg(RULE);
 
         let total = format!(
             " {:.1} kg · ¤ {} ",
@@ -1098,5 +1101,31 @@ mod tests {
                 assert!(row.trim_end().ends_with(end), "{body:?} {row:?}");
             }
         }
+    }
+    #[test]
+    fn filter_keys_retype_the_card_only_from_the_pack() {
+        let st = state();
+        let mut k = Kit::new(0);
+        press(&mut k, &st, KeyCode::Char(']'), 7);
+        assert_eq!(k.changed, 0, "the rack's card stays as it was");
+        k.state.pane = Pane::Pack;
+        press(&mut k, &st, KeyCode::Char(']'), 9);
+        assert_eq!(k.changed, 9);
+    }
+
+    #[test]
+    fn the_divider_keeps_its_junction_mid_slide() {
+        let mut st = state();
+        let mut k = Kit::new(0);
+        k.set_pane(Pane::Pack, 0);
+        st.tick = 3;
+        let buf = drawn(&k, &st);
+        let l = layout(BODY);
+        let seg: Vec<u16> = (BODY.x..BODY.right())
+            .filter(|&x| buf[(x, l.rule)].symbol() == "━")
+            .collect();
+        assert!(seg.first().is_some_and(|&s| s < l.divider), "{seg:?}");
+        assert_eq!(buf[(l.divider, l.rule)].symbol(), "╩");
+        assert_eq!(buf[(l.divider, l.rule)].fg, RULE);
     }
 }

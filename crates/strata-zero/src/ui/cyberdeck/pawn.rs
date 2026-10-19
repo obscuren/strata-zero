@@ -20,6 +20,16 @@ const INV_BASE: u16 = 6;
 /// Columns the inventory row may reach.
 const INV_END: u16 = 81;
 
+/// The x, y, width and height the pawn look covers, from its origin: its size, and
+/// with sockets the cradles that reach out past either side.
+pub fn extent(view: &DeckView) -> (i32, i32, u16, u16) {
+    if view.sockets.is_empty() {
+        (0, 0, W, H)
+    } else {
+        (-4, 0, W + 8, H)
+    }
+}
+
 /// The pawn look's parts, relative to the drawing's origin.
 pub fn parts(view: &DeckView) -> Vec<(Part, Rect)> {
     let mut out = Vec::new();

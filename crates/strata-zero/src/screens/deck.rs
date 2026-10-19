@@ -343,7 +343,6 @@ pub(crate) fn item_popup(st: &mut AppState, id: &ItemId, anchor: (u16, u16)) -> 
 
 /// The popup for one copy in the pack; every verb names this copy.
 pub(crate) fn copy_popup(st: &mut AppState, copy: CopyId, anchor: (u16, u16)) -> Option<Popup> {
-    // Every verb names this copy, never the first of its item.
     let stack = st.character.copy_in_pack(copy)?;
     let item = st.content.item(&stack.item)?;
     let carried = Pick::Blueprint {

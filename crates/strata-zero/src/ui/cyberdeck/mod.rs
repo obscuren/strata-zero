@@ -131,11 +131,8 @@ pub fn size(look: DeckLook) -> (u16, u16) {
 /// The x, y, width and height the drawing covers, from its origin: its size, and with
 /// sockets the cradles that reach out past either side.
 pub fn extent(view: &DeckView) -> (i32, i32, u16, u16) {
-    let (w, h) = size(view.look);
-    if view.sockets.is_empty() {
-        (0, 0, w, h)
-    } else {
-        (-4, 0, w + 8, h)
+    match view.look {
+        DeckLook::Pawn => pawn::extent(view),
     }
 }
 
