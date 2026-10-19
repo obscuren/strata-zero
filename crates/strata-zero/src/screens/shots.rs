@@ -161,6 +161,41 @@ fn combat_aim() -> (AppState, MapScreen) {
     (st, map)
 }
 
+/// The COMBAT start on the Net: jacked into a construct, a beat in.
+#[test]
+#[ignore]
+fn combat_net_start() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let mut st = AppState::new();
+    let mut title = crate::screens::title::Title::new(0);
+    title.update(
+        &mut st,
+        &[key(KeyCode::Down), key(KeyCode::Down), key(KeyCode::Left)],
+    );
+    let crate::app::ScreenCmd::Switch {
+        to: mut generating, ..
+    } = title.update(&mut st, &[key(KeyCode::Enter)])
+    else {
+        panic!("generating")
+    };
+    let crate::app::ScreenCmd::Switch { to: mut map, .. } =
+        generating.update(&mut st, &[key(KeyCode::Enter)])
+    else {
+        panic!("the city")
+    };
+    for _ in 0..60 {
+        st.tick += 1;
+        if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
+            world.advance(city, world.tick() + 1);
+        }
+        map.update(&mut st, &[]);
+    }
+    let buf = draw_stack(&st, &[&*map], (100, 30));
+    write_svg(&dir, "combat_net", &st, &buf, false);
+}
+
 #[test]
 #[ignore]
 fn combat_aim_on_the_lot() {

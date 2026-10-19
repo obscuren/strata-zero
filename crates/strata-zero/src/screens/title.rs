@@ -18,9 +18,25 @@ use ratatui::widgets::{Paragraph, Widget};
 pub const TITLE: &str = "STRATA ZERO";
 const SUBTITLE: &str = "h i g h   t e c h   ·   l o w   l i f e";
 
+/// Which map the COMBAT start opens on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CombatMap {
+    Net,
+    Street,
+}
+
+/// The menu row of the COMBAT start, and its label.
+const COMBAT_ROW: usize = 2;
+const COMBAT_LABEL: &str = "NEW GAME · COMBAT";
+/// The pick in pink, the other in a grey that still reads.
+const PICKED: Color = Color::Rgb(255, 0, 200);
+const UNPICKED: Color = Color::Rgb(120, 125, 135);
+
 pub struct Title {
     menu: Menu,
     opened: u64,
+    /// The COMBAT start's map, picked with the arrows on its row.
+    combat: CombatMap,
 }
 
 impl Title {
@@ -53,8 +69,26 @@ impl Title {
         }
     }
 
-    /// NEW GAME (COMBAT): D'SHAWN on the lot at dusk, a goon twelve tiles off,
-    /// just outside its sight.
+    /// COMBAT on the Net: D'SHAWN into a fresh city, and as it opens, jacked into a
+    /// construct with grey ICE on patrol.
+    fn net_game(&self, st: &mut AppState) -> ScreenCmd {
+        st.character = game::Character::combat_runner(&st.content);
+        st.start = Some(crate::app::Start::Net);
+        match Generating::new(Title::fresh_params(st, st.tick), st.tick) {
+            Ok(g) => ScreenCmd::Switch {
+                to: Box::new(g),
+                fx: TransitionKind::Glitch,
+            },
+            Err(e) => {
+                st.start = None;
+                st.warn(e.to_string());
+                ScreenCmd::Stay
+            }
+        }
+    }
+
+    /// COMBAT on the street: D'SHAWN on the lot at dusk, a goon in the far corner
+    /// and a dummy to shoot at.
     fn combat_game(&self, st: &mut AppState) -> ScreenCmd {
         use citygen::{Place, Pos, StratumKind};
         st.character = game::Character::combat_runner(&st.content);
@@ -90,14 +124,46 @@ impl Title {
                 vec![
                     "NEW GAME".into(),
                     "NEW GAME (DEBUG)".into(),
-                    "NEW GAME (COMBAT)".into(),
+                    COMBAT_LABEL.into(),
                     "LOAD GAME".into(),
                     "QUIT".into(),
                 ],
                 tick + 20,
             ),
             opened: tick,
+            combat: CombatMap::Street,
         }
+    }
+
+    /// The COMBAT row's map pick, drawn after its label: `NET · STREET`, the pick
+    /// in pink, the other in grey.
+    fn draw_combat_pick(&self, area: Rect, menu_x: u16, menu_y: u16, tick: u64, f: &mut Frame) {
+        if self.menu.entrance(COMBAT_ROW, tick) < 1.0 {
+            return;
+        }
+        let y = menu_y + COMBAT_ROW as u16;
+        let x = menu_x + 2 + COMBAT_LABEL.chars().count() as u16 + 2;
+        if y >= area.bottom() {
+            return;
+        }
+        let buf = f.buffer_mut();
+        let mut put = |x0: u16, s: &str, fg: Color, bold: bool| {
+            for (i, ch) in s.chars().enumerate() {
+                let cx = x0 + i as u16;
+                if cx >= area.right() {
+                    break;
+                }
+                let mut style = Style::default().fg(fg);
+                if bold {
+                    style = style.add_modifier(ratatui::style::Modifier::BOLD);
+                }
+                buf[(cx, y)].set_char(ch).set_style(style);
+            }
+        };
+        let net = self.combat == CombatMap::Net;
+        put(x, "NET", if net { PICKED } else { UNPICKED }, net);
+        put(x + 3, " · ", UNPICKED, false);
+        put(x + 6, "STREET", if net { UNPICKED } else { PICKED }, !net);
     }
 }
 
@@ -107,6 +173,15 @@ impl Screen for Title {
             match k.code {
                 KeyCode::Up | KeyCode::Char('k') => self.menu.up(),
                 KeyCode::Down | KeyCode::Char('j') => self.menu.down(),
+                // On the COMBAT row the arrows pick the map.
+                KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l')
+                    if self.menu.selected == COMBAT_ROW =>
+                {
+                    self.combat = match self.combat {
+                        CombatMap::Net => CombatMap::Street,
+                        CombatMap::Street => CombatMap::Net,
+                    };
+                }
                 KeyCode::Char('q') | KeyCode::Esc => return ScreenCmd::Quit,
                 KeyCode::Enter => {
                     return match self.menu.selected {
@@ -115,7 +190,10 @@ impl Screen for Title {
                             fx: TransitionKind::SlideUp,
                         },
                         1 => self.debug_game(st),
-                        2 => self.combat_game(st),
+                        2 => match self.combat {
+                            CombatMap::Street => self.combat_game(st),
+                            CombatMap::Net => self.net_game(st),
+                        },
                         3 => ScreenCmd::Push {
                             to: Box::new(Files::load(st.tick)),
                             fx: TransitionKind::SlideUp,
@@ -177,6 +255,7 @@ impl Screen for Title {
             ),
             f.buffer_mut(),
         );
+        self.draw_combat_pick(area, menu_x, menu_y, st.tick, f);
 
         let hint = "↑↓ select · enter confirm · q quit";
         let hx = area.x + area.width.saturating_sub(hint.chars().count() as u16) / 2;
@@ -312,7 +391,7 @@ mod tests {
         st.tick = 60;
         term.draw(|f| t.draw(&st, f)).unwrap();
         let text = buffer_text(term.backend().buffer());
-        assert!(text.contains("NEW GAME (COMBAT)"), "{text}");
+        assert!(text.contains("NEW GAME · COMBAT"), "{text}");
         // Five hours of ticks already spent this session: the lot still opens at 18:15.
         st.tick = 90 * 300;
         t.update(&mut st, &[key(KeyCode::Down)]);
@@ -346,6 +425,64 @@ mod tests {
         term.draw(|f| map.draw(&st, f)).unwrap();
         let text = buffer_text(term.backend().buffer());
         assert!(text.contains("on foot · the lot"), "{text}");
+    }
+
+    #[test]
+    fn the_combat_row_picks_its_map_with_the_arrows_and_net_jacks_you_into_a_construct() {
+        use citygen::Place;
+        let mut st = AppState::new();
+        let mut t = Title::new(0);
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        st.tick = 60;
+        term.draw(|f| t.draw(&st, f)).unwrap();
+        let text = buffer_text(term.backend().buffer());
+        assert!(text.contains("NEW GAME · COMBAT  NET · STREET"), "{text}");
+        // STREET picked by default, in pink; NET in grey. Left flips them.
+        let cell_of = |term: &Terminal<TestBackend>, word: &str| {
+            let buf = term.backend().buffer();
+            let row = text
+                .lines()
+                .position(|l| l.contains("NET · STREET"))
+                .unwrap() as u16;
+            let line = text.lines().nth(row as usize).unwrap();
+            let col = line.find(word).unwrap() as u16;
+            buf[(col, row)].fg
+        };
+        assert_eq!(cell_of(&term, "STREET"), PICKED);
+        assert_eq!(cell_of(&term, "NET"), UNPICKED);
+        t.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Down)]);
+        t.update(&mut st, &[key(KeyCode::Left)]);
+        assert_eq!(t.combat, CombatMap::Net);
+        term.draw(|f| t.draw(&st, f)).unwrap();
+        assert_eq!(cell_of(&term, "NET"), PICKED);
+        assert_eq!(cell_of(&term, "STREET"), UNPICKED);
+        // The arrows do nothing on another row.
+        t.update(&mut st, &[key(KeyCode::Up)]);
+        t.update(&mut st, &[key(KeyCode::Right)]);
+        assert_eq!(t.combat, CombatMap::Net);
+        t.update(&mut st, &[key(KeyCode::Down)]);
+        let ScreenCmd::Switch {
+            to: mut generating, ..
+        } = t.update(&mut st, &[key(KeyCode::Enter)])
+        else {
+            panic!("straight to generating")
+        };
+        assert_eq!(st.character.handle, "D'SHAWN");
+        let ScreenCmd::Switch { .. } = generating.update(&mut st, &[key(KeyCode::Enter)]) else {
+            panic!("ENTER skips to the city")
+        };
+        let p = st.player.as_ref().expect("jacked in");
+        assert!(p.jacked_in());
+        let Place::Construct(b) = p.place else {
+            panic!("inside a construct: {:?}", p.place)
+        };
+        let k = st.constructs.get(b).expect("the construct stands");
+        assert!(!k.guards.is_empty(), "ICE to fight");
+        assert_eq!(p.pos, k.entry);
+        assert!(
+            st.character.loaded.contains(&game::ItemId::new("attack")),
+            "attack loaded"
+        );
     }
 
     #[test]

@@ -241,6 +241,22 @@ pub struct Engagement { pub place: Place, /* was building: BuildingId */ ... }
   foe hunts, else `still hunted`. The console's `engage` / `calm` work on the street.
 - `spend_ap`, `spend_move`, `stay`, `phase`, `aim_cap`, `your_turn` are place-blind
   already and stay so.
+- **The net's act half is the street's** (Jeffrey, after playing: "the net combat
+  should be similar to the street combat"): the fire cursor opens in a construct
+  on the ICE you aimed at last, else the nearest awake piece in sight; `t` cycles;
+  the readout reads `grey ICE · 4/6 · 3 tiles · 70%` (the attack program's
+  `chance`); `space` runs the loaded attack program at the piece under the cursor
+  (`combat::attack_ice`: one AP, `start_run` + one `step_run`), refused `no attack
+  loaded` / `out of reach`. A program armed by its key keeps `space` as its roll.
+  The attack's picture is a shot (`net::ATTACK_FX`: small flash, the attack's white
+  streak, the tear, a spark on a slip, the number as a tag) in place of the bolt.
+  The turn column (`render/turns.rs`) sits top-right of the map on both maps.
+- **The title's COMBAT row** carries a `NET · STREET` pick, flipped with the
+  arrows on that row, the pick in pink `(255, 0, 200)`, the other in grey
+  `(120, 125, 135)`: STREET is the lot; NET generates a city with
+  `AppState.start = Some(Start::Net)`, and as the map opens
+  `net::start_in_construct` jacks the body in at a corp tower's gate (security
+  raised to 200 at least) and enters the construct.
 - **Your turn ends on its own** `AUTO_END_TICKS = 20` ticks after your last action
   point goes (`Engagement.spent_at`), on the street and in the net alike, so the
   numbers can be read before the board moves on (Jeffrey, after playing). `.`

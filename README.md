@@ -260,9 +260,11 @@ browsing, the console and the inspect and legend sections. Press `` ` `` to flip
 with it off you are always on foot.
 
 **Title** `↑↓` select · `enter` confirm (new game opens the chooser; new game
-(debug) drops D'SHAWN, maxed out, into a fresh city; new game (combat) puts him
-on an empty lot at dusk with a goon in the far corner and a training dummy (`&`,
-stands still, shrugs every round off) six north; load game opens the save
+(debug) drops D'SHAWN, maxed out, into a fresh city; new game · combat has a
+`NET · STREET` pick on its row, `←→` to flip it, the pick in pink: STREET puts
+him on an empty lot at dusk with a goon in the far corner and a training dummy
+(`&`, stands still, shrugs every round off) six north, NET jacks him straight
+into a corp tower's construct with grey ICE on patrol; load game opens the save
 list) · `q` quit
 
 **New game** picks a template (VEX, KESSLER) or a custom build, then walks six
@@ -370,7 +372,15 @@ stops. `1`-`5` fire an ability: Static (from a neural port) costs both AP, hurts
 and stuns for a turn, and tears the cells around the goon. A stim from the deck
 costs an AP. `.` ends the turn; the goon closes in on the pace and shoots back.
 `e` engages by hand with a goon in sight memory, and calms the street when
-nothing hunts you; at zero HP the goon drops (`%`), you flatline.
+nothing hunts you; at zero HP the goon drops (`%`), you flatline. A column at
+the map's top right lists the order (`▶ YOU`, `goon 18`), with the live half of
+your turn lit; the cursor comes back to the enemy you aimed at last; `x` look
+on a goon reads what it is, what it holds and what is left of it. Your turn
+ends on its own a beat after the last AP. **In a construct the act half is the
+same**: the cursor opens on the nearest awake ICE, the readout reads
+`grey ICE · 4/6 · 3 tiles · 70%`, and `space` runs your loaded attack program
+at it (a white streak, the tear, the number); a program armed by its key keeps
+`space` as its roll.
 
 **Pause** (`esc` or `q`) resume · save game · load game · settings (dev mode,
 rain, fps) · quit to title · quit game

@@ -169,6 +169,104 @@ fn play_round(st: &mut AppState, place: Place, fx: &[Fx], r: Round) {
     }
 }
 
+/// The shapes of one shot from `from` to `impact`, pushed from `now`: the flash and
+/// the flight at once, the impact shapes when the flight lands. For the net's
+/// attack program, which rolls its own way but looks like a shot.
+pub fn play_shot(
+    st: &mut AppState,
+    place: Place,
+    fx: &[Fx],
+    from: Pos,
+    impact: Pos,
+    hit: bool,
+    damage: u8,
+) {
+    play_round(
+        st,
+        place,
+        fx,
+        Round {
+            from,
+            impact,
+            hit,
+            damage,
+            k: 0,
+        },
+    );
+}
+
+/// The attack program loaded in the jacked deck, and its slot.
+fn loaded_attack(st: &AppState) -> Option<(ItemId, usize)> {
+    st.character
+        .loaded
+        .iter()
+        .enumerate()
+        .find(|(_, id)| {
+            st.content
+                .item(id)
+                .and_then(|i| i.program)
+                .is_some_and(|p| p.op == game::Op::Attack)
+        })
+        .map(|(slot, id)| (id.clone(), slot))
+}
+
+/// Your chance per turn of the loaded attack program against a standing piece,
+/// in percent; refused without one or out of reach.
+pub fn attack_chance(st: &AppState, b: citygen::BuildingId, i: usize) -> Result<u8, String> {
+    let (id, _) = loaded_attack(st).ok_or_else(|| "no attack loaded".to_string())?;
+    if !crate::net::piece_in_reach(st, b, i) {
+        return Err("out of reach".to_string());
+    }
+    let spec = st
+        .content
+        .item(&id)
+        .and_then(|i| i.program)
+        .ok_or_else(|| "no attack loaded".to_string())?;
+    let target = game::HackTarget::Guard {
+        building: b,
+        index: i,
+    };
+    let kind =
+        crate::net::target_kind(st, b, target).ok_or_else(|| "nothing stands there".to_string())?;
+    let security = st
+        .constructs
+        .get(b)
+        .map(|k| k.security)
+        .ok_or_else(|| "not in a construct".to_string())?;
+    Ok(game::chance(
+        game::power(&st.character, &st.content, &spec, kind),
+        game::difficulty(security),
+    ))
+}
+
+/// You run the loaded attack program at a piece of ICE under the cursor: one
+/// action point, one turn of the run. Returns the program's slot, for the flash.
+pub fn attack_ice(st: &mut AppState, b: citygen::BuildingId, i: usize) -> Result<usize, String> {
+    let (id, slot) = loaded_attack(st).ok_or_else(|| "no attack loaded".to_string())?;
+    if !crate::net::piece_in_reach(st, b, i) {
+        return Err("out of reach".to_string());
+    }
+    crate::net::spend_ap(st)?;
+    let target = game::HackTarget::Guard {
+        building: b,
+        index: i,
+    };
+    match crate::net::start_run(st, id, target) {
+        Ok(line) => {
+            st.say(line);
+            crate::net::step_run(st);
+            Ok(slot)
+        }
+        Err(why) => {
+            // Nothing ran: the point comes back.
+            if let Some(e) = st.net.engaged.as_mut() {
+                e.ap = (e.ap + 1).min(crate::net::BASE_AP);
+            }
+            Err(why)
+        }
+    }
+}
+
 /// A foe takes damage; at zero it is down.
 fn wound_foe(st: &mut AppState, foe: usize, damage: u8) {
     let Some(f) = st.foes.get_mut(foe) else {

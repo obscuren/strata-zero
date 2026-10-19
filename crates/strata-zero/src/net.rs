@@ -55,6 +55,17 @@ pub const BOLT_ROLL: (u8, u8, u8) = (0, 229, 255);
 pub const BOLT_ATTACK: (u8, u8, u8) = (240, 240, 240);
 pub const BOLT_HIT: (u8, u8, u8) = (255, 0, 200);
 pub const BOLT_BLACK: (u8, u8, u8) = (255, 40, 40);
+/// What an attack program looks like: a shot in the attack's white, the net's tear
+/// where it lands, the damage as a tag; a slip sparks.
+pub const ATTACK_FX: [Fx; 5] = [
+    Fx::Flash { big: false },
+    Fx::Streak {
+        colour: BOLT_ATTACK,
+    },
+    Fx::Tear,
+    Fx::Spark,
+    Fx::Number { tag: true },
+];
 /// A slip marks its target magenta; a shield that absorbs marks you cyan.
 pub const MARK_SLIP: (u8, u8, u8) = (255, 0, 200);
 pub const MARK_SHIELD: (u8, u8, u8) = (0, 229, 255);
@@ -578,7 +589,8 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
     // A program on yourself never fails.
     let ok = kind == Target::Deck || succeeds(roll, pw, df);
     let now = st.net.now(st);
-    // The picture of the roll: a bolt to the target, a mark where it slipped.
+    // The picture of the roll: a bolt to the target, a mark where it slipped; an
+    // attack looks like a shot, with its number when it lands.
     if let Some((me, at)) = st
         .player
         .as_ref()
@@ -587,13 +599,14 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
     {
         if at == me {
             mark(st, at, BOLT_ROLL, ROLL_TICKS);
+        } else if spec.op == Op::Attack {
+            let mut damage = 2 * spec.rating;
+            if st.character.flags(&st.content).contains("black_ice") {
+                damage += 1;
+            }
+            crate::combat::play_shot(st, Place::Construct(b), &ATTACK_FX, me, at, ok, damage);
         } else {
-            let colour = if spec.op == Op::Attack {
-                BOLT_ATTACK
-            } else {
-                BOLT_ROLL
-            };
-            bolt(st, me, at, colour, ROLL_TICKS);
+            bolt(st, me, at, BOLT_ROLL, ROLL_TICKS);
         }
         if !ok {
             mark(st, at, MARK_SLIP, MARK_TICKS);
@@ -644,11 +657,6 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
                 ice.mode = IceMode::Awake { seen, lost: 0 };
                 ice.integrity
             };
-            // The damage lifts off the piece when the bolt lands.
-            if let Some(at) = target_pos(st, b, run.target) {
-                let started = st.tick + ROLL_TICKS;
-                number(st, at, format!("-{damage}"), Some(BOLT_ATTACK), started);
-            }
             if left == 0 {
                 st.net.run = None;
                 st.net.land(b, run.target, kind, Op::Attack, now);
@@ -1817,6 +1825,60 @@ pub fn pace(st: &mut AppState) {
     {
         end_turn(st);
     }
+}
+
+/// A standing piece's card for the fire cursor: `grey ICE`, `4/6`, where it stands.
+pub fn ice_card(st: &AppState, b: BuildingId, i: usize) -> Option<(String, String, Pos)> {
+    let k = st.constructs.get(b)?;
+    let g = k.guards.get(i)?;
+    if k.guard_at(g.pos) != Some(i) {
+        return None;
+    }
+    let ice = st.net.ice.get(&b)?.get(i)?;
+    Some((
+        format!("{} ICE", g.grade.label()),
+        format!("{}/{}", ice.integrity, g.grade.integrity()),
+        g.pos,
+    ))
+}
+
+/// The COMBAT start on the Net: the body at the gate of a corp tower's construct
+/// on the grid, jacked in, and inside, where the gate guard sees you on the first
+/// beat. Security 200 at least: grey ICE at the gate and the vault.
+pub fn start_in_construct(st: &mut AppState) -> Result<String, String> {
+    let city = st.city.as_ref().ok_or("no city")?;
+    let b = city
+        .buildings
+        .iter()
+        .find(|b| {
+            b.kind == citygen::BuildingKind::CorpTower
+                && city
+                    .net
+                    .nodes
+                    .iter()
+                    .any(|n| n.building == Some(b.id) && n.kind == NodeKind::DataVault)
+        })
+        .or_else(|| {
+            city.buildings
+                .iter()
+                .find(|b| city.net.nodes.iter().any(|n| n.building == Some(b.id)))
+        })
+        .map(|b| b.id)
+        .ok_or("no construct in this city")?;
+    let gate = crate::constructs::city_gate(city, b).ok_or("the construct has no gate")?;
+    if let Some(sub) = st.city.as_mut().and_then(|c| {
+        c.net
+            .subnets
+            .iter_mut()
+            .find(|s| s.owner == citygen::SubnetOwner::Building(b))
+    }) {
+        sub.security = sub.security.max(200);
+    }
+    let p = st.player.as_mut().ok_or("no body")?;
+    p.body = Some((p.place, p.pos));
+    p.place = Place::Stratum(StratumKind::Net);
+    p.pos = gate;
+    crate::constructs::enter_construct(st, b)
 }
 
 /// The turn column's view: every standing actor in the rolled order with its chip,
