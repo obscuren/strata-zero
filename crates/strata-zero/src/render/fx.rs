@@ -400,6 +400,36 @@ fn paint(
 }
 
 const WHITE: Rgb = Rgb(255, 255, 255);
+/// The warm light a muzzle throws.
+const MUZZLE_LIGHT: Rgb = Rgb(255, 170, 40);
+/// Cell widths a muzzle flash lights on its first tick; half that on its second.
+const FLASH_GLOW: f32 = 4.5;
+/// Cell widths a tracer's head lights as it flies.
+const TRACER_GLOW: f32 = 2.2;
+
+/// Warms the background of every cell within `reach` cell widths of `centre` (a
+/// row counting as two, so the pool is round), `strength` at the centre falling to
+/// nothing at the edge; glyphs are kept.
+fn glow(origin: Pos, area: Rect, buf: &mut Buffer, centre: Pos, reach: f32, strength: f32) {
+    let r = reach.ceil() as i32;
+    for dy in -r..=r {
+        for dx in -r..=r {
+            let p = centre.offset(dx, dy);
+            let d = screen_dist(p, centre);
+            if d >= reach {
+                continue;
+            }
+            let t = strength * (1.0 - d / reach);
+            paint(origin, area, buf, p, |c| {
+                let bg = match c.bg {
+                    Color::Rgb(r, g, b) => Rgb(r, g, b),
+                    _ => Rgb(0, 0, 0),
+                };
+                c.set_bg(bg.mix(MUZZLE_LIGHT, t).to_color());
+            });
+        }
+    }
+}
 
 /// The muzzle: the firer's cell lit, a spark the next cell on, a dot after it; a
 /// big flash spills above and below the spark on its first tick.
@@ -414,6 +444,12 @@ fn flash(inst: &FxInstance, big: bool, elapsed: u64, origin: Pos, area: Rect, bu
     } else {
         Rgb(255, 170, 40)
     };
+    // The light the shot throws on the street around it, gone with the flash.
+    if first {
+        glow(origin, area, buf, line[0], FLASH_GLOW, 0.55);
+    } else {
+        glow(origin, area, buf, line[0], FLASH_GLOW / 2.0, 0.3);
+    }
     paint(origin, area, buf, line[0], |c| {
         c.set_fg(BLACK)
             .set_bg(muzzle.to_color())
@@ -467,6 +503,8 @@ fn tracer(
         return;
     }
     // The content colour leads the trail; the two cells behind it are the fixed embers.
+    // The head carries a little light with it.
+    glow(origin, area, buf, line[head], TRACER_GLOW, 0.3);
     let trail = [colour, Rgb(200, 110, 20), Rgb(110, 55, 10)];
     for (i, tint) in trail.iter().enumerate() {
         let Some(k) = head.checked_sub(i + 1) else {
@@ -864,13 +902,71 @@ mod tests {
         assert_eq!(at(&b, 41, 30).1, rgb((255, 230, 120)));
         assert_eq!(at(&b, 42, 30).0, "·");
         assert_eq!(at(&b, 42, 30).1, rgb((255, 200, 90)));
-        assert_eq!(at(&b, 41, 29), at(&plain, 41, 29), "small: nothing above");
+        // Small: no glyph above, only the glow on the ground.
+        assert_eq!(
+            at(&b, 41, 29).0,
+            at(&plain, 41, 29).0,
+            "small: nothing above"
+        );
         let (b, plain) = drawn(&c, &s, &inst, 101);
         assert_eq!(at(&b, 40, 30).2, rgb((255, 170, 40)));
         assert_eq!(at(&b, 41, 30).0, "*");
-        assert_eq!(at(&b, 42, 30), at(&plain, 42, 30), "the dot is one tick");
+        assert_eq!(
+            at(&b, 42, 30).0,
+            at(&plain, 42, 30).0,
+            "the dot is one tick"
+        );
         let (b, plain) = drawn(&c, &s, &inst, 102);
         assert_eq!(b, plain, "gone after two ticks");
+    }
+
+    #[test]
+    fn a_flash_lights_the_tiles_around_the_muzzle_and_a_tracer_its_neighbours() {
+        let (c, s) = (city(), StylePack::load().unwrap());
+        let inst = shot(Fx::Flash { big: false }, FIRER, TARGET, "");
+        let (b, plain) = drawn(&c, &s, &inst, 100);
+        let warmer = |x: i32, y: i32| {
+            let (Color::Rgb(r, g, _), Color::Rgb(pr, pg, _)) = (at(&b, x, y).2, at(&plain, x, y).2)
+            else {
+                panic!("rgb cells")
+            };
+            (r, g) > (pr, pg)
+        };
+        assert!(warmer(40, 29), "above the muzzle");
+        assert!(warmer(38, 30), "two cells behind");
+        assert!(warmer(43, 31), "ahead and below");
+        assert_eq!(
+            at(&b, 46, 30).2,
+            at(&plain, 46, 30).2,
+            "six cells out is dark"
+        );
+        let (b1, _) = drawn(&c, &s, &inst, 101);
+        let Color::Rgb(r0, ..) = at(&b, 40, 29).2 else {
+            panic!()
+        };
+        let Color::Rgb(r1, ..) = at(&b1, 40, 29).2 else {
+            panic!()
+        };
+        assert!(r1 < r0, "the glow fades on its second tick");
+        let (b, plain) = drawn(&c, &s, &inst, 102);
+        assert_eq!(b, plain);
+        // The tracer head throws a faint light on the cells beside it.
+        let fx = Fx::Tracer {
+            colour: (255, 170, 40),
+            speed: 3,
+        };
+        let inst = shot(fx, FIRER, TARGET, "");
+        let (b, plain) = drawn(&c, &s, &inst, 101);
+        let (Color::Rgb(r, ..), Color::Rgb(pr, ..)) = (at(&b, 44, 29).2, at(&plain, 44, 29).2)
+        else {
+            panic!("rgb cells")
+        };
+        assert!(r > pr, "above the head at (44,30)");
+        assert_eq!(
+            at(&b, 44, 28).2,
+            at(&plain, 44, 28).2,
+            "two rows up is dark"
+        );
     }
 
     #[test]
@@ -897,7 +993,13 @@ mod tests {
         let (b, plain) = drawn(&c, &s, &inst, 100);
         assert_eq!(at(&b, 41, 30).0, "•");
         assert_eq!(at(&b, 41, 30).1, rgb((255, 240, 200)));
-        assert_eq!(at(&b, 40, 30), at(&plain, 40, 30), "never behind the firer");
+        // Never behind the firer: the glyph and its colour stand; only the head's
+        // light reaches the ground there.
+        assert_eq!(
+            (at(&b, 40, 30).0, at(&b, 40, 30).1),
+            (at(&plain, 40, 30).0, at(&plain, 40, 30).1),
+            "never behind the firer"
+        );
         let (b, _) = drawn(&c, &s, &inst, 101);
         assert_eq!(at(&b, 44, 30).0, "•");
         assert_eq!(
