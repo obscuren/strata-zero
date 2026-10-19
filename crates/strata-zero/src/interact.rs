@@ -52,6 +52,36 @@ fn header(name: impl Into<String>, glyph: Option<(char, Color)>) -> Header {
     }
 }
 
+/// What a Take row calls a stack. A copy carries the GEAR picker's marks, so two
+/// copies of one item read apart.
+fn ground_name(st: &AppState, item: &game::Item, s: &game::Stack) -> String {
+    let name = stack_name(&item.name, s.qty);
+    let Some(copy) = s.copy.as_ref() else {
+        return name;
+    };
+    let marks: String = crate::screens::deck::marks(st, item, Some(copy), false, false)
+        .iter()
+        .map(|m| m.content.as_ref())
+        .collect();
+    if marks.is_empty() {
+        name
+    } else {
+        format!("{name} {marks}")
+    }
+}
+
+/// Takes a stack off the ground: a copy by its id, so it comes back with what is
+/// fitted in it; anything else by item and count.
+fn take(s: &game::Stack) -> Pick {
+    Pick::Act(match s.copy_id() {
+        Some(id) => game::Action::TakeCopy(id),
+        None => game::Action::Take {
+            item: s.item.clone(),
+            qty: s.qty,
+        },
+    })
+}
+
 /// A stack as rows and headers name it: "Copper coil ×2", the count only above one.
 fn stack_name(name: &str, qty: u32) -> String {
     if qty > 1 {
@@ -243,12 +273,9 @@ pub fn gather(
         here_rows.push(Choice::on(
             'g',
             "Take",
-            stack_name(&item.name, s.qty),
+            ground_name(st, item, s),
             AMBER,
-            Pick::Act(game::Action::Take {
-                item: s.item.clone(),
-                qty: s.qty,
-            }),
+            take(s),
         ));
     } else if stacks.len() > 1 {
         here_rows.push(Choice::new(
@@ -264,12 +291,9 @@ pub fn gather(
             here_rows.push(Choice::on(
                 key,
                 "Take",
-                stack_name(&item.name, s.qty),
+                ground_name(st, item, s),
                 AMBER,
-                Pick::Act(game::Action::Take {
-                    item: s.item.clone(),
-                    qty: s.qty,
-                }),
+                take(s),
             ));
         }
     }
@@ -559,5 +583,111 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("¤"), "{text}");
+    }
+
+    #[test]
+    fn a_copy_on_the_ground_is_taken_by_its_id() {
+        let mut st = AppState::new();
+        st.city = Some(
+            citygen::Generator::run(citygen::GenParams {
+                seed: 6,
+                size: citygen::SizePreset::Custom { w: 120, h: 60 },
+                districts: 5,
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
+        let (place, pos) = st.player.as_ref().map(|p| (p.place, p.pos)).unwrap();
+        let deck = game::ItemId::new("rebuilt_deck");
+        st.character.give_item(&st.content, deck, 1);
+        let id = st.character.inventory.last().unwrap().copy_id().unwrap();
+        crate::actions::perform(&mut st, game::Action::DropCopy(id)).unwrap();
+        let takes = |st: &AppState| -> Vec<Pick> {
+            let subjects = gather(st, &|_, _| None);
+            let here = subjects
+                .iter()
+                .find(|s| s.dir.is_none())
+                .expect("your tile");
+            here.choices
+                .iter()
+                .filter(|c| c.label == "Take")
+                .map(|c| c.pick.clone())
+                .collect()
+        };
+        let by_id = |p: &Pick| matches!(p, Pick::Act(game::Action::TakeCopy(k)) if *k == id);
+        let alone = takes(&st);
+        assert!(alone.len() == 1 && by_id(&alone[0]), "{alone:?}");
+        // Beside a plain stack, its own row still takes it by its id.
+        st.ground
+            .add(place, pos, game::ItemId::new("copper_coil"), 2);
+        let both = takes(&st);
+        assert_eq!(both.len(), 2, "{both:?}");
+        assert!(both.iter().any(by_id), "{both:?}");
+        assert!(
+            both.iter()
+                .any(|p| matches!(p, Pick::Act(game::Action::Take { qty: 2, .. }))),
+            "{both:?}"
+        );
+    }
+
+    #[test]
+    fn ground_copies_read_apart() {
+        let mut st = AppState::new();
+        st.city = Some(
+            citygen::Generator::run(citygen::GenParams {
+                seed: 6,
+                size: citygen::SizePreset::Custom { w: 120, h: 60 },
+                districts: 5,
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
+        let (deck, sidecar) = (
+            game::ItemId::new("rebuilt_deck"),
+            game::ItemId::new("sidecar"),
+        );
+        st.character.give_item(&st.content, deck.clone(), 2);
+        st.character.give_item(&st.content, sidecar.clone(), 1);
+        let copies = |st: &AppState, item: &game::ItemId| -> Vec<game::CopyId> {
+            let mut ids: Vec<_> = st
+                .character
+                .inventory
+                .iter()
+                .filter(|s| &s.item == item)
+                .filter_map(|s| s.copy_id())
+                .collect();
+            ids.sort_by_key(|k| k.0);
+            ids
+        };
+        let (plain, modded) = (copies(&st, &deck)[0], copies(&st, &deck)[1]);
+        let piece = copies(&st, &sidecar)[0];
+        let fit = game::Action::Fit {
+            host: game::Host::Pack(modded),
+            socket: 0,
+            piece,
+        };
+        crate::actions::perform(&mut st, fit).unwrap();
+        for id in [plain, modded] {
+            crate::actions::perform(&mut st, game::Action::DropCopy(id)).unwrap();
+        }
+        let subjects = gather(&st, &|_, _| None);
+        let here = subjects.iter().find(|s| s.dir.is_none()).unwrap();
+        let rows: Vec<(String, Pick)> = here
+            .choices
+            .iter()
+            .filter(|c| c.label == "Take")
+            .filter_map(|c| Some((c.thing.clone()?.0, c.pick.clone())))
+            .collect();
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        for (id, marks) in [(plain, "□□□□□ · □□"), (modded, "□□□□□ · ■□")]
+        {
+            let row = rows
+                .iter()
+                .find(|(_, p)| matches!(p, Pick::Act(game::Action::TakeCopy(k)) if *k == id))
+                .unwrap_or_else(|| panic!("{rows:?}"));
+            assert!(row.0.ends_with(&format!(" {marks}")), "{rows:?}");
+        }
     }
 }

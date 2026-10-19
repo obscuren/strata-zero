@@ -205,6 +205,7 @@ impl AppIo<'_> {
                             let _ = self.st.net.add_heat(
                                 b,
                                 crate::backdoors::HONEYPOT_NOISE,
+                                0,
                                 now,
                                 false,
                             );
@@ -360,7 +361,7 @@ impl AppIo<'_> {
         let (event, _) = self
             .st
             .net
-            .add_heat(b, crate::backdoors::PLANT_NOISE, now, false);
+            .add_heat(b, crate::backdoors::PLANT_NOISE, 0, now, false);
         if event == game::TraceEvent::Alarm {
             let line = crate::net::raise_alarm(self.st, b);
             self.st.warn(line);

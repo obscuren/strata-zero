@@ -86,10 +86,12 @@ pub enum ItemKind {
     Junk,
     /// Software for a deck's slots; never worn, loaded instead.
     Program,
+    /// Fits into a socket on another item and adds its mods there.
+    Hardware,
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 8] = [
+    pub const ALL: [ItemKind; 9] = [
         ItemKind::Weapon,
         ItemKind::Armor,
         ItemKind::Cyberware,
@@ -98,6 +100,7 @@ impl ItemKind {
         ItemKind::Component,
         ItemKind::Junk,
         ItemKind::Program,
+        ItemKind::Hardware,
     ];
 
     pub fn label(self) -> &'static str {
@@ -110,6 +113,7 @@ impl ItemKind {
             ItemKind::Component => "component",
             ItemKind::Junk => "junk",
             ItemKind::Program => "program",
+            ItemKind::Hardware => "hardware",
         }
     }
 }
@@ -193,12 +197,94 @@ impl DeckLook {
         }
     }
 
+    /// Names of the sockets the drawing places; its length is the room for them.
+    pub fn socket_names(self) -> &'static [&'static str] {
+        match self {
+            DeckLook::Pawn => &["L", "R"],
+        }
+    }
+
     /// ROM abilities the drawing has room for.
     pub fn max_grants(self) -> usize {
         match self {
             DeckLook::Pawn => 3,
         }
     }
+}
+
+/// What a socket takes and what a piece of hardware fits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SocketKind {
+    Deck,
+}
+
+impl SocketKind {
+    /// What a socket of this kind takes.
+    pub fn takes(self) -> &'static str {
+        match self {
+            SocketKind::Deck => "deck hardware",
+        }
+    }
+
+    /// What a piece that fits this kind of socket is called on its card.
+    pub fn fits(self) -> &'static str {
+        match self {
+            SocketKind::Deck => "deck socket",
+        }
+    }
+}
+
+/// What a fitted piece of hardware changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Mod {
+    /// Percent off each trace the deck makes.
+    TraceCut(u8),
+    /// Added to every program turn's power.
+    Power(i8),
+}
+
+/// A number with its sign always shown; a negative takes a real minus, as the
+/// other mod text does.
+fn signed(n: i8) -> String {
+    if n < 0 {
+        format!("\u{2212}{}", n.unsigned_abs())
+    } else {
+        format!("+{n}")
+    }
+}
+
+impl Mod {
+    /// The line the item card reads.
+    pub fn line(&self) -> String {
+        match self {
+            Mod::TraceCut(n) => format!("trace per cast \u{2212}{n}%"),
+            Mod::Power(n) => format!("program power {}", signed(*n)),
+        }
+    }
+
+    /// The short form stuck on the drawing.
+    pub fn sticker(&self) -> String {
+        match self {
+            Mod::TraceCut(n) => format!("TRACE \u{2212}{n}%"),
+            Mod::Power(n) => format!("POWER {}", signed(*n)),
+        }
+    }
+}
+
+/// Which drawings a piece of hardware wears.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum HardwareLook {
+    ColdfinI,
+    ColdfinII,
+    Sidecar,
+}
+
+/// A piece of hardware: the socket it fits, what it does, how it looks.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Hardware {
+    pub fits: SocketKind,
+    pub mods: Vec<Mod>,
+    pub look: HardwareLook,
 }
 
 /// A deck's slots for programs, its rating and the look it wears.
@@ -288,6 +374,19 @@ pub struct Item {
     /// The deck's slots and rating (decks only).
     #[serde(default)]
     pub deck: Option<DeckSpec>,
+    /// The sockets a new copy is made with.
+    #[serde(default)]
+    pub sockets: Vec<SocketKind>,
+    /// What the piece fits and does (hardware only).
+    #[serde(default)]
+    pub hardware: Option<Hardware>,
+}
+
+impl Item {
+    /// Held per copy, since it can carry state: it has sockets or is hardware.
+    pub fn per_copy(&self) -> bool {
+        !self.sockets.is_empty() || self.hardware.is_some()
+    }
 }
 
 /// What an active ability does when fired.

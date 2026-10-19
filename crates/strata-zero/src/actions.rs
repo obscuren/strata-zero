@@ -19,14 +19,19 @@ pub fn handles_items(action: &Action) -> bool {
     matches!(
         action,
         Action::Equip(_)
+            | Action::EquipCopy(_)
             | Action::Unequip(_)
             | Action::Drop { .. }
+            | Action::DropCopy(_)
             | Action::Use(_)
             | Action::Take { .. }
+            | Action::TakeCopy(_)
             | Action::TakeAll
             | Action::Load(_)
             | Action::Unload(_)
             | Action::Slot { .. }
+            | Action::Fit { .. }
+            | Action::Unfit { .. }
     )
 }
 
@@ -39,7 +44,12 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
     // Pack-only actions work anywhere; the ground and the world need a body.
     let needs_body = matches!(
         action,
-        Action::Drop { .. } | Action::Take { .. } | Action::TakeAll | Action::Fire(_)
+        Action::Drop { .. }
+            | Action::DropCopy(_)
+            | Action::Take { .. }
+            | Action::TakeCopy(_)
+            | Action::TakeAll
+            | Action::Fire(_)
     );
     let (place, pos) = match st.player.as_ref().map(|p| (p.place, p.pos)) {
         Some(body) => body,
@@ -51,11 +61,17 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         Action::Fire(id) => Some(id.clone()),
         _ => None,
     };
-    let refresh_sight = matches!(action, Action::Equip(_) | Action::Unequip(_));
+    let refresh_sight = matches!(
+        action,
+        Action::Equip(_) | Action::EquipCopy(_) | Action::Unequip(_)
+    );
     if fired.is_some() {
         crate::net::spend_ap(st)?;
     }
-    let took = matches!(action, Action::Take { .. } | Action::TakeAll);
+    let took = matches!(
+        action,
+        Action::Take { .. } | Action::TakeCopy(_) | Action::TakeAll
+    );
     let outcome = game::apply(
         &mut st.character,
         &mut st.ground,
@@ -197,7 +213,7 @@ mod tests {
     use crate::render::Visibility;
     use crate::walker::Player;
     use citygen::{City, GenParams, Generator, SizePreset};
-    use game::{AbilityId, ItemId, Slot};
+    use game::{AbilityId, CopyId, Host, ItemId, Slot};
 
     fn city() -> City {
         Generator::run(GenParams {
@@ -239,6 +255,18 @@ mod tests {
             Action::Slot {
                 id: ItemId::new("attack"),
                 at: 0,
+            },
+            Action::EquipCopy(CopyId(1)),
+            Action::DropCopy(CopyId(1)),
+            Action::TakeCopy(CopyId(1)),
+            Action::Fit {
+                host: Host::Worn(Slot::Deck),
+                socket: 0,
+                piece: CopyId(1),
+            },
+            Action::Unfit {
+                host: Host::Worn(Slot::Deck),
+                socket: 0,
             },
         ] {
             let refused = perform(&mut st, action.clone());

@@ -79,7 +79,7 @@ pub fn power(ch: &Character, c: &Content, p: &Program, target: Target) -> i32 {
     if flag.is_some_and(|f| ch.flags(c).contains(f)) {
         out += 2;
     }
-    out
+    out + ch.deck_power(c)
 }
 
 /// What a subnet's security puts against a turn.
@@ -122,14 +122,28 @@ pub enum TraceEvent {
 pub struct Trace {
     pub heat: u8,
     pub alert_until: Option<u64>,
+    /// Tenths of a heat point not yet paid: a cut trace is fractional, the meter is not.
+    #[serde(default)]
+    pub carry: u8,
 }
 
 impl Trace {
     /// Adds noise. Crossing the alarm line while not alert raises the alarm; reaching
     /// the dump line dumps.
     pub fn add(&mut self, noise: u8, now: u64) -> TraceEvent {
+        self.add_cut(noise, 0, now)
+    }
+
+    /// `add` with a percent cut off the noise. The cut leaves tenths, which wait in
+    /// `carry` until they make a whole point.
+    pub fn add_cut(&mut self, noise: u8, cut: u8, now: u64) -> TraceEvent {
         let was_alert = self.alert(now);
-        self.heat = self.heat.saturating_add(noise).min(DUMP_HEAT);
+        let tenths = noise as u32 * 100u32.saturating_sub(cut as u32) / 10 + self.carry as u32;
+        self.carry = (tenths % 10) as u8;
+        self.heat = self
+            .heat
+            .saturating_add((tenths / 10).min(255) as u8)
+            .min(DUMP_HEAT);
         // A jump straight past the alarm line still starts the alert.
         let fresh_alarm = self.heat >= ALARM_HEAT && !was_alert;
         if fresh_alarm {
@@ -279,5 +293,45 @@ mod tests {
         t.cool(2, true);
         t.cool(3, true);
         assert_eq!(t.heat, 0, "never below zero");
+    }
+
+    #[test]
+    fn trace_carries_tenths() {
+        let mut t = Trace::default();
+        t.add_cut(4, 10, 0);
+        assert_eq!((t.heat, t.carry), (3, 6));
+        t.add_cut(4, 10, 0);
+        assert_eq!((t.heat, t.carry), (7, 2));
+        let mut t = Trace::default();
+        t.add_cut(4, 0, 0);
+        assert_eq!((t.heat, t.carry), (4, 0));
+        // A carry does not move the dump line.
+        let mut t = Trace {
+            heat: DUMP_HEAT - 4,
+            carry: 7,
+            ..Trace::default()
+        };
+        assert_eq!(t.add(4, 0), TraceEvent::Dump);
+        assert_eq!(t.heat, DUMP_HEAT);
+    }
+
+    #[test]
+    fn the_sidecar_adds_power() {
+        let c = Content::load().unwrap();
+        let mut ch = Character::debug_runner(&c);
+        let p = c.item(&ItemId::new("crack")).unwrap().program.unwrap();
+        let target = Target::Node(NodeKind::DoorLock);
+        let bare = power(&ch, &c, &p, target);
+        let at = ch
+            .inventory
+            .iter()
+            .position(|s| s.item == ItemId::new("sidecar"))
+            .unwrap();
+        let piece = ch.inventory.remove(at);
+        ch.worn.get_mut(&crate::model::Slot::Deck).unwrap().fitted[0] = Some(piece);
+        assert_eq!(power(&ch, &c, &p, target), bare + 1);
+        // Five over the bare power: mid-range, so the extra point shows.
+        let hard = bare + 5;
+        assert_eq!(chance(bare + 1, hard), chance(bare, hard) + 10);
     }
 }

@@ -1,8 +1,11 @@
 //! The pawn look: the deck drawn as a bench unit, 84 by 22. This holds where its
-//! parts sit.
+//! parts and sockets sit.
 
 use super::{DeckView, GLASS_ROWS, GLASS_TEXT_W, GlassTone, Part, Pen, Switch};
+use crate::ui::art::SocketPlace;
 use crate::ui::chrome::{CYAN, MAGENTA, PANEL_BG};
+use crate::ui::hardware::{Side, draw_side};
+use game::{DeckLook, SocketKind};
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
@@ -46,6 +49,29 @@ pub fn parts(view: &DeckView) -> Vec<(Part, Rect)> {
     out.push((Part::Failsafe, Rect::new(69, 7, 10, 5)));
     out.extend(inventory(view));
     out
+}
+
+/// Where each socket the deck has sits, L then R: its rails and the connector in the
+/// edge. `cradles` draws them there.
+pub fn sockets(view: &DeckView) -> Vec<SocketPlace> {
+    let rects = [(-4, 6, 6, 7), (82, 6, 6, 7)];
+    DeckLook::Pawn
+        .socket_names()
+        .iter()
+        .zip(rects)
+        .zip(&view.sockets)
+        .enumerate()
+        .map(|(index, ((&name, (x, y, w, h)), _))| SocketPlace {
+            index,
+            x,
+            y,
+            w,
+            h,
+            name,
+            // A deck's sockets take deck hardware.
+            kind: SocketKind::Deck,
+        })
+        .collect()
 }
 
 /// The inventory row on `INV_Y`: carts two apart from x 2, starting at `inv_offset`,
@@ -97,9 +123,12 @@ const EMPTY: Color = Color::Rgb(0x4a, 0x46, 0x52);
 const LINK_OFF: Color = Color::Rgb(0x2a, 0x55, 0x60);
 const TRACE_OFF: Color = Color::Rgb(0x4a, 0x30, 0x20);
 const GHOST: Color = Color::Rgb(0x3c, 0x44, 0x50);
-/// A plug's body and the bright ferrule pushed into the socket.
+/// A plug's body and a socket's rails; bright, the ferrule pushed into the jack and
+/// the rails' outer ends.
 const STEEL: Color = Color::Rgb(0x8b, 0x85, 0x96);
 const STEEL_HI: Color = Color::Rgb(0xc8, 0xc2, 0xd2);
+/// A socket's contacts.
+const GOLD: Color = Color::Rgb(0xc9, 0xa2, 0x27);
 /// The cables, as (body, ribs): the player's grey, the terminal's cyan.
 const PLAYER_CABLE: (Color, Color) = (Color::Rgb(0x2c, 0x29, 0x34), Color::Rgb(0x6b, 0x65, 0x78));
 const NET_CABLE: (Color, Color) = (Color::Rgb(0x00, 0x3c, 0x46), CYAN);
@@ -117,22 +146,26 @@ const TAG_END: u16 = 68;
 /// The failsafe frame's top-left cell.
 const FX: u16 = 69;
 const FY: u16 = 7;
-/// The row the sockets sit on, in the slab's left and right edges by the bottom corners.
-const SOCKET_Y: u16 = 16;
+/// The row the jacks sit on, in the slab's left and right edges by the bottom corners.
+const JACK_Y: u16 = 16;
 
-/// Draws the pawn deck from the pen's origin, clipped to the pen's area.
+/// Draws the pawn deck from the pen's origin, clipped to the pen's area. Bare, it
+/// leaves out what only inspect shows: the glass's words, WAREZ and a carried cart.
 pub(super) fn draw_with(view: &DeckView, p: &mut Pen) {
     p.fill(0, 0, W, H, PANEL_BG);
     bay(p, view);
     slab(p, view);
+    cradles(p, view);
     glass(p, view);
     p.put(45, 13, SKULL, BLACK, Some(HAZARD), true);
     gauge(p, view);
     tag(p, view);
     failsafe(p, view.switch);
     keyboard(p);
-    inventory_row(p, view);
-    landing(p, view);
+    if !view.bare {
+        inventory_row(p, view);
+        landing(p, view);
+    }
     cables(p, view);
 }
 
@@ -142,7 +175,7 @@ fn bay(p: &mut Pen, view: &DeckView) {
     for (k, cart) in view.bay.iter().enumerate() {
         let size = u16::from(cart.size.max(1));
         let (x, w) = (8 + 14 * start, 14 * size - 2);
-        let lifted = view.held.is_some() && view.point == Part::Slot(k);
+        let lifted = !view.bare && view.held.is_some() && view.point == Part::Slot(k);
         let (body, tape) = if lifted {
             (CART_DIM, LOOSE_TAPE)
         } else {
@@ -168,9 +201,9 @@ fn bay(p: &mut Pen, view: &DeckView) {
 fn slab(p: &mut Pen, view: &DeckView) {
     p.fill(2, 5, 80, 12, BODY);
     p.frame((1, 4, 82, 14), EDGE, ['╭', '╮', '╰', '╯', '─', '│']);
-    // The sockets, dark ports in the edge, there whether anything is plugged in or not.
-    p.put(1, SOCKET_Y, "█", WELL, None, false);
-    p.put(82, SOCKET_Y, "█", WELL, None, false);
+    // The jacks, dark ports in the edge, there whether anything is plugged in or not.
+    p.put(1, JACK_Y, "█", WELL, None, false);
+    p.put(82, JACK_Y, "█", WELL, None, false);
     let mouth = "▀".repeat(14 * usize::from(view.slots));
     p.put(7, 4, &mouth, BEZEL, None, false);
     for i in 0..u16::from(view.slots) {
@@ -201,13 +234,41 @@ fn slab(p: &mut Pen, view: &DeckView) {
     p.put(50, 10, STICKER, WHITE, Some(MAGENTA), true);
 }
 
+/// Each socket's connector, gold contacts in a dark slot in the edge, there whether
+/// anything is fitted or not. A fitted piece also gets steel rails off the edge on
+/// rows 6 and 12, their outer ends bright, and fills the rows between them.
+fn cradles(p: &mut Pen, view: &DeckView) {
+    // L then R: the rails' columns, the outer end, the edge, its contacts, the side.
+    let sides = [
+        (-4..=0, -4, 1, '▌', Side::Left),
+        (83..=87, 87, 82, '▐', Side::Right),
+    ];
+    for ((rails, tip, edge, pin, side), fitted) in sides.into_iter().zip(&view.sockets) {
+        let from = *rails.start();
+        for y in 8..=10 {
+            p.cell(edge, y, pin, GOLD, Some(WELL));
+        }
+        let Some(look) = fitted else { continue };
+        for x in rails {
+            let fg = if x == tip { STEEL_HI } else { STEEL };
+            p.cell(x, 6, '▄', fg, None);
+            p.cell(x, 12, '▀', fg, None);
+        }
+        draw_side(*look, side, p, from, 7);
+    }
+}
+
 /// The glass: a bezel from `GLASS_Y`, amber text on dark amber, alternate rows darker,
-/// the pinned line last. Characters past `typed` are not shown yet.
+/// the pinned line last. Characters past `typed` are not shown yet. Bare, the glass
+/// is blank.
 fn glass(p: &mut Pen, view: &DeckView) {
     p.frame((3, GLASS_Y, 42, 8), BEZEL, ['┏', '┓', '┗', '┛', '━', '┃']);
     p.fill(4, GLASS_Y + 1, 40, 6, GLASS);
     for r in (0..6).step_by(2) {
         p.tint(4, GLASS_Y + 1 + r, 40, 1, GLASS_LO);
+    }
+    if view.bare {
+        return;
     }
     let mut left = view.typed;
     let lines = view
@@ -342,12 +403,12 @@ fn inventory_row(p: &mut Pen, view: &DeckView) {
     }
 }
 
-/// The plugs in the sockets and their cables, snaking out to the edges of the pen's
+/// The plugs in the jacks and their cables, snaking out to the edges of the pen's
 /// reach: the player's on the left while the deck is worn, the terminal's on the
 /// right while jacked in.
 fn cables(p: &mut Pen, view: &DeckView) {
     let (left, right) = p.reach();
-    let y = i32::from(SOCKET_Y);
+    let y = i32::from(JACK_Y);
     let w = i32::from(W);
     if view.plugged {
         p.cell(0, y, '▐', STEEL_HI, None);
@@ -462,6 +523,7 @@ mod tests {
     use crate::ui::cyberdeck::tests::{cart, kit_view};
     use crate::ui::cyberdeck::tests::{render, row, text};
     use crate::ui::cyberdeck::{GlassTone, Held, Switch, draw};
+    use game::HardwareLook;
     use ratatui::buffer::Buffer;
     use ratatui::style::{Color, Modifier};
 
@@ -596,7 +658,7 @@ mod tests {
     }
 
     #[test]
-    fn sockets_always_show_and_cables_follow_the_deck() {
+    fn jacks_always_show_and_cables_follow_the_deck() {
         let grey = Color::Rgb(0x6b, 0x65, 0x78);
         let snake = |buf: &Buffer, cells: &[(u16, u16, &str)], fg: Color| {
             for &(x, y, glyph) in cells {
@@ -614,7 +676,7 @@ mod tests {
                 }
             }
         };
-        // In the pack: both sockets, dark ports in the edge, and nothing in them.
+        // In the pack: both jacks, dark ports in the edge, and nothing in them.
         let mut v = lit_kit();
         let buf = render(&v);
         let ports = [(OX + 1, 16, "█"), (OX + 82, 16, "█")];
@@ -622,7 +684,7 @@ mod tests {
         bare(&buf, 0..OX + 1);
         bare(&buf, OX + 83..98);
 
-        // Worn: the player's grey cable from the left socket, snaking out to the edge.
+        // Worn: the player's grey cable from the left jack, snaking out to the edge.
         v.plugged = true;
         let buf = render(&v);
         snake(&buf, &ports, WELL);
@@ -637,7 +699,7 @@ mod tests {
         assert_eq!(buf[(4, 16)].bg, Color::Rgb(0x2c, 0x29, 0x34));
         bare(&buf, OX + 83..98);
 
-        // Jacked in: the terminal's cyan cable from the right socket, out the other way.
+        // Jacked in: the terminal's cyan cable from the right jack, out the other way.
         v.link = true;
         let buf = render(&v);
         snake(&buf, &left, grey);
@@ -651,6 +713,185 @@ mod tests {
         ];
         snake(&buf, &right, CYAN);
         assert_eq!(buf[(93, 16)].bg, Color::Rgb(0x00, 0x3c, 0x46));
+
+        // A deck with sockets keeps its jacks and cables where they were.
+        let socketed = render(&DeckView {
+            sockets: vec![Some(HardwareLook::ColdfinII), None],
+            ..v.clone()
+        });
+        for y in 13..H {
+            for x in 0..98 {
+                assert_eq!(socketed[(x, y)], buf[(x, y)], "({x},{y})");
+            }
+        }
+    }
+
+    /// The cell at drawing column `x`, which may lie left of the drawing.
+    fn at(buf: &Buffer, x: i32, y: u16) -> &ratatui::buffer::Cell {
+        &buf[(u16::try_from(i32::from(OX) + x).unwrap(), y)]
+    }
+
+    #[test]
+    fn cradles_draw_on_a_deck_with_sockets() {
+        let gold = Color::Rgb(0xc9, 0xa2, 0x27);
+        let well = Color::Rgb(0x0c, 0x0c, 0x10);
+        let steel = Color::Rgb(0x8b, 0x85, 0x96);
+        let steel_hi = Color::Rgb(0xc8, 0xc2, 0xd2);
+        let buf = render(&DeckView {
+            sockets: vec![Some(HardwareLook::ColdfinI), None],
+            ..lit_kit()
+        });
+        // Rails five cells out from a fitted socket's edge, the outer end bright.
+        for x in -4..=0 {
+            let fg = if x == -4 { steel_hi } else { steel };
+            for (y, glyph) in [(6, "▄"), (12, "▀")] {
+                let c = at(&buf, x, y);
+                assert_eq!((c.symbol(), c.fg), (glyph, fg), "({x},{y})");
+            }
+        }
+        // An empty socket has no rails.
+        for x in 83..=87 {
+            for y in [6, 12] {
+                assert_eq!(at(&buf, x, y).symbol(), " ", "({x},{y})");
+            }
+        }
+        let buf = render(&DeckView {
+            sockets: vec![None, None],
+            ..lit_kit()
+        });
+        // The connectors: gold contacts in a dark slot in the edge.
+        for y in 8..=10 {
+            for (x, glyph) in [(1, "▌"), (82, "▐")] {
+                let c = at(&buf, x, y);
+                assert_eq!((c.symbol(), c.fg, c.bg), (glyph, gold, well), "({x},{y})");
+            }
+        }
+        // Empty: no rails and nothing in the cradle.
+        for y in 6..=12 {
+            for x in (-4..=0).chain(83..=87) {
+                assert_eq!(at(&buf, x, y).symbol(), " ", "({x},{y})");
+            }
+        }
+
+        // A deck without sockets has no cradles: the panel and the edge as they were.
+        let buf = render(&lit_kit());
+        for y in 6..=12 {
+            for x in (-4..=0).chain(83..=87) {
+                assert_eq!(at(&buf, x, y).symbol(), " ", "({x},{y})");
+            }
+            for x in [1, 82] {
+                let c = at(&buf, x, y);
+                assert_eq!((c.symbol(), c.fg), ("│", EDGE), "({x},{y})");
+            }
+        }
+    }
+
+    #[test]
+    fn empty_sockets_draw_only_the_connector() {
+        let gold = Color::Rgb(0xc9, 0xa2, 0x27);
+        let well = Color::Rgb(0x0c, 0x0c, 0x10);
+        let bare = render(&lit_kit());
+        let buf = render(&DeckView {
+            sockets: vec![None, None],
+            ..lit_kit()
+        });
+        for y in [6, 12] {
+            for x in (-4..=0).chain(83..=87) {
+                assert_eq!(at(&buf, x, y), at(&bare, x, y), "({x},{y})");
+            }
+        }
+        let c = at(&buf, 1, 9);
+        assert_eq!((c.symbol(), c.fg, c.bg), ("▌", gold, well));
+        // One piece fitted: its rails only.
+        let buf = render(&DeckView {
+            sockets: vec![Some(HardwareLook::ColdfinI), None],
+            ..lit_kit()
+        });
+        let c = at(&buf, -4, 6);
+        assert_eq!((c.symbol(), c.fg), ("▄", Color::Rgb(0xc8, 0xc2, 0xd2)));
+        let c = at(&buf, -3, 6);
+        assert_eq!((c.symbol(), c.fg), ("▄", Color::Rgb(0x8b, 0x85, 0x96)));
+        assert_eq!(at(&buf, 85, 6), at(&bare, 85, 6));
+    }
+
+    #[test]
+    fn fitted_hardware_draws_in_its_socket() {
+        let gold = Color::Rgb(0xc9, 0xa2, 0x27);
+        let buf = render(&DeckView {
+            sockets: vec![Some(HardwareLook::ColdfinI), Some(HardwareLook::Sidecar)],
+            ..lit_kit()
+        });
+        // The Coldfin's base plate against the left edge, its pipe copper.
+        let c = at(&buf, 0, 9);
+        assert_eq!((c.symbol(), c.fg), ("█", Color::Rgb(0xd0, 0x7a, 0x3a)));
+        // The Sidecar's gold fingers against the right edge.
+        let c = at(&buf, 83, 8);
+        assert_eq!((c.symbol(), c.fg), ("▌", gold));
+        // The cradle stays round each piece.
+        for (x, y, glyph) in [(-4, 6, "▄"), (0, 12, "▀"), (83, 6, "▄"), (87, 12, "▀")] {
+            assert_eq!(at(&buf, x, y).symbol(), glyph, "({x},{y})");
+        }
+        assert_eq!(at(&buf, 1, 9).symbol(), "▌");
+        assert_eq!(at(&buf, 82, 9).symbol(), "▐");
+
+        // One socket fitted leaves the other empty.
+        let buf = render(&DeckView {
+            sockets: vec![None, Some(HardwareLook::ColdfinII)],
+            ..lit_kit()
+        });
+        for y in 7..=11 {
+            for x in -4..=0 {
+                assert_eq!(at(&buf, x, y).symbol(), " ", "({x},{y})");
+            }
+        }
+        assert_ne!(at(&buf, 83, 9).symbol(), " ");
+    }
+
+    #[test]
+    fn bare_draws_no_glass_text_warez_or_brackets() {
+        let mut v = lit_kit();
+        (v.more_above, v.more_below) = (true, true);
+        v.sockets = vec![Some(HardwareLook::ColdfinI), None];
+        let lit = render(&v);
+        v.bare = true;
+        let buf = render(&v);
+        // The glass keeps its bezel and its ground, and reads nothing.
+        for y in 7..=12 {
+            for x in 4..44 {
+                let c = &buf[(OX + x, y)];
+                assert_eq!(c.symbol(), " ", "({x},{y})");
+                assert_eq!(c.bg, lit[(OX + x, y)].bg, "({x},{y})");
+            }
+        }
+        let t = text(&buf);
+        for gone in ["WAREZ", "ATTACK", "SLOT A", "[space] eject"] {
+            assert!(!t.contains(gone), "{gone}: {t}");
+        }
+        // The pointer's corners are gone; the bezel's own corner stays.
+        assert_eq!(text(&lit).matches('┏').count(), 2);
+        assert_eq!(t.matches('┏').count(), 1);
+        assert_eq!(buf[(OX + 3, 6)].symbol(), "┏");
+        // The deck itself is all there, sockets included.
+        for want in ["K▒ROK▒WA KX-2", "CRACK", "FAILSAFE", "NETSCAN", "VEX"] {
+            assert!(t.contains(want), "{want}");
+        }
+        assert_eq!(at(&buf, -4, 6).symbol(), "▄");
+
+        // Nor does it draw a carried cart: no outline, and the cart under it stands.
+        v.held = Some(Held {
+            from: 0,
+            cart: cart("SPOOF", 1),
+            start: 1,
+            letter: 'B',
+        });
+        v.point = Part::Slot(1);
+        let buf = render(&v);
+        let t = text(&buf);
+        assert!(
+            !t.contains("SPOOF") && !t.contains('┄') && !t.contains('┌'),
+            "{t}"
+        );
+        assert_eq!(buf[(OX + 23, 2)].bg, TAPE);
     }
 
     #[test]
@@ -884,6 +1125,7 @@ mod tests {
         v.inventory = (0..8).map(|k| cart(&format!("P{k}"), 1)).collect();
         v.inv_offset = 2;
         (v.plugged, v.link) = (true, true);
+        v.sockets = vec![Some(HardwareLook::ColdfinII), Some(HardwareLook::Sidecar)];
         for sw in [Switch::On, Switch::Lifted, Switch::Off] {
             v.switch = sw;
             let mut buf = Buffer::empty(Rect::new(0, 0, 98, 22));
@@ -901,6 +1143,7 @@ mod tests {
         v.more_above = true;
         v.more_below = true;
         (v.plugged, v.link) = (true, true);
+        v.sockets = vec![Some(HardwareLook::Sidecar), None];
         let mut views: Vec<DeckView> = [Switch::On, Switch::Lifted, Switch::Off]
             .into_iter()
             .map(|switch| DeckView {

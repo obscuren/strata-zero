@@ -51,6 +51,10 @@ pub enum ContentError {
     ProgramInvalid { id: String, why: String },
     #[error("deck `{id}`: {why}")]
     DeckInvalid { id: String, why: String },
+    #[error("item `{id}`: {why}")]
+    SocketsInvalid { id: String, why: String },
+    #[error("hardware `{id}`: {why}")]
+    HardwareInvalid { id: String, why: String },
     #[error("tree {name}: {why}")]
     TreeInvalid { name: String, why: String },
 }
@@ -202,6 +206,40 @@ impl Content {
                     return Err(ContentError::DeckInvalid {
                         id: i.id.0.clone(),
                         why: "deck slots on something that is not a deck".into(),
+                    });
+                }
+                _ => {}
+            }
+            if !i.sockets.is_empty() {
+                // Only a drawing can place sockets, and only so many.
+                let room = match (i.kind, i.deck) {
+                    (ItemKind::Deck, Some(d)) => d.look.socket_names().len(),
+                    _ => 0,
+                };
+                if i.sockets.len() > room {
+                    return Err(ContentError::SocketsInvalid {
+                        id: i.id.0.clone(),
+                        why: format!("no drawing places {} sockets for it", i.sockets.len()),
+                    });
+                }
+            }
+            match (i.kind, &i.hardware) {
+                (ItemKind::Hardware, None) => {
+                    return Err(ContentError::HardwareInvalid {
+                        id: i.id.0.clone(),
+                        why: "no hardware numbers".into(),
+                    });
+                }
+                (ItemKind::Hardware, Some(h)) if h.mods.is_empty() => {
+                    return Err(ContentError::HardwareInvalid {
+                        id: i.id.0.clone(),
+                        why: "hardware does at least one thing".into(),
+                    });
+                }
+                (k, Some(_)) if k != ItemKind::Hardware => {
+                    return Err(ContentError::HardwareInvalid {
+                        id: i.id.0.clone(),
+                        why: "hardware numbers on something that is not hardware".into(),
                     });
                 }
                 _ => {}
@@ -1028,7 +1066,7 @@ mod tests {
     #[test]
     fn deck_look_defaults_to_pawn() {
         let text = DEFAULT_CONTENT.replace(", look: Pawn", "");
-        assert!(!text.contains("look:"));
+        assert!(!text.contains("look: Pawn"));
         let c = Content::parse(&text).unwrap();
         let d = c.item(&ItemId::new("pawnshop_deck")).unwrap().deck.unwrap();
         assert_eq!(d.look, DeckLook::Pawn);
@@ -1062,5 +1100,119 @@ mod tests {
             .map(AbilityId::new)
             .to_vec();
         assert!(ok.validate().is_ok());
+    }
+    #[test]
+    fn hardware_and_sockets_load() {
+        let c = Content::load().unwrap();
+        let get = |id: &str| c.item(&ItemId::new(id)).unwrap();
+        assert_eq!(
+            get("rebuilt_deck").sockets,
+            vec![SocketKind::Deck, SocketKind::Deck]
+        );
+        assert!(get("pawnshop_deck").sockets.is_empty());
+        for (id, name, weight, value, m, look) in [
+            (
+                "coldfin_1",
+                "Coldfin vI",
+                0.4,
+                800,
+                Mod::TraceCut(10),
+                HardwareLook::ColdfinI,
+            ),
+            (
+                "coldfin_2",
+                "Coldfin vII",
+                0.6,
+                1600,
+                Mod::TraceCut(20),
+                HardwareLook::ColdfinII,
+            ),
+            (
+                "sidecar",
+                "Sidecar co-processor",
+                0.2,
+                900,
+                Mod::Power(1),
+                HardwareLook::Sidecar,
+            ),
+        ] {
+            let i = get(id);
+            assert_eq!(i.kind, ItemKind::Hardware, "{id}");
+            assert_eq!(i.name, name);
+            assert_eq!(i.weight, weight);
+            assert_eq!(i.value, value);
+            assert_eq!(
+                i.hardware,
+                Some(Hardware {
+                    fits: SocketKind::Deck,
+                    mods: vec![m],
+                    look
+                }),
+                "{id}"
+            );
+        }
+        assert!(get("rebuilt_deck").per_copy());
+        assert!(get("coldfin_1").per_copy());
+        assert!(!get("pawnshop_deck").per_copy());
+        assert!(!get("crack").per_copy());
+    }
+
+    #[test]
+    fn mod_lines_read_as_the_card_does() {
+        assert_eq!(Mod::TraceCut(10).line(), "trace per cast \u{2212}10%");
+        assert_eq!(Mod::Power(1).line(), "program power +1");
+        assert_eq!(Mod::TraceCut(20).sticker(), "TRACE \u{2212}20%");
+        assert_eq!(Mod::Power(1).sticker(), "POWER +1");
+        assert_eq!(Mod::Power(-1).line(), "program power \u{2212}1");
+        assert_eq!(Mod::Power(-1).sticker(), "POWER \u{2212}1");
+        assert_eq!(SocketKind::Deck.takes(), "deck hardware");
+        assert_eq!(SocketKind::Deck.fits(), "deck socket");
+    }
+
+    #[test]
+    fn validation_refuses_bad_hardware_and_sockets() {
+        let c = Content::load().unwrap();
+        let at = |c: &Content, id: &str| c.items.iter().position(|i| i.id.0 == id).unwrap();
+        let hardware = c.item(&ItemId::new("coldfin_1")).unwrap().hardware.clone();
+
+        let mut bad = c.clone();
+        let i = at(&bad, "coldfin_1");
+        bad.items[i].hardware = None;
+        assert!(matches!(
+            bad.validate(),
+            Err(ContentError::HardwareInvalid { .. })
+        ));
+
+        let mut bad = c.clone();
+        let i = at(&bad, "crack");
+        bad.items[i].hardware = hardware;
+        assert!(matches!(
+            bad.validate(),
+            Err(ContentError::HardwareInvalid { .. })
+        ));
+
+        let mut bad = c.clone();
+        let i = at(&bad, "coldfin_1");
+        bad.items[i].hardware.as_mut().unwrap().mods.clear();
+        assert!(matches!(
+            bad.validate(),
+            Err(ContentError::HardwareInvalid { .. })
+        ));
+
+        let mut bad = c.clone();
+        let i = at(&bad, "rebuilt_deck");
+        bad.items[i].sockets = vec![SocketKind::Deck; 3];
+        assert!(matches!(
+            bad.validate(),
+            Err(ContentError::SocketsInvalid { .. })
+        ));
+
+        let mut bad = c.clone();
+        let i = at(&bad, "salvage_jacket");
+        bad.items[i].sockets = vec![SocketKind::Deck];
+        assert!(matches!(
+            bad.validate(),
+            Err(ContentError::SocketsInvalid { .. })
+        ));
     }
 }

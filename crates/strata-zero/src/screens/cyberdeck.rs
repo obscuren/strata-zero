@@ -5,14 +5,20 @@
 use crate::actions::{perform, report};
 use crate::app::{AppState, ScreenCmd, TransitionKind};
 use crate::screens::deck::{Deck, FAILSAFE_TEXT, FAILSAFE_WARN, REVEAL_TICKS};
+use crate::ui::art::{Art, Dir, SocketPlace, step};
 use crate::ui::chrome::{DIM, MAGENTA};
 use crate::ui::cyberdeck::{
-    Cart, DeckView, Dir, GLASS_ROWS, GLASS_TEXT_W, GlassTone, Held, Part, Switch, parts, step,
+    self, Cart, DeckView, GLASS_ROWS, GLASS_TEXT_W, GlassTone, Held, Part, Switch, parts,
 };
 use crate::ui::sidebar::wrap_text;
 use citygen::Place;
 use crossterm::event::KeyCode;
-use game::{AbilityId, Action, DeckSpec, Item, ItemId, ItemKind, SlotPlan, Source};
+use game::{
+    AbilityId, Action, CopyId, DeckSpec, HardwareLook, Item, ItemCopy, ItemId, ItemKind, Slot,
+    SlotPlan, Source,
+};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 
@@ -28,6 +34,9 @@ pub struct DeckTab {
     /// The deck is the jacked one. A deck in the pack is pointed at and read, never
     /// changed.
     pub equipped: bool,
+    /// Which copy in the pack, when the deck is held per copy: what its sockets hold.
+    /// The jacked deck reads the worn copy instead.
+    pub copy: Option<CopyId>,
     pub point: Part,
     /// A program lifted from the inventory, waiting for a slot.
     pub held: Option<ItemId>,
@@ -40,12 +49,20 @@ pub struct DeckTab {
 }
 
 impl DeckTab {
-    /// The blueprint of `deck`: the jacked deck on the part it was left on
-    /// (`st.deck_part`), a carried one on slot A, or the nearest part it has.
-    pub fn for_deck(tick: u64, deck: ItemId, equipped: bool, st: &AppState) -> Self {
+    /// The blueprint of `deck`, `copy` the one in the pack it was opened on: the
+    /// jacked deck on the part it was left on (`st.deck_part`), a carried one on slot
+    /// A, or the nearest part it has.
+    pub fn for_deck(
+        tick: u64,
+        deck: ItemId,
+        equipped: bool,
+        copy: Option<CopyId>,
+        st: &AppState,
+    ) -> Self {
         let mut tab = DeckTab {
             deck,
             equipped,
+            copy,
             point: Part::Slot(0),
             held: None,
             cover_up: false,
@@ -66,12 +83,27 @@ impl DeckTab {
         self.point.pack()
     }
 
-    pub fn hint(&self) -> &'static str {
-        if self.held.is_some() {
-            "↑↓←→ carry · space drop · esc put back"
+    /// The hint row's keys and its esc part, apart so the window can put its own
+    /// keys between them.
+    pub fn hint(&self) -> (&'static str, &'static str) {
+        if self.holding() {
+            ("↑↓←→ carry · space drop", "esc put back")
         } else {
-            "↑↓←→ point · space act · esc close"
+            ("↑↓←→ point · space act", "esc close")
         }
+    }
+
+    /// A cart is lifted and waiting for a slot.
+    pub fn holding(&self) -> bool {
+        self.held.is_some()
+    }
+
+    /// The deck alone, as it stands, for modding: bare, so the glass is blank and
+    /// nothing of inspect's is drawn.
+    pub fn art(&self, st: &AppState) -> DeckArt {
+        let mut view = self.layout(st, self.point);
+        view.bare = true;
+        DeckArt { view }
     }
 
     /// One key: `Pop` for esc with nothing to undo, `Stay` for every other. The window
@@ -186,6 +218,8 @@ impl DeckTab {
             more_below: false,
             typed: usize::MAX,
             tick: st.tick,
+            sockets: sockets(st, self),
+            bare: false,
         };
         // The row scrolls just far enough to show the cart lifted, or the one pointed at.
         let keep = from.or(match point {
@@ -327,6 +361,29 @@ impl DeckTab {
     }
 }
 
+/// A deck as the modding mode sees it: the bare drawing and its sockets.
+pub struct DeckArt {
+    view: DeckView,
+}
+
+impl Art for DeckArt {
+    fn size(&self) -> (u16, u16) {
+        cyberdeck::size(self.view.look)
+    }
+
+    fn origin(&self, body: Rect) -> (u16, u16) {
+        cyberdeck::origin(self.view.look, body)
+    }
+
+    fn draw(&self, origin: (u16, u16), clip: Rect, buf: &mut Buffer) {
+        cyberdeck::draw_at(&self.view, origin, clip, buf);
+    }
+
+    fn sockets(&self) -> Vec<SocketPlace> {
+        cyberdeck::sockets(&self.view)
+    }
+}
+
 /// Jacked in: the deck is meatspace only, so pointing and reading work and acting does not.
 fn locked(st: &AppState) -> bool {
     crate::actions::jacked_in(st)
@@ -337,6 +394,30 @@ fn locked(st: &AppState) -> bool {
 fn drawn<'a>(st: &'a AppState, tab: &DeckTab) -> Option<(&'a Item, DeckSpec)> {
     let item = st.content.item(&tab.deck)?;
     Some((item, item.deck?))
+}
+
+/// The copy of the deck drawn: the worn one for the jacked deck, else the one in the
+/// pack it was opened on. `None` for a deck held without a copy.
+fn copy<'a>(st: &'a AppState, tab: &DeckTab) -> Option<&'a ItemCopy> {
+    if tab.equipped {
+        return st.character.worn_copy(Slot::Deck);
+    }
+    st.character.copy_in_pack(tab.copy?)?.copy.as_ref()
+}
+
+/// What each of the deck's sockets holds: the look of the piece fitted there in the
+/// copy drawn. A deck held without a copy has its sockets, all empty.
+fn sockets(st: &AppState, tab: &DeckTab) -> Vec<Option<HardwareLook>> {
+    let Some((deck, _)) = drawn(st, tab) else {
+        return Vec::new();
+    };
+    let copy = copy(st, tab);
+    (0..deck.sockets.len())
+        .map(|i| {
+            let piece = copy?.fitted.get(i)?.as_ref()?;
+            Some(st.content.item(&piece.item)?.hardware.as_ref()?.look)
+        })
+        .collect()
 }
 
 /// Programs in the pack and not loaded, in pack order, one per id: the carts in
@@ -408,13 +489,16 @@ pub(crate) fn glass(st: &AppState, tab: &DeckTab) -> (Glass, (String, GlassTone)
                 ),
             }
         }
-        Part::Plate => (
-            lines(&Deck::item_card(st, &deck.id)),
+        Part::Plate => {
+            // The card reads the copy drawn, what is fitted in it included.
             (
-                format!("{used}/{} slots · rating {}", spec.slots, spec.rating),
-                GlassTone::Dim,
-            ),
-        ),
+                lines(&Deck::item_card_of(st, &deck.id, copy(st, tab))),
+                (
+                    format!("{used}/{} slots · rating {}", spec.slots, spec.rating),
+                    GlassTone::Dim,
+                ),
+            )
+        }
         Part::Rom(k) => {
             let Some((id, name)) = roms(st, tab).into_iter().nth(k) else {
                 return (Vec::new(), line("", GlassTone::Dim));
@@ -725,7 +809,7 @@ mod tests {
 
     /// The blueprint of the jacked pawnshop deck.
     fn jacked(st: &AppState) -> DeckTab {
-        DeckTab::for_deck(0, id("pawnshop_deck"), true, st)
+        DeckTab::for_deck(0, id("pawnshop_deck"), true, None, st)
     }
 
     fn space(tab: &mut DeckTab, st: &mut AppState) -> ScreenCmd {
@@ -845,7 +929,7 @@ mod tests {
 
         // A deck too small for it says so before it is picked up, and refuses it.
         equip_deck(&mut st, 1);
-        let mut tab = DeckTab::for_deck(0, id("test_deck"), true, &st);
+        let mut tab = DeckTab::for_deck(0, id("test_deck"), true, None, &st);
         tab.point = inv_of(&st, "backdoor");
         let (body, pinned) = glass(&st, &tab);
         assert!(
@@ -888,7 +972,8 @@ mod tests {
         space(&mut tab, &mut st);
         assert_eq!(tab.held, Some(id("attack")));
         assert_eq!(tab.point, Part::Slot(0), "the bay is full: the first cart");
-        assert_eq!(tab.hint(), "↑↓←→ carry · space drop · esc put back");
+        assert!(tab.holding());
+        assert_eq!(tab.hint(), ("↑↓←→ carry · space drop", "esc put back"));
         tab.key(&mut st, KeyCode::Right);
         assert_eq!(tab.point, Part::Slot(1));
         tab.key(&mut st, KeyCode::Down);
@@ -911,7 +996,8 @@ mod tests {
         assert_eq!(tab.held, None);
         assert_eq!(last(&st), Some("Attack slotted · Copy to inventory"));
         assert_eq!(tab.point, Part::Slot(1));
-        assert_eq!(tab.hint(), "↑↓←→ point · space act · esc close");
+        assert!(!tab.holding());
+        assert_eq!(tab.hint(), ("↑↓←→ point · space act", "esc close"));
     }
 
     #[test]
@@ -1080,7 +1166,7 @@ mod tests {
         jack_in(&mut st);
         let b = st.city.as_ref().unwrap().buildings[0].id;
         st.net.trace(b).heat = 60;
-        let mut tab = DeckTab::for_deck(0, id("rebuilt_deck"), false, &st);
+        let mut tab = DeckTab::for_deck(0, id("rebuilt_deck"), false, None, &st);
         // Its own slots, rating and ROM; an empty bay, no trace, no link, though the
         // jacked deck has all three.
         let v = tab.view(&st);
@@ -1089,6 +1175,8 @@ mod tests {
         assert_eq!(v.roms, vec!["NETSCAN", "ARC TRACE"]);
         assert_eq!((v.trace, v.link), (None, false));
         assert_eq!(v.point, Part::Slot(0));
+        // Given without a copy, its sockets are there and empty.
+        assert_eq!(v.sockets, vec![None, None]);
         assert_eq!(
             v.pinned,
             ("not jacked · equip it first".into(), GlassTone::Warn)
@@ -1103,6 +1191,52 @@ mod tests {
             texts(&glass(&st, &tab).0).contains(&"needs 1 slot · 5 free"),
             "the bay is empty"
         );
+    }
+
+    #[test]
+    fn a_deck_in_the_pack_shows_its_own_copy() {
+        let mut st = state();
+        st.character = game::Character::debug_runner(&st.content);
+        st.character.give_item(&st.content, id("rebuilt_deck"), 1);
+        let copy_of = |st: &AppState, item: &str| {
+            st.character
+                .inventory
+                .iter()
+                .find(|s| s.item == id(item))
+                .and_then(|s| s.copy_id())
+                .unwrap()
+        };
+        let copy = copy_of(&st, "rebuilt_deck");
+        let piece = copy_of(&st, "coldfin_2");
+        let fit = Action::Fit {
+            host: game::Host::Pack(copy),
+            socket: 1,
+            piece,
+        };
+        perform(&mut st, fit).unwrap();
+        let mut tab = DeckTab::for_deck(0, id("rebuilt_deck"), false, Some(copy), &st);
+        assert_eq!(
+            tab.view(&st).sockets,
+            vec![None, Some(game::HardwareLook::ColdfinII)]
+        );
+        tab.point = Part::Plate;
+        let body = glass(&st, &tab).0;
+        let lines = texts(&body);
+        assert!(
+            lines.contains(&"□ empty socket · deck hardware"),
+            "{lines:?}"
+        );
+        assert!(
+            lines.contains(&"■ Coldfin vII · trace per cast −20%"),
+            "{lines:?}"
+        );
+
+        // The worn copy is another deck: nothing fitted in it.
+        let worn = DeckTab::for_deck(0, id("rebuilt_deck"), true, None, &st);
+        assert_eq!(worn.view(&st).sockets, vec![None, None]);
+        // A deck without sockets has none to draw.
+        let pawn = DeckTab::for_deck(0, id("pawnshop_deck"), false, None, &st);
+        assert!(pawn.view(&st).sockets.is_empty());
     }
 
     #[test]

@@ -256,6 +256,8 @@ fn card(id: ItemId, name: String, desc: String) -> Item {
         on_use: None,
         program: None,
         deck: None,
+        sockets: Vec::new(),
+        hardware: None,
     }
 }
 
