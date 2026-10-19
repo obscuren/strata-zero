@@ -89,7 +89,7 @@ impl Art for ItemArt {
                 draw_fitted(*look, &place, &mut pen);
             }
         }
-        stickers::draw(&self.stickers, &mut pen);
+        stickers::draw(&self.stickers, size(self.look), &mut pen);
     }
 
     fn sockets(&self) -> Vec<SocketPlace> {
@@ -161,6 +161,30 @@ mod tests {
         let row: String = (26..30).map(|x| buf[(x, 5)].symbol()).collect();
         assert_eq!(row, " HI ");
         assert_eq!(buf[(27, 5)].bg, Color::Rgb(4, 5, 6));
+    }
+
+    #[test]
+    fn the_gun_clips_its_stickers_to_the_drawing() {
+        let sticker = crate::ui::stickers::Placed {
+            art: crate::ui::stickers::tests::lettered(" HELLO "),
+            x: 85,
+            y: 5,
+            turn: game::Turn::Level,
+        };
+        let art = ItemArt {
+            look: ItemLook::Ratchet,
+            fitted: vec![None, None],
+            stickers: vec![sticker],
+        };
+        let (w, h) = art.size();
+        let area = Rect::new(0, 0, w + 10, h);
+        let mut buf = Buffer::empty(area);
+        art.draw((0, 0), area, &mut buf);
+        assert_eq!(buf[(86, 5)].symbol(), "H");
+        for x in w..w + 10 {
+            assert_eq!(buf[(x, 5)].symbol(), " ", "({x},5)");
+            assert_eq!(buf[(x, 5)].bg, Color::Reset, "({x},5)");
+        }
     }
 
     #[test]

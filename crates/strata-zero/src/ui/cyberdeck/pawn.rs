@@ -196,7 +196,7 @@ pub(super) fn draw_with(view: &DeckView, p: &mut Pen) {
     failsafe(p, view.switch);
     keyboard(p);
     // Stickers go on over the paint, the tag included.
-    stickers::draw(&view.stickers, p);
+    stickers::draw(&view.stickers, (W, H), p);
     if !view.bare {
         inventory_row(p, view);
         landing(p, view);
@@ -632,6 +632,26 @@ mod tests {
         });
         assert!(!row(&buf, 10).contains("VEX"), "{}", row(&buf, 10));
         assert!(row(&buf, 10).contains("#####"));
+    }
+
+    #[test]
+    fn a_sticker_never_draws_past_the_drawing() {
+        let base = render(&lit_kit());
+        let over = Placed {
+            art: crate::ui::stickers::tests::lettered(" NO FUTURE "),
+            x: 80,
+            y: 10,
+            turn: game::Turn::Level,
+        };
+        let buf = render(&DeckView {
+            stickers: vec![over],
+            ..lit_kit()
+        });
+        // On the drawing it shows; past its right edge (x 84 on) nothing of it does.
+        assert_eq!(buf[(OX + 81, 10)].symbol(), "N");
+        for x in OX + W..buf.area.width {
+            assert_eq!(buf[(x, 10)], base[(x, 10)], "({x},10)");
+        }
     }
 
     #[test]

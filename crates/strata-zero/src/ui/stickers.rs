@@ -296,10 +296,18 @@ impl Art for Loose {
     }
 }
 
-/// Draws stuck stickers in their order, so each newer one lies over the older.
-pub fn draw(stickers: &[Placed], pen: &mut Pen) {
+/// Draws stuck stickers in their order, so each newer one lies over the older, on a
+/// drawing `w` by `h` from the pen's origin: nothing of them lands past its edges,
+/// though the pen may reach further (a deck's cables do).
+pub fn draw(stickers: &[Placed], (w, h): (u16, u16), pen: &mut Pen) {
+    let mut on = Pen {
+        clip: pen.clip.intersection(Rect::new(pen.ox, pen.oy, w, h)),
+        buf: &mut *pen.buf,
+        ox: pen.ox,
+        oy: pen.oy,
+    };
     for s in stickers {
-        draw_at(&s.art, s.turn, s.x, s.y, pen);
+        draw_at(&s.art, s.turn, s.x, s.y, &mut on);
     }
 }
 
@@ -496,7 +504,7 @@ pub(crate) mod tests {
             y: 0,
             turn: Turn::Level,
         };
-        draw(&[at("aaaa", 0), at("bb", 2)], &mut pen);
+        draw(&[at("aaaa", 0), at("bb", 2)], (6, 1), &mut pen);
         let row: String = (0..6).map(|x| buf[(x, 0)].symbol()).collect();
         assert_eq!(row, "aabb  ");
     }

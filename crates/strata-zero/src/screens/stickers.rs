@@ -142,10 +142,23 @@ fn distance((ax, ay): (f32, f32), (bx, by): (f32, f32)) -> f32 {
     dx * dx + dy * dy
 }
 
-/// The stuck sticker whose centre lies nearest `to`; ties go to the older.
+/// The stuck sticker whose centre lies nearest `to`; ties go to the newer, which lies
+/// on top.
 fn nearest_on(on: &[On], to: (f32, f32)) -> Option<usize> {
     let d = |o: &On| distance(centre(o.rect), to);
-    (0..on.len()).min_by(|&a, &b| d(&on[a]).total_cmp(&d(&on[b])))
+    (0..on.len())
+        .rev()
+        .min_by(|&a, &b| d(&on[a]).total_cmp(&d(&on[b])))
+}
+
+/// The stuck stickers as places for `step`, newest first: its ties go to the earlier
+/// place, so of stickers stuck on one spot the arrows reach the one on top.
+fn stops(on: &[On]) -> Vec<(usize, Rect)> {
+    on.iter()
+        .enumerate()
+        .rev()
+        .map(|(i, o)| (i, o.rect))
+        .collect()
 }
 
 /// A tile's width: its sticker, level, or its count when that is wider.
@@ -455,9 +468,7 @@ impl StickerBench {
             }
         }
         if let Some(dir) = dir_of(code) {
-            let stops: Vec<(usize, Rect)> =
-                on.iter().enumerate().map(|(i, o)| (i, o.rect)).collect();
-            let next = step(&stops, index, dir, |_| true);
+            let next = step(&stops(&on), index, dir, |_| true);
             if next != index {
                 self.at = At::Stuck {
                     index: next,
@@ -1326,5 +1337,60 @@ mod tests {
                 .iter()
                 .all(|s| s.sticker != id("sticker_neko"))
         );
+    }
+    /// The deck worn with only the given stickers, then NO FUTURE and ARASAKA picked
+    /// and stuck: both land on the same start spot, ARASAKA on top.
+    fn stacked(first: &[Stuck]) -> (AppState, Blueprint) {
+        let mut st = dshawn();
+        st.character.worn.get_mut(&Slot::Deck).unwrap().stickers = first.to_vec();
+        let mut bp = worn(&st, "rebuilt_deck", Slot::Deck);
+        let (space, right) = (KeyCode::Char(' '), KeyCode::Right);
+        press(&mut bp, &mut st, &[KeyCode::Char('s'), space, space]);
+        press(&mut bp, &mut st, &[right, right, space, space]);
+        let now = stuck(&st, Slot::Deck);
+        let n = first.len();
+        assert_eq!(now[n].sticker, id("sticker_no_future"));
+        assert_eq!(now[n + 1].sticker, id("sticker_arasaka"));
+        assert_eq!(
+            (now[n].x, now[n].y),
+            (now[n + 1].x, now[n + 1].y),
+            "stacked"
+        );
+        (st, bp)
+    }
+
+    #[test]
+    fn stickers_on_one_spot_point_at_the_top_one_first() {
+        let (mut st, mut bp) = stacked(&[]);
+        press(&mut bp, &mut st, &[KeyCode::Up]);
+        assert_eq!(at(&bp), on(1), "the one on top");
+        assert_eq!(
+            readout(&screen(&bp, &st, 100, 30)),
+            "ARASAKA ▸ stuck · lettered"
+        );
+        // Peeled from the top down, as vinyl comes off.
+        press(&mut bp, &mut st, &[KeyCode::Char(' '), KeyCode::Char(' ')]);
+        let left: Vec<ItemId> = stuck(&st, Slot::Deck)
+            .into_iter()
+            .map(|s| s.sticker)
+            .collect();
+        assert_eq!(left, [id("sticker_no_future")]);
+        assert_eq!(at(&bp), on(0));
+        assert_eq!(
+            readout(&screen(&bp, &st, 100, 30)),
+            "NO FUTURE ▸ stuck · lettered"
+        );
+
+        // The arrows reach the top one too: from x‿x, left onto the stack.
+        let face = Stuck {
+            sticker: id("sticker_dead_face"),
+            x: 45,
+            y: 13,
+            turn: Turn::Level,
+        };
+        let (mut st, mut bp) = stacked(&[face]);
+        bp.stickers.at = on(0);
+        press(&mut bp, &mut st, &[KeyCode::Left]);
+        assert_eq!(at(&bp), on(2));
     }
 }
