@@ -8,12 +8,13 @@ use crate::screens::blueprint::Blueprint;
 use crate::screens::deck::Deck;
 use crate::screens::explore::MapScreen;
 use crate::screens::keypad::Keypad;
+use crate::screens::kit::{Kit, Pane};
 use crate::screens::popup::Popup;
 use crate::screens::terminal::Terminal;
 use crate::screens::testutil::key;
 use citygen::{GenParams, Generator, Place, Pos, SizePreset, StratumKind};
 use crossterm::event::KeyCode;
-use game::ItemId;
+use game::{ItemId, ItemKind, Slot};
 use ratatui::Terminal as Term;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -246,31 +247,32 @@ fn terminal_on_the_street() {
     shot("terminal", &st, &map, &term);
 }
 
-/// The blueprint window on `item`, opened from the deck screen's tab `tab` (GEAR, `3`,
-/// opens what is worn), over the map, at each size.
-fn blueprint_shots(st: &mut AppState, tab: char, item: &str, name: &str, sizes: &[(u16, u16)]) {
-    let (map, deck, window) = blueprint_stack(st, tab, item);
+/// The blueprint window on `item`, opened from GEAR & INVENTORY (`3`) over the map, at
+/// each size: on the rack's worn copy when `worn`, else on the first copy in the pack.
+fn blueprint_shots(st: &mut AppState, worn: bool, item: &str, name: &str, sizes: &[(u16, u16)]) {
+    let (map, deck, window) = blueprint_stack(st, worn, item);
     for (w, h) in sizes {
         let name = format!("{name}_{w}x{h}");
         shot_stack(&name, st, &[&map, &deck, &window], (*w, *h));
     }
 }
 
-/// The screens `blueprint_shots` draws, settled: the map, the deck on `tab`, the window.
-fn blueprint_stack(st: &mut AppState, tab: char, item: &str) -> (MapScreen, Deck, Blueprint) {
+/// The screens `blueprint_shots` draws, settled: the map, GEAR & INVENTORY, the window.
+fn blueprint_stack(st: &mut AppState, worn: bool, item: &str) -> (MapScreen, Deck, Blueprint) {
     let map = MapScreen::walking(st);
     let mut deck = Deck::new(st.tick);
-    deck.update(st, &[key(KeyCode::Char(tab))]);
-    // The copy the deck screen would pass: the one worn from GEAR, else the first carried.
+    deck.update(st, &[key(KeyCode::Char('3'))]);
+    deck.kit.state.pane = if worn { Pane::Rack } else { Pane::Pack };
+    // The copy the deck screen would pass: the one worn, else the first carried.
     let id = ItemId::new(item);
-    let copy = if tab == '3' {
+    let copy = if worn {
         let slot = st.content.item(&id).and_then(|i| i.slot);
         slot.and_then(|s| st.character.worn_copy(s)).map(|k| k.id)
     } else {
         let carried = st.character.inventory.iter().find(|s| s.item == id);
         carried.and_then(|s| s.copy_id())
     };
-    let window = Blueprint::open(st, id, tab == '3', copy);
+    let window = Blueprint::open(st, id, worn, copy);
     // The glass typed out, clear of the deck's signal jitter (three ticks in ninety).
     st.tick += 200;
     if st.tick % 90 < 3 {
@@ -284,7 +286,7 @@ fn blueprint_stack(st: &mut AppState, tab: char, item: &str) -> (MapScreen, Deck
 fn the_deck_on_its_blueprint() {
     let mut st = state_home();
     let sizes = [(100, 30), (120, 40)];
-    blueprint_shots(&mut st, '3', "pawnshop_deck", "blueprint_deck", &sizes);
+    blueprint_shots(&mut st, true, "pawnshop_deck", "blueprint_deck", &sizes);
 }
 
 #[test]
@@ -293,11 +295,11 @@ fn dshawns_decks_on_their_blueprints() {
     let mut st = state_home();
     st.character = game::Character::debug_runner(&st.content);
     let at = [(120, 40)];
-    blueprint_shots(&mut st, '3', "rebuilt_deck", "blueprint_dshawn", &at);
+    blueprint_shots(&mut st, true, "rebuilt_deck", "blueprint_dshawn", &at);
     // The pawnshop deck he carries: its own blueprint, read only.
     blueprint_shots(
         &mut st,
-        '4',
+        false,
         "pawnshop_deck",
         "blueprint_dshawn_carried",
         &at,
@@ -361,7 +363,7 @@ fn hardware_blueprints() {
     st.character = game::Character::debug_runner(&st.content);
     for item in ["coldfin_1", "coldfin_2", "sidecar"] {
         let name = format!("hardware_{item}");
-        blueprint_shots(&mut st, '4', item, &name, &[(100, 30)]);
+        blueprint_shots(&mut st, false, item, &name, &[(100, 30)]);
     }
 }
 
@@ -372,11 +374,11 @@ fn the_ratchet_on_its_blueprint() {
     let mut st = state_home();
     st.character = game::Character::debug_runner(&st.content);
     let sizes = [(100, 30), (120, 40)];
-    blueprint_shots(&mut st, '3', "ratchet_smg", "blueprint_ratchet", &sizes);
+    blueprint_shots(&mut st, true, "ratchet_smg", "blueprint_ratchet", &sizes);
     fit_on_the_ratchet(&mut st, &[(0, "hushcan"), (1, "redeye")]);
     blueprint_shots(
         &mut st,
-        '3',
+        true,
         "ratchet_smg",
         "blueprint_ratchet_fitted",
         &sizes,
@@ -447,35 +449,58 @@ fn weapon_hardware_blueprints() {
     st.character = game::Character::debug_runner(&st.content);
     for item in ["hushcan", "redeye"] {
         let name = format!("hardware_{item}");
-        blueprint_shots(&mut st, '4', item, &name, &[(100, 30), (120, 40)]);
+        blueprint_shots(&mut st, false, item, &name, &[(100, 30), (120, 40)]);
     }
 }
 
-/// GEAR and INVENTORY with a Coldfin vII fitted: the marks after the names.
+/// GEAR & INVENTORY at each size: D'SHAWN with the Hushcan and Redeye fitted on the
+/// Ratchet and the rack on PRIMARY, then a fresh D'SHAWN with the pack filtered to
+/// hardware and the cursor on the Hushcan.
 #[test]
 #[ignore]
-fn gear_and_inventory_marks() {
+fn gear_and_inventory() {
+    let sizes = [(100, 30), (120, 40)];
     let mut st = state_home();
     st.character = game::Character::debug_runner(&st.content);
-    let piece = st
-        .character
-        .inventory
-        .iter()
-        .find(|s| s.item == ItemId::new("coldfin_2"))
-        .and_then(|s| s.copy_id())
-        .unwrap();
-    let fit = game::Action::Fit {
-        host: game::Host::Worn(game::Slot::Deck),
-        socket: 0,
-        piece,
-    };
-    crate::actions::perform(&mut st, fit).unwrap();
-    let map = MapScreen::walking(&mut st);
+    fit_on_the_ratchet(&mut st, &[(0, "hushcan"), (1, "redeye")]);
+    let tile = Slot::ALL.iter().position(|s| *s == Slot::Primary).unwrap();
+    kit_shots(&mut st, "gear_and_inventory_rack", &sizes, |kit, _| {
+        kit.state.pane = Pane::Rack;
+        kit.state.tile = tile;
+    });
+
+    let mut st = state_home();
+    st.character = game::Character::debug_runner(&st.content);
+    kit_shots(&mut st, "gear_and_inventory_pack", &sizes, |kit, st| {
+        kit.state.pane = Pane::Pack;
+        kit.state.filter = Some(ItemKind::Hardware);
+        let rows = kit.pack_rows(st);
+        kit.state.row = rows
+            .iter()
+            .position(|r| r.text.contains("Hushcan"))
+            .unwrap();
+    });
+}
+
+/// The deck on `3`, `set` applied to its kit, then drawn at each size once the card
+/// has typed out, clear of the deck's signal jitter.
+fn kit_shots(
+    st: &mut AppState,
+    name: &str,
+    sizes: &[(u16, u16)],
+    set: impl FnOnce(&mut Kit, &AppState),
+) {
+    let map = MapScreen::walking(st);
+    let mut deck = Deck::new(st.tick);
+    deck.update(st, &[key(KeyCode::Char('3'))]);
+    set(&mut deck.kit, st);
+    deck.kit.changed = st.tick;
     st.tick += 200;
-    for (tab, name) in [('3', "gear_marks"), ('4', "inventory_marks")] {
-        let mut deck = Deck::new(st.tick);
-        deck.update(&mut st, &[key(KeyCode::Char(tab))]);
-        shot_stack(&format!("{name}_100x30"), &st, &[&map, &deck], (100, 30));
+    if st.tick % 90 < 3 {
+        st.tick += 3;
+    }
+    for (w, h) in sizes {
+        shot_stack(&format!("{name}_{w}x{h}"), st, &[&map, &deck], (*w, *h));
     }
 }
 
@@ -485,7 +510,7 @@ fn a_missing_blueprint() {
     let mut st = state_home();
     blueprint_shots(
         &mut st,
-        '4',
+        false,
         "copper_coil",
         "blueprint_missing",
         &[(100, 30)],
@@ -561,7 +586,7 @@ fn site_state() -> AppState {
 
 /// The rebuilt deck worn, on its blueprint, at 120×40.
 fn cyberdeck_buffer(st: &mut AppState) -> Buffer {
-    let (map, deck, window) = blueprint_stack(st, '3', "rebuilt_deck");
+    let (map, deck, window) = blueprint_stack(st, true, "rebuilt_deck");
     draw_stack(st, &[&map, &deck, &window], (120, 40))
 }
 
@@ -587,7 +612,7 @@ fn for_the_site() {
 
     // Modding the Ratchet, both pieces fitted, the pointer on the rail.
     let mut st = site_state();
-    let (map, deck, mut window) = blueprint_stack(&mut st, '3', "ratchet_smg");
+    let (map, deck, mut window) = blueprint_stack(&mut st, true, "ratchet_smg");
     window.update(&mut st, &[key(KeyCode::Char('m'))]);
     window.update(&mut st, &[key(KeyCode::Char(' '))]);
     fit_on_the_ratchet(&mut st, &[(0, "hushcan"), (1, "redeye")]);

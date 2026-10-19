@@ -128,6 +128,14 @@ pub fn size(look: DeckLook) -> (u16, u16) {
     }
 }
 
+/// The x, y, width and height the drawing covers, from its origin: its size, and with
+/// sockets the cradles that reach out past either side.
+pub fn extent(view: &DeckView) -> (i32, i32, u16, u16) {
+    match view.look {
+        DeckLook::Pawn => pawn::extent(view),
+    }
+}
+
 /// The parts of the deck and where they sit, relative to the drawing's origin.
 pub fn parts(view: &DeckView) -> Vec<(Part, Rect)> {
     match view.look {

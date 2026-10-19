@@ -68,6 +68,8 @@ pub struct AppState {
     /// Where the deck was last: its tab and the selected row per tab.
     pub deck_tab: Tab,
     pub deck_rows: [usize; Tab::ALL.len()],
+    /// Where GEAR & INVENTORY was left: the focus, the tile, the pack's row, the filter.
+    pub deck_kit: crate::screens::kit::KitState,
     /// The part the jacked deck's blueprint points at, kept between openings.
     pub deck_part: usize,
     /// The character being built, between the chooser and JACK IN.
@@ -155,6 +157,7 @@ impl AppState {
             repaint: false,
             deck_tab: Tab::Skills,
             deck_rows: [0; Tab::ALL.len()],
+            deck_kit: Default::default(),
             deck_part: 0,
             build: None,
             log: MessageLog::default(),
@@ -253,6 +256,7 @@ impl AppState {
         self.fx.clear();
         self.deck_tab = Tab::Skills;
         self.deck_rows = [0; Tab::ALL.len()];
+        self.deck_kit = Default::default();
         self.deck_part = 0;
     }
 
@@ -796,9 +800,15 @@ mod tests {
             revealed: Vec::new(),
             targets: Vec::new(),
         });
-        st.deck_tab = Tab::Gear;
-        st.deck_rows[Tab::Gear.index()] = 3;
+        st.deck_tab = Tab::Kit;
+        st.deck_rows[Tab::Stats.index()] = 3;
         st.deck_part = 300;
+        st.deck_kit = crate::screens::kit::KitState {
+            pane: crate::screens::kit::Pane::Pack,
+            tile: 4,
+            row: 2,
+            filter: Some(game::ItemKind::Program),
+        };
         let seed = city.seed;
         st.enter_city(city);
         assert!(st.player.is_none() && st.fx.is_empty());
@@ -808,6 +818,7 @@ mod tests {
             (Tab::Skills, [0; Tab::ALL.len()], 0),
             "a new city forgets where the deck was"
         );
+        assert_eq!(st.deck_kit, crate::screens::kit::KitState::default());
     }
 
     #[test]
