@@ -10,6 +10,7 @@ use crate::render::map::MapRef;
 use crate::render::memmap::MemoryMap;
 use crate::screens::kit::Kit;
 use crate::screens::popup::{Choice, Pick, Popup};
+use crate::screens::workbench::Workbench;
 use crate::ui::board::{BoardState, RowKind, board_rows};
 use crate::ui::chrome::{
     BAR_BG, CYAN, CYAN_RGB, DIM, MAGENTA, MAGENTA_RGB, PANEL_BG, RULE, TEXT, dim, frame, glass,
@@ -117,7 +118,6 @@ pub(crate) enum Detail {
     Item(ItemId),
     /// One copy in the pack, for an item held per copy.
     Copy(CopyId),
-    Recipe(usize),
     Stat(Stat),
     Category(CategoryId),
     Skill(SkillId),
@@ -156,6 +156,8 @@ pub struct Deck {
     pub(crate) cursor: TreeCursor,
     /// The talent box lit until its tick: the rank just learned.
     flash: Option<(game::TalentId, u64)>,
+    /// The WORKBENCH tab's sheet: the drawing shown and the part selected.
+    pub(crate) workbench: Workbench,
 }
 
 /// The cursor row's text: cyan, breathing.
@@ -384,45 +386,6 @@ pub(crate) fn card(st: &AppState, detail: &Detail) -> Vec<Line<'static>> {
             None => vec![dim("nothing here")],
         },
         Detail::Journal(i) => Deck::journal_card(st, *i),
-        Detail::Recipe(i) => {
-            let r = &st.content.recipes[*i];
-            let skill = st
-                .content
-                .skill(&r.skill)
-                .map(|s| s.name.clone())
-                .unwrap_or_default();
-            let have = st.character.has_skill(&r.skill);
-            let mut out = vec![head(&r.name)];
-            let need = if have {
-                format!("needs {skill} · yours")
-            } else {
-                format!("needs {skill}")
-            };
-            out.push(if have { dim(need) } else { warn(need) });
-            out.push(plain(""));
-            for (id, n) in &r.inputs {
-                let name = st
-                    .content
-                    .item(id)
-                    .map(|i| i.name.clone())
-                    .unwrap_or_else(|| id.to_string());
-                let got = st.character.count(id);
-                let line = format!("{got}/{n}  {name}");
-                out.push(if got >= *n { plain(line) } else { warn(line) });
-            }
-            let out_name = st
-                .content
-                .item(&r.output.0)
-                .map(|i| i.name.clone())
-                .unwrap_or_default();
-            out.push(Line::from(Span::styled(
-                format!("→ {}× {out_name}", r.output.1),
-                Style::default().fg(CYAN),
-            )));
-            out.push(plain(""));
-            out.push(plain(r.desc.clone()));
-            out
-        }
         Detail::Category(id) => Deck::category_card(st, id),
         Detail::Skill(id) => Deck::skill_card(st, id),
         Detail::Stat(stat) => {
@@ -553,6 +516,7 @@ impl Deck {
             owned_seen: None,
             cursor: TreeCursor::default(),
             flash: None,
+            workbench: Workbench::default(),
         }
     }
 
@@ -717,6 +681,8 @@ impl Deck {
             0,
             0,
         );
+        self.workbench =
+            Workbench::unpack(st.deck_rows[Tab::Workbench.index()]).clamped(&st.content);
         self
     }
 
@@ -901,10 +867,9 @@ impl Deck {
                 detail: None,
                 spans: None,
             }],
-            Tab::Workbench => Self::workbench_rows(st),
             Tab::Jobs => crate::jobs::ui::deck_rows(st),
             Tab::Journal => Self::journal_rows(st),
-            Tab::Kit | Tab::Map | Tab::Talents => Vec::new(),
+            Tab::Workbench | Tab::Kit | Tab::Map | Tab::Talents => Vec::new(),
         }
     }
 
@@ -936,23 +901,6 @@ impl Deck {
             out.push(cyan(format!("grants {}", names.join(" · "))));
         }
         out
-    }
-
-    fn workbench_rows(st: &AppState) -> Vec<Row> {
-        st.content
-            .recipes
-            .iter()
-            .enumerate()
-            .map(|(i, r)| {
-                let ok = st.character.can_craft(&st.content, r);
-                Row {
-                    text: format!("{} {}", if ok { "▪" } else { "▫" }, r.name),
-                    tone: if ok { Tone::Normal } else { Tone::Warn },
-                    detail: Some(Detail::Recipe(i)),
-                    spans: None,
-                }
-            })
-            .collect()
     }
 
     fn stat_rows(st: &AppState) -> Vec<Row> {
@@ -1366,6 +1314,12 @@ impl Deck {
             if self.row >= rows.len() || rows.get(self.row).is_some_and(|r| r.detail.is_none()) {
                 self.row = Self::first_selectable(&rows);
             }
+            if self.tab == Tab::Workbench
+                && st.character.has_workbench(&st.content)
+                && self.workbench.key(st, k.code)
+            {
+                continue;
+            }
             match k.code {
                 KeyCode::Esc | KeyCode::Char('q') => {
                     return ScreenCmd::Pop {
@@ -1468,6 +1422,7 @@ impl Screen for Deck {
         st.deck_rows[self.tab.index()] = self.row;
         st.deck_kit = self.kit.state;
         st.deck_rows[Tab::Talents.index()] = self.cursor.pack();
+        st.deck_rows[Tab::Workbench.index()] = self.workbench.pack();
         cmd
     }
 
@@ -1612,6 +1567,8 @@ impl Screen for Deck {
             .draw(body, buf);
         } else if self.tab == Tab::Kit {
             self.kit.draw(st, body, buf);
+        } else if self.tab == Tab::Workbench && st.character.has_workbench(&st.content) {
+            self.workbench.draw(st, body, buf);
         } else {
             let list_w = (body.width * 2 / 5)
                 .max(28)
@@ -1660,6 +1617,9 @@ impl Screen for Deck {
                     "←→ along · ↑↓ tiers · tab tabs · 0-8 jump · space learn · esc close"
                 }
                 Tab::Kit => self.kit.hints(),
+                Tab::Workbench if st.character.has_workbench(&st.content) => {
+                    self.workbench.hints(st)
+                }
                 _ => "←→ tabs · ↑↓ select · 0-8 jump · space act · esc close",
             },
             Style::default().fg(DIM),
@@ -1861,25 +1821,21 @@ mod tests {
         let mut d = Deck::new(0);
         d.update(&mut st, &[key(KeyCode::Char('4'))]);
         st.tick = 60;
-        let rows = d.rows(&st);
-        let shiv = rows.iter().find(|r| r.text.contains("Wire shiv")).unwrap();
-        let optics = rows
-            .iter()
-            .find(|r| r.text.contains("Optics tune"))
-            .unwrap();
-        assert_eq!(shiv.tone, Tone::Normal);
-        assert_eq!(optics.tone, Tone::Warn);
-        d.row = rows
-            .iter()
-            .position(|r| r.text.contains("Optics tune"))
-            .unwrap();
-        d.changed = 0;
+        // The first drawing: everything on hand and the skill is Vex's.
         let text = draw(&d, &st, 120, 35);
-        assert!(text.contains("needs Electronics · yours"), "{text}");
         assert!(
-            text.contains("1/1") || text.contains("0/1"),
-            "have/need: {text}"
+            text.contains("WIRE SHIV") && text.contains("needs Electronics · yours"),
+            "{text}"
         );
+        assert!(text.contains("every part on hand"), "{text}");
+        // Two drawings on: the optics are worn, not in the pack.
+        d.update(&mut st, &[key(KeyCode::Right), key(KeyCode::Right)]);
+        let text = draw(&d, &st, 120, 35);
+        assert!(
+            text.contains("OPTICS TUNE") && text.contains("1 more Nightglass optics"),
+            "{text}"
+        );
+        assert!(text.contains("not in pack"), "{text}");
 
         d.update(&mut st, &[key(KeyCode::Char('2'))]);
         d.changed = 0;

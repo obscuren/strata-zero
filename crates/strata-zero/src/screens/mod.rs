@@ -21,6 +21,7 @@ pub mod settings;
 pub mod stickers;
 pub mod terminal;
 pub mod title;
+pub mod workbench;
 
 use crate::app::Screen;
 
