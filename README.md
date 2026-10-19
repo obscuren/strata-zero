@@ -215,16 +215,17 @@ Builds for macOS, Linux and Windows are on the
 macOS and Linux:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/obscuren/strata-zero/releases/latest/download/strata-zero-installer.sh | sh
+curl -fsSL https://github.com/obscuren/strata-zero/raw/main/install.sh | sh
 ```
 
-and on Windows:
+and on Windows, in PowerShell:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/obscuren/strata-zero/releases/latest/download/strata-zero-installer.ps1 | iex"
+irm https://github.com/obscuren/strata-zero/raw/main/install.ps1 | iex
 ```
 
-Either puts `strata` in `~/.cargo/bin`.
+Either puts `strata` in `~/.cargo/bin`. Both scripts (`install.sh`,
+`install.ps1`) run the installer of the latest release.
 
 ## Run
 
