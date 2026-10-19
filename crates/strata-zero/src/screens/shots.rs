@@ -9,6 +9,7 @@ use crate::screens::deck::Deck;
 use crate::screens::explore::MapScreen;
 use crate::screens::keypad::Keypad;
 use crate::screens::kit::{Kit, Pane};
+use crate::screens::popup::Popup;
 use crate::screens::terminal::Terminal;
 use crate::screens::testutil::key;
 use citygen::{GenParams, Generator, Place, Pos, SizePreset, StratumKind};
@@ -17,6 +18,7 @@ use game::{ItemId, ItemKind, Slot};
 use ratatui::Terminal as Term;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
 use std::fmt::Write as _;
 
@@ -30,23 +32,21 @@ fn hex(c: Color, fallback: &str) -> String {
     }
 }
 
-/// The buffer as an SVG: a rect per cell background, a text run per cell.
-fn svg(buf: &Buffer, bg: &str) -> String {
+/// The buffer as an SVG: a rect per cell background, a text run per cell. `square`
+/// pads the canvas to a square for the thumbnailer, which crops anything else; the
+/// site takes the terminal as it is.
+fn svg(buf: &Buffer, bg: &str, square: bool) -> String {
     let (w, h) = (
         buf.area.width as f32 * CELL_W,
         buf.area.height as f32 * CELL_H,
     );
-    // A square canvas: the thumbnailer crops anything else.
-    let side = w.max(h);
+    let (w, h) = if square { (w.max(h), w.max(h)) } else { (w, h) };
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{side}\" height=\"{side}\" viewBox=\"0 0 {side} {side}\">"
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\">"
     );
-    let _ = writeln!(
-        out,
-        "<rect width=\"{side}\" height=\"{side}\" fill=\"{bg}\"/>"
-    );
+    let _ = writeln!(out, "<rect width=\"{w}\" height=\"{h}\" fill=\"{bg}\"/>");
     let _ = writeln!(
         out,
         "<style>text{{font-family:'JetBrains Mono','Menlo','DejaVu Sans Mono',monospace;font-size:16px;dominant-baseline:central}}</style>"
@@ -112,10 +112,7 @@ fn shot_at(name: &str, st: &AppState, map: &MapScreen, top: &dyn Screen, size: (
 }
 
 /// A stack of screens, each over the one below it washed, as the app draws it.
-fn shot_stack(name: &str, st: &AppState, stack: &[&dyn Screen], (w, h): (u16, u16)) {
-    let Ok(dir) = std::env::var("SHOT_DIR") else {
-        return;
-    };
+fn draw_stack(st: &AppState, stack: &[&dyn Screen], (w, h): (u16, u16)) -> Buffer {
     let mut t = Term::new(TestBackend::new(w, h)).unwrap();
     t.draw(|f| {
         for (i, screen) in stack.iter().enumerate() {
@@ -126,9 +123,21 @@ fn shot_stack(name: &str, st: &AppState, stack: &[&dyn Screen], (w, h): (u16, u1
         }
     })
     .unwrap();
+    t.backend().buffer().clone()
+}
+
+/// `buf` as `<dir>/<name>.svg` on the city's background.
+fn write_svg(dir: &str, name: &str, st: &AppState, buf: &Buffer, square: bool) {
     let bg = hex(st.style.background.to_color(), "#04060a");
-    let out = svg(t.backend().buffer(), &bg);
-    std::fs::write(format!("{dir}/{name}.svg"), out).unwrap();
+    std::fs::write(format!("{dir}/{name}.svg"), svg(buf, &bg, square)).unwrap();
+}
+
+/// `draw_stack` written to `SHOT_DIR`, square; nothing without it.
+fn shot_stack(name: &str, st: &AppState, stack: &[&dyn Screen], size: (u16, u16)) {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    write_svg(&dir, name, st, &draw_stack(st, stack, size), true);
 }
 
 #[test]
@@ -158,32 +167,45 @@ fn type_lines(st: &mut AppState, term: &mut Terminal, lines: &[&str]) {
 }
 
 /// A shell on a district terminal, after `ls /net`, `ssh 1` and a denied `door release`.
-fn terminal_shot(name: &str, d: citygen::DistrictId) {
-    let mut st = state_home();
-    let map = MapScreen::walking(&mut st);
+fn district_terminal(st: &mut AppState, d: citygen::DistrictId) -> (MapScreen, Terminal) {
+    let map = MapScreen::walking(st);
     let mut term = Terminal::open(
-        &mut st,
+        st,
         HostId::District(d),
         (Place::Stratum(StratumKind::Street), Pos::new(1, 1)),
     );
-    type_lines(&mut st, &mut term, &["ls /net", "ssh 1", "door release"]);
+    type_lines(st, &mut term, &["ls /net", "ssh 1", "door release"]);
     st.tick += 400;
-    term.update(&mut st, &[]);
+    term.update(st, &[]);
+    (map, term)
+}
+
+fn terminal_shot(name: &str, d: citygen::DistrictId) {
+    let mut st = state_home();
+    let (map, term) = district_terminal(&mut st, d);
     shot(name, &st, &map, &term);
+}
+
+/// The first district of `theme`, if the city has one.
+fn district_of(st: &AppState, theme: citygen::Theme) -> Option<citygen::DistrictId> {
+    let city = st.city.as_ref().unwrap();
+    city.districts
+        .iter()
+        .find(|d| d.theme == theme)
+        .map(|d| d.id)
 }
 
 #[test]
 #[ignore]
 fn terminals_by_theme() {
     let st = state_home();
-    let city = st.city.as_ref().unwrap();
     for (name, theme) in [
         ("terminal_megacorp", citygen::Theme::CorpCore),
         ("terminal_street", citygen::Theme::CombatZone),
         ("terminal_neon", citygen::Theme::NightMarket),
     ] {
-        if let Some(d) = city.districts.iter().find(|d| d.theme == theme) {
-            terminal_shot(name, d.id);
+        if let Some(d) = district_of(&st, theme) {
+            terminal_shot(name, d);
         }
     }
 }
@@ -228,6 +250,15 @@ fn terminal_on_the_street() {
 /// The blueprint window on `item`, opened from GEAR & INVENTORY (`3`) over the map, at
 /// each size: on the rack's worn copy when `worn`, else on the first copy in the pack.
 fn blueprint_shots(st: &mut AppState, worn: bool, item: &str, name: &str, sizes: &[(u16, u16)]) {
+    let (map, deck, window) = blueprint_stack(st, worn, item);
+    for (w, h) in sizes {
+        let name = format!("{name}_{w}x{h}");
+        shot_stack(&name, st, &[&map, &deck, &window], (*w, *h));
+    }
+}
+
+/// The screens `blueprint_shots` draws, settled: the map, GEAR & INVENTORY, the window.
+fn blueprint_stack(st: &mut AppState, worn: bool, item: &str) -> (MapScreen, Deck, Blueprint) {
     let map = MapScreen::walking(st);
     let mut deck = Deck::new(st.tick);
     deck.update(st, &[key(KeyCode::Char('3'))]);
@@ -247,10 +278,7 @@ fn blueprint_shots(st: &mut AppState, worn: bool, item: &str, name: &str, sizes:
     if st.tick % 90 < 3 {
         st.tick += 3;
     }
-    for (w, h) in sizes {
-        let name = format!("{name}_{w}x{h}");
-        shot_stack(&name, st, &[&map, &deck, &window], (*w, *h));
-    }
+    (map, deck, window)
 }
 
 #[test]
@@ -521,7 +549,13 @@ fn a_neon_keypad() {
 #[ignore]
 fn offer_window() {
     let mut st = state_home();
-    let map = MapScreen::walking(&mut st);
+    let (map, popup) = offer_stack(&mut st);
+    shot("offer", &st, &map, &popup);
+}
+
+/// A fixer's offer over the map, the welcome job dropped first.
+fn offer_stack(st: &mut AppState) -> (MapScreen, Popup) {
+    let map = MapScreen::walking(st);
     let welcome = st.jobs.active().unwrap().id;
     st.jobs.drop_job(welcome);
     let fx = st
@@ -534,8 +568,84 @@ fn offer_window() {
         .unwrap()
         .id;
     st.jobs.fixer_mut(fx).standing = 0;
-    let id = crate::jobs::offer(&mut st, fx).expect("an offer");
-    let popup = crate::jobs::ui::offer_popup(&st, id, st.tick);
+    let id = crate::jobs::offer(st, fx).expect("an offer");
+    let popup = crate::jobs::ui::offer_popup(st, id, st.tick);
     st.tick += 200;
-    shot("offer", &st, &map, &popup);
+    (map, popup)
+}
+
+/// The city stratazero.io's screens are drawn in: the debug runner's kit as VEX,
+/// without dev mode.
+fn site_state() -> AppState {
+    let mut st = state_home();
+    st.dev = false;
+    st.character = game::Character::debug_runner(&st.content);
+    st.character.handle = "VEX".to_string();
+    st
+}
+
+/// The rebuilt deck worn, on its blueprint, at 120×40.
+fn cyberdeck_buffer(st: &mut AppState) -> Buffer {
+    let (map, deck, window) = blueprint_stack(st, true, "rebuilt_deck");
+    draw_stack(st, &[&map, &deck, &window], (120, 40))
+}
+
+/// The screens stratazero.io shows, at 120×40 and not padded. Run with `SHOT_DIR`
+/// pointed at the site repo's `site/screens`.
+#[test]
+#[ignore]
+fn for_the_site() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let size = (120, 40);
+
+    let mut st = site_state();
+    let d = district_of(&st, citygen::Theme::NightMarket).expect("a night market");
+    let (map, term) = district_terminal(&mut st, d);
+    let buf = draw_stack(&st, &[&map, &term], size);
+    write_svg(&dir, "terminal", &st, &buf, false);
+
+    let mut st = site_state();
+    let buf = cyberdeck_buffer(&mut st);
+    write_svg(&dir, "cyberdeck", &st, &buf, false);
+
+    // Modding the Ratchet, both pieces fitted, the pointer on the rail.
+    let mut st = site_state();
+    let (map, deck, mut window) = blueprint_stack(&mut st, true, "ratchet_smg");
+    window.update(&mut st, &[key(KeyCode::Char('m'))]);
+    window.update(&mut st, &[key(KeyCode::Char(' '))]);
+    fit_on_the_ratchet(&mut st, &[(0, "hushcan"), (1, "redeye")]);
+    window.update(&mut st, &[key(KeyCode::Esc), key(KeyCode::Left)]);
+    let buf = draw_stack(&st, &[&map, &deck, &window], size);
+    write_svg(&dir, "ratchet", &st, &buf, false);
+
+    let mut st = site_state();
+    let (map, popup) = offer_stack(&mut st);
+    let buf = draw_stack(&st, &[&map, &popup], size);
+    write_svg(&dir, "offer", &st, &buf, false);
+}
+
+#[test]
+fn an_exact_svg_is_the_terminal_not_a_square() {
+    let buf = Buffer::empty(Rect::new(0, 0, 120, 40));
+    let exact = svg(&buf, "#0a0b10", false);
+    assert!(exact.starts_with(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="1152" height="800" viewBox="0 0 1152 800">"#
+    ));
+    assert!(svg(&buf, "#0a0b10", true).contains(r#"height="1152""#));
+}
+
+#[test]
+fn the_site_sees_vex_without_dev_mode() {
+    let mut st = site_state();
+    assert!(!st.dev);
+    assert_eq!(st.character.handle, "VEX");
+    let buf = cyberdeck_buffer(&mut st);
+    let text: String = (0..buf.area.height)
+        .flat_map(|y| (0..buf.area.width).map(move |x| (x, y)))
+        .map(|(x, y)| buf[(x, y)].symbol().to_string())
+        .collect();
+    assert!(!text.contains("SHAWN"));
+    assert!(text.contains("VEX"));
 }
