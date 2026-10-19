@@ -98,6 +98,12 @@ const EMPTY: Color = Color::Rgb(0x4a, 0x46, 0x52);
 const LINK_OFF: Color = Color::Rgb(0x2a, 0x55, 0x60);
 const HEAT_OFF: Color = Color::Rgb(0x4a, 0x30, 0x20);
 const GHOST: Color = Color::Rgb(0x3c, 0x44, 0x50);
+/// A plug's body and the bright ferrule pushed into the socket.
+const STEEL: Color = Color::Rgb(0x8b, 0x85, 0x96);
+const STEEL_HI: Color = Color::Rgb(0xc8, 0xc2, 0xd2);
+/// The cables, as (body, ribs): the player's grey, the terminal's cyan.
+const PLAYER_CABLE: (Color, Color) = (Color::Rgb(0x2c, 0x29, 0x34), Color::Rgb(0x6b, 0x65, 0x78));
+const NET_CABLE: (Color, Color) = (Color::Rgb(0x00, 0x3c, 0x46), CYAN);
 
 /// The maker plate and the stickers.
 const MAKER: &str = " K▒ROK▒WA KX-2 ";
@@ -112,6 +118,8 @@ const TAG_END: u16 = 68;
 /// The failsafe frame's top-left cell.
 const FX: u16 = 69;
 const FY: u16 = 7;
+/// The row the sockets sit on, in the slab's left and right edges by the bottom corners.
+const SOCKET_Y: u16 = 16;
 
 /// Draws the pawn deck from the pen's origin, clipped to the pen's area.
 pub(super) fn draw_with(view: &DeckView, p: &mut Pen) {
@@ -126,6 +134,7 @@ pub(super) fn draw_with(view: &DeckView, p: &mut Pen) {
     keyboard(p);
     inventory_row(p, view);
     landing(p, view);
+    cables(p, view);
 }
 
 /// The carts standing in the bay and the empty slots.
@@ -160,6 +169,9 @@ fn bay(p: &mut Pen, view: &DeckView) {
 fn slab(p: &mut Pen, view: &DeckView) {
     p.fill(2, 5, 80, 12, BODY);
     p.frame((1, 4, 82, 14), EDGE, ['╭', '╮', '╰', '╯', '─', '│']);
+    // The sockets, dark ports in the edge, there whether anything is plugged in or not.
+    p.put(1, SOCKET_Y, "█", WELL, None, false);
+    p.put(82, SOCKET_Y, "█", WELL, None, false);
     let mouth = "▀".repeat(14 * usize::from(view.slots));
     p.put(7, 4, &mouth, BEZEL, None, false);
     for i in 0..u16::from(view.slots) {
@@ -329,6 +341,88 @@ fn inventory_row(p: &mut Pen, view: &DeckView) {
     }
 }
 
+/// The plugs in the sockets and their cables, snaking out to the edges of the pen's
+/// reach: the player's on the left while the deck is worn, the terminal's on the
+/// right while jacked in.
+fn cables(p: &mut Pen, view: &DeckView) {
+    let (left, right) = p.reach();
+    let y = i32::from(SOCKET_Y);
+    let w = i32::from(W);
+    if view.plugged {
+        p.cell(0, y, '▐', STEEL_HI, None);
+        p.cell(-1, y, '█', STEEL, None);
+        let out = left.min(-3);
+        let bends = [
+            (-2, y),
+            (-4, y),
+            (-4, y + 2),
+            (-2, y + 2),
+            (-2, y + 4),
+            (out, y + 4),
+        ];
+        cable(p, &bends, PLAYER_CABLE);
+    }
+    if view.link {
+        p.cell(w - 1, y, '▌', STEEL_HI, None);
+        p.cell(w, y, '█', STEEL, None);
+        let (near, far) = (w + 1, w + 3);
+        let out = right.max(w + 4);
+        let bends = [
+            (near, y),
+            (far, y),
+            (far, y + 2),
+            (near, y + 2),
+            (near, y + 4),
+            (out, y + 4),
+        ];
+        cable(p, &bends, NET_CABLE);
+    }
+}
+
+/// A cable from the plug through `bends` and on past the last: ribbed where it runs
+/// straight, a light triangle rounding each bend.
+fn cable(p: &mut Pen, bends: &[(i32, i32)], (body, rib): (Color, Color)) {
+    let toward = |a: (i32, i32), b: (i32, i32)| ((b.0 - a.0).signum(), (b.1 - a.1).signum());
+    let mut cells = vec![bends[0]];
+    for leg in bends.windows(2) {
+        let (dx, dy) = toward(leg[0], leg[1]);
+        let mut at = leg[0];
+        while at != leg[1] {
+            at = (at.0 + dx, at.1 + dy);
+            cells.push(at);
+        }
+    }
+    // The first cell runs back into the plug, the last on out of the window.
+    let first = toward(bends[0], bends[1]);
+    let last = toward(bends[bends.len() - 2], bends[bends.len() - 1]);
+    for (i, &(x, y)) in cells.iter().enumerate() {
+        let back = match i.checked_sub(1) {
+            Some(k) => toward((x, y), cells[k]),
+            None => (-first.0, -first.1),
+        };
+        let on = cells.get(i + 1).map_or(last, |&next| toward((x, y), next));
+        if back.1 == 0 && on.1 == 0 {
+            p.cell(x, y, '▌', rib, Some(body));
+        } else if back.0 == 0 && on.0 == 0 {
+            p.cell(x, y, '▀', rib, Some(body));
+        } else {
+            // A bend joins one side across and one end up or down.
+            let (side, end) = if back.1 == 0 {
+                (back.0, on.1)
+            } else {
+                (on.0, back.1)
+            };
+            let corner = match (side, end) {
+                (-1, 1) => '◣',
+                (1, 1) => '◢',
+                (1, _) => '◥',
+                _ => '◤',
+            };
+            p.cell(x, y, corner, rib, None);
+        }
+    }
+}
+
 /// The outline where the held cart would land, labelled with its name and slot.
 fn landing(p: &mut Pen, view: &DeckView) {
     if let Some(held) = &view.held
@@ -493,6 +587,64 @@ mod tests {
         let on = light(&v);
         assert_eq!(on, Color::Rgb(0, 229, 255));
         assert_ne!(off, on);
+    }
+
+    #[test]
+    fn sockets_always_show_and_cables_follow_the_deck() {
+        let grey = Color::Rgb(0x6b, 0x65, 0x78);
+        let snake = |buf: &Buffer, cells: &[(u16, u16, &str)], fg: Color| {
+            for &(x, y, glyph) in cells {
+                assert_eq!(
+                    (buf[(x, y)].symbol(), buf[(x, y)].fg),
+                    (glyph, fg),
+                    "({x},{y})"
+                );
+            }
+        };
+        let bare = |buf: &Buffer, xs: std::ops::Range<u16>| {
+            for x in xs {
+                for y in 16..=20 {
+                    assert_eq!(buf[(x, y)].symbol(), " ", "({x},{y})");
+                }
+            }
+        };
+        // In the pack: both sockets, dark ports in the edge, and nothing in them.
+        let mut v = lit_kit();
+        let buf = render(&v);
+        let ports = [(OX + 1, 16, "█"), (OX + 82, 16, "█")];
+        snake(&buf, &ports, WELL);
+        bare(&buf, 0..OX + 1);
+        bare(&buf, OX + 83..98);
+
+        // Worn: the player's grey cable from the left socket, snaking out to the edge.
+        v.plugged = true;
+        let buf = render(&v);
+        snake(&buf, &ports, WELL);
+        snake(&buf, &[(OX, 16, "▐")], STEEL_HI);
+        snake(&buf, &[(OX - 1, 16, "█")], STEEL);
+        #[rustfmt::skip]
+        let left = [
+            (5, 16, "▌"), (4, 16, "▌"), (3, 16, "◢"), (3, 17, "▀"), (3, 18, "◥"), (4, 18, "▌"),
+            (5, 18, "◣"), (5, 19, "▀"), (5, 20, "◤"), (4, 20, "▌"), (1, 20, "▌"), (0, 20, "▌"),
+        ];
+        snake(&buf, &left, grey);
+        assert_eq!(buf[(4, 16)].bg, Color::Rgb(0x2c, 0x29, 0x34));
+        bare(&buf, OX + 83..98);
+
+        // Jacked in: the terminal's cyan cable from the right socket, out the other way.
+        v.link = true;
+        let buf = render(&v);
+        snake(&buf, &left, grey);
+        snake(&buf, &[(OX + 83, 16, "▌")], STEEL_HI);
+        snake(&buf, &[(OX + 84, 16, "█")], STEEL);
+        #[rustfmt::skip]
+        let right = [
+            (92, 16, "▌"), (93, 16, "▌"), (94, 16, "◣"), (94, 17, "▀"), (94, 18, "◤"),
+            (93, 18, "▌"), (92, 18, "◢"), (92, 19, "▀"), (92, 20, "◥"), (93, 20, "▌"),
+            (97, 20, "▌"),
+        ];
+        snake(&buf, &right, CYAN);
+        assert_eq!(buf[(93, 16)].bg, Color::Rgb(0x00, 0x3c, 0x46));
     }
 
     #[test]
@@ -733,6 +885,7 @@ mod tests {
         v.more_below = true;
         v.inventory = (0..8).map(|k| cart(&format!("P{k}"), 1)).collect();
         v.inv_offset = 2;
+        (v.plugged, v.link) = (true, true);
         for sw in [Switch::On, Switch::Lifted, Switch::Off] {
             v.switch = sw;
             let mut buf = Buffer::empty(Rect::new(0, 0, 98, 22));
@@ -749,6 +902,7 @@ mod tests {
         let mut v = lit_kit();
         v.more_above = true;
         v.more_below = true;
+        (v.plugged, v.link) = (true, true);
         let mut views: Vec<DeckView> = [Switch::On, Switch::Lifted, Switch::Off]
             .into_iter()
             .map(|switch| DeckView {

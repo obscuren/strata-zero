@@ -178,6 +178,7 @@ impl DeckTab {
             },
             heat: heat(st).filter(|_| self.equipped),
             link: self.equipped && locked(st),
+            plugged: self.equipped,
             handle: st.character.handle.clone(),
             glass: Vec::new(),
             pinned: (String::new(), GlassTone::Dim),

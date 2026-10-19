@@ -68,6 +68,15 @@ graphics for will simply show MISSING BLUEPRINT centered."
   usual and its pinned row reads `not jacked · equip it first` for every part;
   space or enter warns "equip the deck to work on it" in the status row.
   Pointing and reading work.
+- **Sockets and cables.** Every deck has two sockets, dark ports in the slab's
+  left and right edges on the row above the bottom corners, always drawn. The
+  deck you wear has the player's cable in the left socket: a steel plug (a
+  bright ferrule against the edge, the body behind) and a grey ribbed cable
+  (light half-block ribs on a dark body, a light triangle rounding each bend)
+  that snakes left and down, then runs out under the window's frame. While you
+  are jacked in, the terminal's cable is in the right socket the same way, in
+  cyan, snaking out the other side. A carried deck's sockets stay empty.
+  (Jeffrey picked the ribbed cable over coiled and braided mockups.)
 - **Anything else** (no blueprint drawn for it yet): `MISSING BLUEPRINT`,
   bold, in the chrome's dim colour, centred horizontally and vertically in the
   window's inside. Esc closes; no other key does anything.

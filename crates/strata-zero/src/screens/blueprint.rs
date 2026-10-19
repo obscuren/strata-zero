@@ -50,7 +50,9 @@ impl Blueprint {
     /// In the middle of the screen, always inside the area.
     fn rect(area: Rect) -> Rect {
         let fit = |most: u16, least: u16, room: u16, margin: u16| {
-            most.min(room.saturating_sub(2 * margin)).max(least).min(room)
+            most.min(room.saturating_sub(2 * margin))
+                .max(least)
+                .min(room)
         };
         let w = fit(W, MIN_W, area.width, MARGIN.0);
         let h = fit(H, MIN_H, area.height, MARGIN.1);
@@ -295,6 +297,14 @@ mod tests {
         assert_eq!(buf[(ox + 82, oy + 17)].symbol(), "╯");
         assert_eq!(buf[(ox + 5, oy + 5)].symbol(), "K");
         assert!(row(&buf, bottom - 1).contains("↑↓←→ point · space act · esc close"));
+        // Worn, not jacked: the player's cable snakes out under the frame on the left;
+        // the terminal's socket stays empty.
+        assert_eq!(buf[(ox, oy + 16)].symbol(), "▐");
+        assert_eq!(buf[(x + 1, oy + 20)].symbol(), "▌");
+        assert_eq!(buf[(x, oy + 20)].symbol(), "▐");
+        assert_eq!(buf[(ox + 82, oy + 16)].symbol(), "█");
+        assert_eq!(buf[(ox + 83, oy + 16)].symbol(), " ");
+        assert_eq!(buf[(right - 1, oy + 20)].symbol(), " ");
 
         // A bigger terminal: the full size, centred, with more room round the deck.
         let buf = screen(&bp, &st, 120, 40);
@@ -367,6 +377,10 @@ mod tests {
             "! the deck is locked while you're jacked in"
         );
         assert!(buffer_text(&screen(&bp, &st, 100, 30)).contains("locked · jacked in"));
+        // ... and the terminal's cyan cable is in the right socket, out under the frame.
+        let buf = screen(&bp, &st, 100, 30);
+        let cell = &buf[(x + 94, y + 22)];
+        assert_eq!((cell.symbol(), cell.fg), ("▌", CYAN));
     }
 
     #[test]
@@ -422,7 +436,15 @@ mod tests {
         assert!(!deck(&guarded).equipped);
         st.tick += 40;
         let buf = screen(&bp, &st, 100, 30);
-        let (_, y) = corner(100, 30);
+        let (x, y) = corner(100, 30);
+        // In the pack: both sockets empty, no cables.
+        for (socket, plug) in [(x + 7, x + 6), (x + 88, x + 89)] {
+            assert_eq!(buf[(socket, y + 18)].symbol(), "█");
+            assert_eq!(buf[(plug, y + 18)].symbol(), " ");
+        }
+        for cx in [x + 1, x + 94] {
+            assert_eq!(buf[(cx, y + 22)].symbol(), " ");
+        }
         let text = buffer_text(&buf);
         assert!(text.contains("2 SLOT · R1"), "{text}");
         assert!(text.contains("not jacked · equip it first"), "{text}");

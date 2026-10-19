@@ -109,7 +109,10 @@ pub struct DeckView {
     pub held: Option<Held>,
     pub switch: Switch,
     pub heat: Option<u8>,
+    /// Jacked in: the LINK lamp lit and the terminal's cable in the right socket.
     pub link: bool,
+    /// Worn: the player's cable in the left socket.
+    pub plugged: bool,
     pub handle: String,
     /// The glass rows to show, already wrapped and scrolled, at most `GLASS_ROWS`.
     pub glass: Vec<(String, GlassTone)>,
@@ -206,6 +209,35 @@ impl Pen<'_> {
                 Modifier::empty()
             };
         }
+    }
+
+    /// Writes one cell at (x, y), which may lie before the origin: a drawing's cables
+    /// run out past its own edges to the edges of the clip.
+    pub fn cell(&mut self, x: i32, y: i32, ch: char, fg: Color, bg: Option<Color>) {
+        let (Ok(x), Ok(y)) = (
+            u16::try_from(i32::from(self.ox) + x),
+            u16::try_from(i32::from(self.oy) + y),
+        ) else {
+            return;
+        };
+        if !self.clip.contains((x, y).into()) {
+            return;
+        }
+        let cell = &mut self.buf[(x, y)];
+        cell.set_char(ch).set_fg(fg);
+        if let Some(bg) = bg {
+            cell.set_bg(bg);
+        }
+        cell.modifier = Modifier::empty();
+    }
+
+    /// The columns the clip runs from and to, counted from the origin.
+    pub fn reach(&self) -> (i32, i32) {
+        let ox = i32::from(self.ox);
+        (
+            i32::from(self.clip.x) - ox,
+            i32::from(self.clip.right()) - 1 - ox,
+        )
     }
 
     /// Paints a block's background, clearing what was written there. The blanks are
@@ -313,6 +345,7 @@ pub(crate) mod tests {
             switch: Switch::On,
             heat: None,
             link: false,
+            plugged: false,
             handle: "ghost".into(),
             glass: Vec::new(),
             pinned: (String::new(), GlassTone::Dim),
