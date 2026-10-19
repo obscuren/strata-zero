@@ -5,7 +5,7 @@ use super::{DeckView, GLASS_ROWS, GLASS_TEXT_W, GlassTone, Part, Pen, Switch};
 use crate::ui::art::SocketPlace;
 use crate::ui::chrome::{CYAN, MAGENTA, PANEL_BG};
 use crate::ui::hardware::{Side, draw_side};
-use game::{DeckLook, SocketKind};
+use game::DeckLook;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
@@ -56,20 +56,19 @@ pub fn parts(view: &DeckView) -> Vec<(Part, Rect)> {
 pub fn sockets(view: &DeckView) -> Vec<SocketPlace> {
     let rects = [(-4, 6, 6, 7), (82, 6, 6, 7)];
     DeckLook::Pawn
-        .socket_names()
+        .sockets()
         .iter()
         .zip(rects)
         .zip(&view.sockets)
         .enumerate()
-        .map(|(index, ((&name, (x, y, w, h)), _))| SocketPlace {
+        .map(|(index, ((&(name, kind), (x, y, w, h)), _))| SocketPlace {
             index,
             x,
             y,
             w,
             h,
             name,
-            // A deck's sockets take deck hardware.
-            kind: SocketKind::Deck,
+            kind,
         })
         .collect()
 }

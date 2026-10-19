@@ -99,12 +99,11 @@ fn name(c: &Content, id: &ItemId) -> String {
         .unwrap_or_else(|| id.to_string())
 }
 
-/// A socket's name: the deck look's own where it has one, else its number.
+/// A socket's name: the item's drawing's own where it has one, else its number.
 pub fn socket_name(c: &Content, item: &ItemId, socket: usize) -> String {
     c.item(item)
-        .and_then(|i| i.deck)
-        .and_then(|d| d.look.socket_names().get(socket).copied())
-        .map_or_else(|| (socket + 1).to_string(), str::to_string)
+        .and_then(|i| i.drawn_sockets().get(socket))
+        .map_or_else(|| (socket + 1).to_string(), |&(name, _)| name.to_string())
 }
 
 /// Takes up to `qty` of an item out of the pack and returns what came out, in pack
@@ -460,6 +459,14 @@ pub fn apply(
 mod tests {
     use super::*;
     use crate::character::{CopyId, Stack};
+
+    #[test]
+    fn sockets_are_named_by_their_drawing() {
+        let c = Content::load().unwrap();
+        assert_eq!(socket_name(&c, &ItemId::new("ratchet_smg"), 1), "RAIL");
+        assert_eq!(socket_name(&c, &ItemId::new("rebuilt_deck"), 0), "L");
+        assert_eq!(socket_name(&c, &ItemId::new("salvage_jacket"), 0), "1");
+    }
 
     fn setup() -> (Content, Character, Ground, At) {
         let c = Content::load().unwrap();

@@ -3,6 +3,7 @@
 Content(
     items: [
         Item(id: "ratchet_smg", name: "Ratchet SMG", kind: Weapon, slot: Some(Primary), weight: 3.2, value: 900,
+             look: Some(Ratchet), sockets: [Muzzle, Rail],
              desc: "Stamped-receiver machine pistol with a filed-down selector. Jams on cheap ammo, sings on the good stuff."),
         Item(id: "shiv_blade", name: "Monowire shiv", kind: Weapon, slot: Some(Secondary), weight: 0.4, value: 350, perks: [Stat(Reflex, 1)],
              desc: "A hand-wrapped grip around twenty centimetres of monofilament. Do not test the edge with a thumb."),
@@ -37,6 +38,12 @@ Content(
         Item(id: "sidecar", name: "Sidecar co-processor", kind: Hardware, weight: 0.2, value: 900,
              hardware: Some(Hardware(fits: Deck, mods: [Power(1)], look: Sidecar)),
              desc: "A math board on gold fingers. Every turn it thinks a little ahead of you."),
+        Item(id: "hushcan", name: "Hushcan", kind: Hardware, weight: 0.5, value: 700,
+             hardware: Some(Hardware(fits: Muzzle, mods: [Stat(Cool, 1)], look: Hushcan)),
+             desc: "A baffle can that threads onto a muzzle. The shot still happens; the street just takes longer to turn round."),
+        Item(id: "redeye", name: "Redeye sight", kind: Hardware, weight: 0.2, value: 550,
+             hardware: Some(Hardware(fits: Rail, mods: [Stat(Reflex, 1)], look: Redeye)),
+             desc: "A red dot on coated glass. You stop aiming and start pointing."),
         Item(id: "soy_noodle_cup", name: "Soy-noodle cup", kind: Consumable, weight: 0.3, value: 8, use: Some(Heal(3)),
              desc: "Just add water. Water sold separately."),
         Item(id: "stim_patch", name: "Stim patch", kind: Consumable, weight: 0.05, value: 45, use: Some(Heal(15)),

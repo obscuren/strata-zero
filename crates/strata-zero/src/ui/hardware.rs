@@ -103,6 +103,7 @@ pub fn draw_large(look: HardwareLook, mods: &[Mod], p: &mut Pen) {
         HardwareLook::ColdfinI => coldfin(p, mods, false),
         HardwareLook::ColdfinII => coldfin(p, mods, true),
         HardwareLook::Sidecar => sidecar(p, mods),
+        HardwareLook::Hushcan | HardwareLook::Redeye => {}
     }
 }
 
@@ -275,7 +276,8 @@ type Cell = (char, Color, Color);
 
 /// The side drawing as drawn, rows 7-11, left to right, and the side it is drawn for.
 /// The Coldfins read from the outer end in; the Sidecar from the inner end out.
-fn native(look: HardwareLook) -> ([[Cell; 5]; 5], Side) {
+/// Weapon pieces have no side drawing.
+fn native(look: HardwareLook) -> Option<([[Cell; 5]; 5], Side)> {
     let blank: Cell = (' ', PCB, PCB);
     match look {
         HardwareLook::ColdfinI | HardwareLook::ColdfinII => {
@@ -310,7 +312,7 @@ fn native(look: HardwareLook) -> ([[Cell; 5]; 5], Side) {
                     }
                 }
             }
-            (g, Side::Left)
+            Some((g, Side::Left))
         }
         HardwareLook::Sidecar => {
             let mut g = [[blank; 5]; 5];
@@ -330,14 +332,17 @@ fn native(look: HardwareLook) -> ([[Cell; 5]; 5], Side) {
             g[4][1] = ('▪', TAN, PCB);
             g[4][2] = ('╌', TRACE_LINE, PCB);
             g[4][4] = ('●', LED, PCB);
-            (g, Side::Right)
+            Some((g, Side::Right))
         }
+        HardwareLook::Hushcan | HardwareLook::Redeye => None,
     }
 }
 
 /// The 5 by 5 drawing for a socket whose top-left is (x, y) in pen coordinates.
 pub fn draw_side(look: HardwareLook, side: Side, p: &mut Pen, x: i32, y: i32) {
-    let (mut g, drawn) = native(look);
+    let Some((mut g, drawn)) = native(look) else {
+        return;
+    };
     if side != drawn {
         for line in &mut g {
             line.reverse();
@@ -384,6 +389,16 @@ pub fn tile(look: HardwareLook) -> Tile {
             bg: PCB,
             ink: SILK,
             swatch: (GOLD, PCB),
+        },
+        HardwareLook::Hushcan => Tile {
+            bg: rgb(0x3a3f47),
+            ink: rgb(0xe8ecf0),
+            swatch: (rgb(0x3a3f47), rgb(0x1c1f24)),
+        },
+        HardwareLook::Redeye => Tile {
+            bg: rgb(0x5a0c14),
+            ink: rgb(0xffd8dc),
+            swatch: (rgb(0xff2a3c), rgb(0x15171b)),
         },
     }
 }
