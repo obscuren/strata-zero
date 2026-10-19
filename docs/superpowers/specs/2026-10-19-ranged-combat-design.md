@@ -21,7 +21,7 @@ The street gets the net's fight. Walk into a goon's sight, or press `e`, and the
 board goes to turns with the same two pools, the same initiative order, the same
 aimed walk and paced enemy turns the net already has. Then aim a cursor at the
 goon, press space, and watch three rounds leave the Ratchet: the muzzle flash, the
-streak, the goon flashing red, the number lifting off them, a miss sparking off
+tracers, the goon flashing red, the number lifting off them, a miss sparking off
 the wall behind. The goon walks in and shoots back, one tracer at a time. A new
 title entry drops you on an empty lot with one goon in sight to try it.
 
@@ -77,7 +77,9 @@ pub struct Weapon {
 
 ```ron
 Item(id: "ratchet_smg", ..., weapon: Some(Weapon(skill: "handguns", damage: 4, rounds: 3, range: 12,
-     fx: [Flash(big: true), Streak(colour: (240, 240, 240)), Chips, Spark, Number(tag: false)])), ...),
+     fx: [Flash(big: true), Tracer(colour: (255, 170, 40), speed: 3), Chips, Spark, Number(tag: false)])), ...),
+// The Ratchet first carried the streak; after playing, Jeffrey wanted the pistol's
+// tracers on it, three to a burst. The streak stays Static's.
 Item(id: "scrap_nine", name: "Scrap nine", kind: Weapon, slot: Some(Primary), weight: 0.9, value: 320,
      weapon: Some(Weapon(skill: "handguns", damage: 5, rounds: 1, range: 8,
      fx: [Flash(big: false), Tracer(colour: (255, 170, 40), speed: 3), Chips, Spark, Number(tag: false)])),

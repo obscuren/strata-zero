@@ -5,7 +5,7 @@ Content(
         Item(id: "ratchet_smg", name: "Ratchet SMG", kind: Weapon, slot: Some(Primary), weight: 3.2, value: 900,
              look: Some(Ratchet), sockets: [Muzzle, Rail],
              weapon: Some(Weapon(skill: "handguns", damage: 4, rounds: 3, range: 12,
-                                 fx: [Flash(big: true), Streak(colour: (240, 240, 240)), Chips, Spark, Number(tag: false)])),
+                                 fx: [Flash(big: true), Tracer(colour: (255, 170, 40), speed: 3), Chips, Spark, Number(tag: false)])),
              desc: "Stamped-receiver machine pistol with a filed-down selector. Jams on cheap ammo, sings on the good stuff."),
         Item(id: "scrap_nine", name: "Scrap nine", kind: Weapon, slot: Some(Primary), weight: 0.9, value: 320,
              weapon: Some(Weapon(skill: "handguns", damage: 5, rounds: 1, range: 8,

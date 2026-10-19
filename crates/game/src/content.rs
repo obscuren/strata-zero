@@ -787,7 +787,7 @@ mod tests {
                 w.fx[..],
                 [
                     Fx::Flash { big: true },
-                    Fx::Streak { .. },
+                    Fx::Tracer { speed: 3, .. },
                     Fx::Chips,
                     Fx::Spark,
                     Fx::Number { tag: false }

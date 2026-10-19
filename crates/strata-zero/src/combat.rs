@@ -209,6 +209,15 @@ fn volley(
     let Some((place, target)) = st.foes.get(foe).map(|f| (f.place, f.pos)) else {
         return Vec::new();
     };
+    // Shot at, it knows where from: a miss is loud enough to turn it on you.
+    if let Some(f) = st.foes.get_mut(foe)
+        && f.standing()
+    {
+        f.mode = foes::FoeMode::Hunting {
+            seen: from,
+            lost: 0,
+        };
+    }
     let mut out = Vec::new();
     for k in 0..w.rounds as usize {
         let hit = game::round_hits(roll(st), chance);
@@ -449,13 +458,16 @@ mod tests {
         let want: Vec<String> = (0..3)
             .flat_map(|k| {
                 let t = 500 + 4 * k;
+                // Eight tiles at three a tick: the impact lands three ticks in.
                 vec![
                     format!("Flash {{ big: true }}@{t}→Pos {{ x: 14, y: 8 }}"),
-                    format!("Streak {{ colour: (240, 240, 240) }}@{t}→Pos {{ x: 14, y: 8 }}"),
-                    format!("Chips@{}→Pos {{ x: 14, y: 8 }}", t + 1),
+                    format!(
+                        "Tracer {{ colour: (255, 170, 40), speed: 3 }}@{t}→Pos {{ x: 14, y: 8 }}"
+                    ),
+                    format!("Chips@{}→Pos {{ x: 14, y: 8 }}", t + 3),
                     format!(
                         "Number {{ tag: false }}@{}→Pos {{ x: {}, y: 8 }}",
-                        t + 1,
+                        t + 3,
                         14 + k
                     ),
                 ]
@@ -528,6 +540,32 @@ mod tests {
             Pos::new(6, 0),
             "straight up into the wall"
         );
+    }
+
+    #[test]
+    fn a_shot_foe_hunts_you_even_when_it_had_not_seen_you() {
+        // Twelve tiles: outside the goon's sight, inside the Ratchet's reach.
+        let mut st = engaged(Pos::new(18, 8));
+        assert!(!st.foes[0].hunting());
+        st.force_hit = Some(false);
+        fire(&mut st, 0).unwrap();
+        assert_eq!(
+            st.foes[0].mode,
+            foes::FoeMode::Hunting {
+                seen: Pos::new(6, 8),
+                lost: 0
+            },
+            "a miss is loud enough"
+        );
+        // Its turn then runs: it walks toward you on the pace.
+        crate::net::end_turn(&mut st);
+        assert_eq!(st.net.engaged.as_ref().unwrap().actor(), Actor::Foe(0));
+        st.tick += crate::net::PACE_TICKS;
+        if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
+            world.advance(city, world.tick() + crate::net::PACE_TICKS);
+        }
+        crate::net::pace(&mut st);
+        assert_eq!(st.foes[0].pos, Pos::new(17, 8));
     }
 
     #[test]
