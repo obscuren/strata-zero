@@ -725,7 +725,8 @@ impl Deck {
         }
     }
 
-    /// What an item does while worn: one line per perk, one per granted ability.
+    /// What an item does while worn: one line per perk, then one line naming every
+    /// granted ability.
     pub(crate) fn perk_lines(st: &AppState, item: &game::Item) -> Vec<Line<'static>> {
         let cyan = |t: String| Line::from(Span::styled(t, Style::default().fg(CYAN)));
         let mut out = Vec::new();
@@ -738,13 +739,18 @@ impl Deck {
                 Perk::Focus(n) => format!("{n:+} focus"),
             }));
         }
-        for id in &item.grants {
-            let name = st
-                .content
-                .ability(id)
-                .map(|a| a.name.clone())
-                .unwrap_or_else(|| id.to_string());
-            out.push(cyan(format!("grants {name}")));
+        let names: Vec<String> = item
+            .grants
+            .iter()
+            .map(|id| {
+                st.content
+                    .ability(id)
+                    .map(|a| a.name.clone())
+                    .unwrap_or_else(|| id.to_string())
+            })
+            .collect();
+        if !names.is_empty() {
+            out.push(cyan(format!("grants {}", names.join(" · "))));
         }
         out
     }
@@ -998,14 +1004,16 @@ impl Deck {
             (None, Some(s)) => format!(" · {}", s.label()),
             (None, None) => String::new(),
         };
-        out.push(dim(format!("{}{place}", item.kind.label())));
         // A copy weighs and costs what is fitted in it too.
         let fitted: Vec<&game::Stack> = copy
             .map(|k| k.fitted.iter().flatten().collect())
             .unwrap_or_default();
         let weight = item.weight + fitted.iter().map(|s| s.weight(&st.content)).sum::<f32>();
         let value = item.value + fitted.iter().map(|s| s.value(&st.content)).sum::<u32>();
-        out.push(dim(format!("{weight:.1} kg · ¤ {value}")));
+        out.push(dim(format!(
+            "{}{place} · {weight:.1} kg · ¤ {value}",
+            item.kind.label()
+        )));
         out.extend(Self::perk_lines(st, item));
         if let Some(h) = &item.hardware {
             out.extend(h.mods.iter().map(|m| cyan(m.line())));
@@ -3259,12 +3267,34 @@ mod tests {
         let card = d.detail(&st, &rows);
         let text = texts(&card);
         assert_eq!(text[0], "COLDFIN VI");
-        assert_eq!(text[1], "hardware · deck socket");
+        assert_eq!(text[1], "hardware · deck socket · 0.4 kg · ¤ 800");
         let cut = text
             .iter()
             .position(|l| l == "trace per cast −10%")
             .unwrap_or_else(|| panic!("{text:?}"));
         assert_eq!(card[cut].spans[0].style.fg, Some(CYAN));
+    }
+
+    #[test]
+    fn the_card_shares_its_lines() {
+        let st = dshawn();
+        let card = |slot: Slot| {
+            let id = st.character.equipped(slot).cloned().unwrap();
+            let copy = st.character.worn_copy(slot);
+            texts(&Deck::item_card_of(&st, &id, copy))
+        };
+        assert_eq!(card(Slot::Primary)[1], "weapon · primary · 3.2 kg · ¤ 900");
+        let deck = card(Slot::Deck);
+        let grants: Vec<&String> = deck.iter().filter(|l| l.starts_with("grants ")).collect();
+        assert_eq!(grants, ["grants Netscan · Arc Trace"], "{deck:?}");
+        let cold = pack_copy(&st, "coldfin_1");
+        let copy = st.character.copy_in_pack(cold).and_then(|s| s.copy.clone());
+        let text = texts(&Deck::item_card_of(
+            &st,
+            &ItemId::new("coldfin_1"),
+            copy.as_ref(),
+        ));
+        assert_eq!(text[1], "hardware · deck socket · 0.4 kg · ¤ 800");
     }
 
     #[test]
@@ -3297,7 +3327,10 @@ mod tests {
             text.contains(&"■ Hushcan · cool +1".to_string()),
             "{text:?}"
         );
-        assert!(text.iter().any(|l| l.starts_with("3.7 kg")), "{text:?}");
+        assert!(
+            text.iter().any(|l| l.ends_with("3.7 kg · ¤ 1600")),
+            "{text:?}"
+        );
     }
 
     #[test]
@@ -3312,7 +3345,7 @@ mod tests {
             .unwrap();
         let text = texts(&d.detail(&st, &rows));
         assert_eq!(text[0], "HUSHCAN");
-        assert_eq!(text[1], "hardware · muzzle socket");
+        assert_eq!(text[1], "hardware · muzzle socket · 0.5 kg · ¤ 700");
         assert!(text.contains(&"cool +1".to_string()), "{text:?}");
     }
 
