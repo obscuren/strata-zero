@@ -783,6 +783,9 @@ pub fn bolt(st: &mut AppState, from: Pos, to: Pos, colour: (u8, u8, u8), ticks: 
         started: st.tick,
         revealed: Vec::new(),
         targets: vec![to],
+        label: String::new(),
+        hit: false,
+        tint: None,
     });
 }
 
@@ -799,6 +802,35 @@ pub fn mark(st: &mut AppState, at: Pos, colour: (u8, u8, u8), ticks: u64) {
         started: st.tick,
         revealed: Vec::new(),
         targets: vec![at],
+        label: String::new(),
+        hit: false,
+        tint: None,
+    });
+}
+
+/// A number lifting off a tile of the player's map from `started`, in a colour
+/// (the net's bolts); `None` leaves the street's own.
+pub fn number(
+    st: &mut AppState,
+    at: Pos,
+    label: impl Into<String>,
+    colour: Option<(u8, u8, u8)>,
+    started: u64,
+) {
+    let Some(place) = st.player.as_ref().map(|p| p.place) else {
+        return;
+    };
+    st.fx.push(FxInstance {
+        fx: Fx::Number { tag: false },
+        place,
+        origin: at,
+        radius: 0,
+        started,
+        revealed: Vec::new(),
+        targets: vec![at],
+        label: label.into(),
+        hit: true,
+        tint: colour,
     });
 }
 
@@ -814,6 +846,9 @@ fn kick(st: &mut AppState, ticks: u64) {
         started: st.tick,
         revealed: Vec::new(),
         targets: Vec::new(),
+        label: String::new(),
+        hit: false,
+        tint: None,
     });
 }
 

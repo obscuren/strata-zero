@@ -68,6 +68,15 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         action,
         Action::Equip(_) | Action::EquipCopy(_) | Action::Unequip(_)
     );
+    if let Some(id) = &fired
+        && st
+            .character
+            .ability(&st.content, id)
+            .is_some_and(|a| matches!(a.kind, AbilityKind::Active(Active::Strike { .. })))
+    {
+        // A strike wants a target: the map's cursor fires it, not the slot alone.
+        return Err("needs a target · aim at a foe".to_string());
+    }
     if fired.is_some() {
         crate::net::spend_ap(st)?;
     }
@@ -177,6 +186,9 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
                 started,
                 revealed: revealed.clone(),
                 targets: targets.clone(),
+                label: String::new(),
+                hit: false,
+                tint: None,
             });
         }
     }

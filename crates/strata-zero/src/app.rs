@@ -101,12 +101,22 @@ pub struct FxInstance {
     /// For a scan, the tiles it revealed; the wave hides them until it passes.
     pub revealed: Vec<citygen::Pos>,
     /// For a trace, the node tiles it found; bolts run to them and marks sit on them.
+    /// For a shot, the impact tile.
     pub targets: Vec<citygen::Pos>,
+    /// What a number reads (`-4`); empty for every other shape.
+    pub label: String,
+    /// For a shot's shapes: whether the round landed.
+    pub hit: bool,
+    /// A colour the net lends a number (its bolt's); `None` is the street's own.
+    pub tint: Option<(u8, u8, u8)>,
 }
 
 impl FxInstance {
     /// The tick from which the instance draws nothing.
     pub fn until(&self) -> u64 {
+        use crate::render::fx::{
+            FLASH_TICKS, IMPACT_TICKS, NUMBER_TICKS, STREAK_TICKS, tracer_ticks,
+        };
         match self.fx {
             game::Fx::Kick(ticks) => self.started + ticks,
             game::Fx::Wave { ticks, .. } => {
@@ -115,8 +125,17 @@ impl FxInstance {
             game::Fx::Glow { ticks, .. }
             | game::Fx::Bolt { ticks, .. }
             | game::Fx::Mark { ticks, .. } => self.started + ticks,
-            // The shot shapes get their lengths with their drawing.
-            _ => self.started,
+            game::Fx::Tracer { speed, .. } => {
+                self.started
+                    + self
+                        .targets
+                        .first()
+                        .map_or(1, |t| tracer_ticks(self.origin, *t, speed))
+            }
+            game::Fx::Streak { .. } => self.started + STREAK_TICKS,
+            game::Fx::Flash { .. } => self.started + FLASH_TICKS,
+            game::Fx::Chips | game::Fx::Spark | game::Fx::Tear => self.started + IMPACT_TICKS,
+            game::Fx::Number { .. } => self.started + NUMBER_TICKS,
         }
     }
 }
@@ -738,6 +757,39 @@ mod tests {
     }
 
     #[test]
+    fn until_per_shot_shape() {
+        use citygen::Pos;
+        let at = |fx: game::Fx, targets: Vec<Pos>| FxInstance {
+            fx,
+            place: citygen::Place::Stratum(citygen::StratumKind::Street),
+            origin: Pos::new(6, 8),
+            radius: 0,
+            started: 100,
+            revealed: Vec::new(),
+            targets,
+            label: String::new(),
+            hit: false,
+            tint: None,
+        };
+        let to = vec![Pos::new(18, 8)];
+        assert_eq!(at(game::Fx::Flash { big: true }, to.clone()).until(), 102);
+        assert_eq!(
+            at(game::Fx::Streak { colour: (1, 1, 1) }, to.clone()).until(),
+            103
+        );
+        assert_eq!(at(game::Fx::Chips, to.clone()).until(), 103);
+        assert_eq!(at(game::Fx::Spark, to.clone()).until(), 103);
+        assert_eq!(at(game::Fx::Tear, to.clone()).until(), 103);
+        assert_eq!(at(game::Fx::Number { tag: true }, to.clone()).until(), 114);
+        let tracer = game::Fx::Tracer {
+            colour: (1, 1, 1),
+            speed: 3,
+        };
+        assert_eq!(at(tracer.clone(), to).until(), 104);
+        assert_eq!(at(tracer, Vec::new()).until(), 101);
+    }
+
+    #[test]
     fn fx_instances_end_and_prune() {
         let mut st = AppState::new();
         let at = |fx: game::Fx| FxInstance {
@@ -748,6 +800,9 @@ mod tests {
             started: 100,
             revealed: Vec::new(),
             targets: Vec::new(),
+            label: String::new(),
+            hit: false,
+            tint: None,
         };
         st.fx.push(at(game::Fx::Kick(4)));
         st.fx.push(at(game::Fx::Wave {
@@ -801,6 +856,9 @@ mod tests {
             started: 0,
             revealed: Vec::new(),
             targets: Vec::new(),
+            label: String::new(),
+            hit: false,
+            tint: None,
         });
         st.deck_tab = Tab::Kit;
         st.deck_rows[Tab::Stats.index()] = 3;

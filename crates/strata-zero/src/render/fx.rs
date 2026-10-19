@@ -14,8 +14,25 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
 use std::collections::HashSet;
 
-/// Glyphs that ride a wavefront.
+/// Glyphs that ride a wavefront, and that a tear scatters.
 const SPARKS: &[char] = &['ｦ', 'ｱ', 'ﾂ', 'ﾈ', '╳', '≋'];
+/// Ticks a muzzle flash lights the muzzle.
+pub const FLASH_TICKS: u64 = 2;
+/// Ticks a streak stays: white, the colour, ember.
+pub const STREAK_TICKS: u64 = 3;
+/// Ticks chips, a spark or a tear last at the impact.
+pub const IMPACT_TICKS: u64 = 3;
+/// Ticks a damage number stays up.
+pub const NUMBER_TICKS: u64 = 14;
+/// Ticks a number takes to rise one row.
+pub const NUMBER_RISE: u64 = 4;
+
+/// Ticks a tracer takes from the muzzle to its impact: `speed` tiles a tick, at
+/// least one tick.
+pub fn tracer_ticks(origin: Pos, target: Pos, speed: u8) -> u64 {
+    let dist = origin.chebyshev(target).max(1) as u64;
+    dist.div_ceil(speed.max(1) as u64).max(1)
+}
 /// Cells of ripple behind the front, front included.
 pub const BAND: f32 = 9.0;
 /// Cells from one ripple crest to the next.
@@ -431,6 +448,9 @@ mod tests {
             started: 100,
             revealed,
             targets: Vec::new(),
+            label: String::new(),
+            hit: false,
+            tint: None,
         }
     }
 
