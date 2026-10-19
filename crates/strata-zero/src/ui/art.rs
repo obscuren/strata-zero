@@ -40,6 +40,18 @@ pub trait Art {
     /// The item's sockets in their order, in drawing coordinates.
     fn sockets(&self) -> Vec<SocketPlace>;
 
+    /// The item's parts in their order, in drawing coordinates; none for an item
+    /// that is not built from parts.
+    #[allow(dead_code)] // The workbench's sheet draws from this next.
+    fn parts(&self) -> Vec<PartPlace> {
+        Vec::new()
+    }
+
+    /// One part alone, where it sits whole, from `origin`, nothing written outside
+    /// `clip`. Fitted hardware and stickers are never drawn.
+    #[allow(dead_code)]
+    fn draw_part(&self, _part: usize, _origin: (u16, u16), _clip: Rect, _buf: &mut Buffer) {}
+
     /// Where stickers may lie on the drawing; `None` for one that takes none.
     fn sticker_area(&self) -> Option<StickerArea> {
         None
@@ -170,6 +182,26 @@ pub struct SocketPlace {
     pub h: u16,
     pub name: &'static str,
     pub kind: SocketKind,
+}
+
+/// A part on a drawing, in drawing coordinates: what it is, where it sits whole, how
+/// far it moves on an exploded drawing, and where its balloon goes.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PartPlace {
+    /// Its place in the look's parts.
+    pub index: usize,
+    /// The part item's id.
+    pub item: &'static str,
+    pub x: i32,
+    pub y: i32,
+    pub w: u16,
+    pub h: u16,
+    pub apart: (i16, i16),
+    /// The balloon's left cell, from the drawing's origin, moving with the part; the
+    /// leader runs `dir` from the balloon's edge for `len` cells.
+    pub balloon: (i32, i32),
+    pub leader: (Dir, u8),
 }
 
 /// The place nearest `from` in `dir` that `allow` lets the pointer rest on, or
