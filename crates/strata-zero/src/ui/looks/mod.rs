@@ -5,6 +5,7 @@ pub mod ratchet;
 
 use crate::ui::art::{Art, SocketPlace};
 use crate::ui::cyberdeck::Pen;
+use crate::ui::hardware::draw_fitted;
 use game::{HardwareLook, ItemLook};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -64,7 +65,12 @@ impl Art for ItemArt {
             oy,
         };
         match self.look {
-            ItemLook::Ratchet => ratchet::draw(&self.fitted, &mut pen),
+            ItemLook::Ratchet => ratchet::draw(&mut pen),
+        }
+        for (look, place) in self.fitted.iter().zip(self.sockets()) {
+            if let Some(look) = look {
+                draw_fitted(*look, &place, &mut pen);
+            }
         }
     }
 

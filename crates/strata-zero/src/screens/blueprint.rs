@@ -46,10 +46,10 @@ pub struct Blueprint {
 }
 
 /// The looks of the pieces fitted in the host's copy of `item`, one per socket it
-/// draws. An item held without a copy has its sockets, all empty.
+/// has. An item held without a copy has its sockets, all empty.
 fn fitted_looks(st: &AppState, host: Option<Host>, item: &Item) -> Vec<Option<HardwareLook>> {
     let copy = host.and_then(|h| st.character.host_copy(h));
-    (0..item.drawn_sockets().len())
+    (0..item.sockets.len())
         .map(|i| {
             let piece = copy?.fitted.get(i)?.as_ref()?;
             Some(st.content.item(&piece.item)?.hardware.as_ref()?.look)
@@ -1699,6 +1699,27 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn ratchet_with_one_socket_offers_one_place() {
+        let mut st = state();
+        for item in &mut st.content.items {
+            if item.id == id("ratchet_smg") {
+                item.sockets = vec![game::SocketKind::Muzzle];
+            }
+        }
+        let mut bp = vexs_gun(&st);
+        let (w, h) = (100, 30);
+        let (_, readout, _) = rows_of(w, h);
+        press(&mut bp, &mut st, &[KeyCode::Char('m')]);
+        assert!(modding(&bp));
+        for code in [KeyCode::Left, KeyCode::Up, KeyCode::Right, KeyCode::Down] {
+            press(&mut bp, &mut st, &[code]);
+            let buf = screen(&bp, &st, w, h);
+            let line = inside(&buf, w, h, readout);
+            assert!(line.starts_with("SOCKET MUZZLE"), "{line}");
         }
     }
 

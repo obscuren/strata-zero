@@ -2,11 +2,9 @@
 //! threads, a rail on top and a taped grip. Pixels are half cells, folded into half
 //! blocks; text goes over the folded cells.
 
-use super::places;
 use crate::ui::cyberdeck::Pen;
-use crate::ui::hardware::{draw_fitted, rgb};
+use crate::ui::hardware::rgb;
 use crate::ui::pixels::Pixels;
-use game::{HardwareLook, ItemLook};
 use ratatui::style::Color;
 
 /// The drawing's width and height in cells.
@@ -44,8 +42,8 @@ const GOLD_DK: Color = rgb(0x8a6d14);
 const ALU: Color = rgb(0xb4bec8);
 const ALU_MID: Color = rgb(0x7d8893);
 
-/// The gun at the pen's origin, with the pieces in `fitted` drawn in their sockets.
-pub fn draw(fitted: &[Option<HardwareLook>], p: &mut Pen) {
+/// The gun alone at the pen's origin; its sockets are left bare.
+pub fn draw(p: &mut Pen) {
     let mut c = Pixels::new(W, H);
     // The wire stock, extended, to the left.
     c.hline(5, 24, 9, STOCK_HI);
@@ -117,9 +115,4 @@ pub fn draw(fitted: &[Option<HardwareLook>], p: &mut Pen) {
     p.put(46, 7, "S", GM_EDGE, Some(GM), false);
     p.put(48, 7, "▬", WEAR, Some(GM), false);
     p.put(50, 7, "∞", GM_EDGE, Some(GM), false);
-    for (look, place) in fitted.iter().zip(places(ItemLook::Ratchet, fitted.len())) {
-        if let Some(look) = look {
-            draw_fitted(*look, &place, p);
-        }
-    }
 }
