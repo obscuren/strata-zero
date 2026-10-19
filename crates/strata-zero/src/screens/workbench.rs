@@ -917,16 +917,27 @@ fn exploded(p: &mut Pen, st: &AppState, art: &ItemArt, ins: &[Input], sel: usize
     if let Some(s) = shown.iter().find(|s| s.input == Some(sel)) {
         let (x0, y0, x1, y1) = s.rect;
         let (cx, cy) = BRACKET_ROOM;
-        let (left, top) = ((ox + x0 - cx).max(0), (oy + y0 - cy).max(0));
-        let (right, bottom) = (ox + x1 + cx, oy + y1 + cy);
-        let around = Rect::new(
-            left as u16,
-            top as u16,
-            (right - left).max(0) as u16,
-            (bottom - top).max(0) as u16,
-        );
-        brackets(p.buf, around, st.tick, f);
+        let room = (ox + x0 - cx, oy + y0 - cy, ox + x1 + cx, oy + y1 + cy);
+        brackets(p.buf, inside_corners(room, f), st.tick, f);
     }
+}
+
+/// The rectangle to hand `brackets` for corners round `room` that never fall past the
+/// field: a corner that would lie outside `f` comes in to its edge row or column, so
+/// all four always show.
+fn inside_corners((left, top, right, bottom): Span, f: Rect) -> Rect {
+    let (fx0, fy0) = (i32::from(f.x), i32::from(f.y));
+    let (fx1, fy1) = (i32::from(f.right()) - 1, i32::from(f.bottom()) - 1);
+    let inside = |v: i32, lo: i32, hi: i32| v.min(hi).max(lo);
+    // The corners' own columns and rows.
+    let (cl, cr) = (inside(left - 1, fx0, fx1), inside(right, fx0, fx1));
+    let (ct, cb) = (inside(top - 1, fy0, fy1), inside(bottom, fy0, fy1));
+    Rect::new(
+        (cl + 1) as u16,
+        (ct + 1) as u16,
+        (cr - cl - 1).max(0) as u16,
+        (cb - ct - 1).max(0) as u16,
+    )
 }
 
 /// Faint centre lines through the gap a part left, in the cells its rectangle had
@@ -1641,11 +1652,6 @@ mod tests {
         assert_eq!(cells(&b, 78, 13, 12), "none on hand", "{field}");
         assert_eq!(b[(78, 13)].fg, MAGENTA);
 
-        // The receiver's brackets stay inside the field: none on the top edge.
-        assert_eq!(b[(35, 14)].symbol(), "┗", "{field}");
-        assert_eq!(b[(76, 14)].symbol(), "┛", "{field}");
-        assert_eq!(b[(35, 5)].symbol(), "─", "{}", row(&b, 5));
-
         // ↓↓ selects the barrel: brackets two columns and a row clear of its box's
         // rectangle, one more out, and its balloon inverted.
         press(&mut d, &mut st, KeyCode::Down, 2);
@@ -1664,6 +1670,49 @@ mod tests {
         assert_eq!((b[(84, 6)].fg, b[(84, 6)].bg), (PANEL_BG, MAGENTA));
         assert_eq!((b[(39, 6)].fg, b[(39, 6)].bg), (CYAN, BAR_BG));
         assert_ne!(b[(35, 14)].symbol(), "┗", "the receiver's brackets go");
+    }
+
+    #[test]
+    fn the_brackets_always_show_four_corners() {
+        let mut st = dshawn();
+        let mut d = on_the_ratchet(&mut st);
+        // The balloons' cells, which no corner may take.
+        let balloons = [(38, 6), (17, 6), (83, 6), (42, 17), (77, 16)];
+        // Per part in input order: the corners clockwise from the top left. The field
+        // holds rows 6-19, so a corner that would fall past it is brought in to its
+        // edge row; the barrel's and the trigger's fit as they are.
+        let corners: [[(u16, u16); 4]; 5] = [
+            [(35, 6), (76, 6), (76, 14), (35, 14)],
+            [(8, 6), (35, 6), (35, 16), (8, 16)],
+            [(76, 7), (91, 7), (91, 13), (76, 13)],
+            [(46, 12), (67, 12), (67, 19), (46, 19)],
+            [(60, 12), (75, 12), (75, 18), (60, 18)],
+        ];
+        for (part, want) in corners.iter().enumerate() {
+            assert_eq!(d.workbench.part, part);
+            let b = render(&d, &st, 100, 30);
+            let field = area(&b, 3, 97, 6, 20);
+            for (&(x, y), glyph) in want.iter().zip(["┏", "┓", "┛", "┗"]) {
+                assert_eq!(
+                    b[(x, y)].symbol(),
+                    glyph,
+                    "part {part} ({x}, {y}):\n{field}"
+                );
+                for &(bx, by) in &balloons {
+                    assert!(
+                        y != by || !(bx..bx + 3).contains(&x),
+                        "part {part}: ({x}, {y}) on a balloon"
+                    );
+                }
+            }
+            for (n, &(bx, by)) in balloons.iter().enumerate() {
+                assert_eq!(cells(&b, bx, by, 3), format!(" {} ", n + 1), "{field}");
+            }
+            // The sheet's edge and the rule keep their own glyphs.
+            assert!(!row(&b, 5).contains(['┏', '┓']), "{}", row(&b, 5));
+            assert!(!row(&b, 20).contains(['┗', '┛']), "{}", row(&b, 20));
+            press(&mut d, &mut st, KeyCode::Down, 1);
+        }
     }
 
     #[test]
