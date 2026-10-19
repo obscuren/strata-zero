@@ -29,7 +29,7 @@ const MIN_H: u16 = 28;
 /// The screen under the window that shows round it: columns, rows.
 const MARGIN: (u16, u16) = (2, 1);
 /// What an item with no drawing yet shows.
-const MISSING: &str = "MISSING BLUEPRINT";
+pub(crate) const MISSING: &str = "MISSING BLUEPRINT";
 
 pub struct Blueprint {
     /// The item's name, for the title on the top edge.
