@@ -38,9 +38,10 @@ hacked in … this should not only work for this item but for all items."
   - **Sidecar co-processor**: program power +1 (+10% on the odds the RUN rows show).
   The trace keeps fractions under the hood; the meter and the HUD still read whole
   numbers.
-- **Sockets on the pawn deck** are its two sides: socket L and socket R, an open
-  cradle each: two steel rails standing off the side with gold contacts in the edge
-  between them. Fitted hardware sits between the rails. The cable ports in the
+- **Sockets on the pawn deck** are its two sides: socket L and socket R, each gold
+  contacts in the edge. Fitted hardware brings two steel rails standing off the side
+  and sits between them; an empty socket is the connector alone (Jeffrey, after
+  seeing it built: "drop those [prongs] … just the socket is enough"). The cable ports in the
   lower corners stay where they are and are renamed **jacks** in code and docs, so
   "socket" only ever means hardware.
 - **Modding mode** opens from the blueprint window with `m`, only for items with
@@ -137,15 +138,16 @@ Drawing coordinates as in the cyberdeck spec (84×22, origin top-left; cells out
 0..84 are drawn as the cables are, clipped to the window). Socket *n* = 0 is L, the
 left side; 1 is R, the right side.
 
-- **The cradle** (always drawn on an item with sockets, empty or not): steel rails
-  on rows 6 and 12, five cells out from the edge: L cols −4..0, R cols 83..87; `▄` on
-  row 6 and `▀` on row 12 in steel `#8b8596`, the outer end in `#c8c2d2`. The
-  connector in the edge on rows 8-10: L col 1 `▌`, R col 82 `▐`, gold `#c9a227` on
-  well `#0c0c10`.
+- **The connector** (always drawn on an item with sockets, empty or not): in the edge
+  on rows 8-10: L col 1 `▌`, R col 82 `▐`, gold `#c9a227` on well `#0c0c10`.
+- **The rails** (drawn only while a piece is fitted): rows 6 and 12, five cells out
+  from the edge: L cols −4..0, R cols 83..87; `▄` on row 6 and `▀` on row 12 in steel
+  `#8b8596`, the outer end in `#c8c2d2`.
 - **Fitted hardware** fills rows 7-11 between the rails, five columns (L −4..0, R
   83..87), drawn by the piece's look for that side; see *Art reference*.
-- **A socket's rectangle** for the pointer is the rails and the connector: L
-  `(−4, 6, 6, 7)`, R `(82, 6, 6, 7)`. Its brackets land one cell outside: on L at
+- **A socket's rectangle** for the pointer is where the rails, the piece and the
+  connector go, empty or not: L `(−4, 6, 6, 7)`, R `(82, 6, 6, 7)`, so in modding the
+  brackets show where a piece will sit. Its brackets land one cell outside: on L at
   columns −5 and 2, which at 100×30 is the window's first inside column; it fits.
 - **Inspect mode does not point at sockets.** It draws them, empty or fitted, and
   keeps every stop it has today. The maker plate's glass card, which is the item
@@ -325,7 +327,8 @@ The names here are suggestions; the shape is the point.
   turn (36 + 36 = 72 tenths over two turns: +3, +4); vII cuts 20%; two pieces add up;
   the cut caps at 50%; a white ICE hit's +5 is not cut; deep dive stays 0; a deck in
   the pack does nothing; the Sidecar adds 1 to `power` and the chance moves by 10.
-- **Pawn drawing**: an item with sockets draws both cradles (rails, gold connector);
+- **Pawn drawing**: an item with sockets draws both gold connectors, and rails only
+  round a fitted piece;
   a fitted Coldfin vI/vII/Sidecar draws its side art on the right side and mirrored
   on the left; the jacks still draw where they did; at 100×30 nothing is clipped and
   the L brackets fall inside the frame.

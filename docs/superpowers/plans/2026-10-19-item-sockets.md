@@ -336,10 +336,18 @@ Keys while choosing: ←→ and h/l move along the tiles (↑↓ j/k nothing), s
 
 ---
 
-### Task 10: Shots, README and the whole branch
+### Task 10: Empty sockets, picker marks, shots, README
 
 **Files:**
-- Modify: `crates/strata-zero/src/screens/shots.rs`, `README.md`
+- Modify: `crates/strata-zero/src/ui/cyberdeck/pawn.rs` (and its tests), `crates/strata-zero/src/screens/blueprint.rs` (tests touching the rails), `crates/strata-zero/src/screens/deck.rs` (GEAR picker labels), `crates/strata-zero/src/screens/shots.rs`, `README.md`
+
+Added after Tasks 1-9 were built:
+- **Empty sockets are the connector alone** (Jeffrey, on seeing it: "drop those [prongs] … just the socket is enough"; spec *The pawn drawing's sockets* updated): the pawn draws the gold connector for every socket, and the steel rails (rows 6 and 12) only round a fitted piece. The socket rectangles (`sockets()`) do not change, so modding's brackets still frame where a piece goes.
+- **The GEAR picker shows a copy's marks** (controller ruling after Task 6): each picker row reads the item name, one space, then the same marks the INVENTORY row shows for that copy (`marks(..)`, plain colours), so two copies of one deck read apart.
+
+- [ ] **Step 0a: Write the failing tests**: in `pawn.rs`, `empty_sockets_draw_only_the_connector`: `sockets: vec![None, None]` → drawing cells (−4..=0, 6) and (−4..=0, 12) and (83..=87, 6/12) are unchanged from a deck without sockets (no `▄`/`▀` steel), (1, 9) is still `▌` gold on well; `sockets: vec![Some(ColdfinI), None]` → (−4, 6) is `▄` `#c8c2d2`, (−3..=0, 6) `▄` `#8b8596`, and the R side has no rails. Update `cradles_draw_on_a_deck_with_sockets` and `the_worn_deck_shows_its_cradles` (screens/blueprint.rs) to the new rule (D'SHAWN's empty deck: no rail at screen (4, oy+6) or (95, oy+6); the gold connectors still there). In `deck.rs`, `gear_picker_reads_copies_apart`: D'SHAWN with a second rebuilt deck in the pack holding `sidecar` in socket 0 → the DECK slot's picker rows read `Rebuilt pawn deck □□□□□ · □□` and `Rebuilt pawn deck □□□□□ · ■□` and equip their own copy ids. Run them → fail.
+
+- [ ] **Step 0b: Implement** both changes; run the workspace tests and clippy → green; commit `feat(app): empty sockets show only their connector; the picker reads copies apart`.
 
 - [ ] **Step 1: Add ignored shots** in `shots.rs` beside `dshawns_decks_on_their_blueprints`: `modding_the_rebuilt_deck` (D'SHAWN, `m` on the worn deck, 100×30 and 120×40; one with the tray open), `hardware_blueprints` (each of the three pieces at 100×30), `gear_and_inventory_marks` (GEAR and INVENTORY tabs at 100×30 with a Coldfin vII fitted). Run `SHOT_DIR=<scratch dir> cargo test -p strata-zero -q shots:: -- --ignored` and look at the SVGs: nothing clipped at 100×30, the drawings match the spec's art reference.
 
