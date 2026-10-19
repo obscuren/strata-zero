@@ -650,12 +650,13 @@ mod tests {
         let (ox, oy) = (x + 6, y + 2);
         assert_eq!(ox, 8);
         assert_eq!(buf[(ox + 1, oy + 4)].symbol(), "╭");
-        // Each socket's outer rail end: L at drawing x -4, one column in from the
-        // inside's first; R at drawing x 87.
-        assert_eq!(buf[(4, oy + 6)].symbol(), "▄");
-        assert_eq!(buf[(95, oy + 6)].symbol(), "▄");
-        assert_eq!(buf[(4, oy + 12)].symbol(), "▀");
-        assert_eq!(buf[(95, oy + 12)].symbol(), "▀");
+        // Both sockets are empty: no rail where each outer end would be (L at drawing
+        // x -4, R at 87), and the gold connectors in the edges.
+        for (x, y) in [(4, oy + 6), (95, oy + 6), (4, oy + 12), (95, oy + 12)] {
+            assert_eq!(buf[(x, y)].symbol(), " ", "({x},{y})");
+        }
+        assert_eq!(buf[(ox + 1, oy + 9)].symbol(), "▌");
+        assert_eq!(buf[(ox + 82, oy + 9)].symbol(), "▐");
         // The maker plate's card lists both sockets, empty.
         press(&mut bp, &mut st, &[KeyCode::Down]);
         assert_eq!(deck(&bp).point, Part::Plate);
@@ -1021,6 +1022,16 @@ mod tests {
     fn modding_greys_the_item_but_not_its_sockets() {
         let mut st = state();
         let mut bp = dshawns_deck(&mut st);
+        // Rails draw round fitted pieces only.
+        for (socket, piece) in [(0, "coldfin_1"), (1, "sidecar")] {
+            let piece = pack_copy(&st, piece);
+            let fit = Action::Fit {
+                host: Host::Worn(Slot::Deck),
+                socket,
+                piece,
+            };
+            perform(&mut st, fit).unwrap();
+        }
         st.tick += 40;
         let (x, y) = corner(100, 30);
         let (ox, oy) = (x + 6, y + 2);

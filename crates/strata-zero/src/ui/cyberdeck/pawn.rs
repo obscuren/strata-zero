@@ -234,9 +234,9 @@ fn slab(p: &mut Pen, view: &DeckView) {
     p.put(50, 10, STICKER, WHITE, Some(MAGENTA), true);
 }
 
-/// Each socket's cradle, there whether anything is fitted or not: steel rails off
-/// the edge on rows 6 and 12, their outer ends bright, and gold contacts in a dark
-/// slot in the edge between them. A fitted piece fills the rows between the rails.
+/// Each socket's connector, gold contacts in a dark slot in the edge, there whether
+/// anything is fitted or not. A fitted piece also gets steel rails off the edge on
+/// rows 6 and 12, their outer ends bright, and fills the rows between them.
 fn cradles(p: &mut Pen, view: &DeckView) {
     // L then R: the rails' columns, the outer end, the edge, its contacts, the side.
     let sides = [
@@ -245,17 +245,16 @@ fn cradles(p: &mut Pen, view: &DeckView) {
     ];
     for ((rails, tip, edge, pin, side), fitted) in sides.into_iter().zip(&view.sockets) {
         let from = *rails.start();
+        for y in 8..=10 {
+            p.cell(edge, y, pin, GOLD, Some(WELL));
+        }
+        let Some(look) = fitted else { continue };
         for x in rails {
             let fg = if x == tip { STEEL_HI } else { STEEL };
             p.cell(x, 6, '▄', fg, None);
             p.cell(x, 12, '▀', fg, None);
         }
-        for y in 8..=10 {
-            p.cell(edge, y, pin, GOLD, Some(WELL));
-        }
-        if let Some(look) = fitted {
-            draw_side(*look, side, p, from, 7);
-        }
+        draw_side(*look, side, p, from, 7);
     }
 }
 
@@ -739,19 +738,27 @@ mod tests {
         let steel = Color::Rgb(0x8b, 0x85, 0x96);
         let steel_hi = Color::Rgb(0xc8, 0xc2, 0xd2);
         let buf = render(&DeckView {
+            sockets: vec![Some(HardwareLook::ColdfinI), None],
+            ..lit_kit()
+        });
+        // Rails five cells out from a fitted socket's edge, the outer end bright.
+        for x in -4..=0 {
+            let fg = if x == -4 { steel_hi } else { steel };
+            for (y, glyph) in [(6, "▄"), (12, "▀")] {
+                let c = at(&buf, x, y);
+                assert_eq!((c.symbol(), c.fg), (glyph, fg), "({x},{y})");
+            }
+        }
+        // An empty socket has no rails.
+        for x in 83..=87 {
+            for y in [6, 12] {
+                assert_eq!(at(&buf, x, y).symbol(), " ", "({x},{y})");
+            }
+        }
+        let buf = render(&DeckView {
             sockets: vec![None, None],
             ..lit_kit()
         });
-        // Rails five cells out from each edge, their outer ends bright.
-        for (xs, tip) in [(-4..=0, -4), (83..=87, 87)] {
-            for x in xs {
-                let fg = if x == tip { steel_hi } else { steel };
-                for (y, glyph) in [(6, "▄"), (12, "▀")] {
-                    let c = at(&buf, x, y);
-                    assert_eq!((c.symbol(), c.fg), (glyph, fg), "({x},{y})");
-                }
-            }
-        }
         // The connectors: gold contacts in a dark slot in the edge.
         for y in 8..=10 {
             for (x, glyph) in [(1, "▌"), (82, "▐")] {
@@ -759,8 +766,8 @@ mod tests {
                 assert_eq!((c.symbol(), c.fg, c.bg), (glyph, gold, well), "({x},{y})");
             }
         }
-        // Empty: nothing between the rails.
-        for y in 7..=11 {
+        // Empty: no rails and nothing in the cradle.
+        for y in 6..=12 {
             for x in (-4..=0).chain(83..=87) {
                 assert_eq!(at(&buf, x, y).symbol(), " ", "({x},{y})");
             }
@@ -777,6 +784,34 @@ mod tests {
                 assert_eq!((c.symbol(), c.fg), ("│", EDGE), "({x},{y})");
             }
         }
+    }
+
+    #[test]
+    fn empty_sockets_draw_only_the_connector() {
+        let gold = Color::Rgb(0xc9, 0xa2, 0x27);
+        let well = Color::Rgb(0x0c, 0x0c, 0x10);
+        let bare = render(&lit_kit());
+        let buf = render(&DeckView {
+            sockets: vec![None, None],
+            ..lit_kit()
+        });
+        for y in [6, 12] {
+            for x in (-4..=0).chain(83..=87) {
+                assert_eq!(at(&buf, x, y), at(&bare, x, y), "({x},{y})");
+            }
+        }
+        let c = at(&buf, 1, 9);
+        assert_eq!((c.symbol(), c.fg, c.bg), ("▌", gold, well));
+        // One piece fitted: its rails only.
+        let buf = render(&DeckView {
+            sockets: vec![Some(HardwareLook::ColdfinI), None],
+            ..lit_kit()
+        });
+        let c = at(&buf, -4, 6);
+        assert_eq!((c.symbol(), c.fg), ("▄", Color::Rgb(0xc8, 0xc2, 0xd2)));
+        let c = at(&buf, -3, 6);
+        assert_eq!((c.symbol(), c.fg), ("▄", Color::Rgb(0x8b, 0x85, 0x96)));
+        assert_eq!(at(&buf, 85, 6), at(&bare, 85, 6));
     }
 
     #[test]
@@ -816,7 +851,7 @@ mod tests {
     fn bare_draws_no_glass_text_warez_or_brackets() {
         let mut v = lit_kit();
         (v.more_above, v.more_below) = (true, true);
-        v.sockets = vec![None, None];
+        v.sockets = vec![Some(HardwareLook::ColdfinI), None];
         let lit = render(&v);
         v.bare = true;
         let buf = render(&v);

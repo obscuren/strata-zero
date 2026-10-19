@@ -288,7 +288,17 @@ impl Deck {
                         Some(copy) => Action::EquipCopy(copy),
                         None => Action::Equip(s.item.clone()),
                     };
-                    choices.push(Choice::new(k, item.name.clone(), Pick::Act(equip)));
+                    // The marks tell two copies of one item apart.
+                    let marks: String = marks(st, item, s.copy.as_ref(), false, false)
+                        .iter()
+                        .map(|m| m.content.as_ref())
+                        .collect();
+                    let label = if marks.is_empty() {
+                        item.name.clone()
+                    } else {
+                        format!("{} {marks}", item.name)
+                    };
+                    choices.push(Choice::new(k, label, Pick::Act(equip)));
                 }
                 if let Some(id) = st.character.equipped(*slot) {
                     choices.push(Choice::new(
@@ -3157,6 +3167,42 @@ mod tests {
         assert_eq!(st.ground.at(place, pos)[0].copy_id(), Some(second));
         assert!(st.character.copy_in_pack(second).is_none());
         assert!(st.character.copy_in_pack(first).is_some());
+    }
+
+    #[test]
+    fn gear_picker_reads_copies_apart() {
+        let mut st = dshawn();
+        walking(&mut st);
+        st.character
+            .give_item(&st.content, ItemId::new("rebuilt_deck"), 2);
+        let decks: Vec<game::CopyId> = st
+            .character
+            .inventory
+            .iter()
+            .filter(|s| s.item == ItemId::new("rebuilt_deck"))
+            .filter_map(|s| s.copy_id())
+            .collect();
+        let (first, second) = (decks[0], decks[1]);
+        fit(&mut st, game::Host::Pack(second), 0, "sidecar");
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('3'))]);
+        d.row = d
+            .rows(&st)
+            .iter()
+            .position(|r| r.detail == Some(Detail::Slot(Slot::Deck)))
+            .unwrap();
+        let p = d.interact(&mut st).unwrap();
+        let rows: Vec<(&str, &Pick)> = p
+            .choices()
+            .iter()
+            .filter(|c| c.label.starts_with("Rebuilt"))
+            .map(|c| (c.label.as_str(), &c.pick))
+            .collect();
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!(rows[0].0, "Rebuilt pawn deck □□□□□ · □□");
+        assert_eq!(rows[1].0, "Rebuilt pawn deck □□□□□ · ■□");
+        assert!(matches!(rows[0].1, Pick::Act(Action::EquipCopy(k)) if *k == first));
+        assert!(matches!(rows[1].1, Pick::Act(Action::EquipCopy(k)) if *k == second));
     }
 
     #[test]
