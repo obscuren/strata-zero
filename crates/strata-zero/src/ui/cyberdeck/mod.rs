@@ -108,7 +108,8 @@ pub struct DeckView {
     pub point: Part,
     pub held: Option<Held>,
     pub switch: Switch,
-    pub heat: Option<u8>,
+    /// The trace the HUD reads, `None` with none in reach or the deck not jacked.
+    pub trace: Option<u8>,
     /// Jacked in: the LINK lamp lit and the terminal's cable in the right socket.
     pub link: bool,
     /// Worn: the player's cable in the left socket.
@@ -343,7 +344,7 @@ pub(crate) mod tests {
             point: Part::Slot(0),
             held: None,
             switch: Switch::On,
-            heat: None,
+            trace: None,
             link: false,
             plugged: false,
             handle: "ghost".into(),

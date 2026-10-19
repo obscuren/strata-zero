@@ -176,7 +176,7 @@ impl DeckTab {
             } else {
                 Switch::On
             },
-            heat: heat(st).filter(|_| self.equipped),
+            trace: trace(st).filter(|_| self.equipped),
             link: self.equipped && locked(st),
             plugged: self.equipped,
             handle: st.character.handle.clone(),
@@ -358,7 +358,7 @@ pub(crate) fn inventory(st: &AppState) -> Vec<ItemId> {
 
 /// The trace the HUD would show: inside a construct its heat, on the grid the
 /// nearest gate's within reach; `None` when not jacked in.
-pub(crate) fn heat(st: &AppState) -> Option<u8> {
+pub(crate) fn trace(st: &AppState) -> Option<u8> {
     let p = st.player.as_ref().filter(|p| p.jacked_in())?;
     match p.place {
         Place::Construct(b) => Some(st.net.traces.get(&b).map_or(0, |t| t.heat)),
@@ -976,18 +976,18 @@ mod tests {
     }
 
     #[test]
-    fn view_reports_heat_link_and_switch() {
+    fn view_reports_trace_link_and_switch() {
         let mut st = state();
         let tab = jacked(&st);
         let v = tab.view(&st);
-        assert_eq!((v.heat, v.link, v.switch), (None, false, Switch::On));
-        assert_eq!(heat(&st), None);
+        assert_eq!((v.trace, v.link, v.switch), (None, false, Switch::On));
+        assert_eq!(trace(&st), None);
 
         jack_in(&mut st);
         let b = st.city.as_ref().unwrap().buildings[0].id;
         st.net.trace(b).heat = 60;
         let v = tab.view(&st);
-        assert_eq!((v.heat, v.link), (Some(60), true));
+        assert_eq!((v.trace, v.link), (Some(60), true));
         assert_eq!(v.handle, st.character.handle);
 
         // The whole glass types on in the detail pane's reveal time, however long.
@@ -1081,13 +1081,13 @@ mod tests {
         let b = st.city.as_ref().unwrap().buildings[0].id;
         st.net.trace(b).heat = 60;
         let mut tab = DeckTab::for_deck(0, id("rebuilt_deck"), false, &st);
-        // Its own slots, rating and ROM; an empty bay, no heat, no link, though the
+        // Its own slots, rating and ROM; an empty bay, no trace, no link, though the
         // jacked deck has all three.
         let v = tab.view(&st);
         assert_eq!((v.slots, v.rating), (5, 3));
         assert!(v.bay.is_empty());
         assert_eq!(v.roms, vec!["NETSCAN", "ARC TRACE"]);
-        assert_eq!((v.heat, v.link), (None, false));
+        assert_eq!((v.trace, v.link), (None, false));
         assert_eq!(v.point, Part::Slot(0));
         assert_eq!(
             v.pinned,

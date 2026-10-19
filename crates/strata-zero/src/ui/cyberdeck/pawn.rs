@@ -3,7 +3,6 @@
 
 use super::{DeckView, GLASS_ROWS, GLASS_TEXT_W, GlassTone, Part, Pen, Switch};
 use crate::ui::chrome::{CYAN, MAGENTA, PANEL_BG};
-use game::DUMP_HEAT;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
@@ -96,7 +95,7 @@ const LABEL: Color = Color::Rgb(0x8b, 0x85, 0x96);
 const LABEL_DIM: Color = Color::Rgb(0x6b, 0x65, 0x75);
 const EMPTY: Color = Color::Rgb(0x4a, 0x46, 0x52);
 const LINK_OFF: Color = Color::Rgb(0x2a, 0x55, 0x60);
-const HEAT_OFF: Color = Color::Rgb(0x4a, 0x30, 0x20);
+const TRACE_OFF: Color = Color::Rgb(0x4a, 0x30, 0x20);
 const GHOST: Color = Color::Rgb(0x3c, 0x44, 0x50);
 /// A plug's body and the bright ferrule pushed into the socket.
 const STEEL: Color = Color::Rgb(0x8b, 0x85, 0x96);
@@ -237,15 +236,17 @@ fn glass(p: &mut Pen, view: &DeckView) {
     }
 }
 
-/// HEAT: seven cells, one lit for each seventh of the trace begun.
+/// TRACE: the HUD's reading, ten cells with one lit for each full ten, then the
+/// number; dark and blank with no trace.
 fn gauge(p: &mut Pen, view: &DeckView) {
-    let lit = view.heat.map_or(0, |h| {
-        (usize::from(h.min(DUMP_HEAT)) * 7).div_ceil(usize::from(DUMP_HEAT))
-    });
-    p.put(50, 7, "HEAT", LABEL, Some(BODY), true);
+    let lit = view.trace.map_or(0, |t| usize::from(t / 10).min(10));
+    p.put(50, 7, "TRACE", LABEL, Some(BODY), true);
     p.put(50, 8, &"▮".repeat(lit), HOT, Some(BODY), false);
-    let off = "▯".repeat(7 - lit);
-    p.put(50 + lit as u16, 8, &off, HEAT_OFF, Some(BODY), false);
+    let off = "▯".repeat(10 - lit);
+    p.put(50 + lit as u16, 8, &off, TRACE_OFF, Some(BODY), false);
+    if let Some(t) = view.trace {
+        p.put(61, 8, &t.to_string(), LABEL, Some(BODY), true);
+    }
 }
 
 /// The player's handle, sprayed beside the sticker when it fits before the failsafe
@@ -477,7 +478,7 @@ mod tests {
         ];
         v.pinned = ("[space] eject".into(), GlassTone::Body);
         v.handle = "VEX".into();
-        v.heat = Some(60);
+        v.trace = Some(60);
         v
     }
 
@@ -501,7 +502,7 @@ mod tests {
             "ARC TRACE",
             "WAREZ",
             "ATTACK",
-            "HEAT",
+            "TRACE",
             "NO FUTURE",
             "x‿x",
             "VEX",
@@ -526,19 +527,24 @@ mod tests {
     }
 
     #[test]
-    fn heat_lights_a_cell_per_seventh_begun() {
+    fn the_trace_meter_reads_as_the_hud() {
         let mut v = lit_kit();
-        let gauge = |v: &DeckView| {
-            let r = row(&render(v), 8);
-            (count(&r, '▮'), count(&r, '▯'))
+        let meter = |v: &DeckView| {
+            let buf = render(v);
+            let r = row(&buf, 8);
+            let number: String = (OX + 61..OX + 64).map(|x| buf[(x, 8)].symbol()).collect();
+            (count(&r, '▮'), count(&r, '▯'), number.trim().to_string())
         };
-        assert_eq!(gauge(&v), (5, 2));
-        v.heat = None;
-        assert_eq!(gauge(&v), (0, 7));
-        v.heat = Some(100);
-        assert_eq!(gauge(&v), (7, 0));
-        v.heat = Some(1);
-        assert_eq!(gauge(&v), (1, 6));
+        // A cell for each full ten, as the HUD's trace bar fills, and the number.
+        for trace in [60, 0, 9, 10, 34, game::DUMP_HEAT / 2, 99, game::DUMP_HEAT] {
+            v.trace = Some(trace);
+            let hud = crate::net::trace_bar(trace).matches('▰').count();
+            assert_eq!(meter(&v), (hud, 10 - hud, trace.to_string()), "{trace}");
+        }
+        assert_eq!(meter(&lit_kit()).0, 6);
+        // No trace in reach, or not jacked: dark and no number.
+        v.trace = None;
+        assert_eq!(meter(&v), (0, 10, String::new()));
     }
 
     #[test]
@@ -790,14 +796,6 @@ mod tests {
         assert!(line.contains("▸ B"), "{line}");
         assert!(!line.contains("BACKDOOR"));
         assert!(line.contains("BACKD"), "{line}");
-    }
-
-    #[test]
-    fn the_heat_gauge_runs_to_the_dump_threshold() {
-        let mut v = lit_kit();
-        v.heat = Some(game::DUMP_HEAT / 2);
-        let line = row(&render(&v), 8);
-        assert_eq!(line.matches('▮').count(), 4, "{line}");
     }
 
     #[test]

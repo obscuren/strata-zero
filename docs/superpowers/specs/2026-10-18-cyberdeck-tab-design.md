@@ -57,7 +57,7 @@ graphics for will simply show MISSING BLUEPRINT centered."
   smallest terminal, 100×30). The deck's 84×22 drawing sits in the middle of
   the inside. (Jeffrey asked for it a little bigger than the first 88×28.)
 - **The blueprint of the equipped deck** is the deck as this spec describes:
-  bay, glass, failsafe, HEAT, ROM, WAREZ, corner brackets, pick-up/carry/drop,
+  bay, glass, failsafe, TRACE, ROM, WAREZ, corner brackets, pick-up/carry/drop,
   the failsafe's two presses, the lock while jacked in, and every key below
   except the tab keys (there is no tab bar in the window). Esc puts a carried
   cart back, else shuts a lifted cover, else closes the window (back to the
@@ -122,8 +122,8 @@ slot A:
  ╭─────┗A ▀▀▀▀▀▀▀▀▀▀┛ B ▀▀▀▀▀▀▀▀▀▀▀───────────────────────────────────────────────╮
  │   K▒ROK▒WA KX-2  2 SLOT · R1                 ● PWR  ● LINK  ● HOT              │
  │ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓                                     │
- │ ┃ SLOT A ▸ CRACK                         ┃     HEAT               ▞▞▞▞▞▞▞▞▞▞   │
- │ ┃ rating 1 · size 1 · noise 4 · work 3   ┃     ▮▮▮▮▮▯▯            ▞  ▲ ON  ▞   │
+ │ ┃ SLOT A ▸ CRACK                         ┃     TRACE              ▞▞▞▞▞▞▞▞▞▞   │
+ │ ┃ rating 1 · size 1 · noise 4 · work 3   ┃     ▮▮▮▮▮▮▯▯▯▯ 60      ▞  ▲ ON  ▞   │
  │ ┃ Brute force with manners. Opens        ┃                        ▞  █     ▞   │
  │ ┃ anything that answers, loudly.         ┃      NO FUTURE   VEX   ▞    off ▞   │
  │ ┃                                        ┃                        ▞▞▞▞▞▞▞▞▞▞   │
@@ -156,8 +156,10 @@ Row by row (rows of the drawing, 0 at the top):
   amber glass, alternate rows a shade darker (scanlines). See *The glass*.
   The yellow `x‿x` sticker (black ink, bold) sits just right of the bezel's
   bottom-right corner.
-- **7-8, HEAT.** `HEAT` bold in the plate grey, then a 7-cell gauge: lit cells
-  `▮` orange, the rest `▯` dark brown. See *Heat*.
+- **7-8, TRACE.** `TRACE` bold in the plate grey, then a 10-cell meter: lit
+  cells `▮` orange, the rest `▯` dark brown, then the number in bold plate grey
+  from column 61. See *Trace*. (It read HEAT on seven cells at first; Jeffrey
+  asked for TRACE with the value the HUD shows.)
 - **10, stickers.** `NO FUTURE` bold white on magenta.
 - **10 or 12, the tag.** The player's handle in capitals, bold cyan, as if
   sprayed on. It goes beside the sticker when it fits before the failsafe
@@ -197,7 +199,7 @@ tape `#d9c9a0`, loose tape `#8a8270`, ink `#1a1612`, glass `#140e06` and
   there is one (the only empty slot a program can land in, since the bay
   packs left; further empty slots are drawn but are not stops). Then the
   maker plate, each ROM strip, the failsafe, and each cart in WAREZ.
-  Stickers, lights, HEAT and the keyboard are decoration. (Builder-check
+  Stickers, lights, TRACE and the keyboard are decoration. (Builder-check
   call: bay stops are landing places, so pointing and landing never disagree.)
 - **Moving.** Arrows and `hjkl` move to the nearest part in that direction
   (by the parts' centres, preferring the most in line), so any look's layout
@@ -292,13 +294,14 @@ it off take two presses.
   strip says "failsafe on".
 - Opening the tab with the failsafe off draws it off with the cover up.
 
-### Heat
+### Trace
 
-The gauge reads the trace the HUD would show you: inside a construct, that
+The meter reads the trace the HUD would show you: inside a construct, that
 construct's heat; on the grid, the nearest gate's trace within reach
-(`NetState::nearest_trace`); anywhere else, cold (no cells lit). Seven cells
-over 0 to `DUMP_HEAT`, a cell lit for each seventh begun. Cells at or past
-`ALARM_HEAT` may be drawn a hotter shade; builder's call.
+(`NetState::nearest_trace`); anywhere else, or on a deck not jacked, no
+reading (all cells dark, no number). It reads as the HUD's trace bar does:
+ten cells, one lit for each full ten (`trace_bar`), and the number after them,
+so `TRACE ▰▰▰▱▱▱▱▱▱▱ 34` on the HUD is three lit cells and `34` on the deck.
 
 ### Jacked in: the deck is locked
 
@@ -392,8 +395,8 @@ equipped there is nothing to inspect in the DECK slot, and the tab that showed
 - Failsafe: one space leaves `st.net.failsafe` on with the cover up; a second
   turns it off with the warning; esc between them shuts the cover; space when
   off turns it on in one press.
-- Heat: in a construct with heat 60 the gauge lights 5 cells; off the Net it
-  lights none.
+- Trace: in a construct with heat 60 the meter lights 6 cells and reads `60`;
+  off the Net it lights none and shows no number.
 - Draw: at 100×30 the drawing fits the body with nothing clipped; it shows
   the plate, the carts' names, `FAILSAFE`, `WAREZ` and the handle; at
   120×40 it is centred; no deck draws `No CYBERDECK equipped` and no deck
