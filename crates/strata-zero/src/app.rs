@@ -268,17 +268,25 @@ impl AppState {
     /// Puts a city in place: no body, no effects in flight, the home found. The
     /// clock starts at the city's usual hour.
     pub fn enter_city(&mut self, city: City) {
-        self.enter_city_at(city, crate::ui::hud::START_MINUTE_OF_DAY);
+        // The city's clock has run since the session started, as it always has.
+        let day = 24 * 60;
+        let spent = (self.tick / sim::TICKS_PER_MINUTE) % day;
+        let minute = (crate::ui::hud::START_MINUTE_OF_DAY as u64 + spent) % day;
+        self.enter_city_at(city, minute as u16);
     }
 
-    /// Puts a city in place with its clock at `minute` of the day.
+    /// Puts a city in place with its clock reading `minute` of the day on entry,
+    /// whatever ticks the session has already spent.
     pub fn enter_city_at(&mut self, city: City, minute: u16) {
         self.home = crate::home::HomeRig::find(&city);
+        let day = 24 * 60;
+        let spent = (self.tick / sim::TICKS_PER_MINUTE) % day;
+        let start = (minute as u64 + day - spent) % day;
         self.world = Some(sim::World::seed(
             &city,
             &self.people,
             &sim::SimParams::default(),
-            minute,
+            start as u16,
             self.tick,
         ));
         self.city = Some(city);

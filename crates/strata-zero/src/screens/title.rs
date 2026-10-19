@@ -307,6 +307,8 @@ mod tests {
         term.draw(|f| t.draw(&st, f)).unwrap();
         let text = buffer_text(term.backend().buffer());
         assert!(text.contains("NEW GAME (COMBAT)"), "{text}");
+        // Five hours of ticks already spent this session: the lot still opens at 18:15.
+        st.tick = 90 * 300;
         t.update(&mut st, &[key(KeyCode::Down)]);
         t.update(&mut st, &[key(KeyCode::Down)]);
         let ScreenCmd::Switch {

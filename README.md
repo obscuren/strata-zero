@@ -360,7 +360,8 @@ street on the same turns as the Net: `TURN 1  YOU › goon` in the footer,
 `ENGAGED` at the right, `MOVE ▰▰▰▰ 4/4  AP ●● 2/2`. Your turn is two halves. In
 the move half `hjkl` steps and spends a move, `g` aims a path over the street
 and `enter` walks it, `space` stays. The act half opens the fire cursor on the
-nearest goon: `hjkl` moves it, `tab` jumps to the next one, the readout over it
+nearest goon: `hjkl` moves it, `t` jumps to the next one (`tab` stays the deck's,
+so a stim is a key away), the readout over it
 reads `goon · Scrap nine · 8 tiles · 85%`, `space` fires the worn gun for one
 AP, every round rolled on its own (the Ratchet's three, the pistol's one); a hit
 flashes the goon red, the number lifts off, a miss runs on and sparks where it

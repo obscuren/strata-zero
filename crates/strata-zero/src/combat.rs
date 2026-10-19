@@ -39,7 +39,9 @@ pub fn miss_impact(city: &City, place: Place, from: Pos, target: Pos, range: i32
         .skip_while(|p| *p != target)
         .skip(1)
     {
-        if from.chebyshev(p) > range {
+        // The round always clears the target by a tile, range or not: a miss is
+        // never drawn on whoever it missed.
+        if from.chebyshev(p) > range && last != target {
             break;
         }
         match city.tile(k, p) {
@@ -525,6 +527,25 @@ mod tests {
             miss_impact(city, STREET, Pos::new(6, 8), Pos::new(6, 2), 10),
             Pos::new(6, 0),
             "straight up into the wall"
+        );
+    }
+
+    #[test]
+    fn a_miss_at_exactly_range_never_sparks_on_the_target() {
+        let mut st = engaged(Pos::new(16, 8));
+        st.force_hit = Some(false);
+        fire(&mut st, 0).unwrap();
+        let spark = st.fx.iter().find(|i| matches!(i.fx, Fx::Spark)).unwrap();
+        assert_eq!(
+            spark.targets[0],
+            Pos::new(17, 8),
+            "one tile past, over the range"
+        );
+        let city = st.city.as_ref().unwrap();
+        // Against the wall the wall takes it, beyond the range too.
+        assert_eq!(
+            miss_impact(city, STREET, Pos::new(29, 8), Pos::new(39, 8), 10),
+            Pos::new(40, 8)
         );
     }
 

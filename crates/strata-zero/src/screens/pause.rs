@@ -53,8 +53,8 @@ impl Screen for Pause {
                             fx: TransitionKind::None,
                         },
                         1 => {
-                            if st.city.as_ref().is_some_and(|c| c.is_lot()) {
-                                st.warn("nothing to save on the lot");
+                            if let Some(why) = crate::save::refusal(st) {
+                                st.warn(why);
                                 return ScreenCmd::Stay;
                             }
                             let name = st

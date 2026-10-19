@@ -1,6 +1,9 @@
 # Ranged combat on the street — design
 
-Date: 2026-10-19. Status: designed with Jeffrey in the visual companion (terminal
+Date: 2026-10-19. Status: built (branch `worktree-ranged-combat`; after the review
+`t` cycles foes so `tab` keeps the deck, a miss always clears its target by a tile,
+the lot's clock reads 18:15 whatever the session's ticks, and the `s` key refuses
+the lot as the pause menu does). Designed with Jeffrey in the visual companion (terminal
 cell mockups of the burst, animated), approved in chat ("it all looks sick", the
 three looks assigned to pistol, SMG and abilities, the ability and the lot "perfect"
 / "great yes"). Spec, plan and build run on without check-ins.
@@ -251,7 +254,7 @@ On your act half, on the street:
 
 - `hjkl` / arrows move a **target cursor** (`MapScreen.target: Option<Pos>`), the
   look cursor's glyphs, cyan; it starts on the nearest standing foe in sight when
-  the act half opens and is dropped by `esc` or the end of the turn. `tab` jumps to
+  the act half opens and is dropped by `esc` or the end of the turn. `t` jumps to
   the next foe in sight, nearest first, wrapping.
 - With the cursor on a standing foe in sight: the line of fire draws from you to
   it in dim cells (`·` at `(90, 90, 90)`), the foe's cell inverts (black on cyan),
@@ -265,7 +268,7 @@ On your act half, on the street:
   `Strike` ability at the foe under the cursor the same way, spending its `ap`.
 - In the move half the aimed walk works as in a construct (`hjkl` aims a path,
   `enter` walks it); `space` stays, as today.
-- Row 2 of the footer, the prompt, reads `aim  hjkl target · tab next · space fire
+- Row 2 of the footer, the prompt, reads `aim  hjkl target · t next · space fire
   · 1-5 ability · . end turn` on the act half and the net's move prompt on the move
   half.
 

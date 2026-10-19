@@ -318,7 +318,8 @@ impl MapScreen {
             return Some(ScreenCmd::Stay);
         }
         match k.code {
-            KeyCode::Tab | KeyCode::BackTab => {
+            // `t`: the next foe. Tab stays the deck's, so a stim is a key away.
+            KeyCode::Char('t') => {
                 let seen = crate::foes::in_sight(st);
                 if seen.is_empty() {
                     st.warn("nothing to hit");
@@ -382,6 +383,19 @@ impl MapScreen {
     /// A step of yours on turns on foot: a move spent, the last one opening the
     /// act half.
     fn engaged_step(&mut self, st: &mut AppState, dir: Dir) -> ScreenCmd {
+        // A blocked step costs nothing.
+        let open = st
+            .player
+            .as_ref()
+            .zip(st.city.as_ref())
+            .is_some_and(|(p, c)| {
+                p.place
+                    .stratum()
+                    .is_some_and(|k| c.walkable(k, p.pos.step(dir)))
+            });
+        if !open {
+            return ScreenCmd::Stay;
+        }
         if let Err(why) = crate::net::spend_move(st) {
             st.warn(why);
             return ScreenCmd::Stay;
@@ -610,7 +624,7 @@ impl MapScreen {
                 ),
                 Phase::Act => (
                     "AIM".to_string(),
-                    "hjkl target · tab next · space fire · 1-5 ability · . end turn".to_string(),
+                    "hjkl target · t next · space fire · 1-5 ability · . end turn".to_string(),
                 ),
             },
             Actor::You => match e.phase {
@@ -871,6 +885,10 @@ impl MapScreen {
                 });
             }
             KeyCode::Char('s') => {
+                if let Some(why) = crate::save::refusal(st) {
+                    st.warn(why);
+                    return Some(ScreenCmd::Stay);
+                }
                 let name = st.city.as_ref().map(|c| c.name.clone())?;
                 return Some(ScreenCmd::Push {
                     to: Box::new(Files::save(st.tick, &name)),
@@ -2955,10 +2973,36 @@ mod tests {
         s.update(&mut st, &[]);
         s.update(&mut st, &[key(KeyCode::Char(' '))]);
         assert_eq!(s.target, Some(Pos::new(9, 8)));
-        s.update(&mut st, &[key(KeyCode::Tab)]);
+        s.update(&mut st, &[key(KeyCode::Char('t'))]);
         assert_eq!(s.target, Some(Pos::new(14, 8)));
-        s.update(&mut st, &[key(KeyCode::Tab)]);
+        s.update(&mut st, &[key(KeyCode::Char('t'))]);
         assert_eq!(s.target, Some(Pos::new(9, 8)));
+        // Tab is still the deck's: a stim can be used mid-fight.
+        assert!(matches!(
+            s.update(&mut st, &[key(KeyCode::Tab)]),
+            ScreenCmd::Push { .. }
+        ));
+    }
+
+    #[test]
+    fn s_is_refused_on_the_lot() {
+        let (mut st, mut s) = lot(Pos::new(18, 8));
+        assert!(matches!(
+            s.update(&mut st, &[key(KeyCode::Char('s'))]),
+            ScreenCmd::Stay
+        ));
+        assert_eq!(last(&st), Some("nothing to save on the lot"));
+    }
+
+    #[test]
+    fn a_blocked_step_costs_no_move() {
+        let (mut st, mut s) = lot(Pos::new(9, 8));
+        st.player.as_mut().unwrap().pos = Pos::new(1, 8);
+        s.update(&mut st, &[]);
+        assert_eq!(crate::net::phase(&st), Some(crate::net::Phase::Move));
+        s.update(&mut st, &[key(KeyCode::Char('h'))]);
+        assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(1, 8));
+        assert_eq!(st.net.engaged.as_ref().unwrap().moves, 4);
     }
 
     #[test]
@@ -2995,7 +3039,7 @@ mod tests {
         // Any direction brings it back, from your own tile.
         s.update(&mut st, &[key(KeyCode::Char('l'))]);
         assert_eq!(s.target, Some(Pos::new(7, 8)));
-        s.update(&mut st, &[key(KeyCode::Tab)]);
+        s.update(&mut st, &[key(KeyCode::Char('t'))]);
         assert_eq!(s.target, Some(Pos::new(14, 8)));
     }
 
@@ -3077,7 +3121,7 @@ mod tests {
         s.update(&mut st, &[key(KeyCode::Char(slot("static")))]);
         assert_eq!(last(&st), Some("pick a target"));
         assert_eq!(st.net.engaged.as_ref().unwrap().ap, 1);
-        s.update(&mut st, &[key(KeyCode::Tab)]);
+        s.update(&mut st, &[key(KeyCode::Char('t'))]);
         assert_eq!(s.target, Some(Pos::new(14, 8)));
         s.update(&mut st, &[key(KeyCode::Char(slot("static")))]);
         assert_eq!(last(&st), Some("no AP left"));
@@ -3105,7 +3149,7 @@ mod tests {
         );
         assert!(text.contains("TURN 1  YOU › goon"), "{text}");
         assert!(
-            text.contains("hjkl target · tab next · space fire · 1-5 ability · . end turn"),
+            text.contains("hjkl target · t next · space fire · 1-5 ability · . end turn"),
             "{text}"
         );
         s.update(&mut st, &[key(KeyCode::Char('.'))]);
