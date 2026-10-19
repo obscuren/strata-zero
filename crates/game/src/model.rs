@@ -639,6 +639,10 @@ pub struct Recipe {
     pub inputs: Vec<(ItemId, u32)>,
     pub output: (ItemId, u32),
     pub desc: String,
+    /// The steps the workbench's process sheet numbers in its box: up to four lines of
+    /// at most 16 characters. A sheet drawn exploded shows none.
+    #[serde(default)]
+    pub steps: Vec<String>,
 }
 
 /// Where you were made. Cheap stats cost one less per point, dear ones one more.

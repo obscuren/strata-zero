@@ -3,7 +3,7 @@
 
 pub mod ratchet;
 
-use crate::ui::art::{Art, SocketPlace, StickerArea};
+use crate::ui::art::{Art, PartPlace, SocketPlace, StickerArea};
 use crate::ui::cyberdeck::Pen;
 use crate::ui::hardware::draw_fitted;
 use crate::ui::stickers::{self, Placed};
@@ -69,6 +69,29 @@ fn places(look: ItemLook, count: usize) -> Vec<SocketPlace> {
         .collect()
 }
 
+/// A look's parts and where they sit; only some looks are built from parts.
+fn part_places(look: ItemLook) -> Vec<PartPlace> {
+    match look {
+        ItemLook::Ratchet => ratchet::PARTS
+            .iter()
+            .enumerate()
+            .map(
+                |(index, &(item, (x, y, w, h), apart, balloon, leader))| PartPlace {
+                    index,
+                    item,
+                    x,
+                    y,
+                    w,
+                    h,
+                    apart,
+                    balloon,
+                    leader,
+                },
+            )
+            .collect(),
+    }
+}
+
 impl Art for ItemArt {
     fn size(&self) -> (u16, u16) {
         size(self.look)
@@ -94,6 +117,22 @@ impl Art for ItemArt {
 
     fn sockets(&self) -> Vec<SocketPlace> {
         places(self.look, self.fitted.len())
+    }
+
+    fn parts(&self) -> Vec<PartPlace> {
+        part_places(self.look)
+    }
+
+    fn draw_part(&self, part: usize, (ox, oy): (u16, u16), clip: Rect, buf: &mut Buffer) {
+        let mut pen = Pen {
+            clip: clip.intersection(buf.area),
+            buf,
+            ox,
+            oy,
+        };
+        match self.look {
+            ItemLook::Ratchet => ratchet::draw_part(&mut pen, part),
+        }
     }
 
     fn sticker_area(&self) -> Option<StickerArea> {
@@ -202,10 +241,148 @@ mod tests {
             let area = Rect::new(0, 0, w, h);
             let mut buf = Buffer::empty(area);
             art.draw((0, 0), area, &mut buf);
-            for c in &buf.content {
-                assert_eq!(c.symbol().width(), 1, "{:?}", c.symbol());
-                assert!(matches!(c.fg, Color::Rgb(..) | Color::Reset));
-                assert!(matches!(c.bg, Color::Rgb(..) | Color::Reset));
+            let mut drawings = vec![buf];
+            for part in 0..art.parts().len() {
+                let mut buf = Buffer::empty(area);
+                art.draw_part(part, (0, 0), area, &mut buf);
+                drawings.push(buf);
+            }
+            for buf in drawings {
+                for c in &buf.content {
+                    assert_eq!(c.symbol().width(), 1, "{:?}", c.symbol());
+                    assert!(matches!(c.fg, Color::Rgb(..) | Color::Reset));
+                    assert!(matches!(c.bg, Color::Rgb(..) | Color::Reset));
+                }
+            }
+        }
+    }
+
+    /// An FNV-1a hash of every cell's symbol, colours and modifier, the same on every
+    /// Rust release. The drawings use only `Rgb` and `Reset`.
+    fn hash_of(buf: &Buffer) -> u64 {
+        fn colour(c: Color) -> [u8; 4] {
+            match c {
+                Color::Rgb(r, g, b) => [1, r, g, b],
+                _ => [0; 4],
+            }
+        }
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut eat = |bytes: &[u8]| {
+            for &b in bytes {
+                h ^= u64::from(b);
+                h = h.wrapping_mul(0x0100_0000_01b3);
+            }
+        };
+        for c in &buf.content {
+            eat(c.symbol().as_bytes());
+            eat(&[0]);
+            eat(&colour(c.fg));
+            eat(&colour(c.bg));
+            eat(&c.modifier.bits().to_le_bytes());
+        }
+        h
+    }
+
+    /// The bare gun, nothing fitted and no stickers, cell for cell as it was drawn
+    /// before it was cut into parts.
+    #[test]
+    fn the_whole_gun_is_unchanged() {
+        let art = ItemArt {
+            look: ItemLook::Ratchet,
+            fitted: vec![None, None],
+            stickers: Vec::new(),
+        };
+        let area = Rect::new(0, 0, 88, 15);
+        let mut buf = Buffer::empty(area);
+        art.draw((0, 0), area, &mut buf);
+        assert_eq!(hash_of(&buf), 3885222701974628240);
+    }
+
+    fn blank_gun() -> (ItemArt, Rect, Buffer) {
+        let art = ItemArt {
+            look: ItemLook::Ratchet,
+            fitted: vec![None, None],
+            stickers: Vec::new(),
+        };
+        let (w, h) = art.size();
+        let area = Rect::new(0, 0, w, h);
+        (art, area, Buffer::empty(area))
+    }
+
+    /// The cells a drawing wrote, with their positions.
+    fn written(buf: &Buffer) -> Vec<((u16, u16), &ratatui::buffer::Cell)> {
+        let empty = ratatui::buffer::Cell::EMPTY;
+        let a = buf.area;
+        (a.top()..a.bottom())
+            .flat_map(|y| (a.left()..a.right()).map(move |x| (x, y)))
+            .map(|(x, y)| ((x, y), &buf[(x, y)]))
+            .filter(|(_, c)| **c != empty)
+            .collect()
+    }
+
+    #[test]
+    fn parts_drawn_alone_add_up_to_the_whole_gun() {
+        let (art, area, mut whole) = blank_gun();
+        art.draw((0, 0), area, &mut whole);
+        let mut owners = std::collections::HashMap::new();
+        for part in 0..art.parts().len() {
+            let mut buf = Buffer::empty(area);
+            art.draw_part(part, (0, 0), area, &mut buf);
+            for (at, cell) in written(&buf) {
+                assert_eq!(&whole[at], cell, "part {part} at {at:?}");
+                assert_eq!(owners.insert(at, part), None, "{at:?} written twice");
+            }
+        }
+        for (at, _) in written(&whole) {
+            assert!(owners.contains_key(&at), "{at:?} belongs to no part");
+        }
+    }
+
+    #[test]
+    fn a_part_place_is_its_drawing_s_bounding_box() {
+        let (art, area, _) = blank_gun();
+        for place in art.parts() {
+            let mut buf = Buffer::empty(area);
+            art.draw_part(place.index, (0, 0), area, &mut buf);
+            let cells = written(&buf);
+            let min = |f: fn(&(u16, u16)) -> u16| cells.iter().map(|(at, _)| f(at)).min().unwrap();
+            let max = |f: fn(&(u16, u16)) -> u16| cells.iter().map(|(at, _)| f(at)).max().unwrap();
+            let (x0, y0) = (min(|p| p.0), min(|p| p.1));
+            let (x1, y1) = (max(|p| p.0), max(|p| p.1));
+            assert_eq!(
+                (place.x, place.y, place.w, place.h),
+                (i32::from(x0), i32::from(y0), x1 - x0 + 1, y1 - y0 + 1),
+                "{}",
+                place.item
+            );
+        }
+    }
+
+    #[test]
+    fn every_part_is_an_input_of_the_recipe_for_its_item() {
+        let content = game::Content::load().unwrap();
+        for item in content.items.iter().filter(|i| i.look.is_some()) {
+            let art = ItemArt {
+                look: item.look.unwrap(),
+                fitted: Vec::new(),
+                stickers: Vec::new(),
+            };
+            let parts = art.parts();
+            if parts.is_empty() {
+                continue;
+            }
+            let recipe = content
+                .recipes
+                .iter()
+                .find(|r| r.output.0 == item.id)
+                .unwrap_or_else(|| panic!("no recipe makes {}", item.id));
+            for part in parts {
+                assert!(
+                    recipe.inputs.iter().any(|(id, _)| id.0 == part.item),
+                    "{} is not an input of {}",
+                    part.item,
+                    recipe.id
+                );
             }
         }
     }

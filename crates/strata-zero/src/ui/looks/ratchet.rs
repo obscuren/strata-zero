@@ -2,6 +2,7 @@
 //! threads, a rail on top and a taped grip. Pixels are half cells, folded into half
 //! blocks; text goes over the folded cells.
 
+use crate::ui::art::Dir;
 use crate::ui::cyberdeck::Pen;
 use crate::ui::hardware::rgb;
 use crate::ui::pixels::Pixels;
@@ -13,6 +14,63 @@ pub const H: u16 = 15;
 
 /// Where the sockets sit, as x, y, width and height: the muzzle, then the rail.
 pub const PLACES: [(i32, i32, u16, u16); 2] = [(66, 4, 22, 5), (34, 0, 24, 4)];
+
+/// A part of the gun: the part item's id, its rect whole (x, y, width, height), how far
+/// it moves on an exploded drawing, its balloon's left cell and its leader. The order
+/// is the part indexes of `draw_part`.
+pub type PartRow = (
+    &'static str,
+    (i32, i32, u16, u16),
+    (i16, i16),
+    (i32, i32),
+    (Dir, u8),
+);
+
+/// The gun's five parts: the receiver, the stock, the barrel, the magazine and the
+/// trigger group. The balloons sit where the drawing has room.
+pub const PARTS: [PartRow; 5] = [
+    (
+        "ratchet_receiver",
+        (24, 3, 36, 6),
+        (0, 0),
+        (24, 2),
+        (Dir::Down, 1),
+    ),
+    (
+        "ratchet_stock",
+        (2, 3, 22, 8),
+        (-5, 0),
+        (8, 2),
+        (Dir::Down, 1),
+    ),
+    (
+        "ratchet_barrel",
+        (60, 5, 10, 3),
+        (5, 0),
+        (64, 2),
+        (Dir::Down, 1),
+    ),
+    (
+        "ratchet_mag",
+        (35, 9, 16, 6),
+        (0, 1),
+        (28, 12),
+        (Dir::Right, 3),
+    ),
+    (
+        "ratchet_trigger",
+        (49, 9, 10, 3),
+        (0, 1),
+        (63, 11),
+        (Dir::Left, 2),
+    ),
+];
+
+const PART_RECEIVER: usize = 0;
+const PART_STOCK: usize = 1;
+const PART_BARREL: usize = 2;
+const PART_MAG: usize = 3;
+const PART_TRIGGER: usize = 4;
 
 /// Where stickers may lie, as inclusive x0, y0, x1, y1: the receiver's side (its
 /// stamping too), the grip down to the magazine's base, the stock's butt pad; less
@@ -51,7 +109,49 @@ const ALU_MID: Color = rgb(0x7d8893);
 /// The gun alone at the pen's origin; its sockets are left bare.
 pub fn draw(p: &mut Pen) {
     let mut c = Pixels::new(W, H);
-    // The wire stock, extended, to the left.
+    for part in 0..PARTS.len() {
+        paint(&mut c, part);
+    }
+    c.fold(p, 0, 0);
+    for part in 0..PARTS.len() {
+        label(p, part);
+    }
+}
+
+/// One part alone at the pen's origin, as it sits on the whole gun.
+pub fn draw_part(p: &mut Pen, part: usize) {
+    let mut c = Pixels::new(W, H);
+    paint(&mut c, part);
+    c.fold(p, 0, 0);
+    label(p, part);
+}
+
+/// A part's pixels. No two parts share a cell.
+fn paint(c: &mut Pixels, part: usize) {
+    match part {
+        PART_RECEIVER => receiver(c),
+        PART_STOCK => stock(c),
+        PART_BARREL => barrel(c),
+        PART_MAG => mag(c),
+        PART_TRIGGER => trigger(c),
+        _ => {}
+    }
+}
+
+/// A part's text, over its folded cells.
+fn label(p: &mut Pen, part: usize) {
+    match part {
+        PART_RECEIVER => receiver_stamps(p),
+        PART_MAG => {
+            // The label tape on the magazine's base plate.
+            p.put(36, 14, " GOOD STUFF ", INK, Some(LABEL_TAPE), false);
+        }
+        _ => {}
+    }
+}
+
+/// The wire stock, extended, to the left.
+fn stock(c: &mut Pixels) {
     c.hline(5, 24, 9, STOCK_HI);
     c.hline(5, 24, 16, STOCK);
     c.vline(14, 9, 17, STOCK);
@@ -63,7 +163,10 @@ pub fn draw(p: &mut Pen) {
     for y in (7..21).step_by(2) {
         c.px(3, y, Some(POLY_HI));
     }
-    // The receiver, a stamped box.
+}
+
+/// The receiver, a stamped box with its port, wear, charging knob and rail.
+fn receiver(c: &mut Pixels) {
     c.rect(24, 8, 60, 18, GM);
     c.rect(24, 16, 60, 18, GM_LOWER);
     c.hline(24, 60, 8, GM_HI);
@@ -81,7 +184,27 @@ pub fn draw(p: &mut Pen) {
     // The charging knob, top rear.
     c.rect(27, 6, 31, 8, GM_HI);
     c.hline(27, 31, 6, WEAR);
-    // The barrel and its threads, the muzzle's connector.
+    // The rail on top, the rail's connector.
+    for x in 34..58 {
+        c.px(x, 6, (x % 2 == 0).then_some(ALU));
+        c.px(x, 7, Some(ALU_MID));
+    }
+}
+
+/// The stamping on the receiver.
+fn receiver_stamps(p: &mut Pen) {
+    p.put(28, 6, "RATCHET", WEAR, Some(GM), false);
+    p.put(28, 7, "9×19", GM_EDGE, Some(GM), false);
+    p.put(34, 7, "SN", GM_EDGE, Some(GM), false);
+    p.put(37, 7, "░░░░", GM_EDGE, Some(GM), false);
+    // The filed-down selector: a bright lever over two marks.
+    p.put(46, 7, "S", GM_EDGE, Some(GM), false);
+    p.put(48, 7, "▬", WEAR, Some(GM), false);
+    p.put(50, 7, "∞", GM_EDGE, Some(GM), false);
+}
+
+/// The barrel and its threads, the muzzle's connector.
+fn barrel(c: &mut Pixels) {
     c.rect(60, 11, 66, 15, BARREL);
     c.hline(60, 66, 11, BARREL_HI);
     c.hline(60, 66, 13, BARREL_LO);
@@ -89,12 +212,10 @@ pub fn draw(p: &mut Pen) {
     for x in 66..70 {
         c.vline(x, 11, 15, if x % 2 == 0 { GOLD_HI } else { GOLD_DK });
     }
-    // The rail on top, the rail's connector.
-    for x in 34..58 {
-        c.px(x, 6, (x % 2 == 0).then_some(ALU));
-        c.px(x, 7, Some(ALU_MID));
-    }
-    // The grip with the magazine inside, the trigger and its guard in front of it.
+}
+
+/// The grip with the magazine inside, taped, and the magazine's base plate.
+fn mag(c: &mut Pixels) {
     c.rect(38, 18, 48, 27, POLY);
     c.vline(38, 18, 27, POLY_HI);
     for y in (19..27).step_by(2) {
@@ -105,20 +226,13 @@ pub fn draw(p: &mut Pen) {
     c.rect(39, 27, 47, 28, GM_LO);
     c.rect(35, 28, 51, 30, GM);
     c.hline(35, 51, 28, GM_HI);
+}
+
+/// The trigger and its guard, in front of the grip.
+fn trigger(c: &mut Pixels) {
     c.vline(49, 18, 24, GM_HI);
     c.hline(49, 58, 23, GM_HI);
     c.vline(58, 18, 24, GM_HI);
     c.rect(52, 18, 54, 21, WEAR);
     c.px(53, 21, Some(WEAR));
-    c.fold(p, 0, 0);
-    // The label tape on the magazine's base plate and the stamping on the receiver.
-    p.put(36, 14, " GOOD STUFF ", INK, Some(LABEL_TAPE), false);
-    p.put(28, 6, "RATCHET", WEAR, Some(GM), false);
-    p.put(28, 7, "9×19", GM_EDGE, Some(GM), false);
-    p.put(34, 7, "SN", GM_EDGE, Some(GM), false);
-    p.put(37, 7, "░░░░", GM_EDGE, Some(GM), false);
-    // The filed-down selector: a bright lever over two marks.
-    p.put(46, 7, "S", GM_EDGE, Some(GM), false);
-    p.put(48, 7, "▬", WEAR, Some(GM), false);
-    p.put(50, 7, "∞", GM_EDGE, Some(GM), false);
 }

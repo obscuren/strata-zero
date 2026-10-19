@@ -530,6 +530,46 @@ fn weapon_hardware_blueprints() {
     }
 }
 
+/// The deck's WORKBENCH on D'SHAWN's drawings: the Ratchet exploded with its barrel
+/// selected, then whole with a barrel in the pack, and a process sheet.
+#[test]
+#[ignore]
+fn workbench_sheets() {
+    let mut st = state_home();
+    st.character = game::Character::debug_runner(&st.content);
+    let map = MapScreen::walking(&mut st);
+    // Clear of the deck's signal jitter (three ticks in ninety).
+    st.tick += 200;
+    if st.tick % 90 < 3 {
+        st.tick += 3;
+    }
+    let sheet = |st: &mut AppState, keys: &[KeyCode]| {
+        let mut deck = Deck::new(st.tick);
+        deck.update(st, &[key(KeyCode::Char('4'))]);
+        for k in keys {
+            deck.update(st, &[key(*k)]);
+        }
+        deck
+    };
+    let ratchet = [KeyCode::Left, KeyCode::Down, KeyCode::Down];
+    let deck = sheet(&mut st, &ratchet);
+    for (w, h) in [(100, 30), (120, 40)] {
+        let name = format!("workbench_ratchet_{w}x{h}");
+        shot_stack(&name, &st, &[&map, &deck], (w, h));
+    }
+    let barrel = game::ItemId::new("ratchet_barrel");
+    st.character.give_item(&st.content, barrel, 1);
+    let deck = sheet(&mut st, &ratchet);
+    let name = "workbench_ratchet_whole_100x30";
+    shot_stack(name, &st, &[&map, &deck], (100, 30));
+    let stim = crate::screens::workbench::drawings(&st.content)
+        .iter()
+        .position(|&i| st.content.recipes[i].id.0 == "stim_batch")
+        .expect("a Stim batch sheet");
+    let deck = sheet(&mut st, &vec![KeyCode::Right; stim]);
+    shot_stack("workbench_stim_100x30", &st, &[&map, &deck], (100, 30));
+}
+
 /// GEAR & INVENTORY at each size: D'SHAWN with the Hushcan and Redeye fitted on the
 /// Ratchet and the rack on PRIMARY, then a fresh D'SHAWN with the pack filtered to
 /// hardware and the cursor on the Hushcan.
