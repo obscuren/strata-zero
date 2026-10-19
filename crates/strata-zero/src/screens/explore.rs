@@ -6400,6 +6400,12 @@ mod tests {
         );
         assert!(logged(&st, "white ICE hits · heat 5"), "{:?}", last(&st));
         assert_eq!(st.net.traces[&b].heat, 5);
+        assert!(
+            st.fx
+                .iter()
+                .any(|i| matches!(i.fx, game::Fx::Number { .. }) && i.label == "+5"),
+            "heat reads as a plus"
+        );
         // Grey: ten less the deck's rating a hit, a dump at zero.
         let mut st = state8();
         let mut s = MapScreen::explore(0);
@@ -6498,6 +6504,17 @@ mod tests {
         let focus = st.character.focus;
         roll(&mut st, &mut s);
         assert_eq!(last(&st), Some("attack · grey ICE 4/6"));
+        // The number lifts off the piece when the bolt lands, in the bolt's white.
+        let number = st
+            .fx
+            .iter()
+            .find(|i| matches!(i.fx, game::Fx::Number { tag: false }))
+            .expect("a number for the attack");
+        assert_eq!(
+            (number.label.as_str(), number.tint, number.targets[0]),
+            ("-2", Some(crate::net::BOLT_ATTACK), gate)
+        );
+        assert_eq!(number.started, st.tick + crate::net::ROLL_TICKS);
         pass_turn(&mut st, &mut s);
         assert!(logged(&st, "shield absorbs the hit"));
         assert_eq!(st.character.focus, focus);
@@ -6506,6 +6523,14 @@ mod tests {
         assert_eq!(last(&st), Some("attack · grey ICE 2/6"));
         pass_turn(&mut st, &mut s);
         assert_eq!(st.character.focus, focus - 9);
+        let drained = st
+            .fx
+            .iter()
+            .filter(|i| matches!(i.fx, game::Fx::Number { .. }) && i.label == "-9")
+            .last()
+            .expect("a number for the hit on you");
+        assert_eq!(drained.tint, Some(crate::net::BOLT_HIT));
+        assert_eq!(drained.targets[0], st.player.as_ref().unwrap().pos);
         roll(&mut st, &mut s);
         assert_eq!(last(&st), Some("grey ICE broken"), "{:?}", last(&st));
         assert!(st.net.run.is_none());

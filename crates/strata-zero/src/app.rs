@@ -65,6 +65,11 @@ pub struct AppState {
     pub fx: Vec<FxInstance>,
     /// Who stands against you on foot this session; cleared with the city.
     pub foes: Vec<crate::foes::Foe>,
+    /// Rounds fired this session: the roll's seed.
+    pub shots: u64,
+    /// Every round lands, or none; for tests.
+    #[cfg(test)]
+    pub force_hit: Option<bool>,
     /// Set when the screen should be repainted in full, as after a glitch kick.
     pub repaint: bool,
     /// Where the deck was last: its tab and the selected row per tab.
@@ -178,6 +183,9 @@ impl AppState {
             ground: game::Ground::default(),
             fx: Vec::new(),
             foes: Vec::new(),
+            shots: 0,
+            #[cfg(test)]
+            force_hit: None,
             repaint: false,
             deck_tab: Tab::Skills,
             deck_rows: [0; Tab::ALL.len()],

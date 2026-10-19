@@ -639,6 +639,11 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
                 ice.mode = IceMode::Awake { seen, lost: 0 };
                 ice.integrity
             };
+            // The damage lifts off the piece when the bolt lands.
+            if let Some(at) = target_pos(st, b, run.target) {
+                let started = st.tick + ROLL_TICKS;
+                number(st, at, format!("-{damage}"), Some(BOLT_ATTACK), started);
+            }
             if left == 0 {
                 st.net.run = None;
                 st.net.land(b, run.target, kind, Op::Attack, now);
@@ -1865,6 +1870,14 @@ fn hit(st: &mut AppState, b: BuildingId, i: usize) {
         .deck(&st.content)
         .map(|(_, d)| d.rating as u32)
         .unwrap_or(0);
+    // The number lifts off you when the bolt lands, in its colour.
+    let me = st.player.as_ref().map(|p| p.pos);
+    let landed = st.tick + ROLL_TICKS;
+    let colour = if grade == IceGrade::Black {
+        BOLT_BLACK
+    } else {
+        BOLT_HIT
+    };
     match grade {
         IceGrade::White => {
             let heat = st
@@ -1877,6 +1890,9 @@ fn hit(st: &mut AppState, b: BuildingId, i: usize) {
                 "white ICE hits · heat {}",
                 heat.min(game::DUMP_HEAT)
             ));
+            if let Some(me) = me {
+                number(st, me, "+5", Some(colour), landed);
+            }
             ice_heat(st, b, 5);
         }
         IceGrade::Grey => {
@@ -1884,6 +1900,9 @@ fn hit(st: &mut AppState, b: BuildingId, i: usize) {
             st.character.focus = st.character.focus.saturating_sub(drain);
             let focus = st.character.focus;
             st.warn(format!("grey ICE hits · focus {focus}"));
+            if let Some(me) = me {
+                number(st, me, format!("-{drain}"), Some(colour), landed);
+            }
             if focus == 0 {
                 dump(st, "grey ICE drained you");
             }
@@ -1901,6 +1920,9 @@ fn hit(st: &mut AppState, b: BuildingId, i: usize) {
             st.character.hp = st.character.hp.saturating_sub(damage);
             let hp = st.character.hp;
             st.warn(format!("black ICE hits · hp {hp}"));
+            if let Some(me) = me {
+                number(st, me, format!("-{damage}"), Some(colour), landed);
+            }
             let hp_max = st.character.hp_max(&st.content);
             let line = if deep { hp_max / 8 } else { hp_max / 4 };
             let cooling = if deep {
