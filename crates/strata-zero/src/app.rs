@@ -115,6 +115,8 @@ impl FxInstance {
             game::Fx::Glow { ticks, .. }
             | game::Fx::Bolt { ticks, .. }
             | game::Fx::Mark { ticks, .. } => self.started + ticks,
+            // The shot shapes get their lengths with their drawing.
+            _ => self.started,
         }
     }
 }

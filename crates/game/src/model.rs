@@ -499,6 +499,9 @@ pub struct Item {
     /// The stickers a new copy is made with.
     #[serde(default)]
     pub stickers: Vec<Stuck>,
+    /// What it shoots (weapons only).
+    #[serde(default)]
+    pub weapon: Option<Weapon>,
 }
 
 impl Item {
@@ -524,7 +527,7 @@ impl Item {
 }
 
 /// What an active ability does when fired.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Active {
     /// Paints the map within `radius` tiles into memory.
     Scan { radius: i32 },
@@ -532,6 +535,15 @@ pub enum Active {
     Ping { radius: i32 },
     /// Arcs to every net node within `radius` tiles and marks them; all `Fx`.
     Trace { radius: i32 },
+    /// Hits one target in sight within `range`: `damage` on a hit, `stun` turns of
+    /// stun; the roll uses `skill`; it costs `ap` action points.
+    Strike {
+        range: i32,
+        damage: u8,
+        stun: u8,
+        skill: SkillId,
+        ap: u8,
+    },
 }
 
 /// A visual effect an ability plays when it fires; the app draws it over the map.
@@ -547,9 +559,53 @@ pub enum Fx {
     Bolt { colour: (u8, u8, u8), ticks: u64 },
     /// A pulsing mark on every target tile, through walls, for `ticks`.
     Mark { colour: (u8, u8, u8), ticks: u64 },
+    /// A round in flight: a bright head and three trailing cells, `speed` tiles a tick.
+    Tracer { colour: (u8, u8, u8), speed: u8 },
+    /// A round drawn whole from muzzle to impact: white, then the colour, then ember.
+    Streak { colour: (u8, u8, u8) },
+    /// The muzzle: the firer's tile lit and the two cells toward the target; `big`
+    /// adds the cells above and below the muzzle.
+    Flash { big: bool },
+    /// A hit: the target lit red, chips flying off it.
+    Chips,
+    /// A miss: a spark where the round stopped.
+    Spark,
+    /// A hit: the cells around the target torn into the net's glitch set for a beat.
+    Tear,
+    /// The damage lifting off the target; `tag` draws it white on a red field.
+    Number { tag: bool },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Fx {
+    /// A round's way from muzzle to impact.
+    pub fn is_flight(&self) -> bool {
+        matches!(self, Fx::Tracer { .. } | Fx::Streak { .. })
+    }
+
+    /// Played at the impact: on a hit all but the spark, on a miss the spark alone.
+    pub fn is_impact(&self) -> bool {
+        matches!(self, Fx::Chips | Fx::Spark | Fx::Tear | Fx::Number { .. })
+    }
+
+    /// Any shape a shot is made of; only weapons and strike abilities play them.
+    pub fn is_shot(&self) -> bool {
+        self.is_flight() || self.is_impact() || matches!(self, Fx::Flash { .. })
+    }
+}
+
+/// A weapon's numbers: what it rolls with, what a round does, how many it fires,
+/// how far it reaches, and what one round looks like.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Weapon {
+    pub skill: SkillId,
+    pub damage: u8,
+    pub rounds: u8,
+    pub range: i32,
+    #[serde(default)]
+    pub fx: Vec<Fx>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AbilityKind {
     Passive,
     Active(Active),

@@ -1203,7 +1203,7 @@ mod tests {
             AbilityKind::Active(
                 Active::Scan { radius } | Active::Ping { radius } | Active::Trace { radius },
             ) => radius,
-            AbilityKind::Passive => 0,
+            AbilityKind::Active(Active::Strike { .. }) | AbilityKind::Passive => 0,
         };
         if radius != 0 {
             assert_ne!(reach(&eff), reach(base));

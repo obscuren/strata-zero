@@ -92,6 +92,19 @@ pub fn succeeds(roll: u8, power: i32, difficulty: i32) -> bool {
     roll as i32 + power > difficulty
 }
 
+/// The chance one round lands, in percent: reflex and the skill carry it, every
+/// tile past half range costs five, never below 5 nor above 95.
+pub fn hit_chance(reflex: u8, skilled: bool, dist: i32, range: i32) -> u8 {
+    let base = 50 + 4 * reflex as i32 + if skilled { 10 } else { 0 };
+    let falloff = 5 * (dist - range / 2).max(0);
+    (base - falloff).clamp(5, 95) as u8
+}
+
+/// A round lands when the roll (1..=100) is within the chance.
+pub fn round_hits(roll: u8, chance: u8) -> bool {
+    roll <= chance
+}
+
 /// The chance a turn succeeds, in percent: how many of the ten rolls beat it.
 pub fn chance(power: i32, difficulty: i32) -> u8 {
     (1..=10u8)
@@ -182,6 +195,15 @@ mod tests {
     use crate::content::Content;
     use crate::model::{ItemId, SkillId, TalentId, TemplateId};
     use citygen::{IceGrade, NodeKind};
+
+    #[test]
+    fn hit_chance_by_the_formula() {
+        assert_eq!(hit_chance(10, true, 2, 10), 95);
+        assert_eq!(hit_chance(10, true, 9, 10), 80);
+        assert_eq!(hit_chance(4, true, 1, 8), 76);
+        assert_eq!(hit_chance(0, false, 30, 8), 5);
+        assert!(round_hits(80, 80) && !round_hits(81, 80));
+    }
 
     #[test]
     fn the_run_maths() {

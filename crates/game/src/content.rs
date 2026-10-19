@@ -61,6 +61,10 @@ pub enum ContentError {
     LookInvalid { id: String, why: String },
     #[error("sticker `{id}`: {why}")]
     StickerInvalid { id: String, why: String },
+    #[error("weapon `{id}`: {why}")]
+    WeaponInvalid { id: String, why: String },
+    #[error("{where_}: {why}")]
+    FxInvalid { where_: String, why: String },
     #[error("tree {name}: {why}")]
     TreeInvalid { name: String, why: String },
 }
@@ -350,6 +354,27 @@ impl Content {
                     item: i.id.0.clone(),
                 });
             }
+            if let Some(w) = &i.weapon {
+                let bad = |why: &str| ContentError::WeaponInvalid {
+                    id: i.id.0.clone(),
+                    why: why.to_string(),
+                };
+                if i.kind != ItemKind::Weapon
+                    || !matches!(i.slot, Some(Slot::Primary | Slot::Secondary))
+                {
+                    return Err(bad("only a weapon in a hand slot shoots"));
+                }
+                if w.rounds == 0 || w.range < 1 || w.damage == 0 {
+                    return Err(bad("rounds, range and damage are at least one"));
+                }
+                need_skill(format!("item {}", i.id), &w.skill)?;
+                if w.fx.iter().filter(|f| f.is_flight()).count() > 1 {
+                    return Err(ContentError::FxInvalid {
+                        where_: format!("item {}", i.id),
+                        why: "a round has one flight shape at most".into(),
+                    });
+                }
+            }
             if (!i.perks.is_empty() || !i.grants.is_empty()) && i.slot.is_none() {
                 return Err(ContentError::PerkWithoutSlot {
                     item: i.id.0.clone(),
@@ -442,6 +467,16 @@ impl Content {
                 return Err(ContentError::FxOnPassive {
                     ability: a.id.0.clone(),
                 });
+            }
+            let strikes = matches!(a.kind, AbilityKind::Active(Active::Strike { .. }));
+            if !strikes && a.fx.iter().any(Fx::is_shot) {
+                return Err(ContentError::FxInvalid {
+                    where_: format!("ability {}", a.id),
+                    why: "only a strike plays shot shapes".into(),
+                });
+            }
+            if let AbilityKind::Active(Active::Strike { skill, .. }) = &a.kind {
+                need_skill(format!("ability {}", a.id), skill)?;
             }
         }
         for r in &self.recipes {
@@ -733,6 +768,138 @@ impl Boon {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_ratchet_and_the_scrap_nine_are_weapons() {
+        let c = Content::load().unwrap();
+        let w = c
+            .item(&ItemId::new("ratchet_smg"))
+            .unwrap()
+            .weapon
+            .clone()
+            .unwrap();
+        assert_eq!(
+            (w.skill.0.as_str(), w.damage, w.rounds, w.range),
+            ("handguns", 4, 3, 10)
+        );
+        assert!(
+            matches!(
+                w.fx[..],
+                [
+                    Fx::Flash { big: true },
+                    Fx::Streak { .. },
+                    Fx::Chips,
+                    Fx::Spark,
+                    Fx::Number { tag: false }
+                ]
+            ),
+            "{:?}",
+            w.fx
+        );
+        let p = c
+            .item(&ItemId::new("scrap_nine"))
+            .unwrap()
+            .weapon
+            .clone()
+            .unwrap();
+        assert_eq!((p.damage, p.rounds, p.range), (5, 1, 8));
+        assert!(matches!(p.fx[1], Fx::Tracer { speed: 3, .. }), "{:?}", p.fx);
+        assert!(c.item(&ItemId::new("shiv_blade")).unwrap().weapon.is_none());
+    }
+
+    #[test]
+    fn static_is_a_strike_the_neural_port_grants() {
+        let c = Content::load().unwrap();
+        let a = c.ability(&AbilityId::new("static")).unwrap();
+        assert!(
+            matches!(
+                a.kind,
+                AbilityKind::Active(Active::Strike {
+                    range: 8,
+                    damage: 6,
+                    stun: 1,
+                    ap: 2,
+                    ..
+                })
+            ),
+            "{:?}",
+            a.kind
+        );
+        assert!(
+            matches!(
+                a.fx[..],
+                [
+                    Fx::Flash { big: false },
+                    Fx::Streak { .. },
+                    Fx::Tear,
+                    Fx::Number { tag: true }
+                ]
+            ),
+            "{:?}",
+            a.fx
+        );
+        assert!(
+            c.item(&ItemId::new("neural_port"))
+                .unwrap()
+                .grants
+                .contains(&AbilityId::new("static"))
+        );
+    }
+
+    #[test]
+    fn weapon_validation() {
+        let good = Content::load().unwrap();
+        let weapon = good
+            .item(&ItemId::new("scrap_nine"))
+            .unwrap()
+            .weapon
+            .clone()
+            .unwrap();
+        let at = |c: &Content, id: &str| c.items.iter().position(|i| i.id.0 == id).unwrap();
+        // Armour with a weapon.
+        let mut c = good.clone();
+        let i = at(&c, "salvage_jacket");
+        c.items[i].weapon = Some(weapon.clone());
+        assert!(matches!(
+            c.validate(),
+            Err(ContentError::WeaponInvalid { .. })
+        ));
+        // No rounds.
+        let mut c = good.clone();
+        let i = at(&c, "scrap_nine");
+        c.items[i].weapon.as_mut().unwrap().rounds = 0;
+        assert!(matches!(
+            c.validate(),
+            Err(ContentError::WeaponInvalid { .. })
+        ));
+        // An unknown skill.
+        let mut c = good.clone();
+        let i = at(&c, "scrap_nine");
+        c.items[i].weapon.as_mut().unwrap().skill = SkillId::new("juggling");
+        assert!(matches!(
+            c.validate(),
+            Err(ContentError::UnknownSkill { .. })
+        ));
+        // Two flight shapes.
+        let mut c = good.clone();
+        let i = at(&c, "scrap_nine");
+        c.items[i]
+            .weapon
+            .as_mut()
+            .unwrap()
+            .fx
+            .push(Fx::Streak { colour: (1, 1, 1) });
+        assert!(matches!(c.validate(), Err(ContentError::FxInvalid { .. })));
+        // A shot shape on a scan.
+        let mut c = good.clone();
+        let a = c
+            .abilities
+            .iter()
+            .position(|a| a.id.0 == "netscan")
+            .unwrap();
+        c.abilities[a].fx.push(Fx::Chips);
+        assert!(matches!(c.validate(), Err(ContentError::FxInvalid { .. })));
+    }
 
     #[test]
     fn the_ratchet_builds_from_five_parts_and_older_recipes_have_steps() {

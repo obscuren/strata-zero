@@ -548,7 +548,7 @@ pub fn apply(
             ch.fired.insert(id.clone(), tick);
             let effects = match active {
                 Active::Scan { radius } => vec![Effect::Reveal { radius }],
-                Active::Ping { .. } | Active::Trace { .. } => Vec::new(),
+                Active::Ping { .. } | Active::Trace { .. } | Active::Strike { .. } => Vec::new(),
             };
             Ok(Outcome {
                 message: format!("{}: pulse sent", ability.name),

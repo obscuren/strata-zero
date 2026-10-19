@@ -114,6 +114,14 @@ impl Overlay for FxOverlay<'_> {
                     tick,
                     buf,
                 ),
+                // The shot shapes are drawn with their own task.
+                Fx::Tracer { .. }
+                | Fx::Streak { .. }
+                | Fx::Flash { .. }
+                | Fx::Chips
+                | Fx::Spark
+                | Fx::Tear
+                | Fx::Number { .. } => {}
                 Fx::Mark { colour, .. } => mark(
                     inst,
                     Rgb(colour.0, colour.1, colour.2),
