@@ -376,8 +376,9 @@ strip, the failsafe or a program in your warez and the deck's glass reads it
 out; `space` picks a program up and drops it in a slot, ejects one, or lifts
 the failsafe's cover and throws it. A deck you carry shows its own blueprint
 but can't be worked until you equip it; hardware and the Ratchet have blueprints
-of their own, drawn large; anything else reads MISSING BLUEPRINT for now. `esc`
-puts a carried program back, shuts a lifted cover, then closes the window.
+of their own, drawn large, and a sticker shows itself; anything else reads
+MISSING BLUEPRINT for now. `esc` puts a carried program back, shuts a lifted
+cover, then closes the window.
 
 Some items have sockets: the pawn deck has two, one on each side, and the Ratchet
 SMG has a muzzle and a rail. Press `m` in its blueprint for the modding mode. The
@@ -390,8 +391,20 @@ connector, the deck's gold contacts, the gun's gold threads or its bare rail, an
 says what it takes; a fitted piece sits in its place on the item. Deck hardware:
 Coldfin vI cuts the trace of each cast by 10%, Coldfin vII by 20%, and the Sidecar
 co-processor adds 1 to program power. Weapon hardware: the Hushcan, a muzzle
-piece, adds 1 to Cool, and the Redeye sight, for the rail, adds 1 to Reflex. On
-the rack and in the pack an item's marks follow its name: a deck shows its program
+piece, adds 1 to Cool, and the Redeye sight, for the rail, adds 1 to Reflex.
+
+Stickers are cosmetic decals you find and carry in your pack. Anything you can
+wear that has a drawing takes them: the pawn decks and the Ratchet. Press `s` in
+its blueprint for the sticker mode: the item turns grey except where stickers may
+go, and a tray of your stickers rises over its foot, each drawn as it looks.
+`space` picks one and puts it on the item; the arrows move it, `r` turns it a
+quarter clockwise (lettering stands up, its letters upright), `space` sticks it
+and `esc` puts it back. `↑` from the tray points at the stickers already on;
+`space` twice peels one, and it tears. Stickers never cover a working part, may
+overlap (the newest on top) and change nothing but the look. Every pawn deck
+comes with NO FUTURE and x‿x. You can only do this out of the Net.
+
+On the rack and in the pack an item's marks follow its name: a deck shows its program
 slots, then its sockets, as in `■■■■■ · ■□` (a filled box is a program in use or
 a piece fitted, an empty one is free); on the rack the marks sit in the tile's bottom edge. The same marks tell two copies of one item
 apart in the slot popup and on the ground. Skills and categories inspect as
