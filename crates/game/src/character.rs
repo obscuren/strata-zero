@@ -1,5 +1,6 @@
 //! The player's character: stats, skills, talents, equipment, inventory and quest log.
 
+use crate::action::Host;
 use crate::build::Build;
 use crate::content::Content;
 use crate::model::*;
@@ -683,6 +684,16 @@ impl Character {
         }
     }
 
+    /// Puts a stack in the pack: a per-copy item that has no copy gets one on the
+    /// way in, so hardware can always be fitted by id.
+    pub fn stow_item(&mut self, c: &Content, s: Stack) {
+        if s.copy.is_none() {
+            self.give_item(c, s.item, s.qty);
+        } else {
+            self.stow(s);
+        }
+    }
+
     /// A new copy of an item, every socket empty.
     pub fn new_copy(&mut self, c: &Content, item: &ItemId) -> ItemCopy {
         let id = CopyId(self.next_copy);
@@ -724,13 +735,54 @@ impl Character {
         self.inventory.iter().find(|s| s.copy_id() == Some(id))
     }
 
-    /// The copy a slot wears, when what it wears is held per copy.
+    /// The copy a slot wears. It counts only while the slot still wears something:
+    /// `equipment` is the truth, and `worn` can be left behind.
     pub fn worn_copy(&self, slot: Slot) -> Option<&ItemCopy> {
+        self.equipment.get(&slot)?;
         self.worn.get(&slot)
     }
 
     pub fn is_worn_copy(&self, id: CopyId) -> bool {
-        self.worn.values().any(|k| k.id == id)
+        self.worn
+            .iter()
+            .any(|(slot, k)| k.id == id && self.equipment.contains_key(slot))
+    }
+
+    /// The item a host is: what the slot wears, or the copy's item in the pack.
+    pub fn host_item(&self, host: Host) -> Option<&ItemId> {
+        match host {
+            Host::Worn(slot) => self.equipped(slot),
+            Host::Pack(id) => self.copy_in_pack(id).map(|s| &s.item),
+        }
+    }
+
+    /// The host's copy, when it has one.
+    pub fn host_copy(&self, host: Host) -> Option<&ItemCopy> {
+        match host {
+            Host::Worn(slot) => self.worn_copy(slot),
+            Host::Pack(id) => self.copy_in_pack(id)?.copy.as_ref(),
+        }
+    }
+
+    /// The host's copy to change. A per-copy item worn without one gets it now.
+    pub fn host_copy_mut(&mut self, c: &Content, host: Host) -> Option<&mut ItemCopy> {
+        match host {
+            Host::Worn(slot) => {
+                let item = self.equipment.get(&slot)?.clone();
+                if !c.item(&item).is_some_and(Item::per_copy) {
+                    return None;
+                }
+                if !self.worn.contains_key(&slot) {
+                    let copy = self.new_copy(c, &item);
+                    self.worn.insert(slot, copy);
+                }
+                self.worn.get_mut(&slot)
+            }
+            Host::Pack(id) => self
+                .inventory
+                .iter_mut()
+                .find_map(|s| s.copy.as_mut().filter(|k| k.id == id)),
+        }
     }
 
     /// How many of an item sit in the inventory (equipped items do not count).

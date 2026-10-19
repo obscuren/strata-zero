@@ -7,6 +7,13 @@ use crate::ground::Ground;
 use crate::model::*;
 use citygen::{Place, Pos};
 
+/// What hardware is fitted into: the deck being worn, or a copy in the pack.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Host {
+    Worn(Slot),
+    Pack(CopyId),
+}
+
 /// Everything a menu can ask for.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
@@ -47,6 +54,17 @@ pub enum Action {
         id: ItemId,
         at: usize,
     },
+    /// Fits a piece of hardware from the pack into a socket.
+    Fit {
+        host: Host,
+        socket: usize,
+        piece: CopyId,
+    },
+    /// Takes the piece out of a socket, back to the pack.
+    Unfit {
+        host: Host,
+        socket: usize,
+    },
 }
 
 /// Where the character stands: where drops land and takes come from.
@@ -79,6 +97,14 @@ fn name(c: &Content, id: &ItemId) -> String {
     c.item(id)
         .map(|i| i.name.clone())
         .unwrap_or_else(|| id.to_string())
+}
+
+/// A socket's name: the deck look's own where it has one, else its number.
+pub fn socket_name(c: &Content, item: &ItemId, socket: usize) -> String {
+    c.item(item)
+        .and_then(|i| i.deck)
+        .and_then(|d| d.look.socket_names().get(socket).copied())
+        .map_or_else(|| (socket + 1).to_string(), str::to_string)
 }
 
 /// Takes up to `qty` of an item out of the pack and returns what came out, in pack
@@ -250,7 +276,7 @@ pub fn apply(
             if n == 0 {
                 return Err(format!("no {} here", name(c, &item)));
             }
-            ch.give(item.clone(), n);
+            ch.give_item(c, item.clone(), n);
             done(format!("took {n}× `{}`", name(c, &item)))
         }
         Action::TakeCopy(copy) => {
@@ -274,7 +300,7 @@ pub fn apply(
             }
             let n: u32 = stacks.iter().map(|s| s.qty).sum();
             for s in stacks {
-                ch.stow(s);
+                ch.stow_item(c, s);
             }
             done(format!("took {n} items"))
         }
@@ -320,6 +346,81 @@ pub fn apply(
         Action::Load(id) => ch.load(c, &id).and_then(done),
         Action::Unload(id) => ch.unload(c, &id).and_then(done),
         Action::Slot { id, at } => ch.slot_at(c, &id, at).and_then(done),
+        Action::Fit {
+            host,
+            socket,
+            piece,
+        } => {
+            // Every refusal comes before the first change.
+            let host_item = ch
+                .host_item(host)
+                .and_then(|h| c.item(h))
+                .ok_or_else(|| "no such socket".to_string())?;
+            let kind = *host_item
+                .sockets
+                .get(socket)
+                .ok_or_else(|| "no such socket".to_string())?;
+            let i = pack_copy(ch, piece)?;
+            let piece_item = c
+                .item(&ch.inventory[i].item)
+                .ok_or_else(|| "not in your pack".to_string())?;
+            let hardware = piece_item
+                .hardware
+                .as_ref()
+                .ok_or_else(|| format!("`{}` is not hardware", piece_item.name))?;
+            if hardware.fits != kind {
+                return Err(format!(
+                    "`{}` does not fit a {}",
+                    piece_item.name,
+                    kind.fits()
+                ));
+            }
+            let sockets = host_item.sockets.len();
+            let host_id = host_item.id.clone();
+            let stack = ch.inventory.remove(i);
+            let copy = ch
+                .host_copy_mut(c, host)
+                .ok_or_else(|| "no such socket".to_string())?;
+            // A copy made before its item gained sockets still has room for them.
+            if copy.fitted.len() < sockets {
+                copy.fitted.resize(sockets, None);
+            }
+            let old = copy.fitted[socket].replace(stack);
+            let mut message = format!(
+                "`{}` fitted · socket {}",
+                piece_item.name,
+                socket_name(c, &host_id, socket)
+            );
+            if let Some(old) = old {
+                message.push_str(&format!(" · `{}` to the pack", name(c, &old.item)));
+                ch.stow(old);
+            }
+            done(message)
+        }
+        Action::Unfit { host, socket } => {
+            let host_id = ch
+                .host_item(host)
+                .cloned()
+                .ok_or_else(|| "no such socket".to_string())?;
+            let sockets = c.item(&host_id).map_or(0, |i| i.sockets.len());
+            if socket >= sockets {
+                return Err("no such socket".to_string());
+            }
+            let label = socket_name(c, &host_id, socket);
+            let filled = ch
+                .host_copy(host)
+                .is_some_and(|k| k.fitted.get(socket).is_some_and(Option::is_some));
+            if !filled {
+                return Err(format!("socket {label} is empty"));
+            }
+            let out = ch
+                .host_copy_mut(c, host)
+                .and_then(|k| k.fitted[socket].take())
+                .ok_or_else(|| format!("socket {label} is empty"))?;
+            let message = format!("`{}` out · to the pack", name(c, &out.item));
+            ch.stow(out);
+            done(message)
+        }
         Action::Fire(id) => {
             let ability = ch
                 .ability(c, &id)
@@ -957,5 +1058,198 @@ mod tests {
             !ch.loaded.contains(&id("crack")),
             "the last copy leaves the deck"
         );
+    }
+
+    fn runner() -> (Content, Character, Ground, At) {
+        let (c, _, g, at) = setup();
+        (c.clone(), Character::debug_runner(&c), g, at)
+    }
+
+    fn pack_id(ch: &Character, item: &str) -> CopyId {
+        ch.inventory
+            .iter()
+            .find(|s| s.item == id(item))
+            .and_then(Stack::copy_id)
+            .unwrap()
+    }
+
+    fn fit(socket: usize, piece: CopyId) -> Action {
+        Action::Fit {
+            host: Host::Worn(Slot::Deck),
+            socket,
+            piece,
+        }
+    }
+
+    #[test]
+    fn fit_moves_the_piece_into_the_socket() {
+        let (c, mut ch, mut g, at) = runner();
+        let piece = pack_id(&ch, "coldfin_2");
+        let out = apply(&mut ch, &mut g, &c, at, 0, fit(0, piece)).unwrap();
+        assert_eq!(out.message, "`Coldfin vII` fitted · socket L");
+        let held = ch.worn_copy(Slot::Deck).unwrap().fitted[0]
+            .as_ref()
+            .unwrap();
+        assert_eq!(held.copy_id(), Some(piece));
+        assert_eq!(ch.count(&id("coldfin_2")), 0, "fitted is not in the pack");
+    }
+
+    #[test]
+    fn fitting_a_filled_socket_swaps() {
+        let (c, mut ch, mut g, at) = runner();
+        let (two, one) = (pack_id(&ch, "coldfin_2"), pack_id(&ch, "coldfin_1"));
+        apply(&mut ch, &mut g, &c, at, 0, fit(0, two)).unwrap();
+        let out = apply(&mut ch, &mut g, &c, at, 0, fit(0, one)).unwrap();
+        assert_eq!(
+            out.message,
+            "`Coldfin vI` fitted · socket L · `Coldfin vII` to the pack"
+        );
+        assert_eq!(ch.count(&id("coldfin_2")), 1);
+        assert_eq!(pack_id(&ch, "coldfin_2"), two, "its own copy came back");
+    }
+
+    #[test]
+    fn unfit_returns_the_piece() {
+        let (c, mut ch, mut g, at) = runner();
+        let one = pack_id(&ch, "coldfin_1");
+        apply(&mut ch, &mut g, &c, at, 0, fit(0, one)).unwrap();
+        let unfit = Action::Unfit {
+            host: Host::Worn(Slot::Deck),
+            socket: 0,
+        };
+        let out = apply(&mut ch, &mut g, &c, at, 0, unfit.clone()).unwrap();
+        assert_eq!(out.message, "`Coldfin vI` out · to the pack");
+        assert!(ch.worn_copy(Slot::Deck).unwrap().fitted[0].is_none());
+        assert_eq!(pack_id(&ch, "coldfin_1"), one);
+        assert_eq!(
+            apply(&mut ch, &mut g, &c, at, 0, unfit).unwrap_err(),
+            "socket L is empty"
+        );
+    }
+
+    #[test]
+    fn fit_refusals_change_nothing() {
+        let (c, mut ch, mut g, at) = runner();
+        let one = pack_id(&ch, "coldfin_1");
+        ch.give_item(&c, id("rebuilt_deck"), 1);
+        let sidecar = pack_id(&ch, "rebuilt_deck");
+        ch.wear(Slot::Torso, id("salvage_jacket"), None);
+        let jacket = Action::Fit {
+            host: Host::Worn(Slot::Torso),
+            socket: 0,
+            piece: one,
+        };
+        for action in [
+            fit(2, one),
+            fit(0, CopyId(999)),
+            fit(0, sidecar),
+            jacket,
+            Action::Fit {
+                host: Host::Worn(Slot::Legs),
+                socket: 0,
+                piece: one,
+            },
+            Action::Fit {
+                host: Host::Pack(CopyId(999)),
+                socket: 0,
+                piece: one,
+            },
+            Action::Unfit {
+                host: Host::Worn(Slot::Torso),
+                socket: 0,
+            },
+        ] {
+            let before = ch.clone();
+            assert!(
+                apply(&mut ch, &mut g, &c, at, 0, action.clone()).is_err(),
+                "{action:?}"
+            );
+            assert_eq!(ch, before, "{action:?}");
+        }
+    }
+
+    #[test]
+    fn fit_refusal_messages() {
+        let (c, mut ch, mut g, at) = runner();
+        ch.give_item(&c, id("rebuilt_deck"), 1);
+        let sidecar = pack_id(&ch, "rebuilt_deck");
+        let refused =
+            |ch: &mut Character, g: &mut Ground, a| apply(ch, g, &c, at, 0, a).unwrap_err();
+        assert_eq!(refused(&mut ch, &mut g, fit(2, sidecar)), "no such socket");
+        assert_eq!(
+            refused(&mut ch, &mut g, fit(0, sidecar)),
+            "`Rebuilt pawn deck` is not hardware"
+        );
+    }
+
+    #[test]
+    fn fit_into_a_carried_deck() {
+        let (c, mut ch, mut g, at) = runner();
+        ch.give_item(&c, id("rebuilt_deck"), 1);
+        let deck = pack_id(&ch, "rebuilt_deck");
+        let piece = pack_id(&ch, "coldfin_1");
+        let action = Action::Fit {
+            host: Host::Pack(deck),
+            socket: 1,
+            piece,
+        };
+        let out = apply(&mut ch, &mut g, &c, at, 0, action).unwrap();
+        assert_eq!(out.message, "`Coldfin vI` fitted · socket R");
+        let held = ch.copy_in_pack(deck).unwrap().copy.as_ref().unwrap();
+        assert_eq!(
+            held.fitted[1].as_ref().and_then(Stack::copy_id),
+            Some(piece)
+        );
+    }
+
+    #[test]
+    fn a_deck_worn_without_a_copy_takes_hardware() {
+        let (c, mut ch, mut g, at) = setup();
+        ch.equipment.insert(Slot::Deck, id("rebuilt_deck"));
+        ch.worn.clear();
+        ch.give_item(&c, id("coldfin_1"), 1);
+        let piece = pack_id(&ch, "coldfin_1");
+        apply(&mut ch, &mut g, &c, at, 0, fit(1, piece)).unwrap();
+        let worn = ch.worn_copy(Slot::Deck).unwrap();
+        assert_eq!(worn.fitted.len(), 2);
+        assert_eq!(
+            worn.fitted[1].as_ref().and_then(Stack::copy_id),
+            Some(piece)
+        );
+    }
+
+    #[test]
+    fn a_stale_worn_entry_is_no_worn_copy() {
+        let (_, mut ch, _, _) = runner();
+        let worn = ch.worn_copy(Slot::Deck).unwrap().id;
+        assert!(ch.is_worn_copy(worn));
+        ch.equipment.remove(&Slot::Deck);
+        assert!(ch.worn_copy(Slot::Deck).is_none());
+        assert!(!ch.is_worn_copy(worn));
+    }
+
+    #[test]
+    fn taking_a_copyless_stack_of_a_per_copy_item_makes_copies() {
+        let (c, mut ch, mut g, at) = setup();
+        g.add(at.place, at.pos, id("coldfin_1"), 1);
+        let take = Action::Take {
+            item: id("coldfin_1"),
+            qty: 1,
+        };
+        apply(&mut ch, &mut g, &c, at, 0, take).unwrap();
+        assert!(
+            ch.inventory
+                .iter()
+                .any(|s| s.item == id("coldfin_1") && s.copy.is_some())
+        );
+        g.add(at.place, at.pos, id("coldfin_2"), 2);
+        apply(&mut ch, &mut g, &c, at, 0, Action::TakeAll).unwrap();
+        let copies = ch
+            .inventory
+            .iter()
+            .filter(|s| s.item == id("coldfin_2"))
+            .map(|s| (s.qty, s.copy.is_some()))
+            .collect::<Vec<_>>();
+        assert_eq!(copies, vec![(1, true), (1, true)]);
     }
 }

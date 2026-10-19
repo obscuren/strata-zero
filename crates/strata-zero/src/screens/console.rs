@@ -50,8 +50,24 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 if !lies {
                     return Err("nothing can lie there".to_string());
                 }
-                st.ground
-                    .add(focus.place, focus.pos, item.id.clone(), qty);
+                if item.per_copy() {
+                    // Hardware lies as copies, so picking it up never makes it up.
+                    for _ in 0..qty {
+                        let copy = st.character.new_copy(&st.content, &item.id);
+                        st.ground.put(
+                            focus.place,
+                            focus.pos,
+                            game::Stack {
+                                item: item.id.clone(),
+                                qty: 1,
+                                copy: Some(copy),
+                            },
+                        );
+                    }
+                } else {
+                    st.ground
+                        .add(focus.place, focus.pos, item.id.clone(), qty);
+                }
                 Ok(format!("dropped {qty}× `{}`", item.name))
             }
         }
@@ -650,6 +666,20 @@ mod tests {
             "dropped 1× `Dead phone`"
         );
         assert_eq!(st.ground.at(at.place, at.pos)[0].qty, 1);
+        run(&mut st, at, "drop coldfin_1 2").unwrap();
+        let lying = st.ground.at(at.place, at.pos);
+        assert_eq!(
+            lying
+                .iter()
+                .filter(|s| s.item == ItemId::new("coldfin_1"))
+                .map(|s| (s.qty, s.copy.is_some()))
+                .collect::<Vec<_>>(),
+            vec![(1, true), (1, true)],
+            "hardware lies as copies"
+        );
+        // Back to the phone alone for what follows.
+        let phone = st.ground.take_all(at.place, at.pos).remove(0);
+        st.ground.put(at.place, at.pos, phone);
         let wall = {
             let city = st.city.as_ref().unwrap();
             let pos = (0..60)

@@ -30,6 +30,8 @@ pub fn handles_items(action: &Action) -> bool {
             | Action::Load(_)
             | Action::Unload(_)
             | Action::Slot { .. }
+            | Action::Fit { .. }
+            | Action::Unfit { .. }
     )
 }
 
@@ -211,7 +213,7 @@ mod tests {
     use crate::render::Visibility;
     use crate::walker::Player;
     use citygen::{City, GenParams, Generator, SizePreset};
-    use game::{AbilityId, ItemId, Slot};
+    use game::{AbilityId, CopyId, Host, ItemId, Slot};
 
     fn city() -> City {
         Generator::run(GenParams {
@@ -253,6 +255,18 @@ mod tests {
             Action::Slot {
                 id: ItemId::new("attack"),
                 at: 0,
+            },
+            Action::EquipCopy(CopyId(1)),
+            Action::DropCopy(CopyId(1)),
+            Action::TakeCopy(CopyId(1)),
+            Action::Fit {
+                host: Host::Worn(Slot::Deck),
+                socket: 0,
+                piece: CopyId(1),
+            },
+            Action::Unfit {
+                host: Host::Worn(Slot::Deck),
+                socket: 0,
             },
         ] {
             let refused = perform(&mut st, action.clone());
