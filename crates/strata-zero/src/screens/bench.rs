@@ -14,8 +14,6 @@ use ratatui::style::{Color, Modifier, Style};
 
 /// The readout's middle run.
 const WHITE: Color = Color::Rgb(0xe8, 0xe8, 0xec);
-/// The rows at the foot of the body that belong to the tray: four, then the readout.
-const TRAY_ROWS: u16 = 5;
 
 /// What modding keeps between frames. Inspect keeps its own.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -60,9 +58,9 @@ impl Bench {
         ScreenCmd::Stay
     }
 
-    /// The item where inspect draws it, grey but for its sockets, the brackets on the
-    /// pointed one and the readout on the body's last row. The tray's rows, from the
-    /// drawing's left edge on, are left as drawn: the tray paints them.
+    /// The item where inspect draws it, grey but for its sockets (cables and all,
+    /// to the body's edges), the brackets on the pointed one and the readout on the
+    /// body's last row.
     pub fn draw(
         &self,
         st: &AppState,
@@ -75,15 +73,7 @@ impl Bench {
         art.draw(origin, body, buf);
         let places = art.sockets();
         let rects: Vec<Rect> = places.iter().map(|s| on_screen(origin, s)).collect();
-        let tray = Rect::new(
-            origin.0,
-            body.bottom().saturating_sub(TRAY_ROWS),
-            body.right().saturating_sub(origin.0),
-            TRAY_ROWS,
-        )
-        .intersection(body);
-        let keep: Vec<Rect> = rects.iter().copied().chain([tray]).collect();
-        grey_area(buf, body, &keep, PANEL_BG);
+        grey_area(buf, body, &rects, PANEL_BG);
         let Some(place) = places.get(self.point) else {
             return;
         };

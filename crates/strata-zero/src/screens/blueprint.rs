@@ -273,9 +273,10 @@ mod tests {
     use crate::ui::chrome::MAGENTA;
     use crate::ui::cyberdeck::Part;
     use citygen::{GenParams, Generator, Place, Pos, SizePreset, StratumKind};
-    use game::{AbilityKind, Action, Character, Host};
+    use game::{AbilityKind, Action, Character, DeckLook, Host};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Cell;
     use ratatui::style::Color;
 
     fn state() -> AppState {
@@ -1056,6 +1057,40 @@ mod tests {
         let text = buffer_text(&buf);
         assert!(!text.contains("SLOT A"), "{text}");
         assert!(!text.contains("WAREZ"), "{text}");
+    }
+
+    #[test]
+    fn modding_greys_the_terminal_cable_too() {
+        let net = [CYAN, Color::Rgb(0x00, 0x3c, 0x46)];
+        for (w, h) in [(100, 30), (120, 40)] {
+            let mut st = state();
+            let mut bp = dshawns_deck(&mut st);
+            jack_in(&mut st);
+            // The terminal's cable, right of the drawing on rows 16-20, out to the
+            // body's edge; the bottom rows fall where the tray will go.
+            let r = window(w, h);
+            let body = Rect::new(r.x + 1, r.y + 1, r.width - 2, r.height - 4);
+            let (ox, oy) = crate::ui::cyberdeck::origin(DeckLook::Pawn, body);
+            let cable = |buf: &Buffer| -> Vec<((u16, u16), Cell)> {
+                let cells =
+                    (oy + 16..=oy + 20).flat_map(|y| (ox + 85..body.right()).map(move |x| (x, y)));
+                cells.map(|at| (at, buf[at].clone())).collect()
+            };
+            let before = cable(&screen(&bp, &st, w, h));
+            let cyan = before.iter().filter(|(_, c)| c.fg == CYAN).count();
+            assert!(cyan > 4, "{w}x{h}: the cable is drawn, {cyan} cyan cells");
+            press(&mut bp, &mut st, &[KeyCode::Char('m')]);
+            assert!(modding(&bp));
+            let after = cable(&screen(&bp, &st, w, h));
+            for ((at, was), (_, now)) in before.iter().zip(&after) {
+                assert_eq!(now.symbol(), was.symbol(), "{w}x{h} {at:?}");
+                assert_eq!(now.fg, grey(was.fg, Color::Reset), "{w}x{h} {at:?}");
+                assert_eq!(now.bg, grey(was.bg, PANEL_BG), "{w}x{h} {at:?}");
+                for c in [now.fg, now.bg] {
+                    assert!(!net.contains(&c), "{w}x{h} {at:?}: {c:?}");
+                }
+            }
+        }
     }
 
     #[test]
