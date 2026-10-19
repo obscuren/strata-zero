@@ -40,16 +40,12 @@ pub trait Art {
     /// The item's sockets in their order, in drawing coordinates.
     fn sockets(&self) -> Vec<SocketPlace>;
 
-    // TEMP(stickers plan): callers arrive in Tasks 4-5.
-    #[allow(dead_code)]
     /// Where stickers may lie on the drawing; `None` for one that takes none.
     fn sticker_area(&self) -> Option<StickerArea> {
         None
     }
 }
 
-// TEMP(stickers plan): callers arrive in Tasks 4-5.
-#[allow(dead_code)]
 /// The drawing cells a sticker may cover: the drawing's body, less its working parts.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StickerArea {
@@ -58,8 +54,6 @@ pub struct StickerArea {
     on: Vec<bool>,
 }
 
-// TEMP(stickers plan): callers arrive in Tasks 4-5.
-#[allow(dead_code)]
 impl StickerArea {
     /// A `w` by `h` drawing's area: the cells of every `keep` rect less those of every
     /// `drop` rect, each rect as inclusive x0, y0, x1, y1. Cells past the drawing are
@@ -85,6 +79,11 @@ impl StickerArea {
             }
         }
         area
+    }
+
+    /// The drawing's width and height.
+    pub fn size(&self) -> (u16, u16) {
+        (self.w, self.h)
     }
 
     pub fn contains(&self, x: i32, y: i32) -> bool {
@@ -128,8 +127,6 @@ impl StickerArea {
     }
 }
 
-// TEMP(stickers plan): callers arrive in Tasks 4-5.
-#[allow(dead_code)]
 /// Greys every cell of `body` whose drawing cell (from `origin`) is off the area, as
 /// `grey_area` does: the stickers' mode shows where they may go.
 pub fn grey_outside(
