@@ -83,10 +83,15 @@ impl Overlay for FxOverlay<'_> {
         buf: &mut Buffer,
         _style: &StylePack,
     ) {
-        for inst in self
+        // Flashes draw last, over the first cells of the round they light.
+        let is_flash = |i: &&FxInstance| matches!(i.fx, Fx::Flash { .. });
+        let ordered = self
             .fx
             .iter()
-            .filter(|i| i.place == map.place() && i.started <= tick && tick < i.until())
+            .filter(|i| !is_flash(i))
+            .chain(self.fx.iter().filter(is_flash));
+        for inst in
+            ordered.filter(|i| i.place == map.place() && i.started <= tick && tick < i.until())
         {
             let elapsed = tick - inst.started;
             match inst.fx {

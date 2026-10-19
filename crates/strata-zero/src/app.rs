@@ -210,7 +210,8 @@ impl AppState {
 
     /// The time of night as (hour, minute), from the game's tick.
     pub fn clock(&self) -> (u8, u8) {
-        crate::ui::hud::clock_at(self.clock_tick())
+        let m = self.minute_of_day();
+        ((m / 60) as u8, (m % 60) as u8)
     }
 
     /// The minute of the day: the living city's clock, or the tick's before there is one.

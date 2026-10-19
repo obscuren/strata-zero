@@ -140,6 +140,63 @@ fn shot_stack(name: &str, st: &AppState, stack: &[&dyn Screen], size: (u16, u16)
     write_svg(&dir, name, st, &draw_stack(st, stack, size), true);
 }
 
+/// The lot from the title's COMBAT entry, walked four tiles into the goon's sight,
+/// on your act half with the cursor on the goon.
+fn combat_aim() -> (AppState, MapScreen) {
+    let mut st = AppState::new();
+    let mut title = crate::screens::title::Title::new(0);
+    title.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Down)]);
+    let _ = title.update(&mut st, &[key(KeyCode::Enter)]);
+    let mut map = MapScreen::walking(&mut st);
+    st.tick += 100;
+    for _ in 0..4 {
+        map.update(&mut st, &[key(KeyCode::Char('l'))]);
+    }
+    map.update(&mut st, &[key(KeyCode::Char(' '))]);
+    map.update(&mut st, &[]);
+    (st, map)
+}
+
+#[test]
+#[ignore]
+fn combat_aim_on_the_lot() {
+    let (st, map) = combat_aim();
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    write_svg(
+        &dir,
+        "combat_aim",
+        &st,
+        &draw_stack(&st, &[&map], (100, 30)),
+        false,
+    );
+}
+
+#[test]
+#[ignore]
+fn combat_burst_in_flight() {
+    let (mut st, mut map) = combat_aim();
+    st.force_hit = Some(true);
+    map.update(&mut st, &[key(KeyCode::Char(' '))]);
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    // One, five and nine ticks into the burst: the flash, the second round's
+    // streak with the first number up, the third round landing.
+    for (name, ticks) in [
+        ("combat_burst_1", 1),
+        ("combat_burst_5", 4),
+        ("combat_burst_9", 4),
+    ] {
+        st.tick += ticks;
+        if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
+            world.advance(city, world.tick() + ticks);
+        }
+        write_svg(&dir, name, &st, &draw_stack(&st, &[&map], (100, 30)), false);
+    }
+}
+
 #[test]
 #[ignore]
 fn keypad_over_the_home_floor() {

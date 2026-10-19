@@ -308,9 +308,7 @@ impl MapScreen {
     /// next foe, space fires, a strike ability's number fires it, esc drops the
     /// cursor. `None` for a key that is not the cursor's.
     fn handle_firing(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
-        let Some((place, me)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
-            return None;
-        };
+        let (place, me) = st.player.as_ref().map(|p| (p.place, p.pos))?;
         if let Some(dir) = dir_for(k.code) {
             let from = self.target.unwrap_or(me);
             let to = from.step(dir);
@@ -2476,6 +2474,17 @@ impl Screen for MapScreen {
             .target
             .filter(|_| self.firing(st))
             .and_then(|t| crate::foes::foe_at(st, self.place, t));
+        // The readout steps aside while a shot's pictures play on the target.
+        let shooting = self.target.is_some_and(|t| {
+            st.fx.iter().any(|i| {
+                i.place == self.place
+                    && i.fx.is_shot()
+                    && st.tick < i.until()
+                    && i.targets
+                        .first()
+                        .is_some_and(|p| p.y == t.y && (p.x - t.x).abs() <= 2)
+            })
+        });
         let fire =
             self.target
                 .filter(|_| self.firing(st))
@@ -2483,7 +2492,9 @@ impl Screen for MapScreen {
                     line: &fire_line,
                     target: t,
                     on_foe: aimed_foe.is_some(),
-                    readout: aimed_foe.map(|i| Self::aim_readout(st, i)),
+                    readout: aimed_foe
+                        .filter(|_| !shooting)
+                        .map(|i| Self::aim_readout(st, i)),
                 });
         if let Some(o) = fire.as_ref() {
             overlays.push(o);
@@ -3100,6 +3111,51 @@ mod tests {
         s.update(&mut st, &[key(KeyCode::Char('.'))]);
         let text = draw_screen(&s, &st, 100, 30);
         assert!(text.contains("THE GOON ACTS"), "{text}");
+    }
+
+    /// The whole street fight from the title's COMBAT entry: walk into the goon's
+    /// sight, aim, fire until it drops, calm.
+    #[test]
+    fn a_whole_street_fight() {
+        let mut st = AppState::new();
+        let mut title = crate::screens::title::Title::new(0);
+        title.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Down)]);
+        let ScreenCmd::Switch { to: map, .. } = title.update(&mut st, &[key(KeyCode::Enter)])
+        else {
+            panic!("the lot")
+        };
+        let _ = map;
+        let mut s = MapScreen::walking(&mut st);
+        st.force_hit = Some(true);
+        // Four tiles east: at eight tiles the goon sees you.
+        for _ in 0..4 {
+            s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        }
+        assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(10, 8));
+        assert!(st.net.engaged.is_some(), "{:?}", last(&st));
+        assert!(logged(&st, "ENGAGED · the goon has you"));
+        let mut rounds = 0;
+        while !st.foes[0].down && rounds < 6 {
+            settle(&mut st, &mut s);
+            assert!(crate::net::your_turn(&st));
+            if crate::net::phase(&st) == Some(crate::net::Phase::Move) {
+                s.update(&mut st, &[key(KeyCode::Char(' '))]);
+            }
+            assert_eq!(s.target, Some(st.foes[0].pos), "the cursor on the goon");
+            s.update(&mut st, &[key(KeyCode::Char(' '))]);
+            assert!(logged(&st, "you fire · goon 4 · 4 · 4"), "{:?}", last(&st));
+            s.update(&mut st, &[key(KeyCode::Char('.'))]);
+            rounds += 1;
+        }
+        assert!(st.foes[0].down, "{rounds} turns: {:?}", st.foes[0]);
+        assert!(logged(&st, "goon down"));
+        // The round ends with nothing hunting: calm.
+        settle(&mut st, &mut s);
+        assert!(st.net.engaged.is_none(), "{:?}", st.net.engaged);
+        assert!(logged(&st, "calm"));
+        assert!(st.character.hp > 0);
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(!text.contains("ENGAGED"), "{text}");
     }
 
     #[test]
@@ -7046,8 +7102,7 @@ mod tests {
         let drained = st
             .fx
             .iter()
-            .filter(|i| matches!(i.fx, game::Fx::Number { .. }) && i.label == "-9")
-            .last()
+            .rfind(|i| matches!(i.fx, game::Fx::Number { .. }) && i.label == "-9")
             .expect("a number for the hit on you");
         assert_eq!(drained.tint, Some(crate::net::BOLT_HIT));
         assert_eq!(drained.targets[0], st.player.as_ref().unwrap().pos);

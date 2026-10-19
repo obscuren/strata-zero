@@ -591,6 +591,9 @@ pub fn location(city: &City, interiors: &Interiors, place: Place, pos: Pos) -> S
             .unwrap_or_else(|| city.name.clone());
         return format!("{district} · Net");
     }
+    if city.is_lot() {
+        return format!("{} · {}", city.name, stratum.label());
+    }
     let tile = city.tile(stratum, pos);
     let place = tile
         .and_then(|t| t.building)
