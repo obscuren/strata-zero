@@ -5,10 +5,64 @@ use crate::content::Content;
 use crate::model::*;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// A copy's id, unique for the character that made it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct CopyId(pub u32);
+
+/// One copy of an item that carries state of its own.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ItemCopy {
+    pub id: CopyId,
+    /// One entry per socket; a fitted piece is a stack of one with its own copy.
+    pub fitted: Vec<Option<Stack>>,
+}
+
+impl ItemCopy {
+    /// What its fitted pieces weigh.
+    fn fitted_weight(&self, c: &Content) -> f32 {
+        self.fitted.iter().flatten().map(|s| s.weight(c)).sum()
+    }
+
+    fn fitted_value(&self, c: &Content) -> u32 {
+        self.fitted.iter().flatten().map(|s| s.value(c)).sum()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Stack {
     pub item: ItemId,
     pub qty: u32,
+    /// The copy, for an item held per copy: such a stack holds one and never merges.
+    pub copy: Option<ItemCopy>,
+}
+
+impl Stack {
+    /// A stack of an item with no state of its own.
+    pub fn new(item: ItemId, qty: u32) -> Stack {
+        Stack {
+            item,
+            qty,
+            copy: None,
+        }
+    }
+
+    pub fn copy_id(&self) -> Option<CopyId> {
+        self.copy.as_ref().map(|k| k.id)
+    }
+
+    /// The stack's weight, fitted pieces included.
+    pub fn weight(&self, c: &Content) -> f32 {
+        let own = c
+            .item(&self.item)
+            .map_or(0.0, |i| i.weight * self.qty as f32);
+        own + self.copy.as_ref().map_or(0.0, |k| k.fitted_weight(c))
+    }
+
+    /// The stack's value, fitted pieces included.
+    pub fn value(&self, c: &Content) -> u32 {
+        let own = c.item(&self.item).map_or(0, |i| i.value * self.qty);
+        own + self.copy.as_ref().map_or(0, |k| k.fitted_value(c))
+    }
 }
 
 /// Where an ability comes from.
@@ -55,6 +109,8 @@ pub struct Character {
     /// Innate abilities; categories and equipment add more (see `abilities`).
     pub abilities: Vec<AbilityId>,
     pub equipment: BTreeMap<Slot, ItemId>,
+    /// The copy of each worn item held per copy; a stateless worn item has none.
+    pub worn: BTreeMap<Slot, ItemCopy>,
     pub inventory: Vec<Stack>,
     /// The tick each active ability last fired, for cooldowns.
     pub fired: BTreeMap<AbilityId, u64>,
@@ -65,6 +121,8 @@ pub struct Character {
     pub talent_points: u32,
     /// Programs loaded into the jacked deck, in loading order; each is also in the pack.
     pub loaded: Vec<ItemId>,
+    /// The id the next copy takes.
+    pub next_copy: u32,
 }
 
 impl Character {
@@ -92,12 +150,14 @@ impl Character {
             talents: BTreeMap::new(),
             abilities: Vec::new(),
             equipment: BTreeMap::new(),
+            worn: BTreeMap::new(),
             inventory: Vec::new(),
             fired: BTreeMap::new(),
             stat_points: b.points_left(c).max(0) as u32,
             sp: b.sp_left(c).max(0) as u32,
             talent_points: cr.talent_points,
             loaded: Vec::new(),
+            next_copy: 0,
         };
         let mut kit: Vec<(ItemId, u32)> = Vec::new();
         if let Some(p) = b.profession.as_ref().and_then(|id| c.profession(id)) {
@@ -105,7 +165,8 @@ impl Character {
             kit.extend(p.kit.iter().cloned());
         }
         kit.extend(b.kit.iter().cloned());
-        // The first item that fits a free slot is worn; everything else is packed.
+        // The first item that fits a free slot is worn, as a new copy when it is held
+        // per copy; everything else is packed.
         for (id, qty) in kit {
             let Some(item) = c.item(&id) else { continue };
             let mut qty = qty;
@@ -113,10 +174,11 @@ impl Character {
                 && qty > 0
                 && !ch.equipment.contains_key(&slot)
             {
-                ch.equipment.insert(slot, id.clone());
+                let copy = item.per_copy().then(|| ch.new_copy(c, &id));
+                ch.wear(slot, id.clone(), copy);
                 qty -= 1;
             }
-            ch.give(id, qty);
+            ch.give_item(c, id, qty);
         }
         ch.hp = ch.hp_max(c);
         ch.load_all(c);
@@ -282,8 +344,9 @@ impl Character {
     }
 
     /// The debug runner: Vex's build as D'SHAWN at level 50 with every talent at
-    /// its best, full HP and focus, a rebuilt five-slot deck jacked in and every
-    /// program that fits loaded. For the title's NEW GAME (DEBUG).
+    /// its best, full HP and focus, a rebuilt five-slot deck jacked in with its
+    /// sockets empty, the deck hardware in the pack and every program that fits
+    /// loaded. For the title's NEW GAME (DEBUG).
     pub fn debug_runner(c: &Content) -> Character {
         let mut d = Self::from_template(c, &TemplateId::new("vex"))
             .expect("the vex template is in the content");
@@ -296,8 +359,13 @@ impl Character {
         d.focus = d.focus_max(c);
         d.give(ItemId::new("backdoor"), 1);
         // The pawnshop deck goes back to the pack; the rebuilt one takes its slot.
-        if let Some(old) = d.equipment.insert(Slot::Deck, ItemId::new("rebuilt_deck")) {
-            d.give(old, 1);
+        let deck = ItemId::new("rebuilt_deck");
+        let copy = d.new_copy(c, &deck);
+        if let Some(old) = d.wear(Slot::Deck, deck, Some(copy)) {
+            d.stow(old);
+        }
+        for id in ["coldfin_1", "coldfin_2", "sidecar"] {
+            d.give_item(c, ItemId::new(id), 1);
         }
         d.load_all(c);
         d
@@ -573,15 +641,96 @@ impl Character {
         (ready > tick).then(|| ready - tick)
     }
 
-    /// Puts `qty` of an item in the pack, merging into a stack of the same item.
+    /// Puts `qty` of an item in the pack, merging into a stack of the same item that
+    /// holds no copy.
     pub fn give(&mut self, item: ItemId, qty: u32) {
         if qty == 0 {
             return;
         }
-        match self.inventory.iter_mut().find(|s| s.item == item) {
+        match self
+            .inventory
+            .iter_mut()
+            .find(|s| s.item == item && s.copy.is_none())
+        {
             Some(s) => s.qty = s.qty.saturating_add(qty),
-            None => self.inventory.push(Stack { item, qty }),
+            None => self.inventory.push(Stack::new(item, qty)),
         }
+    }
+
+    /// Puts `qty` of an item in the pack: an item held per copy as that many new
+    /// copies, anything else as `give` does.
+    pub fn give_item(&mut self, c: &Content, item: ItemId, qty: u32) {
+        if !c.item(&item).is_some_and(Item::per_copy) {
+            self.give(item, qty);
+            return;
+        }
+        for _ in 0..qty {
+            let copy = self.new_copy(c, &item);
+            self.inventory.push(Stack {
+                item: item.clone(),
+                qty: 1,
+                copy: Some(copy),
+            });
+        }
+    }
+
+    /// Puts a stack in the pack as it is: a copy as its own stack, anything else
+    /// merged by `give`.
+    pub fn stow(&mut self, s: Stack) {
+        match s.copy {
+            Some(_) => self.inventory.push(s),
+            None => self.give(s.item, s.qty),
+        }
+    }
+
+    /// A new copy of an item, every socket empty.
+    pub fn new_copy(&mut self, c: &Content, item: &ItemId) -> ItemCopy {
+        let id = CopyId(self.next_copy);
+        self.next_copy += 1;
+        let sockets = c.item(item).map_or(0, |i| i.sockets.len());
+        ItemCopy {
+            id,
+            fitted: vec![None; sockets],
+        }
+    }
+
+    /// Wears an item in its slot, with its copy when it has one; returns what the
+    /// slot wore, with that one's copy.
+    pub fn wear(&mut self, slot: Slot, item: ItemId, copy: Option<ItemCopy>) -> Option<Stack> {
+        let old = self.equipment.insert(slot, item);
+        let old_copy = match copy {
+            Some(k) => self.worn.insert(slot, k),
+            None => self.worn.remove(&slot),
+        };
+        old.map(|item| Stack {
+            item,
+            qty: 1,
+            copy: old_copy,
+        })
+    }
+
+    /// Takes off what a slot wears, with its copy.
+    pub fn take_off(&mut self, slot: Slot) -> Option<Stack> {
+        let item = self.equipment.remove(&slot)?;
+        Some(Stack {
+            item,
+            qty: 1,
+            copy: self.worn.remove(&slot),
+        })
+    }
+
+    /// The pack stack holding a copy.
+    pub fn copy_in_pack(&self, id: CopyId) -> Option<&Stack> {
+        self.inventory.iter().find(|s| s.copy_id() == Some(id))
+    }
+
+    /// The copy a slot wears, when what it wears is held per copy.
+    pub fn worn_copy(&self, slot: Slot) -> Option<&ItemCopy> {
+        self.worn.get(&slot)
+    }
+
+    pub fn is_worn_copy(&self, id: CopyId) -> bool {
+        self.worn.values().any(|k| k.id == id)
     }
 
     /// How many of an item sit in the inventory (equipped items do not count).
@@ -593,31 +742,29 @@ impl Character {
             .sum()
     }
 
-    /// Carried weight: inventory plus everything equipped.
+    /// Carried weight: inventory plus everything equipped, fitted pieces included.
     pub fn weight(&self, c: &Content) -> f32 {
-        let carried: f32 = self
-            .inventory
-            .iter()
-            .filter_map(|s| c.item(&s.item).map(|i| i.weight * s.qty as f32))
-            .sum();
+        let carried: f32 = self.inventory.iter().map(|s| s.weight(c)).sum();
         let worn: f32 = self
             .equipment
-            .values()
-            .filter_map(|id| c.item(id).map(|i| i.weight))
+            .iter()
+            .map(|(slot, id)| {
+                let own = c.item(id).map_or(0.0, |i| i.weight);
+                own + self.worn.get(slot).map_or(0.0, |k| k.fitted_weight(c))
+            })
             .sum();
         carried + worn
     }
 
     pub fn value(&self, c: &Content) -> u32 {
-        let carried: u32 = self
-            .inventory
-            .iter()
-            .filter_map(|s| c.item(&s.item).map(|i| i.value * s.qty))
-            .sum();
+        let carried: u32 = self.inventory.iter().map(|s| s.value(c)).sum();
         let worn: u32 = self
             .equipment
-            .values()
-            .filter_map(|id| c.item(id).map(|i| i.value))
+            .iter()
+            .map(|(slot, id)| {
+                let own = c.item(id).map_or(0, |i| i.value);
+                own + self.worn.get(slot).map_or(0, |k| k.fitted_value(c))
+            })
             .sum();
         carried + worn
     }
@@ -1276,8 +1423,64 @@ mod tests {
         assert_eq!(d.hp, d.hp_max(&c));
         assert_eq!(d.focus, d.focus_max(&c));
         let vex = vex(&c);
-        // Vex's kit, plus the Backdoor program and the pawnshop deck set aside
-        assert_eq!(d.inventory.len(), vex.inventory.len() + 2, "Vex's kit");
+        // Vex's kit, plus the Backdoor program, the pawnshop deck set aside and the
+        // three pieces of hardware
+        assert_eq!(d.inventory.len(), vex.inventory.len() + 5, "Vex's kit");
         assert!(d.loaded.starts_with(&vex.loaded));
+    }
+
+    #[test]
+    fn per_copy_items_never_stack() {
+        let c = Content::load().unwrap();
+        let mut ch = Character::from_template(&c, &TemplateId::new("kessler")).unwrap();
+        let (deck, crack) = (ItemId::new("rebuilt_deck"), ItemId::new("crack"));
+        assert_eq!((ch.count(&deck), ch.count(&crack)), (0, 0));
+        ch.give_item(&c, deck.clone(), 2);
+        let decks: Vec<&Stack> = ch.inventory.iter().filter(|s| s.item == deck).collect();
+        assert_eq!(decks.len(), 2);
+        for s in &decks {
+            assert_eq!(s.qty, 1);
+            assert_eq!(s.copy.as_ref().unwrap().fitted, vec![None, None]);
+        }
+        assert_ne!(decks[0].copy_id(), decks[1].copy_id());
+        ch.give_item(&c, crack.clone(), 2);
+        let cracks = || ch.inventory.iter().filter(|s| s.item == crack);
+        assert_eq!(cracks().count(), 1);
+        assert_eq!(cracks().next().unwrap(), &Stack::new(crack.clone(), 2));
+        ch.give(crack.clone(), 1);
+        assert_eq!(ch.count(&crack), 3);
+        assert_eq!(ch.inventory.iter().filter(|s| s.item == crack).count(), 1);
+        assert_eq!(ch.count(&deck), 2);
+    }
+
+    #[test]
+    fn debug_runner_carries_hardware() {
+        let c = Content::load().unwrap();
+        let d = Character::debug_runner(&c);
+        assert_eq!(d.equipped(Slot::Deck), Some(&ItemId::new("rebuilt_deck")));
+        let worn = d
+            .worn_copy(Slot::Deck)
+            .expect("the rebuilt deck is worn as a copy");
+        assert_eq!(worn.fitted, vec![None, None]);
+        assert!(d.is_worn_copy(worn.id));
+        let mut ids = vec![worn.id];
+        let mut at = Vec::new();
+        for name in ["coldfin_1", "coldfin_2", "sidecar"] {
+            let id = ItemId::new(name);
+            assert_eq!(d.count(&id), 1, "{name}");
+            let i = d.inventory.iter().position(|s| s.item == id).unwrap();
+            let copy = d.inventory[i]
+                .copy
+                .as_ref()
+                .expect("hardware is held per copy");
+            assert!(copy.fitted.is_empty(), "hardware has no sockets");
+            assert_eq!(d.copy_in_pack(copy.id), Some(&d.inventory[i]));
+            ids.push(copy.id);
+            at.push(i);
+        }
+        assert!(at.is_sorted(), "packed in order: {at:?}");
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), 4, "each its own copy");
     }
 }

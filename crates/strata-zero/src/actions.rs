@@ -19,10 +19,13 @@ pub fn handles_items(action: &Action) -> bool {
     matches!(
         action,
         Action::Equip(_)
+            | Action::EquipCopy(_)
             | Action::Unequip(_)
             | Action::Drop { .. }
+            | Action::DropCopy(_)
             | Action::Use(_)
             | Action::Take { .. }
+            | Action::TakeCopy(_)
             | Action::TakeAll
             | Action::Load(_)
             | Action::Unload(_)
@@ -39,7 +42,12 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
     // Pack-only actions work anywhere; the ground and the world need a body.
     let needs_body = matches!(
         action,
-        Action::Drop { .. } | Action::Take { .. } | Action::TakeAll | Action::Fire(_)
+        Action::Drop { .. }
+            | Action::DropCopy(_)
+            | Action::Take { .. }
+            | Action::TakeCopy(_)
+            | Action::TakeAll
+            | Action::Fire(_)
     );
     let (place, pos) = match st.player.as_ref().map(|p| (p.place, p.pos)) {
         Some(body) => body,
@@ -51,11 +59,17 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         Action::Fire(id) => Some(id.clone()),
         _ => None,
     };
-    let refresh_sight = matches!(action, Action::Equip(_) | Action::Unequip(_));
+    let refresh_sight = matches!(
+        action,
+        Action::Equip(_) | Action::EquipCopy(_) | Action::Unequip(_)
+    );
     if fired.is_some() {
         crate::net::spend_ap(st)?;
     }
-    let took = matches!(action, Action::Take { .. } | Action::TakeAll);
+    let took = matches!(
+        action,
+        Action::Take { .. } | Action::TakeCopy(_) | Action::TakeAll
+    );
     let outcome = game::apply(
         &mut st.character,
         &mut st.ground,

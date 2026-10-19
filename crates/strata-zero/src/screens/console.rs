@@ -40,7 +40,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 return Err(usage);
             }
             if cmd == "spawn" {
-                st.character.give(item.id.clone(), qty);
+                st.character.give_item(&st.content, item.id.clone(), qty);
                 Ok(format!("spawned {qty}× `{}`", item.name))
             } else {
                 let lies = st.city.as_ref().is_some_and(|c| {

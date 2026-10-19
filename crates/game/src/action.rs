@@ -1,7 +1,7 @@
 //! Item actions: everything a menu can do, applied by one function.
 
 use crate::build::Build;
-use crate::character::Character;
+use crate::character::{Character, CopyId, Stack};
 use crate::content::Content;
 use crate::ground::Ground;
 use crate::model::*;
@@ -10,17 +10,25 @@ use citygen::{Place, Pos};
 /// Everything a menu can ask for.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
+    /// Wears the first of an item in pack order, a copy when it is one.
     Equip(ItemId),
+    /// Wears one copy from the pack.
+    EquipCopy(CopyId),
     Unequip(Slot),
     Drop {
         item: ItemId,
         qty: u32,
     },
+    /// Drops one copy from the pack, with what is fitted in it.
+    DropCopy(CopyId),
     Use(ItemId),
+    /// Takes from the stacks without a copy; copies are taken by id.
     Take {
         item: ItemId,
         qty: u32,
     },
+    /// Takes one copy from the ground, with what is fitted in it.
+    TakeCopy(CopyId),
     TakeAll,
     Fire(AbilityId),
     /// Spends a creation point on a stat.
@@ -73,23 +81,72 @@ fn name(c: &Content, id: &ItemId) -> String {
         .unwrap_or_else(|| id.to_string())
 }
 
-/// Removes up to `qty` of an item from the pack; returns how many came out.
-pub fn remove_from_pack(ch: &mut Character, item: &ItemId, qty: u32) -> u32 {
+/// Takes up to `qty` of an item out of the pack and returns what came out, in pack
+/// order: copies whole, stacks without a copy split.
+pub fn take_from_pack(ch: &mut Character, item: &ItemId, qty: u32) -> Vec<Stack> {
     // A program that leaves the pack leaves the deck.
     if ch.count(item) <= qty {
         ch.loaded.retain(|l| l != item);
     }
+    let mut out = Vec::new();
     let mut left = qty;
-    for s in ch.inventory.iter_mut().filter(|s| &s.item == item) {
-        let n = left.min(s.qty);
-        s.qty -= n;
-        left -= n;
-        if left == 0 {
-            break;
+    let mut i = 0;
+    while left > 0 && i < ch.inventory.len() {
+        let s = &mut ch.inventory[i];
+        if &s.item != item || s.qty == 0 {
+            i += 1;
+        } else if s.qty <= left {
+            left -= s.qty;
+            out.push(ch.inventory.remove(i));
+        } else {
+            s.qty -= left;
+            out.push(Stack::new(item.clone(), left));
+            left = 0;
         }
     }
     ch.inventory.retain(|s| s.qty > 0);
-    qty - left
+    out
+}
+
+/// Removes up to `qty` of an item from the pack; returns how many came out.
+pub fn remove_from_pack(ch: &mut Character, item: &ItemId, qty: u32) -> u32 {
+    take_from_pack(ch, item, qty).iter().map(|s| s.qty).sum()
+}
+
+/// Wears a stack of one taken from the pack; what the slot wore comes back to it.
+fn equip_stack(ch: &mut Character, c: &Content, item: &Item, slot: Slot, s: Stack) -> String {
+    let old = ch.wear(slot, s.item, s.copy);
+    clamp_hp(ch, c);
+    let mut message = match old {
+        Some(old) => {
+            let old_name = name(c, &old.item);
+            ch.stow(old);
+            format!("swapped `{old_name}` for `{}`", item.name)
+        }
+        None => format!("equipped `{}`", item.name),
+    };
+    // What is loaded always fits the jacked deck: a smaller one sends
+    // the last loaded back to the pack.
+    if let Some(deck) = item.deck {
+        let mut unloaded = Vec::new();
+        while ch.loaded_size(c) > deck.slots
+            && let Some(last) = ch.loaded.pop()
+        {
+            unloaded.push(format!("`{}`", name(c, &last)));
+        }
+        if !unloaded.is_empty() {
+            message.push_str(&format!(" · {} to inventory", unloaded.join(", ")));
+        }
+    }
+    message
+}
+
+/// Where a copy sits in the pack.
+fn pack_copy(ch: &Character, id: CopyId) -> Result<usize, String> {
+    ch.inventory
+        .iter()
+        .position(|s| s.copy_id() == Some(id))
+        .ok_or_else(|| "not in your pack".to_string())
 }
 
 fn clamp_hp(ch: &mut Character, c: &Content) {
@@ -126,49 +183,47 @@ pub fn apply(
             let slot = item
                 .slot
                 .ok_or_else(|| format!("{} has no slot", item.name))?;
-            remove_from_pack(ch, &id, 1);
-            let old = ch.equipment.insert(slot, id.clone());
-            clamp_hp(ch, c);
-            let mut message = match old {
-                Some(old) => {
-                    let old_name = name(c, &old);
-                    ch.give(old, 1);
-                    format!("swapped `{old_name}` for `{}`", item.name)
-                }
-                None => format!("equipped `{}`", item.name),
+            let Some(s) = take_from_pack(ch, &id, 1).pop() else {
+                return Err(format!("{} is not in your pack", item.name));
             };
-            // What is loaded always fits the jacked deck: a smaller one sends
-            // the last loaded back to the pack.
-            if let Some(deck) = item.deck {
-                let mut unloaded = Vec::new();
-                while ch.loaded_size(c) > deck.slots
-                    && let Some(last) = ch.loaded.pop()
-                {
-                    unloaded.push(format!("`{}`", name(c, &last)));
-                }
-                if !unloaded.is_empty() {
-                    message.push_str(&format!(" · {} to inventory", unloaded.join(", ")));
-                }
-            }
-            done(message)
+            done(equip_stack(ch, c, item, slot, s))
+        }
+        Action::EquipCopy(copy) => {
+            let i = pack_copy(ch, copy)?;
+            let id = &ch.inventory[i].item;
+            let item = c.item(id).ok_or_else(|| format!("unknown item {id}"))?;
+            let slot = item
+                .slot
+                .ok_or_else(|| format!("{} has no slot", item.name))?;
+            let s = ch.inventory.remove(i);
+            done(equip_stack(ch, c, item, slot, s))
         }
         Action::Unequip(slot) => {
-            let id = ch
-                .equipment
-                .remove(&slot)
+            let s = ch
+                .take_off(slot)
                 .ok_or_else(|| format!("nothing in the {} slot", slot.label()))?;
-            ch.give(id.clone(), 1);
+            let message = format!("unequipped `{}`", name(c, &s.item));
+            ch.stow(s);
             clamp_hp(ch, c);
-            done(format!("unequipped `{}`", name(c, &id)))
+            done(message)
         }
         Action::Drop { item, qty } => {
-            let n = qty.min(ch.count(&item));
-            if n == 0 {
+            let taken = take_from_pack(ch, &item, qty);
+            if taken.is_empty() {
                 return Err(format!("no {} to drop", name(c, &item)));
             }
-            remove_from_pack(ch, &item, n);
-            ground.add(at.place, at.pos, item.clone(), n);
+            let n: u32 = taken.iter().map(|s| s.qty).sum();
+            for s in taken {
+                ground.put(at.place, at.pos, s);
+            }
             done(format!("dropped {n}× `{}`", name(c, &item)))
+        }
+        Action::DropCopy(copy) => {
+            let i = pack_copy(ch, copy)?;
+            let s = ch.inventory.remove(i);
+            let message = format!("dropped 1× `{}`", name(c, &s.item));
+            ground.put(at.place, at.pos, s);
+            done(message)
         }
         Action::Use(id) => {
             let item = c.item(&id).ok_or_else(|| format!("unknown item {id}"))?;
@@ -191,32 +246,35 @@ pub fn apply(
             if ch.overburdened(c) {
                 return Err(over_capacity(ch, c));
             }
-            let have = ground
-                .at(at.place, at.pos)
-                .iter()
-                .find(|s| s.item == item)
-                .map(|s| s.qty)
-                .unwrap_or(0);
-            let n = qty.min(have);
+            let n = ground.take(at.place, at.pos, &item, qty);
             if n == 0 {
                 return Err(format!("no {} here", name(c, &item)));
             }
-            ground.take(at.place, at.pos, &item, n);
             ch.give(item.clone(), n);
             done(format!("took {n}× `{}`", name(c, &item)))
+        }
+        Action::TakeCopy(copy) => {
+            if ch.overburdened(c) {
+                return Err(over_capacity(ch, c));
+            }
+            let s = ground
+                .take_copy(at.place, at.pos, copy)
+                .ok_or_else(|| "not here".to_string())?;
+            let message = format!("took 1× `{}`", name(c, &s.item));
+            ch.stow(s);
+            done(message)
         }
         Action::TakeAll => {
             if ch.overburdened(c) {
                 return Err(over_capacity(ch, c));
             }
-            let stacks = ground.at(at.place, at.pos).to_vec();
+            let stacks = ground.take_all(at.place, at.pos);
             if stacks.is_empty() {
                 return Err("nothing here".to_string());
             }
             let n: u32 = stacks.iter().map(|s| s.qty).sum();
             for s in stacks {
-                ground.take(at.place, at.pos, &s.item, s.qty);
-                ch.give(s.item, s.qty);
+                ch.stow(s);
             }
             done(format!("took {n} items"))
         }
@@ -295,7 +353,7 @@ pub fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::character::Stack;
+    use crate::character::{CopyId, Stack};
 
     fn setup() -> (Content, Character, Ground, At) {
         let c = Content::load().unwrap();
@@ -322,19 +380,13 @@ mod tests {
             apply(&mut ch, &mut g, &c, at, 0, Action::Equip(id("copper_coil"))).is_err(),
             "no slot"
         );
-        ch.inventory.push(Stack {
-            item: id("hardhat"),
-            qty: 1,
-        });
+        ch.inventory.push(Stack::new(id("hardhat"), 1));
         let out = apply(&mut ch, &mut g, &c, at, 0, Action::Equip(id("hardhat"))).unwrap();
         assert_eq!(out.message, "equipped `Hardhat with visor`");
         assert_eq!(ch.equipped(Slot::Head), Some(&id("hardhat")));
         assert_eq!(ch.count(&id("hardhat")), 0);
         assert!(!ch.inventory.iter().any(|s| s.qty == 0));
-        ch.inventory.push(Stack {
-            item: id("mirrorshades"),
-            qty: 1,
-        });
+        ch.inventory.push(Stack::new(id("mirrorshades"), 1));
         let out = apply(
             &mut ch,
             &mut g,
@@ -443,10 +495,7 @@ mod tests {
         assert_eq!(ch.count(&id("soy_noodle_cup")), 0);
         // Above the max (a console heal, a later buff): nothing happens, nothing panics.
         ch.hp = 60;
-        ch.inventory.push(Stack {
-            item: id("stim_patch"),
-            qty: 1,
-        });
+        ch.inventory.push(Stack::new(id("stim_patch"), 1));
         let out = apply(&mut ch, &mut g, &c, at, 0, Action::Use(id("stim_patch"))).unwrap();
         assert_eq!(out.message, "used `Stim patch` · +0 hp");
         assert_eq!(ch.hp, 60);
@@ -481,10 +530,7 @@ mod tests {
         assert_eq!(out.message, "took 3 items", "units, not stacks");
         assert!(g.at(at.place, at.pos).is_empty());
         assert_eq!(ch.count(&id("copper_coil")), 3);
-        ch.inventory.push(Stack {
-            item: id("scrap_servo"),
-            qty: 40,
-        });
+        ch.inventory.push(Stack::new(id("scrap_servo"), 40));
         g.add(at.place, at.pos, id("bottle_caps"), 1);
         let err = apply(
             &mut ch,
@@ -708,5 +754,208 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out.message, "`Spoof` slotted · `Crack` to inventory");
+    }
+
+    /// Gives a rebuilt deck copy with `piece` fitted in `socket`; returns the
+    /// deck's copy and the piece's.
+    fn modded_deck(
+        c: &Content,
+        ch: &mut Character,
+        piece: &str,
+        socket: usize,
+    ) -> (CopyId, CopyId) {
+        ch.give_item(c, id("rebuilt_deck"), 1);
+        let fitted = ch.new_copy(c, &id(piece));
+        let piece_id = fitted.id;
+        let deck = ch
+            .inventory
+            .iter_mut()
+            .rev()
+            .find(|s| s.item == id("rebuilt_deck"))
+            .unwrap();
+        let copy = deck.copy.as_mut().unwrap();
+        copy.fitted[socket] = Some(Stack {
+            item: id(piece),
+            qty: 1,
+            copy: Some(fitted),
+        });
+        (copy.id, piece_id)
+    }
+
+    fn near(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-4
+    }
+
+    #[test]
+    fn wearing_a_copy_keeps_its_state() {
+        let (c, mut ch, mut g, at) = setup();
+        let (weight, value) = (ch.weight(&c), ch.value(&c));
+        let (deck, piece) = modded_deck(&c, &mut ch, "coldfin_2", 0);
+        let held = ch.copy_in_pack(deck).unwrap().clone();
+        assert!(near(held.weight(&c), 1.8 + 0.6), "{}", held.weight(&c));
+        assert_eq!(held.value(&c), 6000 + 1600);
+        assert!(near(ch.weight(&c), weight + 1.8 + 0.6));
+        let out = apply(&mut ch, &mut g, &c, at, 0, Action::EquipCopy(deck)).unwrap();
+        assert_eq!(
+            out.message,
+            "swapped `Pawnshop deck` for `Rebuilt pawn deck`"
+        );
+        let worn = ch.worn_copy(Slot::Deck).unwrap();
+        assert_eq!(worn.id, deck);
+        assert_eq!(
+            worn.fitted[0].as_ref().and_then(|s| s.copy_id()),
+            Some(piece)
+        );
+        assert!(ch.is_worn_copy(deck));
+        assert_eq!(ch.count(&id("rebuilt_deck")), 0);
+        assert!(ch.copy_in_pack(deck).is_none());
+        assert_eq!(ch.count(&id("pawnshop_deck")), 1, "the old deck comes back");
+        assert!(
+            near(ch.weight(&c), weight + 1.8 + 0.6),
+            "worn, the piece still weighs: {}",
+            ch.weight(&c)
+        );
+        assert_eq!(ch.value(&c), value + 6000 + 1600);
+        let out = apply(&mut ch, &mut g, &c, at, 0, Action::Unequip(Slot::Deck)).unwrap();
+        assert_eq!(out.message, "unequipped `Rebuilt pawn deck`");
+        assert!(ch.worn_copy(Slot::Deck).is_none() && !ch.is_worn_copy(deck));
+        assert_eq!(ch.copy_in_pack(deck), Some(&held), "back with its piece");
+        assert!(near(ch.weight(&c), weight + 1.8 + 0.6));
+    }
+
+    #[test]
+    fn equip_by_id_takes_the_first_copy() {
+        let (c, mut ch, mut g, at) = setup();
+        ch.give_item(&c, id("rebuilt_deck"), 2);
+        let ids: Vec<CopyId> = ch
+            .inventory
+            .iter()
+            .filter(|s| s.item == id("rebuilt_deck"))
+            .filter_map(|s| s.copy_id())
+            .collect();
+        assert_eq!(ids.len(), 2);
+        let equip = || Action::Equip(id("rebuilt_deck"));
+        apply(&mut ch, &mut g, &c, at, 0, equip()).unwrap();
+        assert_eq!(ch.worn_copy(Slot::Deck).map(|k| k.id), Some(ids[0]));
+        assert!(ch.copy_in_pack(ids[0]).is_none() && ch.copy_in_pack(ids[1]).is_some());
+        assert_eq!(ch.count(&id("pawnshop_deck")), 1);
+        let out = apply(&mut ch, &mut g, &c, at, 0, equip()).unwrap();
+        assert_eq!(
+            out.message,
+            "swapped `Rebuilt pawn deck` for `Rebuilt pawn deck`"
+        );
+        assert_eq!(ch.worn_copy(Slot::Deck).map(|k| k.id), Some(ids[1]));
+        let back = ch.copy_in_pack(ids[0]).expect("the old worn deck returns");
+        assert_eq!((back.qty, back.item.clone()), (1, id("rebuilt_deck")));
+        assert_eq!(ch.count(&id("rebuilt_deck")), 1);
+        // Back to the plain deck: no copy is left worn.
+        apply(
+            &mut ch,
+            &mut g,
+            &c,
+            at,
+            0,
+            Action::Equip(id("pawnshop_deck")),
+        )
+        .unwrap();
+        assert!(ch.worn_copy(Slot::Deck).is_none());
+        assert!(ch.copy_in_pack(ids[1]).is_some());
+        // A copy without a slot is refused before anything moves.
+        let piece = ch.new_copy(&c, &id("sidecar"));
+        ch.inventory.push(Stack {
+            item: id("sidecar"),
+            qty: 1,
+            copy: Some(piece.clone()),
+        });
+        let before = ch.clone();
+        assert_eq!(
+            apply(&mut ch, &mut g, &c, at, 0, Action::EquipCopy(piece.id)).unwrap_err(),
+            "Sidecar co-processor has no slot"
+        );
+        assert_eq!(
+            apply(&mut ch, &mut g, &c, at, 0, Action::EquipCopy(CopyId(999))).unwrap_err(),
+            "not in your pack"
+        );
+        assert_eq!(ch, before);
+    }
+
+    #[test]
+    fn drop_and_take_keep_copies() {
+        let (c, mut ch, mut g, at) = setup();
+        let (deck, _) = modded_deck(&c, &mut ch, "coldfin_1", 1);
+        let held = ch.copy_in_pack(deck).unwrap().clone();
+        let before = ch.clone();
+        assert_eq!(
+            apply(&mut ch, &mut g, &c, at, 0, Action::DropCopy(CopyId(999))).unwrap_err(),
+            "not in your pack"
+        );
+        assert_eq!(ch, before);
+        assert!(g.at(at.place, at.pos).is_empty());
+        let out = apply(&mut ch, &mut g, &c, at, 0, Action::DropCopy(deck)).unwrap();
+        assert_eq!(out.message, "dropped 1× `Rebuilt pawn deck`");
+        assert!(ch.copy_in_pack(deck).is_none());
+        assert_eq!(
+            g.at(at.place, at.pos),
+            std::slice::from_ref(&held),
+            "with its piece"
+        );
+        let take = Action::Take {
+            item: id("rebuilt_deck"),
+            qty: 1,
+        };
+        assert_eq!(
+            apply(&mut ch, &mut g, &c, at, 0, take).unwrap_err(),
+            "no Rebuilt pawn deck here"
+        );
+        let out = apply(&mut ch, &mut g, &c, at, 0, Action::TakeAll).unwrap();
+        assert_eq!(out.message, "took 1 items");
+        assert_eq!(ch.copy_in_pack(deck), Some(&held), "intact");
+        assert!(g.at(at.place, at.pos).is_empty());
+        apply(&mut ch, &mut g, &c, at, 0, Action::DropCopy(deck)).unwrap();
+        assert!(
+            apply(&mut ch, &mut g, &c, at, 0, Action::TakeCopy(CopyId(999))).is_err(),
+            "no such copy here"
+        );
+        let out = apply(&mut ch, &mut g, &c, at, 0, Action::TakeCopy(deck)).unwrap();
+        assert_eq!(out.message, "took 1× `Rebuilt pawn deck`");
+        assert_eq!(ch.copy_in_pack(deck), Some(&held));
+        assert!(g.at(at.place, at.pos).is_empty());
+        // Dropped by id, each copy lies as its own stack.
+        ch.give_item(&c, id("rebuilt_deck"), 1);
+        let out = apply(
+            &mut ch,
+            &mut g,
+            &c,
+            at,
+            0,
+            Action::Drop {
+                item: id("rebuilt_deck"),
+                qty: 5,
+            },
+        )
+        .unwrap();
+        assert_eq!(out.message, "dropped 2× `Rebuilt pawn deck`");
+        let pile = g.at(at.place, at.pos);
+        assert_eq!(pile.len(), 2);
+        assert_eq!(pile[0], held, "pack order");
+        assert!(pile.iter().all(|s| s.qty == 1 && s.copy.is_some()));
+    }
+
+    #[test]
+    fn take_from_pack_splits_plain_stacks_and_unloads() {
+        let (_, mut ch, _, _) = setup();
+        let out = take_from_pack(&mut ch, &id("copper_coil"), 2);
+        assert_eq!(out, vec![Stack::new(id("copper_coil"), 2)]);
+        assert_eq!(ch.count(&id("copper_coil")), 1);
+        assert!(take_from_pack(&mut ch, &id("hardhat"), 1).is_empty());
+        assert_eq!(remove_from_pack(&mut ch, &id("copper_coil"), 5), 1);
+        assert_eq!(ch.count(&id("copper_coil")), 0);
+        assert!(ch.loaded.contains(&id("crack")));
+        let out = take_from_pack(&mut ch, &id("crack"), 1);
+        assert_eq!(out, vec![Stack::new(id("crack"), 1)]);
+        assert!(
+            !ch.loaded.contains(&id("crack")),
+            "the last copy leaves the deck"
+        );
     }
 }

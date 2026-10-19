@@ -1806,10 +1806,9 @@ mod tests {
     /// Forty loose coils: more inventory rows than any pane has.
     fn stuff(st: &mut AppState) {
         use game::Stack;
-        st.character.inventory.extend((0..40).map(|_| Stack {
-            item: ItemId::new("copper_coil"),
-            qty: 1,
-        }));
+        st.character
+            .inventory
+            .extend((0..40).map(|_| Stack::new(ItemId::new("copper_coil"), 1)));
     }
 
     #[test]
@@ -1997,10 +1996,9 @@ mod tests {
             .expect("strip row");
         let x = (0..120u16).find(|x| buf[(*x, y)].symbol() == "o").unwrap();
         assert_eq!(buf[(x, y)].fg, MAGENTA);
-        st.character.inventory.push(game::Stack {
-            item: ItemId::new("scrap_servo"),
-            qty: 40,
-        });
+        st.character
+            .inventory
+            .push(game::Stack::new(ItemId::new("scrap_servo"), 40));
         let text = draw(&d, &st, 120, 35);
         assert!(text.contains("35.6/16.0 kg"), "{text}");
     }
@@ -2034,14 +2032,12 @@ mod tests {
     fn gear_slot_picker_equips_what_fits() {
         let mut st = state();
         walking(&mut st);
-        st.character.inventory.push(game::Stack {
-            item: ItemId::new("mirrorshades"),
-            qty: 1,
-        });
-        st.character.inventory.push(game::Stack {
-            item: ItemId::new("hardhat"),
-            qty: 1,
-        });
+        st.character
+            .inventory
+            .push(game::Stack::new(ItemId::new("mirrorshades"), 1));
+        st.character
+            .inventory
+            .push(game::Stack::new(ItemId::new("hardhat"), 1));
         let mut d = Deck::new(0);
         d.update(&mut st, &[key(KeyCode::Char('3'))]);
         let rows = d.rows(&st);

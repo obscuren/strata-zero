@@ -229,14 +229,8 @@ mod tests {
         assert!(text.contains(b.kind.label()));
         assert!(!text.contains("items"));
         let stacks = [
-            game::Stack {
-                item: game::ItemId::new("copper_coil"),
-                qty: 3,
-            },
-            game::Stack {
-                item: game::ItemId::new("dead_phone"),
-                qty: 1,
-            },
+            game::Stack::new(game::ItemId::new("copper_coil"), 3),
+            game::Stack::new(game::ItemId::new("dead_phone"), 1),
         ];
         let lines = inspector_lines(
             &MapRef::stratum_of(&c, StratumKind::Street),
