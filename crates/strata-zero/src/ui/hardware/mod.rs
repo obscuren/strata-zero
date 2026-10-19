@@ -46,7 +46,7 @@ impl Art for HardwareArt {
     }
 }
 
-const fn rgb(hex: u32) -> Color {
+pub(crate) const fn rgb(hex: u32) -> Color {
     Color::Rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
 }
 
@@ -115,7 +115,6 @@ pub fn draw_large(look: HardwareLook, mods: &[Mod], p: &mut Pen) {
 
 /// Where a piece of this kind draws inside its socket place: the offset from the
 /// place's corner and the size. The deck draws its own sides, so it has none.
-#[allow(dead_code)] // the gun's sockets draw their pieces through it
 pub fn footprint(kind: SocketKind) -> Option<(i32, i32, u16, u16)> {
     match kind {
         SocketKind::Muzzle => Some((4, 0, 18, 5)),
@@ -125,7 +124,6 @@ pub fn footprint(kind: SocketKind) -> Option<(i32, i32, u16, u16)> {
 }
 
 /// Draws the piece in the footprint of `place`; nothing for a deck socket.
-#[allow(dead_code)] // the gun's sockets draw their pieces through it
 pub fn draw_fitted(look: HardwareLook, place: &SocketPlace, p: &mut Pen) {
     let Some((dx, dy, _, _)) = footprint(place.kind) else {
         return;

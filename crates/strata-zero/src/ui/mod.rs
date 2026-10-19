@@ -11,6 +11,7 @@ pub mod form;
 pub mod hardware;
 pub mod hud;
 pub mod logo;
+pub mod looks;
 pub mod menu;
 pub mod meter;
 pub mod panel;

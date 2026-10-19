@@ -1,7 +1,8 @@
 //! The blueprint window: Inspect on an item draws it as what it is, over the deck
 //! screen. Every item opens the same window, in one of two modes: inspect, the item's
 //! own view, and modding, where any item with sockets and a drawing has them worked
-//! on. Decks and hardware have drawings so far; anything else reads MISSING BLUEPRINT.
+//! on. Decks, hardware and items with a look have drawings so far; anything else reads
+//! MISSING BLUEPRINT.
 
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::screens::bench::Bench;
@@ -10,8 +11,9 @@ use crate::screens::deck::status_strip;
 use crate::ui::art::Art;
 use crate::ui::chrome::{CYAN, DIM, PANEL_BG, put, solid};
 use crate::ui::hardware::HardwareArt;
+use crate::ui::looks::ItemArt;
 use crossterm::event::{KeyCode, KeyEvent};
-use game::{CopyId, Host, ItemId, Slot};
+use game::{CopyId, HardwareLook, Host, Item, ItemId, ItemLook, Slot};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -43,12 +45,26 @@ pub struct Blueprint {
     item: ItemId,
 }
 
+/// The looks of the pieces fitted in the host's copy of `item`, one per socket it
+/// draws. An item held without a copy has its sockets, all empty.
+fn fitted_looks(st: &AppState, host: Option<Host>, item: &Item) -> Vec<Option<HardwareLook>> {
+    let copy = host.and_then(|h| st.character.host_copy(h));
+    (0..item.drawn_sockets().len())
+        .map(|i| {
+            let piece = copy?.fitted.get(i)?.as_ref()?;
+            Some(st.content.item(&piece.item)?.hardware.as_ref()?.look)
+        })
+        .collect()
+}
+
 /// What inspect shows.
 enum Inspect {
     /// The deck as hardware: the jacked one works, any other copy only reads.
     Deck(DeckTab),
     /// A piece of hardware, drawn large to look at.
     Hardware(HardwareArt),
+    /// An item drawn by its look, with its fitted pieces.
+    Drawn(ItemLook),
     /// No drawing yet.
     Missing,
 }
@@ -64,10 +80,14 @@ enum Mode {
 
 impl Inspect {
     /// The drawing modding works on; none when there is no drawing.
-    fn art(&self, st: &AppState) -> Option<Box<dyn Art>> {
+    fn art(&self, st: &AppState, host: Option<Host>, item: &ItemId) -> Option<Box<dyn Art>> {
         match self {
             Inspect::Deck(tab) => Some(Box::new(tab.art(st))),
             Inspect::Hardware(art) => Some(Box::new(art.clone())),
+            Inspect::Drawn(look) => Some(Box::new(ItemArt {
+                look: *look,
+                fitted: fitted_looks(st, host, st.content.item(item)?),
+            })),
             Inspect::Missing => None,
         }
     }
@@ -76,8 +96,8 @@ impl Inspect {
 impl Blueprint {
     /// The window on `item`, `equipped` when Inspect was on the item worn (GEAR) rather
     /// than one in the pack, `copy` the copy it was on when the item is held per copy.
-    /// A deck the content knows draws as its look, hardware as itself; anything else
-    /// has no blueprint yet. It opens in inspect.
+    /// A deck the content knows draws as its look, hardware as itself, any other item
+    /// with a look as that; anything else has no blueprint yet. It opens in inspect.
     pub fn open(st: &AppState, item: ItemId, equipped: bool, copy: Option<CopyId>) -> Blueprint {
         let known = st.content.item(&item);
         let title_name = known.map_or_else(|| item.to_string(), |i| i.name.clone());
@@ -86,12 +106,14 @@ impl Blueprint {
                 let jacked = equipped && st.character.equipped(Slot::Deck) == Some(&item);
                 Inspect::Deck(DeckTab::for_deck(st.tick, item.clone(), jacked, copy, st))
             }
-            Some(i) => i.hardware.as_ref().map_or(Inspect::Missing, |h| {
-                Inspect::Hardware(HardwareArt {
+            Some(i) => match (&i.hardware, i.look) {
+                (Some(h), _) => Inspect::Hardware(HardwareArt {
                     look: h.look,
                     mods: h.mods.clone(),
-                })
-            }),
+                }),
+                (None, Some(look)) => Inspect::Drawn(look),
+                (None, None) => Inspect::Missing,
+            },
             None => Inspect::Missing,
         };
         // Worn only when the slot still wears it; else the copy in the pack.
@@ -133,7 +155,7 @@ impl Blueprint {
             return ScreenCmd::Stay;
         }
         if self.mode == Mode::Mod
-            && let Some(art) = self.inspect.art(st)
+            && let Some(art) = self.inspect.art(st, self.host, &self.item)
         {
             return self.bench.key(st, art.as_ref(), self.host, code);
         }
@@ -158,6 +180,12 @@ impl Blueprint {
             }
             Inspect::Hardware(art) => {
                 art.draw(art.origin(body), body, buf);
+                (None, "esc close")
+            }
+            Inspect::Drawn(_) => {
+                if let Some(art) = self.inspect.art(st, self.host, &self.item) {
+                    art.draw(art.origin(body), body, buf);
+                }
                 (None, "esc close")
             }
             Inspect::Missing => {
@@ -239,7 +267,7 @@ impl Screen for Blueprint {
         solid(buf, r);
         bezel(buf, r);
         let art = match self.mode {
-            Mode::Mod => self.inspect.art(st),
+            Mode::Mod => self.inspect.art(st, self.host, &self.item),
             Mode::Inspect => None,
         };
         let mode = if art.is_some() {
@@ -278,8 +306,9 @@ mod tests {
     use crate::ui::art::grey;
     use crate::ui::chrome::MAGENTA;
     use crate::ui::cyberdeck::Part;
+    use crate::ui::looks::ItemArt;
     use citygen::{GenParams, Generator, Place, Pos, SizePreset, StratumKind};
-    use game::{AbilityKind, Action, Character, DeckLook, Host};
+    use game::{AbilityKind, Action, Character, DeckLook, HardwareLook, Host, ItemLook};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Cell;
@@ -1521,5 +1550,173 @@ mod tests {
         assert_eq!(bp.bench.point, 1);
         let buf = screen(&bp, &st, 100, 30);
         assert!(inside(&buf, 100, 30, readout).starts_with("SOCKET R "));
+    }
+
+    const RED_LENS: Color = Color::Rgb(0xff, 0x2a, 0x3c);
+    const GOLD_BRIGHT: Color = Color::Rgb(0xe8, 0xc5, 0x4a);
+    const ALU_MID: Color = Color::Rgb(0x7d, 0x88, 0x93);
+    const WEAR: Color = Color::Rgb(0x8d, 0x93, 0x9c);
+    const GUNMETAL: Color = Color::Rgb(0x2e, 0x31, 0x38);
+
+    /// The window's body on a terminal of `w` by `h`: inside the frame, above the
+    /// status and hint rows.
+    fn body_of(w: u16, h: u16) -> Rect {
+        let r = window(w, h);
+        Rect::new(r.x + 1, r.y + 1, r.width - 2, r.height - 4)
+    }
+
+    /// The gun's drawing origin in the window on a terminal of `w` by `h`.
+    fn gun_origin(w: u16, h: u16) -> (u16, u16) {
+        let art = ItemArt {
+            look: ItemLook::Ratchet,
+            fitted: Vec::new(),
+        };
+        art.origin(body_of(w, h))
+    }
+
+    /// Vex's Ratchet, inspected from GEAR.
+    fn vexs_gun(st: &AppState) -> Blueprint {
+        let copy = st.character.worn_copy(Slot::Primary).map(|k| k.id);
+        Blueprint::open(st, id("ratchet_smg"), true, copy)
+    }
+
+    #[test]
+    fn ratchet_inspects_its_drawing() {
+        let mut st = state();
+        let mut bp = vexs_gun(&st);
+        let (w, h) = (100, 30);
+        let (title, _, hint) = rows_of(w, h);
+        let buf = screen(&bp, &st, w, h);
+        let line = inside(&buf, w, h, title);
+        assert!(line.contains(" BLUEPRINT · RATCHET SMG "), "{line}");
+        assert_eq!(inside(&buf, w, h, hint), "m mod · esc close");
+        assert!(!buffer_text(&buf).contains("MISSING BLUEPRINT"));
+        let (ox, oy) = gun_origin(w, h);
+        assert_eq!((ox, oy), (6, 6));
+        let at = |dx: u16, dy: u16| &buf[(ox + dx, oy + dy)];
+        let thread = at(66, 5);
+        assert_eq!((thread.symbol(), thread.fg), ("▄", GOLD_BRIGHT));
+        let rail = at(34, 3);
+        assert_eq!((rail.symbol(), rail.fg, rail.bg), ("▀", ALU, ALU_MID));
+        let stamp = at(28, 6);
+        assert_eq!((stamp.symbol(), stamp.fg, stamp.bg), ("R", WEAR, GUNMETAL));
+        // Nothing fitted: the muzzle is blank.
+        assert_eq!(at(74, 6).symbol(), " ");
+        assert!(matches!(
+            press(&mut bp, &mut st, &[KeyCode::Esc]),
+            ScreenCmd::Pop { .. }
+        ));
+    }
+
+    #[test]
+    fn ratchet_draws_its_fitted_pieces() {
+        let mut st = state();
+        st.character = Character::debug_runner(&st.content);
+        let bp = vexs_gun(&st);
+        for (socket, piece) in [(0, "hushcan"), (1, "redeye")] {
+            let piece = pack_copy(&st, piece);
+            let fit = Action::Fit {
+                host: Host::Worn(Slot::Primary),
+                socket,
+                piece,
+            };
+            perform(&mut st, fit).unwrap();
+        }
+        let buf = screen(&bp, &st, 100, 30);
+        let (ox, oy) = gun_origin(100, 30);
+        assert_eq!(buf[(ox + 74, oy + 6)].symbol(), "H");
+        let lens = &buf[(ox + 49, oy + 1)];
+        assert_eq!((lens.symbol(), lens.fg), ("●", RED_LENS));
+    }
+
+    #[test]
+    fn ratchet_modding() {
+        let mut st = state();
+        let mut bp = vexs_gun(&st);
+        let (w, h) = (100, 30);
+        let (title, readout, hint) = rows_of(w, h);
+        press(&mut bp, &mut st, &[KeyCode::Char('m')]);
+        assert!(modding(&bp));
+        let buf = screen(&bp, &st, w, h);
+        let line = inside(&buf, w, h, title);
+        assert!(line.contains(" MODDING · RATCHET SMG "), "{line}");
+        assert_eq!(
+            inside(&buf, w, h, hint),
+            "↑↓←→ socket · space choose · m inspect · esc close"
+        );
+        assert_eq!(
+            inside(&buf, w, h, readout),
+            "SOCKET MUZZLE ▸ empty · takes muzzle hardware"
+        );
+        // The receiver greys; the thread, in the muzzle's socket, keeps its colour.
+        let (ox, oy) = gun_origin(w, h);
+        let stamp = &buf[(ox + 28, oy + 6)];
+        assert_eq!(stamp.fg, grey(WEAR, PANEL_BG));
+        assert_eq!(buf[(ox + 68, oy + 6)].bg, GOLD_BRIGHT);
+        // The brackets sit one cell outside the pointed socket, inside the frame.
+        let r = window(w, h);
+        let frame = Rect::new(r.x + 1, r.y + 1, r.width - 2, r.height - 2);
+        let corner = &buf[(ox + 66 + 22, oy + 4 - 1)];
+        assert_eq!(corner.symbol(), "┓");
+        assert!(frame.contains((ox + 88, oy + 3).into()));
+
+        press(&mut bp, &mut st, &[KeyCode::Up]);
+        let buf = screen(&bp, &st, w, h);
+        assert!(inside(&buf, w, h, readout).starts_with("SOCKET MUZZLE"));
+        press(&mut bp, &mut st, &[KeyCode::Left]);
+        let buf = screen(&bp, &st, w, h);
+        assert!(inside(&buf, w, h, readout).starts_with("SOCKET RAIL"));
+        let corner = &buf[(ox + 34 - 1, oy - 1)];
+        assert_eq!(corner.symbol(), "┏");
+        assert!(frame.contains((ox + 33, oy - 1).into()));
+    }
+
+    #[test]
+    fn ratchet_fits_the_window_and_clears_the_band() {
+        let mut st = state();
+        st.character = Character::debug_runner(&st.content);
+        for (w, h) in [(100, 30), (120, 40)] {
+            let r = window(w, h);
+            let inner = Rect::new(r.x + 1, r.y + 1, r.width - 2, r.height - 2);
+            let body = body_of(w, h);
+            let above = Rect::new(inner.x, inner.y, inner.width, body.bottom() - 5 - inner.y);
+            let (ox, oy) = gun_origin(w, h);
+            let fitted = [Some(HardwareLook::Hushcan), Some(HardwareLook::Redeye)];
+            for fitted in [Vec::new(), fitted.to_vec()] {
+                // Drawn on the whole terminal, nothing may land outside the room.
+                let mut buf = Buffer::empty(Rect::new(0, 0, w, h));
+                let art = ItemArt {
+                    look: ItemLook::Ratchet,
+                    fitted,
+                };
+                art.draw((ox, oy), buf.area, &mut buf);
+                let blank = Buffer::empty(buf.area);
+                for y in 0..h {
+                    for x in 0..w {
+                        if buf[(x, y)] != blank[(x, y)] {
+                            assert!(above.contains((x, y).into()), "{w}x{h} ({x},{y})");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ratchet_without_a_copy() {
+        let mut st = state();
+        st.character.give(id("ratchet_smg"), 1);
+        let mut bp = Blueprint::open(&st, id("ratchet_smg"), false, None);
+        let (w, h) = (100, 30);
+        let (_, _, hint) = rows_of(w, h);
+        let buf = screen(&bp, &st, w, h);
+        assert_eq!(inside(&buf, w, h, hint), "esc close");
+        let (ox, oy) = gun_origin(w, h);
+        assert_eq!(buf[(ox + 28, oy + 6)].symbol(), "R");
+        assert!(matches!(
+            press(&mut bp, &mut st, &[KeyCode::Char('m')]),
+            ScreenCmd::Stay
+        ));
+        assert!(!modding(&bp));
     }
 }
