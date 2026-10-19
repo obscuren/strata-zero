@@ -3,8 +3,8 @@
 use crate::geom::{Grid, Pos, Rect, Size};
 use crate::ids::{BuildingId, DistrictId};
 use crate::net::Net;
-use crate::params::GenParams;
-use crate::tile::Tile;
+use crate::params::{GenParams, SizePreset};
+use crate::tile::{Terrain, Tile};
 use serde::{Deserialize, Serialize};
 
 /// A vertical level of the city. `Net` is reserved for the cyberspace projection.
@@ -410,6 +410,35 @@ impl City {
         }
     }
 
+    /// A flat lot for a fight: a road, a sidewalk around it, a wall around that, and
+    /// nothing else. No districts, buildings, connectors or net.
+    pub fn lot(seed: u64) -> City {
+        let mut city = City::empty(GenParams {
+            seed,
+            size: SizePreset::Custom { w: 41, h: 19 },
+            ..Default::default()
+        });
+        city.name = "the lot".to_string();
+        let street = city
+            .stratum_mut(StratumKind::Street)
+            .expect("a physical stratum");
+        street
+            .tiles
+            .fill_rect(Rect::new(0, 0, 41, 19), Tile::new(Terrain::Wall));
+        street
+            .tiles
+            .fill_rect(Rect::new(1, 1, 39, 17), Tile::new(Terrain::Sidewalk));
+        street
+            .tiles
+            .fill_rect(Rect::new(2, 2, 37, 15), Tile::new(Terrain::Road));
+        city
+    }
+
+    /// A lot, not a city: nothing was generated around its road.
+    pub fn is_lot(&self) -> bool {
+        self.districts.is_empty()
+    }
+
     pub fn stratum(&self, k: StratumKind) -> Option<&Stratum> {
         self.strata.iter().find(|s| s.kind == k)
     }
@@ -507,6 +536,37 @@ mod tests {
     use super::*;
     use crate::params::{GenParams, SizePreset};
     use crate::tile::Terrain;
+
+    #[test]
+    fn the_lot_is_a_walled_road_with_nothing_else() {
+        let lot = City::lot(1);
+        assert!(lot.validate().is_ok());
+        let street = StratumKind::Street;
+        let terrain = |x, y| lot.tile(street, Pos::new(x, y)).unwrap().terrain;
+        assert_eq!(terrain(2, 2), Terrain::Road);
+        assert_eq!(terrain(20, 9), Terrain::Road);
+        assert_eq!(terrain(37, 15), Terrain::Road);
+        assert_eq!(terrain(1, 1), Terrain::Sidewalk);
+        assert_eq!(terrain(39, 17), Terrain::Sidewalk);
+        assert_eq!(terrain(0, 0), Terrain::Wall);
+        assert_eq!(terrain(40, 18), Terrain::Wall);
+        assert_eq!(terrain(0, 8), Terrain::Wall);
+        assert!(lot.walkable(street, Pos::new(6, 8)));
+        assert!(lot.walkable(street, Pos::new(18, 8)));
+        assert!(!lot.walkable(street, Pos::new(0, 8)));
+        assert!(lot.districts.is_empty() && lot.buildings.is_empty() && lot.connectors.is_empty());
+        assert!(lot.is_lot());
+        assert_eq!(lot.name, "the lot");
+        assert_eq!(lot.size, Size { w: 41, h: 19 });
+        let city = crate::Generator::run(GenParams {
+            seed: 3,
+            size: SizePreset::Custom { w: 120, h: 60 },
+            districts: 4,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(!city.is_lot());
+    }
 
     #[test]
     fn span_iter_and_class() {
