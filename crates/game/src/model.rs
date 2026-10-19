@@ -639,8 +639,8 @@ pub struct Recipe {
     pub inputs: Vec<(ItemId, u32)>,
     pub output: (ItemId, u32),
     pub desc: String,
-    /// What the bench shows while it builds: two to four short lines, or none for a
-    /// recipe the sheet draws itself.
+    /// The steps the workbench's process sheet numbers in its box: up to four lines of
+    /// at most 16 characters. A sheet drawn exploded shows none.
     #[serde(default)]
     pub steps: Vec<String>,
 }

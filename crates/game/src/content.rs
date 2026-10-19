@@ -465,6 +465,10 @@ impl Content {
                     return Err(bad(format!("input `{id}` is held per copy")));
                 }
             }
+            let mut seen = HashSet::new();
+            if let Some((id, _)) = r.inputs.iter().find(|(id, _)| !seen.insert(id)) {
+                return Err(bad(format!("input `{id}` is listed twice")));
+            }
         }
         self.validate_creation(&need_item, &need_skill, &need_ability)?;
         Ok(())
@@ -771,6 +775,18 @@ mod tests {
             c.validate(),
             Err(ContentError::RecipeInvalid { .. })
         ));
+    }
+
+    #[test]
+    fn validate_refuses_an_input_listed_twice() {
+        let mut c = Content::load().unwrap();
+        let first = c.recipes[0].inputs[0].clone();
+        c.recipes[0].inputs.push((first.0, 1));
+        let err = c.validate();
+        assert!(
+            matches!(&err, Err(ContentError::RecipeInvalid { why, .. }) if why.contains("twice")),
+            "{err:?}"
+        );
     }
 
     #[test]
