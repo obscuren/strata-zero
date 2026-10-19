@@ -435,18 +435,31 @@ fn title_block(
     let x = l.title;
     let y = l.rule + 1;
     let edge = l.right;
+    // Every line ends one column inside the sheet's edge, cut with `…` when longer.
+    let room = (edge - x).max(0) as usize;
+    let mut line = |dy: i32, text: &str, style: Style| {
+        p.put_to(x, y + dy, &cut(text, room), style, edge);
+    };
     let index = format!("◂ {}/{n} ▸", i + 1);
     let ix = l.right - 3 - width(&index);
-    let room = (ix - 1 - x).max(0) as usize;
-    p.put_to(x, y, &cut(&r.name.to_uppercase(), room), bold(CYAN), ix - 1);
-    p.put_to(ix, y, &index, fg(DIM), edge);
+    let name_room = (ix - 1 - x).max(0) as usize;
+    let name = cut(&r.name.to_uppercase(), name_room);
+    line(0, &name, bold(CYAN));
 
+    // What it makes, without the kind when the whole line doesn't fit.
     let (out, count) = (&r.output.0, r.output.1);
     let makes = match st.content.item(out) {
-        Some(item) => format!("makes {count}× {} · {}", item.name, item.kind.label()),
+        Some(item) => {
+            let whole = format!("makes {count}× {} · {}", item.name, item.kind.label());
+            if width(&whole) as usize <= room {
+                whole
+            } else {
+                format!("makes {count}× {}", item.name)
+            }
+        }
         None => format!("makes {count}× {out}"),
     };
-    p.put_to(x, y + 1, &makes, fg(DIM), edge);
+    line(1, &makes, fg(DIM));
 
     let skill = skill_name(st, r);
     let needs = if st.character.has_skill(&r.skill) {
@@ -454,7 +467,7 @@ fn title_block(
     } else {
         (format!("needs {skill}"), MAGENTA)
     };
-    p.put_to(x, y + 2, &needs.0, fg(needs.1), edge);
+    line(2, &needs.0, fg(needs.1));
 
     let short: Vec<&Input> = ins.iter().filter(|i| !i.on_hand()).collect();
     let hand = match short.as_slice() {
@@ -468,14 +481,15 @@ fn title_block(
             MAGENTA,
         ),
     };
-    p.put_to(x, y + 3, &hand.0, fg(hand.1), edge);
+    line(3, &hand.0, fg(hand.1));
 
     let dwg = format!(
         "DWG {}/{n} · process · drawn {}",
         i + 1,
         st.character.handle.to_uppercase()
     );
-    p.put_to(x, y + 4, &dwg, fg(FAINTER), edge);
+    line(4, &dwg, fg(FAINTER));
+    p.put_to(ix, y, &index, fg(DIM), edge);
 }
 
 /// The recipe's skill by name, or its id when content doesn't know it.
@@ -579,8 +593,11 @@ fn process(p: &mut Pen, st: &AppState, r: &Recipe, ins: &[Input], sel: usize) {
         .enumerate()
         .map(|(i, s)| format!("{} {s}", i + 1))
         .collect();
+    // The steps sit two in from the edge, one when that leaves no space after the
+    // longest; the box widens only when a space each side won't fit.
     let longest = steps.iter().map(|s| width(s)).max().unwrap_or(0);
-    let w = PROCESS_W.max(longest + 6).max(width(&skill) + 4);
+    let w = PROCESS_W.max(longest + 4).max(width(&skill) + 4);
+    let inset = if longest + 5 <= w { 3 } else { 2 };
     let (px0, px1) = (jx + 7, jx + 6 + w);
     p.outline((px0, mid - 3, px1, mid + 3), DOUBLE, DIM);
     p.put(
@@ -590,30 +607,54 @@ fn process(p: &mut Pen, st: &AppState, r: &Recipe, ins: &[Input], sel: usize) {
         bold(CYAN),
     );
     for (i, s) in steps.iter().enumerate() {
-        p.put_to(px0 + 3, mid - 1 + i as i32, s, fg(TEXT), px1);
+        p.put_to(px0 + inset, mid - 1 + i as i32, s, fg(TEXT), px1);
     }
 
-    // Out to the result.
+    // Out to the result: the icon, then how many of what, wrapped onto as many lines
+    // as it needs, the box growing round the middle row.
     p.put(px1 + 1, mid, "────▶", faint);
     let ox0 = px1 + 7;
     let ox1 = f.right() as i32 - 2;
     if ox1 <= ox0 + 2 {
         return;
     }
-    p.outline((ox0, mid - 1, ox1, mid + 1), LIGHT, CYAN);
     let (out, count) = (&r.output.0, r.output.1);
     let item = st.content.item(out);
     let icon = item.map_or('?', |i| kind_icon(i.kind));
     let name = item.map_or_else(|| out.to_string(), |i| i.name.clone());
-    p.ch(ox0 + 2, mid, icon, bold(CYAN));
     let room = (ox1 - 1 - (ox0 + 4)).max(0) as usize;
-    p.put_to(
-        ox0 + 4,
-        mid,
-        &cut(&format!("{count}× {name}"), room),
-        bold(CYAN),
-        ox1,
-    );
+    let lines = wrap(&format!("{count}× {name}"), room);
+    let rows = lines.len().max(1) as i32;
+    let first = mid - (rows - 1) / 2;
+    p.outline((ox0, first - 1, ox1, first + rows), LIGHT, CYAN);
+    p.ch(ox0 + 2, first, icon, bold(CYAN));
+    for (i, line) in lines.iter().enumerate() {
+        p.put_to(ox0 + 4, first + i as i32, line, bold(CYAN), ox1);
+    }
+}
+
+/// `text` broken at spaces into lines of at most `room` cells; a word longer than
+/// the room is cut with `…`.
+fn wrap(text: &str, room: usize) -> Vec<String> {
+    if room == 0 {
+        return Vec::new();
+    }
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace().map(|w| cut(w, room)) {
+        if line.is_empty() {
+            line = word;
+        } else if width(&line) + 1 + width(&word) <= room as i32 {
+            line.push(' ');
+            line.push_str(&word);
+        } else {
+            lines.push(std::mem::replace(&mut line, word));
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
 }
 
 /// Where `n` input boxes go, stacked round `centre` between rows `y0..y1`: the top
@@ -1060,10 +1101,12 @@ mod tests {
         let d = bench(&mut st);
         let dwg = "DWG 1/7 · process · drawn ABCDEFGHIJKLMNOP";
 
+        // The drawing number is cut with `…`, ending one column inside the edge.
+        let shown: String = dwg.chars().take(33).chain(['…']).collect();
         let b = render(&d, &st, 100, 30);
         assert_eq!(b[(97, 25)].symbol(), "│", "{}", row(&b, 25));
-        let shown: String = dwg.chars().take(34).collect();
         assert_eq!(cells(&b, 63, 25, 34), shown, "{}", row(&b, 25));
+        assert_eq!(b[(96, 25)].symbol(), "…", "{}", row(&b, 25));
 
         let b = render(&d, &st, 120, 40);
         let top = (0..40u16)
@@ -1081,9 +1124,75 @@ mod tests {
             row(&b, rule + 1)
         );
         assert_eq!(b[(81, rule + 1)].symbol(), "│", "{}", row(&b, rule + 1));
-        let shown: String = dwg.chars().take(34).collect();
         assert_eq!(cells(&b, 83, rule + 5, 34), shown, "{}", row(&b, rule + 5));
         assert_eq!(b[(117, rule + 5)].symbol(), "│", "{}", row(&b, rule + 5));
+    }
+
+    #[test]
+    fn a_long_result_wraps_in_its_box() {
+        let mut st = dshawn();
+        let mut d = bench(&mut st);
+        press(&mut d, &mut st, KeyCode::Right, 2);
+        assert_eq!(recipe_id(&st, &d), "optics_tune");
+        let b = render(&d, &st, 100, 30);
+        let field = area(&b, 3, 97, 6, 20);
+        // Two lines in one box, the icon on the first, grown a row under the middle.
+        assert_eq!(b[(79, 11)].symbol(), "◈", "{field}");
+        assert_eq!(cells(&b, 81, 11, 13), "1× Nightglass", "{field}");
+        assert_eq!(cells(&b, 79, 12, 8), "  optics", "{field}");
+        for (x, y, corner) in [(77, 10, "┌"), (95, 10, "┐"), (77, 13, "└"), (95, 13, "┘")] {
+            assert_eq!(b[(x, y)].symbol(), corner, "({x}, {y}):\n{field}");
+        }
+        for y in [11, 12] {
+            assert_eq!(b[(77, y)].symbol(), "│", "{field}");
+            assert_eq!(b[(95, y)].symbol(), "│", "{field}");
+        }
+        assert_eq!(cells(&b, 71, 11, 5), "────▶", "{field}");
+        // The steps fill the box, a space each side.
+        assert_eq!(cells(&b, 51, 10, 20), "║ 1 re-seat lenses ║", "{field}");
+        // The kind goes when the whole line doesn't fit.
+        assert_eq!(
+            cells(&b, 63, 22, 34).trim_end(),
+            "makes 1× Nightglass optics",
+            "{}",
+            row(&b, 22)
+        );
+    }
+
+    #[test]
+    fn title_lines_cut_inside_the_edge() {
+        let mut st = dshawn();
+        let mut r = st.content.recipes[0].clone();
+        r.id = RecipeId::new("long_lines");
+        r.skill = SkillId::new("scrapcraft");
+        r.inputs = vec![(ItemId::new("a_part_with_an_id_far_too_long"), 2)];
+        st.content.recipes.push(r);
+        let mut d = bench(&mut st);
+        press(&mut d, &mut st, KeyCode::Left, 1);
+        assert_eq!(recipe_id(&st, &d), "long_lines");
+        let b = render(&d, &st, 100, 30);
+        assert_eq!(
+            cells(&b, 63, 24, 34),
+            "2 more a_part_with_an_id_far_too_…",
+            "{}",
+            row(&b, 24)
+        );
+        assert_eq!(b[(97, 24)].symbol(), "│");
+    }
+
+    #[test]
+    fn wrap_breaks_at_spaces_and_cuts_long_words() {
+        assert_eq!(wrap("2× Stim patch", 13), ["2× Stim patch"]);
+        assert_eq!(
+            wrap("1× Nightglass optics", 13),
+            ["1× Nightglass", "optics"]
+        );
+        assert_eq!(
+            wrap("1× Hardhat with visor", 11),
+            ["1× Hardhat", "with visor"]
+        );
+        assert_eq!(wrap("1× Unbreakableword", 8), ["1×", "Unbreak…"]);
+        assert!(wrap("anything", 0).is_empty());
     }
 
     #[test]
