@@ -434,11 +434,11 @@ mod tests {
         st.force_hit = Some(true);
         assert_eq!(
             your_chance(&st, 0).unwrap(),
-            69,
-            "reflex 6, skilled, 8 of 10"
+            74,
+            "reflex 6, skilled, 8 of 12"
         );
         fire(&mut st, 0).unwrap();
-        assert_eq!(st.foes[0].hp, 8);
+        assert_eq!(st.foes[0].hp, 18);
         assert_eq!(st.net.engaged.as_ref().unwrap().ap, 1);
         assert!(
             logged(&st, "you fire · goon 4 · 4 · 4"),
@@ -486,7 +486,7 @@ mod tests {
             .set_vis(Pos::new(37, 8), crate::render::Visibility::Visible);
         st.force_hit = Some(false);
         fire(&mut st, 0).unwrap();
-        assert_eq!(st.foes[0].hp, 20);
+        assert_eq!(st.foes[0].hp, foes::GOON_HP);
         assert!(logged(&st, "you fire · goon miss · miss · miss"));
         let sparks: Vec<Pos> = st
             .fx
@@ -515,8 +515,8 @@ mod tests {
         let spark = st.fx.iter().find(|i| matches!(i.fx, Fx::Spark)).unwrap();
         assert_eq!(
             spark.targets[0],
-            Pos::new(16, 8),
-            "ten tiles from the muzzle"
+            Pos::new(18, 8),
+            "twelve tiles from the muzzle"
         );
         let city = st.city.as_ref().unwrap();
         assert_eq!(
@@ -532,13 +532,13 @@ mod tests {
 
     #[test]
     fn a_miss_at_exactly_range_never_sparks_on_the_target() {
-        let mut st = engaged(Pos::new(16, 8));
+        let mut st = engaged(Pos::new(18, 8));
         st.force_hit = Some(false);
         fire(&mut st, 0).unwrap();
         let spark = st.fx.iter().find(|i| matches!(i.fx, Fx::Spark)).unwrap();
         assert_eq!(
             spark.targets[0],
-            Pos::new(17, 8),
+            Pos::new(19, 8),
             "one tile past, over the range"
         );
         let city = st.city.as_ref().unwrap();
@@ -572,7 +572,7 @@ mod tests {
 
     #[test]
     fn fire_refuses_out_of_range_and_without_a_gun() {
-        let mut st = engaged(Pos::new(18, 8));
+        let mut st = engaged(Pos::new(20, 8));
         assert_eq!(fire(&mut st, 0).unwrap_err(), "out of range");
         st.character
             .wear(Slot::Primary, ItemId::new("shiv_blade"), None);
@@ -646,7 +646,7 @@ mod tests {
         let id = AbilityId::new("static");
         strike(&mut st, &id, 0).unwrap();
         assert_eq!(st.net.engaged.as_ref().unwrap().ap, 0);
-        assert_eq!(st.foes[0].hp, 14);
+        assert_eq!(st.foes[0].hp, foes::GOON_HP - 6);
         assert_eq!(st.foes[0].stunned, 1);
         assert!(logged(&st, "goon stunned"));
         assert!(logged(&st, "Static · goon 6"));

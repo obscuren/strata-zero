@@ -780,7 +780,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             (w.skill.0.as_str(), w.damage, w.rounds, w.range),
-            ("handguns", 4, 3, 10)
+            ("handguns", 4, 3, 12)
         );
         assert!(
             matches!(

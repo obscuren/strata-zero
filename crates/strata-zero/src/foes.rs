@@ -7,8 +7,8 @@ use citygen::pathing::{astar, bresenham};
 use citygen::{City, Place, Pos, Terrain, Tile};
 use game::ItemId;
 
-pub const GOON_HP: u8 = 20;
-pub const GOON_REFLEX: u8 = 4;
+pub const GOON_HP: u8 = 30;
+pub const GOON_REFLEX: u8 = 5;
 pub const GOON_SIGHT: i32 = 8;
 pub const GOON_MOVE: u8 = 3;
 pub const GOON_AP: u8 = 1;
@@ -475,7 +475,7 @@ mod tests {
         let mut st = testutil::lot(Pos::new(15, 8));
         assert_eq!(
             lines(&st, |_| true),
-            vec!["▣ goon · idle · 20/20 · 9 tiles"]
+            vec!["▣ goon · idle · 30/30 · 9 tiles"]
         );
         st.foes[0].mode = FoeMode::Hunting {
             seen: Pos::new(6, 8),
@@ -485,7 +485,7 @@ mod tests {
         st.foes[0].stunned = 1;
         assert_eq!(
             lines(&st, |_| true),
-            vec!["▣ goon · hunting · 14/20 · 9 tiles · stunned 1"]
+            vec!["▣ goon · hunting · 14/30 · 9 tiles · stunned 1"]
         );
         assert!(lines(&st, |_| false).is_empty());
         assert!(any_hunting(&st, STREET));

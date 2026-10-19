@@ -2283,9 +2283,9 @@ mod tests {
     #[test]
     fn initiative_on_the_street_is_by_reflex_with_ties_to_you() {
         let mut st = crate::foes::testutil::lot(Pos::new(14, 8));
-        st.character.stats.reflex = 4;
+        st.character.stats.reflex = 5;
         assert_eq!(initiative(&st, STREET), vec![Actor::You, Actor::Foe(0)]);
-        st.character.stats.reflex = 3;
+        st.character.stats.reflex = 4;
         assert_eq!(initiative(&st, STREET), vec![Actor::Foe(0), Actor::You]);
         // A foe out of sight memory is not seated.
         st.player

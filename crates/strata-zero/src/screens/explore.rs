@@ -2949,7 +2949,7 @@ mod tests {
         assert_eq!(s.target, Some(Pos::new(14, 8)));
         let buf = draw_buffer(&s, &st, 100, 30);
         let text = buffer_text(&buf);
-        assert!(text.contains("goon · Scrap nine · 8 tiles · 69%"), "{text}");
+        assert!(text.contains("goon · Scrap nine · 8 tiles · 74%"), "{text}");
         let me = st.player.as_ref().unwrap().pos;
         let _ = me;
         assert_eq!(
@@ -3144,7 +3144,7 @@ mod tests {
         assert!(text.contains("ENGAGED"), "{text}");
         assert!(!text.contains("HUNTED"), "{text}");
         assert!(
-            text.contains("▣ goon · hunting · 20/20 · 8 tiles"),
+            text.contains("▣ goon · hunting · 30/30 · 8 tiles"),
             "{text}"
         );
         assert!(text.contains("TURN 1  YOU › goon"), "{text}");
@@ -3220,8 +3220,8 @@ mod tests {
             "no room there"
         );
         let listed = crate::screens::console::run(&mut st, at, "foes").unwrap();
-        assert!(listed.contains("0 goon idle 20/20 at 14,8"), "{listed}");
-        assert!(listed.contains("1 goon idle 20/20 at 12,8"), "{listed}");
+        assert!(listed.contains("0 goon idle 30/30 at 14,8"), "{listed}");
+        assert!(listed.contains("1 goon idle 30/30 at 12,8"), "{listed}");
     }
 
     fn last_is_warning(st: &AppState) -> bool {

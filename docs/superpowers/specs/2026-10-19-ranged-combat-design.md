@@ -51,7 +51,9 @@ each read differently from the same engine.
   12 tiles off, outside the goon's sight of 8.
 
 Calls made after the builder check (no round of questions; Jeffrey asked for no
-stops): the Ratchet reaches 10 tiles and the scrap nine 8, so you outrange the
+stops): the Ratchet reaches 12 tiles (10 at first; Jeffrey asked for more after
+playing) and the scrap nine 8, the goon has 30 HP and Reflex 5 (20 and 4 at
+first, likewise), so you outrange the
 goon by a step and the readout example below is what the formula gives; a stim on
 your act half costs an AP; the lot starts at 18:15, the dusk cast's hour (19:30 is
 plain night in the lighting code); saving does nothing to an engagement, in the net
@@ -74,7 +76,7 @@ pub struct Weapon {
 ```
 
 ```ron
-Item(id: "ratchet_smg", ..., weapon: Some(Weapon(skill: "handguns", damage: 4, rounds: 3, range: 10,
+Item(id: "ratchet_smg", ..., weapon: Some(Weapon(skill: "handguns", damage: 4, rounds: 3, range: 12,
      fx: [Flash(big: true), Streak(colour: (240, 240, 240)), Chips, Spark, Number(tag: false)])), ...),
 Item(id: "scrap_nine", name: "Scrap nine", kind: Weapon, slot: Some(Primary), weight: 0.9, value: 320,
      weapon: Some(Weapon(skill: "handguns", damage: 5, rounds: 1, range: 8,
@@ -178,7 +180,7 @@ pub struct Foe {
     pub down: bool,
 }
 // AppState gains: pub foes: Vec<Foe>   (session-only; enter_city clears it)
-pub const GOON_HP: u8 = 20; pub const GOON_REFLEX: u8 = 4; pub const GOON_SIGHT: i32 = 8;
+pub const GOON_HP: u8 = 30; pub const GOON_REFLEX: u8 = 5; pub const GOON_SIGHT: i32 = 8;
 pub const GOON_MOVE: u8 = 3; pub const GOON_AP: u8 = 1;
 ```
 
@@ -259,7 +261,7 @@ On your act half, on the street:
 - With the cursor on a standing foe in sight: the line of fire draws from you to
   it in dim cells (`·` at `(90, 90, 90)`), the foe's cell inverts (black on cyan),
   and a readout sits two rows above the foe, cyan on `(0, 20, 26)`: ` goon · pistol
-  · 9 tiles · 80% ` (its name, its weapon, the distance, **your** chance per round
+  · 9 tiles · 85% ` (its name, its weapon, the distance, **your** chance per round
   with the worn weapon; `out of range` in place of the chance beyond `range`; `no
   line` when a wall is between). The mock's top frame shows it.
 - `space` **fires** the worn `Primary` weapon at the foe under the cursor (one AP,
@@ -325,14 +327,14 @@ On your act half, on the street:
 - Save on the lot: `SAVE` refuses with `nothing to save on the lot` (a lot is a
   city with no districts). Load works as ever.
 - Console: `foe [n]` spawns a goon `n` tiles east of you (default 6) on any
-  street; `foes` lists them (`0 goon hunting 14/20 at 18,8`); `hp` as today.
+  street; `foes` lists them (`0 goon hunting 24/30 at 18,8`); `hp` as today.
 
 ## 6. The footer and the sidebar (`hud.rs`)
 
 - Row 1, right: `ENGAGED` in magenta bold while engaged on the street (the net
   keeps `HUNTED`; on the street the fight is the word).
 - Row 3: `TURN 1  YOU › goon` as the net's; right, the foes in sight memory,
-  nearest first: `▣ goon · hunting · 14/20 · 9 tiles` (`· stunned 1`, `· idle`,
+  nearest first: `▣ goon · hunting · 24/30 · 9 tiles` (`· stunned 1`, `· idle`,
   `· down` kept). In red `(255, 80, 80)`.
 - Row 4: `MOVE`/`AP` as the net's; hollow keys on the foe's turn.
 - HERE in the sidebar lists the same foe lines under the place.
