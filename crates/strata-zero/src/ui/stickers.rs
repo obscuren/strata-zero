@@ -1,9 +1,12 @@
 //! Stickers drawn: lettering on its ground or half-block pixels, at any of the four
 //! turns, wherever a copy has them stuck on its drawing.
 
+use crate::ui::art::{Art, SocketPlace};
 use crate::ui::cyberdeck::Pen;
 use crate::ui::pixels::Pixels;
 use game::{Content, StickerArt, Stuck, Turn};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::Color;
 
 /// A half turn: the glyph's turned form. A glyph with none turns to itself (N O S X Z
@@ -266,6 +269,33 @@ pub fn draw_at(art: &StickerArt, turn: Turn, x: u16, y: u16, pen: &mut Pen) {
     }
 }
 
+/// A sticker on its own blueprint: level, at its size, centred; no sockets, and no
+/// stickers on a sticker.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Loose {
+    pub art: StickerArt,
+}
+
+impl Art for Loose {
+    fn size(&self) -> (u16, u16) {
+        size(&self.art, Turn::Level)
+    }
+
+    fn draw(&self, (ox, oy): (u16, u16), clip: Rect, buf: &mut Buffer) {
+        let mut pen = Pen {
+            clip: clip.intersection(buf.area),
+            buf,
+            ox,
+            oy,
+        };
+        draw_at(&self.art, Turn::Level, 0, 0, &mut pen);
+    }
+
+    fn sockets(&self) -> Vec<SocketPlace> {
+        Vec::new()
+    }
+}
+
 /// Draws stuck stickers in their order, so each newer one lies over the older.
 pub fn draw(stickers: &[Placed], pen: &mut Pen) {
     for s in stickers {
@@ -276,9 +306,6 @@ pub fn draw(stickers: &[Placed], pen: &mut Pen) {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use ratatui::buffer::Buffer;
-    use ratatui::layout::Rect;
-    use ratatui::style::Color;
     use unicode_width::UnicodeWidthChar;
 
     pub fn lettered(text: &str) -> StickerArt {

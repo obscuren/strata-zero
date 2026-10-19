@@ -2,9 +2,10 @@
 //! parts and sockets sit.
 
 use super::{DeckView, GLASS_ROWS, GLASS_TEXT_W, GlassTone, Part, Pen, Switch};
-use crate::ui::art::SocketPlace;
+use crate::ui::art::{SocketPlace, StickerArea};
 use crate::ui::chrome::{CYAN, MAGENTA, PANEL_BG};
 use crate::ui::hardware::{Side, draw_side};
+use crate::ui::stickers;
 use game::DeckLook;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
@@ -83,6 +84,31 @@ pub fn sockets(view: &DeckView) -> Vec<SocketPlace> {
         .collect()
 }
 
+/// Where stickers may lie: the slab's body, less every part the pointer stops on (the
+/// ROM row from its label to the last strip), the glass, TRACE, the lights and the
+/// failsafe. Sockets, jacks and cables sit in the edge or past it.
+pub fn sticker_area(view: &DeckView) -> StickerArea {
+    let roms_end = parts(view)
+        .into_iter()
+        .filter(|(p, _)| matches!(p, Part::Rom(_)))
+        .map(|(_, r)| r.right() - 1)
+        .max()
+        .unwrap_or(7);
+    StickerArea::new(
+        W,
+        H,
+        &[(2, 5, 81, 16)],
+        &[
+            (4, 5, 18, 5),
+            (48, 5, 67, 5),
+            (3, GLASS_Y, 44, GLASS_Y + 7),
+            (50, 7, 63, 8),
+            (FX, FY - 1, FX + 9, FY + 5),
+            (4, 14, roms_end, 14),
+        ],
+    )
+}
+
 /// The inventory row on `INV_Y`: carts two apart from x 2, starting at `inv_offset`,
 /// stopping once one would end past the edge.
 fn inventory(view: &DeckView) -> Vec<(Part, Rect)> {
@@ -109,8 +135,8 @@ const CART_DIM: Color = Color::Rgb(0x2a, 0x28, 0x30);
 const TAPE: Color = Color::Rgb(0xd9, 0xc9, 0xa0);
 const LOOSE_TAPE: Color = Color::Rgb(0x8a, 0x82, 0x70);
 const INK: Color = Color::Rgb(0x1a, 0x16, 0x12);
-/// Exact black, not the terminal's: the skull sticker's ink, the ROM strips' text and
-/// the hazard stripes' ground.
+/// Exact black, not the terminal's: the ROM strips' text and the hazard stripes'
+/// ground.
 const BLACK: Color = Color::Rgb(0, 0, 0);
 const GLASS: Color = Color::Rgb(0x14, 0x0e, 0x06);
 const GLASS_LO: Color = Color::Rgb(0x10, 0x0b, 0x04);
@@ -142,14 +168,13 @@ const GOLD: Color = Color::Rgb(0xc9, 0xa2, 0x27);
 const PLAYER_CABLE: (Color, Color) = (Color::Rgb(0x2c, 0x29, 0x34), Color::Rgb(0x6b, 0x65, 0x78));
 const NET_CABLE: (Color, Color) = (Color::Rgb(0x00, 0x3c, 0x46), CYAN);
 
-/// The maker plate and the stickers.
+/// The maker plate.
 const MAKER: &str = " K▒ROK▒WA KX-2 ";
-const STICKER: &str = " NO FUTURE ";
-const SKULL: &str = " x‿x ";
 
 /// The row the glass's bezel starts on.
 const GLASS_Y: u16 = 6;
-/// Where the tag starts beside the sticker, and the column it must stop before.
+/// Where the tag starts beside NO FUTURE's factory spot, and the column it must stop
+/// before.
 const TAG_X: u16 = 63;
 const TAG_END: u16 = 68;
 /// The failsafe frame's top-left cell.
@@ -166,11 +191,12 @@ pub(super) fn draw_with(view: &DeckView, p: &mut Pen) {
     slab(p, view);
     cradles(p, view);
     glass(p, view);
-    p.put(45, 13, SKULL, BLACK, Some(HAZARD), true);
     gauge(p, view);
     tag(p, view);
     failsafe(p, view.switch);
     keyboard(p);
+    // Stickers go on over the paint, the tag included.
+    stickers::draw(&view.stickers, p);
     if !view.bare {
         inventory_row(p, view);
         landing(p, view);
@@ -206,7 +232,7 @@ fn bay(p: &mut Pen, view: &DeckView) {
     }
 }
 
-/// The deck's body: edge, bay mouth, plate, lights, ROM row and sticker.
+/// The deck's body: edge, bay mouth, plate, lights and ROM row.
 fn slab(p: &mut Pen, view: &DeckView) {
     p.fill(2, 5, 80, 12, BODY);
     p.frame((1, 4, 82, 14), EDGE, ['╭', '╮', '╰', '╯', '─', '│']);
@@ -240,7 +266,6 @@ fn slab(p: &mut Pen, view: &DeckView) {
     for (rom, r) in view.roms.iter().zip(strips) {
         p.put(r.x, r.y, &format!(" {rom} "), BLACK, Some(AMBER_DIM), false);
     }
-    p.put(50, 10, STICKER, WHITE, Some(MAGENTA), true);
 }
 
 /// Each socket's connector, gold contacts in a dark slot in the edge, there whether
@@ -319,8 +344,8 @@ fn gauge(p: &mut Pen, view: &DeckView) {
     }
 }
 
-/// The player's handle, sprayed beside the sticker when it fits before the failsafe
-/// frame, else under the sticker and cut to fit.
+/// The player's handle, sprayed beside NO FUTURE's factory spot when it fits before
+/// the failsafe frame, else under it and cut to fit. It is paint: stickers cover it.
 fn tag(p: &mut Pen, view: &DeckView) {
     let handle = view.handle.to_uppercase();
     if handle.chars().count() <= usize::from(TAG_END - TAG_X) {
@@ -532,6 +557,7 @@ mod tests {
     use crate::ui::cyberdeck::tests::{cart, kit_view};
     use crate::ui::cyberdeck::tests::{render, row, text};
     use crate::ui::cyberdeck::{GlassTone, Held, Switch, draw};
+    use crate::ui::stickers::{Placed, placed};
     use game::HardwareLook;
     use ratatui::buffer::Buffer;
     use ratatui::style::{Color, Modifier};
@@ -557,9 +583,110 @@ mod tests {
         s.chars().filter(|x| *x == c).count()
     }
 
+    /// The pawn deck's factory stickers, from the content.
+    fn factory() -> Vec<Placed> {
+        let c = game::Content::load().unwrap();
+        let deck = c.item(&game::ItemId::new("pawnshop_deck")).unwrap();
+        placed(&c, &deck.stickers)
+    }
+
+    #[test]
+    fn the_deck_wears_its_copys_stickers() {
+        let bare = render(&lit_kit());
+        let t = text(&bare);
+        assert!(
+            !t.contains("NO FUTURE") && !t.contains("x‿x"),
+            "no paint left: {t}"
+        );
+        let worn = render(&DeckView {
+            stickers: factory(),
+            ..lit_kit()
+        });
+        assert!(row(&worn, 10).contains(" NO FUTURE "));
+        assert!(row(&worn, 13).contains(" x‿x "));
+        let cell = &worn[(OX + 51, 10)];
+        assert_eq!(
+            (cell.symbol(), cell.fg, cell.bg),
+            (
+                "N",
+                Color::Rgb(0xe8, 0xe8, 0xec),
+                Color::Rgb(0xff, 0x00, 0xc8)
+            )
+        );
+        assert!(cell.modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn a_sticker_covers_the_tag() {
+        let base = render(&lit_kit());
+        assert!(row(&base, 10).contains("VEX"));
+        let over = Placed {
+            art: crate::ui::stickers::tests::lettered("#####"),
+            x: 62,
+            y: 10,
+            turn: game::Turn::Level,
+        };
+        let buf = render(&DeckView {
+            stickers: vec![over],
+            ..lit_kit()
+        });
+        assert!(!row(&buf, 10).contains("VEX"), "{}", row(&buf, 10));
+        assert!(row(&buf, 10).contains("#####"));
+    }
+
+    #[test]
+    fn the_pawn_sticker_area_keeps_parts_clear() {
+        let v = lit_kit();
+        let area = sticker_area(&v);
+        let on = |x: u16, y: u16| area.contains(i32::from(x), i32::from(y));
+        for (part, r) in parts(&v) {
+            for y in r.top()..r.bottom() {
+                for x in r.left()..r.right() {
+                    assert!(!on(x, y), "{part:?} at ({x},{y})");
+                }
+            }
+        }
+        for (x0, y0, x1, y1) in [
+            (3, 6, 44, 13),
+            (50, 7, 63, 8),
+            (48, 5, 67, 5),
+            (69, 6, 78, 12),
+        ] {
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    assert!(!on(x, y), "({x},{y})");
+                }
+            }
+        }
+        assert!(on(5, 15) && on(40, 16) && on(46, 9) && on(80, 14));
+        for y in 0..H {
+            for x in 0..W {
+                if !(2..=81).contains(&x) || !(5..=16).contains(&y) {
+                    assert!(!on(x, y), "({x},{y}) is off the body");
+                }
+            }
+        }
+        for handle in ["VEX", "D'SHAWN"] {
+            let v = DeckView {
+                handle: handle.into(),
+                ..lit_kit()
+            };
+            let area = sticker_area(&v);
+            for s in factory() {
+                assert!(
+                    area.fits(&s.art, s.turn, i32::from(s.x), i32::from(s.y)),
+                    "{handle}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn the_pawn_deck_draws_its_parts() {
-        let buf = render(&lit_kit());
+        let buf = render(&DeckView {
+            stickers: factory(),
+            ..lit_kit()
+        });
         let t = text(&buf);
         for want in [
             "K▒ROK▒WA KX-2",

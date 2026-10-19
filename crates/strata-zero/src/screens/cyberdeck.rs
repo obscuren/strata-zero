@@ -5,12 +5,13 @@
 use crate::actions::{perform, report};
 use crate::app::{AppState, ScreenCmd, TransitionKind};
 use crate::screens::deck::{Deck, FAILSAFE_TEXT, FAILSAFE_WARN, REVEAL_TICKS};
-use crate::ui::art::{Art, Dir, SocketPlace, step};
+use crate::ui::art::{Art, Dir, SocketPlace, StickerArea, step};
 use crate::ui::chrome::{DIM, MAGENTA};
 use crate::ui::cyberdeck::{
     self, Cart, DeckView, GLASS_ROWS, GLASS_TEXT_W, GlassTone, Held, Part, Switch, parts,
 };
 use crate::ui::sidebar::wrap_text;
+use crate::ui::stickers::placed;
 use citygen::Place;
 use crossterm::event::KeyCode;
 use game::{
@@ -220,6 +221,7 @@ impl DeckTab {
             tick: st.tick,
             sockets: sockets(st, self),
             bare: false,
+            stickers: placed(&st.content, copy(st, self).map_or(&[], |k| &k.stickers)),
         };
         // The row scrolls just far enough to show the cart lifted, or the one pointed at.
         let keep = from.or(match point {
@@ -394,6 +396,10 @@ impl Art for DeckArt {
 
     fn sockets(&self) -> Vec<SocketPlace> {
         cyberdeck::sockets(&self.view)
+    }
+
+    fn sticker_area(&self) -> Option<StickerArea> {
+        Some(cyberdeck::sticker_area(&self.view))
     }
 }
 

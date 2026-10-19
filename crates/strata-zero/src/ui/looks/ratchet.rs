@@ -14,6 +14,12 @@ pub const H: u16 = 15;
 /// Where the sockets sit, as x, y, width and height: the muzzle, then the rail.
 pub const PLACES: [(i32, i32, u16, u16); 2] = [(66, 4, 22, 5), (34, 0, 24, 4)];
 
+/// Where stickers may lie, as inclusive x0, y0, x1, y1: the receiver's side (its
+/// stamping too), the grip down to the magazine's base, the stock's butt pad; less
+/// the ejection port. The barrel, the wire stock, the guard and the sockets stay clear.
+pub const AREA_KEEP: [(u16, u16, u16, u16); 3] = [(24, 4, 59, 8), (38, 9, 47, 14), (2, 3, 5, 10)];
+pub const AREA_DROP: [(u16, u16, u16, u16); 1] = [(45, 5, 54, 6)];
+
 // Gunmetal, stamped and worn.
 const GM: Color = rgb(0x2e3138);
 const GM_HI: Color = rgb(0x4a4f58);
