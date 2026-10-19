@@ -366,9 +366,23 @@ pub struct DeckArt {
     view: DeckView,
 }
 
+impl DeckArt {
+    /// The deck without its cables, for a drawing that has no room for them.
+    #[allow(dead_code)]
+    pub fn unplugged(mut self) -> DeckArt {
+        self.view.plugged = false;
+        self.view.link = false;
+        self
+    }
+}
+
 impl Art for DeckArt {
     fn size(&self) -> (u16, u16) {
         cyberdeck::size(self.view.look)
+    }
+
+    fn extent(&self) -> (i32, i32, u16, u16) {
+        cyberdeck::extent(&self.view)
     }
 
     fn origin(&self, body: Rect) -> (u16, u16) {
