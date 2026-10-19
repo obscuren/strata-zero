@@ -337,6 +337,92 @@ fn hardware_blueprints() {
     }
 }
 
+/// D'SHAWN's worn Ratchet SMG on its blueprint, bare and with both pieces fitted.
+#[test]
+#[ignore]
+fn the_ratchet_on_its_blueprint() {
+    let mut st = state_home();
+    st.character = game::Character::debug_runner(&st.content);
+    let sizes = [(100, 30), (120, 40)];
+    blueprint_shots(&mut st, '3', "ratchet_smg", "blueprint_ratchet", &sizes);
+    fit_on_the_ratchet(&mut st, &[(0, "hushcan"), (1, "redeye")]);
+    blueprint_shots(
+        &mut st,
+        '3',
+        "ratchet_smg",
+        "blueprint_ratchet_fitted",
+        &sizes,
+    );
+}
+
+/// Fits each `(socket, item)` piece from the pack into the worn Ratchet.
+fn fit_on_the_ratchet(st: &mut AppState, pieces: &[(usize, &str)]) {
+    for (socket, item) in pieces {
+        let piece = st
+            .character
+            .inventory
+            .iter()
+            .find(|s| s.item == ItemId::new(item))
+            .and_then(|s| s.copy_id())
+            .unwrap();
+        let fit = game::Action::Fit {
+            host: game::Host::Worn(game::Slot::Primary),
+            socket: *socket,
+            piece,
+        };
+        crate::actions::perform(st, fit).unwrap();
+    }
+}
+
+/// The Ratchet SMG in the blueprint window's modding mode.
+#[test]
+#[ignore]
+fn modding_the_ratchet() {
+    let mut st = state_home();
+    st.character = game::Character::debug_runner(&st.content);
+    let map = MapScreen::walking(&mut st);
+    let mut deck = Deck::new(st.tick);
+    deck.update(&mut st, &[key(KeyCode::Char('3'))]);
+    let copy = st.character.worn_copy(game::Slot::Primary).map(|k| k.id);
+    let mut window = Blueprint::open(&st, ItemId::new("ratchet_smg"), true, copy);
+    st.tick += 200;
+    if st.tick % 90 < 3 {
+        st.tick += 3;
+    }
+    let sizes = [(100, 30), (120, 40)];
+    // The pointer on the muzzle.
+    window.update(&mut st, &[key(KeyCode::Char('m'))]);
+    for (w, h) in sizes {
+        let name = format!("modding_the_ratchet_{w}x{h}");
+        shot_stack(&name, &st, &[&map, &deck, &window], (w, h));
+    }
+    // The tray open on the muzzle.
+    window.update(&mut st, &[key(KeyCode::Char(' '))]);
+    for (w, h) in sizes {
+        let name = format!("modding_the_ratchet_tray_{w}x{h}");
+        shot_stack(&name, &st, &[&map, &deck, &window], (w, h));
+    }
+    // Both pieces fitted, the pointer on the rail.
+    fit_on_the_ratchet(&mut st, &[(0, "hushcan"), (1, "redeye")]);
+    window.update(&mut st, &[key(KeyCode::Esc), key(KeyCode::Left)]);
+    for (w, h) in sizes {
+        let name = format!("modding_the_ratchet_fitted_{w}x{h}");
+        shot_stack(&name, &st, &[&map, &deck, &window], (w, h));
+    }
+}
+
+/// Each piece of weapon hardware on its blueprint.
+#[test]
+#[ignore]
+fn weapon_hardware_blueprints() {
+    let mut st = state_home();
+    st.character = game::Character::debug_runner(&st.content);
+    for item in ["hushcan", "redeye"] {
+        let name = format!("hardware_{item}");
+        blueprint_shots(&mut st, '4', item, &name, &[(100, 30)]);
+    }
+}
+
 /// GEAR and INVENTORY with a Coldfin vII fitted: the marks after the names.
 #[test]
 #[ignore]
