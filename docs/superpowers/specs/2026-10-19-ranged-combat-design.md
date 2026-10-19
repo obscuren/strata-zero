@@ -329,9 +329,10 @@ On your act half, on the street:
 - **Title**: `NEW GAME (COMBAT)` under `NEW GAME (DEBUG)`. It builds
   `debug_runner`, then: wears a `neural_port` (Static), learns `handguns`, gives
   three `stim_patch`, enters `City::lot`, spawns the player at `(6, 8)` and one
-  goon at `(18, 8)` facing you, `Idle`. 12 tiles apart, sight 8: four tiles of
-  walking engage it; `e` engages from where you stand. Switches with the glitch,
-  no generating screen.
+  goon in the lot's far corner at `(38, 16)`, `Idle` (it started twelve tiles
+  off at `(18, 8)`; Jeffrey moved it after playing). A walk east along the road
+  brings you into its sight at `(30, 8)`; `e` engages from anywhere it is in
+  sight memory. Switches with the glitch, no generating screen.
 - Save on the lot: `SAVE` refuses with `nothing to save on the lot` (a lot is a
   city with no districts). Load works as ever.
 - Console: `foe [n]` spawns a goon `n` tiles east of you (default 6) on any

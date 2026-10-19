@@ -3221,10 +3221,14 @@ mod tests {
         let mut s = MapScreen::walking(&mut st);
         st.force_hit = Some(true);
         // Four tiles east: at eight tiles the goon sees you.
-        for _ in 0..4 {
+        // East along the road: at (30,8) the goon in the far corner sees you.
+        for _ in 0..40 {
+            if st.net.engaged.is_some() {
+                break;
+            }
             s.update(&mut st, &[key(KeyCode::Char('l'))]);
         }
-        assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(10, 8));
+        assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(30, 8));
         assert!(st.net.engaged.is_some(), "{:?}", last(&st));
         assert!(logged(&st, "ENGAGED · the goon has you"));
         let mut rounds = 0;

@@ -149,7 +149,11 @@ fn combat_aim() -> (AppState, MapScreen) {
     let _ = title.update(&mut st, &[key(KeyCode::Enter)]);
     let mut map = MapScreen::walking(&mut st);
     st.tick += 100;
-    for _ in 0..4 {
+    // East along the road until the goon in the far corner sees you.
+    for _ in 0..40 {
+        if st.net.engaged.is_some() {
+            break;
+        }
         map.update(&mut st, &[key(KeyCode::Char('l'))]);
     }
     map.update(&mut st, &[key(KeyCode::Char(' '))]);
