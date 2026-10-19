@@ -139,7 +139,6 @@ pub fn parts(view: &DeckView) -> Vec<(Part, Rect)> {
 
 /// The deck's sockets and where they sit, relative to the drawing's origin. Only
 /// modding points at them; they are not parts.
-#[allow(dead_code)] // until the modding mode points at them
 pub fn sockets(view: &DeckView) -> Vec<SocketPlace> {
     match view.look {
         DeckLook::Pawn => pawn::sockets(view),
@@ -159,9 +158,13 @@ pub fn origin(look: DeckLook, area: Rect) -> (u16, u16) {
 /// Draws the deck centred in `area`, then the pointer's corners round the pointed
 /// part unless the view is bare. Nothing is written outside `area`.
 pub fn draw(view: &DeckView, area: Rect, buf: &mut Buffer) {
-    let (ox, oy) = origin(view.look, area);
+    draw_at(view, origin(view.look, area), area, buf);
+}
+
+/// Draws the deck from `(ox, oy)`, as `draw` does, nothing written outside `clip`.
+pub fn draw_at(view: &DeckView, (ox, oy): (u16, u16), clip: Rect, buf: &mut Buffer) {
     let mut pen = Pen {
-        clip: area.intersection(buf.area),
+        clip: clip.intersection(buf.area),
         buf,
         ox,
         oy,
@@ -181,7 +184,7 @@ pub fn draw(view: &DeckView, area: Rect, buf: &mut Buffer) {
 /// Four cyan heavy corners one cell outside `r`, pulsing like the selected rows on
 /// the other tabs. Corners that fall outside `clip` are skipped; the cells keep
 /// whatever they sat on.
-fn brackets(buf: &mut Buffer, r: Rect, tick: u64, clip: Rect) {
+pub(crate) fn brackets(buf: &mut Buffer, r: Rect, tick: u64, clip: Rect) {
     let fg = CYAN_RGB.scale(0.7 + 0.3 * pulse(tick, 30)).to_color();
     let (x1, y1) = (r.x.checked_sub(1), r.y.checked_sub(1));
     let (x2, y2) = (r.x + r.width, r.y + r.height);

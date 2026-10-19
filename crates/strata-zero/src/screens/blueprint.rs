@@ -1,13 +1,17 @@
 //! The blueprint window: Inspect on an item draws it as what it is, over the deck
-//! screen. Every item opens the same window; only the cyberdeck has a drawing so far,
-//! and anything else reads MISSING BLUEPRINT.
+//! screen. Every item opens the same window, in one of two modes: inspect, the item's
+//! own view, and modding, where any item with sockets and a drawing has them worked
+//! on. Decks and hardware have drawings so far; anything else reads MISSING BLUEPRINT.
 
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
+use crate::screens::bench::Bench;
 use crate::screens::cyberdeck::DeckTab;
 use crate::screens::deck::status_strip;
+use crate::ui::art::Art;
 use crate::ui::chrome::{CYAN, DIM, PANEL_BG, put, solid};
+use crate::ui::hardware::HardwareArt;
 use crossterm::event::{KeyCode, KeyEvent};
-use game::{CopyId, ItemId, Slot};
+use game::{CopyId, Host, ItemId, Slot};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -26,27 +30,140 @@ const MARGIN: (u16, u16) = (2, 1);
 const MISSING: &str = "MISSING BLUEPRINT";
 
 pub struct Blueprint {
-    /// ` BLUEPRINT · <NAME> `, on the top edge.
-    title: String,
-    /// The deck on its blueprint, with the copy it was opened on; `None` for an item
-    /// that has none yet.
-    deck: Option<DeckTab>,
+    /// The item's name, for the title on the top edge.
+    title_name: String,
+    /// The item's own view.
+    inspect: Inspect,
+    mode: Mode,
+    /// Where the item's sockets are: the copy worn, or the one in the pack it was
+    /// opened on. `None` for an item held without a copy.
+    host: Option<Host>,
+    item: ItemId,
+}
+
+/// What inspect shows.
+enum Inspect {
+    /// The deck as hardware: the jacked one works, any other copy only reads.
+    Deck(DeckTab),
+    /// A piece of hardware, drawn large to look at.
+    Hardware(HardwareArt),
+    /// No drawing yet.
+    Missing,
+}
+
+/// The mode the window is in. Each has its own pointer: inspect's lives in
+/// `Inspect`, so modding never moves it, and modding starts on the first socket.
+enum Mode {
+    Inspect,
+    Mod(Bench),
+}
+
+impl Inspect {
+    /// The drawing modding works on; none when there is no drawing.
+    fn art(&self, st: &AppState) -> Option<Box<dyn Art>> {
+        match self {
+            Inspect::Deck(tab) => Some(Box::new(tab.art(st))),
+            Inspect::Hardware(art) => Some(Box::new(art.clone())),
+            Inspect::Missing => None,
+        }
+    }
 }
 
 impl Blueprint {
     /// The window on `item`, `equipped` when Inspect was on the item worn (GEAR) rather
     /// than one in the pack, `copy` the copy it was on when the item is held per copy.
-    /// A deck the content knows draws as its look: the jacked one works, any other copy
-    /// only reads. Anything else has no blueprint yet.
+    /// A deck the content knows draws as its look, hardware as itself; anything else
+    /// has no blueprint yet. It opens in inspect.
     pub fn open(st: &AppState, item: ItemId, equipped: bool, copy: Option<CopyId>) -> Blueprint {
         let known = st.content.item(&item);
-        let name = known.map_or_else(|| item.to_string(), |i| i.name.clone());
-        let title = format!(" BLUEPRINT · {} ", name.to_uppercase());
-        let deck = known.and_then(|i| i.deck).map(|_| {
-            let jacked = equipped && st.character.equipped(Slot::Deck) == Some(&item);
-            DeckTab::for_deck(st.tick, item, jacked, copy, st)
-        });
-        Blueprint { title, deck }
+        let title_name = known.map_or_else(|| item.to_string(), |i| i.name.clone());
+        let inspect = match known {
+            Some(i) if i.deck.is_some() => {
+                let jacked = equipped && st.character.equipped(Slot::Deck) == Some(&item);
+                Inspect::Deck(DeckTab::for_deck(st.tick, item.clone(), jacked, copy, st))
+            }
+            Some(i) => i.hardware.as_ref().map_or(Inspect::Missing, |h| {
+                Inspect::Hardware(HardwareArt {
+                    look: h.look,
+                    mods: h.mods.clone(),
+                })
+            }),
+            None => Inspect::Missing,
+        };
+        // Worn only when the slot still wears it; else the copy in the pack.
+        let worn = known
+            .and_then(|i| i.slot)
+            .filter(|s| equipped && st.character.equipped(*s) == Some(&item));
+        let host = worn.map(Host::Worn).or(copy.map(Host::Pack));
+        Blueprint {
+            title_name,
+            inspect,
+            mode: Mode::Inspect,
+            host,
+            item,
+        }
+    }
+
+    /// `m` opens modding on an item with a drawing and sockets (its copy's, else the
+    /// content's), unless a cart is being carried.
+    fn moddable(&self, st: &AppState) -> bool {
+        let carrying = matches!(&self.inspect, Inspect::Deck(tab) if tab.holding());
+        let drawn = !matches!(self.inspect, Inspect::Missing);
+        let sockets = match self.host.and_then(|h| st.character.host_copy(h)) {
+            Some(copy) => copy.fitted.len(),
+            None => st.content.item(&self.item).map_or(0, |i| i.sockets.len()),
+        };
+        drawn && !carrying && sockets > 0
+    }
+
+    /// One key: `m` switches mode, the rest go to the mode that is up.
+    fn key(&mut self, st: &mut AppState, code: KeyCode) -> ScreenCmd {
+        if code == KeyCode::Char('m') {
+            if matches!(self.mode, Mode::Mod(_)) {
+                self.mode = Mode::Inspect;
+            } else if self.moddable(st) {
+                self.mode = Mode::Mod(Bench::default());
+            }
+            return ScreenCmd::Stay;
+        }
+        if let Mode::Mod(bench) = &mut self.mode
+            && let Some(art) = self.inspect.art(st)
+        {
+            return bench.key(art.as_ref(), code);
+        }
+        match &mut self.inspect {
+            Inspect::Deck(tab) => tab.key(st, code),
+            // Nothing to work: esc closes and no other key does anything.
+            _ if matches!(code, KeyCode::Esc | KeyCode::Char('q')) => ScreenCmd::Pop {
+                fx: TransitionKind::None,
+            },
+            _ => ScreenCmd::Stay,
+        }
+    }
+
+    /// Inspect's view of the item in `body`; the hint row: the item's keys, `m mod`
+    /// when modding is open to it, then the esc part.
+    fn draw_inspect(&self, st: &AppState, r: Rect, body: Rect, buf: &mut Buffer) -> String {
+        let (keys, esc) = match &self.inspect {
+            Inspect::Deck(tab) => {
+                crate::ui::cyberdeck::draw(&tab.view(st), body, buf);
+                let (keys, esc) = tab.hint();
+                (Some(keys), esc)
+            }
+            Inspect::Hardware(art) => {
+                art.draw(art.origin(body), body, buf);
+                (None, "esc close")
+            }
+            Inspect::Missing => {
+                let x = r.x + (r.width - MISSING.chars().count() as u16) / 2;
+                let style = Style::default().fg(DIM).add_modifier(Modifier::BOLD);
+                put(buf, x, r.y + r.height / 2, MISSING, style, body.right());
+                (None, "esc close")
+            }
+        };
+        let m = self.moddable(st).then_some("m mod");
+        let parts: Vec<&str> = keys.into_iter().chain(m).chain([esc]).collect();
+        parts.join(" · ")
     }
 
     /// In the middle of the screen, always inside the area.
@@ -93,20 +210,15 @@ impl Screen for Blueprint {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
         let mut cmd = ScreenCmd::Stay;
         for k in keys {
-            cmd = match &mut self.deck {
-                Some(tab) => tab.key(st, k.code),
-                // Nothing to work: esc closes and no other key does anything.
-                None if matches!(k.code, KeyCode::Esc | KeyCode::Char('q')) => ScreenCmd::Pop {
-                    fx: TransitionKind::None,
-                },
-                None => ScreenCmd::Stay,
-            };
+            cmd = self.key(st, k.code);
             if !matches!(cmd, ScreenCmd::Stay) {
                 break;
             }
         }
         // The jacked deck reopens on the part it was left on.
-        if let Some(tab) = self.deck.as_ref().filter(|t| t.equipped) {
+        if let Inspect::Deck(tab) = &self.inspect
+            && tab.equipped
+        {
             st.deck_part = tab.pack();
         }
         cmd
@@ -120,43 +232,51 @@ impl Screen for Blueprint {
         let buf = f.buffer_mut();
         solid(buf, r);
         bezel(buf, r);
-        let title = Style::default().fg(CYAN).add_modifier(Modifier::BOLD);
-        put(buf, r.x + 3, r.y, &self.title, title, r.right() - 2);
-        // Inside the frame: the blueprint, then the status row and the hint row.
+        let bench = match &self.mode {
+            Mode::Mod(bench) => self.inspect.art(st).map(|art| (bench, art)),
+            Mode::Inspect => None,
+        };
+        let mode = if bench.is_some() {
+            "MODDING"
+        } else {
+            "BLUEPRINT"
+        };
+        let title = format!(" {mode} · {} ", self.title_name.to_uppercase());
+        let style = Style::default().fg(CYAN).add_modifier(Modifier::BOLD);
+        put(buf, r.x + 3, r.y, &title, style, r.right() - 2);
+        // Inside the frame: the item, then the status row and the hint row.
         let inside = Rect::new(r.x + 1, r.y + 1, r.width - 2, r.height - 2);
         let hint_y = inside.bottom() - 1;
         let strip_y = hint_y - 1;
-        let hint = match &self.deck {
-            Some(tab) => {
-                let body = Rect::new(inside.x, inside.y, inside.width, strip_y - inside.y);
-                crate::ui::cyberdeck::draw(&tab.view(st), body, buf);
-                tab.hint()
+        let body = Rect::new(inside.x, inside.y, inside.width, strip_y - inside.y);
+        let hint = match bench {
+            Some((bench, art)) => {
+                bench.draw(st, art.as_ref(), self.host, body, buf);
+                bench.hint().to_string()
             }
-            None => {
-                let x = r.x + (r.width - MISSING.chars().count() as u16) / 2;
-                let style = Style::default().fg(DIM).add_modifier(Modifier::BOLD);
-                put(buf, x, r.y + r.height / 2, MISSING, style, inside.right());
-                "esc close"
-            }
+            None => self.draw_inspect(st, r, body, buf),
         };
         status_strip(buf, st, inside.x + 1, strip_y, inside.right());
         let dim = Style::default().fg(DIM);
-        put(buf, inside.x + 1, hint_y, hint, dim, inside.right());
+        put(buf, inside.x + 1, hint_y, &hint, dim, inside.right());
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::actions::perform;
     use crate::messages::Kind;
     use crate::screens::deck::Deck;
     use crate::screens::testutil::{buffer_text, key};
+    use crate::ui::art::grey;
     use crate::ui::chrome::MAGENTA;
     use crate::ui::cyberdeck::Part;
     use citygen::{GenParams, Generator, Place, Pos, SizePreset, StratumKind};
-    use game::{AbilityKind, Character};
+    use game::{AbilityKind, Action, Character, Host};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::style::Color;
 
     fn state() -> AppState {
         let mut st = AppState::new();
@@ -190,7 +310,21 @@ mod tests {
     }
 
     fn deck(bp: &Blueprint) -> &DeckTab {
-        bp.deck.as_ref().expect("a deck's blueprint")
+        match &bp.inspect {
+            Inspect::Deck(tab) => tab,
+            _ => panic!("a deck's blueprint"),
+        }
+    }
+
+    fn deck_mut(bp: &mut Blueprint) -> &mut DeckTab {
+        match &mut bp.inspect {
+            Inspect::Deck(tab) => tab,
+            _ => panic!("a deck's blueprint"),
+        }
+    }
+
+    fn modding(bp: &Blueprint) -> bool {
+        matches!(bp.mode, Mode::Mod(_))
     }
 
     /// The window over the washed deck screen, as the app draws the stack.
@@ -467,7 +601,7 @@ mod tests {
             .unwrap();
         let before = (st.character.clone(), st.net.failsafe);
         for point in [Part::Slot(0), Part::Inv(spoof), Part::Failsafe] {
-            bp.deck.as_mut().unwrap().point = point;
+            deck_mut(&mut bp).point = point;
             for code in [KeyCode::Char(' '), KeyCode::Enter] {
                 assert!(matches!(press(&mut bp, &mut st, &[code]), ScreenCmd::Stay));
                 assert_eq!(last(&st), Some("equip the deck to work on it"));
@@ -482,7 +616,7 @@ mod tests {
             );
         }
         // Pointing and reading work: the plate, and the ROM burned into this deck.
-        bp.deck.as_mut().unwrap().point = Part::Slot(0);
+        deck_mut(&mut bp).point = Part::Slot(0);
         press(&mut bp, &mut st, &[KeyCode::Down]);
         assert_eq!(deck(&bp).point, Part::Plate);
         st.tick += 40;
@@ -531,7 +665,7 @@ mod tests {
         let mut st = state();
         st.tick = 40;
         let mut bp = Blueprint::open(&st, id("copper_coil"), false, None);
-        assert!(bp.deck.is_none());
+        assert!(matches!(bp.inspect, Inspect::Missing));
         let buf = screen(&bp, &st, 100, 30);
         let r = window(100, 30);
         let (x, y) = (r.x, r.y);
@@ -594,11 +728,8 @@ mod tests {
         specless.id = id("specless_deck");
         specless.deck = None;
         st.content.items.push(specless);
-        assert!(
-            Blueprint::open(&st, id("specless_deck"), false, None)
-                .deck
-                .is_none()
-        );
+        let specless = Blueprint::open(&st, id("specless_deck"), false, None);
+        assert!(matches!(specless.inspect, Inspect::Missing));
 
         // No grants: the ROM row holds its label alone; the plate reads the deck's name.
         let mut bare = st.content.item(&id("pawnshop_deck")).unwrap().clone();
@@ -679,5 +810,290 @@ mod tests {
         press(&mut carried, &mut st, &[KeyCode::Down, KeyCode::Esc]);
         let again = Blueprint::open(&st, id("pawnshop_deck"), true, None);
         assert_eq!(deck(&again).point, Part::Failsafe);
+    }
+
+    /// The text inside the window's frame on row `dy` from its top edge, trimmed.
+    fn inside(buf: &Buffer, w: u16, h: u16, dy: u16) -> String {
+        let r = window(w, h);
+        let line: String = (r.x + 1..r.right() - 1)
+            .map(|x| buf[(x, r.y + dy)].symbol())
+            .collect();
+        line.trim().to_string()
+    }
+
+    /// The rows of the window's title, readout and hint, from its top edge.
+    fn rows_of(w: u16, h: u16) -> (u16, u16, u16) {
+        let r = window(w, h);
+        (0, r.height - 4, r.height - 2)
+    }
+
+    /// Where `text` starts on the screen.
+    fn find(buf: &Buffer, text: &str) -> Option<(u16, u16)> {
+        (0..buf.area.height).find_map(|y| {
+            let line = row(buf, y);
+            let at = line.find(text)?;
+            Some((line[..at].chars().count() as u16, y))
+        })
+    }
+
+    /// D'SHAWN's jacked deck, inspected from GEAR: the rebuilt one, with two sockets.
+    fn dshawns_deck(st: &mut AppState) -> Blueprint {
+        st.character = Character::debug_runner(&st.content);
+        st.tick = 40;
+        let copy = st.character.worn_copy(Slot::Deck).map(|k| k.id);
+        Blueprint::open(st, id("rebuilt_deck"), true, copy)
+    }
+
+    /// The copy in the pack of `item`.
+    fn pack_copy(st: &AppState, item: &str) -> CopyId {
+        let stack = st.character.inventory.iter().find(|s| s.item == id(item));
+        stack.and_then(|s| s.copy_id()).expect("a copy in the pack")
+    }
+
+    const LABEL: Color = Color::Rgb(0x8b, 0x85, 0x96);
+    const STEEL: Color = Color::Rgb(0x8b, 0x85, 0x96);
+    const EDGE: Color = Color::Rgb(0xa0, 0x58, 0x3a);
+    const GOLD: Color = Color::Rgb(0xc9, 0xa2, 0x27);
+    const WHITE: Color = Color::Rgb(0xe8, 0xe8, 0xec);
+
+    #[test]
+    fn hardware_has_its_own_blueprint() {
+        let mut st = state();
+        st.character = Character::debug_runner(&st.content);
+        st.tick = 40;
+        let copy = pack_copy(&st, "coldfin_2");
+        let mut bp = Blueprint::open(&st, id("coldfin_2"), false, Some(copy));
+        let (title, _, hint) = rows_of(100, 30);
+        let buf = screen(&bp, &st, 100, 30);
+        let line = inside(&buf, 100, 30, title);
+        assert!(line.contains(" BLUEPRINT · COLDFIN VII "), "{line}");
+        let text = buffer_text(&buf);
+        assert!(text.contains("TRACE −20%"), "{text}");
+        assert!(!text.contains("MISSING BLUEPRINT"), "{text}");
+        // Drawn large in the middle of the body: the clamp's gold contacts on its left.
+        let r = window(100, 30);
+        let body = Rect::new(r.x + 1, r.y + 1, r.width - 2, r.height - 4);
+        let (ox, oy) = (
+            body.x + (body.width - 52) / 2,
+            body.y + (body.height - 18) / 2,
+        );
+        let cell = &buf[(ox, oy + 6)];
+        assert_eq!((cell.symbol(), cell.fg), ("▌", GOLD));
+        assert_eq!(inside(&buf, 100, 30, hint), "esc close");
+        // No sockets: m does nothing.
+        assert!(matches!(
+            press(&mut bp, &mut st, &[KeyCode::Char('m')]),
+            ScreenCmd::Stay
+        ));
+        assert!(!modding(&bp));
+        assert_eq!(buffer_text(&screen(&bp, &st, 100, 30)), text);
+        for code in [KeyCode::Char(' '), KeyCode::Right, KeyCode::Enter] {
+            assert!(matches!(press(&mut bp, &mut st, &[code]), ScreenCmd::Stay));
+        }
+        assert!(matches!(
+            press(&mut bp, &mut st, &[KeyCode::Esc]),
+            ScreenCmd::Pop { .. }
+        ));
+    }
+
+    #[test]
+    fn m_switches_modes_on_an_item_with_sockets() {
+        let mut st = state();
+        let mut bp = dshawns_deck(&mut st);
+        let (w, h) = (100, 30);
+        let (title, readout, hint) = rows_of(w, h);
+        let buf = screen(&bp, &st, w, h);
+        let line = inside(&buf, w, h, hint);
+        assert!(line.contains("space act · m mod · esc close"), "{line}");
+        // The inspect pointer to the plate; modding has a pointer of its own.
+        press(&mut bp, &mut st, &[KeyCode::Down]);
+        assert_eq!(deck(&bp).point, Part::Plate);
+        press(&mut bp, &mut st, &[KeyCode::Char('m')]);
+        assert!(modding(&bp));
+        let buf = screen(&bp, &st, w, h);
+        let line = inside(&buf, w, h, title);
+        assert!(line.contains(" MODDING · REBUILT PAWN DECK "), "{line}");
+        assert_eq!(
+            inside(&buf, w, h, hint),
+            "↑↓←→ socket · space choose · m inspect · esc close"
+        );
+        assert_eq!(
+            inside(&buf, w, h, readout),
+            "SOCKET L ▸ empty · takes deck hardware"
+        );
+        // The readout's runs from the inside's second column: bold cyan, white, dim.
+        let r = window(w, h);
+        let at = |x: u16| &buf[(r.x + x, r.y + readout)];
+        assert_eq!((at(2).symbol(), at(2).fg), ("S", CYAN));
+        assert!(at(2).modifier.contains(Modifier::BOLD));
+        assert_eq!((at(11).symbol(), at(11).fg), ("▸", WHITE));
+        assert!(!at(11).modifier.contains(Modifier::BOLD));
+        assert_eq!((at(19).symbol(), at(19).fg), ("·", DIM));
+
+        press(&mut bp, &mut st, &[KeyCode::Right]);
+        let buf = screen(&bp, &st, w, h);
+        assert_eq!(
+            inside(&buf, w, h, readout),
+            "SOCKET R ▸ empty · takes deck hardware"
+        );
+        press(&mut bp, &mut st, &[KeyCode::Char('h')]);
+        let buf = screen(&bp, &st, w, h);
+        assert!(inside(&buf, w, h, readout).starts_with("SOCKET L "));
+        // Back to inspect: its pointer where it was.
+        assert_eq!(deck(&bp).point, Part::Plate);
+        press(&mut bp, &mut st, &[KeyCode::Char('m')]);
+        assert!(!modding(&bp));
+        assert_eq!(deck(&bp).point, Part::Plate);
+        let buf = screen(&bp, &st, w, h);
+        let line = inside(&buf, w, h, title);
+        assert!(line.contains(" BLUEPRINT · REBUILT PAWN DECK "), "{line}");
+
+        // The pawnshop deck he carries has no sockets: no m.
+        let mut pawn = Blueprint::open(&st, id("pawnshop_deck"), false, None);
+        let buf = screen(&pawn, &st, w, h);
+        let line = inside(&buf, w, h, hint);
+        assert_eq!(line, "↑↓←→ point · space act · esc close");
+        let before = (deck(&pawn).clone(), buffer_text(&buf));
+        assert!(matches!(
+            press(&mut pawn, &mut st, &[KeyCode::Char('m')]),
+            ScreenCmd::Stay
+        ));
+        assert!(!modding(&pawn));
+        let after = (deck(&pawn).clone(), buffer_text(&screen(&pawn, &st, w, h)));
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn the_readout_names_what_is_fitted() {
+        let mut st = state();
+        let mut bp = dshawns_deck(&mut st);
+        let fit = |st: &mut AppState, host, socket, piece: &str| {
+            let piece = pack_copy(st, piece);
+            let fit = Action::Fit {
+                host,
+                socket,
+                piece,
+            };
+            perform(st, fit).unwrap();
+        };
+        fit(&mut st, Host::Worn(Slot::Deck), 1, "coldfin_2");
+        press(&mut bp, &mut st, &[KeyCode::Char('m'), KeyCode::Char('l')]);
+        let (_, readout, _) = rows_of(100, 30);
+        let buf = screen(&bp, &st, 100, 30);
+        assert_eq!(
+            inside(&buf, 100, 30, readout),
+            "SOCKET R ▸ Coldfin vII · trace per cast −20%"
+        );
+        // Esc closes the window.
+        assert!(matches!(
+            press(&mut bp, &mut st, &[KeyCode::Esc]),
+            ScreenCmd::Pop { .. }
+        ));
+
+        // A deck carried in the pack mods too, and reads its own copy's sockets.
+        st.character.give_item(&st.content, id("rebuilt_deck"), 1);
+        let copy = pack_copy(&st, "rebuilt_deck");
+        fit(&mut st, Host::Pack(copy), 0, "sidecar");
+        let mut carried = Blueprint::open(&st, id("rebuilt_deck"), false, Some(copy));
+        press(&mut carried, &mut st, &[KeyCode::Char('m')]);
+        assert!(modding(&carried));
+        let buf = screen(&carried, &st, 100, 30);
+        assert_eq!(
+            inside(&buf, 100, 30, readout),
+            "SOCKET L ▸ Sidecar co-processor · program power +1"
+        );
+        press(&mut carried, &mut st, &[KeyCode::Right]);
+        let buf = screen(&carried, &st, 100, 30);
+        assert_eq!(
+            inside(&buf, 100, 30, readout),
+            "SOCKET R ▸ empty · takes deck hardware"
+        );
+    }
+
+    #[test]
+    fn modding_greys_the_item_but_not_its_sockets() {
+        let mut st = state();
+        let mut bp = dshawns_deck(&mut st);
+        st.tick += 40;
+        let (x, y) = corner(100, 30);
+        let (ox, oy) = (x + 6, y + 2);
+        // Inspect: the maker plate bold in its own colour, the glass on slot A.
+        let buf = screen(&bp, &st, 100, 30);
+        let k = &buf[(ox + 5, oy + 5)];
+        assert_eq!((k.symbol(), k.fg), ("K", LABEL));
+        assert!(k.modifier.contains(Modifier::BOLD));
+        assert!(buffer_text(&buf).contains("SLOT A"));
+        assert_eq!(buf[(ox + 7, oy)].symbol(), "┏");
+
+        press(&mut bp, &mut st, &[KeyCode::Char('m')]);
+        let buf = screen(&bp, &st, 100, 30);
+        let k = &buf[(ox + 5, oy + 5)];
+        assert_eq!(k.symbol(), "K");
+        assert_eq!(k.fg, grey(LABEL, PANEL_BG));
+        assert!(!k.modifier.contains(Modifier::BOLD));
+        // The rust edge greys too, and the player's cable; the window's panel stays.
+        let edge = &buf[(ox + 1, oy + 4)];
+        assert_eq!((edge.symbol(), edge.fg), ("╭", grey(EDGE, PANEL_BG)));
+        let cable = &buf[(ox, oy + 16)];
+        assert_eq!(cable.symbol(), "▐");
+        assert!(
+            matches!(cable.fg, Color::Rgb(r, g, _) if r == g),
+            "{:?}",
+            cable.fg
+        );
+        assert_eq!(buf[(ox, oy)].bg, PANEL_BG);
+        // Each socket keeps its colours: its rails and the gold contacts in the edge.
+        let rail = &buf[(ox - 3, oy + 6)];
+        assert_eq!((rail.symbol(), rail.fg), ("▄", STEEL));
+        let pin = &buf[(ox + 1, oy + 9)];
+        assert_eq!((pin.symbol(), pin.fg), ("▌", GOLD));
+        let rail = &buf[(ox + 86, oy + 12)];
+        assert_eq!((rail.symbol(), rail.fg), ("▀", STEEL));
+        // The brackets on socket L, none on slot A; the glass blank, no WAREZ.
+        assert_eq!(buf[(ox - 5, oy + 5)].symbol(), "┏");
+        assert_eq!(buf[(ox + 2, oy + 13)].symbol(), "┛");
+        assert_ne!(buf[(ox + 7, oy)].symbol(), "┏");
+        let text = buffer_text(&buf);
+        assert!(!text.contains("SLOT A"), "{text}");
+        assert!(!text.contains("WAREZ"), "{text}");
+    }
+
+    #[test]
+    fn modding_keeps_the_drawing_in_place() {
+        for (w, h) in [(120, 40), (100, 30)] {
+            let mut st = state();
+            let mut bp = dshawns_deck(&mut st);
+            let at = find(&screen(&bp, &st, w, h), "K▒ROK▒WA");
+            assert!(at.is_some(), "{w}x{h}");
+            press(&mut bp, &mut st, &[KeyCode::Char('m')]);
+            assert!(modding(&bp));
+            assert_eq!(find(&screen(&bp, &st, w, h), "K▒ROK▒WA"), at, "{w}x{h}");
+        }
+    }
+
+    #[test]
+    fn holding_a_cart_blocks_m() {
+        let mut st = state();
+        let mut bp = dshawns_deck(&mut st);
+        st.character.give(id("spoof"), 1);
+        let spoof = crate::screens::cyberdeck::inventory(&st)
+            .iter()
+            .position(|i| *i == id("spoof"))
+            .unwrap();
+        deck_mut(&mut bp).point = Part::Inv(spoof);
+        press(&mut bp, &mut st, &[KeyCode::Char(' ')]);
+        assert_eq!(deck(&bp).held, Some(id("spoof")));
+        let (_, _, hint) = rows_of(100, 30);
+        let buf = screen(&bp, &st, 100, 30);
+        assert_eq!(
+            inside(&buf, 100, 30, hint),
+            "↑↓←→ carry · space drop · esc put back"
+        );
+        press(&mut bp, &mut st, &[KeyCode::Char('m')]);
+        assert!(!modding(&bp));
+        assert_eq!(deck(&bp).held, Some(id("spoof")));
+        // Put back, m works again.
+        press(&mut bp, &mut st, &[KeyCode::Esc, KeyCode::Char('m')]);
+        assert!(modding(&bp));
     }
 }

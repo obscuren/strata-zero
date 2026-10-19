@@ -1,16 +1,45 @@
 //! The deck hardware drawn: large for the blueprint window, small in a deck's socket,
 //! and as a swatch for the tray. All shapes are half blocks in exact colours.
 
+use super::art::{Art, SocketPlace};
 use super::cyberdeck::Pen;
 use game::{HardwareLook, Mod};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::Color;
 
 /// The large drawing's width.
-#[allow(dead_code)] // until the blueprint window opens on hardware
 pub const W: u16 = 52;
 /// The large drawing's height.
-#[allow(dead_code)] // until the blueprint window opens on hardware
 pub const H: u16 = 18;
+
+/// A piece on its own blueprint: drawn large, centred, with no sockets of its own.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HardwareArt {
+    pub look: HardwareLook,
+    /// What it does, for the sticker.
+    pub mods: Vec<Mod>,
+}
+
+impl Art for HardwareArt {
+    fn size(&self) -> (u16, u16) {
+        (W, H)
+    }
+
+    fn draw(&self, (ox, oy): (u16, u16), clip: Rect, buf: &mut Buffer) {
+        let mut pen = Pen {
+            clip: clip.intersection(buf.area),
+            buf,
+            ox,
+            oy,
+        };
+        draw_large(self.look, &self.mods, &mut pen);
+    }
+
+    fn sockets(&self) -> Vec<SocketPlace> {
+        Vec::new()
+    }
+}
 
 const fn rgb(hex: u32) -> Color {
     Color::Rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
@@ -69,7 +98,6 @@ fn run(p: &mut Pen, y: i32, xs: std::ops::Range<i32>, ch: char, fg: Color, bg: O
 }
 
 /// The large drawing at the pen's origin, 52 by 18.
-#[allow(dead_code)] // until the blueprint window opens on hardware
 pub fn draw_large(look: HardwareLook, mods: &[Mod], p: &mut Pen) {
     match look {
         HardwareLook::ColdfinI => coldfin(p, mods, false),

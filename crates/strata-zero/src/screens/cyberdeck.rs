@@ -5,10 +5,10 @@
 use crate::actions::{perform, report};
 use crate::app::{AppState, ScreenCmd, TransitionKind};
 use crate::screens::deck::{Deck, FAILSAFE_TEXT, FAILSAFE_WARN, REVEAL_TICKS};
-use crate::ui::art::{Dir, step};
+use crate::ui::art::{Art, Dir, SocketPlace, step};
 use crate::ui::chrome::{DIM, MAGENTA};
 use crate::ui::cyberdeck::{
-    Cart, DeckView, GLASS_ROWS, GLASS_TEXT_W, GlassTone, Held, Part, Switch, parts,
+    self, Cart, DeckView, GLASS_ROWS, GLASS_TEXT_W, GlassTone, Held, Part, Switch, parts,
 };
 use crate::ui::sidebar::wrap_text;
 use citygen::Place;
@@ -17,6 +17,8 @@ use game::{
     AbilityId, Action, CopyId, DeckSpec, HardwareLook, Item, ItemCopy, ItemId, ItemKind, Slot,
     SlotPlan, Source,
 };
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 
@@ -81,12 +83,27 @@ impl DeckTab {
         self.point.pack()
     }
 
-    pub fn hint(&self) -> &'static str {
-        if self.held.is_some() {
-            "↑↓←→ carry · space drop · esc put back"
+    /// The hint row's keys and its esc part, apart so the window can put its own
+    /// keys between them.
+    pub fn hint(&self) -> (&'static str, &'static str) {
+        if self.holding() {
+            ("↑↓←→ carry · space drop", "esc put back")
         } else {
-            "↑↓←→ point · space act · esc close"
+            ("↑↓←→ point · space act", "esc close")
         }
+    }
+
+    /// A cart is lifted and waiting for a slot.
+    pub fn holding(&self) -> bool {
+        self.held.is_some()
+    }
+
+    /// The deck alone, as it stands, for modding: bare, so the glass is blank and
+    /// nothing of inspect's is drawn.
+    pub fn art(&self, st: &AppState) -> DeckArt {
+        let mut view = self.layout(st, self.point);
+        view.bare = true;
+        DeckArt { view }
     }
 
     /// One key: `Pop` for esc with nothing to undo, `Stay` for every other. The window
@@ -341,6 +358,29 @@ impl DeckTab {
             self.cover_up = true;
         }
         self.touch(st.tick);
+    }
+}
+
+/// A deck as the modding mode sees it: the bare drawing and its sockets.
+pub struct DeckArt {
+    view: DeckView,
+}
+
+impl Art for DeckArt {
+    fn size(&self) -> (u16, u16) {
+        cyberdeck::size(self.view.look)
+    }
+
+    fn origin(&self, body: Rect) -> (u16, u16) {
+        cyberdeck::origin(self.view.look, body)
+    }
+
+    fn draw(&self, origin: (u16, u16), clip: Rect, buf: &mut Buffer) {
+        cyberdeck::draw_at(&self.view, origin, clip, buf);
+    }
+
+    fn sockets(&self) -> Vec<SocketPlace> {
+        cyberdeck::sockets(&self.view)
     }
 }
 
@@ -932,7 +972,8 @@ mod tests {
         space(&mut tab, &mut st);
         assert_eq!(tab.held, Some(id("attack")));
         assert_eq!(tab.point, Part::Slot(0), "the bay is full: the first cart");
-        assert_eq!(tab.hint(), "↑↓←→ carry · space drop · esc put back");
+        assert!(tab.holding());
+        assert_eq!(tab.hint(), ("↑↓←→ carry · space drop", "esc put back"));
         tab.key(&mut st, KeyCode::Right);
         assert_eq!(tab.point, Part::Slot(1));
         tab.key(&mut st, KeyCode::Down);
@@ -955,7 +996,8 @@ mod tests {
         assert_eq!(tab.held, None);
         assert_eq!(last(&st), Some("Attack slotted · Copy to inventory"));
         assert_eq!(tab.point, Part::Slot(1));
-        assert_eq!(tab.hint(), "↑↓←→ point · space act · esc close");
+        assert!(!tab.holding());
+        assert_eq!(tab.hint(), ("↑↓←→ point · space act", "esc close"));
     }
 
     #[test]
