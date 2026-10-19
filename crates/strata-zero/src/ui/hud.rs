@@ -338,6 +338,8 @@ pub struct Footer<'a> {
     /// `TRACE ▰▰▱▱▱▱▱▱▱▱ 23 · ALERT 58 min`, jacked in.
     pub trace: Option<String>,
     pub hunted: bool,
+    /// On foot on turns: `ENGAGED` at the right of row 1.
+    pub engaged: bool,
     /// `TURN 3  YOU › grey ICE › black ICE`, engaged.
     pub turn: Option<String>,
     /// `RUN  crack · door lock  ▰▰▱ 2/3 · 40%` with the beat bar in calm.
@@ -417,9 +419,9 @@ pub fn footer_rows(f: &Footer, width: u16) -> [Line<'static>; 4] {
         row1.push(Span::styled(trace.clone(), Style::default().fg(CYAN)));
     }
     let mut right1 = Vec::new();
-    if f.hunted {
+    if f.hunted || f.engaged {
         right1.push(Span::styled(
-            "HUNTED",
+            if f.hunted { "HUNTED" } else { "ENGAGED" },
             Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD),
         ));
         right1.push(Span::raw("    "));
@@ -452,8 +454,10 @@ pub fn footer_rows(f: &Footer, width: u16) -> [Line<'static>; 4] {
         }
         let colour = if l.contains("black ICE") {
             Color::Rgb(255, 40, 40)
-        } else {
+        } else if l.contains(" ICE") {
             MAGENTA
+        } else {
+            crate::render::people::FOE
         };
         right3.push(Span::styled(l.clone(), Style::default().fg(colour)));
     }
@@ -860,6 +864,7 @@ mod tests {
                 overburdened: false,
                 trace: None,
                 hunted: false,
+                engaged: false,
                 turn: None,
                 run: None,
                 ice: Vec::new(),
@@ -927,6 +932,7 @@ mod tests {
             overburdened: false,
             trace: None,
             hunted: false,
+            engaged: false,
             turn: None,
             run: None,
             ice: Vec::new(),
@@ -970,6 +976,7 @@ mod tests {
             overburdened: false,
             trace: Some("TRACE ▰▰▱▱▱▱▱▱▱▱ 23".into()),
             hunted: false,
+            engaged: false,
             turn: None,
             run: Some("RUN  crack · door lock  ▰▰▱ 2/3 · 40%   ▓▓▓▓░░░░  next roll".into()),
             ice: vec!["▣ grey ICE · asleep · 6/6 · 4 tiles".into()],

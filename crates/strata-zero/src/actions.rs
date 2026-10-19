@@ -77,7 +77,8 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         // A strike wants a target: the map's cursor fires it, not the slot alone.
         return Err("needs a target · aim at a foe".to_string());
     }
-    if fired.is_some() {
+    // Firing an ability, or using an item on turns, is an action point.
+    if fired.is_some() || (matches!(action, Action::Use(_)) && st.net.engaged.is_some()) {
         crate::net::spend_ap(st)?;
     }
     let took = matches!(
@@ -304,6 +305,27 @@ mod tests {
         st.player = Some(Player::spawn(st.city.as_ref().unwrap(), 1));
         perform(&mut st, Action::Unequip(Slot::Deck)).unwrap();
         assert_eq!(st.character.equipped(Slot::Deck), None);
+    }
+
+    #[test]
+    fn a_stim_from_the_deck_costs_an_ap() {
+        use citygen::Pos;
+        let mut st = crate::foes::testutil::lot(Pos::new(14, 8));
+        st.character.hp = 1;
+        let stim = ItemId::new("stim_patch");
+        crate::net::engage(&mut st, Place::Stratum(StratumKind::Street), true);
+        assert_eq!(
+            perform(&mut st, Action::Use(stim.clone())).unwrap_err(),
+            "move first · space to stay"
+        );
+        assert!(crate::net::stay(&mut st));
+        perform(&mut st, Action::Use(stim.clone())).unwrap();
+        assert_eq!(st.net.engaged.as_ref().unwrap().ap, 1);
+        assert_eq!(st.character.hp, 16);
+        // Out of a fight it is free.
+        crate::net::disengage(&mut st);
+        st.character.give(stim.clone(), 1);
+        perform(&mut st, Action::Use(stim)).unwrap();
     }
 
     #[test]

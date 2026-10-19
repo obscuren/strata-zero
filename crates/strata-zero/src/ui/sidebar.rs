@@ -225,9 +225,14 @@ pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
             out.push(Line::from(Span::styled(format!(" {line}"), style)));
         }
         for line in &v.ice_lines {
+            let colour = if line.contains(" ICE") {
+                MAGENTA
+            } else {
+                crate::render::people::FOE
+            };
             out.push(Line::from(Span::styled(
                 format!(" {line}"),
-                Style::default().fg(MAGENTA),
+                Style::default().fg(colour),
             )));
         }
         if let Some(t) = v.map.tile(v.focus) {

@@ -143,8 +143,13 @@ pub struct MapScreen {
     pub cam: Camera,
     /// The tile under inspection in Explore mode; the camera follows it.
     pub cursor: Pos,
-    /// The tile a walk is aimed at, in a construct.
+    /// The tile a walk is aimed at, on turns or in a construct.
     pub aim: Option<Pos>,
+    /// The fire cursor on your act half on foot: what a shot goes at.
+    pub target: Option<Pos>,
+    /// The half of your turn the last frame saw, so the act half's opening is one
+    /// moment: the cursor opens on the nearest foe then.
+    last_phase: Option<crate::net::Phase>,
     /// The aimed walk being stepped, a tile per `WALK_TICKS`; keys wait for it.
     pub walking: Option<Walk>,
     /// A program waiting for its target.
@@ -253,6 +258,8 @@ impl MapScreen {
             cam: Camera::default(),
             cursor: Pos::new(0, 0),
             aim: None,
+            target: None,
+            last_phase: None,
             walking: None,
             targeting: None,
             which_way: None,
@@ -267,6 +274,137 @@ impl MapScreen {
             last_map: Cell::new(Rect::new(0, 0, 100, 28)),
             placement: None,
         }
+    }
+
+    /// Your act half on foot: the keys aim and fire.
+    fn firing(&self, st: &AppState) -> bool {
+        self.mode == Mode::Walk
+            && crate::net::engaged_on_foot(st)
+            && crate::net::phase(st) == Some(crate::net::Phase::Act)
+    }
+
+    /// The fire cursor opens on the nearest foe in sight, or not at all.
+    fn open_target(&mut self, st: &AppState) {
+        self.target = crate::foes::in_sight(st).first().map(|i| st.foes[*i].pos);
+    }
+
+    /// The readout over a foe under the cursor: its name, its weapon, the distance,
+    /// your chance per round with the worn gun (or why there is none).
+    fn aim_readout(st: &AppState, foe: usize) -> String {
+        let f = &st.foes[foe];
+        let dist = st.player.as_ref().map_or(0, |p| p.pos.chebyshev(f.pos));
+        let odds = match crate::combat::your_chance(st, foe) {
+            Ok(c) => format!("{c}%"),
+            Err(why) => why,
+        };
+        format!(
+            " {} · {} · {dist} tiles · {odds} ",
+            f.name,
+            crate::foes::weapon_name(st, f)
+        )
+    }
+
+    /// The keys of your act half on foot: a direction moves the cursor, tab the
+    /// next foe, space fires, a strike ability's number fires it, esc drops the
+    /// cursor. `None` for a key that is not the cursor's.
+    fn handle_firing(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
+        let Some((place, me)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
+            return None;
+        };
+        if let Some(dir) = dir_for(k.code) {
+            let from = self.target.unwrap_or(me);
+            let to = from.step(dir);
+            if st.city.as_ref().is_some_and(|c| c.size.contains(to)) {
+                self.target = Some(to);
+            }
+            return Some(ScreenCmd::Stay);
+        }
+        match k.code {
+            KeyCode::Tab | KeyCode::BackTab => {
+                let seen = crate::foes::in_sight(st);
+                if seen.is_empty() {
+                    st.warn("nothing to hit");
+                    return Some(ScreenCmd::Stay);
+                }
+                let at = self
+                    .target
+                    .and_then(|t| seen.iter().position(|i| st.foes[*i].pos == t));
+                let next = match at {
+                    Some(i) => (i + 1) % seen.len(),
+                    None => 0,
+                };
+                self.target = Some(st.foes[seen[next]].pos);
+                Some(ScreenCmd::Stay)
+            }
+            KeyCode::Esc if self.target.is_some() => {
+                self.target = None;
+                Some(ScreenCmd::Stay)
+            }
+            KeyCode::Char(' ') => {
+                match self.target.and_then(|t| crate::foes::foe_at(st, place, t)) {
+                    Some(foe) => {
+                        let result = crate::combat::fire(st, foe);
+                        if let Err(why) = result {
+                            st.warn(why);
+                        }
+                    }
+                    None => st.warn("pick a target"),
+                }
+                Some(ScreenCmd::Stay)
+            }
+            KeyCode::Char(c) => {
+                let n = c.to_digit(10)?;
+                if !(1..=hud::SLOTS as u32).contains(&n) {
+                    return None;
+                }
+                let id = Self::actives(st).get(n as usize - 1).cloned()?;
+                let strikes = st.content.ability(&id).is_some_and(|a| {
+                    matches!(
+                        a.kind,
+                        game::AbilityKind::Active(game::Active::Strike { .. })
+                    )
+                });
+                if !strikes {
+                    return None;
+                }
+                match self.target.and_then(|t| crate::foes::foe_at(st, place, t)) {
+                    Some(foe) => {
+                        if let Err(why) = crate::combat::strike(st, &id, foe) {
+                            st.warn(why);
+                        }
+                    }
+                    None => st.warn("pick a target"),
+                }
+                Some(ScreenCmd::Stay)
+            }
+            _ => None,
+        }
+    }
+
+    /// A step of yours on turns on foot: a move spent, the last one opening the
+    /// act half.
+    fn engaged_step(&mut self, st: &mut AppState, dir: Dir) -> ScreenCmd {
+        if let Err(why) = crate::net::spend_move(st) {
+            st.warn(why);
+            return ScreenCmd::Stay;
+        }
+        let bonus = st.sight_bonus();
+        let minute = st.minute_of_day();
+        let Some(city) = st.city.as_ref() else {
+            return ScreenCmd::Stay;
+        };
+        let interiors = &st.interiors;
+        let constructs = &st.constructs;
+        if let Some(player) = st.player.as_mut()
+            && let Some(map) = MapRef::for_place(city, interiors, constructs, player.place, minute)
+            && player.try_move(&map, dir)
+        {
+            player.update_fov(&map, bonus);
+        }
+        if st.net.engaged.as_ref().is_some_and(|e| e.moves == 0) {
+            crate::net::stay(st);
+        }
+        ScreenCmd::Stay
     }
 
     /// The tile the inspector describes: the player in Walk mode, the cursor otherwise.
@@ -382,6 +520,13 @@ impl MapScreen {
                 }
                 _ => Vec::new(),
             },
+            (false, Some(p)) => {
+                let vis = p.vis();
+                crate::foes::lines(st, |q| {
+                    vis.get(q)
+                        .is_some_and(|v| *v != crate::render::Visibility::Unseen)
+                })
+            }
             _ => Vec::new(),
         };
         hud::Footer {
@@ -391,6 +536,7 @@ impl MapScreen {
             overburdened: st.character.overburdened(&st.content),
             trace,
             hunted: jacked && crate::net::hunted(st),
+            engaged: crate::net::engaged_on_foot(st),
             turn: crate::net::turn_readout(st),
             run,
             ice,
@@ -457,7 +603,18 @@ impl MapScreen {
             ));
         }
         let e = st.net.engaged.as_ref()?;
+        let on_foot = crate::net::engaged_on_foot(st);
         Some(match e.actor() {
+            Actor::You if on_foot => match e.phase {
+                Phase::Move => (
+                    "YOUR TURN · MOVE".to_string(),
+                    "hjkl step · g aims a path · enter walks it · space stays".to_string(),
+                ),
+                Phase::Act => (
+                    "AIM".to_string(),
+                    "hjkl target · tab next · space fire · 1-5 ability · . end turn".to_string(),
+                ),
+            },
             Actor::You => match e.phase {
                 Phase::Move => (
                     "YOUR TURN · MOVE".to_string(),
@@ -1381,11 +1538,31 @@ impl MapScreen {
     /// The path from the player to the aim and how many tiles the moves left cover;
     /// `None` when nothing reaches the aim. An aim off the map past the entry is
     /// the gate: the path runs to the entry and one tile out.
+    /// The tiles you would walk over a stratum from `from` to `to`, after your
+    /// own: the shortest way over walkable tiles with standing foes in the way.
+    fn street_path(&self, st: &AppState, from: Pos, to: Pos) -> Option<Vec<Pos>> {
+        let city = st.city.as_ref()?;
+        let place = st.player.as_ref()?.place;
+        let k = place.stratum()?;
+        if from == to {
+            return Some(Vec::new());
+        }
+        let path = citygen::pathing::astar(city.size, from, to, |_, step| {
+            (city.walkable(k, step) && crate::foes::foe_at(st, place, step).is_none()).then_some(1)
+        })?;
+        Some(path.into_iter().filter(|p| *p != from).collect())
+    }
+
     pub fn aim_path(&self, st: &AppState) -> Option<(Vec<Pos>, usize)> {
         let aim = self.aim?;
         let player = st.player.as_ref()?;
         let Place::Construct(b) = player.place else {
-            return None;
+            let path = self.street_path(st, player.pos, aim)?;
+            let lit = match st.net.engaged.as_ref() {
+                Some(e) => e.moves as usize,
+                None => path.len(),
+            };
+            return Some((path, lit));
         };
         let k = st.constructs.get(b)?;
         let path = if k.tiles.in_bounds(aim) {
@@ -1428,6 +1605,51 @@ impl MapScreen {
         ScreenCmd::Stay
     }
 
+    /// One tile of an aimed walk over a stratum: a move spent, sight refreshed, the
+    /// act half opening on the last move.
+    fn street_walk_step(&mut self, st: &mut AppState, next: Pos) {
+        let Some((place, here)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
+            self.walking = None;
+            return;
+        };
+        let open = here.chebyshev(next) <= 1
+            && place
+                .stratum()
+                .is_some_and(|k| st.city.as_ref().is_some_and(|c| c.walkable(k, next)))
+            && crate::foes::foe_at(st, place, next).is_none();
+        if !open {
+            self.walking = None;
+            st.warn("the way is blocked");
+            return;
+        }
+        if let Err(why) = crate::net::spend_move(st) {
+            self.walking = None;
+            st.warn(why);
+            return;
+        }
+        let bonus = st.sight_bonus();
+        let minute = st.minute_of_day();
+        if let Some(city) = st.city.as_ref()
+            && let Some(map) = MapRef::for_place(city, &st.interiors, &st.constructs, place, minute)
+            && let Some(player) = st.player.as_mut()
+        {
+            player.pos = next;
+            player.update_fov(&map, bonus);
+        }
+        let now = st.clock_tick();
+        if let Some(w) = self.walking.as_mut() {
+            w.path.remove(0);
+            if w.path.is_empty() {
+                self.walking = None;
+            } else {
+                w.next_at = now + crate::net::WALK_TICKS;
+            }
+        }
+        if st.net.engaged.as_ref().is_some_and(|e| e.moves == 0) && crate::net::stay(st) {
+            self.walking = None;
+        }
+    }
+
     /// One tile of the walk in flight when its time has come: a move spent in a
     /// fight, sight refreshed, the run aborted as any step aborts it.
     fn walk_step(&mut self, st: &mut AppState) {
@@ -1441,6 +1663,14 @@ impl MapScreen {
             self.walking = None;
             return;
         };
+        if st
+            .player
+            .as_ref()
+            .is_some_and(|p| p.place.stratum().is_some())
+        {
+            self.street_walk_step(st, next);
+            return;
+        }
         let Some((Place::Construct(b), _)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
             self.walking = None;
             return;
@@ -1517,18 +1747,17 @@ impl MapScreen {
         if after != before && st.net.run.take().is_some() {
             st.say("run aborted");
         }
-        if k.code == KeyCode::Char('.')
-            && st
+        if k.code == KeyCode::Char('.') {
+            let inside = st
                 .player
                 .as_ref()
-                .is_some_and(|p| matches!(p.place, Place::Construct(_)))
-        {
+                .is_some_and(|p| matches!(p.place, Place::Construct(_)));
             if st.net.engaged.is_some() {
-                // Only your own turn ends on the key; the ICE's turns run on the pace.
+                // Only your own turn ends on the key; the others' run on the pace.
                 if crate::net::your_turn(st) {
                     crate::net::end_turn(st);
                 }
-            } else {
+            } else if inside {
                 st.net.beat = st.clock_tick();
                 crate::net::beat(st);
             }
@@ -1659,6 +1888,42 @@ impl MapScreen {
             Some((Place::Construct(b), pos)) => Some((b, pos)),
             _ => None,
         };
+        // On foot on turns: `g` aims a path over the street, the arrows move the aim
+        // while it is up, enter walks it; a plain arrow steps and spends a move.
+        if inside.is_none()
+            && crate::net::engaged_on_foot(st)
+            && let Some(pos) = st.player.as_ref().map(|p| p.pos)
+        {
+            if k.code == KeyCode::Char('g') {
+                self.aim = Some(pos);
+                return Some(ScreenCmd::Stay);
+            }
+            if let Some(dir) = dir_for(k.code) {
+                if let Some(from) = self.aim {
+                    let to = from.step(dir);
+                    let cap = crate::net::aim_cap(st);
+                    let open = self
+                        .street_path(st, pos, to)
+                        .is_some_and(|p| p.len() <= cap);
+                    if open {
+                        self.aim = Some(to);
+                    }
+                    return Some(ScreenCmd::Stay);
+                }
+                match self.bump(st, dir) {
+                    Err(cmd) => return Some(cmd),
+                    Ok(true) => return Some(ScreenCmd::Stay),
+                    Ok(false) => {}
+                }
+                return Some(self.engaged_step(st, dir));
+            }
+            if k.code == KeyCode::Enter
+                && let Some(aim) = self.aim
+                && aim != pos
+            {
+                return Some(self.start_walk(st, aim));
+            }
+        }
         if let Some((b, pos)) = inside {
             let acting = crate::net::phase(st) == Some(crate::net::Phase::Act);
             if k.code == KeyCode::Char('g') {
@@ -1872,6 +2137,16 @@ impl Screen for MapScreen {
                     }
                     continue;
                 }
+                // Your act half on foot: the cursor takes its keys, the rest go on.
+                if self.firing(st)
+                    && crate::net::your_turn(st)
+                    && let Some(cmd) = self.handle_firing(st, k)
+                {
+                    if !matches!(cmd, ScreenCmd::Stay) {
+                        return cmd;
+                    }
+                    continue;
+                }
                 // So does the which-way pick.
                 if self.which_way.is_some() {
                     let cmd = self.handle_which_way(st, k);
@@ -1983,6 +2258,17 @@ impl Screen for MapScreen {
                 crate::net::engage(st, place, false);
             }
         }
+        // The fire cursor: opens on the nearest foe as your act half opens, goes
+        // when the half does.
+        let phase = crate::net::phase(st).filter(|_| crate::net::engaged_on_foot(st));
+        if phase == Some(crate::net::Phase::Act) {
+            if self.last_phase != Some(crate::net::Phase::Act) {
+                self.open_target(st);
+            }
+        } else {
+            self.target = None;
+        }
+        self.last_phase = phase;
         // The walk: it stops where it is when a fight starts under it or the turn
         // is no longer yours, else it steps on its ticks.
         if self.walking.is_some()
@@ -1993,9 +2279,11 @@ impl Screen for MapScreen {
             st.say("the walk stops");
         }
         if inside.is_none() {
-            self.aim = None;
-            self.walking = None;
             self.targeting = None;
+            if !crate::net::engaged_on_foot(st) {
+                self.aim = None;
+                self.walking = None;
+            }
         }
         // The turn left you while you were picking: nothing to confirm now.
         if self.targeting.is_some() && !crate::net::your_turn(st) {
@@ -2175,6 +2463,30 @@ impl Screen for MapScreen {
         };
         if !ways.is_empty() {
             overlays.push(&way_blocks);
+        }
+        // The fire cursor: the line to it, the foe under it inverted, the readout.
+        let fire_line: Vec<Pos> = match (self.target, st.player.as_ref()) {
+            (Some(t), Some(p)) if self.firing(st) => citygen::pathing::bresenham(p.pos, t)
+                .into_iter()
+                .filter(|q| *q != p.pos && *q != t)
+                .collect(),
+            _ => Vec::new(),
+        };
+        let aimed_foe = self
+            .target
+            .filter(|_| self.firing(st))
+            .and_then(|t| crate::foes::foe_at(st, self.place, t));
+        let fire =
+            self.target
+                .filter(|_| self.firing(st))
+                .map(|t| crate::render::path::AimOverlay {
+                    line: &fire_line,
+                    target: t,
+                    on_foe: aimed_foe.is_some(),
+                    readout: aimed_foe.map(|i| Self::aim_readout(st, i)),
+                });
+        if let Some(o) = fire.as_ref() {
+            overlays.push(o);
         }
         let looked: Vec<Pos> = self.looking.iter().map(|l| l.cursor).collect();
         let look_block = crate::render::path::BlockOverlay {
@@ -2357,6 +2669,13 @@ impl Screen for MapScreen {
                 (Place::Construct(b), Some(p)) if p.place == self.place => {
                     let vis = p.vis();
                     crate::net::ice_lines(st, b, |q| {
+                        vis.get(q)
+                            .is_some_and(|v| *v != crate::render::Visibility::Unseen)
+                    })
+                }
+                (Place::Stratum(_), Some(p)) if p.place == self.place => {
+                    let vis = p.vis();
+                    crate::foes::lines(st, |q| {
                         vis.get(q)
                             .is_some_and(|v| *v != crate::render::Visibility::Unseen)
                     })
@@ -2581,6 +2900,206 @@ mod tests {
             crate::screens::console::run(&mut st, at, "calm").unwrap(),
             "calm"
         );
+    }
+
+    /// The lot, the goon seeing you, the fight on, you skilled; `space` stays and
+    /// opens the act half.
+    fn act_half(goon: Pos) -> (AppState, MapScreen) {
+        let (mut st, mut s) = lot(goon);
+        st.character.skills.insert(game::SkillId::new("handguns"));
+        s.update(&mut st, &[]);
+        assert!(st.net.engaged.is_some() && crate::net::your_turn(&st));
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(crate::net::phase(&st), Some(crate::net::Phase::Act));
+        (st, s)
+    }
+
+    #[test]
+    fn the_act_half_opens_the_cursor_on_the_nearest_foe() {
+        let (mut st, mut s) = act_half(Pos::new(14, 8));
+        assert_eq!(s.target, Some(Pos::new(14, 8)));
+        let buf = draw_buffer(&s, &st, 100, 30);
+        let text = buffer_text(&buf);
+        assert!(text.contains("goon · Scrap nine · 8 tiles · 69%"), "{text}");
+        let me = st.player.as_ref().unwrap().pos;
+        let _ = me;
+        assert_eq!(
+            cell_of(&s, &st, &buf, Pos::new(14, 8)),
+            ("@".to_string(), Color::Rgb(0, 0, 0))
+        );
+        // The line of fire between you and the goon.
+        assert_eq!(cell_of(&s, &st, &buf, Pos::new(10, 8)).0, "·");
+        // The turn ends: the cursor goes.
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(s.target, None);
+    }
+
+    #[test]
+    fn tab_cycles_foes_nearest_first() {
+        let (mut st, mut s) = lot(Pos::new(14, 8));
+        st.foes.push(crate::foes::Foe::goon(
+            Place::Stratum(StratumKind::Street),
+            Pos::new(9, 8),
+        ));
+        s.update(&mut st, &[]);
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(s.target, Some(Pos::new(9, 8)));
+        s.update(&mut st, &[key(KeyCode::Tab)]);
+        assert_eq!(s.target, Some(Pos::new(14, 8)));
+        s.update(&mut st, &[key(KeyCode::Tab)]);
+        assert_eq!(s.target, Some(Pos::new(9, 8)));
+    }
+
+    #[test]
+    fn space_fires_and_spends_an_ap() {
+        let (mut st, mut s) = act_half(Pos::new(14, 8));
+        st.force_hit = Some(true);
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(st.net.engaged.as_ref().unwrap().ap, 1);
+        assert!(logged(&st, "you fire · goon 4 · 4 · 4"), "{:?}", last(&st));
+        assert_eq!(st.fx.len(), 12);
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(text.contains("AP ●○ 1/2"), "{text}");
+    }
+
+    #[test]
+    fn space_off_a_foe_says_pick_a_target() {
+        let (mut st, mut s) = act_half(Pos::new(14, 8));
+        s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        assert_eq!(s.target, Some(Pos::new(15, 8)));
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(last(&st), Some("pick a target"));
+        assert_eq!(st.net.engaged.as_ref().unwrap().ap, 2);
+        assert!(st.fx.is_empty());
+    }
+
+    #[test]
+    fn esc_drops_the_cursor() {
+        let (mut st, mut s) = act_half(Pos::new(14, 8));
+        assert!(matches!(
+            s.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Stay
+        ));
+        assert_eq!(s.target, None);
+        // Any direction brings it back, from your own tile.
+        s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        assert_eq!(s.target, Some(Pos::new(7, 8)));
+        s.update(&mut st, &[key(KeyCode::Tab)]);
+        assert_eq!(s.target, Some(Pos::new(14, 8)));
+    }
+
+    #[test]
+    fn a_direct_step_spends_a_move_and_the_last_opens_the_act_half() {
+        let (mut st, mut s) = lot(Pos::new(14, 8));
+        s.update(&mut st, &[]);
+        assert_eq!(crate::net::phase(&st), Some(crate::net::Phase::Move));
+        s.update(&mut st, &[key(KeyCode::Char('h'))]);
+        assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(5, 8));
+        assert_eq!(st.net.engaged.as_ref().unwrap().moves, 3);
+        for _ in 0..3 {
+            s.update(&mut st, &[key(KeyCode::Char('h'))]);
+        }
+        assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(2, 8));
+        assert_eq!(crate::net::phase(&st), Some(crate::net::Phase::Act));
+        assert_eq!(s.target, Some(Pos::new(14, 8)));
+        // Moves are done: a direction now moves the cursor, not you.
+        s.update(&mut st, &[key(KeyCode::Char('h'))]);
+        assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(2, 8));
+        assert_eq!(s.target, Some(Pos::new(13, 8)));
+    }
+
+    #[test]
+    fn g_aims_a_path_on_the_street_and_enter_walks_it() {
+        let (mut st, mut s) = lot(Pos::new(14, 8));
+        s.update(&mut st, &[]);
+        s.update(&mut st, &[key(KeyCode::Char('g'))]);
+        assert_eq!(s.aim, Some(Pos::new(6, 8)));
+        s.update(&mut st, &[key(KeyCode::Char('l')), key(KeyCode::Char('l'))]);
+        assert_eq!(s.aim, Some(Pos::new(8, 8)));
+        let (path, lit) = s.aim_path(&st).unwrap();
+        assert_eq!(path, vec![Pos::new(7, 8), Pos::new(8, 8)]);
+        assert_eq!(lit, 4);
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert!(s.walking.is_some());
+        for _ in 0..3 {
+            st.tick += crate::net::WALK_TICKS;
+            s.update(&mut st, &[]);
+        }
+        assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(8, 8));
+        assert_eq!(st.net.engaged.as_ref().unwrap().moves, 2);
+        assert!(s.walking.is_none());
+    }
+
+    #[test]
+    fn street_keys_on_the_foes_turn() {
+        let (mut st, mut s) = act_half(Pos::new(14, 8));
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert!(!crate::net::your_turn(&st));
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert_eq!(last(&st), Some("not your turn"));
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert_eq!(last(&st), Some("not your turn"));
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(last(&st), Some("not your turn"));
+        assert!(st.net.engaged.is_some());
+    }
+
+    #[test]
+    fn number_keys_in_a_street_fight() {
+        let (mut st, mut s) = act_half(Pos::new(14, 8));
+        st.character.give(game::ItemId::new("neural_port"), 1);
+        st.character
+            .wear(game::Slot::Neural, game::ItemId::new("neural_port"), None);
+        let actives = MapScreen::actives(&st);
+        let slot = |id: &str| {
+            actives
+                .iter()
+                .position(|a| a.0 == id)
+                .map(|i| char::from_digit(i as u32 + 1, 10).unwrap())
+                .unwrap()
+        };
+        // A scan is an ability like any other: one AP through the slot.
+        s.update(&mut st, &[key(KeyCode::Char(slot("netscan")))]);
+        assert_eq!(st.net.engaged.as_ref().unwrap().ap, 1);
+        // Static wants the cursor on a foe.
+        s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        s.update(&mut st, &[key(KeyCode::Char(slot("static")))]);
+        assert_eq!(last(&st), Some("pick a target"));
+        assert_eq!(st.net.engaged.as_ref().unwrap().ap, 1);
+        s.update(&mut st, &[key(KeyCode::Tab)]);
+        assert_eq!(s.target, Some(Pos::new(14, 8)));
+        s.update(&mut st, &[key(KeyCode::Char(slot("static")))]);
+        assert_eq!(last(&st), Some("no AP left"));
+        // With both points it fires.
+        let (mut st, mut s) = act_half(Pos::new(14, 8));
+        st.character.give(game::ItemId::new("neural_port"), 1);
+        st.character
+            .wear(game::Slot::Neural, game::ItemId::new("neural_port"), None);
+        st.force_hit = Some(true);
+        s.update(&mut st, &[key(KeyCode::Char(slot("static")))]);
+        assert_eq!(st.net.engaged.as_ref().unwrap().ap, 0);
+        assert_eq!(st.foes[0].stunned, 1);
+        assert!(logged(&st, "goon stunned"));
+    }
+
+    #[test]
+    fn the_footer_reads_engaged_and_the_foe_line() {
+        let (mut st, mut s) = act_half(Pos::new(14, 8));
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(text.contains("ENGAGED"), "{text}");
+        assert!(!text.contains("HUNTED"), "{text}");
+        assert!(
+            text.contains("▣ goon · hunting · 20/20 · 8 tiles"),
+            "{text}"
+        );
+        assert!(text.contains("TURN 1  YOU › goon"), "{text}");
+        assert!(
+            text.contains("hjkl target · tab next · space fire · 1-5 ability · . end turn"),
+            "{text}"
+        );
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(text.contains("THE GOON ACTS"), "{text}");
     }
 
     #[test]
