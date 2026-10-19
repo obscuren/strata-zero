@@ -11,11 +11,11 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 36] = [
+const COMMANDS: [&str; 37] = [
     "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "talent", "tpts", "program",
     "heat", "alarm", "wake", "engage", "calm", "ice", "failsafe", "hp", "who", "clock", "tp",
     "clear", "help", "trace", "seize", "backdoor", "eyes", "light", "time", "job", "standing",
-    "jobs", "target", "foe", "foes",
+    "jobs", "target", "foe", "foes", "dummy",
 ];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
@@ -278,7 +278,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             }
             Ok(lines.join(" · "))
         }
-        "foe" => {
+        "foe" | "dummy" => {
             let n: i32 = args.first().and_then(|a| a.parse().ok()).unwrap_or(6);
             let (place, pos) = st
                 .player
@@ -292,7 +292,11 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             if !open {
                 return Err("no room there".to_string());
             }
-            let foe = crate::foes::Foe::goon(place, at);
+            let foe = if cmd == "dummy" {
+                crate::foes::Foe::dummy(place, at)
+            } else {
+                crate::foes::Foe::goon(place, at)
+            };
             let line = format!("a {} at {},{}", foe.name, at.x, at.y);
             st.foes.push(foe);
             Ok(line)

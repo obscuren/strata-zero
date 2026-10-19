@@ -174,6 +174,10 @@ fn wound_foe(st: &mut AppState, foe: usize, damage: u8) {
     let Some(f) = st.foes.get_mut(foe) else {
         return;
     };
+    if f.inert {
+        // A dummy takes the round and keeps standing: nothing gets through.
+        return;
+    }
     f.hp = f.hp.saturating_sub(damage);
     if f.hp == 0 && !f.down {
         f.down = true;
@@ -212,6 +216,7 @@ fn volley(
     // Shot at, it knows where from: a miss is loud enough to turn it on you.
     if let Some(f) = st.foes.get_mut(foe)
         && f.standing()
+        && !f.inert
     {
         f.mode = foes::FoeMode::Hunting {
             seen: from,
@@ -284,7 +289,8 @@ pub fn fire_at_you(st: &mut AppState, foe: usize) {
     let Some(w) = st
         .foes
         .get(foe)
-        .and_then(|f| st.content.item(&f.weapon))
+        .and_then(|f| f.weapon.as_ref())
+        .and_then(|id| st.content.item(id))
         .and_then(|i| i.weapon.clone())
     else {
         return;
@@ -540,6 +546,30 @@ mod tests {
             Pos::new(6, 0),
             "straight up into the wall"
         );
+    }
+
+    #[test]
+    fn a_dummy_stands_shrugs_every_round_off_and_never_hunts() {
+        let mut st = foes::testutil::lot(Pos::new(14, 8));
+        st.foes[0] = foes::Foe::dummy(STREET, Pos::new(14, 8));
+        st.character.skills.insert(SkillId::new("handguns"));
+        crate::net::engage(&mut st, STREET, true);
+        assert!(crate::net::stay(&mut st));
+        st.force_hit = Some(true);
+        fire(&mut st, 0).unwrap();
+        assert_eq!(st.foes[0].hp, st.foes[0].hp_max, "nothing gets through");
+        assert!(!st.foes[0].hunting() && st.foes[0].standing());
+        assert_eq!(
+            st.fx.iter().filter(|i| i.label == "-4").count(),
+            3,
+            "the numbers still lift off it"
+        );
+        assert!(logged(&st, "you fire · dummy 4 · 4 · 4"));
+        // Its turn passes at once; with nothing hunting, `e` calms the lot.
+        crate::net::end_turn(&mut st);
+        assert!(crate::net::your_turn(&st));
+        assert!(!crate::net::hunting(&st));
+        assert_eq!(foes::weapon_name(&st, &st.foes[0]), "unarmed");
     }
 
     #[test]

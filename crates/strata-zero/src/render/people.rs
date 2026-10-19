@@ -77,7 +77,7 @@ impl Overlay for PeopleOverlay<'_> {
             } else {
                 FOE
             };
-            cell.set_char('@').set_fg(fg);
+            cell.set_char(f.glyph).set_fg(fg);
             if f.hunting() {
                 cell.modifier.insert(Modifier::BOLD);
             } else {

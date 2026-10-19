@@ -399,6 +399,8 @@ impl Character {
         }
         d.skills.insert(SkillId::new("handguns"));
         d.give(ItemId::new("stim_patch"), 3);
+        // The other SMG, in the pack, to swap in and see its look.
+        d.give_item(c, ItemId::new("whisper_smg"), 1);
         d
     }
 
@@ -1577,6 +1579,11 @@ mod tests {
             "Vex's one and three more"
         );
         assert_eq!(d.equipped(Slot::Primary), Some(&ItemId::new("ratchet_smg")));
+        assert_eq!(
+            d.count(&ItemId::new("whisper_smg")),
+            1,
+            "the streak SMG, in the pack"
+        );
         assert_eq!(d.level, 50);
     }
 

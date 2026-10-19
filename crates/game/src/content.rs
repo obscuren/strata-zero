@@ -804,6 +804,14 @@ mod tests {
             .unwrap();
         assert_eq!((p.damage, p.rounds, p.range), (5, 1, 8));
         assert!(matches!(p.fx[1], Fx::Tracer { speed: 3, .. }), "{:?}", p.fx);
+        let s = c
+            .item(&ItemId::new("whisper_smg"))
+            .unwrap()
+            .weapon
+            .clone()
+            .unwrap();
+        assert_eq!((s.damage, s.rounds, s.range), (4, 3, 12));
+        assert!(matches!(s.fx[1], Fx::Streak { .. }), "{:?}", s.fx);
         assert!(c.item(&ItemId::new("shiv_blade")).unwrap().weapon.is_none());
     }
 

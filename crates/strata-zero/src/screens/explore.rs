@@ -283,9 +283,15 @@ impl MapScreen {
             && crate::net::phase(st) == Some(crate::net::Phase::Act)
     }
 
-    /// The fire cursor opens on the nearest foe in sight, or not at all.
+    /// The fire cursor opens on the nearest foe in sight that hunts you, else the
+    /// nearest at all (a dummy never steals it from a gun), or not at all.
     fn open_target(&mut self, st: &AppState) {
-        self.target = crate::foes::in_sight(st).first().map(|i| st.foes[*i].pos);
+        let seen = crate::foes::in_sight(st);
+        self.target = seen
+            .iter()
+            .find(|i| st.foes[**i].hunting())
+            .or(seen.first())
+            .map(|i| st.foes[*i].pos);
     }
 
     /// The readout over a foe under the cursor: its name, its weapon, the distance,

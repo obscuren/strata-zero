@@ -29,12 +29,18 @@ pub struct Foe {
     pub hp: u8,
     pub hp_max: u8,
     pub reflex: u8,
-    pub weapon: ItemId,
+    /// What it shoots with; unarmed without one.
+    pub weapon: Option<ItemId>,
     pub sight: i32,
     pub mode: FoeMode,
     /// Turns left standing stunned: it neither looks, moves nor fires.
     pub stunned: u8,
     pub down: bool,
+    /// A target and nothing more: it never hunts, moves or fires, and nothing
+    /// gets through it.
+    pub inert: bool,
+    /// How it is drawn.
+    pub glyph: char,
 }
 
 impl Foe {
@@ -47,11 +53,32 @@ impl Foe {
             hp: GOON_HP,
             hp_max: GOON_HP,
             reflex: GOON_REFLEX,
-            weapon: ItemId::new("scrap_nine"),
+            weapon: Some(ItemId::new("scrap_nine")),
             sight: GOON_SIGHT,
             mode: FoeMode::Idle,
             stunned: 0,
             down: false,
+            inert: false,
+            glyph: '@',
+        }
+    }
+
+    /// A training dummy: stands there and takes it.
+    pub fn dummy(place: Place, pos: Pos) -> Foe {
+        Foe {
+            name: "dummy".to_string(),
+            place,
+            pos,
+            hp: GOON_HP,
+            hp_max: GOON_HP,
+            reflex: 0,
+            weapon: None,
+            sight: 0,
+            mode: FoeMode::Idle,
+            stunned: 0,
+            down: false,
+            inert: true,
+            glyph: '&',
         }
     }
 
@@ -156,7 +183,7 @@ pub fn look(st: &mut AppState, i: usize) -> bool {
     let Some(foe) = st.foes.get(i) else {
         return false;
     };
-    if foe.down || foe.stunned > 0 || foe.place != me.0 {
+    if foe.down || foe.inert || foe.stunned > 0 || foe.place != me.0 {
         return foe.hunting();
     }
     if sees(city, foe, me.1) {
@@ -215,10 +242,11 @@ pub fn turn_start(st: &mut AppState, i: usize) -> bool {
     look(st, i)
 }
 
-/// The weapon a foe carries: its reach, for the turn.
+/// The weapon a foe carries: its reach, for the turn; nothing unarmed.
 fn weapon_range(st: &AppState, foe: &Foe) -> i32 {
-    st.content
-        .item(&foe.weapon)
+    foe.weapon
+        .as_ref()
+        .and_then(|id| st.content.item(id))
         .and_then(|i| i.weapon.as_ref())
         .map_or(0, |w| w.range)
 }
@@ -233,7 +261,7 @@ pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate
     let Some(foe) = st.foes.get(i).cloned() else {
         return Step::Nothing;
     };
-    if foe.down || foe.place != me_place {
+    if foe.down || foe.inert || foe.place != me_place {
         return Step::Nothing;
     }
     let FoeMode::Hunting { seen, lost } = foe.mode else {
@@ -290,10 +318,14 @@ pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate
 
 /// The weapon's name a foe carries, for the readouts.
 pub fn weapon_name(st: &AppState, foe: &Foe) -> String {
-    st.content
-        .item(&foe.weapon)
-        .map(|i| i.name.clone())
-        .unwrap_or_else(|| foe.weapon.0.clone())
+    match &foe.weapon {
+        Some(id) => st
+            .content
+            .item(id)
+            .map(|i| i.name.clone())
+            .unwrap_or_else(|| id.0.clone()),
+        None => "unarmed".to_string(),
+    }
 }
 
 /// The footer's and HERE's lines for the standing foes on the player's map that

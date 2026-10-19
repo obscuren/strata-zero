@@ -72,6 +72,9 @@ impl Title {
         }
         st.player = Some(p);
         st.foes.push(crate::foes::Foe::goon(place, Pos::new(18, 8)));
+        // A training dummy six tiles north, for trying shots on something that
+        // stands still and shrugs them off.
+        st.foes.push(crate::foes::Foe::dummy(place, Pos::new(6, 2)));
         ScreenCmd::Switch {
             to: crate::screens::explore_screen(st),
             fx: TransitionKind::Glitch,
@@ -327,9 +330,10 @@ mod tests {
             (p.place, p.pos),
             (Place::Stratum(StratumKind::Street), Pos::new(6, 8))
         );
-        assert_eq!(st.foes.len(), 1);
+        assert_eq!(st.foes.len(), 2);
         assert_eq!(st.foes[0].pos, Pos::new(18, 8));
         assert!(!st.foes[0].hunting());
+        assert!(st.foes[1].inert && st.foes[1].pos == Pos::new(6, 2));
         assert!(
             st.world.as_ref().is_some_and(|w| w.people().is_empty()),
             "nobody lives on the lot"

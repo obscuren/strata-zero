@@ -335,7 +335,12 @@ On your act half, on the street:
 - Save on the lot: `SAVE` refuses with `nothing to save on the lot` (a lot is a
   city with no districts). Load works as ever.
 - Console: `foe [n]` spawns a goon `n` tiles east of you (default 6) on any
-  street; `foes` lists them (`0 goon hunting 24/30 at 18,8`); `hp` as today.
+  street, `dummy [n]` a training dummy (`Foe::dummy`: `inert`, unarmed, sight 0,
+  drawn `&`; it never hunts, moves or fires, and no round gets through, though
+  the numbers still lift off it; added after Jeffrey asked for "a stationary
+  dummy that is invulnerable so I can keep on testing"); `foes` lists them
+  (`0 goon hunting 24/30 at 18,8`); `hp` as today. The lot starts with a dummy
+  at `(6, 2)` beside the goon.
 
 ## 6. The footer and the sidebar (`hud.rs`)
 

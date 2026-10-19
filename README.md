@@ -261,7 +261,8 @@ with it off you are always on foot.
 
 **Title** `↑↓` select · `enter` confirm (new game opens the chooser; new game
 (debug) drops D'SHAWN, maxed out, into a fresh city; new game (combat) puts him
-on an empty lot at dusk with a goon twelve tiles off; load game opens the save
+on an empty lot at dusk with a goon twelve tiles off and a training dummy (`&`,
+stands still, shrugs every round off) six north; load game opens the save
 list) · `q` quit
 
 **New game** picks a template (VEX, KESSLER) or a custom build, then walks six
