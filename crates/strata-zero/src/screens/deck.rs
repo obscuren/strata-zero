@@ -3266,4 +3266,67 @@ mod tests {
             .unwrap_or_else(|| panic!("{text:?}"));
         assert_eq!(card[cut].spans[0].style.fg, Some(CYAN));
     }
+
+    #[test]
+    fn the_gear_row_and_card_show_the_guns_sockets() {
+        let mut st = dshawn();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('3'))]);
+        let primary = |d: &Deck, st: &AppState| {
+            let rows = d.rows(st);
+            rows.iter()
+                .position(|r| r.detail == Some(Detail::Slot(Slot::Primary)))
+                .map(|i| (i, rows[i].text.clone()))
+                .unwrap()
+        };
+        let (_, row) = primary(&d, &st);
+        assert!(row.ends_with("□□") && !row.contains(" · "), "{row:?}");
+        let card_of = |d: &mut Deck, st: &AppState| {
+            let rows = d.rows(st);
+            d.row = primary(d, st).0;
+            texts(&d.detail(st, &rows))
+        };
+        let text = card_of(&mut d, &st);
+        assert!(text.contains(&"□ empty socket · muzzle hardware".to_string()));
+        assert!(text.contains(&"□ empty socket · rail hardware".to_string()));
+        fit(&mut st, game::Host::Worn(Slot::Primary), 0, "hushcan");
+        let (_, row) = primary(&d, &st);
+        assert!(row.ends_with("■□"), "{row:?}");
+        let text = card_of(&mut d, &st);
+        assert!(
+            text.contains(&"■ Hushcan · cool +1".to_string()),
+            "{text:?}"
+        );
+        assert!(text.iter().any(|l| l.starts_with("3.7 kg")), "{text:?}");
+    }
+
+    #[test]
+    fn the_hardware_card_names_its_socket_and_stat() {
+        let mut st = dshawn();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('4'))]);
+        let rows = d.rows(&st);
+        d.row = rows
+            .iter()
+            .position(|r| r.text.ends_with("Hushcan"))
+            .unwrap();
+        let text = texts(&d.detail(&st, &rows));
+        assert_eq!(text[0], "HUSHCAN");
+        assert_eq!(text[1], "hardware · muzzle socket");
+        assert!(text.contains(&"cool +1".to_string()), "{text:?}");
+    }
+
+    #[test]
+    fn a_fitted_stat_mod_shows_on_the_stat_card() {
+        let mut st = state();
+        st.character
+            .give_item(&st.content, ItemId::new("hushcan"), 1);
+        fit(&mut st, game::Host::Worn(Slot::Primary), 0, "hushcan");
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('2'))]);
+        let rows = d.rows(&st);
+        d.row = rows.iter().position(|r| r.text.contains("COOL")).unwrap();
+        let text = texts(&d.detail(&st, &rows));
+        assert_eq!(text[1], "5 · 6 with gear", "{text:?}");
+    }
 }

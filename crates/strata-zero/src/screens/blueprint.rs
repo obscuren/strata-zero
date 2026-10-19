@@ -1510,7 +1510,9 @@ mod tests {
         let (log, before) = (st.log.len(), st.character.clone());
         press(&mut bp, &mut st, &[KeyCode::Char(' ')]);
         assert!(!choosing(&bp));
-        assert_eq!((st.log.len(), &st.character), (log, &before));
+        assert_eq!(st.character, before);
+        assert_eq!(st.log.len(), log + 1);
+        assert_eq!(last(&st), Some("no deck hardware in your pack"));
         let buf = screen(&bp, &st, 100, 30);
         assert!(across(&buf, 100, 30, names).contains("nothing in your pack fits"));
         assert_eq!(inside(&buf, 100, 30, hint), SOCKET_HINT);
@@ -1739,5 +1741,107 @@ mod tests {
             ScreenCmd::Stay
         ));
         assert!(!modding(&bp));
+    }
+
+    /// The names on the tray's tiles, left to right.
+    fn tray_names(bp: &Blueprint, st: &AppState) -> Vec<String> {
+        let (names, _) = tile_rows(100, 30);
+        let row = across(&screen(bp, st, 100, 30), 100, 30, names);
+        row.split("  ")
+            .map(|t| t.trim().trim_start_matches(|c: char| !c.is_alphanumeric()))
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty() && t != "HARDWARE")
+            .collect()
+    }
+
+    fn dshawns_gun(st: &mut AppState) -> Blueprint {
+        st.character = Character::debug_runner(&st.content);
+        st.tick = 40;
+        vexs_gun(st)
+    }
+
+    #[test]
+    fn the_tray_offers_what_fits_the_chosen_socket() {
+        let mut st = state();
+        let mut bp = dshawns_gun(&mut st);
+        let (w, h) = (100, 30);
+        let (_, readout, _) = rows_of(w, h);
+        let space = KeyCode::Char(' ');
+        press(&mut bp, &mut st, &[KeyCode::Char('m'), space]);
+        assert!(choosing(&bp));
+        let names = tray_names(&bp, &st);
+        assert!(names.iter().any(|n| n.starts_with("HUSHCAN")), "{names:?}");
+        assert!(!names.iter().any(|n| n.contains("REDEYE")), "{names:?}");
+        press(&mut bp, &mut st, &[space]);
+        assert_eq!(status(&bp, &mut st), "Hushcan fitted · socket MUZZLE");
+        let buf = screen(&bp, &st, w, h);
+        assert_eq!(
+            inside(&buf, w, h, readout),
+            "SOCKET MUZZLE ▸ Hushcan · cool +1"
+        );
+        press(&mut bp, &mut st, &[KeyCode::Left, space]);
+        let names = tray_names(&bp, &st);
+        assert!(names.iter().any(|n| n.starts_with("REDEYE")), "{names:?}");
+        assert!(!names.iter().any(|n| n.contains("HUSHCAN")), "{names:?}");
+        press(&mut bp, &mut st, &[space]);
+        assert_eq!(status(&bp, &mut st), "Redeye sight fitted · socket RAIL");
+        // The filled muzzle offers EMPTY first.
+        press(&mut bp, &mut st, &[KeyCode::Right, space]);
+        let names = tray_names(&bp, &st);
+        assert!(names[0].starts_with("EMPTY"), "{names:?}");
+        press(&mut bp, &mut st, &[space]);
+        assert_eq!(status(&bp, &mut st), "Hushcan out · to the pack");
+        assert_eq!(in_pack(&st, "hushcan"), 1);
+    }
+
+    #[test]
+    fn an_empty_socket_with_nothing_to_fit_says_so_in_the_log() {
+        let mut st = state();
+        let mut bp = dshawns_gun(&mut st);
+        st.character.inventory.retain(|s| s.item != id("hushcan"));
+        press(&mut bp, &mut st, &[KeyCode::Char('m'), KeyCode::Char(' ')]);
+        assert!(!choosing(&bp));
+        assert_eq!(last(&st), Some("no muzzle hardware in your pack"));
+        assert!(!last_is_warning(&st));
+    }
+
+    #[test]
+    fn the_tray_not_choosing_shows_what_fits_the_item() {
+        let mut st = state();
+        let mut bp = dshawns_gun(&mut st);
+        press(&mut bp, &mut st, &[KeyCode::Char('m')]);
+        let names = tray_names(&bp, &st);
+        assert!(names.iter().any(|n| n.starts_with("HUSHCAN")), "{names:?}");
+        assert!(names.iter().any(|n| n.starts_with("REDEYE")), "{names:?}");
+        assert!(!names.iter().any(|n| n.contains("COLDFIN")), "{names:?}");
+        let mut bp = dshawns_deck(&mut st);
+        press(&mut bp, &mut st, &[KeyCode::Char('m')]);
+        // Not choosing the tray shows the first tiles; choosing, it scrolls to them all.
+        let names = tray_names(&bp, &st);
+        assert_eq!(names, ["COLDFIN VI", "COLDFIN VII"]);
+        press(&mut bp, &mut st, &[KeyCode::Char(' ')]);
+        let mut all = tray_names(&bp, &st);
+        for _ in 0..2 {
+            press(&mut bp, &mut st, &[KeyCode::Right]);
+            all.extend(tray_names(&bp, &st));
+        }
+        for want in ["COLDFIN VI", "COLDFIN VII", "SIDECAR CO-PROCESSOR"] {
+            assert!(all.iter().any(|n| n == want), "{want} in {all:?}");
+        }
+        let gun = |n: &String| n.contains("HUSHCAN") || n.contains("REDEYE");
+        assert!(!all.iter().any(gun), "{all:?}");
+    }
+
+    #[test]
+    fn a_jacked_in_gun_refuses_a_fit() {
+        let mut st = state();
+        let mut bp = dshawns_gun(&mut st);
+        jack_in(&mut st);
+        let before = st.character.clone();
+        press(&mut bp, &mut st, &[KeyCode::Char('m'), KeyCode::Char(' ')]);
+        assert!(!choosing(&bp));
+        assert_eq!(last(&st), Some(crate::actions::JACKED_IN));
+        assert!(last_is_warning(&st));
+        assert_eq!(st.character, before);
     }
 }

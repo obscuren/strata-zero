@@ -110,8 +110,8 @@ impl Bench {
     }
 
     /// Space on a socket: the tray opens on its first tile. Jacked in, the gear is
-    /// locked, so it refuses; with no copy to fit into, or nothing to offer, it opens
-    /// nothing (an empty tray already says so).
+    /// locked, so it refuses; with no copy to fit into it opens nothing, and with
+    /// nothing to offer it says so in the log.
     fn choose(&mut self, st: &mut AppState, places: &[SocketPlace], host: Option<Host>) {
         if jacked_in(st) {
             st.warn(JACKED_IN);
@@ -120,7 +120,11 @@ impl Bench {
         let Some(place) = places.get(self.point) else {
             return;
         };
-        if host.is_none() || tray(st, host, places, Some(place)).is_empty() {
+        if host.is_none() {
+            return;
+        }
+        if tray(st, host, places, Some(place)).is_empty() {
+            st.say(format!("no {} in your pack", place.kind.takes()));
             return;
         }
         self.choosing = Some(Choosing {
@@ -262,7 +266,8 @@ fn fitted<'a>(st: &'a AppState, host: Option<Host>, place: &SocketPlace) -> Opti
 }
 
 /// The tray: the pack's hardware that fits any of the item's sockets, in pack order;
-/// while choosing for a filled socket, EMPTY first.
+/// while choosing, only what fits the pointed socket, and EMPTY first when it is
+/// filled.
 fn tray(
     st: &AppState,
     host: Option<Host>,
@@ -282,7 +287,11 @@ fn tray(
         let piece = s.copy_id()?;
         let item = st.content.item(&s.item)?;
         let hardware = item.hardware.as_ref()?;
-        if !places.iter().any(|p| p.kind == hardware.fits) {
+        let fits = match choosing {
+            Some(place) => place.kind == hardware.fits,
+            None => places.iter().any(|p| p.kind == hardware.fits),
+        };
+        if !fits {
             return None;
         }
         let mods: Vec<String> = hardware.mods.iter().map(Mod::line).collect();
