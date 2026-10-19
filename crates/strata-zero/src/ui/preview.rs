@@ -47,7 +47,6 @@ fn commonest(block: [Option<Color>; 4]) -> Option<Color> {
 }
 
 /// The drawing at half size, as pixels ready to fold into a pen.
-#[allow(dead_code)]
 pub(crate) fn half(art: &dyn Art) -> Pixels {
     let (ex, ey, ew, eh) = art.extent();
     let area = Rect::new(0, 0, ew, eh);

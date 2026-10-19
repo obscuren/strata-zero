@@ -22,7 +22,6 @@ impl Pixels {
     }
 
     /// The canvas's width and rows in cells.
-    #[allow(dead_code)]
     pub fn cells(&self) -> (u16, u16) {
         (self.w as u16, (self.h / 2) as u16)
     }

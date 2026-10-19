@@ -368,7 +368,6 @@ pub struct DeckArt {
 
 impl DeckArt {
     /// The deck without its cables, for a drawing that has no room for them.
-    #[allow(dead_code)]
     pub fn unplugged(mut self) -> DeckArt {
         self.view.plugged = false;
         self.view.link = false;

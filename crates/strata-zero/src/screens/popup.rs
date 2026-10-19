@@ -39,8 +39,8 @@ pub enum Pick {
     World(WorldAct),
     /// Shows these lines in place of the rows; Esc returns to the rows.
     Card(Vec<Line<'static>>),
-    /// Opens an item's blueprint window in place of the popup: from GEAR the item worn,
-    /// from INVENTORY one in the pack; `copy` names which, for an item held per copy.
+    /// Opens an item's blueprint window in place of the popup: from the rack the item
+    /// worn, from the pack one carried; `copy` names which, for an item held per copy.
     Blueprint {
         item: game::ItemId,
         equipped: bool,

@@ -1,9 +1,6 @@
 //! GEAR & INVENTORY: the rack of what you wear, the pack of what you carry, and the
 //! item under the cursor, its card beside its drawing at half size.
 
-// The deck takes this view up; until it does only the tests use it.
-#![allow(dead_code)]
-
 use crate::anim::{Easing, Tween};
 use crate::app::AppState;
 use crate::render::glyphs::kind_icon;
@@ -67,8 +64,6 @@ pub struct KitState {
 pub(crate) const C_ROWS: u16 = 12;
 /// Columns of the item card.
 pub(crate) const CARD_W: u16 = 41;
-/// Rows the rack's three tile rows take.
-pub(crate) const RACK_ROWS: u16 = 9;
 
 /// The body's parts: the rack and the pack side by side over a rule, and under it the
 /// card and the drawing.
@@ -143,6 +138,17 @@ impl Kit {
             body: Cell::new(Rect::default()),
             first: Cell::new(0),
         }
+    }
+
+    /// Reopens where the tab was left (`st.deck_kit`), the cursor kept on something
+    /// that still exists. The card types out afresh; the focus segment sits still under
+    /// the focused pane.
+    pub fn restore(st: &AppState) -> Kit {
+        let mut kit = Kit::new(st.tick);
+        kit.state = st.deck_kit;
+        kit.seg_from = kit.state.pane;
+        kit.reselect(st);
+        kit
     }
 
     /// The pack, one row per stack under a header for each kind. A kind picked by the

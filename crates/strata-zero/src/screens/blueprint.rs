@@ -126,7 +126,6 @@ fn host_for(st: &AppState, item: &ItemId, equipped: bool, copy: Option<CopyId>) 
 
 /// The drawing the window would show for the same arguments, with the deck unplugged
 /// so no cable runs out of it. `None` when the item has no drawing.
-#[allow(dead_code)]
 pub fn preview_art(
     st: &AppState,
     item: &ItemId,
@@ -142,10 +141,10 @@ pub fn preview_art(
 }
 
 impl Blueprint {
-    /// The window on `item`, `equipped` when Inspect was on the item worn (GEAR) rather
-    /// than one in the pack, `copy` the copy it was on when the item is held per copy.
-    /// A deck the content knows draws as its look, hardware as itself, any other item
-    /// with a look as that; anything else has no blueprint yet. It opens in inspect.
+    /// The window on `item`, `equipped` when Inspect was on the item worn (the rack)
+    /// rather than one in the pack, `copy` the copy it was on when the item is held per
+    /// copy. A deck the content knows draws as its look, hardware as itself, any other
+    /// item with a look as that; anything else has no blueprint yet. It opens in inspect.
     pub fn open(st: &AppState, item: ItemId, equipped: bool, copy: Option<CopyId>) -> Blueprint {
         let known = st.content.item(&item);
         let title_name = known.map_or_else(|| item.to_string(), |i| i.name.clone());
@@ -903,7 +902,7 @@ mod tests {
         })
     }
 
-    /// D'SHAWN's jacked deck, inspected from GEAR: the rebuilt one, with two sockets.
+    /// D'SHAWN's jacked deck, inspected from the rack: the rebuilt one, with two sockets.
     fn dshawns_deck(st: &mut AppState) -> Blueprint {
         st.character = Character::debug_runner(&st.content);
         st.tick = 40;
@@ -1606,7 +1605,7 @@ mod tests {
         art.origin(body_of(w, h))
     }
 
-    /// Vex's Ratchet, inspected from GEAR.
+    /// Vex's Ratchet, inspected from the rack.
     fn vexs_gun(st: &AppState) -> Blueprint {
         let copy = st.character.worn_copy(Slot::Primary).map(|k| k.id);
         Blueprint::open(st, id("ratchet_smg"), true, copy)

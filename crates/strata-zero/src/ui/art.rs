@@ -17,7 +17,6 @@ pub trait Art {
 
     /// The x, y, width and height the drawing covers, from its origin. Most drawings
     /// stay inside their size, and one that reaches past it says so here.
-    #[allow(dead_code)]
     fn extent(&self) -> (i32, i32, u16, u16) {
         let (w, h) = self.size();
         (0, 0, w, h)
