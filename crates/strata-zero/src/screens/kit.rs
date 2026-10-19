@@ -870,6 +870,9 @@ mod tests {
         k.reselect(&st);
         assert_eq!(k.state.filter, Some(ItemKind::Hardware));
         assert!(k.pack_rows(&st).is_empty());
+        // Stepped: on to the next kind the pack holds, his stickers, then all.
+        press(&mut k, &st, KeyCode::Char(']'), 1);
+        assert_eq!(k.state.filter, Some(ItemKind::Sticker));
         press(&mut k, &st, KeyCode::Char(']'), 1);
         assert_eq!(k.state.filter, None);
     }
@@ -879,10 +882,11 @@ mod tests {
         let mut st = state();
         let mut k = Kit::new(0);
         to_row(&mut k, &st, "Pawnshop deck");
-        let Some(Detail::Item(id)) = k.selected(&st) else {
+        // Held per copy now: it carries stickers.
+        let Some(Detail::Copy(copy)) = k.selected(&st) else {
             panic!("no pawnshop deck selected");
         };
-        perform(&mut st, Action::Equip(id)).unwrap();
+        perform(&mut st, Action::EquipCopy(copy)).unwrap();
         k.reselect(&st);
         let rows = k.pack_rows(&st);
         assert!(rows[k.state.row].detail.is_some());
@@ -931,6 +935,9 @@ mod tests {
         assert_eq!(buf[(57, 5)].fg, FAINTER, "no weapon in the pack");
         assert_eq!(buf[(66, 5)].fg, DIM, "a deck in the pack");
 
+        // Back from ALL: his stickers, the last kind, then the hardware.
+        assert!(k.key(&st, KeyCode::Char('['), k.changed));
+        assert_eq!(k.state.filter, Some(ItemKind::Sticker));
         assert!(k.key(&st, KeyCode::Char('['), k.changed));
         assert_eq!(k.state.filter, Some(ItemKind::Hardware));
         let buf = drawn(&k, &st);

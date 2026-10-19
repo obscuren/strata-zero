@@ -156,6 +156,7 @@ mod tests {
             copy: Some(ItemCopy {
                 id: CopyId(n),
                 fitted: vec![None, None],
+                stickers: Vec::new(),
             }),
         };
         g.put(k, p, copy(0));

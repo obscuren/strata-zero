@@ -16,6 +16,8 @@ pub struct ItemCopy {
     pub id: CopyId,
     /// One entry per socket; a fitted piece is a stack of one with its own copy.
     pub fitted: Vec<Option<Stack>>,
+    /// The stickers on its drawing, oldest first; each newer one goes on top.
+    pub stickers: Vec<Stuck>,
 }
 
 impl ItemCopy {
@@ -368,6 +370,10 @@ impl Character {
         for id in ["coldfin_1", "coldfin_2", "sidecar", "hushcan", "redeye"] {
             d.give_item(c, ItemId::new(id), 1);
         }
+        // Two of every sticker, so sticking and peeling can be tried twice.
+        for i in c.items.iter().filter(|i| i.kind == ItemKind::Sticker) {
+            d.give(i.id.clone(), 2);
+        }
         d.load_all(c);
         d
     }
@@ -703,14 +709,15 @@ impl Character {
         }
     }
 
-    /// A new copy of an item, every socket empty.
+    /// A new copy of an item, every socket empty, with the stickers it is made with.
     pub fn new_copy(&mut self, c: &Content, item: &ItemId) -> ItemCopy {
         let id = CopyId(self.next_copy);
         self.next_copy += 1;
-        let sockets = c.item(item).map_or(0, |i| i.sockets.len());
+        let item = c.item(item);
         ItemCopy {
             id,
-            fitted: vec![None; sockets],
+            fitted: vec![None; item.map_or(0, |i| i.sockets.len())],
+            stickers: item.map(|i| i.stickers.clone()).unwrap_or_default(),
         }
     }
 
@@ -1318,6 +1325,37 @@ mod tests {
     }
 
     #[test]
+    fn new_copies_come_with_their_factory_stickers() {
+        let c = Content::load().unwrap();
+        let mut ch = Character::from_template(&c, &TemplateId::new("vex")).unwrap();
+        let copy = ch.new_copy(&c, &ItemId::new("pawnshop_deck"));
+        let item = c.item(&ItemId::new("pawnshop_deck")).unwrap();
+        assert_eq!(copy.stickers, item.stickers);
+        assert_eq!(copy.stickers.len(), 2);
+        assert!(
+            ch.new_copy(&c, &ItemId::new("ratchet_smg"))
+                .stickers
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn debug_runner_carries_two_of_every_sticker() {
+        let c = Content::load().unwrap();
+        let d = Character::debug_runner(&c);
+        for i in c.items.iter().filter(|i| i.kind == ItemKind::Sticker) {
+            assert_eq!(d.count(&i.id), 2, "{}", i.id);
+        }
+        assert_eq!(d.worn_copy(Slot::Deck).unwrap().stickers.len(), 2);
+        let pawn = d
+            .inventory
+            .iter()
+            .find(|s| s.item == ItemId::new("pawnshop_deck"))
+            .unwrap();
+        assert_eq!(pawn.copy.as_ref().unwrap().stickers.len(), 2);
+    }
+
+    #[test]
     fn debug_runner_jacks_the_rebuilt_deck() {
         let c = Content::load().unwrap();
         let d = Character::debug_runner(&c);
@@ -1521,9 +1559,19 @@ mod tests {
         assert_eq!(d.hp, d.hp_max(&c));
         assert_eq!(d.focus, d.focus_max(&c));
         let vex = vex(&c);
-        // Vex's kit, plus the Backdoor program, the pawnshop deck set aside and the
-        // three pieces of deck hardware and the two weapon pieces
-        assert_eq!(d.inventory.len(), vex.inventory.len() + 7, "Vex's kit");
+        // Vex's kit, plus the Backdoor program, the pawnshop deck set aside, the
+        // three pieces of deck hardware, the two weapon pieces and a stack of every
+        // sticker.
+        let stickers = c
+            .items
+            .iter()
+            .filter(|i| i.kind == ItemKind::Sticker)
+            .count();
+        assert_eq!(
+            d.inventory.len(),
+            vex.inventory.len() + 7 + stickers,
+            "Vex's kit"
+        );
         assert!(d.loaded.starts_with(&vex.loaded));
     }
 
