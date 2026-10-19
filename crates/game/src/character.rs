@@ -742,6 +742,44 @@ impl Character {
         self.worn.get(&slot)
     }
 
+    /// The mods of the hardware fitted in the worn deck. A deck in the pack, or
+    /// none, fits nothing that counts.
+    pub fn deck_mods(&self, c: &Content) -> Vec<Mod> {
+        let Some(copy) = self.worn_copy(Slot::Deck) else {
+            return Vec::new();
+        };
+        copy.fitted
+            .iter()
+            .flatten()
+            .filter_map(|s| c.item(&s.item)?.hardware.as_ref())
+            .flat_map(|h| h.mods.iter().copied())
+            .collect()
+    }
+
+    /// Percent off each trace the deck makes; stacked hardware cuts no more than half.
+    pub fn trace_cut(&self, c: &Content) -> u8 {
+        let sum: u32 = self
+            .deck_mods(c)
+            .iter()
+            .map(|m| match m {
+                Mod::TraceCut(n) => *n as u32,
+                _ => 0,
+            })
+            .sum();
+        sum.min(50) as u8
+    }
+
+    /// Added to every program turn's power.
+    pub fn deck_power(&self, c: &Content) -> i32 {
+        self.deck_mods(c)
+            .iter()
+            .map(|m| match m {
+                Mod::Power(n) => *n as i32,
+                _ => 0,
+            })
+            .sum()
+    }
+
     pub fn is_worn_copy(&self, id: CopyId) -> bool {
         self.worn
             .iter()
@@ -1534,5 +1572,50 @@ mod tests {
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), 4, "each its own copy");
+    }
+
+    fn fit_direct(ch: &mut Character, item: &str, socket: usize) {
+        let at = ch
+            .inventory
+            .iter()
+            .position(|s| s.item == ItemId::new(item))
+            .unwrap();
+        let piece = ch.inventory.remove(at);
+        ch.worn.get_mut(&Slot::Deck).unwrap().fitted[socket] = Some(piece);
+    }
+
+    #[test]
+    fn deck_mods_come_from_the_worn_deck() {
+        let mut c = Content::load().unwrap();
+        let mut ch = Character::debug_runner(&c);
+        assert_eq!((ch.trace_cut(&c), ch.deck_power(&c)), (0, 0));
+        fit_direct(&mut ch, "coldfin_2", 0);
+        assert_eq!(ch.trace_cut(&c), 20);
+        fit_direct(&mut ch, "coldfin_1", 1);
+        assert_eq!(ch.trace_cut(&c), 30);
+        assert_eq!(ch.deck_power(&c), 0);
+        // Two coldfin vII.
+        let mut two = Character::debug_runner(&c);
+        two.give_item(&c, ItemId::new("coldfin_2"), 1);
+        fit_direct(&mut two, "coldfin_2", 0);
+        fit_direct(&mut two, "coldfin_2", 1);
+        assert_eq!(two.trace_cut(&c), 40);
+        let mut car = Character::debug_runner(&c);
+        fit_direct(&mut car, "sidecar", 0);
+        assert_eq!(car.deck_power(&c), 1);
+        // The deck off the body: nothing counts; back on, it all does.
+        let mut off = ch.clone();
+        let deck = off.equipment.remove(&Slot::Deck).unwrap();
+        assert_eq!((off.trace_cut(&c), off.deck_power(&c)), (0, 0));
+        off.equipment.insert(Slot::Deck, deck);
+        assert_eq!(off.trace_cut(&c), 30);
+        // Past half it caps.
+        let cold = c
+            .items
+            .iter_mut()
+            .find(|i| i.id == ItemId::new("coldfin_2"))
+            .unwrap();
+        cold.hardware.as_mut().unwrap().mods = vec![Mod::TraceCut(40)];
+        assert_eq!(two.trace_cut(&c), 50);
     }
 }

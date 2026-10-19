@@ -228,11 +228,12 @@ impl NetState {
         &mut self,
         b: BuildingId,
         noise: u8,
+        cut: u8,
         now: u64,
         null_route: bool,
     ) -> (TraceEvent, bool) {
         let was_alert = self.trace(b).alert(now);
-        let event = self.trace(b).add(noise, now);
+        let event = self.trace(b).add_cut(noise, cut, now);
         if event == TraceEvent::Dump && null_route && !self.null_routed.contains(&b) {
             self.trace(b).heat = game::ALARM_HEAT;
             self.null_routed.insert(b);
@@ -871,10 +872,20 @@ pub fn raise_alarm(st: &mut AppState, b: BuildingId) -> String {
 /// Heat on the construct's trace with everything that follows: the alarm raised,
 /// the null route taken once, the dump. Returns whether the player was dumped.
 pub(crate) fn noise_on(st: &mut AppState, b: BuildingId, noise: u8) -> bool {
+    let cut = st.character.trace_cut(&st.content);
+    heat_on(st, b, noise, cut)
+}
+
+/// Heat the deck's hardware cannot cut: ICE hitting you is not your own trace.
+pub(crate) fn ice_heat(st: &mut AppState, b: BuildingId, noise: u8) -> bool {
+    heat_on(st, b, noise, 0)
+}
+
+fn heat_on(st: &mut AppState, b: BuildingId, noise: u8, cut: u8) -> bool {
     let now = st.net.now(st);
     let was_alert = st.net.alert(b, now);
     let null_route = st.character.flags(&st.content).contains("null_route");
-    let (event, routed) = st.net.add_heat(b, noise, now, null_route);
+    let (event, routed) = st.net.add_heat(b, noise, cut, now, null_route);
     if routed {
         st.warn("null route · the trace loses you");
     }
@@ -1070,7 +1081,7 @@ fn spring(st: &mut AppState, b: BuildingId) {
     lock_down(st, b);
     let _ = st
         .net
-        .add_heat(b, crate::backdoors::HONEYPOT_NOISE, now, false);
+        .add_heat(b, crate::backdoors::HONEYPOT_NOISE, 0, now, false);
     st.backdoors.start_trace(now);
     st.warn("honeypot · they were waiting · trace running");
 }
@@ -1729,7 +1740,7 @@ fn hit(st: &mut AppState, b: BuildingId, i: usize) {
                 "white ICE hits · heat {}",
                 heat.min(game::DUMP_HEAT)
             ));
-            noise_on(st, b, 5);
+            ice_heat(st, b, 5);
         }
         IceGrade::Grey => {
             let drain = 10u32.saturating_sub(armour).max(1);
@@ -2172,6 +2183,33 @@ mod tests {
         p.place = citygen::Place::Stratum(street);
         p.pos = beside_jack;
         assert_eq!(jack_in_refusal(&st), Some("port locked down".to_string()));
+    }
+
+    #[test]
+    fn hardware_cuts_your_trace_not_ice() {
+        let (mut st, rig, _) = at_the_rig(8);
+        let b = rig.home.building;
+        st.character = game::Character::debug_runner(&st.content);
+        let heat = |st: &AppState| st.net.traces.get(&b).map_or(0, |t| t.heat);
+        // Bare: exactly the noise.
+        assert!(!noise_on(&mut st, b, 4));
+        assert_eq!(heat(&st), 4);
+        // Coldfin vI: 36 tenths a time, 3 then 7.
+        st.net.traces.clear();
+        let at = st
+            .character
+            .inventory
+            .iter()
+            .position(|s| s.item == game::ItemId::new("coldfin_1"))
+            .unwrap();
+        let piece = st.character.inventory.remove(at);
+        st.character.worn.get_mut(&game::Slot::Deck).unwrap().fitted[0] = Some(piece);
+        noise_on(&mut st, b, 4);
+        noise_on(&mut st, b, 4);
+        assert_eq!(heat(&st), 7);
+        // ICE is not your trace: the full 5.
+        ice_heat(&mut st, b, 5);
+        assert_eq!(heat(&st), 12);
     }
 
     #[test]
