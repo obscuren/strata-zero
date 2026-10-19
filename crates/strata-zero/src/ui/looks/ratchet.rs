@@ -119,7 +119,6 @@ pub fn draw(p: &mut Pen) {
 }
 
 /// One part alone at the pen's origin, as it sits on the whole gun.
-#[allow(dead_code)]
 pub fn draw_part(p: &mut Pen, part: usize) {
     let mut c = Pixels::new(W, H);
     paint(&mut c, part);

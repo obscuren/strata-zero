@@ -70,7 +70,6 @@ fn places(look: ItemLook, count: usize) -> Vec<SocketPlace> {
 }
 
 /// A look's parts and where they sit; only some looks are built from parts.
-#[allow(dead_code)]
 fn part_places(look: ItemLook) -> Vec<PartPlace> {
     match look {
         ItemLook::Ratchet => ratchet::PARTS

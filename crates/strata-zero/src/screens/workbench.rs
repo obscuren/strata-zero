@@ -1,20 +1,25 @@
 //! The WORKBENCH tab as a set of drawings, one per recipe, in skill order. A sheet has
 //! zone marks round its edge and a field with the build drawn in it; under the rule
 //! sit the parts list, one row per input with what the pack holds, and the title
-//! block. The field shows the build as a process: the inputs flow into a box with the
+//! block. When the output's drawing declares its parts, the field shows it exploded:
+//! the parts drawn apart with their numbers in balloons, a part short as a ghost.
+//! Otherwise it shows the build as a process: the inputs flow into a box with the
 //! skill and its steps, and out to the result.
 
 use crate::app::AppState;
 use crate::render::glyphs::kind_icon;
+use crate::ui::art::{Art, Dir, PartPlace, brackets, grey_at};
 use crate::ui::chrome::{BAR_BG, CYAN, DIM, MAGENTA, PANEL_BG, RULE, TEXT, solid};
 use crate::ui::hud::cut;
+use crate::ui::looks::ItemArt;
 use crossterm::event::KeyCode;
-use game::{Content, Recipe};
-use ratatui::buffer::Buffer;
+use game::{Content, ItemId, Recipe};
+use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
-/// Zone marks, the header in the rule, the drawing number and the process lines.
+/// Zone marks, the header in the rule, the drawing number, the process lines and the
+/// centre lines.
 const FAINTER: Color = Color::Rgb(0x5c, 0x66, 0x73);
 /// Every part on hand.
 const GREEN: Color = Color::Rgb(0x5a, 0xc8, 0x8c);
@@ -36,7 +41,15 @@ const BOX_X: i32 = 9;
 const MAX_GAP: i32 = 3;
 /// The narrowest process box.
 const PROCESS_W: i32 = 20;
+/// A part short, greyed as the modding mode greys but darker: its luminance times this.
+const GHOST: f64 = 0.26;
+/// The glyphs a ghost keeps; any other is text, and blanked.
+const PIXELS: [&str; 6] = [" ", "▀", "▄", "█", "▌", "▐"];
+/// How far the selected part's brackets stand off its rectangle: columns, then rows,
+/// before the corners' own cell.
+const BRACKET_ROOM: (i32, i32) = (2, 1);
 const HINTS: &str = "←→ drawings · ↑↓ parts · space build · tab tabs · esc close";
+const HINTS_ASSEMBLY: &str = "←→ drawings · ↑↓ parts · space assemble · tab tabs · esc close";
 
 /// The sheet shown and the part selected on it. The deck holds it and remembers it
 /// across closing.
@@ -99,19 +112,18 @@ impl Workbench {
         let at = self.clamped(&st.content);
         let r = &st.content.recipes[list[at.drawing]];
         let ins = inputs(st, r);
-        let field = l.field().intersection(sheet);
-        process(
-            &mut Pen {
-                buf: &mut *p.buf,
-                clip: field,
-            },
-            st,
-            r,
-            &ins,
-            at.part,
-        );
+        let art = assembly(st, r);
+        let mut field = Pen {
+            buf: &mut *p.buf,
+            clip: l.field().intersection(sheet),
+        };
+        match &art {
+            Some(art) => exploded(&mut field, st, art, &ins, at.part),
+            None => process(&mut field, st, r, &ins, at.part),
+        }
         parts_list(&mut p, &l, &ins, at.part);
-        title_block(&mut p, &l, st, r, &ins, (at.drawing, list.len()));
+        let sheet_no = (at.drawing, list.len());
+        title_block(&mut p, &l, st, r, &ins, sheet_no, art.is_some());
     }
 
     /// Takes the sheet's keys; false for any other, which the deck then handles.
@@ -127,8 +139,14 @@ impl Workbench {
         true
     }
 
-    pub fn hints(&self, _st: &AppState) -> &'static str {
-        HINTS
+    /// Space assembles on an exploded sheet and builds on a process one.
+    pub fn hints(&self, st: &AppState) -> &'static str {
+        let c = &st.content;
+        let shown = drawings(c).get(self.clamped(c).drawing).copied();
+        match shown {
+            Some(i) if assembly(st, &c.recipes[i]).is_some() => HINTS_ASSEMBLY,
+            _ => HINTS,
+        }
     }
 
     /// The next or previous drawing, wrapping, on its first part.
@@ -170,6 +188,7 @@ pub(crate) fn drawings(c: &Content) -> Vec<usize> {
 
 /// One input of the recipe on the sheet, with what the pack holds of it.
 struct Input {
+    id: ItemId,
     icon: char,
     name: String,
     need: u32,
@@ -188,6 +207,7 @@ fn inputs(st: &AppState, r: &Recipe) -> Vec<Input> {
         .map(|(id, need)| {
             let item = st.content.item(id);
             Input {
+                id: id.clone(),
                 icon: item.map_or('?', |i| kind_icon(i.kind)),
                 name: item.map_or_else(|| id.to_string(), |i| i.name.clone()),
                 need: *need,
@@ -195,6 +215,18 @@ fn inputs(st: &AppState, r: &Recipe) -> Vec<Input> {
             }
         })
         .collect()
+}
+
+/// The output's drawing when it declares the parts it is built from, with nothing
+/// fitted and no stickers, as a build makes it; none otherwise.
+fn assembly(st: &AppState, r: &Recipe) -> Option<ItemArt> {
+    let item = st.content.item(&r.output.0)?;
+    let art = ItemArt {
+        look: item.look?,
+        fitted: vec![None; item.sockets.len()],
+        stickers: Vec::new(),
+    };
+    (!art.parts().is_empty()).then_some(art)
 }
 
 /// Where the sheet's pieces sit, in columns and rows, edges inclusive.
@@ -422,8 +454,9 @@ fn parts_list(p: &mut Pen, l: &Layout, ins: &[Input], sel: usize) {
     }
 }
 
-/// The title block: the recipe and where it sits in the set, what it makes, the skill
-/// it needs, how much of it is on hand, and the drawing's number.
+/// The title block: the recipe and where it sits in the set, what it makes (for an
+/// assembly, the item's kind, slot and weight), the skill it needs, how much of it is
+/// on hand, and the drawing's number and kind.
 fn title_block(
     p: &mut Pen,
     l: &Layout,
@@ -431,6 +464,7 @@ fn title_block(
     r: &Recipe,
     ins: &[Input],
     (i, n): (usize, usize),
+    assembly: bool,
 ) {
     let x = l.title;
     let y = l.rule + 1;
@@ -449,6 +483,12 @@ fn title_block(
     // What it makes, without the kind when the whole line doesn't fit.
     let (out, count) = (&r.output.0, r.output.1);
     let makes = match st.content.item(out) {
+        Some(item) if assembly => {
+            let mut bits = vec![item.kind.label().to_string()];
+            bits.extend(item.slot.map(|s| s.label().to_string()));
+            bits.push(format!("{:.1} kg", item.weight));
+            bits.join(" · ")
+        }
         Some(item) => {
             let whole = format!("makes {count}× {} · {}", item.name, item.kind.label());
             if width(&whole) as usize <= room {
@@ -484,8 +524,9 @@ fn title_block(
     line(3, &hand.0, fg(hand.1));
 
     let dwg = format!(
-        "DWG {}/{n} · process · drawn {}",
+        "DWG {}/{n} · {} · drawn {}",
         i + 1,
+        if assembly { "assembly" } else { "process" },
         st.character.handle.to_uppercase()
     );
     line(4, &dwg, fg(FAINTER));
@@ -717,20 +758,246 @@ fn input_text(p: &mut Pen, x: i32, y: i32, input: &Input, tone: Option<Color>) {
     p.put(cx, y, &count, fg(mark));
 }
 
+/// Boxes as left, top, right and bottom, the last two exclusive.
+type Span = (i32, i32, i32, i32);
+
+/// A part on the exploded drawing: its place, its rectangle moved apart (in drawing
+/// coordinates), and which input it is, if the recipe takes it.
+struct Shown {
+    place: PartPlace,
+    rect: Span,
+    input: Option<usize>,
+}
+
+impl Shown {
+    fn new(place: PartPlace, ins: &[Input]) -> Shown {
+        let (dx, dy) = (i32::from(place.apart.0), i32::from(place.apart.1));
+        let (x, y) = (place.x + dx, place.y + dy);
+        Shown {
+            rect: (x, y, x + i32::from(place.w), y + i32::from(place.h)),
+            input: ins.iter().position(|i| i.id.0 == place.item),
+            place,
+        }
+    }
+
+    fn apart(&self) -> (i32, i32) {
+        (i32::from(self.place.apart.0), i32::from(self.place.apart.1))
+    }
+
+    /// The balloon's left cell, moved with the part, and how wide it is; none for a
+    /// part the recipe doesn't take.
+    fn balloon(&self) -> Option<(i32, i32, i32)> {
+        let n = self.input? + 1;
+        let (dx, dy) = self.apart();
+        let (x, y) = self.place.balloon;
+        Some((x + dx, y + dy, width(&format!(" {n} "))))
+    }
+
+    fn short(&self, ins: &[Input]) -> bool {
+        self.input.is_some_and(|i| !ins[i].on_hand())
+    }
+}
+
+/// The cells of a leader running `dir` for `len` cells from a balloon `w` wide at
+/// `(x, y)`: from the middle of its top or bottom, or from its side.
+fn leader(x: i32, y: i32, w: i32, (dir, len): (Dir, u8)) -> impl Iterator<Item = (i32, i32)> {
+    let mid = x + (w - 1) / 2;
+    (1..=i32::from(len)).map(move |k| match dir {
+        Dir::Up => (mid, y - k),
+        Dir::Down => (mid, y + k),
+        Dir::Left => (x - k, y),
+        Dir::Right => (x + w - 1 + k, y),
+    })
+}
+
+/// The box round all of `boxes`.
+fn bounds(boxes: impl IntoIterator<Item = Span>) -> Option<Span> {
+    boxes
+        .into_iter()
+        .reduce(|a, b| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)))
+}
+
+/// The origin that centres `b` in `f`, and whether `b` fits there.
+fn centre(b: Span, f: Rect) -> ((i32, i32), bool) {
+    let (w, h) = (b.2 - b.0, b.3 - b.1);
+    let (fw, fh) = (i32::from(f.width), i32::from(f.height));
+    let origin = (
+        i32::from(f.x) + (fw - w) / 2 - b.0,
+        i32::from(f.y) + (fh - h) / 2 - b.1,
+    );
+    (origin, w <= fw && h <= fh)
+}
+
+/// Where the drawing's origin goes for the exploded drawing's bounding box, every
+/// moved part with its balloon and leader, to sit centred in `f`; none when it doesn't
+/// fit, or a part would start off the buffer.
+fn exploded_origin(shown: &[Shown], f: Rect) -> Option<(i32, i32)> {
+    let mut boxes = Vec::new();
+    for s in shown {
+        boxes.push(s.rect);
+        if let Some((x, y, w)) = s.balloon() {
+            boxes.push((x, y, x + w, y + 1));
+            boxes.extend(leader(x, y, w, s.place.leader).map(|(x, y)| (x, y, x + 1, y + 1)));
+        }
+    }
+    let ((ox, oy), fits) = centre(bounds(boxes)?, f);
+    let on_buffer = |v: i32| u16::try_from(v).is_ok();
+    let placed = shown
+        .iter()
+        .map(Shown::apart)
+        .all(|(dx, dy)| on_buffer(ox + dx) && on_buffer(oy + dy));
+    (fits && placed).then_some((ox, oy))
+}
+
+/// The output drawn exploded in the field: each part moved by its `apart`, faint
+/// centre lines through the gaps they leave, a balloon with its number on each part
+/// the recipe takes, a part short as a ghost in a dashed box, and the selected part in
+/// brackets. When that doesn't fit, the item is drawn whole, centred and clipped.
+fn exploded(p: &mut Pen, st: &AppState, art: &ItemArt, ins: &[Input], sel: usize) {
+    let f = p.clip;
+    if f.is_empty() {
+        return;
+    }
+    let shown: Vec<Shown> = art
+        .parts()
+        .into_iter()
+        .map(|place| Shown::new(place, ins))
+        .collect();
+    let Some((ox, oy)) = exploded_origin(&shown, f) else {
+        // Whole: the parts where they sit, what the drawing draws with nothing fitted.
+        let home = shown.iter().map(|s| {
+            let pl = &s.place;
+            (pl.x, pl.y, pl.x + i32::from(pl.w), pl.y + i32::from(pl.h))
+        });
+        if let Some(b) = bounds(home) {
+            let ((ox, oy), _) = centre(b, f);
+            let cell = |v: i32| u16::try_from(v.max(0)).unwrap_or(u16::MAX);
+            art.draw((cell(ox), cell(oy)), f, p.buf);
+        }
+        return;
+    };
+    // The centre lines first: a part drawn over one keeps its own cells.
+    for s in &shown {
+        centre_lines(p, s, (ox, oy));
+    }
+    for s in &shown {
+        let (dx, dy) = s.apart();
+        let origin = ((ox + dx) as u16, (oy + dy) as u16);
+        if s.short(ins) {
+            ghost(p, art, s.place.index, origin);
+        } else {
+            art.draw_part(s.place.index, origin, f, p.buf);
+        }
+    }
+    // A part short in a dashed box a column wider than it, `none on hand` under it.
+    for s in shown.iter().filter(|s| s.short(ins)) {
+        let (x0, y0, x1, y1) = s.rect;
+        p.outline(
+            (ox + x0 - 1, oy + y0, ox + x1, oy + y1 - 1),
+            DASHED,
+            MAGENTA,
+        );
+        p.put(ox + x0 - 1, oy + y1 + 1, "none on hand", fg(MAGENTA));
+    }
+    for s in &shown {
+        let (Some(i), Some((x, y, w))) = (s.input, s.balloon()) else {
+            continue;
+        };
+        let ok = ins[i].on_hand();
+        let ink = fg(if ok { CYAN } else { MAGENTA });
+        let glyph = match s.place.leader.0 {
+            Dir::Up | Dir::Down => '│',
+            Dir::Left | Dir::Right => '─',
+        };
+        for (lx, ly) in leader(x, y, w, s.place.leader) {
+            p.ch(ox + lx, oy + ly, glyph, ink);
+        }
+        balloon(p, ox + x, oy + y, i + 1, ok, i == sel);
+    }
+    if let Some(s) = shown.iter().find(|s| s.input == Some(sel)) {
+        let (x0, y0, x1, y1) = s.rect;
+        let (cx, cy) = BRACKET_ROOM;
+        let (left, top) = ((ox + x0 - cx).max(0), (oy + y0 - cy).max(0));
+        let (right, bottom) = (ox + x1 + cx, oy + y1 + cy);
+        let around = Rect::new(
+            left as u16,
+            top as u16,
+            (right - left).max(0) as u16,
+            (bottom - top).max(0) as u16,
+        );
+        brackets(p.buf, around, st.tick, f);
+    }
+}
+
+/// Faint centre lines through the gap a part left, in the cells its rectangle had
+/// whole and has no longer: along its middle row when it moved sideways, down its
+/// middle column when it moved up or down.
+fn centre_lines(p: &mut Pen, s: &Shown, (ox, oy): (i32, i32)) {
+    let pl = &s.place;
+    let (x0, y0, x1, y1) = s.rect;
+    let left = |x: i32, y: i32| !((x0..x1).contains(&x) && (y0..y1).contains(&y));
+    let (dx, dy) = s.apart();
+    let faint = fg(FAINTER);
+    if dx != 0 {
+        let y = pl.y + (i32::from(pl.h) - 1) / 2;
+        for x in (pl.x..pl.x + i32::from(pl.w)).filter(|&x| left(x, y)) {
+            p.ch(ox + x, oy + y, '╌', faint);
+        }
+    }
+    if dy != 0 {
+        let x = pl.x + (i32::from(pl.w) - 1) / 2;
+        for y in (pl.y..pl.y + i32::from(pl.h)).filter(|&y| left(x, y)) {
+            p.ch(ox + x, oy + y, '╎', faint);
+        }
+    }
+}
+
+/// A part short: drawn alone on a scratch buffer, then copied in greyed darker than
+/// the modding mode's grey, without bold, its text blanked. Where it leaves its own
+/// background the sheet's shows through.
+fn ghost(p: &mut Pen, art: &ItemArt, part: usize, origin: (u16, u16)) {
+    let f = p.clip;
+    let mut scratch = Buffer::empty(f);
+    art.draw_part(part, origin, f, &mut scratch);
+    for y in f.top()..f.bottom() {
+        for x in f.left()..f.right() {
+            let c = &scratch[(x, y)];
+            if *c == Cell::EMPTY {
+                continue;
+            }
+            let symbol = if PIXELS.contains(&c.symbol()) {
+                c.symbol()
+            } else {
+                " "
+            };
+            let fg = grey_at(c.fg, Color::Reset, GHOST);
+            let bg = match c.bg {
+                Color::Reset => p.buf[(x, y)].bg,
+                bg => grey_at(bg, PANEL_BG, GHOST),
+            };
+            let cell = &mut p.buf[(x, y)];
+            cell.reset();
+            cell.set_symbol(symbol).set_fg(fg).set_bg(bg);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::app::{AppState, Screen, ScreenCmd};
     use crate::screens::deck::{Deck, Tab};
     use crate::screens::testutil::key;
-    use crate::ui::chrome::{CYAN, MAGENTA};
+    use crate::ui::art::{Art, grey};
+    use crate::ui::chrome::{BAR_BG, CYAN, MAGENTA, PANEL_BG};
+    use crate::ui::looks::ItemArt;
     use crossterm::event::KeyCode;
     use game::{Character, Content, ItemId, RecipeId, SkillId};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use ratatui::buffer::Buffer;
+    use ratatui::buffer::{Buffer, Cell};
     use ratatui::layout::Rect;
-    use ratatui::style::Color;
+    use ratatui::style::{Color, Modifier};
 
     /// D'SHAWN, the debug runner, who has the bench and most of the skills.
     fn dshawn() -> AppState {
@@ -1193,6 +1460,276 @@ mod tests {
         );
         assert_eq!(wrap("1× Unbreakableword", 8), ["1×", "Unbreak…"]);
         assert!(wrap("anything", 0).is_empty());
+    }
+
+    /// D'SHAWN's deck on the Ratchet's sheet, the last drawing: ← once from the first.
+    fn on_the_ratchet(st: &mut AppState) -> Deck {
+        let mut d = bench(st);
+        press(&mut d, st, KeyCode::Left, 1);
+        assert_eq!(recipe_id(st, &d), "ratchet_build");
+        d
+    }
+
+    /// Where `concept_a` puts the drawing's origin at 100×30.
+    const MOCK_ORIGIN: (u16, u16) = (14, 4);
+
+    /// The field at 100×30.
+    const FIELD: Rect = Rect::new(3, 6, 94, 14);
+
+    /// The output of the sheet shown, drawn with nothing fitted and no stickers.
+    fn output_art(st: &AppState, d: &Deck) -> ItemArt {
+        let list = drawings(&st.content);
+        let r = &st.content.recipes[list[d.workbench.drawing]];
+        let item = st.content.item(&r.output.0).unwrap();
+        ItemArt {
+            look: item.look.unwrap(),
+            fitted: vec![None; item.sockets.len()],
+            stickers: Vec::new(),
+        }
+    }
+
+    /// A 100×30 buffer on the panel, as the sheet lays its field.
+    fn panel() -> Buffer {
+        let mut b = Buffer::empty(Rect::new(0, 0, 100, 30));
+        for c in &mut b.content {
+            c.set_bg(PANEL_BG);
+        }
+        b
+    }
+
+    /// The cells `draw` writes over an empty 100×30 buffer, row by row.
+    fn drawn(draw: impl FnOnce(&mut Buffer)) -> Vec<(u16, u16)> {
+        let mut b = Buffer::empty(Rect::new(0, 0, 100, 30));
+        draw(&mut b);
+        (0..30u16)
+            .flat_map(|y| (0..100u16).map(move |x| (x, y)))
+            .filter(|&at| b[at] != Cell::EMPTY)
+            .collect()
+    }
+
+    /// `at` moved by a part's `apart`.
+    fn moved((x, y): (u16, u16), (dx, dy): (i16, i16)) -> (u16, u16) {
+        (
+            (i32::from(x) + i32::from(dx)) as u16,
+            (i32::from(y) + i32::from(dy)) as u16,
+        )
+    }
+
+    #[test]
+    fn the_ratchet_explodes() {
+        let mut st = dshawn();
+        let d = on_the_ratchet(&mut st);
+        let b = render(&d, &st, 100, 30);
+        let title = area(&b, 62, 97, 21, 26);
+        assert_eq!(cells(&b, 63, 21, 11), "RATCHET SMG", "{title}");
+        assert_eq!(cells(&b, 87, 21, 7), "◂ 7/7 ▸", "{title}");
+        assert_eq!(
+            cells(&b, 63, 22, 34).trim_end(),
+            "weapon · primary · 3.2 kg",
+            "{title}"
+        );
+        assert_eq!(
+            cells(&b, 63, 23, 34).trim_end(),
+            "needs Scrapcraft · yours",
+            "{title}"
+        );
+        assert_eq!(
+            cells(&b, 63, 24, 34).trim_end(),
+            "1 more Barrel 9×19",
+            "{title}"
+        );
+        assert_eq!(
+            cells(&b, 63, 25, 34),
+            "DWG 7/7 · assembly · drawn D'SHAWN",
+            "{title}"
+        );
+        assert_eq!(
+            cells(&b, 2, 28, 63).trim_end(),
+            "←→ drawings · ↑↓ parts · space assemble · tab tabs · esc close"
+        );
+
+        // A balloon on each part with its leader, numbered as the parts list.
+        let field = area(&b, 3, 97, 6, 20);
+        for (n, x, y) in [(1, 38, 6), (2, 17, 6), (3, 83, 6), (4, 42, 17), (5, 77, 16)] {
+            assert_eq!(cells(&b, x, y, 3), format!(" {n} "), "{field}");
+            assert!(b[(x + 1, y)].modifier.contains(Modifier::BOLD), "{n}");
+        }
+        for (x, y, glyph) in [
+            (39, 7, "│"),
+            (18, 7, "│"),
+            (84, 7, "│"),
+            (45, 17, "─"),
+            (46, 17, "─"),
+            (47, 17, "─"),
+            (75, 16, "─"),
+            (76, 16, "─"),
+        ] {
+            assert_eq!(b[(x, y)].symbol(), glyph, "({x}, {y}):\n{field}");
+        }
+        // The receiver is selected: its balloon inverted. The stock's is cyan on the
+        // bar's colour, the barrel's (short) magenta on dark magenta, its leader too.
+        assert_eq!((b[(39, 6)].fg, b[(39, 6)].bg), (PANEL_BG, CYAN));
+        assert_eq!((b[(18, 6)].fg, b[(18, 6)].bg), (CYAN, BAR_BG));
+        assert_eq!((b[(84, 6)].fg, b[(84, 6)].bg), (MAGENTA, WARN_BG));
+        assert_eq!(b[(18, 7)].fg, CYAN);
+        assert_eq!(b[(84, 7)].fg, MAGENTA);
+
+        // Each part on hand sits where the whole drawing has it from the mock's
+        // origin, moved by its `apart`.
+        let art = output_art(&st, &d);
+        let mut whole = panel();
+        art.draw(MOCK_ORIGIN, FIELD, &mut whole);
+        let parts = art.parts();
+        assert_eq!(parts.len(), 5);
+        for part in parts {
+            if st.character.count(&ItemId::new(part.item)) == 0 {
+                continue;
+            }
+            let mine = drawn(|buf| art.draw_part(part.index, MOCK_ORIGIN, FIELD, buf));
+            let at = moved(mine[0], part.apart);
+            assert_eq!(b[at], whole[mine[0]], "{} at {at:?}:\n{field}", part.item);
+        }
+        // The receiver doesn't move: its first cell, the charging knob's, is on (41, 7)
+        // as in the mock.
+        let first = drawn(|buf| art.draw_part(0, MOCK_ORIGIN, FIELD, buf))[0];
+        assert_eq!(first, (41, 7));
+        assert_eq!(b[(41, 7)].symbol(), "▀", "{field}");
+    }
+
+    #[test]
+    fn a_missing_part_is_a_ghost_in_a_dashed_box() {
+        let mut st = dshawn();
+        let mut d = on_the_ratchet(&mut st);
+        let art = output_art(&st, &d);
+        let barrel = art.parts()[2];
+        assert_eq!(st.character.count(&ItemId::new(barrel.item)), 0);
+        let b = render(&d, &st, 100, 30);
+        let field = area(&b, 3, 97, 6, 20);
+
+        // Its cells greyed darker than the modding mode's grey, the text blanked; the
+        // dashed box takes its top and bottom rows.
+        let mut whole = panel();
+        art.draw(MOCK_ORIGIN, FIELD, &mut whole);
+        let mine = drawn(|buf| art.draw_part(2, MOCK_ORIGIN, FIELD, buf));
+        let middle: Vec<_> = mine.iter().filter(|&&(_, y)| y == 10).collect();
+        assert_eq!(middle.len(), 10, "{field}");
+        for &&at in &middle {
+            let (got, was) = (&b[moved(at, barrel.apart)], &whole[at]);
+            let red = |c: Color| match c {
+                Color::Rgb(r, _, _) => r,
+                _ => panic!("{c:?}"),
+            };
+            assert!(red(got.fg) < red(grey(was.fg, PANEL_BG)), "{at:?}");
+            assert!(red(got.fg) > 0, "{at:?}");
+            assert!(" ▀▄█▌▐".contains(got.symbol()), "{at:?}");
+            assert!(!got.modifier.contains(Modifier::BOLD), "{at:?}");
+        }
+        // As the mock has it: luminance × 0.26, the blue a touch up.
+        assert_eq!(b[(79, 10)].symbol(), "▀", "{field}");
+        assert_eq!(b[(79, 10)].fg, Color::Rgb(0x19, 0x19, 0x1b));
+        assert_eq!(b[(79, 10)].bg, Color::Rgb(0x12, 0x12, 0x13));
+
+        // The dashed box, a column out each side, and `none on hand` under it.
+        for (x, y, glyph) in [(78, 9, "┌"), (89, 9, "┐"), (78, 11, "└"), (89, 11, "┘")] {
+            assert_eq!(b[(x, y)].symbol(), glyph, "({x}, {y}):\n{field}");
+            assert_eq!(b[(x, y)].fg, MAGENTA);
+        }
+        assert_eq!(cells(&b, 79, 9, 10), "╌".repeat(10), "{field}");
+        assert_eq!(cells(&b, 79, 11, 10), "╌".repeat(10), "{field}");
+        assert_eq!(b[(78, 10)].symbol(), "╎", "{field}");
+        assert_eq!(b[(89, 10)].symbol(), "╎", "{field}");
+        assert_eq!(cells(&b, 78, 13, 12), "none on hand", "{field}");
+        assert_eq!(b[(78, 13)].fg, MAGENTA);
+
+        // The receiver's brackets stay inside the field: none on the top edge.
+        assert_eq!(b[(35, 14)].symbol(), "┗", "{field}");
+        assert_eq!(b[(76, 14)].symbol(), "┛", "{field}");
+        assert_eq!(b[(35, 5)].symbol(), "─", "{}", row(&b, 5));
+
+        // ↓↓ selects the barrel: brackets two columns and a row clear of its box's
+        // rectangle, one more out, and its balloon inverted.
+        press(&mut d, &mut st, KeyCode::Down, 2);
+        assert_eq!(d.workbench.part, 2);
+        let b = render(&d, &st, 100, 30);
+        let field = area(&b, 3, 97, 6, 20);
+        for (x, y, glyph) in [(76, 7, "┏"), (91, 7, "┓"), (76, 13, "┗"), (91, 13, "┛")] {
+            assert_eq!(b[(x, y)].symbol(), glyph, "({x}, {y}):\n{field}");
+            assert!(
+                matches!(b[(x, y)].fg, Color::Rgb(r, _, bl) if bl > 150 && r < 40),
+                "({x}, {y}) {:?}",
+                b[(x, y)].fg
+            );
+        }
+        assert_eq!(cells(&b, 83, 6, 3), " 3 ", "{field}");
+        assert_eq!((b[(84, 6)].fg, b[(84, 6)].bg), (PANEL_BG, MAGENTA));
+        assert_eq!((b[(39, 6)].fg, b[(39, 6)].bg), (CYAN, BAR_BG));
+        assert_ne!(b[(35, 14)].symbol(), "┗", "the receiver's brackets go");
+    }
+
+    #[test]
+    fn centre_lines_fill_the_gaps() {
+        let mut st = dshawn();
+        st.character.give(ItemId::new("ratchet_barrel"), 1);
+        let d = on_the_ratchet(&mut st);
+        let b = render(&d, &st, 100, 30);
+        let field = area(&b, 3, 97, 6, 20);
+        assert_eq!(
+            cells(&b, 63, 24, 34).trim_end(),
+            "every part on hand",
+            "{field}"
+        );
+        // The five columns the stock left and the five the barrel left, on the
+        // barrel's middle row, and no more.
+        let dashes: Vec<u16> = (3..97).filter(|&x| b[(x, 10)].symbol() == "╌").collect();
+        assert_eq!(dashes, [33, 34, 35, 36, 37, 74, 75, 76, 77, 78], "{field}");
+        assert_eq!(b[(33, 10)].fg, FAINTER);
+        // The row the magazine and the trigger left, through their middle columns.
+        let ticks: Vec<u16> = (3..97).filter(|&x| b[(x, 13)].symbol() == "╎").collect();
+        assert_eq!(ticks, [56, 67], "{field}");
+        assert_eq!(b[(56, 13)].fg, FAINTER);
+
+        // With the barrel short, its box's edge takes the line's last column.
+        let mut st = dshawn();
+        let d = on_the_ratchet(&mut st);
+        let b = render(&d, &st, 100, 30);
+        assert_eq!(cells(&b, 74, 10, 5), "╌╌╌╌╎", "{}", row(&b, 10));
+        assert_eq!(b[(78, 10)].fg, MAGENTA);
+    }
+
+    #[test]
+    fn too_big_draws_whole() {
+        let mut st = dshawn();
+        let d = on_the_ratchet(&mut st);
+        // A body a row short leaves a field of 13 rows; exploded the Ratchet needs 14.
+        let body = Rect::new(1, 5, 98, 21);
+        let mut b = Buffer::empty(Rect::new(0, 0, 100, 30));
+        d.workbench.draw(&st, body, &mut b);
+        let field = Rect::new(3, 6, 94, 13);
+        let text = area(&b, 3, 97, 6, 19);
+        assert_eq!(b[(3, 19)].symbol(), "─", "the rule is a row up");
+
+        // The whole gun and nothing else: no balloon, no box. Its parts span columns
+        // 2-69 and rows 3-14 of the drawing, centred in the field from (14, 3).
+        let art = output_art(&st, &d);
+        let mut whole = panel();
+        art.draw((14, 3), field, &mut whole);
+        let gun = drawn(|buf| art.draw((14, 3), Rect::new(0, 0, 100, 30), buf));
+        assert!(
+            gun.iter().all(|&at| field.contains(at.into())),
+            "all in view"
+        );
+        for y in field.top()..field.bottom() {
+            for x in field.left()..field.right() {
+                let (got, want) = (&b[(x, y)], &whole[(x, y)]);
+                assert_eq!(
+                    (got.symbol(), got.fg, got.bg),
+                    (want.symbol(), want.fg, want.bg),
+                    "({x}, {y}):\n{text}"
+                );
+            }
+        }
+        assert!(text.contains("RATCHET"), "{text}");
+        assert!(!text.contains(" 1 "), "{text}");
     }
 
     #[test]

@@ -42,14 +42,12 @@ pub trait Art {
 
     /// The item's parts in their order, in drawing coordinates; none for an item
     /// that is not built from parts.
-    #[allow(dead_code)] // The workbench's sheet draws from this next.
     fn parts(&self) -> Vec<PartPlace> {
         Vec::new()
     }
 
     /// One part alone, where it sits whole, from `origin`, nothing written outside
     /// `clip`. Fitted hardware and stickers are never drawn.
-    #[allow(dead_code)]
     fn draw_part(&self, _part: usize, _origin: (u16, u16), _clip: Rect, _buf: &mut Buffer) {}
 
     /// Where stickers may lie on the drawing; `None` for one that takes none.
@@ -186,7 +184,6 @@ pub struct SocketPlace {
 
 /// A part on a drawing, in drawing coordinates: what it is, where it sits whole, how
 /// far it moves on an exploded drawing, and where its balloon goes.
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PartPlace {
     /// Its place in the look's parts.
@@ -260,13 +257,18 @@ pub fn step<P: Copy + PartialEq>(
 /// the sockets left in colour are what the eye finds. `panel` stays as it is, so a
 /// background the window paints itself is left alone; so does a colour without RGB.
 pub fn grey(c: Color, panel: Color) -> Color {
+    grey_at(c, panel, 0.38)
+}
+
+/// `grey` at another brightness: the luminance times `k`.
+pub fn grey_at(c: Color, panel: Color, k: f64) -> Color {
     let Color::Rgb(r, g, b) = c else {
         return c;
     };
     if c == panel {
         return c;
     }
-    let v = (0.299 * f64::from(r) + 0.587 * f64::from(g) + 0.114 * f64::from(b)) * 0.38;
+    let v = (0.299 * f64::from(r) + 0.587 * f64::from(g) + 0.114 * f64::from(b)) * k;
     let channel = |x: f64| x.round().clamp(0.0, 255.0) as u8;
     Color::Rgb(channel(v), channel(v), channel(v * 1.08))
 }
@@ -404,6 +406,12 @@ mod tests {
         assert_eq!(grey(Color::Rgb(0, 0, 0), PANEL), Color::Rgb(0, 0, 0));
         assert_eq!(grey(PANEL, PANEL), PANEL);
         assert_eq!(grey(Color::Reset, PANEL), Color::Reset);
+        // The same at another brightness.
+        assert_eq!(
+            grey_at(Color::Rgb(255, 255, 255), PANEL, 0.26),
+            Color::Rgb(66, 66, 72)
+        );
+        assert_eq!(grey_at(PANEL, PANEL, 0.26), PANEL);
     }
 
     #[test]
