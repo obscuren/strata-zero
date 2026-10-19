@@ -1,6 +1,7 @@
 //! Ids, enums and the content structs.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt;
 
 macro_rules! id_type {
@@ -88,10 +89,12 @@ pub enum ItemKind {
     Program,
     /// Fits into a socket on another item and adds its mods there.
     Hardware,
+    /// A decal stuck on an item's drawing; changes nothing but how it looks.
+    Sticker,
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 9] = [
+    pub const ALL: [ItemKind; 10] = [
         ItemKind::Weapon,
         ItemKind::Armor,
         ItemKind::Cyberware,
@@ -101,6 +104,7 @@ impl ItemKind {
         ItemKind::Junk,
         ItemKind::Program,
         ItemKind::Hardware,
+        ItemKind::Sticker,
     ];
 
     pub fn label(self) -> &'static str {
@@ -114,6 +118,7 @@ impl ItemKind {
             ItemKind::Junk => "junk",
             ItemKind::Program => "program",
             ItemKind::Hardware => "hardware",
+            ItemKind::Sticker => "sticker",
         }
     }
 }
@@ -327,6 +332,71 @@ pub struct Hardware {
     pub look: HardwareLook,
 }
 
+fn bold() -> bool {
+    true
+}
+
+/// A sticker's graphic: one row of lettering on a ground, or half-block pixels.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum StickerArt {
+    /// The text carries its own margin, a space at each end.
+    Lettered {
+        text: String,
+        ink: (u8, u8, u8),
+        ground: (u8, u8, u8),
+        #[serde(default = "bold")]
+        bold: bool,
+    },
+    /// One char per pixel, two pixels to a cell stacked; `.` is empty.
+    Picture {
+        rows: Vec<String>,
+        colours: BTreeMap<char, (u8, u8, u8)>,
+    },
+}
+
+/// How far a sticker is turned, clockwise in quarters.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Turn {
+    #[default]
+    Level,
+    Quarter,
+    Half,
+    ThreeQuarter,
+}
+
+impl Turn {
+    pub const ALL: [Turn; 4] = [Turn::Level, Turn::Quarter, Turn::Half, Turn::ThreeQuarter];
+
+    /// A quarter further clockwise.
+    pub fn cw(self) -> Turn {
+        match self {
+            Turn::Level => Turn::Quarter,
+            Turn::Quarter => Turn::Half,
+            Turn::Half => Turn::ThreeQuarter,
+            Turn::ThreeQuarter => Turn::Level,
+        }
+    }
+
+    pub fn degrees(self) -> u16 {
+        match self {
+            Turn::Level => 0,
+            Turn::Quarter => 90,
+            Turn::Half => 180,
+            Turn::ThreeQuarter => 270,
+        }
+    }
+}
+
+/// A sticker stuck on an item's drawing: its top-left cell as turned, in drawing cells.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Stuck {
+    pub sticker: ItemId,
+    pub x: u16,
+    pub y: u16,
+    #[serde(default)]
+    pub turn: Turn,
+}
+
 /// A deck's slots for programs, its rating and the look it wears.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeckSpec {
@@ -423,12 +493,24 @@ pub struct Item {
     /// What the piece fits and does (hardware only).
     #[serde(default)]
     pub hardware: Option<Hardware>,
+    /// Its graphic (stickers only).
+    #[serde(default)]
+    pub sticker: Option<StickerArt>,
+    /// The stickers a new copy is made with.
+    #[serde(default)]
+    pub stickers: Vec<Stuck>,
 }
 
 impl Item {
-    /// Held per copy, since it can carry state: it has sockets or is hardware.
+    /// Held per copy, since it can carry state: it has sockets, is hardware, or
+    /// takes stickers.
     pub fn per_copy(&self) -> bool {
-        !self.sockets.is_empty() || self.hardware.is_some()
+        !self.sockets.is_empty() || self.hardware.is_some() || self.takes_stickers()
+    }
+
+    /// It can be worn and has a drawing, so stickers can go on it.
+    pub fn takes_stickers(&self) -> bool {
+        self.slot.is_some() && (self.deck.is_some() || self.look.is_some())
     }
 
     /// The places its drawing sockets: the deck look's, else the item look's.

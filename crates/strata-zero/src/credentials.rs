@@ -259,6 +259,8 @@ fn card(id: ItemId, name: String, desc: String) -> Item {
         sockets: Vec::new(),
         look: None,
         hardware: None,
+        sticker: None,
+        stickers: Vec::new(),
     }
 }
 

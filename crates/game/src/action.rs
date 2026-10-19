@@ -961,7 +961,7 @@ mod tests {
         let back = ch.copy_in_pack(ids[0]).expect("the old worn deck returns");
         assert_eq!((back.qty, back.item.clone()), (1, id("rebuilt_deck")));
         assert_eq!(ch.count(&id("rebuilt_deck")), 1);
-        // Back to the plain deck: no copy is left worn.
+        // Back to the pawnshop deck: it is worn with its own copy, stickers and all.
         apply(
             &mut ch,
             &mut g,
@@ -971,7 +971,8 @@ mod tests {
             Action::Equip(id("pawnshop_deck")),
         )
         .unwrap();
-        assert!(ch.worn_copy(Slot::Deck).is_none());
+        let worn = ch.worn_copy(Slot::Deck).map(|k| k.id);
+        assert!(worn.is_some() && worn != Some(ids[0]) && worn != Some(ids[1]));
         assert!(ch.copy_in_pack(ids[1]).is_some());
         // A copy without a slot is refused before anything moves.
         let piece = ch.new_copy(&c, &id("sidecar"));
