@@ -216,20 +216,30 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             Ok(format!("{n} piece{} awake", if n == 1 { "" } else { "s" }))
         }
         "engage" => {
-            let Some(citygen::Place::Construct(b)) = st.player.as_ref().map(|p| p.place) else {
-                return Err("not in a construct".to_string());
-            };
+            let (place, jacked) = st
+                .player
+                .as_ref()
+                .map(|p| (p.place, p.jacked_in()))
+                .ok_or("no body")?;
             if st.net.engaged.is_some() {
                 return Ok("already engaged".to_string());
             }
-            crate::net::engage(st, b, true);
+            match place {
+                citygen::Place::Construct(_) => {}
+                _ if jacked => return Err("not in a construct".to_string()),
+                _ if crate::foes::in_memory(st).is_empty() => {
+                    return Err("nothing to engage".to_string());
+                }
+                _ => {}
+            }
+            crate::net::engage(st, place, true);
             Ok("engaged by hand".to_string())
         }
         "calm" => {
-            let Some(e) = st.net.engaged.as_ref() else {
+            if st.net.engaged.is_none() {
                 return Ok("already calm".to_string());
-            };
-            if crate::net::any_awake(st, e.building) {
+            }
+            if crate::net::hunting(st) {
                 return Err("still hunted".to_string());
             }
             crate::net::disengage(st);

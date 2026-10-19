@@ -484,13 +484,21 @@ impl MapScreen {
                 ),
             },
             Actor::Ice(i) => {
-                let grade = st
-                    .constructs
-                    .get(e.building)
+                let grade = e
+                    .construct()
+                    .and_then(|b| st.constructs.get(b))
                     .and_then(|k| k.guards.get(i))
                     .map(|g| g.grade.label())
                     .unwrap_or("the");
                 (format!("{grade} ICE ACTS"), "wait".to_string())
+            }
+            Actor::Foe(i) => {
+                let name = st
+                    .foes
+                    .get(i)
+                    .map(|f| f.name.to_uppercase())
+                    .unwrap_or_else(|| "FOE".to_string());
+                (format!("THE {name} ACTS"), "wait".to_string())
             }
         })
     }
@@ -1566,16 +1574,21 @@ impl MapScreen {
             }
             return self.interact(st);
         }
-        // `e`: turns by hand, and back to the beat when nothing hunts you.
+        // `e`: turns by hand, and back to real time when nothing hunts you.
         if k.code == KeyCode::Char('e') {
-            match st.player.as_ref().map(|p| p.place) {
-                Some(Place::Construct(b)) => match st.net.engaged.as_ref() {
-                    None => crate::net::engage(st, b, true),
-                    Some(e) if e.actor() != crate::net::Actor::You => st.warn("not your turn"),
-                    Some(_) if crate::net::any_awake(st, b) => st.warn("still hunted"),
-                    Some(_) => crate::net::disengage(st),
-                },
-                _ => st.warn("nothing to engage"),
+            let place = st.player.as_ref().map(|p| p.place);
+            match (place, st.net.engaged.as_ref()) {
+                (None, _) => st.warn("nothing to engage"),
+                (Some(_), Some(e)) if e.actor() != crate::net::Actor::You => {
+                    st.warn("not your turn")
+                }
+                (Some(_), Some(_)) if crate::net::hunting(st) => st.warn("still hunted"),
+                (Some(_), Some(_)) => crate::net::disengage(st),
+                (Some(place @ Place::Construct(_)), None) => crate::net::engage(st, place, true),
+                (Some(place), None) if !crate::foes::in_memory(st).is_empty() => {
+                    crate::net::engage(st, place, true)
+                }
+                (Some(_), None) => st.warn("nothing to engage"),
             }
             return Some(ScreenCmd::Stay);
         }
@@ -1943,17 +1956,31 @@ impl Screen for MapScreen {
         // The beat of a calm construct: one per frame at most, so a long menu is
         // never a burst of rolls.
         let was_engaged = st.net.engaged.is_some();
+        // Carried to another map, out of the fight.
+        if let Some(e) = st.net.engaged.as_ref()
+            && st.player.as_ref().is_some_and(|p| p.place != e.place)
+        {
+            crate::net::disengage(st);
+        }
         if self.mode == Mode::Walk && inside.is_some() {
             if st.net.engaged.is_some() {
-                crate::net::ice_pace(st);
+                crate::net::pace(st);
             } else if st.clock_tick() >= st.net.beat + crate::net::BEAT_TICKS {
                 st.net.beat = st.clock_tick();
                 crate::net::beat(st);
             }
         }
-        // Out of the construct, out of the fight.
-        if inside.is_none() && st.net.engaged.is_some() {
-            crate::net::disengage(st);
+        // On foot: a foe that sees you puts the map on turns; while it is, they act
+        // on the pace.
+        if self.mode == Mode::Walk
+            && inside.is_none()
+            && let Some(place) = st.player.as_ref().map(|p| p.place)
+        {
+            if st.net.engaged.is_some() {
+                crate::net::pace(st);
+            } else if crate::foes::look_all(st) {
+                crate::net::engage(st, place, false);
+            }
         }
         // The walk: it stops where it is when a fight starts under it or the turn
         // is no longer yours, else it steps on its ticks.
@@ -2484,7 +2511,7 @@ mod tests {
         let (mut st, mut s) = lot(Pos::new(7, 8));
         s.update(&mut st, &[key(KeyCode::Char('l'))]);
         assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(6, 8));
-        assert_eq!(last(&st), Some("the goon is in the way"));
+        assert!(logged(&st, "the goon is in the way"));
         st.foes[0].down = true;
         s.update(&mut st, &[key(KeyCode::Char('l'))]);
         assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(7, 8));
@@ -2504,6 +2531,54 @@ mod tests {
         assert_eq!(
             cell_of(&s, &st, &buf, Pos::new(14, 8)),
             ("%".to_string(), Color::Rgb(120, 30, 30))
+        );
+    }
+
+    #[test]
+    fn e_on_the_street_both_ways_and_still_hunted() {
+        let (mut st, mut s) = lot(Pos::new(14, 8));
+        // The first frame: the goon sees you and the street engages.
+        s.update(&mut st, &[]);
+        assert!(st.net.engaged.as_ref().is_some_and(|e| !e.manual));
+        assert!(logged(&st, "ENGAGED · the goon has you"));
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert_eq!(last(&st), Some("still hunted"));
+        st.foes[0].down = true;
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert_eq!(last(&st), Some("calm"));
+        assert!(st.net.engaged.is_none());
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert_eq!(last(&st), Some("nothing to engage"));
+        // An idle goon in sight memory can be engaged by hand.
+        st.foes.push(crate::foes::Foe::goon(
+            Place::Stratum(StratumKind::Street),
+            Pos::new(18, 8),
+        ));
+        s.update(&mut st, &[]);
+        assert!(st.net.engaged.is_none(), "twelve tiles: unseen by the goon");
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert!(st.net.engaged.as_ref().is_some_and(|e| e.manual));
+        assert_eq!(last(&st), Some("engaged"));
+        // Leaving the map ends it.
+        st.player.as_mut().unwrap().place = Place::Stratum(StratumKind::Skyways);
+        s.update(&mut st, &[]);
+        assert!(st.net.engaged.is_none());
+    }
+
+    #[test]
+    fn console_engage_and_calm_work_on_the_street() {
+        let (mut st, _s) = lot(Pos::new(18, 8));
+        let at = game::At {
+            place: Place::Stratum(StratumKind::Street),
+            pos: Pos::new(6, 8),
+        };
+        assert_eq!(
+            crate::screens::console::run(&mut st, at, "engage").unwrap(),
+            "engaged by hand"
+        );
+        assert_eq!(
+            crate::screens::console::run(&mut st, at, "calm").unwrap(),
+            "calm"
         );
     }
 
@@ -8062,7 +8137,7 @@ mod tests {
         let mut s = MapScreen::explore(0);
         let b = engaged_at_the_gate(&mut st, &mut s);
         let e = st.net.engaged.clone().unwrap();
-        assert_eq!(e.building, b);
+        assert_eq!(e.place, Place::Construct(b));
         assert_eq!(e.round, 1);
         assert_eq!(e.order.len(), 3, "{:?}", e.order);
         assert_eq!(e.order[0], Actor::You, "ties go to you: {:?}", e.order);
@@ -8083,7 +8158,7 @@ mod tests {
         let b = in_construct_at(&mut st, &mut s, 255);
         // The deck adds one Net: at a base of 0 you score 1, under grey's 2 and black's 3.
         st.character.stats.net = 0;
-        let order = initiative(&st, b);
+        let order = initiative(&st, Place::Construct(b));
         assert_eq!(
             order,
             vec![Actor::Ice(1), Actor::Ice(0), Actor::You],
@@ -8092,7 +8167,7 @@ mod tests {
         // At 3 you tie black and the tie is yours.
         st.character.stats.net = 2;
         assert_eq!(
-            initiative(&st, b),
+            initiative(&st, Place::Construct(b)),
             vec![Actor::You, Actor::Ice(1), Actor::Ice(0)]
         );
     }
@@ -9807,7 +9882,7 @@ mod tests {
             work: 2,
         });
         st.net.engaged = Some(crate::net::Engagement {
-            building: a,
+            place: Place::Construct(a),
             round: 1,
             order: vec![crate::net::Actor::You],
             turn: 0,

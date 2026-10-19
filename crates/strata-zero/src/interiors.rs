@@ -237,6 +237,9 @@ fn level_for(plan: &FloorPlan, stratum: StratumKind) -> Option<i32> {
 /// Walks the player through a closed building's door on the city map, onto the
 /// doorstep inside; the floor is generated if this is its first visit.
 pub fn enter(st: &mut AppState, b: BuildingId, door: (StratumKind, Pos)) -> Result<String, String> {
+    if st.net.engaged.is_some() {
+        return Err("not now".to_string());
+    }
     let city = st.city.as_ref().ok_or("no city")?;
     let plan = st
         .interiors

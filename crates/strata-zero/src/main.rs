@@ -6,6 +6,7 @@ mod anim;
 mod app;
 mod backdoors;
 mod cli;
+mod combat;
 mod constructs;
 mod credentials;
 mod exposure;

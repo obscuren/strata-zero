@@ -197,6 +197,91 @@ pub fn step_toward(city: &City, place: Place, from: Pos, goal: Pos, avoid: &[Pos
     path.into_iter().find(|p| *p != from)
 }
 
+/// A foe's turn begins: a stun counts down and the turn passes; else it looks, and
+/// acts only when it hunts. A down foe never does.
+pub fn turn_start(st: &mut AppState, i: usize) -> bool {
+    let Some(foe) = st.foes.get_mut(i) else {
+        return false;
+    };
+    if foe.down {
+        return false;
+    }
+    if foe.stunned > 0 {
+        foe.stunned -= 1;
+        let name = foe.name.clone();
+        st.say(format!("{name} · stunned"));
+        return false;
+    }
+    look(st, i)
+}
+
+/// The weapon a foe carries: its reach, for the turn.
+fn weapon_range(st: &AppState, foe: &Foe) -> i32 {
+    st.content
+        .item(&foe.weapon)
+        .and_then(|i| i.weapon.as_ref())
+        .map_or(0, |w| w.range)
+}
+
+/// One action of a foe's turn: a shot when it hunts you in range with a clear line,
+/// else a step toward where it saw you; at that tile without sight it loses you.
+pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate::net::Step {
+    use crate::net::Step;
+    let Some((me_place, me)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
+        return Step::Nothing;
+    };
+    let Some(foe) = st.foes.get(i).cloned() else {
+        return Step::Nothing;
+    };
+    if foe.down || foe.place != me_place {
+        return Step::Nothing;
+    }
+    let FoeMode::Hunting { seen, lost } = foe.mode else {
+        return Step::Nothing;
+    };
+    let Some(city) = st.city.as_ref() else {
+        return Step::Nothing;
+    };
+    let in_reach =
+        foe.pos.chebyshev(me) <= weapon_range(st, &foe) && line_clear(city, foe.place, foe.pos, me);
+    if can_hit && sees(city, &foe, me) && in_reach {
+        crate::combat::fire_at_you(st, i);
+        return Step::Hit;
+    }
+    if !can_move {
+        return Step::Nothing;
+    }
+    let avoid: Vec<Pos> = std::iter::once(me)
+        .chain(
+            st.foes
+                .iter()
+                .enumerate()
+                .filter(|(j, f)| *j != i && f.standing() && f.place == foe.place)
+                .map(|(_, f)| f.pos),
+        )
+        .collect();
+    let next = if foe.pos == seen {
+        None
+    } else {
+        step_toward(city, foe.place, foe.pos, seen, &avoid).filter(|p| *p != me)
+    };
+    match next {
+        Some(to) => {
+            st.foes[i].pos = to;
+            Step::Moved(to)
+        }
+        None => {
+            let lost = lost + 1;
+            st.foes[i].mode = if lost >= crate::net::LOST_TURNS {
+                FoeMode::Idle
+            } else {
+                FoeMode::Hunting { seen, lost }
+            };
+            Step::Nothing
+        }
+    }
+}
+
 /// The weapon's name a foe carries, for the readouts.
 pub fn weapon_name(st: &AppState, foe: &Foe) -> String {
     st.content
@@ -404,6 +489,126 @@ mod tests {
         );
         assert!(lines(&st, |_| false).is_empty());
         assert!(any_hunting(&st, STREET));
+    }
+
+    /// The clock moves `n` ticks: the app's and the living city's, which the clock
+    /// reads while there is a city.
+    fn advance(st: &mut AppState, n: u64) {
+        st.tick += n;
+        if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
+            world.advance(city, world.tick() + n);
+        }
+    }
+
+    /// One pace of the clock, and whoever acts acts.
+    fn pace(st: &mut AppState) {
+        advance(st, crate::net::PACE_TICKS);
+        crate::net::pace(st);
+    }
+
+    /// Lets the foe act on the pace until the turn is yours or the fight ends.
+    fn settle(st: &mut AppState) {
+        for _ in 0..80 {
+            if crate::net::your_turn(st) {
+                return;
+            }
+            pace(st);
+        }
+        panic!("the foe never hands the turn back");
+    }
+
+    fn hunting_from(st: &mut AppState, seen: Pos) {
+        st.foes[0].mode = FoeMode::Hunting { seen, lost: 0 };
+    }
+
+    #[test]
+    fn a_foes_turn_on_the_pace_steps_toward_you_then_fires() {
+        let mut st = testutil::lot(Pos::new(18, 8));
+        hunting_from(&mut st, Pos::new(6, 8));
+        crate::net::engage(&mut st, STREET, true);
+        assert_eq!(
+            st.net.engaged.as_ref().unwrap().actor(),
+            crate::net::Actor::You
+        );
+        crate::net::end_turn(&mut st);
+        assert_eq!(
+            st.net.engaged.as_ref().unwrap().actor(),
+            crate::net::Actor::Foe(0)
+        );
+        // Three steps, one a pace; at nine tiles the pistol is out of range.
+        pace(&mut st);
+        assert_eq!(st.foes[0].pos, Pos::new(17, 8));
+        assert_eq!(st.net.engaged.as_ref().unwrap().moves, 2);
+        settle(&mut st);
+        assert_eq!(st.foes[0].pos, Pos::new(15, 8));
+        assert!(!logged(&st, "fires"));
+        // Next turn: three more steps, then it fires.
+        crate::net::end_turn(&mut st);
+        settle(&mut st);
+        assert_eq!(st.foes[0].pos, Pos::new(12, 8));
+        assert!(logged(&st, "goon fires"), "{:?}", st.log.latest());
+        assert!(crate::net::your_turn(&st));
+    }
+
+    #[test]
+    fn a_stunned_foe_passes_and_the_stun_counts_down() {
+        let mut st = testutil::lot(Pos::new(12, 8));
+        hunting_from(&mut st, Pos::new(6, 8));
+        st.foes[0].stunned = 1;
+        crate::net::engage(&mut st, STREET, true);
+        crate::net::end_turn(&mut st);
+        assert!(crate::net::your_turn(&st), "the stunned foe passed at once");
+        assert_eq!(st.foes[0].stunned, 0);
+        assert!(logged(&st, "goon · stunned"));
+        assert_eq!(st.foes[0].pos, Pos::new(12, 8));
+    }
+
+    #[test]
+    fn a_foe_with_no_path_ends_its_turn() {
+        let mut st = testutil::lot(Pos::new(1, 1));
+        st.player.as_mut().unwrap().pos = Pos::new(30, 8);
+        hunting_from(&mut st, Pos::new(30, 8));
+        for p in [Pos::new(2, 1), Pos::new(1, 2), Pos::new(2, 2)] {
+            st.foes.push(Foe::goon(STREET, p));
+        }
+        crate::net::engage(&mut st, STREET, true);
+        crate::net::end_turn(&mut st);
+        pace(&mut st);
+        assert_eq!(st.foes[0].pos, Pos::new(1, 1));
+        assert_ne!(
+            st.net.engaged.as_ref().unwrap().actor(),
+            crate::net::Actor::Foe(0)
+        );
+    }
+
+    #[test]
+    fn a_foe_loses_you_after_three_turns() {
+        let mut st = testutil::lot(Pos::new(14, 8));
+        st.player.as_mut().unwrap().pos = Pos::new(36, 16);
+        st.player
+            .as_mut()
+            .unwrap()
+            .set_vis(Pos::new(14, 8), Visibility::Remembered);
+        hunting_from(&mut st, Pos::new(14, 8));
+        crate::net::engage(&mut st, STREET, true);
+        for lost in 1..=2 {
+            crate::net::end_turn(&mut st);
+            settle(&mut st);
+            assert_eq!(
+                st.foes[0].mode,
+                FoeMode::Hunting {
+                    seen: Pos::new(14, 8),
+                    lost
+                }
+            );
+        }
+        crate::net::end_turn(&mut st);
+        settle(&mut st);
+        assert_eq!(st.foes[0].mode, FoeMode::Idle);
+    }
+
+    fn logged(st: &AppState, needle: &str) -> bool {
+        st.log.iter().any(|e| e.text.contains(needle))
     }
 
     #[test]
