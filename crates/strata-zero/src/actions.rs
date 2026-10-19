@@ -5,9 +5,37 @@ use crate::render::map::MapRef;
 use citygen::{City, Place, Pos, StratumKind};
 use game::{AbilityKind, Action, Active, At, Effect};
 
+/// What an item action is refused with while jacked in.
+pub const JACKED_IN: &str = "jacked in · gear and pack locked until you jack out";
+
+/// Jacked in: the body sits still and its gear and pack can't be touched; only the
+/// Net acts.
+pub fn jacked_in(st: &AppState) -> bool {
+    st.player.as_ref().is_some_and(|p| p.jacked_in())
+}
+
+/// Whether `action` changes what is worn, carried or loaded.
+pub fn handles_items(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::Equip(_)
+            | Action::Unequip(_)
+            | Action::Drop { .. }
+            | Action::Use(_)
+            | Action::Take { .. }
+            | Action::TakeAll
+            | Action::Load(_)
+            | Action::Unload(_)
+            | Action::Slot { .. }
+    )
+}
+
 /// Applies an action at the player's feet and runs its effects on the world.
 /// The message is for the status strip; a refusal is the reason.
 pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
+    if handles_items(&action) && jacked_in(st) {
+        return Err(JACKED_IN.to_string());
+    }
     // Pack-only actions work anywhere; the ground and the world need a body.
     let needs_body = matches!(
         action,
@@ -179,6 +207,48 @@ mod tests {
             ..Default::default()
         })
         .unwrap()
+    }
+
+    #[test]
+    fn jacked_in_the_gear_and_the_pack_stay_put() {
+        let mut st = AppState::new();
+        st.city = Some(city());
+        let b = st.city.as_ref().unwrap().buildings[0].id;
+        let mut p = Player::at(Place::Construct(b), Pos::new(1, 1));
+        p.body = Some((Place::Stratum(StratumKind::Street), Pos::new(1, 1)));
+        st.player = Some(p);
+        st.character.give(ItemId::new("stim_patch"), 1);
+        let before = st.character.clone();
+        let loaded = st.character.loaded[0].clone();
+        let stim = ItemId::new("stim_patch");
+        for action in [
+            Action::Equip(ItemId::new("copper_coil")),
+            Action::Unequip(Slot::Deck),
+            Action::Use(stim.clone()),
+            Action::Drop {
+                item: stim.clone(),
+                qty: 1,
+            },
+            Action::Take {
+                item: stim.clone(),
+                qty: 1,
+            },
+            Action::TakeAll,
+            Action::Load(ItemId::new("attack")),
+            Action::Unload(loaded),
+            Action::Slot {
+                id: ItemId::new("attack"),
+                at: 0,
+            },
+        ] {
+            let refused = perform(&mut st, action.clone());
+            assert_eq!(refused, Err(JACKED_IN.to_string()), "{action:?}");
+        }
+        assert_eq!(st.character, before);
+        // Back in the body, its hands are its own again.
+        st.player = Some(Player::spawn(st.city.as_ref().unwrap(), 1));
+        perform(&mut st, Action::Unequip(Slot::Deck)).unwrap();
+        assert_eq!(st.character.equipped(Slot::Deck), None);
     }
 
     #[test]

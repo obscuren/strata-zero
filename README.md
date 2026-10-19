@@ -362,7 +362,8 @@ five stats and your pools; `space` buys a point outright), gear, inventory, work
 (WRENCH unlocks it), jobs (in hand, on offer, done), journal (empty for now), map
 (what you remember of this stratum) and talents (below). Every list wraps at both ends. `space` on a gear slot picks what fits from the pack,
 or unequips and inspects what is worn; on an inventory item it opens the
-verbs: Inspect, Equip, Use, Drop one, Drop all. In a popup the letter or
+verbs: Inspect, Equip, Use, Drop one, Drop all. Jacked in, your gear and pack
+are locked: those verbs dim and only Inspect works. In a popup the letter or
 `enter` fires a row and `esc` closes it; a card a row shows closes the popup too.
 Inspect on an item opens its blueprint in a window over the deck. The jacked
 deck's blueprint is the deck drawn as hardware: arrows point at a slot, a ROM

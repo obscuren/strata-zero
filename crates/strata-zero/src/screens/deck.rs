@@ -158,6 +158,20 @@ fn tone_style(tone: Tone) -> Style {
     }
 }
 
+/// Jacked in, the verbs that would touch the gear or the pack are dimmed and the
+/// popup's body says why; out of the Net nothing changes and there is no body.
+fn hands_off(st: &AppState, choices: &mut [Choice]) -> Vec<String> {
+    if !crate::actions::jacked_in(st) {
+        return Vec::new();
+    }
+    for c in choices.iter_mut() {
+        if matches!(&c.pick, Pick::Act(a) if crate::actions::handles_items(a)) {
+            c.enabled = false;
+        }
+    }
+    vec![capitalised(crate::actions::JACKED_IN)]
+}
+
 impl Deck {
     pub fn new(tick: u64) -> Self {
         Deck {
@@ -220,8 +234,10 @@ impl Deck {
                     st.warn(format!("nothing in the pack fits {}", slot.label()));
                     return None;
                 }
+                let body = hands_off(st, &mut choices);
                 Some(
                     Popup::verbs(&capitalised(slot.label()), choices, st.tick)
+                        .with_body(body)
                         .anchored(anchor.0, anchor.1),
                 )
             }
@@ -262,7 +278,12 @@ impl Deck {
                         }),
                     ));
                 }
-                Some(Popup::verbs(&item.name, choices, st.tick).anchored(anchor.0, anchor.1))
+                let body = hands_off(st, &mut choices);
+                Some(
+                    Popup::verbs(&item.name, choices, st.tick)
+                        .with_body(body)
+                        .anchored(anchor.0, anchor.1),
+                )
             }
             Some(Detail::Category(id)) => {
                 let cat = st.content.category(id)?;
@@ -2571,6 +2592,59 @@ mod tests {
             panic!("inspect opens the blueprint window")
         };
         to
+    }
+
+    #[test]
+    fn jacked_in_gear_and_items_only_inspect() {
+        let mut st = state();
+        let b = st.city.as_ref().unwrap().buildings[0].id;
+        let mut p = crate::walker::Player::at(Place::Construct(b), Pos::new(1, 1));
+        p.body = Some((Place::Stratum(StratumKind::Street), Pos::new(1, 1)));
+        st.player = Some(p);
+        st.character.give(ItemId::new("rebuilt_deck"), 1);
+        st.character.give(ItemId::new("stim_patch"), 2);
+        let before = st.character.clone();
+        let mut d = Deck::new(0);
+        let only_inspect = |p: &Popup| {
+            assert!(p.choices().len() > 1);
+            for c in p.choices() {
+                assert_eq!(c.enabled, c.label == "Inspect", "{}", c.label);
+            }
+        };
+        // GEAR: the DECK slot offers the spare deck and Unequip, dimmed; Inspect works.
+        d.update(&mut st, &[key(KeyCode::Char('3'))]);
+        d.row = d
+            .rows(&st)
+            .iter()
+            .position(|r| r.detail == Some(Detail::Slot(Slot::Deck)))
+            .unwrap();
+        let p = d.interact(&mut st).unwrap();
+        only_inspect(&p);
+        st.tick += 40;
+        let text = draw(&p, &st, 120, 35);
+        assert!(
+            text.contains("Jacked in · gear and pack locked until you jack out"),
+            "{text}"
+        );
+        // INVENTORY: Use and both drops dimmed too.
+        d.update(&mut st, &[key(KeyCode::Char('4'))]);
+        d.row = d
+            .rows(&st)
+            .iter()
+            .position(|r| r.text.contains("Stim patch"))
+            .unwrap();
+        let mut p = d.interact(&mut st).unwrap();
+        only_inspect(&p);
+        let labels: Vec<&str> = p.choices().iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels, ["Inspect", "Use", "Drop one", "Drop all"]);
+        // A dimmed verb's key does nothing.
+        for k in ['u', 'd', 'D'] {
+            assert!(matches!(
+                p.update(&mut st, &[key(KeyCode::Char(k))]),
+                ScreenCmd::Stay
+            ));
+        }
+        assert_eq!(st.character, before);
     }
 
     #[test]

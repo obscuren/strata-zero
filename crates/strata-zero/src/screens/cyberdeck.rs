@@ -329,7 +329,7 @@ impl DeckTab {
 
 /// Jacked in: the deck is meatspace only, so pointing and reading work and acting does not.
 fn locked(st: &AppState) -> bool {
-    st.player.as_ref().is_some_and(|p| p.jacked_in())
+    crate::actions::jacked_in(st)
 }
 
 /// The deck the blueprint draws and its spec; `None` once the content no longer knows
