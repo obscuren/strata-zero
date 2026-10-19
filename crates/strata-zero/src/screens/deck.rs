@@ -162,12 +162,12 @@ pub struct Deck {
 }
 
 /// The cursor row's text: cyan, breathing.
-fn lit(tick: u64) -> Color {
+pub(crate) fn lit(tick: u64) -> Color {
     CYAN_RGB.scale(0.7 + 0.3 * pulse(tick, 30)).to_color()
 }
 
 /// `name` in at most `room` columns, cut with `…` when it is longer.
-fn cut(name: &str, room: usize) -> String {
+pub(crate) fn cut(name: &str, room: usize) -> String {
     if name.chars().count() <= room {
         return name.to_string();
     }
@@ -242,6 +242,306 @@ fn hands_off(st: &AppState, choices: &mut [Choice]) -> Vec<String> {
     vec![capitalised(crate::actions::JACKED_IN)]
 }
 
+/// The popup for a gear slot: a picker for what fits it, then Unequip and Inspect for
+/// what is worn. Nothing fits and nothing is worn says so in the strip.
+pub(crate) fn slot_popup(st: &mut AppState, slot: Slot, anchor: (u16, u16)) -> Option<Popup> {
+    let mut choices = Vec::new();
+    let mut letters = LETTERS.chars();
+    for s in &st.character.inventory {
+        let Some(item) = st.content.item(&s.item) else {
+            continue;
+        };
+        if item.slot != Some(slot) {
+            continue;
+        }
+        let Some(k) = letters.next() else { break };
+        // A copy is worn as itself, with what is fitted in it.
+        let equip = match s.copy_id() {
+            Some(copy) => Action::EquipCopy(copy),
+            None => Action::Equip(s.item.clone()),
+        };
+        // The marks tell two copies of one item apart.
+        let marks: String = marks(st, item, s.copy.as_ref(), false, false)
+            .iter()
+            .map(|m| m.content.as_ref())
+            .collect();
+        let label = if marks.is_empty() {
+            item.name.clone()
+        } else {
+            format!("{} {marks}", item.name)
+        };
+        choices.push(Choice::new(k, label, Pick::Act(equip)));
+    }
+    if let Some(id) = st.character.equipped(slot) {
+        choices.push(Choice::new(
+            'u',
+            "Unequip",
+            Pick::Act(Action::Unequip(slot)),
+        ));
+        let worn = Pick::Blueprint {
+            item: id.clone(),
+            equipped: true,
+            copy: st.character.worn_copy(slot).map(|k| k.id),
+        };
+        choices.push(Choice::new('i', "Inspect", worn));
+    }
+    if choices.is_empty() {
+        st.warn(format!("nothing in the pack fits {}", slot.label()));
+        return None;
+    }
+    let body = hands_off(st, &mut choices);
+    Some(
+        Popup::verbs(&capitalised(slot.label()), choices, st.tick)
+            .with_body(body)
+            .anchored(anchor.0, anchor.1),
+    )
+}
+
+/// The popup for an item in the pack: Inspect, then the verbs it supports.
+pub(crate) fn item_popup(st: &mut AppState, id: &ItemId, anchor: (u16, u16)) -> Option<Popup> {
+    let item = st.content.item(id)?;
+    let qty = st.character.count(id);
+    // In the pack, so never the jacked deck: equipping takes it out.
+    let carried = Pick::Blueprint {
+        item: id.clone(),
+        equipped: false,
+        copy: None,
+    };
+    let mut choices = vec![Choice::new('i', "Inspect", carried)];
+    if item.slot.is_some() {
+        choices.push(Choice::new(
+            'e',
+            "Equip",
+            Pick::Act(Action::Equip(id.clone())),
+        ));
+    }
+    if item.on_use.is_some() {
+        choices.push(Choice::new('u', "Use", Pick::Act(Action::Use(id.clone()))));
+    }
+    choices.push(Choice::new(
+        'd',
+        "Drop one",
+        Pick::Act(Action::Drop {
+            item: id.clone(),
+            qty: 1,
+        }),
+    ));
+    if qty > 1 {
+        choices.push(Choice::new(
+            'D',
+            "Drop all",
+            Pick::Act(Action::Drop {
+                item: id.clone(),
+                qty,
+            }),
+        ));
+    }
+    let body = hands_off(st, &mut choices);
+    Some(
+        Popup::verbs(&item.name, choices, st.tick)
+            .with_body(body)
+            .anchored(anchor.0, anchor.1),
+    )
+}
+
+/// The popup for one copy in the pack; every verb names this copy.
+pub(crate) fn copy_popup(st: &mut AppState, copy: CopyId, anchor: (u16, u16)) -> Option<Popup> {
+    // Every verb names this copy, never the first of its item.
+    let stack = st.character.copy_in_pack(copy)?;
+    let item = st.content.item(&stack.item)?;
+    let carried = Pick::Blueprint {
+        item: stack.item.clone(),
+        equipped: false,
+        copy: Some(copy),
+    };
+    let mut choices = vec![Choice::new('i', "Inspect", carried)];
+    if item.slot.is_some() {
+        choices.push(Choice::new(
+            'e',
+            "Equip",
+            Pick::Act(Action::EquipCopy(copy)),
+        ));
+    }
+    choices.push(Choice::new('d', "Drop", Pick::Act(Action::DropCopy(copy))));
+    let body = hands_off(st, &mut choices);
+    Some(
+        Popup::verbs(&item.name, choices, st.tick)
+            .with_body(body)
+            .anchored(anchor.0, anchor.1),
+    )
+}
+
+/// The detail pane's card for a row.
+pub(crate) fn card(st: &AppState, detail: &Detail) -> Vec<Line<'static>> {
+    match detail {
+        Detail::Job(id) => crate::jobs::ui::detail(st, *id),
+        Detail::Slot(slot) => match st.character.equipped(*slot) {
+            Some(id) => Deck::item_card_of(st, id, st.character.worn_copy(*slot)),
+            None => vec![
+                head("— empty —"),
+                dim(format!("nothing in the {} slot", slot.label())),
+            ],
+        },
+        Detail::Item(id) => Deck::item_card(st, id),
+        Detail::Copy(copy) => match st.character.copy_in_pack(*copy) {
+            Some(s) => Deck::item_card_of(st, &s.item, s.copy.as_ref()),
+            None => vec![dim("nothing here")],
+        },
+        Detail::Journal(i) => Deck::journal_card(st, *i),
+        Detail::Recipe(i) => {
+            let r = &st.content.recipes[*i];
+            let skill = st
+                .content
+                .skill(&r.skill)
+                .map(|s| s.name.clone())
+                .unwrap_or_default();
+            let have = st.character.has_skill(&r.skill);
+            let mut out = vec![head(&r.name)];
+            let need = if have {
+                format!("needs {skill} · yours")
+            } else {
+                format!("needs {skill}")
+            };
+            out.push(if have { dim(need) } else { warn(need) });
+            out.push(plain(""));
+            for (id, n) in &r.inputs {
+                let name = st
+                    .content
+                    .item(id)
+                    .map(|i| i.name.clone())
+                    .unwrap_or_else(|| id.to_string());
+                let got = st.character.count(id);
+                let line = format!("{got}/{n}  {name}");
+                out.push(if got >= *n { plain(line) } else { warn(line) });
+            }
+            let out_name = st
+                .content
+                .item(&r.output.0)
+                .map(|i| i.name.clone())
+                .unwrap_or_default();
+            out.push(Line::from(Span::styled(
+                format!("→ {}× {out_name}", r.output.1),
+                Style::default().fg(CYAN),
+            )));
+            out.push(plain(""));
+            out.push(plain(r.desc.clone()));
+            out
+        }
+        Detail::Category(id) => Deck::category_card(st, id),
+        Detail::Skill(id) => Deck::skill_card(st, id),
+        Detail::Stat(stat) => {
+            let base = st.character.stats.get(*stat);
+            let with = st.character.stat(&st.content, *stat);
+            let mut out = vec![head(stat.name())];
+            out.push(dim(if with == base {
+                format!("{base}")
+            } else {
+                format!("{base} · {with} with gear")
+            }));
+            out.push(plain(""));
+            out.push(plain(st.content.stat_blurb(*stat).to_string()));
+            out.push(plain(""));
+            out.push(dim("feeds"));
+            for s in st.content.skills.iter().filter(|s| s.stat == *stat) {
+                let mark = if st.character.has_skill(&s.id) {
+                    "◆"
+                } else {
+                    "◇"
+                };
+                out.push(plain(format!("{mark} {}", s.name)));
+            }
+            out
+        }
+    }
+}
+
+/// Draws `rows` into `list`, from row `first`, with the cursor on row `cursor`. Focused,
+/// the cursor's row is a lit bar; unfocused, only a dim `▸ ` marks it.
+pub(crate) fn draw_rows(
+    buf: &mut Buffer,
+    list: Rect,
+    rows: &[Row],
+    first: usize,
+    cursor: usize,
+    focused: bool,
+    tick: u64,
+) {
+    for (i, row) in rows
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(list.height as usize)
+    {
+        let ry = list.y + (i - first) as u16;
+        let here = i == cursor && row.detail.is_some();
+        let selected = here && focused;
+        let mut style = tone_style(row.tone);
+        if selected {
+            style = style.bg(BAR_BG).fg(lit(tick)).add_modifier(Modifier::BOLD);
+            for cx in list.x..list.right() {
+                buf[(cx, ry)].set_bg(BAR_BG);
+            }
+        }
+        let (mark, mark_style) = match (here, focused) {
+            (false, _) => ("  ", style),
+            (true, true) => ("▸ ", style),
+            (true, false) => ("▸ ", Style::default().fg(DIM)),
+        };
+        put(buf, list.x + 1, ry, mark, mark_style, list.right());
+        if let Some(line) = &row.spans {
+            let mut x = list.x + 3;
+            for span in &line.spans {
+                let mut s = span.style;
+                if selected {
+                    s = s.bg(BAR_BG).add_modifier(Modifier::BOLD);
+                }
+                put(buf, x, ry, &span.content, s, list.right());
+                x += unicode_width::UnicodeWidthStr::width(span.content.as_ref()) as u16;
+            }
+        } else {
+            put(buf, list.x + 3, ry, &row.text, style, list.right());
+        }
+    }
+}
+
+/// An item's row: `lead` (the slot, or the glyph and count), its name, and the
+/// marks after it. The name is cut so the marks always fit the pane.
+pub(crate) fn item_row(
+    st: &AppState,
+    room: usize,
+    lead: String,
+    name: &str,
+    marks: Vec<Span<'static>>,
+    selected: bool,
+    detail: Detail,
+) -> Row {
+    if marks.is_empty() {
+        return Row {
+            text: format!("{lead}{name}"),
+            tone: Tone::Normal,
+            detail: Some(detail),
+            spans: None,
+        };
+    }
+    let marks_w: usize = marks.iter().map(|m| m.content.chars().count()).sum();
+    let room = room.saturating_sub(lead.chars().count() + 1 + marks_w);
+    let head = format!("{lead}{} ", cut(name, room));
+    let text = marks.iter().fold(head.clone(), |t, m| t + &m.content);
+    let style = if selected {
+        Style::default().fg(lit(st.tick))
+    } else {
+        tone_style(Tone::Normal)
+    };
+    let mut spans = vec![Span::styled(head, style)];
+    spans.extend(marks);
+    Row {
+        text,
+        tone: Tone::Normal,
+        detail: Some(detail),
+        spans: Some(Line::from(spans)),
+    }
+}
+
 impl Deck {
     pub fn new(tick: u64) -> Self {
         Deck {
@@ -272,128 +572,9 @@ impl Deck {
             list.y + self.row.saturating_sub(first) as u16,
         );
         match &row.detail {
-            Some(Detail::Slot(slot)) => {
-                let mut choices = Vec::new();
-                let mut letters = LETTERS.chars();
-                for s in &st.character.inventory {
-                    let Some(item) = st.content.item(&s.item) else {
-                        continue;
-                    };
-                    if item.slot != Some(*slot) {
-                        continue;
-                    }
-                    let Some(k) = letters.next() else { break };
-                    // A copy is worn as itself, with what is fitted in it.
-                    let equip = match s.copy_id() {
-                        Some(copy) => Action::EquipCopy(copy),
-                        None => Action::Equip(s.item.clone()),
-                    };
-                    // The marks tell two copies of one item apart.
-                    let marks: String = marks(st, item, s.copy.as_ref(), false, false)
-                        .iter()
-                        .map(|m| m.content.as_ref())
-                        .collect();
-                    let label = if marks.is_empty() {
-                        item.name.clone()
-                    } else {
-                        format!("{} {marks}", item.name)
-                    };
-                    choices.push(Choice::new(k, label, Pick::Act(equip)));
-                }
-                if let Some(id) = st.character.equipped(*slot) {
-                    choices.push(Choice::new(
-                        'u',
-                        "Unequip",
-                        Pick::Act(Action::Unequip(*slot)),
-                    ));
-                    let worn = Pick::Blueprint {
-                        item: id.clone(),
-                        equipped: true,
-                        copy: st.character.worn_copy(*slot).map(|k| k.id),
-                    };
-                    choices.push(Choice::new('i', "Inspect", worn));
-                }
-                if choices.is_empty() {
-                    st.warn(format!("nothing in the pack fits {}", slot.label()));
-                    return None;
-                }
-                let body = hands_off(st, &mut choices);
-                Some(
-                    Popup::verbs(&capitalised(slot.label()), choices, st.tick)
-                        .with_body(body)
-                        .anchored(anchor.0, anchor.1),
-                )
-            }
-            Some(Detail::Item(id)) => {
-                let item = st.content.item(id)?;
-                let qty = st.character.count(id);
-                // In the pack, so never the jacked deck: equipping takes it out.
-                let carried = Pick::Blueprint {
-                    item: id.clone(),
-                    equipped: false,
-                    copy: None,
-                };
-                let mut choices = vec![Choice::new('i', "Inspect", carried)];
-                if item.slot.is_some() {
-                    choices.push(Choice::new(
-                        'e',
-                        "Equip",
-                        Pick::Act(Action::Equip(id.clone())),
-                    ));
-                }
-                if item.on_use.is_some() {
-                    choices.push(Choice::new('u', "Use", Pick::Act(Action::Use(id.clone()))));
-                }
-                choices.push(Choice::new(
-                    'd',
-                    "Drop one",
-                    Pick::Act(Action::Drop {
-                        item: id.clone(),
-                        qty: 1,
-                    }),
-                ));
-                if qty > 1 {
-                    choices.push(Choice::new(
-                        'D',
-                        "Drop all",
-                        Pick::Act(Action::Drop {
-                            item: id.clone(),
-                            qty,
-                        }),
-                    ));
-                }
-                let body = hands_off(st, &mut choices);
-                Some(
-                    Popup::verbs(&item.name, choices, st.tick)
-                        .with_body(body)
-                        .anchored(anchor.0, anchor.1),
-                )
-            }
-            Some(Detail::Copy(copy)) => {
-                // Every verb names this copy, never the first of its item.
-                let stack = st.character.copy_in_pack(*copy)?;
-                let item = st.content.item(&stack.item)?;
-                let carried = Pick::Blueprint {
-                    item: stack.item.clone(),
-                    equipped: false,
-                    copy: Some(*copy),
-                };
-                let mut choices = vec![Choice::new('i', "Inspect", carried)];
-                if item.slot.is_some() {
-                    choices.push(Choice::new(
-                        'e',
-                        "Equip",
-                        Pick::Act(Action::EquipCopy(*copy)),
-                    ));
-                }
-                choices.push(Choice::new('d', "Drop", Pick::Act(Action::DropCopy(*copy))));
-                let body = hands_off(st, &mut choices);
-                Some(
-                    Popup::verbs(&item.name, choices, st.tick)
-                        .with_body(body)
-                        .anchored(anchor.0, anchor.1),
-                )
-            }
+            Some(Detail::Slot(slot)) => slot_popup(st, *slot, anchor),
+            Some(Detail::Item(id)) => item_popup(st, id, anchor),
+            Some(Detail::Copy(copy)) => copy_popup(st, *copy, anchor),
             Some(Detail::Category(id)) => {
                 let cat = st.content.category(id)?;
                 let b = Build::from_character(&st.content, &st.character);
@@ -755,47 +936,6 @@ impl Deck {
         out
     }
 
-    /// An item's row: `lead` (the slot, or the glyph and count), its name, and the
-    /// marks after it. The name is cut so the marks always fit the pane.
-    fn item_row(
-        &self,
-        st: &AppState,
-        lead: String,
-        name: &str,
-        marks: Vec<Span<'static>>,
-        selected: bool,
-        detail: Detail,
-    ) -> Row {
-        if marks.is_empty() {
-            return Row {
-                text: format!("{lead}{name}"),
-                tone: Tone::Normal,
-                detail: Some(detail),
-                spans: None,
-            };
-        }
-        let marks_w: usize = marks.iter().map(|m| m.content.chars().count()).sum();
-        let room = self
-            .room
-            .get()
-            .saturating_sub(lead.chars().count() + 1 + marks_w);
-        let head = format!("{lead}{} ", cut(name, room));
-        let text = marks.iter().fold(head.clone(), |t, m| t + &m.content);
-        let style = if selected {
-            Style::default().fg(lit(st.tick))
-        } else {
-            tone_style(Tone::Normal)
-        };
-        let mut spans = vec![Span::styled(head, style)];
-        spans.extend(marks);
-        Row {
-            text,
-            tone: Tone::Normal,
-            detail: Some(detail),
-            spans: Some(Line::from(spans)),
-        }
-    }
-
     fn gear_rows(&self, st: &AppState) -> Vec<Row> {
         Slot::ALL
             .iter()
@@ -812,7 +952,15 @@ impl Deck {
                         let selected = i == self.row;
                         let copy = st.character.worn_copy(*slot);
                         let marks = marks(st, item, copy, true, selected);
-                        self.item_row(st, lead, &item.name, marks, selected, detail)
+                        item_row(
+                            st,
+                            self.room.get(),
+                            lead,
+                            &item.name,
+                            marks,
+                            selected,
+                            detail,
+                        )
                     }
                     None => Row {
                         text: format!("{lead}— empty —"),
@@ -853,7 +1001,15 @@ impl Deck {
                     Some(copy) => Detail::Copy(copy),
                     None => Detail::Item(s.item.clone()),
                 };
-                rows.push(self.item_row(st, lead, &item.name, marks, selected, detail));
+                rows.push(item_row(
+                    st,
+                    self.room.get(),
+                    lead,
+                    &item.name,
+                    marks,
+                    selected,
+                    detail,
+                ));
             }
         }
         rows
@@ -942,7 +1098,7 @@ impl Deck {
                     (true, RowKind::Skill(id)) => Some(Detail::Skill(id)),
                     _ => None,
                 },
-                spans: None,
+                spans: Some(r.line),
             })
             .collect()
     }
@@ -1119,84 +1275,7 @@ impl Deck {
         };
         match &row.detail {
             None => Vec::new(),
-            Some(Detail::Job(id)) => crate::jobs::ui::detail(st, *id),
-            Some(Detail::Slot(slot)) => match st.character.equipped(*slot) {
-                Some(id) => Self::item_card_of(st, id, st.character.worn_copy(*slot)),
-                None => vec![
-                    head("— empty —"),
-                    dim(format!("nothing in the {} slot", slot.label())),
-                ],
-            },
-            Some(Detail::Item(id)) => Self::item_card(st, id),
-            Some(Detail::Copy(copy)) => match st.character.copy_in_pack(*copy) {
-                Some(s) => Self::item_card_of(st, &s.item, s.copy.as_ref()),
-                None => vec![dim("nothing here")],
-            },
-            Some(Detail::Journal(i)) => Self::journal_card(st, *i),
-            Some(Detail::Recipe(i)) => {
-                let r = &st.content.recipes[*i];
-                let skill = st
-                    .content
-                    .skill(&r.skill)
-                    .map(|s| s.name.clone())
-                    .unwrap_or_default();
-                let have = st.character.has_skill(&r.skill);
-                let mut out = vec![head(&r.name)];
-                let need = if have {
-                    format!("needs {skill} · yours")
-                } else {
-                    format!("needs {skill}")
-                };
-                out.push(if have { dim(need) } else { warn(need) });
-                out.push(plain(""));
-                for (id, n) in &r.inputs {
-                    let name = st
-                        .content
-                        .item(id)
-                        .map(|i| i.name.clone())
-                        .unwrap_or_else(|| id.to_string());
-                    let got = st.character.count(id);
-                    let line = format!("{got}/{n}  {name}");
-                    out.push(if got >= *n { plain(line) } else { warn(line) });
-                }
-                let out_name = st
-                    .content
-                    .item(&r.output.0)
-                    .map(|i| i.name.clone())
-                    .unwrap_or_default();
-                out.push(Line::from(Span::styled(
-                    format!("→ {}× {out_name}", r.output.1),
-                    Style::default().fg(CYAN),
-                )));
-                out.push(plain(""));
-                out.push(plain(r.desc.clone()));
-                out
-            }
-            Some(Detail::Category(id)) => Self::category_card(st, id),
-            Some(Detail::Skill(id)) => Self::skill_card(st, id),
-            Some(Detail::Stat(stat)) => {
-                let base = st.character.stats.get(*stat);
-                let with = st.character.stat(&st.content, *stat);
-                let mut out = vec![head(stat.name())];
-                out.push(dim(if with == base {
-                    format!("{base}")
-                } else {
-                    format!("{base} · {with} with gear")
-                }));
-                out.push(plain(""));
-                out.push(plain(st.content.stat_blurb(*stat).to_string()));
-                out.push(plain(""));
-                out.push(dim("feeds"));
-                for s in st.content.skills.iter().filter(|s| s.stat == *stat) {
-                    let mark = if st.character.has_skill(&s.id) {
-                        "◆"
-                    } else {
-                        "◇"
-                    };
-                    out.push(plain(format!("{mark} {}", s.name)));
-                }
-                out
-            }
+            Some(d) => card(st, d),
         }
     }
 
@@ -1618,50 +1697,7 @@ impl Screen for Deck {
             let max_first = rows.len().saturating_sub(list.height as usize);
             let first = self.row.saturating_sub(half).min(max_first);
             self.last_list.set((list, first));
-            let board = (self.tab == Tab::Skills).then(|| self.board(st));
-            for (i, row) in rows
-                .iter()
-                .enumerate()
-                .skip(first)
-                .take(list.height as usize)
-            {
-                let ry = list.y + (i - first) as u16;
-                let selected = i == self.row && row.detail.is_some();
-                let mut style = tone_style(row.tone);
-                if selected {
-                    style = style.bg(BAR_BG).fg(lit(tick)).add_modifier(Modifier::BOLD);
-                    for cx in list.x..list.right() {
-                        buf[(cx, ry)].set_bg(BAR_BG);
-                    }
-                }
-                let styled = board
-                    .as_ref()
-                    .and_then(|b| b.get(i))
-                    .map(|b| &b.line)
-                    .or(row.spans.as_ref());
-                if let Some(line) = styled {
-                    put(
-                        buf,
-                        list.x + 1,
-                        ry,
-                        if selected { "▸ " } else { "  " },
-                        style,
-                        list.right(),
-                    );
-                    let mut x = list.x + 3;
-                    for span in &line.spans {
-                        let mut s = span.style;
-                        if selected {
-                            s = s.bg(BAR_BG).add_modifier(Modifier::BOLD);
-                        }
-                        put(buf, x, ry, &span.content, s, list.right());
-                        x += unicode_width::UnicodeWidthStr::width(span.content.as_ref()) as u16;
-                    }
-                    continue;
-                }
-                let text = format!("{}{}", if selected { "▸ " } else { "  " }, row.text);
-                put(buf, list.x + 1, ry, &text, style, list.right());
-            }
+            draw_rows(buf, list, &rows, first, self.row, true, tick);
             if self.tab == Tab::Inventory {
                 let footer = format!(
                     "{:.1} kg · ¤ {}",
@@ -3361,5 +3397,30 @@ mod tests {
         d.row = rows.iter().position(|r| r.text.contains("COOL")).unwrap();
         let text = texts(&d.detail(&st, &rows));
         assert_eq!(text[1], "5 · 6 with gear", "{text:?}");
+    }
+
+    #[test]
+    fn draw_rows_marks_an_unfocused_cursor_dim() {
+        let row = |text: &str, detail: Option<Detail>| Row {
+            text: text.to_string(),
+            tone: Tone::Normal,
+            detail,
+            spans: None,
+        };
+        let rows = vec![
+            row("HEAD", None),
+            row("one", Some(Detail::Stat(Stat::ALL[0]))),
+            row("two", Some(Detail::Stat(Stat::ALL[1]))),
+        ];
+        let list = Rect::new(0, 0, 30, 3);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 30, 5));
+        draw_rows(&mut buf, list, &rows, 0, 1, true, 0);
+        assert_eq!(buf[(1, 1)].symbol(), "▸");
+        assert_eq!(buf[(1, 1)].bg, BAR_BG);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 30, 5));
+        draw_rows(&mut buf, list, &rows, 0, 1, false, 0);
+        assert_eq!(buf[(1, 1)].symbol(), "▸");
+        assert_eq!(buf[(1, 1)].fg, DIM);
+        assert_ne!(buf[(1, 1)].bg, BAR_BG);
     }
 }
