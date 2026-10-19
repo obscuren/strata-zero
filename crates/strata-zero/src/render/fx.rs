@@ -403,7 +403,7 @@ const WHITE: Rgb = Rgb(255, 255, 255);
 /// The warm light a muzzle throws.
 const MUZZLE_LIGHT: Rgb = Rgb(255, 170, 40);
 /// Cell widths a muzzle flash lights on its first tick; half that on its second.
-const FLASH_GLOW: f32 = 4.5;
+const FLASH_GLOW: f32 = 3.5;
 /// Cell widths a tracer's head lights as it flies.
 const TRACER_GLOW: f32 = 2.2;
 
@@ -446,7 +446,7 @@ fn flash(inst: &FxInstance, big: bool, elapsed: u64, origin: Pos, area: Rect, bu
     };
     // The light the shot throws on the street around it, gone with the flash.
     if first {
-        glow(origin, area, buf, line[0], FLASH_GLOW, 0.55);
+        glow(origin, area, buf, line[0], FLASH_GLOW, 0.4);
     } else {
         glow(origin, area, buf, line[0], FLASH_GLOW / 2.0, 0.3);
     }
@@ -934,7 +934,12 @@ mod tests {
         };
         assert!(warmer(40, 29), "above the muzzle");
         assert!(warmer(38, 30), "two cells behind");
-        assert!(warmer(43, 31), "ahead and below");
+        assert!(warmer(42, 31), "ahead and below");
+        assert_eq!(
+            at(&b, 44, 31).2,
+            at(&plain, 44, 31).2,
+            "the pool stays tight"
+        );
         assert_eq!(
             at(&b, 46, 30).2,
             at(&plain, 46, 30).2,
