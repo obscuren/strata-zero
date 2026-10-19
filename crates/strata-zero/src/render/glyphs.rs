@@ -13,5 +13,6 @@ pub fn kind_icon(kind: ItemKind) -> char {
         ItemKind::Component => '▪',
         ItemKind::Junk => '·',
         ItemKind::Program => '⌁',
+        ItemKind::Hardware => '≡',
     }
 }
