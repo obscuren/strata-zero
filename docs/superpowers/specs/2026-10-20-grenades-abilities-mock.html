@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Grenades and abilities</title>
+<style>
+body { background:#0b0b0d; color:#ddd; font-family:-apple-system,Helvetica,Arial,sans-serif; margin:0; padding:18px 24px 60px; }
+h2 { margin:0 0 4px; font-weight:600; }
+h3 { margin:6px 0 4px; font-weight:600; font-size:15px; }
+h4 { margin:18px 0 2px; font-weight:600; font-size:13px; letter-spacing:.08em; text-transform:uppercase; color:#9ab; }
+p { margin:0 0 6px; color:#aaa; font-size:13px; max-width:720px; line-height:1.4; }
+.subtitle { color:#999; margin-bottom:14px; }
+.tv { background:#000; display:inline-block; padding:6px 8px; border:1px solid #333; border-radius:4px; vertical-align:top; }
+.tv pre { margin:0; font-family:"SF Mono",Menlo,"JetBrains Mono",monospace; font-size:16px; line-height:20px; letter-spacing:0; font-variant-ligatures:none; }
+.tv pre span { display:inline-block; width:9.6px; height:20px; text-align:center; white-space:pre; overflow:visible; }
+.b { font-weight:700; }
+.row { display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start; margin:6px 0 10px; }
+.col { max-width:560px; }
+.option { cursor:pointer; padding:8px; border-radius:6px; border:1px solid transparent; }
+.option:hover { border-color:#345; }
+.option.sel { outline:2px solid #4af; }
+.gl { font-family:"SF Mono",Menlo,monospace; color:#ddd; background:#111; padding:1px 5px; border-radius:3px; }
+.sec { margin:22px 0 8px; border-top:1px solid #222; padding-top:12px; }
+code { font-family:"SF Mono",Menlo,monospace; color:#cde; }
+</style></head><body>
+<h2>Grenades and abilities</h2>
+<p class="subtitle">v2: the landing cursor is the net's pick, a cyan block with an × in it. The lot's cells, the game's palette, ticks at the game's pace. Everything loops. Click an option in a section to pick it; we trim from there.</p>
+
+<div class="sec"><h4>1 · Aiming an area</h4>
+<p>Same cursor as the shot, but the key you pressed carries a blast radius, so the footprint shades red under the cursor (darker toward the centre) and the readout says what is in it. Cover cuts it: tiles the landing tile cannot see stay unshaded (the two-cell kiosk below the goon). Right: the footprint covers you too, and the readout says so.</p>
+<div class="row"><div class="tv"><pre id="aim"></pre></div><div class="tv"><pre id="aim2"></pre></div></div>
+<div class="row"><div class="tv"><pre id="foot"></pre></div></div>
+<p>The footer's fourth row: abilities and throwables are one numbered list on the act half, <code>ACT</code>; the throwables carry their count. (Rendered at 100 columns.)</p>
+</div>
+
+<div class="sec"><h4>2 · The throw</h4>
+<p>The grenade is a glyph that crosses the line from you to the landing tile, two tiles a tick, then bounces once and settles. Two ways to read height on a top-down map:</p>
+<div class="row">
+  <div class="col option" data-choice="arc-a" onclick="pick(this,'arc')"><h3>A · Lob</h3><p>The glyph rises two rows over the middle of the flight and comes back down: a drawn parabola. Reads as a throw at a glance; costs two rows of honesty on a top-down map.</p><div class="tv"><pre id="arcA"></pre></div></div>
+  <div class="col option" data-choice="arc-b" onclick="pick(this,'arc')"><h3>B · Shadow</h3><p>The glyph stays on the line and grows with height: <span class="gl">· o O o ·</span>, brightest at the apex. Top-down honest; reads as the thing's shadow passing.</p><div class="tv"><pre id="arcB"></pre></div></div>
+</div></div>
+
+<div class="sec"><h4>3 · The blast</h4>
+<p>Frag, radius 2, dropped a tile short of the goon; the dummy on the edge. Damage falls off by ring: 12 at the centre, 8 at one, 4 at two. The kiosk under the landing tile shadows the two tiles behind it. Numbers lift off everything hit, as tags.</p>
+<div class="row">
+  <div class="col option" data-choice="blast-a" onclick="pick(this,'blast')"><h3>A · Bloom</h3><p>White core, an amber ring that runs out to the edge over two ticks, then smoke that drifts up and thins for a few ticks, and a scorch that stays on the road for the fight.</p><div class="tv"><pre id="blastA"></pre></div></div>
+  <div class="col option" data-choice="blast-b" onclick="pick(this,'blast')"><h3>B · Whiteout</h3><p>The whole footprint inverts to white for a tick, orange the next, then it is over: debris thrown out past the edge and a black scorch under it. Harder and faster; nothing pretty about it.</p><div class="tv"><pre id="blastB"></pre></div></div>
+  <div class="col option" data-choice="blast-c" onclick="pick(this,'blast')"><h3>C · Shock (EMP)</h3><p>The net's blue: rings of <span class="gl">≋</span> run out from the centre, the glitch tears around whatever has chrome, small numbers, a stun. The EMP's look, and the look a net blast would wear.</p><div class="tv"><pre id="blastC"></pre></div></div>
+</div></div>
+
+<div class="sec"><h4>4 · Abilities beyond Static</h4>
+<p>One per stat tree, each with its own look; the streak and the tear (the B and C looks) are reused where chrome is involved. Static stays as it is (hacking, the streak, the tear).</p>
+<div class="row">
+  <div class="col option" data-choice="ab-jolt" onclick="pick(this,'ab')"><h3>Jolt · WRENCH (Tech)</h3><p>Range 3. The streak in cyan to the first foe, then it jumps a tile to a second one next to them for half. A turn of stun on both. Look: streak, tear, spark, tags on a blue field.</p><div class="tv"><pre id="abJolt"></pre></div></div>
+  <div class="col option" data-choice="ab-shove" onclick="pick(this,'ab')"><h3>Shove · MEAT (Body)</h3><p>Adjacent. Small damage and the foe goes back two tiles (one if a wall stops them). Look: the red hit flash, a <span class="gl">»</span> trail where they were, a plain number. The first melee.</p><div class="tv"><pre id="abShove"></pre></div></div>
+</div>
+<div class="row">
+  <div class="col option" data-choice="ab-redline" onclick="pick(this,'ab')"><h3>Redline · EDGE (Reflex)</h3><p>No target. Your pools refill this turn; once a fight, long cooldown. Look: the map kicks (the glitch set thinning over three ticks), a cyan pulse out from your tile, <span class="gl">+ turn</span> lifting off you, the pools flash full in the footer.</p><div class="tv"><pre id="abRed"></pre></div></div>
+  <div class="col option" data-choice="ab-deadeye" onclick="pick(this,'ab')"><h3>Deadeye · STREET (Cool)</h3><p>Marks one foe in sight for the fight: +20% per round at them. Look: the pulsing magenta mark with a <span class="gl">⌖</span> over their head, the readout's chance lit; then the gun does the rest in its own look.</p><div class="tv"><pre id="abDead"></pre></div></div>
+</div></div>
+
+<div class="sec"><h4>5 · A fuse, and the goon stepping out</h4>
+<p>Content decides: a frag goes off on landing (what section 3 shows); a fused thing lies there a turn, blinking, its footprint shaded for everyone to see, and goes off at the top of your next turn. A foe standing in a live footprint spends its moves leaving it if it can. The dummy never moves, so it takes the edge.</p>
+<div class="row"><div class="tv"><pre id="fuse"></pre></div></div>
+</div>
+
+<script>
+(function(){
+const T=75;
+const ROAD=[28,22,20], SIDE=[54,42,38], WALL=[110,80,70], CYAN=[0,229,255], RED=[255,80,80], TEXT=[200,200,200], DIMC=[110,110,110], MAG=[255,0,200], AMB=[255,170,40], GREN=[190,190,140], DEEP=[40,60,200];
+const SPARKS=['ｦ','ｱ','ﾂ','ﾈ','╳','≋'];
+const rgb=c=>`rgb(${c[0]},${c[1]},${c[2]})`;
+const scale=(c,f)=>c.map(v=>Math.min(255,Math.round(v*f)));
+const mix=(a,b,t)=>a.map((v,i)=>Math.round(v+(b[i]-v)*t));
+function hash(a,b,c){ let h=((a+131)*374761393+(b+71)*668265263+(c||0)*2246822519)>>>0; h=(h^(h>>13))*1274126177>>>0; return (h^(h>>16))>>>0; }
+const FIXED=((location.search+location.hash).match(/[?&#]t=(\d+)/)||[])[1];
+
+function Scene(W,H,wallx,kiosk){
+  this.W=W;this.H=H;this.wallx=wallx;this.kiosk=kiosk||[];
+  this.walls=new Set();
+  for(let x=0;x<W;x++){this.walls.add(x+','+0);this.walls.add(x+','+(H-1));}
+  for(let y=0;y<H;y++) for(let x=wallx;x<W;x++) this.walls.add(x+','+y);
+  for(const [x,y] of this.kiosk) this.walls.add(x+','+y);
+}
+Scene.prototype.isWall=function(x,y){return this.walls.has(x+','+y)||x<0||y<0||x>=this.W||y>=this.H;};
+Scene.prototype.grid=function(){
+  const W=this.W,H=this.H,wx=this.wallx,g=[];
+  for(let y=0;y<H;y++){const r=[];for(let x=0;x<W;x++)r.push({ch:' ',fg:TEXT,bg:ROAD,b:false});g.push(r);}
+  for(let x=0;x<W;x++){ g[1][x]={ch:'░',fg:SIDE,bg:scale(ROAD,1.1),b:false}; g[H-2][x]={ch:'░',fg:SIDE,bg:scale(ROAD,1.1),b:false}; }
+  for(let x=0;x<W;x++){ g[0][x]={ch:'─',fg:WALL,bg:[0,0,0],b:false}; g[H-1][x]={ch:'─',fg:WALL,bg:[0,0,0],b:false}; }
+  for(let y=0;y<H;y++){ g[y][wx]={ch:'│',fg:WALL,bg:[0,0,0],b:false}; for(let x=wx+1;x<W;x++) g[y][x]={ch:' ',fg:WALL,bg:[0,0,0],b:false}; }
+  g[0][wx]={ch:'┬',fg:WALL,bg:[0,0,0]}; g[H-1][wx]={ch:'┴',fg:WALL,bg:[0,0,0]};
+  const mid=Math.floor(H/2); for(let x=2;x<wx;x+=6){ g[mid][x]={ch:'·',fg:scale(ROAD,1.8),bg:ROAD,b:false}; }
+  for(const [x,y] of this.kiosk) g[y][x]={ch:'▓',fg:WALL,bg:[20,14,12],b:false};
+  return g;
+};
+function put(g,x,y,ch,fg,bg,b){ if(y<0||y>=g.length||x<0||x>=g[0].length)return; const c=g[y][x]; g[y][x]={ch:ch===null?c.ch:ch,fg:fg||c.fg,bg:bg||c.bg,b:!!b}; }
+function text(g,x,y,s,fg,bg,b){ for(let i=0;i<s.length;i++) put(g,x+i,y,s[i],fg,bg,b); }
+function line(a,b){ const pts=[]; let x0=a.x,y0=a.y; const x1=b.x,y1=b.y; const dx=Math.abs(x1-x0),dy=-Math.abs(y1-y0),sx=x0<x1?1:-1,sy=y0<y1?1:-1; let err=dx+dy; for(;;){ pts.push({x:x0,y:y0}); if(x0===x1&&y0===y1)break; const e2=2*err; if(e2>=dy){err+=dy;x0+=sx;} if(e2<=dx){err+=dx;y0+=sy;} } return pts; }
+function sees(sc,a,b){ const pts=line(a,b); for(let i=1;i<pts.length-1;i++) if(sc.isWall(pts[i].x,pts[i].y)) return false; return !sc.isWall(b.x,b.y); }
+function footprint(sc,c,r){ const out=[]; for(let dy=-r;dy<=r;dy++)for(let dx=-r;dx<=r;dx++){ const p={x:c.x+dx,y:c.y+dy}; if(sc.isWall(p.x,p.y))continue; if(!sees(sc,c,p))continue; out.push({x:p.x,y:p.y,ring:Math.max(Math.abs(dx),Math.abs(dy))}); } return out; }
+function render(el,g,extra){
+  let out='';
+  for(let y=0;y<g.length;y++){ for(let x=0;x<g[0].length;x++){ const c=g[y][x]; out+=`<span${c.b?' class="b"':''} style="color:${rgb(c.fg)};background:${rgb(c.bg)}">${c.ch===' '?'&nbsp;':c.ch}</span>`; } out+='\n'; }
+  if(extra) out+=extra;
+  el.innerHTML=out;
+}
+const RING_BG=[[120,30,30],[80,22,22],[48,16,16]];
+function shade(g,fp,bgs){ for(const p of fp) put(g,p.x,p.y,null,null,(bgs||RING_BG)[Math.min(p.ring,2)]); }
+function tag(g,x,y,s,a,tint){ // a: ticks since; rises a row every 4
+  const life=14; if(a<0||a>=life)return; const rise=Math.floor(a/4); const fade=a>9; const t=' '+s+' ';
+  const fld=tint?(fade?[0,40,50]:tint):(fade?[80,10,10]:[170,20,20]); const fg=fade?[200,120,120]:[255,255,255];
+  text(g,x,y-1-rise,t,tint&&fade?[120,170,180]:fg,fld,true);
+}
+function num(g,x,y,s,a){ const life=14; if(a<0||a>=life)return; const rise=Math.floor(a/4); const fade=a>9; text(g,x,y-1-rise,s,fade?[170,60,60]:[255,235,235],null,true); }
+function chips(g,p,a,fromRight){ if(a<0||a>=3)return; if(a<2) put(g,p.x,p.y,null,[255,255,255],a===0?[255,40,40]:[160,20,20],true);
+  const cs=[[1,-1,"'"],[1,0,'·'],[1,1,','],[2,-1,'·'],[2,1,'`'],[0,-1,'·']]; cs.forEach(([dx,dy,ch],i)=>{ if(i<=a*2+1){ const f=fromRight?-1:1; put(g,p.x+f*(dx+Math.floor(a/2)),p.y+dy,ch,a===0?[255,120,120]:[180,60,60]); } }); }
+function tear(g,p,a,k,tint){ if(a<0||a>=3)return; for(let dy=-1;dy<=1;dy++)for(let dx=-3;dx<=3;dx++){ if(dx===0&&dy===0)continue; const h=hash(dx+7+a*31,dy+3+k*17); if(h%3===0) put(g,p.x+dx,p.y+dy,SPARKS[h%6],tint?(h%2?CYAN:DEEP):(h%2?CYAN:MAG)); } }
+function spark(g,p,a,tint){ if(a<0||a>=3)return; const cols=tint?[[220,255,255],CYAN,[0,80,100]]:[[255,240,160],AMB,[120,60,10]]; put(g,p.x,p.y,['✶','×','·'][a],cols[a],null,a===0); if(a===0){put(g,p.x-1,p.y-1,'`',tint?CYAN:[255,220,120]);put(g,p.x-1,p.y+1,',',tint?CYAN:[255,220,120]);} }
+function kick(g,sc,a){ if(a<0||a>=4)return; const d=[6,9,14,24][a]; for(let y=1;y<sc.H-1;y++)for(let x=1;x<sc.wallx;x++){ const h=hash(x,y,a*7+1); if(h%d===0) put(g,x,y,SPARKS[h%6],h%2?CYAN:MAG); } }
+function glowRing(g,c,r,col){ for(let dy=-r;dy<=r;dy++)for(let dx=-r;dx<=r;dx++){ if(Math.max(Math.abs(dx),Math.abs(dy))!==r)continue; put(g,c.x+dx,c.y+dy,'·',col); } }
+function scorch(g,sc,c){ put(g,c.x,c.y,'▒',[45,40,36],[18,16,15]); for(const p of footprint(sc,c,1)) if(p.ring===1) put(g,p.x,p.y,'░',[38,34,30],[20,17,16]); }
+function tracer(g,from,to,e,speed){ const pts=line(from,to); const head=1+speed*e; if(head>=pts.length-1) return true; const dir=(i)=>{const a=pts[i-1],b=pts[i]; if(a.y===b.y)return '─'; if(a.x===b.x)return '│'; return (b.x-a.x)*(b.y-a.y)>0?'╲':'╱';};
+  put(g,pts[head].x,pts[head].y,'•',[255,240,200],null,true); const tr=[AMB,[200,110,20],[110,55,10]]; for(let i=1;i<=3;i++){ const j=head-i; if(j>0) put(g,pts[j].x,pts[j].y,dir(j),tr[i-1],null,i===1); } return false; }
+function flash(g,from,to,e,big){ if(e<0||e>=2)return; const dx=Math.sign(to.x-from.x),dy=Math.abs(to.y-from.y)>Math.abs(to.x-from.x)?Math.sign(to.y-from.y):0; const ddx=dy?0:dx; put(g,from.x,from.y,null,[0,0,0],e===0?[255,240,180]:AMB,true); put(g,from.x+ddx,from.y+dy,e===0?'✦':'*',[255,230,120],null,true); if(e===0) put(g,from.x+2*ddx,from.y+2*dy,'·',[255,200,90],null,true); if(big&&e===0){put(g,from.x+ddx,from.y+dy-1,'`',[255,200,90]);put(g,from.x+ddx,from.y+dy+1,',',[255,200,90]);} }
+function streak(g,from,to,e,col){ if(e<0||e>=3)return; const pts=line(from,to); const cols=[[240,240,240],col,col===CYAN?[0,80,100]:[120,60,10]][e]; for(let i=1;i<pts.length-1;i++){ const a=pts[i-1],b=pts[i]; const ch=a.y===b.y?'━':a.x===b.x?'┃':(b.x-a.x)*(b.y-a.y)>0?'╲':'╱'; put(g,pts[i].x,pts[i].y,ch,cols,null,e===0); } }
+
+const frames=[];
+function anim(id,fn,loop){ const el=document.getElementById(id); frames.push({el,fn,loop}); }
+
+// ---------- 1 · aiming
+(function(){
+  const sc=new Scene(52,12,47,[[21,7],[22,7]]); const ME={x:12,y:6},GOON={x:23,y:6},DUM={x:24,y:4},L={x:22,y:6};
+  anim('aim',t=>{ const g=sc.grid(); const blink=Math.floor(t/8)%2===0;
+    for(const p of line(ME,L).slice(1,-1)) put(g,p.x,p.y,'·',[90,90,90]);
+    shade(g,footprint(sc,L,2));
+    put(g,ME.x,ME.y,'@',CYAN,null,true); put(g,GOON.x,GOON.y,'@',RED,null,true); put(g,DUM.x,DUM.y,'&',RED,null,true);
+    if(blink) put(g,L.x,L.y,'×',[0,0,0],CYAN,true); else put(g,L.x,L.y,'×',[0,0,0],[0,150,170],true);
+    const s=' frag · 10 tiles · blast 2 · goon 8 · dummy 4 '; text(g,L.x-20,3,s,CYAN,[0,20,26]); text(g,L.x-20+1,3,'frag',CYAN,[0,20,26],true);
+    return g; },16);
+  const sc2=new Scene(44,12,39,[]); const ME2={x:6,y:6},L2={x:8,y:6},G2={x:10,y:5};
+  anim('aim2',t=>{ const g=sc2.grid(); const blink=Math.floor(t/8)%2===0;
+    shade(g,footprint(sc2,L2,2)); put(g,ME2.x,ME2.y,'@',CYAN,[170,30,30],true); put(g,G2.x,G2.y,'@',RED,null,true);
+    if(blink) put(g,L2.x,L2.y,'×',[0,0,0],CYAN,true); else put(g,L2.x,L2.y,'×',[0,0,0],[0,150,170],true);
+    text(g,1,3," frag · 2 tiles · blast 2 · you're in it ",RED,[26,0,0]); text(g,2,3,'frag',RED,[26,0,0],true);
+    return g; },16);
+  // footer at 100 columns
+  (function(){ const W2=100; const el=document.getElementById('foot');
+    const ln=(s,style)=>{ let o=''; for(let i=0;i<W2;i++){ const ch=s[i]||' '; const st=style(i,ch); o+=`<span style="color:${rgb(st.fg)};background:#000;${st.b?'font-weight:700':''}">${ch===' '?'&nbsp;':ch}</span>`; } return o+'\n'; };
+    const rule=ln('━'.repeat(W2),()=>({fg:[90,90,90]}));
+    const r1s=' on foot · the lot'; const r1=r1s.padEnd(W2-13)+'ENGAGED  [?]';
+    const l1=ln(r1,(i)=>{ if(i>=W2-13&&i<W2-6) return {fg:MAG,b:true}; if(i===W2-2) return {fg:CYAN}; if(i>=W2-3) return {fg:[90,90,90]}; return {fg:TEXT}; });
+    const r2s=' aim  hjkl target · t next · space throw · 1-9 ability or item · esc back'; const l2=ln(r2s,(i)=>({fg:i<5?CYAN:DIMC,b:i<5}));
+    const r3s=' TURN 1  YOU › goon'; const right3='▣ goon · hunting · 30/30 · 11 tiles'; const r3=r3s.padEnd(W2-right3.length-1)+right3;
+    const l3=ln(r3,(i)=>{ if(i<r3s.length) return {fg:CYAN,b:true}; if(i>=W2-right3.length-1) return {fg:RED}; return {fg:TEXT}; });
+    const r4s=' ACT  1 static 2 jolt 3 shove 4 redline 5 deadeye 6 frag×2 7 flash×1 8 emp×1'; const right4='AP ●● 2/2  MOVE 4/4'; const r4=r4s.padEnd(W2-right4.length-1)+right4;
+    const l4=ln(r4,(i,ch)=>{ if(i<5) return {fg:DIMC}; if(i>=W2-right4.length-1) return {fg:CYAN,b:true}; if(i>=r4s.indexOf('6 frag')&&i<r4s.length) return {fg:[190,190,140]}; if(i>=r4s.length) return {fg:TEXT}; if(/[0-9]/.test(ch)&&r4s[i+1]===' ') return {fg:[90,90,90]}; return {fg:TEXT}; });
+    el.innerHTML=rule+l1+l2+l3+l4; })();
+})();
+
+// ---------- 2 · the throw
+(function(){
+  const sc=new Scene(36,12,31,[]); const ME={x:4,y:6},L={x:20,y:6},DUM={x:21,y:6}; const T0=2,SP=2; const nfl=Math.ceil((L.x-ME.x-1)/SP);
+  function base(){ const g=sc.grid(); put(g,ME.x,ME.y,'@',CYAN,null,true); put(g,DUM.x,DUM.y,'&',RED,null,true); return g; }
+  function landing(g,t){ const a=t-(T0+nfl); if(a<0)return;
+    if(a===0) put(g,L.x,L.y,'●',[255,240,180],null,true);
+    else if(a===1) put(g,L.x+1,L.y-1,'o',GREN,null,true);
+    else if(a===2) put(g,L.x,L.y,'o',GREN,null,true);
+    else if(a===3){ for(const p of footprint(sc,L,1)) put(g,p.x,p.y,p.ring?'*':'✺',[255,230,120],[200,60,20],true); }
+    else if(a===4){ for(const p of footprint(sc,L,1)) put(g,p.x,p.y,'░',[120,120,120],[60,40,30]); }
+    else if(a<12){ for(const p of footprint(sc,L,1)) if(hash(p.x,p.y,a>>1)%2===0) put(g,p.x,p.y-((a-4)>>2),'░',mix([110,110,110],[50,50,50],(a-4)/8)); scorch(g,sc,L); }
+    else scorch(g,sc,L);
+    tag(g,DUM.x-1,DUM.y,'-8',a-3); chips(g,DUM,a-3,false); }
+  anim('arcA',t=>{ const g=base(); const f=t-T0;
+    for(let i=f-3;i<=f;i++){ if(i<0||i>=nfl)continue; const x=ME.x+1+SP*i,s=(x-ME.x)/(L.x-ME.x); const y=ME.y-Math.round(2.2*4*s*(1-s)); if(i===f) put(g,x,y,'o',GREN,null,true); else put(g,x,y,'·',mix([120,120,120],[50,50,50],(f-i)/3)); }
+    landing(g,t); if(t-(T0+nfl)>=3) put(g,DUM.x,DUM.y,'&',RED,null,true); return g; },40);
+  anim('arcB',t=>{ const g=base(); const f=t-T0;
+    for(let i=f-3;i<=f;i++){ if(i<0||i>=nfl)continue; const x=ME.x+1+SP*i,s=(x-ME.x)/(L.x-ME.x); const h=4*s*(1-s); const ch=h<0.3?'·':h<0.7?'o':'O'; if(i===f) put(g,x,ME.y,ch,mix(GREN,[255,255,255],h),null,h>0.6); else put(g,x,ME.y,'·',mix([120,120,120],[50,50,50],(f-i)/3)); }
+    landing(g,t); if(t-(T0+nfl)>=3) put(g,DUM.x,DUM.y,'&',RED,null,true); return g; },40);
+})();
+
+// ---------- 3 · the blast
+(function(){
+  const sc=new Scene(36,12,31,[[16,8],[17,8]]); const ME={x:3,y:6},L={x:17,y:6},GOON={x:18,y:6},DUM={x:19,y:4}; const T0=4; const LOOP=44;
+  function base(){ const g=sc.grid(); put(g,ME.x,ME.y,'@',CYAN,null,true); put(g,GOON.x,GOON.y,'@',RED,null,true); put(g,DUM.x,DUM.y,'&',RED,null,true); return g; }
+  const fp2=footprint(sc,L,2);
+  anim('blastA',t=>{ const g=base(); const a=t-T0; if(a<0){ if(t>=2) put(g,L.x,L.y,'o',GREN,null,true); return g; }
+    if(a>=3){ scorch(g,sc,L); put(g,GOON.x,GOON.y,'@',RED,null,true); put(g,DUM.x,DUM.y,'&',RED,null,true); }
+    if(a===0) put(g,L.x,L.y,'✺',[0,0,0],[255,240,180],true);
+    if(a===1) for(const p of fp2){ if(p.ring===0) put(g,p.x,p.y,'✺',[255,255,255],[255,120,40],true); else if(p.ring===1) put(g,p.x,p.y,'*',[255,230,120],[200,60,20],true); }
+    if(a===2) for(const p of fp2){ if(p.ring===0) put(g,p.x,p.y,'▒',[255,200,90],[120,40,10]); else if(p.ring===1) put(g,p.x,p.y,'░',AMB,[120,40,10]); else put(g,p.x,p.y,'*',[255,200,90],[90,30,10],true); }
+    if(a===3) for(const p of fp2){ if(p.ring===0) put(g,p.x,p.y,'▓',[90,90,90],[50,40,36]); else if(p.ring===1) put(g,p.x,p.y,'▒',[120,120,120],[60,40,30]); else put(g,p.x,p.y,'·',AMB); }
+    if(a>=4&&a<13) for(const p of fp2){ const h=hash(p.x,p.y,a>>1); if(h%3===0) put(g,p.x,p.y-((a-4)>>2),'░',mix([110,110,110],[45,45,45],(a-4)/9)); else if(h%7===0&&a<8) put(g,p.x,p.y,'·',[200,110,20]); }
+    chips(g,GOON,a-1,true); chips(g,DUM,a-2,true);
+    tag(g,GOON.x-1,GOON.y,'-8',a-1); tag(g,DUM.x-1,DUM.y,'-4',a-2);
+    return g; },LOOP);
+  anim('blastB',t=>{ const g=base(); const a=t-T0; if(a<0){ if(t>=2) put(g,L.x,L.y,'o',GREN,null,true); return g; }
+    if(a>=2){ for(const p of fp2) put(g,p.x,p.y,p.ring===0?'▓':p.ring===1?'▒':'░',[30,27,25],[16,14,13]); put(g,GOON.x,GOON.y,'@',RED,[16,14,13],true); put(g,DUM.x,DUM.y,'&',RED,[16,14,13],true); }
+    if(a===0) for(const p of fp2) put(g,p.x,p.y,null,[0,0,0],[255,255,255],true);
+    if(a===1) for(const p of fp2) put(g,p.x,p.y,null,[60,0,0],p.ring<2?[255,160,60]:[255,110,50],true);
+    if(a>=2&&a<8){ const dirs=[[1,0,'·'],[-1,0,'·'],[0,1,','],[0,-1,"'"],[1,-1,'`'],[-1,-1,"'"],[1,1,','],[-1,1,',']]; dirs.forEach(([dx,dy,ch],i)=>{ const d=3+((a-2)>>1); const p={x:L.x+dx*d,y:L.y+dy*(dy&&dx?Math.ceil(d/2):d)}; if(!sc.isWall(p.x,p.y)&&sees(sc,L,p)) put(g,p.x,p.y,ch,mix([230,230,230],[90,90,90],(a-2)/5)); }); }
+    chips(g,GOON,a-1,true); chips(g,DUM,a-1,true);
+    tag(g,GOON.x-1,GOON.y,'-8',a-1); tag(g,DUM.x-1,DUM.y,'-4',a-1);
+    return g; },LOOP);
+  anim('blastC',t=>{ const g=base(); const a=t-T0; if(a<0){ if(t>=2) put(g,L.x,L.y,'o',[120,200,220],null,true); return g; }
+    if(a===0) put(g,L.x,L.y,'◉',CYAN,[0,60,75],true);
+    if(a===1){ put(g,L.x,L.y,'○',CYAN,null,true); for(const p of fp2) if(p.ring===1) put(g,p.x,p.y,'≋',CYAN,[0,40,50],true); }
+    if(a===2){ for(const p of fp2){ if(p.ring===2) put(g,p.x,p.y,'≋',[0,180,200],[0,30,38]); else if(p.ring===1) put(g,p.x,p.y,'·',[0,120,140]); } }
+    if(a===3) for(const p of fp2) if(p.ring===2) put(g,p.x,p.y,'·',[0,120,140]);
+    const stunG=a>=2; if(stunG) put(g,GOON.x,GOON.y,'@',[140,50,50],null,false); if(a>=3) put(g,DUM.x,DUM.y,'&',[140,50,50],null,false);
+    tear(g,GOON,a-1,1,true); tear(g,DUM,a-2,2,true); spark(g,GOON,a-1,true); spark(g,DUM,a-2,true);
+    tag(g,GOON.x-1,GOON.y,'-3',a-1,[0,90,110]); tag(g,DUM.x-1,DUM.y,'-2',a-2,[0,90,110]);
+    if(a>=4&&a<14) text(g,GOON.x-2,GOON.y+1,'stun 2',[0,160,180],null,false);
+    return g; },LOOP);
+})();
+
+// ---------- 4 · abilities
+(function(){
+  const sc=new Scene(30,10,26,[]);
+  // Jolt
+  (function(){ const ME={x:4,y:5},G1={x:7,y:5},G2={x:9,y:3}; const T0=3;
+    anim('abJolt',t=>{ const g=sc.grid(); const e=t-T0; put(g,ME.x,ME.y,'@',CYAN,null,true); put(g,G1.x,G1.y,'@',RED,null,true); put(g,G2.x,G2.y,'@',RED,null,true);
+      if(e>=2) put(g,G1.x,G1.y,'@',[140,50,50]); if(e>=4) put(g,G2.x,G2.y,'@',[140,50,50]);
+      streak(g,ME,G1,e,CYAN); if(e>=2&&e<5){ const c=[[240,240,240],CYAN,[0,80,100]][e-2]; put(g,8,4,'╱',c,null,e===2); }
+      if(e===1) put(g,G1.x,G1.y,'@',[255,255,255],[0,120,140],true); if(e===3) put(g,G2.x,G2.y,'@',[255,255,255],[0,120,140],true);
+      tear(g,G1,e-1,1,true); tear(g,G2,e-3,2,true); spark(g,G1,e-1,true); spark(g,G2,e-3,true);
+      tag(g,G1.x-1,G1.y,'-5',e-1,[0,90,110]); tag(g,G2.x-1,G2.y,'-2',e-3,[0,90,110]);
+      if(e>=5&&e<16){ text(g,G1.x-1,G1.y+1,'stun',[0,160,180]); }
+      return g; },36); })();
+  // Shove
+  (function(){ const ME={x:8,y:5}; const T0=3;
+    anim('abShove',t=>{ const g=sc.grid(); const e=t-T0; put(g,ME.x,ME.y,'@',CYAN,null,true);
+      const gx=e<1?9:e<2?10:11;
+      if(e===0){ put(g,gx,5,'@',[255,255,255],[255,40,40],true); put(g,ME.x,ME.y,'@',[0,0,0],CYAN,true); }
+      else put(g,gx,5,'@',RED,null,true);
+      if(e>=1&&e<5){ put(g,9,5,'»',e<3?[255,120,120]:[180,60,60]); } if(e>=2&&e<6){ put(g,10,5,'»',e<4?[255,120,120]:[180,60,60]); }
+      num(g,gx,5,'-3',e-1);
+      return g; },30); })();
+  // Redline
+  (function(){ const ME={x:12,y:5}; const T0=3;
+    anim('abRed',t=>{ const g=sc.grid(); const e=t-T0; put(g,ME.x,ME.y,'@',CYAN,null,true);
+      kick(g,sc,e); if(e===0) put(g,ME.x,ME.y,'@',[0,0,0],CYAN,true);
+      if(e>=1&&e<3) glowRing(g,ME,1,CYAN); if(e>=2&&e<5) glowRing(g,ME,2,[0,150,170]); if(e>=4&&e<7) glowRing(g,ME,3,[0,80,100]);
+      tag(g,ME.x-2,ME.y,'+ turn',e-1,[0,90,110]);
+      const W2=30; let foot=''; const s='MOVE ▰▰▰▰ 4/4   AP ●● 2/2', s0='MOVE ▰▱▱▱ 1/4   AP ●○ 1/2'; const use=e>=2?s:s0; const bright=e>=2&&e<6;
+      foot+='<span style="color:#444">'+'━'.repeat(W2)+'</span>\n'; for(let i=0;i<W2;i++){ const ch=use[i]||' '; foot+=`<span style="color:${bright?rgb([255,255,255]):rgb(e>=2?CYAN:[0,120,140])};background:${bright?rgb([0,90,110]):'#000'};font-weight:700">${ch===' '?'&nbsp;':ch}</span>`; } foot+='\n';
+      g._extra=foot; return g; },36); })();
+  // Deadeye
+  (function(){ const ME={x:3,y:5},G={x:17,y:5}; const T0=2;
+    anim('abDead',t=>{ const g=sc.grid(); const e=t-T0; put(g,ME.x,ME.y,'@',CYAN,null,true);
+      if(e>=0){ const pulse=Math.floor(e/3)%2===0; put(g,G.x,G.y,'@',RED,pulse?[140,0,105]:[70,0,52],true); put(g,G.x,G.y-1,'⌖',MAG,null,pulse); }
+      else put(g,G.x,G.y,'@',RED,null,true);
+      if(e>=0&&e<10){ const s=' goon · pistol · 14 tiles · 85% '; text(g,G.x-16,2,s,CYAN,[0,20,26]); text(g,G.x-16+s.indexOf('85%'),2,'85%',MAG,[0,20,26],true); }
+      const FIRE=[10,14,18]; for(let k=0;k<3;k++){ const f=e-FIRE[k]; if(f<0)continue; flash(g,ME,G,f,false); const pts=line(ME,G); const arr=Math.ceil((pts.length-2)/3); if(f<arr) tracer(g,ME,G,f,3); const a=f-arr; chips(g,G,a,false); num(g,G.x+k,G.y,'-4',a); }
+      return g; },44); })();
+})();
+
+// ---------- 5 · the fuse
+(function(){
+  const sc=new Scene(36,12,31,[]); const ME={x:3,y:6},L={x:17,y:6},DUM={x:15,y:8}; const BOOM=18;
+  const fp=footprint(sc,L,2);
+  anim('fuse',t=>{ const g=sc.grid(); put(g,ME.x,ME.y,'@',CYAN,null,true);
+    const gx=t<6?18:t<9?19:20;
+    if(t<BOOM){ shade(g,fp,[[60,18,18],[44,14,14],[30,10,10]]); put(g,L.x,L.y,'o',t%2?RED:GREN,null,true); text(g,L.x-3,L.y-2,' fuse 1 ',CYAN,[0,20,26]); }
+    put(g,DUM.x,DUM.y,'&',RED,null,true);
+    const a=t-BOOM;
+    if(a>=0){ if(a>=3) scorch(g,sc,L);
+      if(a===0) put(g,L.x,L.y,'✺',[0,0,0],[255,240,180],true);
+      if(a===1) for(const p of fp){ if(p.ring===0) put(g,p.x,p.y,'✺',[255,255,255],[255,120,40],true); else if(p.ring===1) put(g,p.x,p.y,'*',[255,230,120],[200,60,20],true); }
+      if(a===2) for(const p of fp){ if(p.ring===0) put(g,p.x,p.y,'▒',[255,200,90],[120,40,10]); else if(p.ring===1) put(g,p.x,p.y,'░',AMB,[120,40,10]); else put(g,p.x,p.y,'*',[255,200,90],[90,30,10],true); }
+      if(a===3) for(const p of fp){ if(p.ring===0) put(g,p.x,p.y,'▓',[90,90,90],[50,40,36]); else if(p.ring===1) put(g,p.x,p.y,'▒',[120,120,120],[60,40,30]); else put(g,p.x,p.y,'·',AMB); }
+      if(a>=4&&a<13) for(const p of fp){ const h=hash(p.x,p.y,a>>1); if(h%3===0) put(g,p.x,p.y-((a-4)>>2),'░',mix([110,110,110],[45,45,45],(a-4)/9)); }
+      if(a>=3) put(g,DUM.x,DUM.y,'&',RED,null,true); chips(g,DUM,a-2,false); tag(g,DUM.x-1,DUM.y,'-4',a-2); }
+    put(g,gx,6,'@',RED,null,true);
+    const W2=36; let foot='<span style="color:#444">'+'━'.repeat(W2)+'</span>\n'; const s=t<6?' TURN 2  you › goon':t<12?' TURN 2  goon moves 2':t<BOOM?' TURN 3  YOU › goon':' TURN 3  YOU › goon'; for(let i=0;i<W2;i++){ const ch=s[i]||' '; foot+=`<span style="color:${rgb(t>=6&&t<12?RED:CYAN)};font-weight:700">${ch===' '?'&nbsp;':ch}</span>`; } foot+='\n';
+    g._extra=foot; return g; },44);
+})();
+
+let tick=0; const step=()=>{ for(const f of frames){ const g=f.fn(tick%f.loop); render(f.el,g,g._extra); } tick++; };
+if(FIXED){ tick=+FIXED; step(); } else setInterval(step,T);
+window.pick=function(el,group){ document.querySelectorAll('.option[data-choice^="'+group+'"]').forEach(o=>o.classList.remove('sel')); el.classList.add('sel'); if(window.toggleSelect) toggleSelect(el); };
+})();
+</script>
+</body></html>
