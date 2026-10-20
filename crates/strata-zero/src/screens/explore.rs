@@ -122,6 +122,13 @@ pub enum Enemy {
     Ice(usize),
 }
 
+/// One entry of the act half's `ACT` list: an ability to fire or a throwable to arm.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Act {
+    Ability(game::AbilityId),
+    Throw(game::ItemId),
+}
+
 /// Look mode: a free cursor on the map the player walks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Looking {
@@ -155,6 +162,8 @@ pub struct MapScreen {
     pub aim: Option<Pos>,
     /// The fire cursor on your act half: what a shot goes at.
     pub target: Option<Pos>,
+    /// A throwable the cursor is aimed with: space throws it at the cursor.
+    pub armed: Option<game::ItemId>,
     /// The enemy you aimed at last: the cursor comes back to it while it stands.
     last_enemy: Option<Enemy>,
     /// The half of your turn the last frame saw, so the act half's opening is one
@@ -269,6 +278,7 @@ impl MapScreen {
             cursor: Pos::new(0, 0),
             aim: None,
             target: None,
+            armed: None,
             last_enemy: None,
             last_phase: None,
             walking: None,
@@ -407,9 +417,165 @@ impl MapScreen {
         }
     }
 
-    /// The keys of your act half on foot: a direction moves the cursor, tab the
-    /// next foe, space fires, a strike ability's number fires it, esc drops the
-    /// cursor. `None` for a key that is not the cursor's.
+    fn in_construct(st: &AppState) -> bool {
+        st.player
+            .as_ref()
+            .is_some_and(|p| matches!(p.place, Place::Construct(_)))
+    }
+
+    /// What the act half offers, in key order: the fight's abilities (strikes,
+    /// boosts, marks; content order), then the throwables in the pack. In a
+    /// construct only what works in the net (a strike that does not push, a boost),
+    /// and no throwables.
+    fn act_list(st: &AppState) -> Vec<Act> {
+        use game::{AbilityKind::Active, Active as A};
+        let net = Self::in_construct(st);
+        let owned = st.character.abilities(&st.content);
+        let mut out: Vec<Act> = st
+            .content
+            .abilities
+            .iter()
+            .filter(|a| owned.iter().any(|(id, _)| *id == a.id))
+            .filter(|a| match a.kind {
+                Active(A::Strike { push, .. }) => !net || push == 0,
+                Active(A::Boost { .. }) => true,
+                Active(A::Mark { .. }) => !net,
+                _ => false,
+            })
+            .map(|a| Act::Ability(a.id.clone()))
+            .collect();
+        if !net {
+            for s in &st.character.inventory {
+                let id = &s.item;
+                let thrown = st.content.item(id).is_some_and(|i| i.throw().is_some());
+                if thrown && s.qty > 0 && !out.contains(&Act::Throw(id.clone())) {
+                    out.push(Act::Throw(id.clone()));
+                }
+            }
+        }
+        out.truncate(9);
+        out
+    }
+
+    /// The first key of the list: `1`, or `6` after a construct's programs.
+    fn act_base(st: &AppState) -> u32 {
+        if Self::in_construct(st) { 6 } else { 1 }
+    }
+
+    /// The entry a number key picks. In a construct `1`-`5` are the programs'.
+    fn act_key(st: &AppState, n: u32) -> Option<Act> {
+        let i = n.checked_sub(Self::act_base(st))?;
+        Self::act_list(st).get(i as usize).cloned()
+    }
+
+    /// The footer's `ACT` entries.
+    fn act_entries(st: &AppState) -> Vec<hud::ActEntry> {
+        use game::{AbilityKind::Active, Active as A};
+        let base = Self::act_base(st);
+        Self::act_list(st)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, act)| {
+                let key = char::from_digit(base + i as u32, 10)?;
+                Some(match act {
+                    Act::Throw(id) => hud::ActEntry {
+                        key,
+                        name: st.content.item(&id)?.name.clone(),
+                        count: Some(st.character.count(&id)),
+                        state: hud::ActState::Ready,
+                    },
+                    Act::Ability(id) => {
+                        let a = st.content.ability(&id)?;
+                        let spent_boost = matches!(a.kind, Active(A::Boost { once: true }))
+                            && st.net.engaged.as_ref().is_some_and(|e| e.boosted);
+                        let state = if st.character.cooling(&st.content, &id, st.tick).is_some() {
+                            hud::ActState::Cooling
+                        } else if spent_boost {
+                            hud::ActState::Refused
+                        } else {
+                            hud::ActState::Ready
+                        };
+                        hud::ActEntry {
+                            key,
+                            name: a.name.clone(),
+                            count: None,
+                            state,
+                        }
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// The pools draw lit while a pulse plays on you.
+    fn flash_pools(&self, st: &AppState) -> bool {
+        let Some(p) = st.player.as_ref() else {
+            return false;
+        };
+        st.fx.iter().any(|i| {
+            matches!(i.fx, game::Fx::Pulse { .. })
+                && i.place == p.place
+                && i.origin == p.pos
+                && i.started <= st.tick
+                && st.tick < i.until()
+        })
+    }
+
+    /// The footprint the armed item's blast would have at `at`: nothing when it
+    /// cannot come down there.
+    fn armed_footprint(st: &AppState, id: &game::ItemId, at: Pos) -> Vec<(Pos, i32)> {
+        let (Some((range, _, blast)), Some(p), Some(city)) = (
+            st.content.item(id).and_then(|i| i.throw()),
+            st.player.as_ref(),
+            st.city.as_ref(),
+        ) else {
+            return Vec::new();
+        };
+        if crate::blast::landing(st, range, at).is_err() {
+            return Vec::new();
+        }
+        crate::blast::footprint(city, p.place, at, blast.radius)
+    }
+
+    /// The readout over the cursor with a throwable armed: the item, the distance,
+    /// the blast and what it would do to each foe in it, nearest the centre first;
+    /// or why it cannot land there. The flag is set when you stand in it.
+    fn armed_readout(st: &AppState, id: &game::ItemId, at: Pos) -> Option<(String, bool)> {
+        let item = st.content.item(id)?;
+        let (range, _, blast) = item.throw()?;
+        let p = st.player.as_ref()?;
+        let name = item.name.to_lowercase();
+        let dist = p.pos.chebyshev(at);
+        if let Err(why) = crate::blast::landing(st, range, at) {
+            return Some((format!(" {name} · {dist} tiles · {why} "), false));
+        }
+        let tiles = Self::armed_footprint(st, id, at);
+        let mut parts = vec![
+            name,
+            format!("{dist} tiles"),
+            format!("blast {}", blast.radius),
+        ];
+        for (pos, ring) in &tiles {
+            let Some(foe) = crate::foes::foe_at(st, p.place, *pos).map(|i| &st.foes[i]) else {
+                continue;
+            };
+            match crate::blast::effect(&blast, *ring, foe.chrome) {
+                (0, 0) => {}
+                (0, _) => parts.push(format!("{} stun", foe.name)),
+                (damage, _) => parts.push(format!("{} {damage}", foe.name)),
+            }
+        }
+        let you = tiles.iter().any(|(q, _)| *q == p.pos);
+        if you {
+            parts.push("you're in it".to_string());
+        }
+        Some((format!(" {} ", parts.join(" · ")), you))
+    }
+
+    /// The keys of your act half: a direction moves the cursor, tab the next foe,
+    /// space fires (or throws what is armed), a number picks from the `ACT` list,
+    /// esc puts a throwable back and then drops the cursor. `None` for a key that
+    /// is not the cursor's.
     fn handle_firing(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
         let (place, me) = st.player.as_ref().map(|p| (p.place, p.pos))?;
         if let Some(dir) = dir_for(k.code) {
@@ -438,8 +604,30 @@ impl MapScreen {
                 self.target = Some(seen[next].1);
                 Some(ScreenCmd::Stay)
             }
+            // Esc puts a throwable back first; the cursor stays.
+            KeyCode::Esc if self.armed.is_some() => {
+                self.armed = None;
+                Some(ScreenCmd::Stay)
+            }
             KeyCode::Esc if self.target.is_some() => {
                 self.target = None;
+                Some(ScreenCmd::Stay)
+            }
+            KeyCode::Char(' ') if self.armed.is_some() => {
+                let id = self.armed.clone()?;
+                match crate::blast::throw(st, &id, self.target.unwrap_or(me)) {
+                    // A throw that cannot come down there leaves it armed to aim again.
+                    Err(why)
+                        if matches!(why.as_str(), "out of range" | "no line" | "no landing") =>
+                    {
+                        st.warn(why)
+                    }
+                    Err(why) => {
+                        self.armed = None;
+                        st.warn(why);
+                    }
+                    Ok(()) => self.armed = None,
+                }
                 Some(ScreenCmd::Stay)
             }
             KeyCode::Char(' ') => {
@@ -474,31 +662,54 @@ impl MapScreen {
             }
             KeyCode::Char(c) => {
                 let n = c.to_digit(10)?;
-                if !(1..=hud::SLOTS as u32).contains(&n) {
-                    return None;
-                }
-                let id = Self::actives(st).get(n as usize - 1).cloned()?;
-                let strikes = st.content.ability(&id).is_some_and(|a| {
-                    matches!(
-                        a.kind,
-                        game::AbilityKind::Active(game::Active::Strike { .. })
-                    )
-                });
-                if !strikes {
-                    return None;
-                }
-                match self.target.and_then(|t| Self::enemy_at(st, t)) {
-                    Some(Enemy::Foe(foe)) => {
-                        self.last_enemy = Some(Enemy::Foe(foe));
-                        if let Err(why) = crate::combat::strike(st, &id, foe) {
-                            st.warn(why);
-                        }
+                let Some(act) = Self::act_key(st, n) else {
+                    // On foot a number with nothing behind it does nothing; in a
+                    // construct 1-5 are the deck's programs.
+                    return (n > 0 && !matches!(place, Place::Construct(_)))
+                        .then_some(ScreenCmd::Stay);
+                };
+                match act {
+                    Act::Throw(id) => {
+                        self.target.get_or_insert(me);
+                        self.armed = Some(id);
                     }
-                    _ => st.warn("pick a target"),
+                    Act::Ability(id) => {
+                        self.armed = None;
+                        self.use_ability(st, place, &id);
+                    }
                 }
                 Some(ScreenCmd::Stay)
             }
             _ => None,
+        }
+    }
+
+    /// An ability of the `ACT` list fired: a strike or a mark at the enemy under the
+    /// cursor, a boost at once. The engine says why not.
+    fn use_ability(&mut self, st: &mut AppState, place: Place, id: &game::AbilityId) {
+        use game::{AbilityKind::Active, Active as A};
+        let Some(kind) = st.content.ability(id).map(|a| a.kind.clone()) else {
+            return;
+        };
+        let enemy = self.target.and_then(|t| Self::enemy_at(st, t));
+        let result = match (kind, enemy, place) {
+            (Active(A::Boost { .. }), _, _) => crate::casts::boost(st, id),
+            (Active(A::Strike { .. }), Some(Enemy::Foe(foe)), _) => {
+                self.last_enemy = enemy;
+                crate::combat::strike(st, id, foe)
+            }
+            (Active(A::Strike { .. }), Some(Enemy::Ice(i)), Place::Construct(b)) => {
+                self.last_enemy = enemy;
+                crate::casts::strike_ice(st, id, b, i)
+            }
+            (Active(A::Mark { .. }), Some(Enemy::Foe(foe)), _) => {
+                self.last_enemy = enemy;
+                crate::casts::mark(st, id, foe)
+            }
+            _ => Err("pick a target".to_string()),
+        };
+        if let Err(why) = result {
+            st.warn(why);
         }
     }
 
@@ -684,6 +895,8 @@ impl MapScreen {
                 || crate::net::phase(st) == Some(crate::net::Phase::Move),
             acting: crate::net::phase(st).map(|p| p == crate::net::Phase::Act),
             prompt: self.turn_prompt(st),
+            act: (self.firing(st) && crate::net::your_turn(st)).then(|| Self::act_entries(st)),
+            flash_pools: self.flash_pools(st),
             budgets: st.net.engaged.as_ref().map(|e| {
                 if e.actor() == crate::net::Actor::You {
                     (e.moves, crate::net::BASE_MOVE, e.ap, crate::net::BASE_AP)
@@ -748,9 +961,13 @@ impl MapScreen {
                     "YOUR TURN · MOVE".to_string(),
                     "hjkl step · g aims a path · enter walks it · space stays".to_string(),
                 ),
+                Phase::Act if self.armed.is_some() => (
+                    "THROW".to_string(),
+                    "hjkl aim · space throw · esc back".to_string(),
+                ),
                 Phase::Act => (
                     "AIM".to_string(),
-                    "hjkl target · t next · space fire · 1-5 ability · . end turn".to_string(),
+                    "hjkl target · t next · space fire · 1-9 act · . end turn".to_string(),
                 ),
             },
             Actor::You => match e.phase {
@@ -2458,6 +2675,7 @@ impl Screen for MapScreen {
             }
         } else {
             self.target = None;
+            self.armed = None;
         }
         self.last_phase = phase;
         self.refresh_placement(st);
@@ -2643,6 +2861,20 @@ impl Screen for MapScreen {
                         .is_some_and(|p| p.y == t.y && (p.x - t.x).abs() <= 2)
             })
         });
+        let armed = self
+            .armed
+            .as_ref()
+            .zip(self.target)
+            .filter(|_| self.firing(st));
+        let armed_text = armed.and_then(|(id, t)| Self::armed_readout(st, id, t));
+        let footprint = armed
+            .map(|(id, t)| Self::armed_footprint(st, id, t))
+            .unwrap_or_default();
+        let you = st
+            .player
+            .as_ref()
+            .map(|p| p.pos)
+            .filter(|me| footprint.iter().any(|(q, _)| q == me));
         let fire =
             self.target
                 .filter(|_| self.firing(st))
@@ -2650,9 +2882,15 @@ impl Screen for MapScreen {
                     line: &fire_line,
                     target: t,
                     on_foe: aimed_foe.is_some(),
-                    readout: aimed_foe
-                        .filter(|_| !shooting)
-                        .map(|i| Self::aim_readout(st, i)),
+                    readout: match &armed_text {
+                        Some((text, _)) => Some(text.clone()),
+                        None => aimed_foe
+                            .filter(|_| !shooting)
+                            .map(|i| Self::aim_readout(st, i)),
+                    },
+                    footprint: &footprint,
+                    you,
+                    warn: armed_text.as_ref().is_some_and(|(_, warn)| *warn),
                 });
         if let Some(o) = fire.as_ref() {
             overlays.push(o);
@@ -3426,17 +3664,12 @@ mod tests {
         st.character.give(game::ItemId::new("neural_port"), 1);
         st.character
             .wear(game::Slot::Neural, game::ItemId::new("neural_port"), None);
-        let actives = MapScreen::actives(&st);
+        let list = MapScreen::act_list(&st);
         let slot = |id: &str| {
-            actives
-                .iter()
-                .position(|a| a.0 == id)
-                .map(|i| char::from_digit(i as u32 + 1, 10).unwrap())
-                .unwrap()
+            let i = list.iter().position(|a| *a == act_ability(id)).unwrap();
+            char::from_digit(i as u32 + 1, 10).unwrap()
         };
-        // A scan is an ability like any other: one AP through the slot.
-        s.update(&mut st, &[key(KeyCode::Char(slot("netscan")))]);
-        assert_eq!(st.net.engaged.as_ref().unwrap().ap, 1);
+        st.net.engaged.as_mut().unwrap().ap = 1;
         // Static wants the cursor on a foe.
         s.update(&mut st, &[key(KeyCode::Char('l'))]);
         s.update(&mut st, &[key(KeyCode::Char(slot("static")))]);
@@ -3470,7 +3703,7 @@ mod tests {
         );
         assert!(text.contains("TURN 1  YOU › goon"), "{text}");
         assert!(
-            text.contains("hjkl target · t next · space fire · 1-5 ability · . end turn"),
+            text.contains("hjkl target · t next · space fire · 1-9 act · . end turn"),
             "{text}"
         );
         s.update(&mut st, &[key(KeyCode::Char('.'))]);
@@ -10951,5 +11184,314 @@ mod tests {
         assert!(st.dev);
         assert!(st.sidebar.is_on(Section::Inspect));
         assert_eq!(st.jump_to, None);
+    }
+
+    /// The lot with the runner's kit on your act half, a goon at `goon`.
+    fn runner_half(goon: Pos) -> (AppState, MapScreen) {
+        let (mut st, mut s) = lot(goon);
+        st.character = game::Character::combat_runner(&st.content);
+        s.update(&mut st, &[]);
+        assert!(st.net.engaged.is_some() && crate::net::your_turn(&st));
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(crate::net::phase(&st), Some(crate::net::Phase::Act));
+        (st, s)
+    }
+
+    fn act_ability(s: &str) -> Act {
+        Act::Ability(game::AbilityId::new(s))
+    }
+
+    fn act_throw(s: &str) -> Act {
+        Act::Throw(ItemId::new(s))
+    }
+
+    fn ap_left(st: &AppState) -> u8 {
+        st.net.engaged.as_ref().unwrap().ap
+    }
+
+    #[test]
+    fn act_list_on_the_street_and_in_a_construct() {
+        let (st, _) = runner_half(Pos::new(12, 8));
+        assert_eq!(
+            MapScreen::act_list(&st),
+            vec![
+                act_ability("static"),
+                act_ability("jolt"),
+                act_ability("shove"),
+                act_ability("redline"),
+                act_ability("deadeye"),
+                act_throw("frag"),
+                act_throw("flashbang"),
+                act_throw("emp_puck"),
+                act_throw("satchel"),
+            ]
+        );
+        assert_eq!(MapScreen::act_key(&st, 6), Some(act_throw("frag")));
+        assert_eq!(MapScreen::act_key(&st, 0), None);
+        assert_eq!(MapScreen::act_key(&st, 10), None);
+        // A construct: the programs keep 1-5, the net's abilities follow on 6-8.
+        let mut st = AppState::new();
+        st.enter_city(citygen::City::lot(1));
+        st.player = Some(crate::walker::Player::at(
+            Place::Stratum(StratumKind::Street),
+            Pos::new(6, 8),
+        ));
+        crate::net::start_in_net_lot(&mut st).unwrap();
+        st.character = game::Character::combat_runner(&st.content);
+        assert_eq!(
+            MapScreen::act_list(&st),
+            vec![
+                act_ability("static"),
+                act_ability("jolt"),
+                act_ability("redline")
+            ]
+        );
+        for n in 1..=5 {
+            assert_eq!(MapScreen::act_key(&st, n), None, "{n} stays a program");
+        }
+        assert_eq!(MapScreen::act_key(&st, 6), Some(act_ability("static")));
+        assert_eq!(MapScreen::act_key(&st, 8), Some(act_ability("redline")));
+        assert_eq!(MapScreen::act_key(&st, 9), None);
+    }
+
+    #[test]
+    fn the_footer_reads_the_act_list_on_the_act_half_only() {
+        let (mut st, mut s) = runner_half(Pos::new(12, 8));
+        let text = buffer_text(&draw_buffer(&s, &st, 160, 30));
+        assert!(
+            text.contains(" ACT  1 static 2 jolt 3 shove 4 redline 5 deadeye 6 frag×3"),
+            "{text}"
+        );
+        assert!(!text.contains("ABILITIES"), "{text}");
+        st.character
+            .fired
+            .insert(game::AbilityId::new("jolt"), st.tick);
+        let text = buffer_text(&draw_buffer(&s, &st, 160, 30));
+        assert!(text.contains("2 jolt ◌ 3 shove"), "{text}");
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        let text = buffer_text(&draw_buffer(&s, &st, 160, 30));
+        assert!(!text.contains(" ACT  "), "{text}");
+    }
+
+    #[test]
+    fn a_throwable_key_arms_the_cursor_and_space_throws() {
+        let (mut st, mut s) = runner_half(Pos::new(12, 8));
+        let frag = ItemId::new("frag");
+        assert_eq!(s.target, Some(Pos::new(12, 8)));
+        s.update(&mut st, &[key(KeyCode::Char('6'))]);
+        assert_eq!(s.armed, Some(frag.clone()));
+        let text = buffer_text(&draw_buffer(&s, &st, 100, 30));
+        assert!(
+            text.contains(" frag · 6 tiles · blast 2 · goon 12 "),
+            "{text}"
+        );
+        assert!(text.contains("hjkl aim · space throw · esc back"), "{text}");
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(st.character.count(&frag), 2, "one thrown");
+        assert_eq!(s.armed, None);
+        assert_eq!(ap_left(&st), 1);
+        // Esc disarms first and keeps the cursor; the next drops it.
+        s.update(&mut st, &[key(KeyCode::Char('6'))]);
+        assert!(s.armed.is_some());
+        s.update(&mut st, &[key(KeyCode::Esc)]);
+        assert_eq!((s.armed.clone(), s.target.is_some()), (None, true));
+        s.update(&mut st, &[key(KeyCode::Esc)]);
+        assert_eq!(s.target, None);
+    }
+
+    #[test]
+    fn a_refused_throw_stays_armed_when_aiming_can_fix_it() {
+        let (mut st, mut s) = runner_half(Pos::new(12, 8));
+        s.update(&mut st, &[key(KeyCode::Char('6'))]);
+        s.target = Some(Pos::new(15, 8));
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert!(s.armed.is_some(), "out of range: aim again");
+        assert_eq!(last(&st), Some("out of range"));
+        assert_eq!(st.character.count(&ItemId::new("frag")), 3);
+        // Out of action points is no aiming problem.
+        st.net.engaged.as_mut().unwrap().ap = 0;
+        s.target = Some(Pos::new(12, 8));
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(s.armed, None);
+        assert_eq!(last(&st), Some("no AP left"));
+    }
+
+    #[test]
+    fn armed_readout_warns_when_you_are_in_it() {
+        let (mut st, mut s) = runner_half(Pos::new(12, 8));
+        let me = st.player.as_ref().unwrap().pos;
+        s.update(&mut st, &[key(KeyCode::Char('6'))]);
+        s.target = Some(me.offset(1, 0));
+        let (text, warn) = MapScreen::armed_readout(&st, &ItemId::new("frag"), me.offset(1, 0))
+            .expect("a readout");
+        assert!(text.ends_with(" · you're in it "), "{text:?}");
+        assert!(warn);
+        let (far, warn) =
+            MapScreen::armed_readout(&st, &ItemId::new("frag"), Pos::new(12, 8)).unwrap();
+        assert!(!far.contains("you're in it") && !warn, "{far:?}");
+    }
+
+    #[test]
+    fn armed_readout_names_the_refusal() {
+        let (mut st, _) = runner_half(Pos::new(12, 8));
+        let frag = ItemId::new("frag");
+        let (text, warn) = MapScreen::armed_readout(&st, &frag, Pos::new(15, 8)).unwrap();
+        assert_eq!(text, " frag · 9 tiles · out of range ");
+        assert!(!warn);
+        // Out of sight there is no line.
+        st.player
+            .as_mut()
+            .unwrap()
+            .set_vis(Pos::new(10, 8), crate::render::Visibility::Unseen);
+        let (text, _) = MapScreen::armed_readout(&st, &frag, Pos::new(10, 8)).unwrap();
+        assert_eq!(text, " frag · 4 tiles · no line ");
+        // A wall in sight cannot be landed on.
+        let size = st.city.as_ref().unwrap().size;
+        let wall = (0..size.h as i32)
+            .flat_map(|y| (0..size.w as i32).map(move |x| Pos::new(x, y)))
+            .filter(|p| p.chebyshev(Pos::new(6, 8)) <= 8)
+            .find(|p| {
+                let city = st.city.as_ref().unwrap();
+                !city.walkable(StratumKind::Street, *p)
+            })
+            .expect("the lot has a wall in reach");
+        st.player
+            .as_mut()
+            .unwrap()
+            .set_vis(wall, crate::render::Visibility::Visible);
+        let (text, _) = MapScreen::armed_readout(&st, &frag, wall).unwrap();
+        assert!(text.ends_with(" · no landing "), "{text:?}");
+    }
+
+    #[test]
+    fn a_flashbang_reads_stun_and_skips_the_chromeless_under_a_chrome_blast() {
+        let (mut st, _) = runner_half(Pos::new(12, 8));
+        let (text, _) =
+            MapScreen::armed_readout(&st, &ItemId::new("flashbang"), Pos::new(12, 8)).unwrap();
+        assert!(text.contains("goon stun"), "{text:?}");
+        st.foes[0].chrome = false;
+        let (text, _) =
+            MapScreen::armed_readout(&st, &ItemId::new("emp_puck"), Pos::new(12, 8)).unwrap();
+        assert!(!text.contains("goon"), "{text:?}");
+    }
+
+    #[test]
+    fn act_keys_past_the_end_and_cooling() {
+        let (mut st, mut s) = runner_half(Pos::new(12, 8));
+        st.character
+            .inventory
+            .retain(|s| s.item != ItemId::new("satchel"));
+        s.update(&mut st, &[key(KeyCode::Char('9'))]);
+        assert_eq!((s.armed.clone(), ap_left(&st)), (None, 2));
+        // No frag in the pack: the entry is gone and its key does nothing.
+        st.character
+            .inventory
+            .retain(|s| s.item != ItemId::new("frag"));
+        assert_eq!(MapScreen::act_key(&st, 6), Some(act_throw("flashbang")));
+        s.update(&mut st, &[key(KeyCode::Char('8'))]);
+        assert_eq!((s.armed.clone(), ap_left(&st)), (None, 2));
+        // A cooling jolt, the goon in reach, says so and costs nothing.
+        st.foes[0].pos = Pos::new(8, 8);
+        s.target = Some(Pos::new(8, 8));
+        st.character
+            .fired
+            .insert(game::AbilityId::new("jolt"), st.tick);
+        s.update(&mut st, &[key(KeyCode::Char('2'))]);
+        assert!(
+            last(&st).is_some_and(|l| l.contains("cooling down")),
+            "{:?}",
+            last(&st)
+        );
+        assert_eq!(ap_left(&st), 2);
+    }
+
+    #[test]
+    fn boost_and_mark_keys() {
+        let (mut st, mut s) = runner_half(Pos::new(12, 8));
+        // Deadeye on the cursor's goon marks it.
+        s.update(&mut st, &[key(KeyCode::Char('5'))]);
+        assert!(st.foes[0].marked, "{:?}", last(&st));
+        // Off a foe it asks for a target.
+        let (mut st2, mut s2) = runner_half(Pos::new(12, 8));
+        s2.target = Some(Pos::new(8, 8));
+        s2.update(&mut st2, &[key(KeyCode::Char('5'))]);
+        assert_eq!(last(&st2), Some("pick a target"));
+        assert_eq!(ap_left(&st2), 2);
+        // Redline fires at once and sends you back to the move half.
+        s.update(&mut st, &[key(KeyCode::Char('4'))]);
+        assert_eq!(crate::net::phase(&st), Some(crate::net::Phase::Move));
+    }
+
+    #[test]
+    fn picking_a_strike_while_armed_disarms() {
+        let (mut st, mut s) = runner_half(Pos::new(12, 8));
+        s.update(&mut st, &[key(KeyCode::Char('6'))]);
+        assert!(s.armed.is_some());
+        st.force_hit = Some(true);
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        assert_eq!(s.armed, None);
+        assert_eq!(ap_left(&st), 0, "static costs two");
+    }
+
+    #[test]
+    fn the_prompt_rows() {
+        let (st, mut s) = runner_half(Pos::new(12, 8));
+        assert_eq!(
+            s.turn_prompt(&st),
+            Some((
+                "AIM".to_string(),
+                "hjkl target · t next · space fire · 1-9 act · . end turn".to_string()
+            ))
+        );
+        s.armed = Some(ItemId::new("frag"));
+        assert_eq!(
+            s.turn_prompt(&st),
+            Some((
+                "THROW".to_string(),
+                "hjkl aim · space throw · esc back".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn the_pools_flash_while_a_pulse_plays() {
+        let (mut st, s) = runner_half(Pos::new(12, 8));
+        assert!(!s.flash_pools(&st));
+        crate::casts::boost(&mut st, &game::AbilityId::new("redline")).unwrap();
+        assert!(s.flash_pools(&st));
+        st.tick += 100;
+        assert!(!s.flash_pools(&st));
+    }
+
+    #[test]
+    fn in_a_construct_the_net_abilities_follow_the_programs() {
+        let mut st = AppState::new();
+        st.enter_city(citygen::City::lot(1));
+        st.player = Some(crate::walker::Player::at(
+            Place::Stratum(StratumKind::Street),
+            Pos::new(6, 8),
+        ));
+        crate::net::start_in_net_lot(&mut st).unwrap();
+        st.character = game::Character::combat_runner(&st.content);
+        let b = citygen::BuildingId(0);
+        st.player.as_mut().unwrap().pos = Pos::new(37, 9);
+        crate::net::engage(&mut st, Place::Construct(b), true);
+        assert!(crate::net::stay(&mut st));
+        st.tick = 500;
+        let mut s = MapScreen::walking(&mut st);
+        s.update(&mut st, &[]);
+        let text = buffer_text(&draw_buffer(&s, &st, 160, 40));
+        assert!(text.contains("PROGRAMS"), "{text}");
+        assert!(text.contains("6 static 7 jolt 8 redline"), "{text}");
+        // 6 is Static on the piece under the cursor.
+        s.target = Some(st.constructs.get(b).unwrap().guards[0].pos);
+        st.force_hit = Some(true);
+        let before = st.net.engaged.as_ref().unwrap().ap;
+        s.update(&mut st, &[key(KeyCode::Char('6'))]);
+        assert!(
+            st.net.engaged.as_ref().unwrap().ap < before,
+            "{:?}",
+            last(&st)
+        );
     }
 }

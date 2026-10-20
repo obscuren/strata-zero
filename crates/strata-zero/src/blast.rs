@@ -123,7 +123,7 @@ fn play_victim(
 
 /// What a blast does to one thing at `ring`: its damage and stun, none of either
 /// for the chromeless under a chrome-only blast.
-fn effect(blast: &Blast, ring: i32, chrome: bool) -> (u8, u8) {
+pub(crate) fn effect(blast: &Blast, ring: i32, chrome: bool) -> (u8, u8) {
     if blast.chrome && !chrome {
         return (0, 0);
     }
@@ -261,8 +261,6 @@ pub fn detonate(
     }
 }
 
-// Read by the foes' step-out and the overlay in the tasks that follow.
-#[allow(dead_code)]
 /// The engagement lets you act: your turn, the act half, an action point left.
 fn throw_allowed(st: &AppState) -> Result<(), String> {
     match st.net.engaged.as_ref() {
@@ -281,8 +279,6 @@ fn throw_allowed(st: &AppState) -> Result<(), String> {
     }
 }
 
-// Read by the foes' step-out and the overlay in the tasks that follow.
-#[allow(dead_code)]
 /// You throw a consumable at a tile: it leaves the pack, the flight plays, the
 /// blast goes off when it lands or lies live for its fuse. One action point.
 pub fn throw(st: &mut AppState, id: &ItemId, at: Pos) -> Result<(), String> {
@@ -294,6 +290,33 @@ pub fn throw(st: &mut AppState, id: &ItemId, at: Pos) -> Result<(), String> {
 /// the calm tests'.
 pub fn throw_free(st: &mut AppState, id: &ItemId, at: Pos) -> Result<(), String> {
     throw_from_hand(st, id, at, false)
+}
+
+/// Whether a throw of `range` from where you stand can come down on `at`: in
+/// reach, in sight with the way clear, on a tile it can lie on. The refusal is the
+/// word the log and the aim readout use.
+pub fn landing(st: &AppState, range: i32, at: Pos) -> Result<(), String> {
+    let (Some(p), Some(city)) = (st.player.as_ref(), st.city.as_ref()) else {
+        return Err("no body in the city".to_string());
+    };
+    if p.pos.chebyshev(at) > range {
+        return Err("out of range".to_string());
+    }
+    let seen = p
+        .vis()
+        .get(at)
+        .is_some_and(|v| *v == crate::render::Visibility::Visible);
+    if !seen || !foes::line_clear(city, p.place, p.pos, at) {
+        return Err("no line".to_string());
+    }
+    let lands = p.place.stratum().is_some_and(|k| {
+        city.tile(k, at)
+            .is_some_and(|t| t.is_walkable() && !foes::blocks_sight(t))
+    });
+    if !lands {
+        return Err("no landing".to_string());
+    }
+    Ok(())
 }
 
 fn throw_from_hand(st: &mut AppState, id: &ItemId, at: Pos, spend: bool) -> Result<(), String> {
@@ -308,27 +331,12 @@ fn throw_from_hand(st: &mut AppState, id: &ItemId, at: Pos, spend: bool) -> Resu
     if st.character.count(id) == 0 {
         return Err("none left".to_string());
     }
-    let (Some(p), Some(city)) = (st.player.as_ref(), st.city.as_ref()) else {
-        return Err("no body in the city".to_string());
-    };
-    let (place, from) = (p.place, p.pos);
-    if from.chebyshev(at) > range {
-        return Err("out of range".to_string());
-    }
-    let seen = p
-        .vis()
-        .get(at)
-        .is_some_and(|v| *v == crate::render::Visibility::Visible);
-    if !seen || !foes::line_clear(city, place, from, at) {
-        return Err("no line".to_string());
-    }
-    let lands = place.stratum().is_some_and(|k| {
-        city.tile(k, at)
-            .is_some_and(|t| t.is_walkable() && !foes::blocks_sight(t))
-    });
-    if !lands {
-        return Err("no landing".to_string());
-    }
+    landing(st, range, at)?;
+    let (place, from) = st
+        .player
+        .as_ref()
+        .map(|p| (p.place, p.pos))
+        .ok_or_else(|| "no body in the city".to_string())?;
     if spend {
         crate::net::spend_ap(st)?;
     }

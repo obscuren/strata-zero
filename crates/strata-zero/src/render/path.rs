@@ -99,12 +99,24 @@ pub struct AimOverlay<'a> {
     pub on_foe: bool,
     /// ` goon · Scrap nine · 9 tiles · 80% `, drawn two rows above the target.
     pub readout: Option<String>,
+    /// The armed item's blast around the target with each tile's ring; empty when
+    /// nothing is armed or it cannot land there.
+    #[allow(dead_code)]
+    pub footprint: &'a [(Pos, i32)],
+    /// Your tile, when it is in the footprint.
+    #[allow(dead_code)]
+    pub you: Option<Pos>,
+    /// The readout draws red: you stand in the blast.
+    pub warn: bool,
 }
 
 /// The line of fire's dots.
 pub const FIRE_LINE: Color = Color::Rgb(90, 90, 90);
 /// Under the readout.
 pub const READOUT_BG: Color = Color::Rgb(0, 20, 26);
+/// The readout when you stand in the blast.
+const WARN_FG: Color = Color::Rgb(255, 80, 80);
+const WARN_BG: Color = Color::Rgb(26, 0, 0);
 
 impl Overlay for AimOverlay<'_> {
     fn draw(
@@ -153,7 +165,12 @@ impl Overlay for AimOverlay<'_> {
         for (i, ch) in text.chars().enumerate() {
             let x = (x0 + i as i32) as u16;
             let cell = &mut buf[(x, y)];
-            cell.set_char(ch).set_fg(CYAN).set_bg(READOUT_BG);
+            let (fg, bg) = if self.warn {
+                (WARN_FG, WARN_BG)
+            } else {
+                (CYAN, READOUT_BG)
+            };
+            cell.set_char(ch).set_fg(fg).set_bg(bg);
             cell.modifier.remove(Modifier::DIM);
             if i > 0 && i < name_end {
                 cell.modifier.insert(Modifier::BOLD);
