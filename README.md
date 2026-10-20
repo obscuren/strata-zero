@@ -374,11 +374,12 @@ digit picks an ability and fires it at the cursor, or arms a throwable. Static
 cells around the goon; Shove knocks an adjacent goon back; Jolt arcs from the
 goon to the nearest other within two tiles; Redline refills your pools and gives
 you the turn again, once a fight; Deadeye marks one goon so your next shots
-land. A throwable arms the cursor: a footprint shades the tiles it will reach, the
-readout says `frag · 6 tiles · blast 2`, `space` throws it, `esc` disarms. Frag
-is a fireball, the flashbang a white flash that stuns, the EMP puck a cyan shock
+land. A throwable arms the cursor: a footprint shades the tiles it will
+reach, the readout says `frag · 6 tiles · blast 2`, `space` throws it, `esc`
+disarms. Frag is a fireball, the flashbang a white flash that stuns, the EMP puck a cyan shock
 that scrambles chrome, the satchel a charge that lies live for a turn with its
-footprint marked, and the goons step out of it. A stim from the deck costs an AP. `.` ends the turn; the goon closes in on the pace and shoots back.
+footprint marked, and the goons step out of it. A stim from the deck costs an
+AP. `.` ends the turn; the goon closes in on the pace and shoots back.
 `e` engages by hand with a goon in sight memory, and calms the street when
 nothing hunts you; at zero HP the goon drops (`%`), you flatline. A column at
 the map's top right lists the order (`▶ YOU`, `goon 18`), with the live half of

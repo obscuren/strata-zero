@@ -3,7 +3,7 @@
 Date: 2026-10-20. Status: built (branch `worktree-grenades-abilities`): the blast
 engine lives in `blast.rs`, logs name the whole item, the live blink is 4 ticks,
 the act half's digits are the `ACT` list only, prompt headings are upper-case and
-the nine-entry row needs 130 columns. Approved in chat ("ALL OF THEM", "Yeah
+the nine-entry row needs 140 columns. Approved in chat ("ALL OF THEM", "Yeah
 great!"); spec, plan and build ran on without check-ins.
 Designed with Jeffrey in the visual companion: terminal-cell mockups of the area
 cursor, two throw arcs, three blast looks, four ability looks and a fused throw.

@@ -293,7 +293,7 @@ fn combat_shot(name: &str, st: &AppState, map: &MapScreen) {
     let Ok(dir) = std::env::var("SHOT_DIR") else {
         return;
     };
-    write_svg(&dir, name, st, &draw_stack(st, &[map], (130, 30)), false);
+    write_svg(&dir, name, st, &draw_stack(st, &[map], (140, 40)), false);
 }
 
 /// Arms `digit` on the cursor and throws.
