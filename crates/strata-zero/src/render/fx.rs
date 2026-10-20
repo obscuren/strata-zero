@@ -164,6 +164,9 @@ impl Overlay for FxOverlay<'_> {
                 Fx::Tear => tear(inst, tick, origin, area, buf),
                 Fx::Number { tag } => number(inst, tag, elapsed, origin, area, buf),
                 Fx::Casing => casing(inst, elapsed, origin, area, buf),
+                // Drawn by a later task.
+                Fx::Throw | Fx::Bloom | Fx::Whiteout | Fx::Shock | Fx::Trail | Fx::Pulse { .. } => {
+                }
                 Fx::Mark { colour, .. } => mark(
                     inst,
                     Rgb(colour.0, colour.1, colour.2),

@@ -136,7 +136,10 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
             AbilityKind::Active(
                 Active::Scan { radius } | Active::Ping { radius } | Active::Trace { radius },
             ) => radius,
-            AbilityKind::Active(Active::Strike { .. }) | AbilityKind::Passive => 0,
+            AbilityKind::Active(
+                Active::Strike { .. } | Active::Boost { .. } | Active::Mark { .. },
+            )
+            | AbilityKind::Passive => 0,
         };
         let mut targets = match (&ability.kind, st.city.as_ref(), place.stratum()) {
             (AbilityKind::Active(Active::Trace { radius }), Some(city), Some(stratum)) => {

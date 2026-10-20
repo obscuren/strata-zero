@@ -458,6 +458,7 @@ pub fn strike(st: &mut AppState, id: &AbilityId, foe: usize) -> Result<(), Strin
         stun,
         skill,
         ap,
+        ..
     }) = ability.kind.clone()
     else {
         return Err(format!("{} is not a strike", ability.name));

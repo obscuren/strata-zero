@@ -1215,6 +1215,13 @@ impl Deck {
                     "strike: one target within {range} tiles · {damage} damage · stunned {stun} turn{} · {ap} AP",
                     if *stun == 1 { "" } else { "s" }
                 ),
+                Active::Boost { once } => format!(
+                    "boost: refills your turn{}",
+                    if *once { " · once a fight" } else { "" }
+                ),
+                Active::Mark { range, bonus, ap } => {
+                    format!("mark: one foe within {range} tiles · +{bonus}% · {ap} AP")
+                }
             };
             out.push(Line::from(Span::styled(effect, Style::default().fg(CYAN))));
         }

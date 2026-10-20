@@ -254,6 +254,7 @@ fn card(id: ItemId, name: String, desc: String) -> Item {
         perks: Vec::new(),
         grants: Vec::new(),
         on_use: None,
+        fx: Vec::new(),
         program: None,
         deck: None,
         sockets: Vec::new(),

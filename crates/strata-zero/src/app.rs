@@ -144,6 +144,13 @@ impl FxInstance {
             game::Fx::Chips | game::Fx::Spark | game::Fx::Tear => self.started + IMPACT_TICKS,
             game::Fx::Number { .. } => self.started + NUMBER_TICKS,
             game::Fx::Casing => self.started + CASING_TICKS,
+            // Drawn by a later task.
+            game::Fx::Throw
+            | game::Fx::Bloom
+            | game::Fx::Whiteout
+            | game::Fx::Shock
+            | game::Fx::Trail
+            | game::Fx::Pulse { .. } => self.started,
         }
     }
 }
