@@ -2002,4 +2002,102 @@ mod tests {
         c.abilities.push(mark);
         assert!(matches!(c.validate(), Err(ContentError::FxInvalid { .. })));
     }
+
+    #[test]
+    fn the_throwables_and_the_abilities_are_in_content() {
+        let c = Content::load().unwrap();
+        let frag = c.item(&ItemId::new("frag")).unwrap();
+        assert_eq!(
+            frag.throw().unwrap().2,
+            Blast {
+                radius: 2,
+                damage: 12,
+                stun: 0,
+                fuse: 0,
+                chrome: false
+            }
+        );
+        assert_eq!(
+            c.item(&ItemId::new("satchel"))
+                .unwrap()
+                .throw()
+                .unwrap()
+                .2
+                .fuse,
+            1
+        );
+        assert!(
+            c.item(&ItemId::new("emp_puck"))
+                .unwrap()
+                .throw()
+                .unwrap()
+                .2
+                .chrome
+        );
+        assert_eq!(
+            c.item(&ItemId::new("flashbang"))
+                .unwrap()
+                .fx
+                .iter()
+                .find(|f| f.is_blast()),
+            Some(&Fx::Whiteout)
+        );
+        assert!(matches!(
+            c.ability(&AbilityId::new("shove")).unwrap().kind,
+            AbilityKind::Active(Active::Strike {
+                push: 2,
+                range: 1,
+                stat: Stat::Body,
+                ..
+            })
+        ));
+        assert!(matches!(
+            c.ability(&AbilityId::new("jolt")).unwrap().kind,
+            AbilityKind::Active(Active::Strike {
+                chain: 1,
+                stat: Stat::Tech,
+                ..
+            })
+        ));
+        assert!(matches!(
+            c.ability(&AbilityId::new("redline")).unwrap().kind,
+            AbilityKind::Active(Active::Boost { once: true })
+        ));
+        assert!(matches!(
+            c.ability(&AbilityId::new("deadeye")).unwrap().kind,
+            AbilityKind::Active(Active::Mark {
+                range: 12,
+                bonus: 20,
+                ap: 1
+            })
+        ));
+    }
+
+    #[test]
+    fn the_talents_and_the_chrome_grant_the_abilities() {
+        let c = Content::load().unwrap();
+        let grants = |talent: &str, ability: &str| {
+            c.talent(&TalentId::new(talent))
+                .unwrap()
+                .effects
+                .first()
+                .unwrap()
+                .iter()
+                .any(|b| matches!(b, Boon::Grant(a) if a.0 == ability))
+        };
+        assert!(grants("iron_grip", "shove"));
+        assert!(grants("bullet_time", "redline"));
+        assert!(grants("solder_hand", "jolt"));
+        assert!(grants("cold_read", "deadeye"));
+        for (item, ability) in [
+            ("piston_arm", "shove"),
+            ("adrenal_pump", "redline"),
+            ("arc_hand", "jolt"),
+            ("target_lens", "deadeye"),
+        ] {
+            let i = c.item(&ItemId::new(item)).unwrap();
+            assert_eq!(i.kind, ItemKind::Cyberware, "{item}");
+            assert_eq!(i.grants, vec![AbilityId::new(ability)], "{item}");
+        }
+    }
 }

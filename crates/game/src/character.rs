@@ -401,6 +401,18 @@ impl Character {
         d.give(ItemId::new("stim_patch"), 3);
         // The other SMG, in the pack, to swap in and see its look.
         d.give_item(c, ItemId::new("whisper_smg"), 1);
+        // The throwables, and the chrome that wears the adrenal pump and target lens.
+        d.give(ItemId::new("frag"), 3);
+        d.give(ItemId::new("flashbang"), 2);
+        d.give(ItemId::new("emp_puck"), 2);
+        d.give(ItemId::new("satchel"), 1);
+        for (id, slot) in [("adrenal_pump", Slot::Torso), ("target_lens", Slot::Eyes)] {
+            let item = ItemId::new(id);
+            d.give_item(c, item.clone(), 1);
+            if let Some(old) = d.wear(slot, item, None) {
+                d.stow(old);
+            }
+        }
         d
     }
 
@@ -1797,5 +1809,20 @@ mod tests {
             .unwrap();
         cold.hardware.as_mut().unwrap().mods = vec![Mod::TraceCut(40)];
         assert_eq!(two.trace_cut(&c), 50);
+    }
+
+    #[test]
+    fn combat_runner_carries_the_kit() {
+        let c = Content::load().unwrap();
+        let d = Character::combat_runner(&c);
+        assert_eq!(d.count(&ItemId::new("frag")), 3);
+        assert_eq!(d.count(&ItemId::new("flashbang")), 2);
+        assert_eq!(d.count(&ItemId::new("emp_puck")), 2);
+        assert_eq!(d.count(&ItemId::new("satchel")), 1);
+        for a in ["static", "jolt", "shove", "redline", "deadeye"] {
+            assert!(d.has_ability(&c, &AbilityId::new(a)), "{a}");
+        }
+        assert_eq!(d.equipped(Slot::Torso), Some(&ItemId::new("adrenal_pump")));
+        assert_eq!(d.equipped(Slot::Eyes), Some(&ItemId::new("target_lens")));
     }
 }
