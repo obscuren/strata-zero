@@ -1194,7 +1194,7 @@ impl Deck {
         if a.cooldown > 0 {
             out.push(dim(format!("cooldown {}s", a.cooldown.div_ceil(30))));
         }
-        if let AbilityKind::Active(active) = a.kind {
+        if let AbilityKind::Active(active) = &a.kind {
             let effect = match active {
                 Active::Scan { radius } => {
                     format!("scan: paints the map within {radius} tiles")
@@ -1205,6 +1205,16 @@ impl Deck {
                 Active::Trace { radius } => {
                     format!("trace: arcs to every node within {radius} tiles")
                 }
+                Active::Strike {
+                    range,
+                    damage,
+                    stun,
+                    ap,
+                    ..
+                } => format!(
+                    "strike: one target within {range} tiles · {damage} damage · stunned {stun} turn{} · {ap} AP",
+                    if *stun == 1 { "" } else { "s" }
+                ),
             };
             out.push(Line::from(Span::styled(effect, Style::default().fg(CYAN))));
         }

@@ -1,0 +1,129 @@
+<h2>The burst: three looks</h2>
+<p class="subtitle">Terminal cells, the game's Combat Zone palette, ticks at the game's pace. The top frame is the aim before you press space; the three below loop one three-round burst each: round 1 hits, round 2 misses and sparks off the wall, round 3 hits. Click the one that feels right; we trim from there.</p>
+
+<style>
+.tv { background:#000; display:inline-block; padding:6px 8px; border:1px solid #333; border-radius:4px; }
+.tv pre { margin:0; font-family: "SF Mono", Menlo, "JetBrains Mono", monospace; font-size:17px; line-height:21px; letter-spacing:0; font-variant-ligatures:none; }
+.tv pre span { display:inline-block; width:10.2px; height:21px; text-align:center; white-space:pre; overflow:visible; }
+.gl { font-family:"SF Mono",Menlo,monospace; color:#ddd; background:#111; padding:1px 5px; border-radius:3px; }
+.b { font-weight:700; }
+.row { display:flex; gap:18px; flex-wrap:wrap; align-items:flex-start; margin:12px 0 22px; }
+.col h3 { margin:6px 0 4px; }
+.col p { margin:0 0 6px; max-width:520px; color:#aaa; font-size:13px; }
+.option.sel { outline:2px solid #4af; }
+</style>
+
+<div class="section">
+  <h3>Aiming</h3>
+  <p style="color:#aaa;font-size:13px;max-width:900px">Your turn, act half. <code>hjkl</code> moves the aim cursor over anything in sight; on the goon it reads the shot: name, weapon, distance, the hit chance per round. The footer's right side carries the same readout where the net lists ICE. <code>space</code> fires. (Side panel left out of the frame.)</p>
+  <div class="tv"><pre id="aim"></pre></div>
+</div>
+
+<div class="row">
+  <div class="col option" data-choice="a" onclick="pick(this)">
+    <h3>A · Tracer</h3>
+    <p>Each round is a bright head with a three-cell amber trail, three tiles a tick. Muzzle flash on your tile and the two in front. A hit flashes the goon red and chips fly; a miss runs on and sparks on the wall. Numbers lift off the goon.</p><p>Glyphs: round <span class="gl">───•</span> · flash <span class="gl">@✦·</span> then <span class="gl">@*</span> · hit <span class="gl">@</span> inverted red, chips <span class="gl">' · , `</span> · wall spark <span class="gl">✶</span> <span class="gl">×</span> <span class="gl">·</span> · number <span class="gl">-4</span> bold</p>
+    <div class="tv"><pre id="va"></pre></div>
+  </div>
+  <div class="col option" data-choice="b" onclick="pick(this)">
+    <h3>B · Streak</h3>
+    <p>A round is one streak drawn whole from muzzle to impact, white on the first tick, amber the next, ember the third, gone. Faster and harder; the burst reads as three flashes of a line.</p><p>Glyphs: streak <span class="gl">━━━━━━</span> · flash <span class="gl">@✦·</span> with <span class="gl">`</span> and <span class="gl">,</span> above and below · hit, chips, spark and number as A</p>
+    <div class="tv"><pre id="vb"></pre></div>
+  </div>
+  <div class="col option" data-choice="c" onclick="pick(this)">
+    <h3>C · Tracer + glitch</h3>
+    <p>A's tracer, but a hit tears the cells around the goon into the net's cyan/magenta glitch for a beat, and the number comes up as a tag on a red field.</p><p>Glyphs: as A, plus the net's glitch set <span class="gl">ｦ ｱ ﾂ ﾈ ╳ ≋</span> around the goon · tag <span class="gl"> -4 </span> white on red</p>
+    <div class="tv"><pre id="vc"></pre></div>
+  </div>
+</div>
+
+<script>
+(function(){
+const W=50,H=12, T=60;
+const ROAD=[28,22,20], SIDE=[54,42,38], WALL=[110,80,70], CYAN=[0,229,255], RED=[255,80,80], TEXT=[200,200,200], DIMC=[110,110,110];
+const ME={x:6,y:6}, GOON={x:22,y:6}, WALLX=44;
+const rgb=c=>`rgb(${c[0]},${c[1]},${c[2]})`;
+const scale=(c,f)=>c.map(v=>Math.min(255,Math.round(v*f)));
+const mix=(a,b,t)=>a.map((v,i)=>Math.round(v+(b[i]-v)*t));
+function grid(){const g=[];for(let y=0;y<H;y++){const r=[];for(let x=0;x<W;x++)r.push({ch:' ',fg:TEXT,bg:ROAD,b:false});g.push(r);}return g;}
+function scene(){
+  const g=grid();
+  for(let x=0;x<W;x++){ g[1][x]={ch:'░',fg:SIDE,bg:scale(ROAD,1.1),b:false}; g[10][x]={ch:'░',fg:SIDE,bg:scale(ROAD,1.1),b:false}; }
+  for(let x=0;x<W;x++){ g[0][x]={ch:'─',fg:WALL,bg:[0,0,0],b:false}; g[11][x]={ch:'─',fg:WALL,bg:[0,0,0],b:false}; }
+  for(let y=0;y<H;y++){ g[y][WALLX]={ch:'│',fg:WALL,bg:[0,0,0],b:false}; for(let x=WALLX+1;x<W;x++) g[y][x]={ch:' ',fg:WALL,bg:[0,0,0],b:false}; }
+  g[0][WALLX]={ch:'┬',fg:WALL,bg:[0,0,0]}; g[11][WALLX]={ch:'┴',fg:WALL,bg:[0,0,0]};
+  // lane marks
+  for(let x=2;x<WALLX;x+=6){ g[6][x]={ch:'·',fg:scale(ROAD,1.8),bg:ROAD,b:false}; }
+  return g;
+}
+function put(g,x,y,ch,fg,bg,b){ if(y<0||y>=H||x<0||x>=W)return; const c=g[y][x]; g[y][x]={ch:ch===null?c.ch:ch,fg:fg||c.fg,bg:bg||c.bg,b:!!b}; }
+function actors(g,aim){
+  put(g,ME.x,ME.y,'@',CYAN,null,true);
+  put(g,GOON.x,GOON.y,'@',RED,null,true);
+  if(aim){ put(g,GOON.x,GOON.y,'@',[0,0,0],CYAN,true); const s=' goon · pistol · 15 tiles · 62% '; for(let i=0;i<s.length;i++) put(g,GOON.x-6+i,4,s[i],CYAN,[0,20,26],i>0&&i<5); }
+}
+function render(el,g,extra){
+  let out='';
+  for(let y=0;y<H;y++){ for(let x=0;x<W;x++){ const c=g[y][x]; out+=`<span${c.b?' class="b"':''} style="color:${rgb(c.fg)};background:${rgb(c.bg)}">${c.ch===' '?'&nbsp;':c.ch}</span>`; } out+='\n'; }
+  if(extra) out+=extra;
+  el.innerHTML=out;
+}
+// ---- the footer under the aim frame
+function footer(){
+  const W2=100; const line=(s,style)=>{ let o=''; for(let i=0;i<W2;i++){ const ch=s[i]||' '; const st=style(i,ch); o+=`<span style="color:${rgb(st.fg)};background:#000;${st.b?'font-weight:700':''}">${ch===' '?'&nbsp;':ch}</span>`; } return o+'\n'; };
+  const rule=line('━'.repeat(W2),()=>({fg:[90,90,90]}));
+  const r1s=' on foot · Combat Zone'; const r1=r1s.padEnd(W2-13)+'ENGAGED  [?]';
+  const l1=line(r1,(i,ch)=>{ if(i>=W2-13&&i<W2-6) return {fg:[255,0,200],b:true}; if(i==W2-2) return {fg:CYAN}; if(i>=W2-3) return {fg:[90,90,90]}; return {fg:TEXT}; });
+  const l2=line('',()=>({fg:TEXT}));
+  const r3s=' TURN 1  YOU › goon'; const right3='▣ goon · pistol · 15 tiles · 62%'; const r3=r3s.padEnd(W2-right3.length-1)+right3;
+  const l3=line(r3,(i,ch)=>{ if(i<r3s.length) return {fg:CYAN,b:true}; if(i>=W2-right3.length-1) return {fg:RED}; return {fg:TEXT}; });
+  const r4s=' ABILITIES  [1] netscan ●    [2] ping ●    [3] ──    [4] ──    [5] ──'; const right4='MOVE ▰▰▰▰ 4/4    AP ●● 2/2'; const r4=r4s.padEnd(W2-right4.length-1)+right4;
+  const l4=line(r4,(i,ch)=>{ if(i<11) return {fg:DIMC}; if(i>=W2-right4.length-1) return {fg:CYAN,b:true}; if(ch=='●') return {fg:CYAN}; if(ch=='─') return {fg:[70,70,70]}; return {fg:TEXT}; });
+  return rule+l1+l2+l3+l4;
+}
+// aim frame: static with a blinking cursor
+const aimEl=document.getElementById('aim');
+const FIXED=((location.search+location.hash).match(/[?&#]t=(\d+)/)||[])[1];  let at=0; const aimStep=()=>{ const g=scene(); actors(g, Math.floor(at/8)%2==0); render(aimEl,g,footer()); at++; }; if(FIXED){at=0;aimStep();} else setInterval(aimStep,T);
+
+// ---- bursts
+const FIRE=[6,10,14]; const HIT=[true,false,true]; const DMG=[4,0,3];
+const SPEED=3;
+const KATA=['ｦ','ｱ','ﾂ','ﾈ','╳','≋'];
+function hash(a,b){ let h=(a*374761393+b*668265263)>>>0; h=(h^(h>>13))*1274126177>>>0; return (h^(h>>16))>>>0; }
+function burst(v,t){
+  const g=scene(); actors(g,false);
+  const dist=GOON.x-ME.x-1;
+  for(let k=0;k<3;k++){
+    const f=FIRE[k]; if(t<f) continue; const e=t-f;
+    const endx=HIT[k]?GOON.x:WALLX;
+    // muzzle flash
+    if(e<2){ put(g,ME.x,ME.y,'@',[0,0,0],e==0?[255,240,180]:[255,170,40],true); put(g,ME.x+1,ME.y,e==0?'✦':'*',[255,230,120],null,true); if(e==0) put(g,ME.x+2,ME.y,'·',[255,200,90],null,true); if(v=='b'&&e==0){put(g,ME.x+1,ME.y-1,'`',[255,200,90]);put(g,ME.x+1,ME.y+1,',',[255,200,90]);} }
+    let arrive;
+    if(v=='b'){
+      arrive=f+1;
+      if(e<3){ const cols=[[240,240,240],[255,170,40],[120,60,10]][e]; for(let x=ME.x+1;x<endx;x++) put(g,x,ME.y,'━',cols,null,e==0); }
+    } else {
+      arrive=f+Math.ceil((endx-ME.x-1)/SPEED);
+      const head=ME.x+1+SPEED*e;
+      if(head<endx){ put(g,head,ME.y,'•',[255,240,200],null,true); const tr=[[255,170,40],[200,110,20],[110,55,10]]; for(let i=1;i<=3;i++){ const x=head-i; if(x>ME.x) put(g,x,ME.y,'─',tr[i-1],null,i==1); } }
+    }
+    const a=t-arrive; if(a<0) continue;
+    if(HIT[k]){
+      if(a<2) put(g,GOON.x,GOON.y,'@',[255,255,255],a==0?[255,40,40]:[160,20,20],true);
+      if(a<3){ const chips=[[1,-1,"'"],[1,0,'·'],[1,1,','],[2,-1,'·'],[2,1,'`'],[0,-1,'·']]; chips.forEach(([dx,dy,ch],i)=>{ if(i<=a*2+1) put(g,GOON.x+dx+Math.floor(a/2),GOON.y+dy,ch,a==0?[255,120,120]:[180,60,60]); }); }
+      if(v=='c'&&a<3){ for(let dy=-1;dy<=1;dy++)for(let dx=-3;dx<=3;dx++){ if(dx==0&&dy==0)continue; const h=hash(dx+7+a*31,dy+3+k*17); if(h%3==0){ put(g,GOON.x+dx,GOON.y+dy,KATA[h%6],h%2?CYAN:[255,0,200],null,false);} } }
+      const life=14; if(a<life){ const rise=Math.floor(a/4); const y=GOON.y-1-rise; const s='-'+DMG[k]; const fade=a>9;
+        if(v=='c'){ const tag=' '+s+' '; for(let i=0;i<tag.length;i++) put(g,GOON.x-1+i+k,y,tag[i],fade?[200,120,120]:[255,255,255],fade?[80,10,10]:[170,20,20],true); }
+        else { for(let i=0;i<s.length;i++) put(g,GOON.x+i+k,y,s[i],fade?[170,60,60]:[255,235,235],null,true); } }
+    } else {
+      if(a<3){ put(g,WALLX,ME.y,['✶','×','·'][a],[[255,240,160],[255,170,40],[120,60,10]][a],null,a==0); if(a==0){put(g,WALLX-1,ME.y-1,'`',[255,220,120]);put(g,WALLX-1,ME.y+1,',',[255,220,120]);} if(a==1){put(g,WALLX-2,ME.y+1,'·',[200,110,20]);} }
+    }
+  }
+  return g;
+}
+const LOOP=46;
+const els={a:document.getElementById('va'),b:document.getElementById('vb'),c:document.getElementById('vc')};
+let t=0; const step=()=>{ for(const v of ['a','b','c']) render(els[v], burst(v,t)); t=(t+1)%LOOP; }; if(FIXED){t=+FIXED;step();} else setInterval(step,T);
+window.pick=function(el){ document.querySelectorAll('.option').forEach(o=>o.classList.remove('sel')); el.classList.add('sel'); if(window.toggleSelect) toggleSelect(el); };
+})();
+</script>

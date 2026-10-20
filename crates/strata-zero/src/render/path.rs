@@ -90,6 +90,80 @@ impl Overlay for PathOverlay<'_> {
     }
 }
 
+/// The fire cursor on your act half: the line of fire in dim dots, the foe under
+/// the cursor inverted (else the look cursor's block), the readout over it.
+pub struct AimOverlay<'a> {
+    /// The tiles between you and the target, both excluded.
+    pub line: &'a [Pos],
+    pub target: Pos,
+    pub on_foe: bool,
+    /// ` goon · Scrap nine · 9 tiles · 80% `, drawn two rows above the target.
+    pub readout: Option<String>,
+}
+
+/// The line of fire's dots.
+pub const FIRE_LINE: Color = Color::Rgb(90, 90, 90);
+/// Under the readout.
+pub const READOUT_BG: Color = Color::Rgb(0, 20, 26);
+
+impl Overlay for AimOverlay<'_> {
+    fn draw(
+        &self,
+        _map: &MapRef,
+        origin: Pos,
+        area: Rect,
+        _tick: u64,
+        buf: &mut Buffer,
+        _style: &StylePack,
+    ) {
+        for p in self.line {
+            if let Some((sx, sy)) = tile_to_screen(area, origin, *p) {
+                buf[(sx, sy)].set_char('·').set_fg(FIRE_LINE);
+            }
+        }
+        if let Some((sx, sy)) = tile_to_screen(area, origin, self.target) {
+            let cell = &mut buf[(sx, sy)];
+            if self.on_foe {
+                cell.set_fg(Color::Rgb(0, 0, 0)).set_bg(CYAN);
+                cell.modifier.insert(Modifier::BOLD);
+            } else {
+                cell.set_bg(crate::look::LOOK_BG.to_color());
+            }
+        }
+        let Some(text) = self.readout.as_ref() else {
+            return;
+        };
+        let Some((tx, ty)) = tile_to_screen(area, origin, self.target) else {
+            return;
+        };
+        let width = text.chars().count() as i32;
+        if area.width < width as u16 || ty < area.y + 2 {
+            return;
+        }
+        let x0 = (tx as i32 - width / 2)
+            .max(area.x as i32)
+            .min(area.right() as i32 - width);
+        let y = ty - 2;
+        // The name (the first word after the margin) in bold.
+        let name_end = text
+            .trim_start()
+            .split('·')
+            .next()
+            .map_or(0, |n| n.len() + 1);
+        for (i, ch) in text.chars().enumerate() {
+            let x = (x0 + i as i32) as u16;
+            let cell = &mut buf[(x, y)];
+            cell.set_char(ch).set_fg(CYAN).set_bg(READOUT_BG);
+            cell.modifier.remove(Modifier::DIM);
+            if i > 0 && i < name_end {
+                cell.modifier.insert(Modifier::BOLD);
+            } else {
+                cell.modifier.remove(Modifier::BOLD);
+            }
+        }
+    }
+}
+
 /// Picking a target for a program: every candidate marked, the picked one lit.
 pub struct TargetOverlay<'a> {
     pub candidates: &'a [Pos],

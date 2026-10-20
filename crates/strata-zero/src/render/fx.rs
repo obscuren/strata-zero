@@ -6,6 +6,7 @@ use crate::render::map::MapRef;
 use crate::render::style::StylePack;
 use crate::render::viewport::{Overlay, tile_to_screen};
 use crate::render::{Rgb, Visibility};
+use citygen::pathing::bresenham;
 use citygen::rng::hash64;
 use citygen::{Grid, Pos};
 use game::Fx;
@@ -14,8 +15,27 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
 use std::collections::HashSet;
 
-/// Glyphs that ride a wavefront.
+/// Glyphs that ride a wavefront, and that a tear scatters.
 const SPARKS: &[char] = &['ｦ', 'ｱ', 'ﾂ', 'ﾈ', '╳', '≋'];
+/// Ticks a muzzle flash lights the muzzle.
+pub const FLASH_TICKS: u64 = 2;
+/// Ticks a streak stays: white, the colour, ember.
+pub const STREAK_TICKS: u64 = 3;
+/// Ticks chips, a spark or a tear last at the impact.
+pub const IMPACT_TICKS: u64 = 3;
+/// Ticks a damage number stays up.
+pub const NUMBER_TICKS: u64 = 14;
+/// Ticks a number takes to rise one row.
+pub const NUMBER_RISE: u64 = 4;
+/// Ticks a spent casing lies on the ground before it is gone.
+pub const CASING_TICKS: u64 = 60;
+
+/// Ticks a tracer takes from the muzzle to its impact: `speed` tiles a tick, at
+/// least one tick.
+pub fn tracer_ticks(origin: Pos, target: Pos, speed: u8) -> u64 {
+    let dist = origin.chebyshev(target).max(1) as u64;
+    dist.div_ceil(speed.max(1) as u64).max(1)
+}
 /// Cells of ripple behind the front, front included.
 pub const BAND: f32 = 9.0;
 /// Cells from one ripple crest to the next.
@@ -24,6 +44,8 @@ const WAVELENGTH: f32 = 3.0;
 const DEEP: Rgb = Rgb(60, 110, 255);
 const KICK_CYAN: Color = Color::Rgb(0, 255, 230);
 const KICK_MAGENTA: Color = Color::Rgb(255, 0, 200);
+/// The chrome's cyan, for a tear's glyphs.
+const TEAR_CYAN: Color = Color::Rgb(0, 229, 255);
 const BLACK: Color = Color::Rgb(0, 0, 0);
 
 /// Distance from `origin` in cell widths, a row counting as two: round on screen.
@@ -63,10 +85,15 @@ impl Overlay for FxOverlay<'_> {
         buf: &mut Buffer,
         _style: &StylePack,
     ) {
-        for inst in self
+        // Flashes draw last, over the first cells of the round they light.
+        let is_flash = |i: &&FxInstance| matches!(i.fx, Fx::Flash { .. });
+        let ordered = self
             .fx
             .iter()
-            .filter(|i| i.place == map.place() && i.started <= tick && tick < i.until())
+            .filter(|i| !is_flash(i))
+            .chain(self.fx.iter().filter(is_flash));
+        for inst in
+            ordered.filter(|i| i.place == map.place() && i.started <= tick && tick < i.until())
         {
             let elapsed = tick - inst.started;
             match inst.fx {
@@ -114,6 +141,29 @@ impl Overlay for FxOverlay<'_> {
                     tick,
                     buf,
                 ),
+                Fx::Tracer { colour, speed } => tracer(
+                    inst,
+                    Rgb(colour.0, colour.1, colour.2),
+                    speed,
+                    elapsed,
+                    origin,
+                    area,
+                    buf,
+                ),
+                Fx::Streak { colour } => streak(
+                    inst,
+                    Rgb(colour.0, colour.1, colour.2),
+                    elapsed,
+                    origin,
+                    area,
+                    buf,
+                ),
+                Fx::Flash { big } => flash(inst, big, elapsed, origin, area, buf),
+                Fx::Chips => chips(inst, elapsed, origin, area, buf),
+                Fx::Spark => spark(inst, elapsed, origin, area, buf),
+                Fx::Tear => tear(inst, tick, origin, area, buf),
+                Fx::Number { tag } => number(inst, tag, elapsed, origin, area, buf),
+                Fx::Casing => casing(inst, elapsed, origin, area, buf),
                 Fx::Mark { colour, .. } => mark(
                     inst,
                     Rgb(colour.0, colour.1, colour.2),
@@ -300,6 +350,433 @@ fn bolt(
     }
 }
 
+/// The glyph of a round's path cell by the step into it: a run along an axis, or
+/// a diagonal; `heavy` for a streak.
+pub fn line_glyph(came: (i32, i32), heavy: bool) -> char {
+    match (came.0 != 0, came.1 != 0) {
+        (true, false) => {
+            if heavy {
+                '━'
+            } else {
+                '─'
+            }
+        }
+        (false, _) => {
+            if heavy {
+                '┃'
+            } else {
+                '│'
+            }
+        }
+        (true, true) => {
+            if came.0 * came.1 > 0 {
+                '╲'
+            } else {
+                '╱'
+            }
+        }
+    }
+}
+
+/// The shot's line from the firer to its impact, both included; empty without a
+/// target.
+fn shot_line(inst: &FxInstance) -> Vec<Pos> {
+    match inst.targets.first() {
+        Some(t) => bresenham(inst.origin, *t),
+        None => Vec::new(),
+    }
+}
+
+/// Paints one tile's cell on screen, if it is on screen.
+fn paint(
+    origin: Pos,
+    area: Rect,
+    buf: &mut Buffer,
+    p: Pos,
+    f: impl FnOnce(&mut ratatui::buffer::Cell),
+) {
+    if let Some((sx, sy)) = tile_to_screen(area, origin, p) {
+        let cell = &mut buf[(sx, sy)];
+        cell.modifier.remove(Modifier::DIM);
+        f(cell);
+    }
+}
+
+const WHITE: Rgb = Rgb(255, 255, 255);
+/// The warm light a muzzle throws.
+const MUZZLE_LIGHT: Rgb = Rgb(255, 170, 40);
+/// Cell widths a muzzle flash lights on its first tick; half that on its second.
+const FLASH_GLOW: f32 = 3.5;
+/// Cell widths a tracer's head lights as it flies.
+const TRACER_GLOW: f32 = 2.2;
+
+/// Warms the background of every cell within `reach` cell widths of `centre` (a
+/// row counting as two, so the pool is round), `strength` at the centre falling to
+/// nothing at the edge; glyphs are kept.
+fn glow(origin: Pos, area: Rect, buf: &mut Buffer, centre: Pos, reach: f32, strength: f32) {
+    let r = reach.ceil() as i32;
+    for dy in -r..=r {
+        for dx in -r..=r {
+            let p = centre.offset(dx, dy);
+            let d = screen_dist(p, centre);
+            if d >= reach {
+                continue;
+            }
+            let t = strength * (1.0 - d / reach);
+            paint(origin, area, buf, p, |c| {
+                let bg = match c.bg {
+                    Color::Rgb(r, g, b) => Rgb(r, g, b),
+                    _ => Rgb(0, 0, 0),
+                };
+                c.set_bg(bg.mix(MUZZLE_LIGHT, t).to_color());
+            });
+        }
+    }
+}
+
+/// The muzzle: the firer's cell lit, a spark the next cell on, a dot after it; a
+/// big flash spills above and below the spark on its first tick.
+fn flash(inst: &FxInstance, big: bool, elapsed: u64, origin: Pos, area: Rect, buf: &mut Buffer) {
+    let line = shot_line(inst);
+    if line.len() < 2 || elapsed >= FLASH_TICKS {
+        return;
+    }
+    let first = elapsed == 0;
+    let muzzle = if first {
+        Rgb(255, 240, 180)
+    } else {
+        Rgb(255, 170, 40)
+    };
+    // The light the shot throws on the street around it, gone with the flash.
+    if first {
+        glow(origin, area, buf, line[0], FLASH_GLOW, 0.4);
+    } else {
+        glow(origin, area, buf, line[0], FLASH_GLOW / 2.0, 0.3);
+    }
+    paint(origin, area, buf, line[0], |c| {
+        c.set_fg(BLACK)
+            .set_bg(muzzle.to_color())
+            .modifier
+            .insert(Modifier::BOLD);
+    });
+    let spark = line[1];
+    paint(origin, area, buf, spark, |c| {
+        c.set_char(if first { '✦' } else { '*' })
+            .set_fg(Rgb(255, 230, 120).to_color())
+            .modifier
+            .insert(Modifier::BOLD);
+    });
+    if !first {
+        return;
+    }
+    if let Some(dot) = line.get(2) {
+        paint(origin, area, buf, *dot, |c| {
+            c.set_char('·')
+                .set_fg(Rgb(255, 200, 90).to_color())
+                .modifier
+                .insert(Modifier::BOLD);
+        });
+    }
+    if big {
+        let amber = Rgb(255, 200, 90).to_color();
+        paint(origin, area, buf, spark.offset(0, -1), |c| {
+            c.set_char('`').set_fg(amber);
+        });
+        paint(origin, area, buf, spark.offset(0, 1), |c| {
+            c.set_char(',').set_fg(amber);
+        });
+    }
+}
+
+/// A round in flight: a bright head `speed` cells further every tick, three
+/// fading cells of trail behind it, never behind the firer.
+#[allow(clippy::too_many_arguments)]
+fn tracer(
+    inst: &FxInstance,
+    colour: Rgb,
+    speed: u8,
+    elapsed: u64,
+    origin: Pos,
+    area: Rect,
+    buf: &mut Buffer,
+) {
+    let line = shot_line(inst);
+    let head = 1 + speed.max(1) as usize * elapsed as usize;
+    if head >= line.len() {
+        return;
+    }
+    // The content colour leads the trail; the two cells behind it are the fixed embers.
+    // The head carries a little light with it.
+    glow(origin, area, buf, line[head], TRACER_GLOW, 0.3);
+    let trail = [colour, Rgb(200, 110, 20), Rgb(110, 55, 10)];
+    for (i, tint) in trail.iter().enumerate() {
+        let Some(k) = head.checked_sub(i + 1) else {
+            break;
+        };
+        if k == 0 {
+            break;
+        }
+        let came = (line[k].x - line[k - 1].x, line[k].y - line[k - 1].y);
+        paint(origin, area, buf, line[k], |c| {
+            c.set_char(line_glyph(came, false)).set_fg(tint.to_color());
+            if i == 0 {
+                c.modifier.insert(Modifier::BOLD);
+            }
+        });
+    }
+    paint(origin, area, buf, line[head], |c| {
+        c.set_char('•')
+            .set_fg(Rgb(255, 240, 200).to_color())
+            .modifier
+            .insert(Modifier::BOLD);
+    });
+}
+
+/// A round drawn whole: white, then its colour, then ember, from the cell past the
+/// firer to the one before the impact.
+fn streak(inst: &FxInstance, colour: Rgb, elapsed: u64, origin: Pos, area: Rect, buf: &mut Buffer) {
+    let line = shot_line(inst);
+    if elapsed >= STREAK_TICKS || line.len() < 3 {
+        return;
+    }
+    let tint = match elapsed {
+        0 => Rgb(240, 240, 240),
+        1 => colour,
+        _ => Rgb(120, 60, 10),
+    };
+    for k in 1..line.len() - 1 {
+        let came = (line[k].x - line[k - 1].x, line[k].y - line[k - 1].y);
+        paint(origin, area, buf, line[k], |c| {
+            c.set_char(line_glyph(came, true)).set_fg(tint.to_color());
+            if elapsed == 0 {
+                c.modifier.insert(Modifier::BOLD);
+            }
+        });
+    }
+}
+
+/// Which way the chips and sparks fly: away from the firer along x (right on a tie).
+fn away(inst: &FxInstance, target: Pos) -> i32 {
+    if inst.origin.x > target.x { -1 } else { 1 }
+}
+
+/// A hit: the target lit red for two ticks, chips flying off it for three.
+fn chips(inst: &FxInstance, elapsed: u64, origin: Pos, area: Rect, buf: &mut Buffer) {
+    let Some(target) = inst.targets.first().copied() else {
+        return;
+    };
+    if elapsed >= IMPACT_TICKS {
+        return;
+    }
+    if elapsed < 2 {
+        let bg = if elapsed == 0 {
+            Rgb(255, 40, 40)
+        } else {
+            Rgb(160, 20, 20)
+        };
+        paint(origin, area, buf, target, |c| {
+            c.set_fg(WHITE.to_color())
+                .set_bg(bg.to_color())
+                .modifier
+                .insert(Modifier::BOLD);
+        });
+    }
+    const CHIPS: [(i32, i32, char); 6] = [
+        (1, -1, '\''),
+        (1, 0, '·'),
+        (1, 1, ','),
+        (2, -1, '·'),
+        (2, 1, '`'),
+        (0, -1, '·'),
+    ];
+    let dir = away(inst, target);
+    let drift = (elapsed / 2) as i32;
+    let tint = if elapsed == 0 {
+        Rgb(255, 120, 120)
+    } else {
+        Rgb(180, 60, 60)
+    };
+    for (i, (dx, dy, glyph)) in CHIPS.iter().enumerate() {
+        if i as u64 > 2 * elapsed + 1 {
+            break;
+        }
+        let p = target.offset((dx + drift) * dir, *dy);
+        paint(origin, area, buf, p, |c| {
+            c.set_char(*glyph).set_fg(tint.to_color());
+        });
+    }
+}
+
+/// A miss: a spark where the round stopped, flecks back toward the firer.
+fn spark(inst: &FxInstance, elapsed: u64, origin: Pos, area: Rect, buf: &mut Buffer) {
+    let Some(target) = inst.targets.first().copied() else {
+        return;
+    };
+    if elapsed >= IMPACT_TICKS {
+        return;
+    }
+    let back = -away(inst, target);
+    // A tinted shot sparks in its own colour; a gun's in hot amber.
+    let (glyph, tint, fleck, ember) = match (elapsed, inst.tint) {
+        (0, None) => (
+            '✶',
+            Rgb(255, 240, 160),
+            Rgb(255, 220, 120),
+            Rgb(200, 110, 20),
+        ),
+        (1, None) => (
+            '×',
+            Rgb(255, 170, 40),
+            Rgb(255, 220, 120),
+            Rgb(200, 110, 20),
+        ),
+        (_, None) => ('·', Rgb(120, 60, 10), Rgb(255, 220, 120), Rgb(200, 110, 20)),
+        (e, Some(t)) => {
+            let t = Rgb(t.0, t.1, t.2);
+            let (glyph, main) = match e {
+                0 => ('✶', t.mix(WHITE, 0.4)),
+                1 => ('×', t),
+                _ => ('·', t.scale(0.45)),
+            };
+            (glyph, main, t.scale(0.85), t.scale(0.6))
+        }
+    };
+    paint(origin, area, buf, target, |c| {
+        c.set_char(glyph).set_fg(tint.to_color());
+        if elapsed == 0 {
+            c.modifier.insert(Modifier::BOLD);
+        }
+    });
+    match elapsed {
+        0 => {
+            let fleck = fleck.to_color();
+            paint(origin, area, buf, target.offset(back, -1), |c| {
+                c.set_char('`').set_fg(fleck);
+            });
+            paint(origin, area, buf, target.offset(back, 1), |c| {
+                c.set_char(',').set_fg(fleck);
+            });
+        }
+        1 => paint(origin, area, buf, target.offset(2 * back, 1), |c| {
+            c.set_char('·').set_fg(ember.to_color());
+        }),
+        _ => {}
+    }
+}
+
+/// A hit's tear: the cells around the target scrambled into the net's glitch set.
+fn tear(inst: &FxInstance, tick: u64, origin: Pos, area: Rect, buf: &mut Buffer) {
+    let Some(target) = inst.targets.first().copied() else {
+        return;
+    };
+    for dy in -1..=1 {
+        for dx in -3..=3 {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            let h = hash64(
+                hash64((dx + 7) as u64, (dy + 3) as u64),
+                hash64(tick, inst.started),
+            );
+            if !h.is_multiple_of(3) {
+                continue;
+            }
+            let glyph = SPARKS[(h % SPARKS.len() as u64) as usize];
+            // The net's cyan and magenta; a tinted shot tears in its colour and the
+            // deep blue behind it.
+            let tint = match (inst.tint, h.is_multiple_of(2)) {
+                (None, true) => KICK_MAGENTA,
+                (None, false) => TEAR_CYAN,
+                (Some(t), true) => Rgb(t.0, t.1, t.2).mix(DEEP, 0.6).to_color(),
+                (Some(t), false) => Rgb(t.0, t.1, t.2).to_color(),
+            };
+            paint(origin, area, buf, target.offset(dx, dy), |c| {
+                c.set_char(glyph).set_fg(tint);
+            });
+        }
+    }
+}
+
+/// The damage lifting off the target: a row higher every `NUMBER_RISE` ticks,
+/// fading after ten; a tag sits on a red field.
+fn number(inst: &FxInstance, tag: bool, elapsed: u64, origin: Pos, area: Rect, buf: &mut Buffer) {
+    let Some(target) = inst.targets.first().copied() else {
+        return;
+    };
+    if elapsed >= NUMBER_TICKS {
+        return;
+    }
+    let y = target.y - 1 - (elapsed / NUMBER_RISE) as i32;
+    let fade = elapsed >= 10;
+    let (fg, bg, text, x0) = if tag {
+        // A red field for a gun's tag; a tinted shot's tag sits on its own colour.
+        let (fg, bg) = match (inst.tint, fade) {
+            (None, false) => (WHITE, Rgb(170, 20, 20)),
+            (None, true) => (Rgb(200, 120, 120), Rgb(80, 10, 10)),
+            (Some(t), false) => (WHITE, Rgb(t.0, t.1, t.2).scale(0.45)),
+            (Some(t), true) => (Rgb(t.0, t.1, t.2).scale(0.8), Rgb(t.0, t.1, t.2).scale(0.2)),
+        };
+        (fg, Some(bg), format!(" {} ", inst.label), target.x - 1)
+    } else {
+        let fg = match (inst.tint, fade) {
+            (Some(t), false) => Rgb(t.0, t.1, t.2),
+            (Some(t), true) => Rgb(t.0, t.1, t.2).scale(0.6),
+            (None, false) => Rgb(255, 235, 235),
+            (None, true) => Rgb(170, 60, 60),
+        };
+        (fg, None, inst.label.clone(), target.x)
+    };
+    for (i, ch) in text.chars().enumerate() {
+        paint(origin, area, buf, Pos::new(x0 + i as i32, y), |c| {
+            c.set_char(ch).set_fg(fg.to_color());
+            if let Some(bg) = bg {
+                c.set_bg(bg.to_color());
+            }
+            c.modifier.insert(Modifier::BOLD);
+        });
+    }
+}
+
+/// A spent casing: out of the muzzle to the shooter's side on the first tick, a
+/// hop of a cell or two, then lying there as brass that dims to the ground's tone.
+fn casing(inst: &FxInstance, elapsed: u64, origin: Pos, area: Rect, buf: &mut Buffer) {
+    let Some(target) = inst.targets.first().copied() else {
+        return;
+    };
+    if elapsed >= CASING_TICKS {
+        return;
+    }
+    let from = inst.origin;
+    let dir = ((target.x - from.x).signum(), (target.y - from.y).signum());
+    let (dir, side) = if dir == (0, 0) {
+        ((1, 0), (0, -1))
+    } else {
+        (dir, (dir.1, -dir.0))
+    };
+    let h = hash64(inst.started, hash64(from.x as u64, from.y as u64));
+    let hop = 1 + (h % 2) as i32;
+    let back = ((h >> 1) % 2) as i32;
+    let out = from.offset(side.0, side.1);
+    let landing = from.offset(side.0 * hop - dir.0 * back, side.1 * hop - dir.1 * back);
+    let brass = Rgb(240, 200, 90);
+    match elapsed {
+        0 => paint(origin, area, buf, out, |c| {
+            c.set_char('\'').set_fg(brass.to_color());
+        }),
+        1 => paint(origin, area, buf, landing, |c| {
+            c.set_char('\'').set_fg(brass.to_color());
+        }),
+        _ => {
+            // Lying there: brass at first, the ground's tone by the end.
+            let t = (elapsed - 2) as f32 / (CASING_TICKS - 2) as f32;
+            let tint = Rgb(200, 160, 60).mix(Rgb(70, 60, 40), t);
+            paint(origin, area, buf, landing, |c| {
+                c.set_char(',').set_fg(tint.to_color());
+            });
+        }
+    }
+}
+
 /// A pulsing mark on every target tile, whatever its visibility.
 fn mark(inst: &FxInstance, colour: Rgb, origin: Pos, area: Rect, tick: u64, buf: &mut Buffer) {
     let glow = colour.scale(0.55 + 0.45 * pulse(tick, 20)).to_color();
@@ -423,6 +900,9 @@ mod tests {
             started: 100,
             revealed,
             targets: Vec::new(),
+            label: String::new(),
+            hit: false,
+            tint: None,
         }
     }
 
@@ -433,6 +913,439 @@ mod tests {
     }
 
     const BOLT: (u8, u8, u8) = (255, 240, 150);
+
+    /// A shot's shape from `origin` to `target`, started at tick 100.
+    fn shot(fx: Fx, origin: Pos, target: Pos, label: &str) -> FxInstance {
+        let mut i = aimed(fx, origin, vec![target]);
+        i.label = label.to_string();
+        i.hit = true;
+        i
+    }
+
+    /// The street with one instance drawn at `tick`, and the plain street beside it.
+    fn drawn(c: &City, s: &StylePack, inst: &FxInstance, tick: u64) -> (Buffer, Buffer) {
+        let overlay = FxOverlay {
+            fx: std::slice::from_ref(inst),
+            vis: None,
+        };
+        let plain = render(c, s, StratumKind::Street, tick, None, &[], (120, 60));
+        let with = render(
+            c,
+            s,
+            StratumKind::Street,
+            tick,
+            None,
+            &[&overlay],
+            (120, 60),
+        );
+        (with, plain)
+    }
+
+    fn at(buf: &Buffer, x: i32, y: i32) -> (String, Color, Color, bool) {
+        let c = &buf[(x as u16, y as u16)];
+        (
+            c.symbol().to_string(),
+            c.fg,
+            c.bg,
+            c.modifier.contains(Modifier::BOLD),
+        )
+    }
+
+    fn rgb(c: (u8, u8, u8)) -> Color {
+        Color::Rgb(c.0, c.1, c.2)
+    }
+
+    const FIRER: Pos = Pos::new(40, 30);
+    const TARGET: Pos = Pos::new(52, 30);
+
+    #[test]
+    fn flash_lights_the_muzzle_two_ticks() {
+        let (c, s) = (city(), StylePack::load().unwrap());
+        let inst = shot(Fx::Flash { big: false }, FIRER, TARGET, "");
+        let (b, plain) = drawn(&c, &s, &inst, 100);
+        let (glyph, fg, bg, bold) = at(&b, 40, 30);
+        assert_eq!(glyph, at(&plain, 40, 30).0, "the firer keeps its glyph");
+        assert_eq!((fg, bg, bold), (rgb((0, 0, 0)), rgb((255, 240, 180)), true));
+        assert_eq!(at(&b, 41, 30).0, "✦");
+        assert_eq!(at(&b, 41, 30).1, rgb((255, 230, 120)));
+        assert_eq!(at(&b, 42, 30).0, "·");
+        assert_eq!(at(&b, 42, 30).1, rgb((255, 200, 90)));
+        // Small: no glyph above, only the glow on the ground.
+        assert_eq!(
+            at(&b, 41, 29).0,
+            at(&plain, 41, 29).0,
+            "small: nothing above"
+        );
+        let (b, plain) = drawn(&c, &s, &inst, 101);
+        assert_eq!(at(&b, 40, 30).2, rgb((255, 170, 40)));
+        assert_eq!(at(&b, 41, 30).0, "*");
+        assert_eq!(
+            at(&b, 42, 30).0,
+            at(&plain, 42, 30).0,
+            "the dot is one tick"
+        );
+        let (b, plain) = drawn(&c, &s, &inst, 102);
+        assert_eq!(b, plain, "gone after two ticks");
+    }
+
+    #[test]
+    fn a_flash_lights_the_tiles_around_the_muzzle_and_a_tracer_its_neighbours() {
+        let (c, s) = (city(), StylePack::load().unwrap());
+        let inst = shot(Fx::Flash { big: false }, FIRER, TARGET, "");
+        let (b, plain) = drawn(&c, &s, &inst, 100);
+        let warmer = |x: i32, y: i32| {
+            let (Color::Rgb(r, g, _), Color::Rgb(pr, pg, _)) = (at(&b, x, y).2, at(&plain, x, y).2)
+            else {
+                panic!("rgb cells")
+            };
+            (r, g) > (pr, pg)
+        };
+        assert!(warmer(40, 29), "above the muzzle");
+        assert!(warmer(38, 30), "two cells behind");
+        assert!(warmer(42, 31), "ahead and below");
+        assert_eq!(
+            at(&b, 44, 31).2,
+            at(&plain, 44, 31).2,
+            "the pool stays tight"
+        );
+        assert_eq!(
+            at(&b, 46, 30).2,
+            at(&plain, 46, 30).2,
+            "six cells out is dark"
+        );
+        let (b1, _) = drawn(&c, &s, &inst, 101);
+        let Color::Rgb(r0, ..) = at(&b, 40, 29).2 else {
+            panic!()
+        };
+        let Color::Rgb(r1, ..) = at(&b1, 40, 29).2 else {
+            panic!()
+        };
+        assert!(r1 < r0, "the glow fades on its second tick");
+        let (b, plain) = drawn(&c, &s, &inst, 102);
+        assert_eq!(b, plain);
+        // The tracer head throws a faint light on the cells beside it.
+        let fx = Fx::Tracer {
+            colour: (255, 170, 40),
+            speed: 3,
+        };
+        let inst = shot(fx, FIRER, TARGET, "");
+        let (b, plain) = drawn(&c, &s, &inst, 101);
+        let (Color::Rgb(r, ..), Color::Rgb(pr, ..)) = (at(&b, 44, 29).2, at(&plain, 44, 29).2)
+        else {
+            panic!("rgb cells")
+        };
+        assert!(r > pr, "above the head at (44,30)");
+        assert_eq!(
+            at(&b, 44, 28).2,
+            at(&plain, 44, 28).2,
+            "two rows up is dark"
+        );
+    }
+
+    #[test]
+    fn a_casing_pops_out_beside_the_muzzle_and_lies_there_dimming() {
+        let (c, s) = (city(), StylePack::load().unwrap());
+        let inst = shot(Fx::Casing, FIRER, TARGET, "");
+        // Shot along +x: the casing flies out above the shooter.
+        let (b, _) = drawn(&c, &s, &inst, 100);
+        assert_eq!(at(&b, 40, 29).0, "'");
+        assert_eq!(at(&b, 40, 29).1, rgb((240, 200, 90)));
+        // Landed: a `,` within two cells above and one behind, where it stays.
+        let (b, plain) = drawn(&c, &s, &inst, 102);
+        let landed: Vec<(i32, i32)> = (38..=40)
+            .flat_map(|x| (28..=29).map(move |y| (x, y)))
+            .filter(|(x, y)| at(&b, *x, *y).0 == "," && at(&plain, *x, *y).0 != ",")
+            .collect();
+        assert_eq!(landed.len(), 1, "{landed:?}");
+        let (lx, ly) = landed[0];
+        assert_eq!(at(&b, lx, ly).1, rgb((200, 160, 60)));
+        let (b, _) = drawn(&c, &s, &inst, 100 + CASING_TICKS - 1);
+        assert_eq!(at(&b, lx, ly).0, ",");
+        let Color::Rgb(r, ..) = at(&b, lx, ly).1 else {
+            panic!()
+        };
+        assert!(r < 120, "faded to the ground's tone: {r}");
+        let (b, plain) = drawn(&c, &s, &inst, 100 + CASING_TICKS);
+        assert_eq!(b, plain, "gone");
+        // Shot straight down: it flies out to the right.
+        let inst = shot(Fx::Casing, FIRER, Pos::new(40, 40), "");
+        let (b, _) = drawn(&c, &s, &inst, 100);
+        assert_eq!(at(&b, 41, 30).0, "'");
+    }
+
+    #[test]
+    fn big_flash_adds_the_cells_above_and_below() {
+        let (c, s) = (city(), StylePack::load().unwrap());
+        let inst = shot(Fx::Flash { big: true }, FIRER, TARGET, "");
+        let (b, _) = drawn(&c, &s, &inst, 100);
+        assert_eq!(at(&b, 41, 29).0, "`");
+        assert_eq!(at(&b, 41, 29).1, rgb((255, 200, 90)));
+        assert_eq!(at(&b, 41, 31).0, ",");
+        let (b, plain) = drawn(&c, &s, &inst, 101);
+        assert_eq!(at(&b, 41, 29), at(&plain, 41, 29));
+        assert_eq!(at(&b, 41, 31), at(&plain, 41, 31));
+    }
+
+    #[test]
+    fn tracer_head_moves_three_tiles_a_tick_with_a_fading_trail() {
+        let (c, s) = (city(), StylePack::load().unwrap());
+        let fx = Fx::Tracer {
+            colour: (255, 170, 40),
+            speed: 3,
+        };
+        let inst = shot(fx, FIRER, TARGET, "");
+        let (b, plain) = drawn(&c, &s, &inst, 100);
+        assert_eq!(at(&b, 41, 30).0, "•");
+        assert_eq!(at(&b, 41, 30).1, rgb((255, 240, 200)));
+        // Never behind the firer: the glyph and its colour stand; only the head's
+        // light reaches the ground there.
+        assert_eq!(
+            (at(&b, 40, 30).0, at(&b, 40, 30).1),
+            (at(&plain, 40, 30).0, at(&plain, 40, 30).1),
+            "never behind the firer"
+        );
+        let (b, _) = drawn(&c, &s, &inst, 101);
+        assert_eq!(at(&b, 44, 30).0, "•");
+        assert_eq!(
+            at(&b, 43, 30),
+            ("─".into(), rgb((255, 170, 40)), at(&b, 43, 30).2, true)
+        );
+        assert_eq!(at(&b, 42, 30).1, rgb((200, 110, 20)));
+        assert_eq!(at(&b, 41, 30).1, rgb((110, 55, 10)));
+        let (b, _) = drawn(&c, &s, &inst, 103);
+        assert_eq!(at(&b, 50, 30).0, "•");
+        let (b, plain) = drawn(&c, &s, &inst, 104);
+        assert_eq!(b, plain, "arrived: the instance has ended");
+    }
+
+    #[test]
+    fn tracer_on_a_diagonal_uses_the_slash_glyphs() {
+        let (c, s) = (city(), StylePack::load().unwrap());
+        let fx = Fx::Tracer {
+            colour: (255, 170, 40),
+            speed: 3,
+        };
+        let down = shot(fx.clone(), FIRER, Pos::new(46, 36), "");
+        let (b, _) = drawn(&c, &s, &down, 101);
+        assert_eq!(at(&b, 44, 34).0, "•");
+        assert_eq!(at(&b, 43, 33).0, "╲");
+        let up = shot(fx, FIRER, Pos::new(46, 24), "");
+        let (b, _) = drawn(&c, &s, &up, 101);
+        assert_eq!(at(&b, 43, 27).0, "╱");
+    }
+
+    #[test]
+    fn streak_whitens_then_ambers_then_embers() {
+        let (c, s) = (city(), StylePack::load().unwrap());
+        let inst = shot(
+            Fx::Streak {
+                colour: (0, 229, 255),
+            },
+            FIRER,
+            TARGET,
+            "",
+        );
+        let (b, plain) = drawn(&c, &s, &inst, 100);
+        for x in 41..=51 {
+            assert_eq!(at(&b, x, 30).0, "━", "x {x}");
+            assert_eq!(at(&b, x, 30).1, rgb((240, 240, 240)));
+            assert!(at(&b, x, 30).3, "bold on the first tick");
+        }
+        assert_eq!(at(&b, 40, 30), at(&plain, 40, 30));
+        assert_eq!(at(&b, 52, 30), at(&plain, 52, 30));
+        let (b, _) = drawn(&c, &s, &inst, 101);
+        assert_eq!(at(&b, 45, 30).1, rgb((0, 229, 255)));
+        let (b, _) = drawn(&c, &s, &inst, 102);
+        assert_eq!(at(&b, 45, 30).1, rgb((120, 60, 10)));
+        let (b, plain) = drawn(&c, &s, &inst, 103);
+        assert_eq!(b, plain);
+    }
+
+    #[test]
+    fn chips_invert_the_target_and_fly_away_from_the_shooter() {
+        let (c, s) = (city(), StylePack::load().unwrap());
+        let inst = shot(Fx::Chips, FIRER, TARGET, "");
+        let (b, plain) = drawn(&c, &s, &inst, 100);
+        let (glyph, fg, bg, bold) = at(&b, 52, 30);
+        assert_eq!(glyph, at(&plain, 52, 30).0);
+        assert_eq!(
+            (fg, bg, bold),
+            (rgb((255, 255, 255)), rgb((255, 40, 40)), true)
+        );
+        assert_eq!(at(&b, 53, 29).0, "'");
+        assert_eq!(at(&b, 53, 29).1, rgb((255, 120, 120)));
+        assert_eq!(at(&b, 53, 30).0, "·");
+        assert_eq!(
+            at(&b, 53, 31),
+            at(&plain, 53, 31),
+            "the third chip is not out yet"
+        );
+        let (b, _) = drawn(&c, &s, &inst, 101);
+        assert_eq!(at(&b, 52, 30).2, rgb((160, 20, 20)));
+        assert_eq!(at(&b, 53, 31).0, ",");
+        assert_eq!(at(&b, 54, 29).0, "·");
+        assert_eq!(at(&b, 53, 31).1, rgb((180, 60, 60)));
+        let (b, plain) = drawn(&c, &s, &inst, 102);
+        assert_eq!(at(&b, 52, 30), at(&plain, 52, 30), "the flash is two ticks");
+        assert_eq!(at(&b, 54, 29).0, "'", "the chips drift a cell outward");
+        let (b, plain) = drawn(&c, &s, &inst, 103);
+        assert_eq!(b, plain);
+        // From the right the chips fly left.
+        let inst = shot(Fx::Chips, Pos::new(60, 30), TARGET, "");
+        let (b, _) = drawn(&c, &s, &inst, 100);
+        assert_eq!(at(&b, 51, 29).0, "'");
+    }
+
+    #[test]
+    fn spark_at_the_impact_three_ticks() {
+        let (c, s) = (city(), StylePack::load().unwrap());
+        let inst = shot(Fx::Spark, FIRER, TARGET, "");
+        let (b, _) = drawn(&c, &s, &inst, 100);
+        assert_eq!(
+            at(&b, 52, 30),
+            ("✶".into(), rgb((255, 240, 160)), at(&b, 52, 30).2, true)
+        );
+        assert_eq!(at(&b, 51, 29).0, "`");
+        assert_eq!(at(&b, 51, 31).0, ",");
+        assert_eq!(at(&b, 51, 31).1, rgb((255, 220, 120)));
+        let (b, plain) = drawn(&c, &s, &inst, 101);
+        assert_eq!(at(&b, 52, 30).0, "×");
+        assert_eq!(at(&b, 52, 30).1, rgb((255, 170, 40)));
+        assert_eq!(at(&b, 51, 29), at(&plain, 51, 29));
+        assert_eq!(at(&b, 50, 31).0, "·");
+        assert_eq!(at(&b, 50, 31).1, rgb((200, 110, 20)));
+        let (b, _) = drawn(&c, &s, &inst, 102);
+        assert_eq!(at(&b, 52, 30).0, "·");
+        assert_eq!(at(&b, 52, 30).1, rgb((120, 60, 10)));
+        let (b, plain) = drawn(&c, &s, &inst, 103);
+        assert_eq!(b, plain);
+    }
+
+    #[test]
+    fn tear_scrambles_the_box_around_the_target() {
+        let (c, s) = (city(), StylePack::load().unwrap());
+        let inst = shot(Fx::Tear, FIRER, TARGET, "");
+        let (b, plain) = drawn(&c, &s, &inst, 100);
+        let mut torn = 0;
+        for y in 0..60 {
+            for x in 0..120 {
+                if at(&b, x, y) == at(&plain, x, y) {
+                    continue;
+                }
+                torn += 1;
+                assert!((49..=55).contains(&x) && (29..=31).contains(&y), "{x},{y}");
+                assert!((x, y) != (52, 30), "the target itself is left alone");
+                let (glyph, fg, _, _) = at(&b, x, y);
+                assert!(SPARKS.contains(&glyph.chars().next().unwrap()), "{glyph}");
+                assert!(fg == rgb((0, 229, 255)) || fg == rgb((255, 0, 200)));
+            }
+        }
+        assert!((3..=14).contains(&torn), "{torn} cells torn");
+        let (b2, _) = drawn(&c, &s, &inst, 101);
+        assert_ne!(b, b2, "the tear shifts every tick");
+        let (b, plain) = drawn(&c, &s, &inst, 103);
+        assert_eq!(b, plain);
+    }
+
+    #[test]
+    fn number_rises_a_row_every_four_ticks_and_fades() {
+        let (c, s) = (city(), StylePack::load().unwrap());
+        let inst = shot(Fx::Number { tag: false }, FIRER, TARGET, "-4");
+        let (b, _) = drawn(&c, &s, &inst, 100);
+        assert_eq!(
+            at(&b, 52, 29),
+            ("-".into(), rgb((255, 235, 235)), at(&b, 52, 29).2, true)
+        );
+        assert_eq!(at(&b, 53, 29).0, "4");
+        let (b, _) = drawn(&c, &s, &inst, 104);
+        assert_eq!(at(&b, 52, 28).0, "-");
+        let (b, _) = drawn(&c, &s, &inst, 110);
+        assert_eq!(at(&b, 52, 27).0, "-");
+        assert_eq!(at(&b, 52, 27).1, rgb((170, 60, 60)));
+        let (b, _) = drawn(&c, &s, &inst, 113);
+        assert_eq!(at(&b, 53, 26).0, "4");
+        let (b, plain) = drawn(&c, &s, &inst, 114);
+        assert_eq!(b, plain);
+        // The net lends its bolt's colour.
+        let mut tinted = inst.clone();
+        tinted.tint = Some((255, 0, 200));
+        let (b, _) = drawn(&c, &s, &tinted, 100);
+        assert_eq!(at(&b, 52, 29).1, rgb((255, 0, 200)));
+        let (b, _) = drawn(&c, &s, &tinted, 110);
+        assert_eq!(at(&b, 52, 27).1, rgb((153, 0, 120)));
+    }
+
+    #[test]
+    fn tag_draws_on_a_red_field() {
+        let (c, s) = (city(), StylePack::load().unwrap());
+        let inst = shot(Fx::Number { tag: true }, FIRER, TARGET, "-4");
+        let (b, _) = drawn(&c, &s, &inst, 100);
+        assert_eq!(
+            at(&b, 51, 29),
+            (" ".into(), rgb((255, 255, 255)), rgb((170, 20, 20)), true)
+        );
+        assert_eq!(at(&b, 52, 29).0, "-");
+        assert_eq!(at(&b, 53, 29).0, "4");
+        assert_eq!(
+            at(&b, 54, 29),
+            (" ".into(), rgb((255, 255, 255)), rgb((170, 20, 20)), true)
+        );
+        let (b, _) = drawn(&c, &s, &inst, 110);
+        assert_eq!(at(&b, 52, 27).1, rgb((200, 120, 120)));
+        assert_eq!(at(&b, 52, 27).2, rgb((80, 10, 10)));
+    }
+
+    #[test]
+    fn a_tinted_shot_tears_sparks_and_tags_in_its_colour() {
+        let (c, s) = (city(), StylePack::load().unwrap());
+        let cyan = (0, 229, 255);
+        let mut tear = shot(Fx::Tear, FIRER, TARGET, "");
+        tear.tint = Some(cyan);
+        let (b, plain) = drawn(&c, &s, &tear, 100);
+        let deep = Rgb(0, 229, 255).mix(DEEP, 0.6).to_color();
+        let mut torn = 0;
+        for y in 29..=31 {
+            for x in 49..=55 {
+                if at(&b, x, y) != at(&plain, x, y) {
+                    torn += 1;
+                    let fg = at(&b, x, y).1;
+                    assert!(
+                        fg == rgb(cyan) || fg == deep,
+                        "{fg:?}: no magenta in a tinted tear"
+                    );
+                }
+            }
+        }
+        assert!(torn > 0);
+        let mut spark = shot(Fx::Spark, FIRER, TARGET, "");
+        spark.tint = Some(cyan);
+        let (b, _) = drawn(&c, &s, &spark, 101);
+        assert_eq!(
+            at(&b, 52, 30).1,
+            rgb(cyan),
+            "the spark in the shot's colour"
+        );
+        let mut tag = shot(Fx::Number { tag: true }, FIRER, TARGET, "-2");
+        tag.tint = Some(cyan);
+        let (b, _) = drawn(&c, &s, &tag, 100);
+        assert_eq!(
+            at(&b, 52, 29).2,
+            Rgb(0, 229, 255).scale(0.45).to_color(),
+            "a blue field"
+        );
+        assert_eq!(at(&b, 52, 29).1, rgb((255, 255, 255)));
+    }
+
+    #[test]
+    fn a_future_instance_draws_nothing() {
+        let (c, s) = (city(), StylePack::load().unwrap());
+        let inst = shot(Fx::Streak { colour: (1, 1, 1) }, FIRER, TARGET, "");
+        let (b, plain) = drawn(&c, &s, &inst, 99);
+        assert_eq!(b, plain);
+        let no_target = aimed(Fx::Chips, FIRER, Vec::new());
+        let (b, plain) = drawn(&c, &s, &no_target, 100);
+        assert_eq!(b, plain);
+    }
 
     #[test]
     fn bolt_grows_toward_its_targets() {

@@ -33,6 +33,14 @@ pub struct CityFileInfo {
 }
 
 /// Where cities are saved by default.
+/// Why the game cannot be saved right now: a lot is not a city to keep.
+pub fn refusal(st: &crate::app::AppState) -> Option<String> {
+    st.city
+        .as_ref()
+        .is_some_and(|c| c.is_lot())
+        .then(|| "nothing to save on the lot".to_string())
+}
+
 pub fn default_dir() -> PathBuf {
     PathBuf::from("cities")
 }

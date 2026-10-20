@@ -259,8 +259,13 @@ and shows a `DEV` badge in the header. It unlocks the free camera, stratum
 browsing, the console and the inspect and legend sections. Press `` ` `` to flip it at runtime;
 with it off you are always on foot.
 
-**Title** `↑↓` select · `enter` confirm (new game opens the chooser; load game
-opens the save list) · `q` quit
+**Title** `↑↓` select · `enter` confirm (new game opens the chooser; new game
+(debug) drops D'SHAWN, maxed out, into a fresh city; new game · combat has a
+`NET · STREET` pick on its row, `←→` to flip it, the pick in pink: STREET puts
+him on an empty lot at dusk with a goon in the far corner and a training dummy
+(`&`, stands still, shrugs every round off) six north, NET jacks him into the
+lot's construct, an open floor with a grey ICE at the far end and a dummy ICE near the
+gate (never wakes, hits or breaks); load game opens the save list) · `q` quit
 
 **New game** picks a template (VEX, KESSLER) or a custom build, then walks six
 steps: ORIGIN, PROFESSION, STATS, SKILLS, NAME, SUMMARY. `↑↓` choose · `enter`
@@ -335,7 +340,7 @@ aim on your own tile stays put; from the
 entry, aiming one tile off the map is the gate, and the walk leaves the
 construct; the program keys draw hollow until you do. Then ACT: `1`-`5` pick a program and the map
 marks what it can run against (nodes beside you; ICE beside you or in sight
-within 6 tiles), `tab` or the arrows move the pick, `space` runs it for one AP
+within 8 tiles), `tab` or the arrows move the pick, `space` runs it for one AP
 (the run stays armed, and `space` rolls it again), a pulse, a shield or a mask
 cost one as well, and `.` ends your turn; spending the last move opens ACT by
 itself. In calm the same pick works and costs nothing. An ICE turn plays out
@@ -352,6 +357,30 @@ Items lie where they are dropped: a pile shows its kind's icon in amber (`≡`
 when mixed), dimmed once out of sight, and the HERE section lists what is on the
 focused tile. A scan paints the map around you into memory; a ping lights the
 terminals and stairs in range for a while.
+
+**Street combat** a goon that sees you (eight tiles, a clear line) puts the
+street on the same turns as the Net: `TURN 1  YOU › goon` in the footer,
+`ENGAGED` at the right, `MOVE ▰▰▰▰ 4/4  AP ●● 2/2`. Your turn is two halves. In
+the move half `hjkl` steps and spends a move, `g` aims a path over the street
+and `enter` walks it, `space` stays. The act half opens the fire cursor on the
+nearest goon: `hjkl` moves it, `t` jumps to the next one (`tab` stays the deck's,
+so a stim is a key away), the readout over it
+reads `goon · Scrap nine · 8 tiles · 90%`, `space` fires the worn gun for one
+AP, every round rolled on its own (the Ratchet's three, the pistol's one); a hit
+flashes the goon red, the number lifts off, a miss runs on and sparks where it
+stops. `1`-`5` fire an ability: Static (from a neural port) costs both AP, hurts
+and stuns for a turn, and tears the cells around the goon. A stim from the deck
+costs an AP. `.` ends the turn; the goon closes in on the pace and shoots back.
+`e` engages by hand with a goon in sight memory, and calms the street when
+nothing hunts you; at zero HP the goon drops (`%`), you flatline. A column at
+the map's top right lists the order (`▶ YOU`, `goon 18`), with the live half of
+your turn lit; the cursor comes back to the enemy you aimed at last; `x` look
+on a goon reads what it is, what it holds and what is left of it. Your turn
+ends on its own a beat after the last AP. **In a construct the act half is the
+same**: the cursor opens on the nearest awake ICE, the readout reads
+`grey ICE · 4/6 · 3 tiles · 70%`, and `space` runs your loaded attack program
+at it (a white streak, the tear, the number); a program armed by its key keeps
+`space` as its roll.
 
 **Pause** (`esc` or `q`) resume · save game · load game · settings (dev mode,
 rain, fps) · quit to title · quit game

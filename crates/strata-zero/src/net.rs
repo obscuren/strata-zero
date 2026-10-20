@@ -47,14 +47,23 @@ pub const WALK_TICKS: u64 = 4;
 /// Ticks a bolt takes from a roll or a hit to its target.
 pub const ROLL_TICKS: u64 = 12;
 /// How far a program reaches a piece of ICE in sight.
-pub const ATTACK_RANGE: i32 = 6;
+pub const ATTACK_RANGE: i32 = 8;
 /// Ticks a slip's or a shield's mark sits on its tile.
 pub const MARK_TICKS: u64 = 20;
-/// A program's roll, cyan; an attack's, white; an ICE hit, magenta; black ICE, red.
+/// A program's roll and an attack, cyan; an ICE hit, magenta; black ICE, red.
 pub const BOLT_ROLL: (u8, u8, u8) = (0, 229, 255);
-pub const BOLT_ATTACK: (u8, u8, u8) = (240, 240, 240);
 pub const BOLT_HIT: (u8, u8, u8) = (255, 0, 200);
 pub const BOLT_BLACK: (u8, u8, u8) = (255, 40, 40);
+/// What an attack program looks like: a shot in the net's cyan (no muzzle, nothing
+/// burns here), the tear where it lands in cyan and deep blue, the damage as a
+/// blue tag; a slip sparks cyan. The whole shot carries `ATTACK_TINT`.
+pub const ATTACK_FX: [Fx; 4] = [
+    Fx::Streak { colour: BOLT_ROLL },
+    Fx::Tear,
+    Fx::Spark,
+    Fx::Number { tag: true },
+];
+pub const ATTACK_TINT: (u8, u8, u8) = BOLT_ROLL;
 /// A slip marks its target magenta; a shield that absorbs marks you cyan.
 pub const MARK_SLIP: (u8, u8, u8) = (255, 0, 200);
 pub const MARK_SHIELD: (u8, u8, u8) = (0, 229, 255);
@@ -64,6 +73,7 @@ pub const MARK_SHIELD: (u8, u8, u8) = (0, 229, 255);
 pub enum Actor {
     You,
     Ice(usize),
+    Foe(usize),
 }
 
 /// Your turn in two halves: you move (or stay), then you act.
@@ -73,11 +83,11 @@ pub enum Phase {
     Act,
 }
 
-/// A construct on turns: the order rolled once, whose turn it is, and the pools
-/// left to the actor acting.
+/// A map on turns, a construct or the street: the order rolled once, whose turn it
+/// is, and the pools left to the actor acting.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Engagement {
-    pub building: BuildingId,
+    pub place: Place,
     pub round: u32,
     pub order: Vec<Actor>,
     pub turn: usize,
@@ -89,11 +99,24 @@ pub struct Engagement {
     pub manual: bool,
     /// The tick the current ICE action started, for the pace.
     pub acting_since: u64,
+    /// The tick your last action point went; the turn ends on its own a beat later.
+    pub spent_at: Option<u64>,
 }
+
+/// Ticks after your last action point before your turn ends on its own.
+pub const AUTO_END_TICKS: u64 = 20;
 
 impl Engagement {
     pub fn actor(&self) -> Actor {
         self.order.get(self.turn).copied().unwrap_or(Actor::You)
+    }
+
+    /// The construct on turns, when it is one.
+    pub fn construct(&self) -> Option<BuildingId> {
+        match self.place {
+            Place::Construct(b) => Some(b),
+            _ => None,
+        }
     }
 }
 
@@ -427,11 +450,16 @@ impl NetState {
 }
 
 pub(crate) fn building_name(st: &AppState, b: BuildingId) -> String {
-    st.city
-        .as_ref()
-        .and_then(|c| c.building_opt(b))
+    let city = st.city.as_ref();
+    city.and_then(|c| c.building_opt(b))
         .map(|x| x.name.clone().unwrap_or_else(|| x.kind.label().to_string()))
-        .unwrap_or_else(|| "the building".to_string())
+        .unwrap_or_else(|| {
+            if city.is_some_and(|c| c.is_lot()) {
+                "the lot".to_string()
+            } else {
+                "the building".to_string()
+            }
+        })
 }
 
 /// The building whose construct or floor the player is in.
@@ -526,7 +554,7 @@ pub fn start_run(st: &mut AppState, program: ItemId, target: HackTarget) -> Resu
     });
     // Pointing a program at a piece is picking the fight.
     if let HackTarget::Guard { .. } = target {
-        engage(st, b, false);
+        engage(st, Place::Construct(b), false);
     }
     let starts = format!("{} starts · {} turns", spec.op.label(), spec.work);
     Ok(match dropped {
@@ -564,7 +592,8 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
     // A program on yourself never fails.
     let ok = kind == Target::Deck || succeeds(roll, pw, df);
     let now = st.net.now(st);
-    // The picture of the roll: a bolt to the target, a mark where it slipped.
+    // The picture of the roll: a bolt to the target, a mark where it slipped; an
+    // attack looks like a shot, with its number when it lands.
     if let Some((me, at)) = st
         .player
         .as_ref()
@@ -573,16 +602,32 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
     {
         if at == me {
             mark(st, at, BOLT_ROLL, ROLL_TICKS);
+        } else if spec.op == Op::Attack {
+            let mut damage = 2 * spec.rating;
+            if st.character.flags(&st.content).contains("black_ice") {
+                damage += 1;
+            }
+            crate::combat::play_shot(
+                st,
+                Place::Construct(b),
+                &ATTACK_FX,
+                me,
+                at,
+                ok,
+                damage,
+                Some(ATTACK_TINT),
+            );
         } else {
-            let colour = if spec.op == Op::Attack {
-                BOLT_ATTACK
-            } else {
-                BOLT_ROLL
-            };
-            bolt(st, me, at, colour, ROLL_TICKS);
+            bolt(st, me, at, BOLT_ROLL, ROLL_TICKS);
         }
         if !ok {
-            mark(st, at, MARK_SLIP, MARK_TICKS);
+            // A slipped attack marks in its own cyan; every other slip in magenta.
+            let colour = if spec.op == Op::Attack {
+                ATTACK_TINT
+            } else {
+                MARK_SLIP
+            };
+            mark(st, at, colour, MARK_TICKS);
         }
     }
     // Deep dive: a vault gives up its contents quietly; a slip is still loud.
@@ -620,14 +665,22 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
             if st.character.flags(&st.content).contains("black_ice") {
                 damage += 1;
             }
-            let grade = st.constructs.get(b).map(|k| k.guards[index].grade)?;
+            let (grade, label, inert) = st.constructs.get(b).map(|k| {
+                (
+                    k.guards[index].grade,
+                    k.guards[index].label(),
+                    k.guards[index].inert,
+                )
+            })?;
             let seen = st.player.as_ref()?.pos;
             let left = {
                 let states = st.net.ice.get_mut(&b)?;
                 let ice = states.get_mut(index)?;
-                ice.integrity = ice.integrity.saturating_sub(damage);
-                // A hit piece turns on you.
-                ice.mode = IceMode::Awake { seen, lost: 0 };
+                // A dummy takes the hit and keeps standing; a piece turns on you.
+                if !inert {
+                    ice.integrity = ice.integrity.saturating_sub(damage);
+                    ice.mode = IceMode::Awake { seen, lost: 0 };
+                }
                 ice.integrity
             };
             if left == 0 {
@@ -636,16 +689,12 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
                 let roots = st.backdoors.roots();
                 st.net.sync_guards(&mut st.constructs, b, now, &roots);
                 kick(st, 6);
-                let line = format!("{} ICE broken", grade.label());
+                let line = format!("{label} ICE broken");
                 st.say(line.clone());
                 alarm_clears(st, b);
                 return Some(line);
             } else {
-                format!(
-                    "attack · {} ICE {left}/{}",
-                    grade.label(),
-                    grade.integrity()
-                )
+                format!("attack · {label} ICE {left}/{}", grade.integrity())
             }
         } else {
             format!("{label} slips · heat {heat}")
@@ -783,6 +832,9 @@ pub fn bolt(st: &mut AppState, from: Pos, to: Pos, colour: (u8, u8, u8), ticks: 
         started: st.tick,
         revealed: Vec::new(),
         targets: vec![to],
+        label: String::new(),
+        hit: false,
+        tint: None,
     });
 }
 
@@ -799,6 +851,35 @@ pub fn mark(st: &mut AppState, at: Pos, colour: (u8, u8, u8), ticks: u64) {
         started: st.tick,
         revealed: Vec::new(),
         targets: vec![at],
+        label: String::new(),
+        hit: false,
+        tint: None,
+    });
+}
+
+/// A number lifting off a tile of the player's map from `started`, in a colour
+/// (the net's bolts); `None` leaves the street's own.
+pub fn number(
+    st: &mut AppState,
+    at: Pos,
+    label: impl Into<String>,
+    colour: Option<(u8, u8, u8)>,
+    started: u64,
+) {
+    let Some(place) = st.player.as_ref().map(|p| p.place) else {
+        return;
+    };
+    st.fx.push(FxInstance {
+        fx: Fx::Number { tag: false },
+        place,
+        origin: at,
+        radius: 0,
+        started,
+        revealed: Vec::new(),
+        targets: vec![at],
+        label: label.into(),
+        hit: true,
+        tint: colour,
     });
 }
 
@@ -814,6 +895,9 @@ fn kick(st: &mut AppState, ticks: u64) {
         started: st.tick,
         revealed: Vec::new(),
         targets: Vec::new(),
+        label: String::new(),
+        hit: false,
+        tint: None,
     });
 }
 
@@ -863,7 +947,7 @@ pub fn raise_alarm(st: &mut AppState, b: BuildingId) -> String {
         .is_some_and(|p| p.place == Place::Construct(b))
         && any_awake(st, b)
     {
-        engage(st, b, false);
+        engage(st, Place::Construct(b), false);
         seat_standing(st, b);
     }
     format!("ALARM · `{}` locks down", building_name(st, b))
@@ -1287,6 +1371,10 @@ pub fn ice_look(st: &mut AppState, b: BuildingId, i: usize) -> bool {
         ice.stunned -= 1;
         return false;
     }
+    // A dummy never looks, never wakes, never acts.
+    if g.inert {
+        return false;
+    }
     if sees(k, g.pos, g.grade, pos, masked) {
         ice.mode = IceMode::Awake { seen: pos, lost: 0 };
     }
@@ -1341,7 +1429,7 @@ pub fn ice_step(st: &mut AppState, b: BuildingId, i: usize, can_move: bool, can_
         }
         IceMode::Awake { seen, lost } => {
             if g.pos.chebyshev(pos) <= 1 {
-                hits = can_hit;
+                hits = can_hit && !g.inert;
             } else if !can_move {
                 // Out of steps: it waits where it stands.
             } else if g.pos == seen || step_toward(k, g.pos, seen, pos).is_none() {
@@ -1396,56 +1484,76 @@ pub fn budgets(grade: IceGrade) -> (u8, u8) {
     }
 }
 
-/// The order of an engagement: you by your Net, each standing piece by its grade,
-/// higher first, ties to you, then by index.
-pub fn initiative(st: &AppState, b: BuildingId) -> Vec<Actor> {
-    let mut scored: Vec<(i32, u8, Actor)> = vec![(
-        st.character.stat(&st.content, game::Stat::Net) as i32,
-        0,
-        Actor::You,
-    )];
-    if let Some(k) = st.constructs.get(b) {
-        for (i, g) in k.guards.iter().enumerate() {
-            if k.guard_at(g.pos).is_none() {
-                continue;
+/// The order of an engagement. In a construct: you by your Net, each standing
+/// piece by its grade. On foot: you by your Reflex, each standing foe in your sight
+/// memory by its own. Higher first, ties to you, then by index.
+pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
+    let mut scored: Vec<(i32, u8, Actor)> = Vec::new();
+    match place {
+        Place::Construct(b) => {
+            scored.push((
+                st.character.stat(&st.content, game::Stat::Net) as i32,
+                0,
+                Actor::You,
+            ));
+            if let Some(k) = st.constructs.get(b) {
+                for (i, g) in k.guards.iter().enumerate() {
+                    if k.guard_at(g.pos).is_none() {
+                        continue;
+                    }
+                    let score = match g.grade {
+                        IceGrade::Black => 3,
+                        IceGrade::Grey => 2,
+                        IceGrade::White => 1,
+                    };
+                    scored.push((score, 1 + i as u8, Actor::Ice(i)));
+                }
             }
-            let score = match g.grade {
-                IceGrade::Black => 3,
-                IceGrade::Grey => 2,
-                IceGrade::White => 1,
-            };
-            scored.push((score, 1 + i as u8, Actor::Ice(i)));
+        }
+        _ => {
+            scored.push((
+                st.character.stat(&st.content, game::Stat::Reflex) as i32,
+                0,
+                Actor::You,
+            ));
+            for i in crate::foes::in_memory(st) {
+                scored.push((st.foes[i].reflex as i32, 1 + i as u8, Actor::Foe(i)));
+            }
         }
     }
     scored.sort_by(|a, c| c.0.cmp(&a.0).then(a.1.cmp(&c.1)));
     scored.into_iter().map(|(_, _, a)| a).collect()
 }
 
-fn pools_for(st: &AppState, b: BuildingId, actor: Actor) -> (u8, u8) {
-    match actor {
-        Actor::You => (BASE_MOVE, BASE_AP),
-        Actor::Ice(i) => st
+fn pools_for(st: &AppState, place: Place, actor: Actor) -> (u8, u8) {
+    match (actor, place) {
+        (Actor::You, _) => (BASE_MOVE, BASE_AP),
+        (Actor::Ice(i), Place::Construct(b)) => st
             .constructs
             .get(b)
             .and_then(|k| k.guards.get(i))
             .map(|g| budgets(g.grade))
             .unwrap_or((0, 0)),
+        (Actor::Ice(_), _) => (0, 0),
+        (Actor::Foe(_), _) => (crate::foes::GOON_MOVE, crate::foes::GOON_AP),
     }
 }
 
-/// The construct goes to turns: the order is rolled, you or the fastest piece acts
-/// first. Nothing happens if it already is.
-pub fn engage(st: &mut AppState, b: BuildingId, manual: bool) {
+/// The map goes to turns: the order is rolled, you or the fastest acts first.
+/// Nothing happens if it already is.
+pub fn engage(st: &mut AppState, place: Place, manual: bool) {
     if st.net.engaged.is_some() {
         return;
     }
-    if let Some(k) = st.constructs.get(b) {
+    if let Place::Construct(b) = place
+        && let Some(k) = st.constructs.get(b)
+    {
         st.net.ice_of(k);
     }
-    let order = initiative(st, b);
-    let (moves, ap) = pools_for(st, b, order[0]);
+    let order = initiative(st, place);
+    let (moves, ap) = pools_for(st, place, order[0]);
     st.net.engaged = Some(Engagement {
-        building: b,
+        place,
         round: 1,
         order,
         turn: 0,
@@ -1454,13 +1562,53 @@ pub fn engage(st: &mut AppState, b: BuildingId, manual: bool) {
         phase: Phase::Move,
         manual,
         acting_since: st.clock_tick(),
+        spent_at: None,
     });
-    st.warn(if manual {
-        "engaged"
+    let line = if manual {
+        "engaged".to_string()
+    } else if let Place::Construct(_) = place {
+        "ENGAGED · the ICE is on you".to_string()
     } else {
-        "ENGAGED · the ICE is on you"
-    });
-    start_ice_turn(st);
+        let name = crate::foes::in_memory(st)
+            .into_iter()
+            .find(|i| st.foes[*i].hunting())
+            .map(|i| st.foes[i].name.clone())
+            .unwrap_or_else(|| "foe".to_string());
+        format!("ENGAGED · the {name} has you")
+    };
+    st.warn(line);
+    start_turn(st);
+}
+
+/// Every standing foe in sight memory the order does not hold yet takes its place
+/// at the end: one that came hunting mid-fight.
+pub fn seat_foes(st: &mut AppState) {
+    let known = crate::foes::in_memory(st);
+    if let Some(e) = st.net.engaged.as_mut() {
+        for i in known {
+            if !e.order.contains(&Actor::Foe(i)) {
+                e.order.push(Actor::Foe(i));
+            }
+        }
+    }
+}
+
+/// Something still hunts you on the map on turns: awake ICE in a construct, a
+/// hunting foe on foot.
+pub fn hunting(st: &AppState) -> bool {
+    match st.net.engaged.as_ref().map(|e| e.place) {
+        Some(Place::Construct(b)) => any_awake(st, b),
+        Some(place) => crate::foes::any_hunting(st, place),
+        None => false,
+    }
+}
+
+/// Engaged on foot: a stratum or a floor on turns.
+pub fn engaged_on_foot(st: &AppState) -> bool {
+    st.net
+        .engaged
+        .as_ref()
+        .is_some_and(|e| !matches!(e.place, Place::Construct(_)))
 }
 
 /// Every standing piece of the construct that the order does not hold yet takes
@@ -1477,7 +1625,7 @@ pub fn seat_standing(st: &mut AppState, b: BuildingId) {
         None => return,
     };
     if let Some(e) = st.net.engaged.as_mut()
-        && e.building == b
+        && e.place == Place::Construct(b)
     {
         for i in standing {
             if !e.order.contains(&Actor::Ice(i)) {
@@ -1531,6 +1679,7 @@ pub fn your_turn(st: &AppState) -> bool {
 
 /// One action point of yours; free in calm.
 pub fn spend_ap(st: &mut AppState) -> Result<(), String> {
+    let now = st.clock_tick();
     let Some(e) = st.net.engaged.as_mut() else {
         return Ok(());
     };
@@ -1544,7 +1693,24 @@ pub fn spend_ap(st: &mut AppState) -> Result<(), String> {
         return Err("no AP left".to_string());
     }
     e.ap -= 1;
+    if e.ap == 0 {
+        e.spent_at = Some(now);
+    }
     Ok(())
+}
+
+/// From the frame loop: your turn ends on its own a beat after the last action
+/// point went, so the numbers can be read before the board moves on.
+pub fn auto_end(st: &mut AppState) {
+    let now = st.clock_tick();
+    let due = st.net.engaged.as_ref().is_some_and(|e| {
+        e.actor() == Actor::You
+            && e.ap == 0
+            && e.spent_at.is_some_and(|at| now >= at + AUTO_END_TICKS)
+    });
+    if due {
+        end_turn(st);
+    }
 }
 
 /// One tile of yours; free in calm.
@@ -1568,11 +1734,11 @@ pub fn spend_move(st: &mut AppState) -> Result<(), String> {
 /// The next actor; a new round when the order wraps, which ends the engagement when
 /// nothing is awake and nobody asked for turns.
 pub fn end_turn(st: &mut AppState) {
-    let Some((b, len, manual, turn, round)) = st
+    let Some((place, len, manual, turn, round)) = st
         .net
         .engaged
         .as_ref()
-        .map(|e| (e.building, e.order.len(), e.manual, e.turn, e.round))
+        .map(|e| (e.place, e.order.len(), e.manual, e.turn, e.round))
     else {
         return;
     };
@@ -1581,14 +1747,19 @@ pub fn end_turn(st: &mut AppState) {
     if turn >= len {
         turn = 0;
         round += 1;
-        // A round passed: a held mask wears (and may dump you through the trace),
-        // and any piece that stood again since takes its seat.
-        seat_standing(st, b);
-        mask_wears(st, b);
+        match place {
+            Place::Construct(b) => {
+                // A round passed: a held mask wears (and may dump you through the
+                // trace), and any piece that stood again since takes its seat.
+                seat_standing(st, b);
+                mask_wears(st, b);
+            }
+            _ => seat_foes(st),
+        }
         if st.net.engaged.is_none() {
             return;
         }
-        if !manual && !any_awake(st, b) {
+        if !manual && !hunting(st) {
             disengage(st);
             return;
         }
@@ -1601,7 +1772,7 @@ pub fn end_turn(st: &mut AppState) {
     else {
         return;
     };
-    let (moves, ap) = pools_for(st, b, actor);
+    let (moves, ap) = pools_for(st, place, actor);
     let now = st.clock_tick();
     if let Some(e) = st.net.engaged.as_mut() {
         e.turn = turn;
@@ -1610,38 +1781,46 @@ pub fn end_turn(st: &mut AppState) {
         e.ap = ap;
         e.phase = Phase::Move;
         e.acting_since = now;
+        e.spent_at = None;
     }
-    start_ice_turn(st);
+    start_turn(st);
 }
 
-/// A piece's turn begins: it looks; a lifted, broken or stunned piece passes.
-fn start_ice_turn(st: &mut AppState) {
+/// An enemy's turn begins: it looks; a lifted, broken, down or stunned one passes.
+fn start_turn(st: &mut AppState) {
     let Some(e) = st.net.engaged.as_ref() else {
         return;
     };
-    let Actor::Ice(i) = e.actor() else {
-        return;
+    let acts = match (e.actor(), e.place) {
+        (Actor::Ice(i), Place::Construct(b)) => ice_look(st, b, i),
+        (Actor::Foe(i), _) => crate::foes::turn_start(st, i),
+        (Actor::Ice(_), _) => false,
+        (Actor::You, _) => return,
     };
-    let b = e.building;
-    if !ice_look(st, b, i) {
+    if !acts {
         end_turn(st);
     }
 }
 
-/// From the frame loop while a piece acts: one action every `PACE_TICKS`.
-pub fn ice_pace(st: &mut AppState) {
+/// From the frame loop while an enemy acts: one action every `PACE_TICKS`.
+pub fn pace(st: &mut AppState) {
     let Some(e) = st.net.engaged.as_ref() else {
         return;
     };
-    let Actor::Ice(i) = e.actor() else {
+    let actor = e.actor();
+    if actor == Actor::You {
         return;
-    };
+    }
     if st.clock_tick() < e.acting_since + PACE_TICKS {
         return;
     }
-    let b = e.building;
+    let place = e.place;
     let (moves, ap) = (e.moves, e.ap);
-    let step = ice_step(st, b, i, moves > 0, ap > 0);
+    let step = match (actor, place) {
+        (Actor::Ice(i), Place::Construct(b)) => ice_step(st, b, i, moves > 0, ap > 0),
+        (Actor::Foe(i), _) => crate::foes::step(st, i, moves > 0, ap > 0),
+        _ => Step::Nothing,
+    };
     let now = st.clock_tick();
     // The hit may have dumped or killed: the engagement is gone then.
     let Some(e) = st.net.engaged.as_mut() else {
@@ -1652,13 +1831,21 @@ pub fn ice_pace(st: &mut AppState) {
         Step::Moved(_) => {
             e.moves = e.moves.saturating_sub(1);
             // A step may bring it into sight of you; it looks again.
-            ice_look(st, b, i);
+            match (actor, place) {
+                (Actor::Ice(i), Place::Construct(b)) => {
+                    ice_look(st, b, i);
+                }
+                (Actor::Foe(i), _) => {
+                    crate::foes::look(st, i);
+                }
+                _ => {}
+            }
         }
         Step::Hit => e.ap = e.ap.saturating_sub(1),
         Step::Nothing => end_turn(st),
     }
     if let Some(e) = st.net.engaged.as_ref()
-        && e.actor() == Actor::Ice(i)
+        && e.actor() == actor
         && e.moves == 0
         && e.ap == 0
     {
@@ -1666,29 +1853,145 @@ pub fn ice_pace(st: &mut AppState) {
     }
 }
 
+/// A standing piece's card for the fire cursor: `grey ICE`, `4/6`, where it stands.
+pub fn ice_card(st: &AppState, b: BuildingId, i: usize) -> Option<(String, String, Pos)> {
+    let k = st.constructs.get(b)?;
+    let g = k.guards.get(i)?;
+    if k.guard_at(g.pos) != Some(i) {
+        return None;
+    }
+    let ice = st.net.ice.get(&b)?.get(i)?;
+    Some((
+        format!("{} ICE", g.label()),
+        format!("{}/{}", ice.integrity, g.grade.integrity()),
+        g.pos,
+    ))
+}
+
+/// The COMBAT start on the Net: the lot's construct (a lane with a grey ICE at the
+/// far end and a dummy near the gate), the body left on the street, jacked in and
+/// landed on the gate.
+pub fn start_in_net_lot(st: &mut AppState) -> Result<String, String> {
+    let k = citygen::lot_construct();
+    let (b, entry) = (k.building, k.entry);
+    st.constructs.insert(k);
+    if let Some(k) = st.constructs.get(b) {
+        st.net.ice_of(k);
+    }
+    let p = st.player.as_mut().ok_or("no body")?;
+    p.body = Some((p.place, p.pos));
+    p.place = Place::Stratum(StratumKind::Net);
+    p.pos = entry;
+    st.net.beat = st.clock_tick();
+    crate::constructs::land(st, Place::Construct(b), entry);
+    Ok("Entering `the lot`".to_string())
+}
+
+/// The turn column's view: every standing actor in the rolled order with its chip,
+/// your pools on your turn, the acting enemy's plan on theirs.
+pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
+    use crate::render::turns::{Chip, TurnView};
+    let e = st.net.engaged.as_ref()?;
+    let k = e.construct().and_then(|b| st.constructs.get(b));
+    let states = e.construct().and_then(|b| st.net.ice.get(&b));
+    let actor = e.actor();
+    let mut chips = Vec::new();
+    for a in &e.order {
+        let chip = match *a {
+            Actor::You => Chip {
+                name: "YOU".to_string(),
+                hp: String::new(),
+                acting: actor == Actor::You,
+            },
+            Actor::Ice(i) => {
+                let Some((g, ice)) = k
+                    .and_then(|k| k.guards.get(i).filter(|g| k.guard_at(g.pos).is_some()))
+                    .zip(states.and_then(|s| s.get(i)))
+                else {
+                    continue;
+                };
+                Chip {
+                    name: format!("{} ICE", g.label()),
+                    hp: format!("{}/{}", ice.integrity, g.grade.integrity()),
+                    acting: actor == *a,
+                }
+            }
+            Actor::Foe(i) => {
+                let Some(f) = st.foes.get(i).filter(|f| f.standing()) else {
+                    continue;
+                };
+                Chip {
+                    name: f.name.clone(),
+                    hp: f.hp.to_string(),
+                    acting: actor == *a,
+                }
+            }
+        };
+        chips.push(chip);
+    }
+    let yours =
+        (actor == Actor::You).then_some((e.moves, BASE_MOVE, e.ap, BASE_AP, e.phase == Phase::Act));
+    let theirs = match actor {
+        Actor::You => None,
+        Actor::Ice(_) | Actor::Foe(_) => {
+            let verb = if matches!(actor, Actor::Ice(_)) {
+                "hits"
+            } else {
+                "fires"
+            };
+            Some(match (e.moves, e.ap) {
+                (0, 0) => "done".to_string(),
+                (0, _) => verb.to_string(),
+                (m, 0) => format!("moves {m}"),
+                (m, _) => format!("moves {m} › {verb}"),
+            })
+        }
+    };
+    Some(TurnView {
+        round: e.round,
+        chips,
+        yours,
+        theirs,
+    })
+}
+
 /// The footer's turn line: `TURN 3  YOU › grey ICE › black ICE`, the actor acting first.
 pub fn turn_readout(st: &AppState) -> Option<String> {
     let e = st.net.engaged.as_ref()?;
-    let k = st.constructs.get(e.building)?;
+    let k = e.construct().and_then(|b| st.constructs.get(b));
     let name = |a: Actor| match a {
         Actor::You => "YOU".to_string(),
         Actor::Ice(i) => k
-            .guards
-            .get(i)
-            .map(|g| format!("{} ICE", g.grade.label()))
+            .and_then(|k| k.guards.get(i))
+            .map(|g| format!("{} ICE", g.label()))
             .unwrap_or_else(|| "ICE".to_string()),
+        Actor::Foe(i) => st
+            .foes
+            .get(i)
+            .map(|f| f.name.clone())
+            .unwrap_or_else(|| "foe".to_string()),
     };
     let mut parts = Vec::new();
     for n in 0..e.order.len() {
         let a = e.order[(e.turn + n) % e.order.len()];
         let mut s = name(a);
-        if n == 0
-            && let Actor::Ice(_) = a
-        {
-            if e.moves > 0 {
-                s.push_str(&format!(" moves {}", e.moves));
-            } else if e.ap > 0 {
-                s.push_str(" hits");
+        if n == 0 {
+            match a {
+                Actor::Ice(_) => {
+                    if e.moves > 0 {
+                        s.push_str(&format!(" moves {}", e.moves));
+                    } else if e.ap > 0 {
+                        s.push_str(" hits");
+                    }
+                }
+                Actor::Foe(_) => {
+                    if e.moves > 0 {
+                        s.push_str(&format!(" moves {}", e.moves));
+                    } else if e.ap > 0 {
+                        s.push_str(" fires");
+                    }
+                }
+                Actor::You => {}
             }
         }
         parts.push(s);
@@ -1728,6 +2031,14 @@ fn hit(st: &mut AppState, b: BuildingId, i: usize) {
         .deck(&st.content)
         .map(|(_, d)| d.rating as u32)
         .unwrap_or(0);
+    // The number lifts off you when the bolt lands, in its colour.
+    let me = st.player.as_ref().map(|p| p.pos);
+    let landed = st.tick + ROLL_TICKS;
+    let colour = if grade == IceGrade::Black {
+        BOLT_BLACK
+    } else {
+        BOLT_HIT
+    };
     match grade {
         IceGrade::White => {
             let heat = st
@@ -1740,6 +2051,9 @@ fn hit(st: &mut AppState, b: BuildingId, i: usize) {
                 "white ICE hits · heat {}",
                 heat.min(game::DUMP_HEAT)
             ));
+            if let Some(me) = me {
+                number(st, me, "+5", Some(colour), landed);
+            }
             ice_heat(st, b, 5);
         }
         IceGrade::Grey => {
@@ -1747,6 +2061,9 @@ fn hit(st: &mut AppState, b: BuildingId, i: usize) {
             st.character.focus = st.character.focus.saturating_sub(drain);
             let focus = st.character.focus;
             st.warn(format!("grey ICE hits · focus {focus}"));
+            if let Some(me) = me {
+                number(st, me, format!("-{drain}"), Some(colour), landed);
+            }
             if focus == 0 {
                 dump(st, "grey ICE drained you");
             }
@@ -1764,6 +2081,9 @@ fn hit(st: &mut AppState, b: BuildingId, i: usize) {
             st.character.hp = st.character.hp.saturating_sub(damage);
             let hp = st.character.hp;
             st.warn(format!("black ICE hits · hp {hp}"));
+            if let Some(me) = me {
+                number(st, me, format!("-{damage}"), Some(colour), landed);
+            }
             let hp_max = st.character.hp_max(&st.content);
             let line = if deep { hp_max / 8 } else { hp_max / 4 };
             let cooling = if deep {
@@ -1814,7 +2134,7 @@ pub fn ice_lines(st: &AppState, b: BuildingId, seen: impl Fn(Pos) -> bool) -> Ve
             };
             format!(
                 "▣ {} ICE · {mode} · {}/{}{stunned}",
-                g.grade.label(),
+                g.label(),
                 i.integrity,
                 g.grade.integrity()
             )
@@ -1906,7 +2226,7 @@ pub fn beat(st: &mut AppState) {
         && st.net.death.is_none()
         && any_awake(st, b)
     {
-        engage(st, b, false);
+        engage(st, Place::Construct(b), false);
     }
 }
 
@@ -1928,7 +2248,7 @@ pub fn run_label(st: &AppState, run: &Run) -> Option<String> {
             .constructs
             .get(building)
             .and_then(|k| k.guards.get(index))
-            .map(|g| format!("{} ICE", g.grade.label()))
+            .map(|g| format!("{} ICE", g.label()))
             .unwrap_or_else(|| "ICE".to_string()),
         HackTarget::Deck => "deck".to_string(),
     };
@@ -1983,8 +2303,12 @@ pub fn hunted(st: &AppState) -> bool {
     })
 }
 
-/// Why the port refuses to jack in right now: the deck cooling, or a lockdown.
+/// Why the port refuses to jack in right now: a fight on foot, the deck cooling, or
+/// a lockdown.
 pub fn jack_in_refusal(st: &AppState) -> Option<String> {
+    if engaged_on_foot(st) {
+        return Some("not with a gun on you".to_string());
+    }
     let now = st.net.now(st);
     if let Some(left) = st.net.cooling(now) {
         return Some(format!("deck cooling · {left} min"));
@@ -2053,7 +2377,7 @@ pub fn targets_near(st: &AppState, b: BuildingId, pos: citygen::Pos) -> Vec<(Hac
                 building: b,
                 index: i,
             },
-            format!("ICE · {}", k.guards[i].grade.label()),
+            format!("ICE · {}", k.guards[i].label()),
         ));
     }
     out
@@ -2109,6 +2433,162 @@ mod tests {
 
     fn b(i: u32) -> BuildingId {
         BuildingId(i)
+    }
+
+    const STREET: Place = Place::Stratum(StratumKind::Street);
+
+    fn logged(st: &AppState, needle: &str) -> bool {
+        st.log.iter().any(|e| e.text.contains(needle))
+    }
+
+    /// The lot's construct with you on its gate, as the COMBAT · NET start opens.
+    fn net_lot() -> AppState {
+        let mut st = AppState::new();
+        st.enter_city(citygen::City::lot(1));
+        st.player = Some(crate::walker::Player::at(STREET, Pos::new(6, 8)));
+        start_in_net_lot(&mut st).unwrap();
+        st
+    }
+
+    #[test]
+    fn the_dummy_ice_never_wakes_hits_or_breaks() {
+        let mut st = net_lot();
+        let b = BuildingId(0);
+        let dummy = st.constructs.get(b).unwrap().guards[1].pos;
+        assert_eq!(dummy, Pos::new(6, 3));
+        // Stand beside it and run the attack at it with a sure roll.
+        st.player.as_mut().unwrap().pos = Pos::new(5, 3);
+        st.net.force_roll = Some(10);
+        st.character
+            .unload(&st.content, &ItemId::new("copy"))
+            .unwrap();
+        st.character.give(ItemId::new("attack"), 1);
+        st.character
+            .load(&st.content, &ItemId::new("attack"))
+            .unwrap();
+        let target = HackTarget::Guard {
+            building: b,
+            index: 1,
+        };
+        start_run(&mut st, ItemId::new("attack"), target).unwrap();
+        assert!(st.net.engaged.is_some());
+        let line = step_run(&mut st).unwrap();
+        assert_eq!(line, "attack · dummy ICE 6/6");
+        assert_eq!(st.net.ice[&b][1].integrity, 6, "nothing gets through");
+        assert_eq!(st.net.ice[&b][1].mode, IceMode::Asleep, "it never wakes");
+        assert!(
+            st.fx
+                .iter()
+                .any(|i| matches!(i.fx, Fx::Number { tag: true })),
+            "the number still lifts"
+        );
+        // Its turn passes at once, and standing beside you it never hits.
+        let hp = st.character.hp;
+        let focus = st.character.focus;
+        for _ in 0..3 {
+            end_turn(&mut st);
+            for _ in 0..40 {
+                if your_turn(&st) {
+                    break;
+                }
+                st.tick += PACE_TICKS;
+                if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
+                    world.advance(city, world.tick() + PACE_TICKS);
+                }
+                pace(&mut st);
+            }
+        }
+        assert_eq!((st.character.hp, st.character.focus), (hp, focus));
+        assert!(!logged(&st, "ICE hits"));
+        assert!(
+            ice_lines(&st, b, |_| true).contains(&"▣ dummy ICE · asleep · 6/6".to_string()),
+            "{:?}",
+            ice_lines(&st, b, |_| true)
+        );
+    }
+
+    #[test]
+    fn initiative_on_the_street_is_by_reflex_with_ties_to_you() {
+        let mut st = crate::foes::testutil::lot(Pos::new(14, 8));
+        st.character.stats.reflex = 5;
+        assert_eq!(initiative(&st, STREET), vec![Actor::You, Actor::Foe(0)]);
+        st.character.stats.reflex = 4;
+        assert_eq!(initiative(&st, STREET), vec![Actor::Foe(0), Actor::You]);
+        // A foe out of sight memory is not seated.
+        st.player
+            .as_mut()
+            .unwrap()
+            .set_vis(Pos::new(14, 8), crate::render::Visibility::Unseen);
+        assert_eq!(initiative(&st, STREET), vec![Actor::You]);
+    }
+
+    #[test]
+    fn pools_for_a_foe() {
+        let mut st = crate::foes::testutil::lot(Pos::new(14, 8));
+        st.character.stats.reflex = 3;
+        st.foes[0].mode = crate::foes::FoeMode::Hunting {
+            seen: Pos::new(6, 8),
+            lost: 0,
+        };
+        engage(&mut st, STREET, true);
+        let e = st.net.engaged.clone().unwrap();
+        assert_eq!(e.place, STREET);
+        assert_eq!(e.actor(), Actor::Foe(0));
+        assert_eq!(
+            (e.moves, e.ap),
+            (crate::foes::GOON_MOVE, crate::foes::GOON_AP)
+        );
+        assert!(logged(&st, "engaged"));
+    }
+
+    #[test]
+    fn a_hunting_foe_engages_the_street_with_the_magenta_line() {
+        let mut st = crate::foes::testutil::lot(Pos::new(14, 8));
+        assert!(crate::foes::look_all(&mut st));
+        engage(&mut st, STREET, false);
+        let e = st.net.engaged.clone().unwrap();
+        assert_eq!((e.place, e.manual), (STREET, false));
+        assert_eq!(e.order, vec![Actor::You, Actor::Foe(0)]);
+        let last = st.log.latest().unwrap();
+        assert_eq!(last.text, "ENGAGED · the goon has you");
+        assert_eq!(last.kind, crate::messages::Kind::Warn);
+        assert!(hunting(&st) && engaged_on_foot(&st));
+        assert!(!hunted(&st), "HUNTED is the net's word");
+    }
+
+    #[test]
+    fn a_round_with_no_hunter_calms_unless_manual() {
+        let mut st = crate::foes::testutil::lot(Pos::new(18, 8));
+        engage(&mut st, STREET, false);
+        assert_eq!(st.net.engaged.as_ref().unwrap().order.len(), 2);
+        // Your turn, then the idle foe's (it passes), then the round ends.
+        end_turn(&mut st);
+        assert!(st.net.engaged.is_none(), "{:?}", st.net.engaged);
+        assert!(logged(&st, "calm"));
+        engage(&mut st, STREET, true);
+        end_turn(&mut st);
+        assert!(st.net.engaged.is_some());
+        assert_eq!(st.net.engaged.as_ref().unwrap().round, 2);
+    }
+
+    #[test]
+    fn jack_in_and_doors_refused_while_engaged() {
+        let mut st = crate::foes::testutil::lot(Pos::new(14, 8));
+        engage(&mut st, STREET, true);
+        assert_eq!(
+            jack_in_refusal(&st).as_deref(),
+            Some("not with a gun on you")
+        );
+        assert_eq!(
+            crate::interiors::enter(&mut st, b(0), (StratumKind::Street, Pos::new(6, 8)))
+                .unwrap_err(),
+            "not now"
+        );
+        disengage(&mut st);
+        assert_ne!(
+            jack_in_refusal(&st).as_deref(),
+            Some("not with a gun on you")
+        );
     }
 
     /// A Medium city with a home, the player woken up beside the bed and stepped to

@@ -63,6 +63,13 @@ pub struct AppState {
     pub ground: game::Ground,
     /// Ability effects in flight, oldest first.
     pub fx: Vec<FxInstance>,
+    /// Who stands against you on foot this session; cleared with the city.
+    pub foes: Vec<crate::foes::Foe>,
+    /// Rounds fired this session: the roll's seed.
+    pub shots: u64,
+    /// Every round lands, or none; for tests.
+    #[cfg(test)]
+    pub force_hit: Option<bool>,
     /// Set when the screen should be repainted in full, as after a glitch kick.
     pub repaint: bool,
     /// Where the deck was last: its tab and the selected row per tab.
@@ -101,12 +108,22 @@ pub struct FxInstance {
     /// For a scan, the tiles it revealed; the wave hides them until it passes.
     pub revealed: Vec<citygen::Pos>,
     /// For a trace, the node tiles it found; bolts run to them and marks sit on them.
+    /// For a shot, the impact tile.
     pub targets: Vec<citygen::Pos>,
+    /// What a number reads (`-4`); empty for every other shape.
+    pub label: String,
+    /// For a shot's shapes: whether the round landed.
+    pub hit: bool,
+    /// A colour the net lends a number (its bolt's); `None` is the street's own.
+    pub tint: Option<(u8, u8, u8)>,
 }
 
 impl FxInstance {
     /// The tick from which the instance draws nothing.
     pub fn until(&self) -> u64 {
+        use crate::render::fx::{
+            CASING_TICKS, FLASH_TICKS, IMPACT_TICKS, NUMBER_TICKS, STREAK_TICKS, tracer_ticks,
+        };
         match self.fx {
             game::Fx::Kick(ticks) => self.started + ticks,
             game::Fx::Wave { ticks, .. } => {
@@ -115,6 +132,18 @@ impl FxInstance {
             game::Fx::Glow { ticks, .. }
             | game::Fx::Bolt { ticks, .. }
             | game::Fx::Mark { ticks, .. } => self.started + ticks,
+            game::Fx::Tracer { speed, .. } => {
+                self.started
+                    + self
+                        .targets
+                        .first()
+                        .map_or(1, |t| tracer_ticks(self.origin, *t, speed))
+            }
+            game::Fx::Streak { .. } => self.started + STREAK_TICKS,
+            game::Fx::Flash { .. } => self.started + FLASH_TICKS,
+            game::Fx::Chips | game::Fx::Spark | game::Fx::Tear => self.started + IMPACT_TICKS,
+            game::Fx::Number { .. } => self.started + NUMBER_TICKS,
+            game::Fx::Casing => self.started + CASING_TICKS,
         }
     }
 }
@@ -154,6 +183,10 @@ impl AppState {
             backdoors: Default::default(),
             ground: game::Ground::default(),
             fx: Vec::new(),
+            foes: Vec::new(),
+            shots: 0,
+            #[cfg(test)]
+            force_hit: None,
             repaint: false,
             deck_tab: Tab::Skills,
             deck_rows: [0; Tab::ALL.len()],
@@ -178,7 +211,8 @@ impl AppState {
 
     /// The time of night as (hour, minute), from the game's tick.
     pub fn clock(&self) -> (u8, u8) {
-        crate::ui::hud::clock_at(self.clock_tick())
+        let m = self.minute_of_day();
+        ((m / 60) as u8, (m % 60) as u8)
     }
 
     /// The minute of the day: the living city's clock, or the tick's before there is one.
@@ -232,14 +266,28 @@ impl AppState {
         }
     }
 
-    /// Puts a city in place: no body, no effects in flight, the home found.
+    /// Puts a city in place: no body, no effects in flight, the home found. The
+    /// clock starts at the city's usual hour.
     pub fn enter_city(&mut self, city: City) {
+        // The city's clock has run since the session started, as it always has.
+        let day = 24 * 60;
+        let spent = (self.tick / sim::TICKS_PER_MINUTE) % day;
+        let minute = (crate::ui::hud::START_MINUTE_OF_DAY as u64 + spent) % day;
+        self.enter_city_at(city, minute as u16);
+    }
+
+    /// Puts a city in place with its clock reading `minute` of the day on entry,
+    /// whatever ticks the session has already spent.
+    pub fn enter_city_at(&mut self, city: City, minute: u16) {
         self.home = crate::home::HomeRig::find(&city);
+        let day = 24 * 60;
+        let spent = (self.tick / sim::TICKS_PER_MINUTE) % day;
+        let start = (minute as u64 + day - spent) % day;
         self.world = Some(sim::World::seed(
             &city,
             &self.people,
             &sim::SimParams::default(),
-            crate::ui::hud::START_MINUTE_OF_DAY,
+            start as u16,
             self.tick,
         ));
         self.city = Some(city);
@@ -254,6 +302,7 @@ impl AppState {
         self.ground = Default::default();
         self.player = None;
         self.fx.clear();
+        self.foes.clear();
         self.deck_tab = Tab::Skills;
         self.deck_rows = [0; Tab::ALL.len()];
         self.deck_kit = Default::default();
@@ -736,6 +785,39 @@ mod tests {
     }
 
     #[test]
+    fn until_per_shot_shape() {
+        use citygen::Pos;
+        let at = |fx: game::Fx, targets: Vec<Pos>| FxInstance {
+            fx,
+            place: citygen::Place::Stratum(citygen::StratumKind::Street),
+            origin: Pos::new(6, 8),
+            radius: 0,
+            started: 100,
+            revealed: Vec::new(),
+            targets,
+            label: String::new(),
+            hit: false,
+            tint: None,
+        };
+        let to = vec![Pos::new(18, 8)];
+        assert_eq!(at(game::Fx::Flash { big: true }, to.clone()).until(), 102);
+        assert_eq!(
+            at(game::Fx::Streak { colour: (1, 1, 1) }, to.clone()).until(),
+            103
+        );
+        assert_eq!(at(game::Fx::Chips, to.clone()).until(), 103);
+        assert_eq!(at(game::Fx::Spark, to.clone()).until(), 103);
+        assert_eq!(at(game::Fx::Tear, to.clone()).until(), 103);
+        assert_eq!(at(game::Fx::Number { tag: true }, to.clone()).until(), 114);
+        let tracer = game::Fx::Tracer {
+            colour: (1, 1, 1),
+            speed: 3,
+        };
+        assert_eq!(at(tracer.clone(), to).until(), 104);
+        assert_eq!(at(tracer, Vec::new()).until(), 101);
+    }
+
+    #[test]
     fn fx_instances_end_and_prune() {
         let mut st = AppState::new();
         let at = |fx: game::Fx| FxInstance {
@@ -746,6 +828,9 @@ mod tests {
             started: 100,
             revealed: Vec::new(),
             targets: Vec::new(),
+            label: String::new(),
+            hit: false,
+            tint: None,
         };
         st.fx.push(at(game::Fx::Kick(4)));
         st.fx.push(at(game::Fx::Wave {
@@ -799,6 +884,9 @@ mod tests {
             started: 0,
             revealed: Vec::new(),
             targets: Vec::new(),
+            label: String::new(),
+            hit: false,
+            tint: None,
         });
         st.deck_tab = Tab::Kit;
         st.deck_rows[Tab::Stats.index()] = 3;

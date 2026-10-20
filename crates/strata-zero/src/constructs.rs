@@ -30,6 +30,11 @@ impl Constructs {
         self.made.get_mut(&b)
     }
 
+    /// A construct made elsewhere (the lot's), kept under its building.
+    pub fn insert(&mut self, k: Construct) {
+        self.made.insert(k.building, k);
+    }
+
     #[cfg(test)]
     pub fn generated(&self) -> usize {
         self.made.len()

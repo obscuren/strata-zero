@@ -388,6 +388,22 @@ impl Character {
         d
     }
 
+    /// The debug runner dressed for the street fight: a neural port worn (Static),
+    /// the handguns skill, three more stim patches. For NEW GAME (COMBAT).
+    pub fn combat_runner(c: &Content) -> Character {
+        let mut d = Self::debug_runner(c);
+        let port = ItemId::new("neural_port");
+        d.give_item(c, port.clone(), 1);
+        if let Some(old) = d.wear(Slot::Neural, port, None) {
+            d.stow(old);
+        }
+        d.skills.insert(SkillId::new("handguns"));
+        d.give(ItemId::new("stim_patch"), 3);
+        // The other SMG, in the pack, to swap in and see its look.
+        d.give_item(c, ItemId::new("whisper_smg"), 1);
+        d
+    }
+
     pub fn has_skill(&self, id: &SkillId) -> bool {
         self.skills.contains(id)
     }
@@ -1203,7 +1219,7 @@ mod tests {
             AbilityKind::Active(
                 Active::Scan { radius } | Active::Ping { radius } | Active::Trace { radius },
             ) => radius,
-            AbilityKind::Passive => 0,
+            AbilityKind::Active(Active::Strike { .. }) | AbilityKind::Passive => 0,
         };
         if radius != 0 {
             assert_ne!(reach(&eff), reach(base));
@@ -1547,6 +1563,28 @@ mod tests {
         );
         assert!(ch.has_ability(&c, &AbilityId::new("netscan")), "the deck");
         assert!(!ch.has_ability(&c, &AbilityId::new("ping")));
+    }
+
+    #[test]
+    fn combat_runner_wears_the_port_knows_handguns_and_carries_stims() {
+        let c = Content::load().unwrap();
+        let d = Character::combat_runner(&c);
+        assert_eq!(d.handle, "D'SHAWN");
+        assert_eq!(d.equipped(Slot::Neural), Some(&ItemId::new("neural_port")));
+        assert!(d.has_ability(&c, &AbilityId::new("static")));
+        assert!(d.has_skill(&SkillId::new("handguns")));
+        assert_eq!(
+            d.count(&ItemId::new("stim_patch")),
+            4,
+            "Vex's one and three more"
+        );
+        assert_eq!(d.equipped(Slot::Primary), Some(&ItemId::new("ratchet_smg")));
+        assert_eq!(
+            d.count(&ItemId::new("whisper_smg")),
+            1,
+            "the streak SMG, in the pack"
+        );
+        assert_eq!(d.level, 50);
     }
 
     #[test]

@@ -15,6 +15,7 @@ pub mod path;
 pub mod people;
 pub mod style;
 pub mod tileset;
+pub mod turns;
 pub mod viewport;
 pub mod weather;
 

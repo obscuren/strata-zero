@@ -11,11 +11,11 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 34] = [
+const COMMANDS: [&str; 37] = [
     "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "talent", "tpts", "program",
     "heat", "alarm", "wake", "engage", "calm", "ice", "failsafe", "hp", "who", "clock", "tp",
     "clear", "help", "trace", "seize", "backdoor", "eyes", "light", "time", "job", "standing",
-    "jobs", "target",
+    "jobs", "target", "foe", "foes", "dummy",
 ];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
@@ -216,20 +216,30 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             Ok(format!("{n} piece{} awake", if n == 1 { "" } else { "s" }))
         }
         "engage" => {
-            let Some(citygen::Place::Construct(b)) = st.player.as_ref().map(|p| p.place) else {
-                return Err("not in a construct".to_string());
-            };
+            let (place, jacked) = st
+                .player
+                .as_ref()
+                .map(|p| (p.place, p.jacked_in()))
+                .ok_or("no body")?;
             if st.net.engaged.is_some() {
                 return Ok("already engaged".to_string());
             }
-            crate::net::engage(st, b, true);
+            match place {
+                citygen::Place::Construct(_) => {}
+                _ if jacked => return Err("not in a construct".to_string()),
+                _ if crate::foes::in_memory(st).is_empty() => {
+                    return Err("nothing to engage".to_string());
+                }
+                _ => {}
+            }
+            crate::net::engage(st, place, true);
             Ok("engaged by hand".to_string())
         }
         "calm" => {
-            let Some(e) = st.net.engaged.as_ref() else {
+            if st.net.engaged.is_none() {
                 return Ok("already calm".to_string());
-            };
-            if crate::net::any_awake(st, e.building) {
+            }
+            if crate::net::hunting(st) {
                 return Err("still hunted".to_string());
             }
             crate::net::disengage(st);
@@ -255,7 +265,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                     let down = if k.guard_at(g.pos).is_none() { " down" } else { "" };
                     format!(
                         "{i} {} {mode} {}/{} at {},{}{down}",
-                        g.grade.label(),
+                        g.label(),
                         ice.integrity,
                         g.grade.integrity(),
                         g.pos.x,
@@ -265,6 +275,53 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 .collect();
             if lines.is_empty() {
                 return Ok("no ICE here".to_string());
+            }
+            Ok(lines.join(" · "))
+        }
+        "foe" | "dummy" => {
+            let n: i32 = args.first().and_then(|a| a.parse().ok()).unwrap_or(6);
+            let (place, pos) = st
+                .player
+                .as_ref()
+                .map(|p| (p.place, p.pos))
+                .ok_or("no body")?;
+            let at = pos.offset(n, 0);
+            let open = place.stratum().is_some_and(|k| {
+                st.city.as_ref().is_some_and(|c| c.walkable(k, at))
+            }) && crate::foes::foe_at(st, place, at).is_none();
+            if !open {
+                return Err("no room there".to_string());
+            }
+            let foe = if cmd == "dummy" {
+                crate::foes::Foe::dummy(place, at)
+            } else {
+                crate::foes::Foe::goon(place, at)
+            };
+            let line = format!("a {} at {},{}", foe.name, at.x, at.y);
+            st.foes.push(foe);
+            Ok(line)
+        }
+        "foes" => {
+            let lines: Vec<String> = st
+                .foes
+                .iter()
+                .enumerate()
+                .map(|(i, f)| {
+                    let mode = match f.mode {
+                        crate::foes::FoeMode::Idle => "idle".to_string(),
+                        crate::foes::FoeMode::Hunting { seen, lost } => {
+                            format!("hunting→{},{} lost {lost}", seen.x, seen.y)
+                        }
+                    };
+                    let down = if f.down { " down" } else { "" };
+                    format!(
+                        "{i} {} {mode} {}/{} at {},{}{down}",
+                        f.name, f.hp, f.hp_max, f.pos.x, f.pos.y
+                    )
+                })
+                .collect();
+            if lines.is_empty() {
+                return Ok("no foes".to_string());
             }
             Ok(lines.join(" · "))
         }
@@ -732,7 +789,10 @@ mod tests {
         assert_eq!(run(&mut st, at, "focus 5").unwrap(), "focus 5/30");
         assert_eq!(run(&mut st, at, "focus 99").unwrap(), "focus 30/30");
         assert!(run(&mut st, at, "help").unwrap().contains("xp"));
-        assert_eq!(complete(&st, "", "fo"), vec!["focus".to_string()]);
+        assert_eq!(
+            complete(&st, "", "fo"),
+            vec!["focus".to_string(), "foe".to_string(), "foes".to_string()]
+        );
         assert_eq!(run(&mut st, at, "sp 2").unwrap(), "sp 2");
         assert_eq!(run(&mut st, at, "pts 3").unwrap(), "points 3");
         assert_eq!((st.character.sp, st.character.stat_points), (2, 3));

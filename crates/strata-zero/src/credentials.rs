@@ -260,6 +260,7 @@ fn card(id: ItemId, name: String, desc: String) -> Item {
         look: None,
         hardware: None,
         sticker: None,
+        weapon: None,
         stickers: Vec::new(),
     }
 }

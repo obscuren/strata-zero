@@ -483,7 +483,42 @@ pub fn look_card(
         card.header = Some(name);
     };
 
-    if let (Some(id), Some(world)) = (person, st.world.as_ref()) {
+    // A foe on the tile, standing or down, before whatever it stands on.
+    let foe = st
+        .foes
+        .iter()
+        .find(|f| f.place == place && f.pos == pos && (visible || f.down));
+    if let Some(f) = foe {
+        let colour = if f.down {
+            crate::render::people::FOE_DOWN
+        } else {
+            crate::render::people::FOE
+        };
+        set_head(
+            &mut card,
+            capitalised(&f.name),
+            Some((if f.down { '%' } else { f.glyph }, colour)),
+        );
+        card.second = Some(if f.down {
+            "down".to_string()
+        } else {
+            let mode = if f.hunting() { "hunting" } else { "idle" };
+            format!(
+                "{mode} · {}/{} · {}",
+                f.hp,
+                f.hp_max,
+                crate::foes::weapon_name(st, f)
+            )
+        });
+        if f.stunned > 0 {
+            card.body.push(format!(
+                "Stunned for {} turn{}.",
+                f.stunned,
+                if f.stunned == 1 { "" } else { "s" }
+            ));
+        }
+        card.also.extend(stacks);
+    } else if let (Some(id), Some(world)) = (person, st.world.as_ref()) {
         let c = world.card(id, city);
         set_head(&mut card, c.name.clone(), Some(mark_person(st, id)));
         card.second = Some(format!("{} · {}", c.profession, c.doing));
@@ -551,7 +586,7 @@ pub fn look_card(
         let g = &st.constructs.get(b).expect("checked").guards[i];
         set_head(
             &mut card,
-            format!("{} ICE", capitalised(g.grade.label())),
+            format!("{} ICE", capitalised(g.label())),
             mark_tile(st, map, pos),
         );
         card.second = Some(if g.standing { "standing" } else { "broken" }.to_string());
