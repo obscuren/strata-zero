@@ -123,6 +123,8 @@ pub const RING_BG: [Color; 3] = [
 ];
 /// Under your own tile when you stand in the blast.
 pub const YOU_IN_IT_BG: Color = Color::Rgb(170, 30, 30);
+/// Ticks in each half of a live blast's blink (30 ticks a second).
+pub const LIVE_BLINK: u64 = 4;
 /// Under a live blast's footprint, dimmer than the aim's.
 pub const LIVE_RING_BG: [Color; 3] = [
     Color::Rgb(60, 18, 18),
@@ -203,7 +205,7 @@ impl Overlay for LiveOverlay<'_> {
             let Some(at) = tile_to_screen(area, origin, l.pos) else {
                 continue;
             };
-            let fg = if tick.is_multiple_of(2) {
+            let fg = if (tick / LIVE_BLINK).is_multiple_of(2) {
                 Color::Rgb(190, 190, 140)
             } else {
                 Color::Rgb(255, 80, 80)
@@ -549,7 +551,7 @@ mod tests {
         let row: String = (6..14).map(|x| even[(x, 3)].symbol().to_string()).collect();
         assert_eq!(row, " fuse 1 ");
         let mut odd = Buffer::empty(area);
-        o.draw(&map, Pos::new(0, 0), area, 1, &mut odd, &style);
+        o.draw(&map, Pos::new(0, 0), area, 4, &mut odd, &style);
         assert_eq!(odd[(10, 5)].fg, Color::Rgb(255, 80, 80));
     }
 }
