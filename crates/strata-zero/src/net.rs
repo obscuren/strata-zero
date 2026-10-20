@@ -674,7 +674,7 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
             if st.character.flags(&st.content).contains("black_ice") {
                 damage += 1;
             }
-            return hit_piece(st, b, index, damage, 0, now);
+            return hit_piece(st, b, index, label, damage, 0, now);
         }
         let line = format!("{label} slips · heat {heat}");
         st.say(line.clone());
@@ -700,11 +700,13 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
 
 /// A hit lands on a piece of ICE: its integrity falls (a dummy takes it and keeps
 /// standing), it wakes, `stun` turns hold it, and at zero the piece breaks with the
-/// break path of an attack. Logs and returns the line.
+/// break path of an attack, ending a run on it. Logs, under the name of what hit
+/// it (`attack · grey ICE 4/6`, `static · grey ICE 3/6`), and returns the line.
 pub fn hit_piece(
     st: &mut AppState,
     b: BuildingId,
     index: usize,
+    by: &str,
     damage: u8,
     stun: u8,
     now: u64,
@@ -731,7 +733,10 @@ pub fn hit_piece(
         ice.integrity
     };
     if left == 0 {
-        st.net.run = None;
+        // A run on the broken piece ends with it; one on anything else goes on.
+        if st.net.run.as_ref().is_some_and(|r| r.target == target) {
+            st.net.run = None;
+        }
         st.net.land(b, target, kind, Op::Attack, now);
         let roots = st.backdoors.roots();
         st.net.sync_guards(&mut st.constructs, b, now, &roots);
@@ -741,7 +746,7 @@ pub fn hit_piece(
         alarm_clears(st, b);
         return Some(line);
     }
-    let line = format!("attack · {label} ICE {left}/{}", grade.integrity());
+    let line = format!("{by} · {label} ICE {left}/{}", grade.integrity());
     st.say(line.clone());
     Some(line)
 }
@@ -1285,9 +1290,15 @@ pub fn sees(k: &Construct, from: Pos, grade: IceGrade, player: Pos, masked: bool
     if from.chebyshev(player) > range {
         return false;
     }
-    bresenham(from, player)
+    line_clear_in(k, from, player)
+}
+
+/// No wall of the construct on the line between two tiles, the ends excluded:
+/// the construct's own clear line, as `foes::line_clear` is a stratum's.
+pub fn line_clear_in(k: &Construct, from: Pos, to: Pos) -> bool {
+    bresenham(from, to)
         .into_iter()
-        .filter(|p| *p != from && *p != player)
+        .filter(|p| *p != from && *p != to)
         .all(|p| {
             k.tiles
                 .get(p)

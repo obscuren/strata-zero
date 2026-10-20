@@ -237,7 +237,7 @@ pub fn strike_ice(
         st.say(format!("{name} · {label} ICE miss"));
         return Ok(());
     }
-    net::hit_piece(st, b, i, damage, stun, now);
+    net::hit_piece(st, b, i, &name, damage, stun, now);
     if stun > 0
         && st
             .net
@@ -248,7 +248,8 @@ pub fn strike_ice(
     {
         st.say(format!("{label} ICE stunned"));
     }
-    // The arc hops on, no roll: half the damage and the stun, a hop late each.
+    // The arc hops on, no roll: half the damage and the stun, a hop late each, to
+    // a standing piece with a clear line from the last, as it hops between foes.
     let half = combat::hop_damage(damage);
     let (mut hits, mut last) = (vec![i], at);
     for hop in 1..=chain as u64 {
@@ -259,7 +260,7 @@ pub fn strike_ice(
             .guards
             .iter()
             .enumerate()
-            .filter(|(i, g)| k.guard_at(g.pos) == Some(*i))
+            .filter(|(i, g)| k.guard_at(g.pos) == Some(*i) && net::line_clear_in(k, last, g.pos))
             .map(|(i, g)| (i, g.pos));
         let Some(next) = combat::nearest_other(candidates, last, &hits) else {
             break;
@@ -282,7 +283,7 @@ pub fn strike_ice(
             half,
             combat::hop_start(impact, hop),
         );
-        net::hit_piece(st, b, next, half, stun, now);
+        net::hit_piece(st, b, next, &name, half, stun, now);
         hits.push(next);
         last = target;
     }
@@ -602,6 +603,11 @@ mod tests {
         assert!(st.fx.iter().all(|i| i.tint == Some(net::ATTACK_TINT)));
         assert!(!st.fx.iter().any(|i| matches!(i.fx, Fx::Flash { .. })));
         assert!(st.fx.iter().any(|i| matches!(i.fx, Fx::Number { .. })));
+        assert!(
+            logged(&st, "static · grey ICE 6/6"),
+            "the strike's own name: {:?}",
+            st.log.iter().map(|e| e.text.clone()).collect::<Vec<_>>()
+        );
         assert!(logged(&st, "grey ICE stunned"));
         // The next one breaks it.
         net::end_turn(&mut st);
@@ -658,5 +664,52 @@ mod tests {
         );
         assert_eq!(mark(&mut st, &id("deadeye"), 0).unwrap_err(), "not in here");
         assert_eq!(strike(&mut st, &id("jolt"), 0).unwrap_err(), "not in here");
+    }
+
+    #[test]
+    fn jolt_does_not_arc_through_a_wall_between_pieces() {
+        let (mut st, b) = net_fight();
+        let k = st.constructs.get_mut(b).unwrap();
+        k.guards[1].pos = Pos::new(38, 11);
+        k.tiles[Pos::new(38, 10)].terrain = citygen::Terrain::NetWall;
+        st.force_hit = Some(true);
+        strike_ice(&mut st, &id("jolt"), b, 0).unwrap();
+        assert_eq!(st.net.ice[&b][0].integrity, 7, "the first piece is hit");
+        let streaks = st
+            .fx
+            .iter()
+            .filter(|i| matches!(i.fx, Fx::Streak { .. }))
+            .count();
+        assert_eq!(streaks, 1, "no hop through the wall");
+    }
+
+    #[test]
+    fn a_break_ends_a_run_on_that_piece_and_no_other() {
+        let crack = |target| game::Run {
+            program: game::ItemId::new("crack"),
+            target,
+            done: 1,
+            work: 3,
+        };
+        // A crack on a door is in flight when Static breaks the grey piece.
+        let (mut st, b) = net_fight();
+        st.net.ice.get_mut(&b).unwrap()[0].integrity = 6;
+        let door = crack(game::HackTarget::Node(citygen::NodeId(3)));
+        st.net.run = Some(door.clone());
+        st.force_hit = Some(true);
+        strike_ice(&mut st, &id("static"), b, 0).unwrap();
+        assert!(logged(&st, "grey ICE broken"));
+        assert_eq!(st.net.run, Some(door), "the door's crack goes on");
+        // A run on the piece itself ends with it.
+        let (mut st, b) = net_fight();
+        st.net.ice.get_mut(&b).unwrap()[0].integrity = 6;
+        st.net.run = Some(crack(game::HackTarget::Guard {
+            building: b,
+            index: 0,
+        }));
+        st.force_hit = Some(true);
+        strike_ice(&mut st, &id("static"), b, 0).unwrap();
+        assert!(logged(&st, "grey ICE broken"));
+        assert_eq!(st.net.run, None);
     }
 }
