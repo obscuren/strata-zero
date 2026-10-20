@@ -382,37 +382,43 @@ impl MapScreen {
     }
 
     /// The readout over an enemy under the cursor: its name, its weapon (or what is
-    /// left of the ICE), the distance, your chance per round (or why there is none).
-    fn aim_readout(st: &AppState, enemy: Enemy) -> String {
+    /// left of the ICE), the distance, your chance per round (or why there is none);
+    /// with the characters of the chance to light when the foe is marked.
+    fn aim_readout(st: &AppState, enemy: Enemy) -> (String, Option<std::ops::Range<usize>>) {
         let Some(me) = st.player.as_ref().map(|p| p.pos) else {
-            return String::new();
+            return (String::new(), None);
         };
         match enemy {
             Enemy::Foe(foe) => {
                 let f = &st.foes[foe];
-                let odds = match crate::combat::your_chance(st, foe) {
+                let chance = crate::combat::your_chance(st, foe);
+                let odds = match &chance {
                     Ok(c) => format!("{c}%"),
-                    Err(why) => why,
+                    Err(why) => why.clone(),
                 };
-                format!(
-                    " {} · {} · {} tiles · {odds} ",
+                let head = format!(
+                    " {} · {} · {} tiles · ",
                     f.name,
                     crate::foes::weapon_name(st, f),
                     me.chebyshev(f.pos)
-                )
+                );
+                let from = head.chars().count();
+                let lit = (f.marked && chance.is_ok()).then(|| from..from + odds.chars().count());
+                (format!("{head}{odds} "), lit)
             }
             Enemy::Ice(i) => {
                 let Some(Place::Construct(b)) = st.player.as_ref().map(|p| p.place) else {
-                    return String::new();
+                    return (String::new(), None);
                 };
                 let Some((name, left, at)) = crate::net::ice_card(st, b, i) else {
-                    return String::new();
+                    return (String::new(), None);
                 };
                 let odds = match crate::combat::attack_chance(st, b, i) {
                     Ok(c) => format!("{c}%"),
                     Err(why) => why,
                 };
-                format!(" {name} · {left} · {} tiles · {odds} ", me.chebyshev(at))
+                let text = format!(" {name} · {left} · {} tiles · {odds} ", me.chebyshev(at));
+                (text, None)
             }
         }
     }
@@ -2889,6 +2895,16 @@ impl Screen for MapScreen {
             .as_ref()
             .map(|p| p.pos)
             .filter(|me| footprint.iter().any(|(q, _)| q == me));
+        let (readout, lit) = match &armed_text {
+            Some((text, _)) => (Some(text.clone()), None),
+            None => match aimed_foe.filter(|_| !shooting) {
+                Some(i) => {
+                    let (text, lit) = Self::aim_readout(st, i);
+                    (Some(text), lit)
+                }
+                None => (None, None),
+            },
+        };
         let fire =
             self.target
                 .filter(|_| self.firing(st))
@@ -2896,15 +2912,11 @@ impl Screen for MapScreen {
                     line: &fire_line,
                     target: t,
                     on_foe: aimed_foe.is_some(),
-                    readout: match &armed_text {
-                        Some((text, _)) => Some(text.clone()),
-                        None => aimed_foe
-                            .filter(|_| !shooting)
-                            .map(|i| Self::aim_readout(st, i)),
-                    },
+                    readout,
                     footprint: &footprint,
                     you,
                     warn: armed_text.as_ref().is_some_and(|(_, warn)| *warn),
+                    lit,
                 });
         // A live blast's thing under a foe standing on it: the foe's glyph is kept.
         let drawn_foes: Vec<Pos> = st
@@ -11465,6 +11477,46 @@ mod tests {
         // Redline fires at once and sends you back to the move half.
         s.update(&mut st, &[key(KeyCode::Char('4'))]);
         assert_eq!(crate::net::phase(&st), Some(crate::net::Phase::Move));
+    }
+
+    #[test]
+    fn the_chance_on_a_marked_foe_is_magenta_bold() {
+        use crate::render::path::MARK_LIT;
+        let (mut st, mut s) = runner_half(Pos::new(12, 8));
+        let chance_cells = |s: &MapScreen, st: &AppState| {
+            let buf = draw_buffer(s, st, 100, 30);
+            let text = buffer_text(&buf);
+            let row = text
+                .lines()
+                .position(|l| l.contains("goon · Scrap nine · 6 tiles · "))
+                .unwrap_or_else(|| panic!("the readout: {text}"));
+            let line: Vec<char> = text.lines().nth(row).unwrap().chars().collect();
+            let pct = line.iter().position(|c| *c == '%').expect("a chance");
+            let digits = (0..pct)
+                .rev()
+                .take_while(|x| line[*x].is_ascii_digit())
+                .count();
+            (
+                (pct - digits..=pct)
+                    .map(|x| buf[(x as u16, row as u16)].clone())
+                    .collect::<Vec<_>>(),
+                buf[(pct as u16 + 1, row as u16)].clone(),
+            )
+        };
+        let (cells, _) = chance_cells(&s, &st);
+        assert!(
+            cells.iter().all(|c| c.fg == CYAN),
+            "unmarked: the readout's own"
+        );
+        s.update(&mut st, &[key(KeyCode::Char('5'))]);
+        assert!(st.foes[0].marked, "{:?}", last(&st));
+        st.tick += 30;
+        let (cells, after) = chance_cells(&s, &st);
+        for c in &cells {
+            assert_eq!(c.fg, MARK_LIT, "{}", c.symbol());
+            assert!(c.modifier.contains(Modifier::BOLD));
+        }
+        assert_eq!(after.fg, CYAN, "the margin after it is not lit");
     }
 
     #[test]

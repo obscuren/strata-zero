@@ -8,6 +8,7 @@ use citygen::Pos;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
+use std::ops::Range;
 
 /// The cross of an aim no path reaches.
 pub const NO_WAY: Color = Color::Rgb(255, 40, 40);
@@ -106,12 +107,17 @@ pub struct AimOverlay<'a> {
     pub you: Option<Pos>,
     /// The readout draws red: you stand in the blast.
     pub warn: bool,
+    /// The readout's characters (by index) drawn in the mark's magenta, bold: the
+    /// chance on a marked foe.
+    pub lit: Option<Range<usize>>,
 }
 
 /// The line of fire's dots.
 pub const FIRE_LINE: Color = Color::Rgb(90, 90, 90);
 /// Under the readout.
 pub const READOUT_BG: Color = Color::Rgb(0, 20, 26);
+/// The chance on a marked foe, in the readout.
+pub const MARK_LIT: Color = Color::Rgb(255, 0, 200);
 /// The readout when you stand in the blast.
 pub const WARN_FG: Color = Color::Rgb(255, 80, 80);
 pub const WARN_BG: Color = Color::Rgb(26, 0, 0);
@@ -133,7 +139,8 @@ pub const LIVE_RING_BG: [Color; 3] = [
 ];
 
 /// ` text ` on the readout ground, bold over the first word, two rows above `at`,
-/// clamped inside the area. Nothing when it does not fit.
+/// clamped inside the area; the screen cell of its first character. Nothing when
+/// it does not fit.
 fn readout(
     buf: &mut Buffer,
     area: Rect,
@@ -142,10 +149,10 @@ fn readout(
     fg: Color,
     bg: Color,
     bold_name: bool,
-) {
+) -> Option<(u16, u16)> {
     let width = text.chars().count() as i32;
     if area.width < width as u16 || at.1 < area.y + 2 {
-        return;
+        return None;
     }
     let x0 = (at.0 as i32 - width / 2)
         .max(area.x as i32)
@@ -171,6 +178,7 @@ fn readout(
             cell.modifier.remove(Modifier::BOLD);
         }
     }
+    Some((x0 as u16, y))
 }
 
 /// Shade each footprint tile by its ring, glyphs kept.
@@ -279,7 +287,15 @@ impl Overlay for AimOverlay<'_> {
         } else {
             (CYAN, READOUT_BG)
         };
-        readout(buf, area, at, text, fg, bg, true);
+        let Some((x0, y)) = readout(buf, area, at, text, fg, bg, true) else {
+            return;
+        };
+        let width = text.chars().count();
+        for i in self.lit.clone().unwrap_or_default().filter(|i| *i < width) {
+            let cell = &mut buf[(x0 + i as u16, y)];
+            cell.set_fg(MARK_LIT);
+            cell.modifier.insert(Modifier::BOLD);
+        }
     }
 }
 
@@ -462,6 +478,7 @@ mod tests {
             footprint,
             you,
             warn: false,
+            lit: None,
         }
     }
 
@@ -525,6 +542,31 @@ mod tests {
         assert_eq!(c.symbol(), "f");
         assert_eq!(c.fg, WARN_FG);
         assert_eq!(c.bg, WARN_BG);
+    }
+
+    #[test]
+    fn a_lit_span_of_the_readout_is_magenta_bold() {
+        let area = Rect::new(0, 0, 30, 6);
+        let mut buf = Buffer::empty(area);
+        // ` goon · 80% ` is 12 wide: centred on x 10 it starts at x 4.
+        let o = AimOverlay {
+            readout: Some(" goon · 80% ".to_string()),
+            lit: Some(8..11),
+            ..aim(Pos::new(10, 4), true, &[], None)
+        };
+        aim_buf(&o, &mut buf, area);
+        let row: String = (4..16).map(|x| buf[(x, 2)].symbol().to_string()).collect();
+        assert_eq!(row, " goon · 80% ");
+        for x in 12..15 {
+            let c = &buf[(x, 2)];
+            assert_eq!(c.fg, MARK_LIT, "{} at {x}", c.symbol());
+            assert!(c.modifier.contains(Modifier::BOLD));
+            assert_eq!(c.bg, READOUT_BG);
+        }
+        let space = &buf[(15, 2)];
+        assert_eq!(space.fg, CYAN);
+        assert!(!space.modifier.contains(Modifier::BOLD));
+        assert_eq!(buf[(10, 2)].fg, CYAN, "the dot stays the readout's");
     }
 
     #[test]
