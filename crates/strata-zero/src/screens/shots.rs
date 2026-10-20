@@ -322,6 +322,21 @@ fn combat_bloom_mid() {
 
 #[test]
 #[ignore]
+fn combat_scorch_under_the_aim() {
+    let (mut st, mut map) = runner_aim(Pos::new(12, 8), None);
+    throw_digit(&mut st, &mut map, '6');
+    at_shape(
+        &mut st,
+        |f| matches!(f, game::Fx::Bloom),
+        crate::render::fx::BLOOM_TICKS + 2,
+    );
+    // Armed again on the goon standing on the scorch: the rings over it.
+    map.update(&mut st, &[key(KeyCode::Char('6'))]);
+    combat_shot("combat_scorch_under_the_aim", &st, &map);
+}
+
+#[test]
+#[ignore]
 fn combat_whiteout_mid() {
     let (mut st, mut map) = runner_aim(Pos::new(12, 8), None);
     throw_digit(&mut st, &mut map, '7');
@@ -341,8 +356,13 @@ fn combat_shock_mid() {
 #[test]
 #[ignore]
 fn combat_live_satchel() {
-    let (mut st, mut map) = runner_aim(Pos::new(10, 8), None);
-    throw_digit(&mut st, &mut map, '9');
+    // Two tiles short of the goon, the cursor put away after: the satchel lies live
+    // with its fuse, the goon standing in its footprint.
+    let (mut st, mut map) = runner_aim(Pos::new(12, 8), None);
+    map.update(&mut st, &[key(KeyCode::Char('9'))]);
+    map.update(&mut st, &[key(KeyCode::Char('h')), key(KeyCode::Char('h'))]);
+    map.update(&mut st, &[key(KeyCode::Char(' '))]);
+    map.update(&mut st, &[key(KeyCode::Esc)]);
     st.tick += 20;
     map.update(&mut st, &[]);
     combat_shot("combat_live_satchel", &st, &map);
