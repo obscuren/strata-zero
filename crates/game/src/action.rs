@@ -29,6 +29,8 @@ pub enum Action {
     /// Drops one copy from the pack, with what is fitted in it.
     DropCopy(CopyId),
     Use(ItemId),
+    /// Spends one thrown item; the throw itself is the app's to play.
+    Throw(ItemId),
     /// Takes from the stacks without a copy; copies are taken by id.
     Take {
         item: ItemId,
@@ -274,6 +276,9 @@ pub fn apply(
             let on_use = item
                 .on_use
                 .ok_or_else(|| format!("{} cannot be used", item.name))?;
+            if item.throw().is_some() {
+                return Err("throw it from the map".to_string());
+            }
             remove_from_pack(ch, &id, 1);
             match on_use {
                 Use::Heal(n) => {
@@ -281,7 +286,19 @@ pub fn apply(
                     ch.hp += healed;
                     done(format!("used `{}` · +{healed} hp", item.name))
                 }
+                Use::Throw { .. } => unreachable!("refused above"),
             }
+        }
+        Action::Throw(id) => {
+            let item = c.item(&id).ok_or_else(|| format!("unknown item {id}"))?;
+            if item.throw().is_none() {
+                return Err(format!("{} is not thrown", item.name));
+            }
+            if ch.count(&id) == 0 {
+                return Err("none left".to_string());
+            }
+            remove_from_pack(ch, &id, 1);
+            done(format!("threw `{}`", item.name))
         }
         Action::Take { item, qty } => {
             if ch.overburdened(c) {
@@ -548,7 +565,11 @@ pub fn apply(
             ch.fired.insert(id.clone(), tick);
             let effects = match active {
                 Active::Scan { radius } => vec![Effect::Reveal { radius }],
-                Active::Ping { .. } | Active::Trace { .. } | Active::Strike { .. } => Vec::new(),
+                Active::Ping { .. }
+                | Active::Trace { .. }
+                | Active::Strike { .. }
+                | Active::Boost { .. }
+                | Active::Mark { .. } => Vec::new(),
             };
             Ok(Outcome {
                 message: format!("{}: pulse sent", ability.name),
@@ -1641,5 +1662,61 @@ mod tests {
         apply(&mut ch, &mut g, &c, at, 0, Action::Unequip(Slot::Deck)).unwrap();
         let back = ch.copy_in_pack(pawn).and_then(|s| s.copy.as_ref());
         assert_eq!(back.and_then(oni), Some(id("sticker_oni")));
+    }
+
+    fn frag() -> Item {
+        ron::from_str(
+            r#"Item(id: "frag", name: "Frag", kind: Consumable, weight: 0.4, value: 1,
+            use: Some(Throw(range: 8, arc: Lob, blast: Blast(radius: 2, damage: 12, stun: 0))),
+            fx: [Throw, Bloom], desc: "")"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn throw_consumes_one_and_use_refuses_a_throwable() {
+        let (mut c, mut ch, mut g, at) = setup();
+        c.items.push(frag());
+        ch.give_item(&c, id("frag"), 2);
+        let out = apply(&mut ch, &mut g, &c, at, 0, Action::Throw(id("frag"))).unwrap();
+        assert_eq!(out.message, "threw `Frag`");
+        assert!(out.effects.is_empty());
+        assert_eq!(ch.count(&id("frag")), 1);
+        assert_eq!(
+            apply(&mut ch, &mut g, &c, at, 0, Action::Use(id("frag"))).unwrap_err(),
+            "throw it from the map"
+        );
+        assert_eq!(ch.count(&id("frag")), 1);
+        ch.give_item(&c, id("stim_patch"), 1);
+        assert_eq!(
+            apply(&mut ch, &mut g, &c, at, 0, Action::Throw(id("stim_patch"))).unwrap_err(),
+            "Stim patch is not thrown"
+        );
+        apply(&mut ch, &mut g, &c, at, 0, Action::Throw(id("frag"))).unwrap();
+        assert_eq!(
+            apply(&mut ch, &mut g, &c, at, 0, Action::Throw(id("frag"))).unwrap_err(),
+            "none left"
+        );
+    }
+
+    #[test]
+    fn fire_books_boost_and_mark_cooldowns() {
+        let (mut c, mut ch, mut g, at) = setup();
+        for (name, kind) in [
+            ("redline", "Active(Boost(once: true))"),
+            ("deadeye", "Active(Mark(range: 12, bonus: 20, ap: 1))"),
+        ] {
+            c.abilities.push(
+                ron::from_str(&format!(
+                    r#"Ability(id: "{name}", name: "X", cooldown: 60, kind: {kind}, desc: "")"#
+                ))
+                .unwrap(),
+            );
+            let a = AbilityId::new(name);
+            ch.abilities.push(a.clone());
+            let out = apply(&mut ch, &mut g, &c, at, 10, Action::Fire(a.clone())).unwrap();
+            assert!(out.effects.is_empty());
+            assert_eq!(ch.fired.get(&a), Some(&10));
+        }
     }
 }

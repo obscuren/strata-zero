@@ -357,6 +357,93 @@ pub struct Footer<'a> {
     pub acting: Option<bool>,
     /// Row 2 while engaged: what is happening and the keys for it.
     pub prompt: Option<(String, String)>,
+    /// On your act half: the fight's abilities and throwables, numbered. In a
+    /// construct only the net-capable abilities, which follow the programs.
+    pub act: Option<Vec<ActEntry>>,
+    /// The pools draw lit: a boost just refilled them.
+    pub flash_pools: bool,
+}
+
+/// One entry of the act half's `ACT` row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActEntry {
+    pub key: char,
+    pub name: String,
+    /// How many are left: set on a throwable.
+    pub count: Option<u32>,
+    pub state: ActState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActState {
+    Ready,
+    Cooling,
+    /// Cannot be used right now.
+    Refused,
+}
+
+const ACT_KEY: Color = Color::Rgb(90, 90, 90);
+const ACT_THROWN: Color = Color::Rgb(190, 190, 140);
+const POOLS_FLASH_BG: Color = Color::Rgb(0, 90, 110);
+
+fn entry_spans(e: &ActEntry) -> Vec<Span<'static>> {
+    let name_fg = match (e.state, e.count) {
+        (ActState::Ready, Some(_)) => ACT_THROWN,
+        (ActState::Ready, None) => TEXT,
+        _ => DIM,
+    };
+    let mut label = e.name.to_lowercase();
+    if let Some(n) = e.count {
+        label.push_str(&format!("×{n}"));
+    }
+    let mut spans = vec![
+        Span::styled(format!("{} ", e.key), Style::default().fg(ACT_KEY)),
+        Span::styled(label, Style::default().fg(name_fg)),
+    ];
+    if e.state == ActState::Cooling {
+        spans.push(dim(" ◌"));
+    }
+    spans
+}
+
+/// The entries that fit in `avail` cells, whole ones only with a space between; a
+/// ` …` ends the list when some were left out.
+fn act_spans(entries: &[ActEntry], avail: usize) -> Vec<Span<'static>> {
+    let cells: Vec<Vec<Span<'static>>> = entries.iter().map(entry_spans).collect();
+    let total: usize =
+        cells.iter().map(|c| width_of(c)).sum::<usize>() + cells.len().saturating_sub(1);
+    let mut kept = Vec::new();
+    let mut used = 0;
+    let all = total <= avail;
+    for c in cells {
+        let w = width_of(&c) + usize::from(!kept.is_empty());
+        if !all && used + w + 2 > avail {
+            break;
+        }
+        used += w;
+        kept.push(c);
+    }
+    let mut out = Vec::new();
+    for (i, c) in kept.into_iter().enumerate() {
+        if i > 0 {
+            out.push(Span::raw(" "));
+        }
+        out.extend(c);
+    }
+    if !all && avail >= used + 2 {
+        out.push(dim(" …"));
+    }
+    out
+}
+
+/// Row 4 on the act half: ` ACT  1 static 2 jolt …` with the pools on the right.
+/// Whole entries drop off the end with `…` when they do not fit.
+pub fn act_row(entries: &[ActEntry], right: Vec<Span<'static>>, width: usize) -> Line<'static> {
+    let right = cut_spans(right, width / 2);
+    let avail = width.saturating_sub(width_of(&right) + 1 + 6);
+    let mut left = vec![dim(" ACT  ")];
+    left.extend(act_spans(entries, avail));
+    right_aligned(left, right, width)
 }
 
 fn right_aligned(left: Vec<Span<'static>>, right: Vec<Span<'static>>, w: usize) -> Line<'static> {
@@ -516,28 +603,61 @@ pub fn footer_rows(f: &Footer, width: u16) -> [Line<'static>; 4] {
                 dim(format!(" {label} "))
             }
         };
-        right4.push(badge("MOVE", f.acting == Some(false)));
-        right4.push(Span::styled(
-            format!(
-                "{}{}",
-                "▰".repeat(mv as usize),
-                "▱".repeat(mv_max.saturating_sub(mv) as usize)
+        let moves = [
+            badge("MOVE", f.acting == Some(false)),
+            Span::styled(
+                format!(
+                    "{}{}",
+                    "▰".repeat(mv as usize),
+                    "▱".repeat(mv_max.saturating_sub(mv) as usize)
+                ),
+                Style::default().fg(CYAN),
             ),
-            Style::default().fg(CYAN),
-        ));
-        right4.push(text(format!(" {mv}/{mv_max}   ")));
-        right4.push(badge("AP", f.acting == Some(true)));
-        right4.push(Span::styled(
-            format!(
-                "{}{}",
-                "●".repeat(ap as usize),
-                "○".repeat(ap_max.saturating_sub(ap) as usize)
+            text(format!(" {mv}/{mv_max}")),
+        ];
+        let points = [
+            badge("AP", f.acting == Some(true)),
+            Span::styled(
+                format!(
+                    "{}{}",
+                    "●".repeat(ap as usize),
+                    "○".repeat(ap_max.saturating_sub(ap) as usize)
+                ),
+                Style::default().fg(CYAN),
             ),
-            Style::default().fg(CYAN),
-        ));
-        right4.push(text(format!(" {ap}/{ap_max}")));
+            text(format!(" {ap}/{ap_max}")),
+        ];
+        // The act half reads the action points first.
+        let (first, second) = if f.act.is_some() {
+            (points, moves)
+        } else {
+            (moves, points)
+        };
+        right4.extend(first);
+        right4.push(Span::raw("   "));
+        right4.extend(second);
     }
-    let line4 = right_aligned(row4, right4, w);
+    if f.flash_pools {
+        let lit = Style::default()
+            .fg(Color::White)
+            .bg(POOLS_FLASH_BG)
+            .add_modifier(Modifier::BOLD);
+        for sp in &mut right4 {
+            sp.style = lit;
+        }
+    }
+    let line4 = match &f.act {
+        Some(entries) if !programs => act_row(entries, right4, w),
+        Some(entries) => {
+            // A construct: the programs keep their slots, the abilities follow.
+            let rw = width_of(&cut_spans(right4.clone(), w / 2));
+            let used = width_of(&row4) + 3;
+            row4.push(Span::raw("   "));
+            row4.extend(act_spans(entries, w.saturating_sub(rw + 1 + used)));
+            right_aligned(row4, right4, w)
+        }
+        None => right_aligned(row4, right4, w),
+    };
     // Row 2: what is happening on turns, and the keys for it.
     let row2 = match &f.prompt {
         Some((what, keys)) => vec![
@@ -877,6 +997,8 @@ mod tests {
                 budgets: None,
                 acting: None,
                 prompt: None,
+                act: None,
+                flash_pools: false,
             };
             footer_rows(&f, 100)[3].clone()
         };
@@ -949,6 +1071,8 @@ mod tests {
             budgets: None,
             acting: None,
             prompt: None,
+            act: None,
+            flash_pools: false,
         };
         let rows: Vec<String> = footer_rows(&on_foot, 120)
             .iter()
@@ -989,6 +1113,8 @@ mod tests {
             budgets: None,
             acting: None,
             prompt: None,
+            act: None,
+            flash_pools: false,
         };
         let rows: Vec<String> = footer_rows(&calm, 130)
             .iter()
@@ -1085,5 +1211,146 @@ mod tests {
             "{:?}",
             rows[3]
         );
+    }
+
+    fn act_entries() -> Vec<ActEntry> {
+        let e = |key, name: &str, count| ActEntry {
+            key,
+            name: name.into(),
+            count,
+            state: ActState::Ready,
+        };
+        vec![
+            e('1', "Static", None),
+            e('2', "Jolt", None),
+            e('3', "Shove", None),
+            e('4', "Redline", None),
+            e('5', "Deadeye", None),
+            e('6', "Frag", Some(3)),
+            e('7', "Flashbang", Some(2)),
+            e('8', "EMP Puck", Some(2)),
+            e('9', "Satchel Charge", Some(1)),
+        ]
+    }
+
+    fn pools() -> Vec<Span<'static>> {
+        vec![Span::raw("AP ●● 2/2  MOVE 4/4")]
+    }
+
+    #[test]
+    fn the_act_row_numbers_abilities_then_throwables_and_cuts_with_an_ellipsis() {
+        let full = act_row(&act_entries(), pools(), 130).to_string();
+        assert!(
+            full.starts_with(
+                " ACT  1 static 2 jolt 3 shove 4 redline 5 deadeye 6 frag×3 7 flashbang×2 8 emp puck×2 9 satchel charge×1"
+            ),
+            "{full:?}"
+        );
+        assert!(full.ends_with("AP ●● 2/2  MOVE 4/4"), "{full:?}");
+        assert_eq!(full.chars().count(), 130);
+        let cut = act_row(&act_entries(), pools(), 100).to_string();
+        assert!(cut.contains(" …"), "{cut:?}");
+        assert!(!cut.contains("satchel"), "whole entries drop: {cut:?}");
+        assert!(cut.ends_with("AP ●● 2/2  MOVE 4/4"), "{cut:?}");
+        assert_eq!(cut.chars().count(), 100);
+    }
+
+    #[test]
+    fn the_act_row_colours_its_parts_and_dims_a_cooling_entry() {
+        let mut entries = act_entries();
+        entries[1].state = ActState::Cooling;
+        entries[2].state = ActState::Refused;
+        let line = act_row(&entries, pools(), 130);
+        let span = |s: &str| {
+            line.spans
+                .iter()
+                .find(|sp| sp.content == s)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(span("1 ").style.fg, Some(Color::Rgb(90, 90, 90)));
+        assert_eq!(span("static").style.fg, Some(TEXT));
+        assert_eq!(span("frag×3").style.fg, Some(Color::Rgb(190, 190, 140)));
+        assert_eq!(span("jolt").style.fg, Some(DIM));
+        assert_eq!(span(" ◌").style.fg, Some(DIM));
+        assert_eq!(span("shove").style.fg, Some(DIM));
+        assert!(line.to_string().contains("2 jolt ◌ 3 shove"));
+    }
+
+    #[test]
+    fn the_footer_reads_the_act_row_with_the_action_points_first() {
+        let f = Footer {
+            place: "the lot".into(),
+            jacked: false,
+            camera: false,
+            overburdened: false,
+            trace: None,
+            hunted: false,
+            engaged: true,
+            turn: None,
+            run: None,
+            ice: Vec::new(),
+            slots_label: "ABILITIES",
+            slots: &[],
+            hollow: false,
+            budgets: Some((4, 4, 2, 2)),
+            acting: Some(true),
+            prompt: None,
+            act: Some(act_entries()),
+            flash_pools: false,
+        };
+        let rows = footer_rows(&f, 140);
+        let row = rows[3].to_string();
+        assert!(row.starts_with(" ACT  1 static"), "{row:?}");
+        assert!(
+            row.contains("AP ●● 2/2") && row.ends_with("MOVE ▰▰▰▰ 4/4"),
+            "{row:?}"
+        );
+        assert!(row.find("AP").unwrap() < row.find("MOVE").unwrap());
+        let lit = Footer {
+            flash_pools: true,
+            ..f
+        };
+        let line = &footer_rows(&lit, 140)[3];
+        let ap = line.spans.iter().find(|sp| sp.content == " AP ").unwrap();
+        assert_eq!(ap.style.bg, Some(Color::Rgb(0, 90, 110)));
+        assert_eq!(ap.style.fg, Some(Color::White));
+    }
+
+    #[test]
+    fn a_construct_keeps_its_programs_and_the_abilities_follow() {
+        let entries: Vec<ActEntry> = act_entries()
+            .into_iter()
+            .take(3)
+            .enumerate()
+            .map(|(i, mut e)| {
+                e.key = char::from(b'6' + i as u8);
+                e
+            })
+            .collect();
+        let f = Footer {
+            place: "the lot · construct".into(),
+            jacked: true,
+            camera: false,
+            overburdened: false,
+            trace: None,
+            hunted: false,
+            engaged: true,
+            turn: None,
+            run: None,
+            ice: Vec::new(),
+            slots_label: "PROGRAMS",
+            slots: &slots_for_footer(),
+            hollow: false,
+            budgets: Some((4, 4, 2, 2)),
+            acting: Some(true),
+            prompt: None,
+            act: Some(entries),
+            flash_pools: false,
+        };
+        let row = footer_rows(&f, 150)[3].to_string();
+        assert!(row.starts_with(" PROGRAMS   [1] CRACK ●"), "{row:?}");
+        assert!(row.contains("6 static 7 jolt 8 shove"), "{row:?}");
+        assert!(row.find("[2] COPY").unwrap() < row.find("6 static").unwrap());
     }
 }

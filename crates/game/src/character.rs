@@ -392,16 +392,33 @@ impl Character {
     /// the handguns skill, three more stim patches. For NEW GAME (COMBAT).
     pub fn combat_runner(c: &Content) -> Character {
         let mut d = Self::debug_runner(c);
-        let port = ItemId::new("neural_port");
-        d.give_item(c, port.clone(), 1);
-        if let Some(old) = d.wear(Slot::Neural, port, None) {
-            d.stow(old);
-        }
+        d.wear_new(c, Slot::Neural, ItemId::new("neural_port"));
         d.skills.insert(SkillId::new("handguns"));
         d.give(ItemId::new("stim_patch"), 3);
         // The other SMG, in the pack, to swap in and see its look.
         d.give_item(c, ItemId::new("whisper_smg"), 1);
+        // The throwables, and the chrome that wears the adrenal pump and target lens.
+        d.give(ItemId::new("frag"), 3);
+        d.give(ItemId::new("flashbang"), 2);
+        d.give(ItemId::new("emp_puck"), 2);
+        d.give(ItemId::new("satchel"), 1);
+        for (id, slot) in [("adrenal_pump", Slot::Torso), ("target_lens", Slot::Eyes)] {
+            d.wear_new(c, slot, ItemId::new(id));
+        }
         d
+    }
+
+    /// Puts a new `item` on in `slot`, never through the pack: no spare is left
+    /// there. A copy of its own when it is held per copy; what the slot wore goes
+    /// to the pack.
+    fn wear_new(&mut self, c: &Content, slot: Slot, item: ItemId) {
+        let copy = c
+            .item(&item)
+            .is_some_and(Item::per_copy)
+            .then(|| self.new_copy(c, &item));
+        if let Some(old) = self.wear(slot, item, copy) {
+            self.stow_item(c, old);
+        }
     }
 
     pub fn has_skill(&self, id: &SkillId) -> bool {
@@ -1219,7 +1236,10 @@ mod tests {
             AbilityKind::Active(
                 Active::Scan { radius } | Active::Ping { radius } | Active::Trace { radius },
             ) => radius,
-            AbilityKind::Active(Active::Strike { .. }) | AbilityKind::Passive => 0,
+            AbilityKind::Active(
+                Active::Strike { .. } | Active::Boost { .. } | Active::Mark { .. },
+            )
+            | AbilityKind::Passive => 0,
         };
         if radius != 0 {
             assert_ne!(reach(&eff), reach(base));
@@ -1794,5 +1814,24 @@ mod tests {
             .unwrap();
         cold.hardware.as_mut().unwrap().mods = vec![Mod::TraceCut(40)];
         assert_eq!(two.trace_cut(&c), 50);
+    }
+
+    #[test]
+    fn combat_runner_carries_the_kit() {
+        let c = Content::load().unwrap();
+        let d = Character::combat_runner(&c);
+        assert_eq!(d.count(&ItemId::new("frag")), 3);
+        assert_eq!(d.count(&ItemId::new("flashbang")), 2);
+        assert_eq!(d.count(&ItemId::new("emp_puck")), 2);
+        assert_eq!(d.count(&ItemId::new("satchel")), 1);
+        for a in ["static", "jolt", "shove", "redline", "deadeye"] {
+            assert!(d.has_ability(&c, &AbilityId::new(a)), "{a}");
+        }
+        assert_eq!(d.equipped(Slot::Torso), Some(&ItemId::new("adrenal_pump")));
+        assert_eq!(d.equipped(Slot::Eyes), Some(&ItemId::new("target_lens")));
+        // Worn, not also carried: the pack holds no spare of the chrome it wears.
+        for id in ["neural_port", "adrenal_pump", "target_lens"] {
+            assert_eq!(d.count(&ItemId::new(id)), 0, "a spare {id} in the pack");
+        }
     }
 }

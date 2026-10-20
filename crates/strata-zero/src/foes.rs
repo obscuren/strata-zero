@@ -41,6 +41,10 @@ pub struct Foe {
     pub inert: bool,
     /// How it is drawn.
     pub glyph: char,
+    /// Wired meat: what a chrome-only blast (an EMP) hurts.
+    pub chrome: bool,
+    /// Read by Deadeye: your chance on it is better for the fight.
+    pub marked: bool,
 }
 
 impl Foe {
@@ -60,6 +64,8 @@ impl Foe {
             down: false,
             inert: false,
             glyph: '@',
+            chrome: true,
+            marked: false,
         }
     }
 
@@ -79,6 +85,8 @@ impl Foe {
             down: false,
             inert: true,
             glyph: '&',
+            chrome: true,
+            marked: false,
         }
     }
 
@@ -251,8 +259,39 @@ fn weapon_range(st: &AppState, foe: &Foe) -> i32 {
         .map_or(0, |w| w.range)
 }
 
-/// One action of a foe's turn: a shot when it hunts you in range with a clear line,
-/// else a step toward where it saw you; at that tile without sight it loses you.
+/// Where a foe standing in a live footprint goes: of the walkable neighbours that
+/// are free, one outside every footprint, nearest `seen`, else the greatest ring.
+fn step_out(st: &AppState, i: usize, seen: Pos, live: &[(Pos, i32)]) -> Option<Pos> {
+    let foe = &st.foes[i];
+    let city = st.city.as_ref()?;
+    let k = foe.place.stratum()?;
+    let me = st.player.as_ref().map(|p| p.pos);
+    let ring = |p: Pos| live.iter().filter(|(q, _)| *q == p).map(|(_, r)| *r).max();
+    let free: Vec<Pos> = (-1..=1)
+        .flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)))
+        .filter(|d| *d != (0, 0))
+        .map(|(dx, dy)| Pos::new(foe.pos.x + dx, foe.pos.y + dy))
+        .filter(|p| {
+            city.walkable(k, *p)
+                && Some(*p) != me
+                && !st
+                    .foes
+                    .iter()
+                    .enumerate()
+                    .any(|(j, f)| j != i && f.standing() && f.place == foe.place && f.pos == *p)
+        })
+        .collect();
+    free.iter()
+        .copied()
+        .filter(|p| ring(*p).is_none())
+        .min_by_key(|p| p.chebyshev(seen))
+        .or_else(|| free.iter().copied().max_by_key(|p| ring(*p)))
+}
+
+/// One action of a foe's turn: out of a live blast's footprint first, then a shot
+/// when it hunts you in range with a clear line, else a step toward where it saw
+/// you; at that tile without sight it loses you. Outside every footprint it never
+/// steps into one: it holds at the edge, and that loses it nothing.
 pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate::net::Step {
     use crate::net::Step;
     let Some((me_place, me)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
@@ -267,6 +306,15 @@ pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate
     let FoeMode::Hunting { seen, lost } = foe.mode else {
         return Step::Nothing;
     };
+    let live = crate::blast::live_footprints(st, foe.place);
+    let in_live = |p: Pos| live.iter().any(|(q, _)| *q == p);
+    if can_move
+        && in_live(foe.pos)
+        && let Some(to) = step_out(st, i, seen, &live)
+    {
+        st.foes[i].pos = to;
+        return Step::Moved(to);
+    }
     let Some(city) = st.city.as_ref() else {
         return Step::Nothing;
     };
@@ -300,6 +348,8 @@ pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate
         step_toward(city, foe.place, foe.pos, seen, &avoid).filter(|p| *p != me)
     };
     match next {
+        // The way on runs into a live blast: it waits outside it.
+        Some(to) if in_live(to) && !in_live(foe.pos) => Step::Nothing,
         Some(to) => {
             st.foes[i].pos = to;
             Step::Moved(to)
@@ -386,6 +436,7 @@ pub(crate) mod testutil {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::Step;
     use citygen::StratumKind;
 
     const STREET: Place = Place::Stratum(StratumKind::Street);
@@ -668,5 +719,149 @@ mod tests {
         assert!(lines(&st, |_| true).is_empty());
         assert!(!any_hunting(&st, STREET));
         assert_eq!(weapon_name(&st, &st.foes[0]), "Scrap nine");
+    }
+
+    /// A live blast of `radius` lying at `at` on the lot.
+    fn live_at(st: &mut AppState, at: Pos, radius: i32) {
+        st.live.push(crate::blast::Live {
+            place: STREET,
+            pos: at,
+            blast: game::Blast {
+                radius,
+                damage: 1,
+                stun: 0,
+                fuse: 2,
+                chrome: false,
+            },
+            fx: Vec::new(),
+            name: "satchel".to_string(),
+            turns: 2,
+            lands: 0,
+            wakes: None,
+        });
+    }
+
+    fn hunting(st: &mut AppState) {
+        st.foes[0].mode = FoeMode::Hunting {
+            seen: Pos::new(6, 8),
+            lost: 0,
+        };
+    }
+
+    fn inside(st: &AppState, p: Pos) -> bool {
+        crate::blast::live_footprints(st, STREET)
+            .iter()
+            .any(|(q, _)| *q == p)
+    }
+
+    #[test]
+    fn a_foe_in_a_live_footprint_steps_out_before_anything_else() {
+        let mut st = testutil::lot(Pos::new(13, 8));
+        hunting(&mut st);
+        live_at(&mut st, Pos::new(14, 8), 1);
+        let hp = st.character.hp;
+        let Step::Moved(to) = step(&mut st, 0, true, true) else {
+            panic!("it should step out");
+        };
+        assert!(!inside(&st, to));
+        assert_eq!(st.foes[0].pos, to);
+        assert_eq!(st.character.hp, hp, "no shot fired");
+    }
+
+    #[test]
+    fn it_picks_the_out_tile_nearest_its_seen() {
+        let mut st = testutil::lot(Pos::new(14, 9));
+        hunting(&mut st);
+        live_at(&mut st, Pos::new(14, 8), 1);
+        assert_eq!(step(&mut st, 0, true, true), Step::Moved(Pos::new(13, 10)));
+    }
+
+    #[test]
+    fn with_no_way_out_it_takes_the_greatest_ring() {
+        let mut st = testutil::lot(Pos::new(12, 8));
+        hunting(&mut st);
+        live_at(&mut st, Pos::new(14, 8), 3);
+        let Step::Moved(to) = step(&mut st, 0, true, true) else {
+            panic!("it should move");
+        };
+        let ring = crate::blast::live_footprints(&st, STREET)
+            .iter()
+            .find(|(q, _)| *q == to)
+            .map(|(_, r)| *r);
+        assert_eq!(ring, Some(3));
+    }
+
+    #[test]
+    fn it_fires_once_out() {
+        let mut st = testutil::lot(Pos::new(13, 8));
+        hunting(&mut st);
+        live_at(&mut st, Pos::new(14, 8), 1);
+        assert!(matches!(step(&mut st, 0, true, true), Step::Moved(_)));
+        assert_eq!(step(&mut st, 0, true, true), Step::Hit);
+    }
+
+    #[test]
+    fn a_foe_with_no_move_in_a_footprint_fires_as_today() {
+        let mut st = testutil::lot(Pos::new(13, 8));
+        hunting(&mut st);
+        live_at(&mut st, Pos::new(14, 8), 1);
+        assert_eq!(step(&mut st, 0, false, true), Step::Hit);
+        assert_eq!(st.foes[0].pos, Pos::new(13, 8));
+    }
+
+    #[test]
+    fn a_foe_outside_a_live_footprint_holds_at_its_edge() {
+        let mut st = testutil::lot(Pos::new(19, 8));
+        hunting(&mut st);
+        // Out to x 17: one step to the edge, then it waits there.
+        live_at(&mut st, Pos::new(14, 8), 3);
+        let Step::Moved(to) = step(&mut st, 0, true, true) else {
+            panic!("it should close in to the edge");
+        };
+        assert!(!inside(&st, to) && to.x == 18, "{to:?}");
+        assert_eq!(step(&mut st, 0, true, true), Step::Nothing);
+        assert_eq!(st.foes[0].pos, to);
+        assert_eq!(
+            st.foes[0].mode,
+            FoeMode::Hunting {
+                seen: Pos::new(6, 8),
+                lost: 0
+            },
+            "holding loses it nothing"
+        );
+        // In the air the blast is no edge: it walks on.
+        st.live[0].lands = st.tick + 10;
+        assert!(matches!(step(&mut st, 0, true, true), Step::Moved(_)));
+    }
+
+    #[test]
+    fn a_foe_steps_out_fires_and_the_satchel_goes_off_on_your_turn() {
+        let mut st = testutil::lot(Pos::new(12, 8));
+        hunting(&mut st);
+        let satchel = st.content.item(&ItemId::new("satchel")).unwrap().clone();
+        let (_, _, blast) = satchel.throw().unwrap();
+        st.live.push(crate::blast::Live {
+            place: STREET,
+            pos: Pos::new(10, 8),
+            blast,
+            fx: satchel.fx.clone(),
+            name: satchel.name.clone(),
+            turns: 1,
+            lands: 0,
+            wakes: None,
+        });
+        crate::net::engage(&mut st, STREET, true);
+        crate::net::end_turn(&mut st);
+        settle(&mut st);
+        let at = st.foes[0].pos;
+        assert!(at.chebyshev(Pos::new(10, 8)) > 3, "out of it: {at:?}");
+        assert!(logged(&st, "goon fires"), "{:?}", st.log.latest());
+        assert!(st.live.is_empty(), "gone off as your turn opened");
+        assert!(
+            logged(&st, "satchel charge · nothing in it"),
+            "{:?}",
+            st.log.latest()
+        );
+        assert_eq!(st.foes[0].hp, GOON_HP);
     }
 }

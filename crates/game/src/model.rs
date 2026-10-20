@@ -457,6 +457,39 @@ pub enum Perk {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Use {
     Heal(u32),
+    /// Thrown at a tile within `range`; the blast goes off there.
+    Throw {
+        range: i32,
+        arc: Arc,
+        blast: Blast,
+    },
+}
+
+/// What a blast does where it lands, from a grenade or an ability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Blast {
+    /// Tiles, Chebyshev; at least one.
+    pub radius: i32,
+    /// At the centre; rings take less. Zero for a stun-only blast.
+    pub damage: u8,
+    /// Turns of stun, every ring the same.
+    pub stun: u8,
+    /// Turns it lies live; zero goes off on landing.
+    #[serde(default)]
+    pub fuse: u8,
+    /// Only things with chrome are hurt.
+    #[serde(default)]
+    pub chrome: bool,
+}
+
+/// How a thrown thing crosses the line: how it is drawn in flight. Either kind
+/// lands only on a tile you see down a clear line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Arc {
+    /// Lobbed: it rises over the line and comes down on the tile.
+    Lob,
+    /// Slid along the ground, on the line all the way.
+    Shadow,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -502,9 +535,20 @@ pub struct Item {
     /// What it shoots (weapons only).
     #[serde(default)]
     pub weapon: Option<Weapon>,
+    /// What a throw looks like, in order (throwables only).
+    #[serde(default)]
+    pub fx: Vec<Fx>,
 }
 
 impl Item {
+    /// The throw it makes, if it is thrown: range, arc and blast.
+    pub fn throw(&self) -> Option<(i32, Arc, Blast)> {
+        match self.on_use {
+            Some(Use::Throw { range, arc, blast }) => Some((range, arc, blast)),
+            _ => None,
+        }
+    }
+
     /// Held per copy, since it can carry state: it has sockets, is hardware, or
     /// takes stickers.
     pub fn per_copy(&self) -> bool {
@@ -543,7 +587,25 @@ pub enum Active {
         stun: u8,
         skill: SkillId,
         ap: u8,
+        /// The stat the roll uses.
+        #[serde(default = "default_net")]
+        stat: Stat,
+        /// Tiles the target is thrown back on a hit.
+        #[serde(default)]
+        push: u8,
+        /// More targets it jumps to on a hit.
+        #[serde(default)]
+        chain: u8,
     },
+    /// No target: the pools refill this turn; `once` a fight.
+    Boost { once: bool },
+    /// Marks one foe in sight within `range` for the fight: `bonus` on the chance;
+    /// it costs `ap` action points.
+    Mark { range: i32, bonus: u8, ap: u8 },
+}
+
+fn default_net() -> Stat {
+    Stat::Net
 }
 
 /// A visual effect an ability plays when it fires; the app draws it over the map.
@@ -577,6 +639,18 @@ pub enum Fx {
     /// A spent casing out of the muzzle: it hops a cell or two to the side and lies
     /// there, dimming.
     Casing,
+    /// A thrown thing crossing the line two tiles a tick, a bounce, then it settles.
+    Throw,
+    /// A blast: white core, an amber ring to the edge, smoke that thins, a scorch.
+    Bloom,
+    /// A blast: the footprint inverts white, then orange, debris out, a black scorch.
+    Whiteout,
+    /// A blast: cyan rings of `≋` out from the centre; the net's blue.
+    Shock,
+    /// Where a shoved thing was: an arrow trail along the push, fading.
+    Trail,
+    /// A ring of `·` pulsing out from the firer to three tiles.
+    Pulse { colour: (u8, u8, u8) },
 }
 
 impl Fx {
@@ -590,9 +664,19 @@ impl Fx {
         matches!(self, Fx::Chips | Fx::Spark | Fx::Tear | Fx::Number { .. })
     }
 
+    /// A blast's shape, played over the whole footprint at the landing tile.
+    pub fn is_blast(&self) -> bool {
+        matches!(self, Fx::Bloom | Fx::Whiteout | Fx::Shock)
+    }
+
     /// Any shape a shot is made of; only weapons and strike abilities play them.
     pub fn is_shot(&self) -> bool {
-        self.is_flight() || self.is_impact() || matches!(self, Fx::Flash { .. } | Fx::Casing)
+        self.is_flight()
+            || self.is_impact()
+            || matches!(
+                self,
+                Fx::Flash { .. } | Fx::Casing | Fx::Trail | Fx::Pulse { .. }
+            )
     }
 }
 

@@ -256,6 +256,143 @@ fn combat_burst_in_flight() {
     }
 }
 
+/// The lot with the combat runner's pack, the goon at `goon` (and a second one
+/// at `other`), on the act half with the cursor on the first goon.
+fn runner_aim(goon: Pos, other: Option<Pos>) -> (AppState, MapScreen) {
+    let mut st = crate::foes::testutil::lot(goon);
+    if let Some(p) = other {
+        st.foes.push(crate::foes::Foe::goon(
+            Place::Stratum(StratumKind::Street),
+            p,
+        ));
+    }
+    st.character = game::Character::combat_runner(&st.content);
+    let mut map = MapScreen::walking(&mut st);
+    st.tick += 100;
+    map.update(&mut st, &[]);
+    map.update(&mut st, &[key(KeyCode::Char(' '))]);
+    map.update(&mut st, &[]);
+    (st, map)
+}
+
+/// Sets the clock `e` ticks into the first of `st`'s shapes that `pick` takes.
+fn at_shape(st: &mut AppState, pick: impl Fn(&game::Fx) -> bool, e: u64) {
+    let started = st
+        .fx
+        .iter()
+        .find(|i| pick(&i.fx))
+        .expect("the shape is up")
+        .started;
+    st.tick = started + e;
+    if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
+        world.advance(city, world.tick().max(st.tick));
+    }
+}
+
+fn combat_shot(name: &str, st: &AppState, map: &MapScreen) {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    write_svg(&dir, name, st, &draw_stack(st, &[map], (140, 40)), false);
+}
+
+/// Arms `digit` on the cursor and throws.
+fn throw_digit(st: &mut AppState, map: &mut MapScreen, digit: char) {
+    map.update(st, &[key(KeyCode::Char(digit))]);
+    st.force_hit = Some(true);
+    map.update(st, &[key(KeyCode::Char(' '))]);
+}
+
+#[test]
+#[ignore]
+fn combat_armed_frag() {
+    let (mut st, mut map) = runner_aim(Pos::new(12, 8), None);
+    map.update(&mut st, &[key(KeyCode::Char('6'))]);
+    combat_shot("combat_armed_frag", &st, &map);
+}
+
+#[test]
+#[ignore]
+fn combat_bloom_mid() {
+    let (mut st, mut map) = runner_aim(Pos::new(12, 8), None);
+    throw_digit(&mut st, &mut map, '6');
+    at_shape(&mut st, |f| matches!(f, game::Fx::Bloom), 2);
+    combat_shot("combat_bloom_mid", &st, &map);
+}
+
+#[test]
+#[ignore]
+fn combat_scorch_under_the_aim() {
+    let (mut st, mut map) = runner_aim(Pos::new(12, 8), None);
+    throw_digit(&mut st, &mut map, '6');
+    at_shape(
+        &mut st,
+        |f| matches!(f, game::Fx::Bloom),
+        crate::render::fx::BLOOM_TICKS + 2,
+    );
+    // Armed again on the goon standing on the scorch: the rings over it.
+    map.update(&mut st, &[key(KeyCode::Char('6'))]);
+    combat_shot("combat_scorch_under_the_aim", &st, &map);
+}
+
+#[test]
+#[ignore]
+fn combat_whiteout_mid() {
+    let (mut st, mut map) = runner_aim(Pos::new(12, 8), None);
+    throw_digit(&mut st, &mut map, '7');
+    at_shape(&mut st, |f| matches!(f, game::Fx::Whiteout), 1);
+    combat_shot("combat_whiteout_mid", &st, &map);
+}
+
+#[test]
+#[ignore]
+fn combat_shock_mid() {
+    let (mut st, mut map) = runner_aim(Pos::new(12, 8), None);
+    throw_digit(&mut st, &mut map, '8');
+    at_shape(&mut st, |f| matches!(f, game::Fx::Shock), 1);
+    combat_shot("combat_shock_mid", &st, &map);
+}
+
+#[test]
+#[ignore]
+fn combat_live_satchel() {
+    // Two tiles short of the goon, the cursor put away after: the satchel lies live
+    // with its fuse, the goon standing in its footprint.
+    let (mut st, mut map) = runner_aim(Pos::new(12, 8), None);
+    map.update(&mut st, &[key(KeyCode::Char('9'))]);
+    map.update(&mut st, &[key(KeyCode::Char('h')), key(KeyCode::Char('h'))]);
+    map.update(&mut st, &[key(KeyCode::Char(' '))]);
+    map.update(&mut st, &[key(KeyCode::Esc)]);
+    st.tick += 20;
+    map.update(&mut st, &[]);
+    combat_shot("combat_live_satchel", &st, &map);
+}
+
+#[test]
+#[ignore]
+fn combat_jolt_chain() {
+    let (mut st, mut map) = runner_aim(Pos::new(8, 8), Some(Pos::new(10, 8)));
+    st.force_hit = Some(true);
+    map.update(&mut st, &[key(KeyCode::Char('2'))]);
+    // Three ticks after the first arc lands the second one is in the air.
+    let first = st.fx.iter().map(|i| i.started).min().unwrap_or_else(|| {
+        let log: Vec<_> = st.log.iter().map(|e| e.text.clone()).collect();
+        panic!("no arc: {log:?}")
+    });
+    st.tick = first + 3;
+    combat_shot("combat_jolt_chain", &st, &map);
+}
+
+#[test]
+#[ignore]
+fn combat_marked() {
+    let (mut st, mut map) = runner_aim(Pos::new(12, 8), None);
+    st.force_hit = Some(true);
+    map.update(&mut st, &[key(KeyCode::Char('5'))]);
+    st.tick += 6;
+    combat_shot("combat_marked", &st, &map);
+}
+
 #[test]
 #[ignore]
 fn keypad_over_the_home_floor() {

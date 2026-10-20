@@ -101,6 +101,8 @@ pub struct Engagement {
     pub acting_since: u64,
     /// The tick your last action point went; the turn ends on its own a beat later.
     pub spent_at: Option<u64>,
+    /// Redline has been spent this fight.
+    pub boosted: bool,
 }
 
 /// Ticks after your last action point before your turn ends on its own.
@@ -131,6 +133,8 @@ pub enum Step {
 pub const DEEP_END_COOLING: u64 = 10;
 /// Heat a ping makes inside a construct.
 pub const PING_NOISE: u8 = 2;
+/// Heat a strike ability makes on a piece of ICE inside a construct.
+pub const STRIKE_NOISE: u8 = 3;
 /// Heat an arc trace makes inside a construct.
 pub const TRACE_NOISE: u8 = 5;
 /// Turns a piece stands stunned after an arc trace.
@@ -180,6 +184,8 @@ pub struct NetState {
     pub beat: u64,
     /// The construct on turns, if any.
     pub engaged: Option<Engagement>,
+    /// Your turns left stunned by a blast of your own.
+    pub stunned_you: u8,
     last_minute: u64,
     /// Every roll comes out this way, for tests.
     #[cfg(test)]
@@ -202,6 +208,7 @@ impl Default for NetState {
             run: None,
             beat: 0,
             engaged: None,
+            stunned_you: 0,
             last_minute: 0,
             #[cfg(test)]
             force_roll: None,
@@ -660,45 +667,14 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
             st.say(line.clone());
             return Some(line);
         }
-        let line = if ok {
+        if ok {
             let mut damage = 2 * spec.rating;
             if st.character.flags(&st.content).contains("black_ice") {
                 damage += 1;
             }
-            let (grade, label, inert) = st.constructs.get(b).map(|k| {
-                (
-                    k.guards[index].grade,
-                    k.guards[index].label(),
-                    k.guards[index].inert,
-                )
-            })?;
-            let seen = st.player.as_ref()?.pos;
-            let left = {
-                let states = st.net.ice.get_mut(&b)?;
-                let ice = states.get_mut(index)?;
-                // A dummy takes the hit and keeps standing; a piece turns on you.
-                if !inert {
-                    ice.integrity = ice.integrity.saturating_sub(damage);
-                    ice.mode = IceMode::Awake { seen, lost: 0 };
-                }
-                ice.integrity
-            };
-            if left == 0 {
-                st.net.run = None;
-                st.net.land(b, run.target, kind, Op::Attack, now);
-                let roots = st.backdoors.roots();
-                st.net.sync_guards(&mut st.constructs, b, now, &roots);
-                kick(st, 6);
-                let line = format!("{label} ICE broken");
-                st.say(line.clone());
-                alarm_clears(st, b);
-                return Some(line);
-            } else {
-                format!("attack · {label} ICE {left}/{}", grade.integrity())
-            }
-        } else {
-            format!("{label} slips · heat {heat}")
-        };
+            return hit_piece(st, b, index, label, damage, 0, now);
+        }
+        let line = format!("{label} slips · heat {heat}");
         st.say(line.clone());
         return Some(line);
     }
@@ -716,6 +692,59 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
     } else {
         format!("{label} slips · heat {heat}")
     };
+    st.say(line.clone());
+    Some(line)
+}
+
+/// A hit lands on a piece of ICE: its integrity falls (a dummy takes it and keeps
+/// standing), it wakes, `stun` turns hold it, and at zero the piece breaks with the
+/// break path of an attack, ending a run on it. Logs, under the name of what hit
+/// it (`attack · grey ICE 4/6`, `static · grey ICE 3/6`), and returns the line.
+pub fn hit_piece(
+    st: &mut AppState,
+    b: BuildingId,
+    index: usize,
+    by: &str,
+    damage: u8,
+    stun: u8,
+    now: u64,
+) -> Option<String> {
+    let target = HackTarget::Guard { building: b, index };
+    let kind = target_kind(st, b, target)?;
+    let (grade, label, inert) = st.constructs.get(b).map(|k| {
+        (
+            k.guards[index].grade,
+            k.guards[index].label(),
+            k.guards[index].inert,
+        )
+    })?;
+    let seen = st.player.as_ref()?.pos;
+    let left = {
+        let states = st.net.ice.get_mut(&b)?;
+        let ice = states.get_mut(index)?;
+        // A dummy takes the hit and keeps standing; a piece turns on you.
+        if !inert {
+            ice.integrity = ice.integrity.saturating_sub(damage);
+            ice.mode = IceMode::Awake { seen, lost: 0 };
+            ice.stunned = ice.stunned.max(stun);
+        }
+        ice.integrity
+    };
+    if left == 0 {
+        // A run on the broken piece ends with it; one on anything else goes on.
+        if st.net.run.as_ref().is_some_and(|r| r.target == target) {
+            st.net.run = None;
+        }
+        st.net.land(b, target, kind, Op::Attack, now);
+        let roots = st.backdoors.roots();
+        st.net.sync_guards(&mut st.constructs, b, now, &roots);
+        kick(st, 6);
+        let line = format!("{label} ICE broken");
+        st.say(line.clone());
+        alarm_clears(st, b);
+        return Some(line);
+    }
+    let line = format!("{by} · {label} ICE {left}/{}", grade.integrity());
     st.say(line.clone());
     Some(line)
 }
@@ -835,6 +864,7 @@ pub fn bolt(st: &mut AppState, from: Pos, to: Pos, colour: (u8, u8, u8), ticks: 
         label: String::new(),
         hit: false,
         tint: None,
+        arc: None,
     });
 }
 
@@ -854,6 +884,7 @@ pub fn mark(st: &mut AppState, at: Pos, colour: (u8, u8, u8), ticks: u64) {
         label: String::new(),
         hit: false,
         tint: None,
+        arc: None,
     });
 }
 
@@ -880,10 +911,11 @@ pub fn number(
         label: label.into(),
         hit: true,
         tint: colour,
+        arc: None,
     });
 }
 
-fn kick(st: &mut AppState, ticks: u64) {
+pub(crate) fn kick(st: &mut AppState, ticks: u64) {
     let Some((place, origin)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
         return;
     };
@@ -898,6 +930,7 @@ fn kick(st: &mut AppState, ticks: u64) {
         label: String::new(),
         hit: false,
         tint: None,
+        arc: None,
     });
 }
 
@@ -1255,9 +1288,15 @@ pub fn sees(k: &Construct, from: Pos, grade: IceGrade, player: Pos, masked: bool
     if from.chebyshev(player) > range {
         return false;
     }
-    bresenham(from, player)
+    line_clear_in(k, from, player)
+}
+
+/// No wall of the construct on the line between two tiles, the ends excluded:
+/// the construct's own clear line, as `foes::line_clear` is a stratum's.
+pub fn line_clear_in(k: &Construct, from: Pos, to: Pos) -> bool {
+    bresenham(from, to)
         .into_iter()
-        .filter(|p| *p != from && *p != player)
+        .filter(|p| *p != from && *p != to)
         .all(|p| {
             k.tiles
                 .get(p)
@@ -1563,6 +1602,7 @@ pub fn engage(st: &mut AppState, place: Place, manual: bool) {
         manual,
         acting_since: st.clock_tick(),
         spent_at: None,
+        boosted: false,
     });
     let line = if manual {
         "engaged".to_string()
@@ -1635,8 +1675,12 @@ pub fn seat_standing(st: &mut AppState, b: BuildingId) {
     }
 }
 
-/// Back to the beat.
+/// Back to the beat. The fight's marks and your stun end with it.
 pub fn disengage(st: &mut AppState) {
+    for f in &mut st.foes {
+        f.marked = false;
+    }
+    st.net.stunned_you = 0;
     if st.net.engaged.take().is_some() {
         st.net.beat = st.clock_tick();
         st.say("calm");
@@ -1782,6 +1826,19 @@ pub fn end_turn(st: &mut AppState) {
         e.phase = Phase::Move;
         e.acting_since = now;
         e.spent_at = None;
+    }
+    if actor == Actor::You {
+        // Fuses burn down as your turn opens; a blast of your own may be the end of you.
+        crate::blast::tick_live(st);
+        // A stun empties the turn's action points, not the turn: the moves are
+        // still yours, and you end it.
+        if st.net.stunned_you > 0
+            && let Some(e) = st.net.engaged.as_mut()
+        {
+            e.ap = 0;
+            st.net.stunned_you -= 1;
+            st.say("you're stunned");
+        }
     }
     start_turn(st);
 }
@@ -2210,6 +2267,15 @@ pub fn trace_bar(heat: u8) -> String {
 /// ICE looks and takes one step or one hit.
 pub fn beat(st: &mut AppState) {
     step_run(st);
+    // On foot and calm, fuses burn down on the beat.
+    if st.net.engaged.is_none()
+        && st
+            .player
+            .as_ref()
+            .is_some_and(|p| !matches!(p.place, Place::Construct(_)))
+    {
+        crate::blast::tick_live(st);
+    }
     // The roll may have tripped the alarm or dumped you: the fight (or the street)
     // takes over from here, nothing acts outside the pace.
     let Some(Place::Construct(b)) = st.player.as_ref().map(|p| p.place) else {
@@ -2791,5 +2857,79 @@ mod tests {
         assert_eq!(net.cooling(5), Some(10));
         assert_eq!(net.cooling(15), None);
         let _ = IceGrade::White;
+    }
+
+    #[test]
+    fn a_stunned_you_loses_the_turns_ap_and_a_fuse_burns_as_it_opens() {
+        use crate::blast::Live;
+        let street = Place::Stratum(citygen::StratumKind::Street);
+        let mut st = crate::foes::testutil::lot(Pos::new(14, 8));
+        engage(&mut st, street, true);
+        st.foes[0].down = true;
+        st.net.stunned_you = 1;
+        let frag = st.content.item(&game::ItemId::new("frag")).unwrap();
+        let (_, _, blast) = frag.throw().unwrap();
+        st.live.push(Live {
+            place: street,
+            pos: Pos::new(30, 8),
+            blast,
+            fx: Vec::new(),
+            name: "Frag".to_string(),
+            turns: 2,
+            lands: 0,
+            wakes: None,
+        });
+        // Your turn passes to the idle goon and back.
+        end_turn(&mut st);
+        let e = st.net.engaged.as_ref().unwrap();
+        assert_eq!(e.actor(), Actor::You);
+        assert_eq!(
+            (e.ap, e.moves),
+            (0, BASE_MOVE),
+            "stunned: no AP, the moves kept"
+        );
+        assert!(e.spent_at.is_none(), "the turn stays open");
+        assert_eq!(st.net.stunned_you, 0);
+        assert!(st.log.iter().any(|m| m.text.contains("you're stunned")));
+        assert_eq!(st.live[0].turns, 1, "a fuse burned as the turn opened");
+        // It does not end on its own: you end it.
+        st.tick += AUTO_END_TICKS * 4;
+        auto_end(&mut st);
+        assert_eq!(st.net.engaged.as_ref().unwrap().actor(), Actor::You);
+        // And the next turn is whole again.
+        end_turn(&mut st);
+        assert_eq!(st.net.engaged.as_ref().unwrap().ap, BASE_AP);
+        assert!(st.live.is_empty(), "the second turn set it off");
+    }
+
+    #[test]
+    fn a_stun_taken_as_the_last_goon_falls_ends_with_the_fight() {
+        let street = Place::Stratum(citygen::StratumKind::Street);
+        let mut st = crate::foes::testutil::lot(Pos::new(8, 8));
+        st.character = game::Character::combat_runner(&st.content);
+        st.foes[0].hp = 1;
+        engage(&mut st, street, false);
+        assert!(stay(&mut st), "your turn first");
+        st.tick = 500;
+        // An EMP between you and the goon: it falls, your chrome takes the stun.
+        crate::blast::throw(&mut st, &game::ItemId::new("emp_puck"), Pos::new(7, 8)).unwrap();
+        assert!(st.foes[0].down);
+        assert_eq!(st.net.stunned_you, 2);
+        // The round runs out with nothing hunting: calm, and the stun with it.
+        end_turn(&mut st);
+        assert!(st.net.engaged.is_none(), "calm");
+        assert_eq!(st.net.stunned_you, 0);
+        // The next fight opens whole, through every turn of yours.
+        st.foes
+            .push(crate::foes::Foe::goon(street, Pos::new(12, 8)));
+        engage(&mut st, street, true);
+        for _ in 0..4 {
+            end_turn(&mut st);
+            if st.net.engaged.as_ref().unwrap().actor() == Actor::You {
+                break;
+            }
+        }
+        let e = st.net.engaged.as_ref().unwrap();
+        assert_eq!((e.actor(), e.ap), (Actor::You, BASE_AP));
     }
 }

@@ -11,11 +11,11 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 37] = [
+const COMMANDS: [&str; 39] = [
     "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "talent", "tpts", "program",
     "heat", "alarm", "wake", "engage", "calm", "ice", "failsafe", "hp", "who", "clock", "tp",
     "clear", "help", "trace", "seize", "backdoor", "eyes", "light", "time", "job", "standing",
-    "jobs", "target", "foe", "foes", "dummy",
+    "jobs", "target", "foe", "foes", "dummy", "throw", "live",
 ];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
@@ -300,6 +300,33 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             let line = format!("a {} at {},{}", foe.name, at.x, at.y);
             st.foes.push(foe);
             Ok(line)
+        }
+        "throw" => {
+            let id = game::ItemId::new(args.first().copied().ok_or("throw what")?);
+            let n: i32 = args.get(1).and_then(|a| a.parse().ok()).unwrap_or(4);
+            let at = st.player.as_ref().ok_or("no body")?.pos.offset(n, 0);
+            crate::blast::throw_free(st, &id, at)?;
+            Ok(format!("thrown at {},{}", at.x, at.y))
+        }
+        "live" => {
+            let lines: Vec<String> = st
+                .live
+                .iter()
+                .map(|l| {
+                    let s = if l.turns == 1 { "" } else { "s" };
+                    format!(
+                        "{} at {},{} · {} turn{s}",
+                        l.name.to_lowercase(),
+                        l.pos.x,
+                        l.pos.y,
+                        l.turns
+                    )
+                })
+                .collect();
+            if lines.is_empty() {
+                return Ok("nothing live".to_string());
+            }
+            Ok(lines.join(" · "))
         }
         "foes" => {
             let lines: Vec<String> = st
@@ -613,7 +640,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             Ok(line)
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · job fetch|copy|plant|deliver · standing <n> · jobs · target <name> · eyes · light · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · job fetch|copy|plant|deliver · standing <n> · jobs · target <name> · eyes · light · foe [n] · dummy [n] · foes · throw <item> [n] · live · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),
@@ -792,6 +819,13 @@ mod tests {
         assert_eq!(
             complete(&st, "", "fo"),
             vec!["focus".to_string(), "foe".to_string(), "foes".to_string()]
+        );
+        assert_eq!(complete(&st, "", "thr"), vec!["throw".to_string()]);
+        assert_eq!(complete(&st, "", "liv"), vec!["live".to_string()]);
+        assert!(
+            run(&mut st, at, "help")
+                .unwrap()
+                .contains("throw <item> [n]")
         );
         assert_eq!(run(&mut st, at, "sp 2").unwrap(), "sp 2");
         assert_eq!(run(&mut st, at, "pts 3").unwrap(), "points 3");

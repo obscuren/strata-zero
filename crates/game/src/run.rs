@@ -95,9 +95,24 @@ pub fn succeeds(roll: u8, power: i32, difficulty: i32) -> bool {
 /// The chance one round lands, in percent: reflex and the skill carry it, every
 /// tile past half range costs five, never below 5 nor above 95.
 pub fn hit_chance(reflex: u8, skilled: bool, dist: i32, range: i32) -> u8 {
-    let base = 50 + 4 * reflex as i32 + if skilled { 10 } else { 0 };
+    hit_chance_with(reflex, skilled, dist, range, 0)
+}
+
+/// `hit_chance` with a bonus added before the clamp (a mark's).
+pub fn hit_chance_with(reflex: u8, skilled: bool, dist: i32, range: i32, bonus: u8) -> u8 {
+    let base = 50 + 4 * reflex as i32 + if skilled { 10 } else { 0 } + bonus as i32;
     let falloff = 5 * (dist - range / 2).max(0);
     (base - falloff).clamp(5, 95) as u8
+}
+
+/// What one ring of a blast does: the centre's damage falls by a step a ring, never
+/// below 1 while the blast hurts at all.
+pub fn blast_damage(damage: u8, radius: i32, ring: i32) -> u8 {
+    if damage == 0 {
+        return 0;
+    }
+    let left = (radius + 1 - ring).max(0);
+    (damage as i32 * left / (radius + 1)).max(1) as u8
 }
 
 /// A round lands when the roll (1..=100) is within the chance.
@@ -355,5 +370,15 @@ mod tests {
         // Five over the bare power: mid-range, so the extra point shows.
         let hard = bare + 5;
         assert_eq!(chance(bare + 1, hard), chance(bare, hard) + 10);
+    }
+
+    #[test]
+    fn blast_damage_falls_off_by_ring() {
+        assert_eq!(blast_damage(12, 2, 0), 12);
+        assert_eq!(blast_damage(12, 2, 1), 8);
+        assert_eq!(blast_damage(12, 2, 2), 4);
+        assert_eq!(blast_damage(16, 3, 3), 4);
+        assert_eq!(blast_damage(2, 3, 3), 1, "the floor");
+        assert_eq!(blast_damage(0, 2, 0), 0, "stun-only");
     }
 }
