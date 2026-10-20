@@ -264,7 +264,7 @@ with it off you are always on foot.
 `NET · STREET` pick on its row, `←→` to flip it, the pick in pink: STREET puts
 him on an empty lot at dusk with a goon in the far corner and a training dummy
 (`&`, stands still, shrugs every round off) six north, NET jacks him into the
-lot's construct, a lane with a grey ICE at the far end and a dummy ICE near the
+lot's construct, an open floor with a grey ICE at the far end and a dummy ICE near the
 gate (never wakes, hits or breaks); load game opens the save list) · `q` quit
 
 **New game** picks a template (VEX, KESSLER) or a custom build, then walks six

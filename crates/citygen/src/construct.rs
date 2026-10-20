@@ -49,8 +49,8 @@ impl Guard {
     }
 }
 
-/// The lot's construct, for practice: a lane the width of the lot with a grey ICE
-/// at the far end and a dummy near the gate, nothing else inside.
+/// The lot's construct, for practice: one open floor the size of the lot (no lane
+/// grid) with a grey ICE at the far end and a dummy near the gate, nothing else.
 pub fn lot_construct() -> Construct {
     let size = Size { w: 41, h: 19 };
     let wall = Tile {
@@ -61,11 +61,11 @@ pub fn lot_construct() -> Construct {
         variant: 0,
     };
     let mut tiles = Grid::filled(size, wall);
-    let lane = Tile {
-        terrain: Terrain::NetLane,
+    let floor = Tile {
+        terrain: Terrain::NetFloor,
         ..wall
     };
-    tiles.fill_rect(Rect::new(1, 1, 39, 17), lane);
+    tiles.fill_rect(Rect::new(1, 1, 39, 17), floor);
     let entry = Pos::new(0, 9);
     tiles[entry] = Tile {
         terrain: Terrain::NetGate,
@@ -458,7 +458,7 @@ mod tests {
         );
         assert_eq!(k.entry, Pos::new(0, 9));
         assert_eq!(k.tiles[k.entry].terrain, Terrain::NetGate);
-        assert_eq!(k.tiles[Pos::new(20, 9)].terrain, Terrain::NetLane);
+        assert_eq!(k.tiles[Pos::new(20, 9)].terrain, Terrain::NetFloor);
         assert_eq!(k.tiles[Pos::new(40, 9)].terrain, Terrain::NetWall);
         assert_eq!(k.guards.len(), 2);
         assert_eq!(

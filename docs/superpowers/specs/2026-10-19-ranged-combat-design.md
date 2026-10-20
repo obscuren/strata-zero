@@ -255,7 +255,8 @@ pub struct Engagement { pub place: Place, /* was building: BuildingId */ ... }
   arrows on that row, the pick in pink `(255, 0, 200)`, the other in grey
   `(120, 125, 135)`: STREET is the lot; NET is the lot too, with the body left on
   the street and jacked into `citygen::lot_construct()` (`net::start_in_net_lot`):
-  a 41×19 construct, a `NetLane` floor inside a `NetWall` ring, the gate at
+  a 41×19 construct, an open `NetFloor` (no lane grid, at Jeffrey's
+  ask) inside a `NetWall` ring, the gate at
   `(0, 9)`, security 200, a grey ICE at `(38, 9)` with no beat and a **dummy ICE**
   at `(6, 3)` (`Guard.inert`: it never looks, wakes, hits or breaks; the attack's
   number still lifts; labelled `dummy ICE` wherever a grade would read). Jeffrey
