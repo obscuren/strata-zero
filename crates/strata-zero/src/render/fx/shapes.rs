@@ -1,5 +1,6 @@
-//! The grenade and ability shapes: a thrown thing's flight, the three blasts and
-//! their scorch, a shove's trail and a boost's rings.
+//! The grenade and ability shapes drawn over the map: a thrown thing's flight, the
+//! three blasts and their scorch, a shove's trail and a boost's rings. What sets a
+//! blast off and whom it hurts is `crate::blast`'s.
 
 use super::{BLOOM_TICKS, WHITE, WHITEOUT_TICKS, paint};
 use crate::app::FxInstance;

@@ -309,8 +309,11 @@ console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `sp`, `pts`, 
 counts the people out, inside and driving, `clock hh:mm` (or `time hh:mm`) jumps the day there,
 `tp x y` teleports on the current map, `eyes` tints the walkers who see you,
 `light` paints the map grey by its light, `job fetch|copy|plant|deliver` rolls and takes one from the nearest fixer,
-`standing n` sets every fixer's opinion of you, `jobs` lists them, `target name` puts the free camera and the inspector on that person (their building's door when they are inside), `clear`, `help`, with Tab completion
-and history) · `esc` pause
+`standing n` sets every fixer's opinion of you, `jobs` lists them, `target name` puts the free camera and the inspector on that person (their building's door when they are inside),
+`foe n` and `dummy n` stand a goon or a training dummy `n` tiles east of you
+(six without `n`), `foes` lists them, `throw item n` throws a grenade `n` tiles
+east (four without `n`) without a fight or an AP, `live` lists the live blasts,
+`clear`, `help`, with Tab completion and history) · `esc` pause
 
 The play HUD frames the map on one grid. The top band carries the handle,
 level, credits and dev readouts, then HP, FOCUS and XP bars that run the width
@@ -372,14 +375,16 @@ stops. The `ACT` row under the footer lists what `1`-`9` do on the act half: a
 digit picks an ability and fires it at the cursor, or arms a throwable. Static
 (from a neural port) costs both AP, hurts and stuns for a turn, and tears the
 cells around the goon; Shove knocks an adjacent goon back; Jolt arcs from the
-goon to the nearest other within two tiles; Redline refills your pools and gives
-you the turn again, once a fight; Deadeye marks one goon so your next shots
-land. A throwable arms the cursor: a footprint shades the tiles it will
-reach, the readout says `frag · 6 tiles · blast 2`, `space` throws it, `esc`
-disarms. Frag is a fireball, the flashbang a white flash that stuns, the EMP puck a cyan shock
-that scrambles chrome, the satchel a charge that lies live for a turn with its
-footprint marked, and the goons step out of it. A stim from the deck costs an
-AP. `.` ends the turn; the goon closes in on the pace and shoots back.
+goon to the nearest other within two tiles; Redline refills your pools and
+gives you the turn again, once a fight; Deadeye marks one goon so your next
+shots land (its chance reads magenta). A throwable arms the cursor: a footprint
+shades the tiles it will reach, the readout says `frag · 6 tiles · blast 2`,
+`space` throws it, `esc` disarms. Frag is a fireball, the flashbang a white
+flash that stuns, the EMP puck a cyan shock that scrambles chrome, the satchel
+a charge that lies live for a turn with its footprint marked once it lands;
+the goons step out of it and wait at its edge. A stun on you takes the AP of
+each turn it lasts, not the moves. A stim from the deck costs an AP. `.` ends
+the turn; the goon closes in on the pace and shoots back.
 `e` engages by hand with a goon in sight memory, and calms the street when
 nothing hunts you; at zero HP the goon drops (`%`), you flatline. A column at
 the map's top right lists the order (`▶ YOU`, `goon 18`), with the live half of
@@ -389,7 +394,9 @@ ends on its own a beat after the last AP. **In a construct the act half is the
 same**: the cursor opens on the nearest awake ICE, the readout reads
 `grey ICE · 4/6 · 3 tiles · 70%`, and `space` runs your loaded attack program
 at it (a white streak, the tear, the number); a program armed by its key keeps
-`space` as its roll.
+`space` as its roll. After the programs' `1`-`5`, `6`-`8` are the abilities
+that work on ICE: Static and Jolt strike the piece under the cursor (Jolt arcs
+on to a piece within two tiles with no wall between), Redline refills your turn.
 
 **Pause** (`esc` or `q`) resume · save game · load game · settings (dev mode,
 rain, fps) · quit to title · quit game

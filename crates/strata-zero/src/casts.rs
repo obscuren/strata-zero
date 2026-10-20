@@ -2,9 +2,6 @@
 //! mark, and a strike on a piece of ICE. Each refuses first and books its cooldown
 //! only once it will go.
 
-// Called from the map's cursor and the ACT keys in the tasks that follow.
-#![allow(dead_code)]
-
 use crate::app::{AppState, FxInstance};
 use crate::combat;
 use crate::net::{self, Actor, Phase};

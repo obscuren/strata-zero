@@ -134,8 +134,6 @@ pub const DEEP_END_COOLING: u64 = 10;
 /// Heat a ping makes inside a construct.
 pub const PING_NOISE: u8 = 2;
 /// Heat a strike ability makes on a piece of ICE inside a construct.
-// Read by `casts::strike_ice` once the cursor calls it.
-#[allow(dead_code)]
 pub const STRIKE_NOISE: u8 = 3;
 /// Heat an arc trace makes inside a construct.
 pub const TRACE_NOISE: u8 = 5;

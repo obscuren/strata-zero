@@ -1,6 +1,6 @@
 //! Ability effects over the map: glitch kicks, expanding wavefronts and glowing markers.
 
-mod blast;
+mod shapes;
 
 use crate::anim::effects::{glitch_cells, pulse};
 use crate::app::FxInstance;
@@ -112,7 +112,7 @@ impl Overlay for ScorchOverlay<'_> {
                 && i.started <= tick
                 && tick < i.until()
         }) {
-            blast::scorch(inst, tick - inst.started, self.vis, origin, area, buf);
+            shapes::scorch(inst, tick - inst.started, self.vis, origin, area, buf);
         }
     }
 }
@@ -206,12 +206,12 @@ impl Overlay for FxOverlay<'_> {
                 Fx::Tear => tear(inst, tick, origin, area, buf),
                 Fx::Number { tag } => number(inst, tag, elapsed, origin, area, buf),
                 Fx::Casing => casing(inst, elapsed, origin, area, buf),
-                Fx::Throw => blast::throw(inst, elapsed, map, origin, area, buf),
-                Fx::Bloom => blast::bloom(inst, elapsed, origin, area, buf),
-                Fx::Whiteout => blast::whiteout(inst, elapsed, map, origin, area, buf),
-                Fx::Shock => blast::shock(inst, elapsed, origin, area, buf),
-                Fx::Trail => blast::trail(inst, elapsed, origin, area, buf),
-                Fx::Pulse { colour } => blast::pulse_rings(
+                Fx::Throw => shapes::throw(inst, elapsed, map, origin, area, buf),
+                Fx::Bloom => shapes::bloom(inst, elapsed, origin, area, buf),
+                Fx::Whiteout => shapes::whiteout(inst, elapsed, map, origin, area, buf),
+                Fx::Shock => shapes::shock(inst, elapsed, origin, area, buf),
+                Fx::Trail => shapes::trail(inst, elapsed, origin, area, buf),
+                Fx::Pulse { colour } => shapes::pulse_rings(
                     inst,
                     Rgb(colour.0, colour.1, colour.2),
                     elapsed,
@@ -764,7 +764,8 @@ fn number(inst: &FxInstance, tag: bool, elapsed: u64, origin: Pos, area: Rect, b
     let y = target.y - 1 - (elapsed / NUMBER_RISE) as i32;
     let fade = elapsed >= 10;
     let (fg, bg, text, x0) = if tag {
-        // A red field for a gun's tag; a tinted shot's tag sits on its own colour.
+        // A red field for a gun's tag; any tinted one (the net's, an EMP's,
+        // Redline's) on the cyan field, whatever its tint.
         let (fg, bg) = match (inst.tint, fade) {
             (None, false) => (WHITE, Rgb(170, 20, 20)),
             (None, true) => (Rgb(200, 120, 120), Rgb(80, 10, 10)),
@@ -832,7 +833,7 @@ fn casing(inst: &FxInstance, elapsed: u64, origin: Pos, area: Rect, buf: &mut Bu
     }
 }
 
-/// The field a tinted tag sits on: the net's, and Redline's `+ turn`.
+/// The field every tinted tag sits on: the net's, an EMP's, Redline's `+ turn`.
 const CYAN_FIELD: Rgb = Rgb(0, 90, 110);
 /// A pulsing mark on every target tile, whatever its visibility.
 fn mark(inst: &FxInstance, colour: Rgb, origin: Pos, area: Rect, tick: u64, buf: &mut Buffer) {
@@ -900,7 +901,7 @@ impl FxOverlay<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::blast::blast_hash;
+    use super::shapes::blast_hash;
     use super::*;
     use crate::render::style::StylePack;
     use crate::render::viewport::{MapView, Overlay};

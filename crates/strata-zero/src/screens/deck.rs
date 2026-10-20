@@ -369,6 +369,28 @@ pub(crate) fn copy_popup(st: &mut AppState, copy: CopyId, anchor: (u16, u16)) ->
     )
 }
 
+/// What a strike does, from its fields: the stun only when it stuns, the push and
+/// the chain when it has them.
+fn strike_line(range: i32, damage: u8, stun: u8, push: u8, chain: u8, ap: u8) -> String {
+    let s = |n: u8| if n == 1 { "" } else { "s" };
+    let tiles = if range == 1 { "tile" } else { "tiles" };
+    let mut parts = vec![
+        format!("strike: one target within {range} {tiles}"),
+        format!("{damage} damage"),
+    ];
+    if stun > 0 {
+        parts.push(format!("stunned {stun} turn{}", s(stun)));
+    }
+    if push > 0 {
+        parts.push(format!("pushes {push} tile{}", s(push)));
+    }
+    if chain > 0 {
+        parts.push(format!("chains to {chain} more"));
+    }
+    parts.push(format!("{ap} AP"));
+    parts.join(" · ")
+}
+
 /// The detail pane's card for a row.
 pub(crate) fn card(st: &AppState, detail: &Detail) -> Vec<Line<'static>> {
     match detail {
@@ -1210,11 +1232,10 @@ impl Deck {
                     damage,
                     stun,
                     ap,
+                    push,
+                    chain,
                     ..
-                } => format!(
-                    "strike: one target within {range} tiles · {damage} damage · stunned {stun} turn{} · {ap} AP",
-                    if *stun == 1 { "" } else { "s" }
-                ),
+                } => strike_line(*range, *damage, *stun, *push, *chain, *ap),
                 Active::Boost { once } => format!(
                     "boost: refills your turn{}",
                     if *once { " · once a fight" } else { "" }
@@ -1700,6 +1721,23 @@ mod tests {
     fn walking(st: &mut AppState) {
         let city = st.city.as_ref().unwrap();
         st.player = Some(crate::walker::Player::spawn(city, 1));
+    }
+
+    #[test]
+    fn a_strike_reads_from_its_fields() {
+        assert_eq!(
+            strike_line(1, 3, 0, 2, 0, 1),
+            "strike: one target within 1 tile · 3 damage · pushes 2 tiles · 1 AP",
+            "no stun, a push"
+        );
+        assert_eq!(
+            strike_line(3, 5, 1, 0, 1, 1),
+            "strike: one target within 3 tiles · 5 damage · stunned 1 turn · chains to 1 more · 1 AP"
+        );
+        assert_eq!(
+            strike_line(8, 6, 2, 0, 0, 2),
+            "strike: one target within 8 tiles · 6 damage · stunned 2 turns · 2 AP"
+        );
     }
 
     #[test]

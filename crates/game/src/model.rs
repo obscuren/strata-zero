@@ -482,12 +482,13 @@ pub struct Blast {
     pub chrome: bool,
 }
 
-/// How a thrown thing crosses the line.
+/// How a thrown thing crosses the line: how it is drawn in flight. Either kind
+/// lands only on a tile you see down a clear line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Arc {
-    /// Over everything in the way.
+    /// Lobbed: it rises over the line and comes down on the tile.
     Lob,
-    /// Along the ground; anything in the way stops it.
+    /// Slid along the ground, on the line all the way.
     Shadow,
 }
 

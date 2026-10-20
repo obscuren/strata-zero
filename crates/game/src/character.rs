@@ -392,11 +392,7 @@ impl Character {
     /// the handguns skill, three more stim patches. For NEW GAME (COMBAT).
     pub fn combat_runner(c: &Content) -> Character {
         let mut d = Self::debug_runner(c);
-        let port = ItemId::new("neural_port");
-        d.give_item(c, port.clone(), 1);
-        if let Some(old) = d.wear(Slot::Neural, port, None) {
-            d.stow(old);
-        }
+        d.wear_new(c, Slot::Neural, ItemId::new("neural_port"));
         d.skills.insert(SkillId::new("handguns"));
         d.give(ItemId::new("stim_patch"), 3);
         // The other SMG, in the pack, to swap in and see its look.
@@ -407,13 +403,22 @@ impl Character {
         d.give(ItemId::new("emp_puck"), 2);
         d.give(ItemId::new("satchel"), 1);
         for (id, slot) in [("adrenal_pump", Slot::Torso), ("target_lens", Slot::Eyes)] {
-            let item = ItemId::new(id);
-            d.give_item(c, item.clone(), 1);
-            if let Some(old) = d.wear(slot, item, None) {
-                d.stow(old);
-            }
+            d.wear_new(c, slot, ItemId::new(id));
         }
         d
+    }
+
+    /// Puts a new `item` on in `slot`, never through the pack: no spare is left
+    /// there. A copy of its own when it is held per copy; what the slot wore goes
+    /// to the pack.
+    fn wear_new(&mut self, c: &Content, slot: Slot, item: ItemId) {
+        let copy = c
+            .item(&item)
+            .is_some_and(Item::per_copy)
+            .then(|| self.new_copy(c, &item));
+        if let Some(old) = self.wear(slot, item, copy) {
+            self.stow_item(c, old);
+        }
     }
 
     pub fn has_skill(&self, id: &SkillId) -> bool {
@@ -1824,5 +1829,9 @@ mod tests {
         }
         assert_eq!(d.equipped(Slot::Torso), Some(&ItemId::new("adrenal_pump")));
         assert_eq!(d.equipped(Slot::Eyes), Some(&ItemId::new("target_lens")));
+        // Worn, not also carried: the pack holds no spare of the chrome it wears.
+        for id in ["neural_port", "adrenal_pump", "target_lens"] {
+            assert_eq!(d.count(&ItemId::new(id)), 0, "a spare {id} in the pack");
+        }
     }
 }
