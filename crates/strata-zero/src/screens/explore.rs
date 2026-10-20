@@ -11662,4 +11662,118 @@ mod tests {
         let c = cell_at(&s, &st, &buf, ring1);
         assert_eq!((c.symbol(), c.bg), ("░", RING_BG[1]));
     }
+
+    /// Frames of one tick each on foot until `done` holds, at most `max`.
+    fn frames_until(
+        st: &mut AppState,
+        s: &mut MapScreen,
+        max: u64,
+        done: impl Fn(&AppState) -> bool,
+    ) -> bool {
+        for _ in 0..max {
+            if done(st) {
+                return true;
+            }
+            st.tick += 1;
+            s.update(st, &[]);
+        }
+        done(st)
+    }
+
+    #[test]
+    fn a_live_blast_burns_on_the_calm_beat_on_foot() {
+        use crate::net::BEAT_TICKS;
+        // Calm, the goon far out of sight: nothing but the beat burns the fuse.
+        let (mut st, mut s) = lot(Pos::new(30, 8));
+        s.update(&mut st, &[]);
+        assert!(st.net.engaged.is_none());
+        let satchel = ItemId::new("satchel");
+        st.character.give(satchel.clone(), 1);
+        crate::blast::throw_free(&mut st, &satchel, Pos::new(10, 8)).unwrap();
+        st.net.beat = st.clock_tick();
+        let lands = st.live[0].lands;
+        assert!(frames_until(&mut st, &mut s, 20, |st| st.tick >= lands));
+        assert_eq!(st.live.len(), 1, "down, lying live");
+        assert!(
+            !crate::blast::live_footprints(&st, Place::Stratum(StratumKind::Street)).is_empty()
+        );
+        let beat = st.net.beat;
+        assert!(
+            frames_until(&mut st, &mut s, BEAT_TICKS + 5, |st| st.live.is_empty()),
+            "the on-foot calm beat burns it"
+        );
+        assert_eq!(st.net.beat, st.clock_tick(), "on the beat");
+        assert!(st.net.beat >= beat + BEAT_TICKS);
+        assert!(
+            logged(&st, "satchel charge · nothing in it"),
+            "{:?}",
+            last(&st)
+        );
+        assert!(st.net.engaged.is_none(), "still calm");
+    }
+
+    #[test]
+    fn a_live_blast_wakes_the_foe_in_its_reach_when_it_lands() {
+        // Nine tiles off the goon does not see you; the satchel comes down by it.
+        let (mut st, mut s) = lot(Pos::new(15, 8));
+        s.update(&mut st, &[]);
+        assert!(st.net.engaged.is_none());
+        let satchel = ItemId::new("satchel");
+        st.character.give(satchel.clone(), 1);
+        crate::blast::throw_free(&mut st, &satchel, Pos::new(12, 8)).unwrap();
+        st.net.beat = st.clock_tick();
+        // In the air: unheard.
+        s.update(&mut st, &[]);
+        assert_eq!(st.foes[0].mode, crate::foes::FoeMode::Idle);
+        assert!(st.net.engaged.is_none());
+        // Down: it hunts toward where it came from, and the street is on turns.
+        let lands = st.live[0].lands;
+        assert!(frames_until(&mut st, &mut s, 20, |st| st.tick > lands));
+        assert_eq!(
+            st.foes[0].mode,
+            crate::foes::FoeMode::Hunting {
+                seen: Pos::new(6, 8),
+                lost: 0
+            }
+        );
+        assert!(st.net.engaged.is_some(), "it hunts: turns");
+        assert!(logged(&st, "ENGAGED · the goon has you"), "{:?}", last(&st));
+        assert_eq!(st.live.len(), 1, "the fuse waits for your turn");
+    }
+
+    #[test]
+    fn a_throw_at_your_own_feet_is_allowed_reads_red_and_hits_you_at_the_centre() {
+        use crate::render::path::WARN_FG;
+        let (mut st, mut s) = runner_half(Pos::new(12, 8));
+        let me = st.player.as_ref().unwrap().pos;
+        let frag = ItemId::new("frag");
+        assert_eq!(crate::blast::landing(&st, 8, me), Ok(()));
+        s.update(&mut st, &[key(KeyCode::Char('6'))]);
+        s.target = Some(me);
+        let (text, warn) = MapScreen::armed_readout(&st, &frag, me).unwrap();
+        assert!(
+            warn && text.starts_with(" frag · 0 tiles · blast 2")
+                && text.ends_with(" · you're in it "),
+            "{text:?}"
+        );
+        let buf = draw_buffer(&s, &st, 100, 30);
+        let page = buffer_text(&buf);
+        let row = page
+            .lines()
+            .position(|l| l.contains(" frag · 0 tiles"))
+            .unwrap_or_else(|| panic!("the readout: {page}"));
+        let col = page
+            .lines()
+            .nth(row)
+            .unwrap()
+            .chars()
+            .position(|c| c == 'f')
+            .unwrap();
+        assert_eq!(buf[(col as u16, row as u16)].fg, WARN_FG, "drawn red");
+        let hp = st.character.hp;
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(st.character.count(&frag), 2, "thrown");
+        assert_eq!(st.character.hp, hp - 12, "the centre's full damage");
+        assert!(logged(&st, "· you 12"), "{:?}", last(&st));
+    }
 }
