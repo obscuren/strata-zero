@@ -63,6 +63,10 @@ pub enum ContentError {
     StickerInvalid { id: String, why: String },
     #[error("weapon `{id}`: {why}")]
     WeaponInvalid { id: String, why: String },
+    #[error("item `{id}`: {why}")]
+    ItemInvalid { id: String, why: String },
+    #[error("ability `{id}`: {why}")]
+    AbilityInvalid { id: String, why: String },
     #[error("{where_}: {why}")]
     FxInvalid { where_: String, why: String },
     #[error("tree {name}: {why}")]
@@ -349,7 +353,7 @@ impl Content {
                     });
                 }
             }
-            if i.on_use.is_some() && i.kind != ItemKind::Consumable {
+            if i.on_use.is_some() && i.throw().is_none() && i.kind != ItemKind::Consumable {
                 return Err(ContentError::UseOnNonConsumable {
                     item: i.id.0.clone(),
                 });
@@ -373,6 +377,36 @@ impl Content {
                         where_: format!("item {}", i.id),
                         why: "a round has one flight shape at most".into(),
                     });
+                }
+            }
+            if let Some((range, _, b)) = i.throw() {
+                let bad = |why: &str| ContentError::ItemInvalid {
+                    id: i.id.0.clone(),
+                    why: why.to_string(),
+                };
+                if i.kind != ItemKind::Consumable {
+                    return Err(bad("only a consumable is thrown"));
+                }
+                if range < 1 || b.radius < 1 {
+                    return Err(bad("range and radius are at least one"));
+                }
+                if b.damage == 0 && b.stun == 0 {
+                    return Err(bad("a blast does damage or stuns"));
+                }
+            }
+            if !i.fx.is_empty() {
+                let bad = |why: &str| ContentError::FxInvalid {
+                    where_: format!("item {}", i.id),
+                    why: why.to_string(),
+                };
+                if i.throw().is_none() {
+                    return Err(bad("only a thrown item plays shapes"));
+                }
+                if i.fx.iter().filter(|f| **f == Fx::Throw).count() > 1 {
+                    return Err(bad("a throw has one Throw shape at most"));
+                }
+                if i.fx.iter().filter(|f| f.is_blast()).count() > 1 {
+                    return Err(bad("a blast has one blast shape at most"));
                 }
             }
             if (!i.perks.is_empty() || !i.grants.is_empty()) && i.slot.is_none() {
@@ -469,14 +503,44 @@ impl Content {
                 });
             }
             let strikes = matches!(a.kind, AbilityKind::Active(Active::Strike { .. }));
-            if !strikes && a.fx.iter().any(Fx::is_shot) {
+            let boosts = matches!(
+                a.kind,
+                AbilityKind::Active(Active::Boost { .. } | Active::Mark { .. })
+            );
+            if !strikes && !boosts && a.fx.iter().any(Fx::is_shot) {
                 return Err(ContentError::FxInvalid {
                     where_: format!("ability {}", a.id),
                     why: "only a strike plays shot shapes".into(),
                 });
             }
-            if let AbilityKind::Active(Active::Strike { skill, .. }) = &a.kind {
+            if let AbilityKind::Active(Active::Boost { .. } | Active::Mark { .. }) = &a.kind
+                && a.fx.iter().any(|f| {
+                    !matches!(
+                        f,
+                        Fx::Kick(_) | Fx::Pulse { .. } | Fx::Number { .. } | Fx::Mark { .. }
+                    )
+                })
+            {
+                return Err(ContentError::FxInvalid {
+                    where_: format!("ability {}", a.id),
+                    why: "a boost or mark plays only Kick, Pulse, Number and Mark".into(),
+                });
+            }
+            if let AbilityKind::Active(Active::Strike {
+                skill,
+                range,
+                push,
+                chain,
+                ..
+            }) = &a.kind
+            {
                 need_skill(format!("ability {}", a.id), skill)?;
+                if (*push > 0 || *chain > 0) && *range < 1 {
+                    return Err(ContentError::AbilityInvalid {
+                        id: a.id.0.clone(),
+                        why: "push and chain need a range".into(),
+                    });
+                }
             }
         }
         for r in &self.recipes {
@@ -1811,5 +1875,131 @@ mod tests {
                 "{id}"
             );
         }
+    }
+
+    fn parse_item(s: &str) -> Item {
+        ron::from_str(s).unwrap()
+    }
+
+    #[test]
+    fn a_throw_use_parses() {
+        let item = parse_item(
+            r#"Item(id: "x", name: "X", kind: Consumable, weight: 0.4, value: 1,
+            use: Some(Throw(range: 8, arc: Lob, blast: Blast(radius: 2, damage: 12, stun: 0))),
+            fx: [Throw, Bloom, Chips, Number(tag: true)], desc: "")"#,
+        );
+        assert_eq!(
+            item.throw(),
+            Some((
+                8,
+                Arc::Lob,
+                Blast {
+                    radius: 2,
+                    damage: 12,
+                    stun: 0,
+                    fuse: 0,
+                    chrome: false
+                }
+            ))
+        );
+        assert!(item.fx.iter().any(Fx::is_blast));
+    }
+
+    #[test]
+    fn a_strike_parses_with_its_defaults_and_its_extras() {
+        let c = Content::load().unwrap();
+        let Some(AbilityKind::Active(Active::Strike {
+            stat, push, chain, ..
+        })) = c.ability(&AbilityId::new("static")).map(|a| a.kind.clone())
+        else {
+            panic!("static is a strike");
+        };
+        assert_eq!((stat, push, chain), (Stat::Net, 0, 0));
+        let a: Ability = ron::from_str(
+            r#"Ability(id: "s", name: "S", cooldown: 1, desc: "",
+            kind: Active(Strike(range: 1, damage: 3, stun: 0, skill: "athletics", ap: 1, stat: Body, push: 2)))"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            a.kind,
+            AbilityKind::Active(Active::Strike {
+                stat: Stat::Body,
+                push: 2,
+                chain: 0,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn boost_and_mark_parse() {
+        let b: AbilityKind = ron::from_str("Active(Boost(once: true))").unwrap();
+        assert_eq!(b, AbilityKind::Active(Active::Boost { once: true }));
+        let m: AbilityKind = ron::from_str("Active(Mark(range: 12, bonus: 20, ap: 1))").unwrap();
+        assert_eq!(
+            m,
+            AbilityKind::Active(Active::Mark {
+                range: 12,
+                bonus: 20,
+                ap: 1
+            })
+        );
+    }
+
+    #[test]
+    fn validate_refuses_bad_throws() {
+        let good = Content::load().unwrap();
+        let throw = |extra: &str, fx: &str, kind: &str| {
+            let mut c = good.clone();
+            c.items.push(parse_item(&format!(
+                r#"Item(id: "t", name: "T", kind: {kind}, weight: 0.4, value: 1,
+                use: Some(Throw(range: 8, arc: Lob, blast: Blast({extra}))), fx: [{fx}], desc: "")"#
+            )));
+            c.validate()
+        };
+        let ok = "radius: 2, damage: 12, stun: 0";
+        assert!(throw(ok, "Throw, Bloom", "Consumable").is_ok());
+        assert!(matches!(
+            throw(ok, "", "Armor"),
+            Err(ContentError::ItemInvalid { .. })
+        ));
+        assert!(matches!(
+            throw("radius: 0, damage: 12, stun: 0", "", "Consumable"),
+            Err(ContentError::ItemInvalid { .. })
+        ));
+        assert!(matches!(
+            throw("radius: 2, damage: 0, stun: 0", "", "Consumable"),
+            Err(ContentError::ItemInvalid { .. })
+        ));
+        assert!(matches!(
+            throw(ok, "Bloom, Shock", "Consumable"),
+            Err(ContentError::FxInvalid { .. })
+        ));
+        // A blast shape on a Heal item.
+        let mut c = good.clone();
+        let i = c.items.iter().position(|i| i.id.0 == "stim_patch").unwrap();
+        c.items[i].fx.push(Fx::Bloom);
+        assert!(matches!(c.validate(), Err(ContentError::FxInvalid { .. })));
+        // Push on a strike with no range.
+        let mut c = good.clone();
+        let i = c.abilities.iter().position(|a| a.id.0 == "static").unwrap();
+        if let AbilityKind::Active(Active::Strike { range, push, .. }) = &mut c.abilities[i].kind {
+            *range = 0;
+            *push = 1;
+        }
+        assert!(matches!(
+            c.validate(),
+            Err(ContentError::AbilityInvalid { .. })
+        ));
+        // Trail on a mark.
+        let mut c = good.clone();
+        let mut mark: Ability = ron::from_str(
+            r#"Ability(id: "m", name: "M", cooldown: 1, desc: "",
+            kind: Active(Mark(range: 12, bonus: 20, ap: 1)))"#,
+        )
+        .unwrap();
+        mark.fx.push(Fx::Trail);
+        c.abilities.push(mark);
+        assert!(matches!(c.validate(), Err(ContentError::FxInvalid { .. })));
     }
 }
