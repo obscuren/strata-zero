@@ -1666,11 +1666,12 @@ pub fn seat_standing(st: &mut AppState, b: BuildingId) {
     }
 }
 
-/// Back to the beat.
+/// Back to the beat. The fight's marks and your stun end with it.
 pub fn disengage(st: &mut AppState) {
     for f in &mut st.foes {
         f.marked = false;
     }
+    st.net.stunned_you = 0;
     if st.net.engaged.take().is_some() {
         st.net.beat = st.clock_tick();
         st.say("calm");
@@ -1820,11 +1821,12 @@ pub fn end_turn(st: &mut AppState) {
     if actor == Actor::You {
         // Fuses burn down as your turn opens; a blast of your own may be the end of you.
         crate::blast::tick_live(st);
+        // A stun empties the turn's action points, not the turn: the moves are
+        // still yours, and you end it.
         if st.net.stunned_you > 0
             && let Some(e) = st.net.engaged.as_mut()
         {
             e.ap = 0;
-            e.spent_at = Some(now);
             st.net.stunned_you -= 1;
             st.say("you're stunned");
         }
@@ -2870,14 +2872,53 @@ mod tests {
         end_turn(&mut st);
         let e = st.net.engaged.as_ref().unwrap();
         assert_eq!(e.actor(), Actor::You);
-        assert_eq!(e.ap, 0, "stunned");
-        assert!(e.spent_at.is_some(), "the turn ends itself");
+        assert_eq!(
+            (e.ap, e.moves),
+            (0, BASE_MOVE),
+            "stunned: no AP, the moves kept"
+        );
+        assert!(e.spent_at.is_none(), "the turn stays open");
         assert_eq!(st.net.stunned_you, 0);
         assert!(st.log.iter().any(|m| m.text.contains("you're stunned")));
         assert_eq!(st.live[0].turns, 1, "a fuse burned as the turn opened");
+        // It does not end on its own: you end it.
+        st.tick += AUTO_END_TICKS * 4;
+        auto_end(&mut st);
+        assert_eq!(st.net.engaged.as_ref().unwrap().actor(), Actor::You);
         // And the next turn is whole again.
         end_turn(&mut st);
         assert_eq!(st.net.engaged.as_ref().unwrap().ap, BASE_AP);
         assert!(st.live.is_empty(), "the second turn set it off");
+    }
+
+    #[test]
+    fn a_stun_taken_as_the_last_goon_falls_ends_with_the_fight() {
+        let street = Place::Stratum(citygen::StratumKind::Street);
+        let mut st = crate::foes::testutil::lot(Pos::new(8, 8));
+        st.character = game::Character::combat_runner(&st.content);
+        st.foes[0].hp = 1;
+        engage(&mut st, street, false);
+        assert!(stay(&mut st), "your turn first");
+        st.tick = 500;
+        // An EMP between you and the goon: it falls, your chrome takes the stun.
+        crate::blast::throw(&mut st, &game::ItemId::new("emp_puck"), Pos::new(7, 8)).unwrap();
+        assert!(st.foes[0].down);
+        assert_eq!(st.net.stunned_you, 2);
+        // The round runs out with nothing hunting: calm, and the stun with it.
+        end_turn(&mut st);
+        assert!(st.net.engaged.is_none(), "calm");
+        assert_eq!(st.net.stunned_you, 0);
+        // The next fight opens whole, through every turn of yours.
+        st.foes
+            .push(crate::foes::Foe::goon(street, Pos::new(12, 8)));
+        engage(&mut st, street, true);
+        for _ in 0..4 {
+            end_turn(&mut st);
+            if st.net.engaged.as_ref().unwrap().actor() == Actor::You {
+                break;
+            }
+        }
+        let e = st.net.engaged.as_ref().unwrap();
+        assert_eq!((e.actor(), e.ap), (Actor::You, BASE_AP));
     }
 }
