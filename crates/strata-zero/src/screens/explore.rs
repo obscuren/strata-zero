@@ -2892,9 +2892,6 @@ impl Screen for MapScreen {
                     you,
                     warn: armed_text.as_ref().is_some_and(|(_, warn)| *warn),
                 });
-        if let Some(o) = fire.as_ref() {
-            overlays.push(o);
-        }
         let live_place = st.player.as_ref().map(|p| p.place);
         let live_ground = live_place
             .map(|pl| crate::blast::live_footprints(st, pl))
@@ -2905,6 +2902,10 @@ impl Screen for MapScreen {
         };
         if !st.live.is_empty() {
             overlays.push(&live);
+        }
+        // After the live blasts: the aim draws over them.
+        if let Some(o) = fire.as_ref() {
+            overlays.push(o);
         }
         let looked: Vec<Pos> = self.looking.iter().map(|l| l.cursor).collect();
         let look_block = crate::render::path::BlockOverlay {

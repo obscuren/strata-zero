@@ -490,6 +490,47 @@ mod tests {
     }
 
     #[test]
+    fn the_aim_drawn_after_a_live_blast_wins_the_shared_cells() {
+        use crate::blast::Live;
+        let city = City::empty(GenParams::default());
+        let place = citygen::Place::Stratum(citygen::StratumKind::Street);
+        let map = MapRef::stratum_of(&city, citygen::StratumKind::Street);
+        let style = StylePack::load().unwrap();
+        let area = Rect::new(0, 0, 20, 8);
+        let at = Pos::new(10, 5);
+        let live = [Live {
+            place,
+            pos: at,
+            blast: game::Blast {
+                radius: 1,
+                damage: 5,
+                stun: 0,
+                fuse: 1,
+                chrome: false,
+            },
+            fx: Vec::new(),
+            name: "frag".to_string(),
+            turns: 1,
+        }];
+        let fp = [(at, 0)];
+        let mut buf = Buffer::empty(area);
+        LiveOverlay {
+            live: &live,
+            footprints: &fp,
+        }
+        .draw(&map, Pos::new(0, 0), area, 0, &mut buf, &style);
+        let o = AimOverlay {
+            readout: Some(" goon ".to_string()),
+            ..aim(at, false, &[], None)
+        };
+        o.draw(&map, Pos::new(0, 0), area, 0, &mut buf, &style);
+        let c = &buf[(10, 5)];
+        assert_eq!((c.symbol(), c.bg), ("×", CYAN));
+        let row: String = (7..13).map(|x| buf[(x, 3)].symbol().to_string()).collect();
+        assert_eq!(row, " goon ", "the aim readout over the fuse label");
+    }
+
+    #[test]
     fn a_warned_readout_is_red() {
         let area = Rect::new(0, 0, 20, 6);
         let mut buf = Buffer::empty(area);
