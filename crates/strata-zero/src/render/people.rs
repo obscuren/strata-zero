@@ -43,6 +43,13 @@ pub struct PeopleOverlay<'a> {
 pub const FOE: Color = Color::Rgb(255, 80, 80);
 /// A foe down.
 pub const FOE_DOWN: Color = Color::Rgb(120, 30, 30);
+/// Under a marked foe, the bright half of its pulse and the dim half.
+pub const MARK_BRIGHT: Color = Color::Rgb(140, 0, 105);
+pub const MARK_DIM: Color = Color::Rgb(70, 0, 52);
+/// Ticks in each half of the pulse.
+pub const MARK_PULSE: u64 = 8;
+/// The reticle over a marked foe.
+const MARK_RETICLE: Color = Color::Rgb(255, 0, 200);
 
 impl Overlay for PeopleOverlay<'_> {
     fn draw(
@@ -50,7 +57,7 @@ impl Overlay for PeopleOverlay<'_> {
         map: &MapRef,
         origin: Pos,
         area: Rect,
-        _tick: u64,
+        tick: u64,
         buf: &mut Buffer,
         style: &StylePack,
     ) {
@@ -82,6 +89,19 @@ impl Overlay for PeopleOverlay<'_> {
                 cell.modifier.insert(Modifier::BOLD);
             } else {
                 cell.modifier.remove(Modifier::BOLD);
+            }
+            if f.marked {
+                let bright = (tick / MARK_PULSE).is_multiple_of(2);
+                cell.set_bg(if bright { MARK_BRIGHT } else { MARK_DIM });
+                if sy > area.y {
+                    let above = &mut buf[(sx, sy - 1)];
+                    above.set_char('⌖').set_fg(MARK_RETICLE);
+                    if bright {
+                        above.modifier.insert(Modifier::BOLD);
+                    } else {
+                        above.modifier.remove(Modifier::BOLD);
+                    }
+                }
             }
         }
         if !map.place().is_street() {
@@ -437,5 +457,41 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("I know a guy.") && text.contains("find me at the bar"));
+    }
+
+    #[test]
+    fn a_marked_foe_pulses_with_a_reticle() {
+        let c = city();
+        let w = World::seed(&c, &People::load().unwrap(), &SimParams::default(), 0, 0);
+        let map = MapRef::stratum_of(&c, StratumKind::Street);
+        let place = citygen::Place::Stratum(StratumKind::Street);
+        let mut foe = Foe::goon(place, citygen::Pos::new(5, 4));
+        foe.marked = true;
+        let foes = [foe];
+        let area = Rect::new(0, 0, 12, 8);
+        let style = StylePack::load().unwrap();
+        let draw = |tick: u64| {
+            let mut buf = Buffer::empty(area);
+            PeopleOverlay {
+                world: &w,
+                night: false,
+                vis: None,
+                eyes: &[],
+                foes: &foes,
+            }
+            .draw(&map, citygen::Pos::new(0, 0), area, tick, &mut buf, &style);
+            buf
+        };
+        let bright = draw(0);
+        assert_eq!(bright[(5, 4)].bg, MARK_BRIGHT);
+        let r = &bright[(5, 3)];
+        assert_eq!(r.symbol(), "⌖");
+        assert_eq!(r.fg, Color::Rgb(255, 0, 200));
+        assert!(r.modifier.contains(Modifier::BOLD));
+        let dim = draw(8);
+        assert_eq!(dim[(5, 4)].bg, MARK_DIM);
+        assert_eq!(dim[(5, 3)].symbol(), "⌖");
+        assert!(!dim[(5, 3)].modifier.contains(Modifier::BOLD));
+        assert_eq!(draw(16)[(5, 4)].bg, MARK_BRIGHT);
     }
 }

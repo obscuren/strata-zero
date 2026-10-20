@@ -101,10 +101,8 @@ pub struct AimOverlay<'a> {
     pub readout: Option<String>,
     /// The armed item's blast around the target with each tile's ring; empty when
     /// nothing is armed or it cannot land there.
-    #[allow(dead_code)]
     pub footprint: &'a [(Pos, i32)],
     /// Your tile, when it is in the footprint.
-    #[allow(dead_code)]
     pub you: Option<Pos>,
     /// The readout draws red: you stand in the blast.
     pub warn: bool,
@@ -115,8 +113,109 @@ pub const FIRE_LINE: Color = Color::Rgb(90, 90, 90);
 /// Under the readout.
 pub const READOUT_BG: Color = Color::Rgb(0, 20, 26);
 /// The readout when you stand in the blast.
-const WARN_FG: Color = Color::Rgb(255, 80, 80);
-const WARN_BG: Color = Color::Rgb(26, 0, 0);
+pub const WARN_FG: Color = Color::Rgb(255, 80, 80);
+pub const WARN_BG: Color = Color::Rgb(26, 0, 0);
+/// Under the footprint's rings, the centre out; ring 3 and beyond take the last.
+pub const RING_BG: [Color; 3] = [
+    Color::Rgb(120, 30, 30),
+    Color::Rgb(80, 22, 22),
+    Color::Rgb(48, 16, 16),
+];
+/// Under your own tile when you stand in the blast.
+pub const YOU_IN_IT_BG: Color = Color::Rgb(170, 30, 30);
+/// Under a live blast's footprint, dimmer than the aim's.
+pub const LIVE_RING_BG: [Color; 3] = [
+    Color::Rgb(60, 18, 18),
+    Color::Rgb(44, 14, 14),
+    Color::Rgb(30, 10, 10),
+];
+
+/// ` text ` on the readout ground, bold over the first word, two rows above `at`,
+/// clamped inside the area. Nothing when it does not fit.
+fn readout(
+    buf: &mut Buffer,
+    area: Rect,
+    at: (u16, u16),
+    text: &str,
+    fg: Color,
+    bg: Color,
+    bold_name: bool,
+) {
+    let width = text.chars().count() as i32;
+    if area.width < width as u16 || at.1 < area.y + 2 {
+        return;
+    }
+    let x0 = (at.0 as i32 - width / 2)
+        .max(area.x as i32)
+        .min(area.right() as i32 - width);
+    let y = at.1 - 2;
+    // The name (the first word after the margin) in bold.
+    let name_end = if bold_name {
+        text.trim_start()
+            .split('·')
+            .next()
+            .map_or(0, |n| n.len() + 1)
+    } else {
+        0
+    };
+    for (i, ch) in text.chars().enumerate() {
+        let x = (x0 + i as i32) as u16;
+        let cell = &mut buf[(x, y)];
+        cell.set_char(ch).set_fg(fg).set_bg(bg);
+        cell.modifier.remove(Modifier::DIM);
+        if i > 0 && i < name_end {
+            cell.modifier.insert(Modifier::BOLD);
+        } else {
+            cell.modifier.remove(Modifier::BOLD);
+        }
+    }
+}
+
+/// Shade each footprint tile by its ring, glyphs kept.
+fn shade(buf: &mut Buffer, area: Rect, origin: Pos, tiles: &[(Pos, i32)], rings: &[Color; 3]) {
+    for (p, ring) in tiles {
+        if let Some((sx, sy)) = tile_to_screen(area, origin, *p) {
+            buf[(sx, sy)].set_bg(rings[(*ring).clamp(0, 2) as usize]);
+        }
+    }
+}
+
+/// Blasts lying live on the map: the footprint shaded, the thing blinking, its
+/// fuse over it.
+pub struct LiveOverlay<'a> {
+    pub live: &'a [crate::blast::Live],
+    /// `blast::live_footprints` for this place.
+    pub footprints: &'a [(Pos, i32)],
+}
+
+impl Overlay for LiveOverlay<'_> {
+    fn draw(
+        &self,
+        map: &MapRef,
+        origin: Pos,
+        area: Rect,
+        tick: u64,
+        buf: &mut Buffer,
+        _style: &StylePack,
+    ) {
+        shade(buf, area, origin, self.footprints, &LIVE_RING_BG);
+        for l in self.live.iter().filter(|l| l.place == map.place()) {
+            let Some(at) = tile_to_screen(area, origin, l.pos) else {
+                continue;
+            };
+            let fg = if tick.is_multiple_of(2) {
+                Color::Rgb(190, 190, 140)
+            } else {
+                Color::Rgb(255, 80, 80)
+            };
+            buf[at]
+                .set_char('o')
+                .set_style(Style::default().fg(fg).add_modifier(Modifier::BOLD));
+            let text = format!(" fuse {} ", l.turns);
+            readout(buf, area, at, &text, CYAN, READOUT_BG, false);
+        }
+    }
+}
 
 impl Overlay for AimOverlay<'_> {
     fn draw(
@@ -128,6 +227,10 @@ impl Overlay for AimOverlay<'_> {
         buf: &mut Buffer,
         _style: &StylePack,
     ) {
+        shade(buf, area, origin, self.footprint, &RING_BG);
+        if let Some((sx, sy)) = self.you.and_then(|y| tile_to_screen(area, origin, y)) {
+            buf[(sx, sy)].set_bg(YOU_IN_IT_BG);
+        }
         for p in self.line {
             if let Some((sx, sy)) = tile_to_screen(area, origin, *p) {
                 buf[(sx, sy)].set_char('·').set_fg(FIRE_LINE);
@@ -135,49 +238,24 @@ impl Overlay for AimOverlay<'_> {
         }
         if let Some((sx, sy)) = tile_to_screen(area, origin, self.target) {
             let cell = &mut buf[(sx, sy)];
-            if self.on_foe {
-                cell.set_fg(Color::Rgb(0, 0, 0)).set_bg(CYAN);
-                cell.modifier.insert(Modifier::BOLD);
-            } else {
-                cell.set_bg(crate::look::LOOK_BG.to_color());
+            if !self.on_foe {
+                cell.set_char('×');
             }
+            cell.set_fg(Color::Rgb(0, 0, 0)).set_bg(CYAN);
+            cell.modifier.insert(Modifier::BOLD);
         }
         let Some(text) = self.readout.as_ref() else {
             return;
         };
-        let Some((tx, ty)) = tile_to_screen(area, origin, self.target) else {
+        let Some(at) = tile_to_screen(area, origin, self.target) else {
             return;
         };
-        let width = text.chars().count() as i32;
-        if area.width < width as u16 || ty < area.y + 2 {
-            return;
-        }
-        let x0 = (tx as i32 - width / 2)
-            .max(area.x as i32)
-            .min(area.right() as i32 - width);
-        let y = ty - 2;
-        // The name (the first word after the margin) in bold.
-        let name_end = text
-            .trim_start()
-            .split('·')
-            .next()
-            .map_or(0, |n| n.len() + 1);
-        for (i, ch) in text.chars().enumerate() {
-            let x = (x0 + i as i32) as u16;
-            let cell = &mut buf[(x, y)];
-            let (fg, bg) = if self.warn {
-                (WARN_FG, WARN_BG)
-            } else {
-                (CYAN, READOUT_BG)
-            };
-            cell.set_char(ch).set_fg(fg).set_bg(bg);
-            cell.modifier.remove(Modifier::DIM);
-            if i > 0 && i < name_end {
-                cell.modifier.insert(Modifier::BOLD);
-            } else {
-                cell.modifier.remove(Modifier::BOLD);
-            }
-        }
+        let (fg, bg) = if self.warn {
+            (WARN_FG, WARN_BG)
+        } else {
+            (CYAN, READOUT_BG)
+        };
+        readout(buf, area, at, text, fg, bg, true);
     }
 }
 
@@ -337,5 +415,141 @@ mod tests {
             Some(Color::Rgb(255, 40, 40)),
             "no way there: red"
         );
+    }
+
+    fn aim_buf(o: &AimOverlay, buf: &mut Buffer, area: Rect) {
+        let city = City::empty(GenParams::default());
+        let map = MapRef::stratum_of(&city, citygen::StratumKind::Street);
+        let style = StylePack::load().unwrap();
+        o.draw(&map, Pos::new(0, 0), area, 0, buf, &style);
+    }
+
+    fn aim<'a>(
+        target: Pos,
+        on_foe: bool,
+        footprint: &'a [(Pos, i32)],
+        you: Option<Pos>,
+    ) -> AimOverlay<'a> {
+        AimOverlay {
+            line: &[],
+            target,
+            on_foe,
+            readout: None,
+            footprint,
+            you,
+            warn: false,
+        }
+    }
+
+    #[test]
+    fn the_cursor_off_a_foe_is_a_cyan_block_with_a_cross() {
+        let area = Rect::new(0, 0, 12, 6);
+        let mut buf = Buffer::empty(area);
+        buf[(5, 3)].set_char('.');
+        aim_buf(&aim(Pos::new(5, 3), false, &[], None), &mut buf, area);
+        let c = &buf[(5, 3)];
+        assert_eq!(c.symbol(), "×");
+        assert_eq!(c.fg, Color::Rgb(0, 0, 0));
+        assert_eq!(c.bg, CYAN);
+        assert!(c.modifier.contains(Modifier::BOLD));
+        // On a foe: the glyph stays, inverted.
+        let mut buf = Buffer::empty(area);
+        buf[(5, 3)].set_char('g');
+        aim_buf(&aim(Pos::new(5, 3), true, &[], None), &mut buf, area);
+        let c = &buf[(5, 3)];
+        assert_eq!(c.symbol(), "g");
+        assert_eq!(c.bg, CYAN);
+    }
+
+    #[test]
+    fn the_footprint_shades_by_ring_and_lights_your_tile() {
+        let area = Rect::new(0, 0, 12, 6);
+        let mut buf = Buffer::empty(area);
+        buf[(4, 3)].set_char('#');
+        let fp = [
+            (Pos::new(5, 3), 0),
+            (Pos::new(4, 3), 1),
+            (Pos::new(3, 3), 2),
+            (Pos::new(2, 3), 3),
+            (Pos::new(8, 3), 1),
+        ];
+        let o = AimOverlay {
+            line: &[Pos::new(4, 3)],
+            ..aim(Pos::new(5, 3), false, &fp, Some(Pos::new(8, 3)))
+        };
+        aim_buf(&o, &mut buf, area);
+        assert_eq!(buf[(5, 3)].bg, CYAN, "the cursor over the centre");
+        let dots = &buf[(4, 3)];
+        assert_eq!(dots.symbol(), "·", "the line's dots over the shading");
+        assert_eq!(dots.bg, RING_BG[1]);
+        assert_eq!(buf[(3, 3)].bg, RING_BG[2]);
+        assert_eq!(buf[(2, 3)].bg, RING_BG[2], "ring 3 takes the last");
+        assert_eq!(buf[(8, 3)].bg, YOU_IN_IT_BG);
+    }
+
+    #[test]
+    fn a_warned_readout_is_red() {
+        let area = Rect::new(0, 0, 20, 6);
+        let mut buf = Buffer::empty(area);
+        let o = AimOverlay {
+            readout: Some(" frag ".to_string()),
+            warn: true,
+            ..aim(Pos::new(10, 4), false, &[], None)
+        };
+        aim_buf(&o, &mut buf, area);
+        let c = &buf[(8, 2)];
+        assert_eq!(c.symbol(), "f");
+        assert_eq!(c.fg, WARN_FG);
+        assert_eq!(c.bg, WARN_BG);
+    }
+
+    #[test]
+    fn a_live_blast_blinks_and_shades() {
+        use crate::blast::Live;
+        let city = City::empty(GenParams::default());
+        let place = citygen::Place::Stratum(citygen::StratumKind::Street);
+        let map = MapRef::stratum_of(&city, citygen::StratumKind::Street);
+        let style = StylePack::load().unwrap();
+        let area = Rect::new(0, 0, 20, 8);
+        let live = [Live {
+            place,
+            pos: Pos::new(10, 5),
+            blast: game::Blast {
+                radius: 1,
+                damage: 5,
+                stun: 0,
+                fuse: 1,
+                chrome: false,
+            },
+            fx: Vec::new(),
+            name: "frag".to_string(),
+            turns: 1,
+        }];
+        let fp = [
+            (Pos::new(10, 5), 0),
+            (Pos::new(11, 5), 1),
+            (Pos::new(12, 5), 3),
+        ];
+        let o = LiveOverlay {
+            live: &live,
+            footprints: &fp,
+        };
+        let mut even = Buffer::empty(area);
+        o.draw(&map, Pos::new(0, 0), area, 0, &mut even, &style);
+        let c = &even[(10, 5)];
+        assert_eq!(c.symbol(), "o");
+        assert_eq!(c.fg, Color::Rgb(190, 190, 140));
+        assert!(c.modifier.contains(Modifier::BOLD));
+        assert_eq!(c.bg, LIVE_RING_BG[0]);
+        assert_eq!(even[(11, 5)].bg, LIVE_RING_BG[1]);
+        assert_eq!(even[(12, 5)].bg, LIVE_RING_BG[2]);
+        let f = &even[(7, 3)];
+        assert_eq!(f.symbol(), "f");
+        assert_eq!((f.fg, f.bg), (CYAN, READOUT_BG));
+        let row: String = (6..14).map(|x| even[(x, 3)].symbol().to_string()).collect();
+        assert_eq!(row, " fuse 1 ");
+        let mut odd = Buffer::empty(area);
+        o.draw(&map, Pos::new(0, 0), area, 1, &mut odd, &style);
+        assert_eq!(odd[(10, 5)].fg, Color::Rgb(255, 80, 80));
     }
 }

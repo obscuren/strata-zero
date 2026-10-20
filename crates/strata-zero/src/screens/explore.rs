@@ -2895,6 +2895,17 @@ impl Screen for MapScreen {
         if let Some(o) = fire.as_ref() {
             overlays.push(o);
         }
+        let live_place = st.player.as_ref().map(|p| p.place);
+        let live_ground = live_place
+            .map(|pl| crate::blast::live_footprints(st, pl))
+            .unwrap_or_default();
+        let live = crate::render::path::LiveOverlay {
+            live: &st.live,
+            footprints: &live_ground,
+        };
+        if !st.live.is_empty() {
+            overlays.push(&live);
+        }
         let looked: Vec<Pos> = self.looking.iter().map(|l| l.cursor).collect();
         let look_block = crate::render::path::BlockOverlay {
             tiles: &looked,
