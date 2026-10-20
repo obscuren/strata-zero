@@ -5,6 +5,7 @@ mod actions;
 mod anim;
 mod app;
 mod backdoors;
+mod blast;
 mod cli;
 mod combat;
 mod constructs;

@@ -66,7 +66,7 @@ pub struct AppState {
     /// Who stands against you on foot this session; cleared with the city.
     pub foes: Vec<crate::foes::Foe>,
     /// Blasts lying live with a fuse; cleared with the city.
-    pub live: Vec<crate::combat::Live>,
+    pub live: Vec<crate::blast::Live>,
     /// Rounds fired this session: the roll's seed.
     pub shots: u64,
     /// Every round lands, or none; for tests.
@@ -126,7 +126,7 @@ impl FxInstance {
     /// How long a blast's stain outlasts it: only where it hurt.
     fn scorch(&self) -> u64 {
         if self.hit {
-            crate::combat::SCORCH_TICKS
+            crate::blast::SCORCH_TICKS
         } else {
             0
         }
@@ -163,7 +163,7 @@ impl FxInstance {
                     + self
                         .targets
                         .first()
-                        .map_or(0, |t| crate::combat::throw_ticks(self.origin, *t))
+                        .map_or(0, |t| crate::blast::throw_ticks(self.origin, *t))
             }
             game::Fx::Bloom => self.started + BLOOM_TICKS + self.scorch(),
             game::Fx::Whiteout => self.started + WHITEOUT_TICKS + self.scorch(),
@@ -862,7 +862,7 @@ mod tests {
             tint: None,
             arc: None,
         };
-        let scorch = crate::combat::SCORCH_TICKS;
+        let scorch = crate::blast::SCORCH_TICKS;
         assert_eq!(at(game::Fx::Throw, false).until(), 105, "six tiles: 3 + 2");
         assert_eq!(at(game::Fx::Bloom, false).until(), 113);
         assert_eq!(at(game::Fx::Bloom, true).until(), 113 + scorch);

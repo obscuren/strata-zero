@@ -1792,7 +1792,7 @@ pub fn end_turn(st: &mut AppState) {
     }
     if actor == Actor::You {
         // Fuses burn down as your turn opens; a blast of your own may be the end of you.
-        crate::combat::tick_live(st);
+        crate::blast::tick_live(st);
         if st.net.stunned_you > 0
             && let Some(e) = st.net.engaged.as_mut()
         {
@@ -2236,7 +2236,7 @@ pub fn beat(st: &mut AppState) {
             .as_ref()
             .is_some_and(|p| !matches!(p.place, Place::Construct(_)))
     {
-        crate::combat::tick_live(st);
+        crate::blast::tick_live(st);
     }
     // The roll may have tripped the alarm or dumped you: the fight (or the street)
     // takes over from here, nothing acts outside the pace.
@@ -2823,7 +2823,7 @@ mod tests {
 
     #[test]
     fn a_stunned_you_loses_the_turns_ap_and_a_fuse_burns_as_it_opens() {
-        use crate::combat::Live;
+        use crate::blast::Live;
         let street = Place::Stratum(citygen::StratumKind::Street);
         let mut st = crate::foes::testutil::lot(Pos::new(14, 8));
         engage(&mut st, street, true);
