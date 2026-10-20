@@ -77,6 +77,23 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         // A strike wants a target: the map's cursor fires it, not the slot alone.
         return Err("needs a target · aim at a foe".to_string());
     }
+    if let Some(id) = &fired
+        && st.character.ability(&st.content, id).is_some_and(|a| {
+            matches!(
+                a.kind,
+                AbilityKind::Active(Active::Boost { .. } | Active::Mark { .. })
+            )
+        })
+    {
+        // A boost or a mark is cast from the map, where the cursor and the turn are.
+        return Err("use it from the map".to_string());
+    }
+    if let Action::Use(id) = &action
+        && st.content.item(id).is_some_and(|i| i.throw().is_some())
+    {
+        // A throwable is thrown, never used: refused before an action point goes.
+        return Err("throw it from the map".to_string());
+    }
     // Firing an ability, or using an item on turns, is an action point.
     if fired.is_some() || (matches!(action, Action::Use(_)) && st.net.engaged.is_some()) {
         crate::net::spend_ap(st)?;

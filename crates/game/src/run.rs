@@ -95,7 +95,12 @@ pub fn succeeds(roll: u8, power: i32, difficulty: i32) -> bool {
 /// The chance one round lands, in percent: reflex and the skill carry it, every
 /// tile past half range costs five, never below 5 nor above 95.
 pub fn hit_chance(reflex: u8, skilled: bool, dist: i32, range: i32) -> u8 {
-    let base = 50 + 4 * reflex as i32 + if skilled { 10 } else { 0 };
+    hit_chance_with(reflex, skilled, dist, range, 0)
+}
+
+/// `hit_chance` with a bonus added before the clamp (a mark's).
+pub fn hit_chance_with(reflex: u8, skilled: bool, dist: i32, range: i32, bonus: u8) -> u8 {
+    let base = 50 + 4 * reflex as i32 + if skilled { 10 } else { 0 } + bonus as i32;
     let falloff = 5 * (dist - range / 2).max(0);
     (base - falloff).clamp(5, 95) as u8
 }

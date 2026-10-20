@@ -68,7 +68,7 @@ pub fn your_weapon(st: &AppState) -> Result<(ItemId, Weapon), String> {
 
 /// A shot's way to a foe from where you stand: refused out of range or without a
 /// clear line in sight; else the distance.
-fn reach(st: &AppState, foe: usize, range: i32) -> Result<i32, String> {
+pub(crate) fn reach(st: &AppState, foe: usize, range: i32) -> Result<i32, String> {
     let (Some(p), Some(city)) = (st.player.as_ref(), st.city.as_ref()) else {
         return Err("no body in the city".to_string());
     };
@@ -97,12 +97,31 @@ fn reach(st: &AppState, foe: usize, range: i32) -> Result<i32, String> {
 pub fn your_chance(st: &AppState, foe: usize) -> Result<u8, String> {
     let (_, w) = your_weapon(st)?;
     let dist = reach(st, foe, w.range)?;
-    Ok(game::hit_chance(
+    let bonus = if st.foes[foe].marked {
+        mark_bonus(st)
+    } else {
+        0
+    };
+    Ok(game::hit_chance_with(
         st.character.stat(&st.content, Stat::Reflex),
         st.character.has_skill(&w.skill),
         dist,
         w.range,
+        bonus,
     ))
+}
+
+/// What a mark adds to your chance: the bonus of the first mark ability you have
+/// (one mark at a time, so the first is the one).
+fn mark_bonus(st: &AppState) -> u8 {
+    st.character
+        .abilities(&st.content)
+        .iter()
+        .find_map(|(id, _)| match st.content.ability(id).map(|a| &a.kind) {
+            Some(AbilityKind::Active(Active::Mark { bonus, .. })) => Some(*bonus),
+            _ => None,
+        })
+        .unwrap_or(0)
 }
 
 /// Everything one round needs to be drawn.
@@ -116,22 +135,29 @@ struct Round {
     tint: Option<(u8, u8, u8)>,
 }
 
+/// Ticks from the muzzle to the impact: the tracer's flight, a streak's one, none
+/// for a shape that needs no flight.
+fn flight_ticks(fx: &[Fx], from: Pos, impact: Pos) -> u64 {
+    fx.iter()
+        .find_map(|f| match f {
+            Fx::Tracer { speed, .. } => Some(tracer_ticks(from, impact, *speed)),
+            Fx::Streak { .. } => Some(1),
+            _ => None,
+        })
+        .unwrap_or(0)
+}
+
 /// Pushes the shapes of one round, offset `k` gaps into the burst: the flash and
 /// the flight at once, the impact when the flight lands.
 fn play_round(st: &mut AppState, place: Place, fx: &[Fx], r: Round) {
     let started = st.tick + r.k as u64 * ROUND_GAP;
-    let flight = fx
-        .iter()
-        .find_map(|f| match f {
-            Fx::Tracer { speed, .. } => Some(tracer_ticks(r.from, r.impact, *speed)),
-            Fx::Streak { .. } => Some(1),
-            _ => None,
-        })
-        .unwrap_or(0);
+    let flight = flight_ticks(fx, r.from, r.impact);
     for shape in fx {
         let (at, target) = match shape {
             Fx::Flash { .. } => (started, r.impact),
             f if f.is_flight() => (started, r.impact),
+            // Drawn along a push or round the firer, not at the impact.
+            Fx::Trail | Fx::Pulse { .. } => continue,
             Fx::Spark => {
                 if r.hit {
                     continue;
@@ -285,6 +311,7 @@ pub(crate) fn wound_foe(st: &mut AppState, foe: usize, damage: u8) {
     f.hp = f.hp.saturating_sub(damage);
     if f.hp == 0 && !f.down {
         f.down = true;
+        f.marked = false;
         let name = f.name.clone();
         st.say(format!("{name} down"));
     }
@@ -441,8 +468,165 @@ pub fn fire_at_you(st: &mut AppState, foe: usize) {
     st.warn(line);
 }
 
-/// You fire a strike ability at a foe: its action points, one round of its damage,
-/// its stun on a hit.
+/// Your chance with a strike ability at a foe, in percent: its stat and skill, the
+/// distance, its range.
+pub fn strike_chance(st: &AppState, id: &AbilityId, foe: usize) -> Result<u8, String> {
+    let ability = st
+        .character
+        .ability(&st.content, id)
+        .ok_or_else(|| format!("unknown ability {id}"))?;
+    let AbilityKind::Active(Active::Strike {
+        range, skill, stat, ..
+    }) = ability.kind
+    else {
+        return Err(format!("{} is not a strike", ability.name));
+    };
+    let dist = reach(st, foe, range)?;
+    Ok(game::hit_chance(
+        st.character.stat(&st.content, stat),
+        st.character.has_skill(&skill),
+        dist,
+        range,
+    ))
+}
+
+/// Ticks a chained hop's shapes play after the one before.
+const HOP_TICKS: u64 = 2;
+
+/// On a hit the foe goes up to `steps` tiles straight away from `from`, stopping
+/// before a tile that is not walkable or holds you or another standing foe. A
+/// `Trail` plays on each tile it left, from `at`. Returns the tiles it moved.
+fn push_foe(st: &mut AppState, foe: usize, from: Pos, steps: u8, at: u64, trail: bool) -> u8 {
+    let Some((place, mut pos)) = st.foes.get(foe).map(|f| (f.place, f.pos)) else {
+        return 0;
+    };
+    let (dx, dy) = ((pos.x - from.x).signum(), (pos.y - from.y).signum());
+    let mut moved = 0;
+    for _ in 0..steps {
+        let next = pos.offset(dx, dy);
+        let open = place
+            .stratum()
+            .zip(st.city.as_ref())
+            .and_then(|(k, city)| city.tile(k, next))
+            .is_some_and(|t| t.is_walkable());
+        let held = next == from
+            || st
+                .foes
+                .iter()
+                .enumerate()
+                .any(|(i, f)| i != foe && f.standing() && f.place == place && f.pos == next);
+        if !open || held {
+            break;
+        }
+        if trail {
+            st.fx.push(FxInstance {
+                fx: Fx::Trail,
+                place,
+                origin: pos,
+                radius: 0,
+                started: at + moved as u64,
+                revealed: Vec::new(),
+                targets: vec![next],
+                label: String::new(),
+                hit: true,
+                tint: None,
+                arc: None,
+            });
+        }
+        pos = next;
+        moved += 1;
+    }
+    if let Some(f) = st.foes.get_mut(foe) {
+        f.pos = pos;
+    }
+    moved
+}
+
+/// What a chain carries from one victim to the next.
+struct Chain<'a> {
+    you: Pos,
+    hops: u8,
+    damage: u8,
+    stun: u8,
+    fx: &'a [Fx],
+    source: &'a str,
+}
+
+/// Jolt's arc: from each victim, the nearest other standing foe within two tiles
+/// with a clear line takes half the damage and the stun, no roll; `hops` of them.
+fn chain_foes(st: &mut AppState, first: usize, arc: Chain) {
+    let half = (arc.damage / 2).max(1);
+    let fx: Vec<Fx> = arc
+        .fx
+        .iter()
+        .filter(|f| !matches!(f, Fx::Flash { .. }))
+        .cloned()
+        .collect();
+    let mut hit = vec![first];
+    for hop in 1..=arc.hops as u64 {
+        let last = *hit.last().expect("the first victim is in");
+        let Some((place, at)) = st.foes.get(last).map(|f| (f.place, f.pos)) else {
+            return;
+        };
+        let Some(city) = st.city.as_ref() else {
+            return;
+        };
+        let next = st
+            .foes
+            .iter()
+            .enumerate()
+            .filter(|(i, f)| {
+                !hit.contains(i)
+                    && f.standing()
+                    && f.place == place
+                    && f.pos.chebyshev(at) <= 2
+                    && foes::line_clear(city, place, at, f.pos)
+            })
+            .min_by_key(|(i, f)| (f.pos.chebyshev(at), *i))
+            .map(|(i, _)| i);
+        let Some(next) = next else {
+            return;
+        };
+        let target = st.foes[next].pos;
+        wound_foe(st, next, half);
+        if let Some(f) = st.foes.get_mut(next) {
+            f.stunned = f.stunned.max(arc.stun);
+            if f.standing() && !f.inert {
+                f.mode = foes::FoeMode::Hunting {
+                    seen: arc.you,
+                    lost: 0,
+                };
+            }
+        }
+        let from_len = st.fx.len();
+        play_round(
+            st,
+            place,
+            &fx,
+            Round {
+                from: at,
+                impact: target,
+                hit: true,
+                damage: half,
+                k: 0,
+                tint: None,
+            },
+        );
+        for i in &mut st.fx[from_len..] {
+            i.started += HOP_TICKS * hop;
+        }
+        let name = st.foes[next].name.clone();
+        st.say(format!(
+            "{} arcs · {name} {half}",
+            arc.source.to_lowercase()
+        ));
+        hit.push(next);
+    }
+}
+
+/// You fire a strike ability at a foe: its action points, one round of its damage
+/// with its own stat, its stun on a hit; a push throws the foe back, a chain arcs
+/// on to the next.
 pub fn strike(st: &mut AppState, id: &AbilityId, foe: usize) -> Result<(), String> {
     let ability = st
         .character
@@ -454,20 +638,21 @@ pub fn strike(st: &mut AppState, id: &AbilityId, foe: usize) -> Result<(), Strin
         stun,
         skill,
         ap,
+        push,
+        chain,
         ..
     }) = ability.kind.clone()
     else {
         return Err(format!("{} is not a strike", ability.name));
     };
-    let dist = reach(st, foe, range)?;
-    match st.net.engaged.as_ref() {
-        Some(e) if e.actor() != crate::net::Actor::You => return Err("not your turn".into()),
-        Some(e) if e.phase == crate::net::Phase::Move => {
-            return Err("move first · space to stay".into());
-        }
-        Some(e) if e.ap < ap => return Err("no AP left".into()),
-        _ => {}
+    if matches!(
+        st.player.as_ref().map(|p| p.place),
+        Some(Place::Construct(_))
+    ) {
+        return Err("not in here".to_string());
     }
+    let chance = strike_chance(st, id, foe)?;
+    crate::casts::can_act(st, ap)?;
     let at = game::At {
         place: st
             .player
@@ -487,12 +672,6 @@ pub fn strike(st: &mut AppState, id: &AbilityId, foe: usize) -> Result<(), Strin
     for _ in 0..ap {
         crate::net::spend_ap(st)?;
     }
-    let chance = game::hit_chance(
-        st.character.stat(&st.content, Stat::Net),
-        st.character.has_skill(&skill),
-        dist,
-        range,
-    );
     let w = Weapon {
         skill,
         damage,
@@ -502,14 +681,37 @@ pub fn strike(st: &mut AppState, id: &AbilityId, foe: usize) -> Result<(), Strin
     };
     let from = at.pos;
     let name = st.foes[foe].name.clone();
+    let impact = st.tick + flight_ticks(&ability.fx, from, st.foes[foe].pos);
     let rounds = volley(st, from, foe, &w, chance, &ability.fx);
-    if rounds.iter().any(Option::is_some) && stun > 0 {
+    let hit = rounds.iter().any(Option::is_some);
+    let mut line = format!(
+        "{} · {name} {}",
+        ability.name.to_lowercase(),
+        outcomes(&rounds)
+    );
+    if hit && stun > 0 {
         if let Some(f) = st.foes.get_mut(foe) {
             f.stunned = f.stunned.max(stun);
         }
         st.say(format!("{name} stunned"));
     }
-    st.say(format!("{} · {name} {}", ability.name, outcomes(&rounds)));
+    if hit && push > 0 && st.foes[foe].standing() {
+        let trail = ability.fx.contains(&Fx::Trail);
+        let moved = push_foe(st, foe, from, push, impact, trail);
+        line.push_str(&format!(" · back {moved}"));
+    }
+    st.say(line);
+    if hit && chain > 0 {
+        let arc = Chain {
+            you: from,
+            hops: chain,
+            damage,
+            stun,
+            fx: &ability.fx,
+            source: &ability.name,
+        };
+        chain_foes(st, foe, arc);
+    }
     Ok(())
 }
 
@@ -821,7 +1023,7 @@ mod tests {
         assert_eq!(st.foes[0].hp, foes::GOON_HP - 6);
         assert_eq!(st.foes[0].stunned, 1);
         assert!(logged(&st, "goon stunned"));
-        assert!(logged(&st, "Static · goon 6"));
+        assert!(logged(&st, "static · goon 6"));
         let shapes: Vec<&Fx> = st.fx.iter().map(|i| &i.fx).collect();
         assert!(
             matches!(

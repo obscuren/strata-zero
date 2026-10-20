@@ -10878,6 +10878,7 @@ mod tests {
         st.net.engaged = Some(crate::net::Engagement {
             place: Place::Construct(a),
             spent_at: None,
+            boosted: false,
             round: 1,
             order: vec![crate::net::Actor::You],
             turn: 0,

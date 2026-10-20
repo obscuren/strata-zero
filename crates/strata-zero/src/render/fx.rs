@@ -35,6 +35,10 @@ pub const BLOOM_TICKS: u64 = 13;
 pub const WHITEOUT_TICKS: u64 = 8;
 /// Ticks a shock plays.
 pub const SHOCK_TICKS: u64 = 4;
+/// Ticks a push's trail stays.
+pub const TRAIL_TICKS: u64 = 4;
+/// Ticks a pulse rings out.
+pub const PULSE_TICKS: u64 = 7;
 
 /// Ticks a tracer takes from the muzzle to its impact: `speed` tiles a tick, at
 /// least one tick.

@@ -101,6 +101,8 @@ pub struct Engagement {
     pub acting_since: u64,
     /// The tick your last action point went; the turn ends on its own a beat later.
     pub spent_at: Option<u64>,
+    /// Redline has been spent this fight.
+    pub boosted: bool,
 }
 
 /// Ticks after your last action point before your turn ends on its own.
@@ -131,6 +133,10 @@ pub enum Step {
 pub const DEEP_END_COOLING: u64 = 10;
 /// Heat a ping makes inside a construct.
 pub const PING_NOISE: u8 = 2;
+/// Heat a strike ability makes on a piece of ICE inside a construct.
+// Read by `casts::strike_ice` once the cursor calls it.
+#[allow(dead_code)]
+pub const STRIKE_NOISE: u8 = 3;
 /// Heat an arc trace makes inside a construct.
 pub const TRACE_NOISE: u8 = 5;
 /// Turns a piece stands stunned after an arc trace.
@@ -663,45 +669,14 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
             st.say(line.clone());
             return Some(line);
         }
-        let line = if ok {
+        if ok {
             let mut damage = 2 * spec.rating;
             if st.character.flags(&st.content).contains("black_ice") {
                 damage += 1;
             }
-            let (grade, label, inert) = st.constructs.get(b).map(|k| {
-                (
-                    k.guards[index].grade,
-                    k.guards[index].label(),
-                    k.guards[index].inert,
-                )
-            })?;
-            let seen = st.player.as_ref()?.pos;
-            let left = {
-                let states = st.net.ice.get_mut(&b)?;
-                let ice = states.get_mut(index)?;
-                // A dummy takes the hit and keeps standing; a piece turns on you.
-                if !inert {
-                    ice.integrity = ice.integrity.saturating_sub(damage);
-                    ice.mode = IceMode::Awake { seen, lost: 0 };
-                }
-                ice.integrity
-            };
-            if left == 0 {
-                st.net.run = None;
-                st.net.land(b, run.target, kind, Op::Attack, now);
-                let roots = st.backdoors.roots();
-                st.net.sync_guards(&mut st.constructs, b, now, &roots);
-                kick(st, 6);
-                let line = format!("{label} ICE broken");
-                st.say(line.clone());
-                alarm_clears(st, b);
-                return Some(line);
-            } else {
-                format!("attack · {label} ICE {left}/{}", grade.integrity())
-            }
-        } else {
-            format!("{label} slips · heat {heat}")
-        };
+            return hit_piece(st, b, index, damage, 0, now);
+        }
+        let line = format!("{label} slips · heat {heat}");
         st.say(line.clone());
         return Some(line);
     }
@@ -719,6 +694,54 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
     } else {
         format!("{label} slips · heat {heat}")
     };
+    st.say(line.clone());
+    Some(line)
+}
+
+/// A hit lands on a piece of ICE: its integrity falls (a dummy takes it and keeps
+/// standing), it wakes, `stun` turns hold it, and at zero the piece breaks with the
+/// break path of an attack. Logs and returns the line.
+pub fn hit_piece(
+    st: &mut AppState,
+    b: BuildingId,
+    index: usize,
+    damage: u8,
+    stun: u8,
+    now: u64,
+) -> Option<String> {
+    let target = HackTarget::Guard { building: b, index };
+    let kind = target_kind(st, b, target)?;
+    let (grade, label, inert) = st.constructs.get(b).map(|k| {
+        (
+            k.guards[index].grade,
+            k.guards[index].label(),
+            k.guards[index].inert,
+        )
+    })?;
+    let seen = st.player.as_ref()?.pos;
+    let left = {
+        let states = st.net.ice.get_mut(&b)?;
+        let ice = states.get_mut(index)?;
+        // A dummy takes the hit and keeps standing; a piece turns on you.
+        if !inert {
+            ice.integrity = ice.integrity.saturating_sub(damage);
+            ice.mode = IceMode::Awake { seen, lost: 0 };
+            ice.stunned = ice.stunned.max(stun);
+        }
+        ice.integrity
+    };
+    if left == 0 {
+        st.net.run = None;
+        st.net.land(b, target, kind, Op::Attack, now);
+        let roots = st.backdoors.roots();
+        st.net.sync_guards(&mut st.constructs, b, now, &roots);
+        kick(st, 6);
+        let line = format!("{label} ICE broken");
+        st.say(line.clone());
+        alarm_clears(st, b);
+        return Some(line);
+    }
+    let line = format!("attack · {label} ICE {left}/{}", grade.integrity());
     st.say(line.clone());
     Some(line)
 }
@@ -889,7 +912,7 @@ pub fn number(
     });
 }
 
-fn kick(st: &mut AppState, ticks: u64) {
+pub(crate) fn kick(st: &mut AppState, ticks: u64) {
     let Some((place, origin)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
         return;
     };
@@ -1570,6 +1593,7 @@ pub fn engage(st: &mut AppState, place: Place, manual: bool) {
         manual,
         acting_since: st.clock_tick(),
         spent_at: None,
+        boosted: false,
     });
     let line = if manual {
         "engaged".to_string()
@@ -1644,6 +1668,9 @@ pub fn seat_standing(st: &mut AppState, b: BuildingId) {
 
 /// Back to the beat.
 pub fn disengage(st: &mut AppState) {
+    for f in &mut st.foes {
+        f.marked = false;
+    }
     if st.net.engaged.take().is_some() {
         st.net.beat = st.clock_tick();
         st.say("calm");
