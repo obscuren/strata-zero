@@ -29,6 +29,12 @@ pub const NUMBER_TICKS: u64 = 14;
 pub const NUMBER_RISE: u64 = 4;
 /// Ticks a spent casing lies on the ground before it is gone.
 pub const CASING_TICKS: u64 = 60;
+/// Ticks a bloom plays before its scorch.
+pub const BLOOM_TICKS: u64 = 13;
+/// Ticks a whiteout plays before its scorch.
+pub const WHITEOUT_TICKS: u64 = 8;
+/// Ticks a shock plays.
+pub const SHOCK_TICKS: u64 = 4;
 
 /// Ticks a tracer takes from the muzzle to its impact: `speed` tiles a tick, at
 /// least one tick.
@@ -906,6 +912,7 @@ mod tests {
             label: String::new(),
             hit: false,
             tint: None,
+            arc: None,
         }
     }
 

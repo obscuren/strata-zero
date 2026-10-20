@@ -193,6 +193,7 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
                 label: String::new(),
                 hit: false,
                 tint: None,
+                arc: None,
             });
         }
     }

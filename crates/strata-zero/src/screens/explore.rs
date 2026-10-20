@@ -2396,8 +2396,15 @@ impl Screen for MapScreen {
         {
             if st.net.engaged.is_some() {
                 crate::net::pace(st);
-            } else if crate::foes::look_all(st) {
-                crate::net::engage(st, place, false);
+            } else {
+                // Calm: a fuse burns down on every beat.
+                if !st.live.is_empty() && st.clock_tick() >= st.net.beat + crate::net::BEAT_TICKS {
+                    st.net.beat = st.clock_tick();
+                    crate::net::beat(st);
+                }
+                if st.net.engaged.is_none() && crate::foes::look_all(st) {
+                    crate::net::engage(st, place, false);
+                }
             }
         }
         // Your last action point gone: the turn passes on its own a beat later.

@@ -180,6 +180,8 @@ pub struct NetState {
     pub beat: u64,
     /// The construct on turns, if any.
     pub engaged: Option<Engagement>,
+    /// Your turns left stunned by a blast of your own.
+    pub stunned_you: u8,
     last_minute: u64,
     /// Every roll comes out this way, for tests.
     #[cfg(test)]
@@ -202,6 +204,7 @@ impl Default for NetState {
             run: None,
             beat: 0,
             engaged: None,
+            stunned_you: 0,
             last_minute: 0,
             #[cfg(test)]
             force_roll: None,
@@ -835,6 +838,7 @@ pub fn bolt(st: &mut AppState, from: Pos, to: Pos, colour: (u8, u8, u8), ticks: 
         label: String::new(),
         hit: false,
         tint: None,
+        arc: None,
     });
 }
 
@@ -854,6 +858,7 @@ pub fn mark(st: &mut AppState, at: Pos, colour: (u8, u8, u8), ticks: u64) {
         label: String::new(),
         hit: false,
         tint: None,
+        arc: None,
     });
 }
 
@@ -880,6 +885,7 @@ pub fn number(
         label: label.into(),
         hit: true,
         tint: colour,
+        arc: None,
     });
 }
 
@@ -898,6 +904,7 @@ fn kick(st: &mut AppState, ticks: u64) {
         label: String::new(),
         hit: false,
         tint: None,
+        arc: None,
     });
 }
 
@@ -1783,6 +1790,18 @@ pub fn end_turn(st: &mut AppState) {
         e.acting_since = now;
         e.spent_at = None;
     }
+    if actor == Actor::You {
+        // Fuses burn down as your turn opens; a blast of your own may be the end of you.
+        crate::combat::tick_live(st);
+        if st.net.stunned_you > 0
+            && let Some(e) = st.net.engaged.as_mut()
+        {
+            e.ap = 0;
+            e.spent_at = Some(now);
+            st.net.stunned_you -= 1;
+            st.say("you're stunned");
+        }
+    }
     start_turn(st);
 }
 
@@ -2210,6 +2229,15 @@ pub fn trace_bar(heat: u8) -> String {
 /// ICE looks and takes one step or one hit.
 pub fn beat(st: &mut AppState) {
     step_run(st);
+    // On foot and calm, fuses burn down on the beat.
+    if st.net.engaged.is_none()
+        && st
+            .player
+            .as_ref()
+            .is_some_and(|p| !matches!(p.place, Place::Construct(_)))
+    {
+        crate::combat::tick_live(st);
+    }
     // The roll may have tripped the alarm or dumped you: the fight (or the street)
     // takes over from here, nothing acts outside the pace.
     let Some(Place::Construct(b)) = st.player.as_ref().map(|p| p.place) else {
@@ -2791,5 +2819,38 @@ mod tests {
         assert_eq!(net.cooling(5), Some(10));
         assert_eq!(net.cooling(15), None);
         let _ = IceGrade::White;
+    }
+
+    #[test]
+    fn a_stunned_you_loses_the_turns_ap_and_a_fuse_burns_as_it_opens() {
+        use crate::combat::Live;
+        let street = Place::Stratum(citygen::StratumKind::Street);
+        let mut st = crate::foes::testutil::lot(Pos::new(14, 8));
+        engage(&mut st, street, true);
+        st.foes[0].down = true;
+        st.net.stunned_you = 1;
+        let frag = st.content.item(&game::ItemId::new("frag")).unwrap();
+        let (_, _, blast) = frag.throw().unwrap();
+        st.live.push(Live {
+            place: street,
+            pos: Pos::new(30, 8),
+            blast,
+            fx: Vec::new(),
+            name: "Frag".to_string(),
+            turns: 2,
+        });
+        // Your turn passes to the idle goon and back.
+        end_turn(&mut st);
+        let e = st.net.engaged.as_ref().unwrap();
+        assert_eq!(e.actor(), Actor::You);
+        assert_eq!(e.ap, 0, "stunned");
+        assert!(e.spent_at.is_some(), "the turn ends itself");
+        assert_eq!(st.net.stunned_you, 0);
+        assert!(st.log.iter().any(|m| m.text.contains("you're stunned")));
+        assert_eq!(st.live[0].turns, 1, "a fuse burned as the turn opened");
+        // And the next turn is whole again.
+        end_turn(&mut st);
+        assert_eq!(st.net.engaged.as_ref().unwrap().ap, BASE_AP);
+        assert!(st.live.is_empty(), "the second turn set it off");
     }
 }

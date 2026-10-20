@@ -65,6 +65,8 @@ pub struct AppState {
     pub fx: Vec<FxInstance>,
     /// Who stands against you on foot this session; cleared with the city.
     pub foes: Vec<crate::foes::Foe>,
+    /// Blasts lying live with a fuse; cleared with the city.
+    pub live: Vec<crate::combat::Live>,
     /// Rounds fired this session: the roll's seed.
     pub shots: u64,
     /// Every round lands, or none; for tests.
@@ -116,13 +118,25 @@ pub struct FxInstance {
     pub hit: bool,
     /// A colour the net lends a number (its bolt's); `None` is the street's own.
     pub tint: Option<(u8, u8, u8)>,
+    /// For a thrown thing: how it crosses the line.
+    pub arc: Option<game::Arc>,
 }
 
 impl FxInstance {
+    /// How long a blast's stain outlasts it: only where it hurt.
+    fn scorch(&self) -> u64 {
+        if self.hit {
+            crate::combat::SCORCH_TICKS
+        } else {
+            0
+        }
+    }
+
     /// The tick from which the instance draws nothing.
     pub fn until(&self) -> u64 {
         use crate::render::fx::{
-            CASING_TICKS, FLASH_TICKS, IMPACT_TICKS, NUMBER_TICKS, STREAK_TICKS, tracer_ticks,
+            BLOOM_TICKS, CASING_TICKS, FLASH_TICKS, IMPACT_TICKS, NUMBER_TICKS, SHOCK_TICKS,
+            STREAK_TICKS, WHITEOUT_TICKS, tracer_ticks,
         };
         match self.fx {
             game::Fx::Kick(ticks) => self.started + ticks,
@@ -144,13 +158,18 @@ impl FxInstance {
             game::Fx::Chips | game::Fx::Spark | game::Fx::Tear => self.started + IMPACT_TICKS,
             game::Fx::Number { .. } => self.started + NUMBER_TICKS,
             game::Fx::Casing => self.started + CASING_TICKS,
+            game::Fx::Throw => {
+                self.started
+                    + self
+                        .targets
+                        .first()
+                        .map_or(0, |t| crate::combat::throw_ticks(self.origin, *t))
+            }
+            game::Fx::Bloom => self.started + BLOOM_TICKS + self.scorch(),
+            game::Fx::Whiteout => self.started + WHITEOUT_TICKS + self.scorch(),
+            game::Fx::Shock => self.started + SHOCK_TICKS,
             // Drawn by a later task.
-            game::Fx::Throw
-            | game::Fx::Bloom
-            | game::Fx::Whiteout
-            | game::Fx::Shock
-            | game::Fx::Trail
-            | game::Fx::Pulse { .. } => self.started,
+            game::Fx::Trail | game::Fx::Pulse { .. } => self.started,
         }
     }
 }
@@ -191,6 +210,7 @@ impl AppState {
             ground: game::Ground::default(),
             fx: Vec::new(),
             foes: Vec::new(),
+            live: Vec::new(),
             shots: 0,
             #[cfg(test)]
             force_hit: None,
@@ -310,6 +330,7 @@ impl AppState {
         self.player = None;
         self.fx.clear();
         self.foes.clear();
+        self.live.clear();
         self.deck_tab = Tab::Skills;
         self.deck_rows = [0; Tab::ALL.len()];
         self.deck_kit = Default::default();
@@ -805,6 +826,7 @@ mod tests {
             label: String::new(),
             hit: false,
             tint: None,
+            arc: None,
         };
         let to = vec![Pos::new(18, 8)];
         assert_eq!(at(game::Fx::Flash { big: true }, to.clone()).until(), 102);
@@ -825,6 +847,31 @@ mod tests {
     }
 
     #[test]
+    fn until_for_the_blast_shapes_and_the_throw() {
+        use citygen::Pos;
+        let at = |fx: game::Fx, hit: bool| FxInstance {
+            fx,
+            place: citygen::Place::Stratum(citygen::StratumKind::Street),
+            origin: Pos::new(6, 8),
+            radius: 2,
+            started: 100,
+            revealed: Vec::new(),
+            targets: vec![Pos::new(12, 8)],
+            label: String::new(),
+            hit,
+            tint: None,
+            arc: None,
+        };
+        let scorch = crate::combat::SCORCH_TICKS;
+        assert_eq!(at(game::Fx::Throw, false).until(), 105, "six tiles: 3 + 2");
+        assert_eq!(at(game::Fx::Bloom, false).until(), 113);
+        assert_eq!(at(game::Fx::Bloom, true).until(), 113 + scorch);
+        assert_eq!(at(game::Fx::Whiteout, true).until(), 108 + scorch);
+        assert_eq!(at(game::Fx::Whiteout, false).until(), 108);
+        assert_eq!(at(game::Fx::Shock, true).until(), 104, "no scorch");
+    }
+
+    #[test]
     fn fx_instances_end_and_prune() {
         let mut st = AppState::new();
         let at = |fx: game::Fx| FxInstance {
@@ -838,6 +885,7 @@ mod tests {
             label: String::new(),
             hit: false,
             tint: None,
+            arc: None,
         };
         st.fx.push(at(game::Fx::Kick(4)));
         st.fx.push(at(game::Fx::Wave {
@@ -894,6 +942,7 @@ mod tests {
             label: String::new(),
             hit: false,
             tint: None,
+            arc: None,
         });
         st.deck_tab = Tab::Kit;
         st.deck_rows[Tab::Stats.index()] = 3;

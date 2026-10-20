@@ -301,6 +301,33 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             st.foes.push(foe);
             Ok(line)
         }
+        "throw" => {
+            let id = game::ItemId::new(args.first().copied().ok_or("throw what")?);
+            let n: i32 = args.get(1).and_then(|a| a.parse().ok()).unwrap_or(4);
+            let at = st.player.as_ref().ok_or("no body")?.pos.offset(n, 0);
+            crate::combat::throw_free(st, &id, at)?;
+            Ok(format!("thrown at {},{}", at.x, at.y))
+        }
+        "live" => {
+            let lines: Vec<String> = st
+                .live
+                .iter()
+                .map(|l| {
+                    let s = if l.turns == 1 { "" } else { "s" };
+                    format!(
+                        "{} at {},{} · {} turn{s}",
+                        l.name.to_lowercase(),
+                        l.pos.x,
+                        l.pos.y,
+                        l.turns
+                    )
+                })
+                .collect();
+            if lines.is_empty() {
+                return Ok("nothing live".to_string());
+            }
+            Ok(lines.join(" · "))
+        }
         "foes" => {
             let lines: Vec<String> = st
                 .foes

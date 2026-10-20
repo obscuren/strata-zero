@@ -41,6 +41,10 @@ pub struct Foe {
     pub inert: bool,
     /// How it is drawn.
     pub glyph: char,
+    /// Wired meat: what a chrome-only blast (an EMP) hurts.
+    pub chrome: bool,
+    /// Read by Deadeye: your chance on it is better for the fight.
+    pub marked: bool,
 }
 
 impl Foe {
@@ -60,6 +64,8 @@ impl Foe {
             down: false,
             inert: false,
             glyph: '@',
+            chrome: true,
+            marked: false,
         }
     }
 
@@ -79,6 +85,8 @@ impl Foe {
             down: false,
             inert: true,
             glyph: '&',
+            chrome: true,
+            marked: false,
         }
     }
 
