@@ -1,5 +1,7 @@
 //! Ability effects over the map: glitch kicks, expanding wavefronts and glowing markers.
 
+mod blast;
+
 use crate::anim::effects::{glitch_cells, pulse};
 use crate::app::FxInstance;
 use crate::render::map::MapRef;
@@ -83,6 +85,9 @@ pub struct FxOverlay<'a> {
     pub fx: &'a [FxInstance],
     /// Sight on the drawn stratum: glow markers show on connectors out of sight.
     pub vis: Option<&'a Grid<Visibility>>,
+    /// Tiles whose bodies the scorch must leave their glyph on: the fx layer draws
+    /// over the people, so the stain only tints their ground.
+    pub standing: &'a [Pos],
 }
 
 impl Overlay for FxOverlay<'_> {
@@ -174,9 +179,21 @@ impl Overlay for FxOverlay<'_> {
                 Fx::Tear => tear(inst, tick, origin, area, buf),
                 Fx::Number { tag } => number(inst, tag, elapsed, origin, area, buf),
                 Fx::Casing => casing(inst, elapsed, origin, area, buf),
-                // Drawn by a later task.
-                Fx::Throw | Fx::Bloom | Fx::Whiteout | Fx::Shock | Fx::Trail | Fx::Pulse { .. } => {
+                Fx::Throw => blast::throw(inst, elapsed, map, origin, area, buf),
+                Fx::Bloom => blast::bloom(inst, elapsed, self.standing, origin, area, buf),
+                Fx::Whiteout => {
+                    blast::whiteout(inst, elapsed, map, self.standing, origin, area, buf)
                 }
+                Fx::Shock => blast::shock(inst, elapsed, origin, area, buf),
+                Fx::Trail => blast::trail(inst, elapsed, origin, area, buf),
+                Fx::Pulse { colour } => blast::pulse_rings(
+                    inst,
+                    Rgb(colour.0, colour.1, colour.2),
+                    elapsed,
+                    origin,
+                    area,
+                    buf,
+                ),
                 Fx::Mark { colour, .. } => mark(
                     inst,
                     Rgb(colour.0, colour.1, colour.2),
@@ -726,8 +743,8 @@ fn number(inst: &FxInstance, tag: bool, elapsed: u64, origin: Pos, area: Rect, b
         let (fg, bg) = match (inst.tint, fade) {
             (None, false) => (WHITE, Rgb(170, 20, 20)),
             (None, true) => (Rgb(200, 120, 120), Rgb(80, 10, 10)),
-            (Some(t), false) => (WHITE, Rgb(t.0, t.1, t.2).scale(0.45)),
-            (Some(t), true) => (Rgb(t.0, t.1, t.2).scale(0.8), Rgb(t.0, t.1, t.2).scale(0.2)),
+            (Some(_), false) => (WHITE, CYAN_FIELD),
+            (Some(_), true) => (Rgb(120, 170, 180), Rgb(0, 40, 50)),
         };
         (fg, Some(bg), format!(" {} ", inst.label), target.x - 1)
     } else {
@@ -790,6 +807,8 @@ fn casing(inst: &FxInstance, elapsed: u64, origin: Pos, area: Rect, buf: &mut Bu
     }
 }
 
+/// The field a tinted tag sits on: the net's, and Redline's `+ turn`.
+const CYAN_FIELD: Rgb = Rgb(0, 90, 110);
 /// A pulsing mark on every target tile, whatever its visibility.
 fn mark(inst: &FxInstance, colour: Rgb, origin: Pos, area: Rect, tick: u64, buf: &mut Buffer) {
     let glow = colour.scale(0.55 + 0.45 * pulse(tick, 20)).to_color();
@@ -856,12 +875,13 @@ impl FxOverlay<'_> {
 
 #[cfg(test)]
 mod tests {
+    use super::blast::blast_hash;
     use super::*;
     use crate::render::style::StylePack;
     use crate::render::viewport::{MapView, Overlay};
     use crate::walker::Player;
     use citygen::{City, GenParams, Generator, Place, Pos, SizePreset, StratumKind};
-    use game::Fx;
+    use game::{Arc, Fx};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
@@ -941,6 +961,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: std::slice::from_ref(inst),
             vis: None,
+            standing: &[],
         };
         let plain = render(c, s, StratumKind::Street, tick, None, &[], (120, 60));
         let with = render(
@@ -1342,11 +1363,7 @@ mod tests {
         let mut tag = shot(Fx::Number { tag: true }, FIRER, TARGET, "-2");
         tag.tint = Some(cyan);
         let (b, _) = drawn(&c, &s, &tag, 100);
-        assert_eq!(
-            at(&b, 52, 29).2,
-            Rgb(0, 229, 255).scale(0.45).to_color(),
-            "a blue field"
-        );
+        assert_eq!(at(&b, 52, 29).2, rgb((0, 90, 110)), "the cyan field");
         assert_eq!(at(&b, 52, 29).1, rgb((255, 255, 255)));
     }
 
@@ -1378,6 +1395,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: std::slice::from_ref(&inst),
             vis: None,
+            standing: &[],
         };
         let plain = render(&c, &s, StratumKind::Street, 106, None, &[], (120, 60));
         let half = render(
@@ -1435,6 +1453,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: std::slice::from_ref(&inst),
             vis: Some(p.vis()),
+            standing: &[],
         };
         let buf = render(
             &c,
@@ -1457,6 +1476,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: std::slice::from_ref(&bolt),
             vis: None,
+            standing: &[],
         };
         for tick in [100u64, 106, 111] {
             render(
@@ -1490,6 +1510,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: std::slice::from_ref(&none),
             vis: None,
+            standing: &[],
         };
         let plain = render(&c, &s, StratumKind::Street, 106, None, &[], (120, 60));
         assert_eq!(
@@ -1543,6 +1564,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: std::slice::from_ref(&inst),
             vis: Some(p.vis()),
+            standing: &[],
         };
         let buf = render(
             &c,
@@ -1611,6 +1633,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: std::slice::from_ref(&inst),
             vis: None,
+            standing: &[],
         };
         let plain = render(&c, &s, StratumKind::Street, 100, None, &[], (120, 60));
         let kicked = render(
@@ -1663,6 +1686,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: std::slice::from_ref(&inst),
             vis: Some(p.vis()),
+            standing: &[],
         };
         let buf = render(
             &c,
@@ -1714,6 +1738,7 @@ mod tests {
             let alone = FxOverlay {
                 fx: std::slice::from_ref(inst),
                 vis: None,
+                standing: &[],
             };
             let on_net = render(&c, &s, StratumKind::Net, 106, None, &[&alone], (120, 60));
             assert_ne!(
@@ -1724,6 +1749,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: &all,
             vis: None,
+            standing: &[],
         };
         let plain = render(&c, &s, StratumKind::Street, 106, None, &[], (120, 60));
         let drawn = render(
@@ -1757,6 +1783,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: std::slice::from_ref(&inst),
             vis: None,
+            standing: &[],
         };
         for tick in [100u64, 105, 112, 120] {
             render(
@@ -1834,6 +1861,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: std::slice::from_ref(&inst),
             vis: None,
+            standing: &[],
         };
         let plain = render(&c, &s, StratumKind::Street, 111, None, &[], (120, 60));
         let full = render(
@@ -1869,5 +1897,475 @@ mod tests {
             outside, 0,
             "the bolt stays inside the box between firer and node"
         );
+    }
+
+    // ---- the grenade and ability shapes
+
+    const L: Pos = Pos::new(40, 30);
+    const GREN: Rgb = Rgb(190, 190, 140);
+    const WHITE_RGB: Rgb = Rgb(255, 255, 255);
+    const CYAN_RGB: Rgb = Rgb(0, 229, 255);
+
+    /// Every tile within `r` of `c`, the centre first: the footprint on open ground.
+    fn square(c: Pos, r: i32) -> Vec<Pos> {
+        let mut out = vec![c];
+        for dy in -r..=r {
+            for dx in -r..=r {
+                if (dx, dy) != (0, 0) {
+                    out.push(c.offset(dx, dy));
+                }
+            }
+        }
+        out
+    }
+
+    fn blast_at(fx: Fx, r: i32, hit: bool) -> FxInstance {
+        let mut i = instance(fx, L, r, Vec::new());
+        i.targets = square(L, r);
+        i.hit = hit;
+        i
+    }
+
+    /// The instance drawn at `started + e`, with bodies standing on `standing`, and
+    /// the plain street beside it.
+    fn at_e(inst: &FxInstance, e: u64, standing: &[Pos]) -> (Buffer, Buffer) {
+        let (c, s) = (city(), StylePack::load().unwrap());
+        let tick = inst.started + e;
+        let overlay = FxOverlay {
+            fx: std::slice::from_ref(inst),
+            vis: None,
+            standing,
+        };
+        let plain = render(&c, &s, StratumKind::Street, tick, None, &[], (120, 60));
+        let with = render(
+            &c,
+            &s,
+            StratumKind::Street,
+            tick,
+            None,
+            &[&overlay],
+            (120, 60),
+        );
+        (with, plain)
+    }
+
+    fn cell(b: &Buffer, p: Pos) -> (String, Color, Color, bool) {
+        at(b, p.x, p.y)
+    }
+
+    fn col(c: Rgb) -> Color {
+        c.to_color()
+    }
+
+    /// A glyph in a colour, whatever is behind it.
+    fn glyph_fg(b: &Buffer, p: Pos) -> (String, Color) {
+        let (g, fg, _, _) = cell(b, p);
+        (g, fg)
+    }
+
+    fn thrown(arc: Arc, to: Pos) -> FxInstance {
+        let mut i = aimed(Fx::Throw, Pos::new(30, 30), vec![to]);
+        i.arc = Some(arc);
+        i
+    }
+
+    #[test]
+    fn throw_lob_rises_and_lands() {
+        // 11 tiles east: five cells in flight, then the landing, bounce and settle.
+        let inst = thrown(Arc::Lob, Pos::new(41, 30));
+        let (b, _) = at_e(&inst, 2, &[]);
+        // Head at line cell 5, round(2.2 * 4 * s(1 - s)) = 2 rows up.
+        let (g, fg, _, bold) = cell(&b, Pos::new(35, 28));
+        assert_eq!((g.as_str(), fg, bold), ("o", col(GREN), true));
+        // The three behind it, each at its own height, fading.
+        let fade = |t: f32| col(Rgb(120, 120, 120).mix(Rgb(50, 50, 50), t));
+        assert_eq!(
+            glyph_fg(&b, Pos::new(33, 28)),
+            ("·".to_string(), fade(1.0 / 3.0))
+        );
+        assert_eq!(
+            glyph_fg(&b, Pos::new(31, 29)),
+            ("·".to_string(), fade(2.0 / 3.0))
+        );
+        assert_ne!(cell(&b, Pos::new(35, 30)).0, "o", "not on the line itself");
+        let (b, _) = at_e(&inst, 5, &[]);
+        let (g, fg, _, bold) = cell(&b, Pos::new(41, 30));
+        assert_eq!((g.as_str(), fg, bold), ("●", col(Rgb(255, 240, 180)), true));
+        let (b, _) = at_e(&inst, 6, &[]);
+        let (g, fg, _, bold) = cell(&b, Pos::new(42, 29));
+        assert_eq!((g.as_str(), fg, bold), ("o", col(GREN), true));
+        let (b, _) = at_e(&inst, 7, &[]);
+        let (g, fg, _, bold) = cell(&b, Pos::new(41, 30));
+        assert_eq!((g.as_str(), fg, bold), ("o", col(GREN), true));
+        let (b, plain) = at_e(&inst, 8, &[]);
+        assert_eq!(b, plain, "nothing after the settle");
+    }
+
+    #[test]
+    fn throw_shadow_grows_on_the_line() {
+        // 21 tiles: the first cell is low, the middle is high, all on the row.
+        let inst = thrown(Arc::Shadow, Pos::new(51, 30));
+        let (b, _) = at_e(&inst, 0, &[]);
+        let h = 4.0 * (1.0 / 21.0) * (20.0 / 21.0);
+        let (g, fg, _, bold) = cell(&b, Pos::new(31, 30));
+        assert_eq!(
+            (g.as_str(), fg, bold),
+            ("·", col(GREN.mix(WHITE_RGB, h)), false)
+        );
+        let (b, _) = at_e(&inst, 1, &[]);
+        let (g, _, _, bold) = cell(&b, Pos::new(33, 30));
+        assert_eq!((g.as_str(), bold), ("o", false));
+        let (b, _) = at_e(&inst, 5, &[]);
+        let h = 4.0 * (11.0 / 21.0) * (10.0 / 21.0);
+        let (g, fg, _, bold) = cell(&b, Pos::new(41, 30));
+        assert_eq!(
+            (g.as_str(), fg, bold),
+            ("O", col(GREN.mix(WHITE_RGB, h)), true)
+        );
+        for y in [28, 29, 31, 32] {
+            assert_ne!(cell(&b, Pos::new(41, y)).0, "O", "never off the row");
+        }
+    }
+
+    #[test]
+    fn bloom_by_tick() {
+        let inst = blast_at(Fx::Bloom, 2, true);
+        let ring1 = Pos::new(41, 30);
+        let ring2 = Pos::new(42, 30);
+        let (b, plain) = at_e(&inst, 0, &[]);
+        assert_eq!(
+            cell(&b, L),
+            ("✺".into(), col(Rgb(0, 0, 0)), col(Rgb(255, 240, 180)), true)
+        );
+        assert_eq!(cell(&b, ring1), cell(&plain, ring1));
+        let (b, plain) = at_e(&inst, 1, &[]);
+        assert_eq!(
+            cell(&b, L),
+            ("✺".into(), col(WHITE_RGB), col(Rgb(255, 120, 40)), true)
+        );
+        assert_eq!(
+            cell(&b, ring1),
+            (
+                "*".into(),
+                col(Rgb(255, 230, 120)),
+                col(Rgb(200, 60, 20)),
+                true
+            )
+        );
+        assert_eq!(cell(&b, ring2), cell(&plain, ring2), "ring 2 waits for e2");
+        let (b, _) = at_e(&inst, 2, &[]);
+        assert_eq!(
+            cell(&b, L),
+            (
+                "▒".into(),
+                col(Rgb(255, 200, 90)),
+                col(Rgb(120, 40, 10)),
+                false
+            )
+        );
+        assert_eq!(
+            cell(&b, ring1),
+            (
+                "░".into(),
+                col(Rgb(255, 170, 40)),
+                col(Rgb(120, 40, 10)),
+                false
+            )
+        );
+        assert_eq!(
+            cell(&b, ring2),
+            (
+                "*".into(),
+                col(Rgb(255, 200, 90)),
+                col(Rgb(90, 30, 10)),
+                true
+            )
+        );
+        let (b, plain) = at_e(&inst, 3, &[]);
+        assert_eq!(
+            cell(&b, L),
+            (
+                "▓".into(),
+                col(Rgb(90, 90, 90)),
+                col(Rgb(50, 40, 36)),
+                false
+            )
+        );
+        assert_eq!(
+            cell(&b, ring1),
+            (
+                "▒".into(),
+                col(Rgb(120, 120, 120)),
+                col(Rgb(60, 40, 30)),
+                false
+            )
+        );
+        let (g, fg, bg, _) = cell(&b, ring2);
+        assert_eq!(
+            (g.as_str(), fg, bg),
+            ("·", col(Rgb(255, 170, 40)), cell(&plain, ring2).2)
+        );
+    }
+
+    #[test]
+    fn bloom_stays_inside_its_footprint_until_the_smoke_rises() {
+        let inst = blast_at(Fx::Bloom, 2, true);
+        for e in 0..4 {
+            let (b, plain) = at_e(&inst, e, &[]);
+            for y in 0..60 {
+                for x in 0..120 {
+                    let p = Pos::new(x, y);
+                    if p.chebyshev(L) > 2 {
+                        assert_eq!(cell(&b, p), cell(&plain, p), "e{e} touched {p:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bloom_smoke_and_embers_follow_the_hash() {
+        let inst = blast_at(Fx::Bloom, 2, true);
+        let (b, _) = at_e(&inst, 6, &[]);
+        let smoke = Rgb(110, 110, 110).mix(Rgb(45, 45, 45), 2.0 / 9.0);
+        let (mut smoked, mut embers) = (0, 0);
+        for p in square(L, 2) {
+            let h = blast_hash(p, 3);
+            if h.is_multiple_of(3) {
+                // Risen (6 - 4) / 4 = 0 rows.
+                assert_eq!(
+                    glyph_fg(&b, p),
+                    ("░".to_string(), col(smoke)),
+                    "smoke at {p:?}"
+                );
+                smoked += 1;
+            } else if h.is_multiple_of(7) {
+                assert_eq!(
+                    glyph_fg(&b, p),
+                    ("·".to_string(), col(Rgb(200, 110, 20))),
+                    "ember at {p:?}"
+                );
+                embers += 1;
+            }
+        }
+        assert!(smoked > 0, "some smoke");
+        assert!(embers > 0, "some embers");
+        // At e9 the embers are gone and the smoke has risen a row.
+        let (b, _) = at_e(&inst, 9, &[]);
+        let smoke = Rgb(110, 110, 110).mix(Rgb(45, 45, 45), 5.0 / 9.0);
+        let risen = square(L, 2)
+            .into_iter()
+            .find(|p| blast_hash(*p, 4).is_multiple_of(3))
+            .expect("some smoke at e9");
+        assert_eq!(
+            glyph_fg(&b, risen.offset(0, -1)),
+            ("░".to_string(), col(smoke))
+        );
+    }
+
+    #[test]
+    fn bloom_scorch_stays_after_the_blast_when_it_hurt() {
+        let inst = blast_at(Fx::Bloom, 2, true);
+        let ring1 = Pos::new(41, 30);
+        let (b, plain) = at_e(&inst, BLOOM_TICKS, &[]);
+        assert_eq!(
+            cell(&b, L),
+            (
+                "▒".into(),
+                col(Rgb(45, 40, 36)),
+                col(Rgb(18, 16, 15)),
+                false
+            )
+        );
+        assert_eq!(
+            cell(&b, ring1),
+            (
+                "░".into(),
+                col(Rgb(38, 34, 30)),
+                col(Rgb(20, 17, 16)),
+                false
+            )
+        );
+        assert_eq!(cell(&b, Pos::new(42, 30)), cell(&plain, Pos::new(42, 30)));
+        // Under the live shape the stain is already down at e5.
+        let (b, _) = at_e(&inst, 5, &[]);
+        assert_eq!(cell(&b, ring1).2, col(Rgb(20, 17, 16)));
+        // A body standing there keeps its glyph; the ground under it is stained.
+        let (b, plain) = at_e(&inst, BLOOM_TICKS, &[L]);
+        let (g, fg, bg, _) = cell(&b, L);
+        assert_eq!((g, fg), glyph_fg(&plain, L));
+        assert_eq!(bg, col(Rgb(18, 16, 15)));
+        // A blast that did no harm leaves nothing.
+        let calm = blast_at(Fx::Bloom, 2, false);
+        let (b, plain) = at_e(&calm, BLOOM_TICKS, &[]);
+        assert_eq!(b, plain);
+    }
+
+    #[test]
+    fn whiteout_by_tick() {
+        let inst = blast_at(Fx::Whiteout, 3, true);
+        let (ring1, ring2) = (Pos::new(41, 30), Pos::new(42, 30));
+        let (b, plain) = at_e(&inst, 0, &[]);
+        for p in [L, ring1, ring2, Pos::new(43, 33)] {
+            let (g, fg, bg, bold) = cell(&b, p);
+            assert_eq!(g, cell(&plain, p).0, "glyphs kept");
+            assert_eq!((fg, bg, bold), (col(Rgb(0, 0, 0)), col(WHITE_RGB), true));
+        }
+        let (b, _) = at_e(&inst, 1, &[]);
+        let (_, fg, bg, bold) = cell(&b, ring1);
+        assert_eq!(
+            (fg, bg, bold),
+            (col(Rgb(60, 0, 0)), col(Rgb(255, 160, 60)), true)
+        );
+        let (_, fg, bg, _) = cell(&b, ring2);
+        assert_eq!((fg, bg), (col(Rgb(60, 0, 0)), col(Rgb(255, 110, 50))));
+        let (b, _) = at_e(&inst, 2, &[]);
+        let stain = (col(Rgb(30, 27, 25)), col(Rgb(16, 14, 13)));
+        assert_eq!(cell(&b, L), ("▓".into(), stain.0, stain.1, false));
+        assert_eq!(cell(&b, ring1), ("▒".into(), stain.0, stain.1, false));
+        assert_eq!(cell(&b, ring2), ("░".into(), stain.0, stain.1, false));
+        // Debris at distance 3 on the axis, and halved up on the diagonal.
+        assert_eq!(
+            glyph_fg(&b, Pos::new(43, 30)),
+            ("·".to_string(), col(Rgb(230, 230, 230)))
+        );
+        assert_eq!(cell(&b, Pos::new(43, 28)).0, "`");
+        // Debris at distance 4 at e4, two fifths of the way to the grey.
+        let (b, _) = at_e(&inst, 4, &[]);
+        assert_eq!(
+            glyph_fg(&b, Pos::new(44, 30)),
+            (
+                "·".to_string(),
+                col(Rgb(230, 230, 230).mix(Rgb(90, 90, 90), 0.4))
+            )
+        );
+        // The stain stays after the blast when it hurt, and not when it did not.
+        let (b, _) = at_e(&inst, WHITEOUT_TICKS, &[]);
+        assert_eq!(cell(&b, L), ("▓".into(), stain.0, stain.1, false));
+        let calm = blast_at(Fx::Whiteout, 3, false);
+        let (b, plain) = at_e(&calm, WHITEOUT_TICKS, &[]);
+        assert_eq!(b, plain);
+        let (b, _) = at_e(&calm, 2, &[]);
+        assert_ne!(cell(&b, L).0, "▓", "a flashbang stains nothing");
+    }
+
+    #[test]
+    fn shock_by_tick() {
+        let inst = blast_at(Fx::Shock, 2, true);
+        let (ring1, ring2) = (Pos::new(41, 30), Pos::new(42, 30));
+        let (b, _) = at_e(&inst, 0, &[]);
+        assert_eq!(
+            cell(&b, L),
+            ("◉".into(), col(CYAN_RGB), col(Rgb(0, 60, 75)), true)
+        );
+        let (b, _) = at_e(&inst, 1, &[]);
+        assert_eq!(cell(&b, L).0, "○");
+        assert_eq!(
+            cell(&b, ring1),
+            ("≋".into(), col(CYAN_RGB), col(Rgb(0, 40, 50)), true)
+        );
+        let (b, _) = at_e(&inst, 2, &[]);
+        assert_eq!(
+            cell(&b, ring2),
+            (
+                "≋".into(),
+                col(Rgb(0, 180, 200)),
+                col(Rgb(0, 30, 38)),
+                false
+            )
+        );
+        assert_eq!(
+            glyph_fg(&b, ring1),
+            ("·".to_string(), col(Rgb(0, 120, 140)))
+        );
+        let (b, _) = at_e(&inst, 3, &[]);
+        assert_eq!(
+            glyph_fg(&b, ring2),
+            ("·".to_string(), col(Rgb(0, 120, 140)))
+        );
+        let (b, plain) = at_e(&inst, 4, &[]);
+        assert_eq!(b, plain, "gone after four ticks");
+    }
+
+    #[test]
+    fn trail_arrows_fade() {
+        let pushed = |to| aimed(Fx::Trail, L, vec![to]);
+        let inst = pushed(Pos::new(41, 30));
+        for (e, c) in [
+            (0, Rgb(255, 120, 120)),
+            (1, Rgb(255, 120, 120)),
+            (2, Rgb(180, 60, 60)),
+            (3, Rgb(180, 60, 60)),
+        ] {
+            let (b, _) = at_e(&inst, e, &[]);
+            assert_eq!(glyph_fg(&b, L), ("»".to_string(), col(c)), "e{e}");
+        }
+        let (b, plain) = at_e(&inst, 4, &[]);
+        assert_eq!(b, plain);
+        for (to, arrow) in [
+            (Pos::new(39, 30), "«"),
+            (Pos::new(40, 31), "∨"),
+            (Pos::new(40, 29), "∧"),
+            (Pos::new(41, 29), "»"),
+            (Pos::new(43, 29), "»"),
+            (Pos::new(41, 27), "∧"),
+        ] {
+            let (b, _) = at_e(&pushed(to), 0, &[]);
+            assert_eq!(cell(&b, L).0, arrow, "{to:?}");
+        }
+    }
+
+    #[test]
+    fn pulse_rings_out() {
+        let inst = aimed(
+            Fx::Pulse {
+                colour: (0, 229, 255),
+            },
+            L,
+            Vec::new(),
+        );
+        let c = CYAN_RGB;
+        let (b, plain) = at_e(&inst, 0, &[]);
+        let (g, fg, bg, bold) = cell(&b, L);
+        assert_eq!(g, cell(&plain, L).0);
+        assert_eq!((fg, bg, bold), (col(Rgb(0, 0, 0)), col(c), true));
+        let (b, _) = at_e(&inst, 1, &[]);
+        for (dx, dy) in [
+            (1, 0),
+            (-1, 0),
+            (0, 1),
+            (0, -1),
+            (1, 1),
+            (-1, -1),
+            (1, -1),
+            (-1, 1),
+        ] {
+            assert_eq!(glyph_fg(&b, L.offset(dx, dy)), ("·".to_string(), col(c)));
+        }
+        assert_ne!(cell(&b, L.offset(2, 0)).0, "·");
+        let (b, _) = at_e(&inst, 3, &[]);
+        assert_eq!(
+            glyph_fg(&b, L.offset(2, 0)),
+            ("·".to_string(), col(c.scale(2.0 / 3.0)))
+        );
+        let (b, _) = at_e(&inst, 5, &[]);
+        assert_eq!(
+            glyph_fg(&b, L.offset(0, -3)),
+            ("·".to_string(), col(c.scale(1.0 / 3.0)))
+        );
+        let (b, plain) = at_e(&inst, 7, &[]);
+        assert_eq!(b, plain);
+    }
+
+    #[test]
+    fn a_tinted_tag_sits_on_the_cyan_field() {
+        let mut tag = shot(Fx::Number { tag: true }, FIRER, TARGET, "+ turn");
+        tag.tint = Some((0, 229, 255));
+        let (b, _) = at_e(&tag, 1, &[]);
+        let (_, fg, bg, bold) = cell(&b, Pos::new(TARGET.x, TARGET.y - 1));
+        assert_eq!((fg, bg, bold), (col(WHITE_RGB), col(Rgb(0, 90, 110)), true));
+        let (b, _) = at_e(&tag, 11, &[]);
+        let (_, fg, bg, _) = cell(&b, Pos::new(TARGET.x, TARGET.y - 3));
+        assert_eq!((fg, bg), (col(Rgb(120, 170, 180)), col(Rgb(0, 40, 50))));
     }
 }

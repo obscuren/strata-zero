@@ -165,6 +165,12 @@ pub fn detonate(
     let Some(city) = st.city.as_ref() else {
         return;
     };
+    // An EMP's victims play in the net's cyan, as a net attack's do.
+    let tint = tint.or_else(|| {
+        fx.iter()
+            .any(|f| matches!(f, Fx::Shock))
+            .then_some(crate::net::ATTACK_TINT)
+    });
     let tiles = footprint(city, place, centre, blast.radius);
     let you = st
         .player
@@ -596,6 +602,38 @@ mod tests {
             "{:?}",
             st.log.latest()
         );
+    }
+
+    #[test]
+    fn an_emps_victims_play_in_the_nets_cyan() {
+        let mut st = foes::testutil::lot(Pos::new(21, 8));
+        let (emp, fx, name) = thrown(&st, "emp_puck");
+        detonate(&mut st, STREET, Pos::new(20, 8), emp, &fx, &name, 500, None);
+        let victims: Vec<_> = st
+            .fx
+            .iter()
+            .filter(|i| matches!(i.fx, Fx::Tear | Fx::Spark | Fx::Number { .. }))
+            .collect();
+        assert!(!victims.is_empty());
+        assert!(
+            victims
+                .iter()
+                .all(|i| i.tint == Some(crate::net::ATTACK_TINT))
+        );
+        // A frag's stay the street's own.
+        let mut st = foes::testutil::lot(Pos::new(21, 8));
+        let (frag, fx, name) = thrown(&st, "frag");
+        detonate(
+            &mut st,
+            STREET,
+            Pos::new(20, 8),
+            frag,
+            &fx,
+            &name,
+            500,
+            None,
+        );
+        assert!(st.fx.iter().all(|i| i.tint.is_none()));
     }
 
     #[test]

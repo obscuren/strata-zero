@@ -2927,7 +2927,24 @@ impl Screen for MapScreen {
         let turn_overlay = turns
             .as_ref()
             .map(|view| crate::render::turns::TurnOverlay { view });
-        let fx = FxOverlay { fx: &st.fx, vis };
+        // The fx draw over the people: the scorch leaves a body its glyph.
+        let standing: Vec<Pos> = st
+            .foes
+            .iter()
+            .filter(|f| f.standing() && f.place == self.place)
+            .map(|f| f.pos)
+            .chain(
+                st.player
+                    .as_ref()
+                    .filter(|p| p.place == self.place)
+                    .map(|p| p.pos),
+            )
+            .collect();
+        let fx = FxOverlay {
+            fx: &st.fx,
+            vis,
+            standing: &standing,
+        };
         overlays.push(&fx);
         let light = crate::render::lighting::LightOverlay { vis };
         if st.show_light {
