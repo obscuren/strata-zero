@@ -142,22 +142,8 @@ pub fn mark(st: &mut AppState, id: &AbilityId, foe: usize) -> Result<(), String>
     Ok(())
 }
 
-/// The nearest other standing piece within two tiles of `from`, by distance then
-/// index, that is not in `hit`.
-fn next_piece(st: &AppState, b: BuildingId, from: Pos, hit: &[usize]) -> Option<usize> {
-    let k = st.constructs.get(b)?;
-    k.guards
-        .iter()
-        .enumerate()
-        .filter(|(i, g)| {
-            !hit.contains(i) && k.guard_at(g.pos) == Some(*i) && g.pos.chebyshev(from) <= 2
-        })
-        .min_by_key(|(i, g)| (g.pos.chebyshev(from), *i))
-        .map(|(i, _)| i)
-}
-
 /// The shot of a strike at a piece: the ability's shapes less the muzzle flash, in
-/// the net's tint, `delay` ticks late.
+/// the net's tint, starting at tick `start`.
 #[allow(clippy::too_many_arguments)]
 fn shoot_piece(
     st: &mut AppState,
@@ -167,7 +153,7 @@ fn shoot_piece(
     at: Pos,
     hit: bool,
     damage: u8,
-    delay: u64,
+    start: u64,
 ) {
     let fx: Vec<Fx> = fx
         .iter()
@@ -185,9 +171,7 @@ fn shoot_piece(
         damage,
         Some(net::ATTACK_TINT),
     );
-    for i in &mut st.fx[from_len..] {
-        i.started += delay;
-    }
+    combat::start_shapes_at(st, from_len, start);
 }
 
 /// You strike a piece of ICE in reach: an attack. It makes the attack's heat, rolls
@@ -244,7 +228,8 @@ pub fn strike_ice(
         range,
     );
     let hit = game::round_hits(combat::roll(st), chance);
-    shoot_piece(st, b, &ability.fx, me, at, hit, damage, 0);
+    let impact = st.tick + combat::flight_ticks(&ability.fx, me, at);
+    shoot_piece(st, b, &ability.fx, me, at, hit, damage, st.tick);
     let now = st.net.now(st);
     let name = ability.name.to_lowercase();
     if !hit {
@@ -264,10 +249,19 @@ pub fn strike_ice(
         st.say(format!("{label} ICE stunned"));
     }
     // The arc hops on, no roll: half the damage and the stun, a hop late each.
-    let half = (damage / 2).max(1);
+    let half = combat::hop_damage(damage);
     let (mut hits, mut last) = (vec![i], at);
     for hop in 1..=chain as u64 {
-        let Some(next) = next_piece(st, b, last, &hits) else {
+        let Some(k) = st.constructs.get(b) else {
+            break;
+        };
+        let candidates = k
+            .guards
+            .iter()
+            .enumerate()
+            .filter(|(i, g)| k.guard_at(g.pos) == Some(*i))
+            .map(|(i, g)| (i, g.pos));
+        let Some(next) = combat::nearest_other(candidates, last, &hits) else {
             break;
         };
         let Some(target) = st
@@ -278,7 +272,16 @@ pub fn strike_ice(
         else {
             break;
         };
-        shoot_piece(st, b, &ability.fx, last, target, true, half, 2 * hop);
+        shoot_piece(
+            st,
+            b,
+            &ability.fx,
+            last,
+            target,
+            true,
+            half,
+            combat::hop_start(impact, hop),
+        );
         net::hit_piece(st, b, next, half, stun, now);
         hits.push(next);
         last = target;
@@ -446,7 +449,7 @@ mod tests {
             streaks,
             vec![
                 (Pos::new(6, 8), Pos::new(9, 8), 500),
-                (Pos::new(9, 8), Pos::new(11, 8), 502)
+                (Pos::new(9, 8), Pos::new(11, 8), 503)
             ]
         );
         // A miss chains nothing.
@@ -512,17 +515,14 @@ mod tests {
         let mut st = fight(Pos::new(14, 8));
         st.foes.push(foes::Foe::goon(STREET, Pos::new(13, 9)));
         let before = your_chance(&st, 0).unwrap();
+        let other = your_chance(&st, 1).unwrap();
         mark(&mut st, &id("deadeye"), 0).unwrap();
         assert!(st.foes[0].marked && !st.foes[1].marked);
         assert_eq!(ap(&st), 1);
         assert!(logged(&st, "deadeye · goon marked"));
         assert!(st.fx.iter().any(|i| matches!(i.fx, Fx::Mark { .. })));
         assert_eq!(your_chance(&st, 0).unwrap(), (before + 20).min(95));
-        assert_eq!(
-            your_chance(&st, 1).unwrap(),
-            your_chance(&st, 1).unwrap(),
-            "unmarked is untouched"
-        );
+        assert_eq!(your_chance(&st, 1).unwrap(), other, "unmarked is untouched");
         // Marking another clears the first.
         st.tick += 1000;
         mark(&mut st, &id("deadeye"), 1).unwrap_or_else(|e| panic!("{e}"));
@@ -651,7 +651,7 @@ mod tests {
             .filter(|i| matches!(i.fx, Fx::Streak { .. }))
             .map(|i| i.started)
             .collect();
-        assert_eq!(streaks, vec![500, 502]);
+        assert_eq!(streaks, vec![500, 503]);
         assert_eq!(
             strike_ice(&mut st, &id("shove"), b, 0).unwrap_err(),
             "not in here"

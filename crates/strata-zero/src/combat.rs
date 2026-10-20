@@ -137,7 +137,7 @@ struct Round {
 
 /// Ticks from the muzzle to the impact: the tracer's flight, a streak's one, none
 /// for a shape that needs no flight.
-fn flight_ticks(fx: &[Fx], from: Pos, impact: Pos) -> u64 {
+pub(crate) fn flight_ticks(fx: &[Fx], from: Pos, impact: Pos) -> u64 {
     fx.iter()
         .find_map(|f| match f {
             Fx::Tracer { speed, .. } => Some(tracer_ticks(from, impact, *speed)),
@@ -490,8 +490,39 @@ pub fn strike_chance(st: &AppState, id: &AbilityId, foe: usize) -> Result<u8, St
     ))
 }
 
-/// Ticks a chained hop's shapes play after the one before.
+/// Ticks a chained hop's shapes start after the first impact, per hop.
 const HOP_TICKS: u64 = 2;
+
+/// What a chain hop does: half the damage, at least 1.
+pub(crate) fn hop_damage(damage: u8) -> u8 {
+    (damage / 2).max(1)
+}
+
+/// The tick hop `hop` (1-based) of a chain starts its shapes, from the first impact.
+pub(crate) fn hop_start(impact: u64, hop: u64) -> u64 {
+    impact + HOP_TICKS * hop
+}
+
+/// The nearest candidate within two tiles of `from`, by distance then index, that
+/// is not already in `hit`.
+pub(crate) fn nearest_other(
+    candidates: impl Iterator<Item = (usize, Pos)>,
+    from: Pos,
+    hit: &[usize],
+) -> Option<usize> {
+    candidates
+        .filter(|(i, p)| !hit.contains(i) && p.chebyshev(from) <= 2)
+        .min_by_key(|(i, p)| (p.chebyshev(from), *i))
+        .map(|(i, _)| i)
+}
+
+/// Starts the shapes pushed since `from_len` at tick `start` instead of now.
+pub(crate) fn start_shapes_at(st: &mut AppState, from_len: usize, start: u64) {
+    let late = start.saturating_sub(st.tick);
+    for i in &mut st.fx[from_len..] {
+        i.started += late;
+    }
+}
 
 /// On a hit the foe goes up to `steps` tiles straight away from `from`, stopping
 /// before a tile that is not walkable or holds you or another standing foe. A
@@ -545,6 +576,8 @@ fn push_foe(st: &mut AppState, foe: usize, from: Pos, steps: u8, at: u64, trail:
 /// What a chain carries from one victim to the next.
 struct Chain<'a> {
     you: Pos,
+    /// The tick the first victim's shapes land: the hops count from it.
+    impact: u64,
     hops: u8,
     damage: u8,
     stun: u8,
@@ -555,7 +588,7 @@ struct Chain<'a> {
 /// Jolt's arc: from each victim, the nearest other standing foe within two tiles
 /// with a clear line takes half the damage and the stun, no roll; `hops` of them.
 fn chain_foes(st: &mut AppState, first: usize, arc: Chain) {
-    let half = (arc.damage / 2).max(1);
+    let half = hop_damage(arc.damage);
     let fx: Vec<Fx> = arc
         .fx
         .iter()
@@ -571,19 +604,15 @@ fn chain_foes(st: &mut AppState, first: usize, arc: Chain) {
         let Some(city) = st.city.as_ref() else {
             return;
         };
-        let next = st
+        let candidates = st
             .foes
             .iter()
             .enumerate()
-            .filter(|(i, f)| {
-                !hit.contains(i)
-                    && f.standing()
-                    && f.place == place
-                    && f.pos.chebyshev(at) <= 2
-                    && foes::line_clear(city, place, at, f.pos)
+            .filter(|(_, f)| {
+                f.standing() && f.place == place && foes::line_clear(city, place, at, f.pos)
             })
-            .min_by_key(|(i, f)| (f.pos.chebyshev(at), *i))
-            .map(|(i, _)| i);
+            .map(|(i, f)| (i, f.pos));
+        let next = nearest_other(candidates, at, &hit);
         let Some(next) = next else {
             return;
         };
@@ -612,9 +641,7 @@ fn chain_foes(st: &mut AppState, first: usize, arc: Chain) {
                 tint: None,
             },
         );
-        for i in &mut st.fx[from_len..] {
-            i.started += HOP_TICKS * hop;
-        }
+        start_shapes_at(st, from_len, hop_start(arc.impact, hop));
         let name = st.foes[next].name.clone();
         st.say(format!(
             "{} arcs · {name} {half}",
@@ -704,6 +731,7 @@ pub fn strike(st: &mut AppState, id: &AbilityId, foe: usize) -> Result<(), Strin
     if hit && chain > 0 {
         let arc = Chain {
             you: from,
+            impact,
             hops: chain,
             damage,
             stun,
