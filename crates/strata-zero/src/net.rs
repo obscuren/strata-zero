@@ -2867,6 +2867,8 @@ mod tests {
             fx: Vec::new(),
             name: "Frag".to_string(),
             turns: 2,
+            lands: 0,
+            wakes: None,
         });
         // Your turn passes to the idle goon and back.
         end_turn(&mut st);

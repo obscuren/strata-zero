@@ -28,6 +28,19 @@ pub struct Live {
     pub fx: Vec<Fx>,
     pub name: String,
     pub turns: u8,
+    /// The tick it comes down: from then it lies on the map, shaded and stepped
+    /// out of; in the air before.
+    pub lands: u64,
+    /// Until it is heard landing, where it was thrown from: the idle foes in its
+    /// reach turn to hunt toward that tile when it comes down.
+    pub wakes: Option<Pos>,
+}
+
+impl Live {
+    /// It lies on the map by `tick`.
+    pub fn landed(&self, tick: u64) -> bool {
+        self.lands <= tick
+    }
 }
 
 /// Every tile within `radius` of `centre` that the centre can see, with its ring,
@@ -375,15 +388,7 @@ fn throw_from_hand(st: &mut AppState, id: &ItemId, at: Pos, spend: bool) -> Resu
         detonate(st, place, at, blast, &item.fx, &item.name, land, None);
         return Ok(());
     }
-    // It lies live: everyone it would reach has heard it land.
-    if let Some(city) = st.city.as_ref() {
-        let tiles = footprint(city, place, at, blast.radius);
-        for (pos, _) in tiles {
-            if let Some(i) = foes::foe_at(st, place, pos) {
-                wake(st, i, from);
-            }
-        }
-    }
+    // It lies live once it lands; everyone it would reach hears it then (`land`).
     st.live.push(Live {
         place,
         pos: at,
@@ -391,6 +396,8 @@ fn throw_from_hand(st: &mut AppState, id: &ItemId, at: Pos, spend: bool) -> Resu
         fx: item.fx.clone(),
         name: item.name.clone(),
         turns: blast.fuse,
+        lands: land,
+        wakes: Some(from),
     });
     let s = if blast.fuse == 1 { "" } else { "s" };
     st.say(format!("{} · {} turn{s}", log_name(&item.name), blast.fuse));
@@ -419,17 +426,38 @@ pub fn tick_live(st: &mut AppState) {
     }
 }
 
-// Read by the foes' step-out and the overlay in the tasks that follow.
-#[allow(dead_code)]
-/// Every tile a live blast on `place` would reach, with its ring: for foes to
-/// step out of and the overlay to shade.
+/// From the frame loop: a live blast that has come down is heard by the idle foes
+/// in its reach, who turn to hunt toward where it was thrown from. Once each.
+pub fn land(st: &mut AppState) {
+    let now = st.tick;
+    let Some(city) = st.city.as_ref() else {
+        return;
+    };
+    let mut woken = Vec::new();
+    for l in st.live.iter_mut().filter(|l| l.landed(now)) {
+        let Some(from) = l.wakes.take() else {
+            continue;
+        };
+        for (pos, _) in footprint(city, l.place, l.pos, l.blast.radius) {
+            woken.push((l.place, pos, from));
+        }
+    }
+    for (place, pos, from) in woken {
+        if let Some(i) = foes::foe_at(st, place, pos) {
+            wake(st, i, from);
+        }
+    }
+}
+
+/// Every tile a live blast lying on `place` would reach, with its ring: for foes
+/// to step out of and the overlay to shade. One still in the air reaches nothing.
 pub fn live_footprints(st: &AppState, place: Place) -> Vec<(Pos, i32)> {
     let Some(city) = st.city.as_ref() else {
         return Vec::new();
     };
     st.live
         .iter()
-        .filter(|l| l.place == place)
+        .filter(|l| l.place == place && l.landed(st.tick))
         .flat_map(|l| footprint(city, place, l.pos, l.blast.radius))
         .collect()
 }
@@ -847,7 +875,19 @@ mod tests {
             "{:?}",
             st.log.latest()
         );
+        // In the air it reaches nothing and nobody has heard it.
+        assert_eq!(
+            st.live[0].lands,
+            500 + throw_ticks(Pos::new(6, 8), Pos::new(12, 8))
+        );
+        land(&mut st);
+        assert!(!st.foes[0].hunting(), "not down yet");
+        assert!(live_footprints(&st, STREET).is_empty());
+        // Down, it lies there and it was heard.
+        st.tick = st.live[0].lands;
+        land(&mut st);
         assert!(st.foes[0].hunting(), "it heard that land");
+        assert_eq!(st.live[0].wakes, None, "heard once");
         assert_eq!(st.foes[0].hp, foes::GOON_HP);
         assert_eq!(live_footprints(&st, STREET).len(), 49);
         tick_live(&mut st);

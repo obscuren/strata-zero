@@ -288,8 +288,10 @@ fn step_out(st: &AppState, i: usize, seen: Pos, live: &[(Pos, i32)]) -> Option<P
         .or_else(|| free.iter().copied().max_by_key(|p| ring(*p)))
 }
 
-/// One action of a foe's turn: a shot when it hunts you in range with a clear line,
-/// else a step toward where it saw you; at that tile without sight it loses you.
+/// One action of a foe's turn: out of a live blast's footprint first, then a shot
+/// when it hunts you in range with a clear line, else a step toward where it saw
+/// you; at that tile without sight it loses you. Outside every footprint it never
+/// steps into one: it holds at the edge, and that loses it nothing.
 pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate::net::Step {
     use crate::net::Step;
     let Some((me_place, me)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
@@ -304,14 +306,14 @@ pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate
     let FoeMode::Hunting { seen, lost } = foe.mode else {
         return Step::Nothing;
     };
-    if can_move {
-        let live = crate::blast::live_footprints(st, foe.place);
-        if live.iter().any(|(p, _)| *p == foe.pos)
-            && let Some(to) = step_out(st, i, seen, &live)
-        {
-            st.foes[i].pos = to;
-            return Step::Moved(to);
-        }
+    let live = crate::blast::live_footprints(st, foe.place);
+    let in_live = |p: Pos| live.iter().any(|(q, _)| *q == p);
+    if can_move
+        && in_live(foe.pos)
+        && let Some(to) = step_out(st, i, seen, &live)
+    {
+        st.foes[i].pos = to;
+        return Step::Moved(to);
     }
     let Some(city) = st.city.as_ref() else {
         return Step::Nothing;
@@ -346,6 +348,8 @@ pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate
         step_toward(city, foe.place, foe.pos, seen, &avoid).filter(|p| *p != me)
     };
     match next {
+        // The way on runs into a live blast: it waits outside it.
+        Some(to) if in_live(to) && !in_live(foe.pos) => Step::Nothing,
         Some(to) => {
             st.foes[i].pos = to;
             Step::Moved(to)
@@ -732,6 +736,8 @@ mod tests {
             fx: Vec::new(),
             name: "satchel".to_string(),
             turns: 2,
+            lands: 0,
+            wakes: None,
         });
     }
 
@@ -801,5 +807,61 @@ mod tests {
         live_at(&mut st, Pos::new(14, 8), 1);
         assert_eq!(step(&mut st, 0, false, true), Step::Hit);
         assert_eq!(st.foes[0].pos, Pos::new(13, 8));
+    }
+
+    #[test]
+    fn a_foe_outside_a_live_footprint_holds_at_its_edge() {
+        let mut st = testutil::lot(Pos::new(19, 8));
+        hunting(&mut st);
+        // Out to x 17: one step to the edge, then it waits there.
+        live_at(&mut st, Pos::new(14, 8), 3);
+        let Step::Moved(to) = step(&mut st, 0, true, true) else {
+            panic!("it should close in to the edge");
+        };
+        assert!(!inside(&st, to) && to.x == 18, "{to:?}");
+        assert_eq!(step(&mut st, 0, true, true), Step::Nothing);
+        assert_eq!(st.foes[0].pos, to);
+        assert_eq!(
+            st.foes[0].mode,
+            FoeMode::Hunting {
+                seen: Pos::new(6, 8),
+                lost: 0
+            },
+            "holding loses it nothing"
+        );
+        // In the air the blast is no edge: it walks on.
+        st.live[0].lands = st.tick + 10;
+        assert!(matches!(step(&mut st, 0, true, true), Step::Moved(_)));
+    }
+
+    #[test]
+    fn a_foe_steps_out_fires_and_the_satchel_goes_off_on_your_turn() {
+        let mut st = testutil::lot(Pos::new(12, 8));
+        hunting(&mut st);
+        let satchel = st.content.item(&ItemId::new("satchel")).unwrap().clone();
+        let (_, _, blast) = satchel.throw().unwrap();
+        st.live.push(crate::blast::Live {
+            place: STREET,
+            pos: Pos::new(10, 8),
+            blast,
+            fx: satchel.fx.clone(),
+            name: satchel.name.clone(),
+            turns: 1,
+            lands: 0,
+            wakes: None,
+        });
+        crate::net::engage(&mut st, STREET, true);
+        crate::net::end_turn(&mut st);
+        settle(&mut st);
+        let at = st.foes[0].pos;
+        assert!(at.chebyshev(Pos::new(10, 8)) > 3, "out of it: {at:?}");
+        assert!(logged(&st, "goon fires"), "{:?}", st.log.latest());
+        assert!(st.live.is_empty(), "gone off as your turn opened");
+        assert!(
+            logged(&st, "satchel charge · nothing in it"),
+            "{:?}",
+            st.log.latest()
+        );
+        assert_eq!(st.foes[0].hp, GOON_HP);
     }
 }

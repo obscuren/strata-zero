@@ -2594,6 +2594,8 @@ impl Screen for MapScreen {
         if self.mode == Mode::Walk {
             crate::jobs::ui::prepare_offers(st, &|pl, p| self.inside_person_at(pl, p));
         }
+        // A thrown live blast that came down this frame is heard before anyone looks.
+        crate::blast::land(st);
         // The beat of a calm construct: one per frame at most, so a long menu is
         // never a burst of rolls.
         let was_engaged = st.net.engaged.is_some();
@@ -11636,6 +11638,8 @@ mod tests {
             fx: Vec::new(),
             name: "Satchel charge".to_string(),
             turns: 1,
+            lands: 0,
+            wakes: None,
         });
         let buf = draw_buffer(&s, &st, 100, 30);
         let c = cell_at(&s, &st, &buf, other);

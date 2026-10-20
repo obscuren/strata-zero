@@ -229,7 +229,12 @@ impl Overlay for LiveOverlay<'_> {
         buf: &mut Buffer,
         _style: &StylePack,
     ) {
-        for l in self.live.iter().filter(|l| l.place == map.place()) {
+        // In the air it is the throw's picture; the overlay takes over at the landing.
+        for l in self
+            .live
+            .iter()
+            .filter(|l| l.place == map.place() && l.landed(tick))
+        {
             let Some(at) = tile_to_screen(area, origin, l.pos) else {
                 continue;
             };
@@ -590,6 +595,8 @@ mod tests {
             fx: Vec::new(),
             name: "frag".to_string(),
             turns: 1,
+            lands: 0,
+            wakes: None,
         }];
         let fp = [
             (Pos::new(10, 5), 0),
@@ -629,5 +636,23 @@ mod tests {
         .draw(&map, Pos::new(0, 0), area, 0, &mut held, &style);
         assert_eq!(held[(10, 5)].symbol(), "@");
         assert_eq!(held[(7, 3)].symbol(), "f");
+        // Still in the air: nothing of it yet.
+        let flying = [Live {
+            lands: 10,
+            ..live[0].clone()
+        }];
+        let mut air = Buffer::empty(area);
+        LiveOverlay {
+            live: &flying,
+            standing: &[],
+        }
+        .draw(&map, Pos::new(0, 0), area, 9, &mut air, &style);
+        assert_eq!(air, Buffer::empty(area));
+        LiveOverlay {
+            live: &flying,
+            standing: &[],
+        }
+        .draw(&map, Pos::new(0, 0), area, 10, &mut air, &style);
+        assert_eq!(air[(10, 5)].symbol(), "o", "down on its landing tick");
     }
 }
