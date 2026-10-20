@@ -5,7 +5,7 @@ use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::interact::{self, FREE_LETTERS};
 use crate::messages::Kind;
 use crate::render::atrium::AtriumOverlay;
-use crate::render::fx::FxOverlay;
+use crate::render::fx::{FxOverlay, ScorchOverlay};
 use crate::render::items::GroundOverlay;
 use crate::render::map::{MapRef, TileMap};
 use crate::render::overlay::Digital;
@@ -2755,6 +2755,20 @@ impl Screen for MapScreen {
             overlays.push(&Weather);
         }
         overlays.push(&digital);
+        // On the ground, under whatever lies or stands on it: the scorch a blast left
+        // and a live blast's shading.
+        let scorch = ScorchOverlay { fx: &st.fx, vis };
+        overlays.push(&scorch);
+        let live_place = st.player.as_ref().map(|p| p.place);
+        let live_ground = live_place
+            .map(|pl| crate::blast::live_footprints(st, pl))
+            .unwrap_or_default();
+        let live_shade = crate::render::path::LiveGround {
+            footprints: &live_ground,
+        };
+        if !live_ground.is_empty() {
+            overlays.push(&live_shade);
+        }
         let ground = GroundOverlay {
             ground: &st.ground,
             content: &st.content,
@@ -2892,13 +2906,19 @@ impl Screen for MapScreen {
                     you,
                     warn: armed_text.as_ref().is_some_and(|(_, warn)| *warn),
                 });
-        let live_place = st.player.as_ref().map(|p| p.place);
-        let live_ground = live_place
-            .map(|pl| crate::blast::live_footprints(st, pl))
-            .unwrap_or_default();
+        // A live blast's thing under a foe standing on it: the foe's glyph is kept.
+        let drawn_foes: Vec<Pos> = st
+            .foes
+            .iter()
+            .filter(|f| f.standing() && f.place == self.place)
+            .filter(|f| {
+                vis.is_none_or(|v| v.get(f.pos) == Some(&crate::render::Visibility::Visible))
+            })
+            .map(|f| f.pos)
+            .collect();
         let live = crate::render::path::LiveOverlay {
             live: &st.live,
-            footprints: &live_ground,
+            standing: &drawn_foes,
         };
         if !st.live.is_empty() {
             overlays.push(&live);
@@ -2927,24 +2947,9 @@ impl Screen for MapScreen {
         let turn_overlay = turns
             .as_ref()
             .map(|view| crate::render::turns::TurnOverlay { view });
-        // The fx draw over the people: the scorch leaves a body its glyph.
-        let standing: Vec<Pos> = st
-            .foes
-            .iter()
-            .filter(|f| f.standing() && f.place == self.place)
-            .map(|f| f.pos)
-            .chain(
-                st.player
-                    .as_ref()
-                    .filter(|p| p.place == self.place)
-                    .map(|p| p.pos),
-            )
-            .collect();
-        let fx = FxOverlay {
-            fx: &st.fx,
-            vis,
-            standing: &standing,
-        };
+        // The live shapes draw over everything on the map; their scorch is on the
+        // ground layer above.
+        let fx = FxOverlay { fx: &st.fx, vis };
         overlays.push(&fx);
         let light = crate::render::lighting::LightOverlay { vis };
         if st.show_light {
@@ -3260,6 +3265,17 @@ mod tests {
         buf: &ratatui::buffer::Buffer,
         p: Pos,
     ) -> (String, Color) {
+        let c = cell_at(s, st, buf, p);
+        (c.symbol().to_string(), c.fg)
+    }
+
+    /// The whole screen cell a tile is drawn on, found as `cell_of` finds it.
+    fn cell_at<'b>(
+        s: &MapScreen,
+        st: &AppState,
+        buf: &'b ratatui::buffer::Buffer,
+        p: Pos,
+    ) -> &'b ratatui::buffer::Cell {
         let me = st.player.as_ref().unwrap().pos;
         let area = s.last_map.get();
         let mut found = None;
@@ -3272,7 +3288,7 @@ mod tests {
         }
         let (mx, my) = found.expect("your @ is on the map");
         let (sx, sy) = ((mx + p.x - me.x) as u16, (my + p.y - me.y) as u16);
-        (buf[(sx, sy)].symbol().to_string(), buf[(sx, sy)].fg)
+        &buf[(sx, sy)]
     }
 
     #[test]
@@ -11522,5 +11538,72 @@ mod tests {
             "{:?}",
             last(&st)
         );
+    }
+
+    #[test]
+    fn the_scorch_lies_under_the_aim_and_the_actors_and_a_live_thing_under_a_foe() {
+        use crate::render::path::{LIVE_RING_BG, RING_BG};
+        use crate::ui::chrome::CYAN;
+        let street = Place::Stratum(StratumKind::Street);
+        let goon = Pos::new(12, 8);
+        let (mut st, mut s) = runner_half(goon);
+        st.force_hit = Some(true);
+        // A frag at the goon, landed and bloomed out: the scorch stays under it.
+        s.update(&mut st, &[key(KeyCode::Char('6'))]);
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        let bloom = st
+            .fx
+            .iter()
+            .find(|i| matches!(i.fx, game::Fx::Bloom) && i.hit)
+            .expect("the bloom")
+            .started;
+        st.tick = bloom + crate::render::fx::BLOOM_TICKS + 2;
+        assert!(st.foes[0].standing());
+        let buf = draw_buffer(&s, &st, 100, 30);
+        // The aimed goon on the scorch: inverted on the cyan, its glyph kept.
+        let c = cell_at(&s, &st, &buf, goon);
+        assert_eq!((c.symbol(), c.fg, c.bg), ("@", Color::Rgb(0, 0, 0), CYAN));
+        // An empty tile of the first ring: the scorch's glyph on its ground.
+        let ring1 = goon.offset(0, 1);
+        let c = cell_at(&s, &st, &buf, ring1);
+        assert_eq!((c.symbol(), c.bg), ("░", Color::Rgb(20, 17, 16)));
+        // A goon standing on a live blast: its glyph over the thing, the shading
+        // under it; off it, the thing shows.
+        let other = Pos::new(15, 10);
+        st.foes.push(crate::foes::Foe::goon(street, other));
+        st.live.push(crate::blast::Live {
+            place: street,
+            pos: other,
+            blast: game::Blast {
+                radius: 1,
+                damage: 5,
+                stun: 0,
+                fuse: 1,
+                chrome: false,
+            },
+            fx: Vec::new(),
+            name: "Satchel charge".to_string(),
+            turns: 1,
+        });
+        let buf = draw_buffer(&s, &st, 100, 30);
+        let c = cell_at(&s, &st, &buf, other);
+        assert_eq!(
+            (c.symbol(), c.fg, c.bg),
+            ("@", crate::render::people::FOE, LIVE_RING_BG[0])
+        );
+        st.foes.pop();
+        let buf = draw_buffer(&s, &st, 100, 30);
+        assert_eq!(cell_at(&s, &st, &buf, other).symbol(), "o");
+        st.live.clear();
+        // Armed with the cursor bare on the scorch's centre: the cross on the cyan,
+        // the footprint's rings over the scorch with its glyphs kept.
+        st.foes[0].pos = Pos::new(18, 8);
+        s.update(&mut st, &[key(KeyCode::Char('6'))]);
+        assert!(s.armed.is_some() && s.target == Some(goon));
+        let buf = draw_buffer(&s, &st, 100, 30);
+        let c = cell_at(&s, &st, &buf, goon);
+        assert_eq!((c.symbol(), c.fg, c.bg), ("×", Color::Rgb(0, 0, 0), CYAN));
+        let c = cell_at(&s, &st, &buf, ring1);
+        assert_eq!((c.symbol(), c.bg), ("░", RING_BG[1]));
     }
 }

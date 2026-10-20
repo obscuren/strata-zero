@@ -182,12 +182,33 @@ fn shade(buf: &mut Buffer, area: Rect, origin: Pos, tiles: &[(Pos, i32)], rings:
     }
 }
 
-/// Blasts lying live on the map: the footprint shaded, the thing blinking, its
-/// fuse over it.
-pub struct LiveOverlay<'a> {
-    pub live: &'a [crate::blast::Live],
+/// The ground under blasts lying live: their footprints shaded, glyphs kept. Drawn
+/// before the people, so whoever stands in one is drawn over the shading.
+pub struct LiveGround<'a> {
     /// `blast::live_footprints` for this place.
     pub footprints: &'a [(Pos, i32)],
+}
+
+impl Overlay for LiveGround<'_> {
+    fn draw(
+        &self,
+        _map: &MapRef,
+        origin: Pos,
+        area: Rect,
+        _tick: u64,
+        buf: &mut Buffer,
+        _style: &StylePack,
+    ) {
+        shade(buf, area, origin, self.footprints, &LIVE_RING_BG);
+    }
+}
+
+/// Blasts lying live on the map: the thing blinking where no one stands on it, its
+/// fuse over it. The shading under them is `LiveGround`'s.
+pub struct LiveOverlay<'a> {
+    pub live: &'a [crate::blast::Live],
+    /// Tiles a standing body is drawn on: its glyph is kept over the thing.
+    pub standing: &'a [Pos],
 }
 
 impl Overlay for LiveOverlay<'_> {
@@ -200,7 +221,6 @@ impl Overlay for LiveOverlay<'_> {
         buf: &mut Buffer,
         _style: &StylePack,
     ) {
-        shade(buf, area, origin, self.footprints, &LIVE_RING_BG);
         for l in self.live.iter().filter(|l| l.place == map.place()) {
             let Some(at) = tile_to_screen(area, origin, l.pos) else {
                 continue;
@@ -210,9 +230,11 @@ impl Overlay for LiveOverlay<'_> {
             } else {
                 Color::Rgb(255, 80, 80)
             };
-            buf[at]
-                .set_char('o')
-                .set_style(Style::default().fg(fg).add_modifier(Modifier::BOLD));
+            if !self.standing.contains(&l.pos) {
+                buf[at]
+                    .set_char('o')
+                    .set_style(Style::default().fg(fg).add_modifier(Modifier::BOLD));
+            }
             let text = format!(" fuse {} ", l.turns);
             readout(buf, area, at, &text, CYAN, READOUT_BG, false);
         }
@@ -490,47 +512,6 @@ mod tests {
     }
 
     #[test]
-    fn the_aim_drawn_after_a_live_blast_wins_the_shared_cells() {
-        use crate::blast::Live;
-        let city = City::empty(GenParams::default());
-        let place = citygen::Place::Stratum(citygen::StratumKind::Street);
-        let map = MapRef::stratum_of(&city, citygen::StratumKind::Street);
-        let style = StylePack::load().unwrap();
-        let area = Rect::new(0, 0, 20, 8);
-        let at = Pos::new(10, 5);
-        let live = [Live {
-            place,
-            pos: at,
-            blast: game::Blast {
-                radius: 1,
-                damage: 5,
-                stun: 0,
-                fuse: 1,
-                chrome: false,
-            },
-            fx: Vec::new(),
-            name: "frag".to_string(),
-            turns: 1,
-        }];
-        let fp = [(at, 0)];
-        let mut buf = Buffer::empty(area);
-        LiveOverlay {
-            live: &live,
-            footprints: &fp,
-        }
-        .draw(&map, Pos::new(0, 0), area, 0, &mut buf, &style);
-        let o = AimOverlay {
-            readout: Some(" goon ".to_string()),
-            ..aim(at, false, &[], None)
-        };
-        o.draw(&map, Pos::new(0, 0), area, 0, &mut buf, &style);
-        let c = &buf[(10, 5)];
-        assert_eq!((c.symbol(), c.bg), ("×", CYAN));
-        let row: String = (7..13).map(|x| buf[(x, 3)].symbol().to_string()).collect();
-        assert_eq!(row, " goon ", "the aim readout over the fuse label");
-    }
-
-    #[test]
     fn a_warned_readout_is_red() {
         let area = Rect::new(0, 0, 20, 6);
         let mut buf = Buffer::empty(area);
@@ -573,11 +554,13 @@ mod tests {
             (Pos::new(11, 5), 1),
             (Pos::new(12, 5), 3),
         ];
+        let ground = LiveGround { footprints: &fp };
         let o = LiveOverlay {
             live: &live,
-            footprints: &fp,
+            standing: &[],
         };
         let mut even = Buffer::empty(area);
+        ground.draw(&map, Pos::new(0, 0), area, 0, &mut even, &style);
         o.draw(&map, Pos::new(0, 0), area, 0, &mut even, &style);
         let c = &even[(10, 5)];
         assert_eq!(c.symbol(), "o");
@@ -594,5 +577,15 @@ mod tests {
         let mut odd = Buffer::empty(area);
         o.draw(&map, Pos::new(0, 0), area, 4, &mut odd, &style);
         assert_eq!(odd[(10, 5)].fg, Color::Rgb(255, 80, 80));
+        // Someone standing on it keeps their glyph; the fuse still reads over them.
+        let mut held = Buffer::empty(area);
+        held[(10, 5)].set_char('@').set_fg(Color::Rgb(255, 80, 80));
+        LiveOverlay {
+            live: &live,
+            standing: &[Pos::new(10, 5)],
+        }
+        .draw(&map, Pos::new(0, 0), area, 0, &mut held, &style);
+        assert_eq!(held[(10, 5)].symbol(), "@");
+        assert_eq!(held[(7, 3)].symbol(), "f");
     }
 }

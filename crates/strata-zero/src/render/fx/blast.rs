@@ -3,11 +3,13 @@
 
 use super::{BLOOM_TICKS, WHITE, WHITEOUT_TICKS, paint};
 use crate::app::FxInstance;
-use crate::render::Rgb;
 use crate::render::map::MapRef;
-use citygen::Pos;
+use crate::render::viewport::tile_to_screen;
+use crate::render::{Rgb, Visibility};
 use citygen::pathing::bresenham;
 use citygen::rng::hash64;
+use citygen::{Grid, Pos};
+use game::Fx;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
@@ -154,46 +156,78 @@ pub(super) fn throw(
     }
 }
 
-/// The scorch's stain on one tile: a body standing there keeps its glyph, the
-/// ground under it darkens.
+/// The scorch's stain on one tile as the ground lies in sight: whole in sight,
+/// dimmed as the map's memory is, nothing where you never looked.
 #[allow(clippy::too_many_arguments)]
 fn stain(
     origin: Pos,
     area: Rect,
     buf: &mut Buffer,
-    standing: &[Pos],
+    vis: Option<&Grid<Visibility>>,
     p: Pos,
     ch: char,
     fg: Rgb,
     bg: Rgb,
 ) {
-    if standing.contains(&p) {
-        paint(origin, area, buf, p, |c| {
-            c.set_bg(bg.to_color());
-        });
-    } else {
-        stamp(origin, area, buf, p, Some(ch), fg, Some(bg), false);
+    let seen = vis.map_or(Visibility::Visible, |v| {
+        v.get(p).copied().unwrap_or(Visibility::Unseen)
+    });
+    match seen {
+        Visibility::Visible => stamp(origin, area, buf, p, Some(ch), fg, Some(bg), false),
+        Visibility::Remembered => {
+            if let Some((sx, sy)) = tile_to_screen(area, origin, p) {
+                let c = &mut buf[(sx, sy)];
+                c.set_char(ch)
+                    .set_fg(fg.scale(0.35).to_color())
+                    .set_bg(bg.scale(0.35).to_color());
+                c.modifier.remove(Modifier::BOLD);
+            }
+        }
+        Visibility::Unseen => {}
     }
 }
 
-/// A fireball: a white flash, rings of flame, smoke rising off the footprint, and
-/// where it hurt, a stain at the centre that stays.
-pub(super) fn bloom(
+/// Where a blast hurt, the stain it leaves: from a bloom's e3 the centre and its
+/// first ring, from a whiteout's e2 the whole footprint by ring. Drawn on the
+/// ground, under everything that stands on it.
+pub(super) fn scorch(
     inst: &FxInstance,
     e: u64,
-    standing: &[Pos],
+    vis: Option<&Grid<Visibility>>,
     origin: Pos,
     area: Rect,
     buf: &mut Buffer,
 ) {
-    if inst.hit && e >= 3 {
-        let (fg, bg) = (Rgb(45, 40, 36), Rgb(18, 16, 15));
-        stain(origin, area, buf, standing, inst.origin, '▒', fg, bg);
-        let (fg, bg) = (Rgb(38, 34, 30), Rgb(20, 17, 16));
-        for p in inst.targets.iter().filter(|p| ring_of(inst, **p) == 1) {
-            stain(origin, area, buf, standing, *p, '░', fg, bg);
-        }
+    if !inst.hit {
+        return;
     }
+    match inst.fx {
+        Fx::Bloom if e >= 3 => {
+            let (fg, bg) = (Rgb(45, 40, 36), Rgb(18, 16, 15));
+            stain(origin, area, buf, vis, inst.origin, '▒', fg, bg);
+            let (fg, bg) = (Rgb(38, 34, 30), Rgb(20, 17, 16));
+            for p in inst.targets.iter().filter(|p| ring_of(inst, **p) == 1) {
+                stain(origin, area, buf, vis, *p, '░', fg, bg);
+            }
+        }
+        Fx::Whiteout if e >= 2 => {
+            let (fg, bg) = (Rgb(30, 27, 25), Rgb(16, 14, 13));
+            for &p in &inst.targets {
+                let glyph = match ring_of(inst, p) {
+                    0 => '▓',
+                    1 => '▒',
+                    _ => '░',
+                };
+                stain(origin, area, buf, vis, p, glyph, fg, bg);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A fireball: a white flash, rings of flame, smoke rising off the footprint; the
+/// stain it leaves is `scorch`'s.
+pub(super) fn bloom(inst: &FxInstance, e: u64, origin: Pos, area: Rect, buf: &mut Buffer) {
     if e >= BLOOM_TICKS {
         return;
     }
@@ -238,13 +272,12 @@ pub(super) fn bloom(
     }
 }
 
-/// A flash: the footprint inverted white, then hot orange, then where it hurt a
-/// dark stain; debris flies off in the eight directions.
+/// A flash: the footprint inverted white, then hot orange, then debris flying off
+/// in the eight directions; the stain it leaves is `scorch`'s.
 pub(super) fn whiteout(
     inst: &FxInstance,
     e: u64,
     map: &MapRef,
-    standing: &[Pos],
     origin: Pos,
     area: Rect,
     buf: &mut Buffer,
@@ -266,17 +299,6 @@ pub(super) fn whiteout(
             }
         }
         _ => {
-            if inst.hit {
-                for &p in &inst.targets {
-                    let glyph = match ring_of(inst, p) {
-                        0 => '▓',
-                        1 => '▒',
-                        _ => '░',
-                    };
-                    let (fg, bg) = (Rgb(30, 27, 25), Rgb(16, 14, 13));
-                    stain(origin, area, buf, standing, p, glyph, fg, bg);
-                }
-            }
             if e < WHITEOUT_TICKS {
                 const DEBRIS: [(i32, i32, char); 8] = [
                     (1, 0, '·'),
