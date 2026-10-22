@@ -53,8 +53,8 @@ const BRACKET_ROOM: (i32, i32) = (2, 1);
 /// How long the parts take to close, then how long the finished build is held, in ticks.
 const CLOSE_TICKS: u64 = 15;
 const HOLD_TICKS: u64 = 30;
-const HINTS: &str = "←→ drawings · ↑↓ parts · space build · q/e tabs · tab close";
-const HINTS_ASSEMBLY: &str = "←→ drawings · ↑↓ parts · space assemble · q/e tabs · tab close";
+const HINTS: &str = "←→ drawings · ↑↓ parts · space build · Q/E tabs · tab close";
+const HINTS_ASSEMBLY: &str = "←→ drawings · ↑↓ parts · space assemble · Q/E tabs · tab close";
 
 /// The sheet shown and the part selected on it. The deck holds it and remembers it
 /// across closing.
@@ -1485,7 +1485,7 @@ mod tests {
         let b = render(&d, &st, 100, 30);
         assert_eq!(
             cells(&b, 2, 28, 60).trim_end(),
-            "←→ drawings · ↑↓ parts · space build · q/e tabs · tab close"
+            "←→ drawings · ↑↓ parts · space build · Q/E tabs · tab close"
         );
         // e still goes to the next tab and q back; tab closes.
         press(&mut d, &mut st, KeyCode::Char('e'), 1);
@@ -1790,7 +1790,7 @@ mod tests {
         );
         assert_eq!(
             cells(&b, 2, 28, 63).trim_end(),
-            "←→ drawings · ↑↓ parts · space assemble · q/e tabs · tab close"
+            "←→ drawings · ↑↓ parts · space assemble · Q/E tabs · tab close"
         );
 
         // A balloon on each part with its leader, numbered as the parts list.

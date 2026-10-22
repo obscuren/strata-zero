@@ -46,6 +46,12 @@ pub(crate) const FAILSAFE_WARN: &str =
 const FLASH_TICKS: u64 = 6;
 const JITTER_PERIOD: u64 = 90;
 const LOGO_MIN_ROWS: u16 = 36;
+/// The tab bar's widest, Q to E: wider decks keep it this wide in the middle.
+const TAB_BAR_MAX: u16 = 120;
+/// The most cells between two tabs.
+const TAB_GAP_MAX: u16 = 4;
+/// What each end of the tab bar takes: the frame's side, the keycap and its arrow.
+const TAB_KEY_W: u16 = 5;
 /// Hotkey letters for picker rows; h j k l move, q closes, u and i are verbs.
 const LETTERS: &str = "abcdefgmnoprstvwxyz";
 /// The marks after a name, plain then on the cursor's row: a deck's program slots in
@@ -1543,26 +1549,47 @@ impl Screen for Deck {
         );
         y += 1;
 
-        // Tab bar: two cells between labels, one when they would not all fit, and
-        // `q ◂` and `▸ e` at its ends, the keys that step through the tabs, while they
-        // fit at either gap.
+        // Tab bar, on a solid row: Q and E, the keys that step through the tabs, as
+        // keycaps at its ends, and the tabs spread evenly between them up to
+        // TAB_GAP_MAX apart. Up to TAB_BAR_MAX columns the keys sit in the frame's
+        // sides; a wider deck keeps the bar that wide in the middle. Without room for
+        // the keys, the labels alone, one cell apart.
+        for cx in inner.x..right {
+            buf[(cx, y)].set_char(' ').set_bg(PANEL_BG);
+        }
         let labels_w: u16 = Tab::ALL
             .iter()
             .map(|t| t.label().chars().count() as u16 + 2)
             .sum();
-        let n = Tab::ALL.len() as u16;
-        let fits = |gap: u16, keys: bool| {
-            let keys_w = if keys { 2 * gap + 7 } else { 0 };
-            2 + labels_w + gap * (n - 1) + keys_w < inner.width
-        };
-        let (gap, keys) = [(2, true), (1, true), (2, false)]
-            .into_iter()
-            .find(|&(gap, keys)| fits(gap, keys))
-            .unwrap_or((1, false));
+        let slots = Tab::ALL.len() as u16 + 1;
+        let bar_w = area.width.min(TAB_BAR_MAX);
+        let off = area.x + (area.width - bar_w) / 2;
+        let lane = bar_w.saturating_sub(2 * TAB_KEY_W);
+        // gaps[0] leads the first label; gaps[i + 1] follows label i.
+        let mut gaps = [1u16; Tab::ALL.len() + 1];
         let mut x = inner.x + 1;
-        if keys {
-            put(buf, x, y, "q ◂", Style::default().fg(DIM), right);
-            x += 3 + gap;
+        if lane >= labels_w + slots {
+            let spare = lane - labels_w;
+            for (i, gap) in gaps.iter_mut().enumerate() {
+                let share = spare / slots + u16::from((i as u16) < spare % slots);
+                *gap = share.min(TAB_GAP_MAX);
+            }
+            gaps[0] += (spare - gaps.iter().sum::<u16>()) / 2;
+            if off == area.x {
+                buf[(area.x, y)].set_char('┤');
+                buf[(area.right() - 1, y)].set_char('├');
+            }
+            let cap = Style::default()
+                .fg(CYAN)
+                .bg(BAR_BG)
+                .add_modifier(Modifier::BOLD);
+            let arrow = Style::default().fg(DIM);
+            let end = off + bar_w - TAB_KEY_W;
+            put(buf, off + 1, y, " Q ", cap, right);
+            put(buf, off + 4, y, "◂", arrow, right);
+            put(buf, end, y, "▸", arrow, right);
+            put(buf, end + 1, y, " E ", cap, right);
+            x = off + TAB_KEY_W + gaps[0];
         }
         let mut starts = [0u16; Tab::ALL.len()];
         for (i, tab) in Tab::ALL.iter().enumerate() {
@@ -1581,11 +1608,7 @@ impl Screen for Deck {
                 Style::default().fg(DIM)
             };
             put(buf, x, y, &label, style, right);
-            x += label.chars().count() as u16 + gap;
-        }
-        if keys {
-            // Padded like a label, so the ghost map does not run into the `e`.
-            put(buf, x, y, "▸ e ", Style::default().fg(DIM), right);
+            x += label.chars().count() as u16 + gaps[i + 1];
         }
         y += 1;
         // Rule with the sliding magenta segment under the active tab.
@@ -1665,15 +1688,15 @@ impl Screen for Deck {
             inner.x + 1,
             hint_y,
             match self.tab {
-                Tab::Skills => "q/e tabs · ↑↓ select · enter fold · space act · tab close",
+                Tab::Skills => "Q/E tabs · ↑↓ select · enter fold · space act · tab close",
                 Tab::Talents => {
-                    "←→ along · ↑↓ tiers · q/e tabs · 0-8 jump · space learn · tab close"
+                    "←→ along · ↑↓ tiers · Q/E tabs · 0-8 jump · space learn · tab close"
                 }
                 Tab::Kit => self.kit.hints(),
                 Tab::Workbench if st.character.has_workbench(&st.content) => {
                     self.workbench.hints(st)
                 }
-                _ => "q/e tabs · ↑↓ select · 0-8 jump · space act · tab close",
+                _ => "Q/E tabs · ↑↓ select · 0-8 jump · space act · tab close",
             },
             Style::default().fg(DIM),
             right,
@@ -1844,27 +1867,44 @@ mod tests {
     }
 
     #[test]
-    fn the_tab_bar_names_q_and_e_at_its_ends_when_they_fit() {
+    fn the_tab_bar_docks_q_and_e_in_the_frame_and_stops_at_120_columns() {
         let st = state();
         let d = Deck::new(0);
-        let bar = |w, h| {
-            let text = draw(&d, &st, w, h);
-            let line = text.lines().find(|l| l.contains("▌SKILLS▐")).unwrap();
-            line.trim_matches(|c| c == '│' || c == ' ').to_string()
+        // The buffer at `w` columns, the tab bar's row and that row as text.
+        let bar = |w: u16| {
+            let mut t = Terminal::new(TestBackend::new(w, 35)).unwrap();
+            t.draw(|f| d.draw(&st, f)).unwrap();
+            let b = t.backend().buffer().clone();
+            let line = |y| (0..w).map(|x| b[(x, y)].symbol()).collect::<String>();
+            let y = (0..35).find(|&y| line(y).contains("▌SKILLS▐")).unwrap();
+            let text = line(y);
+            (b, y, text)
         };
-        let wide = bar(120, 35);
-        assert!(wide.starts_with("q ◂  ▌SKILLS▐"), "{wide:?}");
-        assert!(wide.ends_with(" TALENTS   ▸ e"), "{wide:?}");
-        // Tighter, the gaps shrink to one before the keys go.
-        let tight = bar(100, 30);
-        assert!(tight.starts_with("q ◂ ▌SKILLS▐"), "{tight:?}");
-        assert!(tight.ends_with(" TALENTS  ▸ e"), "{tight:?}");
-        let narrow = bar(90, 30);
-        assert!(
-            narrow.starts_with("▌SKILLS▐"),
-            "no room for the keys: {narrow:?}"
-        );
-        assert!(!narrow.contains('▸'), "{narrow:?}");
+        // At the minimum, the keys sit in the frame's sides, the gaps two cells and one.
+        let (_, _, tight) = bar(100);
+        assert!(tight.starts_with("┤ Q ◂  ▌SKILLS▐"), "{tight:?}");
+        assert!(tight.ends_with(" TALENTS  ▸ E ├"), "{tight:?}");
+        // At 120 the gaps reach four and stop.
+        let (_, _, full) = bar(120);
+        assert!(full.starts_with("┤ Q ◂    ▌SKILLS▐     STATS "), "{full:?}");
+        assert!(full.ends_with("▸ E ├"), "{full:?}");
+        // Wider, the bar stays 120 wide in the middle, out of the frame.
+        let (b, y, wide) = bar(200);
+        let at = |x: usize| wide.chars().skip(x).take(3).collect::<String>();
+        assert!(wide.starts_with('│') && wide.ends_with('│'), "{wide:?}");
+        assert_eq!((at(41), at(155)), (" Q ".into(), "▸ E".into()), "{wide:?}");
+        assert!(!wide.contains(['┤', '├']), "{wide:?}");
+        let chip = &b[(42, y)];
+        assert_eq!((chip.fg, chip.bg), (CYAN, BAR_BG));
+        assert!(chip.modifier.contains(Modifier::BOLD));
+        // A solid row: nothing of the glass shows between the labels.
+        for x in 1..199 {
+            assert!(matches!(b[(x, y)].bg, PANEL_BG | BAR_BG), "x {x}: {wide:?}");
+        }
+        // Without room for the keys, the labels alone.
+        let (_, _, narrow) = bar(90);
+        assert!(narrow.starts_with("│ ▌SKILLS▐"), "{narrow:?}");
+        assert!(!narrow.contains(['◂', '▸', '┤']), "{narrow:?}");
     }
 
     #[test]
@@ -1927,12 +1967,18 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("q/e tabs · ↑↓ select · enter fold · space act · tab close"),
+            text.contains("Q/E tabs · ↑↓ select · enter fold · space act · tab close"),
             "{text}"
         );
         assert!(text.contains("║"), "no pane divider: {text}");
+        // The frame's sides, opened round Q and E on the tab bar's row.
         for (i, l) in lines.iter().enumerate().take(29).skip(1) {
-            assert!(l.starts_with('│') && l.ends_with('│'), "row {i}: {l:?}");
+            let (a, b) = if l.contains("▌SKILLS▐") {
+                ('┤', '├')
+            } else {
+                ('│', '│')
+            };
+            assert!(l.starts_with(a) && l.ends_with(b), "row {i}: {l:?}");
         }
     }
 

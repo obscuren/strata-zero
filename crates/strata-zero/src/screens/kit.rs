@@ -341,10 +341,10 @@ impl Kit {
     pub(crate) fn hints(&self) -> &'static str {
         match self.state.pane {
             Pane::Rack => {
-                "←↑↓→ rack, then over to the pack · [ ] filter · space act · q/e tabs · tab close"
+                "←↑↓→ rack, then over to the pack · [ ] filter · space act · Q/E tabs · tab close"
             }
             Pane::Pack => {
-                "←→ gear/pack · ↑↓ select · [ ] filter · space act · q/e tabs · tab close"
+                "←→ gear/pack · ↑↓ select · [ ] filter · space act · Q/E tabs · tab close"
             }
         }
     }

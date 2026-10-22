@@ -401,9 +401,10 @@ on to a piece within two tiles with no wall between), Redline refills your turn.
 **Pause** (`esc` or `q`) resume · save game · load game · settings (dev mode,
 rain, fps) · quit to title · quit game
 
-**Deck** (`tab`) `q` `e` or `1`-`8` tabs (`0` is talents too); the arrows never
-change tabs · `↑↓` rows · `space` act on a row · `tab` or `esc` close; it reopens
-where you left it. Tabs: skills (the category board:
+**Deck** (`tab`) `Q` `E` (either case) or `1`-`8` tabs (`0` is talents too); the
+arrows never change tabs · `↑↓` rows · `space` act on a row · `tab` or `esc` close;
+it reopens where you left it. Q and E sit as keycaps at the ends of the tab bar, in
+the frame's sides; past 120 columns the bar stays that wide in the middle. Tabs: skills (the category board:
 `enter` folds and unfolds, `space` offers an unlock priced in SP), stats (the
 five stats and your pools; `space` buys a point outright), gear & inventory
 (below), workbench (WRENCH unlocks it; every recipe is a drawing: `←→` flips
