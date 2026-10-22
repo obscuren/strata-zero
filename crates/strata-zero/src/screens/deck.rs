@@ -1341,7 +1341,7 @@ impl Deck {
         }
         for k in keys {
             // GEAR & INVENTORY takes the arrows, left and right too, `h j k l` and its
-            // filter keys; space, the tab keys, the digits and esc go on to the deck's.
+            // filter keys; space, `q` `e`, tab, the digits and esc go on to the deck's.
             if self.tab == Tab::Kit {
                 self.kit.reselect(st);
                 if self.kit.key(st, k.code, st.tick) {
@@ -1359,7 +1359,7 @@ impl Deck {
                 continue;
             }
             match k.code {
-                KeyCode::Esc | KeyCode::Char('q') => {
+                KeyCode::Esc | KeyCode::Tab => {
                     return ScreenCmd::Pop {
                         fx: TransitionKind::Glitch,
                     };
@@ -1386,8 +1386,9 @@ impl Deck {
                         report(st, result);
                     }
                 }
-                KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => self.shift_tab(-1, st),
-                KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => self.shift_tab(1, st),
+                // Only `q` and `e` change tabs, so the arrows mean the same on every tab.
+                KeyCode::Char('q' | 'Q') => self.shift_tab(-1, st),
+                KeyCode::Char('e' | 'E') => self.shift_tab(1, st),
                 KeyCode::Char(c @ '0'..='9') => {
                     // By position from `1`; a digit past the last tab does nothing, and
                     // `0` is the last tab too.
@@ -1542,17 +1543,27 @@ impl Screen for Deck {
         );
         y += 1;
 
-        // Tab bar: two cells between labels, one when they would not all fit.
+        // Tab bar: two cells between labels, one when they would not all fit, and
+        // `q ◂` and `▸ e` at its ends, the keys that step through the tabs, while they
+        // fit at either gap.
         let labels_w: u16 = Tab::ALL
             .iter()
             .map(|t| t.label().chars().count() as u16 + 2)
             .sum();
-        let gap = if labels_w + 2 * (Tab::ALL.len() as u16) < inner.width {
-            2
-        } else {
-            1
+        let n = Tab::ALL.len() as u16;
+        let fits = |gap: u16, keys: bool| {
+            let keys_w = if keys { 2 * gap + 7 } else { 0 };
+            2 + labels_w + gap * (n - 1) + keys_w < inner.width
         };
+        let (gap, keys) = [(2, true), (1, true), (2, false)]
+            .into_iter()
+            .find(|&(gap, keys)| fits(gap, keys))
+            .unwrap_or((1, false));
         let mut x = inner.x + 1;
+        if keys {
+            put(buf, x, y, "q ◂", Style::default().fg(DIM), right);
+            x += 3 + gap;
+        }
         let mut starts = [0u16; Tab::ALL.len()];
         for (i, tab) in Tab::ALL.iter().enumerate() {
             let active = *tab == self.tab;
@@ -1571,6 +1582,10 @@ impl Screen for Deck {
             };
             put(buf, x, y, &label, style, right);
             x += label.chars().count() as u16 + gap;
+        }
+        if keys {
+            // Padded like a label, so the ghost map does not run into the `e`.
+            put(buf, x, y, "▸ e ", Style::default().fg(DIM), right);
         }
         y += 1;
         // Rule with the sliding magenta segment under the active tab.
@@ -1650,15 +1665,15 @@ impl Screen for Deck {
             inner.x + 1,
             hint_y,
             match self.tab {
-                Tab::Skills => "←→ tabs · ↑↓ select · enter fold · space act · esc close",
+                Tab::Skills => "q/e tabs · ↑↓ select · enter fold · space act · tab close",
                 Tab::Talents => {
-                    "←→ along · ↑↓ tiers · tab tabs · 0-8 jump · space learn · esc close"
+                    "←→ along · ↑↓ tiers · q/e tabs · 0-8 jump · space learn · tab close"
                 }
                 Tab::Kit => self.kit.hints(),
                 Tab::Workbench if st.character.has_workbench(&st.content) => {
                     self.workbench.hints(st)
                 }
-                _ => "←→ tabs · ↑↓ select · 0-8 jump · space act · esc close",
+                _ => "q/e tabs · ↑↓ select · 0-8 jump · space act · tab close",
             },
             Style::default().fg(DIM),
             right,
@@ -1814,18 +1829,80 @@ mod tests {
             (Tab::Kit, Pane::Rack, 0),
             "left never leaves the tab"
         );
-        d.update(&mut st, &[key(KeyCode::Tab)]);
-        assert_eq!(d.tab, Tab::Workbench, "tab does");
-        d.update(&mut st, &[key(KeyCode::Char('0')), key(KeyCode::Tab)]);
-        assert_eq!(d.tab, Tab::Skills, "tab wraps forward");
-        d.update(&mut st, &[key(KeyCode::BackTab), key(KeyCode::BackTab)]);
-        assert_eq!(d.tab, Tab::Map);
+        d.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert_eq!(d.tab, Tab::Workbench, "e does");
+        d.update(&mut st, &[key(KeyCode::Char('0')), key(KeyCode::Char('e'))]);
+        assert_eq!(d.tab, Tab::Skills, "e wraps forward");
+        d.update(&mut st, &[key(KeyCode::Char('q')), key(KeyCode::Char('Q'))]);
+        assert_eq!(d.tab, Tab::Map, "q wraps back, in capitals too");
         assert!(matches!(
             d.update(&mut st, &[key(KeyCode::Esc)]),
             ScreenCmd::Pop {
                 fx: TransitionKind::Glitch
             }
         ));
+    }
+
+    #[test]
+    fn the_tab_bar_names_q_and_e_at_its_ends_when_they_fit() {
+        let st = state();
+        let d = Deck::new(0);
+        let bar = |w, h| {
+            let text = draw(&d, &st, w, h);
+            let line = text.lines().find(|l| l.contains("▌SKILLS▐")).unwrap();
+            line.trim_matches(|c| c == '│' || c == ' ').to_string()
+        };
+        let wide = bar(120, 35);
+        assert!(wide.starts_with("q ◂  ▌SKILLS▐"), "{wide:?}");
+        assert!(wide.ends_with(" TALENTS   ▸ e"), "{wide:?}");
+        // Tighter, the gaps shrink to one before the keys go.
+        let tight = bar(100, 30);
+        assert!(tight.starts_with("q ◂ ▌SKILLS▐"), "{tight:?}");
+        assert!(tight.ends_with(" TALENTS  ▸ e"), "{tight:?}");
+        let narrow = bar(90, 30);
+        assert!(
+            narrow.starts_with("▌SKILLS▐"),
+            "no room for the keys: {narrow:?}"
+        );
+        assert!(!narrow.contains('▸'), "{narrow:?}");
+    }
+
+    #[test]
+    fn only_q_and_e_change_tabs_and_tab_closes_the_deck() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        for tab in Tab::ALL {
+            d.set_tab(tab, &st);
+            for code in [
+                KeyCode::Left,
+                KeyCode::Right,
+                KeyCode::Char('h'),
+                KeyCode::Char('l'),
+                KeyCode::BackTab,
+            ] {
+                let cmd = d.update(&mut st, &[key(code)]);
+                assert!(matches!(cmd, ScreenCmd::Stay), "{code:?} on {tab:?}");
+                assert_eq!(d.tab, tab, "{code:?} leaves {tab:?}");
+            }
+            assert!(
+                matches!(
+                    d.update(&mut st, &[key(KeyCode::Char('q'))]),
+                    ScreenCmd::Stay
+                ),
+                "q on {tab:?} closes the deck"
+            );
+            d.update(&mut st, &[key(KeyCode::Char('E'))]);
+            assert_eq!(d.tab, tab, "q then E comes back to {tab:?}");
+            assert!(
+                matches!(
+                    d.update(&mut st, &[key(KeyCode::Tab)]),
+                    ScreenCmd::Pop {
+                        fx: TransitionKind::Glitch
+                    }
+                ),
+                "tab on {tab:?} closes the deck"
+            );
+        }
     }
 
     #[test]
@@ -1850,7 +1927,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("enter fold") && text.contains("space act") && text.contains("esc close"),
+            text.contains("q/e tabs · ↑↓ select · enter fold · space act · tab close"),
             "{text}"
         );
         assert!(text.contains("║"), "no pane divider: {text}");
@@ -2575,12 +2652,12 @@ mod tests {
             text.contains("DOUBLE TAP · EDGE · tier 2") && text.contains("3 more points in EDGE"),
             "{text}"
         );
-        // Up wraps to the capstone; tab still changes tabs, l did not.
+        // Up wraps to the capstone; e still changes tabs, l did not.
         d.update(&mut st, &[key(KeyCode::Char('k')), key(KeyCode::Char('k'))]);
         st.tick += 45;
         let text = draw(&d, &st, 120, 35);
         assert!(text.contains("THE HALF SECOND · EDGE · tier 5"), "{text}");
-        d.update(&mut st, &[key(KeyCode::Tab)]);
+        d.update(&mut st, &[key(KeyCode::Char('e'))]);
         assert_eq!(d.tab, Tab::Skills);
     }
 
