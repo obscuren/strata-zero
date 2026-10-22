@@ -1029,3 +1029,35 @@ fn the_site_sees_vex_without_dev_mode() {
     assert!(!text.contains("SHAWN"));
     assert!(text.contains("VEX"));
 }
+
+/// The SKILLS board with IRON unfolded on →, then its buy popup open on space.
+#[test]
+#[ignore]
+fn the_skills_board_asks_before_it_buys() {
+    let mut st = state_home();
+    st.character.sp = 2;
+    let map = MapScreen::walking(&mut st);
+    let mut deck = Deck::new(st.tick);
+    deck.update(&mut st, &[key(KeyCode::Char('1'))]);
+    deck.row = deck
+        .rows(&st)
+        .iter()
+        .position(|r| r.text.contains("IRON"))
+        .unwrap();
+    deck.update(&mut st, &[key(KeyCode::Right)]);
+    st.tick += 200;
+    if st.tick % 90 < 3 {
+        st.tick += 3;
+    }
+    shot_stack("skills_board_120x40", &st, &[&map, &deck], (120, 40));
+    // The popup anchors to the list the deck last drew.
+    draw_stack(&st, &[&map, &deck], (120, 40));
+    let crate::app::ScreenCmd::Push { to: popup, .. } =
+        deck.update(&mut st, &[key(KeyCode::Char(' '))])
+    else {
+        panic!("space opens the buy popup")
+    };
+    st.tick += 40;
+    let stack: [&dyn Screen; 3] = [&map, &deck, &*popup];
+    shot_stack("skills_board_buy_120x40", &st, &stack, (120, 40));
+}
