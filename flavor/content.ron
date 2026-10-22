@@ -8,6 +8,7 @@ Content(
                                  fx: [Flash(big: true), Tracer(colour: (255, 170, 40), speed: 3), Casing, Chips, Spark, Number(tag: false)])),
              desc: "Stamped-receiver machine pistol with a filed-down selector. Jams on cheap ammo, sings on the good stuff."),
         Item(id: "whisper_smg", name: "Whisper SMG", kind: Weapon, slot: Some(Primary), weight: 2.8, value: 1400,
+             look: Some(Ratchet),
              weapon: Some(Weapon(skill: "handguns", damage: 4, rounds: 3, range: 12,
                                  fx: [Flash(big: true), Streak(colour: (240, 240, 240)), Casing, Chips, Spark, Number(tag: false)])),
              desc: "Integrally suppressed, polymer everything. The rounds are gone before the sound is."),

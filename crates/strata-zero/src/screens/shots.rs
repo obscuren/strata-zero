@@ -620,6 +620,16 @@ fn hardware_blueprints() {
     }
 }
 
+/// The Whisper SMG D'SHAWN carries, on the Ratchet's drawing.
+#[test]
+#[ignore]
+fn the_whisper_on_its_blueprint() {
+    let mut st = state_home();
+    st.character = game::Character::debug_runner(&st.content);
+    let sizes = [(100, 30), (120, 40)];
+    blueprint_shots(&mut st, false, "whisper_smg", "blueprint_whisper", &sizes);
+}
+
 /// D'SHAWN's worn Ratchet SMG on its blueprint, bare and with both pieces fitted.
 #[test]
 #[ignore]

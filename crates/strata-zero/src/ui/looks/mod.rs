@@ -360,22 +360,21 @@ mod tests {
 
     #[test]
     fn every_part_is_an_input_of_the_recipe_for_its_item() {
+        // Parts only show on the bench, for a recipe's output; an item no recipe
+        // makes, like the Whisper, wears the drawing whole.
         let content = game::Content::load().unwrap();
-        for item in content.items.iter().filter(|i| i.look.is_some()) {
+        let mut checked = 0;
+        for recipe in &content.recipes {
+            let Some(look) = content.item(&recipe.output.0).and_then(|i| i.look) else {
+                continue;
+            };
             let art = ItemArt {
-                look: item.look.unwrap(),
+                look,
                 fitted: Vec::new(),
                 stickers: Vec::new(),
             };
             let parts = art.parts();
-            if parts.is_empty() {
-                continue;
-            }
-            let recipe = content
-                .recipes
-                .iter()
-                .find(|r| r.output.0 == item.id)
-                .unwrap_or_else(|| panic!("no recipe makes {}", item.id));
+            checked += usize::from(!parts.is_empty());
             for part in parts {
                 assert!(
                     recipe.inputs.iter().any(|(id, _)| id.0 == part.item),
@@ -385,5 +384,6 @@ mod tests {
                 );
             }
         }
+        assert!(checked > 0, "no recipe builds a drawing from parts");
     }
 }

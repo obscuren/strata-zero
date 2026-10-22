@@ -1574,6 +1574,16 @@ mod tests {
     }
 
     #[test]
+    fn the_whisper_wears_the_ratchets_drawing_without_its_sockets() {
+        let c = Content::load().unwrap();
+        let whisper = c.item(&ItemId::new("whisper_smg")).unwrap();
+        assert_eq!(whisper.look, Some(ItemLook::Ratchet));
+        // Integrally suppressed: nothing screws on.
+        assert!(whisper.sockets.is_empty());
+        assert!(whisper.takes_stickers() && whisper.per_copy());
+    }
+
+    #[test]
     fn weapon_sockets_and_hardware_load() {
         let c = Content::load().unwrap();
         let get = |id: &str| c.item(&ItemId::new(id)).unwrap();
