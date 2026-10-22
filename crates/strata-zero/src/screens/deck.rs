@@ -375,6 +375,13 @@ pub(crate) fn copy_popup(st: &mut AppState, copy: CopyId, anchor: (u16, u16)) ->
     )
 }
 
+/// The ask before something on the SKILLS board is bought: the unlock, then a way out.
+/// Greyed, the unlock leaves Cancel selected.
+fn buy_popup(name: &str, unlock: Choice, tick: u64, anchor: (u16, u16)) -> Popup {
+    let choices = vec![unlock, Choice::new('n', "Cancel", Pick::Close)];
+    Popup::verbs(name, choices, tick).anchored(anchor.0, anchor.1)
+}
+
 /// What a strike does, from its fields: the stun only when it stuns, the push and
 /// the chain when it has them.
 fn strike_line(range: i32, damage: u8, stun: u8, push: u8, chain: u8, ap: u8) -> String {
@@ -548,9 +555,10 @@ impl Deck {
         }
     }
 
-    /// The popup for the selected row: a picker for a gear slot, verbs for an item.
-    /// Rows with nothing to do give `None`; an empty slot nothing fits says so in the strip.
-    /// An item's Inspect opens its blueprint; a skill's or a category's shows its card.
+    /// The popup for the selected row: a picker for a gear slot, verbs for an item, the
+    /// ask before a category or skill not yet owned is bought. Rows with nothing to do
+    /// give `None`; an empty slot nothing fits says so in the strip. An item's Inspect
+    /// opens its blueprint.
     pub(crate) fn interact(&self, st: &mut AppState) -> Option<Popup> {
         if self.tab == Tab::Kit {
             return self.kit.interact(st);
@@ -566,48 +574,34 @@ impl Deck {
             Some(Detail::Slot(slot)) => slot_popup(st, *slot, anchor),
             Some(Detail::Item(id)) => item_popup(st, id, anchor),
             Some(Detail::Copy(copy)) => copy_popup(st, *copy, anchor),
-            Some(Detail::Category(id)) => {
+            Some(Detail::Category(id)) if !st.character.has_category(id) => {
                 let cat = st.content.category(id)?;
-                let b = Build::from_character(&st.content, &st.character);
-                let mut choices = vec![Choice::new(
-                    'i',
-                    "Inspect",
-                    Pick::Card(Self::category_card(st, id)),
-                )];
-                if !st.character.has_category(id) {
-                    let mut unlock = Choice::new(
-                        'u',
-                        format!("Unlock · {} SP", cat.cost),
-                        Pick::Act(Action::Unlock(id.clone())),
-                    );
-                    unlock.enabled = b.clone().toggle_category(&st.content, id).is_ok();
-                    choices.push(unlock);
-                }
-                Some(Popup::verbs(&cat.name, choices, st.tick).anchored(anchor.0, anchor.1))
+                let mut unlock = Choice::new(
+                    'u',
+                    format!("Unlock · {} SP", cat.cost),
+                    Pick::Act(Action::Unlock(id.clone())),
+                );
+                unlock.enabled = Build::from_character(&st.content, &st.character)
+                    .toggle_category(&st.content, id)
+                    .is_ok();
+                Some(buy_popup(&cat.name, unlock, st.tick, anchor))
             }
-            Some(Detail::Skill(id)) => {
+            Some(Detail::Skill(id)) if !st.character.has_skill(id) => {
                 let skill = st.content.skill(id)?;
-                let b = Build::from_character(&st.content, &st.character);
-                let mut choices = vec![Choice::new(
-                    'i',
-                    "Inspect",
-                    Pick::Card(Self::skill_card(st, id)),
-                )];
-                if !st.character.has_skill(id) {
-                    let cost = st.content.skill_cost(id).unwrap_or(0);
-                    let mut unlock = Choice::new(
-                        'u',
-                        if cost == 0 {
-                            "Unlock · free".to_string()
-                        } else {
-                            format!("Unlock · {cost} SP")
-                        },
-                        Pick::Act(Action::UnlockSkill(id.clone())),
-                    );
-                    unlock.enabled = b.clone().toggle_skill(&st.content, id).is_ok();
-                    choices.push(unlock);
-                }
-                Some(Popup::verbs(&skill.name, choices, st.tick).anchored(anchor.0, anchor.1))
+                let cost = st.content.skill_cost(id).unwrap_or(0);
+                let mut unlock = Choice::new(
+                    'u',
+                    if cost == 0 {
+                        "Unlock · free".to_string()
+                    } else {
+                        format!("Unlock · {cost} SP")
+                    },
+                    Pick::Act(Action::UnlockSkill(id.clone())),
+                );
+                unlock.enabled = Build::from_character(&st.content, &st.character)
+                    .toggle_skill(&st.content, id)
+                    .is_ok();
+                Some(buy_popup(&skill.name, unlock, st.tick, anchor))
             }
             _ => None,
         }
@@ -840,6 +834,10 @@ impl Deck {
         }
         self.tab_from = self.tab.index();
         self.tab = tab;
+        // The board lands with only what is owned unfolded.
+        if tab == Tab::Skills {
+            self.open = None;
+        }
         self.row = Self::first_selectable(&self.rows(st));
         // The detail pane types on again, and so does the kit's card.
         self.changed = st.tick;
@@ -1016,23 +1014,42 @@ impl Deck {
         self.owned_seen = Some(now.clone());
     }
 
-    /// Folds or unfolds the selected category, or the one holding the selected skill.
-    fn toggle_fold(&mut self, st: &AppState) {
+    /// Unfolds or folds the selected category. From one of its skills only a fold
+    /// reaches it, and the cursor climbs to the category.
+    fn set_fold(&mut self, st: &AppState, unfold: bool) {
         let rows = self.rows(st);
         let id = match rows.get(self.row).and_then(|r| r.detail.clone()) {
             Some(Detail::Category(id)) => id,
-            Some(Detail::Skill(sid)) => match st.content.category_of(&sid) {
+            Some(Detail::Skill(sid)) if !unfold => match st.content.category_of(&sid) {
                 Some(cat) => cat.id.clone(),
                 None => return,
             },
             _ => return,
         };
         let mut open = self.open_set(st);
-        if !open.remove(&id) {
-            open.insert(id);
-        }
+        let flipped = if unfold {
+            open.insert(id.clone())
+        } else {
+            open.remove(&id)
+        };
         self.open = Some(open);
-        self.changed = st.tick;
+        let here = Some(Detail::Category(id));
+        let row = self.rows(st).iter().position(|r| r.detail == here);
+        let row = row.unwrap_or(self.row);
+        if flipped || row != self.row {
+            self.row = row;
+            self.changed = st.tick;
+        }
+    }
+
+    /// Folds the selected category when it is open, unfolds it when it is not.
+    fn flip_fold(&mut self, st: &AppState) {
+        if let Some(Detail::Category(id)) =
+            self.rows(st).get(self.row).and_then(|r| r.detail.clone())
+        {
+            let open = self.open_set(st).contains(&id);
+            self.set_fold(st, !open);
+        }
     }
 
     /// Everything about one item: the detail pane and the inspect card.
@@ -1409,7 +1426,24 @@ impl Deck {
                 }
                 KeyCode::Up | KeyCode::Char('k') => self.move_row(&rows, -1, st.tick),
                 KeyCode::Down | KeyCode::Char('j') => self.move_row(&rows, 1, st.tick),
-                KeyCode::Enter if self.tab == Tab::Skills => self.toggle_fold(st),
+                KeyCode::Left | KeyCode::Char('h') if self.tab == Tab::Skills => {
+                    self.set_fold(st, false)
+                }
+                KeyCode::Right | KeyCode::Char('l') if self.tab == Tab::Skills => {
+                    self.set_fold(st, true)
+                }
+                // What is not owned yet asks before it is bought; a category owned folds
+                // or unfolds. Enter does nothing on the board.
+                KeyCode::Char(' ') if self.tab == Tab::Skills => match self.interact(st) {
+                    Some(p) => {
+                        return ScreenCmd::Push {
+                            to: Box::new(p),
+                            fx: TransitionKind::None,
+                        };
+                    }
+                    None => self.flip_fold(st),
+                },
+                KeyCode::Enter if self.tab == Tab::Skills => {}
                 KeyCode::Char(' ') | KeyCode::Enter
                     if matches!(
                         rows.get(self.row).and_then(|r| r.detail.as_ref()),
@@ -1688,7 +1722,7 @@ impl Screen for Deck {
             inner.x + 1,
             hint_y,
             match self.tab {
-                Tab::Skills => "Q/E tabs · ↑↓ select · enter fold · space act · tab close",
+                Tab::Skills => "Q/E tabs · ↑↓ select · ←→ fold · space fold/buy · tab close",
                 Tab::Talents => {
                     "←→ along · ↑↓ tiers · Q/E tabs · 0-8 jump · space learn · tab close"
                 }
@@ -1967,7 +2001,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("Q/E tabs · ↑↓ select · enter fold · space act · tab close"),
+            text.contains("Q/E tabs · ↑↓ select · ←→ fold · space fold/buy · tab close"),
             "{text}"
         );
         assert!(text.contains("║"), "no pane divider: {text}");
@@ -2584,8 +2618,22 @@ mod tests {
         );
     }
 
+    /// Puts the SKILLS cursor on the first board row whose text holds `name`.
+    fn on_board(d: &mut Deck, st: &AppState, name: &str) {
+        d.row = d
+            .rows(st)
+            .iter()
+            .position(|r| r.text.contains(name))
+            .unwrap();
+    }
+
+    /// Whether the SKILLS board lists a row holding `name`: unfolded, for a skill.
+    fn listed(d: &Deck, st: &AppState, name: &str) -> bool {
+        d.rows(st).iter().any(|r| r.text.contains(name))
+    }
+
     #[test]
-    fn skills_board_folds_and_unlocks_in_the_deck() {
+    fn skills_board_folds_on_the_arrows_and_buys_through_a_popup() {
         let mut st = state();
         let mut d = Deck::new(0);
         d.update(&mut st, &[key(KeyCode::Char('1'))]);
@@ -2598,31 +2646,44 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("◇ IRON") && !text.contains("Handguns"),
+            text.contains("◇ IRON") && !listed(&d, &st, "Handguns"),
             "unowned categories start folded: {text}"
         );
-        let rows = d.rows(&st);
-        d.row = rows.iter().position(|r| r.text.contains("IRON")).unwrap();
-        d.update(&mut st, &[key(KeyCode::Enter)]);
+        assert!(text.contains("←→ fold · space fold/buy"), "{text}");
+        // The arrows open and close a category you do not own, to look before buying.
+        on_board(&mut d, &st, "IRON");
+        d.update(&mut st, &[key(KeyCode::Right)]);
         let text = draw(&d, &st, 120, 35);
         assert!(text.contains("Handguns") && text.contains("free"), "{text}");
+        d.update(&mut st, &[key(KeyCode::Left)]);
+        assert!(!listed(&d, &st, "Handguns"), "folded again");
+        assert!(
+            matches!(d.update(&mut st, &[key(KeyCode::Enter)]), ScreenCmd::Stay),
+            "enter does nothing on the board"
+        );
+        assert!(!listed(&d, &st, "Handguns"));
+        // Space asks before it buys; without the SP the unlock is greyed.
         let ScreenCmd::Push { to: mut p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))])
         else {
-            panic!("space opens the verbs")
+            panic!("space opens the buy popup")
         };
         p.update(&mut st, &[key(KeyCode::Char('u'))]);
         assert!(
             !st.character.has_category(&game::CategoryId::new("iron")),
             "no SP: nothing unlocks"
         );
-        d.update(&mut st, &[key(KeyCode::Enter)]);
-        assert!(!draw(&d, &st, 120, 35).contains("Handguns"), "folded again");
         st.character.sp = 2;
         let ScreenCmd::Push { to: mut p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))])
         else {
             panic!()
         };
-        p.update(&mut st, &[key(KeyCode::Char('u'))]);
+        st.tick += 40;
+        let text = draw(&*p, &st, 120, 35);
+        assert!(
+            text.contains("Unlock · 2 SP") && !text.contains("Inspect"),
+            "{text}"
+        );
+        p.update(&mut st, &[key(KeyCode::Char(' '))]);
         assert!(
             st.character.has_category(&game::CategoryId::new("iron"))
                 && st.character.has_skill(&game::SkillId::new("handguns"))
@@ -2631,8 +2692,68 @@ mod tests {
         d.update(&mut st, &[]);
         let text = draw(&d, &st, 120, 35);
         assert!(
-            text.contains("◆ IRON") && text.contains("Handguns"),
+            text.contains("◆ IRON") && listed(&d, &st, "Handguns"),
             "a fresh unlock unfolds itself: {text}"
+        );
+    }
+
+    #[test]
+    fn skills_board_space_folds_what_you_own_and_left_climbs_out_of_a_skill() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('1'))]);
+        on_board(&mut d, &st, "NETRUNNER");
+        assert!(matches!(
+            d.update(&mut st, &[key(KeyCode::Char(' '))]),
+            ScreenCmd::Stay
+        ));
+        assert!(
+            !listed(&d, &st, "Hacking"),
+            "space folds a category you own"
+        );
+        d.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert!(listed(&d, &st, "Hacking"), "and unfolds it");
+        // A skill you have: neither space nor → does anything.
+        on_board(&mut d, &st, "Hacking");
+        let at = d.row;
+        assert!(matches!(
+            d.update(&mut st, &[key(KeyCode::Char(' ')), key(KeyCode::Right)]),
+            ScreenCmd::Stay
+        ));
+        assert_eq!(d.row, at);
+        assert!(listed(&d, &st, "Hacking"));
+        // A skill you lack: space asks to buy it.
+        on_board(&mut d, &st, "Vault run");
+        let ScreenCmd::Push { to: p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))]) else {
+            panic!("space offers to buy the skill")
+        };
+        st.tick += 40;
+        let text = draw(&*p, &st, 120, 35);
+        assert!(
+            text.contains("Vault run") && text.contains("Unlock · 2 SP"),
+            "{text}"
+        );
+        // ← from a skill folds its category and puts the cursor on it.
+        d.update(&mut st, &[key(KeyCode::Left)]);
+        assert!(!listed(&d, &st, "Vault run"));
+        assert!(d.rows(&st)[d.row].text.contains("NETRUNNER"));
+    }
+
+    #[test]
+    fn skills_board_lands_with_only_what_you_own_unfolded() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('1'))]);
+        on_board(&mut d, &st, "IRON");
+        d.update(&mut st, &[key(KeyCode::Right)]);
+        on_board(&mut d, &st, "NETRUNNER");
+        d.update(&mut st, &[key(KeyCode::Left)]);
+        assert!(listed(&d, &st, "Handguns") && !listed(&d, &st, "Hacking"));
+        d.update(&mut st, &[key(KeyCode::Char('e')), key(KeyCode::Char('q'))]);
+        assert_eq!(d.tab, Tab::Skills);
+        assert!(
+            listed(&d, &st, "Hacking") && !listed(&d, &st, "Handguns"),
+            "back on the tab, only what you own is open"
         );
     }
 
@@ -2834,28 +2955,6 @@ mod tests {
         let text = draw(&*bp, &st, 100, 30);
         assert!(
             text.contains(" BLUEPRINT · DEAD PHONE ") && text.contains("MISSING BLUEPRINT"),
-            "{text}"
-        );
-
-        // A skill is not an item: its Inspect is still the text card.
-        d.update(&mut st, &[key(KeyCode::Char('1'))]);
-        d.row = d
-            .rows(&st)
-            .iter()
-            .position(|r| r.text.contains("Hacking") && matches!(r.detail, Some(Detail::Skill(_))))
-            .unwrap();
-        let ScreenCmd::Push { to: mut p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))])
-        else {
-            panic!("space opens the verbs")
-        };
-        assert!(matches!(
-            p.update(&mut st, &[key(KeyCode::Char('i'))]),
-            ScreenCmd::Stay
-        ));
-        st.tick += 40;
-        let text = draw(&*p, &st, 120, 35);
-        assert!(
-            text.contains("HACKING") && !text.contains("BLUEPRINT"),
             "{text}"
         );
     }
