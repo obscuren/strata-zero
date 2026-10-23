@@ -408,6 +408,41 @@ fn strike_line(range: i32, damage: u8, stun: u8, push: u8, chain: u8, ap: u8) ->
     parts.join(" · ")
 }
 
+/// A card's text in one colour, bold or not.
+fn styled(text: impl Into<String>, fg: Color, bold: bool) -> Span<'static> {
+    let style = Style::default().fg(fg);
+    let style = if bold {
+        style.add_modifier(Modifier::BOLD)
+    } else {
+        style
+    };
+    Span::styled(text.into(), style)
+}
+
+/// A card's centred `:: value ::` line.
+fn framed(inner: Span<'static>) -> Line<'static> {
+    let rim = |s: &str| styled(s, FAINT, false);
+    Line::from(vec![rim(":: "), inner, rim(" ::")]).centered()
+}
+
+/// The art a card leads with, the stat its sign is lit in and whether it is yours: a
+/// skill's own, or a category's, lit in its first skill's stat.
+fn card_art<'a>(st: &'a AppState, detail: &Detail) -> Option<(&'a game::SkillArt, Stat, bool)> {
+    match detail {
+        Detail::Skill(id) => {
+            let art = st.content.skill_art(id)?;
+            Some((art, st.content.skill(id)?.stat, st.character.has_skill(id)))
+        }
+        Detail::Category(id) => {
+            let art = st.content.category_art(id)?;
+            let first = st.content.category(id)?.skills.first()?;
+            let stat = st.content.skill(&first.id)?.stat;
+            Some((art, stat, st.character.has_category(id)))
+        }
+        _ => None,
+    }
+}
+
 /// The detail pane's card for a row.
 pub(crate) fn card(st: &AppState, detail: &Detail) -> Vec<Line<'static>> {
     match detail {
@@ -612,52 +647,52 @@ impl Deck {
         }
     }
 
-    /// A category's card: its line, cost, skills with their marks, and what it grants.
+    /// A category's card, the text under its art: whether it is yours, its price, its
+    /// skills with their marks, what it grants or unlocks, then its line. All but the line
+    /// are centred.
     pub(crate) fn category_card(st: &AppState, id: &CategoryId) -> Vec<Line<'static>> {
         let Some(cat) = st.content.category(id) else {
             return vec![warn(format!("unknown category {id}"))];
         };
         let owned = st.character.has_category(id);
-        let mut out = vec![head(&cat.name)];
-        out.push(dim(if owned {
-            "yours".to_string()
+        let mut out = vec![if owned {
+            Line::from(styled("[unlocked]", CYAN, true)).centered()
         } else {
-            format!("{} SP to unlock", cat.cost)
-        }));
+            Line::from(styled("[locked]", DIM, false)).centered()
+        }];
+        out.push(framed(styled(format!("{} SP", cat.cost), TEXT, false)));
         out.push(plain(""));
-        out.push(plain(cat.line.clone()));
-        out.push(plain(""));
-        for sk in &cat.skills {
+        out.push(Line::from(styled("[SKILLS]", DIM, true)).centered());
+        let mut skills = Vec::new();
+        for (i, sk) in cat.skills.iter().enumerate() {
+            if i > 0 {
+                skills.push(styled(" · ", FAINT, false));
+            }
             let name = st
                 .content
                 .skill(&sk.id)
-                .map(|k| k.name.clone())
-                .unwrap_or_else(|| sk.id.to_string());
-            let cost = if sk.cost == 0 {
-                "free".to_string()
-            } else {
-                format!("{} SP", sk.cost)
-            };
+                .map_or_else(|| sk.id.to_string(), |k| k.name.clone());
             if st.character.has_skill(&sk.id) {
-                out.push(Line::from(Span::styled(
-                    format!("◆ {name}"),
-                    Style::default().fg(CYAN),
-                )));
+                skills.push(styled("◆ ", CYAN, false));
+                skills.push(styled(name, TEXT, false));
             } else {
-                out.push(dim(format!("◇ {name} · {cost}")));
+                skills.push(styled(format!("◇ {name}"), DIM, false));
             }
         }
-        for a in &cat.grants {
-            if let Some(a) = st.content.ability(a) {
-                out.push(plain(""));
-                out.push(dim(format!("◈ grants {}", a.name)));
-                out.push(plain(a.desc.clone()));
-            }
+        out.push(Line::from(skills).centered());
+        let lit = if owned { CYAN } else { DIM };
+        for a in cat.grants.iter().filter_map(|a| st.content.ability(a)) {
+            out.push(Line::from(styled(format!("◈ grants {}", a.name), lit, false)).centered());
+            out.push(Line::from(styled(a.desc.clone(), FAINT, false)).centered());
         }
-        if !cat.unlocks.is_empty() {
-            out.push(plain(""));
-            out.push(dim("▣ unlocks the workbench"));
+        for u in &cat.unlocks {
+            let what = match u {
+                game::Unlock::Workbench => "▣ unlocks the workbench",
+            };
+            out.push(Line::from(styled(what, lit, false)).centered());
         }
+        out.push(plain(""));
+        out.push(plain(cat.line.clone()));
         out
     }
 
@@ -667,29 +702,14 @@ impl Deck {
         let Some(skill) = st.content.skill(id) else {
             return vec![warn(format!("unknown skill {id}"))];
         };
-        let styled = |text: String, fg: Color, bold: bool| {
-            let style = Style::default().fg(fg);
-            Span::styled(
-                text,
-                if bold {
-                    style.add_modifier(Modifier::BOLD)
-                } else {
-                    style
-                },
-            )
-        };
-        let framed = |inner: Span<'static>| {
-            let rim = |s: &str| styled(s.to_string(), FAINT, false);
-            Line::from(vec![rim(":: "), inner, rim(" ::")]).centered()
-        };
         let mut out = vec![if st.character.has_skill(id) {
-            Line::from(styled("[learned]".into(), CYAN, true)).centered()
+            Line::from(styled("[learned]", CYAN, true)).centered()
         } else {
-            Line::from(styled("[unlearned]".into(), DIM, false)).centered()
+            Line::from(styled("[unlearned]", DIM, false)).centered()
         }];
         if let Some(n) = st.content.skill_cost(id) {
             let cost = if n == 0 {
-                "free".into()
+                "free".to_string()
             } else {
                 format!("{n} SP")
             };
@@ -700,9 +720,9 @@ impl Deck {
             out.push(framed(styled(need, stat_colour(*stat), true)));
         }
         out.push(plain(""));
-        out.push(Line::from(styled("[REQUIRED SKILLS]".into(), DIM, true)).centered());
+        out.push(Line::from(styled("[REQUIRED SKILLS]", DIM, true)).centered());
         let after = if skill.after.is_empty() {
-            styled("[none]".into(), FAINT, false)
+            styled("[none]", FAINT, false)
         } else {
             let names: Vec<&str> = skill
                 .after
@@ -1043,12 +1063,18 @@ impl Deck {
             .collect()
     }
 
-    /// A category bought through a popup unfolds itself when the deck resumes.
+    /// A category bought through a popup unfolds itself when the deck resumes, and
+    /// replays its card when it is the one selected.
     fn note_new_categories(&mut self, st: &AppState) {
         let now = &st.character.categories;
         if let Some(seen) = &self.owned_seen {
             let fresh: Vec<CategoryId> = now.difference(seen).cloned().collect();
             if !fresh.is_empty() {
+                // Bought from its own card, it replays, its art scanning in lit.
+                let selected = self.rows(st).get(self.row).and_then(|r| r.detail.clone());
+                if matches!(&selected, Some(Detail::Category(id)) if fresh.contains(id)) {
+                    self.changed = st.tick;
+                }
                 let mut open = self.open_set(st);
                 open.extend(fresh);
                 self.open = Some(open);
@@ -1767,15 +1793,13 @@ impl Screen for Deck {
                 detail.width.saturating_sub(2),
                 detail.height,
             );
-            // A skill's card leads with its art, scanned in over the first half of the
-            // reveal; the text goes under it.
-            if let Some(Detail::Skill(id)) = rows.get(self.row).and_then(|r| r.detail.as_ref())
-                && let (Some(art), Some(skill)) = (st.content.skill_art(id), st.content.skill(id))
-            {
+            // A skill's or a category's card leads with its art, scanned in over the first
+            // half of the reveal; the text goes under it.
+            let detail = rows.get(self.row).and_then(|r| r.detail.as_ref());
+            if let Some((art, stat, learned)) = detail.and_then(|d| card_art(st, d)) {
                 let scan = ((2.0 * p).min(1.0) * f32::from(skill_art::ROWS)).ceil() as u16;
                 let x = text.x + text.width.saturating_sub(skill_art::W) / 2;
-                let learned = st.character.has_skill(id);
-                skill_art::draw(buf, x, text.y, text, art, skill.stat, learned, scan);
+                skill_art::draw(buf, x, text.y, text, art, stat, learned, scan);
                 let drop = (skill_art::ROWS + 1).min(text.height);
                 text.y += drop;
                 text.height -= drop;
@@ -2861,14 +2885,63 @@ mod tests {
             "unlearned, the gold bar is grey"
         );
 
-        // A category's card is as it was: no art, no requirements.
+        // A category's card is its own: no requirements, and not the skill's art.
         let d = on_skill(&mut st, "NETRUNNER");
         let text = draw(&d, &st, 100, 30);
         assert!(
-            text.contains("yours") && !text.contains("[REQUIRED SKILLS]"),
+            text.contains("[unlocked]") && !text.contains("[REQUIRED SKILLS]"),
             "{text}"
         );
         assert!(!carries(&skills_board_card_cells(&d, &st, 100, 30), ice));
+    }
+
+    #[test]
+    fn a_categorys_card_leads_with_its_art() {
+        let mut st = state();
+        let d = on_skill(&mut st, "NETRUNNER");
+        let text = draw(&d, &st, 100, 30);
+        for want in [
+            "RUNNER_",
+            "[unlocked]",
+            ":: 200 SP ::",
+            "[SKILLS]",
+            "◆ Hacking · ◆ ICE breaker · ◇ Vault run",
+            "◈ grants Signal ghost",
+            "You feel the Net's weather change before the ICE does.",
+            "the Net is a place and you live there",
+        ] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+        let d = on_skill(&mut st, "WRENCH");
+        assert!(draw(&d, &st, 100, 30).contains("▣ unlocks the workbench"));
+        let d = on_skill(&mut st, "IRON");
+        let text = draw(&d, &st, 100, 30);
+        assert!(
+            text.contains("[locked]") && text.contains("◇ Handguns"),
+            "{text}"
+        );
+        let brass = Color::Rgb(184, 146, 60);
+        assert!(
+            !carries(&skills_board_card_cells(&d, &st, 100, 30), brass),
+            "locked, the rounds are grey"
+        );
+    }
+
+    #[test]
+    fn buying_the_selected_category_replays_its_card() {
+        let mut st = state();
+        let mut d = on_skill(&mut st, "IRON");
+        st.character.sp = 200;
+        let ScreenCmd::Push { to: mut p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens the buy popup")
+        };
+        d.changed = 0;
+        p.update(&mut st, &[key(KeyCode::Char('u'))]);
+        assert!(st.character.has_category(&game::CategoryId::new("iron")));
+        st.tick = 500;
+        d.update(&mut st, &[]);
+        assert_eq!(d.changed, 500);
     }
 
     #[test]

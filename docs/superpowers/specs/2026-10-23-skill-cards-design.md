@@ -29,7 +29,8 @@ I/II/III one day), empty for now.
 
 - No enforcement of stat requirements or required skills. Buying works as it does now.
 - The character creation wizard's SKILLS step keeps its card as it is.
-- Category rows on the board keep today's category card.
+- ~~Category rows on the board keep today's category card.~~ Superseded: see "Category
+  cards" below.
 - No new skills. Skills that need others (I/II/III) come later.
 
 ## Anti-goals
@@ -173,6 +174,48 @@ The split, with what each drawing is:
 | STREET | Fixer's ear (burner phone, `JOB?`) | Streetwise (arrow sign), Haggle (price tag going down) |
 | RIPPER | Medtech (medkit), Field patch (tape roll, gel patch) | Stim cocktail (glass, pill on the pick) |
 | MEAT | | Athletics (runner), Freerun (vaulting a wall), Second wind (heart, a pulse) |
+
+## Category cards (added 2026-10-23)
+
+Jeffrey asked for the categories to have art too, and approved this on seeing it. A
+category's card mirrors a skill's: its drawing, then
+
+```
+                           [unlocked]
+                          :: 200 SP ::
+
+                            [SKILLS]
+            ◆ Hacking · ◆ ICE breaker · ◇ Vault run
+                     ◈ grants Signal ghost
+      You feel the Net's weather change before the ICE does.
+
+the Net is a place and you live there
+```
+
+- `[unlocked]` cyan bold if the character owns the category, else `[locked]` dim.
+- `:: 200 SP ::` is the category's cost.
+- `[SKILLS]` dim bold. Under it the category's skills, joined with ` · `: owned ones
+  `◆` cyan with the name in text colour, the rest `◇` and the name dim.
+- Each granted ability: `◈ grants <name>` (cyan if owned, else dim), then its description
+  faint. `▣ unlocks the workbench` for a category that unlocks it.
+- The category's line last, left-aligned. Every other line is centred.
+- Buying the selected category replays its card, as a skill's does.
+
+The art goes in the same file under its own key: `flavor/skill_art.ron` becomes
+`(skills: {...}, categories: {...})`, and `Content` holds `category_art` beside
+`skill_art`. Every category has art, and art names no unknown category. A category's sign
+is lit in its first skill's stat colour (each category's skills share one stat).
+
+| category | drawing |
+|---|---|
+| NETRUNNER | hardware: a deck slab, `RUNNER_` on its screen, its jack's cable |
+| WRENCH | hardware: a wrench and a screwdriver crossed over a gear |
+| IRON | hardware: five rifle rounds standing, the middle one a red-tipped tracer |
+| EDGE | hardware: a katana, its grip in a diamond wrap, a gold guard |
+| GHOST | neon: a hood, two eyes in its shadow |
+| STREET | neon: a skyline with lit windows, a full moon |
+| RIPPER | neon: a hand held up, traced in circuits |
+| MEAT | neon: a figure flexing both arms |
 
 ## Left to the builder
 

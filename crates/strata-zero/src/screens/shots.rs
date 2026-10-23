@@ -1063,7 +1063,8 @@ fn the_skills_board_asks_before_it_buys() {
 }
 
 /// Skill cards at the minimum terminal: hardware learned and not, a sign lit and cold, a
-/// drawing with a label; then ICE breaker at 120x40 and scanning in.
+/// drawing with a label, and three categories' cards; then ICE breaker at 120x40 and
+/// scanning in.
 #[test]
 #[ignore]
 fn skill_cards() {
@@ -1086,6 +1087,9 @@ fn skill_cards() {
         "Streetwise",
         "Haggle",
         "Fixer's ear",
+        "NETRUNNER",
+        "IRON",
+        "GHOST",
     ] {
         on(&mut deck, &mut st, name);
         st.tick += 200;

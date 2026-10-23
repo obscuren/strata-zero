@@ -120,3 +120,17 @@ the card replays. Add the shot `skill_cards` (100×30: ICE breaker, Vault run, S
 - [ ] **Step 4: Run everything** — `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --target-dir target/smoke`, `cargo test --workspace --target-dir target/smoke` — Expected: clean, all pass. Render the shot (`SHOT_DIR=… cargo test -p strata-zero --target-dir target/smoke skill_cards -- --ignored`) and look at it.
 
 - [ ] **Step 5: Commit** — `feat(deck): a skill's card leads with its art, then what it costs and asks for`.
+
+### Task 4: Category cards (spec, "Category cards")
+
+**Files:**
+- Modify: `docs/superpowers/specs/2026-10-23-skill-cards-art/{skillart,export}.py` (the eight drawings are in; export writes `(skills: {...}, categories: {...})`)
+- Modify: `flavor/skill_art.ron` (re-exported)
+- Modify: `crates/game/src/content.rs` (`Content.category_art`, `Content::category_art(&CategoryId) -> Option<&SkillArt>`, the art file's two sections, validation)
+- Modify: `crates/strata-zero/src/screens/deck.rs` (`category_card`, the art branch for `Detail::Category`, the replay on buying), `crates/strata-zero/src/screens/shots.rs`, `README.md`
+
+- [ ] **Step 1: Failing tests.** `content.rs`: `category_art_loads_for_every_category` (all 8 `Some`; `netrunner` is `Hardware` with label text `"RUNNER_"`; `meat` is `Neon`); `category_art_is_validated` — removing `iron`'s art is `Err(CategoryInvalid { .. })` (a new `ContentError::CategoryInvalid { id, why }`, `"category `{id}`: {why}"`), a bad drawing for it likewise, and art keyed by an unknown category is `Err(UnknownCategory { .. })`. `deck.rs`: `a_categorys_card_leads_with_its_art` — NETRUNNER at 100×30 shows `[unlocked]`, `:: 200 SP ::`, `[SKILLS]`, `Hacking · `, `grants Signal ghost`, `RUNNER_`, `the Net is a place and you live there`; IRON shows `[locked]` and no cell in brass `Rgb(184, 146, 60)`; `buying_the_selected_category_replays_its_card`.
+- [ ] **Step 2: Run them to see them fail.**
+- [ ] **Step 3: Implement** as the spec says; the sign's stat is the category's first skill's.
+- [ ] **Step 4: fmt, clippy, the whole suite; render `skill_cards` with NETRUNNER, IRON and GHOST added and look.**
+- [ ] **Step 5: Commit** — `feat(deck): a category's card leads with its art too`.

@@ -555,6 +555,117 @@ HARDWARE = {
 }
 
 
+# ---------------------------------------------------------------- categories, hardware
+
+COPPER_HI, COPPER, COPPER_LO = "#f0a070", "#c46a3a", "#7a3a1a"
+WRAP, WRAP_HI = "#16161a", "#d8cfb8"
+
+
+def thick(p, x0, y0, x1, y1, colours):
+    """A line as thick as `colours`, one row each, the first on top."""
+    for i, c in enumerate(colours):
+        p.line(x0, y0 + i, x1, y1 + i, c)
+
+
+def cat_netrunner(p):
+    # The jack's cable up out of the deck, a NET-blue stripe along it.
+    for y in range(1, 7):
+        p.hline(26, 29, y, RUBBER)
+        p.px(27, y, "#3b5bb0")
+    p.rect(25, 0, 30, 2, ALU)
+    p.hline(25, 30, 1, ALU_MID)
+    # The slab: a lit top edge, a shadowed foot and side.
+    p.rect(1, 7, 33, 18, GM)
+    p.hline(1, 33, 7, GM_HI)
+    p.hline(2, 33, 17, GM_LO)
+    p.vline(32, 8, 18, GM_LO)
+    p.vline(1, 8, 17, GM_EDGE)
+    # The screen with a run going.
+    p.rect(3, 9, 14, 15, "#0f2a1e")
+    p.hline(3, 14, 14, "#1b4a33")
+    p.put(4, 5, "RUNNER_", LED_G, "#0f2a1e")
+    # Three rows of keys, one lit amber; the lights.
+    for y in (10, 12, 14):
+        for x in range(16, 31, 3):
+            p.rect(x, y, x + 2, y + 1, GM_EDGE)
+    p.rect(25, 12, 27, 13, "#e6b43c")
+    p.px(4, 16, LED_G)
+    p.px(6, 16, "#e6b43c")
+
+
+def cat_wrench(p):
+    # The gear behind: teeth, a rim, a hole.
+    for k in range(8):
+        a = k * math.pi / 4
+        x, y = round(17 + 8 * math.cos(a)), round(10 + 8 * math.sin(a))
+        p.rect(x - 1, y - 1, x + 1, y + 1, GM_EDGE)
+    p.disc(17, 10, 7.4, GM_EDGE)
+    p.disc(17, 10, 6.4, GM)
+    p.disc(16.4, 9.4, 4.6, GM_HI)
+    p.disc(17, 10, 4.4, GM)
+    p.disc(17, 10, 2.4, PANEL)
+    # The screwdriver, its amber grip low on the right.
+    thick(p, 5, 3, 20, 12, [STEEL_HI, STEEL])
+    thick(p, 20, 12, 29, 17, ["#f2cf6a", "#e6b43c", "#a87a1c"])
+    p.px(4, 2, STEEL_HI)
+    # The wrench over it, ring end low on the left, open jaw high on the right.
+    thick(p, 6, 16, 27, 4, [STEEL_HI, STEEL, STEEL_LO])
+    p.disc(5, 16.5, 3.0, STEEL)
+    p.disc(4.6, 16, 2.0, STEEL_HI)
+    p.disc(5, 16.5, 1.3, PANEL)
+    p.rect(26, 1, 32, 7, STEEL)
+    p.hline(26, 32, 1, STEEL_HI)
+    p.rect(29, 0, 33, 4, PANEL)
+
+
+def cat_iron(p):
+    # Five rifle rounds standing: a pointed copper bullet, a brass neck, the shoulder out
+    # to the case, its groove and rim. The middle one is a tracer, its tip painted red.
+    for k, x in enumerate((2, 8, 14, 20, 26)):
+        tip = TAPE_HI if k == 2 else COPPER_HI
+        p.px(x + 2, 1, tip)
+        for y in (2, 3):
+            p.hline(x + 1, x + 4, y, TAPE if k == 2 and y == 2 else COPPER)
+            p.px(x + 1, y, tip if y == 2 else COPPER_HI)
+        for y in (4, 5, 6):
+            p.hline(x + 1, x + 4, y, COPPER)
+            p.px(x + 1, y, COPPER_HI)
+            p.px(x + 3, y, COPPER_LO)
+        p.hline(x + 1, x + 4, 7, BRASS)
+        p.px(x + 1, 7, BRASS_HI)
+        p.hline(x, x + 5, 8, BRASS_LO)
+        p.hline(x + 1, x + 4, 8, BRASS_HI)
+        p.rect(x, 9, x + 5, 17, BRASS)
+        p.vline(x, 9, 17, BRASS_LO)
+        p.vline(x + 1, 9, 17, BRASS_HI)
+        p.vline(x + 4, 9, 17, BRASS_LO)
+        p.hline(x + 1, x + 4, 17, BRASS_DK)
+        p.rect(x, 18, x + 5, 20, BRASS_LO)
+        p.hline(x, x + 5, 18, BRASS)
+
+
+def cat_edge(p):
+    # A katana corner to corner: a grip bound in a diamond wrap, a gold guard, then the
+    # blade, spine dark, its edge bright, tapering to the point.
+    for k in range(33):
+        x, y = 1 + k, round(18 - k * 16 / 32)
+        if k < 9:
+            p.px(x, y - 1, WRAP_HI if k % 2 else WRAP)
+            p.px(x, y, WRAP if k % 2 else WRAP_HI)
+            p.px(x, y + 1, WRAP_HI if k % 2 else WRAP)
+        elif k < 11:
+            p.rect(x, y - 2, x + 1, y + 3, BRASS_HI if k == 9 else BRASS_LO)
+        else:
+            p.px(x, y - 1, STEEL_LO if k < 30 else None)
+            p.px(x, y, STEEL)
+            p.px(x, y + 1, WHITE_HI if k < 32 else None)
+    p.px(0, 19, BRASS_LO)
+
+
+HARDWARE.update({
+    "netrunner": cat_netrunner, "wrench": cat_wrench, "iron": cat_iron, "edge": cat_edge,
+})
+
 # ---------------------------------------------------------------- neon
 
 class Sign:
@@ -715,6 +826,71 @@ NEON = {
     "second_wind": (second_wind, "BODY", "#ff3355"),
 }
 
+# ---------------------------------------------------------------- categories, neon
+
+def cat_ghost(s):
+    # A hood and its shoulders; in its shadow, two eyes.
+    s.arc(17, 11, 9, 9, 180, 360, step=2)
+    s.line(8, 11, 5, 19)
+    s.line(26, 11, 29, 19)
+    s.arc(17, 11, 5, 6, 180, 360, step=4)
+    s.arc(17, 11, 5, 4, 0, 180, step=4)
+    s.line(14, 11, 15, 11, True)
+    s.line(19, 11, 20, 11, True)
+
+
+def cat_street(s):
+    # The skyline, a tower with its mast, lit windows, a crescent moon.
+    s.poly([(1, 19), (1, 12), (5, 12), (5, 8), (9, 8), (9, 14), (12, 14), (12, 4), (16, 4),
+            (16, 10), (20, 10), (20, 6), (24, 6), (24, 13), (28, 13), (28, 10), (32, 10),
+            (32, 19)], closed=False)
+    s.line(14, 1, 14, 4)
+    for x, y in [(3, 15), (7, 11), (14, 7), (14, 11), (22, 9), (22, 13), (30, 14)]:
+        s.px(x, y, True)
+    s.arc(29.5, 3.5, 2.4, 2.4, 0, 360, True, 20)
+
+
+def cat_ripper(s):
+    # A hand held up, chrome traced in circuits.
+    for i, top in enumerate((4, 2, 3, 5)):
+        x0 = 10 + i * 4
+        s.line(x0, top, x0, 9)
+        s.line(x0 + 2, top, x0 + 2, 9)
+        s.line(x0, top - 1 + 1, x0 + 2, top - 1 + 1)
+    s.poly([(10, 9), (10, 17), (24, 17), (24, 9)], closed=False)
+    s.line(10, 12, 6, 8)
+    s.line(10, 14, 5, 9)
+    s.px(5, 8)
+    s.line(13, 17, 13, 19)
+    s.line(21, 17, 21, 19)
+    s.poly([(13, 15), (16, 12), (21, 12)], closed=False, accent=True)
+    for x, y in [(13, 15), (21, 12), (19, 15), (11, 6), (15, 4), (19, 5), (23, 7)]:
+        s.px(x, y, True)
+
+
+def cat_meat(s):
+    # A figure flexing both arms: head, shoulders, biceps up to the fists, a waist, legs.
+    s.arc(17, 4, 2.2, 2.2, 0, 360, step=20)
+    s.line(10, 8, 24, 8)
+    for side in (-1, 1):
+        sx = 17 + side * 7
+        elbow, fist = 17 + side * 12, 17 + side * 13
+        s.line(sx, 8, elbow, 9)
+        s.line(elbow, 9, fist, 3)
+        s.arc(17 + side * 9.5, 8, 2.5, 2.2, 180, 360, step=15)
+        s.arc(fist, 2, 1.2, 1.2, 0, 360, step=45)
+    s.line(12, 8, 14, 15)
+    s.line(22, 8, 20, 15)
+    s.line(14, 15, 20, 15)
+    s.line(15, 15, 13, 19)
+    s.line(19, 15, 21, 19)
+
+
+NEON.update({
+    "ghost": (cat_ghost, "COOL", "#00e5ff"), "street": (cat_street, "COOL", "#fff27a"),
+    "ripper": (cat_ripper, "TECH", "#00e5ff"), "meat": (cat_meat, "BODY", "#ffffff"),
+})
+
 PLATE, PLATE_HI, SCREW, COLD = "#101217", "#1b1e25", "#4a4f58", "#363b44"
 
 
@@ -752,6 +928,9 @@ def sign(skill):
     NEON[skill][0](s)
     return s.tubes
 
+
+# The categories, by id, in the board's order; each drawn and lit like a skill.
+CATEGORIES = ["netrunner", "wrench", "iron", "edge", "ghost", "street", "ripper", "meat"]
 
 ORDER = [
     ("NETRUNNER", ["hacking", "ice_breaker", "vault_run"]),
