@@ -274,6 +274,9 @@ follows your origin's and profession's affinity. On SKILLS `→` `←` unfold an
 fold a category and `space` buys or refunds it or a skill with SP. SUMMARY ends
 on `enter`, JACK IN, which builds the character, generates a city and wakes
 you in your flat. Unspent points stay with you and can be spent from the deck.
+SP comes in steps of 50: you start with 600, a category costs 200 (STREET 100), its
+first skill comes free and the other two cost 100 and 150, and every level brings
+100 more.
 
 **Configure** `↑↓` field · `←→` adjust · type digits into the seed · `enter`
 on `RANDOM SEED` / `GENERATE` · `esc` back

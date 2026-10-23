@@ -2672,7 +2672,7 @@ mod tests {
             !st.character.has_category(&game::CategoryId::new("iron")),
             "no SP: nothing unlocks"
         );
-        st.character.sp = 2;
+        st.character.sp = 200;
         let ScreenCmd::Push { to: mut p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))])
         else {
             panic!()
@@ -2680,7 +2680,7 @@ mod tests {
         st.tick += 40;
         let text = draw(&*p, &st, 120, 35);
         assert!(
-            text.contains("Unlock · 2 SP") && !text.contains("Inspect"),
+            text.contains("Unlock · 200 SP") && !text.contains("Inspect"),
             "{text}"
         );
         p.update(&mut st, &[key(KeyCode::Char(' '))]);
@@ -2730,7 +2730,7 @@ mod tests {
         st.tick += 40;
         let text = draw(&*p, &st, 120, 35);
         assert!(
-            text.contains("Vault run") && text.contains("Unlock · 2 SP"),
+            text.contains("Vault run") && text.contains("Unlock · 150 SP"),
             "{text}"
         );
         // ← from a skill folds its category and puts the cursor on it.

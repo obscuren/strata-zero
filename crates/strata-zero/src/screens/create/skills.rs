@@ -119,7 +119,13 @@ pub(super) fn key(c: &mut Create, st: &mut AppState, code: KeyCode) {
 pub(super) fn draw(c: &Create, st: &AppState, b: &Build, panes: &Panes, buf: &mut Buffer) {
     let content = &st.content;
     let left = panes.left;
-    let pool = meter("SP", b.sp_left(content), b.sp_total(content), CYAN_RGB);
+    let pool = meter(
+        "SP",
+        b.sp_left(content),
+        b.sp_total(content),
+        game::SP_STEP,
+        CYAN_RGB,
+    );
     buf.set_line(left.x, left.y + 1, &pool, left.width);
     let list = rows(c, st, b);
     let cur = clamp(&list, c.cursor[Step::Skills.index()]);

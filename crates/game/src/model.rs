@@ -827,6 +827,9 @@ pub enum Unlock {
     Workbench,
 }
 
+/// SP comes in steps of this: every price and the creation budget is a multiple of it.
+pub const SP_STEP: u32 = 50;
+
 /// A skill category: costs SP to own, then its skills cost SP each.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Category {

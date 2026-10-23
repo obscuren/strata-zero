@@ -62,6 +62,7 @@ pub(super) fn draw(
         "POINTS",
         b.points_left(content),
         b.points_total(content),
+        1,
         CYAN_RGB,
     );
     buf.set_line(left.x, left.y + 1, &pool, left.width);

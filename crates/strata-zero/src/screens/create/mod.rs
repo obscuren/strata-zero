@@ -887,11 +887,11 @@ mod tests {
                 && !b.skills.contains(&game::SkillId::new("ice_breaker")),
             "refunding the category drops its skills"
         );
-        assert_eq!(b.sp_left(&st.content), 3);
+        assert_eq!(b.sp_left(&st.content), 300);
         c.update(&mut st, &[key(KeyCode::Char(' '))]);
         let b = st.build.as_ref().unwrap();
         assert!(b.categories.contains(&game::CategoryId::new("netrunner")));
-        assert_eq!(b.sp_left(&st.content), 1);
+        assert_eq!(b.sp_left(&st.content), 100);
         c.update(&mut st, &[key(KeyCode::Left)]);
         let text = draw(&c, &st, 120, 40);
         assert!(

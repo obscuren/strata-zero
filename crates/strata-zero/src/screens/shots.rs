@@ -1035,7 +1035,7 @@ fn the_site_sees_vex_without_dev_mode() {
 #[ignore]
 fn the_skills_board_asks_before_it_buys() {
     let mut st = state_home();
-    st.character.sp = 2;
+    st.character.sp = 200;
     let map = MapScreen::walking(&mut st);
     let mut deck = Deck::new(st.tick);
     deck.update(&mut st, &[key(KeyCode::Char('1'))]);

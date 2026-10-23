@@ -35,6 +35,8 @@ pub enum ContentError {
     SkillInTwoCategories { id: String, a: String, b: String },
     #[error("category `{category}`: its first skill `{skill}` must be free")]
     FirstSkillCosts { category: String, skill: String },
+    #[error("{what}: {cost} SP is not a multiple of {}", SP_STEP)]
+    SpOffStep { what: String, cost: u32 },
     #[error("{where_}: unknown origin `{id}`")]
     UnknownOrigin { where_: String, id: String },
     #[error("{where_}: unknown profession `{id}`")]
@@ -575,7 +577,8 @@ impl Content {
 
     /// Origins, professions, categories and templates: ids unique within their kind,
     /// every reference resolving, every skill in exactly one category with its first
-    /// skill free, emblems three rows of seven glyphs.
+    /// skill free, every SP price and the creation budget in steps of `SP_STEP`,
+    /// emblems three rows of seven glyphs.
     fn validate_creation<'a>(
         &'a self,
         need_item: &dyn Fn(String, &ItemId) -> Result<&'a Item, ContentError>,
@@ -616,11 +619,21 @@ impl Content {
                 need_item(format!("profession {}", p.id), id)?;
             }
         }
+        let on_step = |what: String, cost: u32| {
+            if cost.is_multiple_of(SP_STEP) {
+                Ok(())
+            } else {
+                Err(ContentError::SpOffStep { what, cost })
+            }
+        };
+        on_step("creation".into(), self.creation.sp)?;
         let mut owner: std::collections::HashMap<&SkillId, &CategoryId> =
             std::collections::HashMap::new();
         for cat in &self.categories {
+            on_step(format!("category {}", cat.id), cat.cost)?;
             for (i, s) in cat.skills.iter().enumerate() {
                 need_skill(format!("category {}", cat.id), &s.id)?;
+                on_step(format!("category {} skill {}", cat.id, s.id), s.cost)?;
                 if i == 0 && s.cost != 0 {
                     return Err(ContentError::FirstSkillCosts {
                         category: cat.id.0.clone(),
@@ -1247,7 +1260,7 @@ mod tests {
         );
         assert_eq!(
             (c.creation.point_cost, c.creation.sp, c.creation.name_max),
-            (2, 6, 16)
+            (2, 600, 16)
         );
         assert_eq!(c.origins.len(), 4);
         assert_eq!(c.professions.len(), 4);
@@ -1271,14 +1284,14 @@ mod tests {
             );
         }
         let net = c.category(&CategoryId::new("netrunner")).unwrap();
-        assert_eq!(net.cost, 2);
+        assert_eq!(net.cost, 200);
         assert_eq!(net.skills[0].cost, 0);
         assert_eq!(net.grants, vec![AbilityId::new("signal_ghost")]);
         let wrench = c.category(&CategoryId::new("wrench")).unwrap();
         assert_eq!(wrench.unlocks, vec![Unlock::Workbench]);
         assert_eq!(c.category_of(&SkillId::new("hacking")).unwrap().id, net.id);
-        assert_eq!(c.skill_cost(&SkillId::new("ice_breaker")), Some(1));
-        assert_eq!(c.skill_cost(&SkillId::new("vault_run")), Some(2));
+        assert_eq!(c.skill_cost(&SkillId::new("ice_breaker")), Some(100));
+        assert_eq!(c.skill_cost(&SkillId::new("vault_run")), Some(150));
         assert_eq!(c.skill_cost(&SkillId::new("origami")), None);
         assert!(c.stat_blurb(Stat::Body).contains("meat"));
         assert_eq!(c.template(&TemplateId::new("vex")).unwrap().handle, "VEX");
@@ -1298,7 +1311,7 @@ mod tests {
         let mut two = c.clone();
         two.categories[1].skills.push(CategorySkill {
             id: SkillId::new("hacking"),
-            cost: 1,
+            cost: 100,
         });
         assert!(matches!(
             two.validate(),
@@ -1316,10 +1329,28 @@ mod tests {
             Err(ContentError::SkillInNoCategory { .. })
         ));
         let mut costs = c.clone();
-        costs.categories[0].skills[0].cost = 1;
+        costs.categories[0].skills[0].cost = 100;
         assert!(matches!(
             costs.validate(),
             Err(ContentError::FirstSkillCosts { .. })
+        ));
+        let mut step = c.clone();
+        step.categories[0].skills[1].cost = 120;
+        assert!(matches!(
+            step.validate(),
+            Err(ContentError::SpOffStep { cost: 120, .. })
+        ));
+        let mut step = c.clone();
+        step.categories[0].cost = 75;
+        assert!(matches!(
+            step.validate(),
+            Err(ContentError::SpOffStep { cost: 75, .. })
+        ));
+        let mut step = c.clone();
+        step.creation.sp = 610;
+        assert!(matches!(
+            step.validate(),
+            Err(ContentError::SpOffStep { cost: 610, .. })
         ));
         let mut kit = c.clone();
         kit.professions[0].kit.push((ItemId::new("ghost_item"), 1));
