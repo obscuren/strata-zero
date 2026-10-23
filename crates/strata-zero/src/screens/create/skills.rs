@@ -1,20 +1,21 @@
-//! Step 5: the category board, bought with SP.
+//! Step 5: the category board, bought with SP, and the card for the row under the cursor.
 
-use super::{Create, FLASH_TICKS, Panes, wrap};
+use super::{Create, FLASH_TICKS, Panes};
 use crate::app::AppState;
 use crate::ui::board::{BoardRow, BoardState, RowKind, board_rows};
-use crate::ui::chrome::{BAR_BG, CYAN, CYAN_RGB, DIM, plain};
+use crate::ui::chrome::{BAR_BG, CYAN, CYAN_RGB};
 use crate::ui::meter::meter;
 use crate::ui::panel::boxed;
+use crate::ui::skill_card::{self, Card, Held};
 use crossterm::event::KeyCode;
 use game::{Build, CategoryId, Step};
 use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
 
-fn rows(c: &Create, st: &AppState, b: &Build) -> Vec<BoardRow> {
+pub(super) fn rows(c: &Create, st: &AppState, b: &Build) -> Vec<BoardRow> {
     board_rows(
         &st.content,
         &BoardState {
@@ -45,7 +46,16 @@ fn clamp(rows: &[BoardRow], want: usize) -> usize {
         .unwrap_or(0)
 }
 
+/// A new row under the cursor, or something bought or refunded, replays the card.
 pub(super) fn key(c: &mut Create, st: &mut AppState, code: KeyCode) {
+    let before = (c.cursor[Step::Skills.index()], st.build.clone());
+    turn(c, st, code);
+    if (c.cursor[Step::Skills.index()], st.build.clone()) != before {
+        c.changed = st.tick;
+    }
+}
+
+fn turn(c: &mut Create, st: &mut AppState, code: KeyCode) {
     let i = Step::Skills.index();
     let Some(b) = st.build.as_ref() else { return };
     let list = rows(c, st, b);
@@ -116,7 +126,14 @@ pub(super) fn key(c: &mut Create, st: &mut AppState, code: KeyCode) {
     }
 }
 
-pub(super) fn draw(c: &Create, st: &AppState, b: &Build, panes: &Panes, buf: &mut Buffer) {
+pub(super) fn draw(
+    c: &Create,
+    st: &AppState,
+    b: &Build,
+    panes: &Panes,
+    tick: u64,
+    buf: &mut Buffer,
+) {
     let content = &st.content;
     let left = panes.left;
     let pool = meter(
@@ -154,91 +171,41 @@ pub(super) fn draw(c: &Create, st: &AppState, b: &Build, panes: &Panes, buf: &mu
         }
     }
 
-    // The dossier for the row under the cursor.
+    // The card for the row under the cursor, the name on its box.
     let Some(row) = list.get(cur) else { return };
-    let (title, lines) = match &row.kind {
-        RowKind::Category(id) => {
-            let Some(cat) = content.category(id) else {
-                return;
-            };
-            let mut lines: Vec<Line<'static>> = vec![plain(cat.line.clone())];
-            lines.push(Line::from(Span::styled(
-                if b.categories.contains(id) {
-                    "yours".to_string()
-                } else {
-                    format!("{} SP to unlock", cat.cost)
-                },
-                Style::default().fg(DIM),
-            )));
-            lines.push(plain(""));
-            for sk in &cat.skills {
-                let name = content
-                    .skill(&sk.id)
-                    .map(|k| k.name.clone())
-                    .unwrap_or_else(|| sk.id.to_string());
-                let have = b.skills.contains(&sk.id);
-                let cost = if sk.cost == 0 {
-                    "free".to_string()
-                } else {
-                    format!("{} SP", sk.cost)
-                };
-                lines.push(Line::from(Span::styled(
-                    format!("{} {name} · {cost}", if have { "◆" } else { "◇" }),
-                    Style::default().fg(if have { CYAN } else { DIM }),
-                )));
-            }
-            for a in cat.grants.iter().filter_map(|id| content.ability(id)) {
-                lines.push(plain(""));
-                lines.push(Line::from(Span::styled(
-                    format!("◈ {}", a.name),
-                    Style::default().fg(CYAN),
-                )));
-                lines.extend(
-                    wrap(&a.desc, panes.right.width.saturating_sub(6) as usize)
-                        .into_iter()
-                        .map(plain),
-                );
-            }
-            if !cat.unlocks.is_empty() {
-                lines.push(plain(""));
-                lines.push(Line::from(Span::styled(
-                    "▣ unlocks the workbench",
-                    Style::default().fg(CYAN),
-                )));
-            }
-            (cat.name.clone(), lines)
-        }
-        RowKind::Skill(id) => {
-            let Some(skill) = content.skill(id) else {
-                return;
-            };
-            let mut lines: Vec<Line<'static>> =
-                wrap(&skill.desc, panes.right.width.saturating_sub(6) as usize)
-                    .into_iter()
-                    .map(plain)
-                    .collect();
-            lines.push(plain(""));
-            let cat = content
-                .category_of(id)
-                .map(|c| c.name.clone())
-                .unwrap_or_default();
-            let cost = match content.skill_cost(id) {
-                Some(0) => "free with the category".to_string(),
-                Some(n) => format!("{n} SP"),
-                None => String::new(),
-            };
-            lines.push(Line::from(Span::styled(
-                format!("{cat} · {} · {cost}", skill.stat.label()),
-                Style::default().fg(DIM),
-            )));
-            (skill.name.to_uppercase(), lines)
-        }
+    let (title, card) = match &row.kind {
+        RowKind::Category(id) => (
+            content.category(id).map(|c| c.name.clone()),
+            Card::Category(id),
+        ),
+        RowKind::Skill(id) => (
+            content.skill(id).map(|k| k.name.to_uppercase()),
+            Card::Skill(id),
+        ),
         RowKind::Note => return,
     };
+    let Some(title) = title else { return };
     let block = boxed(&title);
     let inner = block.inner(panes.right);
     block.render(panes.right, buf);
-    for (y, l) in (inner.y + 1..inner.bottom()).zip(lines) {
-        buf.set_line(inner.x + 2, y, &l, inner.width.saturating_sub(3));
-    }
+    let held = Held {
+        categories: &b.categories,
+        skills: &b.skills,
+    };
+    let area = Rect::new(
+        inner.x + 1,
+        inner.y,
+        inner.width.saturating_sub(2),
+        inner.height,
+    );
+    let p = tick.saturating_sub(c.changed) as f32 / 30.0;
+    skill_card::draw(
+        buf,
+        area,
+        content,
+        held,
+        card,
+        p,
+        (tick / 4).is_multiple_of(2),
+    );
 }

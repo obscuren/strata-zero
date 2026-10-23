@@ -8,18 +8,17 @@ use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::messages::Kind;
 use crate::render::map::MapRef;
 use crate::render::memmap::MemoryMap;
-use crate::screens::create::stat_colour;
 use crate::screens::kit::Kit;
 use crate::screens::popup::{Choice, Pick, Popup};
 use crate::screens::workbench::Workbench;
 use crate::ui::board::{BoardState, RowKind, board_rows};
 use crate::ui::chrome::{
-    BAR_BG, CYAN, CYAN_RGB, DIM, FAINT, MAGENTA, MAGENTA_RGB, PANEL_BG, RULE, TEXT, dim, frame,
-    glass, head, plain, put, put_paragraph, reveal, warn,
+    BAR_BG, CYAN, CYAN_RGB, DIM, MAGENTA, MAGENTA_RGB, PANEL_BG, RULE, TEXT, dim, frame, glass,
+    head, plain, put, put_paragraph, reveal, warn,
 };
 use crate::ui::hud::capitalised;
 use crate::ui::logo::{self, Logo};
-use crate::ui::skill_art;
+use crate::ui::skill_card::{self, Card, Held};
 use crate::ui::talents::{TalentsView, TreeCursor, step, talent_at};
 use citygen::rng::hash64;
 use citygen::{FloorPlan, NodeKind, Place, Pos, StratumKind};
@@ -408,38 +407,11 @@ fn strike_line(range: i32, damage: u8, stun: u8, push: u8, chain: u8, ap: u8) ->
     parts.join(" · ")
 }
 
-/// A card's text in one colour, bold or not.
-fn styled(text: impl Into<String>, fg: Color, bold: bool) -> Span<'static> {
-    let style = Style::default().fg(fg);
-    let style = if bold {
-        style.add_modifier(Modifier::BOLD)
-    } else {
-        style
-    };
-    Span::styled(text.into(), style)
-}
-
-/// A card's centred `:: value ::` line.
-fn framed(inner: Span<'static>) -> Line<'static> {
-    let rim = |s: &str| styled(s, FAINT, false);
-    Line::from(vec![rim(":: "), inner, rim(" ::")]).centered()
-}
-
-/// The art a card leads with, the stat its sign is lit in and whether it is yours: a
-/// skill's own, or a category's, lit in its first skill's stat.
-fn card_art<'a>(st: &'a AppState, detail: &Detail) -> Option<(&'a game::SkillArt, Stat, bool)> {
-    match detail {
-        Detail::Skill(id) => {
-            let art = st.content.skill_art(id)?;
-            Some((art, st.content.skill(id)?.stat, st.character.has_skill(id)))
-        }
-        Detail::Category(id) => {
-            let art = st.content.category_art(id)?;
-            let first = st.content.category(id)?.skills.first()?;
-            let stat = st.content.skill(&first.id)?.stat;
-            Some((art, stat, st.character.has_category(id)))
-        }
-        _ => None,
+/// What the deck's cards read as yours: the character's categories and skills.
+fn held(st: &AppState) -> Held<'_> {
+    Held {
+        categories: &st.character.categories,
+        skills: &st.character.skills,
     }
 }
 
@@ -460,8 +432,8 @@ pub(crate) fn card(st: &AppState, detail: &Detail) -> Vec<Line<'static>> {
             None => vec![dim("nothing here")],
         },
         Detail::Journal(i) => Deck::journal_card(st, *i),
-        Detail::Category(id) => Deck::category_card(st, id),
-        Detail::Skill(id) => Deck::skill_card(st, id),
+        Detail::Category(id) => skill_card::lines(&st.content, held(st), Card::Category(id)),
+        Detail::Skill(id) => skill_card::lines(&st.content, held(st), Card::Skill(id)),
         Detail::Stat(stat) => {
             let base = st.character.stats.get(*stat);
             let with = st.character.stat(&st.content, *stat);
@@ -645,100 +617,6 @@ impl Deck {
             }
             _ => None,
         }
-    }
-
-    /// A category's card, the text under its art: whether it is yours, its price, its
-    /// skills with their marks, what it grants or unlocks, then its line. All but the line
-    /// are centred.
-    pub(crate) fn category_card(st: &AppState, id: &CategoryId) -> Vec<Line<'static>> {
-        let Some(cat) = st.content.category(id) else {
-            return vec![warn(format!("unknown category {id}"))];
-        };
-        let owned = st.character.has_category(id);
-        let mut out = vec![if owned {
-            Line::from(styled("[unlocked]", CYAN, true)).centered()
-        } else {
-            Line::from(styled("[locked]", DIM, false)).centered()
-        }];
-        out.push(framed(styled(format!("{} SP", cat.cost), TEXT, false)));
-        out.push(plain(""));
-        out.push(Line::from(styled("[SKILLS]", DIM, true)).centered());
-        let mut skills = Vec::new();
-        for (i, sk) in cat.skills.iter().enumerate() {
-            if i > 0 {
-                skills.push(styled(" · ", FAINT, false));
-            }
-            let name = st
-                .content
-                .skill(&sk.id)
-                .map_or_else(|| sk.id.to_string(), |k| k.name.clone());
-            if st.character.has_skill(&sk.id) {
-                skills.push(styled("◆ ", CYAN, false));
-                skills.push(styled(name, TEXT, false));
-            } else {
-                skills.push(styled(format!("◇ {name}"), DIM, false));
-            }
-        }
-        out.push(Line::from(skills).centered());
-        let lit = if owned { CYAN } else { DIM };
-        for a in cat.grants.iter().filter_map(|a| st.content.ability(a)) {
-            out.push(Line::from(styled(format!("◈ grants {}", a.name), lit, false)).centered());
-            out.push(Line::from(styled(a.desc.clone(), FAINT, false)).centered());
-        }
-        for u in &cat.unlocks {
-            let what = match u {
-                game::Unlock::Workbench => "▣ unlocks the workbench",
-            };
-            out.push(Line::from(styled(what, lit, false)).centered());
-        }
-        out.push(plain(""));
-        out.push(plain(cat.line.clone()));
-        out
-    }
-
-    /// A skill's card, the text under its art: whether it is yours, its price, the
-    /// stats and skills it asks for, then its line. All but the line are centred.
-    pub(crate) fn skill_card(st: &AppState, id: &SkillId) -> Vec<Line<'static>> {
-        let Some(skill) = st.content.skill(id) else {
-            return vec![warn(format!("unknown skill {id}"))];
-        };
-        let mut out = vec![if st.character.has_skill(id) {
-            Line::from(styled("[learned]", CYAN, true)).centered()
-        } else {
-            Line::from(styled("[unlearned]", DIM, false)).centered()
-        }];
-        if let Some(n) = st.content.skill_cost(id) {
-            let cost = if n == 0 {
-                "free".to_string()
-            } else {
-                format!("{n} SP")
-            };
-            out.push(framed(styled(cost, TEXT, false)));
-        }
-        for (stat, n) in &skill.needs {
-            let need = format!("{} {n}", stat.name());
-            out.push(framed(styled(need, stat_colour(*stat), true)));
-        }
-        out.push(plain(""));
-        out.push(Line::from(styled("[REQUIRED SKILLS]", DIM, true)).centered());
-        let after = if skill.after.is_empty() {
-            styled("[none]", FAINT, false)
-        } else {
-            let names: Vec<&str> = skill
-                .after
-                .iter()
-                .map(|a| {
-                    st.content
-                        .skill(a)
-                        .map_or(a.0.as_str(), |s| s.name.as_str())
-                })
-                .collect();
-            styled(format!("[{}]", names.join(" · ")), TEXT, false)
-        };
-        out.push(Line::from(after).centered());
-        out.push(plain(""));
-        out.push(plain(skill.desc.clone()));
-        out
     }
 
     /// Links the deck to a tile: the cursor under the free camera, the player when walking.
@@ -1784,27 +1662,26 @@ impl Screen for Deck {
             let first = self.row.saturating_sub(half).min(max_first);
             self.last_list.set((list, first));
             draw_rows(buf, list, &rows, first, self.row, true, tick);
-            let lines = self.detail(st, &rows);
             let p = (tick.saturating_sub(self.changed)) as f32 / REVEAL_TICKS as f32;
-            let shown = reveal(&lines, p, (tick / 4).is_multiple_of(2));
-            let mut text = Rect::new(
+            let cursor_on = (tick / 4).is_multiple_of(2);
+            let text = Rect::new(
                 detail.x + 1,
                 detail.y,
                 detail.width.saturating_sub(2),
                 detail.height,
             );
-            // A skill's or a category's card leads with its art, scanned in over the first
-            // half of the reveal; the text goes under it.
-            let detail = rows.get(self.row).and_then(|r| r.detail.as_ref());
-            if let Some((art, stat, learned)) = detail.and_then(|d| card_art(st, d)) {
-                let scan = ((2.0 * p).min(1.0) * f32::from(skill_art::ROWS)).ceil() as u16;
-                let x = text.x + text.width.saturating_sub(skill_art::W) / 2;
-                skill_art::draw(buf, x, text.y, text, art, stat, learned, scan);
-                let drop = (skill_art::ROWS + 1).min(text.height);
-                text.y += drop;
-                text.height -= drop;
+            // A skill's or a category's card leads with its art.
+            let card = match rows.get(self.row).and_then(|r| r.detail.as_ref()) {
+                Some(Detail::Skill(id)) => Some(Card::Skill(id)),
+                Some(Detail::Category(id)) => Some(Card::Category(id)),
+                _ => None,
+            };
+            match card {
+                Some(card) => {
+                    skill_card::draw(buf, text, &st.content, held(st), card, p, cursor_on);
+                }
+                None => put_paragraph(buf, text, reveal(&self.detail(st, &rows), p, cursor_on)),
             }
-            put_paragraph(buf, text, shown);
         }
 
         status_strip(buf, st, inner.x + 1, strip_y, right);

@@ -28,7 +28,13 @@ I/II/III one day), empty for now.
 ## Non-goals
 
 - No enforcement of stat requirements or required skills. Buying works as it does now.
-- The character creation wizard's SKILLS step keeps its card as it is.
+- ~~The character creation wizard's SKILLS step keeps its card as it is.~~ Superseded:
+  Jeffrey asked for the same graphics there. The wizard draws the same card
+  (`ui/skill_card.rs`, shared with the deck), reading what the build holds rather than the
+  character, in its box with the name as the title. On that step the box takes 56% of the
+  width, so the art and the skills' line fit at 100×30. On any card too tall for its pane,
+  blank lines give way first, top down. The card replays when the cursor moves or
+  something is bought or refunded.
 - ~~Category rows on the board keep today's category card.~~ Superseded: see "Category
   cards" below.
 - No new skills. Skills that need others (I/II/III) come later.

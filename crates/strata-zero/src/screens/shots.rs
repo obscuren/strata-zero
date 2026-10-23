@@ -1116,3 +1116,32 @@ fn skill_cards() {
     st.tick += 3;
     shot_stack("skill_card_scanning_100x30", &st, &[&map, &deck], (100, 30));
 }
+
+/// The creation wizard's SKILLS step with VEX's build: NETRUNNER's card, Hacking's and
+/// IRON's at the minimum terminal, then NETRUNNER's at 120x40.
+#[test]
+#[ignore]
+fn creation_skill_cards() {
+    let mut st = AppState::new();
+    let mut create = crate::screens::create::chooser::Chooser::new(&st, 0).choose(&mut st);
+    // A step a frame: back from SUMMARY past NAME to SKILLS.
+    create.update(&mut st, &[key(KeyCode::Esc)]);
+    create.update(&mut st, &[key(KeyCode::Esc)]);
+    // Down from NETRUNNER: Hacking is one row on, IRON eight.
+    for (name, downs) in [("netrunner", 0), ("hacking", 1), ("iron", 7)] {
+        create.update(&mut st, &vec![key(KeyCode::Down); downs]);
+        st.tick += 200;
+        shot_stack(
+            &format!("creation_{name}_100x30"),
+            &st,
+            &[&create],
+            (100, 30),
+        );
+    }
+    let mut create = crate::screens::create::chooser::Chooser::new(&st, 0).choose(&mut st);
+    // A step a frame: back from SUMMARY past NAME to SKILLS.
+    create.update(&mut st, &[key(KeyCode::Esc)]);
+    create.update(&mut st, &[key(KeyCode::Esc)]);
+    st.tick += 200;
+    shot_stack("creation_netrunner_120x40", &st, &[&create], (120, 40));
+}

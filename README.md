@@ -271,7 +271,8 @@ gate (never wakes, hits or breaks); load game opens the save list) · `q` quit
 steps: ORIGIN, PROFESSION, STATS, SKILLS, NAME, SUMMARY. `↑↓` choose · `enter`
 next · `esc` back. On STATS `→` buys a point and `←` refunds one; a point's cost
 follows your origin's and profession's affinity. On SKILLS `→` `←` unfold and
-fold a category and `space` buys or refunds it or a skill with SP. SUMMARY ends
+fold a category and `space` buys or refunds it or a skill with SP; the card beside the
+board is the deck's, drawing and all. SUMMARY ends
 on `enter`, JACK IN, which builds the character, generates a city and wakes
 you in your flat. Unspent points stay with you and can be spent from the deck.
 SP comes in steps of 50: you start with 600, a category costs 200 (STREET 100), its
