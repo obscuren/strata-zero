@@ -777,5 +777,6 @@ def render(skill, learned=True):
         return neon(skill, learned)
     p = drawn(skill)
     if not learned:
-        p.recolour(grey)
+        # A hole stays the panel, as the game draws it: it exports as an empty pixel.
+        p.recolour(lambda c: c if c == PANEL else grey(c))
     return p

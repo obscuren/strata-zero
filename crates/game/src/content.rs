@@ -135,12 +135,16 @@ fn art_ok(art: &SkillArt) -> Result<(), String> {
         SkillArt::Hardware {
             colours, labels, ..
         } => {
+            if colours.contains_key(&'.') {
+                return Err("`.` is an empty pixel and takes no colour".into());
+            }
             if let Some(c) = pixels().find(|c| *c != '.' && !colours.contains_key(c)) {
                 return Err(format!("pixel `{c}` has no colour"));
             }
-            let (w, h) = (SKILL_ART_W as u16, (SKILL_ART_H / 2) as u16);
-            let off =
-                |(x, y, text, ..): &&ArtLabel| *y >= h || *x + text.chars().count() as u16 > w;
+            let off = |(x, y, text, ..): &&ArtLabel| {
+                usize::from(*y) >= SKILL_ART_H / 2
+                    || usize::from(*x) + text.chars().count() > SKILL_ART_W
+            };
             if let Some((_, _, text, ..)) = labels.iter().find(off) {
                 return Err(format!("label `{text}` runs off the art"));
             }
@@ -2309,6 +2313,18 @@ mod tests {
             }
         });
         assert!(invalid(&low), "a label under the art");
+        let far = edited("hacking", |a| {
+            if let SkillArt::Hardware { labels, .. } = a {
+                labels.push((u16::MAX, 0, "X".into(), (0, 0, 0), (0, 0, 0)));
+            }
+        });
+        assert!(invalid(&far), "a label far off to the right");
+        let dot = edited("hacking", |a| {
+            if let SkillArt::Hardware { colours, .. } = a {
+                colours.insert('.', (1, 2, 3));
+            }
+        });
+        assert!(invalid(&dot), "a colour for the empty pixel");
         for n in [0, 11] {
             let mut need = c.clone();
             need.skills[0].needs = vec![(Stat::Net, n)];

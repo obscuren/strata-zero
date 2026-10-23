@@ -76,7 +76,10 @@ fn pixels(art: &SkillArt, stat: Stat, learned: bool) -> Vec<Vec<Option<Rgb>>> {
             .iter()
             .map(|r| {
                 r.chars()
-                    .map(|ch| colours.get(&ch).map(|&c| if learned { c } else { grey(c) }))
+                    .map(|ch| {
+                        let c = colours.get(&ch).filter(|_| ch != '.');
+                        c.map(|&c| if learned { c } else { grey(c) })
+                    })
                     .collect()
             })
             .collect(),
