@@ -8,16 +8,18 @@ use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::messages::Kind;
 use crate::render::map::MapRef;
 use crate::render::memmap::MemoryMap;
+use crate::screens::create::stat_colour;
 use crate::screens::kit::Kit;
 use crate::screens::popup::{Choice, Pick, Popup};
 use crate::screens::workbench::Workbench;
 use crate::ui::board::{BoardState, RowKind, board_rows};
 use crate::ui::chrome::{
-    BAR_BG, CYAN, CYAN_RGB, DIM, MAGENTA, MAGENTA_RGB, PANEL_BG, RULE, TEXT, dim, frame, glass,
-    head, plain, put, put_paragraph, reveal, warn,
+    BAR_BG, CYAN, CYAN_RGB, DIM, FAINT, MAGENTA, MAGENTA_RGB, PANEL_BG, RULE, TEXT, dim, frame,
+    glass, head, plain, put, put_paragraph, reveal, warn,
 };
 use crate::ui::hud::capitalised;
 use crate::ui::logo::{self, Logo};
+use crate::ui::skill_art;
 use crate::ui::talents::{TalentsView, TreeCursor, step, talent_at};
 use citygen::rng::hash64;
 use citygen::{FloorPlan, NodeKind, Place, Pos, StratumKind};
@@ -158,6 +160,8 @@ pub struct Deck {
     open: Option<BTreeSet<CategoryId>>,
     /// The owned categories at the last update, so a fresh unlock unfolds itself.
     owned_seen: Option<BTreeSet<CategoryId>>,
+    /// The owned skills at the last update, so buying the selected one replays its card.
+    skills_seen: Option<BTreeSet<SkillId>>,
     /// Where the TALENTS tab's cursor sits.
     pub(crate) cursor: TreeCursor,
     /// The talent box lit until its tick: the rank just learned.
@@ -549,6 +553,7 @@ impl Deck {
             kit: Kit::new(tick),
             open: None,
             owned_seen: None,
+            skills_seen: None,
             cursor: TreeCursor::default(),
             flash: None,
             workbench: Workbench::default(),
@@ -656,23 +661,61 @@ impl Deck {
         out
     }
 
-    /// A skill's card: its line, its category and what it costs.
+    /// A skill's card, the text under its art: whether it is yours, its price, the
+    /// stats and skills it asks for, then its line. All but the line are centred.
     pub(crate) fn skill_card(st: &AppState, id: &SkillId) -> Vec<Line<'static>> {
         let Some(skill) = st.content.skill(id) else {
             return vec![warn(format!("unknown skill {id}"))];
         };
-        let mut out = vec![head(&skill.name)];
-        let cat = st
-            .content
-            .category_of(id)
-            .map(|c| c.name.clone())
-            .unwrap_or_default();
-        let cost = match st.content.skill_cost(id) {
-            Some(0) => "free with the category".to_string(),
-            Some(n) => format!("{n} SP"),
-            None => String::new(),
+        let styled = |text: String, fg: Color, bold: bool| {
+            let style = Style::default().fg(fg);
+            Span::styled(
+                text,
+                if bold {
+                    style.add_modifier(Modifier::BOLD)
+                } else {
+                    style
+                },
+            )
         };
-        out.push(dim(format!("{cat} · {} · {cost}", skill.stat.label())));
+        let framed = |inner: Span<'static>| {
+            let rim = |s: &str| styled(s.to_string(), FAINT, false);
+            Line::from(vec![rim(":: "), inner, rim(" ::")]).centered()
+        };
+        let mut out = vec![if st.character.has_skill(id) {
+            Line::from(styled("[learned]".into(), CYAN, true)).centered()
+        } else {
+            Line::from(styled("[unlearned]".into(), DIM, false)).centered()
+        }];
+        if let Some(n) = st.content.skill_cost(id) {
+            let cost = if n == 0 {
+                "free".into()
+            } else {
+                format!("{n} SP")
+            };
+            out.push(framed(styled(cost, TEXT, false)));
+        }
+        for (stat, n) in &skill.needs {
+            let need = format!("{} {n}", stat.name());
+            out.push(framed(styled(need, stat_colour(*stat), true)));
+        }
+        out.push(plain(""));
+        out.push(Line::from(styled("[REQUIRED SKILLS]".into(), DIM, true)).centered());
+        let after = if skill.after.is_empty() {
+            styled("[none]".into(), FAINT, false)
+        } else {
+            let names: Vec<&str> = skill
+                .after
+                .iter()
+                .map(|a| {
+                    st.content
+                        .skill(a)
+                        .map_or(a.0.as_str(), |s| s.name.as_str())
+                })
+                .collect();
+            styled(format!("[{}]", names.join(" · ")), TEXT, false)
+        };
+        out.push(Line::from(after).centered());
         out.push(plain(""));
         out.push(plain(skill.desc.clone()));
         out
@@ -1012,6 +1055,21 @@ impl Deck {
             }
         }
         self.owned_seen = Some(now.clone());
+    }
+
+    /// Buying the selected skill replays its card, so its art scans in again, lit.
+    fn note_new_skills(&mut self, st: &AppState) {
+        let now = &st.character.skills;
+        if let Some(seen) = &self.skills_seen
+            && self.tab == Tab::Skills
+            && let Some(Detail::Skill(id)) =
+                self.rows(st).get(self.row).and_then(|r| r.detail.clone())
+            && now.contains(&id)
+            && !seen.contains(&id)
+        {
+            self.changed = st.tick;
+        }
+        self.skills_seen = Some(now.clone());
     }
 
     /// Unfolds or folds the selected category. From one of its skills only a fold
@@ -1496,6 +1554,7 @@ pub(crate) fn status_strip(buf: &mut Buffer, st: &AppState, x: u16, y: u16, righ
 impl Screen for Deck {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
         self.note_new_categories(st);
+        self.note_new_skills(st);
         let cmd = self.handle(st, keys);
         st.deck_tab = self.tab;
         st.deck_rows[self.tab.index()] = self.row;
@@ -1702,16 +1761,26 @@ impl Screen for Deck {
             let lines = self.detail(st, &rows);
             let p = (tick.saturating_sub(self.changed)) as f32 / REVEAL_TICKS as f32;
             let shown = reveal(&lines, p, (tick / 4).is_multiple_of(2));
-            put_paragraph(
-                buf,
-                Rect::new(
-                    detail.x + 1,
-                    detail.y,
-                    detail.width.saturating_sub(2),
-                    detail.height,
-                ),
-                shown,
+            let mut text = Rect::new(
+                detail.x + 1,
+                detail.y,
+                detail.width.saturating_sub(2),
+                detail.height,
             );
+            // A skill's card leads with its art, scanned in over the first half of the
+            // reveal; the text goes under it.
+            if let Some(Detail::Skill(id)) = rows.get(self.row).and_then(|r| r.detail.as_ref())
+                && let (Some(art), Some(skill)) = (st.content.skill_art(id), st.content.skill(id))
+            {
+                let scan = ((2.0 * p).min(1.0) * f32::from(skill_art::ROWS)).ceil() as u16;
+                let x = text.x + text.width.saturating_sub(skill_art::W) / 2;
+                let learned = st.character.has_skill(id);
+                skill_art::draw(buf, x, text.y, text, art, skill.stat, learned, scan);
+                let drop = (skill_art::ROWS + 1).min(text.height);
+                text.y += drop;
+                text.height -= drop;
+            }
+            put_paragraph(buf, text, shown);
         }
 
         status_strip(buf, st, inner.x + 1, strip_y, right);
@@ -2737,6 +2806,122 @@ mod tests {
         d.update(&mut st, &[key(KeyCode::Left)]);
         assert!(!listed(&d, &st, "Vault run"));
         assert!(d.rows(&st)[d.row].text.contains("NETRUNNER"));
+    }
+
+    fn skills_board_card_cells(d: &Deck, st: &AppState, w: u16, h: u16) -> Buffer {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| d.draw(st, f)).unwrap();
+        t.backend().buffer().clone()
+    }
+
+    /// Whether any cell is drawn in `c`, as its ink or its ground.
+    fn carries(b: &Buffer, c: Color) -> bool {
+        b.content.iter().any(|cell| cell.fg == c || cell.bg == c)
+    }
+
+    /// The deck on SKILLS with the cursor on `name`, the reveal long done.
+    fn on_skill(st: &mut AppState, name: &str) -> Deck {
+        let mut d = Deck::new(0);
+        d.update(st, &[key(KeyCode::Char('1'))]);
+        on_board(&mut d, st, name);
+        d.changed = 0;
+        st.tick = 400;
+        d
+    }
+
+    #[test]
+    fn a_skills_card_leads_with_its_art() {
+        let mut st = state();
+        let d = on_skill(&mut st, "ICE breaker");
+        let text = draw(&d, &st, 100, 30);
+        for want in [
+            "[learned]",
+            ":: 100 SP ::",
+            ":: NET 5 ::",
+            "[REQUIRED SKILLS]",
+            "[none]",
+            "You find the seam in the ICE before it finds you.",
+        ] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+        let ice = Color::Rgb(124, 203, 230);
+        assert!(
+            carries(&skills_board_card_cells(&d, &st, 100, 30), ice),
+            "the ICE block"
+        );
+
+        let d = on_skill(&mut st, "Vault run");
+        let text = draw(&d, &st, 100, 30);
+        for want in ["[unlearned]", ":: 150 SP ::", ":: NET 7 ::"] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+        let gold = Color::Rgb(232, 197, 74);
+        assert!(
+            !carries(&skills_board_card_cells(&d, &st, 100, 30), gold),
+            "unlearned, the gold bar is grey"
+        );
+
+        // A category's card is as it was: no art, no requirements.
+        let d = on_skill(&mut st, "NETRUNNER");
+        let text = draw(&d, &st, 100, 30);
+        assert!(
+            text.contains("yours") && !text.contains("[REQUIRED SKILLS]"),
+            "{text}"
+        );
+        assert!(!carries(&skills_board_card_cells(&d, &st, 100, 30), ice));
+    }
+
+    #[test]
+    fn a_skills_card_lists_every_need_and_required_skill() {
+        let mut st = state();
+        let ice = st
+            .content
+            .skills
+            .iter_mut()
+            .find(|s| s.id.0 == "ice_breaker")
+            .unwrap();
+        ice.needs = vec![(Stat::Net, 5), (Stat::Cool, 3)];
+        ice.after = vec![game::SkillId::new("hacking")];
+        let d = on_skill(&mut st, "ICE breaker");
+        let text = draw(&d, &st, 100, 30);
+        for want in [":: NET 5 ::", ":: COOL 3 ::", "[Hacking]"] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+    }
+
+    #[test]
+    fn a_skills_card_in_a_narrow_pane() {
+        let mut st = state();
+        let d = on_skill(&mut st, "ICE breaker");
+        let text = draw(&d, &st, 60, 34);
+        assert!(
+            text.contains("[learned]") && text.contains("seam"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_free_skill_reads_free() {
+        let mut st = state();
+        let d = on_skill(&mut st, "Hacking");
+        assert!(draw(&d, &st, 100, 30).contains(":: free ::"));
+    }
+
+    #[test]
+    fn buying_the_selected_skill_replays_its_card() {
+        let mut st = state();
+        let mut d = on_skill(&mut st, "Vault run");
+        st.character.sp = 150;
+        let ScreenCmd::Push { to: mut p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens the buy popup")
+        };
+        d.changed = 0;
+        p.update(&mut st, &[key(KeyCode::Char('u'))]);
+        assert!(st.character.has_skill(&game::SkillId::new("vault_run")));
+        st.tick = 500;
+        d.update(&mut st, &[]);
+        assert_eq!(d.changed, 500);
     }
 
     #[test]

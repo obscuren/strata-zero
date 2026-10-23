@@ -409,7 +409,9 @@ arrows never change tabs · `↑↓` rows · `space` act on a row · `tab` or `e
 it reopens where you left it. Q and E sit as keycaps at the ends of the tab bar, in
 the frame's sides; past 120 columns the bar stays that wide in the middle. Tabs: skills (the category board:
 it opens with only what you own unfolded; `←→` unfold and fold any category, `space`
-folds one you own and asks before it buys anything else with SP), stats (the
+folds one you own and asks before it buys anything else with SP; a skill's card shows its
+drawing, grey or cold until you learn it, its price, the stats and skills it asks for,
+and its line), stats (the
 five stats and your pools; `space` buys a point outright), gear & inventory
 (below), workbench (WRENCH unlocks it; every recipe is a drawing: `←→` flips
 them, `↑↓` walks the parts, `space` builds once every part is on hand; an item

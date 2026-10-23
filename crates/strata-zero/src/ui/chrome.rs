@@ -179,7 +179,10 @@ pub(crate) fn reveal(lines: &[Line<'static>], p: f32, cursor_on: bool) -> Vec<Li
         if cursor_on {
             shown.push(cursor());
         }
-        out.push(Line::from(shown));
+        // A centred line types in centred.
+        let mut typed = Line::from(shown);
+        typed.alignment = line.alignment;
+        out.push(typed);
         return out;
     }
     if cursor_on {
@@ -191,6 +194,14 @@ pub(crate) fn reveal(lines: &[Line<'static>], p: f32, cursor_on: bool) -> Vec<Li
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reveal_keeps_a_lines_alignment() {
+        let lines = [Line::from("abcdef").centered(), Line::from("ghij")];
+        let shown = reveal(&lines, 0.3, false);
+        assert_eq!(shown[0].alignment, Some(ratatui::layout::Alignment::Center));
+        assert_eq!(shown[0].to_string(), "abc");
+    }
 
     fn painted() -> Buffer {
         let mut buf = Buffer::empty(Rect::new(0, 0, 6, 3));

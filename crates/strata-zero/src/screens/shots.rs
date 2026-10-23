@@ -1061,3 +1061,54 @@ fn the_skills_board_asks_before_it_buys() {
     let stack: [&dyn Screen; 3] = [&map, &deck, &*popup];
     shot_stack("skills_board_buy_120x40", &st, &stack, (120, 40));
 }
+
+/// Skill cards at the minimum terminal: hardware learned and not, a sign lit and cold, a
+/// drawing with a label; then ICE breaker at 120x40 and scanning in.
+#[test]
+#[ignore]
+fn skill_cards() {
+    let mut st = state_home();
+    let map = MapScreen::walking(&mut st);
+    let mut deck = Deck::new(st.tick);
+    deck.update(&mut st, &[key(KeyCode::Char('1'))]);
+    let on = |deck: &mut Deck, st: &mut AppState, name: &str| {
+        deck.row = deck
+            .rows(st)
+            .iter()
+            .position(|r| r.text.contains(name))
+            .unwrap();
+        deck.update(st, &[]);
+        deck.changed = st.tick;
+    };
+    for name in [
+        "ICE breaker",
+        "Vault run",
+        "Streetwise",
+        "Haggle",
+        "Fixer's ear",
+    ] {
+        on(&mut deck, &mut st, name);
+        st.tick += 200;
+        if st.tick % 90 < 3 {
+            st.tick += 3;
+        }
+        let file = name.replace([' ', '\''], "_").to_lowercase();
+        shot_stack(
+            &format!("skill_card_{file}_100x30"),
+            &st,
+            &[&map, &deck],
+            (100, 30),
+        );
+    }
+    on(&mut deck, &mut st, "ICE breaker");
+    st.tick += 200;
+    shot_stack(
+        "skill_card_ice_breaker_120x40",
+        &st,
+        &[&map, &deck],
+        (120, 40),
+    );
+    on(&mut deck, &mut st, "ICE breaker");
+    st.tick += 3;
+    shot_stack("skill_card_scanning_100x30", &st, &[&map, &deck], (100, 30));
+}
