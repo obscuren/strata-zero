@@ -271,9 +271,13 @@ gate (never wakes, hits or breaks); load game opens the save list) · `q` quit
 steps: ORIGIN, PROFESSION, STATS, SKILLS, NAME, SUMMARY. `↑↓` choose · `enter`
 next · `esc` back. On STATS `→` buys a point and `←` refunds one; a point's cost
 follows your origin's and profession's affinity. On SKILLS `→` `←` unfold and
-fold a category and `space` buys or refunds it or a skill with SP. SUMMARY ends
+fold a category and `space` buys or refunds it or a skill with SP; the card beside the
+board is the deck's, drawing and all. SUMMARY ends
 on `enter`, JACK IN, which builds the character, generates a city and wakes
 you in your flat. Unspent points stay with you and can be spent from the deck.
+SP comes in steps of 50: you start with 600, a category costs 200 (STREET 100), its
+first skill comes free and the other two cost 100 and 150, and every level brings
+100 more.
 
 **Configure** `↑↓` field · `←→` adjust · type digits into the seed · `enter`
 on `RANDOM SEED` / `GENERATE` · `esc` back
@@ -405,7 +409,11 @@ rain, fps) · quit to title · quit game
 arrows never change tabs · `↑↓` rows · `space` act on a row · `tab` or `esc` close;
 it reopens where you left it. Q and E sit as keycaps at the ends of the tab bar, in
 the frame's sides; past 120 columns the bar stays that wide in the middle. Tabs: skills (the category board:
-`enter` folds and unfolds, `space` offers an unlock priced in SP), stats (the
+it opens with only what you own unfolded; `←→` unfold and fold any category, `space`
+folds one you own and asks before it buys anything else with SP; a skill's card shows its
+drawing, grey or cold until you learn it, its price, the stats and skills it asks for,
+and its line; a category's shows its drawing, its price, its skills and what it grants),
+stats (the
 five stats and your pools; `space` buys a point outright), gear & inventory
 (below), workbench (WRENCH unlocks it; every recipe is a drawing: `←→` flips
 them, `↑↓` walks the parts, `space` builds once every part is on hand; an item

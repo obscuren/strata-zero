@@ -472,7 +472,7 @@ mod tests {
         let c = Content::load().unwrap();
         for t in &c.templates {
             let b = Build::from_template(&c, t);
-            assert_eq!((b.points_spent(&c), b.sp_spent(&c)), (20, 6), "{}", t.id);
+            assert_eq!((b.points_spent(&c), b.sp_spent(&c)), (20, 600), "{}", t.id);
             assert_eq!(b.validate(&c), Ok(()), "{}", t.id);
         }
     }
@@ -541,13 +541,13 @@ mod tests {
             b.skills.contains(&SkillId::new("hacking")),
             "the free first skill comes with it"
         );
-        assert_eq!(b.sp_left(&c), 4);
+        assert_eq!(b.sp_left(&c), 400);
         assert_eq!(b.toggle_skill(&c, &ice), Ok(true));
-        assert_eq!(b.sp_left(&c), 3);
-        assert_eq!(b.skill_cost(&c, &SkillId::new("vault_run")), Some(2));
+        assert_eq!(b.sp_left(&c), 300);
+        assert_eq!(b.skill_cost(&c, &SkillId::new("vault_run")), Some(150));
         assert_eq!(b.toggle_category(&c, &net), Ok(false));
         assert!(
-            b.skills.is_empty() && b.sp_left(&c) == 6,
+            b.skills.is_empty() && b.sp_left(&c) == 600,
             "refunding the category drops its skills"
         );
         b.toggle_category(&c, &CategoryId::new("wrench")).unwrap();
@@ -598,9 +598,9 @@ mod tests {
         let mut ch =
             crate::character::Character::from_template(&c, &TemplateId::new("vex")).unwrap();
         ch.stat_points = 3;
-        ch.sp = 1;
+        ch.sp = 100;
         let b = Build::from_character(&c, &ch);
-        assert_eq!((b.points_left(&c), b.sp_left(&c)), (3, 1));
+        assert_eq!((b.points_left(&c), b.sp_left(&c)), (3, 100));
         assert_eq!(b.stats, ch.stats);
         assert_eq!(b.categories, ch.categories);
         let mut b = b;

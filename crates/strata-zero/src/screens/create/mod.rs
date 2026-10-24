@@ -441,8 +441,15 @@ impl Screen for Create {
             area.width.saturating_sub(4),
             bottom_rule.saturating_sub(body_y),
         );
-        // The lists want room for a tagline; the name wants room for the sheet.
-        let split = body.width * if self.step == Step::Name { 40 } else { 58 } / 100;
+        // The lists want room for a tagline; the name wants room for the sheet, and the
+        // skills' cards room for their art.
+        let split = body.width
+            * match self.step {
+                Step::Name => 40,
+                Step::Skills => 44,
+                _ => 58,
+            }
+            / 100;
         let panes = Panes {
             left: Rect::new(body.x, body.y, split.saturating_sub(2), body.height),
             right: Rect::new(
@@ -473,7 +480,7 @@ impl Screen for Create {
                 buf,
             ),
             Step::Stats => stats::draw(self, st, b, &panes, tick, buf),
-            Step::Skills => skills::draw(self, st, b, &panes, buf),
+            Step::Skills => skills::draw(self, st, b, &panes, tick, buf),
             Step::Summary => summary::draw(st, b, body, tick, buf),
         }
 
@@ -844,6 +851,78 @@ mod tests {
         assert_eq!(c.step, Step::Stats);
     }
 
+    /// VEX's build on the SKILLS step with the cursor on `name`, the card typed out.
+    fn on_skills_row(st: &mut AppState, name: &str) -> Create {
+        let ch = chooser::Chooser::new(st, 0);
+        let mut c = ch.choose(st);
+        for _ in 0..2 {
+            c.update(st, &[key(KeyCode::Esc)]);
+        }
+        let b = st.build.as_ref().unwrap();
+        let list = skills::rows(&c, st, b);
+        c.cursor[Step::Skills.index()] = list
+            .iter()
+            .position(|r| r.line.to_string().contains(name))
+            .unwrap();
+        st.tick += 100;
+        c
+    }
+
+    fn cells(s: &dyn Screen, st: &AppState, w: u16, h: u16) -> ratatui::buffer::Buffer {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| s.draw(st, f)).unwrap();
+        t.backend().buffer().clone()
+    }
+
+    #[test]
+    fn skills_step_cards_lead_with_their_art() {
+        let mut st = AppState::new();
+        let c = on_skills_row(&mut st, "Hacking");
+        let text = draw(&c, &st, 100, 30);
+        for want in [
+            "HACKING",
+            "[learned]",
+            ":: free ::",
+            ":: NET 4 ::",
+            "[REQUIRED SKILLS]",
+            "Getting into systems",
+        ] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+        // NETRUNNER's card is the tallest; its line still shows at the minimum size.
+        let c = on_skills_row(&mut st, "NETRUNNER");
+        let text = draw(&c, &st, 100, 30);
+        for want in [
+            "RUNNER_",
+            "[unlocked]",
+            "[SKILLS]",
+            "the Net is a place and you live",
+        ] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+        let c = on_skills_row(&mut st, "IRON");
+        assert!(draw(&c, &st, 100, 30).contains("[locked]"));
+        let brass = ratatui::style::Color::Rgb(184, 146, 60);
+        let b = cells(&c, &st, 100, 30);
+        assert!(
+            !b.content.iter().any(|x| x.fg == brass || x.bg == brass),
+            "not in the build, the rounds are grey"
+        );
+    }
+
+    #[test]
+    fn skills_step_cards_replay_when_the_cursor_moves_or_something_is_bought() {
+        let mut st = AppState::new();
+        let mut c = on_skills_row(&mut st, "Hacking");
+        c.changed = 0;
+        c.update(&mut st, &[key(KeyCode::Down)]);
+        assert_eq!(c.changed, st.tick, "a new row, a new card");
+        let mut c = on_skills_row(&mut st, "ICE breaker");
+        c.changed = 0;
+        c.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(c.changed, st.tick, "refunded, the card replays");
+    }
+
     #[test]
     fn skills_step_folds_buys_and_refunds() {
         let mut st = AppState::new();
@@ -887,15 +966,16 @@ mod tests {
                 && !b.skills.contains(&game::SkillId::new("ice_breaker")),
             "refunding the category drops its skills"
         );
-        assert_eq!(b.sp_left(&st.content), 3);
+        assert_eq!(b.sp_left(&st.content), 300);
         c.update(&mut st, &[key(KeyCode::Char(' '))]);
         let b = st.build.as_ref().unwrap();
         assert!(b.categories.contains(&game::CategoryId::new("netrunner")));
-        assert_eq!(b.sp_left(&st.content), 1);
+        assert_eq!(b.sp_left(&st.content), 100);
         c.update(&mut st, &[key(KeyCode::Left)]);
+        st.tick += 60;
         let text = draw(&c, &st, 120, 40);
         assert!(
-            !text.contains("├─ ◆ Hacking") && text.contains("◆ Hacking · free"),
+            !text.contains("├─ ◆ Hacking") && text.contains("◆ Hacking · ◇ ICE breaker"),
             "folded in the list, still on the card: {text}"
         );
     }

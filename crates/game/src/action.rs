@@ -963,7 +963,7 @@ mod tests {
         let out = apply(&mut ch, &mut g, &c, at, 0, Action::BuyStat(Stat::Body)).unwrap();
         assert_eq!((ch.stats.body, ch.stat_points), (5, 0));
         assert_eq!(out.message, "BODY 5");
-        ch.sp = 2;
+        ch.sp = 200;
         assert!(
             apply(
                 &mut ch,
@@ -1001,7 +1001,7 @@ mod tests {
             .is_err(),
             "no SP"
         );
-        ch.sp = 1;
+        ch.sp = 100;
         let out = apply(
             &mut ch,
             &mut g,

@@ -1029,3 +1029,119 @@ fn the_site_sees_vex_without_dev_mode() {
     assert!(!text.contains("SHAWN"));
     assert!(text.contains("VEX"));
 }
+
+/// The SKILLS board with IRON unfolded on →, then its buy popup open on space.
+#[test]
+#[ignore]
+fn the_skills_board_asks_before_it_buys() {
+    let mut st = state_home();
+    st.character.sp = 200;
+    let map = MapScreen::walking(&mut st);
+    let mut deck = Deck::new(st.tick);
+    deck.update(&mut st, &[key(KeyCode::Char('1'))]);
+    deck.row = deck
+        .rows(&st)
+        .iter()
+        .position(|r| r.text.contains("IRON"))
+        .unwrap();
+    deck.update(&mut st, &[key(KeyCode::Right)]);
+    st.tick += 200;
+    if st.tick % 90 < 3 {
+        st.tick += 3;
+    }
+    shot_stack("skills_board_120x40", &st, &[&map, &deck], (120, 40));
+    // The popup anchors to the list the deck last drew.
+    draw_stack(&st, &[&map, &deck], (120, 40));
+    let crate::app::ScreenCmd::Push { to: popup, .. } =
+        deck.update(&mut st, &[key(KeyCode::Char(' '))])
+    else {
+        panic!("space opens the buy popup")
+    };
+    st.tick += 40;
+    let stack: [&dyn Screen; 3] = [&map, &deck, &*popup];
+    shot_stack("skills_board_buy_120x40", &st, &stack, (120, 40));
+}
+
+/// Skill cards at the minimum terminal: hardware learned and not, a sign lit and cold, a
+/// drawing with a label, and three categories' cards; then ICE breaker at 120x40 and
+/// scanning in.
+#[test]
+#[ignore]
+fn skill_cards() {
+    let mut st = state_home();
+    let map = MapScreen::walking(&mut st);
+    let mut deck = Deck::new(st.tick);
+    deck.update(&mut st, &[key(KeyCode::Char('1'))]);
+    let on = |deck: &mut Deck, st: &mut AppState, name: &str| {
+        deck.row = deck
+            .rows(st)
+            .iter()
+            .position(|r| r.text.contains(name))
+            .unwrap();
+        deck.update(st, &[]);
+        deck.changed = st.tick;
+    };
+    for name in [
+        "ICE breaker",
+        "Vault run",
+        "Streetwise",
+        "Haggle",
+        "Fixer's ear",
+        "NETRUNNER",
+        "IRON",
+        "GHOST",
+    ] {
+        on(&mut deck, &mut st, name);
+        st.tick += 200;
+        if st.tick % 90 < 3 {
+            st.tick += 3;
+        }
+        let file = name.replace([' ', '\''], "_").to_lowercase();
+        shot_stack(
+            &format!("skill_card_{file}_100x30"),
+            &st,
+            &[&map, &deck],
+            (100, 30),
+        );
+    }
+    on(&mut deck, &mut st, "ICE breaker");
+    st.tick += 200;
+    shot_stack(
+        "skill_card_ice_breaker_120x40",
+        &st,
+        &[&map, &deck],
+        (120, 40),
+    );
+    on(&mut deck, &mut st, "ICE breaker");
+    st.tick += 3;
+    shot_stack("skill_card_scanning_100x30", &st, &[&map, &deck], (100, 30));
+}
+
+/// The creation wizard's SKILLS step with VEX's build: NETRUNNER's card, Hacking's and
+/// IRON's at the minimum terminal, then NETRUNNER's at 120x40.
+#[test]
+#[ignore]
+fn creation_skill_cards() {
+    let mut st = AppState::new();
+    let mut create = crate::screens::create::chooser::Chooser::new(&st, 0).choose(&mut st);
+    // A step a frame: back from SUMMARY past NAME to SKILLS.
+    create.update(&mut st, &[key(KeyCode::Esc)]);
+    create.update(&mut st, &[key(KeyCode::Esc)]);
+    // Down from NETRUNNER: Hacking is one row on, IRON eight.
+    for (name, downs) in [("netrunner", 0), ("hacking", 1), ("iron", 7)] {
+        create.update(&mut st, &vec![key(KeyCode::Down); downs]);
+        st.tick += 200;
+        shot_stack(
+            &format!("creation_{name}_100x30"),
+            &st,
+            &[&create],
+            (100, 30),
+        );
+    }
+    let mut create = crate::screens::create::chooser::Chooser::new(&st, 0).choose(&mut st);
+    // A step a frame: back from SUMMARY past NAME to SKILLS.
+    create.update(&mut st, &[key(KeyCode::Esc)]);
+    create.update(&mut st, &[key(KeyCode::Esc)]);
+    st.tick += 200;
+    shot_stack("creation_netrunner_120x40", &st, &[&create], (120, 40));
+}

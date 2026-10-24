@@ -6,6 +6,9 @@ use crate::content::Content;
 use crate::model::*;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// The SP every level up brings.
+pub const SP_PER_LEVEL: u32 = 100;
+
 /// A copy's id, unique for the character that made it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CopyId(pub u32);
@@ -485,7 +488,8 @@ impl Character {
     }
 
     /// Adds points and levels up while the threshold is crossed; returns the levels
-    /// gained. Level 255 never gains another; the points still add.
+    /// gained. Each level brings a talent point and `SP_PER_LEVEL` SP. Level 255
+    /// never gains another; the points still add.
     pub fn gain_xp(&mut self, points: u32) -> u8 {
         self.xp = self.xp.saturating_add(points);
         let mut gained = 0u8;
@@ -495,6 +499,7 @@ impl Character {
             gained += 1;
         }
         self.talent_points += gained as u32;
+        self.sp = self.sp.saturating_add(SP_PER_LEVEL * gained as u32);
         gained
     }
 
@@ -1034,7 +1039,11 @@ mod tests {
         spare.origin = Some(OriginId::new("vat_grown"));
         spare.profession = Some(ProfessionId::new("techie"));
         let ch = Character::from_build(&c, &spare);
-        assert_eq!((ch.stat_points, ch.sp), (20, 6), "unspent pools ride along");
+        assert_eq!(
+            (ch.stat_points, ch.sp),
+            (20, 600),
+            "unspent pools ride along"
+        );
         assert_eq!(ch.credits, 300);
         assert_eq!(ch.handle, "Nix");
     }
@@ -1305,17 +1314,18 @@ mod tests {
     }
 
     #[test]
-    fn a_level_brings_a_talent_point() {
+    fn a_level_brings_a_talent_point_and_sp() {
         let c = Content::load().unwrap();
         let mut ch = vex(&c);
         ch.talent_points = 0;
+        ch.sp = 0;
         assert_eq!(ch.gain_xp(Character::xp_to_next(1)), 1);
-        assert_eq!(ch.talent_points, 1);
+        assert_eq!((ch.talent_points, ch.sp), (1, 100));
         assert_eq!(
             ch.gain_xp(Character::xp_to_next(2) + Character::xp_to_next(3)),
             2
         );
-        assert_eq!(ch.talent_points, 3);
+        assert_eq!((ch.talent_points, ch.sp), (3, 300));
     }
 
     #[test]

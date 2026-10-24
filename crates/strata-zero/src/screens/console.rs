@@ -101,7 +101,11 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             let gained = st.character.gain_xp(n);
             let level = st.character.level;
             for i in (0..gained).rev() {
-                st.story(format!("level {} · a talent point", level - i));
+                st.story(format!(
+                    "level {} · a talent point · {} SP",
+                    level - i,
+                    game::SP_PER_LEVEL
+                ));
             }
             Ok(format!("+{n} xp"))
         }
@@ -806,7 +810,7 @@ mod tests {
         assert_eq!((st.character.level, st.character.xp), (2, 50));
         assert_eq!(
             st.log.latest().map(|e| e.marked()),
-            Some("▸ level 2 · a talent point".to_string())
+            Some("▸ level 2 · a talent point · 100 SP".to_string())
         );
         assert_eq!(run(&mut st, at, "xp x").unwrap_err(), "xp <points>");
         st.character.level = u8::MAX;
@@ -827,9 +831,10 @@ mod tests {
                 .unwrap()
                 .contains("throw <item> [n]")
         );
-        assert_eq!(run(&mut st, at, "sp 2").unwrap(), "sp 2");
+        // On top of the 100 the level above brought.
+        assert_eq!(run(&mut st, at, "sp 200").unwrap(), "sp 300");
         assert_eq!(run(&mut st, at, "pts 3").unwrap(), "points 3");
-        assert_eq!((st.character.sp, st.character.stat_points), (2, 3));
+        assert_eq!((st.character.sp, st.character.stat_points), (300, 3));
         assert_eq!(run(&mut st, at, "sp x").unwrap_err(), "sp <points>");
         assert!(run(&mut st, at, "help").unwrap().contains("pts"));
     }
@@ -985,13 +990,13 @@ mod tests {
             run(&mut st, at, "talent ice_pick").unwrap_err(),
             "already at its best"
         );
-        // A level brings a point and the log says so.
+        // A level brings a point and SP, and the log says so.
         let before = st.character.talent_points;
         run(&mut st, at, "xp 200").unwrap();
         assert_eq!(st.character.talent_points, before + 1);
         assert_eq!(
             st.log.latest().map(|e| e.text.as_str()),
-            Some("level 2 · a talent point")
+            Some("level 2 · a talent point · 100 SP")
         );
     }
 

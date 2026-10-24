@@ -37,8 +37,6 @@ pub enum Pick {
     Act(Action),
     /// Moves the player: jacks or stairs. Jacks pop with a glitch.
     World(WorldAct),
-    /// Shows these lines in place of the rows; Esc returns to the rows.
-    Card(Vec<Line<'static>>),
     /// Opens an item's blueprint window in place of the popup: from the rack the item
     /// worn, from the pack one carried; `copy` names which, for an item held per copy.
     Blueprint {
@@ -492,11 +490,6 @@ impl Popup {
                     fx: TransitionKind::None,
                 }
             }
-            Pick::Card(lines) => {
-                self.card = Some(lines);
-                self.opened = st.tick;
-                ScreenCmd::Stay
-            }
             Pick::View(section) => {
                 st.sidebar.toggle(section);
                 ScreenCmd::Pop {
@@ -893,7 +886,10 @@ mod tests {
             vec![Choice::new(
                 'i',
                 "inspect",
-                Pick::Card(vec![Line::from("a spool")]),
+                Pick::Talk {
+                    lines: vec![Line::from("a spool")],
+                    said: "a spool".into(),
+                },
             )],
             0,
         );
@@ -947,7 +943,14 @@ mod tests {
         let line = format!("{} {} {}", "x".repeat(23), "y".repeat(23), "z".repeat(23));
         let mut p = Popup::verbs(
             "WRAP",
-            vec![Choice::new('l', "look", Pick::Card(vec![Line::from(line)]))],
+            vec![Choice::new(
+                'l',
+                "look",
+                Pick::Talk {
+                    lines: vec![Line::from(line.clone())],
+                    said: line,
+                },
+            )],
             0,
         );
         p.update(&mut st, &[key(KeyCode::Char('l'))]);
@@ -1069,7 +1072,10 @@ mod tests {
             vec![Choice::new(
                 'i',
                 "Inspect",
-                Pick::Card(vec![Line::from("a spool")]),
+                Pick::Talk {
+                    lines: vec![Line::from("a spool")],
+                    said: "a spool".into(),
+                },
             )],
             0,
         );

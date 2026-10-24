@@ -18,6 +18,8 @@ pub mod panel;
 pub mod pixels;
 pub mod preview;
 pub mod sidebar;
+pub mod skill_art;
+pub mod skill_card;
 pub mod stickers;
 pub mod talents;
 pub mod transition;

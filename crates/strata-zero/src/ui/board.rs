@@ -157,7 +157,7 @@ mod tests {
         let state = BoardState {
             owned_cats: &none,
             owned_skills: &no_skills,
-            sp_left: 6,
+            sp_left: 600,
             open: &none,
         };
         let rows = board_rows(&c, &state, 0, None);
@@ -165,7 +165,7 @@ mod tests {
         assert!(rows.iter().all(|r| r.line.to_string().starts_with("◇ ")));
         let first = rows[0].line.to_string();
         assert!(
-            first.contains("NETRUNNER") && first.contains("2 SP"),
+            first.contains("NETRUNNER") && first.contains("200 SP"),
             "{first}"
         );
         assert!(rows.iter().all(|r| r.selectable));
@@ -188,7 +188,7 @@ mod tests {
             "{texts:?}"
         );
         assert!(
-            texts[2].contains("├─ ◆ ICE breaker") && texts[2].contains("1 SP"),
+            texts[2].contains("├─ ◆ ICE breaker") && texts[2].contains("100 SP"),
             "{texts:?}"
         );
         assert!(

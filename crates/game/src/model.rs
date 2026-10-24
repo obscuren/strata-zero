@@ -717,6 +717,37 @@ pub struct Skill {
     pub name: String,
     pub stat: Stat,
     pub desc: String,
+    /// The stats it asks for, each 1 to 10; shown on its card, not yet enforced.
+    #[serde(default)]
+    pub needs: Vec<(Stat, u8)>,
+    /// The skills it wants first; shown on its card, not yet enforced.
+    #[serde(default)]
+    pub after: Vec<SkillId>,
+}
+
+/// Text over a drawing's folded cells: cell x, cell y, the text, its ink and ground.
+pub type ArtLabel = (u16, u16, String, (u8, u8, u8), (u8, u8, u8));
+
+/// A skill's art is this many pixels wide and tall, two pixels to a cell stacked.
+pub const SKILL_ART_W: usize = 34;
+pub const SKILL_ART_H: usize = 20;
+
+/// A skill's drawing on its card, `SKILL_ART_W` by `SKILL_ART_H` pixels.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum SkillArt {
+    /// Hardware in its own colours: one char per pixel, `.` empty, as a sticker picture.
+    Hardware {
+        rows: Vec<String>,
+        colours: BTreeMap<char, (u8, u8, u8)>,
+        #[serde(default)]
+        labels: Vec<ArtLabel>,
+    },
+    /// A neon sign: `#` a tube in the skill's stat colour, `+` a tube in the accent, `.`
+    /// the plate.
+    Neon {
+        rows: Vec<String>,
+        accent: (u8, u8, u8),
+    },
 }
 
 /// What one rank of a talent adds.
@@ -826,6 +857,9 @@ pub struct CategorySkill {
 pub enum Unlock {
     Workbench,
 }
+
+/// SP comes in steps of this: every price and the creation budget is a multiple of it.
+pub const SP_STEP: u32 = 50;
 
 /// A skill category: costs SP to own, then its skills cost SP each.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
