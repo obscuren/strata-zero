@@ -8,6 +8,7 @@ use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::messages::Kind;
 use crate::render::map::MapRef;
 use crate::render::memmap::MemoryMap;
+use crate::screens::create::stat_colour;
 use crate::screens::kit::Kit;
 use crate::screens::popup::{Choice, Pick, Popup};
 use crate::screens::workbench::Workbench;
@@ -1455,6 +1456,53 @@ pub(crate) fn status_strip(buf: &mut Buffer, st: &AppState, x: u16, y: u16, righ
     put(buf, x, y, &shown, style, right);
 }
 
+/// The SKILLS list's head, on a bar the cursor's colour across the list: every stat by
+/// its short name in its colour with its value, gear counted, and the SP to spend at the
+/// right. Short of room the stats close up: one cell apart, then each value against its
+/// name.
+fn stat_bar(buf: &mut Buffer, st: &AppState, area: Rect) {
+    let (y, right) = (area.y, area.right());
+    for cx in area.x..right {
+        buf[(cx, y)].set_char(' ').set_bg(BAR_BG);
+    }
+    let bar = Style::default().bg(BAR_BG);
+    let sp = st.character.sp.to_string();
+    let sp_x = right.saturating_sub(sp.len() as u16 + 4);
+    put(
+        buf,
+        sp_x,
+        y,
+        &sp,
+        bar.fg(TEXT).add_modifier(Modifier::BOLD),
+        right,
+    );
+    put(buf, sp_x + sp.len() as u16, y, " SP", bar.fg(DIM), right);
+    let stats: Vec<(Stat, String)> = Stat::ALL
+        .iter()
+        .map(|&s| (s, st.character.stat(&st.content, s).to_string()))
+        .collect();
+    let width = |gap: usize, pad: usize| {
+        let cells: usize = stats
+            .iter()
+            .map(|(s, v)| s.short().len() + pad + v.len())
+            .sum();
+        cells + gap * (stats.len() - 1)
+    };
+    let room = sp_x.saturating_sub(area.x + 2) as usize;
+    let (gap, pad) = [(2, 1), (1, 1), (1, 0)]
+        .into_iter()
+        .find(|&(gap, pad)| width(gap, pad) <= room)
+        .unwrap_or((1, 0));
+    let mut x = area.x + 1;
+    for (s, v) in &stats {
+        let name = bar.fg(stat_colour(*s)).add_modifier(Modifier::BOLD);
+        put(buf, x, y, s.short(), name, sp_x);
+        x += (s.short().len() + pad) as u16;
+        put(buf, x, y, v, bar.fg(TEXT), sp_x);
+        x += (v.len() + gap) as u16;
+    }
+}
+
 impl Screen for Deck {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
         self.note_new_categories(st);
@@ -1646,7 +1694,12 @@ impl Screen for Deck {
             let list_w = (body.width * 2 / 5)
                 .max(28)
                 .min(body.width.saturating_sub(10));
-            let list = Rect::new(body.x, body.y, list_w, body.height);
+            let mut list = Rect::new(body.x, body.y, list_w, body.height);
+            // SKILLS heads its list with the stats and the SP to spend, then a blank row.
+            if self.tab == Tab::Skills && list.height > 2 {
+                stat_bar(buf, st, Rect::new(list.x, list.y, list.width, 1));
+                list = Rect::new(list.x, list.y + 2, list.width, list.height - 2);
+            }
             let detail = Rect::new(
                 body.x + list_w + 1,
                 body.y,
@@ -2872,6 +2925,60 @@ mod tests {
         st.tick = 500;
         d.update(&mut st, &[]);
         assert_eq!(d.changed, 500);
+    }
+
+    /// The cells of row `y` from `x0` to `x1`, as text.
+    fn cells(b: &Buffer, x0: u16, x1: u16, y: u16) -> String {
+        (x0..x1).map(|x| b[(x, y)].symbol()).collect()
+    }
+
+    #[test]
+    fn skills_board_heads_with_the_stats_and_the_sp_to_spend() {
+        let mut st = state();
+        st.character.sp = 250;
+        let mut d = on_skill(&mut st, "NETRUNNER");
+        let b = screen(&d, &st, 100, 30);
+        let (list, _) = d.last_list.get();
+        let bar = list.y - 2;
+        let text = cells(&b, list.x, list.right(), bar);
+        // VEX: body 4, reflex 6, tech 5, cool 5, net 6 and the deck's +1.
+        assert_eq!(st.character.stat(&st.content, Stat::Net), 7);
+        for want in ["BOD 4", "REF 6", "TEC 5", "COL 5", "NET 7"] {
+            assert!(text.contains(want), "{want}: {text:?}");
+        }
+        assert!(text.trim_end().ends_with("250 SP"), "{text:?}");
+        assert!(
+            (list.x..list.right()).all(|x| b[(x, bar)].bg == BAR_BG),
+            "the bar is the list's full width"
+        );
+        let net = list.x + text.find("NET").unwrap() as u16;
+        assert_eq!(b[(net, bar)].fg, stat_colour(Stat::Net));
+        let body = list.x + text.find("BOD").unwrap() as u16;
+        assert_eq!(b[(body, bar)].fg, stat_colour(Stat::Body));
+        assert_eq!(cells(&b, list.x, list.right(), bar + 1).trim(), "");
+        assert!(cells(&b, list.x, list.right(), list.y).contains("NETRUNNER"));
+
+        // Every stat at ten and four figures of SP still fit the minimum terminal.
+        st.character.stats = game::Stats {
+            body: 10,
+            reflex: 10,
+            tech: 10,
+            cool: 10,
+            net: 10,
+        };
+        st.character.sp = 1250;
+        let b = screen(&d, &st, 100, 30);
+        let text = cells(&b, list.x, list.right(), bar);
+        for want in ["BOD", "REF", "TEC", "COL", "NET10"] {
+            assert!(text.contains(want), "{want}: {text:?}");
+        }
+        assert!(text.trim_end().ends_with("1250 SP"), "{text:?}");
+
+        // Only SKILLS has the bar.
+        d.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert_ne!(d.tab, Tab::Skills);
+        screen(&d, &st, 100, 30);
+        assert_eq!(d.last_list.get().0.y, bar);
     }
 
     #[test]

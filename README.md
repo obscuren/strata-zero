@@ -408,7 +408,8 @@ rain, fps) · quit to title · quit game
 **Deck** (`tab`) `Q` `E` (either case) or `1`-`8` tabs (`0` is talents too); the
 arrows never change tabs · `↑↓` rows · `space` act on a row · `tab` or `esc` close;
 it reopens where you left it. Q and E sit as keycaps at the ends of the tab bar, in
-the frame's sides; past 120 columns the bar stays that wide in the middle. Tabs: skills (the category board:
+the frame's sides; past 120 columns the bar stays that wide in the middle. Tabs: skills (the category board,
+under a bar with your five stats, gear counted, and the SP you have to spend;
 it opens with only what you own unfolded; `←→` unfold and fold any category, `space`
 folds one you own and asks before it buys anything else with SP; a skill's card shows its
 drawing, grey or cold until you learn it, its price, the stats and skills it asks for,
