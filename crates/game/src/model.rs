@@ -438,6 +438,17 @@ impl Stat {
             Stat::Net => "net",
         }
     }
+
+    /// Three letters in caps, for a line with no room for the names.
+    pub fn short(self) -> &'static str {
+        match self {
+            Stat::Body => "BOD",
+            Stat::Reflex => "REF",
+            Stat::Tech => "TEC",
+            Stat::Cool => "COL",
+            Stat::Net => "NET",
+        }
+    }
 }
 
 /// A modifier an item applies while it is equipped.
