@@ -28,6 +28,11 @@ impl Frame {
         }
     }
 
+    /// Every pixel the default background.
+    pub fn blank(&mut self) {
+        self.px.fill(BG);
+    }
+
     /// Fills `[x0, x1) × [y0, y1)`, clipped to the frame.
     fn fill(&mut self, x0: usize, y0: usize, x1: usize, y1: usize, c: u32) {
         let (x1, y1) = (x1.min(self.w), y1.min(self.h));
@@ -124,6 +129,11 @@ impl Canvas {
 
     pub fn cell(&self) -> CellMetrics {
         self.cell
+    }
+
+    /// The cell for text `px` pixels high.
+    pub fn metrics_at(&self, px: f32) -> CellMetrics {
+        self.fonts.metrics(px)
     }
 
     pub fn px(&self) -> f32 {

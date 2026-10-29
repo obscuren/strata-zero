@@ -24,7 +24,9 @@ pub enum Shortcut {
 
 /// A key event: `pressed` is false for a release (a held key's repeats are presses, as a
 /// terminal's are); `logical` is the key with every modifier applied, `bare` the key
-/// without them (Ctrl and Alt chords read the bare key, so Alt+A is `a`, not `å`).
+/// without them. Ctrl chords read the bare key (Ctrl+C is `c`). Option types what the
+/// layout puts there, as Terminal.app does: `@` and `[` on German keyboards, `å` on a
+/// US one, with no ALT modifier, since no screen reads Alt chords and nano drops them.
 pub fn translate(pressed: bool, logical: &Key, bare: &Key, mods: ModifiersState) -> Input {
     if !pressed {
         return Input::Nothing;
@@ -39,7 +41,7 @@ pub fn translate(pressed: bool, logical: &Key, bare: &Key, mods: ModifiersState)
     if mods.control_key() {
         m |= KeyModifiers::CONTROL;
     }
-    if mods.alt_key() {
+    if mods.alt_key() && mods.control_key() {
         m |= KeyModifiers::ALT;
     }
     let code = match logical {
@@ -48,11 +50,7 @@ pub fn translate(pressed: bool, logical: &Key, bare: &Key, mods: ModifiersState)
             None => return Input::Nothing,
         },
         Key::Character(_) => {
-            let key = if mods.control_key() || mods.alt_key() {
-                bare
-            } else {
-                logical
-            };
+            let key = if mods.control_key() { bare } else { logical };
             match key {
                 Key::Character(s) => match s.chars().next() {
                     Some(c) => KeyCode::Char(c),
@@ -182,14 +180,27 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_and_alt_use_the_bare_key() {
+    fn ctrl_uses_the_bare_key() {
         assert_eq!(
             translate(true, &ch("\u{3}"), &ch("c"), ModifiersState::CONTROL),
             game(KeyCode::Char('c'), KeyModifiers::CONTROL)
         );
+    }
+
+    #[test]
+    fn option_types_what_the_layout_puts_there() {
+        // German layout: Option+L is `@`, Option+5 is `[`.
+        assert_eq!(
+            translate(true, &ch("@"), &ch("l"), ModifiersState::ALT),
+            game(KeyCode::Char('@'), KeyModifiers::NONE)
+        );
+        assert_eq!(
+            translate(true, &ch("["), &ch("5"), ModifiersState::ALT),
+            game(KeyCode::Char('['), KeyModifiers::NONE)
+        );
         assert_eq!(
             translate(true, &ch("å"), &ch("a"), ModifiersState::ALT),
-            game(KeyCode::Char('a'), KeyModifiers::ALT)
+            game(KeyCode::Char('å'), KeyModifiers::NONE)
         );
     }
 

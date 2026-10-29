@@ -10,11 +10,15 @@ use std::io;
 
 pub struct PixelBackend {
     canvas: Canvas,
-    /// What each cell shows, so a redraw of either half of a wide glyph repaints it whole.
+    /// What each cell shows, so a redraw of either half of a wide glyph repaints it whole
+    /// and a resize keeps the picture.
     grid: Vec<Cell>,
     cols: u16,
     rows: u16,
     dirty: bool,
+    /// `clear` was called: the frame is blanked by the draw that follows it, not at once,
+    /// so a window redraw in between never shows an empty frame.
+    blank_pending: bool,
 }
 
 impl PixelBackend {
@@ -26,13 +30,16 @@ impl PixelBackend {
             cols: 0,
             rows: 0,
             dirty: true,
+            blank_pending: false,
         };
         b.regrid();
         b
     }
 
-    /// A new pixel size: a blank frame, and a new grid when the cell count changed
-    /// (ratatui then redraws every cell), else the old grid repainted.
+    /// A new pixel size. The grid keeps what fits and is repainted at once. Cells that
+    /// fell off are gone, so the caller clears the terminal before its next draw: ratatui
+    /// only resends everything when it sees the size change itself, which a resize there
+    /// and back between two frames hides from it.
     pub fn resize(&mut self, width: usize, height: usize) {
         self.canvas.resize(width, height);
         self.regrid();
@@ -48,6 +55,11 @@ impl PixelBackend {
 
     pub fn px(&self) -> f32 {
         self.canvas.px()
+    }
+
+    /// The cell for text `px` pixels high, whatever the current size.
+    pub fn metrics_at(&self, px: f32) -> super::font::CellMetrics {
+        self.canvas.metrics_at(px)
     }
 
     pub fn frame(&self) -> &Frame {
@@ -69,15 +81,25 @@ impl PixelBackend {
         let (cw, ch) = self.cell_px();
         let cols = (self.canvas.frame.w / cw).clamp(1, u16::MAX as usize) as u16;
         let rows = (self.canvas.frame.h / ch).clamp(1, u16::MAX as usize) as u16;
-        if (cols, rows) == (self.cols, self.rows) {
-            for i in 0..self.grid.len() {
-                let (x, y) = ((i % cols as usize) as u16, (i / cols as usize) as u16);
-                self.paint(x, y);
+        if (cols, rows) != (self.cols, self.rows) {
+            let mut grid = vec![Cell::default(); cols as usize * rows as usize];
+            for y in 0..rows.min(self.rows) as usize {
+                for x in 0..cols.min(self.cols) as usize {
+                    grid[y * cols as usize + x] = self.grid[y * self.cols as usize + x].clone();
+                }
             }
-        } else {
+            self.grid = grid;
             self.cols = cols;
             self.rows = rows;
-            self.grid = vec![Cell::default(); cols as usize * rows as usize];
+        }
+        for y in 0..rows {
+            let mut x = 0;
+            while x < cols {
+                let cell = &self.grid[y as usize * cols as usize + x as usize];
+                let span = span_of(cell).min(cols - x);
+                self.canvas.paint(x, y, cell, span);
+                x += span;
+            }
         }
         self.dirty = true;
     }
@@ -101,10 +123,19 @@ impl Backend for PixelBackend {
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
+        if std::mem::take(&mut self.blank_pending) {
+            self.canvas.frame.blank();
+        }
         let mut changed = Vec::new();
         for (x, y, cell) in content {
             if x < self.cols && y < self.rows {
-                self.grid[y as usize * self.cols as usize + x as usize] = cell.clone();
+                let i = y as usize * self.cols as usize + x as usize;
+                self.grid[i] = cell.clone();
+                // ratatui never sends the cell a wide glyph covers; blank it so an old
+                // glyph there can't be repainted over this one.
+                if span_of(cell) == 2 && x + 1 < self.cols {
+                    self.grid[i + 1] = Cell::default();
+                }
                 changed.push((x, y));
             }
         }
@@ -133,8 +164,7 @@ impl Backend for PixelBackend {
 
     fn clear(&mut self) -> io::Result<()> {
         self.grid.fill(Cell::default());
-        let (w, h) = (self.canvas.frame.w, self.canvas.frame.h);
-        self.canvas.resize(w, h);
+        self.blank_pending = true;
         self.dirty = true;
         Ok(())
     }
@@ -246,5 +276,64 @@ mod tests {
         let blank = Cell::default();
         b.draw([(1, 0, &blank)].into_iter()).unwrap();
         assert!(ink(&b), "a redraw of the second cell keeps the glyph");
+    }
+
+    #[test]
+    fn a_wide_glyph_moved_left_leaves_no_ghost() {
+        let Some(mut b) = backend(10, 3) else { return };
+        let (cw, ch) = b.cell_px();
+        let mut wide = Cell::default();
+        wide.set_symbol("⚡").set_fg(Color::Rgb(200, 0, 0));
+        b.draw([(1, 0, &wide)].into_iter()).unwrap();
+        // ratatui moves it one left: the glyph at 0, the freed cell 2; never cell 1.
+        let blank = Cell::default();
+        b.draw([(0, 0, &wide), (2, 0, &blank)].into_iter()).unwrap();
+        let bg = crate::window::raster::BG;
+        assert!((0..ch).all(|y| (2 * cw..3 * cw).all(|x| pixel(&b, x, y) == bg)));
+    }
+
+    #[test]
+    fn a_resize_keeps_the_picture() {
+        let Some(b) = backend(10, 3) else { return };
+        let mut t = Terminal::new(b).unwrap();
+        t.draw(|f| red_block(f, 0, 0)).unwrap();
+        t.backend_mut().set_px(30.0);
+        let b = t.backend_mut();
+        let (cw, ch) = b.cell_px();
+        assert_eq!(pixel(b, cw - 1, ch - 1), RED, "repainted before any draw");
+    }
+
+    #[test]
+    fn clear_blanks_at_the_next_draw_not_before() {
+        let Some(b) = backend(10, 3) else { return };
+        let mut t = Terminal::new(b).unwrap();
+        t.draw(|f| red_block(f, 0, 0)).unwrap();
+        t.clear().unwrap();
+        assert_eq!(
+            pixel(t.backend(), 0, 0),
+            RED,
+            "a redraw now shows the old frame"
+        );
+        t.draw(|_| {}).unwrap();
+        assert_eq!(pixel(t.backend(), 0, 0), crate::window::raster::BG);
+    }
+
+    #[test]
+    fn a_resize_there_and_back_then_a_clear_repaints_every_cell() {
+        let Some(b) = backend(10, 3) else { return };
+        let mut t = Terminal::new(b).unwrap();
+        let draw = |f: &mut ratatui::Frame| {
+            red_block(f, 0, 0);
+            red_block(f, 9, 2);
+        };
+        t.draw(draw).unwrap();
+        // Bigger text drops the far corner; back again, ratatui sees no size change.
+        t.backend_mut().set_px(40.0);
+        t.backend_mut().set_px(20.0);
+        t.clear().unwrap();
+        t.draw(draw).unwrap();
+        let b = t.backend();
+        let (cw, ch) = b.cell_px();
+        assert_eq!(pixel(b, 10 * cw - 1, 3 * ch - 1), RED);
     }
 }

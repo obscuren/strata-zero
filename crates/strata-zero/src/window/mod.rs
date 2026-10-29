@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
+use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::ModifiersState;
@@ -55,6 +55,7 @@ pub fn run(screen: Box<dyn Screen>, st: AppState) -> Result<()> {
         keys: Vec::new(),
         mods: ModifiersState::empty(),
         zoom: 1.0,
+        regridded: false,
         next: Instant::now(),
         frames: 0,
         shot: std::env::var_os("STRATA_WINDOW_SHOT").map(PathBuf::from),
@@ -97,6 +98,9 @@ struct App {
     keys: Vec<KeyEvent>,
     mods: ModifiersState,
     zoom: f32,
+    /// The grid was rebuilt (a resize, a new scale or zoom): the next frame clears the
+    /// terminal so ratatui resends every cell.
+    regridded: bool,
     /// When the next frame is due.
     next: Instant,
     frames: u64,
@@ -107,24 +111,19 @@ struct App {
 impl App {
     fn open(&mut self, el: &ActiveEventLoop) -> Result<()> {
         let fonts = self.fonts.take().context("the window is made once")?;
+        // A first guess in logical pixels; `fit` sets the exact sizes once the window's
+        // scale is known, as cell sizes don't scale exactly (SF Mono is 9 px wide at
+        // 15 px and 19 px at 30).
         let cell = fonts.metrics(TEXT_PX);
-        let cells = |cols: u16, rows: u16| {
-            LogicalSize::new(
-                (cell.w * cols as usize) as f64,
-                (cell.h * rows as usize) as f64,
-            )
-        };
-        let mut size = cells(OPEN.0, OPEN.1);
-        if let Some(m) = el.primary_monitor() {
-            let screen = m.size().to_logical::<f64>(m.scale_factor());
-            size.width = size.width.min(screen.width * 0.9);
-            size.height = size.height.min(screen.height * 0.9);
-        }
         let attrs = Window::default_attributes()
             .with_title("Strata Zero")
-            .with_inner_size(size)
-            .with_min_inner_size(cells(MIN_W, MIN_H));
+            .with_inner_size(LogicalSize::new(
+                (cell.w * OPEN.0 as usize) as f64,
+                (cell.h * OPEN.1 as usize) as f64,
+            ));
         let window = Rc::new(el.create_window(attrs)?);
+        let cell = fonts.metrics(TEXT_PX * window.scale_factor() as f32);
+        fit(&window, cell, true);
         let context = softbuffer::Context::new(window.clone()).map_err(sb)?;
         let surface = softbuffer::Surface::new(&context, window.clone()).map_err(sb)?;
         let px = self.text_px(&window);
@@ -149,6 +148,9 @@ impl App {
         let Some(live) = self.live.as_mut() else {
             return Ok(());
         };
+        if std::mem::take(&mut self.regridded) {
+            live.term.clear()?;
+        }
         let keys = std::mem::take(&mut self.keys);
         if !self.runner.frame(&mut live.term, &keys)? {
             el.exit();
@@ -216,12 +218,33 @@ impl App {
         if live.term.backend().px() != px {
             live.term.backend_mut().set_px(px);
             live.window.request_redraw();
+            self.regridded = true;
         }
     }
 
     fn fail(&mut self, el: &ActiveEventLoop, e: anyhow::Error) {
         self.error.get_or_insert(e);
         el.exit();
+    }
+}
+
+/// The window's minimum, 100×30 cells of `cell` (the cell at the window's scale and
+/// zoom 1), and when `open` its size, 120×40 cells within 90% of its screen.
+fn fit(window: &Window, cell: font::CellMetrics, open: bool) {
+    let cells = |cols: u16, rows: u16| {
+        PhysicalSize::new(
+            (cell.w * cols as usize) as u32,
+            (cell.h * rows as usize) as u32,
+        )
+    };
+    window.set_min_inner_size(Some(cells(MIN_W, MIN_H)));
+    if open {
+        let mut size = cells(OPEN.0, OPEN.1);
+        if let Some(m) = window.current_monitor() {
+            size.width = size.width.min(m.size().width * 9 / 10);
+            size.height = size.height.min(m.size().height * 9 / 10);
+        }
+        let _ = window.request_inner_size(size);
     }
 }
 
@@ -247,9 +270,19 @@ impl ApplicationHandler for App {
                     let backend = live.term.backend_mut();
                     backend.resize(size.width as usize, size.height as usize);
                     live.window.request_redraw();
+                    self.regridded = true;
                 }
             }
-            WindowEvent::ScaleFactorChanged { .. } => self.rescale(),
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                if let Some(live) = self.live.as_ref() {
+                    let cell = live
+                        .term
+                        .backend()
+                        .metrics_at(TEXT_PX * scale_factor as f32);
+                    fit(&live.window, cell, false);
+                }
+                self.rescale();
+            }
             WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
             WindowEvent::KeyboardInput {
                 event,
