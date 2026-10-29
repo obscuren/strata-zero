@@ -574,9 +574,10 @@ Five asks from Jeffrey once the sheet was in, made on top of the attributes rena
 3. **`space allocates attribute`.** The left pane's hint reads `←↑↓→ select · space
    allocates attribute · → over to the chrome · Q/E tabs · tab close`.
 4. **A blank row under each header.** ATTRIBUTES, SECONDARY and RESISTANCES each have an
-   empty row between the header and the tiles; the blank rows between blocks and the
-   rule over the readout stay. At 100×30 the readout has the three rows left and gives
-   way as before (blank rows, then the blurb, the sources last); at 120×40 it has eight.
+   empty row between the header and the tiles; the blank rows between blocks stay. The
+   readout's rule sits right under the RESISTANCES tiles (it separates them itself), so
+   at 100×30 the readout keeps four rows and gives way as before (blank rows, then the
+   blurb, the sources last); at 120×40 it has nine.
 5. **Space swaps, `x` pulls.** `space` on installed chrome opens the FITS picker for that
    site or socket as on an empty one, the card's second line `replaces Piston arm`;
    `space` on a pick installs it and sends what was there to the pack (a limb with what

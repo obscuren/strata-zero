@@ -31,12 +31,13 @@ use std::ops::Range;
 const PANE_W: u16 = 43;
 /// The rule between the panes, from the body's left edge.
 const RULE_X: u16 = 45;
-/// The rule over the readout, and the readout under it, from the body's top.
-const READOUT_RULE: u16 = 18;
-const READOUT_Y: u16 = 19;
+/// The rule over the readout, right under the last block's tiles (it separates them
+/// itself), and the readout under it, from the body's top.
+const READOUT_RULE: u16 = 17;
+const READOUT_Y: u16 = 18;
 
 /// The left pane's blocks of tiles, in `Num::ALL` order: a header's title, the row
-/// it sits on, and each tile's width. A blank row follows each block.
+/// it sits on, and each tile's width. A blank row parts one block from the next.
 const BLOCKS: [(&str, u16, u16); 3] = [
     ("ATTRIBUTES", 0, 8),
     ("SECONDARY", 6, 7),
@@ -913,11 +914,15 @@ mod tests {
         );
         assert_eq!(cells(buf, 2, 17, 11), "RESISTANCES");
         assert_eq!(cells(buf, 2, 19, 14), "┌ KIN ┐┌ THM ┐");
-        // Blank: under each header, between the blocks, and over the readout's rule.
-        for y in [6, 10, 12, 16, 18, 22] {
+        // Blank: under each header and between the blocks; the readout's rule sits right
+        // under the last tiles, and the readout has the four rows under it.
+        for y in [6, 10, 12, 16, 18] {
             assert_eq!(cells(buf, 2, y, 43).trim(), "", "row {y}");
         }
-        assert_eq!(cells(buf, 2, 23, 43), "─".repeat(43), "the rule");
+        assert_eq!(cells(buf, 2, 21, 7), "└─────┘", "KIN's bottom edge");
+        assert_eq!(cells(buf, 2, 22, 43), "─".repeat(43), "the rule");
+        assert_eq!(BODY.bottom() - (BODY.y + READOUT_Y), 4);
+        assert_eq!(cells(buf, 2, 23, 4), "BODY", "the readout under the rule");
         // The deck's +1 net in the NET tile's bottom edge, the jacket's +5 in HP's;
         // with no body SGT moved nothing, so its edge is bare.
         assert_eq!(cells(buf, 34, 9, 8), "└─ +1 ─┘");
@@ -1086,6 +1091,9 @@ mod tests {
             text.lines().next().unwrap().ends_with(&next),
             "right-aligned: {text}"
         );
+        // Four rows at 100×30: the blurb's first line stays, marked cut.
+        assert_eq!(text.lines().count(), 4, "{text}");
+        assert!(text.lines().nth(1).unwrap().ends_with('…'), "{text}");
         assert_eq!(
             buf[(2, BODY.y + READOUT_Y)].fg,
             attribute_colour(Attribute::Body)
