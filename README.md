@@ -384,7 +384,8 @@ gives you the turn again, once a fight; Deadeye marks one goon so your next
 shots land (its chance reads magenta). A throwable arms the cursor: a footprint
 shades the tiles it will reach, the readout says `frag · 6 tiles · blast 2`,
 `space` throws it, `esc` disarms. Frag is a fireball, the flashbang a white
-flash that stuns, the EMP puck a cyan shock that scrambles chrome, the satchel
+flash that stuns, the EMP puck a cyan shock that scrambles chrome, the choke can
+a green haze that poisons, the satchel
 a charge that lies live for a turn with its footprint marked once it lands;
 the goons step out of it and wait at its edge. A stun on you takes the AP of
 each turn it lasts, not the moves. A stim from the deck costs an AP. `.` ends
@@ -415,13 +416,16 @@ folds one you own and asks before it buys anything else with SP; a skill's card 
 drawing, grey or cold until you learn it, its price, the stats and skills it asks for,
 and its line; a category's shows its drawing, its price, its skills and what it grants),
 stats (the
-five stats and your pools; `space` buys a point outright), gear & inventory
+character sheet: on the left the five stats, `space` buys a point outright, then the
+secondary numbers and the six resistances, each tile with a readout that names where
+its number comes from; on the right the chrome ledger, `→` from the last tile of a
+row crosses over and `←` comes back; see Chrome below), gear & inventory
 (below), workbench (WRENCH unlocks it; every recipe is a drawing: `←→` flips
 them, `↑↓` walks the parts, `space` builds once every part is on hand; an item
 whose drawing has parts is drawn exploded, the rest as a process), jobs (in
 hand, on offer, done), journal (empty for now), map (what you remember of this
 stratum) and talents (below). Every list wraps at both ends. GEAR & INVENTORY is
-three panels. The rack is the nine slots as tiles. The pack sits beside it with
+three panels. The rack is the seven slots as tiles; chrome has its own place on STATS. The pack sits beside it with
 a row of kind icons on top: `[` and `]` filter it by kind, and the active icon
 names its kind. The selected item's card sits beside its drawing at half size.
 `←→` move between the rack and the pack. `space` on a tile picks what fits from
@@ -429,6 +433,22 @@ the pack, or unequips and inspects what is worn; on a pack row it opens the
 verbs: Inspect, Equip, Use, Drop one, Drop all. Jacked in, your gear and pack are locked: those verbs dim and only
 Inspect works. In a popup the letter or `enter` fires a row and `esc` closes it;
 a card a row shows closes the popup too.
+
+Chrome is cyberware, and it lives on STATS. Eleven body sites take one piece each:
+neural, eyes, ears, jaw, spine, back, organs, skin, left arm, right arm and legs. An
+arm has two sockets, hand and forearm, that take smaller pieces. The ledger lists
+the sites under head, body and limbs; the card beside it shows the piece's drawing,
+what it costs and what it gives. `space` on an empty site or socket opens a picker
+of what in your pack fits there, `space` again installs it; `space` on a piece pulls
+it back to the pack. Jacked in, chrome is locked like gear is.
+
+Every piece has a load, and the LOAD gauge caps the total. The budget comes from
+your base BODY and COOL; the picker shows what a pick would take. Every piece in
+you also takes 2 off your EMP resistance. What the numbers do: ARM turns 10% of
+the rounds that hit you per point, up to 60%. MOV is the tiles you move a turn in
+a fight on foot. A resistance (KIN, THM, SHK, EMP, TOX, FBK) cuts that kind of
+harm by that many percent, up to 90, and covers a blast's stun as well as its
+damage. A Launcher sleeve in a forearm throws grenades further.
 Inspect on an item opens its blueprint in a window over the deck. The jacked
 deck's blueprint is the deck drawn as hardware: arrows point at a slot, a ROM
 strip, the failsafe or a program in your warez and the deck's glass reads it

@@ -355,6 +355,20 @@ fn combat_shock_mid() {
 
 #[test]
 #[ignore]
+fn combat_haze_mid() {
+    // The act list stops at nine keys, so the satchel gives its up for the choke can.
+    let (mut st, mut map) = runner_aim(Pos::new(12, 8), None);
+    st.character
+        .inventory
+        .retain(|s| s.item != ItemId::new("satchel"));
+    map.update(&mut st, &[]);
+    throw_digit(&mut st, &mut map, '9');
+    at_shape(&mut st, |f| matches!(f, game::Fx::Haze), 1);
+    combat_shot("combat_haze_mid", &st, &map);
+}
+
+#[test]
+#[ignore]
 fn combat_live_satchel() {
     // Two tiles short of the goon, the cursor put away after: the satchel lies live
     // with its fuse, the goon standing in its footprint.
@@ -875,6 +889,103 @@ fn kit_shots(
     deck.update(st, &[key(KeyCode::Char('3'))]);
     set(&mut deck.kit, st);
     deck.kit.changed = st.tick;
+    st.tick += 200;
+    if st.tick % 90 < 3 {
+        st.tick += 3;
+    }
+    for (w, h) in sizes {
+        shot_stack(&format!("{name}_{w}x{h}"), st, &[&map, &deck], (*w, *h));
+    }
+}
+
+/// STATS at each size: the spec's loadout on the Piston arm; the picker on R ARM with
+/// a Grip arm in the pack; the picker on the forearm with a Monowire spool; and the left
+/// pane on EMP, two off for each piece.
+#[test]
+#[ignore]
+fn stats_sheet() {
+    use crate::screens::sheet::{LedgerRow, SheetPane};
+    use game::{Num, Site, Stack};
+    let sizes = [(100, 30), (120, 40)];
+    let fresh = || {
+        let mut st = state_home();
+        st.character = game::Character::debug_runner(&st.content);
+        for (site, item) in [
+            (Site::Neural, "neural_port"),
+            (Site::Eyes, "target_lens"),
+            (Site::Jaw, "bulldog_jaw"),
+            (Site::Spine, "redline_spine"),
+            (Site::Back, "drone_cradle"),
+            (Site::Organs, "adrenal_pump"),
+            (Site::Skin, "subdermal_mesh"),
+            (Site::LeftArm, "piston_arm"),
+        ] {
+            let id = ItemId::new(item);
+            let copy = st.content.item(&id).unwrap().per_copy().then(|| {
+                let mut k = st.character.new_copy(&st.content, &id);
+                if item == "piston_arm" {
+                    let hand = ItemId::new("arc_hand");
+                    let pc = st.character.new_copy(&st.content, &hand);
+                    k.fitted[0] = Some(Stack {
+                        item: hand,
+                        qty: 1,
+                        copy: Some(pc),
+                    });
+                }
+                k
+            });
+            st.character.install(site, id, copy);
+        }
+        st
+    };
+    let mut st = fresh();
+    sheet_shots(&mut st, "stats_ledger_limb", &sizes, |d, _| {
+        d.sheet.state.pane = SheetPane::Ledger;
+        d.sheet.state.row = LedgerRow::Site(Site::LeftArm);
+    });
+
+    let mut st = fresh();
+    st.character
+        .give_item(&st.content, ItemId::new("grip_arm"), 1);
+    sheet_shots(&mut st, "stats_picker_site", &sizes, |d, st| {
+        d.sheet.state.pane = SheetPane::Ledger;
+        d.sheet.state.row = LedgerRow::Site(Site::RightArm);
+        d.update(st, &[key(KeyCode::Char(' '))]);
+    });
+
+    let mut st = fresh();
+    st.character
+        .give_item(&st.content, ItemId::new("monowire_spool"), 1);
+    sheet_shots(&mut st, "stats_picker_socket", &sizes, |d, st| {
+        d.sheet.state.pane = SheetPane::Ledger;
+        d.sheet.state.row = LedgerRow::Socket(Site::LeftArm, 1);
+        d.update(st, &[key(KeyCode::Char(' '))]);
+    });
+
+    let mut st = fresh();
+    let emp = Num::ALL
+        .iter()
+        .position(|&n| n == Num::Resist(game::Harm::Emp))
+        .unwrap();
+    sheet_shots(&mut st, "stats_left_emp", &sizes, |d, _| {
+        d.sheet.state.tile = emp;
+    });
+}
+
+/// The deck on `2` (STATS), `set` applied, then drawn at each size once the card and
+/// the readout have typed out, clear of the deck's signal jitter.
+fn sheet_shots(
+    st: &mut AppState,
+    name: &str,
+    sizes: &[(u16, u16)],
+    set: impl FnOnce(&mut Deck, &mut AppState),
+) {
+    let map = MapScreen::walking(st);
+    let mut deck = Deck::new(st.tick);
+    deck.update(st, &[key(KeyCode::Char('2'))]);
+    set(&mut deck, st);
+    deck.sheet.changed = st.tick;
+    deck.sheet.card = st.tick;
     st.tick += 200;
     if st.tick % 90 < 3 {
         st.tick += 3;
