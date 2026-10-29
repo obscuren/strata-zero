@@ -16,6 +16,7 @@ use crate::ui::chrome::{
     BAR_BG, CYAN, DIM, FAINTER, MAGENTA, RULE, TEXT, put, put_paragraph, reveal, solid,
 };
 // A bonus reads green, what a choice would cost amber: the HUD's own.
+use crate::clinic::Operating;
 use crate::ui::hud::{AMBER, GREEN};
 use citygen::{Place, StratumKind};
 use crossterm::event::KeyCode;
@@ -655,6 +656,8 @@ pub struct Sheet {
     pub changed: u64,
     /// Tick of the last change of the ledger's card: its own typewriter.
     pub card: u64,
+    /// The row `x` asked about: a second `x` there pulls it out and pays the doc.
+    pub pulling: Option<LedgerRow>,
 }
 
 impl Sheet {
@@ -663,6 +666,7 @@ impl Sheet {
             state: SheetState::default(),
             changed: tick,
             card: tick,
+            pulling: None,
         }
     }
 
@@ -680,6 +684,7 @@ impl Sheet {
     pub(crate) fn opened(&mut self, tick: u64) {
         self.state.pane = SheetPane::Left;
         self.state.picker = None;
+        self.pulling = None;
         self.state.tile = self.tile();
         self.changed = tick;
         self.card = tick;
@@ -813,10 +818,15 @@ impl Sheet {
 
         self.draw_right(st, body, buf);
 
+        // Amber while chrome can change: in the doc's chair, or free.
         let rule_x = body.x + RULE_X;
+        let rule = match crate::clinic::operating(st) {
+            Operating::Chair { .. } | Operating::Free => AMBER,
+            Operating::Locked | Operating::Gone { .. } => RULE,
+        };
         if rule_x < body.right() {
             for y in body.y..body.bottom() {
-                buf[(rule_x, y)].set_char('║').set_fg(RULE);
+                buf[(rule_x, y)].set_char('║').set_fg(rule);
             }
         }
     }
@@ -923,16 +933,34 @@ fn header(
     tail: &[(String, Style)],
     lit: bool,
 ) {
+    marked_header(buf, (x0, right), y, title, &[], tail, lit);
+}
+
+/// `header` with a mark straight after the title, before the rule.
+fn marked_header(
+    buf: &mut Buffer,
+    (x0, right): (u16, u16),
+    y: u16,
+    title: &str,
+    mark: &[(String, Style)],
+    tail: &[(String, Style)],
+    lit: bool,
+) {
     let title_style = Style::default()
         .fg(if lit { CYAN } else { DIM })
         .add_modifier(Modifier::BOLD);
     put(buf, x0, y, title, title_style, right);
+    let mut x = x0 + title.chars().count() as u16;
+    for (text, style) in mark {
+        put(buf, x, y, text, *style, right);
+        x += text.chars().count() as u16;
+    }
     let tail_w: u16 = tail
         .iter()
         .map(|(t, _)| t.chars().count() as u16)
         .sum::<u16>()
         + u16::from(!tail.is_empty());
-    let start = x0 + title.chars().count() as u16 + 1;
+    let start = x + 1;
     let end = right.saturating_sub(tail_w);
     if start < end {
         put(

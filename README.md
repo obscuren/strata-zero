@@ -314,7 +314,8 @@ walk · `tab` deck ·
 console (dev mode: `spawn`, `drop`, `give`, `heal`, `xp`, `focus`, `sp`, `pts`, `talent`, `tpts`, `program`, `heat`, `alarm`, `wake`, `engage`, `calm`, `ice`, `failsafe`, `who`
 counts the people out, inside and driving, `clock hh:mm` (or `time hh:mm`) jumps the day there,
 `tp x y` teleports on the current map, `eyes` tints the walkers who see you,
-`light` paints the map grey by its light, `job fetch|copy|plant|deliver` rolls and takes one from the nearest fixer,
+`light` paints the map grey by its light, `ripper` frees chrome (in and out anywhere, no fee),
+`job fetch|copy|plant|deliver` rolls and takes one from the nearest fixer,
 `standing n` sets every fixer's opinion of you, `jobs` lists them, `target name` puts the free camera and the inspector on that person (their building's door when they are inside),
 `foe n` and `dummy n` stand a goon or a training dummy `n` tiles east of you
 (six without `n`), `foes` lists them, `throw item n` throws a grenade `n` tiles
@@ -456,6 +457,18 @@ place that holds a piece the picker says what it `replaces`, and installing swap
 the old piece goes back to the pack (a limb with what is fitted in it), and the
 load counts it leaving. `x` on a piece pulls it back to the pack. Jacked in, chrome
 is locked like gear is.
+
+Chrome only goes in and out at a **ripperdoc's**. Every clinic hides behind a
+front (a noodle bar, a laundromat with the clinic in its cellar, a shuttered
+dentist, a tattoo parlour, a butcher), each on its own hand-laid floor with the
+operating chair in back; Look at the front and it gives itself away. The doc
+keeps night hours, 18:00 to 04:00; while they are out the door is shut, and
+`space` beside it says when it opens. `space` beside the chair offers to sit in
+it, and the deck opens on the ledger with CHROMING UP on the CHROME line. The
+doc charges 12% of a piece's value to put it in and 4% to take it out (a swap is
+both, what is fitted inside a piece rides free): the picker shows the fee and
+what it leaves you, and `x` asks before it pulls. `esc` gets you out of the chair.
+Anywhere else the ledger only looks.
 
 Every piece has a load, and the LOAD gauge caps the total. Installed, a piece
 weighs nothing: LOAD is its cost, and CAR counts only what you carry and wear.

@@ -16,7 +16,7 @@ pub const AMBER: Color = Color::Rgb(255, 200, 80);
 pub const GREEN: Color = Color::Rgb(80, 230, 120);
 pub const DIM_AMBER: Color = Color::Rgb(190, 150, 60);
 pub const RULE_STYLE: Style = Style::new().fg(RULE);
-const BADGE_FG: Color = Color::Rgb(10, 11, 16);
+pub(crate) const BADGE_FG: Color = Color::Rgb(10, 11, 16);
 const TICKS_PER_MINUTE: u64 = 90;
 const START_MINUTE: u64 = 22 * 60;
 /// The minute of the day the game starts at, for the simulation's clock.
@@ -687,7 +687,11 @@ pub fn location(city: &City, interiors: &Interiors, place: Place, pos: Pos) -> S
         Place::Floor { building, level } => {
             let name = city
                 .building_opt(building)
-                .map(|b| b.name.clone().unwrap_or_else(|| b.kind.label().to_string()))
+                .map(|b| {
+                    b.name
+                        .clone()
+                        .unwrap_or_else(|| citygen::kind_label(city, b.id).to_string())
+                })
                 .unwrap_or_else(|| "inside".to_string());
             let _ = interiors;
             return format!("{name} · {}", FloorPlan::label(level));
@@ -695,7 +699,11 @@ pub fn location(city: &City, interiors: &Interiors, place: Place, pos: Pos) -> S
         Place::Construct(building) => {
             let name = city
                 .building_opt(building)
-                .map(|b| b.name.clone().unwrap_or_else(|| b.kind.label().to_string()))
+                .map(|b| {
+                    b.name
+                        .clone()
+                        .unwrap_or_else(|| citygen::kind_label(city, b.id).to_string())
+                })
                 .unwrap_or_else(|| "inside".to_string());
             return format!("{name} · construct");
         }

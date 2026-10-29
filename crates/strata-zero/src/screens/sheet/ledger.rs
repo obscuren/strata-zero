@@ -2,18 +2,19 @@
 //! folded under it, the card of the row the cursor is on, the picker of what in the pack
 //! fits a site or socket (swapping out what it holds), and the LOAD gauge over them.
 
-use super::{RULE_X, Sheet, SheetPane, header};
+use super::{RULE_X, Sheet, SheetPane, marked_header};
 use crate::actions::{JACKED_IN, jacked_in, perform, report};
 use crate::app::AppState;
+use crate::clinic::{OUTSIDE, Operating, gone_line, operating};
 use crate::screens::create::wrap;
 use crate::screens::deck::{REVEAL_TICKS, cut, lit};
 use crate::ui::chrome::{BAR_BG, CYAN, DIM, FAINTER, MAGENTA, RULE, TEXT, put, reveal, solid};
-use crate::ui::hud::{AMBER, GREEN};
+use crate::ui::hud::{AMBER, BADGE_FG, GREEN};
 use crate::ui::implant_art;
 use crossterm::event::KeyCode;
 use game::{
     Action, Content, CopyId, EMP_PER_PIECE, Fits, Host, Item, ItemId, Perk, Site, SocketKind,
-    stack_load,
+    put_in_fee, stack_load, take_out_fee,
 };
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -255,6 +256,13 @@ impl Sheet {
     /// sheet's.
     pub(super) fn ledger_key(&mut self, st: &mut AppState, code: KeyCode) -> bool {
         let tick = st.tick;
+        // Anything but a second `x` lets the asked-about pull go; esc only that.
+        if self.pulling.is_some() && code != KeyCode::Char('x') {
+            self.pulling = None;
+            if code == KeyCode::Esc {
+                return true;
+            }
+        }
         let v = self.view(st);
         if let Some(pick) = v.pick {
             match code {
@@ -311,7 +319,17 @@ impl Sheet {
     fn act(&mut self, st: &mut AppState, v: &View) {
         if jacked_in(st) {
             st.warn(JACKED_IN);
-        } else if v.picks.is_empty() {
+            return;
+        }
+        match operating(st) {
+            Operating::Locked => return st.warn(OUTSIDE),
+            Operating::Gone { doc } => {
+                st.chair = None;
+                return st.warn(gone_line(&doc));
+            }
+            Operating::Chair { .. } | Operating::Free => {}
+        }
+        if v.picks.is_empty() {
             st.warn("nothing in your bag fits");
         } else {
             self.state.picker = Some(0);
@@ -322,11 +340,23 @@ impl Sheet {
     }
 
     /// `x` on a row: chrome comes out to the pack, a limb with what is in it; an empty
-    /// place has nothing to pull.
+    /// place has nothing to pull. In the doc's chair the first `x` asks, for the fee, and
+    /// a second one on the same row pulls and pays.
     fn pull(&mut self, st: &mut AppState, v: &View) {
-        if v.held.is_none() {
+        let Some(held) = v.held.as_ref() else {
+            return;
+        };
+        let row = v.rows[v.row];
+        let fee = take_out_fee(&st.content, held);
+        if matches!(operating(st), Operating::Chair { .. })
+            && fee > 0
+            && !jacked_in(st)
+            && self.pulling != Some(row)
+        {
+            self.pulling = Some(row);
             return;
         }
+        self.pulling = None;
         let (site, socket) = v.at;
         let action = match socket {
             None => Action::Pull(site),
@@ -374,32 +404,114 @@ impl Sheet {
     pub(super) fn ledger_hints(&self, st: &AppState) -> Line<'static> {
         let v = self.view(st);
         let dim = Style::default().fg(DIM);
-        if v.pick.is_some() {
-            // On a held place the pick swaps with what is there.
+        let faint = Style::default().fg(FAINTER);
+        let amber = Style::default().fg(AMBER);
+        let mode = operating(st);
+        if let Some(pick) = v.pick {
+            // On a held place the pick swaps with what is there; a fee the doc won't
+            // take dims it.
             let space = match v.held {
                 Some(_) => "space swap",
                 None => "space install",
             };
-            return Line::from(Span::styled(
-                format!("↑↓ choose · {space} · esc back · Q/E tabs · tab close"),
-                dim,
-            ));
+            let (put, out) = pick_fee(st, &v, &v.picks[pick]);
+            let short = matches!(mode, Operating::Chair { .. }) && put + out > st.character.credits;
+            return Line::from(vec![
+                Span::styled("↑↓ choose · ", dim),
+                Span::styled(space, if short { faint } else { dim }),
+                Span::styled(" · esc back · Q/E tabs · tab close", dim),
+            ]);
         }
-        let locked = if jacked_in(st) {
-            Style::default().fg(FAINTER)
-        } else {
-            dim
-        };
-        let mut spans = vec![
-            Span::styled("↑↓ select · ", dim),
-            Span::styled("space what fits", locked),
-        ];
-        if v.held.is_some() {
-            spans.push(Span::styled(" · ", dim));
-            spans.push(Span::styled("x pull it out", locked));
+        // `x` asked: the second one pulls, for the fee.
+        if let (Some(row), Some(held)) = (self.pulling, v.held.as_ref())
+            && row == v.rows[v.row]
+        {
+            let c = &st.content;
+            let name = c
+                .item(held)
+                .map_or_else(|| held.to_string(), |i| i.name.clone());
+            let (fee, credits) = (take_out_fee(c, held), st.character.credits);
+            let mut spans = vec![
+                Span::styled("x again to pull ", amber),
+                Span::styled(name, Style::default().fg(TEXT)),
+                Span::styled(" for ", amber),
+                Span::styled(format!("¤{fee}"), amber),
+            ];
+            // A pull you can't pay says so, as FITS does.
+            if fee > credits {
+                let magenta = Style::default().fg(MAGENTA);
+                spans[3] = Span::styled(format!("¤{fee}"), magenta);
+                spans.push(Span::styled(format!(" · you have ¤{credits}"), magenta));
+            }
+            let fitted: Vec<&ItemId> = match v.at {
+                (site, None) => st
+                    .character
+                    .chrome_copy(site)
+                    .map(|k| k.fitted.iter().flatten().map(|s| &s.item).collect())
+                    .unwrap_or_default(),
+                (_, Some(_)) => Vec::new(),
+            };
+            // What rides out with it, when it can go at all.
+            match fitted.as_slice() {
+                _ if fee > credits => {}
+                [] => {}
+                [one] => spans.push(Span::styled(
+                    format!(
+                        " · it comes out with its {}",
+                        c.item(one)
+                            .map_or_else(|| one.to_string(), |i| i.name.clone())
+                    ),
+                    dim,
+                )),
+                _ => spans.push(Span::styled(
+                    " · it comes out with what's fitted in it",
+                    dim,
+                )),
+            }
+            spans.push(Span::styled(" · esc keep it", dim));
+            return Line::from(spans);
         }
-        spans.push(Span::styled(" · ← attributes · Q/E tabs · tab close", dim));
-        Line::from(spans)
+        if jacked_in(st) {
+            let mut spans = vec![
+                Span::styled("↑↓ select · ", dim),
+                Span::styled("space what fits", faint),
+            ];
+            if v.held.is_some() {
+                spans.push(Span::styled(" · ", dim));
+                spans.push(Span::styled("x pull it out", faint));
+            }
+            spans.push(Span::styled(" · ← attributes · Q/E tabs · tab close", dim));
+            return Line::from(spans);
+        }
+        match mode {
+            Operating::Locked | Operating::Gone { .. } => Line::from(vec![
+                Span::styled("↑↓ select · ← attributes · Q/E tabs · tab close", dim),
+                Span::styled(format!("   {OUTSIDE}"), faint),
+            ]),
+            Operating::Chair { .. } => {
+                let mut spans = vec![Span::styled("↑↓ select · space what fits", dim)];
+                if let Some(held) = v.held.as_ref() {
+                    spans.push(Span::styled(" · x pull it out ", dim));
+                    spans.push(Span::styled(
+                        format!("¤{}", take_out_fee(&st.content, held)),
+                        amber,
+                    ));
+                }
+                spans.push(Span::styled(
+                    " · ← attributes · esc get out of the chair",
+                    dim,
+                ));
+                Line::from(spans)
+            }
+            Operating::Free => {
+                let mut spans = vec![Span::styled("↑↓ select · space what fits", dim)];
+                if v.held.is_some() {
+                    spans.push(Span::styled(" · x pull it out", dim));
+                }
+                spans.push(Span::styled(" · ← attributes · Q/E tabs · tab close", dim));
+                Line::from(spans)
+            }
+        }
     }
 
     /// Draws the right pane into `body`'s columns past the rule: the CHROME header with
@@ -479,6 +591,8 @@ fn chrome_header(
     };
     let total = after.unwrap_or(load);
     let more = total > load;
+    // What the pick adds: amber, or magenta when it won't fit.
+    let change = if total > max { MAGENTA } else { AMBER };
     let (have, after) = (share(load.min(total)), share(total));
     let fg = |c: Color| Style::default().fg(c);
     let tail = [
@@ -487,15 +601,47 @@ fn chrome_header(
             "▰".repeat(have as usize),
             fg(if focused { CYAN } else { DIM }),
         ),
-        ("▰".repeat((after - have) as usize), fg(AMBER)),
+        ("▰".repeat((after - have) as usize), fg(change)),
         ("▱".repeat((SEGMENTS - after) as usize), fg(FAINTER)),
         (
             format!(" {total}"),
-            fg(if more { AMBER } else { TEXT }).add_modifier(Modifier::BOLD),
+            fg(if more { change } else { TEXT }).add_modifier(Modifier::BOLD),
         ),
         (format!("/{max}"), fg(DIM)),
     ];
-    header(buf, (x0, x1), y, "CHROME", &tail, focused);
+    marked_header(buf, (x0, x1), y, "CHROME", &chrome_mark(st), &tail, focused);
+}
+
+/// The CHROME header's mark: `· CHROMING UP` in the doc's chair, ` FREE ` in the DEV
+/// badge's colours with free chrome, nothing anywhere else.
+fn chrome_mark(st: &AppState) -> Vec<(String, Style)> {
+    match operating(st) {
+        Operating::Chair { .. } => vec![(
+            " · CHROMING UP".to_string(),
+            Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
+        )],
+        Operating::Free => vec![
+            (" ".to_string(), Style::default()),
+            (
+                " FREE ".to_string(),
+                Style::default()
+                    .fg(BADGE_FG)
+                    .bg(AMBER)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ],
+        Operating::Locked | Operating::Gone { .. } => Vec::new(),
+    }
+}
+
+/// What the doc charges for a pick at a place: the piece in, and what the place holds
+/// out.
+fn pick_fee(st: &AppState, v: &View, pick: &Pick) -> (u32, u32) {
+    let c = &st.content;
+    (
+        put_in_fee(c, &pick.item),
+        v.held.as_ref().map_or(0, |h| take_out_fee(c, h)),
+    )
 }
 
 /// The ledger's rows into `area`, scrolled to keep the cursor in sight: groups' headers
@@ -877,6 +1023,33 @@ fn fit_card(st: &AppState, v: &View, focused: bool, w: usize) -> CardText {
         ));
     }
     card.extend(wrap_spans(spans, w));
+    // In the doc's chair, `fee ¤370 · leaves ¤830`: a swap's both parts, a fee you
+    // can't pay in magenta.
+    if matches!(operating(st), Operating::Chair { .. }) {
+        let (put, out) = pick_fee(st, v, pick);
+        let (fee, credits) = (put + out, ch.credits);
+        let amount = format!("¤{fee}");
+        let line = if fee > credits {
+            vec![
+                Span::styled("fee ", fg(DIM)),
+                Span::styled(amount, bold(MAGENTA)),
+                Span::styled(format!(" · you have ¤{credits}"), fg(MAGENTA)),
+            ]
+        } else if out > 0 {
+            vec![
+                Span::styled("fee ", fg(DIM)),
+                Span::styled(amount, bold(AMBER)),
+                Span::styled(format!(" · in ¤{put} · out ¤{out}"), fg(DIM)),
+            ]
+        } else {
+            vec![
+                Span::styled("fee ", fg(DIM)),
+                Span::styled(amount, bold(AMBER)),
+                Span::styled(format!(" · leaves ¤{}", credits - fee), fg(DIM)),
+            ]
+        };
+        card.extend(wrap_spans(line, w));
+    }
     card.description(&item.desc, w);
     card
 }
@@ -1016,6 +1189,7 @@ mod tests {
     use crate::screens::deck::{Deck, REVEAL_TICKS};
     use crate::screens::testutil::key;
     use crate::ui::chrome::{BAR_BG, CYAN, DIM, FAINTER, MAGENTA, RULE, TEXT};
+    use crate::ui::hud::BADGE_FG;
     use citygen::{GenParams, Generator, Place, Pos, SizePreset, StratumKind};
     use game::{Action, Harm, Stack};
     use ratatui::Terminal;
@@ -1104,13 +1278,223 @@ mod tests {
         st
     }
 
-    /// The deck on ATTRIBUTES with the cursor on the ledger's `row`.
+    /// The deck on ATTRIBUTES with the cursor on the ledger's `row`, free chrome on: these
+    /// test the ledger, the chair has its own.
     fn on_ledger(st: &mut AppState, row: LedgerRow) -> Deck {
+        st.free_chrome = true;
         let mut d = Deck::new(st.tick);
         d.update(st, &[key(KeyCode::Char('2'))]);
         d.sheet.state.pane = SheetPane::Ledger;
         d.sheet.state.row = row;
         d
+    }
+
+    /// Sat in a doc's chair with the spec's loadout and `credits`, the deck opened by the
+    /// chair on the ledger's `row`.
+    fn in_chair(credits: u32, row: LedgerRow) -> (AppState, Deck) {
+        let mut st = crate::clinic::testutil::seated();
+        loadout(&mut st);
+        st.character.credits = credits;
+        let mut d = Deck::chair(&st);
+        d.sheet.state.row = row;
+        (st, d)
+    }
+
+    fn hint_line(d: &Deck, st: &mut AppState) -> String {
+        cells(&screen(d, st, (100, 30)), 2, 28, 96)
+            .trim_end()
+            .to_string()
+    }
+
+    #[test]
+    fn the_mark_is_on_the_header_line() {
+        let (mut st, d) = in_chair(1000, LedgerRow::Site(Site::LeftArm));
+        let buf = screen(&d, &mut st, (100, 30));
+        assert_eq!(cells(&buf, R0, 5, 22), "CHROME · CHROMING UP ─");
+        assert_eq!(buf[(R0 + 7, 5)].fg, AMBER);
+        assert!(buf[(R0 + 7, 5)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buf[(BODY.x + 45, 12)].fg, AMBER);
+        assert!(region(&buf, (R0, 98), (6, 27)).matches("CHROMING").count() == 0);
+        // Free chrome: the DEV badge's colours.
+        st.free_chrome = true;
+        let buf = screen(&d, &mut st, (100, 30));
+        assert_eq!(cells(&buf, R0, 5, 15), "CHROME  FREE  ─");
+        assert_eq!(
+            (buf[(R0 + 8, 5)].fg, buf[(R0 + 8, 5)].bg),
+            (BADGE_FG, AMBER)
+        );
+        // Anywhere else: no mark, the rule as it was.
+        st.free_chrome = false;
+        st.chair = None;
+        let buf = screen(&d, &mut st, (100, 30));
+        assert_eq!(cells(&buf, R0, 5, 8), "CHROME ─");
+        assert_eq!(buf[(BODY.x + 45, 12)].fg, RULE);
+    }
+
+    #[test]
+    fn hints_in_the_chair() {
+        let (mut st, d) = in_chair(1000, LedgerRow::Site(Site::LeftArm));
+        let line = "↑↓ select · space what fits · x pull it out ¤110 · ← attributes · esc get out of the chair";
+        assert_eq!(d.sheet.hints(&st), line);
+        assert_eq!(hint_line(&d, &mut st), line);
+        let buf = screen(&d, &mut st, (100, 30));
+        let x = col_of(&buf, 28, 2, "¤110").unwrap();
+        assert_eq!(buf[(x, 28)].fg, AMBER);
+    }
+
+    #[test]
+    fn hints_anywhere_else() {
+        let (mut st, _, _, _) = crate::clinic::testutil::inside();
+        loadout(&mut st);
+        give(&mut st, "grip_arm");
+        let mut d = Deck::new(st.tick);
+        d.update(&mut st, &[key(KeyCode::Char('2'))]);
+        d.sheet.state.pane = SheetPane::Ledger;
+        d.sheet.state.row = LedgerRow::Site(Site::LeftArm);
+        assert_eq!(
+            d.sheet.hints(&st),
+            "↑↓ select · ← attributes · Q/E tabs · tab close   chrome goes in and out in a ripperdoc's chair"
+        );
+        let buf = screen(&d, &mut st, (100, 30));
+        let x = col_of(&buf, 28, 2, "chrome goes").unwrap();
+        assert_eq!(buf[(x, 28)].fg, FAINTER);
+        let before = st.character.clone();
+        for code in [KeyCode::Char(' '), KeyCode::Char('x')] {
+            press(&mut d, &mut st, &[code]);
+            assert_eq!(last(&st), Some(OUTSIDE), "{code:?}");
+            assert_eq!(d.sheet.state.picker, None);
+        }
+        assert_eq!(st.character, before);
+    }
+
+    #[test]
+    fn the_fee_line() {
+        let fee_row = |buf: &Buffer| {
+            (6..27)
+                .map(|y| (y, cells(buf, CARD_100, y, 30)))
+                .find(|(_, t)| t.starts_with("fee "))
+        };
+        // Into an empty place: what it leaves you.
+        let (mut st, mut d) = in_chair(1200, LedgerRow::Site(Site::RightArm));
+        give(&mut st, "grip_arm");
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        let buf = screen(&d, &mut st, (100, 30));
+        let (y, text) = fee_row(&buf).expect("a fee line");
+        assert_eq!(text.trim_end(), "fee ¤370 · leaves ¤830");
+        assert!(cells(&buf, CARD_100, y - 1, 30).starts_with("load 19 → 22/24"));
+        assert_eq!(buf[(CARD_100 + 4, y)].fg, AMBER);
+        // A swap: in and out.
+        let (mut st, mut d) = in_chair(1200, LedgerRow::Site(Site::LeftArm));
+        give(&mut st, "grip_arm");
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        let buf = screen(&d, &mut st, (100, 30));
+        assert_eq!(
+            fee_row(&buf).unwrap().1.trim_end(),
+            "fee ¤480 · in ¤370 · out ¤110"
+        );
+        // Short: magenta, space dimmed and refused, the picker still open.
+        let (mut st, mut d) = in_chair(320, LedgerRow::Site(Site::RightArm));
+        give(&mut st, "grip_arm");
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        let buf = screen(&d, &mut st, (100, 30));
+        let (y, text) = fee_row(&buf).unwrap();
+        assert_eq!(text.trim_end(), "fee ¤370 · you have ¤320");
+        assert_eq!(buf[(CARD_100 + 4, y)].fg, MAGENTA);
+        assert_eq!(buf[(CARD_100 + 12, y)].fg, MAGENTA);
+        let x = col_of(&buf, 28, 2, "space install").unwrap();
+        assert_eq!(buf[(x, 28)].fg, FAINTER);
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        assert_eq!(d.sheet.state.picker, Some(0));
+        assert_eq!(last(&st), Some(crate::actions::fee_line(370, 320).as_str()));
+        assert_eq!(st.character.chrome_at(Site::RightArm), None);
+    }
+
+    #[test]
+    fn over_budget_goes_magenta() {
+        let mut st = AppState::new();
+        loadout(&mut st);
+        st.character.attributes.cool = 4;
+        assert_eq!(st.character.load_max(), 22);
+        give(&mut st, "wrecker_arm");
+        let mut d = on_ledger(&mut st, LedgerRow::Site(Site::RightArm));
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        let buf = screen(&d, &mut st, (100, 30));
+        let header = cells(&buf, R0, 5, 50);
+        assert!(header.trim_end().ends_with("23/22"), "{header}");
+        let total = col_of(&buf, 5, R0, "23/22").unwrap();
+        assert_eq!(buf[(total, 5)].fg, MAGENTA);
+        assert!((R0..98).any(|x| buf[(x, 5)].symbol() == "▰" && buf[(x, 5)].fg == MAGENTA));
+        assert!((R0..98).all(|x| buf[(x, 5)].fg != AMBER), "{header}");
+        // One that fits stays amber.
+        let mut st = AppState::new();
+        loadout(&mut st);
+        st.character.attributes.cool = 4;
+        give(&mut st, "grip_arm");
+        let mut d = on_ledger(&mut st, LedgerRow::Site(Site::RightArm));
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        let buf = screen(&d, &mut st, (100, 30));
+        let total = col_of(&buf, 5, R0, "22/22").unwrap();
+        assert_eq!(buf[(total, 5)].fg, AMBER);
+        assert!((R0..98).all(|x| buf[(x, 5)].fg != MAGENTA));
+    }
+
+    #[test]
+    fn x_asks_first() {
+        let arm = LedgerRow::Site(Site::LeftArm);
+        let (mut st, mut d) = in_chair(1000, arm);
+        press(&mut d, &mut st, &[KeyCode::Char('x')]);
+        assert!(st.character.chrome_at(Site::LeftArm).is_some());
+        assert_eq!(
+            hint_line(&d, &mut st),
+            "x again to pull Piston arm for ¤110 · it comes out with its Arc hand · esc keep it"
+        );
+        press(&mut d, &mut st, &[KeyCode::Char('x')]);
+        assert_eq!(st.character.chrome_at(Site::LeftArm), None);
+        assert_eq!(st.character.credits, 890);
+        // Esc keeps it, and the deck stays open.
+        let (mut st, mut d) = in_chair(1000, arm);
+        press(&mut d, &mut st, &[KeyCode::Char('x')]);
+        assert!(matches!(
+            d.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Stay
+        ));
+        assert_eq!(d.sheet.pulling, None);
+        assert!(st.character.chrome_at(Site::LeftArm).is_some() && st.chair.is_some());
+        // Moving on lets it go: the next x asks about the new row.
+        press(
+            &mut d,
+            &mut st,
+            &[KeyCode::Char('x'), KeyCode::Up, KeyCode::Char('x')],
+        );
+        assert!(st.character.chrome_at(Site::LeftArm).is_some());
+        assert_ne!(d.sheet.pulling, Some(arm));
+        assert!(d.sheet.pulling.is_some());
+        // So does another tab.
+        d.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert_eq!(d.sheet.pulling, None);
+        assert_eq!(st.character.credits, 1000);
+        // Short of the fee, the ask says so in magenta, and the second x is refused.
+        let (mut st, mut d) = in_chair(50, arm);
+        press(&mut d, &mut st, &[KeyCode::Char('x')]);
+        assert_eq!(
+            hint_line(&d, &mut st),
+            "x again to pull Piston arm for ¤110 · you have ¤50 · esc keep it"
+        );
+        let buf = screen(&d, &mut st, (100, 30));
+        let x = col_of(&buf, 28, 2, "¤110").unwrap();
+        assert_eq!(buf[(x, 28)].fg, MAGENTA);
+        press(&mut d, &mut st, &[KeyCode::Char('x')]);
+        assert!(st.character.chrome_at(Site::LeftArm).is_some());
+        assert_eq!(last(&st), Some(crate::actions::fee_line(110, 50).as_str()));
+    }
+
+    #[test]
+    fn free_x_pulls_at_once() {
+        let mut st = AppState::new();
+        loadout(&mut st);
+        let mut d = on_ledger(&mut st, LedgerRow::Site(Site::Eyes));
+        press(&mut d, &mut st, &[KeyCode::Char('x')]);
+        assert_eq!(st.character.chrome_at(Site::Eyes), None);
     }
 
     #[test]
@@ -1750,6 +2134,8 @@ mod tests {
     #[test]
     fn hints_follow_the_focus() {
         let mut st = AppState::new();
+        // Free chrome: today's hints, the chair's have their own test.
+        st.free_chrome = true;
         loadout(&mut st);
         give(&mut st, "grip_arm");
         let hint_row = |d: &Deck, st: &mut AppState| cells(&screen(d, st, (100, 30)), 2, 28, 90);

@@ -203,7 +203,11 @@ impl Interiors {
 /// What the building is called in a log line.
 fn building_name(city: &City, b: BuildingId) -> String {
     city.building_opt(b)
-        .map(|x| x.name.clone().unwrap_or_else(|| x.kind.label().to_string()))
+        .map(|x| {
+            x.name
+                .clone()
+                .unwrap_or_else(|| citygen::kind_label(city, b).to_string())
+        })
         .unwrap_or_else(|| "the building".to_string())
 }
 
@@ -239,6 +243,10 @@ fn level_for(plan: &FloorPlan, stratum: StratumKind) -> Option<i32> {
 pub fn enter(st: &mut AppState, b: BuildingId, door: (StratumKind, Pos)) -> Result<String, String> {
     if st.net.engaged.is_some() {
         return Err("not now".to_string());
+    }
+    // A ripperdoc's door is shut while the doc is out.
+    if !crate::clinic::is_open(st, b) {
+        return Err(crate::clinic::closed_line(st, b));
     }
     let city = st.city.as_ref().ok_or("no city")?;
     let plan = st
@@ -579,6 +587,70 @@ mod tests {
             ..Default::default()
         })
         .unwrap()
+    }
+
+    #[test]
+    fn every_doc_stands_by_the_chair() {
+        let mut laundromats = 0;
+        for seed in [1u64, 2, 3, 8, 11, 21] {
+            let c = Generator::run(GenParams {
+                seed,
+                size: SizePreset::Medium,
+                districts: 7,
+                ..Default::default()
+            })
+            .unwrap();
+            let w = World::seed(
+                &c,
+                &sim::People::load().unwrap(),
+                &sim::SimParams::default(),
+                22 * 60,
+                0,
+            );
+            for b in c
+                .buildings
+                .iter()
+                .filter(|b| b.kind == BuildingKind::Clinic)
+            {
+                let plan = FloorPlan::new(&c, b.id).unwrap();
+                let front = plan.clinic.unwrap().front;
+                laundromats += usize::from(front == citygen::Front::Laundromat);
+                let level = plan.work_floors()[0];
+                let floor = citygen::generate_floor(&c, &plan, level);
+                let spot = floor
+                    .stations
+                    .iter()
+                    .find(|s| s.role == citygen::Role::Surgery)
+                    .unwrap()
+                    .pos;
+                let placed = Placement::new(&plan, &floor, &w, &Homes::default());
+                let who = placed.person_at(spot).unwrap_or_else(|| {
+                    panic!("seed {seed} {:?} {front:?}: nobody on the doc's spot", b.id)
+                });
+                assert_eq!(w.people()[who.0 as usize].profession, "ripperdoc");
+            }
+        }
+        assert!(laundromats > 0, "a cellar clinic among them");
+    }
+
+    #[test]
+    fn a_shut_clinic_turns_you_away() {
+        let (mut st, b, door, out) = crate::clinic::testutil::outside(crate::clinic::testutil::DAY);
+        let refused = enter(&mut st, b, (StratumKind::Street, door));
+        assert_eq!(refused, Err(crate::clinic::closed_line(&st, b)));
+        assert!(crate::clinic::closed_line(&st, b).ends_with(" is closed · opens at 18:00"));
+        let p = st.player.as_ref().unwrap();
+        assert_eq!((p.place, p.pos), (Place::Stratum(StratumKind::Street), out));
+        // At night the doc is in, and the door opens.
+        let (mut st, b, door, _) = crate::clinic::testutil::outside(crate::clinic::testutil::NIGHT);
+        enter(&mut st, b, (StratumKind::Street, door)).unwrap();
+        assert_eq!(
+            st.player.as_ref().unwrap().place,
+            Place::Floor {
+                building: b,
+                level: 0
+            }
+        );
     }
 
     #[test]

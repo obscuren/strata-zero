@@ -230,7 +230,12 @@ mod tests {
     fn plans_follow_height_class_span_and_kind() {
         let c = city();
         let mut seen_tall = false;
-        for b in c.buildings.iter().filter(|b| b.kind.is_closed()) {
+        // A clinic's floor is its front's grid instead (`every_clinic_is_its_front`).
+        for b in c
+            .buildings
+            .iter()
+            .filter(|b| b.kind.is_closed() && b.kind != BuildingKind::Clinic)
+        {
             let plan = FloorPlan::new(&c, b.id).expect("a plan for a closed building");
             assert_eq!(plan.size.w as i32, (b.footprint.w * 3).max(12));
             assert_eq!(plan.size.h as i32, (b.footprint.h * 3).max(9));
@@ -437,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    fn bars_clubs_clinics_temples_halls_factories_and_garages_have_their_rooms() {
+    fn bars_clubs_temples_halls_factories_and_garages_have_their_rooms() {
         let c = city();
         let more: Vec<City> = [8u64, 9, 11]
             .into_iter()
@@ -503,11 +508,6 @@ mod tests {
                 .any(|r| r.kind == RoomKind::Vip && !r.private)
         );
         assert!(vip.stations.iter().any(|s| s.role == Role::Table));
-        expect(
-            BuildingKind::Clinic,
-            &[RoomKind::Waiting, RoomKind::Surgery],
-            &[Role::Surgery],
-        );
         // Temples are rare (one weight in Old Town): lay one out on a bar's plan.
         {
             let (city, b) = find(BuildingKind::Bar);
@@ -791,6 +791,114 @@ mod tests {
                 dump(&plan, &generate_floor(city, &plan, level));
             }
         }
+    }
+
+    /// Every clinic is its front's grid, turned to its main door: the size, the chair
+    /// and the doc's spot, a waiting room, every door its own exit, the cellar's stairs.
+    #[test]
+    fn every_clinic_is_its_front() {
+        use crate::clinic::Front;
+        use crate::geom::Pos;
+        let mut fronts = std::collections::HashSet::new();
+        let mut turns = std::collections::HashSet::new();
+        for seed in [1u64, 2, 3, 8, 11, 21] {
+            let c = Generator::run(GenParams {
+                seed,
+                size: SizePreset::Medium,
+                districts: 7,
+                ..Default::default()
+            })
+            .unwrap();
+            for b in c
+                .buildings
+                .iter()
+                .filter(|b| b.kind == BuildingKind::Clinic)
+            {
+                let plan = FloorPlan::new(&c, b.id).unwrap();
+                let cp = plan
+                    .clinic
+                    .unwrap_or_else(|| panic!("seed {seed}: {:?}", b.id));
+                fronts.insert(cp.front);
+                turns.insert(cp.turn.quarters);
+                assert_eq!(plan.lowest, -(cp.front.floors() as i32 - 1));
+                let chair_level = if cp.front == Front::Laundromat { -1 } else { 0 };
+                assert_eq!(
+                    plan.work_floors(),
+                    vec![chair_level],
+                    "the doc works by the chair"
+                );
+                for level in plan.levels() {
+                    let f = generate_floor(&c, &plan, level);
+                    let what = format!("seed {seed} {:?} {:?} L{level}", b.id, cp.front);
+                    validate_floor(&plan, &f).unwrap_or_else(|e| panic!("{what}: {e}"));
+                    let chairs: Vec<Pos> = f
+                        .tiles
+                        .iter()
+                        .filter(|(_, t)| t.feature == Some(Feature::Furniture(Furniture::Chair)))
+                        .map(|(p, _)| p)
+                        .collect();
+                    if level == chair_level {
+                        assert_eq!(chairs.len(), 1, "{what}");
+                        assert_eq!(f.chair(), Some(chairs[0]));
+                        assert!(
+                            f.stations.iter().any(|s| s.role == Role::Surgery
+                                && s.pos.neighbors4().any(|n| n == chairs[0])),
+                            "{what}: no doc's spot"
+                        );
+                        assert_eq!(f.rooms[0].kind, RoomKind::Surgery, "{what}");
+                    } else {
+                        assert!(chairs.is_empty(), "{what}");
+                    }
+                    // Every door of the building on this floor's stratum has its own exit.
+                    let stratum = plan.exit_stratum(level);
+                    let doors: Vec<Pos> = c
+                        .portals(b.id)
+                        .into_iter()
+                        .filter(|(k, _)| Some(*k) == stratum)
+                        .map(|(_, p)| p)
+                        .collect();
+                    for d in &doors {
+                        assert!(
+                            f.exits.iter().any(|e| e.door == *d),
+                            "{what}: no exit for {d:?}"
+                        );
+                    }
+                    let ats: std::collections::HashSet<Pos> =
+                        f.exits.iter().map(|e| e.at).collect();
+                    assert_eq!(ats.len(), f.exits.len(), "{what}: exits share a tile");
+                    if level == 0 {
+                        let main = f.exits.iter().find(|e| e.door == cp.door).unwrap();
+                        assert_eq!(main.at, cp.entrance, "{what}");
+                        assert!(
+                            f.rooms.iter().any(|r| r.kind == RoomKind::Waiting),
+                            "{what}"
+                        );
+                        // A back door steps into the front room, never the surgery.
+                        let surgery = f.rooms.iter().find(|r| r.kind == RoomKind::Surgery);
+                        for e in &f.exits {
+                            let step = f.doorstep(e);
+                            assert!(
+                                surgery.is_none_or(|r| !r.rect.contains(step)),
+                                "{what}: {:?} opens on the surgery",
+                                e.door
+                            );
+                            assert!(
+                                f.rooms
+                                    .iter()
+                                    .any(|r| r.kind == RoomKind::Waiting && r.rect.contains(step)),
+                                "{what}: {:?} steps in outside the front room",
+                                e.door
+                            );
+                        }
+                    }
+                    if plan.floors() >= 2 {
+                        assert_eq!(f.tiles[plan.stair].terrain, Terrain::Stair, "{what}");
+                    }
+                }
+            }
+        }
+        assert!(fronts.len() >= 4, "{fronts:?}");
+        assert!(turns.len() >= 3, "{turns:?}");
     }
 
     /// A cracked lock always opens something: every closed building keeps at least

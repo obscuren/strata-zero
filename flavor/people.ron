@@ -35,8 +35,9 @@ People(
             lines: ["Package says no questions. I say no questions.",
                     "Fast is a price. Faster is a bigger one.",
                     "Three districts an hour. Legs are the engine."]),
+        // Back-room docs keep night hours.
         Profession(id: "ripperdoc", label: "ripperdoc", works_at: [Clinic],
-            hours: Day(open: 600, close: 1320), staff: (2, 3), car_nudge: 0.4,
+            hours: Day(open: 1080, close: 240), staff: (1, 1), car_nudge: 0.4,
             lines: ["Anaesthetic's extra. Regret's free.",
                     "I can put it in. Getting it out is a different ticket.",
                     "Clean hands, cleaner chrome."]),

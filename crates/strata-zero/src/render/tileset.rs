@@ -127,6 +127,7 @@ pub fn glyph_for(
                 Furniture::Bench => '╥',
                 Furniture::Vending => '◘',
                 Furniture::Bike => 'ꝺ',
+                Furniture::Chair => '╦',
             },
         };
     }
@@ -280,6 +281,7 @@ pub fn legend_entries(k: StratumKind) -> Vec<(char, &'static str)> {
             ('╥', "bench"),
             ('◘', "vending machine"),
             ('ꝺ', "bike"),
+            ('╦', "operating chair"),
             ('◉', "camera"),
             ('~', "puddle/water"),
         ],
@@ -351,6 +353,9 @@ fn terrain_colors(terrain: Terrain, tile: &Tile, ctx: &RenderCtx, tick: u64) -> 
     }
 }
 
+/// The operating chair's cyan.
+const CHAIR: Rgb = Rgb(0, 229, 255);
+
 /// Feature foreground colour, if the feature overrides it.
 fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
     let ts = ctx.style.theme_or_neutral(ctx.theme);
@@ -384,6 +389,7 @@ fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
             Rgb(240, 255, 250).scale(0.7 + 0.3 * pulse(tick + tile.variant as u64, 30))
         }
         Feature::Furniture(Furniture::Counter | Furniture::Shrine) => ts.accent2,
+        Feature::Furniture(Furniture::Chair) => CHAIR,
         Feature::Furniture(_) => ts.wall.scale(1.2),
     }
 }
@@ -542,6 +548,29 @@ mod tests {
     }
 
     #[test]
+    fn the_chair_is_cyan_and_in_the_legend() {
+        let s = StylePack::load().unwrap();
+        let ctx = RenderCtx {
+            style: &s,
+            theme: Some(Theme::NightMarket),
+            stratum: StratumKind::Street,
+            light: 255,
+            tick: 0,
+            vis: Visibility::Visible,
+            connector: None,
+            kind: None,
+            wall_mask: 0,
+            lamps_on: true,
+            sky: None,
+        };
+        let mut t = Tile::new(Terrain::Floor);
+        t.feature = Some(Feature::Furniture(Furniture::Chair));
+        assert_eq!(feature_color(t.feature.unwrap(), &t, &ctx, 0), CHAIR);
+        assert_eq!(cell(&t, &ctx).ch, '╦');
+        assert!(legend_entries(StratumKind::Street).contains(&('╦', "operating chair")));
+    }
+
+    #[test]
     fn home_furniture_and_railings_have_glyphs() {
         let s = StylePack::load().unwrap();
         for (piece, ch) in [
@@ -550,6 +579,7 @@ mod tests {
             (Furniture::Bench, '╥'),
             (Furniture::Vending, '◘'),
             (Furniture::Bike, 'ꝺ'),
+            (Furniture::Chair, '╦'),
         ] {
             let f = Some(Feature::Furniture(piece));
             assert_eq!(glyph_for(Terrain::Floor, f, None, None, 1, 0, 0, &s), ch);

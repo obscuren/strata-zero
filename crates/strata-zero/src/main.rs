@@ -8,6 +8,7 @@ mod backdoors;
 mod blast;
 mod casts;
 mod cli;
+mod clinic;
 mod combat;
 mod constructs;
 mod credentials;

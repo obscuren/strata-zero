@@ -1275,3 +1275,121 @@ fn creation_skill_cards() {
     st.tick += 200;
     shot_stack("creation_netrunner_120x40", &st, &[&create], (120, 40));
 }
+
+/// A ripperdoc's: the shut door by day, the chair's window by night, and the ledger in
+/// the chair on a piece, in FITS paying and short, on a swap, asking before a pull, and
+/// with free chrome, at both sizes.
+#[test]
+#[ignore]
+fn ripperdoc_clinic() {
+    use crate::clinic::testutil::{DAY, inside, outside, seated};
+    use crate::screens::sheet::LedgerRow;
+    use game::{Site, Stack};
+    let sizes = [(100, 30), (120, 40)];
+
+    let (mut st, _, _, _) = outside(DAY);
+    let map = MapScreen::walking(&mut st);
+    let (_, b, door, out) = outside(DAY);
+    let _ = b;
+    st.player.as_mut().unwrap().pos = out;
+    st.tick += 200;
+    let subjects = crate::interact::gather(&st, &|_, _| None);
+    let shut = subjects.iter().find(|s| s.pos == door).unwrap();
+    let pop = shut.window(st.tick.saturating_sub(200));
+    for (w, h) in sizes {
+        shot_stack(
+            &format!("clinic_shut_door_{w}x{h}"),
+            &st,
+            &[&map, &pop],
+            (w, h),
+        );
+    }
+
+    let (mut st, _, _, chair) = inside();
+    let map = MapScreen::walking(&mut st);
+    st.tick += 200;
+    let subjects = crate::interact::gather(&st, &|_, _| None);
+    let s = subjects.iter().find(|s| s.pos == chair).unwrap();
+    let pop = s.window(st.tick.saturating_sub(200));
+    for (w, h) in sizes {
+        shot_stack(
+            &format!("clinic_chair_window_{w}x{h}"),
+            &st,
+            &[&map, &pop],
+            (w, h),
+        );
+    }
+
+    let loadout = |st: &mut AppState| {
+        st.character = game::Character::debug_runner(&st.content);
+        for (site, item) in [
+            (Site::Neural, "neural_port"),
+            (Site::Eyes, "target_lens"),
+            (Site::Jaw, "bulldog_jaw"),
+            (Site::Spine, "redline_spine"),
+            (Site::Back, "drone_cradle"),
+            (Site::Organs, "adrenal_pump"),
+            (Site::Skin, "subdermal_mesh"),
+            (Site::LeftArm, "piston_arm"),
+        ] {
+            let id = ItemId::new(item);
+            let copy = st.content.item(&id).unwrap().per_copy().then(|| {
+                let mut k = st.character.new_copy(&st.content, &id);
+                if item == "piston_arm" {
+                    let hand = ItemId::new("arc_hand");
+                    let pc = st.character.new_copy(&st.content, &hand);
+                    k.fitted[0] = Some(Stack {
+                        item: hand,
+                        qty: 1,
+                        copy: Some(pc),
+                    });
+                }
+                k
+            });
+            st.character.install(site, id, copy);
+        }
+    };
+    let chair_shots = |name: &str, credits: u32, free: bool, row: LedgerRow, keys: &[KeyCode]| {
+        let mut st = seated();
+        loadout(&mut st);
+        st.character.credits = credits;
+        st.free_chrome = free;
+        st.character
+            .give_item(&st.content, ItemId::new("grip_arm"), 1);
+        let map = MapScreen::walking(&mut st);
+        let mut deck = Deck::chair(&st);
+        deck.sheet.state.row = row;
+        for k in keys {
+            deck.update(&mut st, &[key(*k)]);
+        }
+        deck.sheet.changed = st.tick;
+        deck.sheet.card = st.tick;
+        st.tick += 200;
+        if st.tick % 90 < 3 {
+            st.tick += 3;
+        }
+        for (w, h) in sizes {
+            shot_stack(&format!("{name}_{w}x{h}"), &st, &[&map, &deck], (w, h));
+        }
+    };
+    let arm = LedgerRow::Site(Site::LeftArm);
+    let right = LedgerRow::Site(Site::RightArm);
+    chair_shots("clinic_ledger_piece", 1200, false, arm, &[]);
+    chair_shots(
+        "clinic_fits_paying",
+        1200,
+        false,
+        right,
+        &[KeyCode::Char(' ')],
+    );
+    chair_shots(
+        "clinic_fits_short",
+        320,
+        false,
+        right,
+        &[KeyCode::Char(' ')],
+    );
+    chair_shots("clinic_fits_swap", 1200, false, arm, &[KeyCode::Char(' ')]);
+    chair_shots("clinic_x_asks", 1200, false, arm, &[KeyCode::Char('x')]);
+    chair_shots("clinic_free", 1200, true, arm, &[]);
+}

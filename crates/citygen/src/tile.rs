@@ -209,6 +209,8 @@ pub enum Furniture {
     Bench,
     Vending,
     Bike,
+    /// A ripperdoc's operating chair. Last, so old saves keep their indices.
+    Chair,
 }
 
 impl Furniture {
@@ -228,6 +230,7 @@ impl Furniture {
             Furniture::Bench => "bench",
             Furniture::Vending => "vending machine",
             Furniture::Bike => "bike",
+            Furniture::Chair => "operating chair",
         }
     }
 }

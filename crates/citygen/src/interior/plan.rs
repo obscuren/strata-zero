@@ -1,6 +1,7 @@
 //! The plan of a closed building's floors: how many, which are special, where the
 //! lift bank and the stairwell stand on every one of them.
 
+use crate::clinic::{Front, clinic_front};
 use crate::geom::{Pos, Rect, Size};
 use crate::ids::BuildingId;
 use crate::rng::hash64;
@@ -65,6 +66,82 @@ pub struct FloorPlan {
     pub atrium: Option<Rect>,
     /// The floor with the player's flat: only on the city's first atrium megablock.
     pub home_level: Option<i32>,
+    /// A ripperdoc's clinic: its front and how its grid is turned; `None` for every
+    /// other building.
+    pub clinic: Option<ClinicPlan>,
+}
+
+/// How a grid is laid on a floor: mirrored left to right first, then turned clockwise
+/// a quarter at a time. A grid's bottom row ends up on the south (0 quarters), west
+/// (1), north (2) or east (3) edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Turn {
+    pub quarters: u8,
+    pub mirror: bool,
+}
+
+/// A clinic's floors: the front's grid, turned so its street side faces the main door.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClinicPlan {
+    pub front: Front,
+    pub turn: Turn,
+    /// The main street door on the city map.
+    pub door: Pos,
+    /// Its exit on the street floor: the grid's front door, turned.
+    pub entrance: Pos,
+}
+
+/// A `w` by `h` grid's size once turned.
+pub fn turn_size(w: i32, h: i32, t: Turn) -> (i32, i32) {
+    if t.quarters % 2 == 1 { (h, w) } else { (w, h) }
+}
+
+/// Where a tile of a `w` by `h` grid lands once turned.
+pub fn turn_pos(p: Pos, w: i32, h: i32, t: Turn) -> Pos {
+    let mut q = if t.mirror {
+        Pos::new(w - 1 - p.x, p.y)
+    } else {
+        p
+    };
+    let (mut cw, mut ch) = (w, h);
+    for _ in 0..t.quarters % 4 {
+        q = Pos::new(ch - 1 - q.y, q.x);
+        (cw, ch) = (ch, cw);
+    }
+    let _ = cw;
+    q
+}
+
+/// A clinic's plan: the front, the turn that faces its street side to the storefront
+/// door, mirrored on the seed.
+fn clinic_plan(city: &City, id: BuildingId, fp: Rect) -> Option<ClinicPlan> {
+    let front = clinic_front(city, id)?;
+    // The storefront: the door the city dresses as the main one, else the first.
+    let door = crate::generate::exterior::main_door(city, city.building(id)).or_else(|| {
+        city.portals(id)
+            .into_iter()
+            .find(|(k, _)| *k == StratumKind::Street)
+            .map(|(_, p)| p)
+    })?;
+    let quarters = match super::layouts::edge(fp, door) {
+        3 => 0,
+        0 => 1,
+        2 => 2,
+        _ => 3,
+    };
+    let turn = Turn {
+        quarters,
+        mirror: hash64(city.seed, 0xC11D ^ id.index() as u64) & 1 == 1,
+    };
+    let street = super::layouts::clinics::grid(front, 0);
+    let (w, h) = super::layouts::clinics::dims(street);
+    let e = super::layouts::clinics::find(street, b'E')?;
+    Some(ClinicPlan {
+        front,
+        turn,
+        door,
+        entrance: turn_pos(e, w, h, turn),
+    })
 }
 
 /// Whether a building plans an atrium.
@@ -88,7 +165,20 @@ impl FloorPlan {
         }
         let mut rng = ChaCha8Rng::seed_from_u64(hash64(city.seed, 0x1F00 ^ id.index() as u64));
         let fp = b.footprint;
-        let size = floor_size(fp);
+        let clinic = clinic_plan(city, id, fp);
+        // A clinic's floor is its grid, turned.
+        let size = match clinic {
+            Some(c) => {
+                let (w, h) =
+                    super::layouts::clinics::dims(super::layouts::clinics::grid(c.front, 0));
+                let (w, h) = turn_size(w, h, c.turn);
+                Size {
+                    w: w as u32,
+                    h: h as u32,
+                }
+            }
+            None => floor_size(fp),
+        };
         let floors: i32 = match (b.span.hi, b.kind) {
             (StratumKind::Street, BuildingKind::Club) => 2,
             (StratumKind::Street, BuildingKind::Office | BuildingKind::Apartment) => {
@@ -103,7 +193,8 @@ impl FloorPlan {
             _ => rng.random_range(8..=14),
         };
         let top = floors - 1;
-        let lowest = if b.span.lo == StratumKind::Undercity {
+        let cellar = clinic.is_some_and(|c| c.front.floors() == 2);
+        let lowest = if b.span.lo == StratumKind::Undercity || cellar {
             -1
         } else {
             0
@@ -126,6 +217,15 @@ impl FloorPlan {
             (h / 2 - 1, Pos::new(w / 2 - 1, h / 2))
         };
         let lift = (total >= 3).then(|| Pos::new(w / 2 - 1, lift_y));
+        // A clinic with a cellar has its stair where its grid puts it.
+        let stair = clinic
+            .filter(|_| cellar)
+            .and_then(|c| {
+                let street = super::layouts::clinics::grid(c.front, 0);
+                let (gw, gh) = super::layouts::clinics::dims(street);
+                super::layouts::clinics::find(street, b'v').map(|v| turn_pos(v, gw, gh, c.turn))
+            })
+            .unwrap_or(stair);
         // The home: high in the lowest-id atrium megablock, below the top floor and
         // off the bridge floor.
         let first_atrium = city
@@ -156,6 +256,7 @@ impl FloorPlan {
             stair,
             atrium,
             home_level,
+            clinic,
         })
     }
 
@@ -177,6 +278,10 @@ impl FloorPlan {
     }
 
     pub fn floor_type(&self, level: i32) -> FloorType {
+        // Every floor of a clinic is its grid, the laundromat's cellar too.
+        if self.clinic.is_some() {
+            return FloorType::Clinic;
+        }
         if level < 0 {
             return FloorType::Basement;
         }
@@ -223,6 +328,10 @@ impl FloorPlan {
     /// The floors people work on: the office floors of a tower, the one floor of
     /// everything else.
     pub fn work_floors(&self) -> Vec<i32> {
+        // A clinic's doc works by the chair: the laundromat's in its cellar.
+        if let Some(c) = self.clinic {
+            return vec![1 - c.front.floors() as i32];
+        }
         let offices: Vec<i32> = self
             .levels()
             .filter(|l| matches!(self.floor_type(*l), FloorType::Corridor | FloorType::Suite))

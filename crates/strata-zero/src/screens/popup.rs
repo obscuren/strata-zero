@@ -81,6 +81,11 @@ pub enum Pick {
     Drop(crate::jobs::JobId),
     /// Puts a Deliver's package into the person's hands.
     Hand(crate::jobs::JobId),
+    /// Sits in a ripperdoc's chair on this floor: the deck opens on the ledger.
+    Chair {
+        building: citygen::BuildingId,
+        level: i32,
+    },
     Close,
 }
 
@@ -520,6 +525,25 @@ impl Popup {
                 to: Box::new(crate::screens::terminal::Terminal::open(st, origin, key)),
                 fx: TransitionKind::None,
             },
+            Pick::Chair { building, level } => {
+                let Some(doc) = crate::clinic::doc_at_work(st, building) else {
+                    st.warn("the doc is out");
+                    return ScreenCmd::Pop {
+                        fx: TransitionKind::None,
+                    };
+                };
+                st.chair = Some(crate::clinic::Chair {
+                    building,
+                    level,
+                    doc,
+                });
+                let line = crate::clinic::doc_line(st, doc);
+                st.say(format!("{}: “{line}”", crate::clinic::doc_name(st, doc)));
+                ScreenCmd::Replace {
+                    to: Box::new(crate::screens::deck::Deck::chair(st)),
+                    fx: TransitionKind::Glitch,
+                }
+            }
             Pick::Look(pos) => {
                 st.look_at = Some(pos);
                 ScreenCmd::Pop {
@@ -819,6 +843,33 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
         t.draw(|f| p.draw(st, f)).unwrap();
         buffer_text(t.backend().buffer())
+    }
+
+    #[test]
+    fn sitting_in_the_chair_opens_the_deck() {
+        let (mut st, b, level, _) = crate::clinic::testutil::inside();
+        let doc = crate::clinic::doc_at_work(&st, b).unwrap();
+        let mut p = Popup::about(
+            None,
+            None,
+            vec![Choice::new('i', "Sit", Pick::Chair { building: b, level })],
+            st.tick,
+        );
+        let cmd = p.update(&mut st, &[key(crossterm::event::KeyCode::Char('i'))]);
+        assert!(matches!(cmd, ScreenCmd::Replace { .. }));
+        assert_eq!(
+            st.chair,
+            Some(crate::clinic::Chair {
+                building: b,
+                level,
+                doc
+            })
+        );
+        let said = last(&st).unwrap();
+        assert!(
+            said.starts_with(&crate::clinic::doc_name(&st, doc)) && said.contains('“'),
+            "{said}"
+        );
     }
 
     #[test]

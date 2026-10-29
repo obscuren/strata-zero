@@ -84,7 +84,11 @@ pub fn building_label(st: &AppState, b: BuildingId) -> String {
         .and_then(|c| c.building_opt(b))
         .map(|x| match &x.name {
             Some(n) => n.to_uppercase(),
-            None => format!("{} {}", x.kind.label().to_uppercase(), b.index()),
+            None => format!(
+                "{} {}",
+                citygen::kind_label(st.city.as_ref().unwrap(), b).to_uppercase(),
+                b.index()
+            ),
         })
         .unwrap_or_else(|| "THE BUILDING".to_string())
 }
@@ -136,7 +140,7 @@ pub fn scan_row(st: &AppState, i: usize, b: BuildingId) -> String {
         "{:>2}  {:<22} {:<10} SEC {sec:>3}  ICE {:<5} {}",
         i + 1,
         building_name(st, b),
-        city.building(b).kind.label().to_uppercase(),
+        citygen::kind_label(city, b).to_uppercase(),
         ice_grade(sec).to_uppercase(),
         tier_on(st, b).label()
     )

@@ -598,17 +598,20 @@ pub fn look_card(
             )
     }) {
         let bl = city.building(b);
-        let name = bl
-            .name
-            .clone()
-            .unwrap_or_else(|| capitalised(bl.kind.label()));
+        let kind = citygen::kind_label(city, b);
+        let name = bl.name.clone().unwrap_or_else(|| capitalised(kind));
         set_head(&mut card, name, mark_tile(st, map, pos));
         let district = city.district(bl.district).name.clone();
-        card.second = Some(format!("{} · {district}", bl.kind.label()));
+        card.second = Some(format!("{kind} · {district}"));
+        // A clinic's front has its own line, with a tell in it.
+        let key = match citygen::clinic_front(city, b) {
+            Some(_) => format!("{kind} front"),
+            None => kind.to_string(),
+        };
         if visible {
             card.body.extend(
                 looks
-                    .line(Group::Building, bl.kind.label(), city.seed, pos)
+                    .line(Group::Building, &key, city.seed, pos)
                     .map(String::from),
             );
         }
@@ -916,6 +919,62 @@ mod tests {
             h, 8,
             "border, second, blank, two body rows, blank, hint, border: {text}"
         );
+    }
+
+    #[test]
+    fn a_clinic_looks_like_its_front() {
+        let mut st = AppState::new();
+        st.city = Some(
+            Generator::run(GenParams {
+                seed: 8,
+                size: SizePreset::Medium,
+                districts: 7,
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let city = st.city.as_ref().unwrap();
+        let b = city
+            .buildings
+            .iter()
+            .find(|b| b.kind == citygen::BuildingKind::Clinic)
+            .unwrap();
+        let front = citygen::clinic_front(city, b.id).unwrap();
+        // A wall of it, seen from the pavement outside.
+        let (wall, outside) = b
+            .footprint
+            .border()
+            .filter(|p| {
+                city.tile(StratumKind::Street, *p).is_some_and(|t| {
+                    t.feature.is_none()
+                        && matches!(t.terrain, citygen::Terrain::Wall | citygen::Terrain::Window)
+                })
+            })
+            .find_map(|p| {
+                p.neighbors4()
+                    .find(|n| !b.footprint.contains(*n) && city.walkable(StratumKind::Street, *n))
+                    .map(|n| (p, n))
+            })
+            .unwrap();
+        let district = city.district(b.district).name.clone();
+        st.player = Some(Player::spawn(city, 1));
+        stand(&mut st, outside);
+        let c = card(&st, wall);
+        assert_eq!(c.second, Some(format!("{} · {district}", front.label())));
+        let looks = Looks::load();
+        let line = looks
+            .line(
+                Group::Building,
+                &format!("{} front", front.label()),
+                0,
+                wall,
+            )
+            .unwrap();
+        assert_eq!(c.body, vec![line.to_string()]);
+        // Every front has its line.
+        for f in citygen::Front::ALL {
+            assert!(looks.has(&format!("{} front", f.label())), "{f:?}");
+        }
     }
 
     #[test]

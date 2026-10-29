@@ -834,6 +834,8 @@ Content(
                  categories: ["iron", "edge", "meat"], skills: ["handguns", "blades", "athletics"],
                  kit: [("cargo_pants", 1)]),
     ],
+    // What a ripperdoc charges, in percent of a piece's value: to put it in, to take it out.
+    surgery: (install: 12, pull: 4),
     lore: [
         Lore(path: "/etc/security-policy.txt", theme: Some("megacorp"), kind: None,
              text: "HALCYON GROUP · SECURITY POLICY 11-C\nBadges are personal. Tailgating is a terminable offence.\nLifts answer to Security first and to you second.\nReport lost cards to the desk, never to a colleague.\n"),

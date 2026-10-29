@@ -607,6 +607,21 @@ impl Deck {
         self
     }
 
+    /// Sat in a ripperdoc's chair: the deck as it was left, opened on ATTRIBUTES with the
+    /// ledger in hand.
+    pub fn chair(st: &AppState) -> Self {
+        let mut d = Deck::new(st.tick).restore(st);
+        if let Some(p) = st.player.as_ref() {
+            d = d.focus(p.place, p.pos);
+        }
+        d.set_tab(Tab::Attributes, st);
+        d.sheet.opened(st.tick);
+        d.sheet.state.pane = crate::screens::sheet::SheetPane::Ledger;
+        d.sheet.state.row = crate::screens::sheet::LedgerRow::default();
+        d.sheet.reselect(st);
+        d
+    }
+
     /// Reopens where the deck was closed: the remembered tab and its row, clamped to a
     /// row that still exists and can be selected, and GEAR & INVENTORY and ATTRIBUTES where
     /// they were left.
@@ -1315,6 +1330,10 @@ impl Deck {
             }
             match k.code {
                 KeyCode::Esc | KeyCode::Tab => {
+                    // Closing the deck gets you out of the doc's chair.
+                    if st.chair.take().is_some() {
+                        st.say("you get out of the chair");
+                    }
                     return ScreenCmd::Pop {
                         fx: TransitionKind::Glitch,
                     };
@@ -1779,6 +1798,33 @@ mod tests {
     fn walking(st: &mut AppState) {
         let city = st.city.as_ref().unwrap();
         st.player = Some(crate::walker::Player::spawn(city, 1));
+    }
+
+    #[test]
+    fn the_chair_opens_on_the_ledger_and_closing_gets_you_up() {
+        use crate::screens::sheet::SheetPane;
+        let mut st = crate::clinic::testutil::seated();
+        st.deck_tab = Tab::Kit;
+        st.deck_sheet.row = crate::screens::sheet::LedgerRow::Site(game::Site::Legs);
+        let mut d = Deck::chair(&st);
+        assert_eq!(d.tab, Tab::Attributes);
+        assert_eq!(d.sheet.state.pane, SheetPane::Ledger);
+        // On the first chrome row, whatever row the ledger was left on.
+        assert_eq!(
+            d.sheet.state.row,
+            crate::screens::sheet::LedgerRow::default()
+        );
+        assert!(matches!(
+            d.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Pop { .. }
+        ));
+        assert_eq!(st.chair, None);
+        assert_eq!(last(&st), Some("you get out of the chair"));
+        // A deck opened anywhere else closes without a word about chairs.
+        let mut d = Deck::new(st.tick);
+        st.say("before");
+        d.update(&mut st, &[key(KeyCode::Tab)]);
+        assert_eq!(last(&st), Some("before"));
     }
 
     #[test]

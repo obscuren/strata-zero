@@ -11486,6 +11486,8 @@ mod tests {
                 .and_then(game::Stack::copy_id)
                 .unwrap()
         };
+        // Free chrome: the arm goes in without a ripperdoc.
+        st.free_chrome = true;
         let arm = copy(&st, "piston_arm");
         crate::actions::perform(
             &mut st,

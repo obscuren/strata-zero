@@ -41,6 +41,10 @@ pub struct AppState {
     pub show_eyes: bool,
     /// Dev: paint each visible tile grey by its light.
     pub show_light: bool,
+    /// Dev (`ripper`): chrome goes in and out anywhere, free.
+    pub free_chrome: bool,
+    /// The ripperdoc's chair you are sitting in.
+    pub chair: Option<crate::clinic::Chair>,
     /// A popup asked the map for its look cursor on this tile; the map takes it.
     pub look_at: Option<citygen::Pos>,
     /// The console's `target`: a Street tile the free camera should jump to.
@@ -200,6 +204,8 @@ impl AppState {
             show_fps: true,
             show_eyes: false,
             show_light: false,
+            free_chrome: false,
+            chair: None,
             look_at: None,
             jump_to: None,
             content,

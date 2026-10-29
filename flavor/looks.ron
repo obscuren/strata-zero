@@ -92,7 +92,12 @@ Looks(
         "club": ["Bass through the wall, and a queue that doesn't move."],
         "arcade": ["Coloured light pouring out and the rattle of old cabinets."],
         "pawn shop": ["Everything in the window used to belong to someone."],
-        "clinic": ["Clean glass, a red cross and a waiting room that never empties."],
+        // A ripperdoc's front: what the street sees, with a tell for those who look.
+        "noodle bar front": ["Steam on the window, and a door at the back the cook never looks at."],
+        "laundromat front": ["Rows of washers and a change machine; the stair at the back goes further down than a laundromat needs."],
+        "dentist front": ["DENTAL in peeling letters, the blinds always down, and somebody always going in."],
+        "tattoo parlour front": ["Flash sheets in the window and a needle buzzing somewhere in back, louder than a needle should."],
+        "butcher front": ["Hooks in the window and a cold room that hums louder than it should."],
         "temple": ["Lanterns over the door and incense drifting into the street."],
         "warehouse": ["Corrugated walls and a loading bay that smells of diesel."],
         "factory": ["Chimneys, a gate and a shift change you can hear from here."],
