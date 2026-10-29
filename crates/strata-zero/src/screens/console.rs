@@ -102,10 +102,11 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             let level = st.character.level;
             for i in (0..gained).rev() {
                 let at = level - i;
-                let attribute = match game::Character::attribute_points_for(at - 1, at) {
-                    0 => String::new(),
-                    1 => " · an attribute point".to_string(),
-                    n => format!(" · {n} attribute points"),
+                // A line a level, so at most one point a line.
+                let attribute = if game::Character::attribute_points_for(at - 1, at) > 0 {
+                    " · an attribute point"
+                } else {
+                    ""
                 };
                 st.story(format!(
                     "level {at} · a talent point · {} SP{attribute}",
