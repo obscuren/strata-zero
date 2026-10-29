@@ -45,6 +45,8 @@ impl StageRunner for NamingStage {
                 let corp = ctx.flavor.corp_name(rng);
                 corp_names.push(corp.clone());
                 Some(corp)
+            } else if let Some(front) = crate::clinic::clinic_front(&ctx.city, ctx.city.buildings[i].id) {
+                ctx.flavor.front_name(front, rng)
             } else {
                 ctx.flavor.shop_name(kind, rng)
             };
@@ -98,5 +100,35 @@ mod tests {
             })
             .count();
         assert!(landmarks >= a.districts.len(), "landmarks {landmarks}");
+    }
+
+    #[test]
+    fn clinics_are_named_for_their_front() {
+        let flavor = crate::flavor::FlavorPack::load("default").unwrap();
+        let mut clinics = 0;
+        for seed in [91, 8, 11] {
+            let c = small(seed, WaterMode::Bay, 7);
+            for b in &c.buildings {
+                let Some(front) = crate::clinic::clinic_front(&c, b.id) else {
+                    continue;
+                };
+                let name = b.name.as_deref().unwrap();
+                let (_, templates) = flavor.fronts.iter().find(|(f, _)| *f == front).unwrap();
+                let fits = |t: &String| {
+                    let (pre, post) = t.split_once("{syl}").unwrap();
+                    name.len() > pre.len() + post.len()
+                        && name.starts_with(pre)
+                        && name.ends_with(post)
+                        && name[pre.len()..].starts_with(|ch: char| ch.is_uppercase())
+                };
+                // The landmark pass may give the district's biggest lot a grand name.
+                let landmark = ["Tower", "Terminal", "Arcology", "Plaza", "Station"]
+                    .iter()
+                    .any(|w| name.contains(w));
+                assert!(landmark || templates.iter().any(fits), "{front:?}: {name}");
+                clinics += 1;
+            }
+        }
+        assert!(clinics > 0);
     }
 }

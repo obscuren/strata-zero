@@ -48,7 +48,6 @@ FlavorPack(
         (NoodleBar, ["{syl} Noodles", "Ramen {syl}", "{syl} Kitchen", "Hot {syl}", "{syl} Bowl"]),
         (Bar, ["The {syl}", "{syl} Lounge", "Bar {syl}", "{syl} & Static", "Dive {syl}"]),
         (Club, ["Club {syl}", "{syl} Afterdark", "Velvet {syl}", "{syl} Pulse"]),
-        (Clinic, ["{syl} Ripperdoc", "Clinic {syl}", "{syl} Chrome", "Doc {syl}"]),
         (Shop, ["{syl} Goods", "{syl} Mart", "24h {syl}", "{syl} Supply"]),
         (Pawn, ["{syl} Pawn", "{syl} & Sons", "Cash {syl}"]),
         (Arcade, ["{syl} Arcade", "Neon {syl}", "{syl} Braindance"]),
@@ -59,6 +58,14 @@ FlavorPack(
         (Warehouse, ["{syl} Storage", "{syl} Freight"]),
         (Factory, ["{syl} Fabrication", "{syl} Assembly"]),
         (Depot, ["{syl} Depot", "{syl} Transit"]),
+    ],
+    // A clinic is named for its front: what the street sees, never the doc.
+    fronts: [
+        (NoodleBar, ["Hot Pot {syl}", "{syl} Noodles", "Ramen {syl}", "{syl} Bowl"]),
+        (Laundromat, ["{syl} Wash", "Suds {syl}", "{syl} Coin-Op", "Laundromat {syl}"]),
+        (Dentist, ["Saint {syl} Dental", "{syl} Dental", "Dr {syl}, Dentist"]),
+        (Tattoo, ["{syl} Ink", "Needle {syl}", "{syl} Tattoo"]),
+        (Butcher, ["{syl} Meats", "{syl} & Son, Butchers", "Cold Cuts {syl}"]),
     ],
     landmarks: ["{corp} Tower", "{district} Terminal", "The {district} Arcology", "{corp} Plaza", "Old {district} Station"],
     signage: ['ｦ','ｧ','ｨ','ｩ','ｪ','ｫ','ｬ','ｭ','ｮ','ｯ','ｰ','ｱ','ｲ','ｳ','ｴ','ｵ','ｶ','ｷ','ｸ','ｹ','ｺ','ｻ','ｼ','ｽ','ｾ','ｿ','ﾀ','ﾁ','ﾂ','ﾃ','ﾄ','ﾅ','ﾆ','ﾇ','ﾈ','ﾉ','ﾊ','ﾋ','ﾌ','ﾍ','ﾎ','ﾏ','ﾐ','ﾑ','ﾒ','ﾓ','ﾔ','ﾕ','ﾖ','ﾗ','ﾘ','ﾙ','ﾚ','ﾛ','ﾜ','ﾝ','Ж','Ф','Ц','Ш','Я','Δ','Σ','Ψ','Ω','¥','$','€','§','¤'],

@@ -1,5 +1,6 @@
 //! Flavor pack: names and signage glyphs, loaded from RON.
 
+use crate::clinic::Front;
 use crate::params::GenError;
 use crate::world::{BuildingKind, Theme};
 use rand::Rng;
@@ -27,6 +28,9 @@ pub struct FlavorPack {
     pub districts: Vec<(Theme, NameParts)>,
     pub corp: CorpParts,
     pub shops: Vec<(BuildingKind, Vec<String>)>,
+    /// A clinic's name by its front, in place of a shop's.
+    #[serde(default)]
+    pub fronts: Vec<(Front, Vec<String>)>,
     pub landmarks: Vec<String>,
     pub signage: Vec<char>,
     /// Handles for the people of the city.
@@ -106,6 +110,15 @@ impl FlavorPack {
 
     pub fn shop_name(&self, kind: BuildingKind, rng: &mut impl Rng) -> Option<String> {
         let (_, templates) = self.shops.iter().find(|(k, _)| *k == kind)?;
+        let template = pick(rng, templates);
+        let word = self.syllable_word(rng);
+        Some(template.replace("{syl}", &word))
+    }
+
+    /// A clinic's name for its front: the same draws as `shop_name`, so the names after
+    /// it come out the same.
+    pub fn front_name(&self, front: Front, rng: &mut impl Rng) -> Option<String> {
+        let (_, templates) = self.fronts.iter().find(|(f, _)| *f == front)?;
         let template = pick(rng, templates);
         let word = self.syllable_word(rng);
         Some(template.replace("{syl}", &word))

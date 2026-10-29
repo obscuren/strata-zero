@@ -1,5 +1,6 @@
 //! World model and generator for the cyberpunk city.
 
+pub mod clinic;
 pub mod construct;
 pub mod flavor;
 pub mod fov;
@@ -18,6 +19,7 @@ pub mod tile;
 pub mod validate;
 pub mod world;
 
+pub use clinic::{Front, clinic_front, kind_label};
 pub use construct::*;
 pub use flavor::FlavorPack;
 pub use generate::{Generator, Progress, Stage};
