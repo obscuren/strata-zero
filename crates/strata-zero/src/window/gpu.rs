@@ -385,7 +385,10 @@ impl Gpu {
         );
         let mut out = Vec::with_capacity((w * h * 4) as usize);
         for y in 0..h as usize {
-            for px in data[y * row as usize..][..w as usize * 4].chunks_exact(4) {
+            for px in data[y * row as usize..][..w as usize * 4]
+                .as_chunks::<4>()
+                .0
+            {
                 if bgra {
                     out.extend_from_slice(&[px[2], px[1], px[0], 255]);
                 } else {

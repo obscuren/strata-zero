@@ -53,6 +53,7 @@ impl ScreenFx {
     }
 
     /// `off`, `soft` or `crt`, in any case.
+    #[cfg(any(feature = "window", test))]
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "off" => Some(ScreenFx::Off),

@@ -263,9 +263,19 @@ scripts/macos-app.sh   # target/smoke/macos/Strata Zero.app, universal, ad-hoc s
 
 Cmd+Q quits, Ctrl+Cmd+F is fullscreen, Cmd+= / Cmd+- / Cmd+0 set the text size.
 Started from the `.app`, cities save under
-`~/Library/Application Support/Strata Zero/cities/`. `STRATA_WINDOW_SHOT=<file.png>`
-writes the window's frame 1.5 s in. The design and what a Steam build still needs
-are in `docs/superpowers/specs/2026-10-29-window-prototype-design.md`.
+`~/Library/Application Support/Strata Zero/cities/`.
+
+The window draws through the GPU (wgpu: Metal here, Direct3D 12 or Vulkan
+elsewhere) with screen effects, set in Settings under **Screen effects**: OFF,
+SOFT (a glow around bright colours and a light vignette; the default) or CRT (a
+stronger glow, scanlines, a deeper vignette and a slight curve).
+`STRATA_SCREEN_FX=off|soft|crt` picks one at launch. Without a usable GPU it draws
+through the CPU instead, with no effects.
+
+`STRATA_WINDOW_SHOT=<file.png>` writes what the window shows 1.5 s in. The designs,
+and what a Steam build still needs, are in
+`docs/superpowers/specs/2026-10-29-window-prototype-design.md` and
+`docs/superpowers/specs/2026-10-29-window-gpu-effects-design.md`.
 
 ## Keys
 

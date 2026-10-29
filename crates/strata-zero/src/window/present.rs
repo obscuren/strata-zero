@@ -11,7 +11,7 @@ use std::sync::Arc;
 use winit::window::Window;
 
 pub enum Presenter {
-    Gpu(GpuPresenter),
+    Gpu(Box<GpuPresenter>),
     Cpu(CpuPresenter),
 }
 
@@ -19,7 +19,7 @@ impl Presenter {
     /// The GPU when one answers for `window`, else softbuffer, with a note on stderr.
     pub fn new(window: Arc<Window>) -> Result<Presenter> {
         match GpuPresenter::new(window.clone()) {
-            Ok(p) => Ok(Presenter::Gpu(p)),
+            Ok(p) => Ok(Presenter::Gpu(Box::new(p))),
             Err(e) => {
                 eprintln!("strata: no GPU ({e:#}); drawing without screen effects");
                 Ok(Presenter::Cpu(CpuPresenter::new(window)?))
