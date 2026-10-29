@@ -581,6 +581,8 @@ Five asks from Jeffrey once the sheet was in, made on top of the attributes rena
    into line one (`REFLEX 9 · 10 in all, capped`, `MOVE 4 · in a construct`), then the
    kinds flow onto fewer lines ` · ` between, and only then is the last line that fits
    marked `…`.
+   The right pane has the same gap: a blank row under the CHROME header, across the
+   ledger and the card (the ledger's `│` rule still runs from the header down).
 5. **Space swaps, `x` pulls.** `space` on installed chrome opens the FITS picker for that
    site or socket as on an empty one, the card's second line `replaces Piston arm`;
    `space` on a pick installs it and sends what was there to the pack (a limb with what
