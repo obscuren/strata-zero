@@ -31,7 +31,7 @@ pub enum ContentError {
     UnknownAbility { where_: String, id: String },
     #[error("item `{item}` has a use but is not a consumable")]
     UseOnNonConsumable { item: String },
-    #[error("item `{item}` has perks or grants but no slot")]
+    #[error("item `{item}` has perks or grants but no slot or implant")]
     PerkWithoutSlot { item: String },
     #[error("item `{item}` cannot sit in slot {slot:?}")]
     SlotMismatch { item: String, slot: Slot },
@@ -79,6 +79,8 @@ pub enum ContentError {
     StickerInvalid { id: String, why: String },
     #[error("weapon `{id}`: {why}")]
     WeaponInvalid { id: String, why: String },
+    #[error("chrome `{id}`: {why}")]
+    ChromeInvalid { id: String, why: String },
     #[error("item `{id}`: {why}")]
     ItemInvalid { id: String, why: String },
     #[error("ability `{id}`: {why}")]
@@ -226,6 +228,27 @@ fn sticker_ok(i: &Item) -> Result<(), String> {
     Ok(())
 }
 
+/// Chrome is cyberware with an implant and no slot, and nothing else has an implant;
+/// it takes 1 to 5 of the load, and only an arm has sockets.
+fn chrome_ok(i: &Item) -> Result<(), String> {
+    let implant = match (i.kind, i.implant) {
+        (ItemKind::Cyberware, Some(implant)) => implant,
+        (ItemKind::Cyberware, None) => return Err("no implant".into()),
+        (_, Some(_)) => return Err("an implant on something that is not cyberware".into()),
+        (_, None) => return Ok(()),
+    };
+    if i.slot.is_some() {
+        return Err("chrome has no slot; it is installed".into());
+    }
+    if !(1..=5).contains(&implant.load) {
+        return Err(format!("load {}; a load is 1 to 5", implant.load));
+    }
+    if !i.sockets.is_empty() && implant.fits != Fits::Arm {
+        return Err("only an arm has sockets".into());
+    }
+    Ok(())
+}
+
 impl Content {
     /// Parses the embedded `flavor/content.ron` and validates it.
     pub fn load() -> Result<Content, ContentError> {
@@ -349,8 +372,15 @@ impl Content {
                 }
                 _ => {}
             }
-            if !i.sockets.is_empty() {
-                // Only a drawing can place sockets, and each kind must sit where it is drawn.
+            if let Err(why) = chrome_ok(i) {
+                return Err(ContentError::ChromeInvalid {
+                    id: i.id.0.clone(),
+                    why,
+                });
+            }
+            if !i.sockets.is_empty() && i.implant.is_none() {
+                // Only a drawing can place sockets, and each kind must sit where it is
+                // drawn. Chrome's sockets are checked with the rest of the chrome.
                 let drawn = i.drawn_sockets();
                 for (n, kind) in i.sockets.iter().enumerate() {
                     let why = match drawn.get(n) {
@@ -478,7 +508,10 @@ impl Content {
                     return Err(bad("a blast has one blast shape at most"));
                 }
             }
-            if (!i.perks.is_empty() || !i.grants.is_empty()) && i.slot.is_none() {
+            if (!i.perks.is_empty() || !i.grants.is_empty())
+                && i.slot.is_none()
+                && i.implant.is_none()
+            {
                 return Err(ContentError::PerkWithoutSlot {
                     item: i.id.0.clone(),
                 });
@@ -2287,6 +2320,72 @@ mod tests {
             assert_eq!(i.kind, ItemKind::Cyberware, "{item}");
             assert_eq!(i.grants, vec![AbilityId::new(ability)], "{item}");
         }
+    }
+
+    #[test]
+    fn the_seven_pieces_have_sites() {
+        let c = Content::load().unwrap();
+        use SocketKind::{Forearm, Hand};
+        for (id, fits, load) in [
+            ("neural_port", Fits::Neural, 1),
+            ("nightglass_optics", Fits::Eyes, 2),
+            ("target_lens", Fits::Eyes, 2),
+            ("adrenal_pump", Fits::Organs, 2),
+            ("grip_arm", Fits::Arm, 3),
+            ("piston_arm", Fits::Arm, 3),
+            ("arc_hand", Fits::Socket(Hand), 1),
+        ] {
+            let i = c.item(&ItemId::new(id)).unwrap();
+            assert_eq!(i.implant, Some(Implant { fits, load }), "{id}");
+            assert_eq!(i.slot, None, "{id}");
+        }
+        for id in ["grip_arm", "piston_arm"] {
+            let arm = c.item(&ItemId::new(id)).unwrap();
+            assert_eq!(arm.sockets, vec![Hand, Forearm], "{id}");
+        }
+        let hand = c.item(&ItemId::new("arc_hand")).unwrap();
+        assert_eq!(hand.perks, vec![Perk::Resist(Harm::Shock, 10)]);
+        assert_eq!(hand.grants, vec![AbilityId::new("jolt")]);
+        assert!(hand.per_copy(), "a socket piece moves as a copy");
+    }
+
+    #[test]
+    fn chrome_is_validated() {
+        let c = Content::load().unwrap();
+        let at = |c: &Content, id: &str| c.items.iter().position(|i| i.id.0 == id).unwrap();
+        let broken = |id: &str, f: &dyn Fn(&mut Item)| {
+            let mut bad = c.clone();
+            let i = at(&bad, id);
+            f(&mut bad.items[i]);
+            bad.validate()
+        };
+        let invalid =
+            |r: Result<(), ContentError>| matches!(r, Err(ContentError::ChromeInvalid { .. }));
+        assert!(invalid(broken("neural_port", &|i| i.implant = None)));
+        assert!(invalid(
+            broken("neural_port", &|i| i.slot = Some(Slot::Head))
+        ));
+        assert!(invalid(broken("mirrorshades", &|i| {
+            i.implant = Some(Implant {
+                fits: Fits::Eyes,
+                load: 1,
+            })
+        })));
+        let load = |n: u8| move |i: &mut Item| i.implant.as_mut().unwrap().load = n;
+        assert!(invalid(broken("neural_port", &load(0))));
+        assert!(invalid(broken("neural_port", &load(6))));
+        assert!(broken("neural_port", &load(5)).is_ok());
+        assert!(invalid(broken("arc_hand", &|i| {
+            i.sockets = vec![SocketKind::Hand]
+        })));
+        assert_eq!(
+            ContentError::ChromeInvalid {
+                id: "x".into(),
+                why: "y".into()
+            }
+            .to_string(),
+            "chrome `x`: y"
+        );
     }
 
     #[test]

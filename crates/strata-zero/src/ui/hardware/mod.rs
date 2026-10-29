@@ -117,14 +117,15 @@ pub fn draw_large(look: HardwareLook, mods: &[Mod], p: &mut Pen) {
 }
 
 /// Where a piece of this kind draws inside its socket place: the offset from the
-/// place's corner and the size. The deck draws its own sides, so it has none.
+/// place's corner and the size. The deck draws its own sides, so it has none, and
+/// no hardware drawing places a chrome arm's sockets.
 /// A footprint's cells belong to the piece alone: the host's drawing puts neither
 /// pixels nor text there, because pieces are folded over the finished host drawing.
 pub fn footprint(kind: SocketKind) -> Option<(i32, i32, u16, u16)> {
     match kind {
         SocketKind::Muzzle => Some((4, 0, 18, 5)),
         SocketKind::Rail => Some((0, 0, 24, 3)),
-        SocketKind::Deck => None,
+        SocketKind::Deck | SocketKind::Hand | SocketKind::Forearm => None,
     }
 }
 

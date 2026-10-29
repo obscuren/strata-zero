@@ -7,10 +7,12 @@ use crate::ground::Ground;
 use crate::model::*;
 use citygen::{Place, Pos};
 
-/// What hardware is fitted into: the deck being worn, or a copy in the pack.
+/// What a piece is fitted into: what a slot wears, the chrome a site holds, or a
+/// copy in the pack.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Host {
     Worn(Slot),
+    Site(Site),
     Pack(CopyId),
 }
 
@@ -738,12 +740,9 @@ mod tests {
             Action::Equip(id("mirrorshades")),
         )
         .unwrap();
-        assert_eq!(
-            out.message,
-            "swapped `Nightglass optics` for `Mirrorshades`"
-        );
-        assert_eq!(ch.count(&id("nightglass_optics")), 1);
-        assert_eq!(ch.sight_bonus(&c), 0);
+        assert_eq!(out.message, "equipped `Mirrorshades`");
+        assert_eq!(ch.equipped(Slot::Eyes), Some(&id("mirrorshades")));
+        assert_eq!(ch.sight_bonus(&c), 4, "the optics are installed, not worn");
         assert!(
             apply(&mut ch, &mut g, &c, at, 0, Action::Unequip(Slot::Legs)).is_err(),
             "empty slot"
@@ -924,7 +923,7 @@ mod tests {
             .is_err(),
             "passive"
         );
-        ch.equipment.insert(Slot::Neural, id("neural_port"));
+        ch.chrome.insert(Site::Neural, id("neural_port"));
         let out = apply(
             &mut ch,
             &mut g,
@@ -1367,6 +1366,30 @@ mod tests {
             apply(&mut ch, &mut g, &c, at, 0, unfit).unwrap_err(),
             "socket L is empty"
         );
+    }
+
+    #[test]
+    fn unfit_takes_a_piece_out_of_an_installed_arm() {
+        let (c, mut ch, mut g, at) = setup();
+        let (arm, hand) = (id("piston_arm"), id("arc_hand"));
+        // Installed without a copy, the arm gets one on the way in.
+        ch.chrome.insert(Site::LeftArm, arm.clone());
+        let host = Host::Site(Site::LeftArm);
+        assert_eq!(ch.host_item(host), Some(&arm));
+        assert!(ch.host_copy(host).is_none());
+        let piece = Stack {
+            item: hand.clone(),
+            qty: 1,
+            copy: Some(ch.new_copy(&c, &hand)),
+        };
+        ch.host_copy_mut(&c, host).unwrap().fitted[0] = Some(piece);
+        let fitted = (Site::LeftArm, Some(0), hand.clone());
+        assert!(ch.installed().contains(&fitted));
+        let unfit = Action::Unfit { host, socket: 0 };
+        let out = apply(&mut ch, &mut g, &c, at, 0, unfit).unwrap();
+        assert_eq!(out.message, "`Arc hand` out · to the pack");
+        assert_eq!(ch.count(&hand), 1);
+        assert!(!ch.installed().contains(&fitted));
     }
 
     #[test]

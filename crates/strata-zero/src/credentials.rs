@@ -251,6 +251,7 @@ fn card(id: ItemId, name: String, desc: String) -> Item {
         weight: 0.01,
         value: 40,
         desc,
+        implant: None,
         perks: Vec::new(),
         grants: Vec::new(),
         on_use: None,

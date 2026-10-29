@@ -3722,7 +3722,8 @@ mod tests {
         let (mut st, mut s) = act_half(Pos::new(14, 8));
         st.character.give(game::ItemId::new("neural_port"), 1);
         st.character
-            .wear(game::Slot::Neural, game::ItemId::new("neural_port"), None);
+            .chrome
+            .insert(game::Site::Neural, game::ItemId::new("neural_port"));
         let list = MapScreen::act_list(&st);
         let slot = |id: &str| {
             let i = list.iter().position(|a| *a == act_ability(id)).unwrap();
@@ -3742,7 +3743,8 @@ mod tests {
         let (mut st, mut s) = act_half(Pos::new(14, 8));
         st.character.give(game::ItemId::new("neural_port"), 1);
         st.character
-            .wear(game::Slot::Neural, game::ItemId::new("neural_port"), None);
+            .chrome
+            .insert(game::Site::Neural, game::ItemId::new("neural_port"));
         st.force_hit = Some(true);
         s.update(&mut st, &[key(KeyCode::Char(slot("static")))]);
         assert_eq!(st.net.engaged.as_ref().unwrap().ap, 0);
@@ -8669,12 +8671,12 @@ mod tests {
         // Without the optics there is no low-light and no bonus at all.
         let eyes = st
             .character
-            .equipment
+            .chrome
             .iter()
             .find(|(_, id)| id.0 == "nightglass_optics")
-            .map(|(slot, _)| *slot)
+            .map(|(site, _)| *site)
             .unwrap();
-        st.character.equipment.remove(&eyes);
+        st.character.chrome.remove(&eyes);
         st.tick = at(22, 0);
         assert_eq!(st.sight_bonus(), 0);
     }

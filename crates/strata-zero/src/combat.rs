@@ -1043,7 +1043,8 @@ mod tests {
         let mut st = engaged(Pos::new(14, 8));
         st.character.give(ItemId::new("neural_port"), 1);
         st.character
-            .wear(Slot::Neural, ItemId::new("neural_port"), None);
+            .chrome
+            .insert(game::Site::Neural, ItemId::new("neural_port"));
         st.force_hit = Some(true);
         let id = AbilityId::new("static");
         strike(&mut st, &id, 0).unwrap();
@@ -1071,7 +1072,8 @@ mod tests {
         let mut st = engaged(Pos::new(14, 8));
         st.character.give(ItemId::new("neural_port"), 1);
         st.character
-            .wear(Slot::Neural, ItemId::new("neural_port"), None);
+            .chrome
+            .insert(game::Site::Neural, ItemId::new("neural_port"));
         st.character.fired.insert(id.clone(), st.tick);
         assert!(strike(&mut st, &id, 0).unwrap_err().contains("cooling"));
         assert_eq!(st.net.engaged.as_ref().unwrap().ap, 2);
@@ -1081,7 +1083,8 @@ mod tests {
         let mut st = foes::testutil::lot(Pos::new(14, 8));
         st.character.give(ItemId::new("neural_port"), 1);
         st.character
-            .wear(Slot::Neural, ItemId::new("neural_port"), None);
+            .chrome
+            .insert(game::Site::Neural, ItemId::new("neural_port"));
         crate::net::engage(&mut st, STREET, true);
         assert_eq!(crate::net::phase(&st), Some(Phase::Move));
         assert_eq!(

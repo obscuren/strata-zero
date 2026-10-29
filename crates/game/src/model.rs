@@ -39,8 +39,6 @@ id_type!(TemplateId);
 pub enum Slot {
     Head,
     Eyes,
-    Neural,
-    Arms,
     Torso,
     Legs,
     Primary,
@@ -49,11 +47,9 @@ pub enum Slot {
 }
 
 impl Slot {
-    pub const ALL: [Slot; 9] = [
+    pub const ALL: [Slot; 7] = [
         Slot::Head,
         Slot::Eyes,
-        Slot::Neural,
-        Slot::Arms,
         Slot::Torso,
         Slot::Legs,
         Slot::Primary,
@@ -65,8 +61,6 @@ impl Slot {
         match self {
             Slot::Head => "head",
             Slot::Eyes => "eyes",
-            Slot::Neural => "neural",
-            Slot::Arms => "arms",
             Slot::Torso => "torso",
             Slot::Legs => "legs",
             Slot::Primary => "primary",
@@ -74,6 +68,149 @@ impl Slot {
             Slot::Deck => "deck",
         }
     }
+}
+
+/// A place on the body that holds one piece of chrome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum Site {
+    Neural,
+    Eyes,
+    Ears,
+    Jaw,
+    Spine,
+    Back,
+    Organs,
+    Skin,
+    LeftArm,
+    RightArm,
+    Legs,
+}
+
+impl Site {
+    /// Every site, in ledger order.
+    pub const ALL: [Site; 11] = [
+        Site::Neural,
+        Site::Eyes,
+        Site::Ears,
+        Site::Jaw,
+        Site::Spine,
+        Site::Back,
+        Site::Organs,
+        Site::Skin,
+        Site::LeftArm,
+        Site::RightArm,
+        Site::Legs,
+    ];
+
+    /// The short name in caps, as messages set it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Site::Neural => "NEURAL",
+            Site::Eyes => "EYES",
+            Site::Ears => "EARS",
+            Site::Jaw => "JAW",
+            Site::Spine => "SPINE",
+            Site::Back => "BACK",
+            Site::Organs => "ORGANS",
+            Site::Skin => "SKIN",
+            Site::LeftArm => "L ARM",
+            Site::RightArm => "R ARM",
+            Site::Legs => "LEGS",
+        }
+    }
+
+    /// The ledger's row for an empty site.
+    pub fn lower(self) -> &'static str {
+        match self {
+            Site::Neural => "neural",
+            Site::Eyes => "eyes",
+            Site::Ears => "ears",
+            Site::Jaw => "jaw",
+            Site::Spine => "spine",
+            Site::Back => "back",
+            Site::Organs => "organs",
+            Site::Skin => "skin",
+            Site::LeftArm => "l arm",
+            Site::RightArm => "r arm",
+            Site::Legs => "legs",
+        }
+    }
+
+    /// The name in full, for the card.
+    pub fn long(self) -> &'static str {
+        match self {
+            Site::LeftArm => "LEFT ARM",
+            Site::RightArm => "RIGHT ARM",
+            s => s.label(),
+        }
+    }
+
+    /// The ledger's group: `head`, `body` or `limbs`.
+    pub fn group(self) -> &'static str {
+        match self {
+            Site::Neural | Site::Eyes | Site::Ears | Site::Jaw => "head",
+            Site::Spine | Site::Back | Site::Organs | Site::Skin => "body",
+            Site::LeftArm | Site::RightArm | Site::Legs => "limbs",
+        }
+    }
+
+    /// What a piece must fit to go here; both arms are one kind.
+    pub fn fits(self) -> Fits {
+        match self {
+            Site::Neural => Fits::Neural,
+            Site::Eyes => Fits::Eyes,
+            Site::Ears => Fits::Ears,
+            Site::Jaw => Fits::Jaw,
+            Site::Spine => Fits::Spine,
+            Site::Back => Fits::Back,
+            Site::Organs => Fits::Organs,
+            Site::Skin => Fits::Skin,
+            Site::LeftArm | Site::RightArm => Fits::Arm,
+            Site::Legs => Fits::Legs,
+        }
+    }
+}
+
+/// What a piece of chrome fits: a kind of site, or a kind of socket on a chrome limb.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Fits {
+    Neural,
+    Eyes,
+    Ears,
+    Jaw,
+    Spine,
+    Back,
+    Organs,
+    Skin,
+    Arm,
+    Legs,
+    Socket(SocketKind),
+}
+
+impl Fits {
+    pub fn label(self) -> &'static str {
+        match self {
+            Fits::Neural => "neural",
+            Fits::Eyes => "eyes",
+            Fits::Ears => "ears",
+            Fits::Jaw => "jaw",
+            Fits::Spine => "spine",
+            Fits::Back => "back",
+            Fits::Organs => "organs",
+            Fits::Skin => "skin",
+            Fits::Arm => "arm",
+            Fits::Legs => "legs",
+            Fits::Socket(k) => k.fits(),
+        }
+    }
+}
+
+/// A piece of chrome: what it fits and what it takes of your load.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Implant {
+    pub fits: Fits,
+    /// What it takes of your load.
+    pub load: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -238,6 +375,10 @@ pub enum SocketKind {
     Deck,
     Muzzle,
     Rail,
+    /// On a chrome arm: the hand.
+    Hand,
+    /// On a chrome arm: along the forearm.
+    Forearm,
 }
 
 impl SocketKind {
@@ -247,6 +388,8 @@ impl SocketKind {
             SocketKind::Deck => "deck hardware",
             SocketKind::Muzzle => "muzzle hardware",
             SocketKind::Rail => "rail hardware",
+            SocketKind::Hand => "hand chrome",
+            SocketKind::Forearm => "forearm chrome",
         }
     }
 
@@ -256,6 +399,8 @@ impl SocketKind {
             SocketKind::Deck => "deck socket",
             SocketKind::Muzzle => "muzzle socket",
             SocketKind::Rail => "rail socket",
+            SocketKind::Hand => "hand socket",
+            SocketKind::Forearm => "forearm socket",
         }
     }
 }
@@ -583,10 +728,13 @@ pub struct Item {
     pub weight: f32,
     pub value: u32,
     pub desc: String,
-    /// Modifiers while equipped (slot items only).
+    /// What it fits and takes of your load (cyberware only).
+    #[serde(default)]
+    pub implant: Option<Implant>,
+    /// Modifiers while equipped or installed (slot items and chrome only).
     #[serde(default)]
     pub perks: Vec<Perk>,
-    /// Abilities conferred while equipped (slot items only).
+    /// Abilities conferred while equipped or installed (slot items and chrome only).
     #[serde(default)]
     pub grants: Vec<AbilityId>,
     /// What using it does (consumables only).
@@ -630,10 +778,16 @@ impl Item {
         }
     }
 
-    /// Held per copy, since it can carry state: it has sockets, is hardware, or
-    /// takes stickers.
+    /// Held per copy, since it can carry state or be fitted: it has sockets, is
+    /// hardware or chrome that fits a socket, or takes stickers.
     pub fn per_copy(&self) -> bool {
-        !self.sockets.is_empty() || self.hardware.is_some() || self.takes_stickers()
+        let socket_chrome = self
+            .implant
+            .is_some_and(|i| matches!(i.fits, Fits::Socket(_)));
+        !self.sockets.is_empty()
+            || self.hardware.is_some()
+            || socket_chrome
+            || self.takes_stickers()
     }
 
     /// It can be worn and has a drawing, so stickers can go on it.
@@ -1016,5 +1170,29 @@ impl Stats {
             Stat::Cool => self.cool,
             Stat::Net => self.net,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sites_in_ledger_order() {
+        assert_eq!(Site::ALL.len(), 11);
+        assert_eq!(Site::LeftArm.label(), "L ARM");
+        assert_eq!(Site::LeftArm.lower(), "l arm");
+        assert_eq!(Site::RightArm.long(), "RIGHT ARM");
+        let groups: Vec<&str> = Site::ALL.iter().map(|s| s.group()).collect();
+        let count = |g: &str| groups.iter().filter(|h| **h == g).count();
+        assert_eq!((count("head"), count("body"), count("limbs")), (4, 4, 3));
+        let rank = |g: &&str| ["head", "body", "limbs"].iter().position(|h| h == g);
+        assert!(groups.is_sorted_by_key(rank), "{groups:?}");
+        assert_eq!(Site::LeftArm.fits(), Fits::Arm);
+        assert_eq!(Site::RightArm.fits(), Fits::Arm);
+        assert_eq!(Fits::Arm.label(), "arm");
+        assert_eq!(Fits::Socket(SocketKind::Forearm).label(), "forearm socket");
+        assert_eq!(SocketKind::Hand.takes(), "hand chrome");
+        assert_eq!(Slot::ALL.len(), 7);
     }
 }

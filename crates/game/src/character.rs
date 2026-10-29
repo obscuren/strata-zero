@@ -117,6 +117,10 @@ pub struct Character {
     pub equipment: BTreeMap<Slot, ItemId>,
     /// The copy of each worn item held per copy; a stateless worn item has none.
     pub worn: BTreeMap<Slot, ItemCopy>,
+    /// The chrome installed at each site.
+    pub chrome: BTreeMap<Site, ItemId>,
+    /// The copy of each installed piece held per copy (a limb with sockets).
+    pub chrome_copies: BTreeMap<Site, ItemCopy>,
     pub inventory: Vec<Stack>,
     /// The tick each active ability last fired, for cooldowns.
     pub fired: BTreeMap<AbilityId, u64>,
@@ -157,6 +161,8 @@ impl Character {
             abilities: Vec::new(),
             equipment: BTreeMap::new(),
             worn: BTreeMap::new(),
+            chrome: BTreeMap::new(),
+            chrome_copies: BTreeMap::new(),
             inventory: Vec::new(),
             fired: BTreeMap::new(),
             stat_points: b.points_left(c).max(0) as u32,
@@ -171,8 +177,9 @@ impl Character {
             kit.extend(p.kit.iter().cloned());
         }
         kit.extend(b.kit.iter().cloned());
-        // The first item that fits a free slot is worn, as a new copy when it is held
-        // per copy; everything else is packed.
+        // The first item that fits a free slot is worn, and chrome goes in at each free
+        // site of its kind while the load allows, as a new copy when it is held per
+        // copy; everything else is packed.
         for (id, qty) in kit {
             let Some(item) = c.item(&id) else { continue };
             let mut qty = qty;
@@ -182,6 +189,13 @@ impl Character {
             {
                 let copy = item.per_copy().then(|| ch.new_copy(c, &id));
                 ch.wear(slot, id.clone(), copy);
+                qty -= 1;
+            }
+            while qty > 0
+                && let Some(site) = ch.free_site(c, item)
+            {
+                let copy = item.per_copy().then(|| ch.new_copy(c, &id));
+                ch.install(site, id.clone(), copy);
                 qty -= 1;
             }
             ch.give_item(c, id, qty);
@@ -391,37 +405,49 @@ impl Character {
         d
     }
 
-    /// The debug runner dressed for the street fight: a neural port worn (Static),
-    /// the handguns skill, three more stim patches. For NEW GAME (COMBAT).
+    /// The debug runner dressed for the street fight: a neural port installed
+    /// (Static), the handguns skill, three more stim patches. For NEW GAME (COMBAT).
     pub fn combat_runner(c: &Content) -> Character {
         let mut d = Self::debug_runner(c);
-        d.wear_new(c, Slot::Neural, ItemId::new("neural_port"));
+        d.install_new(c, Site::Neural, ItemId::new("neural_port"));
         d.skills.insert(SkillId::new("handguns"));
         d.give(ItemId::new("stim_patch"), 3);
         // The other SMG, in the pack, to swap in and see its look.
         d.give_item(c, ItemId::new("whisper_smg"), 1);
-        // The throwables, and the chrome that wears the adrenal pump and target lens.
+        // The throwables, and the adrenal pump and target lens installed; the optics
+        // the lens replaces go to the pack.
         d.give(ItemId::new("frag"), 3);
         d.give(ItemId::new("flashbang"), 2);
         d.give(ItemId::new("emp_puck"), 2);
         d.give(ItemId::new("satchel"), 1);
-        for (id, slot) in [("adrenal_pump", Slot::Torso), ("target_lens", Slot::Eyes)] {
-            d.wear_new(c, slot, ItemId::new(id));
+        for (id, site) in [("adrenal_pump", Site::Organs), ("target_lens", Site::Eyes)] {
+            d.install_new(c, site, ItemId::new(id));
         }
         d
     }
 
-    /// Puts a new `item` on in `slot`, never through the pack: no spare is left
-    /// there. A copy of its own when it is held per copy; what the slot wore goes
+    /// Installs a new `item` at `site`, never through the pack: no spare is left
+    /// there. A copy of its own when it is held per copy; what the site held goes
     /// to the pack.
-    fn wear_new(&mut self, c: &Content, slot: Slot, item: ItemId) {
+    fn install_new(&mut self, c: &Content, site: Site, item: ItemId) {
         let copy = c
             .item(&item)
             .is_some_and(Item::per_copy)
             .then(|| self.new_copy(c, &item));
-        if let Some(old) = self.wear(slot, item, copy) {
+        if let Some(old) = self.install(site, item, copy) {
             self.stow_item(c, old);
         }
+    }
+
+    /// The first free site a piece of chrome fits, if its load fits the budget.
+    fn free_site(&self, c: &Content, item: &Item) -> Option<Site> {
+        let implant = item.implant?;
+        if self.chrome_load(c) + implant.load as u32 > self.load_max() {
+            return None;
+        }
+        Site::ALL
+            .into_iter()
+            .find(|s| s.fits() == implant.fits && !self.chrome.contains_key(s))
     }
 
     pub fn has_skill(&self, id: &SkillId) -> bool {
@@ -446,11 +472,13 @@ impl Character {
             .any(|cat| cat.unlocks.contains(&Unlock::Workbench))
     }
 
-    /// Perks of everything equipped, in slot order, then those of every talent rank.
+    /// Perks of everything equipped, in slot order, then of installed chrome (see
+    /// `chrome_ids`), then those of every talent rank.
     pub fn perks<'a>(&'a self, c: &'a Content) -> impl Iterator<Item = &'a Perk> + 'a {
         Slot::ALL
             .iter()
             .filter_map(move |s| self.equipment.get(s))
+            .chain(self.chrome_ids())
             .filter_map(move |id| c.item(id))
             .flat_map(|i| i.perks.iter())
             .chain(self.talent_effects(c).filter_map(|b| match b {
@@ -563,14 +591,21 @@ impl Character {
             .sum()
     }
 
-    /// Percent of a kind of harm turned aside.
+    /// Percent of a kind of harm turned aside; EMP takes 2 for every installed piece.
     pub fn resist(&self, c: &Content, h: Harm) -> i32 {
-        self.perks(c)
+        let perks: i32 = self
+            .perks(c)
             .filter_map(|p| match p {
                 Perk::Resist(k, n) if *k == h => Some(*n as i32),
                 _ => None,
             })
-            .sum()
+            .sum();
+        let chrome = if h == Harm::Emp {
+            2 * self.pieces() as i32
+        } else {
+            0
+        };
+        perks - chrome
     }
 
     /// Carry capacity in kilograms: body plus equipment.
@@ -590,8 +625,8 @@ impl Character {
     }
 
     /// Innate abilities first, then those granted by owned categories in content order,
-    /// then those granted by equipment in slot order, then by talents; deduplicated,
-    /// the first source winning.
+    /// then those granted by equipment in slot order, then by installed chrome (see
+    /// `chrome_ids`), then by talents; deduplicated, the first source winning.
     pub fn abilities(&self, c: &Content) -> Vec<(AbilityId, Source)> {
         let mut out: Vec<(AbilityId, Source)> = self
             .abilities
@@ -609,10 +644,8 @@ impl Character {
                 }
             }
         }
-        for slot in Slot::ALL {
-            let Some(item) = self.equipment.get(&slot).and_then(|id| c.item(id)) else {
-                continue;
-            };
+        let worn = Slot::ALL.iter().filter_map(|s| self.equipment.get(s));
+        for item in worn.chain(self.chrome_ids()).filter_map(|id| c.item(id)) {
             for id in &item.grants {
                 if !out.iter().any(|(have, _)| have == id) {
                     out.push((id.clone(), Source::Item(item.id.clone())));
@@ -834,6 +867,81 @@ impl Character {
         })
     }
 
+    /// Installs a piece at a site, with its copy when it has one; returns what the
+    /// site held, with that one's copy.
+    pub fn install(&mut self, site: Site, item: ItemId, copy: Option<ItemCopy>) -> Option<Stack> {
+        let old = self.chrome.insert(site, item);
+        let old_copy = match copy {
+            Some(k) => self.chrome_copies.insert(site, k),
+            None => self.chrome_copies.remove(&site),
+        };
+        old.map(|item| Stack {
+            item,
+            qty: 1,
+            copy: old_copy,
+        })
+    }
+
+    pub fn chrome_at(&self, site: Site) -> Option<&ItemId> {
+        self.chrome.get(&site)
+    }
+
+    /// The copy a site's chrome is held as. It counts only while the site still
+    /// holds something: `chrome` is the truth, and `chrome_copies` can be left behind.
+    pub fn chrome_copy(&self, site: Site) -> Option<&ItemCopy> {
+        self.chrome.get(&site)?;
+        self.chrome_copies.get(&site)
+    }
+
+    /// Installed chrome in site order, then what is fitted in it, sites and sockets
+    /// in order.
+    fn chrome_ids(&self) -> impl Iterator<Item = &ItemId> {
+        let fitted = Site::ALL
+            .iter()
+            .filter_map(|s| self.chrome_copy(*s))
+            .flat_map(|k| k.fitted.iter().flatten())
+            .map(|s| &s.item);
+        self.chrome.values().chain(fitted)
+    }
+
+    /// Every installed piece: each site's own (`None`), then what its sockets hold
+    /// (`Some(socket)`), sites and sockets in order.
+    pub fn installed(&self) -> Vec<(Site, Option<usize>, ItemId)> {
+        let mut out = Vec::new();
+        for (&site, id) in &self.chrome {
+            out.push((site, None, id.clone()));
+            let Some(copy) = self.chrome_copy(site) else {
+                continue;
+            };
+            for (n, s) in copy.fitted.iter().enumerate() {
+                if let Some(s) = s {
+                    out.push((site, Some(n), s.item.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    /// Installed pieces, sockets included.
+    pub fn pieces(&self) -> usize {
+        self.installed().len()
+    }
+
+    /// What the installed pieces take of the load.
+    pub fn chrome_load(&self, c: &Content) -> u32 {
+        self.installed()
+            .iter()
+            .filter_map(|(_, _, id)| c.item(id)?.implant)
+            .map(|i| i.load as u32)
+            .sum()
+    }
+
+    /// The chrome a body takes: from base BODY and COOL, so chrome that raises them
+    /// never raises its own budget.
+    pub fn load_max(&self) -> u32 {
+        2 * (self.stats.body as u32 + self.stats.cool as u32) + 6
+    }
+
     /// The pack stack holding a copy.
     pub fn copy_in_pack(&self, id: CopyId) -> Option<&Stack> {
         self.inventory.iter().find(|s| s.copy_id() == Some(id))
@@ -846,13 +954,13 @@ impl Character {
         self.worn.get(&slot)
     }
 
-    /// The mods of the hardware fitted in anything worn, slots in order and
-    /// sockets in order. Hardware in the pack, or in an item taken off, counts
-    /// for nothing.
+    /// The mods of the hardware fitted in anything worn or installed: slots in
+    /// order, then sites in order, sockets in order. Hardware in the pack, or in an
+    /// item taken off, counts for nothing.
     pub fn worn_mods(&self, c: &Content) -> Vec<Mod> {
-        Slot::ALL
-            .iter()
-            .filter_map(|slot| self.worn_copy(*slot))
+        let worn = Slot::ALL.iter().filter_map(|slot| self.worn_copy(*slot));
+        let installed = Site::ALL.iter().filter_map(|site| self.chrome_copy(*site));
+        worn.chain(installed)
             .flat_map(|copy| copy.fitted.iter().flatten())
             .filter_map(|s| c.item(&s.item)?.hardware.as_ref())
             .flat_map(|h| h.mods.iter().copied())
@@ -889,10 +997,12 @@ impl Character {
             .any(|(slot, k)| k.id == id && self.equipment.contains_key(slot))
     }
 
-    /// The item a host is: what the slot wears, or the copy's item in the pack.
+    /// The item a host is: what the slot wears, the chrome the site holds, or the
+    /// copy's item in the pack.
     pub fn host_item(&self, host: Host) -> Option<&ItemId> {
         match host {
             Host::Worn(slot) => self.equipped(slot),
+            Host::Site(site) => self.chrome_at(site),
             Host::Pack(id) => self.copy_in_pack(id).map(|s| &s.item),
         }
     }
@@ -901,11 +1011,13 @@ impl Character {
     pub fn host_copy(&self, host: Host) -> Option<&ItemCopy> {
         match host {
             Host::Worn(slot) => self.worn_copy(slot),
+            Host::Site(site) => self.chrome_copy(site),
             Host::Pack(id) => self.copy_in_pack(id)?.copy.as_ref(),
         }
     }
 
-    /// The host's copy to change. A per-copy item worn without one gets it now.
+    /// The host's copy to change. A per-copy item worn or installed without one
+    /// gets it now.
     pub fn host_copy_mut(&mut self, c: &Content, host: Host) -> Option<&mut ItemCopy> {
         match host {
             Host::Worn(slot) => {
@@ -918,6 +1030,17 @@ impl Character {
                     self.worn.insert(slot, copy);
                 }
                 self.worn.get_mut(&slot)
+            }
+            Host::Site(site) => {
+                let item = self.chrome.get(&site)?.clone();
+                if !c.item(&item).is_some_and(Item::per_copy) {
+                    return None;
+                }
+                if !self.chrome_copies.contains_key(&site) {
+                    let copy = self.new_copy(c, &item);
+                    self.chrome_copies.insert(site, copy);
+                }
+                self.chrome_copies.get_mut(&site)
             }
             Host::Pack(id) => self
                 .inventory
@@ -935,7 +1058,8 @@ impl Character {
             .sum()
     }
 
-    /// Carried weight: inventory plus everything equipped, fitted pieces included.
+    /// Carried weight: inventory plus everything equipped and installed, fitted
+    /// pieces included.
     pub fn weight(&self, c: &Content) -> f32 {
         let carried: f32 = self.inventory.iter().map(|s| s.weight(c)).sum();
         let worn: f32 = self
@@ -946,7 +1070,18 @@ impl Character {
                 own + self.worn.get(slot).map_or(0.0, |k| k.fitted_weight(c))
             })
             .sum();
-        carried + worn
+        let installed: f32 = self
+            .chrome
+            .iter()
+            .map(|(site, id)| {
+                let own = c.item(id).map_or(0.0, |i| i.weight);
+                own + self
+                    .chrome_copies
+                    .get(site)
+                    .map_or(0.0, |k| k.fitted_weight(c))
+            })
+            .sum();
+        carried + worn + installed
     }
 
     pub fn value(&self, c: &Content) -> u32 {
@@ -959,7 +1094,18 @@ impl Character {
                 own + self.worn.get(slot).map_or(0, |k| k.fitted_value(c))
             })
             .sum();
-        carried + worn
+        let installed: u32 = self
+            .chrome
+            .iter()
+            .map(|(site, id)| {
+                let own = c.item(id).map_or(0, |i| i.value);
+                own + self
+                    .chrome_copies
+                    .get(site)
+                    .map_or(0, |k| k.fitted_value(c))
+            })
+            .sum();
+        carried + worn + installed
     }
 
     /// Whether the skill and every input are there. Does not craft.
@@ -1017,7 +1163,7 @@ mod tests {
             Some(&ItemId::new("salvage_jacket"))
         );
         assert_eq!(
-            ch.equipped(Slot::Eyes),
+            ch.chrome_at(Site::Eyes),
             Some(&ItemId::new("nightglass_optics"))
         );
         assert_eq!(ch.equipped(Slot::Deck), Some(&ItemId::new("pawnshop_deck")));
@@ -1122,7 +1268,7 @@ mod tests {
         assert_eq!(ch.hp_max(&c), 45, "jacket +5");
         assert_eq!(ch.stat(&c, Stat::Net), 7, "deck +1 net");
         assert_eq!(ch.sight_bonus(&c), 4);
-        ch.equipment.remove(&Slot::Eyes);
+        ch.chrome.remove(&Site::Eyes);
         assert_eq!(ch.sight_bonus(&c), 0);
         ch.equipment.remove(&Slot::Deck);
         assert_eq!(ch.stat(&c, Stat::Net), 6);
@@ -1339,7 +1485,7 @@ mod tests {
             "{listed:?}"
         );
         ch.give(port.clone(), 1);
-        ch.equipment.insert(Slot::Neural, port.clone());
+        ch.chrome.insert(Site::Neural, port.clone());
         let listed = ch.abilities(&c);
         assert_eq!(
             listed.iter().filter(|(a, _)| a == &ping).count(),
@@ -1655,7 +1801,7 @@ mod tests {
         let c = Content::load().unwrap();
         let d = Character::combat_runner(&c);
         assert_eq!(d.handle, "D'SHAWN");
-        assert_eq!(d.equipped(Slot::Neural), Some(&ItemId::new("neural_port")));
+        assert_eq!(d.chrome_at(Site::Neural), Some(&ItemId::new("neural_port")));
         assert!(d.has_ability(&c, &AbilityId::new("static")));
         assert!(d.has_skill(&SkillId::new("handguns")));
         assert_eq!(
@@ -1892,11 +2038,150 @@ mod tests {
         for a in ["static", "jolt", "shove", "redline", "deadeye"] {
             assert!(d.has_ability(&c, &AbilityId::new(a)), "{a}");
         }
-        assert_eq!(d.equipped(Slot::Torso), Some(&ItemId::new("adrenal_pump")));
-        assert_eq!(d.equipped(Slot::Eyes), Some(&ItemId::new("target_lens")));
-        // Worn, not also carried: the pack holds no spare of the chrome it wears.
-        for id in ["neural_port", "adrenal_pump", "target_lens"] {
+    }
+
+    #[test]
+    fn runners_install_their_chrome() {
+        let c = Content::load().unwrap();
+        let d = Character::combat_runner(&c);
+        for (site, id) in [
+            (Site::Neural, "neural_port"),
+            (Site::Organs, "adrenal_pump"),
+            (Site::Eyes, "target_lens"),
+        ] {
+            assert_eq!(d.chrome_at(site), Some(&ItemId::new(id)), "{id}");
+            // Installed, not also carried: the pack holds no spare.
             assert_eq!(d.count(&ItemId::new(id)), 0, "a spare {id} in the pack");
         }
+        assert_eq!(
+            d.count(&ItemId::new("nightglass_optics")),
+            1,
+            "the optics the lens replaced"
+        );
+        let d = Character::debug_runner(&c);
+        assert_eq!(
+            d.chrome_at(Site::Eyes),
+            Some(&ItemId::new("nightglass_optics"))
+        );
+        let chrome = |s: &Stack| c.item(&s.item).unwrap().kind == ItemKind::Cyberware;
+        assert!(!d.inventory.iter().any(chrome), "no chrome in the pack");
+    }
+
+    #[test]
+    fn kits_install_chrome() {
+        let c = Content::load().unwrap();
+        let v = vex(&c);
+        let optics = ItemId::new("nightglass_optics");
+        assert_eq!(v.chrome_at(Site::Eyes), Some(&optics));
+        assert_eq!((v.count(&optics), v.equipped(Slot::Eyes)), (0, None));
+        // Two arms take L ARM, then R ARM, each its own copy; a lens finds the eyes
+        // taken and a hand finds no site, so both are packed.
+        let mut b = Build::from_template(&c, c.template(&TemplateId::new("vex")).unwrap());
+        let (grip, lens, hand) = (
+            ItemId::new("grip_arm"),
+            ItemId::new("target_lens"),
+            ItemId::new("arc_hand"),
+        );
+        b.kit
+            .extend([(grip.clone(), 2), (lens.clone(), 1), (hand.clone(), 1)]);
+        let ch = Character::from_build(&c, &b);
+        assert_eq!(ch.chrome_at(Site::LeftArm), Some(&grip));
+        assert_eq!(ch.chrome_at(Site::RightArm), Some(&grip));
+        let (l, r) = (
+            ch.chrome_copy(Site::LeftArm).unwrap(),
+            ch.chrome_copy(Site::RightArm).unwrap(),
+        );
+        assert_ne!(l.id, r.id);
+        assert_eq!(l.fitted, vec![None, None]);
+        assert_eq!(ch.count(&grip), 0);
+        assert_eq!((ch.count(&lens), ch.count(&hand)), (1, 1));
+        let packed = ch.inventory.iter().find(|s| s.item == hand).unwrap();
+        assert!(packed.copy.is_some(), "a socket piece is packed as a copy");
+        // Over the budget: the optics take 2 and the first arm 3 of 6; the second is packed.
+        b.stats.body = 0;
+        b.stats.cool = 0;
+        let ch = Character::from_build(&c, &b);
+        assert_eq!((ch.load_max(), ch.chrome_load(&c)), (6, 5));
+        assert_eq!(ch.chrome_at(Site::LeftArm), Some(&grip));
+        assert_eq!(ch.chrome_at(Site::RightArm), None);
+        assert_eq!(ch.count(&grip), 1);
+    }
+
+    #[test]
+    fn installed_chrome_counts() {
+        let c = Content::load().unwrap();
+        let mut ch = Character::from_template(&c, &TemplateId::new("kessler")).unwrap();
+        assert_eq!((ch.pieces(), ch.chrome_load(&c)), (0, 0));
+        let (weight, body) = (ch.weight(&c), ch.stat(&c, Stat::Body));
+        let (port, arm, hand) = (
+            ItemId::new("neural_port"),
+            ItemId::new("piston_arm"),
+            ItemId::new("arc_hand"),
+        );
+        let mut copy = ch.new_copy(&c, &arm);
+        copy.fitted[0] = Some(Stack {
+            item: hand.clone(),
+            qty: 1,
+            copy: Some(ch.new_copy(&c, &hand)),
+        });
+        ch.chrome.insert(Site::LeftArm, arm.clone());
+        ch.chrome_copies.insert(Site::LeftArm, copy);
+        ch.chrome.insert(Site::Neural, port.clone());
+        assert_eq!(
+            ch.installed(),
+            vec![
+                (Site::Neural, None, port.clone()),
+                (Site::LeftArm, None, arm.clone()),
+                (Site::LeftArm, Some(0), hand.clone()),
+            ]
+        );
+        assert_eq!((ch.pieces(), ch.chrome_load(&c)), (3, 5));
+        assert_eq!(ch.stat(&c, Stat::Body), body + 1);
+        let abilities = ch.abilities(&c);
+        for (a, from) in [
+            ("ping", &port),
+            ("static", &port),
+            ("shove", &arm),
+            ("jolt", &hand),
+        ] {
+            let listed = (AbilityId::new(a), Source::Item(from.clone()));
+            assert!(abilities.contains(&listed), "{a}: {abilities:?}");
+        }
+        assert_eq!(ch.resist(&c, Harm::Shock), 10);
+        assert_eq!(ch.resist(&c, Harm::Emp), -6, "two for every piece");
+        assert!((ch.weight(&c) - (weight + 0.1 + 5.0 + 2.5)).abs() < 1e-4);
+        // A copy left behind at an empty site counts for nothing.
+        ch.chrome.remove(&Site::LeftArm);
+        assert!(ch.chrome_copy(Site::LeftArm).is_none());
+        assert_eq!((ch.pieces(), ch.resist(&c, Harm::Shock)), (1, 0));
+    }
+
+    #[test]
+    fn load_max_reads_base_stats() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        assert_eq!((ch.stats.body, ch.stats.cool), (4, 5));
+        assert_eq!(ch.load_max(), 24);
+        ch.chrome.insert(Site::LeftArm, ItemId::new("piston_arm"));
+        assert_eq!(ch.stat(&c, Stat::Body), 5, "the arm raises BODY");
+        assert_eq!(ch.load_max(), 24, "but not its own budget");
+    }
+
+    #[test]
+    fn hardware_in_installed_chrome_counts() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        let arm = ItemId::new("piston_arm");
+        let mut copy = ch.new_copy(&c, &arm);
+        let cool = ch.stat(&c, Stat::Cool);
+        copy.fitted[1] = Some(Stack {
+            item: ItemId::new("hushcan"),
+            qty: 1,
+            copy: Some(ch.new_copy(&c, &ItemId::new("hushcan"))),
+        });
+        ch.chrome.insert(Site::RightArm, arm);
+        ch.chrome_copies.insert(Site::RightArm, copy);
+        assert_eq!(ch.worn_mods(&c), vec![Mod::Stat(Stat::Cool, 1)]);
+        assert_eq!(ch.stat(&c, Stat::Cool), cool + 1);
     }
 }

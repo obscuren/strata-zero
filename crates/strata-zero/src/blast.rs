@@ -4,7 +4,7 @@
 use crate::app::{AppState, FxInstance};
 use crate::foes;
 use citygen::{City, Place, Pos};
-use game::{Action, Blast, Fx, ItemId, Slot};
+use game::{Action, Blast, Fx, ItemId};
 
 /// Tiles a thrown thing crosses in a tick.
 pub const THROW_SPEED: i32 = 2;
@@ -73,14 +73,9 @@ fn log_name(source: &str) -> String {
     source.to_lowercase()
 }
 
-/// Whether you count as chrome: any cyberware worn.
+/// Whether you count as chrome: anything installed.
 fn you_are_chrome(st: &AppState) -> bool {
-    Slot::ALL.iter().any(|s| {
-        st.character
-            .equipped(*s)
-            .and_then(|id| st.content.item(id))
-            .is_some_and(|i| i.kind == game::ItemKind::Cyberware)
-    })
+    st.character.pieces() > 0
 }
 
 /// An idle, live foe turns to hunt toward `seen`.

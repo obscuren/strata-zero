@@ -1876,12 +1876,12 @@ mod tests {
         );
         assert!(text.contains("— empty —"), "{text}");
         assert!(text.contains(d.kit.hints()), "the kit's hints: {text}");
-        d.update(&mut st, &[key(KeyCode::Right)]);
-        assert_eq!((d.tab, d.kit.state.tile), (Tab::Kit, 1), "eyes");
+        d.update(&mut st, &[key(KeyCode::Right); 2]);
+        assert_eq!((d.tab, d.kit.state.tile), (Tab::Kit, 2), "torso");
         st.tick += 30;
         let text = draw(&d, &st, 120, 35);
         assert!(
-            text.contains("NIGHTGLASS OPTICS") && text.contains("cyberware · eyes"),
+            text.contains("SALVAGE JACKET") && text.contains("armor · torso"),
             "{text}"
         );
 
@@ -2389,11 +2389,11 @@ mod tests {
             text.contains("6 · 7 with gear"),
             "the deck's +1 net: {text}"
         );
-        on_tile(&mut d, &mut st, Slot::Eyes);
+        on_tile(&mut d, &mut st, Slot::Deck);
         d.kit.changed = 0;
         let text = draw(&d, &st, 120, 35);
         assert!(
-            text.contains("+4 sight") && text.contains("grants Low-light"),
+            text.contains("+1 net") && text.contains("grants Netscan"),
             "{text}"
         );
     }
@@ -2404,12 +2404,12 @@ mod tests {
         walking(&mut st);
         st.character
             .inventory
-            .push(game::Stack::new(ItemId::new("mirrorshades"), 1));
+            .push(game::Stack::new(ItemId::new("ballistic_weave"), 1));
         st.character
             .inventory
             .push(game::Stack::new(ItemId::new("hardhat"), 1));
         let mut d = Deck::new(0);
-        on_tile(&mut d, &mut st, Slot::Eyes);
+        on_tile(&mut d, &mut st, Slot::Torso);
         let ScreenCmd::Push { to: mut p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))])
         else {
             panic!("space opens the picker")
@@ -2423,7 +2423,7 @@ mod tests {
         .unwrap();
         let text = buffer_text(t.backend().buffer());
         assert!(
-            text.contains("a  Mirrorshades")
+            text.contains("a  Ballistic weave")
                 && text.contains("u  Unequip")
                 && text.contains("i  Inspect"),
             "{text}"
@@ -2436,12 +2436,12 @@ mod tests {
         );
         p.update(&mut st, &[key(KeyCode::Char('a'))]);
         assert_eq!(
-            st.character.equipped(Slot::Eyes),
-            Some(&ItemId::new("mirrorshades"))
+            st.character.equipped(Slot::Torso),
+            Some(&ItemId::new("ballistic_weave"))
         );
         assert_eq!(
             last(&st),
-            Some("swapped Nightglass optics for Mirrorshades")
+            Some("swapped Salvage jacket for Ballistic weave")
         );
         on_tile(&mut d, &mut st, Slot::Legs);
         assert!(matches!(
@@ -3664,7 +3664,8 @@ mod tests {
             let text = buffer_text(&screen(d, st, 100, 30));
             let lines: Vec<&str> = text.lines().collect();
             let y = lines.iter().position(|l| l.contains("┌ PRIMARY")).unwrap();
-            let x = lines[y].chars().position(|c| c == '┌').unwrap();
+            let at = lines[y].find("┌ PRIMARY").unwrap();
+            let x = lines[y][..at].chars().count();
             let bottom: String = lines[y + 2].chars().skip(x).collect();
             bottom.split('┘').next().unwrap().to_string()
         };
