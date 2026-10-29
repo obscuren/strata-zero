@@ -352,11 +352,11 @@ The README's "nine slots" becomes seven.
 - `from_build`: kit chrome is installed at its site when the site is free and the
   budget allows (an `Arm` piece takes L ARM, then R ARM); socket chrome and anything
   that doesn't go in is packed. Vex's Nightglass optics go in at EYES.
-- `combat_runner` installs the Neural port, the Adrenal pump and the Target lens (the
-  optics it had go to the pack), as it wears them today.
-- `debug_runner` gets nothing new: thirty pieces would put D'SHAWN at about 68 of
-  28 kg and every take would refuse. The dev console's `spawn <item>` hands out any
-  piece to try, and the shots install their own loadout.
+- `combat_runner` installs the Neural port, the Adrenal pump and the Target lens from
+  the pack (the optics it had go to the pack), as it wears them today.
+- `debug_runner` packs one of every piece of chrome it hasn't installed, so every piece
+  can be tried on (Jeffrey asked for it after the build). It leaves D'SHAWN
+  overburdened, about 67 of 28 kg, so takes refuse until something is dropped.
 
 ### Content and validation
 
@@ -527,8 +527,9 @@ in a broken content file) draws nothing above its name.
 - `load_max = 2 × (base BODY + base COOL) + 6`.
 - Installing only on an empty site; replacing means pulling first.
 - The tab opens on the left pane.
-- The debug runner is left as it is (the builder check found packing every piece
-  would overburden it); the console's `spawn` is how a debug game gets chrome.
+- The debug runner first got no chrome (the builder check found packing every piece
+  would overburden it); after the build Jeffrey asked for every piece in its pack, and
+  it now carries them, overburdened.
 - MOV counts on foot only: legs don't run faster in cyberspace, and the netrunning
   specs to come are built around turns there.
 - The shots' BACK piece is the Drone cradle, since the mock's Spider rig is a later

@@ -260,7 +260,8 @@ browsing, the console and the inspect and legend sections. Press `` ` `` to flip
 with it off you are always on foot.
 
 **Title** `↑↓` select · `enter` confirm (new game opens the chooser; new game
-(debug) drops D'SHAWN, maxed out, into a fresh city; new game · combat has a
+(debug) drops D'SHAWN, maxed out and carrying one of every piece of chrome
+(overburdened), into a fresh city; new game · combat has a
 `NET · STREET` pick on its row, `←→` to flip it, the pick in pink: STREET puts
 him on an empty lot at dusk with a goon in the far corner and a training dummy
 (`&`, stands still, shrugs every round off) six north, NET jacks him into the

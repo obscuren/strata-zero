@@ -473,8 +473,9 @@ impl Character {
 
     /// The debug runner: Vex's build as D'SHAWN at level 50 with every talent at
     /// its best, full HP and focus, a rebuilt five-slot deck jacked in with its
-    /// sockets empty, the deck hardware and the weapon pieces in the pack and
-    /// every program that fits loaded. For the title's NEW GAME (DEBUG).
+    /// sockets empty, the deck hardware, the weapon pieces and one of every piece
+    /// of chrome it hasn't installed in the pack, and every program that fits
+    /// loaded. The chrome leaves it overburdened. For the title's NEW GAME (DEBUG).
     pub fn debug_runner(c: &Content) -> Character {
         let mut d = Self::from_template(c, &TemplateId::new("vex"))
             .expect("the vex template is in the content");
@@ -509,6 +510,12 @@ impl Character {
         for i in c.items.iter().filter(|i| i.kind == ItemKind::Sticker) {
             d.give(i.id.clone(), 2);
         }
+        // One of every piece of chrome not already installed, to try on at STATS.
+        for i in c.items.iter().filter(|i| i.kind == ItemKind::Cyberware) {
+            if !d.chrome.values().any(|id| *id == i.id) {
+                d.give_item(c, i.id.clone(), 1);
+            }
+        }
         d.load_all(c);
         d
     }
@@ -535,14 +542,18 @@ impl Character {
         d
     }
 
-    /// Installs a new `item` at `site`, never through the pack: no spare is left
-    /// there. A copy of its own when it is held per copy; what the site held goes
-    /// to the pack.
+    /// Installs `item` at `site`: the one in the pack when there is one, so no spare
+    /// is left there, else a new one, with a copy of its own when it is held per
+    /// copy. What the site held goes to the pack.
     fn install_new(&mut self, c: &Content, site: Site, item: ItemId) {
-        let copy = c
-            .item(&item)
-            .is_some_and(Item::per_copy)
-            .then(|| self.new_copy(c, &item));
+        let stack = crate::action::take_from_pack(self, &item, 1).pop();
+        let copy = match stack {
+            Some(s) => s.copy,
+            None => c
+                .item(&item)
+                .is_some_and(Item::per_copy)
+                .then(|| self.new_copy(c, &item)),
+        };
         if let Some(old) = self.install(site, item, copy) {
             self.stow_item(c, old);
         }
@@ -2051,15 +2062,13 @@ mod tests {
         let vex = vex(&c);
         // Vex's kit, plus the Backdoor program, the pawnshop deck set aside, the
         // three pieces of deck hardware, the two weapon pieces, four stacks of
-        // Ratchet parts and a stack of every sticker.
-        let stickers = c
-            .items
-            .iter()
-            .filter(|i| i.kind == ItemKind::Sticker)
-            .count();
+        // Ratchet parts, a stack of every sticker and every piece of chrome but the
+        // optics Vex wears.
+        let kind = |k: ItemKind| c.items.iter().filter(|i| i.kind == k).count();
+        let chrome = kind(ItemKind::Cyberware) - d.pieces();
         assert_eq!(
             d.inventory.len(),
-            vex.inventory.len() + 11 + stickers,
+            vex.inventory.len() + 11 + kind(ItemKind::Sticker) + chrome,
             "Vex's kit"
         );
         assert!(d.loaded.starts_with(&vex.loaded));
@@ -2275,8 +2284,11 @@ mod tests {
             d.chrome_at(Site::Eyes),
             Some(&ItemId::new("nightglass_optics"))
         );
-        let chrome = |s: &Stack| c.item(&s.item).unwrap().kind == ItemKind::Cyberware;
-        assert!(!d.inventory.iter().any(chrome), "no chrome in the pack");
+        // Every other piece of chrome is in the pack, one of each, to try on.
+        for i in c.items.iter().filter(|i| i.kind == ItemKind::Cyberware) {
+            let packed = if i.id.0 == "nightglass_optics" { 0 } else { 1 };
+            assert_eq!(d.count(&i.id), packed, "{}", i.id);
+        }
     }
 
     #[test]
