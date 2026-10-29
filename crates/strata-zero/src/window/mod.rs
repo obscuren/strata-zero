@@ -1,25 +1,27 @@
 //! The game in its own window instead of a terminal (`strata --window`, the `window`
 //! feature): a ratatui backend that paints the cell grid into pixels, driven by a winit
-//! loop that runs the same `Runner` frame as the terminal does.
+//! loop that runs the same `Runner` frame as the terminal does, and presented through
+//! the GPU with the screen effects chosen in Settings.
 
 pub mod backend;
 pub mod font;
 pub mod gpu;
 pub mod keys;
 pub mod png;
+pub mod present;
 pub mod raster;
 pub mod shapes;
 
-use crate::app::{AppState, FRAME, MIN_H, MIN_W, Runner, Screen};
+use crate::app::{AppState, FRAME, MIN_H, MIN_W, Runner, Screen, ScreenFx};
 use anyhow::{Context, Result};
-use backend::PixelBackend;
+use backend::{Damage, PixelBackend};
 use crossterm::event::KeyEvent;
 use font::Fonts;
 use keys::{Input, Shortcut};
+use present::Presenter;
 use ratatui::Terminal;
-use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
@@ -41,7 +43,14 @@ const ZOOM_RANGE: (f32, f32) = (0.6, 2.5);
 
 /// Runs the game in a window until it quits. Started from inside an `.app`, the working
 /// folder becomes `app_support_dir()` first, so `cities/` is saved there.
-pub fn run(screen: Box<dyn Screen>, st: AppState) -> Result<()> {
+pub fn run(screen: Box<dyn Screen>, mut st: AppState) -> Result<()> {
+    st.windowed = true;
+    if let Some(fx) = std::env::var("STRATA_SCREEN_FX")
+        .ok()
+        .and_then(|s| ScreenFx::parse(&s))
+    {
+        st.screen_fx = fx;
+    }
     if in_bundle() {
         let dir = app_support_dir();
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -57,6 +66,8 @@ pub fn run(screen: Box<dyn Screen>, st: AppState) -> Result<()> {
         mods: ModifiersState::empty(),
         zoom: 1.0,
         regridded: false,
+        damage: None,
+        shown_fx: None,
         next: Instant::now(),
         frames: 0,
         shot: std::env::var_os("STRATA_WINDOW_SHOT").map(PathBuf::from),
@@ -81,12 +92,10 @@ pub fn app_support_dir() -> PathBuf {
     Path::new(&home).join("Library/Application Support/Strata Zero")
 }
 
-/// The window, its surface and the terminal drawing into it, once the window exists.
+/// The window, what presents into it and the terminal drawing for it, once it exists.
 struct Live {
-    window: Rc<Window>,
-    surface: softbuffer::Surface<Rc<Window>, Rc<Window>>,
-    /// The surface's size in pixels, to resize it only when the frame changes size.
-    surface_size: (usize, usize),
+    window: Arc<Window>,
+    presenter: Presenter,
     term: Terminal<PixelBackend>,
 }
 
@@ -102,6 +111,10 @@ struct App {
     /// The grid was rebuilt (a resize, a new scale or zoom): the next frame clears the
     /// terminal so ratatui resends every cell.
     regridded: bool,
+    /// What the backend painted that the screen hasn't shown yet.
+    damage: Option<Damage>,
+    /// The screen effects last presented, to present again when Settings changes them.
+    shown_fx: Option<ScreenFx>,
     /// When the next frame is due.
     next: Instant,
     frames: u64,
@@ -122,18 +135,16 @@ impl App {
                 (cell.w * OPEN.0 as usize) as f64,
                 (cell.h * OPEN.1 as usize) as f64,
             ));
-        let window = Rc::new(el.create_window(attrs)?);
+        let window = Arc::new(el.create_window(attrs)?);
         let cell = fonts.metrics(TEXT_PX * window.scale_factor() as f32);
         fit(&window, cell, true);
-        let context = softbuffer::Context::new(window.clone()).map_err(sb)?;
-        let surface = softbuffer::Surface::new(&context, window.clone()).map_err(sb)?;
+        let presenter = Presenter::new(window.clone())?;
         let px = self.text_px(&window);
         let inner = window.inner_size();
         let backend = PixelBackend::new(fonts, px, inner.width as usize, inner.height as usize);
         self.live = Some(Live {
             window,
-            surface,
-            surface_size: (0, 0),
+            presenter,
             term: Terminal::new(backend)?,
         });
         Ok(())
@@ -157,13 +168,19 @@ impl App {
             el.exit();
         }
         self.frames += 1;
-        if live.term.backend_mut().take_damage().is_some() {
+        let painted = live.term.backend_mut().take_damage();
+        self.damage = Damage::join(self.damage, painted);
+        let fx = self.runner.st.screen_fx;
+        if self.damage.is_some() || self.shown_fx != Some(fx) {
             live.window.request_redraw();
         }
         if self.frames == SHOT_FRAME
             && let Some(path) = &self.shot
         {
-            png::write_frame(path, live.term.backend().frame())?;
+            let scale = live.window.scale_factor() as f32;
+            let frame = live.term.backend().frame();
+            let (w, h, rgba) = live.presenter.capture(frame, fx, scale)?;
+            png::write_rgba(path, w, h, &rgba)?;
         }
         Ok(())
     }
@@ -172,20 +189,17 @@ impl App {
         let Some(live) = self.live.as_mut() else {
             return Ok(());
         };
+        // A resize repaints before the next frame does; show that too.
+        let painted = live.term.backend_mut().take_damage();
+        let damage = Damage::join(self.damage.take(), painted);
+        let fx = self.runner.st.screen_fx;
+        let scale = live.window.scale_factor() as f32;
         let frame = live.term.backend().frame();
-        let (Some(w), Some(h)) = (
-            NonZeroU32::new(frame.w as u32),
-            NonZeroU32::new(frame.h as u32),
-        ) else {
-            return Ok(());
-        };
-        if live.surface_size != (frame.w, frame.h) {
-            live.surface.resize(w, h).map_err(sb)?;
-            live.surface_size = (frame.w, frame.h);
+        if live.presenter.present(frame, damage, fx, scale)? {
+            self.shown_fx = Some(fx);
+        } else {
+            live.window.request_redraw();
         }
-        let mut buf = live.surface.buffer_mut().map_err(sb)?;
-        buf.copy_from_slice(&frame.px);
-        buf.present().map_err(sb)?;
         Ok(())
     }
 
@@ -247,11 +261,6 @@ fn fit(window: &Window, cell: font::CellMetrics, open: bool) {
         }
         let _ = window.request_inner_size(size);
     }
-}
-
-/// softbuffer's error as anyhow's (it is not `Sync`).
-fn sb(e: softbuffer::SoftBufferError) -> anyhow::Error {
-    anyhow::anyhow!("{e}")
 }
 
 impl ApplicationHandler for App {

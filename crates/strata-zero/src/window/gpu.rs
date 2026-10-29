@@ -128,6 +128,7 @@ impl Gpu {
 
     /// A GPU with no window, drawing to `Bgra8UnormSrgb` (for tests and shots); `None`
     /// when this machine has no adapter.
+    #[cfg(test)]
     pub fn headless() -> Option<Gpu> {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());

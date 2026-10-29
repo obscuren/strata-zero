@@ -1,6 +1,5 @@
 //! Frames as PNG files: the live window's (`STRATA_WINDOW_SHOT`) and the shot harness's.
 
-use super::raster::Frame;
 use anyhow::{Context, Result};
 use std::io::BufWriter;
 use std::path::Path;
@@ -10,7 +9,8 @@ use std::path::Path;
 pub const SHOT_PX: f32 = 30.0;
 
 /// `frame` as a PNG at `path`.
-pub fn write_frame(path: &Path, frame: &Frame) -> Result<()> {
+#[cfg(test)]
+pub fn write_frame(path: &Path, frame: &super::raster::Frame) -> Result<()> {
     write_rgba(path, frame.w as u32, frame.h as u32, &frame.to_rgba())
 }
 
