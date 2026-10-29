@@ -1211,9 +1211,9 @@ mod tests {
         w.people().iter().find(|p| f(p)).expect("someone fits")
     }
 
-    /// One doc to a clinic, in the back room by day, gone by night.
+    /// One doc to a clinic, in the back room by night, gone by day.
     #[test]
-    fn a_clinic_has_one_doc_in_the_back_room_by_day() {
+    fn a_clinic_has_one_doc_in_the_back_room_by_night() {
         let c = city();
         let mut w = world(&c);
         let clinics: Vec<_> = c
@@ -1235,13 +1235,13 @@ mod tests {
         let Work::Building(clinic) = w.people()[id.0 as usize].work else {
             unreachable!()
         };
-        run_to(&mut w, &c, tick_at(12 * 60, 1));
+        run_to(&mut w, &c, tick_at(23 * 60, 0));
         assert_eq!(
             w.people()[id.0 as usize].whereabouts,
             Whereabouts::Inside(clinic)
         );
         assert_eq!(w.card(id, &c).doing, "in the back room");
-        run_to(&mut w, &c, tick_at(23 * 60 + 30, 1));
+        run_to(&mut w, &c, tick_at(12 * 60, 1));
         assert_ne!(
             w.people()[id.0 as usize].whereabouts,
             Whereabouts::Inside(clinic)

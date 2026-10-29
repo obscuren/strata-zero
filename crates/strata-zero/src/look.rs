@@ -603,10 +603,15 @@ pub fn look_card(
         set_head(&mut card, name, mark_tile(st, map, pos));
         let district = city.district(bl.district).name.clone();
         card.second = Some(format!("{kind} · {district}"));
+        // A clinic's front has its own line, with a tell in it.
+        let key = match citygen::clinic_front(city, b) {
+            Some(_) => format!("{kind} front"),
+            None => kind.to_string(),
+        };
         if visible {
             card.body.extend(
                 looks
-                    .line(Group::Building, kind, city.seed, pos)
+                    .line(Group::Building, &key, city.seed, pos)
                     .map(String::from),
             );
         }
@@ -956,12 +961,20 @@ mod tests {
         stand(&mut st, outside);
         let c = card(&st, wall);
         assert_eq!(c.second, Some(format!("{} · {district}", front.label())));
-        assert!(!c.body.join(" ").contains("red cross"), "{:?}", c.body);
-        assert!(
-            Looks::load()
-                .line(Group::Building, front.label(), 0, wall)
-                .is_some()
-        );
+        let looks = Looks::load();
+        let line = looks
+            .line(
+                Group::Building,
+                &format!("{} front", front.label()),
+                0,
+                wall,
+            )
+            .unwrap();
+        assert_eq!(c.body, vec![line.to_string()]);
+        // Every front has its line.
+        for f in citygen::Front::ALL {
+            assert!(looks.has(&format!("{} front", f.label())), "{f:?}");
+        }
     }
 
     #[test]

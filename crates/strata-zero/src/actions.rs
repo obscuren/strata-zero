@@ -353,7 +353,7 @@ mod tests {
 
     #[test]
     fn chrome_is_locked_outside_a_chair() {
-        let (mut st, _, _, _) = crate::clinic::testutil::outside(12 * 60);
+        let (mut st, _, _, _) = crate::clinic::testutil::outside(crate::clinic::testutil::NIGHT);
         let install = grip(&mut st);
         st.character
             .install(Site::LeftArm, ItemId::new("piston_arm"), None);
@@ -457,7 +457,7 @@ mod tests {
 
     #[test]
     fn free_chrome_is_free() {
-        let (mut st, _, _, _) = crate::clinic::testutil::outside(23 * 60);
+        let (mut st, _, _, _) = crate::clinic::testutil::outside(crate::clinic::testutil::DAY);
         st.free_chrome = true;
         st.character.credits = 5;
         let install = grip(&mut st);

@@ -70,16 +70,16 @@ pub fn doc_name(st: &AppState, id: PersonId) -> String {
 pub fn hours(st: &AppState) -> (u16, u16) {
     match st.people.profession(RIPPERDOC).map(|p| &p.hours) {
         Some(sim::Hours::Day { open, close }) => (*open, *close),
-        _ => (600, 1320),
+        _ => (1080, 240),
     }
 }
 
-/// A minute of the day as `10:00`.
+/// A minute of the day as `18:00`.
 pub fn hhmm(minute: u16) -> String {
     format!("{:02}:{:02}", minute / 60 % 24, minute % 60)
 }
 
-/// The shut door's window: `CLOSED · opens 10:00 · closes 22:00`.
+/// The shut door's window: `CLOSED · opens 18:00 · closes 04:00`.
 pub fn hours_line(st: &AppState) -> String {
     let (open, close) = hours(st);
     format!("CLOSED · opens {} · closes {}", hhmm(open), hhmm(close))
@@ -100,7 +100,7 @@ pub fn name(st: &AppState, b: BuildingId) -> String {
         .unwrap_or_else(|| "The clinic".to_string())
 }
 
-/// Walking into a shut clinic: `Hot Pot Lou is closed · opens at 10:00`.
+/// Walking into a shut clinic: `Hot Pot Lou is closed · opens at 18:00`.
 pub fn closed_line(st: &AppState, b: BuildingId) -> String {
     format!("{} is closed · opens at {}", name(st, b), hhmm(hours(st).0))
 }
@@ -186,11 +186,15 @@ pub(crate) mod testutil {
         (st, b, door, out)
     }
 
-    /// At noon, inside the clinic on the chair's floor, standing beside the chair
-    /// (not on the doc's spot): the state, the clinic, the chair's level and tile.
+    /// The doc keeps night hours: in at this minute, out at `DAY`.
+    pub const NIGHT: u16 = 22 * 60;
+    pub const DAY: u16 = 12 * 60;
+
+    /// At night, inside the clinic on the chair's floor, standing beside the chair (not
+    /// on the doc's spot): the state, the clinic, the chair's level and tile.
     pub fn inside() -> (AppState, BuildingId, i32, Pos) {
-        let (mut st, b, _, _) = outside(12 * 60);
-        assert!(doc_at_work(&st, b).is_some(), "the doc is in at noon");
+        let (mut st, b, _, _) = outside(NIGHT);
+        assert!(doc_at_work(&st, b).is_some(), "the doc is in at night");
         let level = if citygen::clinic_front(st.city.as_ref().unwrap(), b)
             == Some(citygen::Front::Laundromat)
         {
@@ -232,15 +236,15 @@ pub(crate) mod testutil {
 
 #[cfg(test)]
 mod tests {
-    use super::testutil::{inside, outside, seated};
+    use super::testutil::{DAY, NIGHT, inside, outside, seated};
     use super::*;
 
     #[test]
     fn a_clinic_is_open_while_its_doc_is_in() {
-        let (st, b, _, _) = outside(12 * 60);
+        let (st, b, _, _) = outside(NIGHT);
         assert!(doc_at_work(&st, b).is_some());
         assert!(is_open(&st, b));
-        let (st, b, _, _) = outside(23 * 60 + 30);
+        let (st, b, _, _) = outside(DAY);
         assert!(doc_at_work(&st, b).is_none());
         assert!(!is_open(&st, b));
         // Every other building is as it always was.
@@ -274,15 +278,15 @@ mod tests {
 
     #[test]
     fn lines_read_as_the_spec() {
-        let (mut st, b, _, _) = outside(23 * 60 + 30);
-        assert_eq!(hours_line(&st), "CLOSED · opens 10:00 · closes 22:00");
+        let (mut st, b, _, _) = outside(DAY);
+        assert_eq!(hours_line(&st), "CLOSED · opens 18:00 · closes 04:00");
         st.city.as_mut().unwrap().buildings[b.index()].name = Some("Hot Pot Lou".to_string());
         assert_eq!(
             closed_line(&st, b),
-            "Hot Pot Lou is closed · opens at 10:00"
+            "Hot Pot Lou is closed · opens at 18:00"
         );
         assert_eq!(gone_line("Doc Lou"), "Doc Lou has gone for the night");
-        assert_eq!(hhmm(600), "10:00");
-        assert_eq!(hhmm(1320), "22:00");
+        assert_eq!(hhmm(1080), "18:00");
+        assert_eq!(hhmm(240), "04:00");
     }
 }
