@@ -9424,7 +9424,7 @@ mod tests {
         assert!(!e.manual);
         let text = draw_screen(&s, &st, 140, 40);
         assert!(text.contains("TURN 1  YOU › grey ICE › grey ICE"), "{text}");
-        assert!(text.contains("MOVE ▰▰▰▰ 4/4    AP ●● 2/2"), "{text}");
+        assert!(text.contains("MOV ▰▰▰▰ 4/4    AP ●● 2/2"), "{text}");
         assert!(logged(&st, "ENGAGED · the ICE is on you"));
     }
 
@@ -11525,14 +11525,14 @@ mod tests {
         s.update(&mut st, &[]);
         assert_eq!(st.net.engaged.as_ref().unwrap().moves, 5);
         let text = draw_screen(&s, &st, 140, 40);
-        assert!(text.contains("MOVE ▰▰▰▰▰ 5/5    AP ●● 2/2"), "{text}");
+        assert!(text.contains("MOV ▰▰▰▰▰ 5/5    AP ●● 2/2"), "{text}");
         assert!(text.contains(" ◆ MOV ▰▰▰▰▰   5/5"), "{text}");
         // Their turn: your pools read whole, at your five.
         s.update(&mut st, &[key(KeyCode::Char(' '))]);
         s.update(&mut st, &[key(KeyCode::Char('.'))]);
         assert!(!crate::net::your_turn(&st));
         let text = draw_screen(&s, &st, 140, 40);
-        assert!(text.contains("MOVE ▰▰▰▰▰ 5/5    AP ●● 2/2"), "{text}");
+        assert!(text.contains("MOV ▰▰▰▰▰ 5/5    AP ●● 2/2"), "{text}");
         // The spine and dog legs: seven, and the column still reads them whole.
         let (mut st, mut s) = lot(Pos::new(14, 8));
         for (site, id) in [

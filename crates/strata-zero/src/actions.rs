@@ -75,6 +75,8 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
             | Action::Install { .. }
             | Action::InstallCopy { .. }
             | Action::Pull(_)
+            | Action::Fit { .. }
+            | Action::Unfit { .. }
     );
     if let Some(id) = &fired
         && st
@@ -508,6 +510,48 @@ mod tests {
         assert!(worn > bare, "shades on: {worn} vs {bare}");
         perform(&mut st, Action::Equip(shades)).unwrap();
         assert_eq!(visible(&st), worn, "shades on again");
+    }
+
+    #[test]
+    fn perform_refreshes_sight_after_fitting_chrome() {
+        let mut st = AppState::new();
+        st.city = Some(city());
+        st.player = Some(Player::spawn(st.city.as_ref().unwrap(), 1));
+        let visible = |st: &AppState| {
+            st.player
+                .as_ref()
+                .unwrap()
+                .vis()
+                .count(|v| *v == Visibility::Visible)
+        };
+        // A hand with an eye in its palm, so fitting it shows.
+        let hand = ItemId::new("arc_hand");
+        let item = st.content.items.iter_mut().find(|i| i.id == hand);
+        item.unwrap().perks.push(game::Perk::Sight(4));
+        st.character
+            .chrome
+            .insert(Site::LeftArm, ItemId::new("piston_arm"));
+        st.character.give_item(&st.content, hand.clone(), 1);
+        let host = Host::Site(Site::LeftArm);
+        let piece = st
+            .character
+            .inventory
+            .iter()
+            .find(|s| s.item == hand)
+            .and_then(|s| s.copy_id())
+            .unwrap();
+        let fit = Action::Fit {
+            host,
+            socket: 0,
+            piece,
+        };
+        perform(&mut st, fit.clone()).unwrap();
+        let fitted = visible(&st);
+        perform(&mut st, Action::Unfit { host, socket: 0 }).unwrap();
+        let bare = visible(&st);
+        assert!(fitted > bare, "hand fitted: {fitted} vs {bare}");
+        perform(&mut st, fit).unwrap();
+        assert_eq!(visible(&st), fitted, "hand fitted again");
     }
 
     #[test]

@@ -2,12 +2,13 @@
 //! folded under it, the card of the row the cursor is on, the picker of what in the pack
 //! fits an empty site or socket, and the LOAD gauge over them.
 
-use super::{AMBER, GOOD, RULE_X, Sheet, SheetPane, header};
+use super::{RULE_X, Sheet, SheetPane, header};
 use crate::actions::{JACKED_IN, jacked_in, perform, report};
 use crate::app::AppState;
 use crate::screens::create::wrap;
 use crate::screens::deck::{REVEAL_TICKS, cut, lit};
 use crate::ui::chrome::{BAR_BG, CYAN, DIM, FAINTER, MAGENTA, RULE, TEXT, put, reveal, solid};
+use crate::ui::hud::{AMBER, GREEN};
 use crate::ui::implant_art;
 use crossterm::event::KeyCode;
 use game::{
@@ -864,7 +865,7 @@ fn effects(c: &Content, item: &Item, compact: bool) -> Vec<Span<'static>> {
     let fg = |c: Color| Style::default().fg(c);
     let perks = item.perks.iter().map(|p| {
         let (text, n) = perk_text(p);
-        vec![Span::styled(text, fg(if n < 0 { MAGENTA } else { GOOD }))]
+        vec![Span::styled(text, fg(if n < 0 { MAGENTA } else { GREEN }))]
     });
     let mut grants = Vec::new();
     for (i, a) in item.grants.iter().enumerate() {
@@ -964,7 +965,6 @@ mod tests {
     use crate::app::{Screen, ScreenCmd};
     use crate::messages::Kind;
     use crate::screens::deck::{Deck, REVEAL_TICKS};
-    use crate::screens::sheet::{AMBER, GOOD};
     use crate::screens::testutil::key;
     use crate::ui::chrome::{BAR_BG, CYAN, DIM, FAINTER, MAGENTA, RULE, TEXT};
     use citygen::{GenParams, Generator, Place, Pos, SizePreset, StratumKind};
@@ -1305,7 +1305,7 @@ mod tests {
         let (x, y) = find(&buf, CARD_100, (6, 27), "EMP −2").unwrap();
         assert_eq!(buf[(x, y)].fg, MAGENTA);
         let (x, y) = find(&buf, CARD_100, (6, 27), "BODY +1").unwrap();
-        assert_eq!(buf[(x, y)].fg, GOOD);
+        assert_eq!(buf[(x, y)].fg, GREEN);
         let (x, y) = find(&buf, CARD_100, (6, 27), "Shove").unwrap();
         assert_eq!(buf[(x, y)].fg, CYAN);
         // Under the empty forearm, in FAINT, the pieces in content that fit it.

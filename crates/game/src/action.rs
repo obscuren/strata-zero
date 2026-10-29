@@ -131,11 +131,17 @@ fn name(c: &Content, id: &ItemId) -> String {
         .unwrap_or_else(|| id.to_string())
 }
 
-/// A socket's name: the item's drawing's own where it has one, else its number.
+/// A socket's name: the item's drawing's own where it has one, else its kind's
+/// (`hand`, `forearm`), else its number.
 pub fn socket_name(c: &Content, item: &ItemId, socket: usize) -> String {
-    c.item(item)
-        .and_then(|i| i.drawn_sockets().get(socket))
-        .map_or_else(|| (socket + 1).to_string(), |&(name, _)| name.to_string())
+    let Some(item) = c.item(item) else {
+        return (socket + 1).to_string();
+    };
+    match (item.drawn_sockets().get(socket), item.sockets.get(socket)) {
+        (Some(&(name, _)), _) => name.to_string(),
+        (None, Some(kind)) => kind.label().to_string(),
+        (None, None) => (socket + 1).to_string(),
+    }
 }
 
 /// Takes up to `qty` of an item out of the pack and returns what came out, in pack
@@ -455,10 +461,10 @@ pub fn apply(
                 (
                     None,
                     Some(Implant {
-                        fits: Fits::Socket(kind),
+                        fits: Fits::Socket(wants),
                         load,
                     }),
-                ) => (*kind, *load as u32),
+                ) => (*wants, *load as u32),
                 _ => return Err(format!("`{}` is not hardware", piece_item.name)),
             };
             if fits != kind {
@@ -505,6 +511,8 @@ pub fn apply(
                 message.push_str(&format!(" · `{}` to the pack", name(c, &old.item)));
                 ch.stow(old);
             }
+            // A piece can carry any perk: what left may have held max hp.
+            clamp_hp(ch, c);
             done(message)
         }
         Action::Build(id) => {
@@ -561,6 +569,7 @@ pub fn apply(
                 .ok_or_else(|| format!("socket {label} is empty"))?;
             let message = format!("`{}` out · to the pack", name(c, &out.item));
             ch.stow(out);
+            clamp_hp(ch, c);
             done(message)
         }
         Action::Stick {
@@ -662,6 +671,10 @@ mod tests {
         let c = Content::load().unwrap();
         assert_eq!(socket_name(&c, &ItemId::new("ratchet_smg"), 1), "RAIL");
         assert_eq!(socket_name(&c, &ItemId::new("rebuilt_deck"), 0), "L");
+        // A host without a drawing names its sockets by their kind.
+        assert_eq!(socket_name(&c, &ItemId::new("piston_arm"), 0), "hand");
+        assert_eq!(socket_name(&c, &ItemId::new("piston_arm"), 1), "forearm");
+        // No socket there at all: its number.
         assert_eq!(socket_name(&c, &ItemId::new("salvage_jacket"), 0), "1");
     }
 
@@ -785,7 +798,7 @@ mod tests {
     }
 
     #[test]
-    fn equip_swaps_and_unequip_returns() {
+    fn equip_wears_and_unequip_returns() {
         let (c, mut ch, mut g, at) = setup();
         assert!(
             apply(&mut ch, &mut g, &c, at, 0, Action::Equip(id("hardhat"))).is_err(),
@@ -1464,6 +1477,52 @@ mod tests {
     }
 
     #[test]
+    fn hp_follows_socket_chrome_out() {
+        let (mut c, mut ch, mut g, at) = setup();
+        let (arm, hand) = (id("piston_arm"), id("arc_hand"));
+        // A hand that holds blood.
+        let item = c.items.iter_mut().find(|i| i.id == hand).unwrap();
+        item.perks.push(Perk::HpMax(20));
+        ch.chrome.insert(Site::LeftArm, arm);
+        let host = Host::Site(Site::LeftArm);
+        let piece = Stack {
+            item: hand.clone(),
+            qty: 1,
+            copy: Some(ch.new_copy(&c, &hand)),
+        };
+        ch.host_copy_mut(&c, host).unwrap().fitted[0] = Some(piece);
+        let bare = ch.hp_max(&c) - 20;
+        ch.hp = ch.hp_max(&c);
+        act(&mut ch, &mut g, &c, at, Action::Unfit { host, socket: 0 }).unwrap();
+        assert_eq!(
+            (ch.hp, ch.hp_max(&c)),
+            (bare, bare),
+            "out, the hp it held goes"
+        );
+        // Swapped out for a piece without it, the same.
+        let back = Action::Fit {
+            host,
+            socket: 0,
+            piece: pack_id(&ch, "arc_hand"),
+        };
+        act(&mut ch, &mut g, &c, at, back).unwrap();
+        ch.hp = ch.hp_max(&c);
+        assert_eq!(ch.hp, bare + 20);
+        ch.give_item(&c, id("toolfingers"), 1);
+        let swap = Action::Fit {
+            host,
+            socket: 0,
+            piece: pack_id(&ch, "toolfingers"),
+        };
+        act(&mut ch, &mut g, &c, at, swap).unwrap();
+        assert_eq!(
+            (ch.hp, ch.hp_max(&c)),
+            (bare, bare),
+            "swapped out, the same"
+        );
+    }
+
+    #[test]
     fn fit_refusals_change_nothing() {
         let (c, mut ch, mut g, at) = runner();
         let one = pack_id(&ch, "coldfin_1");
@@ -2004,10 +2063,19 @@ mod tests {
         );
         assert_eq!(ch, before);
         ch.stats.cool = 5;
-        act(&mut ch, &mut g, &c, at, fit(0)).unwrap();
+        let out = act(&mut ch, &mut g, &c, at, fit(0)).unwrap();
+        assert_eq!(out.message, "`Arc hand` fitted · socket hand");
         assert!(
             ch.installed()
                 .contains(&(Site::LeftArm, Some(0), id("arc_hand")))
+        );
+        let unfit = Action::Unfit {
+            host: Host::Site(Site::LeftArm),
+            socket: 1,
+        };
+        assert_eq!(
+            act(&mut ch, &mut g, &c, at, unfit).unwrap_err(),
+            "socket forearm is empty"
         );
     }
 

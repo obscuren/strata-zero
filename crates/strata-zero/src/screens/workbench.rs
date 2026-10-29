@@ -567,11 +567,9 @@ fn title_block(
                     bits.push(i.fits.label().to_string());
                     bits.push(format!("load {}", i.load));
                 }
-                None => {
-                    bits.extend(item.slot.map(|s| s.label().to_string()));
-                    bits.push(format!("{:.1} kg", item.weight));
-                }
+                None => bits.extend(item.slot.map(|s| s.label().to_string())),
             }
+            bits.push(format!("{:.1} kg", item.weight));
             bits.join(" · ")
         }
         Some(item) => {
@@ -1766,6 +1764,27 @@ mod tests {
             (i32::from(x) + i32::from(dx)) as u16,
             (i32::from(y) + i32::from(dy)) as u16,
         )
+    }
+
+    #[test]
+    fn a_chrome_assembly_reads_like_its_card() {
+        let mut st = dshawn();
+        // A drawing with parts, so the grip arm's sheet is an assembly.
+        let arm = game::ItemId::new("grip_arm");
+        let item = st.content.items.iter_mut().find(|i| i.id == arm).unwrap();
+        item.look = Some(game::ItemLook::Ratchet);
+        let mut d = bench(&mut st);
+        let n = drawings(&st.content).len();
+        for _ in 0..n {
+            if recipe_id(&st, &d) == "servo_rebuild" {
+                break;
+            }
+            press(&mut d, &mut st, KeyCode::Right, 1);
+        }
+        assert_eq!(recipe_id(&st, &d), "servo_rebuild");
+        let b = render(&d, &st, 100, 30);
+        let text: String = (0..30u16).map(|y| cells(&b, 0, y, 100) + "\n").collect();
+        assert!(text.contains("cyberware · arm · load 3 · 4.0 kg"), "{text}");
     }
 
     #[test]

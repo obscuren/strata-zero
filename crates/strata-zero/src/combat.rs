@@ -14,6 +14,8 @@ pub const ROUND_GAP: u64 = 4;
 
 /// One roll of 1..=100.
 pub fn roll(st: &mut AppState) -> u8 {
+    // `force_hit` forces every roll, the armour's own too: with ARM > 0 every forced
+    // hit on you also turns.
     #[cfg(test)]
     if let Some(hit) = st.force_hit {
         return if hit { 1 } else { 100 };

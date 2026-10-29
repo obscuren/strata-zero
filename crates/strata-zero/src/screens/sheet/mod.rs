@@ -15,6 +15,8 @@ use crate::screens::popup::wrapped_rows;
 use crate::ui::chrome::{
     BAR_BG, CYAN, DIM, FAINTER, MAGENTA, RULE, TEXT, put, put_paragraph, reveal, solid,
 };
+// A bonus reads green, what a choice would cost amber: the HUD's own.
+use crate::ui::hud::{AMBER, GREEN};
 use citygen::{Place, StratumKind};
 use crossterm::event::KeyCode;
 use game::{Action, Build, Contrib, Num, Source};
@@ -23,11 +25,6 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use std::ops::Range;
-
-/// A bonus.
-pub(crate) const GOOD: Color = Color::Rgb(0x50, 0xe6, 0x78);
-/// What a choice would cost.
-pub(crate) const AMBER: Color = Color::Rgb(0xff, 0xc8, 0x50);
 
 /// Columns of the left pane, from one in from the body's edge; one more stays clear
 /// before the rule.
@@ -74,7 +71,7 @@ fn count(n: usize) -> String {
 /// Green up, magenta down, plain at nothing.
 fn signed(n: i32) -> Color {
     match n.signum() {
-        1 => GOOD,
+        1 => GREEN,
         -1 => MAGENTA,
         _ => TEXT,
     }
@@ -917,7 +914,7 @@ mod tests {
         // The deck's +1 net in the NET tile's bottom edge, the jacket's +5 in HP's;
         // with no body SGT moved nothing, so its edge is bare.
         assert_eq!(cells(buf, 34, 8, 8), "└─ +1 ─┘");
-        assert_eq!(buf[(37, 8)].fg, GOOD);
+        assert_eq!(buf[(37, 8)].fg, GREEN);
         assert_eq!(cells(buf, 2, 13, 7), "└─ +5 ┘");
         assert_eq!(cells(buf, 23, 13, 7), "└─────┘");
         // BODY, selected on the focused pane: cyan edge, the bar behind its value.
