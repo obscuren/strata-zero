@@ -32,9 +32,6 @@ const WIDE_BODY: u16 = 118;
 const LABEL_W: u16 = 8;
 /// The LOAD gauge's segments.
 const SEGMENTS: u32 = 12;
-/// Rows from the body's top to the ledger and the card: the CHROME header, then a
-/// blank row, as under the left pane's headers.
-const BELOW_HEADER: u16 = 2;
 /// The card's socket column: `■ hand    Arc hand`.
 const SOCKET_W: usize = 10;
 
@@ -425,18 +422,14 @@ impl Sheet {
         let rule = (x0 + if wide { LEDGER_WIDE } else { LEDGER_W }).min(x1);
         let after = v.pick.map(|p| load_after(st, v.at, &v.picks[p]));
         chrome_header(st, (x0, x1), body.y, focused, after, buf);
-        let (top, height) = (
-            body.y + BELOW_HEADER,
-            body.height.saturating_sub(BELOW_HEADER),
-        );
-        let rows = Rect::new(x0, top, rule - x0, height);
+        let rows = Rect::new(x0, body.y + 1, rule - x0, body.height - 1);
         draw_ledger(st, &v, rows, focused && v.pick.is_none(), wide, buf);
         for y in body.y + 1..body.bottom() {
             buf[(rule, y)].set_char('│').set_fg(RULE);
         }
         let cx = rule + 2;
         if cx < x1 {
-            let card = Rect::new(cx, top, x1 - cx, height);
+            let card = Rect::new(cx, body.y + 1, x1 - cx, body.height - 1);
             self.draw_card(st, &v, card, focused, buf);
         }
     }
@@ -1242,35 +1235,25 @@ mod tests {
         ] {
             assert!(ledger.contains(want), "{want}:\n{ledger}");
         }
-        // A blank row under the CHROME header, across the ledger and the card, as under
-        // the left pane's headers.
-        assert!(
-            cells(&buf, R0, 6, RULE_100 - R0).trim().is_empty(),
-            "the ledger's gap"
-        );
-        assert!(
-            cells(&buf, CARD_100, 6, 98 - CARD_100).trim().is_empty(),
-            "the card's gap"
-        );
         // The mock's columns: groups from R0 + 1, names from R0 + 2, sockets' rules at
         // R0 + 3 and their names at R0 + 5; the cursor's mark at R0 on the bar.
-        assert_eq!(cells(&buf, R0 + 1, 7, 10), "── head ──");
-        assert_eq!(buf[(R0 + 1, 7)].fg, FAINTER);
-        assert_eq!(cells(&buf, R0 + 2, 8, 11), "Neural port");
-        assert_eq!(buf[(R0 + 2, 8)].fg, TEXT);
-        assert_eq!(cells(&buf, R0 + 2, 10, 6), "· ears");
-        assert_eq!(buf[(R0 + 2, 10)].fg, FAINTER);
-        assert_eq!(buf[(R0, 18)].symbol(), "▸");
-        assert_eq!(cells(&buf, R0 + 2, 18, 10), "Piston arm");
-        assert_eq!(buf[(R0 + 2, 18)].fg, CYAN);
+        assert_eq!(cells(&buf, R0 + 1, 6, 10), "── head ──");
+        assert_eq!(buf[(R0 + 1, 6)].fg, FAINTER);
+        assert_eq!(cells(&buf, R0 + 2, 7, 11), "Neural port");
+        assert_eq!(buf[(R0 + 2, 7)].fg, TEXT);
+        assert_eq!(cells(&buf, R0 + 2, 9, 6), "· ears");
+        assert_eq!(buf[(R0 + 2, 9)].fg, FAINTER);
+        assert_eq!(buf[(R0, 17)].symbol(), "▸");
+        assert_eq!(cells(&buf, R0 + 2, 17, 10), "Piston arm");
+        assert_eq!(buf[(R0 + 2, 17)].fg, CYAN);
         for x in R0..RULE_100 {
-            assert_eq!(buf[(x, 18)].bg, BAR_BG, "the cursor's bar at {x}");
+            assert_eq!(buf[(x, 17)].bg, BAR_BG, "the cursor's bar at {x}");
         }
-        assert_eq!(cells(&buf, R0 + 3, 19, 10), "├ Arc hand");
-        assert_eq!(buf[(R0 + 3, 19)].fg, RULE);
-        assert_eq!(buf[(R0 + 5, 19)].fg, DIM);
-        assert_eq!(cells(&buf, R0 + 3, 20, 11), "└ □ forearm");
-        assert_eq!(buf[(R0 + 5, 20)].fg, FAINTER);
+        assert_eq!(cells(&buf, R0 + 3, 18, 10), "├ Arc hand");
+        assert_eq!(buf[(R0 + 3, 18)].fg, RULE);
+        assert_eq!(buf[(R0 + 5, 18)].fg, DIM);
+        assert_eq!(cells(&buf, R0 + 3, 19, 11), "└ □ forearm");
+        assert_eq!(buf[(R0 + 5, 19)].fg, FAINTER);
         for y in 6..BODY.bottom() {
             assert_eq!(buf[(RULE_100, y)].symbol(), "│", "the ledger's rule at {y}");
         }
@@ -1336,7 +1319,7 @@ mod tests {
             };
             let d = on_ledger(&mut st, row);
             let buf = screen(&d, &mut st, (100, 30));
-            let y = BODY.y + 2 + i as u16;
+            let y = BODY.y + 1 + i as u16;
             assert!(y < BODY.bottom());
             assert_eq!(buf[(R0, y)].symbol(), "▸", "{row:?}");
             let name = match at {
@@ -1398,10 +1381,10 @@ mod tests {
             assert!(card.contains(want), "{want}:\n{card}");
         }
         // The drawing at the top, a blank row, then the name.
-        assert_eq!(cells(&buf, CARD_100, 14, 10), "PISTON ARM");
-        assert_eq!(buf[(CARD_100, 14)].fg, CYAN);
+        assert_eq!(cells(&buf, CARD_100, 13, 10), "PISTON ARM");
+        assert_eq!(buf[(CARD_100, 13)].fg, CYAN);
         let elbow = Color::Rgb(0, 229, 255);
-        let lit = (7..13)
+        let lit = (6..12)
             .any(|y| (CARD_100..98).any(|x| buf[(x, y)].fg == elbow || buf[(x, y)].bg == elbow));
         assert!(lit, "the elbow's light in the art's rows");
         let (x, y) = find(&buf, CARD_100, (6, 27), "EMP −2").unwrap();
@@ -1449,9 +1432,9 @@ mod tests {
         // The pick on the bar; the ledger's cursor dim.
         let (x, y) = find(&buf, CARD_100, (6, 27), "Grip arm").unwrap();
         assert_eq!(buf[(x, y)].bg, BAR_BG);
-        assert_eq!(buf[(R0, 21)].symbol(), "▸");
-        assert_eq!(buf[(R0, 21)].fg, DIM);
-        assert_ne!(buf[(R0 + 2, 21)].bg, BAR_BG);
+        assert_eq!(buf[(R0, 20)].symbol(), "▸");
+        assert_eq!(buf[(R0, 20)].fg, DIM);
+        assert_ne!(buf[(R0 + 2, 20)].bg, BAR_BG);
         // LOAD shows what it takes, in amber.
         let after = format!(" {}/{max}", load + 3);
         let x = col_of(&buf, 5, R0, &after).unwrap_or_else(|| panic!("{}", cells(&buf, R0, 5, 50)));
@@ -1543,7 +1526,7 @@ mod tests {
             .iter()
             .position(|r| *r == LedgerRow::Site(Site::RightArm))
             .unwrap();
-        let y = BODY.y + 2 + i as u16;
+        let y = BODY.y + 1 + i as u16;
         let buf = screen(&d, &mut st, (100, 30));
         assert_eq!(buf[(R0, y)].symbol(), "▸");
         assert_eq!(cells(&buf, R0 + 2, y, 7), "· r arm");
@@ -1739,9 +1722,9 @@ mod tests {
         ] {
             assert!(ledger.contains(want), "{want}:\n{ledger}");
         }
-        assert_eq!(cells(&buf, R0 + 2, 13, 19), "NEURAL  Neural port");
-        assert_eq!(buf[(R0 + 2, 13)].fg, FAINTER);
-        assert_eq!(buf[(R0 + 10, 13)].fg, TEXT);
+        assert_eq!(cells(&buf, R0 + 2, 12, 19), "NEURAL  Neural port");
+        assert_eq!(buf[(R0 + 2, 12)].fg, FAINTER);
+        assert_eq!(buf[(R0 + 10, 12)].fg, TEXT);
         // A socket's row sits under its piece's name.
         let (x, _) = find(&buf, R0, (11, 37), "├ Arc hand").unwrap();
         assert_eq!(x, R0 + 11);
@@ -1749,10 +1732,10 @@ mod tests {
             assert_eq!(buf[(75, y)].symbol(), "│", "y {y}");
             assert_eq!(buf[(76, y)].symbol(), " ", "the gap at {y}");
         }
-        assert_eq!(cells(&buf, 77, 19, 10), "PISTON ARM");
+        assert_eq!(cells(&buf, 77, 18, 10), "PISTON ARM");
         let elbow = Color::Rgb(0, 229, 255);
         let lit =
-            (12..18).any(|y| (77..118).any(|x| buf[(x, y)].fg == elbow || buf[(x, y)].bg == elbow));
+            (11..17).any(|y| (77..118).any(|x| buf[(x, y)].fg == elbow || buf[(x, y)].bg == elbow));
         assert!(lit, "the art right of the rule");
         let card = region(&buf, (77, 118), (11, 37));
         assert!(card.contains("L ARM · load 3 · EMP −2"), "{card}");
