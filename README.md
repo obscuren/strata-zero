@@ -275,7 +275,8 @@ follows your origin's and profession's affinity. On SKILLS `→` `←` unfold an
 fold a category and `space` buys or refunds it or a skill with SP; the card beside the
 board is the deck's, drawing and all. SUMMARY ends
 on `enter`, JACK IN, which builds the character, generates a city and wakes
-you in your flat. Unspent points stay with you and can be spent from the deck.
+you in your flat. Unspent points stay with you and can be spent from the deck,
+and every third level (3, 6, 9 …) brings another.
 SP comes in steps of 50: you start with 600, a category costs 200 (STREET 100), its
 first skill comes free and the other two cost 100 and 150, and every level brings
 100 more.
@@ -416,11 +417,12 @@ it opens with only what you own unfolded; `←→` unfold and fold any category,
 folds one you own and asks before it buys anything else with SP; a skill's card shows its
 drawing, grey or cold until you learn it, its price, the attributes and skills it asks for,
 and its line; a category's shows its drawing, its price, its skills and what it grants),
-attributes (the character sheet: on the left the five attributes, `space` buys a point
-outright, then the secondary numbers and the six resistances, each tile with a
-readout that names where its number comes from; on the right the chrome ledger,
-`→` from the last tile of a row crosses over and `←` comes back; see Chrome
-below), gear & inventory (below), workbench (WRENCH unlocks it; every recipe is
+attributes (the character sheet: on the left the five attributes under a header
+that counts the attribute points left, `N AP` (`0 AP` once spent), `space` allocates
+one outright, then the secondary numbers and the six resistances, each block's
+tiles a blank row under its header, each tile with a readout that names where its
+number comes from; on the right the chrome ledger, `→` from the last tile of a row
+crosses over and `←` comes back; see Chrome below), gear & inventory (below), workbench (WRENCH unlocks it; every recipe is
 a drawing: `←→` flips them, `↑↓` walks the parts, `space` builds once every part
 is on hand; an item whose drawing has parts is drawn exploded, the rest as a
 process), jobs (in hand, on offer, done), journal (empty for now), map (what you
@@ -448,10 +450,12 @@ window.
 each: neural, eyes, ears, jaw, spine, back, organs, skin, left arm, right arm
 and legs. An arm has two sockets, hand and forearm, that take smaller pieces.
 The ledger lists the sites under head, body and limbs; the card beside it shows
-the piece's drawing, what it costs and what it gives. `space` on an empty site
-or socket opens a picker of what in your pack fits there, `space` again installs
-it; `space` on a piece pulls it back to the pack. Jacked in, chrome is locked
-like gear is.
+the piece's drawing, what it costs and what it gives. `space` on a site or socket
+opens a picker of what in your pack fits there, `space` again installs it; on a
+place that holds a piece the picker says what it `replaces`, and installing swaps:
+the old piece goes back to the pack (a limb with what is fitted in it), and the
+load counts it leaving. `x` on a piece pulls it back to the pack. Jacked in, chrome
+is locked like gear is.
 
 Every piece has a load, and the LOAD gauge caps the total. Installed, a piece
 weighs nothing: LOAD is its cost, and CAR counts only what you carry and wear.

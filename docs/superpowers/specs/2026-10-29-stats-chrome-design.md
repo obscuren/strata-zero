@@ -558,3 +558,33 @@ in a broken content file) draws nothing above its name.
 - How the sheet module splits its drawing and keys, and where the shared tile drawing
   lives (the GEAR rack's tile is the model).
 - The exact pixel art for each piece, within the register above.
+
+## Changes after the build (2026-10-29)
+
+Five asks from Jeffrey once the sheet was in, made on top of the attributes rename
+(STATS is ATTRIBUTES, a stat an attribute). The body above stays as it was specified.
+
+1. **An attribute point every few levels.** `LEVELS_PER_ATTRIBUTE_POINT` is 3: every
+   level that is a multiple of it (3, 6, 9 …) adds an attribute point, each level
+   counted when several come at once. The level-up line says so: `level 3 · a talent
+   point · 100 SP · an attribute point`.
+2. **`N AP`, always.** The ATTRIBUTES header's tail is the points left, `0 AP` once they
+   are spent (the number bold TEXT, the word DIM), where it used to read `N points`
+   only while some were unspent. The readout's `next N pts` keeps its rule.
+3. **`space allocates attribute`.** The left pane's hint reads `←↑↓→ select · space
+   allocates attribute · → over to the chrome · Q/E tabs · tab close`.
+4. **A blank row under each header.** ATTRIBUTES, SECONDARY and RESISTANCES each have an
+   empty row between the header and the tiles; the blank rows between blocks and the
+   rule over the readout stay. At 100×30 the readout has the three rows left and gives
+   way as before (blank rows, then the blurb, the sources last); at 120×40 it has eight.
+5. **Space swaps, `x` pulls.** `space` on installed chrome opens the FITS picker for that
+   site or socket as on an empty one, the card's second line `replaces Piston arm`;
+   `space` on a pick installs it and sends what was there to the pack (a limb with what
+   is fitted in it), the load counting what leaves (`Install`/`InstallCopy` swap,
+   ``installed `Grip arm` · L ARM · `Piston arm` to the pack``; `Fit` already did). The
+   pick's load line, its tag and the LOAD gauge count the swap; a lighter one shows no
+   amber and the lower total, and EMP shows only when the count of pieces moves. `x`
+   on chrome pulls it out to the pack, on an empty place it does nothing. Hints on
+   chrome: `↑↓ select · space what fits · x pull it out · ← attributes · Q/E tabs · tab
+   close`. Jacked in, both keys refuse with the lock's words and dim. This replaces
+   "installing only on an empty site; replacing means pulling first" under My calls.
