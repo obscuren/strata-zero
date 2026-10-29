@@ -604,7 +604,7 @@ pub fn footer_rows(f: &Footer, width: u16) -> [Line<'static>; 4] {
             }
         };
         let moves = [
-            badge("MOVE", f.acting == Some(false)),
+            badge("MOV", f.acting == Some(false)),
             Span::styled(
                 format!(
                     "{}{}",
@@ -1174,7 +1174,7 @@ mod tests {
         );
         assert!(rows[2].contains("RUN  crack"), "{:?}", rows[2]);
         assert!(
-            rows[3].trim_end().ends_with("MOVE ▰▰▰▱ 3/4    AP ●● 2/2"),
+            rows[3].trim_end().ends_with("MOV ▰▰▰▱ 3/4    AP ●● 2/2"),
             "{:?}",
             rows[3]
         );
@@ -1192,7 +1192,7 @@ mod tests {
         }
         assert!(rows[2].starts_with(" TURN 3"), "{:?}", rows[2]);
         assert!(
-            rows[3].contains("MOVE") && rows[3].contains("AP"),
+            rows[3].contains("MOV") && rows[3].contains("AP"),
             "{:?}",
             rows[3]
         );
@@ -1234,7 +1234,7 @@ mod tests {
     }
 
     fn pools() -> Vec<Span<'static>> {
-        vec![Span::raw("AP ●● 2/2  MOVE 4/4")]
+        vec![Span::raw("AP ●● 2/2  MOV 4/4")]
     }
 
     #[test]
@@ -1246,12 +1246,12 @@ mod tests {
             ),
             "{full:?}"
         );
-        assert!(full.ends_with("AP ●● 2/2  MOVE 4/4"), "{full:?}");
+        assert!(full.ends_with("AP ●● 2/2  MOV 4/4"), "{full:?}");
         assert_eq!(full.chars().count(), 130);
         let cut = act_row(&act_entries(), pools(), 100).to_string();
         assert!(cut.contains(" …"), "{cut:?}");
         assert!(!cut.contains("satchel"), "whole entries drop: {cut:?}");
-        assert!(cut.ends_with("AP ●● 2/2  MOVE 4/4"), "{cut:?}");
+        assert!(cut.ends_with("AP ●● 2/2  MOV 4/4"), "{cut:?}");
         assert_eq!(cut.chars().count(), 100);
     }
 
@@ -1303,10 +1303,10 @@ mod tests {
         let row = rows[3].to_string();
         assert!(row.starts_with(" ACT  1 static"), "{row:?}");
         assert!(
-            row.contains("AP ●● 2/2") && row.ends_with("MOVE ▰▰▰▰ 4/4"),
+            row.contains("AP ●● 2/2") && row.ends_with("MOV ▰▰▰▰ 4/4"),
             "{row:?}"
         );
-        assert!(row.find("AP").unwrap() < row.find("MOVE").unwrap());
+        assert!(row.find("AP").unwrap() < row.find("MOV ").unwrap());
         let lit = Footer {
             flash_pools: true,
             ..f

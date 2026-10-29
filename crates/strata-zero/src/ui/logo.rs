@@ -183,12 +183,12 @@ mod tests {
     #[test]
     fn a_steady_logo_never_drops_a_letter() {
         use ratatui::buffer::Buffer;
-        let area = Rect::new(0, 0, width("STATS"), ROWS);
+        let area = Rect::new(0, 0, width("ATTRIBUTES"), ROWS);
         let mut lit = 0;
         for tick in 0..120u64 {
             let mut buf = Buffer::empty(area);
             Logo {
-                text: "STATS",
+                text: "ATTRIBUTES",
                 tick,
                 accent: Rgb(0, 229, 255),
                 steady: true,

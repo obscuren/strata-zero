@@ -1,13 +1,13 @@
 //! A skill's card art drawn: hardware in its own colours, greyed until learned, or a neon
-//! sign lit in the skill's stat colour, cold until learned. The rules are the art tool's
+//! sign lit in the skill's attribute colour, cold until learned. The rules are the art tool's
 //! (docs/superpowers/specs/2026-10-23-skill-cards-art/skillart.py), so the game draws the
 //! pixels the tool drew.
 
-use crate::screens::create::stat_rgb;
+use crate::screens::create::attribute_rgb;
 use crate::ui::chrome::PANEL_BG;
 use crate::ui::cyberdeck::Pen;
 use crate::ui::pixels::Pixels;
-use game::{SKILL_ART_H, SKILL_ART_W, SkillArt, Stat};
+use game::{Attribute, SKILL_ART_H, SKILL_ART_W, SkillArt};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
@@ -33,7 +33,7 @@ pub fn draw(
     y: u16,
     clip: Rect,
     art: &SkillArt,
-    stat: Stat,
+    attribute: Attribute,
     learned: bool,
     rows: u16,
 ) {
@@ -47,7 +47,7 @@ pub fn draw(
     }
     let area = Rect::new(x, y, W, rows).intersection(clip);
     let mut canvas = Pixels::new(W, rows);
-    for (py, row) in (0..).zip(pixels(art, stat, learned)) {
+    for (py, row) in (0..).zip(pixels(art, attribute, learned)) {
         for (px, c) in (0..).zip(row) {
             canvas.px(px, py, c.map(colour));
         }
@@ -70,7 +70,7 @@ pub fn draw(
 /// Every pixel of the art, row by row: hardware in its colours (greyed unlearned), or the
 /// sign on its plate. Lit, every plate pixel beside a tube glows with that tube's colour,
 /// the main tubes' halos first and the accent's over them; cold, no halo and grey glass.
-fn pixels(art: &SkillArt, stat: Stat, learned: bool) -> Vec<Vec<Option<Rgb>>> {
+fn pixels(art: &SkillArt, attribute: Attribute, learned: bool) -> Vec<Vec<Option<Rgb>>> {
     match art {
         SkillArt::Hardware { rows, colours, .. } => rows
             .iter()
@@ -95,7 +95,7 @@ fn pixels(art: &SkillArt, stat: Stat, learned: bool) -> Vec<Vec<Option<Rgb>>> {
             for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)] {
                 out[y][x] = Some(SCREW);
             }
-            let main = stat_rgb(stat);
+            let main = attribute_rgb(attribute);
             let main = (main.0, main.1, main.2);
             if learned {
                 for (ch, c) in [('#', main), ('+', *accent)] {
@@ -168,12 +168,12 @@ mod tests {
         rows[y].replace_range(x..x + 1, &ch.to_string());
     }
 
-    fn drawn(art: &SkillArt, stat: Stat, learned: bool, rows: u16, clip: Rect) -> Buffer {
+    fn drawn(art: &SkillArt, attribute: Attribute, learned: bool, rows: u16, clip: Rect) -> Buffer {
         let mut buf = Buffer::empty(AREA);
         for cell in &mut buf.content {
             cell.set_char('x');
         }
-        draw(&mut buf, 0, 0, clip, art, stat, learned, rows);
+        draw(&mut buf, 0, 0, clip, art, attribute, learned, rows);
         buf
     }
 
@@ -194,20 +194,20 @@ mod tests {
 
     #[test]
     fn hardware_draws_its_colours_and_greys_unlearned() {
-        let b = drawn(&hardware(), Stat::Tech, true, ROWS, AREA);
+        let b = drawn(&hardware(), Attribute::Tech, true, ROWS, AREA);
         assert_eq!(
             (b[(0, 0)].symbol(), b[(0, 0)].bg),
             (" ", rgb((200, 100, 50)))
         );
         // An empty cell is the panel, not what was under it.
         assert_eq!((b[(5, 5)].symbol(), b[(5, 5)].bg), (" ", PANEL_BG));
-        let b = drawn(&hardware(), Stat::Tech, false, ROWS, AREA);
+        let b = drawn(&hardware(), Attribute::Tech, false, ROWS, AREA);
         assert_eq!(b[(0, 0)].bg, rgb((86, 71, 63)));
     }
 
     #[test]
     fn a_label_goes_over_the_cells() {
-        let b = drawn(&hardware(), Stat::Tech, true, ROWS, AREA);
+        let b = drawn(&hardware(), Attribute::Tech, true, ROWS, AREA);
         for (x, ch) in [(2, "O"), (3, "K")] {
             assert_eq!(
                 (b[(x, 1)].symbol(), b[(x, 1)].fg, b[(x, 1)].bg),
@@ -227,15 +227,15 @@ mod tests {
     }
 
     #[test]
-    fn neon_lights_in_the_stat_colour_with_a_halo() {
+    fn neon_lights_in_the_attribute_colour_with_a_halo() {
         let net = (110, 150, 255);
-        let b = drawn(&sign(), Stat::Net, true, ROWS, AREA);
+        let b = drawn(&sign(), Attribute::Net, true, ROWS, AREA);
         // Pixel (10, 10) is the top half of cell (10, 5); (11, 10) is beside it.
         assert_eq!(b[(10, 5)].fg, rgb(net));
         assert_eq!(b[(11, 5)].fg, rgb(mix(PLATE, net, 0.28)));
         assert_eq!(b[(21, 5)].fg, rgb(mix(PLATE, (255, 0, 0), 0.28)));
         assert_eq!(b[(0, 0)].fg, rgb(SCREW));
-        let b = drawn(&sign(), Stat::Net, false, ROWS, AREA);
+        let b = drawn(&sign(), Attribute::Net, false, ROWS, AREA);
         assert_eq!(b[(10, 5)].fg, rgb(COLD));
         assert_eq!(b[(11, 5)].bg, rgb(PLATE));
     }
@@ -243,10 +243,16 @@ mod tests {
     #[test]
     fn only_the_rows_asked_for_draw_and_nothing_past_the_clip() {
         // The rows still to scan in are bare panel, not what lay under them.
-        let b = drawn(&sign(), Stat::Net, true, 3, AREA);
+        let b = drawn(&sign(), Attribute::Net, true, 3, AREA);
         assert_eq!((b[(0, 3)].symbol(), b[(0, 3)].bg), (" ", PANEL_BG));
         assert_eq!(b[(0, 2)].bg, rgb(PLATE));
-        let b = drawn(&sign(), Stat::Net, true, ROWS, Rect::new(0, 0, 10, ROWS));
+        let b = drawn(
+            &sign(),
+            Attribute::Net,
+            true,
+            ROWS,
+            Rect::new(0, 0, 10, ROWS),
+        );
         assert_eq!(b[(10, 0)].symbol(), "x");
         assert_ne!(b[(9, 0)].symbol(), "x");
     }

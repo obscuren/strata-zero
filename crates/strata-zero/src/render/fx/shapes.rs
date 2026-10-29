@@ -1,8 +1,8 @@
 //! The grenade and ability shapes drawn over the map: a thrown thing's flight, the
-//! three blasts and their scorch, a shove's trail and a boost's rings. What sets a
-//! blast off and whom it hurts is `crate::blast`'s.
+//! four blasts and the scorch two of them leave, a shove's trail and a boost's
+//! rings. What sets a blast off and whom it hurts is `crate::blast`'s.
 
-use super::{BLOOM_TICKS, WHITE, WHITEOUT_TICKS, paint};
+use super::{BLOOM_TICKS, HAZE_RISE, HAZE_TICKS, WHITE, WHITEOUT_TICKS, paint};
 use crate::app::FxInstance;
 use crate::render::map::MapRef;
 use crate::render::viewport::tile_to_screen;
@@ -18,6 +18,9 @@ use ratatui::style::Modifier;
 const GREN: Rgb = Rgb(190, 190, 140);
 const AMBER: Rgb = Rgb(255, 170, 40);
 const CYAN: Rgb = Rgb(0, 229, 255);
+/// A gas cloud's sickly green, and the dark it thins to.
+const HAZE: Rgb = Rgb(150, 220, 60);
+const HAZE_THIN: Rgb = Rgb(40, 70, 20);
 
 /// Sets a cell's glyph, colours and weight; `None` keeps what is there.
 #[allow(clippy::too_many_arguments)]
@@ -340,6 +343,37 @@ pub(super) fn shock(inst: &FxInstance, e: u64, origin: Pos, area: Rect, buf: &mu
             _ => continue,
         };
         stamp(origin, area, buf, p, Some(ch), fg, bg, bold);
+    }
+}
+
+/// How thick a haze hangs at `e`, up to 1: rising over `HAZE_RISE`, then thinning
+/// to nothing at `HAZE_TICKS`.
+fn haze_thickness(e: u64) -> f32 {
+    if e < HAZE_RISE {
+        (e + 1) as f32 / HAZE_RISE as f32
+    } else {
+        HAZE_TICKS.saturating_sub(e) as f32 / (HAZE_TICKS - HAZE_RISE) as f32
+    }
+}
+
+/// A gas: the footprint fills with green shade, thickest at the centre and drifting
+/// every other tick, then thins away. It leaves no stain.
+pub(super) fn haze(inst: &FxInstance, e: u64, origin: Pos, area: Rect, buf: &mut Buffer) {
+    let thick = haze_thickness(e);
+    let radius = inst.radius.max(1) as f32;
+    for &p in &inst.targets {
+        let local = thick * (1.0 - 0.4 * ring_of(inst, p) as f32 / radius);
+        let h = blast_hash(p, e / 2);
+        if (h % 100) as f32 >= local * 100.0 {
+            continue;
+        }
+        let ch = if local > 0.6 && (h / 100).is_multiple_of(2) {
+            '▒'
+        } else {
+            '░'
+        };
+        let fg = HAZE.mix(HAZE_THIN, 1.0 - local);
+        stamp(origin, area, buf, p, Some(ch), fg, None, false);
     }
 }
 

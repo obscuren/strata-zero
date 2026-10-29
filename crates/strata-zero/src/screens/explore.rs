@@ -430,9 +430,9 @@ impl MapScreen {
     }
 
     /// What the act half offers, in key order: the fight's abilities (strikes,
-    /// boosts, marks; content order), then the throwables in the pack. In a
-    /// construct only what works in the net (a strike that does not push, a boost),
-    /// and no throwables.
+    /// boosts, marks; content order), then the throwables in the pack; at most ten,
+    /// for `1`-`9` and `0`. In a construct only what works in the net (a strike that
+    /// does not push, a boost), and no throwables.
     fn act_list(st: &AppState) -> Vec<Act> {
         use game::{AbilityKind::Active, Active as A};
         let net = Self::in_construct(st);
@@ -459,7 +459,7 @@ impl MapScreen {
                 }
             }
         }
-        out.truncate(9);
+        out.truncate(10);
         out
     }
 
@@ -468,9 +468,15 @@ impl MapScreen {
         if Self::in_construct(st) { 6 } else { 1 }
     }
 
-    /// The entry a number key picks. In a construct `1`-`5` are the programs'.
+    /// The entry a number key picks: `0` is the tenth key, after `9`. In a construct
+    /// `1`-`5` are the programs'.
     fn act_key(st: &AppState, n: u32) -> Option<Act> {
-        let i = n.checked_sub(Self::act_base(st))?;
+        let place = match n {
+            0 => 10,
+            1..=9 => n,
+            _ => return None,
+        };
+        let i = place.checked_sub(Self::act_base(st))?;
         Self::act_list(st).get(i as usize).cloned()
     }
 
@@ -482,7 +488,12 @@ impl MapScreen {
             .into_iter()
             .enumerate()
             .filter_map(|(i, act)| {
-                let key = char::from_digit(base + i as u32, 10)?;
+                // The keys run on from the base to `0`, the tenth, and stop there.
+                let place = base + i as u32;
+                if place > 10 {
+                    return None;
+                }
+                let key = char::from_digit(place % 10, 10)?;
                 Some(match act {
                     Act::Throw(id) => hud::ActEntry {
                         key,
@@ -531,7 +542,7 @@ impl MapScreen {
     /// cannot come down there.
     fn armed_footprint(st: &AppState, id: &game::ItemId, at: Pos) -> Vec<(Pos, i32)> {
         let (Some((range, _, blast)), Some(p), Some(city)) = (
-            st.content.item(id).and_then(|i| i.throw()),
+            crate::blast::your_throw(st, id),
             st.player.as_ref(),
             st.city.as_ref(),
         ) else {
@@ -548,7 +559,7 @@ impl MapScreen {
     /// or why it cannot land there. The flag is set when you stand in it.
     fn armed_readout(st: &AppState, id: &game::ItemId, at: Pos) -> Option<(String, bool)> {
         let item = st.content.item(id)?;
-        let (range, _, blast) = item.throw()?;
+        let (range, _, blast) = crate::blast::your_throw(st, id)?;
         let p = st.player.as_ref()?;
         let name = item.name.to_lowercase();
         let dist = p.pos.chebyshev(at);
@@ -671,8 +682,7 @@ impl MapScreen {
                 let Some(act) = Self::act_key(st, n) else {
                     // On foot a number with nothing behind it does nothing; in a
                     // construct 1-5 are the deck's programs.
-                    return (n > 0 && !matches!(place, Place::Construct(_)))
-                        .then_some(ScreenCmd::Stay);
+                    return (!matches!(place, Place::Construct(_))).then_some(ScreenCmd::Stay);
                 };
                 match act {
                     Act::Throw(id) => {
@@ -904,15 +914,11 @@ impl MapScreen {
             act: (self.firing(st) && crate::net::your_turn(st)).then(|| Self::act_entries(st)),
             flash_pools: self.flash_pools(st),
             budgets: st.net.engaged.as_ref().map(|e| {
+                let moves = crate::net::you_move(st, e.place);
                 if e.actor() == crate::net::Actor::You {
-                    (e.moves, crate::net::BASE_MOVE, e.ap, crate::net::BASE_AP)
+                    (e.moves, moves, e.ap, crate::net::BASE_AP)
                 } else {
-                    (
-                        crate::net::BASE_MOVE,
-                        crate::net::BASE_MOVE,
-                        crate::net::BASE_AP,
-                        crate::net::BASE_AP,
-                    )
+                    (moves, moves, crate::net::BASE_AP, crate::net::BASE_AP)
                 }
             }),
         }
@@ -3477,8 +3483,8 @@ mod tests {
         let text = draw_screen(&s, &st, 100, 30);
         assert!(text.contains(" TURN 1 "), "{text}");
         assert!(text.contains(" ▶ YOU            "), "{text}");
-        assert!(text.contains(" ◆ MOVE ▰▰▰▰  4/4 "), "{text}");
-        assert!(text.contains("   AP   ●●    2/2 "), "{text}");
+        assert!(text.contains(" ◆ MOV ▰▰▰▰    4/4"), "{text}");
+        assert!(text.contains("   AP  ●●      2/2"), "{text}");
         assert!(text.contains("   goon        30 "), "{text}");
         // The column's right edge is the map's right edge, its top the map's top row.
         let rows: Vec<&str> = text.lines().collect();
@@ -3491,8 +3497,8 @@ mod tests {
         );
         s.update(&mut st, &[key(KeyCode::Char(' '))]);
         let text = draw_screen(&s, &st, 100, 30);
-        assert!(text.contains("   MOVE ▰▰▰▰  4/4 "), "{text}");
-        assert!(text.contains(" ◆ AP   ●●    2/2 "), "{text}");
+        assert!(text.contains("   MOV ▰▰▰▰    4/4"), "{text}");
+        assert!(text.contains(" ◆ AP  ●●      2/2"), "{text}");
         s.update(&mut st, &[key(KeyCode::Char('.'))]);
         let text = draw_screen(&s, &st, 100, 30);
         assert!(text.contains("   YOU            "), "{text}");
@@ -3722,7 +3728,8 @@ mod tests {
         let (mut st, mut s) = act_half(Pos::new(14, 8));
         st.character.give(game::ItemId::new("neural_port"), 1);
         st.character
-            .wear(game::Slot::Neural, game::ItemId::new("neural_port"), None);
+            .chrome
+            .insert(game::Site::Neural, game::ItemId::new("neural_port"));
         let list = MapScreen::act_list(&st);
         let slot = |id: &str| {
             let i = list.iter().position(|a| *a == act_ability(id)).unwrap();
@@ -3742,7 +3749,8 @@ mod tests {
         let (mut st, mut s) = act_half(Pos::new(14, 8));
         st.character.give(game::ItemId::new("neural_port"), 1);
         st.character
-            .wear(game::Slot::Neural, game::ItemId::new("neural_port"), None);
+            .chrome
+            .insert(game::Site::Neural, game::ItemId::new("neural_port"));
         st.force_hit = Some(true);
         s.update(&mut st, &[key(KeyCode::Char(slot("static")))]);
         assert_eq!(st.net.engaged.as_ref().unwrap().ap, 0);
@@ -8669,12 +8677,12 @@ mod tests {
         // Without the optics there is no low-light and no bonus at all.
         let eyes = st
             .character
-            .equipment
+            .chrome
             .iter()
             .find(|(_, id)| id.0 == "nightglass_optics")
-            .map(|(slot, _)| *slot)
+            .map(|(site, _)| *site)
             .unwrap();
-        st.character.equipment.remove(&eyes);
+        st.character.chrome.remove(&eyes);
         st.tick = at(22, 0);
         assert_eq!(st.sight_bonus(), 0);
     }
@@ -9416,7 +9424,7 @@ mod tests {
         assert!(!e.manual);
         let text = draw_screen(&s, &st, 140, 40);
         assert!(text.contains("TURN 1  YOU › grey ICE › grey ICE"), "{text}");
-        assert!(text.contains("MOVE ▰▰▰▰ 4/4    AP ●● 2/2"), "{text}");
+        assert!(text.contains("MOV ▰▰▰▰ 4/4    AP ●● 2/2"), "{text}");
         assert!(logged(&st, "ENGAGED · the ICE is on you"));
     }
 
@@ -9427,7 +9435,7 @@ mod tests {
         let mut s = MapScreen::explore(0);
         let b = in_construct_at(&mut st, &mut s, 255);
         // The deck adds one Net: at a base of 0 you score 1, under grey's 2 and black's 3.
-        st.character.stats.net = 0;
+        st.character.attributes.net = 0;
         let order = initiative(&st, Place::Construct(b));
         assert_eq!(
             order,
@@ -9435,7 +9443,7 @@ mod tests {
             "black 3, grey 2, you 1"
         );
         // At 3 you tie black and the tie is yours.
-        st.character.stats.net = 2;
+        st.character.attributes.net = 2;
         assert_eq!(
             initiative(&st, Place::Construct(b)),
             vec![Actor::You, Actor::Ice(1), Actor::Ice(0)]
@@ -11283,11 +11291,16 @@ mod tests {
                 act_throw("flashbang"),
                 act_throw("emp_puck"),
                 act_throw("satchel"),
+                act_throw("choke_can"),
             ]
         );
         assert_eq!(MapScreen::act_key(&st, 6), Some(act_throw("frag")));
-        assert_eq!(MapScreen::act_key(&st, 0), None);
+        // `0` is the tenth key, after `9`.
+        assert_eq!(MapScreen::act_key(&st, 9), Some(act_throw("satchel")));
+        assert_eq!(MapScreen::act_key(&st, 0), Some(act_throw("choke_can")));
         assert_eq!(MapScreen::act_key(&st, 10), None);
+        let keys: String = MapScreen::act_entries(&st).iter().map(|e| e.key).collect();
+        assert_eq!(keys, "1234567890");
         // A construct: the programs keep 1-5, the net's abilities follow on 6-8.
         let mut st = AppState::new();
         st.enter_city(citygen::City::lot(1));
@@ -11311,6 +11324,37 @@ mod tests {
         assert_eq!(MapScreen::act_key(&st, 6), Some(act_ability("static")));
         assert_eq!(MapScreen::act_key(&st, 8), Some(act_ability("redline")));
         assert_eq!(MapScreen::act_key(&st, 9), None);
+        assert_eq!(MapScreen::act_key(&st, 0), None);
+        // Six boosts more, nine entries in all: the keys run 6-9 and 0, then stop
+        // short of the programs' 1.
+        for n in 0..6 {
+            let id = format!("boost_{n}");
+            st.content.abilities.push(
+                ron::from_str(&format!(
+                    r#"Ability(id: "{id}", name: "B{n}", cooldown: 60, kind: Active(Boost(once: false)), desc: "")"#
+                ))
+                .unwrap(),
+            );
+            st.character.abilities.push(game::AbilityId::new(&id));
+        }
+        let keys: String = MapScreen::act_entries(&st).iter().map(|e| e.key).collect();
+        assert_eq!(keys, "67890");
+        assert_eq!(MapScreen::act_key(&st, 0), Some(act_ability("boost_1")));
+        assert_eq!(MapScreen::act_key(&st, 1), None, "1 stays a program");
+    }
+
+    #[test]
+    fn zero_throws_the_choke_can() {
+        let (mut st, mut s) = runner_half(Pos::new(12, 8));
+        let can = ItemId::new("choke_can");
+        assert_eq!(st.character.count(&can), 2);
+        s.update(&mut st, &[key(KeyCode::Char('0'))]);
+        assert_eq!(s.armed, Some(can.clone()));
+        let text = buffer_text(&draw_buffer(&s, &st, 100, 30));
+        assert!(text.contains(" choke can · 6 tiles"), "{text}");
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(st.character.count(&can), 1, "one thrown");
+        assert_eq!(s.armed, None);
     }
 
     #[test]
@@ -11423,6 +11467,87 @@ mod tests {
     }
 
     #[test]
+    fn throw_reach_grows() {
+        let (mut st, _) = runner_half(Pos::new(12, 8));
+        let frag = ItemId::new("frag");
+        let (eleven, twelve) = (Pos::new(17, 8), Pos::new(18, 8));
+        let (text, _) = MapScreen::armed_readout(&st, &frag, eleven).unwrap();
+        assert_eq!(text, " frag · 11 tiles · out of range ", "bare: 8");
+        // A piston arm on the left, the launcher sleeve in its forearm socket.
+        st.character
+            .give_item(&st.content, ItemId::new("piston_arm"), 1);
+        st.character
+            .give_item(&st.content, ItemId::new("launcher_sleeve"), 1);
+        let copy = |st: &AppState, id: &str| {
+            st.character
+                .inventory
+                .iter()
+                .find(|s| s.item == ItemId::new(id))
+                .and_then(game::Stack::copy_id)
+                .unwrap()
+        };
+        let arm = copy(&st, "piston_arm");
+        crate::actions::perform(
+            &mut st,
+            game::Action::InstallCopy {
+                copy: arm,
+                site: game::Site::LeftArm,
+            },
+        )
+        .unwrap();
+        let sleeve = copy(&st, "launcher_sleeve");
+        crate::actions::perform(
+            &mut st,
+            game::Action::Fit {
+                host: game::Host::Site(game::Site::LeftArm),
+                socket: 1,
+                piece: sleeve,
+            },
+        )
+        .unwrap();
+        assert_eq!(st.character.throw_bonus(&st.content), 3);
+        let (text, _) = MapScreen::armed_readout(&st, &frag, eleven).unwrap();
+        assert!(text.starts_with(" frag · 11 tiles · blast 2"), "{text:?}");
+        assert!(!MapScreen::armed_footprint(&st, &frag, eleven).is_empty());
+        let (text, _) = MapScreen::armed_readout(&st, &frag, twelve).unwrap();
+        assert_eq!(text, " frag · 12 tiles · out of range ");
+        // And the throw itself goes that far.
+        crate::blast::throw(&mut st, &frag, eleven).unwrap();
+        assert_eq!(st.character.count(&frag), 2);
+    }
+
+    #[test]
+    fn the_footer_and_the_column_read_your_move() {
+        let (mut st, mut s) = lot(Pos::new(14, 8));
+        st.character
+            .chrome
+            .insert(game::Site::Spine, ItemId::new("redline_spine"));
+        s.update(&mut st, &[]);
+        assert_eq!(st.net.engaged.as_ref().unwrap().moves, 5);
+        let text = draw_screen(&s, &st, 140, 40);
+        assert!(text.contains("MOV ▰▰▰▰▰ 5/5    AP ●● 2/2"), "{text}");
+        assert!(text.contains(" ◆ MOV ▰▰▰▰▰   5/5"), "{text}");
+        // Their turn: your pools read whole, at your five.
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert!(!crate::net::your_turn(&st));
+        let text = draw_screen(&s, &st, 140, 40);
+        assert!(text.contains("MOV ▰▰▰▰▰ 5/5    AP ●● 2/2"), "{text}");
+        // The spine and dog legs: seven, and the column still reads them whole.
+        let (mut st, mut s) = lot(Pos::new(14, 8));
+        for (site, id) in [
+            (game::Site::Spine, "redline_spine"),
+            (game::Site::Legs, "dog_legs"),
+        ] {
+            st.character.chrome.insert(site, ItemId::new(id));
+        }
+        s.update(&mut st, &[]);
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(text.contains(" ◆ MOV ▰▰▰▰▰▰▰ 7/7"), "{text}");
+        assert!(text.contains("   AP  ●●      2/2"), "{text}");
+    }
+
+    #[test]
     fn a_flashbang_reads_stun_and_skips_the_chromeless_under_a_chrome_blast() {
         let (mut st, _) = runner_half(Pos::new(12, 8));
         let (text, _) =
@@ -11439,8 +11564,10 @@ mod tests {
         let (mut st, mut s) = runner_half(Pos::new(12, 8));
         st.character
             .inventory
-            .retain(|s| s.item != ItemId::new("satchel"));
+            .retain(|s| s.item != ItemId::new("satchel") && s.item != ItemId::new("choke_can"));
         s.update(&mut st, &[key(KeyCode::Char('9'))]);
+        assert_eq!((s.armed.clone(), ap_left(&st)), (None, 2));
+        s.update(&mut st, &[key(KeyCode::Char('0'))]);
         assert_eq!((s.armed.clone(), ap_left(&st)), (None, 2));
         // No frag in the pack: the entry is gone and its key does nothing.
         st.character
@@ -11634,6 +11761,7 @@ mod tests {
                 stun: 0,
                 fuse: 1,
                 chrome: false,
+                harm: game::Harm::Kinetic,
             },
             fx: Vec::new(),
             name: "Satchel charge".to_string(),

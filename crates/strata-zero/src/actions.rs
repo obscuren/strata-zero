@@ -21,6 +21,9 @@ pub fn handles_items(action: &Action) -> bool {
         Action::Equip(_)
             | Action::EquipCopy(_)
             | Action::Unequip(_)
+            | Action::Install { .. }
+            | Action::InstallCopy { .. }
+            | Action::Pull(_)
             | Action::Drop { .. }
             | Action::DropCopy(_)
             | Action::Use(_)
@@ -66,7 +69,14 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
     };
     let refresh_sight = matches!(
         action,
-        Action::Equip(_) | Action::EquipCopy(_) | Action::Unequip(_)
+        Action::Equip(_)
+            | Action::EquipCopy(_)
+            | Action::Unequip(_)
+            | Action::Install { .. }
+            | Action::InstallCopy { .. }
+            | Action::Pull(_)
+            | Action::Fit { .. }
+            | Action::Unfit { .. }
     );
     if let Some(id) = &fired
         && st
@@ -250,7 +260,7 @@ mod tests {
     use crate::render::Visibility;
     use crate::walker::Player;
     use citygen::{City, GenParams, Generator, SizePreset};
-    use game::{AbilityId, CopyId, Host, ItemId, RecipeId, Slot};
+    use game::{AbilityId, CopyId, Host, ItemId, RecipeId, Site, Slot};
 
     fn city() -> City {
         Generator::run(GenParams {
@@ -260,6 +270,45 @@ mod tests {
             ..Default::default()
         })
         .unwrap()
+    }
+
+    #[test]
+    fn chrome_is_locked_jacked_in() {
+        let mut st = AppState::new();
+        st.city = Some(city());
+        let b = st.city.as_ref().unwrap().buildings[0].id;
+        let mut p = Player::at(Place::Construct(b), Pos::new(1, 1));
+        p.body = Some((Place::Stratum(StratumKind::Street), Pos::new(1, 1)));
+        st.player = Some(p);
+        st.character
+            .give_item(&st.content, ItemId::new("grip_arm"), 1);
+        let before = st.character.clone();
+        for action in [
+            Action::Install {
+                item: ItemId::new("grip_arm"),
+                site: Site::RightArm,
+            },
+            Action::InstallCopy {
+                copy: CopyId(1),
+                site: Site::RightArm,
+            },
+            Action::Pull(Site::Eyes),
+        ] {
+            let refused = perform(&mut st, action.clone());
+            assert_eq!(refused, Err(JACKED_IN.to_string()), "{action:?}");
+        }
+        assert_eq!(st.character, before);
+        // Back in the body, the arm goes in.
+        st.player = Some(Player::spawn(st.city.as_ref().unwrap(), 1));
+        let install = Action::Install {
+            item: ItemId::new("grip_arm"),
+            site: Site::RightArm,
+        };
+        perform(&mut st, install).unwrap();
+        assert_eq!(
+            st.character.chrome_at(Site::RightArm),
+            Some(&ItemId::new("grip_arm"))
+        );
     }
 
     #[test]
@@ -382,8 +431,8 @@ mod tests {
         assert!(perform(&mut st, Action::Fire(AbilityId::new("netscan"))).is_err());
         assert_eq!(st.fx.len(), 1);
         st.character
-            .equipment
-            .insert(Slot::Neural, ItemId::new("neural_port"));
+            .chrome
+            .insert(Site::Neural, ItemId::new("neural_port"));
         perform(&mut st, Action::Fire(AbilityId::new("ping"))).unwrap();
         let kinds: Vec<&game::Fx> = st.fx.iter().map(|i| &i.fx).collect();
         assert!(
@@ -449,20 +498,68 @@ mod tests {
                 .vis()
                 .count(|v| *v == Visibility::Visible)
         };
+        // Shades that see further, so wearing them shows.
+        let shades = ItemId::new("mirrorshades");
+        let item = st.content.items.iter_mut().find(|i| i.id == shades);
+        item.unwrap().perks.push(game::Perk::Sight(4));
+        st.character.give(shades.clone(), 1);
+        perform(&mut st, Action::Equip(shades.clone())).unwrap();
+        let worn = visible(&st);
         perform(&mut st, Action::Unequip(Slot::Eyes)).unwrap();
         let bare = visible(&st);
-        perform(&mut st, Action::Equip(ItemId::new("nightglass_optics"))).unwrap();
-        let optics = visible(&st);
-        assert!(optics > bare, "optics on: {optics} vs {bare}");
-        perform(&mut st, Action::Unequip(Slot::Eyes)).unwrap();
-        assert_eq!(visible(&st), bare, "optics off again");
+        assert!(worn > bare, "shades on: {worn} vs {bare}");
+        perform(&mut st, Action::Equip(shades)).unwrap();
+        assert_eq!(visible(&st), worn, "shades on again");
+    }
+
+    #[test]
+    fn perform_refreshes_sight_after_fitting_chrome() {
+        let mut st = AppState::new();
+        st.city = Some(city());
+        st.player = Some(Player::spawn(st.city.as_ref().unwrap(), 1));
+        let visible = |st: &AppState| {
+            st.player
+                .as_ref()
+                .unwrap()
+                .vis()
+                .count(|v| *v == Visibility::Visible)
+        };
+        // A hand with an eye in its palm, so fitting it shows.
+        let hand = ItemId::new("arc_hand");
+        let item = st.content.items.iter_mut().find(|i| i.id == hand);
+        item.unwrap().perks.push(game::Perk::Sight(4));
+        st.character
+            .chrome
+            .insert(Site::LeftArm, ItemId::new("piston_arm"));
+        st.character.give_item(&st.content, hand.clone(), 1);
+        let host = Host::Site(Site::LeftArm);
+        let piece = st
+            .character
+            .inventory
+            .iter()
+            .find(|s| s.item == hand)
+            .and_then(|s| s.copy_id())
+            .unwrap();
+        let fit = Action::Fit {
+            host,
+            socket: 0,
+            piece,
+        };
+        perform(&mut st, fit.clone()).unwrap();
+        let fitted = visible(&st);
+        perform(&mut st, Action::Unfit { host, socket: 0 }).unwrap();
+        let bare = visible(&st);
+        assert!(fitted > bare, "hand fitted: {fitted} vs {bare}");
+        perform(&mut st, fit).unwrap();
+        assert_eq!(visible(&st), fitted, "hand fitted again");
     }
 
     #[test]
     fn pack_actions_work_without_a_body() {
         let mut st = AppState::new();
+        st.character.give(ItemId::new("mirrorshades"), 1);
+        assert!(perform(&mut st, Action::Equip(ItemId::new("mirrorshades"))).is_ok());
         assert!(perform(&mut st, Action::Unequip(Slot::Eyes)).is_ok());
-        assert!(perform(&mut st, Action::Equip(ItemId::new("nightglass_optics"))).is_ok());
         st.character.hp = 1;
         assert!(perform(&mut st, Action::Use(ItemId::new("stim_patch"))).is_ok());
         let no_body = "no body in the city";

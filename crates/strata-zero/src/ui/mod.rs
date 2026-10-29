@@ -10,6 +10,7 @@ pub mod dim;
 pub mod form;
 pub mod hardware;
 pub mod hud;
+pub mod implant_art;
 pub mod logo;
 pub mod looks;
 pub mod menu;

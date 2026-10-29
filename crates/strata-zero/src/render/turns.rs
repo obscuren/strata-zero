@@ -78,6 +78,26 @@ fn row(s: &str) -> String {
     out.chars().take(WIDTH as usize).collect()
 }
 
+/// Your two pool rows: the mark, `MOV` and `AP` padded alike, the pips to seven,
+/// one space, the count. Past seven the pips are cut so the count still shows.
+fn pool_rows(moves: u8, moves_max: u8, ap: u8, ap_max: u8, acting: bool) -> (String, String) {
+    let (mm, am) = if acting { (" ", "◆") } else { ("◆", " ") };
+    let line = |mark: &str, label: &str, (on, off): (char, char), n: u8, max: u8| {
+        let count = format!("{n}/{max}");
+        // The mark and label take seven cells, a space parts the pips from the count.
+        let room = (WIDTH as usize).saturating_sub(8 + count.chars().count());
+        let pips: String = (0..max)
+            .map(|i| if i < n { on } else { off })
+            .take(room)
+            .collect();
+        row(&format!(" {mark} {label:<3} {pips:<room$} {count}"))
+    };
+    (
+        line(mm, "MOV", ('▰', '▱'), moves, moves_max),
+        line(am, "AP", ('●', '○'), ap, ap_max),
+    )
+}
+
 impl Overlay for TurnOverlay<'_> {
     fn draw(
         &self,
@@ -121,15 +141,7 @@ impl Overlay for TurnOverlay<'_> {
                 continue;
             }
             if yours && let Some((moves, moves_max, ap, ap_max, acting)) = v.yours {
-                let bar: String = (0..moves_max)
-                    .map(|i| if i < moves { '▰' } else { '▱' })
-                    .collect();
-                let dots: String = (0..ap_max)
-                    .map(|i| if i < ap { '●' } else { '○' })
-                    .collect();
-                let (mm, am) = if acting { (" ", "◆") } else { ("◆", " ") };
-                let move_row = row(&format!(" {mm} MOVE {bar:<4}  {moves}/{moves_max} "));
-                let ap_row = row(&format!(" {am} AP   {dots:<4}  {ap}/{ap_max} "));
+                let (move_row, ap_row) = pool_rows(moves, moves_max, ap, ap_max, acting);
                 let (mf, mb, af, ab) = if acting {
                     (DIM, YOURS, CYAN, LIT)
                 } else {
@@ -152,5 +164,42 @@ impl Overlay for TurnOverlay<'_> {
                 y += 1;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn width(s: &str) -> usize {
+        unicode_width::UnicodeWidthStr::width(s)
+    }
+
+    #[test]
+    fn the_pool_rows_read_in_full_up_to_seven_moves() {
+        let (mv, ap) = pool_rows(4, 4, 2, 2, false);
+        assert_eq!(mv, " ◆ MOV ▰▰▰▰    4/4");
+        assert_eq!(ap, "   AP  ●●      2/2");
+        let (mv, ap) = pool_rows(3, 4, 1, 2, true);
+        assert_eq!(mv, "   MOV ▰▰▰▱    3/4");
+        assert_eq!(ap, " ◆ AP  ●○      1/2");
+        assert_eq!(pool_rows(6, 6, 2, 2, false).0, " ◆ MOV ▰▰▰▰▰▰  6/6");
+        assert_eq!(pool_rows(7, 7, 2, 2, false).0, " ◆ MOV ▰▰▰▰▰▰▰ 7/7");
+        assert_eq!(pool_rows(2, 7, 2, 2, false).0, " ◆ MOV ▰▰▱▱▱▱▱ 2/7");
+        for n in 1..=7 {
+            let (mv, ap) = pool_rows(n, n, 2, 2, false);
+            assert_eq!(width(&mv), WIDTH as usize, "{mv:?}");
+            assert_eq!(width(&ap), WIDTH as usize, "{ap:?}");
+            assert!(mv.ends_with(&format!(" {n}/{n}")), "{mv:?}");
+        }
+    }
+
+    #[test]
+    fn past_seven_the_pips_give_way_and_the_count_stays() {
+        let (mv, _) = pool_rows(9, 9, 2, 2, false);
+        assert_eq!(mv, " ◆ MOV ▰▰▰▰▰▰▰ 9/9");
+        let (mv, _) = pool_rows(10, 12, 2, 2, false);
+        assert_eq!(mv, " ◆ MOV ▰▰▰▰▰ 10/12");
+        assert_eq!(width(&mv), WIDTH as usize);
     }
 }

@@ -182,7 +182,7 @@ const REVEAL_TICKS: u64 = 10;
 
 /// Rows a line takes at `width` under the paragraph's word wrap: greedy, words
 /// joined by single spaces, a word longer than a row spilling into the next.
-fn wrapped_rows(line: &Line<'_>, width: usize) -> usize {
+pub(crate) fn wrapped_rows(line: &Line<'_>, width: usize) -> usize {
     let width = width.max(1);
     let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
     let mut rows = 1;

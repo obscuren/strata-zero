@@ -8,9 +8,10 @@ use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::messages::Kind;
 use crate::render::map::MapRef;
 use crate::render::memmap::MemoryMap;
-use crate::screens::create::stat_colour;
+use crate::screens::create::attribute_colour;
 use crate::screens::kit::Kit;
 use crate::screens::popup::{Choice, Pick, Popup};
+use crate::screens::sheet::Sheet;
 use crate::screens::workbench::Workbench;
 use crate::ui::board::{BoardState, RowKind, board_rows};
 use crate::ui::chrome::{
@@ -25,8 +26,8 @@ use citygen::rng::hash64;
 use citygen::{FloorPlan, NodeKind, Place, Pos, StratumKind};
 use crossterm::event::{KeyCode, KeyEvent};
 use game::{
-    AbilityId, AbilityKind, Action, Active, Build, CategoryId, CopyId, Item, ItemCopy, ItemId, Mod,
-    Perk, SkillId, Slot, Source, Stat,
+    AbilityId, AbilityKind, Action, Active, Attribute, Build, CategoryId, CopyId, Item, ItemCopy,
+    ItemId, Mod, Perk, SkillId, Slot, Source,
 };
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -68,8 +69,9 @@ const SOCKET_EMPTY: (Color, Color) = (DIM, Color::Rgb(0x00, 0xa5, 0xb8));
 pub enum Tab {
     /// Abilities, active and passive.
     Skills,
-    /// The five stats and the points left to spend on them.
-    Stats,
+    /// The character sheet: the attributes, the numbers gear and chrome move, the
+    /// resistances, and the chrome in you.
+    Attributes,
     /// What you wear and what you carry, and the item under the cursor.
     Kit,
     Workbench,
@@ -84,7 +86,7 @@ pub enum Tab {
 impl Tab {
     pub const ALL: [Tab; 8] = [
         Tab::Skills,
-        Tab::Stats,
+        Tab::Attributes,
         Tab::Kit,
         Tab::Workbench,
         Tab::Jobs,
@@ -96,7 +98,7 @@ impl Tab {
     pub fn label(self) -> &'static str {
         match self {
             Tab::Skills => "SKILLS",
-            Tab::Stats => "STATS",
+            Tab::Attributes => "ATTRIBUTES",
             Tab::Kit => "GEAR & INVENTORY",
             Tab::Workbench => "WORKBENCH",
             Tab::Jobs => "JOBS",
@@ -126,7 +128,6 @@ pub(crate) enum Detail {
     Item(ItemId),
     /// One copy in the pack, for an item held per copy.
     Copy(CopyId),
-    Stat(Stat),
     Category(CategoryId),
     Skill(SkillId),
     /// Index into the journal's flat list of entries.
@@ -156,6 +157,8 @@ pub struct Deck {
     last_list: Cell<(Rect, usize)>,
     /// GEAR & INVENTORY, with its own cursor, keys and drawing.
     pub(crate) kit: Kit,
+    /// ATTRIBUTES, the character sheet, the same.
+    pub(crate) sheet: Sheet,
     /// Unfolded categories on the SKILLS board; starts as the owned ones.
     open: Option<BTreeSet<CategoryId>>,
     /// The owned categories at the last update, so a fresh unlock unfolds itself.
@@ -435,29 +438,6 @@ pub(crate) fn card(st: &AppState, detail: &Detail) -> Vec<Line<'static>> {
         Detail::Journal(i) => Deck::journal_card(st, *i),
         Detail::Category(id) => skill_card::lines(&st.content, held(st), Card::Category(id)),
         Detail::Skill(id) => skill_card::lines(&st.content, held(st), Card::Skill(id)),
-        Detail::Stat(stat) => {
-            let base = st.character.stats.get(*stat);
-            let with = st.character.stat(&st.content, *stat);
-            let mut out = vec![head(stat.name())];
-            out.push(dim(if with == base {
-                format!("{base}")
-            } else {
-                format!("{base} · {with} with gear")
-            }));
-            out.push(plain(""));
-            out.push(plain(st.content.stat_blurb(*stat).to_string()));
-            out.push(plain(""));
-            out.push(dim("feeds"));
-            for s in st.content.skills.iter().filter(|s| s.stat == *stat) {
-                let mark = if st.character.has_skill(&s.id) {
-                    "◆"
-                } else {
-                    "◇"
-                };
-                out.push(plain(format!("{mark} {}", s.name)));
-            }
-            out
-        }
     }
 }
 
@@ -559,6 +539,7 @@ impl Deck {
             focus: None,
             last_list: Cell::new((Rect::new(0, 0, 0, 0), 0)),
             kit: Kit::new(tick),
+            sheet: Sheet::new(tick),
             open: None,
             owned_seen: None,
             skills_seen: None,
@@ -627,9 +608,11 @@ impl Deck {
     }
 
     /// Reopens where the deck was closed: the remembered tab and its row, clamped to a
-    /// row that still exists and can be selected, and GEAR & INVENTORY where it was left.
+    /// row that still exists and can be selected, and GEAR & INVENTORY and ATTRIBUTES where
+    /// they were left.
     pub fn restore(mut self, st: &AppState) -> Self {
         self.kit = Kit::restore(st);
+        self.sheet = Sheet::restore(st);
         self.tab = st.deck_tab;
         self.tab_from = self.tab.index();
         let rows = self.rows(st);
@@ -787,6 +770,9 @@ impl Deck {
             self.kit.reselect(st);
             self.kit.changed = st.tick;
         }
+        if tab == Tab::Attributes {
+            self.sheet.opened(st.tick);
+        }
         self.tab_tween = Tween::new(st.tick, 6, Easing::OutCubic);
     }
 
@@ -828,7 +814,6 @@ impl Deck {
     pub(crate) fn rows(&self, st: &AppState) -> Vec<Row> {
         match self.tab {
             Tab::Skills => self.board_list(st),
-            Tab::Stats => Self::stat_rows(st),
             Tab::Workbench if !st.character.has_workbench(&st.content) => vec![Row {
                 text: "no bench. WRENCH unlocks it.".into(),
                 tone: Tone::Dim,
@@ -837,7 +822,7 @@ impl Deck {
             }],
             Tab::Jobs => crate::jobs::ui::deck_rows(st),
             Tab::Journal => Self::journal_rows(st),
-            Tab::Workbench | Tab::Kit | Tab::Map | Tab::Talents => Vec::new(),
+            Tab::Workbench | Tab::Kit | Tab::Attributes | Tab::Map | Tab::Talents => Vec::new(),
         }
     }
 
@@ -848,11 +833,15 @@ impl Deck {
         let mut out = Vec::new();
         for p in &item.perks {
             out.push(cyan(match p {
-                Perk::Stat(s, n) => format!("{n:+} {}", s.label()),
+                Perk::Attribute(s, n) => format!("{n:+} {}", s.label()),
                 Perk::Sight(n) => format!("{n:+} sight"),
                 Perk::Carry(kg) => format!("{kg:+.1} kg carry"),
                 Perk::HpMax(n) => format!("{n:+} max hp"),
                 Perk::Focus(n) => format!("{n:+} focus"),
+                Perk::Armor(n) => format!("{n:+} armour"),
+                Perk::Move(n) => format!("{n:+} move"),
+                Perk::Resist(h, n) => format!("{n:+} {}", h.label()),
+                Perk::Throw(n) => format!("{n:+} throw"),
             }));
         }
         let names: Vec<String> = item
@@ -869,38 +858,6 @@ impl Deck {
             out.push(cyan(format!("grants {}", names.join(" · "))));
         }
         out
-    }
-
-    fn stat_rows(st: &AppState) -> Vec<Row> {
-        let ch = &st.character;
-        let b = Build::from_character(&st.content, ch);
-        let mut rows = Vec::new();
-        if ch.stat_points > 0 || ch.sp > 0 {
-            rows.push(Row {
-                text: format!("points {} · sp {}", ch.stat_points, ch.sp),
-                tone: Tone::Dim,
-                detail: None,
-                spans: None,
-            });
-        }
-        rows.extend(Stat::ALL.iter().map(|&s| {
-            let v = ch.stats.get(s);
-            let lvl = (v as usize).min(10);
-            let bar = format!("{}{}", "▰".repeat(lvl), "▱".repeat(10 - lvl));
-            let next = if ch.stat_points > 0 && v < st.content.creation.stat_cap {
-                let n = b.stat_cost(&st.content, s);
-                format!("  next {n} pt{}", if n == 1 { "" } else { "s" })
-            } else {
-                String::new()
-            };
-            Row {
-                text: format!("{:<8} {v:>2}  {bar}{next}", s.name()),
-                tone: Tone::Normal,
-                detail: Some(Detail::Stat(s)),
-                spans: None,
-            }
-        }));
-        rows
     }
 
     /// The unfolded categories: the remembered set, or the owned ones to start with.
@@ -1034,10 +991,11 @@ impl Deck {
         let cyan = |t: String| Line::from(Span::styled(t, Style::default().fg(CYAN)));
         let mut out = vec![head(&item.name)];
         // Where it goes: a slot, or for hardware the socket it fits.
-        let place = match (&item.hardware, item.slot) {
-            (Some(h), _) => format!(" · {}", h.fits.fits()),
-            (None, Some(s)) => format!(" · {}", s.label()),
-            (None, None) => String::new(),
+        let place = match (&item.hardware, &item.implant, item.slot) {
+            (Some(h), _, _) => format!(" · {}", h.fits.fits()),
+            (None, Some(i), _) => format!(" · {} · load {}", i.fits.label(), i.load),
+            (None, None, Some(s)) => format!(" · {}", s.label()),
+            (None, None, None) => String::new(),
         };
         // A copy weighs and costs what is fitted in it too.
         let fitted: Vec<&game::Stack> = copy
@@ -1325,12 +1283,23 @@ impl Deck {
         if self.tab == Tab::Kit {
             self.kit.reselect(st);
         }
+        if self.tab == Tab::Attributes {
+            self.sheet.reselect(st);
+        }
         for k in keys {
             // GEAR & INVENTORY takes the arrows, left and right too, `h j k l` and its
             // filter keys; space, `q` `e`, tab, the digits and esc go on to the deck's.
             if self.tab == Tab::Kit {
                 self.kit.reselect(st);
                 if self.kit.key(st, k.code, st.tick) {
+                    continue;
+                }
+            }
+            // ATTRIBUTES takes the arrows, `h j k l`, space, `x` on the ledger, and esc
+            // while its picker is open; the rest are the deck's.
+            if self.tab == Tab::Attributes {
+                self.sheet.reselect(st);
+                if self.sheet.key(st, k.code) {
                     continue;
                 }
             }
@@ -1407,19 +1376,6 @@ impl Deck {
                     None => self.flip_fold(st),
                 },
                 KeyCode::Enter if self.tab == Tab::Skills => {}
-                KeyCode::Char(' ') | KeyCode::Enter
-                    if matches!(
-                        rows.get(self.row).and_then(|r| r.detail.as_ref()),
-                        Some(Detail::Stat(_))
-                    ) =>
-                {
-                    // A point buys straight away; the refusal lands in the strip.
-                    if let Some(Detail::Stat(s)) = rows.get(self.row).and_then(|r| r.detail.clone())
-                    {
-                        let result = perform(st, Action::BuyStat(s));
-                        report(st, result);
-                    }
-                }
                 KeyCode::Char(' ') | KeyCode::Enter => {
                     if let Some(p) = self.interact(st) {
                         return ScreenCmd::Push {
@@ -1456,11 +1412,11 @@ pub(crate) fn status_strip(buf: &mut Buffer, st: &AppState, x: u16, y: u16, righ
     put(buf, x, y, &shown, style, right);
 }
 
-/// The SKILLS list's head, on a bar the cursor's colour across the list: every stat by
+/// The SKILLS list's head, on a bar the cursor's colour across the list: every attribute by
 /// its short name in its colour with its value, gear counted, and the SP to spend at the
-/// right. Short of room the stats close up: one cell apart, then each value against its
+/// right. Short of room the attributes close up: one cell apart, then each value against its
 /// name.
-fn stat_bar(buf: &mut Buffer, st: &AppState, area: Rect) {
+fn attribute_bar(buf: &mut Buffer, st: &AppState, area: Rect) {
     let (y, right) = (area.y, area.right());
     for cx in area.x..right {
         buf[(cx, y)].set_char(' ').set_bg(BAR_BG);
@@ -1477,16 +1433,16 @@ fn stat_bar(buf: &mut Buffer, st: &AppState, area: Rect) {
         right,
     );
     put(buf, sp_x + sp.len() as u16, y, " SP", bar.fg(DIM), right);
-    let stats: Vec<(Stat, String)> = Stat::ALL
+    let attributes: Vec<(Attribute, String)> = Attribute::ALL
         .iter()
-        .map(|&s| (s, st.character.stat(&st.content, s).to_string()))
+        .map(|&s| (s, st.character.attribute(&st.content, s).to_string()))
         .collect();
     let width = |gap: usize, pad: usize| {
-        let cells: usize = stats
+        let cells: usize = attributes
             .iter()
             .map(|(s, v)| s.short().len() + pad + v.len())
             .sum();
-        cells + gap * (stats.len() - 1)
+        cells + gap * (attributes.len() - 1)
     };
     let room = sp_x.saturating_sub(area.x + 2) as usize;
     let (gap, pad) = [(2, 1), (1, 1), (1, 0)]
@@ -1494,8 +1450,8 @@ fn stat_bar(buf: &mut Buffer, st: &AppState, area: Rect) {
         .find(|&(gap, pad)| width(gap, pad) <= room)
         .unwrap_or((1, 0));
     let mut x = area.x + 1;
-    for (s, v) in &stats {
-        let name = bar.fg(stat_colour(*s)).add_modifier(Modifier::BOLD);
+    for (s, v) in &attributes {
+        let name = bar.fg(attribute_colour(*s)).add_modifier(Modifier::BOLD);
         put(buf, x, y, s.short(), name, sp_x);
         x += (s.short().len() + pad) as u16;
         put(buf, x, y, v, bar.fg(TEXT), sp_x);
@@ -1511,6 +1467,7 @@ impl Screen for Deck {
         st.deck_tab = self.tab;
         st.deck_rows[self.tab.index()] = self.row;
         st.deck_kit = self.kit.state;
+        st.deck_sheet = self.sheet.state;
         st.deck_rows[Tab::Talents.index()] = self.cursor.pack();
         st.deck_rows[Tab::Workbench.index()] = self.workbench.pack();
         cmd
@@ -1688,6 +1645,8 @@ impl Screen for Deck {
             .draw(body, buf);
         } else if self.tab == Tab::Kit {
             self.kit.draw(st, body, buf);
+        } else if self.tab == Tab::Attributes {
+            self.sheet.draw(st, body, buf);
         } else if self.tab == Tab::Workbench && st.character.has_workbench(&st.content) {
             self.workbench.draw(st, body, buf);
         } else {
@@ -1695,9 +1654,9 @@ impl Screen for Deck {
                 .max(28)
                 .min(body.width.saturating_sub(10));
             let mut list = Rect::new(body.x, body.y, list_w, body.height);
-            // SKILLS heads its list with the stats and the SP to spend, then a blank row.
+            // SKILLS heads its list with the attributes and the SP to spend, then a blank row.
             if self.tab == Tab::Skills && list.height > 2 {
-                stat_bar(buf, st, Rect::new(list.x, list.y, list.width, 1));
+                attribute_bar(buf, st, Rect::new(list.x, list.y, list.width, 1));
                 list = Rect::new(list.x, list.y + 2, list.width, list.height - 2);
             }
             let detail = Rect::new(
@@ -1739,25 +1698,29 @@ impl Screen for Deck {
 
         status_strip(buf, st, inner.x + 1, strip_y, right);
 
-        // Hints.
-        put(
-            buf,
-            inner.x + 1,
-            hint_y,
-            match self.tab {
-                Tab::Skills => "Q/E tabs · ↑↓ select · ←→ fold · space fold/buy · tab close",
-                Tab::Talents => {
-                    "←→ along · ↑↓ tiers · Q/E tabs · 0-8 jump · space learn · tab close"
-                }
-                Tab::Kit => self.kit.hints(),
-                Tab::Workbench if st.character.has_workbench(&st.content) => {
-                    self.workbench.hints(st)
-                }
-                _ => "Q/E tabs · ↑↓ select · 0-8 jump · space act · tab close",
-            },
-            Style::default().fg(DIM),
-            right,
-        );
+        // Hints. The sheet's come with what the lock refuses dimmer.
+        let hint = match self.tab {
+            Tab::Attributes => self.sheet.hint_line(st),
+            tab => Line::from(Span::styled(
+                match tab {
+                    Tab::Skills => "Q/E tabs · ↑↓ select · ←→ fold · space fold/buy · tab close",
+                    Tab::Talents => {
+                        "←→ along · ↑↓ tiers · Q/E tabs · 0-8 jump · space learn · tab close"
+                    }
+                    Tab::Kit => self.kit.hints(),
+                    Tab::Workbench if st.character.has_workbench(&st.content) => {
+                        self.workbench.hints(st)
+                    }
+                    _ => "Q/E tabs · ↑↓ select · 0-8 jump · space act · tab close",
+                },
+                Style::default().fg(DIM),
+            )),
+        };
+        let mut x = inner.x + 1;
+        for span in &hint.spans {
+            put(buf, x, hint_y, &span.content, span.style, right);
+            x = x.saturating_add(span.width() as u16);
+        }
 
         // Signal jitter: a three-tick burst over one row every JITTER_PERIOD ticks.
         if tick % JITTER_PERIOD < 3 {
@@ -1789,7 +1752,7 @@ mod tests {
     use crate::screens::kit::{KitState, Pane};
     use crate::screens::testutil::{buffer_text, key};
     use citygen::{GenParams, Generator, SizePreset};
-    use game::ItemKind;
+    use game::{ItemKind, Num};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -1872,12 +1835,12 @@ mod tests {
         );
         assert!(text.contains("— empty —"), "{text}");
         assert!(text.contains(d.kit.hints()), "the kit's hints: {text}");
-        d.update(&mut st, &[key(KeyCode::Right)]);
-        assert_eq!((d.tab, d.kit.state.tile), (Tab::Kit, 1), "eyes");
+        d.update(&mut st, &[key(KeyCode::Right); 2]);
+        assert_eq!((d.tab, d.kit.state.tile), (Tab::Kit, 2), "torso");
         st.tick += 30;
         let text = draw(&d, &st, 120, 35);
         assert!(
-            text.contains("NIGHTGLASS OPTICS") && text.contains("cyberware · eyes"),
+            text.contains("SALVAGE JACKET") && text.contains("armor · torso"),
             "{text}"
         );
 
@@ -1943,7 +1906,10 @@ mod tests {
         assert!(tight.ends_with(" TALENTS  ▸ E ├"), "{tight:?}");
         // At 120 the gaps reach four and stop.
         let (_, _, full) = bar(120);
-        assert!(full.starts_with("┤ Q ◂    ▌SKILLS▐     STATS "), "{full:?}");
+        assert!(
+            full.starts_with("┤ Q ◂    ▌SKILLS▐     ATTRIBUTES "),
+            "{full:?}"
+        );
         assert!(full.ends_with("▸ E ├"), "{full:?}");
         // Wider, the bar stays 120 wide in the middle, out of the frame.
         let (b, y, wide) = bar(200);
@@ -2072,19 +2038,21 @@ mod tests {
         );
         assert!(text.contains("not in pack"), "{text}");
 
-        d.update(&mut st, &[key(KeyCode::Char('2'))]);
-        d.changed = 0;
-        let rows = d.rows(&st);
-        d.row = rows.iter().position(|r| r.text.contains("NET")).unwrap();
+        on_attribute(&mut d, &mut st, Num::Attribute(Attribute::Net));
         let text = draw(&d, &st, 120, 35);
-        assert!(
-            text.contains("NET       6  ▰▰▰▰▰▰▱▱▱▱") && text.contains("6 · 7 with gear"),
-            "{text}"
-        );
+        assert!(text.contains("NET 6 · 7 with gear"), "{text}");
         assert!(
             text.contains("◆ Hacking") && text.contains("◇ Vault run"),
             "feeds: {text}"
         );
+    }
+
+    /// Opens ATTRIBUTES on a number's tile, its readout typed out.
+    fn on_attribute(d: &mut Deck, st: &mut AppState, n: Num) {
+        d.update(st, &[key(KeyCode::Char('2'))]);
+        d.sheet.state.tile = Num::ALL.iter().position(|&m| m == n).unwrap();
+        d.sheet.changed = 0;
+        st.tick = 60;
     }
 
     #[test]
@@ -2210,20 +2178,18 @@ mod tests {
     }
 
     #[test]
-    fn stats_rows_show_the_stat_and_its_bar() {
+    fn attributes_tab_shows_the_attribute_and_its_blurb() {
         let mut st = state();
-        st.character.stats.body = 7;
+        st.character.attributes.body = 7;
         let mut d = Deck::new(0);
-        d.update(&mut st, &[key(KeyCode::Char('2'))]);
-        let rows = d.rows(&st);
-        let body = rows.iter().find(|r| r.text.contains("BODY")).unwrap();
-        assert!(body.text.contains(" 7  ▰▰▰▰▰▰▰▱▱▱"), "{:?}", body.text);
-        st.tick = 60;
+        on_attribute(&mut d, &mut st, Num::Attribute(Attribute::Body));
+        assert!(d.rows(&st).is_empty(), "the sheet, not a list");
         let text = draw(&d, &st, 120, 35);
         assert!(
-            text.contains("▰▰▰▰▰▰▰▱▱▱") && text.contains("meat"),
+            text.contains("┌ BOD ─┐") && text.contains("│  7   │"),
             "{text}"
         );
+        assert!(text.contains("BODY 7") && text.contains("meat"), "{text}");
     }
 
     #[test]
@@ -2343,7 +2309,7 @@ mod tests {
         st.tick = 60;
         let text = draw(&d, &st, 120, 35);
         assert!(
-            text.contains("hp 45/45") && text.contains("11.6/16.0 kg"),
+            text.contains("hp 45/45") && text.contains("11.4/16.0 kg"),
             "{text}"
         );
         st.say("equipped Hardhat with visor");
@@ -2368,28 +2334,24 @@ mod tests {
             .inventory
             .push(game::Stack::new(ItemId::new("scrap_servo"), 40));
         let text = draw(&d, &st, 120, 35);
-        assert!(text.contains("35.6/16.0 kg"), "{text}");
+        assert!(text.contains("35.4/16.0 kg"), "{text}");
     }
 
     #[test]
     fn skills_and_gear_show_perks() {
         let mut st = state();
         let mut d = Deck::new(0);
-        d.update(&mut st, &[key(KeyCode::Char('2'))]);
-        let rows = d.rows(&st);
-        d.row = rows.iter().position(|r| r.text.contains("NET")).unwrap();
-        d.changed = 0;
-        st.tick = 60;
+        on_attribute(&mut d, &mut st, Num::Attribute(Attribute::Net));
         let text = draw(&d, &st, 120, 35);
         assert!(
-            text.contains("6 · 7 with gear"),
+            text.contains("6 · 7 with gear") && text.contains("gear +1 Pawnshop deck"),
             "the deck's +1 net: {text}"
         );
-        on_tile(&mut d, &mut st, Slot::Eyes);
+        on_tile(&mut d, &mut st, Slot::Deck);
         d.kit.changed = 0;
         let text = draw(&d, &st, 120, 35);
         assert!(
-            text.contains("+4 sight") && text.contains("grants Low-light"),
+            text.contains("+1 net") && text.contains("grants Netscan"),
             "{text}"
         );
     }
@@ -2400,12 +2362,12 @@ mod tests {
         walking(&mut st);
         st.character
             .inventory
-            .push(game::Stack::new(ItemId::new("mirrorshades"), 1));
+            .push(game::Stack::new(ItemId::new("ballistic_weave"), 1));
         st.character
             .inventory
             .push(game::Stack::new(ItemId::new("hardhat"), 1));
         let mut d = Deck::new(0);
-        on_tile(&mut d, &mut st, Slot::Eyes);
+        on_tile(&mut d, &mut st, Slot::Torso);
         let ScreenCmd::Push { to: mut p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))])
         else {
             panic!("space opens the picker")
@@ -2419,7 +2381,7 @@ mod tests {
         .unwrap();
         let text = buffer_text(t.backend().buffer());
         assert!(
-            text.contains("a  Mirrorshades")
+            text.contains("a  Ballistic weave")
                 && text.contains("u  Unequip")
                 && text.contains("i  Inspect"),
             "{text}"
@@ -2432,12 +2394,12 @@ mod tests {
         );
         p.update(&mut st, &[key(KeyCode::Char('a'))]);
         assert_eq!(
-            st.character.equipped(Slot::Eyes),
-            Some(&ItemId::new("mirrorshades"))
+            st.character.equipped(Slot::Torso),
+            Some(&ItemId::new("ballistic_weave"))
         );
         assert_eq!(
             last(&st),
-            Some("swapped Nightglass optics for Mirrorshades")
+            Some("swapped Salvage jacket for Ballistic weave")
         );
         on_tile(&mut d, &mut st, Slot::Legs);
         assert!(matches!(
@@ -2536,7 +2498,7 @@ mod tests {
             labels,
             vec![
                 "SKILLS",
-                "STATS",
+                "ATTRIBUTES",
                 "GEAR & INVENTORY",
                 "WORKBENCH",
                 "JOBS",
@@ -2555,7 +2517,10 @@ mod tests {
         assert!(text.contains("NETRUNNER"), "SKILLS is the board: {text}");
         d.update(&mut st, &[key(KeyCode::Char('2'))]);
         let text = draw(&d, &st, 120, 35);
-        assert!(text.contains("BODY"), "STATS lists the five stats: {text}");
+        assert!(
+            text.contains("┌ BOD") && text.contains("RESISTANCES"),
+            "ATTRIBUTES is the sheet: {text}"
+        );
         assert!(!text.contains("CYBERDECK"), "no deck tab: {text}");
         d.update(&mut st, &[key(KeyCode::Char('6'))]);
         assert_eq!(d.tab, Tab::Journal);
@@ -2572,7 +2537,7 @@ mod tests {
         d.update(&mut st, &[key(KeyCode::Char('1')), key(KeyCode::Char('0'))]);
         assert_eq!(d.tab, Tab::Talents);
         d.update(&mut st, &[key(KeyCode::Char('2')), key(KeyCode::Char('9'))]);
-        assert_eq!(d.tab, Tab::Stats, "9 changes nothing");
+        assert_eq!(d.tab, Tab::Attributes, "9 changes nothing");
         assert_eq!(st.deck_rows.len(), 8);
     }
 
@@ -2610,30 +2575,83 @@ mod tests {
     }
 
     #[test]
-    fn stats_tab_spends_points_on_space() {
+    fn the_attributes_tab_reopens_where_it_was_left() {
+        use crate::screens::sheet::SheetPane;
         let mut st = state();
-        st.character.stat_points = 3;
         let mut d = Deck::new(0);
-        d.update(&mut st, &[key(KeyCode::Char('2'))]);
-        st.tick = 60;
+        // BODY, down to HP, along to FOC.
+        d.update(
+            &mut st,
+            &[
+                key(KeyCode::Char('2')),
+                key(KeyCode::Down),
+                key(KeyCode::Right),
+            ],
+        );
+        assert_eq!((st.deck_tab, st.deck_sheet.tile), (Tab::Attributes, 6));
+        st.tick = 50;
+        let again = Deck::new(5).restore(&st);
+        assert_eq!((again.tab, again.sheet.state.tile), (Tab::Attributes, 6));
+        assert_eq!(again.sheet.changed, 50, "the readout types out afresh");
+        // Left on the ledger, it opens on the left pane with the tile it had.
+        let mut d = again;
+        d.sheet.state.pane = SheetPane::Ledger;
+        d.update(&mut st, &[]);
+        assert_eq!(st.deck_sheet.pane, SheetPane::Ledger);
+        let again = Deck::new(6).restore(&st);
+        assert_eq!(
+            (again.sheet.state.pane, again.sheet.state.tile),
+            (SheetPane::Left, 6)
+        );
+        // Away to another tab and back: the same.
+        let mut d = again;
+        d.update(
+            &mut st,
+            &[
+                key(KeyCode::Right),
+                key(KeyCode::Right),
+                key(KeyCode::Right),
+                key(KeyCode::Right),
+                key(KeyCode::Right),
+            ],
+        );
+        assert_eq!(d.sheet.state.pane, SheetPane::Ledger);
+        d.update(&mut st, &[key(KeyCode::Char('1')), key(KeyCode::Char('2'))]);
+        assert_eq!(
+            (d.sheet.state.pane, d.sheet.state.tile),
+            (SheetPane::Left, 10)
+        );
+    }
+
+    #[test]
+    fn attributes_tab_spends_points_on_space() {
+        let mut st = state();
+        st.character.attribute_points = 3;
+        let mut d = Deck::new(0);
+        on_attribute(&mut d, &mut st, Num::Attribute(Attribute::Body));
         let text = draw(&d, &st, 120, 35);
         assert!(
-            text.contains("points 3") && text.contains("next 3 pts"),
+            text.contains("3 AP") && text.contains("next 3 pts"),
             "{text}"
         );
-        let rows = d.rows(&st);
-        d.row = rows.iter().position(|r| r.text.contains("BODY")).unwrap();
+        assert!(
+            text.contains("space allocates attribute"),
+            "the sheet's hints: {text}"
+        );
         assert!(matches!(
             d.update(&mut st, &[key(KeyCode::Char(' '))]),
             ScreenCmd::Stay
         ));
-        assert_eq!((st.character.stats.body, st.character.stat_points), (5, 0));
+        assert_eq!(
+            (st.character.attributes.body, st.character.attribute_points),
+            (5, 0)
+        );
         assert_eq!(last(&st), Some("BODY 5"));
         assert!(matches!(
             d.update(&mut st, &[key(KeyCode::Char(' '))]),
             ScreenCmd::Stay
         ));
-        assert_eq!(st.character.stats.body, 5);
+        assert_eq!(st.character.attributes.body, 5);
         assert_eq!(
             last(&st),
             Some("no points left"),
@@ -2883,7 +2901,7 @@ mod tests {
             .iter_mut()
             .find(|s| s.id.0 == "ice_breaker")
             .unwrap();
-        ice.needs = vec![(Stat::Net, 5), (Stat::Cool, 3)];
+        ice.needs = vec![(Attribute::Net, 5), (Attribute::Cool, 3)];
         ice.after = vec![game::SkillId::new("hacking")];
         let d = on_skill(&mut st, "ICE breaker");
         let text = draw(&d, &st, 100, 30);
@@ -2933,7 +2951,7 @@ mod tests {
     }
 
     #[test]
-    fn skills_board_heads_with_the_stats_and_the_sp_to_spend() {
+    fn skills_board_heads_with_the_attributes_and_the_sp_to_spend() {
         let mut st = state();
         st.character.sp = 250;
         let mut d = on_skill(&mut st, "NETRUNNER");
@@ -2942,7 +2960,7 @@ mod tests {
         let bar = list.y - 2;
         let text = cells(&b, list.x, list.right(), bar);
         // VEX: body 4, reflex 6, tech 5, cool 5, net 6 and the deck's +1.
-        assert_eq!(st.character.stat(&st.content, Stat::Net), 7);
+        assert_eq!(st.character.attribute(&st.content, Attribute::Net), 7);
         for want in ["BOD 4", "REF 6", "TEC 5", "COL 5", "NET 7"] {
             assert!(text.contains(want), "{want}: {text:?}");
         }
@@ -2952,14 +2970,14 @@ mod tests {
             "the bar is the list's full width"
         );
         let net = list.x + text.find("NET").unwrap() as u16;
-        assert_eq!(b[(net, bar)].fg, stat_colour(Stat::Net));
+        assert_eq!(b[(net, bar)].fg, attribute_colour(Attribute::Net));
         let body = list.x + text.find("BOD").unwrap() as u16;
-        assert_eq!(b[(body, bar)].fg, stat_colour(Stat::Body));
+        assert_eq!(b[(body, bar)].fg, attribute_colour(Attribute::Body));
         assert_eq!(cells(&b, list.x, list.right(), bar + 1).trim(), "");
         assert!(cells(&b, list.x, list.right(), list.y).contains("NETRUNNER"));
 
-        // Every stat at ten and four figures of SP still fit the minimum terminal.
-        st.character.stats = game::Stats {
+        // Every attribute at ten and four figures of SP still fit the minimum terminal.
+        st.character.attributes = game::Attributes {
             body: 10,
             reflex: 10,
             tech: 10,
@@ -2974,8 +2992,8 @@ mod tests {
         }
         assert!(text.trim_end().ends_with("1250 SP"), "{text:?}");
 
-        // Only SKILLS has the bar.
-        d.update(&mut st, &[key(KeyCode::Char('e'))]);
+        // Only SKILLS has the bar: JOURNAL's list starts at the top.
+        d.update(&mut st, &[key(KeyCode::Char('6'))]);
         assert_ne!(d.tab, Tab::Skills);
         screen(&d, &st, 100, 30);
         assert_eq!(d.last_list.get().0.y, bar);
@@ -3647,6 +3665,23 @@ mod tests {
             copy.as_ref(),
         ));
         assert_eq!(text[1], "hardware · deck socket · 0.4 kg · ¤ 800");
+        let arm = texts(&Deck::item_card_of(&st, &ItemId::new("grip_arm"), None));
+        assert!(arm[1].starts_with("cyberware · arm · load 3 · "), "{arm:?}");
+    }
+
+    #[test]
+    fn the_pack_offers_no_equip_on_chrome() {
+        let mut st = dshawn();
+        st.character
+            .give_item(&st.content, ItemId::new("grip_arm"), 1);
+        let copy = pack_copy(&st, "grip_arm");
+        for p in [
+            item_popup(&mut st, &ItemId::new("grip_arm"), (0, 0)).unwrap(),
+            copy_popup(&mut st, copy, (0, 0)).unwrap(),
+        ] {
+            let labels: Vec<&str> = p.choices().iter().map(|c| c.label.as_str()).collect();
+            assert!(!labels.contains(&"Equip"), "{labels:?}");
+        }
     }
 
     #[test]
@@ -3660,7 +3695,8 @@ mod tests {
             let text = buffer_text(&screen(d, st, 100, 30));
             let lines: Vec<&str> = text.lines().collect();
             let y = lines.iter().position(|l| l.contains("┌ PRIMARY")).unwrap();
-            let x = lines[y].chars().position(|c| c == '┌').unwrap();
+            let at = lines[y].find("┌ PRIMARY").unwrap();
+            let x = lines[y][..at].chars().count();
             let bottom: String = lines[y + 2].chars().skip(x).collect();
             bottom.split('┘').next().unwrap().to_string()
         };
@@ -3685,7 +3721,7 @@ mod tests {
     }
 
     #[test]
-    fn the_hardware_card_names_its_socket_and_stat() {
+    fn the_hardware_card_names_its_socket_and_attribute() {
         let st = dshawn();
         let text = texts(&card(
             &st,
@@ -3697,17 +3733,16 @@ mod tests {
     }
 
     #[test]
-    fn a_fitted_stat_mod_shows_on_the_stat_card() {
+    fn a_fitted_attribute_mod_shows_on_the_attribute_card() {
         let mut st = state();
         st.character
             .give_item(&st.content, ItemId::new("hushcan"), 1);
         fit(&mut st, game::Host::Worn(Slot::Primary), 0, "hushcan");
         let mut d = Deck::new(0);
-        d.update(&mut st, &[key(KeyCode::Char('2'))]);
-        let rows = d.rows(&st);
-        d.row = rows.iter().position(|r| r.text.contains("COOL")).unwrap();
-        let text = texts(&d.detail(&st, &rows));
-        assert_eq!(text[1], "5 · 6 with gear", "{text:?}");
+        on_attribute(&mut d, &mut st, Num::Attribute(Attribute::Cool));
+        let text = draw(&d, &st, 120, 35);
+        assert!(text.contains("COOL 5 · 6 with hardware"), "{text}");
+        assert!(text.contains("hardware +1 Hushcan"), "{text}");
     }
 
     #[test]
@@ -3720,8 +3755,8 @@ mod tests {
         };
         let rows = vec![
             row("HEAD", None),
-            row("one", Some(Detail::Stat(Stat::ALL[0]))),
-            row("two", Some(Detail::Stat(Stat::ALL[1]))),
+            row("one", Some(Detail::Journal(0))),
+            row("two", Some(Detail::Journal(1))),
         ];
         let list = Rect::new(0, 0, 30, 3);
         let mut buf = Buffer::empty(Rect::new(0, 0, 30, 5));

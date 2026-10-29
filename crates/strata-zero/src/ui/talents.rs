@@ -2,7 +2,7 @@
 //! rank meter, connectors down to what a talent needs, and a dossier for the one
 //! under the cursor.
 
-use crate::screens::create::stat_colour;
+use crate::screens::create::attribute_colour;
 use crate::ui::chrome::{
     BAR_BG, CYAN, DIM, FAINT, MAGENTA, PANEL_BG, RULE, TEXT, put, put_paragraph, reveal,
 };
@@ -233,13 +233,13 @@ impl TalentsView<'_> {
                 put(buf, x, area.y, " · ", Style::default().fg(DIM), right);
                 x += 3;
             }
-            let s = format!("{} {}", tree.name, ch.tree_points(c, tree.stat));
+            let s = format!("{} {}", tree.name, ch.tree_points(c, tree.attribute));
             put(
                 buf,
                 x,
                 area.y,
                 &s,
-                Style::default().fg(stat_colour(tree.stat)),
+                Style::default().fg(attribute_colour(tree.attribute)),
                 right,
             );
             x += s.chars().count() as u16;
@@ -281,7 +281,7 @@ impl TalentsView<'_> {
         let tiers_fit = ((tier_rows + 1) / 3) as usize;
         for (ti, tree) in c.trees.iter().enumerate() {
             let cx = area.x + ti as u16 * col_w;
-            let colour = stat_colour(tree.stat);
+            let colour = attribute_colour(tree.attribute);
             let mut y = top;
             put(
                 buf,
@@ -308,7 +308,7 @@ impl TalentsView<'_> {
                     // The gap row: a closed tier's caption, else connectors down to
                     // what the tier's talents need.
                     let need = c.creation.tier_gate * tier_i as u32;
-                    let have = ch.tree_points(c, tree.stat);
+                    let have = ch.tree_points(c, tree.attribute);
                     if have < need {
                         let more = need - have;
                         let cap = format!("── {more} more ──");
@@ -422,7 +422,7 @@ impl TalentsView<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use game::{Stat, TemplateId};
+    use game::{Attribute, TemplateId};
 
     fn setup() -> (Content, Character) {
         let c = Content::load().unwrap();
@@ -502,7 +502,7 @@ mod tests {
     #[test]
     fn the_dossier_reads_the_rank_the_next_and_the_reason() {
         let (c, mut ch) = setup();
-        let id = c.tree(Stat::Body).unwrap().tiers[0][0].clone();
+        let id = c.tree(Attribute::Body).unwrap().tiers[0][0].clone();
         let text = |lines: Vec<Line<'static>>| -> Vec<String> {
             lines.iter().map(|l| l.to_string()).collect()
         };

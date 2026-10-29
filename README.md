@@ -260,7 +260,8 @@ browsing, the console and the inspect and legend sections. Press `` ` `` to flip
 with it off you are always on foot.
 
 **Title** `↑↓` select · `enter` confirm (new game opens the chooser; new game
-(debug) drops D'SHAWN, maxed out, into a fresh city; new game · combat has a
+(debug) drops D'SHAWN, maxed out and carrying one of every piece of chrome
+(overburdened), into a fresh city; new game · combat has a
 `NET · STREET` pick on its row, `←→` to flip it, the pick in pink: STREET puts
 him on an empty lot at dusk with a goon in the far corner and a training dummy
 (`&`, stands still, shrugs every round off) six north, NET jacks him into the
@@ -268,13 +269,14 @@ lot's construct, an open floor with a grey ICE at the far end and a dummy ICE ne
 gate (never wakes, hits or breaks); load game opens the save list) · `q` quit
 
 **New game** picks a template (VEX, KESSLER) or a custom build, then walks six
-steps: ORIGIN, PROFESSION, STATS, SKILLS, NAME, SUMMARY. `↑↓` choose · `enter`
-next · `esc` back. On STATS `→` buys a point and `←` refunds one; a point's cost
+steps: ORIGIN, PROFESSION, ATTRIBUTES, SKILLS, NAME, SUMMARY. `↑↓` choose · `enter`
+next · `esc` back. On ATTRIBUTES `→` buys a point and `←` refunds one; a point's cost
 follows your origin's and profession's affinity. On SKILLS `→` `←` unfold and
 fold a category and `space` buys or refunds it or a skill with SP; the card beside the
 board is the deck's, drawing and all. SUMMARY ends
 on `enter`, JACK IN, which builds the character, generates a city and wakes
-you in your flat. Unspent points stay with you and can be spent from the deck.
+you in your flat. Unspent points stay with you and can be spent from the deck,
+and every third level (3, 6, 9 …) brings another.
 SP comes in steps of 50: you start with 600, a category costs 200 (STREET 100), its
 first skill comes free and the other two cost 100 and 150, and every level brings
 100 more.
@@ -329,7 +331,7 @@ is four rows that never resize: where you are (`on foot`, `camera` or `⚡` with
 the building and district; overburdened in magenta; jacked in, the TRACE heat
 and `HUNTED`) with `[?]` the only hint left; a blank row; the fight row (`TURN n`
 and the order, the `RUN` in flight with its beat bar in calm, the ICE in sight
-at the right); and the `ABILITIES` or `PROGRAMS` slots, with `MOVE` and `AP` at
+at the right); and the `ABILITIES` or `PROGRAMS` slots, with `MOV` and `AP` at
 the right while engaged and hollow keys on an ICE turn. Every result and refusal
 lands in the log, and `m` shows the whole history. With the log pane hidden the
 newest line shows briefly over the map instead.
@@ -338,7 +340,7 @@ newest line shows briefly over the map instead.
 rolls once and asleep ICE walks a tile of its beat; `.` hurries the next one.
 ICE that sees you, the alarm, or a program pointed at a piece puts the
 construct on turns: an order rolled once (you by your Net, pieces by grade,
-black before grey before white, ties to you), then `MOVE` 4 tiles and `AP` 2 a
+black before grey before white, ties to you), then `MOV` 4 tiles and `AP` 2 a
 turn. Your turn has two halves and the footer's second row names the one you
 are in. MOVE first: the arrows aim a path from you, as far as your moves reach
 (a red cross on a piece nothing reaches), `space` or `enter` walks it a tile
@@ -367,7 +369,7 @@ terminals and stairs in range for a while.
 
 **Street combat** a goon that sees you (eight tiles, a clear line) puts the
 street on the same turns as the Net: `TURN 1  YOU › goon` in the footer,
-`ENGAGED` at the right, `MOVE ▰▰▰▰ 4/4  AP ●● 2/2`. Your turn is two halves. In
+`ENGAGED` at the right, `MOV ▰▰▰▰ 4/4  AP ●● 2/2`. Your turn is two halves. In
 the move half `hjkl` steps and spends a move, `g` aims a path over the street
 and `enter` walks it, `space` stays. The act half opens the fire cursor on the
 nearest goon: `hjkl` moves it, `t` jumps to the next one (`tab` stays the deck's,
@@ -375,20 +377,21 @@ so a stim is a key away), the readout over it
 reads `goon · Scrap nine · 8 tiles · 90%`, `space` fires the worn gun for one
 AP, every round rolled on its own (the Ratchet's three, the pistol's one); a hit
 flashes the goon red, the number lifts off, a miss runs on and sparks where it
-stops. The `ACT` row under the footer lists what `1`-`9` do on the act half: a
-digit picks an ability and fires it at the cursor, or arms a throwable. Static
-(from a neural port) costs both AP, hurts and stuns for a turn, and tears the
-cells around the goon; Shove knocks an adjacent goon back; Jolt arcs from the
-goon to the nearest other within two tiles; Redline refills your pools and
+stops. The `ACT` row under the footer lists what `1`-`9` and `0` do on the act
+half: a digit picks an ability and fires it at the cursor, or arms a throwable.
+Static (from a neural port) costs both AP, hurts and stuns for a turn, and tears
+the cells around the goon; Shove knocks an adjacent goon back; Jolt arcs from
+the goon to the nearest other within two tiles; Redline refills your pools and
 gives you the turn again, once a fight; Deadeye marks one goon so your next
 shots land (its chance reads magenta). A throwable arms the cursor: a footprint
 shades the tiles it will reach, the readout says `frag · 6 tiles · blast 2`,
 `space` throws it, `esc` disarms. Frag is a fireball, the flashbang a white
-flash that stuns, the EMP puck a cyan shock that scrambles chrome, the satchel
-a charge that lies live for a turn with its footprint marked once it lands;
-the goons step out of it and wait at its edge. A stun on you takes the AP of
-each turn it lasts, not the moves. A stim from the deck costs an AP. `.` ends
-the turn; the goon closes in on the pace and shoots back.
+flash that stuns, the EMP puck a cyan shock that scrambles chrome, the choke can
+a green haze that poisons, the satchel a charge that lies live for a turn with
+its footprint marked once it lands; the goons step out of it and wait at its
+edge. A stun on you takes the AP of each turn it lasts, not the moves. A stim
+from the deck costs an AP. `.` ends the turn; the goon closes in on the pace and
+shoots back.
 `e` engages by hand with a goon in sight memory, and calms the street when
 nothing hunts you; at zero HP the goon drops (`%`), you flatline. A column at
 the map's top right lists the order (`▶ YOU`, `goon 18`), with the live half of
@@ -409,35 +412,60 @@ rain, fps) · quit to title · quit game
 arrows never change tabs · `↑↓` rows · `space` act on a row · `tab` or `esc` close;
 it reopens where you left it. Q and E sit as keycaps at the ends of the tab bar, in
 the frame's sides; past 120 columns the bar stays that wide in the middle. Tabs: skills (the category board,
-under a bar with your five stats, gear counted, and the SP you have to spend;
+under a bar with your five attributes, gear and chrome counted, and the SP you have to spend;
 it opens with only what you own unfolded; `←→` unfold and fold any category, `space`
 folds one you own and asks before it buys anything else with SP; a skill's card shows its
-drawing, grey or cold until you learn it, its price, the stats and skills it asks for,
+drawing, grey or cold until you learn it, its price, the attributes and skills it asks for,
 and its line; a category's shows its drawing, its price, its skills and what it grants),
-stats (the
-five stats and your pools; `space` buys a point outright), gear & inventory
-(below), workbench (WRENCH unlocks it; every recipe is a drawing: `←→` flips
-them, `↑↓` walks the parts, `space` builds once every part is on hand; an item
-whose drawing has parts is drawn exploded, the rest as a process), jobs (in
-hand, on offer, done), journal (empty for now), map (what you remember of this
-stratum) and talents (below). Every list wraps at both ends. GEAR & INVENTORY is
-three panels. The rack is the nine slots as tiles. The pack sits beside it with
-a row of kind icons on top: `[` and `]` filter it by kind, and the active icon
-names its kind. The selected item's card sits beside its drawing at half size.
-`←→` move between the rack and the pack. `space` on a tile picks what fits from
-the pack, or unequips and inspects what is worn; on a pack row it opens the
-verbs: Inspect, Equip, Use, Drop one, Drop all. Jacked in, your gear and pack are locked: those verbs dim and only
-Inspect works. In a popup the letter or `enter` fires a row and `esc` closes it;
-a card a row shows closes the popup too.
-Inspect on an item opens its blueprint in a window over the deck. The jacked
-deck's blueprint is the deck drawn as hardware: arrows point at a slot, a ROM
-strip, the failsafe or a program in your warez and the deck's glass reads it
-out; `space` picks a program up and drops it in a slot, ejects one, or lifts
-the failsafe's cover and throws it. A deck you carry shows its own blueprint
-but can't be worked until you equip it; hardware and the Ratchet have blueprints
-of their own, drawn large, and a sticker shows itself; anything else reads
-MISSING BLUEPRINT for now. `esc` puts a carried program back, shuts a lifted
-cover, then closes the window.
+attributes (the character sheet: on the left the five attributes under a header
+that counts the attribute points left, `N AP` (`0 AP` once spent), `space` allocates
+one outright, then the secondary numbers and the six resistances, each block's
+tiles a blank row under its header, each tile with a readout that names where its
+number comes from; on the right the chrome ledger, `→` from the last tile of a row
+crosses over and `←` comes back; see Chrome below), gear & inventory (below), workbench (WRENCH unlocks it; every recipe is
+a drawing: `←→` flips them, `↑↓` walks the parts, `space` builds once every part
+is on hand; an item whose drawing has parts is drawn exploded, the rest as a
+process), jobs (in hand, on offer, done), journal (empty for now), map (what you
+remember of this stratum) and talents (below). Every list wraps at both ends.
+GEAR & INVENTORY is three panels. The rack is the seven slots as tiles; chrome
+has its own place on ATTRIBUTES. The pack sits beside it with a row of kind icons on
+top: `[` and `]` filter it by kind, and the active icon names its kind. The
+selected item's card sits beside its drawing at half size. `←→` move between the
+rack and the pack. `space` on a tile picks what fits from the pack, or unequips
+and inspects what is worn; on a pack row it opens the verbs: Inspect, Equip,
+Use, Drop one, Drop all. Jacked in, your gear and pack are locked: those verbs
+dim and only Inspect works. In a popup the letter or `enter` fires a row and
+`esc` closes it; a card a row shows closes the popup too. Inspect on an item
+opens its blueprint in a window over the deck. The jacked deck's blueprint is
+the deck drawn as hardware: arrows point at a slot, a ROM strip, the failsafe or
+a program in your warez and the deck's glass reads it out; `space` picks a
+program up and drops it in a slot, ejects one, or lifts the failsafe's cover and
+throws it. A deck you carry shows its own blueprint but can't be worked until
+you equip it; hardware and the Ratchet have blueprints of their own, drawn
+large, and a sticker shows itself; anything else reads MISSING BLUEPRINT for
+now. `esc` puts a carried program back, shuts a lifted cover, then closes the
+window.
+
+**Chrome** is cyberware, and it lives on ATTRIBUTES. Eleven body sites take one piece
+each: neural, eyes, ears, jaw, spine, back, organs, skin, left arm, right arm
+and legs. An arm has two sockets, hand and forearm, that take smaller pieces.
+The ledger lists the sites under head, body and limbs; the card beside it shows
+the piece's drawing, what it costs and what it gives. `space` on a site or socket
+opens a picker of what in your pack fits there, `space` again installs it; on a
+place that holds a piece the picker says what it `replaces`, and installing swaps:
+the old piece goes back to the pack (a limb with what is fitted in it), and the
+load counts it leaving. `x` on a piece pulls it back to the pack. Jacked in, chrome
+is locked like gear is.
+
+Every piece has a load, and the LOAD gauge caps the total. Installed, a piece
+weighs nothing: LOAD is its cost, and CAR counts only what you carry and wear.
+The budget comes from your base BODY and COOL; the picker shows what a pick
+would take. Every piece in you also takes 2 off your EMP resistance. What the
+numbers do: ARM turns 10% of the rounds that hit you per point, up to 60%. MOV
+is the tiles you move a turn in a fight on foot. A resistance (KIN, THM, SHK,
+EMP, TOX, FBK) cuts that kind of harm by that many percent, up to 90, and covers
+a blast's stun as well as its damage. A Launcher sleeve in a forearm throws
+grenades further.
 
 Some items have sockets: the pawn deck has two, one on each side, and the Ratchet
 SMG has a muzzle and a rail. Press `m` in its blueprint for the modding mode. The
@@ -468,16 +496,16 @@ slots, then its sockets, as in `■■■■■ · ■□` (a filled box is a pr
 a piece fitted, an empty one is free); on the rack the marks sit in the tile's bottom edge. The same marks tell two copies of one item
 apart in the slot popup and on the ground. Skills and categories inspect as
 cards. The readout shows hp and the carried weight over capacity (magenta when
-over, and nothing more can be picked up). Items carry
-perks while worn (stat, sight, carry, max hp) and can grant abilities;
-consumables heal when used. The templates, origins, professions,
-categories and every item, ability, skill, talent and recipe live in
-`flavor/content.ron`.
+over, and nothing more can be picked up). Items carry perks while worn or
+installed (attribute, sight, carry, max hp, focus, armour, move, resistances, throw
+range) and can grant abilities; consumables heal when used. The templates,
+origins, professions, categories and every item, ability, skill, talent and
+recipe live in `flavor/content.ron`.
 
-**Talents** (deck tab `8` or `0`) are five trees, one per stat: MEAT, EDGE, WRENCH,
+**Talents** (deck tab `8` or `0`) are five trees, one per attribute: MEAT, EDGE, WRENCH,
 STREET and ICE, each a column of five tiers with two talents a tier and a
 capstone on top. A talent has up to three ranks; each rank adds something you
-can read on the sheet (a stat, max HP, focus, sight, carry), grants an
+can read on the sheet (an attribute, max HP, focus, sight, carry), grants an
 ability, sharpens one (reach, cooldown) or sets a named flag the combat and
 shop systems will read later. A tier opens when the tree below it holds three
 points a tier; a talent with a prerequisite wants it at its best first. You

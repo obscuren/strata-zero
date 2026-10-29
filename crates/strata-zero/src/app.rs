@@ -79,6 +79,8 @@ pub struct AppState {
     pub deck_rows: [usize; Tab::ALL.len()],
     /// Where GEAR & INVENTORY was left: the focus, the tile, the pack's row, the filter.
     pub deck_kit: crate::screens::kit::KitState,
+    /// Where ATTRIBUTES was left: the focus, the tile, the ledger's row.
+    pub deck_sheet: crate::screens::sheet::SheetState,
     /// The part the jacked deck's blueprint points at, kept between openings.
     pub deck_part: usize,
     /// The character being built, between the chooser and JACK IN.
@@ -135,8 +137,8 @@ impl FxInstance {
     /// The tick from which the instance draws nothing.
     pub fn until(&self) -> u64 {
         use crate::render::fx::{
-            BLOOM_TICKS, CASING_TICKS, FLASH_TICKS, IMPACT_TICKS, NUMBER_TICKS, PULSE_TICKS,
-            SHOCK_TICKS, STREAK_TICKS, TRAIL_TICKS, WHITEOUT_TICKS, tracer_ticks,
+            BLOOM_TICKS, CASING_TICKS, FLASH_TICKS, HAZE_TICKS, IMPACT_TICKS, NUMBER_TICKS,
+            PULSE_TICKS, SHOCK_TICKS, STREAK_TICKS, TRAIL_TICKS, WHITEOUT_TICKS, tracer_ticks,
         };
         match self.fx {
             game::Fx::Kick(ticks) => self.started + ticks,
@@ -168,6 +170,7 @@ impl FxInstance {
             game::Fx::Bloom => self.started + BLOOM_TICKS + self.scorch(),
             game::Fx::Whiteout => self.started + WHITEOUT_TICKS + self.scorch(),
             game::Fx::Shock => self.started + SHOCK_TICKS,
+            game::Fx::Haze => self.started + HAZE_TICKS,
             game::Fx::Trail => self.started + TRAIL_TICKS,
             game::Fx::Pulse { .. } => self.started + PULSE_TICKS,
         }
@@ -218,6 +221,7 @@ impl AppState {
             deck_tab: Tab::Skills,
             deck_rows: [0; Tab::ALL.len()],
             deck_kit: Default::default(),
+            deck_sheet: Default::default(),
             deck_part: 0,
             build: None,
             log: MessageLog::default(),
@@ -250,19 +254,26 @@ impl AppState {
         )
     }
 
-    /// How far past the base the character sees: their perks, and two more tiles
-    /// with low-light while the lamps are on, 18:00 to 05:59.
+    /// How far past the base the character sees: their perks, and Low-light's tiles
+    /// while it works (`lowlight`).
     pub fn sight_bonus(&self) -> i32 {
-        let mut bonus = self.character.sight_bonus(&self.content);
-        let night = citygen::lighting::lamps_on(self.minute_of_day());
-        if night
-            && self
-                .character
-                .has_ability(&self.content, &game::AbilityId::new("lowlight"))
-        {
-            bonus += 2;
+        let night = self.lowlight().map_or(0, |(_, n, _)| n);
+        self.character.sight_bonus(&self.content) + night
+    }
+
+    /// Low-light while it works, the lamps on (18:00 to 05:59): the ability, the two
+    /// tiles it adds to sight, and where you have it from.
+    pub fn lowlight(&self) -> Option<(game::AbilityId, i32, game::Source)> {
+        if !citygen::lighting::lamps_on(self.minute_of_day()) {
+            return None;
         }
-        bonus
+        let id = game::AbilityId::new("lowlight");
+        let (_, from) = self
+            .character
+            .abilities(&self.content)
+            .into_iter()
+            .find(|(a, _)| *a == id)?;
+        Some((id, 2, from))
     }
 
     /// Turns dev mode on or off; off also drops the dev-only sidebar sections.
@@ -334,6 +345,7 @@ impl AppState {
         self.deck_tab = Tab::Skills;
         self.deck_rows = [0; Tab::ALL.len()];
         self.deck_kit = Default::default();
+        self.deck_sheet = Default::default();
         self.deck_part = 0;
     }
 
@@ -869,6 +881,11 @@ mod tests {
         assert_eq!(at(game::Fx::Whiteout, true).until(), 108 + scorch);
         assert_eq!(at(game::Fx::Whiteout, false).until(), 108);
         assert_eq!(at(game::Fx::Shock, true).until(), 104, "no scorch");
+        assert_eq!(
+            at(game::Fx::Haze, true).until(),
+            100 + crate::render::fx::HAZE_TICKS,
+            "no scorch"
+        );
     }
 
     #[test]
@@ -945,7 +962,7 @@ mod tests {
             arc: None,
         });
         st.deck_tab = Tab::Kit;
-        st.deck_rows[Tab::Stats.index()] = 3;
+        st.deck_rows[Tab::Attributes.index()] = 3;
         st.deck_part = 300;
         st.deck_kit = crate::screens::kit::KitState {
             pane: crate::screens::kit::Pane::Pack,
@@ -953,6 +970,8 @@ mod tests {
             row: 2,
             filter: Some(game::ItemKind::Program),
         };
+        st.deck_sheet.tile = 9;
+        st.deck_sheet.pane = crate::screens::sheet::SheetPane::Ledger;
         let seed = city.seed;
         st.enter_city(city);
         assert!(st.player.is_none() && st.fx.is_empty());
@@ -963,6 +982,7 @@ mod tests {
             "a new city forgets where the deck was"
         );
         assert_eq!(st.deck_kit, crate::screens::kit::KitState::default());
+        assert_eq!(st.deck_sheet, crate::screens::sheet::SheetState::default());
     }
 
     #[test]

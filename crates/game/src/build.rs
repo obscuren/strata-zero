@@ -11,7 +11,7 @@ pub enum Step {
     Name,
     Origin,
     Profession,
-    Stats,
+    Attributes,
     Skills,
     Summary,
 }
@@ -20,7 +20,7 @@ impl Step {
     pub const ALL: [Step; 6] = [
         Step::Origin,
         Step::Profession,
-        Step::Stats,
+        Step::Attributes,
         Step::Skills,
         Step::Name,
         Step::Summary,
@@ -31,7 +31,7 @@ impl Step {
             Step::Name => "NAME",
             Step::Origin => "ORIGIN",
             Step::Profession => "PROFESSION",
-            Step::Stats => "STATS",
+            Step::Attributes => "ATTRIBUTES",
             Step::Skills => "SKILLS",
             Step::Summary => "SUMMARY",
         }
@@ -42,7 +42,7 @@ impl Step {
             Step::Name => "what they will call you",
             Step::Origin => "where you were made before the city got its hands on you",
             Step::Profession => "what you did before this",
-            Step::Stats => "what the meat can do",
+            Step::Attributes => "what the meat can do",
             Step::Skills => "what you know",
             Step::Summary => "the sheet",
         }
@@ -61,7 +61,7 @@ impl Step {
     }
 }
 
-/// What a point in a stat costs, as a word.
+/// What a point in an attribute costs, as a word.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Affinity {
     Cheap,
@@ -87,8 +87,8 @@ pub enum BuildError {
     BadName(char),
     NoOrigin,
     NoProfession,
-    AtCap(Stat),
-    AtBase(Stat),
+    AtCap(Attribute),
+    AtBase(Attribute),
     OverPoints(u32),
     NoPoints,
     OverSp(u32),
@@ -126,7 +126,7 @@ pub struct Build {
     pub handle: String,
     pub origin: Option<OriginId>,
     pub profession: Option<ProfessionId>,
-    pub stats: Stats,
+    pub attributes: Attributes,
     pub categories: BTreeSet<CategoryId>,
     pub skills: BTreeSet<SkillId>,
     /// Extra kit on top of the profession's.
@@ -140,14 +140,14 @@ pub struct Build {
 const NAME_MARKS: &str = "-_.' ";
 
 impl Build {
-    /// Nothing chosen, every stat at the base.
+    /// Nothing chosen, every attribute at the base.
     pub fn blank(c: &Content) -> Build {
-        let b = c.creation.stat_base;
+        let b = c.creation.attribute_base;
         Build {
             handle: String::new(),
             origin: None,
             profession: None,
-            stats: Stats {
+            attributes: Attributes {
                 body: b,
                 reflex: b,
                 tech: b,
@@ -167,7 +167,7 @@ impl Build {
         b.handle = t.handle.clone();
         b.origin = Some(t.origin.clone());
         b.profession = Some(t.profession.clone());
-        b.stats = t.stats.clone();
+        b.attributes = t.attributes.clone();
         b.categories = t.categories.iter().cloned().collect();
         b.skills = t.skills.iter().cloned().collect();
         b.kit = t.kit.clone();
@@ -182,16 +182,19 @@ impl Build {
         b.handle = ch.handle.clone();
         b.origin = Some(ch.origin.clone());
         b.profession = Some(ch.profession.clone());
-        b.stats = ch.stats.clone();
+        b.attributes = ch.attributes.clone();
         b.categories = ch.categories.clone();
         b.skills = ch.skills.clone();
-        b.pools = Some((b.points_spent(c) + ch.stat_points, b.sp_spent(c) + ch.sp));
+        b.pools = Some((
+            b.points_spent(c) + ch.attribute_points,
+            b.sp_spent(c) + ch.sp,
+        ));
         b
     }
 
     /// The whole points pool this build draws on.
     pub fn points_total(&self, c: &Content) -> u32 {
-        self.pools.map_or(c.creation.stat_points, |p| p.0)
+        self.pools.map_or(c.creation.attribute_points, |p| p.0)
     }
 
     /// The whole SP pool this build draws on.
@@ -199,7 +202,7 @@ impl Build {
         self.pools.map_or(c.creation.sp, |p| p.1)
     }
 
-    fn shift(cheap: &[Stat], dear: &[Stat], s: Stat) -> i32 {
+    fn shift(cheap: &[Attribute], dear: &[Attribute], s: Attribute) -> i32 {
         if cheap.contains(&s) {
             -1
         } else if dear.contains(&s) {
@@ -209,30 +212,30 @@ impl Build {
         }
     }
 
-    /// The origin's shift for a stat: -1 cheap, 0, +1 dear.
-    pub fn origin_shift(&self, c: &Content, s: Stat) -> i32 {
+    /// The origin's shift for an attribute: -1 cheap, 0, +1 dear.
+    pub fn origin_shift(&self, c: &Content, s: Attribute) -> i32 {
         self.origin
             .as_ref()
             .and_then(|id| c.origin(id))
             .map_or(0, |o| Self::shift(&o.cheap, &o.dear, s))
     }
 
-    /// The profession's shift for a stat: -1 cheap, 0, +1 dear.
-    pub fn profession_shift(&self, c: &Content, s: Stat) -> i32 {
+    /// The profession's shift for an attribute: -1 cheap, 0, +1 dear.
+    pub fn profession_shift(&self, c: &Content, s: Attribute) -> i32 {
         self.profession
             .as_ref()
             .and_then(|id| c.profession(id))
             .map_or(0, |p| Self::shift(&p.cheap, &p.dear, s))
     }
 
-    /// What one point in a stat costs: the base cost plus both shifts, clamped to 1..=3.
-    pub fn stat_cost(&self, c: &Content, s: Stat) -> u32 {
+    /// What one point in an attribute costs: the base cost plus both shifts, clamped to 1..=3.
+    pub fn attribute_cost(&self, c: &Content, s: Attribute) -> u32 {
         (c.creation.point_cost as i32 + self.origin_shift(c, s) + self.profession_shift(c, s))
             .clamp(1, 3) as u32
     }
 
-    pub fn affinity(&self, c: &Content, s: Stat) -> Affinity {
-        match self.stat_cost(c, s) {
+    pub fn affinity(&self, c: &Content, s: Attribute) -> Affinity {
+        match self.attribute_cost(c, s) {
             1 => Affinity::Cheap,
             3 => Affinity::Dear,
             _ => Affinity::Normal,
@@ -240,11 +243,14 @@ impl Build {
     }
 
     pub fn points_spent(&self, c: &Content) -> u32 {
-        Stat::ALL
+        Attribute::ALL
             .iter()
             .map(|&s| {
-                let raised = self.stats.get(s).saturating_sub(c.creation.stat_base) as u32;
-                raised * self.stat_cost(c, s)
+                let raised = self
+                    .attributes
+                    .get(s)
+                    .saturating_sub(c.creation.attribute_base) as u32;
+                raised * self.attribute_cost(c, s)
             })
             .sum()
     }
@@ -255,32 +261,32 @@ impl Build {
         self.points_total(c) as i64 - self.points_spent(c) as i64
     }
 
-    fn stat_mut(&mut self, s: Stat) -> &mut u8 {
+    fn attribute_mut(&mut self, s: Attribute) -> &mut u8 {
         match s {
-            Stat::Body => &mut self.stats.body,
-            Stat::Reflex => &mut self.stats.reflex,
-            Stat::Tech => &mut self.stats.tech,
-            Stat::Cool => &mut self.stats.cool,
-            Stat::Net => &mut self.stats.net,
+            Attribute::Body => &mut self.attributes.body,
+            Attribute::Reflex => &mut self.attributes.reflex,
+            Attribute::Tech => &mut self.attributes.tech,
+            Attribute::Cool => &mut self.attributes.cool,
+            Attribute::Net => &mut self.attributes.net,
         }
     }
 
-    pub fn buy_stat(&mut self, c: &Content, s: Stat) -> Result<(), BuildError> {
-        if self.stats.get(s) >= c.creation.stat_cap {
+    pub fn buy_attribute(&mut self, c: &Content, s: Attribute) -> Result<(), BuildError> {
+        if self.attributes.get(s) >= c.creation.attribute_cap {
             return Err(BuildError::AtCap(s));
         }
-        if self.points_left(c) < self.stat_cost(c, s) as i64 {
+        if self.points_left(c) < self.attribute_cost(c, s) as i64 {
             return Err(BuildError::NoPoints);
         }
-        *self.stat_mut(s) += 1;
+        *self.attribute_mut(s) += 1;
         Ok(())
     }
 
-    pub fn refund_stat(&mut self, c: &Content, s: Stat) -> Result<(), BuildError> {
-        if self.stats.get(s) <= c.creation.stat_base {
+    pub fn refund_attribute(&mut self, c: &Content, s: Attribute) -> Result<(), BuildError> {
+        if self.attributes.get(s) <= c.creation.attribute_base {
             return Err(BuildError::AtBase(s));
         }
-        *self.stat_mut(s) -= 1;
+        *self.attribute_mut(s) -= 1;
         Ok(())
     }
 
@@ -381,7 +387,7 @@ impl Build {
         Ok(())
     }
 
-    /// Whether a step may be left. Stats and skills only refuse an overspend.
+    /// Whether a step may be left. Attributes and skills only refuse an overspend.
     pub fn ready(&self, c: &Content, step: Step) -> Result<(), BuildError> {
         match step {
             Step::Name => self.check_name(c),
@@ -391,7 +397,7 @@ impl Build {
                 .as_ref()
                 .map(|_| ())
                 .ok_or(BuildError::NoProfession),
-            Step::Stats | Step::Skills => self.check_pools(c),
+            Step::Attributes | Step::Skills => self.check_pools(c),
             Step::Summary => self.validate(c),
         }
     }
@@ -405,11 +411,11 @@ impl Build {
         let p = self.profession.as_ref().ok_or(BuildError::NoProfession)?;
         c.profession(p)
             .ok_or_else(|| BuildError::Unknown(p.to_string()))?;
-        for s in Stat::ALL {
-            if self.stats.get(s) > c.creation.stat_cap {
+        for s in Attribute::ALL {
+            if self.attributes.get(s) > c.creation.attribute_cap {
                 return Err(BuildError::AtCap(s));
             }
-            if self.stats.get(s) < c.creation.stat_base {
+            if self.attributes.get(s) < c.creation.attribute_base {
                 return Err(BuildError::AtBase(s));
             }
         }
@@ -444,18 +450,26 @@ mod tests {
     fn costs_follow_origin_and_profession_and_clamp() {
         let c = Content::load().unwrap();
         let b = vex(&c);
-        assert_eq!(b.stat_cost(&c, Stat::Body), 3, "dear twice clamps to 3");
-        assert_eq!(b.stat_cost(&c, Stat::Net), 1, "cheap twice clamps to 1");
-        assert_eq!(b.stat_cost(&c, Stat::Reflex), 2);
-        assert_eq!(b.affinity(&c, Stat::Tech), Affinity::Cheap);
+        assert_eq!(
+            b.attribute_cost(&c, Attribute::Body),
+            3,
+            "dear twice clamps to 3"
+        );
+        assert_eq!(
+            b.attribute_cost(&c, Attribute::Net),
+            1,
+            "cheap twice clamps to 1"
+        );
+        assert_eq!(b.attribute_cost(&c, Attribute::Reflex), 2);
+        assert_eq!(b.affinity(&c, Attribute::Tech), Affinity::Cheap);
         for o in &c.origins {
             for p in &c.professions {
                 let mut x = Build::blank(&c);
                 x.origin = Some(o.id.clone());
                 x.profession = Some(p.id.clone());
-                for s in Stat::ALL {
+                for s in Attribute::ALL {
                     assert!(
-                        (1..=3).contains(&x.stat_cost(&c, s)),
+                        (1..=3).contains(&x.attribute_cost(&c, s)),
                         "{} {} {s:?}",
                         o.id,
                         p.id
@@ -464,7 +478,11 @@ mod tests {
             }
         }
         let blank = Build::blank(&c);
-        assert_eq!(blank.stat_cost(&c, Stat::Body), 2, "no picks: base cost");
+        assert_eq!(
+            blank.attribute_cost(&c, Attribute::Body),
+            2,
+            "no picks: base cost"
+        );
     }
 
     #[test]
@@ -478,35 +496,38 @@ mod tests {
     }
 
     #[test]
-    fn buying_and_refunding_stats() {
+    fn buying_and_refunding_attributes() {
         let c = Content::load().unwrap();
         let mut b = Build::blank(&c);
         b.origin = Some(OriginId::new("slab_rat"));
         b.profession = Some(ProfessionId::new("solo"));
         assert_eq!(b.points_left(&c), 20);
-        b.buy_stat(&c, Stat::Body).unwrap();
+        b.buy_attribute(&c, Attribute::Body).unwrap();
         assert_eq!(
-            (b.stats.body, b.points_left(&c)),
+            (b.attributes.body, b.points_left(&c)),
             (4, 19),
             "body is cheap twice: 1"
         );
         assert_eq!(
-            b.refund_stat(&c, Stat::Tech),
-            Err(BuildError::AtBase(Stat::Tech))
+            b.refund_attribute(&c, Attribute::Tech),
+            Err(BuildError::AtBase(Attribute::Tech))
         );
         for _ in 0..4 {
-            b.buy_stat(&c, Stat::Body).unwrap();
+            b.buy_attribute(&c, Attribute::Body).unwrap();
         }
         assert_eq!(
-            b.buy_stat(&c, Stat::Body),
-            Err(BuildError::AtCap(Stat::Body))
+            b.buy_attribute(&c, Attribute::Body),
+            Err(BuildError::AtCap(Attribute::Body))
         );
-        b.stats.tech = 8;
-        b.stats.cool = 8;
+        b.attributes.tech = 8;
+        b.attributes.cool = 8;
         assert!(b.points_left(&c) < 0, "{}", b.points_left(&c));
-        assert_eq!(b.buy_stat(&c, Stat::Reflex), Err(BuildError::NoPoints));
+        assert_eq!(
+            b.buy_attribute(&c, Attribute::Reflex),
+            Err(BuildError::NoPoints)
+        );
         assert!(matches!(
-            b.ready(&c, Step::Stats),
+            b.ready(&c, Step::Attributes),
             Err(BuildError::OverPoints(_))
         ));
     }
@@ -597,14 +618,14 @@ mod tests {
         let c = Content::load().unwrap();
         let mut ch =
             crate::character::Character::from_template(&c, &TemplateId::new("vex")).unwrap();
-        ch.stat_points = 3;
+        ch.attribute_points = 3;
         ch.sp = 100;
         let b = Build::from_character(&c, &ch);
         assert_eq!((b.points_left(&c), b.sp_left(&c)), (3, 100));
-        assert_eq!(b.stats, ch.stats);
+        assert_eq!(b.attributes, ch.attributes);
         assert_eq!(b.categories, ch.categories);
         let mut b = b;
-        b.buy_stat(&c, Stat::Body).unwrap();
+        b.buy_attribute(&c, Attribute::Body).unwrap();
         assert_eq!(b.points_left(&c), 0, "a point in BODY costs Vex 3");
     }
 }

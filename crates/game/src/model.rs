@@ -39,8 +39,6 @@ id_type!(TemplateId);
 pub enum Slot {
     Head,
     Eyes,
-    Neural,
-    Arms,
     Torso,
     Legs,
     Primary,
@@ -49,11 +47,9 @@ pub enum Slot {
 }
 
 impl Slot {
-    pub const ALL: [Slot; 9] = [
+    pub const ALL: [Slot; 7] = [
         Slot::Head,
         Slot::Eyes,
-        Slot::Neural,
-        Slot::Arms,
         Slot::Torso,
         Slot::Legs,
         Slot::Primary,
@@ -65,8 +61,6 @@ impl Slot {
         match self {
             Slot::Head => "head",
             Slot::Eyes => "eyes",
-            Slot::Neural => "neural",
-            Slot::Arms => "arms",
             Slot::Torso => "torso",
             Slot::Legs => "legs",
             Slot::Primary => "primary",
@@ -74,6 +68,149 @@ impl Slot {
             Slot::Deck => "deck",
         }
     }
+}
+
+/// A place on the body that holds one piece of chrome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum Site {
+    Neural,
+    Eyes,
+    Ears,
+    Jaw,
+    Spine,
+    Back,
+    Organs,
+    Skin,
+    LeftArm,
+    RightArm,
+    Legs,
+}
+
+impl Site {
+    /// Every site, in ledger order.
+    pub const ALL: [Site; 11] = [
+        Site::Neural,
+        Site::Eyes,
+        Site::Ears,
+        Site::Jaw,
+        Site::Spine,
+        Site::Back,
+        Site::Organs,
+        Site::Skin,
+        Site::LeftArm,
+        Site::RightArm,
+        Site::Legs,
+    ];
+
+    /// The short name in caps, as messages set it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Site::Neural => "NEURAL",
+            Site::Eyes => "EYES",
+            Site::Ears => "EARS",
+            Site::Jaw => "JAW",
+            Site::Spine => "SPINE",
+            Site::Back => "BACK",
+            Site::Organs => "ORGANS",
+            Site::Skin => "SKIN",
+            Site::LeftArm => "L ARM",
+            Site::RightArm => "R ARM",
+            Site::Legs => "LEGS",
+        }
+    }
+
+    /// The ledger's row for an empty site.
+    pub fn lower(self) -> &'static str {
+        match self {
+            Site::Neural => "neural",
+            Site::Eyes => "eyes",
+            Site::Ears => "ears",
+            Site::Jaw => "jaw",
+            Site::Spine => "spine",
+            Site::Back => "back",
+            Site::Organs => "organs",
+            Site::Skin => "skin",
+            Site::LeftArm => "l arm",
+            Site::RightArm => "r arm",
+            Site::Legs => "legs",
+        }
+    }
+
+    /// The name in full, for the card.
+    pub fn long(self) -> &'static str {
+        match self {
+            Site::LeftArm => "LEFT ARM",
+            Site::RightArm => "RIGHT ARM",
+            s => s.label(),
+        }
+    }
+
+    /// The ledger's group: `head`, `body` or `limbs`.
+    pub fn group(self) -> &'static str {
+        match self {
+            Site::Neural | Site::Eyes | Site::Ears | Site::Jaw => "head",
+            Site::Spine | Site::Back | Site::Organs | Site::Skin => "body",
+            Site::LeftArm | Site::RightArm | Site::Legs => "limbs",
+        }
+    }
+
+    /// What a piece must fit to go here; both arms are one kind.
+    pub fn fits(self) -> Fits {
+        match self {
+            Site::Neural => Fits::Neural,
+            Site::Eyes => Fits::Eyes,
+            Site::Ears => Fits::Ears,
+            Site::Jaw => Fits::Jaw,
+            Site::Spine => Fits::Spine,
+            Site::Back => Fits::Back,
+            Site::Organs => Fits::Organs,
+            Site::Skin => Fits::Skin,
+            Site::LeftArm | Site::RightArm => Fits::Arm,
+            Site::Legs => Fits::Legs,
+        }
+    }
+}
+
+/// What a piece of chrome fits: a kind of site, or a kind of socket on a chrome limb.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Fits {
+    Neural,
+    Eyes,
+    Ears,
+    Jaw,
+    Spine,
+    Back,
+    Organs,
+    Skin,
+    Arm,
+    Legs,
+    Socket(SocketKind),
+}
+
+impl Fits {
+    pub fn label(self) -> &'static str {
+        match self {
+            Fits::Neural => "neural",
+            Fits::Eyes => "eyes",
+            Fits::Ears => "ears",
+            Fits::Jaw => "jaw",
+            Fits::Spine => "spine",
+            Fits::Back => "back",
+            Fits::Organs => "organs",
+            Fits::Skin => "skin",
+            Fits::Arm => "arm",
+            Fits::Legs => "legs",
+            Fits::Socket(k) => k.fits(),
+        }
+    }
+}
+
+/// A piece of chrome: what it fits and what it takes of your load.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Implant {
+    pub fits: Fits,
+    /// What it takes of your load.
+    pub load: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -238,15 +375,32 @@ pub enum SocketKind {
     Deck,
     Muzzle,
     Rail,
+    /// On a chrome arm: the hand.
+    Hand,
+    /// On a chrome arm: along the forearm.
+    Forearm,
 }
 
 impl SocketKind {
+    /// The socket's own name, lower case: what the ledger and the card call it.
+    pub fn label(self) -> &'static str {
+        match self {
+            SocketKind::Deck => "deck",
+            SocketKind::Muzzle => "muzzle",
+            SocketKind::Rail => "rail",
+            SocketKind::Hand => "hand",
+            SocketKind::Forearm => "forearm",
+        }
+    }
+
     /// What a socket of this kind takes.
     pub fn takes(self) -> &'static str {
         match self {
             SocketKind::Deck => "deck hardware",
             SocketKind::Muzzle => "muzzle hardware",
             SocketKind::Rail => "rail hardware",
+            SocketKind::Hand => "hand chrome",
+            SocketKind::Forearm => "forearm chrome",
         }
     }
 
@@ -256,6 +410,8 @@ impl SocketKind {
             SocketKind::Deck => "deck socket",
             SocketKind::Muzzle => "muzzle socket",
             SocketKind::Rail => "rail socket",
+            SocketKind::Hand => "hand socket",
+            SocketKind::Forearm => "forearm socket",
         }
     }
 }
@@ -267,8 +423,8 @@ pub enum Mod {
     TraceCut(u8),
     /// Added to every program turn's power.
     Power(i8),
-    /// Added to one of the wearer's stats.
-    Stat(Stat, i8),
+    /// Added to one of the wearer's attributes.
+    Attribute(Attribute, i8),
 }
 
 /// A number with its sign always shown; a negative takes a real minus, as the
@@ -287,7 +443,7 @@ impl Mod {
         match self {
             Mod::TraceCut(n) => format!("trace per cast \u{2212}{n}%"),
             Mod::Power(n) => format!("program power {}", signed(*n)),
-            Mod::Stat(s, n) => format!("{} {}", s.label(), signed(*n)),
+            Mod::Attribute(s, n) => format!("{} {}", s.label(), signed(*n)),
         }
     }
 
@@ -296,7 +452,7 @@ impl Mod {
         match self {
             Mod::TraceCut(n) => format!("TRACE \u{2212}{n}%"),
             Mod::Power(n) => format!("POWER {}", signed(*n)),
-            Mod::Stat(s, n) => format!("{} {}", s.name(), signed(*n)),
+            Mod::Attribute(s, n) => format!("{} {}", s.name(), signed(*n)),
         }
     }
 }
@@ -407,7 +563,7 @@ pub struct DeckSpec {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Stat {
+pub enum Attribute {
     Body,
     Reflex,
     Tech,
@@ -415,38 +571,103 @@ pub enum Stat {
     Net,
 }
 
-impl Stat {
-    pub const ALL: [Stat; 5] = [Stat::Body, Stat::Reflex, Stat::Tech, Stat::Cool, Stat::Net];
+impl Attribute {
+    pub const ALL: [Attribute; 5] = [
+        Attribute::Body,
+        Attribute::Reflex,
+        Attribute::Tech,
+        Attribute::Cool,
+        Attribute::Net,
+    ];
 
     /// The label in caps, as the sheet sets it.
     pub fn name(self) -> &'static str {
         match self {
-            Stat::Body => "BODY",
-            Stat::Reflex => "REFLEX",
-            Stat::Tech => "TECH",
-            Stat::Cool => "COOL",
-            Stat::Net => "NET",
+            Attribute::Body => "BODY",
+            Attribute::Reflex => "REFLEX",
+            Attribute::Tech => "TECH",
+            Attribute::Cool => "COOL",
+            Attribute::Net => "NET",
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            Stat::Body => "body",
-            Stat::Reflex => "reflex",
-            Stat::Tech => "tech",
-            Stat::Cool => "cool",
-            Stat::Net => "net",
+            Attribute::Body => "body",
+            Attribute::Reflex => "reflex",
+            Attribute::Tech => "tech",
+            Attribute::Cool => "cool",
+            Attribute::Net => "net",
         }
     }
 
     /// Three letters in caps, for a line with no room for the names.
     pub fn short(self) -> &'static str {
         match self {
-            Stat::Body => "BOD",
-            Stat::Reflex => "REF",
-            Stat::Tech => "TEC",
-            Stat::Cool => "COL",
-            Stat::Net => "NET",
+            Attribute::Body => "BOD",
+            Attribute::Reflex => "REF",
+            Attribute::Tech => "TEC",
+            Attribute::Cool => "COL",
+            Attribute::Net => "NET",
+        }
+    }
+}
+
+/// The kind of harm a blast does, and the kind a resistance turns aside.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+pub enum Harm {
+    #[default]
+    Kinetic,
+    Thermal,
+    Shock,
+    Emp,
+    Toxin,
+    Feedback,
+}
+
+impl Harm {
+    pub const ALL: [Harm; 6] = [
+        Harm::Kinetic,
+        Harm::Thermal,
+        Harm::Shock,
+        Harm::Emp,
+        Harm::Toxin,
+        Harm::Feedback,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Harm::Kinetic => "kinetic",
+            Harm::Thermal => "thermal",
+            Harm::Shock => "shock",
+            Harm::Emp => "emp",
+            Harm::Toxin => "toxin",
+            Harm::Feedback => "feedback",
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Harm::Kinetic => "KINETIC",
+            Harm::Thermal => "THERMAL",
+            Harm::Shock => "SHOCK",
+            Harm::Emp => "EMP",
+            Harm::Toxin => "TOXIN",
+            Harm::Feedback => "FEEDBACK",
+        }
+    }
+
+    /// Three letters in caps, for a line with no room for the names.
+    pub fn short(self) -> &'static str {
+        match self {
+            Harm::Kinetic => "KIN",
+            Harm::Thermal => "THM",
+            Harm::Shock => "SHK",
+            Harm::Emp => "EMP",
+            Harm::Toxin => "TOX",
+            Harm::Feedback => "FBK",
         }
     }
 }
@@ -454,7 +675,7 @@ impl Stat {
 /// A modifier an item applies while it is equipped.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Perk {
-    Stat(Stat, i8),
+    Attribute(Attribute, i8),
     /// Field-of-view radius, in tiles.
     Sight(i8),
     /// Carry capacity, in kilograms.
@@ -462,6 +683,14 @@ pub enum Perk {
     HpMax(i32),
     /// Max focus.
     Focus(i32),
+    /// Armour: each point turns 10% of the rounds that hit, at most 60%.
+    Armor(i8),
+    /// Extra move, in tiles a turn.
+    Move(i8),
+    /// Percent of a kind of harm turned aside; negative takes more.
+    Resist(Harm, i8),
+    /// Extra throw range, in tiles.
+    Throw(i8),
 }
 
 /// What a consumable does when used; one unit is consumed.
@@ -491,6 +720,9 @@ pub struct Blast {
     /// Only things with chrome are hurt.
     #[serde(default)]
     pub chrome: bool,
+    /// The kind of harm it does.
+    #[serde(default)]
+    pub harm: Harm,
 }
 
 /// How a thrown thing crosses the line: how it is drawn in flight. Either kind
@@ -513,10 +745,13 @@ pub struct Item {
     pub weight: f32,
     pub value: u32,
     pub desc: String,
-    /// Modifiers while equipped (slot items only).
+    /// What it fits and takes of your load (cyberware only).
+    #[serde(default)]
+    pub implant: Option<Implant>,
+    /// Modifiers while equipped or installed (slot items and chrome only).
     #[serde(default)]
     pub perks: Vec<Perk>,
-    /// Abilities conferred while equipped (slot items only).
+    /// Abilities conferred while equipped or installed (slot items and chrome only).
     #[serde(default)]
     pub grants: Vec<AbilityId>,
     /// What using it does (consumables only).
@@ -560,10 +795,16 @@ impl Item {
         }
     }
 
-    /// Held per copy, since it can carry state: it has sockets, is hardware, or
-    /// takes stickers.
+    /// Held per copy, since it can carry state or be fitted: it has sockets, is
+    /// hardware or chrome that fits a socket, or takes stickers.
     pub fn per_copy(&self) -> bool {
-        !self.sockets.is_empty() || self.hardware.is_some() || self.takes_stickers()
+        let socket_chrome = self
+            .implant
+            .is_some_and(|i| matches!(i.fits, Fits::Socket(_)));
+        !self.sockets.is_empty()
+            || self.hardware.is_some()
+            || socket_chrome
+            || self.takes_stickers()
     }
 
     /// It can be worn and has a drawing, so stickers can go on it.
@@ -598,9 +839,9 @@ pub enum Active {
         stun: u8,
         skill: SkillId,
         ap: u8,
-        /// The stat the roll uses.
+        /// The attribute the roll uses.
         #[serde(default = "default_net")]
-        stat: Stat,
+        attribute: Attribute,
         /// Tiles the target is thrown back on a hit.
         #[serde(default)]
         push: u8,
@@ -615,8 +856,8 @@ pub enum Active {
     Mark { range: i32, bonus: u8, ap: u8 },
 }
 
-fn default_net() -> Stat {
-    Stat::Net
+fn default_net() -> Attribute {
+    Attribute::Net
 }
 
 /// A visual effect an ability plays when it fires; the app draws it over the map.
@@ -658,6 +899,8 @@ pub enum Fx {
     Whiteout,
     /// A blast: cyan rings of `≋` out from the centre; the net's blue.
     Shock,
+    /// A blast: sickly green `░▒` that fills the footprint, thickens, then thins away.
+    Haze,
     /// Where a shoved thing was: an arrow trail along the push, fading.
     Trail,
     /// A ring of `·` pulsing out from the firer to three tiles.
@@ -677,7 +920,7 @@ impl Fx {
 
     /// A blast's shape, played over the whole footprint at the landing tile.
     pub fn is_blast(&self) -> bool {
-        matches!(self, Fx::Bloom | Fx::Whiteout | Fx::Shock)
+        matches!(self, Fx::Bloom | Fx::Whiteout | Fx::Shock | Fx::Haze)
     }
 
     /// Any shape a shot is made of; only weapons and strike abilities play them.
@@ -726,11 +969,11 @@ pub struct Ability {
 pub struct Skill {
     pub id: SkillId,
     pub name: String,
-    pub stat: Stat,
+    pub attribute: Attribute,
     pub desc: String,
-    /// The stats it asks for, each 1 to 10; shown on its card, not yet enforced.
+    /// The attributes it asks for, each 1 to 10; shown on its card, not yet enforced.
     #[serde(default)]
-    pub needs: Vec<(Stat, u8)>,
+    pub needs: Vec<(Attribute, u8)>,
     /// The skills it wants first; shown on its card, not yet enforced.
     #[serde(default)]
     pub after: Vec<SkillId>,
@@ -753,12 +996,24 @@ pub enum SkillArt {
         #[serde(default)]
         labels: Vec<ArtLabel>,
     },
-    /// A neon sign: `#` a tube in the skill's stat colour, `+` a tube in the accent, `.`
+    /// A neon sign: `#` a tube in the skill's attribute colour, `+` a tube in the accent, `.`
     /// the plate.
     Neon {
         rows: Vec<String>,
         accent: (u8, u8, u8),
     },
+}
+
+/// A piece of chrome's art is this many pixels wide and tall, two pixels to a cell stacked.
+pub const IMPLANT_ART_W: usize = 30;
+pub const IMPLANT_ART_H: usize = 12;
+
+/// A piece of chrome's drawing on its card: one char per pixel, `.` empty, a colour per
+/// char, as a sticker picture.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ImplantArt {
+    pub rows: Vec<String>,
+    pub colours: BTreeMap<char, (u8, u8, u8)>,
 }
 
 /// What one rank of a talent adds.
@@ -797,10 +1052,10 @@ pub struct Talent {
     pub desc: String,
 }
 
-/// A tree of talents under one stat: tiers from the bottom, each a row of talents.
+/// A tree of talents under one attribute: tiers from the bottom, each a row of talents.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Tree {
-    pub stat: Stat,
+    pub attribute: Attribute,
     pub name: String,
     pub line: String,
     pub tiers: Vec<Vec<TalentId>>,
@@ -830,15 +1085,15 @@ pub struct Recipe {
     pub steps: Vec<String>,
 }
 
-/// Where you were made. Cheap stats cost one less per point, dear ones one more.
+/// Where you were made. Cheap attributes cost one less per point, dear ones one more.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Origin {
     pub id: OriginId,
     pub name: String,
     pub line: String,
     pub desc: String,
-    pub cheap: Vec<Stat>,
-    pub dear: Vec<Stat>,
+    pub cheap: Vec<Attribute>,
+    pub dear: Vec<Attribute>,
     /// Three rows of seven glyphs for the dossier.
     pub emblem: Vec<String>,
 }
@@ -850,8 +1105,8 @@ pub struct Profession {
     pub name: String,
     pub line: String,
     pub desc: String,
-    pub cheap: Vec<Stat>,
-    pub dear: Vec<Stat>,
+    pub cheap: Vec<Attribute>,
+    pub dear: Vec<Attribute>,
     pub kit: Vec<(ItemId, u32)>,
     pub credits: u32,
     pub emblem: Vec<String>,
@@ -894,7 +1149,7 @@ pub struct Template {
     pub line: String,
     pub origin: OriginId,
     pub profession: ProfessionId,
-    pub stats: Stats,
+    pub attributes: Attributes,
     pub categories: Vec<CategoryId>,
     pub skills: Vec<SkillId>,
     /// Extra kit on top of the profession's.
@@ -905,9 +1160,9 @@ pub struct Template {
 /// The numbers every new character is built under.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Creation {
-    pub stat_base: u8,
-    pub stat_cap: u8,
-    pub stat_points: u32,
+    pub attribute_base: u8,
+    pub attribute_cap: u8,
+    pub attribute_points: u32,
     pub point_cost: u32,
     pub sp: u32,
     pub name_max: usize,
@@ -929,7 +1184,7 @@ fn three() -> u32 {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Stats {
+pub struct Attributes {
     pub body: u8,
     pub reflex: u8,
     pub tech: u8,
@@ -937,14 +1192,39 @@ pub struct Stats {
     pub net: u8,
 }
 
-impl Stats {
-    pub fn get(&self, stat: Stat) -> u8 {
-        match stat {
-            Stat::Body => self.body,
-            Stat::Reflex => self.reflex,
-            Stat::Tech => self.tech,
-            Stat::Cool => self.cool,
-            Stat::Net => self.net,
+impl Attributes {
+    pub fn get(&self, attribute: Attribute) -> u8 {
+        match attribute {
+            Attribute::Body => self.body,
+            Attribute::Reflex => self.reflex,
+            Attribute::Tech => self.tech,
+            Attribute::Cool => self.cool,
+            Attribute::Net => self.net,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sites_in_ledger_order() {
+        assert_eq!(Site::ALL.len(), 11);
+        assert_eq!(Site::LeftArm.label(), "L ARM");
+        assert_eq!(Site::LeftArm.lower(), "l arm");
+        assert_eq!(Site::RightArm.long(), "RIGHT ARM");
+        let groups: Vec<&str> = Site::ALL.iter().map(|s| s.group()).collect();
+        let count = |g: &str| groups.iter().filter(|h| **h == g).count();
+        assert_eq!((count("head"), count("body"), count("limbs")), (4, 4, 3));
+        let rank = |g: &&str| ["head", "body", "limbs"].iter().position(|h| h == g);
+        assert!(groups.is_sorted_by_key(rank), "{groups:?}");
+        assert_eq!(Site::LeftArm.fits(), Fits::Arm);
+        assert_eq!(Site::RightArm.fits(), Fits::Arm);
+        assert_eq!(Fits::Arm.label(), "arm");
+        assert_eq!(Fits::Socket(SocketKind::Forearm).label(), "forearm socket");
+        assert_eq!(SocketKind::Hand.takes(), "hand chrome");
+        assert_eq!(SocketKind::Forearm.label(), "forearm");
+        assert_eq!(Slot::ALL.len(), 7);
     }
 }

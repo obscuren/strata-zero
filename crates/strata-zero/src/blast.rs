@@ -4,7 +4,7 @@
 use crate::app::{AppState, FxInstance};
 use crate::foes;
 use citygen::{City, Place, Pos};
-use game::{Action, Blast, Fx, ItemId, Slot};
+use game::{Action, Blast, Fx, ItemId};
 
 /// Tiles a thrown thing crosses in a tick.
 pub const THROW_SPEED: i32 = 2;
@@ -73,14 +73,9 @@ fn log_name(source: &str) -> String {
     source.to_lowercase()
 }
 
-/// Whether you count as chrome: any cyberware worn.
+/// Whether you count as chrome: anything installed.
 fn you_are_chrome(st: &AppState) -> bool {
-    Slot::ALL.iter().any(|s| {
-        st.character
-            .equipped(*s)
-            .and_then(|id| st.content.item(id))
-            .is_some_and(|i| i.kind == game::ItemKind::Cyberware)
-    })
+    st.character.pieces() > 0
 }
 
 /// An idle, live foe turns to hunt toward `seen`.
@@ -143,6 +138,17 @@ pub(crate) fn effect(blast: &Blast, ring: i32, chrome: bool) -> (u8, u8) {
     (
         game::blast_damage(blast.damage, blast.radius, ring),
         blast.stun,
+    )
+}
+
+/// What a blast does to you at `ring`: `effect`, then your resistance to its kind
+/// of harm on the damage and the stun alike.
+pub fn effect_on_you(st: &AppState, blast: &Blast, ring: i32) -> (u8, u8) {
+    let (damage, stun) = effect(blast, ring, you_are_chrome(st));
+    let resist = st.character.resist(&st.content, blast.harm);
+    (
+        crate::combat::resisted_u8(damage, resist),
+        u8::try_from(game::resisted_stun(stun as u32, resist)).unwrap_or(u8::MAX),
     )
 }
 
@@ -248,7 +254,7 @@ pub fn detonate(
     }
     let mut hurt_you = false;
     if let (Some(ring), Some(pos)) = (you_ring, you) {
-        let (damage, stun) = effect(&blast, ring, you_are_chrome(st));
+        let (damage, stun) = effect_on_you(st, &blast, ring);
         if damage > 0 || stun > 0 {
             hurt_you = true;
             play_victim(
@@ -311,6 +317,12 @@ pub fn throw_free(st: &mut AppState, id: &ItemId, at: Pos) -> Result<(), String>
     throw_from_hand(st, id, at, false)
 }
 
+/// A throwable's throw as you make it: its range and your chrome's reach on it.
+pub fn your_throw(st: &AppState, id: &ItemId) -> Option<(i32, game::Arc, Blast)> {
+    let (range, arc, blast) = st.content.item(id)?.throw()?;
+    Some((range + st.character.throw_bonus(&st.content), arc, blast))
+}
+
 /// Whether a throw of `range` from where you stand can come down on `at`: in
 /// reach, in sight with the way clear, on a tile it can lie on. The refusal is the
 /// word the log and the aim readout use.
@@ -344,9 +356,8 @@ fn throw_from_hand(st: &mut AppState, id: &ItemId, at: Pos, spend: bool) -> Resu
         .item(id)
         .cloned()
         .ok_or_else(|| format!("unknown item {id}"))?;
-    let (range, arc, blast) = item
-        .throw()
-        .ok_or_else(|| format!("{} is not thrown", item.name))?;
+    let (range, arc, blast) =
+        your_throw(st, id).ok_or_else(|| format!("{} is not thrown", item.name))?;
     if st.character.count(id) == 0 {
         return Err("none left".to_string());
     }
@@ -772,6 +783,100 @@ mod tests {
             None,
         );
         assert_eq!(st.net.death.as_deref(), Some("your own frag"));
+    }
+
+    /// You with only `pieces` installed, each at its site.
+    fn wearing(st: &mut AppState, pieces: &[(game::Site, &str)]) {
+        st.character.chrome.clear();
+        st.character.chrome_copies.clear();
+        for (site, id) in pieces {
+            st.character.chrome.insert(*site, ItemId::new(id));
+        }
+    }
+
+    #[test]
+    fn resistances_cut_blasts() {
+        use game::{Harm, Site};
+        let mut st = foes::testutil::lot(Pos::new(30, 8));
+        let (flash, _, _) = thrown(&st, "flashbang");
+        let (satchel, _, _) = thrown(&st, "satchel");
+        let (choke, _, _) = thrown(&st, "choke_can");
+        let (puck, _, _) = thrown(&st, "emp_puck");
+        let resist = |st: &AppState, h| st.character.resist(&st.content, h);
+        // SHK 40: the flashbang's stun 2 is 1.
+        wearing(&mut st, &[(Site::Skin, "grounding_weave")]);
+        assert_eq!(resist(&st, Harm::Shock), 40);
+        assert_eq!(effect_on_you(&st, &flash, 0), (0, 1));
+        // THM 15: the satchel's centre 16 is 14.
+        wearing(&mut st, &[(Site::Skin, "ceramic_plating")]);
+        assert_eq!(resist(&st, Harm::Thermal), 15);
+        assert_eq!(effect_on_you(&st, &satchel, 0), (14, 0));
+        // TOX 40: the choke can's 8 is 5.
+        wearing(&mut st, &[(Site::Jaw, "rebreather")]);
+        assert_eq!(resist(&st, Harm::Toxin), 40);
+        assert_eq!(effect_on_you(&st, &choke, 0), (5, 0));
+        // Nine pieces, EMP −18: the puck's 3 is 4, its stun 2 stays 2.
+        wearing(
+            &mut st,
+            &[
+                (Site::Neural, "neural_port"),
+                (Site::Eyes, "target_lens"),
+                (Site::Ears, "damper_cochlea"),
+                (Site::Jaw, "rebreather"),
+                (Site::Spine, "redline_spine"),
+                (Site::Back, "drone_cradle"),
+                (Site::Organs, "adrenal_pump"),
+                (Site::Skin, "smart_ink"),
+                (Site::Legs, "sprinter_shanks"),
+            ],
+        );
+        assert_eq!(st.character.pieces(), 9);
+        assert_eq!(resist(&st, Harm::Emp), -18);
+        assert_eq!(effect_on_you(&st, &puck, 0), (4, 2));
+        // Chromeless, the puck still passes through you.
+        wearing(&mut st, &[]);
+        assert_eq!(effect_on_you(&st, &puck, 0), (0, 0));
+        // Out past the clamp: 300 is 90 (a hurt stays 1, the stun goes), −300 is −100.
+        let weave = ItemId::new("grounding_weave");
+        let set = |st: &mut AppState, ns: &[i8]| {
+            let item = st.content.items.iter_mut().find(|i| i.id == weave);
+            item.unwrap().perks = ns
+                .iter()
+                .map(|n| game::Perk::Resist(Harm::Emp, *n))
+                .collect();
+        };
+        wearing(&mut st, &[(Site::Skin, "grounding_weave")]);
+        set(&mut st, &[127, 127, 48]);
+        assert_eq!(resist(&st, Harm::Emp), 300);
+        assert_eq!(effect_on_you(&st, &puck, 0), (1, 0));
+        set(&mut st, &[-128, -128, -42]);
+        assert_eq!(resist(&st, Harm::Emp), -300);
+        assert_eq!(effect_on_you(&st, &puck, 0), (6, 4));
+        // Doubled past what a u8 holds: it stops at the top.
+        let huge = Blast {
+            damage: 200,
+            stun: 200,
+            ..puck
+        };
+        assert_eq!(effect_on_you(&st, &huge, 0), (255, 255));
+        // Foes have none: the satchel's centre is still 16 on a goon.
+        assert_eq!(effect(&satchel, 0, true), (16, 0));
+        // And the cut lands: the satchel on you takes 14, and says so.
+        wearing(&mut st, &[(Site::Skin, "ceramic_plating")]);
+        let hp = st.character.hp;
+        let (satchel, fx, name) = thrown(&st, "satchel");
+        detonate(
+            &mut st,
+            STREET,
+            Pos::new(6, 8),
+            satchel,
+            &fx,
+            &name,
+            500,
+            None,
+        );
+        assert_eq!(st.character.hp, hp - 14);
+        assert!(logged(&st, "· you 14"), "{:?}", st.log.latest());
     }
 
     fn fx_of(st: &AppState, id: &str) -> Vec<Fx> {

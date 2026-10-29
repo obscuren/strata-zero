@@ -723,8 +723,8 @@ mod tests {
         assert_eq!(l.divider, 50);
         assert_eq!(l.pack, Rect::new(51, 5, 49, 9));
         assert_eq!(
-            tile_rect(Rect::new(1, 5, 48, 9), 8),
-            Rect::new(33, 11, 16, 3)
+            tile_rect(Rect::new(1, 5, 48, 9), 5),
+            Rect::new(33, 8, 16, 3)
         );
         assert_eq!(
             tile_rect(Rect::new(1, 10, 58, 14), 4),
@@ -740,14 +740,15 @@ mod tests {
             assert!(k.key(&st, c, 5));
             k.state.tile
         };
+        // Seven tiles: two rows of three and the deck alone under the first column.
         assert_eq!(at(&mut k, KeyCode::Right), 1);
         assert_eq!(at(&mut k, KeyCode::Down), 4);
-        assert_eq!(at(&mut k, KeyCode::Down), 7);
         k.changed = 0;
-        assert_eq!(at(&mut k, KeyCode::Down), 7);
+        assert_eq!(at(&mut k, KeyCode::Down), 4);
         assert_eq!(k.changed, 0, "a stop is not a move");
-        assert_eq!(at(&mut k, KeyCode::Left), 6);
-        assert_eq!(at(&mut k, KeyCode::Left), 6);
+        assert_eq!(at(&mut k, KeyCode::Left), 3);
+        assert_eq!(at(&mut k, KeyCode::Down), 6);
+        assert_eq!(at(&mut k, KeyCode::Down), 6);
         assert_eq!(at(&mut k, KeyCode::Left), 6);
         for _ in 0..3 {
             at(&mut k, KeyCode::Up);
@@ -816,7 +817,7 @@ mod tests {
     fn selected_follows_the_pane() {
         let mut st = state();
         let mut k = Kit::new(0);
-        k.state.tile = 6;
+        k.state.tile = 4;
         assert_eq!(k.selected(&st), Some(Detail::Slot(Slot::Primary)));
         st.character
             .give_item(&st.content, ItemId::new("hushcan"), 1);
@@ -828,7 +829,7 @@ mod tests {
     fn space_on_a_tile_or_a_row_opens_its_popup() {
         let mut st = state();
         let mut k = Kit::new(0);
-        k.state.tile = 6;
+        k.state.tile = 4;
         let p = k.interact(&mut st).expect("popup");
         let labels: Vec<_> = p.choices().iter().map(|c| c.label.clone()).collect();
         assert!(labels.iter().any(|l| l == "Unequip"), "{labels:?}");
@@ -898,28 +899,28 @@ mod tests {
         let mut st = state();
         fit(&mut st, Slot::Deck, 0, "coldfin_2");
         let mut k = Kit::new(0);
-        k.state.tile = 8;
+        k.state.tile = 6;
         settle(&k, &mut st);
         let buf = drawn(&k, &st);
-        assert_eq!(cells(&buf, 33, 11, 16), "┌ DECK ────────┐");
-        assert_eq!(cells(&buf, 33, 12, 16), "│Rebuilt pawn… │");
-        assert_eq!(cells(&buf, 33, 13, 16), "└─ ■■■■■ · ■□ ─┘");
-        assert_eq!(buf[(33, 11)].fg, CYAN);
-        assert_eq!(buf[(34, 12)].bg, BAR_BG);
-        assert_eq!(buf[(36, 13)].fg, Color::Rgb(0x1a, 0x9a, 0xaa));
-        assert_eq!(buf[(42, 13)].fg, Color::Rgb(0x00, 0xa5, 0xb8));
-        assert_eq!(buf[(44, 13)].fg, Color::Rgb(0x00, 0xe5, 0xff));
-        assert_eq!(buf[(45, 13)].fg, Color::Rgb(0x00, 0xa5, 0xb8));
+        assert_eq!(cells(&buf, 1, 11, 16), "┌ DECK ────────┐");
+        assert_eq!(cells(&buf, 1, 12, 16), "│Rebuilt pawn… │");
+        assert_eq!(cells(&buf, 1, 13, 16), "└─ ■■■■■ · ■□ ─┘");
+        assert_eq!(buf[(1, 11)].fg, CYAN);
+        assert_eq!(buf[(2, 12)].bg, BAR_BG);
+        assert_eq!(buf[(4, 13)].fg, Color::Rgb(0x1a, 0x9a, 0xaa));
+        assert_eq!(buf[(10, 13)].fg, Color::Rgb(0x00, 0xa5, 0xb8));
+        assert_eq!(buf[(12, 13)].fg, Color::Rgb(0x00, 0xe5, 0xff));
+        assert_eq!(buf[(13, 13)].fg, Color::Rgb(0x00, 0xa5, 0xb8));
         assert_eq!((buf[(2, 6)].symbol(), buf[(2, 6)].fg), ("—", FAINTER));
 
         k.state.pane = Pane::Pack;
         k.reselect(&st);
         let buf = drawn(&k, &st);
-        assert_eq!(buf[(33, 11)].fg, DIM, "the tile keeps its place, dim");
-        assert_ne!(buf[(34, 12)].bg, BAR_BG);
-        assert_eq!(buf[(36, 13)].fg, Color::Rgb(0x3f, 0x7c, 0x87));
-        assert_eq!(buf[(42, 13)].fg, DIM);
-        assert_eq!(buf[(45, 13)].fg, DIM);
+        assert_eq!(buf[(1, 11)].fg, DIM, "the tile keeps its place, dim");
+        assert_ne!(buf[(2, 12)].bg, BAR_BG);
+        assert_eq!(buf[(4, 13)].fg, Color::Rgb(0x3f, 0x7c, 0x87));
+        assert_eq!(buf[(10, 13)].fg, DIM);
+        assert_eq!(buf[(13, 13)].fg, DIM);
     }
 
     #[test]
@@ -992,7 +993,7 @@ mod tests {
         fit(&mut st, Slot::Primary, 0, "hushcan");
         fit(&mut st, Slot::Primary, 1, "redeye");
         let mut k = Kit::new(0);
-        k.state.tile = 6;
+        k.state.tile = 4;
         settle(&k, &mut st);
         let buf = drawn(&k, &st);
         assert!(from(&buf, 3, 15).starts_with("RATCHET SMG"));
@@ -1016,6 +1017,8 @@ mod tests {
     #[test]
     fn an_item_without_a_drawing_shows_the_missing_box() {
         let mut st = state();
+        st.character
+            .wear(Slot::Eyes, ItemId::new("mirrorshades"), None);
         let mut k = Kit::new(0);
         k.state.tile = 1;
         settle(&k, &mut st);
@@ -1023,7 +1026,7 @@ mod tests {
         corners_in(&buf, Rect::new(61, 18, 21, 5), FAINTER);
         assert_eq!((buf[(62, 18)].symbol(), buf[(62, 18)].fg), ("╌", FAINTER));
         assert_eq!((buf[(61, 19)].symbol(), buf[(61, 19)].fg), ("╎", FAINTER));
-        assert_eq!((buf[(71, 19)].symbol(), buf[(71, 19)].fg), ("◈", DIM));
+        assert_eq!((buf[(71, 19)].symbol(), buf[(71, 19)].fg), ("▣", DIM));
         assert_eq!(cells(&buf, 63, 21, 17), "MISSING BLUEPRINT");
         assert_eq!(buf[(63, 21)].fg, FAINTER);
     }
