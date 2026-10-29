@@ -987,6 +987,18 @@ pub enum SkillArt {
     },
 }
 
+/// A piece of chrome's art is this many pixels wide and tall, two pixels to a cell stacked.
+pub const IMPLANT_ART_W: usize = 30;
+pub const IMPLANT_ART_H: usize = 12;
+
+/// A piece of chrome's drawing on its card: one char per pixel, `.` empty, a colour per
+/// char, as a sticker picture.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ImplantArt {
+    pub rows: Vec<String>,
+    pub colours: BTreeMap<char, (u8, u8, u8)>,
+}
+
 /// What one rank of a talent adds.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Boon {
