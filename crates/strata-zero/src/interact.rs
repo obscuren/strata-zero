@@ -203,6 +203,49 @@ pub fn gather(
         }
     }
 
+    // A ripperdoc's chair beside you: sit in it, while the doc is in.
+    if let Place::Floor { building, level } = place
+        && let Some(chair) = st
+            .interiors
+            .floor(building, level)
+            .and_then(|(_, f)| f.chair())
+            .filter(|c| pos.neighbors4().any(|n| n == *c))
+    {
+        let doc = crate::clinic::doc_at_work(st, building);
+        let (subtitle, row) = match doc {
+            Some(id) => (
+                format!(
+                    "{} · “{}”",
+                    crate::clinic::doc_name(st, id),
+                    crate::clinic::doc_line(st, id)
+                ),
+                Choice::on(
+                    'i',
+                    "Interact",
+                    "Sit in the chair",
+                    AMBER,
+                    Pick::Chair { building, level },
+                ),
+            ),
+            None => (
+                "the doc is out".to_string(),
+                Choice {
+                    thing: Some(("Sit in the chair".to_string(), AMBER)),
+                    ..Choice::disabled('i', "Interact")
+                }
+                .tail(" · the doc is out"),
+            ),
+        };
+        add(
+            &mut subs,
+            &mut here,
+            chair,
+            Some(header("Operating chair", mark_tile(st, &map, chair))),
+            Some(subtitle),
+            vec![row],
+        );
+    }
+
     // A locked flat's door beside you: its keypad.
     if let Place::Floor { building, level } = place
         && let Some((_, floor)) = st.interiors.floor(building, level)
@@ -574,6 +617,38 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
         t.draw(|f| popup.draw(st, f)).unwrap();
         buffer_text(t.backend().buffer())
+    }
+
+    #[test]
+    fn the_chair_has_a_window() {
+        let (mut st, b, level, chair) = crate::clinic::testutil::inside();
+        st.tick += 200;
+        let subjects = gather(&st, &|_, _| None);
+        let s = subjects
+            .iter()
+            .find(|s| s.pos == chair)
+            .expect("the chair's window");
+        let h = s.header.as_ref().unwrap();
+        assert_eq!(h.name, "Operating chair");
+        assert_eq!(h.glyph.map(|g| g.0), Some('╦'));
+        let sub = s.subtitle.as_deref().unwrap();
+        assert!(sub.starts_with("Doc ") && sub.contains('“'), "{sub}");
+        let sit = s.choices.iter().find(|c| c.key == 'i').unwrap();
+        assert!(sit.enabled);
+        assert!(
+            matches!(sit.pick, Pick::Chair { building, level: l } if building == b && l == level)
+        );
+        let text = window_text(&st, &[s.clone()]);
+        assert!(text.contains("Interact: Sit in the chair"), "{text}");
+        // The doc gone, the chair is just a chair.
+        let doc = crate::clinic::doc_at_work(&st, b).unwrap();
+        st.world.as_mut().unwrap().park(doc, Pos::new(0, 0));
+        let subjects = gather(&st, &|_, _| None);
+        let s = subjects.iter().find(|s| s.pos == chair).unwrap();
+        let sit = s.choices.iter().find(|c| c.key == 'i').unwrap();
+        assert!(!sit.enabled);
+        assert_eq!(sit.tail, " · the doc is out");
+        assert_eq!(s.subtitle.as_deref(), Some("the doc is out"));
     }
 
     #[test]

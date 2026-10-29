@@ -66,6 +66,14 @@ pub fn doc_name(st: &AppState, id: PersonId) -> String {
     format!("Doc {}", name.split_whitespace().next().unwrap_or("Nobody"))
 }
 
+/// What the doc says: their own line.
+pub fn doc_line(st: &AppState, id: PersonId) -> String {
+    st.world
+        .as_ref()
+        .and_then(|w| w.people().get(id.0 as usize))
+        .map_or_else(String::new, |p| p.line.clone())
+}
+
 /// The doc's hours: the profession's day.
 pub fn hours(st: &AppState) -> (u16, u16) {
     match st.people.profession(RIPPERDOC).map(|p| &p.hours) {
