@@ -201,7 +201,12 @@ pub(crate) mod testutil {
         let city = st.city.clone().unwrap();
         let floor = st.interiors.ensure(&city, b, level).unwrap().clone();
         let chair = floor.chair().unwrap();
-        let doc_spot = floor.stations.iter().find(|s| s.role == citygen::Role::Surgery).unwrap().pos;
+        let doc_spot = floor
+            .stations
+            .iter()
+            .find(|s| s.role == citygen::Role::Surgery)
+            .unwrap()
+            .pos;
         let stand = chair
             .neighbors4()
             .find(|n| *n != doc_spot && floor.tiles[*n].is_walkable())
@@ -272,7 +277,10 @@ mod tests {
         let (mut st, b, _, _) = outside(23 * 60 + 30);
         assert_eq!(hours_line(&st), "CLOSED · opens 10:00 · closes 22:00");
         st.city.as_mut().unwrap().buildings[b.index()].name = Some("Hot Pot Lou".to_string());
-        assert_eq!(closed_line(&st, b), "Hot Pot Lou is closed · opens at 10:00");
+        assert_eq!(
+            closed_line(&st, b),
+            "Hot Pot Lou is closed · opens at 10:00"
+        );
         assert_eq!(gone_line("Doc Lou"), "Doc Lou has gone for the night");
         assert_eq!(hhmm(600), "10:00");
         assert_eq!(hhmm(1320), "22:00");

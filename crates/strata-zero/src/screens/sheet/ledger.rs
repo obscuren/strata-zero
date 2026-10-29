@@ -1104,8 +1104,10 @@ mod tests {
         st
     }
 
-    /// The deck on ATTRIBUTES with the cursor on the ledger's `row`.
+    /// The deck on ATTRIBUTES with the cursor on the ledger's `row`, free chrome on: these
+    /// test the ledger, the chair has its own.
     fn on_ledger(st: &mut AppState, row: LedgerRow) -> Deck {
+        st.free_chrome = true;
         let mut d = Deck::new(st.tick);
         d.update(st, &[key(KeyCode::Char('2'))]);
         d.sheet.state.pane = SheetPane::Ledger;

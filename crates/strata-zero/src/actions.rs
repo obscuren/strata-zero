@@ -1,6 +1,7 @@
 //! Item actions on the app: `game::apply` plus its effects on the walker and the world.
 
 use crate::app::{AppState, FxInstance};
+use crate::clinic::Operating;
 use crate::render::map::MapRef;
 use citygen::{City, Place, Pos, StratumKind};
 use game::{AbilityKind, Action, Active, At, Effect};
@@ -41,11 +42,35 @@ pub fn handles_items(action: &Action) -> bool {
     )
 }
 
+/// A fee the doc won't take: `the doc's fee is ¤370 · you have ¤320`.
+pub fn fee_line(fee: u32, credits: u32) -> String {
+    format!("the doc's fee is ¤{fee} · you have ¤{credits}")
+}
+
 /// Applies an action at the player's feet and runs its effects on the world.
 /// The message is for the status strip; a refusal is the reason.
 pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
     if handles_items(&action) && jacked_in(st) {
         return Err(JACKED_IN.to_string());
+    }
+    // Chrome goes in and out in a ripperdoc's chair, for the doc's fee; free with dev
+    // free chrome. Every refusal comes before any change.
+    let mut charge = None;
+    if let Some(fee) = game::surgery_fee(&st.character, &st.content, &action) {
+        match crate::clinic::operating(st) {
+            Operating::Free => {}
+            Operating::Locked => return Err(crate::clinic::OUTSIDE.to_string()),
+            Operating::Gone { doc } => {
+                st.chair = None;
+                return Err(crate::clinic::gone_line(&doc));
+            }
+            Operating::Chair { doc } => {
+                if fee > st.character.credits {
+                    return Err(fee_line(fee, st.character.credits));
+                }
+                charge = Some((fee, doc));
+            }
+        }
     }
     // Pack-only actions work anywhere; the ground and the world need a body.
     let needs_body = matches!(
@@ -156,6 +181,10 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
     }
     // The ability's effects start now, at the firer's feet.
     let mut message = outcome.message.clone();
+    if let Some((fee, doc)) = charge.filter(|(fee, _)| *fee > 0) {
+        st.character.credits -= fee;
+        message = format!("{message} · ¤{fee} to {doc}");
+    }
     if let Some(id) = fired
         && let Some(ability) = st.character.ability(&st.content, &id)
     {
@@ -298,7 +327,9 @@ mod tests {
             assert_eq!(refused, Err(JACKED_IN.to_string()), "{action:?}");
         }
         assert_eq!(st.character, before);
-        // Back in the body, the arm goes in.
+        // Back in the body, the arm goes in (free chrome: this tests the jack, not the
+        // chair).
+        st.free_chrome = true;
         st.player = Some(Player::spawn(st.city.as_ref().unwrap(), 1));
         let install = Action::Install {
             item: ItemId::new("grip_arm"),
@@ -309,6 +340,140 @@ mod tests {
             st.character.chrome_at(Site::RightArm),
             Some(&ItemId::new("grip_arm"))
         );
+    }
+
+    fn grip(st: &mut AppState) -> Action {
+        st.character
+            .give_item(&st.content, ItemId::new("grip_arm"), 1);
+        Action::Install {
+            item: ItemId::new("grip_arm"),
+            site: Site::RightArm,
+        }
+    }
+
+    #[test]
+    fn chrome_is_locked_outside_a_chair() {
+        let (mut st, _, _, _) = crate::clinic::testutil::outside(12 * 60);
+        let install = grip(&mut st);
+        st.character
+            .install(Site::LeftArm, ItemId::new("piston_arm"), None);
+        st.character
+            .give_item(&st.content, ItemId::new("arc_hand"), 1);
+        let hand = st
+            .character
+            .inventory
+            .iter()
+            .find(|s| s.item == ItemId::new("arc_hand"))
+            .and_then(|s| s.copy_id())
+            .unwrap();
+        let before = st.character.clone();
+        for action in [
+            install,
+            Action::Pull(Site::LeftArm),
+            Action::Fit {
+                host: Host::Site(Site::LeftArm),
+                socket: 0,
+                piece: hand,
+            },
+            Action::Unfit {
+                host: Host::Site(Site::LeftArm),
+                socket: 0,
+            },
+        ] {
+            assert_eq!(
+                perform(&mut st, action.clone()),
+                Err(crate::clinic::OUTSIDE.to_string()),
+                "{action:?}"
+            );
+        }
+        assert_eq!(st.character, before);
+        // Fitting a deck or a gun is no surgery: whatever else refuses it, the chair doesn't.
+        let deck = Action::Fit {
+            host: Host::Worn(Slot::Deck),
+            socket: 0,
+            piece: hand,
+        };
+        assert_ne!(
+            perform(&mut st, deck),
+            Err(crate::clinic::OUTSIDE.to_string())
+        );
+    }
+
+    #[test]
+    fn the_chair_charges() {
+        let mut st = crate::clinic::testutil::seated();
+        st.character.credits = 1000;
+        let install = grip(&mut st);
+        let Operating::Chair { doc } = crate::clinic::operating(&st) else {
+            panic!()
+        };
+        let msg = perform(&mut st, install).unwrap();
+        assert_eq!(st.character.credits, 630);
+        assert!(msg.ends_with(&format!(" · ¤370 to {doc}")), "{msg}");
+        assert_eq!(
+            st.character.chrome_at(Site::RightArm),
+            Some(&ItemId::new("grip_arm"))
+        );
+    }
+
+    #[test]
+    fn short_is_refused_first() {
+        let mut st = crate::clinic::testutil::seated();
+        st.character.credits = 320;
+        let install = grip(&mut st);
+        let before = st.character.clone();
+        assert_eq!(
+            perform(&mut st, install),
+            Err("the doc's fee is ¤370 · you have ¤320".to_string())
+        );
+        assert_eq!(st.character, before);
+    }
+
+    #[test]
+    fn a_short_swap_is_refused() {
+        let mut st = crate::clinic::testutil::seated();
+        st.character
+            .install(Site::RightArm, ItemId::new("piston_arm"), None);
+        st.character.credits = 400;
+        let swap = grip(&mut st);
+        let before = st.character.clone();
+        assert_eq!(perform(&mut st, swap), Err(fee_line(480, 400)));
+        assert_eq!(st.character, before);
+    }
+
+    #[test]
+    fn the_doc_gone_ends_the_chair() {
+        let mut st = crate::clinic::testutil::seated();
+        st.character
+            .install(Site::Eyes, ItemId::new("target_lens"), None);
+        st.player.as_mut().unwrap().place = Place::Stratum(StratumKind::Street);
+        let Err(why) = perform(&mut st, Action::Pull(Site::Eyes)) else {
+            panic!("pulled without a doc")
+        };
+        assert!(why.ends_with(" has gone for the night"), "{why}");
+        assert_eq!(st.chair, None);
+        assert!(st.character.chrome_at(Site::Eyes).is_some());
+    }
+
+    #[test]
+    fn free_chrome_is_free() {
+        let (mut st, _, _, _) = crate::clinic::testutil::outside(23 * 60);
+        st.free_chrome = true;
+        st.character.credits = 5;
+        let install = grip(&mut st);
+        let msg = perform(&mut st, install).unwrap();
+        assert_eq!(st.character.credits, 5);
+        assert!(!msg.contains('¤'), "{msg}");
+    }
+
+    #[test]
+    fn jacked_in_still_wins_in_the_chair() {
+        let mut st = crate::clinic::testutil::seated();
+        let install = grip(&mut st);
+        let p = st.player.as_mut().unwrap();
+        p.body = Some((p.place, p.pos));
+        p.place = Place::Stratum(StratumKind::Net);
+        assert_eq!(perform(&mut st, install), Err(JACKED_IN.to_string()));
     }
 
     #[test]
@@ -515,6 +680,8 @@ mod tests {
     #[test]
     fn perform_refreshes_sight_after_fitting_chrome() {
         let mut st = AppState::new();
+        // Free chrome: this is about sight, not the chair.
+        st.free_chrome = true;
         st.city = Some(city());
         st.player = Some(Player::spawn(st.city.as_ref().unwrap(), 1));
         let visible = |st: &AppState| {
