@@ -180,6 +180,29 @@ pub fn gather(
         );
     }
 
+    // A shut clinic's door beside you: when it opens.
+    if let Some(k) = place.stratum() {
+        for d in pos.neighbors4() {
+            let Some(b) = city
+                .tile(k, d)
+                .filter(|t| t.terrain == citygen::Terrain::Door)
+                .and_then(|t| t.building)
+                .filter(|b| city.portals(*b).contains(&(k, d)))
+                .filter(|b| !crate::clinic::is_open(st, *b))
+            else {
+                continue;
+            };
+            add(
+                &mut subs,
+                &mut here,
+                d,
+                Some(header(crate::clinic::name(st, b), Some(('▯', AMBER)))),
+                Some(crate::clinic::hours_line(st)),
+                Vec::new(),
+            );
+        }
+    }
+
     // A locked flat's door beside you: its keypad.
     if let Place::Floor { building, level } = place
         && let Some((_, floor)) = st.interiors.floor(building, level)
@@ -551,6 +574,41 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
         t.draw(|f| popup.draw(st, f)).unwrap();
         buffer_text(t.backend().buffer())
+    }
+
+    #[test]
+    fn a_shut_door_says_when() {
+        let (mut st, b, door, _) = crate::clinic::testutil::outside(crate::clinic::testutil::DAY);
+        // Nobody standing in the doorway: the door's window is its own.
+        let world = st.world.as_mut().unwrap();
+        if let Some(id) = world.person_at(door) {
+            world.park(id, Pos::new(0, 0));
+        }
+        st.tick += 200;
+        let subjects = gather(&st, &|_, _| None);
+        let shut: Vec<&Subject> = subjects.iter().filter(|s| s.pos == door).collect();
+        assert_eq!(shut.len(), 1, "{subjects:?}");
+        let h = shut[0].header.as_ref().unwrap();
+        assert_eq!(h.name, crate::clinic::name(&st, b));
+        assert_eq!(h.glyph, Some(('▯', AMBER)));
+        assert_eq!(
+            shut[0].subtitle.as_deref(),
+            Some("CLOSED · opens 18:00 · closes 04:00")
+        );
+        assert!(shut[0].choices.is_empty());
+        let text = window_text(&st, &[shut[0].clone()]);
+        assert!(
+            text.contains("x  Look") && text.contains("CLOSED"),
+            "{text}"
+        );
+        // Open, the door has no window: you walk in.
+        let (st, _, door, _) = crate::clinic::testutil::outside(crate::clinic::testutil::NIGHT);
+        assert!(gather(&st, &|_, _| None).iter().all(|s| {
+            s.pos != door
+                || s.header
+                    .as_ref()
+                    .is_some_and(|h| h.name != crate::clinic::name(&st, b))
+        }));
     }
 
     #[test]

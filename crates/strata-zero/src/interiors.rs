@@ -244,6 +244,10 @@ pub fn enter(st: &mut AppState, b: BuildingId, door: (StratumKind, Pos)) -> Resu
     if st.net.engaged.is_some() {
         return Err("not now".to_string());
     }
+    // A ripperdoc's door is shut while the doc is out.
+    if !crate::clinic::is_open(st, b) {
+        return Err(crate::clinic::closed_line(st, b));
+    }
     let city = st.city.as_ref().ok_or("no city")?;
     let plan = st
         .interiors
@@ -583,6 +587,26 @@ mod tests {
             ..Default::default()
         })
         .unwrap()
+    }
+
+    #[test]
+    fn a_shut_clinic_turns_you_away() {
+        let (mut st, b, door, out) = crate::clinic::testutil::outside(crate::clinic::testutil::DAY);
+        let refused = enter(&mut st, b, (StratumKind::Street, door));
+        assert_eq!(refused, Err(crate::clinic::closed_line(&st, b)));
+        assert!(crate::clinic::closed_line(&st, b).ends_with(" is closed · opens at 18:00"));
+        let p = st.player.as_ref().unwrap();
+        assert_eq!((p.place, p.pos), (Place::Stratum(StratumKind::Street), out));
+        // At night the doc is in, and the door opens.
+        let (mut st, b, door, _) = crate::clinic::testutil::outside(crate::clinic::testutil::NIGHT);
+        enter(&mut st, b, (StratumKind::Street, door)).unwrap();
+        assert_eq!(
+            st.player.as_ref().unwrap().place,
+            Place::Floor {
+                building: b,
+                level: 0
+            }
+        );
     }
 
     #[test]
