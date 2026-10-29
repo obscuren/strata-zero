@@ -7,12 +7,13 @@ use crate::app::AppState;
 use crate::render::map::{MapRef, TileMap};
 use crate::screens::create::{stat_colour, wrap};
 use crate::screens::deck::{REVEAL_TICKS, cut, lit};
+use crate::screens::popup::wrapped_rows;
 use crate::ui::chrome::{
     BAR_BG, CYAN, DIM, FAINTER, MAGENTA, RULE, TEXT, put, put_paragraph, reveal, solid,
 };
 use citygen::{Place, StratumKind};
 use crossterm::event::KeyCode;
-use game::{Action, Build, Contrib, Num};
+use game::{Action, Build, Contrib, Num, Source};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -75,12 +76,125 @@ fn signed(n: i32) -> Color {
     }
 }
 
-/// The radius you see by where you stand, as the map's field of view reads it; no
-/// body, no sight.
-fn sight(st: &AppState) -> i32 {
-    let Some(p) = st.player.as_ref() else {
-        return 0;
-    };
+/// One number as the sheet reads it: with everything, what it is of its own, where the
+/// rest comes from, and why the two don't add up when they don't.
+struct Reading {
+    num: Num,
+    value: i32,
+    /// What it is before gear, chrome and talents: 0 for armour, `None` for a
+    /// resistance (nothing but theirs) and for sight with no body to see from.
+    own: Option<i32>,
+    sources: Vec<(Contrib, i32)>,
+    /// Abilities that move it right now: the kind of what grants it, the ability's
+    /// name, what grants it, and how much. Low-light's sight, while the lamps are on.
+    boons: Vec<(usize, String, Option<String>, i32)>,
+    /// Why the value is not its own plus its sources: a cap, a floor, a construct.
+    note: Option<String>,
+}
+
+impl Reading {
+    fn of(st: &AppState, num: Num) -> Reading {
+        let (c, ch) = (&st.content, &st.character);
+        let sources = ch.sources(c, num);
+        let place = st.player.as_ref().map(|p| p.place);
+        let value = match num {
+            Num::Stat(s) => ch.stat(c, s) as i32,
+            Num::Hp => ch.hp_max(c) as i32,
+            Num::Focus => ch.focus_max(c) as i32,
+            Num::Armor => ch.armor(c),
+            Num::Sight => sight(st),
+            Num::Carry => ch.carry_cap(c).round() as i32,
+            Num::Move => {
+                let at = place.unwrap_or(Place::Stratum(StratumKind::Street));
+                crate::net::you_move(st, at) as i32
+            }
+            Num::Resist(h) => ch.resist(c, h),
+        };
+        let boons: Vec<_> = match num {
+            Num::Sight => st
+                .lowlight()
+                .map(|(id, n, from)| {
+                    let name = c
+                        .ability(&id)
+                        .map_or_else(|| id.to_string(), |a| a.name.clone());
+                    let (kind, by) = granted(st, &from);
+                    (kind, name, by, n)
+                })
+                .into_iter()
+                .collect(),
+            _ => Vec::new(),
+        };
+        let added = sources.iter().map(|(_, v)| v).sum::<i32>()
+            + boons.iter().map(|(.., v)| v).sum::<i32>();
+        let own = match num {
+            Num::Stat(s) => Some(ch.stats.get(s) as i32),
+            Num::Hp => Some(ch.hp_base as i32),
+            Num::Focus => Some(ch.focus_base as i32),
+            Num::Armor => Some(0),
+            Num::Sight => sight_here(st),
+            Num::Carry => Some(value - added),
+            Num::Move => Some(crate::net::BASE_MOVE as i32),
+            Num::Resist(_) => None,
+        };
+        let note = match (num, own.map(|o| o + added)) {
+            (_, Some(sum)) if sum == value => None,
+            (Num::Move, Some(_)) if matches!(place, Some(Place::Construct(_))) => {
+                Some(format!("in a construct: {value}"))
+            }
+            (_, Some(sum)) if sum > value => Some(format!("capped at {value}")),
+            (_, Some(_)) => Some(format!("at least {value}")),
+            (Num::Sight, None) if added != 0 => Some(format!("no body: {value}")),
+            _ => None,
+        };
+        Reading {
+            num,
+            value,
+            own,
+            sources,
+            boons,
+            note,
+        }
+    }
+
+    /// What the value moved from its own: the tile's bottom edge. A resistance is
+    /// nothing but its sources, so it has none.
+    fn edge(&self) -> Option<i32> {
+        self.own.map(|o| self.value - o).filter(|e| *e != 0)
+    }
+
+    /// The value's colour: a stat plain, a secondary number by its edge, a
+    /// resistance by its sign.
+    fn colour(&self) -> Color {
+        match self.num {
+            Num::Stat(_) => TEXT,
+            Num::Resist(_) => signed(self.value),
+            _ => signed(self.edge().unwrap_or(0)),
+        }
+    }
+
+    /// The tile's bottom edge, as text and colour.
+    fn modifier(&self) -> Option<(String, Color)> {
+        self.edge().map(|e| (format!("{e:+}"), signed(e)))
+    }
+
+    /// The kinds of source that move it, in `KINDS` order.
+    fn kinds(&self) -> Vec<usize> {
+        let mut kinds: Vec<usize> = self
+            .sources
+            .iter()
+            .map(|(f, _)| kind_of(f))
+            .chain(self.boons.iter().map(|(k, ..)| *k))
+            .collect();
+        kinds.sort_unstable();
+        kinds.dedup();
+        kinds
+    }
+}
+
+/// The place's own sight radius at this hour, before any bonus: what the field of
+/// view starts from. No body, nothing.
+fn sight_here(st: &AppState) -> Option<i32> {
+    let p = st.player.as_ref()?;
     let daylight = st
         .city
         .as_ref()
@@ -94,83 +208,19 @@ fn sight(st: &AppState) -> i32 {
             )
         })
         .map_or(0.0, |map| map.daylight());
-    (p.radius_at(daylight) + st.sight_bonus()).max(1)
+    Some(p.radius_at(daylight))
 }
 
-/// One number as the sheet reads it: with everything, what it is before gear, chrome
-/// and talents (`None` for one that is nothing but theirs), and where the rest comes
-/// from.
-struct Reading {
-    num: Num,
-    value: i32,
-    base: Option<i32>,
-    sources: Vec<(Contrib, i32)>,
-}
-
-impl Reading {
-    fn of(st: &AppState, num: Num) -> Reading {
-        let (c, ch) = (&st.content, &st.character);
-        let sources = ch.sources(c, num);
-        let added: i32 = sources.iter().map(|(_, v)| v).sum();
-        let value = match num {
-            Num::Stat(s) => ch.stat(c, s) as i32,
-            Num::Hp => ch.hp_max(c) as i32,
-            Num::Focus => ch.focus_max(c) as i32,
-            Num::Armor => ch.armor(c),
-            Num::Sight => sight(st),
-            Num::Carry => ch.carry_cap(c).round() as i32,
-            Num::Move => {
-                let place = st
-                    .player
-                    .as_ref()
-                    .map_or(Place::Stratum(StratumKind::Street), |p| p.place);
-                crate::net::you_move(st, place) as i32
-            }
-            Num::Resist(h) => ch.resist(c, h),
-        };
-        let base = match num {
-            Num::Stat(s) => Some(ch.stats.get(s) as i32),
-            Num::Hp => Some(ch.hp_base as i32),
-            Num::Focus => Some(ch.focus_base as i32),
-            Num::Move => Some(crate::net::BASE_MOVE as i32),
-            Num::Sight if st.player.is_none() => None,
-            Num::Sight | Num::Carry => Some(value - added),
-            Num::Armor | Num::Resist(_) => None,
-        };
-        Reading {
-            num,
-            value,
-            base,
-            sources,
-        }
-    }
-
-    /// What gear, chrome and talents add.
-    fn added(&self) -> i32 {
-        self.sources.iter().map(|(_, v)| v).sum()
-    }
-
-    /// The value's colour: a stat plain, a secondary number by its bonus, a
-    /// resistance by its sign.
-    fn colour(&self) -> Color {
-        match self.num {
-            Num::Stat(_) => TEXT,
-            Num::Resist(_) => signed(self.value),
-            _ => signed(self.added()),
-        }
-    }
-
-    /// The tile's bottom edge: what gear, chrome and talents add. A resistance is
-    /// nothing but that, so it shows only its value.
-    fn modifier(&self) -> Option<(String, Color)> {
-        let added = self.added();
-        (added != 0 && !matches!(self.num, Num::Resist(_)))
-            .then(|| (format!("{added:+}"), signed(added)))
-    }
+/// The radius you see by where you stand, as the map's field of view reads it; no
+/// body, no sight.
+fn sight(st: &AppState) -> i32 {
+    sight_here(st).map_or(0, |here| (here + st.sight_bonus()).max(1))
 }
 
 /// The kinds of source, in the order the readout lists them, each with its word.
-const KINDS: [&str; 4] = ["gear", "hardware", "chrome", "talents"];
+const KINDS: [&str; 6] = [
+    "gear", "hardware", "chrome", "talents", "category", "innate",
+];
 
 fn kind_of(from: &Contrib) -> usize {
     match from {
@@ -178,6 +228,34 @@ fn kind_of(from: &Contrib) -> usize {
         Contrib::Hardware(_) => 1,
         Contrib::Chrome(_) | Contrib::Pieces(_) => 2,
         Contrib::Talents => 3,
+    }
+}
+
+/// The kind and the name of what grants an ability: an item is gear or chrome.
+fn granted(st: &AppState, from: &Source) -> (usize, Option<String>) {
+    let c = &st.content;
+    match from {
+        Source::Item(id) => {
+            let item = c.item(id);
+            let chrome = item.is_some_and(|i| i.implant.is_some());
+            let name = item.map_or_else(|| id.to_string(), |i| i.name.clone());
+            (if chrome { 2 } else { 0 }, Some(name))
+        }
+        Source::Talent(t) => (
+            3,
+            Some(
+                c.talent(t)
+                    .map_or_else(|| t.to_string(), |t| t.name.clone()),
+            ),
+        ),
+        Source::Category(k) => (
+            4,
+            Some(
+                c.category(k)
+                    .map_or_else(|| k.to_string(), |k| k.name.clone()),
+            ),
+        ),
+        Source::Innate => (5, None),
     }
 }
 
@@ -215,107 +293,171 @@ fn flow(
     out
 }
 
-/// The readout of a number, `width` columns wide: its name and value, its blurb,
-/// what a stat feeds, and where the rest comes from, one line for each kind.
-fn readout(st: &AppState, r: &Reading, width: usize) -> Vec<Line<'static>> {
-    let (c, ch) = (&st.content, &st.character);
-    let bold = |colour: Color| Style::default().fg(colour).add_modifier(Modifier::BOLD);
-    let dim = Style::default().fg(DIM);
-    let name = match r.num {
-        Num::Stat(s) => stat_colour(s),
-        _ => r.colour(),
-    };
-    let mut head = vec![Span::styled(format!("{} ", r.num.name()), bold(name))];
-    match r.base {
-        Some(base) if base != r.value => {
-            let mut kinds: Vec<usize> = r.sources.iter().map(|(f, _)| kind_of(f)).collect();
-            kinds.sort_unstable();
-            kinds.dedup();
-            let words: Vec<&str> = kinds.iter().map(|&k| KINDS[k]).collect();
-            let with = match words.split_last() {
-                Some((last, [])) => last.to_string(),
-                Some((last, rest)) => format!("{} & {last}", rest.join(", ")),
-                None => "everything".to_string(),
-            };
-            head.push(Span::styled(base.to_string(), bold(TEXT)));
-            head.push(Span::styled(format!(" · {} with {with}", r.value), dim));
+/// A number's readout, in parts so it can give way when rows run short: line one, the
+/// blurb, what a stat feeds, and where the rest comes from with any note.
+struct Readout {
+    head: Line<'static>,
+    blurb: Vec<Line<'static>>,
+    feeds: Vec<Line<'static>>,
+    parts: Vec<Line<'static>>,
+}
+
+impl Readout {
+    /// The readout `width` columns wide.
+    fn of(st: &AppState, r: &Reading, width: usize) -> Readout {
+        let (c, ch) = (&st.content, &st.character);
+        let bold = |colour: Color| Style::default().fg(colour).add_modifier(Modifier::BOLD);
+        let dim = Style::default().fg(DIM);
+        let name = match r.num {
+            Num::Stat(s) => stat_colour(s),
+            _ => r.colour(),
+        };
+        // Its own value and the value with everything, while they differ and it has
+        // one of its own to speak of; else the value.
+        let mut head = vec![Span::styled(format!("{} ", r.num.name()), bold(name))];
+        match r.own {
+            Some(own) if own != r.value && r.num != Num::Armor => {
+                let with = match r.kinds()[..] {
+                    [k] => format!("with {}", KINDS[k]),
+                    _ => "in all".to_string(),
+                };
+                head.push(Span::styled(own.to_string(), bold(TEXT)));
+                head.push(Span::styled(format!(" · {} {with}", r.value), dim));
+            }
+            _ => head.push(Span::styled(r.value.to_string(), bold(r.colour()))),
         }
-        _ => head.push(Span::styled(r.value.to_string(), bold(r.colour()))),
-    }
-    // What the next point costs, at the right, while there are points and room.
-    if let Num::Stat(s) = r.num
-        && ch.stat_points > 0
-        && ch.stats.get(s) < c.creation.stat_cap
-    {
-        let n = Build::from_character(c, ch).stat_cost(c, s);
-        let next = format!("next {n} pt{}", if n == 1 { "" } else { "s" });
-        let used: usize = head.iter().map(|s| s.width()).sum();
-        let pad = width.saturating_sub(used + next.chars().count()).max(2);
-        head.push(Span::raw(" ".repeat(pad)));
-        head.push(Span::styled(next, Style::default().fg(AMBER)));
-    }
-    let mut out = vec![Line::from(head)];
+        // What the next point costs, at the right, while there are points to spend.
+        if let Num::Stat(s) = r.num
+            && ch.stat_points > 0
+            && ch.stats.get(s) < c.creation.stat_cap
+        {
+            let n = Build::from_character(c, ch).stat_cost(c, s);
+            let next = format!("next {n} pt{}", if n == 1 { "" } else { "s" });
+            let used: usize = head.iter().map(|s| s.width()).sum();
+            let pad = width.saturating_sub(used + next.chars().count()).max(2);
+            head.push(Span::raw(" ".repeat(pad)));
+            head.push(Span::styled(next, Style::default().fg(AMBER)));
+        }
 
-    let blurb = match r.num {
-        Num::Stat(s) => c.stat_blurb(s),
-        n => c.number_blurb(n.label()),
-    };
-    out.extend(
-        wrap(blurb, width)
+        let blurb = match r.num {
+            Num::Stat(s) => c.stat_blurb(s),
+            n => c.number_blurb(n.label()),
+        };
+        let blurb = wrap(blurb, width)
             .into_iter()
-            .map(|l| Line::from(Span::styled(l, Style::default().fg(TEXT)))),
-    );
-    out.push(Line::from(""));
-
-    if let Num::Stat(s) = r.num {
-        let skills = c.skills.iter().filter(|k| k.stat == s).map(|k| {
-            let mark = if ch.has_skill(&k.id) { "◆" } else { "◇" };
-            Span::styled(format!("{mark} {}", k.name), Style::default().fg(TEXT))
-        });
-        out.extend(flow(
-            Span::styled("feeds ", dim),
-            skills.collect(),
-            Span::raw(" "),
-            width,
-        ));
-    }
-
-    for (k, word) in KINDS.iter().enumerate() {
-        let entries: Vec<Span<'static>> = r
-            .sources
-            .iter()
-            .filter(|(f, _)| kind_of(f) == k)
-            .map(|(from, v)| {
-                let item = |id: &game::ItemId| {
-                    c.item(id)
-                        .map_or_else(|| id.to_string(), |i| i.name.clone())
-                };
-                let text = match from {
-                    Contrib::Gear(id) | Contrib::Chrome(id) | Contrib::Hardware(id) => {
-                        format!("{v:+} {}", item(id))
-                    }
-                    Contrib::Talents => format!("{v:+}"),
-                    Contrib::Pieces(n) => {
-                        let s = if *n == 1 { "" } else { "s" };
-                        format!("{v} · {} piece{s}", count(*n))
-                    }
-                };
-                Span::styled(text, Style::default().fg(signed(*v)))
-            })
+            .map(|l| Line::from(Span::styled(l, Style::default().fg(TEXT))))
             .collect();
-        if !entries.is_empty() {
-            out.extend(flow(
-                Span::styled(format!("{word} "), dim),
-                entries,
-                Span::styled(" · ", dim),
+
+        let mut feeds = Vec::new();
+        if let Num::Stat(s) = r.num {
+            let skills = c.skills.iter().filter(|k| k.stat == s).map(|k| {
+                let mark = if ch.has_skill(&k.id) { "◆" } else { "◇" };
+                Span::styled(format!("{mark} {}", k.name), Style::default().fg(TEXT))
+            });
+            feeds = flow(
+                Span::styled("feeds ", dim),
+                skills.collect(),
+                Span::raw(" "),
+                width,
+            );
+        }
+
+        let item = |id: &game::ItemId| {
+            c.item(id)
+                .map_or_else(|| id.to_string(), |i| i.name.clone())
+        };
+        let mut parts = Vec::new();
+        for (k, word) in KINDS.iter().enumerate() {
+            let entries: Vec<Span<'static>> = r
+                .sources
+                .iter()
+                .filter(|(f, _)| kind_of(f) == k)
+                .map(|(from, v)| {
+                    let text = match from {
+                        Contrib::Gear(id) | Contrib::Chrome(id) | Contrib::Hardware(id) => {
+                            format!("{v:+} {}", item(id))
+                        }
+                        Contrib::Talents => format!("{v:+}"),
+                        Contrib::Pieces(n) => {
+                            let s = if *n == 1 { "" } else { "s" };
+                            format!("{v} · {} piece{s}", count(*n))
+                        }
+                    };
+                    Span::styled(text, Style::default().fg(signed(*v)))
+                })
+                .collect();
+            if !entries.is_empty() {
+                parts.extend(flow(
+                    Span::styled(format!("{word} "), dim),
+                    entries,
+                    Span::styled(" · ", dim),
+                    width,
+                ));
+            }
+        }
+        // An ability's part is its own line, named with what grants it.
+        for (k, ability, by, v) in &r.boons {
+            let by = by.as_ref().map_or(String::new(), |b| format!(" · {b}"));
+            parts.extend(flow(
+                Span::styled(format!("{} ", KINDS[*k]), dim),
+                vec![Span::styled(
+                    format!("{v:+} {ability}{by}"),
+                    Style::default().fg(signed(*v)),
+                )],
+                Span::raw(""),
                 width,
             ));
         }
+        if let Some(note) = &r.note {
+            parts.push(Line::from(Span::styled(
+                cut(note, width),
+                Style::default().fg(FAINTER),
+            )));
+        }
+        Readout {
+            head: Line::from(head),
+            blurb,
+            feeds,
+            parts,
+        }
     }
-    while out.last().is_some_and(|l| l.width() == 0) {
-        out.pop();
+
+    /// The lines in at most `height` rows of `width`, counted as they wrap. Short of
+    /// rows the blank line gives way first, then the blurb from its end (marked cut),
+    /// then what a stat feeds, so where the number comes from stays to the last.
+    fn fit(mut self, width: usize, height: usize) -> Vec<Line<'static>> {
+        let rows = |lines: &[Line<'static>]| -> usize {
+            lines.iter().map(|l| wrapped_rows(l, width)).sum()
+        };
+        let mut blank = !self.blurb.is_empty() && !(self.feeds.is_empty() && self.parts.is_empty());
+        let mut cut_blurb = false;
+        let lines = loop {
+            let mut lines = vec![self.head.clone()];
+            lines.extend(self.blurb.iter().cloned());
+            if cut_blurb && let Some(last) = lines.last_mut().filter(|_| !self.blurb.is_empty()) {
+                let text = format!("{last}…");
+                *last = Line::from(Span::styled(cut(&text, width), Style::default().fg(TEXT)));
+            }
+            if blank {
+                lines.push(Line::from(""));
+            }
+            lines.extend(self.feeds.iter().cloned());
+            lines.extend(self.parts.iter().cloned());
+            if rows(&lines) <= height {
+                break lines;
+            }
+            if blank {
+                blank = false;
+            } else if self.blurb.pop().is_some() {
+                cut_blurb = true;
+            } else if self.feeds.pop().is_none() {
+                break lines;
+            }
+        };
+        let mut lines = lines;
+        while rows(&lines) > height && lines.pop().is_some() {}
+        lines
     }
-    out
 }
 
 /// Which pane holds the cursor.
@@ -502,14 +644,8 @@ impl Sheet {
         }
         if let Some(y) = in_body(READOUT_Y) {
             let area = Rect::new(x0, y, right - x0, body.bottom() - y);
-            let mut lines = readout(st, &readings[self.tile()], area.width as usize);
-            // Short of rows, the blank ones give way first.
-            while lines.len() > area.height as usize
-                && let Some(blank) = lines.iter().rposition(|l| l.width() == 0)
-            {
-                lines.remove(blank);
-            }
-            lines.truncate(area.height as usize);
+            let (w, h) = (area.width as usize, area.height as usize);
+            let lines = Readout::of(st, &readings[self.tile()], w).fit(w, h);
             let p = st.tick.saturating_sub(self.changed) as f32 / REVEAL_TICKS as f32;
             put_paragraph(
                 buf,
@@ -657,9 +793,9 @@ mod tests {
     use crate::screens::create::stat_colour;
     use crate::screens::deck::{Deck, REVEAL_TICKS};
     use crate::screens::testutil::key;
-    use crate::ui::chrome::{BAR_BG, CYAN, DIM, MAGENTA, RULE};
+    use crate::ui::chrome::{BAR_BG, CYAN, DIM, FAINTER, MAGENTA, RULE, TEXT};
     use citygen::{GenParams, Generator, SizePreset};
-    use game::{Build, ItemId, Num, Site, Stat};
+    use game::{Build, ItemId, Num, Site, Slot, Stat};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -772,10 +908,12 @@ mod tests {
         );
         assert_eq!(cells(buf, 2, 15, 11), "RESISTANCES");
         assert_eq!(cells(buf, 2, 16, 14), "┌ KIN ┐┌ THM ┐");
-        // The deck's +1 net in the NET tile's bottom edge, the optics' +4 in SGT's.
+        // The deck's +1 net in the NET tile's bottom edge, the jacket's +5 in HP's;
+        // with no body SGT moved nothing, so its edge is bare.
         assert_eq!(cells(buf, 34, 8, 8), "└─ +1 ─┘");
         assert_eq!(buf[(37, 8)].fg, GOOD);
-        assert_eq!(cells(buf, 23, 13, 7), "└─ +4 ┘");
+        assert_eq!(cells(buf, 2, 13, 7), "└─ +5 ┘");
+        assert_eq!(cells(buf, 23, 13, 7), "└─────┘");
         // BODY, selected on the focused pane: cyan edge, the bar behind its value.
         assert_eq!(buf[(2, 6)].fg, CYAN);
         assert_eq!(buf[(5, 7)].bg, BAR_BG);
@@ -947,23 +1085,163 @@ mod tests {
             st.minute_of_day(),
         )
         .unwrap();
-        let radius = (p.radius_at(map.daylight()) + st.sight_bonus()).max(1);
-        assert!(radius > 4, "the street's radius and the optics: {radius}");
+        // At night: the street's radius, the optics' four and Low-light's two.
+        assert!(citygen::lighting::lamps_on(st.minute_of_day()));
+        let here = p.radius_at(map.daylight());
+        let radius = (here + st.sight_bonus()).max(1);
+        assert_eq!(radius, here + 6);
         let buf = drawn(&s, &st, BODY);
         assert_eq!(
             cells(&buf, 23, 12, 7).trim_matches(['│', ' ']),
             radius.to_string()
         );
+        assert_eq!(cells(&buf, 23, 13, 7), "└─ +6 ┘");
         let text = readout(&buf, BODY);
         assert!(
-            text.starts_with(&format!("SIGHT {} · {radius} with chrome", radius - 4)),
+            text.starts_with(&format!("SIGHT {here} · {radius} with chrome")),
             "{text}"
         );
-        assert!(text.contains("chrome +4 Nightglass optics"), "{text}");
-        // No body: no sight.
+        assert!(text.contains("chrome +4 Nightglass optics\n"), "{text}");
+        assert!(
+            text.contains("chrome +2 Low-light · Nightglass optics"),
+            "{text}"
+        );
+        // By day Low-light does nothing, and says nothing.
+        while citygen::lighting::lamps_on(st.minute_of_day()) {
+            st.tick += 900;
+        }
+        s.changed = st.tick - REVEAL_TICKS - 1;
+        let p = st.player.as_ref().unwrap();
+        let city = st.city.as_ref().unwrap();
+        let map = MapRef::for_place(
+            city,
+            &st.interiors,
+            &st.constructs,
+            p.place,
+            st.minute_of_day(),
+        )
+        .unwrap();
+        let here = p.radius_at(map.daylight());
+        let buf = drawn(&s, &st, BODY);
+        let text = readout(&buf, BODY);
+        assert!(
+            text.starts_with(&format!("SIGHT {here} · {} with chrome", here + 4)),
+            "{text}"
+        );
+        assert!(!text.contains("Low-light"), "{text}");
+        assert_eq!(cells(&buf, 23, 13, 7), "└─ +4 ┘");
+        // No body: no sight, no edge, and the readout says why.
         st.player = None;
         let buf = drawn(&s, &st, BODY);
         assert_eq!(cells(&buf, 23, 12, 7), "│  0  │");
+        assert_eq!(cells(&buf, 23, 13, 7), "└─────┘");
+        let text = readout(&buf, BODY);
+        assert!(text.starts_with("SIGHT 0\n"), "{text}");
+        assert!(text.contains("chrome +4 Nightglass optics"), "{text}");
+        assert!(text.contains("no body: 0"), "{text}");
+    }
+
+    /// The readout's row that starts with `lead`, as drawn.
+    fn row_of(buf: &Buffer, body: Rect, lead: &str) -> u16 {
+        (body.y + 16..body.bottom())
+            .find(|&y| cells(buf, body.x + 1, y, 43).starts_with(lead))
+            .unwrap_or_else(|| panic!("no row starts with {lead}"))
+    }
+
+    #[test]
+    fn the_edge_is_what_the_value_moved_and_the_readout_says_why() {
+        // BODY 8, a Wrecker arm and a Piston arm: three more, but BODY stops at 10.
+        let mut st = state();
+        st.character.stats.body = 8;
+        st.character
+            .install(Site::LeftArm, ItemId::new("wrecker_arm"), None);
+        st.character
+            .install(Site::RightArm, ItemId::new("piston_arm"), None);
+        let s = Sheet::new(0);
+        settle(&s, &mut st);
+        let buf = drawn(&s, &st, BODY);
+        assert_eq!(cells(&buf, 2, 7, 8), "│  10  │");
+        assert_eq!(cells(&buf, 2, 8, 8), "└─ +2 ─┘");
+        let text = readout(&buf, BODY);
+        for want in [
+            "BODY 8 · 10 with chrome",
+            "chrome +2 Wrecker arm · +1 Piston arm",
+            "capped at 10",
+        ] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+        let y = row_of(&buf, BODY, "capped at 10");
+        assert_eq!(buf[(2, y)].fg, FAINTER);
+
+        // MOV in a construct: your avatar walks BASE_MOVE whatever your spine does.
+        let mut st = walking();
+        st.character
+            .install(Site::Spine, ItemId::new("redline_spine"), None);
+        let b = st.city.as_ref().unwrap().buildings[0].id;
+        st.player.as_mut().unwrap().place = Place::Construct(b);
+        let mut s = Sheet::new(0);
+        s.state.tile = tile_of(Num::Move);
+        settle(&s, &mut st);
+        let buf = drawn(&s, &st, BODY);
+        let mov = 2 + 5 * 7;
+        assert_eq!(cells(&buf, mov, 12, 7), "│  4  │");
+        assert_eq!(
+            cells(&buf, mov, 13, 7),
+            "└─────┘",
+            "no edge: it moved nothing"
+        );
+        assert_eq!(buf[(mov + 3, 12)].fg, TEXT);
+        let text = readout(&buf, BODY);
+        assert!(text.starts_with("MOVE 4\n"), "{text}");
+        assert!(text.contains("chrome +1 Redline spine"), "{text}");
+        assert!(text.contains("in a construct: 4"), "{text}");
+        // On foot the spine counts, and nothing needs saying.
+        st.player.as_mut().unwrap().place = Place::Stratum(StratumKind::Street);
+        let buf = drawn(&s, &st, BODY);
+        assert_eq!(cells(&buf, mov, 13, 7), "└─ +1 ┘");
+        let text = readout(&buf, BODY);
+        assert!(text.starts_with("MOVE 4 · 5 with chrome"), "{text}");
+        assert!(!text.contains("in a construct:"), "{text}");
+    }
+
+    #[test]
+    fn line_one_fits_beside_the_cost_and_no_source_is_lost() {
+        // COOL from the mirrorshades and the Hushcan on the Ratchet, points unspent.
+        let mut st = state();
+        st.character.stat_points = 3;
+        st.character
+            .wear(Slot::Eyes, ItemId::new("mirrorshades"), None);
+        let hush = ItemId::new("hushcan");
+        let copy = st.character.new_copy(&st.content, &hush);
+        let content = st.content.clone();
+        st.character
+            .host_copy_mut(&content, game::Host::Worn(Slot::Primary))
+            .unwrap()
+            .fitted[0] = Some(game::Stack {
+            item: hush,
+            qty: 1,
+            copy: Some(copy),
+        });
+        let mut s = Sheet::new(0);
+        s.state.tile = tile_of(Num::Stat(Stat::Cool));
+        settle(&s, &mut st);
+        let buf = drawn(&s, &st, BODY);
+        let text = readout(&buf, BODY);
+        let n =
+            Build::from_character(&st.content, &st.character).stat_cost(&st.content, Stat::Cool);
+        let next = format!("next {n} pt{}", if n == 1 { "" } else { "s" });
+        let first = text.lines().next().unwrap();
+        assert!(first.starts_with("COOL 5 · 7 in all"), "{text}");
+        assert!(
+            first.ends_with(&next),
+            "one row, the cost at the right: {text}"
+        );
+        assert_eq!(buf[(BODY.x + 43, BODY.y + 16)].fg, AMBER);
+        for want in ["feeds", "gear +1 Mirrorshades", "hardware +1 Hushcan"] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+        // The blurb gave way to make room, and says so.
+        assert!(text.lines().nth(1).unwrap().ends_with('…'), "{text}");
     }
 
     #[test]
@@ -1044,6 +1322,16 @@ mod tests {
                         );
                     }
                     assert_eq!(buf[(body.x, body.y + 4)].symbol(), " ");
+                    // Every line of where the number comes from is drawn.
+                    let text = readout(&buf, body);
+                    let r = Reading::of(&st, Num::ALL[tile]);
+                    for part in Readout::of(&st, &r, 43).parts {
+                        let part = part.to_string();
+                        assert!(
+                            text.contains(part.trim_end()),
+                            "{body:?} tile {tile}: {part:?} in {text}"
+                        );
+                    }
                 }
             }
         }

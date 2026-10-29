@@ -254,19 +254,26 @@ impl AppState {
         )
     }
 
-    /// How far past the base the character sees: their perks, and two more tiles
-    /// with low-light while the lamps are on, 18:00 to 05:59.
+    /// How far past the base the character sees: their perks, and Low-light's tiles
+    /// while it works (`lowlight`).
     pub fn sight_bonus(&self) -> i32 {
-        let mut bonus = self.character.sight_bonus(&self.content);
-        let night = citygen::lighting::lamps_on(self.minute_of_day());
-        if night
-            && self
-                .character
-                .has_ability(&self.content, &game::AbilityId::new("lowlight"))
-        {
-            bonus += 2;
+        let night = self.lowlight().map_or(0, |(_, n, _)| n);
+        self.character.sight_bonus(&self.content) + night
+    }
+
+    /// Low-light while it works, the lamps on (18:00 to 05:59): the ability, the two
+    /// tiles it adds to sight, and where you have it from.
+    pub fn lowlight(&self) -> Option<(game::AbilityId, i32, game::Source)> {
+        if !citygen::lighting::lamps_on(self.minute_of_day()) {
+            return None;
         }
-        bonus
+        let id = game::AbilityId::new("lowlight");
+        let (_, from) = self
+            .character
+            .abilities(&self.content)
+            .into_iter()
+            .find(|(a, _)| *a == id)?;
+        Some((id, 2, from))
     }
 
     /// Turns dev mode on or off; off also drops the dev-only sidebar sections.
