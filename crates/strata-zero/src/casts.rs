@@ -87,8 +87,13 @@ pub fn boost(st: &mut AppState, id: &AbilityId) -> Result<(), String> {
         return Err("once a fight".to_string());
     }
     book(st, id)?;
+    let moves = st
+        .net
+        .engaged
+        .as_ref()
+        .map_or(net::BASE_MOVE, |e| net::you_move(st, e.place));
     if let Some(e) = st.net.engaged.as_mut() {
-        e.moves = net::BASE_MOVE;
+        e.moves = moves;
         e.ap = net::BASE_AP;
         e.phase = Phase::Move;
         e.spent_at = None;

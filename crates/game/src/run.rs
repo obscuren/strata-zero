@@ -130,6 +130,11 @@ pub fn resisted_stun(stun: u32, resist: i32) -> u32 {
     ((stun as i64 * (100 - r) + 50) / 100) as u32
 }
 
+/// The chance armour turns a round that hit, in percent: ten a point, at most 60.
+pub fn turn_chance(armor: i32) -> u32 {
+    armor.saturating_mul(10).clamp(0, 60) as u32
+}
+
 /// A round lands when the roll (1..=100) is within the chance.
 pub fn round_hits(roll: u8, chance: u8) -> bool {
     roll <= chance

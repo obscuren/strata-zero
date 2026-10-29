@@ -666,7 +666,7 @@ pub enum Perk {
     HpMax(i32),
     /// Max focus.
     Focus(i32),
-    /// Armour: flat damage turned aside.
+    /// Armour: each point turns 10% of the rounds that hit, at most 60%.
     Armor(i8),
     /// Extra move, in tiles a turn.
     Move(i8),

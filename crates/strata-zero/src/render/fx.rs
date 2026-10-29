@@ -37,6 +37,10 @@ pub const BLOOM_TICKS: u64 = 13;
 pub const WHITEOUT_TICKS: u64 = 8;
 /// Ticks a shock plays.
 pub const SHOCK_TICKS: u64 = 4;
+/// Ticks a haze hangs, thickening then thinning; it leaves nothing behind.
+pub const HAZE_TICKS: u64 = 24;
+/// Ticks a haze takes to thicken to its fullest.
+pub const HAZE_RISE: u64 = 4;
 /// Ticks a push's trail stays.
 pub const TRAIL_TICKS: u64 = 4;
 /// Ticks a pulse rings out.
@@ -210,8 +214,7 @@ impl Overlay for FxOverlay<'_> {
                 Fx::Bloom => shapes::bloom(inst, elapsed, origin, area, buf),
                 Fx::Whiteout => shapes::whiteout(inst, elapsed, map, origin, area, buf),
                 Fx::Shock => shapes::shock(inst, elapsed, origin, area, buf),
-                // Drawn by a later task.
-                Fx::Haze => {}
+                Fx::Haze => shapes::haze(inst, elapsed, origin, area, buf),
                 Fx::Trail => shapes::trail(inst, elapsed, origin, area, buf),
                 Fx::Pulse { colour } => shapes::pulse_rings(
                     inst,
@@ -2318,6 +2321,44 @@ mod tests {
         );
         let (b, plain) = at_e(&inst, 4);
         assert_eq!(b, plain, "gone after four ticks");
+    }
+
+    #[test]
+    fn haze_draws_green_and_thins() {
+        const HAZE: Rgb = Rgb(150, 220, 60);
+        let inst = blast_at(Fx::Haze, 2, true);
+        let green = |c: Color| matches!(c, Color::Rgb(r, g, b) if g > r && g > b);
+        let hazed = |b: &Buffer| {
+            square(L, 2)
+                .into_iter()
+                .filter(|p| {
+                    let (g, fg) = glyph_fg(b, *p);
+                    (g == "░" || g == "▒") && green(fg)
+                })
+                .count()
+        };
+        // Thickest once it has risen: the centre in the haze's own green, most of the
+        // footprint under it, nothing outside.
+        let (b, plain) = at_e(&inst, HAZE_RISE);
+        let (g, fg) = glyph_fg(&b, L);
+        assert!(g == "░" || g == "▒", "{g:?}");
+        assert_eq!(fg, col(HAZE));
+        let peak = hazed(&b);
+        assert!(peak > 12, "{peak} of 25");
+        for y in 0..60 {
+            for x in 0..120 {
+                let p = Pos::new(x, y);
+                if p.chebyshev(L) > 2 {
+                    assert_eq!(cell(&b, p), cell(&plain, p), "touched {p:?}");
+                }
+            }
+        }
+        // Thin as it rises, thin again as it goes.
+        assert!(hazed(&at_e(&inst, 0).0) < peak);
+        assert!(hazed(&at_e(&inst, HAZE_TICKS - 2).0) < peak);
+        // Gone at the end, and no scorch though it hurt.
+        let (b, plain) = at_e(&inst, HAZE_TICKS);
+        assert_eq!(b, plain);
     }
 
     #[test]

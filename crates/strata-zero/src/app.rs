@@ -135,8 +135,8 @@ impl FxInstance {
     /// The tick from which the instance draws nothing.
     pub fn until(&self) -> u64 {
         use crate::render::fx::{
-            BLOOM_TICKS, CASING_TICKS, FLASH_TICKS, IMPACT_TICKS, NUMBER_TICKS, PULSE_TICKS,
-            SHOCK_TICKS, STREAK_TICKS, TRAIL_TICKS, WHITEOUT_TICKS, tracer_ticks,
+            BLOOM_TICKS, CASING_TICKS, FLASH_TICKS, HAZE_TICKS, IMPACT_TICKS, NUMBER_TICKS,
+            PULSE_TICKS, SHOCK_TICKS, STREAK_TICKS, TRAIL_TICKS, WHITEOUT_TICKS, tracer_ticks,
         };
         match self.fx {
             game::Fx::Kick(ticks) => self.started + ticks,
@@ -167,8 +167,8 @@ impl FxInstance {
             }
             game::Fx::Bloom => self.started + BLOOM_TICKS + self.scorch(),
             game::Fx::Whiteout => self.started + WHITEOUT_TICKS + self.scorch(),
-            // Haze draws nothing yet; it lasts as long as a shock until it has its own.
-            game::Fx::Shock | game::Fx::Haze => self.started + SHOCK_TICKS,
+            game::Fx::Shock => self.started + SHOCK_TICKS,
+            game::Fx::Haze => self.started + HAZE_TICKS,
             game::Fx::Trail => self.started + TRAIL_TICKS,
             game::Fx::Pulse { .. } => self.started + PULSE_TICKS,
         }
@@ -870,6 +870,11 @@ mod tests {
         assert_eq!(at(game::Fx::Whiteout, true).until(), 108 + scorch);
         assert_eq!(at(game::Fx::Whiteout, false).until(), 108);
         assert_eq!(at(game::Fx::Shock, true).until(), 104, "no scorch");
+        assert_eq!(
+            at(game::Fx::Haze, true).until(),
+            100 + crate::render::fx::HAZE_TICKS,
+            "no scorch"
+        );
     }
 
     #[test]

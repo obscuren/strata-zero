@@ -1564,9 +1564,21 @@ pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
     scored.into_iter().map(|(_, _, a)| a).collect()
 }
 
+/// Tiles you may walk in a turn at `place`: on foot your chrome's move counts, at
+/// least one; in a construct your avatar isn't your meat, and walks `BASE_MOVE`.
+pub fn you_move(st: &AppState, place: Place) -> u8 {
+    match place {
+        Place::Construct(_) => BASE_MOVE,
+        _ => {
+            let moves = BASE_MOVE as i32 + st.character.move_bonus(&st.content);
+            moves.clamp(1, u8::MAX as i32) as u8
+        }
+    }
+}
+
 fn pools_for(st: &AppState, place: Place, actor: Actor) -> (u8, u8) {
     match (actor, place) {
-        (Actor::You, _) => (BASE_MOVE, BASE_AP),
+        (Actor::You, _) => (you_move(st, place), BASE_AP),
         (Actor::Ice(i), Place::Construct(b)) => st
             .constructs
             .get(b)
@@ -1710,7 +1722,11 @@ pub fn stay(st: &mut AppState) -> bool {
 pub fn aim_cap(st: &AppState) -> usize {
     match st.net.engaged.as_ref() {
         Some(e) if e.actor() == Actor::You => e.moves as usize,
-        _ => BASE_MOVE as usize,
+        Some(e) => you_move(st, e.place) as usize,
+        None => st
+            .player
+            .as_ref()
+            .map_or(BASE_MOVE, |p| you_move(st, p.place)) as usize,
     }
 }
 
@@ -1986,8 +2002,13 @@ pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
         };
         chips.push(chip);
     }
-    let yours =
-        (actor == Actor::You).then_some((e.moves, BASE_MOVE, e.ap, BASE_AP, e.phase == Phase::Act));
+    let yours = (actor == Actor::You).then_some((
+        e.moves,
+        you_move(st, e.place),
+        e.ap,
+        BASE_AP,
+        e.phase == Phase::Act,
+    ));
     let theirs = match actor {
         Actor::You => None,
         Actor::Ice(_) | Actor::Foe(_) => {
@@ -2058,7 +2079,8 @@ pub fn turn_readout(st: &AppState) -> Option<String> {
 
 /// A standing piece beside the player hits them: white adds heat, grey drains
 /// focus and dumps at zero, black takes HP through the jack. A shield charge soaks
-/// a hit; the deck's rating comes off grey and black hits.
+/// a hit; the deck's rating comes off grey and black hits, then your feedback
+/// resistance cuts what is left.
 fn hit(st: &mut AppState, b: BuildingId, i: usize) {
     let Some((grade, security, from)) = st
         .constructs
@@ -2088,6 +2110,8 @@ fn hit(st: &mut AppState, b: BuildingId, i: usize) {
         .deck(&st.content)
         .map(|(_, d)| d.rating as u32)
         .unwrap_or(0);
+    // Your feedback resistance takes its share after the deck's rating.
+    let feedback = st.character.resist(&st.content, game::Harm::Feedback);
     // The number lifts off you when the bolt lands, in its colour.
     let me = st.player.as_ref().map(|p| p.pos);
     let landed = st.tick + ROLL_TICKS;
@@ -2114,7 +2138,7 @@ fn hit(st: &mut AppState, b: BuildingId, i: usize) {
             ice_heat(st, b, 5);
         }
         IceGrade::Grey => {
-            let drain = 10u32.saturating_sub(armour).max(1);
+            let drain = game::resisted(10u32.saturating_sub(armour).max(1), feedback);
             st.character.focus = st.character.focus.saturating_sub(drain);
             let focus = st.character.focus;
             st.warn(format!("grey ICE hits · focus {focus}"));
@@ -2129,9 +2153,12 @@ fn hit(st: &mut AppState, b: BuildingId, i: usize) {
             // The deep end: half the damage through the jack, a failsafe that waits
             // for an eighth, and a short cooling after.
             let deep = st.character.flags(&st.content).contains("deep_end");
-            let mut damage = (6 + security.saturating_sub(230) as u32 / 5)
-                .saturating_sub(armour)
-                .max(1);
+            let mut damage = game::resisted(
+                (6 + security.saturating_sub(230) as u32 / 5)
+                    .saturating_sub(armour)
+                    .max(1),
+                feedback,
+            );
             if deep {
                 damage = (damage / 2).max(1);
             }
@@ -2571,6 +2598,95 @@ mod tests {
             "{:?}",
             ice_lines(&st, b, |_| true)
         );
+    }
+
+    #[test]
+    fn feedback_cuts_ice() {
+        let mut st = net_lot();
+        let b = BuildingId(0);
+        st.character
+            .chrome
+            .insert(game::Site::Neural, ItemId::new("feedback_fuse"));
+        assert_eq!(st.character.resist(&st.content, game::Harm::Feedback), 25);
+        let armour = st.character.deck(&st.content).map(|(_, d)| d.rating as u32);
+        assert_eq!(armour, Some(1), "the deck's rating comes off first");
+        let set = |st: &mut AppState, grade: IceGrade| {
+            let k = st.constructs.get_mut(b).unwrap();
+            k.security = 255;
+            k.guards[0].grade = grade;
+        };
+        // Black: 6 + (255 − 230) / 5 = 11, less the rating 1, then FBK 25: 8.
+        set(&mut st, IceGrade::Black);
+        let hp = st.character.hp;
+        hit(&mut st, b, 0);
+        assert_eq!(hp - st.character.hp, game::resisted(10, 25));
+        assert_eq!(game::resisted(10, 25), 8);
+        assert!(logged(&st, &format!("black ICE hits · hp {}", hp - 8)));
+        // The deep end halves what the fuse let through: 4.
+        st.character
+            .talents
+            .insert(game::TalentId::new("deep_end"), 1);
+        let hp = st.character.hp;
+        hit(&mut st, b, 0);
+        assert_eq!(hp - st.character.hp, 4);
+        // Grey: 10 less the rating, then FBK 25: 9 drains 7.
+        set(&mut st, IceGrade::Grey);
+        let focus = st.character.focus;
+        hit(&mut st, b, 0);
+        assert_eq!(focus - st.character.focus, game::resisted(9, 25));
+        assert_eq!(game::resisted(9, 25), 7);
+        // White: the heat is the heat.
+        set(&mut st, IceGrade::White);
+        let heat = st.net.traces.get(&b).map_or(0, |t| t.heat);
+        hit(&mut st, b, 0);
+        assert_eq!(st.net.traces[&b].heat, heat + 5);
+    }
+
+    #[test]
+    fn move_reads_chrome() {
+        use game::Site;
+        let fit = |st: &mut AppState, site: Site, id: &str| {
+            st.character.chrome.insert(site, ItemId::new(id));
+        };
+        // The spine: five tiles a fight's turn on foot.
+        let mut st = crate::foes::testutil::lot(Pos::new(14, 8));
+        fit(&mut st, Site::Spine, "redline_spine");
+        assert_eq!(you_move(&st, STREET), 5);
+        engage(&mut st, STREET, true);
+        let e = st.net.engaged.as_ref().unwrap();
+        assert_eq!((e.actor(), e.moves), (Actor::You, 5));
+        assert_eq!(aim_cap(&st), 5);
+        assert_eq!(
+            turn_view(&st).unwrap().yours,
+            Some((5, 5, BASE_AP, BASE_AP, false))
+        );
+        // The next turn of yours opens with five again (the goon down, it comes
+        // straight back).
+        st.foes[0].down = true;
+        st.net.engaged.as_mut().unwrap().moves = 0;
+        end_turn(&mut st);
+        let e = st.net.engaged.as_ref().unwrap();
+        assert_eq!((e.actor(), e.round, e.moves), (Actor::You, 2, 5));
+        // Redline's refill fills to five.
+        fit(&mut st, Site::Organs, "adrenal_pump");
+        st.net.engaged.as_mut().unwrap().moves = 0;
+        crate::casts::boost(&mut st, &game::AbilityId::new("redline")).unwrap();
+        assert_eq!(st.net.engaged.as_ref().unwrap().moves, 5);
+        // The plating alone: three.
+        let mut st = crate::foes::testutil::lot(Pos::new(14, 8));
+        fit(&mut st, Site::Skin, "ceramic_plating");
+        engage(&mut st, STREET, true);
+        assert_eq!(st.net.engaged.as_ref().unwrap().moves, 3);
+        // In a construct your avatar walks the base, spine or not.
+        let mut st = net_lot();
+        let b = BuildingId(0);
+        fit(&mut st, Site::Spine, "redline_spine");
+        assert_eq!(you_move(&st, Place::Construct(b)), BASE_MOVE);
+        engage(&mut st, Place::Construct(b), true);
+        let e = st.net.engaged.as_ref().unwrap();
+        assert_eq!((e.actor(), e.moves), (Actor::You, BASE_MOVE));
+        assert_eq!(BASE_MOVE, 4);
+        assert_eq!(turn_view(&st).unwrap().yours.map(|y| y.1), Some(BASE_MOVE));
     }
 
     #[test]

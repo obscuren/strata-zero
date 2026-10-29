@@ -427,9 +427,18 @@ pub fn fire_at_you(st: &mut AppState, foe: usize) {
     };
     let dist = from.chebyshev(me);
     let chance = game::hit_chance(reflex, true, dist, w.range);
-    let mut rounds = Vec::new();
+    let turn = game::turn_chance(st.character.armor(&st.content));
+    let damage = resisted_u8(
+        w.damage,
+        st.character.resist(&st.content, game::Harm::Kinetic),
+    );
+    let mut words = Vec::new();
+    let mut landed = false;
     for k in 0..w.rounds as usize {
         let hit = game::round_hits(roll(st), chance);
+        // The armour's own roll: a turned round sparks off you as a miss would.
+        let turned = hit && turn > 0 && roll(st) as u32 <= turn;
+        let wounds = hit && !turned;
         let impact = if hit {
             me
         } else {
@@ -438,8 +447,8 @@ pub fn fire_at_you(st: &mut AppState, foe: usize) {
                 None => me,
             }
         };
-        if hit {
-            wound_you(st, &format!("a {name} on the street"), w.damage);
+        if wounds {
+            wound_you(st, &format!("a {name} on the street"), damage);
         }
         play_round(
             st,
@@ -448,24 +457,32 @@ pub fn fire_at_you(st: &mut AppState, foe: usize) {
             Round {
                 from,
                 impact,
-                hit,
-                damage: w.damage,
+                hit: wounds,
+                damage,
                 k,
                 tint: None,
             },
         );
-        rounds.push(hit.then_some(w.damage));
+        landed |= wounds;
+        words.push(match (hit, turned) {
+            (true, false) => damage.to_string(),
+            (true, true) => "turned".to_string(),
+            (false, _) => "miss".to_string(),
+        });
     }
-    let line = if rounds.iter().any(Option::is_some) {
-        format!(
-            "{name} fires · {} · hp {}",
-            outcomes(&rounds),
-            st.character.hp
-        )
+    let words = words.join(" · ");
+    let line = if landed {
+        format!("{name} fires · {words} · hp {}", st.character.hp)
     } else {
-        format!("{name} fires · {}", outcomes(&rounds))
+        format!("{name} fires · {words}")
     };
     st.warn(line);
+}
+
+/// `game::resisted` on a harm held as a byte: a resistance below zero can double
+/// it, and it stops at the top.
+pub(crate) fn resisted_u8(amount: u8, resist: i32) -> u8 {
+    u8::try_from(game::resisted(amount as u32, resist)).unwrap_or(u8::MAX)
 }
 
 /// Your chance with a strike ability at a foe, in percent: its stat and skill, the
@@ -1036,6 +1053,84 @@ mod tests {
         assert_eq!(st.character.hp, 0);
         assert_eq!(st.net.death.as_deref(), Some("a goon on the street"));
         assert!(st.net.engaged.is_none());
+    }
+
+    /// The ceramic plating made to do only `perks`, installed on your skin.
+    fn plated(st: &mut AppState, perks: Vec<game::Perk>) {
+        let plating = ItemId::new("ceramic_plating");
+        let item = st.content.items.iter_mut().find(|i| i.id == plating);
+        item.unwrap().perks = perks;
+        st.character.chrome.insert(game::Site::Skin, plating);
+    }
+
+    #[test]
+    fn armour_turns_rounds() {
+        assert_eq!(game::turn_chance(0), 0);
+        assert_eq!(game::turn_chance(3), 30);
+        assert_eq!(game::turn_chance(6), 60);
+        assert_eq!(game::turn_chance(9), 60, "never past 60");
+        assert_eq!(game::turn_chance(-2), 0);
+        let mut st = engaged(Pos::new(14, 8));
+        plated(&mut st, vec![game::Perk::Armor(6)]);
+        assert_eq!(st.character.armor(&st.content), 6);
+        // A tick whose first roll lands the scrap nine's round at eight tiles and
+        // whose second, the armour's own, turns it at 60%.
+        let chance = game::hit_chance(st.foes[0].reflex, true, 8, 8);
+        let shots = st.shots;
+        let roll_at = |tick: u64, n: u64| (hash64(tick, shots + n) % 100 + 1) as u32;
+        let tick = (500..)
+            .find(|t| roll_at(*t, 1) <= chance as u32 && roll_at(*t, 2) <= 60)
+            .unwrap();
+        st.tick = tick;
+        let hp = st.character.hp;
+        fire_at_you(&mut st, 0);
+        assert_eq!(st.character.hp, hp, "turned: nothing gets through");
+        assert_eq!(
+            st.log.latest().map(|m| m.text.as_str()),
+            Some("goon fires · turned")
+        );
+        let me = Pos::new(6, 8);
+        let spark = st.fx.iter().find(|i| matches!(i.fx, Fx::Spark));
+        assert_eq!(spark.map(|i| i.targets[0]), Some(me), "it sparks off you");
+        assert!(
+            !st.fx
+                .iter()
+                .any(|i| matches!(i.fx, Fx::Chips | Fx::Number { .. })),
+            "no wound drawn"
+        );
+        // Bare, the same tick wounds.
+        st.character.chrome.remove(&game::Site::Skin);
+        assert_eq!(st.character.armor(&st.content), 0);
+        st.shots = shots;
+        st.fx.clear();
+        fire_at_you(&mut st, 0);
+        assert_eq!(st.character.hp, hp - 5);
+        assert!(logged(&st, &format!("goon fires · 5 · hp {}", hp - 5)));
+    }
+
+    #[test]
+    fn kinetic_resist_cuts_rounds() {
+        let mut st = engaged(Pos::new(14, 8));
+        plated(&mut st, vec![game::Perk::Resist(game::Harm::Kinetic, 50)]);
+        assert_eq!(st.character.resist(&st.content, game::Harm::Kinetic), 50);
+        // The goon with a Ratchet: three rounds of 4, each halved.
+        st.foes[0].weapon = Some(ItemId::new("ratchet_smg"));
+        st.force_hit = Some(true);
+        let hp = st.character.hp;
+        fire_at_you(&mut st, 0);
+        assert_eq!(st.character.hp, hp - 6);
+        assert!(
+            logged(&st, &format!("goon fires · 2 · 2 · 2 · hp {}", hp - 6)),
+            "{:?}",
+            st.log.latest()
+        );
+        let labels: Vec<&str> = st
+            .fx
+            .iter()
+            .filter(|i| matches!(i.fx, Fx::Number { .. }))
+            .map(|i| i.label.as_str())
+            .collect();
+        assert_eq!(labels, vec!["-2", "-2", "-2"]);
     }
 
     #[test]
