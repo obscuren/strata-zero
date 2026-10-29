@@ -217,11 +217,17 @@ impl<'a> Builder<'a> {
             } else {
                 (exit_tile(self.plan, door), outward(fp, door))
             };
-            // A clinic's grid is not its footprint: two doors may map to one tile, or a
-            // doorstep onto the chair; such a door takes the nearest free tile instead.
-            let at = match self.clinic_marks() {
-                Some(keep) if used.contains(&at) || keep.contains(&self.inward(at)) => {
-                    match self.free_rim(at, &used, &keep) {
+            // A clinic's grid is not its footprint: a door other than the front door may
+            // map onto another's tile or step into the wrong room; it takes the nearest
+            // frame tile that steps into the right one instead.
+            let at = match (self.plan.clinic, self.clinic_doorsteps()) {
+                (Some(c), Some(ok))
+                    if door != c.door
+                        && (at == c.entrance
+                            || used.contains(&at)
+                            || !ok.contains(&self.inward(at))) =>
+                {
+                    match self.free_rim(at, &used, &ok, c.entrance) {
                         Some(p) => p,
                         None => continue,
                     }
@@ -262,24 +268,29 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// On a clinic floor, the tiles a doorstep must not take: the inner walls and doors,
-    /// the chair, the doc's spot, the stairs and the locked rooms, turned.
-    fn clinic_marks(&self) -> Option<HashSet<Pos>> {
+    /// On a clinic floor, where a door other than the front door may step in: plain
+    /// floor, never in a locked room, and on the street floor only in the front room, so
+    /// no street door opens on the surgery. Turned.
+    fn clinic_doorsteps(&self) -> Option<HashSet<Pos>> {
         let c = self.plan.clinic?;
         let rows = clinics::grid(c.front, self.level);
         let (w, h) = clinics::dims(rows);
         let turn = |p: Pos| crate::interior::plan::turn_pos(p, w, h, c.turn);
-        let mut keep: HashSet<Pos> = clinics::locked_cells(rows).into_iter().map(turn).collect();
+        let locked = clinics::locked_cells(rows);
+        let front = (self.level >= 0).then(|| clinics::front_cells(rows));
+        let mut ok = HashSet::new();
         for (j, row) in rows.iter().enumerate() {
             for (i, mark) in row.bytes().enumerate() {
-                let (i, j) = (i as i32, j as i32);
-                let inner_wall = i > 0 && j > 0 && i < w - 1 && j < h - 1 && b"#+%".contains(&mark);
-                if inner_wall || matches!(mark, b'X' | b'd' | b'v' | b'^') {
-                    keep.insert(turn(Pos::new(i, j)));
+                let p = Pos::new(i as i32, j as i32);
+                if mark == b'.'
+                    && !locked.contains(&p)
+                    && front.as_ref().is_none_or(|f| f.contains(&p))
+                {
+                    ok.insert(turn(p));
                 }
             }
         }
-        Some(keep)
+        Some(ok)
     }
 
     /// The tile inside a frame tile.
@@ -298,14 +309,20 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// The frame tile nearest `from` that no exit has, off the corners, whose doorstep
-    /// keeps clear of `keep`.
-    fn free_rim(&self, from: Pos, used: &HashSet<Pos>, keep: &HashSet<Pos>) -> Option<Pos> {
+    /// The frame tile nearest `from`, off the corners, that no exit has and that isn't
+    /// the front door's, whose doorstep is one of `ok`.
+    fn free_rim(
+        &self,
+        from: Pos,
+        used: &HashSet<Pos>,
+        ok: &HashSet<Pos>,
+        entrance: Pos,
+    ) -> Option<Pos> {
         let frame = self.frame();
         frame
             .border()
-            .filter(|p| !is_corner(frame, *p))
-            .filter(|p| !used.contains(p) && !keep.contains(&self.inward(*p)))
+            .filter(|p| !is_corner(frame, *p) && *p != entrance)
+            .filter(|p| !used.contains(p) && ok.contains(&self.inward(*p)))
             .min_by_key(|p| (p.manhattan(from), p.y, p.x))
     }
 

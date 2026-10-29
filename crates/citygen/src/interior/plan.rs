@@ -112,15 +112,17 @@ pub fn turn_pos(p: Pos, w: i32, h: i32, t: Turn) -> Pos {
     q
 }
 
-/// A clinic's plan: the front, the turn that faces its street side to the main door
-/// (`fp`'s first Street portal), mirrored on the seed.
+/// A clinic's plan: the front, the turn that faces its street side to the storefront
+/// door, mirrored on the seed.
 fn clinic_plan(city: &City, id: BuildingId, fp: Rect) -> Option<ClinicPlan> {
     let front = clinic_front(city, id)?;
-    let door = city
-        .portals(id)
-        .into_iter()
-        .find(|(k, _)| *k == StratumKind::Street)
-        .map(|(_, p)| p)?;
+    // The storefront: the door the city dresses as the main one, else the first.
+    let door = crate::generate::exterior::main_door(city, city.building(id)).or_else(|| {
+        city.portals(id)
+            .into_iter()
+            .find(|(k, _)| *k == StratumKind::Street)
+            .map(|(_, p)| p)
+    })?;
     let quarters = match super::layouts::edge(fp, door) {
         3 => 0,
         0 => 1,

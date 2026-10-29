@@ -868,6 +868,23 @@ mod tests {
                             f.rooms.iter().any(|r| r.kind == RoomKind::Waiting),
                             "{what}"
                         );
+                        // A back door steps into the front room, never the surgery.
+                        let surgery = f.rooms.iter().find(|r| r.kind == RoomKind::Surgery);
+                        for e in &f.exits {
+                            let step = f.doorstep(e);
+                            assert!(
+                                surgery.is_none_or(|r| !r.rect.contains(step)),
+                                "{what}: {:?} opens on the surgery",
+                                e.door
+                            );
+                            assert!(
+                                f.rooms
+                                    .iter()
+                                    .any(|r| r.kind == RoomKind::Waiting && r.rect.contains(step)),
+                                "{what}: {:?} steps in outside the front room",
+                                e.door
+                            );
+                        }
                     }
                     if plan.floors() >= 2 {
                         assert_eq!(f.tiles[plan.stair].terrain, Terrain::Stair, "{what}");

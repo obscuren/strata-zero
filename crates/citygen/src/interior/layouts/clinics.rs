@@ -173,6 +173,27 @@ pub(crate) fn locked_cells(grid: &[&str]) -> HashSet<Pos> {
     out
 }
 
+/// The tiles of a grid's front room, unturned: the region the front door steps into.
+pub(crate) fn front_cells(grid: &[&str]) -> HashSet<Pos> {
+    let (w, h) = dims(grid);
+    let at = |p: Pos| grid[p.y as usize].as_bytes()[p.x as usize];
+    let room =
+        |p: Pos| p.x > 0 && p.y > 0 && p.x < w - 1 && p.y < h - 1 && !b"#w+%E".contains(&at(p));
+    let Some(start) = find(grid, b'E').map(|e| e.offset(0, -1)) else {
+        return HashSet::new();
+    };
+    let mut seen = HashSet::from([start]);
+    let mut todo = vec![start];
+    while let Some(q) = todo.pop() {
+        for n in q.neighbors4() {
+            if room(n) && seen.insert(n) {
+                todo.push(n);
+            }
+        }
+    }
+    seen
+}
+
 fn furniture(mark: u8) -> Option<Furniture> {
     Some(match mark {
         b'X' => Furniture::Chair,
