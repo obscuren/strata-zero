@@ -23,6 +23,8 @@ pub struct Subject {
     pub dir: Option<Dir>,
     pub header: Option<Header>,
     pub subtitle: Option<String>,
+    /// A paragraph under the subtitle, word-wrapped: what someone says.
+    pub body: Vec<String>,
     /// Its verbs, Look not included: `window` puts Look first.
     pub choices: Vec<Choice>,
 }
@@ -40,6 +42,7 @@ impl Subject {
         let mut rows = vec![Choice::new('x', "Look", Pick::Look(self.pos))];
         rows.extend(self.choices.iter().cloned());
         Popup::about(self.header.clone(), self.subtitle.clone(), rows, tick)
+            .with_body(self.body.clone())
     }
 }
 
@@ -114,6 +117,7 @@ fn add(
         dir: Dir::ALL.into_iter().find(|d| here.pos.step(*d) == at),
         header: head,
         subtitle,
+        body: Vec::new(),
         choices: rows,
     });
 }
@@ -146,6 +150,7 @@ pub fn gather(
         dir: None,
         header: None,
         subtitle: None,
+        body: Vec::new(),
         choices: Vec::new(),
     };
     let mut letters = FREE_LETTERS.chars();
@@ -192,6 +197,21 @@ pub fn gather(
             else {
                 continue;
             };
+            // Someone standing in the doorway keeps their window; the door's hours go
+            // on it as a greyed row.
+            if let Some(s) = subs.iter_mut().find(|s| s.pos == d) {
+                s.choices.push(
+                    Choice {
+                        thing: Some((crate::clinic::name(st, b), AMBER)),
+                        ..Choice::disabled('i', "Door")
+                    }
+                    .tail(format!(
+                        " · CLOSED · opens {}",
+                        crate::clinic::hhmm(crate::clinic::hours(st).0)
+                    )),
+                );
+                continue;
+            }
             add(
                 &mut subs,
                 &mut here,
@@ -212,13 +232,10 @@ pub fn gather(
             .filter(|c| pos.neighbors4().any(|n| n == *c))
     {
         let doc = crate::clinic::doc_at_work(st, building);
-        let (subtitle, row) = match doc {
+        let (subtitle, said, row) = match doc {
             Some(id) => (
-                format!(
-                    "{} · “{}”",
-                    crate::clinic::doc_name(st, id),
-                    crate::clinic::doc_line(st, id)
-                ),
+                crate::clinic::doc_name(st, id),
+                vec![format!("“{}”", crate::clinic::doc_line(st, id))],
                 Choice::on(
                     'i',
                     "Interact",
@@ -229,6 +246,7 @@ pub fn gather(
             ),
             None => (
                 "the doc is out".to_string(),
+                Vec::new(),
                 Choice {
                     thing: Some(("Sit in the chair".to_string(), AMBER)),
                     ..Choice::disabled('i', "Interact")
@@ -244,6 +262,10 @@ pub fn gather(
             Some(subtitle),
             vec![row],
         );
+        // What the doc says, wrapped under their name.
+        if let Some(s) = subs.iter_mut().find(|s| s.pos == chair) {
+            s.body = said;
+        }
     }
 
     // A locked flat's door beside you: its keypad.
@@ -632,13 +654,18 @@ mod tests {
         assert_eq!(h.name, "Operating chair");
         assert_eq!(h.glyph.map(|g| g.0), Some('╦'));
         let sub = s.subtitle.as_deref().unwrap();
-        assert!(sub.starts_with("Doc ") && sub.contains('“'), "{sub}");
+        assert!(sub.starts_with("Doc ") && !sub.contains('-'), "{sub}");
+        assert!(
+            s.body[0].starts_with('“') && s.body[0].ends_with('”'),
+            "{:?}",
+            s.body
+        );
         let sit = s.choices.iter().find(|c| c.key == 'i').unwrap();
         assert!(sit.enabled);
         assert!(
             matches!(sit.pick, Pick::Chair { building, level: l } if building == b && l == level)
         );
-        let text = window_text(&st, &[s.clone()]);
+        let text = window_text(&st, std::slice::from_ref(s));
         assert!(text.contains("Interact: Sit in the chair"), "{text}");
         // The doc gone, the chair is just a chair.
         let doc = crate::clinic::doc_at_work(&st, b).unwrap();
@@ -654,8 +681,25 @@ mod tests {
     #[test]
     fn a_shut_door_says_when() {
         let (mut st, b, door, _) = crate::clinic::testutil::outside(crate::clinic::testutil::DAY);
+        // Somebody standing in the doorway keeps their window, with the door's hours on it.
+        let doc = st
+            .world
+            .as_ref()
+            .unwrap()
+            .people()
+            .iter()
+            .find(|p| p.profession == "ripperdoc" && p.work == sim::Work::Building(b))
+            .unwrap()
+            .id;
+        st.world.as_mut().unwrap().park(doc, door);
+        let subjects = gather(&st, &|_, _| None);
+        let s = subjects.iter().find(|s| s.pos == door).unwrap();
+        let row = s.choices.iter().find(|c| c.key == 'i').unwrap();
+        assert!(!row.enabled);
+        assert_eq!(row.tail, " · CLOSED · opens 18:00");
         // Nobody standing in the doorway: the door's window is its own.
         let world = st.world.as_mut().unwrap();
+        world.park(doc, Pos::new(0, 0));
         if let Some(id) = world.person_at(door) {
             world.park(id, Pos::new(0, 0));
         }

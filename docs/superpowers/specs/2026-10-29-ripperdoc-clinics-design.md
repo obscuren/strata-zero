@@ -275,7 +275,9 @@ ripperdoc profession's (`18:00` to `04:00`).
 - **Space beside a closed clinic's door** (on the city map, the door tile next to you)
   gives the door its window, like a flat's keypad: the header is the building's name
   with the door glyph `▯` in amber; the subtitle `CLOSED · opens 18:00 · closes 04:00`;
-  one row, `x Look`. An open clinic's door has no window: you walk in.
+  one row, `x Look`. An open clinic's door has no window: you walk in. When someone
+  stands in the doorway, their window keeps the door as a greyed row: `Door: Hot Pot Lou
+  · CLOSED · opens 18:00`.
 - **Inside at closing time** the doors still let you out. If the doc leaves while you
   are in the chair, the chair is over (below).
 
@@ -294,8 +296,9 @@ else in reach (`interact::gather`):
 └───────────────────────────────────────┘
 ```
 
-- The subtitle is `Doc {name} · “{line}”`, the line one of the doc's, picked as their
-  Talk line is.
+- The subtitle is `Doc {name}` (the person's first name, without the city's `-10`), and
+  their own line sits under it in quotes, word-wrapped (a long line doesn't fit beside
+  the name in a 60-column window).
 - `i Interact: Sit in the chair` (a new `Pick::Chair`): sets `AppState::chair` and
   replaces the window with the deck, opened on ATTRIBUTES with the ledger focused on its
   first chrome row. The doc's line goes to the log (`Doc Lou: “…”`).

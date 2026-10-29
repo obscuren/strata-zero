@@ -56,14 +56,20 @@ pub fn is_open(st: &AppState, b: BuildingId) -> bool {
     !is_clinic(st, b) || doc_at_work(st, b).is_some()
 }
 
-/// What the clinic calls its doc: "Doc" and their first name.
+/// What the clinic calls its doc: "Doc" and their first name, without the city's
+/// number on it (`Anouk-10` is Doc Anouk).
 pub fn doc_name(st: &AppState, id: PersonId) -> String {
     let name = st
         .world
         .as_ref()
         .and_then(|w| w.people().get(id.0 as usize))
         .map_or("", |p| p.name.as_str());
-    format!("Doc {}", name.split_whitespace().next().unwrap_or("Nobody"))
+    let first = name.split_whitespace().next().unwrap_or("Nobody");
+    let first = match first.rsplit_once('-') {
+        Some((stem, n)) if !stem.is_empty() && n.chars().all(|c| c.is_ascii_digit()) => stem,
+        _ => first,
+    };
+    format!("Doc {first}")
 }
 
 /// What the doc says: their own line.
