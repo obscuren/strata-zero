@@ -118,6 +118,9 @@ pub struct Content {
     /// Files that land on a host's disk when its theme and building kind match.
     #[serde(default)]
     pub lore: Vec<Lore>,
+    /// What a ripperdoc charges, in percent of a piece's value.
+    #[serde(default)]
+    pub surgery: crate::surgery::Surgery,
     /// Every skill's card art, from its own file rather than this one.
     #[serde(skip)]
     pub skill_art: BTreeMap<SkillId, SkillArt>,
