@@ -1283,6 +1283,9 @@ impl Deck {
         if self.tab == Tab::Kit {
             self.kit.reselect(st);
         }
+        if self.tab == Tab::Stats {
+            self.sheet.reselect(st);
+        }
         for k in keys {
             // GEAR & INVENTORY takes the arrows, left and right too, `h j k l` and its
             // filter keys; space, `q` `e`, tab, the digits and esc go on to the deck's.
@@ -1292,9 +1295,13 @@ impl Deck {
                     continue;
                 }
             }
-            // STATS takes the arrows, `h j k l` and space; the rest are the deck's.
-            if self.tab == Tab::Stats && self.sheet.key(st, k.code) {
-                continue;
+            // STATS takes the arrows, `h j k l`, space, and esc while its picker is
+            // open; the rest are the deck's.
+            if self.tab == Tab::Stats {
+                self.sheet.reselect(st);
+                if self.sheet.key(st, k.code) {
+                    continue;
+                }
             }
             let rows = self.rows(st);
             if self.row >= rows.len() || rows.get(self.row).is_some_and(|r| r.detail.is_none()) {
@@ -1691,30 +1698,29 @@ impl Screen for Deck {
 
         status_strip(buf, st, inner.x + 1, strip_y, right);
 
-        // Hints.
-        let sheet_hints;
-        put(
-            buf,
-            inner.x + 1,
-            hint_y,
-            match self.tab {
-                Tab::Skills => "Q/E tabs · ↑↓ select · ←→ fold · space fold/buy · tab close",
-                Tab::Stats => {
-                    sheet_hints = self.sheet.hints(st);
-                    &sheet_hints
-                }
-                Tab::Talents => {
-                    "←→ along · ↑↓ tiers · Q/E tabs · 0-8 jump · space learn · tab close"
-                }
-                Tab::Kit => self.kit.hints(),
-                Tab::Workbench if st.character.has_workbench(&st.content) => {
-                    self.workbench.hints(st)
-                }
-                _ => "Q/E tabs · ↑↓ select · 0-8 jump · space act · tab close",
-            },
-            Style::default().fg(DIM),
-            right,
-        );
+        // Hints. The sheet's come with what the lock refuses dimmer.
+        let hint = match self.tab {
+            Tab::Stats => self.sheet.hint_line(st),
+            tab => Line::from(Span::styled(
+                match tab {
+                    Tab::Skills => "Q/E tabs · ↑↓ select · ←→ fold · space fold/buy · tab close",
+                    Tab::Talents => {
+                        "←→ along · ↑↓ tiers · Q/E tabs · 0-8 jump · space learn · tab close"
+                    }
+                    Tab::Kit => self.kit.hints(),
+                    Tab::Workbench if st.character.has_workbench(&st.content) => {
+                        self.workbench.hints(st)
+                    }
+                    _ => "Q/E tabs · ↑↓ select · 0-8 jump · space act · tab close",
+                },
+                Style::default().fg(DIM),
+            )),
+        };
+        let mut x = inner.x + 1;
+        for span in &hint.spans {
+            put(buf, x, hint_y, &span.content, span.style, right);
+            x = x.saturating_add(span.width() as u16);
+        }
 
         // Signal jitter: a three-tick burst over one row every JITTER_PERIOD ticks.
         if tick % JITTER_PERIOD < 3 {

@@ -1,6 +1,10 @@
 //! STATS, the character sheet: on the left the stats you buy, the secondary numbers
 //! gear and chrome move and the resistances, as rack tiles with a readout of the one
-//! selected; on the right the ledger of the chrome in you.
+//! selected; on the right the ledger of the chrome in you (`ledger`).
+
+pub mod ledger;
+
+pub use ledger::LedgerRow;
 
 use crate::actions::{perform, report};
 use crate::app::AppState;
@@ -474,8 +478,9 @@ pub struct SheetState {
     pub pane: SheetPane,
     /// The left pane's tile, an index into `Num::ALL`.
     pub tile: usize,
-    /// The ledger's row.
-    pub row: usize,
+    /// The ledger's row: a site or a socket, kept as itself so it stays put when
+    /// the rows above it change.
+    pub row: LedgerRow,
     /// The picker's pick, while it is open.
     pub picker: Option<usize>,
 }
@@ -484,6 +489,8 @@ pub struct Sheet {
     pub state: SheetState,
     /// Tick of the last change of tile: drives the readout's typewriter.
     pub changed: u64,
+    /// Tick of the last change of the ledger's card: its own typewriter.
+    pub card: u64,
 }
 
 impl Sheet {
@@ -491,6 +498,7 @@ impl Sheet {
         Sheet {
             state: SheetState::default(),
             changed: tick,
+            card: tick,
         }
     }
 
@@ -510,6 +518,7 @@ impl Sheet {
         self.state.picker = None;
         self.state.tile = self.tile();
         self.changed = tick;
+        self.card = tick;
     }
 
     /// The selected tile, always one that exists.
@@ -567,27 +576,15 @@ impl Sheet {
                     report(st, result);
                 }
             }
-            (SheetPane::Ledger, KeyCode::Left | KeyCode::Char('h')) => {
-                self.state.pane = SheetPane::Left;
-            }
-            (
-                SheetPane::Ledger,
-                KeyCode::Right
-                | KeyCode::Char('l')
-                | KeyCode::Up
-                | KeyCode::Char('k')
-                | KeyCode::Down
-                | KeyCode::Char('j')
-                | KeyCode::Char(' ')
-                | KeyCode::Enter,
-            ) => {}
+            (SheetPane::Ledger, _) => return self.ledger_key(st, code),
             _ => return false,
         }
         true
     }
 
     /// Draws the tab into `body`: the left pane's three blocks of tiles, the rule, the
-    /// selected tile's readout typing out under it, and the rule between the panes.
+    /// selected tile's readout typing out under it, the rule between the panes, and the
+    /// right pane's ledger and card.
     pub fn draw(&self, st: &AppState, body: Rect, buf: &mut Buffer) {
         let x0 = body.x + 1;
         let right = (x0 + PANE_W).min(body.right());
@@ -653,6 +650,8 @@ impl Sheet {
                 reveal(&lines, p, (st.tick / 4).is_multiple_of(2)),
             );
         }
+
+        self.draw_right(st, body, buf);
 
         let rule_x = body.x + RULE_X;
         if rule_x < body.right() {
@@ -736,14 +735,21 @@ impl Sheet {
         }
     }
 
-    pub fn hints(&self, _st: &AppState) -> String {
+    /// The hint row's text, by where the cursor is.
+    #[cfg(test)]
+    pub fn hints(&self, st: &AppState) -> String {
+        self.hint_line(st).to_string()
+    }
+
+    /// The hint row, by where the cursor is: dim, and what the lock refuses dimmer.
+    pub fn hint_line(&self, st: &AppState) -> Line<'static> {
         match self.state.pane {
-            SheetPane::Left => {
-                "←↑↓→ select · space buy a point · → over to the chrome · Q/E tabs · tab close"
-            }
-            SheetPane::Ledger => "← stats · Q/E tabs · tab close",
+            SheetPane::Left => Line::from(Span::styled(
+                "←↑↓→ select · space buy a point · → over to the chrome · Q/E tabs · tab close",
+                Style::default().fg(DIM),
+            )),
+            SheetPane::Ledger => self.ledger_hints(st),
         }
-        .to_string()
     }
 }
 

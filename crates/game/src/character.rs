@@ -9,6 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 /// The SP every level up brings.
 pub const SP_PER_LEVEL: u32 = 100;
 
+/// What every installed piece of chrome takes off EMP.
+pub const EMP_PER_PIECE: i32 = 2;
+
 /// A copy's id, unique for the character that made it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CopyId(pub u32);
@@ -707,7 +710,7 @@ impl Character {
             })
             .sum();
         let chrome = if h == Harm::Emp {
-            2 * self.pieces() as i32
+            EMP_PER_PIECE * self.pieces() as i32
         } else {
             0
         };
@@ -763,7 +766,7 @@ impl Character {
         out.push((Contrib::Talents, talents));
         if n == Num::Resist(Harm::Emp) {
             let pieces = self.pieces();
-            out.push((Contrib::Pieces(pieces), -2 * pieces as i32));
+            out.push((Contrib::Pieces(pieces), -EMP_PER_PIECE * pieces as i32));
         }
         out.retain(|(_, v)| *v != 0);
         out

@@ -10,7 +10,6 @@ pub mod dim;
 pub mod form;
 pub mod hardware;
 pub mod hud;
-#[allow(dead_code)] // the character sheet draws it, a later task
 pub mod implant_art;
 pub mod logo;
 pub mod looks;

@@ -382,6 +382,17 @@ pub enum SocketKind {
 }
 
 impl SocketKind {
+    /// The socket's own name, lower case: what the ledger and the card call it.
+    pub fn label(self) -> &'static str {
+        match self {
+            SocketKind::Deck => "deck",
+            SocketKind::Muzzle => "muzzle",
+            SocketKind::Rail => "rail",
+            SocketKind::Hand => "hand",
+            SocketKind::Forearm => "forearm",
+        }
+    }
+
     /// What a socket of this kind takes.
     pub fn takes(self) -> &'static str {
         match self {
@@ -1207,6 +1218,7 @@ mod tests {
         assert_eq!(Fits::Arm.label(), "arm");
         assert_eq!(Fits::Socket(SocketKind::Forearm).label(), "forearm socket");
         assert_eq!(SocketKind::Hand.takes(), "hand chrome");
+        assert_eq!(SocketKind::Forearm.label(), "forearm");
         assert_eq!(Slot::ALL.len(), 7);
     }
 }
