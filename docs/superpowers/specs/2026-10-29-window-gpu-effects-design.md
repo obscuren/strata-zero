@@ -20,8 +20,9 @@ glow or a CRT look is an easy visual win on a store page for a cyberpunk game.
   - **Off**: the frame as painted.
   - **Soft** (the default): a glow around bright colours and a gentle vignette.
   - **CRT**: a stronger glow, scanlines, a deeper vignette and a slight curve.
-- Settings shows a **Screen effects** row only when the game runs in a window; ←→, enter
-  or space cycles Off → Soft → CRT. Like the other settings it is not saved between runs.
+- Settings shows a **Screen effects** row only when the game draws in a window through
+  the GPU (not in a terminal, not in the softbuffer fallback); ←→, enter or space cycles
+  Off → Soft → CRT. Like the other settings it is not saved between runs.
   `STRATA_SCREEN_FX=off|soft|crt` picks the setting at launch.
 - Without a usable GPU the window falls back to the softbuffer path, with no effects.
 
@@ -63,6 +64,16 @@ that doesn't change isn't redrawn); HDR; saving settings; the Steamworks SDK its
    driver) still plays.
 6. A `bytemuck` dependency (already in the tree through wgpu) gives the frame's bytes to
    wgpu without unsafe code.
+
+## After review
+
+- A hidden window (minimised, covered, on another Space) presents nothing until winit
+  says it can be seen again, instead of retrying in a tight loop.
+- A lost surface is made again (three times in a row at most, then an error).
+- The device asks for the adapter's own limits, and a frame larger than the GPU's
+  texture limit keeps the last picture instead of panicking.
+- A failed `STRATA_WINDOW_SHOT` is a note on stderr, not the end of the game; captures
+  read 8-bit RGBA or BGRA targets only.
 
 ## Done when
 

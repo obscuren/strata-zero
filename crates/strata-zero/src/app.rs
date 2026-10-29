@@ -77,9 +77,9 @@ pub struct AppState {
     pub rain: bool,
     /// FPS readout in the status bar (Settings).
     pub show_fps: bool,
-    /// The game runs in a window of its own, not a terminal (Settings then offers the
-    /// screen effects).
-    pub windowed: bool,
+    /// The game draws in a window of its own through the GPU, so the screen effects
+    /// exist (Settings offers them).
+    pub effects: bool,
     /// The window's screen effects (Settings).
     pub screen_fx: ScreenFx,
     /// Dev: tint the walkers who can see you.
@@ -247,7 +247,7 @@ impl AppState {
             dev: DEV_DEFAULT,
             rain: true,
             show_fps: true,
-            windowed: false,
+            effects: false,
             screen_fx: ScreenFx::default(),
             show_eyes: false,
             show_light: false,

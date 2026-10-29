@@ -1,5 +1,5 @@
-//! Settings: dev mode, rain and the FPS counter, flipped in place, and in a window the
-//! screen effects, cycled.
+//! Settings: dev mode, rain and the FPS counter, flipped in place, and in a window that
+//! draws through the GPU the screen effects, cycled.
 
 use crate::app::{AppState, Screen, ScreenCmd, ScreenFx, TransitionKind};
 use crate::ui::panel::boxed;
@@ -24,9 +24,9 @@ impl Settings {
         Settings { selected: 0 }
     }
 
-    /// How many rows there are: the screen effects only in a window.
+    /// How many rows there are: the screen effects only where they can be drawn.
     fn rows(st: &AppState) -> usize {
-        if st.windowed {
+        if st.effects {
             ROWS.len()
         } else {
             ROWS.len() - 1
@@ -180,14 +180,14 @@ mod tests {
     }
 
     #[test]
-    fn screen_effects_row_only_in_a_window() {
+    fn screen_effects_row_only_where_they_draw() {
         let mut st = AppState::new();
         let s = Settings::new();
         let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
         t.draw(|f| s.draw(&st, f)).unwrap();
         assert!(!buffer_text(t.backend().buffer()).contains("Screen effects"));
         assert_eq!(Settings::rows(&st), 3);
-        st.windowed = true;
+        st.effects = true;
         t.draw(|f| s.draw(&st, f)).unwrap();
         let text = buffer_text(t.backend().buffer());
         assert!(
@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn screen_effects_cycle() {
         let mut st = AppState::new();
-        st.windowed = true;
+        st.effects = true;
         let mut s = Settings::new();
         s.update(&mut st, &[key(KeyCode::Up)]);
         assert_eq!(s.selected, 3, "up from the top wraps to the effects row");

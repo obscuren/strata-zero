@@ -4,7 +4,7 @@
 use super::backend::Damage;
 use super::raster::Frame;
 use crate::app::ScreenFx;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 /// How strong each effect is; zero is off.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -334,7 +334,14 @@ impl Gpu {
     /// The frame drawn through `fx` into a texture and read back: width, height and RGBA
     /// bytes, as the window would show them.
     pub fn capture(&self, fx: Params, scale: f32) -> Result<(u32, u32, Vec<u8>)> {
+        use wgpu::TextureFormat as F;
         let tex = self.tex.as_ref().context("nothing uploaded yet")?;
+        if !matches!(
+            self.format,
+            F::Bgra8Unorm | F::Bgra8UnormSrgb | F::Rgba8Unorm | F::Rgba8UnormSrgb
+        ) {
+            bail!("captures read 8-bit RGBA or BGRA, not {:?}", self.format);
+        }
         let (w, h) = (tex.w, tex.h);
         let target = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("capture"),

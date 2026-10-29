@@ -18,7 +18,7 @@ use backend::{Damage, PixelBackend};
 use crossterm::event::KeyEvent;
 use font::Fonts;
 use keys::{Input, Shortcut};
-use present::Presenter;
+use present::{Presenter, Shown};
 use ratatui::Terminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -44,7 +44,6 @@ const ZOOM_RANGE: (f32, f32) = (0.6, 2.5);
 /// Runs the game in a window until it quits. Started from inside an `.app`, the working
 /// folder becomes `app_support_dir()` first, so `cities/` is saved there.
 pub fn run(screen: Box<dyn Screen>, mut st: AppState) -> Result<()> {
-    st.windowed = true;
     if let Some(fx) = std::env::var("STRATA_SCREEN_FX")
         .ok()
         .and_then(|s| ScreenFx::parse(&s))
@@ -68,6 +67,7 @@ pub fn run(screen: Box<dyn Screen>, mut st: AppState) -> Result<()> {
         regridded: false,
         damage: None,
         shown_fx: None,
+        hidden: false,
         next: Instant::now(),
         frames: 0,
         shot: std::env::var_os("STRATA_WINDOW_SHOT").map(PathBuf::from),
@@ -115,6 +115,9 @@ struct App {
     damage: Option<Damage>,
     /// The screen effects last presented, to present again when Settings changes them.
     shown_fx: Option<ScreenFx>,
+    /// The window can't be seen: frames still run and gather damage, but nothing is
+    /// presented until it can be seen again.
+    hidden: bool,
     /// When the next frame is due.
     next: Instant,
     frames: u64,
@@ -139,6 +142,8 @@ impl App {
         let cell = fonts.metrics(TEXT_PX * window.scale_factor() as f32);
         fit(&window, cell, true);
         let presenter = Presenter::new(window.clone())?;
+        // Settings offers the screen effects only where they can be drawn.
+        self.runner.st.effects = presenter.has_effects();
         let px = self.text_px(&window);
         let inner = window.inner_size();
         let backend = PixelBackend::new(fonts, px, inner.width as usize, inner.height as usize);
@@ -171,7 +176,7 @@ impl App {
         let painted = live.term.backend_mut().take_damage();
         self.damage = Damage::join(self.damage, painted);
         let fx = self.runner.st.screen_fx;
-        if self.damage.is_some() || self.shown_fx != Some(fx) {
+        if !self.hidden && (self.damage.is_some() || self.shown_fx != Some(fx)) {
             live.window.request_redraw();
         }
         if self.frames == SHOT_FRAME
@@ -179,8 +184,14 @@ impl App {
         {
             let scale = live.window.scale_factor() as f32;
             let frame = live.term.backend().frame();
-            let (w, h, rgba) = live.presenter.capture(frame, fx, scale)?;
-            png::write_rgba(path, w, h, &rgba)?;
+            // A debugging aid: a failed shot is a note, not the end of the game.
+            let shot = live
+                .presenter
+                .capture(frame, fx, scale)
+                .and_then(|(w, h, rgba)| png::write_rgba(path, w, h, &rgba));
+            if let Err(e) = shot {
+                eprintln!("strata: STRATA_WINDOW_SHOT: {e:#}");
+            }
         }
         Ok(())
     }
@@ -195,10 +206,10 @@ impl App {
         let fx = self.runner.st.screen_fx;
         let scale = live.window.scale_factor() as f32;
         let frame = live.term.backend().frame();
-        if live.presenter.present(frame, damage, fx, scale)? {
-            self.shown_fx = Some(fx);
-        } else {
-            live.window.request_redraw();
+        match live.presenter.present(frame, damage, fx, scale)? {
+            Shown::Yes => self.shown_fx = Some(fx),
+            Shown::Retry => live.window.request_redraw(),
+            Shown::Hidden => self.hidden = true,
         }
         Ok(())
     }
@@ -294,6 +305,12 @@ impl ApplicationHandler for App {
                 self.rescale();
             }
             WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
+            WindowEvent::Occluded(hidden) => {
+                self.hidden = hidden;
+                if let Some(live) = self.live.as_ref().filter(|_| !hidden) {
+                    live.window.request_redraw();
+                }
+            }
             WindowEvent::KeyboardInput {
                 event,
                 is_synthetic: false,
