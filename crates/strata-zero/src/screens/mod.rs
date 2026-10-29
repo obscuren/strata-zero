@@ -58,4 +58,4 @@ pub(crate) mod testutil {
 }
 
 #[cfg(test)]
-mod shots;
+pub(crate) mod shots;
