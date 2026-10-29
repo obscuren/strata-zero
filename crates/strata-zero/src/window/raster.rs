@@ -3,7 +3,7 @@
 
 use super::font::{CellMetrics, Fonts};
 use super::shapes;
-use ratatui::buffer::{Buffer, Cell};
+use ratatui::buffer::Cell;
 use ratatui::style::{Color, Modifier};
 
 /// `Reset` text: the shot harness's foreground.
@@ -217,7 +217,8 @@ impl Canvas {
     }
 
     /// Paints all of `buf` into a frame sized to it, for a screenshot.
-    pub fn paint_buffer(&mut self, buf: &Buffer) {
+    #[cfg(test)]
+    pub fn paint_buffer(&mut self, buf: &ratatui::buffer::Buffer) {
         let CellMetrics { w, h, .. } = self.cell;
         self.resize(buf.area.width as usize * w, buf.area.height as usize * h);
         for y in 0..buf.area.height {

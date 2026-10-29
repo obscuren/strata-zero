@@ -15,6 +15,10 @@ use std::path::PathBuf;
 pub struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
+    /// Play in a window of its own instead of the terminal.
+    #[cfg(feature = "window")]
+    #[arg(long)]
+    window: bool,
 }
 
 #[derive(Subcommand)]
@@ -80,6 +84,10 @@ fn random_seed() -> u64 {
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
+        #[cfg(feature = "window")]
+        None if cli.window || crate::window::in_bundle() => {
+            crate::window::run(Box::new(crate::screens::initial()), AppState::new())
+        }
         None => app::run(Box::new(crate::screens::initial()), AppState::new()),
         Some(Cmd::Gen {
             seed,

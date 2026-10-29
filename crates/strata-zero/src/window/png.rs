@@ -1,13 +1,12 @@
 //! Frames as PNG files: the live window's (`STRATA_WINDOW_SHOT`) and the shot harness's.
 
-use super::font::Fonts;
-use super::raster::{Canvas, Frame};
+use super::raster::Frame;
 use anyhow::{Context, Result};
-use ratatui::buffer::Buffer;
 use std::io::BufWriter;
 use std::path::Path;
 
 /// Text size for screenshots: the window's 15 px at a Retina scale of 2.
+#[cfg(test)]
 pub const SHOT_PX: f32 = 30.0;
 
 /// `frame` as a PNG at `path`.
@@ -22,8 +21,9 @@ pub fn write_frame(path: &Path, frame: &Frame) -> Result<()> {
 }
 
 /// `buf` painted as the window would paint it, written to `<dir>/<name>.png`.
-pub fn write_buffer(dir: &str, name: &str, buf: &Buffer) -> Result<()> {
-    let mut canvas = Canvas::new(Fonts::load()?, SHOT_PX, 0, 0);
+#[cfg(test)]
+pub fn write_buffer(dir: &str, name: &str, buf: &ratatui::buffer::Buffer) -> Result<()> {
+    let mut canvas = super::raster::Canvas::new(super::font::Fonts::load()?, SHOT_PX, 0, 0);
     canvas.paint_buffer(buf);
     write_frame(&Path::new(dir).join(format!("{name}.png")), &canvas.frame)
 }
