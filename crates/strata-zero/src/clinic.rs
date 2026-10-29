@@ -303,4 +303,68 @@ mod tests {
         assert_eq!(hhmm(1080), "18:00");
         assert_eq!(hhmm(240), "04:00");
     }
+
+    /// The whole visit through the real screens, as the player plays it: Space by the
+    /// chair, sit, a piece in for the doc's fee, `x` twice to pull it, esc to get up.
+    #[test]
+    fn a_night_at_the_doc() {
+        use crate::app::Runner;
+        use crate::screens::explore::MapScreen;
+        use crate::screens::testutil::key;
+        use crossterm::event::KeyCode;
+        use game::{ItemId, Site};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (mut st, b, _, chair) = inside();
+        st.character.credits = 1000;
+        st.character
+            .give_item(&st.content, ItemId::new("neural_port"), 1);
+        let map = MapScreen::walking(&mut st);
+        let mut run = Runner::new(Box::new(map), st);
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let mut press = |run: &mut Runner, code: KeyCode| {
+            run.frame(&mut term, &[key(code)]).unwrap();
+            for _ in 0..40 {
+                run.frame(&mut term, &[]).unwrap();
+            }
+            crate::screens::testutil::buffer_text(term.backend().buffer())
+        };
+        // Space, and the chair's way if more than one thing is in reach.
+        let here = run.st.player.as_ref().unwrap().pos;
+        let way = match (chair.x - here.x, chair.y - here.y) {
+            (1, 0) => 'l',
+            (-1, 0) => 'h',
+            (0, 1) => 'j',
+            _ => 'k',
+        };
+        press(&mut run, KeyCode::Char(' '));
+        press(&mut run, KeyCode::Char(way));
+        let text = press(&mut run, KeyCode::Char('i'));
+        assert_eq!(run.st.chair.map(|c| c.building), Some(b));
+        assert!(text.contains("CHROME · CHROMING UP"), "{text}");
+        assert!(text.contains("esc get out of the chair"), "{text}");
+        // The neural port in, for ¤180.
+        press(&mut run, KeyCode::Char(' '));
+        let text = press(&mut run, KeyCode::Char(' '));
+        assert_eq!(
+            run.st.character.chrome_at(Site::Neural),
+            Some(&ItemId::new("neural_port")),
+            "{text}"
+        );
+        assert_eq!(run.st.character.credits, 820);
+        // x asks, x again pulls it out for ¤60.
+        let text = press(&mut run, KeyCode::Char('x'));
+        assert!(
+            text.contains("x again to pull Neural port for ¤60"),
+            "{text}"
+        );
+        press(&mut run, KeyCode::Char('x'));
+        assert_eq!(run.st.character.chrome_at(Site::Neural), None);
+        assert_eq!(run.st.character.credits, 760);
+        // Esc closes the deck and gets you up.
+        press(&mut run, KeyCode::Esc);
+        assert_eq!(run.depth(), 1);
+        assert_eq!(run.st.chair, None);
+    }
 }
