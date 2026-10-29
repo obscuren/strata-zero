@@ -136,7 +136,11 @@ mod tests {
     #[test]
     fn the_floor_is_ten() {
         let mut c = Content::load().unwrap();
-        let cheap = c.items.iter_mut().find(|i| i.id == id("smart_ink")).unwrap();
+        let cheap = c
+            .items
+            .iter_mut()
+            .find(|i| i.id == id("smart_ink"))
+            .unwrap();
         cheap.value = 50;
         assert_eq!(put_in_fee(&c, &id("smart_ink")), 10);
         assert_eq!(take_out_fee(&c, &id("smart_ink")), 10);
