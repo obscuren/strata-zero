@@ -9,6 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 /// The SP every level up brings.
 pub const SP_PER_LEVEL: u32 = 100;
 
+/// Every level that is a multiple of this brings an attribute point: 3, 6, 9 and on.
+pub const LEVELS_PER_ATTRIBUTE_POINT: u8 = 3;
+
 /// What every installed piece of chrome takes off EMP.
 pub const EMP_PER_PIECE: i32 = 2;
 
@@ -222,7 +225,8 @@ pub struct Character {
     pub inventory: Vec<Stack>,
     /// The tick each active ability last fired, for cooldowns.
     pub fired: BTreeMap<AbilityId, u64>,
-    /// Unspent creation points, spendable from the deck under the same rules.
+    /// Unspent attribute points: what creation left, and one every
+    /// `LEVELS_PER_ATTRIBUTE_POINT` levels; spent from the deck under creation's rules.
     pub attribute_points: u32,
     pub sp: u32,
     /// Unspent talent points: one at creation, one per level.
@@ -636,10 +640,13 @@ impl Character {
     }
 
     /// Adds points and levels up while the threshold is crossed; returns the levels
-    /// gained. Each level brings a talent point and `SP_PER_LEVEL` SP. Level 255
-    /// never gains another; the points still add.
+    /// gained. Each level brings a talent point and `SP_PER_LEVEL` SP, and each one
+    /// that is a multiple of `LEVELS_PER_ATTRIBUTE_POINT` an attribute point too,
+    /// counted for every level crossed at once. Level 255 never gains another; the
+    /// points still add.
     pub fn gain_xp(&mut self, points: u32) -> u8 {
         self.xp = self.xp.saturating_add(points);
+        let from = self.level;
         let mut gained = 0u8;
         while self.level < u8::MAX && self.xp >= Self::xp_to_next(self.level) {
             self.xp -= Self::xp_to_next(self.level);
@@ -648,7 +655,15 @@ impl Character {
         }
         self.talent_points += gained as u32;
         self.sp = self.sp.saturating_add(SP_PER_LEVEL * gained as u32);
+        self.attribute_points += Self::attribute_points_for(from, self.level);
         gained
+    }
+
+    /// The attribute points levelling from `from` to `to` brings: one for each level
+    /// past `from`, up to `to`, that is a multiple of `LEVELS_PER_ATTRIBUTE_POINT`.
+    pub fn attribute_points_for(from: u8, to: u8) -> u32 {
+        let n = LEVELS_PER_ATTRIBUTE_POINT;
+        u32::from((to / n).saturating_sub(from / n))
     }
 
     pub fn attribute(&self, c: &Content, attribute: Attribute) -> u8 {
@@ -1736,6 +1751,36 @@ mod tests {
             2
         );
         assert_eq!((ch.talent_points, ch.sp), (3, 300));
+    }
+
+    #[test]
+    fn every_third_level_brings_an_attribute_point() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        ch.attribute_points = 0;
+        assert_eq!(LEVELS_PER_ATTRIBUTE_POINT, 3);
+        // From level 1: 2 brings nothing, 3 a point.
+        assert_eq!(ch.gain_xp(Character::xp_to_next(1)), 1);
+        assert_eq!((ch.level, ch.attribute_points), (2, 0));
+        assert_eq!(ch.gain_xp(Character::xp_to_next(2)), 1);
+        assert_eq!((ch.level, ch.attribute_points), (3, 1));
+        // From 2 to 7 at once: 3 and 6 bring one each.
+        let mut ch = vex(&c);
+        ch.attribute_points = 0;
+        ch.level = 2;
+        let xp: u32 = (2..7).map(Character::xp_to_next).sum();
+        assert_eq!(ch.gain_xp(xp), 5);
+        assert_eq!((ch.level, ch.attribute_points), (7, 2));
+        assert_eq!(Character::attribute_points_for(2, 7), 2);
+        assert_eq!(Character::attribute_points_for(3, 5), 0);
+        assert_eq!(Character::attribute_points_for(5, 6), 1);
+        // 254 to 255 brings one; 255 never levels, and brings nothing more.
+        ch.level = 254;
+        ch.xp = 0;
+        assert_eq!(ch.gain_xp(Character::xp_to_next(254)), 1);
+        assert_eq!((ch.level, ch.attribute_points), (u8::MAX, 3));
+        assert_eq!(ch.gain_xp(u32::MAX), 0);
+        assert_eq!((ch.level, ch.attribute_points), (u8::MAX, 3));
     }
 
     #[test]

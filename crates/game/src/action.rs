@@ -54,7 +54,7 @@ pub enum Action {
     TakeCopy(CopyId),
     TakeAll,
     Fire(AbilityId),
-    /// Spends a creation point on an attribute.
+    /// Spends attribute points on an attribute, at creation's price.
     BuyAttribute(Attribute),
     /// Spends SP on a category; its free skills come along.
     Unlock(CategoryId),

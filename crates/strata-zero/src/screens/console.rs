@@ -101,9 +101,14 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             let gained = st.character.gain_xp(n);
             let level = st.character.level;
             for i in (0..gained).rev() {
+                let at = level - i;
+                let attribute = match game::Character::attribute_points_for(at - 1, at) {
+                    0 => String::new(),
+                    1 => " · an attribute point".to_string(),
+                    n => format!(" · {n} attribute points"),
+                };
                 st.story(format!(
-                    "level {} · a talent point · {} SP",
-                    level - i,
+                    "level {at} · a talent point · {} SP{attribute}",
                     game::SP_PER_LEVEL
                 ));
             }
@@ -997,6 +1002,26 @@ mod tests {
         assert_eq!(
             st.log.latest().map(|e| e.text.as_str()),
             Some("level 2 · a talent point · 100 SP")
+        );
+        // Every third level an attribute point as well; levels crossed at once each
+        // have their line.
+        let (level, points) = (st.character.level, st.character.attribute_points);
+        assert_eq!(level, 2);
+        let xp: u32 = (2..7).map(game::Character::xp_to_next).sum();
+        let before = st.log.len();
+        run(&mut st, at, &format!("xp {xp}")).unwrap();
+        assert_eq!(st.character.level, 7);
+        assert_eq!(st.character.attribute_points, points + 2);
+        let lines: Vec<String> = st.log.iter().skip(before).map(|e| e.text.clone()).collect();
+        assert_eq!(
+            lines,
+            [
+                "level 3 · a talent point · 100 SP · an attribute point",
+                "level 4 · a talent point · 100 SP",
+                "level 5 · a talent point · 100 SP",
+                "level 6 · a talent point · 100 SP · an attribute point",
+                "level 7 · a talent point · 100 SP",
+            ]
         );
     }
 
