@@ -1022,7 +1022,8 @@ impl World {
                 }
                 BuildingKind::NoodleBar => "working the stall".to_string(),
                 BuildingKind::Bar | BuildingKind::Club => "behind the bar".to_string(),
-                BuildingKind::Clinic => "in the clinic".to_string(),
+                // The doc keeps to the back; the street sees the front.
+                BuildingKind::Clinic => "in the back room".to_string(),
                 BuildingKind::Temple => "at the temple".to_string(),
                 _ => format!("working at {}", Self::place_name(city, *b)),
             },
@@ -1208,6 +1209,43 @@ mod tests {
 
     fn one(w: &World, f: impl Fn(&Person) -> bool) -> &Person {
         w.people().iter().find(|p| f(p)).expect("someone fits")
+    }
+
+    /// One doc to a clinic, in the back room by day, gone by night.
+    #[test]
+    fn a_clinic_has_one_doc_in_the_back_room_by_day() {
+        let c = city();
+        let mut w = world(&c);
+        let clinics: Vec<_> = c
+            .buildings
+            .iter()
+            .filter(|b| b.kind == BuildingKind::Clinic)
+            .map(|b| b.id)
+            .collect();
+        assert!(!clinics.is_empty(), "the test city has a clinic");
+        for b in &clinics {
+            let docs = w
+                .people()
+                .iter()
+                .filter(|p| p.profession == "ripperdoc" && p.work == Work::Building(*b))
+                .count();
+            assert_eq!(docs, 1, "{b:?}");
+        }
+        let id = one(&w, |p| p.profession == "ripperdoc").id;
+        let Work::Building(clinic) = w.people()[id.0 as usize].work else {
+            unreachable!()
+        };
+        run_to(&mut w, &c, tick_at(12 * 60, 1));
+        assert_eq!(
+            w.people()[id.0 as usize].whereabouts,
+            Whereabouts::Inside(clinic)
+        );
+        assert_eq!(w.card(id, &c).doing, "in the back room");
+        run_to(&mut w, &c, tick_at(23 * 60 + 30, 1));
+        assert_ne!(
+            w.people()[id.0 as usize].whereabouts,
+            Whereabouts::Inside(clinic)
+        );
     }
 
     #[test]

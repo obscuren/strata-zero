@@ -458,8 +458,12 @@ impl NetState {
 
 pub(crate) fn building_name(st: &AppState, b: BuildingId) -> String {
     let city = st.city.as_ref();
-    city.and_then(|c| c.building_opt(b))
-        .map(|x| x.name.clone().unwrap_or_else(|| x.kind.label().to_string()))
+    city.and_then(|c| c.building_opt(b).map(|x| (c, x)))
+        .map(|(c, x)| {
+            x.name
+                .clone()
+                .unwrap_or_else(|| citygen::kind_label(c, b).to_string())
+        })
         .unwrap_or_else(|| {
             if city.is_some_and(|c| c.is_lot()) {
                 "the lot".to_string()

@@ -44,7 +44,11 @@ impl Constructs {
 /// What the building is called in a log line.
 fn building_name(city: &City, b: BuildingId) -> String {
     city.building_opt(b)
-        .map(|x| x.name.clone().unwrap_or_else(|| x.kind.label().to_string()))
+        .map(|x| {
+            x.name
+                .clone()
+                .unwrap_or_else(|| citygen::kind_label(city, b).to_string())
+        })
         .unwrap_or_else(|| "the building".to_string())
 }
 

@@ -687,7 +687,11 @@ pub fn location(city: &City, interiors: &Interiors, place: Place, pos: Pos) -> S
         Place::Floor { building, level } => {
             let name = city
                 .building_opt(building)
-                .map(|b| b.name.clone().unwrap_or_else(|| b.kind.label().to_string()))
+                .map(|b| {
+                    b.name
+                        .clone()
+                        .unwrap_or_else(|| citygen::kind_label(city, b.id).to_string())
+                })
                 .unwrap_or_else(|| "inside".to_string());
             let _ = interiors;
             return format!("{name} · {}", FloorPlan::label(level));
@@ -695,7 +699,11 @@ pub fn location(city: &City, interiors: &Interiors, place: Place, pos: Pos) -> S
         Place::Construct(building) => {
             let name = city
                 .building_opt(building)
-                .map(|b| b.name.clone().unwrap_or_else(|| b.kind.label().to_string()))
+                .map(|b| {
+                    b.name
+                        .clone()
+                        .unwrap_or_else(|| citygen::kind_label(city, b.id).to_string())
+                })
                 .unwrap_or_else(|| "inside".to_string());
             return format!("{name} · construct");
         }
