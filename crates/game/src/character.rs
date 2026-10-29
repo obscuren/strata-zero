@@ -238,6 +238,26 @@ pub struct Character {
 }
 
 /// What chrome costs past the budget.
+/// What a piece of chrome takes of the load, with what is fitted in its copy; what is
+/// not chrome (hardware, gear) takes nothing. The one count of a piece's load: the
+/// install rule, `load_at` and the sheet's picker all use it.
+pub fn piece_load(c: &Content, item: &ItemId, copy: Option<&ItemCopy>) -> u32 {
+    let own = |id: &ItemId| {
+        c.item(id)
+            .and_then(|i| i.implant)
+            .map_or(0, |i| u32::from(i.load))
+    };
+    copy.iter()
+        .flat_map(|k| k.fitted.iter().flatten())
+        .map(|s| own(&s.item))
+        .fold(own(item), |a, b| a + b)
+}
+
+/// What one of a stack takes of the load, with what is fitted in it.
+pub fn stack_load(c: &Content, s: &Stack) -> u32 {
+    piece_load(c, &s.item, s.copy.as_ref())
+}
+
 pub(crate) fn over_budget(load: u32, max: u32) -> String {
     format!("too much chrome: load {load} of {max}")
 }
@@ -1167,15 +1187,8 @@ impl Character {
         if implant.fits != site.fits() {
             return Err(format!("`{}` doesn't fit {}", item.name, site.label()));
         }
-        let fitted: u32 = stack
-            .copy
-            .iter()
-            .flat_map(|k| k.fitted.iter().flatten())
-            .filter_map(|s| c.item(&s.item)?.implant)
-            .map(|i| i.load as u32)
-            .sum();
         let out = self.load_at(c, (site, None));
-        let after = self.chrome_load(c).saturating_sub(out) + implant.load as u32 + fitted;
+        let after = self.chrome_load(c).saturating_sub(out) + stack_load(c, stack);
         if after > self.load_max() {
             return Err(over_budget(after, self.load_max()));
         }
@@ -1185,28 +1198,14 @@ impl Character {
     /// What the piece at a site (`None`), or in a socket of it (`Some`), takes of the
     /// load, with what is fitted in it; an empty place takes nothing.
     pub fn load_at(&self, c: &Content, (site, socket): (Site, Option<usize>)) -> u32 {
-        let load = |id: &ItemId| {
-            c.item(id)
-                .and_then(|i| i.implant)
-                .map_or(0, |i| i.load as u32)
-        };
         match socket {
-            None => {
-                let Some(id) = self.chrome_at(site) else {
-                    return 0;
-                };
-                let fitted: u32 = self
-                    .chrome_copy(site)
-                    .iter()
-                    .flat_map(|k| k.fitted.iter().flatten())
-                    .map(|s| load(&s.item))
-                    .sum();
-                load(id) + fitted
-            }
+            None => self
+                .chrome_at(site)
+                .map_or(0, |id| piece_load(c, id, self.chrome_copy(site))),
             Some(n) => self
                 .chrome_copy(site)
                 .and_then(|k| k.fitted.get(n)?.as_ref())
-                .map_or(0, |s| load(&s.item)),
+                .map_or(0, |s| stack_load(c, s)),
         }
     }
 
@@ -2462,6 +2461,37 @@ mod tests {
         ch.chrome.remove(&Site::LeftArm);
         assert!(ch.chrome_copy(Site::LeftArm).is_none());
         assert_eq!((ch.pieces(), ch.resist(&c, Harm::Shock)), (1, 0));
+    }
+
+    #[test]
+    fn stack_load_is_the_piece_and_what_is_fitted_in_it() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        let (arm, hand) = (ItemId::new("piston_arm"), ItemId::new("arc_hand"));
+        let mut k = ch.new_copy(&c, &arm);
+        let hc = ch.new_copy(&c, &hand);
+        k.fitted[0] = Some(Stack {
+            item: hand.clone(),
+            qty: 1,
+            copy: Some(hc),
+        });
+        let limb = Stack {
+            item: arm.clone(),
+            qty: 1,
+            copy: Some(k.clone()),
+        };
+        assert_eq!(stack_load(&c, &limb), 4, "the arm's 3 and the hand's 1");
+        assert_eq!(stack_load(&c, &Stack::new(arm.clone(), 1)), 3);
+        assert_eq!(stack_load(&c, &Stack::new(ItemId::new("hushcan"), 1)), 0);
+        assert_eq!(stack_load(&c, &Stack::new(ItemId::new("hardhat"), 1)), 0);
+        // Installed, the same count: `load_at` and the total agree with it.
+        ch.install(Site::LeftArm, arm, Some(k));
+        assert_eq!(ch.load_at(&c, (Site::LeftArm, None)), 4);
+        assert_eq!(ch.load_at(&c, (Site::LeftArm, Some(0))), 1);
+        assert_eq!(ch.load_at(&c, (Site::LeftArm, Some(1))), 0);
+        assert_eq!(ch.load_at(&c, (Site::RightArm, None)), 0);
+        let total: u32 = Site::ALL.iter().map(|&s| ch.load_at(&c, (s, None))).sum();
+        assert_eq!(total, ch.chrome_load(&c));
     }
 
     #[test]

@@ -12,7 +12,8 @@ use crate::ui::hud::{AMBER, GREEN};
 use crate::ui::implant_art;
 use crossterm::event::KeyCode;
 use game::{
-    Action, Content, CopyId, EMP_PER_PIECE, Fits, Host, Item, ItemId, Perk, Site, SocketKind, Stack,
+    Action, Content, CopyId, EMP_PER_PIECE, Fits, Host, Item, ItemId, Perk, Site, SocketKind,
+    stack_load,
 };
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -66,7 +67,7 @@ impl LedgerRow {
 pub struct Pick {
     pub item: ItemId,
     pub copy: Option<CopyId>,
-    pub load: u8,
+    pub load: u32,
 }
 
 /// The ledger's rows: every site in `Site::ALL` order under its group's header, and
@@ -90,11 +91,19 @@ pub fn ledger_rows(st: &AppState) -> Vec<LedgerRow> {
 
 /// What in the pack fits `at`, a site or socket, empty or not, in pack order: a copy
 /// each, a stack without one once. A socket takes copies only, as `Fit` moves them.
+/// Another of the piece a site holds without a copy is that same piece: no swap.
 pub fn fitting(st: &AppState, at: (Site, Option<usize>)) -> Vec<Pick> {
     let (c, ch) = (&st.content, &st.character);
+    let same = match at {
+        (site, None) if ch.chrome_copy(site).is_none() => ch.chrome_at(site),
+        _ => None,
+    };
     let mut out: Vec<Pick> = Vec::new();
     for s in &ch.inventory {
         if s.qty == 0 || !ch.fits_at(c, &s.item, at) || (at.1.is_some() && s.copy.is_none()) {
+            continue;
+        }
+        if s.copy.is_none() && same == Some(&s.item) {
             continue;
         }
         if s.copy.is_none() && out.iter().any(|p| p.copy.is_none() && p.item == s.item) {
@@ -109,21 +118,11 @@ pub fn fitting(st: &AppState, at: (Site, Option<usize>)) -> Vec<Pick> {
     out
 }
 
-/// What one of a stack takes of the load, with what is fitted in it.
-fn stack_load(c: &Content, s: &Stack) -> u8 {
-    let load = |id: &ItemId| c.item(id).and_then(|i| i.implant).map_or(0, |i| i.load);
-    s.copy
-        .iter()
-        .flat_map(|k| k.fitted.iter().flatten())
-        .map(|f| load(&f.item))
-        .fold(load(&s.item), u8::saturating_add)
-}
-
 /// The load once `pick` is in at `at`: what the place holds leaves first, with what is
 /// fitted in it.
 fn load_after(st: &AppState, at: (Site, Option<usize>), pick: &Pick) -> u32 {
     let (c, ch) = (&st.content, &st.character);
-    ch.chrome_load(c).saturating_sub(ch.load_at(c, at)) + u32::from(pick.load)
+    ch.chrome_load(c).saturating_sub(ch.load_at(c, at)) + pick.load
 }
 
 /// The pieces at `at` that a pick swaps out: what the place holds, with what is fitted
@@ -259,8 +258,9 @@ impl Sheet {
         let v = self.view(st);
         if let Some(pick) = v.pick {
             match code {
-                // The picker works inside the place's card: moving the pick or closing
-                // it changes lines in place and never types the card out again.
+                // The picker works inside the place's card: moving the pick changes
+                // lines in place and never types the card out again. Closing it does
+                // only on a held place, whose own card comes back (esc, below).
                 KeyCode::Up | KeyCode::Char('k') => {
                     self.state.picker = Some(pick.saturating_sub(1))
                 }
@@ -375,8 +375,13 @@ impl Sheet {
         let v = self.view(st);
         let dim = Style::default().fg(DIM);
         if v.pick.is_some() {
+            // On a held place the pick swaps with what is there.
+            let space = match v.held {
+                Some(_) => "space swap",
+                None => "space install",
+            };
             return Line::from(Span::styled(
-                "↑↓ choose · space install · esc back · Q/E tabs · tab close",
+                format!("↑↓ choose · {space} · esc back · Q/E tabs · tab close"),
                 dim,
             ));
         }
@@ -1012,7 +1017,7 @@ mod tests {
     use crate::screens::testutil::key;
     use crate::ui::chrome::{BAR_BG, CYAN, DIM, FAINTER, MAGENTA, RULE, TEXT};
     use citygen::{GenParams, Generator, Place, Pos, SizePreset, StratumKind};
-    use game::{Action, Harm};
+    use game::{Action, Harm, Stack};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::style::Color;
@@ -1773,6 +1778,15 @@ mod tests {
         assert!(row.starts_with(picker), "{row}");
         let x = col_of(&screen(&d, &mut st, (100, 30)), 28, 2, "space install").unwrap();
         assert_eq!(screen(&d, &mut st, (100, 30))[(x, 28)].fg, DIM);
+        // On a place that holds a piece, space swaps, and the hint says so.
+        press(&mut d, &mut st, &[KeyCode::Esc]);
+        d.sheet.state.row = LedgerRow::Site(Site::LeftArm);
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        assert!(d.sheet.state.picker.is_some());
+        let swap = "↑↓ choose · space swap · esc back · Q/E tabs · tab close";
+        assert_eq!(d.sheet.hints(&st), swap);
+        let row = hint_row(&d, &mut st);
+        assert!(row.starts_with(swap), "{row}");
     }
 
     #[test]
@@ -1847,6 +1861,100 @@ mod tests {
         assert_eq!(d.sheet.state.picker, None);
         assert_eq!(d.sheet.state.row, LedgerRow::Site(Site::LeftArm));
         assert_eq!(st.character.chrome_load(&st.content), 18);
+    }
+
+    #[test]
+    fn the_same_piece_is_no_swap() {
+        // The Target lens at EYES, held without a copy: another one is the same piece.
+        let mut st = AppState::new();
+        loadout(&mut st);
+        give(&mut st, "target_lens");
+        let eyes = (Site::Eyes, None);
+        assert!(fitting(&st, eyes).is_empty(), "{:?}", fitting(&st, eyes));
+        let mut d = on_ledger(&mut st, LedgerRow::Site(Site::Eyes));
+        let before = st.character.clone();
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        assert_eq!(d.sheet.state.picker, None);
+        assert_eq!(st.character, before);
+        assert_eq!(last(&st), Some("nothing in your bag fits"));
+        // Other eyes still swap in.
+        give(&mut st, "nightglass_optics");
+        let picks: Vec<ItemId> = fitting(&st, eyes).into_iter().map(|p| p.item).collect();
+        assert_eq!(picks, [id("nightglass_optics")]);
+        // A limb is held per copy: another Piston arm is another arm, and swaps.
+        let other = give(&mut st, "piston_arm");
+        assert!(other.is_some());
+        let arms: Vec<Option<CopyId>> = fitting(&st, (Site::LeftArm, None))
+            .into_iter()
+            .map(|p| p.copy)
+            .collect();
+        assert_eq!(arms, [other]);
+    }
+
+    #[test]
+    fn the_picker_counts_load_as_the_rule_does() {
+        // A budget two short of the loadout's: some picks fit by what leaves, some not.
+        let mut st = AppState::new();
+        loadout(&mut st);
+        st.character.attributes.cool = 3;
+        for item in [
+            "grip_arm",
+            "wrecker_arm",
+            "ceramic_plating",
+            "grounding_weave",
+            "second_heart",
+            "filter_liver",
+            "secondhand_eyes",
+            "nightglass_optics",
+            "neural_port",
+            "limbic_damper",
+            "damper_cochlea",
+            "dog_legs",
+        ] {
+            give(&mut st, item);
+        }
+        let surgeon = give(&mut st, "surgeon_arm").unwrap();
+        let tools = st.character.new_copy(&st.content, &id("toolfingers"));
+        let k = st
+            .character
+            .inventory
+            .iter_mut()
+            .find(|s| s.copy_id() == Some(surgeon))
+            .and_then(|s| s.copy.as_mut())
+            .unwrap();
+        k.fitted[0] = Some(Stack {
+            item: id("toolfingers"),
+            qty: 1,
+            copy: Some(tools),
+        });
+        let max = st.character.load_max();
+        let mut seen = (0, 0);
+        for site in Site::ALL {
+            for pick in fitting(&st, (site, None)) {
+                let stack = st
+                    .character
+                    .inventory
+                    .iter()
+                    .find(|s| match pick.copy {
+                        Some(k) => s.copy_id() == Some(k),
+                        None => s.copy.is_none() && s.item == pick.item,
+                    })
+                    .unwrap();
+                let after = load_after(&st, (site, None), &pick);
+                let rule = st.character.can_install_stack(&st.content, stack, site);
+                let over = format!("too much chrome: load {after} of {max}");
+                match rule {
+                    Ok(()) => assert!(after <= max, "{site:?} {:?}", pick.item),
+                    Err(why) => assert_eq!(why, over, "{site:?} {:?}", pick.item),
+                }
+                if after > max {
+                    seen.1 += 1;
+                } else {
+                    seen.0 += 1;
+                }
+            }
+        }
+        assert!(seen.0 > 0 && seen.1 > 0, "fits and refusals both: {seen:?}");
     }
 
     #[test]
