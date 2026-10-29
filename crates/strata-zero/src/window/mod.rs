@@ -4,6 +4,7 @@
 
 pub mod backend;
 pub mod font;
+pub mod gpu;
 pub mod keys;
 pub mod png;
 pub mod raster;
