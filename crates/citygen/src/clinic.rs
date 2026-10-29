@@ -67,9 +67,7 @@ pub fn clinic_front(city: &City, id: BuildingId) -> Option<Front> {
 pub fn kind_label(city: &City, id: BuildingId) -> &'static str {
     match clinic_front(city, id) {
         Some(front) => front.label(),
-        None => city
-            .building_opt(id)
-            .map_or("building", |b| b.kind.label()),
+        None => city.building_opt(id).map_or("building", |b| b.kind.label()),
     }
 }
 
@@ -118,7 +116,11 @@ mod tests {
     #[test]
     fn the_front_is_stable() {
         let (a, b) = (medium(11), medium(11));
-        for x in a.buildings.iter().filter(|x| x.kind == BuildingKind::Clinic) {
+        for x in a
+            .buildings
+            .iter()
+            .filter(|x| x.kind == BuildingKind::Clinic)
+        {
             assert_eq!(clinic_front(&a, x.id), clinic_front(&a, x.id));
             assert_eq!(clinic_front(&a, x.id), clinic_front(&b, x.id));
         }
@@ -126,8 +128,9 @@ mod tests {
 
     #[test]
     fn fronts_cover_all_five() {
-        let seen: std::collections::HashSet<Front> =
-            (0..400).map(|i| front_for(8, BuildingId(i), false)).collect();
+        let seen: std::collections::HashSet<Front> = (0..400)
+            .map(|i| front_for(8, BuildingId(i), false))
+            .collect();
         assert_eq!(seen.len(), Front::ALL.len());
     }
 

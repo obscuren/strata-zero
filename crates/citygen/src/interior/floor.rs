@@ -152,6 +152,19 @@ impl Floor {
         self.rooms.iter().find(|r| r.door == Some(p))
     }
 
+    /// The operating chair on a ripperdoc's floor.
+    pub fn chair(&self) -> Option<Pos> {
+        self.tiles
+            .iter()
+            .find(|(_, t)| {
+                t.feature
+                    == Some(crate::tile::Feature::Furniture(
+                        crate::tile::Furniture::Chair,
+                    ))
+            })
+            .map(|(p, _)| p)
+    }
+
     pub fn station_at(&self, p: Pos) -> Option<&Station> {
         self.stations.iter().find(|s| s.pos == p)
     }

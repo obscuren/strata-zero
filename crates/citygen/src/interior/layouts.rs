@@ -13,6 +13,7 @@ use rand_chacha::ChaCha8Rng;
 use std::collections::HashSet;
 
 mod atrium;
+pub(super) mod clinics;
 mod home;
 
 pub(super) struct Builder<'a> {
@@ -35,7 +36,7 @@ pub(super) struct Builder<'a> {
 }
 
 /// Which edge of a rect a border tile sits on.
-fn edge(r: Rect, p: Pos) -> u8 {
+pub(super) fn edge(r: Rect, p: Pos) -> u8 {
     if p.x == r.x {
         0
     } else if p.x == r.right() - 1 {
@@ -85,6 +86,12 @@ pub(super) fn outward(r: Rect, p: Pos) -> Pos {
 
 /// Where a city-map door on the footprint border lands on the floor's border.
 pub(super) fn exit_tile(plan: &FloorPlan, door: Pos) -> Pos {
+    // A clinic's main door is its grid's front door.
+    if let Some(c) = plan.clinic
+        && c.door == door
+    {
+        return c.entrance;
+    }
     let fp = plan.footprint;
     let (w, h) = (plan.size.w as i32, plan.size.h as i32);
     let sx = ((door.x - fp.x) * SCALE + 1).clamp(1, w - 2);
@@ -210,6 +217,17 @@ impl<'a> Builder<'a> {
             } else {
                 (exit_tile(self.plan, door), outward(fp, door))
             };
+            // A clinic's grid is not its footprint: two doors may map to one tile, or a
+            // doorstep onto the chair; such a door takes the nearest free tile instead.
+            let at = match self.clinic_marks() {
+                Some(keep) if used.contains(&at) || keep.contains(&self.inward(at)) => {
+                    match self.free_rim(at, &used, &keep) {
+                        Some(p) => p,
+                        None => continue,
+                    }
+                }
+                _ => at,
+            };
             if !used.insert(at) {
                 continue;
             }
@@ -242,6 +260,53 @@ impl<'a> Builder<'a> {
             self.doorsteps.push(step);
             self.exits.push(exit);
         }
+    }
+
+    /// On a clinic floor, the tiles a doorstep must not take: the inner walls and doors,
+    /// the chair, the doc's spot, the stairs and the locked rooms, turned.
+    fn clinic_marks(&self) -> Option<HashSet<Pos>> {
+        let c = self.plan.clinic?;
+        let rows = clinics::grid(c.front, self.level);
+        let (w, h) = clinics::dims(rows);
+        let turn = |p: Pos| crate::interior::plan::turn_pos(p, w, h, c.turn);
+        let mut keep: HashSet<Pos> = clinics::locked_cells(rows).into_iter().map(turn).collect();
+        for (j, row) in rows.iter().enumerate() {
+            for (i, mark) in row.bytes().enumerate() {
+                let (i, j) = (i as i32, j as i32);
+                let inner_wall = i > 0 && j > 0 && i < w - 1 && j < h - 1 && b"#+%".contains(&mark);
+                if inner_wall || matches!(mark, b'X' | b'd' | b'v' | b'^') {
+                    keep.insert(turn(Pos::new(i, j)));
+                }
+            }
+        }
+        Some(keep)
+    }
+
+    /// The tile inside a frame tile.
+    fn inward(&self, p: Pos) -> Pos {
+        let (w, h) = (self.w(), self.h());
+        if p.x == 0 {
+            p.offset(1, 0)
+        } else if p.x == w - 1 {
+            p.offset(-1, 0)
+        } else if p.y == 0 {
+            p.offset(0, 1)
+        } else if p.y == h - 1 {
+            p.offset(0, -1)
+        } else {
+            p
+        }
+    }
+
+    /// The frame tile nearest `from` that no exit has, off the corners, whose doorstep
+    /// keeps clear of `keep`.
+    fn free_rim(&self, from: Pos, used: &HashSet<Pos>, keep: &HashSet<Pos>) -> Option<Pos> {
+        let frame = self.frame();
+        frame
+            .border()
+            .filter(|p| !is_corner(frame, *p))
+            .filter(|p| !used.contains(p) && !keep.contains(&self.inward(*p)))
+            .min_by_key(|p| (p.manhattan(from), p.y, p.x))
     }
 
     /// The lift bank and the stairwell, where the plan puts them on every floor.
@@ -902,86 +967,6 @@ impl<'a> Builder<'a> {
         self.tables();
     }
 
-    /// A waiting room by the door, the surgery beyond a wall, a locked back room.
-    fn clinic(&mut self) {
-        let (w, h) = (self.w(), self.h());
-        let edge = self.door_edge();
-        // The dividing wall runs parallel to the door's wall, halfway in.
-        let (waiting, surgery, wall_from, wall_to, door) = match edge {
-            0 => (
-                Rect::new(1, 1, w / 2 - 1, h - 2),
-                Rect::new(w / 2 + 1, 1, w - 2 - w / 2, h - 2),
-                Pos::new(w / 2, 1),
-                Pos::new(w / 2, h - 2),
-                Pos::new(w / 2, h / 2),
-            ),
-            1 => (
-                Rect::new(w / 2 + 1, 1, w - 2 - w / 2, h - 2),
-                Rect::new(1, 1, w / 2 - 1, h - 2),
-                Pos::new(w / 2, 1),
-                Pos::new(w / 2, h - 2),
-                Pos::new(w / 2, h / 2),
-            ),
-            2 => (
-                Rect::new(1, 1, w - 2, h / 2 - 1),
-                Rect::new(1, h / 2 + 1, w - 2, h - 2 - h / 2),
-                Pos::new(1, h / 2),
-                Pos::new(w - 2, h / 2),
-                Pos::new(w / 2 + 2, h / 2),
-            ),
-            _ => (
-                Rect::new(1, h / 2 + 1, w - 2, h - 2 - h / 2),
-                Rect::new(1, 1, w - 2, h / 2 - 1),
-                Pos::new(1, h / 2),
-                Pos::new(w - 2, h / 2),
-                Pos::new(w / 2 + 2, h / 2),
-            ),
-        };
-        self.wall_line(wall_from, wall_to);
-        let door = std::iter::once(door)
-            .chain(
-                Rect::new(
-                    wall_from.x.min(wall_to.x),
-                    wall_from.y.min(wall_to.y),
-                    (wall_from.x - wall_to.x).abs() + 1,
-                    (wall_from.y - wall_to.y).abs() + 1,
-                )
-                .iter(),
-            )
-            .find(|p| self.tiles[*p].terrain == Terrain::Wall)
-            .filter(|p| self.door(*p));
-        // Stools in rows along the waiting room's far wall.
-        let mut y = waiting.y + 1;
-        while y < waiting.bottom() {
-            let mut x = waiting.x + 1;
-            while x < waiting.right() - 1 {
-                self.put(Pos::new(x, y), Furniture::Stool);
-                x += 2;
-            }
-            y += 3;
-        }
-        self.rooms.push(Room {
-            rect: waiting,
-            kind: RoomKind::Waiting,
-            door: None,
-            private: false,
-            number: 0,
-        });
-        let bed = surgery.center();
-        if self.put(bed, Furniture::Bed) {
-            self.station(bed.offset(1, 0), Role::Surgery);
-            self.station(bed.offset(-1, 0), Role::Surgery);
-        }
-        self.rooms.push(Room {
-            rect: surgery,
-            kind: RoomKind::Surgery,
-            door,
-            private: false,
-            number: 0,
-        });
-        self.corner_room(4, 4, RoomKind::BackRoom, true);
-    }
-
     /// A hall with the shrine at the far wall and a locked side room.
     fn temple(&mut self) {
         self.rooms.push(Room {
@@ -1223,7 +1208,7 @@ pub(super) fn generate(city: &City, plan: &FloorPlan, level: i32) -> Floor {
         FloorType::Basement => b.basement(),
         FloorType::Vip => b.corridor(FloorType::Vip),
         FloorType::Bar => b.bar(plan.kind == crate::world::BuildingKind::Club),
-        FloorType::Clinic => b.clinic(),
+        FloorType::Clinic => b.clinic_floor(),
         FloorType::Temple => b.temple(),
         FloorType::Factory => b.factory(),
         FloorType::Garage => b.garage(),
@@ -1231,7 +1216,10 @@ pub(super) fn generate(city: &City, plan: &FloorPlan, level: i32) -> Floor {
         FloorType::Atrium => b.atrium_floor(),
         FloorType::Plaza => b.plaza_floor(),
     }
-    b.lamps();
+    // A clinic's grid hangs its own lamps.
+    if plan.clinic.is_none() {
+        b.lamps();
+    }
     b.connect();
     b.finish()
 }

@@ -45,7 +45,9 @@ impl StageRunner for NamingStage {
                 let corp = ctx.flavor.corp_name(rng);
                 corp_names.push(corp.clone());
                 Some(corp)
-            } else if let Some(front) = crate::clinic::clinic_front(&ctx.city, ctx.city.buildings[i].id) {
+            } else if let Some(front) =
+                crate::clinic::clinic_front(&ctx.city, ctx.city.buildings[i].id)
+            {
                 ctx.flavor.front_name(front, rng)
             } else {
                 ctx.flavor.shop_name(kind, rng)
