@@ -3473,8 +3473,8 @@ mod tests {
         let text = draw_screen(&s, &st, 100, 30);
         assert!(text.contains(" TURN 1 "), "{text}");
         assert!(text.contains(" ▶ YOU            "), "{text}");
-        assert!(text.contains(" ◆ MOVE ▰▰▰▰  4/4 "), "{text}");
-        assert!(text.contains("   AP   ●●    2/2 "), "{text}");
+        assert!(text.contains(" ◆ MOV ▰▰▰▰    4/4"), "{text}");
+        assert!(text.contains("   AP  ●●      2/2"), "{text}");
         assert!(text.contains("   goon        30 "), "{text}");
         // The column's right edge is the map's right edge, its top the map's top row.
         let rows: Vec<&str> = text.lines().collect();
@@ -3487,8 +3487,8 @@ mod tests {
         );
         s.update(&mut st, &[key(KeyCode::Char(' '))]);
         let text = draw_screen(&s, &st, 100, 30);
-        assert!(text.contains("   MOVE ▰▰▰▰  4/4 "), "{text}");
-        assert!(text.contains(" ◆ AP   ●●    2/2 "), "{text}");
+        assert!(text.contains("   MOV ▰▰▰▰    4/4"), "{text}");
+        assert!(text.contains(" ◆ AP  ●●      2/2"), "{text}");
         s.update(&mut st, &[key(KeyCode::Char('.'))]);
         let text = draw_screen(&s, &st, 100, 30);
         assert!(text.contains("   YOU            "), "{text}");
@@ -11480,13 +11480,25 @@ mod tests {
         assert_eq!(st.net.engaged.as_ref().unwrap().moves, 5);
         let text = draw_screen(&s, &st, 140, 40);
         assert!(text.contains("MOVE ▰▰▰▰▰ 5/5    AP ●● 2/2"), "{text}");
-        assert!(text.contains(" ◆ MOVE ▰▰▰▰▰  5/5"), "{text}");
+        assert!(text.contains(" ◆ MOV ▰▰▰▰▰   5/5"), "{text}");
         // Their turn: your pools read whole, at your five.
         s.update(&mut st, &[key(KeyCode::Char(' '))]);
         s.update(&mut st, &[key(KeyCode::Char('.'))]);
         assert!(!crate::net::your_turn(&st));
         let text = draw_screen(&s, &st, 140, 40);
         assert!(text.contains("MOVE ▰▰▰▰▰ 5/5    AP ●● 2/2"), "{text}");
+        // The spine and dog legs: seven, and the column still reads them whole.
+        let (mut st, mut s) = lot(Pos::new(14, 8));
+        for (site, id) in [
+            (game::Site::Spine, "redline_spine"),
+            (game::Site::Legs, "dog_legs"),
+        ] {
+            st.character.chrome.insert(site, ItemId::new(id));
+        }
+        s.update(&mut st, &[]);
+        let text = draw_screen(&s, &st, 100, 30);
+        assert!(text.contains(" ◆ MOV ▰▰▰▰▰▰▰ 7/7"), "{text}");
+        assert!(text.contains("   AP  ●●      2/2"), "{text}");
     }
 
     #[test]
