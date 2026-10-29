@@ -80,6 +80,101 @@ pub enum Source {
     Talent(TalentId),
 }
 
+/// A number the character sheet shows: a stat, a secondary number, or a resistance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Num {
+    Stat(Stat),
+    Hp,
+    Focus,
+    Armor,
+    Sight,
+    Carry,
+    Move,
+    Resist(Harm),
+}
+
+impl Num {
+    /// In the sheet's reading order: the five stats, the six secondary numbers, the
+    /// six resistances.
+    pub const ALL: [Num; 17] = [
+        Num::Stat(Stat::Body),
+        Num::Stat(Stat::Reflex),
+        Num::Stat(Stat::Tech),
+        Num::Stat(Stat::Cool),
+        Num::Stat(Stat::Net),
+        Num::Hp,
+        Num::Focus,
+        Num::Armor,
+        Num::Sight,
+        Num::Carry,
+        Num::Move,
+        Num::Resist(Harm::Kinetic),
+        Num::Resist(Harm::Thermal),
+        Num::Resist(Harm::Shock),
+        Num::Resist(Harm::Emp),
+        Num::Resist(Harm::Toxin),
+        Num::Resist(Harm::Feedback),
+    ];
+
+    /// The tile's label: three letters, two for HP.
+    pub fn label(self) -> &'static str {
+        match self {
+            Num::Stat(s) => s.short(),
+            Num::Hp => "HP",
+            Num::Focus => "FOC",
+            Num::Armor => "ARM",
+            Num::Sight => "SGT",
+            Num::Carry => "CAR",
+            Num::Move => "MOV",
+            Num::Resist(h) => h.short(),
+        }
+    }
+
+    /// The full name in caps, as the readout heads with it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Num::Stat(s) => s.name(),
+            Num::Hp => "HP",
+            Num::Focus => "FOCUS",
+            Num::Armor => "ARMOUR",
+            Num::Sight => "SIGHT",
+            Num::Carry => "CARRY",
+            Num::Move => "MOVE",
+            Num::Resist(h) => h.name(),
+        }
+    }
+
+    /// What a perk adds to this number; nothing when it moves another. Carry counts
+    /// in whole kilograms.
+    pub fn of_perk(self, p: &Perk) -> i32 {
+        match (self, p) {
+            (Num::Stat(s), Perk::Stat(t, n)) if s == *t => *n as i32,
+            (Num::Hp, Perk::HpMax(n)) | (Num::Focus, Perk::Focus(n)) => *n,
+            (Num::Armor, Perk::Armor(n))
+            | (Num::Sight, Perk::Sight(n))
+            | (Num::Move, Perk::Move(n)) => *n as i32,
+            (Num::Carry, Perk::Carry(kg)) => kg.round() as i32,
+            (Num::Resist(h), Perk::Resist(k, n)) if h == *k => *n as i32,
+            _ => 0,
+        }
+    }
+}
+
+/// Where part of a number comes from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Contrib {
+    /// Something worn.
+    Gear(ItemId),
+    /// A piece of chrome installed, at a site or in a socket.
+    Chrome(ItemId),
+    /// Hardware fitted in something worn or installed.
+    Hardware(ItemId),
+    /// Every talent rank held, summed.
+    Talents,
+    /// The chrome installed, counted: what it costs EMP.
+    Pieces(usize),
+}
+
 /// Where a program lands among the loaded ones, and what it sends back.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SlotPlan {
@@ -617,6 +712,61 @@ impl Character {
             0
         };
         perks - chrome
+    }
+
+    /// Every non-zero part of a number that is not its own: what is worn in slot
+    /// order, the chrome in `installed` order, the hardware fitted in what is worn
+    /// then in what is installed, the talents summed into one, and for EMP the pieces
+    /// installed at 2 each.
+    pub fn sources(&self, c: &Content, n: Num) -> Vec<(Contrib, i32)> {
+        let adds = |id: &ItemId| -> i32 {
+            c.item(id)
+                .map_or(0, |i| i.perks.iter().map(|p| n.of_perk(p)).sum())
+        };
+        let mut out = Vec::new();
+        for id in Slot::ALL.iter().filter_map(|s| self.equipment.get(s)) {
+            out.push((Contrib::Gear(id.clone()), adds(id)));
+        }
+        for (_, _, id) in self.installed() {
+            let v = adds(&id);
+            out.push((Contrib::Chrome(id), v));
+        }
+        if let Num::Stat(stat) = n {
+            let worn = Slot::ALL.iter().filter_map(|slot| self.worn_copy(*slot));
+            let installed = Site::ALL.iter().filter_map(|site| self.chrome_copy(*site));
+            for s in worn
+                .chain(installed)
+                .flat_map(|k| k.fitted.iter().flatten())
+            {
+                let v: i32 = c
+                    .item(&s.item)
+                    .and_then(|i| i.hardware.as_ref())
+                    .map_or(0, |h| {
+                        h.mods
+                            .iter()
+                            .map(|m| match m {
+                                Mod::Stat(t, v) if *t == stat => *v as i32,
+                                _ => 0,
+                            })
+                            .sum()
+                    });
+                out.push((Contrib::Hardware(s.item.clone()), v));
+            }
+        }
+        let talents: i32 = self
+            .talent_effects(c)
+            .map(|b| match b {
+                Boon::Perk(p) => n.of_perk(p),
+                _ => 0,
+            })
+            .sum();
+        out.push((Contrib::Talents, talents));
+        if n == Num::Resist(Harm::Emp) {
+            let pieces = self.pieces();
+            out.push((Contrib::Pieces(pieces), -2 * pieces as i32));
+        }
+        out.retain(|(_, v)| *v != 0);
+        out
     }
 
     /// Carry capacity in kilograms: body plus equipment.
@@ -2234,6 +2384,79 @@ mod tests {
         ch.chrome.insert(Site::LeftArm, ItemId::new("piston_arm"));
         assert_eq!(ch.stat(&c, Stat::Body), 5, "the arm raises BODY");
         assert_eq!(ch.load_max(), 24, "but not its own budget");
+    }
+
+    #[test]
+    fn sources_name_each_contribution() {
+        let c = Content::load().unwrap();
+        let mut ch = Character::from_template(&c, &TemplateId::new("kessler")).unwrap();
+        let (arm, shades) = (ItemId::new("piston_arm"), ItemId::new("mirrorshades"));
+        ch.install(Site::LeftArm, arm.clone(), None);
+        ch.wear(Slot::Eyes, shades.clone(), None);
+        assert_eq!(
+            ch.sources(&c, Num::Stat(Stat::Body)),
+            vec![(Contrib::Chrome(arm.clone()), 1)]
+        );
+        assert_eq!(
+            ch.sources(&c, Num::Stat(Stat::Cool)),
+            vec![(Contrib::Gear(shades.clone()), 1)]
+        );
+        assert_eq!(
+            ch.sources(&c, Num::Resist(Harm::Emp)),
+            vec![(Contrib::Pieces(1), -2)]
+        );
+        assert_eq!(ch.sources(&c, Num::Armor), vec![], "nothing moves it");
+        // Talents sum into one; carry rounds to whole kilograms.
+        ch.talents.insert(TalentId::new("thick_skin"), 2);
+        assert_eq!(
+            ch.sources(&c, Num::Hp),
+            vec![
+                (Contrib::Gear(ItemId::new("ballistic_weave")), 8),
+                (Contrib::Talents, 6)
+            ]
+        );
+        assert_eq!(
+            ch.sources(&c, Num::Carry),
+            vec![(Contrib::Gear(ItemId::new("cargo_pants")), 4)]
+        );
+        // Hardware fitted in what you wear or carry in you is named on its own.
+        let hush = ItemId::new("hushcan");
+        let copy = ch.new_copy(&c, &hush);
+        ch.host_copy_mut(&c, Host::Site(Site::LeftArm))
+            .unwrap()
+            .fitted[1] = Some(Stack {
+            item: hush.clone(),
+            qty: 1,
+            copy: Some(copy),
+        });
+        assert_eq!(
+            ch.sources(&c, Num::Stat(Stat::Cool)),
+            vec![(Contrib::Gear(shades), 1), (Contrib::Hardware(hush), 1)]
+        );
+        assert_eq!(
+            ch.sources(&c, Num::Resist(Harm::Emp)),
+            vec![(Contrib::Pieces(2), -4)]
+        );
+    }
+
+    #[test]
+    fn nums_read_in_the_sheets_order() {
+        let labels: Vec<&str> = Num::ALL.iter().map(|n| n.label()).collect();
+        assert_eq!(
+            labels,
+            [
+                "BOD", "REF", "TEC", "COL", "NET", "HP", "FOC", "ARM", "SGT", "CAR", "MOV", "KIN",
+                "THM", "SHK", "EMP", "TOX", "FBK"
+            ]
+        );
+        let names: Vec<&str> = Num::ALL.iter().map(|n| n.name()).collect();
+        assert_eq!(
+            names,
+            [
+                "BODY", "REFLEX", "TECH", "COOL", "NET", "HP", "FOCUS", "ARMOUR", "SIGHT", "CARRY",
+                "MOVE", "KINETIC", "THERMAL", "SHOCK", "EMP", "TOXIN", "FEEDBACK"
+            ]
+        );
     }
 
     #[test]

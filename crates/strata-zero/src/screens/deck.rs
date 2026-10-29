@@ -11,6 +11,7 @@ use crate::render::memmap::MemoryMap;
 use crate::screens::create::stat_colour;
 use crate::screens::kit::Kit;
 use crate::screens::popup::{Choice, Pick, Popup};
+use crate::screens::sheet::Sheet;
 use crate::screens::workbench::Workbench;
 use crate::ui::board::{BoardState, RowKind, board_rows};
 use crate::ui::chrome::{
@@ -68,7 +69,8 @@ const SOCKET_EMPTY: (Color, Color) = (DIM, Color::Rgb(0x00, 0xa5, 0xb8));
 pub enum Tab {
     /// Abilities, active and passive.
     Skills,
-    /// The five stats and the points left to spend on them.
+    /// The character sheet: the stats, the numbers gear and chrome move, the
+    /// resistances, and the chrome in you.
     Stats,
     /// What you wear and what you carry, and the item under the cursor.
     Kit,
@@ -126,7 +128,6 @@ pub(crate) enum Detail {
     Item(ItemId),
     /// One copy in the pack, for an item held per copy.
     Copy(CopyId),
-    Stat(Stat),
     Category(CategoryId),
     Skill(SkillId),
     /// Index into the journal's flat list of entries.
@@ -156,6 +157,8 @@ pub struct Deck {
     last_list: Cell<(Rect, usize)>,
     /// GEAR & INVENTORY, with its own cursor, keys and drawing.
     pub(crate) kit: Kit,
+    /// STATS, the character sheet, the same.
+    pub(crate) sheet: Sheet,
     /// Unfolded categories on the SKILLS board; starts as the owned ones.
     open: Option<BTreeSet<CategoryId>>,
     /// The owned categories at the last update, so a fresh unlock unfolds itself.
@@ -435,29 +438,6 @@ pub(crate) fn card(st: &AppState, detail: &Detail) -> Vec<Line<'static>> {
         Detail::Journal(i) => Deck::journal_card(st, *i),
         Detail::Category(id) => skill_card::lines(&st.content, held(st), Card::Category(id)),
         Detail::Skill(id) => skill_card::lines(&st.content, held(st), Card::Skill(id)),
-        Detail::Stat(stat) => {
-            let base = st.character.stats.get(*stat);
-            let with = st.character.stat(&st.content, *stat);
-            let mut out = vec![head(stat.name())];
-            out.push(dim(if with == base {
-                format!("{base}")
-            } else {
-                format!("{base} · {with} with gear")
-            }));
-            out.push(plain(""));
-            out.push(plain(st.content.stat_blurb(*stat).to_string()));
-            out.push(plain(""));
-            out.push(dim("feeds"));
-            for s in st.content.skills.iter().filter(|s| s.stat == *stat) {
-                let mark = if st.character.has_skill(&s.id) {
-                    "◆"
-                } else {
-                    "◇"
-                };
-                out.push(plain(format!("{mark} {}", s.name)));
-            }
-            out
-        }
     }
 }
 
@@ -559,6 +539,7 @@ impl Deck {
             focus: None,
             last_list: Cell::new((Rect::new(0, 0, 0, 0), 0)),
             kit: Kit::new(tick),
+            sheet: Sheet::new(tick),
             open: None,
             owned_seen: None,
             skills_seen: None,
@@ -627,9 +608,11 @@ impl Deck {
     }
 
     /// Reopens where the deck was closed: the remembered tab and its row, clamped to a
-    /// row that still exists and can be selected, and GEAR & INVENTORY where it was left.
+    /// row that still exists and can be selected, and GEAR & INVENTORY and STATS where
+    /// they were left.
     pub fn restore(mut self, st: &AppState) -> Self {
         self.kit = Kit::restore(st);
+        self.sheet = Sheet::restore(st);
         self.tab = st.deck_tab;
         self.tab_from = self.tab.index();
         let rows = self.rows(st);
@@ -787,6 +770,9 @@ impl Deck {
             self.kit.reselect(st);
             self.kit.changed = st.tick;
         }
+        if tab == Tab::Stats {
+            self.sheet.opened(st.tick);
+        }
         self.tab_tween = Tween::new(st.tick, 6, Easing::OutCubic);
     }
 
@@ -828,7 +814,6 @@ impl Deck {
     pub(crate) fn rows(&self, st: &AppState) -> Vec<Row> {
         match self.tab {
             Tab::Skills => self.board_list(st),
-            Tab::Stats => Self::stat_rows(st),
             Tab::Workbench if !st.character.has_workbench(&st.content) => vec![Row {
                 text: "no bench. WRENCH unlocks it.".into(),
                 tone: Tone::Dim,
@@ -837,7 +822,7 @@ impl Deck {
             }],
             Tab::Jobs => crate::jobs::ui::deck_rows(st),
             Tab::Journal => Self::journal_rows(st),
-            Tab::Workbench | Tab::Kit | Tab::Map | Tab::Talents => Vec::new(),
+            Tab::Workbench | Tab::Kit | Tab::Stats | Tab::Map | Tab::Talents => Vec::new(),
         }
     }
 
@@ -873,38 +858,6 @@ impl Deck {
             out.push(cyan(format!("grants {}", names.join(" · "))));
         }
         out
-    }
-
-    fn stat_rows(st: &AppState) -> Vec<Row> {
-        let ch = &st.character;
-        let b = Build::from_character(&st.content, ch);
-        let mut rows = Vec::new();
-        if ch.stat_points > 0 || ch.sp > 0 {
-            rows.push(Row {
-                text: format!("points {} · sp {}", ch.stat_points, ch.sp),
-                tone: Tone::Dim,
-                detail: None,
-                spans: None,
-            });
-        }
-        rows.extend(Stat::ALL.iter().map(|&s| {
-            let v = ch.stats.get(s);
-            let lvl = (v as usize).min(10);
-            let bar = format!("{}{}", "▰".repeat(lvl), "▱".repeat(10 - lvl));
-            let next = if ch.stat_points > 0 && v < st.content.creation.stat_cap {
-                let n = b.stat_cost(&st.content, s);
-                format!("  next {n} pt{}", if n == 1 { "" } else { "s" })
-            } else {
-                String::new()
-            };
-            Row {
-                text: format!("{:<8} {v:>2}  {bar}{next}", s.name()),
-                tone: Tone::Normal,
-                detail: Some(Detail::Stat(s)),
-                spans: None,
-            }
-        }));
-        rows
     }
 
     /// The unfolded categories: the remembered set, or the owned ones to start with.
@@ -1339,6 +1292,10 @@ impl Deck {
                     continue;
                 }
             }
+            // STATS takes the arrows, `h j k l` and space; the rest are the deck's.
+            if self.tab == Tab::Stats && self.sheet.key(st, k.code) {
+                continue;
+            }
             let rows = self.rows(st);
             if self.row >= rows.len() || rows.get(self.row).is_some_and(|r| r.detail.is_none()) {
                 self.row = Self::first_selectable(&rows);
@@ -1412,19 +1369,6 @@ impl Deck {
                     None => self.flip_fold(st),
                 },
                 KeyCode::Enter if self.tab == Tab::Skills => {}
-                KeyCode::Char(' ') | KeyCode::Enter
-                    if matches!(
-                        rows.get(self.row).and_then(|r| r.detail.as_ref()),
-                        Some(Detail::Stat(_))
-                    ) =>
-                {
-                    // A point buys straight away; the refusal lands in the strip.
-                    if let Some(Detail::Stat(s)) = rows.get(self.row).and_then(|r| r.detail.clone())
-                    {
-                        let result = perform(st, Action::BuyStat(s));
-                        report(st, result);
-                    }
-                }
                 KeyCode::Char(' ') | KeyCode::Enter => {
                     if let Some(p) = self.interact(st) {
                         return ScreenCmd::Push {
@@ -1516,6 +1460,7 @@ impl Screen for Deck {
         st.deck_tab = self.tab;
         st.deck_rows[self.tab.index()] = self.row;
         st.deck_kit = self.kit.state;
+        st.deck_sheet = self.sheet.state;
         st.deck_rows[Tab::Talents.index()] = self.cursor.pack();
         st.deck_rows[Tab::Workbench.index()] = self.workbench.pack();
         cmd
@@ -1693,6 +1638,8 @@ impl Screen for Deck {
             .draw(body, buf);
         } else if self.tab == Tab::Kit {
             self.kit.draw(st, body, buf);
+        } else if self.tab == Tab::Stats {
+            self.sheet.draw(st, body, buf);
         } else if self.tab == Tab::Workbench && st.character.has_workbench(&st.content) {
             self.workbench.draw(st, body, buf);
         } else {
@@ -1745,12 +1692,17 @@ impl Screen for Deck {
         status_strip(buf, st, inner.x + 1, strip_y, right);
 
         // Hints.
+        let sheet_hints;
         put(
             buf,
             inner.x + 1,
             hint_y,
             match self.tab {
                 Tab::Skills => "Q/E tabs · ↑↓ select · ←→ fold · space fold/buy · tab close",
+                Tab::Stats => {
+                    sheet_hints = self.sheet.hints(st);
+                    &sheet_hints
+                }
                 Tab::Talents => {
                     "←→ along · ↑↓ tiers · Q/E tabs · 0-8 jump · space learn · tab close"
                 }
@@ -1794,7 +1746,7 @@ mod tests {
     use crate::screens::kit::{KitState, Pane};
     use crate::screens::testutil::{buffer_text, key};
     use citygen::{GenParams, Generator, SizePreset};
-    use game::ItemKind;
+    use game::{ItemKind, Num};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -2077,19 +2029,21 @@ mod tests {
         );
         assert!(text.contains("not in pack"), "{text}");
 
-        d.update(&mut st, &[key(KeyCode::Char('2'))]);
-        d.changed = 0;
-        let rows = d.rows(&st);
-        d.row = rows.iter().position(|r| r.text.contains("NET")).unwrap();
+        on_stat(&mut d, &mut st, Num::Stat(Stat::Net));
         let text = draw(&d, &st, 120, 35);
-        assert!(
-            text.contains("NET       6  ▰▰▰▰▰▰▱▱▱▱") && text.contains("6 · 7 with gear"),
-            "{text}"
-        );
+        assert!(text.contains("NET 6 · 7 with gear"), "{text}");
         assert!(
             text.contains("◆ Hacking") && text.contains("◇ Vault run"),
             "feeds: {text}"
         );
+    }
+
+    /// Opens STATS on a number's tile, its readout typed out.
+    fn on_stat(d: &mut Deck, st: &mut AppState, n: Num) {
+        d.update(st, &[key(KeyCode::Char('2'))]);
+        d.sheet.state.tile = Num::ALL.iter().position(|&m| m == n).unwrap();
+        d.sheet.changed = 0;
+        st.tick = 60;
     }
 
     #[test]
@@ -2215,20 +2169,18 @@ mod tests {
     }
 
     #[test]
-    fn stats_rows_show_the_stat_and_its_bar() {
+    fn stats_tab_shows_the_stat_and_its_blurb() {
         let mut st = state();
         st.character.stats.body = 7;
         let mut d = Deck::new(0);
-        d.update(&mut st, &[key(KeyCode::Char('2'))]);
-        let rows = d.rows(&st);
-        let body = rows.iter().find(|r| r.text.contains("BODY")).unwrap();
-        assert!(body.text.contains(" 7  ▰▰▰▰▰▰▰▱▱▱"), "{:?}", body.text);
-        st.tick = 60;
+        on_stat(&mut d, &mut st, Num::Stat(Stat::Body));
+        assert!(d.rows(&st).is_empty(), "the sheet, not a list");
         let text = draw(&d, &st, 120, 35);
         assert!(
-            text.contains("▰▰▰▰▰▰▰▱▱▱") && text.contains("meat"),
+            text.contains("┌ BOD ─┐") && text.contains("│  7   │"),
             "{text}"
         );
+        assert!(text.contains("BODY 7") && text.contains("meat"), "{text}");
     }
 
     #[test]
@@ -2380,14 +2332,10 @@ mod tests {
     fn skills_and_gear_show_perks() {
         let mut st = state();
         let mut d = Deck::new(0);
-        d.update(&mut st, &[key(KeyCode::Char('2'))]);
-        let rows = d.rows(&st);
-        d.row = rows.iter().position(|r| r.text.contains("NET")).unwrap();
-        d.changed = 0;
-        st.tick = 60;
+        on_stat(&mut d, &mut st, Num::Stat(Stat::Net));
         let text = draw(&d, &st, 120, 35);
         assert!(
-            text.contains("6 · 7 with gear"),
+            text.contains("6 · 7 with gear") && text.contains("gear +1 Pawnshop deck"),
             "the deck's +1 net: {text}"
         );
         on_tile(&mut d, &mut st, Slot::Deck);
@@ -2560,7 +2508,10 @@ mod tests {
         assert!(text.contains("NETRUNNER"), "SKILLS is the board: {text}");
         d.update(&mut st, &[key(KeyCode::Char('2'))]);
         let text = draw(&d, &st, 120, 35);
-        assert!(text.contains("BODY"), "STATS lists the five stats: {text}");
+        assert!(
+            text.contains("┌ BOD") && text.contains("RESISTANCES"),
+            "STATS is the sheet: {text}"
+        );
         assert!(!text.contains("CYBERDECK"), "no deck tab: {text}");
         d.update(&mut st, &[key(KeyCode::Char('6'))]);
         assert_eq!(d.tab, Tab::Journal);
@@ -2615,19 +2566,69 @@ mod tests {
     }
 
     #[test]
+    fn the_stats_tab_reopens_where_it_was_left() {
+        use crate::screens::sheet::SheetPane;
+        let mut st = state();
+        let mut d = Deck::new(0);
+        // BODY, down to HP, along to FOC.
+        d.update(
+            &mut st,
+            &[
+                key(KeyCode::Char('2')),
+                key(KeyCode::Down),
+                key(KeyCode::Right),
+            ],
+        );
+        assert_eq!((st.deck_tab, st.deck_sheet.tile), (Tab::Stats, 6));
+        st.tick = 50;
+        let again = Deck::new(5).restore(&st);
+        assert_eq!((again.tab, again.sheet.state.tile), (Tab::Stats, 6));
+        assert_eq!(again.sheet.changed, 50, "the readout types out afresh");
+        // Left on the ledger, it opens on the left pane with the tile it had.
+        let mut d = again;
+        d.sheet.state.pane = SheetPane::Ledger;
+        d.update(&mut st, &[]);
+        assert_eq!(st.deck_sheet.pane, SheetPane::Ledger);
+        let again = Deck::new(6).restore(&st);
+        assert_eq!(
+            (again.sheet.state.pane, again.sheet.state.tile),
+            (SheetPane::Left, 6)
+        );
+        // Away to another tab and back: the same.
+        let mut d = again;
+        d.update(
+            &mut st,
+            &[
+                key(KeyCode::Right),
+                key(KeyCode::Right),
+                key(KeyCode::Right),
+                key(KeyCode::Right),
+                key(KeyCode::Right),
+            ],
+        );
+        assert_eq!(d.sheet.state.pane, SheetPane::Ledger);
+        d.update(&mut st, &[key(KeyCode::Char('1')), key(KeyCode::Char('2'))]);
+        assert_eq!(
+            (d.sheet.state.pane, d.sheet.state.tile),
+            (SheetPane::Left, 10)
+        );
+    }
+
+    #[test]
     fn stats_tab_spends_points_on_space() {
         let mut st = state();
         st.character.stat_points = 3;
         let mut d = Deck::new(0);
-        d.update(&mut st, &[key(KeyCode::Char('2'))]);
-        st.tick = 60;
+        on_stat(&mut d, &mut st, Num::Stat(Stat::Body));
         let text = draw(&d, &st, 120, 35);
         assert!(
-            text.contains("points 3") && text.contains("next 3 pts"),
+            text.contains("3 points") && text.contains("next 3 pts"),
             "{text}"
         );
-        let rows = d.rows(&st);
-        d.row = rows.iter().position(|r| r.text.contains("BODY")).unwrap();
+        assert!(
+            text.contains("space buy a point"),
+            "the sheet's hints: {text}"
+        );
         assert!(matches!(
             d.update(&mut st, &[key(KeyCode::Char(' '))]),
             ScreenCmd::Stay
@@ -2979,8 +2980,8 @@ mod tests {
         }
         assert!(text.trim_end().ends_with("1250 SP"), "{text:?}");
 
-        // Only SKILLS has the bar.
-        d.update(&mut st, &[key(KeyCode::Char('e'))]);
+        // Only SKILLS has the bar: JOURNAL's list starts at the top.
+        d.update(&mut st, &[key(KeyCode::Char('6'))]);
         assert_ne!(d.tab, Tab::Skills);
         screen(&d, &st, 100, 30);
         assert_eq!(d.last_list.get().0.y, bar);
@@ -3726,11 +3727,10 @@ mod tests {
             .give_item(&st.content, ItemId::new("hushcan"), 1);
         fit(&mut st, game::Host::Worn(Slot::Primary), 0, "hushcan");
         let mut d = Deck::new(0);
-        d.update(&mut st, &[key(KeyCode::Char('2'))]);
-        let rows = d.rows(&st);
-        d.row = rows.iter().position(|r| r.text.contains("COOL")).unwrap();
-        let text = texts(&d.detail(&st, &rows));
-        assert_eq!(text[1], "5 · 6 with gear", "{text:?}");
+        on_stat(&mut d, &mut st, Num::Stat(Stat::Cool));
+        let text = draw(&d, &st, 120, 35);
+        assert!(text.contains("COOL 5 · 6 with hardware"), "{text}");
+        assert!(text.contains("hardware +1 Hushcan"), "{text}");
     }
 
     #[test]
@@ -3743,8 +3743,8 @@ mod tests {
         };
         let rows = vec![
             row("HEAD", None),
-            row("one", Some(Detail::Stat(Stat::ALL[0]))),
-            row("two", Some(Detail::Stat(Stat::ALL[1]))),
+            row("one", Some(Detail::Journal(0))),
+            row("two", Some(Detail::Journal(1))),
         ];
         let list = Rect::new(0, 0, 30, 3);
         let mut buf = Buffer::empty(Rect::new(0, 0, 30, 5));

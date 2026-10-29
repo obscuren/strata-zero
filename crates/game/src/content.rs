@@ -1,5 +1,6 @@
 //! Content: everything the world is made of, parsed from `flavor/content.ron` and validated.
 
+use crate::character::Num;
 use crate::model::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -91,6 +92,8 @@ pub enum ContentError {
     FxInvalid { where_: String, why: String },
     #[error("tree {name}: {why}")]
     TreeInvalid { name: String, why: String },
+    #[error("number blurbs: {why}")]
+    BlurbsInvalid { why: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -110,6 +113,8 @@ pub struct Content {
     pub categories: Vec<Category>,
     pub templates: Vec<Template>,
     pub stat_blurbs: Vec<(Stat, String)>,
+    /// What each number the sheet shows besides the stats is, by its tile's label.
+    pub number_blurbs: Vec<(String, String)>,
     /// Files that land on a host's disk when its theme and building kind match.
     #[serde(default)]
     pub lore: Vec<Lore>,
@@ -718,6 +723,7 @@ impl Content {
             }
         }
         self.validate_creation(&need_item, &need_skill, &need_ability)?;
+        self.validate_number_blurbs()?;
         if let Some(id) = self
             .implant_art
             .keys()
@@ -729,6 +735,37 @@ impl Content {
             });
         }
         self.validate_skills()
+    }
+
+    /// A blurb for each of the sheet's numbers that is not a stat, once, and for
+    /// nothing else.
+    fn validate_number_blurbs(&self) -> Result<(), ContentError> {
+        let bad = |why: String| ContentError::BlurbsInvalid { why };
+        let labels: Vec<&str> = Num::ALL
+            .iter()
+            .filter(|n| !matches!(n, Num::Stat(_)))
+            .map(|n| n.label())
+            .collect();
+        for label in &labels {
+            match self
+                .number_blurbs
+                .iter()
+                .filter(|(k, _)| k == label)
+                .count()
+            {
+                1 => {}
+                0 => return Err(bad(format!("no blurb for {label}"))),
+                _ => return Err(bad(format!("{label} has more than one blurb"))),
+            }
+        }
+        if let Some((k, _)) = self
+            .number_blurbs
+            .iter()
+            .find(|(k, _)| !labels.contains(&k.as_str()))
+        {
+            return Err(bad(format!("`{k}` is not a number the sheet shows")));
+        }
+        Ok(())
     }
 
     /// What each skill asks for, and the card art: needs of 1 to 10, known skills after
@@ -930,6 +967,15 @@ impl Content {
         self.stat_blurbs
             .iter()
             .find(|(s, _)| *s == stat)
+            .map(|(_, b)| b.as_str())
+            .unwrap_or("")
+    }
+
+    /// A number's blurb by its label (`Num::label`); empty for one without.
+    pub fn number_blurb(&self, label: &str) -> &str {
+        self.number_blurbs
+            .iter()
+            .find(|(k, _)| k == label)
             .map(|(_, b)| b.as_str())
             .unwrap_or("")
     }
@@ -1540,6 +1586,42 @@ mod tests {
                 .all(|t| t.skill.as_ref().is_none_or(|s| c.skill(s).is_some()))
         );
         assert!(c.recipes.iter().all(|r| c.skill(&r.skill).is_some()));
+    }
+
+    #[test]
+    fn number_blurbs_cover_the_twelve() {
+        let c = Content::load().unwrap();
+        let twelve: Vec<&str> = Num::ALL
+            .iter()
+            .filter(|n| !matches!(n, Num::Stat(_)))
+            .map(|n| n.label())
+            .collect();
+        assert_eq!(twelve.len(), 12);
+        assert_eq!(c.number_blurbs.len(), 12);
+        for label in &twelve {
+            assert!(!c.number_blurb(label).is_empty(), "{label}");
+        }
+        assert!(c.number_blurb("EMP").contains("chrome"));
+        assert_eq!(c.number_blurb("BOD"), "", "stats keep their own blurbs");
+
+        let mut missing = c.clone();
+        missing.number_blurbs.retain(|(k, _)| k != "TOX");
+        assert!(matches!(
+            missing.validate(),
+            Err(ContentError::BlurbsInvalid { .. })
+        ));
+        let mut twice = c.clone();
+        twice.number_blurbs.push(("HP".into(), "again".into()));
+        assert!(matches!(
+            twice.validate(),
+            Err(ContentError::BlurbsInvalid { .. })
+        ));
+        let mut stray = c.clone();
+        stray.number_blurbs.push(("XYZ".into(), "who".into()));
+        assert!(matches!(
+            stray.validate(),
+            Err(ContentError::BlurbsInvalid { .. })
+        ));
     }
 
     #[test]
