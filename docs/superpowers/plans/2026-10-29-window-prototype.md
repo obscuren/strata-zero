@@ -15,7 +15,7 @@
 - New dependencies are optional and enabled only by `[features] window = [...]` in `crates/strata-zero/Cargo.toml`; `cargo build` without the feature compiles no winit.
 - No screen module changes; `app::Runner::frame` is the only entry the window uses.
 - Builds and runs use `--target-dir target/smoke`; never `target/release`.
-- `Reset` fg `#cdd4de`, `Reset` bg `#04060a`; default text 15 logical px; window opens at 120×40 cells clamped to the monitor; minimum 100×30 cells.
+- `Reset` fg `#cdd4de`, `Reset` bg `#0a0b10` (the style pack's background); default text 15 logical px; window opens at 120×40 cells clamped to the monitor; minimum 100×30 cells.
 - Font chain: `STRATA_FONT`, `~/Library/Fonts/FiraCodeNerdFontMono-Regular.ttf` (bold `…-Bold.ttf`), `/System/Applications/Utilities/Terminal.app/Contents/Resources/Fonts/SF-Mono-Regular.otf` (bold `SF-Mono-Bold.otf`), `/System/Library/Fonts/Menlo.ttc` (index 0, bold index 1); glyph fallbacks `/System/Library/Fonts/Apple Symbols.ttf`, then Menlo.
 - Bundle: `target/smoke/macos/Strata Zero.app`, id `io.xenohive.strata-zero`, executable `strata`, ad-hoc signed, universal (`aarch64-apple-darwin` + `x86_64-apple-darwin`).
 - Commits end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
@@ -82,11 +82,12 @@ Box characters are four arms (left, right, up, down), each `None | Light | Heavy
 
 **Interfaces:**
 - Produces (`font.rs`): `pub struct Fonts` with `pub fn load() -> anyhow::Result<Fonts>` (the chain in Global Constraints), `pub fn metrics(&self, px: f32) -> CellMetrics`, `pub fn glyph(&mut self, c: char, bold: bool, px: f32) -> Option<&Glyph>` (cached by `(c, bold, px bits)`; `None` when no font has `c`); `pub struct CellMetrics { pub w: usize, pub h: usize, pub baseline: usize }`; `pub struct Glyph { pub left: i32, pub top: i32, pub w: usize, pub h: usize, pub alpha: Vec<u8> }` (`left`/`top` relative to the cell's top-left).
-- Produces (`raster.rs`): `pub struct Frame { pub w: usize, pub h: usize, pub px: Vec<u32> }` (0x00RRGGBB); `pub fn rgb(c: Color, fallback: u32) -> u32`; `pub const FG: u32 = 0xcdd4de; pub const BG: u32 = 0x04060a;` `pub fn paint(frame: &mut Frame, fonts: &mut Fonts, m: CellMetrics, px: f32, col: u16, row: u16, cell: &Cell, span: u16)` (span 2 for a wide glyph); `pub fn buffer_to_rgba(buf: &Buffer, fonts: &mut Fonts, px: f32) -> (usize, usize, Vec<u8>)` for PNGs.
+- Produces (`raster.rs`): `pub struct Frame { pub w: usize, pub h: usize, pub px: Vec<u32> }` (0x00RRGGBB); `pub fn rgb(c: Color, fallback: u32) -> u32`; `pub const FG: u32 = 0xcdd4de; pub const BG: u32 = 0x0a0b10;` `pub fn paint(frame: &mut Frame, fonts: &mut Fonts, m: CellMetrics, px: f32, col: u16, row: u16, cell: &Cell, span: u16)` (span 2 for a wide glyph); `pub fn buffer_to_rgba(buf: &Buffer, fonts: &mut Fonts, px: f32) -> (usize, usize, Vec<u8>)` for PNGs.
 
 `paint` fills the background, then the coverage from `shapes::shape` or the font glyph, blended `fg` over `bg`; modifiers as the spec's call 5; text coverage lifted by `a' = 255 * (a/255)^0.8` so thin strokes read as on macOS.
 
 - [ ] **Step 1: Write the failing tests** (`raster.rs`; they skip with a printed note when `Fonts::load()` fails):
+  - `default_bg_is_the_style_pack_s`: `BG` equals `AppState::new().style.background` as `0xRRGGBB`.
   - `colours`: `rgb(Color::Rgb(1,2,3), 0)` = `0x010203`; `rgb(Color::Reset, FG)` = `FG`; `rgb(Color::Red, 0)` = `0xcd0000`; `rgb(Color::Indexed(196), 0)` = `0xff0000`.
   - `block_fills_with_fg`, `space_fills_with_bg`, `reversed_swaps`, `dim_halves_toward_bg` (`█` fg `Rgb(200,100,0)` bg `Rgb(0,0,0)` with DIM → `0x643200`).
   - `letter_has_ink`: painting `M` puts at least one fg-coloured pixel inside the cell and none outside it.
@@ -152,7 +153,7 @@ The loop (winit 0.30 `ApplicationHandler`): create the window in `resumed` (titl
 The script: release builds with `--features window --target-dir target/smoke` for both targets, `lipo -create` into `Contents/MacOS/strata`, copies `Info.plist` with the workspace version substituted for `@VERSION@`, `codesign --force -s -`, prints the path.
 
 - [ ] **Step 1:** Run the script; `file` on the binary says universal (arm64 + x86_64).
-- [ ] **Step 2:** `open "target/smoke/macos/Strata Zero.app"` with `STRATA_WINDOW_SHOT` unset; after 5 s `pgrep -f "Strata Zero.app"` finds it; quit it with `osascript -e 'quit app "Strata Zero"'`.
+- [ ] **Step 2:** `open --env STRATA_WINDOW_SHOT=live.png "target/smoke/macos/Strata Zero.app"`; after 5 s `pgrep -f "Strata Zero.app"` finds it and `~/Library/Application Support/Strata Zero/live.png` exists and looks right; quit it with `osascript -e 'quit app "Strata Zero"'`.
 - [ ] **Step 3:** Commit `feat(window): Strata Zero.app for macOS`.
 
 ### Task 8: Whole check

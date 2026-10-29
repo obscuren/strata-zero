@@ -3,3 +3,4 @@
 //! loop that runs the same `Runner` frame as the terminal does.
 
 pub mod keys;
+pub mod shapes;

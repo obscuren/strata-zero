@@ -75,9 +75,14 @@ and calls `window::run`.
    licence.
 3. **Size.** 15 pt text by default (logical pixels; cell from the font's advance and line
    height, times the window's scale factor). The window opens at 120×40 cells, clamped
-   to the screen; its minimum is 100×30 cells.
-4. **Colours.** `Rgb` as is; `Reset` foreground `#cdd4de` and background `#04060a` (the
-   shot harness's defaults); named and indexed colours from the xterm palette.
+   to the screen; its minimum is 100×30 cells at the text size it opened with. Cmd+= and
+   Cmd+- keep the window and change the grid, as a terminal's font size does, so a big
+   enough text size can bring up the game's own "resize to at least 100x30". The text
+   size is not remembered between launches.
+4. **Colours.** `Rgb` as is; `Reset` foreground `#cdd4de` (the shot harness's) and
+   background `#0a0b10`, the style pack's background (`flavor/style.ron`), so the street's
+   frame rows, which are left on the default background, match the map tiles beside
+   them; a test keeps the two equal. Named and indexed colours from the xterm palette.
 5. **Modifiers.** BOLD the bold face; DIM the foreground halfway to the background;
    REVERSED swaps; UNDERLINED and CROSSED_OUT draw a line; HIDDEN draws no glyph;
    ITALIC and blink are ignored.
@@ -104,8 +109,11 @@ and calls `window::run`.
 - Unit tests: key mapping, colour mapping, every box-drawing and block character has a
   shape, a rasterized cell's pixels.
 - PNGs of the title, the street and the ATTRIBUTES sheet, looked at.
-- The `.app` opened with `open`: it stays up, its live framebuffer dump looks right, and a
-  city saved from it lands in Application Support.
+- The `.app` opened with `open`: it stays up, and its live framebuffer dump, asked for
+  with a relative path (`open --env STRATA_WINDOW_SHOT=live.png`), looks right and lands
+  in `~/Library/Application Support/Strata Zero/`, which proves the working folder that
+  `cities/` saves into. Saving a city through the menus from the `.app` is left for
+  Jeffrey to try: driving the window's keys from outside needs an Accessibility grant.
 
 ## Toward Steam, after this
 
