@@ -115,6 +115,21 @@ pub fn blast_damage(damage: u8, radius: i32, ring: i32) -> u8 {
     (damage as i32 * left / (radius + 1)).max(1) as u8
 }
 
+/// Harm after a resistance: the percent (clamped to -100..=90) turned aside, rounded to
+/// nearest and never below 1 while the harm was more than none.
+pub fn resisted(amount: u32, resist: i32) -> u32 {
+    if amount == 0 {
+        return 0;
+    }
+    resisted_stun(amount, resist).max(1)
+}
+
+/// `resisted` for a stun, which may be turned aside entirely.
+pub fn resisted_stun(stun: u32, resist: i32) -> u32 {
+    let r = resist.clamp(-100, 90) as i64;
+    ((stun as i64 * (100 - r) + 50) / 100) as u32
+}
+
 /// A round lands when the roll (1..=100) is within the chance.
 pub fn round_hits(roll: u8, chance: u8) -> bool {
     roll <= chance
@@ -370,6 +385,20 @@ mod tests {
         // Five over the bare power: mid-range, so the extra point shows.
         let hard = bare + 5;
         assert_eq!(chance(bare + 1, hard), chance(bare, hard) + 10);
+    }
+
+    #[test]
+    fn resisted_rounds_and_clamps() {
+        assert_eq!(resisted(10, 0), 10);
+        assert_eq!(resisted(10, 15), 9, "8.5 rounds to 9");
+        assert_eq!(resisted(4, 50), 2);
+        assert_eq!(resisted(3, -18), 4);
+        assert_eq!(resisted(5, 95), 1, "clamped to 90, floor 1");
+        assert_eq!(resisted(0, -50), 0);
+        assert_eq!(resisted(2, -300), 4, "clamped to -100");
+        assert_eq!(resisted_stun(2, 40), 1);
+        assert_eq!(resisted_stun(1, 60), 0, "a stun can be turned aside whole");
+        assert_eq!(resisted_stun(2, -18), 2);
     }
 
     #[test]

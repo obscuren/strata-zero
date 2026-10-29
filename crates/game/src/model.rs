@@ -451,6 +451,65 @@ impl Stat {
     }
 }
 
+/// The kind of harm a blast does, and the kind a resistance turns aside.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+pub enum Harm {
+    #[default]
+    Kinetic,
+    Thermal,
+    Shock,
+    Emp,
+    Toxin,
+    Feedback,
+}
+
+impl Harm {
+    pub const ALL: [Harm; 6] = [
+        Harm::Kinetic,
+        Harm::Thermal,
+        Harm::Shock,
+        Harm::Emp,
+        Harm::Toxin,
+        Harm::Feedback,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Harm::Kinetic => "kinetic",
+            Harm::Thermal => "thermal",
+            Harm::Shock => "shock",
+            Harm::Emp => "emp",
+            Harm::Toxin => "toxin",
+            Harm::Feedback => "feedback",
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Harm::Kinetic => "KINETIC",
+            Harm::Thermal => "THERMAL",
+            Harm::Shock => "SHOCK",
+            Harm::Emp => "EMP",
+            Harm::Toxin => "TOXIN",
+            Harm::Feedback => "FEEDBACK",
+        }
+    }
+
+    /// Three letters in caps, for a line with no room for the names.
+    pub fn short(self) -> &'static str {
+        match self {
+            Harm::Kinetic => "KIN",
+            Harm::Thermal => "THM",
+            Harm::Shock => "SHK",
+            Harm::Emp => "EMP",
+            Harm::Toxin => "TOX",
+            Harm::Feedback => "FBK",
+        }
+    }
+}
+
 /// A modifier an item applies while it is equipped.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Perk {
@@ -462,6 +521,14 @@ pub enum Perk {
     HpMax(i32),
     /// Max focus.
     Focus(i32),
+    /// Armour: flat damage turned aside.
+    Armor(i8),
+    /// Extra move, in tiles a turn.
+    Move(i8),
+    /// Percent of a kind of harm turned aside; negative takes more.
+    Resist(Harm, i8),
+    /// Extra throw range, in tiles.
+    Throw(i8),
 }
 
 /// What a consumable does when used; one unit is consumed.
@@ -491,6 +558,9 @@ pub struct Blast {
     /// Only things with chrome are hurt.
     #[serde(default)]
     pub chrome: bool,
+    /// The kind of harm it does.
+    #[serde(default)]
+    pub harm: Harm,
 }
 
 /// How a thrown thing crosses the line: how it is drawn in flight. Either kind

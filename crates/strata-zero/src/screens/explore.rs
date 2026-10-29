@@ -11634,6 +11634,7 @@ mod tests {
                 stun: 0,
                 fuse: 1,
                 chrome: false,
+                harm: game::Harm::Kinetic,
             },
             fx: Vec::new(),
             name: "Satchel charge".to_string(),

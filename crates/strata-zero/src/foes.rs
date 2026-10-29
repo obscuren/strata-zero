@@ -732,6 +732,7 @@ mod tests {
                 stun: 0,
                 fuse: 2,
                 chrome: false,
+                harm: game::Harm::Kinetic,
             },
             fx: Vec::new(),
             name: "satchel".to_string(),

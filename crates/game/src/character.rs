@@ -533,6 +533,46 @@ impl Character {
             .sum()
     }
 
+    /// Armour from equipment.
+    pub fn armor(&self, c: &Content) -> i32 {
+        self.perks(c)
+            .filter_map(|p| match p {
+                Perk::Armor(n) => Some(*n as i32),
+                _ => None,
+            })
+            .sum()
+    }
+
+    /// Extra move from equipment.
+    pub fn move_bonus(&self, c: &Content) -> i32 {
+        self.perks(c)
+            .filter_map(|p| match p {
+                Perk::Move(n) => Some(*n as i32),
+                _ => None,
+            })
+            .sum()
+    }
+
+    /// Extra throw range from equipment.
+    pub fn throw_bonus(&self, c: &Content) -> i32 {
+        self.perks(c)
+            .filter_map(|p| match p {
+                Perk::Throw(n) => Some(*n as i32),
+                _ => None,
+            })
+            .sum()
+    }
+
+    /// Percent of a kind of harm turned aside.
+    pub fn resist(&self, c: &Content, h: Harm) -> i32 {
+        self.perks(c)
+            .filter_map(|p| match p {
+                Perk::Resist(k, n) if *k == h => Some(*n as i32),
+                _ => None,
+            })
+            .sum()
+    }
+
     /// Carry capacity in kilograms: body plus equipment.
     pub fn carry_cap(&self, c: &Content) -> f32 {
         let bonus: f32 = self
@@ -1326,6 +1366,21 @@ mod tests {
             2
         );
         assert_eq!((ch.talent_points, ch.sp), (3, 300));
+    }
+
+    #[test]
+    fn new_perks_sum() {
+        let text = include_str!("../../../flavor/content.ron").replace(
+            r#"perks: [Sight(4)], grants: ["lowlight"]"#,
+            r#"perks: [Sight(4), Armor(2), Move(1), Resist(Kinetic, 15), Throw(3)], grants: ["lowlight"]"#,
+        );
+        let c = Content::parse(&text).unwrap();
+        let ch = vex(&c);
+        assert_eq!(ch.armor(&c), 2);
+        assert_eq!(ch.move_bonus(&c), 1);
+        assert_eq!(ch.resist(&c, Harm::Kinetic), 15);
+        assert_eq!(ch.resist(&c, Harm::Thermal), 0);
+        assert_eq!(ch.throw_bonus(&c), 3);
     }
 
     #[test]

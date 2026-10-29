@@ -933,6 +933,10 @@ impl Boon {
             Boon::Perk(Perk::Focus(n)) => format!("{n:+} focus"),
             Boon::Perk(Perk::Sight(n)) => format!("sight {n:+}"),
             Boon::Perk(Perk::Carry(kg)) => format!("carry {kg:+} kg"),
+            Boon::Perk(Perk::Armor(n)) => format!("{n:+} armour"),
+            Boon::Perk(Perk::Move(n)) => format!("{n:+} move"),
+            Boon::Perk(Perk::Resist(h, n)) => format!("{n:+} {}", h.label()),
+            Boon::Perk(Perk::Throw(n)) => format!("{n:+} throw"),
             Boon::Grant(a) => format!("grants {}", ability_name(a)),
             Boon::Sharpen {
                 ability,
@@ -1289,6 +1293,21 @@ mod tests {
             Content::parse("not ron"),
             Err(ContentError::Parse(_))
         ));
+    }
+
+    #[test]
+    fn grenades_have_harm() {
+        let c = Content::load().unwrap();
+        let harm = |id: &str| match c.item(&ItemId::new(id)).unwrap().on_use {
+            Some(Use::Throw { blast, .. }) => blast.harm,
+            _ => panic!("{id} is not thrown"),
+        };
+        assert_eq!(harm("frag"), Harm::Kinetic);
+        assert_eq!(harm("flashbang"), Harm::Shock);
+        assert_eq!(harm("emp_puck"), Harm::Emp);
+        assert_eq!(harm("satchel"), Harm::Thermal);
+        let b: Blast = ron::from_str("Blast(radius: 1, damage: 2, stun: 0)").unwrap();
+        assert_eq!(b.harm, Harm::Kinetic);
     }
 
     #[test]
@@ -2065,7 +2084,8 @@ mod tests {
                     damage: 12,
                     stun: 0,
                     fuse: 0,
-                    chrome: false
+                    chrome: false,
+                    harm: Harm::Kinetic
                 }
             ))
         );
@@ -2181,7 +2201,8 @@ mod tests {
                 damage: 12,
                 stun: 0,
                 fuse: 0,
-                chrome: false
+                chrome: false,
+                harm: Harm::Kinetic
             }
         );
         assert_eq!(

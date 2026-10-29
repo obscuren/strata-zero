@@ -853,6 +853,10 @@ impl Deck {
                 Perk::Carry(kg) => format!("{kg:+.1} kg carry"),
                 Perk::HpMax(n) => format!("{n:+} max hp"),
                 Perk::Focus(n) => format!("{n:+} focus"),
+                Perk::Armor(n) => format!("{n:+} armour"),
+                Perk::Move(n) => format!("{n:+} move"),
+                Perk::Resist(h, n) => format!("{n:+} {}", h.label()),
+                Perk::Throw(n) => format!("{n:+} throw"),
             }));
         }
         let names: Vec<String> = item
