@@ -32,16 +32,18 @@ const PANE_W: u16 = 43;
 /// The rule between the panes, from the body's left edge.
 const RULE_X: u16 = 45;
 /// The rule over the readout, and the readout under it, from the body's top.
-const READOUT_RULE: u16 = 15;
-const READOUT_Y: u16 = 16;
+const READOUT_RULE: u16 = 18;
+const READOUT_Y: u16 = 19;
 
 /// The left pane's blocks of tiles, in `Num::ALL` order: a header's title, the row
-/// it sits on, and each tile's width.
+/// it sits on, and each tile's width. A blank row follows each block.
 const BLOCKS: [(&str, u16, u16); 3] = [
     ("ATTRIBUTES", 0, 8),
-    ("SECONDARY", 5, 7),
-    ("RESISTANCES", 10, 7),
+    ("SECONDARY", 6, 7),
+    ("RESISTANCES", 12, 7),
 ];
+/// A block's tiles, from its header's row: a blank row between the two.
+const TILES_DY: u16 = 2;
 
 /// The block a number's tile sits in.
 fn block_of(n: Num) -> usize {
@@ -600,19 +602,14 @@ impl Sheet {
                 continue;
             };
             let tail = match b {
-                0 if st.character.attribute_points > 0 => {
-                    let n = st.character.attribute_points;
-                    vec![
-                        (
-                            n.to_string(),
-                            Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
-                        ),
-                        (
-                            format!(" point{}", if n == 1 { "" } else { "s" }),
-                            Style::default().fg(DIM),
-                        ),
-                    ]
-                }
+                // The attribute points left, always: `0 AP` once they are spent.
+                0 => vec![
+                    (
+                        st.character.attribute_points.to_string(),
+                        Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
+                    ),
+                    (" AP".to_string(), Style::default().fg(DIM)),
+                ],
                 1 => vec![(
                     "from gear & chrome".to_string(),
                     Style::default().fg(FAINTER),
@@ -620,11 +617,12 @@ impl Sheet {
                 _ => Vec::new(),
             };
             header(buf, (x0, right), y, title, &tail, focused);
+            let ty = y + TILES_DY;
             for (k, i) in span(b).enumerate() {
                 let x = x0 + k as u16 * w;
-                if y + 3 < body.bottom() && x + w <= right {
+                if ty + 2 < body.bottom() && x + w <= right {
                     let sel = i == self.tile();
-                    self.draw_tile(st, &readings[i], Rect::new(x, y + 1, w, 3), sel, buf);
+                    self.draw_tile(st, &readings[i], Rect::new(x, ty, w, 3), sel, buf);
                 }
             }
         }
@@ -745,7 +743,7 @@ impl Sheet {
     pub fn hint_line(&self, st: &AppState) -> Line<'static> {
         match self.state.pane {
             SheetPane::Left => Line::from(Span::styled(
-                "←↑↓→ select · space buy a point · → over to the chrome · Q/E tabs · tab close",
+                "←↑↓→ select · space allocates attribute · → over to the chrome · Q/E tabs · tab close",
                 Style::default().fg(DIM),
             )),
             SheetPane::Ledger => self.ledger_hints(st),
@@ -850,7 +848,7 @@ mod tests {
 
     /// The readout's rows, the left pane's columns only.
     fn readout(buf: &Buffer, body: Rect) -> String {
-        (body.y + 16..body.bottom())
+        (body.y + READOUT_Y..body.bottom())
             .map(|y| cells(buf, body.x + 1, y, 43).trim_end().to_string() + "\n")
             .collect()
     }
@@ -892,7 +890,7 @@ mod tests {
             .collect();
         for want in [
             "ATTRIBUTES",
-            "2 points",
+            "2 AP",
             "┌ BOD",
             "SECONDARY",
             "from gear & chrome",
@@ -902,30 +900,36 @@ mod tests {
         ] {
             assert!(body.contains(want), "{want}: {body}");
         }
-        // The mock's columns: the headers from x 2, their tails ending at x 44.
+        // The mock's columns: the headers from x 2, their tails ending at x 44; a
+        // blank row under each header, then its tiles.
         assert_eq!(cells(buf, 2, 5, 10), "ATTRIBUTES");
-        assert_eq!(cells(buf, 37, 5, 8), "2 points");
-        assert_eq!(cells(buf, 2, 6, 16), "┌ BOD ─┐┌ REF ─┐");
-        assert_eq!(cells(buf, 2, 10, 9), "SECONDARY");
-        assert_eq!(cells(buf, 27, 10, 18), "from gear & chrome");
+        assert_eq!(cells(buf, 41, 5, 4), "2 AP");
+        assert_eq!(cells(buf, 2, 7, 16), "┌ BOD ─┐┌ REF ─┐");
+        assert_eq!(cells(buf, 2, 11, 9), "SECONDARY");
+        assert_eq!(cells(buf, 27, 11, 18), "from gear & chrome");
         assert_eq!(
-            cells(buf, 2, 11, 42),
+            cells(buf, 2, 13, 42),
             "┌ HP ─┐┌ FOC ┐┌ ARM ┐┌ SGT ┐┌ CAR ┐┌ MOV ┐"
         );
-        assert_eq!(cells(buf, 2, 15, 11), "RESISTANCES");
-        assert_eq!(cells(buf, 2, 16, 14), "┌ KIN ┐┌ THM ┐");
+        assert_eq!(cells(buf, 2, 17, 11), "RESISTANCES");
+        assert_eq!(cells(buf, 2, 19, 14), "┌ KIN ┐┌ THM ┐");
+        // Blank: under each header, between the blocks, and over the readout's rule.
+        for y in [6, 10, 12, 16, 18, 22] {
+            assert_eq!(cells(buf, 2, y, 43).trim(), "", "row {y}");
+        }
+        assert_eq!(cells(buf, 2, 23, 43), "─".repeat(43), "the rule");
         // The deck's +1 net in the NET tile's bottom edge, the jacket's +5 in HP's;
         // with no body SGT moved nothing, so its edge is bare.
-        assert_eq!(cells(buf, 34, 8, 8), "└─ +1 ─┘");
-        assert_eq!(buf[(37, 8)].fg, GREEN);
-        assert_eq!(cells(buf, 2, 13, 7), "└─ +5 ┘");
-        assert_eq!(cells(buf, 23, 13, 7), "└─────┘");
+        assert_eq!(cells(buf, 34, 9, 8), "└─ +1 ─┘");
+        assert_eq!(buf[(37, 9)].fg, GREEN);
+        assert_eq!(cells(buf, 2, 15, 7), "└─ +5 ┘");
+        assert_eq!(cells(buf, 23, 15, 7), "└─────┘");
         // BODY, selected on the focused pane: cyan edge, the bar behind its value.
-        assert_eq!(buf[(2, 6)].fg, CYAN);
-        assert_eq!(buf[(5, 7)].bg, BAR_BG);
-        assert_eq!(buf[(10, 6)].fg, RULE, "REF's edge, not selected");
+        assert_eq!(buf[(2, 7)].fg, CYAN);
+        assert_eq!(buf[(5, 8)].bg, BAR_BG);
+        assert_eq!(buf[(10, 7)].fg, RULE, "REF's edge, not selected");
         assert_eq!(
-            buf[(12, 6)].fg,
+            buf[(12, 7)].fg,
             attribute_colour(Attribute::Reflex),
             "REF in its colour"
         );
@@ -933,6 +937,28 @@ mod tests {
         for y in BODY.y..BODY.bottom() {
             assert_eq!(buf[(BODY.x + 44, y)].symbol(), " ", "y {y}");
             assert_eq!(buf[(BODY.x + 45, y)].symbol(), "║", "y {y}");
+        }
+    }
+
+    #[test]
+    fn the_header_always_says_what_points_are_left() {
+        let mut st = state();
+        for (points, tail) in [(0, "0 AP"), (1, "1 AP"), (12, "12 AP")] {
+            st.character.attribute_points = points;
+            let s = Sheet::new(0);
+            settle(&s, &mut st);
+            let buf = drawn(&s, &st, BODY);
+            let w = tail.chars().count() as u16;
+            assert_eq!(cells(&buf, 45 - w, BODY.y, w), tail);
+            // The number bold TEXT, the word DIM.
+            let n = &buf[(45 - w, BODY.y)];
+            assert_eq!((n.fg, n.modifier.contains(Modifier::BOLD)), (TEXT, true));
+            assert_eq!(buf[(43, BODY.y)].fg, DIM);
+            assert_eq!(buf[(44, BODY.y)].fg, DIM);
+            assert_eq!(buf[(45 - w - 2, BODY.y)].symbol(), "─");
+            // The next point's cost only while there are points to spend.
+            let text = readout(&buf, BODY);
+            assert_eq!(text.contains("next "), points > 0, "{points}: {text}");
         }
     }
 
@@ -1060,8 +1086,11 @@ mod tests {
             text.lines().next().unwrap().ends_with(&next),
             "right-aligned: {text}"
         );
-        assert_eq!(buf[(2, BODY.y + 16)].fg, attribute_colour(Attribute::Body));
-        assert_eq!(buf[(BODY.x + 43, BODY.y + 16)].fg, AMBER);
+        assert_eq!(
+            buf[(2, BODY.y + READOUT_Y)].fg,
+            attribute_colour(Attribute::Body)
+        );
+        assert_eq!(buf[(BODY.x + 43, BODY.y + READOUT_Y)].fg, AMBER);
 
         // EMP, with nine pieces in: the tile and the readout say what they cost.
         nine_pieces(&mut st);
@@ -1073,8 +1102,8 @@ mod tests {
         assert!(text.starts_with("EMP -18"), "{text}");
         assert!(text.contains("chrome -18 · nine pieces"), "{text}");
         assert!(!text.contains("feeds"), "{text}");
-        assert_eq!(cells(&buf, 23, 17, 7), "│ -18 │");
-        assert_eq!(buf[(25, 17)].fg, MAGENTA);
+        assert_eq!(cells(&buf, 23, 20, 7), "│ -18 │");
+        assert_eq!(buf[(25, 20)].fg, MAGENTA);
 
         // SIGHT: the number the map sees by, where you stand.
         let mut st = walking();
@@ -1098,10 +1127,10 @@ mod tests {
         assert_eq!(radius, here + 6);
         let buf = drawn(&s, &st, BODY);
         assert_eq!(
-            cells(&buf, 23, 12, 7).trim_matches(['│', ' ']),
+            cells(&buf, 23, 14, 7).trim_matches(['│', ' ']),
             radius.to_string()
         );
-        assert_eq!(cells(&buf, 23, 13, 7), "└─ +6 ┘");
+        assert_eq!(cells(&buf, 23, 15, 7), "└─ +6 ┘");
         let text = readout(&buf, BODY);
         assert!(
             text.starts_with(&format!("SIGHT {here} · {radius} with chrome")),
@@ -1135,12 +1164,12 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("Low-light"), "{text}");
-        assert_eq!(cells(&buf, 23, 13, 7), "└─ +4 ┘");
+        assert_eq!(cells(&buf, 23, 15, 7), "└─ +4 ┘");
         // No body: no sight, no edge, and the readout says why.
         st.player = None;
         let buf = drawn(&s, &st, BODY);
-        assert_eq!(cells(&buf, 23, 12, 7), "│  0  │");
-        assert_eq!(cells(&buf, 23, 13, 7), "└─────┘");
+        assert_eq!(cells(&buf, 23, 14, 7), "│  0  │");
+        assert_eq!(cells(&buf, 23, 15, 7), "└─────┘");
         let text = readout(&buf, BODY);
         assert!(text.starts_with("SIGHT 0\n"), "{text}");
         assert!(text.contains("chrome +4 Nightglass optics"), "{text}");
@@ -1149,7 +1178,7 @@ mod tests {
 
     /// The readout's row that starts with `lead`, as drawn.
     fn row_of(buf: &Buffer, body: Rect, lead: &str) -> u16 {
-        (body.y + 16..body.bottom())
+        (body.y + READOUT_Y..body.bottom())
             .find(|&y| cells(buf, body.x + 1, y, 43).starts_with(lead))
             .unwrap_or_else(|| panic!("no row starts with {lead}"))
     }
@@ -1166,8 +1195,8 @@ mod tests {
         let s = Sheet::new(0);
         settle(&s, &mut st);
         let buf = drawn(&s, &st, BODY);
-        assert_eq!(cells(&buf, 2, 7, 8), "│  10  │");
-        assert_eq!(cells(&buf, 2, 8, 8), "└─ +2 ─┘");
+        assert_eq!(cells(&buf, 2, 8, 8), "│  10  │");
+        assert_eq!(cells(&buf, 2, 9, 8), "└─ +2 ─┘");
         let text = readout(&buf, BODY);
         for want in [
             "BODY 8 · 10 with chrome",
@@ -1190,13 +1219,13 @@ mod tests {
         settle(&s, &mut st);
         let buf = drawn(&s, &st, BODY);
         let mov = 2 + 5 * 7;
-        assert_eq!(cells(&buf, mov, 12, 7), "│  4  │");
+        assert_eq!(cells(&buf, mov, 14, 7), "│  4  │");
         assert_eq!(
-            cells(&buf, mov, 13, 7),
+            cells(&buf, mov, 15, 7),
             "└─────┘",
             "no edge: it moved nothing"
         );
-        assert_eq!(buf[(mov + 3, 12)].fg, TEXT);
+        assert_eq!(buf[(mov + 3, 14)].fg, TEXT);
         let text = readout(&buf, BODY);
         assert!(text.starts_with("MOVE 4\n"), "{text}");
         assert!(text.contains("chrome +1 Redline spine"), "{text}");
@@ -1204,7 +1233,7 @@ mod tests {
         // On foot the spine counts, and nothing needs saying.
         st.player.as_mut().unwrap().place = Place::Stratum(StratumKind::Street);
         let buf = drawn(&s, &st, BODY);
-        assert_eq!(cells(&buf, mov, 13, 7), "└─ +1 ┘");
+        assert_eq!(cells(&buf, mov, 15, 7), "└─ +1 ┘");
         let text = readout(&buf, BODY);
         assert!(text.starts_with("MOVE 4 · 5 with chrome"), "{text}");
         assert!(!text.contains("in a construct:"), "{text}");
@@ -1231,8 +1260,10 @@ mod tests {
         let mut s = Sheet::new(0);
         s.state.tile = tile_of(Num::Attribute(Attribute::Cool));
         settle(&s, &mut st);
-        let buf = drawn(&s, &st, BODY);
-        let text = readout(&buf, BODY);
+        // Six rows of readout: room for what it feeds, not for the whole blurb.
+        let body = Rect::new(1, 5, 98, READOUT_Y + 6);
+        let buf = drawn(&s, &st, body);
+        let text = readout(&buf, body);
         let n = Build::from_character(&st.content, &st.character)
             .attribute_cost(&st.content, Attribute::Cool);
         let next = format!("next {n} pt{}", if n == 1 { "" } else { "s" });
@@ -1242,7 +1273,7 @@ mod tests {
             first.ends_with(&next),
             "one row, the cost at the right: {text}"
         );
-        assert_eq!(buf[(BODY.x + 43, BODY.y + 16)].fg, AMBER);
+        assert_eq!(buf[(body.x + 43, body.y + READOUT_Y)].fg, AMBER);
         for want in ["feeds", "gear +1 Mirrorshades", "hardware +1 Hushcan"] {
             assert!(text.contains(want), "{want}: {text}");
         }
@@ -1272,14 +1303,14 @@ mod tests {
         s.state.pane = SheetPane::Ledger;
         settle(&s, &mut st);
         let buf = drawn(&s, &st, BODY);
-        assert_eq!(buf[(2, 6)].fg, DIM, "BODY keeps its place, dim");
-        assert_ne!(buf[(5, 7)].bg, BAR_BG);
+        assert_eq!(buf[(2, 7)].fg, DIM, "BODY keeps its place, dim");
+        assert_ne!(buf[(5, 8)].bg, BAR_BG);
         assert_eq!(buf[(2, 5)].fg, DIM, "the headers go dim");
         assert!(s.hints(&st).contains("← attributes"));
         s.state.pane = SheetPane::Left;
         assert_eq!(
             s.hints(&st),
-            "←↑↓→ select · space buy a point · → over to the chrome · Q/E tabs · tab close"
+            "←↑↓→ select · space allocates attribute · → over to the chrome · Q/E tabs · tab close"
         );
     }
 
@@ -1327,7 +1358,9 @@ mod tests {
                             "{body:?} tile {tile} y {y}"
                         );
                     }
-                    assert_eq!(buf[(body.x, body.y + 4)].symbol(), " ");
+                    for dy in [1, 5, 7] {
+                        assert_eq!(buf[(body.x, body.y + dy)].symbol(), " ");
+                    }
                     // Every line of where the number comes from is drawn.
                     let text = readout(&buf, body);
                     let r = Reading::of(&st, Num::ALL[tile]);
@@ -1350,7 +1383,12 @@ mod tests {
         settle(&s, &mut st);
         let wide = drawn(&s, &st, WIDE);
         assert_eq!(cells(&wide, 2, WIDE.y, 10), "ATTRIBUTES");
-        assert_eq!(cells(&wide, 2, WIDE.y + 1, 8), "┌ BOD ─┐");
+        assert_eq!(cells(&wide, 2, WIDE.y + 1, 43).trim(), "");
+        assert_eq!(cells(&wide, 2, WIDE.y + 2, 8), "┌ BOD ─┐");
+        // Room for the whole readout: line one, the blurb, a blank row, what it feeds.
+        let text = readout(&wide, WIDE);
+        assert!(text.contains("feeds"), "{text}");
+        assert!(!text.contains('…'), "{text}");
         assert!(readout(&wide, WIDE).starts_with("BODY 4"));
         assert_eq!(wide[(WIDE.x + 45, WIDE.bottom() - 1)].symbol(), "║");
     }

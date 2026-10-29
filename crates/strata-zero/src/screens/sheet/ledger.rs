@@ -1689,7 +1689,8 @@ mod tests {
         let hint_row = |d: &Deck, st: &mut AppState| cells(&screen(d, st, (100, 30)), 2, 28, 90);
         let mut d = Deck::new(0);
         d.update(&mut st, &[key(KeyCode::Char('2'))]);
-        let left = "←↑↓→ select · space buy a point · → over to the chrome · Q/E tabs · tab close";
+        let left =
+            "←↑↓→ select · space allocates attribute · → over to the chrome · Q/E tabs · tab close";
         assert_eq!(d.sheet.hints(&st), left);
         assert!(hint_row(&d, &mut st).starts_with(left));
         d.sheet.state.pane = SheetPane::Ledger;

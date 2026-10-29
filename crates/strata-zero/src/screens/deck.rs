@@ -2631,11 +2631,11 @@ mod tests {
         on_attribute(&mut d, &mut st, Num::Attribute(Attribute::Body));
         let text = draw(&d, &st, 120, 35);
         assert!(
-            text.contains("3 points") && text.contains("next 3 pts"),
+            text.contains("3 AP") && text.contains("next 3 pts"),
             "{text}"
         );
         assert!(
-            text.contains("space buy a point"),
+            text.contains("space allocates attribute"),
             "the sheet's hints: {text}"
         );
         assert!(matches!(
