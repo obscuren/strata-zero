@@ -1279,8 +1279,8 @@ impl Character {
             .sum()
     }
 
-    /// Carried weight: inventory plus everything equipped and installed, fitted
-    /// pieces included.
+    /// Carried weight: inventory plus everything equipped, fitted pieces included.
+    /// Installed chrome is left out: it is part of you, and LOAD is its cost.
     pub fn weight(&self, c: &Content) -> f32 {
         let carried: f32 = self.inventory.iter().map(|s| s.weight(c)).sum();
         let worn: f32 = self
@@ -1291,20 +1291,10 @@ impl Character {
                 own + self.worn.get(slot).map_or(0.0, |k| k.fitted_weight(c))
             })
             .sum();
-        let installed: f32 = self
-            .chrome
-            .iter()
-            .map(|(site, id)| {
-                let own = c.item(id).map_or(0.0, |i| i.weight);
-                own + self
-                    .chrome_copies
-                    .get(site)
-                    .map_or(0.0, |k| k.fitted_weight(c))
-            })
-            .sum();
-        carried + worn + installed
+        carried + worn
     }
 
+    /// What it all is worth: the pack, what is worn and the chrome in you.
     pub fn value(&self, c: &Content) -> u32 {
         let carried: u32 = self.inventory.iter().map(|s| s.value(c)).sum();
         let worn: u32 = self
@@ -2334,7 +2324,7 @@ mod tests {
         let c = Content::load().unwrap();
         let mut ch = Character::from_template(&c, &TemplateId::new("kessler")).unwrap();
         assert_eq!((ch.pieces(), ch.chrome_load(&c)), (0, 0));
-        let (weight, body) = (ch.weight(&c), ch.stat(&c, Stat::Body));
+        let (weight, value, body) = (ch.weight(&c), ch.value(&c), ch.stat(&c, Stat::Body));
         let (port, arm, hand) = (
             ItemId::new("neural_port"),
             ItemId::new("piston_arm"),
@@ -2371,7 +2361,10 @@ mod tests {
         }
         assert_eq!(ch.resist(&c, Harm::Shock), 10);
         assert_eq!(ch.resist(&c, Harm::Emp), -6, "two for every piece");
-        assert!((ch.weight(&c) - (weight + 0.1 + 5.0 + 2.5)).abs() < 1e-4);
+        // Chrome in you weighs nothing (LOAD is its cost), but it is still worth
+        // what it is.
+        assert!((ch.weight(&c) - weight).abs() < 1e-4, "{}", ch.weight(&c));
+        assert_eq!(ch.value(&c), value + 1500 + 2800 + 2600);
         // A copy left behind at an empty site counts for nothing.
         ch.chrome.remove(&Site::LeftArm);
         assert!(ch.chrome_copy(Site::LeftArm).is_none());

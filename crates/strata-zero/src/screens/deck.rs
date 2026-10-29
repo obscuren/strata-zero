@@ -2306,7 +2306,7 @@ mod tests {
         st.tick = 60;
         let text = draw(&d, &st, 120, 35);
         assert!(
-            text.contains("hp 45/45") && text.contains("11.6/16.0 kg"),
+            text.contains("hp 45/45") && text.contains("11.4/16.0 kg"),
             "{text}"
         );
         st.say("equipped Hardhat with visor");
@@ -2331,7 +2331,7 @@ mod tests {
             .inventory
             .push(game::Stack::new(ItemId::new("scrap_servo"), 40));
         let text = draw(&d, &st, 120, 35);
-        assert!(text.contains("35.6/16.0 kg"), "{text}");
+        assert!(text.contains("35.4/16.0 kg"), "{text}");
     }
 
     #[test]

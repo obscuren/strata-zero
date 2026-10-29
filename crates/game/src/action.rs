@@ -1829,12 +1829,18 @@ mod tests {
         let (c, mut ch, mut g, at) = setup();
         ch.give_item(&c, id("grip_arm"), 1);
         let copy = pack_id(&ch, "grip_arm");
+        let packed = ch.weight(&c);
         let a = Action::Install {
             item: id("grip_arm"),
             site: Site::RightArm,
         };
         let out = act(&mut ch, &mut g, &c, at, a).unwrap();
         assert_eq!(out.message, "installed `Grip arm` · R ARM");
+        assert!(
+            near(ch.weight(&c), packed - 4.0),
+            "installed, the arm weighs nothing: {}",
+            ch.weight(&c)
+        );
         assert_eq!(ch.chrome_at(Site::RightArm), Some(&id("grip_arm")));
         assert_eq!(ch.count(&id("grip_arm")), 0);
         assert_eq!(ch.chrome_copy(Site::RightArm).map(|k| k.id), Some(copy));
@@ -1842,6 +1848,10 @@ mod tests {
         assert_eq!(out.message, "pulled `Grip arm` · to the pack");
         assert_eq!(ch.chrome_at(Site::RightArm), None);
         assert_eq!(pack_id(&ch, "grip_arm"), copy);
+        assert!(
+            near(ch.weight(&c), packed),
+            "back in the pack, it weighs again"
+        );
         assert_eq!(
             act(&mut ch, &mut g, &c, at, Action::Pull(Site::RightArm)).unwrap_err(),
             "nothing installed at R ARM"
