@@ -16,7 +16,7 @@ pub const AMBER: Color = Color::Rgb(255, 200, 80);
 pub const GREEN: Color = Color::Rgb(80, 230, 120);
 pub const DIM_AMBER: Color = Color::Rgb(190, 150, 60);
 pub const RULE_STYLE: Style = Style::new().fg(RULE);
-const BADGE_FG: Color = Color::Rgb(10, 11, 16);
+pub(crate) const BADGE_FG: Color = Color::Rgb(10, 11, 16);
 const TICKS_PER_MINUTE: u64 = 90;
 const START_MINUTE: u64 = 22 * 60;
 /// The minute of the day the game starts at, for the simulation's clock.
