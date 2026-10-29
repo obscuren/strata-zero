@@ -96,7 +96,38 @@ struct Reading {
     /// name, what grants it, and how much. Low-light's sight, while the lamps are on.
     boons: Vec<(usize, String, Option<String>, i32)>,
     /// Why the value is not its own plus its sources: a cap, a floor, a construct.
-    note: Option<String>,
+    note: Option<Note>,
+}
+
+/// Why a number is not its own plus its sources.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Note {
+    Capped,
+    Floor,
+    Construct,
+    NoBody,
+}
+
+impl Note {
+    /// The note on its own line: `capped at 10`.
+    fn line(self, value: i32) -> String {
+        match self {
+            Note::Capped => format!("capped at {value}"),
+            Note::Floor => format!("at least {value}"),
+            Note::Construct => format!("in a construct: {value}"),
+            Note::NoBody => format!("no body: {value}"),
+        }
+    }
+
+    /// The note folded into line one, after the value: `REFLEX 9 · 10 in all, capped`.
+    fn folded(self) -> &'static str {
+        match self {
+            Note::Capped => "capped",
+            Note::Floor => "at its floor",
+            Note::Construct => "in a construct",
+            Note::NoBody => "no body",
+        }
+    }
 }
 
 impl Reading {
@@ -146,11 +177,11 @@ impl Reading {
         let note = match (num, own.map(|o| o + added)) {
             (_, Some(sum)) if sum == value => None,
             (Num::Move, Some(_)) if matches!(place, Some(Place::Construct(_))) => {
-                Some(format!("in a construct: {value}"))
+                Some(Note::Construct)
             }
-            (_, Some(sum)) if sum > value => Some(format!("capped at {value}")),
-            (_, Some(_)) => Some(format!("at least {value}")),
-            (Num::Sight, None) if added != 0 => Some(format!("no body: {value}")),
+            (_, Some(sum)) if sum > value => Some(Note::Capped),
+            (_, Some(_)) => Some(Note::Floor),
+            (Num::Sight, None) if added != 0 => Some(Note::NoBody),
             _ => None,
         };
         Reading {
@@ -300,13 +331,74 @@ fn flow(
     out
 }
 
+/// `items`, each kept whole, ` · `-joined `sep` between them, wrapped at `width`; an
+/// item wider than a line is cut.
+fn run(items: Vec<Vec<Span<'static>>>, sep: Span<'static>, width: usize) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    let mut line: Vec<Span<'static>> = Vec::new();
+    let mut used = 0;
+    for item in items {
+        let w: usize = item.iter().map(Span::width).sum();
+        if used > 0 && used + sep.width() + w > width {
+            out.push(Line::from(std::mem::take(&mut line)));
+            used = 0;
+        }
+        if used > 0 {
+            used += sep.width();
+            line.push(sep.clone());
+        }
+        for span in item {
+            let text = cut(&span.content, width.saturating_sub(used));
+            used += text.chars().count();
+            line.push(Span::styled(text, span.style));
+        }
+    }
+    if !line.is_empty() {
+        out.push(Line::from(line));
+    }
+    out
+}
+
+/// `line` within `width`, ending in `…`: what came after it was cut.
+fn marked_cut(line: &Line<'static>, width: usize) -> Line<'static> {
+    let mut cells: Vec<(char, Style)> = line
+        .spans
+        .iter()
+        .flat_map(|s| s.content.chars().map(move |c| (c, s.style)))
+        .collect();
+    cells.truncate(width.saturating_sub(1));
+    while cells.last().is_some_and(|&(c, _)| c == ' ') {
+        cells.pop();
+    }
+    let style = cells.last().map_or(Style::default().fg(TEXT), |&(_, s)| s);
+    cells.push(('…', style));
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (c, s) in cells {
+        match spans.last_mut() {
+            Some(last) if last.style == s => last.content.to_mut().push(c),
+            _ => spans.push(Span::styled(c.to_string(), s)),
+        }
+    }
+    Line::from(spans)
+}
+
 /// A number's readout, in parts so it can give way when rows run short: line one, the
 /// blurb, what an attribute feeds, and where the rest comes from with any note.
 struct Readout {
-    head: Line<'static>,
+    /// Line one's left: the name, the value, and what it is with everything.
+    head: Vec<Span<'static>>,
+    /// Whether line one goes on past the value (`· 10 in all`): a folded note joins it
+    /// with a comma, else with a dot.
+    with: bool,
+    /// What the next point costs, at the right of line one.
+    next: Option<String>,
     blurb: Vec<Line<'static>>,
     feeds: Vec<Line<'static>>,
-    parts: Vec<Line<'static>>,
+    /// Where the rest comes from: each kind's word with its entries, then each ability
+    /// with what grants it.
+    sources: Vec<(Span<'static>, Vec<Span<'static>>)>,
+    /// Why the value is not its own plus its sources, and the value.
+    note: Option<(Note, i32)>,
 }
 
 impl Readout {
@@ -322,7 +414,7 @@ impl Readout {
         // Its own value and the value with everything, while they differ and it has
         // one of its own to speak of; else the value.
         let mut head = vec![Span::styled(format!("{} ", r.num.name()), bold(name))];
-        match r.own {
+        let with = match r.own {
             Some(own) if own != r.value && r.num != Num::Armor => {
                 let with = match r.kinds()[..] {
                     [k] => format!("with {}", KINDS[k]),
@@ -330,21 +422,23 @@ impl Readout {
                 };
                 head.push(Span::styled(own.to_string(), bold(TEXT)));
                 head.push(Span::styled(format!(" · {} {with}", r.value), dim));
+                true
             }
-            _ => head.push(Span::styled(r.value.to_string(), bold(r.colour()))),
-        }
+            _ => {
+                head.push(Span::styled(r.value.to_string(), bold(r.colour())));
+                false
+            }
+        };
         // What the next point costs, at the right, while there are points to spend.
-        if let Num::Attribute(s) = r.num
-            && ch.attribute_points > 0
-            && ch.attributes.get(s) < c.creation.attribute_cap
-        {
-            let n = Build::from_character(c, ch).attribute_cost(c, s);
-            let next = format!("next {n} pt{}", if n == 1 { "" } else { "s" });
-            let used: usize = head.iter().map(|s| s.width()).sum();
-            let pad = width.saturating_sub(used + next.chars().count()).max(2);
-            head.push(Span::raw(" ".repeat(pad)));
-            head.push(Span::styled(next, Style::default().fg(AMBER)));
-        }
+        let next = match r.num {
+            Num::Attribute(s)
+                if ch.attribute_points > 0 && ch.attributes.get(s) < c.creation.attribute_cap =>
+            {
+                let n = Build::from_character(c, ch).attribute_cost(c, s);
+                Some(format!("next {n} pt{}", if n == 1 { "" } else { "s" }))
+            }
+            _ => None,
+        };
 
         let blurb = match r.num {
             Num::Attribute(s) => c.attribute_blurb(s),
@@ -373,7 +467,7 @@ impl Readout {
             c.item(id)
                 .map_or_else(|| id.to_string(), |i| i.name.clone())
         };
-        let mut parts = Vec::new();
+        let mut sources = Vec::new();
         for (k, word) in KINDS.iter().enumerate() {
             let entries: Vec<Span<'static>> = r
                 .sources
@@ -394,52 +488,96 @@ impl Readout {
                 })
                 .collect();
             if !entries.is_empty() {
-                parts.extend(flow(
-                    Span::styled(format!("{word} "), dim),
-                    entries,
-                    Span::styled(" · ", dim),
-                    width,
-                ));
+                sources.push((Span::styled(format!("{word} "), dim), entries));
             }
         }
-        // An ability's part is its own line, named with what grants it.
+        // An ability's part is its own, named with what grants it.
         for (k, ability, by, v) in &r.boons {
             let by = by.as_ref().map_or(String::new(), |b| format!(" · {b}"));
-            parts.extend(flow(
+            sources.push((
                 Span::styled(format!("{} ", KINDS[*k]), dim),
                 vec![Span::styled(
                     format!("{v:+} {ability}{by}"),
                     Style::default().fg(signed(*v)),
                 )],
-                Span::raw(""),
-                width,
             ));
         }
-        if let Some(note) = &r.note {
-            parts.push(Line::from(Span::styled(
-                cut(note, width),
-                Style::default().fg(FAINTER),
-            )));
-        }
         Readout {
-            head: Line::from(head),
+            head,
+            with,
+            next,
             blurb,
             feeds,
-            parts,
+            sources,
+            note: r.note.map(|n| (n, r.value)),
         }
+    }
+
+    /// Line one `width` wide, the next point's cost at the right; `fold` takes the
+    /// note in after the value, in the note's colour.
+    fn line_one(&self, width: usize, fold: bool) -> Line<'static> {
+        let mut spans = self.head.clone();
+        if let Some((note, _)) = self.note.filter(|_| fold) {
+            let join = if self.with { ", " } else { " · " };
+            spans.push(Span::styled(
+                format!("{join}{}", note.folded()),
+                Style::default().fg(FAINTER),
+            ));
+        }
+        if let Some(next) = &self.next {
+            let used: usize = spans.iter().map(Span::width).sum();
+            let pad = width.saturating_sub(used + next.chars().count()).max(2);
+            spans.push(Span::raw(" ".repeat(pad)));
+            spans.push(Span::styled(next.clone(), Style::default().fg(AMBER)));
+        }
+        Line::from(spans)
+    }
+
+    /// Where the rest comes from: a line or more a kind, or `flowed`, every kind in one
+    /// run, ` · ` between, each kind's word leading its first entry.
+    fn source_lines(&self, width: usize, flowed: bool) -> Vec<Line<'static>> {
+        let sep = Span::styled(" · ", Style::default().fg(DIM));
+        if !flowed {
+            return self
+                .sources
+                .iter()
+                .flat_map(|(lead, entries)| flow(lead.clone(), entries.clone(), sep.clone(), width))
+                .collect();
+        }
+        let items = self.sources.iter().flat_map(|(lead, entries)| {
+            entries.iter().enumerate().map(|(i, e)| match i {
+                0 => vec![lead.clone(), e.clone()],
+                _ => vec![e.clone()],
+            })
+        });
+        run(items.collect(), sep, width)
+    }
+
+    /// The note on a line of its own.
+    fn note_line(&self, width: usize) -> Option<Line<'static>> {
+        self.note.map(|(note, value)| {
+            Line::from(Span::styled(
+                cut(&note.line(value), width),
+                Style::default().fg(FAINTER),
+            ))
+        })
     }
 
     /// The lines in at most `height` rows of `width`, counted as they wrap. Short of
     /// rows the blank line gives way first, then the blurb from its end (marked cut),
     /// then what an attribute feeds, so where the number comes from stays to the last.
+    /// Still short, the note folds into line one, then the sources flow onto fewer
+    /// lines; only then is the last line that fits marked cut.
     fn fit(mut self, width: usize, height: usize) -> Vec<Line<'static>> {
         let rows = |lines: &[Line<'static>]| -> usize {
             lines.iter().map(|l| wrapped_rows(l, width)).sum()
         };
-        let mut blank = !self.blurb.is_empty() && !(self.feeds.is_empty() && self.parts.is_empty());
+        let mut blank = !self.blurb.is_empty()
+            && !(self.feeds.is_empty() && self.sources.is_empty() && self.note.is_none());
         let mut cut_blurb = false;
-        let lines = loop {
-            let mut lines = vec![self.head.clone()];
+        let (mut fold, mut flowed) = (false, false);
+        loop {
+            let mut lines = vec![self.line_one(width, fold)];
             lines.extend(self.blurb.iter().cloned());
             if cut_blurb && let Some(last) = lines.last_mut().filter(|_| !self.blurb.is_empty()) {
                 let text = format!("{last}…");
@@ -449,21 +587,44 @@ impl Readout {
                 lines.push(Line::from(""));
             }
             lines.extend(self.feeds.iter().cloned());
-            lines.extend(self.parts.iter().cloned());
+            lines.extend(self.source_lines(width, flowed));
+            if !fold {
+                lines.extend(self.note_line(width));
+            }
             if rows(&lines) <= height {
-                break lines;
+                return lines;
             }
             if blank {
                 blank = false;
             } else if self.blurb.pop().is_some() {
                 cut_blurb = true;
-            } else if self.feeds.pop().is_none() {
-                break lines;
+            } else if self.feeds.pop().is_some() {
+                // A line of what it feeds gone; try again.
+            } else if !fold && self.note.is_some() {
+                fold = true;
+            } else if !flowed {
+                flowed = true;
+            } else {
+                while rows(&lines) > height && lines.pop().is_some() {}
+                if let Some(last) = lines.last_mut() {
+                    *last = marked_cut(last, width);
+                }
+                return lines;
             }
-        };
-        let mut lines = lines;
-        while rows(&lines) > height && lines.pop().is_some() {}
-        lines
+        }
+    }
+
+    /// Where the rest comes from as `fit` keeps it whatever the rows: every entry, and
+    /// the note's word.
+    #[cfg(test)]
+    fn says(&self) -> Vec<String> {
+        let entries = self
+            .sources
+            .iter()
+            .flat_map(|(_, e)| e.iter().map(|s| s.content.to_string()));
+        entries
+            .chain(self.note.map(|(n, _)| n.folded().to_string()))
+            .collect()
     }
 }
 
@@ -1287,6 +1448,138 @@ mod tests {
         }
         // The blurb gave way to make room, and says so.
         assert!(text.lines().nth(1).unwrap().ends_with('…'), "{text}");
+
+        // On the real 100×30 body, four rows: line one with its cost, every source.
+        let buf = drawn(&s, &st, BODY);
+        let text = readout(&buf, BODY);
+        assert_eq!(text.lines().filter(|l| !l.is_empty()).count(), 4, "{text}");
+        let first = text.lines().next().unwrap();
+        assert!(first.starts_with("COOL 5 · 7 in all"), "{text}");
+        assert!(first.ends_with(&next), "{text}");
+        for want in ["gear +1 Mirrorshades", "hardware +1 Hushcan"] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+    }
+
+    /// REFLEX `base` with the Monowire shiv worn, the Redline spine in and Quick draw at
+    /// 2: three more, capped at 10 from 8 up, points unspent.
+    fn crowded_reflex(base: u8) -> (AppState, Sheet) {
+        let mut st = state();
+        st.character.attribute_points = 3;
+        st.character.attributes.reflex = base;
+        st.character
+            .wear(Slot::Secondary, ItemId::new("shiv_blade"), None);
+        st.character
+            .install(Site::Spine, ItemId::new("redline_spine"), None);
+        st.character
+            .talents
+            .insert(game::TalentId::new("quick_draw"), 2);
+        let mut s = Sheet::new(0);
+        s.state.tile = tile_of(Num::Attribute(Attribute::Reflex));
+        settle(&s, &mut st);
+        (st, s)
+    }
+
+    #[test]
+    fn a_crowded_readout_folds_its_note_into_line_one() {
+        let (st, s) = crowded_reflex(9);
+        let buf = drawn(&s, &st, BODY);
+        let text = readout(&buf, BODY);
+        let first = text.lines().next().unwrap();
+        assert_eq!(first, "REFLEX 9 · 10 in all, capped", "{text}");
+        for want in [
+            "gear +1 Monowire shiv",
+            "chrome +1 Redline spine",
+            "talents +1",
+        ] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+        assert!(!text.contains('…'), "nothing cut: {text}");
+        // The folded note in the note's own colour.
+        let x = BODY.x + 1 + "REFLEX 9 · 10 in all, ".chars().count() as u16;
+        assert_eq!(cells(&buf, x, BODY.y + READOUT_Y, 6), "capped");
+        assert_eq!(buf[(x, BODY.y + READOUT_Y)].fg, FAINTER);
+        // With room, the note keeps its own line.
+        let wide = drawn(&s, &st, WIDE);
+        let text = readout(&wide, WIDE);
+        assert!(text.starts_with("REFLEX 9 · 10 in all\n"), "{text}");
+        assert!(text.contains("\ncapped at 10\n"), "{text}");
+    }
+
+    #[test]
+    fn a_more_crowded_readout_flows_its_sources() {
+        // REFLEX 7, under the cap a point buys to, and the Redeye sight on the Ratchet's
+        // rail as well: four kinds, the cap, and the next point's cost on line one.
+        let (mut st, s) = crowded_reflex(7);
+        let eye = ItemId::new("redeye");
+        let copy = st.character.new_copy(&st.content, &eye);
+        let content = st.content.clone();
+        st.character
+            .host_copy_mut(&content, game::Host::Worn(Slot::Primary))
+            .unwrap()
+            .fitted[1] = Some(game::Stack {
+            item: eye,
+            qty: 1,
+            copy: Some(copy),
+        });
+        let buf = drawn(&s, &st, BODY);
+        let text = readout(&buf, BODY);
+        let n = Build::from_character(&st.content, &st.character)
+            .attribute_cost(&st.content, Attribute::Reflex);
+        let next = format!("next {n} pt{}", if n == 1 { "" } else { "s" });
+        let first = text.lines().next().unwrap();
+        assert!(first.starts_with("REFLEX 7 · 10 in all, capped"), "{text}");
+        assert!(
+            first.ends_with(&next),
+            "the cost still at the right: {text}"
+        );
+        for want in [
+            "gear +1 Monowire shiv",
+            "hardware +1 Redeye sight",
+            "chrome +1 Redline spine · talents +1",
+        ] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+        assert!(!text.contains('…'), "nothing cut: {text}");
+    }
+
+    #[test]
+    fn a_readout_with_no_room_left_marks_its_last_line_cut() {
+        let (st, _) = crowded_reflex(9);
+        let r = Reading::of(&st, Num::Attribute(Attribute::Reflex));
+        let shown = |height: usize| -> Vec<String> {
+            let lines = Readout::of(&st, &r, 43).fit(43, height);
+            lines.iter().map(|l| l.to_string()).collect()
+        };
+        // Three rows: the note folded, the sources flowed onto two lines, nothing cut.
+        assert_eq!(
+            shown(3),
+            [
+                "REFLEX 9 · 10 in all, capped",
+                "gear +1 Monowire shiv",
+                "chrome +1 Redline spine · talents +1",
+            ]
+        );
+        // Two: the last line that fits says the rest was cut.
+        assert_eq!(
+            shown(2),
+            ["REFLEX 9 · 10 in all, capped", "gear +1 Monowire shiv…"]
+        );
+        assert_eq!(shown(1), ["REFLEX 9 · 10 in all, capped…"]);
+        // A full-width line (43 of 43) gives up its last cell to the mark.
+        let line = Line::from(vec![
+            Span::styled("a".repeat(30), Style::default().fg(DIM)),
+            Span::styled(
+                " ".to_string() + &"b".repeat(12),
+                Style::default().fg(GREEN),
+            ),
+        ]);
+        let cut = marked_cut(&line, 43);
+        assert_eq!(
+            cut.to_string(),
+            format!("{} {}…", "a".repeat(30), "b".repeat(11))
+        );
+        assert_eq!(cut.spans.last().unwrap().style.fg, Some(GREEN));
     }
 
     #[test]
@@ -1369,13 +1662,12 @@ mod tests {
                     for dy in [1, 5, 7] {
                         assert_eq!(buf[(body.x, body.y + dy)].symbol(), " ");
                     }
-                    // Every line of where the number comes from is drawn.
+                    // Everything the number comes from is drawn, and why it doesn't add up.
                     let text = readout(&buf, body);
                     let r = Reading::of(&st, Num::ALL[tile]);
-                    for part in Readout::of(&st, &r, 43).parts {
-                        let part = part.to_string();
+                    for part in Readout::of(&st, &r, 43).says() {
                         assert!(
-                            text.contains(part.trim_end()),
+                            text.contains(&part),
                             "{body:?} tile {tile}: {part:?} in {text}"
                         );
                     }

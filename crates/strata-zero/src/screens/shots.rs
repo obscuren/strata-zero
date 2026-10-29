@@ -896,8 +896,8 @@ fn kit_shots(
 
 /// ATTRIBUTES at each size: the spec's loadout on the Piston arm; the picker on R ARM with
 /// a Grip arm in the pack; the picker on the forearm with a Monowire spool; the swap
-/// picker on the Piston arm at L ARM, the Grip arm picked; and the left pane on EMP, two
-/// off for each piece.
+/// picker on the Piston arm at L ARM, the Grip arm picked; the left pane on EMP, two
+/// off for each piece; and on REFLEX, its readout crowded with sources and its cap.
 #[test]
 #[ignore]
 fn attributes_sheet() {
@@ -975,6 +975,19 @@ fn attributes_sheet() {
         .unwrap();
     sheet_shots(&mut st, "attributes_left_emp", &sizes, |d, _| {
         d.sheet.state.tile = emp;
+    });
+
+    // REFLEX, crowded: the Monowire shiv worn as well, so gear, chrome, talents and the
+    // cap want more rows than the readout has at 100×30.
+    let mut st = fresh();
+    st.character
+        .wear(game::Slot::Secondary, ItemId::new("shiv_blade"), None);
+    let reflex = Num::ALL
+        .iter()
+        .position(|&n| n == Num::Attribute(game::Attribute::Reflex))
+        .unwrap();
+    sheet_shots(&mut st, "attributes_left_reflex", &sizes, |d, _| {
+        d.sheet.state.tile = reflex;
     });
 }
 
