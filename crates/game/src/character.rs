@@ -237,7 +237,6 @@ pub struct Character {
     pub next_copy: u32,
 }
 
-/// What chrome costs past the budget.
 /// What a piece of chrome takes of the load, with what is fitted in its copy; what is
 /// not chrome (hardware, gear) takes nothing. The one count of a piece's load: the
 /// install rule, `load_at` and the sheet's picker all use it.
@@ -258,6 +257,7 @@ pub fn stack_load(c: &Content, s: &Stack) -> u32 {
     piece_load(c, &s.item, s.copy.as_ref())
 }
 
+/// What chrome costs past the budget.
 pub(crate) fn over_budget(load: u32, max: u32) -> String {
     format!("too much chrome: load {load} of {max}")
 }
