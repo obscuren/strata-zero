@@ -319,4 +319,77 @@ mod tests {
         let buf = crate::screens::shots::draw_stack(&st, &[&title], (120, 40));
         png::write_buffer(&dir, "title", &buf).unwrap();
     }
+
+    /// The app icon, to `SHOT_DIR/icon.png` (1024 × 1024): "SZ" in the title's block
+    /// letters on a rounded square of the game's background with a neon edge.
+    /// `scripts/macos-app.sh --icon` turns it into `macos/AppIcon.icns`.
+    #[test]
+    #[ignore]
+    fn app_icon() {
+        use crate::render::Rgb;
+        use crate::ui::logo::{self, Logo};
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::widgets::Widget;
+        let Ok(dir) = std::env::var("SHOT_DIR") else {
+            return;
+        };
+        let mut buf = Buffer::empty(Rect::new(0, 0, logo::width("SZ"), logo::ROWS));
+        let logo = Logo {
+            text: "SZ",
+            tick: 0,
+            accent: Rgb(255, 0, 200),
+            steady: true,
+        };
+        logo.render(buf.area, &mut buf);
+        let mut canvas = raster::Canvas::new(Fonts::load().unwrap(), 80.0, 0, 0);
+        canvas.paint_buffer(&buf);
+        let art = &canvas.frame;
+
+        // A rounded square 824 wide in a 1024 canvas, as macOS icons are drawn.
+        const SIZE: usize = 1024;
+        let (inset, radius, edge) = (100.0, 180.0, 10.0);
+        let mut rgba = vec![0u8; SIZE * SIZE * 4];
+        let (ox, oy) = ((SIZE - art.w) / 2, (SIZE - art.h) / 2);
+        for y in 0..SIZE {
+            for x in 0..SIZE {
+                // Signed distance to the rounded square's outline, negative inside.
+                let half = SIZE as f32 / 2.0 - inset;
+                let (dx, dy) = (
+                    (x as f32 + 0.5 - SIZE as f32 / 2.0).abs() - (half - radius),
+                    (y as f32 + 0.5 - SIZE as f32 / 2.0).abs() - (half - radius),
+                );
+                let outside = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt();
+                let d = outside + dx.max(dy).min(0.0) - radius;
+                let alpha = (0.5 - d).clamp(0.0, 1.0);
+                if alpha == 0.0 {
+                    continue;
+                }
+                let mut c = raster::BG;
+                if (x as isize - ox as isize) >= 0
+                    && x - ox < art.w
+                    && (y as isize - oy as isize) >= 0
+                    && y - oy < art.h
+                {
+                    c = art.px[(y - oy) * art.w + (x - ox)];
+                }
+                if d > -edge {
+                    c = 0x00e5ff;
+                }
+                let i = (y * SIZE + x) * 4;
+                rgba[i..i + 4].copy_from_slice(&[
+                    (c >> 16) as u8,
+                    (c >> 8) as u8,
+                    c as u8,
+                    (alpha * 255.0) as u8,
+                ]);
+            }
+        }
+        let path = Path::new(&dir).join("icon.png");
+        let file = std::fs::File::create(path).unwrap();
+        let mut enc = ::png::Encoder::new(std::io::BufWriter::new(file), SIZE as u32, SIZE as u32);
+        enc.set_color(::png::ColorType::Rgba);
+        enc.set_depth(::png::BitDepth::Eight);
+        enc.write_header().unwrap().write_image_data(&rgba).unwrap();
+    }
 }

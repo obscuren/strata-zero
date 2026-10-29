@@ -249,6 +249,24 @@ neighbours), `--water none|bay|river`, `--density 0..1`.
 Needs a truecolor terminal of at least 100x30 cells (iTerm2, Ghostty, kitty,
 WezTerm). Saved cities go to `./cities/*.city`.
 
+### In a window of its own (macOS, prototype)
+
+With the `window` feature the game opens its own window instead of using the
+terminal: the same screens and keys, drawn from a monospace font on this Mac
+(FiraCode Nerd Font Mono, SF Mono or Menlo; `STRATA_FONT=<file>` picks another),
+with box and block characters drawn as shapes.
+
+```sh
+cargo run --release -p strata-zero --features window -- --window
+scripts/macos-app.sh   # target/smoke/macos/Strata Zero.app, universal, ad-hoc signed
+```
+
+Cmd+Q quits, Ctrl+Cmd+F is fullscreen, Cmd+= / Cmd+- / Cmd+0 set the text size.
+Started from the `.app`, cities save under
+`~/Library/Application Support/Strata Zero/cities/`. `STRATA_WINDOW_SHOT=<file.png>`
+writes the window's frame 1.5 s in. The design and what a Steam build still needs
+are in `docs/superpowers/specs/2026-10-29-window-prototype-design.md`.
+
 ## Keys
 
 The game captures the mouse, so dragging over it does not select text (in iTerm2,
