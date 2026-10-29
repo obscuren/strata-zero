@@ -310,7 +310,8 @@ Derived numbers stay computed on read:
   order, as `Source::Item`.
 - `worn_mods()` also reads hardware fitted in installed chrome (none ships, but the rule
   is the same).
-- `weight()` counts installed chrome. (It is in your body; it still weighs.)
+- `weight()` leaves installed chrome out: it is part of you, and LOAD is its cost. Its
+  `value()` still counts.
 - `installed()` lists every installed piece, sockets included, as `(where, ItemId)`;
   `pieces()` is its length; `load()` sums their `implant.load`.
 - `load_max()` is `2 × (base BODY + base COOL) + 6` (24 for BODY 4, COOL 5). Base
@@ -547,7 +548,8 @@ in a broken content file) draws nothing above its name.
 - MOV is `BASE_MOVE` plus the bonus wherever *you* get `BASE_MOVE` on foot, at least 1.
 - SGT shows the radius where you stand right now, so the tile matches the map; the
   readout says it changes with place and daylight.
-- Installed chrome still weighs, as worn gear does.
+- Installed chrome doesn't weigh: the first shots showed the spec loadout alone leaving
+  D'SHAWN at 31 of 28 kg, and LOAD is already what chrome costs you.
 
 ## Left to the builder
 
