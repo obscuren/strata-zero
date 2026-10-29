@@ -7,7 +7,7 @@ use crate::render::fx::tracer_ticks;
 use citygen::pathing::bresenham;
 use citygen::rng::hash64;
 use citygen::{City, Place, Pos};
-use game::{AbilityId, AbilityKind, Action, Active, Fx, ItemId, Slot, Stat, Weapon};
+use game::{AbilityId, AbilityKind, Action, Active, Attribute, Fx, ItemId, Slot, Weapon};
 
 /// Ticks between the rounds of one burst.
 pub const ROUND_GAP: u64 = 4;
@@ -105,7 +105,7 @@ pub fn your_chance(st: &AppState, foe: usize) -> Result<u8, String> {
         0
     };
     Ok(game::hit_chance_with(
-        st.character.stat(&st.content, Stat::Reflex),
+        st.character.attribute(&st.content, Attribute::Reflex),
         st.character.has_skill(&w.skill),
         dist,
         w.range,
@@ -487,7 +487,7 @@ pub(crate) fn resisted_u8(amount: u8, resist: i32) -> u8 {
     u8::try_from(game::resisted(amount as u32, resist)).unwrap_or(u8::MAX)
 }
 
-/// Your chance with a strike ability at a foe, in percent: its stat and skill, the
+/// Your chance with a strike ability at a foe, in percent: its attribute and skill, the
 /// distance, its range.
 pub fn strike_chance(st: &AppState, id: &AbilityId, foe: usize) -> Result<u8, String> {
     let ability = st
@@ -495,14 +495,17 @@ pub fn strike_chance(st: &AppState, id: &AbilityId, foe: usize) -> Result<u8, St
         .ability(&st.content, id)
         .ok_or_else(|| format!("unknown ability {id}"))?;
     let AbilityKind::Active(Active::Strike {
-        range, skill, stat, ..
+        range,
+        skill,
+        attribute,
+        ..
     }) = ability.kind
     else {
         return Err(format!("{} is not a strike", ability.name));
     };
     let dist = reach(st, foe, range)?;
     Ok(game::hit_chance(
-        st.character.stat(&st.content, stat),
+        st.character.attribute(&st.content, attribute),
         st.character.has_skill(&skill),
         dist,
         range,
@@ -671,7 +674,7 @@ fn chain_foes(st: &mut AppState, first: usize, arc: Chain) {
 }
 
 /// You fire a strike ability at a foe: its action points, one round of its damage
-/// with its own stat, its stun on a hit; a push throws the foe back, a chain arcs
+/// with its own attribute, its stun on a hit; a push throws the foe back, a chain arcs
 /// on to the next.
 pub fn strike(st: &mut AppState, id: &AbilityId, foe: usize) -> Result<(), String> {
     let ability = st

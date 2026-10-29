@@ -2,7 +2,7 @@
 
 use crate::character::Character;
 use crate::content::Content;
-use crate::model::{ItemId, Op, Program, SkillId, Stat};
+use crate::model::{Attribute, ItemId, Op, Program, SkillId};
 use citygen::{BuildingId, IceGrade, NodeId, NodeKind};
 use serde::{Deserialize, Serialize};
 
@@ -67,7 +67,7 @@ pub fn skill_for(op: Op, target: Target) -> SkillId {
 /// What the character brings to a turn: twice Net, three with the skill, twice the
 /// program's rating, two with the talent flag that fits the op.
 pub fn power(ch: &Character, c: &Content, p: &Program, target: Target) -> i32 {
-    let mut out = 2 * ch.stat(c, Stat::Net) as i32 + 2 * p.rating as i32;
+    let mut out = 2 * ch.attribute(c, Attribute::Net) as i32 + 2 * p.rating as i32;
     if ch.has_skill(&skill_for(p.op, target)) {
         out += 3;
     }

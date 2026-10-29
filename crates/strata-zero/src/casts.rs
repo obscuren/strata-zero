@@ -177,7 +177,7 @@ fn shoot_piece(
 }
 
 /// You strike a piece of ICE in reach: an attack. It makes the attack's heat, rolls
-/// with the strike's stat and skill, wakes the piece, and a break runs the attack's
+/// with the strike's attribute and skill, wakes the piece, and a break runs the attack's
 /// break path. Shove and its like are refused here.
 pub fn strike_ice(
     st: &mut AppState,
@@ -195,7 +195,7 @@ pub fn strike_ice(
         stun,
         skill,
         ap,
-        stat,
+        attribute,
         push,
         chain,
     }) = ability.kind.clone()
@@ -224,7 +224,7 @@ pub fn strike_ice(
         .map(|g| (g.pos, g.label()))
         .ok_or("nothing stands there")?;
     let chance = game::hit_chance(
-        st.character.stat(&st.content, stat),
+        st.character.attribute(&st.content, attribute),
         st.character.has_skill(&skill),
         me.chebyshev(at),
         range,
@@ -298,7 +298,7 @@ mod tests {
     use crate::combat::{strike, strike_chance, your_chance};
     use crate::foes;
     use citygen::StratumKind;
-    use game::{Character, Stat};
+    use game::{Attribute, Character};
 
     const STREET: Place = Place::Stratum(StratumKind::Street);
 
@@ -335,24 +335,39 @@ mod tests {
     }
 
     #[test]
-    fn strike_rolls_with_its_own_stat() {
+    fn strike_rolls_with_its_own_attribute() {
         let mut st = fight(Pos::new(7, 8));
-        st.character.stats.body = 10;
-        st.character.stats.net = 1;
+        st.character.attributes.body = 10;
+        st.character.attributes.net = 1;
         st.character.skills.insert(game::SkillId::new("athletics"));
-        let want = game::hit_chance(st.character.stat(&st.content, Stat::Body), true, 1, 1);
+        let want = game::hit_chance(
+            st.character.attribute(&st.content, Attribute::Body),
+            true,
+            1,
+            1,
+        );
         assert_eq!(strike_chance(&st, &id("shove"), 0).unwrap(), want);
         assert_eq!(want, 95);
         st.character.skills.clear();
         let unskilled = strike_chance(&st, &id("shove"), 0).unwrap();
         assert_eq!(
             unskilled,
-            game::hit_chance(st.character.stat(&st.content, Stat::Body), false, 1, 1)
+            game::hit_chance(
+                st.character.attribute(&st.content, Attribute::Body),
+                false,
+                1,
+                1
+            )
         );
-        // Static keeps the Net stat.
+        // Static keeps the Net attribute.
         st.foes[0].pos = Pos::new(10, 8);
         let skilled = st.character.has_skill(&game::SkillId::new("hacking"));
-        let want = game::hit_chance(st.character.stat(&st.content, Stat::Net), skilled, 4, 8);
+        let want = game::hit_chance(
+            st.character.attribute(&st.content, Attribute::Net),
+            skilled,
+            4,
+            8,
+        );
         assert_eq!(strike_chance(&st, &id("static"), 0).unwrap(), want);
     }
 

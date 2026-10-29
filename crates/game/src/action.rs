@@ -54,8 +54,8 @@ pub enum Action {
     TakeCopy(CopyId),
     TakeAll,
     Fire(AbilityId),
-    /// Spends a creation point on a stat.
-    BuyStat(Stat),
+    /// Spends a creation point on an attribute.
+    BuyAttribute(Attribute),
     /// Spends SP on a category; its free skills come along.
     Unlock(CategoryId),
     /// Spends SP on a skill of an owned category.
@@ -205,7 +205,7 @@ fn equip_stack(ch: &mut Character, c: &Content, item: &Item, slot: Slot, s: Stac
 }
 
 /// Why chrome can't be worn.
-const CHROME_FROM_STATS: &str = "chrome is installed from STATS";
+const CHROME_FROM_ATTRIBUTES: &str = "chrome is installed from ATTRIBUTES";
 
 /// Installs a stack taken from the pack at a free site, checked by `can_install`.
 fn install_stack(ch: &mut Character, c: &Content, site: Site, s: Stack) -> String {
@@ -252,7 +252,7 @@ pub fn apply(
         Action::Equip(id) => {
             let item = c.item(&id).ok_or_else(|| format!("unknown item {id}"))?;
             if item.implant.is_some() {
-                return Err(CHROME_FROM_STATS.to_string());
+                return Err(CHROME_FROM_ATTRIBUTES.to_string());
             }
             if ch.count(&id) == 0 {
                 return Err(format!("{} is not in your pack", item.name));
@@ -270,7 +270,7 @@ pub fn apply(
             let id = &ch.inventory[i].item;
             let item = c.item(id).ok_or_else(|| format!("unknown item {id}"))?;
             if item.implant.is_some() {
-                return Err(CHROME_FROM_STATS.to_string());
+                return Err(CHROME_FROM_ATTRIBUTES.to_string());
             }
             let slot = item
                 .slot
@@ -396,12 +396,16 @@ pub fn apply(
             }
             done(format!("took {n} items"))
         }
-        Action::BuyStat(stat) => {
+        Action::BuyAttribute(attribute) => {
             let mut b = Build::from_character(c, ch);
-            b.buy_stat(c, stat).map_err(|e| e.to_string())?;
-            ch.stats = b.stats.clone();
-            ch.stat_points = b.points_left(c).max(0) as u32;
-            done(format!("{} {}", stat.name(), ch.stats.get(stat)))
+            b.buy_attribute(c, attribute).map_err(|e| e.to_string())?;
+            ch.attributes = b.attributes.clone();
+            ch.attribute_points = b.points_left(c).max(0) as u32;
+            done(format!(
+                "{} {}",
+                attribute.name(),
+                ch.attributes.get(attribute)
+            ))
         }
         Action::Unlock(id) => {
             let cat = c
@@ -1039,12 +1043,28 @@ mod tests {
     fn spending_from_the_pools() {
         let (c, mut ch, mut g, at) = setup();
         assert!(
-            apply(&mut ch, &mut g, &c, at, 0, Action::BuyStat(Stat::Body)).is_err(),
+            apply(
+                &mut ch,
+                &mut g,
+                &c,
+                at,
+                0,
+                Action::BuyAttribute(Attribute::Body)
+            )
+            .is_err(),
             "no points"
         );
-        ch.stat_points = 3;
-        let out = apply(&mut ch, &mut g, &c, at, 0, Action::BuyStat(Stat::Body)).unwrap();
-        assert_eq!((ch.stats.body, ch.stat_points), (5, 0));
+        ch.attribute_points = 3;
+        let out = apply(
+            &mut ch,
+            &mut g,
+            &c,
+            at,
+            0,
+            Action::BuyAttribute(Attribute::Body),
+        )
+        .unwrap();
+        assert_eq!((ch.attributes.body, ch.attribute_points), (5, 0));
         assert_eq!(out.message, "BODY 5");
         ch.sp = 200;
         assert!(
@@ -1112,7 +1132,7 @@ mod tests {
     #[test]
     fn learn_spends_the_point_and_reports_the_rank() {
         let (c, mut ch, mut g, at) = setup();
-        let first = c.tree(Stat::Net).unwrap().tiers[0][0].clone();
+        let first = c.tree(Attribute::Net).unwrap().tiers[0][0].clone();
         let name = c.talent(&first).unwrap().name.clone();
         let out = apply(&mut ch, &mut g, &c, at, 0, Action::Learn(first.clone())).unwrap();
         assert!(
@@ -1966,8 +1986,8 @@ mod tests {
         // A budget of 6 with a piston arm and the rest installed: no room for another arm.
         ch.chrome.insert(Site::RightArm, id("piston_arm"));
         ch.chrome.insert(Site::Neural, id("neural_port"));
-        ch.stats.body = 0;
-        ch.stats.cool = 0;
+        ch.attributes.body = 0;
+        ch.attributes.cool = 0;
         assert_eq!((ch.chrome_load(&c), ch.load_max()), (6, 6));
         refuses(
             &mut ch,
@@ -2052,8 +2072,8 @@ mod tests {
         );
         assert_eq!(ch, before);
         // Over budget: arm 3 and neural 1 and eyes 2 fill a budget of 6.
-        ch.stats.cool = 0;
-        ch.stats.body = 0;
+        ch.attributes.cool = 0;
+        ch.attributes.body = 0;
         ch.chrome.insert(Site::Neural, id("neural_port"));
         let before = ch.clone();
         assert_eq!((ch.chrome_load(&c), ch.load_max()), (6, 6));
@@ -2062,7 +2082,7 @@ mod tests {
             "too much chrome: load 7 of 6"
         );
         assert_eq!(ch, before);
-        ch.stats.cool = 5;
+        ch.attributes.cool = 5;
         let out = act(&mut ch, &mut g, &c, at, fit(0)).unwrap();
         assert_eq!(out.message, "`Arc hand` fitted · socket hand");
         assert!(
@@ -2091,7 +2111,7 @@ mod tests {
         ] {
             assert_eq!(
                 act(&mut ch, &mut g, &c, at, a).unwrap_err(),
-                "chrome is installed from STATS"
+                "chrome is installed from ATTRIBUTES"
             );
         }
     }

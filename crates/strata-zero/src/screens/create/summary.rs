@@ -1,16 +1,16 @@
 //! Step 6: the sheet, and JACK IN. The sheet itself also sits beside the name.
 
-use super::stat_colour;
+use super::attribute_colour;
 use crate::anim::effects::pulse;
 use crate::app::AppState;
 use crate::ui::chrome::{CYAN, CYAN_RGB, DIM, MAGENTA, TEXT};
-use game::{Build, BuildError, Stat};
+use game::{Attribute, Build, BuildError};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-/// The two-column sheet: stats and what you know on the left, where you were made,
+/// The two-column sheet: attributes and what you know on the left, where you were made,
 /// what you did and your kit on the right.
 pub(super) fn sheet(st: &AppState, b: &Build, area: Rect, buf: &mut Buffer) {
     let c = &st.content;
@@ -22,13 +22,13 @@ pub(super) fn sheet(st: &AppState, b: &Build, area: Rect, buf: &mut Buffer) {
 
     let lx = area.x;
     let mut y = area.y;
-    buf.set_string(lx, y, "STATS", dim);
+    buf.set_string(lx, y, "ATTRIBUTES", dim);
     y += 1;
-    for s in Stat::ALL {
+    for s in Attribute::ALL {
         if y >= stop {
             return;
         }
-        let v = b.stats.get(s);
+        let v = b.attributes.get(s);
         let bar = format!(
             "{}{}",
             "▰".repeat(v as usize),
@@ -36,7 +36,7 @@ pub(super) fn sheet(st: &AppState, b: &Build, area: Rect, buf: &mut Buffer) {
         );
         let row = Line::from(vec![
             Span::styled(format!("{:<8}{v:>2}  ", s.name()), dim),
-            Span::styled(bar, Style::default().fg(stat_colour(s))),
+            Span::styled(bar, Style::default().fg(attribute_colour(s))),
         ]);
         buf.set_line(lx, y, &row, col);
         y += 1;

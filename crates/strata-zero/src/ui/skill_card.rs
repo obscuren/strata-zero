@@ -1,10 +1,10 @@
 //! A skill's or a category's card from the board: its art at the top, then its text. The
 //! deck reads what the character holds; the creation wizard reads what the build does.
 
-use crate::screens::create::stat_colour;
+use crate::screens::create::attribute_colour;
 use crate::ui::chrome::{CYAN, DIM, FAINT, TEXT, plain, put_paragraph, reveal, warn};
 use crate::ui::skill_art;
-use game::{CategoryId, Content, SkillArt, SkillId, Stat, Unlock};
+use game::{Attribute, CategoryId, Content, SkillArt, SkillId, Unlock};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -38,10 +38,10 @@ pub fn draw(
     cursor_on: bool,
 ) {
     let mut text = area;
-    if let Some((art, stat, learned)) = art(content, held, card) {
+    if let Some((art, attribute, learned)) = art(content, held, card) {
         let scan = ((2.0 * p).min(1.0) * f32::from(skill_art::ROWS)).ceil() as u16;
         let x = area.x + area.width.saturating_sub(skill_art::W) / 2;
-        skill_art::draw(buf, x, area.y, area, art, stat, learned, scan);
+        skill_art::draw(buf, x, area.y, area, art, attribute, learned, scan);
         let drop = (skill_art::ROWS + 1).min(area.height);
         text.y += drop;
         text.height -= drop;
@@ -58,24 +58,28 @@ pub fn lines(content: &Content, held: Held, card: Card) -> Vec<Line<'static>> {
     }
 }
 
-/// The art a card leads with, the stat its sign is lit in and whether it is yours: a
-/// skill's own, or a category's, lit in its first skill's stat.
-pub fn art<'a>(content: &'a Content, held: Held, card: Card) -> Option<(&'a SkillArt, Stat, bool)> {
+/// The art a card leads with, the attribute its sign is lit in and whether it is yours: a
+/// skill's own, or a category's, lit in its first skill's attribute.
+pub fn art<'a>(
+    content: &'a Content,
+    held: Held,
+    card: Card,
+) -> Option<(&'a SkillArt, Attribute, bool)> {
     match card {
         Card::Skill(id) => {
             let art = content.skill_art(id)?;
-            Some((art, content.skill(id)?.stat, held.skills.contains(id)))
+            Some((art, content.skill(id)?.attribute, held.skills.contains(id)))
         }
         Card::Category(id) => {
             let art = content.category_art(id)?;
             let first = content.category(id)?.skills.first()?;
-            let stat = content.skill(&first.id)?.stat;
-            Some((art, stat, held.categories.contains(id)))
+            let attribute = content.skill(&first.id)?.attribute;
+            Some((art, attribute, held.categories.contains(id)))
         }
     }
 }
 
-/// A skill's: whether it is yours, its price, the stats and skills it asks for, its line.
+/// A skill's: whether it is yours, its price, the attributes and skills it asks for, its line.
 fn skill_lines(content: &Content, held: Held, id: &SkillId) -> Vec<Line<'static>> {
     let Some(skill) = content.skill(id) else {
         return vec![warn(format!("unknown skill {id}"))];
@@ -93,9 +97,9 @@ fn skill_lines(content: &Content, held: Held, id: &SkillId) -> Vec<Line<'static>
         };
         out.push(framed(styled(cost, TEXT, false)));
     }
-    for (stat, n) in &skill.needs {
-        let need = format!("{} {n}", stat.name());
-        out.push(framed(styled(need, stat_colour(*stat), true)));
+    for (attribute, n) in &skill.needs {
+        let need = format!("{} {n}", attribute.name());
+        out.push(framed(styled(need, attribute_colour(*attribute), true)));
     }
     out.push(plain(""));
     out.push(Line::from(styled("[REQUIRED SKILLS]", DIM, true)).centered());

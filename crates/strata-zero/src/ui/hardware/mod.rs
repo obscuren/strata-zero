@@ -452,7 +452,7 @@ pub fn tile(look: HardwareLook) -> Tile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use game::Stat;
+    use game::Attribute;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
 
@@ -490,7 +490,7 @@ mod tests {
 
     #[test]
     fn hushcan_large_matches_the_reference() {
-        let b = large(HardwareLook::Hushcan, &[Mod::Stat(Stat::Cool, 1)]);
+        let b = large(HardwareLook::Hushcan, &[Mod::Attribute(Attribute::Cool, 1)]);
         assert_eq!(
             (b[(17, 2)].symbol(), b[(17, 2)].fg, b[(17, 2)].bg),
             ("H", rgb(0x6b7480), rgb(0x1c1f24))
@@ -508,7 +508,10 @@ mod tests {
 
     #[test]
     fn redeye_large_matches_the_reference() {
-        let b = large(HardwareLook::Redeye, &[Mod::Stat(Stat::Reflex, 1)]);
+        let b = large(
+            HardwareLook::Redeye,
+            &[Mod::Attribute(Attribute::Reflex, 1)],
+        );
         assert_eq!(text(&b, 23, 7, 6), "REDEYE");
         assert_eq!(text(&b, 37, 5, 11), " REFLEX +1 ");
         assert_eq!((b[(31, 10)].symbol(), b[(31, 10)].fg), ("●", rgb(0xff2a3c)));

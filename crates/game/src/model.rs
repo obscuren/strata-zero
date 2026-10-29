@@ -423,8 +423,8 @@ pub enum Mod {
     TraceCut(u8),
     /// Added to every program turn's power.
     Power(i8),
-    /// Added to one of the wearer's stats.
-    Stat(Stat, i8),
+    /// Added to one of the wearer's attributes.
+    Attribute(Attribute, i8),
 }
 
 /// A number with its sign always shown; a negative takes a real minus, as the
@@ -443,7 +443,7 @@ impl Mod {
         match self {
             Mod::TraceCut(n) => format!("trace per cast \u{2212}{n}%"),
             Mod::Power(n) => format!("program power {}", signed(*n)),
-            Mod::Stat(s, n) => format!("{} {}", s.label(), signed(*n)),
+            Mod::Attribute(s, n) => format!("{} {}", s.label(), signed(*n)),
         }
     }
 
@@ -452,7 +452,7 @@ impl Mod {
         match self {
             Mod::TraceCut(n) => format!("TRACE \u{2212}{n}%"),
             Mod::Power(n) => format!("POWER {}", signed(*n)),
-            Mod::Stat(s, n) => format!("{} {}", s.name(), signed(*n)),
+            Mod::Attribute(s, n) => format!("{} {}", s.name(), signed(*n)),
         }
     }
 }
@@ -563,7 +563,7 @@ pub struct DeckSpec {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Stat {
+pub enum Attribute {
     Body,
     Reflex,
     Tech,
@@ -571,38 +571,44 @@ pub enum Stat {
     Net,
 }
 
-impl Stat {
-    pub const ALL: [Stat; 5] = [Stat::Body, Stat::Reflex, Stat::Tech, Stat::Cool, Stat::Net];
+impl Attribute {
+    pub const ALL: [Attribute; 5] = [
+        Attribute::Body,
+        Attribute::Reflex,
+        Attribute::Tech,
+        Attribute::Cool,
+        Attribute::Net,
+    ];
 
     /// The label in caps, as the sheet sets it.
     pub fn name(self) -> &'static str {
         match self {
-            Stat::Body => "BODY",
-            Stat::Reflex => "REFLEX",
-            Stat::Tech => "TECH",
-            Stat::Cool => "COOL",
-            Stat::Net => "NET",
+            Attribute::Body => "BODY",
+            Attribute::Reflex => "REFLEX",
+            Attribute::Tech => "TECH",
+            Attribute::Cool => "COOL",
+            Attribute::Net => "NET",
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            Stat::Body => "body",
-            Stat::Reflex => "reflex",
-            Stat::Tech => "tech",
-            Stat::Cool => "cool",
-            Stat::Net => "net",
+            Attribute::Body => "body",
+            Attribute::Reflex => "reflex",
+            Attribute::Tech => "tech",
+            Attribute::Cool => "cool",
+            Attribute::Net => "net",
         }
     }
 
     /// Three letters in caps, for a line with no room for the names.
     pub fn short(self) -> &'static str {
         match self {
-            Stat::Body => "BOD",
-            Stat::Reflex => "REF",
-            Stat::Tech => "TEC",
-            Stat::Cool => "COL",
-            Stat::Net => "NET",
+            Attribute::Body => "BOD",
+            Attribute::Reflex => "REF",
+            Attribute::Tech => "TEC",
+            Attribute::Cool => "COL",
+            Attribute::Net => "NET",
         }
     }
 }
@@ -669,7 +675,7 @@ impl Harm {
 /// A modifier an item applies while it is equipped.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Perk {
-    Stat(Stat, i8),
+    Attribute(Attribute, i8),
     /// Field-of-view radius, in tiles.
     Sight(i8),
     /// Carry capacity, in kilograms.
@@ -833,9 +839,9 @@ pub enum Active {
         stun: u8,
         skill: SkillId,
         ap: u8,
-        /// The stat the roll uses.
+        /// The attribute the roll uses.
         #[serde(default = "default_net")]
-        stat: Stat,
+        attribute: Attribute,
         /// Tiles the target is thrown back on a hit.
         #[serde(default)]
         push: u8,
@@ -850,8 +856,8 @@ pub enum Active {
     Mark { range: i32, bonus: u8, ap: u8 },
 }
 
-fn default_net() -> Stat {
-    Stat::Net
+fn default_net() -> Attribute {
+    Attribute::Net
 }
 
 /// A visual effect an ability plays when it fires; the app draws it over the map.
@@ -963,11 +969,11 @@ pub struct Ability {
 pub struct Skill {
     pub id: SkillId,
     pub name: String,
-    pub stat: Stat,
+    pub attribute: Attribute,
     pub desc: String,
-    /// The stats it asks for, each 1 to 10; shown on its card, not yet enforced.
+    /// The attributes it asks for, each 1 to 10; shown on its card, not yet enforced.
     #[serde(default)]
-    pub needs: Vec<(Stat, u8)>,
+    pub needs: Vec<(Attribute, u8)>,
     /// The skills it wants first; shown on its card, not yet enforced.
     #[serde(default)]
     pub after: Vec<SkillId>,
@@ -990,7 +996,7 @@ pub enum SkillArt {
         #[serde(default)]
         labels: Vec<ArtLabel>,
     },
-    /// A neon sign: `#` a tube in the skill's stat colour, `+` a tube in the accent, `.`
+    /// A neon sign: `#` a tube in the skill's attribute colour, `+` a tube in the accent, `.`
     /// the plate.
     Neon {
         rows: Vec<String>,
@@ -1046,10 +1052,10 @@ pub struct Talent {
     pub desc: String,
 }
 
-/// A tree of talents under one stat: tiers from the bottom, each a row of talents.
+/// A tree of talents under one attribute: tiers from the bottom, each a row of talents.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Tree {
-    pub stat: Stat,
+    pub attribute: Attribute,
     pub name: String,
     pub line: String,
     pub tiers: Vec<Vec<TalentId>>,
@@ -1079,15 +1085,15 @@ pub struct Recipe {
     pub steps: Vec<String>,
 }
 
-/// Where you were made. Cheap stats cost one less per point, dear ones one more.
+/// Where you were made. Cheap attributes cost one less per point, dear ones one more.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Origin {
     pub id: OriginId,
     pub name: String,
     pub line: String,
     pub desc: String,
-    pub cheap: Vec<Stat>,
-    pub dear: Vec<Stat>,
+    pub cheap: Vec<Attribute>,
+    pub dear: Vec<Attribute>,
     /// Three rows of seven glyphs for the dossier.
     pub emblem: Vec<String>,
 }
@@ -1099,8 +1105,8 @@ pub struct Profession {
     pub name: String,
     pub line: String,
     pub desc: String,
-    pub cheap: Vec<Stat>,
-    pub dear: Vec<Stat>,
+    pub cheap: Vec<Attribute>,
+    pub dear: Vec<Attribute>,
     pub kit: Vec<(ItemId, u32)>,
     pub credits: u32,
     pub emblem: Vec<String>,
@@ -1143,7 +1149,7 @@ pub struct Template {
     pub line: String,
     pub origin: OriginId,
     pub profession: ProfessionId,
-    pub stats: Stats,
+    pub attributes: Attributes,
     pub categories: Vec<CategoryId>,
     pub skills: Vec<SkillId>,
     /// Extra kit on top of the profession's.
@@ -1154,9 +1160,9 @@ pub struct Template {
 /// The numbers every new character is built under.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Creation {
-    pub stat_base: u8,
-    pub stat_cap: u8,
-    pub stat_points: u32,
+    pub attribute_base: u8,
+    pub attribute_cap: u8,
+    pub attribute_points: u32,
     pub point_cost: u32,
     pub sp: u32,
     pub name_max: usize,
@@ -1178,7 +1184,7 @@ fn three() -> u32 {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Stats {
+pub struct Attributes {
     pub body: u8,
     pub reflex: u8,
     pub tech: u8,
@@ -1186,14 +1192,14 @@ pub struct Stats {
     pub net: u8,
 }
 
-impl Stats {
-    pub fn get(&self, stat: Stat) -> u8 {
-        match stat {
-            Stat::Body => self.body,
-            Stat::Reflex => self.reflex,
-            Stat::Tech => self.tech,
-            Stat::Cool => self.cool,
-            Stat::Net => self.net,
+impl Attributes {
+    pub fn get(&self, attribute: Attribute) -> u8 {
+        match attribute {
+            Attribute::Body => self.body,
+            Attribute::Reflex => self.reflex,
+            Attribute::Tech => self.tech,
+            Attribute::Cool => self.cool,
+            Attribute::Net => self.net,
         }
     }
 }

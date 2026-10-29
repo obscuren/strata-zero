@@ -894,12 +894,12 @@ fn kit_shots(
     }
 }
 
-/// STATS at each size: the spec's loadout on the Piston arm; the picker on R ARM with
+/// ATTRIBUTES at each size: the spec's loadout on the Piston arm; the picker on R ARM with
 /// a Grip arm in the pack; the picker on the forearm with a Monowire spool; and the left
 /// pane on EMP, two off for each piece.
 #[test]
 #[ignore]
-fn stats_sheet() {
+fn attributes_sheet() {
     use crate::screens::sheet::{LedgerRow, SheetPane};
     use game::{Num, Site, Stack};
     let sizes = [(100, 30), (120, 40)];
@@ -935,7 +935,7 @@ fn stats_sheet() {
         st
     };
     let mut st = fresh();
-    sheet_shots(&mut st, "stats_ledger_limb", &sizes, |d, _| {
+    sheet_shots(&mut st, "attributes_ledger_limb", &sizes, |d, _| {
         d.sheet.state.pane = SheetPane::Ledger;
         d.sheet.state.row = LedgerRow::Site(Site::LeftArm);
     });
@@ -943,7 +943,7 @@ fn stats_sheet() {
     let mut st = fresh();
     st.character
         .give_item(&st.content, ItemId::new("grip_arm"), 1);
-    sheet_shots(&mut st, "stats_picker_site", &sizes, |d, st| {
+    sheet_shots(&mut st, "attributes_picker_site", &sizes, |d, st| {
         d.sheet.state.pane = SheetPane::Ledger;
         d.sheet.state.row = LedgerRow::Site(Site::RightArm);
         d.update(st, &[key(KeyCode::Char(' '))]);
@@ -952,7 +952,7 @@ fn stats_sheet() {
     let mut st = fresh();
     st.character
         .give_item(&st.content, ItemId::new("monowire_spool"), 1);
-    sheet_shots(&mut st, "stats_picker_socket", &sizes, |d, st| {
+    sheet_shots(&mut st, "attributes_picker_socket", &sizes, |d, st| {
         d.sheet.state.pane = SheetPane::Ledger;
         d.sheet.state.row = LedgerRow::Socket(Site::LeftArm, 1);
         d.update(st, &[key(KeyCode::Char(' '))]);
@@ -963,12 +963,12 @@ fn stats_sheet() {
         .iter()
         .position(|&n| n == Num::Resist(game::Harm::Emp))
         .unwrap();
-    sheet_shots(&mut st, "stats_left_emp", &sizes, |d, _| {
+    sheet_shots(&mut st, "attributes_left_emp", &sizes, |d, _| {
         d.sheet.state.tile = emp;
     });
 }
 
-/// The deck on `2` (STATS), `set` applied, then drawn at each size once the card and
+/// The deck on `2` (ATTRIBUTES), `set` applied, then drawn at each size once the card and
 /// the readout have typed out, clear of the deck's signal jitter.
 fn sheet_shots(
     st: &mut AppState,

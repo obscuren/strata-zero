@@ -79,7 +79,7 @@ pub struct AppState {
     pub deck_rows: [usize; Tab::ALL.len()],
     /// Where GEAR & INVENTORY was left: the focus, the tile, the pack's row, the filter.
     pub deck_kit: crate::screens::kit::KitState,
-    /// Where STATS was left: the focus, the tile, the ledger's row.
+    /// Where ATTRIBUTES was left: the focus, the tile, the ledger's row.
     pub deck_sheet: crate::screens::sheet::SheetState,
     /// The part the jacked deck's blueprint points at, kept between openings.
     pub deck_part: usize,
@@ -962,7 +962,7 @@ mod tests {
             arc: None,
         });
         st.deck_tab = Tab::Kit;
-        st.deck_rows[Tab::Stats.index()] = 3;
+        st.deck_rows[Tab::Attributes.index()] = 3;
         st.deck_part = 300;
         st.deck_kit = crate::screens::kit::KitState {
             pane: crate::screens::kit::Pane::Pack,

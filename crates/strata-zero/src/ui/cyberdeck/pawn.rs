@@ -222,8 +222,8 @@ fn bay(p: &mut Pen, view: &DeckView) {
         p.fill(x + 1, 2, w - 2, 2, tape);
         let name: String = cart.name.chars().take(usize::from(w) - 3).collect();
         p.put(x + 2, 2, &name, INK, Some(tape), true);
-        let stats = format!("r{} · s{}", cart.rating, cart.size);
-        p.put(x + 2, 3, &stats, INK, Some(tape), false);
+        let attributes = format!("r{} · s{}", cart.rating, cart.size);
+        p.put(x + 2, 3, &attributes, INK, Some(tape), false);
         start += size;
     }
     // Every empty slot says so, though only the first is a stop.
@@ -425,8 +425,8 @@ fn inventory_row(p: &mut Pen, view: &DeckView) {
         p.fill(r.x + 1, r.y, r.width - 2, 2, LOOSE_TAPE);
         let name: String = cart.name.chars().take(usize::from(r.width) - 3).collect();
         p.put(r.x + 2, r.y, &name, INK, Some(LOOSE_TAPE), true);
-        let stats = format!("r{} · s{}", cart.rating, cart.size);
-        p.put(r.x + 2, r.y + 1, &stats, INK, Some(LOOSE_TAPE), false);
+        let attributes = format!("r{} · s{}", cart.rating, cart.size);
+        p.put(r.x + 2, r.y + 1, &attributes, INK, Some(LOOSE_TAPE), false);
         p.put(r.x + r.width - 1, r.y, "▐", EMPTY, Some(CART_DIM), false);
     }
     if view.inv_offset > 0 {

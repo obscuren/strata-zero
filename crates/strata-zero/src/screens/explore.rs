@@ -9435,7 +9435,7 @@ mod tests {
         let mut s = MapScreen::explore(0);
         let b = in_construct_at(&mut st, &mut s, 255);
         // The deck adds one Net: at a base of 0 you score 1, under grey's 2 and black's 3.
-        st.character.stats.net = 0;
+        st.character.attributes.net = 0;
         let order = initiative(&st, Place::Construct(b));
         assert_eq!(
             order,
@@ -9443,7 +9443,7 @@ mod tests {
             "black 3, grey 2, you 1"
         );
         // At 3 you tie black and the tie is yours.
-        st.character.stats.net = 2;
+        st.character.attributes.net = 2;
         assert_eq!(
             initiative(&st, Place::Construct(b)),
             vec![Actor::You, Actor::Ice(1), Actor::Ice(0)]

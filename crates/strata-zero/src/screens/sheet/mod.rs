@@ -1,4 +1,4 @@
-//! STATS, the character sheet: on the left the stats you buy, the secondary numbers
+//! ATTRIBUTES, the character sheet: on the left the attributes you buy, the secondary numbers
 //! gear and chrome move and the resistances, as rack tiles with a readout of the one
 //! selected; on the right the ledger of the chrome in you (`ledger`).
 
@@ -9,7 +9,7 @@ pub use ledger::LedgerRow;
 use crate::actions::{perform, report};
 use crate::app::AppState;
 use crate::render::map::{MapRef, TileMap};
-use crate::screens::create::{stat_colour, wrap};
+use crate::screens::create::{attribute_colour, wrap};
 use crate::screens::deck::{REVEAL_TICKS, cut, lit};
 use crate::screens::popup::wrapped_rows;
 use crate::ui::chrome::{
@@ -37,13 +37,16 @@ const READOUT_Y: u16 = 16;
 
 /// The left pane's blocks of tiles, in `Num::ALL` order: a header's title, the row
 /// it sits on, and each tile's width.
-const BLOCKS: [(&str, u16, u16); 3] =
-    [("STATS", 0, 8), ("SECONDARY", 5, 7), ("RESISTANCES", 10, 7)];
+const BLOCKS: [(&str, u16, u16); 3] = [
+    ("ATTRIBUTES", 0, 8),
+    ("SECONDARY", 5, 7),
+    ("RESISTANCES", 10, 7),
+];
 
 /// The block a number's tile sits in.
 fn block_of(n: Num) -> usize {
     match n {
-        Num::Stat(_) => 0,
+        Num::Attribute(_) => 0,
         Num::Resist(_) => 2,
         _ => 1,
     }
@@ -99,7 +102,7 @@ impl Reading {
         let sources = ch.sources(c, num);
         let place = st.player.as_ref().map(|p| p.place);
         let value = match num {
-            Num::Stat(s) => ch.stat(c, s) as i32,
+            Num::Attribute(s) => ch.attribute(c, s) as i32,
             Num::Hp => ch.hp_max(c) as i32,
             Num::Focus => ch.focus_max(c) as i32,
             Num::Armor => ch.armor(c),
@@ -128,7 +131,7 @@ impl Reading {
         let added = sources.iter().map(|(_, v)| v).sum::<i32>()
             + boons.iter().map(|(.., v)| v).sum::<i32>();
         let own = match num {
-            Num::Stat(s) => Some(ch.stats.get(s) as i32),
+            Num::Attribute(s) => Some(ch.attributes.get(s) as i32),
             Num::Hp => Some(ch.hp_base as i32),
             Num::Focus => Some(ch.focus_base as i32),
             Num::Armor => Some(0),
@@ -163,11 +166,11 @@ impl Reading {
         self.own.map(|o| self.value - o).filter(|e| *e != 0)
     }
 
-    /// The value's colour: a stat plain, a secondary number by its edge, a
+    /// The value's colour: an attribute plain, a secondary number by its edge, a
     /// resistance by its sign.
     fn colour(&self) -> Color {
         match self.num {
-            Num::Stat(_) => TEXT,
+            Num::Attribute(_) => TEXT,
             Num::Resist(_) => signed(self.value),
             _ => signed(self.edge().unwrap_or(0)),
         }
@@ -295,7 +298,7 @@ fn flow(
 }
 
 /// A number's readout, in parts so it can give way when rows run short: line one, the
-/// blurb, what a stat feeds, and where the rest comes from with any note.
+/// blurb, what an attribute feeds, and where the rest comes from with any note.
 struct Readout {
     head: Line<'static>,
     blurb: Vec<Line<'static>>,
@@ -310,7 +313,7 @@ impl Readout {
         let bold = |colour: Color| Style::default().fg(colour).add_modifier(Modifier::BOLD);
         let dim = Style::default().fg(DIM);
         let name = match r.num {
-            Num::Stat(s) => stat_colour(s),
+            Num::Attribute(s) => attribute_colour(s),
             _ => r.colour(),
         };
         // Its own value and the value with everything, while they differ and it has
@@ -328,11 +331,11 @@ impl Readout {
             _ => head.push(Span::styled(r.value.to_string(), bold(r.colour()))),
         }
         // What the next point costs, at the right, while there are points to spend.
-        if let Num::Stat(s) = r.num
-            && ch.stat_points > 0
-            && ch.stats.get(s) < c.creation.stat_cap
+        if let Num::Attribute(s) = r.num
+            && ch.attribute_points > 0
+            && ch.attributes.get(s) < c.creation.attribute_cap
         {
-            let n = Build::from_character(c, ch).stat_cost(c, s);
+            let n = Build::from_character(c, ch).attribute_cost(c, s);
             let next = format!("next {n} pt{}", if n == 1 { "" } else { "s" });
             let used: usize = head.iter().map(|s| s.width()).sum();
             let pad = width.saturating_sub(used + next.chars().count()).max(2);
@@ -341,7 +344,7 @@ impl Readout {
         }
 
         let blurb = match r.num {
-            Num::Stat(s) => c.stat_blurb(s),
+            Num::Attribute(s) => c.attribute_blurb(s),
             n => c.number_blurb(n.label()),
         };
         let blurb = wrap(blurb, width)
@@ -350,8 +353,8 @@ impl Readout {
             .collect();
 
         let mut feeds = Vec::new();
-        if let Num::Stat(s) = r.num {
-            let skills = c.skills.iter().filter(|k| k.stat == s).map(|k| {
+        if let Num::Attribute(s) = r.num {
+            let skills = c.skills.iter().filter(|k| k.attribute == s).map(|k| {
                 let mark = if ch.has_skill(&k.id) { "◆" } else { "◇" };
                 Span::styled(format!("{mark} {}", k.name), Style::default().fg(TEXT))
             });
@@ -425,7 +428,7 @@ impl Readout {
 
     /// The lines in at most `height` rows of `width`, counted as they wrap. Short of
     /// rows the blank line gives way first, then the blurb from its end (marked cut),
-    /// then what a stat feeds, so where the number comes from stays to the last.
+    /// then what an attribute feeds, so where the number comes from stays to the last.
     fn fit(mut self, width: usize, height: usize) -> Vec<Line<'static>> {
         let rows = |lines: &[Line<'static>]| -> usize {
             lines.iter().map(|l| wrapped_rows(l, width)).sum()
@@ -568,8 +571,8 @@ impl Sheet {
             }
             // A point buys straight away; the refusal lands in the strip.
             (SheetPane::Left, KeyCode::Char(' ') | KeyCode::Enter) => {
-                if let Num::Stat(s) = Num::ALL[tile] {
-                    let result = perform(st, Action::BuyStat(s));
+                if let Num::Attribute(s) = Num::ALL[tile] {
+                    let result = perform(st, Action::BuyAttribute(s));
                     report(st, result);
                 }
             }
@@ -597,8 +600,8 @@ impl Sheet {
                 continue;
             };
             let tail = match b {
-                0 if st.character.stat_points > 0 => {
-                    let n = st.character.stat_points;
+                0 if st.character.attribute_points > 0 => {
+                    let n = st.character.attribute_points;
                     vec![
                         (
                             n.to_string(),
@@ -679,7 +682,7 @@ impl Sheet {
             Style::default().fg(lit(st.tick))
         } else {
             Style::default().fg(match r.num {
-                Num::Stat(s) => stat_colour(s),
+                Num::Attribute(s) => attribute_colour(s),
                 _ => DIM,
             })
         };
@@ -793,12 +796,12 @@ mod tests {
     use super::*;
     use crate::app::Screen;
     use crate::render::map::{MapRef, TileMap};
-    use crate::screens::create::stat_colour;
+    use crate::screens::create::attribute_colour;
     use crate::screens::deck::{Deck, REVEAL_TICKS};
     use crate::screens::testutil::key;
     use crate::ui::chrome::{BAR_BG, CYAN, DIM, FAINTER, MAGENTA, RULE, TEXT};
     use citygen::{GenParams, Generator, SizePreset};
-    use game::{Build, ItemId, Num, Site, Slot, Stat};
+    use game::{Attribute, Build, ItemId, Num, Site, Slot};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -877,7 +880,7 @@ mod tests {
     #[test]
     fn left_pane_draws_its_tiles() {
         let mut st = state();
-        st.character.stat_points = 2;
+        st.character.attribute_points = 2;
         let mut d = Deck::new(0);
         d.update(&mut st, &[key(KeyCode::Char('2'))]);
         st.tick = 60;
@@ -888,7 +891,7 @@ mod tests {
             .map(|y| cells(buf, BODY.x, y, BODY.width) + "\n")
             .collect();
         for want in [
-            "STATS",
+            "ATTRIBUTES",
             "2 points",
             "┌ BOD",
             "SECONDARY",
@@ -900,7 +903,7 @@ mod tests {
             assert!(body.contains(want), "{want}: {body}");
         }
         // The mock's columns: the headers from x 2, their tails ending at x 44.
-        assert_eq!(cells(buf, 2, 5, 5), "STATS");
+        assert_eq!(cells(buf, 2, 5, 10), "ATTRIBUTES");
         assert_eq!(cells(buf, 37, 5, 8), "2 points");
         assert_eq!(cells(buf, 2, 6, 16), "┌ BOD ─┐┌ REF ─┐");
         assert_eq!(cells(buf, 2, 10, 9), "SECONDARY");
@@ -923,7 +926,7 @@ mod tests {
         assert_eq!(buf[(10, 6)].fg, RULE, "REF's edge, not selected");
         assert_eq!(
             buf[(12, 6)].fg,
-            stat_colour(Stat::Reflex),
+            attribute_colour(Attribute::Reflex),
             "REF in its colour"
         );
         // Nothing of the left pane past body.x + 44; the rule stands at body.x + 45.
@@ -936,7 +939,7 @@ mod tests {
     #[test]
     fn keys_walk_the_tiles() {
         let mut st = state();
-        st.character.stat_points = 3;
+        st.character.attribute_points = 3;
         let mut s = Sheet::new(0);
         assert_eq!(s.state.tile, 0, "BODY the first time");
         for _ in 0..3 {
@@ -944,7 +947,7 @@ mod tests {
         }
         assert_eq!(
             press(&mut s, &mut st, KeyCode::Right),
-            tile_of(Num::Stat(Stat::Net))
+            tile_of(Num::Attribute(Attribute::Net))
         );
         assert_eq!(s.state.pane, SheetPane::Left);
         press(&mut s, &mut st, KeyCode::Right);
@@ -955,13 +958,13 @@ mod tests {
         );
         assert_eq!(
             press(&mut s, &mut st, KeyCode::Left),
-            tile_of(Num::Stat(Stat::Net))
+            tile_of(Num::Attribute(Attribute::Net))
         );
         assert_eq!(s.state.pane, SheetPane::Left, "back to the tile it had");
         for _ in 0..3 {
             press(&mut s, &mut st, KeyCode::Char('h'));
         }
-        assert_eq!(s.state.tile, tile_of(Num::Stat(Stat::Reflex)));
+        assert_eq!(s.state.tile, tile_of(Num::Attribute(Attribute::Reflex)));
         assert_eq!(press(&mut s, &mut st, KeyCode::Down), tile_of(Num::Focus));
         assert_eq!(
             press(&mut s, &mut st, KeyCode::Char('j')),
@@ -978,27 +981,27 @@ mod tests {
         s.state.tile = tile_of(Num::Move);
         assert_eq!(
             press(&mut s, &mut st, KeyCode::Up),
-            tile_of(Num::Stat(Stat::Net))
+            tile_of(Num::Attribute(Attribute::Net))
         );
         assert_eq!(s.changed, 9);
         assert_eq!(press(&mut s, &mut st, KeyCode::Down), tile_of(Num::Carry));
         assert_eq!(
             press(&mut s, &mut st, KeyCode::Char('k')),
-            tile_of(Num::Stat(Stat::Net))
+            tile_of(Num::Attribute(Attribute::Net))
         );
         assert_eq!(
             press(&mut s, &mut st, KeyCode::Up),
-            tile_of(Num::Stat(Stat::Net))
+            tile_of(Num::Attribute(Attribute::Net))
         );
 
         // Space on BODY buys a point; on ARM it does nothing.
         s.state.tile = 0;
-        let cost =
-            Build::from_character(&st.content, &st.character).stat_cost(&st.content, Stat::Body);
-        let (body, points) = (st.character.stats.body, st.character.stat_points);
+        let cost = Build::from_character(&st.content, &st.character)
+            .attribute_cost(&st.content, Attribute::Body);
+        let (body, points) = (st.character.attributes.body, st.character.attribute_points);
         press(&mut s, &mut st, KeyCode::Char(' '));
         assert_eq!(
-            (st.character.stats.body, st.character.stat_points),
+            (st.character.attributes.body, st.character.attribute_points),
             (body + 1, points - cost)
         );
         assert!(
@@ -1034,15 +1037,15 @@ mod tests {
     #[test]
     fn readout_names_sources() {
         let mut st = state();
-        st.character.stat_points = 3;
+        st.character.attribute_points = 3;
         let arm = ItemId::new("piston_arm");
         st.character.install(Site::LeftArm, arm, None);
         let mut s = Sheet::new(0);
         settle(&s, &mut st);
         let buf = drawn(&s, &st, BODY);
         let text = readout(&buf, BODY);
-        let n =
-            Build::from_character(&st.content, &st.character).stat_cost(&st.content, Stat::Body);
+        let n = Build::from_character(&st.content, &st.character)
+            .attribute_cost(&st.content, Attribute::Body);
         let next = format!("next {n} pt{}", if n == 1 { "" } else { "s" });
         for want in [
             "BODY 4 · 5 with chrome",
@@ -1057,7 +1060,7 @@ mod tests {
             text.lines().next().unwrap().ends_with(&next),
             "right-aligned: {text}"
         );
-        assert_eq!(buf[(2, BODY.y + 16)].fg, stat_colour(Stat::Body));
+        assert_eq!(buf[(2, BODY.y + 16)].fg, attribute_colour(Attribute::Body));
         assert_eq!(buf[(BODY.x + 43, BODY.y + 16)].fg, AMBER);
 
         // EMP, with nine pieces in: the tile and the readout say what they cost.
@@ -1155,7 +1158,7 @@ mod tests {
     fn the_edge_is_what_the_value_moved_and_the_readout_says_why() {
         // BODY 8, a Wrecker arm and a Piston arm: three more, but BODY stops at 10.
         let mut st = state();
-        st.character.stats.body = 8;
+        st.character.attributes.body = 8;
         st.character
             .install(Site::LeftArm, ItemId::new("wrecker_arm"), None);
         st.character
@@ -1211,7 +1214,7 @@ mod tests {
     fn line_one_fits_beside_the_cost_and_no_source_is_lost() {
         // COOL from the mirrorshades and the Hushcan on the Ratchet, points unspent.
         let mut st = state();
-        st.character.stat_points = 3;
+        st.character.attribute_points = 3;
         st.character
             .wear(Slot::Eyes, ItemId::new("mirrorshades"), None);
         let hush = ItemId::new("hushcan");
@@ -1226,12 +1229,12 @@ mod tests {
             copy: Some(copy),
         });
         let mut s = Sheet::new(0);
-        s.state.tile = tile_of(Num::Stat(Stat::Cool));
+        s.state.tile = tile_of(Num::Attribute(Attribute::Cool));
         settle(&s, &mut st);
         let buf = drawn(&s, &st, BODY);
         let text = readout(&buf, BODY);
-        let n =
-            Build::from_character(&st.content, &st.character).stat_cost(&st.content, Stat::Cool);
+        let n = Build::from_character(&st.content, &st.character)
+            .attribute_cost(&st.content, Attribute::Cool);
         let next = format!("next {n} pt{}", if n == 1 { "" } else { "s" });
         let first = text.lines().next().unwrap();
         assert!(first.starts_with("COOL 5 · 7 in all"), "{text}");
@@ -1272,7 +1275,7 @@ mod tests {
         assert_eq!(buf[(2, 6)].fg, DIM, "BODY keeps its place, dim");
         assert_ne!(buf[(5, 7)].bg, BAR_BG);
         assert_eq!(buf[(2, 5)].fg, DIM, "the headers go dim");
-        assert!(s.hints(&st).contains("← stats"));
+        assert!(s.hints(&st).contains("← attributes"));
         s.state.pane = SheetPane::Left;
         assert_eq!(
             s.hints(&st),
@@ -1284,7 +1287,7 @@ mod tests {
     fn nothing_spills_past_the_left_pane() {
         let mut st = walking();
         nine_pieces(&mut st);
-        st.character.stat_points = 12;
+        st.character.attribute_points = 12;
         st.character
             .talents
             .insert(game::TalentId::new("thick_skin"), 3);
@@ -1346,7 +1349,7 @@ mod tests {
         let s = Sheet::new(0);
         settle(&s, &mut st);
         let wide = drawn(&s, &st, WIDE);
-        assert_eq!(cells(&wide, 2, WIDE.y, 5), "STATS");
+        assert_eq!(cells(&wide, 2, WIDE.y, 10), "ATTRIBUTES");
         assert_eq!(cells(&wide, 2, WIDE.y + 1, 8), "┌ BOD ─┐");
         assert!(readout(&wide, WIDE).starts_with("BODY 4"));
         assert_eq!(wide[(WIDE.x + 45, WIDE.bottom() - 1)].symbol(), "║");

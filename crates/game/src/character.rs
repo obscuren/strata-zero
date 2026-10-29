@@ -1,4 +1,4 @@
-//! The player's character: stats, skills, talents, equipment, inventory and quest log.
+//! The player's character: attributes, skills, talents, equipment, inventory and quest log.
 
 use crate::action::Host;
 use crate::build::Build;
@@ -83,10 +83,10 @@ pub enum Source {
     Talent(TalentId),
 }
 
-/// A number the character sheet shows: a stat, a secondary number, or a resistance.
+/// A number the character sheet shows: an attribute, a secondary number, or a resistance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Num {
-    Stat(Stat),
+    Attribute(Attribute),
     Hp,
     Focus,
     Armor,
@@ -97,14 +97,14 @@ pub enum Num {
 }
 
 impl Num {
-    /// In the sheet's reading order: the five stats, the six secondary numbers, the
+    /// In the sheet's reading order: the five attributes, the six secondary numbers, the
     /// six resistances.
     pub const ALL: [Num; 17] = [
-        Num::Stat(Stat::Body),
-        Num::Stat(Stat::Reflex),
-        Num::Stat(Stat::Tech),
-        Num::Stat(Stat::Cool),
-        Num::Stat(Stat::Net),
+        Num::Attribute(Attribute::Body),
+        Num::Attribute(Attribute::Reflex),
+        Num::Attribute(Attribute::Tech),
+        Num::Attribute(Attribute::Cool),
+        Num::Attribute(Attribute::Net),
         Num::Hp,
         Num::Focus,
         Num::Armor,
@@ -122,7 +122,7 @@ impl Num {
     /// The tile's label: three letters, two for HP.
     pub fn label(self) -> &'static str {
         match self {
-            Num::Stat(s) => s.short(),
+            Num::Attribute(s) => s.short(),
             Num::Hp => "HP",
             Num::Focus => "FOC",
             Num::Armor => "ARM",
@@ -136,7 +136,7 @@ impl Num {
     /// The full name in caps, as the readout heads with it.
     pub fn name(self) -> &'static str {
         match self {
-            Num::Stat(s) => s.name(),
+            Num::Attribute(s) => s.name(),
             Num::Hp => "HP",
             Num::Focus => "FOCUS",
             Num::Armor => "ARMOUR",
@@ -151,7 +151,7 @@ impl Num {
     /// in whole kilograms.
     pub fn of_perk(self, p: &Perk) -> i32 {
         match (self, p) {
-            (Num::Stat(s), Perk::Stat(t, n)) if s == *t => *n as i32,
+            (Num::Attribute(s), Perk::Attribute(t, n)) if s == *t => *n as i32,
             (Num::Hp, Perk::HpMax(n)) | (Num::Focus, Perk::Focus(n)) => *n,
             (Num::Armor, Perk::Armor(n))
             | (Num::Sight, Perk::Sight(n))
@@ -203,7 +203,7 @@ pub struct Character {
     pub focus: u32,
     /// Max focus before talents; see `focus_max`.
     pub focus_base: u32,
-    pub stats: Stats,
+    pub attributes: Attributes,
     pub origin: OriginId,
     pub profession: ProfessionId,
     pub categories: BTreeSet<CategoryId>,
@@ -223,7 +223,7 @@ pub struct Character {
     /// The tick each active ability last fired, for cooldowns.
     pub fired: BTreeMap<AbilityId, u64>,
     /// Unspent creation points, spendable from the deck under the same rules.
-    pub stat_points: u32,
+    pub attribute_points: u32,
     pub sp: u32,
     /// Unspent talent points: one at creation, one per level.
     pub talent_points: u32,
@@ -257,7 +257,7 @@ impl Character {
             xp: 0,
             focus: cr.focus,
             focus_base: cr.focus,
-            stats: b.stats.clone(),
+            attributes: b.attributes.clone(),
             origin: b.origin.clone().unwrap_or_else(|| OriginId::new("")),
             profession: b
                 .profession
@@ -273,7 +273,7 @@ impl Character {
             chrome_copies: BTreeMap::new(),
             inventory: Vec::new(),
             fired: BTreeMap::new(),
-            stat_points: b.points_left(c).max(0) as u32,
+            attribute_points: b.points_left(c).max(0) as u32,
             sp: b.sp_left(c).max(0) as u32,
             talent_points: cr.talent_points,
             loaded: Vec::new(),
@@ -510,7 +510,7 @@ impl Character {
         for i in c.items.iter().filter(|i| i.kind == ItemKind::Sticker) {
             d.give(i.id.clone(), 2);
         }
-        // One of every piece of chrome not already installed, to try on at STATS.
+        // One of every piece of chrome not already installed, to try on at ATTRIBUTES.
         for i in c.items.iter().filter(|i| i.kind == ItemKind::Cyberware) {
             if !d.chrome.values().any(|id| *id == i.id) {
                 d.give_item(c, i.id.clone(), 1);
@@ -651,11 +651,11 @@ impl Character {
         gained
     }
 
-    pub fn stat(&self, c: &Content, stat: Stat) -> u8 {
+    pub fn attribute(&self, c: &Content, attribute: Attribute) -> u8 {
         let perks: i32 = self
             .perks(c)
             .filter_map(|p| match p {
-                Perk::Stat(s, n) if *s == stat => Some(*n as i32),
+                Perk::Attribute(s, n) if *s == attribute => Some(*n as i32),
                 _ => None,
             })
             .sum();
@@ -663,12 +663,12 @@ impl Character {
             .worn_mods(c)
             .iter()
             .filter_map(|m| match m {
-                Mod::Stat(s, n) if *s == stat => Some(*n as i32),
+                Mod::Attribute(s, n) if *s == attribute => Some(*n as i32),
                 _ => None,
             })
             .sum();
         let bonus = perks + fitted;
-        (self.stats.get(stat) as i32 + bonus).clamp(0, 10) as u8
+        (self.attributes.get(attribute) as i32 + bonus).clamp(0, 10) as u8
     }
 
     /// Extra field-of-view radius from equipment.
@@ -745,7 +745,7 @@ impl Character {
             let v = adds(&id);
             out.push((Contrib::Chrome(id), v));
         }
-        if let Num::Stat(stat) = n {
+        if let Num::Attribute(attribute) = n {
             let worn = Slot::ALL.iter().filter_map(|slot| self.worn_copy(*slot));
             let installed = Site::ALL.iter().filter_map(|site| self.chrome_copy(*site));
             for s in worn
@@ -759,7 +759,7 @@ impl Character {
                         h.mods
                             .iter()
                             .map(|m| match m {
-                                Mod::Stat(t, v) if *t == stat => *v as i32,
+                                Mod::Attribute(t, v) if *t == attribute => *v as i32,
                                 _ => 0,
                             })
                             .sum()
@@ -792,7 +792,7 @@ impl Character {
                 _ => None,
             })
             .sum();
-        8.0 + 2.0 * self.stats.body as f32 + bonus
+        8.0 + 2.0 * self.attributes.body as f32 + bonus
     }
 
     pub fn overburdened(&self, c: &Content) -> bool {
@@ -873,8 +873,8 @@ impl Character {
     }
 
     /// Ranks held across one tree.
-    pub fn tree_points(&self, c: &Content, stat: Stat) -> u32 {
-        c.tree(stat)
+    pub fn tree_points(&self, c: &Content, attribute: Attribute) -> u32 {
+        c.tree(attribute)
             .map(|t| {
                 t.tiers
                     .iter()
@@ -887,8 +887,8 @@ impl Character {
 
     /// Whether a tier (from zero) of a tree has opened: `tier_gate` points per tier
     /// below it.
-    pub fn tier_open(&self, c: &Content, stat: Stat, tier: usize) -> bool {
-        self.tree_points(c, stat) >= c.creation.tier_gate * tier as u32
+    pub fn tier_open(&self, c: &Content, attribute: Attribute, tier: usize) -> bool {
+        self.tree_points(c, attribute) >= c.creation.tier_gate * tier as u32
     }
 
     /// Why a talent cannot take a point now, in the order the sheet reports it:
@@ -902,7 +902,7 @@ impl Character {
             return Err("no points left".into());
         }
         let need = c.creation.tier_gate * tier as u32;
-        let have = self.tree_points(c, tree.stat);
+        let have = self.tree_points(c, tree.attribute);
         if have < need {
             let more = need - have;
             let s = if more == 1 { "" } else { "s" };
@@ -1171,7 +1171,7 @@ impl Character {
     /// The chrome a body takes: from base BODY and COOL, so chrome that raises them
     /// never raises its own budget.
     pub fn load_max(&self) -> u32 {
-        2 * (self.stats.body as u32 + self.stats.cool as u32) + 6
+        2 * (self.attributes.body as u32 + self.attributes.cool as u32) + 6
     }
 
     /// The pack stack holding a copy.
@@ -1368,11 +1368,11 @@ mod tests {
         );
         assert_eq!(
             (
-                ch.stats.body,
-                ch.stats.reflex,
-                ch.stats.tech,
-                ch.stats.cool,
-                ch.stats.net
+                ch.attributes.body,
+                ch.attributes.reflex,
+                ch.attributes.tech,
+                ch.attributes.cool,
+                ch.attributes.net
             ),
             (4, 6, 5, 5, 6)
         );
@@ -1405,7 +1405,7 @@ mod tests {
         );
         assert!(!ch.has_skill(&SkillId::new("handguns")));
         assert!(ch.has_category(&CategoryId::new("wrench")) && ch.has_workbench(&c));
-        assert_eq!((ch.stat_points, ch.sp), (0, 0));
+        assert_eq!((ch.attribute_points, ch.sp), (0, 0));
         assert_eq!(ch.origin, OriginId::new("creche"));
         assert_eq!(ch.hp, ch.hp_max(&c));
         let abilities = ch.abilities(&c);
@@ -1441,14 +1441,14 @@ mod tests {
             "second torso item is packed"
         );
         assert!(!ch.has_workbench(&c));
-        assert_eq!((ch.stat_points, ch.sp), (0, 0));
+        assert_eq!((ch.attribute_points, ch.sp), (0, 0));
         let mut spare = Build::blank(&c);
         spare.handle = "Nix".into();
         spare.origin = Some(OriginId::new("vat_grown"));
         spare.profession = Some(ProfessionId::new("techie"));
         let ch = Character::from_build(&c, &spare);
         assert_eq!(
-            (ch.stat_points, ch.sp),
+            (ch.attribute_points, ch.sp),
             (20, 600),
             "unspent pools ride along"
         );
@@ -1488,12 +1488,12 @@ mod tests {
         let c = Content::load().unwrap();
         let mut ch = vex(&c);
         assert_eq!(ch.hp_max(&c), 45, "jacket +5");
-        assert_eq!(ch.stat(&c, Stat::Net), 7, "deck +1 net");
+        assert_eq!(ch.attribute(&c, Attribute::Net), 7, "deck +1 net");
         assert_eq!(ch.sight_bonus(&c), 4);
         ch.chrome.remove(&Site::Eyes);
         assert_eq!(ch.sight_bonus(&c), 0);
         ch.equipment.remove(&Slot::Deck);
-        assert_eq!(ch.stat(&c, Stat::Net), 6);
+        assert_eq!(ch.attribute(&c, Attribute::Net), 6);
         assert!(ch.weight(&c) > 0.0 && ch.carry_cap(&c) > ch.weight(&c));
         assert_eq!(
             ch.abilities(&c)
@@ -1522,7 +1522,7 @@ mod tests {
         let mut ch = vex(&c);
         assert_eq!(ch.talent_points, 1);
         assert!(ch.talents.is_empty());
-        let edge = c.tree(Stat::Reflex).unwrap();
+        let edge = c.tree(Attribute::Reflex).unwrap();
         let first = edge.tiers[0][0].clone();
         let second = edge.tiers[1][0].clone();
         assert_eq!(
@@ -1539,22 +1539,22 @@ mod tests {
             assert_eq!(ch.learn(&c, &first).unwrap(), r);
         }
         assert_eq!(ch.can_learn(&c, &first).unwrap_err(), "already at its best");
-        assert_eq!(ch.tree_points(&c, Stat::Reflex), ranks as u32);
+        assert_eq!(ch.tree_points(&c, Attribute::Reflex), ranks as u32);
         let other = edge.tiers[0][1].clone();
-        while ch.tree_points(&c, Stat::Reflex) < 3 {
-            assert!(!ch.tier_open(&c, Stat::Reflex, 1));
+        while ch.tree_points(&c, Attribute::Reflex) < 3 {
+            assert!(!ch.tier_open(&c, Attribute::Reflex, 1));
             ch.learn(&c, &other).unwrap();
         }
-        assert!(ch.tier_open(&c, Stat::Reflex, 1));
+        assert!(ch.tier_open(&c, Attribute::Reflex, 1));
         // A prerequisite must be maxed before its dependant opens.
         let needy = c.talents.iter().find(|t| t.requires.is_some()).unwrap();
         let (tree, tier, _) = c.tree_of(&needy.id).unwrap();
-        let stat = tree.stat;
+        let attribute = tree.attribute;
         let req = c.talent(needy.requires.as_ref().unwrap()).unwrap();
         let mut ch2 = vex(&c);
         ch2.talent_points = 30;
         for lower in 0..tier {
-            for id in &c.tree(stat).unwrap().tiers[lower] {
+            for id in &c.tree(attribute).unwrap().tiers[lower] {
                 if id == &req.id {
                     continue;
                 }
@@ -1563,7 +1563,7 @@ mod tests {
                 }
             }
         }
-        while !ch2.tier_open(&c, stat, tier) {
+        while !ch2.tier_open(&c, attribute, tier) {
             ch2.talents
                 .insert(req.id.clone(), ch2.talent_rank(&req.id) + 1);
             if ch2.talent_rank(&req.id) >= req.ranks {
@@ -1592,7 +1592,7 @@ mod tests {
                 .id
                 .clone()
         };
-        let stat_t = with(|e| matches!(e, Boon::Perk(Perk::Stat(..))));
+        let attribute_t = with(|e| matches!(e, Boon::Perk(Perk::Attribute(..))));
         let focus_t = with(|e| matches!(e, Boon::Perk(Perk::Focus(_))));
         let grant_t = with(|e| matches!(e, Boon::Grant(_)));
         let sharp_t = with(|e| matches!(e, Boon::Sharpen { .. }));
@@ -1604,20 +1604,22 @@ mod tests {
         let before = ch.focus_max(&c);
         force(&mut ch, &focus_t);
         assert!(ch.focus_max(&c) > before);
-        let first_stat = c
-            .talent(&stat_t)
+        let first_attribute = c
+            .talent(&attribute_t)
             .unwrap()
             .effects
             .iter()
             .flatten()
             .find_map(|e| match e {
-                Boon::Perk(Perk::Stat(s, n)) => Some((*s, *n)),
+                Boon::Perk(Perk::Attribute(s, n)) => Some((*s, *n)),
                 _ => None,
             })
             .unwrap();
-        let before = ch.stat(&c, first_stat.0);
-        force(&mut ch, &stat_t);
-        assert!(ch.stat(&c, first_stat.0) as i32 >= before as i32 + first_stat.1 as i32);
+        let before = ch.attribute(&c, first_attribute.0);
+        force(&mut ch, &attribute_t);
+        assert!(
+            ch.attribute(&c, first_attribute.0) as i32 >= before as i32 + first_attribute.1 as i32
+        );
         force(&mut ch, &grant_t);
         let granted = c
             .talent(&grant_t)
@@ -1755,7 +1757,7 @@ mod tests {
     fn boons_read_in_words() {
         let c = Content::load().unwrap();
         assert_eq!(
-            Boon::Perk(Perk::Stat(Stat::Reflex, 1)).words(&c),
+            Boon::Perk(Perk::Attribute(Attribute::Reflex, 1)).words(&c),
             "+1 Reflex"
         );
         assert_eq!(Boon::Perk(Perk::HpMax(3)).words(&c), "+3 max HP");
@@ -2172,23 +2174,26 @@ mod tests {
             .worn_copy(Slot::Primary)
             .expect("the Ratchet, worn as a copy");
         assert_eq!(gun.fitted, vec![None, None]);
-        let (cool, reflex) = (vex.stat(&c, Stat::Cool), vex.stat(&c, Stat::Reflex));
+        let (cool, reflex) = (
+            vex.attribute(&c, Attribute::Cool),
+            vex.attribute(&c, Attribute::Reflex),
+        );
         vex.give_item(&c, ItemId::new("hushcan"), 1);
         vex.give_item(&c, ItemId::new("redeye"), 1);
         assert_eq!(
-            vex.stat(&c, Stat::Cool),
+            vex.attribute(&c, Attribute::Cool),
             cool,
             "in the pack it does nothing"
         );
         fit_worn(&mut vex, Slot::Primary, "hushcan", 0);
-        assert_eq!(vex.stat(&c, Stat::Cool), cool + 1);
+        assert_eq!(vex.attribute(&c, Attribute::Cool), cool + 1);
         fit_worn(&mut vex, Slot::Primary, "redeye", 1);
-        assert_eq!(vex.stat(&c, Stat::Reflex), reflex + 1);
+        assert_eq!(vex.attribute(&c, Attribute::Reflex), reflex + 1);
         assert_eq!((vex.trace_cut(&c), vex.deck_power(&c)), (0, 0));
         // The gun off the body: its pieces count for nothing.
         let mut off = vex.clone();
         off.equipment.remove(&Slot::Primary);
-        assert_eq!(off.stat(&c, Stat::Cool), cool);
+        assert_eq!(off.attribute(&c, Attribute::Cool), cool);
     }
 
     #[test]
@@ -2207,9 +2212,9 @@ mod tests {
             ),
             (1, 1)
         );
-        assert_eq!(d.stat(&c, Stat::Cool), 10);
+        assert_eq!(d.attribute(&c, Attribute::Cool), 10);
         fit_worn(&mut d, Slot::Primary, "hushcan", 0);
-        assert_eq!(d.stat(&c, Stat::Cool), 10, "the clamp holds");
+        assert_eq!(d.attribute(&c, Attribute::Cool), 10, "the clamp holds");
     }
 
     #[test]
@@ -2322,8 +2327,8 @@ mod tests {
         let packed = ch.inventory.iter().find(|s| s.item == hand).unwrap();
         assert!(packed.copy.is_some(), "a socket piece is packed as a copy");
         // Over the budget: the optics take 2 and the first arm 3 of 6; the second is packed.
-        b.stats.body = 0;
-        b.stats.cool = 0;
+        b.attributes.body = 0;
+        b.attributes.cool = 0;
         let ch = Character::from_build(&c, &b);
         assert_eq!((ch.load_max(), ch.chrome_load(&c)), (6, 5));
         assert_eq!(ch.chrome_at(Site::LeftArm), Some(&grip));
@@ -2336,7 +2341,11 @@ mod tests {
         let c = Content::load().unwrap();
         let mut ch = Character::from_template(&c, &TemplateId::new("kessler")).unwrap();
         assert_eq!((ch.pieces(), ch.chrome_load(&c)), (0, 0));
-        let (weight, value, body) = (ch.weight(&c), ch.value(&c), ch.stat(&c, Stat::Body));
+        let (weight, value, body) = (
+            ch.weight(&c),
+            ch.value(&c),
+            ch.attribute(&c, Attribute::Body),
+        );
         let (port, arm, hand) = (
             ItemId::new("neural_port"),
             ItemId::new("piston_arm"),
@@ -2360,7 +2369,7 @@ mod tests {
             ]
         );
         assert_eq!((ch.pieces(), ch.chrome_load(&c)), (3, 5));
-        assert_eq!(ch.stat(&c, Stat::Body), body + 1);
+        assert_eq!(ch.attribute(&c, Attribute::Body), body + 1);
         let abilities = ch.abilities(&c);
         for (a, from) in [
             ("ping", &port),
@@ -2384,13 +2393,13 @@ mod tests {
     }
 
     #[test]
-    fn load_max_reads_base_stats() {
+    fn load_max_reads_base_attributes() {
         let c = Content::load().unwrap();
         let mut ch = vex(&c);
-        assert_eq!((ch.stats.body, ch.stats.cool), (4, 5));
+        assert_eq!((ch.attributes.body, ch.attributes.cool), (4, 5));
         assert_eq!(ch.load_max(), 24);
         ch.chrome.insert(Site::LeftArm, ItemId::new("piston_arm"));
-        assert_eq!(ch.stat(&c, Stat::Body), 5, "the arm raises BODY");
+        assert_eq!(ch.attribute(&c, Attribute::Body), 5, "the arm raises BODY");
         assert_eq!(ch.load_max(), 24, "but not its own budget");
     }
 
@@ -2402,11 +2411,11 @@ mod tests {
         ch.install(Site::LeftArm, arm.clone(), None);
         ch.wear(Slot::Eyes, shades.clone(), None);
         assert_eq!(
-            ch.sources(&c, Num::Stat(Stat::Body)),
+            ch.sources(&c, Num::Attribute(Attribute::Body)),
             vec![(Contrib::Chrome(arm.clone()), 1)]
         );
         assert_eq!(
-            ch.sources(&c, Num::Stat(Stat::Cool)),
+            ch.sources(&c, Num::Attribute(Attribute::Cool)),
             vec![(Contrib::Gear(shades.clone()), 1)]
         );
         assert_eq!(
@@ -2438,7 +2447,7 @@ mod tests {
             copy: Some(copy),
         });
         assert_eq!(
-            ch.sources(&c, Num::Stat(Stat::Cool)),
+            ch.sources(&c, Num::Attribute(Attribute::Cool)),
             vec![(Contrib::Gear(shades), 1), (Contrib::Hardware(hush), 1)]
         );
         assert_eq!(
@@ -2473,7 +2482,7 @@ mod tests {
         let mut ch = vex(&c);
         let arm = ItemId::new("piston_arm");
         let mut copy = ch.new_copy(&c, &arm);
-        let cool = ch.stat(&c, Stat::Cool);
+        let cool = ch.attribute(&c, Attribute::Cool);
         copy.fitted[1] = Some(Stack {
             item: ItemId::new("hushcan"),
             qty: 1,
@@ -2481,7 +2490,7 @@ mod tests {
         });
         ch.chrome.insert(Site::RightArm, arm);
         ch.chrome_copies.insert(Site::RightArm, copy);
-        assert_eq!(ch.worn_mods(&c), vec![Mod::Stat(Stat::Cool, 1)]);
-        assert_eq!(ch.stat(&c, Stat::Cool), cool + 1);
+        assert_eq!(ch.worn_mods(&c), vec![Mod::Attribute(Attribute::Cool, 1)]);
+        assert_eq!(ch.attribute(&c, Attribute::Cool), cool + 1);
     }
 }

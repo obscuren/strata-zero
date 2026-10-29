@@ -1531,7 +1531,7 @@ pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
     match place {
         Place::Construct(b) => {
             scored.push((
-                st.character.stat(&st.content, game::Stat::Net) as i32,
+                st.character.attribute(&st.content, game::Attribute::Net) as i32,
                 0,
                 Actor::You,
             ));
@@ -1551,7 +1551,7 @@ pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
         }
         _ => {
             scored.push((
-                st.character.stat(&st.content, game::Stat::Reflex) as i32,
+                st.character.attribute(&st.content, game::Attribute::Reflex) as i32,
                 0,
                 Actor::You,
             ));
@@ -2692,9 +2692,9 @@ mod tests {
     #[test]
     fn initiative_on_the_street_is_by_reflex_with_ties_to_you() {
         let mut st = crate::foes::testutil::lot(Pos::new(14, 8));
-        st.character.stats.reflex = 5;
+        st.character.attributes.reflex = 5;
         assert_eq!(initiative(&st, STREET), vec![Actor::You, Actor::Foe(0)]);
-        st.character.stats.reflex = 4;
+        st.character.attributes.reflex = 4;
         assert_eq!(initiative(&st, STREET), vec![Actor::Foe(0), Actor::You]);
         // A foe out of sight memory is not seated.
         st.player
@@ -2707,7 +2707,7 @@ mod tests {
     #[test]
     fn pools_for_a_foe() {
         let mut st = crate::foes::testutil::lot(Pos::new(14, 8));
-        st.character.stats.reflex = 3;
+        st.character.attributes.reflex = 3;
         st.foes[0].mode = crate::foes::FoeMode::Hunting {
             seen: Pos::new(6, 8),
             lost: 0,

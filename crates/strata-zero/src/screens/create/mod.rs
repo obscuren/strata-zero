@@ -4,11 +4,11 @@
 //! tagline, a left list, a right dossier, heavy rules, and the HUD's `[key]verb` footer.
 //! The `Build` lives in `AppState`, so stepping back and forth never loses a choice.
 
+mod attributes;
 pub mod chooser;
 mod name;
 mod pick;
 mod skills;
-mod stats;
 mod summary;
 
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
@@ -18,7 +18,7 @@ use crate::screens::title::Title;
 use crate::ui::chrome::{CYAN, CYAN_RGB, DIM, FAINT, MAGENTA, MAGENTA_RGB, RULE, solid};
 use crate::ui::logo::{self, Logo};
 use crossterm::event::{KeyCode, KeyEvent};
-use game::{Build, CategoryId, Character, Stat, Step};
+use game::{Attribute, Build, CategoryId, Character, Step};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -36,19 +36,19 @@ pub const NOTICE_TICKS: u64 = 90;
 /// Rows from which the caption is set in the block font.
 pub const TALL: u16 = 36;
 
-/// Each stat's colour, the HUD's where they overlap.
-pub(crate) fn stat_rgb(s: Stat) -> Rgb {
+/// Each attribute's colour, the HUD's where they overlap.
+pub(crate) fn attribute_rgb(s: Attribute) -> Rgb {
     match s {
-        Stat::Body => Rgb(120, 255, 120),
-        Stat::Reflex => CYAN_RGB,
-        Stat::Tech => Rgb(230, 180, 60),
-        Stat::Cool => MAGENTA_RGB,
-        Stat::Net => Rgb(110, 150, 255),
+        Attribute::Body => Rgb(120, 255, 120),
+        Attribute::Reflex => CYAN_RGB,
+        Attribute::Tech => Rgb(230, 180, 60),
+        Attribute::Cool => MAGENTA_RGB,
+        Attribute::Net => Rgb(110, 150, 255),
     }
 }
 
-pub(crate) fn stat_colour(s: Stat) -> Color {
-    stat_rgb(s).to_color()
+pub(crate) fn attribute_colour(s: Attribute) -> Color {
+    attribute_rgb(s).to_color()
 }
 
 /// The wizard: which step is up, where each list's cursor sits, and the footer notice.
@@ -64,8 +64,8 @@ pub struct Create {
     open: BTreeSet<CategoryId>,
     /// A board row lit after a buy, until the tick.
     flash: Option<(usize, u64)>,
-    /// A stat whose newest segment is lit after a buy, until the tick.
-    stat_flash: Option<(Stat, u64)>,
+    /// An attribute whose newest segment is lit after a buy, until the tick.
+    attribute_flash: Option<(Attribute, u64)>,
 }
 
 /// The two panes a step draws into.
@@ -84,7 +84,7 @@ impl Create {
             notice: None,
             open: BTreeSet::new(),
             flash: None,
-            stat_flash: None,
+            attribute_flash: None,
         };
         if let Some(b) = &st.build {
             c.sync_cursor(st, b);
@@ -217,7 +217,7 @@ impl Create {
                     self.changed = st.tick;
                 }
             }
-            Step::Stats => stats::key(self, st, code),
+            Step::Attributes => attributes::key(self, st, code),
             Step::Skills => skills::key(self, st, code),
             Step::Summary => {}
         }
@@ -229,8 +229,8 @@ impl Create {
             Step::Origin | Step::Profession => {
                 &[("↑↓", "choose"), ("enter", "next"), ("esc", "back")]
             }
-            Step::Stats => &[
-                ("↑↓", "stat"),
+            Step::Attributes => &[
+                ("↑↓", "attribute"),
                 ("→", "buy"),
                 ("←", "refund"),
                 ("enter", "next"),
@@ -479,7 +479,7 @@ impl Screen for Create {
                 &panes,
                 buf,
             ),
-            Step::Stats => stats::draw(self, st, b, &panes, tick, buf),
+            Step::Attributes => attributes::draw(self, st, b, &panes, tick, buf),
             Step::Skills => skills::draw(self, st, b, &panes, tick, buf),
             Step::Summary => summary::draw(st, b, body, tick, buf),
         }
@@ -553,7 +553,7 @@ mod tests {
             [
                 Step::Origin,
                 Step::Profession,
-                Step::Stats,
+                Step::Attributes,
                 Step::Skills,
                 Step::Name,
                 Step::Summary
@@ -616,7 +616,7 @@ mod tests {
                 && text.contains("ORIGIN")
                 && text.contains("CRÈCHE")
                 && text.contains("KIT")
-                && text.contains("STATS"),
+                && text.contains("ATTRIBUTES"),
             "the sheet so far sits beside the name: {text}"
         );
         assert_eq!(c.step, Step::Name);
@@ -659,8 +659,9 @@ mod tests {
         let text = draw(&c, &st, 120, 40);
         let lines: Vec<&str> = text.lines().collect();
         assert!(
-            lines[0]
-                .contains("▌1 ORIGIN▐ ▸ 2 PROFESSION ▸ 3 STATS ▸ 4 SKILLS ▸ 5 NAME ▸ 6 SUMMARY"),
+            lines[0].contains(
+                "▌1 ORIGIN▐ ▸ 2 PROFESSION ▸ 3 ATTRIBUTES ▸ 4 SKILLS ▸ 5 NAME ▸ 6 SUMMARY"
+            ),
             "{}",
             lines[0]
         );
@@ -815,14 +816,14 @@ mod tests {
     }
 
     #[test]
-    fn stats_step_buys_refunds_and_shows_costs() {
+    fn attributes_step_buys_refunds_and_shows_costs() {
         let mut st = AppState::new();
         let ch = chooser::Chooser::new(&st, 0);
         let mut c = ch.choose(&mut st);
         for _ in 0..3 {
             c.update(&mut st, &[key(KeyCode::Esc)]);
         }
-        assert_eq!(c.step, Step::Stats);
+        assert_eq!(c.step, Step::Attributes);
         st.tick = 100;
         let text = draw(&c, &st, 120, 40);
         assert!(text.contains("POINTS") && text.contains("0 left"), "{text}");
@@ -832,13 +833,13 @@ mod tests {
         );
         assert!(text.contains("TECH") && text.contains("cheap"), "{text}");
         c.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Left)]);
-        assert_eq!(st.build.as_ref().unwrap().stats.reflex, 5);
+        assert_eq!(st.build.as_ref().unwrap().attributes.reflex, 5);
         let text = draw(&c, &st, 120, 40);
         assert!(text.contains("2 left"), "{text}");
         c.update(&mut st, &[key(KeyCode::Right)]);
-        assert_eq!(st.build.as_ref().unwrap().stats.reflex, 6);
+        assert_eq!(st.build.as_ref().unwrap().attributes.reflex, 6);
         c.update(&mut st, &[key(KeyCode::Right)]);
-        assert_eq!(st.build.as_ref().unwrap().stats.reflex, 6);
+        assert_eq!(st.build.as_ref().unwrap().attributes.reflex, 6);
         let text = draw(&c, &st, 120, 40);
         assert!(text.contains("no points left"), "{text}");
         st.build.as_mut().unwrap().origin = Some(game::OriginId::new("stowaway"));
@@ -848,7 +849,7 @@ mod tests {
             c.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Stay
         ));
-        assert_eq!(c.step, Step::Stats);
+        assert_eq!(c.step, Step::Attributes);
     }
 
     /// VEX's build on the SKILLS step with the cursor on `name`, the card typed out.
@@ -1006,7 +1007,7 @@ mod tests {
         b.handle = "Sixteen-char-nam".into();
         b.origin = Some(game::OriginId::new("creche"));
         b.profession = Some(game::ProfessionId::new("netrunner"));
-        let c = Create::new(&st, Step::Stats, 0);
+        let c = Create::new(&st, Step::Attributes, 0);
         st.tick = 100;
         let text = draw(&c, &st, 100, 30);
         let first = text.lines().next().unwrap_or("");

@@ -112,8 +112,8 @@ pub struct Content {
     pub professions: Vec<Profession>,
     pub categories: Vec<Category>,
     pub templates: Vec<Template>,
-    pub stat_blurbs: Vec<(Stat, String)>,
-    /// What each number the sheet shows besides the stats is, by its tile's label.
+    pub attribute_blurbs: Vec<(Attribute, String)>,
+    /// What each number the sheet shows besides the attributes is, by its tile's label.
     pub number_blurbs: Vec<(String, String)>,
     /// Files that land on a host's disk when its theme and building kind match.
     #[serde(default)]
@@ -590,8 +590,14 @@ impl Content {
                     })?;
                 }
             }
-            if self.trees.iter().filter(|o| o.stat == tree.stat).count() > 1 {
-                return Err(bad(format!("two trees for {}", tree.stat.name())));
+            if self
+                .trees
+                .iter()
+                .filter(|o| o.attribute == tree.attribute)
+                .count()
+                > 1
+            {
+                return Err(bad(format!("two trees for {}", tree.attribute.name())));
             }
         }
         for t in &self.talents {
@@ -638,7 +644,7 @@ impl Content {
                 let Some((rtree, rtier, rcol)) = self.tree_of(req) else {
                     return Err(bad(format!("prerequisite {req} is in no tree")));
                 };
-                if rtree.stat != tree.stat || rtier >= tier || rcol != col {
+                if rtree.attribute != tree.attribute || rtier >= tier || rcol != col {
                     return Err(bad(format!(
                         "prerequisite {req} must sit in the same column of a lower tier of {}",
                         tree.name
@@ -737,13 +743,13 @@ impl Content {
         self.validate_skills()
     }
 
-    /// A blurb for each of the sheet's numbers that is not a stat, once, and for
+    /// A blurb for each of the sheet's numbers that is not an attribute, once, and for
     /// nothing else.
     fn validate_number_blurbs(&self) -> Result<(), ContentError> {
         let bad = |why: String| ContentError::BlurbsInvalid { why };
         let labels: Vec<&str> = Num::ALL
             .iter()
-            .filter(|n| !matches!(n, Num::Stat(_)))
+            .filter(|n| !matches!(n, Num::Attribute(_)))
             .map(|n| n.label())
             .collect();
         for label in &labels {
@@ -777,8 +783,11 @@ impl Content {
                 id: s.id.0.clone(),
                 why,
             };
-            if let Some((stat, n)) = s.needs.iter().find(|(_, n)| !(1..=10).contains(n)) {
-                return Err(bad(format!("needs {} {n}; a need is 1 to 10", stat.name())));
+            if let Some((attribute, n)) = s.needs.iter().find(|(_, n)| !(1..=10).contains(n)) {
+                return Err(bad(format!(
+                    "needs {} {n}; a need is 1 to 10",
+                    attribute.name()
+                )));
             }
             if let Some(id) = s.after.iter().find(|id| self.skill(id).is_none()) {
                 return Err(bad(format!("after unknown skill `{id}`")));
@@ -963,10 +972,10 @@ impl Content {
             .find(|s| &s.id == skill)
             .map(|s| s.cost)
     }
-    pub fn stat_blurb(&self, stat: Stat) -> &str {
-        self.stat_blurbs
+    pub fn attribute_blurb(&self, attribute: Attribute) -> &str {
+        self.attribute_blurbs
             .iter()
-            .find(|(s, _)| *s == stat)
+            .find(|(s, _)| *s == attribute)
             .map(|(_, b)| b.as_str())
             .unwrap_or("")
     }
@@ -1022,9 +1031,9 @@ impl Content {
             .filter(move |t| t.skill.as_ref() == Some(skill))
     }
 
-    /// The tree under a stat.
-    pub fn tree(&self, stat: Stat) -> Option<&Tree> {
-        self.trees.iter().find(|t| t.stat == stat)
+    /// The tree under an attribute.
+    pub fn tree(&self, attribute: Attribute) -> Option<&Tree> {
+        self.trees.iter().find(|t| t.attribute == attribute)
     }
 
     /// Where a talent hangs: its tree, tier and column.
@@ -1062,7 +1071,7 @@ impl Boon {
                 .unwrap_or_else(|| id.to_string())
         };
         match self {
-            Boon::Perk(Perk::Stat(s, n)) => {
+            Boon::Perk(Perk::Attribute(s, n)) => {
                 let mut name = s.name().to_ascii_lowercase();
                 if let Some(first) = name.get_mut(0..1) {
                     first.make_ascii_uppercase();
@@ -1379,8 +1388,8 @@ mod tests {
         ));
 
         let mut c = good.clone();
-        c.templates[0].stats.body = 8;
-        c.templates[0].stats.cool = 8;
+        c.templates[0].attributes.body = 8;
+        c.templates[0].attributes.cool = 8;
         assert!(matches!(
             c.validate(),
             Err(ContentError::TemplateInvalid { .. })
@@ -1535,9 +1544,9 @@ mod tests {
         let c = Content::load().unwrap();
         assert_eq!(
             (
-                c.creation.stat_base,
-                c.creation.stat_cap,
-                c.creation.stat_points
+                c.creation.attribute_base,
+                c.creation.attribute_cap,
+                c.creation.attribute_points
             ),
             (3, 8, 20)
         );
@@ -1576,7 +1585,7 @@ mod tests {
         assert_eq!(c.skill_cost(&SkillId::new("ice_breaker")), Some(100));
         assert_eq!(c.skill_cost(&SkillId::new("vault_run")), Some(150));
         assert_eq!(c.skill_cost(&SkillId::new("origami")), None);
-        assert!(c.stat_blurb(Stat::Body).contains("meat"));
+        assert!(c.attribute_blurb(Attribute::Body).contains("meat"));
         assert_eq!(c.template(&TemplateId::new("vex")).unwrap().handle, "VEX");
         assert!(c.item(&ItemId::new("ballistic_weave")).is_some());
         assert!(c.ability(&AbilityId::new("signal_ghost")).is_some());
@@ -1593,7 +1602,7 @@ mod tests {
         let c = Content::load().unwrap();
         let twelve: Vec<&str> = Num::ALL
             .iter()
-            .filter(|n| !matches!(n, Num::Stat(_)))
+            .filter(|n| !matches!(n, Num::Attribute(_)))
             .map(|n| n.label())
             .collect();
         assert_eq!(twelve.len(), 12);
@@ -1602,7 +1611,11 @@ mod tests {
             assert!(!c.number_blurb(label).is_empty(), "{label}");
         }
         assert!(c.number_blurb("EMP").contains("chrome"));
-        assert_eq!(c.number_blurb("BOD"), "", "stats keep their own blurbs");
+        assert_eq!(
+            c.number_blurb("BOD"),
+            "",
+            "attributes keep their own blurbs"
+        );
 
         let mut missing = c.clone();
         missing.number_blurbs.retain(|(k, _)| k != "TOX");
@@ -1640,7 +1653,7 @@ mod tests {
         none.skills.push(Skill {
             id: SkillId::new("origami"),
             name: "Origami".into(),
-            stat: Stat::Tech,
+            attribute: Attribute::Tech,
             desc: "paper".into(),
             needs: Vec::new(),
             after: Vec::new(),
@@ -1721,8 +1734,14 @@ mod tests {
         }
         assert_eq!(c.creation.talent_points, 1);
         assert_eq!(c.creation.tier_gate, 3);
-        for stat in [Stat::Body, Stat::Reflex, Stat::Tech, Stat::Cool, Stat::Net] {
-            assert_eq!(c.tree(stat).unwrap().stat, stat);
+        for attribute in [
+            Attribute::Body,
+            Attribute::Reflex,
+            Attribute::Tech,
+            Attribute::Cool,
+            Attribute::Net,
+        ] {
+            assert_eq!(c.tree(attribute).unwrap().attribute, attribute);
         }
     }
 
@@ -1730,9 +1749,9 @@ mod tests {
     fn validation_refuses_a_misplaced_prerequisite_and_bad_ranks() {
         let c = Content::load().unwrap();
         let dt = TalentId::new("double_tap");
-        let (stat, tier, col) = c.tree_of(&dt).map(|(t, i, j)| (t.stat, i, j)).unwrap();
+        let (attribute, tier, col) = c.tree_of(&dt).map(|(t, i, j)| (t.attribute, i, j)).unwrap();
         assert!(tier >= 1);
-        let other = c.tree(stat).unwrap().tiers[tier - 1][1 - col.min(1)].clone();
+        let other = c.tree(attribute).unwrap().tiers[tier - 1][1 - col.min(1)].clone();
         let mut bad = c.clone();
         bad.talents
             .iter_mut()
@@ -1955,7 +1974,7 @@ mod tests {
                 "Hushcan",
                 0.5,
                 700,
-                Mod::Stat(Stat::Cool, 1),
+                Mod::Attribute(Attribute::Cool, 1),
                 SocketKind::Muzzle,
                 HardwareLook::Hushcan,
             ),
@@ -1964,7 +1983,7 @@ mod tests {
                 "Redeye sight",
                 0.2,
                 550,
-                Mod::Stat(Stat::Reflex, 1),
+                Mod::Attribute(Attribute::Reflex, 1),
                 SocketKind::Rail,
                 HardwareLook::Redeye,
             ),
@@ -2141,10 +2160,16 @@ mod tests {
         assert_eq!(Mod::Power(-1).sticker(), "POWER \u{2212}1");
         assert_eq!(SocketKind::Deck.takes(), "deck hardware");
         assert_eq!(SocketKind::Deck.fits(), "deck socket");
-        assert_eq!(Mod::Stat(Stat::Cool, 1).line(), "cool +1");
-        assert_eq!(Mod::Stat(Stat::Cool, 1).sticker(), "COOL +1");
-        assert_eq!(Mod::Stat(Stat::Reflex, -1).line(), "reflex \u{2212}1");
-        assert_eq!(Mod::Stat(Stat::Reflex, -1).sticker(), "REFLEX \u{2212}1");
+        assert_eq!(Mod::Attribute(Attribute::Cool, 1).line(), "cool +1");
+        assert_eq!(Mod::Attribute(Attribute::Cool, 1).sticker(), "COOL +1");
+        assert_eq!(
+            Mod::Attribute(Attribute::Reflex, -1).line(),
+            "reflex \u{2212}1"
+        );
+        assert_eq!(
+            Mod::Attribute(Attribute::Reflex, -1).sticker(),
+            "REFLEX \u{2212}1"
+        );
         assert_eq!(SocketKind::Muzzle.takes(), "muzzle hardware");
         assert_eq!(SocketKind::Rail.fits(), "rail socket");
     }
@@ -2272,21 +2297,24 @@ mod tests {
     fn a_strike_parses_with_its_defaults_and_its_extras() {
         let c = Content::load().unwrap();
         let Some(AbilityKind::Active(Active::Strike {
-            stat, push, chain, ..
+            attribute,
+            push,
+            chain,
+            ..
         })) = c.ability(&AbilityId::new("static")).map(|a| a.kind.clone())
         else {
             panic!("static is a strike");
         };
-        assert_eq!((stat, push, chain), (Stat::Net, 0, 0));
+        assert_eq!((attribute, push, chain), (Attribute::Net, 0, 0));
         let a: Ability = ron::from_str(
             r#"Ability(id: "s", name: "S", cooldown: 1, desc: "",
-            kind: Active(Strike(range: 1, damage: 3, stun: 0, skill: "athletics", ap: 1, stat: Body, push: 2)))"#,
+            kind: Active(Strike(range: 1, damage: 3, stun: 0, skill: "athletics", ap: 1, attribute: Body, push: 2)))"#,
         )
         .unwrap();
         assert!(matches!(
             a.kind,
             AbilityKind::Active(Active::Strike {
-                stat: Stat::Body,
+                attribute: Attribute::Body,
                 push: 2,
                 chain: 0,
                 ..
@@ -2411,7 +2439,7 @@ mod tests {
             AbilityKind::Active(Active::Strike {
                 push: 2,
                 range: 1,
-                stat: Stat::Body,
+                attribute: Attribute::Body,
                 ..
             })
         ));
@@ -2419,7 +2447,7 @@ mod tests {
             c.ability(&AbilityId::new("jolt")).unwrap().kind,
             AbilityKind::Active(Active::Strike {
                 chain: 1,
-                stat: Stat::Tech,
+                attribute: Attribute::Tech,
                 ..
             })
         ));
@@ -2664,9 +2692,9 @@ mod tests {
     fn skill_needs_load() {
         let c = Content::load().unwrap();
         let needs = |id: &str| c.skill(&SkillId::new(id)).unwrap().needs.clone();
-        assert_eq!(needs("ice_breaker"), vec![(Stat::Net, 5)]);
-        assert_eq!(needs("vault_run"), vec![(Stat::Net, 7)]);
-        assert_eq!(needs("athletics"), vec![(Stat::Body, 4)]);
+        assert_eq!(needs("ice_breaker"), vec![(Attribute::Net, 5)]);
+        assert_eq!(needs("vault_run"), vec![(Attribute::Net, 7)]);
+        assert_eq!(needs("athletics"), vec![(Attribute::Body, 4)]);
         assert!(c.skills.iter().all(|s| s.after.is_empty()));
     }
 
@@ -2732,7 +2760,7 @@ mod tests {
         assert!(invalid(&dot), "a colour for the empty pixel");
         for n in [0, 11] {
             let mut need = c.clone();
-            need.skills[0].needs = vec![(Stat::Net, n)];
+            need.skills[0].needs = vec![(Attribute::Net, n)];
             assert!(invalid(&need), "needs {n}");
         }
         let mut after = c.clone();
@@ -2767,7 +2795,7 @@ mod tests {
                 "limbic_damper",
                 Neural,
                 2,
-                vec![Stat(crate::Stat::Cool, 1)],
+                vec![Attribute(crate::Attribute::Cool, 1)],
                 vec![],
                 Some((0.1, 1800)),
             ),
@@ -2832,7 +2860,7 @@ mod tests {
                 "redline_spine",
                 Spine,
                 3,
-                vec![Stat(crate::Stat::Reflex, 1), Move(1)],
+                vec![Attribute(crate::Attribute::Reflex, 1), Move(1)],
                 vec![],
                 Some((1.5, 5200)),
             ),
@@ -2905,7 +2933,7 @@ mod tests {
                 "smart_ink",
                 Skin,
                 1,
-                vec![Stat(crate::Stat::Cool, 1)],
+                vec![Attribute(crate::Attribute::Cool, 1)],
                 vec![],
                 Some((0.0, 700)),
             ),
@@ -2913,7 +2941,7 @@ mod tests {
                 "grip_arm",
                 Arm,
                 3,
-                vec![Carry(12.0), Stat(crate::Stat::Body, 1)],
+                vec![Carry(12.0), Attribute(crate::Attribute::Body, 1)],
                 vec![],
                 None,
             ),
@@ -2921,7 +2949,7 @@ mod tests {
                 "piston_arm",
                 Arm,
                 3,
-                vec![Stat(crate::Stat::Body, 1)],
+                vec![Attribute(crate::Attribute::Body, 1)],
                 vec!["shove"],
                 None,
             ),
@@ -2929,7 +2957,7 @@ mod tests {
                 "surgeon_arm",
                 Arm,
                 3,
-                vec![Stat(crate::Stat::Tech, 2)],
+                vec![Attribute(crate::Attribute::Tech, 2)],
                 vec![],
                 Some((3.5, 4400)),
             ),
@@ -2937,7 +2965,7 @@ mod tests {
                 "wrecker_arm",
                 Arm,
                 4,
-                vec![Stat(crate::Stat::Body, 2)],
+                vec![Attribute(crate::Attribute::Body, 2)],
                 vec![],
                 Some((6.0, 4900)),
             ),
@@ -2953,7 +2981,7 @@ mod tests {
                 "toolfingers",
                 Socket(Hand),
                 1,
-                vec![Stat(crate::Stat::Tech, 1)],
+                vec![Attribute(crate::Attribute::Tech, 1)],
                 vec![],
                 Some((0.4, 1500)),
             ),
@@ -3022,7 +3050,7 @@ mod tests {
                 stun: 0,
                 skill: sk("athletics"),
                 ap: 1,
-                stat: crate::Stat::Body,
+                attribute: crate::Attribute::Body,
                 push: 0,
                 chain: 0
             })
@@ -3037,7 +3065,7 @@ mod tests {
                 stun: 1,
                 skill: sk("athletics"),
                 ap: 1,
-                stat: crate::Stat::Reflex,
+                attribute: crate::Attribute::Reflex,
                 push: 0,
                 chain: 0
             })
@@ -3052,7 +3080,7 @@ mod tests {
                 stun: 0,
                 skill: sk("blades"),
                 ap: 1,
-                stat: crate::Stat::Reflex,
+                attribute: crate::Attribute::Reflex,
                 push: 0,
                 chain: 0
             })

@@ -361,7 +361,7 @@ impl Sheet {
         Line::from(vec![
             Span::styled("↑↓ select · ", dim),
             Span::styled(space, locked),
-            Span::styled(" · ← stats · Q/E tabs · tab close", dim),
+            Span::styled(" · ← attributes · Q/E tabs · tab close", dim),
         ])
     }
 
@@ -838,7 +838,7 @@ fn signed(n: i32) -> String {
 /// goes.
 fn perk_text(p: &Perk) -> (String, i32) {
     let (word, n): (&str, i32) = match *p {
-        Perk::Stat(s, n) => (s.name(), n.into()),
+        Perk::Attribute(s, n) => (s.name(), n.into()),
         Perk::Sight(n) => ("sight", n.into()),
         Perk::Carry(kg) => ("carry", kg.round() as i32),
         Perk::HpMax(n) => ("HP", n),
@@ -1048,7 +1048,7 @@ mod tests {
         st
     }
 
-    /// The deck on STATS with the cursor on the ledger's `row`.
+    /// The deck on ATTRIBUTES with the cursor on the ledger's `row`.
     fn on_ledger(st: &mut AppState, row: LedgerRow) -> Deck {
         let mut d = Deck::new(st.tick);
         d.update(st, &[key(KeyCode::Char('2'))]);
@@ -1421,7 +1421,7 @@ mod tests {
         let mut st = AppState::new();
         loadout(&mut st);
         give(&mut st, "grip_arm");
-        st.character.stats.cool = 3;
+        st.character.attributes.cool = 3;
         let (load, max) = (
             st.character.chrome_load(&st.content),
             st.character.load_max(),
@@ -1616,7 +1616,7 @@ mod tests {
         assert!(cells(&buf, 2, 27, 90).contains(JACKED_IN), "the strip");
         let hint = cells(&buf, 2, 28, 70);
         assert!(
-            hint.starts_with("↑↓ select · space pull it out · ← stats"),
+            hint.starts_with("↑↓ select · space pull it out · ← attributes"),
             "{hint}"
         );
         assert_eq!(buf[(2, 28)].fg, DIM);
@@ -1694,13 +1694,13 @@ mod tests {
         assert!(hint_row(&d, &mut st).starts_with(left));
         d.sheet.state.pane = SheetPane::Ledger;
         d.sheet.state.row = LedgerRow::Site(Site::LeftArm);
-        let chrome = "↑↓ select · space pull it out · ← stats · Q/E tabs · tab close";
+        let chrome = "↑↓ select · space pull it out · ← attributes · Q/E tabs · tab close";
         assert_eq!(d.sheet.hints(&st), chrome);
         assert!(hint_row(&d, &mut st).starts_with(chrome));
         d.sheet.state.row = LedgerRow::Socket(Site::LeftArm, 0);
         assert_eq!(d.sheet.hints(&st), chrome, "a socket's piece is chrome too");
         d.sheet.state.row = LedgerRow::Site(Site::RightArm);
-        let empty = "↑↓ select · space what fits · ← stats · Q/E tabs · tab close";
+        let empty = "↑↓ select · space what fits · ← attributes · Q/E tabs · tab close";
         assert_eq!(d.sheet.hints(&st), empty);
         assert!(hint_row(&d, &mut st).starts_with(empty));
         press(&mut d, &mut st, &[KeyCode::Char(' ')]);

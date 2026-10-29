@@ -269,8 +269,8 @@ lot's construct, an open floor with a grey ICE at the far end and a dummy ICE ne
 gate (never wakes, hits or breaks); load game opens the save list) · `q` quit
 
 **New game** picks a template (VEX, KESSLER) or a custom build, then walks six
-steps: ORIGIN, PROFESSION, STATS, SKILLS, NAME, SUMMARY. `↑↓` choose · `enter`
-next · `esc` back. On STATS `→` buys a point and `←` refunds one; a point's cost
+steps: ORIGIN, PROFESSION, ATTRIBUTES, SKILLS, NAME, SUMMARY. `↑↓` choose · `enter`
+next · `esc` back. On ATTRIBUTES `→` buys a point and `←` refunds one; a point's cost
 follows your origin's and profession's affinity. On SKILLS `→` `←` unfold and
 fold a category and `space` buys or refunds it or a skill with SP; the card beside the
 board is the deck's, drawing and all. SUMMARY ends
@@ -411,12 +411,12 @@ rain, fps) · quit to title · quit game
 arrows never change tabs · `↑↓` rows · `space` act on a row · `tab` or `esc` close;
 it reopens where you left it. Q and E sit as keycaps at the ends of the tab bar, in
 the frame's sides; past 120 columns the bar stays that wide in the middle. Tabs: skills (the category board,
-under a bar with your five stats, gear and chrome counted, and the SP you have to spend;
+under a bar with your five attributes, gear and chrome counted, and the SP you have to spend;
 it opens with only what you own unfolded; `←→` unfold and fold any category, `space`
 folds one you own and asks before it buys anything else with SP; a skill's card shows its
-drawing, grey or cold until you learn it, its price, the stats and skills it asks for,
+drawing, grey or cold until you learn it, its price, the attributes and skills it asks for,
 and its line; a category's shows its drawing, its price, its skills and what it grants),
-stats (the character sheet: on the left the five stats, `space` buys a point
+attributes (the character sheet: on the left the five attributes, `space` buys a point
 outright, then the secondary numbers and the six resistances, each tile with a
 readout that names where its number comes from; on the right the chrome ledger,
 `→` from the last tile of a row crosses over and `←` comes back; see Chrome
@@ -426,7 +426,7 @@ is on hand; an item whose drawing has parts is drawn exploded, the rest as a
 process), jobs (in hand, on offer, done), journal (empty for now), map (what you
 remember of this stratum) and talents (below). Every list wraps at both ends.
 GEAR & INVENTORY is three panels. The rack is the seven slots as tiles; chrome
-has its own place on STATS. The pack sits beside it with a row of kind icons on
+has its own place on ATTRIBUTES. The pack sits beside it with a row of kind icons on
 top: `[` and `]` filter it by kind, and the active icon names its kind. The
 selected item's card sits beside its drawing at half size. `←→` move between the
 rack and the pack. `space` on a tile picks what fits from the pack, or unequips
@@ -444,7 +444,7 @@ large, and a sticker shows itself; anything else reads MISSING BLUEPRINT for
 now. `esc` puts a carried program back, shuts a lifted cover, then closes the
 window.
 
-**Chrome** is cyberware, and it lives on STATS. Eleven body sites take one piece
+**Chrome** is cyberware, and it lives on ATTRIBUTES. Eleven body sites take one piece
 each: neural, eyes, ears, jaw, spine, back, organs, skin, left arm, right arm
 and legs. An arm has two sockets, hand and forearm, that take smaller pieces.
 The ledger lists the sites under head, body and limbs; the card beside it shows
@@ -493,15 +493,15 @@ a piece fitted, an empty one is free); on the rack the marks sit in the tile's b
 apart in the slot popup and on the ground. Skills and categories inspect as
 cards. The readout shows hp and the carried weight over capacity (magenta when
 over, and nothing more can be picked up). Items carry perks while worn or
-installed (stat, sight, carry, max hp, focus, armour, move, resistances, throw
+installed (attribute, sight, carry, max hp, focus, armour, move, resistances, throw
 range) and can grant abilities; consumables heal when used. The templates,
 origins, professions, categories and every item, ability, skill, talent and
 recipe live in `flavor/content.ron`.
 
-**Talents** (deck tab `8` or `0`) are five trees, one per stat: MEAT, EDGE, WRENCH,
+**Talents** (deck tab `8` or `0`) are five trees, one per attribute: MEAT, EDGE, WRENCH,
 STREET and ICE, each a column of five tiers with two talents a tier and a
 capstone on top. A talent has up to three ranks; each rank adds something you
-can read on the sheet (a stat, max HP, focus, sight, carry), grants an
+can read on the sheet (an attribute, max HP, focus, sight, carry), grants an
 ability, sharpens one (reach, cooldown) or sets a named flag the combat and
 shop systems will read later. A tier opens when the tree below it holds three
 points a tier; a talent with a prerequisite wants it at its best first. You

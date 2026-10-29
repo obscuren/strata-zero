@@ -1,6 +1,6 @@
 //! Steps 2 and 3: a list to pick from, with a dossier that types itself out.
 
-use super::{Panes, stat_colour, wrap};
+use super::{Panes, attribute_colour, wrap};
 
 /// Rows each list entry takes: the name, up to two rows of tagline, a blank.
 const STRIDE: u16 = 4;
@@ -9,7 +9,7 @@ use crate::anim::{Easing, Tween};
 use crate::app::AppState;
 use crate::ui::chrome::{CYAN, DIM, MAGENTA, TEXT, plain, reveal};
 use crate::ui::panel::boxed;
-use game::Stat;
+use game::Attribute;
 use ratatui::buffer::Buffer;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -21,14 +21,14 @@ pub(super) struct Entry {
     pub line: String,
     pub desc: String,
     pub emblem: Vec<String>,
-    /// -1 cheap, 0 normal, +1 dear, per stat.
-    pub shifts: Vec<(Stat, i32)>,
+    /// -1 cheap, 0 normal, +1 dear, per attribute.
+    pub shifts: Vec<(Attribute, i32)>,
     pub kit: Vec<String>,
     pub credits: Option<u32>,
 }
 
-fn shifts(cheap: &[Stat], dear: &[Stat]) -> Vec<(Stat, i32)> {
-    Stat::ALL
+fn shifts(cheap: &[Attribute], dear: &[Attribute]) -> Vec<(Attribute, i32)> {
+    Attribute::ALL
         .iter()
         .map(|&s| {
             let d = if cheap.contains(&s) {
@@ -204,7 +204,7 @@ pub(super) fn draw(
         let (word, bar) = affinity(*d);
         let row = Line::from(vec![
             Span::styled(format!("{:<8} ", s.name()), Style::default().fg(DIM)),
-            Span::styled(bar, Style::default().fg(stat_colour(*s))),
+            Span::styled(bar, Style::default().fg(attribute_colour(*s))),
             Span::styled(format!("   {word}"), Style::default().fg(DIM)),
         ]);
         buf.set_line(x, y, &row, inner.width.saturating_sub(3));

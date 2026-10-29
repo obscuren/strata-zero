@@ -134,8 +134,8 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 .first()
                 .and_then(|a| a.parse().ok())
                 .ok_or_else(|| "pts <points>".to_string())?;
-            st.character.stat_points = st.character.stat_points.saturating_add(n);
-            Ok(format!("points {}", st.character.stat_points))
+            st.character.attribute_points = st.character.attribute_points.saturating_add(n);
+            Ok(format!("points {}", st.character.attribute_points))
         }
         "talent" => {
             let id = args
@@ -834,7 +834,7 @@ mod tests {
         // On top of the 100 the level above brought.
         assert_eq!(run(&mut st, at, "sp 200").unwrap(), "sp 300");
         assert_eq!(run(&mut st, at, "pts 3").unwrap(), "points 3");
-        assert_eq!((st.character.sp, st.character.stat_points), (300, 3));
+        assert_eq!((st.character.sp, st.character.attribute_points), (300, 3));
         assert_eq!(run(&mut st, at, "sp x").unwrap_err(), "sp <points>");
         assert!(run(&mut st, at, "help").unwrap().contains("pts"));
     }
