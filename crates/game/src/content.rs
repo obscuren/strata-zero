@@ -229,7 +229,9 @@ fn sticker_ok(i: &Item) -> Result<(), String> {
 }
 
 /// Chrome is cyberware with an implant and no slot, and nothing else has an implant;
-/// it takes 1 to 5 of the load, and only an arm has sockets.
+/// it takes 1 to 5 of the load. Chrome sockets are hand and forearm sockets, both
+/// the ones a piece has and the one a socket piece fits, and a socket piece has no
+/// sockets of its own.
 fn chrome_ok(i: &Item) -> Result<(), String> {
     let implant = match (i.kind, i.implant) {
         (ItemKind::Cyberware, Some(implant)) => implant,
@@ -243,8 +245,17 @@ fn chrome_ok(i: &Item) -> Result<(), String> {
     if !(1..=5).contains(&implant.load) {
         return Err(format!("load {}; a load is 1 to 5", implant.load));
     }
-    if !i.sockets.is_empty() && implant.fits != Fits::Arm {
-        return Err("only an arm has sockets".into());
+    let chrome_socket = |k: SocketKind| matches!(k, SocketKind::Hand | SocketKind::Forearm);
+    if let Fits::Socket(k) = implant.fits {
+        if !chrome_socket(k) {
+            return Err("chrome fits a hand or forearm socket".into());
+        }
+        if !i.sockets.is_empty() {
+            return Err("a socket piece has no sockets".into());
+        }
+    }
+    if !i.sockets.iter().all(|k| chrome_socket(*k)) {
+        return Err("chrome sockets take hand or forearm chrome".into());
     }
     Ok(())
 }
@@ -2378,6 +2389,19 @@ mod tests {
         assert!(invalid(broken("arc_hand", &|i| {
             i.sockets = vec![SocketKind::Hand]
         })));
+        // Chrome sockets are a kind, not a site: an arm takes no gun sockets, a socket
+        // piece fits only a chrome socket, and any piece may have chrome sockets.
+        assert!(invalid(broken("grip_arm", &|i| {
+            i.sockets = vec![SocketKind::Muzzle]
+        })));
+        assert!(invalid(broken("arc_hand", &|i| {
+            i.implant.as_mut().unwrap().fits = Fits::Socket(SocketKind::Rail)
+        })));
+        let legs = broken("piston_arm", &|i| {
+            i.implant.as_mut().unwrap().fits = Fits::Legs;
+            i.sockets = vec![SocketKind::Hand];
+        });
+        assert!(legs.is_ok(), "{legs:?}");
         assert_eq!(
             ContentError::ChromeInvalid {
                 id: "x".into(),
