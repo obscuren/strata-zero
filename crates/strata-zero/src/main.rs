@@ -28,6 +28,8 @@ mod screens;
 mod term;
 mod ui;
 mod walker;
+#[cfg(feature = "window")]
+mod window;
 
 fn main() -> anyhow::Result<()> {
     cli::run()
