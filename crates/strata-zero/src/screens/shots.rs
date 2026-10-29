@@ -356,13 +356,9 @@ fn combat_shock_mid() {
 #[test]
 #[ignore]
 fn combat_haze_mid() {
-    // The act list stops at nine keys, so the satchel gives its up for the choke can.
+    // The choke can is packed last: `0`, the tenth act key.
     let (mut st, mut map) = runner_aim(Pos::new(12, 8), None);
-    st.character
-        .inventory
-        .retain(|s| s.item != ItemId::new("satchel"));
-    map.update(&mut st, &[]);
-    throw_digit(&mut st, &mut map, '9');
+    throw_digit(&mut st, &mut map, '0');
     at_shape(&mut st, |f| matches!(f, game::Fx::Haze), 1);
     combat_shot("combat_haze_mid", &st, &map);
 }

@@ -430,9 +430,9 @@ impl MapScreen {
     }
 
     /// What the act half offers, in key order: the fight's abilities (strikes,
-    /// boosts, marks; content order), then the throwables in the pack. In a
-    /// construct only what works in the net (a strike that does not push, a boost),
-    /// and no throwables.
+    /// boosts, marks; content order), then the throwables in the pack; at most ten,
+    /// for `1`-`9` and `0`. In a construct only what works in the net (a strike that
+    /// does not push, a boost), and no throwables.
     fn act_list(st: &AppState) -> Vec<Act> {
         use game::{AbilityKind::Active, Active as A};
         let net = Self::in_construct(st);
@@ -459,7 +459,7 @@ impl MapScreen {
                 }
             }
         }
-        out.truncate(9);
+        out.truncate(10);
         out
     }
 
@@ -468,9 +468,15 @@ impl MapScreen {
         if Self::in_construct(st) { 6 } else { 1 }
     }
 
-    /// The entry a number key picks. In a construct `1`-`5` are the programs'.
+    /// The entry a number key picks: `0` is the tenth key, after `9`. In a construct
+    /// `1`-`5` are the programs'.
     fn act_key(st: &AppState, n: u32) -> Option<Act> {
-        let i = n.checked_sub(Self::act_base(st))?;
+        let place = match n {
+            0 => 10,
+            1..=9 => n,
+            _ => return None,
+        };
+        let i = place.checked_sub(Self::act_base(st))?;
         Self::act_list(st).get(i as usize).cloned()
     }
 
@@ -482,7 +488,12 @@ impl MapScreen {
             .into_iter()
             .enumerate()
             .filter_map(|(i, act)| {
-                let key = char::from_digit(base + i as u32, 10)?;
+                // The keys run on from the base to `0`, the tenth, and stop there.
+                let place = base + i as u32;
+                if place > 10 {
+                    return None;
+                }
+                let key = char::from_digit(place % 10, 10)?;
                 Some(match act {
                     Act::Throw(id) => hud::ActEntry {
                         key,
@@ -671,8 +682,7 @@ impl MapScreen {
                 let Some(act) = Self::act_key(st, n) else {
                     // On foot a number with nothing behind it does nothing; in a
                     // construct 1-5 are the deck's programs.
-                    return (n > 0 && !matches!(place, Place::Construct(_)))
-                        .then_some(ScreenCmd::Stay);
+                    return (!matches!(place, Place::Construct(_))).then_some(ScreenCmd::Stay);
                 };
                 match act {
                     Act::Throw(id) => {
@@ -11281,11 +11291,16 @@ mod tests {
                 act_throw("flashbang"),
                 act_throw("emp_puck"),
                 act_throw("satchel"),
+                act_throw("choke_can"),
             ]
         );
         assert_eq!(MapScreen::act_key(&st, 6), Some(act_throw("frag")));
-        assert_eq!(MapScreen::act_key(&st, 0), None);
+        // `0` is the tenth key, after `9`.
+        assert_eq!(MapScreen::act_key(&st, 9), Some(act_throw("satchel")));
+        assert_eq!(MapScreen::act_key(&st, 0), Some(act_throw("choke_can")));
         assert_eq!(MapScreen::act_key(&st, 10), None);
+        let keys: String = MapScreen::act_entries(&st).iter().map(|e| e.key).collect();
+        assert_eq!(keys, "1234567890");
         // A construct: the programs keep 1-5, the net's abilities follow on 6-8.
         let mut st = AppState::new();
         st.enter_city(citygen::City::lot(1));
@@ -11309,6 +11324,37 @@ mod tests {
         assert_eq!(MapScreen::act_key(&st, 6), Some(act_ability("static")));
         assert_eq!(MapScreen::act_key(&st, 8), Some(act_ability("redline")));
         assert_eq!(MapScreen::act_key(&st, 9), None);
+        assert_eq!(MapScreen::act_key(&st, 0), None);
+        // Six boosts more, nine entries in all: the keys run 6-9 and 0, then stop
+        // short of the programs' 1.
+        for n in 0..6 {
+            let id = format!("boost_{n}");
+            st.content.abilities.push(
+                ron::from_str(&format!(
+                    r#"Ability(id: "{id}", name: "B{n}", cooldown: 60, kind: Active(Boost(once: false)), desc: "")"#
+                ))
+                .unwrap(),
+            );
+            st.character.abilities.push(game::AbilityId::new(&id));
+        }
+        let keys: String = MapScreen::act_entries(&st).iter().map(|e| e.key).collect();
+        assert_eq!(keys, "67890");
+        assert_eq!(MapScreen::act_key(&st, 0), Some(act_ability("boost_1")));
+        assert_eq!(MapScreen::act_key(&st, 1), None, "1 stays a program");
+    }
+
+    #[test]
+    fn zero_throws_the_choke_can() {
+        let (mut st, mut s) = runner_half(Pos::new(12, 8));
+        let can = ItemId::new("choke_can");
+        assert_eq!(st.character.count(&can), 2);
+        s.update(&mut st, &[key(KeyCode::Char('0'))]);
+        assert_eq!(s.armed, Some(can.clone()));
+        let text = buffer_text(&draw_buffer(&s, &st, 100, 30));
+        assert!(text.contains(" choke can · 6 tiles"), "{text}");
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(st.character.count(&can), 1, "one thrown");
+        assert_eq!(s.armed, None);
     }
 
     #[test]
@@ -11520,6 +11566,8 @@ mod tests {
             .inventory
             .retain(|s| s.item != ItemId::new("satchel") && s.item != ItemId::new("choke_can"));
         s.update(&mut st, &[key(KeyCode::Char('9'))]);
+        assert_eq!((s.armed.clone(), ap_left(&st)), (None, 2));
+        s.update(&mut st, &[key(KeyCode::Char('0'))]);
         assert_eq!((s.armed.clone(), ap_left(&st)), (None, 2));
         // No frag in the pack: the entry is gone and its key does nothing.
         st.character

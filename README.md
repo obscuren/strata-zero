@@ -375,21 +375,21 @@ so a stim is a key away), the readout over it
 reads `goon · Scrap nine · 8 tiles · 90%`, `space` fires the worn gun for one
 AP, every round rolled on its own (the Ratchet's three, the pistol's one); a hit
 flashes the goon red, the number lifts off, a miss runs on and sparks where it
-stops. The `ACT` row under the footer lists what `1`-`9` do on the act half: a
-digit picks an ability and fires it at the cursor, or arms a throwable. Static
-(from a neural port) costs both AP, hurts and stuns for a turn, and tears the
-cells around the goon; Shove knocks an adjacent goon back; Jolt arcs from the
-goon to the nearest other within two tiles; Redline refills your pools and
+stops. The `ACT` row under the footer lists what `1`-`9` and `0` do on the act
+half: a digit picks an ability and fires it at the cursor, or arms a throwable.
+Static (from a neural port) costs both AP, hurts and stuns for a turn, and tears
+the cells around the goon; Shove knocks an adjacent goon back; Jolt arcs from
+the goon to the nearest other within two tiles; Redline refills your pools and
 gives you the turn again, once a fight; Deadeye marks one goon so your next
 shots land (its chance reads magenta). A throwable arms the cursor: a footprint
 shades the tiles it will reach, the readout says `frag · 6 tiles · blast 2`,
 `space` throws it, `esc` disarms. Frag is a fireball, the flashbang a white
 flash that stuns, the EMP puck a cyan shock that scrambles chrome, the choke can
-a green haze that poisons, the satchel
-a charge that lies live for a turn with its footprint marked once it lands;
-the goons step out of it and wait at its edge. A stun on you takes the AP of
-each turn it lasts, not the moves. A stim from the deck costs an AP. `.` ends
-the turn; the goon closes in on the pace and shoots back.
+a green haze that poisons, the satchel a charge that lies live for a turn with
+its footprint marked once it lands; the goons step out of it and wait at its
+edge. A stun on you takes the AP of each turn it lasts, not the moves. A stim
+from the deck costs an AP. `.` ends the turn; the goon closes in on the pace and
+shoots back.
 `e` engages by hand with a goon in sight memory, and calms the street when
 nothing hunts you; at zero HP the goon drops (`%`), you flatline. A column at
 the map's top right lists the order (`▶ YOU`, `goon 18`), with the live half of
