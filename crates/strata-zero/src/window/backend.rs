@@ -8,6 +8,35 @@ use ratatui::buffer::Cell;
 use ratatui::layout::{Position, Size};
 use std::io;
 
+/// A rectangle of the frame that changed, in pixels: `[x0, x1) × [y0, y1)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Damage {
+    pub x0: usize,
+    pub y0: usize,
+    pub x1: usize,
+    pub y1: usize,
+}
+
+impl Damage {
+    /// The smallest rectangle holding both.
+    pub fn union(self, o: Damage) -> Damage {
+        Damage {
+            x0: self.x0.min(o.x0),
+            y0: self.y0.min(o.y0),
+            x1: self.x1.max(o.x1),
+            y1: self.y1.max(o.y1),
+        }
+    }
+
+    /// `a` and `b` together, where either may be nothing.
+    pub fn join(a: Option<Damage>, b: Option<Damage>) -> Option<Damage> {
+        match (a, b) {
+            (Some(a), Some(b)) => Some(a.union(b)),
+            (a, b) => a.or(b),
+        }
+    }
+}
+
 pub struct PixelBackend {
     canvas: Canvas,
     /// What each cell shows, so a redraw of either half of a wide glyph repaints it whole
@@ -15,7 +44,8 @@ pub struct PixelBackend {
     grid: Vec<Cell>,
     cols: u16,
     rows: u16,
-    dirty: bool,
+    /// What was painted since `take_damage` last asked.
+    damage: Option<Damage>,
     /// `clear` was called: the frame is blanked by the draw that follows it, not at once,
     /// so a window redraw in between never shows an empty frame.
     blank_pending: bool,
@@ -29,7 +59,7 @@ impl PixelBackend {
             grid: Vec::new(),
             cols: 0,
             rows: 0,
-            dirty: true,
+            damage: None,
             blank_pending: false,
         };
         b.regrid();
@@ -66,9 +96,19 @@ impl PixelBackend {
         &self.canvas.frame
     }
 
-    /// Whether anything was painted since the last call.
-    pub fn take_dirty(&mut self) -> bool {
-        std::mem::take(&mut self.dirty)
+    /// What was painted since the last call, if anything.
+    pub fn take_damage(&mut self) -> Option<Damage> {
+        self.damage.take()
+    }
+
+    fn damage_all(&mut self) {
+        let f = &self.canvas.frame;
+        self.damage = Some(Damage {
+            x0: 0,
+            y0: 0,
+            x1: f.w,
+            y1: f.h,
+        });
     }
 
     /// One cell's size in pixels.
@@ -101,7 +141,7 @@ impl PixelBackend {
                 x += span;
             }
         }
-        self.dirty = true;
+        self.damage_all();
     }
 
     /// Paints the cell at (`x`, `y`), or the wide glyph covering it from the left.
@@ -115,6 +155,17 @@ impl PixelBackend {
         let cell = &self.grid[at(x)];
         let span = span_of(cell).min(self.cols - x);
         self.canvas.paint(x, y, cell, span);
+        let (cw, ch) = self.cell_px();
+        let (fw, fh) = (self.canvas.frame.w, self.canvas.frame.h);
+        let cell = Damage {
+            x0: (x as usize * cw).min(fw),
+            y0: (y as usize * ch).min(fh),
+            x1: ((x + span) as usize * cw).min(fw),
+            y1: ((y + 1) as usize * ch).min(fh),
+        };
+        if cell.x0 < cell.x1 && cell.y0 < cell.y1 {
+            self.damage = Damage::join(self.damage, Some(cell));
+        }
     }
 }
 
@@ -125,6 +176,7 @@ impl Backend for PixelBackend {
     {
         if std::mem::take(&mut self.blank_pending) {
             self.canvas.frame.blank();
+            self.damage_all();
         }
         let mut changed = Vec::new();
         for (x, y, cell) in content {
@@ -142,7 +194,6 @@ impl Backend for PixelBackend {
         for &(x, y) in &changed {
             self.paint(x, y);
         }
-        self.dirty |= !changed.is_empty();
         Ok(())
     }
 
@@ -165,7 +216,6 @@ impl Backend for PixelBackend {
     fn clear(&mut self) -> io::Result<()> {
         self.grid.fill(Cell::default());
         self.blank_pending = true;
-        self.dirty = true;
         Ok(())
     }
 
@@ -222,7 +272,7 @@ mod tests {
     #[test]
     fn draw_through_a_terminal() {
         let Some(mut b) = backend(10, 3) else { return };
-        b.take_dirty();
+        b.take_damage();
         let mut t = Terminal::new(b).unwrap();
         t.draw(|f| red_block(f, 2, 1)).unwrap();
         let b = t.backend_mut();
@@ -230,8 +280,17 @@ mod tests {
         assert_eq!(pixel(b, 2 * cw, ch), RED);
         assert_eq!(pixel(b, 3 * cw - 1, 2 * ch - 1), RED);
         assert_ne!(pixel(b, 3 * cw, ch), RED);
-        assert!(b.take_dirty());
-        assert!(!b.take_dirty());
+        assert_eq!(
+            b.take_damage(),
+            Some(Damage {
+                x0: 2 * cw,
+                y0: ch,
+                x1: 3 * cw,
+                y1: 2 * ch
+            }),
+            "the damage is the painted cell"
+        );
+        assert_eq!(b.take_damage(), None);
     }
 
     #[test]
@@ -290,6 +349,21 @@ mod tests {
         b.draw([(0, 0, &wide), (2, 0, &blank)].into_iter()).unwrap();
         let bg = crate::window::raster::BG;
         assert!((0..ch).all(|y| (2 * cw..3 * cw).all(|x| pixel(&b, x, y) == bg)));
+    }
+
+    #[test]
+    fn regrid_damages_everything() {
+        let Some(mut b) = backend(10, 3) else { return };
+        b.take_damage();
+        b.set_px(30.0);
+        let f = b.frame();
+        let all = Damage {
+            x0: 0,
+            y0: 0,
+            x1: f.w,
+            y1: f.h,
+        };
+        assert_eq!(b.take_damage(), Some(all));
     }
 
     #[test]

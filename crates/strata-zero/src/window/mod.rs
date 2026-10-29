@@ -156,7 +156,7 @@ impl App {
             el.exit();
         }
         self.frames += 1;
-        if live.term.backend_mut().take_dirty() {
+        if live.term.backend_mut().take_damage().is_some() {
             live.window.request_redraw();
         }
         if self.frames == SHOT_FRAME
