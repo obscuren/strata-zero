@@ -577,7 +577,10 @@ Five asks from Jeffrey once the sheet was in, made on top of the attributes rena
    empty row between the header and the tiles; the blank rows between blocks stay. The
    readout's rule sits right under the RESISTANCES tiles (it separates them itself), so
    at 100×30 the readout keeps four rows and gives way as before (blank rows, then the
-   blurb, the sources last); at 120×40 it has nine.
+   blurb, the sources last); at 120×40 it has nine. Still short of rows, the note folds
+   into line one (`REFLEX 9 · 10 in all, capped`, `MOVE 4 · in a construct`), then the
+   kinds flow onto fewer lines ` · ` between, and only then is the last line that fits
+   marked `…`.
 5. **Space swaps, `x` pulls.** `space` on installed chrome opens the FITS picker for that
    site or socket as on an empty one, the card's second line `replaces Piston arm`;
    `space` on a pick installs it and sends what was there to the pack (a limb with what
@@ -587,5 +590,9 @@ Five asks from Jeffrey once the sheet was in, made on top of the attributes rena
    amber and the lower total, and EMP shows only when the count of pieces moves. `x`
    on chrome pulls it out to the pack, on an empty place it does nothing. Hints on
    chrome: `↑↓ select · space what fits · x pull it out · ← attributes · Q/E tabs · tab
-   close`. Jacked in, both keys refuse with the lock's words and dim. This replaces
+   close`; in the picker on a held place `↑↓ choose · space swap · esc back · …`.
+   Another of a piece a site holds without a copy is the same piece and is not offered;
+   another copy of a limb is. One count of a piece's load with what is fitted in it
+   (`game::stack_load`) serves the install rule and the picker alike. Jacked in, both
+   keys refuse with the lock's words and dim. This replaces
    "installing only on an empty site; replacing means pulling first" under My calls.
