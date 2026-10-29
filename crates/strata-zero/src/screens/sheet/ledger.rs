@@ -245,15 +245,16 @@ impl Sheet {
         let v = self.view(st);
         if let Some(pick) = v.pick {
             match code {
-                KeyCode::Up | KeyCode::Char('k') => self.choose(pick.saturating_sub(1), tick),
+                // The picker works inside the place's card: moving the pick or closing
+                // it changes lines in place and never types the card out again.
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.state.picker = Some(pick.saturating_sub(1))
+                }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    self.choose((pick + 1).min(v.picks.len() - 1), tick)
+                    self.state.picker = Some((pick + 1).min(v.picks.len() - 1))
                 }
                 KeyCode::Char(' ') | KeyCode::Enter => self.install(st, &v, pick),
-                KeyCode::Esc => {
-                    self.state.picker = None;
-                    self.card = tick;
-                }
+                KeyCode::Esc => self.state.picker = None,
                 // The picker keeps the cursor until it closes.
                 KeyCode::Left | KeyCode::Char('h') | KeyCode::Right | KeyCode::Char('l') => {}
                 _ => return false,
@@ -284,13 +285,6 @@ impl Sheet {
         }
     }
 
-    fn choose(&mut self, pick: usize, tick: u64) {
-        if self.state.picker != Some(pick) {
-            self.state.picker = Some(pick);
-            self.card = tick;
-        }
-    }
-
     /// Space on a row: chrome comes out to the pack, a limb with what is in it; an
     /// empty place opens what fits, or says nothing does.
     fn act(&mut self, st: &mut AppState, v: &View) {
@@ -314,7 +308,6 @@ impl Sheet {
             st.warn("nothing in your bag fits");
         } else {
             self.state.picker = Some(0);
-            self.card = st.tick;
         }
     }
 
@@ -1062,6 +1055,42 @@ mod tests {
         d.sheet.state.pane = SheetPane::Ledger;
         d.sheet.state.row = row;
         d
+    }
+
+    #[test]
+    fn the_picker_moves_without_retyping_the_card() {
+        let mut st = AppState::new();
+        loadout(&mut st);
+        give(&mut st, "grip_arm");
+        give(&mut st, "surgeon_arm");
+        let mut d = on_ledger(&mut st, LedgerRow::Site(Site::RightArm));
+        // The place's card types out once.
+        st.tick = d.sheet.card + REVEAL_TICKS + 1;
+        let typed = d.sheet.card;
+        let now = |d: &Deck, st: &AppState| {
+            let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
+            t.draw(|f| d.draw(st, f)).unwrap();
+            region(t.backend().buffer(), (CARD_100, 98), (6, 27))
+        };
+        let line = |st: &AppState, item: &str| {
+            let desc = &st.content.item(&id(item)).unwrap().desc;
+            desc.split_whitespace()
+                .take(3)
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let (grip, surgeon) = (line(&st, "grip_arm"), line(&st, "surgeon_arm"));
+        // Opening the picker, moving the pick and closing it keep the card as typed:
+        // the pick's lines change in place, whole, at once.
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        assert_eq!(d.sheet.state.picker, Some(0));
+        assert!(now(&d, &st).contains(&grip), "opened:\n{}", now(&d, &st));
+        press(&mut d, &mut st, &[KeyCode::Down]);
+        assert_eq!(d.sheet.state.picker, Some(1));
+        assert!(now(&d, &st).contains(&surgeon), "moved:\n{}", now(&d, &st));
+        press(&mut d, &mut st, &[KeyCode::Up, KeyCode::Esc]);
+        assert_eq!(d.sheet.state.picker, None);
+        assert_eq!(d.sheet.card, typed, "the card never started over");
     }
 
     fn press(d: &mut Deck, st: &mut AppState, codes: &[KeyCode]) {
