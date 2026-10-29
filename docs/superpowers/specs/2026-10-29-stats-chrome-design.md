@@ -361,7 +361,8 @@ The README's "nine slots" becomes seven.
 
 Chrome lives in `flavor/content.ron` with the other items. Validation: every cyberware
 item has an implant and no slot; an implant's `Fits::Socket` piece is per copy; a piece
-with sockets fits an `Arm` (the only limb with sockets this session); load is 1 to 5;
+with sockets has only chrome socket kinds (`Hand`, `Forearm`) and a piece that fits a
+socket has none of its own; load is 1 to 5;
 every chrome piece has a drawing; every `grants` names an ability.
 
 ## In play

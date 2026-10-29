@@ -90,7 +90,7 @@ Each is pinned by a test in the task that owns it.
   - `game::Implant { fits: Fits, load: u8 }`; `Item.implant: Option<Implant>`; `Item::per_copy` also true for an implant that fits a socket.
   - `SocketKind::Hand`, `SocketKind::Forearm` (`takes`: `hand chrome`, `forearm chrome`; `fits`: `hand socket`, `forearm socket`).
   - `Character.chrome: BTreeMap<Site, ItemId>`, `Character.chrome_copies: BTreeMap<Site, ItemCopy>`.
-  - `Character::installed(&self) -> Vec<(Site, Option<usize>, ItemId)>` (site; `None` for the site's own piece, `Some(socket)` for a fitted socket piece; site order, sockets in order); `pieces(&self) -> usize`; `load(&self, c) -> u32`; `load_max(&self) -> u32`; `chrome_at(&self, site) -> Option<&ItemId>`; `chrome_copy(&self, site) -> Option<&ItemCopy>`.
+  - `Character::installed(&self) -> Vec<(Site, Option<usize>, ItemId)>` (site; `None` for the site's own piece, `Some(socket)` for a fitted socket piece; site order, sockets in order); `pieces(&self) -> usize`; `chrome_load(&self, c) -> u32`; `load_max(&self) -> u32`; `chrome_at(&self, site) -> Option<&ItemId>`; `chrome_copy(&self, site) -> Option<&ItemCopy>`.
   - `Host::Site(Site)`, handled by `host_item`, `host_copy`, `host_copy_mut`.
   - `perks`, `abilities` (as `Source::Item`), `worn_mods` and `weight` include installed chrome and what is fitted in it; `resist(c, Harm::Emp)` takes `2 × pieces()`.
   - `ContentError::ChromeInvalid { id: String, why: String }` (`"chrome `{id}`: {why}"`).
@@ -119,6 +119,7 @@ Each is pinned by a test in the task that owns it.
 - Modify: `crates/game/src/action.rs` (`Action::Install`, `InstallCopy`, `Pull`; `Fit`; `Equip`)
 - Modify: `crates/strata-zero/src/actions.rs` (`handles_items`, `refresh_sight`)
 - Modify: `crates/strata-zero/src/screens/deck.rs` (pack verbs offer no Equip on chrome; `item_card_of`'s kind line)
+- Modify: `crates/strata-zero/src/screens/workbench.rs` (the assembly line's `kind · slot` for chrome)
 
 **Interfaces:**
 - Consumes: Task 2.
@@ -127,14 +128,14 @@ Each is pinned by a test in the task that owns it.
 - [ ] **Step 1: Write the failing tests** (`action.rs`, `character.rs`)
   - `install_and_pull`: Install `grip_arm` (a copy) at RightArm → `chrome_at(RightArm) == grip_arm`, the pack lost it, message `installed \`Grip arm\` · R ARM`; Pull(RightArm) → back in the pack with its copy, message `pulled \`Grip arm\` · to the pack`.
   - `install_refusals_change_nothing` (character cloned before, equal after each): not in the pack; `hardhat` (not chrome); `neural_port` at Eyes (doesn't fit, `` `Neural port` doesn't fit EYES ``); RightArm already holding something (`pull the \`Grip arm\` out first`); over budget (a character with load 22 of 24 installing a load-3 piece: `too much chrome: load 25 of 24`); `arc_hand` at a site (it fits a socket).
-  - `a_pulled_limb_keeps_its_pieces`: Piston arm with Arc hand fitted, Pull, InstallCopy at RightArm → `installed()` has the arc hand under RightArm, `load()` unchanged.
+  - `a_pulled_limb_keeps_its_pieces`: Piston arm with Arc hand fitted, Pull, InstallCopy at RightArm → `installed()` has the arc hand under RightArm, `chrome_load()` unchanged.
   - `fit_takes_socket_chrome`: Fit `{ host: Host::Site(LeftArm), socket: 0, piece: <arc_hand copy> }` works; socket 1 (Forearm) refuses it (`does not fit a forearm socket`); over budget refuses.
   - `equip_refuses_chrome`: `Equip(neural_port)` is `Err("chrome is installed from STATS")`.
   - `strata-zero` `actions.rs` `chrome_is_locked_jacked_in`: Install/Pull refused with `JACKED_IN` while jacked in.
 
 - [ ] **Step 2: Run them to see them fail.**
 
-- [ ] **Step 3: Implement.** Install mirrors Equip/EquipCopy (take from the pack, then place; every refusal before the first change); Pull mirrors Unequip and clamps HP. `Fit`'s piece check accepts `implant.fits == Fits::Socket(kind)`; with `Host::Site` it also checks the budget. In strata-zero the three new actions join `handles_items` and `refresh_sight`. The pack's verbs: no Equip on cyberware. `item_card_of`'s kind line for chrome: `cyberware · arm · load 3` (`Fits::label`).
+- [ ] **Step 3: Implement.** Install mirrors Equip/EquipCopy (take from the pack, then place; every refusal before the first change); Pull mirrors Unequip and clamps HP. `Fit`'s piece check accepts `implant.fits == Fits::Socket(kind)`; with `Host::Site` it also checks the budget. In strata-zero the three new actions join `handles_items` and `refresh_sight`. The pack's verbs: no Equip on cyberware. `item_card_of`'s kind line for chrome, and the workbench's assembly line (`screens/workbench.rs` ~565, which builds `kind · slot`): `cyberware · arm · load 3` (`Fits::label`).
 
 - [ ] **Step 4: Run** `cargo test --workspace --target-dir target/smoke` — all pass.
 
@@ -260,7 +261,7 @@ Each is pinned by a test in the task that owns it.
 - Produces: `sheet::ledger_rows(st: &AppState) -> Vec<LedgerRow>` where `LedgerRow { Group(&'static str), Site(Site), Socket(Site, usize) }`; `sheet::fitting(st: &AppState, at: (Site, Option<usize>)) -> Vec<Pick>` with `Pick { item: ItemId, copy: Option<CopyId>, load: u8 }` in pack order.
 
 - [ ] **Step 1: Write the failing tests** (all on the deck at 100×30 unless named)
-  - `ledger_lists_sites_and_sockets`: with the spec's loadout (Neural port, Target lens, Bulldog jaw, Redline spine, Drone cradle, Adrenal pump, Subdermal mesh, Piston arm at L ARM with the Arc hand): the ledger holds `── head ──`, `Neural port`, `· ears`, `── limbs ──`, `Piston arm`, `├ Arc hand`, `└ □ forearm`, `· r arm`, `· legs`; header `LOAD`, `20/24`... recomputed from content (assert `load()`/`load_max()` in the text, not a constant).
+  - `ledger_lists_sites_and_sockets`: with the spec's loadout (Neural port, Target lens, Bulldog jaw, Redline spine, Drone cradle, Adrenal pump, Subdermal mesh, Piston arm at L ARM with the Arc hand): the ledger holds `── head ──`, `Neural port`, `· ears`, `── limbs ──`, `Piston arm`, `├ Arc hand`, `└ □ forearm`, `· r arm`, `· legs`; header `LOAD`, `20/24`... recomputed from content (assert `chrome_load()`/`load_max()` in the text, not a constant).
   - `full_body_fits_at_100x30` (Review Focus): both arms chrome with both sockets full, every site full: every ledger row is inside the body; nothing drawn right of the body.
   - `card_on_a_limb`: the card holds `PISTON ARM`, `L ARM · load 3 · EMP −2`, `BODY +1`, `Shove`, `■ hand`, `Arc hand`, `□ forearm`, a FAINT line naming a forearm piece from content; the art's cyan elbow cell is drawn at the card's top rows.
   - `picker_installs`: on `· r arm` with a Grip arm in the pack, `space` opens the picker (`FITS`, `from your bag`, `Grip arm`, `L3`), LOAD shows `23` in AMBER; `space` installs it (R ARM holds it, the picker is closed, the cursor on R ARM); `esc` instead closes it changing nothing.
