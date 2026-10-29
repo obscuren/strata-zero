@@ -1038,10 +1038,11 @@ impl Deck {
         let cyan = |t: String| Line::from(Span::styled(t, Style::default().fg(CYAN)));
         let mut out = vec![head(&item.name)];
         // Where it goes: a slot, or for hardware the socket it fits.
-        let place = match (&item.hardware, item.slot) {
-            (Some(h), _) => format!(" · {}", h.fits.fits()),
-            (None, Some(s)) => format!(" · {}", s.label()),
-            (None, None) => String::new(),
+        let place = match (&item.hardware, &item.implant, item.slot) {
+            (Some(h), _, _) => format!(" · {}", h.fits.fits()),
+            (None, Some(i), _) => format!(" · {} · load {}", i.fits.label(), i.load),
+            (None, None, Some(s)) => format!(" · {}", s.label()),
+            (None, None, None) => String::new(),
         };
         // A copy weighs and costs what is fitted in it too.
         let fitted: Vec<&game::Stack> = copy
@@ -3651,6 +3652,23 @@ mod tests {
             copy.as_ref(),
         ));
         assert_eq!(text[1], "hardware · deck socket · 0.4 kg · ¤ 800");
+        let arm = texts(&Deck::item_card_of(&st, &ItemId::new("grip_arm"), None));
+        assert!(arm[1].starts_with("cyberware · arm · load 3 · "), "{arm:?}");
+    }
+
+    #[test]
+    fn the_pack_offers_no_equip_on_chrome() {
+        let mut st = dshawn();
+        st.character
+            .give_item(&st.content, ItemId::new("grip_arm"), 1);
+        let copy = pack_copy(&st, "grip_arm");
+        for p in [
+            item_popup(&mut st, &ItemId::new("grip_arm"), (0, 0)).unwrap(),
+            copy_popup(&mut st, copy, (0, 0)).unwrap(),
+        ] {
+            let labels: Vec<&str> = p.choices().iter().map(|c| c.label.as_str()).collect();
+            assert!(!labels.contains(&"Equip"), "{labels:?}");
+        }
     }
 
     #[test]

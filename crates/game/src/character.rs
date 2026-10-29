@@ -135,6 +135,16 @@ pub struct Character {
     pub next_copy: u32,
 }
 
+/// What chrome costs past the budget.
+pub(crate) fn over_budget(load: u32, max: u32) -> String {
+    format!("too much chrome: load {load} of {max}")
+}
+
+fn item_name(c: &Content, id: &ItemId) -> String {
+    c.item(id)
+        .map_or_else(|| id.to_string(), |i| i.name.clone())
+}
+
 impl Character {
     /// A playable character from a build. An invalid build still builds with whatever
     /// it holds; the wizard validates before it gets here.
@@ -934,6 +944,63 @@ impl Character {
             .filter_map(|(_, _, id)| c.item(id)?.implant)
             .map(|i| i.load as u32)
             .sum()
+    }
+
+    /// Whether a piece fits `at`: a site (`None`), or a socket of the piece installed
+    /// there (`Some`). Says nothing of what the pack holds or the budget.
+    pub fn fits_at(&self, c: &Content, item: &ItemId, at: (Site, Option<usize>)) -> bool {
+        let Some(implant) = c.item(item).and_then(|i| i.implant) else {
+            return false;
+        };
+        match at {
+            (site, None) => implant.fits == site.fits(),
+            (site, Some(socket)) => {
+                let kind = self
+                    .chrome_at(site)
+                    .and_then(|id| c.item(id))
+                    .and_then(|i| i.sockets.get(socket));
+                matches!((implant.fits, kind), (Fits::Socket(want), Some(&have)) if want == have)
+            }
+        }
+    }
+
+    /// Every refusal `Action::Install` makes, before it acts.
+    pub fn can_install(&self, c: &Content, item: &ItemId, site: Site) -> Result<(), String> {
+        let stack = self
+            .inventory
+            .iter()
+            .find(|s| &s.item == item && s.qty > 0)
+            .ok_or_else(|| format!("`{}` is not in your pack", item_name(c, item)))?;
+        self.can_install_stack(c, stack, site)
+    }
+
+    /// Every refusal installing this pack stack at `site` makes: a limb comes with
+    /// what is fitted in it, and that takes load too.
+    pub fn can_install_stack(&self, c: &Content, stack: &Stack, site: Site) -> Result<(), String> {
+        let item = c
+            .item(&stack.item)
+            .ok_or_else(|| format!("unknown item {}", stack.item))?;
+        let implant = item
+            .implant
+            .ok_or_else(|| format!("`{}` is not chrome", item.name))?;
+        if implant.fits != site.fits() {
+            return Err(format!("`{}` doesn't fit {}", item.name, site.label()));
+        }
+        if let Some(held) = self.chrome_at(site) {
+            return Err(format!("pull the `{}` out first", item_name(c, held)));
+        }
+        let fitted: u32 = stack
+            .copy
+            .iter()
+            .flat_map(|k| k.fitted.iter().flatten())
+            .filter_map(|s| c.item(&s.item)?.implant)
+            .map(|i| i.load as u32)
+            .sum();
+        let after = self.chrome_load(c) + implant.load as u32 + fitted;
+        if after > self.load_max() {
+            return Err(over_budget(after, self.load_max()));
+        }
+        Ok(())
     }
 
     /// The chrome a body takes: from base BODY and COOL, so chrome that raises them

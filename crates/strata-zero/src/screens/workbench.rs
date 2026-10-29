@@ -562,8 +562,16 @@ fn title_block(
     let makes = match st.content.item(out) {
         Some(item) if assembly => {
             let mut bits = vec![item.kind.label().to_string()];
-            bits.extend(item.slot.map(|s| s.label().to_string()));
-            bits.push(format!("{:.1} kg", item.weight));
+            match item.implant {
+                Some(i) => {
+                    bits.push(i.fits.label().to_string());
+                    bits.push(format!("load {}", i.load));
+                }
+                None => {
+                    bits.extend(item.slot.map(|s| s.label().to_string()));
+                    bits.push(format!("{:.1} kg", item.weight));
+                }
+            }
             bits.join(" · ")
         }
         Some(item) => {

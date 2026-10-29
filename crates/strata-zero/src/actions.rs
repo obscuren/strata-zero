@@ -21,6 +21,9 @@ pub fn handles_items(action: &Action) -> bool {
         Action::Equip(_)
             | Action::EquipCopy(_)
             | Action::Unequip(_)
+            | Action::Install { .. }
+            | Action::InstallCopy { .. }
+            | Action::Pull(_)
             | Action::Drop { .. }
             | Action::DropCopy(_)
             | Action::Use(_)
@@ -66,7 +69,12 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
     };
     let refresh_sight = matches!(
         action,
-        Action::Equip(_) | Action::EquipCopy(_) | Action::Unequip(_)
+        Action::Equip(_)
+            | Action::EquipCopy(_)
+            | Action::Unequip(_)
+            | Action::Install { .. }
+            | Action::InstallCopy { .. }
+            | Action::Pull(_)
     );
     if let Some(id) = &fired
         && st
@@ -260,6 +268,45 @@ mod tests {
             ..Default::default()
         })
         .unwrap()
+    }
+
+    #[test]
+    fn chrome_is_locked_jacked_in() {
+        let mut st = AppState::new();
+        st.city = Some(city());
+        let b = st.city.as_ref().unwrap().buildings[0].id;
+        let mut p = Player::at(Place::Construct(b), Pos::new(1, 1));
+        p.body = Some((Place::Stratum(StratumKind::Street), Pos::new(1, 1)));
+        st.player = Some(p);
+        st.character
+            .give_item(&st.content, ItemId::new("grip_arm"), 1);
+        let before = st.character.clone();
+        for action in [
+            Action::Install {
+                item: ItemId::new("grip_arm"),
+                site: Site::RightArm,
+            },
+            Action::InstallCopy {
+                copy: CopyId(1),
+                site: Site::RightArm,
+            },
+            Action::Pull(Site::Eyes),
+        ] {
+            let refused = perform(&mut st, action.clone());
+            assert_eq!(refused, Err(JACKED_IN.to_string()), "{action:?}");
+        }
+        assert_eq!(st.character, before);
+        // Back in the body, the arm goes in.
+        st.player = Some(Player::spawn(st.city.as_ref().unwrap(), 1));
+        let install = Action::Install {
+            item: ItemId::new("grip_arm"),
+            site: Site::RightArm,
+        };
+        perform(&mut st, install).unwrap();
+        assert_eq!(
+            st.character.chrome_at(Site::RightArm),
+            Some(&ItemId::new("grip_arm"))
+        );
     }
 
     #[test]

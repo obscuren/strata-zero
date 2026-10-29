@@ -1,7 +1,7 @@
 //! Item actions: everything a menu can do, applied by one function.
 
 use crate::build::Build;
-use crate::character::{Character, CopyId, Stack};
+use crate::character::{Character, CopyId, Stack, over_budget};
 use crate::content::Content;
 use crate::ground::Ground;
 use crate::model::*;
@@ -24,6 +24,18 @@ pub enum Action {
     /// Wears one copy from the pack.
     EquipCopy(CopyId),
     Unequip(Slot),
+    /// Installs the first of a piece of chrome in pack order at a site.
+    Install {
+        item: ItemId,
+        site: Site,
+    },
+    /// Installs one copy of chrome from the pack at a site, with what is fitted in it.
+    InstallCopy {
+        copy: CopyId,
+        site: Site,
+    },
+    /// Pulls the chrome out of a site, back to the pack with what is fitted in it.
+    Pull(Site),
     Drop {
         item: ItemId,
         qty: u32,
@@ -186,6 +198,17 @@ fn equip_stack(ch: &mut Character, c: &Content, item: &Item, slot: Slot, s: Stac
     message
 }
 
+/// Why chrome can't be worn.
+const CHROME_FROM_STATS: &str = "chrome is installed from STATS";
+
+/// Installs a stack taken from the pack at a free site, checked by `can_install`.
+fn install_stack(ch: &mut Character, c: &Content, site: Site, s: Stack) -> String {
+    let message = format!("installed `{}` · {}", name(c, &s.item), site.label());
+    ch.install(site, s.item, s.copy);
+    clamp_hp(ch, c);
+    message
+}
+
 /// Where a copy sits in the pack.
 fn pack_copy(ch: &Character, id: CopyId) -> Result<usize, String> {
     ch.inventory
@@ -222,6 +245,9 @@ pub fn apply(
     match action {
         Action::Equip(id) => {
             let item = c.item(&id).ok_or_else(|| format!("unknown item {id}"))?;
+            if item.implant.is_some() {
+                return Err(CHROME_FROM_STATS.to_string());
+            }
             if ch.count(&id) == 0 {
                 return Err(format!("{} is not in your pack", item.name));
             }
@@ -237,6 +263,9 @@ pub fn apply(
             let i = pack_copy(ch, copy)?;
             let id = &ch.inventory[i].item;
             let item = c.item(id).ok_or_else(|| format!("unknown item {id}"))?;
+            if item.implant.is_some() {
+                return Err(CHROME_FROM_STATS.to_string());
+            }
             let slot = item
                 .slot
                 .ok_or_else(|| format!("{} has no slot", item.name))?;
@@ -249,6 +278,29 @@ pub fn apply(
                 .ok_or_else(|| format!("nothing in the {} slot", slot.label()))?;
             let message = format!("unequipped `{}`", name(c, &s.item));
             ch.stow_item(c, s);
+            clamp_hp(ch, c);
+            done(message)
+        }
+        Action::Install { item, site } => {
+            ch.can_install(c, &item, site)?;
+            let Some(s) = take_from_pack(ch, &item, 1).pop() else {
+                return Err(format!("{} is not in your pack", name(c, &item)));
+            };
+            done(install_stack(ch, c, site, s))
+        }
+        Action::InstallCopy { copy, site } => {
+            let i = pack_copy(ch, copy)?;
+            ch.can_install_stack(c, &ch.inventory[i], site)?;
+            let s = ch.inventory.remove(i);
+            done(install_stack(ch, c, site, s))
+        }
+        Action::Pull(site) => {
+            let (item, copy) = (ch.chrome_at(site).cloned(), ch.chrome_copy(site).cloned());
+            let item = item.ok_or_else(|| format!("nothing installed at {}", site.label()))?;
+            ch.chrome.remove(&site);
+            ch.chrome_copies.remove(&site);
+            let message = format!("pulled `{}` · to the pack", name(c, &item));
+            ch.stow_item(c, Stack { item, qty: 1, copy });
             clamp_hp(ch, c);
             done(message)
         }
@@ -398,16 +450,35 @@ pub fn apply(
             let piece_item = c
                 .item(&ch.inventory[i].item)
                 .ok_or_else(|| "not in your pack".to_string())?;
-            let hardware = piece_item
-                .hardware
-                .as_ref()
-                .ok_or_else(|| format!("`{}` is not hardware", piece_item.name))?;
-            if hardware.fits != kind {
+            let (fits, load) = match (&piece_item.hardware, &piece_item.implant) {
+                (Some(h), _) => (h.fits, 0),
+                (
+                    None,
+                    Some(Implant {
+                        fits: Fits::Socket(kind),
+                        load,
+                    }),
+                ) => (*kind, *load as u32),
+                _ => return Err(format!("`{}` is not hardware", piece_item.name)),
+            };
+            if fits != kind {
                 return Err(format!(
                     "`{}` does not fit a {}",
                     piece_item.name,
                     kind.fits()
                 ));
+            }
+            if matches!(host, Host::Site(_)) {
+                // What the socket holds now leaves as the piece goes in.
+                let out = ch
+                    .host_copy(host)
+                    .and_then(|k| k.fitted.get(socket)?.as_ref())
+                    .and_then(|s| c.item(&s.item)?.implant)
+                    .map_or(0, |i| i.load as u32);
+                let after = ch.chrome_load(c) - out + load;
+                if after > ch.load_max() {
+                    return Err(over_budget(after, ch.load_max()));
+                }
             }
             let sockets = host_item.sockets.len();
             let host_id = host_item.id.clone();
@@ -1740,6 +1811,210 @@ mod tests {
             let out = apply(&mut ch, &mut g, &c, at, 10, Action::Fire(a.clone())).unwrap();
             assert!(out.effects.is_empty());
             assert_eq!(ch.fired.get(&a), Some(&10));
+        }
+    }
+
+    fn act(
+        ch: &mut Character,
+        g: &mut Ground,
+        c: &Content,
+        at: At,
+        a: Action,
+    ) -> Result<Outcome, String> {
+        apply(ch, g, c, at, 0, a)
+    }
+
+    #[test]
+    fn install_and_pull() {
+        let (c, mut ch, mut g, at) = setup();
+        ch.give_item(&c, id("grip_arm"), 1);
+        let copy = pack_id(&ch, "grip_arm");
+        let a = Action::Install {
+            item: id("grip_arm"),
+            site: Site::RightArm,
+        };
+        let out = act(&mut ch, &mut g, &c, at, a).unwrap();
+        assert_eq!(out.message, "installed `Grip arm` · R ARM");
+        assert_eq!(ch.chrome_at(Site::RightArm), Some(&id("grip_arm")));
+        assert_eq!(ch.count(&id("grip_arm")), 0);
+        assert_eq!(ch.chrome_copy(Site::RightArm).map(|k| k.id), Some(copy));
+        let out = act(&mut ch, &mut g, &c, at, Action::Pull(Site::RightArm)).unwrap();
+        assert_eq!(out.message, "pulled `Grip arm` · to the pack");
+        assert_eq!(ch.chrome_at(Site::RightArm), None);
+        assert_eq!(pack_id(&ch, "grip_arm"), copy);
+        assert_eq!(
+            act(&mut ch, &mut g, &c, at, Action::Pull(Site::RightArm)).unwrap_err(),
+            "nothing installed at R ARM"
+        );
+    }
+
+    #[test]
+    fn install_refusals_change_nothing() {
+        let (c, mut ch, mut g, at) = setup();
+        for item in [
+            "grip_arm",
+            "neural_port",
+            "hardhat",
+            "arc_hand",
+            "target_lens",
+        ] {
+            ch.give_item(&c, id(item), 1);
+        }
+        let install = |item: &str, site| Action::Install {
+            item: id(item),
+            site,
+        };
+        let mut refuses = |ch: &mut Character, a: Action, why: &str| {
+            let before = ch.clone();
+            assert_eq!(act(ch, &mut g, &c, at, a).unwrap_err(), why);
+            assert_eq!(*ch, before);
+        };
+        refuses(
+            &mut ch,
+            install("piston_arm", Site::LeftArm),
+            "`Piston arm` is not in your pack",
+        );
+        refuses(
+            &mut ch,
+            install("hardhat", Site::Eyes),
+            "`Hardhat with visor` is not chrome",
+        );
+        refuses(
+            &mut ch,
+            install("neural_port", Site::Eyes),
+            "`Neural port` doesn't fit EYES",
+        );
+        refuses(
+            &mut ch,
+            install("arc_hand", Site::RightArm),
+            "`Arc hand` doesn't fit R ARM",
+        );
+        refuses(
+            &mut ch,
+            install("target_lens", Site::Eyes),
+            "pull the `Nightglass optics` out first",
+        );
+        // A budget of 6 with a piston arm and the rest installed: no room for another arm.
+        ch.chrome.insert(Site::RightArm, id("piston_arm"));
+        ch.chrome.insert(Site::Neural, id("neural_port"));
+        ch.stats.body = 0;
+        ch.stats.cool = 0;
+        assert_eq!((ch.chrome_load(&c), ch.load_max()), (6, 6));
+        refuses(
+            &mut ch,
+            install("grip_arm", Site::LeftArm),
+            "too much chrome: load 9 of 6",
+        );
+        let copy = pack_id(&ch, "grip_arm");
+        refuses(
+            &mut ch,
+            Action::InstallCopy {
+                copy: CopyId(copy.0 + 99),
+                site: Site::RightArm,
+            },
+            "not in your pack",
+        );
+    }
+
+    #[test]
+    fn can_install_is_what_install_refuses() {
+        let (c, mut ch, _, _) = setup();
+        ch.give_item(&c, id("adrenal_pump"), 1);
+        let pump = id("adrenal_pump");
+        assert_eq!(ch.can_install(&c, &pump, Site::Organs), Ok(()));
+        assert!(ch.can_install(&c, &pump, Site::Jaw).is_err());
+        assert!(ch.fits_at(&c, &pump, (Site::Organs, None)));
+        assert!(!ch.fits_at(&c, &pump, (Site::Jaw, None)));
+        assert!(!ch.fits_at(&c, &pump, (Site::Organs, Some(0))));
+        ch.chrome.insert(Site::LeftArm, id("piston_arm"));
+        assert!(ch.fits_at(&c, &id("arc_hand"), (Site::LeftArm, Some(0))));
+        assert!(!ch.fits_at(&c, &id("arc_hand"), (Site::LeftArm, Some(1))));
+        assert!(!ch.fits_at(&c, &id("arc_hand"), (Site::RightArm, Some(0))));
+        assert!(!ch.fits_at(&c, &id("hardhat"), (Site::Jaw, None)));
+    }
+
+    #[test]
+    fn a_pulled_limb_keeps_its_pieces() {
+        let (c, mut ch, mut g, at) = setup();
+        let (arm, hand) = (id("piston_arm"), id("arc_hand"));
+        ch.give_item(&c, arm.clone(), 1);
+        ch.give_item(&c, hand.clone(), 1);
+        let arm_copy = pack_id(&ch, "piston_arm");
+        let hand_copy = pack_id(&ch, "arc_hand");
+        let at_arm = Action::InstallCopy {
+            copy: arm_copy,
+            site: Site::LeftArm,
+        };
+        act(&mut ch, &mut g, &c, at, at_arm.clone()).unwrap();
+        let fit = Action::Fit {
+            host: Host::Site(Site::LeftArm),
+            socket: 0,
+            piece: hand_copy,
+        };
+        act(&mut ch, &mut g, &c, at, fit).unwrap();
+        let load = ch.chrome_load(&c);
+        act(&mut ch, &mut g, &c, at, Action::Pull(Site::LeftArm)).unwrap();
+        assert!(ch.chrome_load(&c) < load);
+        act(&mut ch, &mut g, &c, at, at_arm).unwrap();
+        assert!(ch.installed().contains(&(Site::LeftArm, Some(0), hand)));
+        assert_eq!(ch.chrome_load(&c), load);
+    }
+
+    #[test]
+    fn fit_takes_socket_chrome() {
+        let (c, mut ch, mut g, at) = setup();
+        ch.give_item(&c, id("piston_arm"), 1);
+        ch.give_item(&c, id("arc_hand"), 1);
+        let (arm, hand) = (pack_id(&ch, "piston_arm"), pack_id(&ch, "arc_hand"));
+        let site = Action::InstallCopy {
+            copy: arm,
+            site: Site::LeftArm,
+        };
+        act(&mut ch, &mut g, &c, at, site).unwrap();
+        let fit = |socket| Action::Fit {
+            host: Host::Site(Site::LeftArm),
+            socket,
+            piece: hand,
+        };
+        let before = ch.clone();
+        assert_eq!(
+            act(&mut ch, &mut g, &c, at, fit(1)).unwrap_err(),
+            "`Arc hand` does not fit a forearm socket"
+        );
+        assert_eq!(ch, before);
+        // Over budget: arm 3 and neural 1 and eyes 2 fill a budget of 6.
+        ch.stats.cool = 0;
+        ch.stats.body = 0;
+        ch.chrome.insert(Site::Neural, id("neural_port"));
+        let before = ch.clone();
+        assert_eq!((ch.chrome_load(&c), ch.load_max()), (6, 6));
+        assert_eq!(
+            act(&mut ch, &mut g, &c, at, fit(0)).unwrap_err(),
+            "too much chrome: load 7 of 6"
+        );
+        assert_eq!(ch, before);
+        ch.stats.cool = 5;
+        act(&mut ch, &mut g, &c, at, fit(0)).unwrap();
+        assert!(
+            ch.installed()
+                .contains(&(Site::LeftArm, Some(0), id("arc_hand")))
+        );
+    }
+
+    #[test]
+    fn equip_refuses_chrome() {
+        let (c, mut ch, mut g, at) = setup();
+        ch.give_item(&c, id("grip_arm"), 1);
+        let copy = pack_id(&ch, "grip_arm");
+        for a in [
+            Action::Equip(id("neural_port")),
+            Action::Equip(id("grip_arm")),
+            Action::EquipCopy(copy),
+        ] {
+            assert_eq!(
+                act(&mut ch, &mut g, &c, at, a).unwrap_err(),
+                "chrome is installed from STATS"
+            );
         }
     }
 }
