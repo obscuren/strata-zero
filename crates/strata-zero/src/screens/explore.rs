@@ -11441,7 +11441,7 @@ mod tests {
         let (mut st, mut s) = runner_half(Pos::new(12, 8));
         st.character
             .inventory
-            .retain(|s| s.item != ItemId::new("satchel"));
+            .retain(|s| s.item != ItemId::new("satchel") && s.item != ItemId::new("choke_can"));
         s.update(&mut st, &[key(KeyCode::Char('9'))]);
         assert_eq!((s.armed.clone(), ap_left(&st)), (None, 2));
         // No frag in the pack: the entry is gone and its key does nothing.

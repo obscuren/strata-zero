@@ -2567,4 +2567,357 @@ mod tests {
             Err(ContentError::UnknownSkill { .. })
         ));
     }
+    #[test]
+    fn every_shipped_piece() {
+        use Fits::*;
+        use Harm::*;
+        use Perk::*;
+        use SocketKind::{Forearm, Hand};
+        let c = Content::load().unwrap();
+        #[allow(clippy::type_complexity)]
+        let table: Vec<(&str, Fits, u8, Vec<Perk>, Vec<&str>, Option<(f32, u32)>)> = vec![
+            (
+                "neural_port",
+                Neural,
+                1,
+                vec![],
+                vec!["ping", "static"],
+                None,
+            ),
+            (
+                "limbic_damper",
+                Neural,
+                2,
+                vec![Stat(crate::Stat::Cool, 1)],
+                vec![],
+                Some((0.1, 1800)),
+            ),
+            (
+                "feedback_fuse",
+                Neural,
+                1,
+                vec![Resist(Feedback, 25)],
+                vec![],
+                Some((0.1, 1200)),
+            ),
+            (
+                "nightglass_optics",
+                Eyes,
+                2,
+                vec![Sight(4)],
+                vec!["lowlight"],
+                None,
+            ),
+            (
+                "target_lens",
+                Eyes,
+                2,
+                vec![Sight(1)],
+                vec!["deadeye"],
+                None,
+            ),
+            (
+                "secondhand_eyes",
+                Eyes,
+                1,
+                vec![Sight(1)],
+                vec![],
+                Some((0.2, 600)),
+            ),
+            (
+                "damper_cochlea",
+                Ears,
+                1,
+                vec![Resist(Shock, 25)],
+                vec![],
+                Some((0.1, 900)),
+            ),
+            (
+                "bulldog_jaw",
+                Jaw,
+                2,
+                vec![],
+                vec!["bite"],
+                Some((0.8, 1900)),
+            ),
+            (
+                "rebreather",
+                Jaw,
+                1,
+                vec![Resist(Toxin, 40)],
+                vec![],
+                Some((0.3, 1100)),
+            ),
+            ("spit_dart", Jaw, 2, vec![], vec!["spit"], Some((0.2, 1600))),
+            (
+                "redline_spine",
+                Spine,
+                3,
+                vec![Stat(crate::Stat::Reflex, 1), Move(1)],
+                vec![],
+                Some((1.5, 5200)),
+            ),
+            (
+                "hardback_brace",
+                Spine,
+                2,
+                vec![Carry(10.0), Armor(1)],
+                vec![],
+                Some((2.0, 2400)),
+            ),
+            (
+                "drone_cradle",
+                Back,
+                3,
+                vec![],
+                vec!["scout"],
+                Some((1.8, 4100)),
+            ),
+            ("adrenal_pump", Organs, 2, vec![], vec!["redline"], None),
+            (
+                "second_heart",
+                Organs,
+                3,
+                vec![HpMax(20)],
+                vec![],
+                Some((0.5, 4800)),
+            ),
+            (
+                "filter_liver",
+                Organs,
+                1,
+                vec![Resist(Toxin, 50)],
+                vec![],
+                Some((0.4, 1400)),
+            ),
+            (
+                "capacitor_ribs",
+                Organs,
+                2,
+                vec![Focus(10)],
+                vec![],
+                Some((0.9, 2600)),
+            ),
+            (
+                "subdermal_mesh",
+                Skin,
+                2,
+                vec![Armor(1), Resist(Kinetic, 15)],
+                vec![],
+                Some((1.0, 2900)),
+            ),
+            (
+                "ceramic_plating",
+                Skin,
+                4,
+                vec![Armor(3), Resist(Kinetic, 30), Resist(Thermal, 15), Move(-1)],
+                vec![],
+                Some((4.5, 6800)),
+            ),
+            (
+                "grounding_weave",
+                Skin,
+                1,
+                vec![Resist(Shock, 40)],
+                vec![],
+                Some((0.3, 1300)),
+            ),
+            (
+                "smart_ink",
+                Skin,
+                1,
+                vec![Stat(crate::Stat::Cool, 1)],
+                vec![],
+                Some((0.0, 700)),
+            ),
+            (
+                "grip_arm",
+                Arm,
+                3,
+                vec![Carry(12.0), Stat(crate::Stat::Body, 1)],
+                vec![],
+                None,
+            ),
+            (
+                "piston_arm",
+                Arm,
+                3,
+                vec![Stat(crate::Stat::Body, 1)],
+                vec!["shove"],
+                None,
+            ),
+            (
+                "surgeon_arm",
+                Arm,
+                3,
+                vec![Stat(crate::Stat::Tech, 2)],
+                vec![],
+                Some((3.5, 4400)),
+            ),
+            (
+                "wrecker_arm",
+                Arm,
+                4,
+                vec![Stat(crate::Stat::Body, 2)],
+                vec![],
+                Some((6.0, 4900)),
+            ),
+            (
+                "arc_hand",
+                Socket(Hand),
+                1,
+                vec![Resist(Shock, 10)],
+                vec!["jolt"],
+                None,
+            ),
+            (
+                "toolfingers",
+                Socket(Hand),
+                1,
+                vec![Stat(crate::Stat::Tech, 1)],
+                vec![],
+                Some((0.4, 1500)),
+            ),
+            (
+                "monowire_spool",
+                Socket(Forearm),
+                2,
+                vec![],
+                vec!["whip"],
+                Some((0.3, 3600)),
+            ),
+            (
+                "launcher_sleeve",
+                Socket(Forearm),
+                2,
+                vec![Throw(3)],
+                vec![],
+                Some((0.8, 2200)),
+            ),
+            (
+                "sprinter_shanks",
+                Legs,
+                3,
+                vec![Move(1)],
+                vec![],
+                Some((5.0, 4600)),
+            ),
+            (
+                "dog_legs",
+                Legs,
+                4,
+                vec![Move(2)],
+                vec![],
+                Some((6.5, 6200)),
+            ),
+        ];
+        assert_eq!(table.len(), 31);
+        for (id, fits, load, perks, grants, wv) in table {
+            let it = c.item(&ItemId::new(id)).unwrap_or_else(|| panic!("{id}"));
+            assert_eq!(it.kind, ItemKind::Cyberware, "{id}");
+            assert_eq!(it.slot, None, "{id}");
+            let imp = it.implant.as_ref().unwrap();
+            assert_eq!((imp.fits, imp.load), (fits, load), "{id}");
+            assert_eq!(it.perks, perks, "{id}");
+            let g: Vec<&str> = it.grants.iter().map(|a| a.0.as_str()).collect();
+            assert_eq!(g, grants, "{id}");
+            if let Some((w, v)) = wv {
+                assert_eq!((it.weight, it.value), (w, v), "{id}");
+            }
+            if id.ends_with("_arm") {
+                assert_eq!(it.sockets, vec![Hand, Forearm], "{id}");
+            }
+        }
+        let strike = |id: &str| {
+            let a = c.ability(&AbilityId::new(id)).unwrap();
+            (a.cooldown, a.kind.clone())
+        };
+        let sk = |s: &str| SkillId::new(s);
+        let (cd, k) = strike("bite");
+        assert_eq!(cd, 60);
+        assert_eq!(
+            k,
+            AbilityKind::Active(Active::Strike {
+                range: 1,
+                damage: 4,
+                stun: 0,
+                skill: sk("athletics"),
+                ap: 1,
+                stat: crate::Stat::Body,
+                push: 0,
+                chain: 0
+            })
+        );
+        let (cd, k) = strike("spit");
+        assert_eq!(cd, 300);
+        assert_eq!(
+            k,
+            AbilityKind::Active(Active::Strike {
+                range: 4,
+                damage: 3,
+                stun: 1,
+                skill: sk("athletics"),
+                ap: 1,
+                stat: crate::Stat::Reflex,
+                push: 0,
+                chain: 0
+            })
+        );
+        let (cd, k) = strike("whip");
+        assert_eq!(cd, 90);
+        assert_eq!(
+            k,
+            AbilityKind::Active(Active::Strike {
+                range: 2,
+                damage: 6,
+                stun: 0,
+                skill: sk("blades"),
+                ap: 1,
+                stat: crate::Stat::Reflex,
+                push: 0,
+                chain: 0
+            })
+        );
+        let (cd, k) = strike("scout");
+        assert_eq!(cd, 600);
+        assert_eq!(k, AbilityKind::Active(Active::Scan { radius: 18 }));
+    }
+
+    #[test]
+    fn choke_can_is_toxin() {
+        let c = Content::load().unwrap();
+        let it = c.item(&ItemId::new("choke_can")).unwrap();
+        assert_eq!(it.kind, ItemKind::Consumable);
+        assert_eq!(
+            it.on_use,
+            Some(Use::Throw {
+                range: 7,
+                arc: Arc::Lob,
+                blast: Blast {
+                    radius: 2,
+                    damage: 8,
+                    stun: 0,
+                    fuse: 0,
+                    chrome: false,
+                    harm: Harm::Toxin
+                }
+            })
+        );
+        assert!(
+            matches!(it.fx[..], [Fx::Throw, Fx::Haze, Fx::Number { tag: true }]),
+            "{:?}",
+            it.fx
+        );
+        assert!(Fx::Haze.is_blast());
+    }
+
+    #[test]
+    fn no_line_promises_more() {
+        let c = Content::load().unwrap();
+        for it in c.items.iter().filter(|i| i.kind == ItemKind::Cyberware) {
+            for w in ["disarm", "revive", "get back up", "through doors", "boots"] {
+                assert!(!it.desc.contains(w), "{}: {w}", it.id.0);
+            }
+        }
+    }
 }

@@ -167,7 +167,8 @@ impl FxInstance {
             }
             game::Fx::Bloom => self.started + BLOOM_TICKS + self.scorch(),
             game::Fx::Whiteout => self.started + WHITEOUT_TICKS + self.scorch(),
-            game::Fx::Shock => self.started + SHOCK_TICKS,
+            // Haze draws nothing yet; it lasts as long as a shock until it has its own.
+            game::Fx::Shock | game::Fx::Haze => self.started + SHOCK_TICKS,
             game::Fx::Trail => self.started + TRAIL_TICKS,
             game::Fx::Pulse { .. } => self.started + PULSE_TICKS,
         }

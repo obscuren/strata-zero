@@ -210,6 +210,8 @@ impl Overlay for FxOverlay<'_> {
                 Fx::Bloom => shapes::bloom(inst, elapsed, origin, area, buf),
                 Fx::Whiteout => shapes::whiteout(inst, elapsed, map, origin, area, buf),
                 Fx::Shock => shapes::shock(inst, elapsed, origin, area, buf),
+                // Drawn by a later task.
+                Fx::Haze => {}
                 Fx::Trail => shapes::trail(inst, elapsed, origin, area, buf),
                 Fx::Pulse { colour } => shapes::pulse_rings(
                     inst,

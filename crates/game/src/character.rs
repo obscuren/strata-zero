@@ -430,6 +430,7 @@ impl Character {
         d.give(ItemId::new("flashbang"), 2);
         d.give(ItemId::new("emp_puck"), 2);
         d.give(ItemId::new("satchel"), 1);
+        d.give(ItemId::new("choke_can"), 2);
         for (id, site) in [("adrenal_pump", Site::Organs), ("target_lens", Site::Eyes)] {
             d.install_new(c, site, ItemId::new(id));
         }
@@ -2125,6 +2126,7 @@ mod tests {
             1,
             "the optics the lens replaced"
         );
+        assert_eq!(d.count(&ItemId::new("choke_can")), 2);
         let d = Character::debug_runner(&c);
         assert_eq!(
             d.chrome_at(Site::Eyes),

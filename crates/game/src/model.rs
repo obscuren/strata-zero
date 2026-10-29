@@ -882,6 +882,8 @@ pub enum Fx {
     Whiteout,
     /// A blast: cyan rings of `≋` out from the centre; the net's blue.
     Shock,
+    /// A blast: sickly green `░▒` that fills the footprint, thickens, then thins away.
+    Haze,
     /// Where a shoved thing was: an arrow trail along the push, fading.
     Trail,
     /// A ring of `·` pulsing out from the firer to three tiles.
@@ -901,7 +903,7 @@ impl Fx {
 
     /// A blast's shape, played over the whole footprint at the landing tile.
     pub fn is_blast(&self) -> bool {
-        matches!(self, Fx::Bloom | Fx::Whiteout | Fx::Shock)
+        matches!(self, Fx::Bloom | Fx::Whiteout | Fx::Shock | Fx::Haze)
     }
 
     /// Any shape a shot is made of; only weapons and strike abilities play them.
