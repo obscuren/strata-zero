@@ -1,6 +1,6 @@
 //! The sheet's right pane: the ledger of the body's sites with a chrome limb's sockets
 //! folded under it, the card of the row the cursor is on, the picker of what in the pack
-//! fits an empty site or socket, and the LOAD gauge over them.
+//! fits a site or socket (swapping out what it holds), and the LOAD gauge over them.
 
 use super::{RULE_X, Sheet, SheetPane, header};
 use crate::actions::{JACKED_IN, jacked_in, perform, report};
@@ -88,8 +88,8 @@ pub fn ledger_rows(st: &AppState) -> Vec<LedgerRow> {
     rows
 }
 
-/// What in the pack fits `at`, an empty site or socket, in pack order: a copy each, a
-/// stack without one once. A socket takes copies only, as `Fit` moves them.
+/// What in the pack fits `at`, a site or socket, empty or not, in pack order: a copy
+/// each, a stack without one once. A socket takes copies only, as `Fit` moves them.
 pub fn fitting(st: &AppState, at: (Site, Option<usize>)) -> Vec<Pick> {
     let (c, ch) = (&st.content, &st.character);
     let mut out: Vec<Pick> = Vec::new();
@@ -117,6 +117,23 @@ fn stack_load(c: &Content, s: &Stack) -> u8 {
         .flat_map(|k| k.fitted.iter().flatten())
         .map(|f| load(&f.item))
         .fold(load(&s.item), u8::saturating_add)
+}
+
+/// The load once `pick` is in at `at`: what the place holds leaves first, with what is
+/// fitted in it.
+fn load_after(st: &AppState, at: (Site, Option<usize>), pick: &Pick) -> u32 {
+    let (c, ch) = (&st.content, &st.character);
+    ch.chrome_load(c).saturating_sub(ch.load_at(c, at)) + u32::from(pick.load)
+}
+
+/// The pieces at `at` that a pick swaps out: what the place holds, with what is fitted
+/// in it.
+fn held_pieces(st: &AppState, (site, socket): (Site, Option<usize>)) -> usize {
+    st.character
+        .installed()
+        .iter()
+        .filter(|&&(s, n, _)| s == site && (socket.is_none() || n == socket))
+        .count()
 }
 
 /// The pieces a pick installs: itself and what is fitted in it.
@@ -190,7 +207,7 @@ struct View {
     at: (Site, Option<usize>),
     /// What the cursor's site or socket holds.
     held: Option<ItemId>,
-    /// What in the pack fits there, while it is empty.
+    /// What in the pack fits there; a pick swaps out what it holds.
     picks: Vec<Pick>,
     /// The pick, while the picker is open.
     pick: Option<usize>,
@@ -202,10 +219,7 @@ impl Sheet {
         let row = resolve(&rows, self.state.row);
         let at = rows[row].at().unwrap_or((Site::ALL[0], None));
         let held = held(st, at).cloned();
-        let picks = match held {
-            Some(_) => Vec::new(),
-            None => fitting(st, at),
-        };
+        let picks = fitting(st, at);
         let pick = self
             .state
             .picker
@@ -222,7 +236,7 @@ impl Sheet {
     }
 
     /// Puts the cursor back on a row that exists (a socket's limb gone, its site) and
-    /// closes a picker that has nothing left to pick or a place that filled.
+    /// closes a picker that has nothing left to pick.
     pub fn reselect(&mut self, st: &AppState) {
         let v = self.view(st);
         let row = v.rows[v.row];
@@ -254,7 +268,13 @@ impl Sheet {
                     self.state.picker = Some((pick + 1).min(v.picks.len() - 1))
                 }
                 KeyCode::Char(' ') | KeyCode::Enter => self.install(st, &v, pick),
-                KeyCode::Esc => self.state.picker = None,
+                // Back on a piece, its own card types out again.
+                KeyCode::Esc => {
+                    self.state.picker = None;
+                    if v.held.is_some() {
+                        self.card = tick;
+                    }
+                }
                 // The picker keeps the cursor until it closes.
                 KeyCode::Left | KeyCode::Char('h') | KeyCode::Right | KeyCode::Char('l') => {}
                 _ => return false,
@@ -273,6 +293,7 @@ impl Sheet {
             }
             KeyCode::Right | KeyCode::Char('l') => {}
             KeyCode::Char(' ') | KeyCode::Enter => self.act(st, &v),
+            KeyCode::Char('x') => self.pull(st, &v),
             _ => return false,
         }
         true
@@ -285,34 +306,44 @@ impl Sheet {
         }
     }
 
-    /// Space on a row: chrome comes out to the pack, a limb with what is in it; an
-    /// empty place opens what fits, or says nothing does.
+    /// Space on a row opens what in the pack fits there, empty or not, or says nothing
+    /// does. On a piece the FITS card takes the place of its own and types out.
     fn act(&mut self, st: &mut AppState, v: &View) {
-        let (site, socket) = v.at;
-        if v.held.is_some() {
-            let action = match socket {
-                None => Action::Pull(site),
-                Some(socket) => Action::Unfit {
-                    host: Host::Site(site),
-                    socket,
-                },
-            };
-            let result = perform(st, action);
-            if result.is_ok() {
-                self.card = st.tick;
-            }
-            report(st, result);
-        } else if jacked_in(st) {
+        if jacked_in(st) {
             st.warn(JACKED_IN);
         } else if v.picks.is_empty() {
             st.warn("nothing in your bag fits");
         } else {
             self.state.picker = Some(0);
+            if v.held.is_some() {
+                self.card = st.tick;
+            }
         }
     }
 
-    /// Installs the pick, or fits it in its socket; it closes the picker, and a
-    /// refusal lands in the strip with the picker still open.
+    /// `x` on a row: chrome comes out to the pack, a limb with what is in it; an empty
+    /// place has nothing to pull.
+    fn pull(&mut self, st: &mut AppState, v: &View) {
+        if v.held.is_none() {
+            return;
+        }
+        let (site, socket) = v.at;
+        let action = match socket {
+            None => Action::Pull(site),
+            Some(socket) => Action::Unfit {
+                host: Host::Site(site),
+                socket,
+            },
+        };
+        let result = perform(st, action);
+        if result.is_ok() {
+            self.card = st.tick;
+        }
+        report(st, result);
+    }
+
+    /// Installs the pick, or fits it in its socket, what was there going to the pack;
+    /// it closes the picker, and a refusal lands in the strip with the picker still open.
     fn install(&mut self, st: &mut AppState, v: &View, pick: usize) {
         let p = &v.picks[pick];
         let (site, socket) = v.at;
@@ -338,8 +369,8 @@ impl Sheet {
         report(st, result);
     }
 
-    /// The ledger's hint row: what space does where the cursor is, dimmer while the
-    /// lock is on.
+    /// The ledger's hint row: what space does, and on chrome what `x` does, dimmer
+    /// while the lock is on.
     pub(super) fn ledger_hints(&self, st: &AppState) -> Line<'static> {
         let v = self.view(st);
         let dim = Style::default().fg(DIM);
@@ -349,20 +380,21 @@ impl Sheet {
                 dim,
             ));
         }
-        let space = match v.held {
-            Some(_) => "space pull it out",
-            None => "space what fits",
-        };
         let locked = if jacked_in(st) {
             Style::default().fg(FAINTER)
         } else {
             dim
         };
-        Line::from(vec![
+        let mut spans = vec![
             Span::styled("↑↓ select · ", dim),
-            Span::styled(space, locked),
-            Span::styled(" · ← attributes · Q/E tabs · tab close", dim),
-        ])
+            Span::styled("space what fits", locked),
+        ];
+        if v.held.is_some() {
+            spans.push(Span::styled(" · ", dim));
+            spans.push(Span::styled("x pull it out", locked));
+        }
+        spans.push(Span::styled(" · ← attributes · Q/E tabs · tab close", dim));
+        Line::from(spans)
     }
 
     /// Draws the right pane into `body`'s columns past the rule: the CHROME header with
@@ -383,8 +415,8 @@ impl Sheet {
         let focused = self.state.pane == SheetPane::Ledger;
         let wide = body.width >= WIDE_BODY;
         let rule = (x0 + if wide { LEDGER_WIDE } else { LEDGER_W }).min(x1);
-        let add = v.pick.map_or(0, |p| u32::from(v.picks[p].load));
-        chrome_header(st, (x0, x1), body.y, focused, add, buf);
+        let after = v.pick.map(|p| load_after(st, v.at, &v.picks[p]));
+        chrome_header(st, (x0, x1), body.y, focused, after, buf);
         let rows = Rect::new(x0, body.y + 1, rule - x0, body.height - 1);
         draw_ledger(st, &v, rows, focused && v.pick.is_none(), wide, buf);
         for y in body.y + 1..body.bottom() {
@@ -398,14 +430,14 @@ impl Sheet {
     }
 
     /// The card of the cursor's row, typing out: a piece's drawing and what it is, or
-    /// what in the pack fits an empty place.
+    /// what in the pack fits an empty place, or a held one while the picker is open.
     fn draw_card(&self, st: &AppState, v: &View, area: Rect, focused: bool, buf: &mut Buffer) {
         let p = st.tick.saturating_sub(self.card) as f32 / REVEAL_TICKS as f32;
         let cursor_on = (st.tick / 4).is_multiple_of(2);
         let w = area.width as usize;
         let mut text = area;
-        let card = match &v.held {
-            Some(id) => {
+        let card = match (&v.held, v.pick) {
+            (Some(id), None) => {
                 // The drawing scans in over the first half of the reveal.
                 if let Some(art) = st.content.implant_art(id) {
                     let scan = ((2.0 * p).min(1.0) * f32::from(implant_art::ROWS)).ceil() as u16;
@@ -416,7 +448,7 @@ impl Sheet {
                 }
                 piece_card(st, v.at, id, w)
             }
-            None => fit_card(st, v, focused, w),
+            _ => fit_card(st, v, focused, w),
         };
         let card = card.fit(text.height as usize, w);
         draw_lines(buf, text, &reveal(&card.lines, p, cursor_on), &card.bars);
@@ -424,13 +456,14 @@ impl Sheet {
 }
 
 /// `CHROME ──── LOAD ▰▰▰▱ 20/24`: the load's share of the budget in twelve segments,
-/// rounded up; what a pick would add in amber, and the total with it.
+/// rounded up. With a pick, the load `after` it goes in, what leaves counted: what it
+/// adds in amber and the total with it; a lighter one, the lower share and total.
 fn chrome_header(
     st: &AppState,
     (x0, x1): (u16, u16),
     y: u16,
     focused: bool,
-    add: u32,
+    after: Option<u32>,
     buf: &mut Buffer,
 ) {
     let ch = &st.character;
@@ -439,7 +472,9 @@ fn chrome_header(
         0 => SEGMENTS,
         m => (n * SEGMENTS).div_ceil(m).min(SEGMENTS),
     };
-    let (have, after) = (share(load), share(load + add));
+    let total = after.unwrap_or(load);
+    let more = total > load;
+    let (have, after) = (share(load.min(total)), share(total));
     let fg = |c: Color| Style::default().fg(c);
     let tail = [
         ("LOAD ".to_string(), fg(DIM)),
@@ -450,8 +485,8 @@ fn chrome_header(
         ("▰".repeat((after - have) as usize), fg(AMBER)),
         ("▱".repeat((SEGMENTS - after) as usize), fg(FAINTER)),
         (
-            format!(" {}", load + add),
-            fg(if add > 0 { AMBER } else { TEXT }).add_modifier(Modifier::BOLD),
+            format!(" {total}"),
+            fg(if more { AMBER } else { TEXT }).add_modifier(Modifier::BOLD),
         ),
         (format!("/{max}"), fg(DIM)),
     ];
@@ -716,34 +751,44 @@ fn socket_lines(
     out
 }
 
-/// An empty site's or socket's card: its name, what it is, and what in the pack fits it;
-/// while the picker is open, the pick on the bar, what it does, what it does to the
-/// load, and its description.
+/// A site's or socket's FITS card: its name, what it is or what it holds, and what in
+/// the pack fits it; while the picker is open, the pick on the bar, what it does, what
+/// it does to the load and EMP (what it swaps out counted), and its description.
 fn fit_card(st: &AppState, v: &View, focused: bool, w: usize) -> CardText {
     let (c, ch) = (&st.content, &st.character);
     let (site, socket) = v.at;
     let mut card = CardText::default();
     let fg = |c: Color| Style::default().fg(c);
     let bold = |c: Color| fg(c).add_modifier(Modifier::BOLD);
-    match socket {
-        None => {
-            card.push(Line::from(Span::styled(site.long(), bold(CYAN))));
-            card.push(Line::from(vec![
-                Span::styled("meat", fg(DIM)),
-                Span::styled(" · nothing fitted", fg(FAINTER)),
-            ]));
-        }
-        Some(n) => {
-            let word = socket_word(st, site, n).to_uppercase();
-            card.push(Line::from(Span::styled(word, bold(CYAN))));
+    let title = match socket {
+        None => site.long().to_string(),
+        Some(n) => socket_word(st, site, n).to_uppercase(),
+    };
+    card.push(Line::from(Span::styled(title, bold(CYAN))));
+    match (socket, &v.held) {
+        (_, Some(id)) => {
+            let name = c
+                .item(id)
+                .map_or_else(|| id.to_string(), |i| i.name.clone());
             card.extend(wrap_spans(
                 vec![
-                    Span::styled("a socket on the ", fg(DIM)),
-                    Span::styled(host_name(st, site), fg(TEXT)),
+                    Span::styled("replaces ", fg(DIM)),
+                    Span::styled(name, fg(TEXT)),
                 ],
                 w,
             ));
         }
+        (None, None) => card.push(Line::from(vec![
+            Span::styled("meat", fg(DIM)),
+            Span::styled(" · nothing fitted", fg(FAINTER)),
+        ])),
+        (Some(_), None) => card.extend(wrap_spans(
+            vec![
+                Span::styled("a socket on the ", fg(DIM)),
+                Span::styled(host_name(st, site), fg(TEXT)),
+            ],
+            w,
+        )),
     }
     card.blank();
     // FITS ──── from your bag
@@ -766,7 +811,7 @@ fn fit_card(st: &AppState, v: &View, focused: bool, w: usize) -> CardText {
     let (load, max) = (ch.chrome_load(c), ch.load_max());
     for (i, pick) in v.picks.iter().enumerate() {
         let on = v.pick == Some(i);
-        let over = load + u32::from(pick.load) > max;
+        let over = load_after(st, v.at, pick) > max;
         let bar = |s: Style| if on { s.bg(BAR_BG) } else { s };
         let name = c
             .item(&pick.item)
@@ -804,23 +849,29 @@ fn fit_card(st: &AppState, v: &View, focused: bool, w: usize) -> CardText {
     };
     card.blank();
     card.extend(wrap_spans(effects(c, item, false), w));
-    let after = load + u32::from(pick.load);
-    let pieces = pick_pieces(st, pick) as i32;
-    card.extend(wrap_spans(
-        vec![
-            Span::styled(format!("load {load} → "), fg(DIM)),
-            Span::styled(
-                after.to_string(),
-                bold(if after > max { MAGENTA } else { AMBER }),
-            ),
-            Span::styled(format!("/{max} · "), fg(DIM)),
-            Span::styled(
-                format!("EMP {}", signed(-EMP_PER_PIECE * pieces)),
-                fg(MAGENTA),
-            ),
-        ],
-        w,
-    ));
+    // `load 19 → 21/24 · EMP −2`: what leaves counted; a lighter swap's total plain,
+    // and EMP only when the count of pieces moves.
+    let after = load_after(st, v.at, pick);
+    let pieces = pick_pieces(st, pick) as i32 - held_pieces(st, v.at) as i32;
+    let total = match after {
+        a if a > max => MAGENTA,
+        a if a > load => AMBER,
+        _ => TEXT,
+    };
+    let mut spans = vec![
+        Span::styled(format!("load {load} → "), fg(DIM)),
+        Span::styled(after.to_string(), bold(total)),
+        Span::styled(format!("/{max}"), fg(DIM)),
+    ];
+    if pieces != 0 {
+        let emp = -EMP_PER_PIECE * pieces;
+        spans.push(Span::styled(" · ", fg(DIM)));
+        spans.push(Span::styled(
+            format!("EMP {}", signed(emp)),
+            fg(if emp < 0 { MAGENTA } else { GREEN }),
+        ));
+    }
+    card.extend(wrap_spans(spans, w));
     card.description(&item.desc, w);
     card
 }
@@ -1505,7 +1556,7 @@ mod tests {
             st.character.resist(&c, Harm::Emp),
         );
         let mut d = on_ledger(&mut st, LedgerRow::Site(Site::LeftArm));
-        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        press(&mut d, &mut st, &[KeyCode::Char('x')]);
         assert_eq!(st.character.chrome_at(Site::LeftArm), None);
         assert_eq!(last(&st), Some("pulled Piston arm · to the pack"));
         let arm = st
@@ -1592,8 +1643,8 @@ mod tests {
         );
         assert_eq!(d.sheet.state.picker, None);
         assert_eq!(d.sheet.state.row, LedgerRow::Socket(Site::LeftArm, 1));
-        // Space on a socket's piece takes it out to the pack.
-        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        // `x` on a socket's piece takes it out to the pack.
+        press(&mut d, &mut st, &[KeyCode::Char('x')]);
         assert!(
             st.character
                 .chrome_copy(Site::LeftArm)
@@ -1609,20 +1660,30 @@ mod tests {
         give(&mut st, "grip_arm");
         let before = st.character.clone();
         let mut d = on_ledger(&mut st, LedgerRow::Site(Site::LeftArm));
-        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
-        assert_eq!(st.character, before);
-        assert_eq!(last(&st), Some(JACKED_IN));
+        // Space on chrome: no picker, the lock's words; `x` the same.
+        for code in [KeyCode::Char(' '), KeyCode::Char('x')] {
+            st.say("before");
+            press(&mut d, &mut st, &[code]);
+            assert_eq!(d.sheet.state.picker, None, "{code:?}");
+            assert_eq!(st.character, before, "{code:?}");
+            assert_eq!(last(&st), Some(JACKED_IN), "{code:?}");
+        }
         let buf = screen(&d, &mut st, (100, 30));
         assert!(cells(&buf, 2, 27, 90).contains(JACKED_IN), "the strip");
         let hint = cells(&buf, 2, 28, 70);
         assert!(
-            hint.starts_with("↑↓ select · space pull it out · ← attributes"),
+            hint.starts_with("↑↓ select · space what fits · x pull it out · ← attributes"),
             "{hint}"
         );
         assert_eq!(buf[(2, 28)].fg, DIM);
-        let x = col_of(&buf, 28, 2, "space pull it out").unwrap();
-        assert_eq!(buf[(x, 28)].fg, FAINTER);
-        assert_eq!(buf[(x + 16, 28)].fg, FAINTER);
+        for keys in ["space what fits", "x pull it out"] {
+            let x = col_of(&buf, 28, 2, keys).unwrap();
+            let n = keys.chars().count() as u16;
+            for k in 0..n {
+                assert_eq!(buf[(x + k, 28)].fg, FAINTER, "{keys} at {k}");
+            }
+            assert_eq!(buf[(x + n + 1, 28)].fg, DIM, "after {keys}");
+        }
         // An empty site: no picker, the lock's words.
         press(
             &mut d,
@@ -1695,7 +1756,8 @@ mod tests {
         assert!(hint_row(&d, &mut st).starts_with(left));
         d.sheet.state.pane = SheetPane::Ledger;
         d.sheet.state.row = LedgerRow::Site(Site::LeftArm);
-        let chrome = "↑↓ select · space pull it out · ← attributes · Q/E tabs · tab close";
+        let chrome =
+            "↑↓ select · space what fits · x pull it out · ← attributes · Q/E tabs · tab close";
         assert_eq!(d.sheet.hints(&st), chrome);
         assert!(hint_row(&d, &mut st).starts_with(chrome));
         d.sheet.state.row = LedgerRow::Socket(Site::LeftArm, 0);
@@ -1711,6 +1773,227 @@ mod tests {
         assert!(row.starts_with(picker), "{row}");
         let x = col_of(&screen(&d, &mut st, (100, 30)), 28, 2, "space install").unwrap();
         assert_eq!(screen(&d, &mut st, (100, 30))[(x, 28)].fg, DIM);
+    }
+
+    #[test]
+    fn space_on_chrome_opens_what_fits_and_swaps() {
+        let mut st = AppState::new();
+        loadout(&mut st);
+        let grip = give(&mut st, "grip_arm");
+        give(&mut st, "surgeon_arm");
+        give(&mut st, "ceramic_plating");
+        let (load, max) = (
+            st.character.chrome_load(&st.content),
+            st.character.load_max(),
+        );
+        assert_eq!((load, max), (19, 24));
+        let mut d = on_ledger(&mut st, LedgerRow::Site(Site::LeftArm));
+        let picks: Vec<ItemId> = fitting(&st, (Site::LeftArm, None))
+            .into_iter()
+            .map(|p| p.item)
+            .collect();
+        assert_eq!(picks, [id("grip_arm"), id("surgeon_arm")], "the arms only");
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        assert_eq!(d.sheet.state.picker, Some(0));
+        assert_eq!(
+            st.character.chrome_at(Site::LeftArm),
+            Some(&id("piston_arm"))
+        );
+        let buf = screen(&d, &mut st, (100, 30));
+        let card = region(&buf, (CARD_100, 98), (6, 27));
+        for want in [
+            "LEFT ARM",
+            "replaces Piston arm",
+            "FITS",
+            "Grip arm",
+            "Surgeon arm",
+            "L3",
+            "load 19 → 18/24",
+        ] {
+            assert!(card.contains(want), "{want}:\n{card}");
+        }
+        assert!(
+            !card.contains("PISTON ARM"),
+            "the piece's card gave way:\n{card}"
+        );
+        assert!(!card.contains("nothing fitted"), "{card}");
+        let (x, y) = find(&buf, CARD_100, (6, 27), "replaces Piston arm").unwrap();
+        assert_eq!(buf[(x, y)].fg, DIM);
+        assert_eq!(buf[(x + 9, y)].fg, TEXT);
+        // Two pieces out, one in: EMP comes back by two.
+        let (x, y) = find(&buf, CARD_100, (6, 27), "EMP +2").unwrap();
+        assert_eq!(buf[(x, y)].fg, GREEN);
+        // Lighter: LOAD shows no amber and the lower total.
+        let header = cells(&buf, R0, 5, 50);
+        assert!(header.trim_end().ends_with("18/24"), "{header}");
+        assert!((R0..98).all(|x| buf[(x, 5)].fg != AMBER), "{header}");
+        assert_eq!(header.matches('▰').count(), (18 * 12_usize).div_ceil(24));
+        // Space swaps: the Grip arm in, the Piston arm to the pack with its hand.
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        assert_eq!(st.character.chrome_at(Site::LeftArm), Some(&id("grip_arm")));
+        assert_eq!(st.character.chrome_copy(Site::LeftArm).map(|k| k.id), grip);
+        assert_eq!(
+            last(&st),
+            Some("installed Grip arm · L ARM · Piston arm to the pack")
+        );
+        let arm = st
+            .character
+            .inventory
+            .iter()
+            .find(|s| s.item == id("piston_arm"))
+            .expect("the Piston arm in the pack");
+        let hand = arm.copy.as_ref().unwrap().fitted[0].as_ref().unwrap();
+        assert_eq!(hand.item, id("arc_hand"), "its hand still in it");
+        assert_eq!(d.sheet.state.picker, None);
+        assert_eq!(d.sheet.state.row, LedgerRow::Site(Site::LeftArm));
+        assert_eq!(st.character.chrome_load(&st.content), 18);
+    }
+
+    #[test]
+    fn a_heavier_swap_counts_what_leaves() {
+        // SKIN: Ceramic plating (4) for the Subdermal mesh (2).
+        let mut st = AppState::new();
+        loadout(&mut st);
+        give(&mut st, "ceramic_plating");
+        let mut d = on_ledger(&mut st, LedgerRow::Site(Site::Skin));
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        assert_eq!(d.sheet.state.picker, Some(0));
+        let buf = screen(&d, &mut st, (100, 30));
+        let card = region(&buf, (CARD_100, 98), (6, 27));
+        for want in ["SKIN", "replaces Subdermal mesh", "Ceramic plating", "L4"] {
+            assert!(card.contains(want), "{want}:\n{card}");
+        }
+        let (x, y) = find(&buf, CARD_100, (6, 27), "load 19 → 21/24").unwrap();
+        assert_eq!(buf[(x + 10, y)].fg, AMBER);
+        assert!(
+            !card.contains("EMP"),
+            "one piece for one: EMP moves not:\n{card}"
+        );
+        // The gauge: the two more in amber, the total with them.
+        let header = cells(&buf, R0, 5, 50);
+        assert!(header.trim_end().ends_with("21/24"), "{header}");
+        let x = col_of(&buf, 5, R0, " 21/24").unwrap();
+        assert_eq!(buf[(x + 1, 5)].fg, AMBER);
+        assert!((R0..98).any(|x| buf[(x, 5)].symbol() == "▰" && buf[(x, 5)].fg == AMBER));
+
+        // Over the budget even once the mesh's two leave: magenta, and it refuses.
+        let mut st = AppState::new();
+        loadout(&mut st);
+        give(&mut st, "ceramic_plating");
+        st.character.attributes.cool = 3;
+        assert_eq!(st.character.load_max(), 20);
+        let mut d = on_ledger(&mut st, LedgerRow::Site(Site::Skin));
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        let buf = screen(&d, &mut st, (100, 30));
+        let (_, y) = find(&buf, CARD_100, (6, 27), "Ceramic plating").unwrap();
+        let x = col_of(&buf, y, CARD_100, "L4").unwrap();
+        assert_eq!(buf[(x, y)].fg, MAGENTA);
+        let (x, y) = find(&buf, CARD_100, (6, 27), "load 19 → 21/20").unwrap();
+        assert_eq!(buf[(x + 10, y)].fg, MAGENTA);
+        let before = st.character.clone();
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        assert_eq!(st.character, before);
+        assert_eq!(last(&st), Some("too much chrome: load 21 of 20"));
+        assert_eq!(d.sheet.state.picker, Some(0), "still choosing");
+    }
+
+    #[test]
+    fn space_on_a_socket_piece_swaps_it() {
+        let mut st = AppState::new();
+        loadout(&mut st);
+        let fingers = give(&mut st, "toolfingers");
+        let hand = st
+            .character
+            .chrome_copy(Site::LeftArm)
+            .and_then(|k| k.fitted[0].as_ref()?.copy_id());
+        let mut d = on_ledger(&mut st, LedgerRow::Socket(Site::LeftArm, 0));
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        assert_eq!(d.sheet.state.picker, Some(0));
+        let buf = screen(&d, &mut st, (100, 30));
+        let card = region(&buf, (CARD_100, 98), (6, 27));
+        for want in [
+            "HAND",
+            "replaces Arc hand",
+            "Toolfingers",
+            "L1",
+            "load 19 → 19/24",
+        ] {
+            assert!(card.contains(want), "{want}:\n{card}");
+        }
+        let (x, y) = find(&buf, CARD_100, (6, 27), "load 19 → 19/24").unwrap();
+        assert_eq!(buf[(x + 10, y)].fg, TEXT, "nothing more: plain");
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        let fitted = st
+            .character
+            .chrome_copy(Site::LeftArm)
+            .and_then(|k| k.fitted[0].clone())
+            .unwrap();
+        assert_eq!(fitted.copy_id(), fingers);
+        assert_eq!(
+            last(&st),
+            Some("Toolfingers fitted · socket hand · Arc hand to the pack")
+        );
+        assert!(hand.is_some_and(|k| st.character.copy_in_pack(k).is_some()));
+        assert_eq!(d.sheet.state.picker, None);
+        assert_eq!(d.sheet.state.row, LedgerRow::Socket(Site::LeftArm, 0));
+    }
+
+    #[test]
+    fn the_swap_picker_types_its_card_once() {
+        let mut st = AppState::new();
+        loadout(&mut st);
+        give(&mut st, "grip_arm");
+        give(&mut st, "surgeon_arm");
+        let mut d = on_ledger(&mut st, LedgerRow::Site(Site::LeftArm));
+        st.tick = d.sheet.card + REVEAL_TICKS + 1;
+        // Opening on a piece: its card gives way to the FITS card, typed out once.
+        st.tick += 1;
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        let opened = st.tick;
+        assert_eq!(d.sheet.card, opened);
+        // Moving the pick never types it again.
+        st.tick += 5;
+        press(&mut d, &mut st, &[KeyCode::Down]);
+        assert_eq!(d.sheet.state.picker, Some(1));
+        st.tick += 5;
+        press(&mut d, &mut st, &[KeyCode::Up]);
+        assert_eq!(d.sheet.card, opened);
+        // Esc: the piece's card again, typed out.
+        st.tick += 5;
+        press(&mut d, &mut st, &[KeyCode::Esc]);
+        assert_eq!(d.sheet.state.picker, None);
+        assert_eq!(d.sheet.card, st.tick);
+        let buf = screen(&d, &mut st, (100, 30));
+        let card = region(&buf, (CARD_100, 98), (6, 27));
+        assert!(card.contains("PISTON ARM"), "{card}");
+    }
+
+    #[test]
+    fn x_pulls_chrome_and_nothing_else() {
+        let mut st = AppState::new();
+        loadout(&mut st);
+        // On an empty place `x` does nothing.
+        let mut d = on_ledger(&mut st, LedgerRow::Site(Site::RightArm));
+        st.say("before");
+        let before = st.character.clone();
+        press(&mut d, &mut st, &[KeyCode::Char('x')]);
+        assert_eq!((&st.character, last(&st)), (&before, Some("before")));
+        let mut d = on_ledger(&mut st, LedgerRow::Socket(Site::LeftArm, 1));
+        press(&mut d, &mut st, &[KeyCode::Char('x')]);
+        assert_eq!((&st.character, last(&st)), (&before, Some("before")));
+        // On a socket's piece: out to the pack.
+        let mut d = on_ledger(&mut st, LedgerRow::Socket(Site::LeftArm, 0));
+        press(&mut d, &mut st, &[KeyCode::Char('x')]);
+        assert_eq!(last(&st), Some("Arc hand out · to the pack"));
+        assert_eq!(st.character.count(&id("arc_hand")), 1);
+        // On a site's piece: out to the pack; the card types afresh.
+        let mut d = on_ledger(&mut st, LedgerRow::Site(Site::LeftArm));
+        st.tick += 7;
+        press(&mut d, &mut st, &[KeyCode::Char('x')]);
+        assert_eq!(st.character.chrome_at(Site::LeftArm), None);
+        assert_eq!(last(&st), Some("pulled Piston arm · to the pack"));
+        assert_eq!(d.sheet.card, st.tick);
+        assert_eq!(d.sheet.state.picker, None);
     }
 
     #[test]

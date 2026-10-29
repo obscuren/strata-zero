@@ -895,8 +895,9 @@ fn kit_shots(
 }
 
 /// ATTRIBUTES at each size: the spec's loadout on the Piston arm; the picker on R ARM with
-/// a Grip arm in the pack; the picker on the forearm with a Monowire spool; and the left
-/// pane on EMP, two off for each piece.
+/// a Grip arm in the pack; the picker on the forearm with a Monowire spool; the swap
+/// picker on the Piston arm at L ARM, the Grip arm picked; and the left pane on EMP, two
+/// off for each piece.
 #[test]
 #[ignore]
 fn attributes_sheet() {
@@ -955,6 +956,15 @@ fn attributes_sheet() {
     sheet_shots(&mut st, "attributes_picker_socket", &sizes, |d, st| {
         d.sheet.state.pane = SheetPane::Ledger;
         d.sheet.state.row = LedgerRow::Socket(Site::LeftArm, 1);
+        d.update(st, &[key(KeyCode::Char(' '))]);
+    });
+
+    let mut st = fresh();
+    st.character
+        .give_item(&st.content, ItemId::new("grip_arm"), 1);
+    sheet_shots(&mut st, "attributes_picker_swap", &sizes, |d, st| {
+        d.sheet.state.pane = SheetPane::Ledger;
+        d.sheet.state.row = LedgerRow::Site(Site::LeftArm);
         d.update(st, &[key(KeyCode::Char(' '))]);
     });
 

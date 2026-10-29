@@ -1155,7 +1155,8 @@ impl Character {
     }
 
     /// Every refusal installing this pack stack at `site` makes: a limb comes with
-    /// what is fitted in it, and that takes load too.
+    /// what is fitted in it, and that takes load too. What the site holds is swapped
+    /// out to the pack, so its load, with what is fitted in it, leaves first.
     pub fn can_install_stack(&self, c: &Content, stack: &Stack, site: Site) -> Result<(), String> {
         let item = c
             .item(&stack.item)
@@ -1166,9 +1167,6 @@ impl Character {
         if implant.fits != site.fits() {
             return Err(format!("`{}` doesn't fit {}", item.name, site.label()));
         }
-        if let Some(held) = self.chrome_at(site) {
-            return Err(format!("pull the `{}` out first", item_name(c, held)));
-        }
         let fitted: u32 = stack
             .copy
             .iter()
@@ -1176,11 +1174,40 @@ impl Character {
             .filter_map(|s| c.item(&s.item)?.implant)
             .map(|i| i.load as u32)
             .sum();
-        let after = self.chrome_load(c) + implant.load as u32 + fitted;
+        let out = self.load_at(c, (site, None));
+        let after = self.chrome_load(c).saturating_sub(out) + implant.load as u32 + fitted;
         if after > self.load_max() {
             return Err(over_budget(after, self.load_max()));
         }
         Ok(())
+    }
+
+    /// What the piece at a site (`None`), or in a socket of it (`Some`), takes of the
+    /// load, with what is fitted in it; an empty place takes nothing.
+    pub fn load_at(&self, c: &Content, (site, socket): (Site, Option<usize>)) -> u32 {
+        let load = |id: &ItemId| {
+            c.item(id)
+                .and_then(|i| i.implant)
+                .map_or(0, |i| i.load as u32)
+        };
+        match socket {
+            None => {
+                let Some(id) = self.chrome_at(site) else {
+                    return 0;
+                };
+                let fitted: u32 = self
+                    .chrome_copy(site)
+                    .iter()
+                    .flat_map(|k| k.fitted.iter().flatten())
+                    .map(|s| load(&s.item))
+                    .sum();
+                load(id) + fitted
+            }
+            Some(n) => self
+                .chrome_copy(site)
+                .and_then(|k| k.fitted.get(n)?.as_ref())
+                .map_or(0, |s| load(&s.item)),
+        }
     }
 
     /// The chrome a body takes: from base BODY and COOL, so chrome that raises them

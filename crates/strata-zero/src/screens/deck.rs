@@ -1295,8 +1295,8 @@ impl Deck {
                     continue;
                 }
             }
-            // ATTRIBUTES takes the arrows, `h j k l`, space, and esc while its picker is
-            // open; the rest are the deck's.
+            // ATTRIBUTES takes the arrows, `h j k l`, space, `x` on the ledger, and esc
+            // while its picker is open; the rest are the deck's.
             if self.tab == Tab::Attributes {
                 self.sheet.reselect(st);
                 if self.sheet.key(st, k.code) {
