@@ -617,6 +617,7 @@ impl Deck {
         d.set_tab(Tab::Attributes, st);
         d.sheet.opened(st.tick);
         d.sheet.state.pane = crate::screens::sheet::SheetPane::Ledger;
+        d.sheet.state.row = crate::screens::sheet::LedgerRow::default();
         d.sheet.reselect(st);
         d
     }
@@ -1804,9 +1805,15 @@ mod tests {
         use crate::screens::sheet::SheetPane;
         let mut st = crate::clinic::testutil::seated();
         st.deck_tab = Tab::Kit;
+        st.deck_sheet.row = crate::screens::sheet::LedgerRow::Site(game::Site::Legs);
         let mut d = Deck::chair(&st);
         assert_eq!(d.tab, Tab::Attributes);
         assert_eq!(d.sheet.state.pane, SheetPane::Ledger);
+        // On the first chrome row, whatever row the ledger was left on.
+        assert_eq!(
+            d.sheet.state.row,
+            crate::screens::sheet::LedgerRow::default()
+        );
         assert!(matches!(
             d.update(&mut st, &[key(KeyCode::Esc)]),
             ScreenCmd::Pop { .. }

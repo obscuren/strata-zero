@@ -229,7 +229,13 @@ impl<'a> Builder<'a> {
                 {
                     match self.free_rim(at, &used, &ok, c.entrance) {
                         Some(p) => p,
-                        None => continue,
+                        None => {
+                            debug_assert!(
+                                false,
+                                "a clinic door at {door:?} has no free frame tile"
+                            );
+                            continue;
+                        }
                     }
                 }
                 _ => at,

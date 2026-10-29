@@ -590,6 +590,50 @@ mod tests {
     }
 
     #[test]
+    fn every_doc_stands_by_the_chair() {
+        let mut laundromats = 0;
+        for seed in [1u64, 2, 3, 8, 11, 21] {
+            let c = Generator::run(GenParams {
+                seed,
+                size: SizePreset::Medium,
+                districts: 7,
+                ..Default::default()
+            })
+            .unwrap();
+            let w = World::seed(
+                &c,
+                &sim::People::load().unwrap(),
+                &sim::SimParams::default(),
+                22 * 60,
+                0,
+            );
+            for b in c
+                .buildings
+                .iter()
+                .filter(|b| b.kind == BuildingKind::Clinic)
+            {
+                let plan = FloorPlan::new(&c, b.id).unwrap();
+                let front = plan.clinic.unwrap().front;
+                laundromats += usize::from(front == citygen::Front::Laundromat);
+                let level = plan.work_floors()[0];
+                let floor = citygen::generate_floor(&c, &plan, level);
+                let spot = floor
+                    .stations
+                    .iter()
+                    .find(|s| s.role == citygen::Role::Surgery)
+                    .unwrap()
+                    .pos;
+                let placed = Placement::new(&plan, &floor, &w, &Homes::default());
+                let who = placed.person_at(spot).unwrap_or_else(|| {
+                    panic!("seed {seed} {:?} {front:?}: nobody on the doc's spot", b.id)
+                });
+                assert_eq!(w.people()[who.0 as usize].profession, "ripperdoc");
+            }
+        }
+        assert!(laundromats > 0, "a cellar clinic among them");
+    }
+
+    #[test]
     fn a_shut_clinic_turns_you_away() {
         let (mut st, b, door, out) = crate::clinic::testutil::outside(crate::clinic::testutil::DAY);
         let refused = enter(&mut st, b, (StratumKind::Street, door));

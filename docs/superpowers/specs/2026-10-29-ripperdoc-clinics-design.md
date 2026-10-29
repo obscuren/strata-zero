@@ -303,7 +303,7 @@ else in reach (`interact::gather`):
   replaces the window with the deck, opened on ATTRIBUTES with the ledger focused on its
   first chrome row. The doc's line goes to the log (`Doc Lou: “…”`).
 - With no doc at work in the building (they left at closing), the row is disabled with
-  the tail ` · the doc is out`.
+  the tail ` · the doc is out`, and the window has no subtitle.
 
 `AppState::chair: Option<Chair>`, where `Chair { building, level, doc: PersonId }`.
 It holds only while the player is on that floor and that doc is working in the
@@ -369,8 +369,9 @@ into
 
 (`x again to pull` and the price amber, the piece's name TEXT, the rest dim; the
 "comes out with" part only when something is fitted, naming the first fitted piece, or
-`with what's fitted in it` for more than one). A second `x` on the same row pulls and
-pays; `esc` disarms (and does not close the deck); any other key disarms and then does
+`with what's fitted in it` for more than one). Short of the fee, the price is magenta and
+`· you have ¤50` follows it (the fitted part drops, for room). A second `x` on the same
+row pulls and pays; `esc` disarms (and does not close the deck); any other key disarms and then does
 what it does. With free chrome, `x` pulls at once, as today.
 
 ### Anywhere else
@@ -488,7 +489,9 @@ From the builder check and the build:
 - **The chair is checked when asked**, not cleared on every move: on the wrong floor or
   with the doc gone it simply doesn't hold.
 - **Glyph `╦`** for the chair, in cyan, as in the mocks.
-- **One doc per clinic**, no front staff.
+- **One doc per clinic**, no front staff. The doc works on the chair's floor (the
+  laundromat's cellar), so they stand on `d`.
+- **The chair opens the ledger on its first chrome row**, whatever row it was left on.
 - **Fees round to ¤10 with a floor of ¤10**; what is fitted in a moved piece rides free.
 
 ## Follow-ups

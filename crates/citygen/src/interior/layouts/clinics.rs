@@ -263,7 +263,8 @@ impl Builder<'_> {
     }
 
     /// The floor's rooms: each walled region inside the frame, the chair's the surgery
-    /// (listed first), the one by the front door the waiting room, the rest back rooms;
+    /// (listed first, then the locked ones), the one by the front door the waiting
+    /// room, the rest back rooms;
     /// a room behind a `locked` door is private, that door its own.
     fn clinic_rooms(&mut self, locked: &[Pos]) {
         let inner = self.inner();
@@ -331,7 +332,9 @@ impl Builder<'_> {
                 number: 0,
             });
         }
-        rooms.sort_by_key(|r| r.kind != RoomKind::Surgery);
+        // The surgery first, then the locked rooms: `room_at` takes the first rect that
+        // holds a tile, and the front room's wraps around both.
+        rooms.sort_by_key(|r| (r.kind != RoomKind::Surgery, !r.private));
         self.rooms.extend(rooms);
     }
 }

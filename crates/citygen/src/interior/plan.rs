@@ -328,6 +328,10 @@ impl FloorPlan {
     /// The floors people work on: the office floors of a tower, the one floor of
     /// everything else.
     pub fn work_floors(&self) -> Vec<i32> {
+        // A clinic's doc works by the chair: the laundromat's in its cellar.
+        if let Some(c) = self.clinic {
+            return vec![1 - c.front.floors() as i32];
+        }
         let offices: Vec<i32> = self
             .levels()
             .filter(|l| matches!(self.floor_type(*l), FloorType::Corridor | FloorType::Suite))

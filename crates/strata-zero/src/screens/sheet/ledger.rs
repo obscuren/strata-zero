@@ -430,12 +430,19 @@ impl Sheet {
             let name = c
                 .item(held)
                 .map_or_else(|| held.to_string(), |i| i.name.clone());
+            let (fee, credits) = (take_out_fee(c, held), st.character.credits);
             let mut spans = vec![
                 Span::styled("x again to pull ", amber),
                 Span::styled(name, Style::default().fg(TEXT)),
                 Span::styled(" for ", amber),
-                Span::styled(format!("¤{}", take_out_fee(c, held)), amber),
+                Span::styled(format!("¤{fee}"), amber),
             ];
+            // A pull you can't pay says so, as FITS does.
+            if fee > credits {
+                let magenta = Style::default().fg(MAGENTA);
+                spans[3] = Span::styled(format!("¤{fee}"), magenta);
+                spans.push(Span::styled(format!(" · you have ¤{credits}"), magenta));
+            }
             let fitted: Vec<&ItemId> = match v.at {
                 (site, None) => st
                     .character
@@ -444,7 +451,9 @@ impl Sheet {
                     .unwrap_or_default(),
                 (_, Some(_)) => Vec::new(),
             };
+            // What rides out with it, when it can go at all.
             match fitted.as_slice() {
+                _ if fee > credits => {}
                 [] => {}
                 [one] => spans.push(Span::styled(
                     format!(
@@ -1464,6 +1473,19 @@ mod tests {
         d.update(&mut st, &[key(KeyCode::Char('e'))]);
         assert_eq!(d.sheet.pulling, None);
         assert_eq!(st.character.credits, 1000);
+        // Short of the fee, the ask says so in magenta, and the second x is refused.
+        let (mut st, mut d) = in_chair(50, arm);
+        press(&mut d, &mut st, &[KeyCode::Char('x')]);
+        assert_eq!(
+            hint_line(&d, &mut st),
+            "x again to pull Piston arm for ¤110 · you have ¤50 · esc keep it"
+        );
+        let buf = screen(&d, &mut st, (100, 30));
+        let x = col_of(&buf, 28, 2, "¤110").unwrap();
+        assert_eq!(buf[(x, 28)].fg, MAGENTA);
+        press(&mut d, &mut st, &[KeyCode::Char('x')]);
+        assert!(st.character.chrome_at(Site::LeftArm).is_some());
+        assert_eq!(last(&st), Some(crate::actions::fee_line(110, 50).as_str()));
     }
 
     #[test]

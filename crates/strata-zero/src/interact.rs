@@ -234,7 +234,7 @@ pub fn gather(
         let doc = crate::clinic::doc_at_work(st, building);
         let (subtitle, said, row) = match doc {
             Some(id) => (
-                crate::clinic::doc_name(st, id),
+                Some(crate::clinic::doc_name(st, id)),
                 vec![format!("“{}”", crate::clinic::doc_line(st, id))],
                 Choice::on(
                     'i',
@@ -245,7 +245,7 @@ pub fn gather(
                 ),
             ),
             None => (
-                "the doc is out".to_string(),
+                None,
                 Vec::new(),
                 Choice {
                     thing: Some(("Sit in the chair".to_string(), AMBER)),
@@ -259,7 +259,7 @@ pub fn gather(
             &mut here,
             chair,
             Some(header("Operating chair", mark_tile(st, &map, chair))),
-            Some(subtitle),
+            subtitle,
             vec![row],
         );
         // What the doc says, wrapped under their name.
@@ -675,7 +675,7 @@ mod tests {
         let sit = s.choices.iter().find(|c| c.key == 'i').unwrap();
         assert!(!sit.enabled);
         assert_eq!(sit.tail, " · the doc is out");
-        assert_eq!(s.subtitle.as_deref(), Some("the doc is out"));
+        assert_eq!(s.subtitle, None, "the row says it once");
     }
 
     #[test]

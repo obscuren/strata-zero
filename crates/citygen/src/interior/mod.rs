@@ -822,6 +822,11 @@ mod tests {
                 turns.insert(cp.turn.quarters);
                 assert_eq!(plan.lowest, -(cp.front.floors() as i32 - 1));
                 let chair_level = if cp.front == Front::Laundromat { -1 } else { 0 };
+                assert_eq!(
+                    plan.work_floors(),
+                    vec![chair_level],
+                    "the doc works by the chair"
+                );
                 for level in plan.levels() {
                     let f = generate_floor(&c, &plan, level);
                     let what = format!("seed {seed} {:?} {:?} L{level}", b.id, cp.front);
