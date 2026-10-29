@@ -193,11 +193,8 @@ fn implant_art_ok(art: &ImplantArt) -> Result<(), String> {
     if art.colours.contains_key(&'.') {
         return Err("`.` is an empty pixel and takes no colour".into());
     }
-    let pixels = art.rows.iter().flat_map(|r| r.chars());
-    if let Some(c) = pixels
-        .into_iter()
-        .find(|c| *c != '.' && !art.colours.contains_key(c))
-    {
+    let mut pixels = art.rows.iter().flat_map(|r| r.chars());
+    if let Some(c) = pixels.find(|c| *c != '.' && !art.colours.contains_key(c)) {
         return Err(format!("pixel `{c}` has no colour"));
     }
     Ok(())
@@ -941,12 +938,12 @@ impl Content {
         self.skills.iter().find(|s| &s.id == id)
     }
 
-    /// A skill's card art.
     /// A piece of chrome's card art.
     pub fn implant_art(&self, id: &ItemId) -> Option<&ImplantArt> {
         self.implant_art.get(id)
     }
 
+    /// A skill's card art.
     pub fn skill_art(&self, id: &SkillId) -> Option<&SkillArt> {
         self.skill_art.get(id)
     }
@@ -2425,8 +2422,8 @@ mod tests {
         }
         assert_eq!(n, 31);
         let arm = c.implant_art(&ItemId::new("piston_arm")).unwrap();
-        let elbow = arm.rows[3].chars().filter_map(|ch| arm.colours.get(&ch));
-        assert!(elbow.into_iter().any(|&c| c == (0, 229, 255)));
+        let mut elbow = arm.rows[3].chars().filter_map(|ch| arm.colours.get(&ch));
+        assert!(elbow.any(|&c| c == (0, 229, 255)));
     }
 
     #[test]
