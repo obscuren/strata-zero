@@ -54,7 +54,7 @@ Each is pinned by a test in the task that owns it.
 - Modify: `flavor/content.ron` (grenades' `harm`)
 
 **Interfaces:**
-- Produces: `game::Harm { Kinetic, Thermal, Shock, Emp, Toxin, Feedback }` (Copy, Eq, Ord, Hash, serde) with `ALL: [Harm; 6]`, `label()` (`kinetic`…`feedback`), `name()` (`KINETIC`…), `short()` (`KIN` `THM` `SHK` `EMP` `TOX` `FBK`); `Perk::Armor(i8)`, `Perk::Move(i8)`, `Perk::Resist(Harm, i8)`, `Perk::Throw(i8)`; `Blast.harm: Harm` (`#[serde(default)]`, `Default` = Kinetic); `game::resisted(amount: u32, resist: i32) -> u32`; `Character::armor(&self, c) -> i32`, `move_bonus(&self, c) -> i32`, `throw_bonus(&self, c) -> i32`, `resist(&self, c, h: Harm) -> i32` (perks only for now; Task 2 adds the EMP cost).
+- Produces: `game::Harm { Kinetic, Thermal, Shock, Emp, Toxin, Feedback }` (Copy, Eq, Ord, Hash, serde) with `ALL: [Harm; 6]`, `label()` (`kinetic`…`feedback`), `name()` (`KINETIC`…), `short()` (`KIN` `THM` `SHK` `EMP` `TOX` `FBK`); `Perk::Armor(i8)`, `Perk::Move(i8)`, `Perk::Resist(Harm, i8)`, `Perk::Throw(i8)`; `Blast.harm: Harm` (`#[serde(default)]`, `Default` = Kinetic); `game::resisted(amount: u32, resist: i32) -> u32` and `game::resisted_stun(stun: u32, resist: i32) -> u32` (the same sum, no floor of 1); `Character::armor(&self, c) -> i32`, `move_bonus(&self, c) -> i32`, `throw_bonus(&self, c) -> i32`, `resist(&self, c, h: Harm) -> i32` (perks only for now; Task 2 adds the EMP cost).
 
 - [ ] **Step 1: Write the failing tests**
   - `run.rs` `resisted_rounds_and_clamps`: `resisted(10, 0) == 10`; `resisted(10, 15) == 9` (8.5 rounds to 9); `resisted(4, 50) == 2`; `resisted(3, -18) == 4`; `resisted(5, 95) == 1` (clamped to 90, floor 1); `resisted(0, -50) == 0`; `resisted(2, -300) == 4` (clamped to −100).
@@ -80,6 +80,7 @@ Each is pinned by a test in the task that owns it.
 - Modify: `flavor/content.ron` (the seven pieces)
 - Modify: every test and runner that used `Slot::Neural`/`Slot::Arms` or wore cyberware in a slot (game: `character.rs` 398, 408, 1302, 1603, 1840-1843; `action.rs` 927; `content.rs` 1306, 2266; strata-zero: `combat.rs` 1046/1074/1084, `actions.rs` 386/452-464, `screens/explore.rs` 3725/3745, `screens/kit.rs` and `screens/deck.rs` tests that index rack tiles: 6 → Primary is now 4, 8 → Deck is now 6, 1 → Eyes stays 1; the 3×3 navigation tests). `grep -rn "Slot::Neural\|Slot::Arms\|Cyberware" crates` must come back clean of the old uses.
 - Modify: `crates/strata-zero/src/blast.rs` (`you_are_chrome` reads installed chrome)
+- Modify: `crates/game/src/character.rs` `from_build`, `combat_runner` (kits and runners install chrome: without a slot, kit chrome would otherwise fall into the pack)
 
 **Interfaces:**
 - Consumes: Task 1's `Harm`, `Perk`.
@@ -100,21 +101,22 @@ Each is pinned by a test in the task that owns it.
   - `content.rs` `chrome_is_validated`: each is `Err(ChromeInvalid { .. })`: a cyberware item with no implant; a cyberware item with a slot; an implant on an Armor item; load 0; load 6; a socket piece with sockets of its own.
   - `character.rs` `installed_chrome_counts`: a character with `piston_arm` at LeftArm (a copy, `arc_hand` copy fitted at socket 0) and `neural_port` at Neural: `installed()` lists `(Neural, None, neural_port)`, `(LeftArm, None, piston_arm)`, `(LeftArm, Some(0), arc_hand)`; `pieces() == 3`; `load() == 5`; `stat(Body)` is base + 1; `abilities` holds ping, static, shove, jolt; `resist(Shock) == 10`; `resist(Emp) == -6`; `weight` includes 0.1 + 5.0 + 2.5.
   - `character.rs` `load_max_reads_base_stats`: BODY 4 COOL 5 → 24; with the Piston arm in, still 24.
-  - `blast.rs` the existing EMP test (`net.rs` 2906-2921, combat runner stunned 2) still passes with the runner's chrome installed (Task 3 moves the runner; here the test installs directly).
+  - `blast.rs` the existing EMP test (`net.rs` 2906-2921, combat runner stunned 2) still passes with the runner's chrome installed.
+  - `kits_install_chrome`: Vex from the template has `nightglass_optics` at Eyes, none in the pack; a build kit with two `grip_arm` installs one at LeftArm and one at RightArm; a kit piece over the budget or with its site taken is packed.
+  - `runners`: `combat_runner` has neural_port at Neural, adrenal_pump at Organs, target_lens at Eyes, nightglass_optics in the pack; `debug_runner` has nightglass_optics at Eyes and no cyberware in its pack.
 
 - [ ] **Step 2: Run them to see them fail** — compile errors.
 
-- [ ] **Step 3: Implement.** Types beside `Slot`/`SocketKind`; `Implant` validation in `validate` (grants and perks on an implant item are allowed: relax `PerkWithoutSlot` to "a slot or an implant"). The character fields mirror `equipment`/`worn` (`chrome_copy` follows `worn_copy`: counts only while `chrome` holds the site). Content: the seven pieces lose `slot`, gain `implant`, the two arms gain `sockets: [Hand, Forearm]`, `arc_hand` gains `perks: [Resist(Shock, 10)]`. Fix every old use listed above so the workspace builds; tests that wore a piece in `Slot::Neural` set `ch.chrome.insert(Site::Neural, …)` instead.
+- [ ] **Step 3: Implement.** Types beside `Slot`/`SocketKind`; `Implant` validation in `validate` (grants and perks on an implant item are allowed: relax `PerkWithoutSlot` to "a slot or an implant"). The character fields mirror `equipment`/`worn` (`chrome_copy` follows `worn_copy`: counts only while `chrome` holds the site). Content: the seven pieces lose `slot`, gain `implant`, the two arms gain `sockets: [Hand, Forearm]`, `arc_hand` gains `perks: [Resist(Shock, 10)]`. `from_build`: after the slot step, kit cyberware whose site (first free of its kind, L before R) is free and whose load fits the budget is installed (a copy when per copy); anything else is packed. `combat_runner` installs its three pieces (the optics it had at Eyes go to the pack); `debug_runner` gets nothing new. Fix every old use listed above so the workspace builds; tests that wore a piece in `Slot::Neural` set `ch.chrome.insert(Site::Neural, …)` instead.
 
 - [ ] **Step 4: Run** `cargo test --workspace --target-dir target/smoke` — all pass.
 
 - [ ] **Step 5: Commit** — `feat(game): chrome lives in body sites; NEURAL and ARMS leave the rack`.
 
-### Task 3: Install, pull and fit; kits and runners
+### Task 3: Install, pull and fit
 
 **Files:**
 - Modify: `crates/game/src/action.rs` (`Action::Install`, `InstallCopy`, `Pull`; `Fit`; `Equip`)
-- Modify: `crates/game/src/character.rs` (`from_build`, `combat_runner`, `debug_runner`)
 - Modify: `crates/strata-zero/src/actions.rs` (`handles_items`, `refresh_sight`)
 - Modify: `crates/strata-zero/src/screens/deck.rs` (pack verbs offer no Equip on chrome; `item_card_of`'s kind line)
 
@@ -128,13 +130,11 @@ Each is pinned by a test in the task that owns it.
   - `a_pulled_limb_keeps_its_pieces`: Piston arm with Arc hand fitted, Pull, InstallCopy at RightArm → `installed()` has the arc hand under RightArm, `load()` unchanged.
   - `fit_takes_socket_chrome`: Fit `{ host: Host::Site(LeftArm), socket: 0, piece: <arc_hand copy> }` works; socket 1 (Forearm) refuses it (`does not fit a forearm socket`); over budget refuses.
   - `equip_refuses_chrome`: `Equip(neural_port)` is `Err("chrome is installed from STATS")`.
-  - `kits_install_chrome`: Vex from the template has `nightglass_optics` at Eyes, none in the pack; a build kit with two `grip_arm` installs one at LeftArm and one at RightArm.
-  - `runners`: `combat_runner` has neural_port at Neural, adrenal_pump at Organs, target_lens at Eyes, nightglass_optics in the pack, and 2 `choke_can` (after Task 4; add that assertion in Task 4); `debug_runner` has nightglass_optics at Eyes and no cyberware in its pack.
   - `strata-zero` `actions.rs` `chrome_is_locked_jacked_in`: Install/Pull refused with `JACKED_IN` while jacked in.
 
 - [ ] **Step 2: Run them to see them fail.**
 
-- [ ] **Step 3: Implement.** Install mirrors Equip/EquipCopy (take from the pack, then place; every refusal before the first change); Pull mirrors Unequip and clamps HP. `Fit`'s piece check accepts `implant.fits == Fits::Socket(kind)`; with `Host::Site` it also checks the budget. `from_build`: after the slot step, cyberware whose site (first free of its kind, L before R) is free and whose load fits is installed (a copy when per copy). Runners per the spec's "Kits and runners". In strata-zero the three new actions join `handles_items` and `refresh_sight`. The pack's verbs: no Equip on cyberware. `item_card_of`'s kind line for chrome: `cyberware · arm · load 3` (`Fits::label`).
+- [ ] **Step 3: Implement.** Install mirrors Equip/EquipCopy (take from the pack, then place; every refusal before the first change); Pull mirrors Unequip and clamps HP. `Fit`'s piece check accepts `implant.fits == Fits::Socket(kind)`; with `Host::Site` it also checks the budget. In strata-zero the three new actions join `handles_items` and `refresh_sight`. The pack's verbs: no Equip on cyberware. `item_card_of`'s kind line for chrome: `cyberware · arm · load 3` (`Fits::label`).
 
 - [ ] **Step 4: Run** `cargo test --workspace --target-dir target/smoke` — all pass.
 
@@ -146,7 +146,7 @@ Each is pinned by a test in the task that owns it.
 - Modify: `flavor/content.ron` (24 new cyberware items, 4 abilities, `choke_can`)
 - Modify: `crates/game/src/model.rs` (`Fx::Haze`, `is_blast`)
 - Modify: `crates/game/src/content.rs` (tests)
-- Modify: `crates/game/src/character.rs` (combat runner packs 2 `choke_can`)
+- Modify: `crates/game/src/character.rs` (combat runner packs 2 `choke_can`; the runners test asserts them)
 
 **Interfaces:**
 - Consumes: Tasks 1-3.
@@ -227,7 +227,7 @@ Each is pinned by a test in the task that owns it.
 - Modify: `crates/game/src/content.rs`, `flavor/content.ron` (`number_blurbs`)
 
 **Interfaces:**
-- Consumes: Tasks 1-3.
+- Consumes: Tasks 1-3; Task 6's `net::you_move(st: &AppState, place: Place) -> u8` for MOV (with no body, `BASE_MOVE + move_bonus`, at least 1).
 - Produces:
   - `game::Num { Stat(Stat), Hp, Focus, Armor, Sight, Carry, Move, Resist(Harm) }`, `Num::label()` (`BOD`… `HP` `FOC` `ARM` `SGT` `CAR` `MOV` `KIN`…), `Num::name()` (`BODY` … `HP`, `FOCUS`, `ARMOUR`, `SIGHT`, `CARRY`, `MOVE`, `KINETIC` …).
   - `game::Contrib { Gear(ItemId), Chrome(ItemId), Hardware(ItemId), Talents, Pieces(usize) }` (not `From`: that name is the prelude's) and `Character::sources(&self, c, n: Num) -> Vec<(Contrib, i32)>` (every non-zero contribution, gear in slot order, chrome in `installed()` order, talents summed into one, EMP's `Pieces(pieces)` at `-2 × pieces`).
@@ -239,7 +239,7 @@ Each is pinned by a test in the task that owns it.
   - `content.rs` `number_blurbs_cover_the_twelve`, and a missing one is an error.
   - `sheet.rs` `left_pane_draws_its_tiles` at 100×30 (the deck on `2`): the body text holds `STATS`, `2 points` (with 2 points unspent), `┌ BOD`, `SECONDARY`, `from gear & chrome`, `┌ ARM`, `RESISTANCES`, `┌ EMP`; nothing in the left pane's columns past body.x + 44.
   - `sheet.rs` `keys_walk_the_tiles`: from BOD, `→`×4 reaches NET, `→` again crosses to the ledger; `←` comes back to NET; `↓` from REF lands on FOC (column kept), `↓` again on THM; `↓` from NET (column 4) lands on CAR; `space` on BOD with points buys one (stat up, points down); `space` on ARM changes nothing.
-  - `sheet.rs` `readout_names_sources`: on BOD with the Piston arm in, the readout holds `BODY 4 · 5 with chrome`, `next 3 pts` (points unspent, cost 3), `feeds`, `chrome +1 Piston arm`; on EMP with nine pieces, `chrome -18 · nine pieces`; on SGT, the value equals the map's radius where you stand.
+  - `sheet.rs` `readout_names_sources`: on BOD with the Piston arm in, the readout holds `BODY 4 · 5 with chrome`, `next N pts` with N from `Build::from_character(..).stat_cost(Body)` (points unspent), `feeds`, `chrome +1 Piston arm`; on EMP with nine pieces, `chrome -18 · nine pieces`; on SGT, the value equals the map's radius where you stand.
   - `deck.rs` the STATS tab reopens where it was left (`st.deck_sheet` kept across a close and reopen).
 
 - [ ] **Step 2: Run to see them fail.**
