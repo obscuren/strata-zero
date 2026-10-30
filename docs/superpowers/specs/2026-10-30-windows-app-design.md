@@ -243,6 +243,32 @@ calls (Jeffrey can overturn any of them):
 Also from the review: the Mac app now carries Fira Code too, so `OFL.txt` goes into the
 `.app`'s Resources as well as into both archives.
 
+After the build, a second review and the PR's CI found, and the branch fixed:
+
+- The exe linked the C runtime as a DLL (`VCRUNTIME140.dll`), which a fresh Windows
+  lacks; it is now built in (`+crt-static`, as dist builds the terminal game), and
+  `scripts/windows-app.sh` fails if the exe still imports it.
+- Windows PowerShell's `Compress-Archive` wrote `\` into the zip's paths; Windows' own
+  `tar` writes the zip instead.
+- `install.sh` built an icon cache in the player's folder, which can hide icons other
+  programs add later; it touches the folder instead.
+- On Linux, fallbacks are also asked of fontconfig, for distributions that name or
+  place fonts differently; Noto Sans Symbols joined the list (⌗).
+- winit needs `libxkbcommon-x11` for an X11 window: every desktop has it, the CI runner
+  didn't.
+- GitHub retires the `macos-14` runner, dist's default for Apple Silicon, on
+  2026-11-02; a brownout cancelled the first release dry run, and that build now runs
+  on `macos-15`.
+
+Seen working on GitHub's runners: the real `Strata Zero.exe` on Windows (Direct3D 12
+on WARP) and `strata-zero` on Linux (Vulkan on lavapipe, under Xvfb), each writing its
+live screenshot; every screen through Soft and CRT; and the whole release, the three app
+jobs included, built on the PR with dist's upload mode.
+
+Not done here: fontdue reads every glyph of a fallback face when it loads it, so the
+first katakana spark costs a few hundred MB for a CJK face on Windows and Linux (the Mac
+already pays this with Arial Unicode). Worth fixing before a Steam Deck build.
+
 ## Left to the builder
 
 The exact fallback lists (driven by the coverage test), the PC icon's margins, how the
