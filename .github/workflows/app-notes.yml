@@ -1,11 +1,11 @@
-# Puts the Mac app at the top of the release notes once dist has published the release.
-# dist's notes list only the files dist builds, so the DMG from build-mac-app.yml would
-# otherwise go unmentioned. The work is scripts/mac-app-notes.sh, which can also be run
-# by hand for an older release.
+# Puts the desktop apps (Mac, Windows, Linux) at the top of the release notes once dist
+# has published the release. dist's notes list only the files dist builds, so the apps
+# from the build-*-app.yml jobs would otherwise go unmentioned. The work is
+# scripts/app-notes.sh, which can also be run by hand for an older release.
 #
 # dist's release.yml calls this after announcing (`post-announce-jobs` in
 # dist-workspace.toml); after changing that file, run `dist generate`.
-name: Mac app notes
+name: App notes
 
 on:
   workflow_call:
@@ -28,5 +28,5 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Link the DMG in the release notes
-        run: scripts/mac-app-notes.sh "$TAG"
+      - name: Link the apps in the release notes
+        run: scripts/app-notes.sh "$TAG"

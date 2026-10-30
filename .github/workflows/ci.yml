@@ -1,7 +1,10 @@
 # Checks every push to main and every pull request: formatting once; then clippy and the
 # tests on macOS, Linux and Windows, for the terminal build and for the window build
-# (the window code only compiles with its feature); and the Mac app built unsigned, so a
-# release's packaging can't break unnoticed.
+# (the window code only compiles with its feature); and the three desktop apps built as
+# a release builds them, so packaging can't break unnoticed. The Windows and Linux app
+# jobs also draw screens through the GPU (Direct3D 12 on WARP, Vulkan on lavapipe: both
+# software renderers) and run the app itself for a screenshot of its window, all kept as
+# artifacts: how those builds are seen without a Windows or Linux PC.
 name: CI
 
 on:
@@ -14,6 +17,11 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # The screens the app jobs draw: the title, a sheet, the rig, the skill cards, a glow
+  # and the street terminal.
+  SHOTS: >-
+    window::tests::window_shots shots::attributes_sheet shots::the_rig_at_home
+    shots::skill_cards shots::combat_bloom_mid shots::terminal_on_the_street
 
 jobs:
   fmt:
@@ -57,3 +65,88 @@ jobs:
         with:
           key: mac-app
       - run: scripts/macos-app.sh --dmg
+
+  windows-app:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: bash
+    env:
+      OUT: target/smoke/shots
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-app
+          workspaces: ". -> target/smoke"
+      - run: cargo clippy -p strata-zero --all-targets --features app --target-dir target/smoke -- -D warnings
+      - run: scripts/windows-app.sh
+      - name: Screens through Direct3D 12
+        run: |
+          mkdir -p "$OUT"
+          SHOT_DIR="$PWD/$OUT" SHOT_FX=1 cargo test -p strata-zero --features window \
+            --target-dir target/smoke -- --ignored $SHOTS
+      - name: The app itself
+        run: |
+          STRATA_WINDOW_SHOT="$PWD/$OUT/live.png" \
+            timeout 30 "target/smoke/windows/Strata Zero/Strata Zero.exe" || true
+          test -s "$OUT/live.png"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-app
+          path: target/smoke/windows/strata-zero-windows-app.zip
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: windows-shots
+          path: target/smoke/shots
+
+  linux-app:
+    runs-on: ubuntu-22.04
+    env:
+      OUT: target/smoke/shots
+      # The GPU tests, the effects and the app draw through Vulkan, on Mesa's lavapipe.
+      WGPU_BACKEND: vulkan
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      # libxkbcommon-x11 is what winit loads for an X11 window: every Linux desktop has
+      # it, the runner doesn't.
+      - name: Vulkan on the CPU, a virtual display, the common desktop fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers xvfb libxkbcommon-x11-0 \
+            fonts-dejavu-core fonts-noto-core fonts-noto-cjk
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-app
+          workspaces: ". -> target/smoke"
+      - run: cargo clippy -p strata-zero --all-targets --features app --target-dir target/smoke -- -D warnings
+      - name: The window's tests, every glyph checked
+        run: |
+          STRATA_FONT_CHECK=1 cargo test -p strata-zero --features window \
+            --target-dir target/smoke window::
+      - run: scripts/linux-app.sh
+      - name: Screens through Vulkan
+        run: |
+          mkdir -p "$OUT"
+          SHOT_DIR="$PWD/$OUT" SHOT_FX=1 cargo test -p strata-zero --features window \
+            --target-dir target/smoke -- --ignored $SHOTS
+      - name: The app itself, on a virtual display
+        run: |
+          STRATA_WINDOW_SHOT="$PWD/$OUT/live.png" \
+            xvfb-run -a timeout 30 target/smoke/linux/strata-zero/strata-zero || true
+          test -s "$OUT/live.png"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-app
+          path: target/smoke/linux/strata-zero-linux-app.tar.gz
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: linux-shots
+          path: target/smoke/shots

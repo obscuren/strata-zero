@@ -17,7 +17,12 @@ install-path = "CARGO_HOME"
 hosting = "github"
 # Whether to install an updater program
 install-updater = false
-# The Mac app, signed and notarized (.github/workflows/build-mac-app.yml), in every release
-global-artifacts-jobs = ["./build-mac-app"]
-# dist's notes list only its own files: put the Mac app on top (.github/workflows/mac-app-notes.yml)
-post-announce-jobs = ["./mac-app-notes"]
+# The desktop apps in every release (.github/workflows/build-*-app.yml): the Mac app,
+# signed and notarized; the Windows app; the Linux app
+global-artifacts-jobs = ["./build-mac-app", "./build-windows-app", "./build-linux-app"]
+# dist's notes list only its own files: put the apps on top (.github/workflows/app-notes.yml)
+post-announce-jobs = ["./app-notes"]
+
+# GitHub retires the macos-14 runner (dist's default for Apple Silicon) on 2026-11-02
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"

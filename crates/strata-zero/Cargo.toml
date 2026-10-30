@@ -31,8 +31,19 @@ wgpu = { version = "30", optional = true }
 pollster = { version = "1", optional = true }
 bytemuck = { version = "1", optional = true }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", optional = true, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+
+[build-dependencies]
+# The Windows app's icon and version information (build.rs).
+winresource = { version = "0.1", optional = true }
+
 [features]
 # The game in its own window instead of a terminal: `strata --window`.
 window = ["dep:winit", "dep:softbuffer", "dep:fontdue", "dep:png", "dep:wgpu", "dep:pollster", "dep:bytemuck"]
+# The desktop app (Strata Zero.app, Strata Zero.exe, the Linux strata-zero): always in
+# the window, with its files in the player's app folder. On Windows it is a GUI program
+# with an icon, showing fatal errors in a message box.
+app = ["window", "dep:winresource", "dep:windows-sys"]
 
 [dev-dependencies]

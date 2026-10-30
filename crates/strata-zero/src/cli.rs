@@ -106,7 +106,7 @@ pub fn run() -> Result<()> {
     let dev = dev_asked(cli.dev, std::env::var_os("STRATA_DEV").as_deref());
     match cli.cmd {
         #[cfg(feature = "window")]
-        None if cli.window || crate::window::in_bundle() => {
+        None if cli.window || crate::window::IS_APP => {
             let st = start_state(dev);
             crate::window::run(Box::new(crate::screens::initial(&st)), st)
         }

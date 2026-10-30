@@ -4,9 +4,12 @@
 //! the GPU with the screen effects chosen in Settings.
 
 pub mod backend;
+#[cfg(all(windows, feature = "app"))]
+pub mod fatal;
 pub mod font;
 pub mod gpu;
 pub mod keys;
+pub mod platform;
 pub mod png;
 pub mod present;
 pub mod raster;
@@ -18,9 +21,10 @@ use backend::{Damage, PixelBackend};
 use crossterm::event::KeyEvent;
 use font::Fonts;
 use keys::{Input, Shortcut};
+use platform::Platform;
 use present::{Presenter, Shown};
 use ratatui::Terminal;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
@@ -29,7 +33,7 @@ use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::ModifiersState;
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
-use winit::window::{Fullscreen, Window, WindowId};
+use winit::window::{Fullscreen, Window, WindowAttributes, WindowId};
 
 /// Text height in logical pixels at zoom 1.
 const TEXT_PX: f32 = 15.0;
@@ -41,8 +45,13 @@ const SHOT_FRAME: u64 = 45;
 const ZOOM_STEP: f32 = 1.1;
 const ZOOM_RANGE: (f32, f32) = (0.6, 2.5);
 
-/// Runs the game in a window until it quits. Started from inside an `.app`, the working
-/// folder becomes `app_support_dir()` first, so `cities/` is saved there.
+/// Whether this is the desktop app (the `app` feature: the Mac `.app`, `Strata Zero.exe`,
+/// the Linux `strata-zero`): it always opens the window, and keeps its files in the
+/// player's app folder.
+pub const IS_APP: bool = cfg!(feature = "app");
+
+/// Runs the game in a window until it quits. The desktop app first makes its app folder
+/// (`Platform::app_dir`) the working folder, so `cities/` is saved there.
 pub fn run(screen: Box<dyn Screen>, mut st: AppState) -> Result<()> {
     if let Some(fx) = std::env::var("STRATA_SCREEN_FX")
         .ok()
@@ -50,12 +59,14 @@ pub fn run(screen: Box<dyn Screen>, mut st: AppState) -> Result<()> {
     {
         st.screen_fx = fx;
     }
-    if in_bundle() {
-        let dir = app_support_dir();
+    if IS_APP {
+        let dir = Platform::NATIVE
+            .app_dir(&platform::process_env)
+            .context("can't tell where to keep the game's files: set APPDATA (Windows) or HOME")?;
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-        std::env::set_current_dir(&dir)?;
+        std::env::set_current_dir(&dir).with_context(|| format!("opening {}", dir.display()))?;
     }
-    let fonts = Fonts::load()?;
+    let fonts = Fonts::load();
     let event_loop = EventLoop::new()?;
     let mut app = App {
         runner: Runner::new(screen, st),
@@ -75,21 +86,6 @@ pub fn run(screen: Box<dyn Screen>, mut st: AppState) -> Result<()> {
     };
     event_loop.run_app(&mut app)?;
     app.error.map_or(Ok(()), Err)
-}
-
-/// Whether this executable sits inside a macOS `.app` bundle.
-pub fn in_bundle() -> bool {
-    std::env::current_exe().is_ok_and(|p| is_bundle_path(&p))
-}
-
-fn is_bundle_path(p: &Path) -> bool {
-    p.to_string_lossy().contains(".app/Contents/MacOS/")
-}
-
-/// Where a bundled game keeps its files: `~/Library/Application Support/Strata Zero`.
-pub fn app_support_dir() -> PathBuf {
-    let home = std::env::var_os("HOME").unwrap_or_default();
-    Path::new(&home).join("Library/Application Support/Strata Zero")
 }
 
 /// The window, what presents into it and the terminal drawing for it, once it exists.
@@ -129,8 +125,8 @@ impl App {
     fn open(&mut self, el: &ActiveEventLoop) -> Result<()> {
         let fonts = self.fonts.take().context("the window is made once")?;
         // A first guess in logical pixels; `fit` sets the exact sizes once the window's
-        // scale is known, as cell sizes don't scale exactly (SF Mono is 9 px wide at
-        // 15 px and 19 px at 30).
+        // scale is known, as cell sizes don't scale exactly (a face 9 px wide at 15 px
+        // can be 19 px wide at 30).
         let cell = fonts.metrics(TEXT_PX);
         let attrs = Window::default_attributes()
             .with_title("Strata Zero")
@@ -138,6 +134,7 @@ impl App {
                 (cell.w * OPEN.0 as usize) as f64,
                 (cell.h * OPEN.1 as usize) as f64,
             ));
+        let attrs = with_platform_look(attrs);
         let window = Arc::new(el.create_window(attrs)?);
         let cell = fonts.metrics(TEXT_PX * window.scale_factor() as f32);
         fit(&window, cell, true);
@@ -254,6 +251,41 @@ impl App {
     }
 }
 
+/// The window's icon and name where the platform takes them from the window: on Windows
+/// the app's icon resource, for the title bar and the taskbar; on Linux the name
+/// `strata-zero` (the Wayland app id and the X11 class, which tie the window to
+/// `strata-zero.desktop`) and the icon for X11. The Mac takes both from the `.app`.
+fn with_platform_look(attrs: WindowAttributes) -> WindowAttributes {
+    #[cfg(all(windows, feature = "app"))]
+    let attrs = {
+        use winit::platform::windows::{IconExtWindows, WindowAttributesExtWindows};
+        use winit::window::Icon;
+        let icon = Icon::from_resource(1, None).ok();
+        attrs.with_window_icon(icon.clone()).with_taskbar_icon(icon)
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let attrs = {
+        use winit::platform::wayland::WindowAttributesExtWayland;
+        // Sets the name X11 reads too.
+        WindowAttributesExtWayland::with_name(attrs, "strata-zero", "strata-zero")
+            .with_window_icon(linux_icon())
+    };
+    attrs
+}
+
+/// The PC icon (`linux/strata-zero.png`), for an X11 window.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn linux_icon() -> Option<winit::window::Icon> {
+    let png = include_bytes!("../../linux/strata-zero.png");
+    let mut reader = ::png::Decoder::new(std::io::Cursor::new(&png[..]))
+        .read_info()
+        .ok()?;
+    let mut rgba = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut rgba).ok()?;
+    rgba.truncate(info.buffer_size());
+    winit::window::Icon::from_rgba(rgba, info.width, info.height).ok()
+}
+
 /// The window's minimum, 100×30 cells of `cell` (the cell at the window's scale and
 /// zoom 1), and when `open` its size, 120×40 cells within 90% of its screen.
 fn fit(window: &Window, cell: font::CellMetrics, open: bool) {
@@ -318,7 +350,14 @@ impl ApplicationHandler for App {
             } => {
                 let pressed = event.state == ElementState::Pressed;
                 let bare = event.key_without_modifiers();
-                match keys::translate(pressed, &event.logical_key, &bare, self.mods) {
+                let input = keys::translate(
+                    pressed,
+                    &event.logical_key,
+                    &bare,
+                    self.mods,
+                    Platform::NATIVE,
+                );
+                match input {
                     Input::Game(k) => self.keys.push(k),
                     Input::Window(s) => self.shortcut(el, s),
                     Input::Nothing => {}
@@ -351,15 +390,7 @@ impl ApplicationHandler for App {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn in_bundle_detects_app_paths() {
-        assert!(is_bundle_path(Path::new(
-            "/Applications/Strata Zero.app/Contents/MacOS/strata"
-        )));
-        assert!(!is_bundle_path(Path::new("target/smoke/release/strata")));
-        assert!(!is_bundle_path(Path::new("/Users/x/my.app.notes/strata")));
-    }
+    use std::path::Path;
 
     /// The title screen as the window paints it, to `SHOT_DIR/title.png`, and in dev mode
     /// with the debug starts to `title_dev.png`. The street, the deck and the ATTRIBUTES
@@ -386,20 +417,43 @@ mod tests {
         }
     }
 
-    /// The app icon, to `SHOT_DIR/icon.png` (1024 × 1024): "SZ" in the title's block
-    /// letters on a rounded square of the game's background with a neon edge.
-    /// `scripts/macos-app.sh --icon` turns it into `macos/AppIcon.icns`.
+    /// The app icons, to `SHOT_DIR`:
+    /// - `icon.png` (1024 × 1024, inset as macOS icons are drawn), which
+    ///   `scripts/macos-app.sh --icon` turns into `macos/AppIcon.icns`;
+    /// - the PC icon, on a fuller square, as `icon.ico` (256 down to 16 pixels) and
+    ///   `strata-zero.png` (256), which `scripts/windows-app.sh --icon` and
+    ///   `scripts/linux-app.sh --icon` copy to `windows/AppIcon.ico` and
+    ///   `linux/strata-zero.png`.
     #[test]
     #[ignore]
     fn app_icon() {
+        let Ok(dir) = std::env::var("SHOT_DIR") else {
+            return;
+        };
+        let dir = Path::new(&dir);
+        let mac = icon_rgba(100.0, 180.0, 10.0);
+        png::write_rgba(&dir.join("icon.png"), ICON, ICON, &mac).unwrap();
+        let pc = icon_rgba(24.0, 160.0, 14.0);
+        let sizes: Vec<(u32, Vec<u8>)> = [256, 64, 48, 32, 24, 16]
+            .into_iter()
+            .map(|s| (s as u32, png::downsample(&pc, ICON as usize, s)))
+            .collect();
+        png::write_ico(&dir.join("icon.ico"), &sizes).unwrap();
+        png::write_rgba(&dir.join("strata-zero.png"), 256, 256, &sizes[0].1).unwrap();
+    }
+
+    /// The side of the icon art, in pixels.
+    const ICON: u32 = 1024;
+
+    /// The icon art, `ICON` pixels a side: "SZ" in the title's block letters on a
+    /// rounded square of the game's background, `inset` from the edges, with corners of
+    /// `radius` and a neon edge `edge` wide.
+    fn icon_rgba(inset: f32, radius: f32, edge: f32) -> Vec<u8> {
         use crate::render::Rgb;
         use crate::ui::logo::{self, Logo};
         use ratatui::buffer::Buffer;
         use ratatui::layout::Rect;
         use ratatui::widgets::Widget;
-        let Ok(dir) = std::env::var("SHOT_DIR") else {
-            return;
-        };
         let mut buf = Buffer::empty(Rect::new(0, 0, logo::width("SZ"), logo::ROWS));
         let logo = Logo {
             text: "SZ",
@@ -408,13 +462,11 @@ mod tests {
             steady: true,
         };
         logo.render(buf.area, &mut buf);
-        let mut canvas = raster::Canvas::new(Fonts::load().unwrap(), 80.0, 0, 0);
+        let mut canvas = raster::Canvas::new(Fonts::load(), 80.0, 0, 0);
         canvas.paint_buffer(&buf);
         let art = &canvas.frame;
 
-        // A rounded square 824 wide in a 1024 canvas, as macOS icons are drawn.
-        const SIZE: usize = 1024;
-        let (inset, radius, edge) = (100.0, 180.0, 10.0);
+        const SIZE: usize = ICON as usize;
         let mut rgba = vec![0u8; SIZE * SIZE * 4];
         let (ox, oy) = ((SIZE - art.w) / 2, (SIZE - art.h) / 2);
         for y in 0..SIZE {
@@ -451,11 +503,6 @@ mod tests {
                 ]);
             }
         }
-        let path = Path::new(&dir).join("icon.png");
-        let file = std::fs::File::create(path).unwrap();
-        let mut enc = ::png::Encoder::new(std::io::BufWriter::new(file), SIZE as u32, SIZE as u32);
-        enc.set_color(::png::ColorType::Rgba);
-        enc.set_depth(::png::BitDepth::Eight);
-        enc.write_header().unwrap().write_image_data(&rgba).unwrap();
+        rgba
     }
 }
