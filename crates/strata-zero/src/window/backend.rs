@@ -238,7 +238,7 @@ impl Backend for PixelBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-        use ratatui::Terminal;
+    use ratatui::Terminal;
     use ratatui::style::{Color, Style};
     use ratatui::widgets::Paragraph;
 

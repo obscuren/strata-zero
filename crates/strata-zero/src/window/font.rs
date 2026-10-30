@@ -355,7 +355,9 @@ mod tests {
         assert_eq!(
             tail,
             [
-                Some(Path::new("/System/Library/Fonts/Supplemental/EuphemiaCAS.ttc")),
+                Some(Path::new(
+                    "/System/Library/Fonts/Supplemental/EuphemiaCAS.ttc"
+                )),
                 Some(Path::new("/System/Library/Fonts/Geneva.ttf")),
             ]
         );
@@ -399,7 +401,10 @@ mod tests {
         );
         assert_eq!(
             found,
-            [b.join("NotoSansCJK-Regular.ttc"), a.join("x/DejaVuSans.ttf")]
+            [
+                b.join("NotoSansCJK-Regular.ttc"),
+                a.join("x/DejaVuSans.ttf")
+            ]
         );
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -462,7 +467,11 @@ mod tests {
                 }
             }
         }
-        assert!(chars.len() > 100, "the scan found {} characters", chars.len());
+        assert!(
+            chars.len() > 100,
+            "the scan found {} characters",
+            chars.len()
+        );
         let mut fonts = Fonts::load();
         let missing: String = chars.into_iter().filter(|&c| !fonts.has(c)).collect();
         let strict = cfg!(any(target_os = "macos", windows))

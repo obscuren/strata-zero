@@ -62,8 +62,7 @@ pub fn run(screen: Box<dyn Screen>, mut st: AppState) -> Result<()> {
             .app_dir(&platform::process_env)
             .context("can't tell where to keep the game's files: set APPDATA (Windows) or HOME")?;
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-        std::env::set_current_dir(&dir)
-            .with_context(|| format!("opening {}", dir.display()))?;
+        std::env::set_current_dir(&dir).with_context(|| format!("opening {}", dir.display()))?;
     }
     let fonts = Fonts::load();
     let event_loop = EventLoop::new()?;
@@ -313,7 +312,14 @@ impl ApplicationHandler for App {
             } => {
                 let pressed = event.state == ElementState::Pressed;
                 let bare = event.key_without_modifiers();
-                match keys::translate(pressed, &event.logical_key, &bare, self.mods) {
+                let input = keys::translate(
+                    pressed,
+                    &event.logical_key,
+                    &bare,
+                    self.mods,
+                    Platform::NATIVE,
+                );
+                match input {
                     Input::Game(k) => self.keys.push(k),
                     Input::Window(s) => self.shortcut(el, s),
                     Input::Nothing => {}
