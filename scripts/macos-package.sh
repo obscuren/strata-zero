@@ -28,7 +28,7 @@ if [ ! -d "$app" ]; then
 fi
 if [ -z "$identity" ] && [ "$require" = "1" ]; then
     echo "error: STRATA_REQUIRE_SIGNING is set but there is no STRATA_SIGN_IDENTITY;" >&2
-    echo "the Developer ID secrets are missing (README, \"Signing the Mac app\")." >&2
+    echo "the Developer ID secrets are missing (docs/development.md, \"Signing the Mac app\")." >&2
     exit 1
 fi
 

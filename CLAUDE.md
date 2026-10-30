@@ -1,8 +1,8 @@
 # Strata Zero
 
 A roguelike in a multi-level cyberpunk city, in Rust. The crates are laid out in
-README.md under "Layout"; game content lives in `flavor/*.ron` and is compiled into the
-binary.
+`docs/development.md` under "Layout"; game content lives in `flavor/*.ron` and is
+compiled into the binary.
 
 ## Two front ends, one set of screens
 
@@ -59,8 +59,8 @@ cargo test --workspace --features strata-zero/window --target-dir target/smoke
   run for real on a Mac.
 - On GitHub, `.github/workflows/ci.yml` runs the same checks on macOS, Linux and Windows
   for both builds, so keep shared code portable (no Mac-only APIs outside
-  `#[cfg(target_os = "macos")]`). Releases are described in README.md under "Release",
-  including the Mac app's signing.
+  `#[cfg(target_os = "macos")]`). Releases are described in `docs/development.md` under
+  "Release", including the Mac app's signing.
 
 ## Seeing the window without opening it
 
