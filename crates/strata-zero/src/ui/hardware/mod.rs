@@ -125,7 +125,7 @@ pub fn footprint(kind: SocketKind) -> Option<(i32, i32, u16, u16)> {
     match kind {
         SocketKind::Muzzle => Some((4, 0, 18, 5)),
         SocketKind::Rail => Some((0, 0, 24, 3)),
-        SocketKind::Deck | SocketKind::Hand | SocketKind::Forearm => None,
+        SocketKind::Deck | SocketKind::Hand | SocketKind::Forearm | SocketKind::Bay => None,
     }
 }
 

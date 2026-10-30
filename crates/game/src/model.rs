@@ -392,6 +392,8 @@ pub enum SocketKind {
     Hand,
     /// On a chrome arm: along the forearm.
     Forearm,
+    /// On a drone cradle: where a drone docks.
+    Bay,
 }
 
 impl SocketKind {
@@ -403,6 +405,7 @@ impl SocketKind {
             SocketKind::Rail => "rail",
             SocketKind::Hand => "hand",
             SocketKind::Forearm => "forearm",
+            SocketKind::Bay => "bay",
         }
     }
 
@@ -414,6 +417,7 @@ impl SocketKind {
             SocketKind::Rail => "rail hardware",
             SocketKind::Hand => "hand chrome",
             SocketKind::Forearm => "forearm chrome",
+            SocketKind::Bay => "drones",
         }
     }
 
@@ -425,7 +429,14 @@ impl SocketKind {
             SocketKind::Rail => "rail socket",
             SocketKind::Hand => "hand socket",
             SocketKind::Forearm => "forearm socket",
+            SocketKind::Bay => "bay",
         }
+    }
+
+    /// What goes in or out of it is surgery, in a ripperdoc's chair: a limb's
+    /// sockets. A drone docks in its bay anywhere.
+    pub fn needs_a_doc(self) -> bool {
+        matches!(self, SocketKind::Hand | SocketKind::Forearm)
     }
 }
 
@@ -1280,6 +1291,16 @@ mod tests {
         assert_eq!(Op::Shield.done_label(), "raised");
         assert_eq!(Op::Mask.done_label(), "raised");
         assert!(Op::ALL.iter().all(|op| !op.done_label().is_empty()));
+    }
+
+    #[test]
+    fn a_bay_reads_from_its_kind() {
+        assert_eq!(SocketKind::Bay.label(), "bay");
+        assert_eq!(SocketKind::Bay.takes(), "drones");
+        assert_eq!(SocketKind::Bay.fits(), "bay");
+        assert!(!SocketKind::Bay.needs_a_doc());
+        assert!(SocketKind::Hand.needs_a_doc() && SocketKind::Forearm.needs_a_doc());
+        assert!(!SocketKind::Deck.needs_a_doc());
     }
 
     #[test]
