@@ -112,7 +112,7 @@ fn shot_at(name: &str, st: &AppState, map: &MapScreen, top: &dyn Screen, size: (
 }
 
 /// A stack of screens, each over the one below it washed, as the app draws it.
-fn draw_stack(st: &AppState, stack: &[&dyn Screen], (w, h): (u16, u16)) -> Buffer {
+pub(crate) fn draw_stack(st: &AppState, stack: &[&dyn Screen], (w, h): (u16, u16)) -> Buffer {
     let mut t = Term::new(TestBackend::new(w, h)).unwrap();
     t.draw(|f| {
         for (i, screen) in stack.iter().enumerate() {
@@ -126,10 +126,13 @@ fn draw_stack(st: &AppState, stack: &[&dyn Screen], (w, h): (u16, u16)) -> Buffe
     t.backend().buffer().clone()
 }
 
-/// `buf` as `<dir>/<name>.svg` on the city's background.
+/// `buf` as `<dir>/<name>.svg` on the city's background; with the window feature, also
+/// as `<name>.png` painted the way the window paints it.
 fn write_svg(dir: &str, name: &str, st: &AppState, buf: &Buffer, square: bool) {
     let bg = hex(st.style.background.to_color(), "#04060a");
     std::fs::write(format!("{dir}/{name}.svg"), svg(buf, &bg, square)).unwrap();
+    #[cfg(feature = "window")]
+    crate::window::png::write_buffer(dir, name, buf).unwrap();
 }
 
 /// `draw_stack` written to `SHOT_DIR`, square; nothing without it.

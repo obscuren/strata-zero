@@ -24,6 +24,46 @@ pub const FRAME: Duration = Duration::from_micros(33_333);
 /// Whether the app starts in dev mode: free camera, map browsing and the inspector.
 pub const DEV_DEFAULT: bool = true;
 
+/// The screen effects a window draws over the game: none, a soft glow and vignette, or
+/// a CRT's glow, scanlines and curve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScreenFx {
+    Off,
+    #[default]
+    Soft,
+    Crt,
+}
+
+impl ScreenFx {
+    /// The next setting, round from CRT back to Off.
+    pub fn next(self) -> Self {
+        match self {
+            ScreenFx::Off => ScreenFx::Soft,
+            ScreenFx::Soft => ScreenFx::Crt,
+            ScreenFx::Crt => ScreenFx::Off,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ScreenFx::Off => "OFF",
+            ScreenFx::Soft => "SOFT",
+            ScreenFx::Crt => "CRT",
+        }
+    }
+
+    /// `off`, `soft` or `crt`, in any case.
+    #[cfg(any(feature = "window", test))]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "off" => Some(ScreenFx::Off),
+            "soft" => Some(ScreenFx::Soft),
+            "crt" => Some(ScreenFx::Crt),
+            _ => None,
+        }
+    }
+}
+
 /// State shared by every screen.
 pub struct AppState {
     pub params: GenParams,
@@ -37,6 +77,11 @@ pub struct AppState {
     pub rain: bool,
     /// FPS readout in the status bar (Settings).
     pub show_fps: bool,
+    /// The game draws in a window of its own through the GPU, so the screen effects
+    /// exist (Settings offers them).
+    pub effects: bool,
+    /// The window's screen effects (Settings).
+    pub screen_fx: ScreenFx,
     /// Dev: tint the walkers who can see you.
     pub show_eyes: bool,
     /// Dev: paint each visible tile grey by its light.
@@ -202,6 +247,8 @@ impl AppState {
             dev: DEV_DEFAULT,
             rain: true,
             show_fps: true,
+            effects: false,
+            screen_fx: ScreenFx::default(),
             show_eyes: false,
             show_light: false,
             free_chrome: false,

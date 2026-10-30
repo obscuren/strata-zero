@@ -249,6 +249,34 @@ neighbours), `--water none|bay|river`, `--density 0..1`.
 Needs a truecolor terminal of at least 100x30 cells (iTerm2, Ghostty, kitty,
 WezTerm). Saved cities go to `./cities/*.city`.
 
+### In a window of its own (macOS, prototype)
+
+With the `window` feature the game opens its own window instead of using the
+terminal: the same screens and keys, drawn from a monospace font on this Mac
+(FiraCode Nerd Font Mono, SF Mono or Menlo; `STRATA_FONT=<file>` picks another),
+with box and block characters drawn as shapes.
+
+```sh
+cargo run --release -p strata-zero --features window -- --window
+scripts/macos-app.sh   # target/smoke/macos/Strata Zero.app, universal, ad-hoc signed
+```
+
+Cmd+Q quits, Ctrl+Cmd+F is fullscreen, Cmd+= / Cmd+- / Cmd+0 set the text size.
+Started from the `.app`, cities save under
+`~/Library/Application Support/Strata Zero/cities/`.
+
+The window draws through the GPU (wgpu: Metal here, Direct3D 12 or Vulkan
+elsewhere) with screen effects, set in Settings under **Screen effects**: OFF,
+SOFT (a glow around bright colours and a light vignette; the default) or CRT (a
+stronger glow, scanlines, a deeper vignette and a slight curve).
+`STRATA_SCREEN_FX=off|soft|crt` picks one at launch. Without a usable GPU it draws
+through the CPU instead, with no effects.
+
+`STRATA_WINDOW_SHOT=<file.png>` writes what the window shows 1.5 s in. The designs,
+and what a Steam build still needs, are in
+`docs/superpowers/specs/2026-10-29-window-prototype-design.md` and
+`docs/superpowers/specs/2026-10-29-window-gpu-effects-design.md`.
+
 ## Keys
 
 The game captures the mouse, so dragging over it does not select text (in iTerm2,
@@ -544,9 +572,14 @@ docs/superpowers/plans   implementation plans
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --features strata-zero/window -- -D warnings
 cargo test --workspace
+cargo test --workspace --features strata-zero/window
 cargo test -p citygen --test seeds -- --ignored   # 250-seed sweep
 ```
+
+The window front end only compiles with its feature, so check both; `CLAUDE.md` has
+more on keeping screens working in both front ends.
 
 ## Release
 
