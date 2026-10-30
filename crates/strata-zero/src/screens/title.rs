@@ -25,8 +25,40 @@ pub enum CombatMap {
     Street,
 }
 
-/// The menu row of the COMBAT start, and its label.
-const COMBAT_ROW: usize = 2;
+/// A row of the title menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Entry {
+    NewGame,
+    /// Dev mode: D'SHAWN, maxed out, into a fresh city.
+    Debug,
+    /// Dev mode: D'SHAWN on the lot, on the street or the Net.
+    Combat,
+    Load,
+    Quit,
+}
+
+impl Entry {
+    /// The rows, the debug starts only in dev mode.
+    fn rows(dev: bool) -> Vec<Entry> {
+        let mut rows = vec![Entry::NewGame];
+        if dev {
+            rows.extend([Entry::Debug, Entry::Combat]);
+        }
+        rows.extend([Entry::Load, Entry::Quit]);
+        rows
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Entry::NewGame => "NEW GAME",
+            Entry::Debug => "NEW GAME (DEBUG)",
+            Entry::Combat => COMBAT_LABEL,
+            Entry::Load => "LOAD GAME",
+            Entry::Quit => "QUIT",
+        }
+    }
+}
+
 const COMBAT_LABEL: &str = "NEW GAME · COMBAT";
 /// The pick in pink, the other in a grey that still reads.
 const PICKED: Color = Color::Rgb(255, 0, 200);
@@ -34,6 +66,7 @@ const UNPICKED: Color = Color::Rgb(120, 125, 135);
 
 pub struct Title {
     menu: Menu,
+    entries: Vec<Entry>,
     opened: u64,
     /// The COMBAT start's map, picked with the arrows on its row.
     combat: CombatMap,
@@ -119,30 +152,35 @@ impl Title {
         }
     }
 
-    pub fn new(tick: u64) -> Self {
+    /// The title for `st`: the debug starts on it while dev mode is on.
+    pub fn new(st: &AppState, tick: u64) -> Self {
+        let entries = Entry::rows(st.dev);
         Title {
             menu: Menu::new(
-                vec![
-                    "NEW GAME".into(),
-                    "NEW GAME (DEBUG)".into(),
-                    COMBAT_LABEL.into(),
-                    "LOAD GAME".into(),
-                    "QUIT".into(),
-                ],
+                entries.iter().map(|e| e.label().to_string()).collect(),
                 tick + 20,
             ),
+            entries,
             opened: tick,
             combat: CombatMap::Street,
         }
     }
 
+    /// The entry under the selection.
+    fn selected(&self) -> Entry {
+        self.entries[self.menu.selected]
+    }
+
     /// The COMBAT row's map pick, drawn after its label: `NET · STREET`, the pick
     /// in pink, the other in grey.
     fn draw_combat_pick(&self, area: Rect, menu_x: u16, menu_y: u16, tick: u64, f: &mut Frame) {
-        if self.menu.entrance(COMBAT_ROW, tick) < 1.0 {
+        let Some(row) = self.entries.iter().position(|e| *e == Entry::Combat) else {
+            return;
+        };
+        if self.menu.entrance(row, tick) < 1.0 {
             return;
         }
-        let y = menu_y + COMBAT_ROW as u16;
+        let y = menu_y + row as u16;
         let x = menu_x + 2 + COMBAT_LABEL.chars().count() as u16 + 2;
         if y >= area.bottom() {
             return;
@@ -176,7 +214,7 @@ impl Screen for Title {
                 KeyCode::Down | KeyCode::Char('j') => self.menu.down(),
                 // On the COMBAT row the arrows pick the map.
                 KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l')
-                    if self.menu.selected == COMBAT_ROW =>
+                    if self.selected() == Entry::Combat =>
                 {
                     self.combat = match self.combat {
                         CombatMap::Net => CombatMap::Street,
@@ -185,21 +223,21 @@ impl Screen for Title {
                 }
                 KeyCode::Char('q') | KeyCode::Esc => return ScreenCmd::Quit,
                 KeyCode::Enter => {
-                    return match self.menu.selected {
-                        0 => ScreenCmd::Push {
+                    return match self.selected() {
+                        Entry::NewGame => ScreenCmd::Push {
                             to: Box::new(Chooser::new(st, st.tick)),
                             fx: TransitionKind::SlideUp,
                         },
-                        1 => self.debug_game(st),
-                        2 => match self.combat {
+                        Entry::Debug => self.debug_game(st),
+                        Entry::Combat => match self.combat {
                             CombatMap::Street => self.combat_game(st),
                             CombatMap::Net => self.net_game(st),
                         },
-                        3 => ScreenCmd::Push {
+                        Entry::Load => ScreenCmd::Push {
                             to: Box::new(Files::load(st.tick)),
                             fx: TransitionKind::SlideUp,
                         },
-                        _ => ScreenCmd::Quit,
+                        Entry::Quit => ScreenCmd::Quit,
                     };
                 }
                 _ => {}
@@ -292,9 +330,10 @@ mod tests {
     #[test]
     fn title_renders_logo_and_menu_and_quits() {
         let mut st = AppState::new();
-        let mut title = Title::new(0);
+        st.unlock_dev();
+        let mut title = Title::new(&st, 0);
         let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
-        // The menu types itself in: by tick 120 all four items stand.
+        // The menu types itself in: by tick 120 all five items stand.
         st.tick = 120;
         t.draw(|f| title.draw(&st, f)).unwrap();
         let text = buffer_text(t.backend().buffer());
@@ -359,9 +398,50 @@ mod tests {
     }
 
     #[test]
+    fn without_dev_mode_the_title_has_no_debug_starts() {
+        let mut st = AppState::new();
+        let mut title = Title::new(&st, 0);
+        assert_eq!(
+            title.entries,
+            [Entry::NewGame, Entry::Load, Entry::Quit],
+            "a player's title"
+        );
+        let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        st.tick = 120;
+        t.draw(|f| title.draw(&st, f)).unwrap();
+        let text = buffer_text(t.backend().buffer());
+        assert!(
+            text.contains("NEW GAME") && text.contains("LOAD GAME") && text.contains("QUIT"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("DEBUG") && !text.contains("COMBAT") && !text.contains("STREET"),
+            "{text}"
+        );
+        // The second row loads, the third quits; the arrows pick nothing.
+        title.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Left)]);
+        assert_eq!(title.combat, CombatMap::Street);
+        assert!(matches!(
+            title.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Push { .. }
+        ));
+        title.update(&mut st, &[key(KeyCode::Down)]);
+        assert!(matches!(
+            title.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Quit
+        ));
+        // Dev mode turned off in a game leaves the debug starts off the next title.
+        st.unlock_dev();
+        st.set_dev(false);
+        assert_eq!(Title::new(&st, 0).entries.len(), 3);
+        st.set_dev(true);
+        assert_eq!(Title::new(&st, 0).entries.len(), 5);
+    }
+
+    #[test]
     fn new_game_opens_the_chooser() {
         let mut st = AppState::new();
-        let mut t = Title::new(0);
+        let mut t = Title::new(&st, 0);
         assert!(
             matches!(
                 t.update(&mut st, &[key(KeyCode::Enter)]),
@@ -372,22 +452,23 @@ mod tests {
             ),
             "new game opens the chooser"
         );
-        let mut t = Title::new(0);
-        t.update(
-            &mut st,
-            &[key(KeyCode::Down), key(KeyCode::Down), key(KeyCode::Down)],
+        let mut t = Title::new(&st, 0);
+        t.update(&mut st, &[key(KeyCode::Down)]);
+        assert!(
+            matches!(
+                t.update(&mut st, &[key(KeyCode::Enter)]),
+                ScreenCmd::Push { .. }
+            ),
+            "load is pushed over the title"
         );
-        assert!(matches!(
-            t.update(&mut st, &[key(KeyCode::Enter)]),
-            ScreenCmd::Push { .. }
-        ));
     }
 
     #[test]
     fn the_combat_entry_opens_the_lot_at_dusk_with_a_goon_twelve_tiles_off() {
         use citygen::{Place, Pos, StratumKind};
         let mut st = AppState::new();
-        let mut t = Title::new(0);
+        st.unlock_dev();
+        let mut t = Title::new(&st, 0);
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
         st.tick = 60;
         term.draw(|f| t.draw(&st, f)).unwrap();
@@ -432,7 +513,8 @@ mod tests {
     fn the_combat_row_picks_its_map_with_the_arrows_and_net_jacks_you_into_a_construct() {
         use citygen::Place;
         let mut st = AppState::new();
-        let mut t = Title::new(0);
+        st.unlock_dev();
+        let mut t = Title::new(&st, 0);
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
         st.tick = 60;
         term.draw(|f| t.draw(&st, f)).unwrap();
@@ -490,7 +572,8 @@ mod tests {
     #[test]
     fn new_game_debug_starts_dshawn_maxed_out_in_a_fresh_city() {
         let mut st = AppState::new();
-        let mut t = Title::new(0);
+        st.unlock_dev();
+        let mut t = Title::new(&st, 0);
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
         st.tick = 60;
         term.draw(|f| t.draw(&st, f)).unwrap();

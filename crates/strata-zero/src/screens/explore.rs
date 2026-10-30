@@ -1205,7 +1205,7 @@ impl MapScreen {
 
     fn handle_common(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
         match k.code {
-            KeyCode::Char('`') => {
+            KeyCode::Char('`') if st.dev_unlocked => {
                 st.set_dev(!st.dev);
                 st.say(if st.dev {
                     "dev mode on"
@@ -2470,7 +2470,7 @@ impl Screen for MapScreen {
                 .any(|k| matches!(k.code, KeyCode::Char('q') | KeyCode::Esc))
             {
                 return ScreenCmd::Switch {
-                    to: Box::new(Title::new(st.tick)),
+                    to: Box::new(Title::new(st, st.tick)),
                     fx: TransitionKind::SlideUp,
                 };
             }
@@ -3248,7 +3248,7 @@ impl Screen for MapScreen {
             crate::look::draw_box(&card, r, f.buffer_mut());
         }
         if self.help {
-            help::draw(f, self.mode);
+            help::draw(f, self.mode, st.dev_unlocked);
         }
     }
 }
@@ -3783,7 +3783,8 @@ mod tests {
     #[test]
     fn a_whole_street_fight() {
         let mut st = AppState::new();
-        let mut title = crate::screens::title::Title::new(0);
+        st.unlock_dev();
+        let mut title = crate::screens::title::Title::new(&st, 0);
         title.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Down)]);
         let ScreenCmd::Switch { to: map, .. } = title.update(&mut st, &[key(KeyCode::Enter)])
         else {
@@ -3925,6 +3926,7 @@ mod tests {
     #[test]
     fn explore_and_walk_round_trip() {
         let mut st = state();
+        st.unlock_dev();
         let mut s = MapScreen::explore(0);
         let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
         t.draw(|f| s.draw(&st, f)).unwrap();
@@ -3978,6 +3980,7 @@ mod tests {
     #[test]
     fn explore_pans_and_switches_to_other_screens() {
         let mut st = state();
+        st.unlock_dev();
         let mut s = MapScreen::explore(0);
         let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
         t.draw(|f| s.draw(&st, f)).unwrap();
@@ -4005,6 +4008,7 @@ mod tests {
     #[test]
     fn explore_cursor_reaches_the_map_corners_without_showing_void() {
         let mut st = state();
+        st.unlock_dev();
         let mut s = MapScreen::explore(0);
         let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
         t.draw(|f| s.draw(&st, f)).unwrap();
@@ -4040,6 +4044,7 @@ mod tests {
     #[test]
     fn space_jacks_in_and_the_net_is_the_fifth_stratum() {
         let mut st = state();
+        st.unlock_dev();
         let mut s = MapScreen::explore(0);
         let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
         t.draw(|f| s.draw(&st, f)).unwrap();
@@ -4126,7 +4131,8 @@ mod tests {
     #[test]
     fn dev_mode_off_locks_the_player_into_walk_mode() {
         let mut st = state();
-        st.dev = false;
+        st.unlock_dev();
+        st.set_dev(false);
         let mut s = MapScreen::explore(0);
         let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
         s.update(&mut st, &[]);
@@ -4160,6 +4166,7 @@ mod tests {
     #[test]
     fn rain_and_fps_follow_the_settings() {
         let mut st = state();
+        st.unlock_dev();
         let mut s = MapScreen::explore(0);
         let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
         st.tick = 100;
@@ -4206,6 +4213,7 @@ mod tests {
     #[test]
     fn tab_opens_the_deck_and_c_is_the_dev_camera() {
         let mut st = state();
+        st.unlock_dev();
         let mut s = MapScreen::explore(0);
         s.update(&mut st, &[]);
         assert!(matches!(
@@ -4262,6 +4270,7 @@ mod tests {
     #[test]
     fn explore_action_bar_and_help_mention_save() {
         let mut st = state();
+        st.unlock_dev();
         let mut s = MapScreen::explore(0);
         s.update(&mut st, &[]);
         let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
@@ -4281,6 +4290,7 @@ mod tests {
     #[test]
     fn deck_opened_from_the_free_camera_links_to_the_cursor() {
         let mut st = state();
+        st.unlock_dev();
         let mut s = MapScreen::explore(0);
         s.update(&mut st, &[]);
         let (pos, name, other, other_name) = {
@@ -4969,6 +4979,7 @@ mod tests {
     #[test]
     fn view_popup_toggles_sections() {
         let mut st = state();
+        st.unlock_dev();
         let mut s = MapScreen::explore(0);
         walking(&mut st, &mut s);
         let ScreenCmd::Push { to: mut p, .. } = s.update(&mut st, &[key(KeyCode::Char('v'))])
@@ -4999,9 +5010,59 @@ mod tests {
         assert!(!text.contains("inspect"), "{text}");
     }
 
+    /// A game started without `--dev`: on foot, no badge, and the dev keys do nothing.
+    #[test]
+    fn without_dev_mode_unlocked_the_dev_keys_do_nothing() {
+        let mut st = state();
+        let mut s = MapScreen::explore(0);
+        s.update(&mut st, &[]);
+        assert_eq!(s.mode, Mode::Walk, "no free camera");
+        s.update(
+            &mut st,
+            &[
+                key(KeyCode::Char('`')),
+                key(KeyCode::Char('c')),
+                key(KeyCode::F(5)),
+                key(KeyCode::F(6)),
+                key(KeyCode::Char(':')),
+            ],
+        );
+        assert!(!st.dev, "the backtick is locked");
+        assert_eq!(s.mode, Mode::Walk);
+        assert!(!st.sidebar.is_on(Section::Inspect) && !st.sidebar.is_on(Section::Legend));
+        assert!(s.console.is_none(), "no console");
+        st.tick += 500;
+        let text = draw_screen(&s, &st, 120, 40);
+        let header = text.lines().next().unwrap();
+        assert!(
+            header.contains("VEX :: LVL 1 :: ¤ 320")
+                && !header.contains("DEV")
+                && !header.contains("fps")
+                && !header.contains("seed"),
+            "{header}"
+        );
+        let ScreenCmd::Push { to: popup, .. } = s.update(&mut st, &[key(KeyCode::Char('v'))])
+        else {
+            panic!("v opens the view popup")
+        };
+        st.tick += 40;
+        let text = draw_screen(&*popup, &st, 100, 30);
+        assert!(
+            text.contains("Log") && !text.contains("Inspect") && !text.contains("Legend"),
+            "{text}"
+        );
+        s.update(&mut st, &[key(KeyCode::Char('?'))]);
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(
+            text.contains("pause menu") && !text.contains("dev console"),
+            "{text}"
+        );
+    }
+
     #[test]
     fn dev_off_clears_dev_sections() {
         let mut st = state();
+        st.unlock_dev();
         let mut s = MapScreen::explore(0);
         st.sidebar.set(Section::Inspect, true);
         s.update(&mut st, &[key(KeyCode::Char('`'))]);
@@ -5031,6 +5092,7 @@ mod tests {
     #[test]
     fn grid_draws_bands_rules_and_the_column() {
         let mut st = state();
+        st.unlock_dev();
         let mut s = MapScreen::explore(0);
         s.update(&mut st, &[]);
         for (w, h) in [(100u16, 30u16), (120, 40)] {
@@ -5178,6 +5240,7 @@ mod tests {
     #[test]
     fn f_keys_toggle_sections() {
         let mut st = state();
+        st.unlock_dev();
         let mut s = MapScreen::explore(0);
         s.update(&mut st, &[]);
         s.update(&mut st, &[key(KeyCode::F(1))]);
@@ -5282,6 +5345,7 @@ mod tests {
     #[test]
     fn squeezed_out_pane_tab_reads_dim() {
         let mut st = state();
+        st.unlock_dev();
         let mut s = MapScreen::explore(0);
         walking(&mut st, &mut s);
         for sec in Section::ALL {
@@ -8928,7 +8992,7 @@ mod tests {
             lines[39]
         );
         // The console takes the last row.
-        st.set_dev(true);
+        st.unlock_dev();
         s.update(&mut st, &[key(KeyCode::Char(':'))]);
         let text = draw_screen(&s, &st, 120, 40);
         assert!(text.lines().nth(39).unwrap().contains(":"), "{text}");

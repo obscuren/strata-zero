@@ -72,13 +72,20 @@ const WALK: &[(&str, &str)] = &[
     ("esc q", "pause menu"),
 ];
 
-/// Draws the key list for `mode` centred over whatever is already on screen.
-pub fn draw(f: &mut Frame, mode: Mode) {
+/// The keys that only work in dev mode, left off the list until it is unlocked.
+const DEV_KEYS: &[&str] = &["F5 F6", "c", ":", "`"];
+
+/// Draws the key list for `mode` centred over whatever is already on screen; the dev
+/// mode keys only with `dev` (dev mode unlocked).
+pub fn draw(f: &mut Frame, mode: Mode, dev: bool) {
     let area = f.area();
-    let rows = match mode {
+    let rows: Vec<_> = match mode {
         Mode::Explore => EXPLORE,
         Mode::Walk => WALK,
-    };
+    }
+    .iter()
+    .filter(|(k, _)| dev || !DEV_KEYS.contains(k))
+    .collect();
     let w = area.width.min(72);
     let h = area.height.min(rows.len() as u16 + 2);
     let rect = Rect::new(
@@ -124,8 +131,10 @@ mod tests {
     fn help_fits_small_and_large_frames() {
         for (w, h) in [(100u16, 30u16), (200, 60), (20, 5)] {
             let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
-            t.draw(|f| draw(f, Mode::Explore)).unwrap();
-            t.draw(|f| draw(f, Mode::Walk)).unwrap();
+            for dev in [false, true] {
+                t.draw(|f| draw(f, Mode::Explore, dev)).unwrap();
+                t.draw(|f| draw(f, Mode::Walk, dev)).unwrap();
+            }
         }
     }
 
@@ -133,7 +142,7 @@ mod tests {
     fn help_lists_the_hud_keys() {
         use crate::screens::testutil::buffer_text;
         let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
-        t.draw(|f| draw(f, Mode::Walk)).unwrap();
+        t.draw(|f| draw(f, Mode::Walk, true)).unwrap();
         let walk = buffer_text(t.backend().buffer());
         assert!(
             walk.contains("fire an ability") && walk.contains("messages") && walk.contains("view"),
@@ -143,11 +152,31 @@ mod tests {
             !walk.contains("inspector") && walk.contains("pause menu"),
             "{walk}"
         );
-        t.draw(|f| draw(f, Mode::Explore)).unwrap();
+        t.draw(|f| draw(f, Mode::Explore, true)).unwrap();
         let explore = buffer_text(t.backend().buffer());
         assert!(
             explore.contains("messages") && !explore.contains("inspector"),
             "{explore}"
         );
+    }
+
+    #[test]
+    fn the_dev_keys_are_listed_only_once_dev_mode_is_unlocked() {
+        use crate::screens::testutil::buffer_text;
+        let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        for mode in [Mode::Walk, Mode::Explore] {
+            t.draw(|f| draw(f, mode, false)).unwrap();
+            let locked = buffer_text(t.backend().buffer());
+            assert!(
+                !locked.contains("dev ") && locked.contains("pause menu"),
+                "{locked}"
+            );
+            t.draw(|f| draw(f, mode, true)).unwrap();
+            let unlocked = buffer_text(t.backend().buffer());
+            assert!(
+                unlocked.contains("dev console") && unlocked.contains("dev mode on / off"),
+                "{unlocked}"
+            );
+        }
     }
 }

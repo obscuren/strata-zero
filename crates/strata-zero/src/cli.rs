@@ -5,6 +5,7 @@ use crate::save::save_city;
 use anyhow::{Context, Result, bail};
 use citygen::{GenParams, Generator, SizePreset, WaterMode};
 use clap::{Parser, Subcommand};
+use std::ffi::OsStr;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -15,6 +16,10 @@ use std::path::PathBuf;
 pub struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
+    /// Start in dev mode: the free camera, the console, the inspector and the debug
+    /// starts on the title. `STRATA_DEV=1` does the same.
+    #[arg(long)]
+    dev: bool,
     /// Play in a window of its own instead of the terminal.
     #[cfg(feature = "window")]
     #[arg(long)]
@@ -81,14 +86,34 @@ fn random_seed() -> u64 {
     citygen::rng::hash64(nanos, std::process::id() as u64)
 }
 
+/// Whether this run asked for dev mode: `--dev`, or `STRATA_DEV` set to anything but
+/// empty or `0`.
+fn dev_asked(flag: bool, env: Option<&OsStr>) -> bool {
+    flag || env.is_some_and(|v| !v.is_empty() && v != OsStr::new("0"))
+}
+
+/// The state a game starts from, dev mode unlocked and on if it was asked for.
+fn start_state(dev: bool) -> AppState {
+    let mut st = AppState::new();
+    if dev {
+        st.unlock_dev();
+    }
+    st
+}
+
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
+    let dev = dev_asked(cli.dev, std::env::var_os("STRATA_DEV").as_deref());
     match cli.cmd {
         #[cfg(feature = "window")]
         None if cli.window || crate::window::in_bundle() => {
-            crate::window::run(Box::new(crate::screens::initial()), AppState::new())
+            let st = start_state(dev);
+            crate::window::run(Box::new(crate::screens::initial(&st)), st)
         }
-        None => app::run(Box::new(crate::screens::initial()), AppState::new()),
+        None => {
+            let st = start_state(dev);
+            app::run(Box::new(crate::screens::initial(&st)), st)
+        }
         Some(Cmd::Gen {
             seed,
             size,
@@ -138,5 +163,29 @@ pub fn run() -> Result<()> {
             );
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dev_mode_is_asked_for_by_flag_or_env() {
+        assert!(!dev_asked(false, None), "off unless asked");
+        assert!(dev_asked(true, None));
+        assert!(dev_asked(false, Some(OsStr::new("1"))));
+        assert!(!dev_asked(false, Some(OsStr::new("0"))));
+        assert!(!dev_asked(false, Some(OsStr::new(""))));
+        assert!(Cli::try_parse_from(["strata", "--dev"]).unwrap().dev);
+        assert!(!Cli::try_parse_from(["strata"]).unwrap().dev);
+    }
+
+    #[test]
+    fn a_game_starts_without_dev_mode_unless_asked() {
+        let st = start_state(false);
+        assert!(!st.dev && !st.dev_unlocked);
+        let st = start_state(true);
+        assert!(st.dev && st.dev_unlocked);
     }
 }

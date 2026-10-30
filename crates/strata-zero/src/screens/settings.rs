@@ -1,5 +1,5 @@
-//! Settings: dev mode, rain and the FPS counter, flipped in place, and in a window that
-//! draws through the GPU the screen effects, cycled.
+//! Settings: dev mode (once unlocked), rain and the FPS counter, flipped in place, and in
+//! a window that draws through the GPU the screen effects, cycled.
 
 use crate::app::{AppState, Screen, ScreenCmd, ScreenFx, TransitionKind};
 use crate::ui::panel::boxed;
@@ -10,7 +10,26 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-const ROWS: [&str; 4] = ["Dev mode", "Rain", "FPS counter", "Screen effects"];
+/// A row of the panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Row {
+    Dev,
+    Rain,
+    Fps,
+    Effects,
+}
+
+impl Row {
+    fn label(self) -> &'static str {
+        match self {
+            Row::Dev => "Dev mode",
+            Row::Rain => "Rain",
+            Row::Fps => "FPS counter",
+            Row::Effects => "Screen effects",
+        }
+    }
+}
+
 const ACCENT: Color = Color::Rgb(0, 229, 255);
 const DIM: Color = Color::Rgb(160, 170, 185);
 const TEXT: Color = Color::Rgb(205, 212, 222);
@@ -24,32 +43,37 @@ impl Settings {
         Settings { selected: 0 }
     }
 
-    /// How many rows there are: the screen effects only where they can be drawn.
-    fn rows(st: &AppState) -> usize {
-        if st.effects {
-            ROWS.len()
-        } else {
-            ROWS.len() - 1
+    /// The rows there are: dev mode only once it is unlocked, the screen effects only
+    /// where they can be drawn.
+    fn rows(st: &AppState) -> Vec<Row> {
+        let mut rows = Vec::new();
+        if st.dev_unlocked {
+            rows.push(Row::Dev);
         }
+        rows.extend([Row::Rain, Row::Fps]);
+        if st.effects {
+            rows.push(Row::Effects);
+        }
+        rows
     }
 
     /// The row's value and whether it reads as on.
-    fn get(st: &AppState, i: usize) -> (&'static str, bool) {
+    fn get(st: &AppState, row: Row) -> (&'static str, bool) {
         let flag = |on: bool| (if on { "ON" } else { "OFF" }, on);
-        match i {
-            0 => flag(st.dev),
-            1 => flag(st.rain),
-            2 => flag(st.show_fps),
-            _ => (st.screen_fx.label(), st.screen_fx != ScreenFx::Off),
+        match row {
+            Row::Dev => flag(st.dev),
+            Row::Rain => flag(st.rain),
+            Row::Fps => flag(st.show_fps),
+            Row::Effects => (st.screen_fx.label(), st.screen_fx != ScreenFx::Off),
         }
     }
 
-    fn flip(st: &mut AppState, i: usize) {
-        match i {
-            0 => st.set_dev(!st.dev),
-            1 => st.rain = !st.rain,
-            2 => st.show_fps = !st.show_fps,
-            _ => st.screen_fx = st.screen_fx.next(),
+    fn flip(st: &mut AppState, row: Row) {
+        match row {
+            Row::Dev => st.set_dev(!st.dev),
+            Row::Rain => st.rain = !st.rain,
+            Row::Fps => st.show_fps = !st.show_fps,
+            Row::Effects => st.screen_fx = st.screen_fx.next(),
         }
     }
 }
@@ -63,14 +87,13 @@ impl Default for Settings {
 impl Screen for Settings {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
         let rows = Self::rows(st);
+        let n = rows.len();
         for k in keys {
             match k.code {
-                KeyCode::Up | KeyCode::Char('k') => {
-                    self.selected = (self.selected + rows - 1) % rows
-                }
-                KeyCode::Down | KeyCode::Char('j') => self.selected = (self.selected + 1) % rows,
+                KeyCode::Up | KeyCode::Char('k') => self.selected = (self.selected + n - 1) % n,
+                KeyCode::Down | KeyCode::Char('j') => self.selected = (self.selected + 1) % n,
                 KeyCode::Left | KeyCode::Right | KeyCode::Enter | KeyCode::Char(' ') => {
-                    Self::flip(st, self.selected)
+                    Self::flip(st, rows[self.selected])
                 }
                 KeyCode::Esc | KeyCode::Char('q') => {
                     return ScreenCmd::Pop {
@@ -96,8 +119,9 @@ impl Screen for Settings {
         let inner = block.inner(panel);
         f.render_widget(block, panel);
         let mut lines: Vec<Line> = Vec::new();
-        for (i, label) in ROWS.iter().enumerate().take(Self::rows(st)) {
-            let (value, on) = Self::get(st, i);
+        for (i, row) in Self::rows(st).into_iter().enumerate() {
+            let (value, on) = Self::get(st, row);
+            let label = row.label();
             let sel = i == self.selected;
             let style = if sel {
                 Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
@@ -133,10 +157,10 @@ mod tests {
     fn settings_dev_off_clears_dev_sections() {
         use crate::ui::sidebar::Section;
         let mut st = AppState::new();
-        st.dev = true;
+        st.unlock_dev();
         st.sidebar.set(Section::Inspect, true);
         st.sidebar.set(Section::Legend, true);
-        Settings::flip(&mut st, 0);
+        Settings::flip(&mut st, Row::Dev);
         assert!(!st.dev);
         assert!(!st.sidebar.is_on(Section::Inspect) && !st.sidebar.is_on(Section::Legend));
     }
@@ -144,6 +168,7 @@ mod tests {
     #[test]
     fn settings_flip_state_and_pop() {
         let mut st = AppState::new();
+        st.unlock_dev();
         let mut s = Settings::new();
         let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
         t.draw(|f| s.draw(&st, f)).unwrap();
@@ -170,11 +195,36 @@ mod tests {
     }
 
     #[test]
+    fn no_dev_mode_row_until_it_is_unlocked() {
+        let mut st = AppState::new();
+        let mut s = Settings::new();
+        let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let text = buffer_text(t.backend().buffer());
+        assert!(
+            text.contains("Rain") && !text.contains("Dev mode"),
+            "{text}"
+        );
+        // The top row is rain, and nothing a key does turns dev mode on.
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert!(!st.rain && !st.dev);
+        st.set_dev(true);
+        assert!(!st.dev, "locked");
+        st.unlock_dev();
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let text = buffer_text(t.backend().buffer());
+        assert!(
+            text.contains("Dev mode") && text.contains("[ ON ]"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn settings_rows_wrap() {
         let mut st = AppState::new();
         let mut s = Settings::new();
         s.update(&mut st, &[key(KeyCode::Up)]);
-        assert_eq!(s.selected, Settings::rows(&st) - 1);
+        assert_eq!(s.selected, Settings::rows(&st).len() - 1);
         s.update(&mut st, &[key(KeyCode::Down)]);
         assert_eq!(s.selected, 0);
     }
@@ -186,7 +236,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
         t.draw(|f| s.draw(&st, f)).unwrap();
         assert!(!buffer_text(t.backend().buffer()).contains("Screen effects"));
-        assert_eq!(Settings::rows(&st), 3);
+        assert_eq!(Settings::rows(&st), [Row::Rain, Row::Fps]);
         st.effects = true;
         t.draw(|f| s.draw(&st, f)).unwrap();
         let text = buffer_text(t.backend().buffer());
@@ -202,7 +252,11 @@ mod tests {
         st.effects = true;
         let mut s = Settings::new();
         s.update(&mut st, &[key(KeyCode::Up)]);
-        assert_eq!(s.selected, 3, "up from the top wraps to the effects row");
+        assert_eq!(
+            Settings::rows(&st)[s.selected],
+            Row::Effects,
+            "up from the top wraps to the effects row"
+        );
         s.update(&mut st, &[key(KeyCode::Right)]);
         assert_eq!(st.screen_fx, ScreenFx::Crt);
         s.update(&mut st, &[key(KeyCode::Enter)]);

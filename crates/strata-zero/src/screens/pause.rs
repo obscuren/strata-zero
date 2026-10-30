@@ -76,7 +76,7 @@ impl Screen for Pause {
                             fx: TransitionKind::None,
                         },
                         4 => ScreenCmd::Switch {
-                            to: Box::new(Title::new(st.tick)),
+                            to: Box::new(Title::new(st, st.tick)),
                             fx: TransitionKind::SlideUp,
                         },
                         _ => ScreenCmd::Quit,

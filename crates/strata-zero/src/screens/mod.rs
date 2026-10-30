@@ -27,8 +27,8 @@ pub mod workbench;
 use crate::app::Screen;
 
 /// The screen the app starts on.
-pub fn initial() -> impl Screen {
-    title::Title::new(0)
+pub fn initial(st: &crate::app::AppState) -> impl Screen + use<> {
+    title::Title::new(st, 0)
 }
 
 /// The screen shown once a city exists: the map, on foot.
