@@ -168,9 +168,17 @@ the five glitch recipes as Python).
 - Modify: `crates/strata-zero/src/missions/mod.rs`; create
   `crates/strata-zero/src/missions/cast.rs`, `crates/strata-zero/src/missions/effects.rs`
 - Modify: `crates/strata-zero/src/app.rs` (`pub missions: missions::Missions`, default;
-  reset in `enter_city`/`enter_city_at`), `crates/strata-zero/src/screens/explore.rs`
-  (`enter_walk`: `crate::missions::begin(st)` right after `credentials::move_in(st)`;
-  the update: `crate::missions::tick(st)` right after `crate::jobs::tick(st)`),
+  reset in `enter_city`/`enter_city_at`), `crates/strata-zero/src/screens/mod.rs`
+  (`explore_screen`: build the `MapScreen::walking`, then `crate::missions::begin(st)`,
+  then box it), `crates/strata-zero/src/screens/explore.rs` (the update:
+  `crate::missions::tick(st)` right after `crate::jobs::tick(st)`),
+  `flavor/content.ron` (the item `taped_package`, spec §12, verbatim) and
+  `flavor/missions.ron` (`Give(item: "taped_package", count: 1)` in place of
+  `sealed_package`), `crates/strata-zero/src/missions/content.rs` (`Mission::roles` must
+  include a `Talk(role)` trigger's role; Task 2's review found it missing), and remove
+  Task 2's staged `#![allow(dead_code, unused_imports)]` (missions/mod.rs) and
+  `#[allow(dead_code)]` (app.rs `book`) once the runtime uses them, keeping a narrow
+  allow only where a later task's item is still unused, with a comment naming that task,
   `crates/strata-zero/src/credentials.rs` (`move_in` stops calling
   `jobs::first_favour`), `crates/strata-zero/src/jobs/generate.rs` (`first_favour`,
   `first_fetch` → `#[cfg(test)]`), `crates/strata-zero/src/jobs/mod.rs`
@@ -221,14 +229,18 @@ the five glitch recipes as Python).
 
 - [ ] **Step 1: Write the failing tests** (in `missions/mod.rs` tests, a real city via
   `jobs::testutil::state_home()` then `begin`; the welcome favour must NOT be there
-  after `MapScreen::walking` — add `new_game_has_no_favour_mail`):
+  after `MapScreen::walking` — add `new_game_has_no_favour_mail`; and
+  `explore_screen_begins_the_story` (a fresh city through `screens::explore_screen`:
+  `begun`, one feed) while `MapScreen::walking` alone leaves `begun == false`):
+  - `roles_include_a_talk_role` (a test book with `Talk("dez")` as its only mention of
+    dez: `roles()` has `dez`);
   - `begin_casts_dez_and_marlo_and_queues_the_welcome`: cast has both; `person_of("dez")
     == jobs::nearest_fixer(home door)`; that person's name is "Dez"; Marlo's work tile
     is 30–140 from the home door; `feeds.len() == 1`, its `text[1]` contains "Marlo"
     and no `{`.
   - `the_same_city_casts_the_same`: two fresh states, same cast ids.
   - `closing_the_welcome_gives_the_package_and_kills_marlo`: `end(st, 0, 0)`; the pack
-    has one `sealed_package`; `world.is_dead(marlo)`; one `Body` at `work_tile`;
+    has one `taped_package` and no `sealed_package`; `world.is_dead(marlo)`; one `Body` at `work_tile`;
     objective starts "Hand the package to Marlo"; run waits on step 2 (`body`).
   - `seeing_the_body_then_a_minute_rings_dez`: put the player on the Street next to
     the body with sight updated (as the shot's street test does), `tick`; run waits on
@@ -359,10 +371,15 @@ the five glitch recipes as Python).
   pub fn ring(st: &mut AppState, call: Call);        // up now, or queued behind the one up
   pub fn tick(st: &mut AppState);                    // voicemail after RING_TICKS
   pub fn key(st: &mut AppState, k: &KeyEvent) -> bool; // true when the card took it
-  pub fn draw(buf: &mut Buffer, map: Rect, st: &AppState);
-  pub fn card_rect(map: Rect, talking: bool) -> Rect;  // ringing 36×5, talking min(62, map.w−2)×13, at (map.x+1, map.y+1)
+  pub fn draw(buf: &mut Buffer, map: Rect, player: Option<(u16, u16)>, st: &AppState); // player = its screen cell
+  pub fn card_rect(map: Rect, talking: bool, player: Option<(u16, u16)>) -> Rect;
+      // ringing 36×5; talking min(62, map.w−2)×13, compact ×7 (no face) when map.h < 28;
+      // at (map.x+1, map.y+1), or (map.x+1, map.bottom()−1−h) when the player's cell is inside that
+  pub fn quiet(st: &AppState) -> bool;  // a fight is on (st.net.engaged) or the player is on a Place::Construct
   ```
-- Behaviour exactly as spec §8: keys `space`/`esc` only; each line logged as it starts
+- Behaviour exactly as spec §8: while `quiet`, a queued call does not ring (its ring
+  timer does not run) and a call that is up goes to voicemail at once; `key` takes
+  nothing while `quiet`; keys `space`/`esc` only; each line logged as it starts
   (`` `Dez` · “…” ``); voicemail mails all lines (subject `voicemail`) and logs ``
   `Dez` · voicemail on your rig ``; any end calls `missions::end` and rings the next
   queued call.
@@ -374,7 +391,11 @@ the five glitch recipes as Python).
   `esc_while_ringing_is_voicemail` (mail with all three lines, step ended),
   `ringing_out_is_voicemail` (advance 900 clock ticks, `tick`), `esc_while_talking_hangs_up`,
   `a_second_call_waits_for_the_first` (Review Focus 3), `the_card_fits_a_100x30_map`
-  (talking card inside `r.map` at 100×30, every word of the current line visible),
+  (talking card inside `r.map` at 100×30, compact: 7 rows, no face, every word of the
+  current line visible), `the_card_moves_off_the_player` (player cell inside the
+  top-left rect → the card sits at the bottom-left), `no_call_rings_in_a_fight` (with
+  `st.net.engaged` set, `ring` leaves it queued; `tick` past 900 does not voicemail;
+  clearing the fight and ticking rings it), `a_fight_sends_a_live_call_to_voicemail`,
   `space_with_a_call_up_does_not_open_the_space_window` (explore update with a call
   up and a person beside the player: no `Push`).
 - [ ] **Step 2–4:** run, implement, run.
