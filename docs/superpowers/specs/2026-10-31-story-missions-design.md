@@ -77,8 +77,23 @@ police, which the game does not have yet.
   open story mission above the job in hand; the tab lists STORY first.
 - **The feed shows all its paragraphs at once** (as mocked); the call types its lines
   out one at a time with the log's reveal.
-- **Every line a call says is logged** as it is shown (`Dez: “…”`), so the Log pane
-  keeps what was said.
+- **Every line a call says is logged** as it is shown (`` `Dez` · “…” ``), so the Log
+  pane keeps what was said.
+
+After the builder check (three questions, settled here):
+
+- **No call rings during a fight or a run.** While `st.net.engaged` is on (a fight on
+  foot or ICE on turns) or the player stands in a construct, a call stays queued and
+  rings once it is over; a call that is up when one starts goes to voicemail at once.
+  `space` and `esc` stay the fight's.
+- **The card never sits on the player.** It goes in the map's top-left corner, or the
+  bottom-left when the player's cell would fall inside it. On a map under 28 rows (the
+  100×30 terminal) the talking card is compact: no face, text only, 7 rows.
+- **The story's package is its own item**, `taped_package` ("Taped package"), not the
+  jobs' `sealed_package`, so no Deliver job can use it up and a later `Take` finds it.
+- **The story begins in `screens::explore_screen`**, the one door every new game, load
+  and debug start goes through, not in `MapScreen::enter_walk`; tests that build a map
+  with `MapScreen::walking` get no story unless they call `missions::begin`.
 
 ## Words
 
@@ -102,7 +117,7 @@ police, which the game does not have yet.
   to it and reads it for display, as it does for jobs.
 - `flavor/missions.ron` holds the cast and the missions, compiled in and validated at
   load like `jobs.ron`: unknown roles, items, steps or text slots fail the load.
-- Triggers in this slice: `NewGame`, `Ended(step)`, `Sees`, `After`, `Enter`, `Talk`,
+- Triggers in this slice: `NewGame`, `Ended(step)`, `Sees`, `After`, `At`, `Talk`,
   `MissionDone`. Effects: `Feed`, `Call`, `Give`, `Take`, `Dead`, `Objective`, `Mail`,
   `Log`. Picks: `NearestFixer`, `Worker`. Each is one enum variant with its own
   evaluation, and §15 is the recipe for adding one.
@@ -158,7 +173,7 @@ Story(
         "marlo": Role(
             name: "Marlo",
             title: "cook",
-            pick: Worker(professions: ["cook"], range: (30, 140)),
+            pick: Worker(professions: ["noodle_cook"], at: [], range: (30, 140)),
             face: None,
         ),
     },
@@ -220,8 +235,8 @@ card: state, keys, drawing), `ui.rs` (pane, deck, console listing).
   each tick. `missions::tick(st)` runs in the explore update right after `jobs::tick`
   (it is frozen under menus like the rest of the world) and does `fire(st, None)` plus
   the call's ring timeout.
-- **`begin(st)`** at new game: called from `MapScreen::enter_walk` right after
-  `credentials::move_in` (the branch where a fresh body wakes at home). Once per city
+- **`begin(st)`** at new game: called from `screens::explore_screen` right after
+  `MapScreen::walking` (every new game, load and debug start comes through it). Once per city
   (`begun`); nothing without a home (the combat lot). It casts every role (§5), marks
   runs that need an uncast role `Uncast` (and in dev mode warns `story · no <role> in
   this city`), then sends `NewGame`.
@@ -346,6 +361,11 @@ column owns the top-right). The world runs on under it.
 
 - `Call { mission, step, from: role, lines: Vec<String>, rang: u64 (clock tick),
   answered: Option<u64>, line: usize, shown: u64 (clock tick the current line began) }`.
+- **Placement:** the card's rect is at (`map.x + 1`, `map.y + 1`) unless the player's
+  screen cell would fall inside it; then at (`map.x + 1`, `map.bottom() − 1 − h`).
+- **No call during a fight or a run:** while `st.net.engaged` is `Some` or the player
+  is on a `Place::Construct`, a ringing call does not start (it stays queued, its ring
+  timer not running), and a call up when one starts goes to voicemail at once.
 - **Ringing** card, 36 × 5, bracket frame: `●` blinking with `○` every 15 ticks,
   `INCOMING · <NAME>` magenta bold, `▂▄▆█` at the right; `<title> · <district>` dim;
   `space` answer · `esc` let it ring.
@@ -354,7 +374,9 @@ column owns the top-right). The world runs on under it.
   wrapped to the card, the ones said so far in `TEXT` with a blank between, the
   current one typing at 60 characters a second with a magenta `▌` after it; older lines
   scroll off the top when the card is full. Last row: `space next` (or `space hang
-  up` on the last line once typed) and `esc hang up`.
+  up` on the last line once typed) and `esc hang up`. On a map under 28 rows the card
+  is **compact**: `min(62, map width − 2)` × 7, no face, the header, three text rows,
+  the key row.
 - **Keys**, only while a call is up, before the walk keys: `space` answers a ringing
   call, finishes the typing of a line, or moves to the next (after the last, ends the
   call); `esc` sends a ringing call to voicemail or hangs up a talking one. Every other
@@ -420,7 +442,7 @@ Mission(id: "the_drop", title: "The drop", from: "dez", steps: [
         ]),
     ]),
     Step(id: "package", when: Ended("welcome"), then: [
-        Give(item: "sealed_package", count: 1),
+        Give(item: "taped_package", count: 1),
         Dead(role: "marlo", look: "Face down on the pavement, apron still on. Not breathing."),
         Objective("Hand the package to {marlo} · {marlo.place} · {marlo.district}"),
     ]),
@@ -462,6 +484,9 @@ features).
   `MapScreen::walking` (the keypad shot, the rig's mail test, the offer stack, the
   interact test) call it themselves or stop assuming it.
 - Nothing else of jobs changes.
+- `flavor/content.ron` gains `Item(id: "taped_package", name: "Taped package", kind:
+  Component, weight: 0.5, value: 0, desc: "Wrapped in black tape, heavier than it
+  looks. Hands only, Dez said. Don't open it.")`.
 
 ## 13. Dev console
 
