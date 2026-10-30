@@ -19,3 +19,5 @@ hosting = "github"
 install-updater = false
 # The Mac app, signed and notarized (.github/workflows/build-mac-app.yml), in every release
 global-artifacts-jobs = ["./build-mac-app"]
+# dist's notes list only its own files: put the Mac app on top (.github/workflows/mac-app-notes.yml)
+post-announce-jobs = ["./mac-app-notes"]

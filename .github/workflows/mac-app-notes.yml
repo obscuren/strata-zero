@@ -1,0 +1,32 @@
+# Puts the Mac app at the top of the release notes once dist has published the release.
+# dist's notes list only the files dist builds, so the DMG from build-mac-app.yml would
+# otherwise go unmentioned. The work is scripts/mac-app-notes.sh, which can also be run
+# by hand for an older release.
+#
+# dist's release.yml calls this after announcing (`post-announce-jobs` in
+# dist-workspace.toml); after changing that file, run `dist generate`.
+name: Mac app notes
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  notes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      MAC_APP_UNSIGNED: ${{ vars.MAC_APP_UNSIGNED }}
+      TAG: ${{ fromJson(inputs.plan).announcement_tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Link the DMG in the release notes
+        run: scripts/mac-app-notes.sh "$TAG"
