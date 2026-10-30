@@ -19,9 +19,10 @@ use backend::{Damage, PixelBackend};
 use crossterm::event::KeyEvent;
 use font::Fonts;
 use keys::{Input, Shortcut};
+use platform::Platform;
 use present::{Presenter, Shown};
 use ratatui::Terminal;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
@@ -42,8 +43,13 @@ const SHOT_FRAME: u64 = 45;
 const ZOOM_STEP: f32 = 1.1;
 const ZOOM_RANGE: (f32, f32) = (0.6, 2.5);
 
-/// Runs the game in a window until it quits. Started from inside an `.app`, the working
-/// folder becomes `app_support_dir()` first, so `cities/` is saved there.
+/// Whether this is the desktop app (the `app` feature: the Mac `.app`, `Strata Zero.exe`,
+/// the Linux `strata-zero`): it always opens the window, and keeps its files in the
+/// player's app folder.
+pub const IS_APP: bool = cfg!(feature = "app");
+
+/// Runs the game in a window until it quits. The desktop app first makes its app folder
+/// (`Platform::app_dir`) the working folder, so `cities/` is saved there.
 pub fn run(screen: Box<dyn Screen>, mut st: AppState) -> Result<()> {
     if let Some(fx) = std::env::var("STRATA_SCREEN_FX")
         .ok()
@@ -51,10 +57,13 @@ pub fn run(screen: Box<dyn Screen>, mut st: AppState) -> Result<()> {
     {
         st.screen_fx = fx;
     }
-    if in_bundle() {
-        let dir = app_support_dir();
+    if IS_APP {
+        let dir = Platform::NATIVE
+            .app_dir(&platform::process_env)
+            .context("can't tell where to keep the game's files: set APPDATA (Windows) or HOME")?;
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-        std::env::set_current_dir(&dir)?;
+        std::env::set_current_dir(&dir)
+            .with_context(|| format!("opening {}", dir.display()))?;
     }
     let fonts = Fonts::load();
     let event_loop = EventLoop::new()?;
@@ -76,21 +85,6 @@ pub fn run(screen: Box<dyn Screen>, mut st: AppState) -> Result<()> {
     };
     event_loop.run_app(&mut app)?;
     app.error.map_or(Ok(()), Err)
-}
-
-/// Whether this executable sits inside a macOS `.app` bundle.
-pub fn in_bundle() -> bool {
-    std::env::current_exe().is_ok_and(|p| is_bundle_path(&p))
-}
-
-fn is_bundle_path(p: &Path) -> bool {
-    p.to_string_lossy().contains(".app/Contents/MacOS/")
-}
-
-/// Where a bundled game keeps its files: `~/Library/Application Support/Strata Zero`.
-pub fn app_support_dir() -> PathBuf {
-    let home = std::env::var_os("HOME").unwrap_or_default();
-    Path::new(&home).join("Library/Application Support/Strata Zero")
 }
 
 /// The window, what presents into it and the terminal drawing for it, once it exists.
@@ -352,15 +346,7 @@ impl ApplicationHandler for App {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn in_bundle_detects_app_paths() {
-        assert!(is_bundle_path(Path::new(
-            "/Applications/Strata Zero.app/Contents/MacOS/strata"
-        )));
-        assert!(!is_bundle_path(Path::new("target/smoke/release/strata")));
-        assert!(!is_bundle_path(Path::new("/Users/x/my.app.notes/strata")));
-    }
+    use std::path::Path;
 
     /// The title screen as the window paints it, to `SHOT_DIR/title.png`. The street, the
     /// deck and the ATTRIBUTES sheet come out of the shot harness (`screens::shots`) as

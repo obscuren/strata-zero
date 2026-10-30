@@ -85,7 +85,7 @@ pub fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         #[cfg(feature = "window")]
-        None if cli.window || crate::window::in_bundle() => {
+        None if cli.window || crate::window::IS_APP => {
             crate::window::run(Box::new(crate::screens::initial()), AppState::new())
         }
         None => app::run(Box::new(crate::screens::initial()), AppState::new()),

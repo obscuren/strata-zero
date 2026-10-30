@@ -34,5 +34,8 @@ bytemuck = { version = "1", optional = true }
 [features]
 # The game in its own window instead of a terminal: `strata --window`.
 window = ["dep:winit", "dep:softbuffer", "dep:fontdue", "dep:png", "dep:wgpu", "dep:pollster", "dep:bytemuck"]
+# The desktop app (Strata Zero.app, Strata Zero.exe, the Linux strata-zero): always in
+# the window, with its files in the player's app folder.
+app = ["window"]
 
 [dev-dependencies]
