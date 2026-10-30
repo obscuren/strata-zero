@@ -228,10 +228,12 @@ pub enum ItemKind {
     Hardware,
     /// A decal stuck on an item's drawing; changes nothing but how it looks.
     Sticker,
+    /// A small vehicle that docks in a socket and comes out with you: a drone.
+    Bot,
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 10] = [
+    pub const ALL: [ItemKind; 11] = [
         ItemKind::Weapon,
         ItemKind::Armor,
         ItemKind::Cyberware,
@@ -242,6 +244,7 @@ impl ItemKind {
         ItemKind::Program,
         ItemKind::Hardware,
         ItemKind::Sticker,
+        ItemKind::Bot,
     ];
 
     pub fn label(self) -> &'static str {
@@ -256,6 +259,7 @@ impl ItemKind {
             ItemKind::Program => "program",
             ItemKind::Hardware => "hardware",
             ItemKind::Sticker => "sticker",
+            ItemKind::Bot => "bot",
         }
     }
 }
@@ -438,6 +442,42 @@ impl SocketKind {
     pub fn needs_a_doc(self) -> bool {
         matches!(self, SocketKind::Hand | SocketKind::Forearm)
     }
+}
+
+/// How a bot gets about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BotBody {
+    /// In the air, over any floor.
+    Air,
+    /// On the ground.
+    Ground,
+}
+
+impl BotBody {
+    /// What the game calls a bot with this body.
+    pub const fn word(self) -> &'static str {
+        match self {
+            BotBody::Air => "drone",
+            BotBody::Ground => "rover",
+        }
+    }
+}
+
+/// A small vehicle: what it is when it is out with you, docked in a socket of your
+/// chrome. Its perks and grants are the item's, and count while it is docked.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Bot {
+    pub body: BotBody,
+    /// The kind of socket it docks in.
+    pub docks: SocketKind,
+    /// Its look on the map: the frames it cycles, in its light.
+    pub frames: Vec<char>,
+    pub light: (u8, u8, u8),
+    /// Moving leaves a wake behind it.
+    pub wake: bool,
+    /// Its seat in a fight, and how far it moves in a turn.
+    pub reflex: u8,
+    pub moves: u8,
 }
 
 /// What a fitted piece of hardware changes.
@@ -805,6 +845,9 @@ pub struct Item {
     /// What it shoots (weapons only).
     #[serde(default)]
     pub weapon: Option<Weapon>,
+    /// What it is out of its socket (bots only).
+    #[serde(default)]
+    pub bot: Option<Bot>,
     /// What a throw looks like, in order (throwables only).
     #[serde(default)]
     pub fx: Vec<Fx>,
@@ -822,13 +865,24 @@ impl Item {
     /// Held per copy, since it can carry state or be fitted: it has sockets, is
     /// hardware or chrome that fits a socket, or takes stickers.
     pub fn per_copy(&self) -> bool {
-        let socket_chrome = self
-            .implant
-            .is_some_and(|i| matches!(i.fits, Fits::Socket(_)));
-        !self.sockets.is_empty()
-            || self.hardware.is_some()
-            || socket_chrome
-            || self.takes_stickers()
+        !self.sockets.is_empty() || self.fits_socket().is_some() || self.takes_stickers()
+    }
+
+    /// The kind of socket it goes in: hardware's, socket chrome's, a bot's dock.
+    pub fn fits_socket(&self) -> Option<SocketKind> {
+        match (&self.hardware, self.implant, &self.bot) {
+            (Some(h), _, _) => Some(h.fits),
+            (
+                None,
+                Some(Implant {
+                    fits: Fits::Socket(k),
+                    ..
+                }),
+                _,
+            ) => Some(k),
+            (None, _, Some(b)) => Some(b.docks),
+            _ => None,
+        }
     }
 
     /// It can be worn and has a drawing, so stickers can go on it.

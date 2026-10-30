@@ -267,6 +267,7 @@ fn card(id: ItemId, name: String, desc: String) -> Item {
         sticker: None,
         weapon: None,
         stickers: Vec::new(),
+        bot: None,
     }
 }
 

@@ -1243,20 +1243,21 @@ mod tests {
         st.character.install(site, id(item), copy);
     }
 
-    /// The spec's loadout: a piece at every site but EARS, R ARM and LEGS, and the
-    /// Piston arm at L ARM with the Arc hand in its hand.
+    /// The spec's loadout: a piece at every site but EARS, R ARM and LEGS, the Scout
+    /// drone in the cradle's bay, and the Piston arm at L ARM with the Arc hand in its
+    /// hand.
     fn loadout(st: &mut AppState) {
         for (site, item) in [
             (Site::Neural, "neural_port"),
             (Site::Eyes, "target_lens"),
             (Site::Jaw, "bulldog_jaw"),
             (Site::Spine, "redline_spine"),
-            (Site::Back, "drone_cradle"),
             (Site::Organs, "adrenal_pump"),
             (Site::Skin, "subdermal_mesh"),
         ] {
             install(st, site, item, &[]);
         }
+        install(st, Site::Back, "drone_cradle", &[(0, "scout_drone")]);
         install(st, Site::LeftArm, "piston_arm", &[(0, "arc_hand")]);
     }
 
@@ -1593,6 +1594,7 @@ mod tests {
                 Group("body"),
                 s(Site::Spine),
                 s(Site::Back),
+                Socket(Site::Back, 0),
                 s(Site::Organs),
                 s(Site::Skin),
                 Group("limbs"),
@@ -1610,6 +1612,7 @@ mod tests {
             "── head ──",
             "Neural port",
             "· ears",
+            "└ Scout drone",
             "── limbs ──",
             "Piston arm",
             "├ Arc hand",
@@ -1627,17 +1630,17 @@ mod tests {
         assert_eq!(buf[(R0 + 2, 7)].fg, TEXT);
         assert_eq!(cells(&buf, R0 + 2, 9, 6), "· ears");
         assert_eq!(buf[(R0 + 2, 9)].fg, FAINTER);
-        assert_eq!(buf[(R0, 17)].symbol(), "▸");
-        assert_eq!(cells(&buf, R0 + 2, 17, 10), "Piston arm");
-        assert_eq!(buf[(R0 + 2, 17)].fg, CYAN);
+        assert_eq!(buf[(R0, 18)].symbol(), "▸");
+        assert_eq!(cells(&buf, R0 + 2, 18, 10), "Piston arm");
+        assert_eq!(buf[(R0 + 2, 18)].fg, CYAN);
         for x in R0..RULE_100 {
-            assert_eq!(buf[(x, 17)].bg, BAR_BG, "the cursor's bar at {x}");
+            assert_eq!(buf[(x, 18)].bg, BAR_BG, "the cursor's bar at {x}");
         }
-        assert_eq!(cells(&buf, R0 + 3, 18, 10), "├ Arc hand");
-        assert_eq!(buf[(R0 + 3, 18)].fg, RULE);
-        assert_eq!(buf[(R0 + 5, 18)].fg, DIM);
-        assert_eq!(cells(&buf, R0 + 3, 19, 11), "└ □ forearm");
-        assert_eq!(buf[(R0 + 5, 19)].fg, FAINTER);
+        assert_eq!(cells(&buf, R0 + 3, 19, 10), "├ Arc hand");
+        assert_eq!(buf[(R0 + 3, 19)].fg, RULE);
+        assert_eq!(buf[(R0 + 5, 19)].fg, DIM);
+        assert_eq!(cells(&buf, R0 + 3, 20, 11), "└ □ forearm");
+        assert_eq!(buf[(R0 + 5, 20)].fg, FAINTER);
         for y in 6..BODY.bottom() {
             assert_eq!(buf[(RULE_100, y)].symbol(), "│", "the ledger's rule at {y}");
         }
@@ -1671,13 +1674,13 @@ mod tests {
             (Site::Ears, "damper_cochlea"),
             (Site::Jaw, "bulldog_jaw"),
             (Site::Spine, "redline_spine"),
-            (Site::Back, "drone_cradle"),
             (Site::Organs, "adrenal_pump"),
             (Site::Skin, "subdermal_mesh"),
             (Site::Legs, "dog_legs"),
         ] {
             install(&mut st, site, item, &[]);
         }
+        install(&mut st, Site::Back, "drone_cradle", &[(0, "scout_drone")]);
         install(
             &mut st,
             Site::LeftArm,
@@ -1691,7 +1694,8 @@ mod tests {
             &[(0, "toolfingers"), (1, "launcher_sleeve")],
         );
         let rows = ledger_rows(&st);
-        assert_eq!(rows.len(), 3 + 11 + 4);
+        // Three groups, eleven sites, four arm sockets and the cradle's bay.
+        assert_eq!(rows.len(), 3 + 11 + 5);
         // Every row on its own line inside the body, whichever the cursor is on.
         for (i, &row) in rows.iter().enumerate() {
             let Some(at) = (match row {
@@ -1816,9 +1820,9 @@ mod tests {
         // The pick on the bar; the ledger's cursor dim.
         let (x, y) = find(&buf, CARD_100, (6, 27), "Grip arm").unwrap();
         assert_eq!(buf[(x, y)].bg, BAR_BG);
-        assert_eq!(buf[(R0, 20)].symbol(), "▸");
-        assert_eq!(buf[(R0, 20)].fg, DIM);
-        assert_ne!(buf[(R0 + 2, 20)].bg, BAR_BG);
+        assert_eq!(buf[(R0, 21)].symbol(), "▸");
+        assert_eq!(buf[(R0, 21)].fg, DIM);
+        assert_ne!(buf[(R0 + 2, 21)].bg, BAR_BG);
         // LOAD shows what it takes, in amber.
         let after = format!(" {}/{max}", load + 3);
         let x = col_of(&buf, 5, R0, &after).unwrap_or_else(|| panic!("{}", cells(&buf, R0, 5, 50)));

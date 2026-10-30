@@ -75,7 +75,7 @@ fn log_name(source: &str) -> String {
 
 /// Whether you count as chrome: anything installed.
 fn you_are_chrome(st: &AppState) -> bool {
-    st.character.pieces() > 0
+    st.character.pieces(&st.content) > 0
 }
 
 /// An idle, live foe turns to hunt toward `seen`.
@@ -830,7 +830,7 @@ mod tests {
                 (Site::Legs, "sprinter_shanks"),
             ],
         );
-        assert_eq!(st.character.pieces(), 9);
+        assert_eq!(st.character.pieces(&st.content), 9);
         assert_eq!(resist(&st, Harm::Emp), -18);
         assert_eq!(effect_on_you(&st, &puck, 0), (4, 2));
         // Chromeless, the puck still passes through you.

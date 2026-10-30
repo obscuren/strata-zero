@@ -497,22 +497,90 @@ def hardback_brace():
 # ================================================================= BACK
 
 def drone_cradle():
-    """A cradle bolted to the back, a sparrow-sized drone docked in it: two rotors
-    blurred over it, its one cyan eye open."""
+    """The cradle alone, bolted to the back: two clamp arms up from the base plate,
+    the dock between them with its cyan contact lit. What docks in it is drawn on its
+    own card."""
+    return art([
+        R(),
+        R(),
+        R((6, "987"), (21, "789")),
+        R((6, "75"), (22, "57")),
+        R((6, "64"), (22, "46")),
+        R((6, "64"), (22, "46")),
+        R((6, "64"), (12, "4qccq4"), (22, "46")),
+        R((6, "64"), (12, "355553"), (22, "46")),
+        R((6, "647"), (13, "4444"), (21, "746")),
+        R((3, "888888888888888888888888")),
+        R((3, "2444444444444444444444442")),
+        R(),
+    ]).rows()
+
+
+# ================================================================= DRONES
+
+# A drone's light is its own: the Scout's green (its Wave), the Mule's amber, the
+# Lamp's warm white.
+SCOUT_HI, SCOUT, SCOUT_DK = "#c8ffc8", "#78ff78", "#2a8a3a"
+MULE_HI, MULE, MULE_DK = "#ffe8a8", "#ffc850", "#8a6420"
+LAMP_HI, LAMP, LAMP_DK, BEAM, BEAM_LO = "#ffffff", "#fff0c8", "#a8987a", "#8c7c52", "#4c4430"
+NET, NET_LO, CRATE, CRATE_HI = "#a89070", "#6e5c44", "#5a4630", "#8a6e4c"
+
+
+def scout_drone():
+    """A sparrow-sized drone side-on: two rotors blurred over it, its body slung
+    between them, the green eye at the nose that maps the floor, two thin skids."""
     return art([
         R(),
         R((3, "3567887653"), (17, "3567887653")),
         R((7, "66"), (21, "66")),
         R((5, "77777"), (10, "9999999999"), (20, "77777")),
-        R((9, "8888888888"), (19, "qc")),
-        R((6, "647"), (9, "7777777777"), (19, "cC"), (21, "764")),
-        R((6, "64"), (9, "555555555555"), (22, "64")),
-        R((6, "64"), (10, "3333333333"), (22, "64")),
-        R((6, "64"), (14, "44"), (22, "64")),
-        R((3, "888888888888888888888888")),
-        R((3, "2444444444444444444444442")),
+        R((9, "8888888888"), (19, "qg")),
+        R((9, "7777777777"), (19, "gk")),
+        R((9, "555555555555")),
+        R((10, "3333333333")),
+        R((11, "4"), (18, "4")),
+        R((9, "5666"), (17, "6665")),
         R(),
-    ]).rows()
+        R(),
+    ], pal(q=SCOUT_HI, g=SCOUT, k=SCOUT_DK)).rows()
+
+
+def mule_drone():
+    """A heavier drone, four rotors on long arms, a crate slung under it in a cargo
+    net; its amber tell on the nose."""
+    return art([
+        R(),
+        R((1, "35678876531"), (18, "35678876531")),
+        R((6, "6"), (23, "6")),
+        R((4, "7777"), (8, "99999999999999"), (22, "7777")),
+        R((7, "8888888888888888"), (23, "qa")),
+        R((7, "7777777777777777"), (23, "ak")),
+        R((8, "55555555555555")),
+        R((9, "n"), (11, "n"), (13, "n"), (15, "n"), (17, "n"), (19, "n"), (21, "n")),
+        R((9, "nBBBBBBBBBBBBn")),
+        R((9, "NbbbbbbbbbbbbN")),
+        R((9, "nnnnnnnnnnnnnn")),
+        R(),
+    ], pal(q=MULE_HI, a=MULE, k=MULE_DK, n=NET, N=NET_LO, b=CRATE, B=CRATE_HI)).rows()
+
+
+def lamp_drone():
+    """A small drone with a lamp for a head: two rotors over a short body, the lamp's
+    housing at the front and its warm beam thrown forward and down."""
+    return art([
+        R(),
+        R((2, "35677653"), (13, "35677653")),
+        R((5, "6"), (16, "6")),
+        R((4, "777"), (7, "999999999"), (16, "777")),
+        R((6, "88888888888"), (17, "679")),
+        R((6, "77777777777"), (17, "5Lw"), (20, "yy")),
+        R((7, "555555555"), (17, "4LL"), (20, "YYyy")),
+        R((8, "3333333"), (17, "34"), (21, "YYyy")),
+        R((9, "4"), (14, "4"), (22, "Yyy")),
+        R((7, "566"), (13, "665"), (23, "yy")),
+        R(),
+        R(),
+    ], pal(w=LAMP_HI, L=LAMP, Y=BEAM, y=BEAM_LO)).rows()
 
 
 # ================================================================= ORGANS
@@ -1061,6 +1129,9 @@ ART = {
     "redline_spine": redline_spine,
     "hardback_brace": hardback_brace,
     "drone_cradle": drone_cradle,
+    "scout_drone": scout_drone,
+    "mule_drone": mule_drone,
+    "lamp_drone": lamp_drone,
     "adrenal_pump": adrenal_pump,
     "second_heart": second_heart,
     "filter_liver": filter_liver,
@@ -1087,7 +1158,8 @@ NAMES = {
     "secondhand_eyes": "Secondhand eyes", "damper_cochlea": "Damper cochlea",
     "bulldog_jaw": "Bulldog jaw", "rebreather": "Rebreather", "spit_dart": "Spit dart",
     "redline_spine": "Redline spine", "hardback_brace": "Hardback brace",
-    "drone_cradle": "Drone cradle", "adrenal_pump": "Adrenal pump", "second_heart": "Second heart",
+    "drone_cradle": "Drone cradle", "scout_drone": "Scout drone", "mule_drone": "Mule drone",
+    "lamp_drone": "Lamp drone", "adrenal_pump": "Adrenal pump", "second_heart": "Second heart",
     "filter_liver": "Filter liver", "capacitor_ribs": "Capacitor ribs",
     "subdermal_mesh": "Subdermal mesh", "ceramic_plating": "Ceramic plating",
     "grounding_weave": "Grounding weave", "smart_ink": "Smart ink", "grip_arm": "Grip arm",
@@ -1104,6 +1176,7 @@ SITES = [
     ("JAW", ["bulldog_jaw", "rebreather", "spit_dart"]),
     ("SPINE", ["redline_spine", "hardback_brace"]),
     ("BACK", ["drone_cradle"]),
+    ("BAY", ["scout_drone", "mule_drone", "lamp_drone"]),
     ("ORGANS", ["adrenal_pump", "second_heart", "filter_liver", "capacitor_ribs"]),
     ("SKIN", ["subdermal_mesh", "ceramic_plating", "grounding_weave", "smart_ink"]),
     ("ARM", ["grip_arm", "piston_arm", "surgeon_arm", "wrecker_arm"]),

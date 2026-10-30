@@ -465,17 +465,11 @@ pub fn apply(
             let piece_item = c
                 .item(&ch.inventory[i].item)
                 .ok_or_else(|| "not in your pack".to_string())?;
-            let (fits, load) = match (&piece_item.hardware, &piece_item.implant) {
-                (Some(h), _) => (h.fits, 0),
-                (
-                    None,
-                    Some(Implant {
-                        fits: Fits::Socket(wants),
-                        load,
-                    }),
-                ) => (*wants, *load as u32),
-                _ => return Err(format!("`{}` is not hardware", piece_item.name)),
+            let Some(fits) = piece_item.fits_socket() else {
+                return Err(format!("`{}` is not hardware", piece_item.name));
             };
+            // Socket chrome takes load; hardware and bots take none.
+            let load = piece_item.implant.map_or(0, |i| u32::from(i.load));
             if fits != kind {
                 return Err(format!(
                     "`{}` does not fit a {}",
@@ -2267,6 +2261,119 @@ mod tests {
         assert_eq!(
             act(&mut ch, &mut g, &c, at, unfit).unwrap_err(),
             "socket forearm is empty"
+        );
+    }
+
+    /// The Drone cradle installed at the back, a Scout and a Mule drone and an Arc hand
+    /// in the pack.
+    fn cradled() -> (Content, Character, Ground, At) {
+        let (c, mut ch, mut g, at) = setup();
+        for item in [
+            "drone_cradle",
+            "scout_drone",
+            "mule_drone",
+            "arc_hand",
+            "piston_arm",
+        ] {
+            ch.give_item(&c, id(item), 1);
+        }
+        let cradle = pack_id(&ch, "drone_cradle");
+        let install = Action::InstallCopy {
+            copy: cradle,
+            site: Site::Back,
+        };
+        act(&mut ch, &mut g, &c, at, install).unwrap();
+        (c, ch, g, at)
+    }
+
+    fn dock(piece: CopyId) -> Action {
+        Action::Fit {
+            host: Host::Site(Site::Back),
+            socket: 0,
+            piece,
+        }
+    }
+
+    #[test]
+    fn a_drone_docks_and_swaps_in_its_bay() {
+        let (c, mut ch, mut g, at) = cradled();
+        let scout = pack_id(&ch, "scout_drone");
+        let out = act(&mut ch, &mut g, &c, at, dock(scout)).unwrap();
+        assert_eq!(out.message, "`Scout drone` fitted · socket bay");
+        let mule = pack_id(&ch, "mule_drone");
+        let out = act(&mut ch, &mut g, &c, at, dock(mule)).unwrap();
+        assert_eq!(
+            out.message,
+            "`Mule drone` fitted · socket bay · `Scout drone` to the pack"
+        );
+        assert!(
+            ch.installed()
+                .contains(&(Site::Back, Some(0), id("mule_drone")))
+        );
+        assert_eq!(pack_id(&ch, "scout_drone"), scout);
+    }
+
+    #[test]
+    fn bays_take_bots_and_nothing_else() {
+        let (c, mut ch, mut g, at) = cradled();
+        let before = ch.clone();
+        let hand = pack_id(&ch, "arc_hand");
+        assert_eq!(
+            act(&mut ch, &mut g, &c, at, dock(hand)).unwrap_err(),
+            "`Arc hand` does not fit a bay"
+        );
+        assert_eq!(ch, before);
+        let arm = pack_id(&ch, "piston_arm");
+        let install = Action::InstallCopy {
+            copy: arm,
+            site: Site::LeftArm,
+        };
+        act(&mut ch, &mut g, &c, at, install).unwrap();
+        let scout = pack_id(&ch, "scout_drone");
+        let in_the_hand = Action::Fit {
+            host: Host::Site(Site::LeftArm),
+            socket: 0,
+            piece: scout,
+        };
+        assert_eq!(
+            act(&mut ch, &mut g, &c, at, in_the_hand).unwrap_err(),
+            "`Scout drone` does not fit a hand socket"
+        );
+    }
+
+    #[test]
+    fn a_cradle_from_an_old_save_takes_a_drone() {
+        let (c, mut ch, mut g, at) = cradled();
+        // A copy made before the cradle had a bay has no room for one.
+        ch.chrome_copies
+            .get_mut(&Site::Back)
+            .unwrap()
+            .fitted
+            .clear();
+        let scout = pack_id(&ch, "scout_drone");
+        act(&mut ch, &mut g, &c, at, dock(scout)).unwrap();
+        assert_eq!(ch.chrome_copy(Site::Back).unwrap().fitted.len(), 1);
+        assert!(
+            ch.installed()
+                .contains(&(Site::Back, Some(0), id("scout_drone")))
+        );
+    }
+
+    #[test]
+    fn pulling_the_cradle_takes_its_drone_along() {
+        let (c, mut ch, mut g, at) = cradled();
+        let scout = pack_id(&ch, "scout_drone");
+        act(&mut ch, &mut g, &c, at, dock(scout)).unwrap();
+        act(&mut ch, &mut g, &c, at, Action::Pull(Site::Back)).unwrap();
+        let cradle = ch
+            .inventory
+            .iter()
+            .find(|s| s.item == id("drone_cradle"))
+            .and_then(|s| s.copy.as_ref())
+            .unwrap();
+        assert_eq!(
+            cradle.fitted[0].as_ref().map(|s| s.item.clone()),
+            Some(id("scout_drone"))
         );
     }
 

@@ -46,8 +46,14 @@ pub fn take_out_fee(c: &Content, item: &ItemId) -> u32 {
 
 /// The fee for a chrome action: the piece it moves in, and what it moves out of the
 /// place to make room. What is fitted inside a moved piece rides along free. `None`
-/// for anything that isn't surgery.
+/// for anything that isn't surgery, a drone docking in its bay among them.
 pub fn surgery_fee(ch: &Character, c: &Content, action: &Action) -> Option<u32> {
+    let surgical = |site, socket: usize| {
+        ch.chrome_at(site)
+            .and_then(|id| c.item(id))
+            .and_then(|i| i.sockets.get(socket))
+            .is_none_or(|k| k.needs_a_doc())
+    };
     let out = |held: Option<&ItemId>| held.map_or(0, |i| take_out_fee(c, i));
     let in_socket = |site, socket: usize| {
         ch.chrome_copy(site)
@@ -66,14 +72,14 @@ pub fn surgery_fee(ch: &Character, c: &Content, action: &Action) -> Option<u32> 
             host: Host::Site(site),
             socket,
             piece,
-        } => {
+        } if surgical(*site, *socket) => {
             let piece = ch.copy_in_pack(*piece).map(|s| &s.item);
             Some(piece.map_or(0, |i| put_in_fee(c, i)) + out(in_socket(*site, *socket)))
         }
         Action::Unfit {
             host: Host::Site(site),
             socket,
-        } => Some(out(in_socket(*site, *socket))),
+        } if surgical(*site, *socket) => Some(out(in_socket(*site, *socket))),
         _ => None,
     }
 }
@@ -184,6 +190,28 @@ mod tests {
             piece: pack_copy(&ch, "arc_hand"),
         };
         assert_eq!(surgery_fee(&ch, &c, &fit), Some(310));
+    }
+
+    #[test]
+    fn docking_a_bay_is_no_surgery() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        let cradle = ch.new_copy(&c, &id("drone_cradle"));
+        ch.install(Site::Back, id("drone_cradle"), Some(cradle));
+        ch.give_item(&c, id("scout_drone"), 1);
+        let dock = Action::Fit {
+            host: Host::Site(Site::Back),
+            socket: 0,
+            piece: pack_copy(&ch, "scout_drone"),
+        };
+        assert_eq!(surgery_fee(&ch, &c, &dock), None);
+        let stow = Action::Unfit {
+            host: Host::Site(Site::Back),
+            socket: 0,
+        };
+        assert_eq!(surgery_fee(&ch, &c, &stow), None);
+        // The cradle itself is chrome.
+        assert!(surgery_fee(&ch, &c, &Action::Pull(Site::Back)).is_some());
     }
 
     #[test]
