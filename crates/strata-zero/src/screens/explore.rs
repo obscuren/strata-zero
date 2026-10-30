@@ -2857,6 +2857,15 @@ impl Screen for MapScreen {
         if let Some(p) = people.as_ref() {
             overlays.push(p);
         }
+        // Your bots over the walkers, under the aim and your @.
+        let bots = crate::render::bots::BotOverlay {
+            bots: &st.bots,
+            content: &st.content,
+            foes: &st.foes,
+            vis,
+            now: st.clock_tick(),
+        };
+        overlays.push(&bots);
         let inside = match (&self.placement, st.world.as_ref()) {
             (Some((pl, _, placement)), Some(world)) if *pl == self.place => Some(InteriorPeople {
                 placement,
