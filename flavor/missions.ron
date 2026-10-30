@@ -1,0 +1,99 @@
+// Story missions. A mission waits on one step at a time; when its trigger fires the
+// step's effects run in order and the mission waits on the next. The last step closes
+// the mission. Text slots: {role} the role's name, {role.title} its title,
+// {role.place} where they work, {role.district} the district, {role.hours} the shift.
+Story(
+    cast: {
+        "dez": Role(
+            name: "Dez",
+            title: "fixer",
+            pick: NearestFixer,
+            face: Some("hustler"),
+        ),
+        "marlo": Role(
+            name: "Marlo",
+            title: "cook",
+            pick: Worker(professions: ["noodle_cook"], at: [], range: (30, 140)),
+            face: None,
+        ),
+    },
+    faces: {
+        "hustler": Face(rows: [
+            "................",
+            ".....dddddd.....",
+            "...dddddddddd...",
+            "..dddddmmddddd..",
+            "..ddmmmmmmmmdd..",
+            "..dmllllllllmd..",
+            "..mlbbllllbblm..",
+            "..mlXXlllleelm..",
+            "..mlXXllllllm...",
+            "..mllllhhllllm..",
+            "...mlllhllllm...",
+            "...mllmmmmllm...",
+            "....mllllllm....",
+            ".....mmllmm.....",
+            "....dmmmmmmd....",
+            "..dddmmmmmmddd..",
+            ".dddddddddddddd.",
+            "dddddddddddddddd",
+        ], eye: (255, 0, 200)),
+        "silhouette": Face(rows: [
+            "................",
+            ".....dddddd.....",
+            "....dmmmmmmd....",
+            "...dmmmmmmmmd...",
+            "...dmmmmmmmmd...",
+            "...dmmmmmmmmd...",
+            "...dmmmmmmmmd...",
+            "...dmmmmmmmmd...",
+            "....dmmmmmmd....",
+            "....dmmmmmmd....",
+            ".....dmmmmd.....",
+            ".....dmmmmd.....",
+            "......dmmd......",
+            "....dddmmddd....",
+            "..dddmmmmmmddd..",
+            ".dmmmmmmmmmmmmd.",
+            "dmmmmmmmmmmmmmmd",
+            "dddddddddddddddd",
+        ], eye: (255, 255, 255)),
+    },
+    missions: [
+        Mission(id: "the_drop", title: "The drop", from: "dez", steps: [
+            Step(id: "welcome", when: NewGame, then: [
+                Feed(from: "dez", close: "take the package", text: [
+                    "Ey, welcome to the block, choom. Word on the wire says you got what it takes. Preem. Let's find out.",
+                    "Got a package needs walking across town. Nothing heavy, nothing hot. Goes to {marlo}, cooks noodles at {marlo.place} in {marlo.district}. Into his hands. Not the counter, not his cousin. Hands.",
+                    "Do it clean, there's more where that came from. Don't open it. Don't get cute. Don't be late.",
+                ]),
+            ]),
+            Step(id: "package", when: Ended("welcome"), then: [
+                Give(item: "sealed_package", count: 1),
+                Dead(role: "marlo", look: "Face down on the pavement, apron still on. Not breathing."),
+                Objective("Hand the package to {marlo} · {marlo.place} · {marlo.district}"),
+            ]),
+            Step(id: "body", when: Sees(role: "marlo", within: 6), then: [
+                Log("`{marlo}` is dead"),
+            ]),
+            Step(id: "ring", when: After(minutes: 1), then: [
+                Call(from: "dez", lines: [
+                    "Choom. Choom, you there? Whatever you're looking at, don't touch it.",
+                    "{marlo} was meant to be breathing when you got there. Somebody got there first.",
+                    "Badges are four minutes out, and they'll love you for this. Walk, don't run. Keep the package. Get home.",
+                ]),
+            ]),
+            Step(id: "run", when: Ended("ring"), then: [
+                Objective("Get home · keep the package"),
+            ]),
+            Step(id: "home", when: At(Home), then: [
+                Mail(from: "dez", subject: "lay low", body: [
+                    "You made it home. Good.",
+                    "Keep the package somewhere they won't look, and don't open it.",
+                    "Lay low. I'll call.",
+                ]),
+                Log("`The drop` · home · `{dez}` will call"),
+            ]),
+        ]),
+    ],
+)

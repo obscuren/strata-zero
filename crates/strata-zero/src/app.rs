@@ -148,6 +148,9 @@ pub struct AppState {
     pub jobs: crate::jobs::Jobs,
     /// The fixers' voice.
     pub flavor: crate::jobs::Flavor,
+    /// The story missions' book.
+    #[allow(dead_code)] // staged: the runtime that reads it comes in later tasks
+    pub book: crate::missions::Book,
 }
 
 /// One ability effect playing on the map.
@@ -286,6 +289,7 @@ impl AppState {
             helix: Default::default(),
             jobs: Default::default(),
             flavor: crate::jobs::Flavor::load().expect("the jobs pack is valid"),
+            book: crate::missions::Book::load().expect("the missions pack is valid"),
         }
     }
 
