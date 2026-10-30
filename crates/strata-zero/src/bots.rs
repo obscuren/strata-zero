@@ -212,9 +212,28 @@ pub fn toward(st: &AppState, me: usize) -> Option<Pos> {
         (to == at || (enters(kind, &m, to) && crate::foes::foe_at(st, place, to).is_none()))
             .then_some(1)
     })?;
-    path.into_iter()
-        .find(|p| *p != from && *p != at)
-        .filter(|p| free(st, place, *p, me))
+    // The path runs four ways; a bot flies eight. It aims at the furthest point of the
+    // path it can see along an open line, and steps that way, diagonals and all.
+    let open = |q: Pos| {
+        bresenham(from, q)
+            .into_iter()
+            .all(|t| t == from || t == at || enters(kind, &m, t))
+    };
+    let aim = path
+        .iter()
+        .copied()
+        .take_while(|q| open(*q))
+        .last()
+        .unwrap_or(at);
+    let toward_aim = Pos::new(
+        from.x + (aim.x - from.x).signum(),
+        from.y + (aim.y - from.y).signum(),
+    );
+    let next = path.into_iter().find(|p| *p != from && *p != at);
+    [Some(toward_aim), next]
+        .into_iter()
+        .flatten()
+        .find(|p| *p != from && *p != at && free(st, place, *p, me))
 }
 
 /// Moves bot `me` to `to`, leaving a wake where it was.
@@ -490,6 +509,25 @@ mod tests {
     }
 
     #[test]
+    fn a_new_city_starts_with_no_bots_out() {
+        let mut st = lot();
+        sync(&mut st);
+        st.bots[0].moved_at = 12345;
+        st.enter_city(City::lot(2));
+        assert!(st.bots.is_empty(), "the last game's drone stays there");
+    }
+
+    #[test]
+    fn it_catches_up_on_the_diagonal() {
+        let mut st = lot();
+        sync(&mut st);
+        // Six tiles off on both axes: diagonal steps close that in about five.
+        st.player.as_mut().unwrap().pos = Pos::new(16, 14);
+        run(&mut st, 3 * 6);
+        assert!(with_you(&st, STREET, pos(&st), you(&st)), "{:?}", pos(&st));
+    }
+
+    #[test]
     fn it_steps_off_a_foe() {
         let mut st = lot();
         sync(&mut st);
@@ -633,6 +671,19 @@ mod tests {
         sync(&mut st);
         crate::net::end_turn(&mut st);
         assert!(crate::net::phase(&st).is_some(), "the empty seat passed");
+    }
+
+    #[test]
+    fn a_stowed_drone_leaves_the_turn_line() {
+        let mut st = on_turns(Pos::new(11, 8));
+        st.character
+            .chrome_copies
+            .get_mut(&game::Site::Back)
+            .unwrap()
+            .fitted[0] = None;
+        sync(&mut st);
+        let line = crate::net::turn_readout(&st).unwrap();
+        assert!(!line.contains("bot") && !line.contains("drone"), "{line}");
     }
 
     #[test]

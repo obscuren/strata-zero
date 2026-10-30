@@ -2126,6 +2126,12 @@ pub fn turn_readout(st: &AppState) -> Option<String> {
     let mut parts = Vec::new();
     for n in 0..e.order.len() {
         let a = e.order[(e.turn + n) % e.order.len()];
+        // A bot's seat it has left (stowed, waiting for room) is not read out.
+        if let Actor::Bot(site, k) = a
+            && crate::bots::name(st, (site, k)).is_none()
+        {
+            continue;
+        }
         let mut s = name(a);
         if n == 0 {
             match a {

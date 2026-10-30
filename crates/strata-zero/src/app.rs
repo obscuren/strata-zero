@@ -417,6 +417,7 @@ impl AppState {
         self.player = None;
         self.fx.clear();
         self.foes.clear();
+        self.bots.clear();
         self.live.clear();
         self.deck_tab = Tab::Skills;
         self.deck_rows = [0; Tab::ALL.len()];

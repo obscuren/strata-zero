@@ -133,7 +133,13 @@ fn held_pieces(st: &AppState, (site, socket): (Site, Option<usize>)) -> usize {
         .installed()
         .iter()
         .filter(|&&(s, n, _)| s == site && (socket.is_none() || n == socket))
+        .filter(|(_, _, id)| !is_bot(st, id))
         .count()
+}
+
+/// A bot is docked, not in the body: no piece of EMP.
+fn is_bot(st: &AppState, id: &ItemId) -> bool {
+    st.content.item(id).is_some_and(|i| i.bot.is_some())
 }
 
 /// The pieces a pick installs: itself and what is fitted in it.
@@ -142,9 +148,13 @@ fn pick_pieces(st: &AppState, pick: &Pick) -> usize {
         Some(k) => s.copy_id() == Some(k),
         None => s.copy.is_none() && s.item == pick.item,
     });
-    let fitted = stack
-        .and_then(|s| s.copy.as_ref())
-        .map_or(0, |k| k.fitted.iter().flatten().count());
+    let fitted = stack.and_then(|s| s.copy.as_ref()).map_or(0, |k| {
+        k.fitted
+            .iter()
+            .flatten()
+            .filter(|s| !is_bot(st, &s.item))
+            .count()
+    });
     1 + fitted
 }
 
@@ -1544,6 +1554,21 @@ mod tests {
             card.contains("Scout drone, Mule"),
             "what docks there:\n{card}"
         );
+    }
+
+    #[test]
+    fn a_cradle_carrying_a_drone_costs_one_piece_of_emp() {
+        let mut st = AppState::new();
+        loadout(&mut st);
+        let mut d = on_ledger(&mut st, LedgerRow::Site(Site::Back));
+        // Out with its drone in it, then picked to go back in.
+        press(&mut d, &mut st, &[KeyCode::Char('x')]);
+        assert!(st.character.chrome_at(Site::Back).is_none());
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        assert_eq!(d.sheet.state.picker, Some(0));
+        let card = region(&screen(&d, &mut st, (100, 30)), (CARD_100, 98), (6, 27));
+        assert!(card.contains("EMP −2"), "{card}");
+        assert!(!card.contains("EMP −4"), "{card}");
     }
 
     #[test]
