@@ -17,6 +17,9 @@ install-path = "CARGO_HOME"
 hosting = "github"
 # Whether to install an updater program
 install-updater = false
+# Beside the README and LICENSE that every archive gets: the crates' licence notices
+# (scripts/third-party.sh)
+include = ["THIRD-PARTY-NOTICES.txt"]
 # The desktop apps in every release (.github/workflows/build-*-app.yml): the Mac app,
 # signed and notarized; the Windows app; the Linux app
 global-artifacts-jobs = ["./build-mac-app", "./build-windows-app", "./build-linux-app"]

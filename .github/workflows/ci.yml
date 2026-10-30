@@ -1,10 +1,11 @@
-# Checks every push to main and every pull request: formatting once; then clippy and the
-# tests on macOS, Linux and Windows, for the terminal build and for the window build
-# (the window code only compiles with its feature); and the three desktop apps built as
-# a release builds them, so packaging can't break unnoticed. The Windows and Linux app
-# jobs also draw screens through the GPU (Direct3D 12 on WARP, Vulkan on lavapipe: both
-# software renderers) and run the app itself for a screenshot of its window, all kept as
-# artifacts: how those builds are seen without a Windows or Linux PC.
+# Checks every push to main and every pull request: formatting and the crates' licences
+# once; then clippy and the tests on macOS, Linux and Windows, for the terminal build
+# and for the window build (the window code only compiles with its feature); and the
+# three desktop apps built as a release builds them, so packaging can't break unnoticed.
+# The Windows and Linux app jobs also draw screens through the GPU (Direct3D 12 on WARP,
+# Vulkan on lavapipe: both software renderers) and run the app itself for a screenshot
+# of its window, all kept as artifacts: how those builds are seen without a Windows or
+# Linux PC.
 name: CI
 
 on:
@@ -31,6 +32,21 @@ jobs:
         with:
           persist-credentials: false
       - run: cargo fmt --all --check
+
+  # Every crate's licence is one about.toml accepts, and THIRD-PARTY-NOTICES.txt, which
+  # every release artifact carries, lists the crates the builds take today.
+  third-party:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: third-party
+      # The version scripts/third-party.sh asks for.
+      - run: cargo install cargo-about --locked --version 0.9.2 --features cli
+      - run: scripts/third-party.sh --check
 
   check:
     name: check (${{ matrix.os }}, ${{ matrix.build }})

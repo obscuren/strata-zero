@@ -1,7 +1,8 @@
 #!/bin/bash
 # Builds target/smoke/windows/strata-zero-windows-app.zip: the game in its own window for
-# Windows (the `app` feature), as `Strata Zero/Strata Zero.exe` beside the game's license
-# and the font's. Runs on Windows under Git Bash, as CI's `shell: bash` does.
+# Windows (the `app` feature), as `Strata Zero/Strata Zero.exe` beside the game's license,
+# the font's and the third-party notices. Runs on Windows under Git Bash, as CI's
+# `shell: bash` does.
 #
 #   scripts/windows-app.sh          build the zip
 #   scripts/windows-app.sh --icon   only regenerate crates/strata-zero/windows/AppIcon.ico
@@ -42,6 +43,7 @@ mkdir -p "$dir"
 cp "$exe" "$dir/Strata Zero.exe"
 cp LICENSE "$dir/LICENSE.txt"
 cp crates/strata-zero/fonts/OFL.txt "$dir/OFL.txt"
+cp THIRD-PARTY-NOTICES.txt "$dir/THIRD-PARTY-NOTICES.txt"
 # Windows' own tar (bsdtar, since Windows 10) writes the zip: Git Bash's tar can't, and
 # Windows PowerShell's Compress-Archive writes `\` into the paths, which unzip elsewhere
 # takes as part of the name.

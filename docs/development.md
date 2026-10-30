@@ -122,6 +122,13 @@ dist's notes list only the files dist builds, so once the release is out
 
 After changing `dist-workspace.toml`, run `dist generate`.
 
+Every archive and app in the release carries `THIRD-PARTY-NOTICES.txt` beside
+`LICENSE`: the licence notices of the crates the game is built from and of Fira Code,
+which their licences ask to travel with it. `scripts/third-party.sh` writes it with
+[cargo-about](https://github.com/EmbarkStudios/cargo-about) from `about.toml`, the
+licences a dependency may carry. After adding or updating a dependency, run it and
+commit the file.
+
 ### Signing the Mac app
 
 The release needs five repository secrets (GitHub › Settings › Secrets and
@@ -156,6 +163,8 @@ the packaging to `scripts/macos-package.sh`).
 `.github/workflows/ci.yml` runs on every push to main and every pull request:
 
 - rustfmt;
+- the crates' licences: each one that `about.toml` accepts, and
+  `THIRD-PARTY-NOTICES.txt` up to date (`scripts/third-party.sh --check`);
 - clippy and the tests on macOS, Linux and Windows, for both the terminal and the
   window build;
 - the Mac app, built unsigned;
