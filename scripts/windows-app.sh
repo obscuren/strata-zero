@@ -42,6 +42,9 @@ mkdir -p "$dir"
 cp "$exe" "$dir/Strata Zero.exe"
 cp LICENSE "$dir/LICENSE.txt"
 cp crates/strata-zero/fonts/OFL.txt "$dir/OFL.txt"
-powershell -NoProfile -Command \
-    "Compress-Archive -Path '$(cygpath -w "$dir")' -DestinationPath '$(cygpath -w "$zip")'"
+# Windows' own tar (bsdtar, since Windows 10) writes the zip: Git Bash's tar can't, and
+# Windows PowerShell's Compress-Archive writes `\` into the paths, which unzip elsewhere
+# takes as part of the name.
+"$(cygpath -u "$SYSTEMROOT")/System32/tar.exe" -a -c -f "$(cygpath -w "$zip")" \
+    -C "$(cygpath -w "$out")" "Strata Zero"
 echo "$zip"
