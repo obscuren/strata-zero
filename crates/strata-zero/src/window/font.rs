@@ -305,17 +305,8 @@ impl Fonts {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::window::platform::env_of;
     use std::collections::BTreeSet;
-    use std::ffi::OsString;
-
-    /// An environment of exactly `vars`.
-    fn env_of(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
-        let vars: Vec<(String, OsString)> = vars
-            .iter()
-            .map(|(k, v)| (k.to_string(), OsString::from(v)))
-            .collect();
-        move |key| vars.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
-    }
 
     fn paths(faces: &[Face]) -> Vec<Option<&Path>> {
         faces.iter().map(Face::path).collect()

@@ -7,7 +7,10 @@ compiled into the binary.
 ## Two front ends, one set of screens
 
 The game runs in a terminal (the default) or in a window of its own (the `window` cargo
-feature: `strata --window`, and `Strata Zero.app` on macOS). Both run the same screens:
+feature: `strata --window`). The `app` feature builds the desktop apps on top of it
+(`Strata Zero.app`, `Strata Zero.exe`, the Linux `strata-zero`): always in the window,
+with the working folder set to the player's app folder (`window::platform`). Both run
+the same screens:
 every screen draws ratatui cells and reads crossterm `KeyEvent`s through
 `app::Runner::frame`, and only the backend below that differs.
 
@@ -78,9 +81,10 @@ cargo test --workspace --features strata-zero/window --target-dir target/smoke
 - **The live window.** `STRATA_WINDOW_SHOT=<file.png>` makes it write what it shows,
   1.5 s in. `STRATA_SCREEN_FX=off|soft|crt` picks the effects; `STRATA_FONT=<file>`
   picks the font.
-- **The app.** `scripts/macos-app.sh` builds `target/smoke/macos/Strata Zero.app`. Inside
+- **The app.** `scripts/macos-app.sh` builds `target/smoke/macos/Strata Zero.app`. In
   the app, the working folder (and so `cities/`) is
-  `~/Library/Application Support/Strata Zero/`.
+  `~/Library/Application Support/Strata Zero/` on a Mac, `%APPDATA%\Strata Zero` on
+  Windows, and `~/.local/share/strata-zero` on Linux.
 
 ## Design notes
 
