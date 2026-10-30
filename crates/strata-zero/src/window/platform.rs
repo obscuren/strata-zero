@@ -96,7 +96,10 @@ mod tests {
     fn linux_app_dir() {
         let dir = Platform::Linux.app_dir(&env_of(&[("XDG_DATA_HOME", "/d"), ("HOME", "/h")]));
         assert_eq!(dir, Some(PathBuf::from("/d/strata-zero")));
-        for xdg in [&[("XDG_DATA_HOME", ""), ("HOME", "/h")][..], &[("HOME", "/h")]] {
+        for xdg in [
+            &[("XDG_DATA_HOME", ""), ("HOME", "/h")][..],
+            &[("HOME", "/h")],
+        ] {
             let dir = Platform::Linux.app_dir(&env_of(xdg));
             assert_eq!(dir, Some(PathBuf::from("/h/.local/share/strata-zero")));
         }

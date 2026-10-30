@@ -29,9 +29,10 @@ code, as long as it stays inside these lines:
 - Draw everything through ratatui. Don't write to stdout, and don't rely on the
   terminal's cursor, title, bell or mouse; screens draw their own cursor as a character.
 - Read keys as crossterm `KeyEvent`s.
-  - In the window, Option types what the keyboard layout puts there (`@`, `[`) and
-    carries no ALT modifier, so don't build a feature on Alt+key.
-  - Cmd chords belong to the window.
+  - In the window, Option (Mac) and AltGr (PC) type what the keyboard layout puts there
+    (`@`, `[`) with no ALT modifier, so don't build a feature on Alt+key.
+  - The window keeps some chords for itself: Cmd chords on a Mac; Ctrl+=, Ctrl+-,
+    Ctrl+0, F11 and Alt+Enter on Windows and Linux. Ctrl+letter stays the game's.
   - Keys outside the usual set (F13 and up, media keys) need a line in `window/keys.rs`.
 - Prefer exact `Color::Rgb` colours. Named ANSI colours take the terminal's theme there
   and the xterm palette in the window.
