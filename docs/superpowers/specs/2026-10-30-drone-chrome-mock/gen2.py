@@ -1,0 +1,169 @@
+"""Drone chrome mockups, round 2: Jeffrey liked A (the rotor); four ideas built on it.
+
+    SHOTS=dir/ python3 gen2.py out.html
+"""
+
+import json
+import os
+import sys
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from gen import CSS, SCOUT, SCOUT_DK, SCOUT_GLOW, lot  # noqa: E402
+
+IDEAS = [
+    {
+        "key": "a", "name": "Rotor (round 1's A)",
+        "about": "As you picked it: two box strokes swapped, faster on the move. Here to "
+                 "compare against.",
+        "frames": ["┼", "╳"], "colours": [SCOUT, SCOUT], "idle": 2, "moving": 1,
+    },
+    {
+        "key": "a1", "name": "Heavy rotor and a wink",
+        "about": "Heavy strokes ╋ ╳ so it reads at a glance among people and lamps, and the "
+                 "hub winks white once a turn of the rotor.",
+        "frames": ["╋", "╳", "╋", "╳", "╋", "╳", "╋", "╳"],
+        "colours": ["#ffffff", SCOUT, SCOUT, SCOUT, SCOUT, SCOUT, SCOUT, SCOUT],
+        "idle": 2, "moving": 1,
+    },
+    {
+        "key": "a2", "name": "Rotor with a light pool",
+        "about": "The drone's lamp tints the floor around it in its own colour, and the "
+                 "pool goes where it goes. In the dark it would light what it hovers over.",
+        "frames": ["┼", "╳"], "colours": [SCOUT, SCOUT], "idle": 2, "moving": 1,
+        "halo": True,
+    },
+    {
+        "key": "a3", "name": "Rotor with a wake",
+        "about": "Flying leaves a short trail of dots that fade in three beats, so you can "
+                 "see where it came from. Standing still leaves nothing.",
+        "frames": ["┼", "╳"], "colours": [SCOUT, SCOUT], "idle": 2, "moving": 1,
+        "trail": True,
+    },
+    {
+        "key": "a4", "name": "Rotor that circles you",
+        "about": "When you stand still it doesn't wander: it circles you two tiles out, "
+                 "stopping now and then, and turns back the other way sometimes.",
+        "frames": ["┼", "╳"], "colours": [SCOUT, SCOUT], "idle": 2, "moving": 1,
+        "orbit": True,
+    },
+]
+
+PAGE = """
+<style>
+%(css)s
+body{background:#0b0e14}
+h2,h3{color:#cdd4de}
+.note{max-width:900px;font-size:14px;line-height:1.5;color:#cdd4de;margin:6px 0 10px}
+.lots{display:flex;flex-wrap:wrap;gap:18px}
+.lotbox{background:#11151d;border:1px solid #1a2230;border-radius:6px;padding:10px 12px;width:440px;cursor:pointer}
+.lotbox.selected{outline:2px solid #00e5ff}
+.lotbox h3{margin:2px 0 4px;color:#00e5ff;font-size:15px}
+.lotbox p{margin:6px 0 0;font-size:13px;line-height:1.45;color:#a0aab9}
+.strip{font-family:'JetBrains Mono',Menlo,monospace;font-size:20px;letter-spacing:6px;margin:2px 0 6px}
+.state{font-family:'JetBrains Mono',Menlo,monospace;font-size:12px;color:#5c6673;margin-top:4px}
+</style>
+
+<h2>Drone glyphs, round 2: built on A</h2>
+<p class="note">Same walk as before: stand, walk east, stand, walk back. The first lot is A as you
+picked it; the other four each add one idea, so they can be mixed (a heavy rotor that circles you
+in its light pool, say). Click any you like; more than one is fine.</p>
+<div class="lots options" data-multiselect>%(lots)s</div>
+
+<script>
+const CELLS = %(cells)s, W = %(w)d, H = %(h)d;
+const IDEAS = %(ideas)s;
+const DK = '%(dk)s';
+function hex(c){return [1,3,5].map(i=>parseInt(c.slice(i,i+2),16));}
+function mix(a,b,t){const x=hex(a),y=hex(b);return '#'+x.map((v,i)=>Math.round(v+(y[i]-v)*t).toString(16).padStart(2,'0')).join('');}
+function mk(box){
+  const t=document.createElement('div');t.className='term';t.style.fontSize='14px';
+  const spans=[];
+  for(let y=0;y<H;y++){const r=document.createElement('div');r.className='r';
+    for(let x=0;x<W;x++){const s=document.createElement('span');r.appendChild(s);spans.push(s);}
+    t.appendChild(r);}
+  box.querySelector('.slot').appendChild(t);return spans;
+}
+const DOTS='·⠂⠈⠐⠠⡀⢀⠄';
+function floor(x,y){if(x<0||y<0||x>=W||y>=H)return false;return DOTS.includes(CELLS[y*W+x][0]);}
+const START={x:9,y:8},PLAN=[];
+for(let i=0;i<40;i++)PLAN.push(0);
+for(let i=0;i<11;i++){PLAN.push(1);PLAN.push(0);}
+for(let i=0;i<40;i++)PLAN.push(0);
+for(let i=0;i<11;i++){PLAN.push(-1);PLAN.push(0);}
+const RING=[[-2,-2],[-1,-2],[0,-2],[1,-2],[2,-2],[2,-1],[2,0],[2,1],[2,2],[1,2],[0,2],[-1,2],[-2,2],[-2,1],[-2,0],[-2,-1]];
+function run(box,g){
+  const spans=mk(box),state=box.querySelector('.state');
+  let seed=7,beat=0,p={...START},d={x:START.x-2,y:START.y-1},frame=0,wait=6,sub=0,dir=1,trail=[];
+  const rnd=()=>{seed=(seed*1103515245+12345)&0x7fffffff;return seed/0x7fffffff;};
+  const cheb=(a,b)=>Math.max(Math.abs(a.x-b.x),Math.abs(a.y-b.y));
+  function ringAt(q){let best=0,bd=99;RING.forEach(([dx,dy],i)=>{const e=Math.abs(p.x+dx-q.x)+Math.abs(p.y+dy-q.y);if(e<bd){bd=e;best=i;}});return best;}
+  setInterval(()=>{
+    const i=beat%%PLAN.length,step=PLAN[i];beat++;
+    if(step)p.x+=step;
+    const walking=PLAN.slice(Math.max(0,i-3),i+1).some(v=>v!==0);
+    let moving=false;const was={...d};
+    if(cheb(p,d)>2||(p.x===d.x&&p.y===d.y)){
+      const goal={x:p.x-Math.sign(step)*1,y:p.y+(d.y<p.y?-1:1)};
+      const nx=d.x+Math.sign(goal.x-d.x),ny=d.y+Math.sign(goal.y-d.y);
+      if(floor(nx,ny)&&!(nx===p.x&&ny===p.y))d={x:nx,y:ny};
+      moving=true;wait=4+Math.floor(rnd()*6);
+    }else if(--wait<=0){
+      if(g.orbit){
+        let k=ringAt(d);const at=RING[k];
+        if(p.x+at[0]!==d.x||p.y+at[1]!==d.y){d={x:p.x+at[0],y:p.y+at[1]};}
+        else{if(rnd()<0.08)dir=-dir;k=(k+dir+RING.length)%%RING.length;
+          const q={x:p.x+RING[k][0],y:p.y+RING[k][1]};if(floor(q.x,q.y))d=q;}
+        moving=true;wait=(rnd()<0.12)?14:3;
+      }else{
+        const opts=[];
+        for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){const q={x:d.x+dx,y:d.y+dy};
+          if((dx||dy)&&floor(q.x,q.y)&&cheb(q,p)<=2&&cheb(q,p)>=1)opts.push(q);}
+        if(opts.length){d=opts[Math.floor(rnd()*opts.length)];moving=true;}
+        wait=5+Math.floor(rnd()*8);
+      }
+    }
+    if(g.trail&&(was.x!==d.x||was.y!==d.y))trail.push({x:was.x,y:was.y,age:0});
+    trail.forEach(t=>t.age++);trail=trail.filter(t=>t.age<=3);
+    const every=(moving||walking)?g.moving:g.idle;
+    if(++sub>=every){sub=0;frame=(frame+1)%%g.frames.length;}
+    // paint: the lot, the pool, the wake, the drone, you
+    for(let y=0;y<H;y++)for(let x=0;x<W;x++){const c=CELLS[y*W+x],s=spans[y*W+x];
+      let bg=c[2],fg=c[1];
+      if(g.halo){const r=cheb({x,y},d);if(r<=2&&floor(x,y)||r<=2&&c[0]==='░'){const t=r===0?0.30:r===1?0.20:0.08;bg=mix(bg,g.colours[0],t);fg=mix(fg,g.colours[0],t*1.6);}}
+      s.textContent=c[0];s.style.color=fg;s.style.background=bg;s.style.fontWeight=c[3]?700:400;}
+    trail.forEach(t=>{const s=spans[t.y*W+t.x];s.textContent=t.age<2?'∙':'·';s.style.color=mix(g.colours[0],CELLS[t.y*W+t.x][2],t.age/4);});
+    let ds=spans[d.y*W+d.x];ds.textContent=g.frames[frame];ds.style.color=g.colours[frame];ds.style.fontWeight=700;
+    let ps=spans[p.y*W+p.x];ps.textContent='@';ps.style.color='#ffffff';ps.style.fontWeight=700;
+    state.textContent=walking?'walking · the drone follows':(g.orbit?'standing · the drone circles':'standing · the drone drifts');
+  },100);
+}
+document.querySelectorAll('.lotbox').forEach((box,i)=>run(box,IDEAS[i]));
+</script>
+"""
+
+
+def lotbox(gl):
+    strip = " ".join('<span style="color:%s">%s</span>' % (c, f)
+                     for f, c in list(zip(gl["frames"], gl["colours"]))[:4])
+    return ('<div class="lotbox option" data-choice="%s" onclick="toggleSelect(this)">'
+            '<h3>%s · %s</h3><div class="strip">%s</div><div class="slot"></div>'
+            '<div class="state"></div><p>%s</p></div>'
+            % (gl["key"], gl["key"].upper(), gl["name"], strip, gl["about"]))
+
+
+def main(out):
+    g = lot()
+    page = PAGE % {
+        "css": CSS,
+        "lots": "".join(lotbox(gl) for gl in IDEAS),
+        "cells": json.dumps([[c[0], c[1], c[2], c[3]] for row in g.c for c in row]),
+        "w": g.w, "h": g.h,
+        "ideas": json.dumps(IDEAS),
+        "dk": SCOUT_DK,
+    }
+    open(out, "w").write(page)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1])
