@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Strata Zero
+Comment=A roguelike in a multi-level cyberpunk city
+Exec=strata-zero
+Icon=strata-zero
+Terminal=false
+Categories=Game;RolePlaying;
+StartupWMClass=strata-zero

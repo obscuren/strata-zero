@@ -1,0 +1,31 @@
+# Builds Strata Zero for Linux, the game in its own window (the `app` feature), into
+# strata-zero-linux-app.tar.gz with scripts/linux-app.sh, and hands it to the release as
+# the artifact `artifacts-linux-app`, which dist's host job attaches to the GitHub
+# Release.
+#
+# dist's release.yml calls this for every release (`global-artifacts-jobs` in
+# dist-workspace.toml); after changing that file, run `dist generate`.
+name: Linux app
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  linux-app:
+    # The runner dist builds the terminal game for Linux on, so both need the same glibc.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Build the app
+        run: scripts/linux-app.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: artifacts-linux-app
+          path: target/smoke/linux/strata-zero-linux-app.tar.gz
+          if-no-files-found: error
