@@ -600,6 +600,10 @@ with:
   `scripts/macos-app.sh`, then signs, wraps, notarizes and staples with
   `scripts/macos-package.sh`, the only step that sees the secrets.
 
+dist's notes list only the files dist builds, so once the release is out
+`.github/workflows/mac-app-notes.yml` puts the DMG at the top of them with
+`scripts/mac-app-notes.sh <tag>`, which can also be run by hand.
+
 After changing `dist-workspace.toml`, run `dist generate`.
 
 ### Signing the Mac app

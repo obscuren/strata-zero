@@ -304,3 +304,12 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+
+  custom-mac-app-notes:
+    needs:
+      - plan
+      - announce
+    uses: ./.github/workflows/mac-app-notes.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit
