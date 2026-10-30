@@ -19,6 +19,7 @@ const LINUX_FALLBACKS: &[&str] = &[
     "DejaVuSans.ttf",
     "DejaVuSansMono.ttf",
     "NotoSansSymbols2-Regular.ttf",
+    "NotoSansSymbols-Regular.ttf",
     "NotoSansMath-Regular.ttf",
     "NotoSans-Regular.ttf",
     "NotoSansLisu-Regular.ttf",
