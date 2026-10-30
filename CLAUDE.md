@@ -57,6 +57,10 @@ cargo test --workspace --features strata-zero/window --target-dir target/smoke
   overwritten.
 - The window's tests skip themselves on a machine with no fonts or no GPU adapter, and
   run for real on a Mac.
+- On GitHub, `.github/workflows/ci.yml` runs the same checks on macOS, Linux and Windows
+  for both builds, so keep shared code portable (no Mac-only APIs outside
+  `#[cfg(target_os = "macos")]`). Releases are described in README.md under "Release",
+  including the Mac app's signing.
 
 ## Seeing the window without opening it
 

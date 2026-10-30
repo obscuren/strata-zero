@@ -1,10 +1,15 @@
 #!/bin/bash
 # Builds target/smoke/macos/Strata Zero.app: the game in its own window, for Apple
-# Silicon and Intel in one binary, ad-hoc signed (enough to run on this Mac; a release
-# needs a Developer ID signature and notarization).
+# Silicon and Intel in one binary (whichever of the two targets are installed), signed
+# ad hoc, which is enough to run on this Mac.
 #
 #   scripts/macos-app.sh            build the app
+#   scripts/macos-app.sh --dmg      then package it with scripts/macos-package.sh into
+#                                   target/smoke/macos/strata-zero-mac-app.dmg (signed and
+#                                   notarized when that script's environment says how)
 #   scripts/macos-app.sh --icon     also regenerate crates/strata-zero/macos/AppIcon.icns
+#
+# Building reads no signing secrets: CI builds first, then packages in a step of its own.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -12,7 +17,17 @@ target=target/smoke
 app="$target/macos/Strata Zero.app"
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 
-if [ "${1:-}" = "--icon" ]; then
+want_dmg=
+want_icon=
+for arg in "$@"; do
+    case "$arg" in
+        --dmg) want_dmg=1 ;;
+        --icon) want_icon=1 ;;
+        *) echo "unknown option: $arg" >&2; exit 2 ;;
+    esac
+done
+
+if [ -n "$want_icon" ]; then
     shots=$(mktemp -d)
     SHOT_DIR="$shots" cargo test -q -p strata-zero --features window --target-dir "$target" \
         window::tests::app_icon -- --ignored
@@ -43,3 +58,7 @@ if [ -f crates/strata-zero/macos/AppIcon.icns ]; then
 fi
 codesign --force --sign - "$app"
 echo "$app"
+
+if [ -n "$want_dmg" ]; then
+    exec scripts/macos-package.sh
+fi
