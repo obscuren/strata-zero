@@ -159,7 +159,7 @@ impl Screen for Configure {
         for k in keys {
             if k.code == KeyCode::Esc {
                 return ScreenCmd::Switch {
-                    to: Box::new(Title::new(st.tick)),
+                    to: Box::new(Title::new(st, st.tick)),
                     fx: TransitionKind::SlideUp,
                 };
             }

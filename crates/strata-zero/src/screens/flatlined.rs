@@ -46,7 +46,7 @@ impl Screen for Flatlined {
         }
         st.player = None;
         ScreenCmd::Switch {
-            to: Box::new(Title::new(st.tick)),
+            to: Box::new(Title::new(st, st.tick)),
             fx: TransitionKind::Glitch,
         }
     }

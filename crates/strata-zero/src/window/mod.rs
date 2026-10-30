@@ -361,23 +361,29 @@ mod tests {
         assert!(!is_bundle_path(Path::new("/Users/x/my.app.notes/strata")));
     }
 
-    /// The title screen as the window paints it, to `SHOT_DIR/title.png`. The street, the
-    /// deck and the ATTRIBUTES sheet come out of the shot harness (`screens::shots`) as
-    /// PNGs too when this feature is on.
+    /// The title screen as the window paints it, to `SHOT_DIR/title.png`, and in dev mode
+    /// with the debug starts to `title_dev.png`. The street, the deck and the ATTRIBUTES
+    /// sheet come out of the shot harness (`screens::shots`) as PNGs too when this
+    /// feature is on.
     #[test]
     #[ignore]
     fn window_shots() {
         let Ok(dir) = std::env::var("SHOT_DIR") else {
             return;
         };
-        let mut st = AppState::new();
-        let mut title = crate::screens::initial();
-        for _ in 0..90 {
-            st.tick += 1;
-            title.update(&mut st, &[]);
+        for (name, dev) in [("title", false), ("title_dev", true)] {
+            let mut st = AppState::new();
+            if dev {
+                st.unlock_dev();
+            }
+            let mut title = crate::screens::initial(&st);
+            for _ in 0..90 {
+                st.tick += 1;
+                title.update(&mut st, &[]);
+            }
+            let buf = crate::screens::shots::draw_stack(&st, &[&title], (120, 40));
+            png::write_buffer(&dir, name, &buf).unwrap();
         }
-        let buf = crate::screens::shots::draw_stack(&st, &[&title], (120, 40));
-        png::write_buffer(&dir, "title", &buf).unwrap();
     }
 
     /// The app icon, to `SHOT_DIR/icon.png` (1024 × 1024): "SZ" in the title's block

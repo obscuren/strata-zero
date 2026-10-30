@@ -57,6 +57,10 @@ cargo test --workspace --features strata-zero/window --target-dir target/smoke
   overwritten.
 - The window's tests skip themselves on a machine with no fonts or no GPU adapter, and
   run for real on a Mac.
+- `AppState::new()` has dev mode off and locked, as a player's game starts. A test or
+  shot that needs the free camera, the console, the inspector or the title's debug
+  starts calls `st.unlock_dev()` first (`--dev` and `STRATA_DEV=1` do it for a real
+  run; see `docs/development.md`).
 - On GitHub, `.github/workflows/ci.yml` runs the same checks on macOS, Linux and Windows
   for both builds, so keep shared code portable (no Mac-only APIs outside
   `#[cfg(target_os = "macos")]`). Releases are described in `docs/development.md` under
@@ -67,8 +71,8 @@ cargo test --workspace --features strata-zero/window --target-dir target/smoke
 - **Shots of real screens.** `SHOT_DIR=<dir> cargo test -p strata-zero --features window
   --target-dir target/smoke -- --ignored <shot test>` writes each shot-harness screen
   (`screens/shots.rs`) as `.svg` and as `.png`, painted as the window paints it.
-  `window_shots` adds the title. With `SHOT_FX=1` set too, it also writes `.soft.png`
-  and `.crt.png` through the GPU effects.
+  `window_shots` adds the title, as players see it and in dev mode. With `SHOT_FX=1`
+  set too, it also writes `.soft.png` and `.crt.png` through the GPU effects.
 - **The live window.** `STRATA_WINDOW_SHOT=<file.png>` makes it write what it shows,
   1.5 s in. `STRATA_SCREEN_FX=off|soft|crt` picks the effects; `STRATA_FONT=<file>`
   picks the font.

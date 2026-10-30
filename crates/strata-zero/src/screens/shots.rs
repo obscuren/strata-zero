@@ -143,11 +143,12 @@ fn shot_stack(name: &str, st: &AppState, stack: &[&dyn Screen], size: (u16, u16)
     write_svg(&dir, name, st, &draw_stack(st, stack, size), true);
 }
 
-/// The lot from the title's COMBAT entry, walked four tiles into the goon's sight,
-/// on your act half with the cursor on the goon.
+/// The lot from the title's COMBAT entry (dev mode), walked four tiles into the goon's
+/// sight, on your act half with the cursor on the goon.
 fn combat_aim() -> (AppState, MapScreen) {
     let mut st = AppState::new();
-    let mut title = crate::screens::title::Title::new(0);
+    st.unlock_dev();
+    let mut title = crate::screens::title::Title::new(&st, 0);
     title.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Down)]);
     let _ = title.update(&mut st, &[key(KeyCode::Enter)]);
     let mut map = MapScreen::walking(&mut st);
@@ -164,7 +165,7 @@ fn combat_aim() -> (AppState, MapScreen) {
     (st, map)
 }
 
-/// The COMBAT start on the Net: jacked into a construct, a beat in.
+/// The COMBAT start on the Net (dev mode): jacked into a construct, a beat in.
 #[test]
 #[ignore]
 fn combat_net_start() {
@@ -172,7 +173,8 @@ fn combat_net_start() {
         return;
     };
     let mut st = AppState::new();
-    let mut title = crate::screens::title::Title::new(0);
+    st.unlock_dev();
+    let mut title = crate::screens::title::Title::new(&st, 0);
     title.update(
         &mut st,
         &[key(KeyCode::Down), key(KeyCode::Down), key(KeyCode::Left)],

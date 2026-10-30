@@ -21,9 +21,6 @@ pub const MIN_W: u16 = 100;
 pub const MIN_H: u16 = 30;
 pub const FRAME: Duration = Duration::from_micros(33_333);
 
-/// Whether the app starts in dev mode: free camera, map browsing and the inspector.
-pub const DEV_DEFAULT: bool = true;
-
 /// The screen effects a window draws over the game: none, a soft glow and vignette, or
 /// a CRT's glow, scanlines and curve.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -71,8 +68,12 @@ pub struct AppState {
     pub player: Option<crate::walker::Player>,
     pub style: StylePack,
     pub tick: u64,
-    /// Dev mode: free camera, stratum browsing and the inspector. Toggled with `` ` ``.
+    /// Dev mode: free camera, stratum browsing, the console and the inspector. Toggled
+    /// with `` ` `` once unlocked.
     pub dev: bool,
+    /// The game was started with `--dev` or `STRATA_DEV`: dev mode can be turned on.
+    /// Without it, dev mode stays off and its keys, rows and title starts are gone.
+    pub dev_unlocked: bool,
     /// Rain overlay on the map (Settings).
     pub rain: bool,
     /// FPS readout in the status bar (Settings).
@@ -244,7 +245,8 @@ impl AppState {
             player: None,
             style: StylePack::load().expect("embedded style pack is valid"),
             tick: 0,
-            dev: DEV_DEFAULT,
+            dev: false,
+            dev_unlocked: false,
             rain: true,
             show_fps: true,
             effects: false,
@@ -329,10 +331,17 @@ impl AppState {
         Some((id, 2, from))
     }
 
-    /// Turns dev mode on or off; off also drops the dev-only sidebar sections.
+    /// Unlocks dev mode and turns it on, for a game started with `--dev`.
+    pub fn unlock_dev(&mut self) {
+        self.dev_unlocked = true;
+        self.dev = true;
+    }
+
+    /// Turns dev mode on, if it is unlocked, or off; off also drops the dev-only sidebar
+    /// sections.
     pub fn set_dev(&mut self, on: bool) {
-        self.dev = on;
-        if !on {
+        self.dev = on && self.dev_unlocked;
+        if !self.dev {
             self.sidebar.leave_dev();
         }
     }

@@ -52,6 +52,23 @@ and what a Steam build still needs, are in
 `docs/superpowers/specs/2026-10-29-window-prototype-design.md` and
 `docs/superpowers/specs/2026-10-29-window-gpu-effects-design.md`.
 
+### Dev mode
+
+Dev mode is off in every build, and locked: no `DEV` badge, no free camera, no `:`
+console, no inspect or legend panes, and only NEW GAME, LOAD GAME and QUIT on the
+title. Start the game with `--dev`, or with `STRATA_DEV=1` set, to unlock it:
+
+```sh
+cargo run --release -p strata-zero -- --dev
+STRATA_DEV=1 target/release/strata
+open -a "Strata Zero" --args --dev   # the Mac app
+```
+
+It then starts on, `` ` `` flips it, Settings has a row for it, `?` lists its keys,
+and the title has NEW GAME (DEBUG) and NEW GAME · COMBAT while it is on.
+`STRATA_DEV` reaches the game only when a shell starts it: the Mac app opened from
+the Finder or the Dock never sees it.
+
 ## Develop
 
 ```sh
