@@ -227,6 +227,9 @@ irm https://github.com/obscuren/strata-zero/raw/main/install.ps1 | iex
 Either puts `strata` in `~/.cargo/bin`. Both scripts (`install.sh`,
 `install.ps1`) run the installer of the latest release.
 
+On a Mac there is also `strata-zero-mac-app.dmg` on the releases page: the game in a
+window of its own, as `Strata Zero.app`, to drag into Applications.
+
 ## Run
 
 `strata`, or from a checkout:
@@ -585,9 +588,55 @@ more on keeping screens working in both front ends.
 
 Bump `version` in the workspace `Cargo.toml`, commit, tag `vX.Y.Z` and push
 the tag. The GitHub mirror runs `.github/workflows/release.yml`, built by
-[dist](https://opensource.axo.dev/cargo-dist/), which builds every target in
-`dist-workspace.toml` and publishes them with the installers as a GitHub
-Release. After changing `dist-workspace.toml`, run `dist generate`.
+[dist](https://opensource.axo.dev/cargo-dist/), and publishes a GitHub Release
+with:
+
+- the terminal game for every target in `dist-workspace.toml` (macOS on Apple
+  Silicon and Intel, Linux on x86_64 and ARM64, Windows on x86_64), with the
+  shell and PowerShell installers;
+- `strata-zero-mac-app.dmg`: `Strata Zero.app`, the window build, universal,
+  signed with a Developer ID and notarized. dist runs
+  `.github/workflows/build-mac-app.yml` for it as a custom job, which runs
+  `scripts/macos-app.sh --dmg`.
+
+After changing `dist-workspace.toml`, run `dist generate`.
+
+### Signing the Mac app
+
+The release needs five repository secrets (GitHub › Settings › Secrets and
+variables › Actions):
+
+| Secret | What it holds |
+|---|---|
+| `MACOS_CERTIFICATE` | A "Developer ID Application" certificate with its private key, exported from Keychain Access as `.p12`, in base64 (`base64 -i cert.p12 \| pbcopy`) |
+| `MACOS_CERTIFICATE_PASSWORD` | The password the `.p12` was exported with |
+| `APPLE_API_KEY` | The text of an App Store Connect API key, `AuthKey_….p8`, used to notarize |
+| `APPLE_API_KEY_ID` | That key's ID |
+| `APPLE_API_ISSUER` | The issuer ID shown above the list of keys |
+
+To get them:
+
+1. Join the Apple Developer Program.
+2. Create a Developer ID Application certificate (Xcode › Settings › Accounts ›
+   Manage Certificates, or developer.apple.com › Certificates), then export it with
+   its private key from Keychain Access.
+3. In App Store Connect › Users and Access › Integrations, create a team API key with
+   the Developer role. Its `.p8` downloads only once.
+
+Without the secrets the release stops at the Mac app. To release anyway with an app
+signed ad hoc (players then allow it once in System Settings › Privacy & Security),
+set the repository variable `MAC_APP_UNSIGNED` to `1`. Locally,
+`STRATA_SIGN_IDENTITY="Developer ID Application: …"` plus the three `APPLE_API_*`
+variables make `scripts/macos-app.sh --dmg` sign and notarize the same way.
+
+### Checks
+
+`.github/workflows/ci.yml` runs on every push to main and every pull request:
+
+- rustfmt;
+- clippy and the tests on macOS, Linux and Windows, for both the terminal and the
+  window build;
+- the Mac app, built unsigned.
 
 ## License
 

@@ -1,0 +1,59 @@
+# Checks every push to main and every pull request: formatting once; then clippy and the
+# tests on macOS, Linux and Windows, for the terminal build and for the window build
+# (the window code only compiles with its feature); and the Mac app built unsigned, so a
+# release's packaging can't break unnoticed.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - run: cargo fmt --all --check
+
+  check:
+    name: check (${{ matrix.os }}, ${{ matrix.build }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        build: [terminal, window]
+    runs-on: ${{ matrix.os }}
+    env:
+      FEATURES: ${{ matrix.build == 'window' && '--features strata-zero/window' || '' }}
+    steps:
+      # Content and tests read text files byte for byte; keep Windows from adding CRs.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.build }}
+      - run: cargo clippy --workspace --all-targets ${{ env.FEATURES }} -- -D warnings
+      - run: cargo test --workspace ${{ env.FEATURES }}
+
+  mac-app:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: mac-app
+      - run: scripts/macos-app.sh --dmg

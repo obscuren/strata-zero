@@ -17,3 +17,5 @@ install-path = "CARGO_HOME"
 hosting = "github"
 # Whether to install an updater program
 install-updater = false
+# The Mac app, signed and notarized (.github/workflows/build-mac-app.yml), in every release
+global-artifacts-jobs = ["./build-mac-app"]
