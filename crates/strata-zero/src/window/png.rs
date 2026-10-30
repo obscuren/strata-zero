@@ -32,7 +32,7 @@ pub fn write_rgba(path: &Path, w: u32, h: u32, rgba: &[u8]) -> Result<()> {
 pub fn write_buffer(dir: &str, name: &str, buf: &ratatui::buffer::Buffer) -> Result<()> {
     use super::gpu::{Gpu, Params};
     use crate::app::ScreenFx;
-    let mut canvas = super::raster::Canvas::new(super::font::Fonts::load()?, SHOT_PX, 0, 0);
+    let mut canvas = super::raster::Canvas::new(super::font::Fonts::load(), SHOT_PX, 0, 0);
     canvas.paint_buffer(buf);
     let dir = Path::new(dir);
     write_frame(&dir.join(format!("{name}.png")), &canvas.frame)?;

@@ -7,6 +7,7 @@ pub mod backend;
 pub mod font;
 pub mod gpu;
 pub mod keys;
+pub mod platform;
 pub mod png;
 pub mod present;
 pub mod raster;
@@ -55,7 +56,7 @@ pub fn run(screen: Box<dyn Screen>, mut st: AppState) -> Result<()> {
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         std::env::set_current_dir(&dir)?;
     }
-    let fonts = Fonts::load()?;
+    let fonts = Fonts::load();
     let event_loop = EventLoop::new()?;
     let mut app = App {
         runner: Runner::new(screen, st),
@@ -129,8 +130,8 @@ impl App {
     fn open(&mut self, el: &ActiveEventLoop) -> Result<()> {
         let fonts = self.fonts.take().context("the window is made once")?;
         // A first guess in logical pixels; `fit` sets the exact sizes once the window's
-        // scale is known, as cell sizes don't scale exactly (SF Mono is 9 px wide at
-        // 15 px and 19 px at 30).
+        // scale is known, as cell sizes don't scale exactly (a face 9 px wide at 15 px
+        // can be 19 px wide at 30).
         let cell = fonts.metrics(TEXT_PX);
         let attrs = Window::default_attributes()
             .with_title("Strata Zero")
@@ -408,7 +409,7 @@ mod tests {
             steady: true,
         };
         logo.render(buf.area, &mut buf);
-        let mut canvas = raster::Canvas::new(Fonts::load().unwrap(), 80.0, 0, 0);
+        let mut canvas = raster::Canvas::new(Fonts::load(), 80.0, 0, 0);
         canvas.paint_buffer(&buf);
         let art = &canvas.frame;
 
