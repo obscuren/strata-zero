@@ -572,9 +572,14 @@ docs/superpowers/plans   implementation plans
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --features strata-zero/window -- -D warnings
 cargo test --workspace
+cargo test --workspace --features strata-zero/window
 cargo test -p citygen --test seeds -- --ignored   # 250-seed sweep
 ```
+
+The window front end only compiles with its feature, so check both; `CLAUDE.md` has
+more on keeping screens working in both front ends.
 
 ## Release
 
