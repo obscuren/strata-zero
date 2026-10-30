@@ -733,7 +733,7 @@ fn worn_window(st: &mut AppState, item: &str, slot: game::Slot) -> (MapScreen, D
     (map, deck, window)
 }
 
-/// D'SHAWN's rebuilt deck in the sticker mode: the tray risen, ARASAKA placed level
+/// D'SHAWN's rebuilt deck in the sticker mode: the tray risen, ORODYNE placed level
 /// and turned, a peel armed; and the deck inspected with what was stuck.
 #[test]
 #[ignore]

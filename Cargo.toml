@@ -5,7 +5,7 @@ members = ["crates/citygen", "crates/strata-zero", "crates/game", "crates/sim"]
 [workspace.package]
 edition = "2024"
 version = "0.1.0"
-license = "MIT"
+license = "GPL-3.0-only"
 repository = "https://github.com/obscuren/strata-zero"
 
 [workspace.dependencies]

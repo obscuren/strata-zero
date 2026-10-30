@@ -1019,9 +1019,9 @@ mod tests {
             ],
         );
         let before = holding(&bp);
-        assert_eq!(before.sticker, id("sticker_arasaka"));
+        assert_eq!(before.sticker, id("sticker_orodyne"));
         let (area, _) = area_of(&bp, &st);
-        let art = art_of(&st, "sticker_arasaka");
+        let art = art_of(&st, "sticker_orodyne");
         let (w, h) = size(&art, Turn::Level);
         let centre = (
             f32::from(before.x) + f32::from(w) / 2.0,
@@ -1072,7 +1072,7 @@ mod tests {
         let mut bp = worn(&st, "rebuilt_deck", Slot::Deck);
         let before = (
             stuck(&st, Slot::Deck),
-            st.character.count(&id("sticker_arasaka")),
+            st.character.count(&id("sticker_orodyne")),
         );
         press(
             &mut bp,
@@ -1090,7 +1090,7 @@ mod tests {
         assert_eq!(
             (
                 stuck(&st, Slot::Deck),
-                st.character.count(&id("sticker_arasaka"))
+                st.character.count(&id("sticker_orodyne"))
             ),
             before
         );
@@ -1102,15 +1102,15 @@ mod tests {
         assert_eq!(
             now.last(),
             Some(&Stuck {
-                sticker: id("sticker_arasaka"),
+                sticker: id("sticker_orodyne"),
                 x: held.x,
                 y: held.y,
                 turn: held.turn
             })
         );
-        assert_eq!(st.character.count(&id("sticker_arasaka")), before.1 - 1);
+        assert_eq!(st.character.count(&id("sticker_orodyne")), before.1 - 1);
         // The log lights the name the message quotes.
-        assert_eq!(last_log(&st), "Arasaka stuck");
+        assert_eq!(last_log(&st), "Orodyne stuck");
         assert_eq!((bp.stickers.at.clone(), bp.stickers.tile), (At::Tray, 2));
     }
 
@@ -1338,8 +1338,8 @@ mod tests {
                 .all(|s| s.sticker != id("sticker_neko"))
         );
     }
-    /// The deck worn with only the given stickers, then NO FUTURE and ARASAKA picked
-    /// and stuck: both land on the same start spot, ARASAKA on top.
+    /// The deck worn with only the given stickers, then NO FUTURE and ORODYNE picked
+    /// and stuck: both land on the same start spot, ORODYNE on top.
     fn stacked(first: &[Stuck]) -> (AppState, Blueprint) {
         let mut st = dshawn();
         st.character.worn.get_mut(&Slot::Deck).unwrap().stickers = first.to_vec();
@@ -1350,7 +1350,7 @@ mod tests {
         let now = stuck(&st, Slot::Deck);
         let n = first.len();
         assert_eq!(now[n].sticker, id("sticker_no_future"));
-        assert_eq!(now[n + 1].sticker, id("sticker_arasaka"));
+        assert_eq!(now[n + 1].sticker, id("sticker_orodyne"));
         assert_eq!(
             (now[n].x, now[n].y),
             (now[n + 1].x, now[n + 1].y),
@@ -1366,7 +1366,7 @@ mod tests {
         assert_eq!(at(&bp), on(1), "the one on top");
         assert_eq!(
             readout(&screen(&bp, &st, 100, 30)),
-            "ARASAKA ▸ stuck · lettered"
+            "ORODYNE ▸ stuck · lettered"
         );
         // Peeled from the top down, as vinyl comes off.
         press(&mut bp, &mut st, &[KeyCode::Char(' '), KeyCode::Char(' ')]);
