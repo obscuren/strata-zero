@@ -56,8 +56,8 @@ sed "s/@VERSION@/$version/g" crates/strata-zero/macos/Info.plist > "$app/Content
 if [ -f crates/strata-zero/macos/AppIcon.icns ]; then
     cp crates/strata-zero/macos/AppIcon.icns "$app/Contents/Resources/"
 fi
-# The app carries Fira Code, whose license travels with it.
-cp crates/strata-zero/fonts/OFL.txt "$app/Contents/Resources/"
+# The app carries Fira Code, whose license travels with it, and so do the crates'.
+cp crates/strata-zero/fonts/OFL.txt THIRD-PARTY-NOTICES.txt "$app/Contents/Resources/"
 codesign --force --sign - "$app"
 echo "$app"
 

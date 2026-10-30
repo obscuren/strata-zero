@@ -1,0 +1,36 @@
+# The licences Strata Zero's dependencies may carry, for cargo-about, which writes
+# THIRD-PARTY-NOTICES.txt (scripts/third-party.sh). Each of them asks that its notice
+# travel with the game, so every release artifact carries that file. A crate under any
+# other licence fails CI until someone has read that licence and added it here.
+#
+# In order of preference: where a crate offers a choice, the notices use the first.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Zlib",
+    "ISC",
+    "Unlicense",
+    "0BSD",
+    "BSL-1.0",
+    "Unicode-3.0",
+]
+
+# The release targets (dist-workspace.toml): crates only other platforms build are left
+# out.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+
+# The tests' crates never ship.
+ignore-dev-dependencies = true
+
+# Strata Zero's own crates (`publish = false`), under its own licence in LICENSE.
+[private]
+ignore = true

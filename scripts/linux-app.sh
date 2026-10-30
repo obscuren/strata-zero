@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds target/smoke/linux/strata-zero-linux-app.tar.gz: the game in its own window for
 # Linux (the `app` feature), as `strata-zero/strata-zero` beside its desktop file, icon,
-# install.sh, the game's license and the font's. Runs on Linux.
+# install.sh, the game's license, the font's and the third-party notices. Runs on Linux.
 #
 #   scripts/linux-app.sh          build the archive
 #   scripts/linux-app.sh --icon   only regenerate crates/strata-zero/linux/strata-zero.png
@@ -34,6 +34,6 @@ mkdir -p "$dir"
 install -m 755 "$target/release/strata" "$dir/strata-zero"
 install -m 755 crates/strata-zero/linux/install.sh "$dir/install.sh"
 install -m 644 crates/strata-zero/linux/strata-zero.desktop crates/strata-zero/linux/strata-zero.png \
-    LICENSE crates/strata-zero/fonts/OFL.txt "$dir/"
+    LICENSE crates/strata-zero/fonts/OFL.txt THIRD-PARTY-NOTICES.txt "$dir/"
 tar -C "$out" -czf "$archive" strata-zero
 echo "$archive"
