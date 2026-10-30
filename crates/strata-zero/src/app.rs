@@ -115,6 +115,8 @@ pub struct AppState {
     pub fx: Vec<FxInstance>,
     /// Who stands against you on foot this session; cleared with the city.
     pub foes: Vec<crate::foes::Foe>,
+    /// The bots out with you, one per bot docked in your chrome; synced from it.
+    pub bots: Vec<crate::bots::BotOut>,
     /// Blasts lying live with a fuse; cleared with the city.
     pub live: Vec<crate::blast::Live>,
     /// Rounds fired this session: the roll's seed.
@@ -275,6 +277,7 @@ impl AppState {
             ground: game::Ground::default(),
             fx: Vec::new(),
             foes: Vec::new(),
+            bots: Vec::new(),
             live: Vec::new(),
             shots: 0,
             #[cfg(test)]

@@ -2628,6 +2628,8 @@ impl Screen for MapScreen {
                 world.path_some(city, 4);
             }
         }
+        // The bots out with you move on the same clock.
+        crate::bots::tick(st);
         // The Net's clock: traces cool, hacks expire, alerts end.
         let now = st.net.now(st);
         let inside = match st.player.as_ref().map(|p| p.place) {
