@@ -454,7 +454,9 @@ pub fn offer(st: &mut AppState, fixer: PersonId) -> Option<JobId> {
     None
 }
 
-/// The first job: a neighbour's flat, the code in the mail, already taken. Once.
+/// The first job: a neighbour's flat, the code in the mail, already taken. Once. New
+/// games start with the story's drop instead; the jobs' tests still start with this.
+#[cfg(test)]
 pub fn first_favour(st: &mut AppState) {
     if !st.jobs.list.is_empty() {
         return;
@@ -682,7 +684,7 @@ mod tests {
 
     #[test]
     fn the_first_favour_is_a_taken_fetch_with_its_mail() {
-        // state_home runs move_in, which runs first_favour.
+        // state_home runs first_favour after move_in.
         let mut st = state_home();
         let j = st.jobs.active().expect("the favour in hand").clone();
         let Kind::Fetch {
@@ -787,6 +789,7 @@ mod tests {
             };
             crate::credentials::prepare(&mut st, rig.home.building);
             crate::credentials::move_in(&mut st);
+            first_favour(&mut st);
             if plain {
                 assert!(
                     st.jobs.active().is_some(),

@@ -985,6 +985,7 @@ mod tests {
         let home = st.home.unwrap().home;
         crate::credentials::prepare(&mut st, home.building);
         crate::credentials::move_in(&mut st);
+        crate::jobs::first_favour(&mut st);
         let me = user_for(&st, HostId::Rig);
         let mail = format!("/home/{me}/mail/001-a-favour.txt");
         ensure_host(&mut st, HostId::Rig)
@@ -1029,6 +1030,7 @@ mod tests {
         let home = st.home.unwrap().home;
         crate::credentials::prepare(&mut st, home.building);
         crate::credentials::move_in(&mut st);
+        crate::jobs::first_favour(&mut st);
         let me = user_for(&st, HostId::Rig);
         assert_eq!(me, slug(&st.character.handle));
         let host = ensure_host(&mut st, HostId::Rig).clone();

@@ -31,6 +31,9 @@ pub enum Source {
     /// Keyed by hand into the door's pad.
     Keypad,
     /// Read in a mail on the rig.
+    // Only the welcome favour mailed a code, and new games no longer run it (the
+    // story's drop replaced it); the journal still reads the source.
+    #[allow(dead_code)]
     Mail,
     /// Read in someone's notes in a shell.
     Shell,
@@ -449,7 +452,6 @@ pub fn move_in(st: &mut AppState) {
     if st.character.count(&id) == 0 {
         st.character.give(id, 1);
     }
-    crate::jobs::first_favour(st);
 }
 
 /// The fixer's mail when the rig comes back from the raid.

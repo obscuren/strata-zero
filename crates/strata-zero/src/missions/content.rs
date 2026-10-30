@@ -69,6 +69,7 @@ pub enum Pick {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct Face {
     pub rows: Vec<String>,
+    #[allow(dead_code)] // the chrome eye's tint (Task 5)
     pub eye: (u8, u8, u8),
 }
 
@@ -176,7 +177,9 @@ impl Effect {
 impl Trigger {
     fn named_roles(&self) -> Vec<&str> {
         match self {
-            Trigger::Sees { role, .. } | Trigger::At(Where::Work { role, .. }) => vec![role],
+            Trigger::Sees { role, .. }
+            | Trigger::At(Where::Work { role, .. })
+            | Trigger::Talk(role) => vec![role],
             _ => vec![],
         }
     }
@@ -317,7 +320,6 @@ impl Book {
                         return Err(BookError::UnknownMission(mission.clone()));
                     }
                 }
-                Trigger::Talk(role) => self.check_role(&place, role)?,
                 other => {
                     for role in other.named_roles() {
                         self.check_role(&place, role)?;
@@ -346,7 +348,8 @@ impl Book {
         Ok(())
     }
 
-    /// Every item a `Give` or `Take` names.
+    /// Every item a `Give` or `Take` names, for the test that has the content.
+    #[cfg(test)]
     pub fn items(&self) -> Vec<&str> {
         let mut out = BTreeSet::new();
         for e in self
@@ -363,6 +366,7 @@ impl Book {
     }
 
     /// The role's face, or the silhouette.
+    #[allow(dead_code)] // the HOLO feed and call draw it (Tasks 6, 7)
     pub fn face_of(&self, role: &str) -> &Face {
         self.cast
             .get(role)

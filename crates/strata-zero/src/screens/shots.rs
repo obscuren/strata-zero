@@ -413,6 +413,7 @@ fn combat_marked() {
 fn keypad_over_the_home_floor() {
     let mut st = state_home();
     let map = MapScreen::walking(&mut st);
+    crate::jobs::first_favour(&mut st);
     st.tick += 200;
     let (b, level, number, _) = crate::jobs::first_fetch(&st).expect("the favour");
     let mut pad = Keypad::open(&st, b, level, number);
@@ -1068,11 +1069,9 @@ fn offer_window() {
     shot("offer", &st, &map, &popup);
 }
 
-/// A fixer's offer over the map, the welcome job dropped first.
+/// A fixer's offer over the map, nothing in hand.
 fn offer_stack(st: &mut AppState) -> (MapScreen, Popup) {
     let map = MapScreen::walking(st);
-    let welcome = st.jobs.active().unwrap().id;
-    st.jobs.drop_job(welcome);
     let fx = st
         .world
         .as_ref()

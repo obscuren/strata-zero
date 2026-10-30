@@ -787,6 +787,7 @@ mod tests {
         let home = st.home.unwrap().home;
         crate::credentials::prepare(&mut st, home.building);
         crate::credentials::move_in(&mut st);
+        crate::jobs::first_favour(&mut st);
         let me = crate::helix::hosts::user_for(&st, HostId::Rig);
         let mut t = Terminal::open(
             &mut st,

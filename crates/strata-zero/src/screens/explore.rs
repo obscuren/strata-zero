@@ -2596,6 +2596,7 @@ impl Screen for MapScreen {
         st.net.minute(now, inside, &mut st.constructs, &roots);
         crate::net::tick_backdoors(st);
         crate::jobs::tick(st);
+        crate::missions::tick(st);
         // A fixer beside you has their offer ready before you talk.
         if self.mode == Mode::Walk {
             crate::jobs::ui::prepare_offers(st, &|pl, p| self.inside_person_at(pl, p));
@@ -5899,6 +5900,8 @@ mod tests {
     fn space_at_the_rig_offers_access_rig() {
         let mut st = state_home();
         let mut s = MapScreen::walking(&mut st);
+        // A new game mails nothing now; the favour's mail is the one the rig reads.
+        crate::jobs::first_favour(&mut st);
         let rig = st.home.unwrap();
         let home = Place::Floor {
             building: rig.home.building,

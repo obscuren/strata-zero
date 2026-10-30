@@ -69,7 +69,7 @@ Story(
                 ]),
             ]),
             Step(id: "package", when: Ended("welcome"), then: [
-                Give(item: "sealed_package", count: 1),
+                Give(item: "taped_package", count: 1),
                 Dead(role: "marlo", look: "Face down on the pavement, apron still on. Not breathing."),
                 Objective("Hand the package to {marlo} · {marlo.place} · {marlo.district}"),
             ]),
