@@ -265,9 +265,11 @@ on WARP) and `strata-zero` on Linux (Vulkan on lavapipe, under Xvfb), each writi
 live screenshot; every screen through Soft and CRT; and the whole release, the three app
 jobs included, built on the PR with dist's upload mode.
 
-Not done here: fontdue reads every glyph of a fallback face when it loads it, so the
-first katakana spark costs a few hundred MB for a CJK face on Windows and Linux (the Mac
-already pays this with Arial Unicode). Worth fixing before a Steam Deck build.
+Not done here, and fixed right after: fontdue reads every glyph of a face when it loads
+it, so the first katakana spark cost a few hundred MB for a CJK fallback face (564 MB
+and 171 ms on a Mac, with Arial Unicode). Fallback faces are now read with ab_glyph,
+which outlines a glyph only when it is drawn: the same katakana costs 25 MB and 2 ms
+(`first_katakana`, an ignored test in `window/font.rs`, measures it).
 
 ## Left to the builder
 

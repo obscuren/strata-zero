@@ -1,8 +1,15 @@
 //! The window's fonts: a monospace face and its bold (Fira Code, built in, unless the
 //! machine has a preferred one), fallbacks on the machine for characters it lacks, the
 //! cell size, and a cache of rasterized glyphs.
+//!
+//! The monospace faces are read whole by fontdue, which outlines every glyph up front:
+//! they are small and draw nearly every cell. Fallbacks are read by ab_glyph, which
+//! outlines a glyph only when it is drawn, because a fallback can be a CJK face of tens
+//! of thousands of glyphs, which fontdue would hold as hundreds of megabytes for the
+//! sake of one katakana.
 
 use super::platform::{Env, Platform, process_env, set};
+use ab_glyph::{Font as _, FontVec, ScaleFont as _};
 use fontdue::{Font, FontSettings};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -84,12 +91,97 @@ impl Face {
             Face::Builtin(bytes) => Font::from_bytes(*bytes, FontSettings::default()).ok(),
         }
     }
+
+    /// The face for ab_glyph, which keeps the file and outlines glyphs as they are drawn.
+    fn load_outlines(&self) -> Option<FontVec> {
+        match self {
+            Face::File { path, index } => {
+                FontVec::try_from_vec_and_index(std::fs::read(path).ok()?, *index).ok()
+            }
+            Face::Builtin(bytes) => FontVec::try_from_vec(bytes.to_vec()).ok(),
+        }
+    }
 }
 
 /// A fallback face, read from disk the first time a character needs it.
 enum Fallback {
     Unread(Face),
-    Read(Option<Font>),
+    Read(Option<FontVec>),
+}
+
+/// A glyph as a face draws it, before it is placed in its cell: its box from the pen
+/// (`left`) and the baseline (`top`, negative above it), its coverage, and its advance.
+struct Ink {
+    left: i32,
+    top: i32,
+    w: usize,
+    h: usize,
+    alpha: Vec<u8>,
+    advance: f32,
+}
+
+impl Ink {
+    /// `c` from a monospace face at `px`, shrunk to fit `room` pixels when wider.
+    fn whole(font: &Font, c: char, px: f32, room: f32) -> Ink {
+        let advance = font.metrics(c, px).advance_width;
+        let fit = if advance > room {
+            px * room / advance
+        } else {
+            px
+        };
+        let (m, alpha) = font.rasterize(c, fit);
+        Ink {
+            left: m.xmin,
+            top: -(m.ymin + m.height as i32),
+            w: m.width,
+            h: m.height,
+            alpha,
+            advance: font.metrics(c, fit).advance_width,
+        }
+    }
+
+    /// `c` from a fallback face at `px`, shrunk to fit `room` pixels when wider. `px` is
+    /// the em, as for fontdue; ab_glyph's scale is the face's height, ascent to descent.
+    fn outlined(font: &FontVec, c: char, px: f32, room: f32) -> Option<Ink> {
+        let em = font.units_per_em()?;
+        let scale = |px: f32| ab_glyph::PxScale::from(px * font.height_unscaled() / em);
+        let id = font.glyph_id(c);
+        let advance = font.as_scaled(scale(px)).h_advance(id);
+        let fit = if advance > room {
+            px * room / advance
+        } else {
+            px
+        };
+        let advance = font.as_scaled(scale(fit)).h_advance(id);
+        let glyph = id.with_scale_and_position(scale(fit), ab_glyph::point(0.0, 0.0));
+        let Some(outline) = font.outline_glyph(glyph) else {
+            // A glyph with nothing to draw.
+            return Some(Ink {
+                left: 0,
+                top: 0,
+                w: 0,
+                h: 0,
+                alpha: Vec::new(),
+                advance,
+            });
+        };
+        let bounds = outline.px_bounds();
+        let (w, h) = (bounds.width() as usize, bounds.height() as usize);
+        let mut alpha = vec![0u8; w * h];
+        outline.draw(|x, y, coverage| {
+            if let Some(a) = alpha.get_mut(y as usize * w + x as usize) {
+                *a = (coverage.clamp(0.0, 1.0) * 255.0).round() as u8;
+            }
+        });
+        Some(Ink {
+            left: bounds.min.x as i32,
+            top: bounds.min.y as i32,
+            w,
+            h,
+            alpha,
+            advance,
+        })
+    }
 }
 
 /// Finds a face (a file, and its index in a collection) that has a character.
@@ -275,32 +367,24 @@ impl Fonts {
         let cell = self.metrics(px);
         let span = c.width().unwrap_or(1).clamp(1, 2);
         let room = (cell.w * span) as f32;
-        let font = match &self.bold {
-            Some(b) if bold && b.has_glyph(c) => b,
-            _ if self.regular.has_glyph(c) => &self.regular,
-            _ => self.fallback_for(c)?,
+        let ink = match &self.bold {
+            Some(b) if bold && b.has_glyph(c) => Ink::whole(b, c, px, room),
+            _ if self.regular.has_glyph(c) => Ink::whole(&self.regular, c, px, room),
+            _ => Ink::outlined(self.fallback_for(c)?, c, px, room)?,
         };
-        let advance = font.metrics(c, px).advance_width;
-        let fit = if advance > room {
-            px * room / advance
-        } else {
-            px
-        };
-        let (m, alpha) = font.rasterize(c, fit);
-        let advance = font.metrics(c, fit).advance_width;
-        let centre = ((room - advance) / 2.0).max(0.0).round() as i32;
+        let centre = ((room - ink.advance) / 2.0).max(0.0).round() as i32;
         Some(Glyph {
-            left: m.xmin + centre,
-            top: cell.baseline as i32 - (m.ymin + m.height as i32),
-            w: m.width,
-            h: m.height,
-            alpha,
+            left: ink.left + centre,
+            top: cell.baseline as i32 + ink.top,
+            w: ink.w,
+            h: ink.h,
+            alpha: ink.alpha,
         })
     }
 
     /// The first fallback that has `c`; failing that, the face `ask` names for it, kept
     /// as one more fallback.
-    fn fallback_for(&mut self, c: char) -> Option<&Font> {
+    fn fallback_for(&mut self, c: char) -> Option<&FontVec> {
         let mut found = (0..self.fallbacks.len()).find(|&i| self.fallback_has(i, c));
         if found.is_none()
             && let Some(ask) = self.ask
@@ -321,9 +405,9 @@ impl Fonts {
     /// Whether fallback `i` has `c`, reading it first if it hasn't been.
     fn fallback_has(&mut self, i: usize, c: char) -> bool {
         if let Fallback::Unread(face) = &self.fallbacks[i] {
-            self.fallbacks[i] = Fallback::Read(face.load());
+            self.fallbacks[i] = Fallback::Read(face.load_outlines());
         }
-        matches!(&self.fallbacks[i], Fallback::Read(Some(f)) if f.has_glyph(c))
+        matches!(&self.fallbacks[i], Fallback::Read(Some(f)) if f.glyph_id(c).0 != 0)
     }
 }
 
@@ -483,6 +567,34 @@ mod tests {
         assert!(fonts.fallback_for('▸').is_none());
         assert_eq!(fonts.fallbacks.len(), before + 2);
         assert_eq!(fonts.asked.len(), 2);
+    }
+
+    /// The first halfwidth katakana (a glitch spark's) as this machine draws it: it comes
+    /// from a CJK fallback face on every platform. Prints how long it took and the
+    /// process's resident memory before and after (from `ps`, where there is one).
+    #[test]
+    #[ignore]
+    fn first_katakana() {
+        fn resident() -> String {
+            std::process::Command::new("ps")
+                .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .and_then(|kb| kb.trim().parse::<u64>().ok())
+                .map_or("?".into(), |kb| format!("{} MB", kb / 1024))
+        }
+        let before = resident();
+        let mut fonts = Fonts::load();
+        let loaded = resident();
+        let start = std::time::Instant::now();
+        assert!(fonts.glyph('ｱ', false, 30.0).is_some(), "no face draws ｱ");
+        let took = start.elapsed();
+        eprintln!(
+            "resident {before} at start, {loaded} with the fonts loaded, {} after the \
+             first katakana, which took {took:?}",
+            resident()
+        );
     }
 
     #[test]
