@@ -42,15 +42,28 @@ The `window` feature builds the window front end; `--window` opens it:
 ```sh
 cargo run --release -p strata-zero --features window -- --window
 scripts/macos-app.sh   # target/smoke/macos/Strata Zero.app, universal, ad-hoc signed
+scripts/windows-app.sh # on Windows (Git Bash): target/smoke/windows/strata-zero-windows-app.zip
+scripts/linux-app.sh   # on Linux: target/smoke/linux/strata-zero-linux-app.tar.gz
 ```
+
+The scripts build the `app` feature: the desktop app, which always opens the window
+and keeps cities in the player's app folder: `~/Library/Application Support/Strata
+Zero/cities/` on a Mac, `%APPDATA%\Strata Zero\cities\` on Windows,
+`~/.local/share/strata-zero/cities/` on Linux. The window carries Fira Code
+(`crates/strata-zero/fonts/`, SIL Open Font License) and takes the symbols Fira Code
+lacks from each platform's own fonts. On a Mac the window's chords are Cmd chords; on
+Windows and Linux F11 or Alt+Enter is fullscreen and Ctrl+= / Ctrl+- / Ctrl+0 set the
+text size. It draws through wgpu: Metal on a Mac, Direct3D 12 or Vulkan on Windows,
+Vulkan or OpenGL on Linux.
 
 `STRATA_FONT=<file>` picks the font, `STRATA_SCREEN_FX=off|soft|crt` the screen
 effects.
 
 `STRATA_WINDOW_SHOT=<file.png>` writes what the window shows 1.5 s in. The designs,
 and what a Steam build still needs, are in
-`docs/superpowers/specs/2026-10-29-window-prototype-design.md` and
-`docs/superpowers/specs/2026-10-29-window-gpu-effects-design.md`.
+`docs/superpowers/specs/2026-10-29-window-prototype-design.md`,
+`docs/superpowers/specs/2026-10-29-window-gpu-effects-design.md` and
+`docs/superpowers/specs/2026-10-30-windows-app-design.md`.
 
 ### Dev mode
 
@@ -97,11 +110,15 @@ with:
   signed with a Developer ID and notarized. dist runs
   `.github/workflows/build-mac-app.yml` for it as a custom job: it builds with
   `scripts/macos-app.sh`, then signs, wraps, notarizes and staples with
-  `scripts/macos-package.sh`, the only step that sees the secrets.
+  `scripts/macos-package.sh`, the only step that sees the secrets;
+- `strata-zero-windows-app.zip` and `strata-zero-linux-app.tar.gz`: the window build
+  for x86_64 Windows and Linux, from `.github/workflows/build-windows-app.yml` and
+  `build-linux-app.yml` with `scripts/windows-app.sh` and `scripts/linux-app.sh`. The
+  Windows exe isn't signed yet.
 
 dist's notes list only the files dist builds, so once the release is out
-`.github/workflows/mac-app-notes.yml` puts the DMG at the top of them with
-`scripts/mac-app-notes.sh <tag>`, which can also be run by hand.
+`.github/workflows/app-notes.yml` puts the three apps at the top of them with
+`scripts/app-notes.sh <tag>`, which can also be run by hand.
 
 After changing `dist-workspace.toml`, run `dist generate`.
 
@@ -141,4 +158,11 @@ the packaging to `scripts/macos-package.sh`).
 - rustfmt;
 - clippy and the tests on macOS, Linux and Windows, for both the terminal and the
   window build;
-- the Mac app, built unsigned.
+- the Mac app, built unsigned;
+- the Windows and Linux apps, built as a release builds them, then seen working: a
+  handful of screens drawn through the GPU and its effects (Direct3D 12 on WARP,
+  Vulkan on lavapipe, both software renderers), and the app itself started for a
+  screenshot of its window (on Linux under a virtual display). The archives and the
+  screenshots are the run's artifacts (`windows-app`, `windows-shots`, `linux-app`,
+  `linux-shots`). On Linux every symbol's glyph is checked against the common
+  desktop fonts.
