@@ -22,3 +22,7 @@ install-updater = false
 global-artifacts-jobs = ["./build-mac-app", "./build-windows-app", "./build-linux-app"]
 # dist's notes list only its own files: put the apps on top (.github/workflows/app-notes.yml)
 post-announce-jobs = ["./app-notes"]
+
+# GitHub retires the macos-14 runner (dist's default for Apple Silicon) on 2026-11-02
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
