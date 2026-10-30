@@ -40,9 +40,9 @@ wording comes from kinds, never from the current examples.
   is twice as long as it is level, so it only fits where the drawing has the height.
   Pictures (half-block pixels, which are square) turn exactly, width and height
   swapped.
-- **The test pile** ("a whole bunch … cyberpunk all the way! … Maybe add arasaka in
+- **The test pile** ("a whole bunch … cyberpunk all the way! … Maybe add orodyne in
   there as well"; the pile was then approved: "Perfect"): 15 lettered and 14 pictures,
-  listed below and drawn in the art reference. ARASAKA stays as drawn (Jeffrey was
+  listed below and drawn in the art reference. ORODYNE stays as drawn (Jeffrey was
   told it is CD Projekt's and R. Talsorian's trademark and the repo is going public;
   the in-world ARASU·TEK is in the pile too).
 - **Where stickers come from**: proposed (on the ground in districts' hangouts, a
@@ -229,7 +229,7 @@ with pulsing brackets one cell outside it.
   the tray on the same tile (or the last one, when that stack ran out), or to the new
   sticker when the pack has no stickers left.
 - Esc or q puts it back: nothing changes, the pointer is on its tile again.
-- Readout: `ARASAKA ▸ level` or ` ▸ turned 90°` · `space sticks it` · `it tears if
+- Readout: `ORODYNE ▸ level` or ` ▸ turned 90°` · `space sticks it` · `it tears if
   peeled`. Hint: `↑↓←→ move · r turn · space stick · esc back`.
 
 **Stuck stickers and peeling.** On the stuck stickers the band is the readout row
