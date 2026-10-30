@@ -587,7 +587,7 @@ more on keeping screens working in both front ends.
 ## Release
 
 Bump `version` in the workspace `Cargo.toml`, commit, tag `vX.Y.Z` and push
-the tag. The GitHub mirror runs `.github/workflows/release.yml`, built by
+the tag to GitHub. GitHub runs `.github/workflows/release.yml`, built by
 [dist](https://opensource.axo.dev/cargo-dist/), and publishes a GitHub Release
 with:
 
