@@ -249,20 +249,9 @@ pub fn span_of(cell: &Cell) -> u16 {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
     use ratatui::style::Style;
-
-    /// The machine's fonts, or `None` (and a note) where it has none.
-    pub(crate) fn fonts() -> Option<Fonts> {
-        match Fonts::load() {
-            Ok(f) => Some(f),
-            Err(e) => {
-                eprintln!("skipped: {e}");
-                None
-            }
-        }
-    }
 
     fn cell(sym: &str, style: Style) -> Cell {
         let mut c = Cell::default();
@@ -272,8 +261,8 @@ pub(crate) mod tests {
     }
 
     /// A one-cell canvas painted with `c`; the cell's pixels.
-    fn painted(c: &Cell) -> Option<(CellMetrics, Vec<u32>)> {
-        let fonts = fonts()?;
+    fn painted(c: &Cell) -> (CellMetrics, Vec<u32>) {
+        let fonts = Fonts::load();
         let m = fonts.metrics(20.0);
         let mut canvas = Canvas::new(fonts, 20.0, m.w * 3, m.h);
         canvas.paint(1, 0, c, 1);
@@ -291,7 +280,7 @@ pub(crate) mod tests {
                 );
             }
         }
-        Some((m, px))
+        (m, px)
     }
 
     #[test]
@@ -311,17 +300,13 @@ pub(crate) mod tests {
 
     #[test]
     fn block_fills_with_fg() {
-        let Some((_, px)) = painted(&cell("█", Style::new().fg(Color::Rgb(200, 0, 0)))) else {
-            return;
-        };
+        let (_, px) = painted(&cell("█", Style::new().fg(Color::Rgb(200, 0, 0))));
         assert!(px.iter().all(|&p| p == 0xc80000));
     }
 
     #[test]
     fn space_fills_with_bg() {
-        let Some((_, px)) = painted(&cell(" ", Style::new().bg(Color::Rgb(0, 0, 200)))) else {
-            return;
-        };
+        let (_, px) = painted(&cell(" ", Style::new().bg(Color::Rgb(0, 0, 200))));
         assert!(px.iter().all(|&p| p == 0x0000c8));
     }
 
@@ -331,9 +316,7 @@ pub(crate) mod tests {
             .fg(Color::Rgb(200, 0, 0))
             .bg(Color::Rgb(0, 0, 200))
             .add_modifier(Modifier::REVERSED);
-        let Some((_, px)) = painted(&cell("█", style)) else {
-            return;
-        };
+        let (_, px) = painted(&cell("█", style));
         assert!(px.iter().all(|&p| p == 0x0000c8));
     }
 
@@ -343,9 +326,7 @@ pub(crate) mod tests {
             .fg(Color::Rgb(200, 100, 0))
             .bg(Color::Rgb(0, 0, 0))
             .add_modifier(Modifier::DIM);
-        let Some((_, px)) = painted(&cell("█", style)) else {
-            return;
-        };
+        let (_, px) = painted(&cell("█", style));
         assert!(px.iter().all(|&p| p == 0x643200), "{:06x}", px[0]);
     }
 
@@ -354,9 +335,7 @@ pub(crate) mod tests {
         let style = Style::new()
             .fg(Color::Rgb(255, 255, 255))
             .bg(Color::Rgb(0, 0, 0));
-        let Some((_, px)) = painted(&cell("M", style)) else {
-            return;
-        };
+        let (_, px) = painted(&cell("M", style));
         assert!(px.contains(&0xffffff));
         assert!(px.contains(&0));
     }
@@ -366,9 +345,7 @@ pub(crate) mod tests {
         let style = Style::new()
             .fg(Color::Rgb(255, 255, 255))
             .bg(Color::Rgb(0, 0, 0));
-        let Some((m, px)) = painted(&cell("\u{10FFFD}", style)) else {
-            return;
-        };
+        let (m, px) = painted(&cell("\u{10FFFD}", style));
         assert_eq!(px[2 * m.w + 1], 0xffffff, "the box's top-left corner");
         assert_eq!(px[(m.h / 2) * m.w + m.w / 2], 0, "the box's centre");
     }

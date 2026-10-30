@@ -33,7 +33,9 @@ code, as long as it stays inside these lines:
 - Prefer exact `Color::Rgb` colours. Named ANSI colours take the terminal's theme there
   and the xterm palette in the window.
 - Box-drawing (U+2500–257F) and block (U+2580–259F) characters always work. Any other
-  symbol needs a monospace font that has it; colour emoji don't render in the window (a
+  symbol needs a font that has it: the window carries Fira Code (`fonts/`) and falls
+  back to each platform's system fonts (`window/font.rs`). A new symbol that no font has
+  fails `every_drawn_character_has_a_glyph`; colour emoji don't render in the window (a
   hollow box shows instead).
 - A setting that only means something in the window (like `AppState.effects` and
   `screen_fx`) is wired on both sides: the screen offers it, the window acts on it.

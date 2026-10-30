@@ -238,17 +238,16 @@ impl Backend for PixelBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::window::raster::tests::fonts;
-    use ratatui::Terminal;
+        use ratatui::Terminal;
     use ratatui::style::{Color, Style};
     use ratatui::widgets::Paragraph;
 
     const RED: u32 = 0xc80000;
 
-    fn backend(cols: usize, rows: usize) -> Option<PixelBackend> {
-        let fonts = fonts()?;
+    fn backend(cols: usize, rows: usize) -> PixelBackend {
+        let fonts = crate::window::font::Fonts::load();
         let m = fonts.metrics(20.0);
-        Some(PixelBackend::new(fonts, 20.0, m.w * cols, m.h * rows))
+        PixelBackend::new(fonts, 20.0, m.w * cols, m.h * rows)
     }
 
     fn pixel(b: &PixelBackend, x: usize, y: usize) -> u32 {
@@ -265,13 +264,13 @@ mod tests {
 
     #[test]
     fn size_is_pixels_over_cells() {
-        let Some(b) = backend(10, 3) else { return };
+        let b = backend(10, 3);
         assert_eq!(b.size().unwrap(), Size::new(10, 3));
     }
 
     #[test]
     fn draw_through_a_terminal() {
-        let Some(mut b) = backend(10, 3) else { return };
+        let mut b = backend(10, 3);
         b.take_damage();
         let mut t = Terminal::new(b).unwrap();
         t.draw(|f| red_block(f, 2, 1)).unwrap();
@@ -295,7 +294,7 @@ mod tests {
 
     #[test]
     fn zero_and_tiny_sizes_never_panic() {
-        let Some(mut b) = backend(10, 3) else { return };
+        let mut b = backend(10, 3);
         b.resize(0, 0);
         assert_eq!(b.size().unwrap(), Size::new(1, 1));
         let mut t = Terminal::new(b).unwrap();
@@ -306,7 +305,7 @@ mod tests {
 
     #[test]
     fn resize_cells_repaints_everything() {
-        let Some(b) = backend(10, 3) else { return };
+        let b = backend(10, 3);
         let mut t = Terminal::new(b).unwrap();
         t.draw(|f| red_block(f, 0, 0)).unwrap();
         t.backend_mut().set_px(30.0);
@@ -323,7 +322,7 @@ mod tests {
 
     #[test]
     fn wide_glyph_spans_two_cells() {
-        let Some(mut b) = backend(10, 3) else { return };
+        let mut b = backend(10, 3);
         let (cw, ch) = b.cell_px();
         let mut wide = Cell::default();
         wide.set_symbol("⚡").set_fg(Color::Rgb(200, 0, 0));
@@ -339,7 +338,7 @@ mod tests {
 
     #[test]
     fn a_wide_glyph_moved_left_leaves_no_ghost() {
-        let Some(mut b) = backend(10, 3) else { return };
+        let mut b = backend(10, 3);
         let (cw, ch) = b.cell_px();
         let mut wide = Cell::default();
         wide.set_symbol("⚡").set_fg(Color::Rgb(200, 0, 0));
@@ -353,7 +352,7 @@ mod tests {
 
     #[test]
     fn regrid_damages_everything() {
-        let Some(mut b) = backend(10, 3) else { return };
+        let mut b = backend(10, 3);
         b.take_damage();
         b.set_px(30.0);
         let f = b.frame();
@@ -368,7 +367,7 @@ mod tests {
 
     #[test]
     fn a_resize_keeps_the_picture() {
-        let Some(b) = backend(10, 3) else { return };
+        let b = backend(10, 3);
         let mut t = Terminal::new(b).unwrap();
         t.draw(|f| red_block(f, 0, 0)).unwrap();
         t.backend_mut().set_px(30.0);
@@ -379,7 +378,7 @@ mod tests {
 
     #[test]
     fn clear_blanks_at_the_next_draw_not_before() {
-        let Some(b) = backend(10, 3) else { return };
+        let b = backend(10, 3);
         let mut t = Terminal::new(b).unwrap();
         t.draw(|f| red_block(f, 0, 0)).unwrap();
         t.clear().unwrap();
@@ -394,7 +393,7 @@ mod tests {
 
     #[test]
     fn a_resize_there_and_back_then_a_clear_repaints_every_cell() {
-        let Some(b) = backend(10, 3) else { return };
+        let b = backend(10, 3);
         let mut t = Terminal::new(b).unwrap();
         let draw = |f: &mut ratatui::Frame| {
             red_block(f, 0, 0);
