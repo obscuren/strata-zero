@@ -28,10 +28,18 @@ for arg in "$@"; do
     esac
 done
 
-cargo build --release -p strata-zero --features app --target-dir "$target"
+# The C runtime linked in, as dist builds the terminal game, so the exe starts on a PC
+# without the Visual C++ redistributable.
+RUSTFLAGS="${RUSTFLAGS:-} -Ctarget-feature=+crt-static" \
+    cargo build --release -p strata-zero --features app --target-dir "$target"
+exe="$target/release/strata.exe"
+if grep -qia 'vcruntime140' "$exe"; then
+    echo "error: $exe still needs VCRUNTIME140.dll" >&2
+    exit 1
+fi
 rm -rf "$dir" "$zip"
 mkdir -p "$dir"
-cp "$target/release/strata.exe" "$dir/Strata Zero.exe"
+cp "$exe" "$dir/Strata Zero.exe"
 cp LICENSE "$dir/LICENSE.txt"
 cp crates/strata-zero/fonts/OFL.txt "$dir/OFL.txt"
 powershell -NoProfile -Command \

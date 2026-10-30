@@ -4,7 +4,7 @@
 
 use super::platform::{Env, Platform, process_env, set};
 use fontdue::{Font, FontSettings};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use unicode_width::UnicodeWidthChar;
 
@@ -14,7 +14,7 @@ const FIRA_REGULAR: &[u8] = include_bytes!("../../fonts/FiraCode-Regular.ttf");
 const FIRA_BOLD: &[u8] = include_bytes!("../../fonts/FiraCode-Bold.ttf");
 
 /// Font files Linux fallbacks are looked for by, in order: where they live differs by
-/// distribution.
+/// distribution. A character none of them has is asked of fontconfig (`fontconfig`).
 const LINUX_FALLBACKS: &[&str] = &[
     "DejaVuSans.ttf",
     "DejaVuSansMono.ttf",
@@ -91,10 +91,17 @@ enum Fallback {
     Read(Option<Font>),
 }
 
+/// Finds a face (a file, and its index in a collection) that has a character.
+type Asker = fn(char) -> Option<(PathBuf, u32)>;
+
 pub struct Fonts {
     regular: Font,
     bold: Option<Font>,
     fallbacks: Vec<Fallback>,
+    /// Asked for a face when no fallback has a character: fontconfig, on Linux.
+    ask: Option<Asker>,
+    /// The characters `ask` has been asked about, so each is asked once.
+    asked: HashSet<char>,
     cache: HashMap<(char, bool, u32), Option<Glyph>>,
 }
 
@@ -216,6 +223,8 @@ impl Fonts {
                 .into_iter()
                 .map(Fallback::Unread)
                 .collect(),
+            ask: (p == Platform::Linux).then_some(fontconfig as Asker),
+            asked: HashSet::new(),
             cache: HashMap::new(),
         }
     }
@@ -288,18 +297,46 @@ impl Fonts {
         })
     }
 
+    /// The first fallback that has `c`; failing that, the face `ask` names for it, kept
+    /// as one more fallback.
     fn fallback_for(&mut self, c: char) -> Option<&Font> {
-        let i = (0..self.fallbacks.len()).find(|&i| {
-            if let Fallback::Unread(face) = &self.fallbacks[i] {
-                self.fallbacks[i] = Fallback::Read(face.load());
-            }
-            matches!(&self.fallbacks[i], Fallback::Read(Some(f)) if f.has_glyph(c))
-        })?;
-        match &self.fallbacks[i] {
+        let mut found = (0..self.fallbacks.len()).find(|&i| self.fallback_has(i, c));
+        if found.is_none()
+            && let Some(ask) = self.ask
+            && self.asked.insert(c)
+            && let Some((path, index)) = ask(c)
+        {
+            self.fallbacks
+                .push(Fallback::Unread(Face::file(path, index)));
+            let i = self.fallbacks.len() - 1;
+            found = self.fallback_has(i, c).then_some(i);
+        }
+        match &self.fallbacks[found?] {
             Fallback::Read(Some(f)) => Some(f),
             _ => None,
         }
     }
+
+    /// Whether fallback `i` has `c`, reading it first if it hasn't been.
+    fn fallback_has(&mut self, i: usize, c: char) -> bool {
+        if let Fallback::Unread(face) = &self.fallbacks[i] {
+            self.fallbacks[i] = Fallback::Read(face.load());
+        }
+        matches!(&self.fallbacks[i], Fallback::Read(Some(f)) if f.has_glyph(c))
+    }
+}
+
+/// The face fontconfig picks for `c`, and its index in a collection: where Linux keeps
+/// a font, and what it is called, differs by distribution.
+fn fontconfig(c: char) -> Option<(PathBuf, u32)> {
+    let out = std::process::Command::new("fc-match")
+        .arg("--format=%{file}\n%{index}")
+        .arg(format!(":charset={:x}", c as u32))
+        .output()
+        .ok()?;
+    let text = String::from_utf8(out.stdout).ok()?;
+    let (file, index) = text.split_once('\n')?;
+    Some((PathBuf::from(file), index.trim().parse().unwrap_or(0)))
 }
 
 #[cfg(test)]
@@ -425,6 +462,26 @@ mod tests {
         assert!(fonts.has('M'));
         assert!(!fonts.has('\u{10FFFD}'));
         assert!(fonts.glyph('▸', false, 15.0).is_none());
+    }
+
+    #[test]
+    fn a_missing_character_is_asked_for_once() {
+        fn fira(_: char) -> Option<(PathBuf, u32)> {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fonts/FiraCode-Bold.ttf");
+            Some((path, 0))
+        }
+        let mut fonts = Fonts::load_for(Platform::Windows, &env_of(&[("WINDIR", "/nowhere")]));
+        fonts.ask = Some(fira);
+        let before = fonts.fallbacks.len();
+        // The asked face has `→` (a fallback is only asked for what no face has, but
+        // nothing stops asking for any character).
+        assert!(fonts.fallback_for('→').is_some());
+        assert_eq!(fonts.fallbacks.len(), before + 1);
+        // Asked again for a character the answer lacks: no second read, no answer.
+        assert!(fonts.fallback_for('▸').is_none());
+        assert!(fonts.fallback_for('▸').is_none());
+        assert_eq!(fonts.fallbacks.len(), before + 2);
+        assert_eq!(fonts.asked.len(), 2);
     }
 
     #[test]
