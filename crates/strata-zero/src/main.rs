@@ -1,5 +1,8 @@
 //! `strata`: Strata Zero, a terminal roguelike in a multi-level cyberpunk city.
 
+// The Windows app is a GUI program: no console opens with it.
+#![cfg_attr(all(windows, feature = "app"), windows_subsystem = "windows")]
+
 mod access;
 mod actions;
 mod anim;
@@ -32,5 +35,12 @@ mod walker;
 mod window;
 
 fn main() -> anyhow::Result<()> {
-    cli::run()
+    #[cfg(all(windows, feature = "app"))]
+    window::fatal::catch_panics();
+    let result = cli::run();
+    #[cfg(all(windows, feature = "app"))]
+    if let Err(e) = &result {
+        window::fatal::show(&format!("{e:#}"));
+    }
+    result
 }
