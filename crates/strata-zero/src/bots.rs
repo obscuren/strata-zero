@@ -234,6 +234,84 @@ pub fn step_to(st: &mut AppState, me: usize, to: Pos, now: u64) {
     b.moved_at = now;
 }
 
+/// The bot out of the site and socket `dock`, by its place in `bots`.
+pub fn index(st: &AppState, dock: (Site, usize)) -> Option<usize> {
+    st.bots.iter().position(|b| b.dock == dock)
+}
+
+/// What the turn column calls bot `dock`: its item's name.
+pub fn name(st: &AppState, dock: (Site, usize)) -> Option<String> {
+    let b = &st.bots[index(st, dock)?];
+    b.pos?;
+    st.content.item(&b.item).map(|i| i.name.clone())
+}
+
+/// The bots placed on `place` with their reflex, in `bots` order: their seats on turns.
+pub fn seats(st: &AppState, place: Place) -> Vec<(u8, (Site, usize))> {
+    (0..st.bots.len())
+        .filter(|&i| st.bots[i].place == place && st.bots[i].pos.is_some())
+        .filter_map(|i| Some((spec(st, i)?.reflex, st.bots[i].dock)))
+        .collect()
+}
+
+/// How far bot `dock` moves in a turn.
+pub fn moves(st: &AppState, dock: (Site, usize)) -> u8 {
+    index(st, dock)
+        .and_then(|i| spec(st, i))
+        .map_or(0, |b| b.moves)
+}
+
+/// A bot's turn begins: it acts when it is out, placed on the engaged map and away
+/// from where it can stay; near you it passes. A bot that has gone passes too.
+pub fn turn_start(st: &mut AppState, dock: (Site, usize)) -> bool {
+    let Some(i) = index(st, dock) else {
+        return false;
+    };
+    let Some((place, at)) = anchor(st) else {
+        return false;
+    };
+    let b = &st.bots[i];
+    let Some(here) = b.pos else {
+        return false;
+    };
+    let engaged = st.net.engaged.as_ref().map(|e| e.place);
+    if b.place != place || engaged != Some(place) || stays(st, place, here, at, i) {
+        return false;
+    }
+    st.bots[i].catching_up = true;
+    true
+}
+
+/// One action of a bot's turn: a step toward you while it is away from where it can
+/// stay, else the turn is done. Combat fills the act half later.
+pub fn step(st: &mut AppState, dock: (Site, usize), can_move: bool) -> crate::net::Step {
+    use crate::net::Step;
+    let Some(i) = index(st, dock) else {
+        return Step::Nothing;
+    };
+    let done = |st: &mut AppState| {
+        st.bots[i].catching_up = false;
+        Step::Nothing
+    };
+    let Some((place, at)) = anchor(st) else {
+        return done(st);
+    };
+    let Some(here) = st.bots[i].pos else {
+        return done(st);
+    };
+    if !can_move || stays(st, place, here, at, i) {
+        return done(st);
+    }
+    match toward(st, i) {
+        Some(next) => {
+            let now = st.clock_tick();
+            step_to(st, i, next, now);
+            Step::Moved(next)
+        }
+        None => done(st),
+    }
+}
+
 /// Off turns: a bot that can stay where it is drifts now and then; one that can't
 /// catches up, a step every `CATCH_UP_TICKS`.
 fn wander(st: &mut AppState, me: usize, now: u64) {
@@ -488,6 +566,93 @@ mod tests {
         st.foes.clear();
         run(&mut st, 1);
         assert_eq!(st.bots[0].pos, Some(Pos::new(11, 9)));
+    }
+
+    const DRONE: crate::net::Actor = crate::net::Actor::Bot(game::Site::Back, 0);
+
+    /// On turns on the lot by hand, the drone out where `at` says, your turn ended so
+    /// the drone's is next.
+    fn on_turns(at: Pos) -> AppState {
+        let mut st = lot();
+        sync(&mut st);
+        st.bots[0].pos = Some(at);
+        crate::net::engage(&mut st, STREET, true);
+        st
+    }
+
+    /// The clock on, a pace each tick, until it is your turn again or `n` ticks pass.
+    fn pace_until_you(st: &mut AppState, n: u64) {
+        for _ in 0..n {
+            if crate::net::phase(st).is_some() {
+                return;
+            }
+            let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+            world.advance(city, world.tick() + 1);
+            tick(st);
+            crate::net::pace(st);
+        }
+    }
+
+    #[test]
+    fn a_bot_takes_a_seat() {
+        let st = on_turns(Pos::new(11, 8));
+        let order = &st.net.engaged.as_ref().unwrap().order;
+        assert!(order.contains(&DRONE), "{order:?}");
+        assert_eq!(order[0], crate::net::Actor::You, "your reflex beats its 6");
+    }
+
+    #[test]
+    fn on_its_turn_it_comes_back_to_you() {
+        let mut st = on_turns(Pos::new(15, 8));
+        crate::net::end_turn(&mut st);
+        assert_eq!(st.net.engaged.as_ref().unwrap().actor(), DRONE);
+        // Off turns it would not move on its own: tick() leaves it be.
+        tick(&mut st);
+        assert_eq!(pos(&st), Pos::new(15, 8));
+        pace_until_you(&mut st, 200);
+        assert!(crate::net::phase(&st).is_some(), "your turn again");
+        assert!(with_you(&st, STREET, pos(&st), you(&st)), "{:?}", pos(&st));
+    }
+
+    #[test]
+    fn near_you_it_passes() {
+        let mut st = on_turns(Pos::new(11, 8));
+        crate::net::end_turn(&mut st);
+        assert!(crate::net::phase(&st).is_some(), "its turn passed at once");
+        assert_eq!(pos(&st), Pos::new(11, 8));
+    }
+
+    #[test]
+    fn a_gone_bot_passes_its_seat() {
+        let mut st = on_turns(Pos::new(15, 8));
+        st.character
+            .chrome_copies
+            .get_mut(&game::Site::Back)
+            .unwrap()
+            .fitted[0] = None;
+        sync(&mut st);
+        crate::net::end_turn(&mut st);
+        assert!(crate::net::phase(&st).is_some(), "the empty seat passed");
+    }
+
+    #[test]
+    fn a_bot_hunts_nothing() {
+        let st = on_turns(Pos::new(11, 8));
+        assert!(!crate::net::hunting(&st), "a drone keeps no fight going");
+    }
+
+    #[test]
+    fn the_turn_column_shows_the_drone() {
+        let mut st = on_turns(Pos::new(15, 8));
+        let chips = crate::net::turn_view(&st).unwrap().chips;
+        let chip = chips
+            .iter()
+            .find(|c| c.name == "Scout drone")
+            .expect("its chip");
+        assert_eq!(chip.hp, "");
+        crate::net::end_turn(&mut st);
+        let line = crate::net::turn_readout(&st).unwrap();
+        assert!(line.contains("Scout drone moves 5"), "{line}");
     }
 
     #[test]

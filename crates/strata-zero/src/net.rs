@@ -74,6 +74,8 @@ pub enum Actor {
     You,
     Ice(usize),
     Foe(usize),
+    /// A bot out with you, by the site and socket it docks in.
+    Bot(game::Site, usize),
 }
 
 /// Your turn in two halves: you move (or stay), then you act.
@@ -1567,7 +1569,7 @@ pub fn budgets(grade: IceGrade) -> (u8, u8) {
 /// piece by its grade. On foot: you by your Reflex, each standing foe in your sight
 /// memory by its own. Higher first, ties to you, then by index.
 pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
-    let mut scored: Vec<(i32, u8, Actor)> = Vec::new();
+    let mut scored: Vec<(i32, u16, Actor)> = Vec::new();
     match place {
         Place::Construct(b) => {
             scored.push((
@@ -1585,7 +1587,7 @@ pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
                         IceGrade::Grey => 2,
                         IceGrade::White => 1,
                     };
-                    scored.push((score, 1 + i as u8, Actor::Ice(i)));
+                    scored.push((score, 1 + i as u16, Actor::Ice(i)));
                 }
             }
         }
@@ -1596,7 +1598,11 @@ pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
                 Actor::You,
             ));
             for i in crate::foes::in_memory(st) {
-                scored.push((st.foes[i].reflex as i32, 1 + i as u8, Actor::Foe(i)));
+                scored.push((st.foes[i].reflex as i32, 1 + i as u16, Actor::Foe(i)));
+            }
+            // Your bots on the map, after foes of the same score.
+            for (i, (reflex, dock)) in crate::bots::seats(st, place).into_iter().enumerate() {
+                scored.push((reflex as i32, 1000 + i as u16, Actor::Bot(dock.0, dock.1)));
             }
         }
     }
@@ -1627,6 +1633,7 @@ fn pools_for(st: &AppState, place: Place, actor: Actor) -> (u8, u8) {
             .unwrap_or((0, 0)),
         (Actor::Ice(_), _) => (0, 0),
         (Actor::Foe(_), _) => (crate::foes::GOON_MOVE, crate::foes::GOON_AP),
+        (Actor::Bot(site, n), _) => (crate::bots::moves(st, (site, n)), 0),
     }
 }
 
@@ -1676,10 +1683,22 @@ pub fn engage(st: &mut AppState, place: Place, manual: bool) {
 /// at the end: one that came hunting mid-fight.
 pub fn seat_foes(st: &mut AppState) {
     let known = crate::foes::in_memory(st);
+    let bots = st
+        .net
+        .engaged
+        .as_ref()
+        .map(|e| crate::bots::seats(st, e.place))
+        .unwrap_or_default();
     if let Some(e) = st.net.engaged.as_mut() {
         for i in known {
             if !e.order.contains(&Actor::Foe(i)) {
                 e.order.push(Actor::Foe(i));
+            }
+        }
+        // A bot that came out mid-fight sits at the end too.
+        for (_, (site, n)) in bots {
+            if !e.order.contains(&Actor::Bot(site, n)) {
+                e.order.push(Actor::Bot(site, n));
             }
         }
     }
@@ -1907,6 +1926,7 @@ fn start_turn(st: &mut AppState) {
     let acts = match (e.actor(), e.place) {
         (Actor::Ice(i), Place::Construct(b)) => ice_look(st, b, i),
         (Actor::Foe(i), _) => crate::foes::turn_start(st, i),
+        (Actor::Bot(site, n), _) => crate::bots::turn_start(st, (site, n)),
         (Actor::Ice(_), _) => false,
         (Actor::You, _) => return,
     };
@@ -1932,6 +1952,7 @@ pub fn pace(st: &mut AppState) {
     let step = match (actor, place) {
         (Actor::Ice(i), Place::Construct(b)) => ice_step(st, b, i, moves > 0, ap > 0),
         (Actor::Foe(i), _) => crate::foes::step(st, i, moves > 0, ap > 0),
+        (Actor::Bot(site, n), _) => crate::bots::step(st, (site, n), moves > 0),
         _ => Step::Nothing,
     };
     let now = st.clock_tick();
@@ -2039,6 +2060,16 @@ pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
                     acting: actor == *a,
                 }
             }
+            Actor::Bot(site, n) => {
+                let Some(name) = crate::bots::name(st, (site, n)) else {
+                    continue;
+                };
+                Chip {
+                    name,
+                    hp: String::new(),
+                    acting: actor == *a,
+                }
+            }
         };
         chips.push(chip);
     }
@@ -2051,7 +2082,7 @@ pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
     ));
     let theirs = match actor {
         Actor::You => None,
-        Actor::Ice(_) | Actor::Foe(_) => {
+        Actor::Ice(_) | Actor::Foe(_) | Actor::Bot(..) => {
             let verb = if matches!(actor, Actor::Ice(_)) {
                 "hits"
             } else {
@@ -2088,6 +2119,9 @@ pub fn turn_readout(st: &AppState) -> Option<String> {
             .get(i)
             .map(|f| f.name.clone())
             .unwrap_or_else(|| "foe".to_string()),
+        Actor::Bot(site, n) => {
+            crate::bots::name(st, (site, n)).unwrap_or_else(|| "bot".to_string())
+        }
     };
     let mut parts = Vec::new();
     for n in 0..e.order.len() {
@@ -2107,6 +2141,11 @@ pub fn turn_readout(st: &AppState) -> Option<String> {
                         s.push_str(&format!(" moves {}", e.moves));
                     } else if e.ap > 0 {
                         s.push_str(" fires");
+                    }
+                }
+                Actor::Bot(..) => {
+                    if e.moves > 0 {
+                        s.push_str(&format!(" moves {}", e.moves));
                     }
                 }
                 Actor::You => {}

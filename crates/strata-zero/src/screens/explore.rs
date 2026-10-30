@@ -1054,6 +1054,12 @@ impl MapScreen {
                     .unwrap_or_else(|| "FOE".to_string());
                 (format!("THE {name} ACTS"), "wait".to_string())
             }
+            Actor::Bot(site, n) => {
+                let name = crate::bots::name(st, (site, n))
+                    .map(|n| n.to_uppercase())
+                    .unwrap_or_else(|| "BOT".to_string());
+                (format!("YOUR {name} MOVES"), "wait".to_string())
+            }
         })
     }
 
