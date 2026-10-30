@@ -596,8 +596,9 @@ with:
   shell and PowerShell installers;
 - `strata-zero-mac-app.dmg`: `Strata Zero.app`, the window build, universal,
   signed with a Developer ID and notarized. dist runs
-  `.github/workflows/build-mac-app.yml` for it as a custom job, which runs
-  `scripts/macos-app.sh --dmg`.
+  `.github/workflows/build-mac-app.yml` for it as a custom job: it builds with
+  `scripts/macos-app.sh`, then signs, wraps, notarizes and staples with
+  `scripts/macos-package.sh`, the only step that sees the secrets.
 
 After changing `dist-workspace.toml`, run `dist generate`.
 
@@ -627,7 +628,8 @@ Without the secrets the release stops at the Mac app. To release anyway with an 
 signed ad hoc (players then allow it once in System Settings › Privacy & Security),
 set the repository variable `MAC_APP_UNSIGNED` to `1`. Locally,
 `STRATA_SIGN_IDENTITY="Developer ID Application: …"` plus the three `APPLE_API_*`
-variables make `scripts/macos-app.sh --dmg` sign and notarize the same way.
+variables make `scripts/macos-app.sh --dmg` sign and notarize the same way (it hands
+the packaging to `scripts/macos-package.sh`).
 
 ### Checks
 

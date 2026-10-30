@@ -3,6 +3,9 @@
 # staples that; and hands it to the release as the artifact `artifacts-mac-app`, which
 # dist's host job attaches to the GitHub Release.
 #
+# Each secret reaches only the step that needs it, and the build runs before any of
+# them, so no dependency's build script sees one or finds the keychain unlocked.
+#
 # dist's release.yml calls this for every release (`global-artifacts-jobs` in
 # dist-workspace.toml); after changing that file, run `dist generate`.
 #
@@ -22,20 +25,21 @@ jobs:
   mac-app:
     runs-on: macos-latest
     env:
-      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
       STRATA_REQUIRE_SIGNING: ${{ vars.MAC_APP_UNSIGNED == '1' && '0' || '1' }}
+      HAVE_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE != '' }}
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
       - name: Rust for both Mac targets
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Build the app
+        run: scripts/macos-app.sh
       - name: The Developer ID, in a keychain of its own
-        if: env.MACOS_CERTIFICATE != ''
+        if: env.HAVE_CERTIFICATE == 'true'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
         run: |
           keychain="$RUNNER_TEMP/signing.keychain-db"
           password=$(openssl rand -base64 24)
@@ -57,8 +61,12 @@ jobs:
             exit 1
           fi
           echo "STRATA_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
-      - name: Build, sign, wrap and notarize
-        run: scripts/macos-app.sh --dmg
+      - name: Sign, wrap in a DMG, notarize and staple
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: scripts/macos-package.sh
       - uses: actions/upload-artifact@v7
         with:
           name: artifacts-mac-app
