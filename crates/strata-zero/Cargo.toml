@@ -3,6 +3,7 @@ name = "strata-zero"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+publish.workspace = true
 repository.workspace = true
 
 [[bin]]
@@ -45,5 +46,10 @@ window = ["dep:winit", "dep:softbuffer", "dep:fontdue", "dep:png", "dep:wgpu", "
 # the window, with its files in the player's app folder. On Windows it is a GUI program
 # with an icon, showing fatal errors in a message box.
 app = ["window", "dep:winresource", "dep:windows-sys"]
+
+# dist leaves out crates with `publish = false` unless told otherwise; this one is the
+# game it releases.
+[package.metadata.dist]
+dist = true
 
 [dev-dependencies]

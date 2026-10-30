@@ -6,6 +6,8 @@ members = ["crates/citygen", "crates/strata-zero", "crates/game", "crates/sim"]
 edition = "2024"
 version = "0.1.0"
 license = "GPL-3.0-only"
+# Never on crates.io: cargo-about leaves these crates out of the notices (about.toml).
+publish = false
 repository = "https://github.com/obscuren/strata-zero"
 
 [workspace.dependencies]

@@ -1,0 +1,24 @@
+Strata Zero: third-party notices
+================================
+
+Strata Zero is built from the open-source Rust crates below, and its window and
+desktop apps carry the Fira Code font. Their licences ask that these notices go with
+every copy of the game. Strata Zero's own licence is in LICENSE.
+
+Written by scripts/third-party.sh; don't edit by hand.
+
+Licences, and how many crates use each:
+{{#each overview}}
+  {{{name}}}: {{count}}
+{{/each}}
+  SIL Open Font License 1.1: Fira Code
+{{#each licenses}}
+
+--------------------------------------------------------------------------------
+{{{name}}}, for:
+{{#each used_by}}
+  {{{crate.name}}} {{{crate.version}}}{{#if crate.repository}} ({{{crate.repository}}}){{/if}}
+{{/each}}
+
+{{{text}}}
+{{/each}}
