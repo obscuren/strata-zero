@@ -22,5 +22,3 @@ install-updater = false
 global-artifacts-jobs = ["./build-mac-app", "./build-windows-app", "./build-linux-app"]
 # dist's notes list only its own files: put the apps on top (.github/workflows/app-notes.yml)
 post-announce-jobs = ["./app-notes"]
-# Temporary: the PR builds and uploads every release artifact once, to prove the jobs
-pr-run-mode = "upload"
