@@ -496,7 +496,8 @@ mod tests {
         }
         boost(&mut st, &id("redline")).unwrap();
         let e = st.net.engaged.as_ref().unwrap();
-        assert_eq!((e.moves, e.ap), (net::BASE_MOVE, net::BASE_AP));
+        // A whole turn: the moves your talents give you, not just the base.
+        assert_eq!((e.moves, e.ap), (net::you_move(&st, e.place), net::BASE_AP));
         assert_eq!(e.phase, Phase::Move);
         assert!(e.boosted);
         assert!(logged(&st, "redline · your turn again"));

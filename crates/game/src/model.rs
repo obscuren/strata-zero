@@ -1016,6 +1016,17 @@ pub struct ImplantArt {
     pub colours: BTreeMap<char, (u8, u8, u8)>,
 }
 
+/// A talent's icon is this many pixels wide and tall, two pixels to a cell stacked.
+pub const TALENT_ART_W: usize = 6;
+pub const TALENT_ART_H: usize = 6;
+
+/// A talent's icon: one char per pixel, `.` empty, a colour per char.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TalentArt {
+    pub rows: Vec<String>,
+    pub colours: BTreeMap<char, (u8, u8, u8)>,
+}
+
 /// What one rank of a talent adds.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Boon {
@@ -1034,13 +1045,12 @@ pub enum Boon {
     Flag(String),
 }
 
-/// A talent in a tree: ranks, each with its boons, behind an optional prerequisite
-/// straight below it in the same column.
+/// A talent in a tree: ranks, each with its boons, behind an optional prerequisite on a
+/// lower tier of the same tree.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Talent {
     pub id: TalentId,
     pub name: String,
-    pub icon: char,
     pub ranks: u8,
     #[serde(default)]
     pub requires: Option<TalentId>,
@@ -1052,13 +1062,51 @@ pub struct Talent {
     pub desc: String,
 }
 
-/// A tree of talents under one attribute: tiers from the bottom, each a row of talents.
+/// Slots in every tier of a tree.
+pub const TREE_COLS: usize = 4;
+/// Tiers a tree has at most, so the board fits the smallest deck.
+pub const TREE_TIERS: usize = 5;
+
+/// A tree of talents under one attribute: tiers from the first, each a row of
+/// `TREE_COLS` slots, `None` where a slot is empty.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Tree {
     pub attribute: Attribute,
     pub name: String,
     pub line: String,
-    pub tiers: Vec<Vec<TalentId>>,
+    pub tiers: Vec<Vec<Option<TalentId>>>,
+}
+
+impl Tree {
+    /// The talent in a slot, if the slot holds one.
+    pub fn slot(&self, tier: usize, col: usize) -> Option<&TalentId> {
+        self.tiers.get(tier)?.get(col)?.as_ref()
+    }
+
+    /// Every talent with its tier and column, tier by tier, left to right.
+    pub fn talents(&self) -> impl Iterator<Item = (usize, usize, &TalentId)> {
+        self.tiers.iter().enumerate().flat_map(|(tier, row)| {
+            row.iter()
+                .enumerate()
+                .filter_map(move |(col, id)| id.as_ref().map(|id| (tier, col, id)))
+        })
+    }
+}
+
+/// The slots, as `(tier, col)`, a trace from a prerequisite at `from` to a talent at `to`
+/// passes through: sideways along the prerequisite's tier to the talent's column, then
+/// down that column to the tier above the talent.
+pub fn trace_slots(from: (usize, usize), to: (usize, usize)) -> Vec<(usize, usize)> {
+    let (ft, fc) = from;
+    let (tt, tc) = to;
+    let mut out = Vec::new();
+    let mut col = fc;
+    while col != tc {
+        col = if tc > col { col + 1 } else { col - 1 };
+        out.push((ft, col));
+    }
+    out.extend((ft + 1..tt).map(|tier| (tier, tc)));
+    out
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

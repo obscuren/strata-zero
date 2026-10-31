@@ -1137,7 +1137,7 @@ mod tests {
     #[test]
     fn learn_spends_the_point_and_reports_the_rank() {
         let (c, mut ch, mut g, at) = setup();
-        let first = c.tree(Attribute::Net).unwrap().tiers[0][0].clone();
+        let first = c.tree(Attribute::Net).unwrap().slot(0, 0).unwrap().clone();
         let name = c.talent(&first).unwrap().name.clone();
         let out = apply(&mut ch, &mut g, &c, at, 0, Action::Learn(first.clone())).unwrap();
         assert!(

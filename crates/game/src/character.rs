@@ -892,11 +892,16 @@ impl Character {
                 dc += cooldown;
             }
         }
+        // Reach: a scan's, ping's or trace's radius, a strike's or mark's range.
         if let AbilityKind::Active(
-            Active::Scan { radius } | Active::Ping { radius } | Active::Trace { radius },
+            Active::Scan { radius: reach }
+            | Active::Ping { radius: reach }
+            | Active::Trace { radius: reach }
+            | Active::Strike { range: reach, .. }
+            | Active::Mark { range: reach, .. },
         ) = &mut a.kind
         {
-            *radius = (*radius + dr).max(1);
+            *reach = (*reach + dr).max(1);
         }
         a.cooldown = (a.cooldown as i64 + dc).max(0) as u64;
         Some(a)
@@ -911,10 +916,8 @@ impl Character {
     pub fn tree_points(&self, c: &Content, attribute: Attribute) -> u32 {
         c.tree(attribute)
             .map(|t| {
-                t.tiers
-                    .iter()
-                    .flatten()
-                    .map(|id| self.talent_rank(id) as u32)
+                t.talents()
+                    .map(|(_, _, id)| self.talent_rank(id) as u32)
                     .sum()
             })
             .unwrap_or(0)
@@ -1564,8 +1567,8 @@ mod tests {
         assert_eq!(ch.talent_points, 1);
         assert!(ch.talents.is_empty());
         let edge = c.tree(Attribute::Reflex).unwrap();
-        let first = edge.tiers[0][0].clone();
-        let second = edge.tiers[1][0].clone();
+        let first = edge.slot(0, 0).unwrap().clone();
+        let second = edge.slot(1, 0).unwrap().clone();
         assert_eq!(
             ch.can_learn(&c, &second).unwrap_err(),
             "3 more points in EDGE"
@@ -1581,7 +1584,7 @@ mod tests {
         }
         assert_eq!(ch.can_learn(&c, &first).unwrap_err(), "already at its best");
         assert_eq!(ch.tree_points(&c, Attribute::Reflex), ranks as u32);
-        let other = edge.tiers[0][1].clone();
+        let other = edge.slot(0, 1).unwrap().clone();
         while ch.tree_points(&c, Attribute::Reflex) < 3 {
             assert!(!ch.tier_open(&c, Attribute::Reflex, 1));
             ch.learn(&c, &other).unwrap();
@@ -1595,7 +1598,7 @@ mod tests {
         let mut ch2 = vex(&c);
         ch2.talent_points = 30;
         for lower in 0..tier {
-            for id in &c.tree(attribute).unwrap().tiers[lower] {
+            for id in c.tree(attribute).unwrap().tiers[lower].iter().flatten() {
                 if id == &req.id {
                     continue;
                 }
@@ -1619,6 +1622,84 @@ mod tests {
         }
         ch2.talents.insert(req.id.clone(), req.ranks);
         assert!(ch2.can_learn(&c, &needy.id).is_ok());
+    }
+
+    #[test]
+    fn a_sharpened_strike_reaches_further() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        let range =
+            |ch: &Character, id: &str| match ch.ability(&c, &AbilityId::new(id)).unwrap().kind {
+                AbilityKind::Active(Active::Strike { range, .. } | Active::Mark { range, .. }) => {
+                    range
+                }
+                _ => panic!("{id} is no strike"),
+            };
+        assert_eq!(range(&ch, "jolt"), 3);
+        ch.talents.insert(TalentId::new("arc_lash"), 1);
+        assert_eq!(range(&ch, "jolt"), 4);
+        ch.talents.insert(TalentId::new("static_bloom"), 2);
+        assert_eq!(range(&ch, "static"), 10);
+        let stat = ch.ability(&c, &AbilityId::new("static")).unwrap();
+        assert_eq!(stat.cooldown, 180);
+        // A mark reaches further the same way.
+        let mut marked = c.clone();
+        let t = marked
+            .talents
+            .iter_mut()
+            .find(|t| t.id.0 == "cold_read")
+            .unwrap();
+        t.effects[1] = vec![Boon::Sharpen {
+            ability: AbilityId::new("deadeye"),
+            radius: 3,
+            cooldown: 0,
+        }];
+        let mut ch = vex(&marked);
+        ch.talents.insert(TalentId::new("cold_read"), 2);
+        let deadeye = ch.ability(&marked, &AbilityId::new("deadeye")).unwrap();
+        assert!(matches!(
+            deadeye.kind,
+            AbilityKind::Active(Active::Mark { range: 15, .. })
+        ));
+    }
+
+    #[test]
+    fn a_sideways_prerequisite_and_an_old_rank_follow_the_rules() {
+        let c = Content::load().unwrap();
+        let id = TalentId::new;
+        let mut ch = vex(&c);
+        ch.talent_points = 20;
+        for (t, r) in [("quick_draw", 3), ("double_tap", 2), ("light_step", 2)] {
+            ch.talents.insert(id(t), r);
+        }
+        // Counter cut hangs off Backstab, one column over.
+        assert_eq!(
+            ch.can_learn(&c, &id("counter_cut")).unwrap_err(),
+            "needs Backstab 2/2"
+        );
+        ch.learn(&c, &id("backstab")).unwrap();
+        ch.learn(&c, &id("backstab")).unwrap();
+        assert!(ch.can_learn(&c, &id("counter_cut")).is_ok());
+        // A rank from before the trees moved still counts, and still opens what it opens.
+        let mut old = vex(&c);
+        old.talent_points = 5;
+        for (t, r) in [
+            ("quick_draw", 3),
+            ("double_tap", 2),
+            ("light_step", 2),
+            ("bullet_time", 2),
+        ] {
+            old.talents.insert(id(t), r);
+        }
+        assert_eq!(old.tree_points(&c, Attribute::Reflex), 9);
+        assert_eq!(old.talent_rank(&id("long_shot")), 0);
+        assert_eq!(
+            old.can_learn(&c, &id("half_second")).unwrap_err(),
+            "3 more points in EDGE"
+        );
+        old.talents.insert(id("hair_trigger"), 2);
+        old.talents.insert(id("steady_hand"), 1);
+        assert!(old.can_learn(&c, &id("half_second")).is_ok());
     }
 
     #[test]
@@ -1696,10 +1777,8 @@ mod tests {
             AbilityKind::Active(
                 Active::Scan { radius } | Active::Ping { radius } | Active::Trace { radius },
             ) => radius,
-            AbilityKind::Active(
-                Active::Strike { .. } | Active::Boost { .. } | Active::Mark { .. },
-            )
-            | AbilityKind::Passive => 0,
+            AbilityKind::Active(Active::Strike { range, .. } | Active::Mark { range, .. }) => range,
+            AbilityKind::Active(Active::Boost { .. }) | AbilityKind::Passive => 0,
         };
         if radius != 0 {
             assert_ne!(reach(&eff), reach(base));
