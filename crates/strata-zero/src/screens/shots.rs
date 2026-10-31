@@ -1558,3 +1558,96 @@ fn talents_board() {
         }
     }
 }
+
+/// Ticks pass on the clock and the world alike.
+fn pass(st: &mut AppState, ticks: u64) {
+    st.tick += ticks;
+    if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
+        world.advance(city, world.tick() + ticks);
+    }
+}
+
+/// A calm crack on a door lock in a corp tower's construct, every tile remembered: the
+/// run's tether half a beat on, at the smallest terminal too, on a hit and landed.
+#[test]
+#[ignore]
+fn run_tether() {
+    use citygen::{BuildingKind, NodeKind, SubnetOwner};
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let mut st = state_home();
+    let mut map = MapScreen::walking(&mut st);
+    let city = st.city.clone().unwrap();
+    let b = city
+        .buildings
+        .iter()
+        .filter(|b| {
+            b.kind == BuildingKind::CorpTower
+                && city
+                    .net
+                    .nodes
+                    .iter()
+                    .any(|n| n.building == Some(b.id) && n.kind == NodeKind::DoorLock)
+        })
+        .filter_map(|b| citygen::construct::generate_construct(&city, b.id).map(|k| (k, b.id)))
+        .filter(|(k, _)| k.size.w <= 34 && k.size.h <= 18)
+        .max_by_key(|(k, _)| (k.rooms.len(), k.size.w * k.size.h))
+        .map(|(_, b)| b)
+        .expect("a tower with a lock");
+    st.city
+        .as_mut()
+        .unwrap()
+        .net
+        .subnets
+        .iter_mut()
+        .find(|s| s.owner == SubnetOwner::Building(b))
+        .unwrap()
+        .security = 120;
+    {
+        let p = st.player.as_mut().unwrap();
+        p.body = Some((Place::Stratum(StratumKind::Street), p.pos));
+        p.place = Place::Stratum(StratumKind::Net);
+        p.pos = crate::constructs::city_gate(&city, b).unwrap();
+    }
+    crate::constructs::enter_construct(&mut st, b).unwrap();
+    map.place = Place::Construct(b);
+    let k = st.constructs.get(b).unwrap().clone();
+    let (lock, lock_pos) = k
+        .nodes
+        .iter()
+        .find(|(id, _)| city.net.node(*id).kind == NodeKind::DoorLock)
+        .copied()
+        .unwrap();
+    let here = lock_pos
+        .neighbors4()
+        .find(|n| k.tiles.get(*n).is_some_and(|t| t.is_walkable()))
+        .unwrap();
+    st.player.as_mut().unwrap().pos = here;
+    map.cam.snap(here);
+    map.update(&mut st, &[key(KeyCode::Char('.'))]);
+    for y in 0..k.size.h as i32 {
+        for x in 0..k.size.w as i32 {
+            let at = Pos::new(x, y);
+            let p = st.player.as_mut().unwrap();
+            if p.vis().get(at) == Some(&crate::render::Visibility::Unseen) {
+                p.set_vis(at, crate::render::Visibility::Remembered);
+            }
+        }
+    }
+    st.net.force_roll = Some(10);
+    crate::net::start_run(&mut st, ItemId::new("crack"), game::HackTarget::Node(lock)).unwrap();
+    map.update(&mut st, &[key(KeyCode::Char('.'))]);
+    pass(&mut st, crate::net::BEAT_TICKS / 2);
+    let shot = |st: &AppState, map: &MapScreen, name: &str, size| {
+        write_svg(&dir, name, st, &draw_stack(st, &[map], size), false);
+    };
+    shot(&st, &map, "run_tether", (120, 36));
+    shot(&st, &map, "run_tether_small", (100, 30));
+    map.update(&mut st, &[key(KeyCode::Char(' '))]);
+    shot(&st, &map, "run_tether_hit", (120, 36));
+    map.update(&mut st, &[key(KeyCode::Char(' '))]);
+    // Past the landing's kick.
+    pass(&mut st, 8);
+    shot(&st, &map, "run_tether_landed", (120, 36));
+}

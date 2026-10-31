@@ -832,13 +832,15 @@ impl MapScreen {
         (route, trace)
     }
 
-    /// What the footer reads this frame.
+    /// What the footer reads this frame. `tethered`: the run hangs off its target on
+    /// the map, so the footer leaves it out.
     fn footer<'a>(
         &self,
         st: &AppState,
         city: &citygen::City,
         jacked: bool,
         slots: &'a [hud::Slot],
+        tethered: bool,
     ) -> hud::Footer<'a> {
         let place = match (jacked, st.player.as_ref().map(|p| p.place)) {
             (true, Some(Place::Construct(b))) => {
@@ -897,7 +899,9 @@ impl MapScreen {
             st.net.run.as_ref(),
             st.player.as_ref().map(|p| p.place),
         ) {
-            (true, Some(run), Some(Place::Construct(b))) => crate::net::run_readout(st, b, run),
+            (true, Some(run), Some(Place::Construct(b))) if !tethered => {
+                crate::net::run_readout(st, b, run)
+            }
             _ => None,
         };
         let ice = match (jacked, st.player.as_ref()) {
@@ -3007,6 +3011,23 @@ impl Screen for MapScreen {
         let turn_overlay = turns
             .as_ref()
             .map(|view| crate::render::turns::TurnOverlay { view });
+        // A calm run hangs off its target, under a roll's bolt and a slip's mark; when
+        // it has no room the footer reads it instead.
+        let tether = crate::net::tether_view(st, self.place).and_then(|view| {
+            let layout =
+                crate::render::tether::layout(&view, map_area, origin, |p| map.tile(p).is_some())?;
+            Some((view, layout))
+        });
+        let tether_overlay =
+            tether
+                .as_ref()
+                .map(|(view, layout)| crate::render::tether::TetherOverlay {
+                    view,
+                    layout: *layout,
+                });
+        if let Some(o) = tether_overlay.as_ref() {
+            overlays.push(o);
+        }
         // The live shapes draw over everything on the map; their scorch is on the
         // ground layer above.
         let fx = FxOverlay { fx: &st.fx, vis };
@@ -3229,7 +3250,7 @@ impl Screen for MapScreen {
         }
         // Footer: four rows, the same four in every state.
         let slots = self.slots(st);
-        let footer = self.footer(st, city, jacked, &slots);
+        let footer = self.footer(st, city, jacked, &slots, tether.is_some());
         let rows = hud::footer_rows(&footer, area.width);
         let recent = st.log.recent(st.tick);
         for (i, row) in rows.into_iter().enumerate() {
@@ -7575,7 +7596,11 @@ mod tests {
         crate::net::start_run(&mut st, ItemId::new("crack"), game::HackTarget::Node(lock)).unwrap();
         s.update(&mut st, &[key(KeyCode::Char('.'))]);
         let text = draw_screen(&s, &st, 120, 40);
-        assert!(text.contains("RUN  crack · door lock  ▰▱▱ 1/3"), "{text}");
+        // Calm, the run hangs off the lock on the map, not in the footer.
+        assert!(
+            text.contains("CRACK  40%") && !text.contains("RUN  crack"),
+            "{text}"
+        );
         // Space is a turn of the run in flight, with no popup in between.
         let cmd = s.update(&mut st, &[key(KeyCode::Char(' '))]);
         assert!(matches!(cmd, ScreenCmd::Stay), "space continues");
@@ -8931,7 +8956,10 @@ mod tests {
         assert_eq!(last(&st), Some("crack 1/3"));
         let text = draw_screen(&s, &st, 180, 40);
         assert!(text.contains("TRACE ▱▱▱▱▱▱▱▱▱▱ 4"), "{text}");
-        assert!(text.contains("RUN  crack · door lock  ▰▱▱ 1/3"), "{text}");
+        assert!(
+            text.contains("CRACK  40%") && !text.contains("RUN  crack"),
+            "{text}"
+        );
         // Every piece asleep: no hunt in the strip.
         for i in st.net.ice.get_mut(&b).unwrap() {
             i.mode = crate::net::IceMode::Asleep;
@@ -8945,7 +8973,10 @@ mod tests {
         // No run: the Net verbs.
         st.net.run = None;
         let text = draw_screen(&s, &st, 180, 40);
-        assert!(!text.contains("RUN  crack"), "{text}");
+        assert!(
+            !text.contains("RUN  crack") && !text.contains("CRACK  40%"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -9022,7 +9053,7 @@ mod tests {
             !text.contains("[space]") && !text.contains("STATUS:") && !text.contains("HERE:"),
             "{text}"
         );
-        // Jacked in with a run: the run row and the programs row, same four rows.
+        // Jacked in with a calm run: it hangs on the map; the same four rows.
         let (_, _) = lock_run(&mut st, &mut s);
         s.update(&mut st, &[key(KeyCode::Char('1')), key(KeyCode::Char(' '))]);
         assert!(st.net.run.is_some());
@@ -9031,11 +9062,7 @@ mod tests {
         assert!(lines[36].starts_with(" ⚡ "), "{:?}", lines[36]);
         assert!(lines[36].contains("TRACE ▱▱▱▱▱▱▱▱▱▱ 4"), "{:?}", lines[36]);
         assert_eq!(lines[37].trim(), "");
-        assert!(
-            lines[38].starts_with(" RUN  crack · door lock"),
-            "{:?}",
-            lines[38]
-        );
+        assert!(!lines[38].contains("RUN"), "{:?}", lines[38]);
         assert!(
             lines[39].starts_with(" PROGRAMS   [1] CRACK ●    [2] COPY ●"),
             "{:?}",
@@ -9046,10 +9073,7 @@ mod tests {
         s.update(&mut st, &[key(KeyCode::Char(':'))]);
         let text = draw_screen(&s, &st, 120, 40);
         assert!(text.lines().nth(39).unwrap().contains(":"), "{text}");
-        assert!(
-            text.lines().nth(38).unwrap().starts_with(" RUN  crack"),
-            "{text}"
-        );
+        assert!(text.contains("CRACK  40%"), "{text}");
     }
 
     #[test]
@@ -9169,21 +9193,107 @@ mod tests {
     }
 
     #[test]
-    fn the_beat_bar_fills_toward_the_next_roll() {
-        use crate::net::{BEAT_TICKS, beat_bar};
+    fn the_pulse_rides_toward_the_next_roll() {
+        use crate::net::{BEAT_TICKS, ROLL_TICKS, beat_phase, tether_view};
+        use crate::render::tether::TetherState;
         let mut st = state8();
         let mut s = MapScreen::explore(0);
-        lock_run(&mut st, &mut s);
+        let (_, lock) = lock_run(&mut st, &mut s);
         s.update(&mut st, &[key(KeyCode::Char('.'))]);
-        assert_eq!(beat_bar(&st, 8), "░░░░░░░░");
+        assert_eq!(beat_phase(&st), 0.0);
         st.tick += BEAT_TICKS / 2;
-        assert_eq!(beat_bar(&st, 8), "▓▓▓▓░░░░");
+        assert!((beat_phase(&st) - 0.5).abs() < 0.02, "{}", beat_phase(&st));
         s.update(&mut st, &[key(KeyCode::Char('1')), key(KeyCode::Char(' '))]);
-        let text = draw_screen(&s, &st, 140, 40);
-        assert!(
-            text.contains("RUN  crack · door lock  ▰▱▱ 1/3 · 40%   ▓▓▓▓░░░░  next roll"),
-            "{text}"
+        let view = tether_view(&st, s.place).expect("a calm run has a tether");
+        let lock_pos = st
+            .constructs
+            .get(match s.place {
+                Place::Construct(b) => b,
+                _ => unreachable!(),
+            })
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == lock)
+            .unwrap()
+            .1;
+        assert_eq!(view.target, lock_pos);
+        assert_eq!((view.turns, view.work, view.odds), (1, 3, 40));
+        assert_eq!(
+            (view.op.as_str(), view.name.as_str()),
+            ("CRACK", "door lock")
         );
+        // The hit flashes, then the pulse rides on.
+        assert_eq!(view.state, TetherState::Hit);
+        st.tick += ROLL_TICKS;
+        let view = tether_view(&st, s.place).unwrap();
+        assert_eq!(view.state, TetherState::Running);
+        assert!(view.phase > 0.5, "{}", view.phase);
+        let text = draw_screen(&s, &st, 140, 40);
+        assert!(!text.contains("next roll"), "{text}");
+    }
+
+    #[test]
+    fn a_landed_run_holds_its_tether_for_a_beat() {
+        use crate::net::tether_view;
+        use crate::render::tether::{LAND_TICKS, TetherState};
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let (_, lock) = lock_run(&mut st, &mut s);
+        crate::net::start_run(&mut st, ItemId::new("crack"), game::HackTarget::Node(lock)).unwrap();
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert!(logged(&st, "lock cracked"), "{:?}", last(&st));
+        assert!(st.net.run.is_none());
+        let view = tether_view(&st, s.place).expect("the landing's beat");
+        assert_eq!(view.state, TetherState::Landed { age: 0 });
+        // Past the landing's kick, which glitches the whole map for a moment.
+        st.tick += 8;
+        let text = draw_screen(&s, &st, 120, 40);
+        assert!(text.contains("CRACKED"), "{text}");
+        st.tick += LAND_TICKS - 8;
+        assert!(tether_view(&st, s.place).is_none());
+    }
+
+    #[test]
+    fn a_slip_shows_on_the_tether() {
+        use crate::net::{MARK_TICKS, tether_view};
+        use crate::render::tether::TetherState;
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let (_, lock) = lock_run(&mut st, &mut s);
+        st.net.force_roll = Some(1);
+        crate::net::start_run(&mut st, ItemId::new("crack"), game::HackTarget::Node(lock)).unwrap();
+        s.update(&mut st, &[key(KeyCode::Char('.'))]);
+        assert!(logged(&st, "crack slips"), "{:?}", last(&st));
+        assert_eq!(tether_view(&st, s.place).unwrap().state, TetherState::Slip);
+        st.tick += MARK_TICKS;
+        assert_eq!(
+            tether_view(&st, s.place).unwrap().state,
+            TetherState::Running
+        );
+    }
+
+    #[test]
+    fn a_calm_run_with_no_tether_stays_in_the_footer() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let (b, _) = lock_run(&mut st, &mut s);
+        // A run left on a piece after a fight ends: no tether for ICE.
+        st.net.run = Some(game::Run {
+            program: ItemId::new("crack"),
+            target: game::HackTarget::Guard {
+                building: b,
+                index: 0,
+            },
+            done: 1,
+            work: 3,
+        });
+        assert!(st.net.engaged.is_none());
+        assert!(crate::net::tether_view(&st, s.place).is_none());
+        let text = draw_screen(&s, &st, 140, 40);
+        assert!(text.contains("RUN  crack · grey ICE  ▰▱▱ 1/3"), "{text}");
     }
 
     fn logged(st: &AppState, needle: &str) -> bool {
@@ -9825,6 +9935,8 @@ mod tests {
         s.update(&mut st, &[key(KeyCode::Char('e'))]);
         s.update(&mut st, &[key(KeyCode::Char(' ')), key(KeyCode::Char(' '))]);
         assert_eq!(st.net.run.as_ref().map(|r| r.done), Some(2));
+        // In a fight the footer reads the run; no tether.
+        assert!(crate::net::tether_view(&st, s.place).is_none());
         let text = draw_screen(&s, &st, 140, 40);
         assert!(
             text.contains("RUN  crack · door lock  ▰▰▱ 2/3") && !text.contains("next roll"),

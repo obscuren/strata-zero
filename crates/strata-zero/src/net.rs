@@ -159,6 +159,25 @@ pub struct Ice {
     pub stunned: u8,
 }
 
+/// How a run's roll went.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Roll {
+    Hit,
+    Slip,
+    /// The hit that finished the run.
+    Land,
+}
+
+/// A run's last roll: when (`AppState::tick`), how it went, and the run as it stood
+/// after it (a landed run has `done == work` and is gone from `NetState::run`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RollEcho {
+    pub at: u64,
+    pub roll: Roll,
+    pub building: BuildingId,
+    pub run: Run,
+}
+
 pub struct NetState {
     /// One state per guard of every construct entered.
     pub ice: BTreeMap<BuildingId, Vec<Ice>>,
@@ -180,6 +199,8 @@ pub struct NetState {
     pub cooling_until: Option<u64>,
     /// The program in flight.
     pub run: Option<Run>,
+    /// The last roll of a run, for the tether's flashes and its landing.
+    pub echo: Option<RollEcho>,
     /// The tick of the last beat in a calm construct.
     pub beat: u64,
     /// The construct on turns, if any.
@@ -206,6 +227,7 @@ impl Default for NetState {
             hacks: Vec::new(),
             cooling_until: None,
             run: None,
+            echo: None,
             beat: 0,
             engaged: None,
             stunned_you: 0,
@@ -682,6 +704,20 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
         st.say(line.clone());
         return Some(line);
     }
+    let roll = match (ok, run.done + 1 >= run.work) {
+        (false, _) => Roll::Slip,
+        (true, false) => Roll::Hit,
+        (true, true) => Roll::Land,
+    };
+    st.net.echo = Some(RollEcho {
+        at: st.tick,
+        roll,
+        building: b,
+        run: Run {
+            done: if ok { run.done + 1 } else { run.done },
+            ..run.clone()
+        },
+    });
     let line = if ok {
         let done = run.done + 1;
         if done >= run.work {
@@ -2327,19 +2363,17 @@ pub fn beat(st: &mut AppState) {
     }
 }
 
-/// `▓▓▓▓░░░░`: how far the clock is toward the next beat.
-pub fn beat_bar(st: &AppState, cells: usize) -> String {
+/// How far the clock is from the last beat toward the next, 0 to 1.
+pub fn beat_phase(st: &AppState) -> f32 {
     let phase = st.clock_tick().saturating_sub(st.net.beat).min(BEAT_TICKS);
-    let filled = ((phase * cells as u64 + BEAT_TICKS / 2) / BEAT_TICKS) as usize;
-    format!("{}{}", "▓".repeat(filled), "░".repeat(cells - filled))
+    phase as f32 / BEAT_TICKS as f32
 }
 
-/// The footer's run line: `RUN  crack · door lock  ▰▰▱ 2/3 · 40%   ▓▓▓▓░░░░  next roll`.
-/// `crack · door lock`: the run's program and target, as the footer names them.
-pub fn run_label(st: &AppState, run: &Run) -> Option<String> {
+/// What a run works on, as the footer and the tether name it: `door lock`, `grey
+/// ICE`, `deck`.
+pub fn target_label(st: &AppState, target: HackTarget) -> Option<String> {
     let city = st.city.as_ref()?;
-    let spec = st.content.item(&run.program)?.program?;
-    let target = match run.target {
+    Some(match target {
         HackTarget::Node(id) => city.net.node(id).kind.label().to_string(),
         HackTarget::Guard { building, index } => st
             .constructs
@@ -2348,35 +2382,107 @@ pub fn run_label(st: &AppState, run: &Run) -> Option<String> {
             .map(|g| format!("{} ICE", g.label()))
             .unwrap_or_else(|| "ICE".to_string()),
         HackTarget::Deck => "deck".to_string(),
-    };
-    Some(format!("{} · {target}", spec.op.label()))
+    })
 }
 
-pub fn run_readout(st: &AppState, b: BuildingId, run: &Run) -> Option<String> {
+/// `crack · door lock`: the run's program and target, as the footer names them.
+pub fn run_label(st: &AppState, run: &Run) -> Option<String> {
+    let spec = st.content.item(&run.program)?.program?;
+    Some(format!(
+        "{} · {}",
+        spec.op.label(),
+        target_label(st, run.target)?
+    ))
+}
+
+/// A run's chance a roll, in percent; a program on yourself never fails.
+pub fn run_odds(st: &AppState, b: BuildingId, run: &Run) -> Option<u8> {
     let spec = st.content.item(&run.program)?.program?;
     let kind = target_kind(st, b, run.target)?;
-    let label = run_label(st, run)?;
+    if kind == Target::Deck {
+        return Some(100);
+    }
     let security = st.constructs.get(b).map_or(0, |k| k.security);
-    let pct = if kind == Target::Deck {
-        100
-    } else {
-        game::chance(
-            power(&st.character, &st.content, &spec, kind),
-            difficulty(security),
-        )
-    };
-    let tail = if st.net.engaged.is_some() {
-        String::new()
-    } else {
-        format!("   {}  next roll", beat_bar(st, 8))
-    };
+    Some(game::chance(
+        power(&st.character, &st.content, &spec, kind),
+        difficulty(security),
+    ))
+}
+
+/// The footer's run line in a fight: `RUN  crack · door lock  ▰▰▱ 2/3 · 40%`. Calm,
+/// the run hangs off its target on the map instead (`tether_view`).
+pub fn run_readout(st: &AppState, b: BuildingId, run: &Run) -> Option<String> {
+    let label = run_label(st, run)?;
+    let pct = run_odds(st, b, run)?;
     Some(format!(
-        "RUN  {label}  {}{} {}/{} · {pct}%{tail}",
+        "RUN  {label}  {}{} {}/{} · {pct}%",
         "▰".repeat(run.done as usize),
         "▱".repeat(run.work.saturating_sub(run.done) as usize),
         run.done,
         run.work
     ))
+}
+
+/// The tether a calm run hangs off its target on `place`'s map: the run in flight,
+/// flashing for a roll that just came, or a landed run for a beat after. `None` in a
+/// fight, off the player's map, or for a program aimed at ICE.
+pub fn tether_view(st: &AppState, place: Place) -> Option<crate::render::tether::TetherView> {
+    use crate::render::tether::{LAND_TICKS, TetherState, TetherView};
+    let p = st.player.as_ref()?;
+    let Place::Construct(b) = place else {
+        return None;
+    };
+    if p.place != place || st.net.engaged.is_some() {
+        return None;
+    }
+    let echo = st.net.echo.as_ref().filter(|e| e.building == b);
+    let age = |e: &RollEcho| st.tick.saturating_sub(e.at);
+    let (run, state) = match st.net.run.as_ref() {
+        Some(run) => {
+            let state =
+                match echo.filter(|e| e.run.program == run.program && e.run.target == run.target) {
+                    Some(e) if e.roll == Roll::Hit && age(e) < ROLL_TICKS => TetherState::Hit,
+                    Some(e) if e.roll == Roll::Slip && age(e) < MARK_TICKS => TetherState::Slip,
+                    _ => TetherState::Running,
+                };
+            (run, state)
+        }
+        None => {
+            let e = echo.filter(|e| e.roll == Roll::Land && age(e) < LAND_TICKS)?;
+            (&e.run, TetherState::Landed { age: age(e) })
+        }
+    };
+    if matches!(run.target, HackTarget::Guard { .. }) {
+        return None;
+    }
+    let spec = st.content.item(&run.program)?.program?;
+    let vis = p.vis();
+    let keep = st
+        .constructs
+        .get(b)
+        .map(|k| {
+            k.guards
+                .iter()
+                .filter(|g| g.standing)
+                .filter(|g| vis.get(g.pos) == Some(&crate::render::Visibility::Visible))
+                .map(|g| g.pos)
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(TetherView {
+        target: target_pos(st, b, run.target)?,
+        me: p.pos,
+        keep,
+        on_self: run.target == HackTarget::Deck,
+        op: spec.op.label().to_uppercase(),
+        done: spec.op.done_label().to_uppercase(),
+        odds: run_odds(st, b, run)?,
+        name: target_label(st, run.target)?,
+        turns: run.done,
+        work: run.work,
+        phase: beat_phase(st),
+        state,
+    })
 }
 
 /// An awake piece stands in the player's sight memory.

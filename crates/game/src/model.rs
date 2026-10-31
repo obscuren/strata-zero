@@ -305,6 +305,19 @@ impl Op {
             Op::Mask => "mask",
         }
     }
+
+    /// What a landed run did, as the tether's label reads it: `cracked`.
+    pub fn done_label(self) -> &'static str {
+        match self {
+            Op::Crack => "cracked",
+            Op::Spoof => "spoofed",
+            Op::Blind => "blinded",
+            Op::Copy => "copied",
+            Op::Backdoor => "planted",
+            Op::Attack => "hit",
+            Op::Shield | Op::Mask => "raised",
+        }
+    }
 }
 
 /// A program's numbers: what it does, how well, how much deck it takes, how loud
@@ -1255,6 +1268,19 @@ impl Attributes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_op_has_a_past_tense() {
+        assert_eq!(Op::Crack.done_label(), "cracked");
+        assert_eq!(Op::Spoof.done_label(), "spoofed");
+        assert_eq!(Op::Blind.done_label(), "blinded");
+        assert_eq!(Op::Copy.done_label(), "copied");
+        assert_eq!(Op::Backdoor.done_label(), "planted");
+        assert_eq!(Op::Attack.done_label(), "hit");
+        assert_eq!(Op::Shield.done_label(), "raised");
+        assert_eq!(Op::Mask.done_label(), "raised");
+        assert!(Op::ALL.iter().all(|op| !op.done_label().is_empty()));
+    }
 
     #[test]
     fn sites_in_ledger_order() {
