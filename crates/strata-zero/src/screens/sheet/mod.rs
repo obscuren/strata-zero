@@ -20,7 +20,7 @@ use crate::clinic::Operating;
 use crate::ui::hud::{AMBER, GREEN};
 use citygen::{Place, StratumKind};
 use crossterm::event::KeyCode;
-use game::{Action, Build, Contrib, Num, Source};
+use game::{Action, BotBody, Build, Contrib, Num, Source};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -256,45 +256,67 @@ fn sight(st: &AppState) -> i32 {
     sight_here(st).map_or(0, |here| (here + st.sight_bonus()).max(1))
 }
 
-/// The kinds of source, in the order the readout lists them, each with its word.
-const KINDS: [&str; 6] = [
-    "gear", "hardware", "chrome", "talents", "category", "innate",
+/// The kinds of source, in the order the readout lists them, each with its word: a
+/// docked bot by its body's.
+const KINDS: [&str; 8] = [
+    "gear",
+    "hardware",
+    "chrome",
+    BotBody::Air.word(),
+    BotBody::Ground.word(),
+    "talents",
+    "category",
+    "innate",
 ];
+
+/// A bot's kind of source, by its body.
+fn bot_kind(body: BotBody) -> usize {
+    match body {
+        BotBody::Air => 3,
+        BotBody::Ground => 4,
+    }
+}
 
 fn kind_of(from: &Contrib) -> usize {
     match from {
         Contrib::Gear(_) => 0,
         Contrib::Hardware(_) => 1,
         Contrib::Chrome(_) | Contrib::Pieces(_) => 2,
-        Contrib::Talents => 3,
+        Contrib::Bot(_, body) => bot_kind(*body),
+        Contrib::Talents => 5,
     }
 }
 
-/// The kind and the name of what grants an ability: an item is gear or chrome.
+/// The kind and the name of what grants an ability: an item is gear, chrome or a
+/// docked bot.
 fn granted(st: &AppState, from: &Source) -> (usize, Option<String>) {
     let c = &st.content;
     match from {
         Source::Item(id) => {
             let item = c.item(id);
-            let chrome = item.is_some_and(|i| i.implant.is_some());
+            let kind = match item {
+                Some(i) if i.implant.is_some() => 2,
+                Some(i) => i.bot.as_ref().map_or(0, |b| bot_kind(b.body)),
+                None => 0,
+            };
             let name = item.map_or_else(|| id.to_string(), |i| i.name.clone());
-            (if chrome { 2 } else { 0 }, Some(name))
+            (kind, Some(name))
         }
         Source::Talent(t) => (
-            3,
+            5,
             Some(
                 c.talent(t)
                     .map_or_else(|| t.to_string(), |t| t.name.clone()),
             ),
         ),
         Source::Category(k) => (
-            4,
+            6,
             Some(
                 c.category(k)
                     .map_or_else(|| k.to_string(), |k| k.name.clone()),
             ),
         ),
-        Source::Innate => (5, None),
+        Source::Innate => (7, None),
     }
 }
 
@@ -476,7 +498,10 @@ impl Readout {
                 .filter(|(f, _)| kind_of(f) == k)
                 .map(|(from, v)| {
                     let text = match from {
-                        Contrib::Gear(id) | Contrib::Chrome(id) | Contrib::Hardware(id) => {
+                        Contrib::Gear(id)
+                        | Contrib::Chrome(id)
+                        | Contrib::Hardware(id)
+                        | Contrib::Bot(id, _) => {
                             format!("{v:+} {}", item(id))
                         }
                         Contrib::Talents => format!("{v:+}"),
@@ -1062,7 +1087,7 @@ mod tests {
         ] {
             st.character.install(site, ItemId::new(id), None);
         }
-        assert_eq!(st.character.pieces(), 9);
+        assert_eq!(st.character.pieces(&st.content), 9);
     }
 
     #[test]
@@ -1252,6 +1277,29 @@ mod tests {
         ] {
             assert!(!s.key(&mut st, code), "{code:?}");
         }
+    }
+
+    #[test]
+    fn the_readout_names_a_drone_by_its_kind() {
+        let mut st = state();
+        let mut cradle = st
+            .character
+            .new_copy(&st.content, &ItemId::new("drone_cradle"));
+        let mule = ItemId::new("mule_drone");
+        let copy = st.character.new_copy(&st.content, &mule);
+        cradle.fitted[0] = Some(game::Stack {
+            item: mule,
+            qty: 1,
+            copy: Some(copy),
+        });
+        st.character
+            .install(Site::Back, ItemId::new("drone_cradle"), Some(cradle));
+        let mut s = Sheet::new(0);
+        s.state.tile = tile_of(Num::Carry);
+        settle(&s, &mut st);
+        let text = readout(&drawn(&s, &st, BODY), BODY);
+        assert!(text.contains("drone +8 Mule drone"), "{text}");
+        assert!(!text.contains("chrome +8"), "{text}");
     }
 
     #[test]

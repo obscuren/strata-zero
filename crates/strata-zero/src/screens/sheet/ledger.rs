@@ -13,8 +13,8 @@ use crate::ui::hud::{AMBER, BADGE_FG, GREEN};
 use crate::ui::implant_art;
 use crossterm::event::KeyCode;
 use game::{
-    Action, Content, CopyId, EMP_PER_PIECE, Fits, Host, Item, ItemId, Perk, Site, SocketKind,
-    put_in_fee, stack_load, take_out_fee,
+    Action, Content, CopyId, EMP_PER_PIECE, Host, Item, ItemId, Perk, Site, SocketKind, put_in_fee,
+    stack_load, take_out_fee,
 };
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -133,7 +133,13 @@ fn held_pieces(st: &AppState, (site, socket): (Site, Option<usize>)) -> usize {
         .installed()
         .iter()
         .filter(|&&(s, n, _)| s == site && (socket.is_none() || n == socket))
+        .filter(|(_, _, id)| !is_bot(st, id))
         .count()
+}
+
+/// A bot is docked, not in the body: no piece of EMP.
+fn is_bot(st: &AppState, id: &ItemId) -> bool {
+    st.content.item(id).is_some_and(|i| i.bot.is_some())
 }
 
 /// The pieces a pick installs: itself and what is fitted in it.
@@ -142,9 +148,13 @@ fn pick_pieces(st: &AppState, pick: &Pick) -> usize {
         Some(k) => s.copy_id() == Some(k),
         None => s.copy.is_none() && s.item == pick.item,
     });
-    let fitted = stack
-        .and_then(|s| s.copy.as_ref())
-        .map_or(0, |k| k.fitted.iter().flatten().count());
+    let fitted = stack.and_then(|s| s.copy.as_ref()).map_or(0, |k| {
+        k.fitted
+            .iter()
+            .flatten()
+            .filter(|s| !is_bot(st, &s.item))
+            .count()
+    });
     1 + fitted
 }
 
@@ -169,6 +179,12 @@ fn socket_kind(st: &AppState, site: Site, n: usize) -> Option<SocketKind> {
         .chrome_at(site)
         .and_then(|id| st.content.item(id))?;
     item.sockets.get(n).copied()
+}
+
+/// A row whose contents change anywhere: a socket whose kind needs no doc, a drone's
+/// bay. What it holds docks and stows with no chair and no fee.
+fn chair_free(st: &AppState, (site, socket): (Site, Option<usize>)) -> bool {
+    socket.is_some_and(|n| socket_kind(st, site, n).is_some_and(|k| !k.needs_a_doc()))
 }
 
 /// A socket's own word, from its kind.
@@ -322,6 +338,7 @@ impl Sheet {
             return;
         }
         match operating(st) {
+            _ if chair_free(st, v.at) => {}
             Operating::Locked => return st.warn(OUTSIDE),
             Operating::Gone { doc } => {
                 st.chair = None;
@@ -351,6 +368,7 @@ impl Sheet {
         if matches!(operating(st), Operating::Chair { .. })
             && fee > 0
             && !jacked_in(st)
+            && !chair_free(st, v.at)
             && self.pulling != Some(row)
         {
             self.pulling = Some(row);
@@ -415,7 +433,9 @@ impl Sheet {
                 None => "space install",
             };
             let (put, out) = pick_fee(st, &v, &v.picks[pick]);
-            let short = matches!(mode, Operating::Chair { .. }) && put + out > st.character.credits;
+            let short = matches!(mode, Operating::Chair { .. })
+                && !chair_free(st, v.at)
+                && put + out > st.character.credits;
             return Line::from(vec![
                 Span::styled("↑↓ choose · ", dim),
                 Span::styled(space, if short { faint } else { dim }),
@@ -482,6 +502,19 @@ impl Sheet {
             }
             spans.push(Span::styled(" · ← attributes · Q/E tabs · tab close", dim));
             return Line::from(spans);
+        }
+        // A bay works in any mode: `space swap · x stow in the bag`, and what docks
+        // there docks anywhere.
+        if chair_free(st, v.at) {
+            let takes = socket_kind(st, v.at.0, v.at.1.unwrap_or(0)).map_or("they", |k| k.takes());
+            let keys = match v.held {
+                Some(_) => "↑↓ select · space swap · x stow in the bag · ← attributes · Q/E tabs",
+                None => "↑↓ select · space dock · ← attributes · Q/E tabs · tab close",
+            };
+            return Line::from(vec![
+                Span::styled(keys, dim),
+                Span::styled(format!("   {takes} dock anywhere"), faint),
+            ]);
         }
         match mode {
             Operating::Locked | Operating::Gone { .. } => Line::from(vec![
@@ -828,6 +861,23 @@ fn piece_card(
             host_name(st, site)
         ),
     };
+    if item.bot.is_some() {
+        // Docked, not installed: no load, no EMP, and out with you.
+        card.extend(wrap_spans(
+            vec![
+                Span::styled("docked in the ", fg(DIM)),
+                Span::styled(host_name(st, site), fg(TEXT)),
+            ],
+            w,
+        ));
+        card.extend(wrap_spans(effects(c, item, false), w));
+        card.push(Line::from(Span::styled(
+            cut("out with you · follows on foot", w),
+            fg(FAINTER),
+        )));
+        card.description(&item.desc, w);
+        return card;
+    }
     let load = item.implant.map_or(0, |i| i.load);
     card.extend(wrap_spans(
         vec![
@@ -888,7 +938,7 @@ fn socket_lines(
             let takes: Vec<&str> = c
                 .items
                 .iter()
-                .filter(|i| i.implant.is_some_and(|m| m.fits == Fits::Socket(kind)))
+                .filter(|i| i.fits_socket() == Some(kind))
                 .map(|i| i.name.as_str())
                 .collect();
             if !takes.is_empty() {
@@ -967,11 +1017,20 @@ fn fit_card(st: &AppState, v: &View, focused: bool, w: usize) -> CardText {
         let name = c
             .item(&pick.item)
             .map_or_else(|| pick.item.to_string(), |i| i.name.clone());
-        let tag = format!("L{}", pick.load);
+        // A bot takes no load: its column says what it does.
+        let bot = c.item(&pick.item).filter(|i| i.bot.is_some());
+        let tag = match bot {
+            Some(i) => effects(c, i, true)
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>(),
+            None => format!("L{}", pick.load),
+        };
         // `▸ Name ········· L3 `: the tag ends a column short of the edge.
         let name = cut(&name, w.saturating_sub(tag.len() + 4));
         let pad = w.saturating_sub(2 + name.chars().count() + tag.len() + 1);
         let tag_style = match (over, on) {
+            _ if bot.is_some() => fg(GREEN),
             (true, _) => fg(MAGENTA),
             (false, true) => fg(lit(st.tick)),
             (false, false) => fg(DIM),
@@ -1000,6 +1059,10 @@ fn fit_card(st: &AppState, v: &View, focused: bool, w: usize) -> CardText {
     };
     card.blank();
     card.extend(wrap_spans(effects(c, item, false), w));
+    if item.bot.is_some() {
+        card.description(&item.desc, w);
+        return card;
+    }
     // `load 19 → 21/24 · EMP −2`: what leaves counted; a lighter swap's total plain,
     // and EMP only when the count of pieces moves.
     let after = load_after(st, v.at, pick);
@@ -1243,20 +1306,21 @@ mod tests {
         st.character.install(site, id(item), copy);
     }
 
-    /// The spec's loadout: a piece at every site but EARS, R ARM and LEGS, and the
-    /// Piston arm at L ARM with the Arc hand in its hand.
+    /// The spec's loadout: a piece at every site but EARS, R ARM and LEGS, the Scout
+    /// drone in the cradle's bay, and the Piston arm at L ARM with the Arc hand in its
+    /// hand.
     fn loadout(st: &mut AppState) {
         for (site, item) in [
             (Site::Neural, "neural_port"),
             (Site::Eyes, "target_lens"),
             (Site::Jaw, "bulldog_jaw"),
             (Site::Spine, "redline_spine"),
-            (Site::Back, "drone_cradle"),
             (Site::Organs, "adrenal_pump"),
             (Site::Skin, "subdermal_mesh"),
         ] {
             install(st, site, item, &[]);
         }
+        install(st, Site::Back, "drone_cradle", &[(0, "scout_drone")]);
         install(st, Site::LeftArm, "piston_arm", &[(0, "arc_hand")]);
     }
 
@@ -1365,6 +1429,159 @@ mod tests {
             assert_eq!(d.sheet.state.picker, None);
         }
         assert_eq!(st.character, before);
+    }
+
+    /// Outside any chair (inside a clinic, not seated), the spec's loadout with the Scout
+    /// drone docked and a Mule drone in the bag, the deck on the ledger's `row`.
+    fn locked_on(row: LedgerRow) -> (AppState, Deck) {
+        let (mut st, _, _, _) = crate::clinic::testutil::inside();
+        loadout(&mut st);
+        give(&mut st, "mule_drone");
+        let mut d = Deck::new(st.tick);
+        d.update(&mut st, &[key(KeyCode::Char('2'))]);
+        d.sheet.state.pane = SheetPane::Ledger;
+        d.sheet.state.row = row;
+        (st, d)
+    }
+
+    const BAY: LedgerRow = LedgerRow::Socket(Site::Back, 0);
+
+    #[test]
+    fn a_bay_docks_and_stows_anywhere() {
+        let (mut st, mut d) = locked_on(BAY);
+        assert_eq!(operating(&st), Operating::Locked);
+        let credits = st.character.credits;
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        assert_eq!(d.sheet.state.picker, Some(0));
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        assert_eq!(
+            last(&st),
+            Some("Mule drone fitted · socket bay · Scout drone to the pack")
+        );
+        assert_eq!(
+            st.character.docked(&st.content),
+            vec![(Site::Back, 0, id("mule_drone"))]
+        );
+        press(&mut d, &mut st, &[KeyCode::Char('x')]);
+        assert_eq!(last(&st), Some("Mule drone out · to the pack"));
+        assert!(st.character.docked(&st.content).is_empty());
+        assert_eq!(st.character.credits, credits, "no fee");
+    }
+
+    #[test]
+    fn a_bay_stays_locked_jacked_in() {
+        let mut st = jacked();
+        loadout(&mut st);
+        give(&mut st, "mule_drone");
+        let mut d = on_ledger(&mut st, BAY);
+        let before = st.character.clone();
+        for code in [KeyCode::Char(' '), KeyCode::Char('x')] {
+            press(&mut d, &mut st, &[code]);
+            assert_eq!(last(&st), Some(JACKED_IN), "{code:?}");
+        }
+        assert_eq!(st.character, before);
+    }
+
+    #[test]
+    fn the_cradle_itself_still_needs_the_chair() {
+        let (mut st, mut d) = locked_on(LedgerRow::Site(Site::Back));
+        let before = st.character.clone();
+        press(&mut d, &mut st, &[KeyCode::Char('x')]);
+        assert_eq!(last(&st), Some(OUTSIDE));
+        assert_eq!(st.character, before);
+    }
+
+    #[test]
+    fn hints_on_a_bay() {
+        let (mut st, d) = locked_on(BAY);
+        assert_eq!(
+            d.sheet.hints(&st),
+            "↑↓ select · space swap · x stow in the bag · ← attributes · Q/E tabs   drones dock anywhere"
+        );
+        let buf = screen(&d, &mut st, (100, 30));
+        let x = col_of(&buf, 28, 2, "drones dock").unwrap();
+        assert_eq!(buf[(x, 28)].fg, FAINTER);
+        st.character
+            .chrome_copies
+            .get_mut(&Site::Back)
+            .unwrap()
+            .fitted[0] = None;
+        assert_eq!(
+            d.sheet.hints(&st),
+            "↑↓ select · space dock · ← attributes · Q/E tabs · tab close   drones dock anywhere"
+        );
+    }
+
+    #[test]
+    fn the_bay_row_card_is_the_drones() {
+        let mut st = AppState::new();
+        loadout(&mut st);
+        let d = on_ledger(&mut st, BAY);
+        let buf = screen(&d, &mut st, (100, 30));
+        let card = region(&buf, (CARD_100, 98), (6, 27));
+        for want in [
+            "SCOUT DRONE",
+            "docked in the Drone cradle",
+            "grants Scout",
+            "out with you · follows on foot",
+            "It comes back when it's bored.",
+        ] {
+            assert!(card.contains(want), "{want}:\n{card}");
+        }
+        for not in ["load", "EMP"] {
+            assert!(!card.contains(not), "{not}:\n{card}");
+        }
+        // Its drawing leads the card, in half blocks.
+        let art = region(&buf, (CARD_100, 98), (6, 12));
+        assert!(art.contains('▀') || art.contains('▄'), "{art}");
+    }
+
+    #[test]
+    fn the_cradles_card_shows_its_bay() {
+        let mut st = AppState::new();
+        loadout(&mut st);
+        let d = on_ledger(&mut st, LedgerRow::Site(Site::Back));
+        let card = region(&screen(&d, &mut st, (100, 30)), (CARD_100, 98), (6, 27));
+        assert!(card.contains("■ bay     Scout drone"), "{card}");
+        st.character
+            .chrome_copies
+            .get_mut(&Site::Back)
+            .unwrap()
+            .fitted[0] = None;
+        let card = region(&screen(&d, &mut st, (100, 30)), (CARD_100, 98), (6, 27));
+        assert!(card.contains("□ bay     empty"), "{card}");
+        assert!(
+            card.contains("Scout drone, Mule"),
+            "what docks there:\n{card}"
+        );
+    }
+
+    #[test]
+    fn a_cradle_carrying_a_drone_costs_one_piece_of_emp() {
+        let mut st = AppState::new();
+        loadout(&mut st);
+        let mut d = on_ledger(&mut st, LedgerRow::Site(Site::Back));
+        // Out with its drone in it, then picked to go back in.
+        press(&mut d, &mut st, &[KeyCode::Char('x')]);
+        assert!(st.character.chrome_at(Site::Back).is_none());
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        assert_eq!(d.sheet.state.picker, Some(0));
+        let card = region(&screen(&d, &mut st, (100, 30)), (CARD_100, 98), (6, 27));
+        assert!(card.contains("EMP −2"), "{card}");
+        assert!(!card.contains("EMP −4"), "{card}");
+    }
+
+    #[test]
+    fn the_bay_picker_shows_what_a_drone_does() {
+        let (mut st, mut d) = locked_on(BAY);
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        let buf = screen(&d, &mut st, (100, 30));
+        let (_, y) = find(&buf, CARD_100, (6, 27), "Mule drone").unwrap();
+        let row = cells(&buf, CARD_100, y, 30);
+        assert!(row.trim_end().ends_with("carry +8"), "{row}");
+        let card = region(&buf, (CARD_100, 98), (6, 27));
+        assert!(!card.contains("L0"), "{card}");
+        assert!(!card.contains("LOAD"), "{card}");
     }
 
     #[test]
@@ -1593,6 +1810,7 @@ mod tests {
                 Group("body"),
                 s(Site::Spine),
                 s(Site::Back),
+                Socket(Site::Back, 0),
                 s(Site::Organs),
                 s(Site::Skin),
                 Group("limbs"),
@@ -1610,6 +1828,7 @@ mod tests {
             "── head ──",
             "Neural port",
             "· ears",
+            "└ Scout drone",
             "── limbs ──",
             "Piston arm",
             "├ Arc hand",
@@ -1627,17 +1846,17 @@ mod tests {
         assert_eq!(buf[(R0 + 2, 7)].fg, TEXT);
         assert_eq!(cells(&buf, R0 + 2, 9, 6), "· ears");
         assert_eq!(buf[(R0 + 2, 9)].fg, FAINTER);
-        assert_eq!(buf[(R0, 17)].symbol(), "▸");
-        assert_eq!(cells(&buf, R0 + 2, 17, 10), "Piston arm");
-        assert_eq!(buf[(R0 + 2, 17)].fg, CYAN);
+        assert_eq!(buf[(R0, 18)].symbol(), "▸");
+        assert_eq!(cells(&buf, R0 + 2, 18, 10), "Piston arm");
+        assert_eq!(buf[(R0 + 2, 18)].fg, CYAN);
         for x in R0..RULE_100 {
-            assert_eq!(buf[(x, 17)].bg, BAR_BG, "the cursor's bar at {x}");
+            assert_eq!(buf[(x, 18)].bg, BAR_BG, "the cursor's bar at {x}");
         }
-        assert_eq!(cells(&buf, R0 + 3, 18, 10), "├ Arc hand");
-        assert_eq!(buf[(R0 + 3, 18)].fg, RULE);
-        assert_eq!(buf[(R0 + 5, 18)].fg, DIM);
-        assert_eq!(cells(&buf, R0 + 3, 19, 11), "└ □ forearm");
-        assert_eq!(buf[(R0 + 5, 19)].fg, FAINTER);
+        assert_eq!(cells(&buf, R0 + 3, 19, 10), "├ Arc hand");
+        assert_eq!(buf[(R0 + 3, 19)].fg, RULE);
+        assert_eq!(buf[(R0 + 5, 19)].fg, DIM);
+        assert_eq!(cells(&buf, R0 + 3, 20, 11), "└ □ forearm");
+        assert_eq!(buf[(R0 + 5, 20)].fg, FAINTER);
         for y in 6..BODY.bottom() {
             assert_eq!(buf[(RULE_100, y)].symbol(), "│", "the ledger's rule at {y}");
         }
@@ -1671,13 +1890,13 @@ mod tests {
             (Site::Ears, "damper_cochlea"),
             (Site::Jaw, "bulldog_jaw"),
             (Site::Spine, "redline_spine"),
-            (Site::Back, "drone_cradle"),
             (Site::Organs, "adrenal_pump"),
             (Site::Skin, "subdermal_mesh"),
             (Site::Legs, "dog_legs"),
         ] {
             install(&mut st, site, item, &[]);
         }
+        install(&mut st, Site::Back, "drone_cradle", &[(0, "scout_drone")]);
         install(
             &mut st,
             Site::LeftArm,
@@ -1691,7 +1910,8 @@ mod tests {
             &[(0, "toolfingers"), (1, "launcher_sleeve")],
         );
         let rows = ledger_rows(&st);
-        assert_eq!(rows.len(), 3 + 11 + 4);
+        // Three groups, eleven sites, four arm sockets and the cradle's bay.
+        assert_eq!(rows.len(), 3 + 11 + 5);
         // Every row on its own line inside the body, whichever the cursor is on.
         for (i, &row) in rows.iter().enumerate() {
             let Some(at) = (match row {
@@ -1784,7 +2004,7 @@ mod tests {
             .iter()
             .filter(|i| {
                 i.implant
-                    .is_some_and(|m| m.fits == Fits::Socket(SocketKind::Forearm))
+                    .is_some_and(|m| m.fits == game::Fits::Socket(SocketKind::Forearm))
             })
             .map(|i| i.name.clone())
             .collect();
@@ -1816,9 +2036,9 @@ mod tests {
         // The pick on the bar; the ledger's cursor dim.
         let (x, y) = find(&buf, CARD_100, (6, 27), "Grip arm").unwrap();
         assert_eq!(buf[(x, y)].bg, BAR_BG);
-        assert_eq!(buf[(R0, 20)].symbol(), "▸");
-        assert_eq!(buf[(R0, 20)].fg, DIM);
-        assert_ne!(buf[(R0 + 2, 20)].bg, BAR_BG);
+        assert_eq!(buf[(R0, 21)].symbol(), "▸");
+        assert_eq!(buf[(R0, 21)].fg, DIM);
+        assert_ne!(buf[(R0 + 2, 21)].bg, BAR_BG);
         // LOAD shows what it takes, in amber.
         let after = format!(" {}/{max}", load + 3);
         let x = col_of(&buf, 5, R0, &after).unwrap_or_else(|| panic!("{}", cells(&buf, R0, 5, 50)));

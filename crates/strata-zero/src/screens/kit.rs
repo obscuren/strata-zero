@@ -871,9 +871,12 @@ mod tests {
         k.reselect(&st);
         assert_eq!(k.state.filter, Some(ItemKind::Hardware));
         assert!(k.pack_rows(&st).is_empty());
-        // Stepped: on to the next kind the pack holds, his stickers, then all.
+        // Stepped: on to the next kind the pack holds, his stickers, his drones, then
+        // all.
         press(&mut k, &st, KeyCode::Char(']'), 1);
         assert_eq!(k.state.filter, Some(ItemKind::Sticker));
+        press(&mut k, &st, KeyCode::Char(']'), 1);
+        assert_eq!(k.state.filter, Some(ItemKind::Bot));
         press(&mut k, &st, KeyCode::Char(']'), 1);
         assert_eq!(k.state.filter, None);
     }
@@ -936,7 +939,9 @@ mod tests {
         assert_eq!(buf[(57, 5)].fg, FAINTER, "no weapon in the pack");
         assert_eq!(buf[(66, 5)].fg, DIM, "a deck in the pack");
 
-        // Back from ALL: his stickers, the last kind, then the hardware.
+        // Back from ALL: his drones, the last kind, his stickers, then the hardware.
+        assert!(k.key(&st, KeyCode::Char('['), k.changed));
+        assert_eq!(k.state.filter, Some(ItemKind::Bot));
         assert!(k.key(&st, KeyCode::Char('['), k.changed));
         assert_eq!(k.state.filter, Some(ItemKind::Sticker));
         assert!(k.key(&st, KeyCode::Char('['), k.changed));

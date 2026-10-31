@@ -16,5 +16,7 @@ pub fn kind_icon(kind: ItemKind) -> char {
         ItemKind::Hardware => '≡',
         // A square with a corner lifting, as a sticker peels.
         ItemKind::Sticker => '◪',
+        // A rotor seen from above, as a drone draws on the map.
+        ItemKind::Bot => '┼',
     }
 }

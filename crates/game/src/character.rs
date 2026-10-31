@@ -175,6 +175,8 @@ pub enum Contrib {
     Chrome(ItemId),
     /// Hardware fitted in something worn or installed.
     Hardware(ItemId),
+    /// A bot docked in installed chrome, with its body: what the sheet calls it.
+    Bot(ItemId, BotBody),
     /// Every talent rank held, summed.
     Talents,
     /// The chrome installed, counted: what it costs EMP.
@@ -534,6 +536,34 @@ impl Character {
         for i in c.items.iter().filter(|i| i.kind == ItemKind::Sticker) {
             d.give(i.id.clone(), 2);
         }
+        // The Drone cradle goes in with the first bot that docks in each of its sockets,
+        // so a debug start has a drone out; every other bot goes in the pack.
+        let cradle = ItemId::new("drone_cradle");
+        let mut copy = d.new_copy(c, &cradle);
+        let mut docked = Vec::new();
+        let kinds = c.item(&cradle).map_or(Vec::new(), |i| i.sockets.clone());
+        for (n, kind) in kinds.into_iter().enumerate() {
+            let bot = c
+                .items
+                .iter()
+                .find(|i| i.bot.as_ref().is_some_and(|b| b.docks == kind));
+            if let Some(bot) = bot {
+                let item = bot.id.clone();
+                let piece = d.new_copy(c, &item);
+                copy.fitted[n] = Some(Stack {
+                    item: item.clone(),
+                    qty: 1,
+                    copy: Some(piece),
+                });
+                docked.push(item);
+            }
+        }
+        d.install(Site::Back, cradle, Some(copy));
+        for i in c.items.iter().filter(|i| i.kind == ItemKind::Bot) {
+            if !docked.contains(&i.id) {
+                d.give_item(c, i.id.clone(), 1);
+            }
+        }
         // One of every piece of chrome not already installed, to try on at ATTRIBUTES.
         for i in c.items.iter().filter(|i| i.kind == ItemKind::Cyberware) {
             if !d.chrome.values().any(|id| *id == i.id) {
@@ -756,7 +786,7 @@ impl Character {
             })
             .sum();
         let chrome = if h == Harm::Emp {
-            EMP_PER_PIECE * self.pieces() as i32
+            EMP_PER_PIECE * self.pieces(c) as i32
         } else {
             0
         };
@@ -778,7 +808,11 @@ impl Character {
         }
         for (_, _, id) in self.installed() {
             let v = adds(&id);
-            out.push((Contrib::Chrome(id), v));
+            if let Some(body) = c.item(&id).and_then(|i| i.bot.as_ref()).map(|b| b.body) {
+                out.push((Contrib::Bot(id, body), v));
+            } else {
+                out.push((Contrib::Chrome(id), v));
+            }
         }
         if let Num::Attribute(attribute) = n {
             let worn = Slot::ALL.iter().filter_map(|slot| self.worn_copy(*slot));
@@ -811,7 +845,7 @@ impl Character {
             .sum();
         out.push((Contrib::Talents, talents));
         if n == Num::Resist(Harm::Emp) {
-            let pieces = self.pieces();
+            let pieces = self.pieces(c);
             out.push((Contrib::Pieces(pieces), -EMP_PER_PIECE * pieces as i32));
         }
         out.retain(|(_, v)| *v != 0);
@@ -1135,9 +1169,25 @@ impl Character {
         out
     }
 
-    /// Installed pieces, sockets included.
-    pub fn pieces(&self) -> usize {
-        self.installed().len()
+    /// Installed pieces, sockets included: chrome, what EMP counts. A docked bot is
+    /// not in the body.
+    pub fn pieces(&self, c: &Content) -> usize {
+        self.installed()
+            .iter()
+            .filter(|(_, _, id)| c.item(id).is_none_or(|i| i.bot.is_none()))
+            .count()
+    }
+
+    /// Every bot docked in installed chrome, sites and sockets in order.
+    pub fn docked(&self, c: &Content) -> Vec<(Site, usize, ItemId)> {
+        self.installed()
+            .into_iter()
+            .filter_map(|(site, socket, id)| {
+                let socket = socket?;
+                c.item(&id)?.bot.as_ref()?;
+                Some((site, socket, id))
+            })
+            .collect()
     }
 
     /// What the installed pieces take of the load.
@@ -1152,17 +1202,19 @@ impl Character {
     /// Whether a piece fits `at`: a site (`None`), or a socket of the piece installed
     /// there (`Some`). Says nothing of what the pack holds or the budget.
     pub fn fits_at(&self, c: &Content, item: &ItemId, at: (Site, Option<usize>)) -> bool {
-        let Some(implant) = c.item(item).and_then(|i| i.implant) else {
+        let Some(item) = c.item(item) else {
             return false;
         };
         match at {
-            (site, None) => implant.fits == site.fits(),
+            (site, None) => item.implant.is_some_and(|i| i.fits == site.fits()),
             (site, Some(socket)) => {
                 let kind = self
                     .chrome_at(site)
                     .and_then(|id| c.item(id))
                     .and_then(|i| i.sockets.get(socket));
-                matches!((implant.fits, kind), (Fits::Socket(want), Some(&have)) if want == have)
+                // Only chrome and bots go in the body's sockets, never hardware.
+                let body = item.implant.is_some() || item.bot.is_some();
+                body && kind.is_some_and(|&k| item.fits_socket() == Some(k))
             }
         }
     }
@@ -2214,13 +2266,14 @@ mod tests {
         let vex = vex(&c);
         // Vex's kit, plus the Backdoor program, the pawnshop deck set aside, the
         // three pieces of deck hardware, the two weapon pieces, four stacks of
-        // Ratchet parts, a stack of every sticker and every piece of chrome but the
-        // optics Vex wears.
+        // Ratchet parts, a stack of every sticker, every piece of chrome but the
+        // optics Vex wears and the cradle, and every bot but the one docked.
         let kind = |k: ItemKind| c.items.iter().filter(|i| i.kind == k).count();
-        let chrome = kind(ItemKind::Cyberware) - d.pieces();
+        let chrome = kind(ItemKind::Cyberware) - d.pieces(&c);
+        let bots = kind(ItemKind::Bot) - d.docked(&c).len();
         assert_eq!(
             d.inventory.len(),
-            vex.inventory.len() + 11 + kind(ItemKind::Sticker) + chrome,
+            vex.inventory.len() + 11 + kind(ItemKind::Sticker) + chrome + bots,
             "Vex's kit"
         );
         assert!(d.loaded.starts_with(&vex.loaded));
@@ -2439,10 +2492,21 @@ mod tests {
             d.chrome_at(Site::Eyes),
             Some(&ItemId::new("nightglass_optics"))
         );
-        // Every other piece of chrome is in the pack, one of each, to try on.
+        // The cradle is in with the Scout drone docked, so a debug start has its drone
+        // out; every other piece of chrome is in the pack, one of each, to try on.
+        assert_eq!(d.chrome_at(Site::Back), Some(&ItemId::new("drone_cradle")));
+        assert_eq!(
+            d.docked(&c),
+            vec![(Site::Back, 0, ItemId::new("scout_drone"))]
+        );
         for i in c.items.iter().filter(|i| i.kind == ItemKind::Cyberware) {
-            let packed = if i.id.0 == "nightglass_optics" { 0 } else { 1 };
-            assert_eq!(d.count(&i.id), packed, "{}", i.id);
+            let installed = ["nightglass_optics", "drone_cradle"].contains(&i.id.0.as_str());
+            assert_eq!(d.count(&i.id), if installed { 0 } else { 1 }, "{}", i.id);
+        }
+        // And every other drone in the pack, to swap in.
+        for i in c.items.iter().filter(|i| i.kind == ItemKind::Bot) {
+            let docked = i.id.0 == "scout_drone";
+            assert_eq!(d.count(&i.id), if docked { 0 } else { 1 }, "{}", i.id);
         }
     }
 
@@ -2490,7 +2554,7 @@ mod tests {
     fn installed_chrome_counts() {
         let c = Content::load().unwrap();
         let mut ch = Character::from_template(&c, &TemplateId::new("kessler")).unwrap();
-        assert_eq!((ch.pieces(), ch.chrome_load(&c)), (0, 0));
+        assert_eq!((ch.pieces(&c), ch.chrome_load(&c)), (0, 0));
         let (weight, value, body) = (
             ch.weight(&c),
             ch.value(&c),
@@ -2518,7 +2582,7 @@ mod tests {
                 (Site::LeftArm, Some(0), hand.clone()),
             ]
         );
-        assert_eq!((ch.pieces(), ch.chrome_load(&c)), (3, 5));
+        assert_eq!((ch.pieces(&c), ch.chrome_load(&c)), (3, 5));
         assert_eq!(ch.attribute(&c, Attribute::Body), body + 1);
         let abilities = ch.abilities(&c);
         for (a, from) in [
@@ -2539,7 +2603,7 @@ mod tests {
         // A copy left behind at an empty site counts for nothing.
         ch.chrome.remove(&Site::LeftArm);
         assert!(ch.chrome_copy(Site::LeftArm).is_none());
-        assert_eq!((ch.pieces(), ch.resist(&c, Harm::Shock)), (1, 0));
+        assert_eq!((ch.pieces(&c), ch.resist(&c, Harm::Shock)), (1, 0));
     }
 
     #[test]
@@ -2582,6 +2646,85 @@ mod tests {
         ch.chrome.insert(Site::LeftArm, ItemId::new("piston_arm"));
         assert_eq!(ch.attribute(&c, Attribute::Body), 5, "the arm raises BODY");
         assert_eq!(ch.load_max(), 24, "but not its own budget");
+    }
+
+    /// Vex with the Drone cradle at the back and `drone` docked in its bay, or the bay
+    /// empty.
+    fn cradled(c: &Content, drone: Option<&str>) -> Character {
+        let mut ch = vex(c);
+        let mut cradle = ch.new_copy(c, &ItemId::new("drone_cradle"));
+        if let Some(d) = drone {
+            let copy = ch.new_copy(c, &ItemId::new(d));
+            cradle.fitted[0] = Some(Stack {
+                item: ItemId::new(d),
+                qty: 1,
+                copy: Some(copy),
+            });
+        }
+        ch.install(Site::Back, ItemId::new("drone_cradle"), Some(cradle));
+        ch
+    }
+
+    #[test]
+    fn a_docked_drone_grants_and_perks_like_chrome() {
+        let c = Content::load().unwrap();
+        let scout = cradled(&c, Some("scout_drone"));
+        assert!(
+            scout.abilities(&c).iter().any(
+                |(a, from)| a.0 == "scout" && *from == Source::Item(ItemId::new("scout_drone"))
+            )
+        );
+        assert!(
+            !cradled(&c, None)
+                .abilities(&c)
+                .iter()
+                .any(|(a, _)| a.0 == "scout"),
+            "the cradle grants nothing of its own"
+        );
+        let empty = cradled(&c, None);
+        let mule = cradled(&c, Some("mule_drone"));
+        assert_eq!(mule.carry_cap(&c), empty.carry_cap(&c) + 8.0);
+        let lamp = cradled(&c, Some("lamp_drone"));
+        assert_eq!(lamp.sight_bonus(&c), empty.sight_bonus(&c) + 3);
+    }
+
+    #[test]
+    fn a_docked_drone_costs_no_load_and_no_emp() {
+        let c = Content::load().unwrap();
+        let (with, without) = (cradled(&c, Some("scout_drone")), cradled(&c, None));
+        assert_eq!(with.pieces(&c), without.pieces(&c));
+        assert_eq!(with.chrome_load(&c), without.chrome_load(&c));
+        assert_eq!(with.resist(&c, Harm::Emp), without.resist(&c, Harm::Emp));
+        assert_eq!(
+            with.weight(&c),
+            without.weight(&c),
+            "docked, it weighs nothing"
+        );
+    }
+
+    #[test]
+    fn a_docked_drone_is_its_own_source() {
+        let c = Content::load().unwrap();
+        let ch = cradled(&c, Some("mule_drone"));
+        assert!(
+            ch.sources(&c, Num::Carry)
+                .contains(&(Contrib::Bot(ItemId::new("mule_drone"), BotBody::Air), 8))
+        );
+        assert_eq!(
+            ch.sources(&c, Num::Resist(Harm::Emp)),
+            cradled(&c, None).sources(&c, Num::Resist(Harm::Emp)),
+            "the drone is no piece"
+        );
+    }
+
+    #[test]
+    fn docked_lists_bots_in_their_bays() {
+        let c = Content::load().unwrap();
+        assert_eq!(
+            cradled(&c, Some("scout_drone")).docked(&c),
+            vec![(Site::Back, 0, ItemId::new("scout_drone"))]
+        );
+        assert!(cradled(&c, None).docked(&c).is_empty());
     }
 
     #[test]

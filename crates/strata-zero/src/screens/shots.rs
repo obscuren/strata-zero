@@ -165,6 +165,40 @@ fn combat_aim() -> (AppState, MapScreen) {
     (st, map)
 }
 
+/// The COMBAT lot (dev mode) with the Scout drone out: three steps east and a few ticks,
+/// so it trails you with its wake behind it.
+#[test]
+#[ignore]
+fn drone_on_the_lot() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let mut st = AppState::new();
+    st.unlock_dev();
+    let mut title = crate::screens::title::Title::new(&st, 0);
+    title.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Down)]);
+    let _ = title.update(&mut st, &[key(KeyCode::Enter)]);
+    let mut map = MapScreen::walking(&mut st);
+    for _ in 0..60 {
+        st.tick += 1;
+        map.update(&mut st, &[]);
+    }
+    for _ in 0..3 {
+        map.update(&mut st, &[key(KeyCode::Char('l'))]);
+        st.tick += 2;
+        map.update(&mut st, &[]);
+    }
+    for _ in 0..4 {
+        st.tick += 1;
+        map.update(&mut st, &[]);
+    }
+    assert!(!st.bots.is_empty(), "the drone is out");
+    for (w, h) in [(100, 30), (120, 40)] {
+        let buf = draw_stack(&st, &[&map], (w, h));
+        write_svg(&dir, &format!("drone_on_the_lot_{w}x{h}"), &st, &buf, false);
+    }
+}
+
 /// The COMBAT start on the Net (dev mode): jacked into a construct, a beat in.
 #[test]
 #[ignore]
@@ -928,11 +962,17 @@ fn attributes_sheet() {
             let id = ItemId::new(item);
             let copy = st.content.item(&id).unwrap().per_copy().then(|| {
                 let mut k = st.character.new_copy(&st.content, &id);
-                if item == "piston_arm" {
-                    let hand = ItemId::new("arc_hand");
-                    let pc = st.character.new_copy(&st.content, &hand);
+                // The arm with its Arc hand, the cradle with its Scout drone.
+                let fitted = match item {
+                    "piston_arm" => Some("arc_hand"),
+                    "drone_cradle" => Some("scout_drone"),
+                    _ => None,
+                };
+                if let Some(piece) = fitted {
+                    let piece = ItemId::new(piece);
+                    let pc = st.character.new_copy(&st.content, &piece);
                     k.fitted[0] = Some(Stack {
-                        item: hand,
+                        item: piece,
                         qty: 1,
                         copy: Some(pc),
                     });
@@ -947,6 +987,24 @@ fn attributes_sheet() {
     sheet_shots(&mut st, "attributes_ledger_limb", &sizes, |d, _| {
         d.sheet.state.pane = SheetPane::Ledger;
         d.sheet.state.row = LedgerRow::Site(Site::LeftArm);
+    });
+
+    // The cradle, its bay with the Scout drone docked, and what docks there.
+    let mut st = fresh();
+    sheet_shots(&mut st, "attributes_ledger_cradle", &sizes, |d, _| {
+        d.sheet.state.pane = SheetPane::Ledger;
+        d.sheet.state.row = LedgerRow::Site(Site::Back);
+    });
+    let mut st = fresh();
+    sheet_shots(&mut st, "attributes_ledger_bay", &sizes, |d, _| {
+        d.sheet.state.pane = SheetPane::Ledger;
+        d.sheet.state.row = LedgerRow::Socket(Site::Back, 0);
+    });
+    let mut st = fresh();
+    sheet_shots(&mut st, "attributes_picker_bay", &sizes, |d, st| {
+        d.sheet.state.pane = SheetPane::Ledger;
+        d.sheet.state.row = LedgerRow::Socket(Site::Back, 0);
+        d.update(st, &[key(KeyCode::Char(' '))]);
     });
 
     let mut st = fresh();

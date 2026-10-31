@@ -1054,6 +1054,12 @@ impl MapScreen {
                     .unwrap_or_else(|| "FOE".to_string());
                 (format!("THE {name} ACTS"), "wait".to_string())
             }
+            Actor::Bot(site, n) => {
+                let name = crate::bots::name(st, (site, n))
+                    .map(|n| n.to_uppercase())
+                    .unwrap_or_else(|| "BOT".to_string());
+                (format!("YOUR {name} MOVES"), "wait".to_string())
+            }
         })
     }
 
@@ -2628,6 +2634,8 @@ impl Screen for MapScreen {
                 world.path_some(city, 4);
             }
         }
+        // The bots out with you move on the same clock.
+        crate::bots::tick(st);
         // The Net's clock: traces cool, hacks expire, alerts end.
         let now = st.net.now(st);
         let inside = match st.player.as_ref().map(|p| p.place) {
@@ -2849,6 +2857,15 @@ impl Screen for MapScreen {
         if let Some(p) = people.as_ref() {
             overlays.push(p);
         }
+        // Your bots over the walkers, under the aim and your @.
+        let bots = crate::render::bots::BotOverlay {
+            bots: &st.bots,
+            content: &st.content,
+            foes: &st.foes,
+            vis,
+            now: st.clock_tick(),
+        };
+        overlays.push(&bots);
         let inside = match (&self.placement, st.world.as_ref()) {
             (Some((pl, _, placement)), Some(world)) if *pl == self.place => Some(InteriorPeople {
                 placement,

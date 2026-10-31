@@ -36,7 +36,7 @@ pub enum ContentError {
     UnknownAbility { where_: String, id: String },
     #[error("item `{item}` has a use but is not a consumable")]
     UseOnNonConsumable { item: String },
-    #[error("item `{item}` has perks or grants but no slot or implant")]
+    #[error("item `{item}` has perks or grants but no slot, implant or bot")]
     PerkWithoutSlot { item: String },
     #[error("item `{item}` cannot sit in slot {slot:?}")]
     SlotMismatch { item: String, slot: Slot },
@@ -86,6 +86,8 @@ pub enum ContentError {
     WeaponInvalid { id: String, why: String },
     #[error("chrome `{id}`: {why}")]
     ChromeInvalid { id: String, why: String },
+    #[error("bot `{id}`: {why}")]
+    BotInvalid { id: String, why: String },
     #[error("item `{id}`: {why}")]
     ItemInvalid { id: String, why: String },
     #[error("ability `{id}`: {why}")]
@@ -272,9 +274,9 @@ fn sticker_ok(i: &Item) -> Result<(), String> {
 }
 
 /// Chrome is cyberware with an implant and no slot, and nothing else has an implant;
-/// it takes 1 to 5 of the load. Chrome sockets are hand and forearm sockets, both
-/// the ones a piece has and the one a socket piece fits, and a socket piece has no
-/// sockets of its own.
+/// it takes 1 to 5 of the load. Chrome sockets are hand, forearm and bay sockets,
+/// both the ones a piece has and the one a socket piece fits, and a socket piece has
+/// no sockets of its own.
 fn chrome_ok(i: &Item) -> Result<(), String> {
     let implant = match (i.kind, i.implant) {
         (ItemKind::Cyberware, Some(implant)) => implant,
@@ -288,9 +290,10 @@ fn chrome_ok(i: &Item) -> Result<(), String> {
     if !(1..=5).contains(&implant.load) {
         return Err(format!("load {}; a load is 1 to 5", implant.load));
     }
-    let chrome_socket = |k: SocketKind| matches!(k, SocketKind::Hand | SocketKind::Forearm);
+    let chrome_socket =
+        |k: SocketKind| matches!(k, SocketKind::Hand | SocketKind::Forearm | SocketKind::Bay);
     if let Fits::Socket(k) = implant.fits {
-        if !chrome_socket(k) {
+        if !matches!(k, SocketKind::Hand | SocketKind::Forearm) {
             return Err("chrome fits a hand or forearm socket".into());
         }
         if !i.sockets.is_empty() {
@@ -298,7 +301,42 @@ fn chrome_ok(i: &Item) -> Result<(), String> {
         }
     }
     if !i.sockets.iter().all(|k| chrome_socket(*k)) {
-        return Err("chrome sockets take hand or forearm chrome".into());
+        return Err("chrome sockets take hand or forearm chrome, or drones".into());
+    }
+    Ok(())
+}
+
+/// A bot is an item of the bot kind with a bot and nothing that makes it chrome or
+/// hardware; it docks in a bay, draws in characters that always render (box-drawing
+/// and block), and moves at least a tile a turn. Nothing else is one.
+fn bot_ok(i: &Item) -> Result<(), String> {
+    let bot = match (i.kind, &i.bot) {
+        (ItemKind::Bot, Some(bot)) => bot,
+        (ItemKind::Bot, None) => return Err("no bot".into()),
+        (_, Some(_)) => return Err("a bot on something that is not a bot".into()),
+        (_, None) => return Ok(()),
+    };
+    if i.implant.is_some() || i.hardware.is_some() || i.slot.is_some() {
+        return Err("a bot docks; it is not installed, fitted or worn".into());
+    }
+    if !i.sockets.is_empty() {
+        return Err("a bot has no sockets".into());
+    }
+    if bot.docks != SocketKind::Bay {
+        return Err("a bot docks in a bay".into());
+    }
+    if bot.frames.is_empty() {
+        return Err("no frames".into());
+    }
+    if let Some(f) = bot
+        .frames
+        .iter()
+        .find(|f| !('\u{2500}'..='\u{259f}').contains(*f))
+    {
+        return Err(format!("frame `{f}` is not box-drawing or block"));
+    }
+    if bot.moves == 0 {
+        return Err("a bot moves at least a tile a turn".into());
     }
     Ok(())
 }
@@ -428,11 +466,25 @@ impl Content {
                 }
                 _ => {}
             }
+            bot_ok(i).map_err(|why| ContentError::BotInvalid {
+                id: i.id.0.clone(),
+                why,
+            })?;
             if let Err(why) = chrome_ok(i) {
                 return Err(ContentError::ChromeInvalid {
                     id: i.id.0.clone(),
                     why,
                 });
+            }
+            if i.bot.is_some() {
+                let bad = |why: String| ContentError::BotInvalid {
+                    id: i.id.0.clone(),
+                    why,
+                };
+                let art = self
+                    .implant_art(&i.id)
+                    .ok_or_else(|| bad("no art".into()))?;
+                implant_art_ok(art).map_err(bad)?;
             }
             if i.implant.is_some() {
                 let bad = |why: String| ContentError::ChromeInvalid {
@@ -574,9 +626,11 @@ impl Content {
                     return Err(bad("a blast has one blast shape at most"));
                 }
             }
+            // Perks and grants count while worn, installed or docked.
             if (!i.perks.is_empty() || !i.grants.is_empty())
                 && i.slot.is_none()
                 && i.implant.is_none()
+                && i.bot.is_none()
             {
                 return Err(ContentError::PerkWithoutSlot {
                     item: i.id.0.clone(),
@@ -782,14 +836,14 @@ impl Content {
         }
         self.validate_creation(&need_item, &need_skill, &need_ability)?;
         self.validate_number_blurbs()?;
-        if let Some(id) = self
-            .implant_art
-            .keys()
-            .find(|id| !self.item(id).is_some_and(|i| i.implant.is_some()))
-        {
+        if let Some(id) = self.implant_art.keys().find(|id| {
+            !self
+                .item(id)
+                .is_some_and(|i| i.implant.is_some() || i.bot.is_some())
+        }) {
             return Err(ContentError::ChromeInvalid {
                 id: id.0.clone(),
-                why: "art for something that is not chrome".into(),
+                why: "art for something that is not chrome or a bot".into(),
             });
         }
         if let Some(id) = self.talent_art.keys().find(|id| self.talent(id).is_none()) {
@@ -2684,6 +2738,10 @@ mod tests {
             n += 1;
         }
         assert_eq!(n, 31);
+        for i in c.items.iter().filter(|i| i.bot.is_some()) {
+            let art = c.implant_art(&i.id).unwrap_or_else(|| panic!("{}", i.id));
+            assert_eq!(art.rows.len(), IMPLANT_ART_H, "{}", i.id);
+        }
         let arm = c.implant_art(&ItemId::new("piston_arm")).unwrap();
         let mut elbow = arm.rows[3].chars().filter_map(|ch| arm.colours.get(&ch));
         assert!(elbow.any(|&c| c == (0, 229, 255)));
@@ -2770,6 +2828,112 @@ mod tests {
             .to_string(),
             "chrome `x`: y"
         );
+    }
+
+    #[test]
+    fn the_drones_load() {
+        let c = Content::load().unwrap();
+        let cradle = c.item(&ItemId::new("drone_cradle")).unwrap();
+        assert_eq!(cradle.sockets, vec![SocketKind::Bay]);
+        assert!(cradle.grants.is_empty());
+        for (id, perks, grants, (weight, value), light) in [
+            (
+                "scout_drone",
+                vec![],
+                vec!["scout"],
+                (0.6, 2400),
+                (120, 255, 120),
+            ),
+            (
+                "mule_drone",
+                vec![Perk::Carry(8.0)],
+                vec![],
+                (1.4, 1800),
+                (255, 200, 80),
+            ),
+            (
+                "lamp_drone",
+                vec![Perk::Sight(3)],
+                vec![],
+                (0.5, 1500),
+                (255, 240, 200),
+            ),
+        ] {
+            let i = c.item(&ItemId::new(id)).unwrap();
+            assert_eq!(i.kind, ItemKind::Bot, "{id}");
+            assert_eq!(i.perks, perks, "{id}");
+            let grants: Vec<AbilityId> = grants.into_iter().map(AbilityId::new).collect();
+            assert_eq!(i.grants, grants, "{id}");
+            assert_eq!((i.weight, i.value), (weight, value), "{id}");
+            assert_eq!(
+                i.bot,
+                Some(Bot {
+                    body: BotBody::Air,
+                    docks: SocketKind::Bay,
+                    frames: vec!['┼', '╳'],
+                    light,
+                    wake: true,
+                    reflex: 6,
+                    moves: 5,
+                }),
+                "{id}"
+            );
+            assert!(i.per_copy(), "{id} moves as a copy");
+            assert_eq!(i.fits_socket(), Some(SocketKind::Bay), "{id}");
+        }
+        assert_eq!(BotBody::Air.word(), "drone");
+        assert_eq!(BotBody::Ground.word(), "rover");
+    }
+
+    #[test]
+    fn bots_are_validated() {
+        let c = Content::load().unwrap();
+        let at = |c: &Content, id: &str| c.items.iter().position(|i| i.id.0 == id).unwrap();
+        let broken = |id: &str, f: &dyn Fn(&mut Item)| {
+            let mut bad = c.clone();
+            let i = at(&bad, id);
+            f(&mut bad.items[i]);
+            bad.validate()
+        };
+        let invalid =
+            |r: Result<(), ContentError>| matches!(r, Err(ContentError::BotInvalid { .. }));
+        let bot = |f: fn(&mut Bot)| move |i: &mut Item| f(i.bot.as_mut().unwrap());
+        assert!(invalid(broken("scout_drone", &|i| i.bot = None)));
+        assert!(invalid(broken("scout_drone", &|i| {
+            i.implant = Some(Implant {
+                fits: Fits::Back,
+                load: 1,
+            })
+        })));
+        assert!(invalid(broken("scout_drone", &|i| {
+            i.sockets = vec![SocketKind::Bay]
+        })));
+        assert!(invalid(broken("scout_drone", &bot(|b| b.frames.clear()))));
+        assert!(invalid(broken(
+            "scout_drone",
+            &bot(|b| b.frames = vec!['🛸'])
+        )));
+        assert!(invalid(broken("scout_drone", &bot(|b| b.moves = 0))));
+        assert!(invalid(broken(
+            "scout_drone",
+            &bot(|b| { b.docks = SocketKind::Hand })
+        )));
+        assert!(invalid(broken("salvage_jacket", &|i| {
+            i.bot = c.item(&ItemId::new("scout_drone")).unwrap().bot.clone()
+        })));
+        let mut no_art = c.clone();
+        no_art.implant_art.remove(&ItemId::new("scout_drone"));
+        assert!(invalid(no_art.validate()), "a bot without art");
+        // A bay is a chrome socket: on chrome, and on nothing else.
+        assert!(
+            invalid(broken("salvage_jacket", &|i| {
+                i.sockets = vec![SocketKind::Bay]
+            })) || matches!(
+                broken("salvage_jacket", &|i| i.sockets = vec![SocketKind::Bay]),
+                Err(ContentError::SocketsInvalid { .. })
+            )
+        );
+        assert!(broken("grip_arm", &|i| i.sockets.push(SocketKind::Bay)).is_ok());
     }
 
     #[test]
@@ -3025,14 +3189,7 @@ mod tests {
                 vec![],
                 Some((2.0, 2400)),
             ),
-            (
-                "drone_cradle",
-                Back,
-                3,
-                vec![],
-                vec!["scout"],
-                Some((1.8, 4100)),
-            ),
+            ("drone_cradle", Back, 3, vec![], vec![], Some((1.8, 4100))),
             ("adrenal_pump", Organs, 2, vec![], vec!["redline"], None),
             (
                 "second_heart",
