@@ -10,6 +10,7 @@ use citygen::{BuildingId, Place, Pos, StratumKind};
 use route::{Leg, NoLeg};
 use sim::{PersonId, Whereabouts};
 
+pub mod overlay;
 pub mod route;
 
 /// A row of the map's listings, as a thing that can be tracked.
@@ -724,7 +725,7 @@ mod tests {
     }
 
     /// The home city, awake, you on the street outside the megablock's door.
-    fn outside() -> AppState {
+    pub(super) fn outside() -> AppState {
         let mut st = state_home();
         MapScreen::walking(&mut st);
         let b = st.home.unwrap().home.building;
@@ -741,12 +742,12 @@ mod tests {
         st
     }
 
-    fn here(st: &AppState) -> Pos {
+    pub(super) fn here(st: &AppState) -> Pos {
         st.player.as_ref().unwrap().pos
     }
 
     /// Steps from `from` to every street tile outside buildings a walk reaches.
-    fn reach(st: &AppState, from: Pos) -> HashMap<Pos, u32> {
+    pub(super) fn reach(st: &AppState, from: Pos) -> HashMap<Pos, u32> {
         let map = MapRef::stratum_of(st.city.as_ref().unwrap(), StratumKind::Street);
         let open = |p: Pos| {
             map.tile(p).is_some_and(|t| {
@@ -767,7 +768,7 @@ mod tests {
     }
 
     /// A street tile exactly `n` steps from where you stand.
-    fn steps_off(st: &AppState, n: u32) -> Pos {
+    pub(super) fn steps_off(st: &AppState, n: u32) -> Pos {
         let mut at: Vec<Pos> = reach(st, here(st))
             .into_iter()
             .filter(|(_, k)| *k == n)

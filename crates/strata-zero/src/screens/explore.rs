@@ -3058,6 +3058,17 @@ impl Screen for MapScreen {
         if let Some(o) = turn_overlay.as_ref() {
             overlays.push(o);
         }
+        // The tracked walk, last: it only tints backgrounds, and only on its own place.
+        let tracked_leg = crate::track::leg_now(st)
+            .and_then(Result::ok)
+            .filter(|l| l.place == self.place);
+        let track_overlay = tracked_leg.map(|leg| crate::track::overlay::TrackOverlay {
+            leg,
+            arrive: leg.through == crate::track::route::Through::Arrive,
+        });
+        if let Some(o) = track_overlay.as_ref() {
+            overlays.push(o);
+        }
         MapView {
             map: &map,
             origin,
@@ -3072,6 +3083,20 @@ impl Screen for MapScreen {
             },
         }
         .render(map_area, f.buffer_mut());
+
+        if let (Some(leg), Some(m)) = (tracked_leg, crate::track::distance(st)) {
+            let label = st.track.as_ref().map_or("", |t| t.label.as_str());
+            let text =
+                crate::track::overlay::tag_text(label, crate::track::next_now(st), leg.through, m);
+            crate::track::overlay::draw_edge_tag(
+                f.buffer_mut(),
+                map_area,
+                origin,
+                leg,
+                &text,
+                st.tick,
+            );
+        }
 
         if let Some(p) = &st.player {
             if let Some((bk, bp)) = p.body
