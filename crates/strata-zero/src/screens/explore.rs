@@ -270,6 +270,12 @@ impl MapScreen {
         s
     }
 
+    /// The map's rect as last drawn.
+    #[cfg(test)]
+    pub(crate) fn map_area(&self) -> Rect {
+        self.last_map.get()
+    }
+
     pub fn explore(_tick: u64) -> Self {
         MapScreen {
             mode: Mode::Explore,
@@ -2489,6 +2495,10 @@ impl Screen for MapScreen {
             self.cam_ready = true;
         }
         for (i, k) in keys.iter().enumerate() {
+            // A HOLO call up takes space and esc before the map does.
+            if crate::missions::call::key(st, k) {
+                continue;
+            }
             // An aim up: esc drops it and nothing else. A walk in flight: the keys
             // wait for it, but esc still pauses.
             if self.mode == Mode::Walk && self.console.is_none() {
@@ -3026,6 +3036,13 @@ impl Screen for MapScreen {
                     .set_style(Style::default().fg(fg).add_modifier(Modifier::BOLD));
             }
         }
+        // The HOLO call in the map's corner, kept off your `@`.
+        let me = st
+            .player
+            .as_ref()
+            .filter(|p| p.place == self.place)
+            .and_then(|p| tile_to_screen(map_area, origin, p.pos));
+        crate::missions::call::draw(f.buffer_mut(), map_area, me, st);
 
         // The vertical rule on every row but the two rule rows.
         {

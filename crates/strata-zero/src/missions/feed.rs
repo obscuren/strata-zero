@@ -61,14 +61,6 @@ pub fn layout(frame: Rect, text: &[String]) -> (Rect, Vec<String>) {
     (Rect::new(x, y, w, h), lines)
 }
 
-/// A stable mix of the city's seed and the role, so two faces don't glitch in step.
-fn seed_of(st: &AppState, role: &str) -> u64 {
-    let city = st.city.as_ref().map_or(0, |c| c.seed);
-    role.bytes().fold(city, |h, b| {
-        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
-    })
-}
-
 impl Screen for Feed {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
         if keys
@@ -115,7 +107,7 @@ impl Screen for Feed {
         let who = &self.view.from;
         let face = st.book.face_of(who);
         let tick = st.tick.saturating_sub(self.opened);
-        face::draw(buf, r.x + 3, r.y + 3, face, tick, seed_of(st, who));
+        face::draw(buf, r.x + 3, r.y + 3, face, tick, face::seed_of(st, who));
         let name_y = r.y + 4 + face::rows(face);
         let name = super::role_name(st, who).to_uppercase();
         put(buf, r.x + 3, name_y, &name, bold(MAGENTA), right);

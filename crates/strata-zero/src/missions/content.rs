@@ -365,7 +365,6 @@ impl Book {
     }
 
     /// The role's face, or the silhouette.
-    #[allow(dead_code)] // the HOLO feed and call draw it (Tasks 6, 7)
     pub fn face_of(&self, role: &str) -> &Face {
         self.cast
             .get(role)

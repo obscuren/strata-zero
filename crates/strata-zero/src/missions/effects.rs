@@ -28,8 +28,9 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
                 answered: None,
                 line: 0,
                 shown: 0,
+                full: false,
             };
-            ring(st, call);
+            super::call::ring(st, call);
         }
         Effect::Give { item, count } => {
             let id = ItemId::new(item);
@@ -94,17 +95,5 @@ fn dead(st: &mut AppState, role: &str, look: &str) {
     }
     if let Some(w) = st.world.as_mut() {
         w.kill(person);
-    }
-}
-
-/// Puts a call up, or queues it behind the one that is up.
-// Task 7 swaps this for `call::ring`, which knows about fights and voicemail.
-fn ring(st: &mut AppState, call: Call) {
-    st.missions.calls.push_back(call);
-    if st.missions.call.is_none()
-        && let Some(mut up) = st.missions.calls.pop_front()
-    {
-        up.rang = st.clock_tick();
-        st.missions.call = Some(up);
     }
 }

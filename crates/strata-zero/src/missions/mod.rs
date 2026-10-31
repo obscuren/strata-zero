@@ -1,6 +1,7 @@
 //! Story missions: authored chains of steps in `flavor/missions.ron`, cast onto the
 //! city's people and moved on by what the game reports and what the engine sees.
 
+pub mod call;
 pub mod cast;
 pub mod content;
 pub mod effects;
@@ -99,6 +100,8 @@ pub struct Call {
     pub line: usize,
     /// The clock tick that line began.
     pub shown: u64,
+    /// `space` finished typing the line: it shows whole.
+    pub full: bool,
 }
 
 /// What the game reports to the story; everything else it checks each tick.
@@ -159,9 +162,11 @@ pub fn send(st: &mut AppState, ev: Event) {
     fire(st, Some(&ev));
 }
 
-/// The story's beat in the explore update: the conditions checked.
+/// The story's beat in the explore update: the conditions checked, the call's ring
+/// timed.
 pub fn tick(st: &mut AppState) {
     fire(st, None);
+    call::tick(st);
 }
 
 /// The feed or call that step `step` of mission `mission` opened has ended.
@@ -376,7 +381,7 @@ mod tests {
     const STREET: Place = Place::Stratum(StratumKind::Street);
 
     /// Seed 8 with its home moved into, the story begun.
-    fn begun() -> AppState {
+    pub(super) fn begun() -> AppState {
         let mut st = state_home();
         begin(&mut st);
         st
@@ -404,7 +409,7 @@ mod tests {
     }
 
     /// Stands the player on a street tile, having looked around.
-    fn on_street(st: &mut AppState, pos: Pos) {
+    pub(super) fn on_street(st: &mut AppState, pos: Pos) {
         let city = st.city.as_ref().unwrap();
         let mut p = Player::at(STREET, pos);
         p.update_fov(
@@ -444,7 +449,7 @@ mod tests {
     }
 
     /// The welcome closed and the body seen, a minute on: Dez's call is up.
-    fn to_the_call(st: &mut AppState) {
+    pub(super) fn to_the_call(st: &mut AppState) {
         end(st, 0, 0);
         let body = st.missions.bodies[0].pos;
         on_street(st, body);

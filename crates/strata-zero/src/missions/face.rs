@@ -3,6 +3,7 @@
 //! into a magenta and a cyan fringe, and a band loses a channel or drops out.
 
 use super::content::Face;
+use crate::app::AppState;
 use crate::ui::chrome::{CYAN, MAGENTA, PANEL_BG};
 use crate::ui::cyberdeck::Pen;
 use crate::ui::pixels::Pixels;
@@ -26,6 +27,15 @@ type Grid = Vec<Vec<Option<Rgb>>>;
 
 const CYAN_RGB: Rgb = (0, 229, 255);
 const MAGENTA_RGB: Rgb = (255, 0, 200);
+
+/// The glitch seed for a role's face: a stable mix of the city's seed and the role, so
+/// two callers don't glitch in step and one glitches the same in the feed and the call.
+pub fn seed_of(st: &AppState, role: &str) -> u64 {
+    let city = st.city.as_ref().map_or(0, |c| c.seed);
+    role.bytes().fold(city, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
 
 /// The face's height in cells.
 pub fn rows(face: &Face) -> u16 {
