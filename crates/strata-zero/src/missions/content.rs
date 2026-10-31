@@ -288,7 +288,13 @@ impl Book {
             return Err(BookError::Empty(format!("mission `{}`", m.id)));
         }
         self.check_role(&format!("mission `{}`", m.id), &m.from)?;
-        self.check_text(&format!("mission `{}` title", m.id), &m.title)?;
+        // A title is printed raw in the pane, the tab and the dossier: no slots.
+        if m.title.contains('{') {
+            return Err(BookError::UnknownSlot {
+                place: format!("title of mission `{}`", m.id),
+                slot: m.title.clone(),
+            });
+        }
         let mut seen: Vec<&Step> = Vec::new();
         for step in &m.steps {
             let place = format!("{}/{}", m.id, step.id);
@@ -345,6 +351,22 @@ impl Book {
             seen.push(step);
         }
         Ok(())
+    }
+
+    /// Every item a `Give` effect puts in the pack.
+    pub fn gives(&self) -> Vec<&str> {
+        let mut out = BTreeSet::new();
+        for e in self
+            .missions
+            .iter()
+            .flat_map(|m| &m.steps)
+            .flat_map(|s| &s.then)
+        {
+            if let Effect::Give { item, .. } = e {
+                out.insert(item.as_str());
+            }
+        }
+        out.into_iter().collect()
     }
 
     /// Every item a `Give` or `Take` names, for the test that has the content.
@@ -458,6 +480,16 @@ mod tests {
             *from = "nobody".into();
         }
         assert!(matches!(b.validate(), Err(BookError::UnknownRole { .. })));
+    }
+
+    #[test]
+    fn a_slot_in_a_mission_title_is_refused() {
+        let mut b = book();
+        b.missions[0].title = "{marlo}'s drop".into();
+        assert!(matches!(
+            b.validate(),
+            Err(BookError::UnknownSlot { ref place, .. }) if place.contains("title")
+        ));
     }
 
     #[test]

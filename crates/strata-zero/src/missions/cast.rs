@@ -4,7 +4,7 @@
 use super::{Pick, Role};
 use crate::app::AppState;
 use citygen::rng::hash64;
-use citygen::{City, Pos, Rect, StratumKind};
+use citygen::{BuildingId, City, Pos, Rect, StratumKind};
 use sim::{PersonId, Work};
 use std::cmp::Reverse;
 use std::collections::BTreeSet;
@@ -120,18 +120,33 @@ pub fn work_tile(st: &AppState, id: PersonId) -> Option<Pos> {
     match st.world.as_ref()?.people().get(id.0 as usize)?.work {
         Work::Spot(pos) => Some(pos),
         Work::Roaming => None,
-        Work::Building(b) => {
-            let fp = city.building_opt(b)?.footprint;
-            // A walk-in kind has no portals.
-            let portals = city.portals(b);
-            let from = portals
-                .iter()
-                .find(|(k, _)| *k == StratumKind::Street)
-                .or(portals.first())
-                .map_or_else(|| fp.center(), |(_, p)| *p);
-            outside(city, fp, from)
-        }
+        Work::Building(b) => outside_building(city, b),
     }
+}
+
+/// The walkable Street tile just outside building `b`, nearest its Street door (or its
+/// middle when it has none, as a walk-in kind).
+fn outside_building(city: &City, b: BuildingId) -> Option<Pos> {
+    let fp = city.building_opt(b)?.footprint;
+    // A walk-in kind has no portals.
+    let portals = city.portals(b);
+    let from = portals
+        .iter()
+        .find(|(k, _)| *k == StratumKind::Street)
+        .or(portals.first())
+        .map_or_else(|| fp.center(), |(_, p)| *p);
+    outside(city, fp, from)
+}
+
+/// Where a dead person's body lies: their work tile, else where they stand on the
+/// street, else the street outside their home. None only when all three fail.
+pub fn body_tile(st: &AppState, id: PersonId) -> Option<Pos> {
+    work_tile(st, id)
+        .or_else(|| st.world.as_ref()?.pos_of(id))
+        .or_else(|| {
+            let home = st.world.as_ref()?.people().get(id.0 as usize)?.home?;
+            outside_building(st.city.as_ref()?, home)
+        })
 }
 
 /// The walkable Street tile outside `fp` nearest `from`, ring by ring.

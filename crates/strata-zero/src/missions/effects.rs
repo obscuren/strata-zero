@@ -83,7 +83,7 @@ fn dead(st: &mut AppState, role: &str, look: &str) {
     if world.is_dead(person) {
         return;
     }
-    if let Some(pos) = cast::work_tile(st, person).or_else(|| world.pos_of(person)) {
+    if let Some(pos) = cast::body_tile(st, person) {
         let body = Body {
             person,
             name: role_name(st, role),
@@ -92,6 +92,8 @@ fn dead(st: &mut AppState, role: &str, look: &str) {
             look: fill(st, look),
         };
         st.missions.bodies.push(body);
+    } else if st.dev {
+        st.warn(format!("story · no place for {role}'s body"));
     }
     if let Some(w) = st.world.as_mut() {
         w.kill(person);

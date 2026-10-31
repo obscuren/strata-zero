@@ -27,6 +27,7 @@ pub use content::*;
 use crate::app::AppState;
 use crate::render::Visibility;
 use citygen::{Place, Pos, StratumKind};
+use game::ItemId;
 use sim::PersonId;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -166,6 +167,12 @@ pub fn begin(st: &mut AppState) {
         for role in uncast {
             st.warn(format!("story · no {role} in this city"));
         }
+    }
+    // The story restarts, so its items do: take back what an earlier start gave.
+    let given: Vec<ItemId> = st.book.gives().into_iter().map(ItemId::new).collect();
+    for id in given {
+        let held = st.character.count(&id);
+        game::remove_from_pack(&mut st.character, &id, held);
     }
     send(st, Event::NewGame);
 }
@@ -615,6 +622,58 @@ mod tests {
         end(&mut st, 0, 0);
         assert_eq!(st.character.count(&ItemId::new("taped_package")), 1);
         assert_eq!(st.missions.bodies.len(), 1);
+    }
+
+    #[test]
+    fn a_second_city_in_a_session_gives_one_package() {
+        let mut st = begun();
+        end(&mut st, 0, 0);
+        assert_eq!(st.character.count(&ItemId::new("taped_package")), 1);
+        // Loading a city keeps the character and restarts the story.
+        let city = Generator::run(GenParams {
+            seed: 8,
+            size: SizePreset::Medium,
+            districts: 7,
+            ..Default::default()
+        })
+        .unwrap();
+        st.enter_city(city);
+        begin(&mut st);
+        assert!(st.missions.begun);
+        assert_eq!(st.character.count(&ItemId::new("taped_package")), 0);
+        end(&mut st, 0, 0);
+        assert_eq!(st.character.count(&ItemId::new("taped_package")), 1);
+    }
+
+    #[test]
+    fn a_roamer_who_dies_still_leaves_a_body() {
+        let mut st = begun();
+        let (roamer, home) = {
+            let world = st.world.as_ref().unwrap();
+            let p = world
+                .people()
+                .iter()
+                .find(|p| p.work == sim::Work::Roaming && p.home.is_some() && !world.is_dead(p.id))
+                .expect("someone roams");
+            (p.id, p.home.unwrap())
+        };
+        assert_eq!(cast::work_tile(&st, roamer), None);
+        st.missions.cast.insert("marlo".into(), roamer);
+        end(&mut st, 0, 0);
+        assert!(st.world.as_ref().unwrap().is_dead(roamer));
+        let body = st.missions.bodies.last().expect("a body");
+        assert_eq!(body.person, roamer);
+        let city = st.city.as_ref().unwrap();
+        assert!(
+            city.walkable(StratumKind::Street, body.pos),
+            "{:?}",
+            body.pos
+        );
+        assert!(
+            !city.building(home).footprint.contains(body.pos),
+            "{:?} is inside home",
+            body.pos
+        );
     }
 
     #[test]
