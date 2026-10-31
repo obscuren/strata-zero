@@ -1291,7 +1291,36 @@ impl Deck {
 }
 
 impl Deck {
+    /// `t` on the JOBS tab: tracks the selected job or story step, or stops it.
+    fn track_row(&self, st: &mut AppState) {
+        let rows = self.rows(st);
+        let result = match rows.get(self.row).and_then(|r| r.detail.as_ref()) {
+            Some(Detail::Job(id)) => match crate::track::ui::job_source(st, *id) {
+                Some(src) => crate::track::toggle(st, src),
+                None if st
+                    .jobs
+                    .get(*id)
+                    .is_some_and(|j| j.state == crate::jobs::State::Offered) =>
+                {
+                    Err("take it first".to_string())
+                }
+                None => return,
+            },
+            Some(Detail::Mission(m)) => match crate::track::ui::story_source(st, *m) {
+                Some(src) => crate::track::toggle(st, src),
+                None => return,
+            },
+            _ => return,
+        };
+        if let Err(e) = result {
+            st.warn(e);
+        }
+        crate::track::tick(st);
+    }
+
     fn handle(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+        // A popup may have changed a job: the track follows before the deck draws it.
+        crate::track::tick(st);
         // A popup may have removed the selected row: reselect before drawing, keys or not.
         let rows = self.rows(st);
         if self.row >= rows.len() || rows.get(self.row).is_some_and(|r| r.detail.is_none()) {
@@ -1383,6 +1412,7 @@ impl Deck {
                         self.set_tab(*tab, st);
                     }
                 }
+                KeyCode::Char('t' | 'T') if self.tab == Tab::Jobs => self.track_row(st),
                 KeyCode::Up | KeyCode::Char('k') => self.move_row(&rows, -1, st.tick),
                 KeyCode::Down | KeyCode::Char('j') => self.move_row(&rows, 1, st.tick),
                 KeyCode::Left | KeyCode::Char('h') if self.tab == Tab::Skills => {
@@ -1737,6 +1767,9 @@ impl Screen for Deck {
                     Tab::Kit => self.kit.hints(),
                     Tab::Workbench if st.character.has_workbench(&st.content) => {
                         self.workbench.hints(st)
+                    }
+                    Tab::Jobs => {
+                        "Q/E tabs · ↑↓ select · 0-8 jump · space act · t track · tab close"
                     }
                     _ => "Q/E tabs · ↑↓ select · 0-8 jump · space act · tab close",
                 },

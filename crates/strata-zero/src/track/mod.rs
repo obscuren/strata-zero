@@ -12,6 +12,7 @@ use sim::{PersonId, Whereabouts};
 
 pub mod overlay;
 pub mod route;
+pub mod ui;
 
 /// A row of the map's listings, as a thing that can be tracked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

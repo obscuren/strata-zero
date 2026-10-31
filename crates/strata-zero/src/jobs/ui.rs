@@ -155,6 +155,10 @@ pub fn detail(st: &AppState, id: JobId) -> Vec<Line<'static>> {
             plain(format!("☐ {}", o.text))
         });
     }
+    if let Some(src) = crate::track::ui::job_source(st, id) {
+        out.push(plain(""));
+        out.push(crate::track::ui::detail_line(st, &src));
+    }
     out
 }
 

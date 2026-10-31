@@ -293,11 +293,16 @@ mod tests {
         let mut off = st;
         off.track = None;
         let without = draw(&s, &off, 60, 20);
+        // The map only: the sidebar's JOBS pane has the track's own line.
+        let area = s.map_area();
         let mut bgs = 0;
-        for (a, b) in with.content().iter().zip(without.content()) {
-            assert_eq!(a.symbol(), b.symbol());
-            assert_eq!(a.fg, b.fg);
-            bgs += (a.bg != b.bg) as usize;
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                let (a, b) = (&with[(x, y)], &without[(x, y)]);
+                assert_eq!(a.symbol(), b.symbol());
+                assert_eq!(a.fg, b.fg);
+                bgs += (a.bg != b.bg) as usize;
+            }
         }
         assert!(bgs > 0, "the glow shows");
     }
@@ -314,7 +319,16 @@ mod tests {
         let mut off = st;
         off.track = None;
         let without = draw(&s, &off, 60, 20);
-        assert_eq!(with, without);
+        // The sidebar's JOBS pane has the track's own line; the rest is the map's.
+        let area = s.map_area();
+        for y in area.y..area.bottom() {
+            if (area.x..area.right()).any(|x| with[(x, y)].symbol() == "⌖") {
+                continue;
+            }
+            for x in area.x..area.right() {
+                assert_eq!(with[(x, y)], without[(x, y)], "at {x},{y}");
+            }
+        }
     }
 
     #[test]
