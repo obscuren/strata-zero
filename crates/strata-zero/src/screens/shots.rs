@@ -1507,3 +1507,54 @@ fn holo_call_glitch() {
         shot_stack(&format!("holo_call_glitch_{w}x{h}"), &st, &[&map], (w, h));
     }
 }
+
+/// TALENTS, the board, as the mockups drew it: EDGE with Quick draw 3, Double tap 2, Light
+/// step 2 and Steady hand 1, Ice pick 2 in ICE, two points to burn; the cursor on Hair
+/// trigger (open) and on Bullet time (out of reach); and MEAT with nothing spent and no
+/// points, the board between levels.
+#[test]
+#[ignore]
+fn talents_board() {
+    use crate::ui::talents::TalentsState;
+    let sizes = [(100u16, 30u16), (120, 40)];
+    let runner = || {
+        let mut st = state_home();
+        st.character = game::Character::debug_runner(&st.content);
+        st.character.talents.clear();
+        for (id, r) in [
+            ("quick_draw", 3u8),
+            ("double_tap", 2),
+            ("light_step", 2),
+            ("steady_hand", 1),
+            ("ice_pick", 2),
+        ] {
+            st.character.talents.insert(game::TalentId::new(id), r);
+        }
+        st.character.talent_points = 2;
+        st
+    };
+    let edge = |spot: (usize, usize)| TalentsState {
+        tree: 1,
+        spots: vec![(0, 0), spot],
+    };
+    for (name, talents, points) in [
+        ("talents_board_open", edge((2, 0)), 2),
+        ("talents_board_locked", edge((2, 1)), 2),
+        ("talents_board_meat_no_points", TalentsState::default(), 0),
+    ] {
+        let mut st = runner();
+        st.character.talent_points = points;
+        let map = MapScreen::walking(&mut st);
+        let mut deck = Deck::new(st.tick);
+        deck.update(&mut st, &[key(KeyCode::Char('0'))]);
+        deck.talents = talents;
+        deck.changed = st.tick;
+        st.tick += 200;
+        if st.tick % 90 < 3 {
+            st.tick += 3;
+        }
+        for (w, h) in sizes {
+            shot_stack(&format!("{name}_{w}x{h}"), &st, &[&map, &deck], (w, h));
+        }
+    }
+}
