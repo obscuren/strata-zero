@@ -1,6 +1,6 @@
 //! The map itself: pixels, markers, the cursor, district names and the tracked walk.
 
-use super::{Cache, cached, map_stratum};
+use super::{Cache, map_stratum};
 use crate::app::AppState;
 use crate::render::style::StylePack;
 use crate::render::{Rgb, Visibility};
@@ -123,14 +123,6 @@ fn walk_on<'a>(st: &'a AppState, cache: &'a Cache, k: StratumKind) -> Option<&'a
 
 fn vis_of(st: &AppState, k: StratumKind) -> Option<&Grid<Visibility>> {
     st.player.as_ref()?.vis_at(Place::Stratum(k))
-}
-
-/// The colour of the `s` × `s` pixel at tile (`x0`, `y0`) of a stratum (spec 7).
-pub fn pixel(st: &AppState, stratum: StratumKind, x0: i32, y0: i32, s: i32) -> Color {
-    match st.city.as_ref() {
-        Some(city) => shade(city, &st.style, stratum, vis_of(st, stratum), x0, y0, s).to_color(),
-        None => PANEL_BG,
-    }
 }
 
 /// Walkable ground under whatever stands on it: a stall on a pavement is pavement.
@@ -272,12 +264,28 @@ impl Pixels {
 /// The tracked walk on the pixels: each pixel it crosses lit by its first tile in the
 /// street's floor glow, then the ripple round the target (or, when the target is not on
 /// this map, a dimmer cyan one round the way on).
-fn glow_walk(st: &AppState, px: &mut Pixels, l: &MapLayout, leg: &Leg, k: StratumKind) {
+fn glow_walk(
+    st: &AppState,
+    px: &mut Pixels,
+    l: &MapLayout,
+    leg: &Leg,
+    k: StratumKind,
+    quiet: Option<Rect>,
+) {
     let (t, n) = (st.tick, leg.path.len());
+    // Nothing moves under the card.
+    let still = |(x, y): (i32, i32)| {
+        quiet.is_some_and(|r| {
+            let (cx, cy) = (l.area.x as i32 + x, l.area.y as i32 + y.div_euclid(2));
+            (r.x as i32..r.right() as i32).contains(&cx)
+                && (r.y as i32..r.bottom() as i32).contains(&cy)
+        })
+    };
     let mut lit = HashSet::new();
     for (i, p) in leg.path.iter().enumerate() {
         let at = l.pixel_of(*p);
         if lit.insert(at)
+            && !still(at)
             && let Some(c) = px.get_mut(at)
         {
             *c = c.mix(CYAN_RGB, glow(i, n, t));
@@ -293,6 +301,7 @@ fn glow_walk(st: &AppState, px: &mut Pixels, l: &MapLayout, leg: &Leg, k: Stratu
         for dx in -7..=7 {
             let f = strength * ripple_px(((dx * dx + dy * dy) as f32).sqrt(), t);
             if f >= 0.02
+                && !still((cx + dx, cy + dy))
                 && let Some(c) = px.get_mut((cx + dx, cy + dy))
             {
                 *c = c.mix(colour, f);
@@ -315,6 +324,27 @@ fn paint(buf: &mut Buffer, l: &MapLayout, px: &Pixels) {
     }
 }
 
+/// Whether a listing shows, on the map and in the pane: of the chosen kind, pinned, or
+/// tracked.
+pub fn shows(st: &AppState, l: &Listing) -> bool {
+    st.atlas.kind.is_none_or(|k| k == l.kind) || l.kind.pinned() || tracked(st, l)
+}
+
+fn tracked(st: &AppState, l: &Listing) -> bool {
+    is_tracked(st, &source_of(st, l))
+}
+
+/// Which listing's marker wins a shared cell, lowest first: the tracked one, then jobs
+/// and the story, then home, then the rest (you are 0).
+pub fn rank(st: &AppState, l: &Listing) -> u8 {
+    match l.kind {
+        _ if tracked(st, l) => 1,
+        Kind::Jobs => 2,
+        Kind::Home => 3,
+        _ => 4,
+    }
+}
+
 /// The markers on the map, one a cell: you, then the tracked one, then the pinned
 /// (jobs and story, home), then the rest, the nearest first. Listings of the chosen
 /// kind show, and the pinned and the tracked one whatever the kind.
@@ -327,16 +357,8 @@ pub fn markers(st: &AppState, layout: &MapLayout, listings: &[Listing]) -> Vec<M
         }
     };
     for (i, l) in listings.iter().enumerate() {
-        let tracked = is_tracked(st, &source_of(st, l));
-        let shown = st.atlas.kind.is_none_or(|k| k == l.kind) || l.kind.pinned() || tracked;
-        let Some(cell) = layout.cell_of(l.tile).filter(|_| shown) else {
+        let Some(cell) = layout.cell_of(l.tile).filter(|_| shows(st, l)) else {
             continue;
-        };
-        let rank = match l.kind {
-            _ if tracked => 1,
-            Kind::Jobs => 2,
-            Kind::Home => 3,
-            _ => 4,
         };
         let m = Marker {
             cell,
@@ -344,7 +366,7 @@ pub fn markers(st: &AppState, layout: &MapLayout, listings: &[Listing]) -> Vec<M
             colour: l.kind.color(),
             listing: Some(i),
         };
-        offer(rank, m);
+        offer(rank(st, l), m);
     }
     let you = layout.stratum.and_then(|k| you_on(st, k));
     if let Some(cell) = you.and_then(|p| layout.cell_of(p)) {
@@ -422,7 +444,8 @@ fn draw_names(
 /// The first tile of the view along one axis, `cells` cells of `per` tiles over a
 /// stratum `len` long: centred when the stratum is shorter than the view; else panned
 /// to keep the cursor `c` four cells inside (centred on it when it starts or leaves the
-/// view) and clamped to the stratum.
+/// view) and clamped to the stratum. Always on the stratum's grid of cells, so a cell
+/// covers the same tiles however the view got there.
 fn pan(prev: i32, c: i32, len: i32, cells: i32, per: i32, restart: bool) -> i32 {
     if len <= cells * per {
         let used = (len + per - 1) / per;
@@ -439,14 +462,16 @@ fn pan(prev: i32, c: i32, len: i32, cells: i32, per: i32, restart: bool) -> i32 
     } else {
         prev
     };
-    o.clamp(0, len - cells * per)
+    let grid = |o: i32| o - o.rem_euclid(per);
+    let far = len - cells * per;
+    grid(o).clamp(0, far + (per - far.rem_euclid(per)) % per)
 }
 
-/// Draws the map into `area`: pixels, the tracked walk on them, markers, the cursor and
-/// district names. Starts the cursor (on the tracked target, else on you) and pans the
-/// view to keep it four cells inside; the deck `settle`s what it returns.
-pub fn draw_map(st: &AppState, area: Rect, buf: &mut Buffer) -> MapLayout {
-    let area = area.intersection(buf.area);
+/// Where the map in `area` looks and where its cursor stands (spec 7): the cursor
+/// starts on the tracked target, else on you, when the map's stratum is new to it or it
+/// has none; the view pans to keep it four cells inside, or centres on it when it
+/// starts or after a zoom.
+pub fn layout(st: &AppState, area: Rect) -> MapLayout {
     let mut layout = MapLayout {
         area,
         s: 1,
@@ -454,26 +479,14 @@ pub fn draw_map(st: &AppState, area: Rect, buf: &mut Buffer) -> MapLayout {
         cursor: None,
         stratum: None,
     };
-    if area.is_empty() {
-        return layout;
-    }
     let k = map_stratum(st);
-    let city = st.city.as_ref();
-    let size = city
+    let size = st
+        .city
+        .as_ref()
         .and_then(|c| c.stratum(k))
         .map(|s| s.tiles.size())
         .filter(|s| s.w > 0 && s.h > 0);
-    let (Some(city), Some(size), Some(_)) = (city, size, st.player.as_ref()) else {
-        let ground = Style::default().fg(DIM).bg(PANEL_BG);
-        for y in area.y..area.bottom() {
-            for x in area.x..area.right() {
-                buf[(x, y)].reset();
-                buf[(x, y)].set_style(ground);
-            }
-        }
-        let room = area.width.saturating_sub(1) as usize;
-        let text = "no signal — walk the city first";
-        buf.set_stringn(area.x + 1, area.y, text, room, ground);
+    let (false, Some(size), Some(_)) = (area.is_empty(), size, st.player.as_ref()) else {
         return layout;
     };
     let s = st
@@ -494,22 +507,50 @@ pub fn draw_map(st: &AppState, area: Rect, buf: &mut Buffer) -> MapLayout {
     let (w, h) = (size.w as i32, size.h as i32);
     let cursor = Pos::new(c.x.clamp(0, w - 1), c.y.clamp(0, h - 1));
     let (prev, cols, rows) = (st.atlas.origin, area.width as i32, area.height as i32);
+    let centre = restart || st.atlas.recentre;
     layout.s = s;
     layout.origin = Pos::new(
-        pan(prev.x, cursor.x, w, cols, s, restart),
-        pan(prev.y, cursor.y, h, rows, 2 * s, restart),
+        pan(prev.x, cursor.x, w, cols, s, centre),
+        pan(prev.y, cursor.y, h, rows, 2 * s, centre),
     );
     layout.cursor = Some(cursor);
     layout.stratum = Some(k);
+    layout
+}
 
-    let cache = cached(st);
-    let mut px = Pixels::of(st, city, k, &layout);
-    if let Some(leg) = walk_on(st, &cache, k) {
-        glow_walk(st, &mut px, &layout, leg, k);
+/// Draws the map as `l` lays it out: pixels, the tracked walk on them, markers, the
+/// cursor and district names; nothing animates in `quiet` (the card's cells).
+pub(super) fn draw_at(
+    st: &AppState,
+    l: &MapLayout,
+    cache: &Cache,
+    quiet: Option<Rect>,
+    buf: &mut Buffer,
+) {
+    let area = l.area;
+    if area.is_empty() {
+        return;
     }
-    paint(buf, &layout, &px);
+    let (Some(city), Some(k), Some(cursor)) = (st.city.as_ref(), l.stratum, l.cursor) else {
+        let ground = Style::default().fg(DIM).bg(PANEL_BG);
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                buf[(x, y)].reset();
+                buf[(x, y)].set_style(ground);
+            }
+        }
+        let room = area.width.saturating_sub(1) as usize;
+        let text = "no signal — walk the city first";
+        buf.set_stringn(area.x + 1, area.y, text, room, ground);
+        return;
+    };
+    let mut px = Pixels::of(st, city, k, l);
+    if let Some(leg) = walk_on(st, cache, k) {
+        glow_walk(st, &mut px, l, leg, k, quiet);
+    }
+    paint(buf, l, &px);
     let mut taken = HashSet::new();
-    for m in markers(st, &layout, &cache.listings) {
+    for m in markers(st, l, &cache.listings) {
         let (top, bottom) = px.cell(m.cell.0 - area.x, m.cell.1 - area.y);
         let bg = top.mix(bottom, 0.5).scale(0.45);
         let style = Style::default()
@@ -519,17 +560,16 @@ pub fn draw_map(st: &AppState, area: Rect, buf: &mut Buffer) -> MapLayout {
         buf[m.cell].set_char(m.glyph).set_style(style);
         taken.insert(m.cell);
     }
-    if let Some(cell) = layout.cell_of(cursor) {
+    if let Some(cell) = l.cell_of(cursor) {
         taken.extend(draw_cursor(buf, area, cell));
     }
-    draw_names(buf, st, city, &layout, &mut taken);
-    layout
+    draw_names(buf, st, city, l, &mut taken);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::Zoom;
     use super::super::tests::{ON_STREET, STREET, outside, put, you};
+    use super::super::{Zoom, cached};
     use super::*;
     use crate::track::Source;
     use crate::track::listings::listings;
@@ -540,8 +580,19 @@ mod tests {
     /// The map drawn into `area` of a buffer a little larger.
     fn draw(st: &AppState, area: Rect) -> (Buffer, MapLayout) {
         let mut buf = Buffer::empty(Rect::new(0, 0, area.right() + 3, area.bottom() + 2));
-        let layout = draw_map(st, area, &mut buf);
-        (buf, layout)
+        let l = layout(st, area);
+        draw_at(st, &l, &cached(st), None, &mut buf);
+        (buf, l)
+    }
+
+    /// The colour of the `s` × `s` pixel at tile (`x0`, `y0`) of a stratum (spec 7).
+    fn pixel(st: &AppState, stratum: StratumKind, x0: i32, y0: i32, s: i32) -> Color {
+        match st.city.as_ref() {
+            Some(city) => {
+                shade(city, &st.style, stratum, vis_of(st, stratum), x0, y0, s).to_color()
+            }
+            None => PANEL_BG,
+        }
     }
 
     /// The nearest ripperdoc on the street that a walk reaches.

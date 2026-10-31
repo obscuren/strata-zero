@@ -9,7 +9,7 @@ use crate::jobs::State;
 use crate::render::map::{MapRef, TileMap};
 use crate::ui::chrome::MAGENTA;
 use crate::ui::hud::AMBER;
-use citygen::{BuildingId, BuildingKind, Place, Pos, StratumKind};
+use citygen::{BuildingId, BuildingKind, Grid, Place, Pos, StratumKind};
 use ratatui::style::Color;
 use sim::{PersonId, Work};
 
@@ -29,7 +29,6 @@ pub enum Kind {
 }
 
 impl Kind {
-    #[allow(dead_code)] // the places pane steps through them
     pub const ALL: [Kind; 10] = [
         Kind::Jobs,
         Kind::Home,
@@ -73,7 +72,6 @@ impl Kind {
         }
     }
 
-    #[allow(dead_code)] // the places pane names the kind shown
     pub fn label(self) -> &'static str {
         match self {
             Kind::Jobs => "jobs & story",
@@ -244,7 +242,9 @@ pub fn listings(st: &AppState, stratum: StratumKind) -> Vec<Listing> {
             });
         }
     }
-    distances(st, stratum, &mut out);
+    if let Some(d) = walk_field(st, stratum) {
+        distances(st, &d, &mut out);
+    }
     sort_listings(&mut out);
     out
 }
@@ -321,13 +321,19 @@ pub(crate) fn building_tile(st: &AppState, b: BuildingId, stratum: StratumKind) 
     (!x.kind.is_closed() && x.span.contains(stratum)).then(|| x.footprint.center())
 }
 
-/// Fills in each listing's walk: one BFS over the stratum from where you start.
-fn distances(st: &AppState, stratum: StratumKind, out: &mut [Listing]) {
-    let (Some(city), Some(from)) = (st.city.as_ref(), walk_from(st, stratum)) else {
+/// Steps of walk from you to every tile of a stratum (`u32::MAX` where none reaches):
+/// one BFS from where you start.
+pub fn walk_field(st: &AppState, stratum: StratumKind) -> Option<Grid<u32>> {
+    let (city, from) = (st.city.as_ref()?, walk_from(st, stratum)?);
+    let map = MapRef::stratum_of(city, stratum);
+    Some(field(map.size(), &[from], open(map, true, &[], &[])))
+}
+
+/// Fills in each listing's walk from the walk field `d`.
+fn distances(st: &AppState, d: &Grid<u32>, out: &mut [Listing]) {
+    let Some(city) = st.city.as_ref() else {
         return;
     };
-    let map = MapRef::stratum_of(city, stratum);
-    let d = field(map.size(), &[from], open(map, true, &[], &[]));
     let at = |p: Pos| d.get(p).copied().filter(|n| *n != u32::MAX);
     for l in out.iter_mut() {
         // On it, else beside it (a door is a wall to the walk).

@@ -34,7 +34,6 @@ pub enum Source {
     /// A listing from the map.
     Listing(ListingId),
     /// A tile picked on the map (or from the console), arrived within `radius`.
-    #[allow(dead_code)] // the map's cursor and the console make it
     Spot { place: Place, pos: Pos, radius: i32 },
 }
 

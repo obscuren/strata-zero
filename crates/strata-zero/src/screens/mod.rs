@@ -1,7 +1,5 @@
 //! Screens: one module per screen, plus shared test helpers.
 
-// Its reader, the deck's MAP tab, arrives with the places pane and the keys.
-#[allow(dead_code)]
 pub mod atlas;
 pub mod bench;
 pub mod blueprint;

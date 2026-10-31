@@ -9,6 +9,9 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::widgets::Widget;
 
+// The deck's MAP drew it until the atlas took its place; kept for whoever draws a
+// memory next (spec 11).
+#[allow(dead_code)]
 pub struct MemoryMap<'a> {
     pub map: &'a MapRef<'a>,
     pub vis: &'a Grid<Visibility>,
