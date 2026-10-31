@@ -60,6 +60,75 @@ pub struct Track {
     /// What the pane and the log call it: "Miracorp Tattoo", "The drop", "the spot".
     pub label: String,
     walk: Walk,
+    pulses: Pulses,
+}
+
+impl Track {
+    /// The pulses on the leg as it stands at tick `t`.
+    fn pulse(&mut self, t: u64) {
+        let walk = self.walk.leg.as_ref().ok().map(|l| (l.place, l.path.len()));
+        self.pulses.step(walk, t);
+    }
+}
+
+/// Ticks between pulses: 3 s.
+pub const PULSE_EVERY: u64 = 90;
+
+/// A bright band along a walk (spec 4), pinned to the walk: it fired at `t0` from your
+/// end of a walk `len` tiles long, and runs on towards the goal.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pulse {
+    pub t0: u64,
+    pub len: usize,
+}
+
+impl Pulse {
+    /// How many tiles from the goal its head is at tick `t`; below zero past it.
+    pub fn head(&self, t: u64) -> f32 {
+        self.len as f32 - 0.9 * t.saturating_sub(self.t0) as f32
+    }
+
+    /// Its tail is not yet past the goal.
+    fn alive(&self, t: u64) -> bool {
+        self.head(t) >= -12.0
+    }
+}
+
+/// The pulses running along one walk: one fired every `PULSE_EVERY` ticks, the first
+/// the moment the walk is drawn; started again when the walk moves to another place.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Pulses {
+    /// The place of the walk they run on.
+    place: Option<Place>,
+    /// When the last one fired.
+    last: Option<u64>,
+    fired: Vec<Pulse>,
+}
+
+impl Pulses {
+    /// At tick `t`, on a walk of `len` tiles in `place` (none when nothing is drawn):
+    /// drops the pulses past the goal and fires one when it is time.
+    pub fn step(&mut self, walk: Option<(Place, usize)>, t: u64) {
+        let Some((place, len)) = walk else {
+            *self = Pulses::default();
+            return;
+        };
+        if self.place != Some(place) {
+            *self = Pulses {
+                place: Some(place),
+                ..Pulses::default()
+            };
+        }
+        self.fired.retain(|p| p.alive(t));
+        if self.last.is_none_or(|l| t >= l + PULSE_EVERY) {
+            self.fired.push(Pulse { t0: t, len });
+            self.last = Some(t);
+        }
+    }
+
+    pub fn all(&self) -> &[Pulse] {
+        &self.fired
+    }
 }
 
 /// The leg as last made, and what it was made from.
@@ -112,11 +181,14 @@ pub fn set(st: &mut AppState, source: Source) -> Result<String, String> {
     }
     let label = label(st, &source);
     let text = format!("⌖ tracking {label}");
-    st.track = Some(Track {
+    let mut track = Track {
         source,
         label,
         walk,
-    });
+        pulses: Pulses::default(),
+    };
+    track.pulse(st.tick);
+    st.track = Some(track);
     st.say(text.clone());
     Ok(text)
 }
@@ -159,8 +231,18 @@ fn end(st: &mut AppState, line: impl FnOnce(&str) -> String) -> Option<String> {
 
 /// The track's beat in the explore update, after the story's (spec 3): cleared when
 /// its source ends or its person is gone, or when you arrive (never for the story,
-/// whose own trigger decides); else its leg remade when you or the target moved.
+/// whose own trigger decides); else its leg remade when you or the target moved, and
+/// its pulses fired and dropped.
 pub fn tick(st: &mut AppState) {
+    follow(st);
+    let now = st.tick;
+    if let Some(t) = st.track.as_mut() {
+        t.pulse(now);
+    }
+}
+
+/// Clears the track, or brings its leg up to date.
+fn follow(st: &mut AppState) {
     let Some(t) = st.track.as_ref() else {
         return;
     };
@@ -267,6 +349,11 @@ pub fn target_now(st: &AppState) -> Option<Target> {
 /// What comes after the leg ("door, then 6F"); nothing when it arrives.
 pub fn next_now(st: &AppState) -> Option<&str> {
     st.track.as_ref()?.walk.next.as_deref()
+}
+
+/// The pulses on the track's leg.
+pub fn pulses_now(st: &AppState) -> &[Pulse] {
+    st.track.as_ref().map_or(&[], |t| t.pulses.all())
 }
 
 /// The leg's length in tiles.
@@ -712,6 +799,7 @@ mod tests {
             source: Source::Spot { place, pos, radius },
             label: "the spot".to_string(),
             walk: Walk::new(&st, Target::Spot { place, pos, radius }),
+            pulses: Pulses::default(),
         });
         let city = st.city.clone().unwrap();
         st.enter_city_at(city, 0);
@@ -1200,6 +1288,106 @@ mod tests {
         put(&mut st, STREET, step);
         tick(&mut st);
         assert_eq!(leg_now(&st), Some(Err(NoLeg::NoWay)));
+    }
+
+    #[test]
+    fn a_pulse_fires_at_once_and_every_three_seconds() {
+        let mut st = outside();
+        st.tick = 1000;
+        let to = steps_off(&st, 120);
+        set(&mut st, street_spot(to, 1)).unwrap();
+        let first = Pulse { t0: 1000, len: 120 };
+        assert_eq!(pulses_now(&st), [first]);
+        for t in 1001..1090 {
+            st.tick = t;
+            tick(&mut st);
+        }
+        assert_eq!(pulses_now(&st), [first]);
+        // A long walk has two in flight.
+        st.tick = 1090;
+        tick(&mut st);
+        let second = Pulse { t0: 1090, len: 120 };
+        assert_eq!(pulses_now(&st), [first, second]);
+        // The first goes once its tail is past the goal: 120 − 0.9 · 147 < −12.
+        st.tick = 1146;
+        tick(&mut st);
+        assert_eq!(pulses_now(&st).len(), 2);
+        st.tick = 1147;
+        tick(&mut st);
+        assert_eq!(pulses_now(&st), [second]);
+        // A short walk: one dies long before the next fires, and the timer still waits.
+        let mut st = outside();
+        st.tick = 0;
+        let to = steps_off(&st, 6);
+        set(&mut st, street_spot(to, 1)).unwrap();
+        for t in 1..90 {
+            st.tick = t;
+            tick(&mut st);
+        }
+        assert!(pulses_now(&st).is_empty());
+        st.tick = 90;
+        tick(&mut st);
+        assert_eq!(pulses_now(&st), [Pulse { t0: 90, len: 6 }]);
+    }
+
+    /// The tiles of the leg a pulse lights at this tick, with how much.
+    fn lit(st: &AppState) -> Vec<(Pos, f32)> {
+        let leg = leg_now(st).unwrap().unwrap();
+        let n = leg.path.len();
+        leg.path
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let g = overlay::from_goal(i, n);
+                (*p, overlay::glow(g, pulses_now(st), st.tick))
+            })
+            .filter(|(_, f)| *f > 0.3)
+            .collect()
+    }
+
+    #[test]
+    fn a_step_along_the_walk_leaves_the_pulses_where_they_were() {
+        let mut st = outside();
+        let to = steps_off(&st, 60);
+        set(&mut st, street_spot(to, 1)).unwrap();
+        st.tick += 30;
+        tick(&mut st);
+        let before = lit(&st);
+        assert!(before.len() >= 5, "{before:?}");
+        for k in 1..=3 {
+            let step = leg_now(&st).unwrap().unwrap().path[0];
+            put(&mut st, STREET, step);
+            tick(&mut st);
+            assert_eq!(distance(&st), Some(60 - k), "the leg is made again");
+            assert_eq!(lit(&st), before, "a step does not move them");
+        }
+    }
+
+    #[test]
+    fn the_pulses_start_again_in_another_place() {
+        let mut st = outside();
+        let landing = here(&st);
+        let to = steps_off(&st, 40);
+        let b = st.home.unwrap().home.building;
+        let lobby = Place::Floor {
+            building: b,
+            level: 0,
+        };
+        let lift = st.interiors.floor(b, 0).unwrap().0.lift.unwrap();
+        put(&mut st, lobby, lift);
+        st.tick = 500;
+        set(&mut st, street_spot(to, 1)).unwrap();
+        let n = distance(&st).unwrap();
+        assert_eq!(leg_now(&st).unwrap().unwrap().place, lobby);
+        assert_eq!(pulses_now(&st), [Pulse { t0: 500, len: n }]);
+        st.tick = 505;
+        tick(&mut st);
+        assert_eq!(pulses_now(&st), [Pulse { t0: 500, len: n }]);
+        // Out on the street: one fired at once, the lobby's gone.
+        put(&mut st, STREET, landing);
+        tick(&mut st);
+        assert_eq!(leg_now(&st).unwrap().unwrap().place, STREET);
+        assert_eq!(pulses_now(&st), [Pulse { t0: 505, len: 40 }]);
     }
 
     #[test]

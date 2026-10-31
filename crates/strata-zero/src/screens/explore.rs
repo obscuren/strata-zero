@@ -3064,6 +3064,7 @@ impl Screen for MapScreen {
             .filter(|l| l.place == self.place);
         let track_overlay = tracked_leg.map(|leg| crate::track::overlay::TrackOverlay {
             leg,
+            pulses: crate::track::pulses_now(st),
             arrive: leg.through == crate::track::route::Through::Arrive,
         });
         if let Some(o) = track_overlay.as_ref() {

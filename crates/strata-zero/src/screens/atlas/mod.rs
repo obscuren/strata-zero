@@ -12,7 +12,7 @@ use crate::app::AppState;
 use crate::render::map::MapRef;
 use crate::track::listings::{self, Kind, Listing, walk_from};
 use crate::track::route::{self, Leg};
-use crate::track::{ListingId, Target, target_now};
+use crate::track::{ListingId, Pulses, Target, target_now};
 use crate::ui::chrome::{CYAN, FAINTER, PANEL_BG};
 use citygen::{Grid, Place, Pos, StratumKind};
 use map::MapLayout;
@@ -51,6 +51,9 @@ pub struct AtlasState {
     /// Where the map was last laid out, for the keys.
     pub layout: Option<MapLayout>,
     cache: Cache,
+    /// The pulses on the walk from your building's way out, while you are inside one
+    /// (on the street the map's walk is the track's leg, with the track's pulses).
+    pulses: Pulses,
 }
 
 impl AtlasState {
@@ -171,13 +174,21 @@ fn cached(st: &AppState) -> Cow<'_, Cache> {
     }
 }
 
-/// Brings the map's listings and walk up to date; the deck calls it each frame the map
-/// shows, so a draw finds them made.
+/// Brings the map's listings and walk up to date, and the pulses on that walk; the deck
+/// calls it each frame the map shows, so a draw finds them made.
 pub fn refresh(st: &mut AppState) {
     let key = Key::now(st);
     if st.atlas.cache.key != Some(key) {
         st.atlas.cache = Cache::new(st, key);
     }
+    let walk = st
+        .atlas
+        .cache
+        .walk
+        .as_ref()
+        .map(|w| (w.place, w.path.len()));
+    let now = st.tick;
+    st.atlas.pulses.step(walk, now);
 }
 
 /// The listings of the map's stratum, nearest first: the cached ones while fresh.
@@ -493,6 +504,51 @@ pub(crate) mod tests {
         let here = you(&st);
         put(&mut st, ON_STREET, here.offset(0, 1));
         assert!(matches!(listed(&st), Cow::Owned(_)), "you moved");
+    }
+
+    #[test]
+    fn inside_the_maps_walk_has_pulses_of_its_own() {
+        let mut st = outside();
+        let landing = you(&st);
+        let doc = clinic(&st);
+        crate::track::set(&mut st, crate::track::Source::Listing(doc.id)).unwrap();
+        let b = st.home.unwrap().home.building;
+        let lift = st.interiors.floor(b, 0).unwrap().0.lift.unwrap();
+        let lobby = Place::Floor {
+            building: b,
+            level: 0,
+        };
+        put(&mut st, lobby, lift);
+        st.tick = 300;
+        crate::track::tick(&mut st);
+        refresh(&mut st);
+        let walk = st
+            .atlas
+            .cache
+            .walk
+            .clone()
+            .expect("the walk from the way out");
+        let first = crate::track::Pulse {
+            t0: 300,
+            len: walk.path.len(),
+        };
+        assert_eq!(st.atlas.pulses.all(), [first]);
+        st.tick = 310;
+        refresh(&mut st);
+        assert_eq!(st.atlas.pulses.all(), [first]);
+        st.tick = 389;
+        refresh(&mut st);
+        assert!(st.atlas.pulses.all().iter().all(|p| p.t0 == 300));
+        st.tick = 390;
+        refresh(&mut st);
+        let second = crate::track::Pulse { t0: 390, ..first };
+        assert_eq!(st.atlas.pulses.all().last(), Some(&second));
+        // Back on the street the map runs the track's own.
+        put(&mut st, ON_STREET, landing);
+        crate::track::tick(&mut st);
+        refresh(&mut st);
+        assert!(st.atlas.cache.walk.is_none());
+        assert!(st.atlas.pulses.all().is_empty());
     }
 
     #[test]

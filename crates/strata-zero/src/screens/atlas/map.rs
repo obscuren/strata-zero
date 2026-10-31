@@ -5,9 +5,9 @@ use crate::app::AppState;
 use crate::render::style::StylePack;
 use crate::render::{Rgb, Visibility};
 use crate::track::listings::{self, Kind, Listing, source_of};
-use crate::track::overlay::{glow, mix, ripple_px};
+use crate::track::overlay::{from_goal, glow, mix, ripple_px};
 use crate::track::route::Leg;
-use crate::track::{is_tracked, leg_now, target_now};
+use crate::track::{Pulse, is_tracked, leg_now, pulses_now, target_now};
 use crate::ui::chrome::{CYAN, CYAN_RGB, DIM, MAGENTA_RGB, PANEL_BG, PANEL_BG_RGB};
 use citygen::{
     City, DistrictId, Grid, Place, Pos, Rect as TileRect, Size, StratumKind, Terrain, Tile,
@@ -15,7 +15,7 @@ use citygen::{
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// The ground of a pixel no district colours.
 const NEUTRAL: Rgb = Rgb(40, 44, 52);
@@ -90,16 +90,20 @@ fn you_on(st: &AppState, k: StratumKind) -> Option<Pos> {
     listings::standing(st, k).map(|s| s.door)
 }
 
-/// The walk to draw on stratum `k`'s map: the leg while you are on `k`, else the walk
-/// from your building's way out.
-fn walk_on<'a>(st: &'a AppState, cache: &'a Cache, k: StratumKind) -> Option<&'a Leg> {
+/// The walk to draw on stratum `k`'s map and the pulses on it: the leg and its pulses
+/// while you are on `k`, else the walk from your building's way out and its own.
+fn walk_on<'a>(
+    st: &'a AppState,
+    cache: &'a Cache,
+    k: StratumKind,
+) -> Option<(&'a Leg, &'a [Pulse])> {
     let on_k = st
         .player
         .as_ref()
         .is_some_and(|p| p.place == Place::Stratum(k));
     match leg_now(st) {
-        Some(Ok(leg)) if on_k && leg.place == Place::Stratum(k) => Some(leg),
-        _ => cache.walk.as_ref(),
+        Some(Ok(leg)) if on_k && leg.place == Place::Stratum(k) => Some((leg, pulses_now(st))),
+        _ => cache.walk.as_ref().map(|w| (w, st.atlas.pulses.all())),
     }
 }
 
@@ -243,18 +247,30 @@ impl Pixels {
     }
 }
 
-/// The tracked walk on the pixels: each pixel it crosses lit by its first tile in the
-/// street's floor glow, then the ripple round the target (or, when the target is not on
-/// this map, a dimmer cyan one round the way on).
+/// How much of the cyan each pixel the walk crosses takes at tick `t`, in the street's
+/// floor glow: the best of the tiles it holds.
+fn glows(l: &MapLayout, leg: &Leg, pulses: &[Pulse], t: u64) -> HashMap<(i32, i32), f32> {
+    let n = leg.path.len();
+    let mut lit: HashMap<(i32, i32), f32> = HashMap::new();
+    for (i, p) in leg.path.iter().enumerate() {
+        let f = glow(from_goal(i, n), pulses, t);
+        let best = lit.entry(l.pixel_of(*p)).or_insert(f);
+        *best = best.max(f);
+    }
+    lit
+}
+
+/// The tracked walk on the pixels in the street's floor glow, then the ripple round the
+/// target (or, when the target is not on this map, a dimmer cyan one round the way on).
 fn glow_walk(
     st: &AppState,
     px: &mut Pixels,
     l: &MapLayout,
-    leg: &Leg,
+    (leg, pulses): (&Leg, &[Pulse]),
     k: StratumKind,
     quiet: Option<Rect>,
 ) {
-    let (t, n) = (st.tick, leg.path.len());
+    let t = st.tick;
     // Nothing moves under the card.
     let still = |(x, y): (i32, i32)| {
         quiet.is_some_and(|r| {
@@ -263,14 +279,11 @@ fn glow_walk(
                 && (r.y as i32..r.bottom() as i32).contains(&cy)
         })
     };
-    let mut lit = HashSet::new();
-    for (i, p) in leg.path.iter().enumerate() {
-        let at = l.pixel_of(*p);
-        if lit.insert(at)
-            && !still(at)
+    for (at, f) in glows(l, leg, pulses, t) {
+        if !still(at)
             && let Some(c) = px.get_mut(at)
         {
-            *c = c.mix(CYAN_RGB, glow(i, n, t));
+            *c = c.mix(CYAN_RGB, f);
         }
     }
     let target = target_now(st).and_then(|x| listings::target_tile(st, k, x));
@@ -922,6 +935,34 @@ mod tests {
             walked.iter().any(|c| with[*c] != without[*c]),
             "the walk glows"
         );
+    }
+
+    #[test]
+    fn the_map_walk_runs_the_same_pulses() {
+        let mut st = outside();
+        let doc = clinic(&st);
+        crate::track::set(&mut st, Source::Listing(doc.id)).unwrap();
+        st.tick += 20;
+        crate::track::tick(&mut st);
+        st.atlas.stratum = Some(STREET);
+        st.atlas.cursor = Some(you(&st));
+        let l = layout(&st, Rect::new(2, 1, 81, 26));
+        let cache = cached(&st);
+        let (leg, pulses) = walk_on(&st, &cache, STREET).unwrap();
+        assert_eq!(crate::track::leg_now(&st), Some(Ok(leg)));
+        assert_eq!(pulses, crate::track::pulses_now(&st));
+        assert_eq!(pulses.len(), 1);
+        // The head's pixel is as bright as the head's tile on the street, and each
+        // pixel takes the best of its tiles.
+        let lit = glows(&l, leg, pulses, st.tick);
+        let n = leg.path.len();
+        let head = pulses[0].head(st.tick);
+        assert_eq!(head, n as f32 - 18.0);
+        let tile = leg.path[n - 1 - head as usize];
+        assert!((lit[&l.pixel_of(tile)] - 0.85).abs() < 1e-3);
+        for (i, p) in leg.path.iter().enumerate() {
+            assert!(lit[&l.pixel_of(*p)] >= glow(from_goal(i, n), pulses, st.tick));
+        }
     }
 
     #[test]

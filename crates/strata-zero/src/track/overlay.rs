@@ -2,6 +2,7 @@
 //! and a tag on the edge names the way when the goal is out of view. Spec
 //! `docs/superpowers/specs/2026-10-31-tracking-and-map-design.md`, 4.
 
+use super::Pulse;
 use super::route::{Leg, Through};
 use crate::render::Rgb;
 use crate::render::map::{MapRef, TileMap};
@@ -18,18 +19,23 @@ use std::f32::consts::{PI, TAU};
 const TAG_FG: Rgb = Rgb(205, 212, 222);
 const TAG_BG: Rgb = Rgb(4, 6, 10);
 
-/// How much of the cyan the `i`th tile of an `n`-tile walk takes at tick `t`: a slow
-/// breath, and a band running along the walk.
-pub fn glow(i: usize, n: usize, t: u64) -> f32 {
-    let t = t as f32;
-    let breathe = 0.22 + 0.06 * (TAU * t / 60.0).sin();
-    let head = (0.9 * t) % (n as f32 + 24.0);
-    let d = head - i as f32;
-    if (0.0..12.0).contains(&d) {
-        breathe.max(0.85 * (1.0 - d / 12.0))
-    } else {
-        breathe
-    }
+/// How much of the cyan a tile `g` tiles from the goal along the walk takes at tick
+/// `t`: a slow breath, and each pulse's head with its trail behind it, the brightest.
+pub fn glow(g: usize, pulses: &[Pulse], t: u64) -> f32 {
+    let breathe = 0.22 + 0.06 * (TAU * t as f32 / 60.0).sin();
+    pulses.iter().fold(breathe, |f, p| {
+        let d = g as f32 - p.head(t);
+        if (0.0..12.0).contains(&d) {
+            f.max(0.85 * (1.0 - d / 12.0))
+        } else {
+            f
+        }
+    })
+}
+
+/// How far from the goal the `i`th tile of an `n`-tile walk is.
+pub fn from_goal(i: usize, n: usize) -> usize {
+    n.saturating_sub(i + 1)
 }
 
 /// How much of the colour a cell `dx`, `dy` tiles from the goal takes at tick `t`: a
@@ -76,6 +82,7 @@ pub fn mix(a: Color, b: Color, f: f32) -> Color {
 /// The leg's glow, under the glyphs: backgrounds only.
 pub struct TrackOverlay<'a> {
     pub leg: &'a Leg,
+    pub pulses: &'a [Pulse],
     /// The goal is the target itself (a magenta ripple), not a way on (a cyan one).
     pub arrive: bool,
 }
@@ -94,7 +101,8 @@ impl Overlay for TrackOverlay<'_> {
         for (i, p) in self.leg.path.iter().enumerate() {
             if let Some((sx, sy)) = tile_to_screen(area, origin, *p) {
                 let c = &mut buf[(sx, sy)];
-                c.set_bg(mix(c.bg, CYAN, glow(i, n, tick)));
+                let f = glow(from_goal(i, n), self.pulses, tick);
+                c.set_bg(mix(c.bg, CYAN, f));
             }
         }
         let (colour, strength) = if self.arrive {
@@ -244,23 +252,30 @@ mod tests {
     const STREET: Place = Place::Stratum(StratumKind::Street);
 
     #[test]
-    fn glow_breathes_and_the_band_runs() {
-        let n = 40;
-        // The head sits on tile 10 when 0.9·t = 10.
-        let t = 0;
-        assert!((glow(5, n, t) - 0.22).abs() < 1e-3);
-        let t = 100; // head 90 mod 64 = 26
-        assert!((glow(26, n, t) - 0.85).abs() < 1e-3, "{}", glow(26, n, t));
-        // Far from the head, only the breath.
+    fn glow_breathes_and_the_pulses_run_to_the_goal() {
+        // No pulse: only the breath.
+        assert!((glow(5, &[], 0) - 0.22).abs() < 1e-3);
         for t in 0..200 {
-            let head = (0.9 * t as f32) % (n as f32 + 24.0);
-            let far = if head > 20.0 { 0 } else { 39 };
-            let f = glow(far, n, t);
+            let f = glow(7, &[], t);
             assert!((0.16..=0.28).contains(&f), "t {t} f {f}");
         }
-        // The head moves forward.
-        let at = |t: u64| (0..n).max_by(|a, b| glow(*a, n, t).total_cmp(&glow(*b, n, t)));
-        assert!(at(30) < at(40));
+        // Fired at 100 on a 40-tile walk: at 120 the head is 40 − 18 = 22 from the goal.
+        let p = [Pulse { t0: 100, len: 40 }];
+        assert_eq!(p[0].head(120), 22.0);
+        assert!((glow(22, &p, 120) - 0.85).abs() < 1e-3);
+        // The trail is behind it, away from the goal; ahead of it, only the breath.
+        assert!((glow(28, &p, 120) - 0.425).abs() < 1e-3);
+        assert_eq!(glow(21, &p, 120), glow(21, &[], 120));
+        assert_eq!(glow(34, &p, 120), glow(34, &[], 120));
+        // It runs towards the goal.
+        let at = |t: u64| (0..40).max_by(|a, b| glow(*a, &p, t).total_cmp(&glow(*b, &p, t)));
+        assert!(at(130) < at(120));
+        // Two at once: the brightest wins.
+        let two = [Pulse { t0: 100, len: 40 }, Pulse { t0: 110, len: 40 }];
+        assert!((glow(31, &two, 120) - 0.85).abs() < 1e-3);
+        assert!((glow(22, &two, 120) - 0.85).abs() < 1e-3);
+        assert_eq!(from_goal(0, 40), 39);
+        assert_eq!(from_goal(39, 40), 0);
     }
 
     #[test]
