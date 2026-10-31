@@ -234,8 +234,9 @@ fn map_area(body: Rect, folded: bool) -> Rect {
     )
 }
 
-/// Draws the MAP tab into the deck's `body`: the title row, the map, and the places
-/// pane, or, folded, the strip and the card (spec 7). The deck settles what it returns.
+/// Draws the MAP tab into the deck's `body`: the title row, the map, the places pane or,
+/// folded, the strip, and the card of the listing under the cursor (spec 7). The deck
+/// settles what it returns.
 pub fn draw(st: &AppState, body: Rect, buf: &mut Buffer) -> MapLayout {
     let body = body.intersection(buf.area);
     let ground = Style::default().bg(PANEL_BG);
@@ -252,8 +253,7 @@ pub fn draw(st: &AppState, body: Rect, buf: &mut Buffer) -> MapLayout {
     }
     let cache = cached(st);
     let all = &cache.listings;
-    let under = under(st, &l, all);
-    let card = under.filter(|_| st.atlas.folded).and_then(|i| {
+    let card = under(st, &l, all).and_then(|i| {
         let at = pane::card_box(&l)?;
         Some((at, &all[i]))
     });
@@ -261,11 +261,11 @@ pub fn draw(st: &AppState, body: Rect, buf: &mut Buffer) -> MapLayout {
     title(st, &l, body, buf);
     if st.atlas.folded {
         pane::strip(st, body, all, buf);
-        if let Some((at, x)) = card {
-            pane::card(st, &l, at, x, buf);
-        }
     } else {
         pane::pane(st, &l, body, &cache, buf);
+    }
+    if let Some((at, x)) = card {
+        pane::card(st, &l, at, x, buf);
     }
     l
 }

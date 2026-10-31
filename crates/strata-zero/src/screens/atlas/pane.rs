@@ -1,5 +1,5 @@
-//! The places pane beside the map, the strip that marks it folded, and the card that
-//! stands in for it then (spec 7, `map2.html`).
+//! The places pane beside the map, the strip that marks it folded, and the card beside
+//! the listing under the cursor (spec 7, `map2.html`).
 
 use super::map::{self, MapLayout};
 use super::{Cache, pane_width, spot_under_cursor, under};
@@ -324,8 +324,8 @@ pub(super) fn card_box(l: &MapLayout) -> Option<Rect> {
     Some(Rect::new(x, y, w, h))
 }
 
-/// The card for the listing under the cursor (folded only): its glyph and name, what it
-/// is, where and how far, and what `t` does.
+/// The card for the listing under the cursor, the pane open or folded: its glyph and
+/// name, what it is, where and how far, and what `t` does.
 pub(super) fn card(st: &AppState, l: &MapLayout, at: Rect, x: &Listing, buf: &mut Buffer) {
     let walk = x.walk.map_or("—".to_string(), |m| format!("{m} m"));
     let place = match l.stratum.and_then(|k| district_of(st, k, x)) {
@@ -543,6 +543,58 @@ mod tests {
         let buf = frame(&mut st, b);
         assert!(row(&buf, b, b.y).starts_with(" PLACES ‹ ripperdocs ›"));
         assert_eq!(sym(&buf, b.right() - 36, b.y + 3), "│");
+    }
+
+    #[test]
+    fn the_card_shows_with_the_pane_open() {
+        for b in [BODY_120, BODY_100] {
+            let mut st = outside();
+            let doc = clinic(&st);
+            st.atlas.stratum = Some(STREET);
+            st.atlas.cursor = Some(doc.tile);
+            frame(&mut st, b);
+            press(&mut st, 't');
+            let buf = frame(&mut st, b);
+            let l = laid(&st);
+            assert!(!st.atlas.folded);
+            let card = card_box(&l).expect("a card");
+            let a = l.area;
+            assert!(
+                card.x >= a.x && card.right() <= a.right(),
+                "{card:?} in {a:?}"
+            );
+            assert!(
+                card.y >= a.y && card.bottom() <= a.bottom(),
+                "{card:?} in {a:?}"
+            );
+            assert_eq!(sym(&buf, card.x, card.y), "┌");
+            assert_eq!(sym(&buf, card.right() - 1, card.bottom() - 1), "┘");
+            let inner = |y: u16| text(&buf, y, card.x + 1..card.right() - 1);
+            let name: String = doc.name.chars().take(20).collect();
+            assert!(inner(card.y + 1).starts_with("+ "), "{}", inner(card.y + 1));
+            assert!(inner(card.y + 1).contains(&name));
+            assert!(inner(card.y + 4).starts_with("⌖ tracking · t stops"));
+            // The row still opens in the list.
+            let y = (b.y + 3..b.bottom())
+                .find(|y| row(&buf, b, *y).contains(&name))
+                .expect("the clinic's row");
+            assert!(row(&buf, b, y + 2).contains("⌖ tracking · t stops"));
+            // Nothing animates under it.
+            let cells = |buf: &Buffer| -> Vec<ratatui::buffer::Cell> {
+                card.positions().map(|p| buf[(p.x, p.y)].clone()).collect()
+            };
+            st.tick += 11;
+            let later = frame(&mut st, b);
+            assert_eq!(cells(&buf), cells(&later));
+            // Off the listings, no card.
+            open_ground(&mut st, b);
+            let buf = frame(&mut st, b);
+            let l = laid(&st);
+            let map: String = (l.area.y..l.area.bottom())
+                .map(|y| text(&buf, y, l.area.x..l.area.right()))
+                .collect();
+            assert!(!map.contains(&name), "{b:?}");
+        }
     }
 
     #[test]
