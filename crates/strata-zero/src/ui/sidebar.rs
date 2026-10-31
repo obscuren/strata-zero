@@ -23,7 +23,8 @@ const LOG_MIN: u16 = 3;
 /// The fewest rows MAP keeps (separator, a squeezed minimap, the coordinate row).
 const MAP_MIN: u16 = 7;
 const HERE_CAP: u16 = 7;
-const JOBS_CAP: u16 = 4;
+/// The rows the job in hand may take; the story's lines come on top of them.
+const JOBS_CAP: u16 = 5;
 const INSPECT_CAP: u16 = 14;
 const ITEM_ROWS: usize = 5;
 /// Ticks the newest log entry takes to type out.
@@ -192,8 +193,11 @@ pub struct SidebarView<'a> {
     pub now: u64,
     /// The ICE the player can see in their construct, one line each.
     pub ice_lines: Vec<String>,
-    /// The JOBS pane: the job in hand, from `jobs::ui::pane_lines`.
+    /// The JOBS pane: the story, then the job in hand, from `missions::ui::jobs_pane`.
     pub jobs: Vec<Line<'static>>,
+    /// How many of `jobs`' leading lines are the story's: they add their rows to the
+    /// pane's cap, so the job in hand keeps its own.
+    pub story_lines: usize,
 }
 
 fn plain(text: impl Into<String>) -> Line<'static> {
@@ -470,7 +474,8 @@ pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) -> V
             }
             Section::Jobs => {
                 let l = v.jobs.clone();
-                let n = rows_for(&l, w).min(JOBS_CAP);
+                let (story, job) = l.split_at(v.story_lines.min(l.len()));
+                let n = rows_for(story, w) + rows_for(job, w).min(JOBS_CAP);
                 (l, n)
             }
             Section::Map => (Vec::new(), MINIMAP_H + 1),
@@ -591,7 +596,8 @@ mod tests {
             net: &st.net,
             now: 0,
             ice_lines: Vec::new(),
-            jobs: crate::jobs::ui::pane_lines(st),
+            jobs: crate::missions::ui::jobs_pane(st),
+            story_lines: crate::missions::ui::pane_lines(st).len(),
         }
     }
 
@@ -764,6 +770,36 @@ mod tests {
         assert!(text.contains("· Street"), "coordinate row: {text}");
         assert_eq!(width(100), 40);
         assert_eq!(width(120), 40);
+    }
+
+    #[test]
+    fn an_open_story_mission_leaves_the_job_in_hand_whole() {
+        let mut st = crate::jobs::testutil::state_home();
+        crate::missions::begin(&mut st);
+        st.dev = false;
+        st.tick += 200;
+        st.missions.runs[0]
+            .objectives
+            .push("Hand the package to Marlo at the noodle stall".into());
+        // The job in hand: a title, an objective that wraps, the bar.
+        let id = st.jobs.active().expect("the welcome favour is in hand").id;
+        let job = st.jobs.list.iter_mut().find(|j| j.id == id).unwrap();
+        job.objectives[0].text = "Take the shard and keep it dry in the rain".into();
+        let title = job.title.to_uppercase();
+        let total = job.objectives.len();
+        let story = crate::missions::ui::pane_lines(&st);
+        assert!(!story.is_empty(), "the story is open");
+        let (k, pos) = {
+            let rig = st.home.unwrap();
+            (rig.place(), rig.home.bed_side)
+        };
+        for (w, h) in [(100, 30), (120, 40)] {
+            let text = draw_to(&view(&st, pos, k), &st.sidebar, width(w), h);
+            assert!(text.contains("THE DROP"), "{w}x{h}: {text}");
+            assert!(text.contains(&title), "{w}x{h}: {text}");
+            assert!(text.contains(&format!("0/{total}")), "{w}x{h}: {text}");
+            assert!(text.contains("rain"), "{w}x{h}: {text}");
+        }
     }
 
     #[test]

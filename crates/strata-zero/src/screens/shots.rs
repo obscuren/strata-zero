@@ -413,6 +413,7 @@ fn combat_marked() {
 fn keypad_over_the_home_floor() {
     let mut st = state_home();
     let map = MapScreen::walking(&mut st);
+    crate::jobs::first_favour(&mut st);
     st.tick += 200;
     let (b, level, number, _) = crate::jobs::first_fetch(&st).expect("the favour");
     let mut pad = Keypad::open(&st, b, level, number);
@@ -483,6 +484,8 @@ fn terminals_by_theme() {
 fn the_rig_at_home() {
     let mut st = state_home();
     let map = MapScreen::walking(&mut st);
+    // A new game mails nothing now; the favour's mail is the one the rig reads.
+    crate::jobs::first_favour(&mut st);
     let home = st.home.unwrap().home;
     let mut term = Terminal::open(&mut st, HostId::Rig, (map.place, home.rig));
     type_lines(&mut st, &mut term, &["cat ~/mail/001-a-favour.txt"]);
@@ -1068,11 +1071,9 @@ fn offer_window() {
     shot("offer", &st, &map, &popup);
 }
 
-/// A fixer's offer over the map, the welcome job dropped first.
+/// A fixer's offer over the map, nothing in hand.
 fn offer_stack(st: &mut AppState) -> (MapScreen, Popup) {
     let map = MapScreen::walking(st);
-    let welcome = st.jobs.active().unwrap().id;
-    st.jobs.drop_job(welcome);
     let fx = st
         .world
         .as_ref()
@@ -1397,4 +1398,112 @@ fn ripperdoc_clinic() {
     chair_shots("clinic_fits_swap", 1200, false, arm, &[KeyCode::Char(' ')]);
     chair_shots("clinic_x_asks", 1200, false, arm, &[KeyCode::Char('x')]);
     chair_shots("clinic_free", 1200, true, arm, &[]);
+}
+
+/// The two sizes the HOLO shots are drawn at.
+const HOLO_SIZES: [(u16, u16); 2] = [(120, 40), (100, 30)];
+
+/// Seed 8 with the story begun, the welcome closed (the package given, Marlo dead at his
+/// station) and the player on the street beside the body, the map's camera there.
+fn street_by_the_body() -> (AppState, MapScreen) {
+    let mut st = state_home();
+    let _ = MapScreen::walking(&mut st);
+    crate::missions::begin(&mut st);
+    st.missions.feeds.clear();
+    crate::missions::end(&mut st, 0, 0);
+    let body = st.missions.bodies[0].pos;
+    let street = Place::Stratum(StratumKind::Street);
+    let beside = {
+        let city = st.city.as_ref().unwrap();
+        let world = st.world.as_ref().unwrap();
+        body.neighbors4()
+            .find(|&n| city.walkable(StratumKind::Street, n) && world.person_at(n).is_none())
+            .expect("a free tile beside the body")
+    };
+    {
+        let p = st.player.as_mut().unwrap();
+        p.place = street;
+        p.pos = beside;
+    }
+    let bonus = st.sight_bonus();
+    let mut p = st.player.take().unwrap();
+    {
+        let city = st.city.as_ref().unwrap();
+        let map = crate::render::map::MapRef::for_place(
+            city,
+            &st.interiors,
+            &st.constructs,
+            street,
+            st.minute_of_day(),
+        )
+        .unwrap();
+        p.update_fov(&map, bonus);
+    }
+    st.player = Some(p);
+    let map = MapScreen::walking(&mut st);
+    (st, map)
+}
+
+/// A minute on from the welcome: Dez's call rings.
+fn ringing_call() -> (AppState, MapScreen) {
+    let (mut st, map) = street_by_the_body();
+    crate::missions::tick(&mut st);
+    if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
+        world.advance(city, world.tick() + sim::TICKS_PER_MINUTE);
+    }
+    crate::missions::tick(&mut st);
+    assert!(st.missions.call.is_some(), "Dez rings");
+    (st, map)
+}
+
+fn holo_space(st: &mut AppState) {
+    assert!(crate::missions::call::key(st, &key(KeyCode::Char(' '))));
+}
+
+#[test]
+#[ignore]
+fn holo_feed() {
+    let mut st = state_home();
+    let map = MapScreen::walking(&mut st);
+    crate::missions::begin(&mut st);
+    let view = st.missions.feeds.pop_front().unwrap();
+    let feed = crate::missions::feed::Feed::new(view, st.tick);
+    for (w, h) in HOLO_SIZES {
+        shot_stack(&format!("holo_feed_{w}x{h}"), &st, &[&map, &feed], (w, h));
+    }
+}
+
+#[test]
+#[ignore]
+fn holo_call_ringing() {
+    let (st, map) = ringing_call();
+    for (w, h) in HOLO_SIZES {
+        shot_stack(&format!("holo_call_ringing_{w}x{h}"), &st, &[&map], (w, h));
+    }
+}
+
+#[test]
+#[ignore]
+fn holo_call_talking() {
+    let (mut st, map) = ringing_call();
+    holo_space(&mut st);
+    holo_space(&mut st);
+    for (w, h) in HOLO_SIZES {
+        shot_stack(&format!("holo_call_talking_{w}x{h}"), &st, &[&map], (w, h));
+    }
+}
+
+#[test]
+#[ignore]
+fn holo_call_glitch() {
+    let (mut st, map) = ringing_call();
+    holo_space(&mut st);
+    holo_space(&mut st);
+    let seed = crate::missions::face::seed_of(&st, "dez");
+    st.tick = (0..600)
+        .find(|&t| crate::missions::face::burst(t, seed).is_some())
+        .expect("a burst frame");
+    for (w, h) in HOLO_SIZES {
+        shot_stack(&format!("holo_call_glitch_{w}x{h}"), &st, &[&map], (w, h));
+    }
 }

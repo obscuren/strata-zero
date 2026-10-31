@@ -270,6 +270,32 @@ impl MapScreen {
         s
     }
 
+    /// The map's rect as last drawn.
+    #[cfg(test)]
+    pub(crate) fn map_area(&self) -> Rect {
+        self.last_map.get()
+    }
+
+    /// Look mode is open.
+    #[cfg(test)]
+    pub(crate) fn is_looking(&self) -> bool {
+        self.looking.is_some()
+    }
+
+    /// On foot with nothing of the map's own open: no console, look, pick, aim, armed
+    /// shot, walk in flight or help. Only then are space and esc a HOLO call's.
+    fn plain_walk(&self) -> bool {
+        self.mode == Mode::Walk
+            && self.console.is_none()
+            && self.looking.is_none()
+            && self.which_way.is_none()
+            && self.targeting.is_none()
+            && self.aim.is_none()
+            && self.armed.is_none()
+            && self.walking.is_none()
+            && !self.help
+    }
+
     pub fn explore(_tick: u64) -> Self {
         MapScreen {
             mode: Mode::Explore,
@@ -2399,6 +2425,13 @@ impl MapScreen {
 
 impl Screen for MapScreen {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+        // A HOLO feed waiting: it opens over the map.
+        if let Some(view) = st.missions.feeds.pop_front() {
+            return ScreenCmd::Push {
+                to: Box::new(crate::missions::feed::Feed::new(view, st.tick)),
+                fx: TransitionKind::Glitch,
+            };
+        }
         // Black ICE killed: the screen reads the cause.
         if let Some(cause) = st.net.death.clone() {
             return ScreenCmd::Switch {
@@ -2482,6 +2515,11 @@ impl Screen for MapScreen {
             self.cam_ready = true;
         }
         for (i, k) in keys.iter().enumerate() {
+            // A HOLO call up takes space and esc before the walk keys, once look mode,
+            // a pick, an aim and help have had theirs.
+            if self.plain_walk() && crate::missions::call::key(st, k) {
+                continue;
+            }
             // An aim up: esc drops it and nothing else. A walk in flight: the keys
             // wait for it, but esc still pauses.
             if self.mode == Mode::Walk && self.console.is_none() {
@@ -2596,6 +2634,7 @@ impl Screen for MapScreen {
         st.net.minute(now, inside, &mut st.constructs, &roots);
         crate::net::tick_backdoors(st);
         crate::jobs::tick(st);
+        crate::missions::tick(st);
         // A fixer beside you has their offer ready before you talk.
         if self.mode == Mode::Walk {
             crate::jobs::ui::prepare_offers(st, &|pl, p| self.inside_person_at(pl, p));
@@ -2801,6 +2840,7 @@ impl Screen for MapScreen {
             vis,
             eyes: &eyes,
             foes: &st.foes,
+            bodies: &st.missions.bodies,
         });
         if let Some(p) = people.as_ref() {
             overlays.push(p);
@@ -3017,6 +3057,13 @@ impl Screen for MapScreen {
                     .set_style(Style::default().fg(fg).add_modifier(Modifier::BOLD));
             }
         }
+        // The HOLO call in the map's corner, kept off your `@`.
+        let me = st
+            .player
+            .as_ref()
+            .filter(|p| p.place == self.place)
+            .and_then(|p| tile_to_screen(map_area, origin, p.pos));
+        crate::missions::call::draw(f.buffer_mut(), map_area, me, st);
 
         // The vertical rule on every row but the two rule rows.
         {
@@ -3138,7 +3185,8 @@ impl Screen for MapScreen {
             dev: st.dev,
             net: &st.net,
             now: st.net.now(st),
-            jobs: crate::jobs::ui::pane_lines(st),
+            jobs: crate::missions::ui::jobs_pane(st),
+            story_lines: crate::missions::ui::pane_lines(st).len(),
             ice_lines: match (self.place, st.player.as_ref()) {
                 (Place::Construct(b), Some(p)) if p.place == self.place => {
                     let vis = p.vis();
@@ -5899,6 +5947,8 @@ mod tests {
     fn space_at_the_rig_offers_access_rig() {
         let mut st = state_home();
         let mut s = MapScreen::walking(&mut st);
+        // A new game mails nothing now; the favour's mail is the one the rig reads.
+        crate::jobs::first_favour(&mut st);
         let rig = st.home.unwrap();
         let home = Place::Floor {
             building: rig.home.building,

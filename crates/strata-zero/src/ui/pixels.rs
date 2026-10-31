@@ -52,6 +52,16 @@ impl Pixels {
         self.rect(x, y0, x + 1, y1, c);
     }
 
+    /// The pixel at (x, y); off the canvas is empty.
+    #[cfg(test)]
+    pub fn get(&self, x: i32, y: i32) -> Option<Color> {
+        if (0..self.w).contains(&x) && (0..self.h).contains(&y) {
+            self.at(x, y)
+        } else {
+            None
+        }
+    }
+
     fn at(&self, x: i32, y: i32) -> Option<Color> {
         self.px[(y * self.w + x) as usize]
     }

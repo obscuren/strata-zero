@@ -148,6 +148,11 @@ pub struct AppState {
     pub jobs: crate::jobs::Jobs,
     /// The fixers' voice.
     pub flavor: crate::jobs::Flavor,
+    /// The story missions' book.
+    pub book: crate::missions::Book,
+    /// The story this session: the cast, where each mission stands, its bodies and the
+    /// HOLO's queue; cleared with the city.
+    pub missions: crate::missions::Missions,
 }
 
 /// One ability effect playing on the map.
@@ -286,6 +291,8 @@ impl AppState {
             helix: Default::default(),
             jobs: Default::default(),
             flavor: crate::jobs::Flavor::load().expect("the jobs pack is valid"),
+            book: crate::missions::Book::load().expect("the missions pack is valid"),
+            missions: Default::default(),
         }
     }
 
@@ -398,6 +405,7 @@ impl AppState {
         self.journal = Default::default();
         self.helix = Default::default();
         self.jobs = Default::default();
+        self.missions = Default::default();
         crate::credentials::purge(&mut self.content, &mut self.character);
         self.ground = Default::default();
         self.player = None;

@@ -223,6 +223,7 @@ pub fn rows(st: &AppState, fixer: PersonId) -> Vec<Choice> {
             Pick::Talk {
                 lines: vec![plain(line)],
                 said,
+                who: Some(fixer),
             },
         )];
     }
@@ -231,7 +232,15 @@ pub fn rows(st: &AppState, fixer: PersonId) -> Vec<Choice> {
         .skip(1)
         .collect();
     let said = format!("{}: \u{201c}{}\u{201d}", card.name, card.line);
-    let mut out = vec![Choice::new('t', "Talk", Pick::Talk { lines, said })];
+    let mut out = vec![Choice::new(
+        't',
+        "Talk",
+        Pick::Talk {
+            lines,
+            said,
+            who: Some(fixer),
+        },
+    )];
     if let Some(j) = st.jobs.taken(fixer) {
         match st.jobs.ready(j.id, &stands(st), &carries(st)) {
             Ok(()) => out.push(

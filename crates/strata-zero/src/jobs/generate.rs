@@ -372,6 +372,7 @@ pub fn generate(st: &mut AppState, fixer: PersonId, kind: KindTag, counter: u32)
                 .people()
                 .iter()
                 .filter(|p| p.profession != "fixer" && p.id != fixer && Some(p.household) != mine)
+                .filter(|p| !world.is_dead(p.id))
                 // At their station at some point inside the window.
                 .filter(|p| on_shift_within(p.shift, start, HOURS_DELIVER * 60))
                 .filter_map(|p| match p.work {
@@ -454,7 +455,9 @@ pub fn offer(st: &mut AppState, fixer: PersonId) -> Option<JobId> {
     None
 }
 
-/// The first job: a neighbour's flat, the code in the mail, already taken. Once.
+/// The first job: a neighbour's flat, the code in the mail, already taken. Once. New
+/// games start with the story's drop instead; the jobs' tests still start with this.
+#[cfg(test)]
 pub fn first_favour(st: &mut AppState) {
     if !st.jobs.list.is_empty() {
         return;
@@ -658,6 +661,24 @@ mod tests {
     }
 
     #[test]
+    fn the_dead_get_no_deliveries() {
+        let mut st = state_home();
+        let fx = a_fixer(&st);
+        let j = generate(&mut st, fx, KindTag::Deliver, 0).expect("a deliver");
+        let Kind::Deliver { to, .. } = j.kind else {
+            panic!()
+        };
+        st.world.as_mut().unwrap().kill(to);
+        for counter in 0..=30 {
+            if let Some(j) = generate(&mut st, fx, KindTag::Deliver, counter)
+                && let Kind::Deliver { to: named, .. } = j.kind
+            {
+                assert_ne!(named, to, "counter {counter}");
+            }
+        }
+    }
+
+    #[test]
     fn offer_keeps_one_standing_offer_per_fixer() {
         let mut st = state_home();
         let fx = a_fixer(&st);
@@ -682,7 +703,7 @@ mod tests {
 
     #[test]
     fn the_first_favour_is_a_taken_fetch_with_its_mail() {
-        // state_home runs move_in, which runs first_favour.
+        // state_home runs first_favour after move_in.
         let mut st = state_home();
         let j = st.jobs.active().expect("the favour in hand").clone();
         let Kind::Fetch {
@@ -787,6 +808,7 @@ mod tests {
             };
             crate::credentials::prepare(&mut st, rig.home.building);
             crate::credentials::move_in(&mut st);
+            first_favour(&mut st);
             if plain {
                 assert!(
                     st.jobs.active().is_some(),

@@ -65,6 +65,8 @@ pub enum Pick {
     Talk {
         lines: Vec<Line<'static>>,
         said: String,
+        /// Who speaks, when it is a person a story may listen for.
+        who: Option<sim::PersonId>,
     },
     /// Asks before jacking out, in place of the popup.
     JackOutAsk,
@@ -550,7 +552,14 @@ impl Popup {
                     fx: TransitionKind::None,
                 }
             }
-            Pick::Talk { lines, said } => {
+            Pick::Talk { lines, said, who } => {
+                if let Some(who) = who.filter(|w| crate::missions::listens(st, *w)) {
+                    st.say(said);
+                    crate::missions::send(st, crate::missions::Event::Talked(who));
+                    return ScreenCmd::Pop {
+                        fx: TransitionKind::None,
+                    };
+                }
                 st.say(said);
                 self.card = Some(lines);
                 self.opened = st.tick;
@@ -940,6 +949,7 @@ mod tests {
                 Pick::Talk {
                     lines: vec![Line::from("a spool")],
                     said: "a spool".into(),
+                    who: None,
                 },
             )],
             0,
@@ -1000,6 +1010,7 @@ mod tests {
                 Pick::Talk {
                     lines: vec![Line::from(line.clone())],
                     said: line,
+                    who: None,
                 },
             )],
             0,
@@ -1126,6 +1137,7 @@ mod tests {
                 Pick::Talk {
                     lines: vec![Line::from("a spool")],
                     said: "a spool".into(),
+                    who: None,
                 },
             )],
             0,

@@ -651,6 +651,8 @@ mod tests {
         let home = st.home.unwrap().home;
         crate::credentials::prepare(&mut st, home.building);
         crate::credentials::move_in(&mut st);
+        // The welcome favour's mail, for the inbox to read.
+        crate::jobs::first_favour(&mut st);
         st
     }
 

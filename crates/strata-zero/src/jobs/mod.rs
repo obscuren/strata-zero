@@ -516,7 +516,7 @@ pub(crate) mod testutil {
     use crate::app::AppState;
     use citygen::{BuildingId, GenParams, Generator, Pos, SizePreset};
 
-    /// Seed 8, medium, seven districts: a megablock home, a fixer, the welcome.
+    /// Seed 8, medium, seven districts: a megablock home, a fixer, the welcome favour.
     pub fn state_home() -> AppState {
         let mut st = AppState::new();
         st.enter_city(
@@ -531,6 +531,7 @@ pub(crate) mod testutil {
         let home = st.home.unwrap().home;
         crate::credentials::prepare(&mut st, home.building);
         crate::credentials::move_in(&mut st);
+        crate::jobs::first_favour(&mut st);
         st
     }
 

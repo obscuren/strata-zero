@@ -31,9 +31,12 @@ pub fn initial(st: &crate::app::AppState) -> impl Screen + use<> {
     title::Title::new(st, 0)
 }
 
-/// The screen shown once a city exists: the map, on foot.
+/// The screen shown once a city exists: the map, on foot, the story begun. Every new
+/// game, load and debug start comes through here.
 pub fn explore_screen(st: &mut crate::app::AppState) -> Box<dyn Screen> {
-    Box::new(explore::MapScreen::walking(st))
+    let map = explore::MapScreen::walking(st);
+    crate::missions::begin(st);
+    Box::new(map)
 }
 
 #[cfg(test)]

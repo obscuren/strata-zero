@@ -13,7 +13,7 @@ use citygen::{BuildingId, FlavorPack, Hue, Pos, Rect};
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 /// Ticks in a game minute, as the HUD's clock keeps it.
 pub const TICKS_PER_MINUTE: u64 = 90;
@@ -131,6 +131,8 @@ pub struct World {
     /// A goal someone has finished with early (a client after a date); the schedule
     /// does not send them back out for it.
     satisfied: HashMap<PersonId, Goal>,
+    /// People who have been killed: they stay in `people()` but are never placed.
+    dead: BTreeSet<PersonId>,
 }
 
 impl World {
@@ -179,6 +181,7 @@ impl World {
             displaced: HashMap::new(),
             chat_resume: HashMap::new(),
             satisfied: HashMap::new(),
+            dead: BTreeSet::new(),
         };
         w.place_everyone(city);
         w.refresh_open();
@@ -220,6 +223,42 @@ impl World {
         };
     }
 
+    /// Kills a person: they never move or show again, though they stay in `people()`.
+    pub fn kill(&mut self, id: PersonId) {
+        let i = id.0 as usize;
+        if i >= self.people.len() || !self.dead.insert(id) {
+            return;
+        }
+        self.displaced.remove(&id);
+        self.pending.retain(|r| r.who != id);
+        self.chat_resume.remove(&id);
+        // A trip cut short leaves its car at the kerb it was bound for.
+        if let Whereabouts::Travelling(t) = &self.people[i].whereabouts {
+            for l in &t.legs {
+                if let Some(c) = l.car {
+                    let car = &mut self.cars[c.0 as usize];
+                    car.parked = true;
+                    car.pos = car
+                        .bound
+                        .take()
+                        .unwrap_or(*l.path.last().unwrap_or(&car.pos));
+                }
+            }
+        }
+    }
+
+    /// Whether this person has been killed.
+    pub fn is_dead(&self, id: PersonId) -> bool {
+        self.dead.contains(&id)
+    }
+
+    /// Gives a person a new name.
+    pub fn rename(&mut self, id: PersonId, name: &str) {
+        if let Some(p) = self.people.get_mut(id.0 as usize) {
+            p.name = name.to_string();
+        }
+    }
+
     /// The span this person works, from their own shift; none for a roamer.
     pub fn work_hours(&self, id: PersonId) -> Option<(u16, u16)> {
         let p = self.people.get(id.0 as usize)?;
@@ -243,7 +282,7 @@ impl World {
     pub fn inside(&self, b: BuildingId) -> Vec<Occupant> {
         self.people
             .iter()
-            .filter(|p| p.whereabouts == Whereabouts::Inside(b))
+            .filter(|p| p.whereabouts == Whereabouts::Inside(b) && !self.dead.contains(&p.id))
             .map(|p| {
                 let on_a_date = self
                     .dates
@@ -462,6 +501,9 @@ impl World {
             let Some(req) = self.pending.pop_front() else {
                 break;
             };
+            if self.dead.contains(&req.who) {
+                continue;
+            }
             let i = req.who.0 as usize;
             let Some(from) = self.anchor(i) else { continue };
             let to = match req.dest {
@@ -584,6 +626,9 @@ impl World {
     /// Where a person is at `tick`, if on the street. A walker due on the blocked
     /// tile waits one tile back; a loiterer on it steps out of sight for the moment.
     fn position(&self, i: usize) -> Option<(Pos, Option<CarId>)> {
+        if self.dead.contains(&self.people[i].id) {
+            return None;
+        }
         let tick = self.tick;
         if let Some(d) = self.displaced.get(&self.people[i].id) {
             return Some((d.to, None));
@@ -625,7 +670,7 @@ impl World {
         self.open = self
             .people
             .iter()
-            .filter(|p| p.goal == Goal::Work)
+            .filter(|p| p.goal == Goal::Work && !self.dead.contains(&p.id))
             .filter_map(|p| match (p.work, &p.whereabouts) {
                 (Work::Building(b), Whereabouts::Inside(w)) if *w == b => Some(b),
                 _ => None,
@@ -638,6 +683,9 @@ impl World {
         let mod_ = self.minute_of_day();
         // Arrivals.
         for i in 0..self.people.len() {
+            if self.dead.contains(&PersonId(i as u32)) {
+                continue;
+            }
             if let Whereabouts::Travelling(t) = &self.people[i].whereabouts
                 && now.saturating_sub(t.depart) >= Self::trip_ticks(t)
             {
@@ -699,10 +747,15 @@ impl World {
             }
         });
         for d in ended {
-            self.people[d.worker.0 as usize].whereabouts = Whereabouts::At {
-                pos: d.beat,
-                activity: Activity::Working,
-            };
+            if !self.dead.contains(&d.worker) {
+                self.people[d.worker.0 as usize].whereabouts = Whereabouts::At {
+                    pos: d.beat,
+                    activity: Activity::Working,
+                };
+            }
+            if self.dead.contains(&d.client) {
+                continue;
+            }
             let door = self.places.doors[&d.hotel][0];
             let ci = d.client.0 as usize;
             self.people[ci].whereabouts = Whereabouts::At {
@@ -724,6 +777,9 @@ impl World {
         }
         // Departures: the schedule changed its mind, and the person is free to go.
         for i in 0..self.people.len() {
+            if self.dead.contains(&PersonId(i as u32)) {
+                continue;
+            }
             if matches!(self.people[i].whereabouts, Whereabouts::Travelling(_)) {
                 continue;
             }
@@ -759,6 +815,9 @@ impl World {
         self.chats.retain(|(_, until)| *until > self.minute);
         let mut by_tile: HashMap<Pos, Vec<usize>> = HashMap::new();
         for i in 0..self.people.len() {
+            if self.dead.contains(&PersonId(i as u32)) {
+                continue;
+            }
             let anchor = match self.people[i].work {
                 Work::Spot(a) => Some(a),
                 _ => None,
@@ -815,7 +874,7 @@ impl World {
             .people
             .iter()
             .enumerate()
-            .filter(|(_, p)| p.profession == "sex_worker")
+            .filter(|(_, p)| p.profession == "sex_worker" && !self.dead.contains(&p.id))
             .filter_map(|(i, p)| match p.whereabouts {
                 Whereabouts::At {
                     pos,
@@ -828,7 +887,9 @@ impl World {
             .people
             .iter()
             .enumerate()
-            .filter(|(_, p)| p.client && p.goal == Goal::Leisure(Leisure::Strip))
+            .filter(|(_, p)| {
+                !self.dead.contains(&p.id) && p.client && p.goal == Goal::Leisure(Leisure::Strip)
+            })
             .filter_map(|(i, p)| match p.whereabouts {
                 Whereabouts::At {
                     pos,
@@ -1994,5 +2055,69 @@ mod tests {
             .unwrap()
             .id;
         assert_eq!(w.pos_of(home), None);
+    }
+
+    #[test]
+    fn a_dead_person_is_gone_from_every_lookup() {
+        let c = city();
+        let mut w = world(&c);
+        let fx = w
+            .people()
+            .iter()
+            .find(|p| p.profession == "fixer")
+            .unwrap()
+            .id;
+        let spot = w.spot_of(fx).unwrap();
+        w.park(fx, spot);
+        assert_eq!(w.person_at(spot), Some(fx));
+        w.kill(fx);
+        assert!(w.is_dead(fx));
+        assert_eq!(w.pos_of(fx), None);
+        assert_ne!(w.person_at(spot), Some(fx));
+        let rect = Rect::new(spot.x - 3, spot.y - 3, 7, 7);
+        assert!(!w.visible(rect).iter().any(|m| matches!(
+            m.kind,
+            MoverKind::Walker { id, .. } if id == fx
+        )));
+        for b in &c.buildings {
+            assert!(!w.inside(b.id).iter().any(|o| o.id == fx));
+        }
+        assert_eq!(w.people()[fx.0 as usize].id, fx);
+    }
+
+    #[test]
+    fn a_dead_person_stays_gone_an_hour_later() {
+        let c = city();
+        let mut w = world(&c);
+        let mut t = tick_at(7 * 60, 1);
+        let mut who = None;
+        for _ in 0..600 {
+            run_to(&mut w, &c, t);
+            who = w
+                .people()
+                .iter()
+                .find(|p| matches!(p.whereabouts, Whereabouts::Travelling(_)))
+                .map(|p| p.id);
+            if who.is_some() {
+                break;
+            }
+            t += TICKS_PER_MINUTE;
+        }
+        let id = who.expect("someone is travelling");
+        w.kill(id);
+        run_to(&mut w, &c, t + 60 * TICKS_PER_MINUTE);
+        assert_eq!(w.pos_of(id), None);
+        for b in &c.buildings {
+            assert!(!w.inside(b.id).iter().any(|o| o.id == id));
+        }
+    }
+
+    #[test]
+    fn rename_renames() {
+        let c = city();
+        let mut w = world(&c);
+        let id = w.people()[3].id;
+        w.rename(id, "Dez");
+        assert_eq!(w.people()[id.0 as usize].name, "Dez");
     }
 }

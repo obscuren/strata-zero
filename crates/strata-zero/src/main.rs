@@ -24,6 +24,7 @@ mod interiors;
 mod jobs;
 mod look;
 mod messages;
+mod missions;
 mod net;
 mod render;
 mod save;

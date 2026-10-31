@@ -1,6 +1,7 @@
 //! The living city on screen: walkers, cars, chats and lit doors inside the bubble.
 
 use crate::foes::Foe;
+use crate::missions::Body;
 use crate::render::map::MapRef;
 use crate::render::style::StylePack;
 use crate::render::viewport::{Overlay, tile_to_screen};
@@ -37,6 +38,8 @@ pub struct PeopleOverlay<'a> {
     pub eyes: &'a [PersonId],
     /// Who stands against you; a down one is remembered where it fell.
     pub foes: &'a [Foe],
+    /// People the story killed, lying where they fell.
+    pub bodies: &'a [Body],
 }
 
 /// A standing foe.
@@ -102,6 +105,18 @@ impl Overlay for PeopleOverlay<'_> {
                         above.modifier.remove(Modifier::BOLD);
                     }
                 }
+            }
+        }
+        for b in self.bodies.iter().filter(|b| b.place == map.place()) {
+            let Some((sx, sy)) = tile_to_screen(area, origin, b.pos) else {
+                continue;
+            };
+            let seen = match self.vis {
+                None => Visibility::Visible,
+                Some(v) => v.get(b.pos).copied().unwrap_or(Visibility::Unseen),
+            };
+            if seen != Visibility::Unseen {
+                buf[(sx, sy)].set_char('%').set_fg(FOE_DOWN);
             }
         }
         if !map.place().is_street() {
@@ -280,6 +295,7 @@ mod tests {
             vis: None,
             eyes: &[],
             foes: &[],
+            bodies: &[],
         }
         .draw(
             &MapRef::stratum_of(&c, StratumKind::Street),
@@ -315,6 +331,7 @@ mod tests {
             vis: None,
             eyes: &[],
             foes: &[],
+            bodies: &[],
         }
         .draw(
             &MapRef::stratum_of(&c, StratumKind::Street),
@@ -344,6 +361,7 @@ mod tests {
             vis: None,
             eyes: &[],
             foes: &[],
+            bodies: &[],
         }
         .draw(
             &MapRef::stratum_of(&c, StratumKind::Net),
@@ -382,6 +400,7 @@ mod tests {
             vis: None,
             eyes: &[],
             foes: &[],
+            bodies: &[],
         }
         .draw(
             &MapRef::stratum_of(&c, StratumKind::Street),
@@ -410,6 +429,7 @@ mod tests {
             vis: Some(&vis),
             eyes: &[],
             foes: &[],
+            bodies: &[],
         }
         .draw(
             &MapRef::stratum_of(&c, StratumKind::Street),
@@ -435,6 +455,54 @@ mod tests {
             0,
             "no car stands in sight"
         );
+    }
+
+    #[test]
+    fn a_body_is_drawn_once_seen() {
+        let c = city();
+        let w = World::seed(
+            &c,
+            &People::load().unwrap(),
+            &SimParams::default(),
+            22 * 60,
+            0,
+        );
+        let at = citygen::Pos::new(3, 2);
+        let bodies = [Body {
+            person: PersonId(0),
+            name: "Marlo".into(),
+            place: citygen::Place::Stratum(StratumKind::Street),
+            pos: at,
+            look: "Face down.".into(),
+        }];
+        let area = Rect::new(0, 0, 8, 6);
+        let style = StylePack::load().unwrap();
+        let cell_at = |seen: Visibility| {
+            let mut vis = Grid::filled(c.size, Visibility::Unseen);
+            vis[at] = seen;
+            let mut buf = Buffer::empty(area);
+            PeopleOverlay {
+                world: &w,
+                night: false,
+                vis: Some(&vis),
+                eyes: &[],
+                foes: &[],
+                bodies: &bodies,
+            }
+            .draw(
+                &MapRef::stratum_of(&c, StratumKind::Street),
+                citygen::Pos::new(0, 0),
+                area,
+                0,
+                &mut buf,
+                &style,
+            );
+            buf[(3, 2)].clone()
+        };
+        let seen = cell_at(Visibility::Remembered);
+        assert_eq!(seen.symbol(), "%");
+        assert_eq!(seen.fg, FOE_DOWN);
+        assert_ne!(cell_at(Visibility::Unseen).symbol(), "%");
     }
 
     #[test]
@@ -478,6 +546,7 @@ mod tests {
                 vis: None,
                 eyes: &[],
                 foes: &foes,
+                bodies: &[],
             }
             .draw(&map, citygen::Pos::new(0, 0), area, tick, &mut buf, &style);
             buf
