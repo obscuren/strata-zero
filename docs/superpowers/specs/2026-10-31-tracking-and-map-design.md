@@ -517,7 +517,9 @@ to Marlo's body remembered, as the mock's dump:
 - `atlas_folded`: frame 3;
 - `track_street_near` and `track_street_far`: the street with the walk to Marlo's body
   in view, and running off the map with its edge tag (as round 1's frames);
-- `track_jobs_tab`: the JOBS tab with the story tracked.
+- `track_jobs_tab`: the JOBS tab with the story tracked;
+- `atlas_from_the_flat`: the MAP opened in your flat on 18F, tracking the clinic (added
+  with the final fix wave: from an upper floor the walk starts at the building's way out).
 
 ## 10. Testing
 
