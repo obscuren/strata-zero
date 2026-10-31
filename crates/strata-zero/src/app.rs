@@ -157,6 +157,8 @@ pub struct AppState {
     /// The story this session: the cast, where each mission stands, its bodies and the
     /// HOLO's queue; cleared with the city.
     pub missions: crate::missions::Missions,
+    /// The one target being tracked, its walk drawn on the map; cleared with the city.
+    pub track: Option<crate::track::Track>,
 }
 
 /// One ability effect playing on the map.
@@ -299,6 +301,7 @@ impl AppState {
             flavor: crate::jobs::Flavor::load().expect("the jobs pack is valid"),
             book: crate::missions::Book::load().expect("the missions pack is valid"),
             missions: Default::default(),
+            track: None,
         }
     }
 
@@ -412,6 +415,7 @@ impl AppState {
         self.helix = Default::default();
         self.jobs = Default::default();
         self.missions = Default::default();
+        self.track = None;
         crate::credentials::purge(&mut self.content, &mut self.character);
         self.ground = Default::default();
         self.player = None;

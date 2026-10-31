@@ -228,7 +228,7 @@ fn land(st: &mut AppState, place: Place, pos: Pos) {
 }
 
 /// The floor a door on a stratum opens onto.
-fn level_for(plan: &FloorPlan, stratum: StratumKind) -> Option<i32> {
+pub(crate) fn level_for(plan: &FloorPlan, stratum: StratumKind) -> Option<i32> {
     match stratum {
         StratumKind::Street => Some(0),
         StratumKind::Skyways => plan.bridge,

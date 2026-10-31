@@ -31,6 +31,9 @@ mod render;
 mod save;
 mod screens;
 mod term;
+// Its readers (the walk, the overlay, the map) arrive in the tasks that follow.
+#[allow(dead_code)]
+mod track;
 mod ui;
 mod walker;
 #[cfg(feature = "window")]
