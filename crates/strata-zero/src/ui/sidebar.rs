@@ -597,7 +597,7 @@ mod tests {
             now: 0,
             ice_lines: Vec::new(),
             jobs: crate::missions::ui::jobs_pane(st),
-            story_lines: crate::missions::ui::pane_lines(st).len(),
+            story_lines: crate::missions::ui::story_line_count(st),
         }
     }
 

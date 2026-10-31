@@ -2442,8 +2442,9 @@ impl Screen for MapScreen {
                 fx: TransitionKind::Glitch,
             };
         }
-        // Black ICE killed: the screen reads the cause.
+        // Black ICE killed: the screen reads the cause. The track ends with you.
         if let Some(cause) = st.net.death.clone() {
+            st.track = None;
             return ScreenCmd::Switch {
                 to: Box::new(crate::screens::flatlined::Flatlined::new(
                     cause,
@@ -2647,6 +2648,7 @@ impl Screen for MapScreen {
         crate::net::tick_backdoors(st);
         crate::jobs::tick(st);
         crate::missions::tick(st);
+        crate::track::tick(st);
         // A fixer beside you has their offer ready before you talk.
         if self.mode == Mode::Walk {
             crate::jobs::ui::prepare_offers(st, &|pl, p| self.inside_person_at(pl, p));
@@ -3056,6 +3058,18 @@ impl Screen for MapScreen {
         if let Some(o) = turn_overlay.as_ref() {
             overlays.push(o);
         }
+        // The tracked walk, last: it only tints backgrounds, and only on its own place.
+        let tracked_leg = crate::track::leg_now(st)
+            .and_then(Result::ok)
+            .filter(|l| l.place == self.place);
+        let track_overlay = tracked_leg.map(|leg| crate::track::overlay::TrackOverlay {
+            leg,
+            pulses: crate::track::pulses_now(st),
+            arrive: leg.through == crate::track::route::Through::Arrive,
+        });
+        if let Some(o) = track_overlay.as_ref() {
+            overlays.push(o);
+        }
         MapView {
             map: &map,
             origin,
@@ -3070,6 +3084,20 @@ impl Screen for MapScreen {
             },
         }
         .render(map_area, f.buffer_mut());
+
+        if let (Some(leg), Some(m)) = (tracked_leg, crate::track::distance(st)) {
+            let label = st.track.as_ref().map_or("", |t| t.label.as_str());
+            let text =
+                crate::track::overlay::tag_text(label, crate::track::next_now(st), leg.through, m);
+            crate::track::overlay::draw_edge_tag(
+                f.buffer_mut(),
+                map_area,
+                origin,
+                leg,
+                &text,
+                st.tick,
+            );
+        }
 
         if let Some(p) = &st.player {
             if let Some((bk, bp)) = p.body
@@ -3224,7 +3252,7 @@ impl Screen for MapScreen {
             net: &st.net,
             now: st.net.now(st),
             jobs: crate::missions::ui::jobs_pane(st),
-            story_lines: crate::missions::ui::pane_lines(st).len(),
+            story_lines: crate::missions::ui::story_line_count(st),
             ice_lines: match (self.place, st.player.as_ref()) {
                 (Place::Construct(b), Some(p)) if p.place == self.place => {
                     let vis = p.vis();

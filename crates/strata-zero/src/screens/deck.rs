@@ -6,8 +6,7 @@ use crate::anim::effects::{glitch_cells, pulse, typewriter};
 use crate::anim::{Easing, Tween};
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::messages::Kind;
-use crate::render::map::MapRef;
-use crate::render::memmap::MemoryMap;
+use crate::screens::atlas::{self, map::MapLayout};
 use crate::screens::create::attribute_colour;
 use crate::screens::kit::Kit;
 use crate::screens::popup::{Choice, Pick, Popup};
@@ -173,6 +172,8 @@ pub struct Deck {
     flash: Option<(game::TalentId, u64)>,
     /// The WORKBENCH tab's sheet: the drawing shown and the part selected.
     pub(crate) workbench: Workbench,
+    /// Where MAP's last draw put the map, for the next update to settle.
+    map_drawn: Cell<Option<MapLayout>>,
 }
 
 /// The cursor row's text: cyan, breathing.
@@ -549,6 +550,7 @@ impl Deck {
             talents: TalentsState::default(),
             flash: None,
             workbench: Workbench::default(),
+            map_drawn: Cell::new(None),
         }
     }
 
@@ -1244,54 +1246,39 @@ impl Deck {
         };
         format!("▍ LINK · {district} · {label}")
     }
-
-    fn draw_map(&self, st: &AppState, body: Rect, buf: &mut Buffer) {
-        match (&st.player, &st.city) {
-            (Some(p), Some(city)) => {
-                let inner = Rect::new(
-                    body.x + 1,
-                    body.y + 1,
-                    body.width.saturating_sub(2),
-                    body.height.saturating_sub(1),
-                );
-                let map = MapRef::for_place(
-                    city,
-                    &st.interiors,
-                    &st.constructs,
-                    p.place,
-                    st.minute_of_day(),
-                )
-                .unwrap_or_else(|| MapRef::stratum_of(city, StratumKind::Street));
-                MemoryMap {
-                    map: &map,
-                    vis: p.vis(),
-                    player: Some(p.pos),
-                    style: &st.style,
-                }
-                .render(inner, buf);
-                put(
-                    buf,
-                    body.x + 1,
-                    body.y,
-                    &format!(" {} · what you remember ", map.label()),
-                    Style::default().fg(DIM).bg(PANEL_BG),
-                    body.right(),
-                );
-            }
-            _ => put(
-                buf,
-                body.x + 1,
-                body.y + 1,
-                "no signal — walk the city first",
-                Style::default().fg(DIM),
-                body.right(),
-            ),
-        }
-    }
 }
 
 impl Deck {
+    /// `t` on the JOBS tab: tracks the selected job or story step, or stops it.
+    fn track_row(&self, st: &mut AppState) {
+        let rows = self.rows(st);
+        let result = match rows.get(self.row).and_then(|r| r.detail.as_ref()) {
+            Some(Detail::Job(id)) => match crate::track::ui::job_source(st, *id) {
+                Some(src) => crate::track::toggle(st, src),
+                None if st
+                    .jobs
+                    .get(*id)
+                    .is_some_and(|j| j.state == crate::jobs::State::Offered) =>
+                {
+                    Err("take it first".to_string())
+                }
+                None => return,
+            },
+            Some(Detail::Mission(m)) => match crate::track::ui::story_source(st, *m) {
+                Some(src) => crate::track::toggle(st, src),
+                None => return,
+            },
+            _ => return,
+        };
+        if let Err(e) = result {
+            st.warn(e);
+        }
+        crate::track::tick(st);
+    }
+
     fn handle(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+        // A popup may have changed a job: the track follows before the deck draws it.
+        crate::track::tick(st);
         // A popup may have removed the selected row: reselect before drawing, keys or not.
         let rows = self.rows(st);
         if self.row >= rows.len() || rows.get(self.row).is_some_and(|r| r.detail.is_none()) {
@@ -1303,7 +1290,19 @@ impl Deck {
         if self.tab == Tab::Attributes {
             self.sheet.reselect(st);
         }
+        // MAP keeps where its last draw left the cursor and the view, and its listings.
+        if self.tab == Tab::Map {
+            if let Some(l) = self.map_drawn.take() {
+                st.atlas.settle(&l);
+            }
+            atlas::refresh(st);
+        }
         for k in keys {
+            let was = self.tab;
+            // MAP takes the cursor's keys, `[ ] < > t + - f`; the rest are the deck's.
+            if self.tab == Tab::Map && atlas::key(st, k.code) {
+                continue;
+            }
             // GEAR & INVENTORY takes the arrows, left and right too, `h j k l` and its
             // filter keys; space, `q` `e`, tab, the digits and esc go on to the deck's.
             if self.tab == Tab::Kit {
@@ -1336,6 +1335,7 @@ impl Deck {
                     if st.chair.take().is_some() {
                         st.say("you get out of the chair");
                     }
+                    st.atlas.leave();
                     return ScreenCmd::Pop {
                         fx: TransitionKind::Glitch,
                     };
@@ -1383,6 +1383,7 @@ impl Deck {
                         self.set_tab(*tab, st);
                     }
                 }
+                KeyCode::Char('t' | 'T') if self.tab == Tab::Jobs => self.track_row(st),
                 KeyCode::Up | KeyCode::Char('k') => self.move_row(&rows, -1, st.tick),
                 KeyCode::Down | KeyCode::Char('j') => self.move_row(&rows, 1, st.tick),
                 KeyCode::Left | KeyCode::Char('h') if self.tab == Tab::Skills => {
@@ -1413,6 +1414,14 @@ impl Deck {
                 }
                 _ => {}
             }
+            // Each visit to MAP starts its cursor again (on the track, else on you).
+            if self.tab != was && (was == Tab::Map || self.tab == Tab::Map) {
+                st.atlas.leave();
+                self.map_drawn.set(None);
+            }
+        }
+        if self.tab == Tab::Map {
+            atlas::refresh(st);
         }
         ScreenCmd::Stay
     }
@@ -1659,7 +1668,7 @@ impl Screen for Deck {
         let strip_y = hint_y.saturating_sub(1);
         let body = Rect::new(inner.x, y, inner.width, strip_y.saturating_sub(y));
         if self.tab == Tab::Map {
-            self.draw_map(st, body, buf);
+            self.map_drawn.set(Some(atlas::draw(st, body, buf)));
         } else if self.tab == Tab::Talents {
             TalentsView {
                 content: &st.content,
@@ -1735,8 +1744,12 @@ impl Screen for Deck {
                         "←→↑↓ move · [ ] trees · space burn a point · Q/E tabs · tab close"
                     }
                     Tab::Kit => self.kit.hints(),
+                    Tab::Map => atlas::hint(st),
                     Tab::Workbench if st.character.has_workbench(&st.content) => {
                         self.workbench.hints(st)
+                    }
+                    Tab::Jobs => {
+                        "Q/E tabs · ↑↓ select · 0-8 jump · space act · t track · tab close"
                     }
                     _ => "Q/E tabs · ↑↓ select · 0-8 jump · space act · tab close",
                 },
@@ -2110,17 +2123,117 @@ mod tests {
     }
 
     #[test]
-    fn map_tab_shows_memory_or_no_signal() {
+    fn map_tab_without_a_city_says_no_signal() {
         let mut st = state();
         let mut d = Deck::new(0);
         d.update(&mut st, &[key(KeyCode::Char('7'))]);
+        assert_eq!(d.tab, Tab::Map);
         let text = draw(&d, &st, 120, 35);
-        assert!(text.contains("no signal"), "{text}");
-        let city = st.city.as_ref().unwrap();
-        st.player = Some(crate::walker::Player::spawn(city, 1));
-        let text = draw(&d, &st, 120, 35);
-        assert!(text.contains('@'), "{text}");
-        assert!(!text.contains("no signal"));
+        assert!(text.contains("no signal — walk the city first"), "{text}");
+        let mut st = AppState::new();
+        d.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Char('j'))]);
+        assert_eq!((d.tab, d.row), (Tab::Map, 0));
+        assert!(draw(&d, &st, 100, 30).contains("no signal — walk the city first"));
+    }
+
+    #[test]
+    fn the_deck_hands_map_its_keys() {
+        use crate::screens::atlas::tests::{outside, you};
+        let mut st = outside();
+        let mut d = Deck::new(st.tick);
+        d.update(&mut st, &[key(KeyCode::Char('7'))]);
+        let text = draw(&d, &st, 120, 40);
+        assert!(text.contains(crate::screens::atlas::hint(&st)), "{text}");
+        assert!(text.contains("PLACES ‹ all ›"), "{text}");
+        let at = you(&st);
+        d.update(&mut st, &[key(KeyCode::Char('h'))]);
+        assert_eq!((d.tab, d.row), (Tab::Map, 0));
+        assert_eq!(
+            st.atlas.cursor,
+            Some(at.offset(-2, 0)),
+            "h moves the cursor"
+        );
+        draw(&d, &st, 120, 40);
+        d.update(&mut st, &[key(KeyCode::Char('j')), key(KeyCode::Down)]);
+        assert_eq!(st.atlas.cursor, Some(at.offset(-2, 8)));
+        assert_eq!((d.tab, d.row), (Tab::Map, 0));
+        // The deck keeps q e, the digits and tab.
+        d.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert_eq!(d.tab, Tab::Talents);
+        d.update(&mut st, &[key(KeyCode::Char('q'))]);
+        assert_eq!(d.tab, Tab::Map);
+        d.update(&mut st, &[key(KeyCode::Char('3'))]);
+        assert_eq!(d.tab, Tab::Kit);
+        d.update(&mut st, &[key(KeyCode::Char('7'))]);
+        assert_eq!(d.tab, Tab::Map);
+        assert!(matches!(
+            d.update(&mut st, &[key(KeyCode::Tab)]),
+            ScreenCmd::Pop { .. }
+        ));
+    }
+
+    #[test]
+    fn the_map_cursor_starts_again_each_visit() {
+        use crate::screens::atlas::tests::{clinic, outside, you};
+        let mut st = outside();
+        let at = you(&st);
+        st.deck_tab = Tab::Map;
+        let mut d = Deck::new(st.tick).restore(&st);
+        let frame = |d: &mut Deck, st: &mut AppState, keys: &[KeyEvent]| {
+            draw(d, st, 120, 40);
+            d.update(st, keys);
+        };
+        frame(
+            &mut d,
+            &mut st,
+            &[key(KeyCode::Char('l')), key(KeyCode::Char('l'))],
+        );
+        frame(&mut d, &mut st, &[]);
+        frame(&mut d, &mut st, &[]);
+        assert_eq!(
+            st.atlas.cursor,
+            Some(at.offset(4, 0)),
+            "within a visit it stays"
+        );
+        // Away and back: on you again.
+        frame(&mut d, &mut st, &[key(KeyCode::Char('e'))]);
+        frame(&mut d, &mut st, &[key(KeyCode::Char('q'))]);
+        frame(&mut d, &mut st, &[]);
+        assert_eq!(d.tab, Tab::Map);
+        assert_eq!(st.atlas.cursor, Some(at));
+        // Kind, zoom and fold last; closed on MAP and opened again, the cursor starts on
+        // the tracked clinic.
+        frame(
+            &mut d,
+            &mut st,
+            &[
+                key(KeyCode::Char('l')),
+                key(KeyCode::Char('>')),
+                key(KeyCode::Char('-')),
+                key(KeyCode::Char('f')),
+            ],
+        );
+        let doc = clinic(&st);
+        crate::track::set(&mut st, crate::track::Source::Listing(doc.id)).unwrap();
+        frame(&mut d, &mut st, &[]);
+        assert_ne!(st.atlas.cursor, Some(doc.tile), "the visit's cursor stays");
+        assert!(matches!(
+            d.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Pop { .. }
+        ));
+        let mut d = Deck::new(st.tick).restore(&st);
+        assert_eq!(d.tab, Tab::Map);
+        frame(&mut d, &mut st, &[]);
+        assert_eq!(st.atlas.cursor, Some(doc.tile));
+        let atlas = &st.atlas;
+        assert_eq!(
+            (atlas.kind, atlas.zoom, atlas.folded),
+            (
+                Some(crate::track::listings::Kind::Jobs),
+                crate::screens::atlas::Zoom::Fit,
+                true
+            )
+        );
     }
 
     #[test]
@@ -2215,23 +2328,6 @@ mod tests {
     }
 
     #[test]
-    fn map_tab_ignores_row_keys() {
-        let mut st = state();
-        let mut d = Deck::new(0);
-        d.update(
-            &mut st,
-            &[
-                key(KeyCode::Char('7')),
-                key(KeyCode::Down),
-                key(KeyCode::Char('j')),
-                key(KeyCode::Up),
-            ],
-        );
-        assert_eq!((d.tab, d.row), (Tab::Map, 0));
-        assert!(draw(&d, &st, 100, 30).contains("no signal"));
-    }
-
-    #[test]
     fn attributes_tab_shows_the_attribute_and_its_blurb() {
         let mut st = state();
         st.character.attributes.body = 7;
@@ -2283,21 +2379,22 @@ mod tests {
     }
 
     #[test]
-    fn memory_map_caption_sits_above_the_map() {
+    fn map_title_sits_above_the_map() {
         let mut st = state();
         let mut d = Deck::new(0);
         d.update(&mut st, &[key(KeyCode::Char('7'))]);
         let mut p = crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1);
         p.pos = citygen::Pos::new(0, 0);
+        p.place = Place::Stratum(StratumKind::Street);
         st.player = Some(p);
         let text = draw(&d, &st, 120, 35);
         let lines: Vec<&str> = text.lines().collect();
         let cap = lines
             .iter()
-            .position(|l| l.contains("what you remember"))
+            .position(|l| l.contains("lit: remembered · faint: the city grid"))
             .unwrap();
-        assert!(!lines[cap].contains('@'), "caption row: {:?}", lines[cap]);
-        assert!(lines[cap + 1].contains('@'), "{text}");
+        assert!(!lines[cap].contains('@'), "title row: {:?}", lines[cap]);
+        assert!(lines[cap + 1..].iter().any(|l| l.contains('@')), "{text}");
     }
 
     #[test]

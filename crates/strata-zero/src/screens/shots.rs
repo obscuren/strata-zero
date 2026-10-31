@@ -1709,3 +1709,241 @@ fn run_tether() {
     pass(&mut st, 8);
     shot(&st, &map, "run_tether_landed", (120, 36));
 }
+
+/// The walk from the home megablock's street door to Marlo's body, tile by tile.
+fn home_to_body(st: &AppState) -> Vec<Pos> {
+    let city = st.city.as_ref().unwrap();
+    let body = st.missions.bodies[0].pos;
+    let home = st.home.unwrap().home.building;
+    let door = city
+        .portals(home)
+        .into_iter()
+        .find(|(k, _)| *k == StratumKind::Street)
+        .map(|(_, p)| p)
+        .unwrap();
+    let start = door
+        .neighbors4()
+        .find(|&n| city.walkable(StratumKind::Street, n))
+        .unwrap();
+    citygen::pathing::astar(city.size, start, body, |_, s| {
+        city.walkable(StratumKind::Street, s).then_some(1)
+    })
+    .unwrap()
+}
+
+/// Puts the player on `at` of the street and sees from there.
+fn stand_on(st: &mut AppState, at: Pos) {
+    let street = Place::Stratum(StratumKind::Street);
+    let bonus = st.sight_bonus();
+    let mut p = st.player.take().unwrap();
+    p.place = street;
+    p.pos = at;
+    {
+        let city = st.city.as_ref().unwrap();
+        let map = crate::render::map::MapRef::for_place(
+            city,
+            &st.interiors,
+            &st.constructs,
+            street,
+            st.minute_of_day(),
+        )
+        .unwrap();
+        p.update_fov(&map, bonus);
+    }
+    st.player = Some(p);
+}
+
+/// The street by the body, with the walk from home remembered (seen every other step)
+/// and the player back outside the home megablock's door.
+fn walked_city() -> (AppState, Vec<Pos>) {
+    let (mut st, _) = street_by_the_body();
+    let route = home_to_body(&st);
+    for at in route.iter().step_by(2) {
+        stand_on(&mut st, *at);
+    }
+    stand_on(&mut st, route[0]);
+    (st, route)
+}
+
+/// The track of the story's open mission, if one waits.
+fn story_track(st: &AppState) -> Option<crate::track::Source> {
+    (0..st.book.missions.len()).find_map(|m| crate::track::ui::story_source(st, m))
+}
+
+/// `walked_city` with the clinic named Miracorp Tattoo tracked.
+fn tracked_city() -> (AppState, MapScreen) {
+    let (mut st, _) = walked_city();
+    let l = crate::track::listings::listings(&st, StratumKind::Street)
+        .into_iter()
+        .find(|l| l.name == "Miracorp Tattoo")
+        .expect("a clinic called Miracorp Tattoo");
+    st.atlas.cursor = Some(l.tile);
+    st.atlas.picked = Some((l.id, l.kind, l.tile));
+    crate::track::set(&mut st, crate::track::Source::Listing(l.id)).unwrap();
+    let map = MapScreen::walking(&mut st);
+    (st, map)
+}
+
+/// `tracked_city`, back in your flat on 18F where the game starts.
+fn tracked_from_the_flat() -> (AppState, MapScreen) {
+    let (mut st, _) = tracked_city();
+    let rig = st.home.unwrap();
+    let p = st.player.as_mut().unwrap();
+    p.place = rig.place();
+    p.pos = rig.home.bed_side;
+    st.atlas.cursor = None;
+    st.atlas.picked = None;
+    crate::track::tick(&mut st);
+    let map = MapScreen::walking(&mut st);
+    (st, map)
+}
+
+const BOTH: [(u16, u16); 2] = [(120, 40), (100, 30)];
+
+/// `n` frames of the track, as the deck (or the street) runs them, so its pulses are
+/// in flight when the shot is taken.
+fn fly(st: &mut AppState, mut deck: Option<&mut Deck>, n: u64) {
+    for _ in 0..n {
+        st.tick += 1;
+        match deck.as_deref_mut() {
+            Some(d) => {
+                d.update(st, &[]);
+            }
+            None => crate::track::tick(st),
+        }
+    }
+}
+
+/// The deck on MAP, drawn once so its keys have a map to work on; `keys` then press,
+/// and the deck is written at `size` as `name`.
+fn atlas_shot(name: &str, keys: &[KeyCode], ground: bool) {
+    atlas_shot_from(name, keys, ground, tracked_city);
+}
+
+/// `atlas_shot` from the state `start` makes.
+fn atlas_shot_from(
+    name: &str,
+    keys: &[KeyCode],
+    ground: bool,
+    start: fn() -> (AppState, MapScreen),
+) {
+    for size in BOTH {
+        let (mut st, map) = start();
+        let plaza = ground.then(|| {
+            let city = st.city.as_ref().unwrap();
+            let tiles = &city.stratum(StratumKind::Street).unwrap().tiles;
+            let size = tiles.size();
+            (0..size.h as i32)
+                .flat_map(|y| (0..size.w as i32).map(move |x| Pos::new(x, y)))
+                .find(|p| {
+                    tiles.get(*p).is_some_and(|t| {
+                        t.terrain == citygen::Terrain::Plaza
+                            && t.district
+                                .and_then(|d| city.districts.get(d.0 as usize))
+                                .is_some_and(|d| d.name.starts_with("Crown Circle"))
+                    })
+                })
+                .expect("a Crown Circle plaza")
+        });
+        let mut deck = Deck::new(st.tick);
+        deck.update(&mut st, &[key(KeyCode::Char('7'))]);
+        st.tick += 200;
+        let _ = draw_stack(&st, &[&map, &deck], size);
+        for k in keys {
+            deck.update(&mut st, &[key(*k)]);
+        }
+        if let Some(p) = plaza {
+            st.atlas.cursor = Some(p);
+            st.atlas.picked = None;
+        }
+        fly(&mut st, Some(&mut deck), 40);
+        let (w, h) = size;
+        shot_stack(&format!("{name}_{w}x{h}"), &st, &[&map, &deck], size);
+    }
+}
+
+/// The MAP opened in your flat on 18F, Miracorp Tattoo tracked: the walk from the
+/// megablock's door, the distances from there.
+#[test]
+#[ignore]
+fn atlas_from_the_flat() {
+    atlas_shot_from("atlas_from_the_flat", &[], false, tracked_from_the_flat);
+}
+
+/// Frame 1: every kind, the cursor on the tracked clinic.
+#[test]
+#[ignore]
+fn atlas_listing() {
+    atlas_shot("atlas_listing", &[], false);
+}
+
+/// Frame 2: ripperdocs only, the cursor on a Crown Circle plaza.
+#[test]
+#[ignore]
+fn atlas_ground() {
+    let at = crate::track::listings::Kind::ALL
+        .iter()
+        .position(|k| *k == crate::track::listings::Kind::Docs)
+        .unwrap();
+    let keys = vec![KeyCode::Char('>'); at + 1];
+    atlas_shot("atlas_ground", &keys, true);
+}
+
+/// Frame 3: the places pane folded to its strip and the card.
+#[test]
+#[ignore]
+fn atlas_folded() {
+    atlas_shot("atlas_folded", &[KeyCode::Char('f')], false);
+}
+
+/// The street with the walk to Marlo's body, `back` tiles of it still ahead, `flying`
+/// ticks after it was tracked.
+fn street_walk(name: &str, back: usize, flying: u64) {
+    let (mut st, route) = walked_city();
+    stand_on(&mut st, route[route.len().saturating_sub(back + 1)]);
+    let source = story_track(&st).unwrap_or(crate::track::Source::Spot {
+        place: Place::Stratum(StratumKind::Street),
+        pos: st.missions.bodies[0].pos,
+        radius: 1,
+    });
+    crate::track::set(&mut st, source).unwrap();
+    let map = MapScreen::walking(&mut st);
+    fly(&mut st, None, flying);
+    for (w, h) in BOTH {
+        shot_stack(&format!("{name}_{w}x{h}"), &st, &[&map], (w, h));
+    }
+}
+
+#[test]
+#[ignore]
+fn track_street_near() {
+    street_walk("track_street_near", 30, 14);
+}
+
+#[test]
+#[ignore]
+fn track_street_far() {
+    street_walk("track_street_far", 95, 14);
+}
+
+/// The deck's JOBS tab with the story tracked.
+#[test]
+#[ignore]
+fn track_jobs_tab() {
+    let (mut st, route) = walked_city();
+    stand_on(&mut st, route[route.len().saturating_sub(31)]);
+    let source = story_track(&st).expect("an open mission");
+    crate::track::set(&mut st, source).unwrap();
+    let map = MapScreen::walking(&mut st);
+    let mut deck = Deck::new(st.tick);
+    deck.update(&mut st, &[key(KeyCode::Char('5'))]);
+    st.tick += 200;
+    for (w, h) in BOTH {
+        shot_stack(
+            &format!("track_jobs_tab_{w}x{h}"),
+            &st,
+            &[&map, &deck],
+            (w, h),
+        );
+    }
+}

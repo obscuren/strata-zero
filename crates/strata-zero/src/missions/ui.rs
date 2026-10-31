@@ -52,9 +52,15 @@ pub fn pane_lines(st: &AppState) -> Vec<Line<'static>> {
     out
 }
 
-/// The whole JOBS pane: the story's lines, then the job in hand.
+/// The lines the pane never caps: the track's, then the story's.
+pub fn story_line_count(st: &AppState) -> usize {
+    usize::from(st.track.is_some()) + pane_lines(st).len()
+}
+
+/// The whole JOBS pane: the track, the story's lines, then the job in hand.
 pub fn jobs_pane(st: &AppState) -> Vec<Line<'static>> {
-    let mut out = pane_lines(st);
+    let mut out: Vec<Line<'static>> = crate::track::ui::pane_line(st).into_iter().collect();
+    out.extend(pane_lines(st));
     out.extend(crate::jobs::ui::pane_lines(st));
     out
 }
@@ -163,6 +169,10 @@ pub fn detail(st: &AppState, mission: usize) -> Vec<Line<'static>> {
         } else {
             Line::from(Span::styled(format!("☐ {o}"), Style::default().fg(TEXT)))
         });
+    }
+    if let Some(src) = crate::track::ui::story_source(st, mission) {
+        out.push(Line::from(""));
+        out.push(crate::track::ui::detail_line(st, &src));
     }
     out
 }

@@ -31,6 +31,7 @@ mod render;
 mod save;
 mod screens;
 mod term;
+mod track;
 mod ui;
 mod walker;
 #[cfg(feature = "window")]
