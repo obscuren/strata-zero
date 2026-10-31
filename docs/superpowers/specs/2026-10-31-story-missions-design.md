@@ -196,6 +196,8 @@ Story(
 - Text everywhere (feed paragraphs, call lines, objectives, mails, logs) takes the
   slots above, checked at load against the cast: `{marlo.place}` with no role `marlo`
   fails validation, as does an unknown field after the dot.
+- A mission `title` takes no slots: it is printed as written in the pane, the tab and
+  the dossier, so validation refuses any `{` in one.
 
 Validation (`Book::validate`, run by `load` and by a unit test on the shipped file):
 every role a trigger, effect, slot or `from` names exists; every `Ended(step)` names an
@@ -239,7 +241,8 @@ card: state, keys, drawing), `ui.rs` (pane, deck, console listing).
   `MapScreen::walking` (every new game, load and debug start comes through it). Once per city
   (`begun`); nothing without a home (the combat lot). It casts every role (§5), marks
   runs that need an uncast role `Uncast` (and in dev mode warns `story · no <role> in
-  this city`), then sends `NewGame`.
+  this city`), takes back from the pack every item a `Give` names (the story restarts, so
+  its items do: a second city in one session gives no second package), then sends `NewGame`.
 
 ## 3. Triggers
 
@@ -309,10 +312,13 @@ spot), `{role.district}` (the district of the work tile), `{role.hours}` (the sh
   lists them (ids are indices), and callers that pick from it (the Deliver pool,
   `Placement::new`, casting) skip the dead.
 - The **work tile** of a person: a `Spot` is its tile; a `Building` gives the walkable
-  Street tile just outside its footprint nearest its first portal (closed buildings) or
+  Street tile just outside its footprint nearest its first Street portal (closed buildings) or
   its footprint's centre (walk-in kinds like a noodle bar), searched ring by ring.
-- `Dead(role)` records `Body { person, name, place: Street, pos: work tile, look }` in
-  `missions.bodies` and calls `kill`.
+- `Dead(role)` records `Body { person, name, place: Street, pos, look }` in
+  `missions.bodies` and calls `kill`. `pos` is the work tile; for a person with none (a
+  roamer) the tile where they stand on the street; failing that the walkable Street tile
+  just outside their home building (the same ring search). Only if all three fail is
+  there no body (a dev-mode warning says so).
 - The map draws bodies as down foes are drawn: `%` in `FOE_DOWN` on any tile not
   `Unseen` (render/people.rs, the same loop, fed from `missions.bodies` for the place).
 - Look reads a body like a down foe: the name as header, `%`, the line `dead`, and the
@@ -370,7 +376,7 @@ column owns the top-right). The world runs on under it.
   `INCOMING · <NAME>` magenta bold, `▂▄▆█` at the right; `<title> · <district>` dim;
   `space` answer · `esc` let it ring.
 - **Talking** card, `min(62, map width − 2)` × 13: `● <NAME> · mm:ss` (time since
-  answered, real seconds) and the signal; the face at the left; the lines at the right
+  answered, in clock seconds: it pauses under a window) and the signal; the face at the left; the lines at the right
   wrapped to the card, the ones said so far in `TEXT` with a blank between, the
   current one typing at 60 characters a second with a magenta `▌` after it; older lines
   scroll off the top when the card is full. Last row: `space next` (or `space hang
@@ -422,8 +428,9 @@ column owns the top-right). The world runs on under it.
 - The pane (`missions::ui::pane_lines`, put before `jobs::ui::pane_lines` where the
   sidebar's `jobs` lines are built) shows each `Open` run: ` THE DROP · Dez · story`
   (title magenta bold, the rest dim) and ` » <current objective>`. With a story line
-  shown, the jobs' `no job on · find a fixer` line stays as it is. `JOBS_CAP` goes from
-  4 to 5.
+  shown, the jobs' `no job on · find a fixer` line stays as it is. The pane's cap is
+  the jobs' own (`JOBS_CAP`) plus the rows the story's lines take, wrapped as the sidebar
+  wraps, so the job in hand is never cut off by the story.
 - The deck's JOBS tab lists, when any run is `Open` or `Done`, a `STORY` header row,
   the runs (`  <title>` open, `✓ <title>` done), a `JOBS` header, then the jobs as
   today. With no story yet the tab is exactly as today. `Detail::Mission(usize)` shows
