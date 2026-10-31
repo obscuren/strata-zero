@@ -9,6 +9,8 @@ use crate::missions::{RunState, Trigger, Where};
 use citygen::{BuildingId, Place, Pos, StratumKind};
 use sim::{PersonId, Whereabouts};
 
+pub mod route;
+
 /// A row of the map's listings, as a thing that can be tracked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ListingId {
