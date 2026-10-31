@@ -71,7 +71,7 @@ colour that only shows what you have already walked. Jeffrey wants:
 7. **The walk crosses places a leg at a time.** On the street the walk goes to the
    building's door; inside, to the lift (or the stairs when lifts are locked down), then
    to the target. Between strata, to a connector. Each leg is drawn in the place you are
-   in, and the pane says what comes next ("door, then 6F").
+   in, and the pane says what comes next ("building, then 6F").
 8. **A person target inside a building** is that building until you are inside it; you
    arrive on entering. Inside, you find them yourself.
 9. **The map shows your stratum**, or the Street while you are inside a building or
@@ -272,8 +272,9 @@ The leg is cached in the track with the inputs it was made from (place, your til
 goal) and remade when any changes, at most once a tick.
 
 Distance shown anywhere is the leg's length in tiles, as `m`. When more legs follow, the
-pane adds what comes next: `door, then 6F`, `lift to 6F`, `stairs up`, `out to the
-street`, `up to the Street`.
+pane adds what comes next: `building, then 6F`, `lift to 6F`, `stairs up`, `out to the
+street`, `up to the Street`. (A door leg says `building`, Jeffrey after playing it,
+2026-10-31: "instead of door it should say 'building' or something".)
 
 ## 3. Arriving and clearing
 
@@ -333,7 +334,7 @@ calls `set_bg`, so every glyph stays.
   last is in view, one row (or column) inside: ` ▴ Miracorp Tattoo · 61 m ` (▴ ▾ ◂ ▸
   by the edge), the arrow pulsing magenta (`0.65 + 0.35·sin(2π·t/30)`), the text
   `(205,212,222)` on `(4,6,10)`, clamped inside the view. For a leg through a door or a
-  lift the tag names that: ` ▸ door · Velform Group Plaza · 12 m `.
+  lift the tag names that: ` ▸ building · Velform Group Plaza · 12 m `.
 
 These constants are the ones `round1.html` animates (concept C) and `map2.html` reuses,
 except the pulses, which replace the mock's band `(0.9·t) mod (n + 24)` (it numbered

@@ -546,8 +546,8 @@ pub fn next_text(st: &AppState, leg: &Leg, target: Target) -> Option<String> {
                 None => FloorPlan::new(city, b).and_then(|plan| level_for(&plan, k)),
             };
             Some(match up {
-                Some(l) if Some(l) != door => format!("door, then {}", FloorPlan::label(l)),
-                _ => "door".to_string(),
+                Some(l) if Some(l) != door => format!("building, then {}", FloorPlan::label(l)),
+                _ => "building".to_string(),
             })
         }
         Through::Lift(l) => Some(format!("lift to {}", FloorPlan::label(l))),
@@ -849,9 +849,9 @@ mod tests {
         assert_walk(&map, from, &leg.path);
         assert_eq!(
             next_text(&st, &leg, Target::Building(clinic)).as_deref(),
-            Some("door")
+            Some("building")
         );
-        // A spot up in a building: its door, then its floor.
+        // A spot up in a building: the building, then its floor.
         let (b, level, _, tile) = crate::jobs::generate::first_fetch(&st).unwrap();
         assert!(level > 0);
         let fetch = spot(Place::Floor { building: b, level }, tile);
@@ -859,7 +859,7 @@ mod tests {
         assert_eq!(leg.through, Through::Door(b));
         assert_eq!(
             next_text(&st, &leg, fetch),
-            Some(format!("door, then {}", FloorPlan::label(level)))
+            Some(format!("building, then {}", FloorPlan::label(level)))
         );
     }
 
@@ -1268,7 +1268,7 @@ mod tests {
         assert!(on_it.contains(&b), "{b:?} is not on this roof");
         let city = st.city.as_ref().unwrap();
         assert!(city.portals(b).contains(&(StratumKind::Heights, leg.goal)));
-        assert_eq!(next_text(&st, &leg, there).as_deref(), Some("door"));
+        assert_eq!(next_text(&st, &leg, there).as_deref(), Some("building"));
         // Inside, the way leads down, not back up onto the roof.
         let top = st.interiors.plan(city, b).unwrap().top;
         st.interiors.ensure(city, b, top).unwrap();

@@ -351,7 +351,7 @@ pub fn target_now(st: &AppState) -> Option<Target> {
     st.track.as_ref().map(|t| t.walk.target)
 }
 
-/// What comes after the leg ("door, then 6F"); nothing when it arrives.
+/// What comes after the leg ("building, then 6F"); nothing when it arrives.
 pub fn next_now(st: &AppState) -> Option<&str> {
     st.track.as_ref()?.walk.next.as_deref()
 }
@@ -1237,7 +1237,7 @@ mod tests {
             unreachable!()
         };
         set(&mut st, job_source(id, 0)).unwrap();
-        assert!(next_now(&st).unwrap().starts_with("door"));
+        assert!(next_now(&st).unwrap().starts_with("building"));
         tick(&mut st);
         assert!(st.track.is_some());
         crate::jobs::send(

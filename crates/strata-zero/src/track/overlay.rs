@@ -282,8 +282,8 @@ mod tests {
         let at = |next, through| tag_text("Velform Group Plaza", next, through, 12);
         assert_eq!(at(None, Through::Arrive), "Velform Group Plaza · 12 m");
         assert_eq!(
-            at(Some("door"), Through::Door(citygen::BuildingId(3))),
-            "door · Velform Group Plaza · 12 m"
+            at(Some("building"), Through::Door(citygen::BuildingId(3))),
+            "building · Velform Group Plaza · 12 m"
         );
         assert_eq!(
             at(Some("lift to 6F"), Through::Lift(6)),
