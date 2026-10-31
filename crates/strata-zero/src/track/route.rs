@@ -143,33 +143,103 @@ fn on_stratum(
     from: Pos,
     target: Target,
 ) -> Result<Leg, NoLeg> {
-    let city = map.city();
     let aim = aim_of(target).ok_or(NoLeg::NoWay)?;
+    lead_on(st, map, k, from, aim)
+        .or_else(|| through_a_building(st, map, k, from, aim))
+        .ok_or(NoLeg::NoWay)
+}
+
+/// The first two ways on from a stratum: the target's goal on `k` if a walk reaches
+/// it, else a connector towards one of its other strata, the nearest first.
+fn lead_on(st: &AppState, map: &MapRef, k: StratumKind, from: Pos, aim: Aim) -> Option<Leg> {
+    let city = map.city();
     let strata = strata_of(city, aim);
-    if !strata.contains(&k) {
-        let t = nearest_stratum(&strata, k).ok_or(NoLeg::NoWay)?;
-        return between(st, map, k, t, from, aim);
+    if strata.contains(&k) {
+        let through = match aim {
+            Aim::Building(b) if !walk_in(city, b) => Through::Door(b),
+            _ => Through::Arrive,
+        };
+        // In a walk-in's footprint you are there.
+        let inside = match aim {
+            Aim::Building(b) => walk_in(city, b) && city.building(b).footprint.contains(from),
+            Aim::Tile { .. } => false,
+        };
+        let found = if inside {
+            Some((Vec::new(), from))
+        } else {
+            towards(map, from, &goals_on(map, aim, k), true, &[])
+        };
+        if let Some((path, goal)) = found {
+            return Some(Leg {
+                place: map.place(),
+                path,
+                goal,
+                through,
+            });
+        }
     }
-    let through = match aim {
-        Aim::Building(b) if !walk_in(city, b) => Through::Door(b),
-        _ => Through::Arrive,
+    let mut others: Vec<StratumKind> = strata.into_iter().filter(|s| *s != k).collect();
+    others.sort_by_key(|s| (s.index().abs_diff(k.index()), s.index()));
+    others
+        .into_iter()
+        .find_map(|t| between(st, map, k, t, from, aim))
+}
+
+/// The third way on from a stratum, off a rooftop with no ladder: the nearest closed
+/// building's door on `k` you can walk to whose building has another door that leads
+/// on. You go in and come out that way.
+fn through_a_building(
+    st: &AppState,
+    map: &MapRef,
+    k: StratumKind,
+    from: Pos,
+    aim: Aim,
+) -> Option<Leg> {
+    let city = map.city();
+    let walked = field(map.size(), &[from], open(*map, true, &[], &[from]));
+    let steps_to = |door: Pos| {
+        if door == from {
+            return Some(0);
+        }
+        door.neighbors4()
+            .filter_map(|n| walked.get(n).copied())
+            .filter(|d| *d != u32::MAX)
+            .min()
+            .map(|d| d + 1)
     };
-    // In a walk-in's footprint you are there.
-    let inside = match aim {
-        Aim::Building(b) => walk_in(city, b) && city.building(b).footprint.contains(from),
-        Aim::Tile { .. } => false,
-    };
-    let (path, goal) = if inside {
-        (Vec::new(), from)
-    } else {
-        towards(map, from, &goals_on(map, aim, k), true, &[]).ok_or(NoLeg::NoWay)?
-    };
-    Ok(Leg {
-        place: map.place(),
-        path,
-        goal,
-        through,
-    })
+    let mut doors: Vec<(u32, Pos, BuildingId)> = city
+        .buildings
+        .iter()
+        .filter(|b| b.kind.is_closed())
+        .flat_map(|b| {
+            city.portals(b.id)
+                .into_iter()
+                .filter(|(s, _)| *s == k)
+                .map(move |(_, p)| (p, b.id))
+        })
+        .filter_map(|(p, b)| Some((steps_to(p)?, p, b)))
+        .collect();
+    doors.sort_by_key(|(d, p, _)| (*d, *p));
+    let mut fields: Vec<(StratumKind, Grid<u32>)> = Vec::new();
+    for (_, door, b) in doors {
+        let others = city.portals(b).into_iter().filter(|w| *w != (k, door));
+        let on = others.into_iter().any(|(s, q)| {
+            if !fields.iter().any(|(x, _)| *x == s) {
+                fields.push((s, lead_field(st, city, s, aim)));
+            }
+            fields.iter().any(|(x, f)| *x == s && leads(f, q))
+        });
+        if on {
+            let path = walk(map, from, door, true, &[])?;
+            return Some(Leg {
+                place: map.place(),
+                path,
+                goal: door,
+                through: Through::Door(b),
+            });
+        }
+    }
+    None
 }
 
 /// A spot's tile when a walk may stand on it, else the tiles within its radius (at
@@ -281,8 +351,9 @@ fn to_level(
     })
 }
 
-/// Out of the building: this floor's exit onto the target's stratum, or the floor
-/// that has one.
+/// Out of the building by a door whose landing leads on to the target, the target's
+/// stratum first: this floor's exit, or the floor that has one. When no door leads on,
+/// the street door.
 fn out_of(
     st: &AppState,
     map: &MapRef,
@@ -292,51 +363,121 @@ fn out_of(
     exits: &[Pos],
 ) -> Result<Leg, NoLeg> {
     let city = map.city();
-    let level = floor.level;
+    let (b, level) = (plan.building, floor.level);
     let aim = aim_of(target).ok_or(NoLeg::NoWay)?;
     let t = nearest_stratum(&strata_of(city, aim), StratumKind::Street).ok_or(NoLeg::NoWay)?;
-    let onto = |k: StratumKind| -> Vec<Pos> {
-        floor
+    // This floor's exits onto `k` through the city-map doors `good` allows.
+    let exit = |k: StratumKind, good: &dyn Fn(Pos) -> bool| {
+        let goals: Vec<Pos> = floor
             .exits
             .iter()
-            .filter(|e| e.stratum == k)
+            .filter(|e| e.stratum == k && good(e.door))
             .map(|e| e.at)
-            .collect()
-    };
-    let exit = |goals: &[Pos]| {
-        towards(map, from, goals, false, exits).map(|(path, goal)| Leg {
+            .collect();
+        towards(map, from, &goals, false, exits).map(|(path, goal)| Leg {
             place: map.place(),
             path,
             goal,
             through: Through::Exit,
         })
     };
-    if let Some(leg) = exit(&onto(t)) {
-        return Ok(leg);
-    }
-    // The floor that opens onto it, unless it is known not to.
-    let opens = |l: i32| {
-        l != level
-            && plan.levels().any(|x| x == l)
-            && st
-                .interiors
-                .floor(plan.building, l)
-                .is_none_or(|(_, f)| f.exits.iter().any(|e| e.stratum == t))
-    };
-    if let Some(l) = level_for(plan, t).filter(|l| opens(*l)) {
-        return to_level(st, map, plan, level, l, from, exits);
-    }
-    // Any way out, onto the stratum nearest it first.
-    let mut ks: Vec<StratumKind> = floor.exits.iter().map(|e| e.stratum).collect();
+    let doors = city.portals(b);
+    let mut ks: Vec<StratumKind> = doors.iter().map(|(k, _)| *k).collect();
     ks.sort_by_key(|k| (k.index().abs_diff(t.index()), k.index()));
     ks.dedup();
-    if let Some(leg) = ks.into_iter().find_map(|k| exit(&onto(k))) {
+    for k in ks {
+        let lead = lead_field(st, city, k, aim);
+        let good: Vec<Pos> = doors
+            .iter()
+            .filter(|(s, p)| *s == k && leads(&lead, *p))
+            .map(|(_, p)| *p)
+            .collect();
+        if good.is_empty() {
+            continue;
+        }
+        if let Some(leg) = exit(k, &|p| good.contains(&p)) {
+            return Ok(leg);
+        }
+        // The floor those doors open onto, unless it is known not to.
+        let opens = |l: i32| {
+            l != level
+                && plan.levels().any(|x| x == l)
+                && st.interiors.floor(b, l).is_none_or(|(_, f)| {
+                    f.exits
+                        .iter()
+                        .any(|e| e.stratum == k && good.contains(&e.door))
+                })
+        };
+        if let Some(l) = level_for(plan, k).filter(|l| opens(*l)) {
+            return to_level(st, map, plan, level, l, from, exits);
+        }
+    }
+    if let Some(leg) = exit(StratumKind::Street, &|_| true) {
         return Ok(leg);
     }
     if level != 0 {
         return to_level(st, map, plan, level, 0, from, exits);
     }
     Err(NoLeg::NoWay)
+}
+
+/// The next stratum from `s` towards `t`.
+fn toward(s: StratumKind, t: StratumKind) -> Option<StratumKind> {
+    if t.index() > s.index() {
+        s.above()
+    } else {
+        s.below()
+    }
+}
+
+/// The tiles of an aim on `k` that open a walk-in's doors to a walk.
+fn ends(aim: Aim, k: StratumKind) -> Vec<Pos> {
+    match aim {
+        Aim::Tile { k: at, pos, .. } if at == k => vec![pos],
+        _ => Vec::new(),
+    }
+}
+
+/// Steps on stratum `j` to the target's goal there when `j` is `t`, else to a
+/// connector on towards `t` whose landing is in the next stratum's field.
+fn onward_field(st: &AppState, city: &City, j: StratumKind, t: StratumKind, aim: Aim) -> Grid<u32> {
+    let map = MapRef::stratum_at(city, j, st.minute_of_day());
+    let sources: Vec<Pos> = match toward(j, t) {
+        _ if j == t => goals_on(&map, aim, j),
+        Some(n) => {
+            let on = onward_field(st, city, n, t, aim);
+            links(city, j, n).filter(|p| reached(&on, *p)).collect()
+        }
+        None => Vec::new(),
+    };
+    field(map.size(), &sources, open(map, true, &[], &ends(aim, j)))
+}
+
+/// Steps on stratum `k` to its way on, as `lead_on` finds it from any tile: the
+/// target's goal there, or a connector that leads on towards its other strata.
+fn lead_field(st: &AppState, city: &City, k: StratumKind, aim: Aim) -> Grid<u32> {
+    let map = MapRef::stratum_at(city, k, st.minute_of_day());
+    let strata = strata_of(city, aim);
+    let mut sources = if strata.contains(&k) {
+        goals_on(&map, aim, k)
+    } else {
+        Vec::new()
+    };
+    for t in strata.into_iter().filter(|t| *t != k) {
+        let Some(j) = toward(k, t) else { continue };
+        let onward = onward_field(st, city, j, t, aim);
+        sources.extend(links(city, k, j).filter(|p| reached(&onward, *p)));
+    }
+    field(map.size(), &sources, open(map, true, &[], &ends(aim, k)))
+}
+
+fn reached(f: &Grid<u32>, p: Pos) -> bool {
+    f.get(p).is_some_and(|d| *d != u32::MAX)
+}
+
+/// Whether a city-map door leads on: it, or a tile beside it, is in the field.
+fn leads(f: &Grid<u32>, door: Pos) -> bool {
+    reached(f, door) || door.neighbors4().any(|n| reached(f, n))
 }
 
 /// On stratum `k`, the target reached on `t`: to the connector on to the next stratum
@@ -348,46 +489,17 @@ fn between(
     t: StratumKind,
     from: Pos,
     aim: Aim,
-) -> Result<Leg, NoLeg> {
+) -> Option<Leg> {
     let city = map.city();
-    let next = |s: StratumKind| {
-        if t.index() > s.index() {
-            s.above()
-        } else {
-            s.below()
-        }
-    };
-    let j = next(k).ok_or(NoLeg::NoWay)?;
-    let here: Vec<Pos> = links(city, k, j).collect();
-    if here.is_empty() {
-        return Err(NoLeg::NoWay);
-    }
+    let j = toward(k, t)?;
     let walked = field(map.size(), &[from], open(*map, true, &[], &[from]));
-    // On `j`, the walk from each landing to the target, or to a connector onward.
-    let there = MapRef::stratum_at(city, j, st.minute_of_day());
-    let (sources, ends) = match aim {
-        Aim::Tile { pos, .. } if j == t => (goals_on(&there, aim, j), vec![pos]),
-        _ if j == t => (goals_on(&there, aim, j), Vec::new()),
-        _ => (
-            next(j).map_or_else(Vec::new, |n| links(city, j, n).collect()),
-            Vec::new(),
-        ),
-    };
-    let onward = field(there.size(), &sources, open(there, true, &[], &ends));
+    let onward = onward_field(st, city, j, t, aim);
     let cost = |p: Pos| {
-        let (a, b) = (*walked.get(p)?, *onward.get(p)?);
-        if a == u32::MAX || b == u32::MAX {
-            return None;
-        }
-        Some((a + b, a, p))
+        (reached(&walked, p) && reached(&onward, p)).then(|| (walked[p] + onward[p], walked[p], p))
     };
-    let (_, _, goal) = here
-        .into_iter()
-        .filter_map(cost)
-        .min()
-        .ok_or(NoLeg::NoWay)?;
-    let path = walk(map, from, goal, true, &[]).ok_or(NoLeg::NoWay)?;
-    Ok(Leg {
+    let (_, _, goal) = links(city, k, j).filter_map(cost).min()?;
+    let path = walk(map, from, goal, true, &[])?;
+    Some(Leg {
         place: map.place(),
         path,
         goal,
@@ -1044,5 +1156,197 @@ mod tests {
         put(&mut st, STREET, outside);
         let p = crate::jobs::testutil::a_fixer(&st);
         assert_eq!(leg(&st, Target::Person(p)), Err(NoLeg::NoWay));
+    }
+
+    #[test]
+    fn a_walled_off_spot_has_no_way_and_no_door() {
+        let mut st = awake();
+        let from = outside_home(&mut st);
+        put(&mut st, STREET, from);
+        let to = steps_off(&street(&st), from, 30);
+        let city = st.city.as_mut().unwrap();
+        for p in to.neighbors8() {
+            city.tile_mut(StratumKind::Street, p).unwrap().terrain = Terrain::Wall;
+        }
+        assert_eq!(leg(&st, spot(STREET, to)), Err(NoLeg::NoWay));
+    }
+
+    const HEIGHTS: Place = Place::Stratum(StratumKind::Heights);
+
+    /// A closed building's roof door, its rooftop piece (steps from the door), and
+    /// whether a ladder leaves that piece.
+    struct Roof {
+        b: BuildingId,
+        door: Pos,
+        piece: HashMap<Pos, u32>,
+        ladder: bool,
+    }
+
+    impl Roof {
+        /// A rooftop tile beside the door.
+        fn beside(&self) -> Pos {
+            let mut at: Vec<Pos> = self
+                .piece
+                .iter()
+                .filter(|(_, d)| **d == 1)
+                .map(|(p, _)| *p)
+                .collect();
+            at.sort();
+            at[0]
+        }
+    }
+
+    fn roofs(st: &AppState) -> Vec<Roof> {
+        let city = st.city.as_ref().unwrap();
+        let (h, sky) = (StratumKind::Heights, StratumKind::Skyways);
+        let map = MapRef::stratum_of(city, h);
+        city.buildings
+            .iter()
+            .filter(|b| b.kind.is_closed())
+            .filter_map(|b| {
+                let (_, door) = city.portals(b.id).into_iter().find(|(k, _)| *k == h)?;
+                let piece = steps(&map, door);
+                let ladder = city.connectors.iter().any(|c| {
+                    c.public
+                        && c.serves.contains(&h)
+                        && c.serves.contains(&sky)
+                        && piece.contains_key(&c.pos)
+                });
+                Some(Roof {
+                    b: b.id,
+                    door,
+                    piece,
+                    ladder,
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_roof_with_a_ladder_leads_off_it() {
+        let mut st = awake();
+        let roofs = roofs(&st);
+        let here = roofs.iter().find(|r| r.ladder).unwrap();
+        // A tower whose roof is not this one's.
+        let tower = roofs
+            .iter()
+            .find(|r| r.b != here.b && !here.piece.contains_key(&r.door))
+            .unwrap();
+        put(&mut st, HEIGHTS, here.beside());
+        let target = Target::Building(tower.b);
+        let leg = leg(&st, target).unwrap();
+        assert_eq!(leg.through, Through::Connector(StratumKind::Skyways));
+        assert!(here.piece.contains_key(&leg.goal));
+        assert_eq!(
+            next_text(&st, &leg, target).as_deref(),
+            Some("down to the Skyways")
+        );
+    }
+
+    #[test]
+    fn a_roof_with_no_ladder_goes_in_by_a_door() {
+        let mut st = awake();
+        let outside = outside_home(&mut st);
+        let roofs = roofs(&st);
+        let here = roofs.iter().find(|r| !r.ladder).unwrap();
+        let on_it: Vec<BuildingId> = roofs
+            .iter()
+            .filter(|r| here.piece.contains_key(&r.door))
+            .map(|r| r.b)
+            .collect();
+        put(&mut st, HEIGHTS, here.beside());
+        let there = spot(STREET, outside);
+        let leg = leg(&st, there).unwrap();
+        let Through::Door(b) = leg.through else {
+            panic!("{leg:?}")
+        };
+        assert!(on_it.contains(&b), "{b:?} is not on this roof");
+        let city = st.city.as_ref().unwrap();
+        assert!(city.portals(b).contains(&(StratumKind::Heights, leg.goal)));
+        assert_eq!(next_text(&st, &leg, there).as_deref(), Some("door"));
+        // Inside, the way leads down, not back up onto the roof.
+        let top = st.interiors.plan(city, b).unwrap().top;
+        st.interiors.ensure(city, b, top).unwrap();
+        let (_, floor) = st.interiors.floor(b, top).unwrap();
+        let roof = floor.exits.iter().find(|e| e.door == leg.goal).unwrap();
+        let at = floor.doorstep(roof);
+        put(
+            &mut st,
+            Place::Floor {
+                building: b,
+                level: top,
+            },
+            at,
+        );
+        let down = super::leg(&st, there).unwrap();
+        assert!(
+            matches!(
+                down.through,
+                Through::Lift(0) | Through::Stairs { up: false }
+            ),
+            "{down:?}"
+        );
+    }
+
+    #[test]
+    fn from_inside_a_tower_a_far_roof_is_not_up_its_own() {
+        let mut st = awake();
+        let roofs = roofs(&st);
+        // A roof a ladder leaves, and a tower whose roof is not that one.
+        let far = roofs.iter().find(|r| r.ladder).unwrap();
+        let tower = roofs
+            .iter()
+            .find(|r| !far.piece.contains_key(&r.door))
+            .unwrap()
+            .b;
+        let target = spot(HEIGHTS, far.beside());
+        let city = st.city.as_ref().unwrap();
+        let plan = st.interiors.plan(city, tower).unwrap().clone();
+        st.interiors.ensure(city, tower, 0).unwrap();
+        st.interiors.ensure(city, tower, plan.top).unwrap();
+        // On the ground floor: out, or to the bridge; not up to the roof.
+        let (_, ground) = st.interiors.floor(tower, 0).unwrap();
+        let at = ground.doorstep(&ground.exits[0]);
+        let ways: Vec<(Pos, StratumKind)> =
+            ground.exits.iter().map(|e| (e.at, e.stratum)).collect();
+        let onto = |leg: &Leg| ways.iter().find(|(p, _)| *p == leg.goal).map(|(_, k)| *k);
+        put(
+            &mut st,
+            Place::Floor {
+                building: tower,
+                level: 0,
+            },
+            at,
+        );
+        let leg = leg(&st, target).unwrap();
+        match leg.through {
+            Through::Exit => {
+                assert_ne!(onto(&leg), Some(StratumKind::Heights), "{leg:?}")
+            }
+            Through::Lift(l) => assert_eq!(Some(l), plan.bridge, "{leg:?}"),
+            _ => panic!("{leg:?}"),
+        }
+        // Beside the roof door upstairs: down, not out onto this roof.
+        let (_, upstairs) = st.interiors.floor(tower, plan.top).unwrap();
+        let roof = upstairs
+            .exits
+            .iter()
+            .find(|e| e.stratum == StratumKind::Heights)
+            .unwrap();
+        let at = upstairs.doorstep(roof);
+        put(
+            &mut st,
+            Place::Floor {
+                building: tower,
+                level: plan.top,
+            },
+            at,
+        );
+        let leg = super::leg(&st, target).unwrap();
+        assert!(
+            matches!(leg.through, Through::Lift(l) if l < plan.top)
+                || leg.through == Through::Stairs { up: false },
+            "{leg:?}"
+        );
     }
 }
