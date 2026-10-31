@@ -234,6 +234,23 @@ fn map_area(body: Rect, folded: bool) -> Rect {
     )
 }
 
+/// The map as it lays out in the deck's `body`, the pane open or folded.
+fn layout_in(st: &AppState, body: Rect) -> MapLayout {
+    let folded = st.atlas.folded;
+    MapLayout {
+        pane: if folded { 0 } else { pane_width(body) },
+        ..map::layout(st, map_area(body, folded))
+    }
+}
+
+/// The map laid out again where `last` was, as it would draw now.
+fn relayout(st: &AppState, last: &MapLayout) -> MapLayout {
+    MapLayout {
+        pane: last.pane,
+        ..map::layout(st, last.area)
+    }
+}
+
 /// Draws the MAP tab into the deck's `body`: the title row, the map, the places pane or,
 /// folded, the strip, and the card of the listing under the cursor (spec 7). The deck
 /// settles what it returns.
@@ -246,7 +263,7 @@ pub fn draw(st: &AppState, body: Rect, buf: &mut Buffer) -> MapLayout {
             buf[(x, y)].set_style(ground);
         }
     }
-    let l = map::layout(st, map_area(body, st.atlas.folded));
+    let l = layout_in(st, body);
     if l.stratum.is_none() || body.height < 2 {
         map::draw_at(st, &l, &cached(st), None, buf);
         return l;
@@ -456,7 +473,7 @@ pub(crate) mod tests {
         for p in tiles {
             st.atlas.stratum = Some(STREET);
             st.atlas.cursor = Some(p);
-            let l = map::layout(st, map_area(body, st.atlas.folded));
+            let l = layout_in(st, body);
             let spot = spot_under_cursor(st, &l);
             let walked = spot.is_some_and(|q| {
                 let f = listings::walk_field(st, STREET).unwrap();

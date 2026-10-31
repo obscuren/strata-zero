@@ -34,7 +34,8 @@ pub fn fit_scale(size: Size, cols: u16, rows: u16) -> i32 {
 }
 
 /// Where the map was drawn: the cells, the tiles a pixel covers, the tile at the
-/// top-left cell, and the cursor and stratum the draw settled on.
+/// top-left cell, the cursor and stratum the draw settled on, and the width of the
+/// places pane beside it (none folded).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MapLayout {
     pub area: Rect,
@@ -42,6 +43,7 @@ pub struct MapLayout {
     pub origin: Pos,
     pub cursor: Option<Pos>,
     pub stratum: Option<StratumKind>,
+    pub pane: u16,
 }
 
 impl MapLayout {
@@ -473,6 +475,7 @@ pub fn layout(st: &AppState, area: Rect) -> MapLayout {
         origin: Pos::default(),
         cursor: None,
         stratum: None,
+        pane: 0,
     };
     let k = map_stratum(st);
     let size = st

@@ -27,10 +27,19 @@ pub enum Kind {
     Pawn,
     Arcades,
     Hotels,
+    /// Corp towers and offices.
+    Corps,
+    /// Factories, warehouses and depots.
+    Industry,
+    /// Garages and parking.
+    Garages,
+    Temples,
+    /// Apartments and megablocks, but your own.
+    Blocks,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 10] = [
+    pub const ALL: [Kind; 15] = [
         Kind::Jobs,
         Kind::Home,
         Kind::Docs,
@@ -41,6 +50,11 @@ impl Kind {
         Kind::Pawn,
         Kind::Arcades,
         Kind::Hotels,
+        Kind::Corps,
+        Kind::Industry,
+        Kind::Garages,
+        Kind::Temples,
+        Kind::Blocks,
     ];
 
     pub fn glyph(self) -> char {
@@ -55,6 +69,11 @@ impl Kind {
             Kind::Pawn => '¢',
             Kind::Arcades => '▣',
             Kind::Hotels => 'H',
+            Kind::Corps => '▲',
+            Kind::Industry => '▤',
+            Kind::Garages => 'P',
+            Kind::Temples => '†',
+            Kind::Blocks => '#',
         }
     }
 
@@ -70,6 +89,11 @@ impl Kind {
             Kind::Pawn => Color::Rgb(224, 192, 112),
             Kind::Arcades => Color::Rgb(176, 128, 255),
             Kind::Hotels => Color::Rgb(192, 200, 216),
+            Kind::Corps => Color::Rgb(110, 180, 255),
+            Kind::Industry => Color::Rgb(170, 150, 120),
+            Kind::Garages => Color::Rgb(150, 150, 165),
+            Kind::Temples => Color::Rgb(255, 230, 150),
+            Kind::Blocks => Color::Rgb(140, 175, 150),
         }
     }
 
@@ -85,6 +109,11 @@ impl Kind {
             Kind::Pawn => "pawnshops",
             Kind::Arcades => "arcades",
             Kind::Hotels => "hotels",
+            Kind::Corps => "corp towers & offices",
+            Kind::Industry => "factories & warehouses",
+            Kind::Garages => "garages & parking",
+            Kind::Temples => "temples",
+            Kind::Blocks => "apartment blocks",
         }
     }
 
@@ -93,9 +122,9 @@ impl Kind {
         matches!(self, Kind::Jobs | Kind::Home)
     }
 
-    /// The kind a building of this kind lists under.
-    fn of(kind: BuildingKind) -> Option<Kind> {
-        Some(match kind {
+    /// The kind a building of this kind lists under: every kind of building is one.
+    fn of(kind: BuildingKind) -> Kind {
+        match kind {
             BuildingKind::Clinic => Kind::Docs,
             BuildingKind::Bar | BuildingKind::Club => Kind::Bars,
             BuildingKind::NoodleBar => Kind::Noodle,
@@ -103,8 +132,12 @@ impl Kind {
             BuildingKind::Pawn => Kind::Pawn,
             BuildingKind::Arcade => Kind::Arcades,
             BuildingKind::Hotel => Kind::Hotels,
-            _ => return None,
-        })
+            BuildingKind::CorpTower | BuildingKind::Office => Kind::Corps,
+            BuildingKind::Factory | BuildingKind::Warehouse | BuildingKind::Depot => Kind::Industry,
+            BuildingKind::Garage | BuildingKind::Parking => Kind::Garages,
+            BuildingKind::Temple => Kind::Temples,
+            BuildingKind::Apartment | BuildingKind::Megablock => Kind::Blocks,
+        }
     }
 }
 
@@ -239,10 +272,13 @@ pub fn listings(st: &AppState, stratum: StratumKind) -> Vec<Listing> {
             });
         }
     }
+    let home = st.home.as_ref().map(|r| r.home.building);
     for b in &city.buildings {
-        let Some(kind) = Kind::of(b.kind) else {
+        // Your own block is home's row.
+        if Some(b.id) == home {
             continue;
-        };
+        }
+        let kind = Kind::of(b.kind);
         let Some(tile) = building_tile(st, b.id, stratum) else {
             continue;
         };
@@ -453,13 +489,103 @@ pub(crate) mod tests {
     #[test]
     fn kinds_have_their_glyphs() {
         let glyphs: String = Kind::ALL.iter().map(|k| k.glyph()).collect();
-        assert_eq!(glyphs, "◆⌂+$Y≈▪¢▣H");
+        assert_eq!(glyphs, "◆⌂+$Y≈▪¢▣H▲▤P†#");
         assert_eq!(Kind::Jobs.color(), MAGENTA);
         assert_eq!(Kind::Fixers.color(), AMBER);
         assert_eq!(Kind::Home.color(), Color::Rgb(124, 255, 154));
         assert_eq!(Kind::Hotels.label(), "hotels");
+        for (k, colour, label) in [
+            (Kind::Corps, (110, 180, 255), "corp towers & offices"),
+            (Kind::Industry, (170, 150, 120), "factories & warehouses"),
+            (Kind::Garages, (150, 150, 165), "garages & parking"),
+            (Kind::Temples, (255, 230, 150), "temples"),
+            (Kind::Blocks, (140, 175, 150), "apartment blocks"),
+        ] {
+            assert_eq!(k.color(), Color::Rgb(colour.0, colour.1, colour.2));
+            assert_eq!(k.label(), label);
+        }
         let pinned: Vec<Kind> = Kind::ALL.into_iter().filter(|k| k.pinned()).collect();
         assert_eq!(pinned, [Kind::Jobs, Kind::Home]);
+    }
+
+    #[test]
+    fn every_building_kind_lists_under_a_kind() {
+        let st = state_home();
+        let home = st.home.unwrap().home.building;
+        let city = st.city.as_ref().unwrap();
+        for k in StratumKind::ALL {
+            let all = listings(&st, k);
+            for b in &city.buildings {
+                if b.id == home || building_tile(&st, b.id, k).is_none() {
+                    continue;
+                }
+                let want = Kind::of(b.kind);
+                assert!(
+                    all.iter()
+                        .any(|l| l.id == ListingId::Building(b.id) && l.kind == want),
+                    "{:?} {} on {k:?}",
+                    b.kind,
+                    b.id.0
+                );
+            }
+        }
+        use BuildingKind as B;
+        for (b, k) in [
+            (B::CorpTower, Kind::Corps),
+            (B::Office, Kind::Corps),
+            (B::Factory, Kind::Industry),
+            (B::Warehouse, Kind::Industry),
+            (B::Depot, Kind::Industry),
+            (B::Garage, Kind::Garages),
+            (B::Parking, Kind::Garages),
+            (B::Temple, Kind::Temples),
+            (B::Apartment, Kind::Blocks),
+            (B::Megablock, Kind::Blocks),
+        ] {
+            assert_eq!(Kind::of(b), k, "{b:?}");
+        }
+        // Each new kind the city builds has some on the street (seed 8 builds no
+        // temple); home stays one row, its own.
+        let street = listings(&st, STREET);
+        for k in [
+            Kind::Corps,
+            Kind::Industry,
+            Kind::Garages,
+            Kind::Temples,
+            Kind::Blocks,
+        ] {
+            let built = city.buildings.iter().any(|b| Kind::of(b.kind) == k);
+            assert_eq!(!of_kind(&street, k).is_empty(), built, "{k:?}");
+        }
+        let rows: Vec<&Listing> = street
+            .iter()
+            .filter(|l| l.id == ListingId::Building(home))
+            .collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, Kind::Home);
+    }
+
+    #[test]
+    fn the_kiln_stacks_have_listings() {
+        let st = state_home();
+        let city = st.city.as_ref().unwrap();
+        let kiln = city
+            .districts
+            .iter()
+            .find(|d| d.name == "Kiln Stacks")
+            .expect("seed 8 has the Kiln Stacks")
+            .id;
+        let here: Vec<Listing> = StratumKind::ALL
+            .into_iter()
+            .flat_map(|k| listings(&st, k))
+            .filter(|l| {
+                l.building
+                    .and_then(|b| city.building_opt(b))
+                    .is_some_and(|b| b.district == kiln)
+            })
+            .collect();
+        assert!(here.len() >= 3, "{}", here.len());
+        assert!(here.iter().any(|l| l.kind == Kind::Industry));
     }
 
     #[test]

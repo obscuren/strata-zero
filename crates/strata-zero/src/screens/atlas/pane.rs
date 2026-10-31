@@ -84,12 +84,36 @@ pub(super) fn list(st: &AppState, l: &MapLayout, all: &[Listing]) -> List {
     List { rows, sel, first }
 }
 
+/// Where the kinds' glyphs go in a pane `w` wide, each as a column from the pane's first
+/// cell inside and a row under its header, then `all`'s: a glyph every two cells, onto
+/// a second row when the next does not fit.
+fn chips(w: u16) -> (Vec<(u16, u16)>, (u16, u16)) {
+    let room = w.saturating_sub(2);
+    let (mut x, mut y) = (0, 0);
+    let mut at = |cells: u16| {
+        if x > 0 && x + cells > room {
+            (x, y) = (0, y + 1);
+        }
+        let p = (x, y);
+        x += cells + 1;
+        p
+    };
+    let glyphs = Kind::ALL.iter().map(|_| at(1)).collect();
+    (glyphs, at(3))
+}
+
+/// The rows the kinds take in a pane `w` wide.
+fn chip_rows(w: u16) -> u16 {
+    chips(w).1.1 + 1
+}
+
 /// The list's first line and its `▼` line, below the header, the kinds and the rule;
 /// above the cursor's lines when no row is selected (`foot`).
 fn lines(l: &MapLayout, foot: bool) -> (u16, u16) {
     let top = l.area.y.saturating_sub(1);
+    let first = top + 2 + chip_rows(l.pane);
     let last = l.area.bottom().saturating_sub(if foot { 5 } else { 2 });
-    (top + 3, last.max(top + 3))
+    (first, last.max(first))
 }
 
 /// The first row in view: `kept`, moved just enough that the selected row shows whole
@@ -125,8 +149,8 @@ pub(super) fn pane(st: &AppState, l: &MapLayout, body: Rect, cache: &Cache, buf:
     if px + 8 + label.chars().count() as u16 + 1 < keys {
         put(buf, keys, top, "< >", fg(FAINTER), right);
     }
-    let mut x = px + 1;
-    for k in Kind::ALL {
+    let (glyphs, all_at) = chips(w);
+    for (k, (dx, dy)) in Kind::ALL.into_iter().zip(glyphs) {
         let on = st.atlas.kind.is_none_or(|c| c == k) || k.pinned();
         let mut style = if on {
             bold(k.color())
@@ -136,17 +160,24 @@ pub(super) fn pane(st: &AppState, l: &MapLayout, body: Rect, cache: &Cache, buf:
         if st.atlas.kind == Some(k) {
             style = style.bg(SEL);
         }
-        put(buf, x, top + 1, &k.glyph().to_string(), style, right);
-        x += 2;
+        let glyph = k.glyph().to_string();
+        put(buf, px + 1 + dx, top + 1 + dy, &glyph, style, right);
     }
     let every = if st.atlas.kind.is_none() {
         fg(CYAN).bg(SEL)
     } else {
         fg(FAINTER)
     };
-    put(buf, x, top + 1, "all", every, right);
+    put(
+        buf,
+        px + 1 + all_at.0,
+        top + 1 + all_at.1,
+        "all",
+        every,
+        right,
+    );
     let rule = "─".repeat(w.saturating_sub(2) as usize);
-    put(buf, px, top + 2, &rule, fg(BORDER), right);
+    put(buf, px, top + 1 + chip_rows(w), &rule, fg(BORDER), right);
 
     let v = list(st, l, all);
     let foot = v.sel.is_none();
@@ -417,6 +448,42 @@ mod tests {
             assert_eq!(l.area.right(), body.right() - w - 1, "a spare column");
             assert_eq!((l.area.y, l.area.bottom()), (body.y + 1, body.bottom()));
             assert!(row(&buf, body, body.y).starts_with(" PLACES ‹ all ›"));
+        }
+    }
+
+    #[test]
+    fn the_kinds_wrap_at_30_cells_and_not_at_36() {
+        let glyphs: String = Kind::ALL.iter().map(|k| k.glyph()).collect();
+        let first: String = glyphs.chars().take(14).collect();
+        let last = glyphs.chars().last().unwrap();
+        for (b, rows) in [(BODY_120, 1), (BODY_100, 2)] {
+            let mut st = outside();
+            let buf = frame(&mut st, b);
+            let chips =
+                |y: u16| -> String { row(&buf, b, y).chars().filter(|c| *c != ' ').collect() };
+            if rows == 1 {
+                assert_eq!(chips(b.y + 1), format!("{glyphs}all"));
+            } else {
+                assert_eq!(chips(b.y + 1), first);
+                assert_eq!(chips(b.y + 2), format!("{last}all"));
+                assert_eq!(sym(&buf, b.right() - 30 + 2, b.y + 2), last.to_string());
+            }
+            // The rule under them, and the list a row lower.
+            let rule = b.y + 1 + rows;
+            assert!(
+                row(&buf, b, rule).contains("──────"),
+                "{}",
+                row(&buf, b, rule)
+            );
+            let l = laid(&st);
+            let v = list(&st, &l, &listed(&st));
+            let x = &listed(&st)[v.rows[v.first]];
+            let name: String = x.name.chars().take(15).collect();
+            assert!(
+                row(&buf, b, rule + 1).contains(&name),
+                "{}",
+                row(&buf, b, rule + 1)
+            );
         }
     }
 

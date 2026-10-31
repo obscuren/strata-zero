@@ -1,8 +1,8 @@
 //! The MAP's keys (spec 7): the cursor, the places list, the kinds, the track, the
 //! zoom and the fold. Everything else is the deck's.
 
-use super::map::{self, MapLayout};
-use super::{cached, pane, refresh, spot_under_cursor, under_cursor};
+use super::map::MapLayout;
+use super::{cached, pane, refresh, relayout, spot_under_cursor, under_cursor};
 use crate::app::AppState;
 use crate::track::listings::{Kind, source_of};
 use crate::track::{self, Source};
@@ -69,11 +69,11 @@ pub fn key(st: &mut AppState, code: KeyCode) -> bool {
         _ => {}
     }
     // The rest work on the map as it would draw now; before its first draw there is none.
-    let Some(area) = st.atlas.layout.map(|l| l.area) else {
+    let Some(last) = st.atlas.layout else {
         return true;
     };
     refresh(st);
-    let now = map::layout(st, area);
+    let now = relayout(st, &last);
     st.atlas.settle(&now);
     match act {
         Act::Move(dx, dy) => step(st, &now, dx, dy),
@@ -82,7 +82,7 @@ pub fn key(st: &mut AppState, code: KeyCode) -> bool {
         _ => {}
     }
     refresh(st);
-    let after = map::layout(st, area);
+    let after = relayout(st, &last);
     st.atlas.settle(&after);
     st.atlas.scroll = pane::list(st, &after, &cached(st).listings).first;
     true
@@ -293,15 +293,22 @@ mod tests {
         let mut st = outside();
         frame(&mut st, BODY_120);
         assert_eq!(st.atlas.kind, None, "all");
+        assert_eq!(Kind::ALL.len(), 15);
         for k in Kind::ALL {
             press(&mut st, '>');
             assert_eq!(st.atlas.kind, Some(k));
         }
-        assert_eq!(st.atlas.kind, Some(Kind::Hotels));
+        assert_eq!(st.atlas.kind, Some(Kind::Blocks));
         press(&mut st, '>');
         assert_eq!(st.atlas.kind, None, "round to all");
         press(&mut st, '<');
-        assert_eq!(st.atlas.kind, Some(Kind::Hotels));
+        assert_eq!(st.atlas.kind, Some(Kind::Blocks));
+        for k in Kind::ALL.iter().rev().skip(1) {
+            press(&mut st, '<');
+            assert_eq!(st.atlas.kind, Some(*k));
+        }
+        press(&mut st, '<');
+        assert_eq!(st.atlas.kind, None);
         // Ripperdocs: the clinics, and the pinned rows with them.
         st.atlas.kind = Some(Kind::Docs);
         let buf = frame(&mut st, BODY_120);
