@@ -566,7 +566,7 @@ pub fn next_text(st: &AppState, leg: &Leg, target: Target) -> Option<String> {
 /// Whether a walk may step on a tile (spec §2): a walkable one, and of the doors on a
 /// stratum (`doors_are_walls`) only those of a walk-in that one of `ends` lies in; on
 /// a floor every door but its `exits`.
-fn open<'a>(
+pub(crate) fn open<'a>(
     map: MapRef<'a>,
     doors_are_walls: bool,
     exits: &'a [Pos],
@@ -636,7 +636,7 @@ fn towards(
 }
 
 /// Steps from the nearest of `sources` to every tile `ok` lets a walk on.
-fn field(size: Size, sources: &[Pos], ok: impl Fn(Pos) -> bool) -> Grid<u32> {
+pub(crate) fn field(size: Size, sources: &[Pos], ok: impl Fn(Pos) -> bool) -> Grid<u32> {
     let mut d = Grid::filled(size, u32::MAX);
     let mut queue = VecDeque::new();
     for s in sources {
