@@ -86,6 +86,15 @@ colour that only shows what you have already walked. Jeffrey wants:
     source as `t` on the JOBS tab, shows the same track state and clears the same way.
     A job whose target is a listed building (a Plant on a clinic) is two rows, the `◆`
     and the `+`; they share one marker cell, where the `◆` wins.
+14. **Jacked in, nothing offers `t track`**: tracking stays refused from the net ("not
+    from the net"), so the map's rows, card and footer say `jacked in` where they would
+    say `t track`.
+15. **`t` on what you are already at refuses**: `⌖ you're there` (a warning), the old
+    track kept, instead of tracking and clearing on the next tick.
+16. **Home's track label is the listing's name** (`home · {building}`), so the pane, the
+    log and the map's row agree.
+17. **The cursor on the tracked spot** says `⌖ tracking · t stops` in the footer, not
+    `t tracks this spot instead`.
 
 After the builder check (settled without asking):
 - "Get home" leads to the flat: `At(Home)` resolves to a spot inside your flat on its
