@@ -122,7 +122,6 @@ pub fn set(st: &mut AppState, source: Source) -> Result<String, String> {
 }
 
 /// Stops tracking, and logs it.
-#[allow(dead_code)] // the console's `track off` calls it
 pub fn stop(st: &mut AppState) {
     end(st, |label| format!("⌖ stopped tracking {label}"));
 }

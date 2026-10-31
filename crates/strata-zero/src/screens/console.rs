@@ -12,11 +12,11 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 41] = [
+const COMMANDS: [&str; 42] = [
     "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "talent", "tpts", "program",
     "heat", "alarm", "wake", "engage", "calm", "ice", "failsafe", "hp", "who", "clock", "tp",
     "clear", "help", "trace", "seize", "backdoor", "eyes", "light", "time", "job", "standing",
-    "jobs", "target", "foe", "foes", "dummy", "throw", "live", "ripper", "story",
+    "jobs", "target", "foe", "foes", "dummy", "throw", "live", "ripper", "story", "track",
 ];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
@@ -585,6 +585,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             ))
         }
         "story" => story(st, &args),
+        "track" => track(st, &args),
         "jobs" => {
             if st.jobs.list.is_empty() {
                 return Ok("no jobs".to_string());
@@ -660,11 +661,92 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             Ok(line)
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · job fetch|copy|plant|deliver · standing <n> · jobs · target <name> · eyes · light · ripper · foe [n] · dummy [n] · foes · throw <item> [n] · live · story [fire <mission> | feed | call] · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · job fetch|copy|plant|deliver · standing <n> · jobs · target <name> · eyes · light · ripper · foe [n] · dummy [n] · foes · throw <item> [n] · live · story [fire <mission> | feed | call] · track [off | <x> <y> | <name>] · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),
         other => Err(format!("unknown command {other}")),
+    }
+}
+
+/// `track`: shows the track; `off` stops it; `<x> <y>` tracks a spot in your place;
+/// `<name>` tracks the listing on the map's stratum whose name starts with it.
+fn track(st: &mut AppState, args: &[&str]) -> Result<String, String> {
+    use crate::track::{self, Source, Target, route::Through};
+    match args {
+        [] => {
+            let Some(t) = st.track.as_ref() else {
+                return Ok("nothing tracked".to_string());
+            };
+            let label = t.label.clone();
+            let target = match track::target_now(st) {
+                Some(Target::Building(b)) => format!("Building({})", b.0),
+                Some(Target::Person(p)) => format!("Person({})", p.0),
+                Some(Target::Spot { pos, .. }) => format!("Spot({},{})", pos.x, pos.y),
+                None => "?".to_string(),
+            };
+            let leg = match track::leg_now(st) {
+                Some(Ok(l)) => {
+                    let through = match l.through {
+                        Through::Arrive => "Arrive",
+                        Through::Door(_) => "Door",
+                        Through::Lift(_) => "Lift",
+                        Through::Stairs { .. } => "Stairs",
+                        Through::Exit => "Exit",
+                        Through::Connector(_) => "Connector",
+                    };
+                    format!("{through} · {} m", l.path.len())
+                }
+                _ => "no leg".to_string(),
+            };
+            Ok(format!("⌖ {label} · {target} · {leg}"))
+        }
+        ["off"] => {
+            if st.track.is_none() {
+                return Ok("nothing tracked".to_string());
+            }
+            track::stop(st);
+            Ok("stopped".to_string())
+        }
+        [x, y] if x.parse::<i32>().is_ok() && y.parse::<i32>().is_ok() => {
+            let place = st
+                .player
+                .as_ref()
+                .map(|p| p.place)
+                .ok_or_else(|| "no body in the city".to_string())?;
+            let pos = Pos::new(x.parse().unwrap_or(0), y.parse().unwrap_or(0));
+            track::set(
+                st,
+                Source::Spot {
+                    place,
+                    pos,
+                    radius: 1,
+                },
+            )
+        }
+        words => {
+            let want = words.join(" ").to_lowercase();
+            let all = track::listings::listings(st, crate::screens::atlas::map_stratum(st));
+            let hits: Vec<_> = all
+                .iter()
+                .filter(|l| l.name.to_lowercase().starts_with(&want))
+                .collect();
+            match hits.as_slice() {
+                [] => Err(format!("no listing called {want}")),
+                [one] => {
+                    let source = track::listings::source_of(st, one);
+                    track::set(st, source)
+                }
+                many => Err(format!(
+                    "several: {}",
+                    many.iter()
+                        .take(6)
+                        .map(|l| l.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" · ")
+                )),
+            }
+        }
     }
 }
 
@@ -757,6 +839,16 @@ pub fn complete(st: &AppState, head: &str, word: &str) -> Vec<String> {
             .filter(|c| c.starts_with(word))
             .map(|c| c.to_string())
             .collect()
+    } else if head.trim() == "track" {
+        let want = word.to_lowercase();
+        let mut v = vec!["off".to_string()];
+        v.extend(
+            crate::track::listings::listings(st, crate::screens::atlas::map_stratum(st))
+                .into_iter()
+                .map(|l| l.name),
+        );
+        v.retain(|c| c.to_lowercase().starts_with(&want));
+        v
     } else if head.trim() == "story fire" {
         st.book
             .missions
@@ -992,6 +1084,44 @@ mod tests {
             pos: Pos::new(0, 0),
         };
         (st, at)
+    }
+
+    #[test]
+    fn track_shows_and_stops() {
+        let (mut st, at) = story_state();
+        let _ = crate::screens::explore::MapScreen::walking(&mut st);
+        assert_eq!(run(&mut st, at, "track").unwrap(), "nothing tracked");
+        let here = st.player.as_ref().unwrap().pos;
+        let line = format!("track {} {}", here.x + 6, here.y);
+        let out = run(&mut st, at, &line).unwrap();
+        assert!(out.contains("tracking"), "{out}");
+        assert!(run(&mut st, at, "track").unwrap().starts_with('⌖'));
+        assert_eq!(run(&mut st, at, "track off").unwrap(), "stopped");
+        assert!(st.track.is_none());
+        assert_eq!(run(&mut st, at, "track").unwrap(), "nothing tracked");
+    }
+
+    #[test]
+    fn track_by_name_finds_a_listing() {
+        let (mut st, at) = story_state();
+        let _ = crate::screens::explore::MapScreen::walking(&mut st);
+        let out = run(&mut st, at, "track miracorp").unwrap();
+        assert!(out.contains("Miracorp"), "{out}");
+        assert!(run(&mut st, at, "track off").is_ok());
+        assert_eq!(
+            run(&mut st, at, "track zzz").unwrap_err(),
+            "no listing called zzz"
+        );
+        assert!(
+            run(&mut st, at, "track mira")
+                .unwrap_err()
+                .starts_with("several: ")
+        );
+        assert!(
+            complete(&st, "track", "mi")
+                .iter()
+                .any(|c| c.starts_with("Miracorp"))
+        );
     }
 
     #[test]
