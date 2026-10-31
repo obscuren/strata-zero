@@ -172,14 +172,19 @@ pub fn set(st: &mut AppState, source: Source) -> Result<String, String> {
         Resolved::Nowhere => Err("nothing to walk to yet".to_string()),
     };
     let target = concrete(resolve(st, &source))?;
-    let target = concrete(locate(st, target))?;
-    let walk = Walk::new(st, target);
+    let located = concrete(locate(st, target))?;
+    let walk = Walk::new(st, located);
     match walk.leg {
         Err(NoLeg::NoWay) => return Err("no way there from here".to_string()),
         Err(NoLeg::JackedIn) => return Err("not from the net".to_string()),
         Ok(_) => {}
     }
     let label = label(st, &source);
+    // Tracked, it would clear on the next tick; a story's own trigger decides its own.
+    let story = matches!(source, Source::Story { .. });
+    if !story && arrival(st, target, located, &label).is_some() {
+        return Err("⌖ you're there".to_string());
+    }
     let text = format!("⌖ tracking {label}");
     let mut track = Track {
         source,
@@ -351,6 +356,16 @@ pub fn next_now(st: &AppState) -> Option<&str> {
     st.track.as_ref()?.walk.next.as_deref()
 }
 
+/// You are in the net, where no leg is made: in a construct or on its grid.
+pub fn jacked_in(st: &AppState) -> bool {
+    st.player.as_ref().is_some_and(|p| {
+        matches!(
+            p.place,
+            Place::Construct(_) | Place::Stratum(StratumKind::Net)
+        )
+    })
+}
+
 /// The pulses on the track's leg.
 pub fn pulses_now(st: &AppState) -> &[Pulse] {
     st.track.as_ref().map_or(&[], |t| t.pulses.all())
@@ -498,6 +513,8 @@ pub fn label(st: &AppState, source: &Source) -> String {
         Source::Listing(ListingId::Building(b)) => {
             if crate::clinic::is_clinic(st, b) {
                 crate::clinic::name(st, b)
+            } else if st.home.is_some_and(|r| r.home.building == b) {
+                format!("home · {}", crate::net::building_name(st, b))
             } else {
                 crate::net::building_name(st, b)
             }
@@ -986,6 +1003,73 @@ mod tests {
         );
         assert_eq!(tracked(&st), Some(a));
         assert_eq!(st.log.len(), n, "a refusal logs nothing here");
+    }
+
+    #[test]
+    fn set_on_what_you_are_at_refuses() {
+        let mut st = outside();
+        let a = street_spot(steps_off(&st, 20), 1);
+        set(&mut st, a).unwrap();
+        // Beside a clinic's door.
+        let city = st.city.as_ref().unwrap();
+        let clinic = city
+            .buildings
+            .iter()
+            .map(|b| b.id)
+            .find(|b| crate::clinic::is_clinic(&st, *b))
+            .unwrap();
+        let fp = city.building(clinic).footprint;
+        let (_, door) = city
+            .portals(clinic)
+            .into_iter()
+            .find(|(k, _)| *k == StratumKind::Street)
+            .unwrap();
+        let beside = door
+            .neighbors4()
+            .find(|p| !fp.contains(*p) && city.walkable(StratumKind::Street, *p))
+            .unwrap();
+        put(&mut st, STREET, beside);
+        let n = st.log.len();
+        let there = Err("⌖ you're there".to_string());
+        assert_eq!(
+            set(&mut st, Source::Listing(ListingId::Building(clinic))),
+            there
+        );
+        assert_eq!(tracked(&st), Some(a), "the old track kept");
+        // A spot within its radius.
+        assert_eq!(set(&mut st, street_spot(beside, 1)), there);
+        assert_eq!(tracked(&st), Some(a));
+        assert_eq!(st.log.len(), n, "the caller warns");
+        // A story step's own trigger decides its arrival: it is tracked.
+        crate::missions::begin(&mut st);
+        st.missions.feeds.clear();
+        crate::missions::end(&mut st, 0, 0);
+        let body = st.missions.bodies[0].clone();
+        let city = st.city.as_ref().unwrap();
+        let next_to = body
+            .pos
+            .neighbors4()
+            .find(|p| city.walkable(StratumKind::Street, *p))
+            .unwrap();
+        put(&mut st, body.place, next_to);
+        let at = st.missions.runs[0].at;
+        assert!(set(&mut st, story(0, at)).is_ok());
+    }
+
+    #[test]
+    fn home_is_tracked_as_its_listing() {
+        let st = outside();
+        let b = st.home.unwrap().home.building;
+        let src = Source::Listing(ListingId::Building(b));
+        let home = listings::listings(&st, StratumKind::Street)
+            .into_iter()
+            .find(|l| l.kind == listings::Kind::Home)
+            .unwrap();
+        assert_eq!(label(&st, &src), home.name);
+        assert_eq!(
+            label(&st, &src),
+            format!("home · {}", crate::net::building_name(&st, b))
+        );
     }
 
     #[test]

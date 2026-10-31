@@ -2,12 +2,12 @@
 //! the listing under the cursor (spec 7, `map2.html`).
 
 use super::map::{self, MapLayout};
-use super::{Cache, pane_width, spot_under_cursor, under};
+use super::{Cache, pane_width, spot_source, spot_under_cursor, under};
 use crate::app::AppState;
 use crate::render::Visibility;
-use crate::track::is_tracked;
 use crate::track::listings::{Kind, Listing, source_of};
 use crate::track::overlay::mix;
+use crate::track::{is_tracked, jacked_in};
 use crate::ui::chrome::{CYAN, DIM, FAINTER, PANEL_BG, TEXT};
 use citygen::{Place, StratumKind};
 use ratatui::buffer::Buffer;
@@ -59,6 +59,15 @@ fn fg(c: Color) -> Style {
 /// Whether a listing is what is tracked.
 fn tracked(st: &AppState, x: &Listing) -> bool {
     is_tracked(st, &source_of(st, x))
+}
+
+/// What `t` offers on something untracked: nothing from the net.
+fn offer(st: &AppState) -> &'static str {
+    if jacked_in(st) {
+        "jacked in"
+    } else {
+        "t track"
+    }
 }
 
 /// The places list as the pane lays it out.
@@ -235,7 +244,7 @@ pub(super) fn pane(st: &AppState, l: &MapLayout, body: Rect, cache: &Cache, buf:
                 put(buf, px + 3, y + 2, "⌖ tracking", bold(CYAN), right);
                 put(buf, px + 14, y + 2, "· t stops", fg(FAINTER), right);
             } else {
-                put(buf, px + 3, y + 2, "t track", fg(DIM), right);
+                put(buf, px + 3, y + 2, offer(st), fg(DIM), right);
             }
         }
         y += h;
@@ -296,11 +305,14 @@ fn ground(st: &AppState, l: &MapLayout, cache: &Cache) -> Vec<(String, Style)> {
                 "never been"
             };
             out.push((format!("walk {m} m · {seen}"), fg(DIM)));
+            let here = spot_source(st, l).is_some_and(|s| is_tracked(st, &s));
             let t = match st.track {
-                Some(_) => "t tracks this spot instead",
-                None => "t tracks this spot",
+                _ if here => ("⌖ tracking · t stops", fg(CYAN)),
+                _ if jacked_in(st) => ("jacked in", fg(DIM)),
+                Some(_) => ("t tracks this spot instead", fg(DIM)),
+                None => ("t tracks this spot", fg(DIM)),
             };
-            out.push((t.to_string(), fg(DIM)));
+            out.push((t.0.to_string(), t.1));
         }
     }
     out
@@ -366,7 +378,7 @@ pub(super) fn card(st: &AppState, l: &MapLayout, at: Rect, x: &Listing, buf: &mu
     let track = if tracked(st, x) {
         ("⌖ tracking · t stops", CYAN)
     } else {
-        ("t track", DIM)
+        (offer(st), DIM)
     };
     let rows = [
         (format!("{} {}", x.kind.glyph(), x.name), x.kind.color()),
@@ -573,6 +585,58 @@ mod tests {
         let buf = frame(&mut st, b);
         assert_eq!(spot_under_cursor(&st, &laid(&st)), Some(spot));
         assert_eq!(foot(&buf, b, 2).trim(), "no way there");
+    }
+
+    #[test]
+    fn the_cursor_on_the_tracked_spot_says_so() {
+        let mut st = outside();
+        let b = BODY_120;
+        open_ground(&mut st, b);
+        press(&mut st, 't');
+        assert!(matches!(
+            st.track.as_ref().map(|t| t.source),
+            Some(crate::track::Source::Spot { .. })
+        ));
+        let buf = frame(&mut st, b);
+        assert_eq!(foot(&buf, b, 1).trim(), "⌖ tracking · t stops");
+        assert_eq!(buf[(b.right() - 36 + 2, b.bottom() - 1)].fg, CYAN);
+        // And `t` stops it.
+        press(&mut st, 't');
+        assert!(st.track.is_none());
+        let buf = frame(&mut st, b);
+        assert_eq!(foot(&buf, b, 1).trim(), "t tracks this spot");
+    }
+
+    #[test]
+    fn jacked_in_nothing_offers_t_track() {
+        let mut st = outside();
+        let doc = clinic(&st);
+        let landing = crate::screens::atlas::tests::you(&st);
+        let b = st.home.unwrap().home.building;
+        let p = st.player.as_mut().unwrap();
+        p.body = Some((Place::Stratum(STREET), landing));
+        p.place = Place::Construct(b);
+        p.pos = citygen::Pos::new(1, 1);
+        st.atlas.stratum = Some(STREET);
+        st.atlas.cursor = Some(doc.tile);
+        let body = BODY_120;
+        let buf = frame(&mut st, body);
+        let name: String = doc.name.chars().take(23).collect();
+        let y = (body.y + 3..body.bottom())
+            .find(|y| row(&buf, body, *y).contains(&name))
+            .expect("the clinic's row");
+        assert_eq!(row(&buf, body, y + 2).trim(), "jacked in");
+        let card = card_box(&laid(&st)).unwrap();
+        let last = text(&buf, card.y + 4, card.x + 1..card.right() - 1);
+        assert_eq!(last.trim(), "jacked in");
+        // On open ground.
+        open_ground(&mut st, body);
+        let buf = frame(&mut st, body);
+        assert!(foot(&buf, body, 2).starts_with(" walk "));
+        assert_eq!(foot(&buf, body, 1).trim(), "jacked in");
+        // `t` there is still refused, from the net.
+        press(&mut st, 't');
+        assert_eq!(st.log.latest().unwrap().text, "not from the net");
     }
 
     #[test]

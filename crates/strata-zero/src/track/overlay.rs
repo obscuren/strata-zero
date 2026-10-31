@@ -226,14 +226,13 @@ pub fn draw_edge_tag(buf: &mut Buffer, area: Rect, origin: Pos, leg: &Leg, text:
     }
 }
 
-/// The tag's words for this leg: the target's name when the leg arrives, else the way
-/// on, then the distance.
+/// The tag's words for this leg: the target's name, after the way on when the leg does
+/// not arrive, then the distance.
 pub fn tag_text(label: &str, next: Option<&str>, through: Through, metres: usize) -> String {
-    let words = match through {
-        Through::Arrive => label,
-        _ => next.unwrap_or(label),
-    };
-    format!("{words} · {metres} m")
+    match (through, next) {
+        (Through::Arrive, _) | (_, None) => format!("{label} · {metres} m"),
+        (_, Some(next)) => format!("{next} · {label} · {metres} m"),
+    }
 }
 
 #[cfg(test)]
@@ -276,6 +275,21 @@ mod tests {
         assert!((glow(22, &two, 120) - 0.85).abs() < 1e-3);
         assert_eq!(from_goal(0, 40), 39);
         assert_eq!(from_goal(39, 40), 0);
+    }
+
+    #[test]
+    fn the_tag_names_the_way_and_the_place() {
+        let at = |next, through| tag_text("Velform Group Plaza", next, through, 12);
+        assert_eq!(at(None, Through::Arrive), "Velform Group Plaza · 12 m");
+        assert_eq!(
+            at(Some("door"), Through::Door(citygen::BuildingId(3))),
+            "door · Velform Group Plaza · 12 m"
+        );
+        assert_eq!(
+            at(Some("lift to 6F"), Through::Lift(6)),
+            "lift to 6F · Velform Group Plaza · 12 m"
+        );
+        assert_eq!(at(None, Through::Exit), "Velform Group Plaza · 12 m");
     }
 
     #[test]

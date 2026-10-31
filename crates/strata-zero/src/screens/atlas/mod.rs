@@ -12,7 +12,7 @@ use crate::app::AppState;
 use crate::render::map::MapRef;
 use crate::track::listings::{self, Kind, Listing, walk_from};
 use crate::track::route::{self, Leg};
-use crate::track::{ListingId, Pulses, Target, target_now};
+use crate::track::{ListingId, Pulses, Source, Target, target_now};
 use crate::ui::chrome::{CYAN, FAINTER, PANEL_BG};
 use citygen::{Grid, Place, Pos, StratumKind};
 use map::MapLayout;
@@ -367,6 +367,16 @@ pub fn spot_under_cursor(st: &AppState, layout: &MapLayout) -> Option<Pos> {
         .flat_map(|dy| (-8..=8).map(move |dx| mid.offset(dx, dy)))
         .filter(|p| ok(*p))
         .min_by_key(|p| (p.dist2(mid), p.y, p.x))
+}
+
+/// What `t` tracks off the listings: the spot under the cursor, arrived at within the
+/// tiles a pixel covers.
+pub(super) fn spot_source(st: &AppState, layout: &MapLayout) -> Option<Source> {
+    Some(Source::Spot {
+        place: Place::Stratum(layout.stratum?),
+        pos: spot_under_cursor(st, layout)?,
+        radius: layout.s.max(1),
+    })
 }
 
 /// While you are inside a building, the walk on the map from its way out to the

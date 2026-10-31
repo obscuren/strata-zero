@@ -2,11 +2,11 @@
 //! zoom and the fold. Everything else is the deck's.
 
 use super::map::MapLayout;
-use super::{cached, pane, refresh, relayout, spot_under_cursor, under_cursor};
+use super::{cached, pane, refresh, relayout, spot_source, under_cursor};
 use crate::app::AppState;
+use crate::track;
 use crate::track::listings::{Kind, source_of};
-use crate::track::{self, Source};
-use citygen::{Place, Pos};
+use citygen::Pos;
 use crossterm::event::KeyCode;
 
 #[derive(Clone, Copy)]
@@ -134,15 +134,7 @@ fn step_list(st: &mut AppState, l: &MapLayout, d: i32) {
 /// under it; on the tracked one, stops.
 fn track_here(st: &mut AppState, l: &MapLayout) {
     let listing = under_cursor(st, l).map(|x| source_of(st, &x));
-    let spot = || {
-        let (pos, k) = (spot_under_cursor(st, l)?, l.stratum?);
-        Some(Source::Spot {
-            place: Place::Stratum(k),
-            pos,
-            radius: l.s.max(1),
-        })
-    };
-    let result = match listing.or_else(spot) {
+    let result = match listing.or_else(|| spot_source(st, l)) {
         Some(source) => track::toggle(st, source),
         None => Err("nothing to walk to there".to_string()),
     };
