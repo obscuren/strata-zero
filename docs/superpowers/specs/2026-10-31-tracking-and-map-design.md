@@ -293,10 +293,23 @@ tick: either clear is right, and only one log line is written).
 A `TrackOverlay` in the explore screen's overlay stack, drawn after the others. It only
 calls `set_bg`, so every glyph stays.
 
-- **The walk**: each tile of `leg.path` in view, at index `i`:
+- **The walk**: each tile of `leg.path` in view, at `g` tiles from the goal along the
+  path (`g = n − 1 − i` for index `i`, `n = path.len()`):
   - base `f = 0.22 + 0.06·sin(2π·t/60)`;
-  - the band: `head = (0.9·t) mod (n + 24)` with `n = path.len()`; when
-    `0 ≤ head − i < 12`, `f = max(f, 0.85·(1 − (head − i)/12))`;
+  - **pulses**, Jeffrey's ruling after playing it (2026-10-31): "when you move the line
+    trace get redrawn and act weirdly. It should be drawn independently", and the next
+    pulse must not wait for the last to arrive — "a 3s timer for firing":
+    - a pulse fires every 90 ticks (3 s), the first the moment the leg is drawn, from
+      your end of the walk: it records the tick it fired, `t₀`, and the walk's length
+      then, `L₀ = n`;
+    - its head lies `h = L₀ − 0.9·(t − t₀)` tiles from the goal: it is pinned to the
+      walk, not to you, so walking along the path or the path being remade does not
+      move it;
+    - it dies when `h < −12` (its tail past the goal); several can be in flight on a
+      long walk;
+    - the tail trails behind the head, away from the goal: with `d = g − h`, when
+      `0 ≤ d < 12`, `f = max(f, 0.85·(1 − d/12))`; the brightest pulse wins;
+    - pulses reset when the leg moves to another place (a door, a lift, a connector);
   - the cell's background becomes `mix(its background, CYAN (0,229,255), f)`.
 - **The ripple at the goal** when `through` is `Arrive` (MAGENTA (255,0,200)), or a
   dimmer cyan ripple at a door, lift, stairs or connector goal:
@@ -313,7 +326,10 @@ calls `set_bg`, so every glyph stays.
   `(205,212,222)` on `(4,6,10)`, clamped inside the view. For a leg through a door or a
   lift the tag names that: ` ▸ door · Velform Group Plaza · 12 m `.
 
-These constants are the ones `round1.html` animates (concept C) and `map2.html` reuses.
+These constants are the ones `round1.html` animates (concept C) and `map2.html` reuses,
+except the pulses, which replace the mock's band `(0.9·t) mod (n + 24)` (it numbered
+the walk from you and waited for each pulse to arrive). The deck map's walk uses the
+same pulses, each pixel lit by the tiles it holds.
 
 ## 5. Where the track shows
 
@@ -431,9 +447,11 @@ each.
   on the right edge marks it (frame 3): `▕` in the border colour, then on `(10,16,24)`:
   `◂f` (cyan, bold) on the first row, `PLACES` down the strip zigzagging between its two
   columns, the chosen kind's glyph, and the count of listings. `f` unfolds.
-- **The card** (folded only): the listing under the cursor gets a 30-wide box beside its
-  marker, on the side with room, inside the map: glyph and name, `what`, `{district} ·
-  {m} m`, and the track state. Nothing animates under it.
+- **The card**, the pane open or folded (Jeffrey after playing it, 2026-10-31: "when
+  hovering over a POI in the map, I remember a popout being drawn"): the listing under
+  the cursor gets a 30-wide box beside its marker, on the side with room, inside the
+  map: glyph and name, `what`, `{district} · {m} m`, and the track state. Nothing
+  animates under it. With the pane open its row still opens in the list too.
 
 ### Keys
 
