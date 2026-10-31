@@ -484,6 +484,8 @@ fn terminals_by_theme() {
 fn the_rig_at_home() {
     let mut st = state_home();
     let map = MapScreen::walking(&mut st);
+    // A new game mails nothing now; the favour's mail is the one the rig reads.
+    crate::jobs::first_favour(&mut st);
     let home = st.home.unwrap().home;
     let mut term = Terminal::open(&mut st, HostId::Rig, (map.place, home.rig));
     type_lines(&mut st, &mut term, &["cat ~/mail/001-a-favour.txt"]);
