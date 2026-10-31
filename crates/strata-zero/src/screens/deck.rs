@@ -21,7 +21,7 @@ use crate::ui::chrome::{
 use crate::ui::hud::capitalised;
 use crate::ui::logo::{self, Logo};
 use crate::ui::skill_card::{self, Card, Held};
-use crate::ui::talents::{TalentsView, TreeCursor, step, talent_at};
+use crate::ui::talents::{TalentsState, TalentsView, talent_at};
 use citygen::rng::hash64;
 use citygen::{FloorPlan, NodeKind, Place, Pos, StratumKind};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -167,8 +167,8 @@ pub struct Deck {
     owned_seen: Option<BTreeSet<CategoryId>>,
     /// The owned skills at the last update, so buying the selected one replays its card.
     skills_seen: Option<BTreeSet<SkillId>>,
-    /// Where the TALENTS tab's cursor sits.
-    pub(crate) cursor: TreeCursor,
+    /// The TALENTS tab: the tree on show and where its cursor sits in each tree.
+    pub(crate) talents: TalentsState,
     /// The talent box lit until its tick: the rank just learned.
     flash: Option<(game::TalentId, u64)>,
     /// The WORKBENCH tab's sheet: the drawing shown and the part selected.
@@ -546,7 +546,7 @@ impl Deck {
             open: None,
             owned_seen: None,
             skills_seen: None,
-            cursor: TreeCursor::default(),
+            talents: TalentsState::default(),
             flash: None,
             workbench: Workbench::default(),
         }
@@ -640,12 +640,7 @@ impl Deck {
         } else {
             Self::first_selectable(&rows)
         };
-        self.cursor = step(
-            &st.content,
-            TreeCursor::unpack(st.deck_rows[Tab::Talents.index()]),
-            0,
-            0,
-        );
+        self.talents = st.deck_talents.clone();
         self.workbench =
             Workbench::unpack(st.deck_rows[Tab::Workbench.index()]).clamped(&st.content);
         self
@@ -823,9 +818,9 @@ impl Deck {
         rows.iter().position(|r| r.detail.is_some()).unwrap_or(0)
     }
 
-    /// Moves the TALENTS cursor along a tier, across trees or between tiers.
+    /// Moves the TALENTS cursor along a tier or between tiers of the tree on show.
     fn move_cursor(&mut self, st: &AppState, dx: i32, dy: i32) {
-        self.cursor = step(&st.content, self.cursor, dx, dy);
+        self.talents.step(&st.content, dx, dy);
         self.changed = st.tick;
     }
 
@@ -1357,9 +1352,15 @@ impl Deck {
                 KeyCode::Down | KeyCode::Char('j') if self.tab == Tab::Talents => {
                     self.move_cursor(st, 0, 1)
                 }
+                KeyCode::Char(c @ ('[' | ']')) if self.tab == Tab::Talents => {
+                    self.talents
+                        .switch(&st.content, if c == '[' { -1 } else { 1 });
+                    self.changed = st.tick;
+                }
                 KeyCode::Char(' ') | KeyCode::Enter if self.tab == Tab::Talents => {
                     // A rank goes in straight away; the refusal lands in the strip.
-                    if let Some(id) = talent_at(&st.content, self.cursor).cloned() {
+                    let at = self.talents.cursor(&st.content);
+                    if let Some(id) = talent_at(&st.content, at).cloned() {
                         let result = perform(st, Action::Learn(id.clone()));
                         if result.is_ok() {
                             self.flash = Some((id, st.tick + FLASH_TICKS));
@@ -1494,7 +1495,7 @@ impl Screen for Deck {
         st.deck_rows[self.tab.index()] = self.row;
         st.deck_kit = self.kit.state;
         st.deck_sheet = self.sheet.state;
-        st.deck_rows[Tab::Talents.index()] = self.cursor.pack();
+        st.deck_talents = self.talents.clone();
         st.deck_rows[Tab::Workbench.index()] = self.workbench.pack();
         cmd
     }
@@ -1663,7 +1664,7 @@ impl Screen for Deck {
             TalentsView {
                 content: &st.content,
                 character: &st.character,
-                cursor: self.cursor,
+                cursor: self.talents.cursor(&st.content),
                 tick,
                 changed: self.changed,
                 flash: self.flash.clone(),
@@ -1731,7 +1732,7 @@ impl Screen for Deck {
                 match tab {
                     Tab::Skills => "Q/E tabs · ↑↓ select · ←→ fold · space fold/buy · tab close",
                     Tab::Talents => {
-                        "←→ along · ↑↓ tiers · Q/E tabs · 0-8 jump · space learn · tab close"
+                        "←→↑↓ move · [ ] trees · space burn a point · Q/E tabs · tab close"
                     }
                     Tab::Kit => self.kit.hints(),
                     Tab::Workbench if st.character.has_workbench(&st.content) => {
@@ -3091,108 +3092,189 @@ mod tests {
     }
 
     #[test]
-    fn talents_tab_draws_the_trees_and_moves_the_cursor() {
+    fn talents_board_draws_one_tree() {
         let mut st = state();
         let mut d = Deck::new(0);
         d.update(&mut st, &[key(KeyCode::Char('0'))]);
         assert_eq!(d.tab, Tab::Talents);
         st.tick = 60;
-        let text = draw(&d, &st, 120, 35);
-        assert!(text.contains("▌TALENTS▐"), "{text}");
-        for name in ["MEAT", "EDGE", "WRENCH", "STREET", "ICE"] {
-            assert!(text.contains(name), "{name}: {text}");
+        for (w, h) in [(100, 30), (120, 40)] {
+            let text = draw(&d, &st, w, h);
+            for s in [
+                "▌TALENTS▐",
+                "TREES",
+                "▶MEAT",
+                "EDGE",
+                "WRENCH",
+                "STREET",
+                "ICE",
+                "1 to burn",
+                "MEAT · the body is the first machine",
+                "┣━ 0",
+                "┣━ 3",
+                "┣━12",
+                "> thick_skin.tal",
+                "○○○ 0/3 · tier 1",
+                "THICK SKIN",
+                "NEXT  +3 max HP",
+                "[space] burn a point",
+                "←→↑↓ move · [ ] trees · space burn a point",
+            ] {
+                assert!(text.contains(s), "{s} at {w}x{h}: {text}");
+            }
+            assert!(!text.contains("quick_draw"), "one tree at a time: {text}");
         }
-        assert!(text.contains("TALENTS · 1 point"), "{text}");
+        // `]` shows EDGE at its first talent; the arrows stay in it; `[` goes back.
+        d.update(&mut st, &[key(KeyCode::Char(']'))]);
+        st.tick += 45;
+        let text = draw(&d, &st, 100, 30);
         assert!(
-            text.contains("THICK SKIN · MEAT · tier 1 · rank 0/3"),
+            text.contains("▶EDGE") && text.contains("> quick_draw.tal"),
             "{text}"
         );
-        assert!(text.contains("next: +3 max HP"), "{text}");
-        assert!(text.contains("3 more"), "a closed tier says so: {text}");
-        // The cursor's box is highlighted like a selected row.
-        let mut t = Terminal::new(TestBackend::new(120, 35)).unwrap();
-        t.draw(|f| d.draw(&st, f)).unwrap();
-        let lit = t
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .any(|c| c.symbol() == "▲" && c.bg == BAR_BG);
-        assert!(lit, "the first box is lit");
-        // Right past the tier's end lands in the next tree.
+        assert!(
+            text.contains("EDGE · the half second that decides it"),
+            "{text}"
+        );
         d.update(&mut st, &[key(KeyCode::Char('l')), key(KeyCode::Char('l'))]);
         st.tick += 45;
-        let text = draw(&d, &st, 120, 35);
-        assert!(text.contains("QUICK DRAW · EDGE · tier 1"), "{text}");
-        // Down: the next tier; the dossier says why it is closed.
-        d.update(&mut st, &[key(KeyCode::Char('j'))]);
+        assert!(draw(&d, &st, 100, 30).contains("> light_step.tal"));
+        // The spot survives closing the deck.
+        let d2 = Deck::new(0).restore(&st);
+        assert_eq!(d2.tab, Tab::Talents);
+        assert_eq!(d2.talents, d.talents);
+        d.update(&mut st, &[key(KeyCode::Char('['))]);
         st.tick += 45;
-        let text = draw(&d, &st, 120, 35);
+        assert!(draw(&d, &st, 100, 30).contains("> thick_skin.tal"));
+        d.update(&mut st, &[key(KeyCode::Char(']'))]);
+        st.tick += 45;
         assert!(
-            text.contains("DOUBLE TAP · EDGE · tier 2") && text.contains("3 more points in EDGE"),
-            "{text}"
+            draw(&d, &st, 100, 30).contains("> light_step.tal"),
+            "EDGE remembers its spot"
         );
-        // Up wraps to the capstone; e still changes tabs, l did not.
-        d.update(&mut st, &[key(KeyCode::Char('k')), key(KeyCode::Char('k'))]);
-        st.tick += 45;
-        let text = draw(&d, &st, 120, 35);
-        assert!(text.contains("THE HALF SECOND · EDGE · tier 5"), "{text}");
+        // `e` still changes tabs.
         d.update(&mut st, &[key(KeyCode::Char('e'))]);
         assert_eq!(d.tab, Tab::Skills);
     }
 
     #[test]
-    fn talents_tab_learns_on_space_and_shows_the_rank() {
+    fn talents_board_reads_the_locked_reasons() {
+        let mut st = state();
+        for (id, r) in [
+            ("quick_draw", 3),
+            ("double_tap", 2),
+            ("light_step", 2),
+            ("steady_hand", 1),
+        ] {
+            st.character.talents.insert(game::TalentId::new(id), r);
+        }
+        st.character.talent_points = 2;
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('0')), key(KeyCode::Char(']'))]);
+        d.update(
+            &mut st,
+            &[
+                key(KeyCode::Char('j')),
+                key(KeyCode::Char('j')),
+                key(KeyCode::Char('l')),
+            ],
+        );
+        st.tick += 60;
+        let text = draw(&d, &st, 100, 30);
+        assert!(text.contains("> bullet_time.tal"), "{text}");
+        assert!(
+            text.contains("NEED  ✓ 6 points in EDGE") && text.contains("✗ Long shot 2/2"),
+            "{text}"
+        );
+        assert!(!text.contains("[space]"), "{text}");
+        assert!(text.contains("LINE    Steady hand"), "{text}");
+        // With no points the board stays lit; the readout says what is missing.
+        st.character.talent_points = 0;
+        let text = draw(&d, &st, 100, 30);
+        assert!(text.contains("✗ no points left"), "{text}");
+        d.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(last(&st), Some("no points left"));
+        assert!(last_is_warning(&st));
+    }
+
+    /// A chip's LED column and bottom row on the 100x30 deck, whose body starts at (1, 5).
+    fn led(tier: u16, col: u16) -> (u16, u16) {
+        (1 + 21 + 11 * col + 7, 5 + 2 + 4 * tier + 2)
+    }
+
+    /// Whether a colour is one the board greys a chip to.
+    fn greyed(c: Color) -> bool {
+        matches!(c, Color::Rgb(r, g, _) if r == g)
+    }
+
+    #[test]
+    fn talents_board_learns_and_lights() {
         let mut st = state();
         let mut d = Deck::new(0);
         d.update(&mut st, &[key(KeyCode::Char('0'))]);
-        assert!(matches!(
-            d.update(&mut st, &[key(KeyCode::Char(' '))]),
-            ScreenCmd::Stay
-        ));
+        d.update(&mut st, &[key(KeyCode::Char(' '))]);
         assert_eq!(
             st.character.talent_rank(&game::TalentId::new("thick_skin")),
             1
         );
         assert_eq!(last(&st), Some("Thick skin 1/3"));
-        st.tick = 60;
-        let text = draw(&d, &st, 120, 35);
-        assert!(
-            text.contains("▰▱▱ 1/3")
-                && text.contains("TALENTS · 0 points")
-                && text.contains("MEAT 1"),
-            "{text}"
-        );
-        assert!(text.contains("now: +3 max HP"), "{text}");
+        let (x, y) = led(0, 0);
+        let buf = screen(&d, &st, 100, 30);
+        assert_eq!(buf[(x, y)].symbol(), "●");
+        assert_eq!(buf[(x, y)].fg, MAGENTA, "the flash");
+        st.tick += FLASH_TICKS + 30;
+        let buf = screen(&d, &st, 100, 30);
+        let meat = crate::screens::create::attribute_colour(game::Attribute::Body);
+        assert_eq!(buf[(x, y)].symbol(), "●");
+        assert_eq!(buf[(x, y)].fg, meat);
+        assert_eq!(buf[(x, y - 1)].symbol(), "○");
+        assert!(buffer_text(&buf).contains("0 to burn"));
+        // Long haul is open, in colour; Second lung's tier is shut, grey.
+        let (lx, ly) = led(0, 1);
+        assert!(!greyed(buf[(lx - 7, ly)].bg), "{:?}", buf[(lx - 7, ly)]);
+        let (sx, sy) = led(1, 0);
+        assert!(greyed(buf[(sx - 7, sy)].bg), "{:?}", buf[(sx - 7, sy)]);
         d.update(&mut st, &[key(KeyCode::Char(' '))]);
         assert_eq!(last(&st), Some("no points left"));
-        assert!(last_is_warning(&st));
-        // The smallest screen still draws every tree and the dossier.
-        let text = draw(&d, &st, 100, 30);
-        assert!(
-            text.contains("THICK SKIN · MEAT") && text.contains("ICE") && text.contains("Bruises"),
-            "{text}"
-        );
-        // The cursor survives a reopen.
-        d.update(&mut st, &[key(KeyCode::Char('l')), key(KeyCode::Char('j'))]);
-        let d2 = Deck::new(0).restore(&st);
-        assert_eq!(d2.tab, Tab::Talents);
-        assert_eq!(d2.cursor, d.cursor);
     }
 
     #[test]
-    fn talents_columns_widen_on_a_wide_screen() {
+    fn talents_board_lights_a_capstone() {
         let mut st = state();
+        for (id, r) in [
+            ("thick_skin", 3),
+            ("long_haul", 2),
+            ("iron_grip", 2),
+            ("haymaker", 2),
+            ("bull_rush", 1),
+            ("juggernaut", 2),
+            ("meat_machine", 1),
+        ] {
+            st.character.talents.insert(game::TalentId::new(id), r);
+        }
         let mut d = Deck::new(0);
         d.update(&mut st, &[key(KeyCode::Char('0'))]);
-        st.tick = 60;
-        let text = draw(&d, &st, 140, 40);
-        assert!(text.contains("▲ Thick skin"), "{text}");
-        let text = draw(&d, &st, 120, 35);
+        d.talents = TalentsState {
+            tree: 0,
+            spots: vec![(4, 1)],
+        };
+        st.tick += 60;
+        let buf = screen(&d, &st, 100, 30);
+        let text = buffer_text(&buf);
         assert!(
-            text.contains("▲ Thick sk ") && !text.contains("Thick skin"),
+            text.contains("> meat_machine.tal") && text.contains("at its best"),
             "{text}"
         );
+        let (x, y) = led(4, 1);
+        assert_eq!(buf[(x, y)].symbol(), "●");
+        assert_eq!(buf[(x, y)].fg, Color::Rgb(255, 200, 80));
+        // The trace from Juggernaut ends in an arrow over the capstone, lit.
+        let meat = crate::screens::create::attribute_colour(game::Attribute::Body);
+        let (ax, ay) = (x - 7 + 2, y - 3);
+        assert_eq!(buf[(ax, ay)].symbol(), "▼");
+        assert_eq!(buf[(ax, ay)].fg, meat);
+        // So is the rail, all the way down.
+        assert_eq!(buf[(1 + 15, y - 1)].fg, meat);
     }
 
     #[test]
@@ -3204,8 +3286,8 @@ mod tests {
         let text = draw(&d, &st, 100, 30);
         assert!(text.contains("▌TALENTS▐"), "{text}");
         assert!(
-            text.contains("▱▱▱ 0/3"),
-            "a box draws at the minimum: {text}"
+            text.contains("○○○ 0/3"),
+            "the board draws at the minimum: {text}"
         );
         d.update(&mut st, &[key(KeyCode::Char('1'))]);
         let text = draw(&d, &st, 100, 30);

@@ -131,6 +131,8 @@ pub struct AppState {
     pub deck_kit: crate::screens::kit::KitState,
     /// Where ATTRIBUTES was left: the focus, the tile, the ledger's row.
     pub deck_sheet: crate::screens::sheet::SheetState,
+    /// The TALENTS tab's tree and cursor spots.
+    pub deck_talents: crate::ui::talents::TalentsState,
     /// The part the jacked deck's blueprint points at, kept between openings.
     pub deck_part: usize,
     /// The character being built, between the chooser and JACK IN.
@@ -282,6 +284,7 @@ impl AppState {
             deck_rows: [0; Tab::ALL.len()],
             deck_kit: Default::default(),
             deck_sheet: Default::default(),
+            deck_talents: Default::default(),
             deck_part: 0,
             build: None,
             log: MessageLog::default(),
@@ -416,6 +419,7 @@ impl AppState {
         self.deck_rows = [0; Tab::ALL.len()];
         self.deck_kit = Default::default();
         self.deck_sheet = Default::default();
+        self.deck_talents = Default::default();
         self.deck_part = 0;
     }
 
