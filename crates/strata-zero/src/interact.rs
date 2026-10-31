@@ -172,7 +172,15 @@ pub fn gather(
         let mut rows = if world.people()[id.0 as usize].profession == "fixer" {
             crate::jobs::ui::rows(st, id)
         } else {
-            vec![Choice::new('t', "Talk", Pick::Talk { lines, said })]
+            vec![Choice::new(
+                't',
+                "Talk",
+                Pick::Talk {
+                    lines,
+                    said,
+                    who: Some(id),
+                },
+            )]
         };
         rows.extend(crate::jobs::ui::receiver_rows(st, id));
         add(
@@ -728,6 +736,90 @@ mod tests {
                     .as_ref()
                     .is_some_and(|h| h.name != crate::clinic::name(&st, b))
         }));
+    }
+
+    /// Stands the player on a street tile beside `who`, who is parked where they are.
+    fn stand_beside(st: &mut AppState, who: sim::PersonId) -> Pos {
+        let spot = st.world.as_ref().unwrap().spot_of(who).unwrap();
+        let city = st.city.clone().unwrap();
+        let beside = spot
+            .neighbors4()
+            .find(|p| city.walkable(citygen::StratumKind::Street, *p))
+            .unwrap();
+        let mut p = crate::walker::Player::spawn(&city, 1);
+        p.place = Place::Stratum(citygen::StratumKind::Street);
+        p.pos = beside;
+        st.player = Some(p);
+        st.world.as_mut().unwrap().park(who, spot);
+        spot
+    }
+
+    /// The Space window on `who` beside the player, its Talk row fired.
+    fn talk_to(st: &mut AppState, who: sim::PersonId) -> crate::app::ScreenCmd {
+        let spot = stand_beside(st, who);
+        let subjects = gather(st, &|_, _| None);
+        let mut window = subjects
+            .iter()
+            .find(|s| s.pos == spot)
+            .expect("the person is beside")
+            .window(st.tick.saturating_sub(200));
+        let key = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('t'),
+            crossterm::event::KeyModifiers::NONE,
+        );
+        window.update(st, &[key])
+    }
+
+    fn talk_book(st: &mut AppState) {
+        st.book = crate::missions::Book::parse(
+            r#"Story(
+                cast: { "dez": Role(name: "Dez", title: "fixer", pick: NearestFixer, face: None) },
+                faces: { "silhouette": Face(rows: ["......dd........", "....dmmmmd......"], eye: (255, 255, 255)) },
+                missions: [Mission(id: "chat", title: "Chat", from: "dez", steps: [
+                    Step(id: "hello", when: Talk("dez"), then: [
+                        Feed(from: "dez", close: "ok", text: ["Hello."]),
+                    ]),
+                ])],
+            )"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn talking_to_a_role_fires_its_step() {
+        let mut st = state_home();
+        talk_book(&mut st);
+        crate::missions::begin(&mut st);
+        let dez = crate::missions::person_of(&st, "dez").unwrap();
+        assert!(st.missions.feeds.is_empty());
+        let cmd = talk_to(&mut st, dez);
+        assert!(matches!(cmd, crate::app::ScreenCmd::Pop { .. }));
+        assert_eq!(st.missions.feeds.len(), 1);
+    }
+
+    #[test]
+    fn talk_is_unchanged_for_anyone_else() {
+        let mut st = state_home();
+        talk_book(&mut st);
+        crate::missions::begin(&mut st);
+        let dez = crate::missions::person_of(&st, "dez").unwrap();
+        let other = st
+            .world
+            .as_ref()
+            .unwrap()
+            .people()
+            .iter()
+            .enumerate()
+            .map(|(i, _)| sim::PersonId(i as u32))
+            .find(|p| {
+                *p != dez
+                    && !st.world.as_ref().unwrap().is_dead(*p)
+                    && st.world.as_ref().unwrap().spot_of(*p).is_some()
+            })
+            .unwrap();
+        let cmd = talk_to(&mut st, other);
+        assert!(matches!(cmd, crate::app::ScreenCmd::Stay));
+        assert!(st.missions.feeds.is_empty());
     }
 
     #[test]

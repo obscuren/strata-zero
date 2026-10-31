@@ -108,7 +108,6 @@ pub struct Call {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
     NewGame,
-    #[allow(dead_code)] // Talk sends it (Task 8)
     Talked(PersonId),
 }
 
@@ -178,7 +177,6 @@ pub fn end(st: &mut AppState, mission: usize, step: usize) {
 }
 
 /// Whether a mission waits on talking to this person.
-#[allow(dead_code)] // Talk asks before it shows the card (Task 8)
 pub fn listens(st: &AppState, who: PersonId) -> bool {
     (0..st.missions.runs.len()).any(|m| {
         matches!(waiting(st, m).map(|s| &s.when),
