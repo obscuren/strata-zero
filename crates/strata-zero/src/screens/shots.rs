@@ -1784,13 +1784,51 @@ fn tracked_city() -> (AppState, MapScreen) {
     (st, map)
 }
 
+/// `tracked_city`, back in your flat on 18F where the game starts.
+fn tracked_from_the_flat() -> (AppState, MapScreen) {
+    let (mut st, _) = tracked_city();
+    let rig = st.home.unwrap();
+    let p = st.player.as_mut().unwrap();
+    p.place = rig.place();
+    p.pos = rig.home.bed_side;
+    st.atlas.cursor = None;
+    st.atlas.picked = None;
+    crate::track::tick(&mut st);
+    let map = MapScreen::walking(&mut st);
+    (st, map)
+}
+
 const BOTH: [(u16, u16); 2] = [(120, 40), (100, 30)];
+
+/// `n` frames of the track, as the deck (or the street) runs them, so its pulses are
+/// in flight when the shot is taken.
+fn fly(st: &mut AppState, mut deck: Option<&mut Deck>, n: u64) {
+    for _ in 0..n {
+        st.tick += 1;
+        match deck.as_deref_mut() {
+            Some(d) => {
+                d.update(st, &[]);
+            }
+            None => crate::track::tick(st),
+        }
+    }
+}
 
 /// The deck on MAP, drawn once so its keys have a map to work on; `keys` then press,
 /// and the deck is written at `size` as `name`.
 fn atlas_shot(name: &str, keys: &[KeyCode], ground: bool) {
+    atlas_shot_from(name, keys, ground, tracked_city);
+}
+
+/// `atlas_shot` from the state `start` makes.
+fn atlas_shot_from(
+    name: &str,
+    keys: &[KeyCode],
+    ground: bool,
+    start: fn() -> (AppState, MapScreen),
+) {
     for size in BOTH {
-        let (mut st, map) = tracked_city();
+        let (mut st, map) = start();
         let plaza = ground.then(|| {
             let city = st.city.as_ref().unwrap();
             let tiles = &city.stratum(StratumKind::Street).unwrap().tiles;
@@ -1818,10 +1856,18 @@ fn atlas_shot(name: &str, keys: &[KeyCode], ground: bool) {
             st.atlas.cursor = Some(p);
             st.atlas.picked = None;
         }
-        deck.update(&mut st, &[]);
+        fly(&mut st, Some(&mut deck), 40);
         let (w, h) = size;
         shot_stack(&format!("{name}_{w}x{h}"), &st, &[&map, &deck], size);
     }
+}
+
+/// The MAP opened in your flat on 18F, Miracorp Tattoo tracked: the walk from the
+/// megablock's door, the distances from there.
+#[test]
+#[ignore]
+fn atlas_from_the_flat() {
+    atlas_shot_from("atlas_from_the_flat", &[], false, tracked_from_the_flat);
 }
 
 /// Frame 1: every kind, the cursor on the tracked clinic.
@@ -1850,8 +1896,9 @@ fn atlas_folded() {
     atlas_shot("atlas_folded", &[KeyCode::Char('f')], false);
 }
 
-/// The street with the walk to Marlo's body, `back` tiles of it still ahead.
-fn street_walk(name: &str, back: usize) {
+/// The street with the walk to Marlo's body, `back` tiles of it still ahead, `flying`
+/// ticks after it was tracked.
+fn street_walk(name: &str, back: usize, flying: u64) {
     let (mut st, route) = walked_city();
     stand_on(&mut st, route[route.len().saturating_sub(back + 1)]);
     let source = story_track(&st).unwrap_or(crate::track::Source::Spot {
@@ -1861,6 +1908,7 @@ fn street_walk(name: &str, back: usize) {
     });
     crate::track::set(&mut st, source).unwrap();
     let map = MapScreen::walking(&mut st);
+    fly(&mut st, None, flying);
     for (w, h) in BOTH {
         shot_stack(&format!("{name}_{w}x{h}"), &st, &[&map], (w, h));
     }
@@ -1869,13 +1917,13 @@ fn street_walk(name: &str, back: usize) {
 #[test]
 #[ignore]
 fn track_street_near() {
-    street_walk("track_street_near", 30);
+    street_walk("track_street_near", 30, 14);
 }
 
 #[test]
 #[ignore]
 fn track_street_far() {
-    street_walk("track_street_far", 95);
+    street_walk("track_street_far", 95, 14);
 }
 
 /// The deck's JOBS tab with the story tracked.
