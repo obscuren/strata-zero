@@ -112,9 +112,14 @@ fn nearest_stratum(strata: &[StratumKind], k: StratumKind) -> Option<StratumKind
 /// The walk from where you stand towards a concrete target (a `Spot` or a
 /// `Building`; a `Person` is `locate`d first).
 pub fn leg(st: &AppState, target: Target) -> Result<Leg, NoLeg> {
-    let city = st.city.as_ref().ok_or(NoLeg::NoWay)?;
     let player = st.player.as_ref().ok_or(NoLeg::NoWay)?;
-    let (place, from) = (player.place, player.pos);
+    leg_from(st, player.place, player.pos, target)
+}
+
+/// The walk from tile `from` of `place` towards a concrete target, as `leg` makes it
+/// from where you stand: the map's walk from your building's way out.
+pub fn leg_from(st: &AppState, place: Place, from: Pos, target: Target) -> Result<Leg, NoLeg> {
+    let city = st.city.as_ref().ok_or(NoLeg::NoWay)?;
     if matches!(
         place,
         Place::Construct(_) | Place::Stratum(StratumKind::Net)

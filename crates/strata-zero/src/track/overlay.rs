@@ -47,6 +47,20 @@ pub fn ripple(dx: i32, dy: i32, t: u64) -> f32 {
     (ring * 0.55).max(core)
 }
 
+/// The map's ripple on its pixels: how much of the colour a pixel `d` pixels from the
+/// target takes at tick `t`, rings 1.6 pixels apart going out from a pulsing core.
+pub fn ripple_px(d: f32, t: u64) -> f32 {
+    let t = t as f32;
+    let r = (t / 14.0) % 4.0;
+    let ring = (1.0 - (d - 1.6 * r).abs() / 1.2).max(0.0) * (1.0 - r / 4.0);
+    let core = if d < 0.8 {
+        0.4 + 0.25 * (PI * t / 15.0).sin()
+    } else {
+        0.0
+    };
+    (0.7 * ring).max(core)
+}
+
 fn rgb(c: Color) -> Rgb {
     match c {
         Color::Rgb(r, g, b) => Rgb(r, g, b),
@@ -263,6 +277,24 @@ mod tests {
         for t in 0..120 {
             assert_eq!(ripple(4, 3, t), 0.0);
             assert_eq!(ripple(7, 0, t), 0.0);
+        }
+    }
+
+    #[test]
+    fn the_map_ripple_rings_out_in_pixels() {
+        // The core pulses, and a ring leaves it at full strength.
+        for t in 0..120 {
+            let c = ripple_px(0.0, t);
+            assert!((0.15..=0.7).contains(&c), "t {t} core {c}");
+        }
+        assert!((ripple_px(0.0, 0) - 0.7).abs() < 1e-3);
+        // t = 14: r = 1, so the ring stands at d = 1.6, 0.7 · 0.75 strong.
+        assert!((ripple_px(1.6, 14) - 0.525).abs() < 1e-3);
+        assert!(ripple_px(1.6, 14) > ripple_px(3.0, 14));
+        assert_eq!(ripple_px(2.9, 14), 0.0);
+        // Never past the last ring.
+        for t in 0..120 {
+            assert_eq!(ripple_px(7.7, t), 0.0);
         }
     }
 

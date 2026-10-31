@@ -34,6 +34,7 @@ pub enum Source {
     /// A listing from the map.
     Listing(ListingId),
     /// A tile picked on the map (or from the console), arrived within `radius`.
+    #[allow(dead_code)] // the map's cursor and the console make it
     Spot { place: Place, pos: Pos, radius: i32 },
 }
 
@@ -122,6 +123,7 @@ pub fn set(st: &mut AppState, source: Source) -> Result<String, String> {
 }
 
 /// Stops tracking, and logs it.
+#[allow(dead_code)] // the console's `track off` calls it
 pub fn stop(st: &mut AppState) {
     end(st, |label| format!("⌖ stopped tracking {label}"));
 }

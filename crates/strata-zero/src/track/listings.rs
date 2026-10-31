@@ -29,6 +29,7 @@ pub enum Kind {
 }
 
 impl Kind {
+    #[allow(dead_code)] // the places pane steps through them
     pub const ALL: [Kind; 10] = [
         Kind::Jobs,
         Kind::Home,
@@ -72,6 +73,7 @@ impl Kind {
         }
     }
 
+    #[allow(dead_code)] // the places pane names the kind shown
     pub fn label(self) -> &'static str {
         match self {
             Kind::Jobs => "jobs & story",
@@ -293,7 +295,7 @@ fn jobs_and_story(st: &AppState, stratum: StratumKind, out: &mut Vec<Listing>) {
 }
 
 /// Where a located target stands on a stratum.
-fn target_tile(st: &AppState, stratum: StratumKind, t: Target) -> Option<Pos> {
+pub(crate) fn target_tile(st: &AppState, stratum: StratumKind, t: Target) -> Option<Pos> {
     match t {
         Target::Spot {
             place: Place::Stratum(k),
@@ -310,7 +312,7 @@ fn target_tile(st: &AppState, stratum: StratumKind, t: Target) -> Option<Pos> {
 }
 
 /// A building's door on the stratum, else (a walk-in) its footprint's middle.
-fn building_tile(st: &AppState, b: BuildingId, stratum: StratumKind) -> Option<Pos> {
+pub(crate) fn building_tile(st: &AppState, b: BuildingId, stratum: StratumKind) -> Option<Pos> {
     let city = st.city.as_ref()?;
     let x = city.building_opt(b)?;
     if let Some((_, door)) = city.portals(b).into_iter().find(|(k, _)| *k == stratum) {
