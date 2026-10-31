@@ -2442,8 +2442,9 @@ impl Screen for MapScreen {
                 fx: TransitionKind::Glitch,
             };
         }
-        // Black ICE killed: the screen reads the cause.
+        // Black ICE killed: the screen reads the cause. The track ends with you.
         if let Some(cause) = st.net.death.clone() {
+            st.track = None;
             return ScreenCmd::Switch {
                 to: Box::new(crate::screens::flatlined::Flatlined::new(
                     cause,
@@ -2647,6 +2648,7 @@ impl Screen for MapScreen {
         crate::net::tick_backdoors(st);
         crate::jobs::tick(st);
         crate::missions::tick(st);
+        crate::track::tick(st);
         // A fixer beside you has their offer ready before you talk.
         if self.mode == Mode::Walk {
             crate::jobs::ui::prepare_offers(st, &|pl, p| self.inside_person_at(pl, p));
