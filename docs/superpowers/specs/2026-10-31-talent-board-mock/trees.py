@@ -1,0 +1,80 @@
+"""The five trees as proposed: four columns, five tiers, twelve talents each.
+
+Each talent: (tier, col, id, name, ranks, requires, new, words per rank, desc).
+Words follow the deck's own wording (`Boon::words`): flags read `later: ...`.
+"""
+
+TREES = [
+    ("MEAT", "#78ff78", "the body is the first machine", [
+        (0, 0, "thick_skin", "Thick skin", 3, None, False, ["+3 max HP", "+3 max HP", "+4 max HP"], "Bruises are a kind of armour."),
+        (0, 1, "long_haul", "Long haul", 2, None, False, ["carry +4 kg", "carry +4 kg"], "A strong back and no sense of when to put it down."),
+        (0, 2, "iron_grip", "Iron grip", 2, None, False, ["+1 Body · grants Shove", "later: iron grip"], "Whatever you hold stays held."),
+        (1, 0, "second_lung", "Second lung", 2, "thick_skin", False, ["+2 focus", "+3 focus"], "You keep going after the air runs out."),
+        (1, 2, "haymaker", "Haymaker", 2, "iron_grip", True, ["Shove cools 20 ticks sooner", "later: haymaker"], "The shove that ends the conversation."),
+        (1, 3, "wall_runner", "Wall runner", 1, None, False, ["later: wall runner"], "Walls are a slower kind of floor."),
+        (2, 0, "pain_editor", "Pain editor", 2, "second_lung", False, ["+5 max HP", "later: pain editor"], "The signal still arrives. You just stop reading it."),
+        (2, 1, "bull_rush", "Bull rush", 1, "haymaker", True, ["+1 move"], "Through, not around."),
+        (2, 3, "cat_fall", "Cat fall", 1, "wall_runner", False, ["later: cat fall"], "You land on your feet. Mostly."),
+        (3, 0, "scar_tissue", "Scar tissue", 2, "pain_editor", True, ["+1 armour", "+1 armour"], "Every old wound is a plate now."),
+        (3, 1, "juggernaut", "Juggernaut", 2, "bull_rush", False, ["+1 Body · +4 max HP", "later: juggernaut"], "You do not go around things any more."),
+        (4, 1, "meat_machine", "Meat machine", 1, "juggernaut", False, ["+10 max HP · +1 Body"], "The body is the first machine, and yours runs hot."),
+    ]),
+    ("EDGE", "#00e5ff", "the half second that decides it", [
+        (0, 0, "quick_draw", "Quick draw", 3, None, False, ["later: quick draw", "+1 Reflex", "sight +1"], "First shot comes out before the argument ends."),
+        (0, 1, "steady_hand", "Steady hand", 2, None, False, ["sight +1", "later: steady hand"], "The barrel does not move until you do."),
+        (0, 3, "light_step", "Light step", 2, None, True, ["+1 move", "+1 Reflex"], "You are already somewhere else when they look."),
+        (1, 0, "double_tap", "Double tap", 2, "quick_draw", False, ["later: double tap", "+1 Reflex"], "Two rounds for the price of one trigger pull."),
+        (1, 1, "long_shot", "Long shot", 2, "steady_hand", True, ["sight +1", "later: long shot"], "Past the second streetlight, still yours."),
+        (1, 3, "backstab", "Backstab", 2, "light_step", False, ["later: backstab", "+1 Reflex"], "From behind, the first cut is the only cut."),
+        (2, 0, "hair_trigger", "Hair trigger", 2, "double_tap", False, ["later: hair trigger", "sight +1"], "The round leaves before the thought does."),
+        (2, 1, "bullet_time", "Bullet time", 2, "long_shot", False, ["+3 focus · grants Redline", "later: bullet time"], "Everything slows down except you."),
+        (2, 2, "counter_cut", "Counter cut", 2, "backstab", False, ["later: counter cut", "+1 Reflex"], "They cut, you cut back, they stop."),
+        (3, 0, "fan_fire", "Fan fire", 2, "hair_trigger", True, ["later: fan fire", "+1 Reflex"], "Six rounds, one breath, one direction."),
+        (3, 2, "razor_wire", "Razor wire", 1, "counter_cut", False, ["later: razor wire"], "Inside the swing, under the guard, done."),
+        (4, 1, "half_second", "The half second", 1, "bullet_time", False, ["+2 Reflex · later: half second"], "The half second before the other guy moves is yours now."),
+    ]),
+    ("WRENCH", "#e6b43c", "chrome does what you tell it", [
+        (0, 0, "solder_hand", "Solder hand", 2, None, False, ["later: solder hand · grants Jolt", "+1 Tech"], "Recipes need one fewer component."),
+        (0, 1, "scrap_eye", "Scrap eye", 2, None, False, ["sight +1", "sight +1"], "You see parts where other people see trash."),
+        (0, 3, "field_medic", "Field medic", 2, None, False, ["later: field medic", "+3 max HP"], "Patches work on the move."),
+        (1, 0, "overclocker", "Overclocker", 2, "solder_hand", False, ["Netscan reaches 3 further", "Netscan cools 60 ticks sooner"], "Everything you touch runs hot and fast and short."),
+        (1, 1, "jury_rig", "Jury rig", 2, "scrap_eye", True, ["later: jury rig", "+1 Tech"], "Tape holds. Tape always holds."),
+        (1, 3, "stim_chemist", "Stim chemist", 2, "field_medic", False, ["+3 focus", "later: stim chemist"], "Mix it right and the night lasts twice as long."),
+        (2, 0, "arc_lash", "Arc lash", 2, "overclocker", True, ["Jolt reaches 1 further", "Jolt cools 60 ticks sooner"], "The arc goes a little further than it should."),
+        (2, 1, "tinker", "Tinker", 2, "jury_rig", False, ["later: tinker", "+1 Tech"], "Two broken things make one that works, mostly."),
+        (2, 3, "trauma_kit", "Trauma kit", 1, "stim_chemist", False, ["+3 max HP · later: trauma kit"], "Tape, gel and a steady hand, on the run."),
+        (3, 0, "live_wire", "Live wire", 2, "arc_lash", True, ["+10 EMP", "later: live wire"], "You have been shocked so often it tickles."),
+        (3, 2, "chrome_whisperer", "Chrome whisperer", 2, "trauma_kit", False, ["carry +4 kg", "+1 Tech"], "Cyberware runs quieter when you are the one who fitted it."),
+        (4, 1, "machine_ghost", "Machine ghost", 1, "tinker", False, ["+2 Tech · later: machine ghost"], "Chrome does what you tell it. Then it does what you meant."),
+    ]),
+    ("STREET", "#ff00c8", "the city owes you", [
+        (0, 0, "ghost", "Ghost", 2, None, False, ["later: ghost", "sight +1"], "Cameras see a smear where you were."),
+        (0, 2, "silver_tongue", "Silver tongue", 2, None, False, ["later: haggle", "+1 Cool"], "Every price has a second price, and you know it."),
+        (0, 3, "cold_read", "Cold read", 2, None, False, ["+2 focus · grants Deadeye", "+2 focus"], "You hear the lie before they finish telling it."),
+        (1, 0, "shadow_step", "Shadow step", 2, "ghost", False, ["later: shadow step", "+1 Cool"], "You were never here, and the footage agrees."),
+        (1, 1, "skeleton_key", "Skeleton key", 1, None, False, ["later: skeleton key"], "Doors are a suggestion."),
+        (1, 2, "ear_to_the_ground", "Ear to the ground", 2, "silver_tongue", False, ["grants Street sense · later: fixer jobs", "+1 Cool"], "You hear the job before it is posted."),
+        (2, 1, "smoke", "Smoke", 1, "skeleton_key", False, ["later: smoke"], "Gone before the door finishes closing."),
+        (2, 2, "fixers_favour", "Fixer's favour", 2, "ear_to_the_ground", True, ["later: fixer's favour", "+1 Cool"], "Somebody owes somebody who owes you."),
+        (2, 3, "ice_cold", "Ice cold", 2, "cold_read", False, ["+1 Cool", "later: ice cold"], "The voice does not shake when the gun comes out."),
+        (3, 0, "blind_spot", "Blind spot", 2, "shadow_step", True, ["later: blind spot", "sight +1"], "Every camera has one. You live there."),
+        (3, 3, "stare_down", "Stare down", 1, "ice_cold", True, ["later: stare down"], "They look away first. They always look away first."),
+        (4, 1, "the_name", "The name", 1, "smoke", False, ["+2 Cool · later: the name"], "The city owes you. It knows your name, and it pays."),
+    ]),
+    ("ICE", "#6e96ff", "the deep end of the grid", [
+        (0, 0, "ice_pick", "Ice pick", 2, None, False, ["later: ice pick", "Netscan cools 60 ticks sooner"], "Gates open a little faster for you."),
+        (0, 1, "wide_band", "Wide band", 2, None, False, ["Netscan reaches 3 further", "Netscan reaches 3 further"], "The deck hears further than it was built to."),
+        (0, 3, "cold_boot", "Cold boot", 2, None, False, ["+3 focus", "+3 focus"], "Four seconds from dark to dangerous."),
+        (1, 0, "deep_dive", "Deep dive", 2, "ice_pick", False, ["later: deep dive", "+1 Net"], "Vaults give up their contents without the alarm."),
+        (1, 1, "handshake", "Handshake", 2, "wide_band", False, ["grants Ping", "Ping reaches 4 further · cools 60 ticks sooner"], "Every terminal in range answers when you knock."),
+        (1, 2, "arc_welder", "Arc welder", 2, None, False, ["Arc Trace reaches 4 further", "Arc Trace cools 90 ticks sooner"], "The charge goes where you point it."),
+        (1, 3, "null_route", "Null route", 1, "cold_boot", False, ["sight +1 · later: null route"], "The trace goes somewhere. Not to you."),
+        (2, 0, "vault_rat", "Vault rat", 2, "deep_dive", True, ["later: vault rat", "+1 Net"], "Every vault has a back door if you are small enough."),
+        (2, 2, "black_ice", "Black ICE", 2, "arc_welder", False, ["later: black ice", "+1 Net"], "You find the seam in the ICE before it finds you."),
+        (2, 3, "trace_eater", "Trace eater", 2, "null_route", True, ["+10 FBK", "later: trace eater"], "The trace comes looking. You have it for lunch."),
+        (3, 1, "static_bloom", "Static bloom", 2, "handshake", True, ["Static reaches 2 further", "Static cools 60 ticks sooner"], "One burst of noise, and every lens in the room forgets."),
+        (4, 2, "deep_end", "The deep end", 1, "black_ice", False, ["+2 Net · grants Arc Trace · later: deep end"], "How deep you can go and still come back: all the way."),
+    ]),
+]
+
+GATE = 3  # points a tier: tier t opens at GATE * t in the tree
