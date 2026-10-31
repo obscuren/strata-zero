@@ -412,18 +412,13 @@ impl TalentsView<'_> {
         let bold = Modifier::BOLD;
         pen.text(1, 0, "TREES", DIM, None, bold);
         pen.text(8, 0, "[ ]", FAINTER, None, Modifier::empty());
-        let cap = c.creation.tier_gate
-            * c.trees
-                .iter()
-                .map(|t| t.tiers.len())
-                .max()
-                .unwrap_or(1)
-                .saturating_sub(1) as u32;
         let mut y = 2;
         for (i, tree) in c.trees.iter().enumerate() {
             let rgb = attribute_rgb(tree.attribute);
             let on = i == self.cursor.tree;
             let pts = ch.tree_points(c, tree.attribute);
+            // The points that open this tree's last tier: the meter fills toward them.
+            let cap = (c.creation.tier_gate * tree.tiers.len().saturating_sub(1) as u32).max(1);
             if on {
                 let ground = PANEL_BG_RGB.mix(rgb, 0.22).to_color();
                 for x in 0..SLOTS_W {
@@ -454,7 +449,7 @@ impl TalentsView<'_> {
                 None,
                 if on { bold } else { Modifier::empty() },
             );
-            let fill = (pts / 2).min(6) as usize;
+            let fill = (pts * 6 / cap).min(6) as usize;
             let meter_fg = if on {
                 rgb.to_color()
             } else {
@@ -514,15 +509,11 @@ impl TalentsView<'_> {
             Some(ground),
             Modifier::BOLD,
         );
+        // The line, cut where the board ends so it never runs into the readout.
         let line_x = BOARD_X + 2 + tree.name.chars().count() as u16;
-        pen.text(
-            line_x,
-            0,
-            &format!("· {}", tree.line),
-            FAINT,
-            Some(ground),
-            Modifier::empty(),
-        );
+        let room = (BOARD_X + BOARD_W).saturating_sub(line_x + 1) as usize;
+        let line: String = format!("· {}", tree.line).chars().take(room).collect();
+        pen.text(line_x, 0, &line, FAINT, Some(ground), Modifier::empty());
 
         let chip = |tier: usize, col: usize| -> (u16, u16) {
             (
