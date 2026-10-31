@@ -342,7 +342,8 @@ pub struct Footer<'a> {
     pub engaged: bool,
     /// `TURN 3  YOU › grey ICE › black ICE`, engaged.
     pub turn: Option<String>,
-    /// `RUN  crack · door lock  ▰▰▱ 2/3 · 40%` with the beat bar in calm.
+    /// `RUN  crack · door lock  ▰▰▱ 2/3 · 40%`: in a fight, or calm when the run has
+    /// no tether on the map.
     pub run: Option<String>,
     /// The ICE in sight, nearest first.
     pub ice: Vec<String>,
@@ -1113,7 +1114,7 @@ mod tests {
             hunted: false,
             engaged: false,
             turn: None,
-            run: Some("RUN  crack · door lock  ▰▰▱ 2/3 · 40%   ▓▓▓▓░░░░  next roll".into()),
+            run: Some("RUN  crack · door lock  ▰▰▱ 2/3 · 40%".into()),
             ice: vec!["▣ grey ICE · asleep · 6/6 · 4 tiles".into()],
             slots_label: "PROGRAMS",
             slots: &slots_for_footer(),
@@ -1140,7 +1141,6 @@ mod tests {
             "{:?}",
             rows[2]
         );
-        assert!(rows[2].contains("next roll"), "{:?}", rows[2]);
         assert!(
             rows[2]
                 .trim_end()

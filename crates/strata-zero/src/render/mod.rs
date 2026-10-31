@@ -14,6 +14,7 @@ pub mod overlay;
 pub mod path;
 pub mod people;
 pub mod style;
+pub mod tether;
 pub mod tileset;
 pub mod turns;
 pub mod viewport;
