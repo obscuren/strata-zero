@@ -818,4 +818,51 @@ mod tests {
         assert!(matches!(cmd, ScreenCmd::Stay), "the call takes space");
         assert!(st.missions.call.as_ref().unwrap().answered.is_some());
     }
+
+    /// Up and still ringing from `rang`, nothing in the mail.
+    fn still_ringing(st: &AppState, rang: u64) {
+        let c = st.missions.call.as_ref().expect("the call is up");
+        assert_eq!((c.rang, c.answered), (rang, None));
+        assert!(voicemail(st).is_none());
+    }
+
+    #[test]
+    fn look_mode_keeps_its_keys_with_a_call_up() {
+        let mut st = up();
+        let mut map = MapScreen::walking(&mut st);
+        let rang = st.missions.call.as_ref().unwrap().rang;
+        let k = crate::screens::testutil::key;
+        map.update(&mut st, &[k(KeyCode::Char('x'))]);
+        assert!(map.is_looking());
+        let cmd = map.update(&mut st, &[k(KeyCode::Esc)]);
+        assert!(matches!(cmd, ScreenCmd::Stay));
+        assert!(!map.is_looking(), "esc closes look mode");
+        still_ringing(&st, rang);
+        // Space in look mode is look's too.
+        map.update(&mut st, &[k(KeyCode::Char('x'))]);
+        assert!(map.is_looking());
+        let _ = map.update(&mut st, &[k(SPACE)]);
+        still_ringing(&st, rang);
+    }
+
+    #[test]
+    fn help_keeps_esc_and_q_with_a_call_up() {
+        let mut st = up();
+        let mut map = MapScreen::walking(&mut st);
+        let rang = st.missions.call.as_ref().unwrap().rang;
+        let k = crate::screens::testutil::key;
+        for close in [KeyCode::Esc, KeyCode::Char('q')] {
+            map.update(&mut st, &[k(KeyCode::Char('?'))]);
+            assert!(map.help);
+            let cmd = map.update(&mut st, &[k(close)]);
+            assert!(matches!(cmd, ScreenCmd::Stay), "{close:?}");
+            assert!(!map.help, "{close:?} closes help");
+            still_ringing(&st, rang);
+        }
+        // With nothing of the map's open, esc is the call's.
+        let cmd = map.update(&mut st, &[k(KeyCode::Esc)]);
+        assert!(matches!(cmd, ScreenCmd::Stay), "no pause menu");
+        assert!(st.missions.call.is_none());
+        assert!(voicemail(&st).is_some());
+    }
 }

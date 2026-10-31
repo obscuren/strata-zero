@@ -276,6 +276,26 @@ impl MapScreen {
         self.last_map.get()
     }
 
+    /// Look mode is open.
+    #[cfg(test)]
+    pub(crate) fn is_looking(&self) -> bool {
+        self.looking.is_some()
+    }
+
+    /// On foot with nothing of the map's own open: no console, look, pick, aim, armed
+    /// shot, walk in flight or help. Only then are space and esc a HOLO call's.
+    fn plain_walk(&self) -> bool {
+        self.mode == Mode::Walk
+            && self.console.is_none()
+            && self.looking.is_none()
+            && self.which_way.is_none()
+            && self.targeting.is_none()
+            && self.aim.is_none()
+            && self.armed.is_none()
+            && self.walking.is_none()
+            && !self.help
+    }
+
     pub fn explore(_tick: u64) -> Self {
         MapScreen {
             mode: Mode::Explore,
@@ -2495,8 +2515,9 @@ impl Screen for MapScreen {
             self.cam_ready = true;
         }
         for (i, k) in keys.iter().enumerate() {
-            // A HOLO call up takes space and esc before the map does.
-            if crate::missions::call::key(st, k) {
+            // A HOLO call up takes space and esc before the walk keys, once look mode,
+            // a pick, an aim and help have had theirs.
+            if self.plain_walk() && crate::missions::call::key(st, k) {
                 continue;
             }
             // An aim up: esc drops it and nothing else. A walk in flight: the keys
