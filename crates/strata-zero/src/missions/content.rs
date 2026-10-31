@@ -69,7 +69,6 @@ pub enum Pick {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct Face {
     pub rows: Vec<String>,
-    #[allow(dead_code)] // the chrome eye's tint (Task 5)
     pub eye: (u8, u8, u8),
 }
 

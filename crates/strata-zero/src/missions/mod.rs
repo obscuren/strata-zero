@@ -4,6 +4,7 @@
 pub mod cast;
 pub mod content;
 pub mod effects;
+pub mod face;
 
 pub use content::*;
 
