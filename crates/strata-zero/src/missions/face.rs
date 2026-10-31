@@ -13,7 +13,6 @@ use ratatui::style::Color;
 use std::collections::BTreeSet;
 
 /// The face's width in cells: 16, and two empty columns each side for the slips.
-#[allow(dead_code)] // the HOLO feed and call use it (Tasks 6, 7)
 pub const FACE_W: u16 = 20;
 const PAD: usize = 2;
 /// Ticks in one calm-then-burst cycle.
@@ -29,14 +28,12 @@ const CYAN_RGB: Rgb = (0, 229, 255);
 const MAGENTA_RGB: Rgb = (255, 0, 200);
 
 /// The face's height in cells.
-#[allow(dead_code)] // the HOLO feed and call draw it (Tasks 6, 7)
 pub fn rows(face: &Face) -> u16 {
     (face.rows.len() / 2) as u16
 }
 
 /// The recipe (0..5) drawn at this tick, `None` when calm. Each 60-tick cycle holds
 /// one burst of 2 to 5 frames of 2 or 3 ticks, starting somewhere in its first half.
-#[allow(dead_code)] // the HOLO feed and call draw it (Tasks 6, 7)
 pub fn burst(tick: u64, seed: u64) -> Option<u8> {
     let h = hash64(seed, tick / CYCLE);
     let at = tick % CYCLE;
@@ -51,7 +48,6 @@ pub fn burst(tick: u64, seed: u64) -> Option<u8> {
 }
 
 /// The face at this tick, 20 pixels wide and twice `rows` high. Pure.
-#[allow(dead_code)] // the HOLO feed and call draw it (Tasks 6, 7)
 pub fn pixels(face: &Face, tick: u64, seed: u64) -> Pixels {
     render(face, ((tick / 4) % 2) as usize, burst(tick, seed))
 }
@@ -211,7 +207,6 @@ fn apply(g: &mut Grid, recipe: u8) {
 }
 
 /// Draws the face with its top-left at (x, y), on the panel colour.
-#[allow(dead_code)] // the HOLO feed and call draw it (Tasks 6, 7)
 pub fn draw(buf: &mut Buffer, x: u16, y: u16, face: &Face, tick: u64, seed: u64) {
     let area = buf.area;
     let mut pen = Pen {
@@ -236,7 +231,6 @@ pub fn draw(buf: &mut Buffer, x: u16, y: u16, face: &Face, tick: u64, seed: u64)
 
 /// Spec 7's frame around `area`: half-block brackets at the corners, a faint rule
 /// between, on the panel colour.
-#[allow(dead_code)] // the HOLO feed and call draw it (Tasks 6, 7)
 pub fn bracket_frame(buf: &mut Buffer, area: Rect) {
     if area.width < 6 || area.height < 4 {
         return;

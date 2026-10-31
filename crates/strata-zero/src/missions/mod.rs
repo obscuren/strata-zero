@@ -5,6 +5,7 @@ pub mod cast;
 pub mod content;
 pub mod effects;
 pub mod face;
+pub mod feed;
 
 pub use content::*;
 
@@ -164,7 +165,6 @@ pub fn tick(st: &mut AppState) {
 }
 
 /// The feed or call that step `step` of mission `mission` opened has ended.
-#[allow(dead_code)] // the feed and the call end their steps (Tasks 6, 7)
 pub fn end(st: &mut AppState, mission: usize, step: usize) {
     if let Some(run) = st.missions.runs.get_mut(mission) {
         run.ended.insert(step);

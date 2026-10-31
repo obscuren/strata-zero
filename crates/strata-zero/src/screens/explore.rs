@@ -2399,6 +2399,13 @@ impl MapScreen {
 
 impl Screen for MapScreen {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+        // A HOLO feed waiting: it opens over the map.
+        if let Some(view) = st.missions.feeds.pop_front() {
+            return ScreenCmd::Push {
+                to: Box::new(crate::missions::feed::Feed::new(view, st.tick)),
+                fx: TransitionKind::Glitch,
+            };
+        }
         // Black ICE killed: the screen reads the cause.
         if let Some(cause) = st.net.death.clone() {
             return ScreenCmd::Switch {
