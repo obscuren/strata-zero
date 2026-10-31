@@ -351,6 +351,25 @@ pub fn target_now(st: &AppState) -> Option<Target> {
     st.track.as_ref().map(|t| t.walk.target)
 }
 
+/// The floor of building `b` the track wants you on: where its lift leg rides to, else
+/// the target's own floor when it lies in `b`; none untracked or elsewhere.
+pub fn floor_wanted(st: &AppState, b: BuildingId) -> Option<i32> {
+    if let Some(Ok(leg)) = leg_now(st)
+        && let (Place::Floor { building, .. }, route::Through::Lift(level)) =
+            (leg.place, leg.through)
+        && building == b
+    {
+        return Some(level);
+    }
+    match target_now(st)? {
+        Target::Spot {
+            place: Place::Floor { building, level },
+            ..
+        } if building == b => Some(level),
+        _ => None,
+    }
+}
+
 /// What comes after the leg ("building, then 6F"); nothing when it arrives.
 pub fn next_now(st: &AppState) -> Option<&str> {
     st.track.as_ref()?.walk.next.as_deref()

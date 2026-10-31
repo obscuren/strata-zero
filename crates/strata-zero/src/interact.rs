@@ -489,13 +489,15 @@ pub fn gather(
     subs
 }
 
-/// The lift panel's rows: every floor of the building, the current one greyed.
+/// The lift panel's rows: every floor of the building, the current one greyed, the one
+/// the track wants you on marked `⌖` in cyan.
 pub fn ride_rows(st: &AppState, letters: &mut std::str::Chars) -> Option<Vec<Choice>> {
     let player = st.player.as_ref()?;
     let Place::Floor { building, level } = player.place else {
         return None;
     };
     let plan = st.interiors.plan_of(building)?;
+    let wanted = crate::track::floor_wanted(st, building).filter(|w| *w != level);
     Some(
         crate::interiors::floor_rows(plan, level)
             .into_iter()
@@ -506,7 +508,12 @@ pub fn ride_rows(st: &AppState, letters: &mut std::str::Chars) -> Option<Vec<Cho
                     Some((f, m)) => (f.to_string(), format!(" · {m}")),
                     None => (label, String::new()),
                 };
-                let mut c = Choice::on(key, "Ride", floor, TEXT, Pick::World(WorldAct::Lift(l)))
+                let (floor, colour) = if wanted == Some(l) {
+                    (format!("⌖ {floor}"), CYAN)
+                } else {
+                    (floor, TEXT)
+                };
+                let mut c = Choice::on(key, "Ride", floor, colour, Pick::World(WorldAct::Lift(l)))
                     .tail(marks);
                 c.enabled = l != level;
                 c
@@ -639,6 +646,77 @@ mod tests {
     use crate::screens::testutil::buffer_text;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+
+    /// The floors the lift panel marks `⌖` in cyan.
+    fn marked_floors(st: &AppState) -> Vec<i32> {
+        ride_rows(st, &mut "abcdefghijklmnopqrstuvwxyz0123456789".chars())
+            .unwrap()
+            .into_iter()
+            .filter(|c| {
+                c.thing
+                    .as_ref()
+                    .is_some_and(|(t, colour)| t.starts_with('⌖') && *colour == CYAN)
+            })
+            .filter_map(|c| match c.pick {
+                Pick::World(WorldAct::Lift(l)) => Some(l),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_lift_marks_the_floor_the_track_wants() {
+        let mut st = state_home();
+        crate::screens::explore::MapScreen::walking(&mut st);
+        let b = st.home.unwrap().home.building;
+        let (flat, pos) = crate::track::flat_tile(&st).unwrap();
+        let Place::Floor { level, .. } = flat else {
+            unreachable!()
+        };
+        let lift = {
+            let city = st.city.as_ref().unwrap();
+            st.interiors.ensure(city, b, 0).unwrap();
+            st.interiors.ensure(city, b, level).unwrap();
+            st.interiors.plan_of(b).unwrap().lift.unwrap()
+        };
+        let stand = |st: &mut AppState, level: i32| {
+            let p = st.player.as_mut().unwrap();
+            p.place = Place::Floor { building: b, level };
+            p.pos = lift;
+        };
+        // In the lobby's lift, untracked: no floor marked.
+        stand(&mut st, 0);
+        assert!(marked_floors(&st).is_empty());
+        // Tracking the flat: its floor, and only it.
+        let home = crate::track::Source::Spot {
+            place: flat,
+            pos,
+            radius: 1,
+        };
+        crate::track::set(&mut st, home).unwrap();
+        assert_eq!(marked_floors(&st), vec![level]);
+        // From the flat's floor, a walk out to the street marks the ground floor.
+        stand(&mut st, level);
+        let outside = {
+            let city = st.city.as_ref().unwrap();
+            let door = city
+                .portals(b)
+                .into_iter()
+                .find(|(k, _)| *k == citygen::StratumKind::Street)
+                .map(|(_, p)| p)
+                .unwrap();
+            door.neighbors4()
+                .find(|&n| city.walkable(citygen::StratumKind::Street, n))
+                .unwrap()
+        };
+        let street = crate::track::Source::Spot {
+            place: Place::Stratum(citygen::StratumKind::Street),
+            pos: outside,
+            radius: 1,
+        };
+        crate::track::set(&mut st, street).unwrap();
+        assert_eq!(marked_floors(&st), vec![0]);
+    }
 
     /// The window of the one subject beside the player, as drawn.
     fn window_text(st: &AppState, subjects: &[Subject]) -> String {
