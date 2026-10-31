@@ -124,6 +124,8 @@ pub(crate) enum Tone {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Detail {
     Job(crate::jobs::JobId),
+    /// A story mission, by its place in the book.
+    Mission(usize),
     Slot(Slot),
     Item(ItemId),
     /// One copy in the pack, for an item held per copy.
@@ -423,6 +425,7 @@ fn held(st: &AppState) -> Held<'_> {
 pub(crate) fn card(st: &AppState, detail: &Detail) -> Vec<Line<'static>> {
     match detail {
         Detail::Job(id) => crate::jobs::ui::detail(st, *id),
+        Detail::Mission(m) => crate::missions::ui::detail(st, *m),
         Detail::Slot(slot) => match st.character.equipped(*slot) {
             Some(id) => Deck::item_card_of(st, id, st.character.worn_copy(*slot)),
             None => vec![
@@ -835,7 +838,11 @@ impl Deck {
                 detail: None,
                 spans: None,
             }],
-            Tab::Jobs => crate::jobs::ui::deck_rows(st),
+            Tab::Jobs => {
+                let mut rows = crate::missions::ui::deck_rows(st);
+                rows.extend(crate::jobs::ui::deck_rows(st));
+                rows
+            }
             Tab::Journal => Self::journal_rows(st),
             Tab::Workbench | Tab::Kit | Tab::Attributes | Tab::Map | Tab::Talents => Vec::new(),
         }

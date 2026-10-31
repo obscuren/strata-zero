@@ -3185,7 +3185,7 @@ impl Screen for MapScreen {
             dev: st.dev,
             net: &st.net,
             now: st.net.now(st),
-            jobs: crate::jobs::ui::pane_lines(st),
+            jobs: crate::missions::ui::jobs_pane(st),
             ice_lines: match (self.place, st.player.as_ref()) {
                 (Place::Construct(b), Some(p)) if p.place == self.place => {
                     let vis = p.vis();

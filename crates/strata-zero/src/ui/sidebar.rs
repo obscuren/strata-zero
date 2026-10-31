@@ -23,7 +23,7 @@ const LOG_MIN: u16 = 3;
 /// The fewest rows MAP keeps (separator, a squeezed minimap, the coordinate row).
 const MAP_MIN: u16 = 7;
 const HERE_CAP: u16 = 7;
-const JOBS_CAP: u16 = 4;
+const JOBS_CAP: u16 = 5;
 const INSPECT_CAP: u16 = 14;
 const ITEM_ROWS: usize = 5;
 /// Ticks the newest log entry takes to type out.
@@ -192,7 +192,7 @@ pub struct SidebarView<'a> {
     pub now: u64,
     /// The ICE the player can see in their construct, one line each.
     pub ice_lines: Vec<String>,
-    /// The JOBS pane: the job in hand, from `jobs::ui::pane_lines`.
+    /// The JOBS pane: the story, then the job in hand, from `missions::ui::jobs_pane`.
     pub jobs: Vec<Line<'static>>,
 }
 
@@ -591,7 +591,7 @@ mod tests {
             net: &st.net,
             now: 0,
             ice_lines: Vec::new(),
-            jobs: crate::jobs::ui::pane_lines(st),
+            jobs: crate::missions::ui::jobs_pane(st),
         }
     }
 

@@ -7,6 +7,7 @@ pub mod content;
 pub mod effects;
 pub mod face;
 pub mod feed;
+pub mod ui;
 
 pub use content::*;
 
