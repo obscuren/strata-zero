@@ -434,7 +434,7 @@ pub(crate) mod tests {
     /// A street tile a few steps from you where the map lists nothing under the cursor,
     /// with a spot a walk reaches; the cursor left there and drawn.
     pub(super) fn open_ground(st: &mut AppState, body: Rect) -> Pos {
-        let me = you(st);
+        let me = walk_from(st, STREET).expect("a walk from you");
         let size = st.city.as_ref().unwrap().size;
         let mut tiles: Vec<Pos> = size
             .rect()

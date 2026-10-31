@@ -472,6 +472,42 @@ mod tests {
         assert!(foot(&buf, 1).trim_end().ends_with("t tracks this spot"));
     }
 
+    /// The pane's line `k` rows from the body's bottom.
+    fn foot(buf: &Buffer, b: Rect, k: u16) -> String {
+        row(buf, b, b.bottom() - k)
+    }
+
+    #[test]
+    fn from_the_flat_the_foot_says_the_walk() {
+        let mut st = crate::track::listings::tests::in_the_flat();
+        let b = BODY_120;
+        open_ground(&mut st, b);
+        let buf = frame(&mut st, b);
+        assert!(foot(&buf, b, 3).starts_with(" CURSOR · "));
+        let walk = foot(&buf, b, 2);
+        assert!(
+            walk.starts_with(" walk ") && walk.contains(" m · "),
+            "{walk}"
+        );
+    }
+
+    #[test]
+    fn a_spot_walled_off_has_no_way_there() {
+        let mut st = outside();
+        let b = BODY_120;
+        open_ground(&mut st, b);
+        let l = laid(&st);
+        let spot = spot_under_cursor(&st, &l).unwrap();
+        let city = st.city.as_mut().unwrap();
+        for p in spot.neighbors8() {
+            city.tile_mut(STREET, p).unwrap().terrain = citygen::Terrain::Wall;
+        }
+        st.tick += 30;
+        let buf = frame(&mut st, b);
+        assert_eq!(spot_under_cursor(&st, &laid(&st)), Some(spot));
+        assert_eq!(foot(&buf, b, 2).trim(), "no way there");
+    }
+
     #[test]
     fn f_folds_and_the_strip_marks_it() {
         let mut st = outside();

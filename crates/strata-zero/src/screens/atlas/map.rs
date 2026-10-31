@@ -85,27 +85,9 @@ pub struct Marker {
     pub listing: Option<usize>,
 }
 
-/// Where you show on stratum `k`'s map: your tile, the door out of the building you
-/// are in, or your body's while you are jacked in.
+/// Where your `@` shows on stratum `k`'s map.
 fn you_on(st: &AppState, k: StratumKind) -> Option<Pos> {
-    let p = st.player.as_ref()?;
-    let on = |place: Place, pos: Pos| match place {
-        Place::Stratum(s) => (s == k).then_some(pos),
-        Place::Floor { building, level } => st
-            .interiors
-            .floor(building, level)
-            .and_then(|(_, floor)| {
-                floor
-                    .exits
-                    .iter()
-                    .filter(|e| e.stratum == k)
-                    .min_by_key(|e| (e.at.manhattan(pos), e.at.y, e.at.x))
-                    .map(|e| e.door)
-            })
-            .or_else(|| listings::building_tile(st, building, k)),
-        Place::Construct(_) => None,
-    };
-    on(p.place, p.pos).or_else(|| p.body.and_then(|(place, pos)| on(place, pos)))
+    listings::standing(st, k).map(|s| s.door)
 }
 
 /// The walk to draw on stratum `k`'s map: the leg while you are on `k`, else the walk
@@ -934,6 +916,35 @@ mod tests {
         off.track = None;
         off.atlas.stratum = Some(STREET);
         off.atlas.cursor = l.cursor;
+        let (without, _) = draw(&off, area);
+        let walked: HashSet<(u16, u16)> = leg.path.iter().filter_map(|p| l.cell_of(*p)).collect();
+        assert!(
+            walked.iter().any(|c| with[*c] != without[*c]),
+            "the walk glows"
+        );
+    }
+
+    #[test]
+    fn from_the_flat_the_map_draws_the_walk() {
+        let mut st = crate::track::listings::tests::in_the_flat();
+        let doc = listings(&st, STREET)
+            .into_iter()
+            .find(|l| l.name == "Miracorp Tattoo")
+            .expect("a clinic called Miracorp Tattoo");
+        crate::track::set(&mut st, Source::Listing(doc.id)).unwrap();
+        crate::track::tick(&mut st);
+        let at = listings::standing(&st, STREET).unwrap();
+        st.atlas.stratum = Some(STREET);
+        st.atlas.cursor = Some(at.door);
+        let area = Rect::new(0, 0, 81, 26);
+        let (with, l) = draw(&st, area);
+        // You show at the building's door.
+        assert_eq!(with[l.cell_of(at.door).unwrap()].symbol(), "@");
+        let target = crate::track::target_now(&st).unwrap();
+        let leg = crate::track::route::leg_from(&st, ON_STREET, at.landing, target).unwrap();
+        assert!(leg.path.len() > 10);
+        let mut off = st;
+        off.track = None;
         let (without, _) = draw(&off, area);
         let walked: HashSet<(u16, u16)> = leg.path.iter().filter_map(|p| l.cell_of(*p)).collect();
         assert!(

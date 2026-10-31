@@ -5,6 +5,7 @@ use super::route::{field, open};
 use super::ui::{job_source, story_source};
 use super::{ListingId, Resolved, Source, Target, label, locate, resolve};
 use crate::app::AppState;
+use crate::interiors::level_for;
 use crate::jobs::State;
 use crate::render::map::{MapRef, TileMap};
 use crate::ui::chrome::MAGENTA;
@@ -137,24 +138,82 @@ pub fn source_of(st: &AppState, l: &Listing) -> Source {
     .unwrap_or(Source::Listing(l.id))
 }
 
-/// The tile a walk from you starts on, on `stratum`: yours, or the landing of the way
-/// out of your floor, or your body's while you are jacked in.
-pub fn walk_from(st: &AppState, stratum: StratumKind) -> Option<Pos> {
+/// Where you stand on a stratum's map.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Standing {
+    /// Where your `@` shows: your tile, or the door out of the building you are in.
+    pub door: Pos,
+    /// Where a walk from you starts: your tile, or the tile outside that door.
+    pub landing: Pos,
+}
+
+/// Where you stand on `stratum`: your tile when you are on it; on a floor, the way out
+/// onto it (this floor's exit, else the exit of the floor that opens onto it once that
+/// floor is made, else outside the building's door there); jacked in, your body's.
+pub fn standing(st: &AppState, stratum: StratumKind) -> Option<Standing> {
     let p = st.player.as_ref()?;
     let on = |place: Place, pos: Pos| match place {
-        Place::Stratum(k) => (k == stratum).then_some(pos),
-        Place::Floor { building, level } => {
-            let (_, floor) = st.interiors.floor(building, level)?;
-            floor
-                .exits
-                .iter()
-                .filter(|e| e.stratum == stratum)
-                .min_by_key(|e| (e.at.manhattan(pos), e.at.y, e.at.x))
-                .map(|e| e.landing)
-        }
+        Place::Stratum(k) => (k == stratum).then_some(Standing {
+            door: pos,
+            landing: pos,
+        }),
+        Place::Floor { building, level } => way_out(st, building, level, pos, stratum),
         Place::Construct(_) => None,
     };
     on(p.place, p.pos).or_else(|| p.body.and_then(|(place, pos)| on(place, pos)))
+}
+
+/// From tile `pos` of floor `level` of `b`, the way out onto `stratum`.
+fn way_out(
+    st: &AppState,
+    b: BuildingId,
+    level: i32,
+    pos: Pos,
+    stratum: StratumKind,
+) -> Option<Standing> {
+    let exit = |l: i32| {
+        let (_, floor) = st.interiors.floor(b, l)?;
+        floor
+            .exits
+            .iter()
+            .filter(|e| e.stratum == stratum)
+            .min_by_key(|e| (e.at.manhattan(pos), e.at.y, e.at.x))
+            .map(|e| Standing {
+                door: e.door,
+                landing: e.landing,
+            })
+    };
+    let below = || {
+        let l = level_for(st.interiors.plan_of(b)?, stratum)?;
+        exit(l)
+    };
+    exit(level)
+        .or_else(below)
+        .or_else(|| outside_door(st, b, stratum))
+}
+
+/// A building's first door on `stratum` and the walkable tile outside it (on the
+/// Heights, the roof's door itself, as the roof's exit lands).
+fn outside_door(st: &AppState, b: BuildingId, stratum: StratumKind) -> Option<Standing> {
+    let city = st.city.as_ref()?;
+    let fp = city.building_opt(b)?.footprint;
+    city.portals(b)
+        .into_iter()
+        .filter(|(k, _)| *k == stratum)
+        .find_map(|(_, door)| {
+            let landing = if stratum == StratumKind::Heights {
+                Some(door)
+            } else {
+                door.neighbors4()
+                    .find(|n| !fp.contains(*n) && city.walkable(stratum, *n))
+            };
+            landing.map(|landing| Standing { door, landing })
+        })
+}
+
+/// The tile a walk from you starts on, on `stratum`.
+pub fn walk_from(st: &AppState, stratum: StratumKind) -> Option<Pos> {
+    standing(st, stratum).map(|s| s.landing)
 }
 
 /// The listings of a stratum, nearest first.
@@ -353,7 +412,7 @@ fn distances(st: &AppState, d: &Grid<u32>, out: &mut [Listing]) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::super::tests::outside;
     use super::*;
     use crate::jobs::testutil::{a_fixer, state_home};
@@ -571,10 +630,62 @@ mod tests {
         };
         p.pos = exit.at;
         assert_eq!(walk_from(&st, STREET), Some(exit.landing));
-        assert_eq!(walk_from(&st, StratumKind::Heights), None);
+        // A stratum this floor has no exit onto: the building's door there, if any.
+        let city = st.city.as_ref().unwrap();
+        for k in [StratumKind::Heights, StratumKind::Undercity] {
+            let door = city.portals(b).into_iter().find(|(s, _)| *s == k);
+            assert_eq!(standing(&st, k).map(|s| s.door), door.map(|d| d.1), "{k:?}");
+        }
         let p = st.player.as_mut().unwrap();
         p.place = Place::Stratum(STREET);
         p.pos = Pos::new(3, 4);
         assert_eq!(walk_from(&st, STREET), Some(Pos::new(3, 4)));
+    }
+
+    /// Awake in your flat on 18F, where the game starts.
+    pub(crate) fn in_the_flat() -> AppState {
+        let mut st = state_home();
+        crate::screens::explore::MapScreen::walking(&mut st);
+        let rig = st.home.unwrap();
+        assert_eq!(rig.home.level, 18);
+        assert_eq!(st.player.as_ref().unwrap().place, rig.place());
+        st
+    }
+
+    #[test]
+    fn from_the_flat_the_walk_starts_outside_the_door() {
+        let mut st = in_the_flat();
+        let b = st.home.unwrap().home.building;
+        let at = standing(&st, STREET).expect("you show on the street");
+        let city = st.city.as_ref().unwrap();
+        assert!(city.portals(b).contains(&(STREET, at.door)), "{at:?}");
+        assert_eq!(at.door.manhattan(at.landing), 1);
+        assert!(city.walkable(STREET, at.landing));
+        assert!(!city.building(b).footprint.contains(at.landing));
+        assert_eq!(walk_from(&st, STREET), Some(at.landing));
+        // Listings have walks, nearest first.
+        let all = listings(&st, STREET);
+        let walks: Vec<Option<u32>> = all.iter().map(|l| l.walk).collect();
+        let seen: Vec<u32> = walks.iter().map_while(|w| *w).collect();
+        assert!(seen.len() > 5, "{} reached", seen.len());
+        assert!(seen.windows(2).all(|w| w[0] <= w[1]));
+        // The ground floor made: its door out.
+        let city = st.city.as_ref().unwrap();
+        st.interiors.ensure(city, b, 0).unwrap();
+        let (_, lobby) = st.interiors.floor(b, 0).unwrap();
+        let from = walk_from(&st, STREET).unwrap();
+        assert!(
+            lobby
+                .exits
+                .iter()
+                .any(|e| e.stratum == STREET && e.landing == from),
+            "{from:?}"
+        );
+        // Jacked in from the flat: your body's.
+        let p = st.player.as_mut().unwrap();
+        p.body = Some((p.place, p.pos));
+        p.place = Place::Construct(b);
+        p.pos = Pos::new(1, 1);
+        assert_eq!(walk_from(&st, STREET), Some(from));
     }
 }
