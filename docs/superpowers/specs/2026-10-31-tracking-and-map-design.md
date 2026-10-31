@@ -416,6 +416,18 @@ each.
 | pawnshops | `¢` | (224,192,112) | `Pawn` |
 | arcades | `▣` | (176,128,255) | `Arcade` |
 | hotels | `H` | (192,200,216) | `Hotel` |
+| corp towers & offices | `▲` | (110,180,255) | `CorpTower`, `Office` |
+| factories & warehouses | `▤` | (170,150,120) | `Factory`, `Warehouse`, `Depot` |
+| garages & parking | `P` | (150,150,165) | `Garage`, `Parking` |
+| temples | `†` | (255,230,150) | `Temple` |
+| apartment blocks | `#` | (140,175,150) | `Apartment`, `Megablock` (your home stays `⌂`) |
+
+The last five were added after Jeffrey played it (2026-10-31): "many areas dont seem to
+have POI, that cant be right". Districts are themed, and the corporate, industrial,
+dock and residential ones are built almost only of those kinds, so without them whole
+districts showed nothing. Every building kind on a stratum is now some listing's kind.
+The glyphs must pass the window's glyph test; a missing one is swapped for another
+before it lands.
 
 - Buildings count when their span holds the stratum; names as the street shows them
   (`net::building_name`, `clinic::name` for clinics). `what` is the kind and, for a
@@ -430,7 +442,9 @@ each.
 
 - Width 36 cells at 110 columns and wider, 30 below; a `│` in `(26,34,48)` on its left.
 - **Header**: `PLACES ‹ {kind} ›` and `< >` faint on the right. Below, the kinds' glyphs
-  in a row, lit when shown, the chosen one on `SEL (20,32,44)`, `all` last.
+  in a row, lit when shown, the chosen one on `SEL (20,32,44)`, `all` last; when they
+  do not fit the pane's width (15 kinds at 30 cells), they wrap onto a second row and
+  the list starts a row lower.
 - **The list**: the listings of the chosen kind (and the pinned ones), nearest first:
   glyph, name (cut to fit), distance right-aligned (`61 m`, `—`). `[ ]` step the
   selection; the cursor jumps to the listing and the view pans to it. The list scrolls
