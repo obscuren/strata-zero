@@ -17,8 +17,9 @@ const TEXT_AT: u16 = 22;
 const TEXT_LESS: u16 = 26;
 /// The fewest rows the box has.
 const MIN_H: u16 = 16;
-/// Rows of the box that are not text: the header, the gaps and the key row.
-const CHROME_H: u16 = 6;
+/// Rows of the box that are not text: the header, the gaps (one blank row between the
+/// last paragraph and the key row) and the key row.
+const CHROME_H: u16 = 7;
 
 /// A feed on the screen.
 pub struct Feed {
@@ -172,10 +173,33 @@ mod tests {
         let text = vec!["word ".repeat(300)];
         let (r, lines) = layout(frame, &text);
         assert_eq!((r.width, r.height), (90, 18));
-        assert_eq!(lines.len(), 12);
-        assert!(lines[11].ends_with('…'));
+        assert_eq!(lines.len(), 11);
+        assert!(lines[10].ends_with('…'));
         let (r, _) = layout(Rect::new(0, 0, 60, 30), &["hi".to_string()]);
         assert_eq!((r.width, r.height, r.x), (56, 16, 2));
+    }
+
+    #[test]
+    fn a_blank_row_separates_the_text_from_the_key_row() {
+        for size in [(100, 30), (120, 40)] {
+            let mut st = state_home();
+            let map = MapScreen::walking(&mut st);
+            super::super::begin(&mut st);
+            let view = st.missions.feeds.pop_front().unwrap();
+            let feed = Feed::new(view, st.tick);
+            let (r, lines) = layout(Rect::new(0, 0, size.0, size.1), &feed.view.text);
+            let buf = draw_stack(&st, &[&map, &feed], size);
+            let row = |y: u16| -> String {
+                (r.x + super::TEXT_AT..r.right() - 2)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            };
+            let key_y = r.bottom() - 3;
+            assert!(row(key_y).starts_with("space"), "{size:?}");
+            assert!(row(key_y - 1).trim().is_empty(), "{size:?}");
+            assert!(!row(key_y - 2).trim().is_empty(), "{size:?}");
+            assert_eq!(lines.len() as u16, key_y - 2 - (r.y + 3) + 1, "{size:?}");
+        }
     }
 
     #[test]

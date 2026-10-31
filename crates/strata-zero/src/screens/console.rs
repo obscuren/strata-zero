@@ -12,11 +12,11 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 40] = [
+const COMMANDS: [&str; 41] = [
     "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "talent", "tpts", "program",
     "heat", "alarm", "wake", "engage", "calm", "ice", "failsafe", "hp", "who", "clock", "tp",
     "clear", "help", "trace", "seize", "backdoor", "eyes", "light", "time", "job", "standing",
-    "jobs", "target", "foe", "foes", "dummy", "throw", "live", "ripper",
+    "jobs", "target", "foe", "foes", "dummy", "throw", "live", "ripper", "story",
 ];
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
@@ -584,6 +584,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 if fixers.len() == 1 { "" } else { "s" }
             ))
         }
+        "story" => story(st, &args),
         "jobs" => {
             if st.jobs.list.is_empty() {
                 return Ok("no jobs".to_string());
@@ -659,11 +660,79 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             Ok(line)
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · job fetch|copy|plant|deliver · standing <n> · jobs · target <name> · eyes · light · ripper · foe [n] · dummy [n] · foes · throw <item> [n] · live · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · job fetch|copy|plant|deliver · standing <n> · jobs · target <name> · eyes · light · ripper · foe [n] · dummy [n] · foes · throw <item> [n] · live · story [fire <mission> | feed | call] · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),
         other => Err(format!("unknown command {other}")),
+    }
+}
+
+/// `story`: the cast and missions; `fire <mission>` runs its waiting step; `feed` and
+/// `call` queue a test feed or ring a test call from the first role with a face.
+fn story(st: &mut AppState, args: &[&str]) -> Result<String, String> {
+    let usage = "story [fire <mission> | feed | call]";
+    let test_role = || {
+        st.book
+            .cast
+            .iter()
+            .find(|(_, r)| r.face.is_some())
+            .map(|(id, _)| id.clone())
+            .ok_or_else(|| "no role has a face".to_string())
+    };
+    match args {
+        [] => Ok(crate::missions::ui::console_lines(st).join(" · ")),
+        ["fire", id] => {
+            let m = st
+                .book
+                .missions
+                .iter()
+                .position(|m| m.id == *id)
+                .ok_or_else(|| format!("unknown mission {id}"))?;
+            if st.missions.runs.get(m).is_none() {
+                return Err("the story has not begun in this city".to_string());
+            }
+            if !crate::missions::force(st, m) {
+                return Err(format!("nothing waits in {id}"));
+            }
+            Ok(format!("fired {id}"))
+        }
+        ["feed"] => {
+            let from = test_role()?;
+            st.missions.feeds.push_back(crate::missions::FeedView {
+                mission: usize::MAX,
+                step: usize::MAX,
+                from,
+                text: vec![
+                    "Test feed. Words go here, then more words, wrapped to the box.".to_string(),
+                    "A second paragraph, to see the gap between them.".to_string(),
+                ],
+                close: "close".to_string(),
+            });
+            Ok("feed queued".to_string())
+        }
+        ["call"] => {
+            let from = test_role()?;
+            crate::missions::call::ring(
+                st,
+                crate::missions::Call {
+                    mission: usize::MAX,
+                    step: usize::MAX,
+                    from,
+                    lines: vec![
+                        "Test call. Can you hear me?".to_string(),
+                        "A second line, to step to.".to_string(),
+                    ],
+                    rang: 0,
+                    answered: None,
+                    line: 0,
+                    shown: 0,
+                    full: false,
+                },
+            );
+            Ok("ringing".to_string())
+        }
+        _ => Err(usage.to_string()),
     }
 }
 
@@ -680,6 +749,19 @@ pub fn complete(st: &AppState, head: &str, word: &str) -> Vec<String> {
             .items
             .iter()
             .map(|i| i.id.0.clone())
+            .filter(|id| id.starts_with(word))
+            .collect()
+    } else if head.trim() == "story" {
+        ["fire", "feed", "call"]
+            .iter()
+            .filter(|c| c.starts_with(word))
+            .map(|c| c.to_string())
+            .collect()
+    } else if head.trim() == "story fire" {
+        st.book
+            .missions
+            .iter()
+            .map(|m| m.id.clone())
             .filter(|id| id.starts_with(word))
             .collect()
     } else if head.trim() == "target" {
@@ -899,6 +981,61 @@ mod tests {
         assert!(st.show_eyes && st.show_light);
         assert_eq!(run(&mut st, at, "eyes").unwrap(), "eyes off");
         assert!(!st.show_eyes);
+    }
+
+    /// Seed 8 with its home, the story begun, and a console aimed at the street.
+    fn story_state() -> (AppState, At) {
+        let mut st = crate::jobs::testutil::state_home();
+        crate::missions::begin(&mut st);
+        let at = At {
+            place: citygen::Place::Stratum(citygen::StratumKind::Street),
+            pos: Pos::new(0, 0),
+        };
+        (st, at)
+    }
+
+    #[test]
+    fn story_lists_the_cast_and_missions() {
+        let (mut st, at) = story_state();
+        let out = run(&mut st, at, "story").unwrap();
+        assert!(out.contains("dez"), "{out}");
+        assert!(out.contains("the_drop"), "{out}");
+        assert!(out.contains("waits on"), "{out}");
+        assert_eq!(complete(&st, "", "sto"), vec!["story".to_string()]);
+        assert!(run(&mut st, at, "help").unwrap().contains("story"));
+        assert!(
+            run(&mut st, at, "story nope")
+                .unwrap_err()
+                .contains("story")
+        );
+    }
+
+    #[test]
+    fn story_fire_runs_the_waiting_step() {
+        let (mut st, at) = story_state();
+        let package = ItemId::new("taped_package");
+        assert_eq!(st.character.count(&package), 0);
+        let before = st.missions.runs[0].at;
+        run(&mut st, at, "story fire the_drop").unwrap();
+        assert_eq!(st.character.count(&package), 1);
+        assert!(st.missions.runs[0].at > before);
+        assert!(
+            run(&mut st, at, "story fire nope")
+                .unwrap_err()
+                .contains("unknown mission")
+        );
+        assert!(complete(&st, "story", "fi").contains(&"fire".to_string()));
+    }
+
+    #[test]
+    fn story_feed_and_call_queue_tests() {
+        let (mut st, at) = story_state();
+        st.missions.feeds.clear();
+        run(&mut st, at, "story feed").unwrap();
+        assert_eq!(st.missions.feeds.len(), 1);
+        assert!(st.missions.call.is_none());
+        run(&mut st, at, "story call").unwrap();
+        assert!(st.missions.call.is_some() || !st.missions.calls.is_empty());
     }
 
     #[test]

@@ -93,6 +93,47 @@ pub fn deck_rows(st: &AppState) -> Vec<Row> {
     out
 }
 
+/// The dev console's `story`: each role with the person cast in it, then each mission
+/// with its state and the step it waits on.
+pub fn console_lines(st: &AppState) -> Vec<String> {
+    if !st.missions.begun {
+        return vec!["the story has not begun in this city".to_string()];
+    }
+    let mut out = Vec::new();
+    for role in st.book.cast.keys() {
+        out.push(match super::person_of(st, role) {
+            Some(id) => {
+                let name = st
+                    .world
+                    .as_ref()
+                    .and_then(|w| w.people().iter().find(|p| p.id == id))
+                    .map_or("?", |p| p.name.as_str());
+                format!("{role} → {} {name}", id.0)
+            }
+            None => format!("{role} → nobody"),
+        });
+    }
+    for (i, m) in st.book.missions.iter().enumerate() {
+        let Some(run) = st.missions.runs.get(i) else {
+            continue;
+        };
+        let state = match run.state {
+            RunState::Waiting => "waiting",
+            RunState::Open => "open",
+            RunState::Done { .. } => "done",
+            RunState::Uncast => "uncast",
+        };
+        let waits = match (run.state, m.steps.get(run.at)) {
+            (RunState::Open | RunState::Waiting, Some(step)) => {
+                format!(" · waits on {}: {:?}", step.id, step.when)
+            }
+            _ => String::new(),
+        };
+        out.push(format!("{} · {state}{waits}", m.id));
+    }
+    out
+}
+
 /// The deck's dossier on one mission.
 pub fn detail(st: &AppState, mission: usize) -> Vec<Line<'static>> {
     let (Some(m), Some(run)) = (st.book.missions.get(mission), st.missions.runs.get(mission))

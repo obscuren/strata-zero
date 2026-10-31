@@ -1,5 +1,18 @@
 //! Story missions: authored chains of steps in `flavor/missions.ron`, cast onto the
 //! city's people and moved on by what the game reports and what the engine sees.
+//!
+//! Owns the runtime (`Missions`, `Run`, `begin`, `send`, `tick`, `end`), the book's
+//! types (`content`), casting (`cast`), what a step does (`effects`), and what the
+//! player sees: the HOLO feed and call (`feed`, `call`, `face`) and the JOBS lines (`ui`).
+//! No mission, step or role id appears in Rust outside tests; the book names them.
+//!
+//! Adding a block (spec `docs/superpowers/specs/2026-10-31-story-missions-design.md`, 15):
+//! - A trigger: a variant on `Trigger` (and `Where` for a place), its arm in
+//!   `Trigger::fires`, its names in `Book::validate`; an event also gets a variant on
+//!   `Event` and one `send` where the game does it. Test with a small book.
+//! - An effect: a variant on `Effect`, its arm in `effects::apply`, its names in
+//!   `Book::validate`. Test it.
+//! - A pick: a variant on `Pick` and its arm in `cast::pick`.
 
 pub mod call;
 pub mod cast;
@@ -208,21 +221,7 @@ fn fire(st: &mut AppState, ev: Option<&Event>) {
             if !step.when.fires(st, m, ev) {
                 continue;
             }
-            let then = step.then.clone();
-            let at = st.missions.runs[m].at;
-            for e in &then {
-                effects::apply(st, m, at, e);
-            }
-            let now = st.net.now(st);
-            let last = st.book.missions[m].steps.len();
-            let run = &mut st.missions.runs[m];
-            run.at = at + 1;
-            run.since = now;
-            run.state = if run.at >= last {
-                RunState::Done { at: now }
-            } else {
-                RunState::Open
-            };
+            run_step(st, m);
             any = true;
         }
         ev = None;
@@ -230,6 +229,39 @@ fn fire(st: &mut AppState, ev: Option<&Event>) {
             break;
         }
     }
+}
+
+/// Runs the effects of the step mission `m` waits on and moves it to the next.
+fn run_step(st: &mut AppState, m: usize) {
+    let Some(step) = waiting(st, m) else {
+        return;
+    };
+    let then = step.then.clone();
+    let at = st.missions.runs[m].at;
+    for e in &then {
+        effects::apply(st, m, at, e);
+    }
+    let now = st.net.now(st);
+    let last = st.book.missions[m].steps.len();
+    let run = &mut st.missions.runs[m];
+    run.at = at + 1;
+    run.since = now;
+    run.state = if run.at >= last {
+        RunState::Done { at: now }
+    } else {
+        RunState::Open
+    };
+}
+
+/// Dev console: runs the step mission `m` waits on as if its trigger fired, then lets
+/// whatever that makes true fire. False when nothing waits.
+pub fn force(st: &mut AppState, m: usize) -> bool {
+    if waiting(st, m).is_none() {
+        return false;
+    }
+    run_step(st, m);
+    fire(st, None);
+    true
 }
 
 impl Trigger {
