@@ -372,6 +372,7 @@ pub fn generate(st: &mut AppState, fixer: PersonId, kind: KindTag, counter: u32)
                 .people()
                 .iter()
                 .filter(|p| p.profession != "fixer" && p.id != fixer && Some(p.household) != mine)
+                .filter(|p| !world.is_dead(p.id))
                 // At their station at some point inside the window.
                 .filter(|p| on_shift_within(p.shift, start, HOURS_DELIVER * 60))
                 .filter_map(|p| match p.work {
@@ -657,6 +658,24 @@ mod tests {
             j.objectives[0].text
         );
         assert!(j.pay >= PAY_DELIVER_BASE);
+    }
+
+    #[test]
+    fn the_dead_get_no_deliveries() {
+        let mut st = state_home();
+        let fx = a_fixer(&st);
+        let j = generate(&mut st, fx, KindTag::Deliver, 0).expect("a deliver");
+        let Kind::Deliver { to, .. } = j.kind else {
+            panic!()
+        };
+        st.world.as_mut().unwrap().kill(to);
+        for counter in 0..=30 {
+            if let Some(j) = generate(&mut st, fx, KindTag::Deliver, counter)
+                && let Kind::Deliver { to: named, .. } = j.kind
+            {
+                assert_ne!(named, to, "counter {counter}");
+            }
+        }
     }
 
     #[test]

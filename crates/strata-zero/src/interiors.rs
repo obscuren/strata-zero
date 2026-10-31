@@ -691,6 +691,42 @@ mod tests {
     }
 
     #[test]
+    fn placement_leaves_out_the_dead() {
+        let c = Generator::run(GenParams {
+            seed: 6,
+            size: SizePreset::Custom { w: 120, h: 60 },
+            districts: 8,
+            ..Default::default()
+        })
+        .unwrap();
+        let people = sim::People::load().unwrap();
+        let mut w = sim::World::seed(&c, &people, &sim::SimParams::default(), 22 * 60, 0);
+        for m in 1..=12 * 60 {
+            w.advance(&c, m * sim::TICKS_PER_MINUTE);
+            w.path_some(&c, usize::MAX);
+        }
+        let tower = c
+            .buildings
+            .iter()
+            .find(|b| b.kind == BuildingKind::CorpTower)
+            .unwrap();
+        let mut i = Interiors::default();
+        i.ensure(&c, tower.id, 0).unwrap();
+        let (plan, lobby) = i.floor(tower.id, 0).unwrap();
+        let who: Vec<PersonId> = Placement::new(plan, lobby, &w, &Homes::default())
+            .people()
+            .map(|(_, id)| id)
+            .collect();
+        assert!(!who.is_empty(), "someone stands in the lobby");
+        for id in who {
+            w.kill(id);
+        }
+        // Another drone may take the desk; none of the dead stands anywhere.
+        let after = Placement::new(plan, lobby, &w, &Homes::default());
+        assert!(after.people().all(|(_, id)| !w.is_dead(id)));
+    }
+
+    #[test]
     fn the_first_drone_minds_the_lobby_desk() {
         let c = Generator::run(GenParams {
             seed: 6,

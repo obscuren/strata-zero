@@ -488,7 +488,22 @@ pub fn look_card(
         .foes
         .iter()
         .find(|f| f.place == place && f.pos == pos && (visible || f.down));
-    if let Some(f) = foe {
+    // A body the story left, before the same.
+    let body = st
+        .missions
+        .bodies
+        .iter()
+        .find(|b| b.place == place && b.pos == pos);
+    if let (Some(b), None) = (body, foe) {
+        set_head(
+            &mut card,
+            capitalised(&b.name),
+            Some(('%', crate::render::people::FOE_DOWN)),
+        );
+        card.second = Some("dead".to_string());
+        card.body.push(b.look.clone());
+        card.also.extend(stacks);
+    } else if let Some(f) = foe {
         let colour = if f.down {
             crate::render::people::FOE_DOWN
         } else {
@@ -760,6 +775,25 @@ mod tests {
         };
         let text = all_text(&rest);
         assert!(!text.chars().any(|ch| ch.is_ascii_digit()), "{text}");
+    }
+
+    #[test]
+    fn look_reads_a_body() {
+        let mut st = state(false);
+        let at = bare(&st);
+        stand(&mut st, at);
+        st.missions.bodies.push(crate::missions::Body {
+            person: sim::PersonId(0),
+            name: "Marlo".into(),
+            place: STREET,
+            pos: at,
+            look: "Marlo lies face down by the shutters.".into(),
+        });
+        let c = card(&st, at);
+        assert_eq!(c.header.as_deref(), Some("Marlo"));
+        assert_eq!(c.glyph.map(|g| g.0), Some('%'));
+        assert_eq!(c.second.as_deref(), Some("dead"));
+        assert_eq!(c.body, ["Marlo lies face down by the shutters."]);
     }
 
     #[test]

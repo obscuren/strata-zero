@@ -2802,6 +2802,7 @@ impl Screen for MapScreen {
             vis,
             eyes: &eyes,
             foes: &st.foes,
+            bodies: &st.missions.bodies,
         });
         if let Some(p) = people.as_ref() {
             overlays.push(p);
