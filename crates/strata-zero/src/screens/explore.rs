@@ -2664,11 +2664,16 @@ impl Screen for MapScreen {
         crate::net::tick_backdoors(st);
         crate::jobs::tick(st);
         crate::missions::tick(st);
-        // A scene playing: no aimed walk goes on under it, and the map follows where
-        // it puts you before this frame draws.
+        // A scene playing: no aimed walk goes on under it, nothing of the map's stays
+        // open to keep its keys after, and the map follows where it puts you before
+        // this frame draws.
         if crate::missions::scene::running(st).is_some() {
             self.walking = None;
             self.aim = None;
+            self.help = false;
+            self.looking = None;
+            self.which_way = None;
+            self.targeting = None;
             if self.mode == Mode::Walk && st.player.as_ref().is_some_and(|p| p.place != self.place)
             {
                 self.follow_player(st);

@@ -134,6 +134,17 @@ impl SceneRun {
     }
 }
 
+impl PadRun {
+    /// The verdict shows from clock tick `at`, its hold counted from there. The flash's
+    /// glitch runs on the frame tick `tick`, as the real pad's does.
+    fn verdict(&mut self, at: u64, tick: u64) {
+        self.verdict_at = Some(at);
+        if let Some(pad) = self.pad.as_mut() {
+            pad.show_verdict(self.open, tick);
+        }
+    }
+}
+
 impl Line {
     /// Clock ticks the whole line takes to type.
     fn type_ticks(&self) -> u64 {
@@ -235,7 +246,14 @@ pub fn skip(st: &mut AppState) {
         finish(st, &mut run, &beat);
     }
     run.beat += 1;
-    while let Some(beat) = run.current() {
+    loop {
+        // A walk left going beside the beats gets there before the next beat looks.
+        for w in std::mem::take(&mut run.walks) {
+            land(st, &w);
+        }
+        let Some(beat) = run.current() else {
+            break;
+        };
         start(st, &mut run, &beat);
         finish(st, &mut run, &beat);
         run.beat += 1;
@@ -243,17 +261,27 @@ pub fn skip(st: &mut AppState) {
     close(st, run);
 }
 
-/// `space`: a typing line shows whole; else the beat in progress ends now, in its end
-/// state, and the scene moves on.
+/// `space`: a typing line shows whole, a keypad still typing types the rest and shows
+/// its verdict; else the beat in progress ends now, in its end state, and the scene
+/// moves on. A hold counts from the press.
 fn next(st: &mut AppState) {
     let Some(mut run) = st.missions.scene.take() else {
         return;
     };
     let now = st.clock_tick();
     if let Some(line) = run.line.as_mut().filter(|l| l.typing(now)) {
-        // Whole from now, so a hold counts from here.
         line.began = now;
         line.chars_per_tick = f32::INFINITY;
+        st.missions.scene = Some(run);
+        return;
+    }
+    if let Some(p) = run.keypad.as_mut().filter(|p| p.verdict_at.is_none()) {
+        for d in std::mem::take(&mut p.digits) {
+            if let Some(pad) = p.pad.as_mut() {
+                pad.show_digit(d);
+            }
+        }
+        p.verdict(now, st.tick);
         st.missions.scene = Some(run);
         return;
     }
@@ -330,11 +358,11 @@ fn advance(st: &mut AppState, run: &mut SceneRun) -> bool {
     chain(st, run)
 }
 
-/// The scene is over: a walk left going ends on its goal, the doors and the camera go
-/// with the run, and the step that played it has ended.
+/// The scene is over: a walk left going lands where it ends, the doors and the camera
+/// go with the run, and the step that played it has ended.
 fn close(st: &mut AppState, run: SceneRun) {
     for w in &run.walks {
-        put(st, &w.who, w.place, w.goal);
+        land(st, w);
     }
     super::end(st, run.mission, run.step);
 }
@@ -399,7 +427,10 @@ fn start(st: &mut AppState, run: &mut SceneRun, beat: &Beat) {
                 run.camera = Some(tile);
             }
         }
-        Beat::Arrive { role, at } => effects::arrive(st, role, at),
+        Beat::Arrive { role, at } => {
+            run.walks.retain(|w| &w.who != role);
+            effects::arrive(st, role, at);
+        }
         Beat::Leave(role) => {
             run.walks.retain(|w| &w.who != role);
             visitors::leave(st, role);
@@ -446,7 +477,7 @@ fn finish(st: &mut AppState, run: &mut SceneRun, beat: &Beat) {
         } => {
             if let Some(i) = run.walks.iter().position(|w| &w.who == who) {
                 let w = run.walks.remove(i);
-                put(st, &w.who, w.place, w.goal);
+                land(st, &w);
             }
         }
         Beat::Keypad { .. } => run.keypad = None,
@@ -467,8 +498,9 @@ fn ticks(secs: f32) -> u64 {
 }
 
 /// Sets an actor walking to the mark: a path over the floor, or straight there when the
-/// mark lies on another map or no path leads to it. An actor not on the map, or a mark
-/// that resolves to nothing, walks nowhere.
+/// mark lies on another map or no path leads to it. With another actor on the mark the
+/// walk stops the tile before them, or stays put when there is none. An actor not on
+/// the map, or a mark that resolves to nothing, walks nowhere.
 fn walk(st: &mut AppState, run: &mut SceneRun, who: &str, to: &Mark, step_ticks: u64) {
     run.walks.retain(|w| w.who != who);
     let walker = (who != YOU).then_some(who);
@@ -484,21 +516,43 @@ fn walk(st: &mut AppState, run: &mut SceneRun, who: &str, to: &Mark, step_ticks:
         }
         return;
     };
-    if there != place {
-        put(st, who, place, goal);
-        return;
+    let held = taken(st, who, place, goal);
+    let route = if there == place {
+        path(st, who, place, from, goal)
+    } else {
+        None
+    };
+    match route {
+        Some(mut tiles) => {
+            if held {
+                tiles.pop();
+            }
+            // Already there, or nowhere free on the way: the walk is over.
+            let Some(&end) = tiles.last() else {
+                return;
+            };
+            run.walks.push(WalkRun {
+                who: who.to_string(),
+                place,
+                path: tiles,
+                goal: end,
+                next: st.clock_tick().saturating_add(step_ticks),
+                step_ticks,
+            });
+        }
+        None if !held => put(st, who, place, goal),
+        None => {}
     }
-    match path(st, who, place, from, goal) {
-        Some(path) if !path.is_empty() => run.walks.push(WalkRun {
-            who: who.to_string(),
-            place,
-            path,
-            goal,
-            next: st.clock_tick().saturating_add(step_ticks),
-            step_ticks,
-        }),
-        Some(_) => {}
-        None => put(st, who, place, goal),
+}
+
+/// Puts a walker where its walk ends: the goal, or the last free tile left of its path
+/// when another actor has stepped onto the goal since; where it stands when none is.
+fn land(st: &mut AppState, w: &WalkRun) {
+    let end = std::iter::once(w.goal)
+        .chain(w.path.iter().rev().copied())
+        .find(|p| !taken(st, &w.who, w.place, *p));
+    if let Some(p) = end {
+        put(st, &w.who, w.place, p);
     }
 }
 
@@ -520,7 +574,8 @@ fn path(st: &AppState, who: &str, place: Place, from: Pos, goal: Pos) -> Option<
 }
 
 /// Each walk steps the tiles whose time has come, the player seeing from each. A tile
-/// someone has stepped into since finds a new way round, or the walker goes to the goal.
+/// someone has stepped into since finds a new way round, or the walker lands where the
+/// walk ends.
 fn step_walks(st: &mut AppState, run: &mut SceneRun, now: u64) {
     for w in &mut run.walks {
         while now >= w.next {
@@ -532,8 +587,8 @@ fn step_walks(st: &mut AppState, run: &mut SceneRun, now: u64) {
                     .and_then(|(_, here)| path(st, &w.who, w.place, here, w.goal))
                     .unwrap_or_default();
                 if round.first().is_none_or(|p| taken(st, &w.who, w.place, *p)) {
+                    land(st, w);
                     w.path.clear();
-                    put(st, &w.who, w.place, w.goal);
                     break;
                 }
                 w.path = round;
@@ -560,11 +615,7 @@ fn step_pad(st: &AppState, run: &mut SceneRun, now: u64) {
             }
         }
         if p.digits.is_empty() {
-            p.verdict_at = Some(p.next);
-            // The flash's glitch runs on the frame tick, as the real pad's does.
-            if let Some(pad) = p.pad.as_mut() {
-                pad.show_verdict(p.open, st.tick);
-            }
+            p.verdict(p.next, st.tick);
         } else {
             p.next = p.next.saturating_add(p.step_ticks);
         }
@@ -679,6 +730,11 @@ mod tests {
     /// Two visitors, and a mission whose first step plays scene "s" (these beats at
     /// this pace) and whose second waits on its end.
     fn book(pace: &str, beats: &str) -> Book {
+        book_with(pace, beats, r#"Log("after the scene")"#)
+    }
+
+    /// The same, the second step doing `after`.
+    fn book_with(pace: &str, beats: &str, after: &str) -> Book {
         Book::parse(&format!(
             r#"Story(
                 cast: {{
@@ -692,7 +748,7 @@ mod tests {
                 }},
                 missions: [Mission(id: "m", title: "M", from: "castellan", steps: [
                     Step(id: "play", when: NewGame, then: [Scene("s")]),
-                    Step(id: "after", when: Ended("play"), then: [Log("after the scene")]),
+                    Step(id: "after", when: Ended("play"), then: [{after}]),
                 ])],
                 scenes: {{
                     "s": Scene(title: "Test", look: Film, pace: {pace}, beats: [{beats}]),
@@ -1073,12 +1129,15 @@ mod tests {
     #[test]
     fn a_call_up_when_a_scene_starts_goes_to_voicemail() {
         let mut st = queued(SLOW, r#"Say(who: "castellan", text: "Now.")"#);
+        // The call comes up first, then the scene is queued.
+        let scene = st.missions.scenes.pop_front().unwrap();
         let call = Effect::Call {
             from: "seren".into(),
             lines: vec!["Pick up.".into()],
         };
         effects::apply(&mut st, 0, 1, &call);
         assert!(st.missions.call.is_some());
+        st.missions.scenes.push_back(scene);
         tick(&mut st);
         assert!(running(&st).is_some());
         assert!(st.missions.call.is_none());
@@ -1215,5 +1274,241 @@ mod tests {
         assert!(press(&mut st, KeyCode::Esc));
         assert!(running(&st).is_none());
         assert_eq!(logged(&st, "after the scene"), 1, "ending it ends nothing");
+    }
+
+    #[test]
+    fn a_scene_closes_the_maps_overlays() {
+        let mut st = queued(SLOW, r#"Say(who: "castellan", text: "Stay.")"#);
+        let mut map = MapScreen::walking(&mut st);
+        stand(&mut st, &Mark::HomeInside(1));
+        // Look mode and help open on the map before the scene comes.
+        let scene = st.missions.scenes.pop_front().unwrap();
+        let k = crate::screens::testutil::key;
+        map.update(&mut st, &[k(KeyCode::Char('x'))]);
+        assert!(map.is_looking());
+        map.help = true;
+        st.missions.scenes.push_back(scene);
+        map.update(&mut st, &[]);
+        assert!(running(&st).is_some());
+        assert!(!map.help && !map.is_looking());
+        // One esc is the scene's.
+        let cmd = map.update(&mut st, &[k(KeyCode::Esc)]);
+        assert!(matches!(cmd, ScreenCmd::Stay));
+        assert!(running(&st).is_none());
+    }
+
+    #[test]
+    fn a_call_rung_as_a_scene_ends_waits_for_the_next() {
+        let mut st = state_home();
+        st.book = book_with(
+            SLOW,
+            r#"Say(who: "castellan", text: "One.")"#,
+            r#"Call(from: "castellan", lines: ["Pick up."])"#,
+        );
+        stand(&mut st, &Mark::HomeInside(1));
+        begin(&mut st);
+        tick(&mut st);
+        assert!(running(&st).is_some());
+        // A second scene waits its turn; the first's end rings the call.
+        play(&mut st, "s");
+        assert!(press(&mut st, KeyCode::Esc));
+        assert!(st.missions.call.is_none(), "it waits behind the next scene");
+        tick(&mut st);
+        assert!(running(&st).is_some());
+        assert!(st.missions.call.is_none());
+        assert!(press(&mut st, KeyCode::Esc));
+        tick(&mut st);
+        let up = st.missions.call.as_ref().expect("the call rings");
+        assert_eq!(up.answered, None);
+        assert!(st.journal.mails.iter().all(|m| m.subject != "voicemail"));
+    }
+
+    /// Seren at the rig and you outside the door, then this scene; skipped at once, or
+    /// played to its last beat, a line waiting for space.
+    fn side_walk(skip: bool) -> AppState {
+        let mut st = queued(
+            SLOW,
+            r#"Walk(who: "seren", to: HomeInside(2), pace: Some(0.05), wait: false),
+            Wait(5.0),
+            Walk(who: "you", to: Beside(Role("seren"))),
+            Say(who: "you", text: "Here.")"#,
+        );
+        let rig = at(&st, &Mark::HomeRig);
+        visitors::arrive(&mut st, "seren", rig);
+        tick(&mut st);
+        if skip {
+            assert!(press(&mut st, KeyCode::Esc));
+        } else {
+            run_ticks(&mut st, 300);
+            assert_eq!(beat(&st), 3);
+        }
+        st
+    }
+
+    #[test]
+    fn a_skip_lets_side_walks_arrive_first() {
+        let played = side_walk(false);
+        let skipped = side_walk(true);
+        assert!(running(&skipped).is_none());
+        let x = at(&skipped, &Mark::HomeInside(2));
+        assert_eq!(at(&skipped, &Mark::Role("seren".into())), x);
+        assert_eq!(me(&skipped), me(&played));
+        assert_eq!(me(&skipped).1.chebyshev(x.1), 1, "beside where she went");
+    }
+
+    #[test]
+    fn arriving_ends_a_walk() {
+        let mut st = queued(
+            SLOW,
+            r#"Walk(who: "seren", to: HomeInside(2), wait: false),
+            Arrive(role: "seren", at: HomeBed),
+            Say(who: "seren", text: "Here.")"#,
+        );
+        let rig = at(&st, &Mark::HomeRig);
+        visitors::arrive(&mut st, "seren", rig);
+        tick(&mut st);
+        assert!(running(&st).unwrap().walks.is_empty());
+        run_ticks(&mut st, 200);
+        assert_eq!(
+            at(&st, &Mark::Role("seren".into())),
+            at(&st, &Mark::HomeBed)
+        );
+        assert!(press(&mut st, KeyCode::Esc));
+        assert_eq!(
+            at(&st, &Mark::Role("seren".into())),
+            at(&st, &Mark::HomeBed)
+        );
+    }
+
+    /// The pad drawn alone, as text.
+    fn drawn(st: &AppState) -> String {
+        use ratatui::{Terminal, backend::TestBackend};
+        let pad = running(st).unwrap().pad().unwrap();
+        let mut term = Terminal::new(TestBackend::new(80, 40)).unwrap();
+        term.draw(|f| pad.draw(st, f)).unwrap();
+        crate::screens::testutil::buffer_text(term.backend().buffer())
+    }
+
+    #[test]
+    fn space_on_a_keypad_shows_the_verdict_then_closes() {
+        let pad = "Keypad(door: HomeDoor, code: Code(1234), result: Denied, keys: 0.1, hold: 0.5)";
+        let mut st = playing(
+            SLOW,
+            &format!(r#"{pad}, {pad}, Say(who: "you", text: "No.")"#),
+        );
+        let typed = |st: &AppState| running(st).unwrap().pad().unwrap().typed().to_vec();
+        run_ticks(&mut st, 4);
+        assert_eq!(typed(&st), [1]);
+        assert!(!drawn(&st).contains("DENIED"));
+        // The first press types the rest and shows the verdict, held from the press.
+        assert!(press(&mut st, SPACE));
+        assert_eq!(beat(&st), 0);
+        assert_eq!(typed(&st), [1, 2, 3, 4]);
+        assert!(drawn(&st).contains("DENIED"), "{}", drawn(&st));
+        run_ticks(&mut st, 15 - 1);
+        assert_eq!(beat(&st), 0);
+        run_ticks(&mut st, 1);
+        assert_eq!(beat(&st), 1);
+        // The second press closes the pad.
+        assert!(press(&mut st, SPACE));
+        assert_eq!((beat(&st), typed(&st).len()), (1, 4));
+        assert!(press(&mut st, SPACE));
+        assert_eq!(beat(&st), 2);
+        assert!(running(&st).unwrap().pad().is_none());
+    }
+
+    #[test]
+    fn a_walk_to_someone_stops_beside_them() {
+        let mut st = queued(
+            SLOW,
+            r#"Walk(who: "you", to: Role("seren")),
+            Walk(who: "you", to: Role("seren")),
+            Say(who: "you", text: "Hi.")"#,
+        );
+        let seren = at(&st, &Mark::HomeInside(2));
+        visitors::arrive(&mut st, "seren", seren);
+        tick(&mut st);
+        // Outside, through the door, to the tile before hers: two steps.
+        run_ticks(&mut st, 2 * 15);
+        assert_eq!(beat(&st), 2, "the second walk had nowhere to go");
+        assert_eq!(me(&st), at(&st, &Mark::HomeInside(1)));
+        assert_eq!(at(&st, &Mark::Role("seren".into())), seren);
+    }
+
+    #[test]
+    fn a_skip_mid_keypad_ends_cleanly() {
+        let mut st = playing(
+            SLOW,
+            r#"Keypad(door: HomeDoor, code: Journal, result: Denied, keys: 0.1, hold: 0.5),
+            Say(who: "you", text: "After.")"#,
+        );
+        let h = st.home.unwrap().home;
+        let state = st.journal.keypad(h.building, h.level, h.number);
+        let codes = st.journal.codes().len();
+        run_ticks(&mut st, 4);
+        assert!(press(&mut st, KeyCode::Esc));
+        assert!(running(&st).is_none());
+        assert_eq!(logged(&st, "VEX · \u{201c}After.\u{201d}"), 1);
+        assert!(ended(&st));
+        assert_eq!(st.journal.keypad(h.building, h.level, h.number), state);
+        assert_eq!(st.journal.codes().len(), codes);
+    }
+
+    #[test]
+    fn a_skip_ends_a_side_walk_on_its_goal() {
+        let mut st = queued(
+            SLOW,
+            r#"Walk(who: "seren", to: HomeOutside, wait: false),
+            Say(who: "castellan", text: "Go.")"#,
+        );
+        stand(&mut st, &Mark::HomeBed);
+        let rig = at(&st, &Mark::HomeRig);
+        visitors::arrive(&mut st, "seren", rig);
+        tick(&mut st);
+        run_ticks(&mut st, 20);
+        assert_eq!(running(&st).unwrap().walks.len(), 1, "still on her way");
+        assert!(press(&mut st, KeyCode::Esc));
+        let out = at(&st, &Mark::HomeOutside);
+        assert_eq!(at(&st, &Mark::Role("seren".into())), out);
+    }
+
+    #[test]
+    fn a_walk_to_another_place_is_at_once() {
+        let mut st = queued(
+            SLOW,
+            r#"Walk(who: "you", to: HomeInside(2)), Say(who: "you", text: "Home.")"#,
+        );
+        let mut map = MapScreen::walking(&mut st);
+        let b = st.home.unwrap().home.building;
+        let below = st.city.as_ref().unwrap().portals(b).first().unwrap().1;
+        on_street(&mut st, below);
+        // The map on the street, then the scene.
+        let scene = st.missions.scenes.pop_front().unwrap();
+        map.update(&mut st, &[]);
+        assert_eq!(map.place, Place::Stratum(StratumKind::Street));
+        st.missions.scenes.push_back(scene);
+        map.update(&mut st, &[]);
+        let goal = at(&st, &Mark::HomeInside(2));
+        assert_eq!(me(&st), goal);
+        assert_eq!(beat(&st), 1);
+        assert_eq!(map.place, goal.0, "the map follows you home");
+        let vis = st.player.as_ref().unwrap().vis();
+        assert_eq!(vis.get(goal.1), Some(&Visibility::Visible));
+    }
+
+    #[test]
+    fn a_walk_with_no_path_goes_to_its_goal() {
+        let mut st = queued(
+            SLOW,
+            r#"Walk(who: "seren", to: HomeOutside), Say(who: "seren", text: "Out.")"#,
+        );
+        // You in the doorway: no way out past you.
+        stand(&mut st, &Mark::HomeDoor);
+        let rig = at(&st, &Mark::HomeRig);
+        visitors::arrive(&mut st, "seren", rig);
+        tick(&mut st);
+        assert_eq!(beat(&st), 1, "over at once");
+        let out = at(&st, &Mark::HomeOutside);
+        assert_eq!(at(&st, &Mark::Role("seren".into())), out);
     }
 }

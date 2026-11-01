@@ -104,9 +104,10 @@ pub fn key(st: &mut AppState, k: &KeyEvent) -> bool {
     }
 }
 
-/// No call rings or talks during a fight, a run or a scene: `space` and `esc` are theirs.
+/// No call rings or talks during a fight, a run or a scene, or while a scene waits to
+/// play (a call up as one starts would go to voicemail): `space` and `esc` are theirs.
 pub fn quiet(st: &AppState) -> bool {
-    busy(st) || st.missions.scene.is_some()
+    busy(st) || st.missions.scene.is_some() || !st.missions.scenes.is_empty()
 }
 
 /// A fight is on or the player is in a construct: no call, and no scene either.
