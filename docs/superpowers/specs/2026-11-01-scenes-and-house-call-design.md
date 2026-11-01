@@ -321,7 +321,10 @@ Drawn instead of the explore frame while a film scene runs:
 - **Hint**: `space next · esc skip` in `FAINT`, last row, right-aligned to the map's
   right edge.
 - **Marker**: `▾` in the speaker's colour, bold, on the cell above the line's anchor
-  when that cell is on the map.
+  when that cell is on the map and no actor stands on it (the voice behind the door
+  never covers you on the walkway).
+- What a scene writes over map cells (the marker, an open door, the bubbles' stage line,
+  tail and text) sets its whole style: nothing of the cell under it (bold, dim) shows.
 - **Keypad**: when a `Keypad` beat shows its pad, the map washes (`ui::dim::wash` on
   the map's rect) and the pad draws over the frame as the real one does.
 - No HUD, no side panel, no footer, no toasts, no call card.
@@ -342,8 +345,8 @@ Drawn after the explore frame while a bubbles scene runs:
 - **Placement** around the anchor's screen cell `(sx, sy)`: above (bottom border on
   `sy − 2`, a `▾` tail on `(sx, sy − 1)`) or else below (top border on `sy + 2`, a `▴`
   tail on `(sx, sy + 1)`), horizontally `x = sx − w / 2` clamped into the map; a spot
-  is taken if it fits inside the map and covers neither the player's cell nor an
-  actor's. With no anchor on screen or no spot, the bubble sits in the map's bottom-left
+  is taken if it fits inside the map and neither it nor its tail covers the player's
+  cell or an actor's. With no anchor on screen or no spot, the bubble sits in the map's bottom-left
   corner with no tail.
 - **Keypad**: as in film, the map washes and the pad draws over it, then the bubble.
 

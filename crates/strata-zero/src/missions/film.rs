@@ -84,7 +84,8 @@ fn subtitle(
     let text_w = (map.width as usize).saturating_sub(label_w + 2).max(1);
     // Wrapped whole, so the words don't jump about while they type.
     let mut wrapped = wrap_text(&line.text, text_w);
-    let whole: Vec<usize> = wrapped.iter().map(|r| r.chars().count()).collect();
+    let now = st.clock_tick();
+    let typed = overlay::typed_rows(&line.text, &wrapped, line.shown(now).chars().count());
     if wrapped.len() > rows as usize {
         wrapped.truncate(rows as usize);
         if let Some(last) = wrapped.last_mut() {
@@ -94,27 +95,22 @@ fn subtitle(
     let width = label_w + 2 + wrapped.iter().map(|r| r.chars().count()).max().unwrap_or(0);
     let x = frame.x + frame.width.saturating_sub(width as u16) / 2;
     text(buf, frame, x, top, &label, colour, true);
-    let now = st.clock_tick();
-    let mut left = line.shown(now).chars().count();
     let tx = x + label_w as u16 + 2;
     let mut caret = (tx, top);
-    for (i, row) in wrapped.iter().enumerate() {
-        let take = left.min(whole[i]);
+    for (i, (row, &take)) in wrapped.iter().zip(&typed).enumerate() {
         let y = top + i as u16;
         let shown: String = row.chars().take(take).collect();
         text(buf, frame, tx, y, &shown, WHITE, false);
         if take > 0 {
             caret = (tx + shown.chars().count() as u16, y);
         }
-        // The space the wrap broke at.
-        left = left.saturating_sub(whole[i] + 1);
     }
     if line.typing(now) {
         text(buf, frame, caret.0, caret.1, "▌", colour, false);
     }
 }
 
-/// Writes `s` from `x` on black, stopping at the frame's edge.
+/// Writes `s` from `x` on black in its whole style, stopping at the frame's edge.
 fn text(buf: &mut Buffer, frame: Rect, x: u16, y: u16, s: &str, fg: Color, bold: bool) {
     if y >= frame.bottom() {
         return;
@@ -124,13 +120,13 @@ fn text(buf: &mut Buffer, frame: Rect, x: u16, y: u16, s: &str, fg: Color, bold:
         style = style.add_modifier(Modifier::BOLD);
     }
     for (cx, ch) in (x..frame.right()).zip(s.chars()) {
-        buf[(cx, y)].set_char(ch).set_style(style);
+        overlay::ink(&mut buf[(cx, y)], ch, style);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::scene::tests::{SLOW, SPACE, playing, press, queued, see};
+    use super::super::scene::tests::{SLOW, SPACE, playing, press, queued, run_ticks, see};
     use super::super::{Mark, marks, overlay, visitors};
     use crate::app::AppState;
     use crate::screens::explore::MapScreen;
@@ -211,6 +207,21 @@ mod tests {
     }
 
     #[test]
+    fn typing_keeps_pace_past_a_long_word() {
+        // A word wider than the subtitle splits with no space dropped at the break.
+        let long = "x".repeat(100);
+        let mut st = playing(
+            SLOW,
+            &format!(r#"Say(who: "castellan", text: "{long} end")"#),
+        );
+        // A character a tick.
+        run_ticks(&mut st, 70);
+        let (buf, _) = drawn(&mut st, (120, 40));
+        let typed = |y| row(&buf, y).chars().filter(|c| *c == 'x').count();
+        assert_eq!((typed(36), typed(37)), (68, 2));
+    }
+
+    #[test]
     fn the_marker_sits_over_the_speaker() {
         let mut st = queued(SLOW, r#"Say(who: "castellan", text: "Hi.")"#);
         let (place, pos) = marks::resolve(&st, &Mark::HomeOutside, None).unwrap();
@@ -230,10 +241,10 @@ mod tests {
 
     #[test]
     fn a_hidden_speaker_reads_dim() {
-        let mut st = playing(
-            SLOW,
-            r#"Say(who: "castellan", as: Some("A voice"), at: Some(HomeDoor), text: "Come in.")"#,
-        );
+        let mut st = playing(SLOW, VOICE);
+        // You inside, off the walkway the marker hangs over.
+        let (place, inside) = marks::resolve(&st, &Mark::HomeInside(2), None).unwrap();
+        st.player = Some(crate::walker::Player::at(place, inside));
         see(&mut st);
         let (buf, _) = drawn(&mut st, (120, 40));
         let sub = row(&buf, 36);
@@ -248,6 +259,25 @@ mod tests {
         assert_eq!(buf[marker[0]].fg, DIM);
         let line = super::super::scene::running(&st).unwrap().line().unwrap();
         assert_eq!(overlay::speaker(&st, line), ("A VOICE".to_string(), DIM));
+    }
+
+    /// The voice behind your door, as the house call has it.
+    const VOICE: &str =
+        r#"Say(who: "castellan", as: Some("A voice"), at: Some(HomeDoor), text: "Come in.")"#;
+
+    #[test]
+    fn the_voice_at_the_door_never_covers_you() {
+        let mut st = playing(SLOW, VOICE);
+        // You on the cell the marker would take, over the door.
+        let (place, door) = marks::resolve(&st, &Mark::HomeDoor, None).unwrap();
+        st.player = Some(crate::walker::Player::at(place, door.offset(0, -1)));
+        see(&mut st);
+        let (buf, _) = drawn(&mut st, (120, 40));
+        let me = cells(&buf, |c| {
+            c.symbol() == "@" && c.fg == Color::Rgb(255, 255, 255)
+        });
+        assert_eq!(me.len(), 1, "your @ shows");
+        assert!(cells(&buf, |c| c.symbol() == "▾").is_empty());
     }
 
     #[test]

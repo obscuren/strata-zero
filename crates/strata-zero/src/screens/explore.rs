@@ -223,7 +223,7 @@ pub(crate) struct Regions {
     pub(crate) footer: [Rect; 4],
 }
 
-fn layout(area: Rect, show_route: bool) -> Regions {
+pub(crate) fn layout(area: Rect, show_route: bool) -> Regions {
     let r = sidebar::width(area.width);
     let l = area.width.saturating_sub(r + 1);
     let x_rule = area.x + l;

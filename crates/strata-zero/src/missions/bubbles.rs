@@ -83,7 +83,8 @@ pub fn say(buf: &mut Buffer, map: Rect, origin: Pos, st: &AppState) {
     let inner = w.saturating_sub(4).max(1) as usize;
     // Wrapped whole, so the words don't jump about while they type.
     let mut wrapped = wrap_text(&line.text, inner);
-    let whole: Vec<usize> = wrapped.iter().map(|r| r.chars().count()).collect();
+    let now = st.clock_tick();
+    let typed = overlay::typed_rows(&line.text, &wrapped, line.shown(now).chars().count());
     let rows = map.height.saturating_sub(2).max(1) as usize;
     if wrapped.len() > rows {
         wrapped.truncate(rows);
@@ -125,22 +126,17 @@ pub fn say(buf: &mut Buffer, map: Rect, origin: Pos, st: &AppState) {
     put(buf, rect.x, rect.y, &top, edge, rect.right());
     let bold = edge.add_modifier(Modifier::BOLD);
     put(buf, rect.x + 3, rect.y, &label, bold, rect.right());
-    let now = st.clock_tick();
-    let mut left = line.shown(now).chars().count();
     let text = Style::default().fg(TEXT).bg(PANEL_BG);
     let mut caret = (rect.x + 2, rect.y + 1);
-    for (i, row) in wrapped.iter().enumerate() {
+    for (i, (row, &take)) in wrapped.iter().zip(&typed).enumerate() {
         let y = rect.y + 1 + i as u16;
         put(buf, rect.x, y, "│", edge, rect.right());
         put(buf, rect.right() - 1, y, "│", edge, rect.right());
-        let take = left.min(whole[i]);
         let shown: String = row.chars().take(take).collect();
         put(buf, rect.x + 2, y, &shown, text, rect.right() - 1);
         if take > 0 {
             caret = (rect.x + 2 + shown.chars().count() as u16, y);
         }
-        // The space the wrap broke at.
-        left = left.saturating_sub(whole[i] + 1);
     }
     let bottom = format!("╰{}╯", "─".repeat(wide.saturating_sub(2)));
     put(buf, rect.x, rect.bottom() - 1, &bottom, edge, rect.right());
@@ -148,15 +144,15 @@ pub fn say(buf: &mut Buffer, map: Rect, origin: Pos, st: &AppState) {
         put(buf, caret.0, caret.1, "▌", edge, rect.right() - 1);
     }
     if let Some((x, y, ch)) = tail {
-        let cell = &mut buf[(x, y)];
-        cell.set_char(ch).fg = colour;
-        cell.modifier.insert(Modifier::BOLD);
+        let style = Style::default().fg(colour).add_modifier(Modifier::BOLD);
+        overlay::ink(&mut buf[(x, y)], ch, style);
     }
 }
 
 /// Where a `w` by `h` bubble goes in `map` for a speaker on the screen cell `anchor`,
 /// and the tail's cell and glyph. Above (the bottom border two rows up, a `▾` between)
-/// if it fits in the map and covers none of `avoid`, else below (`▴`); centred on the
+/// if it fits in the map and neither it nor its tail covers any of `avoid`, else below
+/// (`▴`); centred on the
 /// speaker, clamped into the map. With no anchor or no spot: the map's bottom-left
 /// corner, no tail.
 pub fn place(
@@ -180,27 +176,28 @@ pub fn place(
                 continue;
             }
             let rect = Rect::new(x, top as u16, w, h);
-            if !avoid.iter().any(|&c| rect.contains(c.into())) {
-                return (rect, Some((sx, tail_y as u16, glyph)));
+            let tail = (sx, tail_y as u16);
+            if !avoid.iter().any(|&c| rect.contains(c.into()) || c == tail) {
+                return (rect, Some((tail.0, tail.1, glyph)));
             }
         }
     }
     (Rect::new(map.x, map.bottom() - h, w, h), None)
 }
 
-/// Writes `s` from `x` with `style`, stopping before column `right`.
+/// Writes `s` from `x` in its whole `style`, stopping before column `right`.
 fn put(buf: &mut Buffer, x: u16, y: u16, s: &str, style: Style, right: u16) {
     if y >= buf.area.bottom() {
         return;
     }
     for (cx, ch) in (x..right.min(buf.area.right())).zip(s.chars()) {
-        buf[(cx, y)].set_char(ch).set_style(style);
+        overlay::ink(&mut buf[(cx, y)], ch, style);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::scene::tests::{SLOW, SPACE, playing, press, queued, see};
+    use super::super::scene::tests::{SLOW, SPACE, playing, press, queued, run_ticks, see};
     use super::super::{Look, Mark, marks, scene, visitors};
     use super::*;
     use crate::screens::explore::MapScreen;
@@ -240,6 +237,17 @@ mod tests {
         assert_eq!(rect.y, 17);
         assert_eq!(tail, Some((30, 16, '▴')));
         assert!(!rect.contains(me.into()));
+    }
+
+    #[test]
+    fn place_never_puts_the_tail_on_an_actor() {
+        // Someone right above the speaker: the tail above would land on them.
+        let (rect, tail) = place(Some((30, 15)), MAP, 34, 4, &[(30, 14)]);
+        assert_eq!(tail, Some((30, 16, '▴')));
+        assert_eq!(rect.y, 17);
+        // Above and below both: the corner, no tail.
+        let (rect, tail) = place(Some((30, 15)), MAP, 34, 4, &[(30, 14), (30, 16)]);
+        assert_eq!((rect.x, rect.bottom(), tail), (MAP.x, MAP.bottom(), None));
     }
 
     #[test]
@@ -359,6 +367,76 @@ mod tests {
             })
             .count();
         assert!(tail >= 1);
+    }
+
+    #[test]
+    fn typing_keeps_pace_past_a_long_word() {
+        // A word wider than the bubble splits with no space dropped at the break.
+        let long = "y".repeat(40);
+        let mut st = bubbling(&format!(r#"Say(who: "castellan", text: "{long} end")"#));
+        // A character a tick.
+        run_ticks(&mut st, 32);
+        let (buf, _) = drawn(&mut st, (120, 40));
+        let rect = bubble(&buf).expect("a bubble");
+        let typed: Vec<usize> = (rect.y + 1..rect.bottom() - 1)
+            .map(|y| {
+                (rect.x..rect.right())
+                    .filter(|&x| buf[(x, y)].symbol() == "y")
+                    .count()
+            })
+            .collect();
+        assert_eq!(typed, [30, 2]);
+    }
+
+    /// A map of grey cells, bold and dim, as a lit wall or a sign can be.
+    fn bold_dim(area: Rect) -> Buffer {
+        let mut buf = Buffer::empty(area);
+        let style = Style::default()
+            .fg(Color::Rgb(90, 90, 90))
+            .bg(Color::Rgb(20, 20, 20))
+            .add_modifier(Modifier::BOLD | Modifier::DIM);
+        buf.set_style(area, style);
+        buf
+    }
+
+    #[test]
+    fn the_stage_line_sets_its_whole_style() {
+        let st = bubbling(r#"Stage("The lock clicks."), Say(who: "castellan", text: "Hi.")"#);
+        let area = Rect::new(0, 0, 120, 40);
+        let r = crate::screens::explore::layout(area, false);
+        let mut buf = bold_dim(area);
+        chrome(&mut buf, &r, &st, false);
+        let stage = " ▸ The lock clicks. ";
+        let (x, y) = (r.map.x + 1, r.map.y + 1);
+        let cells: Vec<&ratatui::buffer::Cell> = (x..x + stage.chars().count() as u16)
+            .map(|cx| &buf[(cx, y)])
+            .collect();
+        let text: String = cells.iter().map(|c| c.symbol()).collect();
+        assert_eq!(text, stage);
+        assert!(
+            cells.iter().all(|c| c.modifier.is_empty() && c.fg == DIM),
+            "uniformly dim"
+        );
+        let title = &buf[(r.footer[0].x + 1, r.footer[0].y)];
+        assert_eq!(title.modifier, Modifier::BOLD);
+    }
+
+    #[test]
+    fn the_tail_sets_its_whole_style() {
+        let mut st = queued(SLOW, r#"Say(who: "castellan", text: "Hi.")"#);
+        st.book.scenes.get_mut("s").unwrap().look = Look::Bubbles;
+        let (place, pos) = marks::resolve(&st, &Mark::HomeInside(2), None).unwrap();
+        visitors::arrive(&mut st, "castellan", (place, pos));
+        super::super::tick(&mut st);
+        // You well off the view; he is at (30, 10).
+        st.player = Some(crate::walker::Player::at(place, pos.offset(60, 0)));
+        let map = Rect::new(0, 0, 60, 20);
+        let mut buf = bold_dim(map);
+        say(&mut buf, map, pos.offset(-30, -10), &st);
+        let tail = &buf[(30, 9)];
+        assert_eq!(tail.symbol(), "▾");
+        assert_eq!(tail.modifier, Modifier::BOLD);
+        assert_eq!(tail.fg, Color::Rgb(255, 200, 80));
     }
 
     #[test]

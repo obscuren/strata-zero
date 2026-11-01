@@ -6,6 +6,7 @@ use super::{Book, marks};
 use crate::app::AppState;
 use crate::render::viewport::tile_to_screen;
 use crate::ui::chrome::DIM;
+use crate::ui::dim::scale;
 use crate::walker::Visibility;
 use citygen::{Place, Pos};
 use ratatui::buffer::Buffer;
@@ -82,17 +83,6 @@ pub fn draw(buf: &mut Buffer, area: Rect, origin: Pos, st: &AppState) {
             cell.set_char('@').fg = colour(&st.book, &v.role);
             cell.modifier.insert(Modifier::BOLD);
         }
-    }
-}
-
-/// A colour darkened by `level`; named colours are left as they are.
-fn scale(c: Color, level: f32) -> Color {
-    match c {
-        Color::Rgb(r, g, b) => {
-            let s = |v: u8| (f32::from(v) * level).round() as u8;
-            Color::Rgb(s(r), s(g), s(b))
-        }
-        other => other,
     }
 }
 

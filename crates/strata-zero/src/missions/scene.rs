@@ -796,7 +796,7 @@ pub(crate) mod tests {
     }
 
     /// Runs the clock on `n` ticks, the story's beat after each.
-    fn run_ticks(st: &mut AppState, n: u64) {
+    pub(crate) fn run_ticks(st: &mut AppState, n: u64) {
         for _ in 0..n {
             if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
                 world.advance(city, world.tick() + 1);

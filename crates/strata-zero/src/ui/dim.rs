@@ -7,7 +7,8 @@ use ratatui::style::Color;
 const DIM: f32 = 0.35;
 const SCANLINE: f32 = 0.8;
 
-fn scale(c: Color, f: f32) -> Color {
+/// A colour darkened by `f`; named colours are left as they are.
+pub fn scale(c: Color, f: f32) -> Color {
     match c {
         Color::Rgb(r, g, b) => Color::Rgb(
             (r as f32 * f).round() as u8,
