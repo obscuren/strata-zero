@@ -270,6 +270,30 @@ impl MapScreen {
         s
     }
 
+    /// A film scene's frame over the map drawn into `map_area`: the doors and the marker,
+    /// then everything but the map in black with the subtitle, a keypad over it, and the
+    /// console and help if open.
+    fn draw_film(&self, st: &AppState, f: &mut Frame, map_area: Rect, origin: Pos) {
+        use crate::missions::{film, overlay, scene};
+        let area = f.area();
+        overlay::draw(f.buffer_mut(), map_area, origin, st);
+        film::draw(f.buffer_mut(), area, map_area, st);
+        if let Some(pad) = scene::running(st).and_then(|s| s.pad()) {
+            crate::ui::dim::wash_rect(f.buffer_mut(), map_area);
+            pad.draw(st, f);
+        }
+        if let Some(con) = self.console.as_ref() {
+            let row = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1);
+            f.render_widget(
+                Paragraph::new(console::line(con, st.tick, st.log.recent(st.tick))),
+                row,
+            );
+        }
+        if self.help {
+            help::draw(f, self.mode, st.dev_unlocked);
+        }
+    }
+
     /// The map's rect as last drawn.
     #[cfg(test)]
     pub(crate) fn map_area(&self) -> Rect {
@@ -2796,7 +2820,14 @@ impl Screen for MapScreen {
         let jacked = st.player.as_ref().is_some_and(|p| p.jacked_in());
         let (route, home_trace) = self.route_parts(st, jacked);
         let r = layout(area, !route.is_empty() || home_trace.is_some());
-        let map_area = r.map;
+        // A film scene frames the map in the middle of a black frame.
+        let film = crate::missions::scene::running(st)
+            .is_some_and(|s| s.look() == crate::missions::Look::Film);
+        let map_area = if film {
+            crate::missions::film::map_rect(area, r.map)
+        } else {
+            r.map
+        };
         self.last_map.set(map_area);
         let origin = self.cam.origin(map_area.width, map_area.height);
         let cursor = self.focus_pos(st);
@@ -3157,6 +3188,10 @@ impl Screen for MapScreen {
                     .set_char('@')
                     .set_style(Style::default().fg(fg).add_modifier(Modifier::BOLD));
             }
+        }
+        if film {
+            self.draw_film(st, f, map_area, origin);
+            return;
         }
         // The HOLO call in the map's corner, kept off your `@`.
         let me = st

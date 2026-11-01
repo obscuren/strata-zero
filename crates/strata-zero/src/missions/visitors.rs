@@ -97,7 +97,7 @@ fn scale(c: Color, level: f32) -> Color {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::app::Screen;
     use crate::jobs::testutil::state_home;
@@ -176,6 +176,44 @@ mod tests {
             "{}",
             last.text
         );
+    }
+
+    #[test]
+    fn a_visitor_draws_as_a_bold_at_in_its_tint_where_you_can_see() {
+        let mut st = flat();
+        add_role(&mut st, "castellan", "Castellan");
+        let (place, pos) = marks::resolve(&st, &Mark::HomeInside(1), None).unwrap();
+        let bonus = st.sight_bonus();
+        let minute = st.minute_of_day();
+        let map = crate::render::map::MapRef::for_place(
+            st.city.as_ref().unwrap(),
+            &st.interiors,
+            &st.constructs,
+            place,
+            minute,
+        )
+        .unwrap();
+        st.player.as_mut().unwrap().update_fov(&map, bonus);
+        let vis = st.player.as_ref().unwrap().vis().clone();
+        let area = Rect::new(0, 0, 20, 10);
+        let seen = pos.offset(1, 0);
+        assert_eq!(vis.get(seen), Some(&Visibility::Visible));
+        arrive(&mut st, "castellan", (place, seen));
+        let mut buf = Buffer::empty(area);
+        draw(&mut buf, area, pos.offset(-5, -5), &st);
+        let cell = &buf[(6, 5)];
+        assert_eq!(cell.symbol(), "@");
+        assert_eq!(cell.fg, Color::Rgb(255, 128, 0));
+        assert!(cell.modifier.contains(Modifier::BOLD));
+        // On a tile you can't see, nothing is drawn.
+        let hidden = (-20..20)
+            .flat_map(|d| [pos.offset(d, 6), pos.offset(d, -6)])
+            .find(|p| vis.get(*p).is_some_and(|v| *v != Visibility::Visible))
+            .expect("a tile out of sight");
+        arrive(&mut st, "castellan", (place, hidden));
+        let mut buf = Buffer::empty(area);
+        draw(&mut buf, area, hidden.offset(-3, -3), &st);
+        assert!(buf.content().iter().all(|c| c.symbol() != "@"));
     }
 
     #[test]

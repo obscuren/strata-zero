@@ -96,34 +96,28 @@ impl SceneRun {
         &self.id
     }
 
-    #[allow(dead_code)] // the film and the bubbles draw it from the next tasks
     pub fn look(&self) -> Look {
         self.scene.look
     }
 
-    #[allow(dead_code)] // the film and the bubbles draw it from the next tasks
     pub fn title(&self) -> &str {
         &self.scene.title
     }
 
-    #[allow(dead_code)] // the film and the bubbles draw it from the next tasks
     /// The last stage line.
     pub fn stage(&self) -> Option<&str> {
         self.stage.as_deref()
     }
 
-    #[allow(dead_code)] // the film and the bubbles draw it from the next tasks
     pub fn line(&self) -> Option<&Line> {
         self.line.as_ref()
     }
 
-    #[allow(dead_code)] // the film and the bubbles draw it from the next tasks
     /// The keypad on screen.
     pub fn pad(&self) -> Option<&Keypad> {
         self.keypad.as_ref().and_then(|p| p.pad.as_ref())
     }
 
-    #[allow(dead_code)] // the film and the bubbles draw it from the next tasks
     pub fn doors(&self) -> &[(Place, Pos)] {
         &self.doors
     }
@@ -156,7 +150,6 @@ impl Line {
         now < self.began.saturating_add(self.type_ticks())
     }
 
-    #[allow(dead_code)] // the film and the bubbles draw it from the next tasks
     /// The text typed by clock tick `now`.
     pub fn shown(&self, now: u64) -> &str {
         if !self.typing(now) {
@@ -710,7 +703,7 @@ fn put(st: &mut AppState, who: &str, place: Place, pos: Pos) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::super::tests::on_street;
     use super::super::{Book, Effect, Mark, begin, effects, marks, tick, visitors};
     use super::*;
@@ -723,9 +716,9 @@ mod tests {
     use citygen::{GenParams, Generator, SizePreset, StratumKind};
     use crossterm::event::KeyCode;
 
-    const SPACE: KeyCode = KeyCode::Char(' ');
+    pub(crate) const SPACE: KeyCode = KeyCode::Char(' ');
     /// Typing a character a tick, lines waiting for space.
-    const SLOW: &str = "Pace(type: 30, walk: 0.5, hold: None)";
+    pub(crate) const SLOW: &str = "Pace(type: 30, walk: 0.5, hold: None)";
 
     /// Two visitors, and a mission whose first step plays scene "s" (these beats at
     /// this pace) and whose second waits on its end.
@@ -759,14 +752,14 @@ mod tests {
     }
 
     /// Puts the player on a mark, nothing seen yet.
-    fn stand(st: &mut AppState, mark: &Mark) {
+    pub(crate) fn stand(st: &mut AppState, mark: &Mark) {
         let (place, pos) = marks::resolve(st, mark, None).unwrap();
         st.player = Some(Player::at(place, pos));
     }
 
     /// Seed 8 moved in with the test's book, outside the flat's door, the story begun:
     /// the scene waits its turn.
-    fn queued(pace: &str, beats: &str) -> AppState {
+    pub(crate) fn queued(pace: &str, beats: &str) -> AppState {
         let mut st = state_home();
         st.character.handle = "VEX".into();
         st.book = book(pace, beats);
@@ -777,11 +770,17 @@ mod tests {
     }
 
     /// The same, the scene started.
-    fn playing(pace: &str, beats: &str) -> AppState {
+    pub(crate) fn playing(pace: &str, beats: &str) -> AppState {
         let mut st = queued(pace, beats);
         tick(&mut st);
         assert!(running(&st).is_some(), "the scene starts");
         st
+    }
+
+    /// You look around from where you stand.
+    pub(crate) fn see(st: &mut AppState) {
+        let (place, pos) = me(st);
+        put(st, YOU, place, pos);
     }
 
     /// Runs the clock on `n` ticks, the story's beat after each.
@@ -794,7 +793,7 @@ mod tests {
         }
     }
 
-    fn press(st: &mut AppState, code: KeyCode) -> bool {
+    pub(crate) fn press(st: &mut AppState, code: KeyCode) -> bool {
         key(st, &crate::screens::testutil::key(code))
     }
 
@@ -808,7 +807,7 @@ mod tests {
         (p.place, p.pos)
     }
 
-    fn at(st: &AppState, mark: &Mark) -> (Place, Pos) {
+    pub(crate) fn at(st: &AppState, mark: &Mark) -> (Place, Pos) {
         marks::resolve(st, mark, None).unwrap()
     }
 
