@@ -9,7 +9,6 @@ pub mod items;
 pub mod lighting;
 pub mod map;
 pub mod mark;
-pub mod memmap;
 pub mod minimap;
 pub mod overlay;
 pub mod path;
