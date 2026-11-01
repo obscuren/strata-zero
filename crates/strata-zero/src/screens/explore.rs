@@ -1729,6 +1729,12 @@ impl MapScreen {
             st.warn(format!("the {name} is in the way"));
             return Err(ScreenCmd::Stay);
         }
+        // A visitor holds their tile too.
+        if let Some(v) = crate::missions::visitors::at(st, place, target) {
+            let name = crate::missions::role_name(st, &v.role);
+            st.warn(format!("`{name}` is in the way"));
+            return Err(ScreenCmd::Stay);
+        }
         if !place.is_street() {
             // Indoors people stand at their stations and are not swapped around.
             return if self.inside_person_at(place, target).is_some() {
@@ -3084,6 +3090,10 @@ impl Screen for MapScreen {
             },
         }
         .render(map_area, f.buffer_mut());
+        // The flat's lights and the story's visitors, under your own `@`.
+        if st.player.as_ref().is_some_and(|p| p.place == self.place) {
+            crate::missions::visitors::draw(f.buffer_mut(), map_area, origin, st);
+        }
 
         if let (Some(leg), Some(m)) = (tracked_leg, crate::track::distance(st)) {
             let label = st.track.as_ref().map_or("", |t| t.label.as_str());

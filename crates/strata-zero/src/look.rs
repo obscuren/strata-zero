@@ -399,7 +399,7 @@ pub fn points_of_interest(
                 st.world.as_ref().and_then(|w| w.person_at(p)).is_some()
             } else {
                 inside_person(place, p).is_some()
-            };
+            } || crate::missions::visitors::at(st, place, p).is_some();
             let lit = matches!(
                 tile.feature,
                 Some(Feature::Lamp | Feature::Neon(_) | Feature::Sign(_) | Feature::HoloAd)
@@ -488,6 +488,10 @@ pub fn look_card(
         .foes
         .iter()
         .find(|f| f.place == place && f.pos == pos && (visible || f.down));
+    // A visitor the story put here, before people.
+    let visitor = visible
+        .then(|| crate::missions::visitors::at(st, place, pos))
+        .flatten();
     // A body the story left, before the same.
     let body = st
         .missions
@@ -532,6 +536,16 @@ pub fn look_card(
                 if f.stunned == 1 { "" } else { "s" }
             ));
         }
+        card.also.extend(stacks);
+    } else if let Some(v) = visitor {
+        let role = st.book.cast.get(&v.role);
+        set_head(
+            &mut card,
+            role.map_or_else(|| v.role.clone(), |r| r.name.clone()),
+            Some(('@', crate::missions::visitors::colour(&st.book, &v.role))),
+        );
+        card.second = role.map(|r| r.title.clone());
+        card.body.extend(role.and_then(|r| r.look.clone()));
         card.also.extend(stacks);
     } else if let (Some(id), Some(world)) = (person, st.world.as_ref()) {
         let c = world.card(id, city);
@@ -1033,5 +1047,55 @@ mod tests {
             assert!(l.has(k), "{k}");
         }
         assert!(l.line(Group::Feature, "lamp", 0, Pos::new(0, 0)).is_some());
+    }
+
+    #[test]
+    fn look_reads_a_visitor() {
+        use crate::jobs::testutil::state_home;
+        use crate::missions::{Mark, Pick, Role, marks};
+        let mut st = state_home();
+        st.book.cast.insert(
+            "seren".into(),
+            Role {
+                name: "Seren".into(),
+                title: "ripperdoc".into(),
+                pick: Pick::Visitor,
+                face: None,
+                tint: Some((255, 128, 0)),
+                look: Some("Gloves, a long coat and a tired eye.".into()),
+            },
+        );
+        let (place, me) = marks::resolve(&st, &Mark::HomeInside(1), None).unwrap();
+        st.player = Some(Player::at(place, me));
+        let (_, beside) = marks::resolve(&st, &Mark::Beside(Box::new(Mark::You)), None).unwrap();
+        crate::missions::visitors::arrive(&mut st, "seren", (place, beside));
+        let mut p = Player::at(place, me);
+        fn floor(st: &AppState, place: Place) -> MapRef<'_> {
+            MapRef::for_place(
+                st.city.as_ref().unwrap(),
+                &st.interiors,
+                &st.constructs,
+                place,
+                0,
+            )
+            .unwrap()
+        }
+        p.update_fov(&floor(&st, place), 0);
+        st.player = Some(p);
+        let map = floor(&st, place);
+        let c = look_card(&st, &map, place, beside, &|_, _| None, &[]);
+        assert_eq!(c.header.as_deref(), Some("Seren"));
+        assert_eq!(c.glyph, Some(('@', Color::Rgb(255, 128, 0))));
+        assert_eq!(c.second.as_deref(), Some("ripperdoc"));
+        assert!(all_text(&c).contains("a tired eye"), "{}", all_text(&c));
+        let near = points_of_interest(
+            &st,
+            &map,
+            place,
+            TileRect::new(me.x - 3, me.y - 3, 7, 7),
+            me,
+            &|_, _| None,
+        );
+        assert!(near.contains(&beside));
     }
 }

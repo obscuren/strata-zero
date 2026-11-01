@@ -29,9 +29,13 @@ pub fn cast(st: &mut AppState) {
         .iter()
         .map(|(id, r)| (id.clone(), r.clone()))
         .collect();
-    for (i, (id, role)) in roles.into_iter().enumerate() {
+    for (id, role) in roles {
+        // A visitor is an authored person, not one of the sim's.
+        if matches!(role.pick, Pick::Visitor) {
+            continue;
+        }
         let taken: BTreeSet<PersonId> = st.missions.cast.values().copied().collect();
-        let Some(who) = pick(st, &role.pick, door, hash64(seed, i as u64), &taken) else {
+        let Some(who) = pick(st, &role.pick, door, hash64(seed, id_seed(&id)), &taken) else {
             continue;
         };
         if let Some(w) = st.world.as_mut() {
@@ -39,6 +43,12 @@ pub fn cast(st: &mut AppState) {
         }
         st.missions.cast.insert(id, who);
     }
+}
+
+/// A role id as a number, so a role's roll doesn't move when another role is added or
+/// renamed.
+fn id_seed(id: &str) -> u64 {
+    id.bytes().fold(0, |h, b| hash64(h, u64::from(b)))
 }
 
 /// The home building's first door, where casting measures from, as the jobs do.
@@ -63,7 +73,7 @@ fn pick(
     let city = st.city.as_ref()?;
     let free = |id: PersonId| !taken.contains(&id) && !world.is_dead(id);
     match pick {
-        // Task 2: visitors
+        // Never cast: `cast` skips visitors.
         Pick::Visitor => None,
         Pick::NearestFixer => world
             .people()
@@ -242,5 +252,28 @@ mod tests {
             work_tile(&st, fixer),
             st.world.as_ref().unwrap().spot_of(fixer)
         );
+    }
+
+    #[test]
+    fn adding_a_visitor_recasts_nobody() {
+        let mut st = state_home();
+        cast(&mut st);
+        let before = st.missions.cast.clone();
+        assert!(before.len() >= 2, "{before:?}");
+        // A role that sorts before all the others would have moved their index.
+        st.book.cast.insert(
+            "aaa".into(),
+            Role {
+                name: "Aaa".into(),
+                title: "visitor".into(),
+                pick: Pick::Visitor,
+                face: None,
+                tint: None,
+                look: None,
+            },
+        );
+        cast(&mut st);
+        assert_eq!(st.missions.cast, before);
+        assert!(!st.missions.cast.contains_key("aaa"));
     }
 }

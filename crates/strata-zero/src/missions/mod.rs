@@ -20,7 +20,9 @@ pub mod content;
 pub mod effects;
 pub mod face;
 pub mod feed;
+pub mod marks;
 pub mod ui;
+pub mod visitors;
 
 pub use content::*;
 
@@ -47,6 +49,12 @@ pub struct Missions {
     pub calls: VecDeque<Call>,
     /// The story has begun in this city.
     pub begun: bool,
+    /// The authored people standing on the map, in the order they arrived.
+    pub visitors: Vec<visitors::Visitor>,
+    /// How bright your flat is; `None` is normal.
+    pub lights: Option<f32>,
+    /// Scenes queued by `Effect::Scene`: mission, step, scene id.
+    pub scenes: VecDeque<(usize, usize, String)>,
 }
 
 /// Where one mission stands.
@@ -146,7 +154,9 @@ pub fn begin(st: &mut AppState) {
         .map(|m| Run {
             at: 0,
             since: now,
-            state: if (st.book.needs_cast(m))
+            state: if st
+                .book
+                .needs_cast(m)
                 .iter()
                 .all(|r| st.missions.cast.contains_key(r))
             {
@@ -164,7 +174,7 @@ pub fn begin(st: &mut AppState) {
             .book
             .cast
             .keys()
-            .filter(|r| !st.missions.cast.contains_key(*r))
+            .filter(|r| !st.book.is_visitor(r) && !st.missions.cast.contains_key(*r))
             .cloned()
             .collect();
         for role in uncast {
@@ -340,8 +350,12 @@ fn at(st: &AppState, place: &Where) -> bool {
         Where::Home => st
             .home
             .is_some_and(|rig| p.place == rig.place() && rig.home.rect.contains(p.pos)),
-        // Task 5: HomeDoor
-        Where::HomeDoor => false,
+        // Walking up to your door: on the walkway, one tile from it.
+        Where::HomeDoor => st.home.is_some_and(|rig| {
+            p.place == rig.place()
+                && !rig.home.rect.contains(p.pos)
+                && p.pos.manhattan(rig.home.door) <= 1
+        }),
         Where::Work { role, within } => {
             p.place == Place::Stratum(StratumKind::Street)
                 && person_of(st, role)
@@ -381,8 +395,12 @@ pub fn fill(st: &AppState, text: &str) -> String {
     out
 }
 
-/// What one slot says: the role's name, or one of `SLOT_FIELDS`.
+/// What one slot says: the player's handle for `{you}`, the role's name, or one of
+/// `SLOT_FIELDS`.
 fn slot_text(st: &AppState, role: &str, field: Option<&str>) -> Option<String> {
+    if role == YOU && field.is_none() {
+        return Some(st.character.handle.clone());
+    }
     let r = st.book.cast.get(role)?;
     let Some(field) = field else {
         return Some(r.name.clone());
@@ -889,5 +907,74 @@ mod tests {
         assert_eq!(district, want.name);
         assert!(!fill(&st, "{marlo.place}").contains('{'));
         assert_eq!(fill(&st, "no slots"), "no slots");
+    }
+
+    /// The shipped cast's picks and a visitor, with these missions.
+    fn book_with_visitor(missions: &str) -> Book {
+        Book::parse(&format!(
+            r#"Story(
+                cast: {{
+                    "dez": Role(name: "Dez", title: "fixer", pick: NearestFixer, face: None),
+                    "seren": Role(name: "Seren", title: "doc", pick: Visitor, face: None),
+                }},
+                faces: {{
+                    "silhouette": Face(rows: ["......dd........", "....dmmmmd......"], eye: (255, 255, 255)),
+                }},
+                missions: [{missions}],
+            )"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn at_home_door_fires_outside_the_door() {
+        let mut st = state_home();
+        st.book = book(
+            r#"Mission(id: "door", title: "Door", from: "dez", steps: [
+                Step(id: "go", when: NewGame, then: [Objective("Go home")]),
+                Step(id: "knock", when: At(HomeDoor), then: [Log("knock")]),
+            ])"#,
+        );
+        begin(&mut st);
+        let stand = |st: &mut AppState, mark: &Mark| {
+            let (place, pos) = marks::resolve(st, mark, None).unwrap();
+            st.player = Some(Player::at(place, pos));
+        };
+        // In the flat, one tile from the door, is not at the door.
+        stand(&mut st, &Mark::HomeInside(1));
+        tick(&mut st);
+        assert_eq!(st.missions.runs[0].at, 1);
+        // On the street below is not either.
+        let below = door(&st);
+        on_street(&mut st, below);
+        tick(&mut st);
+        assert_eq!(st.missions.runs[0].at, 1);
+        stand(&mut st, &Mark::HomeOutside);
+        tick(&mut st);
+        assert!(matches!(st.missions.runs[0].state, RunState::Done { .. }));
+        assert!(st.log.iter().any(|e| e.text == "knock"));
+    }
+
+    #[test]
+    fn a_visitor_from_is_never_uncast() {
+        let mut st = state_home();
+        st.book = book_with_visitor(
+            r#"Mission(id: "call", title: "Call", from: "seren", steps: [
+                Step(id: "go", when: NewGame, then: [Objective("Wait")]),
+                Step(id: "later", when: After(minutes: 600), then: [Log("later")]),
+            ])"#,
+        );
+        begin(&mut st);
+        assert!(!st.missions.cast.contains_key("seren"));
+        assert_eq!(st.missions.runs[0].state, RunState::Open);
+    }
+
+    #[test]
+    fn you_fills_with_the_handle() {
+        let mut st = state_home();
+        st.character.handle = "D'SHAWN".into();
+        assert_eq!(fill(&st, "hello {you}, {you}"), "hello D'SHAWN, D'SHAWN");
+        // Only the plain slot: `{you.title}` stays as written.
+        assert_eq!(fill(&st, "{you.title}"), "{you.title}");
     }
 }

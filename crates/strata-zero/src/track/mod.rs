@@ -466,6 +466,11 @@ fn resolve_story(st: &AppState, mission: usize, step: usize) -> Resolved {
             pos,
             radius: 0,
         }),
+        Trigger::At(Where::HomeDoor) => st.home.map(|rig| Target::Spot {
+            place: rig.place(),
+            pos: rig.home.door,
+            radius: 1,
+        }),
         Trigger::At(Where::Work { role, within }) => crate::missions::person_of(st, role)
             .and_then(|p| crate::missions::cast::work_tile(st, p))
             .map(|pos| Target::Spot {
@@ -1507,5 +1512,31 @@ mod tests {
         assert!(matches!(s.update(&mut st, &[]), ScreenCmd::Switch { .. }));
         assert!(st.track.is_none());
         assert_eq!(st.log.len(), n, "a flatline says nothing of it");
+    }
+
+    #[test]
+    fn home_door_tracks_the_door() {
+        let mut st = state_home();
+        st.book = crate::missions::Book::parse(
+            r#"Story(
+                cast: { "dez": Role(name: "Dez", title: "fixer", pick: NearestFixer, face: None) },
+                faces: { "silhouette": Face(rows: ["......dd........", "....dmmmmd......"], eye: (255, 255, 255)) },
+                missions: [Mission(id: "door", title: "Door", from: "dez", steps: [
+                    Step(id: "go", when: NewGame, then: [Objective("Go home")]),
+                    Step(id: "knock", when: At(HomeDoor), then: [Log("knock")]),
+                ])],
+            )"#,
+        )
+        .unwrap();
+        crate::missions::begin(&mut st);
+        let rig = st.home.unwrap();
+        assert_eq!(
+            resolve(&st, &story(0, 1)),
+            Resolved::Target(Target::Spot {
+                place: rig.place(),
+                pos: rig.home.door,
+                radius: 1
+            })
+        );
     }
 }
