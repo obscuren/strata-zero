@@ -2441,8 +2441,10 @@ impl MapScreen {
 
 impl Screen for MapScreen {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
-        // A HOLO feed waiting: it opens over the map.
-        if let Some(view) = st.missions.feeds.pop_front() {
+        // A HOLO feed waiting: it opens over the map, once no scene is playing.
+        if crate::missions::scene::running(st).is_none()
+            && let Some(view) = st.missions.feeds.pop_front()
+        {
             return ScreenCmd::Push {
                 to: Box::new(crate::missions::feed::Feed::new(view, st.tick)),
                 fx: TransitionKind::Glitch,
@@ -2532,6 +2534,12 @@ impl Screen for MapScreen {
             self.cam_ready = true;
         }
         for (i, k) in keys.iter().enumerate() {
+            // A scene playing takes every key, all but the `:` that opens the dev
+            // console over it.
+            let console = st.dev && k.code == KeyCode::Char(':');
+            if !console && crate::missions::scene::key(st, k) {
+                continue;
+            }
             // A HOLO call up takes space and esc before the walk keys, once look mode,
             // a pick, an aim and help have had theirs.
             if self.plain_walk() && crate::missions::call::key(st, k) {
@@ -2615,8 +2623,10 @@ impl Screen for MapScreen {
             self.enter_walk(st);
         }
         let map = self.last_map.get();
-        match (self.mode, &st.player) {
-            (Mode::Walk, Some(p)) => self.cam.follow(p.pos, map.width, map.height),
+        match (self.mode, &st.player, crate::missions::scene::camera(st)) {
+            // A scene holding a tile of this map: the camera centres on it.
+            (Mode::Walk, _, Some((place, pos))) if place == self.place => self.cam.target(pos),
+            (Mode::Walk, Some(p), _) => self.cam.follow(p.pos, map.width, map.height),
             _ => self.cam.follow(self.cursor, map.width, map.height),
         }
         // The camera is bound by the map it shows, not the city: a floor or a construct
@@ -2654,6 +2664,16 @@ impl Screen for MapScreen {
         crate::net::tick_backdoors(st);
         crate::jobs::tick(st);
         crate::missions::tick(st);
+        // A scene playing: no aimed walk goes on under it, and the map follows where
+        // it puts you before this frame draws.
+        if crate::missions::scene::running(st).is_some() {
+            self.walking = None;
+            self.aim = None;
+            if self.mode == Mode::Walk && st.player.as_ref().is_some_and(|p| p.place != self.place)
+            {
+                self.follow_player(st);
+            }
+        }
         crate::track::tick(st);
         // A fixer beside you has their offer ready before you talk.
         if self.mode == Mode::Walk {

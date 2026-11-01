@@ -3,7 +3,8 @@
 //!
 //! Owns the runtime (`Missions`, `Run`, `begin`, `send`, `tick`, `end`), the book's
 //! types (`content`), casting (`cast`), what a step does (`effects`), and what the
-//! player sees: the HOLO feed and call (`feed`, `call`, `face`) and the JOBS lines (`ui`).
+//! player sees: the HOLO feed and call (`feed`, `call`, `face`), the scenes played on
+//! the map (`scene`, with `marks` and `visitors`) and the JOBS lines (`ui`).
 //! No mission, step or role id appears in Rust outside tests; the book names them.
 //!
 //! Adding a block (spec `docs/superpowers/specs/2026-10-31-story-missions-design.md`, 15):
@@ -21,6 +22,7 @@ pub mod effects;
 pub mod face;
 pub mod feed;
 pub mod marks;
+pub mod scene;
 pub mod ui;
 pub mod visitors;
 
@@ -55,6 +57,8 @@ pub struct Missions {
     pub lights: Option<f32>,
     /// Scenes queued by `Effect::Scene`: mission, step, scene id.
     pub scenes: VecDeque<(usize, usize, String)>,
+    /// The scene playing.
+    pub scene: Option<scene::SceneRun>,
 }
 
 /// Where one mission stands.
@@ -195,14 +199,15 @@ pub fn send(st: &mut AppState, ev: Event) {
     fire(st, Some(&ev));
 }
 
-/// The story's beat in the explore update: the conditions checked, the call's ring
-/// timed.
+/// The story's beat in the explore update: the conditions checked, the scene played,
+/// the call's ring timed.
 pub fn tick(st: &mut AppState) {
     fire(st, None);
+    scene::tick(st);
     call::tick(st);
 }
 
-/// The feed or call that step `step` of mission `mission` opened has ended.
+/// The feed, call or scene that step `step` of mission `mission` opened has ended.
 pub fn end(st: &mut AppState, mission: usize, step: usize) {
     if let Some(run) = st.missions.runs.get_mut(mission) {
         run.ended.insert(step);

@@ -1,6 +1,8 @@
 //! What a step does to the game (spec §4), its text filled as it runs.
 
-use super::{Body, Call, Effect, FeedView, cast, fill, marks, person_of, role_name, visitors};
+use super::{
+    Body, Call, Effect, FeedView, Mark, cast, fill, marks, person_of, role_name, visitors,
+};
 use crate::app::AppState;
 use citygen::{Place, StratumKind};
 use game::ItemId;
@@ -70,14 +72,25 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
             st.story(text);
         }
         Effect::Scene(id) => st.missions.scenes.push_back((mission, step, id.clone())),
-        Effect::Arrive { role, at } => match marks::resolve(st, at, Some(role)) {
-            Some(spot) => visitors::arrive(st, role, spot),
-            None if st.dev => st.warn(format!("scene · {at:?} not found")),
-            None => {}
-        },
+        Effect::Arrive { role, at } => arrive(st, role, at),
         Effect::Leave(role) => visitors::leave(st, role),
-        Effect::Lights(level) => st.missions.lights = (*level < 1.0).then_some(*level),
+        Effect::Lights(level) => lights(st, *level),
     }
+}
+
+/// The role's visitor stands on the mark; a mark that resolves to nothing leaves things
+/// as they are. As the effect and as a scene's beat.
+pub(super) fn arrive(st: &mut AppState, role: &str, at: &Mark) {
+    match marks::resolve(st, at, Some(role)) {
+        Some(spot) => visitors::arrive(st, role, spot),
+        None if st.dev => st.warn(format!("scene · {at:?} not found")),
+        None => {}
+    }
+}
+
+/// Your flat's light level; 1.0 is normal.
+pub(super) fn lights(st: &mut AppState, level: f32) {
+    st.missions.lights = (level < 1.0).then_some(level);
 }
 
 /// The role's person dies: a body at their work tile, the sim done with them. Once.

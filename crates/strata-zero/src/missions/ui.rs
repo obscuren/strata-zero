@@ -99,9 +99,24 @@ pub fn deck_rows(st: &AppState) -> Vec<Row> {
     out
 }
 
-/// The dev console's `story`: each role with the person cast in it, then each mission
-/// with its state and the step it waits on.
+/// The dev console's `story`: each role with the person cast in it, each mission with
+/// its state and the step it waits on, then the book's scenes.
 pub fn console_lines(st: &AppState) -> Vec<String> {
+    let mut out = story_lines(st);
+    for (id, scene) in &st.book.scenes {
+        let look = match scene.look {
+            super::Look::Film => "film",
+            super::Look::Bubbles => "bubbles",
+        };
+        let n = scene.beats.len();
+        let beats = if n == 1 { "beat" } else { "beats" };
+        out.push(format!("scene {id} · {look} · {n} {beats}"));
+    }
+    out
+}
+
+/// The cast and the missions, for `console_lines`.
+fn story_lines(st: &AppState) -> Vec<String> {
     if !st.missions.begun {
         return vec!["the story has not begun in this city".to_string()];
     }

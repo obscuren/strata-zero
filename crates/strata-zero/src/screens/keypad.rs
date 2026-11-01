@@ -27,6 +27,7 @@ enum Flash {
     Refused(u64),
 }
 
+#[derive(Clone, Debug)]
 pub struct Keypad {
     look: Look,
     building: BuildingId,
@@ -68,7 +69,6 @@ impl Keypad {
         }
     }
 
-    #[allow(dead_code)] // the scene film drives it from the next task
     /// The pad of that flat with nothing typed, for a scene to type on.
     pub fn scripted(st: &AppState, building: BuildingId, level: i32, number: u16) -> Keypad {
         Keypad {
@@ -77,7 +77,6 @@ impl Keypad {
         }
     }
 
-    #[allow(dead_code)] // the scene film drives it from the next task
     /// A digit appears on the display (the first four only).
     pub fn show_digit(&mut self, d: u8) {
         if self.typed.len() < 4 {
@@ -85,7 +84,6 @@ impl Keypad {
         }
     }
 
-    #[allow(dead_code)] // the scene film drives it from the next task
     /// Flashes OPEN or DENIED as the real pad does; nothing else is touched.
     pub fn show_verdict(&mut self, open: bool, tick: u64) {
         self.flash = if open {

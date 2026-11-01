@@ -16,7 +16,8 @@ use ratatui::style::{Color, Modifier, Style};
 pub const RING_TICKS: u64 = 900;
 /// Characters a line types out in a second.
 pub const TYPE_PER_SECOND: u64 = 60;
-const TICKS_PER_SECOND: u64 = 30;
+/// The clock's ticks in a second.
+pub const TICKS_PER_SECOND: u64 = 30;
 /// Frame ticks the ringing dot stays lit, then dark.
 const BLINK_TICKS: u64 = 15;
 const RING_W: u16 = 36;
@@ -103,8 +104,13 @@ pub fn key(st: &mut AppState, k: &KeyEvent) -> bool {
     }
 }
 
-/// No call rings or talks during a fight or a run: `space` and `esc` are theirs.
+/// No call rings or talks during a fight, a run or a scene: `space` and `esc` are theirs.
 pub fn quiet(st: &AppState) -> bool {
+    busy(st) || st.missions.scene.is_some()
+}
+
+/// A fight is on or the player is in a construct: no call, and no scene either.
+pub fn busy(st: &AppState) -> bool {
     st.net.engaged.is_some()
         || st
             .player
@@ -144,8 +150,8 @@ fn hang_up(st: &mut AppState) {
     }
 }
 
-/// The call ends with every line left on the rig.
-fn voicemail(st: &mut AppState) {
+/// The call that is up ends with every line left on the rig.
+pub(super) fn voicemail(st: &mut AppState) {
     let Some(call) = st.missions.call.take() else {
         return;
     };
