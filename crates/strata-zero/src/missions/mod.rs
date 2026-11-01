@@ -15,6 +15,7 @@
 //!   `Book::validate`. Test it.
 //! - A pick: a variant on `Pick` and its arm in `cast::pick`.
 
+pub mod bubbles;
 pub mod call;
 pub mod cast;
 pub mod content;

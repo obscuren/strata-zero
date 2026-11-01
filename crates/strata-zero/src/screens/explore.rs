@@ -210,17 +210,17 @@ fn dir_for(code: KeyCode) -> Option<Dir> {
 
 /// The grid: a four-row band, a heavy rule, the map beside the right column, a heavy
 /// rule, then the two footer rows. One light vertical rule separates the columns.
-struct Regions {
-    band_l: [Rect; 4],
-    band_r: [Rect; 4],
-    top_rule: Rect,
+pub(crate) struct Regions {
+    pub(crate) band_l: [Rect; 4],
+    pub(crate) band_r: [Rect; 4],
+    pub(crate) top_rule: Rect,
     /// The route and the trace home, under the rule; only when there is something to say.
-    route: Option<Rect>,
-    map: Rect,
-    side: Rect,
-    vrule_x: u16,
-    bottom_rule: Rect,
-    footer: [Rect; 4],
+    pub(crate) route: Option<Rect>,
+    pub(crate) map: Rect,
+    pub(crate) side: Rect,
+    pub(crate) vrule_x: u16,
+    pub(crate) bottom_rule: Rect,
+    pub(crate) footer: [Rect; 4],
 }
 
 fn layout(area: Rect, show_route: bool) -> Regions {
@@ -3193,6 +3193,12 @@ impl Screen for MapScreen {
             self.draw_film(st, f, map_area, origin);
             return;
         }
+        // A bubbles scene keeps the frame; its doors and marker go on the map.
+        let bubbles = crate::missions::scene::running(st)
+            .is_some_and(|s| s.look() == crate::missions::Look::Bubbles);
+        if bubbles {
+            crate::missions::overlay::draw(f.buffer_mut(), map_area, origin, st);
+        }
         // The HOLO call in the map's corner, kept off your `@`.
         let me = st
             .player
@@ -3430,6 +3436,16 @@ impl Screen for MapScreen {
             let h = crate::look::box_height(&card, crate::look::LOOK_W);
             let r = crate::look::place_box(map_area, at, h);
             crate::look::draw_box(&card, r, f.buffer_mut());
+        }
+        // A bubbles scene dims the frame, a keypad goes over the map, the bubble last.
+        if bubbles {
+            use crate::missions::{bubbles, scene};
+            bubbles::chrome(f.buffer_mut(), &r, st, self.console.is_some());
+            if let Some(pad) = scene::running(st).and_then(|s| s.pad()) {
+                crate::ui::dim::wash_rect(f.buffer_mut(), map_area);
+                pad.draw(st, f);
+            }
+            bubbles::say(f.buffer_mut(), map_area, origin, st);
         }
         if self.help {
             help::draw(f, self.mode, st.dev_unlocked);

@@ -39,7 +39,7 @@ pub fn draw(buf: &mut Buffer, frame: Rect, map: Rect, st: &AppState) {
             }
         }
     }
-    let title = run.title().to_uppercase();
+    let title = cut(&run.title().to_uppercase(), map.width as usize);
     text(buf, frame, map.x, frame.y + 1, &title, TITLE, true);
     if let Some(stage) = run.stage() {
         let stage = cut(stage, map.width as usize);
@@ -58,7 +58,7 @@ pub fn draw(buf: &mut Buffer, frame: Rect, map: Rect, st: &AppState) {
 }
 
 /// `s` cut to `w` cells, with `…` when it was longer.
-fn cut(s: &str, w: usize) -> String {
+pub(super) fn cut(s: &str, w: usize) -> String {
     if s.chars().count() <= w {
         return s.to_string();
     }
@@ -269,5 +269,40 @@ mod tests {
             let c = &buf[((x as i32 + dx * k) as u16, (y as i32 + dy * k) as u16)];
             assert_eq!(c.bg, Color::Rgb(bg.0, bg.1, bg.2), "{k} deep");
         }
+    }
+
+    const PAD: &str =
+        "Keypad(door: HomeDoor, code: Code(1234), result: Denied, keys: 0.1, hold: 0.5)";
+
+    #[test]
+    fn a_keypad_washes_the_map_and_draws_over_it() {
+        use crate::app::Screen;
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut st = playing(SLOW, PAD);
+        let (buf, map) = drawn(&mut st, (120, 40));
+        let mut plain = playing(SLOW, r#"Say(who: "castellan", text: "Hi.")"#);
+        let (mut reference, _) = drawn(&mut plain, (120, 40));
+        crate::ui::dim::wash_rect(&mut reference, map);
+        let (x, y) = (map.x, map.y + 3);
+        assert_eq!(buf[(x, y)].fg, reference[(x, y)].fg);
+        assert_eq!(buf[(x, y)].bg, reference[(x, y)].bg);
+        // The pad is where it draws alone.
+        let pad = super::super::scene::running(&st).unwrap().pad().unwrap();
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| pad.draw(&st, f)).unwrap();
+        let alone = term.backend().buffer().clone();
+        let mut inked = 0;
+        for py in 0..40 {
+            for px in 0..120 {
+                if alone[(px, py)].symbol() != " " {
+                    inked += 1;
+                    assert_eq!(buf[(px, py)].symbol(), alone[(px, py)].symbol());
+                }
+            }
+        }
+        assert!(inked > 20, "the pad has something on it");
+        // The HUD rows stay black.
+        assert_eq!(buf[(5, 20)].bg, Color::Rgb(0, 0, 0));
+        assert!(!buffer_text(&buf).contains("FOCUS"));
     }
 }
