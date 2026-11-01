@@ -1,7 +1,6 @@
 //! The film look (scenes spec §5): the frame black, the map in the middle at its usual
-//! size under the title, and under the map what happens, dim and italic, over the line
-//! as a subtitle. The map and the overlays on it are drawn by the explore screen; this
-//! is the rest.
+//! size, and under the map what happens, dim and italic, over the line as a subtitle.
+//! The map and the overlays on it are drawn by the explore screen; this is the rest.
 
 use super::overlay::{self, WHITE};
 use super::scene::{self, Line};
@@ -13,24 +12,22 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
 const BLACK: Color = Color::Rgb(0, 0, 0);
-/// The title: magenta at 60 %.
-const TITLE: Color = Color::Rgb(153, 0, 120);
 const HINT: &str = "space next · esc skip";
 /// The most rows a subtitle takes.
 const SUBTITLE_ROWS: u16 = 3;
-/// The map's top row: under the title (row 1) and a blank row.
-const MAP_TOP: u16 = 3;
+/// The map's top row: two black rows above it.
+const MAP_TOP: u16 = 2;
 
-/// `map` moved to the middle of `frame`, and up under the title, so the rows under it
-/// hold the stage line and the subtitle.
+/// `map` moved to the middle of `frame`, and up to `MAP_TOP`, so the rows under it hold
+/// the stage line and the subtitle.
 pub fn map_rect(frame: Rect, map: Rect) -> Rect {
     let slack = frame.width.saturating_sub(map.width);
     let y = map.y.min(frame.y + MAP_TOP);
     Rect::new(frame.x + slack / 2, y, map.width, map.height)
 }
 
-/// Blacks out everything outside `map`, then draws the title, and under the map the
-/// stage line, the subtitle and the hint.
+/// Blacks out everything outside `map`, then draws under the map the stage line, the
+/// subtitle and the hint.
 pub fn draw(buf: &mut Buffer, frame: Rect, map: Rect, st: &AppState) {
     let Some(run) = scene::running(st) else {
         return;
@@ -44,17 +41,8 @@ pub fn draw(buf: &mut Buffer, frame: Rect, map: Rect, st: &AppState) {
             }
         }
     }
-    let title = cut(&run.title().to_uppercase(), map.width as usize);
-    text(
-        buf,
-        frame,
-        map.x,
-        frame.y + 1,
-        &title,
-        TITLE,
-        Modifier::BOLD,
-    );
-    // A blank row under the map, then what happens, on the whole black row.
+    // A blank row under the map, then what happens, on the whole black row, then a
+    // blank row before the line.
     if let Some(stage) = run.stage() {
         let stage = cut(stage, frame.width.saturating_sub(2) as usize);
         let w = stage.chars().count() as u16;
@@ -74,7 +62,7 @@ pub fn draw(buf: &mut Buffer, frame: Rect, map: Rect, st: &AppState) {
     let plain = Modifier::empty();
     text(buf, frame, hint_x.max(frame.x), hint_y, HINT, FAINT, plain);
     if let Some(line) = run.line() {
-        let top = map.bottom() + 2;
+        let top = map.bottom() + 3;
         let rows = hint_y.saturating_sub(top).min(SUBTITLE_ROWS);
         subtitle(buf, frame, map, st, line, top, rows);
     }
@@ -189,20 +177,21 @@ mod tests {
             r#"Stage("The lock clicks."), Say(who: "castellan", text: "Hello there.")"#,
         );
         let (buf, map) = drawn(&mut st, (120, 40));
-        // Up under the title, the rows the HUD had above it given to the bottom.
-        assert_eq!((map.x, map.y, map.width, map.height), (20, 3, 79, 30));
-        let top: String = (0..3).map(|y| row(&buf, y)).collect();
-        assert!(!top.contains("HP") && !top.contains("FOCUS"), "{top}");
-        assert!(row(&buf, 1)[map.x as usize..].starts_with("TEST"));
-        assert!(row(&buf, 2).trim().is_empty());
-        // What happens, under the map and over the line: centred, dim, italic.
+        // Up under two black rows, no title; the rows the HUD had above it given to
+        // the bottom.
+        assert_eq!((map.x, map.y, map.width, map.height), (20, 2, 79, 30));
+        assert!(row(&buf, 0).trim().is_empty() && row(&buf, 1).trim().is_empty());
+        assert!(!buffer_text(&buf).contains("TEST"), "no title");
+        // What happens, under the map and over the line, a blank row either side:
+        // centred, dim, italic.
         let stage = "The lock clicks.";
         let at = (120 - stage.len()) / 2;
-        assert!(row(&buf, 33).trim().is_empty());
-        assert_eq!(row(&buf, 34).trim(), stage);
-        assert!(row(&buf, 34).starts_with(&format!("{}{stage}", " ".repeat(at))));
-        assert_eq!(buf[(at as u16, 34)].fg, DIM);
-        assert!(buf[(at as u16, 34)].modifier.contains(Modifier::ITALIC));
+        assert!(row(&buf, 32).trim().is_empty());
+        assert_eq!(row(&buf, 33).trim(), stage);
+        assert!(row(&buf, 33).starts_with(&format!("{}{stage}", " ".repeat(at))));
+        assert_eq!(buf[(at as u16, 33)].fg, DIM);
+        assert!(buf[(at as u16, 33)].modifier.contains(Modifier::ITALIC));
+        assert!(row(&buf, 34).trim().is_empty());
         let sub = row(&buf, 35);
         let label_at = sub.find("CASTELLAN").expect("the label");
         assert_eq!(sub[..label_at].trim(), "");
@@ -228,14 +217,16 @@ mod tests {
         let (buf, map) = drawn(&mut st, (100, 30));
         assert_eq!((map.width, map.height), (59, 20));
         assert!(stage.len() > map.width as usize);
-        assert_eq!(row(&buf, 24).trim(), stage);
+        assert_eq!(row(&buf, 23).trim(), stage);
         let rows: Vec<String> = (25..28).map(|y| row(&buf, y)).collect();
         assert!(rows.iter().all(|r| !r.trim().is_empty()), "{rows:?}");
         assert!(rows[0].contains("CASTELLAN"));
         let words = rows.join(" ").replace("CASTELLAN", "");
         assert_eq!(words.split_whitespace().count(), 20, "{rows:?}");
         assert!(row(&buf, 29).trim_end().ends_with("esc skip"));
-        assert!(row(&buf, 23).trim().is_empty() && row(&buf, 28).trim().is_empty());
+        for blank in [22, 24, 28] {
+            assert!(row(&buf, blank).trim().is_empty(), "row {blank}");
+        }
     }
 
     #[test]

@@ -35,6 +35,10 @@ missions pick either per scene.
   to be italic and i think also on the bottom. theres so much to see its easy to miss".
   The film's stage line moved under the map, over the subtitle; both looks draw it
   italic, and the window leans its glyphs to show it.
+- **No title in the film** (next): "Remove the title on top, move everything one line
+  up (the whole screen). Make sure there's an empty line between the italic text and
+  the scrolling text of the conversation". The map starts on the frame's third row,
+  and a blank row sits on either side of the stage line.
 - **Timing SHOULD NOT be hardcoded.** Every wait, walk speed, typing speed and line
   dwell is a value in the scene's data. A line moves on after its data-set time, or
   when you press `space`; both work now.
@@ -180,7 +184,7 @@ scenes: {
 },
 ```
 
-- `title`: shown in the film's top bar and the bubbles' footer, upper case. No slots.
+- `title`: shown in the bubbles' footer, upper case (the film shows none). No slots.
 - `look`: `Film` or `Bubbles`.
 - `next` (optional): the scene that plays straight after this one, for the same step;
   the step ends with the last. The house call's film names Seren's aside, so the dev
@@ -315,17 +319,15 @@ Drawn instead of the explore frame while a film scene runs:
 
 - The whole frame black (`Rgb(0,0,0)`).
 - The map at its usual size (`layout(..).map`), moved to the middle of the frame
-  (`x = (W − w) / 2`) and up to the frame's row 3 (`film::map_rect`), drawn as usual
-  (map, people, visitors, bodies, the player), then the scene's overlays: lights,
-  doors, the speaker's marker.
-- **Title**: the scene's title upper case, magenta at 60 %, bold, on the frame's second
-  row at the map's left edge; a blank row under it, then the map.
+  (`x = (W − w) / 2`) and up to the frame's row 2 (`film::map_rect`), two black rows
+  above it and no title, drawn as usual (map, people, visitors, bodies, the player),
+  then the scene's overlays: lights, doors, the speaker's marker.
 - **Stage line** under the map, after a blank row (the map's bottom + 1): dim (`DIM`),
   italic, centred in the frame, cut with `…` at the frame's width less two.
-- **Subtitle** under the stage line's row: the label in the speaker's colour, bold, two
+- **Subtitle** after another blank row: the label in the speaker's colour, bold, two
   spaces, the typed text in white; wrapped to the map's width less the label,
   continuation lines indented under the text; up to three lines (more are cut with
-  `…`), the block centred in the frame, starting on the map's bottom + 2, whether or
+  `…`), the block centred in the frame, starting on the map's bottom + 3, whether or
   not a stage line shows. While a line types, a `▌` in the speaker's colour follows
   it.
 - **Hint**: `space next · esc skip` in `FAINT`, last row, right-aligned to the map's
@@ -508,8 +510,8 @@ Scenes:
   the couch and Seren at the rig; skipping both scenes leaves no visitors, the lights at
   1.0, the objective "Sleep · Castellan will be in touch", and two minutes on the mail
   from Mezz.
-- **Drawing**: film at 120×40 and 100×30 has no HUD row, the title, the stage line, the
-  subtitle and the hint where §5 puts them; bubbles' bubble avoids the player's cell
+- **Drawing**: film at 120×40 and 100×30 has no HUD row and no title, the stage line,
+  the subtitle and the hint where §5 puts them; bubbles' bubble avoids the player's cell
   and lies inside the map; every new glyph (`▾ ▴ ╭ ╮ ╰ ╯ ▌`) passes
   `every_drawn_character_has_a_glyph`.
 - **Shots** (`screens/shots.rs`, ignored, `SHOT_DIR`): `scene_film_keypad`,
