@@ -616,7 +616,7 @@ mod tests {
                     done: false,
                 },
                 Objective {
-                    text: "Bring it to Dez".into(),
+                    text: "Bring it to Mezz".into(),
                     done: false,
                 },
             ],

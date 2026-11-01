@@ -43,6 +43,10 @@ pub struct CellMetrics {
     pub baseline: usize,
 }
 
+/// How far italic leans: pixels across for each pixel up. No face carries an italic, so
+/// the window leans the upright one.
+const SLANT: f32 = 0.2;
+
 /// A rasterized glyph: coverage `w*h`, placed at `left`, `top` from its cell's top-left.
 #[derive(Debug, Clone)]
 pub struct Glyph {
@@ -51,6 +55,42 @@ pub struct Glyph {
     pub w: usize,
     pub h: usize,
     pub alpha: Vec<u8>,
+}
+
+impl Glyph {
+    /// The glyph leaned as italic about row `pivot` of its cell: rows above it move
+    /// right and rows below it left, so the letter stays in its cell. Each row is
+    /// resampled between the two columns it falls across.
+    fn slanted(&self, pivot: f32) -> Glyph {
+        if self.w == 0 || self.h == 0 {
+            return self.clone();
+        }
+        let shift = |y: usize| (pivot - (self.top as f32 + y as f32 + 0.5)) * SLANT;
+        let lo = shift(self.h - 1).floor() as i32;
+        let w = self.w + (shift(0).ceil() as i32 - lo) as usize + 1;
+        let mut alpha = vec![0u8; w * self.h];
+        let mut row = vec![0.0f32; w];
+        for y in 0..self.h {
+            let s = shift(y) - lo as f32;
+            let (whole, part) = (s.floor() as usize, s.fract());
+            row.fill(0.0);
+            for x in 0..self.w {
+                let a = self.alpha[y * self.w + x] as f32;
+                row[x + whole] += a * (1.0 - part);
+                row[x + whole + 1] += a * part;
+            }
+            for (out, a) in alpha[y * w..(y + 1) * w].iter_mut().zip(&row) {
+                *out = a.round().min(255.0) as u8;
+            }
+        }
+        Glyph {
+            left: self.left + lo,
+            top: self.top,
+            w,
+            h: self.h,
+            alpha,
+        }
+    }
 }
 
 /// A face: a file on disk (with, for a collection, the face's index in it), or bytes
@@ -195,7 +235,7 @@ pub struct Fonts {
     ask: Option<Asker>,
     /// The characters `ask` has been asked about, so each is asked once.
     asked: HashSet<char>,
-    cache: HashMap<(char, bool, u32), Option<Glyph>>,
+    cache: HashMap<(char, bool, bool, u32), Option<Glyph>>,
 }
 
 /// The monospace faces tried in order, each with its bold: `STRATA_FONT`, the
@@ -348,11 +388,15 @@ impl Fonts {
     /// `c` rasterized at `px`, from the bold face when `bold` and it has `c`, else the
     /// regular face, else the first fallback that has it; `None` when no face does. A
     /// fallback glyph wider than its cell (or two, for a wide character) is scaled to fit
-    /// and centred.
-    pub fn glyph(&mut self, c: char, bold: bool, px: f32) -> Option<&Glyph> {
-        let key = (c, bold, px.to_bits());
+    /// and centred. `italic` leans it about the cell's middle row.
+    pub fn glyph(&mut self, c: char, bold: bool, italic: bool, px: f32) -> Option<&Glyph> {
+        let key = (c, bold, italic, px.to_bits());
         if !self.cache.contains_key(&key) {
-            let glyph = self.rasterize(c, bold, px);
+            let mut glyph = self.rasterize(c, bold, px);
+            if italic {
+                let pivot = self.metrics(px).h as f32 / 2.0;
+                glyph = glyph.map(|g| g.slanted(pivot));
+            }
             self.cache.insert(key, glyph);
         }
         self.cache.get(&key).and_then(Option::as_ref)
@@ -541,12 +585,48 @@ mod tests {
     }
 
     #[test]
+    fn italic_leans_right_inside_its_cell() {
+        let mut fonts = Fonts::load_for(Platform::Windows, &env_of(&[]));
+        let cell = fonts.metrics(30.0);
+        let upright = fonts.glyph('l', false, false, 30.0).unwrap().clone();
+        let italic = fonts.glyph('l', false, true, 30.0).unwrap().clone();
+        // The ink's mean column, in cell pixels, over rows `rows` of the glyph.
+        let mean = |g: &Glyph, rows: std::ops::Range<usize>| {
+            let (mut sum, mut n) = (0.0, 0.0);
+            for y in rows {
+                for x in 0..g.w {
+                    let a = g.alpha[y * g.w + x] as f32;
+                    sum += a * (g.left as f32 + x as f32);
+                    n += a;
+                }
+            }
+            sum / n
+        };
+        let h = upright.h;
+        let lean = |g: &Glyph| mean(g, 0..h / 4) - mean(g, h - h / 4..h);
+        assert_eq!((italic.top, italic.h), (upright.top, upright.h));
+        let more = lean(&italic) - lean(&upright);
+        let want = SLANT * (h - h / 4) as f32;
+        assert!((more - want).abs() < 1.0, "leans {more}, want {want}");
+        let inked: Vec<i32> = (0..italic.w)
+            .filter(|&x| (0..h).any(|y| italic.alpha[y * italic.w + x] > 0))
+            .map(|x| italic.left + x as i32)
+            .collect();
+        assert!(inked[0] >= 0 && *inked.last().unwrap() < cell.w as i32);
+        let ink = |g: &Glyph| g.alpha.iter().map(|&a| a as f32).sum::<f32>();
+        assert!((ink(&italic) / ink(&upright) - 1.0).abs() < 0.05);
+        // Upright stays upright, cached apart.
+        let again = fonts.glyph('l', false, false, 30.0).unwrap();
+        assert_eq!(again.alpha, upright.alpha);
+    }
+
+    #[test]
     fn missing_fallbacks_are_skipped() {
         let mut fonts =
             Fonts::load_for(Platform::Windows, &env_of(&[("WINDIR", "/nowhere/strata")]));
         assert!(fonts.has('M'));
         assert!(!fonts.has('\u{10FFFD}'));
-        assert!(fonts.glyph('▸', false, 15.0).is_none());
+        assert!(fonts.glyph('▸', false, false, 15.0).is_none());
     }
 
     #[test]
@@ -588,7 +668,10 @@ mod tests {
         let mut fonts = Fonts::load();
         let loaded = resident();
         let start = std::time::Instant::now();
-        assert!(fonts.glyph('ｱ', false, 30.0).is_some(), "no face draws ｱ");
+        assert!(
+            fonts.glyph('ｱ', false, false, 30.0).is_some(),
+            "no face draws ｱ"
+        );
         let took = start.elapsed();
         eprintln!(
             "resident {before} at start, {loaded} with the fonts loaded, {} after the \

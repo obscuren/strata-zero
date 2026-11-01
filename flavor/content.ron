@@ -480,7 +480,7 @@ Content(
         Item(id: "sealed_package", name: "Sealed package", kind: Component, weight: 0.5, value: 0,
              desc: "Taped shut. Heavier than it looks. Not yours to open."),
         Item(id: "taped_package", name: "Taped package", kind: Component, weight: 0.5, value: 0,
-             desc: "Wrapped in black tape, heavier than it looks. Hands only, Dez said. Don't open it."),
+             desc: "Wrapped in black tape, heavier than it looks. Hands only, Mezz said. Don't open it."),
     ],
     skills: [
         Skill(id: "blades", name: "Blades", attribute: Reflex, needs: [(Reflex, 4)], desc: "Knives, shivs and anything with an edge."),

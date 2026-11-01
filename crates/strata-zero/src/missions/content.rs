@@ -8,6 +8,8 @@ const DEFAULT: &str = include_str!("../../../../flavor/missions.ron");
 
 /// What a `{role.field}` slot may ask of a role.
 pub const SLOT_FIELDS: [&str; 4] = ["title", "place", "district", "hours"];
+/// What a `{role.field}` slot may ask of a visitor, who works nowhere.
+pub const VISITOR_FIELDS: [&str; 1] = ["title"];
 
 /// The shade letters a face row may hold.
 const SHADES: &str = ".dmlhbeX";
@@ -15,6 +17,8 @@ const SHADES: &str = ".dmlhbeX";
 const FACE_WIDTH: usize = 16;
 /// The face a role without one calls with.
 const SILHOUETTE: &str = "silhouette";
+/// The player, as a beat's speaker or walker and as the `{you}` slot. No cast role takes it.
+pub const YOU: &str = "you";
 
 #[derive(Clone, Debug, Error, PartialEq)]
 pub enum BookError {
@@ -38,6 +42,18 @@ pub enum BookError {
     BadFace { face: String, why: String },
     #[error("missions: the book has no `silhouette` face")]
     NoSilhouette,
+    #[error("missions: {place}: unknown scene `{scene}`")]
+    UnknownScene { place: String, scene: String },
+    #[error("missions: {place}: `{role}` is not a visitor")]
+    NotAVisitor { place: String, role: String },
+    #[error("missions: {place}: {what}")]
+    BadNumber { place: String, what: String },
+    #[error("missions: no role may be called `{0}`")]
+    ReservedRole(String),
+    #[error("missions: scene `{0}` has no beats")]
+    EmptyScene(String),
+    #[error("missions: scene `{0}` comes back to itself through `next`")]
+    SceneLoop(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -46,6 +62,8 @@ pub struct Book {
     pub cast: BTreeMap<String, Role>,
     pub faces: BTreeMap<String, Face>,
     pub missions: Vec<Mission>,
+    #[serde(default)]
+    pub scenes: BTreeMap<String, Scene>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -54,6 +72,118 @@ pub struct Role {
     pub title: String,
     pub pick: Pick,
     pub face: Option<String>,
+    /// A speaker's colour, and a visitor's `@`.
+    #[serde(default)]
+    pub tint: Option<(u8, u8, u8)>,
+    /// What look mode says of a visitor.
+    #[serde(default)]
+    pub look: Option<String>,
+}
+
+/// How a scene is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+pub enum Look {
+    Film,
+    Bubbles,
+}
+
+/// A scene's timing, all data: seconds, or characters per second for typing.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Pace {
+    /// Characters per second a line types at.
+    #[serde(rename = "type")]
+    pub chars: f32,
+    /// Seconds per tile a walk takes.
+    pub walk: f32,
+    /// Seconds a typed line stays before the scene moves on; `None` waits for space.
+    pub hold: Option<f32>,
+}
+
+/// A scripted cinematic: `flavor/missions.ron` `scenes`.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Scene {
+    pub title: String,
+    pub look: Look,
+    pub pace: Pace,
+    pub beats: Vec<Beat>,
+    /// The scene that plays straight after this one, for the same step: the step
+    /// ends with the last.
+    #[serde(default)]
+    pub next: Option<String>,
+}
+
+/// Where a beat points, resolved when it runs.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub enum Mark {
+    You,
+    Role(String),
+    HomeDoor,
+    HomeOutside,
+    HomeInside(u32),
+    HomeRig,
+    HomeBed,
+    HomeFurniture(citygen::Furniture),
+    Beside(Box<Mark>),
+}
+
+/// The code a scripted keypad types.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+pub enum PadCode {
+    Journal,
+    Code(u16),
+}
+
+/// What the scripted keypad's display ends on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+pub enum PadResult {
+    Denied,
+    Open,
+}
+
+fn yes() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub enum Beat {
+    Say {
+        who: String,
+        text: String,
+        #[serde(default, rename = "as")]
+        label: Option<String>,
+        #[serde(default)]
+        at: Option<Mark>,
+        #[serde(default)]
+        hold: Option<f32>,
+    },
+    Stage(String),
+    Walk {
+        who: String,
+        to: Mark,
+        #[serde(default)]
+        pace: Option<f32>,
+        #[serde(default = "yes")]
+        wait: bool,
+    },
+    Wait(f32),
+    Keypad {
+        door: Mark,
+        code: PadCode,
+        result: PadResult,
+        keys: f32,
+        hold: f32,
+    },
+    Door {
+        at: Mark,
+        open: bool,
+    },
+    Camera(Mark),
+    Arrive {
+        role: String,
+        at: Mark,
+    },
+    Leave(String),
+    Lights(f32),
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -64,6 +194,8 @@ pub enum Pick {
         at: Vec<citygen::BuildingKind>,
         range: (i32, i32),
     },
+    /// Never cast from the sim: a scene or an effect brings them.
+    Visitor,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -101,7 +233,12 @@ pub enum Trigger {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub enum Where {
     Home,
-    Work { role: String, within: i32 },
+    Work {
+        role: String,
+        within: i32,
+    },
+    /// Home: in your flat, or outside it within one tile of its door (the door included).
+    HomeDoor,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -134,6 +271,14 @@ pub enum Effect {
         body: Vec<String>,
     },
     Log(String),
+    /// Plays the scene; its end marks the step `Ended`, as a feed's does.
+    Scene(String),
+    Arrive {
+        role: String,
+        at: Mark,
+    },
+    Leave(String),
+    Lights(f32),
 }
 
 impl Effect {
@@ -153,23 +298,34 @@ impl Effect {
                 .map(String::as_str)
                 .chain([subject.as_str()])
                 .collect(),
-            Effect::Give { .. } | Effect::Take { .. } => vec![],
+            Effect::Give { .. }
+            | Effect::Take { .. }
+            | Effect::Scene(_)
+            | Effect::Arrive { .. }
+            | Effect::Leave(_)
+            | Effect::Lights(_) => vec![],
         }
     }
 
-    /// The roles named outside text: who speaks, who dies.
+    /// The roles named outside text: who speaks, who dies, who arrives (but you).
     fn named_roles(&self) -> Vec<&str> {
         match self {
             Effect::Feed { from, .. } | Effect::Call { from, .. } | Effect::Mail { from, .. } => {
                 vec![from]
             }
-            Effect::Dead { role, .. } => vec![role],
+            Effect::Arrive { role, .. } if role == YOU => vec![],
+            Effect::Dead { role, .. } | Effect::Arrive { role, .. } | Effect::Leave(role) => {
+                vec![role]
+            }
             _ => vec![],
         }
     }
 
     fn presents(&self) -> bool {
-        matches!(self, Effect::Feed { .. } | Effect::Call { .. })
+        matches!(
+            self,
+            Effect::Feed { .. } | Effect::Call { .. } | Effect::Scene(_)
+        )
     }
 }
 
@@ -194,7 +350,12 @@ impl Mission {
             for e in &step.then {
                 out.extend(e.named_roles().into_iter().map(String::from));
                 for t in e.texts() {
-                    out.extend(slots(t).into_iter().map(|(role, _)| role));
+                    out.extend(
+                        slots(t)
+                            .into_iter()
+                            .map(|(role, _)| role)
+                            .filter(|r| r != YOU),
+                    );
                 }
             }
         }
@@ -245,6 +406,9 @@ impl Book {
         if !self.faces.contains_key(SILHOUETTE) {
             return Err(BookError::NoSilhouette);
         }
+        if self.cast.contains_key(YOU) {
+            return Err(BookError::ReservedRole(YOU.into()));
+        }
         for (id, role) in &self.cast {
             if let Some(face) = role.face.as_ref().filter(|f| !self.faces.contains_key(*f)) {
                 return Err(BookError::BadFace {
@@ -253,10 +417,28 @@ impl Book {
                 });
             }
         }
+        for (id, scene) in &self.scenes {
+            self.check_scene(id, scene)?;
+        }
         for m in &self.missions {
             self.check_mission(m)?;
         }
         Ok(())
+    }
+
+    /// A visitor is never cast from the sim.
+    pub fn is_visitor(&self, role: &str) -> bool {
+        self.cast
+            .get(role)
+            .is_some_and(|r| matches!(r.pick, Pick::Visitor))
+    }
+
+    /// The roles a mission needs the sim to cast: all it names but visitors and `you`.
+    pub fn needs_cast(&self, m: &Mission) -> BTreeSet<String> {
+        m.roles()
+            .into_iter()
+            .filter(|r| r != YOU && !self.is_visitor(r))
+            .collect()
     }
 
     fn check_role(&self, place: &str, role: &str) -> Result<(), BookError> {
@@ -272,13 +454,159 @@ impl Book {
 
     fn check_text(&self, place: &str, text: &str) -> Result<(), BookError> {
         for (role, field) in slots(text) {
+            if role == YOU {
+                // The player's handle takes no field.
+                match field {
+                    Some(f) => {
+                        return Err(BookError::UnknownSlot {
+                            place: place.into(),
+                            slot: format!("{role}.{f}"),
+                        });
+                    }
+                    None => continue,
+                }
+            }
             self.check_role(place, &role)?;
-            if let Some(field) = field.filter(|f| !SLOT_FIELDS.contains(&f.as_str())) {
+            let fields: &[&str] = if self.is_visitor(&role) {
+                &VISITOR_FIELDS
+            } else {
+                &SLOT_FIELDS
+            };
+            if let Some(field) = field.filter(|f| !fields.contains(&f.as_str())) {
                 return Err(BookError::UnknownSlot {
                     place: place.into(),
                     slot: format!("{role}.{field}"),
                 });
             }
+        }
+        Ok(())
+    }
+
+    /// A role that must be a visitor.
+    fn check_visitor(&self, place: &str, role: &str) -> Result<(), BookError> {
+        self.check_role(place, role)?;
+        if self.is_visitor(role) {
+            Ok(())
+        } else {
+            Err(BookError::NotAVisitor {
+                place: place.into(),
+                role: role.into(),
+            })
+        }
+    }
+
+    /// Who an `Arrive` puts on the map: a visitor, or you (a cut).
+    fn check_arriving(&self, place: &str, role: &str) -> Result<(), BookError> {
+        if role == YOU {
+            Ok(())
+        } else {
+            self.check_visitor(place, role)
+        }
+    }
+
+    /// A mark: its roles are visitors, `HomeInside` goes in at least a tile.
+    fn check_mark(&self, place: &str, mark: &Mark) -> Result<(), BookError> {
+        match mark {
+            Mark::Role(role) => self.check_visitor(place, role),
+            Mark::HomeInside(0) => Err(BookError::BadNumber {
+                place: place.into(),
+                what: "HomeInside(0) is the door itself".into(),
+            }),
+            Mark::Beside(inner) => self.check_mark(place, inner),
+            _ => Ok(()),
+        }
+    }
+
+    fn check_scene(&self, id: &str, scene: &Scene) -> Result<(), BookError> {
+        let at = format!("scene {id}");
+        if scene.beats.is_empty() {
+            return Err(BookError::EmptyScene(id.into()));
+        }
+        // A title is printed raw in the film's bar and the bubbles' footer: no slots.
+        if scene.title.contains('{') {
+            return Err(BookError::UnknownSlot {
+                place: format!("title of {at}"),
+                slot: scene.title.clone(),
+            });
+        }
+        positive(&at, "type", scene.pace.chars)?;
+        positive(&at, "walk", scene.pace.walk)?;
+        if let Some(h) = scene.pace.hold {
+            positive(&at, "hold", h)?;
+        }
+        for (i, beat) in scene.beats.iter().enumerate() {
+            let place = format!("{at} beat {}", i + 1);
+            self.check_beat(&place, beat)?;
+        }
+        // Each `next` is a scene, and following them ends.
+        let mut next = scene.next.as_deref();
+        for _ in 0..self.scenes.len() {
+            let Some(n) = next else {
+                return Ok(());
+            };
+            if n == id {
+                return Err(BookError::SceneLoop(id.into()));
+            }
+            let Some(s) = self.scenes.get(n) else {
+                return Err(BookError::UnknownScene {
+                    place: format!("next of {at}"),
+                    scene: n.into(),
+                });
+            };
+            next = s.next.as_deref();
+        }
+        Ok(())
+    }
+
+    fn check_beat(&self, place: &str, beat: &Beat) -> Result<(), BookError> {
+        match beat {
+            Beat::Say {
+                who,
+                text,
+                label,
+                at,
+                hold,
+            } => {
+                // `you` may speak; every other speaker is in the cast.
+                if who != YOU {
+                    self.check_role(place, who)?;
+                }
+                self.check_text(place, text)?;
+                if let Some(label) = label {
+                    self.check_text(place, label)?;
+                }
+                if let Some(mark) = at {
+                    self.check_mark(place, mark)?;
+                }
+                if let Some(h) = hold {
+                    positive(place, "hold", *h)?;
+                }
+            }
+            Beat::Stage(text) => self.check_text(place, text)?,
+            Beat::Walk { who, to, pace, .. } => {
+                if who != YOU {
+                    self.check_visitor(place, who)?;
+                }
+                self.check_mark(place, to)?;
+                if let Some(p) = pace {
+                    positive(place, "pace", *p)?;
+                }
+            }
+            Beat::Wait(s) => positive(place, "wait", *s)?,
+            Beat::Keypad {
+                door, keys, hold, ..
+            } => {
+                self.check_mark(place, door)?;
+                positive(place, "keys", *keys)?;
+                positive(place, "hold", *hold)?;
+            }
+            Beat::Door { at, .. } | Beat::Camera(at) => self.check_mark(place, at)?,
+            Beat::Arrive { role, at } => {
+                self.check_arriving(place, role)?;
+                self.check_mark(place, at)?;
+            }
+            Beat::Leave(role) => self.check_visitor(place, role)?,
+            Beat::Lights(level) => check_level(place, *level)?,
         }
         Ok(())
     }
@@ -338,7 +666,20 @@ impl Book {
                 for t in e.texts() {
                     self.check_text(&place, t)?;
                 }
+                let at = format!("mission {} step {}", m.id, step.id);
                 match e {
+                    Effect::Scene(id) if !self.scenes.contains_key(id) => {
+                        return Err(BookError::UnknownScene {
+                            place: at,
+                            scene: id.clone(),
+                        });
+                    }
+                    Effect::Arrive { role, at: mark } => {
+                        self.check_arriving(&at, role)?;
+                        self.check_mark(&at, mark)?;
+                    }
+                    Effect::Leave(role) => self.check_visitor(&at, role)?,
+                    Effect::Lights(level) => check_level(&at, *level)?,
                     Effect::Feed { text, .. } if text.is_empty() => {
                         return Err(BookError::Empty(format!("feed in {place}")));
                     }
@@ -396,6 +737,30 @@ impl Book {
     }
 }
 
+/// Seconds and rates are finite and above zero.
+fn positive(place: &str, what: &str, v: f32) -> Result<(), BookError> {
+    if v.is_finite() && v > 0.0 {
+        Ok(())
+    } else {
+        Err(BookError::BadNumber {
+            place: place.into(),
+            what: format!("{what} is {v}, wanted more than 0"),
+        })
+    }
+}
+
+/// A light level runs from black (0) to normal (1).
+fn check_level(place: &str, level: f32) -> Result<(), BookError> {
+    if (0.0..=1.0).contains(&level) {
+        Ok(())
+    } else {
+        Err(BookError::BadNumber {
+            place: place.into(),
+            what: format!("light level {level}, wanted 0 to 1"),
+        })
+    }
+}
+
 fn check_face(name: &str, face: &Face) -> Result<(), BookError> {
     let bad = |why: String| BookError::BadFace {
         face: name.into(),
@@ -435,11 +800,13 @@ mod tests {
     #[test]
     fn the_shipped_book_parses_and_validates() {
         let b = book();
-        assert_eq!(b.missions.len(), 1);
+        assert_eq!(b.missions.len(), 2);
         assert_eq!(b.missions[0].id, "the_drop");
+        assert_eq!(b.missions[1].id, "house_call");
+        assert_eq!(b.scenes.len(), 2);
         assert_eq!(b.missions[0].steps.len(), 6);
-        assert!(b.cast.contains_key("dez") && b.cast.contains_key("marlo"));
-        assert_eq!(b.face_of("dez").eye, (255, 0, 200));
+        assert!(b.cast.contains_key("mezz") && b.cast.contains_key("marlo"));
+        assert_eq!(b.face_of("mezz").eye, (255, 0, 200));
         assert_eq!(b.face_of("marlo"), &b.faces["silhouette"]);
     }
 
@@ -468,8 +835,8 @@ mod tests {
     }
 
     #[test]
-    fn the_drop_needs_dez_and_marlo() {
-        let want: BTreeSet<String> = ["dez", "marlo"].map(String::from).into();
+    fn the_drop_needs_mezz_and_marlo() {
+        let want: BTreeSet<String> = ["mezz", "marlo"].map(String::from).into();
         assert_eq!(book().missions[0].roles(), want);
     }
 
@@ -555,6 +922,238 @@ mod tests {
         let mut b = book();
         b.faces.remove("silhouette");
         assert_eq!(b.validate(), Err(BookError::NoSilhouette));
+    }
+
+    /// A small book with a runner, a visitor, and the steps and scenes of the test's making.
+    fn tiny(cast: &str, steps: &str, scenes: &str) -> Result<Book, BookError> {
+        let src = r#"Story(
+            cast: {
+                "marlo": Role(name: "Marlo", title: "cook",
+                    pick: Worker(professions: ["noodle_cook"], at: [], range: (0, 9)), face: None),
+                "seren": Role(name: "Seren", title: "doc", pick: Visitor, face: None,
+                    tint: Some((1, 2, 3)), look: Some("a doctor")),
+                CAST
+            },
+            faces: { "silhouette": Face(rows: ["................", "................"], eye: (0, 0, 0)) },
+            missions: [Mission(id: "m", title: "M", from: "seren", steps: [STEPS])],
+            scenes: { SCENES },
+        )"#;
+        Book::parse(
+            &src.replace("CAST", cast)
+                .replace("STEPS", steps)
+                .replace("SCENES", scenes),
+        )
+    }
+
+    const STEP: &str = r#"Step(id: "a", when: NewGame, then: [Log("hi")])"#;
+
+    /// A scene "s" of the given beats under a pace that passes.
+    fn scene_with(pace: &str, beats: &str) -> String {
+        format!(r#""s": Scene(title: "S", look: Film, pace: {pace}, beats: [{beats}])"#)
+    }
+
+    fn scened(beats: &str) -> Result<Book, BookError> {
+        let pace = "Pace(type: 45, walk: 0.3, hold: Some(2.5))";
+        tiny("", STEP, &scene_with(pace, beats))
+    }
+
+    fn with_steps(steps: &str) -> Result<Book, BookError> {
+        tiny(
+            "",
+            steps,
+            &scene_with("Pace(type: 45, walk: 0.3, hold: None)", "Wait(1.0)"),
+        )
+    }
+
+    #[test]
+    fn scenes_parse_with_every_beat() {
+        let b = scened(
+            r#"Say(who: "seren", text: "hello {you}", as: Some("A voice"), at: Some(HomeDoor), hold: Some(1.0)),
+            Stage("INSIDE"),
+            Walk(who: "seren", to: Beside(You)),
+            Wait(1.0),
+            Keypad(door: HomeDoor, code: Journal, result: Denied, keys: 0.2, hold: 1.0),
+            Door(at: HomeDoor, open: true),
+            Camera(HomeFurniture(Couch)),
+            Arrive(role: "seren", at: HomeOutside),
+            Leave("seren"),
+            Lights(0.5)"#,
+        )
+        .unwrap();
+        let s = &b.scenes["s"];
+        assert_eq!(s.beats.len(), 10);
+        assert_eq!(s.look, Look::Film);
+        assert_eq!(s.pace.hold, Some(2.5));
+        assert!(matches!(
+            &s.beats[2],
+            Beat::Walk {
+                wait: true,
+                pace: None,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &s.beats[0],
+            Beat::Say { label: Some(l), .. } if l == "A voice"
+        ));
+    }
+
+    #[test]
+    fn an_unknown_scene_is_refused() {
+        let steps = r#"Step(id: "a", when: NewGame, then: [Scene("nope")])"#;
+        assert!(matches!(
+            with_steps(steps),
+            Err(BookError::UnknownScene { .. })
+        ));
+    }
+
+    #[test]
+    fn a_visitor_takes_no_place_slot() {
+        let steps = r#"Step(id: "a", when: NewGame, then: [Log("{seren.place}")])"#;
+        assert!(matches!(
+            with_steps(steps),
+            Err(BookError::UnknownSlot { .. })
+        ));
+        let ok = r#"Step(id: "a", when: NewGame, then: [Log("{seren} the {seren.title}")])"#;
+        assert!(with_steps(ok).is_ok());
+    }
+
+    #[test]
+    fn no_role_is_called_you() {
+        let cast = r#""you": Role(name: "Y", title: "t", pick: Visitor, face: None),"#;
+        let pace = "Pace(type: 45, walk: 0.3, hold: None)";
+        assert!(matches!(
+            tiny(cast, STEP, &scene_with(pace, "Wait(1.0)")),
+            Err(BookError::ReservedRole(_))
+        ));
+    }
+
+    #[test]
+    fn walks_and_arrivals_need_visitors() {
+        for beat in [
+            r#"Arrive(role: "marlo", at: HomeDoor)"#,
+            r#"Walk(who: "marlo", to: HomeDoor)"#,
+            r#"Leave("marlo")"#,
+            r#"Camera(Role("marlo"))"#,
+        ] {
+            assert!(
+                matches!(scened(beat), Err(BookError::NotAVisitor { .. })),
+                "{beat}"
+            );
+        }
+        assert!(matches!(
+            scened(r#"Leave("ghost")"#),
+            Err(BookError::UnknownRole { .. })
+        ));
+        assert!(scened(r#"Walk(who: "you", to: Beside(Role("seren")))"#).is_ok());
+    }
+
+    #[test]
+    fn you_may_arrive() {
+        assert!(scened(r#"Arrive(role: "you", at: HomeOutside)"#).is_ok());
+        let steps = r#"Step(id: "a", when: NewGame, then: [Arrive(role: "you", at: HomeBed)])"#;
+        let b = with_steps(steps).unwrap();
+        assert!(!b.missions[0].roles().contains(YOU));
+        // Only arriving: you never leave the map.
+        assert!(matches!(
+            scened(r#"Leave("you")"#),
+            Err(BookError::UnknownRole { .. })
+        ));
+    }
+
+    #[test]
+    fn numbers_must_be_positive() {
+        let bad = |r: Result<Book, BookError>| {
+            assert!(matches!(r, Err(BookError::BadNumber { .. })), "{r:?}")
+        };
+        let paced = |pace: &str| tiny("", STEP, &scene_with(pace, "Wait(1.0)"));
+        bad(paced("Pace(type: 0, walk: 0.3, hold: None)"));
+        bad(paced("Pace(type: 45, walk: -1.0, hold: None)"));
+        bad(paced("Pace(type: 45, walk: 0.3, hold: Some(0.0))"));
+        bad(scened("Wait(-1.0)"));
+        bad(scened("Lights(1.5)"));
+        bad(scened(r#"Walk(who: "you", to: HomeDoor, pace: Some(0.0))"#));
+        bad(scened(
+            "Keypad(door: HomeDoor, code: Code(1234), result: Open, keys: 0.0, hold: 1.0)",
+        ));
+        bad(scened(r#"Say(who: "you", text: "x", hold: Some(-2.0))"#));
+        bad(scened("Camera(HomeInside(0))"));
+        let steps = r#"Step(id: "a", when: NewGame, then: [Lights(2.0)])"#;
+        assert!(
+            matches!(with_steps(steps), Err(BookError::BadNumber { ref place, .. }) if place.contains("mission m step a"))
+        );
+    }
+
+    #[test]
+    fn an_empty_scene_is_refused() {
+        assert!(matches!(scened(""), Err(BookError::EmptyScene(_))));
+    }
+
+    #[test]
+    fn a_next_scene_exists_and_comes_back_to_none() {
+        let pace = "Pace(type: 45, walk: 0.3, hold: None)";
+        let two = |s_next: &str, t_next: &str| {
+            let scenes = format!(
+                r#""s": Scene(title: "S", look: Film, pace: {pace}, beats: [Wait(1.0)], next: {s_next}),
+                "t": Scene(title: "T", look: Bubbles, pace: {pace}, beats: [Wait(1.0)], next: {t_next})"#
+            );
+            tiny("", STEP, &scenes)
+        };
+        let b = two(r#"Some("t")"#, "None").unwrap();
+        assert_eq!(b.scenes["s"].next.as_deref(), Some("t"));
+        assert_eq!(b.scenes["t"].next, None);
+        assert!(matches!(
+            two(r#"Some("nope")"#, "None"),
+            Err(BookError::UnknownScene { .. })
+        ));
+        assert!(matches!(
+            two(r#"Some("t")"#, r#"Some("s")"#),
+            Err(BookError::SceneLoop(_))
+        ));
+        assert!(matches!(
+            two(r#"Some("s")"#, "None"),
+            Err(BookError::SceneLoop(_))
+        ));
+    }
+
+    #[test]
+    fn ended_may_name_a_scene_step() {
+        let steps = r#"Step(id: "a", when: NewGame, then: [Scene("s")]),
+            Step(id: "b", when: Ended("a"), then: [Log("after")])"#;
+        assert!(with_steps(steps).is_ok());
+    }
+
+    #[test]
+    fn you_is_a_slot() {
+        let ok = r#"Step(id: "a", when: NewGame, then: [Log("{you}")])"#;
+        assert!(with_steps(ok).is_ok());
+        let bad = r#"Step(id: "a", when: NewGame, then: [Log("{you.place}")])"#;
+        assert!(matches!(
+            with_steps(bad),
+            Err(BookError::UnknownSlot { .. })
+        ));
+    }
+
+    #[test]
+    fn visitors_need_no_cast() {
+        let steps = r#"Step(id: "a", when: NewGame, then: [Log("{you} and {marlo}")])"#;
+        let b = with_steps(steps).unwrap();
+        let m = &b.missions[0];
+        assert_eq!(m.from, "seren");
+        assert!(m.roles().contains("seren") && !m.roles().contains("you"));
+        let want: BTreeSet<String> = ["marlo"].map(String::from).into();
+        assert_eq!(b.needs_cast(m), want);
+        assert!(b.is_visitor("seren") && !b.is_visitor("marlo") && !b.is_visitor(YOU));
+    }
+
+    #[test]
+    fn a_scene_title_takes_no_slots() {
+        let src = r#""s": Scene(title: "{you}", look: Bubbles,
+            pace: Pace(type: 45, walk: 0.3, hold: None), beats: [Wait(1.0)])"#;
+        assert!(matches!(
+            tiny("", STEP, src),
+            Err(BookError::UnknownSlot { .. })
+        ));
     }
 
     #[test]

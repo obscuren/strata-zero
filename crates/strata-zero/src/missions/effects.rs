@@ -1,6 +1,9 @@
 //! What a step does to the game (spec §4), its text filled as it runs.
 
-use super::{Body, Call, Effect, FeedView, cast, fill, person_of, role_name};
+use super::{
+    Body, Call, Effect, FeedView, Mark, YOU, cast, fill, marks, person_of, role_name, scene,
+    visitors,
+};
 use crate::app::AppState;
 use citygen::{Place, StratumKind};
 use game::ItemId;
@@ -69,7 +72,37 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
             let text = fill(st, text);
             st.story(text);
         }
+        Effect::Scene(id) => st.missions.scenes.push_back((mission, step, id.clone())),
+        Effect::Arrive { role, at } => arrive(st, role, at),
+        Effect::Leave(role) => visitors::leave(st, role),
+        Effect::Lights(level) => lights(st, *level),
     }
+}
+
+/// The role's visitor stands on the mark, or you do, at once: a cut, you seeing from
+/// there. A tile another actor holds gives the free one beside it; a mark that
+/// resolves to nothing (or has no room beside it) leaves things as they are. As the
+/// effect and as a scene's beat.
+pub(super) fn arrive(st: &mut AppState, role: &str, at: &Mark) {
+    let walker = (role != YOU).then_some(role);
+    let spot = marks::resolve(st, at, walker).and_then(|(place, pos)| {
+        if scene::taken(st, role, place, pos) {
+            marks::beside_tile(st, place, pos, walker)
+        } else {
+            Some((place, pos))
+        }
+    });
+    match spot {
+        Some((place, pos)) if role == YOU => scene::put(st, YOU, place, pos),
+        Some(spot) => visitors::arrive(st, role, spot),
+        None if st.dev => st.warn(format!("scene · {at:?} not found")),
+        None => {}
+    }
+}
+
+/// Your flat's light level; 1.0 is normal.
+pub(super) fn lights(st: &mut AppState, level: f32) {
+    st.missions.lights = (level < 1.0).then_some(level);
 }
 
 /// The role's person dies: a body at their work tile, the sim done with them. Once.
@@ -97,5 +130,157 @@ fn dead(st: &mut AppState, role: &str, look: &str) {
     }
     if let Some(w) = st.world.as_mut() {
         w.kill(person);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::jobs::testutil::state_home;
+    use crate::missions::{Mark, marks, visitors};
+    use crate::walker::Player;
+    use citygen::Pos;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::style::{Color, Style};
+
+    fn in_the_flat() -> AppState {
+        let mut st = state_home();
+        let (place, pos) = marks::resolve(&st, &Mark::HomeInside(1), None).unwrap();
+        st.player = Some(Player::at(place, pos));
+        st
+    }
+
+    /// The colours of a flat tile and of one far outside it, drawn over a flat grey map.
+    fn drawn(st: &AppState) -> [(Color, Color); 2] {
+        let (_, flat) = marks::flat_rect(st).unwrap();
+        let origin = Pos::new(flat.x - 10, flat.y - 10);
+        let area = Rect::new(0, 0, 60, 40);
+        let mut buf = Buffer::empty(area);
+        buf.set_style(
+            area,
+            Style::default()
+                .fg(Color::Rgb(200, 100, 50))
+                .bg(Color::Rgb(100, 50, 20)),
+        );
+        visitors::draw(&mut buf, area, origin, st);
+        let at = |p: Pos| {
+            let c = &buf[((p.x - origin.x) as u16, (p.y - origin.y) as u16)];
+            (c.fg, c.bg)
+        };
+        [at(flat.center()), at(origin)]
+    }
+
+    #[test]
+    fn lights_dim_the_flat() {
+        let mut st = in_the_flat();
+        let full = drawn(&st);
+        assert_eq!(full[0], (Color::Rgb(200, 100, 50), Color::Rgb(100, 50, 20)));
+        apply(&mut st, 0, 0, &Effect::Lights(0.5));
+        assert_eq!(st.missions.lights, Some(0.5));
+        let dim = drawn(&st);
+        assert_eq!(dim[0], (Color::Rgb(100, 50, 25), Color::Rgb(50, 25, 10)));
+        assert_eq!(dim[1], full[1], "outside the flat is unchanged");
+        apply(&mut st, 0, 0, &Effect::Lights(1.0));
+        assert_eq!(st.missions.lights, None);
+        assert_eq!(drawn(&st), full);
+    }
+
+    #[test]
+    fn arrive_leave_and_scene() {
+        let mut st = in_the_flat();
+        let want = marks::resolve(&st, &Mark::HomeInside(2), None).unwrap();
+        let arrive = Effect::Arrive {
+            role: "seren".into(),
+            at: Mark::HomeInside(2),
+        };
+        apply(&mut st, 0, 0, &arrive);
+        assert_eq!(st.missions.visitors.len(), 1);
+        assert_eq!(visitors::at(&st, want.0, want.1).unwrap().role, "seren");
+        // A mark that resolves to nothing leaves things as they are.
+        st.home = None;
+        apply(&mut st, 0, 0, &arrive);
+        assert_eq!(st.missions.visitors.len(), 1);
+        apply(&mut st, 0, 0, &Effect::Leave("seren".into()));
+        assert!(st.missions.visitors.is_empty());
+        apply(&mut st, 3, 4, &Effect::Scene("film".into()));
+        assert_eq!(
+            st.missions.scenes,
+            [(3, 4, "film".to_string())]
+                .into_iter()
+                .collect::<std::collections::VecDeque<_>>()
+        );
+    }
+
+    fn arrive(role: &str, at: Mark) -> Effect {
+        Effect::Arrive {
+            role: role.into(),
+            at,
+        }
+    }
+
+    #[test]
+    fn arrive_puts_you_there_at_once() {
+        let mut st = state_home();
+        let b = st.home.unwrap().home.building;
+        let below = st.city.as_ref().unwrap().portals(b).first().unwrap().1;
+        super::super::tests::on_street(&mut st, below);
+        let want = marks::resolve(&st, &Mark::HomeInside(2), None).unwrap();
+        apply(&mut st, 0, 0, &arrive("you", Mark::HomeInside(2)));
+        let me = st.player.as_ref().unwrap();
+        assert_eq!((me.place, me.pos), want);
+        assert_eq!(
+            me.vis().get(want.1),
+            Some(&crate::render::Visibility::Visible),
+            "you see from where you are put"
+        );
+        assert!(st.missions.visitors.is_empty(), "you are no visitor");
+    }
+
+    #[test]
+    fn arrive_on_someone_lands_beside_them() {
+        let mut st = in_the_flat();
+        let me = st.player.as_ref().map(|p| (p.place, p.pos)).unwrap();
+        let walkable = |st: &AppState, p: Pos| {
+            crate::render::map::MapRef::for_place(
+                st.city.as_ref().unwrap(),
+                &st.interiors,
+                &st.constructs,
+                me.0,
+                st.minute_of_day(),
+            )
+            .is_some_and(|m| crate::render::map::TileMap::walkable(&m, p))
+        };
+        // Onto you: the tile beside you.
+        apply(&mut st, 0, 0, &arrive("seren", Mark::You));
+        let seren = marks::resolve(&st, &Mark::Role("seren".into()), None).unwrap();
+        assert_eq!(seren.0, me.0);
+        assert_eq!(seren.1.chebyshev(me.1), 1);
+        assert!(walkable(&st, seren.1));
+        // Onto her: beside her, on neither of you.
+        apply(
+            &mut st,
+            0,
+            0,
+            &arrive("castellan", Mark::Role("seren".into())),
+        );
+        let castellan = marks::resolve(&st, &Mark::Role("castellan".into()), None).unwrap();
+        assert_eq!(castellan.1.chebyshev(seren.1), 1);
+        assert!(castellan.1 != me.1 && walkable(&st, castellan.1));
+        // You onto her: beside her, she stays.
+        apply(&mut st, 0, 0, &arrive("you", Mark::Role("seren".into())));
+        let now = st.player.as_ref().map(|p| (p.place, p.pos)).unwrap();
+        assert_eq!(now.1.chebyshev(seren.1), 1);
+        assert!(now.1 != castellan.1 && walkable(&st, now.1));
+        assert_eq!(
+            marks::resolve(&st, &Mark::Role("seren".into()), None),
+            Some(seren)
+        );
+        // A visitor arriving where they already stand stays put.
+        apply(&mut st, 0, 0, &arrive("seren", Mark::Role("seren".into())));
+        assert_eq!(
+            marks::resolve(&st, &Mark::Role("seren".into()), None),
+            Some(seren)
+        );
     }
 }

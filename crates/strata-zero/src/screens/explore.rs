@@ -210,20 +210,20 @@ fn dir_for(code: KeyCode) -> Option<Dir> {
 
 /// The grid: a four-row band, a heavy rule, the map beside the right column, a heavy
 /// rule, then the two footer rows. One light vertical rule separates the columns.
-struct Regions {
-    band_l: [Rect; 4],
-    band_r: [Rect; 4],
-    top_rule: Rect,
+pub(crate) struct Regions {
+    pub(crate) band_l: [Rect; 4],
+    pub(crate) band_r: [Rect; 4],
+    pub(crate) top_rule: Rect,
     /// The route and the trace home, under the rule; only when there is something to say.
-    route: Option<Rect>,
-    map: Rect,
-    side: Rect,
-    vrule_x: u16,
-    bottom_rule: Rect,
-    footer: [Rect; 4],
+    pub(crate) route: Option<Rect>,
+    pub(crate) map: Rect,
+    pub(crate) side: Rect,
+    pub(crate) vrule_x: u16,
+    pub(crate) bottom_rule: Rect,
+    pub(crate) footer: [Rect; 4],
 }
 
-fn layout(area: Rect, show_route: bool) -> Regions {
+pub(crate) fn layout(area: Rect, show_route: bool) -> Regions {
     let r = sidebar::width(area.width);
     let l = area.width.saturating_sub(r + 1);
     let x_rule = area.x + l;
@@ -268,6 +268,30 @@ impl MapScreen {
         s.enter_walk(st);
         s.cam_ready = s.mode == Mode::Walk;
         s
+    }
+
+    /// A film scene's frame over the map drawn into `map_area`: the doors and the marker,
+    /// then everything but the map in black with the subtitle, a keypad over it, and the
+    /// console and help if open.
+    fn draw_film(&self, st: &AppState, f: &mut Frame, map_area: Rect, origin: Pos) {
+        use crate::missions::{film, overlay, scene};
+        let area = f.area();
+        overlay::draw(f.buffer_mut(), map_area, origin, st);
+        film::draw(f.buffer_mut(), area, map_area, st);
+        if let Some(pad) = scene::running(st).and_then(|s| s.pad()) {
+            crate::ui::dim::wash_rect(f.buffer_mut(), map_area);
+            pad.draw(st, f);
+        }
+        if let Some(con) = self.console.as_ref() {
+            let row = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1);
+            f.render_widget(
+                Paragraph::new(console::line(con, st.tick, st.log.recent(st.tick))),
+                row,
+            );
+        }
+        if self.help {
+            help::draw(f, self.mode, st.dev_unlocked);
+        }
     }
 
     /// The map's rect as last drawn.
@@ -1729,6 +1753,12 @@ impl MapScreen {
             st.warn(format!("the {name} is in the way"));
             return Err(ScreenCmd::Stay);
         }
+        // A visitor holds their tile too.
+        if let Some(v) = crate::missions::visitors::at(st, place, target) {
+            let name = crate::missions::role_name(st, &v.role);
+            st.warn(format!("`{name}` is in the way"));
+            return Err(ScreenCmd::Stay);
+        }
         if !place.is_street() {
             // Indoors people stand at their stations and are not swapped around.
             return if self.inside_person_at(place, target).is_some() {
@@ -2435,8 +2465,10 @@ impl MapScreen {
 
 impl Screen for MapScreen {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
-        // A HOLO feed waiting: it opens over the map.
-        if let Some(view) = st.missions.feeds.pop_front() {
+        // A HOLO feed waiting: it opens over the map, once no scene is playing.
+        if crate::missions::scene::running(st).is_none()
+            && let Some(view) = st.missions.feeds.pop_front()
+        {
             return ScreenCmd::Push {
                 to: Box::new(crate::missions::feed::Feed::new(view, st.tick)),
                 fx: TransitionKind::Glitch,
@@ -2525,7 +2557,23 @@ impl Screen for MapScreen {
             self.cursor = size.center();
             self.cam_ready = true;
         }
+        // A scene took a key this frame.
+        let mut scened = false;
         for (i, k) in keys.iter().enumerate() {
+            // Once a scene has had a key, the rest of the frame's are its too, or
+            // nobody's: a second `esc` as one scene ends and the next waits its tick
+            // never reaches the map.
+            if scened {
+                crate::missions::scene::key(st, k);
+                continue;
+            }
+            // A scene playing takes every key, all but the `:` that opens the dev
+            // console over it.
+            let console = st.dev && k.code == KeyCode::Char(':');
+            if !console && crate::missions::scene::key(st, k) {
+                scened = true;
+                continue;
+            }
             // A HOLO call up takes space and esc before the walk keys, once look mode,
             // a pick, an aim and help have had theirs.
             if self.plain_walk() && crate::missions::call::key(st, k) {
@@ -2609,8 +2657,10 @@ impl Screen for MapScreen {
             self.enter_walk(st);
         }
         let map = self.last_map.get();
-        match (self.mode, &st.player) {
-            (Mode::Walk, Some(p)) => self.cam.follow(p.pos, map.width, map.height),
+        match (self.mode, &st.player, crate::missions::scene::camera(st)) {
+            // A scene holding a tile of this map: the camera centres on it.
+            (Mode::Walk, _, Some((place, pos))) if place == self.place => self.cam.target(pos),
+            (Mode::Walk, Some(p), _) => self.cam.follow(p.pos, map.width, map.height),
             _ => self.cam.follow(self.cursor, map.width, map.height),
         }
         // The camera is bound by the map it shows, not the city: a floor or a construct
@@ -2647,7 +2697,28 @@ impl Screen for MapScreen {
         st.net.minute(now, inside, &mut st.constructs, &roots);
         crate::net::tick_backdoors(st);
         crate::jobs::tick(st);
+        let before = st.player.as_ref().map(|p| (p.place, p.pos));
         crate::missions::tick(st);
+        // The story moved you (an `Arrive`, a scene's walk): no aimed walk goes on from
+        // where you were, and the map follows you before this frame draws.
+        if st.player.as_ref().map(|p| (p.place, p.pos)) != before {
+            self.walking = None;
+            self.aim = None;
+            if self.mode == Mode::Walk && st.player.as_ref().is_some_and(|p| p.place != self.place)
+            {
+                self.follow_player(st);
+            }
+        }
+        // A scene playing: no aimed walk goes on under it, and nothing of the map's
+        // stays open to keep its keys after.
+        if crate::missions::scene::running(st).is_some() {
+            self.walking = None;
+            self.aim = None;
+            self.help = false;
+            self.looking = None;
+            self.which_way = None;
+            self.targeting = None;
+        }
         crate::track::tick(st);
         // A fixer beside you has their offer ready before you talk.
         if self.mode == Mode::Walk {
@@ -2765,7 +2836,14 @@ impl Screen for MapScreen {
         let jacked = st.player.as_ref().is_some_and(|p| p.jacked_in());
         let (route, home_trace) = self.route_parts(st, jacked);
         let r = layout(area, !route.is_empty() || home_trace.is_some());
-        let map_area = r.map;
+        // A film scene frames the map in the middle of a black frame.
+        let film = crate::missions::scene::running(st)
+            .is_some_and(|s| s.look() == crate::missions::Look::Film);
+        let map_area = if film {
+            crate::missions::film::map_rect(area, r.map)
+        } else {
+            r.map
+        };
         self.last_map.set(map_area);
         let origin = self.cam.origin(map_area.width, map_area.height);
         let cursor = self.focus_pos(st);
@@ -3059,9 +3137,10 @@ impl Screen for MapScreen {
             overlays.push(o);
         }
         // The tracked walk, last: it only tints backgrounds, and only on its own place.
+        // A film shows none of the HUD, the walk and its edge tag neither.
         let tracked_leg = crate::track::leg_now(st)
             .and_then(Result::ok)
-            .filter(|l| l.place == self.place);
+            .filter(|l| !film && l.place == self.place);
         let track_overlay = tracked_leg.map(|leg| crate::track::overlay::TrackOverlay {
             leg,
             pulses: crate::track::pulses_now(st),
@@ -3084,6 +3163,10 @@ impl Screen for MapScreen {
             },
         }
         .render(map_area, f.buffer_mut());
+        // The flat's lights and the story's visitors, under your own `@`.
+        if st.player.as_ref().is_some_and(|p| p.place == self.place) {
+            crate::missions::visitors::draw(f.buffer_mut(), map_area, origin, st);
+        }
 
         if let (Some(leg), Some(m)) = (tracked_leg, crate::track::distance(st)) {
             let label = st.track.as_ref().map_or("", |t| t.label.as_str());
@@ -3122,6 +3205,16 @@ impl Screen for MapScreen {
                     .set_char('@')
                     .set_style(Style::default().fg(fg).add_modifier(Modifier::BOLD));
             }
+        }
+        if film {
+            self.draw_film(st, f, map_area, origin);
+            return;
+        }
+        // A bubbles scene keeps the frame; its doors and marker go on the map.
+        let bubbles = crate::missions::scene::running(st)
+            .is_some_and(|s| s.look() == crate::missions::Look::Bubbles);
+        if bubbles {
+            crate::missions::overlay::draw(f.buffer_mut(), map_area, origin, st);
         }
         // The HOLO call in the map's corner, kept off your `@`.
         let me = st
@@ -3360,6 +3453,16 @@ impl Screen for MapScreen {
             let h = crate::look::box_height(&card, crate::look::LOOK_W);
             let r = crate::look::place_box(map_area, at, h);
             crate::look::draw_box(&card, r, f.buffer_mut());
+        }
+        // A bubbles scene dims the frame, a keypad goes over the map, the bubble last.
+        if bubbles {
+            use crate::missions::{bubbles, scene};
+            bubbles::chrome(f.buffer_mut(), &r, st, self.console.is_some());
+            if let Some(pad) = scene::running(st).and_then(|s| s.pad()) {
+                crate::ui::dim::wash_rect(f.buffer_mut(), map_area);
+                pad.draw(st, f);
+            }
+            bubbles::say(f.buffer_mut(), map_area, origin, st);
         }
         if self.help {
             help::draw(f, self.mode, st.dev_unlocked);

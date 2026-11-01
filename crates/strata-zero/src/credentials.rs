@@ -462,7 +462,7 @@ pub fn fixer_mail(st: &mut AppState) {
         .list
         .last()
         .map(|j| crate::jobs::ui::fixer_name(st, j.fixer))
-        .unwrap_or_else(|| "Dez".to_string());
+        .unwrap_or_else(|| "Mezz".to_string());
     let now = st.net.now(st);
     st.journal.mails.push(Mail {
         from,

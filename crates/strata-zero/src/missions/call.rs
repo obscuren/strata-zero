@@ -16,7 +16,8 @@ use ratatui::style::{Color, Modifier, Style};
 pub const RING_TICKS: u64 = 900;
 /// Characters a line types out in a second.
 pub const TYPE_PER_SECOND: u64 = 60;
-const TICKS_PER_SECOND: u64 = 30;
+/// The clock's ticks in a second.
+pub const TICKS_PER_SECOND: u64 = 30;
 /// Frame ticks the ringing dot stays lit, then dark.
 const BLINK_TICKS: u64 = 15;
 const RING_W: u16 = 36;
@@ -103,8 +104,14 @@ pub fn key(st: &mut AppState, k: &KeyEvent) -> bool {
     }
 }
 
-/// No call rings or talks during a fight or a run: `space` and `esc` are theirs.
+/// No call rings or talks during a fight, a run or a scene, or while a scene waits to
+/// play (a call up as one starts would go to voicemail): `space` and `esc` are theirs.
 pub fn quiet(st: &AppState) -> bool {
+    busy(st) || st.missions.scene.is_some() || !st.missions.scenes.is_empty()
+}
+
+/// A fight is on or the player is in a construct: no call, and no scene either.
+pub fn busy(st: &AppState) -> bool {
     st.net.engaged.is_some()
         || st
             .player
@@ -144,8 +151,8 @@ fn hang_up(st: &mut AppState) {
     }
 }
 
-/// The call ends with every line left on the rig.
-fn voicemail(st: &mut AppState) {
+/// The call that is up ends with every line left on the rig.
+pub(super) fn voicemail(st: &mut AppState) {
     let Some(call) = st.missions.call.take() else {
         return;
     };
@@ -412,13 +419,13 @@ mod tests {
     const SPACE: KeyCode = KeyCode::Char(' ');
     const STREET: Place = Place::Stratum(StratumKind::Street);
 
-    /// Seed 8 on the street by Marlo's body, Dez's call ringing, the welcome's feed
+    /// Seed 8 on the street by Marlo's body, Mezz's call ringing, the welcome's feed
     /// already gone.
     fn up() -> AppState {
         let mut st = begun();
         st.missions.feeds.clear();
         to_the_call(&mut st);
-        assert!(st.missions.call.is_some(), "Dez rings");
+        assert!(st.missions.call.is_some(), "Mezz rings");
         st
     }
 
@@ -474,7 +481,7 @@ mod tests {
     fn said(st: &AppState, line: &str) -> bool {
         st.log
             .iter()
-            .any(|e| e.text == format!("Dez · \u{201c}{line}\u{201d}"))
+            .any(|e| e.text == format!("Mezz · \u{201c}{line}\u{201d}"))
     }
 
     fn voicemail(st: &AppState) -> Option<&crate::credentials::Mail> {
@@ -491,7 +498,7 @@ mod tests {
         let st = up();
         let shown = card(&st);
         for w in [
-            "INCOMING · DEZ",
+            "INCOMING · MEZZ",
             "▂▄▆█",
             "space",
             "answer",
@@ -500,7 +507,7 @@ mod tests {
         ] {
             assert!(shown.contains(w), "{w:?} missing:\n{shown}");
         }
-        let district = super::super::fill(&st, "{dez.district}");
+        let district = super::super::fill(&st, "{mezz.district}");
         let place: String = format!("fixer · {district}").chars().take(30).collect();
         assert!(shown.contains(&place), "{place:?} missing:\n{shown}");
         assert!(shown.contains('●') || shown.contains('○'), "{shown}");
@@ -533,7 +540,7 @@ mod tests {
         ticks(&mut st, 60);
         let shown = card(&st);
         assert_eq!(missing(&first, &shown), Vec::<&str>::new(), "{shown}");
-        for w in ["DEZ · 00:02", "▂▄▆█", "space next", "esc hang up", "▌"] {
+        for w in ["MEZZ · 00:02", "▂▄▆█", "space next", "esc hang up", "▌"] {
             assert!(shown.contains(w), "{w:?} missing:\n{shown}");
         }
         // The face, at the left.
@@ -578,13 +585,13 @@ mod tests {
         assert!(press(&mut st, KeyCode::Esc));
         assert!(st.missions.call.is_none());
         let mail = voicemail(&st).expect("a voicemail");
-        assert_eq!(mail.from, "Dez");
+        assert_eq!(mail.from, "Mezz");
         assert_eq!(mail.body, all);
         assert!(!mail.read);
         assert!(
             st.log
                 .iter()
-                .any(|e| e.text == "Dez · voicemail on your rig")
+                .any(|e| e.text == "Mezz · voicemail on your rig")
         );
         assert!(all.iter().all(|l| !said(&st, l)), "nothing was said");
         assert!(st.missions.runs[0].ended.contains(&3));
@@ -627,7 +634,7 @@ mod tests {
         let second = Call {
             mission: 0,
             step: 1,
-            from: "dez".into(),
+            from: "mezz".into(),
             lines: vec!["Second.".into()],
             rang: 0,
             answered: None,
@@ -643,7 +650,7 @@ mod tests {
         st.missions.feeds.push_back(FeedView {
             mission: 0,
             step: 0,
-            from: "dez".into(),
+            from: "mezz".into(),
             text: vec!["Feed.".into()],
             close: "ok".into(),
         });
@@ -700,7 +707,7 @@ mod tests {
                 "line {i}:\n{shown}"
             );
             assert!(
-                shown.contains("DEZ") && shown.contains("esc hang up"),
+                shown.contains("MEZZ") && shown.contains("esc hang up"),
                 "{shown}"
             );
             // No face: the rows under the header hold text and keys only.
@@ -777,7 +784,7 @@ mod tests {
         assert!(
             st.log
                 .iter()
-                .any(|e| e.text == "Dez · voicemail on your rig")
+                .any(|e| e.text == "Mezz · voicemail on your rig")
         );
         assert!(st.missions.runs[0].ended.contains(&3));
     }

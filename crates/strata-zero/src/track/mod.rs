@@ -466,6 +466,14 @@ fn resolve_story(st: &AppState, mission: usize, step: usize) -> Resolved {
             pos,
             radius: 0,
         }),
+        // The door itself: the trigger holds there and all through the flat, so the
+        // walk ends where it fires and no "there" shows on a corner of the walkway
+        // beside it, where it doesn't.
+        Trigger::At(Where::HomeDoor) => st.home.map(|rig| Target::Spot {
+            place: rig.place(),
+            pos: rig.home.door,
+            radius: 0,
+        }),
         Trigger::At(Where::Work { role, within }) => crate::missions::person_of(st, role)
             .and_then(|p| crate::missions::cast::work_tile(st, p))
             .map(|pos| Target::Spot {
@@ -702,19 +710,16 @@ mod tests {
         assert_eq!(st.missions.runs[m].at, ring);
         assert_eq!(resolve(&st, &story(m, ring)), Resolved::Nowhere);
 
-        let (_, home) = step_of(&st, |t| matches!(t, Trigger::At(Where::Home)));
+        let (_, home) = step_of(&st, |t| matches!(t, Trigger::At(Where::HomeDoor)));
         while st.missions.runs[m].at < home {
             assert!(crate::missions::force(&mut st, m));
         }
         let rig = st.home.unwrap();
-        let (place, pos) = flat_tile(&st).unwrap();
-        assert_eq!(place, rig.place());
-        assert!(rig.home.rect.contains(pos));
         assert_eq!(
             resolve(&st, &story(m, home)),
             Resolved::Target(Target::Spot {
-                place,
-                pos,
+                place: rig.place(),
+                pos: rig.home.door,
                 radius: 0
             })
         );
@@ -1507,5 +1512,53 @@ mod tests {
         assert!(matches!(s.update(&mut st, &[]), ScreenCmd::Switch { .. }));
         assert!(st.track.is_none());
         assert_eq!(st.log.len(), n, "a flatline says nothing of it");
+    }
+
+    #[test]
+    fn home_door_tracks_the_door() {
+        let mut st = outside();
+        let landing = here(&st);
+        st.book = crate::missions::Book::parse(
+            r#"Story(
+                cast: { "mezz": Role(name: "Mezz", title: "fixer", pick: NearestFixer, face: None) },
+                faces: { "silhouette": Face(rows: ["......dd........", "....dmmmmd......"], eye: (255, 255, 255)) },
+                missions: [Mission(id: "door", title: "Door", from: "mezz", steps: [
+                    Step(id: "go", when: NewGame, then: [Objective("Go home")]),
+                    Step(id: "knock", when: At(HomeDoor), then: [Log("knock")]),
+                ])],
+            )"#,
+        )
+        .unwrap();
+        crate::missions::begin(&mut st);
+        let rig = st.home.unwrap();
+        let target = Target::Spot {
+            place: rig.place(),
+            pos: rig.home.door,
+            radius: 0,
+        };
+        assert_eq!(resolve(&st, &story(0, 1)), Resolved::Target(target));
+        // "There" only where the trigger holds: never on the walkway's corners by the
+        // door, where it doesn't.
+        let knock = Trigger::At(Where::HomeDoor);
+        for dy in -2..=2 {
+            for dx in -2..=2 {
+                let pos = rig.home.door.offset(dx, dy);
+                put(&mut st, rig.place(), pos);
+                if arrival(&st, target, target, "home").is_some() {
+                    assert!(knock.fires(&st, 0, None), "there at {pos:?}, not home");
+                }
+            }
+        }
+        // Tracked from the street, then home at the far end of the flat: the step is
+        // done, and the track with it.
+        put(&mut st, STREET, landing);
+        assert!(set(&mut st, story(0, 1)).is_ok());
+        let bed = crate::missions::marks::resolve(&st, &crate::missions::Mark::HomeBed, None);
+        let (place, pos) = bed.unwrap();
+        put(&mut st, place, pos);
+        crate::missions::tick(&mut st);
+        tick(&mut st);
+        assert!(st.track.is_none());
+        assert!(st.log.iter().any(|e| e.text == "knock"));
     }
 }

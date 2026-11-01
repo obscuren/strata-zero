@@ -99,9 +99,28 @@ pub fn deck_rows(st: &AppState) -> Vec<Row> {
     out
 }
 
-/// The dev console's `story`: each role with the person cast in it, then each mission
-/// with its state and the step it waits on.
+/// The dev console's `story`: each role with the person cast in it, each mission with
+/// its state and the step it waits on, then the book's scenes.
 pub fn console_lines(st: &AppState) -> Vec<String> {
+    let mut out = story_lines(st);
+    for (id, scene) in &st.book.scenes {
+        let look = match scene.look {
+            super::Look::Film => "film",
+            super::Look::Bubbles => "bubbles",
+        };
+        let n = scene.beats.len();
+        let beats = if n == 1 { "beat" } else { "beats" };
+        let then = scene
+            .next
+            .as_ref()
+            .map_or_else(String::new, |next| format!(" · then {next}"));
+        out.push(format!("scene {id} · {look} · {n} {beats}{then}"));
+    }
+    out
+}
+
+/// The cast and the missions, for `console_lines`.
+fn story_lines(st: &AppState) -> Vec<String> {
     if !st.missions.begun {
         return vec!["the story has not begun in this city".to_string()];
     }
@@ -198,7 +217,7 @@ mod tests {
     fn the_pane_shows_the_drop_above_the_job() {
         let st = open_drop();
         let story = pane_lines(&st);
-        assert_eq!(text(&story[0]), " THE DROP · Dez · story");
+        assert_eq!(text(&story[0]), " THE DROP · Mezz · story");
         assert_eq!(story[0].spans[1].style.fg, Some(MAGENTA));
         assert_eq!(story[0].spans[2].style.fg, Some(DIM));
         assert!(text(&story[1]).starts_with(" » Hand the package to "));
@@ -256,13 +275,13 @@ mod tests {
             .insert(0, "Walk to the corner".into());
         let d = detail(&st, 0);
         assert_eq!(text(&d[0]), "The drop");
-        assert_eq!(text(&d[1]), "from Dez · story · open");
+        assert_eq!(text(&d[1]), "from Mezz · story · open");
         assert_eq!(text(&d[3]), "☑ Walk to the corner");
         assert_eq!(d[3].spans[0].style.fg, Some(DIM));
         assert!(text(&d[4]).starts_with("☐ Hand the package"));
         st.missions.runs[0].state = RunState::Done { at: 5 };
         let d = detail(&st, 0);
-        assert_eq!(text(&d[1]), "from Dez · story · done");
+        assert_eq!(text(&d[1]), "from Mezz · story · done");
         assert!(text(&d[4]).starts_with("☑ "));
     }
 }

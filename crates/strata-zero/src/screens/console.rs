@@ -661,7 +661,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             Ok(line)
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · job fetch|copy|plant|deliver · standing <n> · jobs · target <name> · eyes · light · ripper · foe [n] · dummy [n] · foes · throw <item> [n] · live · story [fire <mission> | feed | call] · track [off | <x> <y> | <name>] · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · job fetch|copy|plant|deliver · standing <n> · jobs · target <name> · eyes · light · ripper · foe [n] · dummy [n] · foes · throw <item> [n] · live · story [fire <mission> | scene <id> | skip | feed | call] · track [off | <x> <y> | <name>] · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),
@@ -750,10 +750,11 @@ fn track(st: &mut AppState, args: &[&str]) -> Result<String, String> {
     }
 }
 
-/// `story`: the cast and missions; `fire <mission>` runs its waiting step; `feed` and
-/// `call` queue a test feed or ring a test call from the first role with a face.
+/// `story`: the cast, missions and scenes; `fire <mission>` runs its waiting step;
+/// `scene <id>` plays a scene, `skip` skips the one playing; `feed` and `call` queue a
+/// test feed or ring a test call from the first role with a face.
 fn story(st: &mut AppState, args: &[&str]) -> Result<String, String> {
-    let usage = "story [fire <mission> | feed | call]";
+    let usage = "story [fire <mission> | scene <id> | skip | feed | call]";
     let test_role = || {
         st.book
             .cast
@@ -778,6 +779,20 @@ fn story(st: &mut AppState, args: &[&str]) -> Result<String, String> {
                 return Err(format!("nothing waits in {id}"));
             }
             Ok(format!("fired {id}"))
+        }
+        ["scene", id] => {
+            if !st.book.scenes.contains_key(*id) {
+                return Err(format!("unknown scene {id}"));
+            }
+            crate::missions::scene::play(st, id);
+            Ok(format!("playing {id}"))
+        }
+        ["skip"] => {
+            let id = crate::missions::scene::running(st)
+                .map(|r| r.id().to_string())
+                .ok_or_else(|| "no scene is playing".to_string())?;
+            crate::missions::scene::skip(st);
+            Ok(format!("skipped {id}"))
         }
         ["feed"] => {
             let from = test_role()?;
@@ -834,7 +849,7 @@ pub fn complete(st: &AppState, head: &str, word: &str) -> Vec<String> {
             .filter(|id| id.starts_with(word))
             .collect()
     } else if head.trim() == "story" {
-        ["fire", "feed", "call"]
+        ["fire", "scene", "skip", "feed", "call"]
             .iter()
             .filter(|c| c.starts_with(word))
             .map(|c| c.to_string())
@@ -855,6 +870,13 @@ pub fn complete(st: &AppState, head: &str, word: &str) -> Vec<String> {
             .iter()
             .map(|m| m.id.clone())
             .filter(|id| id.starts_with(word))
+            .collect()
+    } else if head.trim() == "story scene" {
+        st.book
+            .scenes
+            .keys()
+            .filter(|id| id.starts_with(word))
+            .cloned()
             .collect()
     } else if head.trim() == "target" {
         let want = word.to_lowercase();
@@ -1128,7 +1150,7 @@ mod tests {
     fn story_lists_the_cast_and_missions() {
         let (mut st, at) = story_state();
         let out = run(&mut st, at, "story").unwrap();
-        assert!(out.contains("dez"), "{out}");
+        assert!(out.contains("mezz"), "{out}");
         assert!(out.contains("the_drop"), "{out}");
         assert!(out.contains("waits on"), "{out}");
         assert_eq!(complete(&st, "", "sto"), vec!["story".to_string()]);
@@ -1155,6 +1177,60 @@ mod tests {
                 .contains("unknown mission")
         );
         assert!(complete(&st, "story", "fi").contains(&"fire".to_string()));
+    }
+
+    #[test]
+    fn story_scene_plays_and_skip_skips() {
+        use crate::missions::{Beat, Look, Pace, Scene, scene};
+        let (mut st, at) = story_state();
+        let aside = Scene {
+            title: "Aside".into(),
+            look: Look::Bubbles,
+            pace: Pace {
+                chars: 45.0,
+                walk: 0.3,
+                hold: None,
+            },
+            beats: vec![Beat::Stage("A stage line.".into()), Beat::Wait(1.0)],
+            next: None,
+        };
+        let mut film = aside.clone();
+        film.look = Look::Film;
+        film.next = Some("aside".into());
+        st.book.scenes.insert("aside".into(), aside);
+        st.book.scenes.insert("film".into(), film);
+        let out = run(&mut st, at, "story").unwrap();
+        // The aside names no next; the film names the aside.
+        assert!(
+            out.contains(
+                "scene aside · bubbles · 2 beats · scene film · film · 2 beats · then aside"
+            ),
+            "{out}"
+        );
+        assert!(
+            run(&mut st, at, "story scene nope")
+                .unwrap_err()
+                .contains("unknown scene")
+        );
+        assert_eq!(
+            run(&mut st, at, "story skip").unwrap_err(),
+            "no scene is playing"
+        );
+        assert_eq!(
+            run(&mut st, at, "story scene aside").unwrap(),
+            "playing aside"
+        );
+        crate::missions::tick(&mut st);
+        assert_eq!(scene::running(&st).map(|r| r.id()), Some("aside"));
+        assert_eq!(run(&mut st, at, "story skip").unwrap(), "skipped aside");
+        assert!(scene::running(&st).is_none());
+        let words = complete(&st, "story", "s");
+        assert!(words.contains(&"scene".to_string()) && words.contains(&"skip".to_string()));
+        assert_eq!(
+            complete(&st, "story scene", "as"),
+            vec!["aside".to_string()]
+        );
+        assert!(run(&mut st, at, "help").unwrap().contains("scene <id>"));
     }
 
     #[test]

@@ -27,6 +27,7 @@ enum Flash {
     Refused(u64),
 }
 
+#[derive(Clone, Debug)]
 pub struct Keypad {
     look: Look,
     building: BuildingId,
@@ -39,6 +40,9 @@ pub struct Keypad {
     known: Option<u16>,
     typed: Vec<u8>,
     flash: Flash,
+    /// Drawn by a scene: it never asks `credentials`, never pops itself and holds its
+    /// verdict on the glass.
+    scripted: bool,
 }
 
 /// Where key `i` of the grid sits inside the device rect: three a row, a row of
@@ -61,7 +65,32 @@ impl Keypad {
             known: st.journal.code_for(building, level, number).map(|c| c.code),
             typed: Vec::new(),
             flash: Flash::None,
+            scripted: false,
         }
+    }
+
+    /// The pad of that flat with nothing typed, for a scene to type on.
+    pub fn scripted(st: &AppState, building: BuildingId, level: i32, number: u16) -> Keypad {
+        Keypad {
+            scripted: true,
+            ..Keypad::open(st, building, level, number)
+        }
+    }
+
+    /// A digit appears on the display (the first four only).
+    pub fn show_digit(&mut self, d: u8) {
+        if self.typed.len() < 4 {
+            self.typed.push(d);
+        }
+    }
+
+    /// Flashes OPEN or DENIED as the real pad does; nothing else is touched.
+    pub fn show_verdict(&mut self, open: bool, tick: u64) {
+        self.flash = if open {
+            Flash::Open(tick)
+        } else {
+            Flash::Denied(tick)
+        };
     }
 
     #[cfg(test)]
@@ -123,6 +152,9 @@ fn pop() -> ScreenCmd {
 
 impl Screen for Keypad {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+        if self.scripted {
+            return ScreenCmd::Stay;
+        }
         if let Flash::Open(t) = self.flash {
             if !keys.is_empty() || st.tick > t + OPEN_TICKS {
                 return pop();
@@ -163,10 +195,11 @@ impl Screen for Keypad {
         // The reading on the glass, its colour, and whether the glass glitches.
         let (led, reading, glitch) = match (self.flash, locked) {
             (Flash::Open(_), _) => (Led::Ok, Some(("OPEN".to_string(), self.look.text())), None),
-            (Flash::Denied(t), _) if tick <= t + DENIED_TICKS => (
+            (Flash::Denied(t), _) if self.scripted || tick <= t + DENIED_TICKS => (
                 Led::Fail,
                 Some(("DENIED".to_string(), device::DENY)),
-                Some((tick.saturating_sub(t)) as f32 / DENIED_TICKS as f32),
+                // The glitch runs its frames; a scripted pad keeps the word after.
+                Some(tick.saturating_sub(t) as f32 / DENIED_TICKS as f32).filter(|p| *p <= 1.0),
             ),
             (_, Some(until)) => (
                 Led::Fail,
@@ -414,5 +447,50 @@ mod tests {
             text.contains("[1][_][_][_]") && !text.contains("DENIED"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn scripted_digits_show() {
+        let (st, b, level, number, _) = state();
+        let mut k = Keypad::scripted(&st, b, level, number);
+        assert!(draw(&k, &st).contains("[_][_][_][_]"));
+        for d in [4, 0, 7, 2, 9] {
+            k.show_digit(d);
+        }
+        assert_eq!(k.typed(), &[4, 0, 7, 2]);
+        assert!(draw(&k, &st).contains("[4][0][7][2]"));
+    }
+
+    #[test]
+    fn scripted_verdict_touches_nothing() {
+        let (mut st, b, level, number, _) = state();
+        let mut k = Keypad::scripted(&st, b, level, number);
+        let codes = st.journal.codes().len();
+        let state = st.journal.keypad(b, level, number);
+        let log = st.log.len();
+        for d in [0, 0, 0, 0] {
+            k.show_digit(d);
+        }
+        k.show_verdict(false, st.tick);
+        assert_eq!(st.journal.codes().len(), codes);
+        assert_eq!(st.journal.keypad(b, level, number), state);
+        assert_eq!(st.log.len(), log);
+        // It never pops itself, whatever the frame ticks do.
+        st.tick += OPEN_TICKS * 10;
+        assert!(matches!(k.update(&mut st, &[]), ScreenCmd::Stay));
+    }
+
+    #[test]
+    fn scripted_denied_holds() {
+        let (mut st, b, level, number, _) = state();
+        let mut k = Keypad::scripted(&st, b, level, number);
+        let t = st.tick;
+        k.show_verdict(false, t);
+        assert!(draw(&k, &st).contains("DENIED"));
+        st.tick = t + 100;
+        let text = draw(&k, &st);
+        assert!(text.contains("DENIED") && !text.contains("[_]"), "{text}");
+        k.show_verdict(true, t);
+        assert!(draw(&k, &st).contains("OPEN"));
     }
 }

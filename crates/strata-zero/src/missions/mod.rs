@@ -3,7 +3,8 @@
 //!
 //! Owns the runtime (`Missions`, `Run`, `begin`, `send`, `tick`, `end`), the book's
 //! types (`content`), casting (`cast`), what a step does (`effects`), and what the
-//! player sees: the HOLO feed and call (`feed`, `call`, `face`) and the JOBS lines (`ui`).
+//! player sees: the HOLO feed and call (`feed`, `call`, `face`), the scenes played on
+//! the map (`scene`, with `marks` and `visitors`) and the JOBS lines (`ui`).
 //! No mission, step or role id appears in Rust outside tests; the book names them.
 //!
 //! Adding a block (spec `docs/superpowers/specs/2026-10-31-story-missions-design.md`, 15):
@@ -14,13 +15,19 @@
 //!   `Book::validate`. Test it.
 //! - A pick: a variant on `Pick` and its arm in `cast::pick`.
 
+pub mod bubbles;
 pub mod call;
 pub mod cast;
 pub mod content;
 pub mod effects;
 pub mod face;
 pub mod feed;
+pub mod film;
+pub mod marks;
+pub mod overlay;
+pub mod scene;
 pub mod ui;
+pub mod visitors;
 
 pub use content::*;
 
@@ -47,6 +54,14 @@ pub struct Missions {
     pub calls: VecDeque<Call>,
     /// The story has begun in this city.
     pub begun: bool,
+    /// The authored people standing on the map, in the order they arrived.
+    pub visitors: Vec<visitors::Visitor>,
+    /// How bright your flat is; `None` is normal.
+    pub lights: Option<f32>,
+    /// Scenes queued by `Effect::Scene`: mission, step, scene id.
+    pub scenes: VecDeque<(usize, usize, String)>,
+    /// The scene playing.
+    pub scene: Option<scene::SceneRun>,
 }
 
 /// Where one mission stands.
@@ -146,7 +161,12 @@ pub fn begin(st: &mut AppState) {
         .map(|m| Run {
             at: 0,
             since: now,
-            state: if m.roles().iter().all(|r| st.missions.cast.contains_key(r)) {
+            state: if st
+                .book
+                .needs_cast(m)
+                .iter()
+                .all(|r| st.missions.cast.contains_key(r))
+            {
                 RunState::Waiting
             } else {
                 RunState::Uncast
@@ -161,7 +181,7 @@ pub fn begin(st: &mut AppState) {
             .book
             .cast
             .keys()
-            .filter(|r| !st.missions.cast.contains_key(*r))
+            .filter(|r| !st.book.is_visitor(r) && !st.missions.cast.contains_key(*r))
             .cloned()
             .collect();
         for role in uncast {
@@ -182,14 +202,15 @@ pub fn send(st: &mut AppState, ev: Event) {
     fire(st, Some(&ev));
 }
 
-/// The story's beat in the explore update: the conditions checked, the call's ring
-/// timed.
+/// The story's beat in the explore update: the conditions checked, the scene played,
+/// the call's ring timed.
 pub fn tick(st: &mut AppState) {
     fire(st, None);
+    scene::tick(st);
     call::tick(st);
 }
 
-/// The feed or call that step `step` of mission `mission` opened has ended.
+/// The feed, call or scene that step `step` of mission `mission` opened has ended.
 pub fn end(st: &mut AppState, mission: usize, step: usize) {
     if let Some(run) = st.missions.runs.get_mut(mission) {
         run.ended.insert(step);
@@ -337,6 +358,12 @@ fn at(st: &AppState, place: &Where) -> bool {
         Where::Home => st
             .home
             .is_some_and(|rig| p.place == rig.place() && rig.home.rect.contains(p.pos)),
+        // Home: in the flat, or walking up to its door (the walkway one tile from it, the
+        // doorway itself).
+        Where::HomeDoor => st.home.is_some_and(|rig| {
+            p.place == rig.place()
+                && (rig.home.rect.contains(p.pos) || p.pos.manhattan(rig.home.door) <= 1)
+        }),
         Where::Work { role, within } => {
             p.place == Place::Stratum(StratumKind::Street)
                 && person_of(st, role)
@@ -376,8 +403,12 @@ pub fn fill(st: &AppState, text: &str) -> String {
     out
 }
 
-/// What one slot says: the role's name, or one of `SLOT_FIELDS`.
+/// What one slot says: the player's handle for `{you}`, the role's name, or one of
+/// `SLOT_FIELDS`.
 fn slot_text(st: &AppState, role: &str, field: Option<&str>) -> Option<String> {
+    if role == YOU && field.is_none() {
+        return Some(st.character.handle.clone());
+    }
     let r = st.book.cast.get(role)?;
     let Some(field) = field else {
         return Some(r.name.clone());
@@ -408,7 +439,7 @@ pub fn role_name(st: &AppState, role: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::jobs::testutil::state_home;
     use crate::render::map::MapRef;
@@ -469,7 +500,7 @@ mod tests {
         Book::parse(&format!(
             r#"Story(
                 cast: {{
-                    "dez": Role(name: "Dez", title: "fixer", pick: NearestFixer, face: None),
+                    "mezz": Role(name: "Mezz", title: "fixer", pick: NearestFixer, face: None),
                     "marlo": Role(name: "Marlo", title: "cook", face: None,
                         pick: Worker(professions: ["noodle_cook"], at: [], range: (30, 140))),
                 }},
@@ -486,7 +517,7 @@ mod tests {
         person_of(st, "marlo").expect("marlo is cast")
     }
 
-    /// The welcome closed and the body seen, a minute on: Dez's call is up.
+    /// The welcome closed and the body seen, a minute on: Mezz's call is up.
     pub(super) fn to_the_call(st: &mut AppState) {
         end(st, 0, 0);
         let body = st.missions.bodies[0].pos;
@@ -500,10 +531,10 @@ mod tests {
     fn roles_include_a_talk_role() {
         let b = book(
             r#"Mission(id: "chat", title: "Chat", from: "marlo", steps: [
-                Step(id: "hello", when: Talk("dez"), then: [Log("hi")]),
+                Step(id: "hello", when: Talk("mezz"), then: [Log("hi")]),
             ])"#,
         );
-        assert!(b.missions[0].roles().contains("dez"));
+        assert!(b.missions[0].roles().contains("mezz"));
     }
 
     #[test]
@@ -530,22 +561,25 @@ mod tests {
     }
 
     #[test]
-    fn begin_casts_dez_and_marlo_and_queues_the_welcome() {
+    fn begin_casts_mezz_and_marlo_and_queues_the_welcome() {
         let st = begun();
-        let dez = person_of(&st, "dez").expect("dez is cast");
+        let mezz = person_of(&st, "mezz").expect("mezz is cast");
         let marlo = marlo(&st);
-        assert_ne!(dez, marlo);
+        assert_ne!(mezz, marlo);
         let door = door(&st);
-        assert_eq!(Some(dez), crate::jobs::nearest_fixer(&st, door));
+        assert_eq!(Some(mezz), crate::jobs::nearest_fixer(&st, door));
         let people = st.world.as_ref().unwrap().people();
-        assert_eq!(people[dez.0 as usize].name, "Dez");
+        assert_eq!(people[mezz.0 as usize].name, "Mezz");
         assert_eq!(people[marlo.0 as usize].name, "Marlo");
         assert_eq!(people[marlo.0 as usize].profession, "noodle_cook");
         let d = cast::work_tile(&st, marlo).unwrap().manhattan(door);
         assert!((30..=140).contains(&d), "Marlo works {d} from home");
         assert_eq!(st.missions.feeds.len(), 1);
         let feed = &st.missions.feeds[0];
-        assert_eq!((feed.mission, feed.step, feed.from.as_str()), (0, 0, "dez"));
+        assert_eq!(
+            (feed.mission, feed.step, feed.from.as_str()),
+            (0, 0, "mezz")
+        );
         assert!(feed.text[1].contains("Marlo"), "{:?}", feed.text);
         assert!(
             !feed.text.iter().any(|t| t.contains('{')),
@@ -677,7 +711,7 @@ mod tests {
     }
 
     #[test]
-    fn seeing_the_body_then_a_minute_rings_dez() {
+    fn seeing_the_body_then_a_minute_rings_mezz() {
         let mut st = begun();
         end(&mut st, 0, 0);
         // Out of sight, nothing.
@@ -696,8 +730,11 @@ mod tests {
         assert!(st.missions.call.is_none());
         advance(&mut st, 1);
         tick(&mut st);
-        let call = st.missions.call.as_ref().expect("Dez rings");
-        assert_eq!((call.mission, call.step, call.from.as_str()), (0, 3, "dez"));
+        let call = st.missions.call.as_ref().expect("Mezz rings");
+        assert_eq!(
+            (call.mission, call.step, call.from.as_str()),
+            (0, 3, "mezz")
+        );
         assert_eq!(call.lines.len(), 3);
         assert!(
             call.lines[1].starts_with("Marlo was meant"),
@@ -709,7 +746,7 @@ mod tests {
     }
 
     #[test]
-    fn ending_the_call_sets_get_home_and_home_closes_it() {
+    fn ending_the_call_sets_get_home_and_your_door_closes_it() {
         let mut st = begun();
         to_the_call(&mut st);
         end(&mut st, 0, 3);
@@ -722,24 +759,13 @@ mod tests {
         // Still on the street: not home.
         tick(&mut st);
         assert_eq!(st.missions.runs[0].state, RunState::Open);
-        let rig = st.home.unwrap();
-        let p = st.player.as_mut().unwrap();
-        p.place = rig.place();
-        p.pos = rig.home.bed_side;
-        assert!(rig.home.rect.contains(p.pos));
+        let (place, pos) = marks::resolve(&st, &Mark::HomeOutside, None).unwrap();
+        st.player = Some(Player::at(place, pos));
         tick(&mut st);
         assert!(matches!(st.missions.runs[0].state, RunState::Done { .. }));
-        let mail = st.journal.mails.last().unwrap();
-        assert_eq!(
-            (mail.from.as_str(), mail.subject.as_str()),
-            ("Dez", "lay low")
-        );
-        assert_eq!(mail.body.len(), 3);
-        assert!(
-            st.log
-                .iter()
-                .any(|e| e.text == "The drop · home · Dez will call")
-        );
+        assert!(st.log.iter().any(|e| e.text == "The drop · home"));
+        // The mail waits for the house call.
+        assert!(st.journal.mails.iter().all(|m| m.subject != "lay low"));
         assert_eq!(st.character.count(&ItemId::new("taped_package")), 1);
     }
 
@@ -793,10 +819,10 @@ mod tests {
     fn mission_done_after_minutes_starts_the_next() {
         let mut st = state_home();
         st.book = book(
-            r#"Mission(id: "first", title: "First", from: "dez", steps: [
+            r#"Mission(id: "first", title: "First", from: "mezz", steps: [
                 Step(id: "start", when: NewGame, then: [Objective("Meet {marlo}")]),
             ]),
-            Mission(id: "second", title: "Second", from: "dez", steps: [
+            Mission(id: "second", title: "Second", from: "mezz", steps: [
                 Step(id: "later", when: MissionDone(mission: "first", minutes: 5), then: [
                     Objective("Later"),
                 ]),
@@ -821,7 +847,7 @@ mod tests {
     fn at_work_fires_near_the_role() {
         let mut st = state_home();
         st.book = book(
-            r#"Mission(id: "visit", title: "Visit", from: "dez", steps: [
+            r#"Mission(id: "visit", title: "Visit", from: "mezz", steps: [
                 Step(id: "go", when: NewGame, then: [Objective("Find {marlo} at {marlo.place}")]),
                 Step(id: "there", when: At(Work(role: "marlo", within: 3)), then: [
                     Log("at `{marlo.place}`"),
@@ -846,7 +872,7 @@ mod tests {
     fn talking_to_the_role_fires_and_take_takes() {
         let mut st = state_home();
         st.book = book(
-            r#"Mission(id: "hand", title: "Hand", from: "dez", steps: [
+            r#"Mission(id: "hand", title: "Hand", from: "mezz", steps: [
                 Step(id: "get", when: NewGame, then: [Give(item: "taped_package", count: 2)]),
                 Step(id: "give", when: Talk("marlo"), then: [Take(item: "taped_package", count: 1)]),
             ])"#,
@@ -854,10 +880,10 @@ mod tests {
         begin(&mut st);
         let id = ItemId::new("taped_package");
         assert_eq!(st.character.count(&id), 2);
-        let dez = person_of(&st, "dez").unwrap();
+        let mezz = person_of(&st, "mezz").unwrap();
         let marlo = marlo(&st);
-        assert!(listens(&st, marlo) && !listens(&st, dez));
-        send(&mut st, Event::Talked(dez));
+        assert!(listens(&st, marlo) && !listens(&st, mezz));
+        send(&mut st, Event::Talked(mezz));
         assert_eq!(st.character.count(&id), 2);
         send(&mut st, Event::Talked(marlo));
         assert_eq!(st.character.count(&id), 1);
@@ -868,11 +894,11 @@ mod tests {
     #[test]
     fn fill_fills_every_slot() {
         let st = begun();
-        let dez = person_of(&st, "dez").unwrap();
-        let hours = crate::jobs::hours_text(st.world.as_ref().unwrap().work_hours(dez).unwrap());
-        assert_eq!(fill(&st, "{dez} the {dez.title}"), "Dez the fixer");
-        assert_eq!(fill(&st, "at {dez.place}"), "at the corner");
-        assert_eq!(fill(&st, "{dez.hours}"), hours);
+        let mezz = person_of(&st, "mezz").unwrap();
+        let hours = crate::jobs::hours_text(st.world.as_ref().unwrap().work_hours(mezz).unwrap());
+        assert_eq!(fill(&st, "{mezz} the {mezz.title}"), "Mezz the fixer");
+        assert_eq!(fill(&st, "at {mezz.place}"), "at the corner");
+        assert_eq!(fill(&st, "{mezz.hours}"), hours);
         let district = fill(&st, "{marlo.district}");
         let tile = cast::work_tile(&st, marlo(&st)).unwrap();
         let city = st.city.as_ref().unwrap();
@@ -884,5 +910,343 @@ mod tests {
         assert_eq!(district, want.name);
         assert!(!fill(&st, "{marlo.place}").contains('{'));
         assert_eq!(fill(&st, "no slots"), "no slots");
+    }
+
+    /// The shipped cast's picks and a visitor, with these missions.
+    fn book_with_visitor(missions: &str) -> Book {
+        Book::parse(&format!(
+            r#"Story(
+                cast: {{
+                    "mezz": Role(name: "Mezz", title: "fixer", pick: NearestFixer, face: None),
+                    "seren": Role(name: "Seren", title: "doc", pick: Visitor, face: None),
+                }},
+                faces: {{
+                    "silhouette": Face(rows: ["......dd........", "....dmmmmd......"], eye: (255, 255, 255)),
+                }},
+                missions: [{missions}],
+            )"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn at_home_door_fires_at_the_door_and_inside() {
+        // Whether `At(HomeDoor)` fires with you standing on the mark.
+        let knocks = |mark: Option<Mark>| {
+            let mut st = state_home();
+            st.book = book(
+                r#"Mission(id: "door", title: "Door", from: "mezz", steps: [
+                    Step(id: "go", when: NewGame, then: [Objective("Go home")]),
+                    Step(id: "knock", when: At(HomeDoor), then: [Log("knock")]),
+                ])"#,
+            );
+            begin(&mut st);
+            match mark {
+                Some(mark) => {
+                    let (place, pos) = marks::resolve(&st, &mark, None).unwrap();
+                    st.player = Some(Player::at(place, pos));
+                }
+                None => {
+                    let below = door(&st);
+                    on_street(&mut st, below);
+                }
+            }
+            tick(&mut st);
+            let done = matches!(st.missions.runs[0].state, RunState::Done { .. });
+            assert_eq!(done, st.log.iter().any(|e| e.text == "knock"));
+            done
+        };
+        // Home is home: the walkway at the door, the doorway, anywhere in the flat.
+        assert!(knocks(Some(Mark::HomeOutside)));
+        assert!(knocks(Some(Mark::HomeDoor)));
+        assert!(knocks(Some(Mark::HomeInside(1))));
+        assert!(knocks(Some(Mark::HomeBed)));
+        // On the street below is not.
+        assert!(!knocks(None));
+    }
+
+    #[test]
+    fn arriving_you_drops_an_aimed_walk() {
+        let mut st = state_home();
+        st.book = book(
+            r#"Mission(id: "cut", title: "Cut", from: "mezz", steps: [
+                Step(id: "go", when: NewGame, then: [Objective("Go home")]),
+                Step(id: "out", when: At(Home), then: [Arrive(role: "you", at: HomeOutside)]),
+            ])"#,
+        );
+        begin(&mut st);
+        let mut map = crate::screens::explore::MapScreen::walking(&mut st);
+        let (place, pos) = marks::resolve(&st, &Mark::HomeInside(1), None).unwrap();
+        st.player = Some(Player::at(place, pos));
+        // A fight on foot, where an aimed walk outlasts the frame.
+        crate::net::engage(&mut st, place, true);
+        map.walking = Some(crate::screens::explore::Walk {
+            path: vec![pos.offset(0, 1)],
+            next_at: u64::MAX,
+        });
+        crate::app::Screen::update(&mut map, &mut st, &[]);
+        let out = marks::resolve(&st, &Mark::HomeOutside, None).unwrap();
+        let me = st.player.as_ref().unwrap();
+        assert_eq!((me.place, me.pos), out);
+        assert!(map.walking.is_none(), "no walk goes on from where you were");
+    }
+
+    #[test]
+    fn a_visitor_from_is_never_uncast() {
+        let mut st = state_home();
+        st.book = book_with_visitor(
+            r#"Mission(id: "call", title: "Call", from: "seren", steps: [
+                Step(id: "go", when: NewGame, then: [Objective("Wait")]),
+                Step(id: "later", when: After(minutes: 600), then: [Log("later")]),
+            ])"#,
+        );
+        begin(&mut st);
+        assert!(!st.missions.cast.contains_key("seren"));
+        assert_eq!(st.missions.runs[0].state, RunState::Open);
+    }
+
+    #[test]
+    fn you_fills_with_the_handle() {
+        let mut st = state_home();
+        st.character.handle = "D'SHAWN".into();
+        assert_eq!(fill(&st, "hello {you}, {you}"), "hello D'SHAWN, D'SHAWN");
+        // Only the plain slot: `{you.title}` stays as written.
+        assert_eq!(fill(&st, "{you.title}"), "{you.title}");
+    }
+
+    /// The drop run through its last step, you standing at your door, the house call's
+    /// film queued.
+    pub(crate) fn at_your_door() -> AppState {
+        let mut st = begun();
+        st.character.handle = "VEX".into();
+        to_the_call(&mut st);
+        end(&mut st, 0, 3);
+        let (place, pos) = marks::resolve(&st, &Mark::HomeOutside, None).unwrap();
+        st.player = Some(Player::at(place, pos));
+        tick(&mut st);
+        st
+    }
+
+    fn visitor_at(st: &AppState, mark: &Mark) -> Option<String> {
+        let (place, pos) = marks::resolve(st, mark, None).unwrap();
+        visitors::at(st, place, pos).map(|v| v.role.clone())
+    }
+
+    /// The house call's flat as the film opens: dim, Castellan on the couch, Seren at
+    /// your rig.
+    fn the_stage_is_set(st: &AppState) {
+        assert_eq!(scene::running(st).map(|r| r.id()), Some("house_call"));
+        assert_eq!(
+            visitor_at(st, &Mark::HomeFurniture(citygen::Furniture::Couch)).as_deref(),
+            Some("castellan")
+        );
+        let (place, pos) = marks::resolve(st, &Mark::HomeRig, None).unwrap();
+        let seren = st
+            .missions
+            .visitors
+            .iter()
+            .find(|v| v.role == "seren")
+            .expect("seren is in");
+        assert_eq!(seren.place, place);
+        assert!(seren.pos.manhattan(pos) <= 1, "{:?} by {pos:?}", seren.pos);
+        assert_eq!(st.missions.lights, Some(0.45));
+    }
+
+    #[test]
+    fn the_drop_ends_at_your_door() {
+        let mut st = at_your_door();
+        assert!(matches!(st.missions.runs[0].state, RunState::Done { .. }));
+        assert_eq!(st.missions.runs[1].state, RunState::Open);
+        tick(&mut st);
+        the_stage_is_set(&st);
+    }
+
+    #[test]
+    fn the_house_call_played_alone_sets_its_own_stage() {
+        // As the console plays it: no mission step has put anyone in the flat.
+        let mut st = begun();
+        scene::play(&mut st, "house_call");
+        tick(&mut st);
+        the_stage_is_set(&st);
+    }
+
+    #[test]
+    fn the_house_call_played_alone_ends_with_seren_s_aside() {
+        let mut st = begun();
+        scene::play(&mut st, "house_call");
+        tick(&mut st);
+        assert!(scene::tests::press(&mut st, crossterm::event::KeyCode::Esc));
+        tick(&mut st);
+        assert_eq!(scene::running(&st).map(|r| r.id()), Some("seren_aside"));
+        assert!(scene::tests::press(&mut st, crossterm::event::KeyCode::Esc));
+        tick(&mut st);
+        assert!(scene::running(&st).is_none());
+        assert!(st.missions.visitors.is_empty(), "Seren has gone");
+        assert_eq!(st.missions.lights, None);
+        // Played for no step: the house call's mission has not moved.
+        assert!(st.missions.runs[1].ended.is_empty());
+    }
+
+    /// Mezz's call over with you already standing on `mark`, home before he told you to
+    /// go: the drop's last steps run as the call ends.
+    fn home_early(mark: &Mark) -> AppState {
+        let mut st = begun();
+        st.character.handle = "VEX".into();
+        to_the_call(&mut st);
+        let (place, pos) = marks::resolve(&st, mark, None).unwrap();
+        st.player = Some(Player::at(place, pos));
+        scene::tests::see(&mut st);
+        end(&mut st, 0, 3);
+        st
+    }
+
+    #[test]
+    fn home_early_the_film_opens_at_your_door() {
+        for mark in [Mark::HomeInside(1), Mark::HomeDoor, Mark::HomeBed] {
+            let mut st = home_early(&mark);
+            assert!(
+                matches!(st.missions.runs[0].state, RunState::Done { .. }),
+                "{mark:?}: the drop ends at once"
+            );
+            tick(&mut st);
+            assert_eq!(
+                scene::running(&st).map(|r| r.id()),
+                Some("house_call"),
+                "{mark:?}"
+            );
+            // Cut to the walkway outside, seeing from it.
+            let out = marks::resolve(&st, &Mark::HomeOutside, None).unwrap();
+            let me = st.player.as_ref().unwrap();
+            assert_eq!((me.place, me.pos), out, "{mark:?}");
+            assert_eq!(me.vis().get(out.1), Some(&Visibility::Visible));
+            assert_eq!(
+                visitor_at(&st, &Mark::HomeFurniture(citygen::Furniture::Couch)).as_deref(),
+                Some("castellan"),
+                "{mark:?}"
+            );
+            let (_, rig) = marks::resolve(&st, &Mark::HomeRig, None).unwrap();
+            let seren = st.missions.visitors.iter().find(|v| v.role == "seren");
+            assert!(
+                seren.is_some_and(|s| s.pos.chebyshev(rig) <= 1 && s.pos != me.pos),
+                "{mark:?}: {seren:?} by {rig:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn home_early_on_the_rig_side_seren_still_takes_the_rig() {
+        // The film puts you on the walkway before anyone comes in, so the tile you
+        // held is hers again.
+        let mut st = home_early(&Mark::HomeRig);
+        tick(&mut st);
+        the_stage_is_set(&st);
+        let seren = st
+            .missions
+            .visitors
+            .iter()
+            .find(|v| v.role == "seren")
+            .expect("seren is in");
+        let map = crate::render::map::MapRef::for_place(
+            st.city.as_ref().unwrap(),
+            &st.interiors,
+            &st.constructs,
+            seren.place,
+            st.minute_of_day(),
+        )
+        .unwrap();
+        assert!(crate::render::map::TileMap::walkable(&map, seren.pos));
+    }
+
+    #[test]
+    fn skipping_the_house_call() {
+        let mut st = at_your_door();
+        tick(&mut st);
+        assert!(scene::tests::press(&mut st, crossterm::event::KeyCode::Esc));
+        tick(&mut st);
+        assert_eq!(scene::running(&st).map(|r| r.id()), Some("seren_aside"));
+        assert!(scene::tests::press(&mut st, crossterm::event::KeyCode::Esc));
+        assert!(scene::running(&st).is_none());
+        assert!(st.missions.visitors.is_empty());
+        assert_eq!(st.missions.lights, None);
+        assert_eq!(
+            st.missions.runs[1].objectives.last().map(String::as_str),
+            Some("Sleep · Castellan will be in touch")
+        );
+        assert!(st.journal.mails.iter().all(|m| m.subject != "lay low"));
+        advance(&mut st, 2);
+        tick(&mut st);
+        let mail = st.journal.mails.last().unwrap();
+        assert_eq!(
+            (mail.from.as_str(), mail.subject.as_str()),
+            ("Mezz", "lay low")
+        );
+        assert_eq!(mail.body.len(), 3, "{:?}", mail.body);
+        assert_eq!(mail.body[0], "You made it home. Good.");
+        // Every line of both scenes is in the log, once.
+        for id in ["house_call", "seren_aside"] {
+            for beat in &st.book.scenes[id].beats {
+                let Beat::Say { text, .. } = beat else {
+                    continue;
+                };
+                let text = fill(&st, text);
+                let n = st.log.iter().filter(|e| e.text.contains(&text)).count();
+                assert_eq!(n, 1, "{text}");
+            }
+        }
+    }
+
+    #[test]
+    fn playing_the_house_call_through() {
+        // At your door, the film queued and not yet begun.
+        let mut st = home_early(&Mark::HomeOutside);
+        assert!(scene::running(&st).is_none());
+        // A wait after the film's last beat, so the run is seen with the door shut.
+        let film = st.book.scenes.get_mut("house_call").unwrap();
+        film.beats.push(Beat::Wait(1.0));
+        let last = film.beats.len() - 1;
+        let door = marks::resolve(&st, &Mark::HomeDoor, None).unwrap();
+        let (mut opened, mut shut) = (false, false);
+        for _ in 0..20_000 {
+            match scene::running(&st) {
+                Some(r) if r.id() == "seren_aside" => break,
+                Some(r) if r.id() == "house_call" => {
+                    opened |= r.doors() == [door];
+                    shut |= r.beat() == last && r.doors().is_empty();
+                }
+                _ => {}
+            }
+            let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) else {
+                panic!("no world");
+            };
+            world.advance(city, world.tick() + 1);
+            tick(&mut st);
+        }
+        assert_eq!(scene::running(&st).map(|r| r.id()), Some("seren_aside"));
+        let (place, pos) = marks::resolve(&st, &Mark::HomeInside(2), None).unwrap();
+        let me = st.player.as_ref().unwrap();
+        assert_eq!((me.place, me.pos), (place, pos));
+        assert!(st.missions.visitors.iter().all(|v| v.role != "castellan"));
+        let seren = st
+            .missions
+            .visitors
+            .iter()
+            .find(|v| v.role == "seren")
+            .unwrap();
+        assert_eq!(seren.place, place);
+        assert!(seren.pos.manhattan(pos) <= 1, "{:?} by {pos:?}", seren.pos);
+        assert!(opened, "the door opens");
+        assert!(shut, "and closes behind Castellan");
+    }
+
+    #[test]
+    fn mezz_not_dez() {
+        let st = begun();
+        let book = format!("{:?}", st.book);
+        assert!(!book.contains(concat!("D", "ez")) && !book.contains(concat!("d", "ez")));
+        let fixer = person_of(&st, "mezz").expect("mezz is cast");
+        assert_eq!(
+            st.world.as_ref().unwrap().people()[fixer.0 as usize].name,
+            "Mezz"
+        );
     }
 }

@@ -2117,7 +2117,7 @@ mod tests {
         let c = city();
         let mut w = world(&c);
         let id = w.people()[3].id;
-        w.rename(id, "Dez");
-        assert_eq!(w.people()[id.0 as usize].name, "Dez");
+        w.rename(id, "Mezz");
+        assert_eq!(w.people()[id.0 as usize].name, "Mezz");
     }
 }

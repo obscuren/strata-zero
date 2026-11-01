@@ -851,11 +851,11 @@ mod tests {
     fn talk_book(st: &mut AppState) {
         st.book = crate::missions::Book::parse(
             r#"Story(
-                cast: { "dez": Role(name: "Dez", title: "fixer", pick: NearestFixer, face: None) },
+                cast: { "mezz": Role(name: "Mezz", title: "fixer", pick: NearestFixer, face: None) },
                 faces: { "silhouette": Face(rows: ["......dd........", "....dmmmmd......"], eye: (255, 255, 255)) },
-                missions: [Mission(id: "chat", title: "Chat", from: "dez", steps: [
-                    Step(id: "hello", when: Talk("dez"), then: [
-                        Feed(from: "dez", close: "ok", text: ["Hello."]),
+                missions: [Mission(id: "chat", title: "Chat", from: "mezz", steps: [
+                    Step(id: "hello", when: Talk("mezz"), then: [
+                        Feed(from: "mezz", close: "ok", text: ["Hello."]),
                     ]),
                 ])],
             )"#,
@@ -868,9 +868,9 @@ mod tests {
         let mut st = state_home();
         talk_book(&mut st);
         crate::missions::begin(&mut st);
-        let dez = crate::missions::person_of(&st, "dez").unwrap();
+        let mezz = crate::missions::person_of(&st, "mezz").unwrap();
         assert!(st.missions.feeds.is_empty());
-        let cmd = talk_to(&mut st, dez);
+        let cmd = talk_to(&mut st, mezz);
         assert!(matches!(cmd, crate::app::ScreenCmd::Pop { .. }));
         assert_eq!(st.missions.feeds.len(), 1);
     }
@@ -880,7 +880,7 @@ mod tests {
         let mut st = state_home();
         talk_book(&mut st);
         crate::missions::begin(&mut st);
-        let dez = crate::missions::person_of(&st, "dez").unwrap();
+        let mezz = crate::missions::person_of(&st, "mezz").unwrap();
         let other = st
             .world
             .as_ref()
@@ -890,7 +890,7 @@ mod tests {
             .enumerate()
             .map(|(i, _)| sim::PersonId(i as u32))
             .find(|p| {
-                *p != dez
+                *p != mezz
                     && !st.world.as_ref().unwrap().is_dead(*p)
                     && st.world.as_ref().unwrap().spot_of(*p).is_some()
             })
