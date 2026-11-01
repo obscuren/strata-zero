@@ -3,7 +3,11 @@
 //! draws the rest live elsewhere; this is the state and the running of time.
 
 use crate::app::AppState;
+use crate::ui::chrome::{self, CYAN, DIM, FAINT, TEXT};
 use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier, Style};
 use std::time::{Duration, Instant};
 
 /// Sleeping heals and darkens the flat; waiting only lets the time go.
@@ -204,6 +208,188 @@ fn cause(st: &AppState, running: bool) -> Option<Why> {
     }
 }
 
+/// The window's width and height, borders included.
+pub const WINDOW_W: u16 = 57;
+pub const WINDOW_H: u16 = 12;
+/// The strip: 24 hours in half-hour cells.
+const CELLS: i64 = 48;
+const CELL_MINUTES: i64 = 30;
+
+const TEAL: Color = Color::Rgb(0, 230, 210);
+/// The sleep on the strip, and the wake time's own colour.
+const SLEEP: Color = Color::Rgb(0, 165, 184);
+const PAST: Color = Color::Rgb(35, 38, 45);
+const NIGHT_CELL: Color = Color::Rgb(23, 33, 58);
+const DAY_CELL: Color = Color::Rgb(61, 51, 24);
+
+/// The window over the map: centred, its bottom row on the map's last, clipped to the
+/// map where that is narrower.
+pub fn window_rect(map: Rect) -> Rect {
+    let (w, h) = (WINDOW_W.min(map.width), WINDOW_H.min(map.height));
+    Rect::new(map.x + (map.width - w) / 2, map.bottom() - h, w, h)
+}
+
+/// `5h 11m`.
+fn hours(minutes: u64) -> String {
+    format!("{}h {}m", minutes / 60, minutes % 60)
+}
+
+/// A minute of the day as `hh:mm`, rounded to ten minutes when it is the wake time.
+fn hhmm(minute_of_day: i64, rounded: bool) -> String {
+    let m = if rounded {
+        (minute_of_day + 5) / 10 * 10 % 1440
+    } else {
+        minute_of_day
+    };
+    format!("{:02}:{:02}", m / 60, m % 60)
+}
+
+/// Draws the Rest window over the map: choosing a wake time at `until` (`asleep`
+/// `None`), or the rest under way since the minute `from` (`Some(from)`), the strip
+/// filling up to the time now.
+pub fn draw_window(
+    buf: &mut Buffer,
+    map: Rect,
+    st: &AppState,
+    kind: Kind,
+    until: u64,
+    asleep: Option<u64>,
+) {
+    let r = window_rect(map);
+    if r.width < WINDOW_W || r.height < WINDOW_H {
+        return;
+    }
+    chrome::solid(buf, r);
+    chrome::frame(buf, r);
+    let max = r.right() - 1;
+    let title = Style::default().fg(TEAL).add_modifier(Modifier::BOLD);
+    let (glyph, name) = match (kind, asleep.is_some()) {
+        (Kind::Sleep, false) => ("▤", "Sleep"),
+        (Kind::Wait, false) => ("☾", "Wait"),
+        (Kind::Sleep, true) => ("▤", "Asleep"),
+        (Kind::Wait, true) => ("☾", "Waiting"),
+    };
+    chrome::put(buf, r.x + 2, r.y, &format!(" {glyph} {name} "), title, max);
+
+    // Game minutes as the strip counts them, and the minute of the day they fall on.
+    let (now_m, until_m) = (now(st) as i64, until as i64);
+    let from = asleep.map_or(now_m, |f| f as i64);
+    let today = st.minute_of_day() as i64;
+    let of_day = |m: i64| (today + m - now_m).rem_euclid(1440);
+    // The strip starts on the hour two hours before you lay down.
+    let start = from - of_day(from) % 60 - 120;
+    let x0 = r.x + 4;
+    let x_of = |m: i64| x0 + (m - start).div_euclid(CELL_MINUTES).clamp(0, CELLS - 1) as u16;
+
+    for k in (0..24).step_by(2) {
+        let hour = (of_day(start) / 60 + k) % 24;
+        let style = Style::default().fg(FAINT);
+        chrome::put(
+            buf,
+            x0 + 2 * k as u16,
+            r.y + 2,
+            &format!("{hour:02}"),
+            style,
+            max,
+        );
+    }
+    for i in 0..CELLS {
+        let m = start + i * CELL_MINUTES;
+        let fg = if from < m + CELL_MINUTES && m < until_m {
+            if asleep.is_some() && m < now_m {
+                CYAN
+            } else {
+                SLEEP
+            }
+        } else if m + CELL_MINUTES <= from {
+            PAST
+        } else if citygen::lighting::lamps_on(of_day(m) as u16) {
+            NIGHT_CELL
+        } else {
+            DAY_CELL
+        };
+        chrome::put(
+            buf,
+            x0 + i as u16,
+            r.y + 3,
+            "█",
+            Style::default().fg(fg),
+            max,
+        );
+    }
+
+    // The markers, and under them the labels, a space apart and inside the window.
+    let (now_colour, now_label) = if asleep.is_some() {
+        (CYAN, hhmm(of_day(now_m), false))
+    } else {
+        (TEXT, format!("now {}", hhmm(of_day(now_m), false)))
+    };
+    let wake_label = format!("wake {}", hhmm(of_day(until_m), true));
+    let (nl, wl) = (
+        now_label.chars().count() as u16,
+        wake_label.chars().count() as u16,
+    );
+    let right = r.right() - 2;
+    let mut now_x = x_of(now_m).min(right - nl);
+    let mut wake_x = x_of(until_m).max(now_x + nl + 1);
+    if wake_x + wl > right {
+        wake_x = right - wl;
+        now_x = now_x.min(wake_x - nl - 1);
+    }
+    let bold = |c: Color| Style::default().fg(c).add_modifier(Modifier::BOLD);
+    chrome::put(buf, x_of(now_m), r.y + 4, "▴", bold(now_colour), max);
+    chrome::put(buf, x_of(until_m), r.y + 4, "▴", bold(SLEEP), max);
+    chrome::put(
+        buf,
+        now_x,
+        r.y + 5,
+        &now_label,
+        Style::default().fg(now_colour),
+        max,
+    );
+    chrome::put(
+        buf,
+        wake_x,
+        r.y + 5,
+        &wake_label,
+        Style::default().fg(SLEEP),
+        max,
+    );
+
+    let (said, keys) = match asleep {
+        Some(_) => {
+            let slept = (now_m - from).max(0) as u64;
+            let to_go = (until_m - now_m).max(0) as u64;
+            let verb = if kind == Kind::Sleep {
+                "slept"
+            } else {
+                "waited"
+            };
+            (
+                format!("{} {verb} · {} to go", hours(slept), hours(to_go)),
+                "esc wakes you".to_string(),
+            )
+        }
+        None => {
+            let length = (until_m - now_m).max(0) as u64;
+            let said = match kind {
+                Kind::Sleep if length >= NIGHT => {
+                    format!("{} asleep · you wake rested", hours(length))
+                }
+                Kind::Sleep => format!("{} asleep · a nap, some HP and FOCUS back", hours(length)),
+                Kind::Wait => format!("{} waiting", hours(length)),
+            };
+            let enter = if kind == Kind::Sleep { "sleep" } else { "wait" };
+            (
+                said,
+                format!("h l an hour · H L ten minutes · enter {enter} · esc"),
+            )
+        }
+    };
+    chrome::put(buf, x0, r.y + 7, &said, Style::default().fg(DIM), max);
+    chrome::put(buf, x0, r.y + 9, &keys, Style::default().fg(FAINT), max);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,7 +399,11 @@ mod tests {
     use crate::missions::{Book, Mark};
     use crate::screens::explore::MapScreen;
     use crate::screens::testutil::key;
+    use crate::ui::chrome::CYAN;
     use crossterm::event::KeyCode;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::style::Color;
 
     const LONG: Duration = Duration::from_secs(60);
 
@@ -525,5 +715,146 @@ mod tests {
             .unwrap(),
         );
         assert!(st.rest.is_none());
+    }
+
+    /// The window drawn at `until` over the map of a 120×40 screen; `asleep` is the
+    /// minute you lay down, when it is drawn as the asleep frame.
+    fn drawn(st: &AppState, kind: Kind, until: u64, asleep: Option<u64>) -> (Buffer, Rect) {
+        let area = Rect::new(0, 0, 120, 40);
+        let map = crate::screens::explore::layout(area, false).map;
+        let mut buf = Buffer::empty(area);
+        draw_window(&mut buf, map, st, kind, until, asleep);
+        (buf, window_rect(map))
+    }
+
+    fn row(buf: &Buffer, r: Rect, y: u16) -> String {
+        (r.x..r.right())
+            .map(|x| buf[(x, r.y + y)].symbol())
+            .collect()
+    }
+
+    /// The colour of strip cell `i`.
+    fn cell(buf: &Buffer, r: Rect, i: u16) -> Color {
+        buf[(r.x + 4 + i, r.y + 3)].fg
+    }
+
+    const PAST: Color = Color::Rgb(35, 38, 45);
+    const SLEEPING: Color = Color::Rgb(0, 165, 184);
+
+    #[test]
+    fn the_strip_at_night() {
+        let mut st = state_home();
+        at(&mut st, 22, 1);
+        let (buf, r) = drawn(&st, Kind::Sleep, minutes(&st, 7, 0), None);
+        assert!(row(&buf, r, 0).contains("Sleep"));
+        assert!(
+            row(&buf, r, 2)
+                .trim_start_matches(['│', ' '])
+                .starts_with("20  22  00"),
+            "{}",
+            row(&buf, r, 2)
+        );
+        for i in 0..4 {
+            assert_eq!(cell(&buf, r, i), PAST, "cell {i}");
+        }
+        for i in 4..22 {
+            assert_eq!(cell(&buf, r, i), SLEEPING, "cell {i}");
+        }
+        assert_eq!(cell(&buf, r, 22), Color::Rgb(61, 51, 24), "07:00 is day");
+        for i in 44..48 {
+            assert_eq!(cell(&buf, r, i), Color::Rgb(23, 33, 58), "cell {i}");
+        }
+        for i in [4, 22] {
+            assert_eq!(buf[(r.x + 4 + i, r.y + 4)].symbol(), "▴");
+        }
+        assert!(row(&buf, r, 5).contains("now 22:01"));
+        assert!(row(&buf, r, 5).contains("wake 07:00"));
+        assert_eq!(
+            row(&buf, r, 7).trim_matches(|c| c == ' ' || c == '│'),
+            "8h 59m asleep · you wake rested"
+        );
+        assert!(row(&buf, r, 9).contains("enter sleep"));
+    }
+
+    #[test]
+    fn a_nap_and_a_wait_read_their_own_lines() {
+        let mut st = state_home();
+        at(&mut st, 22, 1);
+        let (buf, r) = drawn(&st, Kind::Sleep, now(&st) + 120, None);
+        assert!(row(&buf, r, 7).contains("2h 0m asleep · a nap, some HP and FOCUS back"));
+        let (buf, r) = drawn(&st, Kind::Wait, now(&st) + 60, None);
+        assert!(row(&buf, r, 0).contains("Wait"));
+        assert!(row(&buf, r, 7).contains("1h 0m waiting"));
+        assert!(row(&buf, r, 9).contains("enter wait"));
+    }
+
+    #[test]
+    fn asleep_the_strip_fills() {
+        let mut st = state_home();
+        at(&mut st, 22, 1);
+        let (from, until) = (now(&st), minutes(&st, 7, 0));
+        at(&mut st, 3, 12);
+        let (buf, r) = drawn(&st, Kind::Sleep, until, Some(from));
+        assert!(row(&buf, r, 0).contains("Asleep"));
+        for i in 4..=14 {
+            assert_eq!(cell(&buf, r, i), CYAN, "cell {i}");
+        }
+        for i in 15..22 {
+            assert_eq!(cell(&buf, r, i), SLEEPING, "cell {i}");
+        }
+        assert_eq!(buf[(r.x + 4 + 14, r.y + 4)].symbol(), "▴");
+        assert_eq!(buf[(r.x + 4 + 14, r.y + 4)].fg, CYAN);
+        assert_eq!(buf[(r.x + 4 + 14, r.y + 5)].fg, CYAN);
+        assert!(row(&buf, r, 5).contains("03:12"));
+        assert!(row(&buf, r, 7).contains("5h 11m slept · 3h 48m to go"));
+        assert!(row(&buf, r, 9).contains("esc wakes you"));
+        let (buf, r) = drawn(&st, Kind::Wait, until, Some(from));
+        assert!(row(&buf, r, 0).contains("Waiting"));
+        assert!(row(&buf, r, 7).contains("5h 11m waited · 3h 48m to go"));
+    }
+
+    #[test]
+    fn close_labels_do_not_touch() {
+        let mut st = state_home();
+        at(&mut st, 22, 1);
+        let (buf, r) = drawn(&st, Kind::Wait, minutes(&st, 22, 20), None);
+        assert!(
+            row(&buf, r, 5).contains("now 22:01 wake 22:20"),
+            "{}",
+            row(&buf, r, 5)
+        );
+    }
+
+    #[test]
+    fn labels_stay_in_the_window_at_the_strips_end() {
+        let mut st = state_home();
+        at(&mut st, 22, 1);
+        let from = now(&st);
+        let until = from + 1200;
+        let (buf, r) = drawn(&st, Kind::Sleep, until, None);
+        assert!(
+            row(&buf, r, 5)
+                .trim_end_matches([' ', '│'])
+                .ends_with("wake 18:00")
+        );
+        assert_eq!(buf[(r.right() - 1, r.y + 5)].symbol(), "│");
+        at(&mut st, 17, 59);
+        let (buf, r) = drawn(&st, Kind::Sleep, until, Some(from));
+        let text = row(&buf, r, 5);
+        assert!(text.contains("17:59 wake 18:00"), "{text}");
+    }
+
+    #[test]
+    fn the_window_fits_100x30_and_120x40() {
+        for (w, h) in [(100, 30), (120, 40)] {
+            let map = crate::screens::explore::layout(Rect::new(0, 0, w, h), false).map;
+            let r = window_rect(map);
+            assert_eq!((r.width, r.height), (57, 12), "{w}x{h}");
+            assert!(r.x >= map.x && r.right() <= map.right(), "{w}x{h}");
+            assert_eq!(r.bottom(), map.bottom(), "{w}x{h}");
+        }
+        let narrow = Rect::new(2, 5, 40, 20);
+        let r = window_rect(narrow);
+        assert!(r.x >= narrow.x && r.right() <= narrow.right());
     }
 }

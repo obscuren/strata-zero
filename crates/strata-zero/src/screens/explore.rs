@@ -1361,17 +1361,29 @@ impl MapScreen {
         Some(ScreenCmd::Stay)
     }
 
-    /// Feeds keys to the open console; a run line goes through the commands.
-    fn feed_console(&mut self, st: &mut AppState, focus: game::At, keys: &[KeyEvent]) {
-        let Some(con) = self.console.as_mut() else {
-            return;
-        };
+    /// Feeds keys to the open console; a run line goes through the commands, and one
+    /// that opens a window closes the console and pushes it.
+    fn feed_console(
+        &mut self,
+        st: &mut AppState,
+        focus: game::At,
+        keys: &[KeyEvent],
+    ) -> Option<ScreenCmd> {
+        let con = self.console.as_mut()?;
         let mut close = false;
+        let mut opened = None;
         for k in keys {
             match con.key(*k, &|head, word| console::complete(st, head, word)) {
                 ConsoleEvent::Run(line) => {
                     let result = console::run(st, focus, &line);
+                    if result.is_ok() {
+                        opened = console::opens(st, &line);
+                    }
                     report(st, result);
+                    if opened.is_some() {
+                        close = true;
+                        break;
+                    }
                 }
                 ConsoleEvent::Close => close = true,
                 ConsoleEvent::None => {}
@@ -1380,6 +1392,10 @@ impl MapScreen {
         if close {
             self.console = None;
         }
+        opened.map(|to| ScreenCmd::Push {
+            to,
+            fx: TransitionKind::None,
+        })
     }
 
     /// What Space opens: one thing in reach goes straight to its window, none gives a
@@ -2527,8 +2543,9 @@ impl Screen for MapScreen {
             },
         };
         if self.console.is_some() {
-            self.feed_console(st, focus, keys);
-            return ScreenCmd::Stay;
+            return self
+                .feed_console(st, focus, keys)
+                .unwrap_or(ScreenCmd::Stay);
         }
         let Some(size) = st.city.as_ref().map(|c| c.size) else {
             if keys
@@ -2633,8 +2650,9 @@ impl Screen for MapScreen {
             }
             // `:` just opened the console: the rest of this frame's keys are typing.
             if self.console.is_some() {
-                self.feed_console(st, focus, &keys[i + 1..]);
-                return ScreenCmd::Stay;
+                return self
+                    .feed_console(st, focus, &keys[i + 1..])
+                    .unwrap_or(ScreenCmd::Stay);
             }
         }
         // A key may have taken the player through a door, up a lift or out again: the
@@ -2700,9 +2718,9 @@ impl Screen for MapScreen {
                 self.follow_player(st);
             }
         }
-        // A scene playing: no aimed walk goes on under it, and nothing of the map's
-        // stays open to keep its keys after.
-        if crate::missions::scene::running(st).is_some() {
+        // A scene playing or a rest under way: no aimed walk goes on under it, and
+        // nothing of the map's stays open to keep its keys after.
+        if crate::missions::scene::running(st).is_some() || st.rest.is_some() {
             self.walking = None;
             self.aim = None;
             self.help = false;
@@ -12287,5 +12305,36 @@ mod tests {
         assert_eq!(st.character.count(&frag), 2, "thrown");
         assert_eq!(st.character.hp, hp - 12, "the centre's full damage");
         assert!(logged(&st, "· you 12"), "{:?}", last(&st));
+    }
+
+    #[test]
+    fn a_rest_stops_the_walk_under_it() {
+        let mut st = crate::jobs::testutil::state_home();
+        let mut s = MapScreen::walking(&mut st);
+        let pos = st.player.as_ref().unwrap().pos;
+        s.walking = Some(Walk {
+            path: vec![pos.step(citygen::Dir::E)],
+            next_at: u64::MAX,
+        });
+        s.aim = Some(pos);
+        let until = crate::rest::now(&st) + 600;
+        crate::rest::start(&mut st, crate::rest::Kind::Wait, until);
+        assert!(st.rest.is_some());
+        s.update(&mut st, &[]);
+        assert!(s.walking.is_none() && s.aim.is_none());
+    }
+
+    #[test]
+    fn the_consoles_wait_pushes_the_window() {
+        let mut st = crate::jobs::testutil::state_home();
+        st.unlock_dev();
+        let mut s = MapScreen::walking(&mut st);
+        let typed: Vec<KeyEvent> = ":wait"
+            .chars()
+            .map(|c| key(KeyCode::Char(c)))
+            .chain([key(KeyCode::Enter)])
+            .collect();
+        assert!(matches!(s.update(&mut st, &typed), ScreenCmd::Push { .. }));
+        assert!(s.console.is_none());
     }
 }

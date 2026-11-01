@@ -18,6 +18,7 @@ pub mod kit;
 pub mod messages;
 pub mod pause;
 pub mod popup;
+pub mod rest;
 pub mod settings;
 pub mod sheet;
 pub mod stickers;

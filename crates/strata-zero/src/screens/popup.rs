@@ -88,6 +88,8 @@ pub enum Pick {
         building: citygen::BuildingId,
         level: i32,
     },
+    /// Opens the Rest window for a sleep in place of the popup.
+    Sleep,
     Close,
 }
 
@@ -525,6 +527,13 @@ impl Popup {
             },
             Pick::Terminal { origin, key } => ScreenCmd::Replace {
                 to: Box::new(crate::screens::terminal::Terminal::open(st, origin, key)),
+                fx: TransitionKind::None,
+            },
+            Pick::Sleep => ScreenCmd::Replace {
+                to: Box::new(crate::screens::rest::RestScreen::open(
+                    st,
+                    crate::rest::Kind::Sleep,
+                )),
                 fx: TransitionKind::None,
             },
             Pick::Chair { building, level } => {

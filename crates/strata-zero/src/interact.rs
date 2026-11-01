@@ -3,12 +3,13 @@
 
 use crate::app::AppState;
 use crate::render::map::MapRef;
+use crate::render::map::TileMap;
 use crate::render::mark::{mark_items, mark_person, mark_tile};
 use crate::render::people::card_lines;
 use crate::screens::popup::{Choice, Header, Pick, Popup, WorldAct};
 use crate::ui::chrome::{CYAN, MAGENTA, TEXT};
 use crate::ui::hud::{AMBER, capitalised};
-use citygen::{Dir, FloorPlan, Place, Pos};
+use citygen::{Dir, Feature, FloorPlan, Furniture, Place, Pos};
 use ratatui::style::Color;
 
 /// Letters for take, ride and program rows: no verb letter, none of the window's
@@ -353,6 +354,26 @@ pub fn gather(
             Some(header(name, mark_tile(st, &map, tile))),
             None,
             rows,
+        );
+    }
+
+    // Your own bed beside you, in your flat: sleep in it.
+    if let Some(rig) = st.home.as_ref()
+        && place == rig.place()
+        && let Some(bed) = pos.neighbors4().find(|n| {
+            rig.home.rect.contains(*n)
+                && map
+                    .tile(*n)
+                    .is_some_and(|t| t.feature == Some(Feature::Furniture(Furniture::Bed)))
+        })
+    {
+        add(
+            &mut subs,
+            &mut here,
+            bed,
+            Some(header("Bed", mark_tile(st, &map, bed))),
+            None,
+            vec![Choice::on('i', "Interact", "Sleep", CYAN, Pick::Sleep)],
         );
     }
 
@@ -1036,5 +1057,50 @@ mod tests {
                 .unwrap_or_else(|| panic!("{rows:?}"));
             assert!(row.0.ends_with(&format!(" {marks}")), "{rows:?}");
         }
+    }
+
+    #[test]
+    fn the_bed_offers_sleep() {
+        let mut st = crate::jobs::testutil::state_home();
+        crate::screens::explore::MapScreen::walking(&mut st);
+        let home = st.home.unwrap();
+        let named = |st: &AppState, name: &str| {
+            gather(st, &|_, _| None)
+                .into_iter()
+                .find(|s| s.header.as_ref().is_some_and(|h| h.name == name))
+        };
+        // Beside the bed.
+        st.player.as_mut().unwrap().pos = home.home.bed_side;
+        let bed = named(&st, "Bed").expect("the bed");
+        assert!(bed.choices.iter().any(|c| c.label == "Interact"
+            && c.thing.as_ref().is_some_and(|(t, _)| t == "Sleep")
+            && matches!(c.pick, Pick::Sleep)));
+        // Beside the rig, away from the bed.
+        let floor = st
+            .interiors
+            .floor(home.home.building, home.home.level)
+            .map(|(_, f)| f.clone())
+            .unwrap();
+        let has_bed = |p: Pos| {
+            p.neighbors4().any(|n| {
+                floor
+                    .tiles
+                    .get(n)
+                    .is_some_and(|t| t.feature == Some(Feature::Furniture(Furniture::Bed)))
+            })
+        };
+        let rig_side = home
+            .home
+            .rig
+            .neighbors4()
+            .find(|p| {
+                home.home.rect.contains(*p)
+                    && floor.tiles.get(*p).is_some_and(|t| t.is_walkable())
+                    && !has_bed(*p)
+            })
+            .expect("a floor tile by the rig, away from the bed");
+        st.player.as_mut().unwrap().pos = rig_side;
+        assert!(named(&st, "Bed").is_none());
+        assert!(named(&st, "Access rig").is_some());
     }
 }

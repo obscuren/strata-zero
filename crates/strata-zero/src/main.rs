@@ -30,8 +30,6 @@ mod messages;
 mod missions;
 mod net;
 mod render;
-// The bed's window (the next step of the wait-and-sleep plan) is what starts a rest.
-#[allow(dead_code)]
 mod rest;
 mod save;
 mod screens;
