@@ -3231,6 +3231,21 @@ impl Screen for MapScreen {
             .as_ref()
             .filter(|p| p.place == self.place)
             .and_then(|p| tile_to_screen(map_area, origin, p.pos));
+        if let Some(rest) = &st.rest {
+            if rest.kind == crate::rest::Kind::Sleep
+                && let Some(me) = me
+            {
+                crate::rest::draw_zs(f.buffer_mut(), map_area, me);
+            }
+            crate::rest::draw_window(
+                f.buffer_mut(),
+                map_area,
+                st,
+                rest.kind,
+                rest.until,
+                Some(rest.from),
+            );
+        }
         crate::missions::call::draw(f.buffer_mut(), map_area, me, st);
 
         // The vertical rule on every row but the two rule rows.
@@ -4085,6 +4100,7 @@ mod tests {
     use crossterm::event::KeyCode;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
 
     fn state() -> AppState {
         let mut st = AppState::new();
@@ -12322,6 +12338,109 @@ mod tests {
         assert!(st.rest.is_some());
         s.update(&mut st, &[]);
         assert!(s.walking.is_none() && s.aim.is_none());
+    }
+
+    /// The home state beside its bed, drawn at `w`×`h`: the buffer, the map rect and
+    /// the map's origin.
+    fn beside_the_bed(st: &mut AppState, w: u16, h: u16) -> (Buffer, Rect, Pos) {
+        use crate::missions::{Mark, marks};
+        let (place, pos) = marks::resolve(st, &Mark::HomeBed, None).unwrap();
+        st.player = Some(crate::walker::Player::at(place, pos));
+        let s = MapScreen::walking(st);
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| s.draw(st, f)).unwrap();
+        let map = layout(Rect::new(0, 0, w, h), false).map;
+        let origin = s.cam.origin(map.width, map.height);
+        (t.backend().buffer().clone(), map, origin)
+    }
+
+    /// Where your `@` is drawn in the map: white and bold.
+    fn my_at(buf: &Buffer, map: Rect) -> (u16, u16) {
+        let white = Color::Rgb(255, 255, 255);
+        map.positions()
+            .map(|p| (p.x, p.y))
+            .find(|&(x, y)| buf[(x, y)].symbol() == "@" && buf[(x, y)].fg == white)
+            .expect("your @ is on the map")
+    }
+
+    /// The summed brightness of the flat's cells on the map.
+    fn flat_light(st: &AppState, buf: &Buffer, map: Rect, origin: Pos) -> u32 {
+        let (_, rect) = crate::missions::marks::flat_rect(st).unwrap();
+        let rgb = |c: Color| match c {
+            Color::Rgb(r, g, b) => r as u32 + g as u32 + b as u32,
+            _ => 0,
+        };
+        rect.iter()
+            .filter_map(|p| tile_to_screen(map, origin, p))
+            .map(|(x, y)| rgb(buf[(x, y)].fg) + rgb(buf[(x, y)].bg))
+            .sum()
+    }
+
+    #[test]
+    fn asleep_the_flat_is_dark_and_you_have_zs() {
+        use crate::rest::{self, Kind};
+        let mut st = crate::jobs::testutil::state_home();
+        let (awake, map, origin) = beside_the_bed(&mut st, 120, 40);
+        let (x, y) = my_at(&awake, map);
+        assert_ne!(awake[(x + 1, y - 1)].symbol(), "z");
+        let until = rest::now(&st) + 600;
+        rest::start(&mut st, Kind::Sleep, until);
+        assert!(st.rest.is_some());
+        let (asleep, _, _) = beside_the_bed(&mut st, 120, 40);
+        assert!(
+            flat_light(&st, &asleep, map, origin) < flat_light(&st, &awake, map, origin),
+            "the flat is dark"
+        );
+        let z = &asleep[(x + 1, y - 1)];
+        assert_eq!((z.symbol(), z.fg), ("z", Color::Rgb(0, 165, 184)));
+        let big = &asleep[(x + 2, y - 2)];
+        assert_eq!((big.symbol(), big.fg), ("Z", CYAN));
+        assert!(big.modifier.contains(Modifier::BOLD));
+        assert!(!z.modifier.contains(Modifier::BOLD));
+        let title: String = (map.x..map.right())
+            .map(|x| asleep[(x, crate::rest::window_rect(map).y)].symbol())
+            .collect();
+        assert!(title.contains("Asleep"), "{title}");
+    }
+
+    #[test]
+    fn waiting_keeps_the_lights() {
+        use crate::rest::{self, Kind};
+        let mut st = crate::jobs::testutil::state_home();
+        let (awake, map, origin) = beside_the_bed(&mut st, 120, 40);
+        let (x, y) = my_at(&awake, map);
+        let until = rest::now(&st) + 60;
+        rest::start(&mut st, Kind::Wait, until);
+        assert!(st.rest.is_some());
+        let (waiting, _, _) = beside_the_bed(&mut st, 120, 40);
+        assert_eq!(
+            flat_light(&st, &waiting, map, origin),
+            flat_light(&st, &awake, map, origin)
+        );
+        assert_ne!(waiting[(x + 1, y - 1)].symbol(), "z");
+        assert_ne!(waiting[(x + 2, y - 2)].symbol(), "Z");
+    }
+
+    #[test]
+    fn asleep_fits_100x30() {
+        use crate::rest::{self, Kind};
+        for (w, h) in [(100, 30), (120, 40)] {
+            let mut st = crate::jobs::testutil::state_home();
+            let (awake, map, _) = beside_the_bed(&mut st, w, h);
+            let me = my_at(&awake, map);
+            let until = rest::now(&st) + 600;
+            rest::start(&mut st, Kind::Sleep, until);
+            let (asleep, _, _) = beside_the_bed(&mut st, w, h);
+            let win = rest::window_rect(map);
+            assert!(win.x >= map.x && win.right() <= map.right() && win.bottom() <= map.bottom());
+            // The camera holds you in the map's middle. On the 20 rows of 100×30 the
+            // window's top row is that middle, so only 120×40 keeps you in view.
+            if w == 120 {
+                let covered = win.contains(ratatui::layout::Position::new(me.0, me.1));
+                assert!(!covered, "{me:?} {map:?} {win:?}");
+                assert_eq!(my_at(&asleep, map), me, "your @ shows");
+            }
+        }
     }
 
     #[test]

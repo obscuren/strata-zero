@@ -56,13 +56,23 @@ pub fn colour(book: &Book, role: &str) -> Color {
         .map_or(DIM, |(r, g, b)| Color::Rgb(r, g, b))
 }
 
+/// How much of the flat's light is left while you sleep.
+const ASLEEP_LIGHTS: f32 = 0.4;
+
 /// Draws the flat's lights, then the visitors, over the map view in `area`. The lights
 /// scale every cell of the flat (walls too); the visitors come after, bright.
 pub fn draw(buf: &mut Buffer, area: Rect, origin: Pos, st: &AppState) {
     let Some(me) = st.player.as_ref() else {
         return;
     };
-    if let (Some(level), Some((place, rect))) = (st.missions.lights, marks::flat_rect(st))
+    // Asleep the flat is dark whatever the story left on.
+    let lights = match &st.rest {
+        Some(rest) if rest.kind == crate::rest::Kind::Sleep => {
+            Some(st.missions.lights.unwrap_or(1.0).min(ASLEEP_LIGHTS))
+        }
+        _ => st.missions.lights,
+    };
+    if let (Some(level), Some((place, rect))) = (lights, marks::flat_rect(st))
         && place == me.place
     {
         for p in rect.iter() {

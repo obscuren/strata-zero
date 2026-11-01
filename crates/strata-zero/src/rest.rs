@@ -390,6 +390,31 @@ pub fn draw_window(
     chrome::put(buf, x0, r.y + 9, &keys, Style::default().fg(FAINT), max);
 }
 
+/// The sleeper's z's beside `me`, the screen cell of your `@`: a small `z` one up and
+/// right, a big `Z` two up and two right, each only where it is inside the map. They
+/// set the cell's whole style, nothing of the map under them.
+pub fn draw_zs(buf: &mut Buffer, map: Rect, me: (u16, u16)) {
+    let zs = [
+        ('z', 1, 1, Style::default().fg(SLEEP)),
+        (
+            'Z',
+            2,
+            2,
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        ),
+    ];
+    for (ch, dx, dy, style) in zs {
+        let (Some(x), Some(y)) = (me.0.checked_add(dx), me.1.checked_sub(dy)) else {
+            continue;
+        };
+        if map.contains(ratatui::layout::Position::new(x, y)) {
+            let cell = &mut buf[(x, y)];
+            cell.set_char(ch).set_style(style);
+            cell.modifier = style.add_modifier;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
