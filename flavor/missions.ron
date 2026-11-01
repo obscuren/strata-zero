@@ -113,9 +113,6 @@ Story(
         ]),
         Mission(id: "house_call", title: "House call", from: "castellan", steps: [
             Step(id: "door", when: MissionDone(mission: "the_drop", minutes: 0), then: [
-                Lights(0.45),
-                Arrive(role: "castellan", at: HomeFurniture(Couch)),
-                Arrive(role: "seren", at: HomeRig),
                 Scene("house_call"),
             ]),
             Step(id: "aside", when: Ended("door"), then: [Scene("seren_aside")]),
@@ -135,7 +132,12 @@ Story(
     scenes: {
         "house_call": Scene(title: "House call", look: Film,
             pace: Pace(type: 45, walk: 0.3, hold: Some(2.5)), beats: [
+            // The film sets its own stage, so it plays the same from the console:
+            // you outside first, then the dark flat and who waits in it.
             Arrive(role: "you", at: HomeOutside),
+            Lights(0.45),
+            Arrive(role: "castellan", at: HomeFurniture(Couch)),
+            Arrive(role: "seren", at: HomeRig),
             Stage("You key your code. The pad buzzes red."),
             Keypad(door: HomeDoor, code: Journal, result: Denied, keys: 0.22, hold: 0.8),
             Say(who: "you", text: "WTF…?"),

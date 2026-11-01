@@ -1032,18 +1032,15 @@ pub(crate) mod tests {
         visitors::at(st, place, pos).map(|v| v.role.clone())
     }
 
-    #[test]
-    fn the_drop_ends_at_your_door() {
-        let mut st = at_your_door();
-        assert!(matches!(st.missions.runs[0].state, RunState::Done { .. }));
-        assert_eq!(st.missions.runs[1].state, RunState::Open);
-        tick(&mut st);
-        assert_eq!(scene::running(&st).map(|r| r.id()), Some("house_call"));
+    /// The house call's flat as the film opens: dim, Castellan on the couch, Seren at
+    /// your rig.
+    fn the_stage_is_set(st: &AppState) {
+        assert_eq!(scene::running(st).map(|r| r.id()), Some("house_call"));
         assert_eq!(
-            visitor_at(&st, &Mark::HomeFurniture(citygen::Furniture::Couch)).as_deref(),
+            visitor_at(st, &Mark::HomeFurniture(citygen::Furniture::Couch)).as_deref(),
             Some("castellan")
         );
-        let (place, pos) = marks::resolve(&st, &Mark::HomeRig, None).unwrap();
+        let (place, pos) = marks::resolve(st, &Mark::HomeRig, None).unwrap();
         let seren = st
             .missions
             .visitors
@@ -1053,6 +1050,24 @@ pub(crate) mod tests {
         assert_eq!(seren.place, place);
         assert!(seren.pos.manhattan(pos) <= 1, "{:?} by {pos:?}", seren.pos);
         assert_eq!(st.missions.lights, Some(0.45));
+    }
+
+    #[test]
+    fn the_drop_ends_at_your_door() {
+        let mut st = at_your_door();
+        assert!(matches!(st.missions.runs[0].state, RunState::Done { .. }));
+        assert_eq!(st.missions.runs[1].state, RunState::Open);
+        tick(&mut st);
+        the_stage_is_set(&st);
+    }
+
+    #[test]
+    fn the_house_call_played_alone_sets_its_own_stage() {
+        // As the console plays it: no mission step has put anyone in the flat.
+        let mut st = begun();
+        scene::play(&mut st, "house_call");
+        tick(&mut st);
+        the_stage_is_set(&st);
     }
 
     /// Mezz's call over with you already standing on `mark`, home before he told you to
@@ -1102,27 +1117,27 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn home_early_on_the_rig_side_seren_comes_in_beside_you() {
-        let st = home_early(&Mark::HomeRig);
-        let (place, rig) = marks::resolve(&st, &Mark::HomeRig, None).unwrap();
+    fn home_early_on_the_rig_side_seren_still_takes_the_rig() {
+        // The film puts you on the walkway before anyone comes in, so the tile you
+        // held is hers again.
+        let mut st = home_early(&Mark::HomeRig);
+        tick(&mut st);
+        the_stage_is_set(&st);
         let seren = st
             .missions
             .visitors
             .iter()
             .find(|v| v.role == "seren")
             .expect("seren is in");
-        assert_eq!(seren.place, place);
-        assert_eq!(seren.pos.chebyshev(rig), 1, "beside the tile you hold");
         let map = crate::render::map::MapRef::for_place(
             st.city.as_ref().unwrap(),
             &st.interiors,
             &st.constructs,
-            place,
+            seren.place,
             st.minute_of_day(),
         )
         .unwrap();
         assert!(crate::render::map::TileMap::walkable(&map, seren.pos));
-        assert!(visitor_at(&st, &Mark::HomeFurniture(citygen::Furniture::Couch)).is_some());
     }
 
     #[test]
