@@ -52,6 +52,8 @@ pub enum BookError {
     ReservedRole(String),
     #[error("missions: scene `{0}` has no beats")]
     EmptyScene(String),
+    #[error("missions: scene `{0}` comes back to itself through `next`")]
+    SceneLoop(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -104,6 +106,10 @@ pub struct Scene {
     pub look: Look,
     pub pace: Pace,
     pub beats: Vec<Beat>,
+    /// The scene that plays straight after this one, for the same step: the step
+    /// ends with the last.
+    #[serde(default)]
+    pub next: Option<String>,
 }
 
 /// Where a beat points, resolved when it runs.
@@ -531,6 +537,23 @@ impl Book {
         for (i, beat) in scene.beats.iter().enumerate() {
             let place = format!("{at} beat {}", i + 1);
             self.check_beat(&place, beat)?;
+        }
+        // Each `next` is a scene, and following them ends.
+        let mut next = scene.next.as_deref();
+        for _ in 0..self.scenes.len() {
+            let Some(n) = next else {
+                return Ok(());
+            };
+            if n == id {
+                return Err(BookError::SceneLoop(id.into()));
+            }
+            let Some(s) = self.scenes.get(n) else {
+                return Err(BookError::UnknownScene {
+                    place: format!("next of {at}"),
+                    scene: n.into(),
+                });
+            };
+            next = s.next.as_deref();
         }
         Ok(())
     }
@@ -1064,6 +1087,33 @@ mod tests {
     #[test]
     fn an_empty_scene_is_refused() {
         assert!(matches!(scened(""), Err(BookError::EmptyScene(_))));
+    }
+
+    #[test]
+    fn a_next_scene_exists_and_comes_back_to_none() {
+        let pace = "Pace(type: 45, walk: 0.3, hold: None)";
+        let two = |s_next: &str, t_next: &str| {
+            let scenes = format!(
+                r#""s": Scene(title: "S", look: Film, pace: {pace}, beats: [Wait(1.0)], next: {s_next}),
+                "t": Scene(title: "T", look: Bubbles, pace: {pace}, beats: [Wait(1.0)], next: {t_next})"#
+            );
+            tiny("", STEP, &scenes)
+        };
+        let b = two(r#"Some("t")"#, "None").unwrap();
+        assert_eq!(b.scenes["s"].next.as_deref(), Some("t"));
+        assert_eq!(b.scenes["t"].next, None);
+        assert!(matches!(
+            two(r#"Some("nope")"#, "None"),
+            Err(BookError::UnknownScene { .. })
+        ));
+        assert!(matches!(
+            two(r#"Some("t")"#, r#"Some("s")"#),
+            Err(BookError::SceneLoop(_))
+        ));
+        assert!(matches!(
+            two(r#"Some("s")"#, "None"),
+            Err(BookError::SceneLoop(_))
+        ));
     }
 
     #[test]

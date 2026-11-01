@@ -3,8 +3,9 @@
 // the mission. Text slots: {role} the role's name, {role.title} its title,
 // {role.place} where they work, {role.district} the district, {role.hours} the shift;
 // {you} is the player's handle.
-// `scenes` are scripted cinematics: a step's `Scene("id")` plays one, and its end marks the
-// step `Ended`, as a feed's does. A scene is a list of beats, in the look `Film` or `Bubbles`.
+// `scenes` are scripted cinematics: a step's `Scene("id")` plays one, then its `next` if it
+// names one, and the last one's end marks the step `Ended`, as a feed's does. A scene is a
+// list of beats, in the look `Film` or `Bubbles`.
 // Visitors (`pick: Visitor`) are never cast and take only {role} and {role.title}. Effects
 // `Scene`, `Arrive` (a visitor or "you"), `Leave`, `Lights`; `At(HomeDoor)`: in or at your flat.
 Story(
@@ -115,8 +116,7 @@ Story(
             Step(id: "door", when: MissionDone(mission: "the_drop", minutes: 0), then: [
                 Scene("house_call"),
             ]),
-            Step(id: "aside", when: Ended("door"), then: [Scene("seren_aside")]),
-            Step(id: "rest", when: Ended("aside"), then: [
+            Step(id: "rest", when: Ended("door"), then: [
                 Objective("Sleep · {castellan} will be in touch"),
             ]),
             Step(id: "lay_low", when: After(minutes: 2), then: [
@@ -130,7 +130,8 @@ Story(
         ]),
     ],
     scenes: {
-        "house_call": Scene(title: "House call", look: Film,
+        // Seren's aside follows the film as its `next`, from the console too.
+        "house_call": Scene(title: "House call", look: Film, next: Some("seren_aside"),
             pace: Pace(type: 45, walk: 0.3, hold: Some(2.5)), beats: [
             // The film sets its own stage, so it plays the same from the console:
             // you outside first, then the dark flat and who waits in it.

@@ -110,7 +110,11 @@ pub fn console_lines(st: &AppState) -> Vec<String> {
         };
         let n = scene.beats.len();
         let beats = if n == 1 { "beat" } else { "beats" };
-        out.push(format!("scene {id} · {look} · {n} {beats}"));
+        let then = scene
+            .next
+            .as_ref()
+            .map_or_else(String::new, |next| format!(" · then {next}"));
+        out.push(format!("scene {id} · {look} · {n} {beats}{then}"));
     }
     out
 }

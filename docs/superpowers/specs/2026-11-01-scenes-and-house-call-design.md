@@ -178,6 +178,9 @@ scenes: {
 
 - `title`: shown in the film's top bar and the bubbles' footer, upper case. No slots.
 - `look`: `Film` or `Bubbles`.
+- `next` (optional): the scene that plays straight after this one, for the same step;
+  the step ends with the last. The house call's film names Seren's aside, so the dev
+  console's `story scene house_call` plays both, as the game does.
 - `pace` (all required, all data):
   - `type`: characters per second a line types at (> 0).
   - `walk`: seconds per tile a walk takes (> 0).
@@ -236,7 +239,7 @@ and `Camera` do nothing, a `Keypad` shows no pad (its time still passes).
 - `Pick::Visitor`: never cast from the sim. A visitor role takes only the slots
   `{role}` and `{role.title}` (validation refuses `.place`, `.district`, `.hours`).
 - Effects: `Scene("id")` plays the scene (the step's presentation, like a feed: its
-  end marks the step `Ended`); `Arrive(role | "you", at: <Mark>)`, `Leave(role)` and
+  end, or the end of the last scene its `next` leads to, marks the step `Ended`); `Arrive(role | "you", at: <Mark>)`, `Leave(role)` and
   `Lights(level)` work as the beats do, outside a scene (an `Arrive` of `you` is the
   same cut, and the map follows you there).
 - `Where::HomeDoor`: you are home: on your flat's floor, inside the flat's rect, or
@@ -246,7 +249,7 @@ and `Camera` do nothing, a `Keypad` shows no pad (its time still passes).
   `you` for `Walk` and `Arrive`); no role is called `you`; `type`, `walk`, holds, keys, waits and
   paces are finite and > 0; `level` in 0..=1; `HomeInside(0)` refused; text slots
   checked with `{you}` allowed; `Ended(step)` may name a step that plays a scene; a
-  scene has at least one beat.
+  scene has at least one beat; a scene's `next` exists and never leads back to it.
 
 ## 2. The runtime (`missions/scene.rs`)
 
@@ -278,8 +281,9 @@ f32` (1.0).
 - **Skip.** Every remaining beat applies its end state at once: lines and the line in
   progress are logged in full, walks finish (actors on their goals), arrivals and
   leaves happen, lights set; then the scene ends.
-- **End.** The scene's doors and camera are dropped, the step is marked `Ended`, the
-  next queued scene may start, queued feeds and calls go on as before.
+- **End.** The scene's doors and camera are dropped; its `next` is queued first, for
+  the same step, or else the step is marked `Ended`; the next queued scene may start,
+  queued feeds and calls go on as before.
 - **A fight mid-scene** (`st.net.engaged` becomes `Some`) skips the scene.
 - **Logging.** `` `Castellan` · “Sit down…” `` as each line starts (the label as
   written, `as` if set, your handle for `you`); stage lines are not logged.
@@ -412,8 +416,7 @@ Mission(id: "house_call", title: "House call", from: "castellan", steps: [
     Step(id: "door", when: MissionDone(mission: "the_drop", minutes: 0), then: [
         Scene("house_call"),
     ]),
-    Step(id: "aside", when: Ended("door"), then: [Scene("seren_aside")]),
-    Step(id: "rest", when: Ended("aside"), then: [
+    Step(id: "rest", when: Ended("door"), then: [
         Objective("Sleep · {castellan} will be in touch"),
     ]),
     Step(id: "lay_low", when: After(minutes: 2), then: [
@@ -430,7 +433,7 @@ Mission(id: "house_call", title: "House call", from: "castellan", steps: [
 Scenes:
 
 ```ron
-"house_call": Scene(title: "House call", look: Film,
+"house_call": Scene(title: "House call", look: Film, next: Some("seren_aside"),
     pace: Pace(type: 45, walk: 0.3, hold: Some(2.5)), beats: [
     Arrive(role: "you", at: HomeOutside),
     Lights(0.45),

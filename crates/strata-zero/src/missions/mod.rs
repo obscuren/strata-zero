@@ -1070,6 +1070,23 @@ pub(crate) mod tests {
         the_stage_is_set(&st);
     }
 
+    #[test]
+    fn the_house_call_played_alone_ends_with_seren_s_aside() {
+        let mut st = begun();
+        scene::play(&mut st, "house_call");
+        tick(&mut st);
+        assert!(scene::tests::press(&mut st, crossterm::event::KeyCode::Esc));
+        tick(&mut st);
+        assert_eq!(scene::running(&st).map(|r| r.id()), Some("seren_aside"));
+        assert!(scene::tests::press(&mut st, crossterm::event::KeyCode::Esc));
+        tick(&mut st);
+        assert!(scene::running(&st).is_none());
+        assert!(st.missions.visitors.is_empty(), "Seren has gone");
+        assert_eq!(st.missions.lights, None);
+        // Played for no step: the house call's mission has not moved.
+        assert!(st.missions.runs[1].ended.is_empty());
+    }
+
     /// Mezz's call over with you already standing on `mark`, home before he told you to
     /// go: the drop's last steps run as the call ends.
     fn home_early(mark: &Mark) -> AppState {

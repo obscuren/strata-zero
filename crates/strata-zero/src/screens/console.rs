@@ -1192,10 +1192,21 @@ mod tests {
                 hold: None,
             },
             beats: vec![Beat::Stage("A stage line.".into()), Beat::Wait(1.0)],
+            next: None,
         };
+        let mut film = aside.clone();
+        film.look = Look::Film;
+        film.next = Some("aside".into());
         st.book.scenes.insert("aside".into(), aside);
+        st.book.scenes.insert("film".into(), film);
         let out = run(&mut st, at, "story").unwrap();
-        assert!(out.contains("scene aside · bubbles · 2 beats"), "{out}");
+        // The aside names no next; the film names the aside.
+        assert!(
+            out.contains(
+                "scene aside · bubbles · 2 beats · scene film · film · 2 beats · then aside"
+            ),
+            "{out}"
+        );
         assert!(
             run(&mut st, at, "story scene nope")
                 .unwrap_err()

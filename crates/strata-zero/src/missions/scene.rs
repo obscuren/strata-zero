@@ -185,7 +185,8 @@ pub fn camera(st: &AppState) -> Option<(Place, Pos)> {
     running(st).and_then(|r| r.camera)
 }
 
-/// Dev console: plays the scene next, for no mission's step, so its end moves nothing on.
+/// Dev console: plays the scene next, then its `next`, for no mission's step, so their
+/// end moves nothing on.
 pub fn play(st: &mut AppState, id: &str) {
     st.missions
         .scenes
@@ -364,12 +365,16 @@ fn advance(st: &mut AppState, run: &mut SceneRun) -> bool {
 }
 
 /// The scene is over: a walk left going lands where it ends, the doors and the camera
-/// go with the run, and the step that played it has ended.
+/// go with the run, and its `next` plays first for the same step, or the step that
+/// played it has ended.
 fn close(st: &mut AppState, run: SceneRun) {
     for w in &run.walks {
         land(st, w);
     }
-    super::end(st, run.mission, run.step);
+    match run.scene.next {
+        Some(next) => st.missions.scenes.push_front((run.mission, run.step, next)),
+        None => super::end(st, run.mission, run.step),
+    }
 }
 
 /// What a beat does as it begins.
@@ -1067,6 +1072,26 @@ pub(crate) mod tests {
         map.update(&mut st, &[k(KeyCode::Esc), k(KeyCode::Char('l'))]);
         assert!(running(&st).is_none());
         assert_eq!(me(&st), here);
+    }
+
+    #[test]
+    fn the_next_scene_plays_for_the_same_step() {
+        let mut st = queued(SLOW, r#"Say(who: "castellan", text: "One.")"#);
+        let mut aside = st.book.scenes["s"].clone();
+        aside.look = Look::Bubbles;
+        st.book.scenes.insert("t".into(), aside);
+        st.book.scenes.get_mut("s").unwrap().next = Some("t".into());
+        tick(&mut st);
+        assert!(press(&mut st, KeyCode::Esc));
+        assert!(!ended(&st), "the step waits on the scene after");
+        // Next in line, ahead of anything queued behind the first.
+        st.missions
+            .scenes
+            .push_back((usize::MAX, usize::MAX, "s".into()));
+        tick(&mut st);
+        assert_eq!(running(&st).map(|r| r.id()), Some("t"));
+        assert!(press(&mut st, KeyCode::Esc));
+        assert!(ended(&st));
     }
 
     #[test]
