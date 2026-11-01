@@ -2119,8 +2119,10 @@ fn indoor_lighting() {
     }
 }
 
-/// The flat after the house call, both scenes skipped, beside the bed at 22:01.
-fn beside_the_bed() -> (AppState, MapScreen) {
+/// The flat after the house call, both scenes skipped, beside the bed at 22:01, the map
+/// run a few frames at `size` as play does: the camera clamped to the floor, which puts
+/// the flat (on the floor's bottom edge) low on the map.
+pub(crate) fn beside_the_bed(size: (u16, u16)) -> (AppState, MapScreen) {
     use crate::missions::scene::tests::press;
     let mut st = crate::missions::tests::at_your_door();
     for _ in 0..2 {
@@ -2136,7 +2138,8 @@ fn beside_the_bed() -> (AppState, MapScreen) {
     let ahead = (22 * 60 + 1 + 1440 - st.minute_of_day() as u64) % 1440;
     let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
     world.advance(city, world.tick() + ahead * sim::TICKS_PER_MINUTE);
-    let map = MapScreen::walking(&mut st);
+    let mut map = MapScreen::walking(&mut st);
+    map.settle(&mut st, size);
     (st, map)
 }
 
@@ -2148,7 +2151,7 @@ fn rest_shots() {
     use crate::rest::{self, Kind};
     use crate::screens::rest::RestScreen;
     for (suffix, size) in [("", (120, 40)), ("_100x30", (100, 30))] {
-        let (mut st, map) = beside_the_bed();
+        let (mut st, map) = beside_the_bed(size);
         let choose = RestScreen::open(&st, Kind::Sleep);
         shot_stack(&format!("rest_choose{suffix}"), &st, &[&map, &choose], size);
 

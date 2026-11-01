@@ -115,8 +115,8 @@ A screen pushed over the map (`ScreenCmd::Replace` from the popup), so the stack
 what is under it. It draws one window in the game's window style (`┍━ ▤ Sleep ━┑`, light
 sides, `┕━┙`, `CYAN` frame, the title `TEAL` bold, the glyph `▤` for Sleep and `☾` for
 Wait), 57 columns wide and 12 rows high, centred across the map
-(`explore::layout(area, false).map`) with its bottom row on the map's last row, on
-`PANEL_BG`. Rows from the top border (row 0):
+(`explore::layout(area, false).map`) with its bottom row on the map's last row (or on
+top when that covers you; the end of this section), on `PANEL_BG`. Rows from the top border (row 0):
 
 - 2: hour labels, `FAINT`, every two hours at the hour's first cell (`20  22  00 …`).
 - 3: the strip, 48 cells, two an hour, `█` in:
@@ -135,15 +135,20 @@ Wait), 57 columns wide and 12 rows high, centred across the map
   wait` for Wait).
 
 Keys: `h`/`←` an hour earlier, `l`/`→` an hour later, `H` and `L` ten minutes, all
-clamped to 10 minutes to 20 hours ahead; `enter` starts it (§3) and pops the window;
+clamped to 10 minutes (rounded up to a ten of the clock) to 20 hours ahead; `enter` starts it (§3) and pops the window;
 `esc` pops it and nothing happens. The wake time is held as a game minute and shown
 rounded to ten minutes (the default is already on a ten).
 
 The window fits 100×30 (the map is 59 wide there) and 120×40. On a map under 25 rows
 (100×30's is 20) it drops its blank rows and stands 8 rows high: border, labels, strip,
-markers, their labels, the line, the keys, border. With the camera on you, either
-height leaves your `@` and the z's above it clear. (Ruling while building: the full
-window covered the `@` at 100×30.)
+markers, their labels, the line, the keys, border. (Ruling while building: the full
+window covered the `@` at 100×30.) It sits on the map's bottom rows unless there it
+would cover your `@` or the z's up and right of it (the rows `y-2..=y`); then it drops
+to the top of the map instead, the same size. The camera is clamped to the floor and
+the home flat can sit on the floor's bottom edge, so in play your `@` beside the bed is
+often drawn low on the map (seed 8: row 17 of 20 at 100×30). The map records where it
+drew your `@` each frame (`AppState.drawn_you`), so the choosing window, a screen on
+top, knows it too; it and the asleep window stand in the same place.
 
 ## 3. Asleep (and waiting)
 
@@ -178,7 +183,9 @@ in the HUD), with:
 
 ## 4. Waking
 
-Checked after every minute run asleep, in this order; the first that holds wakes you:
+Checked after every minute run asleep, and before each frame's first minute (so what
+came up outside the rest's minutes, as a fight the explore frame started after them,
+wakes you with no minute more), in this order; the first that holds wakes you:
 
 1. A fight (`st.net.engaged`).
 2. Your HP below what it was when you lay down.
@@ -189,6 +196,10 @@ Checked after every minute run asleep, in this order; the first that holds wakes
 7. The wake minute reached.
 
 `esc` wakes you at the minute it is.
+
+Lying down when something already wakes you (a fight, a call up, a scene playing or
+queued, a feed queued) does nothing but say so: no rest, no minute, the line `You can't
+sleep now.` (`You can't wait now.` for Wait).
 
 On waking `st.rest` is cleared, then, for Sleep only, HP and FOCUS each rise by
 `ceil(max × min(1, minutes slept / 360))`, capped at their max. One log line says what

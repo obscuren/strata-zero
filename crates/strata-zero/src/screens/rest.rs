@@ -52,9 +52,11 @@ impl Screen for RestScreen {
         ScreenCmd::Stay
     }
 
+    /// Over the map drawn under it this frame, kept off your `@` there.
     fn draw(&self, st: &AppState, f: &mut Frame) {
         let map = super::explore::layout(f.area(), false).map;
-        rest::draw_window(f.buffer_mut(), map, st, self.kind, self.until, None);
+        let you = st.drawn_you.get();
+        rest::draw_window(f.buffer_mut(), map, you, st, self.kind, self.until, None);
     }
 }
 
@@ -91,7 +93,10 @@ mod tests {
         for _ in 0..30 {
             press(&mut s, &mut st, KeyCode::Char('h'));
         }
-        assert_eq!(s.until, now + 10, "no earlier than ten minutes on");
+        // No earlier than ten minutes on, rounded up to a ten of the clock.
+        let ahead = s.until - now;
+        assert!((10..20).contains(&ahead), "{ahead}");
+        assert_eq!((st.minute_of_day() as u64 + ahead) % 10, 0, "{ahead}");
         for _ in 0..30 {
             press(&mut s, &mut st, KeyCode::Char('l'));
         }

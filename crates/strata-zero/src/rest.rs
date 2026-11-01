@@ -74,14 +74,16 @@ pub fn default_wake(st: &AppState, kind: Kind) -> u64 {
     now(st) + ahead + ten
 }
 
-/// A wake minute held to the least (ten minutes on) and the most (twenty hours) a rest
-/// may last.
+/// A wake minute held to the least (ten minutes on, rounded up to a ten of the clock,
+/// as the window shows it) and the most (twenty hours) a rest may last.
 pub fn clamp(st: &AppState, wake: u64) -> u64 {
     let now = now(st);
-    wake.clamp(now + 10, now + 1200)
+    let ten = (10 - (st.minute_of_day() as u64 + 10) % 10) % 10;
+    wake.clamp(now + 10 + ten, now + 1200)
 }
 
-/// Lies you down or sits you out until `until`, unless something already wakes you.
+/// Lies you down or sits you out until `until`. When something already wakes you (a
+/// fight, a call, a scene, a feed) there is no rest, only a line that says so.
 pub fn start(st: &mut AppState, kind: Kind, until: u64) {
     st.rest = Some(Rest {
         kind,
@@ -91,9 +93,13 @@ pub fn start(st: &mut AppState, kind: Kind, until: u64) {
         visitors: in_the_flat(st),
     });
     // What is there as you lie down is what you lie down to; only a fight, a call, a
-    // scene or a feed wake you at once.
-    if let Some(why) = cause(st, false) {
-        wake(st, why);
+    // scene or a feed keep you up.
+    if cause(st, false).is_some() {
+        st.rest = None;
+        st.say(match kind {
+            Kind::Sleep => "You can't sleep now.",
+            Kind::Wait => "You can't wait now.",
+        });
     }
 }
 
@@ -106,6 +112,12 @@ pub fn frame(st: &mut AppState) {
 /// `budget` spent (always one), or at the first thing that wakes you.
 pub fn frame_within(st: &mut AppState, budget: Duration) {
     let began = Instant::now();
+    // What came up outside the rest's minutes (a fight the explore frame started after
+    // them) wakes you before another minute runs.
+    if let Some(why) = cause(st, true) {
+        wake(st, why);
+        return;
+    }
     for _ in 0..MINUTES_PER_FRAME {
         if st.rest.is_none() {
             return;
@@ -225,16 +237,30 @@ const PAST: Color = Color::Rgb(35, 38, 45);
 const NIGHT_CELL: Color = Color::Rgb(23, 33, 58);
 const DAY_CELL: Color = Color::Rgb(61, 51, 24);
 
-/// The window over the map: centred, its bottom row on the map's last, clipped to the
-/// map where that is narrower, and `SHORT_H` high on a map under `TALL_MAP` rows.
-pub fn window_rect(map: Rect) -> Rect {
+/// The window over the map: centred, clipped to the map where that is narrower, and
+/// `SHORT_H` high on a map under `TALL_MAP` rows. It sits on the map's last rows, unless
+/// there it would cover `you`, the screen cell of your `@`, or the z's beside it; then
+/// on the map's first rows.
+pub fn window_rect(map: Rect, you: Option<(u16, u16)>) -> Rect {
     let tall = if map.height < TALL_MAP {
         SHORT_H
     } else {
         WINDOW_H
     };
     let (w, h) = (WINDOW_W.min(map.width), tall.min(map.height));
-    Rect::new(map.x + (map.width - w) / 2, map.bottom() - h, w, h)
+    let x = map.x + (map.width - w) / 2;
+    let low = Rect::new(x, map.bottom() - h, w, h);
+    let covered = you.is_some_and(|me| {
+        std::iter::once(Some(me))
+            .chain(z_cells(me))
+            .flatten()
+            .any(|(x, y)| low.contains(ratatui::layout::Position::new(x, y)))
+    });
+    if covered {
+        Rect::new(x, map.y, w, h)
+    } else {
+        low
+    }
 }
 
 /// `5h 11m`.
@@ -252,18 +278,20 @@ fn hhmm(minute_of_day: i64, rounded: bool) -> String {
     format!("{:02}:{:02}", m / 60, m % 60)
 }
 
-/// Draws the Rest window over the map: choosing a wake time at `until` (`asleep`
-/// `None`), or the rest under way since the minute `from` (`Some(from)`), the strip
-/// filling up to the time now.
+/// Draws the Rest window over the map, off `you` (your `@`'s screen cell, as
+/// `window_rect` takes it): choosing a wake time at `until` (`asleep` `None`), or the
+/// rest under way since the minute `from` (`Some(from)`), the strip filling up to the
+/// time now.
 pub fn draw_window(
     buf: &mut Buffer,
     map: Rect,
+    you: Option<(u16, u16)>,
     st: &AppState,
     kind: Kind,
     until: u64,
     asleep: Option<u64>,
 ) {
-    let r = window_rect(map);
+    let r = window_rect(map, you);
     if r.width < WINDOW_W || r.height < SHORT_H {
         return;
     }
@@ -407,21 +435,22 @@ pub fn draw_window(
     chrome::put(buf, x0, row(9), &keys, Style::default().fg(FAINT), max);
 }
 
+/// The cells of the z's beside `me`, the screen cell of your `@`: the small one one up
+/// and right, the big one two up and two right; `None` past the screen's edge.
+fn z_cells(me: (u16, u16)) -> [Option<(u16, u16)>; 2] {
+    [1, 2].map(|d| Some((me.0.checked_add(d)?, me.1.checked_sub(d)?)))
+}
+
 /// The sleeper's z's beside `me`, the screen cell of your `@`: a small `z` one up and
 /// right, a big `Z` two up and two right, each only where it is inside the map. They
 /// set the cell's whole style, nothing of the map under them.
 pub fn draw_zs(buf: &mut Buffer, map: Rect, me: (u16, u16)) {
     let zs = [
-        ('z', 1, 1, Style::default().fg(SLEEP)),
-        (
-            'Z',
-            2,
-            2,
-            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
-        ),
+        ('z', Style::default().fg(SLEEP)),
+        ('Z', Style::default().fg(CYAN).add_modifier(Modifier::BOLD)),
     ];
-    for (ch, dx, dy, style) in zs {
-        let (Some(x), Some(y)) = (me.0.checked_add(dx), me.1.checked_sub(dy)) else {
+    for (at, (ch, style)) in z_cells(me).into_iter().zip(zs) {
+        let Some((x, y)) = at else {
             continue;
         };
         if map.contains(ratatui::layout::Position::new(x, y)) {
@@ -435,7 +464,7 @@ pub fn draw_zs(buf: &mut Buffer, map: Rect, me: (u16, u16)) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::Screen;
+    use crate::app::{Screen, ScreenCmd};
     use crate::jobs::testutil::state_home;
     use crate::missions::marks;
     use crate::missions::{Book, Mark};
@@ -524,12 +553,17 @@ mod tests {
 
     #[test]
     fn the_wake_time_clamps() {
-        let st = state_home();
+        let mut st = state_home();
+        at(&mut st, 22, 1);
         let n = now(&st);
-        assert_eq!(clamp(&st, n + 1), n + 10);
-        assert_eq!(clamp(&st, n), n + 10);
+        // The least is ten minutes on, up to a ten of the clock: 22:20, not 22:11.
+        assert_eq!(clamp(&st, n + 1), minutes(&st, 22, 20));
+        assert_eq!(clamp(&st, n), minutes(&st, 22, 20));
         assert_eq!(clamp(&st, n + 300), n + 300);
         assert_eq!(clamp(&st, n + 2000), n + 1200);
+        at(&mut st, 22, 10);
+        let n = now(&st);
+        assert_eq!(clamp(&st, n), n + 10, "already on a ten");
     }
 
     #[test]
@@ -539,10 +573,15 @@ mod tests {
         start(&mut st, Kind::Sleep, from + 30);
         frame_within(&mut st, LONG);
         assert_eq!(now(&st), from + 4);
+        // The Net's minute and the jobs' clock move with the world.
+        assert_eq!(st.net.last_minute(), from + 4);
+        assert_eq!(st.jobs.last_minute(), Some(from + 4));
         for _ in 0..7 {
             frame_within(&mut st, LONG);
         }
         assert_eq!(now(&st), from + 30);
+        assert_eq!(st.net.last_minute(), from + 30);
+        assert_eq!(st.jobs.last_minute(), Some(from + 30));
         assert!(st.rest.is_none());
         let (h, m) = st.clock();
         assert_eq!(last(&st), format!("You wake at {h:02}:{m:02}."));
@@ -574,13 +613,17 @@ mod tests {
         let logged = |st: &AppState| st.log.iter().any(|e| e.text == "the step");
         let mut awake = storied(30, r#"Log("the step")"#);
         let from = now(&awake);
-        while !logged(&awake) {
+        for _ in 0..120 {
+            if logged(&awake) {
+                break;
+            }
             crate::clock::run(
                 &mut awake,
                 Some(sim::TICKS_PER_MINUTE),
                 crate::clock::PATHS_PER_FRAME,
             );
         }
+        assert!(logged(&awake), "the step fires awake");
         let mut asleep = storied(30, r#"Log("the step")"#);
         start(&mut asleep, Kind::Sleep, from + 120);
         let mut seen = None;
@@ -609,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn a_call_up_as_you_lie_down_wakes_you_at_once() {
+    fn with_a_call_up_you_cannot_lie_down() {
         let mut st = storied(0, r#"Call(from: "mezz", lines: ["Pick up."])"#);
         crate::missions::tick(&mut st);
         assert!(st.missions.call.is_some());
@@ -618,7 +661,25 @@ mod tests {
         start(&mut st, Kind::Sleep, until);
         assert!(st.rest.is_none());
         assert_eq!(st.clock_tick(), from);
-        assert!(last(&st).starts_with("A call wakes you"));
+        assert_eq!(last(&st), "You can't sleep now.");
+        start(&mut st, Kind::Wait, until);
+        assert!(st.rest.is_none());
+        assert_eq!(last(&st), "You can't wait now.");
+    }
+
+    #[test]
+    fn a_fight_from_outside_the_rest_wakes_you_with_no_minute_run() {
+        let mut st = state_home();
+        let until = now(&st) + 600;
+        start(&mut st, Kind::Sleep, until);
+        // The explore frame's tail, after the rest's minutes: a fight starts.
+        let street = citygen::Place::Stratum(citygen::StratumKind::Street);
+        crate::net::engage(&mut st, street, true);
+        let from = st.clock_tick();
+        frame_within(&mut st, LONG);
+        assert!(st.rest.is_none());
+        assert_eq!(st.clock_tick(), from, "no minute ran");
+        assert_eq!(last(&st), "A fight wakes you.");
     }
 
     #[test]
@@ -704,7 +765,8 @@ mod tests {
             KeyCode::Char('q'),
             KeyCode::Char(' '),
         ] {
-            s.update(&mut st, &[key(code)]);
+            let cmd = s.update(&mut st, &[key(code)]);
+            assert!(matches!(cmd, ScreenCmd::Stay), "{code:?} leaves the stack");
             assert_eq!(spot(&st), at);
             assert_eq!(st.rest.as_ref().map(|r| r.until), Some(until));
         }
@@ -765,8 +827,8 @@ mod tests {
         let area = Rect::new(0, 0, 120, 40);
         let map = crate::screens::explore::layout(area, false).map;
         let mut buf = Buffer::empty(area);
-        draw_window(&mut buf, map, st, kind, until, asleep);
-        (buf, window_rect(map))
+        draw_window(&mut buf, map, None, st, kind, until, asleep);
+        (buf, window_rect(map, None))
     }
 
     fn row(buf: &Buffer, r: Rect, y: u16) -> String {
@@ -890,7 +952,7 @@ mod tests {
     fn the_window_fits_100x30_and_120x40() {
         for (w, h) in [(100, 30), (120, 40)] {
             let map = crate::screens::explore::layout(Rect::new(0, 0, w, h), false).map;
-            let r = window_rect(map);
+            let r = window_rect(map, None);
             // 100×30's map is 20 rows, 120×40's 30: the short window and the full one.
             let rows = if h == 30 { 8 } else { 12 };
             assert_eq!((r.width, r.height), (57, rows), "{w}x{h}");
@@ -898,8 +960,29 @@ mod tests {
             assert_eq!(r.bottom(), map.bottom(), "{w}x{h}");
         }
         let narrow = Rect::new(2, 5, 40, 20);
-        let r = window_rect(narrow);
+        let r = window_rect(narrow, None);
         assert!(r.x >= narrow.x && r.right() <= narrow.right());
+    }
+
+    #[test]
+    fn the_window_goes_up_off_you_and_your_zs() {
+        let map = crate::screens::explore::layout(Rect::new(0, 0, 100, 30), false).map;
+        let low = window_rect(map, None);
+        let x = map.x + map.width / 2;
+        // In the middle, or on the row just above the window: the bottom.
+        for y in [map.y + map.height / 2, low.y - 1] {
+            assert_eq!(window_rect(map, Some((x, y))), low, "{y}");
+        }
+        // Your `@` on its rows, or left of it with only the z's on them: the top, the
+        // same size.
+        let top = Rect::new(low.x, map.y, 57, 8);
+        for me in [(x, low.y), (x, map.bottom() - 1), (low.x - 1, low.y + 2)] {
+            assert_eq!(window_rect(map, Some(me)), top, "{me:?}");
+        }
+        // Clear of the window's columns, nothing of you under it: the bottom.
+        let wide = Rect::new(0, 5, 120, 20);
+        let r = window_rect(wide, None);
+        assert_eq!(window_rect(wide, Some((r.x - 3, wide.bottom() - 1))), r);
     }
 
     #[test]
@@ -909,8 +992,9 @@ mod tests {
         let area = Rect::new(0, 0, 100, 30);
         let map = crate::screens::explore::layout(area, false).map;
         let mut buf = Buffer::empty(area);
-        draw_window(&mut buf, map, &st, Kind::Sleep, minutes(&st, 22, 20), None);
-        let r = window_rect(map);
+        let until = minutes(&st, 22, 20);
+        draw_window(&mut buf, map, None, &st, Kind::Sleep, until, None);
+        let r = window_rect(map, None);
         assert_eq!(r.height, 8);
         let text = |y| row(&buf, r, y);
         assert!(text(0).contains("Sleep"));
@@ -926,6 +1010,7 @@ mod tests {
         draw_window(
             &mut buf,
             map,
+            None,
             &st,
             Kind::Sleep,
             minutes(&st, 7, 0),
