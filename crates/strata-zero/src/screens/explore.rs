@@ -2668,27 +2668,19 @@ impl Screen for MapScreen {
             (Mode::Walk, Some(p)) if p.place.is_street() => Some(p.pos),
             _ => None,
         };
-        if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
+        if let (Some(_), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
             world.set_blocker(standing);
-            if self.mode == Mode::Walk {
-                world.advance(city, world.tick() + elapsed);
-                world.path_some(city, 4);
-            }
         }
-        // The bots out with you move on the same clock.
-        crate::bots::tick(st);
-        // The Net's clock: traces cool, hacks expire, alerts end.
-        let now = st.net.now(st);
         let inside = match st.player.as_ref().map(|p| p.place) {
             Some(Place::Construct(b)) => Some(b),
             _ => None,
         };
-        let roots = st.backdoors.roots();
-        st.net.minute(now, inside, &mut st.constructs, &roots);
-        crate::net::tick_backdoors(st);
-        crate::jobs::tick(st);
         let before = st.player.as_ref().map(|p| (p.place, p.pos));
-        crate::missions::tick(st);
+        crate::clock::run(
+            st,
+            (self.mode == Mode::Walk).then_some(elapsed),
+            crate::clock::PATHS_PER_FRAME,
+        );
         // The story moved you (an `Arrive`, a scene's walk): no aimed walk goes on from
         // where you were, and the map follows you before this frame draws.
         if st.player.as_ref().map(|p| (p.place, p.pos)) != before {

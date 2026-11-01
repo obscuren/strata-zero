@@ -14,6 +14,7 @@ mod broadcasts;
 mod casts;
 mod cli;
 mod clinic;
+mod clock;
 mod combat;
 mod constructs;
 mod credentials;
