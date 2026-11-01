@@ -2564,6 +2564,11 @@ impl Screen for MapScreen {
                 scened = true;
                 continue;
             }
+            // A rest takes every key but esc, which wakes you (and the console's, once
+            // open, its own).
+            if !console && self.console.is_none() && crate::rest::key(st, k) {
+                continue;
+            }
             // A HOLO call up takes space and esc before the walk keys, once look mode,
             // a pick, an aim and help have had theirs.
             if self.plain_walk() && crate::missions::call::key(st, k) {
@@ -2676,11 +2681,15 @@ impl Screen for MapScreen {
             _ => None,
         };
         let before = st.player.as_ref().map(|p| (p.place, p.pos));
-        crate::clock::run(
-            st,
-            (self.mode == Mode::Walk).then_some(elapsed),
-            crate::clock::PATHS_PER_FRAME,
-        );
+        if st.rest.is_some() {
+            crate::rest::frame(st);
+        } else {
+            crate::clock::run(
+                st,
+                (self.mode == Mode::Walk).then_some(elapsed),
+                crate::clock::PATHS_PER_FRAME,
+            );
+        }
         // The story moved you (an `Arrive`, a scene's walk): no aimed walk goes on from
         // where you were, and the map follows you before this frame draws.
         if st.player.as_ref().map(|p| (p.place, p.pos)) != before {
@@ -5069,6 +5078,20 @@ mod tests {
             ScreenCmd::Stay
         ));
         assert_eq!(last(&st), Some("no active abilities"));
+    }
+
+    #[test]
+    fn a_rest_leaves_the_console_its_keys() {
+        let mut st = crate::jobs::testutil::state_home();
+        st.unlock_dev();
+        let mut s = MapScreen::walking(&mut st);
+        let until = crate::rest::now(&st) + 600;
+        crate::rest::start(&mut st, crate::rest::Kind::Sleep, until);
+        s.update(&mut st, &[key(KeyCode::Char(':'))]);
+        assert!(s.console.is_some());
+        s.update(&mut st, &[key(KeyCode::Char('x'))]);
+        assert_eq!(s.console.as_ref().map(|c| c.input.as_str()), Some("x"));
+        assert!(st.rest.is_some());
     }
 
     #[test]
