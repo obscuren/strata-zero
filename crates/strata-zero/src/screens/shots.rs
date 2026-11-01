@@ -1947,3 +1947,81 @@ fn track_jobs_tab() {
         );
     }
 }
+
+/// The shipped story at your door after the drop, the house call queued, and the map
+/// that will draw it.
+fn at_the_door() -> (AppState, MapScreen) {
+    let mut st = crate::missions::tests::at_your_door();
+    let map = MapScreen::walking(&mut st);
+    (st, map)
+}
+
+/// One tick on, the story's own.
+fn story_tick(st: &mut AppState) {
+    if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
+        world.advance(city, world.tick() + 1);
+    }
+    crate::missions::tick(st);
+}
+
+/// Ticks the story until the running scene stands on `beat` with its line fully typed
+/// (or, on a keypad beat, its verdict showing).
+fn scene_at(st: &mut AppState, beat: usize) {
+    use crate::missions::scene;
+    for _ in 0..20_000 {
+        if let Some(run) = scene::running(st) {
+            let line_done = run.line().is_none_or(|l| !l.typing(st.clock_tick()));
+            let pad_done = run.pad().is_none() || run.verdict_shown();
+            if run.beat() == beat && line_done && pad_done {
+                return;
+            }
+        }
+        story_tick(st);
+    }
+    panic!("the scene never reached beat {beat}");
+}
+
+/// Ticks on until the scene `id` is the one running.
+fn scene_is(st: &mut AppState, id: &str) {
+    use crate::missions::scene;
+    for _ in 0..20_000 {
+        if scene::running(st).map(|r| r.id()) == Some(id) {
+            return;
+        }
+        story_tick(st);
+    }
+    panic!("{id} never played");
+}
+
+/// The house call's film at the beats that matter: the pad's DENIED, the voice at the
+/// open door, Castellan on the couch, Seren out of the bedroom; then the couch small.
+#[test]
+#[ignore]
+fn scene_film_shots() {
+    for (name, beat, size) in [
+        ("scene_film_keypad", 1, (120, 40)),
+        ("scene_film_door", 6, (120, 40)),
+        ("scene_film_couch", 11, (120, 40)),
+        ("scene_film_seren", 17, (120, 40)),
+        ("scene_film_couch_100x30", 11, (100, 30)),
+    ] {
+        let (mut st, map) = at_the_door();
+        scene_at(&mut st, beat);
+        shot_stack(name, &st, &[&map], size);
+    }
+}
+
+/// Seren's aside as bubbles over the dimmed flat, at both sizes.
+#[test]
+#[ignore]
+fn scene_bubbles_shots() {
+    for (name, size) in [
+        ("scene_bubbles_seren", (120, 40)),
+        ("scene_bubbles_seren_100x30", (100, 30)),
+    ] {
+        let (mut st, map) = at_the_door();
+        scene_is(&mut st, "seren_aside");
+        scene_at(&mut st, 2);
+        shot_stack(name, &st, &[&map], size);
+    }
+}

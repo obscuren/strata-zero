@@ -439,7 +439,7 @@ pub fn role_name(st: &AppState, role: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::jobs::testutil::state_home;
     use crate::render::map::MapRef;
@@ -988,7 +988,7 @@ mod tests {
 
     /// The drop run through its last step, you standing at your door, the house call's
     /// film queued.
-    fn at_your_door() -> AppState {
+    pub(crate) fn at_your_door() -> AppState {
         let mut st = begun();
         st.character.handle = "VEX".into();
         to_the_call(&mut st);

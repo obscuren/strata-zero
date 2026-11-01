@@ -96,6 +96,18 @@ impl SceneRun {
         &self.id
     }
 
+    /// The beat in progress.
+    #[cfg(test)]
+    pub fn beat(&self) -> usize {
+        self.beat
+    }
+
+    /// The keypad has typed its last digit and shows its verdict.
+    #[cfg(test)]
+    pub fn verdict_shown(&self) -> bool {
+        self.keypad.as_ref().is_some_and(|p| p.verdict_at.is_some())
+    }
+
     pub fn look(&self) -> Look {
         self.scene.look
     }
