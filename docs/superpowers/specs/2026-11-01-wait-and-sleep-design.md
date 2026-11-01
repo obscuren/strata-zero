@@ -139,7 +139,11 @@ clamped to 10 minutes to 20 hours ahead; `enter` starts it (§3) and pops the wi
 `esc` pops it and nothing happens. The wake time is held as a game minute and shown
 rounded to ten minutes (the default is already on a ten).
 
-The window fits 100×30 (the map is 59 wide there) and 120×40.
+The window fits 100×30 (the map is 59 wide there) and 120×40. On a map under 25 rows
+(100×30's is 20) it drops its blank rows and stands 8 rows high: border, labels, strip,
+markers, their labels, the line, the keys, border. With the camera on you, either
+height leaves your `@` and the z's above it clear. (Ruling while building: the full
+window covered the `@` at 100×30.)
 
 ## 3. Asleep (and waiting)
 
