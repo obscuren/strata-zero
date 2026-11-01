@@ -767,11 +767,13 @@ mod tests {
     #[test]
     fn the_shipped_book_parses_and_validates() {
         let b = book();
-        assert_eq!(b.missions.len(), 1);
+        assert_eq!(b.missions.len(), 2);
         assert_eq!(b.missions[0].id, "the_drop");
+        assert_eq!(b.missions[1].id, "house_call");
+        assert_eq!(b.scenes.len(), 2);
         assert_eq!(b.missions[0].steps.len(), 6);
-        assert!(b.cast.contains_key("dez") && b.cast.contains_key("marlo"));
-        assert_eq!(b.face_of("dez").eye, (255, 0, 200));
+        assert!(b.cast.contains_key("mezz") && b.cast.contains_key("marlo"));
+        assert_eq!(b.face_of("mezz").eye, (255, 0, 200));
         assert_eq!(b.face_of("marlo"), &b.faces["silhouette"]);
     }
 
@@ -800,8 +802,8 @@ mod tests {
     }
 
     #[test]
-    fn the_drop_needs_dez_and_marlo() {
-        let want: BTreeSet<String> = ["dez", "marlo"].map(String::from).into();
+    fn the_drop_needs_mezz_and_marlo() {
+        let want: BTreeSet<String> = ["mezz", "marlo"].map(String::from).into();
         assert_eq!(book().missions[0].roles(), want);
     }
 

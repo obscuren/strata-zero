@@ -1150,7 +1150,7 @@ mod tests {
     fn story_lists_the_cast_and_missions() {
         let (mut st, at) = story_state();
         let out = run(&mut st, at, "story").unwrap();
-        assert!(out.contains("dez"), "{out}");
+        assert!(out.contains("mezz"), "{out}");
         assert!(out.contains("the_drop"), "{out}");
         assert!(out.contains("waits on"), "{out}");
         assert_eq!(complete(&st, "", "sto"), vec!["story".to_string()]);

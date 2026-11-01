@@ -160,7 +160,7 @@ mod tests {
             for w in &words {
                 assert!(shown.contains(w.as_str()), "{size:?}: {w:?} missing");
             }
-            for w in ["space", "take the package", "HOLO", "DEZ"] {
+            for w in ["space", "take the package", "HOLO", "MEZZ"] {
                 assert!(shown.contains(w), "{size:?}: {w:?} missing");
             }
             assert!(!shown.contains('…'), "{size:?}");

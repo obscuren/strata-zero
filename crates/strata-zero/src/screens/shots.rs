@@ -1502,7 +1502,7 @@ fn street_by_the_body() -> (AppState, MapScreen) {
     (st, map)
 }
 
-/// A minute on from the welcome: Dez's call rings.
+/// A minute on from the welcome: Mezz's call rings.
 fn ringing_call() -> (AppState, MapScreen) {
     let (mut st, map) = street_by_the_body();
     crate::missions::tick(&mut st);
@@ -1510,7 +1510,7 @@ fn ringing_call() -> (AppState, MapScreen) {
         world.advance(city, world.tick() + sim::TICKS_PER_MINUTE);
     }
     crate::missions::tick(&mut st);
-    assert!(st.missions.call.is_some(), "Dez rings");
+    assert!(st.missions.call.is_some(), "Mezz rings");
     (st, map)
 }
 
@@ -1557,7 +1557,7 @@ fn holo_call_glitch() {
     let (mut st, map) = ringing_call();
     holo_space(&mut st);
     holo_space(&mut st);
-    let seed = crate::missions::face::seed_of(&st, "dez");
+    let seed = crate::missions::face::seed_of(&st, "mezz");
     st.tick = (0..600)
         .find(|&t| crate::missions::face::burst(t, seed).is_some())
         .expect("a burst frame");

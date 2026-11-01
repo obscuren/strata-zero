@@ -707,20 +707,17 @@ mod tests {
         assert_eq!(st.missions.runs[m].at, ring);
         assert_eq!(resolve(&st, &story(m, ring)), Resolved::Nowhere);
 
-        let (_, home) = step_of(&st, |t| matches!(t, Trigger::At(Where::Home)));
+        let (_, home) = step_of(&st, |t| matches!(t, Trigger::At(Where::HomeDoor)));
         while st.missions.runs[m].at < home {
             assert!(crate::missions::force(&mut st, m));
         }
         let rig = st.home.unwrap();
-        let (place, pos) = flat_tile(&st).unwrap();
-        assert_eq!(place, rig.place());
-        assert!(rig.home.rect.contains(pos));
         assert_eq!(
             resolve(&st, &story(m, home)),
             Resolved::Target(Target::Spot {
-                place,
-                pos,
-                radius: 0
+                place: rig.place(),
+                pos: rig.home.door,
+                radius: 1
             })
         );
         assert_eq!(resolve(&st, &story(m, sees)), done());
@@ -1519,9 +1516,9 @@ mod tests {
         let mut st = state_home();
         st.book = crate::missions::Book::parse(
             r#"Story(
-                cast: { "dez": Role(name: "Dez", title: "fixer", pick: NearestFixer, face: None) },
+                cast: { "mezz": Role(name: "Mezz", title: "fixer", pick: NearestFixer, face: None) },
                 faces: { "silhouette": Face(rows: ["......dd........", "....dmmmmd......"], eye: (255, 255, 255)) },
-                missions: [Mission(id: "door", title: "Door", from: "dez", steps: [
+                missions: [Mission(id: "door", title: "Door", from: "mezz", steps: [
                     Step(id: "go", when: NewGame, then: [Objective("Go home")]),
                     Step(id: "knock", when: At(HomeDoor), then: [Log("knock")]),
                 ])],

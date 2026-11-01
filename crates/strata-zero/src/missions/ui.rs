@@ -213,7 +213,7 @@ mod tests {
     fn the_pane_shows_the_drop_above_the_job() {
         let st = open_drop();
         let story = pane_lines(&st);
-        assert_eq!(text(&story[0]), " THE DROP · Dez · story");
+        assert_eq!(text(&story[0]), " THE DROP · Mezz · story");
         assert_eq!(story[0].spans[1].style.fg, Some(MAGENTA));
         assert_eq!(story[0].spans[2].style.fg, Some(DIM));
         assert!(text(&story[1]).starts_with(" » Hand the package to "));
@@ -271,13 +271,13 @@ mod tests {
             .insert(0, "Walk to the corner".into());
         let d = detail(&st, 0);
         assert_eq!(text(&d[0]), "The drop");
-        assert_eq!(text(&d[1]), "from Dez · story · open");
+        assert_eq!(text(&d[1]), "from Mezz · story · open");
         assert_eq!(text(&d[3]), "☑ Walk to the corner");
         assert_eq!(d[3].spans[0].style.fg, Some(DIM));
         assert!(text(&d[4]).starts_with("☐ Hand the package"));
         st.missions.runs[0].state = RunState::Done { at: 5 };
         let d = detail(&st, 0);
-        assert_eq!(text(&d[1]), "from Dez · story · done");
+        assert_eq!(text(&d[1]), "from Mezz · story · done");
         assert!(text(&d[4]).starts_with("☑ "));
     }
 }
