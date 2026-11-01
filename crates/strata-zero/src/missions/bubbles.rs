@@ -65,7 +65,10 @@ pub fn chrome(buf: &mut Buffer, r: &Regions, st: &AppState, console: bool) {
     }
     if let Some(stage) = run.stage() {
         let stage = cut(&format!(" ▸ {stage} "), r.map.width as usize);
-        let style = Style::default().fg(DIM).bg(PANEL_BG);
+        let style = Style::default()
+            .fg(DIM)
+            .bg(PANEL_BG)
+            .add_modifier(Modifier::ITALIC);
         put(buf, r.map.x + 1, r.map.y + 1, &stage, style, r.map.right());
     }
 }
@@ -414,8 +417,10 @@ mod tests {
         let text: String = cells.iter().map(|c| c.symbol()).collect();
         assert_eq!(text, stage);
         assert!(
-            cells.iter().all(|c| c.modifier.is_empty() && c.fg == DIM),
-            "uniformly dim"
+            cells
+                .iter()
+                .all(|c| c.modifier == Modifier::ITALIC && c.fg == DIM),
+            "uniformly dim and italic, as the film's"
         );
         let title = &buf[(r.footer[0].x + 1, r.footer[0].y)];
         assert_eq!(title.modifier, Modifier::BOLD);

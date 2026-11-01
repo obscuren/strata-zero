@@ -195,8 +195,11 @@ impl Canvas {
             }
             return;
         }
-        let bold = mods.contains(Modifier::BOLD);
-        let Some(g) = self.fonts.glyph(c, bold, self.px) else {
+        let (bold, italic) = (
+            mods.contains(Modifier::BOLD),
+            mods.contains(Modifier::ITALIC),
+        );
+        let Some(g) = self.fonts.glyph(c, bold, italic, self.px) else {
             // No face has it: a hollow box inside the cell.
             let (bx0, by0, bx1, by1) =
                 (x0 + 1, y0 + 2, x1c.saturating_sub(1), y1c.saturating_sub(2));
@@ -338,6 +341,16 @@ mod tests {
         let (_, px) = painted(&cell("M", style));
         assert!(px.contains(&0xffffff));
         assert!(px.contains(&0));
+    }
+
+    #[test]
+    fn italic_slants_the_letter() {
+        let style = Style::new()
+            .fg(Color::Rgb(255, 255, 255))
+            .bg(Color::Rgb(0, 0, 0));
+        let (_, upright) = painted(&cell("l", style));
+        let (_, italic) = painted(&cell("l", style.add_modifier(Modifier::ITALIC)));
+        assert_ne!(upright, italic);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! The film look (scenes spec §5): the frame black, the map in the middle at its usual
-//! size, what happens dim in the top bar, the line as a subtitle under the map. The
-//! map and the overlays on it are drawn by the explore screen; this is the rest.
+//! size under the title, and under the map what happens, dim and italic, over the line
+//! as a subtitle. The map and the overlays on it are drawn by the explore screen; this
+//! is the rest.
 
 use super::overlay::{self, WHITE};
 use super::scene::{self, Line};
@@ -17,15 +18,19 @@ const TITLE: Color = Color::Rgb(153, 0, 120);
 const HINT: &str = "space next · esc skip";
 /// The most rows a subtitle takes.
 const SUBTITLE_ROWS: u16 = 3;
+/// The map's top row: under the title (row 1) and a blank row.
+const MAP_TOP: u16 = 3;
 
-/// `map` moved to the middle of `frame`; only its x changes.
+/// `map` moved to the middle of `frame`, and up under the title, so the rows under it
+/// hold the stage line and the subtitle.
 pub fn map_rect(frame: Rect, map: Rect) -> Rect {
     let slack = frame.width.saturating_sub(map.width);
-    Rect::new(frame.x + slack / 2, map.y, map.width, map.height)
+    let y = map.y.min(frame.y + MAP_TOP);
+    Rect::new(frame.x + slack / 2, y, map.width, map.height)
 }
 
-/// Blacks out everything outside `map`, then draws the top bar, the subtitle and the
-/// hint.
+/// Blacks out everything outside `map`, then draws the title, and under the map the
+/// stage line, the subtitle and the hint.
 pub fn draw(buf: &mut Buffer, frame: Rect, map: Rect, st: &AppState) {
     let Some(run) = scene::running(st) else {
         return;
@@ -40,18 +45,36 @@ pub fn draw(buf: &mut Buffer, frame: Rect, map: Rect, st: &AppState) {
         }
     }
     let title = cut(&run.title().to_uppercase(), map.width as usize);
-    text(buf, frame, map.x, frame.y + 1, &title, TITLE, true);
+    text(
+        buf,
+        frame,
+        map.x,
+        frame.y + 1,
+        &title,
+        TITLE,
+        Modifier::BOLD,
+    );
+    // A blank row under the map, then what happens, on the whole black row.
     if let Some(stage) = run.stage() {
-        let stage = cut(stage, map.width as usize);
+        let stage = cut(stage, frame.width.saturating_sub(2) as usize);
         let w = stage.chars().count() as u16;
         let x = frame.x + frame.width.saturating_sub(w) / 2;
-        text(buf, frame, x, map.y.saturating_sub(2), &stage, DIM, false);
+        text(
+            buf,
+            frame,
+            x,
+            map.bottom() + 1,
+            &stage,
+            DIM,
+            Modifier::ITALIC,
+        );
     }
     let hint_y = frame.bottom().saturating_sub(1);
     let hint_x = map.right().saturating_sub(HINT.chars().count() as u16);
-    text(buf, frame, hint_x.max(frame.x), hint_y, HINT, FAINT, false);
+    let plain = Modifier::empty();
+    text(buf, frame, hint_x.max(frame.x), hint_y, HINT, FAINT, plain);
     if let Some(line) = run.line() {
-        let top = map.bottom() + 1;
+        let top = map.bottom() + 2;
         let rows = hint_y.saturating_sub(top).min(SUBTITLE_ROWS);
         subtitle(buf, frame, map, st, line, top, rows);
     }
@@ -94,31 +117,28 @@ fn subtitle(
     }
     let width = label_w + 2 + wrapped.iter().map(|r| r.chars().count()).max().unwrap_or(0);
     let x = frame.x + frame.width.saturating_sub(width as u16) / 2;
-    text(buf, frame, x, top, &label, colour, true);
+    text(buf, frame, x, top, &label, colour, Modifier::BOLD);
     let tx = x + label_w as u16 + 2;
     let mut caret = (tx, top);
     for (i, (row, &take)) in wrapped.iter().zip(&typed).enumerate() {
         let y = top + i as u16;
         let shown: String = row.chars().take(take).collect();
-        text(buf, frame, tx, y, &shown, WHITE, false);
+        text(buf, frame, tx, y, &shown, WHITE, Modifier::empty());
         if take > 0 {
             caret = (tx + shown.chars().count() as u16, y);
         }
     }
     if line.typing(now) {
-        text(buf, frame, caret.0, caret.1, "▌", colour, false);
+        text(buf, frame, caret.0, caret.1, "▌", colour, Modifier::empty());
     }
 }
 
 /// Writes `s` from `x` on black in its whole style, stopping at the frame's edge.
-fn text(buf: &mut Buffer, frame: Rect, x: u16, y: u16, s: &str, fg: Color, bold: bool) {
+fn text(buf: &mut Buffer, frame: Rect, x: u16, y: u16, s: &str, fg: Color, mods: Modifier) {
     if y >= frame.bottom() {
         return;
     }
-    let mut style = Style::default().fg(fg).bg(BLACK);
-    if bold {
-        style = style.add_modifier(Modifier::BOLD);
-    }
+    let style = Style::default().fg(fg).bg(BLACK).add_modifier(mods);
     for (cx, ch) in (x..frame.right()).zip(s.chars()) {
         overlay::ink(&mut buf[(cx, y)], ch, style);
     }
@@ -169,16 +189,21 @@ mod tests {
             r#"Stage("The lock clicks."), Say(who: "castellan", text: "Hello there.")"#,
         );
         let (buf, map) = drawn(&mut st, (120, 40));
-        assert_eq!((map.x, map.y, map.width, map.height), (20, 5, 79, 30));
-        let top: String = (0..5).map(|y| row(&buf, y)).collect();
+        // Up under the title, the rows the HUD had above it given to the bottom.
+        assert_eq!((map.x, map.y, map.width, map.height), (20, 3, 79, 30));
+        let top: String = (0..3).map(|y| row(&buf, y)).collect();
         assert!(!top.contains("HP") && !top.contains("FOCUS"), "{top}");
         assert!(row(&buf, 1)[map.x as usize..].starts_with("TEST"));
+        assert!(row(&buf, 2).trim().is_empty());
+        // What happens, under the map and over the line: centred, dim, italic.
         let stage = "The lock clicks.";
         let at = (120 - stage.len()) / 2;
-        assert_eq!(row(&buf, 3).trim(), stage);
-        assert!(row(&buf, 3).starts_with(&format!("{}{stage}", " ".repeat(at))));
-        assert_eq!(buf[(at as u16, 3)].fg, DIM);
-        let sub = row(&buf, 36);
+        assert!(row(&buf, 33).trim().is_empty());
+        assert_eq!(row(&buf, 34).trim(), stage);
+        assert!(row(&buf, 34).starts_with(&format!("{}{stage}", " ".repeat(at))));
+        assert_eq!(buf[(at as u16, 34)].fg, DIM);
+        assert!(buf[(at as u16, 34)].modifier.contains(Modifier::ITALIC));
+        let sub = row(&buf, 35);
         let label_at = sub.find("CASTELLAN").expect("the label");
         assert_eq!(sub[..label_at].trim(), "");
         let hint = row(&buf, 39);
@@ -193,17 +218,24 @@ mod tests {
     #[test]
     fn film_fits_100x30() {
         let text = ["abcdef"; 20].join(" ");
-        let mut st = playing(SLOW, &format!(r#"Say(who: "castellan", text: "{text}")"#));
+        // Wider than the map: the stage line has the frame's width.
+        let stage = "From the bedroom, a woman, the rig's cable still at her neck.";
+        let mut st = playing(
+            SLOW,
+            &format!(r#"Stage("{stage}"), Say(who: "castellan", text: "{text}")"#),
+        );
         assert!(press(&mut st, SPACE), "space shows the whole line");
         let (buf, map) = drawn(&mut st, (100, 30));
         assert_eq!((map.width, map.height), (59, 20));
-        let rows: Vec<String> = (26..29).map(|y| row(&buf, y)).collect();
+        assert!(stage.len() > map.width as usize);
+        assert_eq!(row(&buf, 24).trim(), stage);
+        let rows: Vec<String> = (25..28).map(|y| row(&buf, y)).collect();
         assert!(rows.iter().all(|r| !r.trim().is_empty()), "{rows:?}");
         assert!(rows[0].contains("CASTELLAN"));
         let words = rows.join(" ").replace("CASTELLAN", "");
         assert_eq!(words.split_whitespace().count(), 20, "{rows:?}");
         assert!(row(&buf, 29).trim_end().ends_with("esc skip"));
-        assert!(row(&buf, 25).trim().is_empty());
+        assert!(row(&buf, 23).trim().is_empty() && row(&buf, 28).trim().is_empty());
     }
 
     #[test]
@@ -218,7 +250,7 @@ mod tests {
         run_ticks(&mut st, 70);
         let (buf, _) = drawn(&mut st, (120, 40));
         let typed = |y| row(&buf, y).chars().filter(|c| *c == 'x').count();
-        assert_eq!((typed(36), typed(37)), (68, 2));
+        assert_eq!((typed(35), typed(36)), (68, 2));
     }
 
     #[test]
@@ -247,13 +279,13 @@ mod tests {
         st.player = Some(crate::walker::Player::at(place, inside));
         see(&mut st);
         let (buf, _) = drawn(&mut st, (120, 40));
-        let sub = row(&buf, 36);
+        let sub = row(&buf, 35);
         assert!(
             sub.contains("A VOICE") && !sub.contains("CASTELLAN"),
             "{sub}"
         );
         let x = sub.find("A VOICE").unwrap() as u16;
-        assert_eq!(buf[(x, 36)].fg, DIM);
+        assert_eq!(buf[(x, 35)].fg, DIM);
         let marker = cells(&buf, |c| c.symbol() == "▾");
         assert_eq!(marker.len(), 1);
         assert_eq!(buf[marker[0]].fg, DIM);

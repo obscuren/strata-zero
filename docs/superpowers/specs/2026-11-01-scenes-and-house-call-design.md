@@ -31,6 +31,10 @@ missions pick either per scene.
   without the film effect. So build both, make sure that both are done and ready and
   can be integrated").
 - **B's stage line in A**: "The lock clicks from inside…" reads in the film's top bar.
+- **The stage line at the bottom, italic** (after playing it): "The 'you walk in' needs
+  to be italic and i think also on the bottom. theres so much to see its easy to miss".
+  The film's stage line moved under the map, over the subtitle; both looks draw it
+  italic, and the window leans its glyphs to show it.
 - **Timing SHOULD NOT be hardcoded.** Every wait, walk speed, typing speed and line
   dwell is a value in the scene's data. A line moves on after its data-set time, or
   when you press `space`; both work now.
@@ -193,7 +197,7 @@ scenes: {
 | Beat | Does | Ends |
 |---|---|---|
 | `Say(who: "role" \| "you", text: "..", as: Some("A voice"), at: Some(<Mark>), hold: Some(s))` | a line: types at `pace.type`, shown as a subtitle (film) or a bubble (bubbles); logged as it starts | after typing plus `hold` (the beat's, else the pace's); with no hold at all, on `space` |
-| `Stage("..")` | the stage line: film's top bar, bubbles' corner; replaces the last one | at once |
+| `Stage("..")` | the stage line, italic: under the film's map, in the bubbles' corner; replaces the last one | at once |
 | `Walk(who, to: <Mark>, pace: Some(s), wait: true)` | the actor walks a path to the mark, one tile per `pace` (the beat's, else `pace.walk`) | on arrival; with `wait: false` at once, the walk going on beside later beats |
 | `Wait(s)` | nothing for `s` seconds | after `s` |
 | `Keypad(door: <Mark>, code: Journal \| Code(n), result: Denied \| Open, keys: s, hold: s)` | the door's keypad over the map: the code typed a digit every `keys` seconds, then the verdict, held `hold` seconds | after the last digit plus `hold` |
@@ -311,17 +315,19 @@ Drawn instead of the explore frame while a film scene runs:
 
 - The whole frame black (`Rgb(0,0,0)`).
 - The map at its usual size (`layout(..).map`), moved to the middle of the frame
-  (`x = (W − w) / 2`), drawn as usual (map, people, visitors, bodies, the player),
-  then the scene's overlays: lights, doors, the speaker's marker.
-- **Top bar** (rows above the map): the scene's title upper case, magenta at 60 %,
-  bold, on the second row at the map's left edge; the stage line dim (`DIM`), centred,
-  on the row above the map's top rule row (the map's `y − 2`), cut with `…` at the
-  map's width.
-- **Subtitle** under the map: the label in the speaker's colour, bold, two spaces, the
-  typed text in white; wrapped to the map's width less the label, continuation lines
-  indented under the text; up to three lines (more are cut with `…`), the block
-  centred in the frame, starting on the map's bottom + 1. While a line types, a `▌` in
-  the speaker's colour follows it.
+  (`x = (W − w) / 2`) and up to the frame's row 3 (`film::map_rect`), drawn as usual
+  (map, people, visitors, bodies, the player), then the scene's overlays: lights,
+  doors, the speaker's marker.
+- **Title**: the scene's title upper case, magenta at 60 %, bold, on the frame's second
+  row at the map's left edge; a blank row under it, then the map.
+- **Stage line** under the map, after a blank row (the map's bottom + 1): dim (`DIM`),
+  italic, centred in the frame, cut with `…` at the frame's width less two.
+- **Subtitle** under the stage line's row: the label in the speaker's colour, bold, two
+  spaces, the typed text in white; wrapped to the map's width less the label,
+  continuation lines indented under the text; up to three lines (more are cut with
+  `…`), the block centred in the frame, starting on the map's bottom + 2, whether or
+  not a stage line shows. While a line types, a `▌` in the speaker's colour follows
+  it.
 - **Hint**: `space next · esc skip` in `FAINT`, last row, right-aligned to the map's
   right edge.
 - **Marker**: `▾` in the speaker's colour, bold, on the cell above the line's anchor
@@ -341,7 +347,7 @@ Drawn after the explore frame while a bubbles scene runs:
   four rows cleared to `PANEL_BG`: the first reads `cinematic · <title>` in magenta at
   80 %, bold; the last `space next   esc skip` in `DIM`.
 - The stage line at the map's top-left (`map.x + 1, map.y + 1`): ` ▸ <stage> ` in
-  `DIM` on `PANEL_BG`, cut at the map's width.
+  `DIM` italic on `PANEL_BG`, cut at the map's width.
 - **The bubble**: width `min(34, map.w − 2)`, the text wrapped to width − 4, height
   lines + 2; a rounded box (`╭ ─ ╮ │ ╰ ╯`) in the speaker's colour on `PANEL_BG`, the
   label bold in the top border (`╭─ CASTELLAN ───╮`), the text in `TEXT`, a `▌` in the
