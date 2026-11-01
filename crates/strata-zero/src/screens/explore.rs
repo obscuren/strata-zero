@@ -12433,13 +12433,38 @@ mod tests {
             let (asleep, _, _) = beside_the_bed(&mut st, w, h);
             let win = rest::window_rect(map);
             assert!(win.x >= map.x && win.right() <= map.right() && win.bottom() <= map.bottom());
-            // The camera holds you in the map's middle. On the 20 rows of 100×30 the
-            // window's top row is that middle, so only 120×40 keeps you in view.
-            if w == 120 {
-                let covered = win.contains(ratatui::layout::Position::new(me.0, me.1));
-                assert!(!covered, "{me:?} {map:?} {win:?}");
-                assert_eq!(my_at(&asleep, map), me, "your @ shows");
+            // The camera holds you in the map's middle; the window stays below you
+            // and the z's above it.
+            for (dx, dy) in [(0, 0), (1, 1), (2, 2)] {
+                let at = (me.0 + dx, me.1 - dy);
+                let pos = ratatui::layout::Position::new(at.0, at.1);
+                assert!(!win.contains(pos), "{w}x{h}: {at:?} {map:?} {win:?}");
+                assert_eq!(asleep[at].symbol(), ["@", "z", "Z"][dx as usize], "{w}x{h}");
             }
+        }
+    }
+
+    #[test]
+    fn the_choosing_window_leaves_you_at_100x30() {
+        use crate::rest::Kind;
+        for (w, h) in [(100, 30), (120, 40)] {
+            let mut st = crate::jobs::testutil::state_home();
+            let (awake, map, _) = beside_the_bed(&mut st, w, h);
+            let me = my_at(&awake, map);
+            let s = MapScreen::walking(&mut st);
+            let choose = crate::screens::rest::RestScreen::open(&st, Kind::Sleep);
+            let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+            t.draw(|f| {
+                s.draw(&st, f);
+                crate::ui::dim::wash(f.buffer_mut());
+                choose.draw(&st, f);
+            })
+            .unwrap();
+            let buf = t.backend().buffer();
+            let win = crate::rest::window_rect(map);
+            assert_eq!(buf[(win.x + 3, win.y)].symbol(), "▤", "{w}x{h}: the window");
+            assert!(!win.contains(ratatui::layout::Position::new(me.0, me.1)));
+            assert_eq!(buf[me].symbol(), "@", "{w}x{h}: you show");
         }
     }
 

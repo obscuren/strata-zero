@@ -211,6 +211,9 @@ fn cause(st: &AppState, running: bool) -> Option<Why> {
 /// The window's width and height, borders included.
 pub const WINDOW_W: u16 = 57;
 pub const WINDOW_H: u16 = 12;
+/// On a map shorter than `TALL_MAP` rows the window drops its blank rows.
+pub const SHORT_H: u16 = 8;
+const TALL_MAP: u16 = 25;
 /// The strip: 24 hours in half-hour cells.
 const CELLS: i64 = 48;
 const CELL_MINUTES: i64 = 30;
@@ -223,9 +226,14 @@ const NIGHT_CELL: Color = Color::Rgb(23, 33, 58);
 const DAY_CELL: Color = Color::Rgb(61, 51, 24);
 
 /// The window over the map: centred, its bottom row on the map's last, clipped to the
-/// map where that is narrower.
+/// map where that is narrower, and `SHORT_H` high on a map under `TALL_MAP` rows.
 pub fn window_rect(map: Rect) -> Rect {
-    let (w, h) = (WINDOW_W.min(map.width), WINDOW_H.min(map.height));
+    let tall = if map.height < TALL_MAP {
+        SHORT_H
+    } else {
+        WINDOW_H
+    };
+    let (w, h) = (WINDOW_W.min(map.width), tall.min(map.height));
     Rect::new(map.x + (map.width - w) / 2, map.bottom() - h, w, h)
 }
 
@@ -256,9 +264,18 @@ pub fn draw_window(
     asleep: Option<u64>,
 ) {
     let r = window_rect(map);
-    if r.width < WINDOW_W || r.height < WINDOW_H {
+    if r.width < WINDOW_W || r.height < SHORT_H {
         return;
     }
+    // A row of the full window as this one has it: the short one has no blank rows.
+    let row = |n: u16| {
+        r.y + match (r.height < WINDOW_H, n) {
+            (false, n) => n,
+            (true, 7) => 5,
+            (true, 9) => 6,
+            (true, n) => n - 1,
+        }
+    };
     chrome::solid(buf, r);
     chrome::frame(buf, r);
     let max = r.right() - 1;
@@ -287,7 +304,7 @@ pub fn draw_window(
         chrome::put(
             buf,
             x0 + 2 * k as u16,
-            r.y + 2,
+            row(2),
             &format!("{hour:02}"),
             style,
             max,
@@ -311,7 +328,7 @@ pub fn draw_window(
         chrome::put(
             buf,
             x0 + i as u16,
-            r.y + 3,
+            row(3),
             "█",
             Style::default().fg(fg),
             max,
@@ -337,12 +354,12 @@ pub fn draw_window(
         now_x = now_x.min(wake_x - nl - 1);
     }
     let bold = |c: Color| Style::default().fg(c).add_modifier(Modifier::BOLD);
-    chrome::put(buf, x_of(now_m), r.y + 4, "▴", bold(now_colour), max);
-    chrome::put(buf, x_of(until_m), r.y + 4, "▴", bold(SLEEP), max);
+    chrome::put(buf, x_of(now_m), row(4), "▴", bold(now_colour), max);
+    chrome::put(buf, x_of(until_m), row(4), "▴", bold(SLEEP), max);
     chrome::put(
         buf,
         now_x,
-        r.y + 5,
+        row(5),
         &now_label,
         Style::default().fg(now_colour),
         max,
@@ -350,7 +367,7 @@ pub fn draw_window(
     chrome::put(
         buf,
         wake_x,
-        r.y + 5,
+        row(5),
         &wake_label,
         Style::default().fg(SLEEP),
         max,
@@ -386,8 +403,8 @@ pub fn draw_window(
             )
         }
     };
-    chrome::put(buf, x0, r.y + 7, &said, Style::default().fg(DIM), max);
-    chrome::put(buf, x0, r.y + 9, &keys, Style::default().fg(FAINT), max);
+    chrome::put(buf, x0, row(7), &said, Style::default().fg(DIM), max);
+    chrome::put(buf, x0, row(9), &keys, Style::default().fg(FAINT), max);
 }
 
 /// The sleeper's z's beside `me`, the screen cell of your `@`: a small `z` one up and
@@ -874,12 +891,46 @@ mod tests {
         for (w, h) in [(100, 30), (120, 40)] {
             let map = crate::screens::explore::layout(Rect::new(0, 0, w, h), false).map;
             let r = window_rect(map);
-            assert_eq!((r.width, r.height), (57, 12), "{w}x{h}");
+            // 100×30's map is 20 rows, 120×40's 30: the short window and the full one.
+            let rows = if h == 30 { 8 } else { 12 };
+            assert_eq!((r.width, r.height), (57, rows), "{w}x{h}");
             assert!(r.x >= map.x && r.right() <= map.right(), "{w}x{h}");
             assert_eq!(r.bottom(), map.bottom(), "{w}x{h}");
         }
         let narrow = Rect::new(2, 5, 40, 20);
         let r = window_rect(narrow);
         assert!(r.x >= narrow.x && r.right() <= narrow.right());
+    }
+
+    #[test]
+    fn the_short_window_has_no_blank_rows() {
+        let mut st = state_home();
+        at(&mut st, 22, 1);
+        let area = Rect::new(0, 0, 100, 30);
+        let map = crate::screens::explore::layout(area, false).map;
+        let mut buf = Buffer::empty(area);
+        draw_window(&mut buf, map, &st, Kind::Sleep, minutes(&st, 22, 20), None);
+        let r = window_rect(map);
+        assert_eq!(r.height, 8);
+        let text = |y| row(&buf, r, y);
+        assert!(text(0).contains("Sleep"));
+        assert!(text(1).contains("20  22  00"));
+        assert_eq!(buf[(r.x + 4 + 4, r.y + 2)].symbol(), "█");
+        assert_eq!(buf[(r.x + 4 + 4, r.y + 3)].symbol(), "▴");
+        assert!(text(4).contains("now 22:01 wake 22:20"), "{}", text(4));
+        assert!(text(5).contains("asleep"));
+        assert!(text(6).contains("enter sleep"));
+        assert!(text(7).starts_with('┕'), "{}", text(7));
+        // Asleep it fills the same rows.
+        let from = now(&st);
+        draw_window(
+            &mut buf,
+            map,
+            &st,
+            Kind::Sleep,
+            minutes(&st, 7, 0),
+            Some(from),
+        );
+        assert!(row(&buf, r, 6).contains("esc wakes you"));
     }
 }
