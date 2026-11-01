@@ -2557,11 +2557,21 @@ impl Screen for MapScreen {
             self.cursor = size.center();
             self.cam_ready = true;
         }
+        // A scene took a key this frame.
+        let mut scened = false;
         for (i, k) in keys.iter().enumerate() {
+            // Once a scene has had a key, the rest of the frame's are its too, or
+            // nobody's: a second `esc` as one scene ends and the next waits its tick
+            // never reaches the map.
+            if scened {
+                crate::missions::scene::key(st, k);
+                continue;
+            }
             // A scene playing takes every key, all but the `:` that opens the dev
             // console over it.
             let console = st.dev && k.code == KeyCode::Char(':');
             if !console && crate::missions::scene::key(st, k) {
+                scened = true;
                 continue;
             }
             // A HOLO call up takes space and esc before the walk keys, once look mode,
@@ -2687,10 +2697,20 @@ impl Screen for MapScreen {
         st.net.minute(now, inside, &mut st.constructs, &roots);
         crate::net::tick_backdoors(st);
         crate::jobs::tick(st);
+        let before = st.player.as_ref().map(|p| (p.place, p.pos));
         crate::missions::tick(st);
-        // A scene playing: no aimed walk goes on under it, nothing of the map's stays
-        // open to keep its keys after, and the map follows where it puts you before
-        // this frame draws.
+        // The story moved you (an `Arrive`, a scene's walk): no aimed walk goes on from
+        // where you were, and the map follows you before this frame draws.
+        if st.player.as_ref().map(|p| (p.place, p.pos)) != before {
+            self.walking = None;
+            self.aim = None;
+            if self.mode == Mode::Walk && st.player.as_ref().is_some_and(|p| p.place != self.place)
+            {
+                self.follow_player(st);
+            }
+        }
+        // A scene playing: no aimed walk goes on under it, and nothing of the map's
+        // stays open to keep its keys after.
         if crate::missions::scene::running(st).is_some() {
             self.walking = None;
             self.aim = None;
@@ -2698,10 +2718,6 @@ impl Screen for MapScreen {
             self.looking = None;
             self.which_way = None;
             self.targeting = None;
-            if self.mode == Mode::Walk && st.player.as_ref().is_some_and(|p| p.place != self.place)
-            {
-                self.follow_player(st);
-            }
         }
         crate::track::tick(st);
         // A fixer beside you has their offer ready before you talk.
@@ -3121,9 +3137,10 @@ impl Screen for MapScreen {
             overlays.push(o);
         }
         // The tracked walk, last: it only tints backgrounds, and only on its own place.
+        // A film shows none of the HUD, the walk and its edge tag neither.
         let tracked_leg = crate::track::leg_now(st)
             .and_then(Result::ok)
-            .filter(|l| l.place == self.place);
+            .filter(|l| !film && l.place == self.place);
         let track_overlay = tracked_leg.map(|leg| crate::track::overlay::TrackOverlay {
             leg,
             pulses: crate::track::pulses_now(st),

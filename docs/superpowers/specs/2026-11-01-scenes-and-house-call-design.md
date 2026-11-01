@@ -81,8 +81,9 @@ After the builder check (settled here):
   every city (the rename moves him in the map anyway); tests and shots that assumed the
   old Marlo are updated, the rule isn't bent to keep him.
 - **Tracking follows `HomeDoor`.** `track::resolve_story` gets a `HomeDoor` arm: a spot
-  on your flat's door, radius 1. The track test that looks for `Where::Home` in the
-  shipped book looks for `HomeDoor`.
+  on your flat's door, radius 0 (after the final review: the door is where the trigger
+  holds, and a radius of 1 read "there" on the walkway's corners, where it doesn't). The
+  track test that looks for `Where::Home` in the shipped book looks for `HomeDoor`.
 - **The dev console keeps its priority.** It takes keys before the scene and draws over
   the film, so `story skip` can be typed while a scene runs.
 - **The rename is everywhere in the game**: `flavor/content.ron`'s package text,
@@ -95,6 +96,20 @@ After the builder check (settled here):
   frames as the real pad's does.
 - **A line spoken `as` someone else hides the speaker**: its label and its marker are
   `DIM`, not the speaker's tint (the voice behind the door isn't Castellan yet).
+
+After the final review: **getting home early.** A player who walked home during Mezz's
+call stood in the flat with "Get home" and nothing happened (and leaving played the
+arrival backwards). So:
+
+- **`Where::HomeDoor` holds when you are home**: in the flat's rect, or outside it within
+  one tile (manhattan) of its door, the door tile included.
+- **`Arrive` takes `you`**: the player is put on the mark at once (place, tile, sight; an
+  aimed walk or a scene walk of yours dropped), the same cut as a mission effect or a
+  scene beat.
+- **`Arrive` onto a held tile** (the player or another visitor on it) takes the free
+  walkable tile beside it nearest the one arriving, as `Beside` picks it; and the film
+  opens with `Arrive(role: "you", at: HomeOutside)`, so it always starts on the walkway
+  at your door.
 
 ## Words
 
@@ -181,7 +196,7 @@ scenes: {
 | `Keypad(door: <Mark>, code: Journal \| Code(n), result: Denied \| Open, keys: s, hold: s)` | the door's keypad over the map: the code typed a digit every `keys` seconds, then the verdict, held `hold` seconds | after the last digit plus `hold` |
 | `Door(at: <Mark>, open: bool)` | the door drawn open (or closed again) for the rest of the scene | at once |
 | `Camera(<Mark>)` | the camera holds that tile; `Camera(You)` follows you again | at once |
-| `Arrive(role, at: <Mark>)` | the visitor appears on the mark | at once |
+| `Arrive(role \| "you", at: <Mark>)` | the visitor appears on the mark (or moves there); `you` are put there, a cut (your place, tile and sight, any walk of yours dropped); a tile another actor holds gives the free tile beside it nearest the one arriving (as `Beside`) | at once |
 | `Leave(role)` | the visitor is gone | at once |
 | `Lights(level)` | your flat's light level, `1.0` normal, `0.0` black (§8) | at once |
 
@@ -221,13 +236,14 @@ and `Camera` do nothing, a `Keypad` shows no pad (its time still passes).
 - `Pick::Visitor`: never cast from the sim. A visitor role takes only the slots
   `{role}` and `{role.title}` (validation refuses `.place`, `.district`, `.hours`).
 - Effects: `Scene("id")` plays the scene (the step's presentation, like a feed: its
-  end marks the step `Ended`); `Arrive(role, at: <Mark>)`, `Leave(role)` and
-  `Lights(level)` work as the beats do, outside a scene.
-- `Where::HomeDoor`: on your flat's floor, outside the flat's rect, within one tile
-  (manhattan) of its door: walking up to your door.
+  end marks the step `Ended`); `Arrive(role | "you", at: <Mark>)`, `Leave(role)` and
+  `Lights(level)` work as the beats do, outside a scene (an `Arrive` of `you` is the
+  same cut, and the map follows you there).
+- `Where::HomeDoor`: you are home: on your flat's floor, inside the flat's rect, or
+  outside it within one tile (manhattan) of its door, the door tile included.
 - Validation, beside the old: every scene an effect names exists; every role a beat or
   effect names exists; `Walk`, `Arrive`, `Leave` and `Role(..)` marks name visitors (or
-  `you` for `Walk`); no role is called `you`; `type`, `walk`, holds, keys, waits and
+  `you` for `Walk` and `Arrive`); no role is called `you`; `type`, `walk`, holds, keys, waits and
   paces are finite and > 0; `level` in 0..=1; `HomeInside(0)` refused; text slots
   checked with `{you}` allowed; `Ended(step)` may name a step that plays a scene; a
   scene has at least one beat.
@@ -416,6 +432,7 @@ Scenes:
 ```ron
 "house_call": Scene(title: "House call", look: Film,
     pace: Pace(type: 45, walk: 0.3, hold: Some(2.5)), beats: [
+    Arrive(role: "you", at: HomeOutside),
     Stage("You key your code. The pad buzzes red."),
     Keypad(door: HomeDoor, code: Journal, result: Denied, keys: 0.22, hold: 0.8),
     Say(who: "you", text: "WTF…?"),

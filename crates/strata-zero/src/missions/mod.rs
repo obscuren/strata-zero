@@ -358,11 +358,11 @@ fn at(st: &AppState, place: &Where) -> bool {
         Where::Home => st
             .home
             .is_some_and(|rig| p.place == rig.place() && rig.home.rect.contains(p.pos)),
-        // Walking up to your door: on the walkway, one tile from it.
+        // Home: in the flat, or walking up to its door (the walkway one tile from it, the
+        // doorway itself).
         Where::HomeDoor => st.home.is_some_and(|rig| {
             p.place == rig.place()
-                && !rig.home.rect.contains(p.pos)
-                && p.pos.manhattan(rig.home.door) <= 1
+                && (rig.home.rect.contains(p.pos) || p.pos.manhattan(rig.home.door) <= 1)
         }),
         Where::Work { role, within } => {
             p.place == Place::Stratum(StratumKind::Street)
@@ -759,11 +759,6 @@ pub(crate) mod tests {
         // Still on the street: not home.
         tick(&mut st);
         assert_eq!(st.missions.runs[0].state, RunState::Open);
-        // Inside the flat is not at its door either.
-        let (place, pos) = marks::resolve(&st, &Mark::HomeInside(1), None).unwrap();
-        st.player = Some(Player::at(place, pos));
-        tick(&mut st);
-        assert_eq!(st.missions.runs[0].state, RunState::Open);
         let (place, pos) = marks::resolve(&st, &Mark::HomeOutside, None).unwrap();
         st.player = Some(Player::at(place, pos));
         tick(&mut st);
@@ -935,32 +930,65 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn at_home_door_fires_outside_the_door() {
+    fn at_home_door_fires_at_the_door_and_inside() {
+        // Whether `At(HomeDoor)` fires with you standing on the mark.
+        let knocks = |mark: Option<Mark>| {
+            let mut st = state_home();
+            st.book = book(
+                r#"Mission(id: "door", title: "Door", from: "mezz", steps: [
+                    Step(id: "go", when: NewGame, then: [Objective("Go home")]),
+                    Step(id: "knock", when: At(HomeDoor), then: [Log("knock")]),
+                ])"#,
+            );
+            begin(&mut st);
+            match mark {
+                Some(mark) => {
+                    let (place, pos) = marks::resolve(&st, &mark, None).unwrap();
+                    st.player = Some(Player::at(place, pos));
+                }
+                None => {
+                    let below = door(&st);
+                    on_street(&mut st, below);
+                }
+            }
+            tick(&mut st);
+            let done = matches!(st.missions.runs[0].state, RunState::Done { .. });
+            assert_eq!(done, st.log.iter().any(|e| e.text == "knock"));
+            done
+        };
+        // Home is home: the walkway at the door, the doorway, anywhere in the flat.
+        assert!(knocks(Some(Mark::HomeOutside)));
+        assert!(knocks(Some(Mark::HomeDoor)));
+        assert!(knocks(Some(Mark::HomeInside(1))));
+        assert!(knocks(Some(Mark::HomeBed)));
+        // On the street below is not.
+        assert!(!knocks(None));
+    }
+
+    #[test]
+    fn arriving_you_drops_an_aimed_walk() {
         let mut st = state_home();
         st.book = book(
-            r#"Mission(id: "door", title: "Door", from: "mezz", steps: [
+            r#"Mission(id: "cut", title: "Cut", from: "mezz", steps: [
                 Step(id: "go", when: NewGame, then: [Objective("Go home")]),
-                Step(id: "knock", when: At(HomeDoor), then: [Log("knock")]),
+                Step(id: "out", when: At(Home), then: [Arrive(role: "you", at: HomeOutside)]),
             ])"#,
         );
         begin(&mut st);
-        let stand = |st: &mut AppState, mark: &Mark| {
-            let (place, pos) = marks::resolve(st, mark, None).unwrap();
-            st.player = Some(Player::at(place, pos));
-        };
-        // In the flat, one tile from the door, is not at the door.
-        stand(&mut st, &Mark::HomeInside(1));
-        tick(&mut st);
-        assert_eq!(st.missions.runs[0].at, 1);
-        // On the street below is not either.
-        let below = door(&st);
-        on_street(&mut st, below);
-        tick(&mut st);
-        assert_eq!(st.missions.runs[0].at, 1);
-        stand(&mut st, &Mark::HomeOutside);
-        tick(&mut st);
-        assert!(matches!(st.missions.runs[0].state, RunState::Done { .. }));
-        assert!(st.log.iter().any(|e| e.text == "knock"));
+        let mut map = crate::screens::explore::MapScreen::walking(&mut st);
+        let (place, pos) = marks::resolve(&st, &Mark::HomeInside(1), None).unwrap();
+        st.player = Some(Player::at(place, pos));
+        // A fight on foot, where an aimed walk outlasts the frame.
+        crate::net::engage(&mut st, place, true);
+        map.walking = Some(crate::screens::explore::Walk {
+            path: vec![pos.offset(0, 1)],
+            next_at: u64::MAX,
+        });
+        crate::app::Screen::update(&mut map, &mut st, &[]);
+        let out = marks::resolve(&st, &Mark::HomeOutside, None).unwrap();
+        let me = st.player.as_ref().unwrap();
+        assert_eq!((me.place, me.pos), out);
+        assert!(map.walking.is_none(), "no walk goes on from where you were");
     }
 
     #[test]
@@ -1027,6 +1055,76 @@ pub(crate) mod tests {
         assert_eq!(st.missions.lights, Some(0.45));
     }
 
+    /// Mezz's call over with you already standing on `mark`, home before he told you to
+    /// go: the drop's last steps run as the call ends.
+    fn home_early(mark: &Mark) -> AppState {
+        let mut st = begun();
+        st.character.handle = "VEX".into();
+        to_the_call(&mut st);
+        let (place, pos) = marks::resolve(&st, mark, None).unwrap();
+        st.player = Some(Player::at(place, pos));
+        scene::tests::see(&mut st);
+        end(&mut st, 0, 3);
+        st
+    }
+
+    #[test]
+    fn home_early_the_film_opens_at_your_door() {
+        for mark in [Mark::HomeInside(1), Mark::HomeDoor, Mark::HomeBed] {
+            let mut st = home_early(&mark);
+            assert!(
+                matches!(st.missions.runs[0].state, RunState::Done { .. }),
+                "{mark:?}: the drop ends at once"
+            );
+            tick(&mut st);
+            assert_eq!(
+                scene::running(&st).map(|r| r.id()),
+                Some("house_call"),
+                "{mark:?}"
+            );
+            // Cut to the walkway outside, seeing from it.
+            let out = marks::resolve(&st, &Mark::HomeOutside, None).unwrap();
+            let me = st.player.as_ref().unwrap();
+            assert_eq!((me.place, me.pos), out, "{mark:?}");
+            assert_eq!(me.vis().get(out.1), Some(&Visibility::Visible));
+            assert_eq!(
+                visitor_at(&st, &Mark::HomeFurniture(citygen::Furniture::Couch)).as_deref(),
+                Some("castellan"),
+                "{mark:?}"
+            );
+            let (_, rig) = marks::resolve(&st, &Mark::HomeRig, None).unwrap();
+            let seren = st.missions.visitors.iter().find(|v| v.role == "seren");
+            assert!(
+                seren.is_some_and(|s| s.pos.chebyshev(rig) <= 1 && s.pos != me.pos),
+                "{mark:?}: {seren:?} by {rig:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn home_early_on_the_rig_side_seren_comes_in_beside_you() {
+        let st = home_early(&Mark::HomeRig);
+        let (place, rig) = marks::resolve(&st, &Mark::HomeRig, None).unwrap();
+        let seren = st
+            .missions
+            .visitors
+            .iter()
+            .find(|v| v.role == "seren")
+            .expect("seren is in");
+        assert_eq!(seren.place, place);
+        assert_eq!(seren.pos.chebyshev(rig), 1, "beside the tile you hold");
+        let map = crate::render::map::MapRef::for_place(
+            st.city.as_ref().unwrap(),
+            &st.interiors,
+            &st.constructs,
+            place,
+            st.minute_of_day(),
+        )
+        .unwrap();
+        assert!(crate::render::map::TileMap::walkable(&map, seren.pos));
+        assert!(visitor_at(&st, &Mark::HomeFurniture(citygen::Furniture::Couch)).is_some());
+    }
+
     #[test]
     fn skipping_the_house_call() {
         let mut st = at_your_door();
@@ -1050,6 +1148,8 @@ pub(crate) mod tests {
             (mail.from.as_str(), mail.subject.as_str()),
             ("Mezz", "lay low")
         );
+        assert_eq!(mail.body.len(), 3, "{:?}", mail.body);
+        assert_eq!(mail.body[0], "You made it home. Good.");
         // Every line of both scenes is in the log, once.
         for id in ["house_call", "seren_aside"] {
             for beat in &st.book.scenes[id].beats {
@@ -1065,10 +1165,23 @@ pub(crate) mod tests {
 
     #[test]
     fn playing_the_house_call_through() {
-        let mut st = at_your_door();
+        // At your door, the film queued and not yet begun.
+        let mut st = home_early(&Mark::HomeOutside);
+        assert!(scene::running(&st).is_none());
+        // A wait after the film's last beat, so the run is seen with the door shut.
+        let film = st.book.scenes.get_mut("house_call").unwrap();
+        film.beats.push(Beat::Wait(1.0));
+        let last = film.beats.len() - 1;
+        let door = marks::resolve(&st, &Mark::HomeDoor, None).unwrap();
+        let (mut opened, mut shut) = (false, false);
         for _ in 0..20_000 {
-            if scene::running(&st).map(|r| r.id()) == Some("seren_aside") {
-                break;
+            match scene::running(&st) {
+                Some(r) if r.id() == "seren_aside" => break,
+                Some(r) if r.id() == "house_call" => {
+                    opened |= r.doors() == [door];
+                    shut |= r.beat() == last && r.doors().is_empty();
+                }
+                _ => {}
             }
             let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) else {
                 panic!("no world");
@@ -1089,10 +1202,8 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(seren.place, place);
         assert!(seren.pos.manhattan(pos) <= 1, "{:?} by {pos:?}", seren.pos);
-        assert!(
-            scene::running(&st).unwrap().doors().is_empty(),
-            "the door is closed"
-        );
+        assert!(opened, "the door opens");
+        assert!(shut, "and closes behind Castellan");
     }
 
     #[test]

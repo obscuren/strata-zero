@@ -679,7 +679,7 @@ fn spot(st: &AppState, who: &str) -> Option<(Place, Pos)> {
 }
 
 /// Another actor than `who` stands on the tile.
-fn taken(st: &AppState, who: &str, place: Place, pos: Pos) -> bool {
+pub(super) fn taken(st: &AppState, who: &str, place: Place, pos: Pos) -> bool {
     let you = who != YOU
         && st
             .player
@@ -693,7 +693,7 @@ fn taken(st: &AppState, who: &str, place: Place, pos: Pos) -> bool {
 }
 
 /// Moves an actor: you, seeing from the new tile, or a visitor still on the map.
-fn put(st: &mut AppState, who: &str, place: Place, pos: Pos) {
+pub(super) fn put(st: &mut AppState, who: &str, place: Place, pos: Pos) {
     if who != YOU {
         if let Some(v) = st.missions.visitors.iter_mut().find(|v| v.role == who) {
             (v.place, v.pos) = (place, pos);
@@ -1044,6 +1044,32 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn keys_after_a_scene_ends_in_the_frame_are_swallowed() {
+        // The scene's end queues the next, as the house call queues Seren's aside.
+        let mut st = state_home();
+        st.book = book_with(
+            SLOW,
+            r#"Say(who: "castellan", text: "One.")"#,
+            r#"Scene("s")"#,
+        );
+        let mut map = MapScreen::walking(&mut st);
+        stand(&mut st, &Mark::HomeInside(1));
+        begin(&mut st);
+        map.update(&mut st, &[]);
+        assert!(running(&st).is_some());
+        let k = crate::screens::testutil::key;
+        let cmd = map.update(&mut st, &[k(KeyCode::Esc), k(KeyCode::Esc)]);
+        assert!(matches!(cmd, ScreenCmd::Stay), "no pause menu");
+        assert!(running(&st).is_some(), "the next scene starts");
+        assert_eq!(st.missions.runs[0].ended, [0].into());
+        // Nor does a key the scene had no use for reach the map.
+        let here = me(&st);
+        map.update(&mut st, &[k(KeyCode::Esc), k(KeyCode::Char('l'))]);
+        assert!(running(&st).is_none());
+        assert_eq!(me(&st), here);
+    }
+
+    #[test]
     fn a_scene_waits_out_a_fight() {
         let mut st = queued(SLOW, r#"Say(who: "castellan", text: "Later.")"#);
         let place = me(&st).0;
@@ -1389,6 +1415,40 @@ pub(crate) mod tests {
             at(&st, &Mark::Role("seren".into())),
             at(&st, &Mark::HomeBed)
         );
+    }
+
+    #[test]
+    fn arriving_you_is_a_cut() {
+        let mut st = queued(
+            SLOW,
+            r#"Walk(who: "you", to: HomeBed, wait: false),
+            Arrive(role: "you", at: HomeOutside),
+            Say(who: "you", text: "Out.")"#,
+        );
+        stand(&mut st, &Mark::HomeInside(1));
+        let out = at(&st, &Mark::HomeOutside);
+        tick(&mut st);
+        assert_eq!(beat(&st), 2);
+        assert_eq!(me(&st), out, "put there at once");
+        assert!(
+            running(&st).unwrap().walks.is_empty(),
+            "the walk is dropped"
+        );
+        let vis = st.player.as_ref().unwrap().vis();
+        assert_eq!(vis.get(out.1), Some(&Visibility::Visible));
+        run_ticks(&mut st, 200);
+        assert_eq!(me(&st), out);
+        // Onto a visitor's tile: beside it.
+        let mut st = queued(
+            SLOW,
+            r#"Arrive(role: "you", at: Role("seren")), Say(who: "you", text: "Hi.")"#,
+        );
+        let inside = at(&st, &Mark::HomeInside(2));
+        visitors::arrive(&mut st, "seren", inside);
+        tick(&mut st);
+        assert_eq!(me(&st).0, inside.0);
+        assert_eq!(me(&st).1.chebyshev(inside.1), 1);
+        assert_eq!(at(&st, &Mark::Role("seren".into())), inside);
     }
 
     /// The pad drawn alone, as text.

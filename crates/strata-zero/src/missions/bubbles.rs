@@ -24,7 +24,7 @@ const TITLE: Color = Color::Rgb(204, 0, 160);
 const KEYS: &str = "space next   esc skip";
 
 /// Dims the top band and the side panel, clears the four footer rows to the panel and
-/// writes `cinematic · <title>` and the keys on them, and the stage line in the map's
+/// writes `cinematic · <TITLE>` and the keys on them, and the stage line in the map's
 /// top-left corner. With the console open its row is left alone.
 pub fn chrome(buf: &mut Buffer, r: &Regions, st: &AppState, console: bool) {
     let Some(run) = scene::running(st) else {
@@ -51,7 +51,7 @@ pub fn chrome(buf: &mut Buffer, r: &Regions, st: &AppState, console: bool) {
             cell.set_bg(PANEL_BG);
         }
     }
-    let title = format!("cinematic · {}", run.title());
+    let title = format!("cinematic · {}", run.title().to_uppercase());
     let bold = Style::default()
         .fg(TITLE)
         .bg(PANEL_BG)
@@ -308,7 +308,7 @@ mod tests {
         let mut st = bubbling(r#"Stage("The lock clicks."), Say(who: "castellan", text: "Hi.")"#);
         let (buf, map) = drawn(&mut st, (120, 40));
         assert!(
-            row(&buf, 36).starts_with(" cinematic · Test"),
+            row(&buf, 36).starts_with(" cinematic · TEST"),
             "{}",
             row(&buf, 36)
         );

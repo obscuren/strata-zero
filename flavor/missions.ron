@@ -5,6 +5,8 @@
 // {you} is the player's handle.
 // `scenes` are scripted cinematics: a step's `Scene("id")` plays one, and its end marks the
 // step `Ended`, as a feed's does. A scene is a list of beats, in the look `Film` or `Bubbles`.
+// Visitors (`pick: Visitor`) are never cast and take only {role} and {role.title}. Effects
+// `Scene`, `Arrive` (a visitor or "you"), `Leave`, `Lights`; `At(HomeDoor)`: in or at your flat.
 Story(
     cast: {
         "mezz": Role(
@@ -133,6 +135,7 @@ Story(
     scenes: {
         "house_call": Scene(title: "House call", look: Film,
             pace: Pace(type: 45, walk: 0.3, hold: Some(2.5)), beats: [
+            Arrive(role: "you", at: HomeOutside),
             Stage("You key your code. The pad buzzes red."),
             Keypad(door: HomeDoor, code: Journal, result: Denied, keys: 0.22, hold: 0.8),
             Say(who: "you", text: "WTF…?"),

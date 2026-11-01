@@ -271,6 +271,41 @@ mod tests {
         }
     }
 
+    #[test]
+    fn film_draws_no_track() {
+        use super::super::Look;
+        // The map's cells drawn in this look, untracked and then tracked to a tile two
+        // in from your door.
+        let frames = |look: Look| {
+            let mut st = queued(SLOW, r#"Say(who: "castellan", text: "Hello.")"#);
+            st.book.scenes.get_mut("s").unwrap().look = look;
+            super::super::tick(&mut st);
+            see(&mut st);
+            let (plain, map) = drawn(&mut st, (120, 40));
+            let (place, pos) = marks::resolve(&st, &Mark::HomeInside(2), None).unwrap();
+            let spot = crate::track::Source::Spot {
+                place,
+                pos,
+                radius: 0,
+            };
+            crate::track::set(&mut st, spot).unwrap();
+            let leg = crate::track::leg_now(&st).unwrap().unwrap();
+            assert!(!leg.path.is_empty() && leg.place == place);
+            let (tracked, _) = drawn(&mut st, (120, 40));
+            let cells = |b: &Buffer| -> Vec<Cell> {
+                (map.y..map.bottom())
+                    .flat_map(|y| (map.x..map.right()).map(move |x| (x, y)))
+                    .map(|p| b[p].clone())
+                    .collect()
+            };
+            (cells(&plain), cells(&tracked))
+        };
+        let (plain, tracked) = frames(Look::Film);
+        assert!(plain == tracked, "the film shows no walk");
+        let (plain, tracked) = frames(Look::Bubbles);
+        assert!(plain != tracked, "the bubbles keep the HUD's walk");
+    }
+
     const PAD: &str =
         "Keypad(door: HomeDoor, code: Code(1234), result: Denied, keys: 0.1, hold: 0.5)";
 

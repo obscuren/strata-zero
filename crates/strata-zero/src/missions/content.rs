@@ -231,7 +231,7 @@ pub enum Where {
         role: String,
         within: i32,
     },
-    /// On your flat's floor, outside the flat, within one tile of its door.
+    /// Home: in your flat, or outside it within one tile of its door (the door included).
     HomeDoor,
 }
 
@@ -301,12 +301,13 @@ impl Effect {
         }
     }
 
-    /// The roles named outside text: who speaks, who dies.
+    /// The roles named outside text: who speaks, who dies, who arrives (but you).
     fn named_roles(&self) -> Vec<&str> {
         match self {
             Effect::Feed { from, .. } | Effect::Call { from, .. } | Effect::Mail { from, .. } => {
                 vec![from]
             }
+            Effect::Arrive { role, .. } if role == YOU => vec![],
             Effect::Dead { role, .. } | Effect::Arrive { role, .. } | Effect::Leave(role) => {
                 vec![role]
             }
@@ -488,6 +489,15 @@ impl Book {
         }
     }
 
+    /// Who an `Arrive` puts on the map: a visitor, or you (a cut).
+    fn check_arriving(&self, place: &str, role: &str) -> Result<(), BookError> {
+        if role == YOU {
+            Ok(())
+        } else {
+            self.check_visitor(place, role)
+        }
+    }
+
     /// A mark: its roles are visitors, `HomeInside` goes in at least a tile.
     fn check_mark(&self, place: &str, mark: &Mark) -> Result<(), BookError> {
         match mark {
@@ -569,7 +579,7 @@ impl Book {
             }
             Beat::Door { at, .. } | Beat::Camera(at) => self.check_mark(place, at)?,
             Beat::Arrive { role, at } => {
-                self.check_visitor(place, role)?;
+                self.check_arriving(place, role)?;
                 self.check_mark(place, at)?;
             }
             Beat::Leave(role) => self.check_visitor(place, role)?,
@@ -642,7 +652,7 @@ impl Book {
                         });
                     }
                     Effect::Arrive { role, at: mark } => {
-                        self.check_visitor(&at, role)?;
+                        self.check_arriving(&at, role)?;
                         self.check_mark(&at, mark)?;
                     }
                     Effect::Leave(role) => self.check_visitor(&at, role)?,
@@ -1013,6 +1023,19 @@ mod tests {
             Err(BookError::UnknownRole { .. })
         ));
         assert!(scened(r#"Walk(who: "you", to: Beside(Role("seren")))"#).is_ok());
+    }
+
+    #[test]
+    fn you_may_arrive() {
+        assert!(scened(r#"Arrive(role: "you", at: HomeOutside)"#).is_ok());
+        let steps = r#"Step(id: "a", when: NewGame, then: [Arrive(role: "you", at: HomeBed)])"#;
+        let b = with_steps(steps).unwrap();
+        assert!(!b.missions[0].roles().contains(YOU));
+        // Only arriving: you never leave the map.
+        assert!(matches!(
+            scened(r#"Leave("you")"#),
+            Err(BookError::UnknownRole { .. })
+        ));
     }
 
     #[test]

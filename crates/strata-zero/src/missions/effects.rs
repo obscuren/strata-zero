@@ -1,7 +1,8 @@
 //! What a step does to the game (spec §4), its text filled as it runs.
 
 use super::{
-    Body, Call, Effect, FeedView, Mark, cast, fill, marks, person_of, role_name, visitors,
+    Body, Call, Effect, FeedView, Mark, YOU, cast, fill, marks, person_of, role_name, scene,
+    visitors,
 };
 use crate::app::AppState;
 use citygen::{Place, StratumKind};
@@ -78,10 +79,21 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
     }
 }
 
-/// The role's visitor stands on the mark; a mark that resolves to nothing leaves things
-/// as they are. As the effect and as a scene's beat.
+/// The role's visitor stands on the mark, or you do, at once: a cut, you seeing from
+/// there. A tile another actor holds gives the free one beside it; a mark that
+/// resolves to nothing (or has no room beside it) leaves things as they are. As the
+/// effect and as a scene's beat.
 pub(super) fn arrive(st: &mut AppState, role: &str, at: &Mark) {
-    match marks::resolve(st, at, Some(role)) {
+    let walker = (role != YOU).then_some(role);
+    let spot = marks::resolve(st, at, walker).and_then(|(place, pos)| {
+        if scene::taken(st, role, place, pos) {
+            marks::beside_tile(st, place, pos, walker)
+        } else {
+            Some((place, pos))
+        }
+    });
+    match spot {
+        Some((place, pos)) if role == YOU => scene::put(st, YOU, place, pos),
         Some(spot) => visitors::arrive(st, role, spot),
         None if st.dev => st.warn(format!("scene · {at:?} not found")),
         None => {}
@@ -197,6 +209,78 @@ mod tests {
             [(3, 4, "film".to_string())]
                 .into_iter()
                 .collect::<std::collections::VecDeque<_>>()
+        );
+    }
+
+    fn arrive(role: &str, at: Mark) -> Effect {
+        Effect::Arrive {
+            role: role.into(),
+            at,
+        }
+    }
+
+    #[test]
+    fn arrive_puts_you_there_at_once() {
+        let mut st = state_home();
+        let b = st.home.unwrap().home.building;
+        let below = st.city.as_ref().unwrap().portals(b).first().unwrap().1;
+        super::super::tests::on_street(&mut st, below);
+        let want = marks::resolve(&st, &Mark::HomeInside(2), None).unwrap();
+        apply(&mut st, 0, 0, &arrive("you", Mark::HomeInside(2)));
+        let me = st.player.as_ref().unwrap();
+        assert_eq!((me.place, me.pos), want);
+        assert_eq!(
+            me.vis().get(want.1),
+            Some(&crate::render::Visibility::Visible),
+            "you see from where you are put"
+        );
+        assert!(st.missions.visitors.is_empty(), "you are no visitor");
+    }
+
+    #[test]
+    fn arrive_on_someone_lands_beside_them() {
+        let mut st = in_the_flat();
+        let me = st.player.as_ref().map(|p| (p.place, p.pos)).unwrap();
+        let walkable = |st: &AppState, p: Pos| {
+            crate::render::map::MapRef::for_place(
+                st.city.as_ref().unwrap(),
+                &st.interiors,
+                &st.constructs,
+                me.0,
+                st.minute_of_day(),
+            )
+            .is_some_and(|m| crate::render::map::TileMap::walkable(&m, p))
+        };
+        // Onto you: the tile beside you.
+        apply(&mut st, 0, 0, &arrive("seren", Mark::You));
+        let seren = marks::resolve(&st, &Mark::Role("seren".into()), None).unwrap();
+        assert_eq!(seren.0, me.0);
+        assert_eq!(seren.1.chebyshev(me.1), 1);
+        assert!(walkable(&st, seren.1));
+        // Onto her: beside her, on neither of you.
+        apply(
+            &mut st,
+            0,
+            0,
+            &arrive("castellan", Mark::Role("seren".into())),
+        );
+        let castellan = marks::resolve(&st, &Mark::Role("castellan".into()), None).unwrap();
+        assert_eq!(castellan.1.chebyshev(seren.1), 1);
+        assert!(castellan.1 != me.1 && walkable(&st, castellan.1));
+        // You onto her: beside her, she stays.
+        apply(&mut st, 0, 0, &arrive("you", Mark::Role("seren".into())));
+        let now = st.player.as_ref().map(|p| (p.place, p.pos)).unwrap();
+        assert_eq!(now.1.chebyshev(seren.1), 1);
+        assert!(now.1 != castellan.1 && walkable(&st, now.1));
+        assert_eq!(
+            marks::resolve(&st, &Mark::Role("seren".into()), None),
+            Some(seren)
+        );
+        // A visitor arriving where they already stand stays put.
+        apply(&mut st, 0, 0, &arrive("seren", Mark::Role("seren".into())));
+        assert_eq!(
+            marks::resolve(&st, &Mark::Role("seren".into()), None),
+            Some(seren)
         );
     }
 }

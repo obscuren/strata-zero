@@ -1999,11 +1999,11 @@ fn scene_is(st: &mut AppState, id: &str) {
 #[ignore]
 fn scene_film_shots() {
     for (name, beat, size) in [
-        ("scene_film_keypad", 1, (120, 40)),
-        ("scene_film_door", 6, (120, 40)),
-        ("scene_film_couch", 11, (120, 40)),
-        ("scene_film_seren", 17, (120, 40)),
-        ("scene_film_couch_100x30", 11, (100, 30)),
+        ("scene_film_keypad", 2, (120, 40)),
+        ("scene_film_door", 7, (120, 40)),
+        ("scene_film_couch", 12, (120, 40)),
+        ("scene_film_seren", 18, (120, 40)),
+        ("scene_film_couch_100x30", 12, (100, 30)),
     ] {
         let (mut st, map) = at_the_door();
         scene_at(&mut st, beat);

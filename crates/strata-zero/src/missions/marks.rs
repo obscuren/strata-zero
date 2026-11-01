@@ -90,6 +90,17 @@ fn nearest_door(tiles: impl Iterator<Item = Pos>, door: Pos) -> Option<Pos> {
 /// The free walkable tile next to `inner`, nearest the walker (or the player).
 fn beside(st: &AppState, inner: &Mark, walker: Option<&str>) -> Option<(Place, Pos)> {
     let (place, at) = resolve(st, inner, walker)?;
+    beside_tile(st, place, at, walker)
+}
+
+/// The free walkable tile next to `at` on `place`, nearest the walker (or the player):
+/// free is no actor on it. Next door first, then the corners.
+pub fn beside_tile(
+    st: &AppState,
+    place: Place,
+    at: Pos,
+    walker: Option<&str>,
+) -> Option<(Place, Pos)> {
     let map = MapRef::for_place(
         st.city.as_ref()?,
         &st.interiors,
@@ -116,7 +127,6 @@ fn beside(st: &AppState, inner: &Mark, walker: Option<&str>) -> Option<(Place, P
             .filter(free)
             .min_by_key(|p| (p.manhattan(from), p.y, p.x))
     };
-    // Next door first, then the corners.
     nearest(&mut at.neighbors4())
         .or_else(|| nearest(&mut at.neighbors8()))
         .map(|p| (place, p))
