@@ -63,6 +63,8 @@ fn pick(
     let city = st.city.as_ref()?;
     let free = |id: PersonId| !taken.contains(&id) && !world.is_dead(id);
     match pick {
+        // Task 2: visitors
+        Pick::Visitor => None,
         Pick::NearestFixer => world
             .people()
             .iter()

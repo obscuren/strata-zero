@@ -69,6 +69,12 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
             let text = fill(st, text);
             st.story(text);
         }
+        // Task 3: scenes
+        Effect::Scene(_) => {}
+        // Task 2: visitors
+        Effect::Arrive { .. } | Effect::Leave(_) => {}
+        // Task 6: lights
+        Effect::Lights(_) => {}
     }
 }
 

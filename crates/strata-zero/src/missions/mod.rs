@@ -146,7 +146,10 @@ pub fn begin(st: &mut AppState) {
         .map(|m| Run {
             at: 0,
             since: now,
-            state: if m.roles().iter().all(|r| st.missions.cast.contains_key(r)) {
+            state: if (st.book.needs_cast(m))
+                .iter()
+                .all(|r| st.missions.cast.contains_key(r))
+            {
                 RunState::Waiting
             } else {
                 RunState::Uncast
@@ -337,6 +340,8 @@ fn at(st: &AppState, place: &Where) -> bool {
         Where::Home => st
             .home
             .is_some_and(|rig| p.place == rig.place() && rig.home.rect.contains(p.pos)),
+        // Task 5: HomeDoor
+        Where::HomeDoor => false,
         Where::Work { role, within } => {
             p.place == Place::Stratum(StratumKind::Street)
                 && person_of(st, role)
