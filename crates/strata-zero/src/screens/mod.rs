@@ -13,6 +13,7 @@ pub mod explore;
 pub mod files;
 pub mod flatlined;
 pub mod help;
+pub mod jobs_tab;
 pub mod keypad;
 pub mod kit;
 pub mod messages;

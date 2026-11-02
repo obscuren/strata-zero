@@ -2,7 +2,6 @@
 
 use super::{Job, JobId, Jobs, State, WARN_MINUTES, clock_text};
 use crate::app::AppState;
-use crate::screens::deck::{Detail, Row, Tone};
 use crate::ui::chrome::{CYAN, DIM, MAGENTA, TEXT};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -84,82 +83,6 @@ pub fn pane_lines(st: &AppState) -> Vec<Line<'static>> {
             Span::styled(format!(" {done}/{total}"), Style::default().fg(DIM)),
         ]),
     ]
-}
-
-fn mark(state: State) -> &'static str {
-    match state {
-        State::Done => "✓",
-        State::Failed => "✗",
-        State::Dropped => "–",
-        State::Taken | State::Offered => " ",
-    }
-}
-
-/// Taken first, then offered (dim), then the finished ones.
-pub fn deck_rows(st: &AppState) -> Vec<Row> {
-    let order = |s: State| match s {
-        State::Taken => 0,
-        State::Offered => 1,
-        _ => 2,
-    };
-    let mut jobs: Vec<&Job> = st.jobs.list.iter().collect();
-    jobs.sort_by_key(|j| (order(j.state), j.id));
-    jobs.into_iter()
-        .map(|j| Row {
-            text: format!("{} {}", mark(j.state), j.title),
-            tone: match j.state {
-                State::Taken => Tone::Normal,
-                State::Offered | State::Dropped => Tone::Dim,
-                State::Done => Tone::Done,
-                State::Failed => Tone::Warn,
-            },
-            detail: Some(Detail::Job(j.id)),
-            spans: None,
-        })
-        .collect()
-}
-
-/// The deck's dossier on one job.
-pub fn detail(st: &AppState, id: JobId) -> Vec<Line<'static>> {
-    let Some(j) = st.jobs.get(id) else {
-        return Vec::new();
-    };
-    let now = st.net.now(st);
-    let outcome = match j.state {
-        State::Offered => "on offer".to_string(),
-        State::Taken => format!("{} left", clock_text(Jobs::left(j, now).unwrap_or(0))),
-        State::Done => "done".to_string(),
-        State::Failed => "failed".to_string(),
-        State::Dropped => "dropped".to_string(),
-    };
-    let mut out = vec![Line::from(Span::styled(
-        j.title.clone(),
-        Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
-    ))];
-    out.push(dim(format!(
-        "from {} · {} · ¤{} · {outcome}",
-        fixer_name(st, j.fixer),
-        district_of_fixer(st, j.fixer),
-        j.pay
-    )));
-    out.push(plain(""));
-    out.extend(j.brief.iter().map(|l| plain(l.clone())));
-    out.push(plain(""));
-    for o in &j.objectives {
-        out.push(if o.done {
-            Line::from(Span::styled(
-                format!("☑ {}", o.text),
-                Style::default().fg(DIM),
-            ))
-        } else {
-            plain(format!("☐ {}", o.text))
-        });
-    }
-    if let Some(src) = crate::track::ui::job_source(st, id) {
-        out.push(plain(""));
-        out.push(crate::track::ui::detail_line(st, &src));
-    }
-    out
 }
 
 use super::{Event, Kind, REFUSE_AT, Say, handin_item};
@@ -285,6 +208,57 @@ pub fn rows(st: &AppState, fixer: PersonId) -> Vec<Choice> {
     } else {
         let line = st.flavor.line(Say::Nothing, fixer.0 as u64);
         out.push(Choice::disabled('w', "Work").tail(format!(" · {line}")));
+    }
+    out
+}
+
+/// A job's own mails, newest first, by their place in the inbox.
+pub fn job_mails(st: &AppState, job: JobId) -> Vec<usize> {
+    let mut v: Vec<usize> = st
+        .journal
+        .mails
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.job == Some(job))
+        .map(|(i, _)| i)
+        .collect();
+    v.reverse();
+    v
+}
+
+/// The mails about a fixer's jobs, newest first; never the story's, even from a fixer
+/// the story also casts.
+pub fn fixer_mails(st: &AppState, fixer: PersonId) -> Vec<usize> {
+    let mut v: Vec<usize> = st
+        .journal
+        .mails
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| {
+            m.job
+                .and_then(|j| st.jobs.get(j))
+                .is_some_and(|j| j.fixer == fixer)
+        })
+        .map(|(i, _)| i)
+        .collect();
+    v.reverse();
+    v
+}
+
+/// Mails as the rig reads them, one after another, each marked read.
+pub fn mail_card(st: &mut AppState, mails: &[usize]) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    for (k, i) in mails.iter().enumerate() {
+        let Some(m) = st.journal.mails.get(*i) else {
+            continue;
+        };
+        if k > 0 {
+            out.push(plain(""));
+        }
+        out.push(dim(format!("From: {}", m.from)));
+        out.push(dim(format!("Subject: {}", m.subject)));
+        out.extend(m.body.iter().map(|l| plain(l.clone())));
+        crate::credentials::mail_read(st, *i);
     }
     out
 }
@@ -473,15 +447,6 @@ mod tests {
         );
         assert_eq!(lines[1], " » Take the shard");
         assert_eq!(lines[2], " ▱▱ 0/2");
-        let rows = deck_rows(&st);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].text, "  The drop");
-        let d = text(&detail(&st, id));
-        assert!(
-            d[1].contains("¤200") && d[1].contains("12h 0m left"),
-            "{d:?}"
-        );
-        assert!(d.iter().any(|l| l == "☐ Take the shard"), "{d:?}");
     }
 
     use crate::app::{Screen, ScreenCmd};

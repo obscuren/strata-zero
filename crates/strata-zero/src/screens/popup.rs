@@ -83,6 +83,12 @@ pub enum Pick {
     Drop(crate::jobs::JobId),
     /// Puts a Deliver's package into the person's hands.
     Hand(crate::jobs::JobId),
+    /// Tracks this, or stops when it is the track.
+    Track(crate::track::Source),
+    /// Closes and asks the deck for its MAP with the cursor on this listing.
+    Map(crate::track::ListingId),
+    /// Shows these mails, newest first, as a card, and marks them read.
+    Mail(Vec<usize>),
     /// Sits in a ripperdoc's chair on this floor: the deck opens on the ledger.
     Chair {
         building: citygen::BuildingId,
@@ -408,6 +414,12 @@ impl Popup {
         }
     }
 
+    /// The rows' labels, for tests.
+    #[cfg(test)]
+    pub(crate) fn labels(&self) -> Vec<String> {
+        self.choices.iter().map(|c| c.label.clone()).collect()
+    }
+
     /// Pins the top-left corner near `(x, y)`; clamped so the whole panel stays on screen.
     pub fn anchored(mut self, x: u16, y: u16) -> Self {
         self.anchor = Some((x, y));
@@ -636,6 +648,26 @@ impl Popup {
                 ScreenCmd::Pop {
                     fx: TransitionKind::None,
                 }
+            }
+            Pick::Track(source) => {
+                if let Err(e) = crate::track::toggle(st, source) {
+                    st.warn(e);
+                }
+                crate::track::tick(st);
+                ScreenCmd::Pop {
+                    fx: TransitionKind::None,
+                }
+            }
+            Pick::Map(id) => {
+                st.deck_map_to = Some(id);
+                ScreenCmd::Pop {
+                    fx: TransitionKind::None,
+                }
+            }
+            Pick::Mail(mails) => {
+                self.card = Some(crate::jobs::ui::mail_card(st, &mails));
+                self.opened = st.tick;
+                ScreenCmd::Stay
             }
             Pick::Close => ScreenCmd::Pop {
                 fx: TransitionKind::None,

@@ -8,6 +8,7 @@ use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::messages::Kind;
 use crate::screens::atlas::{self, map::MapLayout};
 use crate::screens::create::attribute_colour;
+use crate::screens::jobs_tab::{self, JobsTab, Key as JobsKey};
 use crate::screens::kit::Kit;
 use crate::screens::popup::{Choice, Pick, Popup};
 use crate::screens::sheet::Sheet;
@@ -116,15 +117,10 @@ impl Tab {
 pub(crate) enum Tone {
     Normal,
     Dim,
-    Warn,
-    Done,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Detail {
-    Job(crate::jobs::JobId),
-    /// A story mission, by its place in the book.
-    Mission(usize),
     Slot(Slot),
     Item(ItemId),
     /// One copy in the pack, for an item held per copy.
@@ -172,6 +168,8 @@ pub struct Deck {
     flash: Option<(game::TalentId, u64)>,
     /// The WORKBENCH tab's sheet: the drawing shown and the part selected.
     pub(crate) workbench: Workbench,
+    /// JOBS, with its own entries, cursor, keys and drawing.
+    pub(crate) jobs: JobsTab,
     /// Where MAP's last draw put the map, for the next update to settle.
     map_drawn: Cell<Option<MapLayout>>,
 }
@@ -238,8 +236,6 @@ fn tone_style(tone: Tone) -> Style {
     match tone {
         Tone::Normal => Style::default().fg(TEXT),
         Tone::Dim => Style::default().fg(DIM),
-        Tone::Warn => Style::default().fg(MAGENTA),
-        Tone::Done => Style::default().fg(Color::Rgb(90, 200, 140)),
     }
 }
 
@@ -425,8 +421,6 @@ fn held(st: &AppState) -> Held<'_> {
 /// The detail pane's card for a row.
 pub(crate) fn card(st: &AppState, detail: &Detail) -> Vec<Line<'static>> {
     match detail {
-        Detail::Job(id) => crate::jobs::ui::detail(st, *id),
-        Detail::Mission(m) => crate::missions::ui::detail(st, *m),
         Detail::Slot(slot) => match st.character.equipped(*slot) {
             Some(id) => Deck::item_card_of(st, id, st.character.worn_copy(*slot)),
             None => vec![
@@ -550,6 +544,7 @@ impl Deck {
             talents: TalentsState::default(),
             flash: None,
             workbench: Workbench::default(),
+            jobs: JobsTab::new(tick),
             map_drawn: Cell::new(None),
         }
     }
@@ -643,6 +638,7 @@ impl Deck {
             Self::first_selectable(&rows)
         };
         self.talents = st.deck_talents.clone();
+        self.jobs = JobsTab::restore(st);
         self.workbench =
             Workbench::unpack(st.deck_rows[Tab::Workbench.index()]).clamped(&st.content);
         self
@@ -789,6 +785,10 @@ impl Deck {
             self.sheet.opened(st.tick);
         }
         self.tab_tween = Tween::new(st.tick, 6, Easing::OutCubic);
+        if tab == Tab::Jobs {
+            self.jobs.changed = st.tick;
+            self.jobs.reselect(st);
+        }
     }
 
     fn shift_tab(&mut self, delta: i32, st: &AppState) {
@@ -835,13 +835,10 @@ impl Deck {
                 detail: None,
                 spans: None,
             }],
-            Tab::Jobs => {
-                let mut rows = crate::missions::ui::deck_rows(st);
-                rows.extend(crate::jobs::ui::deck_rows(st));
-                rows
-            }
             Tab::Journal => Self::journal_rows(st),
-            Tab::Workbench | Tab::Kit | Tab::Attributes | Tab::Map | Tab::Talents => Vec::new(),
+            Tab::Workbench | Tab::Kit | Tab::Attributes | Tab::Map | Tab::Talents | Tab::Jobs => {
+                Vec::new()
+            }
         }
     }
 
@@ -1249,31 +1246,27 @@ impl Deck {
 }
 
 impl Deck {
-    /// `t` on the JOBS tab: tracks the selected job or story step, or stops it.
-    fn track_row(&self, st: &mut AppState) {
-        let rows = self.rows(st);
-        let result = match rows.get(self.row).and_then(|r| r.detail.as_ref()) {
-            Some(Detail::Job(id)) => match crate::track::ui::job_source(st, *id) {
-                Some(src) => crate::track::toggle(st, src),
-                None if st
-                    .jobs
-                    .get(*id)
-                    .is_some_and(|j| j.state == crate::jobs::State::Offered) =>
-                {
-                    Err("take it first".to_string())
-                }
-                None => return,
-            },
-            Some(Detail::Mission(m)) => match crate::track::ui::story_source(st, *m) {
-                Some(src) => crate::track::toggle(st, src),
-                None => return,
-            },
-            _ => return,
+    /// Opens MAP on the listing JOBS asked for (`m`, or Show on the MAP), the cursor on
+    /// it and the view round it; one not on the map's stratum stays on JOBS and says so.
+    fn show_on_map(&mut self, st: &mut AppState) {
+        let Some(id) = st.deck_map_to.take() else {
+            return;
         };
-        if let Err(e) = result {
-            st.warn(e);
+        atlas::refresh(st);
+        let Some(l) = atlas::listed(st).iter().find(|l| l.id == id).cloned() else {
+            st.warn("not on the map from here");
+            return;
+        };
+        self.set_tab(Tab::Map, st);
+        st.atlas.leave();
+        self.map_drawn.set(None);
+        st.atlas.stratum = Some(atlas::map_stratum(st));
+        st.atlas.cursor = Some(l.tile);
+        st.atlas.picked = Some((l.id, l.kind, l.tile));
+        st.atlas.recentre = true;
+        if st.atlas.kind.is_some_and(|k| k != l.kind) {
+            st.atlas.kind = None;
         }
-        crate::track::tick(st);
     }
 
     fn handle(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
@@ -1290,6 +1283,11 @@ impl Deck {
         if self.tab == Tab::Attributes {
             self.sheet.reselect(st);
         }
+        if self.tab == Tab::Jobs {
+            self.jobs.reselect(st);
+        }
+        // A popup on JOBS may have asked for the MAP.
+        self.show_on_map(st);
         // MAP keeps where its last draw left the cursor and the view, and its listings.
         if self.tab == Tab::Map {
             if let Some(l) = self.map_drawn.take() {
@@ -1328,6 +1326,22 @@ impl Deck {
                 && self.workbench.key(st, k.code)
             {
                 continue;
+            }
+            // JOBS takes the arrows, `h j k l`, `t`, `m`, space and enter.
+            if self.tab == Tab::Jobs {
+                match self.jobs.key(st, k.code) {
+                    JobsKey::Pass => {}
+                    JobsKey::Done => {
+                        self.show_on_map(st);
+                        continue;
+                    }
+                    JobsKey::Popup(p) => {
+                        return ScreenCmd::Push {
+                            to: Box::new(p),
+                            fx: TransitionKind::None,
+                        };
+                    }
+                }
             }
             match k.code {
                 KeyCode::Esc | KeyCode::Tab => {
@@ -1383,7 +1397,6 @@ impl Deck {
                         self.set_tab(*tab, st);
                     }
                 }
-                KeyCode::Char('t' | 'T') if self.tab == Tab::Jobs => self.track_row(st),
                 KeyCode::Up | KeyCode::Char('k') => self.move_row(&rows, -1, st.tick),
                 KeyCode::Down | KeyCode::Char('j') => self.move_row(&rows, 1, st.tick),
                 KeyCode::Left | KeyCode::Char('h') if self.tab == Tab::Skills => {
@@ -1506,6 +1519,7 @@ impl Screen for Deck {
         st.deck_sheet = self.sheet.state;
         st.deck_talents = self.talents.clone();
         st.deck_rows[Tab::Workbench.index()] = self.workbench.pack();
+        st.deck_rows[Tab::Jobs.index()] = self.jobs.row;
         cmd
     }
 
@@ -1685,6 +1699,8 @@ impl Screen for Deck {
             self.sheet.draw(st, body, buf);
         } else if self.tab == Tab::Workbench && st.character.has_workbench(&st.content) {
             self.workbench.draw(st, body, buf);
+        } else if self.tab == Tab::Jobs {
+            self.jobs.draw(st, body, buf);
         } else {
             let list_w = (body.width * 2 / 5)
                 .max(28)
@@ -1748,9 +1764,7 @@ impl Screen for Deck {
                     Tab::Workbench if st.character.has_workbench(&st.content) => {
                         self.workbench.hints(st)
                     }
-                    Tab::Jobs => {
-                        "Q/E tabs · ↑↓ select · 0-8 jump · space act · t track · tab close"
-                    }
+                    Tab::Jobs => jobs_tab::HINT,
                     _ => "Q/E tabs · ↑↓ select · 0-8 jump · space act · tab close",
                 },
                 Style::default().fg(DIM),
@@ -1880,8 +1894,9 @@ mod tests {
         d.update(&mut st, &[key(KeyCode::Char('5'))]);
         st.tick += 40;
         let text = draw(&d, &st, 120, 35);
+        // The job in hand, and the done one folded under their fixer.
         assert!(
-            text.contains("The drop") && text.contains("✓ First jack"),
+            text.contains("The drop") && text.contains("1 closed"),
             "{text}"
         );
         assert!(text.contains("LINK"), "{text}");

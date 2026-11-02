@@ -650,6 +650,70 @@ pub(crate) mod testutil {
             .id
     }
 
+    /// The JOBS mock's six jobs in place of the favour, each fixer in turn giving one:
+    /// a fetch and a delivery in hand (the package delivered), a copy on offer, a
+    /// plant done, a fetch late, a delivery dropped. Every fixer at standing 6.
+    pub fn six_jobs(st: &mut AppState) -> Vec<JobId> {
+        use super::{KindTag, generate};
+        st.jobs.list.clear();
+        let fixers: Vec<sim::PersonId> = st
+            .world
+            .as_ref()
+            .unwrap()
+            .people()
+            .iter()
+            .filter(|p| p.profession == "fixer")
+            .map(|p| p.id)
+            .collect();
+        let kinds = [
+            KindTag::Fetch,
+            KindTag::Deliver,
+            KindTag::Copy,
+            KindTag::Plant,
+            KindTag::Fetch,
+            KindTag::Deliver,
+        ];
+        let mut ids = Vec::new();
+        for (i, k) in kinds.into_iter().enumerate() {
+            let job = fixers
+                .iter()
+                .cycle()
+                .skip(i)
+                .take(fixers.len())
+                .find_map(|f| {
+                    st.jobs.fixer_mut(*f).standing = 6;
+                    (0..40).find_map(|n| generate(st, *f, k, n + i as u32))
+                })
+                .expect("a job of each kind");
+            ids.push(st.jobs.push(job));
+        }
+        for (i, id) in ids.iter().enumerate() {
+            if i != 2 {
+                crate::jobs::take_job(st, *id).unwrap();
+            }
+        }
+        st.jobs
+            .list
+            .iter_mut()
+            .find(|j| j.id == ids[1])
+            .unwrap()
+            .objectives[0]
+            .done = true;
+        st.jobs.hand_in(ids[3], 0);
+        // Late on its own: the minute would fail the fetch in hand with it.
+        let fixer = st.jobs.get(ids[4]).unwrap().fixer;
+        st.jobs.fixer_mut(fixer).standing += super::LOSS_LATE;
+        let standing = st.jobs.standing(fixer);
+        let j = st.jobs.list.iter_mut().find(|j| j.id == ids[4]).unwrap();
+        j.state = State::Failed;
+        j.closed = Some(super::Closed {
+            at: j.deadline.unwrap() + 1,
+            standing,
+        });
+        st.jobs.drop_job(ids[5], 0);
+        ids
+    }
+
     /// "The drop", in hand, one of three objectives done; and "First jack", done.
     /// For layout tests that want the pane and the tab filled.
     pub fn sample_jobs(st: &mut AppState) -> JobId {

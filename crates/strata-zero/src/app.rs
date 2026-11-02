@@ -131,6 +131,10 @@ pub struct AppState {
     pub deck_rows: [usize; Tab::ALL.len()],
     /// Where GEAR & INVENTORY was left: the focus, the tile, the pack's row, the filter.
     pub deck_kit: crate::screens::kit::KitState,
+    /// The fixers whose closed jobs JOBS shows unfolded.
+    pub deck_jobs_open: std::collections::BTreeSet<sim::PersonId>,
+    /// A listing JOBS asked MAP to put its cursor on, for the deck's next update.
+    pub deck_map_to: Option<crate::track::ListingId>,
     /// Where ATTRIBUTES was left: the focus, the tile, the ledger's row.
     pub deck_sheet: crate::screens::sheet::SheetState,
     /// The TALENTS tab's tree and cursor spots.
@@ -302,6 +306,8 @@ impl AppState {
             deck_tab: Tab::Skills,
             deck_rows: [0; Tab::ALL.len()],
             deck_kit: Default::default(),
+            deck_jobs_open: Default::default(),
+            deck_map_to: None,
             deck_sheet: Default::default(),
             deck_talents: Default::default(),
             deck_part: 0,
@@ -448,6 +454,8 @@ impl AppState {
         self.deck_tab = Tab::Skills;
         self.deck_rows = [0; Tab::ALL.len()];
         self.deck_kit = Default::default();
+        self.deck_jobs_open.clear();
+        self.deck_map_to = None;
         self.deck_sheet = Default::default();
         self.deck_talents = Default::default();
         self.deck_part = 0;

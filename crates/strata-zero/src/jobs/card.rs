@@ -360,6 +360,23 @@ pub fn stop_place(st: &AppState, job: &Job) -> String {
     }
 }
 
+/// What a source points at, as the track line names it: a person, a building, your
+/// home, or the district of a spot.
+pub fn target_place(st: &AppState, source: &Source) -> String {
+    match track::resolve(st, source) {
+        Resolved::Target(track::Target::Person(p)) => track::person_name(st, p),
+        Resolved::Target(track::Target::Building(b)) => crate::net::building_name(st, b),
+        Resolved::Target(track::Target::Spot { place, pos, .. }) => {
+            let home = st.home.map(|r| r.home.building);
+            match place {
+                Place::Floor { building, .. } if Some(building) == home => "home".to_string(),
+                _ => track::district_at(st, place, pos).unwrap_or_else(|| "the spot".into()),
+            }
+        }
+        _ => "there".to_string(),
+    }
+}
+
 /// A delivery's person and their workplace, then their trade and hours.
 fn deliver_place(st: &AppState, to: PersonId) -> (String, String) {
     let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_ref()) else {
