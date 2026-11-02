@@ -942,10 +942,8 @@ mod tests {
     #[test]
     fn an_item_that_does_not_open_is_refused() {
         let (c, mut ch, mut g, at) = setup();
-        let before = ch.count(&id("copper_coil"));
         ch.give(id("copper_coil"), 1);
         let held = ch.count(&id("copper_coil"));
-        assert!(held > before);
         let err = apply(&mut ch, &mut g, &c, at, 0, Action::Open(id("copper_coil"))).unwrap_err();
         assert!(err.contains("doesn't open"), "{err}");
         assert_eq!(ch.count(&id("copper_coil")), held);

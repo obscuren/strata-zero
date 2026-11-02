@@ -561,6 +561,9 @@ impl Content {
                     why: "stickers on something that takes none".into(),
                 });
             }
+            for (out, _) in &i.opens {
+                need_item(format!("item {} opens", i.id), out)?;
+            }
             for s in &i.stickers {
                 let on = need_item(format!("item {} stickers", i.id), &s.sticker)?;
                 if on.kind != ItemKind::Sticker {
@@ -1398,6 +1401,14 @@ mod tests {
         for r in c.recipes.iter().filter(|r| r.id.0 != "ratchet_build") {
             assert!((2..=4).contains(&r.steps.len()), "{}", r.id);
         }
+    }
+
+    #[test]
+    fn validate_refuses_an_opens_output_that_is_missing() {
+        let mut c = Content::load().unwrap();
+        c.items[0].opens = vec![(ItemId::new("no_such_thing"), 1)];
+        let err = c.validate().unwrap_err().to_string();
+        assert!(err.contains("no_such_thing"), "{err}");
     }
 
     #[test]
