@@ -105,6 +105,7 @@ impl Overlay for AtriumOverlay<'_> {
                     wall_mask: mask,
                     lamps_on: true,
                     sky: None,
+                    glow: self.ground.glow.get(p).map(|&(r, g, b)| Rgb(r, g, b)),
                 };
                 let c = cell(tile, &ctx);
                 // The walkway this level would show here, at this tile's light: the
@@ -127,6 +128,7 @@ impl Overlay for AtriumOverlay<'_> {
                         wall_mask: 0,
                         lamps_on: true,
                         sky: None,
+                        glow: map.glow(p),
                     };
                     cell(&bare, &wctx).fg
                 });
@@ -252,6 +254,11 @@ mod tests {
                 wall_mask: 0,
                 lamps_on: true,
                 sky: None,
+                glow: Some(Rgb(
+                    ground.glow[table].0,
+                    ground.glow[table].1,
+                    ground.glow[table].2,
+                )),
             },
         );
         assert!(

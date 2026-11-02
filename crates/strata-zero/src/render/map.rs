@@ -3,7 +3,7 @@
 
 use crate::constructs::Constructs;
 use crate::interiors::Interiors;
-use crate::render::ConnDir;
+use crate::render::{ConnDir, Rgb};
 use citygen::{
     BuildingKind, City, ConnectorKind, Construct, Floor, FloorPlan, Place, Pos, Size, StratumKind,
     Terrain, Theme, Tile,
@@ -51,6 +51,10 @@ pub trait TileMap {
     }
     /// The sky's colour and weight on a sunlit stratum by day; none elsewhere.
     fn sky(&self) -> Option<((u8, u8, u8), f32)> {
+        None
+    }
+    /// The light's colour on the tile, where light has one (an interior floor).
+    fn glow(&self, _p: Pos) -> Option<Rgb> {
         None
     }
 }
@@ -304,6 +308,10 @@ impl TileMap for FloorMap<'_> {
         self.floor.light.get(p).copied().unwrap_or(0)
     }
 
+    fn glow(&self, p: Pos) -> Option<Rgb> {
+        self.floor.glow.get(p).map(|&(r, g, b)| Rgb(r, g, b))
+    }
+
     fn theme(&self, _p: Pos) -> Option<Theme> {
         Some(self.plan.theme)
     }
@@ -348,6 +356,14 @@ impl TileMap for MapRef<'_> {
             MapRef::Stratum(m) => m.light(p),
             MapRef::Floor(m) => m.light(p),
             MapRef::Construct(m) => m.light(p),
+        }
+    }
+
+    fn glow(&self, p: Pos) -> Option<Rgb> {
+        match self {
+            MapRef::Stratum(m) => m.glow(p),
+            MapRef::Floor(m) => m.glow(p),
+            MapRef::Construct(m) => m.glow(p),
         }
     }
 
@@ -472,6 +488,14 @@ mod tests {
         });
         assert_eq!(map.size(), plan.size);
         assert!(map.light(floor.stations[0].pos) > 0);
+        assert!(
+            map.glow(floor.stations[0].pos).is_some(),
+            "a floor's light has a colour"
+        );
+        assert_eq!(
+            MapRef::stratum_at(&c, StratumKind::Street, 0).glow(Pos::new(5, 5)),
+            None
+        );
         assert_eq!(
             map.theme(Pos::new(1, 1)),
             Some(c.district(b.district).theme)

@@ -2,7 +2,7 @@
 
 pub mod tuning;
 
-use crate::geom::{Grid, Pos};
+use crate::geom::{Grid, Pos, Size};
 use crate::tile::{Feature, Terrain, Tile};
 use crate::world::StratumKind;
 use tuning::*;
@@ -109,6 +109,111 @@ pub fn compute(
     out
 }
 
+/// Which fittings light a room: hung from the ceiling, set in the walls, or both. A
+/// place's mood, picked from its seed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Mood {
+    Ceiling,
+    Walls,
+    Both,
+}
+
+impl Mood {
+    pub fn ceiling(self) -> bool {
+        matches!(self, Mood::Ceiling | Mood::Both)
+    }
+
+    pub fn walls(self) -> bool {
+        matches!(self, Mood::Walls | Mood::Both)
+    }
+}
+
+/// A room's mood, by weight from `moods`: the same for the same building, room kind
+/// and room number on every visit. Public rooms pass number 0, so every corridor or
+/// bar of a building shares one; flats and hotel rooms carry their own.
+pub fn room_mood(
+    seed: u64,
+    building: crate::ids::BuildingId,
+    room: Option<crate::interior::RoomKind>,
+    number: u16,
+    moods: &[(Mood, u32)],
+) -> Mood {
+    use crate::rng::hash64;
+    let kind = room.map_or(255, |k| k as u64);
+    let h = hash64(
+        hash64(hash64(seed, building.index() as u64), kind),
+        number as u64,
+    );
+    let total: u32 = moods.iter().map(|(_, w)| w).sum();
+    let mut at = (h % total.max(1) as u64) as u32;
+    for &(m, w) in moods {
+        if at < w {
+            return m;
+        }
+        at -= w;
+    }
+    Mood::Ceiling
+}
+
+/// A light on an interior floor: its cone's radius and strength at the centre, and
+/// the colour it throws.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Emitter {
+    pub pos: Pos,
+    pub radius: i32,
+    pub strength: f32,
+    pub colour: (u8, u8, u8),
+}
+
+/// Coloured light: each tile's ambient from `base`, plus every emitter's cone in its
+/// colour, reaching only the tiles it can see through `blocks`. As in `compute`, a
+/// blocking tile takes the light that hits it. Each channel is clamped to 0..=255.
+pub fn compute_coloured(
+    size: Size,
+    base: impl Fn(Pos) -> [f32; 3],
+    blocks: impl Fn(Pos) -> bool,
+    emitters: &[Emitter],
+) -> Grid<(u8, u8, u8)> {
+    let mut light: Vec<[f32; 3]> = (0..size.area())
+        .map(|i| {
+            let w = size.w as usize;
+            base(Pos::new((i % w) as i32, (i / w) as i32))
+        })
+        .collect();
+    // The cone's quadrants share their diagonals, so a tile can be marked twice: each
+    // emitter lights it once.
+    let mut lit_by = vec![usize::MAX; size.area()];
+    for (n, e) in emitters.iter().enumerate() {
+        let colour = [e.colour.0, e.colour.1, e.colour.2].map(|c| c as f32 / 255.0);
+        crate::fov::compute(
+            e.pos,
+            e.radius,
+            &blocks,
+            |q| size.contains(q),
+            |q| {
+                let i = size.index(q);
+                if lit_by[i] == n {
+                    return;
+                }
+                lit_by[i] = n;
+                let d = (e.pos.dist2(q) as f32).sqrt();
+                if d <= e.radius as f32 {
+                    let k = e.strength * (1.0 - d / e.radius as f32);
+                    for (v, c) in light[size.index(q)].iter_mut().zip(colour) {
+                        *v += k * c;
+                    }
+                }
+            },
+        );
+    }
+    let mut out = Grid::filled(size, (0u8, 0u8, 0u8));
+    for (slot, [r, g, b]) in out.as_mut_slice().iter_mut().zip(light) {
+        let c = |v: f32| v.round().clamp(0.0, 255.0) as u8;
+        *slot = (c(r), c(g), c(b));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,6 +262,80 @@ mod tests {
         assert!(light[Pos::new(12, 3)] > 0, "the wall glows");
         assert_eq!(light[Pos::new(13, 3)], 0, "nothing behind the wall");
         assert!(light[Pos::new(13, 5)] > 0, "the window lets it through");
+    }
+
+    use crate::ids::BuildingId;
+    use crate::interior::RoomKind;
+    use crate::tile::Tone;
+    use crate::world::BuildingKind;
+
+    #[test]
+    fn a_mood_is_the_same_for_the_same_place_and_varies_across_places() {
+        let moods = tuning::room_light(Some(RoomKind::Bar), BuildingKind::Bar).moods;
+        let pick = |b: u32| room_mood(8, BuildingId(b), Some(RoomKind::Bar), 0, moods);
+        assert_eq!(pick(3), pick(3));
+        let seen: std::collections::HashSet<_> = (0..40).map(pick).collect();
+        assert!(seen.contains(&Mood::Walls) && seen.contains(&Mood::Both));
+        assert!(
+            !seen.contains(&Mood::Ceiling),
+            "a bar never goes ceiling-only"
+        );
+    }
+
+    #[test]
+    fn a_club_bar_is_blacklight_and_a_temple_hall_candlelit() {
+        assert_eq!(
+            tuning::room_light(Some(RoomKind::Bar), BuildingKind::Club).tone,
+            Tone::Blacklight
+        );
+        let hall = tuning::room_light(Some(RoomKind::Hall), BuildingKind::Temple);
+        assert_eq!(
+            (hall.tone, hall.moods),
+            (Tone::Tungsten, &[(Mood::Walls, 1)][..])
+        );
+        assert_eq!(
+            tuning::room_light(Some(RoomKind::Hall), BuildingKind::Warehouse).tone,
+            Tone::Sodium
+        );
+        assert_eq!(
+            tuning::room_light(None, BuildingKind::Hotel).tone,
+            Tone::Fluorescent
+        );
+    }
+
+    #[test]
+    fn coloured_light_lands_once_on_every_tile_of_its_cone() {
+        let size = Size { w: 20, h: 20 };
+        let e = Emitter {
+            pos: Pos::new(10, 10),
+            radius: 5,
+            strength: 190.0,
+            colour: (255, 255, 255),
+        };
+        let g = compute_coloured(size, |_| [0.0; 3], |_| false, &[e]);
+        assert!(
+            g[Pos::new(11, 11)].0 < g[Pos::new(11, 10)].0,
+            "the diagonal is nearer?"
+        );
+        assert!(g[Pos::new(13, 13)].0 < g[Pos::new(13, 10)].0);
+    }
+
+    #[test]
+    fn coloured_light_carries_its_colour_and_stops_at_walls() {
+        let size = Size { w: 20, h: 10 };
+        let walls: Vec<Pos> = (0..10).map(|y| Pos::new(12, y)).collect();
+        let e = Emitter {
+            pos: Pos::new(10, 5),
+            radius: 6,
+            strength: 200.0,
+            colour: (255, 168, 88),
+        };
+        let g = compute_coloured(size, |_| [10.0, 10.0, 10.0], |p| walls.contains(&p), &[e]);
+        let near = g[Pos::new(10, 5)];
+        assert!(near.0 > near.2, "warm: {near:?}");
+        assert_eq!(g[Pos::new(0, 0)], (10, 10, 10));
+        assert!(g[Pos::new(12, 5)].0 > 10, "the wall takes the light");
+        assert_eq!(g[Pos::new(13, 5)], (10, 10, 10), "nothing behind the wall");
     }
 
     #[test]
