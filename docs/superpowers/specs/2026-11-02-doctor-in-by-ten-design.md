@@ -351,7 +351,10 @@ item or no jacket was worn then, and Odile says neither jacket line.
   its body the `line` (*"One piece, on his tab. The rest go back in the drawer."*), one
   row per piece: `Take: <name> · <site> · <grants, or nothing>` (the mock's rows).
   Space takes the piece into your bag and opens the tab; esc closes the window and
-  leaves the tray pending: talking to the `from` role opens it again.
+  leaves the tray pending: talking to the `from` role opens it again. Esc logs
+  `<from's name> · the tray waits · talk to take a piece`, and sitting in the `from`
+  doc's chair while the tray waits holds it out first: a piece taken, the chair opens;
+  esc, back to the map (final review).
 - **The tab:** `Missions.tab = Some(Tab { doc: PersonId, item: ItemId, payer: String,
   spent: bool })`. In the chair of that doc, installing that item costs nothing: the
   fee line reads `fee TAB · CASTELLAN · ¤N on the tab` (payer's name upper-cased, N the
