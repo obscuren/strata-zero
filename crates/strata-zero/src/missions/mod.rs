@@ -16,6 +16,7 @@
 //! - An effect: a variant on `Effect`, its arm in `effects::apply`, its names in
 //!   `Book::validate`. Test it.
 //! - A pick: a variant on `Pick` and its arm in `cast::pick`.
+//! - A need: a variant on `Need` and its arm in `holds`.
 
 pub mod asides;
 pub mod broadcast;
@@ -40,7 +41,7 @@ pub use content::*;
 use crate::app::AppState;
 use crate::render::Visibility;
 use citygen::{Place, Pos, StratumKind};
-use game::ItemId;
+use game::{ItemId, SkillId, Slot};
 use sim::PersonId;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -77,6 +78,10 @@ pub struct Missions {
     pub daze: Option<daze::Daze>,
     /// The bubbles up over the map that leave you the keys, oldest first.
     pub asides: Vec<asides::Aside>,
+    /// The items the story has unsealed, by id: `Need::Unsealed`.
+    pub unsealed: BTreeSet<String>,
+    /// The items whose telling reading has been shown, by id: `Need::Read`.
+    pub read: BTreeSet<String>,
 }
 
 /// Where one mission stands.
@@ -91,6 +96,8 @@ pub struct Run {
     pub objectives: Vec<String>,
     /// Steps whose feed or call has ended.
     pub ended: BTreeSet<usize>,
+    /// The game minute its first step fired: when the mission began.
+    pub began: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,12 +130,14 @@ pub struct Body {
 
 /// You walking away from a body (morning news spec §7): the first time you were more
 /// than `news::AWAY` tiles from it after having been near.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Left {
     /// The clock: hour, minute.
     pub at: (u8, u8),
     /// The eight-point heading from the body to you: `north`, `north-east` …
     pub heading: &'static str,
+    /// What you wore on your torso then: the jacket the camera saw (doctor spec §7).
+    pub worn: Option<ItemId>,
 }
 
 /// A HOLO feed waiting to be shown, its text filled.
@@ -202,6 +211,7 @@ pub fn begin(st: &mut AppState) {
             },
             objectives: Vec::new(),
             ended: BTreeSet::new(),
+            began: None,
         })
         .collect();
     st.missions.runs = runs;
@@ -301,6 +311,9 @@ fn run_step(st: &mut AppState, m: usize) {
     let now = st.net.now(st);
     let last = st.book.missions[m].steps.len();
     let run = &mut st.missions.runs[m];
+    if at == 0 {
+        run.began = Some(now);
+    }
     run.at = at + 1;
     run.since = now;
     run.state = if run.at >= last {
@@ -400,6 +413,35 @@ fn at(st: &AppState, place: &Where) -> bool {
                     .is_some_and(|t| p.pos.manhattan(t) <= *within)
         }
     }
+}
+
+/// Whether a need holds now (doctor spec §2), asked for mission `mission`: `Late`
+/// counts from when that mission began, so asked for none it never holds.
+pub fn holds(st: &AppState, mission: Option<usize>, need: &Need) -> bool {
+    let torso = || st.character.equipped(Slot::Torso);
+    match need {
+        Need::Skill(id) => st.character.has_skill(&SkillId::new(id)),
+        Need::Read(item) => st.missions.read.contains(item),
+        Need::Carries(item) => st.character.count(&ItemId::new(item)) > 0,
+        Need::Unsealed(item) => st.missions.unsealed.contains(item),
+        Need::Changed => news::jacket_seen(st).is_some_and(|j| torso() != Some(&j)),
+        Need::Unchanged => news::jacket_seen(st).is_some_and(|j| torso() == Some(&j)),
+        Need::Late(minute) => mission
+            .and_then(|m| st.missions.runs.get(m))
+            .and_then(|r| r.began)
+            .is_some_and(|began| st.net.now(st) > first_at(st, began, *minute)),
+        Need::Not(need) => !holds(st, mission, need),
+        Need::All(needs) => needs.iter().all(|n| holds(st, mission, n)),
+    }
+}
+
+/// The first game minute at or after `from` whose clock shows `minute` of the day.
+fn first_at(st: &AppState, from: u64, minute: u16) -> u64 {
+    let day = u64::from(sim::DAY);
+    // The clock at `from`, counted back from the clock now.
+    let back = st.net.now(st).saturating_sub(from) % day;
+    let then = (u64::from(st.minute_of_day()) + day - back) % day;
+    from + (u64::from(minute) + day - then) % day
 }
 
 /// A text with its `{role}` and `{role.field}` slots filled from the cast. A slot the
@@ -1517,5 +1559,167 @@ pub(crate) mod tests {
             st.world.as_ref().unwrap().people()[fixer.0 as usize].name,
             "Mezz"
         );
+    }
+
+    #[test]
+    fn skill_carries_unsealed_and_read_hold_as_named() {
+        let mut st = AppState::new();
+        let skill = Need::Skill("hacking".into());
+        st.character.skills.clear();
+        assert!(!holds(&st, None, &skill));
+        st.character.skills.insert(SkillId::new("hacking"));
+        assert!(holds(&st, None, &skill));
+        let package = ItemId::new("taped_package");
+        let carries = Need::Carries("taped_package".into());
+        assert!(!holds(&st, None, &carries));
+        st.character.give(package.clone(), 1);
+        assert!(holds(&st, None, &carries));
+        game::remove_from_pack(&mut st.character, &package, 1);
+        assert!(!holds(&st, None, &carries));
+        let unsealed = Need::Unsealed("taped_package".into());
+        assert!(!holds(&st, None, &unsealed));
+        st.missions.unsealed.insert("taped_package".into());
+        assert!(holds(&st, None, &unsealed));
+        let read = Need::Read("ledger_shard".into());
+        assert!(!holds(&st, None, &read));
+        st.missions.read.insert("ledger_shard".into());
+        assert!(holds(&st, None, &read));
+        assert!(!holds(&st, None, &Need::Read("taped_package".into())));
+        // A new story forgets both.
+        let fresh = Missions::default();
+        assert!(fresh.unsealed.is_empty() && fresh.read.is_empty());
+    }
+
+    #[test]
+    fn not_and_all_combine() {
+        let st = AppState::new();
+        let yes = Need::All(vec![]);
+        let no = Need::Not(Box::new(yes.clone()));
+        assert!(holds(&st, None, &yes));
+        assert!(!holds(&st, None, &no));
+        assert!(!holds(&st, None, &Need::All(vec![yes.clone(), no.clone()])));
+        assert!(holds(&st, None, &Need::All(vec![yes.clone(), yes.clone()])));
+        let mixed = Need::All(vec![yes, no]);
+        assert!(holds(&st, None, &Need::Not(Box::new(mixed))));
+        // As the book writes them.
+        let need: Need = ron::from_str(r#"Not(All([Skill("hacking"), Late(600)]))"#).unwrap();
+        assert_eq!(
+            need,
+            Need::Not(Box::new(Need::All(vec![
+                Need::Skill("hacking".into()),
+                Need::Late(600),
+            ])))
+        );
+    }
+
+    /// A city-less game's clock set to `h:m` on day `day`, the game starting at 22:00 on
+    /// day 1.
+    fn set_clock(st: &mut AppState, day: u64, h: u64, m: u64) {
+        let minute = (day - 1) * 1440 + h * 60 + m - 22 * 60;
+        st.tick = minute * sim::TICKS_PER_MINUTE;
+        assert_eq!(st.clock(), (h as u8, m as u8));
+    }
+
+    #[test]
+    fn late_is_past_the_first_such_clock_after_the_mission_began() {
+        let mut st = AppState::new();
+        st.missions.runs.push(Run {
+            at: 1,
+            since: 0,
+            state: RunState::Open,
+            objectives: Vec::new(),
+            ended: BTreeSet::new(),
+            began: None,
+        });
+        let late = Need::Late(600);
+        let is_late = |st: &AppState| holds(st, Some(0), &late);
+        set_clock(&mut st, 2, 10, 1);
+        assert!(!is_late(&st), "not begun");
+        // Begun at 07:20: late after ten that morning, and from then on.
+        set_clock(&mut st, 2, 7, 20);
+        st.missions.runs[0].began = Some(st.net.now(&st));
+        set_clock(&mut st, 2, 9, 59);
+        assert!(!is_late(&st));
+        set_clock(&mut st, 2, 10, 0);
+        assert!(!is_late(&st), "ten is not past ten");
+        set_clock(&mut st, 2, 10, 1);
+        assert!(is_late(&st));
+        assert!(!holds(&st, None, &late), "asked for no mission");
+        set_clock(&mut st, 3, 1, 0);
+        assert!(is_late(&st));
+        // Begun at 11:00: the next morning's ten.
+        set_clock(&mut st, 2, 11, 0);
+        st.missions.runs[0].began = Some(st.net.now(&st));
+        set_clock(&mut st, 2, 23, 0);
+        assert!(!is_late(&st));
+        set_clock(&mut st, 3, 10, 0);
+        assert!(!is_late(&st));
+        set_clock(&mut st, 3, 10, 1);
+        assert!(is_late(&st));
+        // Begun on ten: late a minute on.
+        set_clock(&mut st, 2, 10, 0);
+        st.missions.runs[0].began = Some(st.net.now(&st));
+        assert!(!is_late(&st));
+        set_clock(&mut st, 2, 10, 1);
+        assert!(is_late(&st));
+    }
+
+    #[test]
+    fn the_first_step_firing_marks_when_the_mission_began() {
+        let mut st = state_home();
+        st.book = book(
+            r#"Mission(id: "later", title: "Later", from: "mezz", steps: [
+                Step(id: "wait", when: After(minutes: 30), then: [Log("on")]),
+                Step(id: "more", when: After(minutes: 30), then: [Log("more")]),
+            ])"#,
+        );
+        begin(&mut st);
+        assert_eq!(st.missions.runs[0].began, None, "nothing fired");
+        advance(&mut st, 30);
+        tick(&mut st);
+        let began = st.net.now(&st);
+        assert_eq!(st.missions.runs[0].began, Some(began));
+        advance(&mut st, 30);
+        tick(&mut st);
+        assert!(matches!(st.missions.runs[0].state, RunState::Done { .. }));
+        assert_eq!(st.missions.runs[0].began, Some(began), "the first step's");
+    }
+
+    #[test]
+    fn changed_and_unchanged_need_a_known_jacket() {
+        let mut st = begun();
+        let both = |st: &AppState| {
+            (
+                holds(st, None, &Need::Changed),
+                holds(st, None, &Need::Unchanged),
+            )
+        };
+        assert_eq!(both(&st), (false, false), "no news item");
+        // Marlo dies and the news is about him.
+        end(&mut st, 0, 0);
+        news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        let jacket = ItemId::new("salvage_jacket");
+        st.character.wear(game::Slot::Torso, jacket.clone(), None);
+        assert_eq!(both(&st), (false, false), "nobody saw you go");
+        st.missions.bodies[0].left = Some(Left {
+            at: (22, 41),
+            heading: "north",
+            worn: None,
+        });
+        assert_eq!(both(&st), (false, false), "nothing worn then");
+        st.missions.bodies[0].left.as_mut().unwrap().worn = Some(jacket.clone());
+        assert_eq!(both(&st), (false, true));
+        st.character.take_off(game::Slot::Torso);
+        assert_eq!(both(&st), (true, false), "nothing on now");
+        st.character
+            .wear(game::Slot::Torso, ItemId::new("ballistic_weave"), None);
+        assert_eq!(both(&st), (true, false), "another jacket");
+        // Stale, the item still holds what the camera saw.
+        let fresh = news::current(&st).unwrap().fresh;
+        advance(&mut st, fresh);
+        assert!(news::current(&st).is_none());
+        assert_eq!(both(&st), (true, false));
+        st.character.wear(game::Slot::Torso, jacket, None);
+        assert_eq!(both(&st), (false, true));
     }
 }

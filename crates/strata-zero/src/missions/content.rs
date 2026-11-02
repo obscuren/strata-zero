@@ -211,6 +211,28 @@ fn yes() -> bool {
     true
 }
 
+/// Who you are, as the story asks it (doctor spec §2): `missions::holds` answers.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub enum Need {
+    /// You have the skill.
+    Skill(String),
+    /// A reading of the item that tells has been shown this story.
+    Read(String),
+    /// You carry at least one.
+    Carries(String),
+    /// The story has unsealed the item.
+    Unsealed(String),
+    /// The jacket the camera saw is known and isn't what you wear now.
+    Changed,
+    /// The jacket the camera saw is known and is what you wear now.
+    Unchanged,
+    /// Now is past the first time the clock showed this minute of the day after the
+    /// mission began.
+    Late(u16),
+    Not(Box<Need>),
+    All(Vec<Need>),
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub enum Beat {
     Say {
@@ -222,6 +244,9 @@ pub enum Beat {
         at: Option<Mark>,
         #[serde(default)]
         hold: Option<f32>,
+        /// Said only when it holds; else skipped at once.
+        #[serde(default)]
+        need: Option<Need>,
     },
     Stage(String),
     Walk {
@@ -657,6 +682,7 @@ impl Book {
                 label,
                 at,
                 hold,
+                need,
             } => {
                 // `you` may speak; every other speaker is in the cast.
                 if who != YOU {
@@ -671,6 +697,9 @@ impl Book {
                 }
                 if let Some(h) = hold {
                     positive(place, "hold", *h)?;
+                }
+                if let Some(need) = need {
+                    check_need(place, need)?;
                 }
             }
             Beat::Stage(text) => self.check_text(place, text)?,
@@ -875,6 +904,19 @@ fn check_level(place: &str, level: f32) -> Result<(), BookError> {
             place: place.into(),
             what: format!("light level {level}, wanted 0 to 1"),
         })
+    }
+}
+
+/// A `Late` minute is a minute of the day, inside `Not` and `All` too.
+fn check_need(place: &str, need: &Need) -> Result<(), BookError> {
+    match need {
+        Need::Late(minute) if *minute >= sim::DAY => Err(BookError::BadNumber {
+            place: place.into(),
+            what: format!("Late({minute}), wanted 0 to {}", sim::DAY - 1),
+        }),
+        Need::Not(inner) => check_need(place, inner),
+        Need::All(needs) => needs.iter().try_for_each(|n| check_need(place, n)),
+        _ => Ok(()),
     }
 }
 
@@ -1215,6 +1257,10 @@ mod tests {
             "Keypad(door: HomeDoor, code: Code(1234), result: Open, keys: 0.0, hold: 1.0)",
         ));
         bad(scened(r#"Say(who: "you", text: "x", hold: Some(-2.0))"#));
+        bad(scened(
+            r#"Say(who: "you", text: "x", need: Some(Not(All([Late(1440)]))))"#,
+        ));
+        assert!(scened(r#"Say(who: "you", text: "x", need: Some(Late(1439)))"#).is_ok());
         bad(scened("Camera(HomeInside(0))"));
         bad(with_steps(
             r#"Step(id: "a", when: NewGame, then: [Daze(0.0)])"#,

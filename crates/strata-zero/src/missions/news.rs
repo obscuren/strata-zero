@@ -9,7 +9,7 @@ use crate::app::AppState;
 use crate::ui::chrome::{DIM, MAGENTA};
 use crate::walker::Visibility;
 use citygen::{BuildingId, BuildingKind, Feature, Place, Pos, Rect, StratumKind};
-use game::{Attribute, Slot};
+use game::{Attribute, ItemId, Slot};
 use sim::{MoverKind, PersonId};
 use std::collections::BTreeSet;
 
@@ -408,12 +408,13 @@ fn building_here(st: &AppState) -> Option<BuildingId> {
 
 /// Each body you have not yet walked away from, on the place you are on: near once you
 /// are within `NEAR` tiles of it, in sight or not; after that, the first frame you are
-/// past `AWAY` the clock and your heading from it are kept.
+/// past `AWAY` the clock, your heading from it and what you wear on your torso are kept.
 fn walk_away(st: &mut AppState) {
     let Some((place, you)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
         return;
     };
     let at = st.clock();
+    let worn = st.character.equipped(Slot::Torso).cloned();
     for b in st
         .missions
         .bodies
@@ -426,6 +427,7 @@ fn walk_away(st: &mut AppState) {
             b.left = Some(Left {
                 at,
                 heading: heading(b.pos, you),
+                worn: worn.clone(),
             });
         }
     }
@@ -448,19 +450,23 @@ pub fn build_word(body: u8) -> &'static str {
     }
 }
 
-/// The SOUGHT card's two lines for the current item, read from you as you are now: who
-/// is sought, your build and what you wear; what they carried, and the minute you walked
-/// away from the item's body and which way (or `late last night`).
+/// The SOUGHT card's two lines for the current item: who is sought, your build as it is
+/// now and the jacket the camera saw (what you wear now, until you walk away); what they
+/// carried, and the minute you walked away from the item's body and which way (or
+/// `late last night`).
 pub fn sought(st: &AppState) -> Option<[String; 2]> {
     let n = current(st)?;
     let item = st.book.news.get(&n.id)?;
     let build = build_word(st.character.attribute(&st.content, Attribute::Body));
-    let clothes = st
-        .character
-        .equipped(Slot::Torso)
+    let left = walked_away(st, &n.about);
+    let worn = match &left {
+        Some(l) => l.worn.as_ref(),
+        None => st.character.equipped(Slot::Torso),
+    };
+    let clothes = worn
         .and_then(|id| st.content.item(id))
         .map_or_else(|| NO_CLOTHES.to_string(), |i| i.name.to_lowercase());
-    let when = walked_away(st, &n.about).map_or_else(
+    let when = left.map_or_else(
         || NO_TIME.to_string(),
         |l| format!("{:02}:{:02}, heading {}", l.at.0, l.at.1, l.heading),
     );
@@ -474,7 +480,15 @@ pub fn sought(st: &AppState) -> Option<[String; 2]> {
 pub fn walked_away(st: &AppState, about: &str) -> Option<Left> {
     person_of(st, about)
         .and_then(|who| st.missions.bodies.iter().find(|b| b.person == who))
-        .and_then(|b| b.left)
+        .and_then(|b| b.left.clone())
+}
+
+/// The jacket the camera saw (doctor spec §7): what you wore walking away from the body
+/// of the news item put out last, fresh or stale. None with no item out, nobody having
+/// seen you go, or nothing on your torso then.
+pub fn jacket_seen(st: &AppState) -> Option<ItemId> {
+    let n = st.missions.news.as_ref()?;
+    walked_away(st, &n.about)?.worn
 }
 
 /// The channel: the first word of the first named corp building's name, in capitals,
@@ -1022,6 +1036,7 @@ pub(crate) mod tests {
         let left = Some(Left {
             at: (22, 41),
             heading: "north",
+            worn: st.character.equipped(Slot::Torso).cloned(),
         });
         assert_eq!(st.missions.bodies[0].left, left);
         // Walk on, come back and leave the other way later: unchanged.
@@ -1058,6 +1073,7 @@ pub(crate) mod tests {
         st.missions.bodies[0].left = Some(Left {
             at: (22, 41),
             heading: "north",
+            worn: Some(ItemId::new("salvage_jacket")),
         });
         assert_eq!(
             sought(&st).unwrap(),
@@ -1079,6 +1095,46 @@ pub(crate) mod tests {
         // What you wear now: BODY is read as it is.
         st.character.attributes.body = 8;
         assert!(sought(&st).unwrap()[0].contains("heavy build"));
+    }
+
+    #[test]
+    fn walking_away_keeps_the_jacket_and_sought_names_it() {
+        let mut st = begun();
+        // Marlo dies: his body is the item's `about`.
+        crate::missions::end(&mut st, 0, 0);
+        put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        st.character.attributes.body = 5;
+        let jacket = ItemId::new("salvage_jacket");
+        st.character.wear(Slot::Torso, jacket.clone(), None);
+        let (place, at) = (st.missions.bodies[0].place, st.missions.bodies[0].pos);
+        stand(&mut st, place, at.offset(3, -3));
+        stand(&mut st, place, at.offset(0, -13));
+        st.character.take_off(Slot::Torso);
+        let left = st.missions.bodies[0].left.clone().expect("walked away");
+        assert_eq!(left.worn, Some(jacket.clone()));
+        assert_eq!(jacket_seen(&st), Some(jacket));
+        let seen = "a courier · medium build · salvage jacket";
+        assert_eq!(sought(&st).unwrap()[0], seen);
+        // What you wear now changes nothing the camera saw.
+        st.character
+            .wear(Slot::Torso, ItemId::new("ballistic_weave"), None);
+        assert_eq!(sought(&st).unwrap()[0], seen);
+    }
+
+    #[test]
+    fn walking_away_in_nothing_is_dark_clothes_from_then_on() {
+        let mut st = begun();
+        crate::missions::end(&mut st, 0, 0);
+        put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        st.character.take_off(Slot::Torso);
+        let (place, at) = (st.missions.bodies[0].place, st.missions.bodies[0].pos);
+        stand(&mut st, place, at.offset(3, -3));
+        stand(&mut st, place, at.offset(0, -13));
+        assert!(st.missions.bodies[0].left.is_some());
+        assert_eq!(jacket_seen(&st), None);
+        st.character
+            .wear(Slot::Torso, ItemId::new("salvage_jacket"), None);
+        assert!(sought(&st).unwrap()[0].ends_with("· dark clothes"));
     }
 
     /// Runs the clock on to the first game minute from `from` (and from now, and past

@@ -138,6 +138,11 @@ impl SceneRun {
     fn current(&self) -> Option<Beat> {
         self.scene.beats.get(self.beat).cloned()
     }
+
+    /// The mission its lines' needs are asked for: none from the console.
+    fn mission(&self) -> Option<usize> {
+        (self.mission != usize::MAX).then_some(self.mission)
+    }
 }
 
 impl PadRun {
@@ -381,6 +386,12 @@ fn close(st: &mut AppState, run: SceneRun) {
 fn start(st: &mut AppState, run: &mut SceneRun, beat: &Beat) {
     let now = st.clock_tick();
     match beat {
+        // A line whose need fails is never said: no line, so it is over as it begins.
+        Beat::Say {
+            need: Some(need), ..
+        } if !super::holds(st, run.mission(), need) => {
+            run.line = None;
+        }
         Beat::Say {
             who,
             text,
@@ -1273,6 +1284,34 @@ pub(crate) mod tests {
         assert!(press(&mut st, KeyCode::Esc));
         assert_eq!(logged(&st, "Castellan · \u{201c}Sit.\u{201d}"), 1);
         assert_eq!(logged(&st, "A voice · \u{201c}Come in, VEX.\u{201d}"), 1);
+    }
+
+    #[test]
+    fn a_say_whose_need_fails_is_skipped_at_once() {
+        let mut st = queued(
+            SLOW,
+            r#"Say(who: "castellan", text: "Never.", need: Some(Skill("nonesuch"))),
+            Say(who: "castellan", text: "Said."),
+            Say(who: "seren", text: "Nor this.", need: Some(Skill("nonesuch"))),
+            Say(who: "seren", text: "Last.", need: Some(Not(Skill("nonesuch"))))"#,
+        );
+        let t = st.clock_tick();
+        run_ticks(&mut st, 1);
+        let run = running(&st).expect("the scene plays");
+        assert_eq!(run.beat(), 1);
+        let line = run.line().unwrap();
+        assert_eq!(line.text, "Said.");
+        assert!(
+            line.began <= t + 1,
+            "no time passed: {} from {t}",
+            line.began
+        );
+        assert_eq!(logged(&st, "Castellan · \u{201c}Never.\u{201d}"), 0);
+        // Skipped through, a line whose need fails is not said either.
+        assert!(press(&mut st, KeyCode::Esc));
+        assert_eq!(logged(&st, "Seren · \u{201c}Nor this.\u{201d}"), 0);
+        assert_eq!(logged(&st, "Seren · \u{201c}Last.\u{201d}"), 1);
+        assert!(ended(&st));
     }
 
     #[test]

@@ -1592,10 +1592,13 @@ fn news_shots() {
     }
     news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
     let about = person_of(&st, &news::current(&st).unwrap().about).unwrap();
+    // You walk away in what you wear.
+    let worn = st.character.equipped(Slot::Torso).cloned();
     let body = st.missions.bodies.iter_mut().find(|b| b.person == about);
     body.expect("the item's body").left = Some(Left {
         at: (22, 41),
         heading: "north",
+        worn,
     });
     let map = MapScreen::walking(&mut st);
     let broadcast = crate::missions::broadcast::Broadcast::new();
