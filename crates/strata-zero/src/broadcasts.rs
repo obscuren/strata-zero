@@ -35,6 +35,11 @@ pub enum When {
     LoadGame,
 }
 
+/// A colour as the file writes it, `(r, g, b)`.
+pub type Rgb8 = (u8, u8, u8);
+/// A span of the tag line and its colour; none is the text colour.
+pub type TagSpan = (String, Option<Rgb8>);
+
 /// One broadcast as the file has it: who is on air, what they shout, say and sign off
 /// with, and when it plays.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -42,11 +47,11 @@ pub struct Broadcast {
     pub id: String,
     pub when: When,
     /// The tag line's spans; a span without a colour is the text colour.
-    pub tag: Vec<(String, Option<(u8, u8, u8)>)>,
+    pub tag: Vec<TagSpan>,
     pub shout: String,
     pub paras: Vec<String>,
     pub sign: String,
-    pub sign_colour: (u8, u8, u8),
+    pub sign_colour: Rgb8,
 }
 
 /// Every broadcast, in file order.
@@ -86,7 +91,8 @@ impl Broadcasts {
     /// Any text in the file's shape, checked: unique ids, no empty text, known slots,
     /// and something to play on a new game and on a load.
     pub fn parse(src: &str) -> Result<Broadcasts, BroadcastError> {
-        let all: Broadcasts = ron::from_str(src).map_err(|e| BroadcastError::Parse(e.to_string()))?;
+        let all: Broadcasts =
+            ron::from_str(src).map_err(|e| BroadcastError::Parse(e.to_string()))?;
         for (i, b) in all.0.iter().enumerate() {
             if b.id.is_empty() {
                 return Err(BroadcastError::Empty(format!("broadcast {}'s id", i + 1)));
@@ -257,7 +263,10 @@ pub fn loud(name: &str) -> String {
     // The last letter of each vowel run that a consonant follows.
     let held: Vec<usize> = (0..chars.len())
         .filter(|&i| {
-            vowel(chars[i]) && chars.get(i + 1).is_some_and(|&n| n.is_alphabetic() && !vowel(n))
+            vowel(chars[i])
+                && chars
+                    .get(i + 1)
+                    .is_some_and(|&n| n.is_alphabetic() && !vowel(n))
         })
         .collect();
     let held = &held[held.len().saturating_sub(2)..];
@@ -354,7 +363,11 @@ mod tests {
             city.districts.iter().any(|d| d.name == market),
             "{market} is one of the city's districts"
         );
-        assert_eq!(fill("{market}", &city, "Vex"), market, "the same every time");
+        assert_eq!(
+            fill("{market}", &city, "Vex"),
+            market,
+            "the same every time"
+        );
         for b in &Broadcasts::load().unwrap().0 {
             let aired = air(b, &city, "Vex");
             let all = [aired.shout.clone(), aired.sign.clone()]

@@ -80,17 +80,14 @@ struct Places {
     footer_y: u16,
     /// The broadcast as it fits the column.
     lines: Vec<Line<'static>>,
-    /// How many paragraphs made it in.
-    paras: usize,
 }
 
 impl Broadcast {
     /// After JACK IN on the sheet: the build's runner, its perma death.
     pub fn new_game(st: &AppState, city: City) -> Self {
-        let (handle, perma_death) = st
-            .build
-            .as_ref()
-            .map_or((String::new(), true), |b| (b.handle.trim().to_string(), b.perma_death));
+        let (handle, perma_death) = st.build.as_ref().map_or((String::new(), true), |b| {
+            (b.handle.trim().to_string(), b.perma_death)
+        });
         let b = st.broadcasts.pick(When::NewGame, city.seed);
         let aired = air(b, &city, &handle);
         Broadcast::open(st, city, Entry::NewGame, aired, handle, perma_death)
@@ -101,7 +98,14 @@ impl Broadcast {
         let handle = st.character.handle.clone();
         let b = st.broadcasts.pick(When::LoadGame, city.seed);
         let aired = air(b, &city, &handle);
-        Broadcast::open(st, city, Entry::Load { path }, aired, handle, st.perma_death)
+        Broadcast::open(
+            st,
+            city,
+            Entry::Load { path },
+            aired,
+            handle,
+            st.perma_death,
+        )
     }
 
     fn open(
@@ -113,7 +117,11 @@ impl Broadcast {
         perma_death: bool,
     ) -> Self {
         let minute = crate::ui::hud::minute_at(st.tick);
-        let chars = aired.tag.iter().map(|(t, _)| t.chars().count()).sum::<usize>()
+        let chars = aired
+            .tag
+            .iter()
+            .map(|(t, _)| t.chars().count())
+            .sum::<usize>()
             + aired.shout.chars().count()
             + aired.paras.iter().map(|p| p.chars().count()).sum::<usize>()
             + aired.sign.chars().count();
@@ -172,10 +180,10 @@ impl Broadcast {
 
     /// The broadcast's lines for a column `width` wide: the tag line and the clock, a
     /// rule, the shout, `paras` of the paragraphs and the sign-off. `tight` takes blank
-    /// rows out, a few at a time: 1 those between paragraphs, 2 the one under the
-    /// rule, 3 the one over the sign-off.
+    /// rows out, a few at a time: 1 the one under the rule, 2 those between
+    /// paragraphs, 3 the one over the sign-off.
     fn compose(&self, width: u16, tight: u8, paras: usize) -> Vec<Line<'static>> {
-        let gaps = tight == 0;
+        let gaps = tight < 2;
         let w = width as usize;
         let mut out = Vec::new();
         let mut tag: Vec<Span<'static>> = self
@@ -183,7 +191,10 @@ impl Broadcast {
             .tag
             .iter()
             .map(|(t, c)| match c {
-                Some(c) => Span::styled(t.clone(), Style::default().fg(*c).add_modifier(Modifier::BOLD)),
+                Some(c) => Span::styled(
+                    t.clone(),
+                    Style::default().fg(*c).add_modifier(Modifier::BOLD),
+                ),
                 None => Span::styled(t.clone(), Style::default().fg(TEXT)),
             })
             .collect();
@@ -193,23 +204,37 @@ impl Broadcast {
         tag.push(Span::styled(self.clock.clone(), Style::default().fg(FAINT)));
         out.push(Line::from(tag));
         out.push(Line::styled("─".repeat(w), Style::default().fg(RULE)));
-        if tight < 2 {
+        if tight < 1 {
             out.push(Line::default());
         }
         let shout = Style::default().fg(WHITE).add_modifier(Modifier::BOLD);
-        out.extend(wrap(&self.aired.shout, w).into_iter().map(|l| Line::styled(l, shout)));
+        out.extend(
+            wrap(&self.aired.shout, w)
+                .into_iter()
+                .map(|l| Line::styled(l, shout)),
+        );
         out.push(Line::default());
         for p in self.aired.paras.iter().take(paras) {
-            out.extend(wrap(p, w).into_iter().map(|l| Line::styled(l, Style::default().fg(TEXT))));
+            out.extend(
+                wrap(p, w)
+                    .into_iter()
+                    .map(|l| Line::styled(l, Style::default().fg(TEXT))),
+            );
             if gaps {
                 out.push(Line::default());
             }
         }
-        if (1..3).contains(&tight) {
+        if tight == 2 {
             out.push(Line::default());
         }
-        let sign = Style::default().fg(self.aired.sign_colour).add_modifier(Modifier::BOLD);
-        out.extend(wrap(&self.aired.sign, w).into_iter().map(|l| Line::styled(l, sign)));
+        let sign = Style::default()
+            .fg(self.aired.sign_colour)
+            .add_modifier(Modifier::BOLD);
+        out.extend(
+            wrap(&self.aired.sign, w)
+                .into_iter()
+                .map(|l| Line::styled(l, sign)),
+        );
         out
     }
 
@@ -240,20 +265,11 @@ impl Broadcast {
         };
         // Blank rows go first, then paragraphs from the end.
         let all = self.aired.paras.len();
-        let fits = |l: &Vec<Line<'static>>| l.len() <= room as usize;
-        let mut fit = (0..=3)
+        let lines = (0..=3)
             .map(|tight| self.compose(column_w, tight, all))
-            .find(fits)
-            .map(|l| (l, all));
-        let mut n = all;
-        while fit.is_none() && n > 1 {
-            n -= 1;
-            let lines = self.compose(column_w, 3, n);
-            if fits(&lines) || n == 1 {
-                fit = Some((lines, n));
-            }
-        }
-        let (lines, paras) = fit.unwrap_or_else(|| (self.compose(column_w, 3, all), all));
+            .chain((1..all).rev().map(|n| self.compose(column_w, 3, n)))
+            .find(|l| l.len() <= room as usize)
+            .unwrap_or_else(|| self.compose(column_w, 3, all.min(1)));
         // Alone, the broadcast sits in the middle of the rows it has.
         let y = if art.is_none() {
             top + room.saturating_sub(lines.len() as u16) / 2
@@ -275,7 +291,6 @@ impl Broadcast {
             ),
             footer_y,
             lines,
-            paras,
         }
     }
 
@@ -287,7 +302,14 @@ impl Broadcast {
         for (name, row) in cutaway::BANDS.iter().zip(cutaway::band_rows(art.height)) {
             let label = format!("{name} ─");
             let x = rule.saturating_sub(label.chars().count() as u16);
-            put(buf, x, art.y + row, &label, Style::default().fg(FAINTER), rule);
+            put(
+                buf,
+                x,
+                art.y + row,
+                &label,
+                Style::default().fg(FAINTER),
+                rule,
+            );
         }
     }
 
@@ -323,10 +345,18 @@ impl Broadcast {
                 RED,
                 Some(BANNER_BG),
                 " ▲ PERMA DEATH IS ON ",
-                Style::default().fg(RED).bg(BANNER_BG).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(RED)
+                    .bg(BANNER_BG)
+                    .add_modifier(Modifier::BOLD),
             )
         } else {
-            (FAINTER, None, " PERMA DEATH IS OFF ", Style::default().fg(DIM))
+            (
+                FAINTER,
+                None,
+                " PERMA DEATH IS OFF ",
+                Style::default().fg(DIM),
+            )
         };
         let on_bg = |s: Style| match bg {
             Some(bg) => s.bg(bg),
@@ -339,11 +369,32 @@ impl Broadcast {
         };
         let edge = on_bg(Style::default().fg(frame));
         let inner = (r.width - 2) as usize;
-        put(buf, r.x, r.y, &format!("{tl}{}{tr}", h.to_string().repeat(inner)), edge, right);
-        put(buf, r.x, r.y + 3, &format!("{bl}{}{br}", h.to_string().repeat(inner)), edge, right);
+        put(
+            buf,
+            r.x,
+            r.y,
+            &format!("{tl}{}{tr}", h.to_string().repeat(inner)),
+            edge,
+            right,
+        );
+        put(
+            buf,
+            r.x,
+            r.y + 3,
+            &format!("{bl}{}{br}", h.to_string().repeat(inner)),
+            edge,
+            right,
+        );
         for y in [r.y + 1, r.y + 2] {
             put(buf, r.x, y, &v.to_string(), edge, right);
-            put(buf, r.x + 1, y, &" ".repeat(inner), on_bg(Style::default()), inner_right);
+            put(
+                buf,
+                r.x + 1,
+                y,
+                &" ".repeat(inner),
+                on_bg(Style::default()),
+                inner_right,
+            );
             put(buf, inner_right, y, &v.to_string(), edge, right);
         }
         put(buf, r.x + 2, r.y, title, title_style, inner_right);
@@ -368,10 +419,24 @@ impl Broadcast {
             )
         };
         let first_style = Style::default().fg(if self.perma_death { TEXT } else { DIM });
-        put(buf, r.x + 3, r.y + 1, &first, on_bg(first_style), inner_right - 1);
+        put(
+            buf,
+            r.x + 3,
+            r.y + 1,
+            &first,
+            on_bg(first_style),
+            inner_right - 1,
+        );
         // `[p]turn it off` at the right, in the footer's style.
         let keys_x = inner_right.saturating_sub(2 + 3 + verb.len() as u16);
-        put(buf, r.x + 3, r.y + 2, second, on_bg(second_style), keys_x.saturating_sub(1));
+        put(
+            buf,
+            r.x + 3,
+            r.y + 2,
+            second,
+            on_bg(second_style),
+            keys_x.saturating_sub(1),
+        );
         let mut x = keys_x;
         for span in keys_line(&[("p", verb)]).spans {
             let text = span.content.trim_end();
@@ -433,7 +498,11 @@ impl Screen for Broadcast {
         if let Some((art, rule)) = at.art {
             self.draw_art(buf, art, rule);
         }
-        let shown = reveal(&at.lines, self.typed(st.tick), (st.tick / 4).is_multiple_of(2));
+        let shown = reveal(
+            &at.lines,
+            self.typed(st.tick),
+            (st.tick / 4).is_multiple_of(2),
+        );
         for (i, line) in shown.iter().enumerate() {
             let y = at.column.y + i as u16;
             if y >= at.toggles_y {
@@ -456,7 +525,14 @@ impl Screen for Broadcast {
         );
         let who = format!("{} · {}", self.city_name, self.handle);
         let x = area.right().saturating_sub(2 + who.width() as u16);
-        put(buf, x, at.footer_y, &who, Style::default().fg(FAINTER), area.right());
+        put(
+            buf,
+            x,
+            at.footer_y,
+            &who,
+            Style::default().fg(FAINTER),
+            area.right(),
+        );
     }
 }
 
@@ -481,7 +557,11 @@ mod tests {
     /// A new game's state, VEX's build on the sheet.
     fn new_game() -> (AppState, Broadcast) {
         let mut st = AppState::new();
-        let t = st.content.template(&game::TemplateId::new("vex")).unwrap().clone();
+        let t = st
+            .content
+            .template(&game::TemplateId::new("vex"))
+            .unwrap()
+            .clone();
         st.build = Some(game::Build::from_template(&st.content, &t));
         let b = Broadcast::new_game(&st, small(2));
         (st, b)
@@ -536,7 +616,11 @@ mod tests {
             ScreenCmd::Switch { .. }
         ));
         assert!(!st.perma_death && !st.tutorial_off);
-        assert!(st.log.iter().any(|e| e.text.contains("loaded cities/x.city")));
+        assert!(
+            st.log
+                .iter()
+                .any(|e| e.text.contains("loaded cities/x.city"))
+        );
     }
 
     #[test]
@@ -575,7 +659,11 @@ mod tests {
         }
         b.update(&mut st, &[key(KeyCode::Char('t')), key(KeyCode::Char('p'))]);
         let text = draw(&b, &st, 120, 40);
-        for want in ["[✓] DISABLE TUTORIAL", "PERMA DEATH IS OFF", "[p]turn it on"] {
+        for want in [
+            "[✓] DISABLE TUTORIAL",
+            "PERMA DEATH IS OFF",
+            "[p]turn it on",
+        ] {
             assert!(text.contains(want), "wants {want:?}: {text}");
         }
     }
@@ -591,7 +679,12 @@ mod tests {
                     let at = screen.places(area);
                     let end = at.column.y + at.lines.len() as u16;
                     assert!(end < at.toggles_y, "{} at {w}x{h}, seed {seed}", b.id);
-                    assert_eq!(at.paras, b.paras.len(), "{} keeps every paragraph", b.id);
+                    let words = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
+                    let drawn: Vec<String> = at.lines.iter().map(|l| l.to_string()).collect();
+                    let drawn = words(&drawn.join(" "));
+                    for p in &screen.aired.paras {
+                        assert!(drawn.contains(&words(p)), "{} keeps {p:?}", b.id);
+                    }
                     assert_eq!(at.art.is_some(), w >= 120, "{} at {w}x{h}", b.id);
                 }
             }

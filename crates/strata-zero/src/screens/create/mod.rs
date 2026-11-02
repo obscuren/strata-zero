@@ -843,9 +843,7 @@ mod tests {
             "the caption is the handle in block font with the tagline: {text}"
         );
         assert!(
-            text.contains("CRÈCHE")
-                && text.contains("NETRUNNER")
-                && text.contains("step 6 of 6"),
+            text.contains("CRÈCHE") && text.contains("NETRUNNER") && text.contains("step 6 of 6"),
             "{text}"
         );
         assert!(
@@ -856,7 +854,10 @@ mod tests {
             text.contains("◈ Signal ghost") && text.contains("◈ Street sense"),
             "what the categories grant is on the sheet: {text}"
         );
-        assert!(text.contains("[enter]next") && !text.contains("JACK IN"), "{text}");
+        assert!(
+            text.contains("[enter]next") && !text.contains("JACK IN"),
+            "{text}"
+        );
         let ScreenCmd::Push { to: mut on_air, .. } = c.update(&mut st, &[key(KeyCode::Enter)])
         else {
             panic!("the sheet goes on to the broadcast")
@@ -894,7 +895,10 @@ mod tests {
             c.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Push { .. }
         ));
-        assert!(st.build.is_some(), "jacking in again starts from the same build");
+        assert!(
+            st.build.is_some(),
+            "jacking in again starts from the same build"
+        );
     }
 
     #[test]

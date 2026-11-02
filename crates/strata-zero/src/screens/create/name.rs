@@ -43,7 +43,11 @@ pub(super) fn key(st: &mut AppState, field: &mut NameField, code: KeyCode) {
 fn meaning(b: &Build) -> String {
     if b.perma_death {
         let name = b.handle.trim().to_uppercase();
-        let who = if name.is_empty() { "your runner" } else { &name };
+        let who = if name.is_empty() {
+            "your runner"
+        } else {
+            &name
+        };
         format!("One life. If {who} flatlines, the save goes too and the run is over.")
     } else {
         "A flatline sends you back to your last save.".to_string()

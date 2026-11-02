@@ -85,7 +85,8 @@ pub fn draw(buf: &mut Buffer, area: Rect, seed: u64) {
     let mut p = Pixels::new(area.width, area.height);
     let (w, ph) = (i32::from(area.width), i32::from(area.height) * 2);
     let at = |f: f32| (ph as f32 * f) as i32;
-    let (skyways, street, under, net) = (at(STARTS[1]), at(STARTS[2]), at(STARTS[3]), at(STARTS[4]));
+    let (skyways, street, under, net) =
+        (at(STARTS[1]), at(STARTS[2]), at(STARTS[3]), at(STARTS[4]));
     let put = |p: &mut Pixels, x: i32, y: i32, c: Rgb| p.px(x, y, Some(c.to_color()));
 
     // The sky, the Street's haze rising into it; below the street, the dark.
@@ -186,7 +187,12 @@ pub fn draw(buf: &mut Buffer, area: Rect, seed: u64) {
         for x in 0..w {
             let (row, col) = ((y - net) % 3 == 0, x % 6 == 0);
             if row || col {
-                put(&mut p, x, y, LATTICE.scale(if row && col { 0.45 } else { 0.2 }));
+                put(
+                    &mut p,
+                    x,
+                    y,
+                    LATTICE.scale(if row && col { 0.45 } else { 0.2 }),
+                );
             }
         }
     }
