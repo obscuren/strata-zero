@@ -7,9 +7,11 @@ use thiserror::Error;
 const DEFAULT: &str = include_str!("../../../../flavor/missions.ron");
 
 /// What a `{role.field}` slot may ask of a role.
-pub const SLOT_FIELDS: [&str; 4] = ["title", "place", "district", "hours"];
+pub const SLOT_FIELDS: [&str; 5] = ["title", "spaced", "place", "district", "hours"];
 /// What a `{role.field}` slot may ask of a visitor, who works nowhere.
-pub const VISITOR_FIELDS: [&str; 1] = ["title"];
+pub const VISITOR_FIELDS: [&str; 2] = ["title", "spaced"];
+/// The fields that ask where a person is, so they need one in the city.
+const PLACE_FIELDS: [&str; 3] = ["place", "district", "hours"];
 
 /// The shade letters a face row may hold.
 const SHADES: &str = ".dmlhbeX";
@@ -120,16 +122,6 @@ impl News {
         .chain(&self.crawl)
         .chain(&self.overheard)
         .map(String::as_str)
-    }
-
-    /// The roles it names: who it is about and its slots (but you).
-    fn roles(&self) -> BTreeSet<String> {
-        let mut out = BTreeSet::from([self.about.clone()]);
-        for t in self.texts() {
-            out.extend(slots(t).into_iter().map(|(role, _)| role));
-        }
-        out.remove(YOU);
-        out
     }
 }
 
@@ -281,6 +273,8 @@ pub enum Beat {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub enum Pick {
     NearestFixer,
+    /// The one of this profession (an id) whose work tile is nearest the home door.
+    Nearest(String),
     Worker {
         professions: Vec<String>,
         at: Vec<citygen::BuildingKind>,
@@ -440,6 +434,7 @@ impl Trigger {
 
 impl Mission {
     /// Every role the mission names: its `from`, triggers, effects and slots.
+    #[cfg(test)]
     pub fn roles(&self) -> BTreeSet<String> {
         let mut out = BTreeSet::new();
         out.insert(self.from.clone());
@@ -476,6 +471,14 @@ pub fn slots(text: &str) -> Vec<(String, Option<String>)> {
         rest = &after[close + 1..];
     }
     out
+}
+
+/// The roles a text asks the place, district or hours of.
+fn placed(text: &str) -> impl Iterator<Item = String> {
+    slots(text)
+        .into_iter()
+        .filter(|(_, f)| f.as_deref().is_some_and(|f| PLACE_FIELDS.contains(&f)))
+        .map(|(role, _)| role)
 }
 
 impl Book {
@@ -534,13 +537,33 @@ impl Book {
             .is_some_and(|r| matches!(r.pick, Pick::Visitor))
     }
 
-    /// The roles a mission needs the sim to cast: all it names, and all the news it puts
-    /// out names, but visitors and `you`.
+    /// The roles a mission needs the sim to cast: those a trigger waits on, an effect acts
+    /// on, a scene's speaker or a news item is about, and any whose place, district or
+    /// hours a text asks. A bare name needs nobody. Visitors and `you` are never cast.
     pub fn needs_cast(&self, m: &Mission) -> BTreeSet<String> {
-        let mut roles = m.roles();
-        for e in m.steps.iter().flat_map(|s| &s.then) {
-            if let Some(news) = self.news_of(e) {
-                roles.extend(news.roles());
+        let mut roles = BTreeSet::new();
+        for step in &m.steps {
+            roles.extend(step.when.named_roles().into_iter().map(String::from));
+            for e in &step.then {
+                // One arm per effect that acts on a person.
+                if let Effect::Dead { role, .. } = e {
+                    roles.insert(role.clone());
+                }
+                for t in e.texts() {
+                    roles.extend(placed(t));
+                }
+                match e {
+                    Effect::Scene(id) => self.scene_needs(id, &mut roles),
+                    Effect::News(id) => {
+                        if let Some(news) = self.news.get(id) {
+                            roles.insert(news.about.clone());
+                            for t in news.texts() {
+                                roles.extend(placed(t));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
         roles
@@ -549,11 +572,28 @@ impl Book {
             .collect()
     }
 
-    /// The news item an `Effect::News` puts out.
-    fn news_of(&self, e: &Effect) -> Option<&News> {
-        match e {
-            Effect::News(id) => self.news.get(id),
-            _ => None,
+    /// The roles a scene and the scenes after it need: speakers and placed slots.
+    fn scene_needs(&self, id: &str, roles: &mut BTreeSet<String>) {
+        let mut next = Some(id);
+        // A `next` chain is checked to end, but a bound costs nothing.
+        for _ in 0..=self.scenes.len() {
+            let Some(scene) = next.and_then(|n| self.scenes.get(n)) else {
+                return;
+            };
+            for beat in &scene.beats {
+                match beat {
+                    Beat::Say {
+                        who, text, label, ..
+                    } => {
+                        roles.insert(who.clone());
+                        roles.extend(placed(text));
+                        roles.extend(label.iter().flat_map(|l| placed(l)));
+                    }
+                    Beat::Stage(text) => roles.extend(placed(text)),
+                    _ => {}
+                }
+            }
+            next = scene.next.as_deref();
         }
     }
 
@@ -1323,7 +1363,8 @@ mod tests {
 
     #[test]
     fn visitors_need_no_cast() {
-        let steps = r#"Step(id: "a", when: NewGame, then: [Log("{you} and {marlo}")])"#;
+        let steps =
+            r#"Step(id: "a", when: NewGame, then: [Log("{you} and {marlo} at {marlo.place}")])"#;
         let b = with_steps(steps).unwrap();
         let m = &b.missions[0];
         assert_eq!(m.from, "seren");
@@ -1464,6 +1505,42 @@ mod tests {
         let steps = r#"Step(id: "n", when: NewGame, then: [News("x")]),
             Step(id: "after", when: Ended("n"), then: [Log("after")])"#;
         assert!(with_news("marlo", "Headline", steps).is_ok());
+    }
+
+    /// The roles `steps` need cast, with a fixer `zed` in the cast and scenes `s` and `t`.
+    fn needed(steps: &str) -> BTreeSet<String> {
+        let zed = r#""zed": Role(name: "Zed", title: "fixer", pick: NearestFixer, face: None),"#;
+        let pace = "Pace(type: 45, walk: 0.3, hold: None)";
+        let scenes = format!(
+            r#""s": Scene(title: "S", look: Film, pace: {pace}, next: Some("t"),
+                beats: [Say(who: "seren", text: "hi")]),
+            "t": Scene(title: "T", look: Film, pace: {pace},
+                beats: [Say(who: "zed", text: "hey")])"#
+        );
+        let b = tiny(zed, steps, &scenes).unwrap();
+        b.needs_cast(&b.missions[0])
+    }
+
+    #[test]
+    fn needs_cast_skips_bare_names_and_counts_places() {
+        let none = BTreeSet::new();
+        let zed: BTreeSet<String> = ["zed"].map(String::from).into();
+        let log = |t: &str| format!(r#"Step(id: "a", when: NewGame, then: [Log("{t}")])"#);
+        assert_eq!(needed(&log("{zed} {zed.spaced} {zed.title}")), none);
+        assert_eq!(needed(&log("at {zed.place}")), zed);
+        assert_eq!(needed(&log("in {zed.district}")), zed);
+        assert_eq!(needed(&log("from {zed.hours}")), zed);
+        let talk = r#"Step(id: "a", when: Talk("zed"), then: [Log("x")])"#;
+        assert_eq!(needed(talk), zed);
+        let dead = r#"Step(id: "a", when: NewGame, then: [Dead(role: "zed", look: "x")])"#;
+        assert_eq!(needed(dead), zed);
+        // A scene's speaker, found down its `next` chain.
+        let scene = r#"Step(id: "a", when: NewGame, then: [Scene("s")])"#;
+        assert_eq!(needed(scene), zed);
+        // A visitor speaking needs nobody.
+        let seren =
+            r#"Step(id: "a", when: NewGame, then: [Feed(from: "zed", text: ["x"], close: "y")])"#;
+        assert_eq!(needed(seren), none);
     }
 
     #[test]

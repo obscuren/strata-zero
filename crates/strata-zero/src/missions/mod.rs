@@ -484,8 +484,10 @@ fn slot_text(st: &AppState, role: &str, field: Option<&str>) -> Option<String> {
     let Some(field) = field else {
         return Some(r.name.clone());
     };
-    if field == "title" {
-        return Some(r.title.clone());
+    match field {
+        "title" => return Some(r.title.clone()),
+        "spaced" => return Some(spaced(&r.name)),
+        _ => {}
     }
     let who = person_of(st, role)?;
     match field {
@@ -494,6 +496,21 @@ fn slot_text(st: &AppState, role: &str, field: Option<&str>) -> Option<String> {
         "hours" => Some(cast::hours_of(st, who)),
         _ => None,
     }
+}
+
+/// A name for a sign: each word's letters upper-case with a space between them, the
+/// words three spaces apart.
+fn spaced(name: &str) -> String {
+    name.split_whitespace()
+        .map(|w| {
+            w.chars()
+                .flat_map(char::to_uppercase)
+                .map(String::from)
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join("   ")
 }
 
 /// The person cast in a role.
@@ -596,6 +613,28 @@ pub(crate) mod tests {
         tick(st);
         advance(st, 1);
         tick(st);
+    }
+
+    #[test]
+    fn a_name_slot_fills_from_the_book_when_nobody_plays_the_role() {
+        let mut st = begun();
+        st.book.cast.insert(
+            "zed".into(),
+            Role {
+                name: "Zed".into(),
+                title: "fixer".into(),
+                pick: Pick::NearestFixer,
+                face: None,
+                tint: None,
+                look: None,
+            },
+        );
+        assert!(person_of(&st, "zed").is_none());
+        assert_eq!(
+            fill(&st, "{zed} · {zed.spaced} · {zed.title} · {zed.place}"),
+            "Zed · Z E D · fixer · {zed.place}"
+        );
+        assert_eq!(spaced("Ab Cd"), "A B   C D");
     }
 
     #[test]

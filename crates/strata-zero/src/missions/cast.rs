@@ -14,8 +14,8 @@ const FIXER: &str = "fixer";
 /// How far past a footprint's longer side the search for its street tile reaches.
 const RING_SLACK: i32 = 16;
 
-/// Binds every role to a person, in the book's order: never one person to two roles,
-/// never a dead one. A cast person takes the role's name; a role nobody can play is
+/// Binds every role to a person: the nearest-picks first, then the workers, each in the
+/// book's order. Never one person to two roles, never a dead one. A cast person takes the role's name; a role nobody can play is
 /// left out of `missions.cast`.
 pub fn cast(st: &mut AppState) {
     st.missions.cast.clear();
@@ -29,7 +29,9 @@ pub fn cast(st: &mut AppState) {
         .iter()
         .map(|(id, r)| (id.clone(), r.clone()))
         .collect();
-    for (id, role) in roles {
+    let nearest = |r: &Role| matches!(r.pick, Pick::NearestFixer | Pick::Nearest(_));
+    let (first, then): (Vec<_>, Vec<_>) = roles.into_iter().partition(|(_, r)| nearest(r));
+    for (id, role) in first.into_iter().chain(then) {
         // A visitor is an authored person, not one of the sim's.
         if matches!(role.pick, Pick::Visitor) {
             continue;
@@ -83,6 +85,13 @@ fn pick(
                 Work::Spot(pos) => Some((pos.manhattan(door), p.id)),
                 _ => None,
             })
+            .min_by_key(|(d, id)| (*d, id.0))
+            .map(|(_, id)| id),
+        Pick::Nearest(profession) => world
+            .people()
+            .iter()
+            .filter(|p| &p.profession == profession && free(p.id))
+            .filter_map(|p| Some((work_tile(st, p.id)?.manhattan(door), p.id)))
             .min_by_key(|(d, id)| (*d, id.0))
             .map(|(_, id)| id),
         Pick::Worker {
@@ -252,6 +261,95 @@ mod tests {
             work_tile(&st, fixer),
             st.world.as_ref().unwrap().spot_of(fixer)
         );
+    }
+
+    fn role(pick: Pick) -> Role {
+        Role {
+            name: "Extra".into(),
+            title: "extra".into(),
+            pick,
+            face: None,
+            tint: None,
+            look: None,
+        }
+    }
+
+    #[test]
+    fn nearest_casts_the_nearest_of_its_profession() {
+        let mut st = state_home();
+        st.book
+            .cast
+            .insert("cook".into(), role(Pick::Nearest("noodle_cook".into())));
+        cast(&mut st);
+        let door = home_door(&st).unwrap();
+        let want = st
+            .world
+            .as_ref()
+            .unwrap()
+            .people()
+            .iter()
+            .filter(|p| p.profession == "noodle_cook")
+            .filter_map(|p| Some((work_tile(&st, p.id)?.manhattan(door), p.id.0)))
+            .min()
+            .map(|(_, id)| PersonId(id));
+        assert!(want.is_some());
+        // Marlo is a cook too, but the nearest-picks go first.
+        assert_eq!(st.missions.cast.get("cook").copied(), want);
+        assert_ne!(st.missions.cast.get("marlo").copied(), want);
+    }
+
+    #[test]
+    fn nearest_picks_cast_before_workers() {
+        let mut st = state_home();
+        cast(&mut st);
+        let mezz = st.missions.cast["mezz"];
+        // A role that sorts before `mezz` and could take any fixer.
+        st.book.cast.insert(
+            "aaa".into(),
+            role(Pick::Worker {
+                professions: vec!["fixer".into()],
+                at: vec![],
+                range: (0, 999),
+            }),
+        );
+        cast(&mut st);
+        assert_eq!(st.missions.cast["mezz"], mezz);
+        assert_ne!(st.missions.cast.get("aaa"), Some(&mezz));
+    }
+
+    #[test]
+    fn shipped_roles_cast_as_before() {
+        let mut st = state_home();
+        cast(&mut st);
+        let door = home_door(&st).unwrap();
+        // Mezz: the nearest fixer on a spot.
+        let fixers = st
+            .world
+            .as_ref()
+            .unwrap()
+            .people()
+            .iter()
+            .filter(|p| p.profession == FIXER)
+            .filter_map(|p| match p.work {
+                Work::Spot(pos) => Some((pos.manhattan(door), p.id.0)),
+                _ => None,
+            })
+            .min();
+        assert_eq!(
+            st.missions.cast["mezz"],
+            PersonId(fixers.expect("a fixer").1)
+        );
+        // Marlo: what the worker pick finds with nobody taken, as when the roles were
+        // cast in id order (marlo, then mezz).
+        let seed = st.city.as_ref().unwrap().seed;
+        let alone = pick(
+            &st,
+            &st.book.cast["marlo"].pick,
+            door,
+            hash64(seed, id_seed("marlo")),
+            &BTreeSet::new(),
+        );
+        assert_eq!(st.missions.cast.get("marlo").copied(), alone);
     }
 
     #[test]
