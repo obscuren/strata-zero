@@ -299,16 +299,19 @@ mod tests {
     fn the_shipped_broadcasts_load() {
         let all = Broadcasts::load().unwrap();
         let ids: Vec<&str> = all.0.iter().map(|b| b.id.as_str()).collect();
-        assert_eq!(ids, ["static66", "nitewire", "block_pa"]);
+        assert_eq!(ids, ["static66", "nitewire", "block_pa", "courier"]);
         let mut loads = std::collections::BTreeSet::new();
         for seed in 1..20 {
             assert_eq!(all.pick(When::NewGame, seed).id, "static66");
             let id = &all.pick(When::LoadGame, seed).id;
-            assert!(id == "nitewire" || id == "block_pa", "{id}");
+            assert!(
+                ["nitewire", "block_pa", "courier"].contains(&id.as_str()),
+                "{id}"
+            );
             assert_eq!(&all.pick(When::LoadGame, seed).id, id, "a city hears one");
             loads.insert(id.clone());
         }
-        assert_eq!(loads.len(), 2, "both loads play somewhere");
+        assert_eq!(loads.len(), 3, "every load plays somewhere");
     }
 
     #[test]

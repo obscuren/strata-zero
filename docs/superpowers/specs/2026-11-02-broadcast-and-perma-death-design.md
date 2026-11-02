@@ -238,6 +238,20 @@ The three to ship, from round 2 with the city's names:
    found in the stairwell on 9. If it belongs to you, collect it from the lobby before
    06:00.` Sign-off `{city} Housing Authority. You live here now.` in amber.
 
+Added with the morning news (`2026-11-02-morning-news-design.md`), Jeffrey's pick C of
+three drawn options (a NEWSLINE late edition and a precinct scanner leak on NEW GAME
+were the others):
+
+4. **`courier`**, `LoadGame`. Static 66 the morning after the drop, the story's news as
+   the pirates tell it. Tag as `static66`. Shout `{city.loud}, WHO'S THE COURIER?`.
+   Paragraphs: `Somebody put a noodle cook on the pavement last night, and the badges
+   want a word with whoever walked off with a package. Funny thing: the cook sold
+   names. To the badges.` / `So, for the record. Static Sixty-Six never saw your face,
+   your jacket or your package. Cameras see everybody. Cameras don't testify.` /
+   `Courier, if you're listening: don't open it. Don't come by the dish.` Sign-off
+   `Static Sixty-Six. We never saw a thing.` in magenta. A load starts the story over,
+   so it plays as the city's memory of the drop, not the run's; one of three loads.
+
 ## What goes away
 
 - `screens/generating.rs` and its tests. Its callers (NEW GAME's JACK IN, NEW GAME
