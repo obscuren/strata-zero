@@ -2,22 +2,18 @@
 
 use super::{Cache, map_stratum};
 use crate::app::AppState;
-use crate::render::Rgb;
-use crate::render::style::StylePack;
+use crate::render::mappix::{Pixels, paint, stratum_px};
 use crate::track::listings::{self, Kind, Listing, source_of};
 use crate::track::overlay::{from_goal, glow, mix, ripple_px};
 use crate::track::route::Leg;
 use crate::track::{Pulse, is_tracked, leg_now, pulses_now, target_now};
-use crate::ui::chrome::{CYAN, CYAN_RGB, DIM, MAGENTA_RGB, PANEL_BG, PANEL_BG_RGB};
-use citygen::{City, DistrictId, Place, Pos, Rect as TileRect, Size, StratumKind, Terrain, Tile};
+use crate::ui::chrome::{CYAN, CYAN_RGB, DIM, MAGENTA_RGB, PANEL_BG};
+use citygen::{City, Place, Pos, Rect as TileRect, Size, StratumKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-/// The ground of a pixel no district colours.
-const NEUTRAL: Rgb = Rgb(40, 44, 52);
-const WATER: Rgb = Rgb(14, 40, 72);
 const YOU: Color = Color::Rgb(255, 255, 255);
 /// How many cells the cursor keeps from the map's edges.
 const MARGIN: i32 = 4;
@@ -107,120 +103,13 @@ fn walk_on<'a>(
     }
 }
 
-/// Walkable ground under whatever stands on it: a stall on a pavement is pavement.
-fn ground(t: &Tile) -> bool {
-    Tile {
-        feature: None,
-        ..*t
-    }
-    .is_walkable()
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Class {
-    Building,
-    Road,
-    Walk,
-    Water,
-}
-
-/// A pixel's colour from the tiles it covers: its class in its commonest district's
-/// theme.
-fn shade(city: &City, style: &StylePack, k: StratumKind, x0: i32, y0: i32, s: i32) -> Rgb {
-    let Some(stratum) = city.stratum(k) else {
-        return PANEL_BG_RGB;
-    };
-    let (mut n, mut solid, mut water, mut road, mut walk) = (0, 0, 0, false, false);
-    // The districts met, and how often; a pixel meets few.
-    let mut districts: [(Option<DistrictId>, u32); 8] = [(None, 0); 8];
-    for y in y0..y0 + s {
-        for x in x0..x0 + s {
-            let p = Pos::new(x, y);
-            let Some(t) = stratum.tiles.get(p) else {
-                continue;
-            };
-            n += 1;
-            match t.terrain {
-                Terrain::Wall
-                | Terrain::Mass
-                | Terrain::Window
-                | Terrain::Rooftop
-                | Terrain::Door => solid += 1,
-                Terrain::Water | Terrain::Sewage => water += 1,
-                Terrain::Road => road = true,
-                _ => {}
-            }
-            walk |= ground(t);
-            if let Some(d) = t.district
-                && let Some(slot) = districts
-                    .iter_mut()
-                    .find(|(id, _)| id.is_none_or(|id| id == d))
-            {
-                *slot = (Some(d), slot.1 + 1);
-            }
-        }
-    }
-    let class = if solid * 2 > n {
-        Class::Building
-    } else if road {
-        Class::Road
-    } else if walk {
-        Class::Walk
-    } else if n > 0 && water * 2 >= n {
-        Class::Water
-    } else {
-        return PANEL_BG_RGB;
-    };
-    // The commonest, the first met on a tie.
-    let district = districts
-        .iter()
-        .fold(
-            (None, 0),
-            |best, (d, c)| if *c > best.1 { (*d, *c) } else { best },
-        )
-        .0;
-    let theme = district
-        .and_then(|d| city.district_opt(d))
-        .map(|d| style.theme_or_neutral(Some(d.theme)));
-    match (class, theme) {
-        (Class::Water, _) => WATER,
-        (_, None) => NEUTRAL,
-        (Class::Building, Some(t)) => t.roof,
-        (Class::Road, Some(t)) => t.road.scale(1.9),
-        (Class::Walk, Some(t)) => t.sidewalk.scale(1.15),
-    }
-}
-
-/// The view's pixels, two to a cell, row by row.
-struct Pixels {
-    w: i32,
-    h: i32,
-    v: Vec<Rgb>,
-}
-
-impl Pixels {
-    fn of(st: &AppState, city: &City, k: StratumKind, l: &MapLayout) -> Pixels {
-        let (w, h) = (l.area.width as i32, 2 * l.area.height as i32);
-        let v = (0..h)
-            .flat_map(|y| (0..w).map(move |x| (x, y)))
-            .map(|(x, y)| {
-                let (x0, y0) = (l.origin.x + x * l.s, l.origin.y + y * l.s);
-                shade(city, &st.style, k, x0, y0, l.s)
-            })
-            .collect();
-        Pixels { w, h, v }
-    }
-
-    fn get_mut(&mut self, (x, y): (i32, i32)) -> Option<&mut Rgb> {
-        ((0..self.w).contains(&x) && (0..self.h).contains(&y))
-            .then(|| &mut self.v[(y * self.w + x) as usize])
-    }
-
-    /// The top and bottom pixels of the cell `x`, `y` cells into the map.
-    fn cell(&self, x: u16, y: u16) -> (Rgb, Rgb) {
-        let at = |py: i32| self.v[(py * self.w + x as i32) as usize];
-        (at(2 * y as i32), at(2 * y as i32 + 1))
-    }
+/// The view's pixels, two to a cell.
+fn pixels_of(st: &AppState, city: &City, k: StratumKind, l: &MapLayout) -> Pixels {
+    let (w, h) = (l.area.width as i32, 2 * l.area.height as i32);
+    Pixels::new(w, h, |x, y| {
+        let (x0, y0) = (l.origin.x + x * l.s, l.origin.y + y * l.s);
+        stratum_px(city, &st.style, k, x0, y0, l.s)
+    })
 }
 
 /// How much of the cyan each pixel the walk crosses takes at tick `t`, in the street's
@@ -277,20 +166,6 @@ fn glow_walk(
             {
                 *c = c.mix(colour, f);
             }
-        }
-    }
-}
-
-/// The pixels as half blocks: `▀` in the top pixel's colour on the bottom's.
-fn paint(buf: &mut Buffer, l: &MapLayout, px: &Pixels) {
-    for y in 0..l.area.height {
-        for x in 0..l.area.width {
-            let (top, bottom) = px.cell(x, y);
-            let c = &mut buf[(l.area.x + x, l.area.y + y)];
-            c.reset();
-            c.set_char(if top == bottom { ' ' } else { '▀' })
-                .set_fg(top.to_color())
-                .set_bg(bottom.to_color());
         }
     }
 }
@@ -516,11 +391,11 @@ pub(super) fn draw_at(
         buf.set_stringn(area.x + 1, area.y, text, room, ground);
         return;
     };
-    let mut px = Pixels::of(st, city, k, l);
+    let mut px = pixels_of(st, city, k, l);
     if let Some(leg) = walk_on(st, cache, k) {
         glow_walk(st, &mut px, l, leg, k, quiet);
     }
-    paint(buf, l, &px);
+    paint(buf, l.area, &px);
     let mut taken = HashSet::new();
     for m in markers(st, l, &cache.listings) {
         let (top, bottom) = px.cell(m.cell.0 - area.x, m.cell.1 - area.y);
@@ -547,6 +422,7 @@ mod tests {
     use crate::track::Source;
     use crate::track::listings::listings;
     use citygen::City;
+    use citygen::{Terrain, Tile};
     use ratatui::buffer::Cell;
     use std::collections::HashSet;
 
@@ -561,7 +437,7 @@ mod tests {
     /// The colour of the `s` × `s` pixel at tile (`x0`, `y0`) of a stratum (spec 7).
     fn pixel(st: &AppState, stratum: StratumKind, x0: i32, y0: i32, s: i32) -> Color {
         match st.city.as_ref() {
-            Some(city) => shade(city, &st.style, stratum, x0, y0, s).to_color(),
+            Some(city) => stratum_px(city, &st.style, stratum, x0, y0, s).to_color(),
             None => PANEL_BG,
         }
     }
