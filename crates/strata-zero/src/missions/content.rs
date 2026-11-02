@@ -1302,15 +1302,98 @@ mod tests {
     #[test]
     fn the_shipped_book_parses_and_validates() {
         let b = book();
-        assert_eq!(b.missions.len(), 3);
+        assert_eq!(b.missions.len(), 5);
         assert_eq!(b.missions[0].id, "the_drop");
         assert_eq!(b.missions[1].id, "house_call");
         assert_eq!(b.missions[2].id, "morning_after");
-        assert_eq!(b.scenes.len(), 3);
+        assert_eq!(b.scenes.len(), 5);
         assert_eq!(b.missions[0].steps.len(), 6);
         assert!(b.cast.contains_key("mezz") && b.cast.contains_key("marlo"));
         assert_eq!(b.face_of("mezz").eye, (255, 0, 200));
         assert_eq!(b.face_of("marlo"), &b.faces["silhouette"]);
+    }
+
+    /// The skills a need asks for, inside `Not` and `All` too.
+    fn skills_in(need: &Need, out: &mut Vec<String>) {
+        match need {
+            Need::Skill(id) => out.push(id.clone()),
+            Need::Not(inner) => skills_in(inner, out),
+            Need::All(needs) => needs.iter().for_each(|n| skills_in(n, out)),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn the_shipped_book_loads_the_doctor() {
+        let b = book();
+        let ids: Vec<&str> = b.missions.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "the_drop",
+                "house_call",
+                "morning_after",
+                "doctor",
+                "ledger"
+            ]
+        );
+        let (doctor, ledger) = (&b.missions[3], &b.missions[4]);
+        assert_eq!(doctor.title, "Doctor's in by ten");
+        let steps: Vec<&str> = doctor.steps.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(steps, ["word", "in", "tray", "out", "free"]);
+        // The doc must be in the city, and the cook whose district the news named; the
+        // fixer she names needn't be, so only the hook waits on him.
+        let needs = |m: &Mission| b.needs_cast(m).into_iter().collect::<Vec<_>>();
+        assert_eq!(needs(doctor), ["marlo", "odile"]);
+        assert_eq!(needs(ledger), ["coz"]);
+        assert_eq!(b.cast["odile"].pick, Pick::Nearest("ripperdoc".into()));
+        assert!(matches!(
+            &b.cast["coz"].pick,
+            Pick::Worker { professions, .. } if professions == &["fixer"]
+        ));
+        for id in ["odile", "odile_out"] {
+            assert_eq!(b.scenes[id].look, Look::Bubbles, "{id}");
+        }
+        let at = |item: &str| b.readings[item].iter().map(|r| r.at).collect::<Vec<_>>();
+        assert_eq!(
+            at("ledger_shard"),
+            [ReadAt::Rig, ReadAt::Bench, ReadAt::Look]
+        );
+        assert_eq!(at("taped_package"), [ReadAt::Look]);
+        // A set of three for each category's free skill, the last for anyone.
+        let sets = doctor
+            .steps
+            .iter()
+            .flat_map(|s| &s.then)
+            .find_map(|e| match e {
+                Effect::Tray { sets, .. } => Some(sets),
+                _ => None,
+            })
+            .expect("her tray");
+        assert_eq!(sets.len(), 9);
+        assert!(sets.iter().all(|s| s.items.len() == 3));
+        assert_eq!(sets.last().unwrap().need, Need::All(vec![]));
+        // Every skill a need asks for is one the content has.
+        let mut skills = Vec::new();
+        for need in sets.iter().map(|s| &s.need) {
+            skills_in(need, &mut skills);
+        }
+        for r in b.readings.values().flatten() {
+            skills_in(&r.need, &mut skills);
+        }
+        for beat in b.scenes.values().flat_map(|s| &s.beats) {
+            if let Beat::Say { need: Some(n), .. } = beat {
+                skills_in(n, &mut skills);
+            }
+        }
+        assert_eq!(skills.len(), 12, "{skills:?}");
+        let c = Content::load().unwrap();
+        for id in skills {
+            assert!(
+                c.skill(&game::SkillId::new(&id)).is_some(),
+                "no skill `{id}`"
+            );
+        }
     }
 
     #[test]
