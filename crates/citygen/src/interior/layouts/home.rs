@@ -10,13 +10,13 @@ pub(super) const HOME_DOOR: i32 = 17;
 
 /// The flat's 35x7 interior, the walkway side on top, the windows below: `#` wall,
 /// `+` door, `W` shower, `H` shelf, `L` locker, `B` bed, `D` desk, `T` the rig,
-/// `C` couch, `O` table, `S` stool, `K` counter.
+/// `C` couch, `V` the holo set, `O` table, `S` stool, `K` counter.
 const LAYOUT: [&str; 7] = [
     "W..#HHHH.LLL#......................",
     "...#........#......................",
     "#+#####+#####......................",
     "............+...........SOS.......K",
-    "#########+###.....................K",
+    "#########+###...V.................K",
     "BB..........#.....................K",
     "BB....DT....#..CCCC.........KKKKKKK",
 ];
@@ -48,6 +48,7 @@ impl Builder<'_> {
                     'B' => Furniture::Bed,
                     'D' => Furniture::Desk,
                     'C' => Furniture::Couch,
+                    'V' => Furniture::Holo,
                     'O' => Furniture::Table,
                     'S' => Furniture::Stool,
                     'K' => Furniture::Counter,

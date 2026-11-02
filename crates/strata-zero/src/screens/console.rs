@@ -680,7 +680,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             Ok(line)
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · job fetch|copy|plant|deliver · standing <n> · jobs · target <name> · eyes · light · ripper · foe [n] · dummy [n] · foes · throw <item> [n] · live · story [fire <mission> | scene <id> | skip | feed | call] · track [off | <x> <y> | <name>] · wait · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · job fetch|copy|plant|deliver · standing <n> · jobs · target <name> · eyes · light · ripper · foe [n] · dummy [n] · foes · throw <item> [n] · live · story [fire <mission> | scene <id> | skip | news <id> | feed | call] · track [off | <x> <y> | <name>] · wait · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),
@@ -770,10 +770,11 @@ fn track(st: &mut AppState, args: &[&str]) -> Result<String, String> {
 }
 
 /// `story`: the cast, missions and scenes; `fire <mission>` runs its waiting step;
-/// `scene <id>` plays a scene, `skip` skips the one playing; `feed` and `call` queue a
-/// test feed or ring a test call from the first role with a face.
+/// `scene <id>` plays a scene, `skip` skips the one playing; `news <id>` puts out a news
+/// item; `feed` and `call` queue a test feed or ring a test call from the first role
+/// with a face. A scene or news item from here belongs to no mission's step.
 fn story(st: &mut AppState, args: &[&str]) -> Result<String, String> {
-    let usage = "story [fire <mission> | scene <id> | skip | feed | call]";
+    let usage = "story [fire <mission> | scene <id> | skip | news <id> | feed | call]";
     let test_role = || {
         st.book
             .cast
@@ -812,6 +813,13 @@ fn story(st: &mut AppState, args: &[&str]) -> Result<String, String> {
                 .ok_or_else(|| "no scene is playing".to_string())?;
             crate::missions::scene::skip(st);
             Ok(format!("skipped {id}"))
+        }
+        ["news", id] => {
+            if !st.book.news.contains_key(*id) {
+                return Err(format!("unknown news {id}"));
+            }
+            crate::missions::news::put_out(st, id, usize::MAX, usize::MAX);
+            Ok(format!("news {id}"))
         }
         ["feed"] => {
             let from = test_role()?;
@@ -868,7 +876,7 @@ pub fn complete(st: &AppState, head: &str, word: &str) -> Vec<String> {
             .filter(|id| id.starts_with(word))
             .collect()
     } else if head.trim() == "story" {
-        ["fire", "scene", "skip", "feed", "call"]
+        ["fire", "scene", "skip", "news", "feed", "call"]
             .iter()
             .filter(|c| c.starts_with(word))
             .map(|c| c.to_string())
@@ -893,6 +901,13 @@ pub fn complete(st: &AppState, head: &str, word: &str) -> Vec<String> {
     } else if head.trim() == "story scene" {
         st.book
             .scenes
+            .keys()
+            .filter(|id| id.starts_with(word))
+            .cloned()
+            .collect()
+    } else if head.trim() == "story news" {
+        st.book
+            .news
             .keys()
             .filter(|id| id.starts_with(word))
             .cloned()
@@ -1261,6 +1276,26 @@ mod tests {
         assert!(st.missions.call.is_none());
         run(&mut st, at, "story call").unwrap();
         assert!(st.missions.call.is_some() || !st.missions.calls.is_empty());
+    }
+
+    #[test]
+    fn story_news_puts_out_an_item() {
+        let (mut st, at) = story_state();
+        assert_eq!(run(&mut st, at, "story news marlo").unwrap(), "news marlo");
+        let n = crate::missions::news::current(&st).expect("the item is current");
+        assert_eq!((n.mission, n.step), (usize::MAX, usize::MAX));
+        assert_eq!(
+            run(&mut st, at, "story news nope").unwrap_err(),
+            "unknown news nope"
+        );
+        assert!(complete(&st, "story ", "n").contains(&"news".to_string()));
+        assert_eq!(complete(&st, "story news", "m"), vec!["marlo".to_string()]);
+        assert!(run(&mut st, at, "help").unwrap().contains("news <id>"));
+        assert!(
+            run(&mut st, at, "story nope")
+                .unwrap_err()
+                .contains("news <id>")
+        );
     }
 
     #[test]

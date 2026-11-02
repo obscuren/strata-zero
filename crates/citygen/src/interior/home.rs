@@ -98,9 +98,14 @@ mod tests {
                 Furniture::Counter,
                 Furniture::Shelf,
                 Furniture::Locker,
+                Furniture::Holo,
             ] {
                 assert!(has(x), "{x:?}");
             }
+            assert_eq!(
+                f.tiles[Pos::new(h.rect.x + 16, h.rect.y + 4)].feature,
+                Some(Feature::Furniture(Furniture::Holo))
+            );
             assert_eq!(f.tiles[h.rig].feature, Some(Feature::Terminal));
             assert!(
                 h.rig

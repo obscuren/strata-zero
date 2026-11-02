@@ -8,6 +8,10 @@
 // list of beats, in the look `Film` or `Bubbles`.
 // Visitors (`pick: Visitor`) are never cast and take only {role} and {role.title}. Effects
 // `Scene`, `Arrive` (a visitor or "you"), `Leave`, `Lights`; `At(HomeDoor)`: in or at your flat.
+// `news` items are put out by `News("id")`, one current at a time for `fresh` game minutes;
+// their texts take slots, and the roles they name are roles the mission needs. `still` is
+// 18 rows of 18 pixels, `0`-`6` the camera's greens dark to light, `r` the bracket's red.
+// `Daze(seconds)` makes the screen swim.
 Story(
     cast: {
         "mezz": Role(
@@ -134,6 +138,23 @@ Story(
                     "Seren will send you the where. Don't keep her waiting.",
                 ]),
             ]),
+            Step(id: "up", when: Ended("morning"), then: [Log("`House call` · morning")]),
+        ]),
+        Mission(id: "morning_after", title: "The morning after", from: "castellan", steps: [
+            Step(id: "wake", when: MissionDone(mission: "house_call", minutes: 0), then: [
+                Scene("waking"),
+            ]),
+            Step(id: "news", when: Ended("wake"), then: [
+                Daze(4.0),
+                News("marlo"),
+                Objective("Catch the news on the holo"),
+            ]),
+            Step(id: "saw", when: Ended("news"), then: [
+                Mail(from: "mezz", subject: "the news", body: [
+                    "Saw the news.",
+                    "Don't go out looking like you.",
+                ]),
+            ]),
         ]),
     ],
     scenes: {
@@ -188,5 +209,66 @@ Story(
             Walk(who: "seren", to: HomeOutside),
             Leave("seren"),
         ]),
+        "waking": Scene(title: "The morning after", look: Bubbles,
+            pace: Pace(type: 45, walk: 0.3, hold: Some(2.5)), beats: [
+            Stage("Your head swims. Last night comes back in pieces: the red pad, the couch, her cable."),
+            Wait(1.5),
+            Say(who: "you", text: "…so that happened."),
+        ]),
+    },
+    news: {
+        "marlo": News(
+            about: "marlo",
+            headline: "Courier sought in {marlo.district}",
+            report: [
+                "A noodle cook was found dead late last night outside his stall at {marlo.place}. He was {marlo}, 41. Sources at the precinct say he was a paid informer.",
+                "Officers want to speak to a courier a street camera caught leaving soon after, carrying a package. Anyone who knows them is asked to call it in.",
+            ],
+            reads: [
+                "This is Newsline. A cook found dead outside his stall in {marlo.district}.",
+                "Sources say {marlo} sold names to the precinct.",
+                "Police want a word with a courier seen leaving with a package.",
+                "Rain by noon. Lift nine is out again.",
+            ],
+            crawl: [
+                "{marlo}, 41, named as police informer",
+                "Courier sought in {marlo.district}",
+                "Lift 9 out of service",
+                "Rain by noon",
+                "Arcology rents up 4%",
+            ],
+            overheard: [
+                "That noodle cook in {marlo.district}. Informer, they're saying.",
+                "Courier, they said. Jacket like that one.",
+                "Whoever did the cook did the block a favour.",
+                "Cameras saw a courier. Cameras see everybody.",
+                "Sold names, my aunt says. Had it coming.",
+            ],
+            sought: "a courier",
+            carrying: "a taped package",
+            camera: "CAM 14",
+            still: [
+                "155555511111116661",
+                "144444411011011211",
+                "323232321111111211",
+                "244444421101111211",
+                "245555421111111211",
+                "2222222211rr11rr11",
+                "3333333322r3034r33",
+                "333333332230004443",
+                "300300332230066443",
+                "300000332230304433",
+                "331113332230303333",
+                "2222222222r1113r32",
+                "2222222222rr22rr22",
+                "111111111311111111",
+                "111111111311111111",
+                "111111111111111111",
+                "111111111311111111",
+                "111111111311111111",
+            ],
+            close: "turn it off",
+            fresh: 1440,
+        ),
     },
 )

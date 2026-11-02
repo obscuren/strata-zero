@@ -1573,6 +1573,116 @@ fn holo_feed() {
     }
 }
 
+/// The morning news: the broadcast at 07:14 over the map, Marlo dead and you seen
+/// walking away north at 22:41, at both sizes.
+#[test]
+#[ignore]
+fn news_shots() {
+    use crate::missions::{Left, news, person_of};
+    let mut st = state_home();
+    let _ = MapScreen::walking(&mut st);
+    crate::missions::begin(&mut st);
+    st.missions.feeds.clear();
+    crate::missions::end(&mut st, 0, 0);
+    let want = 7 * 60 + 14;
+    let ahead = (want + 1440 - st.minute_of_day() as u64) % 1440;
+    {
+        let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+        world.advance(city, world.tick() + ahead * sim::TICKS_PER_MINUTE);
+    }
+    news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+    let about = person_of(&st, &news::current(&st).unwrap().about).unwrap();
+    let body = st.missions.bodies.iter_mut().find(|b| b.person == about);
+    body.expect("the item's body").left = Some(Left {
+        at: (22, 41),
+        heading: "north",
+    });
+    let map = MapScreen::walking(&mut st);
+    let broadcast = crate::missions::broadcast::Broadcast::new();
+    for (w, h) in HOLO_SIZES {
+        let name = format!("news_broadcast_{w}x{h}");
+        shot_stack(&name, &st, &[&map, &broadcast], (w, h));
+    }
+    // The set reading its first line to you by the couch, two seconds in.
+    let (place, set) = news::set_tile(&st).unwrap();
+    let mut me = crate::walker::Player::at(place, set.offset(-2, 1));
+    {
+        let city = st.city.as_ref().unwrap();
+        let flat = crate::render::map::MapRef::for_place(
+            city,
+            &st.interiors,
+            &st.constructs,
+            place,
+            st.minute_of_day(),
+        )
+        .unwrap();
+        me.update_fov(&flat, st.sight_bonus());
+    }
+    st.player = Some(me);
+    news::tick(&mut st, true);
+    assert_eq!(st.missions.asides.len(), 1, "the set reads");
+    {
+        let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+        world.advance(
+            city,
+            world.tick() + 2 * crate::missions::call::TICKS_PER_SECOND,
+        );
+    }
+    let map = MapScreen::walking(&mut st);
+    for (w, h) in HOLO_SIZES {
+        shot_stack(&format!("news_set_reading_{w}x{h}"), &st, &[&map], (w, h));
+    }
+    // Out on the street: someone three tiles off says the first overheard line, a second
+    // in, you still seeing them.
+    use crate::missions::news::tests as at;
+    st.missions.asides.clear();
+    at::to_a_heard_minute(&mut st, 0);
+    at::by_someone(&mut st, 3);
+    let spot = st.player.as_ref().unwrap().pos;
+    news::tick(&mut st, true);
+    assert_eq!(st.missions.asides.len(), 1, "overheard");
+    let speaker = st.missions.asides[0].speaker;
+    {
+        let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+        world.advance(city, world.tick() + crate::missions::call::TICKS_PER_SECOND);
+    }
+    at::look_from(&mut st, Place::Stratum(StratumKind::Street), spot);
+    if let crate::missions::asides::Speaker::Person(id) = speaker {
+        let at = st.world.as_ref().unwrap().pos_of(id).unwrap();
+        let seen = st.player.as_ref().unwrap().vis().get(at).copied();
+        assert_eq!(seen, Some(crate::walker::Visibility::Visible), "still seen");
+    }
+    let map = MapScreen::walking(&mut st);
+    for (w, h) in HOLO_SIZES {
+        let drawn = crate::screens::testutil::buffer_text(&draw_stack(&st, &[&map], (w, h)));
+        assert!(drawn.contains("overheard"), "a bubble over them at {w}x{h}");
+        shot_stack(&format!("news_overheard_{w}x{h}"), &st, &[&map], (w, h));
+    }
+    // By a holo ad as it cuts in, a second in: its glow MAGENTA and its NEWSLINE aside.
+    st.missions.asides.clear();
+    at::an_ad_cutting_in(&mut st);
+    {
+        let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+        world.advance(city, world.tick() + crate::missions::call::TICKS_PER_SECOND);
+    }
+    assert!(news::cut_in(&st).is_some(), "still cutting in");
+    let map = MapScreen::walking(&mut st);
+    for (w, h) in HOLO_SIZES {
+        let drawn = crate::screens::testutil::buffer_text(&draw_stack(&st, &[&map], (w, h)));
+        assert!(drawn.contains("NEWSLINE"), "a bubble over it at {w}x{h}");
+        shot_stack(&format!("news_holo_ad_{w}x{h}"), &st, &[&map], (w, h));
+    }
+    // The daze half way: rows adrift, a magenta and cyan fringe, the HUD still.
+    st.missions.asides.clear();
+    crate::missions::daze::start(&mut st, 4.0);
+    st.tick += 20;
+    assert!(crate::missions::daze::strength(&st) > 0.0, "still dizzy");
+    let map = MapScreen::walking(&mut st);
+    for (w, h) in HOLO_SIZES {
+        shot_stack(&format!("news_daze_{w}x{h}"), &st, &[&map], (w, h));
+    }
+}
+
 #[test]
 #[ignore]
 fn holo_call_ringing() {

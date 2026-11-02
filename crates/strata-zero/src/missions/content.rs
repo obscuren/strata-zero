@@ -17,6 +17,10 @@ const SHADES: &str = ".dmlhbeX";
 const FACE_WIDTH: usize = 16;
 /// The face a role without one calls with.
 const SILHOUETTE: &str = "silhouette";
+/// What a news still's rows may hold: the camera's greens dark to light, the bracket's red.
+const STILL_PIXELS: &str = "0123456r";
+/// A news still is this many pixels a side.
+const STILL_SIDE: usize = 18;
 /// The player, as a beat's speaker or walker and as the `{you}` slot. No cast role takes it.
 pub const YOU: &str = "you";
 
@@ -54,6 +58,10 @@ pub enum BookError {
     EmptyScene(String),
     #[error("missions: scene `{0}` comes back to itself through `next`")]
     SceneLoop(String),
+    #[error("missions: {place}: unknown news `{news}`")]
+    UnknownNews { place: String, news: String },
+    #[error("missions: news `{news}`: still {why}")]
+    BadStill { news: String, why: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -64,6 +72,65 @@ pub struct Book {
     pub missions: Vec<Mission>,
     #[serde(default)]
     pub scenes: BTreeMap<String, Scene>,
+    #[serde(default)]
+    pub news: BTreeMap<String, News>,
+}
+
+/// A news item: `flavor/missions.ron` `news`, put out by `Effect::News`. Its texts take
+/// the usual slots.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct News {
+    /// The role whose body the camera saw.
+    pub about: String,
+    pub headline: String,
+    /// The broadcast's paragraphs.
+    pub report: Vec<String>,
+    /// What the set in your flat says, in turn.
+    pub reads: Vec<String>,
+    /// The ticker along the broadcast's foot.
+    pub crawl: Vec<String>,
+    /// What people in the street say of it, in turn.
+    pub overheard: Vec<String>,
+    /// Who is sought, and what they carried.
+    pub sought: String,
+    pub carrying: String,
+    /// The camera that took the still.
+    pub camera: String,
+    /// `STILL_SIDE` rows of `STILL_SIDE` pixels from `STILL_PIXELS`.
+    pub still: Vec<String>,
+    /// The label after `space` in the broadcast.
+    pub close: String,
+    /// Game minutes it stays current.
+    pub fresh: u64,
+}
+
+impl News {
+    /// Every piece of text the item shows, for slots.
+    fn texts(&self) -> impl Iterator<Item = &str> {
+        [
+            &self.headline,
+            &self.sought,
+            &self.carrying,
+            &self.camera,
+            &self.close,
+        ]
+        .into_iter()
+        .chain(&self.report)
+        .chain(&self.reads)
+        .chain(&self.crawl)
+        .chain(&self.overheard)
+        .map(String::as_str)
+    }
+
+    /// The roles it names: who it is about and its slots (but you).
+    fn roles(&self) -> BTreeSet<String> {
+        let mut out = BTreeSet::from([self.about.clone()]);
+        for t in self.texts() {
+            out.extend(slots(t).into_iter().map(|(role, _)| role));
+        }
+        out.remove(YOU);
+        out
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -279,6 +346,10 @@ pub enum Effect {
     },
     Leave(String),
     Lights(f32),
+    /// Puts out the news item; its end marks the step `Ended`, as a feed's does.
+    News(String),
+    /// The screen swims for this many seconds.
+    Daze(f32),
 }
 
 impl Effect {
@@ -303,7 +374,9 @@ impl Effect {
             | Effect::Scene(_)
             | Effect::Arrive { .. }
             | Effect::Leave(_)
-            | Effect::Lights(_) => vec![],
+            | Effect::Lights(_)
+            | Effect::News(_)
+            | Effect::Daze(_) => vec![],
         }
     }
 
@@ -324,7 +397,7 @@ impl Effect {
     fn presents(&self) -> bool {
         matches!(
             self,
-            Effect::Feed { .. } | Effect::Call { .. } | Effect::Scene(_)
+            Effect::Feed { .. } | Effect::Call { .. } | Effect::Scene(_) | Effect::News(_)
         )
     }
 }
@@ -420,6 +493,9 @@ impl Book {
         for (id, scene) in &self.scenes {
             self.check_scene(id, scene)?;
         }
+        for (id, news) in &self.news {
+            self.check_news(id, news)?;
+        }
         for m in &self.missions {
             self.check_mission(m)?;
         }
@@ -433,12 +509,27 @@ impl Book {
             .is_some_and(|r| matches!(r.pick, Pick::Visitor))
     }
 
-    /// The roles a mission needs the sim to cast: all it names but visitors and `you`.
+    /// The roles a mission needs the sim to cast: all it names, and all the news it puts
+    /// out names, but visitors and `you`.
     pub fn needs_cast(&self, m: &Mission) -> BTreeSet<String> {
-        m.roles()
+        let mut roles = m.roles();
+        for e in m.steps.iter().flat_map(|s| &s.then) {
+            if let Some(news) = self.news_of(e) {
+                roles.extend(news.roles());
+            }
+        }
+        roles
             .into_iter()
             .filter(|r| r != YOU && !self.is_visitor(r))
             .collect()
+    }
+
+    /// The news item an `Effect::News` puts out.
+    fn news_of(&self, e: &Effect) -> Option<&News> {
+        match e {
+            Effect::News(id) => self.news.get(id),
+            _ => None,
+        }
     }
 
     fn check_role(&self, place: &str, role: &str) -> Result<(), BookError> {
@@ -611,6 +702,25 @@ impl Book {
         Ok(())
     }
 
+    fn check_news(&self, id: &str, news: &News) -> Result<(), BookError> {
+        let at = format!("news `{id}`");
+        self.check_role(&at, &news.about)?;
+        let empty = [
+            ("headline", news.headline.is_empty()),
+            ("report", news.report.is_empty()),
+            ("reads", news.reads.is_empty()),
+            ("overheard", news.overheard.is_empty()),
+            ("fresh", news.fresh == 0),
+        ];
+        if let Some((what, _)) = empty.iter().find(|(_, is)| *is) {
+            return Err(BookError::Empty(format!("{what} in {at}")));
+        }
+        for t in news.texts() {
+            self.check_text(&at, t)?;
+        }
+        check_still(id, &news.still)
+    }
+
     fn check_mission(&self, m: &Mission) -> Result<(), BookError> {
         if m.steps.is_empty() {
             return Err(BookError::Empty(format!("mission `{}`", m.id)));
@@ -680,6 +790,13 @@ impl Book {
                     }
                     Effect::Leave(role) => self.check_visitor(&at, role)?,
                     Effect::Lights(level) => check_level(&at, *level)?,
+                    Effect::News(id) if !self.news.contains_key(id) => {
+                        return Err(BookError::UnknownNews {
+                            place: at,
+                            news: id.clone(),
+                        });
+                    }
+                    Effect::Daze(seconds) => positive(&at, "daze", *seconds)?,
                     Effect::Feed { text, .. } if text.is_empty() => {
                         return Err(BookError::Empty(format!("feed in {place}")));
                     }
@@ -784,6 +901,26 @@ fn check_face(name: &str, face: &Face) -> Result<(), BookError> {
     Ok(())
 }
 
+fn check_still(news: &str, still: &[String]) -> Result<(), BookError> {
+    let bad = |why: String| BookError::BadStill {
+        news: news.into(),
+        why,
+    };
+    if still.len() != STILL_SIDE {
+        return Err(bad(format!("{} rows, wanted {STILL_SIDE}", still.len())));
+    }
+    for (i, row) in still.iter().enumerate() {
+        let width = row.chars().count();
+        if width != STILL_SIDE {
+            return Err(bad(format!("row {i} is {width} wide, wanted {STILL_SIDE}")));
+        }
+        if let Some(c) = row.chars().find(|c| !STILL_PIXELS.contains(*c)) {
+            return Err(bad(format!("row {i} has unknown pixel `{c}`")));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -800,10 +937,11 @@ mod tests {
     #[test]
     fn the_shipped_book_parses_and_validates() {
         let b = book();
-        assert_eq!(b.missions.len(), 2);
+        assert_eq!(b.missions.len(), 3);
         assert_eq!(b.missions[0].id, "the_drop");
         assert_eq!(b.missions[1].id, "house_call");
-        assert_eq!(b.scenes.len(), 2);
+        assert_eq!(b.missions[2].id, "morning_after");
+        assert_eq!(b.scenes.len(), 3);
         assert_eq!(b.missions[0].steps.len(), 6);
         assert!(b.cast.contains_key("mezz") && b.cast.contains_key("marlo"));
         assert_eq!(b.face_of("mezz").eye, (255, 0, 200));
@@ -1078,6 +1216,9 @@ mod tests {
         ));
         bad(scened(r#"Say(who: "you", text: "x", hold: Some(-2.0))"#));
         bad(scened("Camera(HomeInside(0))"));
+        bad(with_steps(
+            r#"Step(id: "a", when: NewGame, then: [Daze(0.0)])"#,
+        ));
         let steps = r#"Step(id: "a", when: NewGame, then: [Lights(2.0)])"#;
         assert!(
             matches!(with_steps(steps), Err(BookError::BadNumber { ref place, .. }) if place.contains("mission m step a"))
@@ -1163,5 +1304,140 @@ mod tests {
             text.clear();
         }
         assert!(matches!(b.validate(), Err(BookError::Empty(_))));
+    }
+
+    /// The shipped book with its news item changed.
+    fn news_changed(change: impl FnOnce(&mut News)) -> Result<(), BookError> {
+        let mut b = book();
+        change(b.news.get_mut("marlo").unwrap());
+        b.validate()
+    }
+
+    /// A small book with a news item "x" about `about` whose headline is `headline`,
+    /// and these steps.
+    fn with_news(about: &str, headline: &str, steps: &str) -> Result<Book, BookError> {
+        let still = vec![format!("\"{}\"", "0".repeat(18)); 18].join(", ");
+        let src = format!(
+            r#"Story(
+                cast: {{
+                    "marlo": Role(name: "Marlo", title: "cook",
+                        pick: Worker(professions: ["noodle_cook"], at: [], range: (0, 9)), face: None),
+                    "seren": Role(name: "Seren", title: "doc", pick: Visitor, face: None),
+                }},
+                faces: {{ "silhouette": Face(rows: ["................", "................"], eye: (0, 0, 0)) }},
+                missions: [Mission(id: "m", title: "M", from: "seren", steps: [{steps}])],
+                news: {{
+                    "x": News(about: "{about}", headline: "{headline}", report: ["A report."],
+                        reads: ["A read."], crawl: ["A crawl."], overheard: ["Overheard."],
+                        sought: "someone", carrying: "something", camera: "CAM 1",
+                        still: [{still}], close: "off", fresh: 60),
+                }},
+            )"#
+        );
+        Book::parse(&src)
+    }
+
+    #[test]
+    fn the_shipped_book_has_its_news() {
+        let b = book();
+        let n = &b.news["marlo"];
+        assert_eq!((n.still.len(), n.still[0].chars().count()), (18, 18));
+        assert_eq!(n.fresh, 1440);
+    }
+
+    #[test]
+    fn an_unknown_news_is_refused() {
+        let mut b = book();
+        step_mut(&mut b, "body").then[0] = Effect::News("nope".into());
+        assert!(matches!(
+            b.validate(),
+            Err(BookError::UnknownNews { ref news, .. }) if news == "nope"
+        ));
+    }
+
+    #[test]
+    fn a_news_about_nobody_is_refused() {
+        assert!(matches!(
+            news_changed(|n| n.about = "nobody".into()),
+            Err(BookError::UnknownRole { ref role, .. }) if role == "nobody"
+        ));
+        assert!(matches!(
+            news_changed(|n| n.reads[0] = "{nobody} did it".into()),
+            Err(BookError::UnknownRole { .. })
+        ));
+    }
+
+    #[test]
+    fn an_empty_headline_is_refused() {
+        assert!(matches!(
+            news_changed(|n| n.headline.clear()),
+            Err(BookError::Empty(ref what)) if what.contains("news `marlo`")
+        ));
+        assert!(matches!(
+            news_changed(|n| n.report.clear()),
+            Err(BookError::Empty(_))
+        ));
+        assert!(matches!(
+            news_changed(|n| n.reads.clear()),
+            Err(BookError::Empty(_))
+        ));
+    }
+
+    #[test]
+    fn an_empty_overheard_is_refused() {
+        assert!(matches!(
+            news_changed(|n| n.overheard.clear()),
+            Err(BookError::Empty(ref what)) if what.contains("news `marlo`")
+        ));
+    }
+
+    #[test]
+    fn a_bad_still_is_refused() {
+        let bad_still = |r: Result<(), BookError>| {
+            assert!(matches!(r, Err(BookError::BadStill { .. })), "{r:?}")
+        };
+        bad_still(news_changed(|n| {
+            n.still.pop();
+        }));
+        bad_still(news_changed(|n| n.still[3].push('0')));
+        bad_still(news_changed(|n| {
+            n.still[5] = format!("x{}", "0".repeat(17))
+        }));
+    }
+
+    #[test]
+    fn a_stale_at_once_news_is_refused() {
+        assert!(matches!(
+            news_changed(|n| n.fresh = 0),
+            Err(BookError::Empty(ref what)) if what.contains("news `marlo`")
+        ));
+    }
+
+    #[test]
+    fn news_is_a_presentation() {
+        let steps = r#"Step(id: "n", when: NewGame, then: [News("x")]),
+            Step(id: "after", when: Ended("n"), then: [Log("after")])"#;
+        assert!(with_news("marlo", "Headline", steps).is_ok());
+    }
+
+    #[test]
+    fn the_news_roles_must_be_cast() {
+        let steps = r#"Step(id: "n", when: NewGame, then: [News("x")])"#;
+        let want: BTreeSet<String> = ["marlo"].map(String::from).into();
+        // Named in a text, the item about a visitor.
+        let b = with_news("seren", "{marlo} in {marlo.district}", steps).unwrap();
+        assert!(!b.missions[0].roles().contains("marlo"));
+        assert_eq!(b.needs_cast(&b.missions[0]), want);
+        // The role it is about.
+        let b = with_news("marlo", "Headline", steps).unwrap();
+        assert_eq!(b.needs_cast(&b.missions[0]), want);
+        // A mission that puts out no news needs none of its roles.
+        let b = with_news(
+            "marlo",
+            "{marlo}",
+            r#"Step(id: "a", when: NewGame, then: [Log("hi")])"#,
+        )
+        .unwrap();
+        assert!(b.needs_cast(&b.missions[0]).is_empty());
     }
 }

@@ -2482,6 +2482,14 @@ impl MapScreen {
 
 impl Screen for MapScreen {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+        // A daze over: it ends.
+        if st
+            .missions
+            .daze
+            .is_some_and(|d| st.tick >= d.start + d.ticks)
+        {
+            st.missions.daze = None;
+        }
         // A HOLO feed waiting: it opens over the map, once no scene is playing.
         if crate::missions::scene::running(st).is_none()
             && let Some(view) = st.missions.feeds.pop_front()
@@ -2740,6 +2748,9 @@ impl Screen for MapScreen {
             self.targeting = None;
         }
         crate::track::tick(st);
+        // The asides run out on the clock, and all go once a scene, a rest or a fight is on.
+        crate::missions::asides::prune(st);
+        crate::missions::news::tick(st, self.mode == Mode::Walk);
         // A fixer beside you has their offer ready before you talk.
         if self.mode == Mode::Walk {
             crate::jobs::ui::prepare_offers(st, &|pl, p| self.inside_person_at(pl, p));
@@ -3188,6 +3199,26 @@ impl Screen for MapScreen {
         if st.player.as_ref().is_some_and(|p| p.place == self.place) {
             crate::missions::visitors::draw(f.buffer_mut(), map_area, origin, st);
         }
+        // Your flat's holo set, playing the news while it is on: in sight, not through
+        // a wall.
+        if crate::missions::news::current(st).is_some_and(|n| n.on)
+            && let Some((place, pos)) = crate::missions::news::set_tile(st)
+            && place == self.place
+            && vis.is_none_or(|v| v.get(pos) == Some(&crate::render::Visibility::Visible))
+            && let Some((sx, sy)) = tile_to_screen(map_area, origin, pos)
+        {
+            f.buffer_mut()[(sx, sy)]
+                .set_char(crate::render::tileset::holo_glyph(&st.style, st.tick))
+                .set_fg(crate::ui::chrome::MAGENTA);
+        }
+        // A holo ad cutting into the news: its glow in MAGENTA, its glyph kept.
+        if let Some(pos) = crate::missions::news::cut_in(st)
+            && self.place.is_street()
+            && vis.is_none_or(|v| v.get(pos) == Some(&crate::render::Visibility::Visible))
+            && let Some((sx, sy)) = tile_to_screen(map_area, origin, pos)
+        {
+            f.buffer_mut()[(sx, sy)].set_fg(crate::ui::chrome::MAGENTA);
+        }
 
         if let (Some(leg), Some(m)) = (tracked_leg, crate::track::distance(st)) {
             let label = st.track.as_ref().map_or("", |t| t.label.as_str());
@@ -3227,6 +3258,9 @@ impl Screen for MapScreen {
                     .set_style(Style::default().fg(fg).add_modifier(Modifier::BOLD));
             }
         }
+        // The daze swims the whole map picture, `@` and visitors with it; what floats
+        // over the map below stays still.
+        crate::missions::daze::draw(f.buffer_mut(), map_area, st);
         // Your `@`'s cell, kept for what draws over the map: the HOLO call, the Rest
         // window here and the one a screen on top draws.
         let me = st
@@ -3260,6 +3294,11 @@ impl Screen for MapScreen {
                 rest.until,
                 Some(rest.from),
             );
+        }
+        // Asides over the map, off your `@`: only on foot with the console shut (and, as
+        // `draw` sees to, no scene, rest or fight).
+        if self.mode == Mode::Walk && self.console.is_none() {
+            crate::missions::asides::draw(f.buffer_mut(), map_area, origin, st);
         }
         // The HOLO call in the map's corner, kept off your `@`.
         crate::missions::call::draw(f.buffer_mut(), map_area, me, st);
@@ -5128,6 +5167,140 @@ mod tests {
             ScreenCmd::Stay
         ));
         assert_eq!(last(&st), Some("no active abilities"));
+    }
+
+    /// Seed 8 moved in with the news out (the welcome put by), you standing `(dx, dy)`
+    /// from the holo set and looking around, one frame run.
+    fn by_the_holo_set(dx: i32, dy: i32) -> (AppState, MapScreen) {
+        let mut st = crate::jobs::testutil::state_home();
+        let mut s = MapScreen::walking(&mut st);
+        crate::missions::begin(&mut st);
+        st.missions.feeds.clear();
+        crate::missions::news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        assert!(crate::missions::news::current(&st).is_some_and(|n| n.on));
+        let (place, pos) = crate::missions::news::set_tile(&st).unwrap();
+        let mut me = crate::walker::Player::at(place, pos.offset(dx, dy));
+        me.update_fov(
+            &MapRef::for_place(
+                st.city.as_ref().unwrap(),
+                &st.interiors,
+                &st.constructs,
+                place,
+                0,
+            )
+            .unwrap(),
+            0,
+        );
+        st.player = Some(me);
+        s.update(&mut st, &[]);
+        (st, s)
+    }
+
+    /// The cells that change when the set goes off, drawn at 120x40 on frame tick 24:
+    /// on, then off.
+    fn holo_on_off(st: &mut AppState, s: &MapScreen) -> (Buffer, Buffer, Vec<(u16, u16)>) {
+        st.tick = 24;
+        let on = draw_buffer(s, st, 120, 40);
+        st.missions.news.as_mut().unwrap().on = false;
+        let off = draw_buffer(s, st, 120, 40);
+        st.missions.news.as_mut().unwrap().on = true;
+        let changed = (0..40)
+            .flat_map(|y| (0..120).map(move |x| (x, y)))
+            .filter(|p| on[*p] != off[*p])
+            .collect();
+        (on, off, changed)
+    }
+
+    #[test]
+    fn the_holo_set_plays_in_magenta_while_it_is_on() {
+        // In the living room, the set in view.
+        let (mut st, s) = by_the_holo_set(0, 1);
+        let (on, off, changed) = holo_on_off(&mut st, &s);
+        assert_eq!(changed.len(), 1, "{changed:?}");
+        let (on, off) = (&on[changed[0]], &off[changed[0]]);
+        assert_eq!(off.symbol(), "◫");
+        assert_eq!(on.fg, crate::ui::chrome::MAGENTA);
+        assert!(
+            st.style
+                .glyphs
+                .holo
+                .iter()
+                .any(|c| on.symbol() == c.to_string())
+        );
+    }
+
+    #[test]
+    fn a_holo_ad_cutting_in_glows_magenta() {
+        let mut st = crate::jobs::testutil::state_home();
+        crate::missions::begin(&mut st);
+        st.missions.feeds.clear();
+        crate::missions::news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        let ad = crate::missions::news::tests::an_ad_cutting_in(&mut st);
+        let s = MapScreen::walking(&mut st);
+        assert!(s.place.is_street());
+        // The cut's cell alone, the bubble over it taken away.
+        st.missions.asides.clear();
+        st.tick = 24;
+        let on = draw_buffer(&s, &st, 120, 40);
+        let cut = st.missions.news.as_mut().unwrap().cut.take();
+        let off = draw_buffer(&s, &st, 120, 40);
+        st.missions.news.as_mut().unwrap().cut = cut;
+        let changed: Vec<(u16, u16)> = (0..40)
+            .flat_map(|y| (0..120).map(move |x| (x, y)))
+            .filter(|p| on[*p] != off[*p])
+            .collect();
+        assert_eq!(changed.len(), 1, "{changed:?}");
+        let (on, off) = (&on[changed[0]], &off[changed[0]]);
+        assert_eq!(on.fg, crate::ui::chrome::MAGENTA);
+        assert_eq!(on.symbol(), off.symbol(), "the glyph kept");
+        assert!(
+            st.style
+                .glyphs
+                .holo
+                .iter()
+                .any(|c| on.symbol() == c.to_string())
+        );
+        assert_eq!(crate::missions::news::cut_in(&st), Some(ad));
+    }
+
+    #[test]
+    fn an_unseen_holo_set_does_not_play_through_the_wall() {
+        // In the bedroom, its wall between you and the set.
+        let (mut st, s) = by_the_holo_set(-10, 1);
+        let (_, pos) = crate::missions::news::set_tile(&st).unwrap();
+        let seen = st.player.as_ref().unwrap().vis().get(pos).copied();
+        assert_ne!(seen, Some(Visibility::Visible));
+        let (_, _, changed) = holo_on_off(&mut st, &s);
+        assert_eq!(changed, [], "on or off, it looks the same");
+    }
+
+    #[test]
+    fn asides_float_over_the_map_only_while_you_walk() {
+        let (mut st, mut s) = by_the_holo_set(0, 1);
+        assert_eq!(st.missions.asides.len(), 1, "the set reads its first line");
+        // What the asides add to the frame.
+        let added = |s: &MapScreen, st: &mut AppState| {
+            let with = draw_buffer(s, st, 120, 40);
+            let up = std::mem::take(&mut st.missions.asides);
+            let without = draw_buffer(s, st, 120, 40);
+            st.missions.asides = up;
+            (0..40)
+                .flat_map(|y| (0..120).map(move |x| (x, y)))
+                .filter(|p| with[*p] != without[*p])
+                .count()
+        };
+        assert!(added(&s, &mut st) > 20, "a bubble over the map");
+        s.console = Some(Console::default());
+        assert_eq!(added(&s, &mut st), 0, "none with the console open");
+        s.console = None;
+        s.mode = Mode::Explore;
+        assert_eq!(added(&s, &mut st), 0, "none from the free camera");
+        s.mode = Mode::Walk;
+        // A scene starting takes them down.
+        crate::missions::scene::play(&mut st, "waking");
+        s.update(&mut st, &[]);
+        assert!(crate::missions::scene::running(&st).is_some());
+        assert!(st.missions.asides.is_empty());
     }
 
     #[test]

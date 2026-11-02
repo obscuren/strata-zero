@@ -111,9 +111,24 @@ pub fn say(buf: &mut Buffer, map: Rect, origin: Pos, st: &AppState) {
         )
         .filter_map(|p| tile_to_screen(map, origin, p))
         .collect();
-    let (rect, tail) = place(anchor, map, w, h, &avoid);
-
     let (label, colour) = overlay::speaker(st, line);
+    let at = place(anchor, map, w, h, &avoid);
+    frame(buf, at, &label, colour, &wrapped, &typed, line.typing(now));
+}
+
+/// A bubble in `rect` with its `tail` (as `place` gives them): cleared to the panel, the
+/// rounded edge in `colour` with `label` bold in its top, the first `typed[i]`
+/// characters of each of `rows` inside, the caret after them while `typing`, and the
+/// tail in bold. The scene's bubble and the asides both draw this.
+pub(super) fn frame(
+    buf: &mut Buffer,
+    (rect, tail): (Rect, Option<(u16, u16, char)>),
+    label: &str,
+    colour: Color,
+    rows: &[String],
+    typed: &[usize],
+    typing: bool,
+) {
     let edge = Style::default().fg(colour).bg(PANEL_BG);
     for y in rect.y..rect.bottom() {
         for x in rect.x..rect.right() {
@@ -123,7 +138,7 @@ pub fn say(buf: &mut Buffer, map: Rect, origin: Pos, st: &AppState) {
         }
     }
     let wide = rect.width as usize;
-    let label = cut(&label, wide.saturating_sub(5));
+    let label = cut(label, wide.saturating_sub(5));
     let dashes = wide.saturating_sub(label.chars().count() + 5);
     let top = format!("╭─ {label} {}╮", "─".repeat(dashes));
     put(buf, rect.x, rect.y, &top, edge, rect.right());
@@ -131,7 +146,7 @@ pub fn say(buf: &mut Buffer, map: Rect, origin: Pos, st: &AppState) {
     put(buf, rect.x + 3, rect.y, &label, bold, rect.right());
     let text = Style::default().fg(TEXT).bg(PANEL_BG);
     let mut caret = (rect.x + 2, rect.y + 1);
-    for (i, (row, &take)) in wrapped.iter().zip(&typed).enumerate() {
+    for (i, (row, &take)) in rows.iter().zip(typed).enumerate() {
         let y = rect.y + 1 + i as u16;
         put(buf, rect.x, y, "│", edge, rect.right());
         put(buf, rect.right() - 1, y, "│", edge, rect.right());
@@ -143,7 +158,7 @@ pub fn say(buf: &mut Buffer, map: Rect, origin: Pos, st: &AppState) {
     }
     let bottom = format!("╰{}╯", "─".repeat(wide.saturating_sub(2)));
     put(buf, rect.x, rect.bottom() - 1, &bottom, edge, rect.right());
-    if line.typing(now) {
+    if typing {
         put(buf, caret.0, caret.1, "▌", edge, rect.right() - 1);
     }
     if let Some((x, y, ch)) = tail {

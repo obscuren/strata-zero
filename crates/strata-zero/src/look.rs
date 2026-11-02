@@ -620,7 +620,19 @@ pub fn look_card(
             f => match feature_name(f) {
                 Some((name, key)) => {
                     set_head(&mut card, name.to_string(), glyph);
-                    if visible {
+                    // A holo ad cutting into the news reads the headline while it lasts.
+                    let cut = (visible
+                        && f == Feature::HoloAd
+                        && place.is_street()
+                        && crate::missions::news::cut_in(st) == Some(pos))
+                    .then(|| crate::missions::news::current(st))
+                    .flatten();
+                    if let Some(n) = cut {
+                        card.body.push(format!(
+                            "The ad stutters. For a second it's a headline: {}.",
+                            n.headline_caps()
+                        ));
+                    } else if visible {
                         card.body.extend(
                             looks
                                 .line(Group::Feature, key, city.seed, pos)
@@ -826,6 +838,64 @@ mod tests {
     }
 
     #[test]
+    fn the_holo_set_in_the_flat_reads_its_head_and_a_line() {
+        let mut st = crate::jobs::testutil::state_home();
+        let (place, pos) = crate::missions::news::set_tile(&st).unwrap();
+        let map = MapRef::for_place(
+            st.city.as_ref().unwrap(),
+            &st.interiors,
+            &st.constructs,
+            place,
+            0,
+        )
+        .unwrap();
+        let mut me = Player::at(place, pos.offset(0, 1));
+        me.update_fov(&map, 0);
+        st.player = Some(me);
+        let c = look_card(&st, &map, place, pos, &|_, _| None, &[]);
+        assert_eq!(c.header.as_deref(), Some("Holo set"));
+        assert!(
+            [
+                "A cheap holo set, the picture a hand's width off true.",
+                "Older than the flat. It still gets every channel."
+            ]
+            .contains(&c.body[0].as_str()),
+            "{:?}",
+            c.body
+        );
+    }
+
+    #[test]
+    fn look_reads_the_headline_during_the_cut() {
+        use crate::missions::news;
+        let mut st = crate::jobs::testutil::state_home();
+        crate::missions::begin(&mut st);
+        news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        let headline = news::current(&st).unwrap().headline.to_uppercase();
+        let ad = news::tests::an_ad_cutting_in(&mut st);
+        let c = card(&st, ad);
+        assert_eq!(c.header.as_deref(), Some("Holo ad"));
+        assert_eq!(
+            c.body,
+            [format!(
+                "The ad stutters. For a second it's a headline: {headline}."
+            )]
+        );
+        assert!(headline.starts_with("COURIER SOUGHT IN "), "{headline}");
+        // After the cut: the ad's own line.
+        if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
+            world.advance(city, world.tick() + news::CUT_TICKS);
+        }
+        assert_eq!(news::cut_in(&st), None);
+        let seed = st.city.as_ref().unwrap().seed;
+        let own = Looks::load()
+            .line(Group::Feature, "holo_ad", seed, ad)
+            .map(String::from);
+        assert!(own.is_some());
+        assert_eq!(card(&st, ad).body, Vec::from_iter(own));
+    }
+
+    #[test]
     fn a_person_reads_name_job_doing_and_never_a_number() {
         let mut st = state(true);
         let (id, at, beside) = someone(&st);
@@ -862,6 +932,8 @@ mod tests {
             place: STREET,
             pos: at,
             look: "Marlo lies face down by the shutters.".into(),
+            near: false,
+            left: None,
         });
         let c = card(&st, at);
         assert_eq!(c.header.as_deref(), Some("Marlo"));

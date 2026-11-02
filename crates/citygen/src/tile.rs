@@ -269,8 +269,11 @@ pub enum Furniture {
     Bench,
     Vending,
     Bike,
-    /// A ripperdoc's operating chair. Last, so old saves keep their indices.
+    /// A ripperdoc's operating chair. Appended, so old saves keep their indices.
     Chair,
+    /// The flat's holo set, which carries the morning news. After `Chair`, so old saves
+    /// keep their indices.
+    Holo,
 }
 
 impl Furniture {
@@ -291,6 +294,7 @@ impl Furniture {
             Furniture::Vending => "vending machine",
             Furniture::Bike => "bike",
             Furniture::Chair => "operating chair",
+            Furniture::Holo => "holo set",
         }
     }
 }

@@ -90,6 +90,8 @@ pub enum Pick {
     },
     /// Opens the Rest window for a sleep in place of the popup.
     Sleep,
+    /// Switches your holo set on and opens the news broadcast in place of the popup.
+    Watch,
     Close,
 }
 
@@ -536,6 +538,13 @@ impl Popup {
                 )),
                 fx: TransitionKind::None,
             },
+            Pick::Watch => {
+                crate::missions::news::switch_on(st);
+                ScreenCmd::Replace {
+                    to: Box::new(crate::missions::broadcast::Broadcast::new()),
+                    fx: TransitionKind::Glitch,
+                }
+            }
             Pick::Chair { building, level } => {
                 let Some(doc) = crate::clinic::doc_at_work(st, building) else {
                     st.warn("the doc is out");
@@ -888,6 +897,30 @@ mod tests {
             said.starts_with(&crate::clinic::doc_name(&st, doc)) && said.contains('“'),
             "{said}"
         );
+    }
+
+    #[test]
+    fn watch_switches_the_set_on_and_opens_the_broadcast() {
+        use crate::missions::news;
+        let mut st = crate::jobs::testutil::state_home();
+        crate::missions::begin(&mut st);
+        news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        news::switch_off(&mut st);
+        let mut p = Popup::about(
+            None,
+            None,
+            vec![Choice::new('i', "Interact", Pick::Watch)],
+            st.tick,
+        );
+        let cmd = p.update(&mut st, &[key(crossterm::event::KeyCode::Char('i'))]);
+        assert!(matches!(
+            cmd,
+            ScreenCmd::Replace {
+                fx: TransitionKind::Glitch,
+                ..
+            }
+        ));
+        assert!(news::current(&st).unwrap().on);
     }
 
     #[test]

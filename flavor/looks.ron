@@ -136,6 +136,10 @@ Looks(
         "bench": ["A bench bolted down so it stays where it is."],
         "vending machine": ["Drinks behind scratched glass, prices taped over prices."],
         "bike": ["A bike chained to itself, missing its front wheel."],
+        "holo set": [
+            "A cheap holo set, the picture a hand's width off true.",
+            "Older than the flat. It still gets every channel.",
+        ],
     },
     building: {
         "corp tower": ["Mirrored glass to the clouds. The lobby has more guards than chairs."],
