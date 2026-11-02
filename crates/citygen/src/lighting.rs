@@ -109,6 +109,52 @@ pub fn compute(
     out
 }
 
+/// Which fittings light a room: hung from the ceiling, set in the walls, or both. A
+/// place's mood, picked from its seed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Mood {
+    Ceiling,
+    Walls,
+    Both,
+}
+
+impl Mood {
+    pub fn ceiling(self) -> bool {
+        matches!(self, Mood::Ceiling | Mood::Both)
+    }
+
+    pub fn walls(self) -> bool {
+        matches!(self, Mood::Walls | Mood::Both)
+    }
+}
+
+/// A room's mood, by weight from `moods`: the same for the same building, room kind
+/// and room number on every visit. Public rooms pass number 0, so every corridor or
+/// bar of a building shares one; flats and hotel rooms carry their own.
+pub fn room_mood(
+    seed: u64,
+    building: crate::ids::BuildingId,
+    room: Option<crate::interior::RoomKind>,
+    number: u16,
+    moods: &[(Mood, u32)],
+) -> Mood {
+    use crate::rng::hash64;
+    let kind = room.map_or(255, |k| k as u64);
+    let h = hash64(
+        hash64(hash64(seed, building.index() as u64), kind),
+        number as u64,
+    );
+    let total: u32 = moods.iter().map(|(_, w)| w).sum();
+    let mut at = (h % total.max(1) as u64) as u32;
+    for &(m, w) in moods {
+        if at < w {
+            return m;
+        }
+        at -= w;
+    }
+    Mood::Ceiling
+}
+
 /// A light on an interior floor: its cone's radius and strength at the centre, and
 /// the colour it throws.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -208,6 +254,42 @@ mod tests {
         assert!(light[Pos::new(12, 3)] > 0, "the wall glows");
         assert_eq!(light[Pos::new(13, 3)], 0, "nothing behind the wall");
         assert!(light[Pos::new(13, 5)] > 0, "the window lets it through");
+    }
+
+    use crate::ids::BuildingId;
+    use crate::interior::RoomKind;
+    use crate::tile::Tone;
+    use crate::world::BuildingKind;
+
+    #[test]
+    fn a_mood_is_the_same_for_the_same_place_and_varies_across_places() {
+        let moods = tuning::room_light(Some(RoomKind::Bar), BuildingKind::Bar).moods;
+        let pick = |b: u32| room_mood(8, BuildingId(b), Some(RoomKind::Bar), 0, moods);
+        assert_eq!(pick(3), pick(3));
+        let seen: std::collections::HashSet<_> = (0..40).map(pick).collect();
+        assert!(seen.contains(&Mood::Walls) && seen.contains(&Mood::Both));
+        assert!(!seen.contains(&Mood::Ceiling), "a bar never goes ceiling-only");
+    }
+
+    #[test]
+    fn a_club_bar_is_blacklight_and_a_temple_hall_candlelit() {
+        assert_eq!(
+            tuning::room_light(Some(RoomKind::Bar), BuildingKind::Club).tone,
+            Tone::Blacklight
+        );
+        let hall = tuning::room_light(Some(RoomKind::Hall), BuildingKind::Temple);
+        assert_eq!(
+            (hall.tone, hall.moods),
+            (Tone::Tungsten, &[(Mood::Walls, 1)][..])
+        );
+        assert_eq!(
+            tuning::room_light(Some(RoomKind::Hall), BuildingKind::Warehouse).tone,
+            Tone::Sodium
+        );
+        assert_eq!(
+            tuning::room_light(None, BuildingKind::Hotel).tone,
+            Tone::Fluorescent
+        );
     }
 
     #[test]
