@@ -2475,6 +2475,13 @@ fn doctor_shots() {
         // Seren's line through the set.
         let mut st = seren_has_written();
         st.missions.daze = None;
+        let ahead = (7 * 60 + 52 + 1440 - u64::from(st.minute_of_day())) % 1440;
+        let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+        world.advance(city, world.tick() + ahead * sim::TICKS_PER_MINUTE);
+        // Her line went up at 06:04 and is long gone: put it up again at 07:52.
+        let line = st.missions.asides.pop().expect("Seren on the set");
+        st.missions.asides.clear();
+        crate::missions::asides::say(&mut st, line.speaker, line.label, line.colour, line.text);
         let map = by_the_set(&mut st);
         world_seconds(&mut st, 3);
         shot_stack(&name("seren_set"), &st, &[&map], size);
@@ -2511,12 +2518,30 @@ fn doctor_shots() {
         scene_is(&mut st, "odile");
         scene_at(&mut st, 1);
         st.missions.daze = None;
-        let map = MapScreen::walking(&mut st);
-        let drawn = crate::screens::testutil::buffer_text(&draw_stack(&st, &[&map], size));
-        assert!(
-            drawn.contains('▴') || drawn.contains('▾'),
-            "her bubble is anchored by a tail"
+        let mut map = MapScreen::walking(&mut st);
+        map.settle(&mut st, size);
+        // Her bubble is anchored: she is drawn where the map places her, and the tail
+        // sits in the cell just above or below hers.
+        let doc = crate::missions::person_of(&st, "odile").unwrap();
+        let her = crate::interiors::drawn_at(&st, doc).expect("she is drawn");
+        let anchor = crate::missions::scene::running(&st)
+            .and_then(|s| s.line().and_then(|l| l.anchor))
+            .expect("her line has an anchor");
+        assert_eq!(anchor, her, "the line is anchored on her drawn tile");
+        let buf = draw_stack(&st, &[&map], size);
+        assert_eq!(
+            map.placed_tile(doc),
+            Some(her.1),
+            "the map places her there"
         );
+        let rect = map.last_map_rect();
+        let origin = map.cam.origin(rect.width, rect.height);
+        let (sx, sy) = crate::render::viewport::tile_to_screen(rect, origin, her.1)
+            .expect("her cell is on screen");
+        let tail = [(sy.wrapping_sub(1), '▾'), (sy + 1, '▴')]
+            .into_iter()
+            .find(|&(y, glyph)| buf[(sx, y)].symbol() == glyph.to_string());
+        assert!(tail.is_some(), "no tail beside her cell ({sx}, {sy})");
         shot_stack(&name("odile"), &st, &[&map], size);
 
         // Her tray, once the scene is out.

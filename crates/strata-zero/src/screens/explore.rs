@@ -310,6 +310,22 @@ impl MapScreen {
         }
     }
 
+    /// The map area of the last frame, for a shot that checks where something drew.
+    #[cfg(test)]
+    pub(crate) fn last_map_rect(&self) -> Rect {
+        self.last_map.get()
+    }
+
+    /// The tile this map's placement stands `id` on, on the floor the player walks.
+    #[cfg(test)]
+    pub(crate) fn placed_tile(&self, id: sim::PersonId) -> Option<Pos> {
+        let (_, _, placement) = self.placement.as_ref()?;
+        placement
+            .people()
+            .find(|(_, who)| *who == id)
+            .map(|(p, _)| p)
+    }
+
     /// Look mode is open.
     #[cfg(test)]
     pub(crate) fn is_looking(&self) -> bool {
