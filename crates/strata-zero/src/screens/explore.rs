@@ -3189,6 +3189,16 @@ impl Screen for MapScreen {
         if st.player.as_ref().is_some_and(|p| p.place == self.place) {
             crate::missions::visitors::draw(f.buffer_mut(), map_area, origin, st);
         }
+        // Your flat's holo set, playing the news while it is on.
+        if crate::missions::news::current(st).is_some_and(|n| n.on)
+            && let Some((place, pos)) = crate::missions::news::set_tile(st)
+            && place == self.place
+            && let Some((sx, sy)) = tile_to_screen(map_area, origin, pos)
+        {
+            f.buffer_mut()[(sx, sy)]
+                .set_char(crate::render::tileset::holo_glyph(&st.style, st.tick))
+                .set_fg(crate::ui::chrome::MAGENTA);
+        }
 
         if let (Some(leg), Some(m)) = (tracked_leg, crate::track::distance(st)) {
             let label = st.track.as_ref().map_or("", |t| t.label.as_str());
@@ -5129,6 +5139,53 @@ mod tests {
             ScreenCmd::Stay
         ));
         assert_eq!(last(&st), Some("no active abilities"));
+    }
+
+    #[test]
+    fn the_holo_set_plays_in_magenta_while_it_is_on() {
+        let mut st = crate::jobs::testutil::state_home();
+        let mut s = MapScreen::walking(&mut st);
+        crate::missions::begin(&mut st);
+        crate::missions::news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        assert!(crate::missions::news::current(&st).is_some_and(|n| n.on));
+        // In the living room, the set in view.
+        let (place, pos) = crate::missions::news::set_tile(&st).unwrap();
+        let mut me = crate::walker::Player::at(place, pos.offset(0, 1));
+        me.update_fov(
+            &MapRef::for_place(
+                st.city.as_ref().unwrap(),
+                &st.interiors,
+                &st.constructs,
+                place,
+                0,
+            )
+            .unwrap(),
+            0,
+        );
+        st.player = Some(me);
+        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        s.update(&mut st, &[]);
+        st.tick = 24;
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let on = t.backend().buffer().clone();
+        st.missions.news.as_mut().unwrap().on = false;
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let off = t.backend().buffer().clone();
+        let changed: Vec<(u16, u16)> = (0..40)
+            .flat_map(|y| (0..120).map(move |x| (x, y)))
+            .filter(|p| on[*p] != off[*p])
+            .collect();
+        assert_eq!(changed.len(), 1, "{changed:?}");
+        let (on, off) = (&on[changed[0]], &off[changed[0]]);
+        assert_eq!(off.symbol(), "◫");
+        assert_eq!(on.fg, crate::ui::chrome::MAGENTA);
+        assert!(
+            st.style
+                .glyphs
+                .holo
+                .iter()
+                .any(|c| on.symbol() == c.to_string())
+        );
     }
 
     #[test]

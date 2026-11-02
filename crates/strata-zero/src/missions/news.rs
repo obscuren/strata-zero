@@ -3,7 +3,7 @@
 //! frame's news tick watches you walk away from the story's bodies (§7) and ends the
 //! item's step.
 
-use super::{Left, Where, fill, person_of};
+use super::{Left, Mark, Where, fill, person_of};
 use crate::app::AppState;
 use citygen::Pos;
 use game::{Attribute, Slot};
@@ -201,6 +201,11 @@ pub fn channel(city: &citygen::City) -> String {
     format!("{corp} NEWSLINE")
 }
 
+/// Your flat's holo set: the place and tile, or None without a flat.
+pub fn set_tile(st: &AppState) -> Option<(citygen::Place, Pos)> {
+    super::marks::resolve(st, &Mark::HomeFurniture(citygen::Furniture::Holo), None)
+}
+
 /// The item while it is fresh.
 pub fn current(st: &AppState) -> Option<&NewsRun> {
     let now = st.net.now(st);
@@ -249,6 +254,27 @@ mod tests {
         let mut st = state_home();
         crate::missions::begin(&mut st);
         st
+    }
+
+    #[test]
+    fn the_set_is_in_your_flat_two_rows_above_the_couch() {
+        let st = state_home();
+        let (place, pos) = set_tile(&st).expect("a set in the flat");
+        assert_eq!(place, st.home.as_ref().unwrap().place());
+        let map = crate::render::map::MapRef::for_place(
+            st.city.as_ref().unwrap(),
+            &st.interiors,
+            &st.constructs,
+            place,
+            0,
+        )
+        .unwrap();
+        use crate::render::map::TileMap;
+        let below = map.tile(pos.offset(0, 2)).unwrap();
+        assert_eq!(
+            below.feature,
+            Some(citygen::Feature::Furniture(citygen::Furniture::Couch))
+        );
     }
 
     #[test]

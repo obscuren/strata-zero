@@ -41,6 +41,12 @@ pub fn connects(a: Terrain, b: Terrain) -> bool {
         || (lane(a) && lane(b))
 }
 
+/// The holo-ad glyphs in turn: a holo set's picture at `tick`.
+pub fn holo_glyph(style: &StylePack, tick: u64) -> char {
+    let set = &style.glyphs.holo;
+    set[(tick / 8 % set.len() as u64) as usize]
+}
+
 /// Glyph for a Net node kind from the style's `net` set.
 pub fn node_glyph(kind: NodeKind, style: &StylePack) -> char {
     let g = &style.glyphs.net;
@@ -136,6 +142,7 @@ pub fn glyph_for(
                 Furniture::Vending => '◘',
                 Furniture::Bike => 'ꝺ',
                 Furniture::Chair => '╦',
+                Furniture::Holo => '◫',
             },
         };
     }
@@ -290,6 +297,7 @@ pub fn legend_entries(k: StratumKind) -> Vec<(char, &'static str)> {
             ('◘', "vending machine"),
             ('ꝺ', "bike"),
             ('╦', "operating chair"),
+            ('◫', "holo set"),
             ('◉', "camera"),
             ('~', "puddle/water"),
         ],
@@ -655,6 +663,7 @@ mod tests {
             (Furniture::Vending, '◘'),
             (Furniture::Bike, 'ꝺ'),
             (Furniture::Chair, '╦'),
+            (Furniture::Holo, '◫'),
         ] {
             let f = Some(Feature::Furniture(piece));
             assert_eq!(glyph_for(Terrain::Floor, f, None, None, 1, 0, 0, &s), ch);

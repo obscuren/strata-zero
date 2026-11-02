@@ -826,6 +826,34 @@ mod tests {
     }
 
     #[test]
+    fn the_holo_set_in_the_flat_reads_its_head_and_a_line() {
+        let mut st = crate::jobs::testutil::state_home();
+        let (place, pos) = crate::missions::news::set_tile(&st).unwrap();
+        let map = MapRef::for_place(
+            st.city.as_ref().unwrap(),
+            &st.interiors,
+            &st.constructs,
+            place,
+            0,
+        )
+        .unwrap();
+        let mut me = Player::at(place, pos.offset(0, 1));
+        me.update_fov(&map, 0);
+        st.player = Some(me);
+        let c = look_card(&st, &map, place, pos, &|_, _| None, &[]);
+        assert_eq!(c.header.as_deref(), Some("Holo set"));
+        assert!(
+            [
+                "A cheap holo set, the picture a hand's width off true.",
+                "Older than the flat. It still gets every channel."
+            ]
+            .contains(&c.body[0].as_str()),
+            "{:?}",
+            c.body
+        );
+    }
+
+    #[test]
     fn a_person_reads_name_job_doing_and_never_a_number() {
         let mut st = state(true);
         let (id, at, beside) = someone(&st);
