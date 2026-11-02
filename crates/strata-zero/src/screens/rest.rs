@@ -35,7 +35,7 @@ impl Screen for RestScreen {
                 KeyCode::Char('l') | KeyCode::Right => self.shift(st, 60),
                 KeyCode::Char('H') => self.shift(st, -10),
                 KeyCode::Char('L') => self.shift(st, 10),
-                KeyCode::Enter => {
+                KeyCode::Char(' ') => {
                     rest::start(st, self.kind, self.until);
                     return ScreenCmd::Pop {
                         fx: TransitionKind::None,
@@ -104,7 +104,7 @@ mod tests {
     }
 
     #[test]
-    fn esc_goes_back_and_enter_lies_you_down() {
+    fn esc_goes_back_and_space_lies_you_down() {
         let mut st = state_home();
         let mut s = RestScreen::open(&st, Kind::Sleep);
         assert!(matches!(
@@ -115,6 +115,11 @@ mod tests {
         press(&mut s, &mut st, KeyCode::Char('l'));
         assert!(matches!(
             press(&mut s, &mut st, KeyCode::Enter),
+            ScreenCmd::Stay
+        ));
+        assert!(st.rest.is_none(), "enter isn't the window's key");
+        assert!(matches!(
+            press(&mut s, &mut st, KeyCode::Char(' ')),
             ScreenCmd::Pop { .. }
         ));
         let rest = st.rest.as_ref().unwrap();

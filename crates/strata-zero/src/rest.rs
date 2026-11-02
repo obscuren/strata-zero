@@ -424,10 +424,10 @@ pub fn draw_window(
                 Kind::Sleep => format!("{} asleep · a nap, some HP and FOCUS back", hours(length)),
                 Kind::Wait => format!("{} waiting", hours(length)),
             };
-            let enter = if kind == Kind::Sleep { "sleep" } else { "wait" };
+            let space = if kind == Kind::Sleep { "sleep" } else { "wait" };
             (
                 said,
-                format!("h l an hour · H L ten minutes · enter {enter} · esc"),
+                format!("h l an hour · H L ten minutes · space {space} · esc"),
             )
         }
     };
@@ -877,7 +877,7 @@ mod tests {
             row(&buf, r, 7).trim_matches(|c| c == ' ' || c == '│'),
             "8h 59m asleep · you wake rested"
         );
-        assert!(row(&buf, r, 9).contains("enter sleep"));
+        assert!(row(&buf, r, 9).contains("space sleep"));
     }
 
     #[test]
@@ -889,7 +889,7 @@ mod tests {
         let (buf, r) = drawn(&st, Kind::Wait, now(&st) + 60, None);
         assert!(row(&buf, r, 0).contains("Wait"));
         assert!(row(&buf, r, 7).contains("1h 0m waiting"));
-        assert!(row(&buf, r, 9).contains("enter wait"));
+        assert!(row(&buf, r, 9).contains("space wait"));
     }
 
     #[test]
@@ -1003,7 +1003,7 @@ mod tests {
         assert_eq!(buf[(r.x + 4 + 4, r.y + 3)].symbol(), "▴");
         assert!(text(4).contains("now 22:01 wake 22:20"), "{}", text(4));
         assert!(text(5).contains("asleep"));
-        assert!(text(6).contains("enter sleep"));
+        assert!(text(6).contains("space sleep"));
         assert!(text(7).starts_with('┕'), "{}", text(7));
         // Asleep it fills the same rows.
         let from = now(&st);

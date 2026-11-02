@@ -12561,7 +12561,7 @@ mod tests {
         assert_eq!(win.bottom(), map.bottom(), "on the map's bottom rows");
         assert!(!inside(win, me), "{me:?} {win:?}");
         assert_eq!(choosing[me].symbol(), "@");
-        choose.update(&mut st, &[key(KeyCode::Enter)]);
+        choose.update(&mut st, &[key(KeyCode::Char(' '))]);
         assert!(st.rest.is_some());
         s.update(&mut st, &[]);
         let waiting = draw_buffer(&s, &st, w, h);

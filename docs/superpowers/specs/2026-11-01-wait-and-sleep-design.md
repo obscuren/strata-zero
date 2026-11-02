@@ -20,8 +20,10 @@ list of choices, B, a timeline, and C, a big clock, each choosing and asleep).
     opens the timeline.
   - The strip: the next 24 hours, two cells an hour, night blue, day amber, past grey,
     the sleep teal, markers for now and the wake time; `h`/`l` an hour, `H`/`L` ten
-    minutes; the length and what you wake to under it; `enter` sleeps, `esc` goes
-    back. At night the wake time starts on 07:00.
+    minutes; the length and what you wake to under it; `space` sleeps, `esc` goes
+    back. At night the wake time starts on 07:00. (Changed after the build: Jeffrey
+    moved it from `enter` to `space`, "the common key for confirming or
+    interacting".)
   - Asleep: the window stays, titled Asleep, the strip filling; the flat dark, z's
     over you, the HUD clock racing; `esc` wakes you.
   - The window works for Wait as well; only the bed opens it in this build.
@@ -131,11 +133,11 @@ top when that covers you; the end of this section), on `PANEL_BG`. Rows from the
 - 7: what it comes to, `DIM`: `8h 59m asleep · you wake rested` (Sleep, 6 hours or
   more), `2h 0m asleep · a nap, some HP and FOCUS back` (Sleep, less),
   `1h 0m waiting` (Wait).
-- 9: the keys, `FAINT`: `h l an hour · H L ten minutes · enter sleep · esc` (`enter
+- 9: the keys, `FAINT`: `h l an hour · H L ten minutes · space sleep · esc` (`space
   wait` for Wait).
 
 Keys: `h`/`←` an hour earlier, `l`/`→` an hour later, `H` and `L` ten minutes, all
-clamped to 10 minutes (rounded up to a ten of the clock) to 20 hours ahead; `enter` starts it (§3) and pops the window;
+clamped to 10 minutes (rounded up to a ten of the clock) to 20 hours ahead; `space` starts it (§3) and pops the window (`enter` does nothing);
 `esc` pops it and nothing happens. The wake time is held as a game minute and shown
 rounded to ten minutes (the default is already on a ten).
 
@@ -264,7 +266,7 @@ through the night.
   beside the rig no bed; a bed outside your flat offers nothing.
 - The window: the default wake time at 22:01 is 07:00, at 13:00 is 21:00; `h`, `l`,
   `H`, `L` move it and clamp at 10 minutes and 20 hours; the strip's cells (past,
-  sleep, night, day) at 22:01 to 07:00; `esc` pops with no rest; `enter` starts one.
+  sleep, night, day) at 22:01 to 07:00; `esc` pops with no rest; `space` starts one.
 - Time passes: asleep from 22:01 to 07:00 the world's tick advances by exactly the
   minutes run, 4 a frame with time to spare and at least 1 with none, and the clock
   reads 07:00 on waking; the jobs' clocks and the Net's minute moved the same.
