@@ -1,7 +1,7 @@
 //! Every number behind light and sight, in one place. Tweak here, look with the dev
 //! console's `clock hh:mm` and `light`.
 
-use crate::tile::{Feature, Terrain};
+use crate::tile::{Feature, Hue, Terrain, Tone};
 use crate::world::StratumKind;
 
 /// Dawn ramps from 05:00 to 07:00; the midpoint 06:00 is when lamps go off.
@@ -75,3 +75,29 @@ pub const SKY_DAY_WEIGHT: f32 = 0.18;
 /// The sky at the middle of dawn and dusk: amber, and how much of it at the peak.
 pub const SKY_DUSK: (u8, u8, u8) = (235, 150, 80);
 pub const SKY_DUSK_WEIGHT: f32 = 0.25;
+
+/// The colour a tone's light throws.
+pub const fn tone_rgb(t: Tone) -> (u8, u8, u8) {
+    match t {
+        Tone::Fluorescent => (185, 232, 222),
+        Tone::Led => (175, 205, 255),
+        Tone::Tungsten => (255, 168, 88),
+        Tone::Surgical => (228, 242, 255),
+        Tone::Sodium => (255, 150, 55),
+        Tone::Blacklight => (175, 95, 255),
+        Tone::Neon(h) => match h {
+            Hue::Cyan => (0, 225, 210),
+            Hue::Magenta => (255, 60, 175),
+            Hue::Pink => (255, 110, 200),
+            Hue::Orange => (255, 140, 40),
+            Hue::Yellow => (255, 220, 60),
+            Hue::Green => (60, 255, 120),
+            Hue::Blue => (60, 120, 255),
+            Hue::Red => (255, 50, 60),
+            Hue::White => (240, 240, 255),
+        },
+    }
+}
+
+/// A rig's or a terminal's screen glow.
+pub const SCREEN: (u8, u8, u8) = (0, 225, 210);

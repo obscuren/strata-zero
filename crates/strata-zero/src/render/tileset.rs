@@ -86,6 +86,7 @@ pub fn glyph_for(
             Feature::Neon(_) => '▪',
             Feature::HoloAd => pick(&g.holo, tick / 8 + variant as u64),
             Feature::Lamp => '●',
+            Feature::Fitting(_) => '▬',
             Feature::Vent => {
                 if (tick / 4 + variant as u64) % 10 < 3 {
                     pick(&g.steam, tick / 4 + variant as u64)
@@ -371,7 +372,7 @@ fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
         Feature::HoloAd => ts
             .accent2
             .scale(0.7 + 0.3 * pulse(tick + tile.variant as u64, 24)),
-        Feature::Lamp => Rgb(255, 240, 200),
+        Feature::Lamp | Feature::Fitting(_) => Rgb(255, 240, 200),
         Feature::Vent => Rgb(170, 175, 185),
         Feature::Puddle => Rgb(80, 115, 165),
         Feature::Trash => Rgb(115, 105, 85),

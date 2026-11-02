@@ -152,8 +152,68 @@ pub enum Feature {
     Furniture(Furniture),
     /// A piece of ICE standing in a construct; nobody walks through it while it stands.
     Ice(IceGrade),
-    /// A shopfront awning over the pavement; walkable. Last, so old saves keep their indices.
+    /// A shopfront awning over the pavement; walkable.
     Awning,
+    /// A light fitting indoors. Last, so old saves keep their indices.
+    Fitting(Fitting),
+}
+
+/// A light fitting on an interior floor: hung from the ceiling (walked under), set in a
+/// wall, or a stage's lights.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Fitting {
+    pub kind: FittingKind,
+    pub tone: Tone,
+    pub wear: Wear,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FittingKind {
+    Tube,
+    Panel,
+    Bulb,
+    HighBay,
+    Strip,
+    Sconce,
+    NeonStrip,
+    Stage,
+}
+
+impl FittingKind {
+    /// Set in a wall tile rather than hung over a floor tile.
+    pub fn on_wall(self) -> bool {
+        matches!(
+            self,
+            FittingKind::Strip | FittingKind::Sconce | FittingKind::NeonStrip
+        )
+    }
+
+    /// The kinds that go dead or stutter with age.
+    pub fn wears(self) -> bool {
+        matches!(
+            self,
+            FittingKind::Tube | FittingKind::HighBay | FittingKind::Strip
+        )
+    }
+}
+
+/// What lights a room, and so its colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Tone {
+    Fluorescent,
+    Led,
+    Tungsten,
+    Surgical,
+    Sodium,
+    Neon(Hue),
+    Blacklight,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Wear {
+    Ok,
+    Dead,
+    Stutter,
 }
 
 /// How hard a piece of ICE bites: white traces and alarms, grey dumps you.
@@ -235,7 +295,7 @@ impl Furniture {
     }
 }
 
-pub const ALL_FEATURES: [Feature; 19] = [
+pub const ALL_FEATURES: [Feature; 21] = [
     Feature::Neon(Hue::Cyan),
     Feature::HoloAd,
     Feature::Lamp,
@@ -255,6 +315,16 @@ pub const ALL_FEATURES: [Feature; 19] = [
     Feature::Furniture(Furniture::Desk),
     Feature::Ice(IceGrade::White),
     Feature::Awning,
+    Feature::Fitting(Fitting {
+        kind: FittingKind::Tube,
+        tone: Tone::Fluorescent,
+        wear: Wear::Ok,
+    }),
+    Feature::Fitting(Fitting {
+        kind: FittingKind::Bulb,
+        tone: Tone::Tungsten,
+        wear: Wear::Ok,
+    }),
 ];
 
 /// One cell of a stratum.
@@ -374,7 +444,7 @@ mod tests {
         assert!(Tile::new(Terrain::Plaza).is_outdoor_ground());
         assert!(Tile::new(Terrain::Door).is_building_part());
         assert_eq!(ALL_TERRAIN.len(), 28);
-        assert_eq!(ALL_FEATURES.len(), 19);
+        assert_eq!(ALL_FEATURES.len(), 21);
         assert!(!Tile::new(Terrain::Mass).is_walkable());
         assert!(Tile::new(Terrain::Mass).blocks_sight());
         assert!(Tile::new(Terrain::Mass).is_building_part());
@@ -438,11 +508,42 @@ mod tests {
         assert_eq!(Terrain::Road.label(), "road");
         assert!(Terrain::NetLane.is_net() && !Terrain::Road.is_net());
         assert_eq!(ALL_TERRAIN.len(), 28);
-        assert_eq!(ALL_FEATURES.len(), 19);
+        assert_eq!(ALL_FEATURES.len(), 21);
         assert_eq!(crate::world::StratumKind::ALL.len(), 5);
         assert_eq!(
             crate::world::StratumKind::ALL[4],
             crate::world::StratumKind::Net
         );
+    }
+
+    #[test]
+    fn fittings_are_walked_under_or_sit_in_walls() {
+        let f = |kind| {
+            Feature::Fitting(Fitting {
+                kind,
+                tone: Tone::Fluorescent,
+                wear: Wear::Ok,
+            })
+        };
+        let mut t = Tile::new(Terrain::Floor);
+        for k in [
+            FittingKind::Tube,
+            FittingKind::Panel,
+            FittingKind::Bulb,
+            FittingKind::HighBay,
+            FittingKind::Stage,
+        ] {
+            t.feature = Some(f(k));
+            assert!(t.is_walkable(), "{k:?}");
+            assert!(!k.on_wall());
+        }
+        for k in [
+            FittingKind::Strip,
+            FittingKind::Sconce,
+            FittingKind::NeonStrip,
+        ] {
+            assert!(k.on_wall(), "{k:?}");
+        }
+        assert!(FittingKind::Tube.wears() && !FittingKind::Panel.wears());
     }
 }
