@@ -54,6 +54,17 @@ fn door_of(st: &AppState, b: BuildingId) -> Option<Pos> {
     st.city.as_ref()?.portals(b).first().map(|(_, p)| *p)
 }
 
+/// How a fetch's door code is to be had in `b`, in the fixer's words: from its server,
+/// else from the lobby's card.
+pub(crate) fn how_in(st: &AppState, b: BuildingId) -> String {
+    if has_node(st, b, NodeKind::Server) {
+        st.flavor.how_server()
+    } else {
+        st.flavor.how_card()
+    }
+    .to_string()
+}
+
 fn has_node(st: &AppState, b: BuildingId, kind: NodeKind) -> bool {
     st.city.as_ref().is_some_and(|c| {
         c.net
@@ -185,12 +196,7 @@ fn finish_fetch(st: &AppState, mut job: Job, r_text: u64) -> Job {
         return job;
     };
     let name = crate::net::building_name(st, building);
-    let how = if has_node(st, building, NodeKind::Server) {
-        st.flavor.how_server()
-    } else {
-        st.flavor.how_card()
-    }
-    .to_string();
+    let how = how_in(st, building);
     let slots = [
         ("building", name.clone()),
         ("floor", FloorPlan::label(level)),

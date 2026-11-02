@@ -200,7 +200,7 @@ pub fn prepare_offers(
     }
 }
 
-fn refused(st: &AppState, fixer: PersonId) -> bool {
+pub(crate) fn refused(st: &AppState, fixer: PersonId) -> bool {
     st.jobs.standing(fixer) <= REFUSE_AT || st.backdoors.fixer_quiet(st.net.now(st))
 }
 
@@ -210,6 +210,19 @@ fn stands(st: &AppState) -> impl Fn(BuildingId) -> bool + '_ {
 
 fn carries(st: &AppState) -> impl Fn(&ItemId) -> bool + '_ {
     move |i| st.character.count(i) > 0
+}
+
+/// Whether the fixer would take the hand-in if you found them now, else why not: their
+/// refusal first, then the job's own reason.
+pub(crate) fn hand_in_now(st: &AppState, id: JobId) -> Result<(), String> {
+    let j = st.jobs.get(id).ok_or_else(|| "no such job".to_string())?;
+    if refused(st, j.fixer) {
+        return Err(format!(
+            "{} won't deal with you now",
+            fixer_name(st, j.fixer)
+        ));
+    }
+    st.jobs.ready(id, &stands(st), &carries(st))
 }
 
 /// A fixer's rows after Look: Talk, then the offer, the hand-in or the drop.
