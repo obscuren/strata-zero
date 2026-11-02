@@ -3,14 +3,10 @@
 
 use super::{RunState, role_name};
 use crate::app::AppState;
-use crate::screens::deck::{Detail, Row, Tone};
-use crate::ui::chrome::{DIM, MAGENTA, TEXT};
+use crate::jobs::card::{self, Item, Way};
+use crate::ui::chrome::{DIM, FAINT, MAGENTA, TEXT};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-
-fn dim(text: impl Into<String>) -> Line<'static> {
-    Line::from(Span::styled(text.into(), Style::default().fg(DIM)))
-}
 
 fn shown(state: RunState) -> bool {
     matches!(state, RunState::Open | RunState::Done { .. })
@@ -65,38 +61,23 @@ pub fn jobs_pane(st: &AppState) -> Vec<Line<'static>> {
     out
 }
 
-/// The STORY header, the missions open or done, then the JOBS header; nothing at all
-/// while no mission has started.
-pub fn deck_rows(st: &AppState) -> Vec<Row> {
-    let header = |text: &str| Row {
-        text: text.into(),
-        tone: Tone::Dim,
-        detail: None,
-        spans: None,
-    };
-    let mut out = Vec::new();
+/// The missions the JOBS tab lists: the open ones, then the done ones, each with
+/// whether it is done.
+pub fn story_missions(st: &AppState) -> Vec<(usize, bool)> {
+    let mut open = Vec::new();
+    let mut done = Vec::new();
     for (i, run) in st.missions.runs.iter().enumerate() {
-        let Some(m) = st.book.missions.get(i) else {
+        if st.book.missions.get(i).is_none() {
             continue;
-        };
-        let (text, tone) = match run.state {
-            RunState::Open => (format!("  {}", m.title), Tone::Normal),
-            RunState::Done { .. } => (format!("✓ {}", m.title), Tone::Done),
-            _ => continue,
-        };
-        out.push(Row {
-            text,
-            tone,
-            detail: Some(Detail::Mission(i)),
-            spans: None,
-        });
+        }
+        match run.state {
+            RunState::Open => open.push((i, false)),
+            RunState::Done { .. } => done.push((i, true)),
+            _ => {}
+        }
     }
-    if out.is_empty() {
-        return out;
-    }
-    out.insert(0, header("STORY"));
-    out.push(header("JOBS"));
-    out
+    open.extend(done);
+    open
 }
 
 /// The dev console's `story`: each role with the person cast in it, each mission with
@@ -159,8 +140,10 @@ fn story_lines(st: &AppState) -> Vec<String> {
     out
 }
 
-/// The deck's dossier on one mission.
-pub fn detail(st: &AppState, mission: usize) -> Vec<Line<'static>> {
+/// The story's card (spec 9): the mission as a route, its earlier objectives ticked,
+/// you and the walk, then the step it waits on in its own words; no window. A done one
+/// is ticked through and has nothing to track.
+pub fn story_card(st: &AppState, mission: usize, width: usize, way: &Way) -> Vec<Line<'static>> {
     let (Some(m), Some(run)) = (st.book.missions.get(mission), st.missions.runs.get(mission))
     else {
         return Vec::new();
@@ -170,28 +153,61 @@ pub fn detail(st: &AppState, mission: usize) -> Vec<Line<'static>> {
     }
     let done = matches!(run.state, RunState::Done { .. });
     let mut out = vec![
-        Line::from(Span::styled(
-            m.title.clone(),
-            Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD),
-        )),
-        dim(format!(
-            "from {} · story · {}",
-            from_name(st, mission),
-            if done { "done" } else { "open" }
-        )),
+        card::title_line("STORY", MAGENTA, &m.title, "", width),
+        card::row(
+            vec![Span::styled(
+                format!(
+                    "from {} · {}",
+                    from_name(st, mission),
+                    if done { "done" } else { "open" }
+                ),
+                Style::default().fg(DIM),
+            )],
+            Vec::new(),
+            width,
+        ),
         Line::from(""),
     ];
-    let last = run.objectives.len().saturating_sub(1);
-    for (i, o) in run.objectives.iter().enumerate() {
-        out.push(if i < last || done {
-            dim(format!("☑ {o}"))
-        } else {
-            Line::from(Span::styled(format!("☐ {o}"), Style::default().fg(TEXT)))
-        });
+    let ticked = if done {
+        run.objectives.len()
+    } else {
+        run.objectives.len().saturating_sub(1)
+    };
+    let stop = |glyph, glyph_col, text: String, text_col, under| card::Stop {
+        glyph,
+        glyph_col,
+        text,
+        text_col,
+        verb: String::new(),
+        verb_style: Style::default(),
+        under,
+    };
+    let mut items: Vec<Item> = run.objectives[..ticked]
+        .iter()
+        .map(|o| Item::Stop(stop("✓", card::DONE, o.clone(), FAINT, Vec::new())))
+        .collect();
+    let mut tracks = None;
+    if !done && let Some(now) = run.objectives.last() {
+        if *way != Way::Nowhere {
+            items.push(Item::You {
+                walk: card::walk_of(way),
+            });
+            tracks = crate::track::ui::story_source(st, mission);
+        }
+        let mut lines = card::wrap(now, width.saturating_sub(5), "").into_iter();
+        let first = lines.next().unwrap_or_default();
+        let under = lines.map(|l| (l, TEXT)).collect();
+        items.push(Item::Stop(stop("◆", MAGENTA, first, TEXT, under)));
     }
-    if let Some(src) = crate::track::ui::story_source(st, mission) {
+    out.extend(card::route_lines(st, items, width));
+    if let Some(src) = tracks {
         out.push(Line::from(""));
-        out.push(crate::track::ui::detail_line(st, &src));
+        out.push(card::track_line(
+            st,
+            &src,
+            &card::target_place(st, &src),
+            width,
+        ));
     }
     out
 }
@@ -232,56 +248,65 @@ mod tests {
     }
 
     #[test]
-    fn the_tab_has_story_then_jobs() {
-        let st = open_drop();
-        let rows = deck_rows(&st);
-        assert_eq!(rows[0].text, "STORY");
-        assert!(rows[0].detail.is_none());
-        assert_eq!(rows[1].text, "  The drop");
-        assert_eq!(rows[1].detail, Some(Detail::Mission(0)));
-        assert_eq!(rows[2].text, "JOBS");
-        assert!(rows[2].detail.is_none());
-        assert_eq!(rows.len(), 3);
-        let mut deck = crate::screens::deck::Deck::new(st.tick);
-        deck.tab = crate::screens::deck::Tab::Jobs;
-        let tab = deck.rows(&st);
-        let jobs = crate::jobs::ui::deck_rows(&st);
-        assert!(!jobs.is_empty());
-        assert_eq!(tab.len(), rows.len() + jobs.len());
-        assert!(matches!(tab[3].detail, Some(Detail::Job(_))));
-    }
-
-    #[test]
-    fn the_tab_is_unchanged_without_a_story() {
-        let mut st = state_home();
-        st.missions.runs.clear();
-        assert!(deck_rows(&st).is_empty());
-        assert!(pane_lines(&st).is_empty());
-        let mut deck = crate::screens::deck::Deck::new(st.tick);
-        deck.tab = crate::screens::deck::Tab::Jobs;
-        let plain: Vec<String> = crate::jobs::ui::deck_rows(&st)
-            .into_iter()
-            .map(|r| r.text)
-            .collect();
-        let tab: Vec<String> = deck.rows(&st).into_iter().map(|r| r.text).collect();
-        assert_eq!(tab, plain);
-    }
-
-    #[test]
-    fn the_detail_ticks_earlier_objectives() {
+    fn the_tab_lists_open_missions_then_done_ones() {
         let mut st = open_drop();
+        assert_eq!(story_missions(&st), vec![(0, false)]);
+        st.missions.runs[0].state = RunState::Done { at: 5 };
+        assert_eq!(story_missions(&st), vec![(0, true)]);
+        st.missions.runs.clear();
+        assert!(story_missions(&st).is_empty());
+        assert!(pane_lines(&st).is_empty());
+    }
+
+    fn card_text(st: &AppState, way: &Way) -> Vec<String> {
+        story_card(st, 0, 68, way).iter().map(text).collect()
+    }
+
+    #[test]
+    fn the_story_card_is_a_route_without_a_clock() {
+        let mut st = open_drop();
+        let walk = Way::Walk { m: 30, next: None };
+        let c = card_text(&st, &walk);
+        assert!(c[0].starts_with("STORY ━ THE DROP ━"), "{c:#?}");
+        assert_eq!(c[1], "from Mezz · open");
+        assert!(c.iter().any(|l| l.starts_with("  @  you")), "{c:#?}");
+        assert!(c.iter().any(|l| l == "  ┃  30 m"), "{c:#?}");
+        assert!(
+            c.iter().any(|l| l.starts_with("  ◆  Hand the package to ")),
+            "{c:#?}"
+        );
+        assert!(
+            !c.iter()
+                .any(|l| l.contains("clock") || l.contains("window") || l.contains("waits")),
+            "{c:#?}"
+        );
+        assert!(c.last().unwrap().contains("TRACK"), "{c:#?}");
+        // Earlier objectives are ticked stops above you.
         st.missions.runs[0]
             .objectives
             .insert(0, "Walk to the corner".into());
-        let d = detail(&st, 0);
-        assert_eq!(text(&d[0]), "The drop");
-        assert_eq!(text(&d[1]), "from Mezz · story · open");
-        assert_eq!(text(&d[3]), "☑ Walk to the corner");
-        assert_eq!(d[3].spans[0].style.fg, Some(DIM));
-        assert!(text(&d[4]).starts_with("☐ Hand the package"));
+        let c = card_text(&st, &walk);
+        let tick = c.iter().position(|l| l.contains("✓  Walk to the corner"));
+        let you = c.iter().position(|l| l.starts_with("  @  you"));
+        assert!(tick.is_some() && tick < you, "{c:#?}");
+        // A step with nowhere to walk to: its line alone, nothing to track.
+        let c = card_text(&st, &Way::Nowhere);
+        assert!(
+            !c.iter().any(|l| l.contains('@') || l.contains("TRACK")),
+            "{c:#?}"
+        );
+    }
+
+    #[test]
+    fn a_done_story_is_ticked_through() {
+        let mut st = open_drop();
         st.missions.runs[0].state = RunState::Done { at: 5 };
-        let d = detail(&st, 0);
-        assert_eq!(text(&d[1]), "from Mezz · story · done");
-        assert!(text(&d[4]).starts_with("☑ "));
+        let c = card_text(&st, &Way::Nowhere);
+        assert_eq!(c[1], "from Mezz · done");
+        assert!(
+            c.iter().any(|l| l.contains("✓  Hand the package")),
+            "{c:#?}"
+        );
+        assert!(!c.iter().any(|l| l.contains("TRACK") || l.contains('@')));
     }
 }

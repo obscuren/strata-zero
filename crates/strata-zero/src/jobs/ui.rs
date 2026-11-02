@@ -1,8 +1,7 @@
 //! What the player sees of the jobs: the QUEST pane, the deck's tab, the names.
 
-use super::{Job, JobId, Jobs, State, WARN_MINUTES, clock_text};
+use super::{JobId, Jobs, State, WARN_MINUTES, clock_text};
 use crate::app::AppState;
-use crate::screens::deck::{Detail, Row, Tone};
 use crate::ui::chrome::{CYAN, DIM, MAGENTA, TEXT};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -86,82 +85,6 @@ pub fn pane_lines(st: &AppState) -> Vec<Line<'static>> {
     ]
 }
 
-fn mark(state: State) -> &'static str {
-    match state {
-        State::Done => "✓",
-        State::Failed => "✗",
-        State::Dropped => "–",
-        State::Taken | State::Offered => " ",
-    }
-}
-
-/// Taken first, then offered (dim), then the finished ones.
-pub fn deck_rows(st: &AppState) -> Vec<Row> {
-    let order = |s: State| match s {
-        State::Taken => 0,
-        State::Offered => 1,
-        _ => 2,
-    };
-    let mut jobs: Vec<&Job> = st.jobs.list.iter().collect();
-    jobs.sort_by_key(|j| (order(j.state), j.id));
-    jobs.into_iter()
-        .map(|j| Row {
-            text: format!("{} {}", mark(j.state), j.title),
-            tone: match j.state {
-                State::Taken => Tone::Normal,
-                State::Offered | State::Dropped => Tone::Dim,
-                State::Done => Tone::Done,
-                State::Failed => Tone::Warn,
-            },
-            detail: Some(Detail::Job(j.id)),
-            spans: None,
-        })
-        .collect()
-}
-
-/// The deck's dossier on one job.
-pub fn detail(st: &AppState, id: JobId) -> Vec<Line<'static>> {
-    let Some(j) = st.jobs.get(id) else {
-        return Vec::new();
-    };
-    let now = st.net.now(st);
-    let outcome = match j.state {
-        State::Offered => "on offer".to_string(),
-        State::Taken => format!("{} left", clock_text(Jobs::left(j, now).unwrap_or(0))),
-        State::Done => "done".to_string(),
-        State::Failed => "failed".to_string(),
-        State::Dropped => "dropped".to_string(),
-    };
-    let mut out = vec![Line::from(Span::styled(
-        j.title.clone(),
-        Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
-    ))];
-    out.push(dim(format!(
-        "from {} · {} · ¤{} · {outcome}",
-        fixer_name(st, j.fixer),
-        district_of_fixer(st, j.fixer),
-        j.pay
-    )));
-    out.push(plain(""));
-    out.extend(j.brief.iter().map(|l| plain(l.clone())));
-    out.push(plain(""));
-    for o in &j.objectives {
-        out.push(if o.done {
-            Line::from(Span::styled(
-                format!("☑ {}", o.text),
-                Style::default().fg(DIM),
-            ))
-        } else {
-            plain(format!("☐ {}", o.text))
-        });
-    }
-    if let Some(src) = crate::track::ui::job_source(st, id) {
-        out.push(plain(""));
-        out.push(crate::track::ui::detail_line(st, &src));
-    }
-    out
-}
-
 use super::{Event, Kind, REFUSE_AT, Say, handin_item};
 use crate::screens::popup::{Choice, Header, Pick, Popup};
 use crate::ui::hud::AMBER;
@@ -200,7 +123,7 @@ pub fn prepare_offers(
     }
 }
 
-fn refused(st: &AppState, fixer: PersonId) -> bool {
+pub(crate) fn refused(st: &AppState, fixer: PersonId) -> bool {
     st.jobs.standing(fixer) <= REFUSE_AT || st.backdoors.fixer_quiet(st.net.now(st))
 }
 
@@ -210,6 +133,19 @@ fn stands(st: &AppState) -> impl Fn(BuildingId) -> bool + '_ {
 
 fn carries(st: &AppState) -> impl Fn(&ItemId) -> bool + '_ {
     move |i| st.character.count(i) > 0
+}
+
+/// Whether the fixer would take the hand-in if you found them now, else why not: their
+/// refusal first, then the job's own reason.
+pub(crate) fn hand_in_now(st: &AppState, id: JobId) -> Result<(), String> {
+    let j = st.jobs.get(id).ok_or_else(|| "no such job".to_string())?;
+    if refused(st, j.fixer) {
+        return Err(format!(
+            "{} won't deal with you now",
+            fixer_name(st, j.fixer)
+        ));
+    }
+    st.jobs.ready(id, &stands(st), &carries(st))
 }
 
 /// A fixer's rows after Look: Talk, then the offer, the hand-in or the drop.
@@ -276,6 +212,66 @@ pub fn rows(st: &AppState, fixer: PersonId) -> Vec<Choice> {
     out
 }
 
+/// A job's own mails, newest first, by their place in the inbox.
+pub fn job_mails(st: &AppState, job: JobId) -> Vec<usize> {
+    let mut v: Vec<usize> = st
+        .journal
+        .mails
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.job == Some(job))
+        .map(|(i, _)| i)
+        .collect();
+    v.reverse();
+    v
+}
+
+/// The mails about a fixer's jobs, newest first; never the story's, even from a fixer
+/// the story also casts.
+pub fn fixer_mails(st: &AppState, fixer: PersonId) -> Vec<usize> {
+    let mut v: Vec<usize> = st
+        .journal
+        .mails
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| {
+            m.job
+                .and_then(|j| st.jobs.get(j))
+                .is_some_and(|j| j.fixer == fixer)
+        })
+        .map(|(i, _)| i)
+        .collect();
+    v.reverse();
+    v
+}
+
+/// The mail of `mails` (newest first) to read next: the newest unread, else the newest.
+pub fn next_mail(st: &AppState, mails: &[usize]) -> Option<usize> {
+    mails
+        .iter()
+        .copied()
+        .find(|i| st.journal.mails.get(*i).is_some_and(|m| !m.read))
+        .or_else(|| mails.first().copied())
+}
+
+/// Mails as the rig reads them, one after another, each marked read.
+pub fn mail_card(st: &mut AppState, mails: &[usize]) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    for (k, i) in mails.iter().enumerate() {
+        let Some(m) = st.journal.mails.get(*i) else {
+            continue;
+        };
+        if k > 0 {
+            out.push(plain(""));
+        }
+        out.push(dim(format!("From: {}", m.from)));
+        out.push(dim(format!("Subject: {}", m.subject)));
+        out.extend(m.body.iter().map(|l| plain(l.clone())));
+        crate::credentials::mail_read(st, *i);
+    }
+    out
+}
+
 /// The offer in place of the window: title, pay and hours, the brief, take or not.
 pub fn offer_popup(st: &AppState, id: JobId, tick: u64) -> Popup {
     let Some(j) = st.jobs.get(id) else {
@@ -322,7 +318,8 @@ pub fn hand_in(st: &mut AppState, id: JobId) -> Result<String, String> {
     if let Some(item) = handin_item(&j.kind) {
         game::remove_from_pack(&mut st.character, &item, 1);
     }
-    let pay = st.jobs.hand_in(id).ok_or("not in hand")?;
+    let now = st.net.now(st);
+    let pay = st.jobs.hand_in(id, now).ok_or("not in hand")?;
     st.character.credits = st.character.credits.saturating_add(pay);
     let fixer = fixer_name(st, j.fixer);
     let said = st.flavor.line(Say::Handed, id.0 as u64).to_string();
@@ -337,7 +334,8 @@ pub fn hand_in(st: &mut AppState, id: JobId) -> Result<String, String> {
 /// Gives the job up; the package, if still carried, stays in the pack.
 pub fn drop(st: &mut AppState, id: JobId) -> Result<String, String> {
     let j = st.jobs.get(id).cloned().ok_or("no such job")?;
-    if !st.jobs.drop_job(id) {
+    let now = st.net.now(st);
+    if !st.jobs.drop_job(id, now) {
         return Err("not in hand".into());
     }
     let fixer = fixer_name(st, j.fixer);
@@ -402,7 +400,7 @@ pub fn hand_over(st: &mut AppState, id: JobId) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jobs::{HOURS_FETCH, Kind, Objective, PAY_FETCH};
+    use crate::jobs::{HOURS_FETCH, Job, Kind, Objective, PAY_FETCH};
     use citygen::{BuildingId, Pos};
 
     fn text(lines: &[Line<'_>]) -> Vec<String> {
@@ -443,6 +441,7 @@ mod tests {
             taken: None,
             deadline: None,
             state: State::Offered,
+            closed: None,
         });
         assert_eq!(
             text(&pane_lines(&st)),
@@ -457,15 +456,6 @@ mod tests {
         );
         assert_eq!(lines[1], " » Take the shard");
         assert_eq!(lines[2], " ▱▱ 0/2");
-        let rows = deck_rows(&st);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].text, "  The drop");
-        let d = text(&detail(&st, id));
-        assert!(
-            d[1].contains("¤200") && d[1].contains("12h 0m left"),
-            "{d:?}"
-        );
-        assert!(d.iter().any(|l| l == "☐ Take the shard"), "{d:?}");
     }
 
     use crate::app::{Screen, ScreenCmd};
@@ -578,7 +568,7 @@ mod tests {
         let fx = a_fixer(&st);
         // Clear the welcome so this fixer can offer.
         let welcome = st.jobs.active().unwrap().id;
-        st.jobs.drop_job(welcome);
+        st.jobs.drop_job(welcome, 0);
         st.jobs.fixer_mut(fx).standing = 0;
         let id = crate::jobs::offer(&mut st, fx).unwrap();
         let mut p = offer_popup(&st, id, st.tick);
@@ -651,7 +641,7 @@ mod tests {
         let mut st = state_home();
         let fx = a_fixer(&st);
         let welcome = st.jobs.active().unwrap().id;
-        st.jobs.drop_job(welcome);
+        st.jobs.drop_job(welcome, 0);
         st.jobs.fixer_mut(fx).standing = 0;
         let home = st.home.unwrap().home;
         let city = st.city.clone().unwrap();

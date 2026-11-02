@@ -948,7 +948,7 @@ mod tests {
         let fx = a_fixer(&st);
         // The welcome may be theirs; clear it so the window shows an offer.
         let welcome = st.jobs.active().unwrap().id;
-        st.jobs.drop_job(welcome);
+        st.jobs.drop_job(welcome, 0);
         st.jobs.fixer_mut(fx).standing = 0;
         let spot = st.world.as_ref().unwrap().spot_of(fx).unwrap();
         let city = st.city.clone().unwrap();

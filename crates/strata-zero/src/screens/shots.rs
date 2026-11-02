@@ -2137,28 +2137,6 @@ fn track_street_far() {
     street_walk("track_street_far", 95, 14);
 }
 
-/// The deck's JOBS tab with the story tracked.
-#[test]
-#[ignore]
-fn track_jobs_tab() {
-    let (mut st, route) = walked_city();
-    stand_on(&mut st, route[route.len().saturating_sub(31)]);
-    let source = story_track(&st).expect("an open mission");
-    crate::track::set(&mut st, source).unwrap();
-    let map = MapScreen::walking(&mut st);
-    let mut deck = Deck::new(st.tick);
-    deck.update(&mut st, &[key(KeyCode::Char('5'))]);
-    st.tick += 200;
-    for (w, h) in BOTH {
-        shot_stack(
-            &format!("track_jobs_tab_{w}x{h}"),
-            &st,
-            &[&map, &deck],
-            (w, h),
-        );
-    }
-}
-
 /// The shipped story at your door after the drop, the house call queued, and the map
 /// that will draw it.
 fn at_the_door() -> (AppState, MapScreen) {
@@ -2337,5 +2315,82 @@ fn rest_shots() {
         }
         assert_eq!(st.clock(), (3, 12));
         shot_stack(&format!("rest_asleep{suffix}"), &st, &[&map], size);
+    }
+}
+
+/// The JOBS tab (spec 2026-11-02), as the mock drew it: the drop open, the mock's six
+/// jobs taken at 22:00, the clock on 01:20, the fetch tracked; a job in hand, one ready,
+/// an offer, a fixer, a closed job, the story, and space on the fixer, at both sizes.
+#[test]
+#[ignore]
+fn jobs_tab() {
+    use crate::screens::jobs_tab::Entry;
+    let (mut st, route) = walked_city();
+    stand_on(&mut st, route[route.len().saturating_sub(31)]);
+    let ids = crate::jobs::testutil::six_jobs(&mut st);
+    let p = st.player.as_ref().unwrap();
+    let at = game::At {
+        place: p.place,
+        pos: p.pos,
+    };
+    crate::screens::console::run(&mut st, at, "clock 01:20").unwrap();
+    let src = crate::track::ui::job_source(&st, ids[0]).unwrap();
+    crate::track::set(&mut st, src).unwrap();
+    let map = MapScreen::walking(&mut st);
+    let fixer = st.jobs.get(ids[0]).unwrap().fixer;
+    st.deck_jobs_open.insert(st.jobs.get(ids[3]).unwrap().fixer);
+    let deck_on = |st: &mut AppState, want: &Entry| {
+        let mut deck = Deck::new(st.tick);
+        deck.update(st, &[key(KeyCode::Char('5'))]);
+        deck.jobs.select(st, want);
+        // Off the deck's signal jitter, the card typed out.
+        st.tick += 200;
+        while st.tick % 90 < 3 {
+            st.tick += 1;
+        }
+        deck
+    };
+    for (name, want) in [
+        ("t", Entry::Job(ids[0])),
+        ("t_ready", Entry::Job(ids[1])),
+        ("offer", Entry::Job(ids[2])),
+        ("fixer", Entry::Fixer(fixer)),
+        ("closed", Entry::Job(ids[3])),
+        ("story", Entry::Mission(0)),
+    ] {
+        let deck = deck_on(&mut st, &want);
+        for (w, h) in BOTH {
+            shot_stack(
+                &format!("jobs_tab_{name}_{w}x{h}"),
+                &st,
+                &[&map, &deck],
+                (w, h),
+            );
+        }
+    }
+    for (w, h) in BOTH {
+        let mut deck = deck_on(&mut st, &Entry::Fixer(fixer));
+        // A draw at this size first, so the popup anchors on the row as drawn.
+        shot_stack(
+            &format!("jobs_tab_verbs_{w}x{h}"),
+            &st,
+            &[&map, &deck],
+            (w, h),
+        );
+        let crate::app::ScreenCmd::Push { to, .. } =
+            deck.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens the fixer's verbs")
+        };
+        st.tick += 40;
+        while st.tick % 90 < 3 {
+            st.tick += 1;
+        }
+        shot_stack(
+            &format!("jobs_tab_verbs_{w}x{h}"),
+            &st,
+            &[&map, &deck, to.as_ref()],
+            (w, h),
+        );
     }
 }

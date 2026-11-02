@@ -1001,6 +1001,7 @@ mod tests {
             body: vec![],
             read: false,
             at: 9,
+            job: None,
         });
         let host = ensure_host(&mut st, HostId::Rig).clone();
         assert_eq!(
@@ -1059,6 +1060,7 @@ mod tests {
             body: vec![],
             read: false,
             at: 9,
+            job: None,
         });
         let host = ensure_host(&mut st, HostId::Rig).clone();
         assert_eq!(

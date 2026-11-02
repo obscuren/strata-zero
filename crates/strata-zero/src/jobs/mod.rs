@@ -1,6 +1,7 @@
 //! Jobs: the work the fixers hand out, their deadlines, and what each fixer thinks
 //! of you. Runtime data, never content; the rest of the app reports events here.
 
+pub mod card;
 pub mod flavor;
 pub mod generate;
 pub mod ui;
@@ -111,6 +112,15 @@ pub struct Job {
     /// `taken + hours × 60`.
     pub deadline: Option<u64>,
     pub state: State,
+    /// When it ended, done, late or dropped.
+    pub closed: Option<Closed>,
+}
+
+/// How a job ended: the game minute, and the fixer's standing just after.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Closed {
+    pub at: u64,
+    pub standing: i32,
 }
 
 /// What a fixer thinks of you, and how many offers they have rolled.
@@ -176,6 +186,82 @@ pub fn clock_text(left: u64) -> String {
         m if m < 60 => format!("{m}m"),
         m => format!("{}h {}m", m / 60, m % 60),
     }
+}
+
+/// What a fixer thinks of you, in a word.
+pub fn standing_word(standing: i32) -> &'static str {
+    match standing {
+        s if s <= REFUSE_AT => "refuses you",
+        s if s < 0 => "cold",
+        s if s < COPY_AT => "new",
+        s if s < PLANT_AT => "known",
+        s if s < VAULT_AT => "trusted",
+        _ => "inner circle",
+    }
+}
+
+/// The standing from which a fixer offers this work.
+pub fn opens_at(kind: KindTag, vault: bool) -> i32 {
+    match kind {
+        KindTag::Fetch | KindTag::Deliver => REFUSE_AT + 1,
+        KindTag::Copy if vault => VAULT_AT,
+        KindTag::Copy => COPY_AT,
+        KindTag::Plant => PLANT_AT,
+    }
+}
+
+/// The minute of the day at game minute `m`.
+pub fn day_minute(m: u64) -> u16 {
+    crate::ui::hud::minute_at(m * sim::TICKS_PER_MINUTE)
+}
+
+/// Whether minute of the day `t` falls in the shift `(from, to)`; a shift whose end is
+/// before its start wraps past midnight.
+pub fn in_shift(t: u16, (from, to): (u16, u16)) -> bool {
+    if from <= to {
+        from <= t && t < to
+    } else {
+        t >= from || t < to
+    }
+}
+
+/// Game minutes from `now` until the shift next starts or ends.
+pub fn shift_turn(now: u64, shift: (u16, u16)) -> u64 {
+    let on = in_shift(day_minute(now), shift);
+    (1..=24 * 60)
+        .find(|d| in_shift(day_minute(now + d), shift) != on)
+        .unwrap_or(24 * 60)
+}
+
+/// Where the fixer is at the end of a job's window: on their corner, or off it. A fixer
+/// off the corner still takes the hand-in wherever you find them; the window only
+/// says where to look.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Corner {
+    /// On the corner at the deadline.
+    Through,
+    /// Off the corner from this game minute, before the deadline, and not back in time.
+    Leaves(u64),
+    /// Off the corner from now until after the deadline.
+    Off,
+}
+
+pub fn corner(now: u64, deadline: u64, shift: (u16, u16)) -> Corner {
+    if in_shift(day_minute(deadline), shift) {
+        return Corner::Through;
+    }
+    match (now..deadline)
+        .rev()
+        .find(|m| in_shift(day_minute(*m), shift))
+    {
+        Some(m) => Corner::Leaves(m + 1),
+        None => Corner::Off,
+    }
+}
+
+/// A fixer's hours on their corner.
+pub fn shift_of(st: &AppState, fixer: PersonId) -> Option<(u16, u16)> {
+    st.world.as_ref()?.work_hours(fixer)
 }
 
 impl Jobs {
@@ -251,8 +337,8 @@ impl Jobs {
         true
     }
 
-    /// `Taken → Dropped`, the standing down.
-    pub fn drop_job(&mut self, id: JobId) -> bool {
+    /// `Taken → Dropped` at minute `now`, the standing down.
+    pub fn drop_job(&mut self, id: JobId, now: u64) -> bool {
         let Some(j) = self.get_mut(id) else {
             return false;
         };
@@ -261,13 +347,13 @@ impl Jobs {
         }
         j.state = State::Dropped;
         let fixer = j.fixer;
-        self.fixer_mut(fixer).standing += LOSS_DROP;
+        self.close(id, fixer, LOSS_DROP, now);
         true
     }
 
-    /// Ends a Taken job: every objective ticked, the standing up, the pay returned.
-    /// The caller checks `ready` first.
-    pub fn hand_in(&mut self, id: JobId) -> Option<u32> {
+    /// Ends a Taken job at minute `now`: every objective ticked, the standing up, the
+    /// pay returned. The caller checks `ready` first.
+    pub fn hand_in(&mut self, id: JobId, now: u64) -> Option<u32> {
         let j = self.get_mut(id)?;
         if j.state != State::Taken {
             return None;
@@ -277,8 +363,18 @@ impl Jobs {
             o.done = true;
         }
         let (fixer, pay) = (j.fixer, j.pay);
-        self.fixer_mut(fixer).standing += GAIN_DONE;
+        self.close(id, fixer, GAIN_DONE, now);
         Some(pay)
+    }
+
+    /// Moves the fixer's standing by `delta` and stamps the job closed.
+    fn close(&mut self, id: JobId, fixer: PersonId, delta: i32, now: u64) {
+        let f = self.fixer_mut(fixer);
+        f.standing += delta;
+        let standing = f.standing;
+        if let Some(j) = self.get_mut(id) {
+            j.closed = Some(Closed { at: now, standing });
+        }
     }
 
     /// Whether the hand-in can happen now, else why not, in the fixer's words.
@@ -300,7 +396,7 @@ impl Jobs {
         {
             return Err(match j.kind {
                 Kind::Fetch { .. } | Kind::Copy { .. } => "the shard is not yet yours",
-                Kind::Plant { .. } => "no backdoor stands there yet",
+                Kind::Plant { .. } => "the backdoor is not planted yet",
                 Kind::Deliver { .. } => "the package is not delivered",
             }
             .to_string());
@@ -382,11 +478,11 @@ impl Jobs {
             if j.deadline.is_some_and(|d| d < now) {
                 j.state = State::Failed;
                 late.push(Late { job: j.id });
-                losses.push(j.fixer);
+                losses.push((j.id, j.fixer));
             }
         }
-        for f in losses {
-            self.fixer_mut(f).standing += LOSS_LATE;
+        for (id, f) in losses {
+            self.close(id, f, LOSS_LATE, now);
         }
         late
     }
@@ -432,6 +528,7 @@ pub fn tick(st: &mut AppState) {
             body: vec![line],
             read: false,
             at: now,
+            job: Some(job),
         });
     }
 }
@@ -509,6 +606,7 @@ pub fn take_job(st: &mut AppState, id: JobId) -> Result<String, String> {
         body,
         read: false,
         at: now,
+        job: Some(id),
     });
     let said = st.flavor.line(Say::Taken, id.0 as u64).to_string();
     let line = format!("`{}` · taken · {fixer}: \u{201c}{said}\u{201d}", j.title);
@@ -552,6 +650,70 @@ pub(crate) mod testutil {
             .id
     }
 
+    /// The JOBS mock's six jobs in place of the favour, each fixer in turn giving one:
+    /// a fetch and a delivery in hand (the package delivered), a copy on offer, a
+    /// plant done, a fetch late, a delivery dropped. Every fixer at standing 6.
+    pub fn six_jobs(st: &mut AppState) -> Vec<JobId> {
+        use super::{KindTag, generate};
+        st.jobs.list.clear();
+        let fixers: Vec<sim::PersonId> = st
+            .world
+            .as_ref()
+            .unwrap()
+            .people()
+            .iter()
+            .filter(|p| p.profession == "fixer")
+            .map(|p| p.id)
+            .collect();
+        let kinds = [
+            KindTag::Fetch,
+            KindTag::Deliver,
+            KindTag::Copy,
+            KindTag::Plant,
+            KindTag::Fetch,
+            KindTag::Deliver,
+        ];
+        let mut ids = Vec::new();
+        for (i, k) in kinds.into_iter().enumerate() {
+            let job = fixers
+                .iter()
+                .cycle()
+                .skip(i)
+                .take(fixers.len())
+                .find_map(|f| {
+                    st.jobs.fixer_mut(*f).standing = 6;
+                    (0..40).find_map(|n| generate(st, *f, k, n + i as u32))
+                })
+                .expect("a job of each kind");
+            ids.push(st.jobs.push(job));
+        }
+        for (i, id) in ids.iter().enumerate() {
+            if i != 2 {
+                crate::jobs::take_job(st, *id).unwrap();
+            }
+        }
+        st.jobs
+            .list
+            .iter_mut()
+            .find(|j| j.id == ids[1])
+            .unwrap()
+            .objectives[0]
+            .done = true;
+        st.jobs.hand_in(ids[3], 0);
+        // Late on its own: the minute would fail the fetch in hand with it.
+        let fixer = st.jobs.get(ids[4]).unwrap().fixer;
+        st.jobs.fixer_mut(fixer).standing += super::LOSS_LATE;
+        let standing = st.jobs.standing(fixer);
+        let j = st.jobs.list.iter_mut().find(|j| j.id == ids[4]).unwrap();
+        j.state = State::Failed;
+        j.closed = Some(super::Closed {
+            at: j.deadline.unwrap() + 1,
+            standing,
+        });
+        st.jobs.drop_job(ids[5], 0);
+        ids
+    }
+
     /// "The drop", in hand, one of three objectives done; and "First jack", done.
     /// For layout tests that want the pane and the tab filled.
     pub fn sample_jobs(st: &mut AppState) -> JobId {
@@ -579,6 +741,7 @@ pub(crate) mod testutil {
             taken: None,
             deadline: None,
             state: State::Offered,
+            closed: None,
         };
         let drop = st.jobs.push(job(
             "The drop",
@@ -592,7 +755,7 @@ pub(crate) mod testutil {
         st.jobs.list.last_mut().unwrap().objectives[0].done = true;
         let jack = st.jobs.push(job("First jack", &["Jack in", "Jack out"]));
         st.jobs.take(jack, 0);
-        st.jobs.hand_in(jack);
+        st.jobs.hand_in(jack, 0);
         drop
     }
 }
@@ -632,6 +795,7 @@ mod tests {
             taken: None,
             deadline: None,
             state: State::Offered,
+            closed: None,
         }
     }
 
@@ -675,7 +839,7 @@ mod tests {
         assert_eq!(jobs.taken(PersonId(7)).map(|j| j.id), Some(id));
         assert_eq!(jobs.active().map(|j| j.id), Some(id));
         assert!(!jobs.take(id, 100), "taken twice is refused");
-        assert!(jobs.drop_job(id));
+        assert!(jobs.drop_job(id, 0));
         assert_eq!(jobs.standing(PersonId(7)), LOSS_DROP);
         let id2 = jobs.push(fetch(7));
         jobs.take(id2, 200);
@@ -683,7 +847,7 @@ mod tests {
             place: flat(),
             pos: Pos::new(5, 5),
         });
-        assert_eq!(jobs.hand_in(id2), Some(PAY_FETCH));
+        assert_eq!(jobs.hand_in(id2, 0), Some(PAY_FETCH));
         assert_eq!(jobs.standing(PersonId(7)), LOSS_DROP + GAIN_DONE);
         assert!(jobs.get(id2).unwrap().objectives.iter().all(|o| o.done));
         assert!(jobs.active().is_none());
@@ -941,6 +1105,11 @@ mod tests {
         );
         assert_eq!(st.jobs.standing(st.jobs.get(id).unwrap().fixer), LOSS_LATE);
         assert!(st.log.latest().is_some_and(|e| e.text.contains("too late")));
+        assert_eq!(last.job, Some(id), "the late mail names its job");
+        assert_eq!(
+            st.jobs.get(id).unwrap().closed.map(|c| c.standing),
+            Some(LOSS_LATE)
+        );
     }
 
     #[test]
@@ -980,7 +1149,7 @@ mod tests {
         let mut st = state_home();
         let fx = a_fixer(&st);
         let welcome = st.jobs.active().unwrap().id;
-        st.jobs.drop_job(welcome);
+        st.jobs.drop_job(welcome, 0);
         st.jobs.fixer_mut(fx).standing = 0;
         let id = crate::jobs::offer(&mut st, fx).unwrap();
         let hours = st.jobs.get(id).unwrap().hours;
@@ -990,6 +1159,143 @@ mod tests {
         let line = format!("By {:02}:{:02}.", by / 60, by % 60);
         let body = &st.journal.mails.last().unwrap().body;
         assert!(body.contains(&line), "wanted {line:?} in {body:?}");
+        assert_eq!(st.journal.mails.last().unwrap().job, Some(id));
+    }
+
+    #[test]
+    fn standing_words() {
+        let words: Vec<&str> = [-3, -1, 0, 1, 2, 5, 6, 9]
+            .into_iter()
+            .map(standing_word)
+            .collect();
+        assert_eq!(
+            words,
+            [
+                "refuses you",
+                "cold",
+                "new",
+                "new",
+                "known",
+                "trusted",
+                "inner circle",
+                "inner circle"
+            ]
+        );
+    }
+
+    #[test]
+    fn opens_at_matches_allowed() {
+        for n in -4..=8 {
+            for k in [
+                KindTag::Fetch,
+                KindTag::Deliver,
+                KindTag::Copy,
+                KindTag::Plant,
+            ] {
+                assert_eq!(
+                    opens_at(k, false) <= n,
+                    Jobs::allowed(n).contains(&k),
+                    "{k:?} at {n}"
+                );
+            }
+        }
+        assert_eq!(opens_at(KindTag::Copy, true), VAULT_AT);
+    }
+
+    #[test]
+    fn in_shift_wraps() {
+        let night = (18 * 60, 4 * 60);
+        for t in [1080, 1439, 0, 239] {
+            assert!(in_shift(t, night), "{t}");
+        }
+        for t in [240, 600, 1079] {
+            assert!(!in_shift(t, night), "{t}");
+        }
+        assert!(in_shift(540, (540, 1200)));
+        assert!(!in_shift(1200, (540, 1200)));
+    }
+
+    /// The first game minute from `base` on whose clock reads `hm`.
+    fn at(base: u64, hm: u16) -> u64 {
+        (base..base + 24 * 60)
+            .find(|m| day_minute(*m) == hm)
+            .unwrap()
+    }
+
+    #[test]
+    fn corner_at_the_deadline() {
+        let night = (18 * 60, 4 * 60);
+        let taken = at(0, 22 * 60);
+        let due = taken + 12 * 60;
+        assert_eq!(day_minute(due), 10 * 60);
+        assert_eq!(
+            corner(taken + 200, due, night),
+            Corner::Leaves(at(taken, 4 * 60))
+        );
+        assert_eq!(corner(taken, at(taken, 3 * 60), night), Corner::Through);
+        assert_eq!(
+            corner(at(taken, 5 * 60), at(taken, 10 * 60), night),
+            Corner::Off
+        );
+    }
+
+    #[test]
+    fn shift_turn_counts_to_the_next_change() {
+        let night = (18 * 60, 4 * 60);
+        assert_eq!(shift_turn(at(0, 23 * 60 + 30), night), 270);
+        assert_eq!(shift_turn(at(0, 5 * 60), night), 13 * 60);
+    }
+
+    #[test]
+    fn closing_stamps_the_minute_and_the_standing() {
+        let mut jobs = Jobs::default();
+        let done = jobs.push(fetch(1));
+        jobs.take(done, 0);
+        assert_eq!(jobs.hand_in(done, 500), Some(PAY_FETCH));
+        assert_eq!(
+            jobs.get(done).unwrap().closed,
+            Some(Closed {
+                at: 500,
+                standing: GAIN_DONE
+            })
+        );
+        let dropped = jobs.push(fetch(2));
+        jobs.take(dropped, 0);
+        assert!(jobs.drop_job(dropped, 600));
+        assert_eq!(
+            jobs.get(dropped).unwrap().closed,
+            Some(Closed {
+                at: 600,
+                standing: LOSS_DROP
+            })
+        );
+        let late = jobs.push(fetch(3));
+        jobs.take(late, 0);
+        let after = HOURS_FETCH * 60 + 1;
+        assert_eq!(jobs.minute(after), vec![Late { job: late }]);
+        assert_eq!(
+            jobs.get(late).unwrap().closed,
+            Some(Closed {
+                at: after,
+                standing: LOSS_LATE
+            })
+        );
+        assert_eq!(jobs.get(done).unwrap().closed.unwrap().at, 500, "kept");
+    }
+
+    #[test]
+    fn an_unplanted_backdoor_says_so() {
+        let mut jobs = Jobs::default();
+        let mut plant = fetch(1);
+        plant.kind = Kind::Plant {
+            building: BuildingId(3),
+        };
+        let id = jobs.push(plant);
+        jobs.take(id, 0);
+        assert_eq!(
+            jobs.ready(id, &|_| false, &|_| true),
+            Err("the backdoor is not planted yet".to_string())
+        );
     }
 
     #[test]
@@ -1028,7 +1334,7 @@ mod tests {
         let p = st.jobs.push(plant);
         let seed = st.city.as_ref().unwrap().seed;
         st.backdoors.plant_net(pb, 1, seed, 0);
-        st.jobs.drop_job(f);
+        st.jobs.drop_job(f, 0);
         crate::jobs::take_job(&mut st, p).unwrap();
         assert!(
             st.jobs.get(p).unwrap().objectives[0].done,

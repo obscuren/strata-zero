@@ -519,7 +519,7 @@ pub fn locate(st: &AppState, t: Target) -> Resolved {
     }
 }
 
-fn person_name(st: &AppState, id: PersonId) -> String {
+pub(crate) fn person_name(st: &AppState, id: PersonId) -> String {
     st.world
         .as_ref()
         .and_then(|w| w.people().get(id.0 as usize))
@@ -556,7 +556,7 @@ pub fn label(st: &AppState, source: &Source) -> String {
 }
 
 /// The name of the district a tile lies in.
-fn district_at(st: &AppState, place: Place, pos: Pos) -> Option<String> {
+pub(crate) fn district_at(st: &AppState, place: Place, pos: Pos) -> Option<String> {
     let city = st.city.as_ref()?;
     let id = match place {
         Place::Stratum(k) => city.tile(k, pos)?.district?,
@@ -581,7 +581,7 @@ pub(crate) fn flat_tile(st: &AppState) -> Option<(Place, Pos)> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::app::{Screen, ScreenCmd};
     use crate::jobs::testutil::{a_fixer, state_home};
@@ -857,7 +857,7 @@ mod tests {
     }
 
     /// The home city, awake, you on the street outside the megablock's door.
-    pub(super) fn outside() -> AppState {
+    pub(crate) fn outside() -> AppState {
         let mut st = state_home();
         MapScreen::walking(&mut st);
         let b = st.home.unwrap().home.building;
@@ -1237,7 +1237,7 @@ mod tests {
         set(&mut st, job_source(id, 0)).unwrap();
         tick(&mut st);
         assert!(st.track.is_some());
-        assert!(st.jobs.drop_job(id));
+        assert!(st.jobs.drop_job(id, 0));
         let n = st.log.len();
         tick(&mut st);
         assert!(st.track.is_none());

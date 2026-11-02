@@ -65,6 +65,7 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
                 body: body.iter().map(|b| fill(st, b)).collect(),
                 read: false,
                 at: st.net.now(st),
+                job: None,
             };
             st.journal.mails.push(mail);
         }
