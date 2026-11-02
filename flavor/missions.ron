@@ -193,7 +193,7 @@ Story(
             Step(id: "tray", when: Ended("in"), then: [
                 Tray(from: "odile", tab: "castellan", title: "her tray",
                     line: "One piece, on his tab. The rest go back in the drawer.", sets: [
-                    TraySet(need: Skill("hacking"), items: ["neural_port", "feedback_fuse", "limbic_damper"]),
+                    TraySet(need: Skill("hacking"), items: ["neural_port", "target_lens", "subdermal_mesh"]),
                     TraySet(need: Skill("electronics"), items: ["grip_arm", "capacitor_ribs", "damper_cochlea"]),
                     TraySet(need: Skill("handguns"), items: ["target_lens", "adrenal_pump", "hardback_brace"]),
                     TraySet(need: Skill("blades"), items: ["piston_arm", "subdermal_mesh", "adrenal_pump"]),
@@ -371,7 +371,7 @@ Story(
                 Art("┌─────────────────────┐   housing  matte, no maker"),
                 Art("│ ░░░░░░░░░░░░░░░░░░░ │   data     locked · ICE 3"),
                 Art("└┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┘   contacts gold, worn bright"),
-                Art("  ╰── `{coz.spaced}` ──╯         mark     `{coz}` · burned in"),
+                Art("  ╰── `{coz.spaced}` ──╯           mark     `{coz}` · burned in"),
                 Blank,
                 You("{coz}. Fixers sign their shards."),
             ]),

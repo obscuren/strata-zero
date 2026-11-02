@@ -2474,6 +2474,7 @@ fn doctor_shots() {
 
         // Seren's line through the set.
         let mut st = seren_has_written();
+        st.missions.daze = None;
         let map = by_the_set(&mut st);
         world_seconds(&mut st, 3);
         shot_stack(&name("seren_set"), &st, &[&map], size);
@@ -2509,7 +2510,13 @@ fn doctor_shots() {
         at_the_doctor(&mut st);
         scene_is(&mut st, "odile");
         scene_at(&mut st, 1);
+        st.missions.daze = None;
         let map = MapScreen::walking(&mut st);
+        let drawn = crate::screens::testutil::buffer_text(&draw_stack(&st, &[&map], size));
+        assert!(
+            drawn.contains('▴') || drawn.contains('▾'),
+            "her bubble is anchored by a tail"
+        );
         shot_stack(&name("odile"), &st, &[&map], size);
 
         // Her tray, once the scene is out.

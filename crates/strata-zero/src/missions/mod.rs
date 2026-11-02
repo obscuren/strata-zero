@@ -2252,7 +2252,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             tray,
-            ["neural_port", "feedback_fuse", "limbic_damper"].map(ItemId::new),
+            ["neural_port", "target_lens", "subdermal_mesh"].map(ItemId::new),
             "a runner's tray"
         );
         // The hook: the ledger's owner, then his line.

@@ -262,7 +262,7 @@ readings: {
             Art("┌─────────────────────┐   housing  matte, no maker"),
             Art("│ ░░░░░░░░░░░░░░░░░░░ │   data     locked · ICE 3"),
             Art("└┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┘   contacts gold, worn bright"),
-            Art("  ╰── `C O Z` ──╯         mark     `{coz}` · burned in"),
+            Art("  ╰── `C O Z` ──╯           mark     `{coz}` · burned in"),
             Blank,
             You("{coz}. Fixers sign their shards."),
         ]),
@@ -363,7 +363,7 @@ The sets (`items` in this order; ids from `flavor/content.ron`):
 
 | need | pieces |
 |---|---|
-| `Skill("hacking")` | neural_port, feedback_fuse, limbic_damper |
+| `Skill("hacking")` | neural_port, target_lens, subdermal_mesh |
 | `Skill("electronics")` | grip_arm, capacitor_ribs, damper_cochlea |
 | `Skill("handguns")` | target_lens, adrenal_pump, hardback_brace |
 | `Skill("blades")` | piston_arm, subdermal_mesh, adrenal_pump |
