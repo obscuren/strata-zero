@@ -1907,7 +1907,7 @@ fn stand_on(st: &mut AppState, at: Pos) {
 
 /// The street by the body, with the walk from home remembered (seen every other step)
 /// and the player back outside the home megablock's door.
-fn walked_city() -> (AppState, Vec<Pos>) {
+pub(crate) fn walked_city() -> (AppState, Vec<Pos>) {
     let (mut st, _) = street_by_the_body();
     let route = home_to_body(&st);
     for at in route.iter().step_by(2) {
@@ -1923,7 +1923,7 @@ fn story_track(st: &AppState) -> Option<crate::track::Source> {
 }
 
 /// `walked_city` with the clinic named Miracorp Tattoo tracked.
-fn tracked_city() -> (AppState, MapScreen) {
+pub(crate) fn tracked_city() -> (AppState, MapScreen) {
     let (mut st, _) = walked_city();
     let l = crate::track::listings::listings(&st, StratumKind::Street)
         .into_iter()
@@ -1937,7 +1937,7 @@ fn tracked_city() -> (AppState, MapScreen) {
 }
 
 /// `tracked_city`, back in your flat on 18F where the game starts.
-fn tracked_from_the_flat() -> (AppState, MapScreen) {
+pub(crate) fn tracked_from_the_flat() -> (AppState, MapScreen) {
     let (mut st, _) = tracked_city();
     let rig = st.home.unwrap();
     let p = st.player.as_mut().unwrap();

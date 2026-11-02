@@ -7,7 +7,7 @@ use crate::track::listings::{self, Kind, Listing, source_of};
 use crate::track::overlay::{from_goal, glow, mix, ripple_px};
 use crate::track::route::Leg;
 use crate::track::{Pulse, is_tracked, leg_now, pulses_now, target_now};
-use crate::ui::chrome::{CYAN, CYAN_RGB, DIM, MAGENTA_RGB, PANEL_BG};
+use crate::ui::chrome::{CYAN, CYAN_RGB, DIM, MAGENTA_RGB, PANEL_BG, PANEL_BG_RGB};
 use citygen::{City, Place, Pos, Rect as TileRect, Size, StratumKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -108,7 +108,7 @@ fn pixels_of(st: &AppState, city: &City, k: StratumKind, l: &MapLayout) -> Pixel
     let (w, h) = (l.area.width as i32, 2 * l.area.height as i32);
     Pixels::new(w, h, |x, y| {
         let (x0, y0) = (l.origin.x + x * l.s, l.origin.y + y * l.s);
-        stratum_px(city, &st.style, k, x0, y0, l.s)
+        stratum_px(city, &st.style, k, x0, y0, l.s).unwrap_or(PANEL_BG_RGB)
     })
 }
 
@@ -437,7 +437,9 @@ mod tests {
     /// The colour of the `s` × `s` pixel at tile (`x0`, `y0`) of a stratum (spec 7).
     fn pixel(st: &AppState, stratum: StratumKind, x0: i32, y0: i32, s: i32) -> Color {
         match st.city.as_ref() {
-            Some(city) => stratum_px(city, &st.style, stratum, x0, y0, s).to_color(),
+            Some(city) => stratum_px(city, &st.style, stratum, x0, y0, s)
+                .unwrap_or(PANEL_BG_RGB)
+                .to_color(),
             None => PANEL_BG,
         }
     }

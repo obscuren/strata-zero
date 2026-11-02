@@ -3415,6 +3415,7 @@ impl Screen for MapScreen {
                 .as_ref()
                 .filter(|p| p.place == self.place)
                 .map(|p| p.pos),
+            track: crate::track::mini::map_track(st, self.place),
             style: &st.style,
             content: &st.content,
             ground: &st.ground,
@@ -5744,7 +5745,20 @@ mod tests {
         st.tick += 200;
         let text = draw_screen(&s, &st, 100, 30);
         assert!(text.contains("THE DROP"), "{text}");
-        assert!(text.contains("· Street "), "minimap coordinate row: {text}");
+        // The minimap's bottom row names the district you stand in.
+        let city = st.city.as_ref().unwrap();
+        let at = st.player.as_ref().unwrap().pos;
+        let d = city
+            .tile(StratumKind::Street, at)
+            .and_then(|t| t.district)
+            .map(|d| city.district(d).name.clone())
+            .expect("a district under you");
+        let side = |l: &str| l.chars().rev().take(40).collect::<Vec<_>>();
+        let named = text.lines().any(|l| {
+            let s: String = side(l).into_iter().rev().collect();
+            s.trim_end() == format!(" {d}")
+        });
+        assert!(named, "minimap bottom row: {text}");
         assert!(text.contains("took it"), "log pane: {text}");
     }
 

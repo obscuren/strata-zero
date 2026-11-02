@@ -11,6 +11,7 @@ use route::{Leg, NoLeg};
 use sim::{PersonId, Whereabouts};
 
 pub mod listings;
+pub mod mini;
 pub mod overlay;
 pub mod route;
 pub mod ui;

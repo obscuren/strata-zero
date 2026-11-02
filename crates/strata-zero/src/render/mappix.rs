@@ -3,7 +3,6 @@
 
 use crate::render::Rgb;
 use crate::render::style::StylePack;
-use crate::ui::chrome::PANEL_BG_RGB;
 use citygen::{City, DistrictId, Pos, StratumKind, Terrain, Tile};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -30,12 +29,18 @@ enum Class {
 }
 
 /// The colour of the `s` × `s` pixel at tile (`x0`, `y0`) of stratum `k`: its class in
-/// its commonest district's theme. On the Net, walls and gates are its blocks, lanes its
+/// its commonest district's theme; none where there is nothing (off the stratum, open
+/// air). On the Net, walls, gates and the floors inside them are its blocks, lanes its
 /// roads, and the open lattice is nothing.
-pub fn stratum_px(city: &City, style: &StylePack, k: StratumKind, x0: i32, y0: i32, s: i32) -> Rgb {
-    let Some(stratum) = city.stratum(k) else {
-        return PANEL_BG_RGB;
-    };
+pub fn stratum_px(
+    city: &City,
+    style: &StylePack,
+    k: StratumKind,
+    x0: i32,
+    y0: i32,
+    s: i32,
+) -> Option<Rgb> {
+    let stratum = city.stratum(k)?;
     let (mut n, mut solid, mut water, mut road, mut walk) = (0, 0, 0, false, false);
     // The districts met, and how often; a pixel meets few.
     let mut districts: [(Option<DistrictId>, u32); 8] = [(None, 0); 8];
@@ -53,7 +58,8 @@ pub fn stratum_px(city: &City, style: &StylePack, k: StratumKind, x0: i32, y0: i
                 | Terrain::Rooftop
                 | Terrain::Door
                 | Terrain::NetWall
-                | Terrain::NetGate => solid += 1,
+                | Terrain::NetGate
+                | Terrain::NetFloor => solid += 1,
                 Terrain::Water | Terrain::Sewage => water += 1,
                 Terrain::Road | Terrain::NetLane => road = true,
                 _ => {}
@@ -77,7 +83,7 @@ pub fn stratum_px(city: &City, style: &StylePack, k: StratumKind, x0: i32, y0: i
     } else if n > 0 && water * 2 >= n {
         Class::Water
     } else {
-        return PANEL_BG_RGB;
+        return None;
     };
     // The commonest, the first met on a tie.
     let district = districts
@@ -90,13 +96,13 @@ pub fn stratum_px(city: &City, style: &StylePack, k: StratumKind, x0: i32, y0: i
     let theme = district
         .and_then(|d| city.district_opt(d))
         .map(|d| style.theme_or_neutral(Some(d.theme)));
-    match (class, theme) {
+    Some(match (class, theme) {
         (Class::Water, _) => WATER,
         (_, None) => NEUTRAL,
         (Class::Building, Some(t)) => t.roof,
         (Class::Road, Some(t)) => t.road.scale(1.9),
         (Class::Walk, Some(t)) => t.sidewalk.scale(1.15),
-    }
+    })
 }
 
 /// Pixels two to a cell, row by row.
@@ -123,6 +129,11 @@ impl Pixels {
 
     pub fn height(&self) -> i32 {
         self.h
+    }
+
+    pub fn get(&self, (x, y): (i32, i32)) -> Option<Rgb> {
+        ((0..self.w).contains(&x) && (0..self.h).contains(&y))
+            .then(|| self.v[(y * self.w + x) as usize])
     }
 
     pub fn get_mut(&mut self, (x, y): (i32, i32)) -> Option<&mut Rgb> {
@@ -190,17 +201,17 @@ mod tests {
         let lattice = find(&city, net, |t| t.terrain == Terrain::NetGrid).expect("a lattice");
         assert_eq!(
             stratum_px(&city, &style, net, lattice.x, lattice.y, 1),
-            PANEL_BG_RGB
+            None
         );
         let lane = find(&city, net, |t| t.terrain == Terrain::NetLane).expect("a lane");
         assert_eq!(
             stratum_px(&city, &style, net, lane.x, lane.y, 1),
-            theme(lane).road.scale(1.9)
+            Some(theme(lane).road.scale(1.9))
         );
         if let Some(wall) = find(&city, net, |t| t.terrain == Terrain::NetWall) {
             assert_eq!(
                 stratum_px(&city, &style, net, wall.x, wall.y, 1),
-                theme(wall).roof
+                Some(theme(wall).roof)
             );
         }
     }
