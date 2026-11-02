@@ -352,8 +352,9 @@ item or no jacket was worn then, and Odile says neither jacket line.
   leaves the tray pending: talking to the `from` role opens it again.
 - **The tab:** `Missions.tab = Some(Tab { doc: PersonId, item: ItemId, payer: String,
   spent: bool })`. In the chair of that doc, installing that item costs nothing: the
-  fee line reads `fee TAB · CASTELLAN · ¤N on him` (payer's name upper-cased, N the
-  fee that would have been charged, AMBER bold as the mock). The install marks it
+  fee line reads `fee TAB · CASTELLAN · ¤N on the tab` (payer's name upper-cased, N the
+  fee that would have been charged, AMBER bold as the mock; the mock's "on him" would
+  need a pronoun the code doesn't have). The install marks it
   spent; any other piece pays as usual.
 - **`Chromed(role)`** fires once the tab with that role's person as doc is spent and
   you are out of the chair.
