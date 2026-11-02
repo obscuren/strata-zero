@@ -681,17 +681,21 @@ fn pad(
     }
 }
 
-/// Where an actor stands: you, or a visitor on the map.
+/// Where an actor stands: you, a visitor on the map, or a cast person on your place
+/// (the street, or your floor) where it draws them.
 fn spot(st: &AppState, who: &str) -> Option<(Place, Pos)> {
+    let you = st.player.as_ref().map(|p| (p.place, p.pos));
     if who == YOU {
-        st.player.as_ref().map(|p| (p.place, p.pos))
-    } else {
-        st.missions
-            .visitors
-            .iter()
-            .find(|v| v.role == who)
-            .map(|v| (v.place, v.pos))
+        return you;
     }
+    let visitor = st.missions.visitors.iter().find(|v| v.role == who);
+    if let Some(v) = visitor {
+        return Some((v.place, v.pos));
+    }
+    let (here, _) = you?;
+    super::person_of(st, who)
+        .and_then(|id| crate::interiors::drawn_at(st, id))
+        .filter(|(place, _)| *place == here)
 }
 
 /// Another actor than `who` stands on the tile.
@@ -1645,5 +1649,42 @@ pub(crate) mod tests {
         assert_eq!(beat(&st), 1, "over at once");
         let out = at(&st, &Mark::HomeOutside);
         assert_eq!(at(&st, &Mark::Role("seren".into())), out);
+    }
+
+    /// Plays, from the console, a scene "s" of one line said by the role `doc`: the line.
+    fn the_doc_says(st: &mut AppState) -> Line {
+        st.book = super::super::tests::doc_book(
+            super::super::tests::IDLE,
+            &format!(
+                r#""s": Scene(title: "S", look: Bubbles, pace: {SLOW},
+                    beats: [Say(who: "doc", text: "He sends me strays.")])"#
+            ),
+        );
+        play(st, "s");
+        tick(st);
+        running(st).and_then(|r| r.line()).expect("a line").clone()
+    }
+
+    #[test]
+    fn a_doc_line_anchors_beside_her() {
+        let (mut st, b, level, _) = crate::clinic::testutil::inside();
+        let doc = super::super::tests::cast_doc(&mut st, b);
+        let line = the_doc_says(&mut st);
+        assert_eq!(line.label, "Doc Vance");
+        let her = crate::interiors::drawn_at(&st, doc).expect("drawn on her floor");
+        assert_eq!(her.0, Place::Floor { building: b, level });
+        assert_eq!(line.anchor, Some(her));
+    }
+
+    #[test]
+    fn a_line_by_someone_elsewhere_goes_to_the_corner() {
+        // You on the street, the doc in at the chair.
+        let (mut st, b, _, _) = crate::clinic::testutil::outside(crate::clinic::testutil::NIGHT);
+        let doc = super::super::tests::cast_doc(&mut st, b);
+        assert!(crate::interiors::drawn_at(&st, doc).is_some());
+        assert_eq!(the_doc_says(&mut st).anchor, None);
+        // Nobody cast: the line is said all the same, to the corner.
+        let (mut st, _, _, _) = crate::clinic::testutil::inside();
+        assert_eq!(the_doc_says(&mut st).anchor, None);
     }
 }

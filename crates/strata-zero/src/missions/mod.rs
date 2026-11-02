@@ -391,7 +391,8 @@ fn sees(st: &AppState, role: &str, within: i32) -> bool {
     })
 }
 
-/// The player is at the place: inside their flat, or on the street by a role's work.
+/// The player is at the place: inside their flat, on the street by a role's work, or
+/// beside the role's person.
 fn at(st: &AppState, place: &Where) -> bool {
     let Some(p) = st.player.as_ref() else {
         return false;
@@ -412,6 +413,10 @@ fn at(st: &AppState, place: &Where) -> bool {
                     .and_then(|id| cast::work_tile(st, id))
                     .is_some_and(|t| p.pos.manhattan(t) <= *within)
         }
+        // On the street or a floor, wherever the role's person is drawn.
+        Where::By { role, within } => person_of(st, role)
+            .and_then(|id| crate::interiors::drawn_at(st, id))
+            .is_some_and(|(place, pos)| p.place == place && p.pos.manhattan(pos) <= *within),
     }
 }
 
@@ -1760,5 +1765,91 @@ pub(crate) mod tests {
         assert_eq!(both(&st), (true, false));
         st.character.wear(game::Slot::Torso, jacket, None);
         assert_eq!(both(&st), (false, true));
+    }
+
+    /// A book whose one role, `doc`, is a ripperdoc, with these missions and scenes.
+    pub(crate) fn doc_book(missions: &str, scenes: &str) -> Book {
+        Book::parse(&format!(
+            r#"Story(
+                cast: {{
+                    "doc": Role(name: "Doc Vance", title: "ripperdoc",
+                        pick: Nearest("ripperdoc"), face: None),
+                }},
+                faces: {{
+                    "silhouette": Face(rows: ["................", "................"], eye: (0, 0, 0)),
+                }},
+                missions: [{missions}],
+                scenes: {{ {scenes} }},
+            )"#
+        ))
+        .unwrap()
+    }
+
+    /// A mission that does nothing, for a book that only needs its scenes.
+    pub(crate) const IDLE: &str = r#"Mission(id: "m", title: "M", from: "doc", steps: [
+        Step(id: "a", when: NewGame, then: [Log("hi")]),
+    ])"#;
+
+    /// Casts `doc` on the clinic's doc at work.
+    pub(crate) fn cast_doc(st: &mut AppState, b: citygen::BuildingId) -> PersonId {
+        let doc = crate::clinic::doc_at_work(st, b).expect("the doc is in");
+        st.missions.cast.insert("doc".into(), doc);
+        doc
+    }
+
+    /// The street tile outside a building's street door.
+    pub(crate) fn outside_door(st: &AppState, b: citygen::BuildingId) -> Pos {
+        let c = st.city.as_ref().unwrap();
+        let foot = c.building_opt(b).unwrap().footprint;
+        let (_, door) = c
+            .portals(b)
+            .into_iter()
+            .find(|(k, _)| *k == StratumKind::Street)
+            .unwrap();
+        door.neighbors4()
+            .find(|n| !foot.contains(*n) && c.walkable(StratumKind::Street, *n))
+            .unwrap()
+    }
+
+    #[test]
+    fn by_holds_beside_a_doc_at_work_and_not_at_the_front_door() {
+        let (mut st, b, _, _) = crate::clinic::testutil::inside();
+        st.book = doc_book(IDLE, "");
+        let doc = cast_doc(&mut st, b);
+        let by = |within| Where::By {
+            role: "doc".into(),
+            within,
+        };
+        assert!(at(&st, &by(4)), "beside the chair, beside her");
+        assert!(!at(&st, &by(0)), "not on her tile");
+        // At the front door on the street floor: a room or a floor away from her.
+        let city = st.city.clone().unwrap();
+        let entrance = st
+            .interiors
+            .plan(&city, b)
+            .unwrap()
+            .clinic
+            .unwrap()
+            .entrance;
+        st.interiors.ensure(&city, b, 0).unwrap();
+        st.player = Some(Player::at(
+            Place::Floor {
+                building: b,
+                level: 0,
+            },
+            entrance,
+        ));
+        assert!(!at(&st, &by(4)));
+        // Out on the street, beside her where she stands.
+        let out = outside_door(&st, b);
+        st.world.as_mut().unwrap().park(doc, out);
+        on_street(&mut st, out.offset(0, 1));
+        assert!(at(&st, &by(4)));
+        on_street(&mut st, out.offset(5, 0));
+        assert!(!at(&st, &by(4)));
+        // Nobody cast, nobody beside.
+        st.missions.cast.clear();
+        on_street(&mut st, out.offset(0, 1));
+        assert!(!at(&st, &by(4)));
     }
 }

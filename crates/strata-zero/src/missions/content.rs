@@ -183,6 +183,8 @@ pub enum Mark {
     HomeBed,
     HomeFurniture(citygen::Furniture),
     Beside(Box<Mark>),
+    /// The operating chair in the role's work building, on its floor.
+    Chair(String),
 }
 
 /// The code a scripted keypad types.
@@ -325,6 +327,12 @@ pub enum Where {
     },
     /// Home: in your flat, or outside it within one tile of its door (the door included).
     HomeDoor,
+    /// Within `within` tiles (Manhattan) of the role's person on the same place: the
+    /// street where the sim has them, or the floor that draws them.
+    By {
+        role: String,
+        within: i32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -425,9 +433,33 @@ impl Trigger {
     fn named_roles(&self) -> Vec<&str> {
         match self {
             Trigger::Sees { role, .. }
-            | Trigger::At(Where::Work { role, .. })
+            | Trigger::At(Where::Work { role, .. } | Where::By { role, .. })
             | Trigger::Talk(role) => vec![role],
             _ => vec![],
+        }
+    }
+}
+
+impl Beat {
+    /// The marks the beat points at.
+    fn marks(&self) -> Vec<&Mark> {
+        match self {
+            Beat::Say { at, .. } => at.iter().collect(),
+            Beat::Walk { to, .. } => vec![to],
+            Beat::Keypad { door, .. } => vec![door],
+            Beat::Door { at, .. } | Beat::Camera(at) | Beat::Arrive { at, .. } => vec![at],
+            Beat::Stage(_) | Beat::Wait(_) | Beat::Leave(_) | Beat::Lights(_) => vec![],
+        }
+    }
+}
+
+impl Mark {
+    /// The role the mark needs a person in the city for: a chair's doc.
+    fn cast_role(&self) -> Option<&str> {
+        match self {
+            Mark::Chair(role) => Some(role),
+            Mark::Beside(inner) => inner.cast_role(),
+            _ => None,
         }
     }
 }
@@ -538,21 +570,23 @@ impl Book {
     }
 
     /// The roles a mission needs the sim to cast: those a trigger waits on, an effect acts
-    /// on, a scene's speaker or a news item is about, and any whose place, district or
-    /// hours a text asks. A bare name needs nobody. Visitors and `you` are never cast.
+    /// on, a mark lies by, a scene's speaker or a news item is about, and any whose
+    /// place, district or hours a text asks. A bare name needs nobody. Visitors and `you`
+    /// are never cast.
     pub fn needs_cast(&self, m: &Mission) -> BTreeSet<String> {
         let mut roles = BTreeSet::new();
         for step in &m.steps {
             roles.extend(step.when.named_roles().into_iter().map(String::from));
             for e in &step.then {
-                // One arm per effect that acts on a person.
-                if let Effect::Dead { role, .. } = e {
-                    roles.insert(role.clone());
-                }
                 for t in e.texts() {
                     roles.extend(placed(t));
                 }
+                // One arm per effect that acts on a person or points at a mark.
                 match e {
+                    Effect::Dead { role, .. } => {
+                        roles.insert(role.clone());
+                    }
+                    Effect::Arrive { at, .. } => roles.extend(at.cast_role().map(String::from)),
                     Effect::Scene(id) => self.scene_needs(id, &mut roles),
                     Effect::News(id) => {
                         if let Some(news) = self.news.get(id) {
@@ -572,7 +606,7 @@ impl Book {
             .collect()
     }
 
-    /// The roles a scene and the scenes after it need: speakers and placed slots.
+    /// The roles a scene and the scenes after it need: speakers, marks and placed slots.
     fn scene_needs(&self, id: &str, roles: &mut BTreeSet<String>) {
         let mut next = Some(id);
         // A `next` chain is checked to end, but a bound costs nothing.
@@ -581,6 +615,12 @@ impl Book {
                 return;
             };
             for beat in &scene.beats {
+                roles.extend(
+                    beat.marks()
+                        .into_iter()
+                        .filter_map(Mark::cast_role)
+                        .map(String::from),
+                );
                 match beat {
                     Beat::Say {
                         who, text, label, ..
@@ -660,10 +700,12 @@ impl Book {
         }
     }
 
-    /// A mark: its roles are visitors, `HomeInside` goes in at least a tile.
+    /// A mark: its roles are visitors (a chair's is in the cast), `HomeInside` goes in at
+    /// least a tile.
     fn check_mark(&self, place: &str, mark: &Mark) -> Result<(), BookError> {
         match mark {
             Mark::Role(role) => self.check_visitor(place, role),
+            Mark::Chair(role) => self.check_role(place, role),
             Mark::HomeInside(0) => Err(BookError::BadNumber {
                 place: place.into(),
                 what: "HomeInside(0) is the door itself".into(),
@@ -1541,6 +1583,42 @@ mod tests {
         let seren =
             r#"Step(id: "a", when: NewGame, then: [Feed(from: "zed", text: ["x"], close: "y")])"#;
         assert_eq!(needed(seren), none);
+    }
+
+    #[test]
+    fn beside_someone_and_their_chair_need_them_cast() {
+        let zed: BTreeSet<String> = ["zed"].map(String::from).into();
+        let by = r#"Step(id: "a", when: At(By(role: "zed", within: 4)), then: [Log("x")])"#;
+        assert_eq!(needed(by), zed);
+        // A mark in an effect, inside `Beside` too.
+        let arrive = r#"Step(id: "a", when: NewGame,
+            then: [Arrive(role: "seren", at: Beside(Chair("zed")))])"#;
+        assert_eq!(needed(arrive), zed);
+        // A mark in a scene's beat.
+        let doc =
+            r#""zed": Role(name: "Zed", title: "doc", pick: Nearest("ripperdoc"), face: None),"#;
+        let pace = "Pace(type: 45, walk: 0.3, hold: None)";
+        let b = tiny(
+            doc,
+            r#"Step(id: "a", when: NewGame, then: [Scene("s")])"#,
+            &scene_with(
+                pace,
+                r#"Say(who: "seren", text: "hi", at: Some(Chair("zed")))"#,
+            ),
+        )
+        .unwrap();
+        assert_eq!(b.needs_cast(&b.missions[0]), zed);
+    }
+
+    #[test]
+    fn beside_and_the_chair_name_a_known_role() {
+        let by = r#"Step(id: "a", when: At(By(role: "nobody", within: 4)), then: [Log("x")])"#;
+        assert!(matches!(with_steps(by), Err(BookError::UnknownRole { .. })));
+        assert!(matches!(
+            scened(r#"Camera(Chair("nobody"))"#),
+            Err(BookError::UnknownRole { .. })
+        ));
+        assert!(scened(r#"Camera(Chair("marlo"))"#).is_ok());
     }
 
     #[test]
