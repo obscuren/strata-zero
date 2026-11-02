@@ -2048,6 +2048,65 @@ fn atlas_folded() {
     atlas_shot("atlas_folded", &[KeyCode::Char('f')], false);
 }
 
+/// The minimap on the street, Miracorp Tattoo tracked: the close up, the walk, the
+/// clinic's `+`, its distance and bearing.
+#[test]
+#[ignore]
+fn minimap_street() {
+    for (w, h) in BOTH {
+        let (mut st, map) = tracked_city();
+        fly(&mut st, None, 14);
+        shot_stack(&format!("minimap_street_{w}x{h}"), &st, &[&map], (w, h));
+    }
+}
+
+/// The minimap in your flat on 18F, the same track: the floor plan, the walk to the
+/// lift, the shaft lit down to L.
+#[test]
+#[ignore]
+fn minimap_flat() {
+    for (w, h) in BOTH {
+        let (mut st, map) = tracked_from_the_flat();
+        fly(&mut st, None, 14);
+        shot_stack(&format!("minimap_flat_{w}x{h}"), &st, &[&map], (w, h));
+    }
+}
+
+/// The minimap inside a building of one floor: the plan alone, no shaft.
+#[test]
+#[ignore]
+fn minimap_one_floor() {
+    for (w, h) in BOTH {
+        let (mut st, _) = tracked_city();
+        let city = st.city.clone().unwrap();
+        let b = city
+            .buildings
+            .iter()
+            .filter(|b| b.kind.is_closed())
+            .find(|b| {
+                st.interiors.ensure(&city, b.id, 0).is_some()
+                    && st
+                        .interiors
+                        .plan_of(b.id)
+                        .is_some_and(|p| p.lowest == p.top)
+            })
+            .expect("a one-floor building")
+            .id;
+        let (_, floor) = st.interiors.floor(b, 0).unwrap();
+        let door = floor.exits.first().map(|e| floor.doorstep(e)).unwrap();
+        let p = st.player.as_mut().unwrap();
+        p.place = Place::Floor {
+            building: b,
+            level: 0,
+        };
+        p.pos = door;
+        crate::track::tick(&mut st);
+        let map = MapScreen::walking(&mut st);
+        fly(&mut st, None, 14);
+        shot_stack(&format!("minimap_one_floor_{w}x{h}"), &st, &[&map], (w, h));
+    }
+}
+
 /// The street with the walk to Marlo's body, `back` tiles of it still ahead, `flying`
 /// ticks after it was tracked.
 fn street_walk(name: &str, back: usize, flying: u64) {

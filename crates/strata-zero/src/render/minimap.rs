@@ -307,15 +307,20 @@ impl Minimap<'_> {
         let colours = PlanColours::of(self.style.theme_or_neutral(Some(plan.theme)));
         let room = |p: Pos| rooms.get(p).copied().flatten();
         let (px, v) = self.plan(&floor.tiles, room, &colours, plan_area, buf);
-        if floor
+        // The lift wins a cell it shares with the stairs, unless the walk takes the stairs.
+        let stairs = floor
             .tiles
             .get(plan.stair)
             .is_some_and(|t| t.terrain == Terrain::Stair)
-        {
-            mark(buf, &px, &v, plan.stair, '≡', DIM, false);
-        }
-        if let Some(lift) = plan.lift {
-            mark(buf, &px, &v, lift, '⇅', CORNER, false);
+            .then_some((plan.stair, '≡', DIM));
+        let lift = plan.lift.map(|l| (l, '⇅', CORNER));
+        let ways = if self.track.walk.last() == Some(&plan.stair) {
+            [lift, stairs]
+        } else {
+            [stairs, lift]
+        };
+        for (at, ch, fg) in ways.into_iter().flatten() {
+            mark(buf, &px, &v, at, ch, fg, false);
         }
         for r in floor.rooms.iter().filter(|r| r.kind == RoomKind::Home) {
             let inside = self.player.is_some_and(|p| r.rect.contains(p));
@@ -1009,5 +1014,27 @@ mod tests {
             let bottom = text(&buf, 12, 0..40);
             assert!(bottom.starts_with(&format!(" {name}  ")), "{bottom:?}");
         }
+    }
+
+    #[test]
+    fn locked_lifts_send_you_down_the_stairs() {
+        let (mut st, _) = crate::screens::shots::tracked_from_the_flat();
+        let (_, plan, level) = flat_view(&st, 12);
+        let now = st.net.now(&st);
+        st.net.trace(plan.building).add(game::ALARM_HEAT, now);
+        st.net.alarm(plan.building, now);
+        let source = st.track.as_ref().unwrap().source;
+        crate::track::set(&mut st, source).unwrap();
+        let leg = crate::track::leg_now(&st).unwrap().unwrap();
+        assert!(matches!(
+            leg.through,
+            crate::track::route::Through::Stairs { to: 0, .. }
+        ));
+        let buf = inside(&st, 40, 13);
+        assert!(find(&buf, "≡").is_some(), "the stairs win their cell");
+        let rows = shaft_rows(plan.lowest, plan.top, level, Some(0), 12);
+        let top = (12 - rows.len() as u16) / 2;
+        let lobby = top + rows.iter().position(|r| *r == Some(0)).unwrap() as u16;
+        assert_eq!(buf[(38, lobby)].symbol(), "⌖", "the stairs want L too");
     }
 }
