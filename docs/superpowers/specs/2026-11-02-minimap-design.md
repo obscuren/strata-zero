@@ -106,7 +106,8 @@ What the map shows follows the map the sidebar describes (`SidebarView::map`):
   up, the marker is drawn on the close up's border instead, where the line from the centre
   to the target leaves the map. When it isn't on this map, nothing is drawn; the walk and
   the bottom row show the way.
-- **You.** `@` in white, bold, on your cell, drawn last so it wins its cell.
+- **You.** `@` in white on your cell, drawn last so it wins its cell. Not bold: the
+  bold `@` is the one in the main view (a test holds the player to one).
 - A glyph over a half-block cell takes as its background the colour of the pixel its
   tile falls in, so the ground under it stays right.
 
@@ -139,9 +140,10 @@ megablock's 60 × 60 floor fits at 3 in a full pane and follows you in a squeeze
 
 **On it**, in this order, so the later ones win a shared cell:
 - the walk to the lift (or the stairs, or the door out) in the tracking cyan, as in §2;
-- the stairs `≡` in `DIM` at `FloorPlan::stair`;
+- the stairs `≡` in `DIM` at `FloorPlan::stair`, where that tile really is a stair;
 - the lift `⇅` in light grey (230, 230, 240) at `FloorPlan::lift`, when the building
-  has one;
+  has one. The lift wins a cell it shares with the stairs, unless the walk goes to the
+  stairs (no lift, or the lifts locked), when the stairs win it;
 - your home `⌂` in the home green (124, 255, 154), bold, at the door of a `Home` room on
   this floor, unless you are in it;
 - the target's marker, when the target is on this floor (§5);
@@ -161,23 +163,26 @@ vertically in the map's rows.
 - Your floor: the row's cells right of the `│` take the selection ground (20, 32, 44);
   the name is bold white, the marker `@` white.
 - The floor the track wants (`track::floor_wanted`, when it isn't yours): the name bold
-  cyan, the marker `⌖` cyan.
+  cyan, the marker `⌖` cyan. A stairs leg carries the floor it goes to
+  (`Through::Stairs { up, to }`), so the stairs want a floor as the lift does, here and
+  on the lift panel.
 - The floors (and gap rows) strictly between yours and the wanted one: the marker
   column is a bold cyan `┃`, the shaft lit.
 - Any other floor: the name in `DIM`, the marker column a `│` in `FAINT`.
 
 Which floors get a row, as many as fit the map's rows: yours and the wanted one always;
 then the top, then the bottom; then the floors next to yours and next to the wanted one;
-then those two away from yours. Each is added only if the strip, gap rows and all, still
-fits; one that doesn't fit is skipped and the next tried. In a full pane (12 map rows) a
-27-floor megablock shows `27F ┊ 20F 19F 18F 17F 16F ┊ 1F L B1`; a short building shows
-every floor.
+then those two away from yours; then every other floor, nearest yours first (the upper
+on a tie). Each is added only if the strip, gap rows and all, still fits; one that
+doesn't fit is skipped and the next tried. So a building whose floors all fit shows
+every floor. In a full pane (12 map rows) a 27-floor megablock wanting L shows
+`27F ┊ 21F 20F 19F 18F 17F 16F ┊ 1F L B1`; in a squeezed one (5 rows) `┊ 18F ┊ L B1`.
 
 ### 4. The Net and constructs
 
 On the Net grid (`StratumKind::Net`), the close up of §2 with the Net's tiles classed for
-it: `NetWall` and `NetGate` are building, `NetLane` is road, and the open lattice
-(`NetGrid`) is the panel ground, so the lanes and the gates read as streets and blocks.
+it: `NetWall`, `NetGate` and `NetFloor` are building, `NetLane` is road, and the open
+lattice (`NetGrid`) is the panel ground, so the lanes and the gates read as streets and blocks.
 The deck MAP never shows the Net, so this classing changes nothing there.
 
 In a construct, the plan of §3 over the construct's tiles: `NetWall` is wall, every
@@ -196,7 +201,8 @@ The last row of the pane, on the sidebar's ground, one cell in from each side.
 - On a floor: the floor's name in bold white (`18F`), then ` · ` and the room you are in
   (`home 1814`, `corridor`, `open plan`) in `DIM`: the room's kind label and its number
   when it has one, as the inspector writes it. In no room, the floor's name alone.
-- In a construct: `construct` in `DIM`. On the Net grid: `the Net` in `DIM`.
+- In a construct: `construct` in `DIM`. On the Net grid, as on any stratum, the
+  district under you; `the Net` in `DIM` where there is none.
 
 **Right: the track.** Nothing when nothing is tracked. Else, by the first that applies:
 1. The track has no leg: `⌖ no way` (no way from here) or `⌖ jacked in`, the `⌖` in cyan,
@@ -242,6 +248,9 @@ from the track's source and target, so the deck MAP and the minimap agree.
 - Drawing is cheap enough to do every frame: about a thousand pixels of up to nine tiles
   each. Room lookups on a floor go through a per-draw index of the floor's rooms rather
   than a scan of every room for every tile.
+- Where nothing is (off the stratum, outside the floor), the minimap shows the sidebar's
+  own ground (`StylePack::background`) and the deck MAP its panel colour: the shared
+  pixel functions return no colour there and each map fills its own.
 
 ### 8. Tests and shots
 
@@ -293,6 +302,26 @@ from the track's source and target, so the deck MAP and the minimap agree.
     palette, so a floor looks like the block it sits in on the street.
 12. **The shaft's floor choice** goes yours, wanted, top, bottom, then neighbours, skipping
     what doesn't fit, as mocked at 12 rows; at 5 rows it keeps the floors that matter.
+
+13. **The minimap's `@` is not bold** (see §2).
+14. **The stairs win a shared cell when the walk takes them** (§3); otherwise the lift
+    does, as mocked.
+
+## The builder check
+
+A fresh reader planned from this document and asked two things; both were mine to
+settle, and are settled above:
+
+1. *When the walk takes the stairs, does the shaft still show the floor it heads for?*
+   Yes: a stairs leg now carries its floor, and `floor_wanted` reads it (§3).
+2. *Does the floor choice stop at "two away from yours" even when every floor fits?*
+   No: after those, every other floor nearest yours, so a building that fits shows every
+   floor (§3).
+
+It also settled, as its own calls: `NetFloor` counts as building on the Net grid; the
+stairs are drawn only where the floor has a stair tile; a floor too big for 3 follows you
+on the same cell grid as the close up; a target off the plan pins to the border as on
+the close up; the target's tile follows the deck MAP's rule (a building's door).
 
 ## Left to the builder
 
