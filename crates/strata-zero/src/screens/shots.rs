@@ -1573,6 +1573,38 @@ fn holo_feed() {
     }
 }
 
+/// The morning news: the broadcast at 07:14 over the map, Marlo dead and you seen
+/// walking away north at 22:41, at both sizes.
+#[test]
+#[ignore]
+fn news_shots() {
+    use crate::missions::{Left, news, person_of};
+    let mut st = state_home();
+    let _ = MapScreen::walking(&mut st);
+    crate::missions::begin(&mut st);
+    st.missions.feeds.clear();
+    crate::missions::end(&mut st, 0, 0);
+    let want = 7 * 60 + 14;
+    let ahead = (want + 1440 - st.minute_of_day() as u64) % 1440;
+    {
+        let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+        world.advance(city, world.tick() + ahead * sim::TICKS_PER_MINUTE);
+    }
+    news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+    let about = person_of(&st, &news::current(&st).unwrap().about).unwrap();
+    let body = st.missions.bodies.iter_mut().find(|b| b.person == about);
+    body.expect("the item's body").left = Some(Left {
+        at: (22, 41),
+        heading: "north",
+    });
+    let map = MapScreen::walking(&mut st);
+    let broadcast = crate::missions::broadcast::Broadcast::new();
+    for (w, h) in HOLO_SIZES {
+        let name = format!("news_broadcast_{w}x{h}");
+        shot_stack(&name, &st, &[&map, &broadcast], (w, h));
+    }
+}
+
 #[test]
 #[ignore]
 fn holo_call_ringing() {

@@ -377,6 +377,27 @@ pub fn gather(
         );
     }
 
+    // Your own holo set beside you, in your flat, while there is news: watch it.
+    if let Some(rig) = st.home.as_ref()
+        && place == rig.place()
+        && crate::missions::news::fresh(st)
+        && let Some(set) = pos.neighbors4().find(|n| {
+            rig.home.rect.contains(*n)
+                && map
+                    .tile(*n)
+                    .is_some_and(|t| t.feature == Some(Feature::Furniture(Furniture::Holo)))
+        })
+    {
+        add(
+            &mut subs,
+            &mut here,
+            set,
+            Some(header("Holo set", mark_tile(st, &map, set))),
+            None,
+            vec![Choice::on('i', "Interact", "Watch", CYAN, Pick::Watch)],
+        );
+    }
+
     // Your own tile: jack out, what lies there, the ways up and down.
     let mut here_rows = Vec::new();
     let mut fixture: Option<&str> = None;
@@ -1102,5 +1123,44 @@ mod tests {
         st.player.as_mut().unwrap().pos = rig_side;
         assert!(named(&st, "Bed").is_none());
         assert!(named(&st, "Access rig").is_some());
+    }
+
+    #[test]
+    fn the_set_offers_watch_while_the_news_is_fresh() {
+        use crate::missions::news;
+        let mut st = state_home();
+        crate::screens::explore::MapScreen::walking(&mut st);
+        crate::missions::begin(&mut st);
+        let set_subject = |st: &AppState| {
+            gather(st, &|_, _| None)
+                .into_iter()
+                .find(|s| s.header.as_ref().is_some_and(|h| h.name == "Holo set"))
+        };
+        // Between the set and the couch.
+        let (place, set) = news::set_tile(&st).unwrap();
+        st.player = Some(crate::walker::Player::at(place, set.offset(0, 1)));
+        assert!(set_subject(&st).is_none(), "no news, no Watch");
+        news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        let watch = |st: &AppState| {
+            let s = set_subject(st).expect("the set");
+            assert_eq!(s.pos, set);
+            s.choices.iter().any(|c| {
+                c.key == 'i'
+                    && c.label == "Interact"
+                    && c.thing.as_ref().is_some_and(|(t, _)| t == "Watch")
+                    && matches!(c.pick, Pick::Watch)
+            })
+        };
+        assert!(watch(&st));
+        // Switched off, it is still offered while the news is fresh.
+        news::switch_off(&mut st);
+        assert!(watch(&st));
+        // Away from the set: not in reach.
+        st.player = Some(crate::walker::Player::at(place, set.offset(0, 2)));
+        assert!(set_subject(&st).is_none());
+        // Stale: the set is furniture.
+        st.player = Some(crate::walker::Player::at(place, set.offset(0, 1)));
+        st.missions.news.as_mut().unwrap().fresh = 0;
+        assert!(set_subject(&st).is_none());
     }
 }

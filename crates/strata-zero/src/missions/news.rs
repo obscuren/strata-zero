@@ -166,7 +166,6 @@ pub fn build_word(body: u8) -> &'static str {
 /// The SOUGHT card's two lines for the current item, read from you as you are now: who
 /// is sought, your build and what you wear; what they carried, and the minute you walked
 /// away from the item's body and which way (or `late last night`).
-#[allow(dead_code)] // the broadcast draws it from a later task
 pub fn sought(st: &AppState) -> Option<[String; 2]> {
     let n = current(st)?;
     let item = st.book.news.get(&n.id)?;
@@ -176,10 +175,7 @@ pub fn sought(st: &AppState) -> Option<[String; 2]> {
         .equipped(Slot::Torso)
         .and_then(|id| st.content.item(id))
         .map_or_else(|| NO_CLOTHES.to_string(), |i| i.name.to_lowercase());
-    let left = person_of(st, &n.about)
-        .and_then(|who| st.missions.bodies.iter().find(|b| b.person == who))
-        .and_then(|b| b.left);
-    let when = left.map_or_else(
+    let when = walked_away(st, &n.about).map_or_else(
         || NO_TIME.to_string(),
         |l| format!("{:02}:{:02}, heading {}", l.at.0, l.at.1, l.heading),
     );
@@ -187,6 +183,13 @@ pub fn sought(st: &AppState) -> Option<[String; 2]> {
         format!("{} · {build} build · {clothes}", fill(st, &item.sought)),
         format!("carrying {} · {when}", fill(st, &item.carrying)),
     ])
+}
+
+/// When you walked away from the body of the role `about`, if anyone saw you go.
+pub fn walked_away(st: &AppState, about: &str) -> Option<Left> {
+    person_of(st, about)
+        .and_then(|who| st.missions.bodies.iter().find(|b| b.person == who))
+        .and_then(|b| b.left)
 }
 
 /// The channel: the first word of the first named corp building's name, in capitals,
@@ -216,13 +219,20 @@ pub fn current(st: &AppState) -> Option<&NewsRun> {
 }
 
 /// Whether an item is fresh.
-#[allow(dead_code)] // the set's Watch asks it from the next tasks
 pub fn fresh(st: &AppState) -> bool {
     current(st).is_some()
 }
 
+/// Switches the set on, while the item is fresh: Watch on the set.
+pub fn switch_on(st: &mut AppState) {
+    if fresh(st)
+        && let Some(n) = st.missions.news.as_mut()
+    {
+        n.on = true;
+    }
+}
+
 /// Switches the set off and ends the item's step, once.
-#[allow(dead_code)] // the broadcast's `space` calls it from the next tasks
 pub fn switch_off(st: &mut AppState) {
     if let Some(n) = st.missions.news.as_mut() {
         n.on = false;
@@ -241,7 +251,7 @@ pub fn end_step(st: &mut AppState) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::jobs::testutil::state_home;
     use crate::missions::{Body, Effect, Left, Mark, Mission, RunState, Step, Trigger, marks};
@@ -387,6 +397,25 @@ mod tests {
     }
 
     #[test]
+    fn switching_on_only_while_fresh() {
+        let mut st = begun();
+        switch_on(&mut st);
+        assert!(st.missions.news.is_none());
+        put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        switch_off(&mut st);
+        switch_on(&mut st);
+        let n = current(&st).unwrap();
+        assert!(n.on && n.ended, "on again; the step stays ended");
+        switch_off(&mut st);
+        st.missions.news.as_mut().unwrap().fresh = 0;
+        switch_on(&mut st);
+        assert!(
+            !st.missions.news.as_ref().unwrap().on,
+            "stale: nothing to watch"
+        );
+    }
+
+    #[test]
     fn ending_the_step_leaves_the_set_on() {
         let mut st = begun();
         put_out(&mut st, "marlo", usize::MAX, usize::MAX);
@@ -406,7 +435,7 @@ mod tests {
     }
 
     /// A book of one mission: a step putting out the news, and one after it ends.
-    fn news_then_after(st: &mut AppState) {
+    pub(crate) fn news_then_after(st: &mut AppState) {
         let step = |id: &str, when: Trigger, then: Effect| Step {
             id: id.into(),
             when,
@@ -428,7 +457,8 @@ mod tests {
         st.book.validate().unwrap();
     }
 
-    fn afters(st: &AppState) -> usize {
+    /// How often the step after the news step has fired.
+    pub(crate) fn afters(st: &AppState) -> usize {
         st.log.iter().filter(|e| e.text == "after").count()
     }
 
