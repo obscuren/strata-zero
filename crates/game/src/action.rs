@@ -36,6 +36,8 @@ pub enum Action {
     },
     /// Pulls the chrome out of a site, back to the pack with what is fitted in it.
     Pull(Site),
+    /// Opens one of an item into what it holds.
+    Open(ItemId),
     Drop {
         item: ItemId,
         qty: u32,
@@ -353,6 +355,27 @@ pub fn apply(
                 }
                 Use::Throw { .. } => unreachable!("refused above"),
             }
+        }
+        Action::Open(id) => {
+            let item = c.item(&id).ok_or_else(|| format!("unknown item {id}"))?;
+            if ch.count(&id) == 0 {
+                return Err(format!("{} is not in your pack", item.name));
+            }
+            if item.opens.is_empty() {
+                return Err(format!("{} doesn't open", item.name));
+            }
+            remove_from_pack(ch, &id, 1);
+            let mut parts = Vec::new();
+            for (out, n) in &item.opens {
+                ch.give_item(c, out.clone(), *n);
+                let out_name = name(c, out);
+                parts.push(if *n > 1 {
+                    format!("{n}× {out_name}")
+                } else {
+                    out_name
+                });
+            }
+            done(format!("You open the {}: {}.", item.name, parts.join(", ")))
         }
         Action::Throw(id) => {
             let item = c.item(&id).ok_or_else(|| format!("unknown item {id}"))?;
@@ -882,6 +905,62 @@ mod tests {
             out.message,
             "swapped `Pawnshop deck` for `Rebuilt pawn deck`"
         );
+    }
+
+    fn box_content() -> Content {
+        let mut c = Content::load().unwrap();
+        let mut b = c.item(&id("copper_coil")).unwrap().clone();
+        b.id = id("box");
+        b.name = "Box".to_string();
+        b.opens = vec![(id("bolt"), 2), (id("nut"), 1)];
+        let mut bolt = b.clone();
+        (bolt.id, bolt.name, bolt.opens) = (id("bolt"), "Bolt".to_string(), Vec::new());
+        let mut nut = bolt.clone();
+        (nut.id, nut.name) = (id("nut"), "Nut".to_string());
+        c.items.extend([b, bolt, nut]);
+        c
+    }
+
+    #[test]
+    fn opening_takes_one_and_gives_what_it_holds() {
+        let (_, mut ch, mut g, at) = setup();
+        let c = box_content();
+        ch.give(id("box"), 1);
+        let out = apply(&mut ch, &mut g, &c, at, 0, Action::Open(id("box"))).unwrap();
+        assert_eq!(out.message, "You open the Box: 2× Bolt, Nut.");
+        assert_eq!(
+            (
+                ch.count(&id("box")),
+                ch.count(&id("bolt")),
+                ch.count(&id("nut"))
+            ),
+            (0, 2, 1)
+        );
+        assert!(apply(&mut ch, &mut g, &c, at, 0, Action::Open(id("box"))).is_err());
+    }
+
+    #[test]
+    fn an_item_that_does_not_open_is_refused() {
+        let (c, mut ch, mut g, at) = setup();
+        let before = ch.count(&id("copper_coil"));
+        ch.give(id("copper_coil"), 1);
+        let held = ch.count(&id("copper_coil"));
+        assert!(held > before);
+        let err = apply(&mut ch, &mut g, &c, at, 0, Action::Open(id("copper_coil"))).unwrap_err();
+        assert!(err.contains("doesn't open"), "{err}");
+        assert_eq!(ch.count(&id("copper_coil")), held);
+    }
+
+    #[test]
+    fn the_shipped_package_opens_into_the_shard() {
+        let c = Content::load().unwrap();
+        assert_eq!(
+            c.item(&id("taped_package")).unwrap().opens,
+            vec![(id("ledger_shard"), 1)]
+        );
+        let s = c.item(&id("ledger_shard")).unwrap();
+        assert_eq!((s.kind, s.value), (ItemKind::Component, 0));
+        assert_eq!(s.desc, "A ledger shard. Locked. Somebody will know whose.");
     }
 
     #[test]

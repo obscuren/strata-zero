@@ -821,6 +821,9 @@ pub struct Item {
     /// What using it does (consumables only).
     #[serde(default, rename = "use")]
     pub on_use: Option<Use>,
+    /// What opening it gives, one per open (the item is used up).
+    #[serde(default)]
+    pub opens: Vec<(ItemId, u32)>,
     /// The program's numbers (programs only).
     #[serde(default)]
     pub program: Option<Program>,

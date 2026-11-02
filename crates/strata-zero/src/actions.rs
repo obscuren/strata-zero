@@ -28,6 +28,7 @@ pub fn handles_items(action: &Action) -> bool {
             | Action::Drop { .. }
             | Action::DropCopy(_)
             | Action::Use(_)
+            | Action::Open(_)
             | Action::Take { .. }
             | Action::TakeCopy(_)
             | Action::TakeAll
