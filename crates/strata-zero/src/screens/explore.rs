@@ -3203,6 +3203,14 @@ impl Screen for MapScreen {
                 .set_char(crate::render::tileset::holo_glyph(&st.style, st.tick))
                 .set_fg(crate::ui::chrome::MAGENTA);
         }
+        // A holo ad cutting into the news: its glow in MAGENTA, its glyph kept.
+        if let Some(pos) = crate::missions::news::cut_in(st)
+            && self.place.is_street()
+            && vis.is_none_or(|v| v.get(pos) == Some(&crate::render::Visibility::Visible))
+            && let Some((sx, sy)) = tile_to_screen(map_area, origin, pos)
+        {
+            f.buffer_mut()[(sx, sy)].set_fg(crate::ui::chrome::MAGENTA);
+        }
 
         if let (Some(leg), Some(m)) = (tracked_leg, crate::track::distance(st)) {
             let label = st.track.as_ref().map_or("", |t| t.label.as_str());
@@ -5208,6 +5216,40 @@ mod tests {
                 .iter()
                 .any(|c| on.symbol() == c.to_string())
         );
+    }
+
+    #[test]
+    fn a_holo_ad_cutting_in_glows_magenta() {
+        let mut st = crate::jobs::testutil::state_home();
+        crate::missions::begin(&mut st);
+        st.missions.feeds.clear();
+        crate::missions::news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        let ad = crate::missions::news::tests::an_ad_cutting_in(&mut st);
+        let s = MapScreen::walking(&mut st);
+        assert!(s.place.is_street());
+        // The cut's cell alone, the bubble over it taken away.
+        st.missions.asides.clear();
+        st.tick = 24;
+        let on = draw_buffer(&s, &st, 120, 40);
+        let cut = st.missions.news.as_mut().unwrap().cut.take();
+        let off = draw_buffer(&s, &st, 120, 40);
+        st.missions.news.as_mut().unwrap().cut = cut;
+        let changed: Vec<(u16, u16)> = (0..40)
+            .flat_map(|y| (0..120).map(move |x| (x, y)))
+            .filter(|p| on[*p] != off[*p])
+            .collect();
+        assert_eq!(changed.len(), 1, "{changed:?}");
+        let (on, off) = (&on[changed[0]], &off[changed[0]]);
+        assert_eq!(on.fg, crate::ui::chrome::MAGENTA);
+        assert_eq!(on.symbol(), off.symbol(), "the glyph kept");
+        assert!(
+            st.style
+                .glyphs
+                .holo
+                .iter()
+                .any(|c| on.symbol() == c.to_string())
+        );
+        assert_eq!(crate::missions::news::cut_in(&st), Some(ad));
     }
 
     #[test]

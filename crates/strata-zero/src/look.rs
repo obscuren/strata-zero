@@ -620,7 +620,19 @@ pub fn look_card(
             f => match feature_name(f) {
                 Some((name, key)) => {
                     set_head(&mut card, name.to_string(), glyph);
-                    if visible {
+                    // A holo ad cutting into the news reads the headline while it lasts.
+                    let cut = (visible
+                        && f == Feature::HoloAd
+                        && place.is_street()
+                        && crate::missions::news::cut_in(st) == Some(pos))
+                    .then(|| crate::missions::news::current(st))
+                    .flatten();
+                    if let Some(n) = cut {
+                        card.body.push(format!(
+                            "The ad stutters. For a second it's a headline: {}.",
+                            n.headline.to_uppercase()
+                        ));
+                    } else if visible {
                         card.body.extend(
                             looks
                                 .line(Group::Feature, key, city.seed, pos)
@@ -851,6 +863,36 @@ mod tests {
             "{:?}",
             c.body
         );
+    }
+
+    #[test]
+    fn look_reads_the_headline_during_the_cut() {
+        use crate::missions::news;
+        let mut st = crate::jobs::testutil::state_home();
+        crate::missions::begin(&mut st);
+        news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        let headline = news::current(&st).unwrap().headline.to_uppercase();
+        let ad = news::tests::an_ad_cutting_in(&mut st);
+        let c = card(&st, ad);
+        assert_eq!(c.header.as_deref(), Some("Holo ad"));
+        assert_eq!(
+            c.body,
+            [format!(
+                "The ad stutters. For a second it's a headline: {headline}."
+            )]
+        );
+        assert!(headline.starts_with("COURIER SOUGHT IN "), "{headline}");
+        // After the cut: the ad's own line.
+        if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
+            world.advance(city, world.tick() + news::CUT_TICKS);
+        }
+        assert_eq!(news::cut_in(&st), None);
+        let seed = st.city.as_ref().unwrap().seed;
+        let own = Looks::load()
+            .line(Group::Feature, "holo_ad", seed, ad)
+            .map(String::from);
+        assert!(own.is_some());
+        assert_eq!(card(&st, ad).body, Vec::from_iter(own));
     }
 
     #[test]

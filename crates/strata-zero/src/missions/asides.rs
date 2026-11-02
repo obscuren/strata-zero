@@ -28,8 +28,6 @@ pub enum Speaker {
     /// A tile on a place: the holo set, an ad.
     Tile(Place, Pos),
     /// Someone on the street, followed as they walk.
-    // Said by the city's overheard lines (spec §6), which come next.
-    #[allow(dead_code)]
     Person(sim::PersonId),
 }
 
@@ -91,7 +89,8 @@ pub fn prune(st: &mut AppState) {
 
 /// Each aside up, oldest first, as a bubble in `map` around its speaker's cell, off your
 /// `@` and the people drawn there; none while they are not `live`. One whose speaker is
-/// off the map's screen area, or with no room beside it, is not drawn.
+/// off the map's screen area or (a person) out of your sight, or with no room beside it,
+/// is not drawn.
 pub fn draw(buf: &mut Buffer, map: Rect, origin: Pos, st: &AppState) {
     let Some(me) = st.player.as_ref().filter(|_| live(st)) else {
         return;
@@ -131,7 +130,7 @@ pub fn draw(buf: &mut Buffer, map: Rect, origin: Pos, st: &AppState) {
 }
 
 /// The speaker's screen cell: a tile on your place, or a person where they are on the
-/// street while you are on it.
+/// street while you are on it and see them.
 fn anchor(
     speaker: Speaker,
     map: Rect,
@@ -145,7 +144,8 @@ fn anchor(
             if !me.place.is_street() {
                 return None;
             }
-            st.world.as_ref()?.pos_of(id)?
+            let at = st.world.as_ref()?.pos_of(id)?;
+            (me.vis().get(at) == Some(&Visibility::Visible)).then_some(at)?
         }
     };
     tile_to_screen(map, origin, at)
@@ -192,7 +192,7 @@ mod tests {
     use crate::screens::explore::MapScreen;
     use crate::screens::shots::draw_stack;
     use crate::ui::chrome::{DIM, MAGENTA};
-    use crate::walker::Player;
+    use crate::walker::{Player, Visibility};
     use citygen::StratumKind;
 
     const STREET: Place = Place::Stratum(StratumKind::Street);
@@ -428,36 +428,71 @@ mod tests {
             st.missions.asides.clear();
             say(&mut st, at, "NEWS".into(), MAGENTA, LINE.into());
             assert_eq!(drawn(&st, set), Buffer::empty(AREA), "{at:?}");
-            assert_eq!(st.missions.asides.len(), 1, "it still runs out its time");
+            // Not drawn, it still runs out its time.
+            let until = st.missions.asides[0].until;
+            let left = until - 1 - st.clock_tick();
+            run(&mut st, left);
+            prune(&mut st);
+            assert_eq!(st.missions.asides.len(), 1, "{at:?} up till its time");
+            run(&mut st, 1);
+            prune(&mut st);
+            assert!(st.missions.asides.is_empty(), "{at:?} gone at its time");
         }
-        // A person, on the street only, drawn where they are.
-        let walker = st
-            .world
-            .as_ref()
-            .unwrap()
-            .visible(citygen::Rect::new(0, 0, 1000, 1000))
+    }
+
+    #[test]
+    fn a_person_is_drawn_on_the_street_while_you_see_them() {
+        let mut st = state_home();
+        let (place, set) = news::set_tile(&st).unwrap();
+        stand(&mut st, place, set.offset(0, 1));
+        // Someone on foot you would see from a free tile to one side of them, off where
+        // the bubble goes.
+        let city = st.city.as_ref().unwrap();
+        let world = st.world.as_ref().unwrap();
+        let spots: Vec<(sim::PersonId, Pos, Pos)> = world
+            .visible(citygen::Rect::new(0, 0, 100_000, 100_000))
             .into_iter()
-            .find_map(|m| match m.kind {
+            .filter_map(|m| match m.kind {
                 sim::MoverKind::Walker { id, .. } => Some((id, m.pos)),
                 _ => None,
             })
+            .flat_map(|(id, at)| [2, -2, 3, -3].map(|dx| (id, at, at.offset(dx, 0))))
+            .filter(|&(_, _, p)| {
+                city.walkable(StratumKind::Street, p) && world.person_at(p).is_none()
+            })
+            .collect();
+        let home = st.player.clone();
+        let (id, at, beside) = spots
+            .into_iter()
+            .find(|&(_, at, beside)| {
+                stand(&mut st, STREET, beside);
+                st.player.as_ref().unwrap().vis().get(at) == Some(&Visibility::Visible)
+            })
             .expect("someone out on the street");
-        st.missions.asides.clear();
+        st.player = home;
         say(
             &mut st,
-            Speaker::Person(walker.0),
+            Speaker::Person(id),
             "overheard".into(),
             DIM,
             LINE.into(),
         );
-        assert_eq!(
-            drawn(&st, walker.1),
-            Buffer::empty(AREA),
-            "you are in your flat"
-        );
-        st.player = Some(Player::at(STREET, walker.1.offset(9, 9)));
-        let buf = drawn(&st, walker.1);
+        assert_eq!(drawn(&st, at), Buffer::empty(AREA), "you are in your flat");
+        // On the street beside them but not looking: not drawn.
+        st.player = Some(Player::at(STREET, beside));
+        assert_eq!(drawn(&st, at), Buffer::empty(AREA), "out of your sight");
+        // Seeing them: over them.
+        stand(&mut st, STREET, beside);
+        let buf = drawn(&st, at);
         assert!(bubble(&buf).is_some());
         assert_eq!(buf[(30, 9)].symbol(), "▾", "over them");
+        // Out of sight again: gone from the map, still up on the clock.
+        st.player
+            .as_mut()
+            .unwrap()
+            .set_vis(at, Visibility::Remembered);
+        assert_eq!(drawn(&st, at), Buffer::empty(AREA), "out of sight again");
+        prune(&mut st);
+        assert_eq!(st.missions.asides.len(), 1);
     }
 }

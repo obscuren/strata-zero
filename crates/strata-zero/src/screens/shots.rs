@@ -1632,6 +1632,46 @@ fn news_shots() {
     for (w, h) in HOLO_SIZES {
         shot_stack(&format!("news_set_reading_{w}x{h}"), &st, &[&map], (w, h));
     }
+    // Out on the street: someone three tiles off says the first overheard line, a second
+    // in, you still seeing them.
+    use crate::missions::news::tests as at;
+    st.missions.asides.clear();
+    at::to_a_heard_minute(&mut st, 0);
+    at::by_someone(&mut st, 3);
+    let spot = st.player.as_ref().unwrap().pos;
+    news::tick(&mut st, true);
+    assert_eq!(st.missions.asides.len(), 1, "overheard");
+    let speaker = st.missions.asides[0].speaker;
+    {
+        let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+        world.advance(city, world.tick() + crate::missions::call::TICKS_PER_SECOND);
+    }
+    at::look_from(&mut st, Place::Stratum(StratumKind::Street), spot);
+    if let crate::missions::asides::Speaker::Person(id) = speaker {
+        let at = st.world.as_ref().unwrap().pos_of(id).unwrap();
+        let seen = st.player.as_ref().unwrap().vis().get(at).copied();
+        assert_eq!(seen, Some(crate::walker::Visibility::Visible), "still seen");
+    }
+    let map = MapScreen::walking(&mut st);
+    for (w, h) in HOLO_SIZES {
+        let drawn = crate::screens::testutil::buffer_text(&draw_stack(&st, &[&map], (w, h)));
+        assert!(drawn.contains("overheard"), "a bubble over them at {w}x{h}");
+        shot_stack(&format!("news_overheard_{w}x{h}"), &st, &[&map], (w, h));
+    }
+    // By a holo ad as it cuts in, a second in: its glow MAGENTA and its NEWSLINE aside.
+    st.missions.asides.clear();
+    at::an_ad_cutting_in(&mut st);
+    {
+        let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+        world.advance(city, world.tick() + crate::missions::call::TICKS_PER_SECOND);
+    }
+    assert!(news::cut_in(&st).is_some(), "still cutting in");
+    let map = MapScreen::walking(&mut st);
+    for (w, h) in HOLO_SIZES {
+        let drawn = crate::screens::testutil::buffer_text(&draw_stack(&st, &[&map], (w, h)));
+        assert!(drawn.contains("NEWSLINE"), "a bubble over it at {w}x{h}");
+        shot_stack(&format!("news_holo_ad_{w}x{h}"), &st, &[&map], (w, h));
+    }
 }
 
 #[test]
