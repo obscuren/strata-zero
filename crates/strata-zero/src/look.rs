@@ -595,7 +595,8 @@ pub fn look_card(
         let item = st.content.item(&s.item);
         set_head(&mut card, first.clone(), mark_items(st, place, pos));
         card.second = item.map(|i| format!("{} · on the ground", i.kind.label()));
-        card.body.extend(item.map(|i| i.desc.clone()));
+        card.body
+            .extend(item.map(|i| crate::missions::item_desc(st, &i.id)));
         card.also.extend(rest.iter().cloned());
     } else if let Some(f) = tile.feature {
         let glyph = mark_tile(st, map, pos);
@@ -957,6 +958,21 @@ mod tests {
             .add(STREET, at, game::ItemId::new("dead_phone"), 1);
         let c = card(&st, at);
         assert_eq!(c.also, ["Dead phone"]);
+    }
+
+    #[test]
+    fn an_item_reads_its_look_reading() {
+        let st = state(false);
+        let mut st = crate::missions::reading::tests::reader(st, &[]);
+        let at = bare(&st);
+        stand(&mut st, at);
+        let shard = game::ItemId::new("ledger_shard");
+        st.ground.add(STREET, at, shard.clone(), 1);
+        let own = st.content.item(&shard).unwrap().desc.clone();
+        assert_eq!(card(&st, at).body, [own]);
+        st.character.skills.insert(game::SkillId::new("streetwise"));
+        let c = card(&st, at);
+        assert_eq!(c.body, ["Tape round it. Ruko wraps his like that."]);
     }
 
     #[test]

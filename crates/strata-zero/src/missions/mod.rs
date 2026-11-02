@@ -6,7 +6,8 @@
 //! player sees: the HOLO feed and call (`feed`, `call`, `face`), the scenes played on
 //! the map (`scene`, with `marks` and `visitors`), the news put out (`news`) and its
 //! broadcast on the holo set (`broadcast`), the bubbles that leave you the keys
-//! (`asides`), the daze (`daze`) and the JOBS lines (`ui`).
+//! (`asides`), the daze (`daze`), the JOBS lines (`ui`) and an item's readings and
+//! their card (`reading`).
 //! No mission, step or role id appears in Rust outside tests; the book names them.
 //!
 //! Adding a block (spec `docs/superpowers/specs/2026-10-31-story-missions-design.md`, 15):
@@ -17,6 +18,8 @@
 //!   `Book::validate`. Test it.
 //! - A pick: a variant on `Pick` and its arm in `cast::pick`.
 //! - A need: a variant on `Need` and its arm in `holds`.
+//! - A reading's row: a variant on `Row`, its texts in `Reading::texts` and its lines
+//!   in `reading::lines`.
 
 pub mod asides;
 pub mod broadcast;
@@ -32,11 +35,13 @@ pub mod film;
 pub mod marks;
 pub mod news;
 pub mod overlay;
+pub mod reading;
 pub mod scene;
 pub mod ui;
 pub mod visitors;
 
 pub use content::*;
+pub use reading::{item_desc, reading};
 
 use crate::app::AppState;
 use crate::render::Visibility;

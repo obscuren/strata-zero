@@ -2,6 +2,7 @@
 //! letters (`x` look, `t` talk, `i` interact, `j` jack, `g` take, `>` `<` go).
 
 use crate::app::AppState;
+use crate::missions::ReadAt;
 use crate::render::map::MapRef;
 use crate::render::map::TileMap;
 use crate::render::mark::{mark_items, mark_person, mark_tile};
@@ -84,6 +85,28 @@ fn take(s: &game::Stack) -> Pick {
             qty: s.qty,
         },
     })
+}
+
+/// The rig's reading rows: one per carried item with a rig reading that holds, `r`
+/// first.
+fn rig_reads(st: &AppState) -> Vec<Choice> {
+    let mut keys = std::iter::once('r').chain(FREE_LETTERS.chars());
+    st.book
+        .readings
+        .keys()
+        .map(|k| game::ItemId::new(k))
+        .filter(|id| st.character.count(id) > 0)
+        .filter_map(|id| {
+            let r = crate::missions::reading(st, &id.0, ReadAt::Rig)?;
+            let name = st.content.item(&id)?.name.clone();
+            let verb = crate::missions::fill(st, &r.verb);
+            let read = Pick::Read {
+                item: id,
+                at: ReadAt::Rig,
+            };
+            Some(Choice::on(keys.next()?, verb, name, CYAN, read))
+        })
+        .collect()
 }
 
 /// A stack as rows and headers name it: "Copper coil ×2", the count only above one.
@@ -351,6 +374,9 @@ pub fn gather(
             ));
         }
         rows.push(Choice::new('j', "Jack in", Pick::World(WorldAct::JackIn)));
+        if matches!(origin, Some(HostId::Rig)) {
+            rows.extend(rig_reads(st));
+        }
         add(
             &mut subs,
             &mut here,
@@ -1216,5 +1242,63 @@ mod tests {
         st.player = Some(crate::walker::Player::at(place, set.offset(0, 1)));
         st.missions.news.as_mut().unwrap().fresh = 0;
         assert!(set_subject(&st).is_none());
+    }
+
+    #[test]
+    fn the_rig_offers_read_only_for_a_matching_reading() {
+        use crate::app::ScreenCmd;
+        use crate::screens::testutil::key;
+        use crossterm::event::KeyCode;
+        let mut st = state_home();
+        crate::screens::explore::MapScreen::walking(&mut st);
+        let mut st = crate::missions::reading::tests::reader(st, &["hacking"]);
+        st.tick += 200;
+        let home = st.home.unwrap().home;
+        let floor = st
+            .interiors
+            .floor(home.building, home.level)
+            .map(|(_, f)| f.clone())
+            .unwrap();
+        st.player.as_mut().unwrap().pos = home
+            .rig
+            .neighbors4()
+            .find(|p| {
+                home.rect.contains(*p) && floor.tiles.get(*p).is_some_and(|t| t.is_walkable())
+            })
+            .expect("a floor tile by the rig");
+        let rig = |st: &AppState| {
+            gather(st, &|_, _| None)
+                .into_iter()
+                .find(|s| s.header.as_ref().is_some_and(|h| h.name == "Access rig"))
+                .expect("the rig")
+        };
+        let reads = |st: &AppState| -> Vec<Choice> {
+            let rows = rig(st).choices.into_iter();
+            rows.filter(|c| matches!(c.pick, Pick::Read { .. }))
+                .collect()
+        };
+        let rows = reads(&st);
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0].key, rows[0].label.as_str()), ('r', "Read"));
+        let thing = rows[0].thing.clone().unwrap();
+        assert_eq!(thing, ("Ledger shard".to_string(), CYAN));
+        assert!(matches!(&rows[0].pick,
+            Pick::Read { item, at: ReadAt::Rig } if item.0 == "ledger_shard"));
+        let shown = window_text(&st, &[rig(&st)]);
+        assert!(shown.contains("r  Read: Ledger shard"), "{shown}");
+        // Fired: the card in place of the window, the shard read.
+        let mut window = rig(&st).window(st.tick.saturating_sub(200));
+        let cmd = window.update(&mut st, &[key(KeyCode::Char('r'))]);
+        assert!(matches!(cmd, ScreenCmd::Replace { .. }));
+        assert!(st.missions.read.contains("ledger_shard"));
+        // Fired on a state gone stale: the window only closes.
+        st.character.skills.clear();
+        let cmd = window.update(&mut st, &[key(KeyCode::Char('r'))]);
+        assert!(matches!(cmd, ScreenCmd::Pop { .. }));
+        assert!(reads(&st).is_empty(), "no hacking, no row");
+        st.character.skills.insert(game::SkillId::new("hacking"));
+        let shard = game::ItemId::new("ledger_shard");
+        game::remove_from_pack(&mut st.character, &shard, 1);
+        assert!(reads(&st).is_empty(), "no shard, no row");
     }
 }

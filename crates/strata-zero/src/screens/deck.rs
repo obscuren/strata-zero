@@ -5,7 +5,9 @@ use crate::actions::{perform, report};
 use crate::anim::effects::{glitch_cells, pulse, typewriter};
 use crate::anim::{Easing, Tween};
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
+use crate::interact::FREE_LETTERS;
 use crate::messages::Kind;
+use crate::missions::ReadAt;
 use crate::screens::atlas::{self, map::MapLayout};
 use crate::screens::create::attribute_colour;
 use crate::screens::jobs_tab::{self, JobsTab, Key as JobsKey};
@@ -246,7 +248,15 @@ fn hands_off(st: &AppState, choices: &mut [Choice]) -> Vec<String> {
         return Vec::new();
     }
     for c in choices.iter_mut() {
-        if matches!(&c.pick, Pick::Act(a) if crate::actions::handles_items(a)) {
+        if matches!(&c.pick, Pick::Act(a) if crate::actions::handles_items(a))
+            || matches!(
+                c.pick,
+                Pick::Read {
+                    at: ReadAt::Bench,
+                    ..
+                }
+            )
+        {
             c.enabled = false;
         }
     }
@@ -341,6 +351,20 @@ pub(crate) fn item_popup(st: &mut AppState, id: &ItemId, anchor: (u16, u16)) -> 
             "Open",
             Pick::Act(Action::Open(id.clone())),
         ));
+    }
+    // At your bench: the item's bench reading, on a letter the popup leaves free (the
+    // drops below take `d`).
+    if st.character.has_workbench(&st.content)
+        && let Some(r) = crate::missions::reading(st, &id.0, ReadAt::Bench)
+        && let Some(key) = FREE_LETTERS
+            .chars()
+            .find(|k| *k != 'd' && choices.iter().all(|c| c.key != *k))
+    {
+        let read = Pick::Read {
+            item: id.clone(),
+            at: ReadAt::Bench,
+        };
+        choices.push(Choice::new(key, crate::missions::fill(st, &r.verb), read));
     }
     choices.push(Choice::new(
         'd',
@@ -1062,7 +1086,7 @@ impl Deck {
             )));
         }
         out.push(plain(""));
-        out.push(plain(item.desc.clone()));
+        out.push(plain(crate::missions::item_desc(st, id)));
         out
     }
 
@@ -1833,6 +1857,51 @@ mod tests {
         st.missions.unsealed.insert("stim_patch".into());
         let p = item_popup(&mut st, &ItemId::new("stim_patch"), (0, 0)).unwrap();
         assert!(p.choices().iter().all(|c| c.label != "Open"));
+    }
+
+    #[test]
+    fn the_bench_row_needs_a_bench_and_the_reading() {
+        use crate::screens::testutil::key;
+        let mut st = crate::missions::reading::tests::reader(AppState::new(), &[]);
+        st.character.categories.clear();
+        let shard = ItemId::new("ledger_shard");
+        let reads = |st: &mut AppState| -> Vec<Choice> {
+            let p = item_popup(st, &shard, (0, 0)).unwrap();
+            let rows = p.choices().iter();
+            rows.filter(|c| matches!(c.pick, Pick::Read { .. }))
+                .cloned()
+                .collect()
+        };
+        assert!(reads(&mut st).is_empty());
+        st.character.skills.insert(SkillId::new("electronics"));
+        assert!(reads(&mut st).is_empty(), "the reading's skill, no bench");
+        st.character.categories.insert(CategoryId::new("wrench"));
+        st.character.skills.clear();
+        assert!(reads(&mut st).is_empty(), "a bench, no reading");
+        st.character.skills.insert(SkillId::new("electronics"));
+        let rows = reads(&mut st);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            (rows[0].key, rows[0].label.as_str()),
+            ('a', "Open the casing")
+        );
+        assert!(matches!(&rows[0].pick, Pick::Read { item, at: ReadAt::Bench } if *item == shard));
+        // Before the drops, on a letter no other row has.
+        let mut p = item_popup(&mut st, &shard, (0, 0)).unwrap();
+        let labels: Vec<&str> = p.choices().iter().map(|c| c.label.as_str()).collect();
+        let at = |l: &str| labels.iter().position(|x| *x == l).unwrap();
+        assert!(at("Open the casing") < at("Drop one"), "{labels:?}");
+        let keys: BTreeSet<char> = p.choices().iter().map(|c| c.key).collect();
+        assert_eq!(keys.len(), p.choices().len());
+        // Fired: the card in place of the popup, over the deck.
+        let cmd = p.update(&mut st, &[key(KeyCode::Char('a'))]);
+        assert!(matches!(cmd, ScreenCmd::Replace { .. }));
+        // Jacked in, the bench is hands off like the rest of the pack.
+        let mut me = crate::walker::Player::at(Place::Stratum(StratumKind::Street), Pos::new(1, 1));
+        me.body = Some((Place::Stratum(StratumKind::Street), Pos::new(1, 1)));
+        st.player = Some(me);
+        let rows = reads(&mut st);
+        assert!(rows.len() == 1 && !rows[0].enabled);
     }
 
     fn last(st: &AppState) -> Option<&str> {

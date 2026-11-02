@@ -98,6 +98,11 @@ pub enum Pick {
     Sleep,
     /// Switches your holo set on and opens the news broadcast in place of the popup.
     Watch,
+    /// Opens the card of an item's reading at the rig or the bench in place of the popup.
+    Read {
+        item: game::ItemId,
+        at: crate::missions::ReadAt,
+    },
     Close,
 }
 
@@ -555,6 +560,18 @@ impl Popup {
                 ScreenCmd::Replace {
                     to: Box::new(crate::missions::broadcast::Broadcast::new()),
                     fx: TransitionKind::Glitch,
+                }
+            }
+            // Offered on a state gone stale, it only closes.
+            Pick::Read { item, at } => {
+                match crate::missions::reading::ReadCard::open(st, &item, at) {
+                    Some(card) => ScreenCmd::Replace {
+                        to: Box::new(card),
+                        fx: TransitionKind::None,
+                    },
+                    None => ScreenCmd::Pop {
+                        fx: TransitionKind::None,
+                    },
                 }
             }
             Pick::Chair { building, level } => {

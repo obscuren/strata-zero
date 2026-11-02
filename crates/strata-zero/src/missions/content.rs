@@ -78,6 +78,79 @@ pub struct Book {
     pub scenes: BTreeMap<String, Scene>,
     #[serde(default)]
     pub news: BTreeMap<String, News>,
+    /// What who you are finds in an item, by item id (doctor spec §3).
+    #[serde(default)]
+    pub readings: BTreeMap<String, Vec<Reading>>,
+}
+
+/// Where an item is read: at your rig, at your bench, or by its Look.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+pub enum ReadAt {
+    Rig,
+    Bench,
+    Look,
+}
+
+/// A reading of an item at one place, for whoever its need holds for. A `Look` reading
+/// is only `text`, read in place of the item's description; at the rig and the bench it
+/// is offered as `verb` and shown as a card of `rows` under `head`. Every text takes
+/// the usual slots.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Reading {
+    pub at: ReadAt,
+    pub need: Need,
+    #[serde(default)]
+    pub verb: String,
+    #[serde(default)]
+    pub head: String,
+    #[serde(default)]
+    pub rows: Vec<Row>,
+    /// The label after `space`.
+    #[serde(default)]
+    pub close: String,
+    /// Showing it records `Need::Read` of the item.
+    #[serde(default)]
+    pub tells: bool,
+    #[serde(default)]
+    pub text: String,
+}
+
+/// One row of a reading's card. Backticked spans in a field's text and in art stand out.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub enum Row {
+    /// A label in the gutter, then its text.
+    Field(String, String),
+    /// A line in alarm.
+    Hot(String),
+    /// Somebody's mark, led by `▚▞`.
+    Tag(String),
+    /// A drawing.
+    Art(String),
+    /// What you make of it.
+    You(String),
+    /// `shown` entries of a ledger of `total`, seeded by the city and the item.
+    Ledger(u32, u32),
+    Blank,
+}
+
+impl Reading {
+    /// Every piece of text it shows, for slots.
+    fn texts(&self) -> Vec<&str> {
+        let mut out = vec![
+            self.verb.as_str(),
+            self.head.as_str(),
+            self.close.as_str(),
+            self.text.as_str(),
+        ];
+        for row in &self.rows {
+            match row {
+                Row::Field(label, text) => out.extend([label.as_str(), text.as_str()]),
+                Row::Hot(t) | Row::Tag(t) | Row::Art(t) | Row::You(t) => out.push(t),
+                Row::Ledger(..) | Row::Blank => {}
+            }
+        }
+        out
+    }
 }
 
 /// A news item: `flavor/missions.ron` `news`, put out by `Effect::News`. Its texts take
@@ -593,6 +666,11 @@ impl Book {
         for m in &self.missions {
             self.check_mission(m)?;
         }
+        for (item, readings) in &self.readings {
+            for (i, r) in readings.iter().enumerate() {
+                self.check_reading(&format!("reading {} of {item}", i + 1), r)?;
+            }
+        }
         Ok(())
     }
 
@@ -872,6 +950,33 @@ impl Book {
         check_still(id, &news.still)
     }
 
+    /// A reading: its need, its slots, the verb that offers it at the rig or the bench or
+    /// the text a Look reads, and ledgers that show no more than they hold.
+    fn check_reading(&self, place: &str, r: &Reading) -> Result<(), BookError> {
+        check_need(place, &r.need)?;
+        let (what, said) = match r.at {
+            ReadAt::Look => ("text", &r.text),
+            ReadAt::Rig | ReadAt::Bench => ("verb", &r.verb),
+        };
+        if said.is_empty() {
+            return Err(BookError::Empty(format!("{what} in {place}")));
+        }
+        for t in r.texts() {
+            self.check_text(place, t)?;
+        }
+        for row in &r.rows {
+            if let Row::Ledger(shown, total) = row
+                && shown > total
+            {
+                return Err(BookError::BadNumber {
+                    place: place.into(),
+                    what: format!("Ledger({shown}, {total}) shows more than it holds"),
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn check_mission(&self, m: &Mission) -> Result<(), BookError> {
         if m.steps.is_empty() {
             return Err(BookError::Empty(format!("mission `{}`", m.id)));
@@ -988,7 +1093,8 @@ impl Book {
         out.into_iter().collect()
     }
 
-    /// Every item a `Give`, `Take` or `Unseal` names, for the test that has the content.
+    /// Every item a `Give`, `Take` or `Unseal` names or a reading reads, for the test
+    /// that has the content.
     #[cfg(test)]
     pub fn items(&self) -> Vec<&str> {
         let mut out = BTreeSet::new();
@@ -1003,6 +1109,7 @@ impl Book {
                 out.insert(item.as_str());
             }
         }
+        out.extend(self.readings.keys().map(String::as_str));
         out.into_iter().collect()
     }
 
@@ -1755,5 +1862,61 @@ mod tests {
             tiny(code_role, STEP, ""),
             Err(BookError::ReservedRole(CODE.into()))
         );
+    }
+
+    /// The tiny book with these readings.
+    fn with_readings(readings: &str) -> Result<Book, BookError> {
+        tiny("", STEP, &format!("}}, readings: {{ {readings}"))
+    }
+
+    #[test]
+    fn readings_parse_and_check_their_texts() {
+        let b = with_readings(
+            r#""ledger_shard": [
+                Reading(at: Rig, need: Skill("hacking"), verb: "Read", head: "h · {marlo}",
+                    close: "pull it", tells: true, rows: [
+                    Field("owner", "`{marlo}` · cook"), Hot("open"), Tag("{seren}"),
+                    Art("`{marlo.spaced}`"), You("hm"), Ledger(4, 214), Blank,
+                ]),
+                Reading(at: Look, need: Not(Read("ledger_shard")), text: "Tape. {marlo}."),
+            ]"#,
+        )
+        .unwrap();
+        let shard = &b.readings["ledger_shard"];
+        assert_eq!((shard[0].at, shard[1].at), (ReadAt::Rig, ReadAt::Look));
+        assert_eq!(shard[0].rows[5], Row::Ledger(4, 214));
+        assert!(shard[0].tells && !shard[1].tells && shard[1].verb.is_empty());
+        // A book without readings has none.
+        assert!(tiny("", STEP, "").unwrap().readings.is_empty());
+        let refused = |r: &str| with_readings(&format!(r#""ledger_shard": [{r}]"#));
+        // Every text's slots name the cast.
+        assert!(matches!(
+            refused(r#"Reading(at: Look, need: Skill("x"), text: "{nobody}")"#),
+            Err(BookError::UnknownRole { .. })
+        ));
+        assert!(matches!(
+            refused(
+                r#"Reading(at: Bench, need: Skill("x"), verb: "Open", rows: [Field("{nobody}", "x")])"#
+            ),
+            Err(BookError::UnknownRole { .. })
+        ));
+        // A rig or bench reading is offered by its verb; a Look reading is its text.
+        assert!(matches!(
+            refused(r#"Reading(at: Rig, need: Skill("x"), head: "h")"#),
+            Err(BookError::Empty(_))
+        ));
+        assert!(matches!(
+            refused(r#"Reading(at: Look, need: Skill("x"))"#),
+            Err(BookError::Empty(_))
+        ));
+        // A ledger shows no more than it holds, and a need's minute is a minute of the day.
+        assert!(matches!(
+            refused(r#"Reading(at: Rig, need: Skill("x"), verb: "Read", rows: [Ledger(5, 4)])"#),
+            Err(BookError::BadNumber { .. })
+        ));
+        assert!(matches!(
+            refused(r#"Reading(at: Look, need: Late(1440), text: "x")"#),
+            Err(BookError::BadNumber { .. })
+        ));
     }
 }
