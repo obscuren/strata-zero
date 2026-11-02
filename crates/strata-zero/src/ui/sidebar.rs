@@ -6,6 +6,7 @@ use crate::render::map::{MapRef, TileMap};
 use crate::render::minimap::Minimap;
 use crate::render::overlay::Digital;
 use crate::render::style::StylePack;
+use crate::track::mini::MapTrack;
 use crate::ui::chrome::{CYAN, DIM, MAGENTA, TEXT, reveal};
 use crate::ui::hud::{RULE_STYLE, clock_at};
 use crate::ui::panel::{inspector_lines, legend};
@@ -20,7 +21,7 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 pub const MINIMAP_H: u16 = 13;
 const LOG_MIN: u16 = 3;
-/// The fewest rows MAP keeps (separator, a squeezed minimap, the coordinate row).
+/// The fewest rows MAP keeps (separator, a squeezed minimap, its bottom row).
 const MAP_MIN: u16 = 7;
 const HERE_CAP: u16 = 7;
 /// The rows the job in hand may take; the story's lines come on top of them.
@@ -179,6 +180,8 @@ pub struct SidebarView<'a> {
     /// The main viewport in tiles, for the minimap.
     pub view: TileRect,
     pub player: Option<Pos>,
+    /// What the minimap shows of the track.
+    pub track: MapTrack<'a>,
     pub style: &'a StylePack,
     pub content: &'a Content,
     pub ground: &'a Ground,
@@ -522,23 +525,14 @@ pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) -> V
         let (_, lines, _) = built.iter().find(|(x, ..)| *x == s).expect("budgeted");
         let content = Rect::new(area.x, y, w, rows);
         match s {
-            Section::Map => {
-                let map_rows = rows.saturating_sub(1);
-                Minimap {
-                    map: &v.map,
-                    view: v.view,
-                    player: v.player,
-                    style: v.style,
-                }
-                .render(Rect::new(area.x, y, w, map_rows), buf);
-                let coord = format!("{},{} · {} ", v.focus.x, v.focus.y, v.map.label());
-                let pad = (w as usize).saturating_sub(coord.chars().count());
-                Paragraph::new(Line::from(Span::styled(
-                    format!("{}{coord}", " ".repeat(pad)),
-                    Style::default().fg(DIM),
-                )))
-                .render(Rect::new(area.x, y + map_rows, w, rows - map_rows), buf);
+            Section::Map => Minimap {
+                map: &v.map,
+                view: v.view,
+                player: v.player,
+                style: v.style,
+                track: &v.track,
             }
+            .render(content, buf),
             Section::Log => draw_log(v.log, v.tick, content, buf),
             _ => Paragraph::new(lines.clone())
                 .wrap(Wrap { trim: false })
@@ -586,6 +580,7 @@ mod tests {
             inspect: focus,
             view: TileRect::new(0, 0, 70, 25),
             player: Some(focus),
+            track: MapTrack::default(),
             style: &st.style,
             content: &st.content,
             ground: &st.ground,
@@ -767,7 +762,16 @@ mod tests {
             "{text}"
         );
         assert_eq!(text.matches(&"─".repeat(40)).count(), 3, "{text}");
-        assert!(text.contains("· Street"), "coordinate row: {text}");
+        let city = st.city.as_ref().unwrap();
+        let d = city
+            .tile(StratumKind::Street, pos)
+            .and_then(|t| t.district)
+            .map(|d| city.district(d).name.clone())
+            .expect("a district under you");
+        assert!(
+            text.contains(&format!(" {d}")),
+            "the minimap's bottom row: {text}"
+        );
         assert_eq!(width(100), 40);
         assert_eq!(width(120), 40);
     }

@@ -30,8 +30,10 @@ pub enum Through {
     Door(BuildingId),
     /// The lift bank, to that level.
     Lift(i32),
+    /// The stairwell, to that level.
     Stairs {
         up: bool,
+        to: i32,
     },
     /// This floor's door out.
     Exit,
@@ -352,7 +354,7 @@ fn to_level(
         place,
         path,
         goal: plan.stair,
-        through: Through::Stairs { up: to > level },
+        through: Through::Stairs { up: to > level, to },
     })
 }
 
@@ -551,7 +553,9 @@ pub fn next_text(st: &AppState, leg: &Leg, target: Target) -> Option<String> {
             })
         }
         Through::Lift(l) => Some(format!("lift to {}", FloorPlan::label(l))),
-        Through::Stairs { up } => Some(if up { "stairs up" } else { "stairs down" }.to_string()),
+        Through::Stairs { up, .. } => {
+            Some(if up { "stairs up" } else { "stairs down" }.to_string())
+        }
         Through::Exit => {
             let Place::Floor { building, level } = leg.place else {
                 return None;
@@ -978,7 +982,13 @@ mod tests {
         st.net.alarm(b, now);
         assert!(!st.net.lifts_answer(b, now));
         let leg = super::leg(&st, home).unwrap();
-        assert_eq!(leg.through, Through::Stairs { up: true });
+        assert_eq!(
+            leg.through,
+            Through::Stairs {
+                up: true,
+                to: level
+            }
+        );
         assert_eq!(leg.goal, stair);
         assert_eq!(next_text(&st, &leg, home).as_deref(), Some("stairs up"));
     }
@@ -1041,7 +1051,7 @@ mod tests {
         assert!(
             matches!(
                 leg.through,
-                Through::Lift(0) | Through::Stairs { up: false }
+                Through::Lift(0) | Through::Stairs { up: false, to: 0 }
             ),
             "{leg:?}"
         );
@@ -1287,7 +1297,7 @@ mod tests {
         assert!(
             matches!(
                 down.through,
-                Through::Lift(0) | Through::Stairs { up: false }
+                Through::Lift(0) | Through::Stairs { up: false, to: 0 }
             ),
             "{down:?}"
         );
@@ -1350,7 +1360,7 @@ mod tests {
         let leg = super::leg(&st, target).unwrap();
         assert!(
             matches!(leg.through, Through::Lift(l) if l < plan.top)
-                || leg.through == Through::Stairs { up: false },
+                || matches!(leg.through, Through::Stairs { up: false, .. }),
             "{leg:?}"
         );
     }

@@ -2391,7 +2391,7 @@ mod tests {
         let lines: Vec<&str> = text.lines().collect();
         let cap = lines
             .iter()
-            .position(|l| l.contains("lit: remembered · faint: the city grid"))
+            .position(|l| l.contains(" · STREET · zoom "))
             .unwrap();
         assert!(!lines[cap].contains('@'), "title row: {:?}", lines[cap]);
         assert!(lines[cap + 1..].iter().any(|l| l.contains('@')), "{text}");

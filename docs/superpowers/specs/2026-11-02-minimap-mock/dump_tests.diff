@@ -1,0 +1,271 @@
+diff --git a/crates/strata-zero/src/screens/shots.rs b/crates/strata-zero/src/screens/shots.rs
+index 25fb8cd..1d23fa5 100644
+--- a/crates/strata-zero/src/screens/shots.rs
++++ b/crates/strata-zero/src/screens/shots.rs
+@@ -2076,3 +2076,266 @@ fn indoor_lighting() {
+         shoot(name, &mut st);
+     }
+ }
++
++/// THROWAWAY: the street of the walk shot as data, for the minimap mockups.
++#[test]
++#[ignore]
++fn tmp_minimap_dump() {
++    let Ok(dir) = std::env::var("SHOT_DIR") else {
++        return;
++    };
++    let (mut st, route) = walked_city();
++    stand_on(&mut st, route[route.len().saturating_sub(96)]);
++    let source = story_track(&st).unwrap();
++    crate::track::set(&mut st, source).unwrap();
++    let map = MapScreen::walking(&mut st);
++    fly(&mut st, None, 14);
++    let city = st.city.as_ref().unwrap();
++    let s = city.stratum(StratumKind::Street).unwrap();
++    let size = s.tiles.size();
++    let vis = st.player.as_ref().unwrap().vis_at(Place::Stratum(StratumKind::Street));
++    let mut ter = Vec::new();
++    let mut dis = Vec::new();
++    let mut seen = Vec::new();
++    let mut feat = Vec::new();
++    for y in 0..size.h as i32 {
++        let (mut a, mut b, mut c, mut d) = (String::new(), String::new(), String::new(), String::new());
++        for x in 0..size.w as i32 {
++            let p = Pos::new(x, y);
++            let t = s.tiles.get(p).unwrap();
++            a.push(match t.terrain {
++                citygen::Terrain::Void => ' ',
++                citygen::Terrain::Water | citygen::Terrain::Sewage => 'w',
++                citygen::Terrain::Road => 'r',
++                citygen::Terrain::Sidewalk => 's',
++                citygen::Terrain::Alley => 'a',
++                citygen::Terrain::Plaza => 'p',
++                citygen::Terrain::Floor => 'f',
++                citygen::Terrain::Wall => 'W',
++                citygen::Terrain::Door => 'D',
++                citygen::Terrain::Window => 'N',
++                citygen::Terrain::Mass => 'M',
++                citygen::Terrain::Rooftop => 'R',
++                citygen::Terrain::Walkway | citygen::Terrain::Bridge => 'k',
++                citygen::Terrain::Stair | citygen::Terrain::Lift | citygen::Terrain::Ladder => '^',
++                citygen::Terrain::Grate => 'g',
++                citygen::Terrain::Rail => '=',
++                _ => '?',
++            });
++            b.push(t.district.map_or('.', |d| (b'a' + d.0 as u8) as char));
++            c.push(match vis.and_then(|g| g.get(p)) {
++                Some(crate::render::Visibility::Visible) => '2',
++                Some(crate::render::Visibility::Remembered) => '1',
++                _ => '0',
++            });
++            d.push(if t.feature.is_some() { 'F' } else if t.is_walkable() { '.' } else { '#' });
++        }
++        ter.push(a);
++        dis.push(b);
++        seen.push(c);
++        feat.push(d);
++    }
++    let districts: Vec<_> = city
++        .districts
++        .iter()
++        .map(|d| {
++            let t = st.style.theme_or_neutral(Some(d.theme));
++            let c = |r: crate::render::Rgb| format!("#{:02x}{:02x}{:02x}", r.0, r.1, r.2);
++            serde_json::json!({
++                "id": d.id.0, "name": d.name, "theme": format!("{:?}", d.theme),
++                "center": [d.center.x, d.center.y],
++                "roof": c(t.roof), "road": c(t.road), "sidewalk": c(t.sidewalk),
++                "accent": c(t.accent), "accent2": c(t.accent2),
++            })
++        })
++        .collect();
++    let colour = |c: Color| match c {
++        Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
++        _ => String::new(),
++    };
++    let listings: Vec<_> = crate::track::listings::listings(&st, StratumKind::Street)
++        .into_iter()
++        .map(|l| {
++            serde_json::json!({
++                "kind": format!("{:?}", l.kind), "glyph": l.kind.glyph().to_string(),
++                "colour": colour(l.kind.color()), "name": l.name, "what": l.what,
++                "tile": [l.tile.x, l.tile.y], "walk": l.walk,
++            })
++        })
++        .collect();
++    let buildings: Vec<_> = city
++        .buildings
++        .iter()
++        .map(|b| {
++            let f = b.footprint;
++            serde_json::json!({
++                "kind": format!("{:?}", b.kind), "name": b.name, "district": b.district.0,
++                "fp": [f.x, f.y, f.w, f.h],
++            })
++        })
++        .collect();
++    let leg = crate::track::leg_now(&st).and_then(|l| l.ok());
++    let path: Vec<[i32; 2]> = leg.map_or(Vec::new(), |l| l.path.iter().map(|p| [p.x, p.y]).collect());
++    let player = st.player.as_ref().unwrap().pos;
++    let frames: Vec<_> = BOTH
++        .iter()
++        .map(|&(w, h)| {
++            let buf = draw_stack(&st, &[&map], (w, h));
++            let mut rows = Vec::new();
++            for y in 0..h {
++                let mut row = Vec::new();
++                for x in 0..w {
++                    let c = &buf[(x, y)];
++                    row.push(serde_json::json!([
++                        c.symbol(),
++                        colour(c.fg),
++                        colour(c.bg),
++                        c.modifier.contains(Modifier::BOLD)
++                    ]));
++                }
++                rows.push(row);
++            }
++            serde_json::json!({"w": w, "h": h, "cells": rows})
++        })
++        .collect();
++    let out = serde_json::json!({
++        "w": size.w, "h": size.h, "terrain": ter, "district": dis, "vis": seen, "feat": feat,
++        "districts": districts, "listings": listings, "buildings": buildings, "path": path,
++        "player": [player.x, player.y], "frames": frames,
++        "body": [st.missions.bodies[0].pos.x, st.missions.bodies[0].pos.y],
++    });
++    std::fs::write(format!("{dir}/minimap_dump.json"), out.to_string()).unwrap();
++    for (w, h) in BOTH {
++        shot_stack(&format!("minimap_now_{w}x{h}"), &st, &[&map], (w, h));
++    }
++}
++
++/// THROWAWAY: indoor floors as data, for the minimap mockups.
++#[test]
++#[ignore]
++fn tmp_minimap_indoor_dump() {
++    use citygen::BuildingKind as K;
++    let Ok(dir) = std::env::var("SHOT_DIR") else {
++        return;
++    };
++    let colour = |c: Color| match c {
++        Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
++        _ => String::new(),
++    };
++    let dump = |name: &str, st: &mut AppState| {
++        let map = MapScreen::walking(st);
++        fly(st, None, 14);
++        let p = st.player.as_ref().unwrap();
++        let Place::Floor { building, level } = p.place else {
++            panic!("not inside")
++        };
++        let (plan, floor) = st.interiors.floor(building, level).unwrap();
++        let size = floor.tiles.size();
++        let mut ter = Vec::new();
++        for y in 0..size.h as i32 {
++            let mut a = String::new();
++            for x in 0..size.w as i32 {
++                let t = floor.tiles.get(Pos::new(x, y)).unwrap();
++                a.push(match t.terrain {
++                    citygen::Terrain::Void => ' ',
++                    citygen::Terrain::Floor => '.',
++                    citygen::Terrain::Wall => 'W',
++                    citygen::Terrain::Door => 'D',
++                    citygen::Terrain::Window => 'N',
++                    citygen::Terrain::Stair => 'S',
++                    citygen::Terrain::Lift => 'L',
++                    citygen::Terrain::Atrium => 'A',
++                    citygen::Terrain::Railing => 'R',
++                    citygen::Terrain::Walkway => 'k',
++                    _ if t.is_walkable() => ',',
++                    _ => '#',
++                });
++            }
++            ter.push(a);
++        }
++        let rooms: Vec<_> = floor
++            .rooms
++            .iter()
++            .map(|r| {
++                serde_json::json!({
++                    "rect": [r.rect.x, r.rect.y, r.rect.w, r.rect.h],
++                    "kind": r.kind.label(), "number": r.number, "private": r.private,
++                    "door": r.door.map(|d| [d.x, d.y]),
++                })
++            })
++            .collect();
++        let exits: Vec<_> = floor
++            .exits
++            .iter()
++            .map(|e| serde_json::json!({"at": [e.at.x, e.at.y], "door": [e.door.x, e.door.y],
++                "stratum": format!("{:?}", e.stratum)}))
++            .collect();
++        let leg = crate::track::leg_now(st).and_then(|l| l.ok());
++        let path: Vec<[i32; 2]> =
++            leg.map_or(Vec::new(), |l| l.path.iter().map(|p| [p.x, p.y]).collect());
++        let through = leg.map(|l| format!("{:?}", l.through));
++        let b = st.city.as_ref().unwrap().building(building);
++        let fp = plan.footprint;
++        let standing = crate::track::listings::standing(st, StratumKind::Street).map(|s| [s.door.x, s.door.y]);
++        let target = crate::track::target_now(st).map(|t| format!("{t:?}"));
++        let pos = p.pos;
++        let frame = {
++            let buf = draw_stack(st, &[&map], (120, 40));
++            let mut rows = Vec::new();
++            for y in 0..40 {
++                let mut row = Vec::new();
++                for x in 0..120 {
++                    let c = &buf[(x, y)];
++                    row.push(serde_json::json!([
++                        c.symbol(),
++                        colour(c.fg),
++                        colour(c.bg),
++                        c.modifier.contains(Modifier::BOLD)
++                    ]));
++                }
++                rows.push(row);
++            }
++            rows
++        };
++        let out = serde_json::json!({
++            "name": b.name, "kind": format!("{:?}", b.kind), "level": level,
++            "lowest": plan.lowest, "top": plan.top, "fp": [fp.x, fp.y, fp.w, fp.h],
++            "lift": plan.lift.map(|l| [l.x, l.y]), "stair": [plan.stair.x, plan.stair.y],
++            "atrium": plan.atrium.map(|a| [a.x, a.y, a.w, a.h]), "home_level": plan.home_level,
++            "w": size.w, "h": size.h, "terrain": ter, "rooms": rooms, "exits": exits,
++            "path": path, "through": through, "player": [pos.x, pos.y], "standing": standing,
++            "target": target, "cells": frame,
++        });
++        std::fs::write(format!("{dir}/{name}.json"), out.to_string()).unwrap();
++    };
++    let (mut st, _) = tracked_from_the_flat();
++    dump("indoor_flat", &mut st);
++    let (mut st, _) = tracked_city();
++    let city = st.city.clone().unwrap();
++    let found = city
++        .buildings
++        .iter()
++        .filter(|b| b.kind == K::Office)
++        .find_map(|b| {
++            let floor = st.interiors.ensure(&city, b.id, 2)?.clone();
++            let size = floor.tiles.size();
++            let mid = Pos::new(size.w as i32 / 2, size.h as i32 / 2);
++            let stand = floor
++                .tiles
++                .iter()
++                .filter(|(_, t)| t.is_walkable())
++                .min_by_key(|(p, _)| p.dist2(mid))
++                .map(|(p, _)| p)?;
++            Some((b.id, stand))
++        })
++        .unwrap();
++    st.player = Some(crate::walker::Player::at(
++        Place::Floor {
++            building: found.0,
++            level: 2,
++        },
++        found.1,
++    ));
++    crate::track::tick(&mut st);
++    dump("indoor_office", &mut st);
++}

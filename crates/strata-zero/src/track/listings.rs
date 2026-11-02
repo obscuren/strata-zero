@@ -171,6 +171,28 @@ pub fn source_of(st: &AppState, l: &Listing) -> Source {
     .unwrap_or(Source::Listing(l.id))
 }
 
+/// The glyph and colour the maps mark a track's target with: what its listing would
+/// show, a job's or the story's `◆`, a picked spot `⌖`.
+pub fn marker_of(st: &AppState, source: &Source) -> (char, Color) {
+    let kind = match *source {
+        Source::Job { .. } | Source::Story { .. } => Kind::Jobs,
+        Source::Listing(ListingId::Job(_) | ListingId::Story(_)) => Kind::Jobs,
+        Source::Listing(ListingId::Person(_)) => Kind::Fixers,
+        Source::Listing(ListingId::Building(b)) => {
+            if st.home.as_ref().is_some_and(|r| r.home.building == b) {
+                Kind::Home
+            } else {
+                match st.city.as_ref().and_then(|c| c.building_opt(b)) {
+                    Some(x) => Kind::of(x.kind),
+                    None => return ('⌖', MAGENTA),
+                }
+            }
+        }
+        Source::Spot { .. } => return ('⌖', MAGENTA),
+    };
+    (kind.glyph(), kind.color())
+}
+
 /// Where you stand on a stratum's map.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Standing {

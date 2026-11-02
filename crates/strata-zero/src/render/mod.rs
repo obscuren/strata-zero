@@ -8,6 +8,7 @@ pub mod glyphs;
 pub mod items;
 pub mod lighting;
 pub mod map;
+pub mod mappix;
 pub mod mark;
 pub mod minimap;
 pub mod overlay;

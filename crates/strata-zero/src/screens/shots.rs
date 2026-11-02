@@ -1907,7 +1907,7 @@ fn stand_on(st: &mut AppState, at: Pos) {
 
 /// The street by the body, with the walk from home remembered (seen every other step)
 /// and the player back outside the home megablock's door.
-fn walked_city() -> (AppState, Vec<Pos>) {
+pub(crate) fn walked_city() -> (AppState, Vec<Pos>) {
     let (mut st, _) = street_by_the_body();
     let route = home_to_body(&st);
     for at in route.iter().step_by(2) {
@@ -1923,7 +1923,7 @@ fn story_track(st: &AppState) -> Option<crate::track::Source> {
 }
 
 /// `walked_city` with the clinic named Miracorp Tattoo tracked.
-fn tracked_city() -> (AppState, MapScreen) {
+pub(crate) fn tracked_city() -> (AppState, MapScreen) {
     let (mut st, _) = walked_city();
     let l = crate::track::listings::listings(&st, StratumKind::Street)
         .into_iter()
@@ -1937,7 +1937,7 @@ fn tracked_city() -> (AppState, MapScreen) {
 }
 
 /// `tracked_city`, back in your flat on 18F where the game starts.
-fn tracked_from_the_flat() -> (AppState, MapScreen) {
+pub(crate) fn tracked_from_the_flat() -> (AppState, MapScreen) {
     let (mut st, _) = tracked_city();
     let rig = st.home.unwrap();
     let p = st.player.as_mut().unwrap();
@@ -2046,6 +2046,65 @@ fn atlas_ground() {
 #[ignore]
 fn atlas_folded() {
     atlas_shot("atlas_folded", &[KeyCode::Char('f')], false);
+}
+
+/// The minimap on the street, Miracorp Tattoo tracked: the close up, the walk, the
+/// clinic's `+`, its distance and bearing.
+#[test]
+#[ignore]
+fn minimap_street() {
+    for (w, h) in BOTH {
+        let (mut st, map) = tracked_city();
+        fly(&mut st, None, 14);
+        shot_stack(&format!("minimap_street_{w}x{h}"), &st, &[&map], (w, h));
+    }
+}
+
+/// The minimap in your flat on 18F, the same track: the floor plan, the walk to the
+/// lift, the shaft lit down to L.
+#[test]
+#[ignore]
+fn minimap_flat() {
+    for (w, h) in BOTH {
+        let (mut st, map) = tracked_from_the_flat();
+        fly(&mut st, None, 14);
+        shot_stack(&format!("minimap_flat_{w}x{h}"), &st, &[&map], (w, h));
+    }
+}
+
+/// The minimap inside a building of one floor: the plan alone, no shaft.
+#[test]
+#[ignore]
+fn minimap_one_floor() {
+    for (w, h) in BOTH {
+        let (mut st, _) = tracked_city();
+        let city = st.city.clone().unwrap();
+        let b = city
+            .buildings
+            .iter()
+            .filter(|b| b.kind.is_closed())
+            .find(|b| {
+                st.interiors.ensure(&city, b.id, 0).is_some()
+                    && st
+                        .interiors
+                        .plan_of(b.id)
+                        .is_some_and(|p| p.lowest == p.top)
+            })
+            .expect("a one-floor building")
+            .id;
+        let (_, floor) = st.interiors.floor(b, 0).unwrap();
+        let door = floor.exits.first().map(|e| floor.doorstep(e)).unwrap();
+        let p = st.player.as_mut().unwrap();
+        p.place = Place::Floor {
+            building: b,
+            level: 0,
+        };
+        p.pos = door;
+        crate::track::tick(&mut st);
+        let map = MapScreen::walking(&mut st);
+        fly(&mut st, None, 14);
+        shot_stack(&format!("minimap_one_floor_{w}x{h}"), &st, &[&map], (w, h));
+    }
 }
 
 /// The street with the walk to Marlo's body, `back` tiles of it still ahead, `flying`
