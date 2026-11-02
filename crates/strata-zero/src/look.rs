@@ -595,7 +595,8 @@ pub fn look_card(
         let item = st.content.item(&s.item);
         set_head(&mut card, first.clone(), mark_items(st, place, pos));
         card.second = item.map(|i| format!("{} · on the ground", i.kind.label()));
-        card.body.extend(item.map(|i| i.desc.clone()));
+        card.body
+            .extend(item.map(|i| crate::missions::item_desc(st, &i.id)));
         card.also.extend(rest.iter().cloned());
     } else if let Some(f) = tile.feature {
         let glyph = mark_tile(st, map, pos);
@@ -680,6 +681,19 @@ pub fn look_card(
         }
     } else {
         ground(st, map, place, pos, own, &mut card);
+    }
+    // What the story left on the tile, its own paragraph.
+    if visible
+        && let Some((_, _, note)) = st
+            .missions
+            .notes
+            .iter()
+            .find(|(p, q, _)| *p == place && *q == pos)
+    {
+        if !card.body.is_empty() {
+            card.body.push(String::new());
+        }
+        card.body.push(note.clone());
     }
     if !visible {
         card.second = Some("as you last saw it".to_string());
@@ -960,6 +974,21 @@ mod tests {
     }
 
     #[test]
+    fn an_item_reads_its_look_reading() {
+        let st = state(false);
+        let mut st = crate::missions::reading::tests::reader(st, &[]);
+        let at = bare(&st);
+        stand(&mut st, at);
+        let shard = game::ItemId::new("ledger_shard");
+        st.ground.add(STREET, at, shard.clone(), 1);
+        let own = st.content.item(&shard).unwrap().desc.clone();
+        assert_eq!(card(&st, at).body, [own]);
+        st.character.skills.insert(game::SkillId::new("streetwise"));
+        let c = card(&st, at);
+        assert_eq!(c.body, ["Tape round it. Ruko wraps his like that."]);
+    }
+
+    #[test]
     fn remembered_tiles_hide_people_and_items() {
         let mut st = state(true);
         let (_, at, beside) = someone(&st);
@@ -1179,6 +1208,41 @@ mod tests {
             assert!(l.has(k), "{k}");
         }
         assert!(l.line(Group::Feature, "lamp", 0, Pos::new(0, 0)).is_some());
+    }
+
+    #[test]
+    fn a_note_reads_under_its_tile_look() {
+        use crate::missions::{Mark, tests};
+        let (mut st, b, level, chair) = crate::clinic::testutil::inside();
+        st.book = tests::doc_book(tests::IDLE, "");
+        tests::cast_doc(&mut st, b);
+        let place = Place::Floor { building: b, level };
+        let note = crate::missions::Effect::Note {
+            at: Mark::Chair("doc".into()),
+            text: "Three tags scratched on the lamp arm.".into(),
+        };
+        crate::missions::effects::apply(&mut st, 0, 0, &note);
+        fn floor(st: &AppState, place: Place) -> MapRef<'_> {
+            MapRef::for_place(
+                st.city.as_ref().unwrap(),
+                &st.interiors,
+                &st.constructs,
+                place,
+                0,
+            )
+            .unwrap()
+        }
+        let mut p = Player::at(place, st.player.as_ref().unwrap().pos);
+        p.update_fov(&floor(&st, place), 0);
+        st.player = Some(p);
+        let map = floor(&st, place);
+        let c = look_card(&st, &map, place, chair, &|_, _| None, &[]);
+        let n = c.body.len();
+        assert!(n >= 1, "{c:?}");
+        assert_eq!(c.body[n - 1], "Three tags scratched on the lamp arm.");
+        if n > 1 {
+            assert_eq!(c.body[n - 2], "", "its own paragraph");
+        }
     }
 
     #[test]

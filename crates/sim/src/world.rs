@@ -133,6 +133,8 @@ pub struct World {
     satisfied: HashMap<PersonId, Goal>,
     /// People who have been killed: they stay in `people()` but are never placed.
     dead: BTreeSet<PersonId>,
+    /// People held at work: the schedule does not send them home.
+    held: BTreeSet<PersonId>,
 }
 
 impl World {
@@ -182,6 +184,7 @@ impl World {
             chat_resume: HashMap::new(),
             satisfied: HashMap::new(),
             dead: BTreeSet::new(),
+            held: BTreeSet::new(),
         };
         w.place_everyone(city);
         w.refresh_open();
@@ -232,7 +235,11 @@ impl World {
         self.displaced.remove(&id);
         self.pending.retain(|r| r.who != id);
         self.chat_resume.remove(&id);
-        // A trip cut short leaves its car at the kerb it was bound for.
+        self.park_cars_of(i);
+    }
+
+    /// A trip cut short leaves its car at the kerb it was bound for.
+    fn park_cars_of(&mut self, i: usize) {
         if let Whereabouts::Travelling(t) = &self.people[i].whereabouts {
             for l in &t.legs {
                 if let Some(c) = l.car {
@@ -245,6 +252,67 @@ impl World {
                 }
             }
         }
+    }
+
+    /// Holds a person at work: they are put at their workplace on the job at once, and
+    /// the schedule does not send them home until `release`. A date they are on ends.
+    pub fn keep_at_work(&mut self, id: PersonId) {
+        let i = id.0 as usize;
+        if i >= self.people.len() || self.dead.contains(&id) {
+            return;
+        }
+        let at = match self.people[i].work {
+            Work::Building(b) => Whereabouts::Inside(b),
+            Work::Spot(pos) => Whereabouts::At {
+                pos,
+                activity: Activity::Working,
+            },
+            Work::Roaming => return,
+        };
+        self.end_dates_of(id);
+        self.park_cars_of(i);
+        self.displaced.remove(&id);
+        self.chat_resume.remove(&id);
+        self.pending.retain(|r| r.who != id);
+        self.satisfied.remove(&id);
+        self.people[i].goal = Goal::Work;
+        self.people[i].whereabouts = at;
+        self.held.insert(id);
+        self.refresh_open();
+    }
+
+    /// Ends any date this person is on: the other one comes out as a date's end has
+    /// them, the worker back on the beat, the client at the hotel's door.
+    fn end_dates_of(&mut self, id: PersonId) {
+        let (ended, kept) = std::mem::take(&mut self.dates)
+            .into_iter()
+            .partition(|d| d.client == id || d.worker == id);
+        self.dates = kept;
+        for d in ended {
+            if d.worker != id && !self.dead.contains(&d.worker) {
+                self.people[d.worker.0 as usize].whereabouts = Whereabouts::At {
+                    pos: d.beat,
+                    activity: Activity::Working,
+                };
+            }
+            if d.client != id && !self.dead.contains(&d.client) {
+                let door = self.places.doors[&d.hotel][0];
+                self.people[d.client.0 as usize].whereabouts = Whereabouts::At {
+                    pos: door,
+                    activity: Activity::Loitering,
+                };
+            }
+        }
+    }
+
+    /// Lets a held person follow their schedule again.
+    pub fn release(&mut self, id: PersonId) {
+        self.held.remove(&id);
+    }
+
+    /// Whether this person is held at work.
+    pub fn is_held(&self, id: PersonId) -> bool {
+        self.held.contains(&id)
     }
 
     /// Whether this person has been killed.
@@ -783,6 +851,9 @@ impl World {
             if matches!(self.people[i].whereabouts, Whereabouts::Travelling(_)) {
                 continue;
             }
+            if self.held.contains(&PersonId(i as u32)) {
+                continue;
+            }
             if self
                 .dates
                 .iter()
@@ -1270,6 +1341,101 @@ mod tests {
 
     fn one(w: &World, f: impl Fn(&Person) -> bool) -> &Person {
         w.people().iter().find(|p| f(p)).expect("someone fits")
+    }
+
+    /// A ripperdoc and her clinic.
+    fn a_doc(w: &World) -> (PersonId, BuildingId) {
+        let p = one(w, |p| {
+            p.profession == "ripperdoc" && matches!(p.work, Work::Building(_))
+        });
+        let Work::Building(b) = p.work else {
+            unreachable!()
+        };
+        (p.id, b)
+    }
+
+    fn working_in(w: &World, b: BuildingId, id: PersonId) -> bool {
+        w.inside(b)
+            .iter()
+            .any(|o| o.id == id && o.role == OccupantRole::Working)
+    }
+
+    #[test]
+    fn a_held_worker_stays_at_work_out_of_hours() {
+        let c = city();
+        let mut w = world(&c);
+        let (id, b) = a_doc(&w);
+        run_to(&mut w, &c, tick_at(10 * 60, 1));
+        assert!(!working_in(&w, b, id), "off at ten");
+        w.keep_at_work(id);
+        assert!(w.is_held(id));
+        assert!(working_in(&w, b, id));
+        run_to(&mut w, &c, tick_at(16 * 60, 1));
+        assert!(working_in(&w, b, id), "still at work six hours on");
+        assert!(w.is_open(b));
+    }
+
+    #[test]
+    fn release_sends_them_where_the_schedule_says() {
+        let c = city();
+        let mut w = world(&c);
+        let (id, b) = a_doc(&w);
+        run_to(&mut w, &c, tick_at(10 * 60, 1));
+        w.keep_at_work(id);
+        w.release(id);
+        assert!(!w.is_held(id));
+        run_to(&mut w, &c, tick_at(12 * 60, 1));
+        assert!(!w.inside(b).iter().any(|o| o.id == id));
+    }
+
+    #[test]
+    fn holding_someone_on_a_date_ends_it() {
+        let c = city();
+        let mut w = world(&c);
+        let (id, b) = a_doc(&w);
+        run_to(&mut w, &c, tick_at(23 * 60, 0));
+        let (wi, beat) = (0..w.people.len())
+            .find_map(|i| match w.people[i].whereabouts {
+                Whereabouts::At {
+                    pos,
+                    activity: Activity::Working,
+                } if w.people[i].profession == "sex_worker" => Some((i, pos)),
+                _ => None,
+            })
+            .expect("someone on the beat");
+        let hotel = *w.places.doors.keys().find(|h| **h != b).unwrap();
+        let worker = PersonId(wi as u32);
+        // The doc on a date in a hotel, ten minutes to go.
+        for who in [id, worker] {
+            w.people[who.0 as usize].whereabouts = Whereabouts::Inside(hotel);
+        }
+        w.dates.push(Date {
+            client: id,
+            worker,
+            hotel,
+            until: w.minute + 10,
+            beat,
+        });
+        w.keep_at_work(id);
+        assert!(w.dates.is_empty(), "the date is over");
+        assert_eq!(
+            w.people[wi].whereabouts,
+            Whereabouts::At {
+                pos: beat,
+                activity: Activity::Working
+            },
+            "back on the beat"
+        );
+        let later = w.tick() + 20 * TICKS_PER_MINUTE;
+        run_to(&mut w, &c, later);
+        assert!(working_in(&w, b, id), "never walked out of the hotel");
+    }
+
+    #[test]
+    fn a_new_world_holds_nobody() {
+        let c = city();
+        let w = world(&c);
+        assert!(w.people().iter().all(|p| !w.is_held(p.id)));
     }
 
     /// One doc to a clinic, in the back room by night, gone by day.

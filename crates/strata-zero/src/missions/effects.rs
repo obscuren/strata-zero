@@ -1,8 +1,8 @@
 //! What a step does to the game (spec §4), its text filled as it runs.
 
 use super::{
-    Body, Call, Effect, FeedView, Mark, YOU, cast, daze, fill, marks, news, person_of, role_name,
-    scene, visitors,
+    Body, Call, CodeOf, Effect, FeedView, Mark, TrayOffer, YOU, cast, code_slot, daze, fill, marks,
+    news, person_of, role_name, scene, visitors,
 };
 use crate::app::AppState;
 use citygen::{Place, StratumKind};
@@ -47,6 +47,9 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
         Effect::Take { item, count } => {
             game::remove_from_pack(&mut st.character, &ItemId::new(item), *count);
         }
+        Effect::Unseal(item) => {
+            st.missions.unsealed.insert(item.clone());
+        }
         Effect::Dead { role, look } => dead(st, role, look),
         Effect::Objective(text) => {
             let text = fill(st, text);
@@ -58,11 +61,19 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
             from,
             subject,
             body,
+            code,
         } => {
+            // The code is learned as the mail lands; `{code}` says it, or nothing.
+            let digits = code
+                .as_ref()
+                .and_then(|c| learn_code(st, c))
+                .map(|c| format!("{c:04}"))
+                .unwrap_or_default();
+            let text = |st: &AppState, t: &str| fill(st, &t.replace(&code_slot(), &digits));
             let mail = crate::credentials::Mail {
                 from: role_name(st, from),
-                subject: fill(st, subject),
-                body: body.iter().map(|b| fill(st, b)).collect(),
+                subject: text(st, subject),
+                body: body.iter().map(|b| text(st, b)).collect(),
                 read: false,
                 at: st.net.now(st),
                 job: None,
@@ -77,8 +88,89 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
         Effect::Arrive { role, at } => arrive(st, role, at),
         Effect::Leave(role) => visitors::leave(st, role),
         Effect::Lights(level) => lights(st, *level),
+        Effect::Holo { from, text } => holo(st, from, text),
+        Effect::Note { at, text } => note(st, at, text),
         Effect::News(id) => news::put_out(st, id, mission, step),
         Effect::Daze(seconds) => daze::start(st, *seconds),
+        Effect::Hold(role) => {
+            if let (Some(id), Some(w)) = (person_of(st, role), st.world.as_mut()) {
+                w.keep_at_work(id);
+            }
+        }
+        Effect::Release(role) => {
+            st.missions.releasing.insert(role.clone());
+        }
+        Effect::Tray {
+            from,
+            tab,
+            title,
+            line,
+            sets,
+        } => {
+            // The first set that fits who you are now, kept as it is held out. Nothing
+            // when nobody holds it.
+            let items = sets
+                .iter()
+                .find(|s| super::holds(st, Some(mission), &s.need))
+                .map(|s| s.items.iter().map(|i| ItemId(i.clone())).collect());
+            if let Some(items) = items
+                && person_of(st, from).is_some()
+            {
+                st.missions.tray = Some(TrayOffer {
+                    mission,
+                    step,
+                    from: from.clone(),
+                    tab: tab.clone(),
+                    title: fill(st, title),
+                    line: fill(st, line),
+                    items,
+                    shown: false,
+                });
+            }
+        }
+    }
+}
+
+/// A mail's code into the journal (`Source::Mail`): the street code of the role's work
+/// building. None when nobody plays the role or they work in no building.
+fn learn_code(st: &mut AppState, code: &CodeOf) -> Option<u16> {
+    let CodeOf::Clinic(role) = code;
+    let b = cast::work_building(st, person_of(st, role)?)?;
+    let code = crate::credentials::street_code(st, b);
+    let at = st.net.now(st);
+    st.journal.learn(crate::credentials::Code {
+        building: b,
+        level: 0,
+        number: crate::credentials::STREET_DOOR,
+        household: None,
+        code,
+        source: crate::credentials::Source::Mail,
+        noted_by: None,
+        at,
+    });
+    Some(code)
+}
+
+/// Lets go each role `Release` named once you are not inside their work building, so
+/// they never walk out past you. A role nobody plays is dropped.
+pub(super) fn release_waiting(st: &mut AppState) {
+    if st.missions.releasing.is_empty() {
+        return;
+    }
+    let inside = match st.player.as_ref().map(|p| p.place) {
+        Some(Place::Floor { building, .. }) => Some(building),
+        _ => None,
+    };
+    let roles: Vec<String> = st.missions.releasing.iter().cloned().collect();
+    for role in roles {
+        let who = person_of(st, &role);
+        if inside.is_some() && who.and_then(|id| cast::work_building(st, id)) == inside {
+            continue;
+        }
+        if let (Some(id), Some(w)) = (who, st.world.as_mut()) {
+            w.release(id);
+        }
+        st.missions.releasing.remove(&role);
     }
 }
 
@@ -106,6 +198,50 @@ pub(super) fn arrive(st: &mut AppState, role: &str, at: &Mark) {
 /// Your flat's light level; 1.0 is normal.
 pub(super) fn lights(st: &mut AppState, level: f32) {
     st.missions.lights = (level < 1.0).then_some(level);
+}
+
+/// The role's line through your flat's holo set, under the channel with its label
+/// glitched into the speaker's initial. Nothing away from home or without a set.
+fn holo(st: &mut AppState, from: &str, text: &str) {
+    if !super::at(st, &super::Where::Home) {
+        return;
+    }
+    let (Some(city), Some((place, pos))) = (st.city.as_ref(), news::set_tile(st)) else {
+        return;
+    };
+    let channel = news::channel(city);
+    let keep = channel.chars().count().saturating_sub(3);
+    let initial = role_name(st, from)
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_default();
+    let label = format!(
+        "{}▚▞▚ {initial}",
+        channel.chars().take(keep).collect::<String>()
+    );
+    let colour = visitors::colour(&st.book, from);
+    let text = fill(st, text);
+    super::asides::say(
+        st,
+        super::asides::Speaker::Tile(place, pos),
+        label,
+        colour,
+        text,
+    );
+}
+
+/// Leaves the filled line under the Look of the mark's tile, replacing any there. A mark
+/// that resolves to nothing leaves nothing.
+pub(super) fn note(st: &mut AppState, at: &Mark, text: &str) {
+    let Some((place, pos)) = marks::resolve(st, at, None) else {
+        return;
+    };
+    let text = fill(st, text);
+    st.missions
+        .notes
+        .retain(|(p, q, _)| (*p, *q) != (place, pos));
+    st.missions.notes.push((place, pos, text));
 }
 
 /// The role's person dies: a body at their work tile, the sim done with them. Once.
@@ -144,7 +280,7 @@ mod tests {
     use crate::jobs::testutil::state_home;
     use crate::missions::{Mark, marks, visitors};
     use crate::walker::Player;
-    use citygen::Pos;
+    use citygen::{Place, Pos, StratumKind};
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use ratatui::style::{Color, Style};
@@ -218,6 +354,61 @@ mod tests {
     }
 
     #[test]
+    fn holo_speaks_through_the_set_at_home() {
+        let mut st = in_the_flat();
+        let (place, set) = news::set_tile(&st).unwrap();
+        let channel = news::channel(st.city.as_ref().unwrap());
+        let holo = Effect::Holo {
+            from: "seren".into(),
+            text: "Your lock's yours again, {mezz}.".into(),
+        };
+        apply(&mut st, 0, 0, &holo);
+        let [a] = st.missions.asides.as_slice() else {
+            panic!("{:?}", st.missions.asides)
+        };
+        assert_eq!(
+            a.speaker,
+            crate::missions::asides::Speaker::Tile(place, set)
+        );
+        let stem: String = channel.chars().take(channel.chars().count() - 3).collect();
+        assert_eq!(a.label, format!("{stem}▚▞▚ S"));
+        assert_eq!(a.colour, visitors::colour(&st.book, "seren"));
+        assert!(!a.text.contains('{'), "filled: {}", a.text);
+    }
+
+    #[test]
+    fn holo_away_from_home_says_nothing() {
+        let mut st = in_the_flat();
+        st.player = Some(Player::at(
+            Place::Stratum(StratumKind::Street),
+            Pos::new(1, 1),
+        ));
+        let holo = Effect::Holo {
+            from: "seren".into(),
+            text: "Hello.".into(),
+        };
+        apply(&mut st, 0, 0, &holo);
+        assert!(st.missions.asides.is_empty());
+    }
+
+    #[test]
+    fn a_note_replaces_the_one_on_its_tile_and_unresolved_does_nothing() {
+        let mut st = in_the_flat();
+        let at = Mark::HomeInside(2);
+        let tile = marks::resolve(&st, &at, None).unwrap();
+        let note = |text: &str| Effect::Note {
+            at: at.clone(),
+            text: text.into(),
+        };
+        apply(&mut st, 0, 0, &note("one"));
+        apply(&mut st, 0, 0, &note("two"));
+        assert_eq!(st.missions.notes, [(tile.0, tile.1, "two".to_string())]);
+        st.home = None;
+        apply(&mut st, 0, 0, &note("three"));
+        assert_eq!(st.missions.notes.len(), 1);
+    }
+
+    #[test]
     fn the_daze_effect_starts_a_daze() {
         let mut st = state_home();
         st.tick = 77;
@@ -237,6 +428,180 @@ mod tests {
         apply(&mut st, 1, 2, &Effect::News("marlo".into()));
         let n = crate::missions::news::current(&st).unwrap();
         assert_eq!((n.id.as_str(), n.mission, n.step), ("marlo", 1, 2));
+    }
+
+    /// At night beside the clinic's chair, its doc cast as `doc`: the state, the clinic
+    /// and the doc.
+    fn by_the_chair() -> (AppState, citygen::BuildingId, sim::PersonId) {
+        let (mut st, b, _, _) = crate::clinic::testutil::inside();
+        let doc = super::super::tests::cast_doc(&mut st, b);
+        (st, b, doc)
+    }
+
+    fn held(st: &AppState, doc: sim::PersonId) -> bool {
+        st.world.as_ref().unwrap().is_held(doc)
+    }
+
+    #[test]
+    fn release_waits_until_you_are_out() {
+        let (mut st, b, doc) = by_the_chair();
+        apply(&mut st, 0, 0, &Effect::Hold("doc".into()));
+        assert!(held(&st, doc));
+        apply(&mut st, 0, 0, &Effect::Release("doc".into()));
+        crate::missions::tick(&mut st);
+        assert!(held(&st, doc), "not while you are inside");
+        // Out on the street: the next tick lets her go.
+        let out = super::super::tests::outside_door(&st, b);
+        super::super::tests::on_street(&mut st, out);
+        crate::missions::tick(&mut st);
+        assert!(!held(&st, doc));
+        assert!(st.missions.releasing.is_empty());
+        // Nobody cast: the release is dropped, nothing else.
+        apply(&mut st, 0, 0, &Effect::Release("nobody".into()));
+        crate::missions::tick(&mut st);
+        assert!(st.missions.releasing.is_empty());
+    }
+
+    /// The doc's tray on Castellan's tab: a NETRUNNER's set, then one for anyone.
+    fn tray() -> Effect {
+        let set = |need: crate::missions::Need, items: &[&str]| crate::missions::TraySet {
+            need,
+            items: items.iter().map(|s| s.to_string()).collect(),
+        };
+        Effect::Tray {
+            from: "doc".into(),
+            tab: "castellan".into(),
+            title: "her tray".into(),
+            line: "One piece, on {castellan}'s tab.".into(),
+            sets: vec![
+                set(
+                    crate::missions::Need::Skill("hacking".into()),
+                    &["neural_port", "feedback_fuse", "limbic_damper"],
+                ),
+                set(
+                    crate::missions::Need::All(vec![]),
+                    &["subdermal_mesh", "target_lens", "neural_port"],
+                ),
+            ],
+        }
+    }
+
+    fn ids(items: &[&str]) -> Vec<ItemId> {
+        items.iter().copied().map(ItemId::new).collect()
+    }
+
+    #[test]
+    fn the_tray_offers_the_first_set_that_fits() {
+        let (mut st, _, _) = by_the_chair();
+        st.character.skills.clear();
+        st.character.skills.insert(game::SkillId::new("hacking"));
+        apply(&mut st, 2, 3, &tray());
+        let t = st.missions.tray.clone().expect("the tray is up");
+        assert_eq!(
+            t.items,
+            ids(&["neural_port", "feedback_fuse", "limbic_damper"])
+        );
+        assert_eq!((t.mission, t.step), (2, 3));
+        assert_eq!((t.from.as_str(), t.tab.as_str()), ("doc", "castellan"));
+        assert_eq!(t.title, "her tray");
+        assert_eq!(t.line, "One piece, on Castellan's tab.");
+        assert!(!t.shown);
+        // Kept as it was held out: who you are later doesn't reshuffle it.
+        st.character.skills.clear();
+        assert_eq!(st.missions.tray.as_ref().unwrap().items, t.items);
+        // Nothing that fits: the last set.
+        apply(&mut st, 2, 3, &tray());
+        assert_eq!(
+            st.missions.tray.as_ref().unwrap().items,
+            ids(&["subdermal_mesh", "target_lens", "neural_port"])
+        );
+        // Nobody holding it out: no tray.
+        st.missions.tray = None;
+        st.missions.cast.clear();
+        apply(&mut st, 2, 3, &tray());
+        assert_eq!(st.missions.tray, None);
+    }
+
+    #[test]
+    fn taking_a_piece_bags_it_and_opens_the_tab() {
+        let (mut st, _, doc) = by_the_chair();
+        st.character.skills.clear();
+        apply(&mut st, 0, 0, &tray());
+        let lens = ItemId::new("target_lens");
+        assert_eq!(st.character.count(&lens), 0);
+        crate::missions::take_from_tray(&mut st, 1);
+        assert_eq!(st.character.count(&lens), 1);
+        assert_eq!(st.missions.tray, None, "the rest go back in the drawer");
+        assert_eq!(
+            st.missions.tab,
+            Some(crate::missions::Tab {
+                doc,
+                item: lens.clone(),
+                payer: "Castellan".into(),
+                spent: false,
+            })
+        );
+        // No tray up: taking does nothing.
+        crate::missions::take_from_tray(&mut st, 0);
+        assert_eq!(st.character.count(&lens), 1);
+        assert_eq!(st.character.count(&ItemId::new("subdermal_mesh")), 0);
+    }
+
+    #[test]
+    fn unseal_lets_the_pack_open_the_item() {
+        let mut st = AppState::new();
+        let id = ItemId::new("taped_package");
+        assert!(!crate::missions::unsealed(&st, &id));
+        apply(&mut st, 0, 0, &Effect::Unseal("taped_package".into()));
+        assert!(crate::missions::unsealed(&st, &id));
+    }
+
+    fn mail(code: Option<&str>) -> Effect {
+        Effect::Mail {
+            from: "doc".into(),
+            subject: "ten".into(),
+            body: vec!["Shutter's down. Code's {code}.".into(), "— S".into()],
+            code: code.map(|r| crate::missions::CodeOf::Clinic(r.into())),
+        }
+    }
+
+    #[test]
+    fn the_mail_learns_the_code_as_it_lands() {
+        use crate::credentials::{STREET_DOOR, Source, street_code};
+        let (mut st, b, _) = by_the_chair();
+        let code = street_code(&st, b);
+        apply(&mut st, 0, 0, &mail(Some("doc")));
+        let learned = st.journal.code_for(b, 0, STREET_DOOR).expect("learned");
+        assert_eq!((learned.code, learned.source), (code, Source::Mail));
+        assert_eq!(learned.noted_by, None);
+        let m = st.journal.mails.last().unwrap();
+        assert_eq!(m.body[0], format!("Shutter's down. Code's {code:04}."));
+        assert_eq!(m.body[1], "— S");
+        let name = crate::net::building_name(&st, b);
+        let lines: Vec<String> = crate::credentials::entries(&st)
+            .into_iter()
+            .flat_map(|(_, _, es)| es)
+            .map(|e| e.text)
+            .collect();
+        assert!(
+            lines.iter().any(|t| t.starts_with(&format!(
+                "door code {code:04} · `{name}`, street door · from a mail on the rig"
+            ))),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_code_for_nobody_learns_nothing() {
+        let (mut st, _, _) = by_the_chair();
+        let codes = st.journal.codes().len();
+        apply(&mut st, 0, 0, &mail(Some("nobody")));
+        apply(&mut st, 0, 0, &mail(None));
+        assert_eq!(st.journal.codes().len(), codes);
+        for m in &st.journal.mails {
+            assert_eq!(m.body[0], "Shutter's down. Code's .");
+        }
+        assert_eq!(st.journal.mails.len(), 2);
     }
 
     fn arrive(role: &str, at: Mark) -> Effect {

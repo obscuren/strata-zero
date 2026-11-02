@@ -12,6 +12,23 @@
 // their texts take slots, and the roles they name are roles the mission needs. `still` is
 // 18 rows of 18 pixels, `0`-`6` the camera's greens dark to light, `r` the bracket's red.
 // `Daze(seconds)` makes the screen swim.
+// `pick: Nearest("ripperdoc")` casts the one of that profession nearest your home. A bare
+// {role}, {role.title} or {role.spaced} (the name in spaced capitals) fills from the book
+// when nobody plays the role; only the roles a mission acts on or places need a person.
+// `Hold(role)` keeps someone at work against their hours; `Release(role)` lets them go
+// once you are out of their building. `Unseal(item)` lets the pack open it. `Holo` says a
+// line through your flat's set while you are in; `Note(at, text)` leaves one under a
+// tile's Look. A mail's `code: Some(Clinic(role))` is learned as it lands and fills its
+// {code}.
+// `Tray` holds out the first set whose need holds: one piece to take, on `tab`'s tab in
+// `from`'s chair. `Chromed(role)` fires once it is in and you are up.
+// `At(By(role, within))`: beside the role's person, in sight. The mark `Chair(role)`:
+// their chair.
+// A need asks who you are: `Skill`, `Read(item)`, `Carries(item)`, `Unsealed(item)`,
+// `Changed` / `Unchanged` (the jacket the camera saw), `Late(minute)`, `Not`, `All`. A
+// `Say` with a `need` is said only when it holds.
+// `readings` are what who you are finds in an item at the rig, at the bench or by its
+// Look; the first whose need holds there is the one read.
 Story(
     cast: {
         "mezz": Role(
@@ -42,6 +59,10 @@ Story(
             tint: Some((255, 0, 200)),
             look: Some("Striking. A black netsuit, your rig's cable still at her neck."),
         ),
+        "odile": Role(name: "Odile Vance", title: "ripperdoc", pick: Nearest("ripperdoc"),
+            face: None, tint: Some((160, 220, 255))),
+        "coz": Role(name: "Coz", title: "fixer",
+            pick: Worker(professions: ["fixer"], at: [], range: (40, 200)), face: None),
     },
     faces: {
         "hustler": Face(rows: [
@@ -156,6 +177,50 @@ Story(
                 ]),
             ]),
         ]),
+        Mission(id: "doctor", title: "Doctor's in by ten", from: "castellan", steps: [
+            Step(id: "word", when: MissionDone(mission: "morning_after", minutes: 0), then: [
+                Hold("odile"),
+                Unseal("taped_package"),
+                Holo(from: "seren", text: "Doctor's in by ten. Eat first."),
+                Mail(from: "seren", subject: "ten", code: Some(Clinic("odile")), body: [
+                    "Doctor's in by ten. Eat first.",
+                    "Shutter's down till dark. Code's {code}. She knows you're coming.",
+                    "The package is yours now. Open it.",
+                    "— S",
+                ]),
+                Objective("See the doctor · {odile.place} · {odile.district} · by ten"),
+            ]),
+            Step(id: "in", when: At(By(role: "odile", within: 4)), then: [Scene("odile")]),
+            Step(id: "tray", when: Ended("in"), then: [
+                Tray(from: "odile", tab: "castellan", title: "her tray",
+                    line: "One piece, on his tab. The rest go back in the drawer.", sets: [
+                    TraySet(need: Skill("hacking"), items: ["neural_port", "target_lens", "subdermal_mesh"]),
+                    TraySet(need: Skill("electronics"), items: ["grip_arm", "capacitor_ribs", "damper_cochlea"]),
+                    TraySet(need: Skill("handguns"), items: ["target_lens", "adrenal_pump", "hardback_brace"]),
+                    TraySet(need: Skill("blades"), items: ["piston_arm", "subdermal_mesh", "adrenal_pump"]),
+                    TraySet(need: Skill("stealth"), items: ["nightglass_optics", "damper_cochlea", "smart_ink"]),
+                    TraySet(need: Skill("streetwise"), items: ["secondhand_eyes", "bulldog_jaw", "filter_liver"]),
+                    TraySet(need: Skill("medtech"), items: ["surgeon_arm", "filter_liver", "rebreather"]),
+                    TraySet(need: Skill("athletics"), items: ["adrenal_pump", "hardback_brace", "subdermal_mesh"]),
+                    TraySet(need: All([]), items: ["subdermal_mesh", "target_lens", "neural_port"]),
+                ]),
+                Objective("Sit in {odile}'s chair · your piece is on {castellan}'s tab"),
+            ]),
+            Step(id: "out", when: Chromed("odile"), then: [Scene("odile_out")]),
+            Step(id: "free", when: Ended("out"), then: [
+                Release("odile"),
+                Log("`Doctor's in by ten` · on {castellan}'s tab"),
+            ]),
+        ]),
+        // The hook, its own mission so a city with one fixer (Mezz) still plays the doctor.
+        Mission(id: "ledger", title: "The ledger", from: "castellan", steps: [
+            Step(id: "go", when: MissionDone(mission: "doctor", minutes: 0), then: [
+                Objective("Sell the ledger back to {coz} · {coz.place} · {coz.district}"),
+            ]),
+            Step(id: "sell", when: Talk("coz"), then: [
+                Log("`{coz}` · \"The ledger? Not here. I'll find you.\""),
+            ]),
+        ]),
     ],
     scenes: {
         // Seren's aside follows the film as its `next`, from the console too.
@@ -215,6 +280,25 @@ Story(
             Wait(1.5),
             Say(who: "you", text: "…so that happened."),
         ]),
+        "odile": Scene(title: "Doctor's in by ten", look: Bubbles,
+            pace: Pace(type: 45, walk: 0.3, hold: Some(2.5)), beats: [
+            Stage("One light on, over the chair."),
+            Say(who: "odile", text: "He sends me strays."),
+            Say(who: "odile", need: Some(Late(600)), text: "Ten, he said. He said you'd be late, too."),
+            Say(who: "odile", need: Some(Changed), text: "New jacket. Good. The last one didn't think of that."),
+            Say(who: "odile", need: Some(Unchanged), text: "Lose that jacket before you go. It's on every screen in {marlo.district}."),
+            Say(who: "odile", need: Some(All([Not(Read("ledger_shard")), Carries("taped_package")])),
+                text: "That tape's {coz}'s. You're walking a fixer's ledger round in daylight."),
+            Say(who: "odile", need: Some(All([Not(Read("ledger_shard")), Carries("ledger_shard")])),
+                text: "That shard's {coz}'s. You're walking a fixer's ledger round in daylight."),
+            Say(who: "odile", text: "{castellan} pays for one piece. Pick."),
+        ]),
+        "odile_out": Scene(title: "Doctor's in by ten", look: Bubbles,
+            pace: Pace(type: 45, walk: 0.3, hold: Some(2.5)), beats: [
+            Say(who: "odile", text: "Three sat in that chair on his money before you."),
+            Say(who: "odile", hold: Some(4.0), text: "Ask him where they are."),
+            Note(at: Chair("odile"), text: "Three clinic tags hang off the lamp arm. The names are scratched off."),
+        ]),
     },
     news: {
         "marlo": News(
@@ -270,5 +354,34 @@ Story(
             close: "turn it off",
             fresh: 1440,
         ),
+    },
+    readings: {
+        "ledger_shard": [
+            Reading(at: Rig, need: Skill("hacking"), verb: "Read", head: "shard · read at the rig",
+                close: "pull it", tells: true, rows: [
+                Field("LEDGER", "214 entries · 2068–2071"),
+                Field("owner", "`{coz}` · fixer"),
+                Hot("ICE     open · cracked 02:13 last night"),
+                Blank,
+                Ledger(4, 214),
+                Blank,
+                Tag("too slow. —S"),
+            ]),
+            Reading(at: Bench, need: Skill("electronics"), verb: "Open the casing",
+                head: "shard · casing open", close: "close the casing", tells: true, rows: [
+                Art("┌─────────────────────┐   housing  matte, no maker"),
+                Art("│ ░░░░░░░░░░░░░░░░░░░ │   data     locked · ICE 3"),
+                Art("└┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┘   contacts gold, worn bright"),
+                Art("  ╰── `{coz.spaced}` ──╯           mark     `{coz}` · burned in"),
+                Blank,
+                You("{coz}. Fixers sign their shards."),
+            ]),
+            Reading(at: Look, need: Skill("streetwise"),
+                text: "Black fixer's tape still round the casing, wound three times. {coz} wraps his like that."),
+        ],
+        "taped_package": [
+            Reading(at: Look, need: All([Skill("streetwise"), Unsealed("taped_package")]),
+                text: "Black fixer's tape, wound three times. {coz} wraps his like that."),
+        ],
     },
 )

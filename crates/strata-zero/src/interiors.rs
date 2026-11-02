@@ -8,7 +8,8 @@ use citygen::{
     BuildingId, City, Exit, Floor, FloorPlan, Place, Pos, Role, RoomKind, StratumKind, Terrain,
     generate_floor,
 };
-use sim::{HouseholdId, OccupantRole, PersonId, World};
+use sim::{HouseholdId, Occupant, OccupantRole, PersonId, Whereabouts, World};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -244,10 +245,13 @@ pub fn enter(st: &mut AppState, b: BuildingId, door: (StratumKind, Pos)) -> Resu
     if st.net.engaged.is_some() {
         return Err("not now".to_string());
     }
-    // A ripperdoc's door is shut while the doc is out.
-    if !crate::clinic::is_open(st, b) {
-        return Err(crate::clinic::closed_line(st, b));
-    }
+    // A ripperdoc's door is shut while the doc is out or held; its street code lifts it.
+    let keyed = if crate::clinic::is_open(st, b) {
+        None
+    } else {
+        let code = crate::credentials::known_street_code(st, b);
+        Some(code.ok_or_else(|| crate::clinic::closed_line(st, b))?)
+    };
     let city = st.city.as_ref().ok_or("no city")?;
     let plan = st
         .interiors
@@ -269,7 +273,10 @@ pub fn enter(st: &mut AppState, b: BuildingId, door: (StratumKind, Pos)) -> Resu
     let name = building_name(city, b);
     crate::credentials::prepare(st, b);
     land(st, Place::Floor { building: b, level }, step);
-    Ok(format!("Entering `{name}`"))
+    Ok(match keyed {
+        Some(code) => format!("you key in {code:04}"),
+        None => format!("Entering `{name}`"),
+    })
 }
 
 /// Steps out of an exit onto its landing on the city map.
@@ -399,6 +406,55 @@ pub fn floor_rows(plan: &FloorPlan, here: i32) -> Vec<(i32, String)> {
         .collect()
 }
 
+/// A building's plan as the session has it, else made fresh from the seed.
+pub fn plan_now(st: &AppState, b: BuildingId) -> Option<Cow<'_, FloorPlan>> {
+    match st.interiors.plan_of(b) {
+        Some(plan) => Some(Cow::Borrowed(plan)),
+        None => FloorPlan::new(st.city.as_ref()?, b).map(Cow::Owned),
+    }
+}
+
+/// A floor as the session has it once walked onto, else made fresh from the seed: the
+/// same floor, not kept. So the story can see a floor nobody has looked at.
+pub fn floor_now<'a>(st: &'a AppState, plan: &FloorPlan, level: i32) -> Option<Cow<'a, Floor>> {
+    if !plan.levels().any(|l| l == level) {
+        return None;
+    }
+    match st.interiors.floor(plan.building, level) {
+        Some((_, floor)) => Some(Cow::Borrowed(floor)),
+        None => Some(Cow::Owned(generate_floor(st.city.as_ref()?, plan, level))),
+    }
+}
+
+/// Where a person is drawn now (doctor spec §4): their tile on the street, or inside a
+/// building the tile its floor's `Placement` stands them on, on the floor they occupy.
+/// None for the dead, and for anyone behind a door.
+pub fn drawn_at(st: &AppState, id: PersonId) -> Option<(Place, Pos)> {
+    let world = st.world.as_ref()?;
+    if let Some(pos) = world.pos_of(id) {
+        return Some((Place::Stratum(StratumKind::Street), pos));
+    }
+    let Whereabouts::Inside(b) = world.people().get(id.0 as usize)?.whereabouts else {
+        return None;
+    };
+    let occupants = world.inside(b);
+    let o = occupants.iter().find(|o| o.id == id)?;
+    let plan = plan_now(st, b)?;
+    let level = match o.role {
+        OccupantRole::Working if receptionist(world, &occupants) == Some(id) => 0,
+        OccupantRole::Working => work_floor(&plan.work_floors(), id),
+        OccupantRole::Visiting => 0,
+        OccupantRole::Living | OccupantRole::Guest => return None,
+    };
+    let floor = floor_now(st, &plan, level)?;
+    let none = Homes::default();
+    let homes = st.interiors.homes_of(b).unwrap_or(&none);
+    let (pos, _) = Placement::new(&plan, &floor, world, homes)
+        .people()
+        .find(|(_, who)| *who == id)?;
+    Some((Place::Floor { building: b, level }, pos))
+}
+
 /// Where the building's occupants stand on one floor, worked out from the world's
 /// coarse `Inside` state the moment the floor is looked at.
 #[derive(Clone, Debug, Default)]
@@ -435,6 +491,23 @@ fn take_station(free: &mut Vec<(Pos, Role)>, wants: &[Role]) -> Option<Pos> {
     None
 }
 
+/// The first drone at work in a building: they mind the lobby desk.
+fn receptionist(world: &World, occupants: &[Occupant]) -> Option<PersonId> {
+    occupants
+        .iter()
+        .find(|o| {
+            o.role == OccupantRole::Working
+                && world.people()[o.id.0 as usize].profession == "corp_drone"
+        })
+        .map(|o| o.id)
+}
+
+/// The one of the work floors a worker works on, by who they are.
+fn work_floor(work_floors: &[i32], id: PersonId) -> i32 {
+    let h = hash64(id.0 as u64, 0x0CC);
+    work_floors[(h % work_floors.len() as u64) as usize]
+}
+
 impl Placement {
     pub fn new(plan: &FloorPlan, floor: &Floor, world: &World, homes: &Homes) -> Placement {
         let mut free: Vec<(Pos, Role)> = floor.stations.iter().map(|s| (s.pos, s.role)).collect();
@@ -456,13 +529,7 @@ impl Placement {
             .collect();
         let occupants = world.inside(plan.building);
         // The first drone at work minds the lobby desk; the rest spread over the floors.
-        let receptionist = occupants
-            .iter()
-            .find(|o| {
-                o.role == OccupantRole::Working
-                    && world.people()[o.id.0 as usize].profession == "corp_drone"
-            })
-            .map(|o| o.id);
+        let receptionist = receptionist(world, &occupants);
         for o in occupants {
             let p = &world.people()[o.id.0 as usize];
             let h = hash64(o.id.0 as u64, 0x0CC);
@@ -476,8 +543,7 @@ impl Placement {
                         }
                         continue;
                     }
-                    let level = work_floors[(h % work_floors.len() as u64) as usize];
-                    if level != floor.level {
+                    if work_floor(&work_floors, o.id) != floor.level {
                         continue;
                     }
                     let shops = has_shops(floor);
@@ -631,6 +697,38 @@ mod tests {
             }
         }
         assert!(laundromats > 0, "a cellar clinic among them");
+    }
+
+    #[test]
+    fn a_doc_is_drawn_at_her_station_whether_her_floor_was_seen_or_not() {
+        let (mut st, b, _, _) = crate::clinic::testutil::outside(crate::clinic::testutil::NIGHT);
+        let doc = crate::clinic::doc_at_work(&st, b).unwrap();
+        // Nobody has walked in: her floor is made fresh for it, and not kept.
+        let (place, pos) = drawn_at(&st, doc).expect("drawn inside");
+        assert_eq!(st.interiors.generated(), 0);
+        let Place::Floor { building, level } = place else {
+            panic!("on a floor: {place:?}")
+        };
+        assert_eq!(building, b);
+        let city = st.city.clone().unwrap();
+        let floor = st.interiors.ensure(&city, b, level).unwrap();
+        assert!(floor.chair().is_some(), "the chair's floor");
+        assert_eq!(floor.station_at(pos).map(|s| s.role), Some(Role::Surgery));
+        // Seen, the same tile, where the floor's placement stands her.
+        assert_eq!(drawn_at(&st, doc), Some((place, pos)));
+        let (plan, floor) = st.interiors.floor(b, level).unwrap();
+        let placed = Placement::new(plan, floor, st.world.as_ref().unwrap(), &Homes::default());
+        assert_eq!(placed.person_at(pos), Some(doc));
+        // On the street, where the sim has her.
+        let out = crate::missions::tests::outside_door(&st, b);
+        st.world.as_mut().unwrap().park(doc, out);
+        assert_eq!(
+            drawn_at(&st, doc),
+            Some((Place::Stratum(StratumKind::Street), out))
+        );
+        // Dead, nowhere.
+        st.world.as_mut().unwrap().kill(doc);
+        assert_eq!(drawn_at(&st, doc), None);
     }
 
     #[test]

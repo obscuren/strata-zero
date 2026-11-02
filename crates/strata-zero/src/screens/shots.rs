@@ -1592,10 +1592,13 @@ fn news_shots() {
     }
     news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
     let about = person_of(&st, &news::current(&st).unwrap().about).unwrap();
+    // You walk away in what you wear.
+    let worn = st.character.equipped(Slot::Torso).cloned();
     let body = st.missions.bodies.iter_mut().find(|b| b.person == about);
     body.expect("the item's body").left = Some(Left {
         at: (22, 41),
         heading: "north",
+        worn,
     });
     let map = MapScreen::walking(&mut st);
     let broadcast = crate::missions::broadcast::Broadcast::new();
@@ -2392,5 +2395,179 @@ fn jobs_tab() {
             &[&map, &deck, to.as_ref()],
             (w, h),
         );
+    }
+}
+
+/// The morning after, Seren's word come: in the flat, the doctor's mission open.
+fn seren_has_written() -> AppState {
+    let mut st = crate::missions::tests::the_morning_call();
+    crate::missions::tests::to_the_word(&mut st);
+    st
+}
+
+/// Walks the player to a free tile by the news set, the camera there.
+fn by_the_set(st: &mut AppState) -> MapScreen {
+    let (place, set) = crate::missions::news::set_tile(st).expect("the set");
+    let mut me = crate::walker::Player::at(place, set.offset(-2, 1));
+    {
+        let city = st.city.as_ref().unwrap();
+        let flat = crate::render::map::MapRef::for_place(
+            city,
+            &st.interiors,
+            &st.constructs,
+            place,
+            st.minute_of_day(),
+        )
+        .unwrap();
+        me.update_fov(&flat, st.sight_bonus());
+    }
+    st.player = Some(me);
+    MapScreen::walking(st)
+}
+
+/// Runs the world on `seconds` of game time.
+fn world_seconds(st: &mut AppState, seconds: u64) {
+    let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+    world.advance(
+        city,
+        world.tick() + seconds * crate::missions::call::TICKS_PER_SECOND,
+    );
+}
+
+/// In at the doc's street door on the mailed code and up beside her, her scene (the
+/// doctor's `in` step) starting.
+fn at_the_doctor(st: &mut AppState) {
+    use crate::missions::tests as t;
+    let doc = crate::missions::person_of(st, "odile").expect("the doc is cast");
+    let b = crate::missions::cast::work_building(st, doc).expect("she works in her clinic");
+    let code = crate::credentials::street_code(st, b);
+    let out = t::outside_door(st, b);
+    t::on_street(st, out);
+    let (_, door) = st
+        .city
+        .as_ref()
+        .unwrap()
+        .portals(b)
+        .into_iter()
+        .find(|(k, _)| *k == StratumKind::Street)
+        .unwrap();
+    let keyed = crate::interiors::enter(st, b, (StratumKind::Street, door));
+    assert_eq!(keyed, Ok(format!("you key in {code:04}")));
+    let (place, at) = crate::interiors::drawn_at(st, doc).expect("she is drawn inside");
+    let by = t::beside_on(st, place, at);
+    t::stand_seeing(st, place, by);
+    crate::missions::tick(st);
+}
+
+/// Doctor's in by ten, drawn through the real screens: Seren on the set, the shard's
+/// cards at the rig and the bench, the doc and her scene, her tray, the tab in the chair.
+#[test]
+#[ignore]
+fn doctor_shots() {
+    use crate::missions::ReadAt;
+    use crate::missions::reading::ReadCard;
+    use crate::screens::sheet::LedgerRow;
+    let shard = ItemId::new("ledger_shard");
+    for (w, h) in [(120u16, 40u16), (100, 30)] {
+        let size = (w, h);
+        let name = |what: &str| format!("doctor_{what}_{w}x{h}");
+
+        // Seren's line through the set.
+        let mut st = seren_has_written();
+        st.missions.daze = None;
+        let ahead = (7 * 60 + 52 + 1440 - u64::from(st.minute_of_day())) % 1440;
+        let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+        world.advance(city, world.tick() + ahead * sim::TICKS_PER_MINUTE);
+        // Her line went up at 06:04 and is long gone: put it up again at 07:52.
+        let line = st.missions.asides.pop().expect("Seren on the set");
+        st.missions.asides.clear();
+        crate::missions::asides::say(&mut st, line.speaker, line.label, line.colour, line.text);
+        let map = by_the_set(&mut st);
+        world_seconds(&mut st, 3);
+        shot_stack(&name("seren_set"), &st, &[&map], size);
+
+        // The shard read at the rig by a hacker, over the flat.
+        let mut st = seren_has_written();
+        st.character.skills.insert(game::SkillId::new("hacking"));
+        let map = by_the_set(&mut st);
+        let card = ReadCard::open(&mut st, &shard, ReadAt::Rig).expect("the rig reads it");
+        shot_stack(&name("read_rig"), &st, &[&map, &card], size);
+
+        // The casing opened at the bench by a wrench, over the deck's pack.
+        let mut st = seren_has_written();
+        st.character = game::Character::debug_runner(&st.content);
+        st.character
+            .skills
+            .insert(game::SkillId::new("electronics"));
+        st.character.give_item(&st.content, shard.clone(), 1);
+        let map = by_the_set(&mut st);
+        st.tick += 200;
+        let mut deck = Deck::new(st.tick);
+        deck.update(&mut st, &[key(KeyCode::Char('4'))]);
+        let card = ReadCard::open(&mut st, &shard, ReadAt::Bench).expect("the bench opens it");
+        shot_stack(&name("read_bench"), &st, &[&map, &deck, &card], size);
+
+        // The held clinic at ten, the first line up beside her.
+        let mut st = seren_has_written();
+        let (hh, mm) = st.clock();
+        let now = u64::from(hh) * 60 + u64::from(mm);
+        let ahead = (10 * 60 + 1440 - now) % 1440;
+        let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+        world.advance(city, world.tick() + ahead * sim::TICKS_PER_MINUTE);
+        at_the_doctor(&mut st);
+        scene_is(&mut st, "odile");
+        scene_at(&mut st, 1);
+        st.missions.daze = None;
+        let mut map = MapScreen::walking(&mut st);
+        map.settle(&mut st, size);
+        // Her bubble is anchored: she is drawn where the map places her, and the tail
+        // sits in the cell just above or below hers.
+        let doc = crate::missions::person_of(&st, "odile").unwrap();
+        let her = crate::interiors::drawn_at(&st, doc).expect("she is drawn");
+        let anchor = crate::missions::scene::running(&st)
+            .and_then(|s| s.line().and_then(|l| l.anchor))
+            .expect("her line has an anchor");
+        assert_eq!(anchor, her, "the line is anchored on her drawn tile");
+        let buf = draw_stack(&st, &[&map], size);
+        assert_eq!(
+            map.placed_tile(doc),
+            Some(her.1),
+            "the map places her there"
+        );
+        let rect = map.last_map_rect();
+        let origin = map.cam.origin(rect.width, rect.height);
+        let (sx, sy) = crate::render::viewport::tile_to_screen(rect, origin, her.1)
+            .expect("her cell is on screen");
+        let tail = [(sy.wrapping_sub(1), '▾'), (sy + 1, '▴')]
+            .into_iter()
+            .find(|&(y, glyph)| buf[(sx, y)].symbol() == glyph.to_string());
+        assert!(tail.is_some(), "no tail beside her cell ({sx}, {sy})");
+        shot_stack(&name("odile"), &st, &[&map], size);
+
+        // Her tray, once the scene is out.
+        crate::missions::scene::skip(&mut st);
+        let tray = Popup::tray(&st).expect("her tray is held out");
+        st.tick += 200;
+        let map = MapScreen::walking(&mut st);
+        shot_stack(&name("tray"), &st, &[&map, &tray], size);
+
+        // The chair on the tab: a piece from the tray, the fee his.
+        crate::missions::take_from_tray(&mut st, 0);
+        let tab = st.missions.tab.clone().expect("the tab");
+        let site = crate::missions::tests::site_for(&st, &tab.item);
+        let mut st = crate::clinic::testutil::seated();
+        st.character.give_item(&st.content, tab.item.clone(), 1);
+        st.missions.tab = Some(tab);
+        let map = MapScreen::walking(&mut st);
+        let mut deck = Deck::chair(&st);
+        deck.sheet.state.row = LedgerRow::Site(site);
+        deck.update(&mut st, &[key(KeyCode::Char(' '))]);
+        deck.sheet.changed = st.tick;
+        deck.sheet.card = st.tick;
+        st.tick += 200;
+        if st.tick % 90 < 3 {
+            st.tick += 3;
+        }
+        shot_stack(&name("chair_tab"), &st, &[&map, &deck], size);
     }
 }

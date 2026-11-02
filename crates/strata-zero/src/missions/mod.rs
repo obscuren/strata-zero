@@ -6,7 +6,8 @@
 //! player sees: the HOLO feed and call (`feed`, `call`, `face`), the scenes played on
 //! the map (`scene`, with `marks` and `visitors`), the news put out (`news`) and its
 //! broadcast on the holo set (`broadcast`), the bubbles that leave you the keys
-//! (`asides`), the daze (`daze`) and the JOBS lines (`ui`).
+//! (`asides`), the daze (`daze`), the JOBS lines (`ui`) and an item's readings and
+//! their card (`reading`).
 //! No mission, step or role id appears in Rust outside tests; the book names them.
 //!
 //! Adding a block (spec `docs/superpowers/specs/2026-10-31-story-missions-design.md`, 15):
@@ -16,6 +17,9 @@
 //! - An effect: a variant on `Effect`, its arm in `effects::apply`, its names in
 //!   `Book::validate`. Test it.
 //! - A pick: a variant on `Pick` and its arm in `cast::pick`.
+//! - A need: a variant on `Need` and its arm in `holds`.
+//! - A reading's row: a variant on `Row`, its texts in `Reading::texts` and its lines
+//!   in `reading::lines`.
 
 pub mod asides;
 pub mod broadcast;
@@ -31,16 +35,18 @@ pub mod film;
 pub mod marks;
 pub mod news;
 pub mod overlay;
+pub mod reading;
 pub mod scene;
 pub mod ui;
 pub mod visitors;
 
 pub use content::*;
+pub use reading::{item_desc, reading};
 
 use crate::app::AppState;
 use crate::render::Visibility;
 use citygen::{Place, Pos, StratumKind};
-use game::ItemId;
+use game::{ItemId, SkillId, Slot};
 use sim::PersonId;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -77,6 +83,45 @@ pub struct Missions {
     pub daze: Option<daze::Daze>,
     /// The bubbles up over the map that leave you the keys, oldest first.
     pub asides: Vec<asides::Aside>,
+    /// The items the story has unsealed, by id: `Need::Unsealed`.
+    pub unsealed: BTreeSet<String>,
+    /// The items whose telling reading has been shown, by id: `Need::Read`.
+    pub read: BTreeSet<String>,
+    /// Roles `Release` let go, waiting for you to leave their work building.
+    pub releasing: BTreeSet<String>,
+    /// The lines the story left under a tile's Look, one a tile.
+    pub notes: Vec<(Place, Pos, String)>,
+    /// The tray held out, until a piece is taken from it.
+    pub tray: Option<TrayOffer>,
+    /// The piece taken from a tray, on someone's tab.
+    pub tab: Option<Tab>,
+}
+
+/// A tray of pieces held out by a role (doctor spec §8): one to take, on a tab.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrayOffer {
+    pub mission: usize,
+    pub step: usize,
+    /// The role holding it out.
+    pub from: String,
+    /// The role whose tab pays.
+    pub tab: String,
+    pub title: String,
+    pub line: String,
+    /// The set that fitted who you were when it was held out, kept.
+    pub items: Vec<ItemId>,
+    /// It has been put up over the map; esc leaves it waiting, talking opens it again.
+    pub shown: bool,
+}
+
+/// A piece on someone's tab: in its doc's chair it goes in free, once.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Tab {
+    pub doc: PersonId,
+    pub item: ItemId,
+    /// The name of whoever pays.
+    pub payer: String,
+    pub spent: bool,
 }
 
 /// Where one mission stands.
@@ -91,6 +136,8 @@ pub struct Run {
     pub objectives: Vec<String>,
     /// Steps whose feed or call has ended.
     pub ended: BTreeSet<usize>,
+    /// The game minute its first step fired: when the mission began.
+    pub began: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,12 +170,14 @@ pub struct Body {
 
 /// You walking away from a body (morning news spec §7): the first time you were more
 /// than `news::AWAY` tiles from it after having been near.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Left {
     /// The clock: hour, minute.
     pub at: (u8, u8),
     /// The eight-point heading from the body to you: `north`, `north-east` …
     pub heading: &'static str,
+    /// What you wore on your torso then: the jacket the camera saw (doctor spec §7).
+    pub worn: Option<ItemId>,
 }
 
 /// A HOLO feed waiting to be shown, its text filled.
@@ -202,6 +251,7 @@ pub fn begin(st: &mut AppState) {
             },
             objectives: Vec::new(),
             ended: BTreeSet::new(),
+            began: None,
         })
         .collect();
     st.missions.runs = runs;
@@ -218,7 +268,7 @@ pub fn begin(st: &mut AppState) {
         }
     }
     // The story restarts, so its items do: take back what an earlier start gave.
-    let given: Vec<ItemId> = st.book.gives().into_iter().map(ItemId::new).collect();
+    let given = st.book.gives(&st.content);
     for id in given {
         let held = st.character.count(&id);
         game::remove_from_pack(&mut st.character, &id, held);
@@ -226,14 +276,75 @@ pub fn begin(st: &mut AppState) {
     send(st, Event::NewGame);
 }
 
+/// Whether the story has unsealed the item, so the pack may open it.
+pub fn unsealed(st: &AppState, id: &ItemId) -> bool {
+    st.missions.unsealed.contains(&id.0)
+}
+
+/// The person holding out the tray, while one waits.
+pub fn tray_from(st: &AppState) -> Option<PersonId> {
+    st.missions
+        .tray
+        .as_ref()
+        .and_then(|t| person_of(st, &t.from))
+}
+
+/// Takes the tray's `i`th piece into your pack, on the tab of its doc, the one holding
+/// it out; the rest are put away. Nothing without a tray or its doc.
+pub fn take_from_tray(st: &mut AppState, i: usize) {
+    let Some(tray) = st.missions.tray.as_ref() else {
+        return;
+    };
+    let (Some(item), Some(doc)) = (tray.items.get(i).cloned(), person_of(st, &tray.from)) else {
+        return;
+    };
+    let payer = role_name(st, &tray.tab);
+    let name = st
+        .content
+        .item(&item)
+        .map_or_else(|| item.to_string(), |it| it.name.clone());
+    st.character.give_item(&st.content, item.clone(), 1);
+    st.missions.tab = Some(Tab {
+        doc,
+        item,
+        payer,
+        spent: false,
+    });
+    st.missions.tray = None;
+    st.story(format!("`{name}` ×1 · in your pack"));
+}
+
+/// The tab that pays for this piece in the chair you sit in: not yet spent, on that
+/// piece, with that chair's doc.
+pub fn tab_for<'a>(st: &'a AppState, item: &ItemId) -> Option<&'a Tab> {
+    st.missions
+        .tab
+        .as_ref()
+        .filter(|t| !t.spent && &t.item == item && st.chair.is_some_and(|c| c.doc == t.doc))
+}
+
+/// The tab dev free chrome spends on this piece: in a chair, the one `tab_for` finds;
+/// in none, the unspent tab on that piece.
+pub fn free_tab_for<'a>(st: &'a AppState, item: &ItemId) -> Option<&'a Tab> {
+    match st.chair {
+        Some(_) => tab_for(st, item),
+        None => st
+            .missions
+            .tab
+            .as_ref()
+            .filter(|t| !t.spent && &t.item == item),
+    }
+}
+
 /// Reports an event: every mission waiting on it moves on.
 pub fn send(st: &mut AppState, ev: Event) {
     fire(st, Some(&ev));
 }
 
-/// The story's beat in the explore update: the conditions checked, the scene played,
-/// the call's ring timed.
+/// The story's beat in the explore update: the held let go once you are out, the
+/// conditions checked, the scene played, the call's ring timed.
 pub fn tick(st: &mut AppState) {
+    effects::release_waiting(st);
     fire(st, None);
     scene::tick(st);
     call::tick(st);
@@ -301,6 +412,9 @@ fn run_step(st: &mut AppState, m: usize) {
     let now = st.net.now(st);
     let last = st.book.missions[m].steps.len();
     let run = &mut st.missions.runs[m];
+    if at == 0 {
+        run.began = Some(now);
+    }
     run.at = at + 1;
     run.since = now;
     run.state = if run.at >= last {
@@ -350,6 +464,16 @@ impl Trigger {
                 .is_some_and(|r| {
                     matches!(r.state, RunState::Done { at: done } if now.saturating_sub(done) >= *minutes)
                 }),
+            // The tab with the role's person as its doc is spent, and you are up out of
+            // the chair.
+            Trigger::Chromed(role) => {
+                st.chair.is_none()
+                    && st
+                        .missions
+                        .tab
+                        .as_ref()
+                        .is_some_and(|t| t.spent && person_of(st, role) == Some(t.doc))
+            }
         }
     }
 }
@@ -378,7 +502,8 @@ fn sees(st: &AppState, role: &str, within: i32) -> bool {
     })
 }
 
-/// The player is at the place: inside their flat, or on the street by a role's work.
+/// The player is at the place: inside their flat, on the street by a role's work, or
+/// beside the role's person with them in sight.
 fn at(st: &AppState, place: &Where) -> bool {
     let Some(p) = st.player.as_ref() else {
         return false;
@@ -399,7 +524,61 @@ fn at(st: &AppState, place: &Where) -> bool {
                     .and_then(|id| cast::work_tile(st, id))
                     .is_some_and(|t| p.pos.manhattan(t) <= *within)
         }
+        // On the street or a floor, wherever the role's person is drawn, and seen: never
+        // through a wall. Inside a building you are not in, they are nowhere near you,
+        // so their floor is never worked out.
+        Where::By { role, within } => person_of(st, role)
+            .filter(|id| !inside_elsewhere(st, p.place, *id))
+            .and_then(|id| crate::interiors::drawn_at(st, id))
+            .is_some_and(|(place, pos)| {
+                p.place == place
+                    && p.vis().get(pos) == Some(&Visibility::Visible)
+                    && p.pos.manhattan(pos) <= *within
+            }),
     }
+}
+
+/// The person is inside a building and off the street, and `here` is none of its
+/// floors: wherever its floors draw them, it isn't here.
+fn inside_elsewhere(st: &AppState, here: Place, id: PersonId) -> bool {
+    let Some(world) = st.world.as_ref() else {
+        return false;
+    };
+    let inside = match world.people().get(id.0 as usize).map(|q| &q.whereabouts) {
+        Some(sim::Whereabouts::Inside(b)) => *b,
+        _ => return false,
+    };
+    world.pos_of(id).is_none()
+        && !matches!(here, Place::Floor { building, .. } if building == inside)
+}
+
+/// Whether a need holds now (doctor spec §2), asked for mission `mission`: `Late`
+/// counts from when that mission began, so asked for none it never holds.
+pub fn holds(st: &AppState, mission: Option<usize>, need: &Need) -> bool {
+    let torso = || st.character.equipped(Slot::Torso);
+    match need {
+        Need::Skill(id) => st.character.has_skill(&SkillId::new(id)),
+        Need::Read(item) => st.missions.read.contains(item),
+        Need::Carries(item) => st.character.count(&ItemId::new(item)) > 0,
+        Need::Unsealed(item) => st.missions.unsealed.contains(item),
+        Need::Changed => news::jacket_seen(st).is_some_and(|j| torso() != Some(&j)),
+        Need::Unchanged => news::jacket_seen(st).is_some_and(|j| torso() == Some(&j)),
+        Need::Late(minute) => mission
+            .and_then(|m| st.missions.runs.get(m))
+            .and_then(|r| r.began)
+            .is_some_and(|began| st.net.now(st) > first_at(st, began, *minute)),
+        Need::Not(need) => !holds(st, mission, need),
+        Need::All(needs) => needs.iter().all(|n| holds(st, mission, n)),
+    }
+}
+
+/// The first game minute at or after `from` whose clock shows `minute` of the day.
+fn first_at(st: &AppState, from: u64, minute: u16) -> u64 {
+    let day = u64::from(sim::DAY);
+    // The clock at `from`, counted back from the clock now.
+    let back = st.net.now(st).saturating_sub(from) % day;
+    let then = (u64::from(st.minute_of_day()) + day - back) % day;
+    from + (u64::from(minute) + day - then) % day
 }
 
 /// A text with its `{role}` and `{role.field}` slots filled from the cast. A slot the
@@ -442,8 +621,10 @@ fn slot_text(st: &AppState, role: &str, field: Option<&str>) -> Option<String> {
     let Some(field) = field else {
         return Some(r.name.clone());
     };
-    if field == "title" {
-        return Some(r.title.clone());
+    match field {
+        "title" => return Some(r.title.clone()),
+        "spaced" => return Some(spaced(&r.name)),
+        _ => {}
     }
     let who = person_of(st, role)?;
     match field {
@@ -452,6 +633,21 @@ fn slot_text(st: &AppState, role: &str, field: Option<&str>) -> Option<String> {
         "hours" => Some(cast::hours_of(st, who)),
         _ => None,
     }
+}
+
+/// A name for a sign: each word's letters upper-case with a space between them, the
+/// words three spaces apart.
+fn spaced(name: &str) -> String {
+    name.split_whitespace()
+        .map(|w| {
+            w.chars()
+                .flat_map(char::to_uppercase)
+                .map(String::from)
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join("   ")
 }
 
 /// The person cast in a role.
@@ -507,13 +703,25 @@ pub(crate) mod tests {
     }
 
     /// Stands the player on a street tile, having looked around.
-    pub(super) fn on_street(st: &mut AppState, pos: Pos) {
+    pub(crate) fn on_street(st: &mut AppState, pos: Pos) {
         let city = st.city.as_ref().unwrap();
         let mut p = Player::at(STREET, pos);
         p.update_fov(
             &MapRef::stratum_at(city, StratumKind::Street, st.minute_of_day()),
             0,
         );
+        st.player = Some(p);
+    }
+
+    /// Stands the player on a tile of a place as it is drawn now (a floor once walked
+    /// onto), having looked around.
+    pub(crate) fn stand_seeing(st: &mut AppState, place: Place, pos: Pos) {
+        let city = st.city.as_ref().unwrap();
+        let minute = st.minute_of_day();
+        let map = MapRef::for_place(city, &st.interiors, &st.constructs, place, minute)
+            .expect("the place is drawn");
+        let mut p = Player::at(place, pos);
+        p.update_fov(&map, 0);
         st.player = Some(p);
     }
 
@@ -554,6 +762,28 @@ pub(crate) mod tests {
         tick(st);
         advance(st, 1);
         tick(st);
+    }
+
+    #[test]
+    fn a_name_slot_fills_from_the_book_when_nobody_plays_the_role() {
+        let mut st = begun();
+        st.book.cast.insert(
+            "zed".into(),
+            Role {
+                name: "Zed".into(),
+                title: "fixer".into(),
+                pick: Pick::NearestFixer,
+                face: None,
+                tint: None,
+                look: None,
+            },
+        );
+        assert!(person_of(&st, "zed").is_none());
+        assert_eq!(
+            fill(&st, "{zed} · {zed.spaced} · {zed.title} · {zed.place}"),
+            "Zed · Z E D · fixer · {zed.place}"
+        );
+        assert_eq!(spaced("Ab Cd"), "A B   C D");
     }
 
     #[test]
@@ -623,7 +853,8 @@ pub(crate) mod tests {
     #[test]
     fn the_same_city_casts_the_same() {
         let (a, b) = (begun(), begun());
-        assert_eq!(a.missions.cast.len(), 2);
+        let roles: Vec<&str> = a.missions.cast.keys().map(String::as_str).collect();
+        assert_eq!(roles, ["coz", "marlo", "mezz", "odile"]);
         assert_eq!(a.missions.cast, b.missions.cast);
     }
 
@@ -644,7 +875,13 @@ pub(crate) mod tests {
             }
             begin(&mut st);
             // Both cast, Marlo in range or, where no cook is, the nearest past it.
-            assert_eq!(st.missions.cast.len(), 2, "seed {seed}");
+            assert!(
+                ["mezz", "marlo"]
+                    .iter()
+                    .all(|r| st.missions.cast.contains_key(*r)),
+                "seed {seed}: {:?}",
+                st.missions.cast
+            );
             assert_eq!(st.missions.runs[0].state, RunState::Open, "seed {seed}");
             assert_eq!(st.missions.feeds.len(), 1, "seed {seed}");
         }
@@ -827,6 +1064,7 @@ pub(crate) mod tests {
     #[test]
     fn a_new_city_begins_a_new_story() {
         let mut st = begun();
+        let cast = st.missions.cast.clone();
         end(&mut st, 0, 0);
         assert!(st.missions.begun && !st.missions.bodies.is_empty());
         let city = st.city.clone().unwrap();
@@ -835,7 +1073,7 @@ pub(crate) mod tests {
         assert!(st.missions.cast.is_empty() && st.missions.runs.is_empty());
         assert!(st.missions.bodies.is_empty() && st.missions.feeds.is_empty());
         begin(&mut st);
-        assert_eq!(st.missions.cast.len(), 2);
+        assert_eq!(st.missions.cast, cast);
         assert_eq!(st.missions.feeds.len(), 1);
         let marlo = marlo(&st);
         assert!(!st.world.as_ref().unwrap().is_dead(marlo));
@@ -1047,13 +1285,18 @@ pub(crate) mod tests {
     /// film queued.
     pub(crate) fn at_your_door() -> AppState {
         let mut st = begun();
-        st.character.handle = "VEX".into();
-        to_the_call(&mut st);
-        end(&mut st, 0, 3);
-        let (place, pos) = marks::resolve(&st, &Mark::HomeOutside, None).unwrap();
-        st.player = Some(Player::at(place, pos));
-        tick(&mut st);
+        to_your_door(&mut st);
         st
+    }
+
+    /// `at_your_door` in any city whose story has begun.
+    fn to_your_door(st: &mut AppState) {
+        st.character.handle = "VEX".into();
+        to_the_call(st);
+        end(st, 0, 3);
+        let (place, pos) = marks::resolve(st, &Mark::HomeOutside, None).unwrap();
+        st.player = Some(Player::at(place, pos));
+        tick(st);
     }
 
     fn visitor_at(st: &AppState, mark: &Mark) -> Option<String> {
@@ -1271,22 +1514,29 @@ pub(crate) mod tests {
     /// ahead, with the minute the morning's eight hours count from.
     fn after_the_mail() -> (AppState, u64) {
         let mut st = at_your_door();
+        let since = to_the_mail(&mut st);
+        (st, since)
+    }
+
+    /// From your door, the house call skipped and Mezz's mail landed, the HOLO feed
+    /// read: the minute the morning's eight hours count from.
+    fn to_the_mail(st: &mut AppState) -> u64 {
         for _ in 0..2 {
-            tick(&mut st);
-            scene::tests::press(&mut st, crossterm::event::KeyCode::Esc);
+            tick(st);
+            scene::tests::press(st, crossterm::event::KeyCode::Esc);
         }
         st.missions.feeds.clear();
-        advance(&mut st, 2);
-        tick(&mut st);
+        advance(st, 2);
+        tick(st);
         assert!(st.journal.mails.iter().any(|m| m.subject == "lay low"));
         assert_eq!(st.missions.runs[1].state, RunState::Open);
         let since = st.missions.runs[1].since;
         assert_eq!(
-            crate::rest::now(&st),
+            crate::rest::now(st),
             since,
             "the mail starts the eight hours"
         );
-        (st, since)
+        since
     }
 
     /// The house call still open on its Sleep objective, nobody calling.
@@ -1373,13 +1623,18 @@ pub(crate) mod tests {
     }
 
     /// Eight hours after Mezz's mail, in the flat: Castellan's morning call ringing.
-    fn the_morning_call() -> AppState {
+    pub(crate) fn the_morning_call() -> AppState {
         let (mut st, _) = after_the_mail();
-        advance(&mut st, 480);
-        tick(&mut st);
+        to_the_morning_call(&mut st);
+        st
+    }
+
+    /// From Mezz's mail, eight hours on: Castellan's morning call ringing.
+    fn to_the_morning_call(st: &mut AppState) {
+        advance(st, 480);
+        tick(st);
         let call = st.missions.call.as_ref().expect("the call is up");
         assert_eq!(call.from, "castellan");
-        st
     }
 
     /// The morning call answered through and the waking scene run out: the news is on.
@@ -1517,5 +1772,823 @@ pub(crate) mod tests {
             st.world.as_ref().unwrap().people()[fixer.0 as usize].name,
             "Mezz"
         );
+    }
+
+    #[test]
+    fn a_restart_takes_back_the_shard_too() {
+        let mut st = state_home();
+        let shard = ItemId::new("ledger_shard");
+        assert!(st.book.gives(&st.content).contains(&shard));
+        st.character.give(shard.clone(), 1);
+        st.missions.unsealed.insert("taped_package".into());
+        st.missions.read.insert("ledger_shard".into());
+        // A new story: its record is fresh, and begin takes back what it gave.
+        st.missions = Missions::default();
+        assert!(st.missions.unsealed.is_empty() && st.missions.read.is_empty());
+        begin(&mut st);
+        assert_eq!(st.character.count(&shard), 0);
+    }
+
+    #[test]
+    fn skill_carries_unsealed_and_read_hold_as_named() {
+        let mut st = AppState::new();
+        let skill = Need::Skill("hacking".into());
+        st.character.skills.clear();
+        assert!(!holds(&st, None, &skill));
+        st.character.skills.insert(SkillId::new("hacking"));
+        assert!(holds(&st, None, &skill));
+        let package = ItemId::new("taped_package");
+        let carries = Need::Carries("taped_package".into());
+        assert!(!holds(&st, None, &carries));
+        st.character.give(package.clone(), 1);
+        assert!(holds(&st, None, &carries));
+        game::remove_from_pack(&mut st.character, &package, 1);
+        assert!(!holds(&st, None, &carries));
+        let unsealed = Need::Unsealed("taped_package".into());
+        assert!(!holds(&st, None, &unsealed));
+        st.missions.unsealed.insert("taped_package".into());
+        assert!(holds(&st, None, &unsealed));
+        let read = Need::Read("ledger_shard".into());
+        assert!(!holds(&st, None, &read));
+        st.missions.read.insert("ledger_shard".into());
+        assert!(holds(&st, None, &read));
+        assert!(!holds(&st, None, &Need::Read("taped_package".into())));
+        // A new story forgets both.
+        let fresh = Missions::default();
+        assert!(fresh.unsealed.is_empty() && fresh.read.is_empty());
+    }
+
+    #[test]
+    fn not_and_all_combine() {
+        let st = AppState::new();
+        let yes = Need::All(vec![]);
+        let no = Need::Not(Box::new(yes.clone()));
+        assert!(holds(&st, None, &yes));
+        assert!(!holds(&st, None, &no));
+        assert!(!holds(&st, None, &Need::All(vec![yes.clone(), no.clone()])));
+        assert!(holds(&st, None, &Need::All(vec![yes.clone(), yes.clone()])));
+        let mixed = Need::All(vec![yes, no]);
+        assert!(holds(&st, None, &Need::Not(Box::new(mixed))));
+        // As the book writes them.
+        let need: Need = ron::from_str(r#"Not(All([Skill("hacking"), Late(600)]))"#).unwrap();
+        assert_eq!(
+            need,
+            Need::Not(Box::new(Need::All(vec![
+                Need::Skill("hacking".into()),
+                Need::Late(600),
+            ])))
+        );
+    }
+
+    /// A city-less game's clock set to `h:m` on day `day`, the game starting at 22:00 on
+    /// day 1.
+    fn set_clock(st: &mut AppState, day: u64, h: u64, m: u64) {
+        let minute = (day - 1) * 1440 + h * 60 + m - 22 * 60;
+        st.tick = minute * sim::TICKS_PER_MINUTE;
+        assert_eq!(st.clock(), (h as u8, m as u8));
+    }
+
+    #[test]
+    fn late_is_past_the_first_such_clock_after_the_mission_began() {
+        let mut st = AppState::new();
+        st.missions.runs.push(Run {
+            at: 1,
+            since: 0,
+            state: RunState::Open,
+            objectives: Vec::new(),
+            ended: BTreeSet::new(),
+            began: None,
+        });
+        let late = Need::Late(600);
+        let is_late = |st: &AppState| holds(st, Some(0), &late);
+        set_clock(&mut st, 2, 10, 1);
+        assert!(!is_late(&st), "not begun");
+        // Begun at 07:20: late after ten that morning, and from then on.
+        set_clock(&mut st, 2, 7, 20);
+        st.missions.runs[0].began = Some(st.net.now(&st));
+        set_clock(&mut st, 2, 9, 59);
+        assert!(!is_late(&st));
+        set_clock(&mut st, 2, 10, 0);
+        assert!(!is_late(&st), "ten is not past ten");
+        set_clock(&mut st, 2, 10, 1);
+        assert!(is_late(&st));
+        assert!(!holds(&st, None, &late), "asked for no mission");
+        set_clock(&mut st, 3, 1, 0);
+        assert!(is_late(&st));
+        // Begun at 11:00: the next morning's ten.
+        set_clock(&mut st, 2, 11, 0);
+        st.missions.runs[0].began = Some(st.net.now(&st));
+        set_clock(&mut st, 2, 23, 0);
+        assert!(!is_late(&st));
+        set_clock(&mut st, 3, 10, 0);
+        assert!(!is_late(&st));
+        set_clock(&mut st, 3, 10, 1);
+        assert!(is_late(&st));
+        // Begun on ten: late a minute on.
+        set_clock(&mut st, 2, 10, 0);
+        st.missions.runs[0].began = Some(st.net.now(&st));
+        assert!(!is_late(&st));
+        set_clock(&mut st, 2, 10, 1);
+        assert!(is_late(&st));
+    }
+
+    #[test]
+    fn the_first_step_firing_marks_when_the_mission_began() {
+        let mut st = state_home();
+        st.book = book(
+            r#"Mission(id: "later", title: "Later", from: "mezz", steps: [
+                Step(id: "wait", when: After(minutes: 30), then: [Log("on")]),
+                Step(id: "more", when: After(minutes: 30), then: [Log("more")]),
+            ])"#,
+        );
+        begin(&mut st);
+        assert_eq!(st.missions.runs[0].began, None, "nothing fired");
+        advance(&mut st, 30);
+        tick(&mut st);
+        let began = st.net.now(&st);
+        assert_eq!(st.missions.runs[0].began, Some(began));
+        advance(&mut st, 30);
+        tick(&mut st);
+        assert!(matches!(st.missions.runs[0].state, RunState::Done { .. }));
+        assert_eq!(st.missions.runs[0].began, Some(began), "the first step's");
+    }
+
+    #[test]
+    fn changed_and_unchanged_need_a_known_jacket() {
+        let mut st = begun();
+        let both = |st: &AppState| {
+            (
+                holds(st, None, &Need::Changed),
+                holds(st, None, &Need::Unchanged),
+            )
+        };
+        assert_eq!(both(&st), (false, false), "no news item");
+        // Marlo dies and the news is about him.
+        end(&mut st, 0, 0);
+        news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        let jacket = ItemId::new("salvage_jacket");
+        st.character.wear(game::Slot::Torso, jacket.clone(), None);
+        assert_eq!(both(&st), (false, false), "nobody saw you go");
+        st.missions.bodies[0].left = Some(Left {
+            at: (22, 41),
+            heading: "north",
+            worn: None,
+        });
+        assert_eq!(both(&st), (false, false), "nothing worn then");
+        st.missions.bodies[0].left.as_mut().unwrap().worn = Some(jacket.clone());
+        assert_eq!(both(&st), (false, true));
+        st.character.take_off(game::Slot::Torso);
+        assert_eq!(both(&st), (true, false), "nothing on now");
+        st.character
+            .wear(game::Slot::Torso, ItemId::new("ballistic_weave"), None);
+        assert_eq!(both(&st), (true, false), "another jacket");
+        // Stale, the item still holds what the camera saw.
+        let fresh = news::current(&st).unwrap().fresh;
+        advance(&mut st, fresh);
+        assert!(news::current(&st).is_none());
+        assert_eq!(both(&st), (true, false));
+        st.character.wear(game::Slot::Torso, jacket, None);
+        assert_eq!(both(&st), (false, true));
+    }
+
+    /// A book whose one role, `doc`, is a ripperdoc, with these missions and scenes.
+    pub(crate) fn doc_book(missions: &str, scenes: &str) -> Book {
+        Book::parse(&format!(
+            r#"Story(
+                cast: {{
+                    "doc": Role(name: "Doc Vance", title: "ripperdoc",
+                        pick: Nearest("ripperdoc"), face: None),
+                }},
+                faces: {{
+                    "silhouette": Face(rows: ["................", "................"], eye: (0, 0, 0)),
+                }},
+                missions: [{missions}],
+                scenes: {{ {scenes} }},
+            )"#
+        ))
+        .unwrap()
+    }
+
+    /// A mission that does nothing, for a book that only needs its scenes.
+    pub(crate) const IDLE: &str = r#"Mission(id: "m", title: "M", from: "doc", steps: [
+        Step(id: "a", when: NewGame, then: [Log("hi")]),
+    ])"#;
+
+    /// Casts `doc` on the clinic's doc at work.
+    pub(crate) fn cast_doc(st: &mut AppState, b: citygen::BuildingId) -> PersonId {
+        let doc = crate::clinic::doc_at_work(st, b).expect("the doc is in");
+        st.missions.cast.insert("doc".into(), doc);
+        doc
+    }
+
+    /// The street tile outside a building's street door.
+    pub(crate) fn outside_door(st: &AppState, b: citygen::BuildingId) -> Pos {
+        let c = st.city.as_ref().unwrap();
+        let foot = c.building_opt(b).unwrap().footprint;
+        let (_, door) = c
+            .portals(b)
+            .into_iter()
+            .find(|(k, _)| *k == StratumKind::Street)
+            .unwrap();
+        door.neighbors4()
+            .find(|n| !foot.contains(*n) && c.walkable(StratumKind::Street, *n))
+            .unwrap()
+    }
+
+    #[test]
+    fn by_holds_beside_a_doc_at_work_and_not_at_the_front_door() {
+        let (mut st, b, _, _) = crate::clinic::testutil::inside();
+        st.book = doc_book(IDLE, "");
+        let doc = cast_doc(&mut st, b);
+        let by = |within| Where::By {
+            role: "doc".into(),
+            within,
+        };
+        let (place, pos) = st.player.as_ref().map(|p| (p.place, p.pos)).unwrap();
+        stand_seeing(&mut st, place, pos);
+        assert!(at(&st, &by(4)), "beside the chair, beside her");
+        assert!(!at(&st, &by(0)), "not on her tile");
+        // At the front door on the street floor: a room or a floor away from her.
+        let city = st.city.clone().unwrap();
+        let entrance = st
+            .interiors
+            .plan(&city, b)
+            .unwrap()
+            .clinic
+            .unwrap()
+            .entrance;
+        st.interiors.ensure(&city, b, 0).unwrap();
+        st.player = Some(Player::at(
+            Place::Floor {
+                building: b,
+                level: 0,
+            },
+            entrance,
+        ));
+        assert!(!at(&st, &by(4)));
+        // Out on the street, beside her where she stands.
+        let out = outside_door(&st, b);
+        st.world.as_mut().unwrap().park(doc, out);
+        on_street(&mut st, out.offset(0, 1));
+        assert!(at(&st, &by(4)));
+        on_street(&mut st, out.offset(5, 0));
+        assert!(!at(&st, &by(4)));
+        // Nobody cast, nobody beside.
+        st.missions.cast.clear();
+        on_street(&mut st, out.offset(0, 1));
+        assert!(!at(&st, &by(4)));
+    }
+
+    #[test]
+    fn by_wants_her_in_sight_not_across_a_wall() {
+        use citygen::{Front, RoomKind};
+        let (mut st, _, _, _) = crate::clinic::testutil::outside(crate::clinic::testutil::NIGHT);
+        st.book = doc_book(IDLE, "");
+        let city = st.city.clone().unwrap();
+        // A front whose front room comes within four tiles of the doc's spot, a wall
+        // between them.
+        let b = city
+            .buildings
+            .iter()
+            .map(|x| x.id)
+            .find(|b| {
+                matches!(
+                    citygen::clinic_front(&city, *b),
+                    Some(Front::NoodleBar | Front::Butcher | Front::Tattoo)
+                ) && crate::clinic::doc_at_work(&st, *b).is_some()
+            })
+            .expect("a noodle bar, butcher or tattoo clinic with its doc in");
+        let doc = cast_doc(&mut st, b);
+        let (place, her) = crate::interiors::drawn_at(&st, doc).expect("she is drawn inside");
+        let Place::Floor { level, .. } = place else {
+            panic!("{place:?}")
+        };
+        let floor = st.interiors.ensure(&city, b, level).unwrap().clone();
+        let room = |kind| floor.rooms.iter().find(|r| r.kind == kind).unwrap().rect;
+        let (front, surgery) = (room(RoomKind::Waiting), room(RoomKind::Surgery));
+        let across = front
+            .iter()
+            .find(|p| {
+                !surgery.contains(*p) && floor.tiles[*p].is_walkable() && p.manhattan(her) <= 4
+            })
+            .expect("a front-room tile four from her");
+        let by = Where::By {
+            role: "doc".into(),
+            within: 4,
+        };
+        stand_seeing(&mut st, place, across);
+        assert!(!at(&st, &by), "across the wall from her");
+        let beside = beside_on(&mut st, place, her);
+        stand_seeing(&mut st, place, beside);
+        assert!(at(&st, &by), "beside her in the surgery");
+    }
+
+    #[test]
+    fn by_answers_off_her_building_without_drawing_her_floor() {
+        let (mut st, b, _, _) = crate::clinic::testutil::inside();
+        st.book = doc_book(IDLE, "");
+        let doc = cast_doc(&mut st, b);
+        let by = Where::By {
+            role: "doc".into(),
+            within: 4,
+        };
+        // What `at` says working out in full where her floor draws her.
+        let full = |st: &AppState| {
+            let p = st.player.as_ref().unwrap();
+            crate::interiors::drawn_at(st, doc).is_some_and(|(place, pos)| {
+                p.place == place
+                    && p.vis().get(pos) == Some(&Visibility::Visible)
+                    && p.pos.manhattan(pos) <= 4
+            })
+        };
+        // On her floor, beside her: worked out, and beside.
+        let (place, pos) = st.player.as_ref().map(|p| (p.place, p.pos)).unwrap();
+        stand_seeing(&mut st, place, pos);
+        assert!(!inside_elsewhere(&st, place, doc));
+        assert!(at(&st, &by) && full(&st));
+        // On the street outside: she is in a building you are not in.
+        let out = outside_door(&st, b);
+        on_street(&mut st, out);
+        assert!(inside_elsewhere(&st, STREET, doc));
+        assert!(!at(&st, &by) && !full(&st));
+        // On another building's floor: the same.
+        let (home, level) = st
+            .city
+            .as_ref()
+            .and_then(citygen::home)
+            .map(|h| (h.building, h.level))
+            .unwrap();
+        let elsewhere = Place::Floor {
+            building: home,
+            level,
+        };
+        assert!(inside_elsewhere(&st, elsewhere, doc));
+        // Out on the street herself: worked out, and beside.
+        st.world.as_mut().unwrap().park(doc, out);
+        on_street(&mut st, out.offset(0, 1));
+        assert!(!inside_elsewhere(&st, STREET, doc));
+        assert!(at(&st, &by) && full(&st));
+    }
+
+    #[test]
+    fn chromed_waits_for_spent_and_up() {
+        let mut st = crate::clinic::testutil::seated();
+        let b = st.chair.unwrap().building;
+        st.book = doc_book(
+            r#"Mission(id: "m", title: "M", from: "doc", steps: [
+                Step(id: "tray", when: NewGame, then: [Tray(from: "doc", tab: "doc",
+                    title: "her tray", line: "One piece.",
+                    sets: [TraySet(need: All([]), items: ["neural_port"])])]),
+                Step(id: "out", when: Chromed("doc"), then: [Log("out")]),
+            ])"#,
+            "",
+        );
+        begin(&mut st);
+        let doc = cast_doc(&mut st, b);
+        take_from_tray(&mut st, 0);
+        tick(&mut st);
+        assert_eq!(st.missions.runs[0].at, 1, "nothing spent yet");
+        // The piece in, in her chair, on the tab: spent, but you are still sat in it.
+        st.character.credits = 0;
+        let put = crate::actions::perform(
+            &mut st,
+            game::Action::Install {
+                item: ItemId::new("neural_port"),
+                site: game::Site::Neural,
+            },
+        );
+        assert!(put.is_ok(), "{put:?}");
+        assert!(st.missions.tab.as_ref().unwrap().spent);
+        tick(&mut st);
+        assert_eq!(st.missions.runs[0].at, 1, "still in the chair");
+        // Up out of the chair, but the tab another doc's: nothing.
+        st.chair = None;
+        st.missions.tab.as_mut().unwrap().doc = PersonId(doc.0 + 1);
+        tick(&mut st);
+        assert_eq!(st.missions.runs[0].at, 1, "another doc's tab");
+        // Hers, spent, and you up: chromed.
+        st.missions.tab.as_mut().unwrap().doc = doc;
+        tick(&mut st);
+        assert!(matches!(st.missions.runs[0].state, RunState::Done { .. }));
+        assert!(st.log.iter().any(|e| e.text == "out"));
+    }
+
+    #[test]
+    fn dev_free_chrome_spends_the_tab_on_its_piece() {
+        let (mut st, b, level, _) = crate::clinic::testutil::inside();
+        st.book = doc_book(
+            r#"Mission(id: "m", title: "M", from: "doc", steps: [
+                Step(id: "tray", when: NewGame, then: [Tray(from: "doc", tab: "doc",
+                    title: "her tray", line: "One piece.",
+                    sets: [TraySet(need: All([]), items: ["neural_port"])])]),
+                Step(id: "out", when: Chromed("doc"), then: [Log("out")]),
+            ])"#,
+            "",
+        );
+        begin(&mut st);
+        let doc = cast_doc(&mut st, b);
+        take_from_tray(&mut st, 0);
+        st.free_chrome = true;
+        let spent = |st: &AppState| st.missions.tab.as_ref().unwrap().spent;
+        let install = |st: &mut AppState, id: &str| {
+            let item = ItemId::new(id);
+            let site = site_for(st, &item);
+            let put = crate::actions::perform(st, game::Action::Install { item, site });
+            assert!(put.is_ok(), "{put:?}");
+            site
+        };
+        // Another piece goes in free and leaves the tab be.
+        let mesh = ItemId::new("subdermal_mesh");
+        st.character.give_item(&st.content, mesh, 1);
+        install(&mut st, "subdermal_mesh");
+        assert!(!spent(&st));
+        // In another doc's chair the tab isn't theirs to spend.
+        st.chair = Some(crate::clinic::Chair {
+            building: b,
+            level,
+            doc: PersonId(doc.0 + 1),
+        });
+        let site = install(&mut st, "neural_port");
+        assert!(!spent(&st));
+        let pulled = crate::actions::perform(&mut st, game::Action::Pull(site));
+        assert!(pulled.is_ok(), "{pulled:?}");
+        // Up, the tab's piece in anywhere: spent, and chromed.
+        st.chair = None;
+        install(&mut st, "neural_port");
+        assert!(spent(&st));
+        tick(&mut st);
+        assert!(matches!(st.missions.runs[0].state, RunState::Done { .. }));
+        assert!(st.log.iter().any(|e| e.text == "out"));
+    }
+
+    /// The index of the book's mission `id`, and of its run.
+    fn mission_at(st: &AppState, id: &str) -> usize {
+        st.book.missions.iter().position(|m| m.id == id).unwrap()
+    }
+
+    /// The morning after done as the news tests finish it, the set switched off: Mezz's
+    /// mail has come, and Seren's word after it.
+    pub(crate) fn to_the_word(st: &mut AppState) {
+        the_news_is_on(st);
+        news::switch_off(st);
+        mezz_saw_the_news(st);
+    }
+
+    /// A site on the body the piece fits, a free one first.
+    pub(crate) fn site_for(st: &AppState, piece: &ItemId) -> game::Site {
+        let fits = st.content.item(piece).and_then(|i| i.implant).unwrap().fits;
+        game::Site::ALL
+            .into_iter()
+            .filter(|s| s.fits() == fits)
+            .min_by_key(|s| st.character.chrome.contains_key(s))
+            .unwrap_or_else(|| panic!("{piece} fits no site"))
+    }
+
+    /// The floor generated, a free tile beside `at` on it.
+    pub(crate) fn beside_on(st: &mut AppState, place: Place, at: Pos) -> Pos {
+        let Place::Floor { building, level } = place else {
+            panic!("{place:?} is no floor")
+        };
+        st.interiors
+            .ensure(st.city.as_ref().unwrap(), building, level)
+            .unwrap();
+        marks::beside_tile(st, place, at, None).unwrap().1
+    }
+
+    /// Seren's word come: plays the doctor through as the game does and gives back the
+    /// lines of her scene that were said, and her tray. The package is opened when
+    /// `open`, its shard read at the rig when `read`; then in at the street door on the
+    /// mailed code, beside her, her scene, the tray's first piece, her chair on the tab,
+    /// up, her parting words, and out on the street, where she is let go.
+    fn play_the_doctor(st: &mut AppState, open: bool, read: bool) -> (Vec<String>, Vec<ItemId>) {
+        use crate::credentials::{STREET_DOOR, Source, street_code};
+        let doctor = mission_at(st, "doctor");
+        let doc = person_of(st, "odile").expect("odile is cast");
+        let b = cast::work_building(st, doc).expect("she works in her clinic");
+        let held = |st: &AppState| st.world.as_ref().unwrap().is_held(doc);
+        assert_eq!(
+            st.world.as_ref().unwrap().people()[doc.0 as usize].name,
+            "Odile Vance"
+        );
+        // Seren's word: the doc kept in, her clinic shut, the package yours to open.
+        assert!(held(st));
+        assert!(!crate::clinic::is_open(st, b));
+        assert!(unsealed(st, &ItemId::new("taped_package")));
+        // Her mail carries the street code, and the journal keeps it.
+        let code = street_code(st, b);
+        let mail = st.journal.mails.iter().find(|m| m.subject == "ten");
+        let mail = mail.expect("Seren's mail");
+        assert_eq!(mail.from, "Seren");
+        assert_eq!(
+            mail.body,
+            [
+                "Doctor's in by ten. Eat first.".to_string(),
+                format!("Shutter's down till dark. Code's {code:04}. She knows you're coming."),
+                "The package is yours now. Open it.".into(),
+                "— S".into(),
+            ]
+        );
+        let learned = st.journal.code_for(b, 0, STREET_DOOR).expect("learned");
+        assert_eq!((learned.code, learned.source), (code, Source::Mail));
+        let see = format!(
+            "See the doctor · {} · {} · by ten",
+            cast::place_of(st, doc),
+            cast::district_of(st, doc)
+        );
+        assert_eq!(st.missions.runs[doctor].objectives.last(), Some(&see));
+        // The package opens on the shard; read at the rig, it tells.
+        let (package, shard) = (ItemId::new("taped_package"), ItemId::new("ledger_shard"));
+        if open {
+            let opened = crate::actions::perform(st, game::Action::Open(package.clone()));
+            assert!(opened.is_ok(), "{opened:?}");
+            assert_eq!(
+                (st.character.count(&package), st.character.count(&shard)),
+                (0, 1)
+            );
+        }
+        if read {
+            assert!(reading::ReadCard::open(st, &shard, ReadAt::Rig).is_some());
+            assert!(holds(st, None, &Need::Read("ledger_shard".into())));
+        }
+        // In at the street door on the code, and up to her: her scene.
+        let out = outside_door(st, b);
+        on_street(st, out);
+        let city = st.city.as_ref().unwrap();
+        let (_, door) = city
+            .portals(b)
+            .into_iter()
+            .find(|(k, _)| *k == StratumKind::Street)
+            .unwrap();
+        let keyed = crate::interiors::enter(st, b, (StratumKind::Street, door));
+        assert_eq!(keyed, Ok(format!("you key in {code:04}")));
+        let (place, at) = crate::interiors::drawn_at(st, doc).expect("she is drawn inside");
+        let by = beside_on(st, place, at);
+        stand_seeing(st, place, by);
+        tick(st);
+        assert_eq!(scene::running(st).map(|r| r.id()), Some("odile"));
+        scene::skip(st);
+        let said: Vec<String> = st.book.scenes["odile"]
+            .beats
+            .iter()
+            .filter_map(|beat| match beat {
+                Beat::Say { text, .. } => Some(fill(st, text)),
+                _ => None,
+            })
+            .filter(|t| st.log.iter().any(|e| e.text.contains(t.as_str())))
+            .collect();
+        // Her tray: one piece, on Castellan's tab.
+        let tray = st.missions.tray.clone().expect("her tray is held out");
+        assert_eq!(
+            (tray.from.as_str(), tray.tab.as_str()),
+            ("odile", "castellan")
+        );
+        assert_eq!(
+            st.missions.runs[doctor]
+                .objectives
+                .last()
+                .map(String::as_str),
+            Some("Sit in Odile Vance's chair · your piece is on Castellan's tab")
+        );
+        take_from_tray(st, 0);
+        let piece = tray.items[0].clone();
+        assert_eq!(st.character.count(&piece), 1);
+        // Sat in her chair, it goes in free.
+        let chair = Mark::Chair("odile".into());
+        let (floor, seat) = marks::resolve(st, &chair, None).expect("her chair");
+        let Place::Floor { building, level } = floor else {
+            panic!("{floor:?}")
+        };
+        let by = beside_on(st, floor, seat);
+        st.player = Some(Player::at(floor, by));
+        assert_eq!(crate::clinic::doc_at_work(st, building), Some(doc));
+        st.chair = Some(crate::clinic::Chair {
+            building,
+            level,
+            doc,
+        });
+        let (credits, site) = (st.character.credits, site_for(st, &piece));
+        let put = crate::actions::perform(
+            st,
+            game::Action::Install {
+                item: piece.clone(),
+                site,
+            },
+        );
+        assert!(put.is_ok(), "{put:?}");
+        assert_eq!(st.character.chrome.get(&site), Some(&piece));
+        assert_eq!(st.character.credits, credits, "on the tab");
+        // Up out of the chair: her parting words, the tags on her lamp.
+        assert!(st.chair.take().is_some());
+        tick(st);
+        assert_eq!(scene::running(st).map(|r| r.id()), Some("odile_out"));
+        scene::skip(st);
+        assert!(
+            st.missions.notes.iter().any(|(p, q, t)| (*p, *q) == (floor, seat)
+                && t == "Three clinic tags hang off the lamp arm. The names are scratched off."),
+            "{:?}",
+            st.missions.notes
+        );
+        assert!(matches!(
+            st.missions.runs[doctor].state,
+            RunState::Done { .. }
+        ));
+        assert!(
+            st.log
+                .iter()
+                .any(|e| e.text == "Doctor's in by ten · on Castellan's tab")
+        );
+        // Let go once you are out, never past you.
+        tick(st);
+        assert!(held(st), "not while you are inside");
+        on_street(st, out);
+        tick(st);
+        assert!(!held(st));
+        (said, tray.items)
+    }
+
+    #[test]
+    fn the_doctor_plays_end_to_end() {
+        let mut st = the_morning_call();
+        to_the_word(&mut st);
+        let (doctor, ledger) = (mission_at(&st, "doctor"), mission_at(&st, "ledger"));
+        assert_eq!(st.missions.runs[doctor].state, RunState::Open);
+        assert_eq!(st.missions.runs[ledger].state, RunState::Waiting);
+        // Seren breaks into your set.
+        let seren = st.missions.asides.last().expect("Seren on the set");
+        assert!(seren.label.ends_with("▚▞▚ S"), "{}", seren.label);
+        assert_eq!(seren.text, "Doctor's in by ten. Eat first.");
+        // The camera saw you in this jacket, and you wear it still; it isn't ten yet.
+        let jacket = ItemId::new("salvage_jacket");
+        st.character.wear(Slot::Torso, jacket.clone(), None);
+        st.missions.bodies[0].left = Some(Left {
+            at: (22, 41),
+            heading: "north",
+            worn: Some(jacket),
+        });
+        assert!(st.clock() < (10, 0), "{:?}", st.clock());
+        let district = fill(&st, "{marlo.district}");
+        let (said, tray) = play_the_doctor(&mut st, true, true);
+        // The shard read, she names nobody; on time, she says nothing of it.
+        assert_eq!(
+            said,
+            [
+                "He sends me strays.".to_string(),
+                format!("Lose that jacket before you go. It's on every screen in {district}."),
+                "Castellan pays for one piece. Pick.".into(),
+            ]
+        );
+        assert_eq!(
+            tray,
+            ["neural_port", "target_lens", "subdermal_mesh"].map(ItemId::new),
+            "a runner's tray"
+        );
+        // The hook: the ledger's owner, then his line.
+        let coz = person_of(&st, "coz").expect("coz is cast");
+        assert_ne!(Some(coz), person_of(&st, "mezz"));
+        assert_eq!(st.missions.runs[ledger].state, RunState::Open);
+        let sell = format!(
+            "Sell the ledger back to Coz · {} · {}",
+            cast::place_of(&st, coz),
+            cast::district_of(&st, coz)
+        );
+        assert_eq!(st.missions.runs[ledger].objectives.last(), Some(&sell));
+        send(&mut st, Event::Talked(coz));
+        assert!(matches!(
+            st.missions.runs[ledger].state,
+            RunState::Done { .. }
+        ));
+        assert!(
+            st.log
+                .iter()
+                .any(|e| e.text == "Coz · \"The ledger? Not here. I'll find you.\"")
+        );
+    }
+
+    #[test]
+    fn the_doctor_names_the_fixer_to_whoever_couldnt_read_the_shard() {
+        let mut st = the_morning_call();
+        to_the_word(&mut st);
+        // A gun hand, not a runner, the package still taped, in another jacket than the
+        // camera saw, and late.
+        st.character.skills = [SkillId::new("handguns")].into();
+        st.character
+            .wear(Slot::Torso, ItemId::new("ballistic_weave"), None);
+        st.missions.bodies[0].left = Some(Left {
+            at: (22, 41),
+            heading: "north",
+            worn: Some(ItemId::new("salvage_jacket")),
+        });
+        let (h, m) = st.clock();
+        let now = u64::from(h) * 60 + u64::from(m);
+        advance(&mut st, (10 * 60 + 30 + 1440 - now) % 1440);
+        assert_eq!(st.clock(), (10, 30));
+        let (said, tray) = play_the_doctor(&mut st, false, false);
+        assert_eq!(
+            said,
+            [
+                "He sends me strays.",
+                "Ten, he said. He said you'd be late, too.",
+                "New jacket. Good. The last one didn't think of that.",
+                "That tape's Coz's. You're walking a fixer's ledger round in daylight.",
+                "Castellan pays for one piece. Pick.",
+            ]
+        );
+        assert_eq!(
+            tray,
+            ["target_lens", "adrenal_pump", "hardback_brace"].map(ItemId::new),
+            "a gun hand's tray"
+        );
+    }
+
+    #[test]
+    fn the_doctor_plays_with_one_fixer() {
+        let mut st = AppState::new();
+        st.enter_city(
+            Generator::run(GenParams {
+                seed: 1,
+                size: SizePreset::Medium,
+                districts: 6,
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let world = st.world.as_ref().unwrap();
+        let fixers = world.people().iter().filter(|p| p.profession == "fixer");
+        assert_eq!(fixers.count(), 1, "a city with one fixer");
+        let home = st.home.expect("a home").home.building;
+        crate::credentials::prepare(&mut st, home);
+        crate::credentials::move_in(&mut st);
+        begin(&mut st);
+        let (doctor, ledger) = (mission_at(&st, "doctor"), mission_at(&st, "ledger"));
+        assert!(person_of(&st, "mezz").is_some() && person_of(&st, "coz").is_none());
+        assert_eq!(st.missions.runs[doctor].state, RunState::Waiting);
+        assert_eq!(st.missions.runs[ledger].state, RunState::Uncast);
+        // The story to Seren's word, as anywhere.
+        to_your_door(&mut st);
+        to_the_mail(&mut st);
+        to_the_morning_call(&mut st);
+        to_the_word(&mut st);
+        assert_eq!(st.missions.runs[doctor].state, RunState::Open);
+        // Opened, not read: she names him though nobody plays him.
+        let (said, _) = play_the_doctor(&mut st, true, false);
+        let named = "That shard's Coz's. You're walking a fixer's ledger round in daylight.";
+        assert!(said.iter().any(|l| l == named), "{said:?}");
+        assert_eq!(st.missions.runs[ledger].state, RunState::Uncast);
+        // No slot shows unfilled: the log, the mail, the objectives, the notes, the
+        // shard's Look and its cards.
+        let shard = ItemId::new("ledger_shard");
+        let mut shown: Vec<String> = st.log.iter().map(|e| e.text.clone()).collect();
+        shown.extend(st.journal.mails.iter().flat_map(|m| m.body.clone()));
+        shown.extend(st.missions.runs.iter().flat_map(|r| r.objectives.clone()));
+        shown.extend(st.missions.notes.iter().map(|(_, _, t)| t.clone()));
+        shown.push(item_desc(&st, &shard));
+        for at in [ReadAt::Rig, ReadAt::Bench] {
+            let card = reading::ReadCard::open(&mut st, &shard, at).expect("a card");
+            let drawn = crate::screens::shots::draw_stack(&st, &[&card], (120, 40));
+            let text = crate::screens::testutil::buffer_text(&drawn);
+            assert!(text.contains("Coz"), "{text}");
+            shown.push(text);
+        }
+        for text in &shown {
+            assert!(!text.contains('{'), "{text}");
+        }
+    }
+
+    #[test]
+    fn every_tray_piece_installs_on_bare_meat() {
+        let mut st = crate::clinic::testutil::seated();
+        st.free_chrome = true;
+        let mut bare = st.character.clone();
+        bare.chrome.clear();
+        bare.chrome_copies.clear();
+        let sets: Vec<TraySet> = st
+            .book
+            .missions
+            .iter()
+            .flat_map(|m| &m.steps)
+            .flat_map(|s| &s.then)
+            .filter_map(|e| match e {
+                Effect::Tray { sets, .. } => Some(sets.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert!(!sets.is_empty(), "the book holds out a tray");
+        for piece in sets.iter().flat_map(|s| &s.items).map(|i| ItemId::new(i)) {
+            let item = st.content.item(&piece).unwrap();
+            assert_eq!(item.kind, game::ItemKind::Cyberware, "{piece}");
+            st.character = bare.clone();
+            st.character.give_item(&st.content, piece.clone(), 1);
+            let site = site_for(&st, &piece);
+            let put = crate::actions::perform(
+                &mut st,
+                game::Action::Install {
+                    item: piece.clone(),
+                    site,
+                },
+            );
+            assert!(put.is_ok(), "{piece}: {put:?}");
+            assert_eq!(st.character.chrome.get(&site), Some(&piece));
+        }
     }
 }

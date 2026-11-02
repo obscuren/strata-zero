@@ -427,7 +427,7 @@ impl Sheet {
         let mode = operating(st);
         if let Some(pick) = v.pick {
             // On a held place the pick swaps with what is there; a fee the doc won't
-            // take dims it.
+            // take dims it, unless a tab pays it.
             let space = match v.held {
                 Some(_) => "space swap",
                 None => "space install",
@@ -435,6 +435,7 @@ impl Sheet {
             let (put, out) = pick_fee(st, &v, &v.picks[pick]);
             let short = matches!(mode, Operating::Chair { .. })
                 && !chair_free(st, v.at)
+                && crate::missions::tab_for(st, &v.picks[pick].item).is_none()
                 && put + out > st.character.credits;
             return Line::from(vec![
                 Span::styled("↑↓ choose · ", dim),
@@ -668,7 +669,7 @@ fn chrome_mark(st: &AppState) -> Vec<(String, Style)> {
 }
 
 /// What the doc charges for a pick at a place: the piece in, and what the place holds
-/// out.
+/// out. A tab (`missions::tab_for`) pays both for its piece.
 fn pick_fee(st: &AppState, v: &View, pick: &Pick) -> (u32, u32) {
     let c = &st.content;
     (
@@ -1087,12 +1088,18 @@ fn fit_card(st: &AppState, v: &View, focused: bool, w: usize) -> CardText {
     }
     card.extend(wrap_spans(spans, w));
     // In the doc's chair, `fee ¤370 · leaves ¤830`: a swap's both parts, a fee you
-    // can't pay in magenta.
+    // can't pay in magenta, a piece on someone's tab `fee TAB · NAME · ¤370 on the tab`.
     if matches!(operating(st), Operating::Chair { .. }) {
         let (put, out) = pick_fee(st, v, pick);
         let (fee, credits) = (put + out, ch.credits);
         let amount = format!("¤{fee}");
-        let line = if fee > credits {
+        let line = if let Some(tab) = crate::missions::tab_for(st, &pick.item) {
+            vec![
+                Span::styled("fee ", fg(DIM)),
+                Span::styled(format!("TAB · {}", tab.payer.to_uppercase()), bold(AMBER)),
+                Span::styled(format!(" · {amount} on the tab"), fg(DIM)),
+            ]
+        } else if fee > credits {
             vec![
                 Span::styled("fee ", fg(DIM)),
                 Span::styled(amount, bold(MAGENTA)),
@@ -1584,13 +1591,137 @@ mod tests {
         assert!(!card.contains("LOAD"), "{card}");
     }
 
+    /// The card's fee line at 100×30: its row and text.
+    fn fee_row(buf: &Buffer) -> Option<(u16, String)> {
+        (6..27)
+            .map(|y| (y, cells(buf, CARD_100, y, 30)))
+            .find(|(_, t)| t.starts_with("fee "))
+    }
+
+    /// `item` on Castellan's tab, its doc `doc`.
+    fn on_the_tab(st: &mut AppState, doc: sim::PersonId, item: &str) {
+        st.missions.tab = Some(crate::missions::Tab {
+            doc,
+            item: id(item),
+            payer: "Castellan".into(),
+            spent: false,
+        });
+    }
+
+    fn spent(st: &AppState) -> bool {
+        st.missions.tab.as_ref().is_some_and(|t| t.spent)
+    }
+
+    #[test]
+    fn the_tab_piece_goes_in_free_once() {
+        // Short of the fee, the grip arm on the tab of the doc you sit with.
+        let (mut st, mut d) = in_chair(50, LedgerRow::Site(Site::RightArm));
+        let doc = st.chair.unwrap().doc;
+        on_the_tab(&mut st, doc, "grip_arm");
+        give(&mut st, "grip_arm");
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        let buf = screen(&d, &mut st, (100, 30));
+        // The card is 30 wide at 100×30: the line wraps.
+        let (y, text) = fee_row(&buf).expect("a fee line");
+        assert_eq!(text.trim_end(), "fee TAB · CASTELLAN · ¤370 on");
+        assert_eq!(cells(&buf, CARD_100, y + 1, 30).trim_end(), "the tab");
+        assert_eq!(buf[(CARD_100, y)].fg, DIM);
+        let tab = buf[(CARD_100 + 4, y)].clone();
+        assert_eq!(tab.fg, AMBER);
+        assert!(tab.modifier.contains(Modifier::BOLD));
+        assert_eq!(buf[(CARD_100 + 18, y)].fg, AMBER, "the name");
+        assert_eq!(buf[(CARD_100 + 22, y)].fg, DIM, "the amount");
+        // At 120×40, as the mock: one row.
+        let wide = screen(&d, &mut st, (120, 40));
+        let card = region(&wide, (77, 118), (11, 37));
+        assert!(
+            card.contains("fee TAB · CASTELLAN · ¤370 on the tab"),
+            "{card}"
+        );
+        // Space isn't dimmed: the tab pays.
+        let x = col_of(&buf, 28, 2, "space install").unwrap();
+        assert_eq!(buf[(x, 28)].fg, DIM);
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        assert_eq!(
+            st.character.chrome_at(Site::RightArm),
+            Some(&id("grip_arm"))
+        );
+        assert_eq!(st.character.credits, 50);
+        assert!(spent(&st));
+        let said = last(&st).unwrap();
+        assert!(said.ends_with(" · ¤370 on the tab"), "{said}");
+        // Once: a second one pays the doc.
+        st.character.credits = 1200;
+        give(&mut st, "grip_arm");
+        d.sheet.state.row = LedgerRow::Site(Site::LeftArm);
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        let buf = screen(&d, &mut st, (100, 30));
+        assert_eq!(
+            fee_row(&buf).unwrap().1.trim_end(),
+            "fee ¤480 · in ¤370 · out ¤110"
+        );
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        assert_eq!(st.character.chrome_at(Site::LeftArm), Some(&id("grip_arm")));
+        assert_eq!(st.character.credits, 720);
+    }
+
+    #[test]
+    fn another_piece_pays_and_the_tab_waits() {
+        let (mut st, mut d) = in_chair(1200, LedgerRow::Site(Site::RightArm));
+        let doc = st.chair.unwrap().doc;
+        on_the_tab(&mut st, doc, "grip_arm");
+        give(&mut st, "surgeon_arm");
+        let fee = game::put_in_fee(&st.content, &id("surgeon_arm"));
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        let buf = screen(&d, &mut st, (100, 30));
+        assert_eq!(
+            fee_row(&buf).unwrap().1.trim_end(),
+            format!("fee ¤{fee} · leaves ¤{}", 1200 - fee)
+        );
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        assert_eq!(
+            st.character.chrome_at(Site::RightArm),
+            Some(&id("surgeon_arm"))
+        );
+        assert_eq!(st.character.credits, 1200 - fee);
+        assert!(!spent(&st), "the tab waits");
+        // Its own piece, a swap at L ARM: in and out, both on the tab.
+        give(&mut st, "grip_arm");
+        d.sheet.state.row = LedgerRow::Site(Site::LeftArm);
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        let buf = screen(&d, &mut st, (100, 30));
+        assert_eq!(
+            fee_row(&buf).unwrap().1.trim_end(),
+            "fee TAB · CASTELLAN · ¤480 on"
+        );
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        assert_eq!(st.character.credits, 1200 - fee);
+        assert!(spent(&st));
+    }
+
+    #[test]
+    fn the_tab_piece_pays_at_another_doc() {
+        let (mut st, mut d) = in_chair(1200, LedgerRow::Site(Site::RightArm));
+        let doc = st.chair.unwrap().doc;
+        on_the_tab(&mut st, sim::PersonId(doc.0 + 1), "grip_arm");
+        give(&mut st, "grip_arm");
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        let buf = screen(&d, &mut st, (100, 30));
+        assert_eq!(
+            fee_row(&buf).unwrap().1.trim_end(),
+            "fee ¤370 · leaves ¤830"
+        );
+        press(&mut d, &mut st, &[KeyCode::Char(' ')]);
+        assert_eq!(
+            st.character.chrome_at(Site::RightArm),
+            Some(&id("grip_arm"))
+        );
+        assert_eq!(st.character.credits, 830);
+        assert!(!spent(&st), "not her chair");
+    }
+
     #[test]
     fn the_fee_line() {
-        let fee_row = |buf: &Buffer| {
-            (6..27)
-                .map(|y| (y, cells(buf, CARD_100, y, 30)))
-                .find(|(_, t)| t.starts_with("fee "))
-        };
         // Into an empty place: what it leaves you.
         let (mut st, mut d) = in_chair(1200, LedgerRow::Site(Site::RightArm));
         give(&mut st, "grip_arm");

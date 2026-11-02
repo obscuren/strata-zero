@@ -310,6 +310,22 @@ impl MapScreen {
         }
     }
 
+    /// The map area of the last frame, for a shot that checks where something drew.
+    #[cfg(test)]
+    pub(crate) fn last_map_rect(&self) -> Rect {
+        self.last_map.get()
+    }
+
+    /// The tile this map's placement stands `id` on, on the floor the player walks.
+    #[cfg(test)]
+    pub(crate) fn placed_tile(&self, id: sim::PersonId) -> Option<Pos> {
+        let (_, _, placement) = self.placement.as_ref()?;
+        placement
+            .people()
+            .find(|(_, who)| *who == id)
+            .map(|(p, _)| p)
+    }
+
     /// Look mode is open.
     #[cfg(test)]
     pub(crate) fn is_looking(&self) -> bool {
@@ -2498,6 +2514,19 @@ impl Screen for MapScreen {
                 to: Box::new(crate::missions::feed::Feed::new(view, st.tick)),
                 fx: TransitionKind::Glitch,
             };
+        }
+        // The story's tray: it opens over the map once, when no scene is playing; esc
+        // leaves it waiting for you to talk to whoever holds it.
+        if crate::missions::scene::running(st).is_none()
+            && let Some(tray) = st.missions.tray.as_mut().filter(|t| !t.shown)
+        {
+            tray.shown = true;
+            if let Some(popup) = Popup::tray(st) {
+                return ScreenCmd::Push {
+                    to: Box::new(popup),
+                    fx: TransitionKind::None,
+                };
+            }
         }
         // Black ICE killed: the screen reads the cause. The track ends with you.
         if let Some(cause) = st.net.death.clone() {

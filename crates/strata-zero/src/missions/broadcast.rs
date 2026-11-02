@@ -374,6 +374,7 @@ mod tests {
             body.expect("the item's body").left = Some(Left {
                 at: (22, 41),
                 heading: "north",
+                worn: None,
             });
             let n = news::current(&st).unwrap();
             let (r, lines) = boxed(&st, size);

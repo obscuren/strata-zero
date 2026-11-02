@@ -98,6 +98,17 @@ pub enum Pick {
     Sleep,
     /// Switches your holo set on and opens the news broadcast in place of the popup.
     Watch,
+    /// Opens the card of an item's reading at the rig or the bench in place of the popup.
+    Read {
+        item: game::ItemId,
+        at: crate::missions::ReadAt,
+    },
+    /// Takes the story's tray's piece at this index, on the tab; held out from a
+    /// chair, then sits in it.
+    Tray {
+        piece: usize,
+        chair: Option<(citygen::BuildingId, i32)>,
+    },
     Close,
 }
 
@@ -195,6 +206,28 @@ impl Choice {
     }
 }
 
+/// ` · neural · grants Ping, Static`: where a piece goes, lower case, and the abilities
+/// it grants by name, when it grants any.
+fn piece_tail(st: &AppState, item: &game::Item) -> String {
+    let mut tail = item
+        .implant
+        .map(|i| format!(" · {}", i.fits.label().to_lowercase()))
+        .unwrap_or_default();
+    let grants: Vec<String> = item
+        .grants
+        .iter()
+        .map(|a| {
+            st.content
+                .ability(a)
+                .map_or_else(|| a.to_string(), |a| a.name.clone())
+        })
+        .collect();
+    if !grants.is_empty() {
+        tail.push_str(&format!(" · grants {}", grants.join(", ")));
+    }
+    tail
+}
+
 const REVEAL_TICKS: u64 = 10;
 
 /// Rows a line takes at `width` under the paragraph's word wrap: greedy, words
@@ -241,6 +274,8 @@ pub struct Popup {
     opened: u64,
     /// When set, the card's lines replace the rows; closing it closes the popup.
     card: Option<Vec<Line<'static>>>,
+    /// Logged when esc puts the window down.
+    esc_line: Option<String>,
 }
 
 impl Popup {
@@ -267,12 +302,19 @@ impl Popup {
             anchor: None,
             opened: tick,
             card: None,
+            esc_line: None,
         }
     }
 
     /// A paragraph between the subtitle and the rows.
     pub fn with_body(mut self, lines: Vec<String>) -> Self {
         self.body = lines;
+        self
+    }
+
+    /// A line logged when esc puts the window down.
+    fn on_esc(mut self, line: String) -> Self {
+        self.esc_line = Some(line);
         self
     }
 
@@ -299,6 +341,38 @@ impl Popup {
                 Choice::new('n', "Stay in", Pick::Close),
             ],
             tick,
+        )
+    }
+
+    /// The story's tray, while one waits (doctor spec §8): `<holder> · <title>` over its
+    /// line, a `Take` row a piece on keys 1 to 9, each with where it goes and what it
+    /// grants. Esc puts it down and says how to get it back.
+    pub fn tray(st: &AppState) -> Option<Self> {
+        Popup::tray_then(st, None)
+    }
+
+    /// The tray, held out from the chair on this floor when `chair` names one: a piece
+    /// taken, you sit in it.
+    fn tray_then(st: &AppState, chair: Option<(citygen::BuildingId, i32)>) -> Option<Self> {
+        let t = st.missions.tray.as_ref()?;
+        let rows = t
+            .items
+            .iter()
+            .zip('1'..='9')
+            .enumerate()
+            .map(|(i, (id, key))| {
+                let item = st.content.item(id);
+                let name = item.map_or_else(|| id.to_string(), |it| it.name.clone());
+                let tail = item.map(|it| piece_tail(st, it)).unwrap_or_default();
+                Choice::on(key, "Take", name, CYAN, Pick::Tray { piece: i, chair }).tail(tail)
+            })
+            .collect();
+        let from = crate::missions::role_name(st, &t.from);
+        let title = format!("{from} · {}", t.title);
+        Some(
+            Popup::verbs(&title, rows, st.tick)
+                .with_body(vec![t.line.clone()])
+                .on_esc(format!("`{from}` · the tray waits · talk to take a piece")),
         )
     }
 
@@ -557,25 +631,19 @@ impl Popup {
                     fx: TransitionKind::Glitch,
                 }
             }
-            Pick::Chair { building, level } => {
-                let Some(doc) = crate::clinic::doc_at_work(st, building) else {
-                    st.warn("the doc is out");
-                    return ScreenCmd::Pop {
+            // Offered on a state gone stale, it only closes.
+            Pick::Read { item, at } => {
+                match crate::missions::reading::ReadCard::open(st, &item, at) {
+                    Some(card) => ScreenCmd::Replace {
+                        to: Box::new(card),
                         fx: TransitionKind::None,
-                    };
-                };
-                st.chair = Some(crate::clinic::Chair {
-                    building,
-                    level,
-                    doc,
-                });
-                let line = crate::clinic::doc_line(st, doc);
-                st.say(format!("{}: “{line}”", crate::clinic::doc_name(st, doc)));
-                ScreenCmd::Replace {
-                    to: Box::new(crate::screens::deck::Deck::chair(st)),
-                    fx: TransitionKind::Glitch,
+                    },
+                    None => ScreenCmd::Pop {
+                        fx: TransitionKind::None,
+                    },
                 }
             }
+            Pick::Chair { building, level } => sit(st, building, level),
             Pick::Look(pos) => {
                 st.look_at = Some(pos);
                 ScreenCmd::Pop {
@@ -583,17 +651,41 @@ impl Popup {
                 }
             }
             Pick::Talk { lines, said, who } => {
-                if let Some(who) = who.filter(|w| crate::missions::listens(st, *w)) {
-                    st.say(said);
+                st.say(said);
+                let heard = who.filter(|w| crate::missions::listens(st, *w));
+                if let Some(who) = heard {
                     crate::missions::send(st, crate::missions::Event::Talked(who));
+                }
+                // Whoever holds out a tray holds it out again.
+                if who.is_some()
+                    && who == crate::missions::tray_from(st)
+                    && let Some(tray) = Popup::tray(st)
+                {
+                    if let Some(t) = st.missions.tray.as_mut() {
+                        t.shown = true;
+                    }
+                    return ScreenCmd::Replace {
+                        to: Box::new(tray),
+                        fx: TransitionKind::None,
+                    };
+                }
+                if heard.is_some() {
                     return ScreenCmd::Pop {
                         fx: TransitionKind::None,
                     };
                 }
-                st.say(said);
                 self.card = Some(lines);
                 self.opened = st.tick;
                 ScreenCmd::Stay
+            }
+            Pick::Tray { piece, chair } => {
+                crate::missions::take_from_tray(st, piece);
+                match chair {
+                    Some((building, level)) => sit(st, building, level),
+                    None => ScreenCmd::Pop {
+                        fx: TransitionKind::None,
+                    },
+                }
             }
             Pick::JackOutAsk => ScreenCmd::Replace {
                 to: Box::new(Popup::jack_out_confirm(st.tick)),
@@ -756,6 +848,40 @@ impl Popup {
     }
 }
 
+/// Sits you in the doc's chair on this floor and opens the deck on it. A tray its doc
+/// holds out waits first: it comes up in the chair's place, and a piece taken sits you
+/// down.
+fn sit(st: &mut AppState, building: citygen::BuildingId, level: i32) -> ScreenCmd {
+    let Some(doc) = crate::clinic::doc_at_work(st, building) else {
+        st.warn("the doc is out");
+        return ScreenCmd::Pop {
+            fx: TransitionKind::None,
+        };
+    };
+    if crate::missions::tray_from(st) == Some(doc)
+        && let Some(tray) = Popup::tray_then(st, Some((building, level)))
+    {
+        if let Some(t) = st.missions.tray.as_mut() {
+            t.shown = true;
+        }
+        return ScreenCmd::Replace {
+            to: Box::new(tray),
+            fx: TransitionKind::None,
+        };
+    }
+    st.chair = Some(crate::clinic::Chair {
+        building,
+        level,
+        doc,
+    });
+    let line = crate::clinic::doc_line(st, doc);
+    st.say(format!("{}: “{line}”", crate::clinic::doc_name(st, doc)));
+    ScreenCmd::Replace {
+        to: Box::new(crate::screens::deck::Deck::chair(st)),
+        fx: TransitionKind::Glitch,
+    }
+}
+
 impl Screen for Popup {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
         for k in keys {
@@ -786,6 +912,9 @@ impl Screen for Popup {
                 KeyCode::Up | KeyCode::Char('k') => self.move_sel(-1),
                 KeyCode::Down | KeyCode::Char('j') => self.move_sel(1),
                 KeyCode::Esc | KeyCode::Char('q') => {
+                    if let Some(line) = self.esc_line.take() {
+                        st.story(line);
+                    }
                     return ScreenCmd::Pop {
                         fx: TransitionKind::None,
                     };
@@ -1305,5 +1434,179 @@ mod tests {
         );
         dead.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Up)]);
         assert_eq!(dead.selected, 0, "nothing to land on: no change, no hang");
+    }
+
+    /// Any screen drawn alone at `w`×`h`, a while after it opened.
+    fn drawn(screen: &dyn Screen, st: &mut AppState, w: u16, h: u16) -> String {
+        st.tick += 40;
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| screen.draw(st, f)).unwrap();
+        buffer_text(t.backend().buffer())
+    }
+
+    #[test]
+    fn sitting_in_her_chair_holds_her_waiting_tray_out_first() {
+        use crate::missions::{Effect, Need, TraySet, effects};
+        let (mut st, b, level, _) = crate::clinic::testutil::inside();
+        st.book = crate::missions::tests::doc_book(crate::missions::tests::IDLE, "");
+        let doc = crate::missions::tests::cast_doc(&mut st, b);
+        let tray = Effect::Tray {
+            from: "doc".into(),
+            tab: "doc".into(),
+            title: "her tray".into(),
+            line: "One piece.".into(),
+            sets: vec![TraySet {
+                need: Need::All(vec![]),
+                items: vec!["neural_port".into(), "subdermal_mesh".into()],
+            }],
+        };
+        effects::apply(&mut st, 0, 0, &tray);
+        // Put up over the map once and put down with esc.
+        st.missions.tray.as_mut().unwrap().shown = true;
+        let sit = || {
+            Popup::about(
+                None,
+                None,
+                vec![Choice::new('i', "Sit", Pick::Chair { building: b, level })],
+                0,
+            )
+        };
+        // Sat down with her tray waiting: the tray first, the chair not yet.
+        let ScreenCmd::Replace { to: mut up, .. } =
+            sit().update(&mut st, &[key(KeyCode::Char('i'))])
+        else {
+            panic!("the chair holds the tray out");
+        };
+        assert_eq!(st.chair, None);
+        assert!(drawn(up.as_ref(), &mut st, 120, 40).contains("Doc Vance · her tray"));
+        // Esc: back to the map, standing, the tray still waiting.
+        assert!(matches!(
+            up.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Pop { .. }
+        ));
+        assert_eq!(st.chair, None);
+        assert!(st.missions.tray.is_some());
+        // Sat down again and a piece taken: the chair opens.
+        let ScreenCmd::Replace { to: mut up, .. } =
+            sit().update(&mut st, &[key(KeyCode::Char('i'))])
+        else {
+            panic!("the chair holds the tray out again");
+        };
+        assert!(matches!(
+            up.update(&mut st, &[key(KeyCode::Char('1'))]),
+            ScreenCmd::Replace { .. }
+        ));
+        assert_eq!(st.missions.tray, None);
+        assert_eq!(st.character.count(&ItemId::new("neural_port")), 1);
+        let chair = crate::clinic::Chair {
+            building: b,
+            level,
+            doc,
+        };
+        assert_eq!(st.chair, Some(chair));
+        // Another's tray waiting: the chair is only the chair.
+        st.chair = None;
+        effects::apply(&mut st, 0, 0, &tray);
+        st.missions
+            .cast
+            .insert("doc".into(), sim::PersonId(doc.0 + 1));
+        assert!(matches!(
+            sit().update(&mut st, &[key(KeyCode::Char('i'))]),
+            ScreenCmd::Replace { .. }
+        ));
+        assert_eq!(st.chair, Some(chair));
+        assert!(st.missions.tray.is_some());
+    }
+
+    #[test]
+    fn esc_leaves_the_tray_and_talking_reopens_it() {
+        use crate::missions::{Effect, Need, TraySet, effects};
+        let (mut st, b, _, _) = crate::clinic::testutil::inside();
+        st.book = crate::missions::tests::doc_book(crate::missions::tests::IDLE, "");
+        let doc = crate::missions::tests::cast_doc(&mut st, b);
+        let tray = Effect::Tray {
+            from: "doc".into(),
+            tab: "doc".into(),
+            title: "her tray".into(),
+            line: "One piece, on his tab. The rest go back in the drawer.".into(),
+            sets: vec![TraySet {
+                need: Need::All(vec![]),
+                items: vec!["neural_port".into(), "subdermal_mesh".into()],
+            }],
+        };
+        effects::apply(&mut st, 0, 0, &tray);
+        // Put up over the map once.
+        let mut map = crate::screens::explore::MapScreen::walking(&mut st);
+        let ScreenCmd::Push { to: mut up, .. } = map.update(&mut st, &[]) else {
+            panic!("the tray opens over the map");
+        };
+        let text = drawn(up.as_ref(), &mut st, 120, 40);
+        assert!(text.contains("Doc Vance · her tray"), "{text}");
+        assert!(
+            text.contains("One piece, on his tab. The rest go back in the drawer."),
+            "{text}"
+        );
+        assert!(
+            text.contains("1  Take: Neural port · neural · grants Ping, Static"),
+            "{text}"
+        );
+        assert!(text.contains("2  Take: Subdermal mesh · skin"), "{text}");
+        // Esc puts it down, pending, and says how to get it back; the map doesn't put it
+        // up again.
+        assert!(matches!(
+            up.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Pop { .. }
+        ));
+        assert!(st.missions.tray.as_ref().is_some_and(|t| t.shown));
+        assert_eq!(
+            last(&st),
+            Some("Doc Vance · the tray waits · talk to take a piece")
+        );
+        assert!(!matches!(map.update(&mut st, &[]), ScreenCmd::Push { .. }));
+        // Talking to her holds it out again; anyone else talks as ever.
+        let talk = |who| {
+            Popup::verbs(
+                "DOC",
+                vec![Choice::new(
+                    't',
+                    "Talk",
+                    Pick::Talk {
+                        lines: vec![Line::from("a line")],
+                        said: "Doc Vance: hi".into(),
+                        who: Some(who),
+                    },
+                )],
+                0,
+            )
+        };
+        assert!(matches!(
+            talk(sim::PersonId(doc.0 + 1)).update(&mut st, &[key(KeyCode::Char('t'))]),
+            ScreenCmd::Stay
+        ));
+        // Held out by talking before the map put it up, it counts as shown.
+        st.missions.tray.as_mut().unwrap().shown = false;
+        let ScreenCmd::Replace { to: mut again, .. } =
+            talk(doc).update(&mut st, &[key(KeyCode::Char('t'))])
+        else {
+            panic!("talking to her opens the tray");
+        };
+        assert!(st.missions.tray.as_ref().is_some_and(|t| t.shown));
+        assert_eq!(last(&st), Some("Doc Vance: hi"));
+        assert!(drawn(again.as_ref(), &mut st, 120, 40).contains("Doc Vance · her tray"));
+        // Taking one puts it away for good.
+        assert!(matches!(
+            again.update(&mut st, &[key(KeyCode::Char('2'))]),
+            ScreenCmd::Pop { .. }
+        ));
+        assert_eq!(st.missions.tray, None);
+        assert_eq!(
+            st.missions.tab.as_ref().map(|t| t.item.clone()),
+            Some(ItemId::new("subdermal_mesh"))
+        );
+        assert_eq!(st.character.count(&ItemId::new("subdermal_mesh")), 1);
+        assert!(matches!(
+            talk(doc).update(&mut st, &[key(KeyCode::Char('t'))]),
+            ScreenCmd::Stay
+        ));
     }
 }

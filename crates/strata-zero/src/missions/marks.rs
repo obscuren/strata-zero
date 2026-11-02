@@ -1,11 +1,13 @@
 //! Marks: where a scene's beat or an effect points, resolved when it runs (scenes spec
 //! §1, "Marks"). All `Home*` marks lie on the player's flat; without a home they are
-//! nothing.
+//! nothing. A `Chair` lies in a cast role's work building, on whichever floor has it.
 
 use super::{Mark, visitors};
 use crate::app::AppState;
+use crate::interiors;
 use crate::render::map::{MapRef, TileMap};
 use citygen::{Feature, Place, Pos, Rect};
+use sim::Work;
 
 /// The `(Place, Pos)` a mark names now, or None. `walker` is the actor a `Beside`
 /// measures from (a visitor's role), else the player.
@@ -19,8 +21,22 @@ pub fn resolve(st: &AppState, mark: &Mark, walker: Option<&str>) -> Option<(Plac
             .find(|v| &v.role == role)
             .map(|v| (v.place, v.pos)),
         Mark::Beside(inner) => beside(st, inner, walker),
+        Mark::Chair(role) => chair(st, role),
         _ => home_mark(st, mark),
     }
+}
+
+/// The operating chair in the role's work building, on the work floor it stands on.
+fn chair(st: &AppState, role: &str) -> Option<(Place, Pos)> {
+    let id = super::person_of(st, role)?;
+    let Work::Building(b) = st.world.as_ref()?.people().get(id.0 as usize)?.work else {
+        return None;
+    };
+    let plan = interiors::plan_now(st, b)?;
+    plan.work_floors().into_iter().find_map(|level| {
+        let pos = interiors::floor_now(st, &plan, level)?.chair()?;
+        Some((Place::Floor { building: b, level }, pos))
+    })
 }
 
 /// The flat's rect grown by one, its walls included, and the floor it is on.
@@ -236,6 +252,30 @@ mod tests {
             assert_eq!(resolve(&st, &m, None), None, "{m:?}");
         }
         assert_eq!(flat_rect(&st), None);
+    }
+
+    #[test]
+    fn the_chair_mark_finds_the_doc_chair() {
+        let (mut st, b, level, chair) = crate::clinic::testutil::inside();
+        st.book = crate::missions::tests::doc_book(crate::missions::tests::IDLE, "");
+        let doc = Mark::Chair("doc".into());
+        assert_eq!(resolve(&st, &doc, None), None, "nobody cast");
+        crate::missions::tests::cast_doc(&mut st, b);
+        let here = Place::Floor { building: b, level };
+        assert_eq!(resolve(&st, &doc, None), Some((here, chair)));
+        // Beside it, on her floor.
+        let (place, pos) = resolve(&st, &Mark::Beside(Box::new(doc.clone())), None).unwrap();
+        assert_eq!((place, pos.chebyshev(chair)), (here, 1));
+        // From the street, the floor nobody has walked onto yet.
+        let (mut st, same, _, _) = crate::clinic::testutil::outside(crate::clinic::testutil::NIGHT);
+        assert_eq!(same, b, "the fixture's clinic");
+        st.book = crate::missions::tests::doc_book(crate::missions::tests::IDLE, "");
+        crate::missions::tests::cast_doc(&mut st, b);
+        assert_eq!(resolve(&st, &doc, None), Some((here, chair)));
+        assert!(
+            st.interiors.floor(b, level).is_none(),
+            "made fresh, not kept"
+        );
     }
 
     #[test]

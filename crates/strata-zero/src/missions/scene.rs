@@ -138,6 +138,11 @@ impl SceneRun {
     fn current(&self) -> Option<Beat> {
         self.scene.beats.get(self.beat).cloned()
     }
+
+    /// The mission its lines' needs are asked for: none from the console.
+    fn mission(&self) -> Option<usize> {
+        (self.mission != usize::MAX).then_some(self.mission)
+    }
 }
 
 impl PadRun {
@@ -381,6 +386,12 @@ fn close(st: &mut AppState, run: SceneRun) {
 fn start(st: &mut AppState, run: &mut SceneRun, beat: &Beat) {
     let now = st.clock_tick();
     match beat {
+        // A line whose need fails is never said: no line, so it is over as it begins.
+        Beat::Say {
+            need: Some(need), ..
+        } if !super::holds(st, run.mission(), need) => {
+            run.line = None;
+        }
         Beat::Say {
             who,
             text,
@@ -446,6 +457,7 @@ fn start(st: &mut AppState, run: &mut SceneRun, beat: &Beat) {
             visitors::leave(st, role);
         }
         Beat::Lights(level) => effects::lights(st, *level),
+        Beat::Note { at, text } => effects::note(st, at, text),
     }
 }
 
@@ -473,7 +485,8 @@ fn ended(_st: &AppState, run: &SceneRun, beat: &Beat, now: u64) -> bool {
         | Beat::Camera(_)
         | Beat::Arrive { .. }
         | Beat::Leave(_)
-        | Beat::Lights(_) => true,
+        | Beat::Lights(_)
+        | Beat::Note { .. } => true,
     }
 }
 
@@ -498,7 +511,8 @@ fn finish(st: &mut AppState, run: &mut SceneRun, beat: &Beat) {
         | Beat::Camera(_)
         | Beat::Arrive { .. }
         | Beat::Leave(_)
-        | Beat::Lights(_) => {}
+        | Beat::Lights(_)
+        | Beat::Note { .. } => {}
     }
 }
 
@@ -670,17 +684,21 @@ fn pad(
     }
 }
 
-/// Where an actor stands: you, or a visitor on the map.
+/// Where an actor stands: you, a visitor on the map, or a cast person on your place
+/// (the street, or your floor) where it draws them.
 fn spot(st: &AppState, who: &str) -> Option<(Place, Pos)> {
+    let you = st.player.as_ref().map(|p| (p.place, p.pos));
     if who == YOU {
-        st.player.as_ref().map(|p| (p.place, p.pos))
-    } else {
-        st.missions
-            .visitors
-            .iter()
-            .find(|v| v.role == who)
-            .map(|v| (v.place, v.pos))
+        return you;
     }
+    let visitor = st.missions.visitors.iter().find(|v| v.role == who);
+    if let Some(v) = visitor {
+        return Some((v.place, v.pos));
+    }
+    let (here, _) = you?;
+    super::person_of(st, who)
+        .and_then(|id| crate::interiors::drawn_at(st, id))
+        .filter(|(place, _)| *place == here)
 }
 
 /// Another actor than `who` stands on the tile.
@@ -1276,6 +1294,34 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_say_whose_need_fails_is_skipped_at_once() {
+        let mut st = queued(
+            SLOW,
+            r#"Say(who: "castellan", text: "Never.", need: Some(Skill("nonesuch"))),
+            Say(who: "castellan", text: "Said."),
+            Say(who: "seren", text: "Nor this.", need: Some(Skill("nonesuch"))),
+            Say(who: "seren", text: "Last.", need: Some(Not(Skill("nonesuch"))))"#,
+        );
+        let t = st.clock_tick();
+        run_ticks(&mut st, 1);
+        let run = running(&st).expect("the scene plays");
+        assert_eq!(run.beat(), 1);
+        let line = run.line().unwrap();
+        assert_eq!(line.text, "Said.");
+        assert!(
+            line.began <= t + 1,
+            "no time passed: {} from {t}",
+            line.began
+        );
+        assert_eq!(logged(&st, "Castellan · \u{201c}Never.\u{201d}"), 0);
+        // Skipped through, a line whose need fails is not said either.
+        assert!(press(&mut st, KeyCode::Esc));
+        assert_eq!(logged(&st, "Seren · \u{201c}Nor this.\u{201d}"), 0);
+        assert_eq!(logged(&st, "Seren · \u{201c}Last.\u{201d}"), 1);
+        assert!(ended(&st));
+    }
+
+    #[test]
     fn the_camera_holds_a_mark_then_follows_you() {
         let mut st = queued(
             SLOW,
@@ -1606,5 +1652,42 @@ pub(crate) mod tests {
         assert_eq!(beat(&st), 1, "over at once");
         let out = at(&st, &Mark::HomeOutside);
         assert_eq!(at(&st, &Mark::Role("seren".into())), out);
+    }
+
+    /// Plays, from the console, a scene "s" of one line said by the role `doc`: the line.
+    fn the_doc_says(st: &mut AppState) -> Line {
+        st.book = super::super::tests::doc_book(
+            super::super::tests::IDLE,
+            &format!(
+                r#""s": Scene(title: "S", look: Bubbles, pace: {SLOW},
+                    beats: [Say(who: "doc", text: "He sends me strays.")])"#
+            ),
+        );
+        play(st, "s");
+        tick(st);
+        running(st).and_then(|r| r.line()).expect("a line").clone()
+    }
+
+    #[test]
+    fn a_doc_line_anchors_beside_her() {
+        let (mut st, b, level, _) = crate::clinic::testutil::inside();
+        let doc = super::super::tests::cast_doc(&mut st, b);
+        let line = the_doc_says(&mut st);
+        assert_eq!(line.label, "Doc Vance");
+        let her = crate::interiors::drawn_at(&st, doc).expect("drawn on her floor");
+        assert_eq!(her.0, Place::Floor { building: b, level });
+        assert_eq!(line.anchor, Some(her));
+    }
+
+    #[test]
+    fn a_line_by_someone_elsewhere_goes_to_the_corner() {
+        // You on the street, the doc in at the chair.
+        let (mut st, b, _, _) = crate::clinic::testutil::outside(crate::clinic::testutil::NIGHT);
+        let doc = super::super::tests::cast_doc(&mut st, b);
+        assert!(crate::interiors::drawn_at(&st, doc).is_some());
+        assert_eq!(the_doc_says(&mut st).anchor, None);
+        // Nobody cast: the line is said all the same, to the corner.
+        let (mut st, _, _, _) = crate::clinic::testutil::inside();
+        assert_eq!(the_doc_says(&mut st).anchor, None);
     }
 }

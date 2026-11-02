@@ -31,9 +31,6 @@ pub enum Source {
     /// Keyed by hand into the door's pad.
     Keypad,
     /// Read in a mail on the rig.
-    // Only the welcome favour mailed a code, and new games no longer run it (the
-    // story's drop replaced it); the journal still reads the source.
-    #[allow(dead_code)]
     Mail,
     /// Read in someone's notes in a shell.
     Shell,
@@ -50,6 +47,21 @@ pub struct Mail {
     pub at: u64,
     /// The job it is about, for a job's own mails.
     pub job: Option<crate::jobs::JobId>,
+}
+
+/// The room number a building's street doors share one code under; no room has it.
+pub const STREET_DOOR: u16 = u16::MAX;
+
+/// A building's street code: one for all its street doors, fixed by the seed.
+pub fn street_code(st: &AppState, b: BuildingId) -> u16 {
+    st.city
+        .as_ref()
+        .map_or(0, |c| citygen::rng::door_code(c.seed, b, 0, STREET_DOOR))
+}
+
+/// The building's street code, once the journal holds it.
+pub fn known_street_code(st: &AppState, b: BuildingId) -> Option<u16> {
+    st.journal.code_for(b, 0, STREET_DOOR).map(|c| c.code)
 }
 
 /// Minutes a keypad stays locked after the third miss.
@@ -260,6 +272,7 @@ fn card(id: ItemId, name: String, desc: String) -> Item {
         perks: Vec::new(),
         grants: Vec::new(),
         on_use: None,
+        opens: Vec::new(),
         fx: Vec::new(),
         program: None,
         deck: None,
@@ -537,18 +550,38 @@ fn whose_flat(st: &AppState, b: BuildingId, level: i32, number: u16) -> String {
         .unwrap_or_else(|| "empty flat".to_string())
 }
 
+/// What a code opens, as the journal says it: the building's street door, a locked room
+/// that is no flat by its kind (`Hot Pot Lou`, back room), else the flat.
+fn door_of(st: &AppState, c: &Code) -> String {
+    let building = || crate::net::building_name(st, c.building);
+    if c.number == STREET_DOOR {
+        return format!("`{}`, street door", building());
+    }
+    let room = st
+        .interiors
+        .floor(c.building, c.level)
+        .and_then(|(_, f)| f.rooms.iter().find(|r| r.private && r.number == c.number))
+        .map(|r| r.kind)
+        .filter(|k| !matches!(k, citygen::RoomKind::Flat | citygen::RoomKind::Home));
+    if let Some(kind) = room {
+        return format!("`{}`, {}", building(), kind.label());
+    }
+    let whose = match c.source {
+        Source::Home => "your flat".to_string(),
+        Source::ServerCopy | Source::Keypad | Source::Mail | Source::Shell => {
+            whose_flat(st, c.building, c.level, c.number)
+        }
+    };
+    format!("{whose} `{}`, level {}", c.number, c.level)
+}
+
 /// The journal, grouped per building: (building, header, entries). Codes first,
 /// then cards, then the backdoor; buildings with a dated entry first, newest first,
 /// then those known only by a card.
 pub fn entries(st: &AppState) -> Vec<(BuildingId, String, Vec<Entry>)> {
     let mut by: BTreeMap<BuildingId, Vec<Entry>> = BTreeMap::new();
     for c in st.journal.codes() {
-        let whose = match c.source {
-            Source::Home => "your flat".to_string(),
-            Source::ServerCopy | Source::Keypad | Source::Mail | Source::Shell => {
-                whose_flat(st, c.building, c.level, c.number)
-            }
-        };
+        let what = door_of(st, c);
         let from = match c.source {
             Source::ServerCopy => format!("copied off the server, {}", stamp(c.at)),
             Source::Keypad => format!("keyed in at the door, {}", stamp(c.at)),
@@ -562,10 +595,7 @@ pub fn entries(st: &AppState) -> Vec<(BuildingId, String, Vec<Entry>)> {
         by.entry(c.building).or_default().push(Entry {
             building: c.building,
             kind: EntryKind::Code(c.clone()),
-            text: format!(
-                "door code {:04} · {whose} `{}`, level {} · {from}",
-                c.code, c.number, c.level
-            ),
+            text: format!("door code {:04} · {what} · {from}", c.code),
             at: Some(c.at),
         });
     }
@@ -1182,6 +1212,96 @@ mod tests {
             "{es:?}"
         );
         assert!(flat_label(&st, b, level, number).ends_with(&format!("flat {number}")));
+    }
+
+    /// A code for a room of a building, learned by mail.
+    fn mailed(b: BuildingId, level: i32, number: u16, code: u16) -> Code {
+        Code {
+            building: b,
+            level,
+            number,
+            household: None,
+            code,
+            source: Source::Mail,
+            noted_by: None,
+            at: 600,
+        }
+    }
+
+    fn text_of(st: &crate::app::AppState, b: BuildingId, number: u16) -> String {
+        entries(st)
+            .into_iter()
+            .flat_map(|(_, _, es)| es)
+            .find(
+                |e| matches!(&e.kind, EntryKind::Code(c) if c.building == b && c.number == number),
+            )
+            .unwrap()
+            .text
+    }
+
+    #[test]
+    fn the_journal_says_what_a_code_opens() {
+        let (mut st, flats) = state();
+        let city = st.city.clone().unwrap();
+        // A street door: the building's, by name.
+        let front = city
+            .buildings
+            .iter()
+            .find(|x| x.kind.is_closed() && x.id != flats)
+            .unwrap()
+            .id;
+        let code = street_code(&st, front);
+        assert_eq!(
+            code,
+            citygen::rng::door_code(city.seed, front, 0, STREET_DOOR)
+        );
+        st.journal.learn(mailed(front, 0, STREET_DOOR, code));
+        let name = crate::net::building_name(&st, front);
+        assert_eq!(
+            text_of(&st, front, STREET_DOOR),
+            format!(
+                "door code {code:04} · `{name}`, street door · from a mail on the rig, {}",
+                stamp(600)
+            )
+        );
+        // A locked room that is no flat: the building and the room.
+        let (bar, level, room) = city
+            .buildings
+            .iter()
+            .filter(|x| x.kind == BuildingKind::Bar)
+            .find_map(|x| {
+                let floor = st.interiors.ensure(&city, x.id, 0)?;
+                let r = floor
+                    .rooms
+                    .iter()
+                    .find(|r| r.private && r.kind == citygen::RoomKind::BackRoom)?;
+                Some((x.id, 0, r.number))
+            })
+            .expect("a bar with a back room");
+        st.journal.learn(mailed(bar, level, room, 1234));
+        let name = crate::net::building_name(&st, bar);
+        assert_eq!(
+            text_of(&st, bar, room),
+            format!(
+                "door code 1234 · `{name}`, back room · from a mail on the rig, {}",
+                stamp(600)
+            )
+        );
+        // A flat reads as it always has.
+        prepare(&mut st, flats);
+        let (level, number) = st
+            .interiors
+            .homes_of(flats)
+            .unwrap()
+            .flats()
+            .next()
+            .unwrap();
+        st.journal.learn(mailed(flats, level, number, 4321));
+        assert!(
+            text_of(&st, flats, number).contains(&format!("flat `{number}`, level {level} · ")),
+            "{}",
+            text_of(&st, flats, number)
+        );
     }
 
     #[test]

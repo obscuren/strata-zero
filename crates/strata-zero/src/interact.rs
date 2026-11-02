@@ -2,6 +2,7 @@
 //! letters (`x` look, `t` talk, `i` interact, `j` jack, `g` take, `>` `<` go).
 
 use crate::app::AppState;
+use crate::missions::ReadAt;
 use crate::render::map::MapRef;
 use crate::render::map::TileMap;
 use crate::render::mark::{mark_items, mark_person, mark_tile};
@@ -84,6 +85,28 @@ fn take(s: &game::Stack) -> Pick {
             qty: s.qty,
         },
     })
+}
+
+/// The rig's reading rows: one per carried item with a rig reading that holds, `r`
+/// first.
+fn rig_reads(st: &AppState) -> Vec<Choice> {
+    let mut keys = std::iter::once('r').chain(FREE_LETTERS.chars());
+    st.book
+        .readings
+        .keys()
+        .map(|k| game::ItemId::new(k))
+        .filter(|id| st.character.count(id) > 0)
+        .filter_map(|id| {
+            let r = crate::missions::reading(st, &id.0, ReadAt::Rig)?;
+            let name = st.content.item(&id)?.name.clone();
+            let verb = crate::missions::fill(st, &r.verb);
+            let read = Pick::Read {
+                item: id,
+                at: ReadAt::Rig,
+            };
+            Some(Choice::on(keys.next()?, verb, name, CYAN, read))
+        })
+        .collect()
 }
 
 /// A stack as rows and headers name it: "Copper coil ×2", the count only above one.
@@ -206,6 +229,10 @@ pub fn gather(
             else {
                 continue;
             };
+            // The street code, when you hold it.
+            let code = crate::credentials::known_street_code(st, b)
+                .map(|c| format!(" · code {c:04}"))
+                .unwrap_or_default();
             // Someone standing in the doorway keeps their window; the door's hours go
             // on it as a greyed row.
             if let Some(s) = subs.iter_mut().find(|s| s.pos == d) {
@@ -214,10 +241,7 @@ pub fn gather(
                         thing: Some((crate::clinic::name(st, b), AMBER)),
                         ..Choice::disabled('i', "Door")
                     }
-                    .tail(format!(
-                        " · CLOSED · opens {}",
-                        crate::clinic::hhmm(crate::clinic::hours(st).0)
-                    )),
+                    .tail(format!(" · {}{code}", crate::clinic::shut_row(st, b))),
                 );
                 continue;
             }
@@ -226,7 +250,7 @@ pub fn gather(
                 &mut here,
                 d,
                 Some(header(crate::clinic::name(st, b), Some(('▯', AMBER)))),
-                Some(crate::clinic::hours_line(st)),
+                Some(format!("{}{code}", crate::clinic::hours_line(st, b))),
                 Vec::new(),
             );
         }
@@ -347,6 +371,9 @@ pub fn gather(
             ));
         }
         rows.push(Choice::new('j', "Jack in", Pick::World(WorldAct::JackIn)));
+        if matches!(origin, Some(HostId::Rig)) {
+            rows.extend(rig_reads(st));
+        }
         add(
             &mut subs,
             &mut here,
@@ -807,6 +834,118 @@ mod tests {
     }
 
     #[test]
+    fn the_shut_door_shows_the_code_you_hold() {
+        let (mut st, b, door, _) = crate::clinic::testutil::outside(crate::clinic::testutil::DAY);
+        let world = st.world.as_mut().unwrap();
+        if let Some(id) = world.person_at(door) {
+            world.park(id, Pos::new(0, 0));
+        }
+        let subtitle = |st: &AppState| {
+            gather(st, &|_, _| None)
+                .into_iter()
+                .find(|s| s.pos == door)
+                .and_then(|s| s.subtitle)
+                .unwrap()
+        };
+        assert_eq!(subtitle(&st), "CLOSED · opens 18:00 · closes 04:00");
+        let code = crate::credentials::street_code(&st, b);
+        st.journal.learn(crate::credentials::Code {
+            building: b,
+            level: 0,
+            number: crate::credentials::STREET_DOOR,
+            household: None,
+            code,
+            source: crate::credentials::Source::Mail,
+            noted_by: None,
+            at: 0,
+        });
+        assert_eq!(
+            subtitle(&st),
+            format!("CLOSED · opens 18:00 · closes 04:00 · code {code:04}")
+        );
+        // Somebody in the doorway: the greyed row carries it.
+        let doc = st
+            .world
+            .as_ref()
+            .unwrap()
+            .people()
+            .iter()
+            .find(|p| p.profession == "ripperdoc" && p.work == sim::Work::Building(b))
+            .unwrap()
+            .id;
+        st.world.as_mut().unwrap().park(doc, door);
+        let subjects = gather(&st, &|_, _| None);
+        let s = subjects.iter().find(|s| s.pos == door).unwrap();
+        let row = s.choices.iter().find(|c| c.key == 'i').unwrap();
+        assert_eq!(
+            row.tail,
+            format!(" · CLOSED · opens 18:00 · code {code:04}")
+        );
+    }
+
+    #[test]
+    fn a_held_clinic_keeps_no_hours_on_its_door() {
+        use crate::credentials::{Code, STREET_DOOR, Source, street_code};
+        // At night, in its hours, the doc held in by the story: shut all the same.
+        let (mut st, b, door, _) = crate::clinic::testutil::outside(crate::clinic::testutil::NIGHT);
+        let doc = crate::clinic::doc_at_work(&st, b).expect("the doc is in");
+        st.missions.cast.insert("doc".into(), doc);
+        crate::missions::effects::apply(
+            &mut st,
+            0,
+            0,
+            &crate::missions::Effect::Hold("doc".into()),
+        );
+        assert!(!crate::clinic::is_open(&st, b));
+        let world = st.world.as_mut().unwrap();
+        if let Some(id) = world.person_at(door) {
+            world.park(id, Pos::new(0, 0));
+        }
+        let subtitle = |st: &AppState| {
+            gather(st, &|_, _| None)
+                .into_iter()
+                .find(|s| s.pos == door)
+                .and_then(|s| s.subtitle)
+                .unwrap()
+        };
+        assert_eq!(subtitle(&st), "CLOSED");
+        let name = crate::clinic::name(&st, b);
+        assert_eq!(
+            crate::clinic::closed_line(&st, b),
+            format!("{name} is closed")
+        );
+        let refused = crate::interiors::enter(&mut st, b, (citygen::StratumKind::Street, door));
+        assert_eq!(refused, Err(format!("{name} is closed")));
+        let code = street_code(&st, b);
+        st.journal.learn(Code {
+            building: b,
+            level: 0,
+            number: STREET_DOOR,
+            household: None,
+            code,
+            source: Source::Mail,
+            noted_by: None,
+            at: 0,
+        });
+        assert_eq!(subtitle(&st), format!("CLOSED · code {code:04}"));
+        // Somebody in the doorway: the greyed row says the same.
+        let other = st
+            .world
+            .as_ref()
+            .unwrap()
+            .people()
+            .iter()
+            .find(|p| p.id != doc && p.profession != "ripperdoc")
+            .unwrap()
+            .id;
+        st.world.as_mut().unwrap().park(other, door);
+        let subjects = gather(&st, &|_, _| None);
+        let s = subjects.iter().find(|s| s.pos == door).unwrap();
+        let row = s.choices.iter().find(|c| c.key == 'i').unwrap();
+        assert_eq!(row.tail, format!(" · CLOSED · code {code:04}"));
+    }
+
+    #[test]
     fn a_shut_door_says_when() {
         let (mut st, b, door, _) = crate::clinic::testutil::outside(crate::clinic::testutil::DAY);
         // Somebody standing in the doorway keeps their window, with the door's hours on it.
@@ -1162,5 +1301,63 @@ mod tests {
         st.player = Some(crate::walker::Player::at(place, set.offset(0, 1)));
         st.missions.news.as_mut().unwrap().fresh = 0;
         assert!(set_subject(&st).is_none());
+    }
+
+    #[test]
+    fn the_rig_offers_read_only_for_a_matching_reading() {
+        use crate::app::ScreenCmd;
+        use crate::screens::testutil::key;
+        use crossterm::event::KeyCode;
+        let mut st = state_home();
+        crate::screens::explore::MapScreen::walking(&mut st);
+        let mut st = crate::missions::reading::tests::reader(st, &["hacking"]);
+        st.tick += 200;
+        let home = st.home.unwrap().home;
+        let floor = st
+            .interiors
+            .floor(home.building, home.level)
+            .map(|(_, f)| f.clone())
+            .unwrap();
+        st.player.as_mut().unwrap().pos = home
+            .rig
+            .neighbors4()
+            .find(|p| {
+                home.rect.contains(*p) && floor.tiles.get(*p).is_some_and(|t| t.is_walkable())
+            })
+            .expect("a floor tile by the rig");
+        let rig = |st: &AppState| {
+            gather(st, &|_, _| None)
+                .into_iter()
+                .find(|s| s.header.as_ref().is_some_and(|h| h.name == "Access rig"))
+                .expect("the rig")
+        };
+        let reads = |st: &AppState| -> Vec<Choice> {
+            let rows = rig(st).choices.into_iter();
+            rows.filter(|c| matches!(c.pick, Pick::Read { .. }))
+                .collect()
+        };
+        let rows = reads(&st);
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0].key, rows[0].label.as_str()), ('r', "Read"));
+        let thing = rows[0].thing.clone().unwrap();
+        assert_eq!(thing, ("Ledger shard".to_string(), CYAN));
+        assert!(matches!(&rows[0].pick,
+            Pick::Read { item, at: ReadAt::Rig } if item.0 == "ledger_shard"));
+        let shown = window_text(&st, &[rig(&st)]);
+        assert!(shown.contains("r  Read: Ledger shard"), "{shown}");
+        // Fired: the card in place of the window, the shard read.
+        let mut window = rig(&st).window(st.tick.saturating_sub(200));
+        let cmd = window.update(&mut st, &[key(KeyCode::Char('r'))]);
+        assert!(matches!(cmd, ScreenCmd::Replace { .. }));
+        assert!(st.missions.read.contains("ledger_shard"));
+        // Fired on a state gone stale: the window only closes.
+        st.character.skills.clear();
+        let cmd = window.update(&mut st, &[key(KeyCode::Char('r'))]);
+        assert!(matches!(cmd, ScreenCmd::Pop { .. }));
+        assert!(reads(&st).is_empty(), "no hacking, no row");
+        st.character.skills.insert(game::SkillId::new("hacking"));
+        let shard = game::ItemId::new("ledger_shard");
+        game::remove_from_pack(&mut st.character, &shard, 1);
+        assert!(reads(&st).is_empty(), "no shard, no row");
     }
 }

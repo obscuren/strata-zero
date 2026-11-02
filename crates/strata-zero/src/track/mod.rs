@@ -482,6 +482,18 @@ fn resolve_story(st: &AppState, mission: usize, step: usize) -> Resolved {
                 pos,
                 radius: *within,
             }),
+        // The person's tile on the floor that draws them (an indoor spot routes by lift
+        // and stairs), else the person, wherever they are.
+        Trigger::At(Where::By { role, within }) => crate::missions::person_of(st, role).map(|id| {
+            match crate::interiors::drawn_at(st, id) {
+                Some((place @ Place::Floor { .. }, pos)) => Target::Spot {
+                    place,
+                    pos,
+                    radius: *within,
+                },
+                _ => Target::Person(id),
+            }
+        }),
         _ => None,
     };
     target.map_or(Resolved::Nowhere, Resolved::Target)
@@ -1561,5 +1573,52 @@ pub(crate) mod tests {
         tick(&mut st);
         assert!(st.track.is_none());
         assert!(st.log.iter().any(|e| e.text == "knock"));
+    }
+
+    #[test]
+    fn tracking_by_leads_to_her_floor() {
+        use crate::missions::tests::{cast_doc, doc_book, outside_door};
+        let (mut st, b, _, _) = crate::clinic::testutil::outside(crate::clinic::testutil::NIGHT);
+        st.book = doc_book(
+            r#"Mission(id: "see", title: "See", from: "doc", steps: [
+                Step(id: "word", when: NewGame, then: [Objective("See the doc")]),
+                Step(id: "in", when: At(By(role: "doc", within: 4)), then: [Log("in")]),
+            ])"#,
+            "",
+        );
+        crate::missions::begin(&mut st);
+        let doc = cast_doc(&mut st, b);
+        assert_eq!(st.missions.runs[0].at, 1, "waits to be beside her");
+        // Her floor: the one with the chair, her tile the doc's spot beside it.
+        let city = st.city.as_ref().unwrap();
+        let plan = citygen::FloorPlan::new(city, b).unwrap();
+        let (level, spot) = plan
+            .levels()
+            .find_map(|l| {
+                let floor = citygen::generate_floor(city, &plan, l);
+                floor.chair()?;
+                let s = floor
+                    .stations
+                    .iter()
+                    .find(|s| s.role == citygen::Role::Surgery)?;
+                Some((l, s.pos))
+            })
+            .unwrap();
+        let her = Target::Spot {
+            place: Place::Floor { building: b, level },
+            pos: spot,
+            radius: 4,
+        };
+        assert_eq!(resolve(&st, &story(0, 1)), Resolved::Target(her));
+        // Tracked from the street, the floor is the one the lift and stairs take you to.
+        assert!(set(&mut st, story(0, 1)).is_ok());
+        assert_eq!(floor_wanted(&st, b), Some(level));
+        // Out on the street, she is tracked where she walks.
+        let out = outside_door(&st, b);
+        st.world.as_mut().unwrap().park(doc, out);
+        assert_eq!(
+            resolve(&st, &story(0, 1)),
+            Resolved::Target(Target::Person(doc))
+        );
     }
 }

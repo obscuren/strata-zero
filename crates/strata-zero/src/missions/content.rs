@@ -7,9 +7,11 @@ use thiserror::Error;
 const DEFAULT: &str = include_str!("../../../../flavor/missions.ron");
 
 /// What a `{role.field}` slot may ask of a role.
-pub const SLOT_FIELDS: [&str; 4] = ["title", "place", "district", "hours"];
+pub const SLOT_FIELDS: [&str; 5] = ["title", "spaced", "place", "district", "hours"];
 /// What a `{role.field}` slot may ask of a visitor, who works nowhere.
-pub const VISITOR_FIELDS: [&str; 1] = ["title"];
+pub const VISITOR_FIELDS: [&str; 2] = ["title", "spaced"];
+/// The fields that ask where a person is, so they need one in the city.
+const PLACE_FIELDS: [&str; 3] = ["place", "district", "hours"];
 
 /// The shade letters a face row may hold.
 const SHADES: &str = ".dmlhbeX";
@@ -23,6 +25,8 @@ const STILL_PIXELS: &str = "0123456r";
 const STILL_SIDE: usize = 18;
 /// The player, as a beat's speaker or walker and as the `{you}` slot. No cast role takes it.
 pub const YOU: &str = "you";
+/// The `{code}` slot in a mail: the code it carries. No cast role takes it.
+pub const CODE: &str = "code";
 
 #[derive(Clone, Debug, Error, PartialEq)]
 pub enum BookError {
@@ -74,6 +78,79 @@ pub struct Book {
     pub scenes: BTreeMap<String, Scene>,
     #[serde(default)]
     pub news: BTreeMap<String, News>,
+    /// What who you are finds in an item, by item id (doctor spec §3).
+    #[serde(default)]
+    pub readings: BTreeMap<String, Vec<Reading>>,
+}
+
+/// Where an item is read: at your rig, at your bench, or by its Look.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+pub enum ReadAt {
+    Rig,
+    Bench,
+    Look,
+}
+
+/// A reading of an item at one place, for whoever its need holds for. A `Look` reading
+/// is only `text`, read in place of the item's description; at the rig and the bench it
+/// is offered as `verb` and shown as a card of `rows` under `head`. Every text takes
+/// the usual slots.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Reading {
+    pub at: ReadAt,
+    pub need: Need,
+    #[serde(default)]
+    pub verb: String,
+    #[serde(default)]
+    pub head: String,
+    #[serde(default)]
+    pub rows: Vec<Row>,
+    /// The label after `space`.
+    #[serde(default)]
+    pub close: String,
+    /// Showing it records `Need::Read` of the item.
+    #[serde(default)]
+    pub tells: bool,
+    #[serde(default)]
+    pub text: String,
+}
+
+/// One row of a reading's card. Backticked spans in a field's text and in art stand out.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub enum Row {
+    /// A label in the gutter, then its text.
+    Field(String, String),
+    /// A line in alarm.
+    Hot(String),
+    /// Somebody's mark, led by `▚▞`.
+    Tag(String),
+    /// A drawing.
+    Art(String),
+    /// What you make of it.
+    You(String),
+    /// `shown` entries of a ledger of `total`, seeded by the city and the item.
+    Ledger(u32, u32),
+    Blank,
+}
+
+impl Reading {
+    /// Every piece of text it shows, for slots.
+    fn texts(&self) -> Vec<&str> {
+        let mut out = vec![
+            self.verb.as_str(),
+            self.head.as_str(),
+            self.close.as_str(),
+            self.text.as_str(),
+        ];
+        for row in &self.rows {
+            match row {
+                Row::Field(label, text) => out.extend([label.as_str(), text.as_str()]),
+                Row::Hot(t) | Row::Tag(t) | Row::Art(t) | Row::You(t) => out.push(t),
+                Row::Ledger(..) | Row::Blank => {}
+            }
+        }
+        out
+    }
 }
 
 /// A news item: `flavor/missions.ron` `news`, put out by `Effect::News`. Its texts take
@@ -120,16 +197,6 @@ impl News {
         .chain(&self.crawl)
         .chain(&self.overheard)
         .map(String::as_str)
-    }
-
-    /// The roles it names: who it is about and its slots (but you).
-    fn roles(&self) -> BTreeSet<String> {
-        let mut out = BTreeSet::from([self.about.clone()]);
-        for t in self.texts() {
-            out.extend(slots(t).into_iter().map(|(role, _)| role));
-        }
-        out.remove(YOU);
-        out
     }
 }
 
@@ -191,6 +258,8 @@ pub enum Mark {
     HomeBed,
     HomeFurniture(citygen::Furniture),
     Beside(Box<Mark>),
+    /// The operating chair in the role's work building, on its floor.
+    Chair(String),
 }
 
 /// The code a scripted keypad types.
@@ -211,6 +280,28 @@ fn yes() -> bool {
     true
 }
 
+/// Who you are, as the story asks it (doctor spec §2): `missions::holds` answers.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub enum Need {
+    /// You have the skill.
+    Skill(String),
+    /// A reading of the item that tells has been shown this story.
+    Read(String),
+    /// You carry at least one.
+    Carries(String),
+    /// The story has unsealed the item.
+    Unsealed(String),
+    /// The jacket the camera saw is known and isn't what you wear now.
+    Changed,
+    /// The jacket the camera saw is known and is what you wear now.
+    Unchanged,
+    /// Now is past the first time the clock showed this minute of the day after the
+    /// mission began.
+    Late(u16),
+    Not(Box<Need>),
+    All(Vec<Need>),
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub enum Beat {
     Say {
@@ -222,6 +313,9 @@ pub enum Beat {
         at: Option<Mark>,
         #[serde(default)]
         hold: Option<f32>,
+        /// Said only when it holds; else skipped at once.
+        #[serde(default)]
+        need: Option<Need>,
     },
     Stage(String),
     Walk {
@@ -251,11 +345,18 @@ pub enum Beat {
     },
     Leave(String),
     Lights(f32),
+    /// Leaves a line under the Look of the mark's tile; a newer one replaces it.
+    Note {
+        at: Mark,
+        text: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub enum Pick {
     NearestFixer,
+    /// The one of this profession (an id) whose work tile is nearest the home door.
+    Nearest(String),
     Worker {
         professions: Vec<String>,
         at: Vec<citygen::BuildingKind>,
@@ -295,6 +396,7 @@ pub enum Trigger {
     At(Where),
     Talk(String),
     MissionDone { mission: String, minutes: u64 },
+    Chromed(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -306,6 +408,12 @@ pub enum Where {
     },
     /// Home: in your flat, or outside it within one tile of its door (the door included).
     HomeDoor,
+    /// Within `within` tiles (Manhattan) of the role's person on the same place: the
+    /// street where the sim has them, or the floor that draws them.
+    By {
+        role: String,
+        within: i32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -327,6 +435,8 @@ pub enum Effect {
         item: String,
         count: u32,
     },
+    /// Lets the pack open the item.
+    Unseal(String),
     Dead {
         role: String,
         look: String,
@@ -336,6 +446,9 @@ pub enum Effect {
         from: String,
         subject: String,
         body: Vec<String>,
+        /// A code the mail carries: learned as it lands, and its `{code}` slot.
+        #[serde(default)]
+        code: Option<CodeOf>,
     },
     Log(String),
     /// Plays the scene; its end marks the step `Ended`, as a feed's does.
@@ -346,10 +459,50 @@ pub enum Effect {
     },
     Leave(String),
     Lights(f32),
+    /// The role's line, said through your flat's holo set while you are home.
+    Holo {
+        from: String,
+        text: String,
+    },
+    /// Leaves a line under the Look of the mark's tile; a newer one replaces it.
+    Note {
+        at: Mark,
+        text: String,
+    },
     /// Puts out the news item; its end marks the step `Ended`, as a feed's does.
     News(String),
     /// The screen swims for this many seconds.
     Daze(f32),
+    /// Keeps the role's person at work, against their hours.
+    Hold(String),
+    /// Lets the role's person go, the first minute you are out of their work building.
+    Release(String),
+    /// The `from` role holds out the first set whose need holds: one piece to take, on
+    /// the `tab` role's tab, which pays for it in `from`'s chair.
+    Tray {
+        from: String,
+        tab: String,
+        title: String,
+        line: String,
+        sets: Vec<TraySet>,
+    },
+}
+
+/// The pieces a tray holds when its need does.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct TraySet {
+    pub need: Need,
+    pub items: Vec<String>,
+}
+
+/// A tray's rows take the keys 1 to 9.
+const TRAY_MAX: usize = 9;
+
+/// What a mail's code opens.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub enum CodeOf {
+    /// The street doors of the role's work building.
+    Clinic(String),
 }
 
 impl Effect {
@@ -364,6 +517,8 @@ impl Effect {
             Effect::Call { lines, .. } => lines.iter().map(String::as_str).collect(),
             Effect::Dead { look, .. } => vec![look],
             Effect::Objective(s) | Effect::Log(s) => vec![s],
+            Effect::Holo { text, .. } | Effect::Note { text, .. } => vec![text],
+            Effect::Tray { title, line, .. } => vec![title, line],
             Effect::Mail { subject, body, .. } => body
                 .iter()
                 .map(String::as_str)
@@ -371,25 +526,41 @@ impl Effect {
                 .collect(),
             Effect::Give { .. }
             | Effect::Take { .. }
+            | Effect::Unseal(_)
             | Effect::Scene(_)
             | Effect::Arrive { .. }
             | Effect::Leave(_)
             | Effect::Lights(_)
             | Effect::News(_)
-            | Effect::Daze(_) => vec![],
+            | Effect::Daze(_)
+            | Effect::Hold(_)
+            | Effect::Release(_) => vec![],
         }
     }
 
-    /// The roles named outside text: who speaks, who dies, who arrives (but you).
+    /// The roles named outside text: who speaks, who dies, who arrives (but you), who is
+    /// held or let go, whose building a mailed code opens, and who holds out a tray on
+    /// whose tab.
     fn named_roles(&self) -> Vec<&str> {
         match self {
-            Effect::Feed { from, .. } | Effect::Call { from, .. } | Effect::Mail { from, .. } => {
+            Effect::Mail {
+                from,
+                code: Some(CodeOf::Clinic(role)),
+                ..
+            } => vec![from, role],
+            Effect::Tray { from, tab, .. } => vec![from, tab],
+            Effect::Feed { from, .. }
+            | Effect::Call { from, .. }
+            | Effect::Mail { from, .. }
+            | Effect::Holo { from, .. } => {
                 vec![from]
             }
             Effect::Arrive { role, .. } if role == YOU => vec![],
-            Effect::Dead { role, .. } | Effect::Arrive { role, .. } | Effect::Leave(role) => {
-                vec![role]
-            }
+            Effect::Dead { role, .. }
+            | Effect::Arrive { role, .. }
+            | Effect::Leave(role)
+            | Effect::Hold(role)
+            | Effect::Release(role) => vec![role],
             _ => vec![],
         }
     }
@@ -406,15 +577,44 @@ impl Trigger {
     fn named_roles(&self) -> Vec<&str> {
         match self {
             Trigger::Sees { role, .. }
-            | Trigger::At(Where::Work { role, .. })
-            | Trigger::Talk(role) => vec![role],
+            | Trigger::At(Where::Work { role, .. } | Where::By { role, .. })
+            | Trigger::Talk(role)
+            | Trigger::Chromed(role) => vec![role],
             _ => vec![],
+        }
+    }
+}
+
+impl Beat {
+    /// The marks the beat points at.
+    fn marks(&self) -> Vec<&Mark> {
+        match self {
+            Beat::Say { at, .. } => at.iter().collect(),
+            Beat::Walk { to, .. } => vec![to],
+            Beat::Keypad { door, .. } => vec![door],
+            Beat::Door { at, .. }
+            | Beat::Camera(at)
+            | Beat::Arrive { at, .. }
+            | Beat::Note { at, .. } => vec![at],
+            Beat::Stage(_) | Beat::Wait(_) | Beat::Leave(_) | Beat::Lights(_) => vec![],
+        }
+    }
+}
+
+impl Mark {
+    /// The role the mark needs a person in the city for: a chair's doc.
+    fn cast_role(&self) -> Option<&str> {
+        match self {
+            Mark::Chair(role) => Some(role),
+            Mark::Beside(inner) => inner.cast_role(),
+            _ => None,
         }
     }
 }
 
 impl Mission {
     /// Every role the mission names: its `from`, triggers, effects and slots.
+    #[cfg(test)]
     pub fn roles(&self) -> BTreeSet<String> {
         let mut out = BTreeSet::new();
         out.insert(self.from.clone());
@@ -427,7 +627,7 @@ impl Mission {
                         slots(t)
                             .into_iter()
                             .map(|(role, _)| role)
-                            .filter(|r| r != YOU),
+                            .filter(|r| r != YOU && r != CODE),
                     );
                 }
             }
@@ -451,6 +651,19 @@ pub fn slots(text: &str) -> Vec<(String, Option<String>)> {
         rest = &after[close + 1..];
     }
     out
+}
+
+/// `{code}`, as a mail's text says it.
+pub fn code_slot() -> String {
+    format!("{{{CODE}}}")
+}
+
+/// The roles a text asks the place, district or hours of.
+fn placed(text: &str) -> impl Iterator<Item = String> {
+    slots(text)
+        .into_iter()
+        .filter(|(_, f)| f.as_deref().is_some_and(|f| PLACE_FIELDS.contains(&f)))
+        .map(|(role, _)| role)
 }
 
 impl Book {
@@ -479,8 +692,8 @@ impl Book {
         if !self.faces.contains_key(SILHOUETTE) {
             return Err(BookError::NoSilhouette);
         }
-        if self.cast.contains_key(YOU) {
-            return Err(BookError::ReservedRole(YOU.into()));
+        if let Some(reserved) = [YOU, CODE].into_iter().find(|r| self.cast.contains_key(*r)) {
+            return Err(BookError::ReservedRole(reserved.into()));
         }
         for (id, role) in &self.cast {
             if let Some(face) = role.face.as_ref().filter(|f| !self.faces.contains_key(*f)) {
@@ -499,6 +712,11 @@ impl Book {
         for m in &self.missions {
             self.check_mission(m)?;
         }
+        for (item, readings) in &self.readings {
+            for (i, r) in readings.iter().enumerate() {
+                self.check_reading(&format!("reading {} of {item}", i + 1), r)?;
+            }
+        }
         Ok(())
     }
 
@@ -509,13 +727,44 @@ impl Book {
             .is_some_and(|r| matches!(r.pick, Pick::Visitor))
     }
 
-    /// The roles a mission needs the sim to cast: all it names, and all the news it puts
-    /// out names, but visitors and `you`.
+    /// The roles a mission needs the sim to cast: those a trigger waits on, an effect acts
+    /// on, a mark lies by, a scene's speaker or a news item is about, and any whose
+    /// place, district or hours a text asks. A bare name needs nobody. Visitors and `you`
+    /// are never cast.
     pub fn needs_cast(&self, m: &Mission) -> BTreeSet<String> {
-        let mut roles = m.roles();
-        for e in m.steps.iter().flat_map(|s| &s.then) {
-            if let Some(news) = self.news_of(e) {
-                roles.extend(news.roles());
+        let mut roles = BTreeSet::new();
+        for step in &m.steps {
+            roles.extend(step.when.named_roles().into_iter().map(String::from));
+            for e in &step.then {
+                for t in e.texts() {
+                    roles.extend(placed(t));
+                }
+                // One arm per effect that acts on a person or points at a mark.
+                match e {
+                    Effect::Dead { role, .. }
+                    | Effect::Hold(role)
+                    | Effect::Release(role)
+                    | Effect::Tray { from: role, .. }
+                    | Effect::Mail {
+                        code: Some(CodeOf::Clinic(role)),
+                        ..
+                    } => {
+                        roles.insert(role.clone());
+                    }
+                    Effect::Arrive { at, .. } | Effect::Note { at, .. } => {
+                        roles.extend(at.cast_role().map(String::from));
+                    }
+                    Effect::Scene(id) => self.scene_needs(id, &mut roles),
+                    Effect::News(id) => {
+                        if let Some(news) = self.news.get(id) {
+                            roles.insert(news.about.clone());
+                            for t in news.texts() {
+                                roles.extend(placed(t));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
         roles
@@ -524,11 +773,34 @@ impl Book {
             .collect()
     }
 
-    /// The news item an `Effect::News` puts out.
-    fn news_of(&self, e: &Effect) -> Option<&News> {
-        match e {
-            Effect::News(id) => self.news.get(id),
-            _ => None,
+    /// The roles a scene and the scenes after it need: speakers, marks and placed slots.
+    fn scene_needs(&self, id: &str, roles: &mut BTreeSet<String>) {
+        let mut next = Some(id);
+        // A `next` chain is checked to end, but a bound costs nothing.
+        for _ in 0..=self.scenes.len() {
+            let Some(scene) = next.and_then(|n| self.scenes.get(n)) else {
+                return;
+            };
+            for beat in &scene.beats {
+                roles.extend(
+                    beat.marks()
+                        .into_iter()
+                        .filter_map(Mark::cast_role)
+                        .map(String::from),
+                );
+                match beat {
+                    Beat::Say {
+                        who, text, label, ..
+                    } => {
+                        roles.insert(who.clone());
+                        roles.extend(placed(text));
+                        roles.extend(label.iter().flat_map(|l| placed(l)));
+                    }
+                    Beat::Stage(text) | Beat::Note { text, .. } => roles.extend(placed(text)),
+                    _ => {}
+                }
+            }
+            next = scene.next.as_deref();
         }
     }
 
@@ -595,10 +867,12 @@ impl Book {
         }
     }
 
-    /// A mark: its roles are visitors, `HomeInside` goes in at least a tile.
+    /// A mark: its roles are visitors (a chair's is in the cast), `HomeInside` goes in at
+    /// least a tile.
     fn check_mark(&self, place: &str, mark: &Mark) -> Result<(), BookError> {
         match mark {
             Mark::Role(role) => self.check_visitor(place, role),
+            Mark::Chair(role) => self.check_role(place, role),
             Mark::HomeInside(0) => Err(BookError::BadNumber {
                 place: place.into(),
                 what: "HomeInside(0) is the door itself".into(),
@@ -657,6 +931,7 @@ impl Book {
                 label,
                 at,
                 hold,
+                need,
             } => {
                 // `you` may speak; every other speaker is in the cast.
                 if who != YOU {
@@ -671,6 +946,9 @@ impl Book {
                 }
                 if let Some(h) = hold {
                     positive(place, "hold", *h)?;
+                }
+                if let Some(need) = need {
+                    check_need(place, need)?;
                 }
             }
             Beat::Stage(text) => self.check_text(place, text)?,
@@ -698,6 +976,10 @@ impl Book {
             }
             Beat::Leave(role) => self.check_visitor(place, role)?,
             Beat::Lights(level) => check_level(place, *level)?,
+            Beat::Note { at, text } => {
+                self.check_text(place, text)?;
+                self.check_mark(place, at)?;
+            }
         }
         Ok(())
     }
@@ -719,6 +1001,33 @@ impl Book {
             self.check_text(&at, t)?;
         }
         check_still(id, &news.still)
+    }
+
+    /// A reading: its need, its slots, the verb that offers it at the rig or the bench or
+    /// the text a Look reads, and ledgers that show no more than they hold.
+    fn check_reading(&self, place: &str, r: &Reading) -> Result<(), BookError> {
+        check_need(place, &r.need)?;
+        let (what, said) = match r.at {
+            ReadAt::Look => ("text", &r.text),
+            ReadAt::Rig | ReadAt::Bench => ("verb", &r.verb),
+        };
+        if said.is_empty() {
+            return Err(BookError::Empty(format!("{what} in {place}")));
+        }
+        for t in r.texts() {
+            self.check_text(place, t)?;
+        }
+        for row in &r.rows {
+            if let Row::Ledger(shown, total) = row
+                && shown > total
+            {
+                return Err(BookError::BadNumber {
+                    place: place.into(),
+                    what: format!("Ledger({shown}, {total}) shows more than it holds"),
+                });
+            }
+        }
+        Ok(())
     }
 
     fn check_mission(&self, m: &Mission) -> Result<(), BookError> {
@@ -773,8 +1082,14 @@ impl Book {
                 for role in e.named_roles() {
                     self.check_role(&place, role)?;
                 }
+                // A mail may say the code it carries.
+                let mail = matches!(e, Effect::Mail { .. });
                 for t in e.texts() {
-                    self.check_text(&place, t)?;
+                    if mail {
+                        self.check_text(&place, &t.replace(&code_slot(), ""))?;
+                    } else {
+                        self.check_text(&place, t)?;
+                    }
                 }
                 let at = format!("mission {} step {}", m.id, step.id);
                 match e {
@@ -790,6 +1105,7 @@ impl Book {
                     }
                     Effect::Leave(role) => self.check_visitor(&at, role)?,
                     Effect::Lights(level) => check_level(&at, *level)?,
+                    Effect::Note { at: mark, .. } => self.check_mark(&at, mark)?,
                     Effect::News(id) if !self.news.contains_key(id) => {
                         return Err(BookError::UnknownNews {
                             place: at,
@@ -803,6 +1119,7 @@ impl Book {
                     Effect::Call { lines, .. } if lines.is_empty() => {
                         return Err(BookError::Empty(format!("call in {place}")));
                     }
+                    Effect::Tray { sets, .. } => check_tray(&place, sets)?,
                     _ => {}
                 }
             }
@@ -811,8 +1128,8 @@ impl Book {
         Ok(())
     }
 
-    /// Every item a `Give` effect puts in the pack.
-    pub fn gives(&self) -> Vec<&str> {
+    /// Every item a `Give` effect puts in the pack, and what those items open into.
+    pub fn gives(&self, content: &game::Content) -> Vec<game::ItemId> {
         let mut out = BTreeSet::new();
         for e in self
             .missions
@@ -821,13 +1138,18 @@ impl Book {
             .flat_map(|s| &s.then)
         {
             if let Effect::Give { item, .. } = e {
-                out.insert(item.as_str());
+                let id = game::ItemId::new(item);
+                if let Some(it) = content.item(&id) {
+                    out.extend(it.opens.iter().map(|(o, _)| o.clone()));
+                }
+                out.insert(id);
             }
         }
         out.into_iter().collect()
     }
 
-    /// Every item a `Give` or `Take` names, for the test that has the content.
+    /// Every item a `Give`, `Take` or `Unseal` names, a tray holds or a reading reads, for
+    /// the test that has the content.
     #[cfg(test)]
     pub fn items(&self) -> Vec<&str> {
         let mut out = BTreeSet::new();
@@ -837,10 +1159,17 @@ impl Book {
             .flat_map(|m| &m.steps)
             .flat_map(|s| &s.then)
         {
-            if let Effect::Give { item, .. } | Effect::Take { item, .. } = e {
-                out.insert(item.as_str());
+            match e {
+                Effect::Give { item, .. } | Effect::Take { item, .. } | Effect::Unseal(item) => {
+                    out.insert(item.as_str());
+                }
+                Effect::Tray { sets, .. } => {
+                    out.extend(sets.iter().flat_map(|s| &s.items).map(String::as_str));
+                }
+                _ => {}
             }
         }
+        out.extend(self.readings.keys().map(String::as_str));
         out.into_iter().collect()
     }
 
@@ -875,6 +1204,42 @@ fn check_level(place: &str, level: f32) -> Result<(), BookError> {
             place: place.into(),
             what: format!("light level {level}, wanted 0 to 1"),
         })
+    }
+}
+
+/// A tray holds a set, each set's need checked, and a set from one piece to one a key.
+fn check_tray(place: &str, sets: &[TraySet]) -> Result<(), BookError> {
+    if sets.is_empty() {
+        return Err(BookError::Empty(format!("tray in {place}")));
+    }
+    for set in sets {
+        check_need(place, &set.need)?;
+        if set.items.is_empty() {
+            return Err(BookError::Empty(format!("a tray's set in {place}")));
+        }
+        if set.items.len() > TRAY_MAX {
+            return Err(BookError::BadNumber {
+                place: place.into(),
+                what: format!(
+                    "a tray's set of {}, wanted {TRAY_MAX} at most",
+                    set.items.len()
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// A `Late` minute is a minute of the day, inside `Not` and `All` too.
+fn check_need(place: &str, need: &Need) -> Result<(), BookError> {
+    match need {
+        Need::Late(minute) if *minute >= sim::DAY => Err(BookError::BadNumber {
+            place: place.into(),
+            what: format!("Late({minute}), wanted 0 to {}", sim::DAY - 1),
+        }),
+        Need::Not(inner) => check_need(place, inner),
+        Need::All(needs) => needs.iter().try_for_each(|n| check_need(place, n)),
+        _ => Ok(()),
     }
 }
 
@@ -937,15 +1302,98 @@ mod tests {
     #[test]
     fn the_shipped_book_parses_and_validates() {
         let b = book();
-        assert_eq!(b.missions.len(), 3);
+        assert_eq!(b.missions.len(), 5);
         assert_eq!(b.missions[0].id, "the_drop");
         assert_eq!(b.missions[1].id, "house_call");
         assert_eq!(b.missions[2].id, "morning_after");
-        assert_eq!(b.scenes.len(), 3);
+        assert_eq!(b.scenes.len(), 5);
         assert_eq!(b.missions[0].steps.len(), 6);
         assert!(b.cast.contains_key("mezz") && b.cast.contains_key("marlo"));
         assert_eq!(b.face_of("mezz").eye, (255, 0, 200));
         assert_eq!(b.face_of("marlo"), &b.faces["silhouette"]);
+    }
+
+    /// The skills a need asks for, inside `Not` and `All` too.
+    fn skills_in(need: &Need, out: &mut Vec<String>) {
+        match need {
+            Need::Skill(id) => out.push(id.clone()),
+            Need::Not(inner) => skills_in(inner, out),
+            Need::All(needs) => needs.iter().for_each(|n| skills_in(n, out)),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn the_shipped_book_loads_the_doctor() {
+        let b = book();
+        let ids: Vec<&str> = b.missions.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "the_drop",
+                "house_call",
+                "morning_after",
+                "doctor",
+                "ledger"
+            ]
+        );
+        let (doctor, ledger) = (&b.missions[3], &b.missions[4]);
+        assert_eq!(doctor.title, "Doctor's in by ten");
+        let steps: Vec<&str> = doctor.steps.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(steps, ["word", "in", "tray", "out", "free"]);
+        // The doc must be in the city, and the cook whose district the news named; the
+        // fixer she names needn't be, so only the hook waits on him.
+        let needs = |m: &Mission| b.needs_cast(m).into_iter().collect::<Vec<_>>();
+        assert_eq!(needs(doctor), ["marlo", "odile"]);
+        assert_eq!(needs(ledger), ["coz"]);
+        assert_eq!(b.cast["odile"].pick, Pick::Nearest("ripperdoc".into()));
+        assert!(matches!(
+            &b.cast["coz"].pick,
+            Pick::Worker { professions, .. } if professions == &["fixer"]
+        ));
+        for id in ["odile", "odile_out"] {
+            assert_eq!(b.scenes[id].look, Look::Bubbles, "{id}");
+        }
+        let at = |item: &str| b.readings[item].iter().map(|r| r.at).collect::<Vec<_>>();
+        assert_eq!(
+            at("ledger_shard"),
+            [ReadAt::Rig, ReadAt::Bench, ReadAt::Look]
+        );
+        assert_eq!(at("taped_package"), [ReadAt::Look]);
+        // A set of three for each category's free skill, the last for anyone.
+        let sets = doctor
+            .steps
+            .iter()
+            .flat_map(|s| &s.then)
+            .find_map(|e| match e {
+                Effect::Tray { sets, .. } => Some(sets),
+                _ => None,
+            })
+            .expect("her tray");
+        assert_eq!(sets.len(), 9);
+        assert!(sets.iter().all(|s| s.items.len() == 3));
+        assert_eq!(sets.last().unwrap().need, Need::All(vec![]));
+        // Every skill a need asks for is one the content has.
+        let mut skills = Vec::new();
+        for need in sets.iter().map(|s| &s.need) {
+            skills_in(need, &mut skills);
+        }
+        for r in b.readings.values().flatten() {
+            skills_in(&r.need, &mut skills);
+        }
+        for beat in b.scenes.values().flat_map(|s| &s.beats) {
+            if let Beat::Say { need: Some(n), .. } = beat {
+                skills_in(n, &mut skills);
+            }
+        }
+        assert_eq!(skills.len(), 12, "{skills:?}");
+        let c = Content::load().unwrap();
+        for id in skills {
+            assert!(
+                c.skill(&game::SkillId::new(&id)).is_some(),
+                "no skill `{id}`"
+            );
+        }
     }
 
     #[test]
@@ -1215,6 +1663,10 @@ mod tests {
             "Keypad(door: HomeDoor, code: Code(1234), result: Open, keys: 0.0, hold: 1.0)",
         ));
         bad(scened(r#"Say(who: "you", text: "x", hold: Some(-2.0))"#));
+        bad(scened(
+            r#"Say(who: "you", text: "x", need: Some(Not(All([Late(1440)]))))"#,
+        ));
+        assert!(scened(r#"Say(who: "you", text: "x", need: Some(Late(1439)))"#).is_ok());
         bad(scened("Camera(HomeInside(0))"));
         bad(with_steps(
             r#"Step(id: "a", when: NewGame, then: [Daze(0.0)])"#,
@@ -1277,7 +1729,8 @@ mod tests {
 
     #[test]
     fn visitors_need_no_cast() {
-        let steps = r#"Step(id: "a", when: NewGame, then: [Log("{you} and {marlo}")])"#;
+        let steps =
+            r#"Step(id: "a", when: NewGame, then: [Log("{you} and {marlo} at {marlo.place}")])"#;
         let b = with_steps(steps).unwrap();
         let m = &b.missions[0];
         assert_eq!(m.from, "seren");
@@ -1420,6 +1873,78 @@ mod tests {
         assert!(with_news("marlo", "Headline", steps).is_ok());
     }
 
+    /// The roles `steps` need cast, with a fixer `zed` in the cast and scenes `s` and `t`.
+    fn needed(steps: &str) -> BTreeSet<String> {
+        let zed = r#""zed": Role(name: "Zed", title: "fixer", pick: NearestFixer, face: None),"#;
+        let pace = "Pace(type: 45, walk: 0.3, hold: None)";
+        let scenes = format!(
+            r#""s": Scene(title: "S", look: Film, pace: {pace}, next: Some("t"),
+                beats: [Say(who: "seren", text: "hi")]),
+            "t": Scene(title: "T", look: Film, pace: {pace},
+                beats: [Say(who: "zed", text: "hey")])"#
+        );
+        let b = tiny(zed, steps, &scenes).unwrap();
+        b.needs_cast(&b.missions[0])
+    }
+
+    #[test]
+    fn needs_cast_skips_bare_names_and_counts_places() {
+        let none = BTreeSet::new();
+        let zed: BTreeSet<String> = ["zed"].map(String::from).into();
+        let log = |t: &str| format!(r#"Step(id: "a", when: NewGame, then: [Log("{t}")])"#);
+        assert_eq!(needed(&log("{zed} {zed.spaced} {zed.title}")), none);
+        assert_eq!(needed(&log("at {zed.place}")), zed);
+        assert_eq!(needed(&log("in {zed.district}")), zed);
+        assert_eq!(needed(&log("from {zed.hours}")), zed);
+        let talk = r#"Step(id: "a", when: Talk("zed"), then: [Log("x")])"#;
+        assert_eq!(needed(talk), zed);
+        let dead = r#"Step(id: "a", when: NewGame, then: [Dead(role: "zed", look: "x")])"#;
+        assert_eq!(needed(dead), zed);
+        // A scene's speaker, found down its `next` chain.
+        let scene = r#"Step(id: "a", when: NewGame, then: [Scene("s")])"#;
+        assert_eq!(needed(scene), zed);
+        // A visitor speaking needs nobody.
+        let seren =
+            r#"Step(id: "a", when: NewGame, then: [Feed(from: "zed", text: ["x"], close: "y")])"#;
+        assert_eq!(needed(seren), none);
+    }
+
+    #[test]
+    fn beside_someone_and_their_chair_need_them_cast() {
+        let zed: BTreeSet<String> = ["zed"].map(String::from).into();
+        let by = r#"Step(id: "a", when: At(By(role: "zed", within: 4)), then: [Log("x")])"#;
+        assert_eq!(needed(by), zed);
+        // A mark in an effect, inside `Beside` too.
+        let arrive = r#"Step(id: "a", when: NewGame,
+            then: [Arrive(role: "seren", at: Beside(Chair("zed")))])"#;
+        assert_eq!(needed(arrive), zed);
+        // A mark in a scene's beat.
+        let doc =
+            r#""zed": Role(name: "Zed", title: "doc", pick: Nearest("ripperdoc"), face: None),"#;
+        let pace = "Pace(type: 45, walk: 0.3, hold: None)";
+        let b = tiny(
+            doc,
+            r#"Step(id: "a", when: NewGame, then: [Scene("s")])"#,
+            &scene_with(
+                pace,
+                r#"Say(who: "seren", text: "hi", at: Some(Chair("zed")))"#,
+            ),
+        )
+        .unwrap();
+        assert_eq!(b.needs_cast(&b.missions[0]), zed);
+    }
+
+    #[test]
+    fn beside_and_the_chair_name_a_known_role() {
+        let by = r#"Step(id: "a", when: At(By(role: "nobody", within: 4)), then: [Log("x")])"#;
+        assert!(matches!(with_steps(by), Err(BookError::UnknownRole { .. })));
+        assert!(matches!(
+            scened(r#"Camera(Chair("nobody"))"#),
+            Err(BookError::UnknownRole { .. })
+        ));
+        assert!(scened(r#"Camera(Chair("marlo"))"#).is_ok());
+    }
+
     #[test]
     fn the_news_roles_must_be_cast() {
         let steps = r#"Step(id: "n", when: NewGame, then: [News("x")])"#;
@@ -1439,5 +1964,204 @@ mod tests {
         )
         .unwrap();
         assert!(b.needs_cast(&b.missions[0]).is_empty());
+    }
+
+    #[test]
+    fn holds_releases_and_a_mailed_code_need_the_role_cast() {
+        let zed: BTreeSet<String> = ["zed"].map(String::from).into();
+        let step = |e: &str| format!(r#"Step(id: "a", when: NewGame, then: [{e}])"#);
+        assert_eq!(needed(&step(r#"Hold("zed")"#)), zed);
+        assert_eq!(needed(&step(r#"Release("zed")"#)), zed);
+        let mail = r#"Mail(from: "seren", subject: "ten", body: ["Code's {code}."],
+            code: Some(Clinic("zed")))"#;
+        assert_eq!(needed(&step(mail)), zed);
+        // A mail with no code needs nobody but its slots.
+        let plain = r#"Mail(from: "zed", subject: "ten", body: ["hi"])"#;
+        assert_eq!(needed(&step(plain)), BTreeSet::new());
+    }
+
+    #[test]
+    fn holds_and_mailed_codes_name_a_known_role() {
+        let step = |e: &str| format!(r#"Step(id: "a", when: NewGame, then: [{e}])"#);
+        assert!(with_steps(&step(r#"Hold("marlo")"#)).is_ok());
+        assert!(with_steps(&step(r#"Release("marlo")"#)).is_ok());
+        for e in [
+            r#"Hold("nobody")"#,
+            r#"Release("nobody")"#,
+            r#"Mail(from: "seren", subject: "s", body: ["x"], code: Some(Clinic("nobody")))"#,
+        ] {
+            assert!(
+                matches!(with_steps(&step(e)), Err(BookError::UnknownRole { .. })),
+                "{e}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_code_slot_is_a_mails_alone() {
+        let step = |e: &str| format!(r#"Step(id: "a", when: NewGame, then: [{e}])"#);
+        let b = with_steps(&step(
+            r#"Mail(from: "seren", subject: "ten", body: ["Code's {code}."],
+                code: Some(Clinic("marlo")))"#,
+        ))
+        .unwrap();
+        let Effect::Mail { code, .. } = &b.missions[0].steps[0].then[0] else {
+            panic!("a mail")
+        };
+        assert_eq!(code, &Some(CodeOf::Clinic("marlo".into())));
+        assert!(!b.missions[0].roles().contains(CODE));
+        // A mail without a code may still say `{code}`: it fills as nothing.
+        assert!(
+            with_steps(&step(
+                r#"Mail(from: "seren", subject: "s", body: ["{code}"])"#
+            ))
+            .is_ok()
+        );
+        // Anywhere else it is a role nobody plays.
+        assert!(matches!(
+            with_steps(&step(r#"Log("{code}")"#)),
+            Err(BookError::UnknownRole { .. })
+        ));
+        // And no role may take the slot's name.
+        let code_role = r#""code": Role(name: "C", title: "x", pick: NearestFixer, face: None),"#;
+        assert_eq!(
+            tiny(code_role, STEP, ""),
+            Err(BookError::ReservedRole(CODE.into()))
+        );
+    }
+
+    /// A step holding out a tray from `from` on `tab`'s tab, with these sets.
+    fn tray_step(from: &str, tab: &str, sets: &str) -> String {
+        format!(
+            r#"Step(id: "a", when: NewGame, then: [Tray(from: "{from}", tab: "{tab}",
+                title: "her tray", line: "One piece.", sets: [{sets}])])"#
+        )
+    }
+
+    const ONE_SET: &str = r#"TraySet(need: All([]), items: ["neural_port"])"#;
+
+    #[test]
+    fn a_tray_and_chromed_need_their_doc_cast() {
+        let zed: BTreeSet<String> = ["zed"].map(String::from).into();
+        // The tab's payer is a name on a line: nobody need play them.
+        assert_eq!(needed(&tray_step("zed", "marlo", ONE_SET)), zed);
+        let chromed = r#"Step(id: "a", when: Chromed("zed"), then: [Log("x")])"#;
+        assert_eq!(needed(chromed), zed);
+    }
+
+    #[test]
+    fn a_tray_names_known_roles_and_one_to_nine_pieces_a_set() {
+        let b = with_steps(&tray_step(
+            "marlo",
+            "seren",
+            r#"TraySet(need: Skill("hacking"), items: ["neural_port", "feedback_fuse"]),
+                TraySet(need: All([]), items: ["subdermal_mesh"])"#,
+        ))
+        .unwrap();
+        let Effect::Tray {
+            from, tab, sets, ..
+        } = &b.missions[0].steps[0].then[0]
+        else {
+            panic!("a tray")
+        };
+        assert_eq!((from.as_str(), tab.as_str()), ("marlo", "seren"));
+        assert_eq!(sets[0].need, Need::Skill("hacking".into()));
+        assert_eq!(sets[1].items, ["subdermal_mesh"]);
+        let refused = |steps: &str| with_steps(steps).unwrap_err();
+        for (from, tab) in [("nobody", "seren"), ("marlo", "nobody")] {
+            assert!(
+                matches!(
+                    refused(&tray_step(from, tab, ONE_SET)),
+                    BookError::UnknownRole { .. }
+                ),
+                "{from} {tab}"
+            );
+        }
+        let chromed = r#"Step(id: "a", when: Chromed("nobody"), then: [Log("x")])"#;
+        assert!(matches!(refused(chromed), BookError::UnknownRole { .. }));
+        // Its words name the cast too.
+        assert!(matches!(
+            refused(&tray_step("marlo", "seren", ONE_SET).replace("One piece.", "{nobody}")),
+            BookError::UnknownRole { .. }
+        ));
+        // A tray holds a set; a set holds a piece, and no more than the keys 1 to 9.
+        assert!(matches!(
+            refused(&tray_step("marlo", "seren", "")),
+            BookError::Empty(_)
+        ));
+        let empty = r#"TraySet(need: All([]), items: [])"#;
+        assert!(matches!(
+            refused(&tray_step("marlo", "seren", empty)),
+            BookError::Empty(_)
+        ));
+        let ten = format!(
+            "TraySet(need: All([]), items: [{}])",
+            [r#""neural_port""#; 10].join(", ")
+        );
+        assert!(matches!(
+            refused(&tray_step("marlo", "seren", &ten)),
+            BookError::BadNumber { .. }
+        ));
+        let late = r#"TraySet(need: Late(1440), items: ["neural_port"])"#;
+        assert!(matches!(
+            refused(&tray_step("marlo", "seren", late)),
+            BookError::BadNumber { .. }
+        ));
+    }
+
+    /// The tiny book with these readings.
+    fn with_readings(readings: &str) -> Result<Book, BookError> {
+        tiny("", STEP, &format!("}}, readings: {{ {readings}"))
+    }
+
+    #[test]
+    fn readings_parse_and_check_their_texts() {
+        let b = with_readings(
+            r#""ledger_shard": [
+                Reading(at: Rig, need: Skill("hacking"), verb: "Read", head: "h · {marlo}",
+                    close: "pull it", tells: true, rows: [
+                    Field("owner", "`{marlo}` · cook"), Hot("open"), Tag("{seren}"),
+                    Art("`{marlo.spaced}`"), You("hm"), Ledger(4, 214), Blank,
+                ]),
+                Reading(at: Look, need: Not(Read("ledger_shard")), text: "Tape. {marlo}."),
+            ]"#,
+        )
+        .unwrap();
+        let shard = &b.readings["ledger_shard"];
+        assert_eq!((shard[0].at, shard[1].at), (ReadAt::Rig, ReadAt::Look));
+        assert_eq!(shard[0].rows[5], Row::Ledger(4, 214));
+        assert!(shard[0].tells && !shard[1].tells && shard[1].verb.is_empty());
+        // A book without readings has none.
+        assert!(tiny("", STEP, "").unwrap().readings.is_empty());
+        let refused = |r: &str| with_readings(&format!(r#""ledger_shard": [{r}]"#));
+        // Every text's slots name the cast.
+        assert!(matches!(
+            refused(r#"Reading(at: Look, need: Skill("x"), text: "{nobody}")"#),
+            Err(BookError::UnknownRole { .. })
+        ));
+        assert!(matches!(
+            refused(
+                r#"Reading(at: Bench, need: Skill("x"), verb: "Open", rows: [Field("{nobody}", "x")])"#
+            ),
+            Err(BookError::UnknownRole { .. })
+        ));
+        // A rig or bench reading is offered by its verb; a Look reading is its text.
+        assert!(matches!(
+            refused(r#"Reading(at: Rig, need: Skill("x"), head: "h")"#),
+            Err(BookError::Empty(_))
+        ));
+        assert!(matches!(
+            refused(r#"Reading(at: Look, need: Skill("x"))"#),
+            Err(BookError::Empty(_))
+        ));
+        // A ledger shows no more than it holds, and a need's minute is a minute of the day.
+        assert!(matches!(
+            refused(r#"Reading(at: Rig, need: Skill("x"), verb: "Read", rows: [Ledger(5, 4)])"#),
+            Err(BookError::BadNumber { .. })
+        ));
+        assert!(matches!(
+            refused(r#"Reading(at: Look, need: Late(1440), text: "x")"#),
+            Err(BookError::BadNumber { .. })
+        ));
     }
 }
