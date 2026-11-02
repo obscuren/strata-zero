@@ -2,7 +2,7 @@
 
 pub mod tuning;
 
-use crate::geom::{Grid, Pos};
+use crate::geom::{Grid, Pos, Size};
 use crate::tile::{Feature, Terrain, Tile};
 use crate::world::StratumKind;
 use tuning::*;
@@ -109,6 +109,57 @@ pub fn compute(
     out
 }
 
+/// A light on an interior floor: its cone's radius and strength at the centre, and
+/// the colour it throws.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Emitter {
+    pub pos: Pos,
+    pub radius: i32,
+    pub strength: f32,
+    pub colour: (u8, u8, u8),
+}
+
+/// Coloured light: each tile's ambient from `base`, plus every emitter's cone in its
+/// colour, reaching only the tiles it can see through `blocks`. As in `compute`, a
+/// blocking tile takes the light that hits it. Each channel is clamped to 0..=255.
+pub fn compute_coloured(
+    size: Size,
+    base: impl Fn(Pos) -> [f32; 3],
+    blocks: impl Fn(Pos) -> bool,
+    emitters: &[Emitter],
+) -> Grid<(u8, u8, u8)> {
+    let mut light: Vec<[f32; 3]> = (0..size.area())
+        .map(|i| {
+            let w = size.w as usize;
+            base(Pos::new((i % w) as i32, (i / w) as i32))
+        })
+        .collect();
+    for e in emitters {
+        let colour = [e.colour.0, e.colour.1, e.colour.2].map(|c| c as f32 / 255.0);
+        crate::fov::compute(
+            e.pos,
+            e.radius,
+            &blocks,
+            |q| size.contains(q),
+            |q| {
+                let d = (e.pos.dist2(q) as f32).sqrt();
+                if d <= e.radius as f32 {
+                    let k = e.strength * (1.0 - d / e.radius as f32);
+                    for (v, c) in light[size.index(q)].iter_mut().zip(colour) {
+                        *v += k * c;
+                    }
+                }
+            },
+        );
+    }
+    let mut out = Grid::filled(size, (0u8, 0u8, 0u8));
+    for (slot, [r, g, b]) in out.as_mut_slice().iter_mut().zip(light) {
+        let c = |v: f32| v.round().clamp(0.0, 255.0) as u8;
+        *slot = (c(r), c(g), c(b));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,6 +208,24 @@ mod tests {
         assert!(light[Pos::new(12, 3)] > 0, "the wall glows");
         assert_eq!(light[Pos::new(13, 3)], 0, "nothing behind the wall");
         assert!(light[Pos::new(13, 5)] > 0, "the window lets it through");
+    }
+
+    #[test]
+    fn coloured_light_carries_its_colour_and_stops_at_walls() {
+        let size = Size { w: 20, h: 10 };
+        let walls: Vec<Pos> = (0..10).map(|y| Pos::new(12, y)).collect();
+        let e = Emitter {
+            pos: Pos::new(10, 5),
+            radius: 6,
+            strength: 200.0,
+            colour: (255, 168, 88),
+        };
+        let g = compute_coloured(size, |_| [10.0, 10.0, 10.0], |p| walls.contains(&p), &[e]);
+        let near = g[Pos::new(10, 5)];
+        assert!(near.0 > near.2, "warm: {near:?}");
+        assert_eq!(g[Pos::new(0, 0)], (10, 10, 10));
+        assert!(g[Pos::new(12, 5)].0 > 10, "the wall takes the light");
+        assert_eq!(g[Pos::new(13, 5)], (10, 10, 10), "nothing behind the wall");
     }
 
     #[test]
