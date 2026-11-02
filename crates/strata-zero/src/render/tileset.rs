@@ -1,12 +1,14 @@
 //! The tileset: one pure function from a tile and its context to a styled cell.
 
 use crate::anim::effects::{flicker, pulse};
-use crate::render::lighting::lit;
+use crate::render::lighting::{lit, lit_by};
 use crate::render::overlay::SIGNAL;
 use crate::render::style::StylePack;
 use crate::render::{Cell, ConnDir, RenderCtx, Rgb, Visibility};
+use citygen::lighting::tuning::tone_rgb;
 use citygen::{
-    BuildingKind, ConnectorKind, Feature, Furniture, IceGrade, NodeKind, StratumKind, Terrain, Tile,
+    BuildingKind, ConnectorKind, Feature, Fitting, FittingKind, Furniture, IceGrade, NodeKind,
+    StratumKind, Terrain, Tile, Tone, Wear,
 };
 
 const LIGHT: [char; 16] = [
@@ -80,13 +82,18 @@ pub fn glyph_for(
 ) -> char {
     let g = &style.glyphs;
     let pick = |set: &[char], i: u64| set[(i % set.len() as u64) as usize];
+    // A wall's fitting and a stage's lights draw over the ground's own glyph.
+    let feature = feature.filter(|f| !keeps_ground(*f));
     if let Some(f) = feature {
         return match f {
             Feature::Ice(_) => '▣',
             Feature::Neon(_) => '▪',
             Feature::HoloAd => pick(&g.holo, tick / 8 + variant as u64),
             Feature::Lamp => '●',
-            Feature::Fitting(_) => '▬',
+            Feature::Fitting(x) => match x.kind {
+                FittingKind::Bulb => '•',
+                _ => '▬',
+            },
             Feature::Vent => {
                 if (tick / 4 + variant as u64) % 10 < 3 {
                     pick(&g.steam, tick / 4 + variant as u64)
@@ -372,7 +379,12 @@ fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
         Feature::HoloAd => ts
             .accent2
             .scale(0.7 + 0.3 * pulse(tick + tile.variant as u64, 24)),
-        Feature::Lamp | Feature::Fitting(_) => Rgb(255, 240, 200),
+        Feature::Lamp => Rgb(255, 240, 200),
+        Feature::Fitting(x) => match x.wear {
+            Wear::Ok => fitting_colour(x),
+            Wear::Dead => DEAD_FITTING,
+            Wear::Stutter => fitting_colour(x).scale(flicker(tick, tile.variant, true)),
+        },
         Feature::Vent => Rgb(170, 175, 185),
         Feature::Puddle => Rgb(80, 115, 165),
         Feature::Trash => Rgb(115, 105, 85),
@@ -392,6 +404,30 @@ fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
         Feature::Furniture(Furniture::Counter | Furniture::Shrine) => ts.accent2,
         Feature::Furniture(Furniture::Chair) => CHAIR,
         Feature::Furniture(_) => ts.wall.scale(1.2),
+    }
+}
+
+/// A fitting that leaves the ground's glyph showing: set in a wall, or a stage's lights.
+fn keeps_ground(f: Feature) -> bool {
+    matches!(f, Feature::Fitting(x) if x.kind.on_wall() || x.kind == FittingKind::Stage)
+}
+
+/// A dead fitting's grey.
+const DEAD_FITTING: Rgb = Rgb(0x3e, 0x47, 0x50);
+/// A bare bulb's warm white.
+const BULB: Rgb = Rgb(0xff, 0xd9, 0xa0);
+/// Furniture whose light has a channel this bright takes the light's colour.
+const LIT_FURNITURE: u8 = 180;
+
+/// A fitting's own colour: a pale tint of its tone's light (neon and blacklight stay
+/// saturated), a bare bulb its warm white.
+pub fn fitting_colour(f: Fitting) -> Rgb {
+    let (r, g, b) = tone_rgb(f.tone);
+    let white = Rgb(255, 255, 255);
+    match (f.kind, f.tone) {
+        (FittingKind::Bulb, _) => BULB,
+        (_, Tone::Neon(_) | Tone::Blacklight) => Rgb(r, g, b).mix(white, 0.2),
+        _ => Rgb(r, g, b).mix(white, 0.6),
     }
 }
 
@@ -426,12 +462,38 @@ pub fn cell(tile: &Tile, ctx: &RenderCtx) -> Cell {
             | Feature::HoloAd
             | Feature::Terminal
             | Feature::Camera
-            | Feature::Node(_),
+            | Feature::Node(_)
+            | Feature::Fitting(_),
         ) => true,
         _ => false,
     };
-    let mut fg = if emits { fg } else { lit(fg, ctx.light) };
-    let mut bg = lit(bg, ctx.light);
+    let (mut fg, mut bg) = match ctx.glow {
+        Some(l) => (
+            if emits { fg } else { lit_by(fg, l, true) },
+            lit_by(bg, l, false),
+        ),
+        None => (
+            if emits { fg } else { lit(fg, ctx.light) },
+            lit(bg, ctx.light),
+        ),
+    };
+    if let (Some(l), Some(Feature::Furniture(_))) = (ctx.glow, tile.feature) {
+        let top = l.0.max(l.1).max(l.2);
+        if top >= LIT_FURNITURE {
+            fg = fg.mix(l.scale(255.0 / top as f32), 0.7);
+        }
+    }
+    let fitting = match tile.feature {
+        Some(Feature::Fitting(f)) if f.wear != Wear::Dead => Some(f),
+        _ => None,
+    };
+    if let Some(f) = fitting {
+        if f.kind.on_wall() {
+            bg = fitting_colour(f).scale(0.22);
+        } else if f.kind == FittingKind::Stage {
+            bg = bg.mix(fitting_colour(f).scale(0.35), 0.45);
+        }
+    }
     if let Some((sky, w)) = ctx.sky {
         if !emits {
             fg = fg.mix(sky, w);
@@ -441,6 +503,7 @@ pub fn cell(tile: &Tile, ctx: &RenderCtx) -> Cell {
     let jack = ctx.connector.is_some_and(|c| c.kind == ConnectorKind::Jack);
     let bold = tile.is_connector()
         || matches!(tile.feature, Some(Feature::Sign(_) | Feature::Neon(_)))
+        || fitting.is_some_and(|f| f.kind.on_wall() || f.kind == FittingKind::Bulb)
         || (matches!(tile.feature, Some(Feature::Node(_))) && jack);
     Cell {
         ch,
@@ -458,7 +521,8 @@ mod tests {
     use crate::render::style::StylePack;
     use crate::render::{RenderCtx, Visibility};
     use citygen::{
-        ALL_FEATURES, ALL_TERRAIN, Feature, Hue, NodeKind, StratumKind, Terrain, Theme, Tile,
+        ALL_FEATURES, ALL_TERRAIN, Feature, Fitting, FittingKind, Furniture, Hue, NodeKind,
+        StratumKind, Terrain, Theme, Tile, Tone, Wear,
     };
     use unicode_width::UnicodeWidthChar;
 
@@ -515,6 +579,7 @@ mod tests {
             wall_mask: 0,
             lamps_on: true,
             sky: None,
+            glow: None,
         };
         let wall = Tile::new(Terrain::Wall);
         assert_eq!(cell(&wall, &ctx(255, 0)), cell(&wall, &ctx(255, 0)));
@@ -563,6 +628,7 @@ mod tests {
             wall_mask: 0,
             lamps_on: true,
             sky: None,
+            glow: None,
         };
         let mut t = Tile::new(Terrain::Floor);
         t.feature = Some(Feature::Furniture(Furniture::Chair));
@@ -621,6 +687,7 @@ mod tests {
             wall_mask: 0,
             lamps_on,
             sky,
+            glow: None,
         };
         let mut lamp = Tile::new(Terrain::Sidewalk);
         lamp.feature = Some(Feature::Lamp);
@@ -634,6 +701,115 @@ mod tests {
         let plain = cell(&floor, &ctx(true, None));
         let tinted = cell(&floor, &ctx(true, Some((Rgb(255, 0, 0), 0.5))));
         assert!(tinted.bg.0 > plain.bg.0, "the sky pulls toward red");
+    }
+
+    fn glow_ctx(s: &StylePack, glow: Option<Rgb>) -> RenderCtx<'_> {
+        RenderCtx {
+            style: s,
+            theme: Some(Theme::CorpCore),
+            stratum: StratumKind::Street,
+            light: 120,
+            tick: 0,
+            vis: Visibility::Visible,
+            connector: None,
+            kind: None,
+            wall_mask: 0,
+            lamps_on: true,
+            sky: None,
+            glow,
+        }
+    }
+
+    fn fit(kind: FittingKind, tone: Tone, wear: Wear) -> Feature {
+        Feature::Fitting(Fitting { kind, tone, wear })
+    }
+
+    fn street_tint(s: &StylePack, c: Rgb) -> Rgb {
+        let (dr, dg, db) = s.stratum(StratumKind::Street).tint;
+        c.tint(dr, dg, db)
+    }
+
+    #[test]
+    fn a_warm_glow_warms_the_floor_and_a_cold_one_cools_it() {
+        let s = StylePack::load().unwrap();
+        let floor = Tile::new(Terrain::Floor);
+        let warm = cell(&floor, &glow_ctx(&s, Some(Rgb(200, 130, 70))));
+        assert!(warm.bg.0 > warm.bg.2, "{:?}", warm.bg);
+        let cold = cell(&floor, &glow_ctx(&s, Some(Rgb(140, 180, 170))));
+        assert!(cold.bg.2 >= cold.bg.0, "{:?}", cold.bg);
+    }
+
+    #[test]
+    fn strata_cells_are_unchanged_without_glow() {
+        let s = StylePack::load().unwrap();
+        let ctx = glow_ctx(&s, None);
+        let wall = Tile::new(Terrain::Wall);
+        let (fg, bg) = terrain_colors(Terrain::Wall, &wall, &ctx, 0);
+        let c = cell(&wall, &ctx);
+        assert_eq!(c.fg, lit(street_tint(&s, fg), 120));
+        assert_eq!(c.bg, lit(street_tint(&s, bg), 120));
+    }
+
+    #[test]
+    fn fittings_draw_as_tubes_bulbs_and_lit_walls() {
+        let s = StylePack::load().unwrap();
+        let ctx = glow_ctx(&s, Some(Rgb(120, 120, 120)));
+        let mut t = Tile::new(Terrain::Floor);
+        t.feature = Some(fit(FittingKind::Tube, Tone::Fluorescent, Wear::Ok));
+        assert_eq!(cell(&t, &ctx).ch, '▬');
+        t.feature = Some(fit(FittingKind::Bulb, Tone::Tungsten, Wear::Ok));
+        let bulb = cell(&t, &ctx);
+        assert_eq!(bulb.ch, '•');
+        assert!(bulb.bold);
+        let strip = Fitting {
+            kind: FittingKind::Strip,
+            tone: Tone::Fluorescent,
+            wear: Wear::Ok,
+        };
+        let mut w = Tile::new(Terrain::Wall);
+        w.feature = Some(Feature::Fitting(strip));
+        let mask = MASK_E | MASK_W;
+        let wctx = RenderCtx {
+            wall_mask: mask,
+            ..glow_ctx(&s, Some(Rgb(120, 120, 120)))
+        };
+        let c = cell(&w, &wctx);
+        assert_eq!(
+            c.ch,
+            glyph_for(Terrain::Wall, None, None, None, w.variant, 0, mask, &s)
+        );
+        assert_eq!(c.fg, street_tint(&s, fitting_colour(strip)));
+        t.feature = Some(fit(FittingKind::Tube, Tone::Fluorescent, Wear::Dead));
+        let dead = cell(&t, &ctx);
+        assert_eq!(dead.fg, street_tint(&s, Rgb(0x3e, 0x47, 0x50)));
+        assert_eq!(dead.bg, cell(&Tile::new(Terrain::Floor), &ctx).bg);
+    }
+
+    #[test]
+    fn furniture_in_strong_light_takes_its_colour() {
+        let s = StylePack::load().unwrap();
+        let mut t = Tile::new(Terrain::Floor);
+        t.feature = Some(Feature::Furniture(Furniture::Table));
+        let lit_table = cell(&t, &glow_ctx(&s, Some(Rgb(230, 160, 90))));
+        assert!(
+            lit_table.fg.0 as i32 > lit_table.fg.2 as i32 + 60,
+            "{:?}",
+            lit_table.fg
+        );
+        let dim = cell(&t, &glow_ctx(&s, Some(Rgb(90, 60, 40))));
+        assert!((dim.fg.0 as i32 - dim.fg.2 as i32) < 40, "{:?}", dim.fg);
+    }
+
+    #[test]
+    fn remembered_glow_tiles_still_dim() {
+        let s = StylePack::load().unwrap();
+        let c = cell(
+            &Tile::new(Terrain::Floor),
+            &glow_ctx(&s, Some(Rgb(200, 130, 70))),
+        );
+        let r = apply_vis(c, Visibility::Remembered);
+        assert_eq!(r.bg, c.bg.scale(0.35));
+        assert!(r.dim);
     }
 
     #[test]
@@ -651,6 +827,7 @@ mod tests {
             wall_mask: MASK_E | MASK_W,
             lamps_on: true,
             sky: None,
+            glow: None,
         };
         let wall = cell(&Tile::new(Terrain::NetWall), &ctx(StratumKind::Net));
         assert_eq!(wall.ch, '━');

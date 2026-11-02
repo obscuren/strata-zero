@@ -61,6 +61,19 @@ pub fn lit(c: Rgb, light: u8) -> Rgb {
     c.scale(0.25 + 0.75 * (light as f32) / 255.0)
 }
 
+/// A colour under coloured light `l`: each channel scaled by its own light, never below
+/// a floor, plus a little of the light itself. A foreground keeps more than a background.
+pub fn lit_by(c: Rgb, l: Rgb, fg: bool) -> Rgb {
+    let (floor, glow) = if fg { (0.30, 0.16) } else { (0.22, 0.10) };
+    let ch = |c: u8, l: u8| {
+        let l = l as f32;
+        (c as f32 * (floor + (1.0 - floor) * l / 255.0) + l * glow)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
+    Rgb(ch(c.0, l.0), ch(c.1, l.1), ch(c.2, l.2))
+}
+
 /// Remembered tiles are dim and static; unseen tiles are black.
 pub fn apply_vis(cell: Cell, vis: Visibility) -> Cell {
     match vis {

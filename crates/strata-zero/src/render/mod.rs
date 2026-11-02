@@ -115,6 +115,9 @@ pub struct RenderCtx<'a> {
     pub lamps_on: bool,
     /// The sky's cast and its weight, on a sunlit stratum by day.
     pub sky: Option<(Rgb, f32)>,
+    /// The light's colour on the tile, on an interior floor; `None` lights it grey by
+    /// `light`.
+    pub glow: Option<Rgb>,
 }
 
 #[cfg(test)]

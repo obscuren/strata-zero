@@ -56,6 +56,7 @@ pub fn mark_tile(st: &AppState, map: &MapRef, pos: Pos) -> Option<(char, Color)>
         wall_mask: wall_mask(map, pos, tile.terrain),
         lamps_on: map.lamps_on(),
         sky: sky_of(map),
+        glow: map.glow(pos),
     };
     let c = cell(tile, &ctx);
     Some((c.ch, c.fg.to_color()))

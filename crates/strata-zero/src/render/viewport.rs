@@ -184,6 +184,7 @@ impl Widget for MapView<'_> {
                                 wall_mask: 0,
                                 lamps_on: map.lamps_on(),
                                 sky: sky_of(map),
+                                glow: None,
                             };
                             apply_vis(cell(&back, &ctx), Visibility::Remembered).write(buf, sx, sy);
                         }
@@ -208,6 +209,7 @@ impl Widget for MapView<'_> {
                     wall_mask: mask,
                     lamps_on: map.lamps_on(),
                     sky: sky_of(map),
+                    glow: map.glow(p),
                 };
                 apply_vis(cell(tile, &ctx), vis).write(buf, sx, sy);
             }
