@@ -311,7 +311,9 @@ Somebody will know whose."*
   uses (a `credentials` const). `interiors::enter` on a shut clinic lets you in when
   the journal holds that code, with the status line `you key in 4417` as a locked
   inner door does; otherwise it refuses as today. The shut door's window line gains
-  ` · code 4417` when you have it.
+  ` · code 4417` when you have it. While the doc is held the hours say nothing, so the
+  line drops them: `CLOSED · code 4417`, or `CLOSED` (and the refusal `<name> is
+  closed`); the sim's street door light is left as it is (final review).
 - **The journal** words a street code `door code 4417 · Miracorp Tattoo, street door ·
   <source>`: the code's entry carries what it opens (flat, back room or street door),
   so non-flat codes stop reading "flat 0".
