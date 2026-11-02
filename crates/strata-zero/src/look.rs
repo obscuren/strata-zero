@@ -119,8 +119,30 @@ fn feature_name(f: Feature) -> Option<(&'static str, &'static str)> {
         Feature::Pipe => ("Pipe", "pipe"),
         Feature::Cable => ("Cable", "cable"),
         Feature::Awning => ("Awning", "awning"),
+        Feature::Fitting(x) => fitting_name(x),
         _ => return None,
     })
+}
+
+/// A light fitting's name and key, by its kind and, for the kinds that wear, its wear.
+fn fitting_name(f: citygen::Fitting) -> (&'static str, &'static str) {
+    use citygen::{FittingKind as K, Wear as W};
+    match (f.kind, f.wear) {
+        (K::Tube, W::Dead) => ("Dead fluorescent tube", "tube_dead"),
+        (K::Tube, W::Stutter) => ("Flickering fluorescent tube", "tube_flicker"),
+        (K::Tube, _) => ("Fluorescent tube", "tube"),
+        (K::HighBay, W::Dead) => ("Dead high-bay lamp", "high_bay_dead"),
+        (K::HighBay, W::Stutter) => ("Flickering high-bay lamp", "high_bay_flicker"),
+        (K::HighBay, _) => ("High-bay lamp", "high_bay"),
+        (K::Strip, W::Dead) => ("Dead light strip", "strip_dead"),
+        (K::Strip, W::Stutter) => ("Flickering light strip", "strip_flicker"),
+        (K::Strip, _) => ("Light strip", "strip"),
+        (K::Panel, _) => ("LED panel", "panel"),
+        (K::Bulb, _) => ("Bulb", "bulb"),
+        (K::Sconce, _) => ("Sconce", "sconce"),
+        (K::NeonStrip, _) => ("Neon strip", "neon_strip"),
+        (K::Stage, _) => ("Stage lights", "stage_lights"),
+    }
 }
 
 /// A fixture on the tile: header, second line and its flavour key.
@@ -763,6 +785,44 @@ mod tests {
             s.push('\n');
         }
         s
+    }
+
+    #[test]
+    fn every_fitting_has_a_name_and_flavour() {
+        use citygen::{Fitting, FittingKind as K, Tone, Wear};
+        let looks = Looks::load();
+        for kind in [
+            K::Tube,
+            K::Panel,
+            K::Bulb,
+            K::HighBay,
+            K::Strip,
+            K::Sconce,
+            K::NeonStrip,
+            K::Stage,
+        ] {
+            let wears: &[Wear] = if kind.wears() {
+                &[Wear::Ok, Wear::Dead, Wear::Stutter]
+            } else {
+                &[Wear::Ok]
+            };
+            for &wear in wears {
+                let f = Feature::Fitting(Fitting {
+                    kind,
+                    tone: Tone::Fluorescent,
+                    wear,
+                });
+                let (name, key) =
+                    feature_name(f).unwrap_or_else(|| panic!("{kind:?} {wear:?} has no name"));
+                assert!(!name.is_empty() && !name.contains("Street"));
+                assert!(
+                    looks
+                        .line(Group::Feature, key, 1, citygen::Pos::new(0, 0))
+                        .is_some(),
+                    "{key} has no flavour"
+                );
+            }
+        }
     }
 
     #[test]

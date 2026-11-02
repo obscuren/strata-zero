@@ -63,6 +63,63 @@ Looks(
             "Torn canvas over the shopfront, holding a pool of rain.",
             "Shade by day, and a roof for whoever sleeps under it by night.",
         ],
+        // Indoor light fittings: by kind, and for the kinds that wear, dead or flickering.
+        "tube": [
+            "A fluorescent tube humming at a pitch only the dogs mind.",
+            "Cold light that makes everyone under it look a day older.",
+        ],
+        "tube_dead": [
+            "A dead tube, grey at both ends. Nobody has filed the ticket.",
+            "The tube went out and took this stretch of ceiling with it.",
+        ],
+        "tube_flicker": [
+            "One end flickers. Nobody's coming to fix it.",
+            "It stutters on, thinks about it, and stutters off again.",
+        ],
+        "panel": [
+            "An LED panel, flat and bright and very sure of itself.",
+            "Clean white light, the kind they put in rooms where people sign things.",
+        ],
+        "bulb": [
+            "A bare bulb on a cord, swaying a little when the trains go by.",
+            "One warm bulb doing the work of three.",
+        ],
+        "high_bay": [
+            "A high-bay lamp up in the girders, orange as the street.",
+            "Sodium light from the rafters. The pigeons like it.",
+        ],
+        "high_bay_dead": [
+            "A dead lamp up in the dark of the roof.",
+            "The lamp up there gave out. The corner under it belongs to the rats now.",
+        ],
+        "high_bay_flicker": [
+            "The lamp in the girders buzzes, dims and catches again.",
+            "Orange light that can't decide whether to stay.",
+        ],
+        "strip": [
+            "A light strip set into the wall, a thin cold line.",
+            "A strip of light along the wall that never lets the place feel like night.",
+        ],
+        "strip_dead": [
+            "A dead stretch of strip, dark between two lit ones.",
+            "Part of the strip went out. The wall is darker there.",
+        ],
+        "strip_flicker": [
+            "A strip segment flickering like it's trying to say something.",
+            "The strip stutters along the wall: on, off, on.",
+        ],
+        "sconce": [
+            "A sconce on the wall, warm and low.",
+            "Light from a little shade on the wall, kinder than the room deserves.",
+        ],
+        "neon_strip": [
+            "Neon behind the bar, painting every bottle the same colour.",
+            "A tube of colour along the wall, buzzing under the music.",
+        ],
+        "stage_lights": [
+            "Coloured light on the stage boards, waiting for somebody.",
+            "The stage glows in two colours that don't agree.",
+        ],
     },
     furniture: {
         "desk": ["A desk with a cold monitor and a mug ring nobody wiped."],
