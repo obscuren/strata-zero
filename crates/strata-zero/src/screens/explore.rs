@@ -2482,6 +2482,14 @@ impl MapScreen {
 
 impl Screen for MapScreen {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+        // A daze over: it ends.
+        if st
+            .missions
+            .daze
+            .is_some_and(|d| st.tick >= d.start + d.ticks)
+        {
+            st.missions.daze = None;
+        }
         // A HOLO feed waiting: it opens over the map, once no scene is playing.
         if crate::missions::scene::running(st).is_none()
             && let Some(view) = st.missions.feeds.pop_front()
@@ -3250,6 +3258,9 @@ impl Screen for MapScreen {
                     .set_style(Style::default().fg(fg).add_modifier(Modifier::BOLD));
             }
         }
+        // The daze swims the whole map picture, `@` and visitors with it; what floats
+        // over the map below stays still.
+        crate::missions::daze::draw(f.buffer_mut(), map_area, st);
         // Your `@`'s cell, kept for what draws over the map: the HOLO call, the Rest
         // window here and the one a screen on top draws.
         let me = st

@@ -1672,6 +1672,15 @@ fn news_shots() {
         assert!(drawn.contains("NEWSLINE"), "a bubble over it at {w}x{h}");
         shot_stack(&format!("news_holo_ad_{w}x{h}"), &st, &[&map], (w, h));
     }
+    // The daze half way: rows adrift, a magenta and cyan fringe, the HUD still.
+    st.missions.asides.clear();
+    crate::missions::daze::start(&mut st, 4.0);
+    st.tick += 20;
+    assert!(crate::missions::daze::strength(&st) > 0.0, "still dizzy");
+    let map = MapScreen::walking(&mut st);
+    for (w, h) in HOLO_SIZES {
+        shot_stack(&format!("news_daze_{w}x{h}"), &st, &[&map], (w, h));
+    }
 }
 
 #[test]
