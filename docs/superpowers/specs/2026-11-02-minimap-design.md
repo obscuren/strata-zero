@@ -65,10 +65,11 @@ of clarity."
 
 ### 1. The pane
 
-The MAP pane keeps its place and size in the sidebar: `MINIMAP_H` (13) rows plus its
-separator, squeezed down to `MAP_MIN` (7) when LOG needs the rows, as today
-(`sidebar::budget`). Under the separator, every row but the last is the map; the last row
-is the **bottom row** (§5), in place of today's coordinate row. The map is 40 cells wide,
+The MAP pane keeps its place and size in the sidebar: its separator, `MINIMAP_H` (13)
+map rows and one more, squeezed down to `MAP_MIN` (7, the separator included, so 5 map
+rows) when LOG needs the rows, as today (`sidebar::budget`). Under the separator, every
+row but the last is the map; the last row is the **bottom row** (§5), in place of
+today's coordinate row. The map is 40 cells wide,
 the whole column.
 
 What the map shows follows the map the sidebar describes (`SidebarView::map`):
@@ -175,8 +176,9 @@ then the top, then the bottom; then the floors next to yours and next to the wan
 then those two away from yours; then every other floor, nearest yours first (the upper
 on a tie). Each is added only if the strip, gap rows and all, still fits; one that
 doesn't fit is skipped and the next tried. So a building whose floors all fit shows
-every floor. In a full pane (12 map rows) a 27-floor megablock wanting L shows
-`27F ┊ 21F 20F 19F 18F 17F 16F ┊ 1F L B1`; in a squeezed one (5 rows) `┊ 18F ┊ L B1`.
+every floor. In a full pane (13 map rows) a 27-floor megablock wanting L shows
+`27F ┊ 21F 20F 19F 18F 17F 16F 15F ┊ 1F L B1`; at 12 rows the same without 15F; in a
+squeezed pane (5 rows) `┊ 18F ┊ L B1`.
 
 ### 4. The Net and constructs
 
