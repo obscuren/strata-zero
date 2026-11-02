@@ -294,7 +294,9 @@ Somebody will know whose."*
 - **Where:** `At(By { role, within })` holds while you and the role's person are on the
   same place (the street, or one floor of a building) and you are within `within`
   tiles of them (Manhattan): on the street where the sim has them, indoors the tile the
-  floor draws them on. So the scene starts beside her in the surgery, on whatever floor
+  floor draws them on; and their tile is in your sight, as `Sees` has it, so a front
+  room four tiles from the surgery across its wall doesn't count (final review). So the
+  scene starts beside her in the surgery, on whatever floor
   the layout puts the chair (a Laundromat's is the cellar). Tracking resolves it to a
   `Spot` on her floor at her tile with radius `within` (indoor spots already route, as
   jobs do), or to `Target::Person` while she is on the street.

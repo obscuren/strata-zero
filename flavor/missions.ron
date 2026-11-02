@@ -22,7 +22,8 @@
 // {code}.
 // `Tray` holds out the first set whose need holds: one piece to take, on `tab`'s tab in
 // `from`'s chair. `Chromed(role)` fires once it is in and you are up.
-// `At(By(role, within))`: beside the role's person. The mark `Chair(role)`: their chair.
+// `At(By(role, within))`: beside the role's person, in sight. The mark `Chair(role)`:
+// their chair.
 // A need asks who you are: `Skill`, `Read(item)`, `Carries(item)`, `Unsealed(item)`,
 // `Changed` / `Unchanged` (the jacket the camera saw), `Late(minute)`, `Not`, `All`. A
 // `Say` with a `need` is said only when it holds.

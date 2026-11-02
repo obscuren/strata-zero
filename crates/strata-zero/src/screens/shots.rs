@@ -2455,7 +2455,7 @@ fn at_the_doctor(st: &mut AppState) {
     assert_eq!(keyed, Ok(format!("you key in {code:04}")));
     let (place, at) = crate::interiors::drawn_at(st, doc).expect("she is drawn inside");
     let by = t::beside_on(st, place, at);
-    st.player = Some(crate::walker::Player::at(place, by));
+    t::stand_seeing(st, place, by);
     crate::missions::tick(st);
 }
 

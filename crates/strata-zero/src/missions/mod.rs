@@ -490,7 +490,7 @@ fn sees(st: &AppState, role: &str, within: i32) -> bool {
 }
 
 /// The player is at the place: inside their flat, on the street by a role's work, or
-/// beside the role's person.
+/// beside the role's person with them in sight.
 fn at(st: &AppState, place: &Where) -> bool {
     let Some(p) = st.player.as_ref() else {
         return false;
@@ -511,10 +511,15 @@ fn at(st: &AppState, place: &Where) -> bool {
                     .and_then(|id| cast::work_tile(st, id))
                     .is_some_and(|t| p.pos.manhattan(t) <= *within)
         }
-        // On the street or a floor, wherever the role's person is drawn.
+        // On the street or a floor, wherever the role's person is drawn, and seen: never
+        // through a wall.
         Where::By { role, within } => person_of(st, role)
             .and_then(|id| crate::interiors::drawn_at(st, id))
-            .is_some_and(|(place, pos)| p.place == place && p.pos.manhattan(pos) <= *within),
+            .is_some_and(|(place, pos)| {
+                p.place == place
+                    && p.vis().get(pos) == Some(&Visibility::Visible)
+                    && p.pos.manhattan(pos) <= *within
+            }),
     }
 }
 
@@ -676,6 +681,18 @@ pub(crate) mod tests {
             &MapRef::stratum_at(city, StratumKind::Street, st.minute_of_day()),
             0,
         );
+        st.player = Some(p);
+    }
+
+    /// Stands the player on a tile of a place as it is drawn now (a floor once walked
+    /// onto), having looked around.
+    pub(crate) fn stand_seeing(st: &mut AppState, place: Place, pos: Pos) {
+        let city = st.city.as_ref().unwrap();
+        let minute = st.minute_of_day();
+        let map = MapRef::for_place(city, &st.interiors, &st.constructs, place, minute)
+            .expect("the place is drawn");
+        let mut p = Player::at(place, pos);
+        p.update_fov(&map, 0);
         st.player = Some(p);
     }
 
@@ -1958,6 +1975,8 @@ pub(crate) mod tests {
             role: "doc".into(),
             within,
         };
+        let (place, pos) = st.player.as_ref().map(|p| (p.place, p.pos)).unwrap();
+        stand_seeing(&mut st, place, pos);
         assert!(at(&st, &by(4)), "beside the chair, beside her");
         assert!(!at(&st, &by(0)), "not on her tile");
         // At the front door on the street floor: a room or a floor away from her.
@@ -1989,6 +2008,50 @@ pub(crate) mod tests {
         st.missions.cast.clear();
         on_street(&mut st, out.offset(0, 1));
         assert!(!at(&st, &by(4)));
+    }
+
+    #[test]
+    fn by_wants_her_in_sight_not_across_a_wall() {
+        use citygen::{Front, RoomKind};
+        let (mut st, _, _, _) = crate::clinic::testutil::outside(crate::clinic::testutil::NIGHT);
+        st.book = doc_book(IDLE, "");
+        let city = st.city.clone().unwrap();
+        // A front whose front room comes within four tiles of the doc's spot, a wall
+        // between them.
+        let b = city
+            .buildings
+            .iter()
+            .map(|x| x.id)
+            .find(|b| {
+                matches!(
+                    citygen::clinic_front(&city, *b),
+                    Some(Front::NoodleBar | Front::Butcher | Front::Tattoo)
+                ) && crate::clinic::doc_at_work(&st, *b).is_some()
+            })
+            .expect("a noodle bar, butcher or tattoo clinic with its doc in");
+        let doc = cast_doc(&mut st, b);
+        let (place, her) = crate::interiors::drawn_at(&st, doc).expect("she is drawn inside");
+        let Place::Floor { level, .. } = place else {
+            panic!("{place:?}")
+        };
+        let floor = st.interiors.ensure(&city, b, level).unwrap().clone();
+        let room = |kind| floor.rooms.iter().find(|r| r.kind == kind).unwrap().rect;
+        let (front, surgery) = (room(RoomKind::Waiting), room(RoomKind::Surgery));
+        let across = front
+            .iter()
+            .find(|p| {
+                !surgery.contains(*p) && floor.tiles[*p].is_walkable() && p.manhattan(her) <= 4
+            })
+            .expect("a front-room tile four from her");
+        let by = Where::By {
+            role: "doc".into(),
+            within: 4,
+        };
+        stand_seeing(&mut st, place, across);
+        assert!(!at(&st, &by), "across the wall from her");
+        let beside = beside_on(&mut st, place, her);
+        stand_seeing(&mut st, place, beside);
+        assert!(at(&st, &by), "beside her in the surgery");
     }
 
     #[test]
@@ -2136,7 +2199,7 @@ pub(crate) mod tests {
         assert_eq!(keyed, Ok(format!("you key in {code:04}")));
         let (place, at) = crate::interiors::drawn_at(st, doc).expect("she is drawn inside");
         let by = beside_on(st, place, at);
-        st.player = Some(Player::at(place, by));
+        stand_seeing(st, place, by);
         tick(st);
         assert_eq!(scene::running(st).map(|r| r.id()), Some("odile"));
         scene::skip(st);
