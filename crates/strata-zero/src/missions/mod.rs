@@ -82,6 +82,8 @@ pub struct Missions {
     pub unsealed: BTreeSet<String>,
     /// The items whose telling reading has been shown, by id: `Need::Read`.
     pub read: BTreeSet<String>,
+    /// Roles `Release` let go, waiting for you to leave their work building.
+    pub releasing: BTreeSet<String>,
 }
 
 /// Where one mission stands.
@@ -241,9 +243,10 @@ pub fn send(st: &mut AppState, ev: Event) {
     fire(st, Some(&ev));
 }
 
-/// The story's beat in the explore update: the conditions checked, the scene played,
-/// the call's ring timed.
+/// The story's beat in the explore update: the held let go once you are out, the
+/// conditions checked, the scene played, the call's ring timed.
 pub fn tick(st: &mut AppState) {
+    effects::release_waiting(st);
     fire(st, None);
     scene::tick(st);
     call::tick(st);

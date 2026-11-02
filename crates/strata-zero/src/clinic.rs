@@ -51,9 +51,19 @@ pub fn doc_at_work(st: &AppState, b: BuildingId) -> Option<PersonId> {
         .find(|id| world.people()[id.0 as usize].profession == RIPPERDOC)
 }
 
-/// A clinic is open while its doc is in; every other building is as it always was.
+/// A clinic is open while its doc is in, and not held there by the story (shut to the
+/// street, the chair working); every other building is as it always was.
 pub fn is_open(st: &AppState, b: BuildingId) -> bool {
-    !is_clinic(st, b) || doc_at_work(st, b).is_some()
+    !is_clinic(st, b) || doc_at_work(st, b).is_some_and(|id| !is_held(st, id))
+}
+
+/// Whether the story holds the clinic's doc at work.
+pub fn held(st: &AppState, b: BuildingId) -> bool {
+    doc_at_work(st, b).is_some_and(|id| is_held(st, id))
+}
+
+fn is_held(st: &AppState, id: PersonId) -> bool {
+    st.world.as_ref().is_some_and(|w| w.is_held(id))
 }
 
 /// What the clinic calls its doc: "Doc" and their first name, without the city's
@@ -302,6 +312,102 @@ mod tests {
         assert_eq!(gone_line("Doc Lou"), "Doc Lou has gone for the night");
         assert_eq!(hhmm(1080), "18:00");
         assert_eq!(hhmm(240), "04:00");
+    }
+
+    /// By day, the clinic's doc cast as `doc` and held at work by the story: the state,
+    /// the clinic, its street door and the doc.
+    fn held_by_day() -> (AppState, BuildingId, citygen::Pos, PersonId) {
+        let (mut st, b, door, _) = outside(DAY);
+        let doc = st
+            .world
+            .as_ref()
+            .unwrap()
+            .people()
+            .iter()
+            .find(|p| p.profession == RIPPERDOC && p.work == sim::Work::Building(b))
+            .unwrap()
+            .id;
+        st.missions.cast.insert("doc".into(), doc);
+        crate::missions::effects::apply(
+            &mut st,
+            0,
+            0,
+            &crate::missions::Effect::Hold("doc".into()),
+        );
+        (st, b, door, doc)
+    }
+
+    #[test]
+    fn hold_keeps_the_doc_in_and_the_clinic_shut() {
+        let (mut st, b, door, doc) = held_by_day();
+        assert_eq!(doc_at_work(&st, b), Some(doc), "in, out of hours");
+        assert!(held(&st, b));
+        assert!(!is_open(&st, b), "shut to the street");
+        let refused = crate::interiors::enter(&mut st, b, (citygen::StratumKind::Street, door));
+        assert_eq!(refused, Err(closed_line(&st, b)));
+        assert!(st.player.as_ref().unwrap().place.is_street());
+        // Not held, a clinic is as its doc's hours have it.
+        let (st, b, _, _) = outside(NIGHT);
+        assert!(!held(&st, b) && is_open(&st, b));
+    }
+
+    #[test]
+    fn the_street_code_lets_you_in_and_the_chair_works() {
+        let (mut st, b, door, doc) = held_by_day();
+        let code = crate::credentials::street_code(&st, b);
+        let seed = st.city.as_ref().unwrap().seed;
+        assert_eq!(
+            code,
+            citygen::rng::door_code(seed, b, 0, crate::credentials::STREET_DOOR)
+        );
+        st.journal.learn(crate::credentials::Code {
+            building: b,
+            level: 0,
+            number: crate::credentials::STREET_DOOR,
+            household: None,
+            code,
+            source: crate::credentials::Source::Mail,
+            noted_by: None,
+            at: 0,
+        });
+        let entered = crate::interiors::enter(&mut st, b, (citygen::StratumKind::Street, door));
+        assert_eq!(entered, Ok(format!("you key in {code:04}")));
+        assert_eq!(
+            st.player.as_ref().unwrap().place,
+            Place::Floor {
+                building: b,
+                level: 0
+            }
+        );
+        // Down to the chair, sat in it: the held doc works it.
+        let level = if citygen::clinic_front(st.city.as_ref().unwrap(), b)
+            == Some(citygen::Front::Laundromat)
+        {
+            -1
+        } else {
+            0
+        };
+        let city = st.city.clone().unwrap();
+        let chair = st
+            .interiors
+            .ensure(&city, b, level)
+            .unwrap()
+            .chair()
+            .unwrap();
+        let p = st.player.as_mut().unwrap();
+        p.place = Place::Floor { building: b, level };
+        p.pos = chair;
+        st.chair = Some(Chair {
+            building: b,
+            level,
+            doc,
+        });
+        assert_eq!(
+            operating(&st),
+            Operating::Chair {
+                doc: doc_name(&st, doc)
+            }
+        );
     }
 
     /// The whole visit through the real screens, as the player plays it: Space by the

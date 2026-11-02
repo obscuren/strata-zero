@@ -25,6 +25,8 @@ const STILL_PIXELS: &str = "0123456r";
 const STILL_SIDE: usize = 18;
 /// The player, as a beat's speaker or walker and as the `{you}` slot. No cast role takes it.
 pub const YOU: &str = "you";
+/// The `{code}` slot in a mail: the code it carries. No cast role takes it.
+pub const CODE: &str = "code";
 
 #[derive(Clone, Debug, Error, PartialEq)]
 pub enum BookError {
@@ -363,6 +365,9 @@ pub enum Effect {
         from: String,
         subject: String,
         body: Vec<String>,
+        /// A code the mail carries: learned as it lands, and its `{code}` slot.
+        #[serde(default)]
+        code: Option<CodeOf>,
     },
     Log(String),
     /// Plays the scene; its end marks the step `Ended`, as a feed's does.
@@ -377,6 +382,17 @@ pub enum Effect {
     News(String),
     /// The screen swims for this many seconds.
     Daze(f32),
+    /// Keeps the role's person at work, against their hours.
+    Hold(String),
+    /// Lets the role's person go, the first minute you are out of their work building.
+    Release(String),
+}
+
+/// What a mail's code opens.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub enum CodeOf {
+    /// The street doors of the role's work building.
+    Clinic(String),
 }
 
 impl Effect {
@@ -403,20 +419,30 @@ impl Effect {
             | Effect::Leave(_)
             | Effect::Lights(_)
             | Effect::News(_)
-            | Effect::Daze(_) => vec![],
+            | Effect::Daze(_)
+            | Effect::Hold(_)
+            | Effect::Release(_) => vec![],
         }
     }
 
-    /// The roles named outside text: who speaks, who dies, who arrives (but you).
+    /// The roles named outside text: who speaks, who dies, who arrives (but you), who is
+    /// held or let go, and whose building a mailed code opens.
     fn named_roles(&self) -> Vec<&str> {
         match self {
+            Effect::Mail {
+                from,
+                code: Some(CodeOf::Clinic(role)),
+                ..
+            } => vec![from, role],
             Effect::Feed { from, .. } | Effect::Call { from, .. } | Effect::Mail { from, .. } => {
                 vec![from]
             }
             Effect::Arrive { role, .. } if role == YOU => vec![],
-            Effect::Dead { role, .. } | Effect::Arrive { role, .. } | Effect::Leave(role) => {
-                vec![role]
-            }
+            Effect::Dead { role, .. }
+            | Effect::Arrive { role, .. }
+            | Effect::Leave(role)
+            | Effect::Hold(role)
+            | Effect::Release(role) => vec![role],
             _ => vec![],
         }
     }
@@ -479,7 +505,7 @@ impl Mission {
                         slots(t)
                             .into_iter()
                             .map(|(role, _)| role)
-                            .filter(|r| r != YOU),
+                            .filter(|r| r != YOU && r != CODE),
                     );
                 }
             }
@@ -503,6 +529,11 @@ pub fn slots(text: &str) -> Vec<(String, Option<String>)> {
         rest = &after[close + 1..];
     }
     out
+}
+
+/// `{code}`, as a mail's text says it.
+pub fn code_slot() -> String {
+    format!("{{{CODE}}}")
 }
 
 /// The roles a text asks the place, district or hours of.
@@ -539,8 +570,8 @@ impl Book {
         if !self.faces.contains_key(SILHOUETTE) {
             return Err(BookError::NoSilhouette);
         }
-        if self.cast.contains_key(YOU) {
-            return Err(BookError::ReservedRole(YOU.into()));
+        if let Some(reserved) = [YOU, CODE].into_iter().find(|r| self.cast.contains_key(*r)) {
+            return Err(BookError::ReservedRole(reserved.into()));
         }
         for (id, role) in &self.cast {
             if let Some(face) = role.face.as_ref().filter(|f| !self.faces.contains_key(*f)) {
@@ -583,7 +614,13 @@ impl Book {
                 }
                 // One arm per effect that acts on a person or points at a mark.
                 match e {
-                    Effect::Dead { role, .. } => {
+                    Effect::Dead { role, .. }
+                    | Effect::Hold(role)
+                    | Effect::Release(role)
+                    | Effect::Mail {
+                        code: Some(CodeOf::Clinic(role)),
+                        ..
+                    } => {
                         roles.insert(role.clone());
                     }
                     Effect::Arrive { at, .. } => roles.extend(at.cast_role().map(String::from)),
@@ -884,8 +921,14 @@ impl Book {
                 for role in e.named_roles() {
                     self.check_role(&place, role)?;
                 }
+                // A mail may say the code it carries.
+                let mail = matches!(e, Effect::Mail { .. });
                 for t in e.texts() {
-                    self.check_text(&place, t)?;
+                    if mail {
+                        self.check_text(&place, &t.replace(&code_slot(), ""))?;
+                    } else {
+                        self.check_text(&place, t)?;
+                    }
                 }
                 let at = format!("mission {} step {}", m.id, step.id);
                 match e {
@@ -1640,5 +1683,69 @@ mod tests {
         )
         .unwrap();
         assert!(b.needs_cast(&b.missions[0]).is_empty());
+    }
+
+    #[test]
+    fn holds_releases_and_a_mailed_code_need_the_role_cast() {
+        let zed: BTreeSet<String> = ["zed"].map(String::from).into();
+        let step = |e: &str| format!(r#"Step(id: "a", when: NewGame, then: [{e}])"#);
+        assert_eq!(needed(&step(r#"Hold("zed")"#)), zed);
+        assert_eq!(needed(&step(r#"Release("zed")"#)), zed);
+        let mail = r#"Mail(from: "seren", subject: "ten", body: ["Code's {code}."],
+            code: Some(Clinic("zed")))"#;
+        assert_eq!(needed(&step(mail)), zed);
+        // A mail with no code needs nobody but its slots.
+        let plain = r#"Mail(from: "zed", subject: "ten", body: ["hi"])"#;
+        assert_eq!(needed(&step(plain)), BTreeSet::new());
+    }
+
+    #[test]
+    fn holds_and_mailed_codes_name_a_known_role() {
+        let step = |e: &str| format!(r#"Step(id: "a", when: NewGame, then: [{e}])"#);
+        assert!(with_steps(&step(r#"Hold("marlo")"#)).is_ok());
+        assert!(with_steps(&step(r#"Release("marlo")"#)).is_ok());
+        for e in [
+            r#"Hold("nobody")"#,
+            r#"Release("nobody")"#,
+            r#"Mail(from: "seren", subject: "s", body: ["x"], code: Some(Clinic("nobody")))"#,
+        ] {
+            assert!(
+                matches!(with_steps(&step(e)), Err(BookError::UnknownRole { .. })),
+                "{e}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_code_slot_is_a_mails_alone() {
+        let step = |e: &str| format!(r#"Step(id: "a", when: NewGame, then: [{e}])"#);
+        let b = with_steps(&step(
+            r#"Mail(from: "seren", subject: "ten", body: ["Code's {code}."],
+                code: Some(Clinic("marlo")))"#,
+        ))
+        .unwrap();
+        let Effect::Mail { code, .. } = &b.missions[0].steps[0].then[0] else {
+            panic!("a mail")
+        };
+        assert_eq!(code, &Some(CodeOf::Clinic("marlo".into())));
+        assert!(!b.missions[0].roles().contains(CODE));
+        // A mail without a code may still say `{code}`: it fills as nothing.
+        assert!(
+            with_steps(&step(
+                r#"Mail(from: "seren", subject: "s", body: ["{code}"])"#
+            ))
+            .is_ok()
+        );
+        // Anywhere else it is a role nobody plays.
+        assert!(matches!(
+            with_steps(&step(r#"Log("{code}")"#)),
+            Err(BookError::UnknownRole { .. })
+        ));
+        // And no role may take the slot's name.
+        let code_role = r#""code": Role(name: "C", title: "x", pick: NearestFixer, face: None),"#;
+        assert_eq!(
+            tiny(code_role, STEP, ""),
+            Err(BookError::ReservedRole(CODE.into()))
+        );
     }
 }

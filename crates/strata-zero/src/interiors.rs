@@ -245,10 +245,13 @@ pub fn enter(st: &mut AppState, b: BuildingId, door: (StratumKind, Pos)) -> Resu
     if st.net.engaged.is_some() {
         return Err("not now".to_string());
     }
-    // A ripperdoc's door is shut while the doc is out.
-    if !crate::clinic::is_open(st, b) {
-        return Err(crate::clinic::closed_line(st, b));
-    }
+    // A ripperdoc's door is shut while the doc is out or held; its street code lifts it.
+    let keyed = if crate::clinic::is_open(st, b) {
+        None
+    } else {
+        let code = crate::credentials::known_street_code(st, b);
+        Some(code.ok_or_else(|| crate::clinic::closed_line(st, b))?)
+    };
     let city = st.city.as_ref().ok_or("no city")?;
     let plan = st
         .interiors
@@ -270,7 +273,10 @@ pub fn enter(st: &mut AppState, b: BuildingId, door: (StratumKind, Pos)) -> Resu
     let name = building_name(city, b);
     crate::credentials::prepare(st, b);
     land(st, Place::Floor { building: b, level }, step);
-    Ok(format!("Entering `{name}`"))
+    Ok(match keyed {
+        Some(code) => format!("you key in {code:04}"),
+        None => format!("Entering `{name}`"),
+    })
 }
 
 /// Steps out of an exit onto its landing on the city map.

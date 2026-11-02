@@ -145,6 +145,14 @@ pub fn work_tile(st: &AppState, id: PersonId) -> Option<Pos> {
     }
 }
 
+/// The building a person works in; None for a spot or a roamer.
+pub fn work_building(st: &AppState, id: PersonId) -> Option<BuildingId> {
+    match st.world.as_ref()?.people().get(id.0 as usize)?.work {
+        Work::Building(b) => Some(b),
+        Work::Spot(_) | Work::Roaming => None,
+    }
+}
+
 /// The walkable Street tile just outside building `b`, nearest its Street door (or its
 /// middle when it has none, as a walk-in kind).
 fn outside_building(city: &City, b: BuildingId) -> Option<Pos> {

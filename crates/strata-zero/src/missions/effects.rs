@@ -1,8 +1,8 @@
 //! What a step does to the game (spec §4), its text filled as it runs.
 
 use super::{
-    Body, Call, Effect, FeedView, Mark, YOU, cast, daze, fill, marks, news, person_of, role_name,
-    scene, visitors,
+    Body, Call, CodeOf, Effect, FeedView, Mark, YOU, cast, code_slot, daze, fill, marks, news,
+    person_of, role_name, scene, visitors,
 };
 use crate::app::AppState;
 use citygen::{Place, StratumKind};
@@ -58,11 +58,19 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
             from,
             subject,
             body,
+            code,
         } => {
+            // The code is learned as the mail lands; `{code}` says it, or nothing.
+            let digits = code
+                .as_ref()
+                .and_then(|c| learn_code(st, c))
+                .map(|c| format!("{c:04}"))
+                .unwrap_or_default();
+            let text = |st: &AppState, t: &str| fill(st, &t.replace(&code_slot(), &digits));
             let mail = crate::credentials::Mail {
                 from: role_name(st, from),
-                subject: fill(st, subject),
-                body: body.iter().map(|b| fill(st, b)).collect(),
+                subject: text(st, subject),
+                body: body.iter().map(|b| text(st, b)).collect(),
                 read: false,
                 at: st.net.now(st),
                 job: None,
@@ -79,6 +87,57 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
         Effect::Lights(level) => lights(st, *level),
         Effect::News(id) => news::put_out(st, id, mission, step),
         Effect::Daze(seconds) => daze::start(st, *seconds),
+        Effect::Hold(role) => {
+            if let (Some(id), Some(w)) = (person_of(st, role), st.world.as_mut()) {
+                w.keep_at_work(id);
+            }
+        }
+        Effect::Release(role) => {
+            st.missions.releasing.insert(role.clone());
+        }
+    }
+}
+
+/// A mail's code into the journal (`Source::Mail`): the street code of the role's work
+/// building. None when nobody plays the role or they work in no building.
+fn learn_code(st: &mut AppState, code: &CodeOf) -> Option<u16> {
+    let CodeOf::Clinic(role) = code;
+    let b = cast::work_building(st, person_of(st, role)?)?;
+    let code = crate::credentials::street_code(st, b);
+    let at = st.net.now(st);
+    st.journal.learn(crate::credentials::Code {
+        building: b,
+        level: 0,
+        number: crate::credentials::STREET_DOOR,
+        household: None,
+        code,
+        source: crate::credentials::Source::Mail,
+        noted_by: None,
+        at,
+    });
+    Some(code)
+}
+
+/// Lets go each role `Release` named once you are not inside their work building, so
+/// they never walk out past you. A role nobody plays is dropped.
+pub(super) fn release_waiting(st: &mut AppState) {
+    if st.missions.releasing.is_empty() {
+        return;
+    }
+    let inside = match st.player.as_ref().map(|p| p.place) {
+        Some(Place::Floor { building, .. }) => Some(building),
+        _ => None,
+    };
+    let roles: Vec<String> = st.missions.releasing.iter().cloned().collect();
+    for role in roles {
+        let who = person_of(st, &role);
+        if inside.is_some() && who.and_then(|id| cast::work_building(st, id)) == inside {
+            continue;
+        }
+        if let (Some(id), Some(w)) = (who, st.world.as_mut()) {
+            w.release(id);
+        }
+        st.missions.releasing.remove(&role);
     }
 }
 
@@ -237,6 +296,86 @@ mod tests {
         apply(&mut st, 1, 2, &Effect::News("marlo".into()));
         let n = crate::missions::news::current(&st).unwrap();
         assert_eq!((n.id.as_str(), n.mission, n.step), ("marlo", 1, 2));
+    }
+
+    /// At night beside the clinic's chair, its doc cast as `doc`: the state, the clinic
+    /// and the doc.
+    fn by_the_chair() -> (AppState, citygen::BuildingId, sim::PersonId) {
+        let (mut st, b, _, _) = crate::clinic::testutil::inside();
+        let doc = super::super::tests::cast_doc(&mut st, b);
+        (st, b, doc)
+    }
+
+    fn held(st: &AppState, doc: sim::PersonId) -> bool {
+        st.world.as_ref().unwrap().is_held(doc)
+    }
+
+    #[test]
+    fn release_waits_until_you_are_out() {
+        let (mut st, b, doc) = by_the_chair();
+        apply(&mut st, 0, 0, &Effect::Hold("doc".into()));
+        assert!(held(&st, doc));
+        apply(&mut st, 0, 0, &Effect::Release("doc".into()));
+        crate::missions::tick(&mut st);
+        assert!(held(&st, doc), "not while you are inside");
+        // Out on the street: the next tick lets her go.
+        let out = super::super::tests::outside_door(&st, b);
+        super::super::tests::on_street(&mut st, out);
+        crate::missions::tick(&mut st);
+        assert!(!held(&st, doc));
+        assert!(st.missions.releasing.is_empty());
+        // Nobody cast: the release is dropped, nothing else.
+        apply(&mut st, 0, 0, &Effect::Release("nobody".into()));
+        crate::missions::tick(&mut st);
+        assert!(st.missions.releasing.is_empty());
+    }
+
+    fn mail(code: Option<&str>) -> Effect {
+        Effect::Mail {
+            from: "doc".into(),
+            subject: "ten".into(),
+            body: vec!["Shutter's down. Code's {code}.".into(), "— S".into()],
+            code: code.map(|r| crate::missions::CodeOf::Clinic(r.into())),
+        }
+    }
+
+    #[test]
+    fn the_mail_learns_the_code_as_it_lands() {
+        use crate::credentials::{STREET_DOOR, Source, street_code};
+        let (mut st, b, _) = by_the_chair();
+        let code = street_code(&st, b);
+        apply(&mut st, 0, 0, &mail(Some("doc")));
+        let learned = st.journal.code_for(b, 0, STREET_DOOR).expect("learned");
+        assert_eq!((learned.code, learned.source), (code, Source::Mail));
+        assert_eq!(learned.noted_by, None);
+        let m = st.journal.mails.last().unwrap();
+        assert_eq!(m.body[0], format!("Shutter's down. Code's {code:04}."));
+        assert_eq!(m.body[1], "— S");
+        let name = crate::net::building_name(&st, b);
+        let lines: Vec<String> = crate::credentials::entries(&st)
+            .into_iter()
+            .flat_map(|(_, _, es)| es)
+            .map(|e| e.text)
+            .collect();
+        assert!(
+            lines.iter().any(|t| t.starts_with(&format!(
+                "door code {code:04} · `{name}`, street door · from a mail on the rig"
+            ))),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_code_for_nobody_learns_nothing() {
+        let (mut st, _, _) = by_the_chair();
+        let codes = st.journal.codes().len();
+        apply(&mut st, 0, 0, &mail(Some("nobody")));
+        apply(&mut st, 0, 0, &mail(None));
+        assert_eq!(st.journal.codes().len(), codes);
+        for m in &st.journal.mails {
+            assert_eq!(m.body[0], "Shutter's down. Code's .");
+        }
+        assert_eq!(st.journal.mails.len(), 2);
     }
 
     fn arrive(role: &str, at: Mark) -> Effect {

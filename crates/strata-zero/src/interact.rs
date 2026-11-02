@@ -206,6 +206,10 @@ pub fn gather(
             else {
                 continue;
             };
+            // The street code, when you hold it.
+            let code = crate::credentials::known_street_code(st, b)
+                .map(|c| format!(" · code {c:04}"))
+                .unwrap_or_default();
             // Someone standing in the doorway keeps their window; the door's hours go
             // on it as a greyed row.
             if let Some(s) = subs.iter_mut().find(|s| s.pos == d) {
@@ -215,7 +219,7 @@ pub fn gather(
                         ..Choice::disabled('i', "Door")
                     }
                     .tail(format!(
-                        " · CLOSED · opens {}",
+                        " · CLOSED · opens {}{code}",
                         crate::clinic::hhmm(crate::clinic::hours(st).0)
                     )),
                 );
@@ -226,7 +230,7 @@ pub fn gather(
                 &mut here,
                 d,
                 Some(header(crate::clinic::name(st, b), Some(('▯', AMBER)))),
-                Some(crate::clinic::hours_line(st)),
+                Some(format!("{}{code}", crate::clinic::hours_line(st))),
                 Vec::new(),
             );
         }
@@ -804,6 +808,56 @@ mod tests {
         assert!(!sit.enabled);
         assert_eq!(sit.tail, " · the doc is out");
         assert_eq!(s.subtitle, None, "the row says it once");
+    }
+
+    #[test]
+    fn the_shut_door_shows_the_code_you_hold() {
+        let (mut st, b, door, _) = crate::clinic::testutil::outside(crate::clinic::testutil::DAY);
+        let world = st.world.as_mut().unwrap();
+        if let Some(id) = world.person_at(door) {
+            world.park(id, Pos::new(0, 0));
+        }
+        let subtitle = |st: &AppState| {
+            gather(st, &|_, _| None)
+                .into_iter()
+                .find(|s| s.pos == door)
+                .and_then(|s| s.subtitle)
+                .unwrap()
+        };
+        assert_eq!(subtitle(&st), "CLOSED · opens 18:00 · closes 04:00");
+        let code = crate::credentials::street_code(&st, b);
+        st.journal.learn(crate::credentials::Code {
+            building: b,
+            level: 0,
+            number: crate::credentials::STREET_DOOR,
+            household: None,
+            code,
+            source: crate::credentials::Source::Mail,
+            noted_by: None,
+            at: 0,
+        });
+        assert_eq!(
+            subtitle(&st),
+            format!("CLOSED · opens 18:00 · closes 04:00 · code {code:04}")
+        );
+        // Somebody in the doorway: the greyed row carries it.
+        let doc = st
+            .world
+            .as_ref()
+            .unwrap()
+            .people()
+            .iter()
+            .find(|p| p.profession == "ripperdoc" && p.work == sim::Work::Building(b))
+            .unwrap()
+            .id;
+        st.world.as_mut().unwrap().park(doc, door);
+        let subjects = gather(&st, &|_, _| None);
+        let s = subjects.iter().find(|s| s.pos == door).unwrap();
+        let row = s.choices.iter().find(|c| c.key == 'i').unwrap();
+        assert_eq!(
+            row.tail,
+            format!(" · CLOSED · opens 18:00 · code {code:04}")
+        );
     }
 
     #[test]
