@@ -103,10 +103,23 @@ pub fn hhmm(minute: u16) -> String {
     format!("{:02}:{:02}", minute / 60 % 24, minute % 60)
 }
 
-/// The shut door's window: `CLOSED · opens 18:00 · closes 04:00`.
-pub fn hours_line(st: &AppState) -> String {
+/// The shut door's window: `CLOSED · opens 18:00 · closes 04:00`. While the story
+/// holds its doc in, the hours don't say when it opens: just `CLOSED`.
+pub fn hours_line(st: &AppState, b: BuildingId) -> String {
+    if held(st, b) {
+        return "CLOSED".to_string();
+    }
     let (open, close) = hours(st);
     format!("CLOSED · opens {} · closes {}", hhmm(open), hhmm(close))
+}
+
+/// The same, short, on the row of someone standing in the doorway:
+/// `CLOSED · opens 18:00`, or `CLOSED` while its doc is held.
+pub fn shut_row(st: &AppState, b: BuildingId) -> String {
+    if held(st, b) {
+        return "CLOSED".to_string();
+    }
+    format!("CLOSED · opens {}", hhmm(hours(st).0))
 }
 
 /// What the building is called to the player.
@@ -124,8 +137,12 @@ pub fn name(st: &AppState, b: BuildingId) -> String {
         .unwrap_or_else(|| "The clinic".to_string())
 }
 
-/// Walking into a shut clinic: `Hot Pot Lou is closed · opens at 18:00`.
+/// Walking into a shut clinic: `Hot Pot Lou is closed · opens at 18:00`, or
+/// `Hot Pot Lou is closed` while its doc is held.
 pub fn closed_line(st: &AppState, b: BuildingId) -> String {
+    if held(st, b) {
+        return format!("{} is closed", name(st, b));
+    }
     format!("{} is closed · opens at {}", name(st, b), hhmm(hours(st).0))
 }
 
@@ -303,7 +320,8 @@ mod tests {
     #[test]
     fn lines_read_as_the_spec() {
         let (mut st, b, _, _) = outside(DAY);
-        assert_eq!(hours_line(&st), "CLOSED · opens 18:00 · closes 04:00");
+        assert_eq!(hours_line(&st, b), "CLOSED · opens 18:00 · closes 04:00");
+        assert_eq!(shut_row(&st, b), "CLOSED · opens 18:00");
         st.city.as_mut().unwrap().buildings[b.index()].name = Some("Hot Pot Lou".to_string());
         assert_eq!(
             closed_line(&st, b),

@@ -241,10 +241,7 @@ pub fn gather(
                         thing: Some((crate::clinic::name(st, b), AMBER)),
                         ..Choice::disabled('i', "Door")
                     }
-                    .tail(format!(
-                        " · CLOSED · opens {}{code}",
-                        crate::clinic::hhmm(crate::clinic::hours(st).0)
-                    )),
+                    .tail(format!(" · {}{code}", crate::clinic::shut_row(st, b))),
                 );
                 continue;
             }
@@ -253,7 +250,7 @@ pub fn gather(
                 &mut here,
                 d,
                 Some(header(crate::clinic::name(st, b), Some(('▯', AMBER)))),
-                Some(format!("{}{code}", crate::clinic::hours_line(st))),
+                Some(format!("{}{code}", crate::clinic::hours_line(st, b))),
                 Vec::new(),
             );
         }
@@ -884,6 +881,68 @@ mod tests {
             row.tail,
             format!(" · CLOSED · opens 18:00 · code {code:04}")
         );
+    }
+
+    #[test]
+    fn a_held_clinic_keeps_no_hours_on_its_door() {
+        use crate::credentials::{Code, STREET_DOOR, Source, street_code};
+        // At night, in its hours, the doc held in by the story: shut all the same.
+        let (mut st, b, door, _) = crate::clinic::testutil::outside(crate::clinic::testutil::NIGHT);
+        let doc = crate::clinic::doc_at_work(&st, b).expect("the doc is in");
+        st.missions.cast.insert("doc".into(), doc);
+        crate::missions::effects::apply(
+            &mut st,
+            0,
+            0,
+            &crate::missions::Effect::Hold("doc".into()),
+        );
+        assert!(!crate::clinic::is_open(&st, b));
+        let world = st.world.as_mut().unwrap();
+        if let Some(id) = world.person_at(door) {
+            world.park(id, Pos::new(0, 0));
+        }
+        let subtitle = |st: &AppState| {
+            gather(st, &|_, _| None)
+                .into_iter()
+                .find(|s| s.pos == door)
+                .and_then(|s| s.subtitle)
+                .unwrap()
+        };
+        assert_eq!(subtitle(&st), "CLOSED");
+        let name = crate::clinic::name(&st, b);
+        assert_eq!(
+            crate::clinic::closed_line(&st, b),
+            format!("{name} is closed")
+        );
+        let refused = crate::interiors::enter(&mut st, b, (citygen::StratumKind::Street, door));
+        assert_eq!(refused, Err(format!("{name} is closed")));
+        let code = street_code(&st, b);
+        st.journal.learn(Code {
+            building: b,
+            level: 0,
+            number: STREET_DOOR,
+            household: None,
+            code,
+            source: Source::Mail,
+            noted_by: None,
+            at: 0,
+        });
+        assert_eq!(subtitle(&st), format!("CLOSED · code {code:04}"));
+        // Somebody in the doorway: the greyed row says the same.
+        let other = st
+            .world
+            .as_ref()
+            .unwrap()
+            .people()
+            .iter()
+            .find(|p| p.id != doc && p.profession != "ripperdoc")
+            .unwrap()
+            .id;
+        st.world.as_mut().unwrap().park(other, door);
+        let subjects = gather(&st, &|_, _| None);
+        let s = subjects.iter().find(|s| s.pos == door).unwrap();
+        let row = s.choices.iter().find(|c| c.key == 'i').unwrap();
+        assert_eq!(row.tail, format!(" · CLOSED · code {code:04}"));
     }
 
     #[test]
