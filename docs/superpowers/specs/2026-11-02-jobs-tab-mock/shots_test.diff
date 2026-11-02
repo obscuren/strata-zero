@@ -1,0 +1,148 @@
+diff --git a/crates/strata-zero/src/screens/shots.rs b/crates/strata-zero/src/screens/shots.rs
+index d8fcb40..d13e7bc 100644
+--- a/crates/strata-zero/src/screens/shots.rs
++++ b/crates/strata-zero/src/screens/shots.rs
+@@ -2339,3 +2339,143 @@ fn rest_shots() {
+         shot_stack(&format!("rest_asleep{suffix}"), &st, &[&map], size);
+     }
+ }
++
++/// Throwaway: the JOBS tab as it stands, with a job in every state.
++#[test]
++#[ignore]
++fn jobs_tab_now() {
++    use crate::jobs::{KindTag, generate};
++    let (mut st, route) = walked_city();
++    stand_on(&mut st, route[route.len().saturating_sub(31)]);
++    let fixers: Vec<sim::PersonId> = st
++        .world
++        .as_ref()
++        .unwrap()
++        .people()
++        .iter()
++        .filter(|p| p.profession == "fixer")
++        .map(|p| p.id)
++        .collect();
++    let mut ids = Vec::new();
++    for (i, k) in [
++        KindTag::Fetch,
++        KindTag::Deliver,
++        KindTag::Copy,
++        KindTag::Plant,
++        KindTag::Fetch,
++        KindTag::Deliver,
++    ]
++    .into_iter()
++    .enumerate()
++    {
++        let job = fixers.iter().cycle().skip(i).take(fixers.len()).find_map(|f| {
++            st.jobs.fixer_mut(*f).standing = 6;
++            (0..40).find_map(|n| generate::generate(&mut st, *f, k, n + i as u32))
++        });
++        if let Some(job) = job {
++            ids.push(st.jobs.push(job));
++        }
++    }
++    assert_eq!(ids.len(), 6, "a job of each kind");
++    // 0 taken, 1 taken (delivered), 2 offered, 3 done, 4 failed, 5 dropped.
++    for (i, id) in ids.iter().enumerate() {
++        if i != 2 {
++            let _ = crate::jobs::take_job(&mut st, *id);
++        }
++    }
++    if let Some(j) = st.jobs.list.iter_mut().find(|j| j.id == ids[1]) {
++        j.objectives[0].done = true;
++    }
++    st.jobs.hand_in(ids[3], 0);
++    if let Some(j) = st.jobs.list.iter_mut().find(|j| j.id == ids[4]) {
++        j.state = crate::jobs::State::Failed;
++    }
++    st.jobs.drop_job(ids[5], 0);
++    let map = MapScreen::walking(&mut st);
++    for row in 0..9 {
++        let mut deck = Deck::new(st.tick);
++        deck.update(&mut st, &[key(KeyCode::Char('5'))]);
++        for _ in 0..row {
++            deck.update(&mut st, &[key(KeyCode::Down)]);
++        }
++        st.tick += 200;
++        while st.tick % 90 < 3 {
++            st.tick += 1;
++        }
++        for (w, h) in BOTH {
++            shot_stack(&format!("jobs_now_{row}_{w}x{h}"), &st, &[&map, &deck], (w, h));
++        }
++    }
++    // JOBS with nothing on it, to draw the mockups over.
++    let list = std::mem::take(&mut st.jobs.list);
++    let states: Vec<_> = st.missions.runs.iter().map(|r| r.state).collect();
++    for r in &mut st.missions.runs {
++        r.state = crate::missions::RunState::Waiting;
++    }
++    let mut deck = Deck::new(st.tick);
++    deck.update(&mut st, &[key(KeyCode::Char('5'))]);
++    // Off the deck's signal jitter.
++    st.tick += 200;
++    while st.tick % 90 < 3 {
++        st.tick += 1;
++    }
++    for (w, h) in BOTH {
++        shot_stack(&format!("jobs_base_{w}x{h}"), &st, &[&map, &deck], (w, h));
++    }
++    st.jobs.list = list;
++    for (r, s) in st.missions.runs.iter_mut().zip(states) {
++        r.state = s;
++    }
++    let lines: Vec<String> = st
++        .jobs
++        .list
++        .iter()
++        .map(|j| {
++            format!(
++                "{:?} {:?} {} ¤{} {}h · {:?} · {:?}",
++                j.state,
++                j.kind.tag(),
++                j.title,
++                j.pay,
++                j.hours,
++                j.objectives,
++                j.brief
++            )
++        })
++        .collect();
++    let mut lines = lines;
++    lines.push(format!("clock {:?} now {}", st.clock(), st.net.now(&st)));
++    for j in st.jobs.list.clone() {
++        lines.push(format!(
++            "fixer of {}: {} standing {} · left {:?}",
++            j.title,
++            crate::jobs::ui::fixer_name(&st, j.fixer),
++            st.jobs.standing(j.fixer),
++            crate::jobs::Jobs::left(&j, st.net.now(&st))
++        ));
++        if let Some(src) = crate::track::ui::job_source(&st, j.id) {
++            crate::track::set(&mut st, src).unwrap();
++            crate::track::tick(&mut st);
++            lines.push(format!(
++                "  track {:?}: {} m · next {:?}",
++                src,
++                crate::track::distance(&st).unwrap_or(0),
++                crate::track::next_now(&st)
++            ));
++        }
++    }
++    for m in 0..st.book.missions.len() {
++        if let Some(src) = crate::track::ui::story_source(&st, m) {
++            crate::track::set(&mut st, src).unwrap();
++            crate::track::tick(&mut st);
++            lines.push(format!(
++                "  story {m}: {} m · next {:?}",
++                crate::track::distance(&st).unwrap_or(0),
++                crate::track::next_now(&st)
++            ));
++        }
++    }
++    if let Ok(dir) = std::env::var("SHOT_DIR") {
++        std::fs::write(format!("{dir}/jobs.txt"), lines.join("\n")).unwrap();
++    }
++}
