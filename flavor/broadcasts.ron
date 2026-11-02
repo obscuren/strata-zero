@@ -1,0 +1,59 @@
+// What the city says as you drop in. The broadcast screen opens every NEW GAME and
+// LOAD GAME with one of these: among those whose `when` fits, the city's seed picks.
+// Slots in braces are filled from the city being entered and the runner: {city}
+// {city.loud} {you} {home} {corp}, and a district of a kind, {market} {zone} {blocks}
+// {docks} {core} {strip} {industry} {oldtown}. A slot in capitals ({CITY}) fills in
+// capitals. Colours are (r, g, b); a tag span without one is the text colour.
+Broadcasts([
+    Broadcast(
+        id: "static66",
+        when: NewGame,
+        tag: [
+            ("●", Some((255, 40, 40))),
+            (" ON AIR  ", Some((255, 40, 40))),
+            ("STATIC 66 · PIRATE", None),
+        ],
+        shout: "{city.loud}! WAKE UP!",
+        paras: [
+            "Rise and grind, you beautiful wrecks. Static Sixty-Six, coming off a dish on the roof of {home} that we absolutely paid for.",
+            "Acid rain on the Heights, so the suits stay in and the Street's ours. The skyway over {industry}'s shut, somebody's car is part of it now. Noodles in {market}, still four. Cops in {zone}, still twenty.",
+            "Fresh meat in town tonight. Don't take work from anyone who's smiling.",
+        ],
+        sign: "Static Sixty-Six. Turn it up, lock your door.",
+        sign_colour: (255, 0, 200),
+    ),
+    Broadcast(
+        id: "nitewire",
+        when: LoadGame,
+        tag: [
+            ("◆", Some((0, 229, 255))),
+            (" CH9 NITEWIRE  ", Some((0, 229, 255))),
+            ("LIVE", Some((255, 40, 40))),
+        ],
+        shout: "GOOD EVENING, {CITY}.",
+        paras: [
+            "Eleven dead in {zone} since sundown. Police are calling it a quiet night.",
+            "Smog advisory on the Street until further notice. The Heights report clear skies and record bookings.",
+            "After the break: who's buying up the Undercity one flooded block at a time, and why your landlord is smiling.",
+        ],
+        sign: "This hour of NITEWIRE is brought to you by {corp}. Breathe responsibly.",
+        sign_colour: (0, 172, 191),
+    ),
+    Broadcast(
+        id: "block_pa",
+        when: LoadGame,
+        tag: [
+            ("▌", Some((255, 200, 80))),
+            ("{HOME} ", Some((255, 200, 80))),
+            ("RESIDENT ANNOUNCEMENT", None),
+        ],
+        shout: "ATTENTION, {HOME}.",
+        paras: [
+            "Water on floors 12 to 30 is off until further notice. Do not drink from the cooling lines.",
+            "The lift is working. The lift is not safe. Residents use it at their own risk.",
+            "A body was found in the stairwell on 9. If it belongs to you, collect it from the lobby before 06:00.",
+        ],
+        sign: "{city} Housing Authority. You live here now.",
+        sign_colour: (255, 200, 80),
+    ),
+])

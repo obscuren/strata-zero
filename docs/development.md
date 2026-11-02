@@ -10,7 +10,7 @@ crates/citygen       world model + city generator + interiors (no terminal depen
 crates/game          characters, items, abilities, the build rules (no terminal dependencies)
 crates/sim           the living city: people, places, paths and the world's minute
 crates/strata-zero   the game: ratatui app, screens, renderer, walking and jacking in, the `gen` CLI
-flavor/              names.ron (names, handles, signage glyphs) · style.ron (palettes, glyph sets) · content.ron (game content) · people.ron (professions and their lines)
+flavor/              names.ron (names, handles, signage glyphs) · style.ron (palettes, glyph sets) · content.ron (game content) · people.ron (professions and their lines) · broadcasts.ron (what the city says as you drop in)
 docs/superpowers/specs   design specs
 docs/superpowers/plans   implementation plans
 ```

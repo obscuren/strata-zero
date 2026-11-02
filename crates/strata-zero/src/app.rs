@@ -159,6 +159,8 @@ pub struct AppState {
     pub flavor: crate::jobs::Flavor,
     /// The story missions' book.
     pub book: crate::missions::Book,
+    /// What the city says as you drop in.
+    pub broadcasts: crate::broadcasts::Broadcasts,
     /// The story this session: the cast, where each mission stands, its bodies and the
     /// HOLO's queue; cleared with the city.
     pub missions: crate::missions::Missions,
@@ -309,6 +311,7 @@ impl AppState {
             jobs: Default::default(),
             flavor: crate::jobs::Flavor::load().expect("the jobs pack is valid"),
             book: crate::missions::Book::load().expect("the missions pack is valid"),
+            broadcasts: crate::broadcasts::Broadcasts::load().expect("the broadcasts are valid"),
             missions: Default::default(),
             track: None,
             atlas: Default::default(),
