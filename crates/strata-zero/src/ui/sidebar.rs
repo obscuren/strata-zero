@@ -21,7 +21,7 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 pub const MINIMAP_H: u16 = 13;
 const LOG_MIN: u16 = 3;
-/// The fewest rows MAP keeps (separator, a squeezed minimap, the coordinate row).
+/// The fewest rows MAP keeps (separator, a squeezed minimap, its bottom row).
 const MAP_MIN: u16 = 7;
 const HERE_CAP: u16 = 7;
 /// The rows the job in hand may take; the story's lines come on top of them.

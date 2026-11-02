@@ -148,7 +148,7 @@ megablock's 60 × 60 floor fits at 3 in a full pane and follows you in a squeeze
 - your home `⌂` in the home green (124, 255, 154), bold, at the door of a `Home` room on
   this floor, unless you are in it;
 - the target's marker, when the target is on this floor (§5);
-- you, `@` in white, bold.
+- you, `@` in white (not bold, §2).
 
 **The shaft.** When the building has more than one floor (`lowest < top`), the right 8
 columns of the map are the shaft strip and the plan takes the other 32. A one-floor

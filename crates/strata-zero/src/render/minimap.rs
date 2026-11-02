@@ -8,7 +8,9 @@ use crate::render::mappix::{Pixels, PlanColours, paint, plan_px, stratum_px};
 use crate::render::style::StylePack;
 use crate::track::mini::MapTrack;
 use crate::ui::chrome::{CYAN, CYAN_RGB, DIM, FAINT};
-use citygen::{FloorPlan, Grid, Pos, Rect as TileRect, RoomKind, Size, StratumKind, Terrain, Tile};
+use citygen::{
+    Floor, FloorPlan, Grid, Pos, Rect as TileRect, RoomKind, Size, StratumKind, Terrain, Tile,
+};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -113,20 +115,40 @@ fn plan_scale(size: Size, cols: u16, rows: u16) -> i32 {
 }
 
 /// A plan's first tile along one axis, `span` tiles of view over a plan `len` long:
-/// centred when the plan fits, else round `at` and clamped to the plan, on a grid of
-/// `grid` tiles.
+/// centred when the plan fits, else round `at` (always in view) and clamped to the plan,
+/// on a grid of `grid` tiles.
 fn plan_axis(len: i32, span: i32, at: i32, grid: i32) -> i32 {
     if len <= span {
         return -((span - len) / 2);
     }
-    let o = (at - span / 2).clamp(0, len - span);
-    o - o.rem_euclid(grid)
+    let mut o = at - span / 2;
+    o -= o.rem_euclid(grid);
+    while at >= o + span {
+        o += grid;
+    }
+    let far = len - span;
+    o.clamp(0, far + (grid - far.rem_euclid(grid)) % grid)
+}
+
+/// Which room each tile of a floor is in, as `Floor::room_at` would say: a room before
+/// the corridor or hall it opens off, the first listed of each.
+fn room_index(floor: &Floor) -> Grid<Option<RoomKind>> {
+    let mut out = Grid::filled(floor.tiles.size(), None);
+    let open = |r: &&citygen::Room| matches!(r.kind, RoomKind::Corridor | RoomKind::Hall);
+    let (halls, rooms): (Vec<_>, Vec<_>) = floor.rooms.iter().partition(open);
+    for r in halls.into_iter().rev().chain(rooms.into_iter().rev()) {
+        for p in r.rect.iter() {
+            out.set(p, Some(r.kind));
+        }
+    }
+    out
 }
 
 /// The shaft strip's rows, the top floor first, `None` a gap where floors are skipped:
 /// yours and the one wanted always, then the top, the bottom, the floors next to yours
 /// and to the wanted one, two from yours, then the rest nearest yours, each only while
-/// the strip still fits `rows`.
+/// the strip still fits `rows`. Too few rows even for yours and the wanted one: the gap
+/// rows go, the ends first, then the wanted floor.
 pub fn shaft_rows(
     lowest: i32,
     top: i32,
@@ -159,16 +181,28 @@ pub fn shaft_rows(
     let mut rest: Vec<i32> = (lowest..=top).collect();
     rest.sort_by_key(|l| ((l - you).abs(), -l));
     order.extend(rest);
-    let mut chosen = BTreeSet::new();
-    for l in order {
-        if !(lowest..=top).contains(&l) || !chosen.insert(l) {
-            continue;
-        }
-        if laid(&chosen).len() > rows {
+    let on = |l: &i32| (lowest..=top).contains(l);
+    let mut chosen: BTreeSet<i32> = std::iter::once(you).chain(wanted).filter(on).collect();
+    for l in order.into_iter().filter(on) {
+        if chosen.insert(l) && laid(&chosen).len() > rows {
             chosen.remove(&l);
         }
     }
-    laid(&chosen)
+    let mut out = laid(&chosen);
+    while out.len() > rows {
+        if out.first() == Some(&None) {
+            out.remove(0);
+        } else if out.last() == Some(&None) {
+            out.pop();
+        } else if let Some(i) = out.iter().position(|r| r.is_none()) {
+            out.remove(i);
+        } else if let Some(i) = out.iter().position(|r| *r != Some(you)) {
+            out.remove(i);
+        } else {
+            out.truncate(rows);
+        }
+    }
+    out
 }
 
 /// The walk's pixels taken toward the tracking cyan, once each.
@@ -209,6 +243,8 @@ fn put(
     }
     if bold {
         c.modifier.insert(Modifier::BOLD);
+    } else {
+        c.modifier.remove(Modifier::BOLD);
     }
 }
 
@@ -296,14 +332,7 @@ impl Minimap<'_> {
             width: area.width - if shaft { SHAFT_W } else { 0 },
             ..area
         };
-        let size = floor.tiles.size();
-        let mut rooms: Grid<Option<RoomKind>> = Grid::filled(size, None);
-        for y in 0..size.h as i32 {
-            for x in 0..size.w as i32 {
-                let p = Pos::new(x, y);
-                rooms.set(p, floor.room_at(p).map(|r| r.kind));
-            }
-        }
+        let rooms = room_index(floor);
         let colours = PlanColours::of(self.style.theme_or_neutral(Some(plan.theme)));
         let room = |p: Pos| rooms.get(p).copied().flatten();
         let (px, v) = self.plan(&floor.tiles, room, &colours, plan_area, buf);
@@ -725,6 +754,20 @@ mod tests {
     }
 
     #[test]
+    fn your_at_is_never_bold() {
+        let (c, s) = (city(), StylePack::load().unwrap());
+        let at = street_tile(&c);
+        // The target under you is drawn bold first; you are drawn over it.
+        let track = MapTrack {
+            target: Some((at, '+', CYAN)),
+            ..MapTrack::default()
+        };
+        let buf = draw(&c, &s, at, &track, 40, 13);
+        let you = find(&buf, "@").expect("you");
+        assert!(!buf[you].modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
     fn the_ground_holds_still() {
         for x in 0..12 {
             let o = close_up_origin(Pos::new(100 + x, 50 + x), 40, 12);
@@ -843,6 +886,64 @@ mod tests {
         let all: Vec<_> = (-1..=8).rev().map(f).collect();
         assert_eq!(shaft_rows(-1, 8, 5, Some(0), 12), all);
         assert!(shaft_rows(0, 9, 4, None, 0).is_empty());
+        // Too few rows: the gaps go before your floor or the wanted one does.
+        assert_eq!(shaft_rows(0, 9, 4, None, 2), vec![f(4), gap]);
+        assert_eq!(shaft_rows(0, 9, 4, Some(0), 2), vec![f(4), f(0)]);
+        assert_eq!(shaft_rows(0, 9, 4, Some(0), 1), vec![f(4)]);
+        assert_eq!(shaft_rows(0, 9, 4, Some(7), 3), vec![f(7), gap, f(4)]);
+    }
+
+    #[test]
+    fn plan_axis_keeps_you_in_view() {
+        // A floor 33 tiles tall in a squeezed pane (5 rows at 3) and in one row; across.
+        for (len, span, grid) in [
+            (99, 30, 6),
+            (99, 6, 6),
+            (60, 30, 6),
+            (90, 96, 3),
+            (90, 60, 3),
+        ] {
+            for at in 0..len {
+                let o = plan_axis(len, span, at, grid);
+                assert!(
+                    o <= at && at < o + span,
+                    "{len} {span} {grid}: {at} from {o}"
+                );
+                if len > span {
+                    assert_eq!(o.rem_euclid(grid), 0, "on the grid");
+                    assert!(o >= 0 && o < len, "on the floor");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn room_index_agrees_with_room_at() {
+        let (mut st, _) = crate::screens::shots::tracked_city();
+        let city = st.city.clone().unwrap();
+        let mut floors = 0;
+        for b in city
+            .buildings
+            .iter()
+            .filter(|b| b.kind.is_closed())
+            .take(40)
+        {
+            let Some(floor) = st.interiors.ensure(&city, b.id, 0) else {
+                continue;
+            };
+            let index = room_index(floor);
+            for (p, _) in floor.tiles.iter() {
+                let want = floor.room_at(p).map(|r| r.kind);
+                assert_eq!(
+                    index.get(p).copied().flatten(),
+                    want,
+                    "{:?} at {p:?}",
+                    b.kind
+                );
+            }
+            floors += 1;
+        }
+        assert!(floors > 10, "{floors} floors");
     }
 
     #[test]
@@ -1014,6 +1115,22 @@ mod tests {
             let bottom = text(&buf, 12, 0..40);
             assert!(bottom.starts_with(&format!(" {name}  ")), "{bottom:?}");
         }
+    }
+
+    #[test]
+    fn the_lift_wins_a_shared_cell_unless_you_take_the_stairs() {
+        let (mut st, _) = crate::screens::shots::tracked_from_the_flat();
+        // At 11 rows the flat's lift and stairs fall in one cell.
+        let (v, plan, _) = flat_view(&st, 11);
+        let cell = v.cell_of(plan.stair).unwrap();
+        assert_eq!(v.cell_of(plan.lift.unwrap()), Some(cell));
+        assert_eq!(inside(&st, 40, 12)[cell].symbol(), "⇅");
+        let now = st.net.now(&st);
+        st.net.trace(plan.building).add(game::ALARM_HEAT, now);
+        st.net.alarm(plan.building, now);
+        let source = st.track.as_ref().unwrap().source;
+        crate::track::set(&mut st, source).unwrap();
+        assert_eq!(inside(&st, 40, 12)[cell].symbol(), "≡");
     }
 
     #[test]
