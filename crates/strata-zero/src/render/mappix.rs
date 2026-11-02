@@ -2,8 +2,9 @@
 //! colour from the tiles it covers, and pixels painted two to a cell.
 
 use crate::render::Rgb;
-use crate::render::style::StylePack;
-use citygen::{City, DistrictId, Pos, StratumKind, Terrain, Tile};
+use crate::render::style::{StylePack, ThemeStyle};
+use crate::ui::chrome::PANEL_BG_RGB;
+use citygen::{City, DistrictId, Grid, Pos, RoomKind, StratumKind, Terrain, Tile};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
@@ -102,6 +103,100 @@ pub fn stratum_px(
         (Class::Building, Some(t)) => t.roof,
         (Class::Road, Some(t)) => t.road.scale(1.9),
         (Class::Walk, Some(t)) => t.sidewalk.scale(1.15),
+    })
+}
+
+/// What a floor's or a construct's plan is drawn in, from its building's district theme.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlanColours {
+    pub wall: Rgb,
+    /// Floor in no room, or in a corridor.
+    pub corridor: Rgb,
+    pub room: Rgb,
+    pub open_plan: Rgb,
+    /// Your flat.
+    pub home: Rgb,
+    /// An atrium's railing.
+    pub rail: Rgb,
+    /// The atrium's drop.
+    pub pit: Rgb,
+}
+
+impl PlanColours {
+    pub fn of(t: &ThemeStyle) -> PlanColours {
+        let room = t.roof.scale(1.1);
+        PlanColours {
+            wall: PANEL_BG_RGB.mix(t.roof, 0.3),
+            corridor: t.road.scale(2.1),
+            room,
+            open_plan: t.roof.scale(1.25),
+            home: room.mix(Rgb(124, 255, 154), 0.22),
+            rail: t.roof.mix(Rgb(230, 230, 240), 0.25),
+            pit: Rgb(5, 7, 11),
+        }
+    }
+}
+
+/// The colour of the `s` × `s` pixel at tile (`x0`, `y0`) of a plan: a railing, the
+/// drop, a wall (a wall a tile thick always shows), else the room most of its floor lies
+/// in; none where the plan has no tile. `room` says which room a tile is in.
+pub fn plan_px(
+    tiles: &Grid<Tile>,
+    room: impl Fn(Pos) -> Option<RoomKind>,
+    c: &PlanColours,
+    x0: i32,
+    y0: i32,
+    s: i32,
+) -> Option<Rgb> {
+    let (mut n, mut wall, mut pit, mut rail) = (0, 0, 0, false);
+    // The rooms the floor meets, and how often; `None` is no room.
+    let mut rooms: Vec<(Option<RoomKind>, u32)> = Vec::new();
+    for y in y0..y0 + s {
+        for x in x0..x0 + s {
+            let p = Pos::new(x, y);
+            let Some(t) = tiles.get(p).filter(|t| t.terrain != Terrain::Void) else {
+                continue;
+            };
+            n += 1;
+            match t.terrain {
+                Terrain::Railing => rail = true,
+                Terrain::Atrium => pit += 1,
+                _ if ground(t) => {
+                    let r = room(p);
+                    match rooms.iter_mut().find(|(k, _)| *k == r) {
+                        Some(e) => e.1 += 1,
+                        None => rooms.push((r, 1)),
+                    }
+                }
+                _ => wall += 1,
+            }
+        }
+    }
+    if n == 0 {
+        return None;
+    }
+    if rail {
+        return Some(c.rail);
+    }
+    if pit * 2 >= n {
+        return Some(c.pit);
+    }
+    // The commonest, the first met on a tie.
+    let most = rooms.iter().fold(
+        None,
+        |best: Option<(Option<RoomKind>, u32)>, e| match best {
+            Some(b) if b.1 >= e.1 => Some(b),
+            _ => Some(*e),
+        },
+    );
+    let Some((kind, _)) = most.filter(|_| wall * s < n) else {
+        return Some(c.wall);
+    };
+    Some(match kind {
+        None | Some(RoomKind::Corridor) => c.corridor,
+        Some(RoomKind::OpenPlan) => c.open_plan,
+        Some(RoomKind::Home) => c.home,
+        Some(_) => c.room,
     })
 }
 
@@ -214,6 +309,39 @@ mod tests {
                 Some(theme(wall).roof)
             );
         }
+    }
+
+    #[test]
+    fn plan_classes() {
+        use citygen::Size;
+        let style = StylePack::load().unwrap();
+        let c = PlanColours::of(style.theme_or_neutral(None));
+        let mut tiles = Grid::filled(Size { w: 12, h: 12 }, Tile::new(Terrain::Floor));
+        // A wall a tile thick down column 5, a drop at 8..10 × 0..2, a railing at 11, 11.
+        for y in 0..12 {
+            tiles.set(Pos::new(5, y), Tile::new(Terrain::Wall));
+        }
+        for (x, y) in [(8, 0), (9, 0), (8, 1), (9, 1)] {
+            tiles.set(Pos::new(x, y), Tile::new(Terrain::Atrium));
+        }
+        tiles.set(Pos::new(11, 11), Tile::new(Terrain::Railing));
+        let home = |p: Pos| (p.y >= 6 && p.x < 5).then_some(RoomKind::Home);
+        let px = |x, y, s| plan_px(&tiles, home, &c, x, y, s);
+        assert_eq!(px(4, 0, 2), Some(c.wall), "a thin wall shows at 2");
+        assert_eq!(px(3, 0, 3), Some(c.wall), "and at 3");
+        assert_eq!(px(0, 0, 2), Some(c.corridor), "floor in no room");
+        assert_eq!(px(0, 6, 2), Some(c.home));
+        assert_eq!(px(8, 0, 2), Some(c.pit));
+        assert_eq!(px(10, 10, 2), Some(c.rail), "any railing wins");
+        assert_eq!(px(12, 0, 2), None, "off the plan");
+        assert_eq!(
+            plan_px(&tiles, |_| Some(RoomKind::OpenPlan), &c, 0, 0, 2),
+            Some(c.open_plan)
+        );
+        assert_eq!(
+            plan_px(&tiles, |_| Some(RoomKind::Office), &c, 0, 0, 2),
+            Some(c.room)
+        );
     }
 
     #[test]

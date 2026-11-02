@@ -768,7 +768,10 @@ mod tests {
             .and_then(|t| t.district)
             .map(|d| city.district(d).name.clone())
             .expect("a district under you");
-        assert!(text.contains(&format!(" {d}")), "the minimap's bottom row: {text}");
+        assert!(
+            text.contains(&format!(" {d}")),
+            "the minimap's bottom row: {text}"
+        );
         assert_eq!(width(100), 40);
         assert_eq!(width(120), 40);
     }

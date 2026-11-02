@@ -3,18 +3,18 @@
 //! track goes. Spec `docs/superpowers/specs/2026-11-02-minimap-design.md`.
 
 use crate::render::Rgb;
-use crate::render::map::{MapRef, StratumMap};
-use crate::render::mappix::{Pixels, paint, stratum_px};
+use crate::render::map::{ConstructMap, FloorMap, MapRef, StratumMap, TileMap};
+use crate::render::mappix::{Pixels, PlanColours, paint, plan_px, stratum_px};
 use crate::render::style::StylePack;
 use crate::track::mini::MapTrack;
-use crate::ui::chrome::{CYAN_RGB, DIM};
-use citygen::{Pos, Rect as TileRect, StratumKind};
+use crate::ui::chrome::{CYAN, CYAN_RGB, DIM, FAINT};
+use citygen::{FloorPlan, Grid, Pos, Rect as TileRect, RoomKind, Size, StratumKind, Terrain, Tile};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use ratatui::widgets::Widget;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 /// Tiles a pixel in the close up.
 const CLOSE: i32 = 3;
@@ -22,6 +22,11 @@ const CORNER: Color = Color::Rgb(230, 230, 240);
 const YOU: Color = Color::Rgb(255, 255, 255);
 /// How far the walk's pixels go toward the tracking cyan.
 const WALK: f32 = 0.75;
+/// The shaft strip's columns: a rule, a floor's name in four, a space, its mark, a space.
+const SHAFT_W: u16 = 8;
+/// Your floor's row in the strip.
+const SEL: Color = Color::Rgb(20, 32, 44);
+const HOME: Color = Color::Rgb(124, 255, 154);
 
 pub struct Minimap<'a> {
     pub map: &'a MapRef<'a>,
@@ -98,6 +103,72 @@ fn close_up_origin(centre: Pos, cols: u16, rows: u16) -> Pos {
     let x = centre.x - cols as i32 * CLOSE / 2;
     let y = centre.y - rows as i32 * CLOSE;
     Pos::new(x - x.rem_euclid(CLOSE), y - y.rem_euclid(2 * CLOSE))
+}
+
+/// The plan's tiles a pixel: 2 when the whole plan fits `cols` × `rows` cells at 2,
+/// else 3.
+fn plan_scale(size: Size, cols: u16, rows: u16) -> i32 {
+    let fits = size.w as i32 <= 2 * cols as i32 && size.h as i32 <= 4 * rows as i32;
+    if fits { 2 } else { 3 }
+}
+
+/// A plan's first tile along one axis, `span` tiles of view over a plan `len` long:
+/// centred when the plan fits, else round `at` and clamped to the plan, on a grid of
+/// `grid` tiles.
+fn plan_axis(len: i32, span: i32, at: i32, grid: i32) -> i32 {
+    if len <= span {
+        return -((span - len) / 2);
+    }
+    let o = (at - span / 2).clamp(0, len - span);
+    o - o.rem_euclid(grid)
+}
+
+/// The shaft strip's rows, the top floor first, `None` a gap where floors are skipped:
+/// yours and the one wanted always, then the top, the bottom, the floors next to yours
+/// and to the wanted one, two from yours, then the rest nearest yours, each only while
+/// the strip still fits `rows`.
+pub fn shaft_rows(
+    lowest: i32,
+    top: i32,
+    you: i32,
+    wanted: Option<i32>,
+    rows: usize,
+) -> Vec<Option<i32>> {
+    let laid = |chosen: &BTreeSet<i32>| {
+        let mut out = Vec::new();
+        let mut above: Option<i32> = None;
+        for &l in chosen.iter().rev() {
+            if above.map_or(l < top, |a| a - l > 1) {
+                out.push(None);
+            }
+            out.push(Some(l));
+            above = Some(l);
+        }
+        if above.is_some_and(|l| l > lowest) {
+            out.push(None);
+        }
+        out
+    };
+    let mut order = vec![you];
+    order.extend(wanted);
+    order.extend([top, lowest, you + 1, you - 1]);
+    if let Some(w) = wanted {
+        order.extend([w + 1, w - 1]);
+    }
+    order.extend([you + 2, you - 2]);
+    let mut rest: Vec<i32> = (lowest..=top).collect();
+    rest.sort_by_key(|l| ((l - you).abs(), -l));
+    order.extend(rest);
+    let mut chosen = BTreeSet::new();
+    for l in order {
+        if !(lowest..=top).contains(&l) || !chosen.insert(l) {
+            continue;
+        }
+        if laid(&chosen).len() > rows {
+            chosen.remove(&l);
+        }
+    }
+    laid(&chosen)
 }
 
 /// The walk's pixels taken toward the tracking cyan, once each.
@@ -180,6 +251,149 @@ impl Minimap<'_> {
                 mark(buf, &px, &v, t, ch, CORNER, false);
             }
         }
+        self.marks(buf, &px, &v);
+    }
+
+    /// A plan in `area`: the whole of it at 2 or 3 tiles a pixel, or round you when it
+    /// is too big, and the walk on it. Returns the pixels and where they lie, for the
+    /// marks.
+    fn plan(
+        &self,
+        tiles: &Grid<Tile>,
+        room: impl Fn(Pos) -> Option<RoomKind>,
+        colours: &PlanColours,
+        area: Rect,
+        buf: &mut Buffer,
+    ) -> (Pixels, View) {
+        let size = tiles.size();
+        let s = plan_scale(size, area.width, area.height);
+        let at = self.focus();
+        let v = View {
+            area,
+            s,
+            origin: Pos::new(
+                plan_axis(size.w as i32, area.width as i32 * s, at.x, s),
+                plan_axis(size.h as i32, area.height as i32 * 2 * s, at.y, 2 * s),
+            ),
+        };
+        let ground = self.ground();
+        let mut px = Pixels::new(area.width as i32, 2 * area.height as i32, |x, y| {
+            let (x0, y0) = (v.origin.x + x * s, v.origin.y + y * s);
+            plan_px(tiles, &room, colours, x0, y0, s).unwrap_or(ground)
+        });
+        glow_walk(&mut px, &v, self.track.walk);
+        paint(buf, area, &px);
+        (px, v)
+    }
+
+    /// The floor you are on: its plan, the stairs, the lift, your home's door, the
+    /// target and you; the building's floors in a strip at the right when it has more
+    /// than one.
+    fn floor_plan(&self, m: &FloorMap, area: Rect, buf: &mut Buffer) {
+        let (plan, floor) = (m.plan, m.floor);
+        let shaft = plan.lowest < plan.top && area.width > 2 * SHAFT_W;
+        let plan_area = Rect {
+            width: area.width - if shaft { SHAFT_W } else { 0 },
+            ..area
+        };
+        let size = floor.tiles.size();
+        let mut rooms: Grid<Option<RoomKind>> = Grid::filled(size, None);
+        for y in 0..size.h as i32 {
+            for x in 0..size.w as i32 {
+                let p = Pos::new(x, y);
+                rooms.set(p, floor.room_at(p).map(|r| r.kind));
+            }
+        }
+        let colours = PlanColours::of(self.style.theme_or_neutral(Some(plan.theme)));
+        let room = |p: Pos| rooms.get(p).copied().flatten();
+        let (px, v) = self.plan(&floor.tiles, room, &colours, plan_area, buf);
+        if floor
+            .tiles
+            .get(plan.stair)
+            .is_some_and(|t| t.terrain == Terrain::Stair)
+        {
+            mark(buf, &px, &v, plan.stair, '≡', DIM, false);
+        }
+        if let Some(lift) = plan.lift {
+            mark(buf, &px, &v, lift, '⇅', CORNER, false);
+        }
+        for r in floor.rooms.iter().filter(|r| r.kind == RoomKind::Home) {
+            let inside = self.player.is_some_and(|p| r.rect.contains(p));
+            if let (Some(door), false) = (r.door, inside) {
+                mark(buf, &px, &v, door, '⌂', HOME, true);
+            }
+        }
+        self.marks(buf, &px, &v);
+        if shaft {
+            let strip = Rect {
+                x: area.right() - SHAFT_W,
+                width: SHAFT_W,
+                ..area
+            };
+            self.shaft(plan, floor.level, strip, buf);
+        }
+    }
+
+    /// The building's floors, like a lift panel: yours on the selection ground, the one
+    /// the track wants `⌖` in cyan, the shaft between them lit.
+    fn shaft(&self, plan: &FloorPlan, level: i32, area: Rect, buf: &mut Buffer) {
+        let wanted = self.track.wanted.filter(|w| *w != level);
+        let rows = shaft_rows(plan.lowest, plan.top, level, wanted, area.height as usize);
+        for y in area.y..area.bottom() {
+            buf[(area.x, y)].set_char('│').set_fg(FAINT);
+        }
+        let at = |l: i32| rows.iter().position(|r| *r == Some(l));
+        let lit = match (at(level), wanted.and_then(at)) {
+            (Some(a), Some(b)) => Some((a.min(b), a.max(b))),
+            _ => None,
+        };
+        let top = area.y + (area.height - rows.len() as u16) / 2;
+        let (name_x, mark_x) = (area.x + 1, area.x + 6);
+        let shaft_lit = Style::default().fg(CYAN).add_modifier(Modifier::BOLD);
+        for (i, r) in rows.iter().enumerate() {
+            let y = top + i as u16;
+            let between = lit.is_some_and(|(a, b)| a < i && i < b);
+            let name = |l: i32| format!("{:>4}", FloorPlan::label(l));
+            match *r {
+                None => {
+                    buf[(area.x + 4, y)].set_char('┊').set_fg(FAINT);
+                    if between {
+                        buf[(mark_x, y)].set_char('┃').set_style(shaft_lit);
+                    }
+                }
+                Some(l) if l == level => {
+                    for x in name_x..area.right() {
+                        buf[(x, y)].set_bg(SEL);
+                    }
+                    let bold = Style::default()
+                        .fg(YOU)
+                        .bg(SEL)
+                        .add_modifier(Modifier::BOLD);
+                    buf.set_string(name_x, y, name(l), bold);
+                    buf[(mark_x, y)].set_char('@').set_fg(YOU);
+                }
+                Some(l) if Some(l) == wanted => {
+                    buf.set_string(name_x, y, name(l), shaft_lit);
+                    buf[(mark_x, y)].set_char('⌖').set_style(shaft_lit);
+                }
+                Some(l) => {
+                    buf.set_string(name_x, y, name(l), Style::default().fg(DIM));
+                    if between {
+                        buf[(mark_x, y)].set_char('┃').set_style(shaft_lit);
+                    } else {
+                        buf[(mark_x, y)].set_char('│').set_fg(FAINT);
+                    }
+                }
+            }
+        }
+    }
+
+    /// A construct: its plan, walls and floor, in its building's colours; the target
+    /// and you.
+    fn construct_plan(&self, m: &ConstructMap, area: Rect, buf: &mut Buffer) {
+        let theme = m.theme(m.construct.entry);
+        let colours = PlanColours::of(self.style.theme_or_neutral(theme));
+        let (px, v) = self.plan(&m.construct.tiles, |_| None, &colours, area, buf);
         self.marks(buf, &px, &v);
     }
 
@@ -311,8 +525,10 @@ impl Widget for Minimap<'_> {
                 buf[(x, y)].set_char(' ').set_bg(ground);
             }
         }
-        if let MapRef::Stratum(m) = self.map {
-            self.close_up(m, map, buf);
+        match self.map {
+            MapRef::Stratum(m) => self.close_up(m, map, buf),
+            MapRef::Floor(m) => self.floor_plan(m, map, buf),
+            MapRef::Construct(m) => self.construct_plan(m, map, buf),
         }
         self.bottom_row(row, buf);
     }
@@ -539,5 +755,259 @@ mod tests {
             text.contains('…') || d.name.chars().count() <= 3,
             "{text:?}"
         );
+    }
+
+    /// The minimap of the place you are in, as the sidebar hands it over.
+    fn inside(st: &crate::app::AppState, w: u16, h: u16) -> Buffer {
+        let p = st.player.as_ref().unwrap();
+        let city = st.city.as_ref().unwrap();
+        let map = MapRef::for_place(
+            city,
+            &st.interiors,
+            &st.constructs,
+            p.place,
+            st.minute_of_day(),
+        )
+        .expect("a map of where you are");
+        let track = crate::track::mini::map_track(st, p.place);
+        let mut buf = Buffer::empty(Rect::new(0, 0, w, h));
+        Minimap {
+            map: &map,
+            view: TileRect::new(p.pos.x - 10, p.pos.y - 5, 20, 10),
+            player: Some(p.pos),
+            style: &st.style,
+            track: &track,
+        }
+        .render(Rect::new(0, 0, w, h), &mut buf);
+        buf
+    }
+
+    fn text(buf: &Buffer, y: u16, xs: std::ops::Range<u16>) -> String {
+        xs.map(|x| buf[(x, y)].symbol()).collect()
+    }
+
+    /// Your flat's floor, its plan, and the View a 32 × `rows` plan area draws it in.
+    fn flat_view(st: &crate::app::AppState, rows: u16) -> (View, FloorPlan, i32) {
+        let p = st.player.as_ref().unwrap();
+        let citygen::Place::Floor { building, level } = p.place else {
+            panic!("not inside");
+        };
+        let (plan, floor) = st.interiors.floor(building, level).unwrap();
+        let size = floor.tiles.size();
+        let s = plan_scale(size, 32, rows);
+        let v = View {
+            area: Rect::new(0, 0, 32, rows),
+            s,
+            origin: Pos::new(
+                plan_axis(size.w as i32, 32 * s, p.pos.x, s),
+                plan_axis(size.h as i32, rows as i32 * 2 * s, p.pos.y, 2 * s),
+            ),
+        };
+        (v, plan.clone(), level)
+    }
+
+    #[test]
+    fn shaft_rows_choose() {
+        let gap = None;
+        let f = |l: i32| Some(l);
+        assert_eq!(
+            shaft_rows(-1, 27, 18, Some(0), 12),
+            vec![
+                f(27),
+                gap,
+                f(21),
+                f(20),
+                f(19),
+                f(18),
+                f(17),
+                f(16),
+                gap,
+                f(1),
+                f(0),
+                f(-1)
+            ]
+        );
+        assert_eq!(
+            shaft_rows(-1, 27, 18, Some(0), 5),
+            vec![gap, f(18), gap, f(0), f(-1)]
+        );
+        assert_eq!(shaft_rows(0, 3, 2, None, 12), vec![f(3), f(2), f(1), f(0)]);
+        assert_eq!(shaft_rows(-2, 0, 0, Some(-2), 12), vec![f(0), f(-1), f(-2)]);
+        assert_eq!(shaft_rows(0, 40, 20, None, 3), vec![gap, f(20), gap]);
+        // A building that fits shows every floor.
+        let all: Vec<_> = (-1..=8).rev().map(f).collect();
+        assert_eq!(shaft_rows(-1, 8, 5, Some(0), 12), all);
+        assert!(shaft_rows(0, 9, 4, None, 0).is_empty());
+    }
+
+    #[test]
+    fn the_flat_is_drawn_whole() {
+        let (st, _) = crate::screens::shots::tracked_from_the_flat();
+        let buf = inside(&st, 40, 13);
+        let (v, plan, _) = flat_view(&st, 12);
+        assert_eq!(v.s, 3, "a megablock's floor is drawn at 3");
+        let (_, floor) = st
+            .interiors
+            .floor(plan.building, plan.home_level.unwrap())
+            .unwrap();
+        let size = floor.tiles.size();
+        for corner in [
+            Pos::new(0, 0),
+            Pos::new(size.w as i32 - 1, size.h as i32 - 1),
+        ] {
+            assert!(v.cell_of(corner).is_some(), "the whole floor shows");
+        }
+        let lift = v.cell_of(plan.lift.unwrap()).unwrap();
+        assert_eq!(buf[lift].symbol(), "⇅");
+        let stair = v.cell_of(plan.stair).unwrap();
+        assert_eq!(buf[stair].symbol(), "≡");
+        let you = v.cell_of(st.player.as_ref().unwrap().pos).unwrap();
+        assert_eq!(buf[you].symbol(), "@");
+        // The walk to the lift is drawn in cyan.
+        let track = crate::track::mini::map_track(&st, st.player.as_ref().unwrap().place);
+        let step = track.walk[track.walk.len() / 2];
+        let (x, y) = v.pixel_of(step);
+        let cell = &buf[(x as u16, (y / 2) as u16)];
+        let c = if y % 2 == 0 && cell.symbol() == "▀" {
+            cell.fg
+        } else {
+            cell.bg
+        };
+        let Color::Rgb(r, g, b) = c else {
+            panic!("{c:?}")
+        };
+        assert!(r < 100 && g > 150 && b > 150, "the walk at {step:?}: {c:?}");
+    }
+
+    #[test]
+    fn the_shaft_lights_the_way() {
+        let (st, _) = crate::screens::shots::tracked_from_the_flat();
+        let buf = inside(&st, 40, 13);
+        let (_, plan, level) = flat_view(&st, 12);
+        let rows = shaft_rows(plan.lowest, plan.top, level, Some(0), 12);
+        let top = (12 - rows.len() as u16) / 2;
+        for y in 0..12 {
+            assert_eq!(buf[(32, y)].symbol(), "│", "the strip's rule");
+        }
+        let row_of = |l: i32| top + rows.iter().position(|r| *r == Some(l)).unwrap() as u16;
+        let (you, lobby) = (row_of(level), row_of(0));
+        assert_eq!(
+            text(&buf, you, 33..37),
+            format!("{:>4}", FloorPlan::label(level))
+        );
+        assert_eq!(buf[(33, you)].bg, SEL);
+        assert!(buf[(36, you)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buf[(38, you)].symbol(), "@");
+        assert_eq!(text(&buf, lobby, 33..37), "   L");
+        assert_eq!(buf[(36, lobby)].fg, CYAN);
+        assert_eq!(buf[(38, lobby)].symbol(), "⌖");
+        for y in you + 1..lobby {
+            assert_eq!(buf[(38, y)].symbol(), "┃", "row {y}");
+            assert_eq!(buf[(38, y)].fg, CYAN);
+        }
+        // Above you, the shaft is dark.
+        assert_ne!(buf[(38, you - 1)].symbol(), "┃");
+    }
+
+    #[test]
+    fn a_big_floor_follows_you() {
+        let (st, _) = crate::screens::shots::tracked_from_the_flat();
+        let buf = inside(&st, 40, 6);
+        let (v, ..) = flat_view(&st, 5);
+        assert_eq!(v.s, 3);
+        let you = v
+            .cell_of(st.player.as_ref().unwrap().pos)
+            .expect("you are in view");
+        assert!(you.0 < 32 && you.1 < 5);
+        assert_eq!(buf[you].symbol(), "@");
+        assert_eq!(buf[(32, 0)].symbol(), "│", "the strip still shows");
+    }
+
+    #[test]
+    fn one_floor_no_shaft() {
+        let (mut st, _) = crate::screens::shots::tracked_city();
+        let city = st.city.clone().unwrap();
+        let b = city
+            .buildings
+            .iter()
+            .filter(|b| b.kind.is_closed())
+            .find(|b| {
+                st.interiors.ensure(&city, b.id, 0).is_some()
+                    && st
+                        .interiors
+                        .plan_of(b.id)
+                        .is_some_and(|p| p.lowest == p.top)
+            })
+            .expect("a one-floor building")
+            .id;
+        let (_, floor) = st.interiors.floor(b, 0).unwrap();
+        let size = floor.tiles.size();
+        let at = (0..size.h as i32)
+            .flat_map(|y| (0..size.w as i32).map(move |x| Pos::new(x, y)))
+            .find(|p| floor.tiles.get(*p).is_some_and(|t| t.is_walkable()))
+            .unwrap();
+        let p = st.player.as_mut().unwrap();
+        p.place = citygen::Place::Floor {
+            building: b,
+            level: 0,
+        };
+        p.pos = at;
+        let buf = inside(&st, 40, 13);
+        assert!((0..12).all(|y| buf[(32, y)].symbol() != "│"), "no strip");
+        assert_eq!(find(&buf, "@").map(|c| c.0 < 40), Some(true));
+        let bottom = text(&buf, 12, 0..40);
+        assert!(bottom.starts_with(" L"), "{bottom:?}");
+    }
+
+    #[test]
+    fn a_construct_draws() {
+        let (mut st, _) = crate::screens::shots::tracked_city();
+        let city = st.city.clone().unwrap();
+        let (b, entry) = city
+            .buildings
+            .iter()
+            .find_map(|b| st.constructs.ensure(&city, b.id).map(|k| (b.id, k.entry)))
+            .expect("a construct");
+        let p = st.player.as_mut().unwrap();
+        p.place = citygen::Place::Construct(b);
+        p.pos = entry;
+        let buf = inside(&st, 40, 13);
+        assert!(find(&buf, "@").is_some());
+        assert!(text(&buf, 12, 0..40).starts_with(" construct"));
+        // Walls and floor both show.
+        let colours: HashSet<Color> = (0..12)
+            .flat_map(|y| (0..40).map(move |x| (x, y)))
+            .map(|at| buf[at].bg)
+            .collect();
+        assert!(colours.len() >= 3, "{colours:?}");
+    }
+
+    #[test]
+    fn the_bottom_row_indoors() {
+        let (mut st, _) = crate::screens::shots::tracked_from_the_flat();
+        let (_, plan, level) = flat_view(&st, 12);
+        let name = FloorPlan::label(level);
+        let buf = inside(&st, 40, 13);
+        let bottom = text(&buf, 12, 0..40);
+        let (_, floor) = st.interiors.floor(plan.building, level).unwrap();
+        let room = floor.room_at(st.player.as_ref().unwrap().pos).unwrap();
+        let want = format!(" {name} · {} {}", room.kind.label(), room.number);
+        assert!(bottom.starts_with(&want), "{bottom:?}");
+        assert!(bottom.ends_with("⌖ lift to L "), "{bottom:?}");
+        assert!(buf[(1, 12)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buf[(1, 12)].fg, YOU);
+        // In no room, the floor's name alone.
+        let size = floor.tiles.size();
+        let bare = (0..size.h as i32)
+            .flat_map(|y| (0..size.w as i32).map(move |x| Pos::new(x, y)))
+            .find(|p| {
+                floor.tiles.get(*p).is_some_and(|t| t.is_walkable()) && floor.room_at(*p).is_none()
+            });
+        if let Some(at) = bare {
+            st.player.as_mut().unwrap().pos = at;
+            let buf = inside(&st, 40, 13);
+            let bottom = text(&buf, 12, 0..40);
+            assert!(bottom.starts_with(&format!(" {name}  ")), "{bottom:?}");
+        }
     }
 }

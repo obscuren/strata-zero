@@ -352,12 +352,12 @@ pub fn target_now(st: &AppState) -> Option<Target> {
     st.track.as_ref().map(|t| t.walk.target)
 }
 
-/// The floor of building `b` the track wants you on: where its lift leg rides to, else
-/// the target's own floor when it lies in `b`; none untracked or elsewhere.
+/// The floor of building `b` the track wants you on: where its lift or stairs leg goes,
+/// else the target's own floor when it lies in `b`; none untracked or elsewhere.
 pub fn floor_wanted(st: &AppState, b: BuildingId) -> Option<i32> {
     if let Some(Ok(leg)) = leg_now(st)
-        && let (Place::Floor { building, .. }, route::Through::Lift(level)) =
-            (leg.place, leg.through)
+        && let Place::Floor { building, .. } = leg.place
+        && let route::Through::Lift(level) | route::Through::Stairs { to: level, .. } = leg.through
         && building == b
     {
         return Some(level);
