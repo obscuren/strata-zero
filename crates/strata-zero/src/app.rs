@@ -139,6 +139,11 @@ pub struct AppState {
     pub deck_part: usize,
     /// The character being built, between the chooser and JACK IN.
     pub build: Option<game::Build>,
+    /// The run is played for one life. Carried through the game; nothing reads it yet.
+    pub perma_death: bool,
+    /// The player turned the tutorial off. Carried through the game; nothing reads it
+    /// yet.
+    pub tutorial_off: bool,
     /// What happened, newest last.
     pub log: MessageLog,
     /// Which sidebar sections are on.
@@ -294,6 +299,8 @@ impl AppState {
             deck_talents: Default::default(),
             deck_part: 0,
             build: None,
+            perma_death: true,
+            tutorial_off: false,
             log: MessageLog::default(),
             sidebar: Sidebar::default(),
             home: None,
@@ -677,6 +684,13 @@ mod tests {
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+
+    #[test]
+    fn the_run_starts_with_perma_death_and_the_tutorial() {
+        let st = AppState::new();
+        assert!(st.perma_death);
+        assert!(!st.tutorial_off);
+    }
 
     fn text(t: &Terminal<TestBackend>) -> String {
         let b = t.backend().buffer();

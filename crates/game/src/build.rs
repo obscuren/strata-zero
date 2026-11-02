@@ -135,6 +135,8 @@ pub struct Build {
     /// Pool totals when they are not the creation defaults: a played character's
     /// spent points plus what it still holds.
     pub pools: Option<(u32, u32)>,
+    /// One life: picked on NAME, on unless turned off.
+    pub perma_death: bool,
 }
 
 const NAME_MARKS: &str = "-_.' ";
@@ -159,6 +161,7 @@ impl Build {
             kit: Vec::new(),
             template: None,
             pools: None,
+            perma_death: true,
         }
     }
 
@@ -444,6 +447,13 @@ mod tests {
 
     fn vex(c: &Content) -> Build {
         Build::from_template(c, c.template(&TemplateId::new("vex")).unwrap())
+    }
+
+    #[test]
+    fn perma_death_starts_on() {
+        let c = Content::load().unwrap();
+        assert!(Build::blank(&c).perma_death);
+        assert!(vex(&c).perma_death);
     }
 
     #[test]
