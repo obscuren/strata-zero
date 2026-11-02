@@ -323,6 +323,19 @@ pub fn tab_for<'a>(st: &'a AppState, item: &ItemId) -> Option<&'a Tab> {
         .filter(|t| !t.spent && &t.item == item && st.chair.is_some_and(|c| c.doc == t.doc))
 }
 
+/// The tab dev free chrome spends on this piece: in a chair, the one `tab_for` finds;
+/// in none, the unspent tab on that piece.
+pub fn free_tab_for<'a>(st: &'a AppState, item: &ItemId) -> Option<&'a Tab> {
+    match st.chair {
+        Some(_) => tab_for(st, item),
+        None => st
+            .missions
+            .tab
+            .as_ref()
+            .filter(|t| !t.spent && &t.item == item),
+    }
+}
+
 /// Reports an event: every mission waiting on it moves on.
 pub fn send(st: &mut AppState, ev: Event) {
     fire(st, Some(&ev));
@@ -2155,6 +2168,54 @@ pub(crate) mod tests {
         assert_eq!(st.missions.runs[0].at, 1, "another doc's tab");
         // Hers, spent, and you up: chromed.
         st.missions.tab.as_mut().unwrap().doc = doc;
+        tick(&mut st);
+        assert!(matches!(st.missions.runs[0].state, RunState::Done { .. }));
+        assert!(st.log.iter().any(|e| e.text == "out"));
+    }
+
+    #[test]
+    fn dev_free_chrome_spends_the_tab_on_its_piece() {
+        let (mut st, b, level, _) = crate::clinic::testutil::inside();
+        st.book = doc_book(
+            r#"Mission(id: "m", title: "M", from: "doc", steps: [
+                Step(id: "tray", when: NewGame, then: [Tray(from: "doc", tab: "doc",
+                    title: "her tray", line: "One piece.",
+                    sets: [TraySet(need: All([]), items: ["neural_port"])])]),
+                Step(id: "out", when: Chromed("doc"), then: [Log("out")]),
+            ])"#,
+            "",
+        );
+        begin(&mut st);
+        let doc = cast_doc(&mut st, b);
+        take_from_tray(&mut st, 0);
+        st.free_chrome = true;
+        let spent = |st: &AppState| st.missions.tab.as_ref().unwrap().spent;
+        let install = |st: &mut AppState, id: &str| {
+            let item = ItemId::new(id);
+            let site = site_for(st, &item);
+            let put = crate::actions::perform(st, game::Action::Install { item, site });
+            assert!(put.is_ok(), "{put:?}");
+            site
+        };
+        // Another piece goes in free and leaves the tab be.
+        let mesh = ItemId::new("subdermal_mesh");
+        st.character.give_item(&st.content, mesh, 1);
+        install(&mut st, "subdermal_mesh");
+        assert!(!spent(&st));
+        // In another doc's chair the tab isn't theirs to spend.
+        st.chair = Some(crate::clinic::Chair {
+            building: b,
+            level,
+            doc: PersonId(doc.0 + 1),
+        });
+        let site = install(&mut st, "neural_port");
+        assert!(!spent(&st));
+        let pulled = crate::actions::perform(&mut st, game::Action::Pull(site));
+        assert!(pulled.is_ok(), "{pulled:?}");
+        // Up, the tab's piece in anywhere: spent, and chromed.
+        st.chair = None;
+        install(&mut st, "neural_port");
+        assert!(spent(&st));
         tick(&mut st);
         assert!(matches!(st.missions.runs[0].state, RunState::Done { .. }));
         assert!(st.log.iter().any(|e| e.text == "out"));

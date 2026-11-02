@@ -72,13 +72,17 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         return Err("not yours to open".to_string());
     }
     // Chrome goes in and out in a ripperdoc's chair, for the doc's fee; free with dev
-    // free chrome; a piece on someone's tab goes in on the tab, once. Every refusal
-    // comes before any change.
+    // free chrome; a piece on someone's tab goes in on the tab, once, and free chrome
+    // spends that tab too. Every refusal comes before any change.
     let mut charge = None;
     let mut tab = None;
+    let mut spend = false;
     if let Some(fee) = game::surgery_fee(&st.character, &st.content, &action) {
         match crate::clinic::operating(st) {
-            Operating::Free => {}
+            Operating::Free => {
+                spend = put_in(st, &action)
+                    .is_some_and(|item| crate::missions::free_tab_for(st, &item).is_some());
+            }
             Operating::Locked => return Err(crate::clinic::OUTSIDE.to_string()),
             Operating::Gone { doc } => {
                 st.chair = None;
@@ -89,6 +93,7 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
                     .is_some_and(|item| crate::missions::tab_for(st, &item).is_some()) =>
             {
                 tab = Some(fee);
+                spend = true;
             }
             Operating::Chair { doc } => {
                 if fee > st.character.credits {
@@ -211,10 +216,10 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         st.character.credits -= fee;
         message = format!("{message} · ¤{fee} to {doc}");
     }
+    if spend && let Some(t) = st.missions.tab.as_mut() {
+        t.spent = true;
+    }
     if let Some(fee) = tab {
-        if let Some(t) = st.missions.tab.as_mut() {
-            t.spent = true;
-        }
         message = format!("{message} · ¤{fee} on the tab");
     }
     if let Some(id) = fired
