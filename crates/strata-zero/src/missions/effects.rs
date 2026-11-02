@@ -1,8 +1,8 @@
 //! What a step does to the game (spec §4), its text filled as it runs.
 
 use super::{
-    Body, Call, Effect, FeedView, Mark, YOU, cast, fill, marks, person_of, role_name, scene,
-    visitors,
+    Body, Call, Effect, FeedView, Mark, YOU, cast, daze, fill, marks, news, person_of, role_name,
+    scene, visitors,
 };
 use crate::app::AppState;
 use citygen::{Place, StratumKind};
@@ -76,6 +76,8 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
         Effect::Arrive { role, at } => arrive(st, role, at),
         Effect::Leave(role) => visitors::leave(st, role),
         Effect::Lights(level) => lights(st, *level),
+        Effect::News(id) => news::put_out(st, id, mission, step),
+        Effect::Daze(seconds) => daze::start(st, *seconds),
     }
 }
 
@@ -210,6 +212,28 @@ mod tests {
                 .into_iter()
                 .collect::<std::collections::VecDeque<_>>()
         );
+    }
+
+    #[test]
+    fn the_daze_effect_starts_a_daze() {
+        let mut st = state_home();
+        st.tick = 77;
+        apply(&mut st, 0, 0, &Effect::Daze(4.0));
+        assert_eq!(
+            st.missions.daze,
+            Some(crate::missions::daze::Daze {
+                start: 77,
+                ticks: 120
+            })
+        );
+    }
+
+    #[test]
+    fn the_news_effect_puts_out_the_item() {
+        let mut st = state_home();
+        apply(&mut st, 1, 2, &Effect::News("marlo".into()));
+        let n = crate::missions::news::current(&st).unwrap();
+        assert_eq!((n.id.as_str(), n.mission, n.step), ("marlo", 1, 2));
     }
 
     fn arrive(role: &str, at: Mark) -> Effect {

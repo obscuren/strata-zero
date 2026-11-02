@@ -4,7 +4,8 @@
 //! Owns the runtime (`Missions`, `Run`, `begin`, `send`, `tick`, `end`), the book's
 //! types (`content`), casting (`cast`), what a step does (`effects`), and what the
 //! player sees: the HOLO feed and call (`feed`, `call`, `face`), the scenes played on
-//! the map (`scene`, with `marks` and `visitors`) and the JOBS lines (`ui`).
+//! the map (`scene`, with `marks` and `visitors`), the news put out (`news`), the daze
+//! (`daze`) and the JOBS lines (`ui`).
 //! No mission, step or role id appears in Rust outside tests; the book names them.
 //!
 //! Adding a block (spec `docs/superpowers/specs/2026-10-31-story-missions-design.md`, 15):
@@ -19,11 +20,13 @@ pub mod bubbles;
 pub mod call;
 pub mod cast;
 pub mod content;
+pub mod daze;
 pub mod effects;
 pub mod face;
 pub mod feed;
 pub mod film;
 pub mod marks;
+pub mod news;
 pub mod overlay;
 pub mod scene;
 pub mod ui;
@@ -62,6 +65,10 @@ pub struct Missions {
     pub scenes: VecDeque<(usize, usize, String)>,
     /// The scene playing.
     pub scene: Option<scene::SceneRun>,
+    /// The news item put out last, fresh or not.
+    pub news: Option<news::NewsRun>,
+    /// The daze running, if one is.
+    pub daze: Option<daze::Daze>,
 }
 
 /// Where one mission stands.
