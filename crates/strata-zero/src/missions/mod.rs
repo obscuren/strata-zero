@@ -512,8 +512,10 @@ fn at(st: &AppState, place: &Where) -> bool {
                     .is_some_and(|t| p.pos.manhattan(t) <= *within)
         }
         // On the street or a floor, wherever the role's person is drawn, and seen: never
-        // through a wall.
+        // through a wall. Inside a building you are not in, they are nowhere near you,
+        // so their floor is never worked out.
         Where::By { role, within } => person_of(st, role)
+            .filter(|id| !inside_elsewhere(st, p.place, *id))
             .and_then(|id| crate::interiors::drawn_at(st, id))
             .is_some_and(|(place, pos)| {
                 p.place == place
@@ -521,6 +523,20 @@ fn at(st: &AppState, place: &Where) -> bool {
                     && p.pos.manhattan(pos) <= *within
             }),
     }
+}
+
+/// The person is inside a building and off the street, and `here` is none of its
+/// floors: wherever its floors draw them, it isn't here.
+fn inside_elsewhere(st: &AppState, here: Place, id: PersonId) -> bool {
+    let Some(world) = st.world.as_ref() else {
+        return false;
+    };
+    let inside = match world.people().get(id.0 as usize).map(|q| &q.whereabouts) {
+        Some(sim::Whereabouts::Inside(b)) => *b,
+        _ => return false,
+    };
+    world.pos_of(id).is_none()
+        && !matches!(here, Place::Floor { building, .. } if building == inside)
 }
 
 /// Whether a need holds now (doctor spec §2), asked for mission `mission`: `Late`
@@ -2052,6 +2068,53 @@ pub(crate) mod tests {
         let beside = beside_on(&mut st, place, her);
         stand_seeing(&mut st, place, beside);
         assert!(at(&st, &by), "beside her in the surgery");
+    }
+
+    #[test]
+    fn by_answers_off_her_building_without_drawing_her_floor() {
+        let (mut st, b, _, _) = crate::clinic::testutil::inside();
+        st.book = doc_book(IDLE, "");
+        let doc = cast_doc(&mut st, b);
+        let by = Where::By {
+            role: "doc".into(),
+            within: 4,
+        };
+        // What `at` says working out in full where her floor draws her.
+        let full = |st: &AppState| {
+            let p = st.player.as_ref().unwrap();
+            crate::interiors::drawn_at(st, doc).is_some_and(|(place, pos)| {
+                p.place == place
+                    && p.vis().get(pos) == Some(&Visibility::Visible)
+                    && p.pos.manhattan(pos) <= 4
+            })
+        };
+        // On her floor, beside her: worked out, and beside.
+        let (place, pos) = st.player.as_ref().map(|p| (p.place, p.pos)).unwrap();
+        stand_seeing(&mut st, place, pos);
+        assert!(!inside_elsewhere(&st, place, doc));
+        assert!(at(&st, &by) && full(&st));
+        // On the street outside: she is in a building you are not in.
+        let out = outside_door(&st, b);
+        on_street(&mut st, out);
+        assert!(inside_elsewhere(&st, STREET, doc));
+        assert!(!at(&st, &by) && !full(&st));
+        // On another building's floor: the same.
+        let (home, level) = st
+            .city
+            .as_ref()
+            .and_then(citygen::home)
+            .map(|h| (h.building, h.level))
+            .unwrap();
+        let elsewhere = Place::Floor {
+            building: home,
+            level,
+        };
+        assert!(inside_elsewhere(&st, elsewhere, doc));
+        // Out on the street herself: worked out, and beside.
+        st.world.as_mut().unwrap().park(doc, out);
+        on_street(&mut st, out.offset(0, 1));
+        assert!(!inside_elsewhere(&st, STREET, doc));
+        assert!(at(&st, &by) && full(&st));
     }
 
     #[test]
