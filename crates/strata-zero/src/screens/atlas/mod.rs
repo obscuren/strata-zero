@@ -298,7 +298,7 @@ fn title(st: &AppState, l: &MapLayout, body: Rect, buf: &mut Buffer) {
         city.name.to_uppercase(),
         k.label().to_uppercase()
     );
-    let rest = format!(" · zoom {} · lit: remembered · faint: the city grid", l.s);
+    let rest = format!(" · zoom {}", l.s);
     let right = l.area.right();
     let x = body.x + 1;
     let bold = Style::default()
@@ -504,8 +504,9 @@ pub(crate) mod tests {
         let city = st.city.as_ref().unwrap().name.to_uppercase();
         let head = format!("{city} · STREET");
         let row = text(&buf, BODY_120.y, 2..BODY_120.right());
-        let want = format!("{head} · zoom 2 · lit: remembered · faint: the city grid");
+        let want = format!("{head} · zoom 2 ");
         assert!(row.starts_with(&want), "{row}");
+        assert!(!row.contains("remembered"), "no fog to explain: {row}");
         let at = |x: u16| &buf[(x, BODY_120.y)];
         assert_eq!(at(2).fg, CYAN);
         assert!(at(2).modifier.contains(Modifier::BOLD));
