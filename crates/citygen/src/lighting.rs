@@ -180,7 +180,10 @@ pub fn compute_coloured(
             base(Pos::new((i % w) as i32, (i / w) as i32))
         })
         .collect();
-    for e in emitters {
+    // The cone's quadrants share their diagonals, so a tile can be marked twice: each
+    // emitter lights it once.
+    let mut lit_by = vec![usize::MAX; size.area()];
+    for (n, e) in emitters.iter().enumerate() {
         let colour = [e.colour.0, e.colour.1, e.colour.2].map(|c| c as f32 / 255.0);
         crate::fov::compute(
             e.pos,
@@ -188,6 +191,11 @@ pub fn compute_coloured(
             &blocks,
             |q| size.contains(q),
             |q| {
+                let i = size.index(q);
+                if lit_by[i] == n {
+                    return;
+                }
+                lit_by[i] = n;
                 let d = (e.pos.dist2(q) as f32).sqrt();
                 if d <= e.radius as f32 {
                     let k = e.strength * (1.0 - d / e.radius as f32);
@@ -293,6 +301,23 @@ mod tests {
             tuning::room_light(None, BuildingKind::Hotel).tone,
             Tone::Fluorescent
         );
+    }
+
+    #[test]
+    fn coloured_light_lands_once_on_every_tile_of_its_cone() {
+        let size = Size { w: 20, h: 20 };
+        let e = Emitter {
+            pos: Pos::new(10, 10),
+            radius: 5,
+            strength: 190.0,
+            colour: (255, 255, 255),
+        };
+        let g = compute_coloured(size, |_| [0.0; 3], |_| false, &[e]);
+        assert!(
+            g[Pos::new(11, 11)].0 < g[Pos::new(11, 10)].0,
+            "the diagonal is nearer?"
+        );
+        assert!(g[Pos::new(13, 13)].0 < g[Pos::new(13, 10)].0);
     }
 
     #[test]

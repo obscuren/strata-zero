@@ -419,15 +419,23 @@ const BULB: Rgb = Rgb(0xff, 0xd9, 0xa0);
 /// Furniture whose light has a channel this bright takes the light's colour.
 const LIT_FURNITURE: u8 = 180;
 
-/// A fitting's own colour: a pale tint of its tone's light (neon and blacklight stay
-/// saturated), a bare bulb its warm white.
+/// A fitting's own colour, by its tone (the spec's): a pale tint of the light it throws,
+/// neon still saturated, a bulb its warm white.
 pub fn fitting_colour(f: Fitting) -> Rgb {
-    let (r, g, b) = tone_rgb(f.tone);
-    let white = Rgb(255, 255, 255);
-    match (f.kind, f.tone) {
-        (FittingKind::Bulb, _) => BULB,
-        (_, Tone::Neon(_) | Tone::Blacklight) => Rgb(r, g, b).mix(white, 0.2),
-        _ => Rgb(r, g, b).mix(white, 0.6),
+    if f.kind == FittingKind::Bulb {
+        return BULB;
+    }
+    match f.tone {
+        Tone::Fluorescent => Rgb(0xea, 0xff, 0xfa),
+        Tone::Led => Rgb(0xe8, 0xf0, 0xff),
+        Tone::Tungsten => BULB,
+        Tone::Surgical => Rgb(0xff, 0xff, 0xff),
+        Tone::Sodium => Rgb(0xff, 0xc0, 0x70),
+        Tone::Blacklight => Rgb(0xd9, 0xa8, 0xff),
+        Tone::Neon(_) => {
+            let (r, g, b) = tone_rgb(f.tone);
+            Rgb(r, g, b).mix(Rgb(255, 255, 255), 0.2)
+        }
     }
 }
 
@@ -783,6 +791,33 @@ mod tests {
         let dead = cell(&t, &ctx);
         assert_eq!(dead.fg, street_tint(&s, Rgb(0x3e, 0x47, 0x50)));
         assert_eq!(dead.bg, cell(&Tile::new(Terrain::Floor), &ctx).bg);
+    }
+
+    #[test]
+    fn fittings_take_the_specs_colours() {
+        let c = |kind, tone| {
+            fitting_colour(Fitting {
+                kind,
+                tone,
+                wear: Wear::Ok,
+            })
+        };
+        assert_eq!(
+            c(FittingKind::Tube, Tone::Fluorescent),
+            Rgb(0xea, 0xff, 0xfa)
+        );
+        assert_eq!(c(FittingKind::Panel, Tone::Led), Rgb(0xe8, 0xf0, 0xff));
+        assert_eq!(c(FittingKind::HighBay, Tone::Sodium), Rgb(0xff, 0xc0, 0x70));
+        assert_eq!(c(FittingKind::Bulb, Tone::Tungsten), Rgb(0xff, 0xd9, 0xa0));
+        assert_eq!(
+            c(FittingKind::Sconce, Tone::Tungsten),
+            Rgb(0xff, 0xd9, 0xa0)
+        );
+        assert_eq!(c(FittingKind::Strip, Tone::Surgical), Rgb(0xff, 0xff, 0xff));
+        assert_eq!(
+            c(FittingKind::Sconce, Tone::Blacklight),
+            Rgb(0xd9, 0xa8, 0xff)
+        );
     }
 
     #[test]

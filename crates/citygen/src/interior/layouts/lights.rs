@@ -67,6 +67,38 @@ fn emitter(pos: Pos, (radius, strength): (i32, f32), colour: (u8, u8, u8)) -> Em
     }
 }
 
+/// Where a part's tubes would hang, first tile of each, rows then columns: a part up to
+/// 7 wide gets one column with the tube centred (two cells from 5 wide), a wider one a
+/// column every 6 from its left + 2; a part up to 4 high gets its middle row, a higher one
+/// a row every 4 from its top + 2. Only spots inside the part.
+fn tube_spots(tiles: &[Pos]) -> Vec<Pos> {
+    let (Some(x0), Some(x1)) = (
+        tiles.iter().map(|p| p.x).min(),
+        tiles.iter().map(|p| p.x).max(),
+    ) else {
+        return Vec::new();
+    };
+    let y0 = tiles.iter().map(|p| p.y).min().unwrap_or(0);
+    let y1 = tiles.iter().map(|p| p.y).max().unwrap_or(0);
+    let (w, h) = (x1 - x0 + 1, y1 - y0 + 1);
+    let long = if w >= 5 { 2 } else { 1 };
+    let cols: Vec<i32> = if w <= 7 {
+        vec![x0 + (w - long) / 2]
+    } else {
+        (x0 + 2..x1).step_by(6).collect()
+    };
+    let rows: Vec<i32> = if h <= 4 {
+        vec![y0 + h / 2]
+    } else {
+        (y0 + 2..y1).step_by(4).collect()
+    };
+    let set: HashSet<Pos> = tiles.iter().copied().collect();
+    rows.iter()
+        .flat_map(|&y| cols.iter().map(move |&x| Pos::new(x, y)))
+        .filter(|p| set.contains(p))
+        .collect()
+}
+
 fn centroid(tiles: &[Pos]) -> (f32, f32) {
     let n = tiles.len().max(1) as f32;
     let x = tiles.iter().map(|p| p.x as f32).sum::<f32>() / n;
@@ -325,9 +357,9 @@ impl Builder<'_> {
         }
     }
 
-    /// Tubes along the rows: on a grid every 6 columns and 4 rows from the part's
-    /// corner + 2, then wherever the part still lies farther than that from a tube. Two
-    /// cells where the row runs 5 wide or more.
+    /// Tubes along the rows: on `tube_spots` first, then wherever the part still lies
+    /// farther than 6 columns and 4 rows from a tube. Two cells where the row runs 5
+    /// wide or more.
     fn tubes(&mut self, part: &Part, tone: Tone) {
         let kind = match tone {
             Tone::Fluorescent => FittingKind::Tube,
@@ -335,15 +367,7 @@ impl Builder<'_> {
             _ => FittingKind::Panel,
         };
         let set: HashSet<Pos> = part.tiles.iter().copied().collect();
-        let x0 = part.tiles.iter().map(|p| p.x).min().unwrap_or(0);
-        let y0 = part.tiles.iter().map(|p| p.y).min().unwrap_or(0);
-        let mut grid: Vec<Pos> = part
-            .tiles
-            .iter()
-            .copied()
-            .filter(|p| (p.x - x0) % 6 == 2 && (p.y - y0) % 4 == 2)
-            .collect();
-        grid.sort_by_key(|p| (p.y, p.x));
+        let grid = tube_spots(&part.tiles);
         let mut rest = part.tiles.clone();
         rest.sort_by_key(|p| (p.y, p.x));
         let mut placed: Vec<Pos> = Vec::new();
@@ -558,6 +582,30 @@ mod tests {
     use crate::{GenParams, Generator, SizePreset};
     use std::collections::{BTreeSet, HashSet};
     use std::sync::OnceLock;
+
+    fn rect(x0: i32, y0: i32, w: i32, h: i32) -> Vec<Pos> {
+        (y0..y0 + h)
+            .flat_map(|y| (x0..x0 + w).map(move |x| Pos::new(x, y)))
+            .collect()
+    }
+
+    #[test]
+    fn tubes_sit_in_the_middle_of_a_narrow_part() {
+        use super::tube_spots;
+        assert_eq!(tube_spots(&rect(4, 6, 3, 3)), vec![Pos::new(5, 7)]);
+        // Seven wide or less: one column, the two-cell tube centred.
+        assert_eq!(tube_spots(&rect(0, 0, 7, 2)), vec![Pos::new(2, 1)]);
+        // Wide and low: the middle row, every six columns from the corner + 2.
+        assert_eq!(
+            tube_spots(&rect(10, 3, 14, 3)),
+            vec![Pos::new(12, 4), Pos::new(18, 4)]
+        );
+        // A long, narrow corridor: one column, every four rows from the top + 2.
+        assert_eq!(
+            tube_spots(&rect(0, 0, 2, 12)),
+            vec![Pos::new(0, 2), Pos::new(0, 6), Pos::new(0, 10)]
+        );
+    }
 
     /// The interior tests' small city and three Medium ones (seed 8 is the shots').
     fn cities() -> &'static [City] {
