@@ -99,6 +99,28 @@ fn tube_spots(tiles: &[Pos]) -> Vec<Pos> {
         .collect()
 }
 
+/// The first tile of every tube a part hangs: each free `tube_spots` spot, then every
+/// free tile more than a grid step from all of those, in reading order.
+fn tube_plan(tiles: &[Pos], free: impl Fn(Pos) -> bool) -> Vec<Pos> {
+    let mut placed: Vec<Pos> = tube_spots(tiles).into_iter().filter(|p| free(*p)).collect();
+    let mut rest = tiles.to_vec();
+    rest.sort_by_key(|p| (p.y, p.x));
+    for p in rest {
+        if free(p) && !near_a_tube(&placed, p) {
+            placed.push(p);
+        }
+    }
+    placed
+}
+
+/// Whether `p` lies within one grid step (6 columns, 4 rows) of a tube already hung, so
+/// the filling pass leaves it to that tube.
+fn near_a_tube(tubes: &[Pos], p: Pos) -> bool {
+    tubes
+        .iter()
+        .any(|q| (q.x - p.x).abs() <= 6 && (q.y - p.y).abs() <= 4)
+}
+
 fn centroid(tiles: &[Pos]) -> (f32, f32) {
     let n = tiles.len().max(1) as f32;
     let x = tiles.iter().map(|p| p.x as f32).sum::<f32>() / n;
@@ -358,7 +380,7 @@ impl Builder<'_> {
     }
 
     /// Tubes along the rows: on `tube_spots` first, then wherever the part still lies
-    /// farther than 6 columns and 4 rows from a tube. Two cells where the row runs 5
+    /// more than a grid step from a tube. Two cells where the row runs 5
     /// wide or more.
     fn tubes(&mut self, part: &Part, tone: Tone) {
         let kind = match tone {
@@ -367,18 +389,7 @@ impl Builder<'_> {
             _ => FittingKind::Panel,
         };
         let set: HashSet<Pos> = part.tiles.iter().copied().collect();
-        let grid = tube_spots(&part.tiles);
-        let mut rest = part.tiles.clone();
-        rest.sort_by_key(|p| (p.y, p.x));
-        let mut placed: Vec<Pos> = Vec::new();
-        for p in grid.into_iter().chain(rest) {
-            if !self.hangs_free(p)
-                || placed
-                    .iter()
-                    .any(|q| (q.x - p.x).abs() < 6 && (q.y - p.y).abs() < 4)
-            {
-                continue;
-            }
+        for p in tube_plan(&part.tiles, |p| self.hangs_free(p)) {
             let run = (0..)
                 .map(|i| p.offset(i, 0))
                 .take_while(|q| set.contains(q))
@@ -393,7 +404,6 @@ impl Builder<'_> {
             } else {
                 vec![p]
             };
-            placed.push(p);
             let size = self.plan.size;
             let wear = self.wear(kind, tone, size.index(p) as u64);
             let (base, colour) = match (kind, wear) {
@@ -587,6 +597,27 @@ mod tests {
         (y0..y0 + h)
             .flat_map(|y| (x0..x0 + w).map(move |x| Pos::new(x, y)))
             .collect()
+    }
+
+    #[test]
+    fn a_tile_one_grid_step_from_a_tube_needs_no_tube_of_its_own() {
+        use super::near_a_tube;
+        let tubes = [Pos::new(10, 10)];
+        assert!(near_a_tube(&tubes, Pos::new(16, 14)), "a grid step away");
+        assert!(near_a_tube(&tubes, Pos::new(4, 6)));
+        assert!(
+            !near_a_tube(&tubes, Pos::new(17, 10)),
+            "past the next column"
+        );
+        assert!(!near_a_tube(&tubes, Pos::new(10, 15)), "past the next row");
+    }
+
+    #[test]
+    fn an_open_room_hangs_a_tube_on_every_grid_spot_and_fills_no_more() {
+        use super::{tube_plan, tube_spots};
+        let room = rect(0, 0, 20, 10);
+        assert_eq!(tube_plan(&room, |_| true), tube_spots(&room));
+        assert_eq!(tube_spots(&room).len(), 6);
     }
 
     #[test]
