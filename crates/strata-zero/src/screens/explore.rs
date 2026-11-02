@@ -2740,6 +2740,8 @@ impl Screen for MapScreen {
             self.targeting = None;
         }
         crate::track::tick(st);
+        // The asides run out on the clock, and all go once a scene, a rest or a fight is on.
+        crate::missions::asides::prune(st);
         crate::missions::news::tick(st, self.mode == Mode::Walk);
         // A fixer beside you has their offer ready before you talk.
         if self.mode == Mode::Walk {
@@ -3189,10 +3191,12 @@ impl Screen for MapScreen {
         if st.player.as_ref().is_some_and(|p| p.place == self.place) {
             crate::missions::visitors::draw(f.buffer_mut(), map_area, origin, st);
         }
-        // Your flat's holo set, playing the news while it is on.
+        // Your flat's holo set, playing the news while it is on: in sight, not through
+        // a wall.
         if crate::missions::news::current(st).is_some_and(|n| n.on)
             && let Some((place, pos)) = crate::missions::news::set_tile(st)
             && place == self.place
+            && vis.is_none_or(|v| v.get(pos) == Some(&crate::render::Visibility::Visible))
             && let Some((sx, sy)) = tile_to_screen(map_area, origin, pos)
         {
             f.buffer_mut()[(sx, sy)]
@@ -3271,6 +3275,11 @@ impl Screen for MapScreen {
                 rest.until,
                 Some(rest.from),
             );
+        }
+        // Asides over the map, off your `@`: only on foot with the console shut (and, as
+        // `draw` sees to, no scene, rest or fight).
+        if self.mode == Mode::Walk && self.console.is_none() {
+            crate::missions::asides::draw(f.buffer_mut(), map_area, origin, st);
         }
         // The HOLO call in the map's corner, kept off your `@`.
         crate::missions::call::draw(f.buffer_mut(), map_area, me, st);
@@ -5141,16 +5150,17 @@ mod tests {
         assert_eq!(last(&st), Some("no active abilities"));
     }
 
-    #[test]
-    fn the_holo_set_plays_in_magenta_while_it_is_on() {
+    /// Seed 8 moved in with the news out (the welcome put by), you standing `(dx, dy)`
+    /// from the holo set and looking around, one frame run.
+    fn by_the_holo_set(dx: i32, dy: i32) -> (AppState, MapScreen) {
         let mut st = crate::jobs::testutil::state_home();
         let mut s = MapScreen::walking(&mut st);
         crate::missions::begin(&mut st);
+        st.missions.feeds.clear();
         crate::missions::news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
         assert!(crate::missions::news::current(&st).is_some_and(|n| n.on));
-        // In the living room, the set in view.
         let (place, pos) = crate::missions::news::set_tile(&st).unwrap();
-        let mut me = crate::walker::Player::at(place, pos.offset(0, 1));
+        let mut me = crate::walker::Player::at(place, pos.offset(dx, dy));
         me.update_fov(
             &MapRef::for_place(
                 st.city.as_ref().unwrap(),
@@ -5163,18 +5173,30 @@ mod tests {
             0,
         );
         st.player = Some(me);
-        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
         s.update(&mut st, &[]);
+        (st, s)
+    }
+
+    /// The cells that change when the set goes off, drawn at 120x40 on frame tick 24:
+    /// on, then off.
+    fn holo_on_off(st: &mut AppState, s: &MapScreen) -> (Buffer, Buffer, Vec<(u16, u16)>) {
         st.tick = 24;
-        t.draw(|f| s.draw(&st, f)).unwrap();
-        let on = t.backend().buffer().clone();
+        let on = draw_buffer(s, st, 120, 40);
         st.missions.news.as_mut().unwrap().on = false;
-        t.draw(|f| s.draw(&st, f)).unwrap();
-        let off = t.backend().buffer().clone();
-        let changed: Vec<(u16, u16)> = (0..40)
+        let off = draw_buffer(s, st, 120, 40);
+        st.missions.news.as_mut().unwrap().on = true;
+        let changed = (0..40)
             .flat_map(|y| (0..120).map(move |x| (x, y)))
             .filter(|p| on[*p] != off[*p])
             .collect();
+        (on, off, changed)
+    }
+
+    #[test]
+    fn the_holo_set_plays_in_magenta_while_it_is_on() {
+        // In the living room, the set in view.
+        let (mut st, s) = by_the_holo_set(0, 1);
+        let (on, off, changed) = holo_on_off(&mut st, &s);
         assert_eq!(changed.len(), 1, "{changed:?}");
         let (on, off) = (&on[changed[0]], &off[changed[0]]);
         assert_eq!(off.symbol(), "◫");
@@ -5186,6 +5208,46 @@ mod tests {
                 .iter()
                 .any(|c| on.symbol() == c.to_string())
         );
+    }
+
+    #[test]
+    fn an_unseen_holo_set_does_not_play_through_the_wall() {
+        // In the bedroom, its wall between you and the set.
+        let (mut st, s) = by_the_holo_set(-10, 1);
+        let (_, pos) = crate::missions::news::set_tile(&st).unwrap();
+        let seen = st.player.as_ref().unwrap().vis().get(pos).copied();
+        assert_ne!(seen, Some(Visibility::Visible));
+        let (_, _, changed) = holo_on_off(&mut st, &s);
+        assert_eq!(changed, [], "on or off, it looks the same");
+    }
+
+    #[test]
+    fn asides_float_over_the_map_only_while_you_walk() {
+        let (mut st, mut s) = by_the_holo_set(0, 1);
+        assert_eq!(st.missions.asides.len(), 1, "the set reads its first line");
+        // What the asides add to the frame.
+        let added = |s: &MapScreen, st: &mut AppState| {
+            let with = draw_buffer(s, st, 120, 40);
+            let up = std::mem::take(&mut st.missions.asides);
+            let without = draw_buffer(s, st, 120, 40);
+            st.missions.asides = up;
+            (0..40)
+                .flat_map(|y| (0..120).map(move |x| (x, y)))
+                .filter(|p| with[*p] != without[*p])
+                .count()
+        };
+        assert!(added(&s, &mut st) > 20, "a bubble over the map");
+        s.console = Some(Console::default());
+        assert_eq!(added(&s, &mut st), 0, "none with the console open");
+        s.console = None;
+        s.mode = Mode::Explore;
+        assert_eq!(added(&s, &mut st), 0, "none from the free camera");
+        s.mode = Mode::Walk;
+        // A scene starting takes them down.
+        crate::missions::scene::play(&mut st, "waking");
+        s.update(&mut st, &[]);
+        assert!(crate::missions::scene::running(&st).is_some());
+        assert!(st.missions.asides.is_empty());
     }
 
     #[test]

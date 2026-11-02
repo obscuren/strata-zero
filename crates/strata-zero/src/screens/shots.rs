@@ -1603,6 +1603,35 @@ fn news_shots() {
         let name = format!("news_broadcast_{w}x{h}");
         shot_stack(&name, &st, &[&map, &broadcast], (w, h));
     }
+    // The set reading its first line to you by the couch, two seconds in.
+    let (place, set) = news::set_tile(&st).unwrap();
+    let mut me = crate::walker::Player::at(place, set.offset(-2, 1));
+    {
+        let city = st.city.as_ref().unwrap();
+        let flat = crate::render::map::MapRef::for_place(
+            city,
+            &st.interiors,
+            &st.constructs,
+            place,
+            st.minute_of_day(),
+        )
+        .unwrap();
+        me.update_fov(&flat, st.sight_bonus());
+    }
+    st.player = Some(me);
+    news::tick(&mut st, true);
+    assert_eq!(st.missions.asides.len(), 1, "the set reads");
+    {
+        let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+        world.advance(
+            city,
+            world.tick() + 2 * crate::missions::call::TICKS_PER_SECOND,
+        );
+    }
+    let map = MapScreen::walking(&mut st);
+    for (w, h) in HOLO_SIZES {
+        shot_stack(&format!("news_set_reading_{w}x{h}"), &st, &[&map], (w, h));
+    }
 }
 
 #[test]

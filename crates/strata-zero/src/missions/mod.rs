@@ -5,7 +5,8 @@
 //! types (`content`), casting (`cast`), what a step does (`effects`), and what the
 //! player sees: the HOLO feed and call (`feed`, `call`, `face`), the scenes played on
 //! the map (`scene`, with `marks` and `visitors`), the news put out (`news`) and its
-//! broadcast on the holo set (`broadcast`), the daze (`daze`) and the JOBS lines (`ui`).
+//! broadcast on the holo set (`broadcast`), the bubbles that leave you the keys
+//! (`asides`), the daze (`daze`) and the JOBS lines (`ui`).
 //! No mission, step or role id appears in Rust outside tests; the book names them.
 //!
 //! Adding a block (spec `docs/superpowers/specs/2026-10-31-story-missions-design.md`, 15):
@@ -16,6 +17,7 @@
 //!   `Book::validate`. Test it.
 //! - A pick: a variant on `Pick` and its arm in `cast::pick`.
 
+pub mod asides;
 pub mod broadcast;
 pub mod bubbles;
 pub mod call;
@@ -73,6 +75,8 @@ pub struct Missions {
     pub news_ends: Vec<(usize, usize)>,
     /// The daze running, if one is.
     pub daze: Option<daze::Daze>,
+    /// The bubbles up over the map that leave you the keys, oldest first.
+    pub asides: Vec<asides::Aside>,
 }
 
 /// Where one mission stands.

@@ -1,10 +1,12 @@
 //! The news (morning news spec §2): the item the story put out last, its texts filled.
 //! One is current at a time, for its `fresh` game minutes; every outlet shows it. The
-//! frame's news tick watches you walk away from the story's bodies (§7) and ends the
-//! item's step.
+//! frame's news tick has the holo set read it out (§5), watches you walk away from the
+//! story's bodies (§7) and ends the item's step.
 
+use super::asides::{self, READ_GAP, Speaker};
 use super::{Left, Mark, Where, fill, person_of};
 use crate::app::AppState;
+use crate::ui::chrome::MAGENTA;
 use citygen::Pos;
 use game::{Attribute, Slot};
 
@@ -55,6 +57,11 @@ pub struct NewsRun {
     pub on: bool,
     /// The step that put it out has ended.
     pub ended: bool,
+    /// The next of `reads` the set says.
+    pub read: usize,
+    /// The clock tick the set's last line ends, or ended if it went early; none before
+    /// the first.
+    pub read_end: Option<u64>,
 }
 
 /// Puts out the book's news item `id` for step `step` of mission `mission`: its texts
@@ -85,6 +92,8 @@ pub fn put_out(st: &mut AppState, id: &str, mission: usize, step: usize) {
         about: item.about.clone(),
         on: true,
         ended: false,
+        read: 0,
+        read_end: None,
     };
     // A step still waiting on the item this replaces must not wait for ever: the next
     // tick ends it (ending it here would run the story inside the step putting this out).
@@ -100,12 +109,15 @@ pub fn put_out(st: &mut AppState, id: &str, mission: usize, step: usize) {
 }
 
 /// The frame's news, in every explore update: the steps a newer item replaced end, the
-/// walk away from each body is watched, and the item's step ends the first frame you
-/// are out of your flat (no home counts as out) or once the item is stale (spec
-/// builder rulings). `_walking`: the map is in walk mode, for what shows only then.
-pub fn tick(st: &mut AppState, _walking: bool) {
+/// set reads (only with the map in walk mode, `walking`), the walk away from each body
+/// is watched, and the item's step ends the first frame you are out of your flat (no
+/// home counts as out) or once the item is stale (spec builder rulings).
+pub fn tick(st: &mut AppState, walking: bool) {
     for (mission, step) in std::mem::take(&mut st.missions.news_ends) {
         super::end(st, mission, step);
+    }
+    if walking {
+        read(st);
     }
     walk_away(st);
     // The stored item, fresh or not; a console item has no step to end.
@@ -119,6 +131,43 @@ pub fn tick(st: &mut AppState, _walking: bool) {
     if stale || !super::at(st, &Where::Home) {
         end_step(st);
     }
+}
+
+/// The set's lines (spec §5): while the item is fresh, the set on and you in your flat,
+/// its `reads` in turn, round and round, each an aside on the set labelled with the
+/// channel, `READ_GAP` after the last one ended.
+fn read(st: &mut AppState) {
+    if !asides::live(st) || !super::at(st, &Where::Home) {
+        return;
+    }
+    let Some((place, pos)) = set_tile(st) else {
+        return;
+    };
+    let speaker = Speaker::Tile(place, pos);
+    let now = st.clock_tick();
+    let up = st
+        .missions
+        .asides
+        .iter()
+        .any(|a| a.speaker == speaker && now < a.until);
+    if up || !current(st).is_some_and(|n| n.on && !n.reads.is_empty()) {
+        return;
+    }
+    let Some(n) = st.missions.news.as_mut() else {
+        return;
+    };
+    if let Some(end) = n.read_end.as_mut() {
+        // Taken down before its time (a scene, the broadcast): it ended now.
+        *end = (*end).min(now);
+        if now < *end + READ_GAP {
+            return;
+        }
+    }
+    let text = n.reads[n.read % n.reads.len()].clone();
+    n.read = (n.read + 1) % n.reads.len();
+    n.read_end = Some(now + asides::lasts(&text));
+    let channel = n.channel.clone();
+    asides::say(st, speaker, channel, MAGENTA, text);
 }
 
 /// Each body you have not yet walked away from, on the place you are on: near once you
@@ -223,8 +272,10 @@ pub fn fresh(st: &AppState) -> bool {
     current(st).is_some()
 }
 
-/// Switches the set on, while the item is fresh: Watch on the set.
+/// Switches the set on, while the item is fresh: Watch on the set. The broadcast opens
+/// over the map, so the asides go: none is left frozen under it.
 pub fn switch_on(st: &mut AppState) {
+    st.missions.asides.clear();
     if fresh(st)
         && let Some(n) = st.missions.news.as_mut()
     {
@@ -254,7 +305,11 @@ pub fn end_step(st: &mut AppState) {
 pub(crate) mod tests {
     use super::*;
     use crate::jobs::testutil::state_home;
-    use crate::missions::{Body, Effect, Left, Mark, Mission, RunState, Step, Trigger, marks};
+    use crate::missions::asides::{self, READ_GAP, Speaker};
+    use crate::missions::{
+        Body, Effect, Left, Mark, Mission, RunState, Step, Trigger, marks, scene,
+    };
+    use crate::ui::chrome::{DIM, MAGENTA};
     use crate::walker::Player;
     use citygen::{Place, Pos, StratumKind};
     use game::{ItemId, Slot};
@@ -541,6 +596,116 @@ pub(crate) mod tests {
     fn stand(st: &mut AppState, place: Place, pos: Pos) {
         st.player = Some(Player::at(place, pos));
         tick(st, true);
+    }
+
+    /// The console's item out, you in your flat, nothing keeping the asides down.
+    fn home_with_the_news() -> AppState {
+        let mut st = begun();
+        put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        in_the_flat(&mut st);
+        assert!(asides::live(&st));
+        st
+    }
+
+    fn in_the_flat(st: &mut AppState) {
+        let (place, pos) = marks::resolve(st, &Mark::HomeInside(1), None).unwrap();
+        st.player = Some(Player::at(place, pos));
+    }
+
+    /// Runs the clock to tick `at`.
+    fn run_to(st: &mut AppState, at: u64) {
+        if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
+            world.advance(city, at);
+        }
+    }
+
+    /// A frame in walk mode: the asides whose time is up go, then the news tick.
+    fn frame(st: &mut AppState) {
+        asides::prune(st);
+        tick(st, true);
+    }
+
+    fn texts(st: &AppState) -> Vec<&str> {
+        st.missions.asides.iter().map(|a| a.text.as_str()).collect()
+    }
+
+    #[test]
+    fn the_set_reads_in_turn_round_and_round() {
+        let mut st = home_with_the_news();
+        let n = current(&st).unwrap().clone();
+        let (place, pos) = set_tile(&st).unwrap();
+        assert_eq!(n.reads.len(), 4);
+        for want in n.reads.iter().chain(&n.reads[..1]) {
+            frame(&mut st);
+            let [a] = st.missions.asides.as_slice() else {
+                panic!("one line up: {:?}", texts(&st));
+            };
+            let a = a.clone();
+            assert_eq!(a.text, *want);
+            assert_eq!((a.label.as_str(), a.colour), (n.channel.as_str(), MAGENTA));
+            assert_eq!(a.speaker, Speaker::Tile(place, pos));
+            // Up for its time, then quiet for the gap.
+            run_to(&mut st, a.until - 1);
+            frame(&mut st);
+            assert_eq!(st.missions.asides, std::slice::from_ref(&a));
+            run_to(&mut st, a.until + READ_GAP - 1);
+            frame(&mut st);
+            assert!(st.missions.asides.is_empty(), "{:?}", texts(&st));
+            run_to(&mut st, a.until + READ_GAP);
+        }
+    }
+
+    #[test]
+    fn the_set_stops_when_off_or_you_leave() {
+        let mut st = home_with_the_news();
+        let reads = current(&st).unwrap().reads.clone();
+        frame(&mut st);
+        let until = st.missions.asides[0].until;
+        // Off: the line up runs out and none follows.
+        switch_off(&mut st);
+        run_to(&mut st, until + READ_GAP * 4);
+        frame(&mut st);
+        assert!(st.missions.asides.is_empty());
+        // On again, but out of the flat on its floor, then on the street: nothing.
+        switch_on(&mut st);
+        let (place, pos) = marks::resolve(&st, &Mark::HomeOutside, None).unwrap();
+        st.player = Some(Player::at(place, pos));
+        frame(&mut st);
+        st.player = Some(Player::at(STREET, Pos::new(0, 0)));
+        frame(&mut st);
+        assert!(st.missions.asides.is_empty());
+        // Home, the map not on foot: nothing; on foot, the next line.
+        in_the_flat(&mut st);
+        tick(&mut st, false);
+        assert!(st.missions.asides.is_empty());
+        frame(&mut st);
+        assert_eq!(texts(&st), [reads[1].as_str()]);
+        // A scene waiting: the line goes and no other comes until it has played.
+        let until = st.missions.asides[0].until;
+        scene::play(&mut st, "waking");
+        frame(&mut st);
+        assert!(st.missions.asides.is_empty());
+        run_to(&mut st, until + READ_GAP);
+        frame(&mut st);
+        assert!(st.missions.asides.is_empty());
+        st.missions.scenes.clear();
+        frame(&mut st);
+        let now = st.clock_tick();
+        run_to(&mut st, now + READ_GAP);
+        frame(&mut st);
+        assert_eq!(texts(&st), [reads[2].as_str()]);
+    }
+
+    #[test]
+    fn watching_clears_the_asides() {
+        let mut st = home_with_the_news();
+        frame(&mut st);
+        let there = Speaker::Tile(STREET, Pos::new(0, 0));
+        asides::say(&mut st, there, "overheard".into(), DIM, "Hm.".into());
+        assert_eq!(st.missions.asides.len(), 2);
+        // The broadcast opens over the map: nothing left frozen around it.
+        switch_on(&mut st);
+        assert!(st.missions.asides.is_empty());
     }
 
     #[test]
