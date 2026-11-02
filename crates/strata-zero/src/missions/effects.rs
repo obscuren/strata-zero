@@ -47,6 +47,9 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
         Effect::Take { item, count } => {
             game::remove_from_pack(&mut st.character, &ItemId::new(item), *count);
         }
+        Effect::Unseal(item) => {
+            st.missions.unsealed.insert(item.clone());
+        }
         Effect::Dead { role, look } => dead(st, role, look),
         Effect::Objective(text) => {
             let text = fill(st, text);
@@ -328,6 +331,15 @@ mod tests {
         apply(&mut st, 0, 0, &Effect::Release("nobody".into()));
         crate::missions::tick(&mut st);
         assert!(st.missions.releasing.is_empty());
+    }
+
+    #[test]
+    fn unseal_lets_the_pack_open_the_item() {
+        let mut st = AppState::new();
+        let id = ItemId::new("taped_package");
+        assert!(!crate::missions::unsealed(&st, &id));
+        apply(&mut st, 0, 0, &Effect::Unseal("taped_package".into()));
+        assert!(crate::missions::unsealed(&st, &id));
     }
 
     fn mail(code: Option<&str>) -> Effect {

@@ -230,12 +230,17 @@ pub fn begin(st: &mut AppState) {
         }
     }
     // The story restarts, so its items do: take back what an earlier start gave.
-    let given: Vec<ItemId> = st.book.gives().into_iter().map(ItemId::new).collect();
+    let given = st.book.gives(&st.content);
     for id in given {
         let held = st.character.count(&id);
         game::remove_from_pack(&mut st.character, &id, held);
     }
     send(st, Event::NewGame);
+}
+
+/// Whether the story has unsealed the item, so the pack may open it.
+pub fn unsealed(st: &AppState, id: &ItemId) -> bool {
+    st.missions.unsealed.contains(&id.0)
 }
 
 /// Reports an event: every mission waiting on it moves on.
@@ -1606,6 +1611,21 @@ pub(crate) mod tests {
             st.world.as_ref().unwrap().people()[fixer.0 as usize].name,
             "Mezz"
         );
+    }
+
+    #[test]
+    fn a_restart_takes_back_the_shard_too() {
+        let mut st = state_home();
+        let shard = ItemId::new("ledger_shard");
+        assert!(st.book.gives(&st.content).contains(&shard));
+        st.character.give(shard.clone(), 1);
+        st.missions.unsealed.insert("taped_package".into());
+        st.missions.read.insert("ledger_shard".into());
+        // A new story: its record is fresh, and begin takes back what it gave.
+        st.missions = Missions::default();
+        assert!(st.missions.unsealed.is_empty() && st.missions.read.is_empty());
+        begin(&mut st);
+        assert_eq!(st.character.count(&shard), 0);
     }
 
     #[test]

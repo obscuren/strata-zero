@@ -308,6 +308,12 @@ pub(crate) fn slot_popup(st: &mut AppState, slot: Slot, anchor: (u16, u16)) -> O
     )
 }
 
+/// Whether the pack offers to open the item: it opens into something and the story has
+/// unsealed it.
+fn openable(st: &AppState, item: &game::Item) -> bool {
+    !item.opens.is_empty() && crate::missions::unsealed(st, &item.id)
+}
+
 /// The popup for an item in the pack: Inspect, then the verbs it supports.
 pub(crate) fn item_popup(st: &mut AppState, id: &ItemId, anchor: (u16, u16)) -> Option<Popup> {
     let item = st.content.item(id)?;
@@ -328,6 +334,13 @@ pub(crate) fn item_popup(st: &mut AppState, id: &ItemId, anchor: (u16, u16)) -> 
     }
     if item.on_use.is_some() {
         choices.push(Choice::new('u', "Use", Pick::Act(Action::Use(id.clone()))));
+    }
+    if openable(st, item) {
+        choices.push(Choice::new(
+            'o',
+            "Open",
+            Pick::Act(Action::Open(id.clone())),
+        ));
     }
     choices.push(Choice::new(
         'd',
@@ -371,6 +384,10 @@ pub(crate) fn copy_popup(st: &mut AppState, copy: CopyId, anchor: (u16, u16)) ->
             "Equip",
             Pick::Act(Action::EquipCopy(copy)),
         ));
+    }
+    if openable(st, item) {
+        let open = Action::Open(stack.item.clone());
+        choices.push(Choice::new('o', "Open", Pick::Act(open)));
     }
     choices.push(Choice::new('d', "Drop", Pick::Act(Action::DropCopy(copy))));
     let body = hands_off(st, &mut choices);
@@ -1796,6 +1813,27 @@ impl Screen for Deck {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn open_labels(st: &mut AppState) -> Vec<String> {
+        let p = item_popup(st, &ItemId::new("taped_package"), (0, 0)).unwrap();
+        p.choices().iter().map(|c| c.label.clone()).collect()
+    }
+
+    #[test]
+    fn the_package_offers_open_only_once_unsealed() {
+        let mut st = AppState::new();
+        st.character.give(ItemId::new("taped_package"), 1);
+        assert!(!open_labels(&mut st).contains(&"Open".to_string()));
+        st.missions.unsealed.insert("taped_package".into());
+        let labels = open_labels(&mut st);
+        let at = |l: &str| labels.iter().position(|x| x == l).unwrap();
+        assert!(at("Open") < at("Drop one"), "{labels:?}");
+        // Nothing else offers it: an item that opens nothing never shows Open.
+        st.character.give(ItemId::new("stim_patch"), 1);
+        st.missions.unsealed.insert("stim_patch".into());
+        let p = item_popup(&mut st, &ItemId::new("stim_patch"), (0, 0)).unwrap();
+        assert!(p.choices().iter().all(|c| c.label != "Open"));
+    }
 
     fn last(st: &AppState) -> Option<&str> {
         st.log.latest().map(|e| e.text.as_str())

@@ -356,6 +356,8 @@ pub enum Effect {
         item: String,
         count: u32,
     },
+    /// Lets the pack open the item.
+    Unseal(String),
     Dead {
         role: String,
         look: String,
@@ -414,6 +416,7 @@ impl Effect {
                 .collect(),
             Effect::Give { .. }
             | Effect::Take { .. }
+            | Effect::Unseal(_)
             | Effect::Scene(_)
             | Effect::Arrive { .. }
             | Effect::Leave(_)
@@ -965,8 +968,8 @@ impl Book {
         Ok(())
     }
 
-    /// Every item a `Give` effect puts in the pack.
-    pub fn gives(&self) -> Vec<&str> {
+    /// Every item a `Give` effect puts in the pack, and what those items open into.
+    pub fn gives(&self, content: &game::Content) -> Vec<game::ItemId> {
         let mut out = BTreeSet::new();
         for e in self
             .missions
@@ -975,13 +978,17 @@ impl Book {
             .flat_map(|s| &s.then)
         {
             if let Effect::Give { item, .. } = e {
-                out.insert(item.as_str());
+                let id = game::ItemId::new(item);
+                if let Some(it) = content.item(&id) {
+                    out.extend(it.opens.iter().map(|(o, _)| o.clone()));
+                }
+                out.insert(id);
             }
         }
         out.into_iter().collect()
     }
 
-    /// Every item a `Give` or `Take` names, for the test that has the content.
+    /// Every item a `Give`, `Take` or `Unseal` names, for the test that has the content.
     #[cfg(test)]
     pub fn items(&self) -> Vec<&str> {
         let mut out = BTreeSet::new();
@@ -991,7 +998,8 @@ impl Book {
             .flat_map(|m| &m.steps)
             .flat_map(|s| &s.then)
         {
-            if let Effect::Give { item, .. } | Effect::Take { item, .. } = e {
+            if let Effect::Give { item, .. } | Effect::Take { item, .. } | Effect::Unseal(item) = e
+            {
                 out.insert(item.as_str());
             }
         }

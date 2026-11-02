@@ -54,6 +54,12 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
     if handles_items(&action) && jacked_in(st) {
         return Err(JACKED_IN.to_string());
     }
+    // The story keeps some things shut until it says otherwise.
+    if let Action::Open(id) = &action
+        && !crate::missions::unsealed(st, id)
+    {
+        return Err("not yours to open".to_string());
+    }
     // Chrome goes in and out in a ripperdoc's chair, for the doc's fee; free with dev
     // free chrome. Every refusal comes before any change.
     let mut charge = None;
@@ -341,6 +347,35 @@ mod tests {
             st.character.chrome_at(Site::RightArm),
             Some(&ItemId::new("grip_arm"))
         );
+    }
+
+    #[test]
+    fn opening_a_sealed_item_is_refused() {
+        let mut st = AppState::new();
+        st.character.give(ItemId::new("taped_package"), 1);
+        let before = st.character.clone();
+        let open = Action::Open(ItemId::new("taped_package"));
+        assert_eq!(perform(&mut st, open), Err("not yours to open".to_string()));
+        assert_eq!(st.character, before);
+    }
+
+    #[test]
+    fn opening_gives_the_shard() {
+        let mut st = AppState::new();
+        st.character.give(ItemId::new("taped_package"), 1);
+        crate::missions::effects::apply(
+            &mut st,
+            0,
+            0,
+            &crate::missions::Effect::Unseal("taped_package".into()),
+        );
+        let open = Action::Open(ItemId::new("taped_package"));
+        assert_eq!(
+            perform(&mut st, open),
+            Ok("You open the Taped package: Ledger shard.".to_string())
+        );
+        assert_eq!(st.character.count(&ItemId::new("ledger_shard")), 1);
+        assert_eq!(st.character.count(&ItemId::new("taped_package")), 0);
     }
 
     fn grip(st: &mut AppState) -> Action {
