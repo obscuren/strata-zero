@@ -322,7 +322,8 @@ pub fn hand_in(st: &mut AppState, id: JobId) -> Result<String, String> {
     if let Some(item) = handin_item(&j.kind) {
         game::remove_from_pack(&mut st.character, &item, 1);
     }
-    let pay = st.jobs.hand_in(id).ok_or("not in hand")?;
+    let now = st.net.now(st);
+    let pay = st.jobs.hand_in(id, now).ok_or("not in hand")?;
     st.character.credits = st.character.credits.saturating_add(pay);
     let fixer = fixer_name(st, j.fixer);
     let said = st.flavor.line(Say::Handed, id.0 as u64).to_string();
@@ -337,7 +338,8 @@ pub fn hand_in(st: &mut AppState, id: JobId) -> Result<String, String> {
 /// Gives the job up; the package, if still carried, stays in the pack.
 pub fn drop(st: &mut AppState, id: JobId) -> Result<String, String> {
     let j = st.jobs.get(id).cloned().ok_or("no such job")?;
-    if !st.jobs.drop_job(id) {
+    let now = st.net.now(st);
+    if !st.jobs.drop_job(id, now) {
         return Err("not in hand".into());
     }
     let fixer = fixer_name(st, j.fixer);
@@ -443,6 +445,7 @@ mod tests {
             taken: None,
             deadline: None,
             state: State::Offered,
+            closed: None,
         });
         assert_eq!(
             text(&pane_lines(&st)),
@@ -578,7 +581,7 @@ mod tests {
         let fx = a_fixer(&st);
         // Clear the welcome so this fixer can offer.
         let welcome = st.jobs.active().unwrap().id;
-        st.jobs.drop_job(welcome);
+        st.jobs.drop_job(welcome, 0);
         st.jobs.fixer_mut(fx).standing = 0;
         let id = crate::jobs::offer(&mut st, fx).unwrap();
         let mut p = offer_popup(&st, id, st.tick);
@@ -651,7 +654,7 @@ mod tests {
         let mut st = state_home();
         let fx = a_fixer(&st);
         let welcome = st.jobs.active().unwrap().id;
-        st.jobs.drop_job(welcome);
+        st.jobs.drop_job(welcome, 0);
         st.jobs.fixer_mut(fx).standing = 0;
         let home = st.home.unwrap().home;
         let city = st.city.clone().unwrap();

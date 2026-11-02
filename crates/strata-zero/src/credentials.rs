@@ -48,6 +48,8 @@ pub struct Mail {
     pub read: bool,
     /// The game minute it arrived.
     pub at: u64,
+    /// The job it is about, for a job's own mails.
+    pub job: Option<crate::jobs::JobId>,
 }
 
 /// Minutes a keypad stays locked after the third miss.
@@ -473,6 +475,7 @@ pub fn fixer_mail(st: &mut AppState) {
         ],
         read: false,
         at: now,
+        job: None,
     });
 }
 

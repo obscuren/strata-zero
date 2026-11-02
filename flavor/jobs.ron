@@ -35,7 +35,7 @@ Jobs(
         ]),
     ],
     how: (card: "the lobby desk keeps a card", server: "the server knows the code"),
-    where: "I hold the corner on {district} from 18:00.",
+    where: "I hold the corner on {district} from {start}.",
     offer:    ["Got something. Interested?", "Work found you. Want it?"],
     taken:    ["Mail's on your rig.", "Details on your rig. Don't lose them."],
     handed:   ["Good. Here.", "Clean. Here's yours."],

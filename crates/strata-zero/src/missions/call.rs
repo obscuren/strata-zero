@@ -163,6 +163,7 @@ pub(super) fn voicemail(st: &mut AppState) {
         body: call.lines.clone(),
         read: false,
         at: st.net.now(st),
+        job: None,
     };
     st.journal.mails.push(mail);
     st.story(format!("`{name}` · voicemail on your rig"));

@@ -97,8 +97,11 @@ pub fn hours_text((from, to): (u16, u16)) -> String {
 
 /// Where to find the fixer again, in their words.
 pub fn where_line(st: &AppState, fixer: PersonId) -> String {
-    st.flavor
-        .where_line(&[("district", district_of_fixer(st, fixer))])
+    let (from, _) = super::shift_of(st, fixer).unwrap_or((18 * 60, 4 * 60));
+    st.flavor.where_line(&[
+        ("district", district_of_fixer(st, fixer)),
+        ("start", format!("{:02}:{:02}", from / 60, from % 60)),
+    ])
 }
 
 fn blank(fixer: PersonId, kind: Kind, hours: u64, pay: u32, now: u64) -> Job {
@@ -115,12 +118,16 @@ fn blank(fixer: PersonId, kind: Kind, hours: u64, pay: u32, now: u64) -> Job {
         taken: None,
         deadline: None,
         state: State::Offered,
+        closed: None,
     }
 }
 
+/// Every job's last objective: the fixer's corner and their hours on it.
 fn handin_text(st: &AppState, fixer: PersonId) -> String {
+    let hours =
+        super::shift_of(st, fixer).map_or_else(String::new, |s| format!(" · {}", hours_text(s)));
     format!(
-        "Bring it to {} · {} corner · 18:00–04:00",
+        "Hand it in to {} · {} corner{hours}",
         fixer_name(st, fixer),
         district_of_fixer(st, fixer)
     )
@@ -353,7 +360,7 @@ pub fn generate(st: &mut AppState, fixer: PersonId, kind: KindTag, counter: u32)
                     done: false,
                 },
                 Objective {
-                    text: format!("Report to {} while it stands", fixer_name(st, fixer)),
+                    text: handin_text(st, fixer),
                     done: false,
                 },
             ];
@@ -418,7 +425,7 @@ pub fn generate(st: &mut AppState, fixer: PersonId, kind: KindTag, counter: u32)
             job.brief = st.flavor.brief(KindTag::Deliver, r_text, &slots);
             job.objectives = vec![
                 Objective {
-                    text: format!("Hand the package to {} · {place} · {hours}", p.name),
+                    text: format!("Deliver the package to {} · {place} · {hours}", p.name),
                     done: false,
                 },
                 Objective {
@@ -520,6 +527,7 @@ pub fn first_favour(st: &mut AppState) {
         body,
         read: false,
         at: now,
+        job: Some(id),
     });
 }
 
@@ -627,10 +635,22 @@ mod tests {
         assert_eq!(
             p.objectives[1].text,
             format!(
-                "Report to {} while it stands",
-                crate::jobs::ui::fixer_name(&st, fx)
+                "Hand it in to {} · {} corner · 18:00–04:00",
+                crate::jobs::ui::fixer_name(&st, fx),
+                crate::jobs::ui::district_of_fixer(&st, fx)
             )
         );
+        // Every kind hands in the same way.
+        st.jobs.fixer_mut(fx).standing = 0;
+        for k in [KindTag::Fetch, KindTag::Copy, KindTag::Deliver] {
+            st.jobs.fixer_mut(fx).standing = COPY_AT;
+            let j = generate(&mut st, fx, k, 0).expect("a job");
+            assert_eq!(
+                j.objectives.last().unwrap().text,
+                p.objectives[1].text,
+                "{k:?}"
+            );
+        }
     }
 
     #[test]
@@ -648,7 +668,7 @@ mod tests {
         assert!(
             j.objectives[0]
                 .text
-                .starts_with(&format!("Hand the package to {}", p.name)),
+                .starts_with(&format!("Deliver the package to {}", p.name)),
             "{}",
             j.objectives[0].text
         );
@@ -684,7 +704,7 @@ mod tests {
         let fx = a_fixer(&st);
         // The welcome may be this fixer's; clear it so they can offer.
         let welcome = st.jobs.active().unwrap().id;
-        st.jobs.drop_job(welcome);
+        st.jobs.drop_job(welcome, 0);
         st.jobs.fixer_mut(fx).standing = 0;
         let a = offer(&mut st, fx).expect("an offer");
         let b = offer(&mut st, fx).expect("the same offer");

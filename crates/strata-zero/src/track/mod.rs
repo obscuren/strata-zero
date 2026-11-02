@@ -1237,7 +1237,7 @@ mod tests {
         set(&mut st, job_source(id, 0)).unwrap();
         tick(&mut st);
         assert!(st.track.is_some());
-        assert!(st.jobs.drop_job(id));
+        assert!(st.jobs.drop_job(id, 0));
         let n = st.log.len();
         tick(&mut st);
         assert!(st.track.is_none());

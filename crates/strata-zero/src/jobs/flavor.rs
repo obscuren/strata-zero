@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const DEFAULT: &str = include_str!("../../../../flavor/jobs.ron");
-const SLOTS: [&str; 11] = [
+const SLOTS: [&str; 12] = [
     "building",
     "floor",
     "number",
@@ -16,6 +16,7 @@ const SLOTS: [&str; 11] = [
     "place",
     "hours",
     "district",
+    "start",
 ];
 
 /// A job's kind without its target.
@@ -245,7 +246,7 @@ mod tests {
         assert_eq!(f.line(Say::Refused, 2), "Lose this number.");
         assert_eq!(f.how_card(), "the lobby desk keeps a card");
         assert_eq!(
-            f.where_line(&[("district", "Old Town".into())]),
+            f.where_line(&[("district", "Old Town".into()), ("start", "18:00".into())]),
             "I hold the corner on Old Town from 18:00."
         );
     }
