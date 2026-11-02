@@ -26,6 +26,10 @@ pub(crate) const GLASS: f32 = 0.45;
 /// What a terminal's faint attribute does to a colour, roughly; the glass bakes it in.
 const FAINT_GHOST: f32 = 0.5;
 pub(crate) const RULE: Color = Color::Rgb(40, 60, 75);
+/// Danger: perma death and what it costs.
+pub(crate) const RED: Color = Color::Rgb(255, 40, 40);
+/// Words about danger, lighter than RED so they read as text.
+pub(crate) const RED_TEXT: Color = Color::Rgb(255, 96, 112);
 pub(crate) const BAR_BG: Color = Color::Rgb(0, 60, 70);
 
 pub(crate) fn head(text: impl Into<String>) -> Line<'static> {

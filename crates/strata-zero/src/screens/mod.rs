@@ -3,6 +3,7 @@
 pub mod atlas;
 pub mod bench;
 pub mod blueprint;
+pub mod broadcast;
 pub mod configure;
 pub mod console;
 pub mod create;
@@ -11,7 +12,6 @@ pub mod deck;
 pub mod explore;
 pub mod files;
 pub mod flatlined;
-pub mod generating;
 pub mod help;
 pub mod keypad;
 pub mod kit;
@@ -25,11 +25,38 @@ pub mod terminal;
 pub mod title;
 pub mod workbench;
 
-use crate::app::Screen;
+use crate::app::{Screen, ScreenCmd, TransitionKind};
 
 /// The screen the app starts on.
 pub fn initial(st: &crate::app::AppState) -> impl Screen + use<> {
     title::Title::new(st, 0)
+}
+
+/// A city built at once from `params`.
+pub fn build_city(params: citygen::GenParams) -> anyhow::Result<citygen::City> {
+    Ok(citygen::Generator::run(params)?)
+}
+
+/// Puts a built city in place and drops onto its street.
+pub fn enter_built_city(st: &mut crate::app::AppState, city: citygen::City) -> ScreenCmd {
+    st.params = city.params.clone();
+    st.enter_city(city);
+    ScreenCmd::Switch {
+        to: explore_screen(st),
+        fx: TransitionKind::Glitch,
+    }
+}
+
+/// Builds a city from `params` and drops onto its street; a city that fails to build
+/// is a warning and nothing more.
+pub fn start_city(st: &mut crate::app::AppState, params: citygen::GenParams) -> ScreenCmd {
+    match build_city(params) {
+        Ok(city) => enter_built_city(st, city),
+        Err(e) => {
+            st.warn(e.to_string());
+            ScreenCmd::Stay
+        }
+    }
 }
 
 /// The screen shown once a city exists: the map, on foot, the story begun. Every new

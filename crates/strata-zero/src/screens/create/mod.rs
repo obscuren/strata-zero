@@ -13,12 +13,12 @@ mod summary;
 
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::render::Rgb;
-use crate::screens::generating::Generating;
+use crate::screens::broadcast::Broadcast;
 use crate::screens::title::Title;
 use crate::ui::chrome::{CYAN, CYAN_RGB, DIM, FAINT, MAGENTA, MAGENTA_RGB, RULE, solid};
 use crate::ui::logo::{self, Logo};
 use crossterm::event::{KeyCode, KeyEvent};
-use game::{Attribute, Build, CategoryId, Character, Step};
+use game::{Attribute, Build, CategoryId, Step};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -51,9 +51,18 @@ pub(crate) fn attribute_colour(s: Attribute) -> Color {
     attribute_rgb(s).to_color()
 }
 
+/// Which of NAME's two fields takes the keys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NameField {
+    Handle,
+    PermaDeath,
+}
+
 /// The wizard: which step is up, where each list's cursor sits, and the footer notice.
 pub struct Create {
     pub(crate) step: Step,
+    /// NAME's field with the keys.
+    pub(crate) name_field: NameField,
     /// Tick the current step opened: drives the slide-in and the typewriter.
     opened: u64,
     /// Tick the dossier last changed, so it types itself out again.
@@ -78,6 +87,7 @@ impl Create {
     pub fn new(st: &AppState, step: Step, tick: u64) -> Self {
         let mut c = Create {
             step,
+            name_field: NameField::Handle,
             opened: tick,
             changed: tick,
             cursor: [0; 6],
@@ -117,6 +127,7 @@ impl Create {
         self.opened = st.tick;
         self.changed = st.tick;
         self.notice = None;
+        self.name_field = NameField::Handle;
         self.pick_under_cursor(st);
         ScreenCmd::Flash(TransitionKind::Glitch)
     }
@@ -154,7 +165,7 @@ impl Create {
         }
         match self.step.next() {
             Some(s) => self.go(st, s),
-            None => self.jack_in(st),
+            None => self.on_air(st),
         }
     }
 
@@ -167,20 +178,19 @@ impl Create {
         }
     }
 
-    /// Builds the character and heads for a fresh city, as NEW GAME used to.
-    fn jack_in(&mut self, st: &mut AppState) -> ScreenCmd {
-        let Some(b) = st.build.take() else {
+    /// Builds a fresh city and puts the broadcast over the sheet; the build stays until
+    /// JACK IN there.
+    fn on_air(&mut self, st: &mut AppState) -> ScreenCmd {
+        if st.build.is_none() {
             return ScreenCmd::Stay;
-        };
-        st.character = Character::from_build(&st.content, &b);
-        match Generating::new(Title::fresh_params(st, st.tick), st.tick) {
-            Ok(g) => ScreenCmd::Switch {
-                to: Box::new(g),
+        }
+        match crate::screens::build_city(Title::fresh_params(st, st.tick)) {
+            Ok(city) => ScreenCmd::Push {
+                to: Box::new(Broadcast::new_game(st, city)),
                 fx: TransitionKind::Glitch,
             },
             Err(e) => {
                 st.warn(e.to_string());
-                st.build = Some(b);
                 ScreenCmd::Stay
             }
         }
@@ -204,7 +214,7 @@ impl Create {
 
     fn step_key(&mut self, st: &mut AppState, code: KeyCode) {
         match self.step {
-            Step::Name => name::key(st, code),
+            Step::Name => name::key(st, &mut self.name_field, code),
             Step::Origin => {
                 if self.move_cursor(st.content.origins.len(), code) {
                     self.pick_under_cursor(st);
@@ -225,7 +235,20 @@ impl Create {
 
     fn footer_keys(&self) -> &'static [(&'static str, &'static str)] {
         match self.step {
-            Step::Name => &[("type", "name"), ("enter", "next"), ("esc", "back")],
+            Step::Name => match self.name_field {
+                NameField::Handle => &[
+                    ("type", "name"),
+                    ("↓", "perma death"),
+                    ("enter", "next"),
+                    ("esc", "back"),
+                ],
+                NameField::PermaDeath => &[
+                    ("←→", "on/off"),
+                    ("↑", "handle"),
+                    ("enter", "next"),
+                    ("esc", "back"),
+                ],
+            },
             Step::Origin | Step::Profession => {
                 &[("↑↓", "choose"), ("enter", "next"), ("esc", "back")]
             }
@@ -244,7 +267,7 @@ impl Create {
                 ("enter", "next"),
                 ("esc", "back"),
             ],
-            Step::Summary => &[("enter", "JACK IN"), ("esc", "back")],
+            Step::Summary => &[("enter", "next"), ("esc", "back")],
         }
     }
 }
@@ -460,7 +483,7 @@ impl Screen for Create {
             ),
         };
         match self.step {
-            Step::Name => name::draw(st, b, &panes, tick, buf),
+            Step::Name => name::draw(st, b, self.name_field, &panes, tick, buf),
             Step::Origin => pick::draw(
                 &pick::origins(st),
                 self.cursor[Step::Origin.index()],
@@ -544,6 +567,57 @@ mod tests {
         b.origin = Some(game::OriginId::new("creche"));
         b.profession = Some(game::ProfessionId::new("netrunner"));
         Create::new(st, step, 0)
+    }
+
+    #[test]
+    fn name_step_moves_to_perma_death_and_flips_it() {
+        let mut st = AppState::new();
+        let mut c = picked(&mut st, Step::Name);
+        let pd = |st: &AppState| st.build.as_ref().unwrap().perma_death;
+        let handle = |st: &AppState| st.build.as_ref().unwrap().handle.clone();
+        c.update(&mut st, &[key(KeyCode::Left)]);
+        assert!(pd(&st), "the arrows flip it only on its own field");
+        c.update(&mut st, &[key(KeyCode::Down)]);
+        assert_eq!(c.name_field, NameField::PermaDeath);
+        c.update(&mut st, &[key(KeyCode::Right)]);
+        assert!(!pd(&st));
+        c.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert!(pd(&st));
+        c.update(&mut st, &[key(KeyCode::Char('x')), key(KeyCode::Backspace)]);
+        assert_eq!(handle(&st), "", "typing on perma death goes nowhere");
+        c.update(&mut st, &[key(KeyCode::Up), key(KeyCode::Char('x'))]);
+        assert_eq!(c.name_field, NameField::Handle);
+        assert_eq!(handle(&st), "x");
+        assert!(pd(&st));
+    }
+
+    #[test]
+    fn name_step_draws_perma_death_and_the_sheet_tag() {
+        for (w, h) in [(120, 40), (100, 30)] {
+            let mut st = AppState::new();
+            let mut c = picked(&mut st, Step::Name);
+            st.build.as_mut().unwrap().handle = "Vex".into();
+            let text = draw(&c, &st, w, h);
+            for want in [
+                "perma death",
+                "ON · OFF",
+                "One life. If VEX flatlines",
+                "PERMA DEATH",
+                "[↓]perma death",
+                "▮",
+            ] {
+                assert!(text.contains(want), "{w}x{h} wants {want:?}: {text}");
+            }
+            c.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Right)]);
+            let text = draw(&c, &st, w, h);
+            for want in ["A flatline sends you back", "[←→]on/off", "[↑]handle"] {
+                assert!(text.contains(want), "{w}x{h} wants {want:?}: {text}");
+            }
+            assert!(
+                !text.contains("PERMA DEATH") && !text.contains('▮'),
+                "{w}x{h}: no tag while off, no cursor off the handle: {text}"
+            );
+        }
     }
 
     #[test]
@@ -769,10 +843,7 @@ mod tests {
             "the caption is the handle in block font with the tagline: {text}"
         );
         assert!(
-            text.contains("JACK IN")
-                && text.contains("CRÈCHE")
-                && text.contains("NETRUNNER")
-                && text.contains("step 6 of 6"),
+            text.contains("CRÈCHE") && text.contains("NETRUNNER") && text.contains("step 6 of 6"),
             "{text}"
         );
         assert!(
@@ -783,20 +854,51 @@ mod tests {
             text.contains("◈ Signal ghost") && text.contains("◈ Street sense"),
             "what the categories grant is on the sheet: {text}"
         );
-        let cmd = c.update(&mut st, &[key(KeyCode::Enter)]);
         assert!(
-            matches!(
-                cmd,
-                ScreenCmd::Switch {
-                    fx: TransitionKind::Glitch,
-                    ..
-                }
-            ),
-            "jack in generates"
+            text.contains("[enter]next") && !text.contains("JACK IN"),
+            "{text}"
         );
+        let ScreenCmd::Push { to: mut on_air, .. } = c.update(&mut st, &[key(KeyCode::Enter)])
+        else {
+            panic!("the sheet goes on to the broadcast")
+        };
+        assert!(st.build.is_some() && st.city.is_none(), "nothing made yet");
+        let space = key(KeyCode::Char(' '));
+        on_air.update(&mut st, &[space]);
+        assert!(matches!(
+            on_air.update(&mut st, &[space]),
+            ScreenCmd::Switch {
+                fx: TransitionKind::Glitch,
+                ..
+            }
+        ));
         assert_eq!(st.character.handle, "VEX");
         assert!(st.build.is_none());
         assert!(st.character.has_category(&game::CategoryId::new("wrench")));
+    }
+
+    #[test]
+    fn esc_from_the_broadcast_keeps_the_build() {
+        let mut st = AppState::new();
+        let mut c = chooser::Chooser::new(&st, 0).choose(&mut st);
+        let ScreenCmd::Push { to: mut on_air, .. } = c.update(&mut st, &[key(KeyCode::Enter)])
+        else {
+            panic!("the sheet goes on to the broadcast")
+        };
+        assert!(matches!(
+            on_air.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Pop { .. }
+        ));
+        assert!(st.build.is_some() && st.city.is_none());
+        st.tick += 1;
+        assert!(matches!(
+            c.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Push { .. }
+        ));
+        assert!(
+            st.build.is_some(),
+            "jacking in again starts from the same build"
+        );
     }
 
     #[test]

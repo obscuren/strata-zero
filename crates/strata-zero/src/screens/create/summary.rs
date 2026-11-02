@@ -1,4 +1,5 @@
-//! Step 6: the sheet, and JACK IN. The sheet itself also sits beside the name.
+//! Step 6: the sheet, then on to the broadcast. The sheet itself also sits beside the
+//! name.
 
 use super::attribute_colour;
 use crate::anim::effects::pulse;
@@ -181,7 +182,7 @@ pub(super) fn draw(st: &AppState, b: &Build, body: Rect, tick: u64, buf: &mut Bu
             );
         }
     }
-    let confirm = "[enter] JACK IN";
+    let confirm = "[enter] next";
     let cx = body.x + body.width.saturating_sub(confirm.len() as u16) / 2;
     buf.set_string(
         cx,

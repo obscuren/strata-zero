@@ -1340,6 +1340,48 @@ fn creation_skill_cards() {
     shot_stack("creation_netrunner_120x40", &st, &[&create], (120, 40));
 }
 
+/// The way in: NAME with perma death on (both sizes) and turned off on its field; each
+/// shipped broadcast at 120x40 in a full-size city, STATIC 66 at 100x30, and STATIC 66
+/// with perma death off and the tutorial ticked.
+#[test]
+#[ignore]
+fn broadcast_and_perma_death() {
+    use crate::screens::broadcast::Broadcast;
+    let mut st = AppState::new();
+    let mut create = crate::screens::create::chooser::Chooser::new(&st, 0).choose(&mut st);
+    // From SUMMARY back to NAME.
+    create.update(&mut st, &[key(KeyCode::Esc)]);
+    st.tick += 200;
+    for (w, h) in [(120, 40), (100, 30)] {
+        shot_stack(
+            &format!("name_perma_death_{w}x{h}"),
+            &st,
+            &[&create],
+            (w, h),
+        );
+    }
+    create.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Right)]);
+    shot_stack("name_perma_death_off_120x40", &st, &[&create], (120, 40));
+
+    let city = Generator::run(GenParams::default().with_seed(77)).unwrap();
+    let space = key(KeyCode::Char(' '));
+    for b in st.broadcasts.0.clone() {
+        let mut on_air = Broadcast::with(&st, city.clone(), &b);
+        on_air.update(&mut st, &[space]);
+        shot_stack(
+            &format!("broadcast_{}_120x40", b.id),
+            &st,
+            &[&on_air],
+            (120, 40),
+        );
+        if b.id == "static66" {
+            shot_stack("broadcast_static66_100x30", &st, &[&on_air], (100, 30));
+            on_air.update(&mut st, &[key(KeyCode::Char('p')), key(KeyCode::Char('t'))]);
+            shot_stack("broadcast_static66_off_120x40", &st, &[&on_air], (120, 40));
+        }
+    }
+}
+
 /// A ripperdoc's: the shut door by day, the chair's window by night, and the ledger in
 /// the chair on a piece, in FITS paying and short, on a swap, asking before a pull, and
 /// with free chrome, at both sizes.

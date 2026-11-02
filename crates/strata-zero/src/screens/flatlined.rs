@@ -44,6 +44,8 @@ impl Screen for Flatlined {
         {
             st.character = fresh;
         }
+        st.perma_death = true;
+        st.tutorial_off = false;
         st.player = None;
         ScreenCmd::Switch {
             to: Box::new(Title::new(st, st.tick)),
@@ -92,5 +94,26 @@ impl Screen for Flatlined {
         centred(buf, y, &self.cause, Style::default().fg(TEXT));
         centred(buf, y + 1, &self.runner, Style::default().fg(DIM));
         centred(buf, y + 3, "any key · title", Style::default().fg(DIM));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::screens::testutil::key;
+    use crossterm::event::KeyCode;
+
+    #[test]
+    fn a_flatline_resets_the_flags() {
+        let mut st = AppState::new();
+        st.perma_death = false;
+        st.tutorial_off = true;
+        let mut f = Flatlined::new("black ICE".into(), "Nyx", 3, 0);
+        st.tick = 20;
+        assert!(matches!(
+            f.update(&mut st, &[key(KeyCode::Char(' '))]),
+            ScreenCmd::Switch { .. }
+        ));
+        assert!(st.perma_death && !st.tutorial_off);
     }
 }

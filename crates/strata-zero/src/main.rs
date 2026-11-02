@@ -10,6 +10,7 @@ mod app;
 mod backdoors;
 mod blast;
 mod bots;
+mod broadcasts;
 mod casts;
 mod cli;
 mod clinic;
