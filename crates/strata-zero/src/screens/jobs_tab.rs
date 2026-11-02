@@ -195,7 +195,18 @@ impl JobsTab {
                     continue;
                 }
                 if let Some(src) = story_source(st, m) {
-                    let t = card::way_text(&self.way(st, &src));
+                    // The walk, and who or what is at its end.
+                    let way = self.way(st, &src);
+                    let t = match way {
+                        Way::Walk { .. } => {
+                            format!(
+                                "{} · {}",
+                                card::way_text(&way),
+                                card::target_place(st, &src)
+                            )
+                        }
+                        _ => card::way_text(&way),
+                    };
                     if !t.is_empty() {
                         out.push(Entry::Next(t, track::is_tracked(st, &src)));
                     }
@@ -289,6 +300,17 @@ impl JobsTab {
             self.row = after.or(before).unwrap_or(0);
         }
         self.sel = entries.get(self.row).filter(|e| e.selectable()).cloned();
+    }
+
+    /// Puts the cursor on `want`, for tests and shots.
+    #[cfg(test)]
+    pub(crate) fn select(&mut self, st: &AppState, want: &Entry) {
+        self.row = self
+            .entries(st)
+            .iter()
+            .position(|e| e == want)
+            .expect("the row is listed");
+        self.sel = Some(want.clone());
     }
 
     fn step(&mut self, entries: &[Entry], delta: i32, tick: u64) {
@@ -520,7 +542,12 @@ impl JobsTab {
         let (_, first_was) = self.last_list.get();
         self.last_list.set((list, first_was));
         let entries = self.entries(st);
-        let row = self.row.min(entries.len().saturating_sub(1));
+        // The selected entry wherever this draw's list puts it.
+        let row = self
+            .sel
+            .as_ref()
+            .and_then(|s| entries.iter().position(|e| e == s))
+            .unwrap_or_else(|| self.row.min(entries.len().saturating_sub(1)));
         let half = list.height.saturating_sub(1) as usize / 2;
         let max_first = entries.len().saturating_sub(list.height as usize);
         let first = row.saturating_sub(half).min(max_first);
@@ -555,7 +582,7 @@ impl JobsTab {
             .take(text.height as usize)
         {
             let y = text.y + k as u16;
-            for x in text.x..text.right() {
+            for x in detail.x..detail.right() {
                 buf[(x, y)].set_char(' ').set_bg(PANEL_BG);
             }
             put_spans(buf, text.x, y, &line.spans, text.right());
@@ -786,13 +813,8 @@ impl JobsTab {
                     .get(*m)
                     .map(|x| x.title.clone())
                     .unwrap_or_default();
-                let mut right = Vec::new();
-                if !done
-                    && let Some(src) = story_source(st, *m)
-                    && let Way::Walk { m: d, .. } = self.way(st, &src)
-                {
-                    right.push((format!("{d} m"), DIM, false));
-                }
+                // The walk is on the next line, under it.
+                let right = Vec::new();
                 let mark = done.then_some(("✓", card::DONE));
                 let tone = if done { card::DONE } else { TEXT };
                 row_at(
@@ -844,7 +866,7 @@ impl JobsTab {
                             x,
                             y,
                             &text[lead.len()..],
-                            Style::default().fg(DIM),
+                            Style::default().fg(DIM).remove_modifier(Modifier::BOLD),
                             edge,
                         );
                     }
@@ -960,12 +982,7 @@ mod tests {
     }
 
     fn select(d: &mut Deck, st: &AppState, want: &Entry) {
-        let entries = d.jobs.entries(st);
-        d.jobs.row = entries
-            .iter()
-            .position(|e| e == want)
-            .expect("the row is listed");
-        d.jobs.sel = Some(want.clone());
+        d.jobs.select(st, want);
     }
 
     fn selected(d: &Deck, st: &AppState) -> Entry {

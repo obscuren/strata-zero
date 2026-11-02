@@ -565,6 +565,19 @@ window; tests with and without the window; `cargo check` for Linux and Windows.
   player sees changes yet.
 - **The off-corner stretch is advice** (§4 and the builder check), so "hand in by"
   appears nowhere.
+
+Made while building, from the real shots (`jobs_tab_*` in `screens/shots.rs`):
+- **The story's distance** moves onto its next line, "24 m · Marlo", instead of sitting
+  on the row's right as well. Its target is named the way the story names the person
+  ("Marlo", the role), not by the cast person's own name.
+- **Copy and plant stops name the host** the way the brief and the objective do
+  (`bar-oromed`), not by the building's display name.
+- **The window's second line puts the due time first.** The label for when the fixer
+  leaves goes under the bar only when it fits beside the due time. The third line
+  says it anyway.
+- **The offer's standing line** shortens to "{kind} work from standing {n} · you are at
+  {s}" when the full line doesn't fit.
+- **A tracked fixer** shows its `⌖` after their name on the fixer row ("MEZZ ⌖").
 - **Distances are cached per visit** (§11), not per frame. The legs are path searches.
 
 ## The builder check

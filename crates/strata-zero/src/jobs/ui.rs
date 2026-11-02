@@ -1,6 +1,6 @@
 //! What the player sees of the jobs: the QUEST pane, the deck's tab, the names.
 
-use super::{Job, JobId, Jobs, State, WARN_MINUTES, clock_text};
+use super::{JobId, Jobs, State, WARN_MINUTES, clock_text};
 use crate::app::AppState;
 use crate::ui::chrome::{CYAN, DIM, MAGENTA, TEXT};
 use ratatui::style::{Modifier, Style};
@@ -391,7 +391,7 @@ pub fn hand_over(st: &mut AppState, id: JobId) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jobs::{HOURS_FETCH, Kind, Objective, PAY_FETCH};
+    use crate::jobs::{HOURS_FETCH, Job, Kind, Objective, PAY_FETCH};
     use citygen::{BuildingId, Pos};
 
     fn text(lines: &[Line<'_>]) -> Vec<String> {

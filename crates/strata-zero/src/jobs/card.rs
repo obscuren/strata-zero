@@ -31,7 +31,8 @@ pub enum Way {
         m: usize,
         next: Option<String>,
     },
-    NoWay,
+    /// No walk gets there from here.
+    Unreachable,
     JackedIn,
     /// Nothing to walk to: done with, or a step with no place.
     Nowhere,
@@ -51,7 +52,7 @@ pub fn way(st: &AppState, source: &Source) -> Way {
             m: leg.path.len(),
             next: track::route::next_text(st, &leg, located),
         },
-        Err(NoLeg::NoWay) => Way::NoWay,
+        Err(NoLeg::NoWay) => Way::Unreachable,
         Err(NoLeg::JackedIn) => Way::JackedIn,
     }
 }
@@ -61,7 +62,7 @@ pub fn way_text(way: &Way) -> String {
     match way {
         Way::Walk { m, next: Some(n) } => format!("{m} m · {n}"),
         Way::Walk { m, next: None } => format!("{m} m"),
-        Way::NoWay => "no way from here".to_string(),
+        Way::Unreachable => "no way from here".to_string(),
         Way::JackedIn => "jacked in".to_string(),
         Way::Nowhere => String::new(),
     }
@@ -250,7 +251,7 @@ fn you_text(st: &AppState) -> String {
 pub(crate) fn walk_of(way: &Way) -> Option<(String, Color)> {
     match way {
         Way::Walk { .. } => Some((way_text(way), CYAN)),
-        Way::NoWay | Way::JackedIn => Some((way_text(way), DIM)),
+        Way::Unreachable | Way::JackedIn => Some((way_text(way), DIM)),
         Way::Nowhere => None,
     }
 }
@@ -354,9 +355,9 @@ pub fn stop_place(st: &AppState, job: &Job) -> String {
     match &job.kind {
         Kind::Fetch { number, .. } => format!("flat {number}"),
         Kind::Copy { building, .. } | Kind::Plant { building } => {
-            crate::net::building_name(st, *building)
+            crate::helix::hosts::building_hostname(st, *building)
         }
-        Kind::Deliver { to, .. } => track::person_name(st, *to),
+        Kind::Deliver { to, .. } => person_called(st, *to),
     }
 }
 
@@ -364,7 +365,7 @@ pub fn stop_place(st: &AppState, job: &Job) -> String {
 /// home, or the district of a spot.
 pub fn target_place(st: &AppState, source: &Source) -> String {
     match track::resolve(st, source) {
-        Resolved::Target(track::Target::Person(p)) => track::person_name(st, p),
+        Resolved::Target(track::Target::Person(p)) => person_called(st, p),
         Resolved::Target(track::Target::Building(b)) => crate::net::building_name(st, b),
         Resolved::Target(track::Target::Spot { place, pos, .. }) => {
             let home = st.home.map(|r| r.home.building);
@@ -375,6 +376,17 @@ pub fn target_place(st: &AppState, source: &Source) -> String {
         }
         _ => "there".to_string(),
     }
+}
+
+/// A person as the game calls them: by the story's name for the role they are cast
+/// in, else their own.
+fn person_called(st: &AppState, p: PersonId) -> String {
+    st.missions
+        .cast
+        .iter()
+        .find(|(_, who)| **who == p)
+        .map(|(role, _)| crate::missions::role_name(st, role))
+        .unwrap_or_else(|| track::person_name(st, p))
 }
 
 /// A delivery's person and their workplace, then their trade and hours.
@@ -421,6 +433,7 @@ fn backdoor_health(st: &AppState, b: BuildingId) -> Option<(String, Color)> {
 /// The job's own stop, its objective 0: done, to do, or (on an offer) faint.
 fn target_stop(st: &AppState, job: &Job, done: bool, faint: bool) -> Stop {
     let name = |b: BuildingId| crate::net::building_name(st, b);
+    let host = |b: BuildingId| crate::helix::hosts::building_hostname(st, b);
     let security = |b: BuildingId| crate::access::security_of(st, b);
     let (text, todo, did, under) = match &job.kind {
         Kind::Fetch {
@@ -439,7 +452,7 @@ fn target_stop(st: &AppState, job: &Job, done: bool, faint: bool) -> Stop {
             vec![door_line(st, *building, *level, *number)],
         ),
         Kind::Copy { building, vault } => (
-            format!("{} · security {}", name(*building), security(*building)),
+            format!("{} · security {}", host(*building), security(*building)),
             if *vault {
                 "copy its vault"
             } else {
@@ -453,7 +466,7 @@ fn target_stop(st: &AppState, job: &Job, done: bool, faint: bool) -> Stop {
             vec![("in the Net".to_string(), DIM)],
         ),
         Kind::Plant { building } => (
-            format!("{} · security {}", name(*building), security(*building)),
+            format!("{} · security {}", host(*building), security(*building)),
             "plant a backdoor",
             "backdoor planted",
             if done {
@@ -652,16 +665,7 @@ pub fn window_lines(st: &AppState, job: &Job, width: usize) -> Vec<Line<'static>
     let at = shift.map(|s| (corner(real_now, due, s), s));
     let taken_l = format!("taken {}", hm(day_minute(taken)));
     let mut left = vec![span(format!("        {taken_l}"), fg(FAINT))];
-    let mut used = 8 + taken_l.chars().count();
-    if let Some((Corner::Leaves(h), _)) = at {
-        let label = hm(day_minute(h));
-        let x = (8 + cell(h)).saturating_sub(2).max(used + 1);
-        if x + label.len() <= width {
-            left.push(span(" ".repeat(x - used), fg(FAINT)));
-            left.push(span(label, fg(FAINT)));
-            used = x + 5;
-        }
-    }
+    let used = 8 + taken_l.chars().count();
     let left_text = clock_text(Jobs::left(job, real_now).unwrap_or(0));
     let due_l = format!("due {}", hm(day_minute(due)));
     let rights = [
@@ -676,10 +680,33 @@ pub fn window_lines(st: &AppState, job: &Job, width: usize) -> Vec<Line<'static>
         ],
         vec![span(due_l.clone(), fg(DIM))],
     ];
-    let right = rights
-        .into_iter()
-        .find(|r| used + 1 + cells(r) <= width)
-        .unwrap_or_default();
+    // Where the fixer leaves goes under the bar when it fits before the right part;
+    // the due time comes first.
+    let leaves = match at {
+        Some((Corner::Leaves(h), _)) => {
+            let x = (8 + cell(h)).saturating_sub(2).max(used + 1);
+            Some((x, hm(day_minute(h))))
+        }
+        _ => None,
+    };
+    let with = leaves.as_ref().and_then(|(x, label)| {
+        let after = x + label.len();
+        rights
+            .iter()
+            .find(|r| after + 1 + cells(r) <= width)
+            .map(|r| (r.clone(), *x, label.clone()))
+    });
+    let right = match with {
+        Some((r, x, label)) => {
+            left.push(span(" ".repeat(x - used), fg(FAINT)));
+            left.push(span(label, fg(FAINT)));
+            r
+        }
+        None => rights
+            .into_iter()
+            .find(|r| used + 1 + cells(r) <= width)
+            .unwrap_or_default(),
+    };
     out.push(row(left, right, width));
 
     let fixer = fixer_name(st, job.fixer);
@@ -827,12 +854,18 @@ fn offer_card(st: &AppState, job: &Job, width: usize, way: &Way) -> Vec<Line<'st
     } else {
         job.kind.tag().label()
     };
+    let from = opens_at(job.kind.tag(), vault);
+    let long = format!(
+        "{work} work · {} offers it from standing {from} · you are at {standing}",
+        fixer_name(st, job.fixer)
+    );
+    let short = format!("{work} work from standing {from} · you are at {standing}");
     out.push(plain(
-        format!(
-            "{work} work · {} offers it from standing {} · you are at {standing}",
-            fixer_name(st, job.fixer),
-            opens_at(job.kind.tag(), vault)
-        ),
+        if long.chars().count() <= width {
+            long
+        } else {
+            short
+        },
         FAINT,
         width,
     ));
@@ -1132,7 +1165,7 @@ fn closed_card(st: &AppState, job: &Job, width: usize) -> Vec<Line<'static>> {
                 span(
                     format!(
                         "the backdoor on {} · health ",
-                        crate::net::building_name(st, building)
+                        crate::helix::hosts::building_hostname(st, building)
                     ),
                     fg(DIM),
                 ),
@@ -1463,7 +1496,7 @@ mod tests {
         st.backdoors.plant_net(building, 1, 7, now);
         crate::jobs::send(&mut st, Event::Planted { building });
         crate::jobs::ui::hand_in(&mut st, id).unwrap();
-        let host = crate::net::building_name(&st, building);
+        let host = crate::helix::hosts::building_hostname(&st, building);
         let c = card(&st, id, 68);
         assert!(
             has(
@@ -1508,7 +1541,7 @@ mod tests {
         crate::track::set(&mut st, src).unwrap();
         for width in [56, 68] {
             let line = track_line(&st, &src, &place, width);
-            let l = text(&[line.clone()]).remove(0);
+            let l = text(std::slice::from_ref(&line)).remove(0);
             assert_eq!(l.chars().count(), width, "{l:?}");
             assert!(
                 l.starts_with(" ⌖ TRACKING  flat ") && l.ends_with(" t  stop"),
