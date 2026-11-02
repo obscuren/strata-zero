@@ -1520,6 +1520,7 @@ impl Screen for Deck {
         st.deck_talents = self.talents.clone();
         st.deck_rows[Tab::Workbench.index()] = self.workbench.pack();
         st.deck_rows[Tab::Jobs.index()] = self.jobs.row;
+        st.deck_jobs_sel = self.jobs.sel.clone();
         cmd
     }
 

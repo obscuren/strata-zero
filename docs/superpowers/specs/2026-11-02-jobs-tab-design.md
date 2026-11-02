@@ -143,7 +143,9 @@ Top to bottom (`round2_t`, `round2_v_steps`):
        "¤{pay}" in DIM.
      - An offer (DIM title): "offer" in AMBER, then "¤{pay}".
      - Narrower than 44 cells, the pay of a job in hand drops first.
-     - The mark column holds a cyan, bold `⌖` while that job is the track.
+     - The mark column holds a cyan, bold `⌖` while that job is the track. An offer
+       tracks its fixer, so a tracked fixer's `⌖` sits on the fixer's row instead,
+       after the name.
   3. **The next step** under each live job, indented further (DIM, not selectable):
      - In hand: "{m} m · {next}" from the walk to its current stop (`route::next_text`).
        For the hand-in leg: "{m} m · hand in to {fixer}".
@@ -189,8 +191,8 @@ fixer's corner in every kind.
 **The route.** One line per stop, two cells in.
 - The glyph sits in its own column, bold. The stop's text follows two cells on. Its verb
   is right-aligned in TEXT.
-- `@` (WHITE) is you: "you · {place} · by {nearest building}" (or "· in {building}"
-  indoors).
+- `@` (WHITE) is you, as the deck's link line says where: "you · {district} ·
+  {stratum}" outdoors, "you · {building} · {floor}" indoors.
 - `@` sits just above the first stop not yet done. Below it, in CYAN, a `┃` line:
   "{m} m · {next}", the walk to that stop.
 - Stops already done sit above `@`, each with a `✓` in DONE and the done word in FAINT.
@@ -424,18 +426,20 @@ goes to the strip.
 
 | row | verbs |
 | --- | --- |
-| job in hand | `t` Track (Stop tracking, with a `⌖` tail, while it is the track) · `m` Show on the MAP · `r` Read the mail ({n}) · `d` Drop |
+| job in hand | `t` Track (Stop tracking, with a `⌖` tail, while it is the track) · `m` Show on the MAP · `r` Read the mail · `d` Drop |
 | offer | `t` Track {fixer} · `m` Show on the MAP |
-| fixer | `t` Track {fixer} · `m` Show on the MAP · `r` Read {fixer}'s mail ({n}) |
+| fixer | `t` Track {fixer} · `m` Show on the MAP · `r` Read {fixer}'s mail |
 | story | `t` Track · `m` Show on the MAP |
-| closed job | `r` Read the mail ({n}) |
+| closed job | `r` Read the mail |
 
 - `d` Drop opens the existing ask, "Drop {title}?" with y and n (`drop_confirm`), then
   runs `jobs::ui::drop`.
-- `r` shows the job's mails (or all of that fixer's job mails) as a card popup, newest
-  first: "From", "Subject", then the body. They're marked read as the rig marks them
-  (`credentials::mail_read`). A job's mails are the ones it sent: the take and the
-  late notice (§11). Story mails never show here, even from a fixer who is also in the
+- `r` shows one mail as a card popup: of the job's mails (or that fixer's job mails),
+  the newest unread, else the newest. "From", "Subject", then the body. It is marked
+  read as the rig marks it (`credentials::mail_read`); one mail a card, so no mail is
+  marked read that didn't fit on the screen. The verb's tail says " · {n} unread", or
+  " · {n}" when all are read. A job's mails are the ones it sent: the take and the late
+  notice (§11). Story mails never show here, even from a fixer who is also in the
   story. With no mails, the verb is disabled with " · no mail".
 
 **The words.** Every place a job speaks uses these:
@@ -578,6 +582,15 @@ Made while building, from the real shots (`jobs_tab_*` in `screens/shots.rs`):
 - **The offer's standing line** shortens to "{kind} work from standing {n} · you are at
   {s}" when the full line doesn't fit.
 - **A tracked fixer** shows its `⌖` after their name on the fixer row ("MEZZ ⌖").
+
+From the final review:
+- **The tab remembers its row by what it is** (`AppState.deck_jobs_sel`), not by its
+  index, so it comes back on the same job when the deck reopens. A row that leaves the
+  list, like a job dropped and folded away, hands the cursor to its fixer's fold, else
+  to the fixer.
+- **One mail a card** (§10), so nothing is marked read off the screen.
+- **The walks last the visit.** The world stands still while the deck is open; the
+  update makes the selected card's walk, and the draw finds it made.
 - **Distances are cached per visit** (§11), not per frame. The legs are path searches.
 
 ## The builder check

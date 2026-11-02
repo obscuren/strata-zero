@@ -5,7 +5,9 @@
 
 use crate::app::AppState;
 use crate::jobs::card::{self, Way, fixer_source};
-use crate::jobs::ui::{district_of_fixer, fixer_mails, fixer_name, hand_in_now, job_mails};
+use crate::jobs::ui::{
+    district_of_fixer, fixer_mails, fixer_name, hand_in_now, job_mails, next_mail,
+};
 use crate::jobs::{
     Job, JobId, Jobs, State, WARN_MINUTES, clock_text, day_minute, in_shift, shift_of,
 };
@@ -36,7 +38,7 @@ const NARROW: u16 = 44;
 
 /// One row of the list.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum Entry {
+pub enum Entry {
     Header(String),
     Mission(usize),
     Fixer(PersonId),
@@ -66,14 +68,14 @@ fn closed(j: &Job) -> bool {
 }
 
 /// What the cached walks were made from: where you stand, each job's state and ticks,
-/// the story's steps, the track, and the second (people move).
+/// the story's steps, the track. The world stands still while the deck is open, so
+/// they last the visit unless one of these changes.
 #[derive(Clone, Debug, PartialEq)]
 struct Stamp {
     at: Option<(Place, Pos)>,
     jobs: Vec<(JobId, State, Vec<bool>)>,
     story: Vec<usize>,
     track: Option<Source>,
-    second: u64,
 }
 
 impl Stamp {
@@ -88,7 +90,6 @@ impl Stamp {
                 .collect(),
             story: st.missions.runs.iter().map(|r| r.at).collect(),
             track: st.track.as_ref().map(|t| t.source),
-            second: st.tick / 30,
         }
     }
 }
@@ -110,7 +111,7 @@ pub(crate) enum Key {
 pub(crate) struct JobsTab {
     pub row: usize,
     /// The selected entry, so the cursor stays on it as rows come and go.
-    sel: Option<Entry>,
+    pub(crate) sel: Option<Entry>,
     /// Tick of the last row change; drives the card's typewriter.
     pub changed: u64,
     ways: RefCell<Ways>,
@@ -134,6 +135,7 @@ impl JobsTab {
     pub fn restore(st: &AppState) -> JobsTab {
         let mut t = JobsTab::new(st.tick);
         t.row = st.deck_rows[Tab::Jobs.index()];
+        t.sel = st.deck_jobs_sel.clone();
         t.reselect(st);
         t
     }
@@ -276,30 +278,49 @@ impl JobsTab {
         }
     }
 
-    /// Puts the cursor back on the entry it was on, or the nearest selectable one after
-    /// where it was; on a fresh tab, the first live job.
+    /// Puts the cursor back on the entry it was on; one gone from the list (a job folded
+    /// away as it closed) hands it to its fixer's fold, else to the fixer. Else the
+    /// nearest selectable row after where it was; on a fresh tab, the first live job.
+    /// Then makes the walk the selected card reads, so the draw finds it made.
     pub(crate) fn reselect(&mut self, st: &AppState) {
         let entries = self.entries(st);
-        if let Some(sel) = &self.sel
-            && let Some(i) = entries.iter().position(|e| e == sel)
-        {
-            self.row = i;
-            return;
-        }
+        let at = |want: &Entry| entries.iter().position(|e| e == want);
+        let found = self.sel.as_ref().and_then(|sel| {
+            at(sel).or_else(|| {
+                let fixer = match sel {
+                    Entry::Job(id) => st.jobs.get(*id).map(|j| j.fixer),
+                    Entry::Fixer(f) | Entry::Folded { fixer: f, .. } => Some(*f),
+                    _ => None,
+                }?;
+                entries
+                    .iter()
+                    .position(|e| matches!(e, Entry::Folded { fixer: f, .. } if *f == fixer))
+                    .or_else(|| at(&Entry::Fixer(fixer)))
+            })
+        });
         let ok = |i: usize| entries.get(i).is_some_and(Entry::selectable);
-        if self.sel.is_none() && !ok(self.row) {
-            let live = entries.iter().position(
-                |e| matches!(e, Entry::Job(id) if st.jobs.get(*id).is_some_and(|j| !closed(j))),
-            );
-            self.row = live
+        self.row = match found {
+            Some(i) => i,
+            None if self.sel.is_none() && !ok(self.row) => entries
+                .iter()
+                .position(
+                    |e| matches!(e, Entry::Job(id) if st.jobs.get(*id).is_some_and(|j| !closed(j))),
+                )
                 .or_else(|| entries.iter().position(Entry::selectable))
-                .unwrap_or(0);
-        } else if !ok(self.row) {
-            let after = (self.row..entries.len()).find(|i| ok(*i));
-            let before = (0..self.row.min(entries.len())).rev().find(|i| ok(*i));
-            self.row = after.or(before).unwrap_or(0);
-        }
+                .unwrap_or(0),
+            None if !ok(self.row) => {
+                let after = (self.row..entries.len()).find(|i| ok(*i));
+                let before = (0..self.row.min(entries.len())).rev().find(|i| ok(*i));
+                after.or(before).unwrap_or(0)
+            }
+            None => self.row,
+        };
         self.sel = entries.get(self.row).filter(|e| e.selectable()).cloned();
+        if let Some(e) = &self.sel
+            && let Some(src) = self.source_of(st, e)
+        {
+            self.way(st, &src);
+        }
     }
 
     /// Puts the cursor on `want`, for tests and shots.
@@ -407,12 +428,21 @@ impl JobsTab {
         };
         let map_choice =
             || Self::listing_of(st, e).map(|id| Choice::new('m', "Show on the MAP", Pick::Map(id)));
-        let mail_choice = |label: String, mails: Vec<usize>| {
-            if mails.is_empty() {
-                Choice::disabled('r', label).tail(" · no mail")
-            } else {
-                let n = mails.len();
-                Choice::new('r', label, Pick::Mail(mails)).tail(format!(" · {n}"))
+        // One mail a card, so none is marked read unseen: the newest unread, else the
+        // newest; the tail counts what is left unread.
+        let mail_choice = |label: String, mails: Vec<usize>| match next_mail(st, &mails) {
+            None => Choice::disabled('r', label).tail(" · no mail"),
+            Some(i) => {
+                let unread = mails
+                    .iter()
+                    .filter(|m| st.journal.mails.get(**m).is_some_and(|m| !m.read))
+                    .count();
+                let tail = if unread > 0 {
+                    format!(" · {unread} unread")
+                } else {
+                    format!(" · {}", mails.len())
+                };
+                Choice::new('r', label, Pick::Mail(vec![i])).tail(tail)
             }
         };
         let (title, choices): (String, Vec<Option<Choice>>) = match e {
@@ -1296,6 +1326,56 @@ mod tests {
         assert!(mails.iter().all(|i| st.journal.mails[*i].read));
         assert!(!st.journal.mails[story].read);
         assert_eq!(job_mails(&st, ids[0]).len(), 1);
+    }
+
+    #[test]
+    fn reopening_the_deck_finds_the_row_it_was_left_on() {
+        let (mut st, ids, mut d) = jobs_deck();
+        select(&mut d, &st, &Entry::Job(ids[2]));
+        d.update(&mut st, &[]);
+        // Whatever the saved index points at now, the entry wins.
+        st.deck_rows[Tab::Jobs.index()] = 0;
+        let back = Deck::new(st.tick).restore(&st);
+        assert_eq!(back.jobs.sel, Some(Entry::Job(ids[2])));
+    }
+
+    #[test]
+    fn a_dropped_job_leaves_the_cursor_with_its_fixer() {
+        let (mut st, ids, mut d) = jobs_deck();
+        let f = st.jobs.get(ids[1]).unwrap().fixer;
+        select(&mut d, &st, &Entry::Job(ids[1]));
+        crate::jobs::ui::drop(&mut st, ids[1]).unwrap();
+        d.update(&mut st, &[]);
+        assert!(
+            matches!(selected(&d, &st), Entry::Folded { fixer, n: 2 } if fixer == f),
+            "{:?}",
+            selected(&d, &st)
+        );
+    }
+
+    #[test]
+    fn the_mail_is_read_one_at_a_time_newest_unread_first() {
+        let (mut st, ids, _) = jobs_deck();
+        let f = st.jobs.get(ids[1]).unwrap().fixer;
+        let mails = fixer_mails(&st, f);
+        assert!(mails.len() >= 2, "a take for each job: {mails:?}");
+        let first = next_mail(&st, &mails).unwrap();
+        assert_eq!(first, mails[0], "the newest");
+        crate::jobs::ui::mail_card(&mut st, &[first]);
+        assert_eq!(
+            next_mail(&st, &mails),
+            Some(mails[1]),
+            "then the next unread"
+        );
+        assert!(!st.journal.mails[mails[1]].read, "unseen stays unread");
+        for m in &mails {
+            st.journal.mails[*m].read = true;
+        }
+        assert_eq!(
+            next_mail(&st, &mails),
+            Some(mails[0]),
+            "all read: the newest"
+        );
     }
 
     #[test]

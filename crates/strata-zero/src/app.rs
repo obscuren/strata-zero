@@ -133,6 +133,8 @@ pub struct AppState {
     pub deck_kit: crate::screens::kit::KitState,
     /// The fixers whose closed jobs JOBS shows unfolded.
     pub deck_jobs_open: std::collections::BTreeSet<sim::PersonId>,
+    /// The row JOBS was left on, by what it is rather than where.
+    pub deck_jobs_sel: Option<crate::screens::jobs_tab::Entry>,
     /// A listing JOBS asked MAP to put its cursor on, for the deck's next update.
     pub deck_map_to: Option<crate::track::ListingId>,
     /// Where ATTRIBUTES was left: the focus, the tile, the ledger's row.
@@ -307,6 +309,7 @@ impl AppState {
             deck_rows: [0; Tab::ALL.len()],
             deck_kit: Default::default(),
             deck_jobs_open: Default::default(),
+            deck_jobs_sel: None,
             deck_map_to: None,
             deck_sheet: Default::default(),
             deck_talents: Default::default(),
@@ -455,6 +458,7 @@ impl AppState {
         self.deck_rows = [0; Tab::ALL.len()];
         self.deck_kit = Default::default();
         self.deck_jobs_open.clear();
+        self.deck_jobs_sel = None;
         self.deck_map_to = None;
         self.deck_sheet = Default::default();
         self.deck_talents = Default::default();

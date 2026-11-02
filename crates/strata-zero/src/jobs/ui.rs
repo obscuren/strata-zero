@@ -245,6 +245,15 @@ pub fn fixer_mails(st: &AppState, fixer: PersonId) -> Vec<usize> {
     v
 }
 
+/// The mail of `mails` (newest first) to read next: the newest unread, else the newest.
+pub fn next_mail(st: &AppState, mails: &[usize]) -> Option<usize> {
+    mails
+        .iter()
+        .copied()
+        .find(|i| st.journal.mails.get(*i).is_some_and(|m| !m.read))
+        .or_else(|| mails.first().copied())
+}
+
 /// Mails as the rig reads them, one after another, each marked read.
 pub fn mail_card(st: &mut AppState, mails: &[usize]) -> Vec<Line<'static>> {
     let mut out = Vec::new();
