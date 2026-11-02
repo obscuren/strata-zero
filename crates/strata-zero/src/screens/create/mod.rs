@@ -51,9 +51,18 @@ pub(crate) fn attribute_colour(s: Attribute) -> Color {
     attribute_rgb(s).to_color()
 }
 
+/// Which of NAME's two fields takes the keys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NameField {
+    Handle,
+    PermaDeath,
+}
+
 /// The wizard: which step is up, where each list's cursor sits, and the footer notice.
 pub struct Create {
     pub(crate) step: Step,
+    /// NAME's field with the keys.
+    pub(crate) name_field: NameField,
     /// Tick the current step opened: drives the slide-in and the typewriter.
     opened: u64,
     /// Tick the dossier last changed, so it types itself out again.
@@ -78,6 +87,7 @@ impl Create {
     pub fn new(st: &AppState, step: Step, tick: u64) -> Self {
         let mut c = Create {
             step,
+            name_field: NameField::Handle,
             opened: tick,
             changed: tick,
             cursor: [0; 6],
@@ -117,6 +127,7 @@ impl Create {
         self.opened = st.tick;
         self.changed = st.tick;
         self.notice = None;
+        self.name_field = NameField::Handle;
         self.pick_under_cursor(st);
         ScreenCmd::Flash(TransitionKind::Glitch)
     }
@@ -204,7 +215,7 @@ impl Create {
 
     fn step_key(&mut self, st: &mut AppState, code: KeyCode) {
         match self.step {
-            Step::Name => name::key(st, code),
+            Step::Name => name::key(st, &mut self.name_field, code),
             Step::Origin => {
                 if self.move_cursor(st.content.origins.len(), code) {
                     self.pick_under_cursor(st);
@@ -225,7 +236,20 @@ impl Create {
 
     fn footer_keys(&self) -> &'static [(&'static str, &'static str)] {
         match self.step {
-            Step::Name => &[("type", "name"), ("enter", "next"), ("esc", "back")],
+            Step::Name => match self.name_field {
+                NameField::Handle => &[
+                    ("type", "name"),
+                    ("↓", "perma death"),
+                    ("enter", "next"),
+                    ("esc", "back"),
+                ],
+                NameField::PermaDeath => &[
+                    ("←→", "on/off"),
+                    ("↑", "handle"),
+                    ("enter", "next"),
+                    ("esc", "back"),
+                ],
+            },
             Step::Origin | Step::Profession => {
                 &[("↑↓", "choose"), ("enter", "next"), ("esc", "back")]
             }
@@ -460,7 +484,7 @@ impl Screen for Create {
             ),
         };
         match self.step {
-            Step::Name => name::draw(st, b, &panes, tick, buf),
+            Step::Name => name::draw(st, b, self.name_field, &panes, tick, buf),
             Step::Origin => pick::draw(
                 &pick::origins(st),
                 self.cursor[Step::Origin.index()],
@@ -544,6 +568,57 @@ mod tests {
         b.origin = Some(game::OriginId::new("creche"));
         b.profession = Some(game::ProfessionId::new("netrunner"));
         Create::new(st, step, 0)
+    }
+
+    #[test]
+    fn name_step_moves_to_perma_death_and_flips_it() {
+        let mut st = AppState::new();
+        let mut c = picked(&mut st, Step::Name);
+        let pd = |st: &AppState| st.build.as_ref().unwrap().perma_death;
+        let handle = |st: &AppState| st.build.as_ref().unwrap().handle.clone();
+        c.update(&mut st, &[key(KeyCode::Left)]);
+        assert!(pd(&st), "the arrows flip it only on its own field");
+        c.update(&mut st, &[key(KeyCode::Down)]);
+        assert_eq!(c.name_field, NameField::PermaDeath);
+        c.update(&mut st, &[key(KeyCode::Right)]);
+        assert!(!pd(&st));
+        c.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert!(pd(&st));
+        c.update(&mut st, &[key(KeyCode::Char('x')), key(KeyCode::Backspace)]);
+        assert_eq!(handle(&st), "", "typing on perma death goes nowhere");
+        c.update(&mut st, &[key(KeyCode::Up), key(KeyCode::Char('x'))]);
+        assert_eq!(c.name_field, NameField::Handle);
+        assert_eq!(handle(&st), "x");
+        assert!(pd(&st));
+    }
+
+    #[test]
+    fn name_step_draws_perma_death_and_the_sheet_tag() {
+        for (w, h) in [(120, 40), (100, 30)] {
+            let mut st = AppState::new();
+            let mut c = picked(&mut st, Step::Name);
+            st.build.as_mut().unwrap().handle = "Vex".into();
+            let text = draw(&c, &st, w, h);
+            for want in [
+                "perma death",
+                "ON · OFF",
+                "One life. If VEX flatlines",
+                "PERMA DEATH",
+                "[↓]perma death",
+                "▮",
+            ] {
+                assert!(text.contains(want), "{w}x{h} wants {want:?}: {text}");
+            }
+            c.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Right)]);
+            let text = draw(&c, &st, w, h);
+            for want in ["A flatline sends you back", "[←→]on/off", "[↑]handle"] {
+                assert!(text.contains(want), "{w}x{h} wants {want:?}: {text}");
+            }
+            assert!(
+                !text.contains("PERMA DEATH") && !text.contains('▮'),
+                "{w}x{h}: no tag while off, no cursor off the handle: {text}"
+            );
+        }
     }
 
     #[test]
