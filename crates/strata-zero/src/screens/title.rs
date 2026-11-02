@@ -16,7 +16,7 @@ use ratatui::text::Span;
 use ratatui::widgets::{Paragraph, Widget};
 
 pub const TITLE: &str = "STRATA ZERO";
-const SUBTITLE: &str = "h i g h   t e c h   ·   l o w   l i f e";
+pub const SUBTITLE: &str = "h i g h   t e c h   ·   l o w   l i f e";
 
 /// Which map the COMBAT start opens on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
