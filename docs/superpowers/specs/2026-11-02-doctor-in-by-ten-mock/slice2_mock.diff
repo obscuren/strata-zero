@@ -1,0 +1,270 @@
+diff --git a/crates/strata-zero/src/screens/sheet/ledger.rs b/crates/strata-zero/src/screens/sheet/ledger.rs
+index e2210c4..60a4320 100644
+--- a/crates/strata-zero/src/screens/sheet/ledger.rs
++++ b/crates/strata-zero/src/screens/sheet/ledger.rs
+@@ -993,7 +993,7 @@ fn fit_card(st: &AppState, v: &View, focused: bool, w: usize) -> CardText {
+     }
+     card.blank();
+     // FITS ──── from your bag
+-    let tail = "from your bag";
++    let tail = if std::env::var("MOCK_TAB").is_ok() { "from her tray" } else { "from your bag" };
+     let run = w.saturating_sub("FITS".len() + tail.len() + 2);
+     card.push(Line::from(vec![
+         Span::styled("FITS", bold(if focused { CYAN } else { DIM })),
+@@ -1092,7 +1092,13 @@ fn fit_card(st: &AppState, v: &View, focused: bool, w: usize) -> CardText {
+         let (put, out) = pick_fee(st, v, pick);
+         let (fee, credits) = (put + out, ch.credits);
+         let amount = format!("¤{fee}");
+-        let line = if fee > credits {
++        let line = if std::env::var("MOCK_TAB").is_ok() {
++            vec![
++                Span::styled("fee ", fg(DIM)),
++                Span::styled("TAB · CASTELLAN", bold(AMBER)),
++                Span::styled(format!(" · ¤{fee} on him"), fg(DIM)),
++            ]
++        } else if fee > credits {
+             vec![
+                 Span::styled("fee ", fg(DIM)),
+                 Span::styled(amount, bold(MAGENTA)),
+diff --git a/crates/strata-zero/src/screens/shots.rs b/crates/strata-zero/src/screens/shots.rs
+index d8fcb40..7fb04d0 100644
+--- a/crates/strata-zero/src/screens/shots.rs
++++ b/crates/strata-zero/src/screens/shots.rs
+@@ -2339,3 +2339,237 @@ fn rest_shots() {
+         shot_stack(&format!("rest_asleep{suffix}"), &st, &[&map], size);
+     }
+ }
++
++// ---- Throwaway: slice 2 mocks (Doctor's in by ten). Not committed. ----
++
++/// A reading card: a HOLO bracket box over whatever is under it, its lines as given.
++struct MockRead {
++    head: (&'static str, &'static str),
++    lines: Vec<Vec<(String, Color, bool)>>,
++    close: &'static str,
++}
++
++impl Screen for MockRead {
++    fn update(&mut self, _: &mut AppState, _: &[crossterm::event::KeyEvent]) -> crate::app::ScreenCmd {
++        crate::app::ScreenCmd::Stay
++    }
++    fn draw(&self, st: &AppState, f: &mut ratatui::Frame) {
++        use ratatui::style::Style;
++        const MAGENTA: Color = Color::Rgb(255, 0, 200);
++        const DIM: Color = Color::Rgb(110, 120, 135);
++        let area = f.area();
++        let w = 66u16.min(area.width - 4);
++        let h = (self.lines.len() as u16 + 7).min(area.height - 2);
++        let r = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2 - 2, w, h);
++        let buf = f.buffer_mut();
++        crate::missions::face::bracket_frame(buf, r);
++        let put = |buf: &mut Buffer, x: u16, y: u16, s: &str, c: Color, b: bool| {
++            let mut style = Style::default().fg(c).bg(Color::Rgb(10, 12, 18));
++            if b {
++                style = style.add_modifier(Modifier::BOLD);
++            }
++            buf.set_string(x, y, s, style);
++        };
++        put(buf, r.x + 3, r.y + 1, self.head.0, MAGENTA, true);
++        put(buf, r.x + 4 + self.head.0.chars().count() as u16, r.y + 1, self.head.1, DIM, false);
++        let (hh, mm) = st.clock();
++        put(buf, r.right() - 16, r.y + 1, "▂▄▆█", MAGENTA, false);
++        put(buf, r.right() - 11, r.y + 1, &format!("{hh:02}:{mm:02}"), DIM, false);
++        for (j, line) in self.lines.iter().enumerate() {
++            let mut x = r.x + 3;
++            for (s, c, b) in line {
++                put(buf, x, r.y + 3 + j as u16, s, *c, *b);
++                x += s.chars().count() as u16;
++            }
++        }
++        let ky = r.bottom() - 2;
++        put(buf, r.x + 3, ky, "space", MAGENTA, true);
++        put(buf, r.x + 9, ky, self.close, DIM, false);
++    }
++}
++
++fn seg(s: &str, c: Color) -> (String, Color, bool) {
++    (s.to_string(), c, false)
++}
++fn segb(s: &str, c: Color) -> (String, Color, bool) {
++    (s.to_string(), c, true)
++}
++
++/// The flat at 07:52, the news read, standing by the set: Seren's line through it.
++fn mock_flat() -> (AppState, MapScreen) {
++    use crate::missions::news;
++    let mut st = state_home();
++    let _ = MapScreen::walking(&mut st);
++    crate::missions::begin(&mut st);
++    st.missions.feeds.clear();
++    crate::missions::end(&mut st, 0, 0);
++    let want = 7 * 60 + 52;
++    let ahead = (want + 1440 - st.minute_of_day() as u64) % 1440;
++    {
++        let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
++        world.advance(city, world.tick() + ahead * sim::TICKS_PER_MINUTE);
++    }
++    news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
++    let (place, set) = news::set_tile(&st).unwrap();
++    let mut me = crate::walker::Player::at(place, set.offset(-2, 1));
++    {
++        let city = st.city.as_ref().unwrap();
++        let flat = crate::render::map::MapRef::for_place(
++            city,
++            &st.interiors,
++            &st.constructs,
++            place,
++            st.minute_of_day(),
++        )
++        .unwrap();
++        me.update_fov(&flat, st.sight_bonus());
++    }
++    st.player = Some(me);
++    let map = MapScreen::walking(&mut st);
++    (st, map)
++}
++
++#[test]
++#[ignore]
++fn slice2_mock() {
++    use crate::missions::asides::{self, Speaker};
++    use crate::missions::news;
++    const MAGENTA: Color = Color::Rgb(255, 0, 200);
++    const DIM: Color = Color::Rgb(110, 120, 135);
++    const TEXT: Color = Color::Rgb(220, 225, 235);
++    const AMBER: Color = Color::Rgb(255, 190, 60);
++    const CYAN: Color = Color::Rgb(0, 229, 255);
++    const FAINT: Color = Color::Rgb(70, 78, 92);
++    let sizes = [(120, 40), (100, 30)];
++
++    // 1. Seren on your set: the set's line torn, hers in its place.
++    let (mut st, _) = mock_flat();
++    let (place, set) = news::set_tile(&st).unwrap();
++    asides::say(
++        &mut st,
++        Speaker::Tile(place, set),
++        "HEXTEK NEWS▚▞▚ S".to_string(),
++        MAGENTA,
++        "Doctor's in by ten. Eat first.".to_string(),
++    );
++    {
++        let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
++        world.advance(city, world.tick() + 3 * crate::missions::call::TICKS_PER_SECOND);
++    }
++    let map = MapScreen::walking(&mut st);
++    for (w, h) in sizes {
++        shot_stack(&format!("s2_seren_set_{w}x{h}"), &st, &[&map], (w, h));
++    }
++
++    // 2. NETRUNNER: the shard read at the rig. The ledger, its owner, and her tag.
++    let (st, map) = mock_flat();
++    let rig = MockRead {
++        head: ("HOLO", "▸ shard · read at the rig"),
++        lines: vec![
++            vec![seg("LEDGER  ", DIM), seg("214 entries · 2068–2071", TEXT)],
++            vec![seg("owner   ", DIM), segb("COZ", AMBER), seg(" · fixer · Kowloon Row", DIM)],
++            vec![seg("ICE     ", DIM), segb("open", MAGENTA), seg(" · cracked 02:13 last night", MAGENTA)],
++            vec![],
++            vec![seg("03.11  ¤ 4 000  ", TEXT), seg("▓▓▓▓▓▓▓  ", FAINT), seg("Old Kowloon Row Station", DIM)],
++            vec![seg("03.14  ¤   650  ", TEXT), seg("▓▓▓▓▓    ▓▓▓▓▓▓▓▓", FAINT)],
++            vec![seg("03.19  ¤12 500  ", TEXT), seg("▓▓▓▓▓▓▓▓ ", FAINT), seg("Velform Group Plaza", DIM)],
++            vec![seg("04.02  ¤ 1 100  ", TEXT), seg("▓▓▓▓     ▓▓▓▓▓▓", FAINT)],
++            vec![seg("  …210 more", FAINT)],
++            vec![],
++            vec![segb("▚▞ ", MAGENTA), segb("too slow. —S", MAGENTA)],
++        ],
++        close: "pull it",
++    };
++    for (w, h) in sizes {
++        shot_stack(&format!("s2_read_rig_{w}x{h}"), &st, &[&map, &rig], (w, h));
++    }
++
++    // 3. WRENCH: the shard opened at the bench. Data locked; the hardware signed.
++    let (mut st, map) = mock_flat();
++    st.character = game::Character::debug_runner(&st.content);
++    st.tick += 200;
++    if st.tick % 90 < 3 {
++        st.tick += 3;
++    }
++    let mut deck = Deck::new(st.tick);
++    deck.update(&mut st, &[key(KeyCode::Char('4'))]);
++    let bench = MockRead {
++        head: ("BENCH", "▸ shard · casing open"),
++        lines: vec![
++            vec![seg("  ┌─────────────────────┐", CYAN)],
++            vec![seg("  │ ░░░░░░░░░░░░░░░░░░░ │   ", CYAN), seg("housing  ", DIM), seg("matte, no maker", TEXT)],
++            vec![seg("  │ ░░  ", CYAN), seg("ledger shard", DIM), seg("  ░ │   ", CYAN), seg("data     ", DIM), seg("locked · ICE 3", TEXT)],
++            vec![seg("  └┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┬┘   ", CYAN), seg("contacts ", DIM), seg("gold, worn bright", TEXT)],
++            vec![seg("    ╰── ", AMBER), segb("C O Z", AMBER), seg(" ──╯          ", AMBER), seg("mark     ", DIM), segb("COZ", AMBER), seg(" · burned in", DIM)],
++            vec![],
++            vec![seg("you  ", DIM), seg("Coz. Fixers sign their shards.", TEXT)],
++        ],
++        close: "close the casing",
++    };
++    for (w, h) in sizes {
++        shot_stack(&format!("s2_read_bench_{w}x{h}"), &st, &[&map, &deck, &bench], (w, h));
++    }
++
++    // 4. Odile Vance at her chair: the first line, as a bubble by the chair; then her
++    // tray, three pieces for the build, one on Castellan's tab.
++    let (mut st, _b, _, chair) = crate::clinic::testutil::inside();
++    let _ = MapScreen::walking(&mut st);
++    let place = st.player.as_ref().unwrap().place;
++    asides::say(
++        &mut st,
++        Speaker::Tile(place, chair),
++        "Odile Vance".to_string(),
++        Color::Rgb(160, 220, 255),
++        "He sends me strays. Sit.".to_string(),
++    );
++    {
++        let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
++        world.advance(city, world.tick() + 2 * crate::missions::call::TICKS_PER_SECOND);
++    }
++    let map = MapScreen::walking(&mut st);
++    for (w, h) in sizes {
++        shot_stack(&format!("s2_odile_{w}x{h}"), &st, &[&map], (w, h));
++    }
++    st.missions.asides.clear();
++    use crate::screens::popup::{Choice, Pick};
++    let mut choices = Vec::new();
++    for (k, name, tail) in [
++        ('1', "Take", "Neural port"),
++        ('2', "Take", "Target lens"),
++        ('3', "Take", "Subdermal mesh"),
++    ] {
++        let mut c = Choice::on(k, name, tail, CYAN, Pick::Close);
++        c.tail = match k {
++            '1' => " · neural · grants Ping, Static",
++            '2' => " · eyes · ICE shows its seams",
++            _ => " · skin · takes a knife",
++        }
++        .to_string();
++        choices.push(c);
++    }
++    let tray = crate::screens::popup::Popup::verbs("Odile Vance · her tray", choices, st.tick)
++        .with_body(vec!["One piece, on his tab. The rest go back in the drawer.".to_string()]);
++    st.tick += 200;
++    let map = MapScreen::walking(&mut st);
++    for (w, h) in sizes {
++        shot_stack(&format!("s2_tray_{w}x{h}"), &st, &[&map, &tray], (w, h));
++    }
++
++    // 5. The chair on Castellan's tab: her tray in FITS, the fee his.
++    let mut st = crate::clinic::testutil::seated();
++    st.character.credits = 320;
++    st.character.give_item(&st.content, ItemId::new("neural_port"), 1);
++    let map = MapScreen::walking(&mut st);
++    let mut deck = Deck::chair(&st);
++    deck.sheet.state.row = crate::screens::sheet::LedgerRow::Site(game::Site::Neural);
++    deck.update(&mut st, &[key(KeyCode::Char(' '))]);
++    deck.sheet.changed = st.tick;
++    deck.sheet.card = st.tick;
++    st.tick += 200;
++    if st.tick % 90 < 3 {
++        st.tick += 3;
++    }
++    for (w, h) in sizes {
++        shot_stack(&format!("s2_chair_tab_{w}x{h}"), &st, &[&map, &deck], (w, h));
++    }
++}
