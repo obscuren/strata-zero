@@ -56,4 +56,23 @@ Broadcasts([
         sign: "{city} Housing Authority. You live here now.",
         sign_colour: (255, 200, 80),
     ),
+    // The morning after the drop, as the pirates tell it: the story's news
+    // (`missions.ron`, `news: "marlo"`) on the way back in.
+    Broadcast(
+        id: "courier",
+        when: LoadGame,
+        tag: [
+            ("●", Some((255, 40, 40))),
+            (" ON AIR  ", Some((255, 40, 40))),
+            ("STATIC 66 · PIRATE", None),
+        ],
+        shout: "{city.loud}, WHO'S THE COURIER?",
+        paras: [
+            "Somebody put a noodle cook on the pavement last night, and the badges want a word with whoever walked off with a package. Funny thing: the cook sold names. To the badges.",
+            "So, for the record. Static Sixty-Six never saw your face, your jacket or your package. Cameras see everybody. Cameras don't testify.",
+            "Courier, if you're listening: don't open it. Don't come by the dish.",
+        ],
+        sign: "Static Sixty-Six. We never saw a thing.",
+        sign_colour: (255, 0, 200),
+    ),
 ])
