@@ -2025,3 +2025,54 @@ fn scene_bubbles_shots() {
         shot_stack(name, &st, &[&map], size);
     }
 }
+
+/// Interiors under their own light, map only, as the indoor lighting mock drew them
+/// (`docs/superpowers/specs/2026-11-02-indoor-lighting-mock/`): the start flat, a
+/// ripperdoc's at night, the first bar and club at street level, an office and a hotel
+/// floor, with the player on the floor's middle walkable tile.
+#[test]
+#[ignore]
+fn indoor_lighting() {
+    use citygen::BuildingKind as K;
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let shoot = |name: &str, st: &mut AppState| {
+        let map = MapScreen::walking(st);
+        write_svg(&dir, name, st, &draw_stack(st, &[&map], (120, 40)), false);
+    };
+    shoot("indoor_flat", &mut state_home());
+    let (mut st, ..) = crate::clinic::testutil::inside();
+    shoot("indoor_clinic", &mut st);
+    for (kind, level, name) in [
+        (K::Bar, 0, "indoor_bar"),
+        (K::Club, 0, "indoor_club"),
+        (K::Office, 2, "indoor_office"),
+        (K::Hotel, 2, "indoor_hotel"),
+    ] {
+        let mut st = state_home();
+        let city = st.city.clone().unwrap();
+        let found = city
+            .buildings
+            .iter()
+            .filter(|b| b.kind == kind)
+            .find_map(|b| {
+                let floor = st.interiors.ensure(&city, b.id, level)?.clone();
+                let size = floor.tiles.size();
+                let mid = Pos::new(size.w as i32 / 2, size.h as i32 / 2);
+                let stand = floor
+                    .tiles
+                    .iter()
+                    .filter(|(_, t)| t.is_walkable())
+                    .min_by_key(|(p, _)| p.dist2(mid))
+                    .map(|(p, _)| p)?;
+                Some((b.id, stand))
+            });
+        let Some((building, stand)) = found else {
+            continue;
+        };
+        let place = Place::Floor { building, level };
+        st.player = Some(crate::walker::Player::at(place, stand));
+        shoot(name, &mut st);
+    }
+}
