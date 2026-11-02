@@ -396,6 +396,7 @@ pub enum Trigger {
     At(Where),
     Talk(String),
     MissionDone { mission: String, minutes: u64 },
+    Chromed(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -476,7 +477,26 @@ pub enum Effect {
     Hold(String),
     /// Lets the role's person go, the first minute you are out of their work building.
     Release(String),
+    /// The `from` role holds out the first set whose need holds: one piece to take, on
+    /// the `tab` role's tab, which pays for it in `from`'s chair.
+    Tray {
+        from: String,
+        tab: String,
+        title: String,
+        line: String,
+        sets: Vec<TraySet>,
+    },
 }
+
+/// The pieces a tray holds when its need does.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct TraySet {
+    pub need: Need,
+    pub items: Vec<String>,
+}
+
+/// A tray's rows take the keys 1 to 9.
+const TRAY_MAX: usize = 9;
 
 /// What a mail's code opens.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -498,6 +518,7 @@ impl Effect {
             Effect::Dead { look, .. } => vec![look],
             Effect::Objective(s) | Effect::Log(s) => vec![s],
             Effect::Holo { text, .. } | Effect::Note { text, .. } => vec![text],
+            Effect::Tray { title, line, .. } => vec![title, line],
             Effect::Mail { subject, body, .. } => body
                 .iter()
                 .map(String::as_str)
@@ -518,7 +539,8 @@ impl Effect {
     }
 
     /// The roles named outside text: who speaks, who dies, who arrives (but you), who is
-    /// held or let go, and whose building a mailed code opens.
+    /// held or let go, whose building a mailed code opens, and who holds out a tray on
+    /// whose tab.
     fn named_roles(&self) -> Vec<&str> {
         match self {
             Effect::Mail {
@@ -526,6 +548,7 @@ impl Effect {
                 code: Some(CodeOf::Clinic(role)),
                 ..
             } => vec![from, role],
+            Effect::Tray { from, tab, .. } => vec![from, tab],
             Effect::Feed { from, .. }
             | Effect::Call { from, .. }
             | Effect::Mail { from, .. }
@@ -555,7 +578,8 @@ impl Trigger {
         match self {
             Trigger::Sees { role, .. }
             | Trigger::At(Where::Work { role, .. } | Where::By { role, .. })
-            | Trigger::Talk(role) => vec![role],
+            | Trigger::Talk(role)
+            | Trigger::Chromed(role) => vec![role],
             _ => vec![],
         }
     }
@@ -720,6 +744,7 @@ impl Book {
                     Effect::Dead { role, .. }
                     | Effect::Hold(role)
                     | Effect::Release(role)
+                    | Effect::Tray { from: role, .. }
                     | Effect::Mail {
                         code: Some(CodeOf::Clinic(role)),
                         ..
@@ -1094,6 +1119,7 @@ impl Book {
                     Effect::Call { lines, .. } if lines.is_empty() => {
                         return Err(BookError::Empty(format!("call in {place}")));
                     }
+                    Effect::Tray { sets, .. } => check_tray(&place, sets)?,
                     _ => {}
                 }
             }
@@ -1122,8 +1148,8 @@ impl Book {
         out.into_iter().collect()
     }
 
-    /// Every item a `Give`, `Take` or `Unseal` names or a reading reads, for the test
-    /// that has the content.
+    /// Every item a `Give`, `Take` or `Unseal` names, a tray holds or a reading reads, for
+    /// the test that has the content.
     #[cfg(test)]
     pub fn items(&self) -> Vec<&str> {
         let mut out = BTreeSet::new();
@@ -1133,9 +1159,14 @@ impl Book {
             .flat_map(|m| &m.steps)
             .flat_map(|s| &s.then)
         {
-            if let Effect::Give { item, .. } | Effect::Take { item, .. } | Effect::Unseal(item) = e
-            {
-                out.insert(item.as_str());
+            match e {
+                Effect::Give { item, .. } | Effect::Take { item, .. } | Effect::Unseal(item) => {
+                    out.insert(item.as_str());
+                }
+                Effect::Tray { sets, .. } => {
+                    out.extend(sets.iter().flat_map(|s| &s.items).map(String::as_str));
+                }
+                _ => {}
             }
         }
         out.extend(self.readings.keys().map(String::as_str));
@@ -1174,6 +1205,29 @@ fn check_level(place: &str, level: f32) -> Result<(), BookError> {
             what: format!("light level {level}, wanted 0 to 1"),
         })
     }
+}
+
+/// A tray holds a set, each set's need checked, and a set from one piece to one a key.
+fn check_tray(place: &str, sets: &[TraySet]) -> Result<(), BookError> {
+    if sets.is_empty() {
+        return Err(BookError::Empty(format!("tray in {place}")));
+    }
+    for set in sets {
+        check_need(place, &set.need)?;
+        if set.items.is_empty() {
+            return Err(BookError::Empty(format!("a tray's set in {place}")));
+        }
+        if set.items.len() > TRAY_MAX {
+            return Err(BookError::BadNumber {
+                place: place.into(),
+                what: format!(
+                    "a tray's set of {}, wanted {TRAY_MAX} at most",
+                    set.items.len()
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// A `Late` minute is a minute of the day, inside `Not` and `All` too.
@@ -1891,6 +1945,85 @@ mod tests {
             tiny(code_role, STEP, ""),
             Err(BookError::ReservedRole(CODE.into()))
         );
+    }
+
+    /// A step holding out a tray from `from` on `tab`'s tab, with these sets.
+    fn tray_step(from: &str, tab: &str, sets: &str) -> String {
+        format!(
+            r#"Step(id: "a", when: NewGame, then: [Tray(from: "{from}", tab: "{tab}",
+                title: "her tray", line: "One piece.", sets: [{sets}])])"#
+        )
+    }
+
+    const ONE_SET: &str = r#"TraySet(need: All([]), items: ["neural_port"])"#;
+
+    #[test]
+    fn a_tray_and_chromed_need_their_doc_cast() {
+        let zed: BTreeSet<String> = ["zed"].map(String::from).into();
+        // The tab's payer is a name on a line: nobody need play them.
+        assert_eq!(needed(&tray_step("zed", "marlo", ONE_SET)), zed);
+        let chromed = r#"Step(id: "a", when: Chromed("zed"), then: [Log("x")])"#;
+        assert_eq!(needed(chromed), zed);
+    }
+
+    #[test]
+    fn a_tray_names_known_roles_and_one_to_nine_pieces_a_set() {
+        let b = with_steps(&tray_step(
+            "marlo",
+            "seren",
+            r#"TraySet(need: Skill("hacking"), items: ["neural_port", "feedback_fuse"]),
+                TraySet(need: All([]), items: ["subdermal_mesh"])"#,
+        ))
+        .unwrap();
+        let Effect::Tray {
+            from, tab, sets, ..
+        } = &b.missions[0].steps[0].then[0]
+        else {
+            panic!("a tray")
+        };
+        assert_eq!((from.as_str(), tab.as_str()), ("marlo", "seren"));
+        assert_eq!(sets[0].need, Need::Skill("hacking".into()));
+        assert_eq!(sets[1].items, ["subdermal_mesh"]);
+        let refused = |steps: &str| with_steps(steps).unwrap_err();
+        for (from, tab) in [("nobody", "seren"), ("marlo", "nobody")] {
+            assert!(
+                matches!(
+                    refused(&tray_step(from, tab, ONE_SET)),
+                    BookError::UnknownRole { .. }
+                ),
+                "{from} {tab}"
+            );
+        }
+        let chromed = r#"Step(id: "a", when: Chromed("nobody"), then: [Log("x")])"#;
+        assert!(matches!(refused(chromed), BookError::UnknownRole { .. }));
+        // Its words name the cast too.
+        assert!(matches!(
+            refused(&tray_step("marlo", "seren", ONE_SET).replace("One piece.", "{nobody}")),
+            BookError::UnknownRole { .. }
+        ));
+        // A tray holds a set; a set holds a piece, and no more than the keys 1 to 9.
+        assert!(matches!(
+            refused(&tray_step("marlo", "seren", "")),
+            BookError::Empty(_)
+        ));
+        let empty = r#"TraySet(need: All([]), items: [])"#;
+        assert!(matches!(
+            refused(&tray_step("marlo", "seren", empty)),
+            BookError::Empty(_)
+        ));
+        let ten = format!(
+            "TraySet(need: All([]), items: [{}])",
+            [r#""neural_port""#; 10].join(", ")
+        );
+        assert!(matches!(
+            refused(&tray_step("marlo", "seren", &ten)),
+            BookError::BadNumber { .. }
+        ));
+        let late = r#"TraySet(need: Late(1440), items: ["neural_port"])"#;
+        assert!(matches!(
+            refused(&tray_step("marlo", "seren", late)),
+            BookError::BadNumber { .. }
+        ));
     }
 
     /// The tiny book with these readings.

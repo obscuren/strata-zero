@@ -2499,6 +2499,19 @@ impl Screen for MapScreen {
                 fx: TransitionKind::Glitch,
             };
         }
+        // The story's tray: it opens over the map once, when no scene is playing; esc
+        // leaves it waiting for you to talk to whoever holds it.
+        if crate::missions::scene::running(st).is_none()
+            && let Some(tray) = st.missions.tray.as_mut().filter(|t| !t.shown)
+        {
+            tray.shown = true;
+            if let Some(popup) = Popup::tray(st) {
+                return ScreenCmd::Push {
+                    to: Box::new(popup),
+                    fx: TransitionKind::None,
+                };
+            }
+        }
         // Black ICE killed: the screen reads the cause. The track ends with you.
         if let Some(cause) = st.net.death.clone() {
             st.track = None;

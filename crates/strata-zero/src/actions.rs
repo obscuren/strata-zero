@@ -48,6 +48,17 @@ pub fn fee_line(fee: u32, credits: u32) -> String {
     format!("the doc's fee is ¤{fee} · you have ¤{credits}")
 }
 
+/// The piece a chrome action puts in, from the pack: at a site or in a socket.
+fn put_in(st: &AppState, action: &Action) -> Option<game::ItemId> {
+    match action {
+        Action::Install { item, .. } => Some(item.clone()),
+        Action::InstallCopy { copy, .. } | Action::Fit { piece: copy, .. } => {
+            st.character.copy_in_pack(*copy).map(|s| s.item.clone())
+        }
+        _ => None,
+    }
+}
+
 /// Applies an action at the player's feet and runs its effects on the world.
 /// The message is for the status strip; a refusal is the reason.
 pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
@@ -61,8 +72,10 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         return Err("not yours to open".to_string());
     }
     // Chrome goes in and out in a ripperdoc's chair, for the doc's fee; free with dev
-    // free chrome. Every refusal comes before any change.
+    // free chrome; a piece on someone's tab goes in on the tab, once. Every refusal
+    // comes before any change.
     let mut charge = None;
+    let mut tab = None;
     if let Some(fee) = game::surgery_fee(&st.character, &st.content, &action) {
         match crate::clinic::operating(st) {
             Operating::Free => {}
@@ -70,6 +83,12 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
             Operating::Gone { doc } => {
                 st.chair = None;
                 return Err(crate::clinic::gone_line(&doc));
+            }
+            Operating::Chair { .. }
+                if put_in(st, &action)
+                    .is_some_and(|item| crate::missions::tab_for(st, &item).is_some()) =>
+            {
+                tab = Some(fee);
             }
             Operating::Chair { doc } => {
                 if fee > st.character.credits {
@@ -191,6 +210,12 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
     if let Some((fee, doc)) = charge.filter(|(fee, _)| *fee > 0) {
         st.character.credits -= fee;
         message = format!("{message} · ¤{fee} to {doc}");
+    }
+    if let Some(fee) = tab {
+        if let Some(t) = st.missions.tab.as_mut() {
+            t.spent = true;
+        }
+        message = format!("{message} · ¤{fee} on the tab");
     }
     if let Some(id) = fired
         && let Some(ability) = st.character.ability(&st.content, &id)

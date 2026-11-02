@@ -1,8 +1,8 @@
 //! What a step does to the game (spec §4), its text filled as it runs.
 
 use super::{
-    Body, Call, CodeOf, Effect, FeedView, Mark, YOU, cast, code_slot, daze, fill, marks, news,
-    person_of, role_name, scene, visitors,
+    Body, Call, CodeOf, Effect, FeedView, Mark, TrayOffer, YOU, cast, code_slot, daze, fill, marks,
+    news, person_of, role_name, scene, visitors,
 };
 use crate::app::AppState;
 use citygen::{Place, StratumKind};
@@ -99,6 +99,34 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
         }
         Effect::Release(role) => {
             st.missions.releasing.insert(role.clone());
+        }
+        Effect::Tray {
+            from,
+            tab,
+            title,
+            line,
+            sets,
+        } => {
+            // The first set that fits who you are now, kept as it is held out. Nothing
+            // when nobody holds it.
+            let items = sets
+                .iter()
+                .find(|s| super::holds(st, Some(mission), &s.need))
+                .map(|s| s.items.iter().map(|i| ItemId(i.clone())).collect());
+            if let Some(items) = items
+                && person_of(st, from).is_some()
+            {
+                st.missions.tray = Some(TrayOffer {
+                    mission,
+                    step,
+                    from: from.clone(),
+                    tab: tab.clone(),
+                    title: fill(st, title),
+                    line: fill(st, line),
+                    items,
+                    shown: false,
+                });
+            }
         }
     }
 }
@@ -432,6 +460,91 @@ mod tests {
         apply(&mut st, 0, 0, &Effect::Release("nobody".into()));
         crate::missions::tick(&mut st);
         assert!(st.missions.releasing.is_empty());
+    }
+
+    /// The doc's tray on Castellan's tab: a NETRUNNER's set, then one for anyone.
+    fn tray() -> Effect {
+        let set = |need: crate::missions::Need, items: &[&str]| crate::missions::TraySet {
+            need,
+            items: items.iter().map(|s| s.to_string()).collect(),
+        };
+        Effect::Tray {
+            from: "doc".into(),
+            tab: "castellan".into(),
+            title: "her tray".into(),
+            line: "One piece, on {castellan}'s tab.".into(),
+            sets: vec![
+                set(
+                    crate::missions::Need::Skill("hacking".into()),
+                    &["neural_port", "feedback_fuse", "limbic_damper"],
+                ),
+                set(
+                    crate::missions::Need::All(vec![]),
+                    &["subdermal_mesh", "target_lens", "neural_port"],
+                ),
+            ],
+        }
+    }
+
+    fn ids(items: &[&str]) -> Vec<ItemId> {
+        items.iter().copied().map(ItemId::new).collect()
+    }
+
+    #[test]
+    fn the_tray_offers_the_first_set_that_fits() {
+        let (mut st, _, _) = by_the_chair();
+        st.character.skills.clear();
+        st.character.skills.insert(game::SkillId::new("hacking"));
+        apply(&mut st, 2, 3, &tray());
+        let t = st.missions.tray.clone().expect("the tray is up");
+        assert_eq!(
+            t.items,
+            ids(&["neural_port", "feedback_fuse", "limbic_damper"])
+        );
+        assert_eq!((t.mission, t.step), (2, 3));
+        assert_eq!((t.from.as_str(), t.tab.as_str()), ("doc", "castellan"));
+        assert_eq!(t.title, "her tray");
+        assert_eq!(t.line, "One piece, on Castellan's tab.");
+        assert!(!t.shown);
+        // Kept as it was held out: who you are later doesn't reshuffle it.
+        st.character.skills.clear();
+        assert_eq!(st.missions.tray.as_ref().unwrap().items, t.items);
+        // Nothing that fits: the last set.
+        apply(&mut st, 2, 3, &tray());
+        assert_eq!(
+            st.missions.tray.as_ref().unwrap().items,
+            ids(&["subdermal_mesh", "target_lens", "neural_port"])
+        );
+        // Nobody holding it out: no tray.
+        st.missions.tray = None;
+        st.missions.cast.clear();
+        apply(&mut st, 2, 3, &tray());
+        assert_eq!(st.missions.tray, None);
+    }
+
+    #[test]
+    fn taking_a_piece_bags_it_and_opens_the_tab() {
+        let (mut st, _, doc) = by_the_chair();
+        st.character.skills.clear();
+        apply(&mut st, 0, 0, &tray());
+        let lens = ItemId::new("target_lens");
+        assert_eq!(st.character.count(&lens), 0);
+        crate::missions::take_from_tray(&mut st, 1);
+        assert_eq!(st.character.count(&lens), 1);
+        assert_eq!(st.missions.tray, None, "the rest go back in the drawer");
+        assert_eq!(
+            st.missions.tab,
+            Some(crate::missions::Tab {
+                doc,
+                item: lens.clone(),
+                payer: "Castellan".into(),
+                spent: false,
+            })
+        );
+        // No tray up: taking does nothing.
+        crate::missions::take_from_tray(&mut st, 0);
+        assert_eq!(st.character.count(&lens), 1);
+        assert_eq!(st.character.count(&ItemId::new("subdermal_mesh")), 0);
     }
 
     #[test]

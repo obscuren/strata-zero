@@ -91,6 +91,37 @@ pub struct Missions {
     pub releasing: BTreeSet<String>,
     /// The lines the story left under a tile's Look, one a tile.
     pub notes: Vec<(Place, Pos, String)>,
+    /// The tray held out, until a piece is taken from it.
+    pub tray: Option<TrayOffer>,
+    /// The piece taken from a tray, on someone's tab.
+    pub tab: Option<Tab>,
+}
+
+/// A tray of pieces held out by a role (doctor spec §8): one to take, on a tab.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrayOffer {
+    pub mission: usize,
+    pub step: usize,
+    /// The role holding it out.
+    pub from: String,
+    /// The role whose tab pays.
+    pub tab: String,
+    pub title: String,
+    pub line: String,
+    /// The set that fitted who you were when it was held out, kept.
+    pub items: Vec<ItemId>,
+    /// It has been put up over the map; esc leaves it waiting, talking opens it again.
+    pub shown: bool,
+}
+
+/// A piece on someone's tab: in its doc's chair it goes in free, once.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Tab {
+    pub doc: PersonId,
+    pub item: ItemId,
+    /// The name of whoever pays.
+    pub payer: String,
+    pub spent: bool,
 }
 
 /// Where one mission stands.
@@ -250,6 +281,48 @@ pub fn unsealed(st: &AppState, id: &ItemId) -> bool {
     st.missions.unsealed.contains(&id.0)
 }
 
+/// The person holding out the tray, while one waits.
+pub fn tray_from(st: &AppState) -> Option<PersonId> {
+    st.missions
+        .tray
+        .as_ref()
+        .and_then(|t| person_of(st, &t.from))
+}
+
+/// Takes the tray's `i`th piece into your pack, on the tab of its doc, the one holding
+/// it out; the rest are put away. Nothing without a tray or its doc.
+pub fn take_from_tray(st: &mut AppState, i: usize) {
+    let Some(tray) = st.missions.tray.as_ref() else {
+        return;
+    };
+    let (Some(item), Some(doc)) = (tray.items.get(i).cloned(), person_of(st, &tray.from)) else {
+        return;
+    };
+    let payer = role_name(st, &tray.tab);
+    let name = st
+        .content
+        .item(&item)
+        .map_or_else(|| item.to_string(), |it| it.name.clone());
+    st.character.give_item(&st.content, item.clone(), 1);
+    st.missions.tab = Some(Tab {
+        doc,
+        item,
+        payer,
+        spent: false,
+    });
+    st.missions.tray = None;
+    st.story(format!("`{name}` ×1 · in your pack"));
+}
+
+/// The tab that pays for this piece in the chair you sit in: not yet spent, on that
+/// piece, with that chair's doc.
+pub fn tab_for<'a>(st: &'a AppState, item: &ItemId) -> Option<&'a Tab> {
+    st.missions
+        .tab
+        .as_ref()
+        .filter(|t| !t.spent && &t.item == item && st.chair.is_some_and(|c| c.doc == t.doc))
+}
+
 /// Reports an event: every mission waiting on it moves on.
 pub fn send(st: &mut AppState, ev: Event) {
     fire(st, Some(&ev));
@@ -378,6 +451,16 @@ impl Trigger {
                 .is_some_and(|r| {
                     matches!(r.state, RunState::Done { at: done } if now.saturating_sub(done) >= *minutes)
                 }),
+            // The tab with the role's person as its doc is spent, and you are up out of
+            // the chair.
+            Trigger::Chromed(role) => {
+                st.chair.is_none()
+                    && st
+                        .missions
+                        .tab
+                        .as_ref()
+                        .is_some_and(|t| t.spent && person_of(st, role) == Some(t.doc))
+            }
         }
     }
 }
@@ -1881,5 +1964,48 @@ pub(crate) mod tests {
         st.missions.cast.clear();
         on_street(&mut st, out.offset(0, 1));
         assert!(!at(&st, &by(4)));
+    }
+
+    #[test]
+    fn chromed_waits_for_spent_and_up() {
+        let mut st = crate::clinic::testutil::seated();
+        let b = st.chair.unwrap().building;
+        st.book = doc_book(
+            r#"Mission(id: "m", title: "M", from: "doc", steps: [
+                Step(id: "tray", when: NewGame, then: [Tray(from: "doc", tab: "doc",
+                    title: "her tray", line: "One piece.",
+                    sets: [TraySet(need: All([]), items: ["neural_port"])])]),
+                Step(id: "out", when: Chromed("doc"), then: [Log("out")]),
+            ])"#,
+            "",
+        );
+        begin(&mut st);
+        let doc = cast_doc(&mut st, b);
+        take_from_tray(&mut st, 0);
+        tick(&mut st);
+        assert_eq!(st.missions.runs[0].at, 1, "nothing spent yet");
+        // The piece in, in her chair, on the tab: spent, but you are still sat in it.
+        st.character.credits = 0;
+        let put = crate::actions::perform(
+            &mut st,
+            game::Action::Install {
+                item: ItemId::new("neural_port"),
+                site: game::Site::Neural,
+            },
+        );
+        assert!(put.is_ok(), "{put:?}");
+        assert!(st.missions.tab.as_ref().unwrap().spent);
+        tick(&mut st);
+        assert_eq!(st.missions.runs[0].at, 1, "still in the chair");
+        // Up out of the chair, but the tab another doc's: nothing.
+        st.chair = None;
+        st.missions.tab.as_mut().unwrap().doc = PersonId(doc.0 + 1);
+        tick(&mut st);
+        assert_eq!(st.missions.runs[0].at, 1, "another doc's tab");
+        // Hers, spent, and you up: chromed.
+        st.missions.tab.as_mut().unwrap().doc = doc;
+        tick(&mut st);
+        assert!(matches!(st.missions.runs[0].state, RunState::Done { .. }));
+        assert!(st.log.iter().any(|e| e.text == "out"));
     }
 }
