@@ -12,12 +12,22 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 42] = [
+const COMMANDS: [&str; 43] = [
     "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "talent", "tpts", "program",
     "heat", "alarm", "wake", "engage", "calm", "ice", "failsafe", "hp", "who", "clock", "tp",
     "clear", "help", "trace", "seize", "backdoor", "eyes", "light", "time", "job", "standing",
-    "jobs", "target", "foe", "foes", "dummy", "throw", "live", "ripper", "story", "track",
+    "jobs", "target", "foe", "foes", "dummy", "throw", "live", "ripper", "story", "track", "wait",
 ];
+
+/// The screen a line that ran well opens over the map: the Wait window for `wait`.
+pub fn opens(st: &AppState, line: &str) -> Option<Box<dyn crate::app::Screen>> {
+    (line.split_whitespace().next() == Some("wait")).then(|| {
+        Box::new(crate::screens::rest::RestScreen::open(
+            st,
+            crate::rest::Kind::Wait,
+        )) as Box<dyn crate::app::Screen>
+    })
+}
 
 /// Runs one line against the app. `focus` is the map's focus tile on its stratum.
 pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
@@ -532,6 +542,15 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 "ripper off".to_string()
             })
         }
+        "wait" => {
+            if st.city.is_none() {
+                return Err("no city, no clock".to_string());
+            }
+            if st.rest.is_some() {
+                return Err("already resting".to_string());
+            }
+            Ok("wait · pick the time".to_string())
+        }
         "clear" => {
             let n = st.ground.at(focus.place, focus.pos).len();
             st.ground.clear(focus.place, focus.pos);
@@ -661,7 +680,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             Ok(line)
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · job fetch|copy|plant|deliver · standing <n> · jobs · target <name> · eyes · light · ripper · foe [n] · dummy [n] · foes · throw <item> [n] · live · story [fire <mission> | scene <id> | skip | feed | call] · track [off | <x> <y> | <name>] · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · job fetch|copy|plant|deliver · standing <n> · jobs · target <name> · eyes · light · ripper · foe [n] · dummy [n] · foes · throw <item> [n] · live · story [fire <mission> | scene <id> | skip | feed | call] · track [off | <x> <y> | <name>] · wait · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),
@@ -1465,5 +1484,24 @@ mod tests {
         let prefix: String = lower.chars().take(2).collect();
         let names = complete(&st, "target", &prefix);
         assert!(names.iter().any(|n| n == &name), "{names:?}");
+    }
+
+    #[test]
+    fn wait_opens_the_wait_window() {
+        let mut st = crate::jobs::testutil::state_home();
+        crate::screens::explore::MapScreen::walking(&mut st);
+        let p = st.player.as_ref().unwrap();
+        let at = At {
+            place: p.place,
+            pos: p.pos,
+        };
+        assert_eq!(run(&mut st, at, "wait").unwrap(), "wait · pick the time");
+        assert!(opens(&st, "wait").is_some());
+        assert!(opens(&st, "heal").is_none());
+        assert_eq!(complete(&st, "", "wai"), vec!["wait".to_string()]);
+        assert!(run(&mut st, at, "help").unwrap().contains("wait"));
+        let until = crate::rest::now(&st) + 600;
+        crate::rest::start(&mut st, crate::rest::Kind::Sleep, until);
+        assert!(run(&mut st, at, "wait").is_err(), "not while resting");
     }
 }

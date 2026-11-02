@@ -299,6 +299,17 @@ impl MapScreen {
         self.last_map.get()
     }
 
+    /// Drawn once at `w`×`h`, then a few frames run with no keys, as play has it before
+    /// anything is looked at: the camera on you and clamped to the map it shows.
+    #[cfg(test)]
+    pub(crate) fn settle(&mut self, st: &mut AppState, (w, h): (u16, u16)) {
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
+        t.draw(|f| self.draw(st, f)).unwrap();
+        for _ in 0..20 {
+            self.update(st, &[]);
+        }
+    }
+
     /// Look mode is open.
     #[cfg(test)]
     pub(crate) fn is_looking(&self) -> bool {
@@ -1361,17 +1372,29 @@ impl MapScreen {
         Some(ScreenCmd::Stay)
     }
 
-    /// Feeds keys to the open console; a run line goes through the commands.
-    fn feed_console(&mut self, st: &mut AppState, focus: game::At, keys: &[KeyEvent]) {
-        let Some(con) = self.console.as_mut() else {
-            return;
-        };
+    /// Feeds keys to the open console; a run line goes through the commands, and one
+    /// that opens a window closes the console and pushes it.
+    fn feed_console(
+        &mut self,
+        st: &mut AppState,
+        focus: game::At,
+        keys: &[KeyEvent],
+    ) -> Option<ScreenCmd> {
+        let con = self.console.as_mut()?;
         let mut close = false;
+        let mut opened = None;
         for k in keys {
             match con.key(*k, &|head, word| console::complete(st, head, word)) {
                 ConsoleEvent::Run(line) => {
                     let result = console::run(st, focus, &line);
+                    if result.is_ok() {
+                        opened = console::opens(st, &line);
+                    }
                     report(st, result);
+                    if opened.is_some() {
+                        close = true;
+                        break;
+                    }
                 }
                 ConsoleEvent::Close => close = true,
                 ConsoleEvent::None => {}
@@ -1380,6 +1403,10 @@ impl MapScreen {
         if close {
             self.console = None;
         }
+        opened.map(|to| ScreenCmd::Push {
+            to,
+            fx: TransitionKind::None,
+        })
     }
 
     /// What Space opens: one thing in reach goes straight to its window, none gives a
@@ -2527,8 +2554,9 @@ impl Screen for MapScreen {
             },
         };
         if self.console.is_some() {
-            self.feed_console(st, focus, keys);
-            return ScreenCmd::Stay;
+            return self
+                .feed_console(st, focus, keys)
+                .unwrap_or(ScreenCmd::Stay);
         }
         let Some(size) = st.city.as_ref().map(|c| c.size) else {
             if keys
@@ -2562,6 +2590,11 @@ impl Screen for MapScreen {
             let console = st.dev && k.code == KeyCode::Char(':');
             if !console && crate::missions::scene::key(st, k) {
                 scened = true;
+                continue;
+            }
+            // A rest takes every key but esc, which wakes you (and the console's, once
+            // open, its own).
+            if !console && self.console.is_none() && crate::rest::key(st, k) {
                 continue;
             }
             // A HOLO call up takes space and esc before the walk keys, once look mode,
@@ -2628,8 +2661,9 @@ impl Screen for MapScreen {
             }
             // `:` just opened the console: the rest of this frame's keys are typing.
             if self.console.is_some() {
-                self.feed_console(st, focus, &keys[i + 1..]);
-                return ScreenCmd::Stay;
+                return self
+                    .feed_console(st, focus, &keys[i + 1..])
+                    .unwrap_or(ScreenCmd::Stay);
             }
         }
         // A key may have taken the player through a door, up a lift or out again: the
@@ -2668,27 +2702,23 @@ impl Screen for MapScreen {
             (Mode::Walk, Some(p)) if p.place.is_street() => Some(p.pos),
             _ => None,
         };
-        if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
+        if let (Some(_), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
             world.set_blocker(standing);
-            if self.mode == Mode::Walk {
-                world.advance(city, world.tick() + elapsed);
-                world.path_some(city, 4);
-            }
         }
-        // The bots out with you move on the same clock.
-        crate::bots::tick(st);
-        // The Net's clock: traces cool, hacks expire, alerts end.
-        let now = st.net.now(st);
         let inside = match st.player.as_ref().map(|p| p.place) {
             Some(Place::Construct(b)) => Some(b),
             _ => None,
         };
-        let roots = st.backdoors.roots();
-        st.net.minute(now, inside, &mut st.constructs, &roots);
-        crate::net::tick_backdoors(st);
-        crate::jobs::tick(st);
         let before = st.player.as_ref().map(|p| (p.place, p.pos));
-        crate::missions::tick(st);
+        if st.rest.is_some() {
+            crate::rest::frame(st);
+        } else {
+            crate::clock::run(
+                st,
+                (self.mode == Mode::Walk).then_some(elapsed),
+                crate::clock::PATHS_PER_FRAME,
+            );
+        }
         // The story moved you (an `Arrive`, a scene's walk): no aimed walk goes on from
         // where you were, and the map follows you before this frame draws.
         if st.player.as_ref().map(|p| (p.place, p.pos)) != before {
@@ -2699,9 +2729,9 @@ impl Screen for MapScreen {
                 self.follow_player(st);
             }
         }
-        // A scene playing: no aimed walk goes on under it, and nothing of the map's
-        // stays open to keep its keys after.
-        if crate::missions::scene::running(st).is_some() {
+        // A scene playing or a rest under way: no aimed walk goes on under it, and
+        // nothing of the map's stays open to keep its keys after.
+        if crate::missions::scene::running(st).is_some() || st.rest.is_some() {
             self.walking = None;
             self.aim = None;
             self.help = false;
@@ -2812,6 +2842,7 @@ impl Screen for MapScreen {
 
     fn draw(&self, st: &AppState, f: &mut Frame) {
         let area = f.area();
+        st.drawn_you.set(None);
         let Some(city) = st.city.as_ref() else {
             f.render_widget(
                 Paragraph::new("no city loaded · q back").alignment(Alignment::Center),
@@ -3196,6 +3227,14 @@ impl Screen for MapScreen {
                     .set_style(Style::default().fg(fg).add_modifier(Modifier::BOLD));
             }
         }
+        // Your `@`'s cell, kept for what draws over the map: the HOLO call, the Rest
+        // window here and the one a screen on top draws.
+        let me = st
+            .player
+            .as_ref()
+            .filter(|p| p.place == self.place)
+            .and_then(|p| tile_to_screen(map_area, origin, p.pos));
+        st.drawn_you.set(me);
         if film {
             self.draw_film(st, f, map_area, origin);
             return;
@@ -3206,12 +3245,23 @@ impl Screen for MapScreen {
         if bubbles {
             crate::missions::overlay::draw(f.buffer_mut(), map_area, origin, st);
         }
+        if let Some(rest) = &st.rest {
+            if rest.kind == crate::rest::Kind::Sleep
+                && let Some(me) = me
+            {
+                crate::rest::draw_zs(f.buffer_mut(), map_area, me);
+            }
+            crate::rest::draw_window(
+                f.buffer_mut(),
+                map_area,
+                me,
+                st,
+                rest.kind,
+                rest.until,
+                Some(rest.from),
+            );
+        }
         // The HOLO call in the map's corner, kept off your `@`.
-        let me = st
-            .player
-            .as_ref()
-            .filter(|p| p.place == self.place)
-            .and_then(|p| tile_to_screen(map_area, origin, p.pos));
         crate::missions::call::draw(f.buffer_mut(), map_area, me, st);
 
         // The vertical rule on every row but the two rule rows.
@@ -4066,6 +4116,7 @@ mod tests {
     use crossterm::event::KeyCode;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
 
     fn state() -> AppState {
         let mut st = AppState::new();
@@ -5077,6 +5128,20 @@ mod tests {
             ScreenCmd::Stay
         ));
         assert_eq!(last(&st), Some("no active abilities"));
+    }
+
+    #[test]
+    fn a_rest_leaves_the_console_its_keys() {
+        let mut st = crate::jobs::testutil::state_home();
+        st.unlock_dev();
+        let mut s = MapScreen::walking(&mut st);
+        let until = crate::rest::now(&st) + 600;
+        crate::rest::start(&mut st, crate::rest::Kind::Sleep, until);
+        s.update(&mut st, &[key(KeyCode::Char(':'))]);
+        assert!(s.console.is_some());
+        s.update(&mut st, &[key(KeyCode::Char('x'))]);
+        assert_eq!(s.console.as_ref().map(|c| c.input.as_str()), Some("x"));
+        assert!(st.rest.is_some());
     }
 
     #[test]
@@ -12272,5 +12337,249 @@ mod tests {
         assert_eq!(st.character.count(&frag), 2, "thrown");
         assert_eq!(st.character.hp, hp - 12, "the centre's full damage");
         assert!(logged(&st, "· you 12"), "{:?}", last(&st));
+    }
+
+    #[test]
+    fn a_rest_stops_the_walk_under_it() {
+        let mut st = crate::jobs::testutil::state_home();
+        let mut s = MapScreen::walking(&mut st);
+        let pos = st.player.as_ref().unwrap().pos;
+        s.walking = Some(Walk {
+            path: vec![pos.step(citygen::Dir::E)],
+            next_at: u64::MAX,
+        });
+        s.aim = Some(pos);
+        let until = crate::rest::now(&st) + 600;
+        crate::rest::start(&mut st, crate::rest::Kind::Wait, until);
+        assert!(st.rest.is_some());
+        s.update(&mut st, &[]);
+        assert!(s.walking.is_none() && s.aim.is_none());
+    }
+
+    /// The home state beside its bed, its map run a few frames at `w`×`h` as play does:
+    /// the screen, the map rect and the map's origin.
+    fn beside_the_bed(st: &mut AppState, w: u16, h: u16) -> (MapScreen, Rect, Pos) {
+        use crate::missions::{Mark, marks};
+        let (place, pos) = marks::resolve(st, &Mark::HomeBed, None).unwrap();
+        st.player = Some(crate::walker::Player::at(place, pos));
+        let mut s = MapScreen::walking(st);
+        s.settle(st, (w, h));
+        let map = layout(Rect::new(0, 0, w, h), false).map;
+        let origin = s.cam.origin(map.width, map.height);
+        (s, map, origin)
+    }
+
+    /// The Rest window as drawn on the map: from its top corner, under the title's
+    /// glyph, to its bottom corner.
+    fn rest_window(buf: &Buffer, map: Rect) -> Rect {
+        let sym = |x: u16, y: u16| buf[(x, y)].symbol().to_string();
+        let (x, y) = map
+            .positions()
+            .map(|p| (p.x, p.y))
+            .find(|&(x, y)| {
+                sym(x, y) == "┍" && x + 3 < map.right() && ["▤", "☾"].contains(&&*sym(x + 3, y))
+            })
+            .expect("the Rest window is drawn");
+        let right = (x..map.right()).find(|&c| sym(c, y) == "┑").unwrap();
+        let bottom = (y..map.bottom()).find(|&r| sym(x, r) == "┕").unwrap();
+        Rect::new(x, y, right - x + 1, bottom - y + 1)
+    }
+
+    /// Your `@`'s cell and the z's cells beside it: a small one up and right, a big one
+    /// two up and two right.
+    fn you_and_your_zs(me: (u16, u16)) -> [(u16, u16); 3] {
+        [me, (me.0 + 1, me.1 - 1), (me.0 + 2, me.1 - 2)]
+    }
+
+    fn inside(win: Rect, (x, y): (u16, u16)) -> bool {
+        win.contains(ratatui::layout::Position::new(x, y))
+    }
+
+    /// Where your `@` is drawn in the map: white and bold.
+    fn my_at(buf: &Buffer, map: Rect) -> (u16, u16) {
+        let white = Color::Rgb(255, 255, 255);
+        map.positions()
+            .map(|p| (p.x, p.y))
+            .find(|&(x, y)| buf[(x, y)].symbol() == "@" && buf[(x, y)].fg == white)
+            .expect("your @ is on the map")
+    }
+
+    /// The summed brightness of the flat's cells on the map.
+    fn flat_light(st: &AppState, buf: &Buffer, map: Rect, origin: Pos) -> u32 {
+        let (_, rect) = crate::missions::marks::flat_rect(st).unwrap();
+        let rgb = |c: Color| match c {
+            Color::Rgb(r, g, b) => r as u32 + g as u32 + b as u32,
+            _ => 0,
+        };
+        rect.iter()
+            .filter_map(|p| tile_to_screen(map, origin, p))
+            .map(|(x, y)| rgb(buf[(x, y)].fg) + rgb(buf[(x, y)].bg))
+            .sum()
+    }
+
+    #[test]
+    fn asleep_the_flat_is_dark_and_you_have_zs() {
+        use crate::rest::{self, Kind};
+        let mut st = crate::jobs::testutil::state_home();
+        let (s, map, origin) = beside_the_bed(&mut st, 120, 40);
+        let awake = draw_buffer(&s, &st, 120, 40);
+        let (x, y) = my_at(&awake, map);
+        assert_ne!(awake[(x + 1, y - 1)].symbol(), "z");
+        let until = rest::now(&st) + 600;
+        rest::start(&mut st, Kind::Sleep, until);
+        assert!(st.rest.is_some());
+        let asleep = draw_buffer(&s, &st, 120, 40);
+        assert!(
+            flat_light(&st, &asleep, map, origin) < flat_light(&st, &awake, map, origin),
+            "the flat is dark"
+        );
+        let z = &asleep[(x + 1, y - 1)];
+        assert_eq!((z.symbol(), z.fg), ("z", Color::Rgb(0, 165, 184)));
+        let big = &asleep[(x + 2, y - 2)];
+        assert_eq!((big.symbol(), big.fg), ("Z", CYAN));
+        assert!(big.modifier.contains(Modifier::BOLD));
+        assert!(!z.modifier.contains(Modifier::BOLD));
+        let win = rest_window(&asleep, map);
+        let title: String = (win.x..win.right())
+            .map(|x| asleep[(x, win.y)].symbol())
+            .collect();
+        assert!(title.contains("Asleep"), "{title}");
+    }
+
+    #[test]
+    fn waiting_keeps_the_lights() {
+        use crate::rest::{self, Kind};
+        let mut st = crate::jobs::testutil::state_home();
+        let (s, map, origin) = beside_the_bed(&mut st, 120, 40);
+        let awake = draw_buffer(&s, &st, 120, 40);
+        let (x, y) = my_at(&awake, map);
+        let until = rest::now(&st) + 60;
+        rest::start(&mut st, Kind::Wait, until);
+        assert!(st.rest.is_some());
+        let waiting = draw_buffer(&s, &st, 120, 40);
+        assert_eq!(
+            flat_light(&st, &waiting, map, origin),
+            flat_light(&st, &awake, map, origin)
+        );
+        assert_ne!(waiting[(x + 1, y - 1)].symbol(), "z");
+        assert_ne!(waiting[(x + 2, y - 2)].symbol(), "Z");
+    }
+
+    #[test]
+    fn asleep_fits_100x30() {
+        use crate::rest::{self, Kind};
+        for (w, h) in [(100, 30), (120, 40)] {
+            let mut st = crate::jobs::testutil::state_home();
+            let (s, map, _) = beside_the_bed(&mut st, w, h);
+            let me = my_at(&draw_buffer(&s, &st, w, h), map);
+            let until = rest::now(&st) + 600;
+            rest::start(&mut st, Kind::Sleep, until);
+            let asleep = draw_buffer(&s, &st, w, h);
+            let win = rest_window(&asleep, map);
+            assert!(win.x >= map.x && win.right() <= map.right() && win.bottom() <= map.bottom());
+            // The flat is on the floor's bottom edge and the camera clamped there: the
+            // window keeps off you and the z's above you.
+            for (at, ch) in you_and_your_zs(me).into_iter().zip(["@", "z", "Z"]) {
+                assert!(!inside(win, at), "{w}x{h}: {at:?} {map:?} {win:?}");
+                assert_eq!(asleep[at].symbol(), ch, "{w}x{h}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_choosing_window_leaves_you_at_100x30() {
+        use crate::rest::Kind;
+        for (w, h) in [(100, 30), (120, 40)] {
+            let mut st = crate::jobs::testutil::state_home();
+            let (s, map, _) = beside_the_bed(&mut st, w, h);
+            let me = my_at(&draw_buffer(&s, &st, w, h), map);
+            let choose = crate::screens::rest::RestScreen::open(&st, Kind::Sleep);
+            let buf = crate::screens::shots::draw_stack(&st, &[&s, &choose], (w, h));
+            let win = rest_window(&buf, map);
+            assert!(!inside(win, me), "{w}x{h}: {me:?} {win:?}");
+            assert_eq!(buf[me].symbol(), "@", "{w}x{h}: you show");
+        }
+    }
+
+    #[test]
+    fn after_the_house_call_the_window_leaves_you_and_your_zs() {
+        use crate::rest::{self, Kind};
+        for (w, h) in [(100, 30), (120, 40)] {
+            // As play has it: the house call over, beside the bed, the camera clamped to
+            // the floor with the flat on its bottom edge, so your `@` is drawn low.
+            let (mut st, s) = crate::screens::shots::beside_the_bed((w, h));
+            let map = layout(Rect::new(0, 0, w, h), false).map;
+            let me = my_at(&draw_buffer(&s, &st, w, h), map);
+            assert!(
+                me.1 >= map.y + map.height / 2,
+                "{w}x{h}: you are low: {me:?}"
+            );
+            let choose = crate::screens::rest::RestScreen::open(&st, Kind::Sleep);
+            let choosing = crate::screens::shots::draw_stack(&st, &[&s, &choose], (w, h));
+            let win = rest_window(&choosing, map);
+            assert_eq!(choosing[me].symbol(), "@", "{w}x{h}: you show choosing");
+            for at in you_and_your_zs(me) {
+                assert!(!inside(win, at), "{w}x{h}: choosing {at:?} {win:?}");
+            }
+            let until = rest::default_wake(&st, Kind::Sleep);
+            rest::start(&mut st, Kind::Sleep, until);
+            assert!(st.rest.is_some());
+            let asleep = draw_buffer(&s, &st, w, h);
+            assert_eq!(
+                rest_window(&asleep, map),
+                win,
+                "{w}x{h}: the window stays put"
+            );
+            for (at, ch) in you_and_your_zs(me).into_iter().zip(["@", "z", "Z"]) {
+                assert!(!inside(win, at), "{w}x{h}: asleep {at:?} {win:?}");
+                assert_eq!(asleep[at].symbol(), ch, "{w}x{h}: asleep {at:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_consoles_wait_on_the_street_leaves_you() {
+        let (w, h) = (100, 30);
+        let mut st = crate::jobs::testutil::state_home();
+        st.unlock_dev();
+        st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
+        let mut s = MapScreen::walking(&mut st);
+        s.settle(&mut st, (w, h));
+        assert!(st.player.as_ref().unwrap().place.is_street());
+        let map = layout(Rect::new(0, 0, w, h), false).map;
+        let me = my_at(&draw_buffer(&s, &st, w, h), map);
+        let typed: Vec<KeyEvent> = ":wait"
+            .chars()
+            .map(|c| key(KeyCode::Char(c)))
+            .chain([key(KeyCode::Enter)])
+            .collect();
+        let ScreenCmd::Push { to: mut choose, .. } = s.update(&mut st, &typed) else {
+            panic!("wait pushes the window");
+        };
+        let choosing = crate::screens::shots::draw_stack(&st, &[&s, choose.as_ref()], (w, h));
+        let win = rest_window(&choosing, map);
+        assert_eq!(win.bottom(), map.bottom(), "on the map's bottom rows");
+        assert!(!inside(win, me), "{me:?} {win:?}");
+        assert_eq!(choosing[me].symbol(), "@");
+        choose.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert!(st.rest.is_some());
+        s.update(&mut st, &[]);
+        let waiting = draw_buffer(&s, &st, w, h);
+        assert_eq!(rest_window(&waiting, map), win);
+        assert_eq!(waiting[me].symbol(), "@");
+    }
+
+    #[test]
+    fn the_consoles_wait_pushes_the_window() {
+        let mut st = crate::jobs::testutil::state_home();
+        st.unlock_dev();
+        let mut s = MapScreen::walking(&mut st);
+        let typed: Vec<KeyEvent> = ":wait"
+            .chars()
+            .map(|c| key(KeyCode::Char(c)))
+            .chain([key(KeyCode::Enter)])
+            .collect();
+        assert!(matches!(s.update(&mut st, &typed), ScreenCmd::Push { .. }));
+        assert!(s.console.is_none());
     }
 }

@@ -246,6 +246,12 @@ impl NetState {
         st.clock_tick() / sim::TICKS_PER_MINUTE
     }
 
+    /// The last game minute `minute` ran up to.
+    #[cfg(test)]
+    pub(crate) fn last_minute(&self) -> u64 {
+        self.last_minute
+    }
+
     pub fn trace(&mut self, b: BuildingId) -> &mut Trace {
         self.traces.entry(b).or_default()
     }

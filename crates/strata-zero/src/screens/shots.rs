@@ -2118,3 +2118,55 @@ fn indoor_lighting() {
         shoot(name, &mut st);
     }
 }
+
+/// The flat after the house call, both scenes skipped, beside the bed at 22:01, the map
+/// run a few frames at `size` as play does: the camera clamped to the floor, which puts
+/// the flat (on the floor's bottom edge) low on the map.
+pub(crate) fn beside_the_bed(size: (u16, u16)) -> (AppState, MapScreen) {
+    use crate::missions::scene::tests::press;
+    let mut st = crate::missions::tests::at_your_door();
+    for _ in 0..2 {
+        crate::missions::tick(&mut st);
+        press(&mut st, KeyCode::Esc);
+    }
+    assert!(crate::missions::scene::running(&st).is_none());
+    // The HOLO feed the story queued is read; it would wake you.
+    st.missions.feeds.clear();
+    let (place, pos) =
+        crate::missions::marks::resolve(&st, &crate::missions::Mark::HomeBed, None).unwrap();
+    st.player = Some(crate::walker::Player::at(place, pos));
+    let ahead = (22 * 60 + 1 + 1440 - st.minute_of_day() as u64) % 1440;
+    let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+    world.advance(city, world.tick() + ahead * sim::TICKS_PER_MINUTE);
+    let mut map = MapScreen::walking(&mut st);
+    map.settle(&mut st, size);
+    (st, map)
+}
+
+/// The Rest window over the map beside the bed, and the same night asleep at 03:12, at
+/// both sizes.
+#[test]
+#[ignore]
+fn rest_shots() {
+    use crate::rest::{self, Kind};
+    use crate::screens::rest::RestScreen;
+    for (suffix, size) in [("", (120, 40)), ("_100x30", (100, 30))] {
+        let (mut st, map) = beside_the_bed(size);
+        let choose = RestScreen::open(&st, Kind::Sleep);
+        shot_stack(&format!("rest_choose{suffix}"), &st, &[&map, &choose], size);
+
+        let until = rest::default_wake(&st, Kind::Sleep);
+        rest::start(&mut st, Kind::Sleep, until);
+        assert!(
+            st.rest.is_some(),
+            "the rest began: {:?}",
+            st.log.iter().last().map(|e| &e.text)
+        );
+        // A minute a frame, so the clock stops on 03:12.
+        while st.rest.is_some() && st.minute_of_day() != 3 * 60 + 12 {
+            rest::frame_within(&mut st, std::time::Duration::ZERO);
+        }
+        assert_eq!(st.clock(), (3, 12));
+        shot_stack(&format!("rest_asleep{suffix}"), &st, &[&map], size);
+    }
+}

@@ -1238,6 +1238,111 @@ pub(crate) mod tests {
         assert!(shut, "and closes behind Castellan");
     }
 
+    /// The house call skipped and Mezz's mail landed, the HOLO feed read: the night
+    /// ahead, with the minute the morning's eight hours count from.
+    fn after_the_mail() -> (AppState, u64) {
+        let mut st = at_your_door();
+        for _ in 0..2 {
+            tick(&mut st);
+            scene::tests::press(&mut st, crossterm::event::KeyCode::Esc);
+        }
+        st.missions.feeds.clear();
+        advance(&mut st, 2);
+        tick(&mut st);
+        assert!(st.journal.mails.iter().any(|m| m.subject == "lay low"));
+        assert_eq!(st.missions.runs[1].state, RunState::Open);
+        let since = st.missions.runs[1].since;
+        assert_eq!(
+            crate::rest::now(&st),
+            since,
+            "the mail starts the eight hours"
+        );
+        (st, since)
+    }
+
+    /// The house call still open on its Sleep objective, nobody calling.
+    fn waiting_on_the_call(st: &AppState) {
+        let run = &st.missions.runs[1];
+        assert_eq!(run.state, RunState::Open);
+        assert_eq!(
+            run.objectives.last().map(String::as_str),
+            Some("Sleep · Castellan will be in touch")
+        );
+        assert!(st.missions.call.is_none());
+    }
+
+    /// Answers the call through every line and hangs up.
+    fn answer_through(st: &mut AppState) {
+        for _ in 0..40 {
+            if st.missions.call.is_none() {
+                return;
+            }
+            let space = crate::screens::testutil::key(crossterm::event::KeyCode::Char(' '));
+            assert!(call::key(st, &space));
+        }
+        panic!("the call never ended");
+    }
+
+    #[test]
+    fn castellan_calls_in_the_morning_awake() {
+        let (mut st, since) = after_the_mail();
+        let mut rang = None;
+        for _ in 0..600 {
+            crate::clock::run(
+                &mut st,
+                Some(sim::TICKS_PER_MINUTE),
+                crate::clock::PATHS_PER_FRAME,
+            );
+            if st.missions.call.is_some() {
+                rang = Some(crate::rest::now(&st));
+                break;
+            }
+            waiting_on_the_call(&st);
+        }
+        assert_eq!(rang, Some(since + 480));
+        let call = st.missions.call.as_ref().unwrap();
+        assert_eq!(call.from, "castellan");
+        assert!(call.answered.is_none(), "ringing");
+        assert!(
+            call.lines[0].starts_with("Morning, VEX."),
+            "{:?}",
+            call.lines
+        );
+        assert!(call.lines.iter().all(|l| !l.contains('{')));
+        answer_through(&mut st);
+        assert!(matches!(st.missions.runs[1].state, RunState::Done { .. }));
+    }
+
+    #[test]
+    fn castellan_wakes_you_in_the_morning() {
+        use crate::rest::{self, Kind};
+        let (mut st, since) = after_the_mail();
+        rest::start(&mut st, Kind::Sleep, since + 1200);
+        assert!(st.rest.is_some(), "asleep");
+        for _ in 0..400 {
+            if st.rest.is_none() {
+                break;
+            }
+            rest::frame_within(&mut st, std::time::Duration::from_secs(60));
+            if st.rest.is_some() {
+                waiting_on_the_call(&st);
+            }
+        }
+        assert!(st.rest.is_none(), "the call woke you");
+        assert_eq!(rest::now(&st), since + 480, "the same minute as awake");
+        let (h, m) = st.clock();
+        let wake = format!("A call wakes you at {h:02}:{m:02}.");
+        assert_eq!(
+            st.log.iter().last().map(|e| e.text.as_str()),
+            Some(wake.as_str())
+        );
+        let call = st.missions.call.as_ref().expect("the call is up");
+        assert_eq!(call.from, "castellan");
+        assert!(call.answered.is_none(), "and ringing");
+        answer_through(&mut st);
+        assert!(matches!(st.missions.runs[1].state, RunState::Done { .. }));
+    }
+
     #[test]
     fn mezz_not_dez() {
         let st = begun();

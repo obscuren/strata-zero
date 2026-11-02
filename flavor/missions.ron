@@ -127,6 +127,13 @@ Story(
                 ]),
                 Log("`House call` · `{castellan}` will be in touch"),
             ]),
+            Step(id: "morning", when: After(minutes: 480), then: [
+                Call(from: "castellan", lines: [
+                    "Morning, {you}. Eight hours. That's all anyone gets from me.",
+                    "There's a doctor who owes me. She'll put something in you worth having, on my tab.",
+                    "Seren will send you the where. Don't keep her waiting.",
+                ]),
+            ]),
         ]),
     ],
     scenes: {

@@ -164,6 +164,11 @@ pub struct AppState {
     /// The story this session: the cast, where each mission stands, its bodies and the
     /// HOLO's queue; cleared with the city.
     pub missions: crate::missions::Missions,
+    /// The rest under way (a sleep or a wait); never saved, cleared with the city.
+    pub rest: Option<crate::rest::Rest>,
+    /// Where the explore screen last drew your `@`, for a window drawn over it: set every
+    /// explore draw, `None` when you were not drawn. Never saved.
+    pub drawn_you: std::cell::Cell<Option<(u16, u16)>>,
     /// The one target being tracked, its walk drawn on the map; cleared with the city.
     pub track: Option<crate::track::Track>,
     /// The deck's MAP: its cursor, view, zoom, kind and fold, for the session.
@@ -313,6 +318,8 @@ impl AppState {
             book: crate::missions::Book::load().expect("the missions pack is valid"),
             broadcasts: crate::broadcasts::Broadcasts::load().expect("the broadcasts are valid"),
             missions: Default::default(),
+            rest: None,
+            drawn_you: Default::default(),
             track: None,
             atlas: Default::default(),
         }
@@ -428,6 +435,7 @@ impl AppState {
         self.helix = Default::default();
         self.jobs = Default::default();
         self.missions = Default::default();
+        self.rest = None;
         self.track = None;
         self.atlas = Default::default();
         crate::credentials::purge(&mut self.content, &mut self.character);

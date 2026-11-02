@@ -364,6 +364,12 @@ impl Jobs {
         out
     }
 
+    /// The last game minute `minute` ran on.
+    #[cfg(test)]
+    pub(crate) fn last_minute(&self) -> Option<u64> {
+        self.last_minute
+    }
+
     /// Once per game minute: jobs past their deadline fail and the fixer remembers.
     pub fn minute(&mut self, now: u64) -> Vec<Late> {
         if self.last_minute.is_some_and(|m| now <= m) {
