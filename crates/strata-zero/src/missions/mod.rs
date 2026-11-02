@@ -669,7 +669,7 @@ pub(crate) mod tests {
     }
 
     /// Stands the player on a street tile, having looked around.
-    pub(super) fn on_street(st: &mut AppState, pos: Pos) {
+    pub(crate) fn on_street(st: &mut AppState, pos: Pos) {
         let city = st.city.as_ref().unwrap();
         let mut p = Player::at(STREET, pos);
         p.update_fov(
@@ -1577,7 +1577,7 @@ pub(crate) mod tests {
     }
 
     /// Eight hours after Mezz's mail, in the flat: Castellan's morning call ringing.
-    fn the_morning_call() -> AppState {
+    pub(crate) fn the_morning_call() -> AppState {
         let (mut st, _) = after_the_mail();
         to_the_morning_call(&mut st);
         st
@@ -2041,14 +2041,14 @@ pub(crate) mod tests {
 
     /// The morning after done as the news tests finish it, the set switched off: Mezz's
     /// mail has come, and Seren's word after it.
-    fn to_the_word(st: &mut AppState) {
+    pub(crate) fn to_the_word(st: &mut AppState) {
         the_news_is_on(st);
         news::switch_off(st);
         mezz_saw_the_news(st);
     }
 
     /// A site on the body the piece fits, a free one first.
-    fn site_for(st: &AppState, piece: &ItemId) -> game::Site {
+    pub(crate) fn site_for(st: &AppState, piece: &ItemId) -> game::Site {
         let fits = st.content.item(piece).and_then(|i| i.implant).unwrap().fits;
         game::Site::ALL
             .into_iter()
@@ -2058,7 +2058,7 @@ pub(crate) mod tests {
     }
 
     /// The floor generated, a free tile beside `at` on it.
-    fn beside_on(st: &mut AppState, place: Place, at: Pos) -> Pos {
+    pub(crate) fn beside_on(st: &mut AppState, place: Place, at: Pos) -> Pos {
         let Place::Floor { building, level } = place else {
             panic!("{place:?} is no floor")
         };
