@@ -630,7 +630,7 @@ pub fn look_card(
                     if let Some(n) = cut {
                         card.body.push(format!(
                             "The ad stutters. For a second it's a headline: {}.",
-                            n.headline.to_uppercase()
+                            n.headline_caps()
                         ));
                     } else if visible {
                         card.body.extend(

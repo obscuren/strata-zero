@@ -95,6 +95,9 @@ pub fn draw(buf: &mut Buffer, map: Rect, origin: Pos, st: &AppState) {
     let Some(me) = st.player.as_ref().filter(|_| live(st)) else {
         return;
     };
+    if st.missions.asides.is_empty() {
+        return;
+    }
     let now = st.clock_tick();
     let avoid = people(map, origin, st, me);
     let most = ASIDE_W.min(map.width.saturating_sub(2));

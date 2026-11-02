@@ -69,7 +69,8 @@ throwaway shot test that drew the broadcast; `broadcast_120x40.png`, its picture
   is recorded as it happens (no history exists today).
 - **The channel is named after one of the city's corps**: the first word of the name
   of the first corp building (by id) that has a name, in capitals, then `NEWSLINE`
-  (`VELFORM NEWSLINE`); `CITY NEWSLINE` in a city without one.
+  (`VELFORM NEWSLINE`); `CITY NEWSLINE` in a city without one. A building named after
+  its district ("The Kowloon Row Arcology") is a landmark, not a corp's, and is skipped.
 - **The set is new furniture**, `Furniture::Holo` ("holo set"), on the flat's layout
   two tiles in front of the couch, off the line from the door to the couch. Off, it is a
   static glyph; on, it cycles the holo-ad glyphs in HOLO magenta. It throws no light (a

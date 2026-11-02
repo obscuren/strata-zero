@@ -106,6 +106,13 @@ pub struct NewsRun {
     pub inside: Option<BuildingId>,
 }
 
+impl NewsRun {
+    /// The headline in capitals, as the outlets show it.
+    pub fn headline_caps(&self) -> String {
+        self.headline.to_uppercase()
+    }
+}
+
 /// Puts out the book's news item `id` for step `step` of mission `mission`: its texts
 /// filled, the set switched on, current in place of any earlier one.
 pub fn put_out(st: &mut AppState, id: &str, mission: usize, step: usize) {
@@ -327,9 +334,13 @@ fn cut(st: &mut AppState, seed: u64, now: u64, you: Pos) {
     };
     n.cut_at = Some(now);
     n.cut = Some((ad, until));
-    let text = format!("▸ {}", n.headline.to_uppercase());
+    let text = format!("▸ {}", n.headline_caps());
     let speaker = Speaker::Tile(Place::Stratum(StratumKind::Street), ad);
     asides::say(st, speaker, CUT_LABEL.into(), MAGENTA, text);
+    // The ad's aside ends with the cut.
+    if let Some(a) = st.missions.asides.last_mut() {
+        a.until = until;
+    }
 }
 
 /// The holo ad on the street you see within `AD_WITHIN`, the nearest; ties to the top,
@@ -374,7 +385,7 @@ fn screens(st: &mut AppState) {
     if let Some(b) = here.filter(|_| screened)
         && n.screened.insert(b)
     {
-        let line = format!("Over the counter, a screen: {}.", n.headline.to_uppercase());
+        let line = format!("Over the counter, a screen: {}.", n.headline_caps());
         st.say(line);
     }
 }
@@ -385,9 +396,9 @@ fn building_here(st: &AppState) -> Option<BuildingId> {
     let p = st.player.as_ref()?;
     match p.place {
         Place::Floor { building, .. } => Some(building),
-        Place::Stratum(k) if k != StratumKind::Net => {
+        Place::Stratum(StratumKind::Street) => {
             let city = st.city.as_ref()?;
-            city.tile(k, p.pos)?
+            city.tile(StratumKind::Street, p.pos)?
                 .building
                 .filter(|&b| city.building_opt(b).is_some_and(|b| !b.kind.is_closed()))
         }
@@ -467,13 +478,20 @@ pub fn walked_away(st: &AppState, about: &str) -> Option<Left> {
 }
 
 /// The channel: the first word of the first named corp building's name, in capitals,
-/// then `NEWSLINE`.
+/// then `NEWSLINE`. A building named after its district is a landmark, not a corp's, and
+/// is skipped.
 pub fn channel(city: &citygen::City) -> String {
     let corp = city
         .buildings
         .iter()
         .filter(|b| b.kind.is_corp())
-        .find_map(|b| b.name.as_deref()?.split_whitespace().next())
+        .filter_map(|b| {
+            let name = b.name.as_deref()?;
+            let district = city.district_opt(b.district)?.name.to_lowercase();
+            let landmark = !district.is_empty() && name.to_lowercase().contains(&district);
+            (!landmark).then_some(name)
+        })
+        .find_map(|name| name.split_whitespace().next())
         .map_or_else(|| NO_CORP.to_string(), str::to_uppercase);
     format!("{corp} NEWSLINE")
 }
@@ -619,6 +637,48 @@ pub(crate) mod tests {
             city.buildings[i].name = None;
         }
         assert_eq!(channel(&city), "CITY NEWSLINE");
+    }
+
+    #[test]
+    fn the_channel_is_not_a_landmark_word() {
+        use citygen::{GenParams, Generator, SizePreset};
+        for seed in [2, 7, 10] {
+            let city = Generator::run(GenParams {
+                seed,
+                size: SizePreset::Medium,
+                districts: 7,
+                ..Default::default()
+            })
+            .unwrap();
+            let channel = channel(&city);
+            let word = channel.strip_suffix(" NEWSLINE").unwrap();
+            assert!(!matches!(word, "THE" | "OLD"), "seed {seed}: {channel}");
+            for d in &city.districts {
+                let name = d.name.to_uppercase();
+                assert!(
+                    !name.split_whitespace().any(|w| w == word),
+                    "seed {seed}: {channel} is a word of {name}"
+                );
+            }
+        }
+        // Seed 8 stays as it was.
+        let mut city = state_home().city.unwrap();
+        assert_eq!(channel(&city), "HEXTEK NEWSLINE");
+        // A corp building named after its district is skipped for the next.
+        let corps: Vec<usize> = (0..city.buildings.len())
+            .filter(|&i| city.buildings[i].kind.is_corp())
+            .collect();
+        for &i in &corps {
+            city.buildings[i].name = None;
+        }
+        let district = city
+            .district(city.buildings[corps[0]].district)
+            .name
+            .clone();
+        city.buildings[corps[0]].name = Some(format!("The {district} Arcology"));
+        city.buildings[corps[1]].name = Some("   ".into());
+        city.buildings[corps[2]].name = Some("Velform Plaza".into());
+        assert_eq!(channel(&city), "VELFORM NEWSLINE");
     }
 
     /// Runs the world on `minutes` game minutes.
@@ -1377,6 +1437,18 @@ pub(crate) mod tests {
             frame(&mut st);
             assert_eq!((heard(&st), cuts(&st), cut_in(&st)), (vec![], vec![], None));
         }
+        // Below the street at an ad's own spot, that spot in sight: only the gate stops it.
+        let ad = ads(&st)[0];
+        let under = Place::Stratum(StratumKind::Undercity);
+        look_from(&mut st, under, ad);
+        assert!(seen(&st, ad), "the spot is marked visible below");
+        again(&mut st);
+        for m in from + 30..from + 90 {
+            to_minute(&mut st, m);
+            look_from(&mut st, under, ad);
+            frame(&mut st);
+            assert_eq!((heard(&st), cuts(&st), cut_in(&st)), (vec![], vec![], None));
+        }
         // No city, no world, nobody: nothing, and no panic.
         let mut st = AppState::new();
         put_out(&mut st, "marlo", usize::MAX, usize::MAX);
@@ -1407,6 +1479,8 @@ pub(crate) mod tests {
         assert_eq!(cut_in(&st), Some(ad));
         run_to(&mut st, start + CUT_TICKS);
         assert_eq!(cut_in(&st), None);
+        asides::prune(&mut st);
+        assert_eq!(cuts(&st), [], "the aside ends with the cut");
         // Not again inside the gap, though a roll comes up there; then again.
         let seed = st.city.as_ref().unwrap().seed;
         let cut_at = current(&st).unwrap().cut_at.unwrap();
@@ -1502,6 +1576,18 @@ pub(crate) mod tests {
         assert_eq!(shown(&st), 3, "the map not on foot");
         tick(&mut st, true);
         assert_eq!(shown(&st), 4);
+        // A walk-in's basement carries its id on the Undercity: not the screen.
+        put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        // (Citygen writes it under a noodle bar's basement; here the bar is given one.)
+        let under = StratumKind::Undercity;
+        let cellar = st
+            .city
+            .as_mut()
+            .and_then(|c| c.tile_mut(under, noodles_at))
+            .unwrap();
+        cellar.building = Some(noodles);
+        stand(&mut st, Place::Stratum(under), noodles_at);
+        assert_eq!(shown(&st), 4, "under the building");
     }
 
     #[test]

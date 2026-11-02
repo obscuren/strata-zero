@@ -3,6 +3,7 @@
 //! where the feed has the face, the report beside it, the SOUGHT card, the crawl along
 //! the foot. `space` switches the set off; `esc` leaves it on.
 
+use super::film::cut;
 use super::{cast, face, fill, news, person_of};
 use crate::app::{AppState, Screen, ScreenCmd};
 use crate::ui::chrome::{DIM, FAINT, MAGENTA, PANEL_BG, TEXT, put};
@@ -155,16 +156,6 @@ fn crawl_text(lines: &[String]) -> String {
     }
     let upper: Vec<String> = lines.iter().map(|l| l.to_uppercase()).collect();
     format!(" ▸ {}  ", upper.join("   ▸ "))
-}
-
-/// `text` in `width` columns at most, cut with `…` when it runs over.
-fn cut(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_string();
-    }
-    let mut out: String = text.chars().take(width.saturating_sub(1)).collect();
-    out.push('…');
-    out
 }
 
 fn close() -> ScreenCmd {
