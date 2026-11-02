@@ -5,7 +5,6 @@ use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::render::Rgb;
 use crate::screens::create::chooser::Chooser;
 use crate::screens::files::Files;
-use crate::screens::generating::Generating;
 use crate::ui::logo::{self, Logo};
 use crate::ui::menu::{Menu, MenuView};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -90,16 +89,7 @@ impl Title {
     /// NEW GAME (DEBUG): D'SHAWN, maxed out, straight into a fresh city.
     fn debug_game(&self, st: &mut AppState) -> ScreenCmd {
         st.character = game::Character::debug_runner(&st.content);
-        match Generating::new(Title::fresh_params(st, st.tick), st.tick) {
-            Ok(g) => ScreenCmd::Switch {
-                to: Box::new(g),
-                fx: TransitionKind::Glitch,
-            },
-            Err(e) => {
-                st.warn(e.to_string());
-                ScreenCmd::Stay
-            }
-        }
+        crate::screens::start_city(st, Title::fresh_params(st, st.tick))
     }
 
     /// COMBAT on the Net: D'SHAWN into a fresh city, and as it opens, jacked into a
@@ -544,7 +534,7 @@ mod tests {
         t.update(&mut st, &[key(KeyCode::Right)]);
         assert_eq!(t.combat, CombatMap::Net);
         t.update(&mut st, &[key(KeyCode::Down)]);
-        // NET: straight onto the lot's construct, no generating screen.
+        // NET: straight onto the lot's construct, no broadcast.
         let ScreenCmd::Switch { to: map, .. } = t.update(&mut st, &[key(KeyCode::Enter)]) else {
             panic!("straight to the map")
         };
@@ -580,18 +570,15 @@ mod tests {
         assert!(buffer_text(term.backend().buffer()).contains("NEW GAME (DEBUG)"));
         t.update(&mut st, &[key(KeyCode::Down)]);
         let ScreenCmd::Switch {
-            to: mut generating,
             fx: TransitionKind::Glitch,
+            ..
         } = t.update(&mut st, &[key(KeyCode::Enter)])
         else {
-            panic!("straight to generating")
+            panic!("straight into the city")
         };
         assert_eq!(st.character.handle, "D'SHAWN");
         assert_eq!(st.character.level, 50);
         assert!(st.character.flags(&st.content).contains("deep_end"));
-        let ScreenCmd::Switch { .. } = generating.update(&mut st, &[key(KeyCode::Enter)]) else {
-            panic!("ENTER skips to the city")
-        };
         let p = st.player.as_ref().expect("walking in the new city");
         if let Some(h) = st.home {
             assert_eq!(

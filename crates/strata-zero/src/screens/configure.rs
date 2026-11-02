@@ -2,7 +2,6 @@
 
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::render::Rgb;
-use crate::screens::generating::Generating;
 use crate::screens::title::Title;
 use crate::ui::form::{Field, Form, FormView};
 use crate::ui::panel::boxed;
@@ -176,14 +175,8 @@ impl Screen for Configure {
                         st.warn(e.to_string());
                         continue;
                     }
-                    match Generating::new(params.clone(), st.tick) {
-                        Ok(next) => {
-                            st.params = params;
-                            return ScreenCmd::Switch {
-                                to: Box::new(next),
-                                fx: TransitionKind::Glitch,
-                            };
-                        }
+                    match crate::screens::build_city(params) {
+                        Ok(city) => return crate::screens::enter_built_city(st, city),
                         Err(e) => {
                             self.error = Some(e.to_string());
                             st.warn(e.to_string());

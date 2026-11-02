@@ -16,7 +16,6 @@ use crate::screens::configure::Configure;
 use crate::screens::console;
 use crate::screens::deck::Deck;
 use crate::screens::files::Files;
-use crate::screens::generating::Generating;
 use crate::screens::help;
 use crate::screens::messages::Messages;
 use crate::screens::pause::Pause;
@@ -1349,16 +1348,7 @@ impl MapScreen {
             KeyCode::Char('w') => self.enter_walk(st),
             KeyCode::Char('r') => {
                 let params = st.params.clone().with_seed(hash64(st.params.seed, st.tick));
-                return Some(match Generating::new(params, st.tick) {
-                    Ok(next) => ScreenCmd::Switch {
-                        to: Box::new(next),
-                        fx: TransitionKind::Glitch,
-                    },
-                    Err(e) => {
-                        st.warn(e.to_string());
-                        ScreenCmd::Stay
-                    }
-                });
+                return Some(crate::screens::start_city(st, params));
             }
             KeyCode::Char('g') => {
                 return Some(ScreenCmd::Switch {
@@ -4206,13 +4196,16 @@ mod tests {
         s.update(&mut st, &[key(KeyCode::Right), key(KeyCode::Down)]);
         assert_eq!(s.cursor, Pos::new(before.x + 1, before.y + 1));
         assert!(matches!(
-            s.update(&mut st, &[key(KeyCode::Char('r'))]),
-            ScreenCmd::Switch { .. }
-        ));
-        assert!(matches!(
             s.update(&mut st, &[key(KeyCode::Char('g'))]),
             ScreenCmd::Switch { .. }
         ));
+        // r builds a fresh city and walks into it at once.
+        let seed = st.city.as_ref().map(|c| c.seed);
+        assert!(matches!(
+            s.update(&mut st, &[key(KeyCode::Char('r'))]),
+            ScreenCmd::Switch { .. }
+        ));
+        assert_ne!(st.city.as_ref().map(|c| c.seed), seed);
         let mut empty = AppState::new();
         let mut t2 = Terminal::new(TestBackend::new(100, 30)).unwrap();
         t2.draw(|f| s.draw(&empty, f)).unwrap();

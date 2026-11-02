@@ -13,12 +13,12 @@ mod summary;
 
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::render::Rgb;
-use crate::screens::generating::Generating;
+use crate::screens::broadcast::Broadcast;
 use crate::screens::title::Title;
 use crate::ui::chrome::{CYAN, CYAN_RGB, DIM, FAINT, MAGENTA, MAGENTA_RGB, RULE, solid};
 use crate::ui::logo::{self, Logo};
 use crossterm::event::{KeyCode, KeyEvent};
-use game::{Attribute, Build, CategoryId, Character, Step};
+use game::{Attribute, Build, CategoryId, Step};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -165,7 +165,7 @@ impl Create {
         }
         match self.step.next() {
             Some(s) => self.go(st, s),
-            None => self.jack_in(st),
+            None => self.on_air(st),
         }
     }
 
@@ -178,20 +178,19 @@ impl Create {
         }
     }
 
-    /// Builds the character and heads for a fresh city, as NEW GAME used to.
-    fn jack_in(&mut self, st: &mut AppState) -> ScreenCmd {
-        let Some(b) = st.build.take() else {
+    /// Builds a fresh city and puts the broadcast over the sheet; the build stays until
+    /// JACK IN there.
+    fn on_air(&mut self, st: &mut AppState) -> ScreenCmd {
+        if st.build.is_none() {
             return ScreenCmd::Stay;
-        };
-        st.character = Character::from_build(&st.content, &b);
-        match Generating::new(Title::fresh_params(st, st.tick), st.tick) {
-            Ok(g) => ScreenCmd::Switch {
-                to: Box::new(g),
+        }
+        match crate::screens::build_city(Title::fresh_params(st, st.tick)) {
+            Ok(city) => ScreenCmd::Push {
+                to: Box::new(Broadcast::new_game(st, city)),
                 fx: TransitionKind::Glitch,
             },
             Err(e) => {
                 st.warn(e.to_string());
-                st.build = Some(b);
                 ScreenCmd::Stay
             }
         }
@@ -268,7 +267,7 @@ impl Create {
                 ("enter", "next"),
                 ("esc", "back"),
             ],
-            Step::Summary => &[("enter", "JACK IN"), ("esc", "back")],
+            Step::Summary => &[("enter", "next"), ("esc", "back")],
         }
     }
 }
@@ -844,8 +843,7 @@ mod tests {
             "the caption is the handle in block font with the tagline: {text}"
         );
         assert!(
-            text.contains("JACK IN")
-                && text.contains("CRÈCHE")
+            text.contains("CRÈCHE")
                 && text.contains("NETRUNNER")
                 && text.contains("step 6 of 6"),
             "{text}"
@@ -858,20 +856,45 @@ mod tests {
             text.contains("◈ Signal ghost") && text.contains("◈ Street sense"),
             "what the categories grant is on the sheet: {text}"
         );
-        let cmd = c.update(&mut st, &[key(KeyCode::Enter)]);
-        assert!(
-            matches!(
-                cmd,
-                ScreenCmd::Switch {
-                    fx: TransitionKind::Glitch,
-                    ..
-                }
-            ),
-            "jack in generates"
-        );
+        assert!(text.contains("[enter]next") && !text.contains("JACK IN"), "{text}");
+        let ScreenCmd::Push { to: mut on_air, .. } = c.update(&mut st, &[key(KeyCode::Enter)])
+        else {
+            panic!("the sheet goes on to the broadcast")
+        };
+        assert!(st.build.is_some() && st.city.is_none(), "nothing made yet");
+        let space = key(KeyCode::Char(' '));
+        on_air.update(&mut st, &[space]);
+        assert!(matches!(
+            on_air.update(&mut st, &[space]),
+            ScreenCmd::Switch {
+                fx: TransitionKind::Glitch,
+                ..
+            }
+        ));
         assert_eq!(st.character.handle, "VEX");
         assert!(st.build.is_none());
         assert!(st.character.has_category(&game::CategoryId::new("wrench")));
+    }
+
+    #[test]
+    fn esc_from_the_broadcast_keeps_the_build() {
+        let mut st = AppState::new();
+        let mut c = chooser::Chooser::new(&st, 0).choose(&mut st);
+        let ScreenCmd::Push { to: mut on_air, .. } = c.update(&mut st, &[key(KeyCode::Enter)])
+        else {
+            panic!("the sheet goes on to the broadcast")
+        };
+        assert!(matches!(
+            on_air.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Pop { .. }
+        ));
+        assert!(st.build.is_some() && st.city.is_none());
+        st.tick += 1;
+        assert!(matches!(
+            c.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Push { .. }
+        ));
+        assert!(st.build.is_some(), "jacking in again starts from the same build");
     }
 
     #[test]

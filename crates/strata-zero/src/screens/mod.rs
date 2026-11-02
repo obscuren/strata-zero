@@ -12,7 +12,6 @@ pub mod deck;
 pub mod explore;
 pub mod files;
 pub mod flatlined;
-pub mod generating;
 pub mod help;
 pub mod keypad;
 pub mod kit;

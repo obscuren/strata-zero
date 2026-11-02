@@ -2,6 +2,7 @@
 
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::render::Rgb;
+use crate::screens::broadcast::Broadcast;
 use crate::save::{CityFileInfo, default_dir, list_cities, load_city, save_city};
 use crate::ui::form::{Field, Form, FormView};
 use crate::ui::panel::boxed;
@@ -123,11 +124,9 @@ impl Screen for Files {
                         };
                         match load_city(&entry.path) {
                             Ok(city) => {
-                                st.params = city.params.clone();
-                                st.enter_city(city);
-                                st.say(format!("loaded {}", entry.path.display()));
-                                return ScreenCmd::Switch {
-                                    to: crate::screens::explore_screen(st),
+                                let path = entry.path.display().to_string();
+                                return ScreenCmd::Push {
+                                    to: Box::new(Broadcast::load(st, city, path)),
                                     fx: TransitionKind::Glitch,
                                 };
                             }
@@ -315,8 +314,15 @@ mod tests {
         t.draw(|f| load.draw(&st, f)).unwrap();
         let text = buffer_text(t.backend().buffer());
         assert!(text.contains(&name) && text.contains("seed 9"), "{text}");
+        let ScreenCmd::Push { to: mut on_air, .. } = load.update(&mut st, &[key(KeyCode::Enter)])
+        else {
+            panic!("a load goes through the broadcast")
+        };
+        assert!(st.city.is_none(), "not entered until JACK IN");
+        let space = key(KeyCode::Char(' '));
+        on_air.update(&mut st, &[space]);
         assert!(matches!(
-            load.update(&mut st, &[key(KeyCode::Enter)]),
+            on_air.update(&mut st, &[space]),
             ScreenCmd::Switch { .. }
         ));
         assert_eq!(st.city.as_ref().map(|c| c.seed), Some(9));
