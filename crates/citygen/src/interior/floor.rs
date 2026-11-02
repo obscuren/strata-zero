@@ -109,7 +109,10 @@ pub struct Exit {
 pub struct Floor {
     pub level: i32,
     pub tiles: Grid<Tile>,
+    /// The brightest channel of `glow`: the light as one number.
     pub light: Grid<u8>,
+    /// The light's colour on each tile, each channel 0..=255.
+    pub glow: Grid<(u8, u8, u8)>,
     pub rooms: Vec<Room>,
     pub exits: Vec<Exit>,
     pub stations: Vec<Station>,

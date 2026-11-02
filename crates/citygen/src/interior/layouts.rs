@@ -6,7 +6,7 @@ use crate::geom::{Pos, Rect};
 use crate::lighting;
 use crate::pathing::{bfs_nearest, components};
 use crate::rng::hash64;
-use crate::tile::{Feature, Furniture, Terrain, Tile};
+use crate::tile::{Feature, Fitting, FittingKind, Furniture, Hue, Terrain, Tile, Tone, Wear};
 use crate::world::{BuildingKind, City, StratumKind};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -15,6 +15,7 @@ use std::collections::HashSet;
 mod atrium;
 pub(super) mod clinics;
 mod home;
+mod lights;
 
 pub(super) struct Builder<'a> {
     city: &'a City,
@@ -33,6 +34,12 @@ pub(super) struct Builder<'a> {
     clear: HashSet<Pos>,
     /// Every exit's doorstep.
     doorsteps: Vec<Pos>,
+    /// The floor's own seed, for the fittings' wear.
+    seed: u64,
+    /// The lights the floor is lit from, as `light()` places them.
+    emitters: Vec<lighting::Emitter>,
+    /// Each tile's ambient, by its room's tone and mood.
+    ambient: crate::geom::Grid<[f32; 3]>,
 }
 
 /// Which edge of a rect a border tile sits on.
@@ -127,6 +134,9 @@ impl<'a> Builder<'a> {
             reserved: HashSet::new(),
             clear: HashSet::new(),
             doorsteps: Vec::new(),
+            seed,
+            emitters: Vec::new(),
+            ambient: crate::geom::Grid::filled(plan.size, [0.0; 3]),
         };
         b.windows();
         b
@@ -255,6 +265,7 @@ impl<'a> Builder<'a> {
                 level: self.level,
                 tiles: self.tiles.clone(),
                 light: crate::geom::Grid::filled(self.plan.size, 0),
+                glow: crate::geom::Grid::filled(self.plan.size, (0, 0, 0)),
                 rooms: Vec::new(),
                 exits: Vec::new(),
                 stations: Vec::new(),
@@ -966,7 +977,16 @@ impl<'a> Builder<'a> {
             if let Some(rect) = spot {
                 for p in rect.iter() {
                     self.reserved.insert(p);
-                    self.tiles[p].feature = Some(Feature::Lamp);
+                    let hue = if (p.y - rect.y) % 2 == 0 {
+                        Hue::Magenta
+                    } else {
+                        Hue::Cyan
+                    };
+                    self.tiles[p].feature = Some(Feature::Fitting(Fitting {
+                        kind: FittingKind::Stage,
+                        tone: Tone::Neon(hue),
+                        wear: Wear::Ok,
+                    }));
                 }
                 self.rooms.push(Room {
                     rect,
@@ -1114,19 +1134,6 @@ impl<'a> Builder<'a> {
 
     // ---- finishing --------------------------------------------------------
 
-    fn lamps(&mut self) {
-        let inner = self.inner();
-        for p in inner.iter() {
-            if p.x % 6 == 3
-                && p.y % 6 == 3
-                && self.tiles[p].terrain == Terrain::Floor
-                && self.tiles[p].feature.is_none()
-            {
-                self.tiles[p].feature = Some(Feature::Lamp);
-            }
-        }
-    }
-
     /// Every walkable tile reaches every other: doors through inner walls where two
     /// pieces meet, around locked rooms where a way exists, else through them (and
     /// then they are no longer locked).
@@ -1198,21 +1205,20 @@ impl<'a> Builder<'a> {
 
     fn finish(self) -> Floor {
         let tiles = &self.tiles;
-        let light = lighting::compute(
-            tiles,
-            lighting::tuning::INTERIOR_BASE,
+        let glow = lighting::compute_coloured(
+            self.plan.size,
+            |p| self.ambient[p],
             |p| tiles.get(p).is_none_or(|t| t.blocks_sight()),
-            |t| match t.feature {
-                Some(Feature::Lamp) => Some(lighting::tuning::INTERIOR_LAMP),
-                _ => None,
-            },
+            &self.emitters,
         );
+        let light = glow.map(|&(r, g, b)| r.max(g).max(b));
         let mut stations = self.stations;
         stations.retain(|s| self.tiles[s.pos].is_walkable());
         Floor {
             level: self.level,
             tiles: self.tiles,
             light,
+            glow,
             rooms: self.rooms,
             exits: self.exits,
             stations,
@@ -1220,7 +1226,7 @@ impl<'a> Builder<'a> {
     }
 }
 
-pub(super) fn generate(city: &City, plan: &FloorPlan, level: i32) -> Floor {
+fn build<'a>(city: &'a City, plan: &'a FloorPlan, level: i32) -> Builder<'a> {
     let mut b = Builder::new(city, plan, level);
     b.exits();
     b.shafts();
@@ -1239,10 +1245,17 @@ pub(super) fn generate(city: &City, plan: &FloorPlan, level: i32) -> Floor {
         FloorType::Atrium => b.atrium_floor(),
         FloorType::Plaza => b.plaza_floor(),
     }
-    // A clinic's grid hangs its own lamps.
-    if plan.clinic.is_none() {
-        b.lamps();
-    }
     b.connect();
-    b.finish()
+    b.light();
+    b
+}
+
+pub(super) fn generate(city: &City, plan: &FloorPlan, level: i32) -> Floor {
+    build(city, plan, level).finish()
+}
+
+/// The builder of a floor, laid out and lit but not yet finished.
+#[cfg(test)]
+pub(super) fn built<'a>(city: &'a City, plan: &'a FloorPlan, level: i32) -> Builder<'a> {
+    build(city, plan, level)
 }

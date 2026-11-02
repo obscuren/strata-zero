@@ -51,10 +51,6 @@ pub fn lamp_emission(feature: Option<Feature>) -> Option<(i32, f32)> {
     }
 }
 
-/// A lamp on an interior floor.
-pub const INTERIOR_LAMP: (i32, f32) = (6, 120.0);
-/// Base light of an interior floor; floors have no sky.
-pub const INTERIOR_BASE: u8 = 150;
 /// The Net's open grid and its lanes, written straight into `steady`.
 pub const NET_GRID_LIGHT: u8 = 200;
 pub const NET_LANE_LIGHT: u8 = 255;
@@ -141,9 +137,7 @@ pub fn room_light(room: Option<RoomKind>, building: BuildingKind) -> RoomLight {
         (Some(R::Surgery), _) => light(Tone::Surgical, 128, &[(Both, 1)]),
         (Some(R::Hall | R::Bays), _) => light(Tone::Sodium, 78, &[(Ceiling, 3), (Both, 1)]),
         (Some(R::Stage), _) => light(Tone::Neon(Hue::Magenta), 60, &[(Ceiling, 1)]),
-        (Some(R::Corridor) | None, _) => {
-            light(Tone::Fluorescent, 92, &[(Ceiling, 3), (Walls, 1)])
-        }
+        (Some(R::Corridor) | None, _) => light(Tone::Fluorescent, 92, &[(Ceiling, 3), (Walls, 1)]),
     }
 }
 

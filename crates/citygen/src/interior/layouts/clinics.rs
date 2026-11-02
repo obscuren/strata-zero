@@ -236,10 +236,8 @@ impl Builder<'_> {
                     b'g' => Terrain::Grate,
                     _ => Terrain::Floor,
                 };
-                t.feature = match mark {
-                    b'*' => Some(Feature::Lamp),
-                    m => furniture(m).map(Feature::Furniture),
-                };
+                // A `*` was a lamp; the floor's fittings light it now.
+                t.feature = furniture(mark).map(Feature::Furniture);
                 if mark == b'd' {
                     self.stations.push(Station {
                         pos: p,

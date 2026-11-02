@@ -268,7 +268,10 @@ mod tests {
         assert_eq!(pick(3), pick(3));
         let seen: std::collections::HashSet<_> = (0..40).map(pick).collect();
         assert!(seen.contains(&Mood::Walls) && seen.contains(&Mood::Both));
-        assert!(!seen.contains(&Mood::Ceiling), "a bar never goes ceiling-only");
+        assert!(
+            !seen.contains(&Mood::Ceiling),
+            "a bar never goes ceiling-only"
+        );
     }
 
     #[test]

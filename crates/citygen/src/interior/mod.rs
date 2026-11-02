@@ -730,7 +730,7 @@ mod tests {
                             (_, Some(Feature::Furniture(Furniture::Shelf))) => 's',
                             (_, Some(Feature::Furniture(Furniture::Machine))) => 'm',
                             (_, Some(Feature::Furniture(_))) => 'f',
-                            (_, Some(Feature::Lamp)) => '*',
+                            (_, Some(Feature::Fitting(f))) if !f.kind.on_wall() => '*',
                             (Terrain::Wall, _) => '#',
                             (Terrain::Window, _) => 'w',
                             (Terrain::Door, _) => '+',
