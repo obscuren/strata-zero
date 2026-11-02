@@ -457,6 +457,7 @@ fn start(st: &mut AppState, run: &mut SceneRun, beat: &Beat) {
             visitors::leave(st, role);
         }
         Beat::Lights(level) => effects::lights(st, *level),
+        Beat::Note { at, text } => effects::note(st, at, text),
     }
 }
 
@@ -484,7 +485,8 @@ fn ended(_st: &AppState, run: &SceneRun, beat: &Beat, now: u64) -> bool {
         | Beat::Camera(_)
         | Beat::Arrive { .. }
         | Beat::Leave(_)
-        | Beat::Lights(_) => true,
+        | Beat::Lights(_)
+        | Beat::Note { .. } => true,
     }
 }
 
@@ -509,7 +511,8 @@ fn finish(st: &mut AppState, run: &mut SceneRun, beat: &Beat) {
         | Beat::Camera(_)
         | Beat::Arrive { .. }
         | Beat::Leave(_)
-        | Beat::Lights(_) => {}
+        | Beat::Lights(_)
+        | Beat::Note { .. } => {}
     }
 }
 

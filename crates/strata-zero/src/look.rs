@@ -682,6 +682,19 @@ pub fn look_card(
     } else {
         ground(st, map, place, pos, own, &mut card);
     }
+    // What the story left on the tile, its own paragraph.
+    if visible
+        && let Some((_, _, note)) = st
+            .missions
+            .notes
+            .iter()
+            .find(|(p, q, _)| *p == place && *q == pos)
+    {
+        if !card.body.is_empty() {
+            card.body.push(String::new());
+        }
+        card.body.push(note.clone());
+    }
     if !visible {
         card.second = Some("as you last saw it".to_string());
         card.body.clear();
@@ -1195,6 +1208,41 @@ mod tests {
             assert!(l.has(k), "{k}");
         }
         assert!(l.line(Group::Feature, "lamp", 0, Pos::new(0, 0)).is_some());
+    }
+
+    #[test]
+    fn a_note_reads_under_its_tile_look() {
+        use crate::missions::{Mark, tests};
+        let (mut st, b, level, chair) = crate::clinic::testutil::inside();
+        st.book = tests::doc_book(tests::IDLE, "");
+        tests::cast_doc(&mut st, b);
+        let place = Place::Floor { building: b, level };
+        let note = crate::missions::Effect::Note {
+            at: Mark::Chair("doc".into()),
+            text: "Three tags scratched on the lamp arm.".into(),
+        };
+        crate::missions::effects::apply(&mut st, 0, 0, &note);
+        fn floor(st: &AppState, place: Place) -> MapRef<'_> {
+            MapRef::for_place(
+                st.city.as_ref().unwrap(),
+                &st.interiors,
+                &st.constructs,
+                place,
+                0,
+            )
+            .unwrap()
+        }
+        let mut p = Player::at(place, st.player.as_ref().unwrap().pos);
+        p.update_fov(&floor(&st, place), 0);
+        st.player = Some(p);
+        let map = floor(&st, place);
+        let c = look_card(&st, &map, place, chair, &|_, _| None, &[]);
+        let n = c.body.len();
+        assert!(n >= 1, "{c:?}");
+        assert_eq!(c.body[n - 1], "Three tags scratched on the lamp arm.");
+        if n > 1 {
+            assert_eq!(c.body[n - 2], "", "its own paragraph");
+        }
     }
 
     #[test]

@@ -345,6 +345,11 @@ pub enum Beat {
     },
     Leave(String),
     Lights(f32),
+    /// Leaves a line under the Look of the mark's tile; a newer one replaces it.
+    Note {
+        at: Mark,
+        text: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -453,6 +458,16 @@ pub enum Effect {
     },
     Leave(String),
     Lights(f32),
+    /// The role's line, said through your flat's holo set while you are home.
+    Holo {
+        from: String,
+        text: String,
+    },
+    /// Leaves a line under the Look of the mark's tile; a newer one replaces it.
+    Note {
+        at: Mark,
+        text: String,
+    },
     /// Puts out the news item; its end marks the step `Ended`, as a feed's does.
     News(String),
     /// The screen swims for this many seconds.
@@ -482,6 +497,7 @@ impl Effect {
             Effect::Call { lines, .. } => lines.iter().map(String::as_str).collect(),
             Effect::Dead { look, .. } => vec![look],
             Effect::Objective(s) | Effect::Log(s) => vec![s],
+            Effect::Holo { text, .. } | Effect::Note { text, .. } => vec![text],
             Effect::Mail { subject, body, .. } => body
                 .iter()
                 .map(String::as_str)
@@ -510,7 +526,10 @@ impl Effect {
                 code: Some(CodeOf::Clinic(role)),
                 ..
             } => vec![from, role],
-            Effect::Feed { from, .. } | Effect::Call { from, .. } | Effect::Mail { from, .. } => {
+            Effect::Feed { from, .. }
+            | Effect::Call { from, .. }
+            | Effect::Mail { from, .. }
+            | Effect::Holo { from, .. } => {
                 vec![from]
             }
             Effect::Arrive { role, .. } if role == YOU => vec![],
@@ -549,7 +568,10 @@ impl Beat {
             Beat::Say { at, .. } => at.iter().collect(),
             Beat::Walk { to, .. } => vec![to],
             Beat::Keypad { door, .. } => vec![door],
-            Beat::Door { at, .. } | Beat::Camera(at) | Beat::Arrive { at, .. } => vec![at],
+            Beat::Door { at, .. }
+            | Beat::Camera(at)
+            | Beat::Arrive { at, .. }
+            | Beat::Note { at, .. } => vec![at],
             Beat::Stage(_) | Beat::Wait(_) | Beat::Leave(_) | Beat::Lights(_) => vec![],
         }
     }
@@ -704,7 +726,9 @@ impl Book {
                     } => {
                         roles.insert(role.clone());
                     }
-                    Effect::Arrive { at, .. } => roles.extend(at.cast_role().map(String::from)),
+                    Effect::Arrive { at, .. } | Effect::Note { at, .. } => {
+                        roles.extend(at.cast_role().map(String::from));
+                    }
                     Effect::Scene(id) => self.scene_needs(id, &mut roles),
                     Effect::News(id) => {
                         if let Some(news) = self.news.get(id) {
@@ -747,7 +771,7 @@ impl Book {
                         roles.extend(placed(text));
                         roles.extend(label.iter().flat_map(|l| placed(l)));
                     }
-                    Beat::Stage(text) => roles.extend(placed(text)),
+                    Beat::Stage(text) | Beat::Note { text, .. } => roles.extend(placed(text)),
                     _ => {}
                 }
             }
@@ -927,6 +951,10 @@ impl Book {
             }
             Beat::Leave(role) => self.check_visitor(place, role)?,
             Beat::Lights(level) => check_level(place, *level)?,
+            Beat::Note { at, text } => {
+                self.check_text(place, text)?;
+                self.check_mark(place, at)?;
+            }
         }
         Ok(())
     }
@@ -1052,6 +1080,7 @@ impl Book {
                     }
                     Effect::Leave(role) => self.check_visitor(&at, role)?,
                     Effect::Lights(level) => check_level(&at, *level)?,
+                    Effect::Note { at: mark, .. } => self.check_mark(&at, mark)?,
                     Effect::News(id) if !self.news.contains_key(id) => {
                         return Err(BookError::UnknownNews {
                             place: at,

@@ -88,6 +88,8 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
         Effect::Arrive { role, at } => arrive(st, role, at),
         Effect::Leave(role) => visitors::leave(st, role),
         Effect::Lights(level) => lights(st, *level),
+        Effect::Holo { from, text } => holo(st, from, text),
+        Effect::Note { at, text } => note(st, at, text),
         Effect::News(id) => news::put_out(st, id, mission, step),
         Effect::Daze(seconds) => daze::start(st, *seconds),
         Effect::Hold(role) => {
@@ -170,6 +172,50 @@ pub(super) fn lights(st: &mut AppState, level: f32) {
     st.missions.lights = (level < 1.0).then_some(level);
 }
 
+/// The role's line through your flat's holo set, under the channel with its label
+/// glitched into the speaker's initial. Nothing away from home or without a set.
+fn holo(st: &mut AppState, from: &str, text: &str) {
+    if !super::at(st, &super::Where::Home) {
+        return;
+    }
+    let (Some(city), Some((place, pos))) = (st.city.as_ref(), news::set_tile(st)) else {
+        return;
+    };
+    let channel = news::channel(city);
+    let keep = channel.chars().count().saturating_sub(3);
+    let initial = role_name(st, from)
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_default();
+    let label = format!(
+        "{}▚▞▚ {initial}",
+        channel.chars().take(keep).collect::<String>()
+    );
+    let colour = visitors::colour(&st.book, from);
+    let text = fill(st, text);
+    super::asides::say(
+        st,
+        super::asides::Speaker::Tile(place, pos),
+        label,
+        colour,
+        text,
+    );
+}
+
+/// Leaves the filled line under the Look of the mark's tile, replacing any there. A mark
+/// that resolves to nothing leaves nothing.
+pub(super) fn note(st: &mut AppState, at: &Mark, text: &str) {
+    let Some((place, pos)) = marks::resolve(st, at, None) else {
+        return;
+    };
+    let text = fill(st, text);
+    st.missions
+        .notes
+        .retain(|(p, q, _)| (*p, *q) != (place, pos));
+    st.missions.notes.push((place, pos, text));
+}
+
 /// The role's person dies: a body at their work tile, the sim done with them. Once.
 fn dead(st: &mut AppState, role: &str, look: &str) {
     let Some(person) = person_of(st, role) else {
@@ -206,7 +252,7 @@ mod tests {
     use crate::jobs::testutil::state_home;
     use crate::missions::{Mark, marks, visitors};
     use crate::walker::Player;
-    use citygen::Pos;
+    use citygen::{Place, Pos, StratumKind};
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use ratatui::style::{Color, Style};
@@ -277,6 +323,61 @@ mod tests {
                 .into_iter()
                 .collect::<std::collections::VecDeque<_>>()
         );
+    }
+
+    #[test]
+    fn holo_speaks_through_the_set_at_home() {
+        let mut st = in_the_flat();
+        let (place, set) = news::set_tile(&st).unwrap();
+        let channel = news::channel(st.city.as_ref().unwrap());
+        let holo = Effect::Holo {
+            from: "seren".into(),
+            text: "Your lock's yours again, {mezz}.".into(),
+        };
+        apply(&mut st, 0, 0, &holo);
+        let [a] = st.missions.asides.as_slice() else {
+            panic!("{:?}", st.missions.asides)
+        };
+        assert_eq!(
+            a.speaker,
+            crate::missions::asides::Speaker::Tile(place, set)
+        );
+        let stem: String = channel.chars().take(channel.chars().count() - 3).collect();
+        assert_eq!(a.label, format!("{stem}▚▞▚ S"));
+        assert_eq!(a.colour, visitors::colour(&st.book, "seren"));
+        assert!(!a.text.contains('{'), "filled: {}", a.text);
+    }
+
+    #[test]
+    fn holo_away_from_home_says_nothing() {
+        let mut st = in_the_flat();
+        st.player = Some(Player::at(
+            Place::Stratum(StratumKind::Street),
+            Pos::new(1, 1),
+        ));
+        let holo = Effect::Holo {
+            from: "seren".into(),
+            text: "Hello.".into(),
+        };
+        apply(&mut st, 0, 0, &holo);
+        assert!(st.missions.asides.is_empty());
+    }
+
+    #[test]
+    fn a_note_replaces_the_one_on_its_tile_and_unresolved_does_nothing() {
+        let mut st = in_the_flat();
+        let at = Mark::HomeInside(2);
+        let tile = marks::resolve(&st, &at, None).unwrap();
+        let note = |text: &str| Effect::Note {
+            at: at.clone(),
+            text: text.into(),
+        };
+        apply(&mut st, 0, 0, &note("one"));
+        apply(&mut st, 0, 0, &note("two"));
+        assert_eq!(st.missions.notes, [(tile.0, tile.1, "two".to_string())]);
+        st.home = None;
+        apply(&mut st, 0, 0, &note("three"));
+        assert_eq!(st.missions.notes.len(), 1);
     }
 
     #[test]

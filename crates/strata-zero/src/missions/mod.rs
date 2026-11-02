@@ -89,6 +89,8 @@ pub struct Missions {
     pub read: BTreeSet<String>,
     /// Roles `Release` let go, waiting for you to leave their work building.
     pub releasing: BTreeSet<String>,
+    /// The lines the story left under a tile's Look, one a tile.
+    pub notes: Vec<(Place, Pos, String)>,
 }
 
 /// Where one mission stands.
