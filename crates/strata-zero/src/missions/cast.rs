@@ -15,8 +15,8 @@ const FIXER: &str = "fixer";
 const RING_SLACK: i32 = 16;
 
 /// Binds every role to a person: the nearest-picks first, then the workers, each in the
-/// book's order. Never one person to two roles, never a dead one. A cast person takes the role's name; a role nobody can play is
-/// left out of `missions.cast`.
+/// book's order. Never one person to two roles, never a dead one. A cast person takes
+/// the role's name; a role nobody can play is left out of `missions.cast`.
 pub fn cast(st: &mut AppState) {
     st.missions.cast.clear();
     let Some(door) = home_door(st) else {
