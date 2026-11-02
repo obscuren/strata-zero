@@ -138,6 +138,23 @@ Story(
                     "Seren will send you the where. Don't keep her waiting.",
                 ]),
             ]),
+            Step(id: "up", when: Ended("morning"), then: [Log("`House call` · morning")]),
+        ]),
+        Mission(id: "morning_after", title: "The morning after", from: "castellan", steps: [
+            Step(id: "wake", when: MissionDone(mission: "house_call", minutes: 0), then: [
+                Scene("waking"),
+            ]),
+            Step(id: "news", when: Ended("wake"), then: [
+                Daze(4.0),
+                News("marlo"),
+                Objective("Catch the news on the holo"),
+            ]),
+            Step(id: "saw", when: Ended("news"), then: [
+                Mail(from: "mezz", subject: "the news", body: [
+                    "Saw the news.",
+                    "Don't go out looking like you.",
+                ]),
+            ]),
         ]),
     ],
     scenes: {
@@ -191,6 +208,12 @@ Story(
             Lights(1.0),
             Walk(who: "seren", to: HomeOutside),
             Leave("seren"),
+        ]),
+        "waking": Scene(title: "The morning after", look: Bubbles,
+            pace: Pace(type: 45, walk: 0.3, hold: Some(2.5)), beats: [
+            Stage("Your head swims. Last night comes back in pieces: the red pad, the couch, her cable."),
+            Wait(1.5),
+            Say(who: "you", text: "…so that happened."),
         ]),
     },
     news: {

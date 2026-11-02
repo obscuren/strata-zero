@@ -862,6 +862,8 @@ mod tests {
             place: STREET,
             pos: at,
             look: "Marlo lies face down by the shutters.".into(),
+            near: false,
+            left: None,
         });
         let c = card(&st, at);
         assert_eq!(c.header.as_deref(), Some("Marlo"));

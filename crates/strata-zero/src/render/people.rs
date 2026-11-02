@@ -474,6 +474,8 @@ mod tests {
             place: citygen::Place::Stratum(StratumKind::Street),
             pos: at,
             look: "Face down.".into(),
+            near: false,
+            left: None,
         }];
         let area = Rect::new(0, 0, 8, 6);
         let style = StylePack::load().unwrap();

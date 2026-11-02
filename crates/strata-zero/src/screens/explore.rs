@@ -2740,6 +2740,7 @@ impl Screen for MapScreen {
             self.targeting = None;
         }
         crate::track::tick(st);
+        crate::missions::news::tick(st, self.mode == Mode::Walk);
         // A fixer beside you has their offer ready before you talk.
         if self.mode == Mode::Walk {
             crate::jobs::ui::prepare_offers(st, &|pl, p| self.inside_person_at(pl, p));

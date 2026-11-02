@@ -125,6 +125,8 @@ fn dead(st: &mut AppState, role: &str, look: &str) {
             place: Place::Stratum(StratumKind::Street),
             pos,
             look: fill(st, look),
+            near: false,
+            left: None,
         };
         st.missions.bodies.push(body);
     } else if st.dev {

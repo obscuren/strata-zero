@@ -937,10 +937,11 @@ mod tests {
     #[test]
     fn the_shipped_book_parses_and_validates() {
         let b = book();
-        assert_eq!(b.missions.len(), 2);
+        assert_eq!(b.missions.len(), 3);
         assert_eq!(b.missions[0].id, "the_drop");
         assert_eq!(b.missions[1].id, "house_call");
-        assert_eq!(b.scenes.len(), 2);
+        assert_eq!(b.missions[2].id, "morning_after");
+        assert_eq!(b.scenes.len(), 3);
         assert_eq!(b.missions[0].steps.len(), 6);
         assert!(b.cast.contains_key("mezz") && b.cast.contains_key("marlo"));
         assert_eq!(b.face_of("mezz").eye, (255, 0, 200));

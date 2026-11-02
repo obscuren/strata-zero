@@ -67,6 +67,9 @@ pub struct Missions {
     pub scene: Option<scene::SceneRun>,
     /// The news item put out last, fresh or not.
     pub news: Option<news::NewsRun>,
+    /// Steps whose news item a newer one replaced before they ended: mission, step. The
+    /// next news tick ends them.
+    pub news_ends: Vec<(usize, usize)>,
     /// The daze running, if one is.
     pub daze: Option<daze::Daze>,
 }
@@ -107,6 +110,20 @@ pub struct Body {
     pub pos: Pos,
     /// What look mode says of it.
     pub look: String,
+    /// You have been within `news::NEAR` tiles of it on its place.
+    pub near: bool,
+    /// When you walked away from it, once: recorded by the news tick.
+    pub left: Option<Left>,
+}
+
+/// You walking away from a body (morning news spec §7): the first time you were more
+/// than `news::AWAY` tiles from it after having been near.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Left {
+    /// The clock: hour, minute.
+    pub at: (u8, u8),
+    /// The eight-point heading from the body to you: `north`, `north-east` …
+    pub heading: &'static str,
 }
 
 /// A HOLO feed waiting to be shown, its text filled.
@@ -1348,6 +1365,141 @@ pub(crate) mod tests {
         assert!(call.answered.is_none(), "and ringing");
         answer_through(&mut st);
         assert!(matches!(st.missions.runs[1].state, RunState::Done { .. }));
+    }
+
+    /// Eight hours after Mezz's mail, in the flat: Castellan's morning call ringing.
+    fn the_morning_call() -> AppState {
+        let (mut st, _) = after_the_mail();
+        advance(&mut st, 480);
+        tick(&mut st);
+        let call = st.missions.call.as_ref().expect("the call is up");
+        assert_eq!(call.from, "castellan");
+        st
+    }
+
+    /// The morning call answered through and the waking scene run out: the news is on.
+    fn the_news_is_on(st: &mut AppState) {
+        answer_through(st);
+        tick(st);
+        assert_eq!(scene::running(st).map(|r| r.id()), Some("waking"));
+        scene::skip(st);
+        assert!(news::current(st).is_some(), "the news is on");
+    }
+
+    /// Mezz's mails about the news.
+    fn news_mails(st: &AppState) -> Vec<&crate::credentials::Mail> {
+        st.journal
+            .mails
+            .iter()
+            .filter(|m| m.subject == "the news")
+            .collect()
+    }
+
+    /// Mezz's mail has come, once, and the morning after is done.
+    fn mezz_saw_the_news(st: &AppState) {
+        let mails = news_mails(st);
+        assert_eq!(mails.len(), 1, "{mails:?}");
+        assert_eq!(mails[0].from, "Mezz");
+        assert_eq!(
+            mails[0].body,
+            ["Saw the news.", "Don't go out looking like you."]
+        );
+        assert!(matches!(st.missions.runs[2].state, RunState::Done { .. }));
+    }
+
+    #[test]
+    fn the_house_call_is_not_done_while_the_call_rings() {
+        let st = the_morning_call();
+        let run = &st.missions.runs[1];
+        assert_eq!(run.state, RunState::Open);
+        assert_eq!(
+            run.objectives.last().map(String::as_str),
+            Some("Sleep · Castellan will be in touch")
+        );
+        assert_eq!(st.missions.runs[2].state, RunState::Waiting);
+        assert!(st.missions.scenes.is_empty(), "no scene under the call");
+    }
+
+    #[test]
+    fn the_morning_after_wakes_dizzy_and_puts_out_the_news() {
+        let mut st = the_morning_call();
+        answer_through(&mut st);
+        // Done only now the call has ended.
+        assert!(matches!(st.missions.runs[1].state, RunState::Done { .. }));
+        assert!(st.log.iter().any(|e| e.text == "House call · morning"));
+        assert_eq!(st.missions.runs[2].state, RunState::Open);
+        tick(&mut st);
+        assert_eq!(scene::running(&st).map(|r| r.id()), Some("waking"));
+        assert!(st.missions.daze.is_none() && news::current(&st).is_none());
+        scene::skip(&mut st);
+        assert!(scene::running(&st).is_none());
+        assert!(
+            st.log.iter().any(|e| e.text.contains("…so that happened.")),
+            "{:?}",
+            st.log.iter().map(|e| &e.text).collect::<Vec<_>>()
+        );
+        assert!(st.missions.daze.is_some(), "dizzy");
+        let n = news::current(&st).expect("the news is on");
+        assert!(n.on && !n.ended);
+        assert_eq!((n.id.as_str(), n.mission, n.step), ("marlo", 2, 1));
+        assert_eq!(
+            st.missions.runs[2].objectives.last().map(String::as_str),
+            Some("Catch the news on the holo")
+        );
+        // In the flat, fresh: the step waits.
+        news::tick(&mut st, true);
+        assert!(news_mails(&st).is_empty());
+        assert_eq!(st.missions.runs[2].state, RunState::Open);
+    }
+
+    #[test]
+    fn switching_the_set_off_sends_mezzs_mail() {
+        let mut st = the_morning_call();
+        the_news_is_on(&mut st);
+        news::switch_off(&mut st);
+        mezz_saw_the_news(&st);
+        assert!(!news::current(&st).unwrap().on);
+        news::tick(&mut st, true);
+        mezz_saw_the_news(&st);
+    }
+
+    #[test]
+    fn leaving_the_flat_sends_it_too() {
+        let mut st = the_morning_call();
+        the_news_is_on(&mut st);
+        news::tick(&mut st, true);
+        assert!(news_mails(&st).is_empty());
+        let (place, pos) = marks::resolve(&st, &Mark::HomeOutside, None).unwrap();
+        st.player = Some(Player::at(place, pos));
+        news::tick(&mut st, true);
+        mezz_saw_the_news(&st);
+        assert!(news::current(&st).unwrap().on, "the set stays on");
+        news::tick(&mut st, true);
+        mezz_saw_the_news(&st);
+    }
+
+    #[test]
+    fn out_of_the_flat_when_it_comes_sends_it_at_once() {
+        let mut st = the_morning_call();
+        let below = door(&st);
+        on_street(&mut st, below);
+        the_news_is_on(&mut st);
+        news::tick(&mut st, true);
+        mezz_saw_the_news(&st);
+        assert!(news::current(&st).unwrap().on, "on for when you get home");
+    }
+
+    #[test]
+    fn staying_in_until_it_is_stale_sends_it_then() {
+        let mut st = the_morning_call();
+        the_news_is_on(&mut st);
+        let fresh = news::current(&st).unwrap().fresh;
+        advance(&mut st, fresh - 1);
+        news::tick(&mut st, true);
+        assert!(news_mails(&st).is_empty());
+        advance(&mut st, 1);
+        news::tick(&mut st, true);
+        mezz_saw_the_news(&st);
     }
 
     #[test]
