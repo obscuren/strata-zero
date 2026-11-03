@@ -16,8 +16,11 @@ pub enum Kind {
 pub struct Entry {
     pub text: String,
     pub kind: Kind,
-    /// The tick the entry arrived.
+    /// The city's tick the entry arrived; stamps the clock and ages `recent`.
     pub tick: u64,
+    /// The frame tick the entry arrived; the log types the line out on it, so a sleep
+    /// that races the city's clock ahead doesn't leave it hidden.
+    pub shown: u64,
     /// Names in the text, as char ranges, lit when the log draws: a place, an item,
     /// a person. Writers mark them with backticks; the text keeps none.
     pub marks: Vec<(usize, usize)>,
@@ -68,7 +71,7 @@ impl MessageLog {
     /// How long the newest entry counts as recent.
     pub const RECENT_TICKS: u64 = 90;
 
-    pub fn push(&mut self, kind: Kind, text: impl Into<String>, tick: u64) {
+    pub fn push(&mut self, kind: Kind, text: impl Into<String>, tick: u64, shown: u64) {
         if self.entries.len() == Self::CAP {
             self.entries.pop_front();
         }
@@ -77,6 +80,7 @@ impl MessageLog {
             text,
             kind,
             tick,
+            shown,
             marks,
         });
     }
@@ -114,19 +118,19 @@ mod tests {
     fn log_caps_and_reports_recent() {
         let mut log = MessageLog::default();
         assert!(log.is_empty() && log.latest().is_none() && log.recent(0).is_none());
-        log.push(Kind::Info, "took it", 10);
-        log.push(Kind::Warn, "no", 20);
+        log.push(Kind::Info, "took it", 10, 10);
+        log.push(Kind::Warn, "no", 20, 20);
         assert_eq!(log.len(), 2);
         assert_eq!(log.recent(20).map(|e| e.text.as_str()), Some("no"));
         assert_eq!(log.recent(109).map(|e| e.text.as_str()), Some("no"));
         assert!(log.recent(110).is_none());
         assert_eq!(log.latest().map(|e| e.marked()), Some("! no".to_string()));
-        log.push(Kind::Story, "level 2", 30);
+        log.push(Kind::Story, "level 2", 30, 30);
         assert_eq!(log.latest().unwrap().marked(), "▸ level 2");
         let texts: Vec<&str> = log.iter().map(|e| e.text.as_str()).collect();
         assert_eq!(texts, vec!["took it", "no", "level 2"]);
         for i in 0..MessageLog::CAP {
-            log.push(Kind::Info, format!("m{i}"), 100 + i as u64);
+            log.push(Kind::Info, format!("m{i}"), 100 + i as u64, 100 + i as u64);
         }
         // 203 pushes into a 200-cap log: the three first entries are gone.
         assert_eq!(log.len(), MessageLog::CAP);
@@ -137,11 +141,11 @@ mod tests {
     #[test]
     fn backticks_mark_names_and_leave_the_text_plain() {
         let mut log = MessageLog::default();
-        log.push(Kind::Info, "Entering `Novbio Labs`", 5);
+        log.push(Kind::Info, "Entering `Novbio Labs`", 5, 5);
         let e = log.latest().unwrap();
         assert_eq!(e.text, "Entering Novbio Labs");
         assert_eq!(e.marks, vec![(9, 20)]);
-        log.push(Kind::Warn, "took 2× `Copper coil` from `Mama Sol`", 6);
+        log.push(Kind::Warn, "took 2× `Copper coil` from `Mama Sol`", 6, 6);
         let e = log.latest().unwrap();
         assert_eq!(e.text, "took 2× Copper coil from Mama Sol");
         assert_eq!(
@@ -150,9 +154,9 @@ mod tests {
             "offsets in chars, after stripping"
         );
         assert_eq!(e.marked(), "! took 2× Copper coil from Mama Sol");
-        log.push(Kind::Info, "no marks here", 7);
+        log.push(Kind::Info, "no marks here", 7, 7);
         assert!(log.latest().unwrap().marks.is_empty());
-        log.push(Kind::Info, "a lone ` tick", 8);
+        log.push(Kind::Info, "a lone ` tick", 8, 8);
         assert_eq!(log.latest().unwrap().text, "a lone  tick");
     }
 }

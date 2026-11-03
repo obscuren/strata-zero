@@ -470,17 +470,18 @@ impl AppState {
 
     /// Logs a plain result.
     pub fn say(&mut self, msg: impl Into<String>) {
-        self.log.push(Kind::Info, msg, self.clock_tick());
+        self.log.push(Kind::Info, msg, self.clock_tick(), self.tick);
     }
 
     /// Logs a refusal.
     pub fn warn(&mut self, msg: impl Into<String>) {
-        self.log.push(Kind::Warn, msg, self.clock_tick());
+        self.log.push(Kind::Warn, msg, self.clock_tick(), self.tick);
     }
 
     /// Logs a job or level line.
     pub fn story(&mut self, msg: impl Into<String>) {
-        self.log.push(Kind::Story, msg, self.clock_tick());
+        self.log
+            .push(Kind::Story, msg, self.clock_tick(), self.tick);
     }
 }
 
