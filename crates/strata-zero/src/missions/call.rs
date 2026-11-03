@@ -156,9 +156,8 @@ pub(super) fn voicemail(st: &mut AppState) {
     let Some(call) = st.missions.call.take() else {
         return;
     };
-    let name = role_name(st, &call.from);
     let mail = crate::credentials::Mail {
-        from: name.clone(),
+        from: role_name(st, &call.from),
         subject: "voicemail".to_string(),
         body: call.lines.clone(),
         read: false,
@@ -166,8 +165,8 @@ pub(super) fn voicemail(st: &mut AppState) {
         job: None,
         story: None,
     };
+    // The map's mail mark logs it as it lands.
     st.journal.mails.push(mail);
-    st.story(format!("`{name}` · voicemail on your rig"));
     super::end(st, call.mission, call.step);
     next(st);
 }
@@ -490,6 +489,13 @@ mod tests {
         st.journal.mails.iter().find(|m| m.subject == "voicemail")
     }
 
+    /// The log's lines about the voicemail once a map frame has noticed it land.
+    fn voicemail_logged(st: &mut AppState) -> Vec<String> {
+        crate::mail_mark::notice(st);
+        let lines = st.log.iter().filter(|e| e.text.contains("voicemail"));
+        lines.map(|e| e.text.clone()).collect()
+    }
+
     fn engage(st: &mut AppState) {
         crate::net::engage(st, STREET, true);
         assert!(st.net.engaged.is_some());
@@ -590,12 +596,8 @@ mod tests {
         assert_eq!(mail.from, "Mezz");
         assert_eq!(mail.body, all);
         assert!(!mail.read);
-        assert!(
-            st.log
-                .iter()
-                .any(|e| e.text == "Mezz · voicemail on your rig")
-        );
         assert!(all.iter().all(|l| !said(&st, l)), "nothing was said");
+        assert_eq!(voicemail_logged(&mut st), ["Mezz · mail · voicemail"]);
         assert!(st.missions.runs[0].ended.contains(&3));
     }
 
@@ -783,11 +785,7 @@ mod tests {
         super::super::tick(&mut st);
         assert!(st.missions.call.is_none());
         assert_eq!(voicemail(&st).map(|m| m.body.clone()), Some(all));
-        assert!(
-            st.log
-                .iter()
-                .any(|e| e.text == "Mezz · voicemail on your rig")
-        );
+        assert_eq!(voicemail_logged(&mut st), ["Mezz · mail · voicemail"]);
         assert!(st.missions.runs[0].ended.contains(&3));
     }
 
