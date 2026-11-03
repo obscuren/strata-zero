@@ -1,0 +1,372 @@
+diff --git a/crates/strata-zero/src/interact.rs b/crates/strata-zero/src/interact.rs
+index 214fc61..b8f167a 100644
+--- a/crates/strata-zero/src/interact.rs
++++ b/crates/strata-zero/src/interact.rs
+@@ -372,6 +372,17 @@ pub fn gather(
+         }
+         rows.push(Choice::new('j', "Jack in", Pick::World(WorldAct::JackIn)));
+         if matches!(origin, Some(HostId::Rig)) {
++            // MOCK: the rig reads the inbox, the newest unread first.
++            let all: Vec<usize> = (0..st.journal.mails.len()).rev().collect();
++            if let Some(i) = crate::jobs::ui::next_mail(st, &all) {
++                let n = st.journal.mails.iter().filter(|m| !m.read).count();
++                let tail = if n > 0 {
++                    format!(" · {n} new")
++                } else {
++                    " · all read".to_string()
++                };
++                rows.push(Choice::new('m', "Read mail", Pick::Mail(vec![i])).tail(tail));
++            }
+             rows.extend(rig_reads(st));
+         }
+         add(
+diff --git a/crates/strata-zero/src/jobs/ui.rs b/crates/strata-zero/src/jobs/ui.rs
+index 6dd7679..4384466 100644
+--- a/crates/strata-zero/src/jobs/ui.rs
++++ b/crates/strata-zero/src/jobs/ui.rs
+@@ -264,7 +264,20 @@ pub fn mail_card(st: &mut AppState, mails: &[usize]) -> Vec<Line<'static>> {
+         if k > 0 {
+             out.push(plain(""));
+         }
+-        out.push(dim(format!("From: {}", m.from)));
++        // MOCK: a mail read for the first time says so.
++        if m.read {
++            out.push(dim(format!("From: {}", m.from)));
++        } else {
++            out.push(Line::from(vec![
++                Span::styled(format!("From: {}", m.from), Style::default().fg(DIM)),
++                Span::styled(
++                    "  ▣ NEW",
++                    Style::default()
++                        .fg(crate::ui::chrome::MAGENTA)
++                        .add_modifier(ratatui::style::Modifier::BOLD),
++                ),
++            ]));
++        }
+         out.push(dim(format!("Subject: {}", m.subject)));
+         out.extend(m.body.iter().map(|l| plain(l.clone())));
+         crate::credentials::mail_read(st, *i);
+diff --git a/crates/strata-zero/src/screens/explore.rs b/crates/strata-zero/src/screens/explore.rs
+index 1c7bb68..c8c054d 100644
+--- a/crates/strata-zero/src/screens/explore.rs
++++ b/crates/strata-zero/src/screens/explore.rs
+@@ -3358,6 +3358,22 @@ impl Screen for MapScreen {
+             lw,
+         );
+         f.render_widget(Paragraph::new(status), r.band_l[0]);
++        // MOCK: the mail mark, A on the status line after the credits.
++        let unread = hud::mock_unread(&st.journal.mails);
++        if hud::mock_option() == 1 {
++            let used = 1
++                + ch.handle.chars().count()
++                + 8
++                + ch.level.to_string().len()
++                + 6
++                + ch.credits.to_string().len();
++            let b = r.band_l[0];
++            let used = (used as u16).min(b.width);
++            f.render_widget(
++                Paragraph::new(ratatui::text::Line::from(hud::mock_status_mark(&unread))),
++                Rect::new(b.x + used, b.y, b.width - used, 1),
++            );
++        }
+         let hp_max = ch.hp_max(&st.content);
+         let rows = [
+             hud::bar_row(
+@@ -3400,6 +3416,16 @@ impl Screen for MapScreen {
+             Paragraph::new(hud::exposure_row(&exposure, rw)),
+             r.band_r[2],
+         );
++        // MOCK: B, the mark at the right end of the band's third row.
++        if hud::mock_option() == 2 {
++            let line = hud::mock_band_mark(&unread, rw);
++            let w = (line.width() as u16).min(rw);
++            let row = r.band_r[2];
++            f.render_widget(
++                Paragraph::new(line),
++                Rect::new(row.right() - w, row.y, w, 1),
++            );
++        }
+         f.render_widget(
+             Paragraph::new(hud::carry_row(
+                 ch.weight(&st.content),
+@@ -3489,6 +3515,16 @@ impl Screen for MapScreen {
+             );
+         }
+         f.render_widget(Paragraph::new(tabs), r.band_r[3]);
++        // MOCK: C, a pill on the map's top edge, right.
++        if hud::mock_option() == 3
++            && let Some(pill) = hud::mock_pill(&unread)
++        {
++            let w = (pill.width() as u16).min(r.map.width);
++            f.render_widget(
++                Paragraph::new(pill),
++                Rect::new(r.map.right() - w - 8, r.map.y + 1, w, 1),
++            );
++        }
+         if let Some(rr) = r.route {
+             f.render_widget(
+                 Paragraph::new(hud::route_row(&route, home_trace.as_deref(), rr.width)),
+diff --git a/crates/strata-zero/src/screens/jobs_tab.rs b/crates/strata-zero/src/screens/jobs_tab.rs
+index f4e68c2..6e6f736 100644
+--- a/crates/strata-zero/src/screens/jobs_tab.rs
++++ b/crates/strata-zero/src/screens/jobs_tab.rs
+@@ -33,6 +33,9 @@ use std::cell::{Cell, RefCell};
+ pub(crate) const HINT: &str =
+     "Q/E tabs · ↑↓ select · ←→ fold · space verbs · t track · m map · tab close";
+ 
++/// MOCK: the list keeps no walk line under its rows.
++const MOCK_NO_WALK: bool = true;
++
+ /// Under this many columns the list drops a job's pay and shortens the FIXERS header.
+ const NARROW: u16 = 44;
+ 
+@@ -193,7 +196,8 @@ impl JobsTab {
+             out.push(Entry::Header("STORY".to_string()));
+             for (m, done) in story {
+                 out.push(Entry::Mission(m));
+-                if done {
++                // MOCK: no walk line under the mission; the card on the right has it.
++                if done || MOCK_NO_WALK {
+                     continue;
+                 }
+                 if let Some(src) = story_source(st, m) {
+@@ -229,7 +233,7 @@ impl JobsTab {
+                 for j in live_jobs(st, *f) {
+                     out.push(Entry::Job(j.id));
+                     let (t, tracked) = self.next_of(st, j);
+-                    if !t.is_empty() {
++                    if !t.is_empty() && !MOCK_NO_WALK {
+                         out.push(Entry::Next(t, tracked));
+                     }
+                 }
+@@ -845,7 +849,12 @@ impl JobsTab {
+                     .unwrap_or_default();
+                 // The walk is on the next line, under it.
+                 let right = Vec::new();
+-                let mark = done.then_some(("✓", card::DONE));
++                let tracked = story_source(st, *m).is_some_and(|s| track::is_tracked(st, &s));
++                let mark = if done {
++                    Some(("✓", card::DONE))
++                } else {
++                    tracked.then_some(("⌖", CYAN))
++                };
+                 let tone = if done { card::DONE } else { TEXT };
+                 row_at(
+                     buf,
+diff --git a/crates/strata-zero/src/screens/shots.rs b/crates/strata-zero/src/screens/shots.rs
+index 673e5ca..4ee9fe3 100644
+--- a/crates/strata-zero/src/screens/shots.rs
++++ b/crates/strata-zero/src/screens/shots.rs
+@@ -2571,3 +2571,117 @@ fn doctor_shots() {
+         shot_stack(&name("chair_tab"), &st, &[&map, &deck], size);
+     }
+ }
++
++/// MOCK: clear objectives, the JOBS list without walk lines, and the mail mark.
++#[test]
++#[ignore]
++fn objectives_mock() {
++    use crate::missions::RunState;
++    use crate::screens::jobs_tab::Entry;
++    use std::sync::atomic::Ordering;
++    let idx = |st: &AppState, id: &str| st.book.missions.iter().position(|m| m.id == id).unwrap();
++    let deck_on = |st: &mut AppState, want: &Entry| {
++        let mut deck = Deck::new(st.tick);
++        deck.update(st, &[key(KeyCode::Char('5'))]);
++        deck.jobs.select(st, want);
++        st.tick += 200;
++        while st.tick % 90 < 3 {
++            st.tick += 1;
++        }
++        deck
++    };
++    let set = |st: &mut AppState, id: &str, state: RunState, objectives: &[&str]| {
++        let i = st.book.missions.iter().position(|m| m.id == id).unwrap();
++        let run = &mut st.missions.runs[i];
++        run.state = state;
++        run.objectives = objectives.iter().map(|s| s.to_string()).collect();
++    };
++    let done = RunState::Done { at: 0 };
++    for (w, h) in [(120u16, 40u16), (100, 30)] {
++        let size = (w, h);
++        let name = |what: &str| format!("mock_{what}_{w}x{h}");
++
++        // The JOBS tab, the morning after mid-chain, the doctor open beside it.
++        let mut st = seren_has_written();
++        st.missions.daze = None;
++        st.missions.asides.clear();
++        let ids = crate::jobs::testutil::six_jobs(&mut st);
++        set(&mut st, "morning_after", RunState::Open, &[
++            "Catch the news on the holo",
++            "Read Mezz's mail",
++            "Open the package · it's in your pack",
++        ]);
++        let map = by_the_set(&mut st);
++        let m = idx(&st, "morning_after");
++        let deck = deck_on(&mut st, &Entry::Mission(m));
++        shot_stack(&name("jobs_morning"), &st, &[&map, &deck], size);
++        let deck = deck_on(&mut st, &Entry::Job(ids[0]));
++        shot_stack(&name("jobs_job"), &st, &[&map, &deck], size);
++
++        // The ledger, its first objective fit to a hacker.
++        set(&mut st, "morning_after", done, &[
++            "Catch the news on the holo",
++            "Read Mezz's mail",
++            "Open the package · it's in your pack",
++        ]);
++        set(&mut st, "ledger", RunState::Open, &[
++            "Find out whose shard this is · read it at your rig",
++        ]);
++        let l = idx(&st, "ledger");
++        let deck = deck_on(&mut st, &Entry::Mission(l));
++        shot_stack(&name("jobs_ledger"), &st, &[&map, &deck], size);
++
++        // The main screen as Mezz's mail lands: three marks.
++        let mut st = seren_has_written();
++        st.missions.daze = None;
++        st.missions.asides.clear();
++        let d = idx(&st, "doctor");
++        st.missions.runs[d].state = RunState::Waiting;
++        set(&mut st, "morning_after", RunState::Open, &[
++            "Catch the news on the holo",
++            "Read Mezz's mail",
++        ]);
++        for m in st.journal.mails.iter_mut() {
++            m.read = m.subject != "the news";
++        }
++        st.story("`Mezz` · mail · the news".to_string());
++        st.tick += 120;
++        st.tick = st.clock_tick() + 120;
++        let map = by_the_set(&mut st);
++        world_seconds(&mut st, 3);
++        for (k, opt) in [(1u8, "a"), (2, "b"), (3, "c")] {
++            crate::ui::hud::MOCK_MAIL.store(k, Ordering::Relaxed);
++            crate::ui::hud::MOCK_FRESH.store(true, Ordering::Relaxed);
++            shot_stack(&name(&format!("mail_{opt}")), &st, &[&map], size);
++            crate::ui::hud::MOCK_FRESH.store(false, Ordering::Relaxed);
++            shot_stack(&name(&format!("mail_{opt}_settled")), &st, &[&map], size);
++        }
++        crate::ui::hud::MOCK_MAIL.store(1, Ordering::Relaxed);
++        crate::ui::hud::MOCK_FRESH.store(false, Ordering::Relaxed);
++
++        // At the rig: the mail row, then the mail opened.
++        let home = st.home.unwrap().home;
++        let floor = st
++            .interiors
++            .floor(home.building, home.level)
++            .map(|(_, f)| f.clone())
++            .unwrap();
++        st.player.as_mut().unwrap().pos = home
++            .rig
++            .neighbors4()
++            .find(|p| home.rect.contains(*p) && floor.tiles.get(*p).is_some_and(|t| t.is_walkable()))
++            .expect("a floor tile by the rig");
++        let map = MapScreen::walking(&mut st);
++        st.tick += 200;
++        let rig = crate::interact::gather(&st, &|_, _| None)
++            .into_iter()
++            .find(|s| s.header.as_ref().is_some_and(|h| h.name == "Access rig"))
++            .expect("the rig");
++        let mut pop = rig.window(st.tick.saturating_sub(200));
++        shot_stack(&name("rig"), &st, &[&map, &pop], size);
++        pop.update(&mut st, &[key(KeyCode::Char('m'))]);
++        st.tick += 200;
++        shot_stack(&name("rig_mail"), &st, &[&map, &pop], size);
++    }
++    crate::ui::hud::MOCK_MAIL.store(0, Ordering::Relaxed);
++}
+diff --git a/crates/strata-zero/src/ui/hud.rs b/crates/strata-zero/src/ui/hud.rs
+index 90d59e2..9113f5f 100644
+--- a/crates/strata-zero/src/ui/hud.rs
++++ b/crates/strata-zero/src/ui/hud.rs
+@@ -148,6 +148,89 @@ pub struct Status<'a> {
+ }
+ 
+ /// ` DEV  VEX :: LVL 2 :: ¤ 320 [:: seed N :: F fps]`, cut to `width`.
++/// MOCK: which mail mark the screen draws: 0 none, 1 A (status line), 2 B (band row),
++/// 3 C (a pill on the map).
++pub static MOCK_MAIL: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
++/// MOCK: the mail just landed (the mark lit) or has sat a while.
++pub static MOCK_FRESH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
++
++/// MOCK: the unread mail: how many, and the newest's sender and subject.
++pub fn mock_unread(mails: &[crate::credentials::Mail]) -> Option<(usize, String, String)> {
++    let n = mails.iter().filter(|m| !m.read).count();
++    let m = mails.iter().rev().find(|m| !m.read)?;
++    Some((n, m.from.clone(), m.subject.clone()))
++}
++
++pub fn mock_option() -> u8 {
++    MOCK_MAIL.load(std::sync::atomic::Ordering::Relaxed)
++}
++
++pub fn mock_fresh() -> bool {
++    MOCK_FRESH.load(std::sync::atomic::Ordering::Relaxed)
++}
++
++fn mock_words(n: usize) -> String {
++    if n == 1 { "NEW MAIL".to_string() } else { format!("{n} NEW MAIL") }
++}
++
++/// MOCK A: the mark on the status line, after the credits.
++pub fn mock_status_mark(unread: &Option<(usize, String, String)>) -> Vec<Span<'static>> {
++    let Some((n, _, _)) = unread else {
++        return Vec::new();
++    };
++    let words = mock_words(*n);
++    let style = if mock_fresh() {
++        Style::default()
++            .fg(BADGE_FG)
++            .bg(crate::ui::chrome::MAGENTA)
++            .add_modifier(Modifier::BOLD)
++    } else {
++        Style::default()
++            .fg(crate::ui::chrome::MAGENTA)
++            .add_modifier(Modifier::BOLD)
++    };
++    vec![dim(" :: "), Span::styled(format!(" ▣ {words} "), style)]
++}
++
++/// MOCK B: the mark at the right end of the band's third row: who wrote and about what.
++pub fn mock_band_mark(unread: &Option<(usize, String, String)>, width: u16) -> Line<'static> {
++    let Some((n, from, subject)) = unread else {
++        return Line::from("");
++    };
++    let more = if *n > 1 { format!(" +{}", n - 1) } else { String::new() };
++    let text = format!("▣ {from} · {subject}{more} ");
++    let style = if mock_fresh() {
++        Style::default()
++            .fg(BADGE_FG)
++            .bg(crate::ui::chrome::MAGENTA)
++            .add_modifier(Modifier::BOLD)
++    } else {
++        Style::default()
++            .fg(crate::ui::chrome::MAGENTA)
++            .add_modifier(Modifier::BOLD)
++    };
++    let w = text.chars().count() + 1;
++    let gap = (width as usize).saturating_sub(w);
++    Line::from(vec![Span::raw(" ".repeat(gap)), Span::styled(format!(" {text}"), style)])
++}
++
++/// MOCK C: a pill on the map's top edge, right: what landed and from whom.
++pub fn mock_pill(unread: &Option<(usize, String, String)>) -> Option<Line<'static>> {
++    let (n, from, subject) = unread.as_ref()?;
++    let more = if *n > 1 { format!("  +{}", n - 1) } else { String::new() };
++    let lit = Style::default()
++        .fg(BADGE_FG)
++        .bg(crate::ui::chrome::MAGENTA)
++        .add_modifier(Modifier::BOLD);
++    let soft = Style::default()
++        .fg(Color::Rgb(255, 225, 245))
++        .bg(Color::Rgb(120, 20, 90));
++    Some(Line::from(vec![
++        Span::styled(" ▣ MAIL ", lit),
++        Span::styled(format!(" {} · {subject}{more} ", from.to_uppercase()), soft),
++    ]))
++}
++
+ pub fn status_line(s: &Status, width: u16) -> Line<'static> {
+     let mut spans = vec![Span::raw(" ")];
+     if s.dev {
