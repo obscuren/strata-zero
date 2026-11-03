@@ -70,9 +70,11 @@ sidebar's minimap still shows the street and HERE says `nothing here`.
 
 - Standing on the Net stratum or in a construct, every tile of that map counts as
   visible. Nothing on the Net is ever drawn as remembered.
-- What leans on sight keeps working as written, with everything in view: the ICE
-  lines in HERE list every standing piece; targets, aims and the inspector see all
-  tiles. ICE's own sight (`net::sees`) is unchanged.
+- What leans on sight keeps working, with everything in view: the ICE lines in HERE
+  list every standing piece; the inspector sees all tiles. What a program or the fire
+  cursor can reach was "in your sight within range"; on the Net it is now "within
+  range with no construct wall between" (`line_clear_in`), so a piece behind a wall
+  stays out of reach. ICE's own sight (`net::sees`) is unchanged.
 - **Ping** is unchanged: in a construct it still glows every node for a while (and
   warms the trace), which still points them out; on the street it is as it was.
 - **Signal ghost** felt awake ICE through walls, which everyone now sees. It now marks
@@ -113,7 +115,8 @@ District hubs keep double walls in white.
 - **Gates** `▯` in white on a glow of the tier colour.
 - **Hubs**: double walls in white, `⬡`, and faint rings of dots in the void around them
   (at about 5, 9 and 13 tiles, measured with a cell twice as tall as it is wide).
-- **Nodes** keep today's glyphs. Server, vault, hub and ICE in white (black ICE red).
+- **Nodes** keep today's glyphs. Server, vault and hub in white; an ICE node in the
+  colour of the piece at that gate (white or grey; gates never hold black).
   **Terminals** (`◇`) in their own colour everywhere on the Net, open grid and
   constructs: violet-blue (140,150,255). Other nodes (locks, cameras, ad boards, lamp
   grids, lift controls) in their wall's colour mixed halfway to white.
@@ -133,12 +136,15 @@ District hubs keep double walls in white.
 - **Rooms**: floor lit cyan at 10%; the vault room amber at 16%. Nodes as on the open
   grid; server and vault bold, the vault `⌗` amber.
 - **The spine** as a lane; **doors** `▯` white.
-- **ICE** `◈`: white and grey ICE in grey (200,208,220), black ICE in red, each on a
-  glow of its colour.
+- **ICE** `◈` (today `▣`; `◈` is ICE everywhere on the Net now, and HERE's ICE lines
+  say `◈` too): white ICE near white (240,244,248), grey ICE magenta (255,0,200), as
+  today, black ICE red; each on a glow of its colour.
 - **The watch**: each standing piece tints the spine tiles it would see you on (its
   row or column, within its sight, a clear line, by today's `sees` rule without the
-  mask): grey at 30% for white and grey ICE, red at 45% for black. A tile two pieces
-  watch takes the stronger tint.
+  mask), in the piece's colour: 25% for white, 30% for grey, 45% for black. A tile two
+  pieces watch takes the darkest piece's tint (black over grey over white).
+- **The tracked building is not amber inside**: the body keeps its tier colour; the
+  vault keeps the amber.
 - **The void around** as on the open grid.
 
 ### The sidebar on the Net
@@ -149,21 +155,25 @@ District hubs keep double walls in white.
 - **HERE, the construct card.** On the open Net: the construct whose gate is nearest
   within 12 tiles (the one the footer's TRACE already names), or `open grid` when there
   is none in reach. Inside a construct: that construct, above today's TRACE and ICE
-  lines. The card:
-  - its name in caps, bold, in the tier colour (amber when tracked), then `· kind`
-    and, on the open Net, an arrow toward its gate;
-  - `SEC n`, the tier in words and, on the open Net, what stands at its gate
-    (`no ICE at the gate`, `grey ICE at the gate`);
-  - `NODES` and a count per node glyph (`▪ 5  ◆ 1  ◇ 1`);
-  - when they apply: `ALARM · n min`, `LOCKDOWN`, `BACKDOOR · yours`, `JOB`.
-  The node or ICE under the focus keeps its line after the card.
+  lines. Three lines on the open Net, the first two inside:
+  - its name in caps, bold, in the tier colour (amber when tracked, open Net only),
+    then `· kind` and, on the open Net, an arrow toward its gate;
+  - `SEC n · ` and the ICE it keeps: `no ICE`, `gate white`, `gate grey`, and when it
+    has a vault guard ` · vault grey` or ` · vault black`; with no ICE, the tier word
+    (`open`, `guarded`) instead;
+  - `NODES` and a count per node glyph (`▪ 5  ◆ 1  ◇ 1`), then ` · alarm` while its
+    alarm is up, ` · backdoor` while you hold one there, ` · job` when tracked for a
+    job.
+  The node or ICE under the focus keeps its line after the card. On the Net HERE may
+  take up to 10 rows (7 elsewhere); the alarm inside reads in the TRACE lines
+  (`ALERT · n min`) as today.
 - **The minimap**: on the open Net, 3 by 3 tiles to a half-block pixel, centred on you:
   construct walls in the tier colour, their floors dark in it, lanes signal, hubs
   white, you white, your port green, the tracked building amber, the void dark with the
   district's accent at 12%. Inside a construct, the construct's plan at a tile a pixel,
   centred: body and edges in the tier colour (dark and less dark), spine signal, the
-  watched spine tinted, rooms cyan, nodes white, the vault amber, ICE grey or red, you
-  white. The caption under it names the district (open Net) or the construct.
+  watched spine tinted, rooms cyan, nodes white, the vault amber, ICE in its pieces'
+  colours, you white. The caption under it names the district (open Net) or the construct.
 
 ### Lanes carry you
 
@@ -171,11 +181,13 @@ District hubs keep double walls in white.
   in the same direction) does not stop there: you ride on, a tile at a time, until the
   next stop.
 - **Stops**: a junction (a lane tile with a lane or gate beside it off the ride's
-  line), a gate, a node, the lane's end, or the tile before anything that blocks.
-  A ride follows the lane round a bend where it does not branch.
+  line), a hub's gate, a node, the lane's end, the tile before anything that blocks,
+  and the lane tile before a construct's gate: a ride never enters a construct; the
+  next step does, as today. A ride follows the lane round a bend where it does not
+  branch.
 - **Any key stops a ride** at the tile you have reached, and does nothing else.
-- **Speed**: a tile every two ticks; nothing else is spent (the open Net runs in real
-  time, a walked tile costs only its keypress). Behind you a short streak of the lane
+- **Speed**: a tile a tick; nothing else is spent (the open Net runs in real time, a
+  walked tile costs only its keypress, so the gain is one keypress per stretch). Behind you a short streak of the lane
   lit white, fading over four tiles; the stretch ahead to the stop lit and the stop
   marked.
 - Not inside constructs (the spine is walked) and not while engaged.
@@ -217,6 +229,11 @@ District hubs keep double walls in white.
 - **The construct card** on the open Net picks the nearest gate within 12, matching
   the footer's TRACE.
 - **The header's eyes word** on the Net is `unseen` or `hunted`.
+- **Riding never enters a construct**: a ride stops before a construct's gate.
+- **ICE keeps today's colours** (white near white, grey magenta, black red) so white and
+  grey stay apart; the glyph inside becomes `◈`, as on the open Net.
+- **HERE grows to 10 rows on the Net**; the card drops to two lines inside.
+- **The fire cursor and program reach use a clear line**, not the old sight, on the Net.
 
 ## What's left to the builder
 
