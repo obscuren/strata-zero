@@ -45,6 +45,14 @@ pub fn item_desc(st: &AppState, id: &ItemId) -> String {
     }
 }
 
+/// The pack shows the item's card: a Look reading that tells, when it holds, records the
+/// item read.
+pub fn look_tells(st: &mut AppState, item: &ItemId) {
+    if reading(st, &item.0, ReadAt::Look).is_some_and(|r| r.tells) {
+        st.missions.read.insert(item.0.clone());
+    }
+}
+
 /// A reading on the screen, over the map at the rig or the deck at the bench: the HOLO
 /// frame of the feed, its rows filled when it opened.
 pub struct ReadCard {
@@ -373,6 +381,44 @@ pub(crate) mod tests {
         assert!(ReadCard::open(&mut st, &shard(), ReadAt::Rig).is_none());
         assert!(ReadCard::open(&mut st, &shard(), ReadAt::Look).is_none());
         assert!(st.missions.read.is_empty());
+    }
+
+    #[test]
+    fn a_telling_look_is_read_when_its_card_shows() {
+        use crate::screens::{deck::Deck, testutil::key};
+        let telling = |streetwise_tells: bool, skills: &[&str]| {
+            let mut st = reader(AppState::new(), skills);
+            if !streetwise_tells {
+                for rs in st.book.readings.values_mut() {
+                    rs.iter_mut().for_each(|r| r.tells = false);
+                }
+            }
+            for rs in st.book.readings.values_mut() {
+                for r in rs.iter_mut().filter(|r| r.at == ReadAt::Look) {
+                    r.tells = r.tells || streetwise_tells;
+                }
+            }
+            let mut d = Deck::new(st.tick);
+            d.update(&mut st, &[key(KeyCode::Char('3'))]);
+            // The pack's cursor on the shard.
+            let rows = d.kit.pack_rows(&st);
+            d.kit.state.pane = crate::screens::kit::Pane::Pack;
+            d.kit.state.row = rows
+                .iter()
+                .position(|r| {
+                    matches!(&r.detail, Some(crate::screens::deck::Detail::Item(i)) if *i == shard())
+                })
+                .unwrap();
+            assert!(st.missions.read.is_empty(), "nothing before the update");
+            d.update(&mut st, &[]);
+            st.missions.read.contains("ledger_shard")
+        };
+        // A telling Look whose need holds.
+        assert!(telling(true, &["streetwise"]));
+        // One that doesn't tell.
+        assert!(!telling(false, &["streetwise"]));
+        // One whose need doesn't hold.
+        assert!(!telling(true, &[]));
     }
 
     #[test]

@@ -464,6 +464,7 @@ impl Trigger {
                 .is_some_and(|r| {
                     matches!(r.state, RunState::Done { at: done } if now.saturating_sub(done) >= *minutes)
                 }),
+            Trigger::Holds(need) => holds(st, Some(m), need),
             // The tab with the role's person as its doc is spent, and you are up out of
             // the chair.
             Trigger::Chromed(role) => {
@@ -1890,6 +1891,67 @@ pub(crate) mod tests {
         assert!(!is_late(&st));
         set_clock(&mut st, 2, 10, 1);
         assert!(is_late(&st));
+    }
+
+    #[test]
+    fn holds_fires_once_the_need_holds() {
+        let mut st = state_home();
+        st.book = book(
+            r#"Mission(id: "m", title: "M", from: "mezz", steps: [
+                Step(id: "has", when: Holds(Carries("ledger_shard")), then: [Log("got")]),
+            ])"#,
+        );
+        begin(&mut st);
+        tick(&mut st);
+        assert_eq!(st.missions.runs[0].state, RunState::Waiting);
+        st.character.give(ItemId::new("ledger_shard"), 1);
+        tick(&mut st);
+        assert!(matches!(st.missions.runs[0].state, RunState::Done { .. }));
+    }
+
+    #[test]
+    fn holds_late_uses_its_mission() {
+        let mut st = state_home();
+        let ten_past = (st.minute_of_day() + 30) % sim::DAY;
+        st.book = book(&format!(
+            r#"Mission(id: "m", title: "M", from: "mezz", steps: [
+                Step(id: "go", when: After(minutes: 0), then: [Log("go")]),
+                Step(id: "late", when: Holds(Late({ten_past})), then: [Log("late")]),
+            ])"#
+        ));
+        begin(&mut st);
+        tick(&mut st);
+        assert_eq!(st.missions.runs[0].began, Some(st.net.now(&st)));
+        assert_eq!(st.missions.runs[0].state, RunState::Open);
+        advance(&mut st, 29);
+        tick(&mut st);
+        assert_eq!(st.missions.runs[0].state, RunState::Open);
+        advance(&mut st, 2);
+        tick(&mut st);
+        assert!(matches!(st.missions.runs[0].state, RunState::Done { .. }));
+    }
+
+    #[test]
+    fn objective_fit_takes_the_first_that_holds() {
+        let objective = |skills: &[&str]| {
+            let mut st = state_home();
+            st.book = book(
+                r#"Mission(id: "m", title: "M", from: "mezz", steps: [
+                    Step(id: "a", when: NewGame, then: [ObjectiveFit([
+                        Fit(need: Skill("hacking"), text: "crack it"),
+                        Fit(need: Skill("streetwise"), text: "look it over"),
+                        Fit(need: All([]), text: "ask around"),
+                    ]), Mail(from: "mezz", subject: "s", body: ["b"])]),
+                ])"#,
+            );
+            st.character.skills = skills.iter().map(|s| game::SkillId::new(s)).collect();
+            begin(&mut st);
+            tick(&mut st);
+            st.missions.runs[0].objectives.clone()
+        };
+        assert_eq!(objective(&["hacking", "streetwise"]), ["crack it"]);
+        assert_eq!(objective(&["streetwise"]), ["look it over"]);
+        assert_eq!(objective(&[]), ["ask around"]);
     }
 
     #[test]

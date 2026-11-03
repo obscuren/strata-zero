@@ -391,12 +391,22 @@ pub struct Step {
 pub enum Trigger {
     NewGame,
     Ended(String),
-    Sees { role: String, within: i32 },
-    After { minutes: u64 },
+    Sees {
+        role: String,
+        within: i32,
+    },
+    After {
+        minutes: u64,
+    },
     At(Where),
     Talk(String),
-    MissionDone { mission: String, minutes: u64 },
+    MissionDone {
+        mission: String,
+        minutes: u64,
+    },
     Chromed(String),
+    /// Fires on any pass once the need holds.
+    Holds(Need),
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -442,6 +452,11 @@ pub enum Effect {
         look: String,
     },
     Objective(String),
+    /// Pushes the text of the first fit whose need holds, as `Objective` does.
+    ObjectiveFit(Vec<Fit>),
+    /// Records `Need::Read(item)` as if a telling reading had been shown: someone told
+    /// you whose it is.
+    Told(String),
     Mail {
         from: String,
         subject: String,
@@ -488,6 +503,13 @@ pub enum Effect {
     },
 }
 
+/// An objective's text for who you are: shown when its need holds.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Fit {
+    pub need: Need,
+    pub text: String,
+}
+
 /// The pieces a tray holds when its need does.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct TraySet {
@@ -517,6 +539,7 @@ impl Effect {
             Effect::Call { lines, .. } => lines.iter().map(String::as_str).collect(),
             Effect::Dead { look, .. } => vec![look],
             Effect::Objective(s) | Effect::Log(s) => vec![s],
+            Effect::ObjectiveFit(fits) => fits.iter().map(|f| f.text.as_str()).collect(),
             Effect::Holo { text, .. } | Effect::Note { text, .. } => vec![text],
             Effect::Tray { title, line, .. } => vec![title, line],
             Effect::Mail { subject, body, .. } => body
@@ -527,6 +550,7 @@ impl Effect {
             Effect::Give { .. }
             | Effect::Take { .. }
             | Effect::Unseal(_)
+            | Effect::Told(_)
             | Effect::Scene(_)
             | Effect::Arrive { .. }
             | Effect::Leave(_)
@@ -1076,6 +1100,7 @@ impl Book {
                         return Err(BookError::UnknownMission(mission.clone()));
                     }
                 }
+                Trigger::Holds(need) => check_need(&place, need)?,
                 other => {
                     for role in other.named_roles() {
                         self.check_role(&place, role)?;
@@ -1124,6 +1149,7 @@ impl Book {
                         return Err(BookError::Empty(format!("call in {place}")));
                     }
                     Effect::Tray { sets, .. } => check_tray(&place, sets)?,
+                    Effect::ObjectiveFit(fits) => check_fits(&place, fits)?,
                     _ => {}
                 }
             }
@@ -1164,7 +1190,10 @@ impl Book {
             .flat_map(|s| &s.then)
         {
             match e {
-                Effect::Give { item, .. } | Effect::Take { item, .. } | Effect::Unseal(item) => {
+                Effect::Give { item, .. }
+                | Effect::Take { item, .. }
+                | Effect::Unseal(item)
+                | Effect::Told(item) => {
                     out.insert(item.as_str());
                 }
                 Effect::Tray { sets, .. } => {
@@ -1230,6 +1259,25 @@ fn check_tray(place: &str, sets: &[TraySet]) -> Result<(), BookError> {
                 ),
             });
         }
+    }
+    Ok(())
+}
+
+/// An objective's fits: at least one, each need checked, and the last always holds, as
+/// the tray's sets are checked.
+fn check_fits(place: &str, fits: &[Fit]) -> Result<(), BookError> {
+    let Some(last) = fits.last() else {
+        return Err(BookError::Empty(format!("objective fits in {place}")));
+    };
+    for fit in fits {
+        check_need(place, &fit.need)?;
+    }
+    if last.need != Need::All(vec![]) {
+        return Err(BookError::BadNumber {
+            place: place.into(),
+            what: "the last fit's need is not All([]), so a player could be left with no objective"
+                .into(),
+        });
     }
     Ok(())
 }
@@ -1911,6 +1959,51 @@ mod tests {
         let seren =
             r#"Step(id: "a", when: NewGame, then: [Feed(from: "zed", text: ["x"], close: "y")])"#;
         assert_eq!(needed(seren), none);
+    }
+
+    #[test]
+    fn a_fit_placing_a_role_needs_it_cast() {
+        let zed: BTreeSet<String> = ["zed"].map(String::from).into();
+        let fit = r#"Step(id: "a", when: NewGame, then: [ObjectiveFit([
+            Fit(need: Skill("hacking"), text: "read it"),
+            Fit(need: All([]), text: "ask the doctor at {zed.place}"),
+        ])])"#;
+        assert_eq!(needed(fit), zed);
+        let bare = fit.replace("at {zed.place}", "");
+        assert_eq!(needed(&bare), BTreeSet::new());
+    }
+
+    #[test]
+    fn objective_fit_must_end_on_all() {
+        let fit =
+            |fits: &str| format!(r#"Step(id: "a", when: NewGame, then: [ObjectiveFit([{fits}])])"#);
+        let ok = fit(r#"Fit(need: Skill("hacking"), text: "a"), Fit(need: All([]), text: "b")"#);
+        assert!(with_steps(&ok).is_ok());
+        for bad in [
+            r#"Fit(need: Skill("hacking"), text: "a")"#,
+            r#"Fit(need: All([]), text: "a"), Fit(need: Skill("hacking"), text: "b")"#,
+            "",
+        ] {
+            assert!(with_steps(&fit(bad)).is_err(), "{bad}");
+        }
+        // Its words name the cast, and its needs are checked.
+        let nobody = fit(r#"Fit(need: All([]), text: "{nobody}")"#);
+        assert!(matches!(
+            with_steps(&nobody).unwrap_err(),
+            BookError::UnknownRole { .. }
+        ));
+        let late = fit(r#"Fit(need: Late(2000), text: "a"), Fit(need: All([]), text: "b")"#);
+        assert!(with_steps(&late).is_err());
+        // A step on `Holds` has its need checked too.
+        let holds = |need: &str| {
+            format!(r#"Step(id: "a", when: Holds({need}), then: [Told("ledger_shard")])"#)
+        };
+        assert!(with_steps(&holds(r#"Carries("x")"#)).is_ok());
+        assert!(with_steps(&holds("Late(2000)")).is_err());
+        assert_eq!(
+            with_steps(&holds("Changed")).unwrap().items(),
+            ["ledger_shard"]
+        );
     }
 
     #[test]

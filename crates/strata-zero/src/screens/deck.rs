@@ -1554,6 +1554,12 @@ impl Screen for Deck {
         self.note_new_categories(st);
         self.note_new_skills(st);
         let cmd = self.handle(st, keys);
+        // The pack's card reads an item's Look: one that tells has been shown.
+        if self.tab == Tab::Kit
+            && let Some(Detail::Item(id)) = self.kit.selected(st)
+        {
+            crate::missions::reading::look_tells(st, &id);
+        }
         st.deck_tab = self.tab;
         st.deck_rows[self.tab.index()] = self.row;
         st.deck_kit = self.kit.state;

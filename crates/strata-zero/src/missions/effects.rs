@@ -57,6 +57,20 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
                 run.objectives.push(text);
             }
         }
+        Effect::ObjectiveFit(fits) => {
+            let fit = fits
+                .iter()
+                .find(|f| super::holds(st, Some(mission), &f.need));
+            if let Some(fit) = fit {
+                let text = fill(st, &fit.text);
+                if let Some(run) = st.missions.runs.get_mut(mission) {
+                    run.objectives.push(text);
+                }
+            }
+        }
+        Effect::Told(item) => {
+            st.missions.read.insert(item.clone());
+        }
         Effect::Mail {
             from,
             subject,
@@ -555,6 +569,18 @@ mod tests {
         assert!(!crate::missions::unsealed(&st, &id));
         apply(&mut st, 0, 0, &Effect::Unseal("taped_package".into()));
         assert!(crate::missions::unsealed(&st, &id));
+    }
+
+    #[test]
+    fn told_records_read() {
+        let mut st = AppState::new();
+        let need = crate::missions::Need::Read("ledger_shard".into());
+        assert!(!crate::missions::holds(&st, None, &need));
+        apply(&mut st, 0, 0, &Effect::Told("ledger_shard".into()));
+        assert!(crate::missions::holds(&st, None, &need));
+        // Harmless when read already.
+        apply(&mut st, 0, 0, &Effect::Told("ledger_shard".into()));
+        assert!(crate::missions::holds(&st, None, &need));
     }
 
     fn mail(code: Option<&str>) -> Effect {
