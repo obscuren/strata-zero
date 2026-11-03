@@ -31,6 +31,7 @@ mod missions;
 mod net;
 mod render;
 mod rest;
+mod ride;
 mod save;
 mod screens;
 mod term;

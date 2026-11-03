@@ -170,6 +170,8 @@ pub struct MapScreen {
     last_phase: Option<crate::net::Phase>,
     /// The aimed walk being stepped, a tile per `WALK_TICKS`; keys wait for it.
     pub walking: Option<Walk>,
+    /// A ride along a lane of the open Net, a tile per `RIDE_TICKS`; any key stops it.
+    pub riding: Option<crate::ride::Ride>,
     /// A program waiting for its target.
     pub targeting: Option<Targeting>,
     /// Space asked which way.
@@ -358,6 +360,7 @@ impl MapScreen {
             last_enemy: None,
             last_phase: None,
             walking: None,
+            riding: None,
             targeting: None,
             which_way: None,
             looking: None,
@@ -1914,6 +1917,61 @@ impl MapScreen {
 
     /// A construct's gate on the Net, stepped onto from the open grid, leads inside; the
     /// entry inside, stepped off outward, leads back onto the grid.
+    /// A step along a lane of the open Net, out of a fight: the lane carries you on to
+    /// its next stop. Whether a ride started.
+    fn start_ride(&mut self, st: &mut AppState, dir: Dir) -> bool {
+        if st.net.engaged.is_some() {
+            return false;
+        }
+        let (Some(city), Some(p)) = (st.city.as_ref(), st.player.as_ref()) else {
+            return false;
+        };
+        if p.place != Place::Stratum(StratumKind::Net) {
+            return false;
+        }
+        let path = crate::ride::ride_path(city, p.pos, dir);
+        if path.is_empty() {
+            return false;
+        }
+        self.riding = Some(crate::ride::Ride {
+            path,
+            done: Vec::new(),
+            next_at: st.clock_tick(),
+        });
+        true
+    }
+
+    /// The ride's tiles whose time has come, taken in turn; it ends at its stop, or
+    /// when you are no longer on the open Net.
+    fn ride_step(&mut self, st: &mut AppState) {
+        let Some(mut ride) = self.riding.take() else {
+            return;
+        };
+        let now = st.clock_tick();
+        let bonus = st.sight_bonus();
+        let (Some(city), Some(player)) = (st.city.as_ref(), st.player.as_mut()) else {
+            return;
+        };
+        if player.place != Place::Stratum(StratumKind::Net) {
+            return;
+        }
+        let map = MapRef::stratum_of(city, StratumKind::Net);
+        while now >= ride.next_at && !ride.path.is_empty() {
+            let next = ride.path.remove(0);
+            if !map.walkable(next) {
+                ride.path.clear();
+                break;
+            }
+            ride.done.push(player.pos);
+            player.pos = next;
+            ride.next_at += crate::ride::RIDE_TICKS;
+        }
+        player.update_fov(&map, bonus);
+        if !ride.path.is_empty() {
+            self.riding = Some(ride);
+        }
+    }
+
     fn gateway(&mut self, st: &mut AppState, dir: Dir) -> Option<ScreenCmd> {
         let player = st.player.as_ref()?;
         let (here, target) = (player.pos, player.pos.step(dir));
@@ -2437,6 +2495,9 @@ impl MapScreen {
             }
         }
         if let Some(dir) = dir_for(k.code) {
+            if self.start_ride(st, dir) {
+                return Some(ScreenCmd::Stay);
+            }
             if let Some(cmd) = self.gateway(st, dir) {
                 return Some(cmd);
             }
@@ -2646,6 +2707,10 @@ impl Screen for MapScreen {
                     self.aim = None;
                     continue;
                 }
+                // A ride in flight: any key stops it where it is, and does nothing else.
+                if self.riding.take().is_some() {
+                    continue;
+                }
                 if self.walking.is_some() && k.code != KeyCode::Esc {
                     continue;
                 }
@@ -2760,6 +2825,7 @@ impl Screen for MapScreen {
         // where you were, and the map follows you before this frame draws.
         if st.player.as_ref().map(|p| (p.place, p.pos)) != before {
             self.walking = None;
+            self.riding = None;
             self.aim = None;
             if self.mode == Mode::Walk && st.player.as_ref().is_some_and(|p| p.place != self.place)
             {
@@ -2863,6 +2929,7 @@ impl Screen for MapScreen {
         }
         if self.mode == Mode::Walk {
             self.walk_step(st);
+            self.ride_step(st);
         }
         // The fire cursor: opens on the last or nearest enemy as your act half
         // opens (a key, or the walk's last move), goes when the half does.
@@ -2980,6 +3047,14 @@ impl Screen for MapScreen {
             Place::Stratum(StratumKind::Net) | Place::Construct(_)
         ) {
             overlays.push(&net_look);
+        }
+        let ride = self
+            .riding
+            .as_ref()
+            .zip(st.player.as_ref().filter(|p| p.place == self.place))
+            .map(|(ride, p)| crate::render::ride::RideOverlay { ride, me: p.pos });
+        if let Some(o) = ride.as_ref() {
+            overlays.push(o);
         }
         if st.rain {
             overlays.push(&Weather);
@@ -8897,6 +8972,78 @@ mod tests {
                 p.body = None;
             }
             eprintln!("seed {seed}: {} buildings ok", city.buildings.len());
+        }
+    }
+
+    /// A lane tile of the Net from which a step east rides three tiles or more, and
+    /// the ride.
+    fn a_lane_to_ride(st: &AppState) -> (Pos, Vec<Pos>) {
+        let city = st.city.as_ref().unwrap();
+        let net = city.stratum(StratumKind::Net).unwrap();
+        net.tiles
+            .iter()
+            .filter(|(_, t)| t.terrain == citygen::Terrain::NetLane)
+            .find_map(|(p, _)| {
+                let path = crate::ride::ride_path(city, p, Dir::E);
+                (path.len() >= 3).then_some((p, path))
+            })
+            .expect("a lane to ride")
+    }
+
+    fn on_a_lane(st: &mut AppState, s: &mut MapScreen) -> Vec<Pos> {
+        walking(st, s);
+        let (from, path) = a_lane_to_ride(st);
+        st.player.as_mut().unwrap().body = Some((Place::Stratum(StratumKind::Street), from));
+        stand(st, s, Place::Stratum(StratumKind::Net), from);
+        path
+    }
+
+    #[test]
+    fn a_step_along_a_lane_rides_to_its_stop() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let path = on_a_lane(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        assert_eq!(
+            st.player.as_ref().unwrap().pos,
+            path[0],
+            "the first tile at once"
+        );
+        assert!(s.riding.is_some());
+        for _ in 0..path.len() + 2 {
+            st.tick += crate::ride::RIDE_TICKS;
+            s.update(&mut st, &[]);
+        }
+        assert_eq!(st.player.as_ref().unwrap().pos, *path.last().unwrap());
+        assert!(s.riding.is_none(), "it ends at its stop");
+    }
+
+    #[test]
+    fn any_key_stops_a_ride() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let path = on_a_lane(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        let at = st.player.as_ref().unwrap().pos;
+        assert_eq!(at, path[0]);
+        s.update(&mut st, &[key(KeyCode::Char('x'))]);
+        assert!(s.riding.is_none());
+        assert!(s.looking.is_none(), "the key did nothing else");
+        for _ in 0..5 {
+            st.tick += 1;
+            s.update(&mut st, &[]);
+        }
+        assert_eq!(st.player.as_ref().unwrap().pos, at);
+    }
+
+    #[test]
+    fn no_ride_inside_a_construct() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        in_construct(&mut st, &mut s);
+        for code in ['h', 'j', 'k', 'l'] {
+            s.update(&mut st, &[key(KeyCode::Char(code))]);
+            assert!(s.riding.is_none());
         }
     }
 
