@@ -51,7 +51,7 @@ pub fn net_px(
         return None;
     }
     Some(if lane {
-        SIGNAL.scale(0.85)
+        SIGNAL.scale(0.6)
     } else if let (Some(b), None) = (wall, floor) {
         colour(b).scale(0.55)
     } else if let Some(b) = floor {
@@ -129,7 +129,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             net_px(&c, &style, lane.x, lane.y, 1, None),
-            Some(SIGNAL.scale(0.85))
+            Some(SIGNAL.scale(0.6))
         );
         let b = c.stratum(StratumKind::Net).unwrap().tiles[black_wall].building;
         assert_eq!(

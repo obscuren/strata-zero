@@ -2689,3 +2689,59 @@ fn stand_in(st: &mut AppState, place: Place, at: Pos) {
     }
     st.player = Some(p);
 }
+
+/// Half way along a ride north up the lane by Kiroflux Mart.
+#[test]
+#[ignore]
+fn net_ride() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (mut st, mut map) = on_the_open_net();
+    stand_in(&mut st, Place::Stratum(StratumKind::Net), Pos::new(199, 61));
+    map.cam.snap(Pos::new(199, 61));
+    map.update(&mut st, &[key(KeyCode::Char('k'))]);
+    for _ in 0..3 {
+        pass(&mut st, crate::ride::RIDE_TICKS);
+        map.update(&mut st, &[]);
+    }
+    for (name, size) in [("net_ride", (120, 40)), ("net_ride_small", (100, 30))] {
+        write_svg(&dir, name, &st, &draw_stack(&st, &[&map], size), false);
+    }
+}
+
+/// A rig run that landed at a backdoor on Stack 101 Terminal and walked to Kiroflux
+/// Mart: the cord back to the relay and the hop home, then a trace on the relay.
+#[test]
+#[ignore]
+fn net_cord() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (mut st, mut map) = on_the_open_net();
+    let city = st.city.clone().unwrap();
+    let relay = city
+        .buildings
+        .iter()
+        .find(|b| b.name.as_deref() == Some("Stack 101 Terminal"))
+        .map(|b| b.id)
+        .expect("Stack 101 Terminal");
+    let home = st.home.unwrap();
+    st.player.as_mut().unwrap().body = Some((home.place(), home.home.rig));
+    let now = st.net.now(&st);
+    st.backdoors.plant_net(relay, 50, city.seed, now);
+    st.backdoors.start_route(Some(relay));
+    map.update(&mut st, &[]);
+    for (name, size) in [("net_cord", (120, 40)), ("net_cord_small", (100, 30))] {
+        write_svg(&dir, name, &st, &draw_stack(&st, &[&map], size), false);
+    }
+    st.backdoors.start_trace(now);
+    map.update(&mut st, &[]);
+    write_svg(
+        &dir,
+        "net_cord_traced",
+        &st,
+        &draw_stack(&st, &[&map], (120, 40)),
+        false,
+    );
+}
