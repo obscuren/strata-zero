@@ -499,8 +499,10 @@ fn resolve_story(st: &AppState, mission: usize, step: usize) -> Resolved {
     target.map_or(Resolved::Nowhere, Resolved::Target)
 }
 
-/// A `Person` target made concrete: the tile they stand on, the building they are in,
-/// or where they lay. Other targets pass through.
+/// A `Person` target made concrete: the tile they stand on, on the street or on the
+/// floor that draws them (an indoor spot routes by the door and the lift), the
+/// building when they are behind a door of their own, or where they lay. Other targets
+/// pass through.
 pub fn locate(st: &AppState, t: Target) -> Resolved {
     let Target::Person(id) = t else {
         return Resolved::Target(t);
@@ -526,7 +528,16 @@ pub fn locate(st: &AppState, t: Target) -> Resolved {
         });
     }
     match world.people().get(id.0 as usize).map(|p| &p.whereabouts) {
-        Some(Whereabouts::Inside(b)) => Resolved::Target(Target::Building(*b)),
+        Some(Whereabouts::Inside(b)) => {
+            Resolved::Target(match crate::interiors::drawn_at(st, id) {
+                Some((place @ Place::Floor { .. }, pos)) => Target::Spot {
+                    place,
+                    pos,
+                    radius: 1,
+                },
+                _ => Target::Building(*b),
+            })
+        }
         _ => Resolved::Nowhere,
     }
 }
@@ -776,20 +787,21 @@ pub(crate) mod tests {
                 radius: 1
             })
         );
-        let (indoors, b) = st
-            .world
-            .as_ref()
-            .unwrap()
-            .people()
-            .iter()
-            .find_map(|p| match p.whereabouts {
-                Whereabouts::Inside(b) => Some((p.id, b)),
-                _ => None,
-            })
-            .expect("somebody is indoors");
+        let (indoors, b) = at_home(&st)[0];
         assert_eq!(
             locate(&st, Target::Person(indoors)),
             Resolved::Target(Target::Building(b))
+        );
+        // At work inside, where their floor stands them.
+        let (drone, _, _) = a_drone_upstairs(&mut st);
+        let (place, pos) = crate::interiors::drawn_at(&st, drone).unwrap();
+        assert_eq!(
+            locate(&st, Target::Person(drone)),
+            Resolved::Target(Target::Spot {
+                place,
+                pos,
+                radius: 1
+            })
         );
         // Spots and buildings pass through.
         let t = Target::Building(b);
@@ -1194,20 +1206,111 @@ pub(crate) mod tests {
         assert_eq!(last(&st), format!("⌖ there · {name}"));
     }
 
-    #[test]
-    fn a_person_inside_clears_on_entering() {
-        let mut st = outside();
-        let home = st.home.unwrap().home.building;
-        let indoors: Vec<(PersonId, BuildingId)> = st
+    /// Everyone in at home, behind a door of their own, and the building.
+    fn at_home(st: &AppState) -> Vec<(PersonId, BuildingId)> {
+        let w = st.world.as_ref().unwrap();
+        let mut homes: Vec<BuildingId> = w.people().iter().filter_map(|p| p.home).collect();
+        homes.sort();
+        homes.dedup();
+        homes
+            .into_iter()
+            .flat_map(|b| {
+                w.inside(b)
+                    .into_iter()
+                    .filter(|o| o.role == sim::OccupantRole::Living)
+                    .map(move |o| (o.id, b))
+            })
+            .collect()
+    }
+
+    /// A corp drone held at work on a floor above their tower's street door, the tower,
+    /// and that door.
+    fn a_drone_upstairs(st: &mut AppState) -> (PersonId, BuildingId, (StratumKind, Pos)) {
+        let drones: Vec<PersonId> = st
             .world
             .as_ref()
             .unwrap()
             .people()
             .iter()
-            .filter_map(|p| match p.whereabouts {
-                Whereabouts::Inside(b) if b != home => Some((p.id, b)),
-                _ => None,
+            .filter(|p| p.profession == "corp_drone" && matches!(p.work, sim::Work::Building(_)))
+            .map(|p| p.id)
+            .collect();
+        for who in drones {
+            st.world.as_mut().unwrap().keep_at_work(who);
+            let Some((Place::Floor { building: b, level }, _)) =
+                crate::interiors::drawn_at(st, who)
+            else {
+                continue;
+            };
+            let city = st.city.as_ref().unwrap();
+            let Some(door) = city
+                .portals(b)
+                .into_iter()
+                .find(|(k, _)| *k == StratumKind::Street)
+            else {
+                continue;
+            };
+            let plan = citygen::FloorPlan::new(city, b).unwrap();
+            if crate::interiors::level_for(&plan, StratumKind::Street) != Some(level) {
+                return (who, b, door);
+            }
+        }
+        panic!("a drone at work upstairs");
+    }
+
+    #[test]
+    fn a_delivery_upstairs_walks_to_its_person() {
+        let mut st = outside();
+        let (who, b, door) = a_drone_upstairs(&mut st);
+        let id = taken(&mut st, KindTag::Deliver).unwrap();
+        let job = st.jobs.list.iter_mut().find(|j| j.id == id).unwrap();
+        let Kind::Deliver { to, .. } = &mut job.kind else {
+            unreachable!()
+        };
+        *to = who;
+        let (place, desk) = crate::interiors::drawn_at(&st, who).unwrap();
+        let Place::Floor { level, .. } = place else {
+            unreachable!()
+        };
+        let src = job_source(id, 0);
+        let name = label(&st, &src);
+        set(&mut st, src).unwrap();
+        // From the street: their desk on their floor, by the tower's door.
+        assert_eq!(
+            target_now(&st),
+            Some(Target::Spot {
+                place,
+                pos: desk,
+                radius: 1
             })
+        );
+        let then = format!("building, then {}", citygen::FloorPlan::label(level));
+        assert_eq!(next_now(&st), Some(then.as_str()));
+        // In the lobby the track holds, and the lift is marked for their floor.
+        crate::interiors::enter(&mut st, b, door).unwrap();
+        tick(&mut st);
+        assert!(st.track.is_some(), "entering is not reaching them");
+        assert_eq!(floor_wanted(&st, b), Some(level));
+        // On their floor, the walk ends at them.
+        crate::interiors::ride(&mut st, b, level).unwrap();
+        tick(&mut st);
+        let leg = leg_now(&st).unwrap().unwrap().clone();
+        assert_eq!(leg.place, place);
+        assert_eq!(leg.through, route::Through::Arrive);
+        assert!(leg.goal.chebyshev(desk) <= 1, "{leg:?} ends by {desk:?}");
+        put(&mut st, place, leg.goal);
+        tick(&mut st);
+        assert!(st.track.is_none());
+        assert_eq!(last(&st), format!("⌖ there · {name}"));
+    }
+
+    #[test]
+    fn a_person_behind_their_door_clears_on_entering() {
+        let mut st = outside();
+        let home = st.home.unwrap().home.building;
+        let indoors: Vec<(PersonId, BuildingId)> = at_home(&st)
+            .into_iter()
+            .filter(|(_, b)| *b != home)
             .collect();
         let city = st.city.as_ref().unwrap();
         let (who, b, door) = indoors
