@@ -358,6 +358,12 @@ pub fn end(st: &mut AppState, mission: usize, step: usize) {
     fire(st, None);
 }
 
+/// Something changed off the map's frame (a Look that told, an action in the deck):
+/// every mission whose step now holds moves on, before the map's next frame.
+pub fn settle(st: &mut AppState) {
+    fire(st, None);
+}
+
 /// Whether a mission waits on talking to this person.
 pub fn listens(st: &AppState, who: PersonId) -> bool {
     (0..st.missions.runs.len()).any(|m| {
@@ -2692,7 +2698,7 @@ pub(crate) mod tests {
     }
 
     /// The ledger's objective once you know whose the shard is.
-    fn bring_it_to_coz(st: &AppState) -> String {
+    pub(crate) fn bring_it_to_coz(st: &AppState) -> String {
         let coz = person_of(st, "coz").expect("coz is cast");
         format!(
             "Bring it to Coz · {} · {}",
@@ -2702,14 +2708,14 @@ pub(crate) mod tests {
     }
 
     /// The ledger's objectives, in order.
-    fn ledger_objectives(st: &AppState) -> Vec<String> {
+    pub(crate) fn ledger_objectives(st: &AppState) -> Vec<String> {
         st.missions.runs[mission_at(st, "ledger")]
             .objectives
             .clone()
     }
 
     /// Seren's word come, with only these skills.
-    fn the_word_with(skills: &[&str]) -> AppState {
+    pub(crate) fn the_word_with(skills: &[&str]) -> AppState {
         let mut st = the_morning_call();
         to_the_word(&mut st);
         st.character.skills = skills.iter().map(|s| SkillId::new(s)).collect();

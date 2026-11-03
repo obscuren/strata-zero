@@ -1554,12 +1554,14 @@ impl Screen for Deck {
         self.note_new_categories(st);
         self.note_new_skills(st);
         let cmd = self.handle(st, keys);
-        // The pack's card reads an item's Look: one that tells has been shown.
+        // The pack's card reads an item's Look: one that tells has been shown, and the
+        // story moves on with the deck still up.
         if self.tab == Tab::Kit
             && let Some(detail) = self.kit.selected(st)
             && let Some((id, ..)) = super::kit::shown_item(st, &detail)
+            && crate::missions::reading::look_tells(st, &id)
         {
-            crate::missions::reading::look_tells(st, &id);
+            crate::missions::settle(st);
         }
         st.deck_tab = self.tab;
         st.deck_rows[self.tab.index()] = self.row;
@@ -2631,6 +2633,53 @@ mod tests {
         st.tick += 30;
         let text = draw(&d, &st, 120, 35);
         assert!(text.contains("▸ Mezz · mail · the news"), "{text}");
+    }
+
+    #[test]
+    fn a_story_beat_in_the_deck_moves_the_story_with_the_deck_up() {
+        use crate::missions::tests::{
+            bring_it_to_coz, ledger_objectives, open_the_package, the_word_with,
+        };
+        let shard = ItemId::new("ledger_shard");
+        let on_shard = |r: &Row| r.text.contains("Ledger shard");
+        // A streetwise player looks the shard over in the pack: its owner, at once.
+        let mut st = the_word_with(&["streetwise"]);
+        open_the_package(&mut st);
+        let whose = "Find out whose shard this is · look it over in your pack";
+        assert_eq!(ledger_objectives(&st), [whose]);
+        let mut d = Deck::new(st.tick);
+        on_pack(&mut d, &mut st, on_shard);
+        d.update(&mut st, &[]);
+        assert_eq!(ledger_objectives(&st).last(), Some(&bring_it_to_coz(&st)));
+        // The package opened from the pack's popup opens the ledger, the deck still up.
+        let mut st = the_word_with(&["hacking"]);
+        assert!(ledger_objectives(&st).is_empty(), "no shard yet");
+        let mut d = Deck::new(st.tick);
+        on_pack(&mut d, &mut st, |r| r.text.contains("Taped package"));
+        let ScreenCmd::Push { to: mut p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space opens the popup")
+        };
+        let cmd = p.update(&mut st, &[key(KeyCode::Char('o'))]);
+        assert!(matches!(cmd, ScreenCmd::Pop { .. }));
+        assert_eq!(st.character.count(&shard), 1);
+        assert_eq!(
+            ledger_objectives(&st),
+            ["Find out whose shard this is · read it at your rig"]
+        );
+        // The casing opened at the bench: its card over the deck, the ledger moved on.
+        let mut st = the_word_with(&["electronics"]);
+        st.character.categories.insert(CategoryId::new("wrench"));
+        open_the_package(&mut st);
+        let mut p = item_popup(&mut st, &shard, (0, 0)).unwrap();
+        let read = p
+            .choices()
+            .iter()
+            .find(|c| matches!(c.pick, Pick::Read { .. }));
+        let k = read.expect("the bench's reading").key;
+        let cmd = p.update(&mut st, &[key(KeyCode::Char(k))]);
+        assert!(matches!(cmd, ScreenCmd::Replace { .. }));
+        assert_eq!(ledger_objectives(&st).last(), Some(&bring_it_to_coz(&st)));
     }
 
     #[test]

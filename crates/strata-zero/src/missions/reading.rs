@@ -46,11 +46,10 @@ pub fn item_desc(st: &AppState, id: &ItemId) -> String {
 }
 
 /// The pack shows the item's card: a Look reading that tells, when it holds, records the
-/// item read.
-pub fn look_tells(st: &mut AppState, item: &ItemId) {
-    if reading(st, &item.0, ReadAt::Look).is_some_and(|r| r.tells) {
-        st.missions.read.insert(item.0.clone());
-    }
+/// item read. True when that read is new.
+pub fn look_tells(st: &mut AppState, item: &ItemId) -> bool {
+    reading(st, &item.0, ReadAt::Look).is_some_and(|r| r.tells)
+        && st.missions.read.insert(item.0.clone())
 }
 
 /// A reading on the screen, over the map at the rig or the deck at the bench: the HOLO
