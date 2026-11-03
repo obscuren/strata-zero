@@ -27,7 +27,7 @@
 // A need asks who you are: `Skill`, `Read(item)`, `Carries(item)`, `Unsealed(item)`,
 // `Changed` / `Unchanged` (the jacket the camera saw), `Late(minute)`, `Not`, `All`. A
 // `Say` with a `need` is said only when it holds. `when: Holds(need)` fires once the need
-// holds, on any pass. `ObjectiveFit` sets the text of the first `Fit` whose need holds;
+// holds, on any pass. `ObjectiveFit` sets the objective of the first `Fit` whose need holds;
 // the last one's need is `All([])`. `Told(item)`: someone said whose it is, so
 // `Read(item)` holds.
 // `readings` are what who you are finds in an item at the rig, at the bench or by its
