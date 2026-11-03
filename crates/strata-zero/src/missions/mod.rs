@@ -2796,7 +2796,14 @@ pub(crate) mod tests {
         );
         assert!(ledger_objectives(&st).is_empty(), "no shard yet");
         open_the_package(&mut st);
-        assert_eq!(ledger_objectives(&st).last(), Some(&bring_it_to_coz(&st)));
+        // Its first tick carries no hint she made needless.
+        assert_eq!(
+            ledger_objectives(&st),
+            [
+                "Find out whose shard this is".to_string(),
+                bring_it_to_coz(&st)
+            ]
+        );
     }
 
     #[test]

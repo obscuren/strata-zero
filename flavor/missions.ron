@@ -232,7 +232,9 @@ Story(
         // one leaves it uncast.
         Mission(id: "ledger", title: "The ledger", from: "castellan", steps: [
             Step(id: "whose", when: Holds(Carries("ledger_shard")), then: [
+                // Told already (the doctor named him): no hint, and the next step ticks it.
                 ObjectiveFit([
+                    Fit(need: Read("ledger_shard"), text: "Find out whose shard this is"),
                     Fit(need: Skill("hacking"),
                         text: "Find out whose shard this is · read it at your rig"),
                     Fit(need: Skill("electronics"),
