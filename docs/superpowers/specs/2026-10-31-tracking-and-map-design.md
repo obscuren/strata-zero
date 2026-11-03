@@ -72,8 +72,12 @@ colour that only shows what you have already walked. Jeffrey wants:
    building's door; inside, to the lift (or the stairs when lifts are locked down), then
    to the target. Between strata, to a connector. Each leg is drawn in the place you are
    in, and the pane says what comes next ("building, then 6F").
-8. **A person target inside a building** is that building until you are inside it; you
-   arrive on entering. Inside, you find them yourself.
+8. **A person target inside a building** is the tile their floor stands them on
+   (`interiors::drawn_at`), walked to like a Fetch: the building's door, the lift to
+   their floor, then them. Only someone behind a door of their own (at home, a hotel
+   guest) is that building, arrived at on entering. (Changed 2026-11-03, after Jeffrey
+   played a delivery to a corp drone on a tower's upper floor: the track stopped at the
+   lobby with "no indication on where to even begin look for it".)
 9. **The map shows your stratum**, or the Street while you are inside a building or
    jacked in. Inside a building the walk on the map starts from that building's way out.
 10. **Arrival radius:** a person, 1 tile; a building, its door or anywhere inside; a spot
@@ -144,7 +148,7 @@ After the builder check (settled without asking):
 - A track that moves on to a job's next objective by itself.
 - Saving tracks or the map's settings to disk.
 - Routing through the Net, or into a construct.
-- Showing people inside buildings on the map, or finding a person on a floor for you.
+- Showing people inside buildings on the map.
 - Searching listings by typed text.
 - Several tracks at once, or waypoints.
 
@@ -218,7 +222,8 @@ the tile is the walkable tile inside the rect nearest the flat's door.
 
 A `Person` resolves further each tick:
 - standing somewhere on a stratum: that tile, radius 1;
-- inside building `b`: `Building(b)`;
+- inside building `b`, drawn on one of its floors: that tile, radius 1;
+- inside building `b` behind a door of their own: `Building(b)`;
 - dead with a story body: the body's tile, radius 1; dead without one: `Gone("{name} is
   gone")`.
 
@@ -283,7 +288,7 @@ street`, `up to the Street`. (A door leg says `building`, Jeffrey after playing 
 | `Spot`: same place, within `radius` (Chebyshev) | clear | `⌖ there · {label}` |
 | `Building(b)`: inside `b` on any floor, or on or beside its door; a walk-in kind, in or beside its footprint | clear | `⌖ there · {label}` |
 | `Person` on a stratum: same place, within 1 | clear | `⌖ there · {label}` |
-| `Person` inside `b`: you enter `b` | clear | `⌖ {name} is in here` |
+| `Person` behind a door of their own in `b`: you enter `b` | clear | `⌖ {name} is in here` |
 | `Job`: the job is not Taken any more (done, failed, late, dropped) | clear | `⌖ {label} · done with` |
 | `Job`: objective `objective` is ticked | clear | `⌖ {label} · done with` |
 | `Story`: the run is not Open, or its step is not `step` any more | clear | `⌖ {label} · done with` |
