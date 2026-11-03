@@ -83,9 +83,37 @@ pub fn text(e: &Exposure) -> String {
     format!("{} · {eyes}", band(e.light))
 }
 
+/// The HUD's words on the Net, where nothing is lit or dark: the place, then whether
+/// ICE hunts you: `grid · unseen`, `construct · hunted`.
+pub fn net_text(place: Place, hunted: bool) -> String {
+    let at = match place {
+        Place::Construct(_) => "construct",
+        _ => "grid",
+    };
+    let eyes = if hunted { "hunted" } else { "unseen" };
+    format!("{at} · {eyes}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_net_reads_the_place_and_the_eyes() {
+        use citygen::BuildingId;
+        assert_eq!(
+            net_text(Place::Stratum(StratumKind::Net), false),
+            "grid · unseen"
+        );
+        assert_eq!(
+            net_text(Place::Construct(BuildingId(3)), false),
+            "construct · unseen"
+        );
+        assert_eq!(
+            net_text(Place::Construct(BuildingId(3)), true),
+            "construct · hunted"
+        );
+    }
     use crate::render::map::{MapRef, TileMap};
     use citygen::{GenParams, Generator, SizePreset};
 

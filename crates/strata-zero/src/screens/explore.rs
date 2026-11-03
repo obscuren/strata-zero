@@ -3391,7 +3391,12 @@ impl Screen for MapScreen {
             Paragraph::new(hud::location_line(&location, st.clock(), rw)),
             r.band_r[0],
         );
-        let exposure = if matches!(self.place, Place::Stratum(_)) {
+        let exposure = if matches!(
+            self.place,
+            Place::Stratum(StratumKind::Net) | Place::Construct(_)
+        ) {
+            crate::exposure::net_text(self.place, crate::net::hunted(st))
+        } else if matches!(self.place, Place::Stratum(_)) {
             crate::exposure::text(&crate::exposure::of(st))
         } else {
             String::new()

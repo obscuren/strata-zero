@@ -2637,8 +2637,8 @@ pub fn targets_near(st: &AppState, b: BuildingId, pos: citygen::Pos) -> Vec<(Hac
     out
 }
 
-/// A standing piece a program reaches: beside you, or in your sight within
-/// `ATTACK_RANGE`.
+/// A standing piece a program reaches: beside you, or within `ATTACK_RANGE` with no
+/// wall of the construct between you.
 pub fn piece_in_reach(st: &AppState, b: BuildingId, index: usize) -> bool {
     let (Some(player), Some(k)) = (st.player.as_ref(), st.constructs.get(b)) else {
         return false;
@@ -2650,9 +2650,7 @@ pub fn piece_in_reach(st: &AppState, b: BuildingId, index: usize) -> bool {
         return false;
     }
     let d = g.pos.chebyshev(player.pos);
-    d <= 1
-        || (d <= ATTACK_RANGE
-            && player.vis().get(g.pos) == Some(&crate::render::Visibility::Visible))
+    d <= 1 || (d <= ATTACK_RANGE && line_clear_in(k, player.pos, g.pos))
 }
 
 /// The HERE section's trace lines inside a construct.

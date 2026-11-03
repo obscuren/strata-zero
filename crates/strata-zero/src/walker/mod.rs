@@ -106,6 +106,14 @@ impl Player {
         self.body.is_some()
     }
 
+    /// The Net has no light rule: on its stratum and in a construct every tile is seen.
+    pub fn sees_all(&self) -> bool {
+        matches!(
+            self.place,
+            Place::Stratum(StratumKind::Net) | Place::Construct(_)
+        )
+    }
+
     /// The port of a terminal on this tile or an 8-neighbour that serves this stratum.
     /// Inside, only the rig at home reaches the Net: its port is the landing outside.
     pub fn terminal_in_reach(&self, city: &City, home: Option<&HomeRig>) -> Option<Pos> {
@@ -204,8 +212,15 @@ impl Player {
     /// Recomputes what the player sees on the current map, demoting old sight to memory.
     /// `sight_bonus` is the character's equipment bonus to the dark radius. On a
     /// physical stratum the cast reaches `LIT_RADIUS` and keeps lit tiles past the dark
-    /// radius; the Net and interiors see the plain radius.
+    /// radius; interiors see the plain radius; the Net sees everything.
     pub fn update_fov(&mut self, map: &dyn TileMap, sight_bonus: i32) {
+        if self.sees_all() {
+            let size = map.size();
+            self.memory_for(size)
+                .as_mut_slice()
+                .fill(Visibility::Visible);
+            return;
+        }
         let dark = (self.radius_at(map.daylight()) + sight_bonus).max(1);
         let lit = map.lit_sight();
         let cast = if lit { dark.max(LIT_RADIUS) } else { dark };
@@ -527,6 +542,77 @@ mod tests {
             .filter(|(q, _)| st.emitted(*q, 22 * 60) == 0 && !street(&c).emits(*q))
             .count();
         assert_eq!(far_dark, 0, "nothing dark beyond the radius is seen");
+    }
+
+    /// A public port and a walkable tile beside it.
+    fn port(c: &City) -> (Pos, Pos) {
+        let jack = c
+            .connectors
+            .iter()
+            .find(|k| k.kind == citygen::ConnectorKind::Jack && k.public)
+            .unwrap();
+        let stand = jack
+            .pos
+            .neighbors8()
+            .find(|n| c.walkable(StratumKind::Street, *n))
+            .unwrap();
+        (jack.pos, stand)
+    }
+
+    #[test]
+    fn the_net_sees_every_tile() {
+        let c = city();
+        let (_, stand) = port(&c);
+        let mut p = Player::spawn(&c, 1);
+        p.pos = stand;
+        p.place = Place::Stratum(StratumKind::Street);
+        p.jack_in(&c, None, 0).unwrap();
+        assert!(p.sees_all());
+        let all = |p: &Player| p.vis().count(|v| *v == Visibility::Visible);
+        let size = c.size;
+        assert_eq!(
+            all(&p),
+            (size.w * size.h) as usize,
+            "every tile, the far ones too"
+        );
+        let net = MapRef::stratum_of(&c, StratumKind::Net);
+        for dir in [Dir::E, Dir::W] {
+            p.try_move(&net, dir);
+            p.update_fov(&net, 0);
+        }
+        assert_eq!(p.vis().count(|v| *v == Visibility::Remembered), 0);
+        assert_eq!(all(&p), (size.w * size.h) as usize);
+    }
+
+    #[test]
+    fn a_construct_sees_every_tile() {
+        let c = city();
+        let (k, b) = c
+            .buildings
+            .iter()
+            .find_map(|b| citygen::construct::generate_construct(&c, b.id).map(|k| (k, b.id)))
+            .expect("a construct");
+        let constructs = {
+            let mut m = crate::constructs::Constructs::default();
+            m.insert(k.clone());
+            m
+        };
+        let interiors = crate::interiors::Interiors::default();
+        let map = MapRef::for_place(&c, &interiors, &constructs, Place::Construct(b), 0).unwrap();
+        let mut p = Player::at(Place::Construct(b), k.entry);
+        assert!(p.sees_all());
+        p.update_fov(&map, 0);
+        assert_eq!(
+            p.vis().count(|v| *v == Visibility::Visible),
+            (k.size.w * k.size.h) as usize
+        );
+    }
+
+    #[test]
+    fn the_street_still_has_its_light_rule() {
+        let c = city();
+        let p = Player::spawn(&c, 1);
+        assert!(!p.sees_all());
     }
 
     #[test]
