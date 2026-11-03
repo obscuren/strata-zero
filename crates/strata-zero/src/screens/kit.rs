@@ -521,9 +521,6 @@ impl Kit {
     }
 }
 
-/// The viewer: a solid window with corner ticks and the selection's drawing at half
-/// size, centred and clipped to it, or the box that says it has none yet. An empty
-/// slot, or nothing selected, leaves only the ticks.
 /// The item a row's card and the viewer show, whether it is worn, and its copy: the
 /// pack's item or copy, or what the slot has on.
 pub(crate) fn shown_item(st: &AppState, detail: &Detail) -> Option<(ItemId, bool, Option<CopyId>)> {
@@ -541,6 +538,9 @@ pub(crate) fn shown_item(st: &AppState, detail: &Detail) -> Option<(ItemId, bool
     }
 }
 
+/// The viewer: a solid window with corner ticks and the selection's drawing at half
+/// size, centred and clipped to it, or the box that says it has none yet. An empty
+/// slot, or nothing selected, leaves only the ticks.
 fn draw_viewer(st: &AppState, selected: Option<&Detail>, view: Rect, buf: &mut Buffer) {
     if view.width < 2 || view.height < 2 {
         return;
