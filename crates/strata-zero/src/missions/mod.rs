@@ -1639,7 +1639,7 @@ pub(crate) mod tests {
     }
 
     /// The morning call answered through and the waking scene run out: the news is on.
-    fn the_news_is_on(st: &mut AppState) {
+    pub(crate) fn the_news_is_on(st: &mut AppState) {
         answer_through(st);
         tick(st);
         assert_eq!(scene::running(st).map(|r| r.id()), Some("waking"));
