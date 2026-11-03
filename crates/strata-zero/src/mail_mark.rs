@@ -8,7 +8,7 @@ use crate::ui::hud::{BADGE_FG, cut_spans};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-/// Frames the pill stays up: six seconds of map frames.
+/// Frames the pill stays up: six seconds of the map's frames on top, its corner clear.
 pub const MAIL_PILL_TICKS: u64 = 180;
 /// Cells between the pill's end and the map's right edge.
 pub const PILL_INSET: u16 = 8;
@@ -16,16 +16,25 @@ pub const PILL_INSET: u16 = 8;
 const PILL_FG: Color = Color::Rgb(255, 225, 245);
 const PILL_BG: Color = Color::Rgb(120, 20, 90);
 
-/// The pill over the map: the mail it announces, and the frame the map first drew it.
+/// The pill over the map: the mail it announces, and the clear map frames it has been
+/// up on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MailPill {
     pub mail: usize,
-    pub shown: Option<u64>,
+    pub frames: u64,
 }
 
-/// A map frame: each mail landed since the last is logged, and the newest puts the pill
-/// up. The pill's clock starts on the first frame it draws, with no film scene playing;
-/// it comes down `MAIL_PILL_TICKS` later, or as soon as its mail is read.
+/// The map's top rows are the pill's: no film scene framing the map, no call card and
+/// no rest window over its top.
+fn clear(st: &AppState) -> bool {
+    let film = crate::missions::scene::running(st)
+        .is_some_and(|s| s.look() == crate::missions::Look::Film);
+    !film && st.missions.call.is_none() && st.rest.is_none()
+}
+
+/// A map frame on top: each mail landed since the last is logged, and the newest puts
+/// the pill up. The pill counts the frames its corner is clear and comes down after
+/// `MAIL_PILL_TICKS` of them, or as soon as its mail is read.
 pub fn notice(st: &mut AppState) {
     let landed = st.mail_seen.min(st.journal.mails.len())..st.journal.mails.len();
     st.mail_seen = landed.end;
@@ -35,28 +44,23 @@ pub fn notice(st: &mut AppState) {
         st.story(line);
     }
     if let Some(mail) = landed.last() {
-        st.mail_pill = Some(MailPill { mail, shown: None });
+        st.mail_pill = Some(MailPill { mail, frames: 0 });
     }
     let Some(mut pill) = st.mail_pill else {
         return;
     };
-    let film = crate::missions::scene::running(st)
-        .is_some_and(|s| s.look() == crate::missions::Look::Film);
-    if pill.shown.is_none() && !film {
-        pill.shown = Some(st.tick);
+    if clear(st) {
+        pill.frames += 1;
     }
     let read = st.journal.mails.get(pill.mail).is_none_or(|m| m.read);
-    let over = pill.shown.is_some_and(|t| st.tick >= t + MAIL_PILL_TICKS);
-    st.mail_pill = (!read && !over).then_some(pill);
+    st.mail_pill = (!read && pill.frames <= MAIL_PILL_TICKS).then_some(pill);
 }
 
-/// The pill while it is up, cut to `width` cells: `▣ MAIL` lit, then who wrote and about
-/// what, and `+N` for the other mails unread.
+/// The pill as the map draws it, cut to `width` cells: `▣ MAIL` lit, then who wrote and
+/// about what, and `+N` for the other mails unread. `None` before its first clear frame,
+/// and while its corner is covered.
 pub fn pill_line(st: &AppState, width: u16) -> Option<Line<'static>> {
-    let pill = st.mail_pill?;
-    if pill.shown.is_none_or(|t| st.tick >= t + MAIL_PILL_TICKS) {
-        return None;
-    }
+    let pill = st.mail_pill.filter(|p| p.frames > 0 && clear(st))?;
     let m = st.journal.mails.get(pill.mail).filter(|m| !m.read)?;
     let others = unread(st) - 1;
     let more = if others > 0 {
@@ -79,9 +83,11 @@ pub fn pill_line(st: &AppState, width: u16) -> Option<Line<'static>> {
     Some(Line::from(cut_spans(spans, width as usize)))
 }
 
-/// The inbox's unread mails.
+/// The unread mails the map has noticed; one landed since its last frame is not yet
+/// among them.
 pub fn unread(st: &AppState) -> usize {
-    st.journal.mails.iter().filter(|m| !m.read).count()
+    let seen = st.mail_seen.min(st.journal.mails.len());
+    st.journal.mails[..seen].iter().filter(|m| !m.read).count()
 }
 
 #[cfg(test)]
@@ -140,13 +146,7 @@ mod tests {
         st.tick += 1;
         notice(&mut st);
         assert_eq!(announced(&st), 3);
-        assert_eq!(
-            st.mail_pill,
-            Some(MailPill {
-                mail: i,
-                shown: Some(st.tick)
-            })
-        );
+        assert_eq!(st.mail_pill, Some(MailPill { mail: i, frames: 1 }));
     }
 
     #[test]
