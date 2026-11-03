@@ -2687,6 +2687,169 @@ pub fn piece_in_reach(st: &AppState, b: BuildingId, index: usize) -> bool {
     d <= 1 || (d <= ATTACK_RANGE && line_clear_in(k, player.pos, g.pos))
 }
 
+/// The Net tile you jacked in at: your rig's landing when the body is at home, else the
+/// port beside the body; none when you are not jacked in.
+pub fn port_of(st: &AppState) -> Option<Pos> {
+    let p = st.player.as_ref()?;
+    let (place, body) = p.body?;
+    if let Some(h) = st.home.filter(|h| h.place() == place) {
+        return Some(h.landing);
+    }
+    let city = st.city.as_ref()?;
+    let k = place.stratum()?;
+    std::iter::once(body)
+        .chain(body.neighbors8())
+        .find_map(|q| {
+            city.connectors_at(q)
+                .find(|c| c.kind == citygen::ConnectorKind::Jack && c.serves.contains(&k))
+                .map(|c| c.pos)
+        })
+}
+
+/// The arrow from `from` toward `to`, eight ways; none on the tile itself.
+fn arrow(from: Pos, to: Pos) -> Option<char> {
+    let (dx, dy) = ((to.x - from.x).signum(), (to.y - from.y).signum());
+    Some(match (dx, dy) {
+        (0, -1) => '↑',
+        (0, 1) => '↓',
+        (-1, 0) => '←',
+        (1, 0) => '→',
+        (-1, -1) => '↖',
+        (1, -1) => '↗',
+        (-1, 1) => '↙',
+        (1, 1) => '↘',
+        _ => return None,
+    })
+}
+
+/// HERE's card for a construct: its name and kind (and on the open Net, the way to its
+/// gate); its security and the ICE it keeps; on the open Net, its nodes and what
+/// stands out about it. `from` is your tile on the open Net, `None` inside.
+pub fn card_lines(
+    st: &AppState,
+    b: BuildingId,
+    from: Option<Pos>,
+) -> Vec<ratatui::text::Line<'static>> {
+    use crate::render::netlook::{AMBER, Tier, WHITE, gate_ice, security_of};
+    use crate::ui::chrome::{CYAN, DIM, MAGENTA, TEXT};
+    use ratatui::style::{Modifier, Style};
+    use ratatui::text::{Line, Span};
+    let Some(city) = st.city.as_ref() else {
+        return Vec::new();
+    };
+    let Some(building) = city.building_opt(b) else {
+        return Vec::new();
+    };
+    let security = security_of(city, b).unwrap_or(0);
+    let tier = Tier::of(security);
+    let tracked = from.is_some()
+        && matches!(crate::track::target_now(st), Some(crate::track::Target::Building(t)) if t == b);
+    let colour = if tracked { AMBER } else { tier.colour() };
+    let kind = citygen::kind_label(city, b);
+    let name = match building.name.as_deref() {
+        Some(n) if n != kind => n.to_uppercase(),
+        _ => kind.to_uppercase(),
+    };
+    let dim = |t: String| Span::styled(t, Style::default().fg(DIM));
+    let text = |t: String| Span::styled(t, Style::default().fg(TEXT));
+    let mut first = vec![
+        Span::raw(" "),
+        Span::styled(
+            name.clone(),
+            Style::default()
+                .fg(colour.to_color())
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
+    if name != kind.to_uppercase() {
+        first.push(dim(format!(" · {kind}")));
+    }
+    if let (Some(at), Some(gate)) = (from, crate::constructs::city_gate(city, b))
+        && let Some(a) = arrow(at, gate)
+    {
+        first.push(text(format!(" {a}")));
+    }
+    let has_vault = city
+        .net
+        .nodes
+        .iter()
+        .any(|n| n.building == Some(b) && n.kind == NodeKind::DataVault);
+    let vault = (has_vault && security >= citygen::construct::GREY_THRESHOLD).then_some(
+        if security >= citygen::construct::BLACK_THRESHOLD {
+            IceGrade::Black
+        } else {
+            IceGrade::Grey
+        },
+    );
+    let ice = match (gate_ice(security), vault) {
+        (None, _) => tier_word(tier).to_string(),
+        (Some(g), None) => format!("gate {}", g.label()),
+        (Some(g), Some(v)) => format!("gate {} · vault {}", g.label(), v.label()),
+    };
+    let second = vec![
+        dim(" SEC ".to_string()),
+        Span::styled(
+            security.to_string(),
+            Style::default()
+                .fg(WHITE.to_color())
+                .add_modifier(Modifier::BOLD),
+        ),
+        text(format!(" · {ice}")),
+    ];
+    let mut out = vec![Line::from(first), Line::from(second)];
+    if from.is_none() {
+        return out;
+    }
+    let mut counts: Vec<(char, usize)> = Vec::new();
+    for n in city
+        .net
+        .nodes
+        .iter()
+        .filter(|n| n.building == Some(b) && n.kind != NodeKind::Ice)
+    {
+        let g = crate::render::tileset::node_glyph(n.kind, &st.style);
+        match counts.iter_mut().find(|(c, _)| *c == g) {
+            Some(e) => e.1 += 1,
+            None => counts.push((g, 1)),
+        }
+    }
+    counts.sort_by_key(|(c, n)| (std::cmp::Reverse(*n), *c));
+    let mut third = vec![dim(" NODES".to_string())];
+    for (g, n) in counts {
+        third.push(text(format!("  {g} {n}")));
+    }
+    let now = st.net.now(st);
+    if st.net.alert(b, now) {
+        third.push(Span::styled(" · alarm", Style::default().fg(MAGENTA)));
+    }
+    if st.backdoors.held(b).is_some() {
+        third.push(Span::styled(" · backdoor", Style::default().fg(CYAN)));
+    }
+    let for_job = tracked
+        && matches!(
+            st.track.as_ref().map(|t| t.source),
+            Some(crate::track::Source::Job { .. })
+        );
+    if for_job {
+        third.push(Span::styled(
+            " · job",
+            Style::default().fg(AMBER.to_color()),
+        ));
+    }
+    out.push(Line::from(third));
+    out
+}
+
+/// A tier's word on the card, where no ICE stands.
+fn tier_word(t: crate::render::netlook::Tier) -> &'static str {
+    use crate::render::netlook::Tier;
+    match t {
+        Tier::Open => "open",
+        Tier::Guarded => "guarded",
+        Tier::Ice | Tier::Black => "ICE",
+    }
+}
+
 /// The HERE section's trace lines inside a construct.
 pub fn trace_lines(net: &NetState, b: BuildingId, now: u64) -> Vec<String> {
     let Some(t) = net.traces.get(&b) else {
@@ -2725,6 +2888,86 @@ mod tests {
 
     fn logged(st: &AppState, needle: &str) -> bool {
         st.log.iter().any(|e| e.text.contains(needle))
+    }
+
+    /// Seed 8 on the open Net, on the lane under Kiroflux Mart's gate.
+    fn under_kiroflux() -> (AppState, BuildingId) {
+        let mut st = AppState::new();
+        st.enter_city(
+            citygen::Generator::run(citygen::GenParams {
+                seed: 8,
+                size: citygen::SizePreset::Medium,
+                districts: 7,
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let b = st
+            .city
+            .as_ref()
+            .unwrap()
+            .buildings
+            .iter()
+            .find(|b| b.name.as_deref() == Some("Kiroflux Mart"))
+            .unwrap()
+            .id;
+        let mut p = crate::walker::Player::at(Place::Stratum(StratumKind::Net), Pos::new(201, 62));
+        p.body = Some((Place::Stratum(StratumKind::Street), Pos::new(201, 62)));
+        st.player = Some(p);
+        (st, b)
+    }
+
+    fn texts(lines: &[ratatui::text::Line<'static>]) -> Vec<String> {
+        lines.iter().map(|l| l.to_string()).collect()
+    }
+
+    #[test]
+    fn the_card_reads_a_construct() {
+        let (st, b) = under_kiroflux();
+        let here = Pos::new(201, 62);
+        assert_eq!(
+            st.net
+                .nearest_trace(st.city.as_ref().unwrap(), here)
+                .map(|t| t.0),
+            Some(b)
+        );
+        let card = texts(&card_lines(&st, b, Some(here)));
+        assert_eq!(card.len(), 3, "{card:?}");
+        assert!(card[0].starts_with(" KIROFLUX MART · shop"), "{card:?}");
+        assert!(card[0].ends_with('↑'), "the gate is right above: {card:?}");
+        assert_eq!(card[1], " SEC 114 · guarded");
+        assert!(card[2].starts_with(" NODES  ▪ "), "{card:?}");
+        // Inside, two lines and no arrow.
+        let inside = texts(&card_lines(&st, b, None));
+        assert_eq!(inside.len(), 2);
+        assert_eq!(inside[0], " KIROFLUX MART · shop");
+        // A black construct with a vault names both pieces.
+        let city = st.city.as_ref().unwrap();
+        let black = city
+            .buildings
+            .iter()
+            .find(|x| {
+                crate::render::netlook::security_of(city, x.id).is_some_and(|s| s >= 230)
+                    && city
+                        .net
+                        .nodes
+                        .iter()
+                        .any(|n| n.building == Some(x.id) && n.kind == NodeKind::DataVault)
+            })
+            .unwrap();
+        let card = texts(&card_lines(&st, black.id, None));
+        assert!(card[1].ends_with("· gate grey · vault black"), "{card:?}");
+    }
+
+    #[test]
+    fn the_card_adds_alarm_backdoor_and_job() {
+        let (mut st, b) = under_kiroflux();
+        let here = Pos::new(201, 62);
+        let now = st.net.now(&st);
+        st.net.trace(b).alert_until = Some(now + 30);
+        st.backdoors.plant_net(b, 50, 8, now);
+        let card = texts(&card_lines(&st, b, Some(here)));
+        assert!(card[2].ends_with(" · alarm · backdoor"), "{card:?}");
     }
 
     #[test]

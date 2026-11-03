@@ -6,6 +6,7 @@
 
 pub mod grid;
 pub mod inside;
+pub mod mini;
 pub mod packets;
 pub mod plate;
 

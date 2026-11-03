@@ -3484,6 +3484,22 @@ impl Screen for MapScreen {
             now: st.net.now(st),
             jobs: crate::missions::ui::jobs_pane(st),
             story_lines: crate::missions::ui::story_line_count(st),
+            card: match (self.place, st.player.as_ref()) {
+                (Place::Construct(b), Some(p)) if p.place == self.place => {
+                    crate::net::card_lines(st, b, None)
+                }
+                (Place::Stratum(StratumKind::Net), Some(p)) if p.place == self.place => st
+                    .net
+                    .nearest_trace(city, p.pos)
+                    .map(|(b, _)| crate::net::card_lines(st, b, Some(p.pos)))
+                    .unwrap_or_default(),
+                _ => Vec::new(),
+            },
+            tracked: match crate::track::target_now(st) {
+                Some(crate::track::Target::Building(b)) => Some(b),
+                _ => None,
+            },
+            port: crate::net::port_of(st),
             ice_lines: match (self.place, st.player.as_ref()) {
                 (Place::Construct(b), Some(p)) if p.place == self.place => {
                     let vis = p.vis();
