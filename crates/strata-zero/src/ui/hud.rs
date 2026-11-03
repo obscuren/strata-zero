@@ -145,9 +145,11 @@ pub struct Status<'a> {
     pub credits: u32,
     pub seed: u64,
     pub fps: Option<f32>,
+    /// Unread mails, marked after the credits; none marks nothing.
+    pub mail: usize,
 }
 
-/// ` DEV  VEX :: LVL 2 :: ¤ 320 [:: seed N :: F fps]`, cut to `width`.
+/// ` DEV  VEX :: LVL 2 :: ¤ 320 [:: ▣ N NEW MAIL] [:: F fps :: seed N]`, cut to `width`.
 pub fn status_line(s: &Status, width: u16) -> Line<'static> {
     let mut spans = vec![Span::raw(" ")];
     if s.dev {
@@ -165,6 +167,17 @@ pub fn status_line(s: &Status, width: u16) -> Line<'static> {
     spans.push(text(s.level.to_string()));
     spans.push(dim(" :: ¤ "));
     spans.push(text(s.credits.to_string()));
+    if s.mail > 0 {
+        let words = match s.mail {
+            1 => "▣ NEW MAIL".to_string(),
+            n => format!("▣ {n} NEW MAIL"),
+        };
+        spans.push(dim(" :: "));
+        spans.push(Span::styled(
+            words,
+            Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD),
+        ));
+    }
     if s.dev {
         if let Some(fps) = s.fps {
             spans.push(dim(format!(" :: {fps:.0} fps")));
@@ -761,6 +774,7 @@ mod tests {
             credits: 320,
             seed: 7,
             fps: Some(30.0),
+            mail: 0,
         }
     }
 
@@ -820,6 +834,59 @@ mod tests {
         )
         .to_string();
         assert!(s.chars().count() <= 59 && s.contains('…'), "{s:?}");
+    }
+
+    #[test]
+    fn status_line_marks_unread_mail() {
+        let mark = |mail: usize, dev: bool, width: u16| {
+            status_line(
+                &Status {
+                    dev,
+                    mail,
+                    seed: 7_167_344_703_327_711_647,
+                    ..status()
+                },
+                width,
+            )
+        };
+        let one = mark(1, false, 79);
+        assert_eq!(
+            one.to_string().trim_end(),
+            " VEX :: LVL 2 :: ¤ 320 :: ▣ NEW MAIL"
+        );
+        let lit = one.spans.iter().find(|s| s.content.contains('▣')).unwrap();
+        assert_eq!(lit.content, "▣ NEW MAIL");
+        assert_eq!(
+            lit.style,
+            Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD)
+        );
+        let sep = one
+            .spans
+            .iter()
+            .rev()
+            .find(|s| s.content == " :: ")
+            .unwrap();
+        assert_eq!(sep.style.fg, Some(DIM));
+        assert_eq!(
+            mark(2, false, 79).to_string().trim_end(),
+            " VEX :: LVL 2 :: ¤ 320 :: ▣ 2 NEW MAIL"
+        );
+        assert!(!mark(0, false, 79).to_string().contains("MAIL"));
+        // The left band at 100×30, dev readouts and a long seed after it: the mark stays
+        // whole, the line its width.
+        let lw = crate::screens::explore::layout(ratatui::layout::Rect::new(0, 0, 100, 30), false)
+            .band_l[0]
+            .width;
+        let dev = mark(2, true, lw).to_string();
+        assert_eq!(dev.chars().count(), lw as usize, "{dev:?}");
+        assert!(
+            dev.contains("¤ 320 :: ▣ 2 NEW MAIL :: 30 fps :: ") && dev.ends_with('…'),
+            "{dev:?}"
+        );
+        // Narrower than the mark: cut like the rest, never past the width.
+        let tight = mark(2, false, 30).to_string();
+        assert_eq!(tight.chars().count(), 30, "{tight:?}");
+        assert!(tight.ends_with('…'), "{tight:?}");
     }
 
     #[test]

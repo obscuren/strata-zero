@@ -160,6 +160,11 @@ pub struct AppState {
     pub home: Option<crate::home::HomeRig>,
     /// What the player knows: door codes, and the lost cards already laid out.
     pub journal: crate::credentials::Journal,
+    /// How many of the inbox's mails the map has noticed; the rest are new on its next
+    /// frame. Cleared with the city.
+    pub mail_seen: usize,
+    /// The pill over the map for the mail that landed last; cleared with the city.
+    pub mail_pill: Option<crate::mail_mark::MailPill>,
     pub helix: crate::helix::Helix,
     /// The fixers' jobs and what each fixer thinks of you.
     pub jobs: crate::jobs::Jobs,
@@ -324,6 +329,8 @@ impl AppState {
             sidebar: Sidebar::default(),
             home: None,
             journal: Default::default(),
+            mail_seen: 0,
+            mail_pill: None,
             helix: Default::default(),
             jobs: Default::default(),
             flavor: crate::jobs::Flavor::load().expect("the jobs pack is valid"),
@@ -444,6 +451,8 @@ impl AppState {
         self.net = Default::default();
         self.backdoors = Default::default();
         self.journal = Default::default();
+        self.mail_seen = 0;
+        self.mail_pill = None;
         self.helix = Default::default();
         self.jobs = Default::default();
         self.missions = Default::default();
