@@ -44,7 +44,7 @@ unchanged.
 
 | step | when | then |
 |---|---|---|
-| `whose` | `Holds(Carries("ledger_shard"))` | `ObjectiveFit` (§2.3): hacking "Find out whose shard this is · read it at your rig"; electronics "… · open the casing at your bench"; streetwise "… · look it over in your pack"; anyone else "… · ask the doctor at {odile.place}" |
+| `whose` | `Holds(Carries("ledger_shard"))` | `ObjectiveFit` (§2.3): already told (`Read("ledger_shard")`) "Find out whose shard this is", no hint (from the final review); hacking "Find out whose shard this is · read it at your rig"; electronics "… · open the casing at your bench"; streetwise "… · look it over in your pack"; anyone else "… · ask the doctor at {odile.place}" |
 | `know` | `Holds(Read("ledger_shard"))` | `Objective("Bring it to {coz} · {coz.place} · {coz.district}")` |
 | `sell` | `Talk("coz")` | the placeholder log, as today |
 
