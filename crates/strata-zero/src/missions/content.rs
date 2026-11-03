@@ -56,6 +56,8 @@ pub enum BookError {
     NotAVisitor { place: String, role: String },
     #[error("missions: {place}: {what}")]
     BadNumber { place: String, what: String },
+    #[error("missions: {place}: {why}")]
+    BadFits { place: String, why: String },
     #[error("missions: no role may be called `{0}`")]
     ReservedRole(String),
     #[error("missions: scene `{0}` has no beats")]
@@ -1183,6 +1185,11 @@ impl Book {
     #[cfg(test)]
     pub fn items(&self) -> Vec<&str> {
         let mut out = BTreeSet::new();
+        for step in self.missions.iter().flat_map(|m| &m.steps) {
+            if let Trigger::Holds(need) = &step.when {
+                items_in(need, &mut out);
+            }
+        }
         for e in self
             .missions
             .iter()
@@ -1190,6 +1197,9 @@ impl Book {
             .flat_map(|s| &s.then)
         {
             match e {
+                Effect::ObjectiveFit(fits) => {
+                    fits.iter().for_each(|f| items_in(&f.need, &mut out));
+                }
                 Effect::Give { item, .. }
                 | Effect::Take { item, .. }
                 | Effect::Unseal(item)
@@ -1213,6 +1223,19 @@ impl Book {
             .and_then(|r| r.face.as_deref())
             .and_then(|f| self.faces.get(f))
             .unwrap_or_else(|| &self.faces[SILHOUETTE])
+    }
+}
+
+/// The items a need names, inside `Not` and `All` too.
+#[cfg(test)]
+fn items_in<'a>(need: &'a Need, out: &mut BTreeSet<&'a str>) {
+    match need {
+        Need::Carries(i) | Need::Read(i) | Need::Unsealed(i) => {
+            out.insert(i);
+        }
+        Need::Not(inner) => items_in(inner, out),
+        Need::All(needs) => needs.iter().for_each(|n| items_in(n, out)),
+        _ => {}
     }
 }
 
@@ -1273,9 +1296,9 @@ fn check_fits(place: &str, fits: &[Fit]) -> Result<(), BookError> {
         check_need(place, &fit.need)?;
     }
     if last.need != Need::All(vec![]) {
-        return Err(BookError::BadNumber {
+        return Err(BookError::BadFits {
             place: place.into(),
-            what: "the last fit's need is not All([]), so a player could be left with no objective"
+            why: "the last fit's need is not All([]), so a player could be left with no objective"
                 .into(),
         });
     }
@@ -1432,6 +1455,16 @@ mod tests {
         }
         for r in b.readings.values().flatten() {
             skills_in(&r.need, &mut skills);
+        }
+        for step in b.missions.iter().flat_map(|m| &m.steps) {
+            if let Trigger::Holds(n) = &step.when {
+                skills_in(n, &mut skills);
+            }
+            for e in &step.then {
+                if let Effect::ObjectiveFit(fits) = e {
+                    fits.iter().for_each(|f| skills_in(&f.need, &mut skills));
+                }
+            }
         }
         for beat in b.scenes.values().flat_map(|s| &s.beats) {
             if let Beat::Say { need: Some(n), .. } = beat {
@@ -1994,16 +2027,28 @@ mod tests {
         ));
         let late = fit(r#"Fit(need: Late(2000), text: "a"), Fit(need: All([]), text: "b")"#);
         assert!(with_steps(&late).is_err());
-        // A step on `Holds` has its need checked too.
-        let holds = |need: &str| {
-            format!(r#"Step(id: "a", when: Holds({need}), then: [Told("ledger_shard")])"#)
-        };
+    }
+
+    #[test]
+    fn a_holds_step_has_its_need_checked() {
+        let holds = |need: &str| format!(r#"Step(id: "a", when: Holds({need}), then: [Log("x")])"#);
         assert!(with_steps(&holds(r#"Carries("x")"#)).is_ok());
         assert!(with_steps(&holds("Late(2000)")).is_err());
-        assert_eq!(
-            with_steps(&holds("Changed")).unwrap().items(),
-            ["ledger_shard"]
-        );
+    }
+
+    #[test]
+    fn the_book_names_the_items_its_needs_and_told_name() {
+        let b = with_steps(
+            r#"Step(id: "a", when: Holds(Not(Carries("c"))), then: [
+                Told("t"),
+                ObjectiveFit([
+                    Fit(need: All([Read("r"), Unsealed("u")]), text: "a"),
+                    Fit(need: All([]), text: "b"),
+                ]),
+            ])"#,
+        )
+        .unwrap();
+        assert_eq!(b.items(), ["c", "r", "t", "u"]);
     }
 
     #[test]

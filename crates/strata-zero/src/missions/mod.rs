@@ -1912,11 +1912,11 @@ pub(crate) mod tests {
     #[test]
     fn holds_late_uses_its_mission() {
         let mut st = state_home();
-        let ten_past = (st.minute_of_day() + 30) % sim::DAY;
+        let half_hour = (st.minute_of_day() + 30) % sim::DAY;
         st.book = book(&format!(
             r#"Mission(id: "m", title: "M", from: "mezz", steps: [
                 Step(id: "go", when: After(minutes: 0), then: [Log("go")]),
-                Step(id: "late", when: Holds(Late({ten_past})), then: [Log("late")]),
+                Step(id: "late", when: Holds(Late({half_hour})), then: [Log("late")]),
             ])"#
         ));
         begin(&mut st);
@@ -1932,6 +1932,38 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn objective_fit_fills_its_slots() {
+        let mut st = state_home();
+        st.book = book(
+            r#"Mission(id: "m", title: "M", from: "mezz", steps: [
+                Step(id: "a", when: NewGame, then: [ObjectiveFit([
+                    Fit(need: All([]), text: "see {marlo}"),
+                ])]),
+            ])"#,
+        );
+        begin(&mut st);
+        tick(&mut st);
+        assert_eq!(st.missions.runs[0].objectives, ["see Marlo"]);
+    }
+
+    #[test]
+    fn a_later_missions_holds_step_runs_in_the_same_call() {
+        let mut st = state_home();
+        st.book = book(
+            r#"Mission(id: "a", title: "A", from: "mezz", steps: [
+                Step(id: "s", when: NewGame, then: [Unseal("x")]),
+            ]),
+            Mission(id: "b", title: "B", from: "mezz", steps: [
+                Step(id: "w", when: Holds(Unsealed("x")), then: [Log("ok")]),
+            ])"#,
+        );
+        begin(&mut st);
+        tick(&mut st);
+        assert!(matches!(st.missions.runs[0].state, RunState::Done { .. }));
+        assert!(matches!(st.missions.runs[1].state, RunState::Done { .. }));
+    }
+
+    #[test]
     fn objective_fit_takes_the_first_that_holds() {
         let objective = |skills: &[&str]| {
             let mut st = state_home();
@@ -1941,7 +1973,7 @@ pub(crate) mod tests {
                         Fit(need: Skill("hacking"), text: "crack it"),
                         Fit(need: Skill("streetwise"), text: "look it over"),
                         Fit(need: All([]), text: "ask around"),
-                    ]), Mail(from: "mezz", subject: "s", body: ["b"])]),
+                    ])]),
                 ])"#,
             );
             st.character.skills = skills.iter().map(|s| game::SkillId::new(s)).collect();

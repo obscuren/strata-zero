@@ -1556,7 +1556,8 @@ impl Screen for Deck {
         let cmd = self.handle(st, keys);
         // The pack's card reads an item's Look: one that tells has been shown.
         if self.tab == Tab::Kit
-            && let Some(Detail::Item(id)) = self.kit.selected(st)
+            && let Some(detail) = self.kit.selected(st)
+            && let Some((id, ..)) = super::kit::shown_item(st, &detail)
         {
             crate::missions::reading::look_tells(st, &id);
         }
