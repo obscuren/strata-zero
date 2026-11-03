@@ -3128,8 +3128,7 @@ impl Screen for MapScreen {
         }
         let ghost = match self.place {
             Place::Construct(b) => Some(crate::render::ghost::GhostOverlay {
-                pieces: crate::net::ghost_pieces(st, b),
-                vis,
+                steps: crate::net::ghost_steps(st, b),
             }),
             _ => None,
         };
@@ -9376,7 +9375,7 @@ mod tests {
     }
 
     #[test]
-    fn signal_ghost_feels_awake_ice_through_walls() {
+    fn signal_ghost_marks_where_awake_ice_steps() {
         let mut st = state8();
         let mut s = MapScreen::explore(0);
         let b = in_construct(&mut st, &mut s);
@@ -9385,25 +9384,27 @@ mod tests {
         let hide = room_tile(&st, b);
         stand(&mut st, &mut s, Place::Construct(b), hide);
         assert!(
-            crate::net::ice_lines(&st, b, |_| false).is_empty(),
-            "asleep and unseen: nothing"
+            crate::net::ghost_steps(&st, b).is_empty(),
+            "asleep: nothing"
         );
-        assert!(crate::net::ghost_pieces(&st, b).is_empty());
         st.net.wake_all(b, hide);
-        let lines = crate::net::ice_lines(&st, b, |_| false);
+        let steps = crate::net::ghost_steps(&st, b);
+        assert!(!steps.is_empty(), "awake: a step each");
+        let now = st.constructs.get(b).unwrap();
+        for (p, _) in &steps {
+            assert!(
+                now.guards.iter().any(|g| g.pos.chebyshev(*p) == 1),
+                "a step beside its piece: {p:?}"
+            );
+        }
+        // Everything in view: the lines list both pieces however the walls lie.
+        let lines = crate::net::ice_lines(&st, b, |_| true);
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert!(lines.iter().all(|l| l.contains("hunting")));
-        let felt = crate::net::ghost_pieces(&st, b);
-        assert_eq!(felt.len(), 2);
-        // Without the ability, nothing through walls.
+        // Without the ability, no steps.
         st.character =
             game::Character::from_template(&st.content, &game::TemplateId::new("kessler")).unwrap();
-        assert!(
-            !st.character
-                .has_ability(&st.content, &game::AbilityId::new("signal_ghost"))
-        );
-        assert!(crate::net::ice_lines(&st, b, |_| false).is_empty());
-        assert!(crate::net::ghost_pieces(&st, b).is_empty());
+        assert!(crate::net::ghost_steps(&st, b).is_empty());
     }
 
     #[test]

@@ -2320,17 +2320,10 @@ pub fn ice_lines(st: &AppState, b: BuildingId, seen: impl Fn(Pos) -> bool) -> Ve
     let Some(states) = st.net.ice.get(&b) else {
         return Vec::new();
     };
-    // Signal ghost: an awake piece is felt through the walls.
-    let ghost = st
-        .character
-        .has_ability(&st.content, &game::AbilityId::new("signal_ghost"));
     k.guards
         .iter()
         .zip(states)
-        .filter(|(g, i)| {
-            k.guard_at(g.pos).is_some()
-                && (seen(g.pos) || (ghost && matches!(i.mode, IceMode::Awake { .. })))
-        })
+        .filter(|(g, _)| k.guard_at(g.pos).is_some() && seen(g.pos))
         .map(|(g, i)| {
             let mode = match i.mode {
                 IceMode::Asleep => "asleep",
@@ -2379,23 +2372,32 @@ pub fn stun_pieces(st: &mut AppState, b: BuildingId, origin: Pos, radius: i32) -
     hit
 }
 
-/// The awake standing pieces a signal ghost feels through the walls; none without
-/// the ability.
-pub fn ghost_pieces(st: &AppState, b: BuildingId) -> Vec<Pos> {
+/// Signal ghost: where each awake standing piece steps next, toward where it last saw
+/// you, with its grade; none without the ability, beside you, or with nowhere to go.
+pub fn ghost_steps(st: &AppState, b: BuildingId) -> Vec<(Pos, IceGrade)> {
     if !st
         .character
         .has_ability(&st.content, &game::AbilityId::new("signal_ghost"))
     {
         return Vec::new();
     }
-    let (Some(k), Some(states)) = (st.constructs.get(b), st.net.ice.get(&b)) else {
+    let (Some(k), Some(states), Some(you)) = (
+        st.constructs.get(b),
+        st.net.ice.get(&b),
+        st.player.as_ref().map(|p| p.pos),
+    ) else {
         return Vec::new();
     };
     k.guards
         .iter()
         .zip(states)
-        .filter(|(g, i)| k.guard_at(g.pos).is_some() && matches!(i.mode, IceMode::Awake { .. }))
-        .map(|(g, _)| g.pos)
+        .filter(|(g, _)| k.guard_at(g.pos).is_some() && g.pos.chebyshev(you) > 1)
+        .filter_map(|(g, i)| match i.mode {
+            IceMode::Awake { seen, .. } if g.pos != seen => {
+                step_toward(k, g.pos, seen, you).map(|p| (p, g.grade))
+            }
+            _ => None,
+        })
         .collect()
 }
 
