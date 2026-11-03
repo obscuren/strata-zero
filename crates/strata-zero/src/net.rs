@@ -2372,8 +2372,10 @@ pub fn stun_pieces(st: &mut AppState, b: BuildingId, origin: Pos, radius: i32) -
     hit
 }
 
-/// Signal ghost: where each awake standing piece steps next, toward where it last saw
-/// you, with its grade; none without the ability, beside you, or with nowhere to go.
+/// Signal ghost: where each awake standing piece steps next, with its grade: toward
+/// you when it sees you now, else toward where it last did, as its next turn goes.
+/// None without the ability, for a stunned or inert piece, beside you, or with nowhere
+/// to go.
 pub fn ghost_steps(st: &AppState, b: BuildingId) -> Vec<(Pos, IceGrade)> {
     if !st
         .character
@@ -2388,15 +2390,26 @@ pub fn ghost_steps(st: &AppState, b: BuildingId) -> Vec<(Pos, IceGrade)> {
     ) else {
         return Vec::new();
     };
+    let masked = st.net.mask > 0;
     k.guards
         .iter()
         .zip(states)
-        .filter(|(g, _)| k.guard_at(g.pos).is_some() && g.pos.chebyshev(you) > 1)
-        .filter_map(|(g, i)| match i.mode {
-            IceMode::Awake { seen, .. } if g.pos != seen => {
-                step_toward(k, g.pos, seen, you).map(|p| (p, g.grade))
-            }
-            _ => None,
+        .filter(|(g, i)| {
+            k.guard_at(g.pos).is_some() && !g.inert && i.stunned == 0 && g.pos.chebyshev(you) > 1
+        })
+        .filter_map(|(g, i)| {
+            let IceMode::Awake { seen, .. } = i.mode else {
+                return None;
+            };
+            let goal = if sees(k, g.pos, g.grade, you, masked) {
+                you
+            } else {
+                seen
+            };
+            (g.pos != goal)
+                .then(|| step_toward(k, g.pos, goal, you))
+                .flatten()
+                .map(|p| (p, g.grade))
         })
         .collect()
 }
@@ -2711,9 +2724,12 @@ pub fn port_of(st: &AppState) -> Option<Pos> {
 /// The cord on the open Net: the way back from you to where the run came onto the
 /// grid, the hops between its relays and home, and how far a trace walking home has
 /// come along it. Spec `2026-11-03-net-look-design.md`, "The cord".
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CordView {
-    /// From where you came onto the grid to the tile before you.
+    /// Where the run came onto the grid: the last relay's gate, or the port.
+    pub entry: Pos,
+    /// From `entry` to the tile before you; filled by `cord_walk`, which the caller
+    /// keeps while neither end moves.
     pub walk: Vec<Pos>,
     /// Straight links, nearest you first: relay to relay, then the first relay home.
     pub hops: Vec<(Pos, Pos)>,
@@ -2721,15 +2737,17 @@ pub struct CordView {
     pub relays: Vec<Pos>,
     /// Your rig's port, or the street port you jacked in at.
     pub port: Option<Pos>,
-    /// A trace has come along the walk.
+    /// A trace of this run has come along the walk.
     pub traced_walk: bool,
-    /// The hops it has come along, counted from you.
-    pub traced_hops: usize,
+    /// For each hop, whether the trace has come along it.
+    pub traced_hops: Vec<bool>,
     /// Where it sits.
     pub at: Option<Pos>,
 }
 
-/// The cord while you stand on the open Net, jacked in, with the cord on in Settings.
+/// The cord while you stand on the open Net, jacked in, with the cord on in Settings;
+/// its walk left empty for `cord_walk`. A trace shows on it only when it walks this
+/// run's route.
 pub fn cord_view(st: &AppState) -> Option<CordView> {
     if !st.cord {
         return None;
@@ -2752,37 +2770,57 @@ pub fn cord_view(st: &AppState) -> Option<CordView> {
         })
         .unwrap_or_default();
     let entry = relays.last().map(|(_, g)| *g).or(port)?;
-    let size = city.size;
-    let cost = |_: Pos, to: Pos| {
-        let t = city.tile(StratumKind::Net, to)?;
-        match t.terrain {
-            Terrain::NetLane | Terrain::NetGate => Some(1),
-            Terrain::NetGrid => Some(3),
-            _ => None,
-        }
-    };
-    let mut walk = citygen::pathing::astar(size, entry, p.pos, cost).unwrap_or_default();
-    walk.pop();
-    let mut hops: Vec<(Pos, Pos)> = relays.windows(2).rev().map(|w| (w[1].1, w[0].1)).collect();
-    if let (Some((_, first)), Some(port)) = (relays.first(), port) {
-        hops.push((*first, port));
+    // Each hop with the relay at its end nearest you.
+    let mut hops: Vec<(BuildingId, (Pos, Pos))> = relays
+        .windows(2)
+        .rev()
+        .map(|w| (w[1].0, (w[1].1, w[0].1)))
+        .collect();
+    if let (Some((first, gate)), Some(port)) = (relays.first(), port) {
+        hops.push((*first, (*gate, port)));
     }
     let mut view = CordView {
-        walk,
-        hops,
+        entry,
+        walk: Vec::new(),
+        hops: hops.iter().map(|(_, h)| *h).collect(),
         relays: relays.iter().map(|(_, g)| *g).collect(),
         port,
-        ..CordView::default()
+        traced_walk: false,
+        traced_hops: vec![false; hops.len()],
+        at: None,
     };
-    if let Some(t) = st.backdoors.trace.as_ref() {
+    let this_run = |t: &crate::backdoors::HomeTrace| {
+        st.backdoors
+            .route
+            .as_ref()
+            .is_some_and(|r| t.relays.iter().all(|b| r.relays.contains(b)))
+    };
+    if let Some(t) = st.backdoors.trace.as_ref().filter(|t| this_run(t)) {
+        let passed = &t.relays[..t.at.min(t.relays.len())];
         view.traced_walk = true;
-        view.traced_hops = t.at.min(view.hops.len());
+        view.traced_hops = hops.iter().map(|(near, _)| passed.contains(near)).collect();
         view.at = match t.relays.get(t.at) {
-            Some(b) => crate::constructs::city_gate(city, *b),
+            Some(b) => relays.iter().find(|(r, _)| r == b).map(|(_, g)| *g),
             None => port,
         };
     }
     Some(view)
+}
+
+/// The way from `entry` to `you` over the open Net, lanes cheap and the open grid
+/// dear, `you` left off.
+pub fn cord_walk(city: &City, entry: Pos, you: Pos) -> Vec<Pos> {
+    let Some(net) = city.stratum(StratumKind::Net) else {
+        return Vec::new();
+    };
+    let cost = |_: Pos, to: Pos| match net.tiles.get(to)?.terrain {
+        Terrain::NetLane | Terrain::NetGate => Some(1),
+        Terrain::NetGrid => Some(3),
+        _ => None,
+    };
+    let mut walk = citygen::pathing::astar(city.size, entry, you, cost).unwrap_or_default();
+    walk.pop();
+    walk
 }
 
 /// The arrow from `from` toward `to`, eight ways; none on the tile itself.
@@ -3049,6 +3087,43 @@ mod tests {
         assert!(card[2].ends_with(" · alarm · backdoor"), "{card:?}");
     }
 
+    #[test]
+    fn the_card_says_job_for_the_tracked_job() {
+        let mut st = crate::jobs::testutil::state_home();
+        let _ = crate::screens::explore::MapScreen::walking(&mut st);
+        let fixer = crate::jobs::testutil::a_fixer(&st);
+        st.jobs.fixer_mut(fixer).standing = 10;
+        let job = (0..40)
+            .find_map(|n| {
+                crate::jobs::generate::generate(&mut st, fixer, crate::jobs::KindTag::Copy, n)
+            })
+            .expect("a copy job");
+        let id = st.jobs.push(job);
+        assert!(st.jobs.take(id, 0));
+        let crate::jobs::Kind::Copy { building: b, .. } = st.jobs.get(id).unwrap().kind.clone()
+        else {
+            panic!("a copy job copies a building")
+        };
+        crate::track::set(
+            &mut st,
+            crate::track::Source::Job {
+                job: id,
+                objective: 0,
+            },
+        )
+        .unwrap();
+        let card = texts(&card_lines(&st, b, Some(Pos::new(0, 0))));
+        assert!(card[2].ends_with(" · job"), "{card:?}");
+        // Tracked as a listing, it is amber but not a job.
+        crate::track::set(
+            &mut st,
+            crate::track::Source::Listing(crate::track::ListingId::Building(b)),
+        )
+        .unwrap();
+        let card = texts(&card_lines(&st, b, Some(Pos::new(0, 0))));
+        assert!(!card[2].ends_with(" · job"), "{card:?}");
+    }
+
     /// `under_kiroflux`, but jacked in from your rig: the body at home, a route.
     fn rig_run() -> (AppState, BuildingId) {
         let (mut st, b) = under_kiroflux();
@@ -3064,10 +3139,12 @@ mod tests {
         let landing = st.home.unwrap().landing;
         let v = cord_view(&st).expect("a cord");
         assert_eq!(v.port, Some(landing));
-        assert_eq!(v.walk.first(), Some(&landing));
+        assert_eq!(v.entry, landing);
         let you = st.player.as_ref().unwrap().pos;
+        let walk = cord_walk(st.city.as_ref().unwrap(), v.entry, you);
+        assert_eq!(walk.first(), Some(&landing));
         assert_eq!(
-            v.walk.last().map(|p| p.manhattan(you)),
+            walk.last().map(|p| p.manhattan(you)),
             Some(1),
             "it reaches you"
         );
@@ -3088,7 +3165,7 @@ mod tests {
         st.backdoors.start_route(Some(relay));
         let gate = crate::constructs::city_gate(&city, relay).unwrap();
         let v = cord_view(&st).unwrap();
-        assert_eq!(v.walk.first(), Some(&gate));
+        assert_eq!(v.entry, gate);
         assert_eq!(v.relays, vec![gate]);
         assert_eq!(v.hops, vec![(gate, st.home.unwrap().landing)]);
     }
@@ -3110,10 +3187,45 @@ mod tests {
         let v = cord_view(&st).unwrap();
         assert!(v.traced_walk);
         assert_eq!(
-            v.traced_hops, 0,
+            v.traced_hops,
+            vec![false],
             "it sits on the relay, the hop home still clean"
         );
         assert_eq!(v.at, crate::constructs::city_gate(&city, relay));
+        // The relay burns: the hop home is the trace's now, and it sits on your door.
+        st.backdoors.trace.as_mut().unwrap().at = 1;
+        let v = cord_view(&st).unwrap();
+        assert_eq!(v.traced_hops, vec![true]);
+        assert_eq!(v.at, st.home.map(|h| h.landing));
+    }
+
+    #[test]
+    fn an_old_trace_stays_off_a_new_cord() {
+        let (mut st, kiroflux) = rig_run();
+        let city = st.city.clone().unwrap();
+        let relay = city
+            .buildings
+            .iter()
+            .find(|x| x.id != kiroflux && x.name.as_deref() == Some("Stack 101 Terminal"))
+            .unwrap()
+            .id;
+        let now = st.net.now(&st);
+        st.backdoors.plant_net(relay, 50, city.seed, now);
+        st.backdoors.start_route(Some(relay));
+        st.backdoors.start_trace(now);
+        // Out, and back in at a street port: no route, so no trace on the cord.
+        st.backdoors.route = None;
+        st.player.as_mut().unwrap().body =
+            Some((Place::Stratum(StratumKind::Street), Pos::new(201, 62)));
+        if let Some(v) = cord_view(&st) {
+            assert!(!v.traced_walk && v.at.is_none(), "{v:?}");
+        }
+        // Back in from the rig on a new route without that relay: still none.
+        let home = st.home.unwrap();
+        st.player.as_mut().unwrap().body = Some((home.place(), home.home.rig));
+        st.backdoors.start_route(None);
+        let v = cord_view(&st).unwrap();
+        assert!(!v.traced_walk && v.at.is_none());
     }
 
     #[test]
@@ -3132,7 +3244,7 @@ mod tests {
         st.backdoors.start_route(Some(BuildingId(60_000)));
         let v = cord_view(&st).expect("the cord falls back to the port");
         assert!(v.relays.is_empty());
-        assert_eq!(v.walk.first(), st.home.map(|h| h.landing).as_ref());
+        assert_eq!(Some(v.entry), st.home.map(|h| h.landing));
     }
 
     #[test]

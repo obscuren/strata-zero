@@ -80,7 +80,11 @@ impl Overlay for CordOverlay<'_> {
             set(buf, at, ch, colour, Some((colour, glow)));
         }
         for (i, (a, b)) in v.hops.iter().enumerate() {
-            let fg = if i < v.traced_hops { TRACED } else { HOP };
+            let fg = if v.traced_hops.get(i).copied().unwrap_or(false) {
+                TRACED
+            } else {
+                HOP
+            };
             for p in bresenham(*a, *b).into_iter().filter(|p| p != a && p != b) {
                 if let Some(at) = tile_to_screen(area, origin, p) {
                     set(buf, at, Some('·'), fg, None);

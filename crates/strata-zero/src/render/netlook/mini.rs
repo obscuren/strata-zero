@@ -64,29 +64,47 @@ pub fn net_px(
     })
 }
 
-/// A tile of a construct's plan: ICE in its colour, the watched spine tinted, the
-/// spine, walls facing rooms brighter than the body, nodes white (the vault amber),
-/// the vault room amber, the other rooms cyan; none off the construct.
-pub fn plan_px(k: &Construct, watch: &HashMap<Pos, IceGrade>, p: Pos) -> Option<Rgb> {
+/// A tile of a construct's plan, with how much it matters when several share a pixel:
+/// ICE in its colour, the watched spine tinted, the spine, nodes white (the vault
+/// amber), the vault room amber, the other rooms cyan, walls facing rooms brighter
+/// than the body; none off the construct.
+fn plan_tile(k: &Construct, watch: &HashMap<Pos, IceGrade>, p: Pos) -> Option<(u8, Rgb)> {
     let t = k.tiles.get(p)?;
     let body = Tier::of(k.security).colour();
     if let Some(Feature::Ice(g)) = t.feature {
-        return Some(inside::watch_tint(g).0);
+        return Some((9, inside::watch_tint(g).0));
     }
     if let Some(g) = watch.get(&p) {
         let (tint, _) = inside::watch_tint(*g);
-        return Some(SIGNAL.scale(0.5).mix(tint, 0.6));
+        return Some((8, SIGNAL.scale(0.5).mix(tint, 0.6)));
     }
     let in_vault = k.vault_room().is_some_and(|r| r.contains(p));
     Some(match (t.terrain, t.feature) {
-        (Terrain::NetLane | Terrain::NetGate, _) => SIGNAL.scale(0.8),
-        (Terrain::NetWall, _) if inside::edge(k, p) => body.scale(0.5),
-        (Terrain::NetWall, _) => body.scale(0.25),
-        (_, Some(Feature::Node(NodeKind::DataVault))) => AMBER,
-        (_, Some(Feature::Node(_))) => WHITE,
-        _ if in_vault => AMBER.scale(0.45),
-        _ => ROOM.scale(0.3),
+        (Terrain::NetLane | Terrain::NetGate, _) => (7, SIGNAL.scale(0.8)),
+        (_, Some(Feature::Node(NodeKind::DataVault))) => (6, AMBER),
+        (_, Some(Feature::Node(_))) => (5, WHITE),
+        (Terrain::NetWall, _) if inside::edge(k, p) => (2, body.scale(0.5)),
+        (Terrain::NetWall, _) => (1, body.scale(0.25)),
+        _ if in_vault => (4, AMBER.scale(0.45)),
+        _ => (3, ROOM.scale(0.3)),
     })
+}
+
+/// The `s` × `s` pixel of a construct's plan at tile (`x0`, `y0`): the tile that
+/// matters most in it, so a piece, a node or the spine never drops out when the plan
+/// is drawn small; none where the block is off the construct.
+pub fn plan_px(
+    k: &Construct,
+    watch: &HashMap<Pos, IceGrade>,
+    x0: i32,
+    y0: i32,
+    s: i32,
+) -> Option<Rgb> {
+    (y0..y0 + s)
+        .flat_map(|y| (x0..x0 + s).map(move |x| Pos::new(x, y)))
+        .filter_map(|p| plan_tile(k, watch, p))
+        .max_by_key(|(rank, _)| *rank)
+        .map(|(_, c)| c)
 }
 
 #[cfg(test)]
@@ -158,7 +176,12 @@ mod tests {
         let watch = crate::net::watched(&k);
         let g = &k.guards[1];
         assert_eq!(
-            plan_px(&k, &watch, g.pos),
+            plan_px(&k, &watch, g.pos.x, g.pos.y, 1),
+            Some(inside::watch_tint(g.grade).0)
+        );
+        // Drawn small, the piece still shows in its block.
+        assert_eq!(
+            plan_px(&k, &watch, g.pos.x - 1, g.pos.y - 1, 3),
             Some(inside::watch_tint(g.grade).0)
         );
         let vault = k
@@ -167,7 +190,7 @@ mod tests {
             .find(|(_, p)| k.tiles[*p].feature == Some(Feature::Node(NodeKind::DataVault)))
             .map(|(_, p)| *p)
             .unwrap();
-        assert_eq!(plan_px(&k, &watch, vault), Some(AMBER));
-        assert_eq!(plan_px(&k, &watch, Pos::new(-1, 0)), None);
+        assert_eq!(plan_px(&k, &watch, vault.x, vault.y, 1), Some(AMBER));
+        assert_eq!(plan_px(&k, &watch, -3, 0, 2), None);
     }
 }

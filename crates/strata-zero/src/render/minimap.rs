@@ -466,8 +466,8 @@ impl Minimap<'_> {
         let watch = crate::net::watched(k);
         let ground = self.ground();
         let px = Pixels::new(area.width as i32, 2 * area.height as i32, |x, y| {
-            let t = Pos::new(v.origin.x + x * s, v.origin.y + y * s);
-            crate::render::netlook::mini::plan_px(k, &watch, t).unwrap_or(ground)
+            let (x0, y0) = (v.origin.x + x * s, v.origin.y + y * s);
+            crate::render::netlook::mini::plan_px(k, &watch, x0, y0, s).unwrap_or(ground)
         });
         paint(buf, area, &px);
         self.marks(buf, &px, &v);

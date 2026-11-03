@@ -33,7 +33,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Paragraph, Widget};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -190,6 +190,8 @@ pub struct MapScreen {
     cam_ready: bool,
     /// The map area of the last frame, so `update` knows the view size.
     last_map: Cell<Rect>,
+    /// The cord's walk, kept while neither end moves: (from, to, walk).
+    cord_walk: RefCell<Option<(Pos, Pos, Vec<Pos>)>>,
     /// Where the occupants of the floor the player walks stand, keyed by the place
     /// and the world's minute it was worked out for.
     placement: Option<(Place, u64, crate::interiors::Placement)>,
@@ -372,6 +374,7 @@ impl MapScreen {
             program_flash: None,
             cam_ready: false,
             last_map: Cell::new(Rect::new(0, 0, 100, 28)),
+            cord_walk: RefCell::new(None),
             placement: None,
         }
     }
@@ -2674,6 +2677,11 @@ impl Screen for MapScreen {
         // A scene took a key this frame.
         let mut scened = false;
         for (i, k) in keys.iter().enumerate() {
+            // A ride in flight: any key stops it where it is, and does nothing else,
+            // before a scene, a rest or a call could take it.
+            if self.riding.take().is_some() {
+                continue;
+            }
             // Once a scene has had a key, the rest of the frame's are its too, or
             // nobody's: a second `esc` as one scene ends and the next waits its tick
             // never reaches the map.
@@ -2703,10 +2711,6 @@ impl Screen for MapScreen {
             if self.mode == Mode::Walk && self.console.is_none() {
                 if k.code == KeyCode::Esc && self.aim.is_some() {
                     self.aim = None;
-                    continue;
-                }
-                // A ride in flight: any key stops it where it is, and does nothing else.
-                if self.riding.take().is_some() {
                     continue;
                 }
                 if self.walking.is_some() && k.code != KeyCode::Esc {
@@ -2834,6 +2838,7 @@ impl Screen for MapScreen {
         // nothing of the map's stays open to keep its keys after.
         if crate::missions::scene::running(st).is_some() || st.rest.is_some() {
             self.walking = None;
+            self.riding = None;
             self.aim = None;
             self.help = false;
             self.looking = None;
@@ -3047,8 +3052,22 @@ impl Screen for MapScreen {
             overlays.push(&net_look);
         }
         // The cord: the way back to where you jacked in (Settings can hide it).
-        let cord =
-            crate::net::cord_view(st).filter(|_| self.place == Place::Stratum(StratumKind::Net));
+        let cord = crate::net::cord_view(st)
+            .filter(|_| self.place == Place::Stratum(StratumKind::Net))
+            .zip(st.player.as_ref().map(|p| p.pos))
+            .map(|(mut view, you)| {
+                let mut kept = self.cord_walk.borrow_mut();
+                match kept.as_ref() {
+                    Some((from, to, walk)) if *from == view.entry && *to == you => {
+                        view.walk = walk.clone();
+                    }
+                    _ => {
+                        view.walk = crate::net::cord_walk(city, view.entry, you);
+                        *kept = Some((view.entry, you, view.walk.clone()));
+                    }
+                }
+                view
+            });
         let cord_overlay = cord
             .as_ref()
             .map(|view| crate::render::cord::CordOverlay { view });
@@ -9377,27 +9396,41 @@ mod tests {
         let mut st = state8();
         let mut s = MapScreen::explore(0);
         let b = in_construct(&mut st, &mut s);
-        let hide = room_tile(&st, b);
+        // A room tile some standing piece has no clear line to.
+        let hide = {
+            let k = st.constructs.get(b).unwrap();
+            k.rooms
+                .iter()
+                .flat_map(|r| r.iter())
+                .find(|p| {
+                    k.tiles[*p].is_walkable()
+                        && k.guards.iter().any(|g| {
+                            k.guard_at(g.pos).is_some() && !crate::net::line_clear_in(k, *p, g.pos)
+                        })
+                })
+                .expect("a room tile a wall hides from a piece")
+        };
         stand(&mut st, &mut s, Place::Construct(b), hide);
         let k = st.constructs.get(b).unwrap();
-        for (_, at) in MapScreen::enemies_in_sight(&st) {
+        let standing: Vec<Pos> = k
+            .guards
+            .iter()
+            .filter(|g| k.guard_at(g.pos).is_some())
+            .map(|g| g.pos)
+            .collect();
+        let walled = standing
+            .iter()
+            .filter(|g| !crate::net::line_clear_in(k, hide, **g))
+            .count();
+        assert!(walled > 0, "a piece behind a wall from {hide:?}");
+        let picks = MapScreen::enemies_in_sight(&st);
+        for (_, at) in &picks {
             assert!(
-                crate::net::line_clear_in(k, hide, at),
+                crate::net::line_clear_in(k, hide, *at),
                 "{at:?} is behind a wall"
             );
         }
-        let walled = k
-            .guards
-            .iter()
-            .filter(|g| k.guard_at(g.pos).is_some() && !crate::net::line_clear_in(k, hide, g.pos))
-            .count();
-        assert_eq!(
-            MapScreen::enemies_in_sight(&st).len() + walled,
-            k.guards
-                .iter()
-                .filter(|g| k.guard_at(g.pos).is_some())
-                .count()
-        );
+        assert_eq!(picks.len() + walled, standing.len());
     }
 
     #[test]
@@ -9422,6 +9455,17 @@ mod tests {
                 now.guards.iter().any(|g| g.pos.chebyshev(*p) == 1),
                 "a step beside its piece: {p:?}"
             );
+        }
+        // A stunned piece loses its turn: no mark.
+        for ice in st.net.ice.get_mut(&b).unwrap().iter_mut() {
+            ice.stunned = 1;
+        }
+        assert!(
+            crate::net::ghost_steps(&st, b).is_empty(),
+            "stunned: nothing"
+        );
+        for ice in st.net.ice.get_mut(&b).unwrap().iter_mut() {
+            ice.stunned = 0;
         }
         // Everything in view: the lines list both pieces however the walls lie.
         let lines = crate::net::ice_lines(&st, b, |_| true);
