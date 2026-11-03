@@ -43,8 +43,6 @@ pub enum Entry {
     Mission(usize),
     Fixer(PersonId),
     Job(JobId),
-    /// The next step under a live job or an open mission, and whether it is the track.
-    Next(String, bool),
     /// A fixer's closed jobs, folded into one row.
     Folded {
         fixer: PersonId,
@@ -191,28 +189,8 @@ impl JobsTab {
         let story = story_missions(st);
         if !story.is_empty() {
             out.push(Entry::Header("STORY".to_string()));
-            for (m, done) in story {
+            for (m, _) in story {
                 out.push(Entry::Mission(m));
-                if done {
-                    continue;
-                }
-                if let Some(src) = story_source(st, m) {
-                    // The walk, and who or what is at its end.
-                    let way = self.way(st, &src);
-                    let t = match way {
-                        Way::Walk { .. } => {
-                            format!(
-                                "{} · {}",
-                                card::way_text(&way),
-                                card::target_place(st, &src)
-                            )
-                        }
-                        _ => card::way_text(&way),
-                    };
-                    if !t.is_empty() {
-                        out.push(Entry::Next(t, track::is_tracked(st, &src)));
-                    }
-                }
             }
         }
         let fixers = fixers_in_order(st);
@@ -228,10 +206,6 @@ impl JobsTab {
                 out.push(Entry::Fixer(*f));
                 for j in live_jobs(st, *f) {
                     out.push(Entry::Job(j.id));
-                    let (t, tracked) = self.next_of(st, j);
-                    if !t.is_empty() {
-                        out.push(Entry::Next(t, tracked));
-                    }
                 }
                 let shut = closed_jobs(st, *f);
                 if shut.is_empty() {
@@ -251,31 +225,6 @@ impl JobsTab {
             out.push(Entry::Empty);
         }
         out
-    }
-
-    /// The line under a live job: the walk to its stop, or to its fixer for the
-    /// hand-in or an offer; and whether the job is the track.
-    fn next_of(&self, st: &AppState, j: &Job) -> (String, bool) {
-        let fixer = fixer_name(st, j.fixer);
-        match j.state {
-            State::Taken => {
-                let Some(src) = job_source(st, j.id) else {
-                    return (String::new(), false);
-                };
-                let way = self.way(st, &src);
-                let at_corner = j.objectives.first().is_some_and(|o| o.done);
-                let text = match (&way, at_corner) {
-                    (Way::Walk { m, .. }, true) => format!("{m} m · hand in to {fixer}"),
-                    _ => card::way_text(&way),
-                };
-                (text, track::is_tracked(st, &src))
-            }
-            State::Offered => match self.way(st, &fixer_source(j.fixer)) {
-                Way::Walk { m, .. } => (format!("take it from {fixer} · {m} m"), false),
-                _ => (format!("take it from {fixer}"), false),
-            },
-            _ => (String::new(), false),
-        }
     }
 
     /// Puts the cursor back on the entry it was on; one gone from the list (a job folded
@@ -843,9 +792,12 @@ impl JobsTab {
                     .get(*m)
                     .map(|x| x.title.clone())
                     .unwrap_or_default();
-                // The walk is on the next line, under it.
-                let right = Vec::new();
-                let mark = done.then_some(("✓", card::DONE));
+                let tracked = story_source(st, *m).is_some_and(|s| track::is_tracked(st, &s));
+                let mark = if done {
+                    Some(("✓", card::DONE))
+                } else {
+                    tracked.then_some(("⌖", CYAN))
+                };
                 let tone = if done { card::DONE } else { TEXT };
                 row_at(
                     buf,
@@ -856,7 +808,7 @@ impl JobsTab {
                     5,
                     mark,
                     (&title, tone, false),
-                    right,
+                    Vec::new(),
                 );
             }
             Entry::Fixer(f) => {
@@ -961,18 +913,6 @@ impl JobsTab {
                     right,
                 );
             }
-            Entry::Next(text, tracked) => {
-                for x in x0..edge {
-                    buf[(x, y)].set_char(' ').set_bg(PANEL_BG);
-                }
-                let mut x = x0 + 9;
-                if *tracked {
-                    put(buf, x, y, "⌖ ", Style::default().fg(CYAN), edge);
-                    x += 2;
-                }
-                let room = edge.saturating_sub(1).saturating_sub(x) as usize;
-                put(buf, x, y, &cut(text, room), Style::default().fg(DIM), edge);
-            }
             Entry::Folded { n, .. } => row_at(
                 buf,
                 list,
@@ -1031,7 +971,11 @@ mod tests {
         let e = d.jobs.entries(&st);
         assert_eq!(e[0], Entry::Header("STORY".into()));
         assert_eq!(e[1], Entry::Mission(0));
-        assert!(matches!(e[2], Entry::Next(..)), "{e:?}");
+        // The walk is the card's: no line under the mission.
+        assert!(
+            e[2] == Entry::Gap || matches!(&e[2], Entry::Header(h) if h.starts_with("FIXERS")),
+            "{e:?}"
+        );
         assert!(
             e.iter()
                 .any(|x| matches!(x, Entry::Header(h) if h.starts_with("FIXERS · "))),
@@ -1045,7 +989,14 @@ mod tests {
             at(&Entry::Job(ids[0])),
             at(&Entry::Fixer(fixer(ids[0]))) + 1
         );
-        assert!(matches!(e[at(&Entry::Job(ids[0])) + 1], Entry::Next(..)));
+        // Nor under a job: the next row is a fixer's next job, a fold, a gap or the end.
+        assert!(
+            !matches!(
+                e.get(at(&Entry::Job(ids[0])) + 1),
+                Some(Entry::Header(_) | Entry::Mission(_))
+            ),
+            "{e:?}"
+        );
         // Closed jobs fold, one row a fixer.
         for id in &ids[3..] {
             assert!(!e.contains(&Entry::Job(*id)), "{id:?} folded");
@@ -1078,7 +1029,25 @@ mod tests {
     }
 
     #[test]
-    fn the_cursor_skips_headers_gaps_and_next_lines() {
+    fn a_tracked_story_marks_its_row() {
+        let (mut st, _, mut d) = jobs_deck();
+        select(&mut d, &st, &Entry::Mission(0));
+        d.update(&mut st, &[key(KeyCode::Char('t'))]);
+        assert!(story_source(&st, 0).is_some_and(|s| track::is_tracked(&st, &s)));
+        let title = st.book.missions[0].title.clone();
+        let buf = frame(&d, &st, 120, 40);
+        let (x, y) = (0..buf.area.height)
+            .find_map(|y| {
+                let row: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+                row.find(&title)
+                    .map(|b| (row[..b].chars().count() as u16, y))
+            })
+            .expect("the mission's row is drawn");
+        assert_eq!(buf[(x - 2, y)].symbol(), "⌖");
+    }
+
+    #[test]
+    fn the_cursor_skips_headers_and_gaps() {
         let (mut st, _, mut d) = jobs_deck();
         for _ in 0..30 {
             d.update(&mut st, &[key(KeyCode::Down)]);
