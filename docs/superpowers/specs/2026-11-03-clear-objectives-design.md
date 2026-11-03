@@ -44,14 +44,21 @@ unchanged.
 
 | step | when | then |
 |---|---|---|
-| `whose` | `Holds(Carries("ledger_shard"))` | `ObjectiveFit` (§2.3): hacking "Find out whose shard this is · read it at your rig"; electronics "… · open the casing at your bench"; streetwise "… · inspect it in your pack"; anyone else "… · ask the doctor" |
+| `whose` | `Holds(Carries("ledger_shard"))` | `ObjectiveFit` (§2.3): hacking "Find out whose shard this is · read it at your rig"; electronics "… · open the casing at your bench"; streetwise "… · look it over in your pack"; anyone else "… · ask the doctor at {odile.place}" |
 | `know` | `Holds(Read("ledger_shard"))` | `Objective("Bring it to {coz} · {coz.place} · {coz.district}")` |
 | `sell` | `Talk("coz")` | the placeholder log, as today |
 
 The ledger opens the moment the package does, beside the doctor's mission; it no longer
-waits for the chair. A city with one fixer still leaves it Uncast, as today.
+waits for the chair. A city with one fixer still leaves it Uncast, as today; so does a
+city with no ripperdoc, since its last fit places `{odile}`.
 
 The streetwise `Look` reading of `ledger_shard` gains `tells: true` (§2.5).
+
+Odile's scene gains a third naming line, for whoever has read nothing and carries
+neither the package nor the shard (`All([Not(Read("ledger_shard")),
+Not(Carries("taped_package")), Not(Carries("ledger_shard"))])`): "He told me what
+you're carrying. Black tape, three turns? That's {coz}'s." So she names Coz to every
+non-reader, and `Told` (§2.4) only ever follows her saying it.
 
 ## 2 · Engine
 
@@ -86,8 +93,10 @@ read it already.
 
 ### 2.5 A Look reading that tells
 
-A `Look` reading with `tells: true` records `Need::Read` of the item when you inspect the
-item in your pack (the pack's Inspect). Other Look readings stay as they are.
+A `Look` reading with `tells: true` records `Need::Read` of the item when the pack shows
+it: the item's row selected in GEAR & INVENTORY, its card on the right reading the Look
+text. (The pack's Inspect opens the blueprint window, which for the shard has no
+drawing.) Other Look readings stay as they are.
 
 ## 3 · Tracking a story step
 
@@ -149,8 +158,7 @@ The header comment of `flavor/missions.ron` says what `Holds`, a mail's `Ended`,
 
 ## Calls I made
 
-- Hints by build in the ledger's first objective; the streetwise hint says "inspect it in
-  your pack" (the pack's own verb) where the mock said "look it over".
+- Hints by build in the ledger's first objective, in the mock's words.
 - "Read Mezz's mail · on your rig": the rig is where story mail is read until the mail
   session; "on your rig" is the fixers' own phrase ("Mail's on your rig.").
 - Seren's holo line and the unseal belong to the morning after (she breaks in when Mezz's
@@ -162,3 +170,16 @@ The header comment of `flavor/missions.ron` says what `Holds`, a mail's `Ended`,
 - The pill counts map frames, so a mail landing behind the deck or the terminal shows
   when you are back on the map.
 - Story objectives that have not arrived stay hidden in the card.
+
+## Builder rulings
+
+From the builder check, settled without changing what was approved:
+
+- The streetwise read happens when the pack's card shows the shard's Look text, not on
+  Inspect (whose window shows the shard as a missing blueprint); the hint keeps the
+  mock's "look it over in your pack".
+- With no ripperdoc in the city a non-reader would be told to ask a doctor who isn't
+  there: the last fit places `{odile}` ("ask the doctor at {odile.place}"), so the ledger
+  stays Uncast there, as it was before.
+- A player who reaches Odile's chair with neither the package nor the shard is still told
+  whose it is, by her third line; so `Told` never fires on a name nobody said.

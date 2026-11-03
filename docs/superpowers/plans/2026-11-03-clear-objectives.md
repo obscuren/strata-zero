@@ -144,9 +144,15 @@ RON content in `flavor/*.ron` compiled into the binary.
   `holds(st, Some(m), need)`)
 - Modify: `crates/strata-zero/src/missions/effects.rs` (`ObjectiveFit` pushes the first
   fit's filled text; `Told(item)` inserts into `st.missions.read`)
-- Modify: `crates/strata-zero/src/screens/popup.rs` (`Pick::Blueprint`: before opening,
-  a `Look` reading of the item with `tells` records `Need::Read`) and
+- Modify: `crates/strata-zero/src/screens/deck.rs` (the GEAR & INVENTORY tab: when the
+  selected pack row is an item whose `Look` reading holds and `tells`, its card showing
+  that text, record `Need::Read` — in `update`, as the selection lands on it; the pack's
+  card is drawn by `Deck::item_card` → `missions::item_desc`) and
   `crates/strata-zero/src/missions/reading.rs` (the helper that does it)
+- Modify: `crates/strata-zero/src/missions/content.rs` text scans: an `ObjectiveFit`'s
+  texts count for slots and for the roles a mission needs exactly as `Objective`'s text
+  does (`Effect::Objective(s) | Effect::Log(s) => vec![s]`), so a fit placing `{odile}`
+  makes the mission need her cast
 - Test: `missions/content.rs`, `missions/mod.rs`, `missions/reading.rs` tests
 
 **Interfaces:**
@@ -160,8 +166,11 @@ RON content in `flavor/*.ron` compiled into the binary.
   `objective_fit_takes_the_first_that_holds` (hacking → the first text; none of the
   skills → the `All([])` text); `objective_fit_must_end_on_all` (validation refuses a
   last need other than `All([])`, and an empty list); `told_records_read`;
-  `a_telling_look_is_read_when_inspected` (a Look reading with `tells: true`: opening
-  the pack's Inspect of the item records `Read`; one without `tells` records nothing).
+  `a_telling_look_is_read_when_its_card_shows` (a Look reading with `tells: true`: the
+  deck's GEAR & INVENTORY tab with the item's row selected records `Read`; one without
+  `tells`, or whose need doesn't hold, records nothing);
+  `a_fit_placing_a_role_needs_it_cast` (a mission whose `ObjectiveFit` text has
+  `{doc.place}` is Uncast when `doc` has nobody).
 - [ ] **Step 2: Run; they fail.**
 - [ ] **Step 3: Implement** as in Interfaces.
 - [ ] **Step 4: Run the missions tests; they pass.**
@@ -192,9 +201,12 @@ Exact copy (spec §1):
 `"`The morning after` · a ledger shard, in your pack"`,
 `"Find out whose shard this is · read it at your rig"` (hacking),
 `"Find out whose shard this is · open the casing at your bench"` (electronics),
-`"Find out whose shard this is · inspect it in your pack"` (streetwise),
-`"Find out whose shard this is · ask the doctor"` (`All([])`),
-`"Bring it to {coz} · {coz.place} · {coz.district}"`.
+`"Find out whose shard this is · look it over in your pack"` (streetwise),
+`"Find out whose shard this is · ask the doctor at {odile.place}"` (`All([])`),
+`"Bring it to {coz} · {coz.place} · {coz.district}"`;
+Odile's third naming line in her `odile` scene, after the two that exist, with need
+`All([Not(Read("ledger_shard")), Not(Carries("taped_package")), Not(Carries("ledger_shard"))])`:
+`"He told me what you're carrying. Black tape, three turns? That's {coz}'s."`
 
 - [ ] **Step 1: Write the failing shipped-book tests.**
   `the_morning_after_asks_for_mezzs_mail`: after the news is watched, the morning
@@ -208,6 +220,9 @@ Exact copy (spec §1):
   reading shown → "Bring it to Coz · …". `odile_tells_who_has_not_read`: through her
   scene without reading → the ledger at "Bring it to Coz"; and the Review Focus 4 case
   (her scene first, the package opened after → straight to "Bring it to Coz").
+  `odile_names_him_to_the_empty_handed`: in her chair with neither item, her third line
+  is said. `no_clinic_leaves_the_ledger_uncast`: a city whose `odile` has nobody leaves
+  the ledger Uncast (the morning after still plays).
 - [ ] **Step 2: Run; they fail.**
 - [ ] **Step 3: Rewrite the book and the helpers** to spec §1; update the existing story
   tests that walked the old chain (they assert the new order; none is deleted unless its
