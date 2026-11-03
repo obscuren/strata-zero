@@ -44,6 +44,8 @@ const SHOT_FRAME: u64 = 45;
 /// How far Cmd+= and Cmd+- step the text size, and its bounds.
 const ZOOM_STEP: f32 = 1.1;
 const ZOOM_RANGE: (f32, f32) = (0.6, 2.5);
+/// The zoom the window opens with and Cmd+0 goes back to: three steps smaller than 1.
+const ZOOM_START: f32 = 1.0 / (ZOOM_STEP * ZOOM_STEP * ZOOM_STEP);
 
 /// Whether this is the desktop app (the `app` feature: the Mac `.app`, `Strata Zero.exe`,
 /// the Linux `strata-zero`): it always opens the window, and keeps its files in the
@@ -74,7 +76,7 @@ pub fn run(screen: Box<dyn Screen>, mut st: AppState) -> Result<()> {
         live: None,
         keys: Vec::new(),
         mods: ModifiersState::empty(),
-        zoom: 1.0,
+        zoom: ZOOM_START,
         regridded: false,
         damage: None,
         shown_fx: None,
@@ -225,7 +227,7 @@ impl App {
             }
             Shortcut::Bigger => self.zoom * ZOOM_STEP,
             Shortcut::Smaller => self.zoom / ZOOM_STEP,
-            Shortcut::ResetSize => 1.0,
+            Shortcut::ResetSize => ZOOM_START,
         }
         .clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
         self.rescale();
