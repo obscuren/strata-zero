@@ -529,6 +529,7 @@ pub fn tick(st: &mut AppState) {
             read: false,
             at: now,
             job: Some(job),
+            story: None,
         });
     }
 }
@@ -607,6 +608,7 @@ pub fn take_job(st: &mut AppState, id: JobId) -> Result<String, String> {
         read: false,
         at: now,
         job: Some(id),
+        story: None,
     });
     let said = st.flavor.line(Say::Taken, id.0 as u64).to_string();
     let line = format!("`{}` · taken · {fixer}: \u{201c}{said}\u{201d}", j.title);

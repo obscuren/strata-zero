@@ -77,6 +77,7 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
                 read: false,
                 at: st.net.now(st),
                 job: None,
+                story: Some((mission, step)),
             };
             st.journal.mails.push(mail);
         }

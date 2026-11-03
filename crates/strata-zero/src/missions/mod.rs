@@ -2591,4 +2591,66 @@ pub(crate) mod tests {
             assert_eq!(st.character.chrome.get(&site), Some(&piece));
         }
     }
+
+    /// A book whose `send` step mails and whose `next` step waits for that mail to end.
+    const MAIL_STEPS: &str = r#"Mission(id: "post", title: "Post", from: "mezz", steps: [
+        Step(id: "send", when: NewGame, then: [Mail(from: "mezz", subject: "Hi", body: ["Read me."])]),
+        Step(id: "next", when: Ended("send"), then: [Log("after")]),
+    ])"#;
+
+    fn after_logged(st: &AppState) -> bool {
+        st.log.iter().any(|e| e.text == "after")
+    }
+
+    /// The inbox index of the mail the first step sent.
+    fn story_mail(st: &AppState) -> usize {
+        st.journal
+            .mails
+            .iter()
+            .position(|m| m.story == Some((0, 0)))
+            .expect("the step sent its mail")
+    }
+
+    #[test]
+    fn a_story_mail_read_ends_its_step() {
+        let mut st = state_home();
+        st.book = book(MAIL_STEPS);
+        begin(&mut st);
+        let i = story_mail(&st);
+        tick(&mut st);
+        assert!(!after_logged(&st), "waits while the mail is unread");
+        crate::credentials::mail_read(&mut st, i);
+        assert!(after_logged(&st));
+    }
+
+    #[test]
+    fn a_mail_read_at_the_terminal_ends_its_step() {
+        let mut st = state_home();
+        st.book = book(MAIL_STEPS);
+        begin(&mut st);
+        tick(&mut st);
+        assert!(!after_logged(&st));
+        let i = story_mail(&st);
+        crate::access::mail_open(&mut st, i).unwrap();
+        assert!(after_logged(&st));
+    }
+
+    #[test]
+    fn reading_it_again_ends_nothing_twice() {
+        let mut st = state_home();
+        st.book = book(MAIL_STEPS);
+        begin(&mut st);
+        let i = story_mail(&st);
+        crate::credentials::mail_read(&mut st, i);
+        let lines = st.log.len();
+        crate::credentials::mail_read(&mut st, i);
+        assert_eq!(st.log.len(), lines);
+    }
+
+    #[test]
+    fn ended_may_name_a_mail_step() {
+        // `Book::parse` validates, and `book` unwraps it.
+        let b = book(MAIL_STEPS);
+        assert!(b.validate().is_ok());
+    }
 }

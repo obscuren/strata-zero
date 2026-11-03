@@ -534,6 +534,7 @@ pub fn first_favour(st: &mut AppState) {
         read: false,
         at: now,
         job: Some(id),
+        story: None,
     });
 }
 

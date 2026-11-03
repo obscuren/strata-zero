@@ -568,7 +568,11 @@ impl Effect {
     fn presents(&self) -> bool {
         matches!(
             self,
-            Effect::Feed { .. } | Effect::Call { .. } | Effect::Scene(_) | Effect::News(_)
+            Effect::Feed { .. }
+                | Effect::Call { .. }
+                | Effect::Scene(_)
+                | Effect::News(_)
+                | Effect::Mail { .. }
         )
     }
 }

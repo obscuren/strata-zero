@@ -47,6 +47,8 @@ pub struct Mail {
     pub at: u64,
     /// The job it is about, for a job's own mails.
     pub job: Option<crate::jobs::JobId>,
+    /// The story (mission, step) whose mail this is: reading it ends that step.
+    pub story: Option<(usize, usize)>,
 }
 
 /// The room number a building's street doors share one code under; no room has it.
@@ -113,10 +115,14 @@ pub struct Journal {
     pub booted: std::collections::HashSet<(Place, Pos)>,
 }
 
-/// A mail has been read: marks it.
+/// A mail has been read: marks it. The first reading of a story mail ends its step.
 pub fn mail_read(st: &mut AppState, index: usize) {
-    if let Some(m) = st.journal.mails.get_mut(index) {
-        m.read = true;
+    let Some(m) = st.journal.mails.get_mut(index) else {
+        return;
+    };
+    let first = !std::mem::replace(&mut m.read, true);
+    if let (true, Some((mission, step))) = (first, m.story) {
+        crate::missions::end(st, mission, step);
     }
 }
 
@@ -489,6 +495,7 @@ pub fn fixer_mail(st: &mut AppState) {
         read: false,
         at: now,
         job: None,
+        story: None,
     });
 }
 

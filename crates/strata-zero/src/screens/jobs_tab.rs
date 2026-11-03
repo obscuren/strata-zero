@@ -1283,6 +1283,7 @@ mod tests {
             read: false,
             at: 0,
             job: None,
+            story: None,
         });
         let story = st.journal.mails.len() - 1;
         let mails = fixer_mails(&st, f);
