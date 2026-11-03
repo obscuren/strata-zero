@@ -2398,7 +2398,8 @@ fn jobs_tab() {
     }
 }
 
-/// The morning after, Seren's word come: in the flat, the doctor's mission open.
+/// The morning after, Mezz's mail read and Seren's word come: in the flat, the package
+/// unsealed, the doctor's mission open.
 fn seren_has_written() -> AppState {
     let mut st = crate::missions::tests::the_morning_call();
     crate::missions::tests::to_the_word(&mut st);

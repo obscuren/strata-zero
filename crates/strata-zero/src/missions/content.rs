@@ -1417,10 +1417,17 @@ mod tests {
         let steps: Vec<&str> = doctor.steps.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(steps, ["word", "in", "tray", "out", "free"]);
         // The doc must be in the city, and the cook whose district the news named; the
-        // fixer she names needn't be, so only the hook waits on him.
+        // fixer she names needn't be, so only the hook waits on him. The hook sends whoever
+        // can't read the shard to her, so it waits on her too.
         let needs = |m: &Mission| b.needs_cast(m).into_iter().collect::<Vec<_>>();
         assert_eq!(needs(doctor), ["marlo", "odile"]);
-        assert_eq!(needs(ledger), ["coz"]);
+        assert_eq!(needs(ledger), ["coz", "odile"]);
+        let steps: Vec<&str> = ledger.steps.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(steps, ["whose", "know", "sell"]);
+        let morning = &b.missions[2];
+        let steps: Vec<&str> = morning.steps.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(steps, ["wake", "news", "saw", "word", "open"]);
+        assert!(b.needs_cast(morning).iter().all(|r| r != "odile"));
         assert_eq!(b.cast["odile"].pick, Pick::Nearest("ripperdoc".into()));
         assert!(matches!(
             &b.cast["coz"].pick,
@@ -1471,7 +1478,7 @@ mod tests {
                 skills_in(n, &mut skills);
             }
         }
-        assert_eq!(skills.len(), 12, "{skills:?}");
+        assert_eq!(skills.len(), 15, "{skills:?}");
         let c = Content::load().unwrap();
         for id in skills {
             assert!(
