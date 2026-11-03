@@ -83,6 +83,8 @@ pub struct AppState {
     pub effects: bool,
     /// The window's screen effects (Settings).
     pub screen_fx: ScreenFx,
+    /// The cord on the Net: the way back to where you jacked in (Settings).
+    pub cord: bool,
     /// Dev: tint the walkers who can see you.
     pub show_eyes: bool,
     /// Dev: paint each visible tile grey by its light.
@@ -282,6 +284,7 @@ impl AppState {
             show_fps: true,
             effects: false,
             screen_fx: ScreenFx::default(),
+            cord: true,
             show_eyes: false,
             show_light: false,
             free_chrome: false,

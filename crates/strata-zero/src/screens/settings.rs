@@ -16,6 +16,7 @@ enum Row {
     Dev,
     Rain,
     Fps,
+    Cord,
     Effects,
 }
 
@@ -25,6 +26,7 @@ impl Row {
             Row::Dev => "Dev mode",
             Row::Rain => "Rain",
             Row::Fps => "FPS counter",
+            Row::Cord => "Cord on the Net",
             Row::Effects => "Screen effects",
         }
     }
@@ -50,7 +52,7 @@ impl Settings {
         if st.dev_unlocked {
             rows.push(Row::Dev);
         }
-        rows.extend([Row::Rain, Row::Fps]);
+        rows.extend([Row::Rain, Row::Fps, Row::Cord]);
         if st.effects {
             rows.push(Row::Effects);
         }
@@ -64,6 +66,7 @@ impl Settings {
             Row::Dev => flag(st.dev),
             Row::Rain => flag(st.rain),
             Row::Fps => flag(st.show_fps),
+            Row::Cord => flag(st.cord),
             Row::Effects => (st.screen_fx.label(), st.screen_fx != ScreenFx::Off),
         }
     }
@@ -73,6 +76,7 @@ impl Settings {
             Row::Dev => st.set_dev(!st.dev),
             Row::Rain => st.rain = !st.rain,
             Row::Fps => st.show_fps = !st.show_fps,
+            Row::Cord => st.cord = !st.cord,
             Row::Effects => st.screen_fx = st.screen_fx.next(),
         }
     }
@@ -152,6 +156,16 @@ mod tests {
     use crate::screens::testutil::{buffer_text, key};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+
+    #[test]
+    fn the_cord_row_flips() {
+        let mut st = AppState::new();
+        assert!(st.cord, "on by default");
+        assert_eq!(Settings::get(&st, Row::Cord), ("ON", true));
+        Settings::flip(&mut st, Row::Cord);
+        assert!(!st.cord);
+        assert_eq!(Settings::get(&st, Row::Cord), ("OFF", false));
+    }
 
     #[test]
     fn settings_dev_off_clears_dev_sections() {
@@ -236,7 +250,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
         t.draw(|f| s.draw(&st, f)).unwrap();
         assert!(!buffer_text(t.backend().buffer()).contains("Screen effects"));
-        assert_eq!(Settings::rows(&st), [Row::Rain, Row::Fps]);
+        assert_eq!(Settings::rows(&st), [Row::Rain, Row::Fps, Row::Cord]);
         st.effects = true;
         t.draw(|f| s.draw(&st, f)).unwrap();
         let text = buffer_text(t.backend().buffer());

@@ -3048,6 +3048,15 @@ impl Screen for MapScreen {
         ) {
             overlays.push(&net_look);
         }
+        // The cord: the way back to where you jacked in (Settings can hide it).
+        let cord =
+            crate::net::cord_view(st).filter(|_| self.place == Place::Stratum(StratumKind::Net));
+        let cord_overlay = cord
+            .as_ref()
+            .map(|view| crate::render::cord::CordOverlay { view });
+        if let Some(o) = cord_overlay.as_ref() {
+            overlays.push(o);
+        }
         let ride = self
             .riding
             .as_ref()
