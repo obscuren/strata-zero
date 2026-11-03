@@ -629,9 +629,10 @@ mod tests {
     fn the_newest_line_types_out_after_a_sleep() {
         let mut st = crate::jobs::testutil::state_home();
         // A night's sleep moves the city's clock far ahead of the frame clock.
-        if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
-            world.advance(city, world.tick() + 480 * sim::TICKS_PER_MINUTE);
-        }
+        let city = st.city.as_ref().expect("a city");
+        let world = st.world.as_mut().expect("a world");
+        world.advance(city, world.tick() + 480 * sim::TICKS_PER_MINUTE);
+        assert!(st.clock_tick() > st.tick + 40_000);
         st.story("`Mezz` · mail · the news");
         st.tick += 30;
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 6));

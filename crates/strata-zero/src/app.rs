@@ -1138,6 +1138,7 @@ mod tests {
             .iter()
             .map(|e| (e.text.clone(), e.kind, e.tick))
             .collect();
+        assert!(st.log.iter().all(|e| e.shown == st.tick));
         assert_eq!(
             kinds,
             vec![
