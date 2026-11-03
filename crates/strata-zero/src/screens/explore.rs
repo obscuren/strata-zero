@@ -394,16 +394,14 @@ impl MapScreen {
                 let Some(k) = st.constructs.get(b) else {
                     return Vec::new();
                 };
-                let vis = p.vis();
+                // Everything in a construct is in view; what the cursor can be on is
+                // what a program could reach: no wall between.
                 let mut out: Vec<(Enemy, Pos)> = k
                     .guards
                     .iter()
                     .enumerate()
                     .filter(|(i, g)| {
-                        k.guard_at(g.pos) == Some(*i)
-                            && vis
-                                .get(g.pos)
-                                .is_some_and(|v| *v == crate::render::Visibility::Visible)
+                        k.guard_at(g.pos) == Some(*i) && crate::net::line_clear_in(k, p.pos, g.pos)
                     })
                     .map(|(i, g)| (Enemy::Ice(i), g.pos))
                     .collect();
@@ -9371,6 +9369,34 @@ mod tests {
                 .ice
                 .get(&b)
                 .is_none_or(|v| v.iter().all(|i| i.stunned == 0))
+        );
+    }
+
+    #[test]
+    fn the_fire_cursor_skips_ice_behind_a_wall() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let hide = room_tile(&st, b);
+        stand(&mut st, &mut s, Place::Construct(b), hide);
+        let k = st.constructs.get(b).unwrap();
+        for (_, at) in MapScreen::enemies_in_sight(&st) {
+            assert!(
+                crate::net::line_clear_in(k, hide, at),
+                "{at:?} is behind a wall"
+            );
+        }
+        let walled = k
+            .guards
+            .iter()
+            .filter(|g| k.guard_at(g.pos).is_some() && !crate::net::line_clear_in(k, hide, g.pos))
+            .count();
+        assert_eq!(
+            MapScreen::enemies_in_sight(&st).len() + walled,
+            k.guards
+                .iter()
+                .filter(|g| k.guard_at(g.pos).is_some())
+                .count()
         );
     }
 
