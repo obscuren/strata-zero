@@ -16,10 +16,11 @@ pub enum Kind {
 pub struct Entry {
     pub text: String,
     pub kind: Kind,
-    /// The city's tick the entry arrived; stamps the clock and ages `recent`.
+    /// The city's tick the entry arrived; stamps the clock.
     pub tick: u64,
-    /// The frame tick the entry arrived; the log types the line out on it, so a sleep
-    /// that races the city's clock ahead doesn't leave it hidden.
+    /// The frame tick the entry arrived; the log types the line out and `recent` ages it
+    /// on the frames, so a sleep that races the city's clock ahead neither hides the line
+    /// nor keeps it up.
     pub shown: u64,
     /// Names in the text, as char ranges, lit when the log draws: a place, an item,
     /// a person. Writers mark them with backticks; the text keeps none.
@@ -90,10 +91,11 @@ impl MessageLog {
         self.entries.back()
     }
 
-    /// The newest entry while it is younger than `RECENT_TICKS`.
+    /// The newest entry while it is younger than `RECENT_TICKS` frames, at frame tick
+    /// `tick`.
     pub fn recent(&self, tick: u64) -> Option<&Entry> {
         self.latest()
-            .filter(|e| tick.saturating_sub(e.tick) < Self::RECENT_TICKS)
+            .filter(|e| tick.saturating_sub(e.shown) < Self::RECENT_TICKS)
     }
 
     /// Oldest first.
@@ -136,6 +138,21 @@ mod tests {
         assert_eq!(log.len(), MessageLog::CAP);
         assert_eq!(log.iter().next().unwrap().text, "m0");
         assert_eq!(log.latest().unwrap().text, "m199");
+    }
+
+    #[test]
+    fn the_newest_line_stops_being_recent_after_a_sleep() {
+        let mut st = crate::jobs::testutil::state_home();
+        // A night's sleep moves the city's clock far ahead of the frame clock.
+        let city = st.city.as_ref().expect("a city");
+        let world = st.world.as_mut().expect("a world");
+        world.advance(city, world.tick() + 480 * sim::TICKS_PER_MINUTE);
+        assert!(st.clock_tick() > st.tick + 40_000);
+        st.story("`Mezz` · mail · the news");
+        st.tick += MessageLog::RECENT_TICKS - 1;
+        assert!(st.log.recent(st.tick).is_some());
+        st.tick += 1;
+        assert!(st.log.recent(st.tick).is_none(), "the toast clears");
     }
 
     #[test]

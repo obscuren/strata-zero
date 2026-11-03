@@ -1487,7 +1487,7 @@ pub(crate) fn status_strip(buf: &mut Buffer, st: &AppState, x: u16, y: u16, righ
     let Some(e) = st.log.recent(st.tick) else {
         return;
     };
-    let p = st.tick.saturating_sub(e.tick) as f32 / 20.0;
+    let p = st.tick.saturating_sub(e.shown) as f32 / 20.0;
     let text = e.marked();
     let shown = if p < 1.0 {
         format!("{}▮", typewriter(&text, p))
@@ -2616,6 +2616,21 @@ mod tests {
             .push(game::Stack::new(ItemId::new("scrap_servo"), 40));
         let text = draw(&d, &st, 120, 35);
         assert!(text.contains("35.4/16.0 kg"), "{text}");
+    }
+
+    #[test]
+    fn the_strip_types_out_after_a_sleep() {
+        let mut st = crate::jobs::testutil::state_home();
+        // A night's sleep moves the city's clock far ahead of the frame clock.
+        let city = st.city.as_ref().expect("a city");
+        let world = st.world.as_mut().expect("a world");
+        world.advance(city, world.tick() + 480 * sim::TICKS_PER_MINUTE);
+        assert!(st.clock_tick() > st.tick + 40_000);
+        let d = Deck::new(st.tick);
+        st.story("`Mezz` · mail · the news");
+        st.tick += 30;
+        let text = draw(&d, &st, 120, 35);
+        assert!(text.contains("▸ Mezz · mail · the news"), "{text}");
     }
 
     #[test]
