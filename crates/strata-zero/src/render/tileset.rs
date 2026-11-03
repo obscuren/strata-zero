@@ -11,13 +11,13 @@ use citygen::{
     StratumKind, Terrain, Tile, Tone, Wear,
 };
 
-const LIGHT: [char; 16] = [
+pub(crate) const LIGHT: [char; 16] = [
     '─', '│', '─', '└', '│', '│', '┌', '├', '─', '┘', '─', '┴', '┐', '┤', '┬', '┼',
 ];
-const HEAVY: [char; 16] = [
+pub(crate) const HEAVY: [char; 16] = [
     '━', '┃', '━', '┗', '┃', '┃', '┏', '┣', '━', '┛', '━', '┻', '┓', '┫', '┳', '╋',
 ];
-const DOUBLE: [char; 16] = [
+pub(crate) const DOUBLE: [char; 16] = [
     '═', '║', '═', '╚', '║', '║', '╔', '╠', '═', '╝', '═', '╩', '╗', '╣', '╦', '╬',
 ];
 

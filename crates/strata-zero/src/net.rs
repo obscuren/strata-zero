@@ -13,7 +13,7 @@ use game::{
     ALERT_MINUTES, COOLING_MINUTES, Fx, HACK_MINUTES, HackTarget, ItemId, Op, Run, Target, Trace,
     TraceEvent, applies, difficulty, power, succeeds,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// A hack that landed: on what, with which op, when, and until when (`None` forever).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1339,6 +1339,40 @@ pub fn sees(k: &Construct, from: Pos, grade: IceGrade, player: Pos, masked: bool
     line_clear_in(k, from, player)
 }
 
+/// The spine each standing piece would see you on: lane and gate tiles in its row or
+/// column within its sight, with no wall between, its own tile left out. Where two
+/// watch one tile the darker grade has it (black over grey over white).
+pub fn watched(k: &Construct) -> HashMap<Pos, IceGrade> {
+    let rank = |g: IceGrade| match g {
+        IceGrade::White => 0,
+        IceGrade::Grey => 1,
+        IceGrade::Black => 2,
+    };
+    let mut out: HashMap<Pos, IceGrade> = HashMap::new();
+    for g in k
+        .guards
+        .iter()
+        .filter(|g| !g.inert && k.guard_at(g.pos).is_some())
+    {
+        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            for d in 1..=g.grade.sight() {
+                let p = g.pos.offset(dx * d, dy * d);
+                let Some(t) = k.tiles.get(p) else { break };
+                if t.terrain == Terrain::NetWall {
+                    break;
+                }
+                if matches!(t.terrain, Terrain::NetLane | Terrain::NetGate) {
+                    let e = out.entry(p).or_insert(g.grade);
+                    if rank(g.grade) > rank(*e) {
+                        *e = g.grade;
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// No wall of the construct on the line between two tiles, the ends excluded:
 /// the construct's own clear line, as `foes::line_clear` is a stratum's.
 pub fn line_clear_in(k: &Construct, from: Pos, to: Pos) -> bool {
@@ -2308,7 +2342,7 @@ pub fn ice_lines(st: &AppState, b: BuildingId, seen: impl Fn(Pos) -> bool) -> Ve
                 String::new()
             };
             format!(
-                "▣ {} ICE · {mode} · {}/{}{stunned}",
+                "◈ {} ICE · {mode} · {}/{}{stunned}",
                 g.label(),
                 i.integrity,
                 g.grade.integrity()
@@ -2693,6 +2727,45 @@ mod tests {
         st.log.iter().any(|e| e.text.contains(needle))
     }
 
+    #[test]
+    fn watch_follows_the_sight_rule() {
+        let city = citygen::Generator::run(citygen::GenParams {
+            seed: 8,
+            size: citygen::SizePreset::Medium,
+            districts: 7,
+            ..Default::default()
+        })
+        .unwrap();
+        let mut k = city
+            .buildings
+            .iter()
+            .filter_map(|b| citygen::construct::generate_construct(&city, b.id))
+            .find(|k| !k.guards.is_empty())
+            .expect("a construct with ICE");
+        let w = watched(&k);
+        let g = k.guards[0].clone();
+        assert!(!w.is_empty());
+        for p in w.keys() {
+            assert!(
+                p.x == g.pos.x
+                    || p.y == g.pos.y
+                    || k.guards.iter().any(|o| p.x == o.pos.x || p.y == o.pos.y)
+            );
+            assert!(matches!(
+                k.tiles[*p].terrain,
+                Terrain::NetLane | Terrain::NetGate
+            ));
+            assert!(
+                k.guards.iter().any(|o| sees(&k, o.pos, o.grade, *p, false)),
+                "{p:?}"
+            );
+        }
+        for i in 0..k.guards.len() {
+            k.set_guard(i, false);
+        }
+        assert!(watched(&k).is_empty(), "lifted pieces watch nothing");
+    }
+
     /// The lot's construct with you on its gate, as the COMBAT · NET start opens.
     fn net_lot() -> AppState {
         let mut st = AppState::new();
@@ -2753,7 +2826,7 @@ mod tests {
         assert_eq!((st.character.hp, st.character.focus), (hp, focus));
         assert!(!logged(&st, "ICE hits"));
         assert!(
-            ice_lines(&st, b, |_| true).contains(&"▣ dummy ICE · asleep · 6/6".to_string()),
+            ice_lines(&st, b, |_| true).contains(&"◈ dummy ICE · asleep · 6/6".to_string()),
             "{:?}",
             ice_lines(&st, b, |_| true)
         );

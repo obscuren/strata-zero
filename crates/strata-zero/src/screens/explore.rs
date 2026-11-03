@@ -2957,6 +2957,30 @@ impl Screen for MapScreen {
         if let Some(o) = atrium.as_ref() {
             overlays.push(o);
         }
+        // The Net's own look, under everything else drawn on it.
+        let net_view = crate::render::netlook::NetLookView {
+            tick: st.tick,
+            tracked: match crate::track::target_now(st) {
+                Some(crate::track::Target::Building(b)) => Some(b),
+                _ => None,
+            },
+            home: st.home.map(|h| h.home.building),
+            watch: match self.place {
+                Place::Construct(b) => st
+                    .constructs
+                    .get(b)
+                    .map(crate::net::watched)
+                    .unwrap_or_default(),
+                _ => Default::default(),
+            },
+        };
+        let net_look = crate::render::netlook::NetLook { view: &net_view };
+        if matches!(
+            self.place,
+            Place::Stratum(StratumKind::Net) | Place::Construct(_)
+        ) {
+            overlays.push(&net_look);
+        }
         if st.rain {
             overlays.push(&Weather);
         }

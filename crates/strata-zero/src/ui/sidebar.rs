@@ -260,7 +260,7 @@ pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
                     };
                     out.push(plain(format!(" ◆ {}{state}", k.label())));
                 }
-                Some(Feature::Ice(g)) => out.push(plain(format!(" ▣ ICE · {}", g.label()))),
+                Some(Feature::Ice(g)) => out.push(plain(format!(" ◈ ICE · {}", g.label()))),
                 _ => {}
             }
         }
