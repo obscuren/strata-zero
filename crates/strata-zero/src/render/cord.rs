@@ -20,6 +20,8 @@ const CORD: Rgb = Rgb(230, 240, 245);
 const TRACED: Rgb = Rgb(255, 0, 200);
 const HOP: Rgb = Rgb(0, 229, 255);
 const PORT: Rgb = Rgb(124, 255, 154);
+/// A relay whose backdoor is gone.
+const DEAD: Rgb = Rgb(96, 104, 116);
 
 pub struct CordOverlay<'a> {
     pub view: &'a CordView,
@@ -91,9 +93,9 @@ impl Overlay for CordOverlay<'_> {
                 }
             }
         }
-        for r in &v.relays {
+        for (r, live) in &v.relays {
             if let Some(at) = tile_to_screen(area, origin, *r) {
-                set(buf, at, Some('▣'), HOP, None);
+                set(buf, at, Some('▣'), if *live { HOP } else { DEAD }, None);
             }
         }
         if let Some(at) = v.port.and_then(|p| tile_to_screen(area, origin, p)) {

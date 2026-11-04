@@ -2733,8 +2733,9 @@ pub struct CordView {
     pub walk: Vec<Pos>,
     /// Straight links, nearest you first: relay to relay, then the first relay home.
     pub hops: Vec<(Pos, Pos)>,
-    /// The gates of the relays the run came through.
-    pub relays: Vec<Pos>,
+    /// The gates of the relays the run came through, and whether each backdoor is
+    /// still held (a burned one is dead).
+    pub relays: Vec<(Pos, bool)>,
     /// Your rig's port, or the street port you jacked in at.
     pub port: Option<Pos>,
     /// A trace of this run has come along the walk.
@@ -2770,6 +2771,7 @@ pub fn cord_view(st: &AppState) -> Option<CordView> {
         })
         .unwrap_or_default();
     let entry = relays.last().map(|(_, g)| *g).or(port)?;
+    let held = |b: BuildingId| st.backdoors.held(b).is_some();
     // Each hop with the relay at its end nearest you.
     let mut hops: Vec<(BuildingId, (Pos, Pos))> = relays
         .windows(2)
@@ -2779,26 +2781,31 @@ pub fn cord_view(st: &AppState) -> Option<CordView> {
     if let (Some((first, gate)), Some(port)) = (relays.first(), port) {
         hops.push((*first, (*gate, port)));
     }
-    let mut view = CordView {
-        entry,
-        walk: Vec::new(),
-        hops: hops.iter().map(|(_, h)| *h).collect(),
-        relays: relays.iter().map(|(_, g)| *g).collect(),
-        port,
-        traced_walk: false,
-        traced_hops: vec![false; hops.len()],
-        at: None,
-    };
     let this_run = |t: &crate::backdoors::HomeTrace| {
         st.backdoors
             .route
             .as_ref()
             .is_some_and(|r| t.relays.iter().all(|b| r.relays.contains(b)))
     };
-    if let Some(t) = st.backdoors.trace.as_ref().filter(|t| this_run(t)) {
-        let passed = &t.relays[..t.at.min(t.relays.len())];
-        view.traced_walk = true;
-        view.traced_hops = hops.iter().map(|(near, _)| passed.contains(near)).collect();
+    let trace = st.backdoors.trace.as_ref().filter(|t| this_run(t));
+    // A hop is the trace's once it has passed the relay at its near end, or that
+    // relay burned before it came (a sprung honeypot, a key gone stale): the trace
+    // goes on past a dead relay. With no trace on, a dead relay's hop is cut.
+    let traced = |near: BuildingId| {
+        trace.is_some_and(|t| t.relays[..t.at.min(t.relays.len())].contains(&near) || !held(near))
+    };
+    hops.retain(|(near, _)| held(*near) || traced(*near));
+    let mut view = CordView {
+        entry,
+        walk: Vec::new(),
+        hops: hops.iter().map(|(_, h)| *h).collect(),
+        relays: relays.iter().map(|(b, g)| (*g, held(*b))).collect(),
+        port,
+        traced_walk: trace.is_some(),
+        traced_hops: hops.iter().map(|(near, _)| traced(*near)).collect(),
+        at: None,
+    };
+    if let Some(t) = trace {
         view.at = match t.relays.get(t.at) {
             Some(b) => relays.iter().find(|(r, _)| r == b).map(|(_, g)| *g),
             None => port,
@@ -3162,11 +3169,13 @@ mod tests {
             .find(|x| x.id != kiroflux && x.name.as_deref() == Some("Stack 101 Terminal"))
             .unwrap()
             .id;
+        let now = st.net.now(&st);
+        st.backdoors.plant_net(relay, 50, city.seed, now);
         st.backdoors.start_route(Some(relay));
         let gate = crate::constructs::city_gate(&city, relay).unwrap();
         let v = cord_view(&st).unwrap();
         assert_eq!(v.entry, gate);
-        assert_eq!(v.relays, vec![gate]);
+        assert_eq!(v.relays, vec![(gate, true)]);
         assert_eq!(v.hops, vec![(gate, st.home.unwrap().landing)]);
     }
 
@@ -3197,6 +3206,37 @@ mod tests {
         let v = cord_view(&st).unwrap();
         assert_eq!(v.traced_hops, vec![true]);
         assert_eq!(v.at, st.home.map(|h| h.landing));
+    }
+
+    #[test]
+    fn a_sprung_relay_leaves_no_blue_on_the_cord() {
+        let (mut st, kiroflux) = rig_run();
+        let city = st.city.clone().unwrap();
+        let relay = city
+            .buildings
+            .iter()
+            .find(|x| x.id != kiroflux && x.name.as_deref() == Some("Stack 101 Terminal"))
+            .unwrap()
+            .id;
+        let now = st.net.now(&st);
+        st.backdoors.plant_net(relay, 50, city.seed, now);
+        st.backdoors.start_route(Some(relay));
+        // The honeypot springs: the relay burns first, the trace goes straight home.
+        st.backdoors
+            .burn(relay, crate::backdoors::Why::Honeypot, now);
+        st.backdoors.start_trace(now);
+        let v = cord_view(&st).unwrap();
+        assert_eq!(
+            v.traced_hops,
+            vec![true],
+            "the hop home is the trace's, not blue"
+        );
+        assert_eq!(v.relays.len(), 1);
+        assert!(!v.relays[0].1, "the burned relay is dead");
+        // A relay burned with no trace on: its hop home is cut, not drawn.
+        st.backdoors.trace = None;
+        let v = cord_view(&st).unwrap();
+        assert!(v.hops.is_empty(), "{v:?}");
     }
 
     #[test]
