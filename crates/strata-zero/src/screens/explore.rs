@@ -1361,6 +1361,9 @@ impl MapScreen {
             KeyCode::Char('q') | KeyCode::Esc => {
                 if self.help {
                     self.help = false;
+                } else if k.code == KeyCode::Esc && st.net.feed.take().is_some() {
+                    // Esc closes a camera's feed before it opens the menu.
+                    st.say("feed closed");
                 } else {
                     return Some(ScreenCmd::Push {
                         to: Box::new(Pause::new(st.tick)),
@@ -2002,9 +2005,12 @@ impl MapScreen {
             done: Vec::new(),
             next_at: st.clock_tick(),
         });
-        // A ride is a move: the run in flight is dropped.
+        // A ride is a move: the run in flight is dropped, a feed closed.
         if st.net.run.take().is_some() {
             st.say("run aborted");
+        }
+        if st.net.feed.take().is_some() {
+            st.say("feed closed");
         }
         true
     }
@@ -2342,6 +2348,10 @@ impl MapScreen {
         // beat, which is when the run rolls and the ICE moves.
         if after != before && st.net.run.take().is_some() {
             st.say("run aborted");
+        }
+        // Moving off closes a camera's feed.
+        if after != before && st.net.feed.take().is_some() {
+            st.say("feed closed");
         }
         if k.code == KeyCode::Char('.') {
             let inside = st
@@ -9918,6 +9928,39 @@ mod tests {
         };
         w.update(&mut st, &[key(KeyCode::Char('f'))]);
         assert_eq!(st.net.feed, Some(cam), "the feed opens from the window too");
+    }
+
+    #[test]
+    fn a_move_or_esc_closes_the_feed() {
+        let (mut st, b) = crate::net::tests::under_kiroflux();
+        st.grid_patrols = crate::grid::Patrols::Sweeps;
+        let mut s = MapScreen::explore(0);
+        let (cam, at) = crate::net::tests::node_cyber(&st, b, citygen::NodeKind::Camera);
+        let here = Pos::new(at.x, at.y + 1);
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), here);
+        let now = st.net.now(&st);
+        crate::holds::take(&mut st, cam, crate::owners::Owner::Building(b), now);
+        // Esc closes it, and doesn't open the menu.
+        s.update(&mut st, &[key(KeyCode::Char('f'))]);
+        assert_eq!(st.net.feed, Some(cam));
+        let cmd = s.update(&mut st, &[key(KeyCode::Esc)]);
+        assert!(matches!(cmd, ScreenCmd::Stay), "no menu while a feed is up");
+        assert_eq!(st.net.feed, None);
+        assert_eq!(last(&st), Some("feed closed"));
+        // With no feed, Esc is the menu again.
+        let cmd = s.update(&mut st, &[key(KeyCode::Esc)]);
+        assert!(matches!(cmd, ScreenCmd::Push { .. }));
+        // A step closes it.
+        s.update(&mut st, &[key(KeyCode::Char('f'))]);
+        assert_eq!(st.net.feed, Some(cam));
+        let city = st.city.clone().unwrap();
+        let step = [Dir::E, Dir::W, Dir::S, Dir::N]
+            .into_iter()
+            .find(|d| city.walkable(StratumKind::Net, here.step(*d)))
+            .expect("somewhere to step");
+        s.update(&mut st, &[key(dir_key(step))]);
+        assert_ne!(st.player.as_ref().unwrap().pos, here, "moved");
+        assert_eq!(st.net.feed, None, "moving off closes the feed");
     }
 
     #[test]

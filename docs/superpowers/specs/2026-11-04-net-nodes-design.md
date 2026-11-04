@@ -128,7 +128,7 @@ you out it means that there's no danger in running there."
   node on a wire, as the tether's label does, on the side with room. It draws the
   street around the camera's anchor live, walkers included, in green phosphor (each
   cell by its light; walkers white; cameras red), with the header
-  `CAM · <BUILDING>` and `● REC`. One feed at a time; `f` again closes it; it closes
+  `CAM · <BUILDING>` and `● REC`. One feed at a time; `f` again, Esc or a move (a step or a ride) closes it; it closes
   when the hold ends, when you leave the Net, or when you tap another camera.
 - **Loop** blinds the camera (as Blind does) until the hold ends.
 - **Eyes in the meat**: a street camera faces out from its building's facade and sees a
