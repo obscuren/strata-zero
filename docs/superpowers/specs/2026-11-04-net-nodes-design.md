@@ -213,7 +213,10 @@ you out it means that there's no danger in running there."
 - Each district keeps sentinels on its lanes, by its security: below 100 none; to 159
   one white; to 199 a white and a grey; to 229 two grey; from 230 two grey and a black.
 - Each walks a beat: a straight lane run near its hub, there and back, asleep, seeing
-  as above. Seeing you wakes it to hunt.
+  as above. Seeing you wakes it to hunt only while its district has you on trace (heat on
+  the district's trace or on any building's in it, or an alarm there); a clean runner
+  passes unbothered. (Jeffrey, after the first build: "ICE shouldn't see me as a threat
+  on the open net" when there's no trace and nothing hunts you.)
 - A district alarm, or an alarm of a building in it, reached from outside, wakes them
   all toward where you were.
 - They appear when you first come onto the open Net in a session and stay for it.

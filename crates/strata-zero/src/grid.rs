@@ -217,6 +217,34 @@ pub fn sees(city: &City, foe: &Foe, to: Pos, masked: bool) -> bool {
     foe.pos.chebyshev(to) <= sight && crate::foes::line_clear(city, foe.place, foe.pos, to)
 }
 
+/// Whether a grid piece takes you for a threat when it sees you. A tracer always:
+/// it was sent for you. A sentinel only while its district has you on trace: heat on
+/// the district's own trace or on any building's in it, or an alarm there. A clean
+/// runner passes through unbothered.
+pub fn threat(st: &AppState, ice: &GridIce) -> bool {
+    if ice.tracer() {
+        return true;
+    }
+    let Some(d) = district_of(st, ice.owner) else {
+        return true;
+    };
+    let now = st.net.now(st);
+    let district = Owner::District(d);
+    if crate::owners::heat(st, district) > 0 || crate::owners::alert(st, district, now) {
+        return true;
+    }
+    let Some(city) = st.city.as_ref() else {
+        return false;
+    };
+    st.net.traces.iter().any(|(b, t)| {
+        (t.heat > 0 || t.alert(now))
+            && city
+                .buildings
+                .get(b.index())
+                .is_some_and(|x| x.district == d)
+    })
+}
+
 /// The district hubs on the Net: each hub's district and tile.
 pub fn hubs(city: &City) -> Vec<(DistrictId, Pos)> {
     city.net
@@ -964,6 +992,52 @@ mod tests {
             terrain: Terrain::NetWall,
             ..citygen::Tile::VOID
         }));
+    }
+
+    #[test]
+    fn a_sentinel_lets_a_clean_runner_pass() {
+        let (mut st, b) = under_kiroflux();
+        st.grid_patrols = Patrols::Sweeps;
+        let (me, them) = on_a_lane(&mut st, 3).expect("a straight lane");
+        let city = st.city.as_ref().unwrap();
+        let d = city
+            .tile(StratumKind::Net, me)
+            .and_then(|t| t.district)
+            .unwrap_or(city.buildings[b.index()].district);
+        st.foes.push(piece(
+            IceGrade::Grey,
+            Role::Sentinel {
+                beat: vec![them],
+                step: 0,
+                forward: true,
+            },
+            Owner::District(d),
+            them,
+        ));
+        // Clean: it sees you and lets you be.
+        assert!(!crate::foes::look(&mut st, 0));
+        tick(&mut st);
+        assert!(st.net.engaged.is_none(), "no fight for a clean runner");
+        // Heat on a building of its district: now you're a threat.
+        let hot = st
+            .city
+            .as_ref()
+            .unwrap()
+            .buildings
+            .iter()
+            .find(|x| x.district == d)
+            .unwrap()
+            .id;
+        st.net.trace(hot).heat = 5;
+        assert!(crate::foes::look(&mut st, 0), "traced, it hunts you");
+        // A tracer never needs a reason.
+        let tracer = GridIce {
+            grade: IceGrade::White,
+            role: Role::Tracer { at: 0, wait: None },
+            owner: Owner::District(d),
+        };
+        st.net.traces.clear();
+        assert!(threat(&st, &tracer));
     }
 
     #[test]

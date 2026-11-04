@@ -220,8 +220,12 @@ pub fn look(st: &mut AppState, i: usize) -> bool {
         };
         return true;
     }
-    let seen = match foe.ice {
-        Some(_) => crate::grid::sees(city, foe, me.1, st.net.mask > 0),
+    let seen = match &foe.ice {
+        // On the open Net a piece only takes you for a threat while you're traced.
+        Some(ice) => {
+            (foe.hunting() || crate::grid::threat(st, ice))
+                && crate::grid::sees(city, foe, me.1, st.net.mask > 0)
+        }
         None => sees(city, foe, me.1),
     };
     if seen {
