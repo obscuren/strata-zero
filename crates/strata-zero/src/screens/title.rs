@@ -58,6 +58,17 @@ impl Entry {
     }
 }
 
+/// The logo's neon.
+pub const LOGO_ACCENT: Rgb = Rgb(255, 0, 200);
+
+/// Where the title puts its logo's top left on `area`: centred, a sixth of the way down.
+pub fn logo_origin(area: Rect) -> (u16, u16) {
+    (
+        area.x + area.width.saturating_sub(logo::width(TITLE)) / 2,
+        area.y + area.height / 6,
+    )
+}
+
 const COMBAT_LABEL: &str = "NEW GAME · COMBAT";
 /// The pick in pink, the other in a grey that still reads.
 const PICKED: Color = Color::Rgb(255, 0, 200);
@@ -69,7 +80,14 @@ pub struct Title {
     opened: u64,
     /// The COMBAT start's map, picked with the arrows on its row.
     combat: CombatMap,
+    /// Keys before this tick are dropped, and each one dropped pushes it on (see
+    /// `after_splash`).
+    quiet_until: u64,
 }
+
+/// How long the title the splash hands over to waits for the keys to stop: 0.8 s with
+/// none, longer than the usual pause before a held key starts repeating.
+const QUIET: u64 = 24;
 
 impl Title {
     /// The current parameters with a seed nobody has played: the tick and the clock.
@@ -153,6 +171,18 @@ impl Title {
             entries,
             opened: tick,
             combat: CombatMap::Street,
+            quiet_until: 0,
+        }
+    }
+
+    /// The title the launch splash hands over to: it drops keys until `QUIET` ticks pass
+    /// with none, so a key mashed or held to skip the splash doesn't quit the game or
+    /// start one. (A terminal never says when a key is let go; the quiet is how a hold
+    /// is seen to end.)
+    pub fn after_splash(st: &AppState, tick: u64) -> Self {
+        Title {
+            quiet_until: tick + QUIET,
+            ..Title::new(st, tick)
         }
     }
 
@@ -198,6 +228,12 @@ impl Title {
 
 impl Screen for Title {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+        if st.tick < self.quiet_until {
+            if !keys.is_empty() {
+                self.quiet_until = st.tick + QUIET;
+            }
+            return ScreenCmd::Stay;
+        }
         for k in keys {
             match k.code {
                 KeyCode::Up | KeyCode::Char('k') => self.menu.up(),
@@ -239,12 +275,11 @@ impl Screen for Title {
     fn draw(&self, st: &AppState, f: &mut Frame) {
         let area = f.area();
         let w = logo::width(TITLE);
-        let x = area.x + area.width.saturating_sub(w) / 2;
-        let y = area.y + area.height / 6;
+        let (x, y) = logo_origin(area);
         Logo {
             text: TITLE,
             tick: st.tick,
-            accent: Rgb(255, 0, 200),
+            accent: LOGO_ACCENT,
             steady: false,
         }
         .render(

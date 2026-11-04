@@ -79,6 +79,8 @@ open -a "Strata Zero" --args --dev   # the Mac app
 
 It then starts on, `` ` `` flips it, Settings has a row for it, `?` lists its keys,
 and the title has NEW GAME (DEBUG) and NEW GAME · COMBAT while it is on.
+The game opens on a five-second splash (`screens/splash.rs`) before the title, in
+dev mode too; any key skips it.
 `STRATA_DEV` reaches the game only when a shell starts it: the Mac app opened from
 the Finder or the Dock never sees it.
 
