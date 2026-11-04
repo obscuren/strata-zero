@@ -6,7 +6,7 @@ use citygen::{Place, Pos};
 use std::collections::HashMap;
 
 /// Everything lying on the ground, keyed by place (a stratum or a floor) and tile.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Ground {
     piles: HashMap<(Place, Pos), Vec<Stack>>,
 }
@@ -98,6 +98,25 @@ mod tests {
     use super::*;
     use crate::character::ItemCopy;
     use citygen::{BuildingId, StratumKind};
+
+    #[test]
+    fn the_ground_comes_back() {
+        let mut g = Ground::default();
+        let a = (Place::Stratum(StratumKind::Street), Pos::new(3, 4));
+        let b = (Place::Stratum(StratumKind::Undercity), Pos::new(9, 1));
+        g.add(a.0, a.1, ItemId::new("copper_coil"), 5);
+        g.add(b.0, b.1, ItemId::new("dead_phone"), 1);
+        let bytes = rmp_serde::to_vec_named(&g).unwrap();
+        let back: Ground = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(back.at(a.0, a.1), g.at(a.0, a.1));
+        assert_eq!(back.at(b.0, b.1), g.at(b.0, b.1));
+        assert_eq!(
+            back.at(a.0, a.1)[0],
+            Stack::new(ItemId::new("copper_coil"), 5)
+        );
+        assert_eq!(back.on(a.0).count(), 1);
+        assert_eq!(back.on(b.0).count(), 1);
+    }
 
     #[test]
     fn piles_merge_take_and_vanish() {

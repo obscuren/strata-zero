@@ -16,11 +16,13 @@ pub const LEVELS_PER_ATTRIBUTE_POINT: u8 = 3;
 pub const EMP_PER_PIECE: i32 = 2;
 
 /// A copy's id, unique for the character that made it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct CopyId(pub u32);
 
 /// One copy of an item that carries state of its own.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ItemCopy {
     pub id: CopyId,
     /// One entry per socket; a fitted piece is a stack of one with its own copy.
@@ -40,7 +42,7 @@ impl ItemCopy {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Stack {
     pub item: ItemId,
     pub qty: u32,
@@ -78,7 +80,7 @@ impl Stack {
 }
 
 /// Where an ability comes from.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Source {
     Innate,
     Category(CategoryId),
@@ -87,7 +89,7 @@ pub enum Source {
 }
 
 /// A number the character sheet shows: an attribute, a secondary number, or a resistance.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Num {
     Attribute(Attribute),
     Hp,
@@ -167,7 +169,7 @@ impl Num {
 }
 
 /// Where part of a number comes from.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Contrib {
     /// Something worn.
     Gear(ItemId),
@@ -184,7 +186,7 @@ pub enum Contrib {
 }
 
 /// Where a program lands among the loaded ones, and what it sends back.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SlotPlan {
     /// The loaded order after the slot.
     pub loaded: Vec<ItemId>,
@@ -196,7 +198,7 @@ pub struct SlotPlan {
 
 /// The character. Nothing derived is cached: every value that depends on equipment
 /// is computed on read from what is equipped right now.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Character {
     pub handle: String,
     pub credits: u32,
@@ -2005,6 +2007,18 @@ mod tests {
             Boon::Flag("deep_end".into()).words(&c),
             "black ICE hits halved · the failsafe waits for an eighth · ten minutes cooling"
         );
+    }
+
+    #[test]
+    fn a_character_comes_back() {
+        let c = Content::load().unwrap();
+        let mut ch = Character::debug_runner(&c);
+        ch.give(ItemId::new("copper_coil"), 3);
+        let worn = ch.worn_copy(Slot::Deck).expect("a worn deck");
+        assert!(!worn.stickers.is_empty());
+        let bytes = rmp_serde::to_vec_named(&ch).unwrap();
+        let back: Character = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(back, ch);
     }
 
     #[test]

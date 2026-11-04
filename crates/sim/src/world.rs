@@ -26,7 +26,7 @@ pub const DRIVE_TICKS: u64 = 3;
 pub const DRIVE_FROM: i32 = 60;
 
 /// A trip someone wants; `path_some` turns it into legs.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TripRequest {
     pub who: PersonId,
     pub dest: Dest,
@@ -34,7 +34,7 @@ pub struct TripRequest {
 }
 
 /// What the player can see of someone.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MoverKind {
     Walker {
         id: PersonId,
@@ -48,14 +48,14 @@ pub enum MoverKind {
     Chat,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Mover {
     pub pos: Pos,
     pub kind: MoverKind,
 }
 
 /// What talking to someone, or inspecting them, shows.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Card {
     pub name: String,
     pub profession: String,
@@ -71,7 +71,7 @@ pub struct Card {
 
 /// Someone the player swapped places with: drawn on `to` until the player moves on,
 /// then back on `back` (a spot) or on their path.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct Displaced {
     /// The player's old tile, where they stand meanwhile.
     to: Pos,
@@ -82,7 +82,7 @@ struct Displaced {
 }
 
 /// Why someone is inside a building.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OccupantRole {
     Working,
     Living,
@@ -90,14 +90,14 @@ pub enum OccupantRole {
     Visiting,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Occupant {
     pub id: PersonId,
     pub role: OccupantRole,
 }
 
 /// A client and a sex worker inside a hotel until a minute.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 struct Date {
     client: PersonId,
     worker: PersonId,
@@ -106,12 +106,16 @@ struct Date {
     beat: Pos,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct World {
     people: Vec<Person>,
     cars: Vec<Car>,
     households: Vec<Vec<PersonId>>,
+    #[serde(skip)]
     places: Places,
+    #[serde(skip)]
     labels: HashMap<String, String>,
+    #[serde(skip)]
     night_lines: HashMap<String, String>,
     pending: VecDeque<TripRequest>,
     /// The last tick advanced to.
@@ -135,6 +139,22 @@ pub struct World {
     dead: BTreeSet<PersonId>,
     /// People held at work: the schedule does not send them home.
     held: BTreeSet<PersonId>,
+}
+
+fn labels_of(people: &People) -> HashMap<String, String> {
+    people
+        .professions
+        .iter()
+        .map(|p| (p.id.clone(), p.label.clone()))
+        .collect()
+}
+
+fn night_lines_of(people: &People) -> HashMap<String, String> {
+    people
+        .professions
+        .iter()
+        .filter_map(|p| p.night_line.clone().map(|l| (p.id.clone(), l)))
+        .collect()
 }
 
 impl World {
@@ -161,16 +181,8 @@ impl World {
             cars,
             households,
             places,
-            labels: people
-                .professions
-                .iter()
-                .map(|p| (p.id.clone(), p.label.clone()))
-                .collect(),
-            night_lines: people
-                .professions
-                .iter()
-                .filter_map(|p| p.night_line.clone().map(|l| (p.id.clone(), l)))
-                .collect(),
+            labels: labels_of(people),
+            night_lines: night_lines_of(people),
             pending: VecDeque::new(),
             tick,
             minute: tick / TICKS_PER_MINUTE,
@@ -189,6 +201,14 @@ impl World {
         w.place_everyone(city);
         w.refresh_open();
         w
+    }
+
+    /// Refills what a saved world leaves out (the places, the profession labels and night
+    /// lines), as `seed` builds them from the city and the people.
+    pub fn rebuild(&mut self, city: &City, people: &People) {
+        self.places = Places::derive(city);
+        self.labels = labels_of(people);
+        self.night_lines = night_lines_of(people);
     }
 
     pub fn tick(&self) -> u64 {
@@ -2275,6 +2295,30 @@ mod tests {
         assert_eq!(w.pos_of(id), None);
         for b in &c.buildings {
             assert!(!w.inside(b.id).iter().any(|o| o.id == id));
+        }
+    }
+
+    #[test]
+    fn a_world_comes_back_and_goes_on_the_same() {
+        let c = Generator::run(GenParams {
+            seed: 8,
+            size: SizePreset::Medium,
+            districts: 7,
+            ..Default::default()
+        })
+        .unwrap();
+        let people = People::load().unwrap();
+        let mut w = World::seed(&c, &people, &SimParams::default(), 22 * 60, 0);
+        run_to(&mut w, &c, 3_000);
+        let bytes = rmp_serde::to_vec_named(&w).unwrap();
+        let mut back: World = rmp_serde::from_slice(&bytes).unwrap();
+        back.rebuild(&c, &people);
+        run_to(&mut w, &c, 6_000);
+        run_to(&mut back, &c, 6_000);
+        assert_eq!(w.minute_of_day(), back.minute_of_day());
+        assert_eq!(w.people().len(), back.people().len());
+        for (a, b) in w.people().iter().zip(back.people()) {
+            assert_eq!(a.whereabouts, b.whereabouts, "{}", a.name);
         }
     }
 

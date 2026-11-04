@@ -26,7 +26,7 @@ const CONSTRUCT_SALT: u64 = 0xC0DE_5EED;
 
 /// A piece of ICE: where it was made, where it stands now (the tile carrying
 /// `Feature::Ice`), and the spine it walks when asleep (empty for white).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Guard {
     pub post: Pos,
     pub pos: Pos,
@@ -106,7 +106,7 @@ pub fn lot_construct() -> Construct {
 }
 
 /// The inside of a construct.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Construct {
     pub building: BuildingId,
     pub security: u8,
@@ -447,6 +447,20 @@ pub fn validate_construct(c: &Construct) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_construct_comes_back_with_its_guards() {
+        use super::*;
+        let mut k = lot_construct();
+        k.guards[0].pos = Pos::new(30, 9);
+        k.guards[0].standing = false;
+        let bytes = rmp_serde::to_vec_named(&k).unwrap();
+        let back: Construct = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(back.guards[0].pos, Pos::new(30, 9));
+        assert!(!back.guards[0].standing);
+        assert_eq!(back.guards, k.guards);
+        assert_eq!(back, k);
+    }
+
     #[test]
     fn the_lot_construct_is_a_lane_with_a_grey_ice_and_a_dummy() {
         use super::*;

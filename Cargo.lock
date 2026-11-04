@@ -346,6 +346,7 @@ dependencies = [
  "postcard",
  "rand 0.9.5",
  "rand_chacha",
+ "rmp-serde",
  "ron",
  "serde",
  "thiserror 2.0.21",
@@ -836,6 +837,7 @@ name = "game"
 version = "0.1.0"
 dependencies = [
  "citygen",
+ "rmp-serde",
  "ron",
  "serde",
  "thiserror 2.0.21",
@@ -1947,6 +1949,7 @@ checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
 dependencies = [
  "ppv-lite86",
  "rand_core 0.9.5",
+ "serde",
 ]
 
 [[package]]
@@ -2273,6 +2276,7 @@ dependencies = [
  "game",
  "rand 0.9.5",
  "rand_chacha",
+ "rmp-serde",
  "ron",
  "serde",
  "thiserror 2.0.21",

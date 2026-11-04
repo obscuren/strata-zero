@@ -24,6 +24,7 @@ fn terrain(city: &City, p: Pos) -> Option<Terrain> {
     city.tile(StratumKind::Street, p).map(|t| t.terrain)
 }
 
+#[derive(Default)]
 pub struct Places {
     /// Street doors per building: Door tiles on the footprint's edge with the street outside.
     pub doors: HashMap<BuildingId, Vec<Pos>>,

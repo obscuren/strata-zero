@@ -10,3 +10,6 @@ citygen = { path = "../citygen" }
 serde.workspace = true
 ron.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+rmp-serde.workspace = true

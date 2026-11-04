@@ -18,7 +18,7 @@ pub const HACK_MINUTES: u64 = 60;
 pub const COOLING_MINUTES: u64 = 10;
 
 /// What a program is pointed at.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Target {
     Node(NodeKind),
     Guard(IceGrade),
@@ -27,7 +27,9 @@ pub enum Target {
 }
 
 /// The exact thing a run works on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum HackTarget {
     Node(NodeId),
     Guard {
@@ -161,7 +163,7 @@ pub fn chance(power: i32, difficulty: i32) -> u8 {
 }
 
 /// A program in flight: how many successful turns it has, of how many it needs.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Run {
     pub program: ItemId,
     pub target: HackTarget,
@@ -169,7 +171,7 @@ pub struct Run {
     pub work: u8,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TraceEvent {
     None,
     Alarm,

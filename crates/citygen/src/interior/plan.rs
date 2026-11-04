@@ -24,7 +24,7 @@ const ATRIUM_W: i32 = 39;
 const ATRIUM_H: i32 = 27;
 
 /// What a floor is laid out as.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FloorType {
     Lobby,
     Corridor,
@@ -43,7 +43,7 @@ pub enum FloorType {
     Plaza,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FloorPlan {
     pub building: BuildingId,
     pub kind: BuildingKind,
@@ -74,14 +74,14 @@ pub struct FloorPlan {
 /// How a grid is laid on a floor: mirrored left to right first, then turned clockwise
 /// a quarter at a time. A grid's bottom row ends up on the south (0 quarters), west
 /// (1), north (2) or east (3) edge.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Turn {
     pub quarters: u8,
     pub mirror: bool,
 }
 
 /// A clinic's floors: the front's grid, turned so its street side faces the main door.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ClinicPlan {
     pub front: Front,
     pub turn: Turn,

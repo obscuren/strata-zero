@@ -13,7 +13,7 @@ repository = "https://github.com/obscuren/strata-zero"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 rand = "0.9"
-rand_chacha = "0.9"
+rand_chacha = { version = "0.9", features = ["serde"] }
 noise = "0.9"
 thiserror = "2"
 anyhow = "1"
@@ -22,6 +22,7 @@ postcard = { version = "1", features = ["use-std"] }
 serde_json = "1"
 rmp-serde = "1"
 flate2 = "1"
+rmpv = "1"
 ratatui = "0.29"
 crossterm = "0.28"
 clap = { version = "4", features = ["derive"] }
