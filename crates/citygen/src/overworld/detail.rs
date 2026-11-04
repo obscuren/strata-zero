@@ -12,7 +12,7 @@ use super::field::Fbm;
 use super::{Ground, Overworld, Water, WorldTile};
 use crate::geom::{Dir, Grid, Pos, Size};
 use crate::rng::{hash64, tile_hash};
-use crate::tile::{Terrain, Tile};
+use crate::tile::{Feature, Terrain, Tile};
 use crate::world::StratumKind;
 
 /// Detail tiles to an overworld tile, each way.
@@ -41,6 +41,8 @@ pub fn region(world: &Overworld, x0: i32, y0: i32, w: u32, h: u32) -> Grid<Tile>
     p.washes();
     p.shores();
     p.roads();
+    p.power_lines();
+    p.litter();
     p.crop(x0, y0, w, h)
 }
 
@@ -372,6 +374,114 @@ impl<'a> Patch<'a> {
         }
     }
 
+    /// Power lines on pylons beside a third of the highways (the route's hash picks
+    /// which, and which side): the line keeps 3 rows off a road running east-west and 6
+    /// columns off one running north-south, about the same distance on screen, with a
+    /// pylon at every corner and every other tile. Nothing stands on water, a road or
+    /// rough ground; the line just has a gap there.
+    fn power_lines(&mut self) {
+        let w = self.world;
+        let Size { w: pw, h: ph } = self.grid.size();
+        let lo = Pos::new(self.x0.div_euclid(TILE) - 2, self.y0.div_euclid(TILE) - 2);
+        let hi = Pos::new(
+            (self.x0 + pw as i32).div_euclid(TILE) + 2,
+            (self.y0 + ph as i32).div_euclid(TILE) + 2,
+        );
+        let near = |p: Pos| p.x >= lo.x && p.y >= lo.y && p.x <= hi.x && p.y <= hi.y;
+        let mut line = Vec::new();
+        let mut pylons = Vec::new();
+        for (i, r) in w.routes.iter().enumerate() {
+            let h = hash64(hash64(w.seed, 2041), i as u64);
+            if h % 3 != 0 || r.path.len() < 2 {
+                continue;
+            }
+            let side = if (h >> 8) & 1 == 0 { 1 } else { -1 };
+            let points: Vec<Option<(Pos, bool)>> = (0..r.path.len())
+                .map(|k| line_point(&r.path, k, side))
+                .collect();
+            for k in 0..r.path.len() - 1 {
+                if !(near(r.path[k]) || near(r.path[k + 1])) {
+                    continue;
+                }
+                let (Some((a, a_pylon)), Some((b, b_pylon))) = (points[k], points[k + 1]) else {
+                    continue;
+                };
+                let cells = straight(a, b);
+                for (j, c) in cells.iter().enumerate() {
+                    let next = cells.get(j + 1).or(cells.get(j.wrapping_sub(1)));
+                    let north_south = next.is_some_and(|n| n.x == c.x);
+                    line.push((*c, north_south));
+                }
+                if a_pylon {
+                    pylons.push(a);
+                }
+                if b_pylon {
+                    pylons.push(b);
+                }
+            }
+        }
+        for (c, north_south) in line {
+            if self.bare(c, false) {
+                self.set_feature(c, Feature::PowerLine(north_south));
+            }
+        }
+        for c in pylons {
+            if self.bare(c, true) {
+                self.set_feature(c, Feature::Pylon);
+            }
+        }
+    }
+
+    /// Litter and the odd wreck on and just off the highways' shoulders.
+    fn litter(&mut self) {
+        let seed = self.world.seed;
+        for p in self.cells().collect::<Vec<_>>() {
+            if !self.bare(p, false) || self.get(p).is_some_and(|t| t.terrain == Terrain::Wash) {
+                continue;
+            }
+            let by_road = std::iter::once(p)
+                .chain(p.neighbors8())
+                .any(|q| self.get(q).is_some_and(|t| t.terrain == Terrain::Gravel));
+            if !by_road {
+                continue;
+            }
+            if roll(seed, 2051, p) < 0.03 {
+                self.set_feature(p, Feature::Trash);
+            } else if roll(seed, 2052, p) < 0.006 {
+                self.set_feature(p, Feature::Barrier);
+            }
+        }
+    }
+
+    /// Whether dressing may stand on `p`: open ground in the world with nothing on it
+    /// (a pylon may replace its own line; it may not stand on a shoulder or in a wash).
+    fn bare(&self, p: Pos, pylon: bool) -> bool {
+        self.in_world(p)
+            && self.get(p).is_some_and(|t| {
+                let free = t.feature.is_none()
+                    || pylon && matches!(t.feature, Some(Feature::PowerLine(_)));
+                let ground = matches!(
+                    t.terrain,
+                    Terrain::Dirt
+                        | Terrain::Scrub
+                        | Terrain::Crops
+                        | Terrain::Salt
+                        | Terrain::Spill
+                        | Terrain::Sand
+                        | Terrain::Rise
+                        | Terrain::Reeds
+                ) || !pylon && matches!(t.terrain, Terrain::Gravel | Terrain::Wash);
+                free && ground
+            })
+    }
+
+    fn set_feature(&mut self, p: Pos, f: Feature) {
+        let l = self.local(p);
+        if let Some(t) = self.grid.get_mut(l) {
+            t.feature = Some(f);
+        }
+    }
+
     /// Stamps a square brush `width` wide reaching right and down from each of `cells`.
     fn brush_from(&mut self, cells: &[Pos], width: i32, mut f: impl FnMut(&mut Self, Pos)) {
         for c in cells {
@@ -438,6 +548,39 @@ fn crossing(world: &Overworld, tx: i32, ty: i32, side: Dir, road: bool, salt: u6
         Dir::S => Pos::new(TILE * tx + offset(tx, ty, false), TILE * ty + TILE - 1),
         _ => Pos::new(TILE * tx + offset(tx, ty - 1, false), TILE * ty),
     }
+}
+
+/// Where a power line beside route `path` stands on its `k`th tile, and whether a pylon
+/// stands there: off the road's lanes by the normal of each step on `side`, mitred at a
+/// corner (which always has a pylon), else on every other tile. `None` where the path
+/// doesn't step to a neighbour.
+fn line_point(path: &[Pos], k: usize, side: i32) -> Option<(Pos, bool)> {
+    let step = |a: Pos, b: Pos| {
+        let d = (b.x - a.x, b.y - a.y);
+        (d.0.abs() + d.1.abs() == 1).then_some(d)
+    };
+    let d_in = if k > 0 {
+        step(path[k - 1], path[k])?
+    } else {
+        step(path[0], path[1])?
+    };
+    let d_out = match path.get(k + 1) {
+        Some(&n) => step(path[k], n)?,
+        None => d_in,
+    };
+    let t = path[k];
+    let (ox, oy) = (TILE * t.x, TILE * t.y);
+    // a step east-west puts the line on row 7 (south) or row 0 (north) of the tile; a
+    // step north-south on column 10 (east) or -3 (west)
+    let row = |(dx, _): (i32, i32)| oy + if side * dx > 0 { 7 } else { 0 };
+    let col = |(_, dy): (i32, i32)| ox + if -side * dy > 0 { 10 } else { -3 };
+    let point = match (d_in.0 != 0, d_out.0 != 0) {
+        (true, true) => (Pos::new(ox + 3, row(d_in)), false),
+        (false, false) => (Pos::new(col(d_in), oy + 3), false),
+        (true, false) => (Pos::new(col(d_out), row(d_in)), true),
+        (false, true) => (Pos::new(col(d_in), row(d_out)), true),
+    };
+    Some((point.0, point.1 || (t.x + t.y).rem_euclid(2) == 0))
 }
 
 /// Four-connected cells from `a` to `b`, stepping along the longer way.
@@ -528,6 +671,24 @@ fn blend(world: &Overworld, x: f32, y: f32, f: impl Fn(&WorldTile) -> f32) -> f3
         + at(1, 0) * ux * (1.0 - uy)
         + at(0, 1) * (1.0 - ux) * uy
         + at(1, 1) * ux * uy
+}
+
+/// A hash of tile `(tx, ty)`'s ground, cell by cell, for the pinned-seed tests.
+#[cfg(test)]
+pub fn fingerprint(world: &Overworld, tx: i32, ty: i32) -> u64 {
+    let g = ground(world, tx, ty);
+    let cells: Vec<(Terrain, Option<Feature>, u8)> = g
+        .iter()
+        .map(|(_, t)| (t.terrain, t.feature, t.variant))
+        .collect();
+    let bytes = postcard::to_allocvec(&cells).unwrap();
+    bytes
+        .chunks(8)
+        .fold(hash64(world.seed, 0xD7A1), |h, chunk| {
+            let mut b = [0u8; 8];
+            b[..chunk.len()].copy_from_slice(chunk);
+            hash64(h, u64::from_le_bytes(b))
+        })
 }
 
 /// A detail cell's stable roll in 0..1 under `salt`.
@@ -892,6 +1053,125 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn power_lines_run_beside_some_highways() {
+        use crate::tile::Feature;
+        let w = Overworld::generate(WorldParams {
+            seed: 0,
+            ..Default::default()
+        })
+        .unwrap();
+        let g = whole(&w);
+        let pylons = g.count(|t| t.feature == Some(Feature::Pylon));
+        let line = g.count(|t| matches!(t.feature, Some(Feature::PowerLine(_))));
+        assert!(pylons >= 20, "{pylons} pylons");
+        assert!(
+            line >= 8 * pylons,
+            "{line} cells of line for {pylons} pylons"
+        );
+        // every pylon has its line beside it
+        for (p, t) in g.iter() {
+            if t.feature == Some(Feature::Pylon) {
+                let wired = p.neighbors8().any(|q| {
+                    g.get(q).is_some_and(|t| {
+                        matches!(t.feature, Some(Feature::PowerLine(_) | Feature::Pylon))
+                    })
+                });
+                assert!(wired, "a lone pylon at {p:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn nothing_stands_on_water_or_the_road() {
+        for seed in 0..2 {
+            let w = Overworld::generate(WorldParams {
+                seed,
+                ..Default::default()
+            })
+            .unwrap();
+            let g = whole(&w);
+            assert!(
+                g.count(|t| t.feature.is_some()) > 100,
+                "seed {seed}: no dressing"
+            );
+            for (p, t) in g.iter() {
+                if t.feature.is_some() {
+                    assert!(
+                        !matches!(
+                            t.terrain,
+                            Terrain::Water
+                                | Terrain::Shallows
+                                | Terrain::Ford
+                                | Terrain::Road
+                                | Terrain::Bridge
+                                | Terrain::Railing
+                                | Terrain::Cliff
+                        ),
+                        "seed {seed} {p:?}: {:?} on {:?}",
+                        t.feature,
+                        t.terrain
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn detail_fingerprints_are_pinned() {
+        // A shared seed must give the same ground on every platform; CI runs this on
+        // macOS, Linux and Windows. Update only for a change meant to move the ground.
+        let w = Overworld::generate(WorldParams {
+            seed: 0,
+            ..Default::default()
+        })
+        .unwrap();
+        let pick = |f: &dyn Fn(&WorldTile) -> bool| {
+            w.tiles.iter().find(|(_, t)| f(t)).map(|(p, _)| p).unwrap()
+        };
+        let tiles = [
+            ("coast", pick(&|t| t.water == Water::Sea)),
+            ("river", pick(&|t| t.water == Water::River && t.road == 0)),
+            ("bridge", pick(&|t| t.water == Water::River && t.road != 0)),
+            ("mountains", pick(&|t| t.ground == Ground::Mountains)),
+            ("salt", pick(&|t| t.ground == Ground::Salt)),
+        ];
+        let got: Vec<(&str, u64)> = tiles
+            .iter()
+            .map(|(n, p)| (*n, fingerprint(&w, p.x, p.y)))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("coast", 3962815746502327822),
+                ("river", 3108408208208366968),
+                ("bridge", 13447226120155517583),
+                ("mountains", 17390919345350947746),
+                ("salt", 1906901485315573515)
+            ]
+        );
+    }
+
+    #[test]
+    fn tiles_build_fast() {
+        let w = Overworld::generate(WorldParams {
+            seed: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        let start = std::time::Instant::now();
+        for ty in 0..w.size.h as i32 {
+            for tx in 0..w.size.w as i32 {
+                let _ = ground(&w, tx, ty);
+            }
+        }
+        let per = start.elapsed() / (w.size.w * w.size.h);
+        assert!(
+            per < std::time::Duration::from_millis(3),
+            "{per:?} a tile (debug build)"
+        );
     }
 
     #[test]

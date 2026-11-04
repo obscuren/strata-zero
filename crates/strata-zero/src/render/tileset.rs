@@ -126,6 +126,8 @@ pub fn glyph_for(
             Feature::Cable => '╌',
             Feature::Awning => '▔',
             Feature::Pylon => '╫',
+            Feature::PowerLine(false) => '┄',
+            Feature::PowerLine(true) => '┆',
             Feature::Node(k) => node_glyph(k, style),
             Feature::Furniture(piece) => match piece {
                 Furniture::Desk => '▭',
@@ -448,6 +450,7 @@ fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
         Feature::Furniture(Furniture::Chair) => CHAIR,
         Feature::Furniture(_) => ts.wall.scale(1.2),
         Feature::Pylon => Rgb(106, 110, 118),
+        Feature::PowerLine(_) => Rgb(42, 46, 54),
     }
 }
 

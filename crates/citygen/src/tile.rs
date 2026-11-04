@@ -216,6 +216,8 @@ pub enum Feature {
     Fitting(Fitting),
     /// A power line's pylon out in the open; nobody walks through it.
     Pylon,
+    /// A power line overhead between pylons; `true` where it runs north-south.
+    PowerLine(bool),
 }
 
 /// A light fitting on an interior floor: hung from the ceiling (walked under), set in a
@@ -359,7 +361,7 @@ impl Furniture {
     }
 }
 
-pub const ALL_FEATURES: [Feature; 22] = [
+pub const ALL_FEATURES: [Feature; 24] = [
     Feature::Neon(Hue::Cyan),
     Feature::HoloAd,
     Feature::Lamp,
@@ -390,6 +392,8 @@ pub const ALL_FEATURES: [Feature; 22] = [
         wear: Wear::Ok,
     }),
     Feature::Pylon,
+    Feature::PowerLine(false),
+    Feature::PowerLine(true),
 ];
 
 /// One cell of a stratum.
@@ -519,9 +523,12 @@ mod tests {
         let mut pylon = Tile::new(Dirt);
         pylon.feature = Some(Feature::Pylon);
         assert!(!pylon.is_walkable() && !pylon.blocks_sight());
+        let mut line = Tile::new(Dirt);
+        line.feature = Some(Feature::PowerLine(true));
+        assert!(line.is_walkable() && !line.blocks_sight());
         assert_eq!(ALL_TERRAIN.len(), 42);
         assert_eq!(*ALL_TERRAIN.last().unwrap(), Wash);
-        assert_eq!(*ALL_FEATURES.last().unwrap(), Feature::Pylon);
+        assert_eq!(*ALL_FEATURES.last().unwrap(), Feature::PowerLine(true));
     }
 
     use super::*;
@@ -542,8 +549,8 @@ mod tests {
         assert!(!Tile::new(Terrain::Window).is_walkable());
         assert!(Tile::new(Terrain::Plaza).is_outdoor_ground());
         assert!(Tile::new(Terrain::Door).is_building_part());
-        assert_eq!(ALL_TERRAIN.len(), 28);
-        assert_eq!(ALL_FEATURES.len(), 21);
+        assert_eq!(ALL_TERRAIN.len(), 42);
+        assert_eq!(ALL_FEATURES.len(), 24);
         assert!(!Tile::new(Terrain::Mass).is_walkable());
         assert!(Tile::new(Terrain::Mass).blocks_sight());
         assert!(Tile::new(Terrain::Mass).is_building_part());
@@ -561,8 +568,12 @@ mod tests {
             assert!(!tile.blocks_sight());
             assert!(!tile.is_building_part());
         }
-        assert_eq!(ALL_TERRAIN.len(), 28);
-        assert_eq!(*ALL_TERRAIN.last().unwrap(), Terrain::Railing);
+        assert_eq!(ALL_TERRAIN.len(), 42);
+        assert_eq!(
+            ALL_TERRAIN[27],
+            Terrain::Railing,
+            "appended, so saves keep indices"
+        );
         assert_eq!(Furniture::Couch.label(), "couch");
         assert_eq!(Furniture::Shower.label(), "shower");
     }
@@ -606,8 +617,8 @@ mod tests {
         assert_eq!(Terrain::NetWall.label(), "construct wall");
         assert_eq!(Terrain::Road.label(), "road");
         assert!(Terrain::NetLane.is_net() && !Terrain::Road.is_net());
-        assert_eq!(ALL_TERRAIN.len(), 28);
-        assert_eq!(ALL_FEATURES.len(), 21);
+        assert_eq!(ALL_TERRAIN.len(), 42);
+        assert_eq!(ALL_FEATURES.len(), 24);
         assert_eq!(crate::world::StratumKind::ALL.len(), 5);
         assert_eq!(
             crate::world::StratumKind::ALL[4],
