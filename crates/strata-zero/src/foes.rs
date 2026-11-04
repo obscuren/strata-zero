@@ -45,7 +45,9 @@ pub struct Foe {
     pub chrome: bool,
     /// Read by Deadeye: your chance on it is better for the fight.
     pub marked: bool,
-    /// ICE on the open Net: its grade, role and owner (`grid`).
+    /// ICE on the open Net: its grade, role and owner (`grid`). After the first saves,
+    /// so it defaults: a foe they hold is no ICE.
+    #[serde(default)]
     pub ice: Option<crate::grid::GridIce>,
 }
 

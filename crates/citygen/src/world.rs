@@ -95,8 +95,9 @@ pub struct Stratum {
     pub steady: Grid<u8>,
     /// Light from street lamps, which switch off by day. No ambient.
     pub lamps: Grid<u8>,
-    /// Districts whose street lamps are cut for now (a lamp grid's lights out). Only for
-    /// the session: never saved.
+    /// Districts whose street lamps are cut for now (a lamp grid's lights out). Never
+    /// saved: the game makes it from what it keeps of the lights out, and again as a
+    /// saved run is reopened.
     #[serde(skip)]
     pub dark: std::collections::BTreeSet<DistrictId>,
 }

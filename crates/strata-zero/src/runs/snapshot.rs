@@ -104,6 +104,7 @@ pub fn snapshot(st: &AppState) -> SnapshotRef<'_> {
         interiors,
         constructs,
         net,
+        grid_patrols: _, // dev switch: Settings' grid patrols
         backdoors,
         ground,
         fx,
@@ -210,6 +211,7 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
         interiors,
         constructs,
         net,
+        grid_patrols: _, // dev switch
         backdoors,
         ground,
         fx,
@@ -321,13 +323,17 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
 }
 
 /// Rebuilds what a restored run leaves out (the world's places and labels, the home,
-/// the tracked walk), drops whatever the run holds that this build's content lacks, and
-/// logs a warning for each thing gone: `lost`, from `file::read`, and those.
+/// the street's lamps cut by a lights out, the tracked walk), drops whatever the run
+/// holds that this build's content lacks, and logs a warning for each thing gone:
+/// `lost`, from `file::read`, and those.
 pub fn after_restore(st: &mut AppState, mut lost: Vec<String>) {
     if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
         world.rebuild(city, &st.people);
     }
     st.home = st.city.as_ref().and_then(crate::home::HomeRig::find);
+    // The street's `dark` is the city's, skipped by the save: made again from the
+    // districts `net.lights_out` still holds.
+    crate::holds::relight(st);
     lost.extend(st.character.forget_unknown(&st.content));
     lost.extend(st.ground.forget_unknown(&st.content));
     lost.extend(st.missions.forget_unknown(&st.content));

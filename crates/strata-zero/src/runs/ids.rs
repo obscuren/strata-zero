@@ -1368,7 +1368,8 @@ mod tests {
         st.net.echo = Some(crate::net::RollEcho {
             at: st.tick,
             roll: crate::net::Roll::Hit,
-            building: tower,
+            // Written as `building: tower` by the build that wrote the fixture.
+            scene: crate::net::Scene::Inside(tower),
             run: crack,
         });
         crate::net::engage(&mut st, Place::Construct(tower), true);

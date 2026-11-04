@@ -173,6 +173,7 @@ pub enum Roll {
 /// A run's last roll: when (`AppState::tick`), how it went, and the run as it stood
 /// after it (a landed run has `done == work` and is gone from `NetState::run`).
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "EchoRead")]
 pub struct RollEcho {
     pub at: u64,
     pub roll: Roll,
@@ -180,8 +181,39 @@ pub struct RollEcho {
     pub run: Run,
 }
 
+/// A `RollEcho` as a save holds it. The first saves (`runs/fixtures/run-v1*.run`) were
+/// written before a run could be worked out on the open Net: they name the construct as
+/// `building`, where a save now writes its `scene`.
+#[derive(serde::Deserialize)]
+struct EchoRead {
+    at: u64,
+    roll: Roll,
+    #[serde(default)]
+    scene: Option<Scene>,
+    #[serde(default)]
+    building: Option<BuildingId>,
+    run: Run,
+}
+
+impl TryFrom<EchoRead> for RollEcho {
+    type Error = &'static str;
+
+    fn try_from(e: EchoRead) -> Result<RollEcho, Self::Error> {
+        let scene = e
+            .scene
+            .or(e.building.map(Scene::Inside))
+            .ok_or("a roll's echo with no scene")?;
+        Ok(RollEcho {
+            at: e.at,
+            roll: e.roll,
+            scene,
+            run: e.run,
+        })
+    }
+}
+
 /// Where a run is worked: inside a construct, or out on the open Net.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Scene {
     Inside(BuildingId),
     Outside,
@@ -313,7 +345,9 @@ pub struct NetState {
     pub death: Option<String>,
     pub traces: BTreeMap<BuildingId, Trace>,
     /// The districts' traces, beside the buildings': heat from their lamp grids and
-    /// street terminals (`owners::heat_on`).
+    /// street terminals (`owners::heat_on`). It and every field below added with the Net's
+    /// nodes came after the first saves: each defaults, so those still open.
+    #[serde(default)]
     pub district_traces: BTreeMap<citygen::DistrictId, Trace>,
     /// Constructs whose trace has already been routed away once this session.
     pub null_routed: BTreeSet<BuildingId>,
@@ -331,20 +365,29 @@ pub struct NetState {
     /// Your turns left stunned by a blast of your own.
     pub stunned_you: u8,
     /// The nodes you hold and the verbs spent on them (`holds`).
+    #[serde(default)]
     pub holds: Vec<crate::holds::Hold>,
     /// The camera whose feed is open.
+    #[serde(default)]
     pub feed: Option<NodeId>,
     /// Buildings whose holo ads say your line.
+    #[serde(default)]
     pub hijacks: Vec<crate::holds::Hijack>,
-    /// Districts whose street lamps are cut, until a game minute.
+    /// Districts whose street lamps are cut, until a game minute. The street's own
+    /// `Stratum::dark` isn't saved: it is made from this (`holds::relight`).
+    #[serde(default)]
     pub lights_out: BTreeMap<citygen::DistrictId, u64>,
     /// An ad board flooding its room in a construct.
+    #[serde(default)]
     pub decoy: Option<crate::holds::Decoy>,
     /// The game minute the street's cameras last warmed a trace.
+    #[serde(default)]
     pub eyes_minute: Option<u64>,
     /// The clock tick a hijacked ad near you may say its line again.
+    #[serde(default)]
     pub line_next: u64,
     /// The open Net's trail, sentinels, tracers' pace and sweeps.
+    #[serde(default)]
     pub grid: crate::grid::GridState,
     last_minute: u64,
     /// Every roll comes out this way, for tests.
@@ -354,6 +397,8 @@ pub struct NetState {
     pub force_roll: Option<u8>,
     /// Slipstream always sheds (`Some(true)`) or never, for tests.
     #[cfg(test)]
+    // A test switch, never part of a run.
+    #[serde(skip)]
     pub force_slip: Option<bool>,
 }
 
