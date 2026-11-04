@@ -413,6 +413,9 @@ fn terrain_colors(terrain: Terrain, tile: &Tile, ctx: &RenderCtx, tick: u64) -> 
 /// The operating chair's cyan.
 const CHAIR: Rgb = Rgb(0, 229, 255);
 
+/// The caps either end of a roadside sign (round 2's Kilo-9).
+const SIGN_CAP: Rgb = Rgb(60, 140, 255);
+
 /// Feature foreground colour, if the feature overrides it.
 fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
     let ts = ctx.style.theme_or_neutral(ctx.theme);
@@ -439,6 +442,8 @@ fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
         Feature::Trash => Rgb(115, 105, 85),
         Feature::Barrier => Rgb(255, 60, 60),
         Feature::Stall => ts.accent,
+        // a roadside sign's caps in blue, its letters in the sign's orange
+        Feature::Sign('▣') => SIGN_CAP,
         Feature::Sign(_) => ts.accent2,
         Feature::Terminal => Rgb(0, 230, 210),
         Feature::Camera => Rgb(255, 60, 70),

@@ -357,14 +357,17 @@ impl Site<'_, '_> {
             let r = self.roll(20 + k);
             self.put(f.at((r % 40) as i32, ((r >> 8) % 6) as i32), Feature::Trash);
         }
-        // the sign by the road: the stop's name on posts
+        // the sign by the road: the stop's name between two caps, on posts
         let name: String = poi
             .name
             .split_whitespace()
             .next()
             .unwrap_or("STOP")
             .to_uppercase();
-        for (k, ch) in name.chars().take(8).enumerate() {
+        let sign = std::iter::once('▣')
+            .chain(name.chars().take(8))
+            .chain(std::iter::once('▣'));
+        for (k, ch) in sign.enumerate() {
             // a letter a cell either way the road runs (a unit is half a row along a
             // north-south one)
             let step = if f.across { 1 } else { 2 };
@@ -886,6 +889,27 @@ mod tests {
             count(&g, |t| t.feature == Some(Feature::Camera)) >= 1,
             "a camera"
         );
+    }
+
+    #[test]
+    fn a_truck_stops_sign_is_framed() {
+        // the roadside sign is the stop's name between two ▣ caps, as round 2's Kilo-9
+        for seed in 0..6 {
+            let w = small(seed);
+            for poi in w.pois.iter().filter(|p| p.kind == PoiKind::TruckStop) {
+                let (_, g) = round(&w, poi, 6);
+                let signs = g
+                    .iter()
+                    .filter_map(|(p, t)| match t.feature {
+                        Some(Feature::Sign(c)) if c != '!' => Some((p, c)),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let caps = signs.iter().filter(|(_, c)| *c == '▣').count();
+                assert_eq!(caps, 2, "seed {seed} {:?}: {signs:?}", poi.at);
+                assert!(signs.len() >= 4, "seed {seed} {:?}: {signs:?}", poi.at);
+            }
+        }
     }
 
     #[test]

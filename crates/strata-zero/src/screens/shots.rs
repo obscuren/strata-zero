@@ -4008,4 +4008,26 @@ fn open_net_shots() {
     s.update(&mut st, &[key(KeyCode::Char(' '))]);
     s.update(&mut st, &[]);
     shot_stack("open_net_truck_stop", &st, &[&s], (120, 40));
+    // a barren stretch: dry land with no road and no POI for three tiles round, its Net
+    // the odd stray dot in the void
+    let barren = w
+        .tiles
+        .iter()
+        .map(|(p, _)| p)
+        .find(|p| {
+            let around = (-3..=3).flat_map(|dy| (-3..=3).map(move |dx| p.offset(dx, dy)));
+            around.clone().all(|q| {
+                w.tile(q).is_some_and(|t| {
+                    t.road == 0 && t.urban.is_none() && t.water == citygen::overworld::Water::None
+                })
+            }) && !w.pois.iter().any(|poi| around.clone().any(|q| q == poi.at))
+        })
+        .unwrap();
+    let cell = Pos::new(TILE * barren.x + TILE / 2, TILE * barren.y + TILE / 2);
+    let o = st.outside.as_mut().unwrap();
+    o.at = At::Ground(cell);
+    o.net = Some(cell);
+    s.update(&mut st, &[]);
+    s.update(&mut st, &[]);
+    shot_stack("open_net_barren", &st, &[&s], (120, 40));
 }

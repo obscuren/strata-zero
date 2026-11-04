@@ -288,11 +288,12 @@ impl OutsideScreen {
             st.warn("the signal is too thin out there");
             return;
         }
+        // the void between signal is barren but walkable; a construct's wall is not
         let ok = self
             .net_view
             .as_ref()
             .and_then(|v| v.tile(to))
-            .is_some_and(|t| t.is_walkable() && t.terrain != citygen::Terrain::Void);
+            .is_some_and(|t| t.terrain == citygen::Terrain::Void || t.is_walkable());
         if !ok {
             return;
         }
@@ -334,7 +335,11 @@ impl OutsideScreen {
                             sky: None,
                             glow: None,
                         };
-                        lighting::apply_vis(tileset::cell(t, &ctx), vis)
+                        let mut c = tileset::cell(t, &ctx);
+                        if t.terrain == citygen::Terrain::Void {
+                            c.bg = crate::render::netlook::VOID;
+                        }
+                        lighting::apply_vis(c, vis)
                     }
                     None => blank(),
                 };
@@ -542,7 +547,7 @@ impl OutsideScreen {
                             sky: None,
                             glow: None,
                         };
-                        lighting::apply_vis(tileset::cell(t, &ctx), vis)
+                        lighting::apply_vis(open_cell(t, &ctx), vis)
                     }
                     _ => blank(),
                 };
@@ -604,6 +609,22 @@ fn blank() -> Cell {
         bold: false,
         dim: false,
     }
+}
+
+/// The orange of a roadside sign's letters (round 2's Kilo-9).
+const ROADSIDE_SIGN: Rgb = Rgb(255, 140, 0);
+
+/// A ground cell as the street draws it, but a roadside sign's letters in the sign's
+/// orange (the open ground has no district to colour them).
+fn open_cell(t: &citygen::Tile, ctx: &RenderCtx) -> Cell {
+    let mut c = tileset::cell(t, ctx);
+    if let Some(citygen::Feature::Sign(ch)) = t.feature
+        && ch != '▣'
+        && ch != '!'
+    {
+        c.fg = ROADSIDE_SIGN;
+    }
+    c
 }
 
 /// Which neighbours of `p` join its terrain, for the glyphs drawn by their neighbours
@@ -906,6 +927,33 @@ mod tests {
     use citygen::Dir;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+
+    #[test]
+    fn a_roadside_sign_is_orange_between_blue_caps() {
+        let st = AppState::new();
+        let ctx = RenderCtx {
+            style: &st.style,
+            theme: None,
+            stratum: StratumKind::Street,
+            light: 110,
+            tick: 0,
+            vis: Visibility::Visible,
+            connector: None,
+            kind: None,
+            wall_mask: 0,
+            lamps_on: true,
+            sky: None,
+            glow: None,
+        };
+        let sign = |c: char| {
+            let mut t = citygen::Tile::new(Terrain::Gravel);
+            t.feature = Some(citygen::Feature::Sign(c));
+            open_cell(&t, &ctx)
+        };
+        assert_eq!(sign('K').fg, ROADSIDE_SIGN);
+        assert_eq!(sign('▣').ch, '▣');
+        assert!(sign('▣').fg.2 > sign('▣').fg.0, "a blue cap");
+    }
 
     fn text(st: &AppState, s: &OutsideScreen, w: u16, h: u16) -> String {
         let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
@@ -1320,6 +1368,31 @@ mod tests {
                 .recent(st.tick)
                 .is_some_and(|e| e.text.contains("signal"))
         );
+    }
+
+    #[test]
+    fn the_barren_net_walks_within_reach() {
+        let (mut st, mut s) = by_a_pump();
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        // stand on the void in reach, beside more void: barren, but a step onto it goes
+        let o = st.outside.as_ref().unwrap();
+        let (At::Ground(body), Some(n)) = (o.at, o.net) else {
+            panic!("jacked in on the ground");
+        };
+        let view = s.net_view.as_ref().unwrap();
+        let void = |p: Pos| {
+            in_reach(body, p)
+                && view
+                    .tile(p)
+                    .is_some_and(|t| t.terrain == citygen::Terrain::Void)
+        };
+        let from = (-12..=12)
+            .flat_map(|dy| (-12..=12).map(move |dx| n.offset(dx, dy)))
+            .find(|p| void(*p) && void(p.offset(1, 0)))
+            .expect("void in reach");
+        st.outside.as_mut().unwrap().net = Some(from);
+        s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        assert_eq!(st.outside.as_ref().unwrap().net, Some(from.offset(1, 0)));
     }
 
     #[test]

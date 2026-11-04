@@ -13,7 +13,7 @@ use crate::tile::{Feature, Terrain, Tile};
 const MARGIN: i32 = 48;
 
 /// How far the grid fades out from signal, in screen columns (a row is two).
-const FADE: f32 = 22.0;
+const FADE: f32 = 13.0;
 
 /// The longest spur or light line, in cells.
 const SPUR: i32 = 40;
@@ -26,9 +26,14 @@ pub fn region(world: &Overworld, x0: i32, y0: i32, w: u32, h: u32) -> Grid<Tile>
         h: h + 2 * MARGIN as u32,
     };
     let ground = detail::region(world, bx, by, size.w, size.h);
+    let mut rooms = Grid::filled(size, false);
+    for (l, t) in ground.iter() {
+        rooms[l] = is_room(t);
+    }
     let mut net = Net {
         grid: Grid::filled(size, Tile::new(Terrain::Void)),
         origin: Pos::new(bx, by),
+        rooms,
     };
     // The trunks: every highway's centreline.
     let (tx0, ty0) = (bx.div_euclid(TILE) - 1, by.div_euclid(TILE) - 1);
@@ -50,14 +55,7 @@ pub fn region(world: &Overworld, x0: i32, y0: i32, w: u32, h: u32) -> Grid<Tile>
     }
     // The constructs: every POI room's outline, a gate where its door is, a node
     // inside the door; the spur from the gate out to a trunk.
-    let room = |p: Pos| {
-        ground.get(p).is_some_and(|t| {
-            matches!(
-                t.terrain,
-                Terrain::Wall | Terrain::Window | Terrain::Door | Terrain::Floor
-            )
-        })
-    };
+    let room = |p: Pos| ground.get(p).is_some_and(is_room);
     let mut gates = Vec::new();
     for (l, t) in ground.iter() {
         if !room(l) {
@@ -80,20 +78,35 @@ pub fn region(world: &Overworld, x0: i32, y0: i32, w: u32, h: u32) -> Grid<Tile>
         let inward = g
             .neighbors4()
             .find(|q| ground.get(*q).is_some_and(|t| t.terrain == Terrain::Floor));
-        let Some(inside) = inward else { continue };
-        net.node(net.world(inside), NodeKind::Terminal);
-        let out = (g.x - inside.x, g.y - inside.y);
+        // a door with no floor behind it still gets its spur, out of whichever side
+        // isn't the room
+        let out = match inward {
+            Some(inside) => {
+                net.node(net.world(inside), NodeKind::Terminal);
+                (g.x - inside.x, g.y - inside.y)
+            }
+            None => [(0, 1), (0, -1), (1, 0), (-1, 0)]
+                .into_iter()
+                .find(|d| !room(g.offset(d.0, d.1)))
+                .unwrap_or((0, 1)),
+        };
         net.spur(world, net.world(g), out);
     }
     // Lone nodes: cameras, the stop's sign, a mast, each on a light line to a lane.
     for (l, t) in ground.iter() {
         let kind = match t.feature {
             Some(Feature::Camera) => NodeKind::Camera,
-            Some(Feature::Sign(_))
-                if !matches!(
-                    ground.get(l.offset(-1, 0)).and_then(|t| t.feature),
-                    Some(Feature::Sign(_))
-                ) =>
+            // a sign's first letter is its ad server (not a warning sign's)
+            Some(Feature::Sign(c))
+                if c != '!'
+                    && !matches!(
+                        ground.get(l.offset(-1, 0)).and_then(|t| t.feature),
+                        Some(Feature::Sign(_))
+                    )
+                    && !matches!(
+                        ground.get(l.offset(0, -1)).and_then(|t| t.feature),
+                        Some(Feature::Sign(_))
+                    ) =>
             {
                 NodeKind::AdBoard
             }
@@ -122,12 +135,15 @@ pub fn region(world: &Overworld, x0: i32, y0: i32, w: u32, h: u32) -> Grid<Tile>
             continue;
         }
         let p = net.world(l);
+        // round 2's lattice of dots, thinning out from signal, the odd one far off
+        if p.x.rem_euclid(4) != 0 || p.y.rem_euclid(2) != 0 {
+            continue;
+        }
         let r = roll(world.seed, 3301, p);
         let keep = if *dist <= FADE {
-            let f = 1.0 - dist / FADE;
-            r < 0.75 * f * f
+            r < 1.0 - dist / FADE
         } else {
-            r < 0.002
+            r < 0.01
         };
         if keep {
             net.grid[l].terrain = Terrain::NetGrid;
@@ -137,16 +153,32 @@ pub fn region(world: &Overworld, x0: i32, y0: i32, w: u32, h: u32) -> Grid<Tile>
     let mut out = Grid::filled(Size { w, h }, Tile::new(Terrain::Void));
     for y in 0..h as i32 {
         for x in 0..w as i32 {
-            out[Pos::new(x, y)] = net.grid[Pos::new(x + MARGIN, y + MARGIN)];
+            let mut t = net.grid[Pos::new(x + MARGIN, y + MARGIN)];
+            t.variant = crate::rng::tile_hash(
+                world.seed,
+                crate::world::StratumKind::Net,
+                Pos::new(x0 + x, y0 + y),
+            );
+            out[Pos::new(x, y)] = t;
         }
     }
     out
+}
+
+/// Whether a ground cell is part of a building (which becomes a construct).
+fn is_room(t: &Tile) -> bool {
+    matches!(
+        t.terrain,
+        Terrain::Wall | Terrain::Window | Terrain::Door | Terrain::Floor
+    )
 }
 
 /// The Net being drawn, over the built rectangle.
 struct Net {
     grid: Grid<Tile>,
     origin: Pos,
+    /// The ground's buildings, which a spur goes round rather than through.
+    rooms: Grid<bool>,
 }
 
 impl Net {
@@ -191,18 +223,22 @@ impl Net {
         }
     }
 
-    fn is_lane(&self, p: Pos) -> bool {
-        self.get(p).is_some_and(|t| t.terrain == Terrain::NetLane)
+    fn in_room(&self, p: Pos) -> bool {
+        self.rooms.get(self.local(p)).copied().unwrap_or(false)
     }
 
-    /// A spur out of a gate along `out` to the first lane; if none within reach, to the
-    /// nearest trunk the world's roads give.
+    /// A spur out of a gate along `out` to the first trunk straight ahead; if none
+    /// within reach, to the nearest trunk the world's roads give, stepping sideways
+    /// first where the way round a building needs it.
     fn spur(&mut self, world: &Overworld, gate: Pos, out: (i32, i32)) {
         let mut path = Vec::new();
         let mut q = gate;
         for _ in 0..SPUR {
             q = q.offset(out.0, out.1);
-            if self.is_lane(q) {
+            if self.in_room(q) {
+                break;
+            }
+            if on_trunk(world, q) {
                 for c in path {
                     self.lane(c);
                 }
@@ -210,10 +246,30 @@ impl Net {
             }
             path.push(q);
         }
-        if let Some(to) = trunk_near(world, gate) {
-            for c in l_path(gate.offset(out.0, out.1), to) {
-                self.lane(c);
+        let Some(to) = trunk_near(world, gate) else {
+            return;
+        };
+        let start = gate.offset(out.0, out.1);
+        let side = (out.1, out.0);
+        let mut fallback = None;
+        for k in 0..=12 {
+            for s in [2 * k, -2 * k] {
+                for vertical_first in [true, false] {
+                    let turn = start.offset(side.0 * s, side.1 * s);
+                    let mut cells = straight(start, turn);
+                    cells.extend(l_path(turn, to, vertical_first));
+                    if !cells.iter().any(|c| self.in_room(*c)) {
+                        for c in cells {
+                            self.lane(c);
+                        }
+                        return;
+                    }
+                    fallback.get_or_insert(cells);
+                }
             }
+        }
+        for c in fallback.unwrap_or_default() {
+            self.lane(c);
         }
     }
 
@@ -224,7 +280,7 @@ impl Net {
             .into_iter()
             .filter_map(|d: (i32, i32)| {
                 (1..=SPUR)
-                    .find(|k| self.is_lane(p.offset(d.0 * k, d.1 * k)))
+                    .find(|k| on_trunk(world, p.offset(d.0 * k, d.1 * k)))
                     .map(|k| (k, d))
             })
             .min_by_key(|(k, _)| *k);
@@ -236,7 +292,7 @@ impl Net {
             }
             None => {
                 if let Some(to) = trunk_near(world, p) {
-                    for c in l_path(p, to) {
+                    for c in l_path(p, to, true) {
                         self.lane(c);
                     }
                 }
@@ -245,11 +301,21 @@ impl Net {
     }
 }
 
+/// Whether `q` lies on a highway's trunk: its tile's road centreline (world data only,
+/// so every spur and line chooses the same whatever region is being built).
+fn on_trunk(world: &Overworld, q: Pos) -> bool {
+    let t = Pos::new(q.x.div_euclid(TILE), q.y.div_euclid(TILE));
+    world
+        .tile(t)
+        .filter(|x| x.road != 0)
+        .is_some_and(|x| centreline(world, t.x, t.y, x.road).contains(&q))
+}
+
 /// The nearest trunk cell to `p` by the world's roads: the centreline cell of the nearest
-/// road tile within three tiles.
+/// road tile within ten tiles.
 fn trunk_near(world: &Overworld, p: Pos) -> Option<Pos> {
     let t = Pos::new(p.x.div_euclid(TILE), p.y.div_euclid(TILE));
-    (0..=3).find_map(|r| {
+    (0..=10).find_map(|r| {
         (-r..=r)
             .flat_map(|dy| (-r..=r).map(move |dx| (dx, dy)))
             .filter(|&(dx, dy): &(i32, i32)| dx.abs().max(dy.abs()) == r)
@@ -259,19 +325,28 @@ fn trunk_near(world: &Overworld, p: Pos) -> Option<Pos> {
     })
 }
 
-/// Cells from `a` to `b`, across to `b`'s row, then along it.
-fn l_path(a: Pos, b: Pos) -> Vec<Pos> {
+/// Cells from `a` to `b` in two straight legs: across to `b`'s row first, or along to
+/// `b`'s column first.
+fn l_path(a: Pos, b: Pos, vertical_first: bool) -> Vec<Pos> {
+    let corner = if vertical_first {
+        Pos::new(a.x, b.y)
+    } else {
+        Pos::new(b.x, a.y)
+    };
+    let mut out = straight(a, corner);
+    out.extend(straight(corner, b));
+    out.push(b);
+    out
+}
+
+/// The cells from `a` up to (not including) `b`, which share a row or a column.
+fn straight(a: Pos, b: Pos) -> Vec<Pos> {
     let mut out = Vec::new();
     let mut q = a;
-    while q.y != b.y {
+    while q != b {
         out.push(q);
-        q.y += (b.y - q.y).signum();
+        q = q.offset((b.x - q.x).signum(), (b.y - q.y).signum());
     }
-    while q.x != b.x {
-        out.push(q);
-        q.x += (b.x - q.x).signum();
-    }
-    out.push(q);
     out
 }
 
@@ -380,22 +455,28 @@ mod tests {
     #[test]
     fn the_grid_fades_from_signal() {
         let w = small(0);
+        let straight = |p: Pos| {
+            (-2..=2).all(|dx| {
+                w.tile(p.offset(dx, 0))
+                    .is_some_and(|t| t.road == LINK_E | LINK_W && t.water == Water::None)
+            })
+        };
         let t = w
             .tiles
             .iter()
-            .filter(|(_, t)| t.road == LINK_E | LINK_W && t.water == Water::None)
             .map(|(p, _)| p)
-            .nth(5)
+            .filter(|p| straight(*p))
+            .nth(2)
             .unwrap();
         let g = region(
             &w,
-            TILE * t.x,
+            TILE * (t.x - 2),
             TILE * (t.y - 3),
-            TILE as u32,
+            (TILE * 5) as u32,
             (TILE * 7) as u32,
         );
         let grid = |rows: std::ops::Range<i32>| {
-            rows.flat_map(|y| (0..TILE).map(move |x| Pos::new(x, y)))
+            rows.flat_map(|y| (0..TILE * 5).map(move |x| Pos::new(x, y)))
                 .filter(|p| g[*p].terrain == Terrain::NetGrid)
                 .count()
         };
@@ -403,6 +484,117 @@ mod tests {
         let near = grid(road_row - 4..road_row - 1);
         let far = grid(0..3);
         assert!(near >= 3 * far.max(1), "near {near}, far {far}");
+    }
+
+    #[test]
+    fn every_kinds_net_is_the_same_built_alone() {
+        let mut seen = Vec::new();
+        for seed in 0..20 {
+            let w = small(seed);
+            for poi in &w.pois {
+                if seen.contains(&poi.kind) && !(seed == 7 && poi.at == Pos::new(68, 6)) {
+                    continue;
+                }
+                seen.push(poi.kind);
+                let o = Pos::new(TILE * (poi.at.x - 1), TILE * (poi.at.y - 1));
+                let r = region(&w, o.x, o.y, (TILE * 3) as u32, (TILE * 3) as u32);
+                for dy in 0..3 {
+                    for dx in 0..3 {
+                        let (tx, ty) = (poi.at.x - 1 + dx, poi.at.y - 1 + dy);
+                        let g = region(&w, TILE * tx, TILE * ty, TILE as u32, TILE as u32);
+                        for (c, a) in g.iter() {
+                            let b = r[Pos::new(TILE * dx + c.x, TILE * dy + c.y)];
+                            assert_eq!(
+                                (a.terrain, a.feature),
+                                (b.terrain, b.feature),
+                                "seed {seed} {:?} at {:?}: {tx},{ty} {c:?}",
+                                poi.kind,
+                                poi.at
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        assert!(seen.len() >= 8, "{seen:?}");
+    }
+
+    #[test]
+    fn every_kinds_gates_are_wired() {
+        // every gate on or beside its POI's tile joins a trunk over lanes (the region
+        // reaches past the furthest trunk a spur can make for)
+        const R: i32 = 13;
+        let mut wired = 0;
+        for seed in 0..8 {
+            let w = small(seed);
+            for poi in w.pois.iter().filter(|p| p.kind != PoiKind::Rig) {
+                let o = Pos::new(TILE * (poi.at.x - R), TILE * (poi.at.y - R));
+                let span = (TILE * (2 * R + 1)) as u32;
+                let g = region(&w, o.x, o.y, span, span);
+                let near = |l: Pos| {
+                    (l.x.div_euclid(TILE) - R).abs() <= 1 && (l.y.div_euclid(TILE) - R).abs() <= 1
+                };
+                let gates = g
+                    .iter()
+                    .filter(|(l, t)| t.terrain == Terrain::NetGate && near(*l))
+                    .map(|(l, _)| l)
+                    .collect::<Vec<_>>();
+                for s in gates {
+                    let at = |l: Pos| Pos::new(o.x + l.x, o.y + l.y);
+                    if trunk_near(&w, at(s)).is_none() {
+                        continue;
+                    }
+                    let mut seen = Grid::filled(g.size(), false);
+                    let mut stack = vec![s];
+                    let mut trunk = false;
+                    while let Some(p) = stack.pop() {
+                        trunk |= on_trunk(&w, at(p));
+                        for q in p.neighbors4() {
+                            if g.get(q).is_some_and(lane) && !seen[q] {
+                                seen[q] = true;
+                                stack.push(q);
+                            }
+                        }
+                    }
+                    assert!(
+                        trunk,
+                        "seed {seed} {:?} at {:?}: gate {s:?} reaches no trunk",
+                        poi.kind, poi.at
+                    );
+                    wired += 1;
+                }
+            }
+        }
+        assert!(wired >= 20, "{wired} gates");
+    }
+
+    #[test]
+    fn the_grid_is_a_lattice_that_shows() {
+        let w = small(0);
+        let t = w
+            .tiles
+            .iter()
+            .filter(|(_, t)| t.road == LINK_E | LINK_W && t.water == Water::None)
+            .map(|(p, _)| p)
+            .nth(5)
+            .unwrap();
+        let o = Pos::new(TILE * t.x, TILE * (t.y - 2));
+        let g = region(&w, o.x, o.y, TILE as u32, (TILE * 5) as u32);
+        let grid: Vec<(Pos, Tile)> = g
+            .iter()
+            .filter(|(_, t)| t.terrain == Terrain::NetGrid)
+            .map(|(p, t)| (Pos::new(o.x + p.x, o.y + p.y), *t))
+            .collect();
+        assert!(grid.len() >= 4, "{} grid dots", grid.len());
+        assert!(
+            grid.iter()
+                .all(|(p, _)| p.x.rem_euclid(4) == 0 && p.y.rem_euclid(2) == 0)
+        );
+        let variants: std::collections::BTreeSet<u8> = g.iter().map(|(_, t)| t.variant).collect();
+        assert!(
+            variants.len() > 4,
+            "cells carry their variant: {variants:?}"
+        );
     }
 
     #[test]
