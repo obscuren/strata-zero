@@ -25,6 +25,9 @@ pub(crate) struct LotsStage {
     rng: Option<ChaCha8Rng>,
     /// Indices into `scratch.blocks` that become one whole-block megablock each.
     mega_blocks: HashSet<usize>,
+    /// Indices into `scratch.blocks` laid as the outskirts (a city on its site's thin
+    /// edge), every district keeping at least one full block.
+    outskirts: HashSet<usize>,
 }
 
 /// Splits a run `[lo, hi)` into pieces of length in `[min, 2*min)` with jittered cuts.
@@ -93,7 +96,7 @@ fn choose_class(rng: &mut ChaCha8Rng, kind: BuildingKind, spec: &ThemeSpec) -> H
 }
 
 /// Raises one building on `lot`: class, basement, walls and floor, and its strata span.
-fn place_building(
+pub(super) fn place_building(
     ctx: &mut GenCtx,
     rng: &mut ChaCha8Rng,
     lot: Rect,
@@ -154,6 +157,27 @@ fn place_building(
     });
 }
 
+/// Whether a block of a city on its site lies in its outskirts: thin at its middle and
+/// not much denser at any corner (a big block up the slope stays the city's).
+fn in_outskirts(ctx: &GenCtx, r: Rect) -> bool {
+    let Some(site) = ctx.scratch.site.as_ref() else {
+        return false;
+    };
+    let centre = Pos::new(r.x + r.w / 2, r.y + r.h / 2);
+    let corners = [
+        Pos::new(r.x, r.y),
+        Pos::new(r.right() - 1, r.y),
+        Pos::new(r.x, r.bottom() - 1),
+        Pos::new(r.right() - 1, r.bottom() - 1),
+    ];
+    site.outskirts(centre)
+        && corners.iter().all(|p| {
+            site.density
+                .get(*p)
+                .is_none_or(|d| *d < super::site::OUTSKIRTS + 0.1)
+        })
+}
+
 impl LotsStage {
     fn place_block(&mut self, ctx: &mut GenCtx, idx: usize) {
         let block = ctx.scratch.blocks[idx];
@@ -162,6 +186,11 @@ impl LotsStage {
         let density = ctx.params().density;
         let rng = self.rng.as_mut().expect("begin sets rng");
 
+        // a city on its site, where it thins: its outskirts, not lots
+        if self.outskirts.contains(&idx) {
+            super::outskirts::lay(ctx, rng, block);
+            return;
+        }
         if self.mega_blocks.contains(&idx) {
             place_building(
                 ctx,
@@ -284,6 +313,28 @@ impl StageRunner for LotsStage {
     fn begin(&mut self, ctx: &mut GenCtx) -> Result<(), GenError> {
         self.rng = Some(ctx.rng(Stage::Lots));
         // Each Megablocks district gets its largest big-enough block as one megablock.
+        // The outskirts: the thin edge's blocks, but every district keeps its largest
+        // block whole (so no district is all yards and shanties).
+        self.outskirts = (0..ctx.scratch.blocks.len())
+            .filter(|i| in_outskirts(ctx, ctx.scratch.blocks[*i].rect))
+            .collect();
+        for d in &ctx.city.districts {
+            let mine = || {
+                ctx.scratch
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, b)| b.district == d.id)
+            };
+            if mine().all(|(i, _)| self.outskirts.contains(&i)) {
+                let largest = mine()
+                    .max_by_key(|(i, b)| (b.rect.area(), std::cmp::Reverse(*i)))
+                    .map(|(i, _)| i);
+                if let Some(i) = largest {
+                    self.outskirts.remove(&i);
+                }
+            }
+        }
         self.mega_blocks.clear();
         for d in ctx
             .city
@@ -301,6 +352,7 @@ impl StageRunner for LotsStage {
                     .enumerate()
                     .filter(|(_, b)| b.district == d.id)
                     .filter(|(_, b)| b.rect.w >= w && b.rect.h >= h)
+                    .filter(|(i, _)| !self.outskirts.contains(i))
                     .max_by_key(|(i, b)| (b.rect.area(), std::cmp::Reverse(*i)))
                     .map(|(i, _)| i)
             });
@@ -316,6 +368,7 @@ impl StageRunner for LotsStage {
                 .iter()
                 .enumerate()
                 .filter(|(_, b)| b.rect.w >= w && b.rect.h >= h)
+                .filter(|(i, _)| !self.outskirts.contains(i))
                 .max_by_key(|(i, b)| (b.rect.area(), std::cmp::Reverse(*i)))
                 .map(|(i, _)| i);
             self.mega_blocks.extend(best);
@@ -336,6 +389,7 @@ impl StageRunner for LotsStage {
         if !self.filled {
             Self::ensure_clinic(ctx);
             Self::fill_leftovers(ctx);
+            super::outskirts::belt(ctx);
             self.filled = true;
             return Ok(StepOut::Continue(1.0));
         }

@@ -128,6 +128,7 @@ pub fn glyph_for(
             Feature::Pylon => '╫',
             Feature::PowerLine(false) => '┄',
             Feature::PowerLine(true) => '┆',
+            Feature::FireBarrel => '•',
             Feature::Node(k) => node_glyph(k, style),
             Feature::Furniture(piece) => match piece {
                 Furniture::Desk => '▭',
@@ -413,6 +414,9 @@ fn terrain_colors(terrain: Terrain, tile: &Tile, ctx: &RenderCtx, tick: u64) -> 
 /// The operating chair's cyan.
 const CHAIR: Rgb = Rgb(0, 229, 255);
 
+/// A fire burning in a drum in the outskirts (round 2's).
+const FIRE: Rgb = Rgb(255, 140, 58);
+
 /// The caps either end of a roadside sign (round 2's Kilo-9).
 const SIGN_CAP: Rgb = Rgb(60, 140, 255);
 
@@ -459,6 +463,8 @@ fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
         Feature::Furniture(Furniture::Chair) => CHAIR,
         Feature::Furniture(_) => ts.wall.scale(1.2),
         Feature::Pylon => Rgb(106, 110, 118),
+        // round 2's fire in a drum, guttering
+        Feature::FireBarrel => FIRE.scale(flicker(tick, tile.variant, true)),
         Feature::PowerLine(_) => Rgb(42, 46, 54),
     }
 }

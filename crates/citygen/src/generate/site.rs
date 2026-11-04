@@ -11,12 +11,17 @@ use crate::tile::{Terrain, Tile};
 /// others round them, so the city builds over its whole footprint on the overworld.
 pub const OUTLINE: f32 = 0.5;
 
-/// The world's part in a city being generated: its block's ground, and how much each
-/// cell is the city's (its own tiles blended across tile lines, with noise: the
-/// outline runs at [`OUTLINE`]).
+/// How dense the city is where its outskirts begin: below it, inside the outline, its
+/// last blocks are round 2's outskirts (lots, yards, shanties) and not full blocks.
+pub const OUTSKIRTS: f32 = 0.08;
+
+/// The world's part in a city being generated: its block's ground, how much each cell
+/// is the city's (its own tiles blended across tile lines, with noise: the outline runs
+/// at [`OUTLINE`]), and how dense the city is there (its tiles' density, blended).
 pub(crate) struct Site {
     pub ground: Grid<Tile>,
     pub outline: Grid<f32>,
+    pub density: Grid<f32>,
 }
 
 /// `base` set to build world `world`'s city `city` on its block: its size the block's
@@ -45,6 +50,7 @@ pub(crate) fn prepare(site: &CitySite, size: Size) -> Option<Site> {
     let ground = detail::region(&world, o.x, o.y, size.w, size.h);
     let edge = Fbm::new(world.seed, 4101);
     let mut outline = Grid::filled(size, 0.0f32);
+    let mut density = Grid::filled(size, 0.0f32);
     let mut own = Grid::filled(world.size, false);
     for t in world.city_tiles(site.city) {
         own[t] = true;
@@ -64,15 +70,30 @@ pub(crate) fn prepare(site: &CitySite, size: Size) -> Option<Site> {
             outline[Pos::new(x, y)] = mine
                 + 0.22 * detail::wave(&edge, wx / 24.0, wy / 12.0)
                 + 0.08 * detail::wave(&edge, wx / 7.0 + 31.0, wy / 3.5);
+            density[Pos::new(x, y)] = detail::blend_tiles(wx, wy, |t| {
+                match (own.get(t), world.tile(t).and_then(|w| w.urban)) {
+                    (Some(true), Some(u)) => u.density as f32 / 255.0,
+                    _ => 0.0,
+                }
+            });
         }
     }
-    Some(Site { ground, outline })
+    Some(Site {
+        ground,
+        outline,
+        density,
+    })
 }
 
 impl Site {
     /// Whether the city builds at `p`: dry, and inside its outline.
     pub fn builds(&self, p: Pos) -> bool {
         !self.wet(p) && self.outline.get(p).is_some_and(|d| *d >= OUTLINE)
+    }
+
+    /// Whether `p` is in the city's outskirts: inside its outline where it is thin.
+    pub fn outskirts(&self, p: Pos) -> bool {
+        self.builds(p) && self.density.get(p).is_some_and(|d| *d < OUTSKIRTS)
     }
 
     /// Whether the world has water at `p`.

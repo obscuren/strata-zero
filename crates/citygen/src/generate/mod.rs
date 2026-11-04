@@ -10,6 +10,7 @@ pub mod interiors;
 pub mod lots;
 pub mod naming;
 pub mod net;
+pub mod outskirts;
 pub mod site;
 pub mod streets;
 pub mod terrain;

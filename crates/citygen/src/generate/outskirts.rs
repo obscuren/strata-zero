@@ -1,0 +1,453 @@
+//! A city's outskirts on its site (#20): where it thins, its last blocks are round 2's
+//! lots, yards and shanties, its sidewalks gravel, its last lamps along the roads. See
+//! `2026-11-04-cities-in-the-world-design.md`, "The outskirts".
+
+use super::{Block, GenCtx, Lot, LotUse};
+use crate::geom::{Pos, Rect};
+use crate::rng::hash64;
+use crate::tile::{Feature, Furniture, Terrain};
+use crate::world::{BuildingKind, StratumKind};
+use rand_chacha::ChaCha8Rng;
+
+const K: StratumKind = StratumKind::Street;
+
+/// What an outskirts block holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Layout {
+    /// A gravel lot of parked rigs, a body shop at its back.
+    Lot,
+    /// A fenced scrapyard of wrecks and scrap.
+    Scrapyard,
+    /// Shanties on the dirt round fire barrels.
+    Shanties,
+    /// Nothing: the world's own ground.
+    Bare,
+}
+
+/// What billboards say.
+const BRANDS: [&str; 8] = [
+    "KIRO", "NANOFIX", "SUNWAVE", "OKAMI", "VOLTEK", "MIRA", "SODA 8", "ZENITH",
+];
+
+/// A hash of `p` for `salt`, for this city.
+fn roll(seed: u64, salt: u64, p: Pos) -> u64 {
+    hash64(seed ^ salt, ((p.x as u32 as u64) << 32) | p.y as u32 as u64)
+}
+
+/// Lays outskirts block `b` in place of its lots.
+pub(crate) fn lay(ctx: &mut GenCtx, rng: &mut ChaCha8Rng, b: Block) {
+    let r = b.rect;
+    let h = roll(ctx.seed, 0x0575, Pos::new(r.x, r.y));
+    let layout = match h % 100 {
+        0..30 => Layout::Lot,
+        30..52 => Layout::Scrapyard,
+        52..86 => Layout::Shanties,
+        _ => Layout::Bare,
+    };
+    match layout {
+        Layout::Lot => lot(ctx, rng, b),
+        Layout::Scrapyard => scrapyard(ctx, b),
+        Layout::Shanties => shanties(ctx, b),
+        Layout::Bare => bare(ctx, r),
+    }
+    if layout != Layout::Bare && (h >> 8).is_multiple_of(2) {
+        billboard(ctx, b, h >> 16);
+    }
+}
+
+/// A paved lot of parked rigs, a lamp at its corner, and a body shop at its back where
+/// the block is big enough.
+fn lot(ctx: &mut GenCtx, rng: &mut ChaCha8Rng, b: Block) {
+    let r = b.rect;
+    ctx.stratum_fill(K, r, Terrain::Plaza);
+    let (sw, sh) = if r.w >= 10 && r.h >= 7 {
+        (8, 5)
+    } else {
+        (6, 4)
+    };
+    let shop = (r.w >= sw + 2 && r.h >= sh + 2)
+        .then(|| Rect::new(r.right() - sw, r.bottom() - sh, sw, sh));
+    for y in (r.y + 1..r.bottom() - 1).step_by(3) {
+        for x in r.x + 1..r.right() - 1 {
+            let p = Pos::new(x, y);
+            if shop.is_none_or(|s| !s.grow(1).contains(p))
+                && !roll(ctx.seed, 0x1075, p).is_multiple_of(3)
+            {
+                ctx.set_feature(K, p, Some(Feature::Furniture(Furniture::Couch)));
+            }
+        }
+    }
+    ctx.set_feature(K, Pos::new(r.x, r.y), Some(Feature::Lamp));
+    ctx.scratch.lots.push(Lot {
+        rect: r,
+        district: b.district,
+        use_: LotUse::Parking,
+    });
+    if let Some(s) = shop {
+        let district = ctx.city.district(b.district).clone();
+        super::lots::place_building(
+            ctx,
+            rng,
+            s,
+            BuildingKind::Garage,
+            district.theme.spec(),
+            district.id,
+        );
+    }
+}
+
+/// A scrapyard: its fence round the block with a gate on its south side, gravel inside,
+/// wrecks and scrap.
+fn scrapyard(ctx: &mut GenCtx, b: Block) {
+    let r = b.rect;
+    let gate = r.x + r.w / 2;
+    for p in r.iter() {
+        let rim = p.x == r.x || p.y == r.y || p.x == r.right() - 1 || p.y == r.bottom() - 1;
+        let in_gate = p.y == r.bottom() - 1 && (p.x == gate || p.x == gate - 1);
+        if rim && !in_gate {
+            ctx.set_terrain(K, p, Terrain::Railing);
+            continue;
+        }
+        ctx.set_terrain(K, p, Terrain::Gravel);
+        if rim {
+            continue;
+        }
+        // a way in from the gate kept clear
+        if p.x == gate || p.x == gate - 1 {
+            continue;
+        }
+        let k = roll(ctx.seed, 0x5C8A, p) % 100;
+        let f = match k {
+            0..22 => Some(Feature::Trash),
+            22..32 => Some(Feature::Furniture(Furniture::Couch)),
+            _ => None,
+        };
+        ctx.set_feature(K, p, f);
+    }
+    ctx.scratch.lots.push(Lot {
+        rect: r,
+        district: b.district,
+        use_: LotUse::Plaza,
+    });
+}
+
+/// Shanties: dirt, up to five shacks with their doors on the dirt, fire barrels between.
+fn shanties(ctx: &mut GenCtx, b: Block) {
+    let r = b.rect;
+    ctx.stratum_fill(K, r, Terrain::Dirt);
+    let mut shacks: Vec<Rect> = Vec::new();
+    for k in 0..16u64 {
+        if shacks.len() == 5 {
+            break;
+        }
+        let h = roll(ctx.seed, 0x5AA7 + k, Pos::new(r.x, r.y));
+        let (w, d) = (4 + (h % 3) as i32, 3 + ((h >> 4) % 2) as i32);
+        if w > r.w || d > r.h {
+            continue;
+        }
+        let x = r.x + ((h >> 8) % (r.w - w + 1) as u64) as i32;
+        let y = r.y + ((h >> 20) % (r.h - d + 1) as u64) as i32;
+        let s = Rect::new(x, y, w, d);
+        if shacks.iter().any(|o| o.grow(1).intersects(s)) {
+            continue;
+        }
+        shacks.push(s);
+    }
+    for s in &shacks {
+        for p in s.iter() {
+            let rim = p.x == s.x || p.y == s.y || p.x == s.right() - 1 || p.y == s.bottom() - 1;
+            ctx.set_terrain(K, p, if rim { Terrain::Wall } else { Terrain::Floor });
+        }
+        // the door on its south wall, onto the dirt or the alley round the block
+        ctx.set_terrain(K, Pos::new(s.x + s.w / 2, s.bottom() - 1), Terrain::Door);
+    }
+    // one or two fires in the open beside the shacks, and the litter of living out
+    let open = |ctx: &GenCtx, p: Pos| {
+        ctx.terrain(K, p) == Terrain::Dirt && shacks.iter().all(|s| !s.grow(1).contains(p))
+    };
+    let mut by_shacks: Vec<Pos> = r
+        .inset(1)
+        .iter()
+        .filter(|p| open(ctx, *p) && shacks.iter().any(|s| s.grow(2).contains(*p)))
+        .collect();
+    by_shacks.sort_by_key(|p| roll(ctx.seed, 0xF14E, *p));
+    let fires = 1 + (roll(ctx.seed, 0xF14F, Pos::new(r.x, r.y)) % 2) as usize;
+    for p in by_shacks.into_iter().take(fires) {
+        ctx.set_feature(K, p, Some(Feature::FireBarrel));
+    }
+    for p in r.inset(1).iter() {
+        if open(ctx, p)
+            && ctx.tile(K, p).is_some_and(|t| t.feature.is_none())
+            && roll(ctx.seed, 0x7A54, p) % 100 < 4
+        {
+            ctx.set_feature(K, p, Some(Feature::Trash));
+        }
+    }
+    ctx.scratch.lots.push(Lot {
+        rect: r,
+        district: b.district,
+        use_: LotUse::Plaza,
+    });
+}
+
+/// Nothing: the block is left out of the city, for the world's ground to fill.
+fn bare(ctx: &mut GenCtx, r: Rect) {
+    for p in r.iter() {
+        for k in StratumKind::PHYSICAL {
+            if let Some(t) = ctx.city.tile_mut(k, p) {
+                t.district = None;
+            }
+        }
+    }
+}
+
+/// A billboard along the block's north or south side, whichever faces the denser city
+/// (the other if that one is built on): a brand between two caps, on two posts behind.
+fn billboard(ctx: &mut GenCtx, b: Block, h: u64) {
+    let r = b.rect;
+    let Some(site) = ctx.scratch.site.as_ref() else {
+        return;
+    };
+    let at = |p: Pos| site.density.get(p).copied().unwrap_or(0.0);
+    let c = Pos::new(r.x + r.w / 2, r.y + r.h / 2);
+    let north = (r.y, 1);
+    let south = (r.bottom() - 1, -1);
+    let sides = if at(c.offset(0, -r.h / 2 - 10)) >= at(c.offset(0, r.h / 2 + 10)) {
+        [north, south]
+    } else {
+        [south, north]
+    };
+    let built = |ctx: &GenCtx, p: Pos| {
+        matches!(
+            ctx.terrain(K, p),
+            Terrain::Wall | Terrain::Door | Terrain::Floor | Terrain::Window
+        ) || ctx.tile(K, p).is_some_and(|t| t.building.is_some())
+    };
+    let brands = (0..BRANDS.len()).map(|k| BRANDS[(h as usize + k) % BRANDS.len()]);
+    for brand in brands {
+        let text: Vec<char> = std::iter::once('▣')
+            .chain(brand.chars())
+            .chain(std::iter::once('▣'))
+            .collect();
+        let n = text.len() as i32;
+        if n + 2 > r.w {
+            continue;
+        }
+        let x0 = r.x + (r.w - n) / 2;
+        for (y, inward) in sides {
+            let cells: Vec<Pos> = (0..n).map(|k| Pos::new(x0 + k, y)).collect();
+            let posts = [
+                Pos::new(x0 + 1, y + inward),
+                Pos::new(x0 + n - 2, y + inward),
+            ];
+            if cells.iter().chain(&posts).any(|p| built(ctx, *p)) {
+                continue;
+            }
+            for (p, ch) in cells.iter().zip(&text) {
+                ctx.set_feature(K, *p, Some(Feature::Sign(*ch)));
+            }
+            for p in posts {
+                ctx.set_feature(K, p, Some(Feature::Pipe));
+            }
+            return;
+        }
+    }
+}
+
+/// After every block: the belt's sidewalks and alleys gravel shoulders and tracks (but
+/// the pavement at its last buildings' doors), and the last lamps along its roads.
+pub(crate) fn belt(ctx: &mut GenCtx) {
+    let Some(site) = ctx.scratch.site.as_ref() else {
+        return;
+    };
+    let size = ctx.size();
+    let mut gravel = Vec::new();
+    let mut lamps = Vec::new();
+    for y in 0..size.h as i32 {
+        for x in 0..size.w as i32 {
+            let p = Pos::new(x, y);
+            if !site.outskirts(p) {
+                continue;
+            }
+            let t = ctx.terrain(K, p);
+            let at_a_building = p
+                .neighbors8()
+                .any(|q| ctx.tile(K, q).is_some_and(|u| u.building.is_some()));
+            if matches!(t, Terrain::Sidewalk | Terrain::Alley) && !at_a_building {
+                gravel.push(p);
+                let by_road = p.neighbors4().any(|q| ctx.terrain(K, q) == Terrain::Road);
+                if by_road && (x * 7 + y * 13).rem_euclid(29) == 0 && site.density[p] > 0.06 {
+                    lamps.push(p);
+                }
+            }
+        }
+    }
+    for p in gravel {
+        ctx.set_terrain(K, p, Terrain::Gravel);
+    }
+    for p in lamps {
+        if ctx.tile(K, p).is_some_and(|t| t.feature.is_none()) {
+            ctx.set_feature(K, p, Some(Feature::Lamp));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::generate::Generator;
+    use crate::generate::connectivity::reachable_from_street;
+    use crate::generate::site::{OUTSKIRTS, Site, prepare, sited};
+    use crate::geom::Pos;
+    use crate::overworld::{Overworld, WorldParams};
+    use crate::tile::{Feature, Terrain};
+    use crate::world::{BuildingKind, City, StratumKind};
+    use crate::{GenParams, SizePreset};
+    use std::sync::OnceLock;
+
+    /// The home cities of three worlds, each with its site, built once.
+    fn homes() -> &'static Vec<(u64, City, Site)> {
+        static HOMES: OnceLock<Vec<(u64, City, Site)>> = OnceLock::new();
+        HOMES.get_or_init(|| {
+            [3u64, 8, 41]
+                .into_iter()
+                .map(|seed| {
+                    let w = Overworld::generate(WorldParams {
+                        seed,
+                        ..Default::default()
+                    })
+                    .unwrap();
+                    let i = w.cities.iter().position(|c| c.home).unwrap() as u8;
+                    let p = sited(
+                        &w,
+                        i,
+                        GenParams {
+                            seed,
+                            ..Default::default()
+                        },
+                    );
+                    let c = Generator::run(p).unwrap();
+                    let site = prepare(c.params.site.as_ref().unwrap(), c.size).unwrap();
+                    (seed, c, site)
+                })
+                .collect()
+        })
+    }
+
+    fn street(c: &City) -> &crate::geom::Grid<crate::tile::Tile> {
+        &c.stratum(StratumKind::Street).unwrap().tiles
+    }
+
+    fn middle(r: crate::geom::Rect) -> Pos {
+        Pos::new(r.x + r.w / 2, r.y + r.h / 2)
+    }
+
+    #[test]
+    fn outskirts_lie_where_the_city_thins() {
+        // a yard's fence, a fire, a shanty: only where the city is thin (a big block
+        // runs a little up the slope; past the outline a POI's rooms are the world's);
+        // its densest part keeps its full blocks
+        for (seed, c, site) in homes() {
+            for (p, t) in street(c).iter() {
+                let outskirt = t.feature == Some(Feature::FireBarrel)
+                    || (t.terrain == Terrain::Railing && site.builds(p))
+                    || (t.terrain == Terrain::Door && t.building.is_none() && site.builds(p));
+                if outskirt {
+                    assert!(
+                        site.density[p] < OUTSKIRTS + 0.12,
+                        "seed {seed}: {:?} at {p:?} where the density is {}",
+                        t.terrain,
+                        site.density[p]
+                    );
+                }
+            }
+            let core = c
+                .buildings
+                .iter()
+                .filter(|b| site.density[middle(b.footprint)] > 0.6)
+                .count();
+            assert!(core >= 20, "seed {seed}: {core} buildings in the core");
+        }
+    }
+
+    #[test]
+    fn the_outskirts_have_their_kinds() {
+        // over three home cities: a body shop, a fenced scrapyard, a shanty with a fire
+        // by it, a billboard facing the city
+        let (mut shops, mut fence, mut fires, mut shanties, mut boards) = (0, 0, 0, 0, 0);
+        for (_, c, site) in homes() {
+            shops += c
+                .buildings
+                .iter()
+                .filter(|b| {
+                    let m = middle(b.footprint);
+                    b.kind == BuildingKind::Garage
+                        && site.builds(m)
+                        && site.density[m] < OUTSKIRTS + 0.1
+                })
+                .count();
+            for (p, t) in street(c).iter() {
+                fence += (t.terrain == Terrain::Railing && site.builds(p)) as usize;
+                fires += (t.feature == Some(Feature::FireBarrel)) as usize;
+                shanties += (t.terrain == Terrain::Door && t.building.is_none()) as usize;
+                boards += (t.feature == Some(Feature::Sign('▣'))) as usize;
+            }
+        }
+        assert!(shops >= 1, "{shops} body shops");
+        assert!(fence >= 20, "{fence} cells of yard fence");
+        assert!(fires >= 2, "{fires} fires");
+        assert!(shanties >= 3, "{shanties} shanties");
+        assert!(boards >= 2, "{boards} billboard caps");
+    }
+
+    #[test]
+    fn an_outskirts_door_is_reached_on_foot() {
+        for (seed, c, _) in homes() {
+            let reach = reachable_from_street(c);
+            for (p, t) in street(c).iter() {
+                if t.terrain == Terrain::Door && t.building.is_none() {
+                    assert!(
+                        reach[StratumKind::Street.index()][p],
+                        "seed {seed}: a shanty's door at {p:?} is cut off"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_belt_has_no_sidewalks() {
+        for (seed, c, site) in homes() {
+            let st = street(c);
+            let walks = st
+                .iter()
+                .filter(|(p, t)| {
+                    t.terrain == Terrain::Sidewalk
+                        && site.builds(*p)
+                        && site.density[*p] < OUTSKIRTS - 0.05
+                        && !p
+                            .neighbors8()
+                            .any(|q| st.get(q).is_some_and(|u| u.building.is_some()))
+                })
+                .map(|(p, _)| p)
+                .collect::<Vec<Pos>>();
+            assert!(
+                walks.is_empty(),
+                "seed {seed}: sidewalk in the belt at {:?}",
+                walks.first()
+            );
+        }
+    }
+
+    #[test]
+    fn a_lone_city_has_no_outskirts() {
+        let c = Generator::run(GenParams {
+            seed: 8,
+            size: SizePreset::Medium,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(street(&c).iter().all(|(_, t)| {
+            t.feature != Some(Feature::FireBarrel) && t.terrain != Terrain::Railing
+        }));
+    }
+}

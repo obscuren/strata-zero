@@ -218,6 +218,8 @@ pub enum Feature {
     Pylon,
     /// A power line overhead between pylons; `true` where it runs north-south.
     PowerLine(bool),
+    /// A fire burning in an oil drum, out in a city's outskirts; nobody walks through it.
+    FireBarrel,
 }
 
 /// A light fitting on an interior floor: hung from the ceiling (walked under), set in a
@@ -361,7 +363,7 @@ impl Furniture {
     }
 }
 
-pub const ALL_FEATURES: [Feature; 24] = [
+pub const ALL_FEATURES: [Feature; 25] = [
     Feature::Neon(Hue::Cyan),
     Feature::HoloAd,
     Feature::Lamp,
@@ -394,6 +396,7 @@ pub const ALL_FEATURES: [Feature; 24] = [
     Feature::Pylon,
     Feature::PowerLine(false),
     Feature::PowerLine(true),
+    Feature::FireBarrel,
 ];
 
 /// One cell of a stratum.
@@ -468,6 +471,7 @@ impl Tile {
                     | Feature::Furniture(_)
                     | Feature::Ice(_)
                     | Feature::Pylon
+                    | Feature::FireBarrel
             )
         );
         terrain_ok && feature_ok
@@ -528,7 +532,10 @@ mod tests {
         assert!(line.is_walkable() && !line.blocks_sight());
         assert_eq!(ALL_TERRAIN.len(), 42);
         assert_eq!(*ALL_TERRAIN.last().unwrap(), Wash);
-        assert_eq!(*ALL_FEATURES.last().unwrap(), Feature::PowerLine(true));
+        assert_eq!(*ALL_FEATURES.last().unwrap(), Feature::FireBarrel);
+        let mut fire = Tile::new(Dirt);
+        fire.feature = Some(Feature::FireBarrel);
+        assert!(!fire.is_walkable() && !fire.blocks_sight());
     }
 
     use super::*;
@@ -550,7 +557,7 @@ mod tests {
         assert!(Tile::new(Terrain::Plaza).is_outdoor_ground());
         assert!(Tile::new(Terrain::Door).is_building_part());
         assert_eq!(ALL_TERRAIN.len(), 42);
-        assert_eq!(ALL_FEATURES.len(), 24);
+        assert_eq!(ALL_FEATURES.len(), 25);
         assert!(!Tile::new(Terrain::Mass).is_walkable());
         assert!(Tile::new(Terrain::Mass).blocks_sight());
         assert!(Tile::new(Terrain::Mass).is_building_part());
@@ -618,7 +625,7 @@ mod tests {
         assert_eq!(Terrain::Road.label(), "road");
         assert!(Terrain::NetLane.is_net() && !Terrain::Road.is_net());
         assert_eq!(ALL_TERRAIN.len(), 42);
-        assert_eq!(ALL_FEATURES.len(), 24);
+        assert_eq!(ALL_FEATURES.len(), 25);
         assert_eq!(crate::world::StratumKind::ALL.len(), 5);
         assert_eq!(
             crate::world::StratumKind::ALL[4],
