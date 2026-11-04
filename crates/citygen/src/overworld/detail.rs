@@ -300,7 +300,9 @@ impl<'a> Patch<'a> {
                 hash64(w.seed, 2022),
                 ((t.x as u32 as u64) << 32) | t.y as u32 as u64,
             );
-            if width == 3.0 && h.is_multiple_of(3) && !pts.is_empty() {
+            // not where a wider river joins: the water there is both rivers' width
+            let joins = t.neighbors8().any(|q| river_width(w, q) > 3);
+            if width == 3.0 && h.is_multiple_of(3) && !joins && !pts.is_empty() {
                 let (x, y) = pts[(h >> 8) as usize % pts.len()];
                 fords.push((x, y, radius(x, y).max(1.2)));
             }
@@ -462,8 +464,13 @@ impl<'a> Patch<'a> {
                 self.set_feature(c, Feature::PowerLine(north_south));
             }
         }
+        // a pylon only where its line reaches it (not alone by a river or a road)
         for c in pylons {
-            if self.bare(c, true) {
+            let wired = c.neighbors8().any(|q| {
+                self.get(q)
+                    .is_some_and(|t| matches!(t.feature, Some(Feature::PowerLine(_))))
+            });
+            if wired && self.bare(c, true) {
                 self.set_feature(c, Feature::Pylon);
             }
         }
@@ -811,13 +818,20 @@ mod tests {
     use crate::overworld::{Ground, Overworld, Water, WorldParams, WorldSize};
     use crate::tile::Terrain;
 
-    #[test]
-    fn a_tile_alone_equals_the_same_tile_in_a_region() {
-        let w = Overworld::generate(WorldParams {
-            seed: 0,
+    /// The small world (160×52): the rules one level down don't depend on the world's
+    /// size, and a whole one builds a quarter as fast as the default.
+    fn small(seed: u64) -> Overworld {
+        Overworld::generate(WorldParams {
+            seed,
+            size: WorldSize::Small,
             ..Default::default()
         })
-        .unwrap();
+        .unwrap()
+    }
+
+    #[test]
+    fn a_tile_alone_equals_the_same_tile_in_a_region() {
+        let w = small(0);
         let r = region(&w, 8 * 40, 8 * 20, 8 * 6, 8 * 4);
         for ty in 20..24 {
             for tx in 40..46 {
@@ -840,11 +854,7 @@ mod tests {
     #[test]
     fn ground_follows_its_overworld_tile() {
         for seed in 0..5 {
-            let w = Overworld::generate(WorldParams {
-                seed,
-                ..Default::default()
-            })
-            .unwrap();
+            let w = small(seed);
             for (p, t) in w.tiles.iter() {
                 if t.water != Water::None || t.road != 0 || t.wash != 0 || t.urban.is_some() {
                     continue;
@@ -891,11 +901,7 @@ mod tests {
     #[test]
     fn water_never_touches_dry_land() {
         for seed in 0..3 {
-            let w = Overworld::generate(WorldParams {
-                seed,
-                ..Default::default()
-            })
-            .unwrap();
+            let w = small(seed);
             let r = whole(&w);
             for (p, t) in r.iter() {
                 if t.terrain != Terrain::Water {
@@ -924,11 +930,7 @@ mod tests {
 
     #[test]
     fn a_sea_tile_is_water_and_its_shore_is_sand() {
-        let w = Overworld::generate(WorldParams {
-            seed: 0,
-            ..Default::default()
-        })
-        .unwrap();
+        let w = small(0);
         let (p, _) = w
             .tiles
             .iter()
@@ -952,11 +954,7 @@ mod tests {
     #[test]
     fn rivers_run_unbroken_across_tiles() {
         for seed in 0..3 {
-            let w = Overworld::generate(WorldParams {
-                seed,
-                ..Default::default()
-            })
-            .unwrap();
+            let w = small(seed);
             let r = whole(&w);
             let wet = |p: Pos| {
                 r.get(p).is_some_and(|t| {
@@ -991,11 +989,7 @@ mod tests {
     #[test]
     fn river_banks_curve_rather_than_step() {
         // Banks that run dead straight for a tile or more read as a canal of boxes.
-        let w = Overworld::generate(WorldParams {
-            seed: 0,
-            ..Default::default()
-        })
-        .unwrap();
+        let w = small(0);
         let g = whole(&w);
         let wet = |p: Pos| {
             g.get(p).is_some_and(|t| {
@@ -1118,11 +1112,7 @@ mod tests {
     #[test]
     fn coasts_and_lake_shores_curve_off_the_tile_lines() {
         for seed in [0, 3] {
-            let w = Overworld::generate(WorldParams {
-                seed,
-                ..Default::default()
-            })
-            .unwrap();
+            let w = small(seed);
             let g = whole(&w);
             let wet = |p: Pos| {
                 g.get(p)
@@ -1146,11 +1136,7 @@ mod tests {
 
     #[test]
     fn ground_kinds_meet_off_the_tile_lines() {
-        let w = Overworld::generate(WorldParams {
-            seed: 0,
-            ..Default::default()
-        })
-        .unwrap();
+        let w = small(0);
         let g = whole(&w);
         let kind = |t: &Tile| match t.terrain {
             Terrain::Dirt | Terrain::Rise | Terrain::Rock => Some(0),
@@ -1182,11 +1168,7 @@ mod tests {
 
     #[test]
     fn passes_run_through_the_mountains() {
-        let w = Overworld::generate(WorldParams {
-            seed: 0,
-            ..Default::default()
-        })
-        .unwrap();
+        let w = small(0);
         let g = whole(&w);
         let in_range = |p: Pos| {
             w.tile(Pos::new(p.x.div_euclid(8), p.y.div_euclid(8)))
@@ -1227,11 +1209,7 @@ mod tests {
     fn every_ford_crosses_the_river() {
         let mut fords = 0;
         for seed in 0..4 {
-            let w = Overworld::generate(WorldParams {
-                seed,
-                ..Default::default()
-            })
-            .unwrap();
+            let w = small(seed);
             let g = whole(&w);
             let land = |p: Pos| {
                 g.get(p)
@@ -1303,11 +1281,7 @@ mod tests {
 
     #[test]
     fn rivers_widen_toward_the_mouth() {
-        let w = Overworld::generate(WorldParams {
-            seed: 0,
-            ..Default::default()
-        })
-        .unwrap();
+        let w = small(0);
         let river = w.rivers.iter().max_by_key(|r| r.len()).unwrap();
         assert_eq!(river_width(&w, river[0]), 3);
         assert_eq!(river_width(&w, *river.last().unwrap()), 7);
@@ -1317,11 +1291,7 @@ mod tests {
     #[test]
     fn washes_run_unbroken_and_dry() {
         for seed in 0..4 {
-            let w = Overworld::generate(WorldParams {
-                seed,
-                ..Default::default()
-            })
-            .unwrap();
+            let w = small(seed);
             for wash in &w.washes {
                 for pair in wash.windows(2) {
                     let (a, b) = (pair[0], pair[1]);
@@ -1339,11 +1309,7 @@ mod tests {
 
     #[test]
     fn a_straight_highway_is_straight_one_level_down() {
-        let w = Overworld::generate(WorldParams {
-            seed: 0,
-            ..Default::default()
-        })
-        .unwrap();
+        let w = small(0);
         let run: Vec<Pos> = w
             .tiles
             .iter()
@@ -1368,11 +1334,7 @@ mod tests {
     fn every_road_meets_itself_across_every_edge() {
         let ok = |t: Terrain| matches!(t, Terrain::Road | Terrain::Bridge);
         for seed in 0..6 {
-            let w = Overworld::generate(WorldParams {
-                seed,
-                ..Default::default()
-            })
-            .unwrap();
+            let w = small(seed);
             for (p, t) in w.tiles.iter() {
                 if t.road & LINK_E != 0 && w.tile(p.offset(1, 0)).is_some() {
                     let (a, b) = (ground(&w, p.x, p.y), ground(&w, p.x + 1, p.y));
@@ -1400,11 +1362,7 @@ mod tests {
     fn a_bridge_carries_the_road_across_the_whole_river() {
         let mut bridges = 0;
         for seed in 0..10 {
-            let w = Overworld::generate(WorldParams {
-                seed,
-                ..Default::default()
-            })
-            .unwrap();
+            let w = small(seed);
             for (p, t) in w
                 .tiles
                 .iter()
@@ -1441,11 +1399,7 @@ mod tests {
     fn a_highway_rides_over_a_wash_on_a_culvert() {
         let mut seen = 0;
         for seed in 0..8 {
-            let w = Overworld::generate(WorldParams {
-                seed,
-                ..Default::default()
-            })
-            .unwrap();
+            let w = small(seed);
             for (p, _) in w
                 .tiles
                 .iter()
@@ -1465,11 +1419,7 @@ mod tests {
     #[test]
     fn a_road_off_the_map_runs_to_the_edge() {
         for seed in 0..10 {
-            let w = Overworld::generate(WorldParams {
-                seed,
-                ..Default::default()
-            })
-            .unwrap();
+            let w = small(seed);
             let (mw, mh) = (w.size.w as i32, w.size.h as i32);
             for (p, t) in w.tiles.iter() {
                 let g = ground(&w, p.x, p.y);
@@ -1495,11 +1445,7 @@ mod tests {
     #[test]
     fn power_lines_run_beside_some_highways() {
         use crate::tile::Feature;
-        let w = Overworld::generate(WorldParams {
-            seed: 0,
-            ..Default::default()
-        })
-        .unwrap();
+        let w = small(0);
         let g = whole(&w);
         let pylons = g.count(|t| t.feature == Some(Feature::Pylon));
         let line = g.count(|t| matches!(t.feature, Some(Feature::PowerLine(_))));
@@ -1524,11 +1470,7 @@ mod tests {
     #[test]
     fn nothing_stands_on_water_or_the_road() {
         for seed in 0..2 {
-            let w = Overworld::generate(WorldParams {
-                seed,
-                ..Default::default()
-            })
-            .unwrap();
+            let w = small(seed);
             let g = whole(&w);
             assert!(
                 g.count(|t| t.feature.is_some()) > 100,
@@ -1598,24 +1540,20 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                ("coast", 11378437512918728102),
-                ("mouth", 2912163278796335393),
-                ("river", 11598598171805637510),
-                ("bridge", 16059526050686227486),
-                ("junction", 9008432128871624991),
-                ("mountains", 11982162702875261886),
-                ("salt", 9176117940815289530),
+                ("coast", 4851722150823226721),
+                ("mouth", 2172678762758755685),
+                ("river", 11201036963274430611),
+                ("bridge", 12795655540901140372),
+                ("junction", 14601247688220562134),
+                ("mountains", 464793460433013172),
+                ("salt", 4141889093027210155),
             ]
         );
     }
 
     #[test]
     fn tiles_build_fast() {
-        let w = Overworld::generate(WorldParams {
-            seed: 1,
-            ..Default::default()
-        })
-        .unwrap();
+        let w = small(1);
         let start = std::time::Instant::now();
         for ty in 0..w.size.h as i32 {
             for tx in 0..w.size.w as i32 {

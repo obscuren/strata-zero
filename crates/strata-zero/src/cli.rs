@@ -63,7 +63,7 @@ pub enum Cmd {
         /// small, medium, large or WxH.
         #[arg(long, default_value = "medium")]
         size: String,
-        /// How many cities, 3 to 8.
+        /// How many cities, 3 to 16 (9 by default).
         #[arg(long)]
         cities: Option<u8>,
         /// Draw one level down instead: the detail map round overworld tile `TX,TY`

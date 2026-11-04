@@ -55,6 +55,11 @@ pub(crate) fn pow_five_quarters(x: f32) -> f32 {
     x * x.sqrt().sqrt()
 }
 
+/// `x` to the three quarters, with square roots only (portable, as `pow_five_quarters`).
+pub(crate) fn pow_three_quarters(x: f32) -> f32 {
+    x.sqrt() * x.sqrt().sqrt()
+}
+
 /// `p` in s-space.
 pub(crate) fn s(p: Pos) -> (f32, f32) {
     (p.x as f32, 2.0 * p.y as f32)

@@ -1,6 +1,8 @@
 //! Stages 1 and 2: the sea and its coast, ridges and elevation.
 
-use super::field::{Fbm, cos, distance_field, length, poly_dist, pow_five_quarters, s, sin};
+use super::field::{
+    Fbm, cos, distance_field, length, poly_dist, pow_five_quarters, pow_three_quarters, s, sin,
+};
 use super::{Ctx, Ground, Water};
 use crate::geom::{Dir, Pos};
 use crate::params::GenError;
@@ -89,14 +91,15 @@ fn sea(ctx: &mut Ctx) {
         .collect();
     let mut bays = Vec::new();
     if !coasts.is_empty() {
-        for _ in 0..rng.random_range(1..=3) {
+        let (n, grow) = (rng.random_range(1..=3), ctx.scale().sqrt());
+        for _ in 0..ctx.times(n) {
             let side = coasts[rng.random_range(0..coasts.len())].side;
             let (_, _, len, _) = against(side, (0.0, 0.0), sw, sh);
             bays.push(Bay {
                 side,
                 t: rng.random_range(0.15..0.85) * len,
-                depth: rng.random_range(6.0..14.0),
-                width: rng.random_range(5.0..8.0),
+                depth: grow * rng.random_range(6.0..14.0),
+                width: grow * rng.random_range(5.0..8.0),
                 tip: Pos::new(0, 0),
             });
         }
@@ -165,11 +168,12 @@ fn inland(ctx: &Ctx) -> super::Grid<f32> {
 
 fn ridges(ctx: &mut Ctx) {
     let mut rng = ctx.rng(1);
-    let count = ctx
-        .params
-        .knobs
-        .ridges
-        .unwrap_or_else(|| if rng.random_bool(0.6) { 1 } else { 2 });
+    let count = ctx.params.knobs.ridges.unwrap_or_else(|| {
+        // fewer ranges than in proportion: they carry the map, and a few long ones
+        // read better than a lattice
+        let n = if rng.random_bool(0.6) { 1.0 } else { 2.0 };
+        (n * pow_three_quarters(ctx.scale())).round() as u8
+    });
     let far = inland(ctx);
     let (sw, sh) = (ctx.size.w as f32, 2.0 * ctx.size.h as f32);
     let min_in = 0.3 * sw.min(sh) / (0.6 * sw.max(sh));
@@ -228,7 +232,8 @@ fn walk(
     let mut at = s(start);
     let mut pts = vec![at];
     let mut length = 0.0;
-    let want = rng.random_range(40.0..75.0);
+    // longer ranges in a bigger world, a little short of in proportion
+    let want = rng.random_range(40.0..75.0) * pow_three_quarters(ctx.scale());
     let margin = 8.0;
     let open = |q: (f32, f32)| {
         q.0 >= margin

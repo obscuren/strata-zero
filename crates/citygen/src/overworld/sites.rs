@@ -57,7 +57,8 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
         })
         .filter(|p| sea[*p] > sea[home])
         .unwrap_or(home);
-    let mut spacing = 38.0f32;
+    let k = ctx.scale();
+    let mut spacing = 38.0f32 * k;
     let mut cities = vec![(home, HOME_SIZE)];
     loop {
         cities.truncate(1);
@@ -92,10 +93,10 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
         {
             cities.push((p, TOWN_SIZE));
         }
-        if cities.len() >= n || spacing <= 12.0 {
+        if cities.len() >= n || spacing <= 12.0 * k {
             break;
         }
-        spacing = (spacing * 0.85).max(12.0);
+        spacing = (spacing * 0.85).max(12.0 * k);
     }
     if cities.len() < 3 {
         return Err(too_few(cities.len()));

@@ -41,8 +41,8 @@ Overworlds, many seeds on one page in the atlas look, to open in a browser:
 cargo run --release -p strata-zero -- world --seeds 0..12 --out world-sheet.html
 ```
 
-`--seed N` for one; `--size small|medium|large|WxH` (120x40, 160x52, 220x72);
-`--cities 3..8`. The generator is `citygen::overworld`; its design is
+`--seed N` for one; `--size small|medium|large|WxH` (160x52, 320x104, 440x144; medium is
+the game's); `--cities 3..16` (9 by default). The generator is `citygen::overworld`; its design is
 `docs/superpowers/specs/2026-11-04-world-generator-design.md`.
 
 One level down, the walkable ground of the tiles round one overworld tile, drawn as the

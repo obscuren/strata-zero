@@ -14,11 +14,12 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
         .params
         .knobs
         .rivers
-        .unwrap_or_else(|| rng.random_range(1..=3));
+        .unwrap_or_else(|| ctx.times(rng.random_range(1..=3)) as u8);
     // An inland world drains into a lake made for it.
     if ctx.sea_sides.is_empty() {
         let at = low_spot(ctx, &mut rng);
-        lake(ctx, &mut rng, at, (4.0, 6.0), (3.0, 4.0));
+        let g = ctx.scale().sqrt();
+        lake(ctx, &mut rng, at, (4.0 * g, 6.0 * g), (3.0 * g, 4.0 * g));
     }
     // Springs whose rivers were laid keep their distance; ones that failed are only
     // not tried again.
@@ -47,7 +48,7 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
             tried.push(spring);
         }
     }
-    for _ in 0..rng.random_range(0..=2) {
+    for _ in 0..ctx.times(rng.random_range(0..=2)) {
         let on_river = rng.random_bool(0.5) && !ctx.rivers.is_empty();
         let at = if on_river {
             let r = &ctx.rivers[rng.random_range(0..ctx.rivers.len())];

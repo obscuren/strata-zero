@@ -36,9 +36,9 @@ pub enum WorldSize {
 impl WorldSize {
     pub fn size(self) -> Size {
         match self {
-            WorldSize::Small => Size { w: 120, h: 40 },
-            WorldSize::Medium => Size { w: 160, h: 52 },
-            WorldSize::Large => Size { w: 220, h: 72 },
+            WorldSize::Small => Size { w: 160, h: 52 },
+            WorldSize::Medium => Size { w: 320, h: 104 },
+            WorldSize::Large => Size { w: 440, h: 144 },
             WorldSize::Custom { w, h } => Size { w, h },
         }
     }
@@ -76,7 +76,7 @@ impl Default for WorldParams {
         WorldParams {
             seed: 0,
             size: WorldSize::Medium,
-            cities: 5,
+            cities: 9,
             flavor: "default".into(),
             knobs: Knobs::default(),
         }
@@ -93,8 +93,8 @@ impl WorldParams {
                 format!("{w}x{h} is outside 60..=512 by 24..=256"),
             ));
         }
-        if !(3..=8).contains(&self.cities) {
-            return Err(bad("cities", format!("{} is outside 3..=8", self.cities)));
+        if !(3..=16).contains(&self.cities) {
+            return Err(bad("cities", format!("{} is outside 3..=16", self.cities)));
         }
         Ok(())
     }
@@ -321,6 +321,17 @@ pub(crate) struct Ctx {
 }
 
 impl Ctx {
+    /// How much bigger than the small world (160×52) this one is across: the square
+    /// root of the area's ratio. Counts of ranges, rivers, lakes and bays grow by it.
+    pub(crate) fn scale(&self) -> f32 {
+        ((self.size.w * self.size.h) as f32 / (160.0 * 52.0)).sqrt()
+    }
+
+    /// `n` of something in a small world, as many in this one.
+    pub(crate) fn times(&self, n: u32) -> u32 {
+        ((n as f32 * self.scale()).round() as u32).max(n.min(1))
+    }
+
     fn new(params: WorldParams, flavor: FlavorPack) -> Ctx {
         let size = params.size.size();
         Ctx {
@@ -560,7 +571,7 @@ fn fingerprints_are_pinned() {
                 seed: 0,
                 ..Default::default()
             },
-            9659042430022885391,
+            16644525074997065947,
         ),
         (
             "medium 7",
@@ -568,7 +579,7 @@ fn fingerprints_are_pinned() {
                 seed: 7,
                 ..Default::default()
             },
-            13821703677101156480,
+            3364278980070901982,
         ),
         (
             "small 3",
@@ -577,7 +588,7 @@ fn fingerprints_are_pinned() {
                 size: WorldSize::Small,
                 ..Default::default()
             },
-            18208813476832896280,
+            79558088959877066,
         ),
         (
             "large 11",
@@ -586,7 +597,7 @@ fn fingerprints_are_pinned() {
                 size: WorldSize::Large,
                 ..Default::default()
             },
-            2213363804552518395,
+            9615291062386294431,
         ),
         (
             "two seas 5",
@@ -598,7 +609,7 @@ fn fingerprints_are_pinned() {
                 },
                 ..Default::default()
             },
-            1856414223241012311,
+            4836069061967063598,
         ),
         (
             "inland 2",
@@ -610,7 +621,7 @@ fn fingerprints_are_pinned() {
                 },
                 ..Default::default()
             },
-            16183058830807330739,
+            7913621416750777667,
         ),
     ];
     let got: Vec<(&str, u64)> = cases
@@ -658,7 +669,7 @@ mod tests {
             ..Default::default()
         });
         bad(WorldParams {
-            cities: 9,
+            cities: 17,
             ..Default::default()
         });
         bad(WorldParams {

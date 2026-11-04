@@ -22,11 +22,21 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
         });
         if !spots.is_empty() {
             let at = spots[rng.random_range(0..spots.len())];
-            patch(ctx, at, (8.0, 5.0), 0.8, 4.0, 1.3, Ground::Spill, 1203);
+            let g = ctx.scale().sqrt();
+            patch(
+                ctx,
+                at,
+                (8.0 * g, 5.0 * g),
+                0.8,
+                4.0,
+                1.3,
+                Ground::Spill,
+                1203,
+            );
             ctx.spill = Some(at);
         }
     }
-    for far in [25.0, 15.0, 8.0] {
+    for far in [25.0, 15.0, 8.0].map(|f| f * ctx.scale()) {
         let spill = ctx.spill;
         let cities = ctx.cities.clone();
         let spots = open_spots(ctx, |p| {
@@ -35,7 +45,17 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
         });
         if !spots.is_empty() {
             let at = spots[rng.random_range(0..spots.len())];
-            patch(ctx, at, (11.0, 5.5), 0.7, 5.0, 1.25, Ground::Salt, 1204);
+            let g = ctx.scale().sqrt();
+            patch(
+                ctx,
+                at,
+                (11.0 * g, 5.5 * g),
+                0.7,
+                5.0,
+                1.25,
+                Ground::Salt,
+                1204,
+            );
             ctx.salt = Some(at);
             break;
         }

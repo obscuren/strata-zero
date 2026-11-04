@@ -77,8 +77,14 @@ its own spec once the generator is tuned. Building that also waits for save the 
   **Shapes are measured on screen**: distances count a row as two columns, so cities,
   lakes and bays come out round on screen, not tall. (The city generator does the same:
   its 240×120 reads square.)
-- Default world: **160×52 tiles**, the round 1 mock's world. Presets small 120×40,
-  medium 160×52, large 220×72, or custom.
+- Default world: **320×104 tiles** (retuned 2026-11-04 after the overworld was played:
+  at 160×52, the round 1 mock's world, the large home city spanned a quarter of the
+  world; Jeff wants the city large on foot and on the overworld, in a much larger
+  world). Presets small 160×52, medium 320×104, large
+  440×144, or custom. Counts grow with the world's scale (the square root of its area
+  over the small world's): rivers, lakes, bays and city spacing in proportion, ranges
+  by its three quarters, the spill, the salt flat and the bays' size by its square
+  root. Nine cities by default (3 to 16); the home city keeps its size in tiles.
 - The home city covers about 30×15 tiles, the mock's size. *(My call: that is today's
   240×120 city at 8×8 detail tiles a tile; the detail scale is decided in the next
   slice, nothing here depends on it.)*
