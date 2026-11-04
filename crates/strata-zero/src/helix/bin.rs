@@ -389,16 +389,17 @@ impl AppIo<'_> {
         }
         match args {
             [] if self.st.journal.mails.is_empty() => Ok(one("NO MAIL")),
-            [] => Ok(lines(access::mail_inbox(self.st))),
+            [] => Ok(Output {
+                open_mail: true,
+                ..Output::default()
+            }),
             [n] => {
                 let i = n
                     .parse::<usize>()
                     .ok()
                     .and_then(|n| n.checked_sub(1))
                     .ok_or_else(|| "usage: mail [n]".to_string())?;
-                let mut out = access::mail_open(self.st, i).map_err(|e| format!("mail: {e}"))?;
-                out[0] = out[0].to_uppercase();
-                out[1] = out[1].to_uppercase();
+                let out = access::mail_open(self.st, i).map_err(|e| format!("mail: {e}"))?;
                 Ok(lines(out))
             }
             _ => Err("usage: mail [n]".to_string()),
@@ -819,22 +820,59 @@ mod tests {
     }
 
     #[test]
+    fn mail_n_prints_a_head_block() {
+        let mut st = state_home();
+        let mut sh = new_shell(&mut st, HostId::Rig);
+        st.journal.mails.clear();
+        let mail = |from: &str, subject: &str| crate::credentials::Mail {
+            from: from.to_string(),
+            subject: subject.to_string(),
+            body: vec!["one line".to_string(), String::new(), "two".to_string()],
+            read: false,
+            at: 600,
+            job: None,
+            story: None,
+        };
+        let a = mail("Mezz", "the news");
+        let time = access::mail_time(&a);
+        assert_eq!(time.len(), 5);
+        st.journal.mails.push(a);
+        let rule = "─".repeat(44);
+        let first = text(&go(&mut st, &mut sh, "mail 1"));
+        let want = format!(
+            "MAIL 1 OF 1 · NEW\nFROM     MEZZ\nSUBJECT  THE NEWS\nTIME     {time}\n{rule}\none line\n\ntwo\n{rule}\nNO NEW MAIL"
+        );
+        assert_eq!(first, want);
+        let again = text(&go(&mut st, &mut sh, "mail 1"));
+        assert!(again.starts_with("MAIL 1 OF 1\n"), "{again}");
+        st.journal.mails.push(mail("Seren", "a call"));
+        st.journal.mails.push(mail("Odile", "a tab"));
+        let left = text(&go(&mut st, &mut sh, "mail 2"));
+        assert!(left.starts_with("MAIL 2 OF 3 · NEW\n"), "{left}");
+        assert!(left.ends_with("\n1 NEW LEFT · mail"), "{left}");
+    }
+
+    #[test]
     fn the_rig_reads_mail_and_journal() {
         let mut st = state_home();
         let mut sh = new_shell(&mut st, HostId::Rig);
         let me = user_for(&st, HostId::Rig);
         assert_eq!(sh.user, me);
         assert_eq!(sh.home, format!("/home/{me}"));
-        let inbox = text(&go(&mut st, &mut sh, "mail"));
-        assert!(inbox.contains('*'), "{inbox}");
-        assert!(!st.journal.mails[0].read);
+        // `mail` asks the screen for HELIX mail, and wins the line as nano does
+        let out = go(&mut st, &mut sh, "mail");
+        assert!(out.open_mail && out.lines.is_empty(), "{out:?}");
+        assert!(!st.journal.mails[0].read, "opening reads nothing");
+        let out = go(&mut st, &mut sh, "mail; echo hi");
+        assert!(out.open_mail && out.lines.is_empty(), "{out:?}");
+        let out = go(&mut st, &mut sh, "echo hi | mail");
+        assert!(out.open_mail, "{out:?}");
         let mail = text(&go(&mut st, &mut sh, "cat ~/mail/001-a-favour.txt"));
         assert!(mail.contains("Door code"), "{mail}");
+        assert!(mail.starts_with("MAIL 1 OF 1 · NEW\nFROM     "), "{mail}");
         assert!(st.journal.mails[0].read);
-        let inbox = text(&go(&mut st, &mut sh, "mail"));
-        assert!(!inbox.contains('*'), "{inbox}");
         let one = text(&go(&mut st, &mut sh, "mail 1"));
-        assert!(one.starts_with("FROM: "), "{one}");
+        assert!(one.starts_with("MAIL 1 OF 1\nFROM     "), "{one}");
         let none = go(&mut st, &mut sh, "mail 9");
         assert_eq!(none.status, 1);
         let seed = st.city.as_ref().unwrap().seed;

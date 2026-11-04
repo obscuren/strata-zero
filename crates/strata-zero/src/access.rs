@@ -475,36 +475,39 @@ pub fn alarm_state(st: &AppState, b: BuildingId) -> String {
     }
 }
 
-/// The rig's inbox, one row a mail, `*` for unread.
-pub fn mail_inbox(st: &AppState) -> Vec<String> {
-    st.journal
-        .mails
-        .iter()
-        .enumerate()
-        .map(|(i, m)| {
-            format!(
-                "{:>2}  {} {:<10} {}",
-                i + 1,
-                if m.read { " " } else { "*" },
-                m.from.to_uppercase(),
-                m.subject.to_uppercase()
-            )
-        })
-        .collect()
+/// A mail's time of day, `hh:mm`.
+pub fn mail_time(m: &credentials::Mail) -> String {
+    let t = crate::jobs::day_minute(m.at);
+    format!("{:02}:{:02}", t / 60, t % 60)
 }
 
-/// A mail's text, read: it is marked read and the favour ticks.
+/// The rule above and below a printed mail's body.
+const MAIL_RULE: &str = "────────────────────────────────────────────";
+
+/// A mail's text, read: it is marked read and its story step ticks. A head block, the
+/// body between two rules, and how many unread are left.
 pub fn mail_open(st: &mut AppState, i: usize) -> Result<Vec<String>, String> {
+    let n = st.journal.mails.len();
     let Some(m) = st.journal.mails.get(i) else {
         return Err("NO SUCH MESSAGE".to_string());
     };
+    let new = if m.read { "" } else { " · NEW" };
     let mut lines = vec![
-        format!("From: {}", m.from),
-        format!("Subject: {}", m.subject),
-        String::new(),
+        format!("MAIL {} OF {n}{new}", i + 1),
+        format!("FROM     {}", m.from.to_uppercase()),
+        format!("SUBJECT  {}", m.subject.to_uppercase()),
+        format!("TIME     {}", mail_time(m)),
+        MAIL_RULE.to_string(),
     ];
     lines.extend(m.body.iter().cloned());
+    lines.push(MAIL_RULE.to_string());
     credentials::mail_read(st, i);
+    let left = st.journal.mails.iter().filter(|m| !m.read).count();
+    lines.push(if left == 0 {
+        "NO NEW MAIL".to_string()
+    } else {
+        format!("{left} NEW LEFT · mail")
+    });
     Ok(lines)
 }
 

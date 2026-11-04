@@ -2853,3 +2853,82 @@ fn objectives_shots() {
         shot_stack(&name("mail_mark"), &st, &[&map], size);
     }
 }
+
+/// HELIX mail at the rig, through the real story: Mezz's mail just in (the older mail
+/// read), the rig's boot saying so, the inbox, the mail read with Seren's landing, and
+/// `mail 4` printed.
+#[test]
+#[ignore]
+fn mail_shots() {
+    for (w, h) in [(120u16, 40u16), (100, 30)] {
+        let size = (w, h);
+        let name = |what: &str| format!("mail_{what}_{w}x{h}");
+
+        let mut st = crate::missions::tests::the_morning_call();
+        crate::missions::tests::the_news_is_on(&mut st);
+        crate::missions::news::switch_off(&mut st);
+        let mezz = st
+            .journal
+            .mails
+            .iter()
+            .position(|m| m.subject == "the news")
+            .expect("Mezz's mail");
+        for (i, m) in st.journal.mails.iter_mut().enumerate() {
+            m.read = i != mezz;
+        }
+        // The map's mail pill stays off the shot.
+        st.missions.daze = None;
+        st.missions.asides.clear();
+        st.mail_seen = st.journal.mails.len();
+        st.mail_pill = None;
+        let map = MapScreen::walking(&mut st);
+        let home = st.home.unwrap().home;
+        let mut term = Terminal::open(&mut st, HostId::Rig, (map.place, home.rig));
+        st.tick += 10_000;
+        term.update(&mut st, &[]);
+
+        let text = buffer_text(&draw_stack(&st, &[&map, &term], size));
+        assert!(
+            text.contains("YOU HAVE 1 NEW MAIL"),
+            "the boot says what is new\n{text}"
+        );
+        shot_stack(&name("boot"), &st, &[&map, &term], size);
+
+        type_lines(&mut st, &mut term, &["mail"]);
+        st.tick += 10_000;
+        term.update(&mut st, &[]);
+        let text = buffer_text(&draw_stack(&st, &[&map, &term], size));
+        assert!(text.contains("HELIX mail 2.2"), "the program is up\n{text}");
+        assert!(text.contains("INBOX"), "on the inbox\n{text}");
+        assert!(text.contains("the news"), "Mezz's mail is listed\n{text}");
+        assert!(text.contains("NEW"), "marked new\n{text}");
+        shot_stack(&name("inbox"), &st, &[&map, &term], size);
+
+        term.update(&mut st, &[key(KeyCode::Char(' '))]);
+        st.tick += 10_000;
+        term.update(&mut st, &[]);
+        let text = buffer_text(&draw_stack(&st, &[&map, &term], size));
+        assert!(
+            text.contains("Saw the news."),
+            "Mezz's mail is read\n{text}"
+        );
+        assert!(text.contains("[ 1 new left ]"), "Seren's came\n{text}");
+        shot_stack(&name("read"), &st, &[&map, &term], size);
+
+        // Out of the program, `mail 4` printed on the rig's own glass.
+        term.update(&mut st, &[key(KeyCode::Esc), key(KeyCode::Esc)]);
+        type_lines(&mut st, &mut term, &["mail 4"]);
+        st.tick += 10_000;
+        term.update(&mut st, &[]);
+        let text = buffer_text(&draw_stack(&st, &[&map, &term], size));
+        assert!(
+            !text.contains("HELIX mail 2.2"),
+            "back at the prompt\n{text}"
+        );
+        assert!(
+            text.contains("MAIL 4 OF 5") && text.contains("FROM     MEZZ"),
+            "mail 4 is read out on the glass\n{text}"
+        );
+        shot_stack(&name("n"), &st, &[&map, &term], size);
+    }
+}

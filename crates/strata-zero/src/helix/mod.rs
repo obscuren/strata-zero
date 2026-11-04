@@ -2,6 +2,7 @@
 
 pub mod bin;
 pub mod hosts;
+pub mod mailer;
 pub mod nano;
 pub mod shell;
 pub mod vfs;

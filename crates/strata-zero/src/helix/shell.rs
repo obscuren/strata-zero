@@ -45,6 +45,8 @@ pub struct Output {
     pub exit: bool,
     pub denied: bool,
     pub open_nano: Option<String>,
+    /// `mail` asks the screen for HELIX mail.
+    pub open_mail: bool,
 }
 
 /// What the shell needs from the world; the app implements it, tests use `MemIo`.
@@ -414,7 +416,8 @@ pub fn run(io: &mut dyn Io, shell: &mut Shell, line: &str) -> Output {
         if o.open_nano.is_some() {
             total.open_nano = o.open_nano;
         }
-        if total.exit || total.open_nano.is_some() {
+        total.open_mail |= o.open_mail;
+        if total.exit || total.open_nano.is_some() || total.open_mail {
             break;
         }
     }
@@ -434,6 +437,7 @@ fn run_pipeline(io: &mut dyn Io, shell: &mut Shell, p: &Pipeline) -> Output {
         if r.out.open_nano.is_some() {
             acc.open_nano = r.out.open_nano;
         }
+        acc.open_mail |= r.out.open_mail;
         errs.extend(r.err);
         stdin = r.out.lines;
     }
@@ -1026,7 +1030,7 @@ const PAGES: &[(&str, &str, &str)] = &[
     (
         "mail",
         "read your mail",
-        "mail lists your mail. mail n reads message n.",
+        "mail opens your inbox: space reads, n the next new, esc leaves. mail n prints message n.",
     ),
     (
         "journal",

@@ -1,10 +1,12 @@
 //! The Access Terminal on screen: a beige CRT over the map running a HELIX/OS shell,
-//! with a scrollback, a prompt, replies that type themselves out, and nano on the glass.
+//! with a scrollback, a prompt, replies that type themselves out, and nano and HELIX
+//! mail on the glass.
 
 use crate::access;
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::helix::bin::{AppIo, new_shell};
 use crate::helix::hosts::{device_of, ensure_host};
+use crate::helix::mailer::{Mailer, MailerEvent};
 use crate::helix::nano::{Nano, NanoEvent};
 use crate::helix::shell::{self, HostId, Io, Shell};
 use crate::helix::vfs::Kind;
@@ -102,6 +104,8 @@ pub struct Terminal {
     shell: Shell,
     /// nano, while it owns the keys and the glass.
     nano: Option<Nano>,
+    /// HELIX mail, while it owns the keys and the glass.
+    mailer: Option<Mailer>,
     /// The shell's prompt, refreshed after every line (`draw` has no `AppIo`).
     prompt: String,
     scrollback: Vec<String>,
@@ -144,12 +148,19 @@ impl Terminal {
             })
         };
         let prompt = shell::prompt(&AppIo { st }, &shell);
+        // A re-open prints no motd, but the rig still says what mail waits, already typed.
+        let scrollback = if fresh || seized {
+            Vec::new()
+        } else {
+            new_mail_line(st, shell.host).into_iter().collect()
+        };
         Terminal {
             look,
             shell,
             nano: None,
+            mailer: None,
             prompt,
-            scrollback: Vec::new(),
+            scrollback,
             typing,
             console: Console::default(),
             denied_at: None,
@@ -256,6 +267,8 @@ impl Terminal {
                 }
                 Err(e) => lines.push(e),
             }
+        } else if out.open_mail {
+            self.mailer = Mailer::open(st);
         }
         // Replies land at once; only the power-on boot types itself out.
         let mut typing = Typing::new(lines, st.tick, self.look.style.cps);
@@ -290,6 +303,21 @@ impl Terminal {
         }
     }
 
+    /// One key to HELIX mail; true once it has closed and given the keys back.
+    fn mailer_key(&mut self, st: &mut AppState, k: KeyEvent) -> bool {
+        let Some(mailer) = &mut self.mailer else {
+            return true;
+        };
+        match mailer.key(st, k) {
+            MailerEvent::Stay => false,
+            MailerEvent::Closed => {
+                self.mailer = None;
+                self.scroll = 0;
+                true
+            }
+        }
+    }
+
     pub(crate) fn rect(area: Rect) -> Rect {
         let w = CRT_W.min(area.width);
         let h = CRT_H.min(area.height);
@@ -302,13 +330,25 @@ impl Terminal {
     }
 }
 
-/// The host's `/etc/motd` as the shell's user reads it; nothing if they cannot.
+/// The host's `/etc/motd` as the shell's user reads it (nothing if they cannot), and on
+/// the rig what mail waits.
 fn motd(st: &mut AppState, sh: &Shell) -> Vec<String> {
     let fs = &ensure_host(st, sh.host).fs;
-    match fs.read(&sh.user, &sh.cwd, &sh.home, "/etc/motd") {
+    let mut lines = match fs.read(&sh.user, &sh.cwd, &sh.home, "/etc/motd") {
         Ok(Kind::File(text)) => text.lines().map(str::to_string).collect(),
         _ => Vec::new(),
+    };
+    if let Some(line) = new_mail_line(st, sh.host) {
+        lines.push(String::new());
+        lines.push(line);
     }
+    lines
+}
+
+/// What the rig says about the mail it holds unread (nothing elsewhere, or when all is read).
+fn new_mail_line(st: &AppState, host: HostId) -> Option<String> {
+    let new = st.journal.mails.iter().filter(|m| !m.read).count();
+    (host == HostId::Rig && new > 0).then(|| format!("YOU HAVE {new} NEW MAIL · TYPE mail"))
 }
 
 fn pop() -> ScreenCmd {
@@ -350,6 +390,15 @@ impl Screen for Terminal {
         if self.nano.is_some() {
             for k in keys {
                 if self.nano_key(st, *k) {
+                    break;
+                }
+            }
+            return ScreenCmd::Stay;
+        }
+        // HELIX mail open: every key is the mailer's until it closes.
+        if self.mailer.is_some() {
+            for k in keys {
+                if self.mailer_key(st, *k) {
                     break;
                 }
             }
@@ -404,9 +453,13 @@ impl Screen for Terminal {
         };
         let buf = f.buffer_mut();
         let screen = device::crt(buf, r, &self.badge(), led, &self.look);
-        // nano owns the glass while it is open; the bezel, LED and scanlines stay.
+        // nano or HELIX mail owns the glass while open; the bezel, LED and scanlines stay.
         if let Some(nano) = &self.nano {
             nano.draw(buf, screen, &self.look);
+        } else if let Some(mailer) = &self.mailer {
+            mailer.draw(st, buf, screen, &self.look);
+        }
+        if self.nano.is_some() || self.mailer.is_some() {
             if self.look.style.scanlines {
                 device::scanlines(buf, screen);
             }
@@ -569,6 +622,50 @@ mod tests {
     );
 
     #[test]
+    fn the_rig_boots_with_the_new_mail() {
+        let mut st = crate::jobs::testutil::state_home();
+        assert!(!st.journal.mails.is_empty() && st.journal.mails.iter().all(|m| !m.read));
+        let sh = new_shell(&mut st, HostId::Rig);
+        let lines = motd(&mut st, &sh);
+        let tail = [
+            "".to_string(),
+            "YOU HAVE 1 NEW MAIL · TYPE mail".to_string(),
+        ];
+        assert!(lines.ends_with(&tail), "{lines:?}");
+        for m in &mut st.journal.mails {
+            m.read = true;
+        }
+        let lines = motd(&mut st, &sh);
+        assert!(!lines.iter().any(|l| l.contains("NEW MAIL")), "{lines:?}");
+        st.journal.mails[0].read = false;
+        let d = st.city.as_ref().unwrap().buildings[0].district;
+        let there = new_shell(&mut st, HostId::District(d));
+        let lines = motd(&mut st, &there);
+        assert!(!lines.iter().any(|l| l.contains("NEW MAIL")), "{lines:?}");
+    }
+
+    #[test]
+    fn a_reopened_rig_still_shows_the_new_mail() {
+        let mut st = crate::jobs::testutil::state_home();
+        for m in &mut st.journal.mails {
+            m.read = true;
+        }
+        let first = Terminal::open(&mut st, HostId::Rig, KEY_A);
+        assert!(!first.text(st.tick).iter().any(|l| l.contains("NEW MAIL")));
+        st.journal.mails[0].read = false;
+        let again = Terminal::open(&mut st, HostId::Rig, KEY_A);
+        let text = again.text(st.tick);
+        assert_eq!(
+            text,
+            vec!["YOU HAVE 1 NEW MAIL · TYPE mail".to_string()],
+            "the line lands at once, with no boot"
+        );
+        st.journal.mails[0].read = true;
+        let quiet = Terminal::open(&mut st, HostId::Rig, KEY_A);
+        assert!(quiet.text(st.tick).is_empty());
+    }
+
+    #[test]
     fn boots_with_motd_and_shows_a_unix_prompt() {
         let (mut st, d, _) = state();
         let origin = HostId::District(d);
@@ -712,6 +809,83 @@ mod tests {
         say(&mut t, &mut st, "nano /tmp");
         assert!(t.nano.is_none());
         assert!(reply(&t, &st, "nano /tmp").contains("is a directory"));
+    }
+
+    /// The rig's terminal at home, booted and settled.
+    fn rig(st: &mut AppState) -> Terminal {
+        let home = st.home.unwrap().home;
+        let spot = (
+            citygen::Place::Floor {
+                building: home.building,
+                level: home.level,
+            },
+            home.rig,
+        );
+        let mut t = Terminal::open(st, HostId::Rig, spot);
+        st.tick += 10_000;
+        t.update(st, &[]);
+        t
+    }
+
+    #[test]
+    fn mail_with_no_mail_prints_no_mail() {
+        let mut st = crate::jobs::testutil::state_home();
+        let favour = st.journal.mails.clone();
+        st.journal.mails.clear();
+        let mut t = rig(&mut st);
+        say(&mut t, &mut st, "mail");
+        assert_eq!(reply(&t, &st, "mail"), "NO MAIL");
+        assert!(t.mailer.is_none(), "nothing opens");
+        // with mail it opens, prints nothing, and ends the line
+        st.journal.mails = favour;
+        say(&mut t, &mut st, "mail; echo hi");
+        assert!(t.mailer.is_some(), "{:?}", t.text(st.tick));
+        assert_eq!(reply(&t, &st, "mail; echo hi"), "");
+    }
+
+    #[test]
+    fn the_terminal_routes_keys_to_the_mailer_until_it_closes() {
+        let mut st = crate::jobs::testutil::state_home();
+        let mut t = rig(&mut st);
+        say(&mut t, &mut st, "mail");
+        assert!(t.mailer.is_some(), "{:?}", t.text(st.tick));
+        let drawn = draw(&t, &st);
+        assert!(
+            drawn.contains("HELIX mail 2.2   INBOX · 1 mail · 1 new"),
+            "the mailer owns the glass: {drawn}"
+        );
+        assert!(!drawn.contains("$ mail"), "not the scrollback: {drawn}");
+        // keys go to the mailer: letters reach no prompt, space reads, esc backs out
+        let keys: Vec<KeyEvent> = "ls".chars().map(|c| key(KeyCode::Char(c))).collect();
+        assert!(matches!(t.update(&mut st, &keys), ScreenCmd::Stay));
+        assert_eq!(t.input(), "", "the console saw none of it");
+        t.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert!(st.journal.mails[0].read);
+        let drawn = draw(&t, &st);
+        assert!(drawn.contains("  From:     "), "{drawn}");
+        assert!(drawn.contains("HELIX mail 2.2   1 of 1 · NEW"), "{drawn}");
+        assert!(matches!(
+            t.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Stay
+        ));
+        assert!(t.mailer.is_some(), "esc: the inbox");
+        assert!(draw(&t, &st).contains("INBOX · 1 mail · 0 new"));
+        assert!(matches!(
+            t.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Stay
+        ));
+        assert!(t.mailer.is_none(), "esc again: the prompt");
+        // nothing left in the scrollback but the line typed
+        let text = t.text(st.tick);
+        assert_eq!(text.last(), Some(&format!("{}mail", t.prompt)), "{text:?}");
+        let drawn = draw(&t, &st);
+        assert!(!drawn.contains("HELIX mail"), "{drawn}");
+        assert!(drawn.contains(&format!("{}▮", t.prompt)), "{drawn}");
+        // and the keys are the shell's again
+        assert!(matches!(
+            t.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Pop { .. }
+        ));
     }
 
     #[test]

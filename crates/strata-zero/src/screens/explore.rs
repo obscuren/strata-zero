@@ -6599,7 +6599,7 @@ mod tests {
                 && drawn.contains("@zenbo:~$ "),
             "{drawn}"
         );
-        assert!(drawn.contains("Subject: a favour"), "{drawn}");
+        assert!(drawn.contains("SUBJECT  A FAVOUR"), "{drawn}");
     }
 
     #[test]

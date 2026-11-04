@@ -1,0 +1,171 @@
+diff --git a/crates/strata-zero/src/access.rs b/crates/strata-zero/src/access.rs
+index 79fa829..9a23548 100644
+--- a/crates/strata-zero/src/access.rs
++++ b/crates/strata-zero/src/access.rs
+@@ -475,8 +475,39 @@ pub fn alarm_state(st: &AppState, b: BuildingId) -> String {
+     }
+ }
+ 
+-/// The rig's inbox, one row a mail, `*` for unread.
++/// MOCK: the inbox newest first, with a head, a status column and the time it came.
+ pub fn mail_inbox(st: &AppState) -> Vec<String> {
++    let mails = &st.journal.mails;
++    let new = mails.iter().filter(|m| !m.read).count();
++    let mut out = vec![
++        format!("INBOX · {} MAIL · {new} NEW", mails.len()),
++        String::new(),
++        "  N   STATUS  TIME   FROM         SUBJECT".to_string(),
++    ];
++    for (i, m) in mails.iter().enumerate().rev() {
++        let t = crate::jobs::day_minute(m.at);
++        out.push(format!(
++            "{} {:>2}   {:<6}  {:02}:{:02}  {:<11}  {}",
++            if m.read { " " } else { "▸" },
++            i + 1,
++            if m.read { "read" } else { "NEW" },
++            t / 60,
++            t % 60,
++            m.from.to_uppercase(),
++            m.subject.to_uppercase()
++        ));
++    }
++    out.push(String::new());
++    out.push(if new > 0 {
++        "mail new  reads the next new one · mail N  reads one".to_string()
++    } else {
++        "mail N  reads one".to_string()
++    });
++    out
++}
++
++/// The old inbox, kept for the mock's sake.
++pub fn mail_inbox_old(st: &AppState) -> Vec<String> {
+     st.journal
+         .mails
+         .iter()
+@@ -498,13 +529,25 @@ pub fn mail_open(st: &mut AppState, i: usize) -> Result<Vec<String>, String> {
+     let Some(m) = st.journal.mails.get(i) else {
+         return Err("NO SUCH MESSAGE".to_string());
+     };
++    // MOCK: a head block, the body between rules, where it stands after.
++    let t = crate::jobs::day_minute(m.at);
++    let rule = "─".repeat(44);
+     let mut lines = vec![
+-        format!("From: {}", m.from),
+-        format!("Subject: {}", m.subject),
+-        String::new(),
++        format!("MAIL {} OF {}{}", i + 1, st.journal.mails.len(), if m.read { "" } else { " · NEW" }),
++        format!("FROM     {}", m.from.to_uppercase()),
++        format!("SUBJECT  {}", m.subject.to_uppercase()),
++        format!("TIME     {:02}:{:02}", t / 60, t % 60),
++        rule.clone(),
+     ];
+     lines.extend(m.body.iter().cloned());
++    lines.push(rule);
+     credentials::mail_read(st, i);
++    let left = st.journal.mails.iter().filter(|m| !m.read).count();
++    lines.push(if left > 0 {
++        format!("{left} NEW LEFT · mail new")
++    } else {
++        "NO NEW MAIL".to_string()
++    });
+     Ok(lines)
+ }
+ 
+diff --git a/crates/strata-zero/src/helix/bin.rs b/crates/strata-zero/src/helix/bin.rs
+index 664900c..e8a5b43 100644
+--- a/crates/strata-zero/src/helix/bin.rs
++++ b/crates/strata-zero/src/helix/bin.rs
+@@ -390,15 +390,20 @@ impl AppIo<'_> {
+         match args {
+             [] if self.st.journal.mails.is_empty() => Ok(one("NO MAIL")),
+             [] => Ok(lines(access::mail_inbox(self.st))),
++            [w] if w == "new" => {
++                let Some(i) = self.st.journal.mails.iter().rposition(|m| !m.read) else {
++                    return Ok(one("NO NEW MAIL"));
++                };
++                let out = access::mail_open(self.st, i).map_err(|e| format!("mail: {e}"))?;
++                Ok(lines(out))
++            }
+             [n] => {
+                 let i = n
+                     .parse::<usize>()
+                     .ok()
+                     .and_then(|n| n.checked_sub(1))
+                     .ok_or_else(|| "usage: mail [n]".to_string())?;
+-                let mut out = access::mail_open(self.st, i).map_err(|e| format!("mail: {e}"))?;
+-                out[0] = out[0].to_uppercase();
+-                out[1] = out[1].to_uppercase();
++                let out = access::mail_open(self.st, i).map_err(|e| format!("mail: {e}"))?;
+                 Ok(lines(out))
+             }
+             _ => Err("usage: mail [n]".to_string()),
+diff --git a/crates/strata-zero/src/screens/shots.rs b/crates/strata-zero/src/screens/shots.rs
+index 455b6d5..9b38722 100644
+--- a/crates/strata-zero/src/screens/shots.rs
++++ b/crates/strata-zero/src/screens/shots.rs
+@@ -2679,3 +2679,39 @@ fn objectives_shots() {
+         shot_stack(&name("mail_mark"), &st, &[&map], size);
+     }
+ }
++
++/// MOCK: mail in the rig's terminal: the boot says what waits, `mail` lists the inbox,
++/// `mail new` reads the next new one.
++#[test]
++#[ignore]
++fn term_mail_mock() {
++    let mut st = crate::missions::tests::the_morning_call();
++    crate::missions::tests::the_news_is_on(&mut st);
++    crate::missions::news::switch_off(&mut st);
++    st.missions.daze = None;
++    st.missions.asides.clear();
++    for m in st.journal.mails.iter_mut() {
++        m.read = m.subject != "the news";
++    }
++    st.mail_seen = st.journal.mails.len();
++    st.mail_pill = None;
++    let map = by_the_set(&mut st);
++    let home = st.home.unwrap();
++    let size = (120u16, 40u16);
++    let mut term = Terminal::open(&mut st, HostId::Rig, (home.place(), home.home.rig));
++    st.tick += 10_000;
++    term.update(&mut st, &[]);
++    shot_stack("term_boot_120x40", &st, &[&map, &term], size);
++    type_lines(&mut st, &mut term, &["mail"]);
++    st.tick += 10_000;
++    term.update(&mut st, &[]);
++    shot_stack("term_inbox_120x40", &st, &[&map, &term], size);
++    type_lines(&mut st, &mut term, &["clear", "mail new"]);
++    st.tick += 10_000;
++    term.update(&mut st, &[]);
++    shot_stack("term_read_120x40", &st, &[&map, &term], size);
++    type_lines(&mut st, &mut term, &["clear"]);
++    st.tick += 10_000;
++    term.update(&mut st, &[]);
++    shot_stack("term_blank_120x40", &st, &[&map, &term], size);
++}
+diff --git a/crates/strata-zero/src/screens/terminal.rs b/crates/strata-zero/src/screens/terminal.rs
+index 6ba37bc..f429b99 100644
+--- a/crates/strata-zero/src/screens/terminal.rs
++++ b/crates/strata-zero/src/screens/terminal.rs
+@@ -305,10 +305,19 @@ impl Terminal {
+ /// The host's `/etc/motd` as the shell's user reads it; nothing if they cannot.
+ fn motd(st: &mut AppState, sh: &Shell) -> Vec<String> {
+     let fs = &ensure_host(st, sh.host).fs;
+-    match fs.read(&sh.user, &sh.cwd, &sh.home, "/etc/motd") {
++    let mut lines: Vec<String> = match fs.read(&sh.user, &sh.cwd, &sh.home, "/etc/motd") {
+         Ok(Kind::File(text)) => text.lines().map(str::to_string).collect(),
+         _ => Vec::new(),
++    };
++    // MOCK: the rig says what waits in the inbox.
++    if sh.host == HostId::Rig {
++        let n = st.journal.mails.iter().filter(|m| !m.read).count();
++        if n > 0 {
++            lines.push(String::new());
++            lines.push(format!("YOU HAVE {n} NEW MAIL · TYPE mail"));
++        }
+     }
++    lines
+ }
+ 
+ fn pop() -> ScreenCmd {
