@@ -9,7 +9,7 @@
 //! same tile built inside any region. See `2026-11-04-world-tiles-design.md`.
 
 use super::field::Fbm;
-use super::{Ground, Overworld, WorldTile};
+use super::{Ground, Overworld, Water, WorldTile};
 use crate::geom::{Grid, Pos, Size};
 use crate::rng::{hash64, tile_hash};
 use crate::tile::{Terrain, Tile};
@@ -36,6 +36,8 @@ pub fn region(world: &Overworld, x0: i32, y0: i32, w: u32, h: u32) -> Grid<Tile>
         h + 2 * MARGIN as u32,
     );
     p.cover();
+    p.water();
+    p.shores();
     p.crop(x0, y0, w, h)
 }
 
@@ -45,7 +47,14 @@ struct Patch<'a> {
     x0: i32,
     y0: i32,
     grid: Grid<Tile>,
+    /// What water a cell is: 0 none, 1 the sea, 2 a lake, 3 a river.
+    wet: Grid<u8>,
 }
+
+const SEA: u8 = 1;
+const LAKE: u8 = 2;
+#[allow(dead_code)]
+const RIVER: u8 = 3;
 
 impl<'a> Patch<'a> {
     fn new(world: &'a Overworld, x0: i32, y0: i32, w: u32, h: u32) -> Patch<'a> {
@@ -54,6 +63,7 @@ impl<'a> Patch<'a> {
             x0,
             y0,
             grid: Grid::filled(Size { w, h }, Tile::new(Terrain::Void)),
+            wet: Grid::filled(Size { w, h }, 0),
         }
     }
 
@@ -121,6 +131,96 @@ impl<'a> Patch<'a> {
         }
     }
 
+    fn wet_at(&self, p: Pos) -> u8 {
+        self.wet.get(self.local(p)).copied().unwrap_or(0)
+    }
+
+    fn set_wet(&mut self, p: Pos, kind: u8) {
+        let l = self.local(p);
+        if let Some(v) = self.wet.get_mut(l) {
+            *v = kind;
+        }
+    }
+
+    /// The sea and lakes: water where the overworld's water, blended between tile
+    /// centres, plus a shoreline noise at three scales (coves, points, the odd spit),
+    /// passes one half.
+    fn water(&mut self) {
+        let w = self.world;
+        let n = [
+            Fbm::new(w.seed, 2011),
+            Fbm::new(w.seed, 2012),
+            Fbm::new(w.seed, 2013),
+        ];
+        for p in self.cells().collect::<Vec<_>>() {
+            if !self.in_world(p) {
+                continue;
+            }
+            let (x, y) = (p.x as f32, p.y as f32);
+            let shore = 0.34 * (n[0].at(x / 16.0, y / 8.0, 3) - 0.5)
+                + 0.22 * (n[1].at(x / 6.0, y / 3.0, 3) - 0.5)
+                + 0.10 * (n[2].at(x / 2.5, y / 1.25, 2) - 0.5);
+            let sea = blend(w, x, y, |t| (t.water == Water::Sea) as u8 as f32) + shore;
+            let lake = blend(w, x, y, |t| (t.water == Water::Lake) as u8 as f32) + shore;
+            if sea > 0.5 {
+                self.set(p, Terrain::Water);
+                self.set_wet(p, SEA);
+            } else if lake > 0.5 {
+                self.set(p, Terrain::Water);
+                self.set_wet(p, LAKE);
+            }
+        }
+    }
+
+    /// The shore bands: water within reach of land is shallows; dry ground beside water
+    /// is a beach at the sea and reeds at a lake or river. Rock, cliffs and the spill
+    /// keep their own shore.
+    fn shores(&mut self) {
+        let near = |dx: i32, dy: i32| dx.abs() <= 1 && dy.abs() <= 1 || dx.abs() == 2 && dy == 0;
+        let cells: Vec<Pos> = self.cells().collect();
+        let mut shallow = Vec::new();
+        let mut beach = Vec::new();
+        for &p in &cells {
+            let wet = self.wet_at(p);
+            let ring = (-2..=2)
+                .flat_map(|dx| (-1..=1).map(move |dy| (dx, dy)))
+                .filter(|&(dx, dy)| (dx, dy) != (0, 0) && near(dx, dy));
+            if wet != 0 {
+                let by_land = ring
+                    .map(|(dx, dy)| p.offset(dx, dy))
+                    .any(|q| self.in_world(q) && self.get(q).is_some() && self.wet_at(q) == 0);
+                if by_land {
+                    shallow.push(p);
+                }
+            } else if self.in_world(p) {
+                let touching: Vec<u8> = (-1..=1)
+                    .flat_map(|dx| (-1..=1).map(move |dy| (dx, dy)))
+                    .map(|(dx, dy)| self.wet_at(p.offset(dx, dy)))
+                    .filter(|k| *k != 0)
+                    .collect();
+                if !touching.is_empty() {
+                    let kind = if touching.contains(&SEA) {
+                        Terrain::Sand
+                    } else {
+                        Terrain::Reeds
+                    };
+                    beach.push((p, kind));
+                }
+            }
+        }
+        for p in shallow {
+            self.set(p, Terrain::Shallows);
+        }
+        for (p, kind) in beach {
+            let keeps = self.get(p).is_some_and(|t| {
+                matches!(t.terrain, Terrain::Rock | Terrain::Cliff | Terrain::Spill)
+            });
+            if !keeps {
+                self.set(p, kind);
+            }
+        }
+    }
+
     /// The cells of `x0, y0, w, h`, each with its stable variant.
     fn crop(&self, x0: i32, y0: i32, w: u32, h: u32) -> Grid<Tile> {
         let mut out = Grid::filled(Size { w, h }, Tile::new(Terrain::Void));
@@ -149,7 +249,6 @@ fn tile_at(world: &Overworld, x: i32, y: i32) -> &WorldTile {
 
 /// `f` blended between overworld tile centres at detail point `(x, y)` (bilinear); the
 /// world's outer tiles blend with themselves.
-#[allow(dead_code)]
 fn blend(world: &Overworld, x: f32, y: f32, f: impl Fn(&WorldTile) -> f32) -> f32 {
     let half = (TILE as f32 - 1.0) / 2.0;
     let (fx, fy) = ((x - half) / TILE as f32, (y - half) / TILE as f32);
@@ -236,6 +335,71 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The whole world's detail, for tests that look across it.
+    fn whole(w: &Overworld) -> Grid<Tile> {
+        region(w, 0, 0, 8 * w.size.w, 8 * w.size.h)
+    }
+
+    #[test]
+    fn water_never_touches_dry_land() {
+        for seed in 0..3 {
+            let w = Overworld::generate(WorldParams {
+                seed,
+                ..Default::default()
+            })
+            .unwrap();
+            let r = whole(&w);
+            for (p, t) in r.iter() {
+                if t.terrain != Terrain::Water {
+                    continue;
+                }
+                for q in p.neighbors8() {
+                    if let Some(n) = r.get(q) {
+                        assert!(
+                            matches!(
+                                n.terrain,
+                                Terrain::Water
+                                    | Terrain::Shallows
+                                    | Terrain::Void
+                                    | Terrain::Bridge
+                                    | Terrain::Railing
+                            ),
+                            "seed {seed}: deep water at {p:?} next to {:?}",
+                            n.terrain
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_sea_tile_is_water_and_its_shore_is_sand() {
+        let w = Overworld::generate(WorldParams {
+            seed: 0,
+            ..Default::default()
+        })
+        .unwrap();
+        let (p, _) = w
+            .tiles
+            .iter()
+            .find(|(p, t)| {
+                t.water == Water::Sea
+                    && p.neighbors8()
+                        .all(|q| w.tile(q).is_some_and(|n| n.water == Water::Sea))
+            })
+            .unwrap();
+        assert!(
+            ground(&w, p.x, p.y)
+                .iter()
+                .all(|(_, t)| matches!(t.terrain, Terrain::Water | Terrain::Shallows))
+        );
+        assert!(
+            whole(&w).count(|t| t.terrain == Terrain::Sand) > 50,
+            "a coast has a beach"
+        );
     }
 
     #[test]
