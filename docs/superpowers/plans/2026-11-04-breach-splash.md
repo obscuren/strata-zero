@@ -31,9 +31,10 @@ animation: `docs/superpowers/specs/2026-11-04-breach-splash-mock/splash.js`, `KE
 
 ## Review Focus
 
-- **Mashing a key to skip** (Esc twice, Enter held): the second press must not quit or
-  start a game. The title opened from the splash swallows keys for its first 10 ticks
-  (Task 2 test `a_key_mashed_through_the_skip_does_nothing`).
+- **Mashing or holding a key to skip** (Esc twice, Enter held): the next presses and the
+  repeats must not quit or start a game. The title opened from the splash drops keys
+  until 24 ticks pass with none (Task 2 test
+  `a_key_mashed_or_held_through_the_skip_does_nothing`).
 - **Terminal resized mid-splash**: every frame lays out from `f.area()`; drawing at any
   size ≥ 100 × 30 never panics (Task 2 `draws_at_every_tick_and_size`).
 - **A tall terminal** (300 × 80): the dump's first row stays at a non-negative row
@@ -81,8 +82,8 @@ animation: `docs/superpowers/specs/2026-11-04-breach-splash-mock/splash.js`, `KE
 - Produces: `pub struct Splash`, `Splash::new(opened: u64, seed: u64) -> Splash`,
   `Splash::at_launch(opened: u64) -> Splash` (seed from the clock),
   `pub const HAND_OVER: u64 = 150;`, `impl Screen for Splash`.
-- Produces: `Title::after_splash(st: &AppState, tick: u64) -> Title`: `Title::new` with
-  keys ignored until `tick + 10`.
+- Produces: `Title::after_splash(st: &AppState, tick: u64) -> Title`: `Title::new` that
+  drops keys until 24 ticks pass with none.
 
 Constants in `splash.rs`: `FOUND = 70`, `SPAN = 560.0`, `KEY_ROW = 1000`,
 `DUMP_W = 79`, `KEY = *b"STRATA ZERO"`, key row bytes
@@ -96,8 +97,8 @@ address `0x00A1F000 + 16n` as `0x{:08X}`.
     switches too.
   - `any_key_skips_to_the_title`: at tick 10 a key gives `Switch` with
     `TransitionKind::Glitch`.
-  - `a_key_mashed_through_the_skip_does_nothing`: the title from the skip returns `Stay`
-    for Esc at tick +3 and `Quit` for Esc at tick +12.
+  - `a_key_mashed_or_held_through_the_skip_does_nothing`: after a skip at tick 10, Esc
+    at 13, every other tick from 30 to 58 and at 70 is `Stay`; Esc at 95 is `Quit`.
   - `the_key_is_found_at_75`: at 120 × 40, tick 75, the buffer text contains
     `53 54 52 41 54 41 20 5A 45 52 4F`, `STRATA ZERO` and `KEY FOUND`.
   - `the_hand_over_is_seamless`: at 120 × 40 and 100 × 30, ticks 147–149: the splash's

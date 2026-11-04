@@ -80,12 +80,14 @@ pub struct Title {
     opened: u64,
     /// The COMBAT start's map, picked with the arrows on its row.
     combat: CombatMap,
-    /// Keys before this tick are dropped (see `after_splash`).
+    /// Keys before this tick are dropped, and each one dropped pushes it on (see
+    /// `after_splash`).
     quiet_until: u64,
 }
 
-/// How long the title the splash hands over to ignores keys: a third of a second.
-const QUIET: u64 = 10;
+/// How long the title the splash hands over to waits for the keys to stop: 0.8 s with
+/// none, longer than the usual pause before a held key starts repeating.
+const QUIET: u64 = 24;
 
 impl Title {
     /// The current parameters with a seed nobody has played: the tick and the clock.
@@ -173,9 +175,10 @@ impl Title {
         }
     }
 
-    /// The title the launch splash hands over to: keys in its first third of a second
-    /// are dropped, so a key mashed or held to skip the splash doesn't quit the game or
-    /// start one.
+    /// The title the launch splash hands over to: it drops keys until `QUIET` ticks pass
+    /// with none, so a key mashed or held to skip the splash doesn't quit the game or
+    /// start one. (A terminal never says when a key is let go; the quiet is how a hold
+    /// is seen to end.)
     pub fn after_splash(st: &AppState, tick: u64) -> Self {
         Title {
             quiet_until: tick + QUIET,
@@ -226,6 +229,9 @@ impl Title {
 impl Screen for Title {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
         if st.tick < self.quiet_until {
+            if !keys.is_empty() {
+                self.quiet_until = st.tick + QUIET;
+            }
             return ScreenCmd::Stay;
         }
         for k in keys {

@@ -489,7 +489,7 @@ mod tests {
     }
 
     #[test]
-    fn a_key_mashed_through_the_skip_does_nothing() {
+    fn a_key_mashed_or_held_through_the_skip_does_nothing() {
         let mut st = AppState::new();
         st.tick = 10;
         let ScreenCmd::Switch { to: mut title, .. } =
@@ -497,16 +497,23 @@ mod tests {
         else {
             panic!("the key skips");
         };
-        st.tick = 13;
-        assert!(matches!(
-            title.update(&mut st, &[key(KeyCode::Esc)]),
-            ScreenCmd::Stay
-        ));
-        st.tick = 22;
-        assert!(matches!(
-            title.update(&mut st, &[key(KeyCode::Esc)]),
-            ScreenCmd::Quit
-        ));
+        let mut esc = |st: &mut AppState, tick: u64| {
+            st.tick = tick;
+            title.update(st, &[key(KeyCode::Esc)])
+        };
+        assert!(matches!(esc(&mut st, 13), ScreenCmd::Stay), "mashed");
+        // Held: the repeats start after the system's pause and come every other tick.
+        for tick in (30..60).step_by(2) {
+            assert!(
+                matches!(esc(&mut st, tick), ScreenCmd::Stay),
+                "held, {tick}"
+            );
+        }
+        assert!(
+            matches!(esc(&mut st, 70), ScreenCmd::Stay),
+            "too soon after"
+        );
+        assert!(matches!(esc(&mut st, 95), ScreenCmd::Quit), "0.8 s quiet");
     }
 
     #[test]
@@ -514,14 +521,12 @@ mod tests {
         let mut st = AppState::new();
         st.tick = 75;
         let text = buffer_text(&draw(&Splash::new(0, 7), &st, (120, 40)));
-        for want in [
-            "53 54 52 41 54 41",
-            "20 5A 45 52 4F",
-            "STRATA ZERO",
-            "KEY FOUND",
-        ] {
-            assert!(text.contains(want), "{want}\n{text}");
+        let rows: Vec<&str> = text.lines().collect();
+        let head = rows[40 / 2 + 4];
+        for want in ["53 54 52 41 54  41 20 5A 45 52 4F", "STRATA ZERO", "◀ KEY"] {
+            assert!(head.contains(want), "{want}\n{head}");
         }
+        assert!(rows[40 - 2].contains("KEY FOUND"), "{}", rows[38]);
     }
 
     #[test]

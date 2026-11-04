@@ -67,9 +67,11 @@ background is the same before and after the hand-over.
   key hints).
 - **Any key** switches to the title at once, through the glitch transition. The key does
   nothing else: it does not reach the title.
-- **The title opened from the splash ignores keys for its first 10 ticks** (a third of a
-  second), so a player mashing Esc or holding Enter to skip doesn't quit the game or
-  start one by accident.
+- **The title opened from the splash drops keys until 24 ticks (0.8 s) pass with none**,
+  each dropped key starting the wait again, so a player mashing Esc or holding Enter to
+  skip doesn't quit the game or start one by accident. (A terminal never reports a key
+  being let go, so a quiet spell is how a hold is seen to end; 0.8 s is longer than the
+  usual pause before a held key starts repeating.)
 - Under 100 × 30 the frame loop already draws its resize notice instead of any screen;
   the splash runs on behind it and hands over as usual.
 - The dump's bytes come from a seed taken at launch (the clock), so the dump differs
@@ -92,7 +94,7 @@ background is the same before and after the hand-over.
 - **The window's live shot** (`STRATA_WINDOW_SHOT`, 1.5 s in) now catches the splash
   mid-scan. That still proves the app draws; its comment says so. The window's
   `window_shots` test draws the title itself, not `initial`.
-- **The key guard** above (10 ticks), on both ways into the title from the splash: a key
+- **The key guard** above (24 quiet ticks), on both ways into the title from the splash: a key
   that arrives just as the splash ends naturally was most likely meant to skip it.
 - **CI's app jobs** draw `shots::splash` with their other shots, so the Windows and Linux
   screenshots include it.
