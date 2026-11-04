@@ -1402,10 +1402,11 @@ pub fn jack_out(st: &mut AppState) -> Result<(), &'static str> {
     {
         player.update_fov(&map, bonus);
     }
-    // A run in flight stays in the Net.
+    // A run in flight stays in the Net, and so does a mask.
     if st.net.run.take().is_some() {
         st.say("run aborted");
     }
+    st.net.mask = 0;
     st.backdoors.end_route();
     Ok(())
 }
@@ -1712,6 +1713,19 @@ fn mask_wears(st: &mut AppState, b: BuildingId) {
         if noise_on(st, b, 1) {
             return;
         }
+        if st.net.mask == 0 {
+            st.say("the mask is gone");
+        }
+    }
+}
+
+/// A held mask wears on the open Net: a turn in a fight, a beat in calm. Nobody owns
+/// the grid, so it makes no noise there.
+pub fn mask_wears_outside(st: &mut AppState) {
+    let masked = st.net.mask > 0;
+    if masked && std::mem::take(&mut st.net.mask_fresh) {
+    } else if masked {
+        st.net.mask -= 1;
         if st.net.mask == 0 {
             st.say("the mask is gone");
         }
@@ -2182,6 +2196,10 @@ pub fn end_turn(st: &mut AppState) {
                 // trace), and any piece that stood again since takes its seat.
                 seat_standing(st, b);
                 mask_wears(st, b);
+            }
+            Place::Stratum(StratumKind::Net) => {
+                seat_foes(st);
+                mask_wears_outside(st);
             }
             _ => seat_foes(st),
         }

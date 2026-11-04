@@ -146,6 +146,9 @@ pub struct Decoy {
 /// already held starts the hour again and keeps what was spent). The log line.
 pub fn take(st: &mut AppState, node: NodeId, owner: Owner, now: u64) -> String {
     let until = now + game::HACK_MINUTES;
+    for j in st.net.hijacks.iter_mut().filter(|j| j.node == node) {
+        j.until = until;
+    }
     match st.net.holds.iter_mut().find(|h| h.node == node) {
         Some(h) => h.until = until,
         None => st.net.holds.push(Hold {
@@ -838,6 +841,10 @@ mod tests {
         assert_eq!(aside.label, "Vex");
         // Walkers near stare at it.
         assert!(staring(&st, ad_at.step(citygen::Dir::S)));
+        // Held again, the hijack lasts with the hold.
+        let later = st.net.now(&st) + 5;
+        take(&mut st, ad, Owner::Building(b), later);
+        assert_eq!(st.net.hijacks[0].until, later + game::HACK_MINUTES);
         // The hold ends: the ads go back.
         st.net.holds.iter_mut().for_each(|h| h.until = 0);
         tick(&mut st);

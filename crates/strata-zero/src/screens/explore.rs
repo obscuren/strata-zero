@@ -503,10 +503,17 @@ impl MapScreen {
         }
     }
 
-    fn in_construct(st: &AppState) -> bool {
-        st.player
-            .as_ref()
-            .is_some_and(|p| matches!(p.place, Place::Construct(_)))
+    /// In the Net: a construct, or the open Net, where the deck's programs are the
+    /// number keys and nothing of the meat's (no throws, no pushes) works.
+    fn in_net(st: &AppState) -> bool {
+        st.player.as_ref().is_some_and(|p| Self::net_place(p.place))
+    }
+
+    fn net_place(place: Place) -> bool {
+        matches!(
+            place,
+            Place::Construct(_) | Place::Stratum(StratumKind::Net)
+        )
     }
 
     /// What the act half offers, in key order: the fight's abilities (strikes,
@@ -515,7 +522,7 @@ impl MapScreen {
     /// does not push, a boost), and no throwables.
     fn act_list(st: &AppState) -> Vec<Act> {
         use game::{AbilityKind::Active, Active as A};
-        let net = Self::in_construct(st);
+        let net = Self::in_net(st);
         let owned = st.character.abilities(&st.content);
         let mut out: Vec<Act> = st
             .content
@@ -545,7 +552,7 @@ impl MapScreen {
 
     /// The first key of the list: `1`, or `6` after a construct's programs.
     fn act_base(st: &AppState) -> u32 {
-        if Self::in_construct(st) { 6 } else { 1 }
+        if Self::in_net(st) { 6 } else { 1 }
     }
 
     /// The entry a number key picks: `0` is the tenth key, after `9`. In a construct
@@ -730,10 +737,18 @@ impl MapScreen {
             KeyCode::Char(' ') => {
                 // A program armed at something keeps space as its roll; the cursor's
                 // attack is for when nothing is in flight.
-                if matches!(place, Place::Construct(_)) && st.net.run.is_some() {
+                if Self::net_place(place) && st.net.run.is_some() {
                     return None;
                 }
                 match self.target.and_then(|t| Self::enemy_at(st, t)) {
+                    // ICE on the open Net takes the deck's attack, not a gun.
+                    Some(Enemy::Foe(foe)) if st.foes.get(foe).is_some_and(|f| f.ice.is_some()) => {
+                        self.last_enemy = Some(Enemy::Foe(foe));
+                        match crate::combat::attack_grid(st, foe) {
+                            Ok(slot) => self.program_flash = Some((slot, st.tick)),
+                            Err(why) => st.warn(why),
+                        }
+                    }
                     Some(Enemy::Foe(foe)) => {
                         self.last_enemy = Some(Enemy::Foe(foe));
                         if let Err(why) = crate::combat::fire(st, foe) {
@@ -752,7 +767,7 @@ impl MapScreen {
                     }
                     // In a construct space keeps its other jobs: a run in flight
                     // rolls, a node opens.
-                    None if matches!(place, Place::Construct(_)) => return None,
+                    None if Self::net_place(place) => return None,
                     None => st.warn("pick a target"),
                 }
                 Some(ScreenCmd::Stay)
@@ -762,7 +777,7 @@ impl MapScreen {
                 let Some(act) = Self::act_key(st, n) else {
                     // On foot a number with nothing behind it does nothing; in a
                     // construct 1-5 are the deck's programs.
-                    return (!matches!(place, Place::Construct(_))).then_some(ScreenCmd::Stay);
+                    return (!Self::net_place(place)).then_some(ScreenCmd::Stay);
                 };
                 match act {
                     Act::Throw(id) => {
@@ -1985,6 +2000,10 @@ impl MapScreen {
             done: Vec::new(),
             next_at: st.clock_tick(),
         });
+        // A ride is a move: the run in flight is dropped.
+        if st.net.run.take().is_some() {
+            st.say("run aborted");
+        }
         true
     }
 
@@ -9805,6 +9824,131 @@ mod tests {
         let now = st.net.now(&st);
         crate::holds::take(&mut st, id, owner, now);
         (st, s)
+    }
+
+    /// A grey grid piece hunting you, at `at`.
+    fn grid_piece(st: &AppState, at: Pos) -> crate::foes::Foe {
+        let d = st.city.as_ref().unwrap().districts[0].id;
+        let me = st.player.as_ref().unwrap().pos;
+        let mut f = crate::grid::piece(
+            citygen::IceGrade::Grey,
+            crate::grid::Role::Sentinel {
+                beat: vec![],
+                step: 0,
+                forward: true,
+            },
+            crate::owners::Owner::District(d),
+            at,
+        );
+        f.mode = crate::foes::FoeMode::Hunting { seen: me, lost: 0 };
+        f
+    }
+
+    /// You on the Net (seed 8, sweeps so no sentinels) at the west end of a straight
+    /// lane four tiles long.
+    fn on_a_straight_lane() -> (AppState, MapScreen, Pos) {
+        let (mut st, _) = crate::net::tests::under_kiroflux();
+        st.grid_patrols = crate::grid::Patrols::Sweeps;
+        let mut s = MapScreen::explore(0);
+        let city = st.city.clone().unwrap();
+        let me = city
+            .stratum(StratumKind::Net)
+            .unwrap()
+            .tiles
+            .iter()
+            .map(|(p, _)| p)
+            .find(|p| {
+                (0..=3).all(|k| {
+                    city.tile(StratumKind::Net, Pos::new(p.x + k, p.y))
+                        .is_some_and(|t| t.terrain == citygen::Terrain::NetLane)
+                })
+            })
+            .unwrap();
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), me);
+        (st, s, me)
+    }
+
+    #[test]
+    fn far_grid_ice_hunting_never_puts_you_on_turns() {
+        let (mut st, mut s, me) = on_a_straight_lane();
+        let far = grid_piece(&st, Pos::new(me.x + 40, me.y));
+        st.foes.push(far);
+        for _ in 0..4 {
+            s.update(&mut st, &[]);
+            s.update(&mut st, &[key(KeyCode::Char('.'))]);
+            assert!(st.net.engaged.is_none(), "{:?}", last(&st));
+        }
+    }
+
+    #[test]
+    fn a_fight_on_the_open_net_takes_the_decks_attack() {
+        let (mut st, mut s, me) = on_a_straight_lane();
+        let attack = game::ItemId::new("attack");
+        if !st.character.loaded.contains(&attack) {
+            st.character.loaded.insert(0, attack);
+        }
+        let piece = st.foes.len();
+        let f = grid_piece(&st, Pos::new(me.x + 3, me.y));
+        st.foes.push(f);
+        crate::net::engage(&mut st, Place::Stratum(StratumKind::Net), false);
+        settle(&mut st, &mut s);
+        assert!(crate::net::your_turn(&st));
+        // Stay: the act half; the cursor on the piece; space attacks with the deck.
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        st.net.force_roll = Some(10);
+        s.target = Some(st.foes[piece].pos);
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert!(
+            st.foes[piece].hp < st.foes[piece].hp_max,
+            "the attack lands: {:?}",
+            last(&st)
+        );
+        // No meat on the Net: nothing to throw, the programs' keys first.
+        assert_eq!(MapScreen::act_base(&st), 6);
+    }
+
+    #[test]
+    fn a_ride_aborts_the_run_and_a_mask_wears_on_the_grid() {
+        let (mut st, _) = crate::net::tests::under_kiroflux();
+        st.grid_patrols = crate::grid::Patrols::Sweeps;
+        let mut s = MapScreen::explore(0);
+        let city = st.city.clone().unwrap();
+        // A wall camera with a lane to ride off from beside it.
+        let (cam, here, dir) = city
+            .net
+            .nodes
+            .iter()
+            .filter(|n| n.kind == citygen::NodeKind::Camera && n.building.is_some())
+            .find_map(|n| {
+                n.cyber.neighbors8().find_map(|q| {
+                    let reach = crate::net::targets_outside(&st, q)
+                        .iter()
+                        .any(|(t, _)| *t == game::HackTarget::Node(n.id));
+                    [Dir::E, Dir::W, Dir::S, Dir::N]
+                        .into_iter()
+                        .find(|d| reach && crate::ride::ride_path(&city, q, *d).len() >= 3)
+                        .map(|d| (n.id, q, d))
+                })
+            })
+            .expect("a lane to ride beside a wall camera");
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), here);
+        crate::net::start_run(
+            &mut st,
+            game::ItemId::new("crack"),
+            game::HackTarget::Node(cam),
+        )
+        .unwrap();
+        s.update(&mut st, &[key(dir_key(dir))]);
+        assert!(st.net.run.is_none(), "riding off drops the run");
+        st.net.mask = 3;
+        for _ in 0..(4 * crate::net::BEAT_TICKS) {
+            st.tick += 1;
+            if let (Some(c), Some(w)) = (st.city.as_ref(), st.world.as_mut()) {
+                w.advance(c, w.tick() + 1);
+            }
+            s.update(&mut st, &[]);
+        }
+        assert_eq!(st.net.mask, 0, "the mask wore off");
     }
 
     #[test]

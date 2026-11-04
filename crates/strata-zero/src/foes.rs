@@ -236,11 +236,17 @@ pub fn look(st: &mut AppState, i: usize) -> bool {
 
 /// Every standing foe on the player's map looks; true when any hunts.
 pub fn look_all(st: &mut AppState) -> bool {
-    let Some(place) = st.player.as_ref().map(|p| p.place) else {
+    let Some((place, me)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
         return false;
     };
+    // On the open Net only the pieces near you count: one hunting across the city
+    // doesn't put you on turns.
+    let net = place == Place::Stratum(citygen::StratumKind::Net);
     let mut any = false;
     for i in standing(st, place) {
+        if net && st.foes[i].pos.chebyshev(me) > crate::grid::FIGHT_RADIUS {
+            continue;
+        }
         any |= look(st, i);
     }
     any

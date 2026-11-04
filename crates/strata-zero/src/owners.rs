@@ -27,7 +27,12 @@ pub fn owner_of(city: &City, node: NodeId) -> Option<Owner> {
 /// The owner's subnet security.
 pub fn security(st: &AppState, o: Owner) -> u8 {
     match o {
-        Owner::Building(b) => crate::access::security_of(st, b),
+        // A construct already made carries its own (the lot's practice construct
+        // among them); else the building's subnet.
+        Owner::Building(b) => st
+            .constructs
+            .get(b)
+            .map_or_else(|| crate::access::security_of(st, b), |k| k.security),
         Owner::District(d) => st
             .city
             .as_ref()

@@ -106,6 +106,7 @@ pub struct GridState {
     pub tracer_tick: u64,
     pub sentinel_tick: u64,
     pub ring_tick: u64,
+    pub mask_tick: u64,
     pub rings: Vec<Ring>,
     /// Owners whose alarm went up from a run outside, while their alert lasts.
     pub alarmed: Vec<Owner>,
@@ -468,28 +469,42 @@ pub fn tick(st: &mut AppState) {
         post_sentinels(st);
     }
     let now = st.net.now(st);
-    // An alarm that cleared lets its waiting tracers go.
-    let alarmed: Vec<Owner> = st.net.grid.alarmed.clone();
-    let cleared: Vec<Owner> = alarmed
-        .into_iter()
-        .filter(|o| !crate::owners::alert(st, *o, now))
+    // An alarm that cleared lets its waiting tracers go: a tracer waits at a gate
+    // only while its owner is on alert.
+    let still: Vec<Owner> = st
+        .net
+        .grid
+        .alarmed
+        .iter()
+        .copied()
+        .filter(|o| crate::owners::alert(st, *o, now))
         .collect();
-    if !cleared.is_empty() {
-        st.net.grid.alarmed.retain(|o| !cleared.contains(o));
-        for f in &mut st.foes {
-            if let Some(ice) = f.ice.as_ref()
-                && ice.tracer()
-                && cleared.contains(&ice.owner)
-                && matches!(ice.role, Role::Tracer { wait: Some(_), .. })
-            {
-                f.down = true;
-            }
-        }
+    st.net.grid.alarmed = still;
+    let gone: Vec<usize> = st
+        .foes
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| {
+            !f.down
+                && f.ice.as_ref().is_some_and(|ice| {
+                    matches!(ice.role, Role::Tracer { wait: Some(_), .. })
+                        && !crate::owners::alert(st, ice.owner, now)
+                })
+        })
+        .map(|(i, _)| i)
+        .collect();
+    for i in gone {
+        st.foes[i].down = true;
     }
     if st.net.engaged.is_some() {
         return;
     }
     let tick = st.clock_tick();
+    // A mask wears a beat at a time out on the grid.
+    if on_net && tick >= st.net.grid.mask_tick + crate::net::BEAT_TICKS {
+        st.net.grid.mask_tick = tick;
+        crate::net::mask_wears_outside(st);
+    }
     if tick >= st.net.grid.tracer_tick + TRACER_TICKS {
         st.net.grid.tracer_tick = tick;
         step_tracers(st);
@@ -562,6 +577,13 @@ fn step_tracers(st: &mut AppState) {
                         st.say("the tracer loses you in the hub's traffic");
                         continue;
                     }
+                    // At the head of a trail you've stopped leaving (a mask), it has
+                    // nothing more to follow.
+                    if at + 1 >= st.net.grid.trail.len() && st.net.mask > 0 {
+                        st.foes[i].down = true;
+                        st.say("the tracer loses your trail");
+                        continue;
+                    }
                     // On to the next point; at the head of the trail it waits for you.
                     if at + 1 < st.net.grid.trail.len()
                         && let Some(GridIce {
@@ -622,6 +644,12 @@ fn step_sentinels(st: &mut AppState) {
         crate::foes::step(st, i, true, false);
     }
     let me = st.player.as_ref().map(|p| p.pos);
+    let others: Vec<Pos> = st
+        .foes
+        .iter()
+        .filter(|f| !f.down && f.place == Place::Stratum(StratumKind::Net))
+        .map(|f| f.pos)
+        .collect();
     for f in &mut st.foes {
         if f.down || f.stunned > 0 || f.hunting() {
             continue;
@@ -643,11 +671,12 @@ fn step_sentinels(st: &mut AppState) {
         }
         let home = beat[(*step).min(beat.len() - 1)];
         if f.pos != home {
-            // Back to the beat after a hunt: straight toward its spot on it.
-            let (dx, dy) = ((home.x - f.pos.x).signum(), (home.y - f.pos.y).signum());
-            let to = Pos::new(f.pos.x + dx, f.pos.y + dy);
-            if Some(to) != me {
-                f.pos = to;
+            // Back to the beat after a hunt, along the lanes to its spot on it.
+            if let Some(city) = st.city.as_ref() {
+                let avoid: Vec<Pos> = me.into_iter().chain(others.iter().copied()).collect();
+                if let Some(to) = crate::foes::step_toward(city, f.place, f.pos, home, &avoid) {
+                    f.pos = to;
+                }
             }
             continue;
         }
@@ -1219,6 +1248,46 @@ mod tests {
         }
         assert!(st.net.cooling_until.is_some(), "it latched: dumped");
         assert!(st.log.iter().any(|e| e.text.contains("latched on")));
+    }
+
+    #[test]
+    fn masked_you_leave_the_tracer_at_the_head_of_the_trail() {
+        let (mut st, _) = under_kiroflux();
+        let walked = walk_east(&mut st, 4);
+        st.net.grid.trail.iter_mut().for_each(|t| t.1 = false);
+        let head = st.net.grid.trail.len() - 1;
+        let d = district(&st);
+        st.foes.push(piece(
+            IceGrade::White,
+            Role::Tracer {
+                at: head,
+                wait: None,
+            },
+            Owner::District(d),
+            *walked.last().unwrap(),
+        ));
+        // You slip away masked: the trail stops at its head.
+        st.net.mask = 3;
+        st.player.as_mut().unwrap().pos = Pos::new(walked[0].x, walked[0].y + 30);
+        step_tracers(&mut st);
+        assert!(st.foes.last().unwrap().down, "nothing more to follow");
+    }
+
+    #[test]
+    fn a_waiting_tracer_goes_when_its_alarm_is_over() {
+        let (mut st, b) = under_kiroflux();
+        st.grid_patrols = Patrols::Sweeps;
+        st.foes.push(piece(
+            IceGrade::White,
+            Role::Tracer {
+                at: 0,
+                wait: Some(Pos::new(1, 1)),
+            },
+            Owner::Building(b),
+            Pos::new(1, 1),
+        ));
+        tick(&mut st);
+        assert!(st.foes.last().unwrap().down, "no alert: it doesn't wait");
     }
 
     #[test]
