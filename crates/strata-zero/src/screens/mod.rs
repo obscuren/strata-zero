@@ -76,7 +76,15 @@ pub fn explore_screen(st: &mut crate::app::AppState) -> Box<dyn Screen> {
 /// The map over a run opened from its file (CONTINUE, LOAD GAME): you where you stood,
 /// the story where it was, nothing started over.
 pub fn resume_screen(st: &mut crate::app::AppState) -> Box<dyn Screen> {
-    Box::new(explore::MapScreen::resumed(st))
+    let outside = st
+        .outside
+        .as_ref()
+        .is_some_and(|o| o.at != crate::outside::At::City);
+    if outside {
+        Box::new(outside::OutsideScreen::new(st))
+    } else {
+        Box::new(explore::MapScreen::resumed(st))
+    }
 }
 
 #[cfg(test)]

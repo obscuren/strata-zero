@@ -749,6 +749,115 @@ mod tests {
         assert_eq!(st.outside.as_ref().unwrap().at, At::City);
     }
 
+    fn map(st: &mut AppState) -> crate::screens::explore::MapScreen {
+        crate::screens::explore::MapScreen::walking(st)
+    }
+
+    #[test]
+    fn w_on_the_open_street_goes_up_to_the_world() {
+        let mut st = on_the_world();
+        let city = st.city.clone().unwrap();
+        let o = st.outside.as_ref().unwrap();
+        let cell = o.street_of(&city, Pos::new(o.block(&city).x + 10, o.block(&city).y + 7));
+        let p = st.player.as_mut().unwrap();
+        p.place = citygen::Place::Stratum(StratumKind::Street);
+        p.pos = cell;
+        let mut m = map(&mut st);
+        assert!(matches!(
+            m.update(&mut st, &[key(KeyCode::Char('W'))]),
+            ScreenCmd::Switch { .. }
+        ));
+        let o = st.outside.as_ref().unwrap();
+        assert_eq!(o.at, At::Overworld(o.tile_of(&city, cell)));
+    }
+
+    #[test]
+    fn w_indoors_says_why_not() {
+        let mut st = on_the_world();
+        let city = st.city.clone().unwrap();
+        let b = city.buildings[0].id;
+        let p = st.player.as_mut().unwrap();
+        p.place = citygen::Place::Floor {
+            building: b,
+            level: 0,
+        };
+        let mut m = map(&mut st);
+        assert!(matches!(
+            m.update(&mut st, &[key(KeyCode::Char('W'))]),
+            ScreenCmd::Stay
+        ));
+        assert_eq!(st.outside.as_ref().unwrap().at, At::City);
+        assert!(
+            st.log
+                .recent(st.tick)
+                .is_some_and(|e| e.text.contains("open street"))
+        );
+    }
+
+    #[test]
+    fn the_streets_edge_leads_out() {
+        let mut st = on_the_world();
+        let city = st.city.clone().unwrap();
+        let o = st.outside.as_ref().unwrap();
+        let b = o.block(&city);
+        let w = o.world().clone();
+        let street = |p: Pos| {
+            city.tile(StratumKind::Street, p)
+                .is_some_and(|t| t.is_walkable() && t.building.is_none())
+        };
+        let open = |c: Pos| {
+            citygen::overworld::detail::region(&w, c.x, c.y, 1, 1)[Pos::new(0, 0)].is_walkable()
+        };
+        let (cw, ch) = (city.size.w as i32, city.size.h as i32);
+        let world_cell = |q: Pos| Pos::new(TILE * b.x + q.x, TILE * b.y + q.y);
+        let edges = (0..ch)
+            .flat_map(|y| [(Pos::new(0, y), Dir::W), (Pos::new(cw - 1, y), Dir::E)])
+            .chain((0..cw).flat_map(|x| [(Pos::new(x, 0), Dir::N), (Pos::new(x, ch - 1), Dir::S)]));
+        let (from, d) = edges
+            .into_iter()
+            .find(|(q, d)| street(*q) && open(world_cell(q.step(*d))))
+            .expect("a street out of the city");
+        let p = st.player.as_mut().unwrap();
+        p.place = citygen::Place::Stratum(StratumKind::Street);
+        p.pos = from;
+        let mut m = map(&mut st);
+        let code = match d {
+            Dir::W => KeyCode::Char('h'),
+            Dir::E => KeyCode::Char('l'),
+            Dir::N => KeyCode::Char('k'),
+            _ => KeyCode::Char('j'),
+        };
+        assert!(matches!(
+            m.update(&mut st, &[key(code)]),
+            ScreenCmd::Switch { .. }
+        ));
+        assert_eq!(
+            st.outside.as_ref().unwrap().at,
+            At::Ground(world_cell(from.step(d)))
+        );
+    }
+
+    #[test]
+    fn a_run_saved_outside_reopens_outside() {
+        let (mut st, _) = out_there();
+        let s = crate::screens::resume_screen(&mut st);
+        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        assert!(buffer_text(t.backend().buffer()).contains("on foot · overworld"));
+        st.outside.as_mut().unwrap().at = At::City;
+        let s = crate::screens::resume_screen(&mut st);
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        assert!(!buffer_text(t.backend().buffer()).contains("on foot · overworld"));
+    }
+
+    #[test]
+    fn the_help_lists_w() {
+        let mut t = Terminal::new(TestBackend::new(120, 60)).unwrap();
+        t.draw(|f| crate::screens::help::draw(f, crate::screens::explore::Mode::Walk, false))
+            .unwrap();
+        assert!(buffer_text(t.backend().buffer()).contains("up to the overworld"));
+    }
+
     #[test]
     fn esc_opens_the_pause_menu() {
         let (mut st, mut s) = out_there();

@@ -2394,6 +2394,29 @@ impl MapScreen {
         cmd
     }
 
+    /// A step from the street off the city's map: out onto the open ground beside it,
+    /// or a word on why not. `None` while the step stays on the map.
+    fn off_the_edge(&mut self, st: &mut AppState, dir: Dir) -> Option<ScreenCmd> {
+        let p = st.player.as_ref()?;
+        let size = st.city.as_ref()?.size;
+        let to = p.pos.step(dir);
+        let inside = to.x >= 0 && to.y >= 0 && to.x < size.w as i32 && to.y < size.h as i32;
+        if inside || !p.place.is_street() || p.jacked_in() {
+            return None;
+        }
+        let from = p.pos;
+        Some(match crate::outside::leave_by(st, from, dir) {
+            Ok(()) => ScreenCmd::Switch {
+                to: Box::new(crate::screens::outside::OutsideScreen::new(st)),
+                fx: TransitionKind::Glitch,
+            },
+            Err(why) => {
+                st.warn(why);
+                ScreenCmd::Stay
+            }
+        })
+    }
+
     fn handle_walk_inner(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
         let jacked = st.player.as_ref().is_some_and(|p| p.jacked_in());
         if k.code == KeyCode::Char(' ') {
@@ -2598,6 +2621,29 @@ impl MapScreen {
             {
                 return Some(self.start_walk(st, aim));
             }
+        }
+        // `W`: up out of the city onto the overworld, from the open street.
+        if k.code == KeyCode::Char('W') {
+            return Some(match crate::outside::can_leave(st) {
+                Ok(()) => {
+                    crate::outside::ensure(st);
+                    crate::outside::moves::up(st);
+                    ScreenCmd::Switch {
+                        to: Box::new(crate::screens::outside::OutsideScreen::new(st)),
+                        fx: TransitionKind::Glitch,
+                    }
+                }
+                Err(why) => {
+                    st.warn(why);
+                    ScreenCmd::Stay
+                }
+            });
+        }
+        // A step off the street's edge: out onto the open ground beside the city.
+        if let Some(dir) = dir_for(k.code)
+            && let Some(cmd) = self.off_the_edge(st, dir)
+        {
+            return Some(cmd);
         }
         if let Some(dir) = dir_for(k.code) {
             if self.start_ride(st, dir) {

@@ -159,6 +159,56 @@ pub fn nearest(from: Pos, reach: i32, ok: impl Fn(Pos) -> bool) -> Option<Pos> {
     })
 }
 
+/// Whether you can leave the city for the world now: on foot on its open street, in a
+/// city (not the lot), not jacked in, not in a fight.
+pub fn can_leave(st: &AppState) -> Result<(), &'static str> {
+    let (Some(city), Some(p)) = (st.city.as_ref(), st.player.as_ref()) else {
+        return Err("nowhere to go");
+    };
+    if city.is_lot() {
+        return Err("there is no world past the lot");
+    }
+    if p.jacked_in() {
+        return Err("jack out first");
+    }
+    if st.net.engaged.is_some() {
+        return Err("not in a fight");
+    }
+    let outdoors = p.place.is_street()
+        && city
+            .tile(StratumKind::Street, p.pos)
+            .is_some_and(|t| t.building.is_none());
+    if !outdoors {
+        return Err("only from the open street");
+    }
+    Ok(())
+}
+
+/// Out of the city by its edge: from street cell `from` a step `d` off the map, onto
+/// the open ground beside the block, where there is ground to stand on.
+pub fn leave_by(st: &mut AppState, from: Pos, d: citygen::Dir) -> Result<(), &'static str> {
+    can_leave(st)?;
+    let city = st.city.clone().ok_or("nowhere to go")?;
+    let o = ensure(st).ok_or("there is no world out here")?;
+    let b = o.block(&city);
+    let to = from.step(d);
+    let cell = Pos::new(TILE * b.x + to.x, TILE * b.y + to.y);
+    let w = o.world();
+    if cell.x < 0
+        || cell.y < 0
+        || cell.x >= TILE * w.size.w as i32
+        || cell.y >= TILE * w.size.h as i32
+    {
+        return Err("the world ends here");
+    }
+    let ground = citygen::overworld::detail::region(w, cell.x, cell.y, 1, 1)[Pos::new(0, 0)];
+    if !ground.is_walkable() {
+        return Err("no way out there");
+    }
+    o.at = At::Ground(cell);
+    Ok(())
+}
+
 /// The run's world beyond the city, made from the city's seed the first time it is
 /// needed (an old save, a test or a dev start has none yet).
 pub fn ensure(st: &mut AppState) -> Option<&mut Outside> {
