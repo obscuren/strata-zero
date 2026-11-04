@@ -80,7 +80,12 @@ pub struct Title {
     opened: u64,
     /// The COMBAT start's map, picked with the arrows on its row.
     combat: CombatMap,
+    /// Keys before this tick are dropped (see `after_splash`).
+    quiet_until: u64,
 }
+
+/// How long the title the splash hands over to ignores keys: a third of a second.
+const QUIET: u64 = 10;
 
 impl Title {
     /// The current parameters with a seed nobody has played: the tick and the clock.
@@ -164,6 +169,17 @@ impl Title {
             entries,
             opened: tick,
             combat: CombatMap::Street,
+            quiet_until: 0,
+        }
+    }
+
+    /// The title the launch splash hands over to: keys in its first third of a second
+    /// are dropped, so a key mashed or held to skip the splash doesn't quit the game or
+    /// start one.
+    pub fn after_splash(st: &AppState, tick: u64) -> Self {
+        Title {
+            quiet_until: tick + QUIET,
+            ..Title::new(st, tick)
         }
     }
 
@@ -209,6 +225,9 @@ impl Title {
 
 impl Screen for Title {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+        if st.tick < self.quiet_until {
+            return ScreenCmd::Stay;
+        }
         for k in keys {
             match k.code {
                 KeyCode::Up | KeyCode::Char('k') => self.menu.up(),

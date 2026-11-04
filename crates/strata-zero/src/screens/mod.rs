@@ -22,6 +22,7 @@ pub mod popup;
 pub mod rest;
 pub mod settings;
 pub mod sheet;
+pub mod splash;
 pub mod stickers;
 pub mod terminal;
 pub mod title;
