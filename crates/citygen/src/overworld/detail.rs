@@ -300,7 +300,7 @@ impl<'a> Patch<'a> {
                 hash64(w.seed, 2022),
                 ((t.x as u32 as u64) << 32) | t.y as u32 as u64,
             );
-            if width == 3.0 && h % 3 == 0 && !pts.is_empty() {
+            if width == 3.0 && h.is_multiple_of(3) && !pts.is_empty() {
                 let (x, y) = pts[(h >> 8) as usize % pts.len()];
                 fords.push((x, y, radius(x, y).max(1.2)));
             }
