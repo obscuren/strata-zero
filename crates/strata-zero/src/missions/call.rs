@@ -615,6 +615,67 @@ mod tests {
         assert!(st.missions.runs[0].ended.contains(&3));
     }
 
+    /// `st` saved and opened again in a new state, as LOAD GAME does.
+    fn reopened(st: &AppState) -> AppState {
+        use crate::runs::snapshot::{after_restore, restore};
+        let dir = crate::runs::testutil::Dir::new("call");
+        let path = crate::runs::file::write(&dir.0, st).expect("the run writes");
+        let mut back = AppState::new();
+        let (_, snap, lost) = crate::runs::file::read(&path, &back.book).unwrap();
+        assert!(lost.is_empty(), "{lost:?}");
+        restore(&mut back, snap);
+        after_restore(&mut back, lost);
+        back
+    }
+
+    #[test]
+    fn a_call_saved_ringing_rings_on_reopened() {
+        let st = crate::runs::testutil::running(up());
+        let mut back = reopened(&st);
+        assert_eq!(
+            back.missions.call, st.missions.call,
+            "the same call, ringing"
+        );
+        // It rings out from when it first rang, not from the load.
+        ticks(&mut back, RING_TICKS - 1);
+        super::super::tick(&mut back);
+        assert!(back.missions.call.is_some(), "still ringing");
+        // Answered, it talks.
+        let first = lines(&back)[0].clone();
+        assert!(press(&mut back, SPACE));
+        assert!(said(&back, &first));
+    }
+
+    #[test]
+    fn a_call_saved_mid_line_carries_on_reopened() {
+        let mut st = crate::runs::testutil::running(up());
+        let all = lines(&st);
+        assert!(all.len() >= 2, "{all:?}");
+        // Answered, the first line typed out, on to the second, its first letters typed.
+        assert!(press(&mut st, SPACE));
+        assert!(press(&mut st, SPACE));
+        assert!(press(&mut st, SPACE));
+        ticks(&mut st, 2);
+        let up = st.missions.call.clone().unwrap();
+        assert_eq!((up.line, up.full), (1, false));
+        let mut back = reopened(&st);
+        assert_eq!(back.missions.call, Some(up), "the call as it was");
+        assert_eq!(card(&back), card(&st), "the card as it was, mid-line");
+        assert!(said(&back, &all[1]), "the log has the line it is on");
+        // It carries on: the rest of the lines, then the call ends its step.
+        for i in 1..all.len() {
+            assert_eq!(back.missions.call.as_ref().unwrap().line, i);
+            assert!(press(&mut back, SPACE), "line {i} typed out");
+            assert!(press(&mut back, SPACE), "line {i} done");
+            if i + 1 < all.len() {
+                assert!(said(&back, &all[i + 1]));
+            }
+        }
+        assert!(back.missions.call.is_none());
+        assert!(back.missions.runs[0].ended.contains(&3));
+        assert!(voicemail(&back).is_none());
+    }
+
     #[test]
     fn esc_while_talking_hangs_up() {
         let mut st = up();

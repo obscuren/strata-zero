@@ -77,14 +77,17 @@ impl Scope {
         }
     }
 
-    /// A step read by its ids; `LOST`, said, when the book lacks either.
+    /// A step read by its ids; `LOST` when the book lacks either, said (a step once
+    /// reading is done, `Found::settle`).
     fn resolve(&mut self, mission: &str, step: &str) -> StepRef {
         let Some(m) = self.ids.mission(mission) else {
             self.lose(format!("a mission ({mission})"));
             return StepRef::LOST;
         };
         let Some(s) = self.ids.step(m, step) else {
-            self.lose(format!("a step of {mission} ({step})"));
+            self.found
+                .gone
+                .push((mission.to_string(), step.to_string()));
             return StepRef::LOST;
         };
         StepRef::new(m, s)
@@ -98,6 +101,28 @@ struct Found {
     lost: Vec<String>,
     /// The book's missions the run had no run for, by place.
     fresh: Vec<usize>,
+    /// Steps the book lacks that something in the run pointed at (a call, a feed, a
+    /// mail), by mission and step id, as met.
+    gone: Vec<(String, String)>,
+    /// Steps the book lacks that the run had ended: the player had finished them, so
+    /// nothing of theirs goes with them and nothing is said.
+    finished: BTreeSet<(String, String)>,
+}
+
+impl Found {
+    /// Once the whole run is read: a line for each step gone that it hadn't ended. The
+    /// runs are read after what points into them, so this waits for them.
+    fn settle(&mut self) {
+        for (mission, step) in std::mem::take(&mut self.gone) {
+            if self.finished.contains(&(mission.clone(), step.clone())) {
+                continue;
+            }
+            let line = format!("a step of {mission} ({step})");
+            if !self.lost.contains(&line) {
+                self.lost.push(line);
+            }
+        }
+    }
 }
 
 thread_local! {
@@ -140,12 +165,13 @@ pub(crate) fn read_snapshot(
 fn reading<R>(book: &Book, f: impl FnOnce() -> R) -> (R, Found) {
     with_book(book, || {
         let out = f();
-        let found = SCOPE.with(|s| {
+        let mut found = SCOPE.with(|s| {
             s.borrow_mut()
                 .as_mut()
                 .map(|s| std::mem::take(&mut s.found))
                 .unwrap_or_default()
         });
+        found.settle();
         (out, found)
     })
 }
@@ -295,30 +321,32 @@ pub mod runs {
             ended,
             began,
         } = run;
-        let mut lost = Vec::new();
-        let mut step = |s: &str| {
-            let i = scope.ids.step(m, s);
-            if i.is_none() {
-                lost.push(format!("a step of {id} ({s})"));
-            }
-            i
-        };
-        let ended = ended.iter().filter_map(|s| step(s)).collect();
+        // An ended step the book lacks goes from the set unsaid: the player finished it.
+        let ended = ended
+            .into_iter()
+            .filter_map(|s| {
+                let i = scope.ids.step(m, &s);
+                if i.is_none() {
+                    scope.found.finished.insert((id.to_string(), s));
+                }
+                i
+            })
+            .collect();
         let last = scope.ids.0[m].1.len();
         let (at, state) = match state {
             // Never run (only running a step moves `at`, and neither runs one): it waits
             // on the book's first step, whatever that is now.
             RunState::Waiting | RunState::Uncast => (0, state),
             _ if at == END => (last, state),
-            _ => match step(&at) {
+            _ => match scope.ids.step(m, &at) {
                 Some(i) => (i, state),
                 // Under way on a step the book lacks: it can't go on, so it is done.
-                None => (last, RunState::Done { at: since }),
+                None => {
+                    scope.lose(format!("a step of {id} ({at})"));
+                    (last, RunState::Done { at: since })
+                }
             },
         };
-        for line in lost {
-            scope.lose(line);
-        }
         Run {
             at,
             since,
@@ -335,7 +363,12 @@ pub mod runs {
 /// (a call, a feed, a scene, the news, the tray, a mail's link to its step, the track).
 /// The lines saying what is gone.
 fn drop_lost(s: &mut Snapshot, book: &Book, found: Found) -> Vec<String> {
-    let Found { lost, fresh } = found;
+    let Found {
+        lost,
+        fresh,
+        gone: _,     // said in `lost` by `settle`
+        finished: _, // unsaid
+    } = found;
     // The minute `NetState::now` gives once the run is back: the world's clock.
     let now = s.world.as_ref().map_or(s.tick, |w| w.tick()) / sim::TICKS_PER_MINUTE;
     for m in fresh {
@@ -748,6 +781,49 @@ mod tests {
         );
         assert_eq!(s.journal.mails.len(), st.journal.mails.len());
         assert!(s.track.is_none());
+    }
+
+    /// A step the player already finished, gone from a later book: dropped from what
+    /// ended, its read mail's link with it, and nothing said, as nothing of theirs goes.
+    #[test]
+    fn an_ended_step_gone_from_the_book_goes_unsaid() {
+        let dir = Dir::new("ended-gone");
+        let (mut st, d, tray) = at_the_tray();
+        let (mail, gone) = st
+            .journal
+            .mails
+            .iter()
+            .enumerate()
+            .find_map(|(i, m)| {
+                m.story
+                    .filter(|r| r.mission == d && r.step < tray)
+                    .map(|r| (i, r.step))
+            })
+            .expect("a mail an ended doctor step sent");
+        // Reading it ended its step.
+        st.journal.mails[mail].read = true;
+        let path = write(&dir.0, &st).unwrap();
+        let mut book = st.book.clone();
+        book.missions[d].steps.remove(gone);
+
+        let (_, s, lost) = read(&path, &book).expect("the run reads");
+        assert!(lost.is_empty(), "nothing the player had is lost: {lost:?}");
+        let run = &s.missions.runs[d];
+        assert_eq!(
+            book.missions[d].steps[run.at].id, "tray",
+            "still at the tray"
+        );
+        assert_eq!(run.ended.len(), tray - 1, "the others still ended");
+        assert_eq!(
+            s.journal.mails[mail].story, None,
+            "the mail stays, its link goes"
+        );
+        // The step under way gone too: that is said, once.
+        let mut book = book.clone();
+        let at = book.missions[d].steps.iter().position(|s| s.id == "tray");
+        book.missions[d].steps.remove(at.unwrap());
+        let (_, _, lost) = read(&path, &book).expect("the run reads");
+        assert_eq!(lost, ["a step of doctor (tray)"]);
     }
 
     #[test]

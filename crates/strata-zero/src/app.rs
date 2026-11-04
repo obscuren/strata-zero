@@ -151,10 +151,12 @@ pub struct AppState {
     pub deck_part: usize,
     /// The character being built, between the chooser and JACK IN.
     pub build: Option<game::Build>,
-    /// The run is played for one life. Carried through the game; nothing reads it yet.
+    /// The run is played for one life: a flatline marks it and sends it to the HALL OF
+    /// FAME (`runs::when::flatline`). Saved with the run, shown on its header and its
+    /// broadcast.
     pub perma_death: bool,
-    /// The player turned the tutorial off. Carried through the game; nothing reads it
-    /// yet.
+    /// The player turned the tutorial off. Saved with the run and shown on its
+    /// broadcast; nothing in play reads it yet.
     pub tutorial_off: bool,
     /// What happened, newest last.
     pub log: MessageLog,
