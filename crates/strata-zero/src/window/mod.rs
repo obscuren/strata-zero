@@ -52,21 +52,30 @@ const ZOOM_START: f32 = 1.0 / (ZOOM_STEP * ZOOM_STEP * ZOOM_STEP);
 /// player's app folder.
 pub const IS_APP: bool = cfg!(feature = "app");
 
-/// Runs the game in a window until it quits. The desktop app first makes its app folder
-/// (`Platform::app_dir`) the working folder, so `cities/` is saved there.
+/// The desktop app makes its app folder (`Platform::app_dir`) the working folder, so
+/// `cities/` and `runs/` are kept there: before the game's state and its first screen are
+/// made, as the title looks in `runs/` for a run to CONTINUE. The folder, or `None`
+/// outside the app (`strata --window` keeps the folder it was started in).
+pub fn enter_app_dir() -> Result<Option<PathBuf>> {
+    if !IS_APP {
+        return Ok(None);
+    }
+    let dir = Platform::NATIVE
+        .app_dir(&platform::process_env)
+        .context("can't tell where to keep the game's files: set APPDATA (Windows) or HOME")?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    std::env::set_current_dir(&dir).with_context(|| format!("opening {}", dir.display()))?;
+    Ok(Some(dir))
+}
+
+/// Runs the game in a window until it quits. The desktop app is in its app folder by
+/// now (`enter_app_dir`).
 pub fn run(screen: Box<dyn Screen>, mut st: AppState) -> Result<()> {
     if let Some(fx) = std::env::var("STRATA_SCREEN_FX")
         .ok()
         .and_then(|s| ScreenFx::parse(&s))
     {
         st.screen_fx = fx;
-    }
-    if IS_APP {
-        let dir = Platform::NATIVE
-            .app_dir(&platform::process_env)
-            .context("can't tell where to keep the game's files: set APPDATA (Windows) or HOME")?;
-        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-        std::env::set_current_dir(&dir).with_context(|| format!("opening {}", dir.display()))?;
     }
     let fonts = Fonts::load();
     let event_loop = EventLoop::new()?;
