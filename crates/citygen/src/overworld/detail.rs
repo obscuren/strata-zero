@@ -254,7 +254,36 @@ impl<'a> Patch<'a> {
         }
     }
 
-    /// Rivers: water along each river tile's line, as wide as the river is there, the
+    /// Every cell within `radius` cells of the points of a course (in cells both ways,
+    /// so a river running east-west is as many rows deep as one running north-south is
+    /// columns wide, as round 4 drew them).
+    fn channel(
+        &mut self,
+        pts: &[(f32, f32)],
+        radius: impl Fn(f32, f32) -> f32,
+        mut f: impl FnMut(&mut Self, Pos),
+    ) {
+        let mut hit = Vec::new();
+        for &(x, y) in pts {
+            let r = radius(x, y).max(1.2);
+            let reach = r.ceil() as i32;
+            let (cx, cy) = (x.floor() as i32, y.floor() as i32);
+            for dy in -reach..=reach {
+                for dx in -reach..=reach {
+                    let p = Pos::new(cx + dx, cy + dy);
+                    let (ex, ey) = (p.x as f32 + 0.5 - x, p.y as f32 + 0.5 - y);
+                    if ex * ex + ey * ey <= r * r && self.get(p).is_some() && self.in_world(p) {
+                        hit.push(p);
+                    }
+                }
+            }
+        }
+        for p in hit {
+            f(self, p);
+        }
+    }
+
+    /// Rivers: water along each river tile's course, as wide as the river is there, the
     /// narrow upper reaches with a ford here and there.
     fn rivers(&mut self) {
         let w = self.world;
@@ -264,18 +293,20 @@ impl<'a> Patch<'a> {
             if mask == 0 {
                 continue;
             }
-            let width = river_width(w, t).max(3) as i32;
-            let line = centreline(w, t.x, t.y, mask, false, 2021);
-            self.brush(&line, width, |p, q| {
+            let width = river_width(w, t).max(3) as f32;
+            let pts = course(w, t.x, t.y, mask, 2021);
+            let bank = Fbm::new(w.seed, 2023);
+            let radius = |x: f32, y: f32| 0.5 * width + 0.3 + 1.4 * wave(&bank, x / 5.0, y / 2.5);
+            self.channel(&pts, radius, |p, q| {
                 if p.wet_at(q) != SEA {
                     p.set(q, Terrain::Water);
                     p.set_wet(q, RIVER);
                 }
             });
-            if width == 3 {
+            if width == 3.0 {
                 fords.extend(
-                    line.iter()
-                        .copied()
+                    cells_of(&pts)
+                        .into_iter()
                         .filter(|c| roll(w.seed, 2022, *c) < 1.0 / 6.0),
                 );
             }
@@ -298,8 +329,11 @@ impl<'a> Patch<'a> {
                 continue;
             }
             let lower = w.washes.iter().any(|c| c[c.len() / 2..].contains(&t));
-            let line = centreline(w, t.x, t.y, mask, false, 2031);
-            self.brush(&line, if lower { 4 } else { 3 }, |p, q| {
+            let width = if lower { 4.0 } else { 3.0 };
+            let pts = course(w, t.x, t.y, mask, 2031);
+            let bank = Fbm::new(w.seed, 2032);
+            let radius = |x: f32, y: f32| 0.5 * width + 0.2 + 0.8 * wave(&bank, x / 5.0, y / 2.5);
+            self.channel(&pts, radius, |p, q| {
                 if p.wet_at(q) == 0 {
                     bed.push(q);
                 }
@@ -332,7 +366,7 @@ impl<'a> Patch<'a> {
         for t in self.tiles_in_reach() {
             let mask = w.tile(t).unwrap().road;
             if mask != 0 {
-                lanes.extend(centreline(w, t.x, t.y, mask, true, 0));
+                lanes.extend(centreline(w, t.x, t.y, mask));
             }
         }
         let mut deck = Vec::new();
@@ -583,6 +617,96 @@ fn line_point(path: &[Pos], k: usize, side: i32) -> Option<(Pos, bool)> {
     Some((point.0, point.1 || (t.x + t.y).rem_euclid(2) == 0))
 }
 
+/// Where a river or wash crosses `side` of tile `(tx, ty)`, as a point on the edge
+/// itself, and the way into the tile from there; both tiles of the edge agree.
+fn edge_point(
+    world: &Overworld,
+    tx: i32,
+    ty: i32,
+    side: Dir,
+    salt: u64,
+) -> ((f32, f32), (f32, f32)) {
+    let c = crossing(world, tx, ty, side, false, salt);
+    let (x0, y0) = ((TILE * tx) as f32, (TILE * ty) as f32);
+    let (cx, cy) = (c.x as f32 + 0.5, c.y as f32 + 0.5);
+    match side {
+        Dir::E => ((x0 + TILE as f32, cy), (-1.0, 0.0)),
+        Dir::W => ((x0, cy), (1.0, 0.0)),
+        Dir::S => ((cx, y0 + TILE as f32), (0.0, -1.0)),
+        _ => ((cx, y0), (0.0, 1.0)),
+    }
+}
+
+/// A river's or wash's course through tile `(tx, ty)` from its link mask, as points in
+/// detail coordinates: a curve leaving each crossing square to its edge, through to the
+/// other crossing (or to the tile's middle where one, three or four meet), then
+/// meandered by a world-wide field so long runs don't line up tile after tile.
+fn course(world: &Overworld, tx: i32, ty: i32, mask: u8, salt: u64) -> Vec<(f32, f32)> {
+    use super::{LINK_E, LINK_N, LINK_S, LINK_W};
+    const HANDLE: f32 = 3.0;
+    const STEPS: usize = 24;
+    let ends: Vec<((f32, f32), (f32, f32))> = [
+        (LINK_N, Dir::N),
+        (LINK_E, Dir::E),
+        (LINK_S, Dir::S),
+        (LINK_W, Dir::W),
+    ]
+    .into_iter()
+    .filter(|(bit, _)| mask & bit != 0)
+    .map(|(_, d)| edge_point(world, tx, ty, d, salt))
+    .collect();
+    let mut out = Vec::new();
+    let mut curve = |a: (f32, f32), na: (f32, f32), b: (f32, f32), nb: (f32, f32)| {
+        let p1 = (a.0 + HANDLE * na.0, a.1 + HANDLE * na.1);
+        let p2 = (b.0 + HANDLE * nb.0, b.1 + HANDLE * nb.1);
+        for i in 0..=STEPS {
+            let t = i as f32 / STEPS as f32;
+            let u = 1.0 - t;
+            let (k0, k1, k2, k3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+            out.push((
+                k0 * a.0 + k1 * p1.0 + k2 * p2.0 + k3 * b.0,
+                k0 * a.1 + k1 * p1.1 + k2 * p2.1 + k3 * b.1,
+            ));
+        }
+    };
+    if let [(a, na), (b, nb)] = ends[..] {
+        curve(a, na, b, nb);
+    } else {
+        let mid = ((TILE * tx) as f32 + 4.0, (TILE * ty) as f32 + 4.0);
+        for &(a, na) in &ends {
+            curve(a, na, mid, (0.0, 0.0));
+        }
+    }
+    let (mx, my) = (
+        Fbm::new(world.seed, salt as u32 + 7),
+        Fbm::new(world.seed, salt as u32 + 8),
+    );
+    out.into_iter()
+        .map(|(x, y)| {
+            (
+                x + 2.5 * wave(&mx, x / 9.0, y / 4.5),
+                y + 1.4 * wave(&my, x / 9.0, y / 4.5),
+            )
+        })
+        .collect()
+}
+
+/// Noise spread over -1..1: the field keeps near its middle (about 0.5 ± 0.09), so
+/// this stretches it, clamping the rare extremes.
+fn wave(n: &Fbm, x: f32, y: f32) -> f32 {
+    ((n.at(x, y, 2) - 0.5) * 5.0).clamp(-1.0, 1.0)
+}
+
+/// The cells a course's points fall in, each once.
+fn cells_of(pts: &[(f32, f32)]) -> Vec<Pos> {
+    let mut out: Vec<Pos> = pts
+        .iter()
+        .map(|&(x, y)| Pos::new(x.floor() as i32, y.floor() as i32))
+        .collect();
+    out.dedup();
+    out
+}
+
 /// Four-connected cells from `a` to `b`, stepping along the longer way.
 fn straight(a: Pos, b: Pos) -> Vec<Pos> {
     let (mut p, mut out) = (a, vec![a]);
@@ -598,29 +722,19 @@ fn straight(a: Pos, b: Pos) -> Vec<Pos> {
     out
 }
 
-/// The cells a line runs on through tile `(tx, ty)`, from the link mask: straight
-/// across when it passes through, else from each crossing to the tile's middle (a road
-/// exactly there, so its corners line up with its crossings).
-fn centreline(world: &Overworld, tx: i32, ty: i32, mask: u8, road: bool, salt: u64) -> Vec<Pos> {
+/// The cells a road runs on through tile `(tx, ty)`, from the link mask: straight
+/// across when it passes through, else from each crossing to the tile's middle, so its
+/// corners line up with its crossings and a straight road never winds.
+fn centreline(world: &Overworld, tx: i32, ty: i32, mask: u8) -> Vec<Pos> {
     use super::{LINK_E, LINK_N, LINK_S, LINK_W};
-    let cross = |d: Dir| crossing(world, tx, ty, d, road, salt);
+    let cross = |d: Dir| crossing(world, tx, ty, d, true, 0);
     if mask == LINK_E | LINK_W {
         return straight(cross(Dir::W), cross(Dir::E));
     }
     if mask == LINK_N | LINK_S {
         return straight(cross(Dir::N), cross(Dir::S));
     }
-    let jiggle = |k: u64| {
-        if road {
-            0
-        } else {
-            (hash64(
-                world.seed ^ salt,
-                ((tx as u32 as u64) << 32 | ty as u32 as u64) + k,
-            ) % 2) as i32
-        }
-    };
-    let mid = Pos::new(TILE * tx + 3 + jiggle(1), TILE * ty + 3 + jiggle(2));
+    let mid = Pos::new(TILE * tx + 3, TILE * ty + 3);
     let mut out = vec![mid];
     for (bit, d) in [
         (LINK_N, Dir::N),
@@ -740,6 +854,13 @@ mod tests {
             .unwrap();
             for (p, t) in w.tiles.iter() {
                 if t.water != Water::None || t.road != 0 || t.wash != 0 || t.urban.is_some() {
+                    continue;
+                }
+                // a wide river's or wash's banks spill into the tiles beside it
+                let by_line = p
+                    .neighbors8()
+                    .any(|q| w.tile(q).is_some_and(|n| n.river != 0 || n.wash != 0));
+                if by_line {
                     continue;
                 }
                 let want = match t.ground {
@@ -864,6 +985,87 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn river_banks_curve_rather_than_step() {
+        // Banks that run dead straight for a tile or more read as a canal of boxes.
+        let w = Overworld::generate(WorldParams {
+            seed: 0,
+            ..Default::default()
+        })
+        .unwrap();
+        let g = whole(&w);
+        let wet = |p: Pos| {
+            g.get(p).is_some_and(|t| {
+                matches!(
+                    t.terrain,
+                    Terrain::Water
+                        | Terrain::Shallows
+                        | Terrain::Ford
+                        | Terrain::Bridge
+                        | Terrain::Railing
+                )
+            })
+        };
+        let river_only = |p: Pos| {
+            let t = Pos::new(p.x.div_euclid(8), p.y.div_euclid(8));
+            w.tile(t).is_some_and(|t| t.water == Water::River)
+                && (-1..=1).all(|dx| {
+                    (-1..=1).all(|dy| {
+                        w.tile(t.offset(dx, dy))
+                            .is_none_or(|t| !matches!(t.water, Water::Sea | Water::Lake))
+                    })
+                })
+        };
+        let size = g.size();
+        let (mut bank, mut straight) = (0, 0);
+        let mut tally = |run: &mut i32| {
+            bank += *run;
+            if *run >= 8 {
+                straight += *run;
+            }
+            *run = 0;
+        };
+        for side in [-1, 1] {
+            for y in 0..size.h as i32 {
+                let mut run = 0;
+                for x in 0..size.w as i32 {
+                    let p = Pos::new(x, y);
+                    if wet(p)
+                        && !wet(p.offset(0, side))
+                        && river_only(p)
+                        && g.get(p.offset(0, side)).is_some()
+                    {
+                        run += 1;
+                    } else {
+                        tally(&mut run);
+                    }
+                }
+                tally(&mut run);
+            }
+            for x in 0..size.w as i32 {
+                let mut run = 0;
+                for y in 0..size.h as i32 {
+                    let p = Pos::new(x, y);
+                    if wet(p)
+                        && !wet(p.offset(side, 0))
+                        && river_only(p)
+                        && g.get(p.offset(side, 0)).is_some()
+                    {
+                        run += 1;
+                    } else {
+                        tally(&mut run);
+                    }
+                }
+                tally(&mut run);
+            }
+        }
+        assert!(bank > 500, "{bank} bank cells");
+        assert!(
+            straight * 100 < bank * 15,
+            "{straight} of {bank} bank cells run straight for 8 or more"
+        );
     }
 
     #[test]
@@ -1146,8 +1348,8 @@ mod tests {
             got,
             vec![
                 ("coast", 3962815746502327822),
-                ("river", 3108408208208366968),
-                ("bridge", 13447226120155517583),
+                ("river", 10113312973255718743),
+                ("bridge", 16059526050686227486),
                 ("mountains", 17390919345350947746),
                 ("salt", 1906901485315573515)
             ]
