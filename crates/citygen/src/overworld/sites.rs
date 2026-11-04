@@ -32,6 +32,21 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
     else {
         return Ok(());
     };
+    // The city spans its shore: its centre sits a little inland, by the water still.
+    let sea = distance_field(ctx.size, |p| ctx.tile(p).water == Water::Sea, 20.0);
+    let home = ctx
+        .all()
+        .filter(|p| {
+            let d = sdist(*p, home);
+            let t = ctx.tile(*p);
+            (4.0..=8.0).contains(&d)
+                && t.water == Water::None
+                && !matches!(t.ground, Ground::Hills | Ground::Mountains | Ground::Peak)
+                && wet(*p)
+        })
+        .max_by(|a, b| sea[*a].total_cmp(&sea[*b]).then(b.y.cmp(&a.y)).then(b.x.cmp(&a.x)))
+        .filter(|p| sea[*p] > sea[home])
+        .unwrap_or(home);
     let mut spacing = 38.0f32;
     let mut cities = vec![(home, HOME_SIZE)];
     loop {
