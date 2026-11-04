@@ -171,7 +171,9 @@ you out it means that there's no danger in running there."
 
 - **Shell** opens the terminal screen on the node's host: a building's for a building's
   terminal, the district's for a street terminal. The same screen and login rules as on
-  the street.
+  the street, but the hold itself is a **user's seat** on that host for its hour (doors,
+  lifts and cameras on a building's), never root: root stays the server's crack and a
+  root backdoor. (Jeffrey agreed, after the first build.)
 
 ### Danger outside
 

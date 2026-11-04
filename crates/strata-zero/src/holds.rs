@@ -186,6 +186,15 @@ pub fn held(st: &AppState, node: NodeId, now: u64) -> Option<&Hold> {
         .find(|h| h.node == node && now < h.until)
 }
 
+/// You hold one of the owner's terminals: for the hold you log in on its host as a
+/// user (root stays the server's).
+pub fn terminal_held(st: &AppState, owner: Owner) -> bool {
+    let now = st.net.now(st);
+    st.net.holds.iter().any(|h| {
+        h.owner == owner && now < h.until && kind_of(st, h.node) == Some(NodeKind::Terminal)
+    })
+}
+
 /// A camera you hold has been looped.
 pub fn looped(st: &AppState, node: NodeId, now: u64) -> bool {
     held(st, node, now).is_some_and(|h| h.used.contains(&Verb::Loop))
@@ -846,6 +855,55 @@ mod tests {
             st.net.blinded(cam, now),
             "the loop is the hold's, not a hack"
         );
+    }
+
+    #[test]
+    fn a_held_terminal_logs_you_in_as_a_user() {
+        use crate::helix::shell::HostId;
+        let (mut st, b) = under_kiroflux();
+        let city = st.city.as_ref().unwrap();
+        let term = city
+            .net
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Terminal && n.building == Some(b))
+            .map(|n| n.id);
+        let d = city.buildings[b.index()].district;
+        let street = city
+            .net
+            .nodes
+            .iter()
+            .find(|n| {
+                n.kind == NodeKind::Terminal
+                    && crate::owners::owner_of(city, n.id) == Some(Owner::District(d))
+            })
+            .map(|n| n.id)
+            .expect("a street terminal");
+        let now = st.net.now(&st);
+        assert_eq!(
+            crate::helix::hosts::user_for(&st, HostId::District(d)),
+            "guest"
+        );
+        take(&mut st, street, Owner::District(d), now);
+        assert_eq!(
+            crate::helix::hosts::user_for(&st, HostId::District(d)),
+            "user"
+        );
+        let term = term.expect("Kiroflux Mart has a terminal");
+        assert_eq!(crate::access::tier_on(&st, b), crate::access::Tier::Guest);
+        take(&mut st, term, Owner::Building(b), now);
+        assert_eq!(crate::access::tier_on(&st, b), crate::access::Tier::User);
+        assert_eq!(
+            crate::helix::hosts::user_for(&st, HostId::Building(b)),
+            "user"
+        );
+        // The hour over, you're a guest again.
+        st.net.holds.iter_mut().for_each(|h| h.until = 0);
+        assert_eq!(
+            crate::helix::hosts::user_for(&st, HostId::District(d)),
+            "guest"
+        );
+        assert_eq!(crate::access::tier_on(&st, b), crate::access::Tier::Guest);
     }
 
     #[test]

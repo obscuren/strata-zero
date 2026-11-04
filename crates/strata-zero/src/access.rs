@@ -44,7 +44,9 @@ pub fn tier_on(st: &AppState, b: BuildingId) -> Tier {
         .filter_map(|s| credentials::parse_keycard(&s.item))
         .any(|(cb, _)| cb == b);
     let code = st.journal.codes().iter().any(|c| c.building == b);
-    if key || card || code {
+    // A terminal of the building held from the Net: a user's seat for the hour.
+    let terminal = crate::holds::terminal_held(st, crate::owners::Owner::Building(b));
+    if key || card || code || terminal {
         Tier::User
     } else {
         Tier::Guest
