@@ -565,6 +565,15 @@ pub enum ScreenCmd {
 pub trait Screen {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd;
     fn draw(&self, st: &AppState, f: &mut Frame);
+
+    /// The screen holds a piece of the story in flight: taken off the state (or marked
+    /// shown) as it opened, settled only as it closes. While one is up the run isn't
+    /// saved on the way out; the save before it opened stands.
+    // Only the window has a way out that asks (`Runner::save_on_exit`).
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
+    fn holds_story(&self) -> bool {
+        false
+    }
 }
 
 /// Centered notice for terminals under the minimum size. Never panics, even at 1x1.
@@ -622,6 +631,17 @@ impl Runner {
     #[cfg(test)]
     pub fn depth(&self) -> usize {
         self.screens.len()
+    }
+
+    /// Saves the run as the app is closed (the window's close button, Cmd+Q), if it can
+    /// be saved right now and no screen holds story in flight; else the last save
+    /// stands. True when it was saved.
+    #[cfg(any(feature = "window", test))]
+    pub fn save_on_exit(&mut self) -> bool {
+        if self.screens.iter().any(|s| s.holds_story()) {
+            return false;
+        }
+        crate::runs::when::save_now(&mut self.st)
     }
 
     fn snapshot(&self, area: Rect) -> Buffer {

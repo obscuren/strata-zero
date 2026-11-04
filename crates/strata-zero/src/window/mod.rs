@@ -218,9 +218,9 @@ impl App {
             return;
         };
         self.zoom = match s {
-            // Cmd+Q: the run is saved first, if it can be right now.
+            // Cmd+Q: the run is saved first, when it can be (`Runner::save_on_exit`).
             Shortcut::Quit => {
-                crate::runs::when::save_now(&mut self.runner.st);
+                self.runner.save_on_exit();
                 return el.exit();
             }
             Shortcut::Fullscreen => {
@@ -323,9 +323,9 @@ impl ApplicationHandler for App {
 
     fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
-            // The close button: the run is saved first, if it can be right now.
+            // The close button: the run is saved first, when it can be.
             WindowEvent::CloseRequested => {
-                crate::runs::when::save_now(&mut self.runner.st);
+                self.runner.save_on_exit();
                 el.exit();
             }
             WindowEvent::Resized(size) => {

@@ -45,7 +45,9 @@ pub fn save_now(st: &mut AppState) -> bool {
         }
         Err(e) => {
             st.save_failed = Some(st.tick);
-            st.warn(format!("couldn't save · {e}"));
+            // The cause underneath (`Permission denied (os error 13)`), not the step
+            // that met it.
+            st.warn(format!("couldn't save · {}", e.root_cause()));
             false
         }
     }
@@ -273,8 +275,11 @@ mod tests {
         std::fs::write(&blocked, b"a file").unwrap();
         st.saves = Some(blocked.clone());
         assert!(!save_now(&mut st));
+        // The line names what the system said, as making that folder says it.
+        let os = std::fs::create_dir_all(&blocked).unwrap_err().to_string();
+        assert!(os.contains("(os error "), "{os}");
         let last = st.log.latest().unwrap().text.clone();
-        assert!(last.starts_with("couldn't save · "), "{last}");
+        assert_eq!(last, format!("couldn't save · {os}"));
         assert_eq!(st.last_save, None);
         assert_eq!(std::fs::read(&blocked).unwrap(), b"a file");
         // A save over an older one that fails: the older one stands.
@@ -283,11 +288,14 @@ mod tests {
         let path = the_file(&dir);
         let before = std::fs::read(&path).unwrap();
         let saved = st.last_save;
-        std::fs::create_dir(path.with_extension("run.tmp")).unwrap();
+        let tmp = path.with_extension("run.tmp");
+        std::fs::create_dir(&tmp).unwrap();
         st.tick += 100;
         assert!(!save_now(&mut st));
+        let os = std::fs::File::create(&tmp).unwrap_err().to_string();
+        assert!(os.contains("(os error "), "{os}");
         let last = st.log.latest().unwrap().text.clone();
-        assert!(last.starts_with("couldn't save · "), "{last}");
+        assert_eq!(last, format!("couldn't save · {os}"));
         assert_eq!(std::fs::read(&path).unwrap(), before, "the old save stands");
         assert_eq!(st.last_save, saved);
         // Asked for again, it is tried once, then not until five minutes on.
@@ -332,6 +340,91 @@ mod tests {
             );
             assert!(std::fs::read_dir(&dir.0).unwrap().next().is_none());
         }
+    }
+
+    #[test]
+    fn the_way_out_keeps_the_save_from_before_a_feed() {
+        use crate::app::Runner;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let dir = Dir::new("feed-exit");
+        let mut st = AppState::new();
+        st.saves = Some(dir.0.clone());
+        let t = st
+            .content
+            .template(&game::TemplateId::new("vex"))
+            .unwrap()
+            .clone();
+        st.build = Some(game::Build::from_template(&st.content, &t));
+        let b = crate::screens::broadcast::Broadcast::new_game(&st, story_city());
+        let mut runner = Runner::new(Box::new(b), st);
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        let space = key(KeyCode::Char(' '));
+        // The feeds waiting in the save on disk.
+        let queued = |path: &Path| {
+            let mut s = AppState::new();
+            let (_, snap, _) = file::read(path, &s.book).unwrap();
+            crate::runs::snapshot::restore(&mut s, snap);
+            s.missions.feeds.len()
+        };
+        // The broadcast shown whole, then JACK IN: the run's first save.
+        runner.frame(&mut term, &[space]).unwrap();
+        runner.frame(&mut term, &[space]).unwrap();
+        let path = the_file(&dir);
+        assert_eq!(queued(&path), 1, "the welcome feed waits in that save");
+        // The map's first frame puts the feed up, off the queue.
+        runner.frame(&mut term, &[]).unwrap();
+        assert_eq!(runner.depth(), 2, "the feed is up");
+        assert!(runner.st.missions.feeds.is_empty());
+        let before = std::fs::read(&path).unwrap();
+        assert!(!runner.save_on_exit(), "no save on the way out with it up");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "the JACK IN save stands"
+        );
+        assert_eq!(queued(&path), 1);
+        // Closed, its step ended: the way out saves.
+        runner.frame(&mut term, &[space]).unwrap();
+        assert_eq!(runner.depth(), 1);
+        assert!(runner.save_on_exit());
+        assert_eq!(queued(&path), 0);
+    }
+
+    #[test]
+    fn screens_that_hold_story_say_so() {
+        use crate::missions::{FeedView, TrayOffer};
+        use crate::screens::popup::Popup;
+        let feed = crate::missions::feed::Feed::new(
+            FeedView {
+                story: None,
+                from: "mezz".into(),
+                text: vec!["word".into()],
+                close: "close".into(),
+            },
+            0,
+        );
+        assert!(feed.holds_story(), "a feed, off the queue");
+        let mut st = AppState::new();
+        st.missions.tray = Some(TrayOffer {
+            story: crate::runs::ids::StepRef::new(0, 0),
+            from: "doc".into(),
+            tab: "doc".into(),
+            title: "her tray".into(),
+            line: "One piece.".into(),
+            items: vec![game::ItemId::new("neural_port")],
+            shown: true,
+        });
+        assert!(Popup::tray(&st).unwrap().holds_story(), "the tray, shown");
+        // The rest keep their story on the state, or none.
+        let others: Vec<Box<dyn Screen>> = vec![
+            Box::new(Popup::jack_out_confirm(0)),
+            Box::new(crate::missions::broadcast::Broadcast::new()),
+            Box::new(crate::screens::explore::MapScreen::explore(0)),
+            Box::new(crate::screens::pause::Pause::new(&st, 0)),
+            Box::new(crate::screens::messages::Messages::new(0)),
+        ];
+        assert!(others.iter().all(|s| !s.holds_story()));
     }
 
     #[test]

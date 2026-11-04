@@ -76,6 +76,11 @@ impl Screen for Feed {
         ScreenCmd::Stay
     }
 
+    /// The feed came off the queue as it opened; its step ends only as it closes.
+    fn holds_story(&self) -> bool {
+        true
+    }
+
     fn draw(&self, st: &AppState, f: &mut Frame) {
         let (r, lines) = layout(f.area(), &self.view.text);
         if r.width < TEXT_LESS + 8 || r.height < MIN_H.min(8) {
