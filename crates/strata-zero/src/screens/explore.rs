@@ -8967,12 +8967,15 @@ mod tests {
         );
         assert_eq!(std::fs::read(&path).unwrap(), bytes, "nothing is marked");
         assert!(st.run.is_some());
-        // The line is the save's own: its clock and its place.
+        // The line is the save's own: its clock, and in the flat just `at home`.
         assert!(saved.place.ends_with(" · at home"), "{}", saved.place);
         assert_eq!(describe::clock(saved.day, saved.minute), "day 1 22:00");
-        let line = format!("reload last save point · day 1 22:00 · {}", saved.place);
         let text = draw_screen(&*dead, &st, 120, 40);
-        assert!(text.contains(&line), "{text}");
+        let row = text
+            .lines()
+            .find(|l| l.contains("reload last save point"))
+            .unwrap_or_else(|| panic!("{text}"));
+        assert_eq!(row.trim(), "reload last save point · day 1 22:00 · at home");
         assert!(
             text.contains("space · load last save     esc · title"),
             "{text}"

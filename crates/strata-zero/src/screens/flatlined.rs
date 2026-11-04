@@ -87,11 +87,14 @@ pub fn end(st: &mut AppState, cause: &str) -> End {
     }
 }
 
-/// Where the save at `h` puts you back: `day 2 07:40 · Velform Group Plaza 18F · at home`.
+/// Where the save at `h` puts you back: `day 2 07:40 · at home` in your own flat,
+/// anywhere else its place line as written (`day 2 07:40 · Velform Group Plaza 18F`).
 fn reload_line(h: &RunHeader) -> String {
     let clock = describe::clock(h.day, h.minute);
     if h.place.is_empty() {
         clock
+    } else if h.place.ends_with(" · at home") {
+        format!("{clock} · at home")
     } else {
         format!("{clock} · {}", h.place)
     }
@@ -401,6 +404,21 @@ mod tests {
         assert!(st.run.is_none(), "nothing on the title saves it");
         assert!(st.net.death.is_none() && st.player.is_none());
         assert!(st.perma_death && !st.tutorial_off);
+    }
+
+    #[test]
+    fn the_reload_line_says_at_home_in_the_flat_and_the_place_elsewhere() {
+        let mut h = describe::header(&AppState::new(), None);
+        h.day = 2;
+        h.minute = 7 * 60 + 40;
+        h.place = "Velform Group Plaza 18F · at home".into();
+        assert_eq!(reload_line(&h), "day 2 07:40 · at home");
+        for place in ["Velform Group Plaza 18F", "on the Net", "Crown Circle"] {
+            h.place = place.into();
+            assert_eq!(reload_line(&h), format!("day 2 07:40 · {place}"));
+        }
+        h.place.clear();
+        assert_eq!(reload_line(&h), "day 2 07:40", "nowhere to say");
     }
 
     #[test]
