@@ -152,7 +152,9 @@ impl City {
                 .filter(|c| c.kind == ConnectorKind::Jack)
                 .map(|c| c.pos)
                 .collect();
-            let walkable = net.tiles.count(|t| t.is_walkable());
+            let walkable = net
+                .tiles
+                .count(|t| counts_for_reach(self, StratumKind::Net, t));
             if !jacks.is_empty() && walkable > 0 {
                 let mut seen = Grid::filled(self.size, false);
                 let mut queue: VecDeque<Pos> = VecDeque::new();
@@ -170,7 +172,11 @@ impl City {
                         }
                     }
                 }
-                let reached = seen.count(|b| *b);
+                let reached = net
+                    .tiles
+                    .iter()
+                    .filter(|(p, t)| seen[*p] && counts_for_reach(self, StratumKind::Net, t))
+                    .count();
                 if (reached as f32) < REACH_TARGET * walkable as f32 {
                     out.push(Violation::StratumUnreachable {
                         stratum: StratumKind::Net,

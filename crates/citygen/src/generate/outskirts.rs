@@ -438,6 +438,92 @@ mod tests {
         }
     }
 
+    fn net(c: &City) -> &crate::geom::Grid<crate::tile::Tile> {
+        &c.stratum(StratumKind::Net).unwrap().tiles
+    }
+
+    #[test]
+    fn the_grid_fades_through_the_outskirts() {
+        // the grid's dots and the districts' tint thin out where the city does
+        for (seed, c, site) in homes() {
+            let dots = |thin: bool| {
+                let cells: Vec<_> = net(c)
+                    .iter()
+                    .filter(|(p, t)| {
+                        t.terrain == Terrain::NetGrid
+                            && site.builds(*p)
+                            && p.x % 4 == 0
+                            && p.y % 2 == 0
+                            && (site.density[*p] < OUTSKIRTS) == thin
+                            && (thin || site.density[*p] > 0.5)
+                    })
+                    .map(|(_, t)| t)
+                    .collect();
+                let lit = cells.iter().filter(|t| t.variant & 1 == 1).count();
+                lit as f32 / cells.len().max(1) as f32
+            };
+            let (belt, core) = (dots(true), dots(false));
+            assert!(
+                belt * 2.0 < core,
+                "seed {seed}: dots {belt} in the belt, {core} in the core"
+            );
+        }
+    }
+
+    #[test]
+    fn past_the_outline_the_net_is_the_open_nets() {
+        for (seed, c, site) in homes() {
+            let o = site.origin;
+            let open =
+                crate::overworld::net_ground::region(&site.world, o.x, o.y, c.size.w, c.size.h);
+            let mut off = 0;
+            for (p, t) in net(c).iter() {
+                if site.outline[p] < crate::generate::site::OUTLINE
+                    && (t.terrain, t.feature) != (open[p].terrain, open[p].feature)
+                {
+                    off += 1;
+                }
+            }
+            assert_eq!(
+                off, 0,
+                "seed {seed}: {off} cells past the outline aren't the open Net's"
+            );
+        }
+    }
+
+    #[test]
+    fn a_trunk_meets_the_citys_grid() {
+        // a highway's trunk out past the outline runs into the city's walkable Net
+        for (seed, c, site) in homes() {
+            let n = net(c);
+            let met = n.iter().any(|(p, t)| {
+                t.terrain == Terrain::NetLane
+                    && site.outline[p] < crate::generate::site::OUTLINE
+                    && p.neighbors4().any(|q| {
+                        n.get(q).is_some_and(|u| u.is_walkable())
+                            && site
+                                .outline
+                                .get(q)
+                                .is_some_and(|o| *o >= crate::generate::site::OUTLINE)
+                    })
+            });
+            assert!(met, "seed {seed}: no trunk meets the city's grid");
+        }
+    }
+
+    #[test]
+    fn a_shanty_splices_a_line() {
+        // the shanties are off the grid, but one has a stolen line off a lane
+        let spliced = homes().iter().any(|(_, c, _)| {
+            street(c).iter().any(|(p, t)| {
+                t.terrain == Terrain::Door
+                    && t.building.is_none()
+                    && net(c).get(p).is_some_and(|u| u.terrain == Terrain::NetLane)
+            })
+        });
+        assert!(spliced, "no shanty taps a line");
+    }
+
     #[test]
     fn a_lone_city_has_no_outskirts() {
         let c = Generator::run(GenParams {

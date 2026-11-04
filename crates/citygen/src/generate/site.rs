@@ -19,6 +19,9 @@ pub const OUTSKIRTS: f32 = 0.08;
 /// is the city's (its own tiles blended across tile lines, with noise: the outline runs
 /// at [`OUTLINE`]), and how dense the city is there (its tiles' density, blended).
 pub(crate) struct Site {
+    pub world: Overworld,
+    /// The block's corner, in world-wide detail cells.
+    pub origin: Pos,
     pub ground: Grid<Tile>,
     pub outline: Grid<f32>,
     pub density: Grid<f32>,
@@ -79,6 +82,8 @@ pub(crate) fn prepare(site: &CitySite, size: Size) -> Option<Site> {
         }
     }
     Some(Site {
+        world,
+        origin: o,
         ground,
         outline,
         density,

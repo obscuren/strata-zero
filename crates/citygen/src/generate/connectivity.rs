@@ -28,6 +28,10 @@ pub(crate) struct ConnectivityStage {
 /// on its site the open ground round it (the world's, walked to round the outside) is
 /// walked over and not counted.
 pub(crate) fn counts_for_reach(city: &City, k: StratumKind, t: &crate::tile::Tile) -> bool {
+    if k == StratumKind::Net && city.params.site.is_some() && t.district.is_none() {
+        // the open Net past the outline, and the outskirts' faded grid
+        return false;
+    }
     t.is_walkable()
         && !(k == StratumKind::Street
             && city.params.site.is_some()

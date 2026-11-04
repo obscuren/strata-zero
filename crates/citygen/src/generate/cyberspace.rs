@@ -24,6 +24,7 @@ enum Work {
     Hub(usize),
     Nodes,
     Lane(usize),
+    Site,
     Ports,
 }
 
@@ -339,6 +340,122 @@ impl CyberspaceStage {
         }
     }
 
+    /// A city on its site: the grid's dots and the districts' tint fade through its
+    /// outskirts, past its outline its Net is the open Net, and one shanty splices a
+    /// stolen line off the nearest lane.
+    fn site(ctx: &mut GenCtx) {
+        use crate::generate::site::OUTLINE;
+        use crate::lighting::tuning::{NET_GRID_LIGHT, NET_LANE_LIGHT};
+        use crate::overworld::detail::roll;
+        /// How dense the city is where its grid has fully come in.
+        const FADE: f32 = 0.2;
+        let Some(site) = ctx.scratch.site.as_ref() else {
+            return;
+        };
+        let size = ctx.size();
+        let open = crate::overworld::net_ground::region(
+            &site.world,
+            site.origin.x,
+            site.origin.y,
+            size.w,
+            size.h,
+        );
+        let seed = ctx.seed;
+        let mut changes: Vec<(Pos, Tile, Option<u8>)> = Vec::new();
+        let Some(net) = ctx.city.stratum(K) else {
+            return;
+        };
+        for (p, t) in net.tiles.iter() {
+            if site.outline[p] < OUTLINE {
+                let o = open[p];
+                let light = match o.terrain {
+                    Terrain::NetLane | Terrain::NetGate => NET_LANE_LIGHT,
+                    Terrain::NetGrid => NET_GRID_LIGHT,
+                    Terrain::NetWall | Terrain::NetFloor => 96,
+                    _ => 0,
+                };
+                let tile = Tile {
+                    district: None,
+                    building: None,
+                    ..o
+                };
+                changes.push((p, tile, Some(light)));
+            } else if t.terrain == Terrain::NetGrid {
+                let f = (site.density[p] / FADE).clamp(0.0, 1.0);
+                let mut n = *t;
+                if roll(seed, 0xFADE, p) > f {
+                    n.variant &= !1;
+                }
+                if roll(seed, 0xFADF, p) > f {
+                    n.district = None;
+                }
+                if n != *t {
+                    changes.push((p, n, None));
+                }
+            }
+        }
+        // the stolen line: from the door of the shanty the hash picks, straight to the
+        // nearest lane, over the grid and the void (never through a construct)
+        let street = ctx.city.stratum(StratumKind::Street).map(|s| &s.tiles);
+        let door = street.and_then(|st| {
+            st.iter()
+                .filter(|(p, t)| {
+                    t.terrain == Terrain::Door
+                        && t.building.is_none()
+                        && site.outline[*p] >= OUTLINE
+                })
+                .map(|(p, _)| p)
+                .min_by(|a, b| {
+                    roll(seed, 0x57E1, *a)
+                        .partial_cmp(&roll(seed, 0x57E1, *b))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+        });
+        let mut line = Vec::new();
+        if let Some(d) = door {
+            let after = |q: Pos| {
+                changes
+                    .iter()
+                    .rev()
+                    .find(|(c, _, _)| *c == q)
+                    .map(|(_, t, _)| t.terrain)
+                    .or_else(|| net.tiles.get(q).map(|t| t.terrain))
+            };
+            let best = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+                .into_iter()
+                .filter_map(|(dx, dy)| {
+                    let mut run = vec![d];
+                    for k in 1..=80 {
+                        let q = d.offset(dx * k, dy * k);
+                        match after(q)? {
+                            Terrain::NetLane | Terrain::NetGate => return Some(run),
+                            Terrain::NetGrid | Terrain::Void => run.push(q),
+                            _ => return None,
+                        }
+                    }
+                    None
+                })
+                .min_by_key(|run| run.len());
+            line = best.unwrap_or_default();
+        }
+        for (p, tile, light) in changes {
+            if let Some(t) = ctx.city.tile_mut(K, p) {
+                *t = tile;
+            }
+            if let (Some(l), Some(st)) = (light, ctx.city.stratum_mut(K)) {
+                st.steady.set(p, l);
+            }
+        }
+        for p in line {
+            if let Some(t) = ctx.city.tile_mut(K, p) {
+                t.terrain = Terrain::NetLane;
+            }
+            if let Some(st) = ctx.city.stratum_mut(K) {
+                st.steady.set(p, NET_LANE_LIGHT);
+            }
+        }
+    }
+
     fn ports(ctx: &mut GenCtx) {
         let street = StratumKind::Street;
         let mut jacks = Vec::new();
@@ -379,6 +496,7 @@ impl StageRunner for CyberspaceStage {
         self.queue.push_back(Work::Nodes);
         self.queue
             .extend((0..ctx.city.net.links.len()).map(Work::Lane));
+        self.queue.push_back(Work::Site);
         self.queue.push_back(Work::Ports);
         self.total = self.queue.len().max(1);
         Ok(())
@@ -395,6 +513,7 @@ impl StageRunner for CyberspaceStage {
             Work::Hub(d) => self.hub(ctx, d),
             Work::Nodes => self.nodes(ctx),
             Work::Lane(i) => self.lane(ctx, i),
+            Work::Site => Self::site(ctx),
             Work::Ports => Self::ports(ctx),
         }
         let done = self.total - self.queue.len();
