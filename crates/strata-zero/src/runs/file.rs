@@ -151,6 +151,8 @@ pub fn read(path: &Path, book: &Book) -> Result<(RunHeader, Snapshot, Vec<String
 }
 
 /// Puts `header` in place of the file's own, its body kept byte for byte.
+// The flatline marks a perma death run with it.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn rewrite_header(path: &Path, header: &RunHeader) -> Result<()> {
     let bytes = std::fs::read(path).map_err(|_| anyhow!(UNREADABLE))?;
     let (_, body) = split(&bytes)?;

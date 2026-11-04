@@ -46,6 +46,10 @@ pub type TagSpan = (String, Option<Rgb8>);
 pub struct Broadcast {
     pub id: String,
     pub when: When,
+    /// The story mission it belongs to: it airs only while that mission is under way,
+    /// and then over the others.
+    #[serde(default)]
+    pub during: Option<String>,
     /// The tag line's spans; a span without a colour is the text colour.
     pub tag: Vec<TagSpan>,
     pub shout: String,
@@ -70,6 +74,8 @@ pub enum BroadcastError {
     Duplicate(String),
     #[error("broadcasts: none plays on {0:?}")]
     Missing(When),
+    #[error("broadcasts: during `{0}`, a mission the story doesn't have")]
+    UnknownMission(String),
 }
 
 /// A broadcast with its slots filled, ready to draw.
@@ -83,14 +89,21 @@ pub struct Aired {
 }
 
 impl Broadcasts {
-    /// The shipped file.
-    pub fn load() -> Result<Broadcasts, BroadcastError> {
-        Broadcasts::parse(DEFAULT)
+    /// The shipped file, checked against the story's `missions` (their ids).
+    pub fn load<'a>(
+        missions: impl IntoIterator<Item = &'a str>,
+    ) -> Result<Broadcasts, BroadcastError> {
+        Broadcasts::parse(DEFAULT, missions)
     }
 
-    /// Any text in the file's shape, checked: unique ids, no empty text, known slots,
-    /// and something to play on a new game and on a load.
-    pub fn parse(src: &str) -> Result<Broadcasts, BroadcastError> {
+    /// Any text in the file's shape, checked: unique ids, no empty text, known slots, a
+    /// `during` that is one of `missions`, and something to play on a new game and on a
+    /// load whatever the story is doing.
+    pub fn parse<'a>(
+        src: &str,
+        missions: impl IntoIterator<Item = &'a str>,
+    ) -> Result<Broadcasts, BroadcastError> {
+        let missions: std::collections::BTreeSet<&str> = missions.into_iter().collect();
         let all: Broadcasts =
             ron::from_str(src).map_err(|e| BroadcastError::Parse(e.to_string()))?;
         for (i, b) in all.0.iter().enumerate() {
@@ -99,6 +112,9 @@ impl Broadcasts {
             }
             if all.0[..i].iter().any(|o| o.id == b.id) {
                 return Err(BroadcastError::Duplicate(b.id.clone()));
+            }
+            if let Some(m) = b.during.as_deref().filter(|m| !missions.contains(m)) {
+                return Err(BroadcastError::UnknownMission(m.to_string()));
             }
             let texts = b
                 .tag
@@ -122,17 +138,26 @@ impl Broadcasts {
             }
         }
         for when in [When::NewGame, When::LoadGame] {
-            if !all.0.iter().any(|b| b.when == when) {
+            if !all.0.iter().any(|b| b.when == when && b.during.is_none()) {
                 return Err(BroadcastError::Missing(when));
             }
         }
         Ok(all)
     }
 
-    /// The broadcast for `when` in the city with `seed`: the same city always hears the
-    /// same one.
-    pub fn pick(&self, when: When, seed: u64) -> &Broadcast {
-        let fits: Vec<&Broadcast> = self.0.iter().filter(|b| b.when == when).collect();
+    /// The broadcast for `when` in the city with `seed`: among those whose mission is
+    /// `under_way`, if any are, else among those that belong to no mission. The same
+    /// city at the same point in the story always hears the same one.
+    pub fn pick_for(&self, when: When, seed: u64, under_way: impl Fn(&str) -> bool) -> &Broadcast {
+        let of_when = || self.0.iter().filter(move |b| b.when == when);
+        let during: Vec<&Broadcast> = of_when()
+            .filter(|b| b.during.as_deref().is_some_and(&under_way))
+            .collect();
+        let fits = if during.is_empty() {
+            of_when().filter(|b| b.during.is_none()).collect()
+        } else {
+            during
+        };
         fits[(hash64(seed, 0xB40A_DCA5) % fits.len() as u64) as usize]
     }
 }
@@ -295,23 +320,77 @@ mod tests {
         .unwrap()
     }
 
+    /// The shipped book's mission ids.
+    fn missions() -> Vec<String> {
+        crate::missions::Book::load()
+            .unwrap()
+            .missions
+            .into_iter()
+            .map(|m| m.id)
+            .collect()
+    }
+
+    fn shipped() -> Broadcasts {
+        let ids = missions();
+        Broadcasts::load(ids.iter().map(String::as_str)).unwrap()
+    }
+
     #[test]
     fn the_shipped_broadcasts_load() {
-        let all = Broadcasts::load().unwrap();
+        let all = shipped();
         let ids: Vec<&str> = all.0.iter().map(|b| b.id.as_str()).collect();
         assert_eq!(ids, ["static66", "nitewire", "block_pa", "courier"]);
         let mut loads = std::collections::BTreeSet::new();
         for seed in 1..20 {
-            assert_eq!(all.pick(When::NewGame, seed).id, "static66");
-            let id = &all.pick(When::LoadGame, seed).id;
-            assert!(
-                ["nitewire", "block_pa", "courier"].contains(&id.as_str()),
-                "{id}"
+            assert_eq!(all.pick_for(When::NewGame, seed, |_| false).id, "static66");
+            let id = &all.pick_for(When::LoadGame, seed, |_| false).id;
+            assert!(["nitewire", "block_pa"].contains(&id.as_str()), "{id}");
+            assert_eq!(
+                &all.pick_for(When::LoadGame, seed, |_| false).id,
+                id,
+                "a city hears one"
             );
-            assert_eq!(&all.pick(When::LoadGame, seed).id, id, "a city hears one");
             loads.insert(id.clone());
         }
-        assert_eq!(loads.len(), 3, "every load plays somewhere");
+        assert_eq!(loads.len(), 2, "every load plays somewhere");
+    }
+
+    #[test]
+    fn the_courier_airs_only_in_the_morning_after() {
+        let all = shipped();
+        let courier = all.0.iter().find(|b| b.id == "courier").unwrap();
+        assert_eq!(courier.during.as_deref(), Some("morning_after"));
+        assert!(
+            all.0
+                .iter()
+                .filter(|b| b.id != "courier")
+                .all(|b| b.during.is_none()),
+            "the others air any time"
+        );
+        fn during(id: &str) -> impl Fn(&str) -> bool + '_ {
+            move |m| m == id
+        }
+        for seed in 1..40 {
+            assert_eq!(
+                all.pick_for(When::LoadGame, seed, during("morning_after"))
+                    .id,
+                "courier",
+                "seed {seed}: picked over the others"
+            );
+            assert_ne!(all.pick_for(When::LoadGame, seed, |_| false).id, "courier");
+            for other in missions().iter().filter(|m| *m != "morning_after") {
+                assert_ne!(
+                    all.pick_for(When::LoadGame, seed, during(other)).id,
+                    "courier",
+                    "seed {seed}, {other} under way"
+                );
+            }
+            assert_eq!(
+                all.pick_for(When::NewGame, seed, |_| true).id,
+                "static66",
+                "a new game never hears it"
+            );
+        }
     }
 
     #[test]
@@ -322,26 +401,48 @@ mod tests {
                    paras: ["words"], sign: "bye", sign_colour: (1, 2, 3))"#
             )
         };
+        let during = |id: &str, mission: &str| {
+            format!(
+                r#"Broadcast(id: "{id}", when: LoadGame, during: Some("{mission}"),
+                   tag: [("ON", None)], shout: "hi", paras: ["words"], sign: "bye",
+                   sign_colour: (1, 2, 3))"#
+            )
+        };
         let book = |items: &[String]| format!("Broadcasts([{}])", items.join(","));
         let ok = [one("a", "NewGame", "hi"), one("b", "LoadGame", "hi")];
-        assert!(Broadcasts::parse(&book(&ok)).is_ok());
+        assert!(Broadcasts::parse(&book(&ok), []).is_ok());
         assert_eq!(
-            Broadcasts::parse(&book(&[one("a", "NewGame", "hi {nope}"), ok[1].clone()])),
+            Broadcasts::parse(
+                &book(&[one("a", "NewGame", "hi {nope}"), ok[1].clone()]),
+                []
+            ),
             Err(BroadcastError::UnknownSlot {
                 id: "a".into(),
                 slot: "nope".into()
             })
         );
         assert_eq!(
-            Broadcasts::parse(&book(&[ok[0].clone(), one("a", "LoadGame", "hi")])),
+            Broadcasts::parse(&book(&[ok[0].clone(), one("a", "LoadGame", "hi")]), []),
             Err(BroadcastError::Duplicate("a".into()))
         );
         assert!(matches!(
-            Broadcasts::parse(&book(&[one("a", "NewGame", " "), ok[1].clone()])),
+            Broadcasts::parse(&book(&[one("a", "NewGame", " "), ok[1].clone()]), []),
             Err(BroadcastError::Empty(_))
         ));
         assert_eq!(
-            Broadcasts::parse(&book(&[ok[0].clone()])),
+            Broadcasts::parse(&book(&[ok[0].clone()]), []),
+            Err(BroadcastError::Missing(When::LoadGame))
+        );
+        // `during` names a mission of the book.
+        let with = [ok[0].clone(), ok[1].clone(), during("c", "the_job")];
+        assert!(Broadcasts::parse(&book(&with), ["the_job"]).is_ok());
+        assert_eq!(
+            Broadcasts::parse(&book(&with), ["another"]),
+            Err(BroadcastError::UnknownMission("the_job".into()))
+        );
+        // A load that airs only during a mission leaves the rest of the time silent.
+        assert_eq!(
+            Broadcasts::parse(&book(&[ok[0].clone(), during("c", "the_job")]), ["the_job"]),
             Err(BroadcastError::Missing(When::LoadGame))
         );
     }
@@ -371,7 +472,7 @@ mod tests {
             market,
             "the same every time"
         );
-        for b in &Broadcasts::load().unwrap().0 {
+        for b in &shipped().0 {
             let aired = air(b, &city, "Vex");
             let all = [aired.shout.clone(), aired.sign.clone()]
                 .into_iter()

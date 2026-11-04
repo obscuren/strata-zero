@@ -3,8 +3,12 @@
 use crate::anim::effects::typewriter;
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::render::Rgb;
+use crate::runs::RunHeader;
+use crate::runs::describe::{clock, first_part};
 use crate::screens::create::chooser::Chooser;
 use crate::screens::files::Files;
+use crate::screens::runs::{FAINT, RunsScreen};
+use crate::ui::chrome::{CYAN, DIM};
 use crate::ui::logo::{self, Logo};
 use crate::ui::menu::{Menu, MenuView};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -13,6 +17,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 use ratatui::widgets::{Paragraph, Widget};
+use std::path::PathBuf;
 
 pub const TITLE: &str = "STRATA ZERO";
 pub const SUBTITLE: &str = "h i g h   t e c h   ·   l o w   l i f e";
@@ -27,32 +32,51 @@ pub enum CombatMap {
 /// A row of the title menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Entry {
+    /// The newest run still going, opened where it was left.
+    Continue,
     NewGame,
     /// Dev mode: D'SHAWN, maxed out, into a fresh city.
     Debug,
     /// Dev mode: D'SHAWN on the lot, on the street or the Net.
     Combat,
+    /// The runs still going.
     Load,
+    /// Dev mode: a city from its `.city` file, a run started over in it.
+    LoadCity,
+    /// The runs that flatlined.
+    Hall,
     Quit,
 }
 
 impl Entry {
-    /// The rows, the debug starts only in dev mode.
-    fn rows(dev: bool) -> Vec<Entry> {
-        let mut rows = vec![Entry::NewGame];
+    /// The rows: CONTINUE when there is a run to go on with, the debug starts and LOAD
+    /// CITY only in dev mode.
+    fn rows(dev: bool, can_continue: bool) -> Vec<Entry> {
+        let mut rows = Vec::new();
+        if can_continue {
+            rows.push(Entry::Continue);
+        }
+        rows.push(Entry::NewGame);
         if dev {
             rows.extend([Entry::Debug, Entry::Combat]);
         }
-        rows.extend([Entry::Load, Entry::Quit]);
+        rows.push(Entry::Load);
+        if dev {
+            rows.push(Entry::LoadCity);
+        }
+        rows.extend([Entry::Hall, Entry::Quit]);
         rows
     }
 
     fn label(self) -> &'static str {
         match self {
+            Entry::Continue => "CONTINUE",
             Entry::NewGame => "NEW GAME",
             Entry::Debug => "NEW GAME (DEBUG)",
             Entry::Combat => COMBAT_LABEL,
             Entry::Load => "LOAD GAME",
+            Entry::LoadCity => "LOAD CITY",
+            Entry::Hall => "HALL OF FAME",
             Entry::Quit => "QUIT",
         }
     }
@@ -83,6 +107,10 @@ pub struct Title {
     /// Keys before this tick are dropped, and each one dropped pushes it on (see
     /// `after_splash`).
     quiet_until: u64,
+    /// The run CONTINUE opens: its file and what its header says.
+    newest: Option<(PathBuf, RunHeader)>,
+    /// Why CONTINUE couldn't open it, said where its line was.
+    error: Option<String>,
 }
 
 /// How long the title the splash hands over to waits for the keys to stop: 0.8 s with
@@ -165,9 +193,11 @@ impl Title {
         }
     }
 
-    /// The title for `st`: the debug starts on it while dev mode is on.
+    /// The title for `st`: CONTINUE on it, under the cursor, while a run in its saves
+    /// folder is still going; the debug starts while dev mode is on.
     pub fn new(st: &AppState, tick: u64) -> Self {
-        let entries = Entry::rows(st.dev);
+        let newest = st.saves.as_deref().and_then(crate::runs::newest);
+        let entries = Entry::rows(st.dev, newest.is_some());
         Title {
             menu: Menu::new(
                 entries.iter().map(|e| e.label().to_string()).collect(),
@@ -177,6 +207,8 @@ impl Title {
             opened: tick,
             combat: CombatMap::Street,
             quiet_until: 0,
+            newest,
+            error: None,
         }
     }
 
@@ -188,6 +220,72 @@ impl Title {
         Title {
             quiet_until: tick + QUIET,
             ..Title::new(st, tick)
+        }
+    }
+
+    /// CONTINUE: the newest run opened, as LOAD GAME's space would.
+    fn continue_run(&mut self, st: &mut AppState) -> ScreenCmd {
+        let Some((path, _)) = self.newest.as_ref() else {
+            return ScreenCmd::Stay;
+        };
+        match crate::screens::runs::resume(st, path) {
+            Ok(cmd) => cmd,
+            Err(why) => {
+                self.error = Some(why);
+                ScreenCmd::Stay
+            }
+        }
+    }
+
+    /// While CONTINUE is picked, two rows under the menu and centred, the run it opens:
+    /// `VEX · NETRUNNER · Saintburg · day 2 07:40 · Bring it to Coz`, the runner cyan
+    /// and bold, the objective dim, the rest faint; or why it wouldn't open.
+    fn draw_run_line(&self, area: Rect, menu_y: u16, tick: u64, f: &mut Frame) {
+        if self.selected() != Entry::Continue || self.menu.entrance(self.menu.selected, tick) < 1.0
+        {
+            return;
+        }
+        let y = menu_y + self.entries.len() as u16 + 2;
+        if y >= area.bottom() {
+            return;
+        }
+        let parts: Vec<(String, Style)> = match (&self.error, &self.newest) {
+            (Some(why), _) => vec![(why.clone(), Style::default().fg(FAINT))],
+            (None, Some((_, h))) => {
+                let objective = h.objective.as_deref().map(first_part).unwrap_or_default();
+                let mut rest = format!(
+                    " · {} · {} · {}",
+                    h.profession,
+                    h.city,
+                    clock(h.day, h.minute)
+                );
+                if !objective.is_empty() {
+                    rest.push_str(" · ");
+                }
+                vec![
+                    (
+                        h.handle.to_uppercase(),
+                        Style::default()
+                            .fg(CYAN)
+                            .add_modifier(ratatui::style::Modifier::BOLD),
+                    ),
+                    (rest, Style::default().fg(FAINT)),
+                    (objective.to_string(), Style::default().fg(DIM)),
+                ]
+            }
+            (None, None) => return,
+        };
+        let n: u16 = parts.iter().map(|(t, _)| t.chars().count() as u16).sum();
+        let mut x = area.x + area.width.saturating_sub(n) / 2;
+        let buf = f.buffer_mut();
+        for (text, style) in &parts {
+            for ch in text.chars() {
+                if x >= area.right() {
+                    return;
+                }
+                buf[(x, y)].set_char(ch).set_style(*style);
+                x += 1;
+            }
         }
     }
 
@@ -254,7 +352,8 @@ impl Screen for Title {
                 }
                 KeyCode::Char('q') | KeyCode::Esc => return ScreenCmd::Quit,
                 KeyCode::Enter => {
-                    return match self.selected() {
+                    let cmd = match self.selected() {
+                        Entry::Continue => self.continue_run(st),
                         Entry::NewGame => ScreenCmd::Push {
                             to: Box::new(Chooser::new(st, st.tick)),
                             fx: TransitionKind::SlideUp,
@@ -265,11 +364,22 @@ impl Screen for Title {
                             CombatMap::Net => self.net_game(st),
                         },
                         Entry::Load => ScreenCmd::Push {
+                            to: Box::new(RunsScreen::load(st)),
+                            fx: TransitionKind::SlideUp,
+                        },
+                        Entry::LoadCity => ScreenCmd::Push {
                             to: Box::new(Files::load(st.tick)),
+                            fx: TransitionKind::SlideUp,
+                        },
+                        Entry::Hall => ScreenCmd::Push {
+                            to: Box::new(RunsScreen::hall(st)),
                             fx: TransitionKind::SlideUp,
                         },
                         Entry::Quit => ScreenCmd::Quit,
                     };
+                    if !matches!(cmd, ScreenCmd::Stay) {
+                        return cmd;
+                    }
                 }
                 _ => {}
             }
@@ -325,14 +435,12 @@ impl Screen for Title {
             f.buffer_mut(),
         );
         self.draw_combat_pick(area, menu_x, menu_y, st.tick, f);
+        self.draw_run_line(area, menu_y, st.tick, f);
 
         let hint = "↑↓ select · enter confirm · q quit";
         let hx = area.x + area.width.saturating_sub(hint.chars().count() as u16) / 2;
         f.render_widget(
-            Paragraph::new(Span::styled(
-                hint,
-                Style::default().fg(Color::Rgb(100, 110, 125)),
-            )),
+            Paragraph::new(Span::styled(hint, Style::default().fg(FAINT))),
             Rect::new(
                 hx,
                 area.bottom() - 2,
@@ -347,6 +455,7 @@ impl Screen for Title {
 mod tests {
     use super::*;
     use crate::app::{AppState, Screen, ScreenCmd};
+    use crate::runs::testutil::{Dir, saving, small_city};
     use crate::screens::testutil::{buffer_text, key};
     use crossterm::event::KeyCode;
     use ratatui::Terminal;
@@ -384,28 +493,13 @@ mod tests {
             title.update(&mut st, &[key(KeyCode::Char('q'))]),
             ScreenCmd::Quit
         ));
-        title.update(
-            &mut st,
-            &[
-                key(KeyCode::Down),
-                key(KeyCode::Down),
-                key(KeyCode::Down),
-                key(KeyCode::Down),
-            ],
-        );
+        // NEW GAME, the two debug starts, LOAD GAME, LOAD CITY, HALL OF FAME, QUIT.
+        title.update(&mut st, &[key(KeyCode::Down); 6]);
         assert!(matches!(
             title.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Quit
         ));
-        title.update(
-            &mut st,
-            &[
-                key(KeyCode::Up),
-                key(KeyCode::Up),
-                key(KeyCode::Up),
-                key(KeyCode::Up),
-            ],
-        );
+        title.update(&mut st, &[key(KeyCode::Up); 6]);
         assert!(matches!(
             title.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Push { .. }
@@ -433,7 +527,7 @@ mod tests {
         let mut title = Title::new(&st, 0);
         assert_eq!(
             title.entries,
-            [Entry::NewGame, Entry::Load, Entry::Quit],
+            [Entry::NewGame, Entry::Load, Entry::Hall, Entry::Quit],
             "a player's title"
         );
         let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
@@ -448,9 +542,15 @@ mod tests {
             !text.contains("DEBUG") && !text.contains("COMBAT") && !text.contains("STREET"),
             "{text}"
         );
-        // The second row loads, the third quits; the arrows pick nothing.
+        // The second row loads, the third is the hall, the fourth quits; the arrows
+        // pick nothing.
         title.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Left)]);
         assert_eq!(title.combat, CombatMap::Street);
+        assert!(matches!(
+            title.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Push { .. }
+        ));
+        title.update(&mut st, &[key(KeyCode::Down)]);
         assert!(matches!(
             title.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Push { .. }
@@ -463,9 +563,9 @@ mod tests {
         // Dev mode turned off in a game leaves the debug starts off the next title.
         st.unlock_dev();
         st.set_dev(false);
-        assert_eq!(Title::new(&st, 0).entries.len(), 3);
+        assert_eq!(Title::new(&st, 0).entries.len(), 4);
         st.set_dev(true);
-        assert_eq!(Title::new(&st, 0).entries.len(), 5);
+        assert_eq!(Title::new(&st, 0).entries.len(), 7);
     }
 
     #[test]
@@ -630,6 +730,271 @@ mod tests {
                 "a new game wakes up at home"
             );
         }
+    }
+
+    /// A run saved in `dir` by `handle` at frame `tick`, standing at `at` when given, its
+    /// header stamped as saved at Unix second `saved`.
+    fn save_run(
+        dir: &Dir,
+        handle: &str,
+        tick: u64,
+        at: Option<(citygen::Place, citygen::Pos)>,
+        saved: u64,
+    ) -> (AppState, std::path::PathBuf) {
+        save_run_in(dir, small_city(), handle, tick, at, saved)
+    }
+
+    /// `save_run` in `city`.
+    fn save_run_in(
+        dir: &Dir,
+        city: citygen::City,
+        handle: &str,
+        tick: u64,
+        at: Option<(citygen::Place, citygen::Pos)>,
+        saved: u64,
+    ) -> (AppState, std::path::PathBuf) {
+        let (mut st, _) = saving(dir, city);
+        st.character.handle = handle.into();
+        st.tick = tick;
+        if let Some((place, pos)) = at {
+            st.player = Some(crate::walker::Player::at(place, pos));
+        }
+        assert!(crate::runs::when::save_now(&mut st));
+        let path = dir.0.join(format!("{}.run", st.run.unwrap().id));
+        let mut h = crate::runs::file::header(&path).unwrap();
+        h.saved = saved;
+        crate::runs::file::rewrite_header(&path, &h).unwrap();
+        (st, path)
+    }
+
+    /// A street tile outside any building.
+    fn on_the_street(city: &citygen::City) -> (citygen::Place, citygen::Pos) {
+        use citygen::{Place, StratumKind};
+        let pos = city
+            .stratum(StratumKind::Street)
+            .unwrap()
+            .tiles
+            .iter()
+            .find_map(|(p, t)| (t.building.is_none() && t.district.is_some()).then_some(p))
+            .unwrap();
+        (Place::Stratum(StratumKind::Street), pos)
+    }
+
+    fn labels(st: &AppState) -> Vec<String> {
+        Title::new(st, 0).menu.items
+    }
+
+    #[test]
+    fn no_continue_without_a_run() {
+        let rows = ["NEW GAME", "LOAD GAME", "HALL OF FAME", "QUIT"];
+        let mut st = AppState::new();
+        assert_eq!(labels(&st), rows, "no saves folder");
+        let dir = Dir::new("no-continue");
+        st.saves = Some(dir.0.clone());
+        assert_eq!(labels(&st), rows, "an empty one");
+        // A run that flatlined, and a file that isn't a run: still nothing to continue.
+        let (_, path) = save_run(&dir, "Gone", 900, None, 100);
+        let mut h = crate::runs::file::header(&path).unwrap();
+        h.death = Some(crate::runs::Death {
+            cause: "shot".into(),
+            day: 1,
+            minute: 0,
+            at: 100,
+            lasted: 40,
+        });
+        crate::runs::file::rewrite_header(&path, &h).unwrap();
+        std::fs::write(dir.0.join("broken.run"), b"not a run").unwrap();
+        assert_eq!(labels(&st), rows);
+        // In dev mode the debug starts and LOAD CITY join them.
+        st.unlock_dev();
+        assert_eq!(
+            labels(&st),
+            [
+                "NEW GAME",
+                "NEW GAME (DEBUG)",
+                "NEW GAME · COMBAT",
+                "LOAD GAME",
+                "LOAD CITY",
+                "HALL OF FAME",
+                "QUIT"
+            ]
+        );
+    }
+
+    #[test]
+    fn continue_opens_the_newest_run() {
+        let dir = Dir::new("continue");
+        save_run(&dir, "Older", 5_000, None, 1_000);
+        // The newer in a city with a home, its story not begun: a resume that started
+        // the story would show.
+        let city = crate::runs::testutil::story_city();
+        let street = on_the_street(&city);
+        let (newer, _) = save_run_in(&dir, city, "Newer", 7_000, Some(street), 2_000);
+        assert!(newer.home.is_some() && !newer.missions.begun);
+        let mut st = AppState::new();
+        st.saves = Some(dir.0.clone());
+        let mut t = Title::new(&st, 0);
+        assert_eq!(
+            t.entries,
+            [
+                Entry::Continue,
+                Entry::NewGame,
+                Entry::Load,
+                Entry::Hall,
+                Entry::Quit
+            ]
+        );
+        assert_eq!(t.selected(), Entry::Continue, "the cursor starts on it");
+        let ScreenCmd::Switch { to: mut on_air, .. } = t.update(&mut st, &[key(KeyCode::Enter)])
+        else {
+            panic!("CONTINUE plays the broadcast")
+        };
+        assert_eq!(st.character.handle, "Newer");
+        assert_eq!(st.run, newer.run, "the newer run");
+        assert_eq!(st.tick, 7_000, "its clock");
+        assert!(
+            !crate::runs::when::marked(&st),
+            "opening a run isn't saving it"
+        );
+        let wall = st
+            .last_save
+            .map(|(_, at)| at.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+        assert_eq!(wall, Some(2_000), "last saved when its file says");
+        // The broadcast shown whole, then JACK IN: back where it was saved.
+        let space = key(KeyCode::Char(' '));
+        on_air.update(&mut st, &[space]);
+        let ScreenCmd::Switch { to: mut map, .. } = on_air.update(&mut st, &[space]) else {
+            panic!("JACK IN")
+        };
+        let world = st.clock_tick();
+        st.tick += 1;
+        map.update(&mut st, &[]);
+        let p = st.player.as_ref().unwrap();
+        assert_eq!((p.place, p.pos), street, "where it stood");
+        assert!(
+            st.clock_tick() - world <= 1,
+            "the first frame runs a frame, not a minute"
+        );
+        assert!(!st.missions.begun, "the story isn't started over");
+        let text = buffer_text(&crate::screens::shots::draw_stack(
+            &st,
+            &[map.as_ref()],
+            (120, 40),
+        ));
+        assert!(!text.contains("SAVED"), "no mark on the way in");
+    }
+
+    #[test]
+    fn continue_shows_its_run_under_the_menu() {
+        let dir = Dir::new("continue-line");
+        let (run, path) = save_run(&dir, "Vex", 5_000, None, 1_000);
+        let mut h = crate::runs::file::header(&path).unwrap();
+        h.day = 2;
+        h.minute = 7 * 60 + 40;
+        h.objective = Some("Bring it to Coz · the Brass Lamp · Ironside".into());
+        crate::runs::file::rewrite_header(&path, &h).unwrap();
+        let mut st = AppState::new();
+        st.saves = Some(dir.0.clone());
+        let mut t = Title::new(&st, 0);
+        st.tick = 120;
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| t.draw(&st, f)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let text = buffer_text(&buf);
+        let city = &run.city.as_ref().unwrap().name;
+        let line = format!("VEX · NETRUNNER · {city} · day 2 07:40 · Bring it to Coz");
+        let x = (120 - line.chars().count() as u16) / 2;
+        let row = text.lines().nth(22).unwrap();
+        assert_eq!(&row.trim(), &line, "two rows under the menu, centred");
+        assert!(row.starts_with(&" ".repeat(x as usize)), "{row:?}");
+        assert!(text.lines().nth(15).unwrap().contains("▸ CONTINUE"));
+        let v = &buf[(x, 22)];
+        assert_eq!(v.fg, Color::Rgb(0, 229, 255));
+        assert!(v.modifier.contains(ratatui::style::Modifier::BOLD));
+        assert_eq!(
+            buf[(x + 4, 22)].fg,
+            Color::Rgb(100, 110, 125),
+            "the rest faint"
+        );
+        let bring = x + line[..line.find("Bring").unwrap()].chars().count() as u16;
+        assert_eq!(
+            buf[(bring, 22)].fg,
+            Color::Rgb(160, 170, 185),
+            "the objective dim"
+        );
+        // Off CONTINUE, the line goes.
+        t.update(&mut st, &[key(KeyCode::Down)]);
+        term.draw(|f| t.draw(&st, f)).unwrap();
+        let text = buffer_text(term.backend().buffer());
+        assert!(!text.contains("NETRUNNER"), "{text}");
+    }
+
+    #[test]
+    fn continue_says_why_a_run_wont_open() {
+        let dir = Dir::new("continue-broken");
+        let (_, path) = save_run(&dir, "Vex", 5_000, None, 1_000);
+        // The header stands, the body is noise.
+        let mut bytes = std::fs::read(&path).unwrap();
+        let end = 10 + u32::from_le_bytes(bytes[6..10].try_into().unwrap()) as usize;
+        for (i, b) in bytes[end..].iter_mut().enumerate() {
+            *b = citygen::rng::hash64(i as u64, 7) as u8;
+        }
+        std::fs::write(&path, &bytes).unwrap();
+        let mut st = AppState::new();
+        st.saves = Some(dir.0.clone());
+        let mut t = Title::new(&st, 0);
+        assert_eq!(t.selected(), Entry::Continue, "its header reads");
+        assert!(matches!(
+            t.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Stay
+        ));
+        assert!(st.run.is_none() && st.city.is_none(), "nothing half opened");
+        st.tick = 120;
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| t.draw(&st, f)).unwrap();
+        let text = buffer_text(term.backend().buffer());
+        assert_eq!(
+            text.lines().nth(22).unwrap().trim(),
+            "the run is broken",
+            "where its line was"
+        );
+    }
+
+    #[test]
+    fn the_title_opens_the_lists() {
+        let dir = Dir::new("title-lists");
+        save_run(&dir, "Vex", 5_000, None, 1_000);
+        let mut st = AppState::new();
+        st.unlock_dev();
+        st.saves = Some(dir.0.clone());
+        let mut t = Title::new(&st, 0);
+        let opens = |t: &mut Title, st: &mut AppState, label: &str| {
+            let at = t.menu.items.iter().position(|r| r == label).unwrap();
+            while t.menu.selected != at {
+                t.update(st, &[key(KeyCode::Down)]);
+            }
+            let ScreenCmd::Push { to, .. } = t.update(st, &[key(KeyCode::Enter)]) else {
+                panic!("{label} pushes its list")
+            };
+            buffer_text(&crate::screens::shots::draw_stack(
+                st,
+                &[&*t, to.as_ref()],
+                (120, 40),
+            ))
+        };
+        let text = opens(&mut t, &mut st, "LOAD GAME");
+        assert!(text.contains("LOAD GAME") && text.contains("VEX"), "{text}");
+        let text = opens(&mut t, &mut st, "HALL OF FAME");
+        assert!(
+            text.contains("HALL OF FAME") && text.contains("Nobody you ran has flatlined. Yet."),
+            "{text}"
+        );
+        let text = opens(&mut t, &mut st, "LOAD CITY");
+        assert!(
+            text.contains("enter load"),
+            "the old list of cities: {text}"
+        );
+        assert_eq!(st.run, None, "nothing opened");
     }
 
     #[test]

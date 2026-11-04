@@ -295,6 +295,10 @@ impl AppState {
         let character = game::Character::from_template(&content, &game::TemplateId::new("vex"))
             .expect("the vex template builds");
         let people = sim::People::load().expect("the people pack is valid");
+        let book = crate::missions::Book::load().expect("the missions pack is valid");
+        let broadcasts =
+            crate::broadcasts::Broadcasts::load(book.missions.iter().map(|m| m.id.as_str()))
+                .expect("the broadcasts are valid");
         AppState {
             params: GenParams::default(),
             city: None,
@@ -353,8 +357,8 @@ impl AppState {
             helix: Default::default(),
             jobs: Default::default(),
             flavor: crate::jobs::Flavor::load().expect("the jobs pack is valid"),
-            book: crate::missions::Book::load().expect("the missions pack is valid"),
-            broadcasts: crate::broadcasts::Broadcasts::load().expect("the broadcasts are valid"),
+            book,
+            broadcasts,
             missions: Default::default(),
             rest: None,
             drawn_you: Default::default(),

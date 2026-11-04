@@ -3514,3 +3514,177 @@ fn net_shell() {
         false,
     );
 }
+
+/// The save mock's three runs in `dir`, from VEX at home in seed 8 (the newest, saved
+/// today at 10:44) and two copies of her file under other runners' headers.
+fn the_mock_runs(dir: &crate::runs::testutil::Dir) {
+    use crate::runs::{RunHeader, file};
+    let mut st = state_home();
+    let _ = MapScreen::walking(&mut st);
+    let mut st = crate::runs::testutil::running(st);
+    st.saves = Some(dir.0.clone());
+    assert!(crate::runs::when::save_now(&mut st));
+    let vex = dir.0.join(format!("{}.run", st.run.unwrap().id));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let today = now / 86_400 * 86_400;
+    let edit = |path: &std::path::Path, f: &dyn Fn(&mut RunHeader)| {
+        let mut h = file::header(path).unwrap();
+        f(&mut h);
+        file::rewrite_header(path, &h).unwrap();
+    };
+    edit(&vex, &|h| {
+        h.level = 4;
+        h.day = 2;
+        h.minute = 7 * 60 + 40;
+        h.mission = Some("The ledger".into());
+        h.objective = Some("Bring it to Coz · the Brass Lamp · Ironside".into());
+        h.credits = 1_240;
+        h.chrome = vec!["Neural port".into(), "Target lens".into()];
+        h.talents = 6;
+        h.played = 3 * 3600 + 12 * 60;
+        h.perma = true;
+        h.saved = today + 10 * 3600 + 44 * 60;
+    });
+    for (name, build, level, city, (day, minute), story, perma, saved) in [
+        (
+            "KESTREL",
+            "SOLO",
+            2,
+            "Lowport",
+            (1, 23 * 60 + 10),
+            "See the doctor",
+            true,
+            today - 86_400,
+        ),
+        (
+            "BRAM",
+            "TECHIE",
+            1,
+            "Chromespire",
+            (1, 6 * 60 + 5),
+            "Watch the news",
+            false,
+            today - 2 * 86_400,
+        ),
+    ] {
+        let path = dir.0.join(format!("{}.run", name.to_lowercase()));
+        std::fs::copy(&vex, &path).unwrap();
+        edit(&path, &|h| {
+            h.handle = name.into();
+            h.profession = build.into();
+            h.level = level;
+            h.city = city.into();
+            h.day = day;
+            h.minute = minute;
+            h.mission = Some("The morning after".into());
+            h.objective = Some(story.into());
+            h.perma = perma;
+            h.saved = saved;
+        });
+    }
+}
+
+/// The title with a run to go on with, as players see it and in dev mode, and without one
+/// (the save mock's `title()`), at 120x40.
+#[test]
+#[ignore]
+fn save_title_shots() {
+    let Ok(out) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let dir = crate::runs::testutil::Dir::new("title-shots");
+    the_mock_runs(&dir);
+    let empty = crate::runs::testutil::Dir::new("title-shots-empty");
+    for (name, saves, dev) in [
+        ("save_title", &dir, false),
+        ("save_title_dev", &dir, true),
+        ("save_title_none", &empty, false),
+    ] {
+        let mut st = AppState::new();
+        if dev {
+            st.unlock_dev();
+        }
+        st.saves = Some(saves.0.clone());
+        let mut title = crate::screens::title::Title::new(&st, 0);
+        for _ in 0..90 {
+            st.tick += 1;
+            title.update(&mut st, &[]);
+        }
+        let buf = draw_stack(&st, &[&title], (120, 40));
+        write_svg(&out, name, &st, &buf, false);
+    }
+}
+
+/// LOAD GAME with the save mock's runs, with a file it can't read among them, and
+/// empty; the HALL OF FAME before anyone has flatlined; and the broadcast a run opens
+/// with (the save mock's `load_game()` and `hall_empty()`), at 120x40.
+#[test]
+#[ignore]
+fn save_load_shots() {
+    use crate::screens::runs::RunsScreen;
+    let Ok(out) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let dir = crate::runs::testutil::Dir::new("load-shots");
+    the_mock_runs(&dir);
+    let mut st = AppState::new();
+    st.saves = Some(dir.0.clone());
+    let list = RunsScreen::load(&st);
+    write_svg(
+        &out,
+        "save_load",
+        &st,
+        &draw_stack(&st, &[&list], (120, 40)),
+        false,
+    );
+    let hall = RunsScreen::hall(&st);
+    write_svg(
+        &out,
+        "save_hall_empty",
+        &st,
+        &draw_stack(&st, &[&hall], (120, 40)),
+        false,
+    );
+
+    std::fs::write(dir.0.join("zz.run"), b"not a run").unwrap();
+    let mut list = RunsScreen::load(&st);
+    list.update(&mut st, &[key(KeyCode::Up)]);
+    write_svg(
+        &out,
+        "save_load_unreadable",
+        &st,
+        &draw_stack(&st, &[&list], (120, 40)),
+        false,
+    );
+
+    let empty = crate::runs::testutil::Dir::new("load-shots-empty");
+    st.saves = Some(empty.0.clone());
+    let list = RunsScreen::load(&st);
+    write_svg(
+        &out,
+        "save_load_empty",
+        &st,
+        &draw_stack(&st, &[&list], (120, 40)),
+        false,
+    );
+
+    // VEX's run opened: its broadcast, the run's own flags and no switches.
+    st.saves = Some(dir.0.clone());
+    let mut list = RunsScreen::load(&st);
+    let crate::app::ScreenCmd::Switch { to: mut on_air, .. } =
+        list.update(&mut st, &[key(KeyCode::Char(' '))])
+    else {
+        panic!("space opens VEX's run")
+    };
+    on_air.update(&mut st, &[key(KeyCode::Char(' '))]);
+    write_svg(
+        &out,
+        "save_resume_broadcast",
+        &st,
+        &draw_stack(&st, &[on_air.as_ref()], (120, 40)),
+        false,
+    );
+}

@@ -109,6 +109,8 @@ pub fn played(secs: u64) -> String {
 }
 
 /// City time a run lasted, in its largest whole unit: `3 days`, `19 hours`, `40 min`.
+// The HALL OF FAME's LASTED, once a run can flatline into it.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn lasted(minutes: u64) -> String {
     let plural = |n: u64, one: &str| {
         if n == 1 {
@@ -147,6 +149,11 @@ pub fn saved_at(unix: u64, now: u64) -> String {
     } else {
         full
     }
+}
+
+/// The city's clock in a run: `day 2 07:40`.
+pub fn clock(day: u32, minute: u16) -> String {
+    format!("day {day} {:02}:{:02}", minute / 60, minute % 60)
 }
 
 /// An objective up to its first ` · `: `Bring it to Coz`.
@@ -199,6 +206,13 @@ mod tests {
         // Past midnight is another day.
         let late = AT - 10 * 3600 - 44 * 60 + 23 * 3600 + 59 * 60;
         assert_eq!(saved_at(late, late + 120), "2026-11-04 23:59");
+    }
+
+    #[test]
+    fn the_clock_reads_day_and_time() {
+        assert_eq!(clock(2, 7 * 60 + 40), "day 2 07:40");
+        assert_eq!(clock(1, 0), "day 1 00:00");
+        assert_eq!(clock(14, 23 * 60 + 59), "day 14 23:59");
     }
 
     #[test]

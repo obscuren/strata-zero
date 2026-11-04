@@ -274,6 +274,15 @@ impl MapScreen {
         s
     }
 
+    /// The map on foot over a run just opened, you where you stood: its first frame runs
+    /// the world a frame on from the saved tick, not the minute a gap since an update
+    /// would.
+    pub fn resumed(st: &mut AppState) -> Self {
+        let mut s = Self::walking(st);
+        s.last_tick = st.tick;
+        s
+    }
+
     /// A film scene's frame over the map drawn into `map_area`: the doors and the marker,
     /// then everything but the map in black with the subtitle, a keypad over it, and the
     /// console and help if open.

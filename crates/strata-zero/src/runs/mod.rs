@@ -4,10 +4,6 @@
 //! made by `describe`) and the run itself (`snapshot`), written when the run can take
 //! it (`when`).
 
-// The game saves runs, but nothing outside the tests opens or lists one until LOAD
-// GAME, CONTINUE and the HALL OF FAME are wired in; remove this then.
-#![allow(dead_code)]
-
 pub mod describe;
 pub mod file;
 pub mod ids;
@@ -145,7 +141,34 @@ pub fn living(dir: &Path) -> Vec<RunInfo> {
     out
 }
 
+/// The newest run still going whose file reads: what CONTINUE opens.
+pub fn newest(dir: &Path) -> Option<(PathBuf, RunHeader)> {
+    living(dir)
+        .into_iter()
+        .find_map(|r| Some((r.path, r.header.ok()?)))
+}
+
+/// Puts the run at `path` in place of whatever `st` holds, as it was saved: read against
+/// the story's book, restored and made whole, whatever this build lacks of it said in
+/// the log. It was last saved when its file says, and the SAVED mark stays down:
+/// opening a run isn't saving it. Nothing changes when the file can't be read, and a run
+/// that flatlined never opens.
+pub fn open(st: &mut crate::app::AppState, path: &Path) -> anyhow::Result<()> {
+    let (header, snap, lost) = file::read(path, &st.book)?;
+    if header.death.is_some() {
+        anyhow::bail!("it flatlined");
+    }
+    snapshot::restore(st, snap);
+    snapshot::after_restore(st, lost);
+    let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(header.saved);
+    // The frame it was saved on is the frame restored; put just out of the mark's reach.
+    st.last_save = Some((st.tick.saturating_sub(when::MARK), at));
+    Ok(())
+}
+
 /// The runs that flatlined, newest death first.
+// The HALL OF FAME lists them once a run can flatline into it.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn dead(dir: &Path) -> Vec<RunInfo> {
     let mut out: Vec<RunInfo> = list(dir).into_iter().filter(is_dead).collect();
     out.sort_by_key(|r| {
@@ -158,4 +181,77 @@ pub fn dead(dir: &Path) -> Vec<RunInfo> {
         )
     });
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testutil::{Dir, saving, small_city};
+    use super::*;
+    use crate::app::AppState;
+
+    fn unix(t: std::time::SystemTime) -> u64 {
+        t.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+    }
+
+    #[test]
+    fn opening_a_run_puts_it_in_place_without_the_mark() {
+        let dir = Dir::new("open");
+        let (mut a, _) = saving(&dir, small_city());
+        a.tick = 2_000;
+        a.character.handle = "Nyx".into();
+        assert!(when::save_now(&mut a));
+        let path = dir.0.join(format!("{}.run", a.run.unwrap().id));
+        let saved = file::header(&path).unwrap().saved;
+        let mut st = AppState::new();
+        st.saves = Some(dir.0.clone());
+        open(&mut st, &path).unwrap();
+        assert_eq!(st.character.handle, "Nyx");
+        assert_eq!((st.run, st.tick), (a.run, 2_000));
+        assert!(!when::marked(&st), "opening a run is not a save");
+        assert_eq!(st.last_save.map(|(_, at)| unix(at)), Some(saved));
+        // The next five-minute save is five minutes of play off, give or take the mark.
+        let (t, _) = st.last_save.unwrap();
+        assert!(st.tick - t <= when::MARK, "{t} against {}", st.tick);
+        assert!(!st.save_due);
+    }
+
+    #[test]
+    fn a_flatlined_run_never_opens() {
+        let dir = Dir::new("open-dead");
+        let (mut a, _) = saving(&dir, small_city());
+        assert!(when::save_now(&mut a));
+        let path = dir.0.join(format!("{}.run", a.run.unwrap().id));
+        let mut h = file::header(&path).unwrap();
+        h.death = Some(Death {
+            cause: "shot".into(),
+            day: 1,
+            minute: 0,
+            at: 1,
+            lasted: 1,
+        });
+        file::rewrite_header(&path, &h).unwrap();
+        let mut st = AppState::new();
+        assert!(open(&mut st, &path).is_err());
+        assert!(
+            st.run.is_none() && st.city.is_none(),
+            "nothing put in place"
+        );
+    }
+
+    #[test]
+    fn continue_is_the_newest_run_that_reads() {
+        let dir = Dir::new("newest");
+        assert!(newest(&dir.0).is_none());
+        std::fs::write(dir.0.join("broken.run"), b"no").unwrap();
+        assert!(
+            newest(&dir.0).is_none(),
+            "an unreadable file isn't a run to go on with"
+        );
+        let (mut a, _) = saving(&dir, small_city());
+        a.character.handle = "Nyx".into();
+        assert!(when::save_now(&mut a));
+        let (path, h) = newest(&dir.0).expect("the run");
+        assert_eq!(h.handle, "Nyx");
+        assert_eq!(path, dir.0.join(format!("{}.run", a.run.unwrap().id)));
+    }
 }

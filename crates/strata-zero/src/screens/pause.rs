@@ -5,6 +5,7 @@ use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::render::Rgb;
 use crate::runs::when::save_now;
 use crate::screens::files::Files;
+use crate::screens::runs::RunsScreen;
 use crate::screens::settings::Settings;
 use crate::screens::title::Title;
 use crate::ui::chrome::solid;
@@ -107,9 +108,10 @@ impl Pause {
                 }
             }
             Row::LoadGame => {
+                // The run in play is saved first, so it is in the list.
                 save_now(st);
                 ScreenCmd::Push {
-                    to: Box::new(Files::load(st.tick)),
+                    to: Box::new(RunsScreen::load(st)),
                     fx: TransitionKind::None,
                 }
             }
@@ -419,10 +421,21 @@ mod tests {
             pick(&mut p, &mut st, row);
             st.tick += 1;
             let cmd = p.update(&mut st, &[key(KeyCode::Enter)]);
-            let went = match row {
-                "LOAD GAME" => matches!(cmd, ScreenCmd::Push { .. }),
-                "QUIT TO TITLE" => matches!(cmd, ScreenCmd::Switch { .. }),
-                _ => matches!(cmd, ScreenCmd::Quit),
+            let went = match (row, cmd) {
+                ("LOAD GAME", ScreenCmd::Push { to, .. }) => {
+                    // The list of runs, the one just saved in it.
+                    let text = buffer_text(&crate::screens::shots::draw_stack(
+                        &st,
+                        &[to.as_ref()],
+                        (120, 40),
+                    ));
+                    assert!(text.contains("space continue"), "{text}");
+                    assert!(text.contains(&st.character.handle.to_uppercase()), "{text}");
+                    true
+                }
+                ("QUIT TO TITLE", cmd) => matches!(cmd, ScreenCmd::Switch { .. }),
+                ("QUIT GAME", cmd) => matches!(cmd, ScreenCmd::Quit),
+                _ => false,
             };
             assert!(went, "{row} goes on");
             assert_eq!(saved_at(&st), Some(st.tick), "{row} saved first");
