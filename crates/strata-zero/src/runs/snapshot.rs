@@ -329,6 +329,7 @@ pub fn after_restore(st: &mut AppState, mut lost: Vec<String>) {
     st.home = st.city.as_ref().and_then(crate::home::HomeRig::find);
     lost.extend(st.character.forget_unknown(&st.content));
     lost.extend(st.ground.forget_unknown(&st.content));
+    lost.extend(st.missions.forget_unknown(&st.content));
     let mut said = std::collections::BTreeSet::new();
     for line in lost {
         if said.insert(line.clone()) {

@@ -42,26 +42,52 @@ impl ItemCopy {
     }
 
     /// Empties each socket whose piece `c` lacks and peels each sticker it lacks, all
-    /// the way down; a line in `lost` for each.
-    pub(crate) fn forget_unknown(&mut self, c: &Content, lost: &mut Vec<String>) {
+    /// the way down; a line in `lost` for each. What a piece taken out held that `c`
+    /// has goes in `out`.
+    pub(crate) fn forget_unknown(
+        &mut self,
+        c: &Content,
+        lost: &mut Vec<String>,
+        out: &mut Vec<Stack>,
+    ) {
         for socket in &mut self.fitted {
-            if socket.as_mut().is_some_and(|s| !s.still_known(c, lost)) {
-                *socket = None;
-            }
+            *socket = socket.take().and_then(|s| s.sift(c, lost, out));
         }
         self.stickers.retain(|s| {
             let known = c.item(&s.sticker).is_some();
             if !known {
-                lost.push(format!("a sticker ({})", s.sticker));
+                lost.push(sticker_lost(&s.sticker));
             }
             known
         });
+    }
+
+    /// The copy of an item `c` lacks, taken apart: each fitted piece `c` has goes in
+    /// `out` as it is (what it holds sifted the same way), and each sticker `c` has as
+    /// one of it; a line in `lost` for each of the rest.
+    pub(crate) fn salvage(self, c: &Content, lost: &mut Vec<String>, out: &mut Vec<Stack>) {
+        for s in self.fitted.into_iter().flatten() {
+            if let Some(kept) = s.sift(c, lost, out) {
+                out.push(kept);
+            }
+        }
+        for stuck in self.stickers {
+            if c.item(&stuck.sticker).is_some() {
+                out.push(Stack::new(stuck.sticker, 1));
+            } else {
+                lost.push(sticker_lost(&stuck.sticker));
+            }
+        }
     }
 }
 
 /// What a save's reader says of an item this build's content lacks.
 fn item_lost(id: &ItemId) -> String {
     format!("an item ({id})")
+}
+
+fn sticker_lost(id: &ItemId) -> String {
+    format!("a sticker ({id})")
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -100,17 +126,26 @@ impl Stack {
         own + self.copy.as_ref().map_or(0, |k| k.fitted_value(c))
     }
 
-    /// Whether `c` has the stack's item, a line in `lost` when it doesn't; what its copy
-    /// holds that `c` lacks is dropped.
-    pub(crate) fn still_known(&mut self, c: &Content, lost: &mut Vec<String>) -> bool {
+    /// The stack as `c` keeps it. None when `c` lacks its item: a line in `lost`, and
+    /// what its copy held that `c` has goes in `out`. Else the stack, what its copy
+    /// holds that `c` lacks dropped.
+    pub(crate) fn sift(
+        mut self,
+        c: &Content,
+        lost: &mut Vec<String>,
+        out: &mut Vec<Stack>,
+    ) -> Option<Stack> {
         if c.item(&self.item).is_none() {
             lost.push(item_lost(&self.item));
-            return false;
+            if let Some(k) = self.copy {
+                k.salvage(c, lost, out);
+            }
+            return None;
         }
         if let Some(k) = self.copy.as_mut() {
-            k.forget_unknown(c, lost);
+            k.forget_unknown(c, lost, out);
         }
-        true
+        Some(self)
     }
 }
 
@@ -1114,13 +1149,19 @@ impl Character {
         }
     }
 
-    /// Drops every item, piece of chrome, talent, skill and sticker `c` lacks, as a run
-    /// saved by a build that had them comes back in one that doesn't: a worn item or an
-    /// installed piece goes with its copy, a fitted piece leaves its socket empty. A line
-    /// for each, naming its id.
+    /// Drops every item, piece of chrome, talent, skill, ability, category and sticker
+    /// `c` lacks, as a run saved by a build that had them comes back in one that
+    /// doesn't. A worn item, an installed piece or a fitted one goes with its copy, and
+    /// what that copy held that `c` has (its fitted pieces, its stickers) comes out
+    /// into the pack. A line for each thing gone, naming its id.
     pub fn forget_unknown(&mut self, c: &Content) -> Vec<String> {
         let mut lost = Vec::new();
-        self.inventory.retain_mut(|s| s.still_known(c, &mut lost));
+        // What comes out of the pieces taken away, for the pack.
+        let mut out = Vec::new();
+        self.inventory = std::mem::take(&mut self.inventory)
+            .into_iter()
+            .filter_map(|s| s.sift(c, &mut lost, &mut out))
+            .collect();
         let worn: Vec<Slot> = self
             .equipment
             .iter()
@@ -1131,10 +1172,12 @@ impl Character {
             if let Some(id) = self.equipment.remove(&slot) {
                 lost.push(item_lost(&id));
             }
-            self.worn.remove(&slot);
+            if let Some(k) = self.worn.remove(&slot) {
+                k.salvage(c, &mut lost, &mut out);
+            }
         }
         for k in self.worn.values_mut() {
-            k.forget_unknown(c, &mut lost);
+            k.forget_unknown(c, &mut lost, &mut out);
         }
         let installed: Vec<Site> = self
             .chrome
@@ -1146,11 +1189,32 @@ impl Character {
             if let Some(id) = self.chrome.remove(&site) {
                 lost.push(format!("chrome ({id})"));
             }
-            self.chrome_copies.remove(&site);
+            if let Some(k) = self.chrome_copies.remove(&site) {
+                k.salvage(c, &mut lost, &mut out);
+            }
         }
         for k in self.chrome_copies.values_mut() {
-            k.forget_unknown(c, &mut lost);
+            k.forget_unknown(c, &mut lost, &mut out);
         }
+        for s in out {
+            self.stow(s);
+        }
+        self.abilities.retain(|a| {
+            let known = c.ability(a).is_some();
+            if !known {
+                lost.push(format!("an ability ({a})"));
+            }
+            known
+        });
+        // A cooldown on an ability the content lacks times nothing.
+        self.fired.retain(|a, _| c.ability(a).is_some());
+        self.categories.retain(|k| {
+            let known = c.category(k).is_some();
+            if !known {
+                lost.push(format!("a category ({k})"));
+            }
+            known
+        });
         self.talents.retain(|t, _| {
             let known = c.talent(t).is_some();
             if !known {
@@ -2960,6 +3024,10 @@ mod tests {
         let talent = d.talents.keys().next().cloned().unwrap();
         let skill = SkillId::new("scrapcraft");
         assert!(d.skills.contains(&skill));
+        let ability = c.abilities.first().map(|a| a.id.clone()).unwrap();
+        d.abilities.push(ability.clone());
+        d.fired.insert(ability.clone(), 5);
+        let category = d.categories.first().cloned().expect("a category");
         // A stack the content lacks altogether, in the pack.
         let knife = ItemId::new("old_knife");
         d.give(knife.clone(), 2);
@@ -2968,8 +3036,21 @@ mod tests {
             .retain(|i| ![&deck, &worn_sticker, &bot, &neural, &program].contains(&&i.id));
         less.talents.retain(|t| t.id != talent);
         less.skills.retain(|s| s.id != skill);
+        less.abilities.retain(|a| a.id != ability);
+        less.categories.retain(|k| k.id != category);
 
         let lost = d.forget_unknown(&less);
+        assert!(
+            lost.contains(&format!("an ability ({ability})")),
+            "{lost:?}"
+        );
+        assert!(
+            lost.contains(&format!("a category ({category})")),
+            "{lost:?}"
+        );
+        assert!(!d.abilities.contains(&ability));
+        assert!(!d.fired.contains_key(&ability), "nor its cooldown");
+        assert!(!d.categories.contains(&category));
         for line in [
             format!("an item ({deck})"),
             format!("a sticker ({worn_sticker})"),
@@ -3002,5 +3083,64 @@ mod tests {
         );
         // Run again, nothing more goes.
         assert!(d.forget_unknown(&less).is_empty());
+    }
+
+    #[test]
+    fn a_runner_forgets_a_host_but_not_what_it_held() {
+        let c = Content::load().unwrap();
+        let mut d = Character::combat_runner(&c);
+        let (deck, cradle) = (ItemId::new("rebuilt_deck"), ItemId::new("drone_cradle"));
+        assert_eq!(d.equipped(Slot::Deck), Some(&deck));
+        assert_eq!(d.chrome.get(&Site::Back), Some(&cradle));
+        let stuck: Vec<ItemId> = d
+            .worn_copy(Slot::Deck)
+            .unwrap()
+            .stickers
+            .iter()
+            .map(|s| s.sticker.clone())
+            .collect();
+        let docked: Vec<ItemId> = d.chrome_copies[&Site::Back]
+            .fitted
+            .iter()
+            .flatten()
+            .map(|s| s.item.clone())
+            .collect();
+        assert!(!stuck.is_empty() && !docked.is_empty());
+        let counts = |d: &Character, ids: &[ItemId]| -> Vec<u32> {
+            ids.iter().map(|i| d.count(i)).collect()
+        };
+        let (stickers, bots) = (counts(&d, &stuck), counts(&d, &docked));
+        let mut less = c.clone();
+        less.items.retain(|i| i.id != deck && i.id != cradle);
+
+        let lost = d.forget_unknown(&less);
+        assert_eq!(
+            lost,
+            [format!("an item ({deck})"), format!("chrome ({cradle})")],
+            "only the hosts are lost"
+        );
+        // Each id up by as many as the host held of it.
+        let up = |was: &[u32], ids: &[ItemId]| -> Vec<u32> {
+            ids.iter()
+                .zip(was)
+                .map(|(i, n)| n + ids.iter().filter(|j| *j == i).count() as u32)
+                .collect()
+        };
+        assert_eq!(
+            counts(&d, &stuck),
+            up(&stickers, &stuck),
+            "the stickers come back to the pack"
+        );
+        assert_eq!(
+            counts(&d, &docked),
+            up(&bots, &docked),
+            "the docked bots go in the pack"
+        );
+        let pack_bots = d
+            .inventory
+            .iter()
+            .filter(|s| docked.contains(&s.item))
+            .all(|s| s.copy.is_some());
+        assert!(pack_bots, "each bot keeps its copy");
     }
 }

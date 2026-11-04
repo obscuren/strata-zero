@@ -146,9 +146,7 @@ pub fn read(path: &Path, book: &Book) -> Result<(RunHeader, Snapshot, Vec<String
     flate2::read::GzDecoder::new(body)
         .read_to_end(&mut raw)
         .context("the run is broken")?;
-    let (snap, found) = ids::reading(book, || rmp_serde::from_slice::<Snapshot>(&raw));
-    let mut snap = snap.context("the run is broken")?;
-    let lost = ids::settle(&mut snap, book, found);
+    let (snap, lost) = ids::read_snapshot(book, &raw).context("the run is broken")?;
     Ok((head.run, snap, lost))
 }
 

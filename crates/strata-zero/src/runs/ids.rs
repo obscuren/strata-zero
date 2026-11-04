@@ -2,7 +2,7 @@
 //! step by its place in the mission; a save writes their ids instead, translated
 //! through the book in scope (`with_book`), so a build that adds, moves or drops a step
 //! reads an old run where it was. Reading against a book that lacks an id records a
-//! line for it, and `settle` drops what held it.
+//! line for it, and `drop_lost` drops what held it.
 
 use super::snapshot::Snapshot;
 use crate::missions::{Book, END, Missions, Run, RunState};
@@ -26,7 +26,7 @@ impl StepRef {
     }
 
     /// What one read from a save is when this build's book lacks its mission or step:
-    /// `settle` drops whatever holds it before the run is put back.
+    /// `drop_lost` drops whatever holds it before the run is put back.
     const LOST: StepRef = StepRef::new(usize::MAX, usize::MAX);
 
     fn lost(self) -> bool {
@@ -93,7 +93,7 @@ impl Scope {
 
 /// What reading a run against a book found.
 #[derive(Debug, Default)]
-pub(crate) struct Found {
+struct Found {
     /// A line for each mission or step the run had and the book lacks.
     lost: Vec<String>,
     /// The book's missions the run had no run for, by place.
@@ -123,8 +123,21 @@ pub fn with_book<R>(book: &Book, f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// A run's body (its snapshot, as MessagePack) read against `book` and made whole by
+/// `drop_lost`: the snapshot, and a line for each mission or step it had that the book
+/// lacks. The one way in for a snapshot: nothing a gone step held reaches the engine.
+pub(crate) fn read_snapshot(
+    book: &Book,
+    body: &[u8],
+) -> Result<(Snapshot, Vec<String>), rmp_serde::decode::Error> {
+    let (snap, found) = reading(book, || rmp_serde::from_slice::<Snapshot>(body));
+    let mut snap = snap?;
+    let lost = drop_lost(&mut snap, book, found);
+    Ok((snap, lost))
+}
+
 /// `f` run with `book` in scope, and what reading inside it found.
-pub(crate) fn reading<R>(book: &Book, f: impl FnOnce() -> R) -> (R, Found) {
+fn reading<R>(book: &Book, f: impl FnOnce() -> R) -> (R, Found) {
     with_book(book, || {
         let out = f();
         let found = SCOPE.with(|s| {
@@ -174,8 +187,9 @@ impl<'de> Deserialize<'de> for StepRef {
 
 /// `Missions.runs` as a save keeps it: a map from each mission's id to its run, the
 /// run's steps by id (`end` past the last). Read against a book, a mission it lacks is
-/// dropped and said, and each mission it has that the save didn't is left for `settle`
-/// to start as `begin` does; a run waiting on a step the book lacks is done.
+/// dropped and said, and each mission it has that the save didn't is left for
+/// `drop_lost` to start as `begin` does. A run that never ran waits on the book's first
+/// step; one under way whose step the book lacks is done.
 pub mod runs {
     use super::*;
 
@@ -256,7 +270,7 @@ pub mod runs {
                 .map(|(m, run)| {
                     run.unwrap_or_else(|| {
                         scope.found.fresh.push(m);
-                        // `settle` puts the run `begin` would make in its place.
+                        // `drop_lost` puts the run `begin` would make in its place.
                         Run {
                             at: 0,
                             since: 0,
@@ -291,12 +305,14 @@ pub mod runs {
         };
         let ended = ended.iter().filter_map(|s| step(s)).collect();
         let last = scope.ids.0[m].1.len();
-        let (at, state) = match (at.as_str(), state) {
-            (END, state) => (last, state),
-            (s, state) => match step(s) {
+        let (at, state) = match state {
+            // Never run (only running a step moves `at`, and neither runs one): it waits
+            // on the book's first step, whatever that is now.
+            RunState::Waiting | RunState::Uncast => (0, state),
+            _ if at == END => (last, state),
+            _ => match step(&at) {
                 Some(i) => (i, state),
-                // A mission that never ran stays as it was; one under way is done.
-                None if state == RunState::Uncast => (last, state),
+                // Under way on a step the book lacks: it can't go on, so it is done.
                 None => (last, RunState::Done { at: since }),
             },
         };
@@ -318,7 +334,7 @@ pub mod runs {
 /// run for starts as `begin` starts one, and whatever holds a step the book lacks goes
 /// (a call, a feed, a scene, the news, the tray, a mail's link to its step, the track).
 /// The lines saying what is gone.
-pub(crate) fn settle(s: &mut Snapshot, book: &Book, found: Found) -> Vec<String> {
+fn drop_lost(s: &mut Snapshot, book: &Book, found: Found) -> Vec<String> {
     let Found { lost, fresh } = found;
     // The minute `NetState::now` gives once the run is back: the world's clock.
     let now = s.world.as_ref().map_or(s.tick, |w| w.tick()) / sim::TICKS_PER_MINUTE;
@@ -609,6 +625,55 @@ mod tests {
     }
 
     #[test]
+    fn a_mission_not_begun_waits_on_the_books_first_step() {
+        use crate::missions::{Effect, Mission, Step, Trigger};
+        let dir = Dir::new("not-begun");
+        let st = running(seren_has_written());
+        let w = st
+            .missions
+            .runs
+            .iter()
+            .position(|r| r.state == RunState::Waiting)
+            .expect("a mission not yet begun");
+        let id = st.book.missions[w].id.clone();
+        let path = write(&dir.0, &st).unwrap();
+        // Its first step renamed away, and a mission new to the book waiting on it done.
+        let mut book = st.book.clone();
+        book.missions[w].steps.remove(0);
+        book.missions.push(Mission {
+            id: "after".into(),
+            title: "After".into(),
+            from: book.missions[w].from.clone(),
+            steps: vec![Step {
+                id: "go".into(),
+                when: Trigger::MissionDone {
+                    mission: id.clone(),
+                    minutes: 0,
+                },
+                then: vec![Effect::Log("went".into())],
+            }],
+        });
+
+        let (_, s, lost) = read(&path, &book).expect("the run reads");
+        assert!(lost.is_empty(), "nothing it had is lost: {lost:?}");
+        let run = &s.missions.runs[w];
+        assert_eq!((run.at, run.state), (0, RunState::Waiting), "{id}");
+        assert!(run.ended.is_empty());
+        let mut b = AppState::new();
+        b.book = book;
+        restore(&mut b, s);
+        after_restore(&mut b, lost);
+        crate::missions::tick(&mut b);
+        let after = b.book.missions.len() - 1;
+        assert_eq!(
+            b.missions.runs[after].state,
+            RunState::Waiting,
+            "nothing waiting on {id} being done fired"
+        );
+        assert!(b.log.iter().all(|e| e.text != "went"));
+    }
+
+    #[test]
     fn a_step_gone_ends_its_mission_and_drops_what_held_it() {
         let dir = Dir::new("step");
         let (mut st, d, tray) = at_the_tray();
@@ -711,6 +776,52 @@ mod tests {
         b.deck_tab = crate::screens::deck::Tab::Kit;
         let deck = crate::screens::deck::Deck::new(b.tick).restore(&b);
         let _ = crate::screens::shots::draw_stack(&b, &[&deck], (120, 40));
+    }
+
+    #[test]
+    fn a_piece_gone_from_the_tray_or_the_tab_is_dropped_and_said() {
+        let dir = Dir::new("tray");
+        let (mut st, d, tray) = at_the_tray();
+        let from = st.book.missions[d].from.clone();
+        let kept = ItemId::new("neural_port");
+        assert!(st.content.item(&kept).is_some());
+        st.missions.tray = Some(TrayOffer {
+            story: StepRef::new(d, tray),
+            from: from.clone(),
+            tab: from,
+            title: "t".into(),
+            line: "l".into(),
+            items: vec![kept.clone(), ItemId::new("old_chip")],
+            shown: false,
+        });
+        st.missions.tab = Some(crate::missions::Tab {
+            doc: sim::PersonId(0),
+            item: ItemId::new("old_port"),
+            payer: "x".into(),
+            spent: false,
+        });
+        let path = write(&dir.0, &st).unwrap();
+        let mut b = AppState::new();
+        let (_, s, lost) = read(&path, &b.book).unwrap();
+        restore(&mut b, s);
+        after_restore(&mut b, lost);
+        assert_eq!(
+            b.missions.tray.as_ref().unwrap().items,
+            [kept],
+            "the known piece stays"
+        );
+        assert_eq!(b.missions.tab, None);
+        for id in ["old_chip", "old_port"] {
+            let line = format!("lost in the update · an item ({id})");
+            assert!(b.log.iter().any(|e| e.text == line), "{line}");
+        }
+        // A tray left with nothing goes.
+        b.missions.tray.as_mut().unwrap().items = vec![ItemId::new("old_chip")];
+        assert_eq!(
+            b.missions.forget_unknown(&b.content),
+            ["an item (old_chip)"]
+        );
+        assert_eq!(b.missions.tray, None);
     }
 
     #[test]

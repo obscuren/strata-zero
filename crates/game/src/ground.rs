@@ -86,13 +86,25 @@ impl Ground {
     }
 
     /// Drops every stack whose item `c` lacks, and what the copies left lying hold that
-    /// it lacks; a pile left with nothing goes. A line for each, naming its id.
+    /// it lacks; what a dropped copy held that `c` has lies on its tile instead, and a
+    /// pile left with nothing goes. A line for each thing gone, naming its id.
     pub fn forget_unknown(&mut self, c: &Content) -> Vec<String> {
         let mut lost = Vec::new();
-        for pile in self.piles.values_mut() {
-            pile.retain_mut(|s| s.still_known(c, &mut lost));
+        let tiles: Vec<(Place, Pos)> = self.piles.keys().copied().collect();
+        for (place, p) in tiles {
+            let mut out = Vec::new();
+            let kept: Vec<Stack> = self
+                .take_all(place, p)
+                .into_iter()
+                .filter_map(|s| s.sift(c, &mut lost, &mut out))
+                .collect();
+            if !kept.is_empty() {
+                self.piles.insert((place, p), kept);
+            }
+            for s in out {
+                self.put(place, p, s);
+            }
         }
-        self.piles.retain(|_, pile| !pile.is_empty());
         lost
     }
 
@@ -164,6 +176,26 @@ mod tests {
         g.forget_unknown(&c);
         assert!(g.at(street, Pos::new(1, 1)).is_empty());
         assert_eq!(g.on(street).count(), 2);
+        // A host the content lacks leaves what it held on its tile.
+        let at = Pos::new(6, 6);
+        g.put(
+            street,
+            at,
+            Stack {
+                item: ItemId::new("gone_deck"),
+                qty: 1,
+                copy: Some(ItemCopy {
+                    id: CopyId(8),
+                    fitted: vec![Some(Stack::new(ItemId::new("copper_coil"), 1))],
+                    stickers: vec![],
+                }),
+            },
+        );
+        assert_eq!(g.forget_unknown(&c), ["an item (gone_deck)"]);
+        assert_eq!(
+            g.at(street, at),
+            [Stack::new(ItemId::new("copper_coil"), 1)]
+        );
     }
 
     #[test]

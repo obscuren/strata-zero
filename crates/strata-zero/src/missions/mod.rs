@@ -104,6 +104,33 @@ pub struct Missions {
     pub tab: Option<Tab>,
 }
 
+impl Missions {
+    /// Drops the pieces `c` lacks from the tray held out and the tab, as a run saved by
+    /// a build that had them comes back in one that doesn't; a tray left empty goes. A
+    /// line for each. (`Left.worn` stays: it is what you wore then, only ever compared,
+    /// and named through a lookup that falls back.)
+    pub fn forget_unknown(&mut self, c: &game::Content) -> Vec<String> {
+        let mut lost = Vec::new();
+        let mut known = |id: &ItemId| {
+            let known = c.item(id).is_some();
+            if !known {
+                lost.push(format!("an item ({id})"));
+            }
+            known
+        };
+        if let Some(t) = self.tray.as_mut() {
+            t.items.retain(&mut known);
+            if t.items.is_empty() {
+                self.tray = None;
+            }
+        }
+        if self.tab.as_ref().is_some_and(|t| !known(&t.item)) {
+            self.tab = None;
+        }
+        lost
+    }
+}
+
 /// A tray of pieces held out by a role (doctor spec §8): one to take, on a tab.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TrayOffer {
