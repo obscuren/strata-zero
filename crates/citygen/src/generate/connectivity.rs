@@ -453,6 +453,11 @@ impl City {
 impl StageRunner for ConnectivityStage {
     fn begin(&mut self, ctx: &mut GenCtx) -> Result<(), GenError> {
         self.rng = Some(ctx.rng(Stage::Connectivity));
+        // A city on its site stands in its open ground before it is linked: a part of
+        // it past a gap the city leaves empty is reached over that ground on foot.
+        if let Some(site) = ctx.scratch.site.as_ref() {
+            super::site::fill(&mut ctx.city, site);
+        }
         self.queue.clear();
         for r in 0..MAX_ROUNDS {
             self.queue.push_back(Work::Round(r));

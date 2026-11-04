@@ -343,6 +343,7 @@ impl Generator {
             return Err(e);
         }
         let mut city = self.ctx.city;
+        // again, for what the stages since linking left empty (slivers voided)
         if let Some(site) = self.ctx.scratch.site.as_ref() {
             site::fill(&mut city, site);
         }

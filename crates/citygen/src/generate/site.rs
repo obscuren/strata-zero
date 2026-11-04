@@ -230,4 +230,27 @@ mod tests {
         });
         assert!(open > 2000, "{open} cells of open ground");
     }
+
+    #[test]
+    fn every_home_city_builds_on_its_site() {
+        // eight worlds' home cities, each cut by its own water: all of them connected
+        for seed in 0..8u64 {
+            let w = Overworld::generate(crate::overworld::WorldParams {
+                seed,
+                ..Default::default()
+            })
+            .unwrap();
+            let home = w.cities.iter().position(|c| c.home).unwrap() as u8;
+            let p = sited(
+                &w,
+                home,
+                crate::GenParams {
+                    seed,
+                    ..Default::default()
+                },
+            );
+            let built = crate::Generator::run(p);
+            assert!(built.is_ok(), "seed {seed}: {:?}", built.err());
+        }
+    }
 }
