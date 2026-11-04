@@ -956,6 +956,9 @@ impl MapScreen {
             (true, Some(run), Some(Place::Construct(b))) if !tethered => {
                 crate::net::run_readout(st, b, run)
             }
+            (true, Some(run), Some(Place::Stratum(StratumKind::Net))) if !tethered => {
+                crate::net::run_readout_at(st, crate::net::Scene::Outside, run)
+            }
             _ => None,
         };
         let ice = match (jacked, st.player.as_ref()) {
@@ -1471,8 +1474,8 @@ impl MapScreen {
         let Some((place, pos)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
             return ScreenCmd::Stay;
         };
-        let Place::Construct(b) = place else {
-            st.warn("programs run inside a construct");
+        let Some(scene) = crate::net::scene_of(place) else {
+            st.warn("programs run on the Net");
             return ScreenCmd::Stay;
         };
         if st.character.deck(&st.content).is_none() {
@@ -1495,8 +1498,8 @@ impl MapScreen {
         let now = st.net.now(st);
         let mut copied = false;
         let mut candidates = Vec::new();
-        for (target, what) in crate::net::targets_near(st, b, pos) {
-            let Some(kind) = crate::net::target_kind(st, b, target) else {
+        for (target, what) in crate::net::targets_at(st, scene, pos) {
+            let Some(kind) = crate::net::kind_at(st, scene, target) else {
                 continue;
             };
             if !game::applies(spec.op, kind) {
@@ -1508,7 +1511,7 @@ impl MapScreen {
                 copied = true;
                 continue;
             }
-            let Some(at) = crate::net::target_pos(st, b, target) else {
+            let Some(at) = crate::net::pos_at(st, scene, target) else {
                 continue;
             };
             candidates.push((target, at, what));
@@ -2286,7 +2289,7 @@ impl MapScreen {
                 if crate::net::your_turn(st) {
                     crate::net::end_turn(st);
                 }
-            } else if inside {
+            } else if inside || st.net.run.is_some() {
                 st.net.beat = st.clock_tick();
                 crate::net::beat(st);
             }
@@ -2883,8 +2886,12 @@ impl Screen for MapScreen {
             if st.net.engaged.is_some() {
                 crate::net::pace(st);
             } else {
-                // Calm: a fuse burns down on every beat.
-                if !st.live.is_empty() && st.clock_tick() >= st.net.beat + crate::net::BEAT_TICKS {
+                // Calm: a fuse burns down on every beat; on the open Net, a run in
+                // flight rolls on it.
+                let rolling = st.net.run.is_some() && place == Place::Stratum(StratumKind::Net);
+                if (!st.live.is_empty() || rolling)
+                    && st.clock_tick() >= st.net.beat + crate::net::BEAT_TICKS
+                {
                     st.net.beat = st.clock_tick();
                     crate::net::beat(st);
                 }
@@ -9659,9 +9666,10 @@ mod tests {
         let gate = crate::constructs::city_gate(&city, b).unwrap();
         st.player.as_mut().unwrap().body = Some((Place::Stratum(StratumKind::Street), gate));
         stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), gate);
+        // On the grid a program reaches what is beside you: here, nothing.
         let cmd = s.update(&mut st, &[key(KeyCode::Char('1'))]);
         assert!(matches!(cmd, ScreenCmd::Stay));
-        assert_eq!(last(&st), Some("programs run inside a construct"));
+        assert_eq!(last(&st), Some("crack · nothing to run it against"));
         assert!(st.net.run.is_none());
         // Back inside without a deck.
         let entry = st.constructs.get(b).unwrap().entry;

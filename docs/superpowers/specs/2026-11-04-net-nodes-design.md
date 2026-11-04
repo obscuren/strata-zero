@@ -250,6 +250,21 @@ you out it means that there's no danger in running there."
   nodes you can hit.
 - **Camera eyes** give 2 heat a game minute; the cone is 8 deep.
 
+- **Tracers latch, whatever else**: beside you a tracer dumps you. Calm, it moves in real
+  time; in a fight it takes turns as other grid ICE, and its "hit" is the latch, so you
+  stop it at range.
+- **Holds outlast alarms**: an alarm doesn't take back what you hold, nor does an alert
+  ending; a loop is part of its hold (not a hack an alarm wipes).
+- **Camera heat stops at the alarm line**: cameras can lock a building down, never dump
+  you; and only you on foot are seen (a body jacked in at a port is not).
+- **Verbs are calm-only**: not in a fight. A decoy draws asleep pieces off their beats
+  while you go unseen; it never ends a fight.
+- **A district alarm locks the district's street ports** for its alert, as a building's
+  alarm locks the ports at its walls today.
+- **Lights out is refused by day** (the lamps are off), not spent.
+- **Cameras need light**: a camera sees you in its cone within 3 tiles, or further where
+  your tile is lit, as walkers see (`sight::sees`); lights out blinds them at range.
+
 ## What's left to the builder
 
 - How the owner-keyed heat path is shaped (an enum on new paths, the building map
