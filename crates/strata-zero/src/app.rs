@@ -188,6 +188,20 @@ pub struct AppState {
     pub track: Option<crate::track::Track>,
     /// The deck's MAP: its cursor, view, zoom, kind and fold, for the session.
     pub atlas: crate::screens::atlas::AtlasState,
+    /// The folder runs are saved in; `None` saves nothing. Only the state a real game
+    /// starts from (`cli::start_state`) has one.
+    pub saves: Option<std::path::PathBuf>,
+    /// The run under way: its id and when it started. Saved with the run; a new city
+    /// has none until JACK IN gives it one.
+    pub run: Option<crate::runs::RunMeta>,
+    /// The run asked to be saved on the next frame that can take a save.
+    // Read by the save points, which come next.
+    #[allow(dead_code)]
+    pub save_due: bool,
+    /// This session's last save of the run: the frame tick, and the wall clock then.
+    // Read by the save points and the pause menu, which come next.
+    #[allow(dead_code)]
+    pub last_save: Option<(u64, std::time::SystemTime)>,
 }
 
 /// One ability effect playing on the map.
@@ -344,6 +358,10 @@ impl AppState {
             drawn_you: Default::default(),
             track: None,
             atlas: Default::default(),
+            saves: None,
+            run: None,
+            save_due: false,
+            last_save: None,
         }
     }
 
@@ -461,7 +479,6 @@ impl AppState {
         self.missions = Default::default();
         self.rest = None;
         self.track = None;
-        self.atlas = Default::default();
         crate::credentials::purge(&mut self.content, &mut self.character);
         self.ground = Default::default();
         self.player = None;
@@ -469,6 +486,17 @@ impl AppState {
         self.foes.clear();
         self.bots.clear();
         self.live.clear();
+        // Another city is another run: JACK IN names it.
+        self.run = None;
+        self.save_due = false;
+        self.last_save = None;
+        self.clear_screens();
+    }
+
+    /// The deck's remembered tabs and rows and the MAP's view, as a new city has them:
+    /// they point into the run that was in place.
+    pub fn clear_screens(&mut self) {
+        self.atlas = Default::default();
         self.deck_tab = Tab::Skills;
         self.deck_rows = [0; Tab::ALL.len()];
         self.deck_kit = Default::default();

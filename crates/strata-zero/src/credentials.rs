@@ -693,12 +693,33 @@ pub fn entries(st: &AppState) -> Vec<(BuildingId, String, Vec<Entry>)> {
     groups
 }
 
+/// A catalogue entry the run made (a keycard), not the build's content.
+fn run_made(id: &ItemId) -> bool {
+    id.0.starts_with("keycard:")
+}
+
 /// Drops every keycard of a previous city from the catalogue and the pack.
 pub fn purge(content: &mut game::Content, character: &mut game::Character) {
-    content.items.retain(|i| !i.id.0.starts_with("keycard:"));
-    character
-        .inventory
-        .retain(|s| !s.item.0.starts_with("keycard:"));
+    content.items.retain(|i| !run_made(&i.id));
+    character.inventory.retain(|s| !run_made(&s.item));
+}
+
+/// The catalogue entries this run made (its keycards), in catalogue order: saved with
+/// the run, since the build's content doesn't have them.
+pub fn run_items(content: &game::Content) -> Vec<Item> {
+    content
+        .items
+        .iter()
+        .filter(|i| run_made(&i.id))
+        .cloned()
+        .collect()
+}
+
+/// A saved run's own catalogue entries back in the catalogue, in place of any that
+/// another run left there; the pack is the saved run's and is left alone.
+pub fn put_back(content: &mut game::Content, items: Vec<Item>) {
+    content.items.retain(|i| !run_made(&i.id));
+    content.items.extend(items);
 }
 
 #[cfg(test)]

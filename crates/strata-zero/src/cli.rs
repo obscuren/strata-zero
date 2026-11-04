@@ -92,9 +92,11 @@ fn dev_asked(flag: bool, env: Option<&OsStr>) -> bool {
     flag || env.is_some_and(|v| !v.is_empty() && v != OsStr::new("0"))
 }
 
-/// The state a game starts from, dev mode unlocked and on if it was asked for.
+/// The state a game starts from: runs saved in the runs folder, dev mode unlocked and
+/// on if it was asked for.
 fn start_state(dev: bool) -> AppState {
     let mut st = AppState::new();
+    st.saves = Some(crate::runs::default_dir());
     if dev {
         st.unlock_dev();
     }
@@ -187,5 +189,11 @@ mod tests {
         assert!(!st.dev && !st.dev_unlocked);
         let st = start_state(true);
         assert!(st.dev && st.dev_unlocked);
+    }
+
+    #[test]
+    fn a_game_saves_its_runs_in_the_runs_folder() {
+        assert_eq!(start_state(false).saves, Some(crate::runs::default_dir()));
+        assert_eq!(AppState::new().saves, None, "nothing else saves");
     }
 }

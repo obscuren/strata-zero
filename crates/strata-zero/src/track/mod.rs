@@ -227,8 +227,6 @@ pub fn set(st: &mut AppState, source: Source) -> Result<String, String> {
 
 /// Remakes the walk and the pulses of a track that was loaded without them, the same
 /// work a beat does when the walk is out of date. Needs the rest of the run restored.
-// Called by the load, which comes next; remove the allow then.
-#[allow(dead_code)]
 pub fn refollow(st: &mut AppState) {
     tick(st);
 }
