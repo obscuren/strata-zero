@@ -89,6 +89,12 @@ map, in its outskirts.
   the block edge, a noisy shoreline between), rivers along the world's river courses at
   detail scale (the contract's crossing points and widths), lakes from lake tiles.
   This replaces `WaterMode` for a city in a world; a bay and a river together is normal.
+  Shores are the tile spec's (curved at three scales, shallows, depth).
+- **No building is cut by water** (Jeffrey, on round 4's lakeshore: "it cuts in to
+  buildings"). A block the shore reaches gets a building fitted to its dry part, a tile
+  or two clear of the water, or none at all. The waterfront is paved: a promenade with
+  lamps along a lake or river, a quay and docks at the sea (where the Docks districts
+  are); reeds and mud only where the city has thinned out.
 - **Ground:** hills and mountains as the open tiles draw them; the city thins on slopes
   (its density already does) and streets bend round them.
 - **Dead ground:** where the spill or salt reaches the block, it is the open ground's,

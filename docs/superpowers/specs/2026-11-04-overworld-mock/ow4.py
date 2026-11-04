@@ -182,7 +182,40 @@ def build(w, X0, Y0):
             if (x, y) in river and terr not in ("sea",):
                 terr = "river"
             g.set(vx, vy, terr)
-    # cities: the world's density, smoothed across tiles
+    # cities: the world's density, smoothed across tiles. No building is cut by water:
+    # a block the shore reaches gets a building fitted to its dry part (or none), and the
+    # waterfront is a paved promenade with lamps.
+    wet = {(X0 + vx, Y0 + vy) for vy in range(VH) for vx in range(VW)
+           if g.t[vy][vx] in ("sea", "lake", "river")}
+
+    def near_water(x, y, r=2):
+        return any((x + dx, y + dy) in wet for dx in range(-r, r + 1) for dy in (-1, 0, 1)
+                   if abs(dx) + 2 * abs(dy) <= r)
+    fitted = {}
+
+    def dry_rect(bk):
+        if bk in fitted:
+            return fitted[bk]
+        l, t = bk[0] * 14 + 2, bk[1] * 7 + 1
+        r, b = l + 11, t + 5
+        while r - l >= 3 and b - t >= 2:
+            bad = [(x, y) for x in range(l, r + 1) for y in range(t, b + 1) if near_water(x, y)]
+            if not bad:
+                fitted[bk] = (l, t, r, b)
+                return fitted[bk]
+            sides = {"l": sum(x == l for x, _ in bad), "r": sum(x == r for x, _ in bad),
+                     "t": sum(y == t for _, y in bad), "b": sum(y == b for _, y in bad)}
+            side = max(sorted(sides), key=lambda k: sides[k])
+            if side == "l":
+                l += 1
+            elif side == "r":
+                r -= 1
+            elif side == "t":
+                t += 1
+            else:
+                b -= 1
+        fitted[bk] = None
+        return None
     for vy in range(VH):
         for vx in range(VW):
             x, y = X0 + vx, Y0 + vy
@@ -198,10 +231,18 @@ def build(w, X0, Y0):
                 if street:
                     g.set(vx, vy, "road" if bx == 0 or by == 0 else "side")
                 else:
-                    g.set(vx, vy, "mass", kind)
-                    edge = bx in (2, 13) or by in (1, 6)
-                    if edge:
-                        g.set(vx, vy, "wall", kind)
+                    rect = dry_rect((x // 14, y // 7))
+                    if rect and rect[0] <= x <= rect[2] and rect[1] <= y <= rect[3]:
+                        l, t, r, b = rect
+                        if x in (l, r) or y in (t, b):
+                            corner = x in (l, r) and y in (t, b)
+                            g.set(vx, vy, "window" if not corner and (x + y) % 2 == 0 else "wall", kind)
+                        else:
+                            g.set(vx, vy, "mass", kind)
+                    else:
+                        g.set(vx, vy, "side" if near_water(x, y, 3) else "plaza")
+                        if near_water(x, y, 2) and not near_water(x, y, 1) and x % 7 == 0:
+                            g.feat(vx, vy, "lamp")
                 if by == 1 and bx == 2 and h32(x // 14, y // 7, 31) < 0.6:
                     g.feat(vx, vy, "lamp")
             elif d > 0.16:
