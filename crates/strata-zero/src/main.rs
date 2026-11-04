@@ -40,6 +40,7 @@ mod ride;
 mod runs;
 mod save;
 mod screens;
+mod sheet;
 mod term;
 mod track;
 mod ui;
