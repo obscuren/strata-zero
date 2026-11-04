@@ -45,11 +45,15 @@ pub(crate) fn prepare(site: &CitySite, size: Size) -> Option<Site> {
     let ground = detail::region(&world, o.x, o.y, size.w, size.h);
     let edge = Fbm::new(world.seed, 4101);
     let mut outline = Grid::filled(size, 0.0f32);
+    let mut own = Grid::filled(world.size, false);
+    for t in world.city_tiles(site.city) {
+        own[t] = true;
+    }
     for y in 0..size.h as i32 {
         for x in 0..size.w as i32 {
             let (wx, wy) = ((o.x + x) as f32, (o.y + y) as f32);
-            let own = detail::blend(&world, wx, wy, |t| {
-                if t.urban.is_some_and(|u| u.city == site.city) {
+            let mine = detail::blend_tiles(wx, wy, |t| {
+                if own.get(t).copied().unwrap_or(false) {
                     1.0
                 } else {
                     0.0
@@ -57,7 +61,7 @@ pub(crate) fn prepare(site: &CitySite, size: Size) -> Option<Site> {
             });
             // the outline runs through tiles, not along them: a wobble a block or two
             // across, and a finer one
-            outline[Pos::new(x, y)] = own
+            outline[Pos::new(x, y)] = mine
                 + 0.22 * detail::wave(&edge, wx / 24.0, wy / 12.0)
                 + 0.08 * detail::wave(&edge, wx / 7.0 + 31.0, wy / 3.5);
         }
@@ -121,6 +125,96 @@ mod tests {
     use crate::tile::Terrain;
     use crate::world::{City, StratumKind};
     use std::sync::OnceLock;
+
+    /// World `seed`'s home city built on its block.
+    fn home_of(seed: u64) -> (Overworld, City) {
+        let w = Overworld::generate(WorldParams {
+            seed,
+            ..Default::default()
+        })
+        .unwrap();
+        let i = w.cities.iter().position(|c| c.home).unwrap() as u8;
+        let p = sited(
+            &w,
+            i,
+            GenParams {
+                seed,
+                ..Default::default()
+            },
+        );
+        let c = Generator::run(p).unwrap();
+        (w, c)
+    }
+
+    /// The world's ground under city `c`'s block.
+    fn ground_of(w: &Overworld, c: &City) -> crate::geom::Grid<Tile> {
+        let o = c.params.site.as_ref().unwrap().origin;
+        detail::region(w, o.x, o.y, c.size.w, c.size.h)
+    }
+
+    #[test]
+    fn a_city_bridges_only_water() {
+        // its arterials and its repairs cross the world's water on bridges, never its
+        // dry ground (0's and 48's arterials ran bridges over dirt)
+        for seed in [0u64, 48, 8] {
+            let (w, c) = home_of(seed);
+            let g = ground_of(&w, &c);
+            let dry = c
+                .stratum(StratumKind::Street)
+                .unwrap()
+                .tiles
+                .iter()
+                .filter(|(p, t)| {
+                    t.terrain == Terrain::Bridge
+                        && !matches!(
+                            g[*p].terrain,
+                            Terrain::Water | Terrain::Shallows | Terrain::Ford | Terrain::Bridge
+                        )
+                })
+                .count();
+            assert_eq!(dry, 0, "seed {seed}: {dry} bridge cells on dry ground");
+        }
+    }
+
+    #[test]
+    fn a_citys_edge_is_the_worlds_ground() {
+        // every cell round the block's edge is the world's own (7's and 45's repairs ran
+        // bridges along the edge; every coast's shallows were deepened)
+        for seed in [3u64, 7, 45, 12] {
+            let (w, c) = home_of(seed);
+            let g = ground_of(&w, &c);
+            let st = &c.stratum(StratumKind::Street).unwrap().tiles;
+            let (cw, ch) = (c.size.w as i32, c.size.h as i32);
+            let off: Vec<Pos> = (0..ch)
+                .flat_map(|y| [Pos::new(0, y), Pos::new(cw - 1, y)])
+                .chain((0..cw).flat_map(|x| [Pos::new(x, 0), Pos::new(x, ch - 1)]))
+                .filter(|p| st[*p].terrain != g[*p].terrain)
+                .collect();
+            assert!(
+                off.is_empty(),
+                "seed {seed}: {} edge cells differ, first {:?}: {:?} vs {:?}",
+                off.len(),
+                off[0],
+                st[off[0]].terrain,
+                g[off[0]].terrain
+            );
+        }
+    }
+
+    #[test]
+    fn every_home_city_has_a_clinic() {
+        // the story's doctor is the ripperdoc nearest home: a home city has a clinic for
+        // her (125's had none)
+        for seed in [125u64, 8] {
+            let (_, c) = home_of(seed);
+            assert!(
+                c.buildings
+                    .iter()
+                    .any(|b| b.kind == crate::world::BuildingKind::Clinic),
+                "seed {seed}: no clinic"
+            );
+        }
+    }
 
     /// Seed 8's world and its home city built on its block, once for every test.
     fn home() -> &'static (Overworld, City) {
@@ -243,11 +337,7 @@ mod tests {
         // the city builds over its own tiles on the overworld, not only its densest part
         let (w, c) = home();
         let i = w.cities.iter().position(|c| c.home).unwrap() as u8;
-        let own = w
-            .tiles
-            .iter()
-            .filter(|(_, t)| t.urban.is_some_and(|u| u.city == i))
-            .count();
+        let own = w.city_tiles(i).len();
         let land = c
             .stratum(StratumKind::Street)
             .unwrap()

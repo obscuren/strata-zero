@@ -862,17 +862,16 @@ fn tile_at(world: &Overworld, x: i32, y: i32) -> &WorldTile {
 /// `f` blended between overworld tile centres at detail point `(x, y)` (bilinear); the
 /// world's outer tiles blend with themselves.
 pub(crate) fn blend(world: &Overworld, x: f32, y: f32, f: impl Fn(&WorldTile) -> f32) -> f32 {
+    blend_tiles(x, y, |t| f(tile_at(world, t.x * TILE, t.y * TILE)))
+}
+
+/// `blend` of a value given by tile position (which may lie off the world).
+pub(crate) fn blend_tiles(x: f32, y: f32, f: impl Fn(Pos) -> f32) -> f32 {
     let half = (TILE as f32 - 1.0) / 2.0;
     let (fx, fy) = ((x - half) / TILE as f32, (y - half) / TILE as f32);
     let (x0, y0) = (fx.floor(), fy.floor());
     let (ux, uy) = (fx - x0, fy - y0);
-    let at = |dx: i32, dy: i32| {
-        f(tile_at(
-            world,
-            (x0 as i32 + dx) * TILE,
-            (y0 as i32 + dy) * TILE,
-        ))
-    };
+    let at = |dx: i32, dy: i32| f(Pos::new(x0 as i32 + dx, y0 as i32 + dy));
     at(0, 0) * (1.0 - ux) * (1.0 - uy)
         + at(1, 0) * ux * (1.0 - uy)
         + at(0, 1) * (1.0 - ux) * uy

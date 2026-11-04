@@ -167,13 +167,27 @@ pub(crate) fn join_street_components(city: &mut City) {
     for p in main {
         in_main.set(*p, true);
     }
-    // a city on its site reaches further, over water too, to join a part cut off
-    let reach = if city.params.site.is_some() { 160 } else { 40 };
+    // a city on its site reaches further, over water too, to join a part of itself cut
+    // off; the world's own ground (an islet, a far bank) is left to the world, and its
+    // edge is the world's
+    let sited = city.params.site.is_some();
+    let reach = if sited { 160 } else { 40 };
+    let edge =
+        |p: Pos| p.x == 0 || p.y == 0 || p.x == size.w as i32 - 1 || p.y == size.h as i32 - 1;
     for comp in comps.iter().skip(1) {
+        if sited {
+            let st = city.stratum(k).expect("street");
+            if !comp
+                .iter()
+                .any(|p| counts_for_reach(city, k, &st.tiles[*p]))
+            {
+                continue;
+            }
+        }
         let path = bfs_nearest(
             size,
             comp[0],
-            |p| city.walkable(k, p) || carvable(city, k, p),
+            |p| city.walkable(k, p) || (carvable(city, k, p) && !(sited && edge(p))),
             |p| in_main[p],
             reach,
         );

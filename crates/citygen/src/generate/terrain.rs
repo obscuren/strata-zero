@@ -91,7 +91,7 @@ impl StageRunner for TerrainStage {
             } else if self.is_water(ctx, p) {
                 ctx.scratch.land.set(p, false);
                 let t = match site.and_then(|s| s.ground.get(p)).map(|t| t.terrain) {
-                    Some(Terrain::Ford) => Terrain::Ford,
+                    Some(t @ (Terrain::Ford | Terrain::Shallows)) => t,
                     _ => Terrain::Water,
                 };
                 ctx.set_terrain(StratumKind::Street, p, t);

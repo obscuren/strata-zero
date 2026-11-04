@@ -267,16 +267,41 @@ pub struct Overworld {
 }
 
 impl Overworld {
+    /// City `i`'s own tiles: those of its index joined (eight ways) to its centre, not
+    /// its outlying towns' (grown under its index along the highways out).
+    pub fn city_tiles(&self, i: u8) -> Vec<Pos> {
+        let mine = |p: Pos| {
+            self.tile(p)
+                .is_some_and(|t| t.urban.is_some_and(|u| u.city == i))
+        };
+        let Some(centre) = self.cities.get(i as usize).map(|c| c.centre) else {
+            return Vec::new();
+        };
+        if !mine(centre) {
+            return Vec::new();
+        }
+        let mut seen = Grid::filled(self.size, false);
+        seen[centre] = true;
+        let mut out = vec![centre];
+        let mut k = 0;
+        while k < out.len() {
+            let p = out[k];
+            k += 1;
+            for q in p.neighbors8() {
+                if self.size.contains(q) && !seen[q] && mine(q) {
+                    seen[q] = true;
+                    out.push(q);
+                }
+            }
+        }
+        out
+    }
+
     /// The overworld tiles city `i`'s map covers: the bounding box of its own tiles
     /// (not its towns'), two tiles more all round for its outskirts to fade in, inside
     /// the world, no bigger than the city generator's largest map.
     pub fn city_block(&self, i: u8) -> crate::geom::Rect {
-        let mine: Vec<Pos> = self
-            .tiles
-            .iter()
-            .filter(|(_, t)| t.urban.is_some_and(|u| u.city == i))
-            .map(|(p, _)| p)
-            .collect();
+        let mine = self.city_tiles(i);
         let centre = self
             .cities
             .get(i as usize)
@@ -679,6 +704,32 @@ pub(crate) fn gen_with(knobs: Knobs, seed: u64) -> Overworld {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_citys_block_leaves_its_towns_out() {
+        // a town grows under its city's index along a highway out: the city's block is
+        // its own tiles', not its towns' (they have small maps of their own)
+        let mut towns = 0;
+        for seed in [0u64, 3, 8, 26] {
+            let w = Overworld::generate(WorldParams {
+                seed,
+                ..Default::default()
+            })
+            .unwrap();
+            for (i, c) in w.cities.iter().enumerate() {
+                let b = w.city_block(i as u8);
+                for t in &c.towns {
+                    towns += 1;
+                    assert!(
+                        !b.contains(*t),
+                        "seed {seed} {}: town {t:?} in {b:?}",
+                        c.name
+                    );
+                }
+            }
+        }
+        assert!(towns >= 4, "{towns} towns");
+    }
 
     #[test]
     fn same_params_same_world_bytes() {

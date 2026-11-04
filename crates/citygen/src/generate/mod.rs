@@ -215,6 +215,15 @@ impl GenCtx {
             .is_some_and(|t| t.district == Some(id))
     }
 
+    /// Whether `p` is water: the world's, for a city on its site; any ground not land,
+    /// for a lone city.
+    pub fn is_wet(&self, p: Pos) -> bool {
+        match self.scratch.site.as_ref() {
+            Some(site) => site.wet(p),
+            None => !self.is_land(p),
+        }
+    }
+
     pub fn is_land(&self, p: Pos) -> bool {
         self.scratch.land.get(p).copied().unwrap_or(false)
     }

@@ -350,11 +350,7 @@ mod tests {
             .iter()
             .filter(|p| city.tile(StratumKind::Street, **p).unwrap().terrain == ground[**p].terrain)
             .count();
-        assert!(
-            same * 10 >= edge.len() * 9,
-            "{same} of {} edge cells are the ground's",
-            edge.len()
-        );
+        assert_eq!(same, edge.len(), "every edge cell is the ground's");
     }
 
     #[test]

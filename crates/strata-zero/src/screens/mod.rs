@@ -47,6 +47,14 @@ pub fn build_city(params: citygen::GenParams) -> anyhow::Result<citygen::City> {
 /// world whose home city doesn't build, or has no flat for the runner, gives way to the
 /// next in the seed's line, so a new game always starts somewhere with its story.
 pub fn build_home(params: citygen::GenParams) -> anyhow::Result<citygen::City> {
+    build_home_where(params, |city| crate::home::HomeRig::find(city).is_some())
+}
+
+/// `build_home`, taking the first world in the seed's line whose home city `fits`.
+fn build_home_where(
+    params: citygen::GenParams,
+    fits: impl Fn(&citygen::City) -> bool,
+) -> anyhow::Result<citygen::City> {
     const TRIES: u64 = 8;
     let mut last = None;
     for k in 0..TRIES {
@@ -58,7 +66,7 @@ pub fn build_home(params: citygen::GenParams) -> anyhow::Result<citygen::City> {
         let home = world.cities.iter().position(|c| c.home).unwrap_or(0) as u8;
         let built = build_city(citygen::sited(&world, home, params.clone().with_seed(seed)));
         match built {
-            Ok(city) if crate::home::HomeRig::find(&city).is_some() => return Ok(city),
+            Ok(city) if fits(&city) => return Ok(city),
             Ok(_) => last = Some(anyhow::anyhow!("seed {seed}'s home city has no flat")),
             Err(e) => last = Some(e),
         }
@@ -183,14 +191,16 @@ mod tests {
 
     #[test]
     fn a_new_game_passes_over_a_world_whose_city_has_no_home() {
-        // seed 60's home city is too small for a megablock, so no flat for the runner:
-        // the new game goes on to the next world in its seed's line
+        // a world whose home city has no flat for the runner (seed 60's did, once) gives
+        // way to the next in its seed's line, the same line every time
         let st = AppState::new();
-        let city = super::build_home(st.params.clone().with_seed(60)).unwrap();
+        let refuse = |c: &citygen::City| c.seed != 60;
+        let city = super::build_home_where(st.params.clone().with_seed(60), refuse).unwrap();
         assert_ne!(city.seed, 60);
-        assert!(crate::home::HomeRig::find(&city).is_some());
-        let again = super::build_home(st.params.clone().with_seed(60)).unwrap();
+        let again = super::build_home_where(st.params.clone().with_seed(60), refuse).unwrap();
         assert_eq!(again.seed, city.seed, "the same line every time");
+        let home = super::build_home(st.params.clone().with_seed(60)).unwrap();
+        assert!(crate::home::HomeRig::find(&home).is_some());
     }
 
     #[test]

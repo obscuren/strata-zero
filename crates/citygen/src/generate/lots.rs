@@ -216,6 +216,44 @@ impl LotsStage {
         }
     }
 
+    /// A city on its site with no clinic turns one low building of the street into one:
+    /// the story's doctor is the ripperdoc nearest home, and a ripperdoc works in a
+    /// clinic. Lone cities are left as they are.
+    fn ensure_clinic(ctx: &mut GenCtx) {
+        let clinic = |b: &Building| b.kind == BuildingKind::Clinic;
+        if ctx.params().site.is_none() || ctx.city.buildings.iter().any(clinic) {
+            return;
+        }
+        let pick = ctx
+            .city
+            .buildings
+            .iter()
+            .filter(|b| {
+                matches!(
+                    b.kind,
+                    BuildingKind::Apartment
+                        | BuildingKind::Office
+                        | BuildingKind::Shop
+                        | BuildingKind::Pawn
+                        | BuildingKind::Bar
+                        | BuildingKind::Hotel
+                ) && !b.span.contains(StratumKind::Skyways)
+                    && b.footprint.w >= 5
+                    && b.footprint.h >= 4
+            })
+            .min_by_key(|b| (b.footprint.area().abs_diff(48), b.id.index()))
+            .map(|b| (b.id, b.footprint));
+        let Some((id, fp)) = pick else { return };
+        ctx.city.buildings[id.index()].kind = BuildingKind::Clinic;
+        for lot in &mut ctx.scratch.lots {
+            if let LotUse::Building { kind, .. } = &mut lot.use_
+                && lot.rect.contains(Pos::new(fp.x, fp.y))
+            {
+                *kind = BuildingKind::Clinic;
+            }
+        }
+    }
+
     /// Any zoned land still untouched becomes a back alley so nothing is unreachable void.
     fn fill_leftovers(ctx: &mut GenCtx) {
         let size = ctx.size();
@@ -296,6 +334,7 @@ impl StageRunner for LotsStage {
             return Ok(StepOut::Continue(0.95 * self.next as f32 / n as f32));
         }
         if !self.filled {
+            Self::ensure_clinic(ctx);
             Self::fill_leftovers(ctx);
             self.filled = true;
             return Ok(StepOut::Continue(1.0));
