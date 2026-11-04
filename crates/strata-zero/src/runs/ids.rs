@@ -1480,8 +1480,8 @@ mod tests {
         out
     }
 
-    /// The run `fixtures/run-v1-net.run` holds: the small morning after, jacked in from
-    /// the street and out on the open Net beside a building's street camera, the slice's
+    /// The run `fixtures/run-v1-net.run` holds: the small morning after, jacked in where
+    /// you stood and out on the open Net beside a building's street camera, the slice's
     /// work done round it. The camera held, looped and its feed open; the building's ad
     /// board held and hijacked; a street terminal of its district held; the district's
     /// lamp grid held and its lamps cut (by day, so the street shows nothing yet); the
