@@ -1,14 +1,14 @@
 //! The pause menu: resume, save, load, settings, quit; under the rows, when the run
-//! was last saved.
+//! was last saved, or why the save it just tried failed.
 
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::render::Rgb;
-use crate::runs::when::save_now;
+use crate::runs::when::try_save;
 use crate::screens::files::Files;
 use crate::screens::runs::RunsScreen;
 use crate::screens::settings::Settings;
 use crate::screens::title::Title;
-use crate::ui::chrome::solid;
+use crate::ui::chrome::{MAGENTA, solid};
 use crate::ui::menu::{Menu, MenuView};
 use crate::ui::panel::boxed;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -66,6 +66,9 @@ impl Row {
 pub struct Pause {
     menu: Menu,
     rows: Vec<Row>,
+    /// The last save this menu tried failed: on which row, and why. The line under the
+    /// rows says so; the same row pressed again goes on without the save.
+    failed: Option<(Row, String)>,
 }
 
 impl Pause {
@@ -75,12 +78,38 @@ impl Pause {
         Pause {
             menu: Menu::new(rows.iter().map(|r| r.label().to_string()).collect(), tick),
             rows,
+            failed: None,
+        }
+    }
+
+    /// The save a row takes before it goes on: true to go on. A save that fails keeps
+    /// the menu up, saying why; pressed again, the row goes on without it.
+    fn saved_first(&mut self, st: &mut AppState, row: Row) -> bool {
+        if self.failed.as_ref().is_some_and(|(r, _)| *r == row) {
+            return true;
+        }
+        self.save(st, row)
+    }
+
+    /// Saves the run if it can be saved; false when the write failed.
+    fn save(&mut self, st: &mut AppState, row: Row) -> bool {
+        match try_save(st) {
+            Some(Err(why)) => {
+                self.failed = Some((row, why));
+                false
+            }
+            Some(Ok(())) => {
+                self.failed = None;
+                true
+            }
+            None => true,
         }
     }
 
     /// What the row under the cursor does.
-    fn choose(&self, st: &mut AppState) -> ScreenCmd {
-        match self.rows[self.menu.selected] {
+    fn choose(&mut self, st: &mut AppState) -> ScreenCmd {
+        let row = self.rows[self.menu.selected];
+        match row {
             Row::Resume => ScreenCmd::Pop {
                 fx: TransitionKind::None,
             },
@@ -88,7 +117,7 @@ impl Pause {
                 if let Some(why) = crate::save::refusal(st) {
                     st.warn(why);
                 } else {
-                    save_now(st);
+                    self.save(st, row);
                 }
                 ScreenCmd::Stay
             }
@@ -107,20 +136,20 @@ impl Pause {
                     fx: TransitionKind::None,
                 }
             }
-            Row::LoadGame => {
-                // The run in play is saved first, so it is in the list.
-                save_now(st);
-                ScreenCmd::Push {
-                    to: Box::new(RunsScreen::load(st)),
-                    fx: TransitionKind::None,
-                }
+            // The ways out of the run save it first (LOAD GAME, so it is in the list);
+            // one whose save fails stays, saying why.
+            Row::LoadGame | Row::QuitToTitle | Row::QuitGame if !self.saved_first(st, row) => {
+                ScreenCmd::Stay
             }
+            Row::LoadGame => ScreenCmd::Push {
+                to: Box::new(RunsScreen::load(st)),
+                fx: TransitionKind::None,
+            },
             Row::Settings => ScreenCmd::Push {
                 to: Box::new(Settings::new()),
                 fx: TransitionKind::None,
             },
             Row::QuitToTitle => {
-                save_now(st);
                 // The run is left: nothing on the title (the window closing) saves it
                 // again with the time spent there.
                 st.run = None;
@@ -129,10 +158,7 @@ impl Pause {
                     fx: TransitionKind::SlideUp,
                 }
             }
-            Row::QuitGame => {
-                save_now(st);
-                ScreenCmd::Quit
-            }
+            Row::QuitGame => ScreenCmd::Quit,
         }
     }
 }
@@ -199,20 +225,26 @@ impl Screen for Pause {
             ),
             f.buffer_mut(),
         );
-        if let Some((_, at)) = st.last_save {
-            let secs = std::time::SystemTime::now()
-                .duration_since(at)
-                .map_or(0, |d| d.as_secs());
-            let y = inner.y + 1 + rows;
-            if y < inner.bottom() {
-                f.render_widget(
-                    Paragraph::new(Span::styled(
-                        format!("  last saved · {}", ago(secs)),
-                        Style::default().fg(FAINT),
-                    )),
-                    Rect::new(inner.x + 1, y, inner.width.saturating_sub(1), 1),
-                );
+        // Under the rows: why the last save this menu tried failed, else when it last
+        // saved.
+        let line = match (&self.failed, st.last_save) {
+            (Some((_, why)), _) => Some((format!("  couldn't save · {why}"), MAGENTA)),
+            (None, Some((_, at))) => {
+                let secs = std::time::SystemTime::now()
+                    .duration_since(at)
+                    .map_or(0, |d| d.as_secs());
+                Some((format!("  last saved · {}", ago(secs)), FAINT))
             }
+            (None, None) => None,
+        };
+        let y = inner.y + 1 + rows;
+        if let Some((text, colour)) = line
+            && y < inner.bottom()
+        {
+            f.render_widget(
+                Paragraph::new(Span::styled(text, Style::default().fg(colour))),
+                Rect::new(inner.x + 1, y, inner.width.saturating_sub(1), 1),
+            );
         }
         f.render_widget(
             Paragraph::new(Span::styled(
@@ -228,6 +260,7 @@ impl Screen for Pause {
 mod tests {
     use super::*;
     use crate::runs::testutil::{Dir, saving, small_city};
+    use crate::runs::when::save_now;
     use crate::screens::testutil::{buffer_text, key};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -447,6 +480,85 @@ mod tests {
         st.tick += 1;
         assert!(!save_now(&mut st));
         assert_eq!(saved_at(&st), Some(st.tick - 1));
+    }
+
+    /// The row the panel's line is on, under the six rows, and its text.
+    fn status_row(p: &Pause, st: &AppState) -> (ratatui::buffer::Buffer, u16, String) {
+        let buf = draw(p, st);
+        let y = (30 - 12) / 2 + 1 + 1 + 6;
+        let row = buffer_text(&buf)
+            .lines()
+            .nth(y as usize)
+            .unwrap()
+            .to_string();
+        (buf, y, row)
+    }
+
+    #[test]
+    fn a_failed_save_on_the_way_out_stays_and_says_why() {
+        let dir = Dir::new("pause-failed");
+        let (mut st, _map) = saving(&dir, small_city());
+        assert!(save_now(&mut st));
+        let path = crate::runs::list(&dir.0)[0].path.clone();
+        let before = std::fs::read(&path).unwrap();
+        // The folder to save in is a file now: every save fails.
+        let blocked = dir.0.join("not-a-folder");
+        std::fs::write(&blocked, b"a file").unwrap();
+        st.saves = Some(blocked.clone());
+        let os = std::fs::create_dir_all(&blocked).unwrap_err().to_string();
+        let run = st.run;
+        // QUIT TO TITLE: the menu stays, the line says why in place of `last saved`.
+        let mut p = Pause::new(&st, st.tick);
+        pick(&mut p, &mut st, "QUIT TO TITLE");
+        st.tick += 1;
+        assert!(matches!(
+            p.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Stay
+        ));
+        assert_eq!(st.run, run, "still in the run");
+        let (buf, y, row) = status_row(&p, &st);
+        let want = format!("couldn't save · {os}");
+        assert!(row.contains(&format!("  {}", &want[..20])), "{row:?}");
+        assert!(!row.contains("last saved"), "{row:?}");
+        let x = row[..row.find("couldn't").unwrap()].chars().count() as u16;
+        assert_eq!(
+            buf[(x, y)].fg,
+            crate::ui::chrome::MAGENTA,
+            "the warning's colour"
+        );
+        // The second press goes on, without saving.
+        assert!(matches!(
+            p.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Switch { .. }
+        ));
+        assert_eq!(st.run, None, "the run is left");
+        assert_eq!(std::fs::read(&path).unwrap(), before, "the old save stands");
+        // LOAD GAME and QUIT GAME the same; SAVE GAME tries every press and says so.
+        st.run = run;
+        for (row, went) in [("LOAD GAME", "a push"), ("QUIT GAME", "a quit")] {
+            let mut p = Pause::new(&st, st.tick);
+            pick(&mut p, &mut st, row);
+            let cmd = p.update(&mut st, &[key(KeyCode::Enter)]);
+            assert!(matches!(cmd, ScreenCmd::Stay), "{row} stays");
+            assert!(status_row(&p, &st).2.contains("couldn't save · "), "{row}");
+            let cmd = p.update(&mut st, &[key(KeyCode::Enter)]);
+            let ok = matches!(
+                (row, cmd),
+                ("LOAD GAME", ScreenCmd::Push { .. }) | ("QUIT GAME", ScreenCmd::Quit)
+            );
+            assert!(ok, "{row}: then {went}");
+        }
+        let mut p = Pause::new(&st, st.tick);
+        pick(&mut p, &mut st, "SAVE GAME");
+        for _ in 0..2 {
+            p.update(&mut st, &[key(KeyCode::Enter)]);
+            assert!(status_row(&p, &st).2.contains("couldn't save · "));
+        }
+        // A save that goes puts `last saved` back.
+        st.saves = Some(dir.0.clone());
+        p.update(&mut st, &[key(KeyCode::Enter)]);
+        let row = status_row(&p, &st).2;
+        assert!(row.contains("last saved · just now"), "{row:?}");
     }
 
     #[test]

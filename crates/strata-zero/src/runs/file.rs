@@ -87,7 +87,28 @@ fn put(path: &Path, head: &Head, body: &[u8]) -> Result<()> {
         let _ = std::fs::remove_file(&tmp);
         return Err(e).with_context(|| format!("writing {}", tmp.display()));
     }
-    std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))
+    patiently(|| std::fs::rename(&tmp, path)).with_context(|| format!("writing {}", path.display()))
+}
+
+/// How often a refused rename is tried again, and how long apart: on Windows a virus
+/// scanner can hold the file just closed for a moment, and the rename is refused
+/// (access denied, a sharing violation) until it lets go.
+const RENAME_RETRIES: u32 = 2;
+const RENAME_WAIT: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// `rename` run, and while it fails run again, `RENAME_RETRIES` more times at most,
+/// `RENAME_WAIT` apart: its last result.
+fn patiently(mut rename: impl FnMut() -> std::io::Result<()>) -> std::io::Result<()> {
+    let mut retries = 0;
+    loop {
+        match rename() {
+            Err(_) if retries < RENAME_RETRIES => {
+                retries += 1;
+                std::thread::sleep(RENAME_WAIT);
+            }
+            done => return done,
+        }
+    }
 }
 
 /// The header's length, once the preamble says this is a run this build reads.
@@ -498,6 +519,40 @@ mod tests {
             born: 0,
         });
         s
+    }
+
+    #[test]
+    fn a_refused_rename_is_tried_again() {
+        let refused = || std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        // Held for two tries, then let go: it goes.
+        let mut tries = 0;
+        let went = patiently(|| {
+            tries += 1;
+            if tries < 3 { Err(refused()) } else { Ok(()) }
+        });
+        assert!(went.is_ok());
+        assert_eq!(tries, 3);
+        // Never let go: three tries, then the refusal.
+        let mut tries = 0;
+        let went = patiently(|| {
+            tries += 1;
+            Err(refused())
+        });
+        assert_eq!(
+            went.unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(tries, 1 + RENAME_RETRIES);
+        // One that goes at once is tried once.
+        let mut tries = 0;
+        assert!(
+            patiently(|| {
+                tries += 1;
+                Ok(())
+            })
+            .is_ok()
+        );
+        assert_eq!(tries, 1);
     }
 
     #[test]

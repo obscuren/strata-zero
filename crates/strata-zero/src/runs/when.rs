@@ -30,25 +30,30 @@ pub fn can_save(st: &AppState) -> bool {
 /// goes up. A write that fails says why in the log and leaves the last save as it was;
 /// the save it was is not asked for again, and the five-minute one waits five minutes.
 pub fn save_now(st: &mut AppState) -> bool {
+    matches!(try_save(st), Some(Ok(())))
+}
+
+/// `save_now`, saying how it went: `None` when the run can't be saved right now (nothing
+/// was tried), else the write, and why it failed when it did (the log says so too).
+pub fn try_save(st: &mut AppState) -> Option<Result<(), String>> {
     if !can_save(st) {
-        return false;
+        return None;
     }
-    let Some(dir) = st.saves.clone() else {
-        return false;
-    };
+    let dir = st.saves.clone()?;
     st.save_due = false;
     match file::write(&dir, st) {
         Ok(_) => {
             st.last_save = Some((st.tick, SystemTime::now()));
             st.save_failed = None;
-            true
+            Some(Ok(()))
         }
         Err(e) => {
             st.save_failed = Some(st.tick);
             // The cause underneath (`Permission denied (os error 13)`), not the step
             // that met it.
-            st.warn(format!("couldn't save · {}", e.root_cause()));
-            false
+            let why = e.root_cause().to_string();
+            st.warn(format!("couldn't save · {why}"));
+            Some(Err(why))
         }
     }
 }
