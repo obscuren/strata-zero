@@ -3923,3 +3923,45 @@ fn outside_shots() {
         shot_stack(name, &st, &[&s], (120, 40));
     }
 }
+
+/// POIs one level down (#17): the truck stop by day and by night, a checkpoint, a camp
+/// at night and a rig, on the seed-8 large city's world, standing on each.
+#[test]
+#[ignore]
+fn poi_shots() {
+    use crate::outside::At;
+    use crate::screens::outside::OutsideScreen;
+    use citygen::overworld::PoiKind;
+    let city = Generator::run(GenParams {
+        seed: 8,
+        size: SizePreset::Large,
+        districts: 7,
+        ..Default::default()
+    })
+    .unwrap();
+    for (name, kind, minute) in [
+        ("poi_truck_stop_day", PoiKind::TruckStop, 13 * 60),
+        ("poi_truck_stop_night", PoiKind::TruckStop, 22 * 60),
+        ("poi_checkpoint", PoiKind::Checkpoint, 13 * 60),
+        ("poi_camp_night", PoiKind::Camp, 22 * 60),
+        ("poi_rig", PoiKind::Rig, 13 * 60),
+        ("poi_solar", PoiKind::Solar, 13 * 60),
+        ("poi_water_plant", PoiKind::WaterPlant, 13 * 60),
+    ] {
+        let mut st = AppState::new();
+        st.enter_city_at(city.clone(), minute);
+        st.character = game::Character::debug_runner(&st.content);
+        st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
+        crate::outside::ensure(&mut st);
+        let o = st.outside.as_ref().unwrap();
+        let Some(poi) = o.world().pois.iter().find(|p| p.kind == kind).cloned() else {
+            eprintln!("{name}: none in this world");
+            continue;
+        };
+        st.outside.as_mut().unwrap().at = At::Overworld(poi.at);
+        let mut s = OutsideScreen::new(&mut st);
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        s.update(&mut st, &[]);
+        shot_stack(name, &st, &[&s], (120, 40));
+    }
+}
