@@ -2,7 +2,7 @@
 //! or two for loops, two or three roads off the map's edge), each link pathfound across
 //! the land so it bends round hills and water.
 
-use super::field::{s, sdist};
+use super::field::{length, s, sdist};
 use super::{Ctx, Ground, LINK_E, LINK_N, LINK_S, LINK_W, Route, Water, link_toward};
 use crate::geom::{Dir, Pos};
 use crate::params::GenError;
@@ -177,7 +177,7 @@ fn chain(ctx: &mut Ctx) {
             };
             let ahead = along[along.len().min(10) - 1];
             let (a, b) = (s(c), s(ahead));
-            let len = (b.0 - a.0).hypot(b.1 - a.1).max(0.001);
+            let len = length(b.0 - a.0, b.1 - a.1).max(0.001);
             leaving.push((i, ((b.0 - a.0) / len, (b.1 - a.1) / len)));
         }
         let mut joined: Vec<usize> = Vec::new();

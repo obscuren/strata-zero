@@ -90,3 +90,40 @@ fn medium_generates_under_two_seconds() {
     .unwrap();
     assert!(t.elapsed().as_secs_f32() < 2.0, "took {:?}", t.elapsed());
 }
+
+/// A city as one number: its strata tile by tile, its buildings, its name.
+fn city_fingerprint(c: &City) -> u64 {
+    let mut h = rng::hash64(c.seed, 0xC17F);
+    let bytes = postcard::to_allocvec(&(&c.strata, &c.buildings, &c.name)).unwrap();
+    for chunk in bytes.chunks(8) {
+        let mut b = [0u8; 8];
+        b[..chunk.len()].copy_from_slice(chunk);
+        h = rng::hash64(h, u64::from_le_bytes(b));
+    }
+    h
+}
+
+/// Players share seeds, so a seed must give the same city on every platform; CI runs
+/// this on macOS, Linux and Windows. A change to the city generator that moves these
+/// moves every shared seed's cities: update the numbers only for a change meant to.
+#[test]
+fn city_fingerprints_are_pinned() {
+    let got: Vec<(u64, u64)> = [(8, SizePreset::Medium), (3, SizePreset::Small)]
+        .into_iter()
+        .map(|(seed, size)| {
+            let c = Generator::run(GenParams {
+                seed,
+                size,
+                districts: 7,
+                ..Default::default()
+            })
+            .unwrap();
+            (seed, city_fingerprint(&c))
+        })
+        .collect();
+    assert_eq!(
+        got,
+        vec![(8, 11999439760483662994), (3, 9183603903408310522)],
+        "a seed no longer gives the city it did"
+    );
+}

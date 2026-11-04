@@ -34,7 +34,7 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
         .find(|(_, p)| wet(*p))
         .or_else(|| scored.first())
     else {
-        return Ok(());
+        return Err(too_few(0));
     };
     // The city spans its shore: its centre sits a little inland, by the water still.
     let sea = distance_field(ctx.size, |p| ctx.tile(p).water == Water::Sea, 20.0);
@@ -61,13 +61,10 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
     let mut cities = vec![(home, HOME_SIZE)];
     loop {
         cities.truncate(1);
-        let fits = |p: Pos, size: f32, placed: &[(Pos, f32)], k: f32| {
-            placed
-                .iter()
-                .all(|(q, qs)| sdist(p, *q) >= (spacing.max(2.4 * size.max(*qs)) * k).min(spacing))
-        };
+        let fits =
+            |p: Pos, placed: &[(Pos, f32)]| placed.iter().all(|(q, _)| sdist(p, *q) >= spacing);
         for size in &middles {
-            if let Some(&(_, p)) = scored.iter().find(|(_, p)| fits(*p, *size, &cities, 1.0)) {
+            if let Some(&(_, p)) = scored.iter().find(|(_, p)| fits(*p, &cities)) {
                 cities.push((p, *size));
             }
         }
@@ -100,6 +97,9 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
         }
         spacing = (spacing * 0.85).max(12.0);
     }
+    if cities.len() < 3 {
+        return Err(too_few(cities.len()));
+    }
     ctx.cities = cities
         .into_iter()
         .enumerate()
@@ -112,6 +112,13 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
         })
         .collect();
     Ok(())
+}
+
+fn too_few(n: usize) -> GenError {
+    GenError::InvalidParams {
+        field: "size",
+        reason: format!("the world has room for {n} cities, it needs at least 3"),
+    }
 }
 
 /// The largest four-connected piece of land a road can cross (anything but sea and peaks).
@@ -237,6 +244,19 @@ mod tests {
             5,
         );
         assert!(home_is_wet(&inland), "inland: home city dry");
+    }
+
+    #[test]
+    fn a_world_with_no_room_for_three_cities_is_refused() {
+        use crate::overworld::{Ctx, Ground};
+        let mut ctx = Ctx::new(
+            WorldParams::default(),
+            crate::flavor::FlavorPack::load("default").unwrap(),
+        );
+        for p in ctx.all() {
+            ctx.tile_mut(p).ground = Ground::Peak;
+        }
+        assert!(super::run(&mut ctx).is_err());
     }
 
     #[test]

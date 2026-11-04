@@ -93,6 +93,15 @@ fn grid(world: &Overworld, style: &StylePack) -> String {
     out
 }
 
+/// `s` safe to put in the page.
+fn esc(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        escape(ch, &mut out);
+    }
+    out
+}
+
 fn summary(world: &Overworld, took: Duration) -> String {
     let mut out = String::new();
     let land = world
@@ -127,7 +136,7 @@ fn summary(world: &Overworld, took: Duration) -> String {
             });
             format!(
                 "<b>{}</b> ({}size {:.1}, {} tiles{})",
-                c.name,
+                esc(&c.name),
                 if c.home { "home, " } else { "" },
                 c.size,
                 tiles,
@@ -163,7 +172,7 @@ fn summary(world: &Overworld, took: Duration) -> String {
                 RegionKind::Flats => "flats",
                 RegionKind::Valley => "valley",
             };
-            format!("{} ({kind})", r.name)
+            format!("{} ({kind})", esc(&r.name))
         })
         .collect();
     let _ = write!(
@@ -171,7 +180,7 @@ fn summary(world: &Overworld, took: Duration) -> String {
         "<p class=note>land {:.0}% · {} rivers · routes: {} · POIs: {} · regions: {}</p>",
         land * 100.0,
         world.rivers.len(),
-        routes.join(", "),
+        esc(&routes.join(", ")),
         pois.join(", "),
         regions.join(", ")
     );
@@ -235,6 +244,15 @@ mod tests {
         assert!(html.contains("seed 0 ·") && html.contains("seed 1 ·"));
         assert!(html.contains(&worlds[1].0.home().name));
         assert!(html.contains("@font-face"));
+    }
+
+    #[test]
+    fn names_are_escaped() {
+        let style = StylePack::load().unwrap();
+        let mut w = Overworld::generate(WorldParams::default()).unwrap();
+        w.cities[0].name = "A<B&C".into();
+        let html = world_sheet(&[(w, std::time::Duration::ZERO)], &style);
+        assert!(html.contains("A&lt;B&amp;C") && !html.contains("A<B&C"));
     }
 
     #[test]

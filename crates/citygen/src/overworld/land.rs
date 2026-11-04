@@ -1,6 +1,6 @@
 //! Stages 1 and 2: the sea and its coast, ridges and elevation.
 
-use super::field::{Fbm, distance_field, poly_dist, s};
+use super::field::{Fbm, cos, distance_field, length, poly_dist, pow_five_quarters, s, sin};
 use super::{Ctx, Ground, Water};
 use crate::geom::{Dir, Pos};
 use crate::params::GenError;
@@ -113,7 +113,7 @@ fn sea(ctx: &mut Ctx) {
             for b in bays.iter().filter(|b| b.side == c.side) {
                 // A rounded inlet: full depth across its middle, closing in at the mouth.
                 let u = ((t - b.t) / (1.6 * b.width)).abs();
-                depth += b.depth * (1.0 - u * u).max(0.0).powf(0.6);
+                depth += b.depth * (1.0 - u * u).max(0.0).sqrt();
             }
             d < depth + j
         });
@@ -186,7 +186,7 @@ fn ridges(ctx: &mut Ctx) {
             let pts = walk(ctx, &mut rng, &land, &far, min_in, (sw, sh));
             let length: f32 = pts
                 .windows(2)
-                .map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1))
+                .map(|w| length(w[1].0 - w[0].0, w[1].1 - w[0].1))
                 .sum();
             if length >= 30.0 {
                 ctx.ridges.push(pts);
@@ -243,7 +243,7 @@ fn walk(
         let mut next = None;
         for turn in [0.0, 0.5, -0.5, 1.0, -1.0] {
             let h = heading + turn;
-            let q = (at.0 + h.cos() * step, at.1 + h.sin() * step);
+            let q = (at.0 + cos(h) * step, at.1 + sin(h) * step);
             if open(q) {
                 heading = h;
                 next = Some(q);
@@ -277,7 +277,7 @@ fn elevation(ctx: &mut Ctx) {
         let m = ctx
             .ridges
             .iter()
-            .map(|r| (1.0 - poly_dist(warped, r) / width).max(0.0).powf(1.2))
+            .map(|r| pow_five_quarters((1.0 - poly_dist(warped, r) / width).max(0.0)))
             .fold(0.0f32, f32::max);
         // Ridged detail: crests and gullies inside the range instead of even bands.
         let ridged = 1.0 - (2.0 * detail.at(sp.0 / 9.0, sp.1 / 9.0, 4) - 1.0).abs();

@@ -1,6 +1,6 @@
 //! Stage 3: rivers from the ridges down to the sea (or a lake inland), and lakes.
 
-use super::field::{poly_dist, s, sdist};
+use super::field::{length, poly_dist, s, sdist};
 use super::{Ctx, Ground, Water, link_toward};
 use crate::geom::Pos;
 use crate::params::GenError;
@@ -14,8 +14,7 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
         .params
         .knobs
         .rivers
-        .unwrap_or_else(|| rng.random_range(1..=3))
-        .max(1);
+        .unwrap_or_else(|| rng.random_range(1..=3));
     // An inland world drains into a lake made for it.
     if ctx.sea_sides.is_empty() {
         let at = low_spot(ctx, &mut rng);
@@ -92,11 +91,12 @@ fn low_spot(ctx: &Ctx, rng: &mut ChaCha8Rng) -> Pos {
 /// An irregular lake round `at`, radii in s-units; never over the sea.
 fn lake(ctx: &mut Ctx, rng: &mut ChaCha8Rng, at: Pos, rx: (f32, f32), ry: (f32, f32)) {
     let (rx, ry) = (rng.random_range(rx.0..rx.1), rng.random_range(ry.0..ry.1));
-    let shape = ctx.fbm(1102 + rng.random_range(0..1000));
+    // Its own band of noise salts, clear of every other stage's.
+    let shape = ctx.fbm(0x1A4E_0000 + rng.random_range(0..1000));
     let (cx, cy) = s(at);
     for p in ctx.all() {
         let (x, y) = s(p);
-        let d = ((x - cx) / rx).hypot((y - cy) / ry) + 0.9 * (shape.at(x / 2.0, y / 2.0, 2) - 0.5);
+        let d = length((x - cx) / rx, (y - cy) / ry) + 0.9 * (shape.at(x / 2.0, y / 2.0, 2) - 0.5);
         if d < 1.0 && ctx.tile(p).water != Water::Sea && ctx.tile(p).ground != Ground::Peak {
             let t = ctx.tile_mut(p);
             t.water = Water::Lake;
@@ -301,7 +301,7 @@ fn smooth(ctx: &Ctx, route: &[Pos]) -> Vec<Pos> {
     let mut along = 0.0f32;
     for w in pts.windows(2) {
         let (a, b) = (w[0], w[1]);
-        let len = (b.0 - a.0).hypot(b.1 - a.1).max(0.001);
+        let len = length(b.0 - a.0, b.1 - a.1).max(0.001);
         let (nx, ny) = (-(b.1 - a.1) / len, (b.0 - a.0) / len);
         let n = (len * 3.0).ceil() as usize;
         for k in 0..n {
@@ -434,6 +434,20 @@ mod tests {
                 assert!(ends_wet, "seed {seed}: river ends dry at {end:?}");
             }
         }
+    }
+
+    #[test]
+    fn the_rivers_knob_can_ask_for_none() {
+        let w = gen_with(
+            Knobs {
+                rivers: Some(0),
+                sea_sides: Some(1),
+                ..Default::default()
+            },
+            3,
+        );
+        assert!(w.rivers.is_empty());
+        assert_eq!(w.tiles.count(|t| t.water == Water::River), 0);
     }
 
     #[test]

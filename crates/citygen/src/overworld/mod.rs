@@ -250,6 +250,9 @@ pub struct Overworld {
     pub tiles: Grid<WorldTile>,
     pub cities: Vec<WorldCity>,
     pub routes: Vec<Route>,
+    /// Each river's course, spring first. A lake made after a river can cover a stretch
+    /// of it; the course keeps those tiles so it stays unbroken, and the tile's `water`
+    /// says what is there.
     pub rivers: Vec<Vec<Pos>>,
     pub pois: Vec<Poi>,
     pub regions: Vec<Region>,
@@ -279,6 +282,8 @@ impl Overworld {
         self.pois.iter().find(|poi| poi.at == p)
     }
 
+    /// The home city. `generate` never hands over a world without one (it refuses a
+    /// world with no room for three cities).
     pub fn home(&self) -> &WorldCity {
         self.cities
             .iter()
@@ -475,6 +480,128 @@ fn sweep() {
         }
     }
     assert!(bad.is_empty(), "{} bad worlds: {bad:?}", bad.len());
+}
+
+/// What a world is, as one number: every tile, every path, every name. A shared seed
+/// must give these exact worlds on every platform; CI runs this on macOS, Linux and
+/// Windows. A change to the generator that moves them changes every seed players have
+/// shared: update the numbers only for a change meant to do that.
+#[cfg(test)]
+pub(crate) fn fingerprint(w: &Overworld) -> u64 {
+    use crate::rng::hash64;
+    let mut h = hash64(w.seed, w.size.w as u64 * 1000 + w.size.h as u64);
+    let mut mix = |v: u64| h = hash64(h, v);
+    for (_, t) in w.tiles.iter() {
+        mix(t.water as u64
+            | (t.ground as u64) << 4
+            | (t.elevation as u64) << 8
+            | (t.road as u64) << 16
+            | (t.river as u64) << 20
+            | t.urban.map_or(0, |u| {
+                1 | (u.city as u64) << 1 | (u.density as u64) << 9 | (u.theme as u64) << 17
+            }) << 24);
+    }
+    let mut text = |s: &str| {
+        for b in s.bytes() {
+            mix(b as u64);
+        }
+    };
+    for c in &w.cities {
+        text(&c.name);
+    }
+    for r in &w.routes {
+        text(&r.name);
+    }
+    for p in &w.pois {
+        text(&p.name);
+    }
+    for r in &w.regions {
+        text(&r.name);
+    }
+    for c in &w.cities {
+        mix((c.centre.x as u64) << 32 | c.centre.y as u32 as u64);
+        mix(c.size.to_bits() as u64);
+    }
+    for path in w.routes.iter().map(|r| &r.path).chain(&w.rivers) {
+        for p in path {
+            mix((p.x as u64) << 32 | p.y as u32 as u64);
+        }
+    }
+    for p in &w.pois {
+        mix((p.at.x as u64) << 32 | p.at.y as u32 as u64);
+    }
+    h
+}
+
+#[cfg(test)]
+#[test]
+fn fingerprints_are_pinned() {
+    let cases: [(&str, WorldParams, u64); 6] = [
+        (
+            "medium 0",
+            WorldParams {
+                seed: 0,
+                ..Default::default()
+            },
+            15640384541781154170,
+        ),
+        (
+            "medium 7",
+            WorldParams {
+                seed: 7,
+                ..Default::default()
+            },
+            9491669103315322041,
+        ),
+        (
+            "small 3",
+            WorldParams {
+                seed: 3,
+                size: WorldSize::Small,
+                ..Default::default()
+            },
+            4628389565503748704,
+        ),
+        (
+            "large 11",
+            WorldParams {
+                seed: 11,
+                size: WorldSize::Large,
+                ..Default::default()
+            },
+            16123016668041772331,
+        ),
+        (
+            "two seas 5",
+            WorldParams {
+                seed: 5,
+                knobs: Knobs {
+                    sea_sides: Some(2),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            8436757463699500743,
+        ),
+        (
+            "inland 2",
+            WorldParams {
+                seed: 2,
+                knobs: Knobs {
+                    sea_sides: Some(0),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            1673962362590889612,
+        ),
+    ];
+    let got: Vec<(&str, u64)> = cases
+        .iter()
+        .map(|(what, p, _)| (*what, fingerprint(&Overworld::generate(p.clone()).unwrap())))
+        .collect();
+    let want: Vec<(&str, u64)> = cases.iter().map(|(what, _, f)| (*what, *f)).collect();
+    assert_eq!(got, want, "a seed no longer gives the world it did");
 }
 
 /// A default world with `knobs` forced, for tests.

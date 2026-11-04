@@ -36,7 +36,9 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
         .all()
         .filter(|p| ctx.tile(*p).water == Water::None && ctx.tile(*p).urban.is_none())
         .count();
-    let target = (open / 600).clamp(6, 16);
+    // About one per 600 open tiles; a big world takes more of each kind.
+    let target = (open / 600).max(6);
+    let scale = (open / 6000).max(1);
     let centres: Vec<Pos> = ctx.cities.iter().map(|c| c.centre).collect();
     let dry = |p: Pos| ctx.tile(p).water == Water::None;
     let lowland = |p: Pos| dry(p) && matches!(ctx.tile(p).ground, Ground::Flats | Ground::Scrub);
@@ -94,13 +96,19 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
             && placed.iter().all(|q| sdist(q.at, p) >= 6.0)
     };
     // One of each kind first, so a world shows its variety, then up to each kind's cap.
-    for round in 0..3 {
+    let rounds = PoiKind::ALL
+        .iter()
+        .map(|k| cap(*k) * scale)
+        .max()
+        .unwrap_or(1);
+    for round in 0..rounds {
+        let before = placed.len();
         for (kind, spots) in &candidates {
             if placed.len() >= target {
                 break;
             }
             let have = placed.iter().filter(|q| q.kind == *kind).count();
-            if have > round || have >= cap(*kind) {
+            if have > round || have >= cap(*kind) * scale {
                 continue;
             }
             if let Some(&at) = spots.iter().find(|p| fits(**p, &placed)) {
@@ -110,6 +118,9 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
                     at,
                 });
             }
+        }
+        if placed.len() == before || placed.len() >= target {
+            break;
         }
     }
     ctx.pois = placed;
@@ -160,6 +171,24 @@ fn outside_cities(ctx: &Ctx) -> Vec<Pos> {
 mod tests {
     use crate::overworld::field::sdist;
     use crate::overworld::{Ground, Overworld, PoiKind, Water, WorldParams};
+
+    #[test]
+    fn a_big_world_gets_pois_at_the_same_density() {
+        let w = Overworld::generate(WorldParams {
+            seed: 4,
+            size: crate::overworld::WorldSize::Custom { w: 512, h: 256 },
+            ..Default::default()
+        })
+        .unwrap();
+        let open = w
+            .tiles
+            .count(|t| t.water == Water::None && t.urban.is_none());
+        assert!(
+            w.pois.len() >= open / 1000,
+            "{} POIs on {open} open tiles",
+            w.pois.len()
+        );
+    }
 
     #[test]
     fn every_kind_turns_up_across_worlds() {

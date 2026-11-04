@@ -200,15 +200,15 @@ fn districts(ctx: &mut Ctx, f: &Fields) {
         };
         for p in mine {
             let d = sdist(p, c.centre);
-            let j = (0..seeds.len())
-                .min_by(|a, b| sdist(p, seeds[*a]).total_cmp(&sdist(p, seeds[*b])))
-                .unwrap_or(0);
-            let mut theme = theme_of(j);
+            let mut by_distance: Vec<usize> = (0..seeds.len()).collect();
+            by_distance.sort_by(|a, b| sdist(p, seeds[*a]).total_cmp(&sdist(p, seeds[*b])));
+            let mut theme = theme_of(by_distance[0]);
+            // The core is only the core: past it, the next district out.
             if theme == Theme::CorpCore && d > 0.4 * c.size {
-                theme = theme_of(1 + j % seeds.len().max(2));
-                if theme == Theme::CorpCore {
-                    theme = Theme::OldTown;
-                }
+                theme = by_distance
+                    .get(1)
+                    .map(|j| theme_of(*j))
+                    .unwrap_or(Theme::OldTown);
             }
             if d > 1.3 * c.size {
                 let coarse = Pos::new(p.x / 4, p.y / 2);

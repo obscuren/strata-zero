@@ -55,7 +55,7 @@ pub enum Cmd {
     /// Generate overworlds and write them to one HTML page, to look at in a browser.
     World {
         /// One seed.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "seeds")]
         seed: Option<u64>,
         /// A range of seeds, `A..B` (B excluded); 0..12 when neither is given.
         #[arg(long)]
@@ -94,8 +94,25 @@ pub fn parse_seeds(s: &str) -> Result<Range<u64>> {
                 .trim()
                 .parse()
                 .with_context(|| format!("bad seed `{s}`"))?;
-            Ok(n..n + 1)
+            one_seed(n)
         }
+    }
+}
+
+fn one_seed(n: u64) -> Result<Range<u64>> {
+    let end = n
+        .checked_add(1)
+        .with_context(|| format!("seed {n} is the last there is; use one below it"))?;
+    Ok(n..end)
+}
+
+/// The seeds `strata world` draws: `--seed`, else `--seeds`, else 0..12.
+pub fn seed_range(seed: Option<u64>, seeds: Option<&str>) -> Result<Range<u64>> {
+    match (seed, seeds) {
+        (Some(_), Some(_)) => bail!("--seed and --seeds both given; pick one"),
+        (Some(n), None) => one_seed(n),
+        (None, Some(s)) => parse_seeds(s),
+        (None, None) => Ok(0..12),
     }
 }
 
@@ -253,11 +270,7 @@ pub fn run() -> Result<()> {
             cities,
             out,
         }) => {
-            let range = match (seed, seeds) {
-                (Some(n), _) => n..n + 1,
-                (None, Some(s)) => parse_seeds(&s)?,
-                (None, None) => 0..12,
-            };
+            let range = seed_range(seed, seeds.as_deref())?;
             let size = parse_world_size(&size)?;
             let style = crate::render::style::StylePack::load()?;
             let mut worlds = Vec::new();
@@ -313,6 +326,18 @@ mod tests {
         assert!(parse_seeds("5..2").is_err());
         assert!(parse_seeds("abc").is_err());
         assert!(parse_seeds("3..x").is_err());
+    }
+
+    #[test]
+    fn one_seed_or_a_range_but_not_both() {
+        assert!(
+            Cli::try_parse_from(["strata", "world", "--seed", "1", "--seeds", "0..3"]).is_err()
+        );
+        assert_eq!(seed_range(Some(4), None).unwrap(), 4..5);
+        assert_eq!(seed_range(None, Some("2..5")).unwrap(), 2..5);
+        assert_eq!(seed_range(None, None).unwrap(), 0..12);
+        assert!(seed_range(Some(u64::MAX), None).is_err());
+        assert!(parse_seeds(&u64::MAX.to_string()).is_err());
     }
 
     #[test]

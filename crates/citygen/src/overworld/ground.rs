@@ -1,7 +1,7 @@
 //! Stage 4: ground cover from moisture and the rivers, and the dead ground: a toxic
 //! spill near enough to a city to shape its edge, a salt flat out in the open.
 
-use super::field::{Fbm, distance_field, s, sdist};
+use super::field::{Fbm, distance_field, length, s, sdist};
 use super::{Ctx, Ground, Water};
 use crate::geom::Pos;
 use crate::params::GenError;
@@ -109,7 +109,7 @@ fn patch(
     let centres: Vec<Pos> = ctx.cities.iter().map(|c| c.centre).collect();
     for p in ctx.all() {
         let (x, y) = s(p);
-        let d = ((x - cx) / rx).hypot((y - cy) / ry) + wobble * shape.at(x / scale, y / scale, 3);
+        let d = length((x - cx) / rx, (y - cy) / ry) + wobble * shape.at(x / scale, y / scale, 3);
         let t = ctx.tile(p);
         if d < reach
             && t.water == Water::None
