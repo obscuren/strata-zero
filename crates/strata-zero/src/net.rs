@@ -349,6 +349,9 @@ pub struct NetState {
     /// Every roll comes out this way, for tests.
     #[cfg(test)]
     pub force_roll: Option<u8>,
+    /// Slipstream always sheds (`Some(true)`) or never, for tests.
+    #[cfg(test)]
+    pub force_slip: Option<bool>,
 }
 
 impl Default for NetState {
@@ -381,6 +384,8 @@ impl Default for NetState {
             last_minute: 0,
             #[cfg(test)]
             force_roll: None,
+            #[cfg(test)]
+            force_slip: None,
         }
     }
 }

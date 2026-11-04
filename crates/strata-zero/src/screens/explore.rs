@@ -192,6 +192,8 @@ pub struct MapScreen {
     last_map: Cell<Rect>,
     /// The cord's walk, kept while neither end moves: (from, to, walk).
     cord_walk: RefCell<Option<(Pos, Pos, Vec<Pos>)>>,
+    /// The open Net's traffic: packets hopping node to node along the lanes.
+    traffic: RefCell<crate::render::netlook::packets::Traffic>,
     /// Where the occupants of the floor the player walks stand, keyed by the place
     /// and the world's minute it was worked out for.
     placement: Option<(Place, u64, crate::interiors::Placement)>,
@@ -375,6 +377,7 @@ impl MapScreen {
             cam_ready: false,
             last_map: Cell::new(Rect::new(0, 0, 100, 28)),
             cord_walk: RefCell::new(None),
+            traffic: RefCell::new(Default::default()),
             placement: None,
         }
     }
@@ -1987,7 +1990,8 @@ impl MapScreen {
     /// A step along a lane of the open Net, out of a fight: the lane carries you on to
     /// its next stop. Whether a ride started.
     fn start_ride(&mut self, st: &mut AppState, dir: Dir) -> bool {
-        if st.net.engaged.is_some() {
+        // Riding the lanes is the Data surfer talent's; without it a lane is walked.
+        if st.net.engaged.is_some() || !crate::ride::surfs(st) {
             return false;
         }
         let (Some(city), Some(p)) = (st.city.as_ref(), st.player.as_ref()) else {
@@ -2030,6 +2034,7 @@ impl MapScreen {
             return;
         }
         let map = MapRef::stratum_of(city, StratumKind::Net);
+        let mut ridden = Vec::new();
         while now >= ride.next_at && !ride.path.is_empty() {
             let next = ride.path.remove(0);
             if !map.walkable(next) {
@@ -2038,11 +2043,16 @@ impl MapScreen {
             }
             ride.done.push(player.pos);
             player.pos = next;
+            ridden.push(next);
             ride.next_at += crate::ride::RIDE_TICKS;
         }
         player.update_fov(&map, bonus);
         if !ride.path.is_empty() {
             self.riding = Some(ride);
+        }
+        // Slipstream: each tile ridden, a chance the trace loses some of you.
+        for at in ridden {
+            crate::ride::slipstream(st, at);
         }
     }
 
@@ -3117,9 +3127,35 @@ impl Screen for MapScreen {
         if let Some(o) = atrium.as_ref() {
             overlays.push(o);
         }
+        // The open Net's traffic moves on with the clock round the view.
+        let packets = if self.place == Place::Stratum(StratumKind::Net) {
+            let mut traffic = self.traffic.borrow_mut();
+            if traffic.seed() != city.seed {
+                *traffic = crate::render::netlook::packets::Traffic::new(city.seed);
+            }
+            let net = city.stratum(StratumKind::Net);
+            let tile = |p: Pos| net.and_then(|s| s.tiles.get(p));
+            let view = citygen::Rect::new(
+                origin.x,
+                origin.y,
+                map_area.width as i32,
+                map_area.height as i32,
+            );
+            traffic.advance(
+                |p| tile(p).is_some_and(|t| t.terrain == citygen::Terrain::NetLane),
+                |p| tile(p).is_some_and(|t| matches!(t.feature, Some(citygen::Feature::Node(_)))),
+                city.net.nodes.iter().map(|n| n.cyber),
+                view,
+                st.tick,
+            );
+            traffic.glows(st.tick)
+        } else {
+            Default::default()
+        };
         // The Net's own look, under everything else drawn on it.
         let net_view = crate::render::netlook::NetLookView {
             tick: st.tick,
+            packets,
             tracked: match crate::track::target_now(st) {
                 Some(crate::track::Target::Building(b)) => Some(b),
                 _ => None,
@@ -9202,6 +9238,10 @@ mod tests {
 
     fn on_a_lane(st: &mut AppState, s: &mut MapScreen) -> Vec<Pos> {
         walking(st, s);
+        // Riding is the Data surfer's.
+        st.character
+            .talents
+            .insert(game::TalentId::new("data_surfer"), 1);
         let (from, path) = a_lane_to_ride(st);
         st.player.as_mut().unwrap().body = Some((Place::Stratum(StratumKind::Street), from));
         stand(st, s, Place::Stratum(StratumKind::Net), from);
@@ -9244,6 +9284,70 @@ mod tests {
         }
         assert_eq!(st.player.as_ref().unwrap().pos, *path.last().unwrap());
         assert!(s.riding.is_none(), "it ends at its stop");
+    }
+
+    #[test]
+    fn without_data_surfer_a_lane_is_walked() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let path = on_a_lane(&mut st, &mut s);
+        st.character
+            .talents
+            .remove(&game::TalentId::new("data_surfer"));
+        let from = st.player.as_ref().unwrap().pos;
+        s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        assert_eq!(st.player.as_ref().unwrap().pos, path[0], "one step");
+        assert!(s.riding.is_none(), "no ride");
+        for _ in 0..4 {
+            st.tick += crate::ride::RIDE_TICKS;
+            s.update(&mut st, &[]);
+        }
+        assert_eq!(
+            st.player.as_ref().unwrap().pos,
+            path[0],
+            "and it stays there"
+        );
+        assert_ne!(from, path[0]);
+    }
+
+    #[test]
+    fn slipstream_sheds_trace_while_riding() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let path = on_a_lane(&mut st, &mut s);
+        let b = st.city.as_ref().unwrap().buildings[0].id;
+        st.net.trace(b).heat = 50;
+        // Without Slipstream nothing sheds, whatever the roll.
+        st.net.force_slip = Some(true);
+        s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        for _ in 0..path.len() + 2 {
+            st.tick += crate::ride::RIDE_TICKS;
+            s.update(&mut st, &[]);
+        }
+        assert_eq!(st.net.traces[&b].heat, 50);
+        // With it, a tile that rolls sheds a tenth of every trace on you.
+        st.character
+            .talents
+            .insert(game::TalentId::new("slipstream"), 1);
+        let at = st.player.as_ref().unwrap().pos;
+        assert!(crate::ride::slipstream(&mut st, at));
+        assert_eq!(st.net.traces[&b].heat, 45);
+        assert_eq!(
+            last(&st),
+            Some("slipstream · the trace loses a tenth of you")
+        );
+        st.net.force_slip = Some(false);
+        assert!(!crate::ride::slipstream(&mut st, at));
+        assert_eq!(st.net.traces[&b].heat, 45);
+        // Unforced, about one tile in twenty sheds.
+        st.net.force_slip = None;
+        let hits = (0..2000)
+            .filter(|i| {
+                st.net.trace(b).heat = 200;
+                crate::ride::slipstream(&mut st, Pos::new(at.x + i % 40, at.y + i / 40))
+            })
+            .count();
+        assert!((40..=170).contains(&hits), "{hits} of 2000");
     }
 
     #[test]

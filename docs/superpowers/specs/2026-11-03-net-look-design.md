@@ -120,10 +120,12 @@ District hubs keep double walls in white.
   **Terminals** (`◇`) in their own colour everywhere on the Net, open grid and
   constructs: violet-blue (140,150,255). Other nodes (locks, cameras, ad boards, lamp
   grids, lift controls) in their wall's colour mixed halfway to white.
-- **Packets**: on every straight lane run of 8 tiles or more on screen, a packet: a
-  white bold head on a signal glow, a two-tile tail fading behind it, moving one tile
-  every few ticks along the run and wrapping. Spacing and direction come from the run,
-  so the picture is stable from frame to frame. A look only.
+- **Packets**: a white bold head on a signal glow, a two-tile tail fading behind it,
+  moving one tile every few ticks. A packet leaves a node and runs the lane to another
+  node that lane joins it to (through junctions, never past another node), then picks
+  the next at random, not straight back while it has a choice; packets cross now and
+  then. One node in two round the view sends one. A look only. (Changed 2026-11-04 from
+  one packet per straight run, which ran node to junction: Jeffrey found that awkward.)
 - **You**: `@` in signal, bold.
 
 ### Inside a construct
@@ -179,7 +181,10 @@ District hubs keep double walls in white.
 
 - On the open Net, a step that runs along a lane (from a lane tile, toward a lane tile
   in the same direction) does not stop there: you ride on, a tile at a time, until the
-  next stop.
+  next stop. Riding is the **Data surfer** talent's (ICE tree, the 12-point tier, under
+  Trace eater; 2026-11-04): without it a lane is walked a tile at a time. **Slipstream**
+  below it gives each tile ridden a 5% chance that every trace on you sheds a tenth of
+  its heat.
 - **Stops**: a junction (a lane tile with a lane or gate beside it off the ride's
   line), a hub's gate, a node, the lane's end, the tile before anything that blocks,
   and the lane tile before a construct's gate: a ride never enters a construct; the

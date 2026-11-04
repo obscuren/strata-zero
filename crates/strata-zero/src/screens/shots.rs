@@ -2639,10 +2639,20 @@ fn net_open() {
     let Ok(dir) = std::env::var("SHOT_DIR") else {
         return;
     };
-    let (st, map) = on_the_open_net();
+    let (mut st, mut map) = on_the_open_net();
     for (name, size) in [("net_open", (120, 40)), ("net_open_small", (100, 30))] {
         write_svg(&dir, name, &st, &draw_stack(&st, &[&map], size), false);
     }
+    // The traffic a few tiles on: packets hop node to node along the lanes.
+    pass(&mut st, crate::render::netlook::packets::PACKET_TICKS * 5);
+    map.update(&mut st, &[]);
+    write_svg(
+        &dir,
+        "net_open_later",
+        &st,
+        &draw_stack(&st, &[&map], (120, 40)),
+        false,
+    );
 }
 
 /// Inside the first black construct with a vault (seed 8), standing in its first room
@@ -2723,6 +2733,10 @@ fn net_ride() {
         return;
     };
     let (mut st, mut map) = on_the_open_net();
+    // Riding is the Data surfer's.
+    st.character
+        .talents
+        .insert(game::TalentId::new("data_surfer"), 1);
     stand_in(&mut st, Place::Stratum(StratumKind::Net), Pos::new(199, 61));
     map.cam.snap(Pos::new(199, 61));
     map.update(&mut st, &[key(KeyCode::Char('k'))]);

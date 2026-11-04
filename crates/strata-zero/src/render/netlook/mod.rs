@@ -148,6 +148,8 @@ pub fn node_colour(kind: NodeKind, wall: Rgb, security: Option<u8>, tick: u64) -
 #[derive(Clone, Debug, Default)]
 pub struct NetLookView {
     pub tick: u64,
+    /// The lane tiles the traffic lights this frame (`packets::Traffic::glows`).
+    pub packets: HashMap<Pos, (f32, bool)>,
     pub tracked: Option<BuildingId>,
     pub home: Option<BuildingId>,
     pub watch: HashMap<Pos, IceGrade>,

@@ -1146,7 +1146,7 @@ pub struct Talent {
 /// Slots in every tier of a tree.
 pub const TREE_COLS: usize = 4;
 /// Tiers a tree has at most, so the board fits the smallest deck.
-pub const TREE_TIERS: usize = 5;
+pub const TREE_TIERS: usize = 6;
 
 /// A tree of talents under one attribute: tiers from the first, each a row of
 /// `TREE_COLS` slots, `None` where a slot is empty.

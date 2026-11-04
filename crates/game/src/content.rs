@@ -1174,6 +1174,8 @@ pub fn flag_words(flag: &str) -> Option<&'static str> {
         "deep_dive" => "+2 power to copy · a vault copy makes no heat",
         "black_ice" => "+1 attack damage",
         "null_route" => "the first dump in a construct routes away",
+        "data_surfer" => "ride the data lines: a step along a lane carries you to its stop",
+        "slipstream" => "riding, each tile a 5% chance every trace on you sheds a tenth",
         "deep_end" => {
             "black ICE hits halved · the failsafe waits for an eighth · ten minutes cooling"
         }
@@ -1844,9 +1846,22 @@ mod tests {
                 "{}",
                 t.name
             );
-            assert_eq!(t.talents().count(), 12, "{}", t.name);
+            // ICE runs a tier deeper, with Data surfer and Slipstream.
+            let n = if t.name == "ICE" { 14 } else { 12 };
+            assert_eq!(t.talents().count(), n, "{}", t.name);
         }
-        assert_eq!(c.talents.len(), 60);
+        assert_eq!(c.talents.len(), 62);
+        assert_eq!(
+            c.tree_of(&TalentId::new("data_surfer"))
+                .map(|(t, i, j)| (t.name.as_str(), i, j)),
+            Some(("ICE", 4, 3)),
+            "on the 12-point tier, under Trace eater"
+        );
+        assert_eq!(
+            c.tree_of(&TalentId::new("slipstream"))
+                .map(|(t, i, j)| (t.name.as_str(), i, j)),
+            Some(("ICE", 5, 3))
+        );
         for t in &c.talents {
             assert!(c.tree_of(&t.id).is_some(), "{} in a tree", t.id);
         }
@@ -1938,7 +1953,8 @@ mod tests {
         let mut sixth = vec![None; TREE_COLS];
         sixth[0] = bad.trees[edge].tiers[3][0].take();
         bad.trees[edge].tiers.push(sixth);
-        assert!(err(&bad).contains("6 tiers"), "{}", err(&bad));
+        bad.trees[edge].tiers.push(vec![None; TREE_COLS]);
+        assert!(err(&bad).contains("7 tiers"), "{}", err(&bad));
 
         let mut bad = c.clone();
         bad.trees[edge].tiers[3] = vec![None; TREE_COLS];

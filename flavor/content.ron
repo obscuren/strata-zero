@@ -512,7 +512,8 @@ Content(
         Skill(id: "second_wind", name: "Second wind", attribute: Body, needs: [(Body, 7)], desc: "The point where others stop is where you start."),
     ],
     // Five trees, one per attribute, drawn one at a time on the deck's board. Each tier is
-    // four slots, None where a slot is empty; a capstone sits alone on the fifth. A talent's
+    // four slots, None where a slot is empty; a capstone sits on the last tier (the fifth,
+    // the sixth for ICE, whose Data surfer line runs a tier deeper). A talent's
     // prerequisite sits on a lower tier: straight above, or to the side (the trace runs along
     // its tier, then down), through empty slots only. Flags are promises the combat and shop
     // systems read later. Each talent's icon is in talent_art.ron.
@@ -546,7 +547,8 @@ Content(
                      [Some("deep_dive"), Some("handshake"), Some("arc_welder"), Some("null_route")],
                      [Some("vault_rat"), None, Some("black_ice"), Some("trace_eater")],
                      [None, Some("static_bloom"), None, None],
-                     [None, None, Some("deep_end"), None]]),
+                     [None, None, Some("deep_end"), Some("data_surfer")],
+                     [None, None, None, Some("slipstream")]]),
     ],
     talents: [
         // MEAT
@@ -728,6 +730,12 @@ Content(
         Talent(id: "trace_eater", name: "Trace eater", ranks: 2, requires: Some("null_route"),
                effects: [[Perk(Resist(Feedback, 10))], [Flag("trace_eater")]],
                desc: "The trace comes looking. You have it for lunch."),
+        Talent(id: "data_surfer", name: "Data surfer", ranks: 1, requires: Some("trace_eater"),
+               effects: [[Flag("data_surfer")]],
+               desc: "Your affinity on the net allows you to surf the data lines with greater speed."),
+        Talent(id: "slipstream", name: "Slipstream", ranks: 1, requires: Some("data_surfer"),
+               effects: [[Flag("slipstream")]],
+               desc: "Ride the traffic long enough and the trace loses you in it."),
         Talent(id: "static_bloom", name: "Static bloom", ranks: 2, requires: Some("handshake"), skill: Some("hacking"),
                effects: [[Sharpen(ability: "static", radius: 2)], [Sharpen(ability: "static", cooldown: -60)]],
                desc: "One burst of noise, and every lens in the room forgets."),

@@ -3,9 +3,7 @@
 //! ringed.
 
 use super::plate::{self, Ring};
-use super::{
-    AMBER, NetLookView, Tier, VOID, WHITE, label_for, node_colour, packets, put, security_of,
-};
+use super::{AMBER, NetLookView, Tier, VOID, WHITE, label_for, node_colour, put, security_of};
 use crate::render::Rgb;
 use crate::render::map::{MapRef, TileMap};
 use crate::render::overlay::SIGNAL;
@@ -119,8 +117,7 @@ pub(super) fn draw(
         .map(|n| n.cyber)
         .filter(|h| tiles.grow(14).contains(*h))
         .collect();
-    let lane = |p: Pos| map.tile(p).is_some_and(|t| t.terrain == Terrain::NetLane);
-    let glows = packets::glows(lane, tiles, view.tick);
+    let glows = &view.packets;
     for sy in area.y..area.bottom() {
         for sx in area.x..area.right() {
             let p = screen_to_tile(area, origin, (sx, sy));
