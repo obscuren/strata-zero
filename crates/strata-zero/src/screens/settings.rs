@@ -18,6 +18,7 @@ enum Row {
     Fps,
     Cord,
     Effects,
+    Patrols,
 }
 
 impl Row {
@@ -28,6 +29,7 @@ impl Row {
             Row::Fps => "FPS counter",
             Row::Cord => "Cord on the Net",
             Row::Effects => "Screen effects",
+            Row::Patrols => "Grid patrols",
         }
     }
 }
@@ -56,6 +58,10 @@ impl Settings {
         if st.effects {
             rows.push(Row::Effects);
         }
+        // A dev switch: what patrols the open Net besides tracers.
+        if st.dev_unlocked {
+            rows.push(Row::Patrols);
+        }
         rows
     }
 
@@ -68,6 +74,7 @@ impl Settings {
             Row::Fps => flag(st.show_fps),
             Row::Cord => flag(st.cord),
             Row::Effects => (st.screen_fx.label(), st.screen_fx != ScreenFx::Off),
+            Row::Patrols => (st.grid_patrols.label(), true),
         }
     }
 
@@ -78,6 +85,7 @@ impl Settings {
             Row::Fps => st.show_fps = !st.show_fps,
             Row::Cord => st.cord = !st.cord,
             Row::Effects => st.screen_fx = st.screen_fx.next(),
+            Row::Patrols => st.grid_patrols = st.grid_patrols.next(),
         }
     }
 }
@@ -258,6 +266,18 @@ mod tests {
             text.contains("Screen effects") && text.contains("[ SOFT ]"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn grid_patrols_is_a_dev_row() {
+        let mut st = AppState::new();
+        assert!(!Settings::rows(&st).contains(&Row::Patrols));
+        st.unlock_dev();
+        assert_eq!(Settings::rows(&st).last(), Some(&Row::Patrols));
+        assert_eq!(Settings::get(&st, Row::Patrols).0, "sentinels");
+        Settings::flip(&mut st, Row::Patrols);
+        assert_eq!(st.grid_patrols, crate::grid::Patrols::Sweeps);
+        assert_eq!(Settings::get(&st, Row::Patrols).0, "sweeps");
     }
 
     #[test]

@@ -44,7 +44,9 @@ pub fn tier_on(st: &AppState, b: BuildingId) -> Tier {
         .filter_map(|s| credentials::parse_keycard(&s.item))
         .any(|(cb, _)| cb == b);
     let code = st.journal.codes().iter().any(|c| c.building == b);
-    if key || card || code {
+    // A terminal of the building held from the Net: a user's seat for the hour.
+    let terminal = crate::holds::terminal_held(st, crate::owners::Owner::Building(b));
+    if key || card || code || terminal {
         Tier::User
     } else {
         Tier::Guest
@@ -535,20 +537,34 @@ pub fn boot_lines(
     host: crate::helix::shell::HostId,
     look: &crate::ui::device::Look,
 ) -> Vec<String> {
+    let place = place_label(st, host);
+    look.style
+        .boot
+        .iter()
+        .map(|l| {
+            let mut l = l.replace("{PLACE}", &place).replace("{OS}", &look.os());
+            if l.contains("{HOST}") {
+                l = l.replace("{HOST}", &crate::helix::hosts::hostname(st, host));
+            }
+            if l.contains("{USER}") {
+                l = l.replace("{USER}", &crate::helix::hosts::user_for(st, host));
+            }
+            l
+        })
+        .collect()
+}
+
+/// What a host's machine calls where it stands: the district, the building, your block.
+pub fn place_label(st: &AppState, host: crate::helix::shell::HostId) -> String {
     use crate::helix::shell::HostId;
-    let place = match host {
+    match host {
         HostId::District(d) => district_name(st, d),
         HostId::Building(b) => building_name(st, b),
         HostId::Rig => st.home.as_ref().map_or_else(
             || "ZENBO".to_string(),
             |h| building_name(st, h.home.building),
         ),
-    };
-    look.style
-        .boot
-        .iter()
-        .map(|l| l.replace("{PLACE}", &place).replace("{OS}", &look.os()))
-        .collect()
+    }
 }
 
 #[cfg(test)]

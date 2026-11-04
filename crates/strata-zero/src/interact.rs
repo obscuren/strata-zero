@@ -600,18 +600,33 @@ pub fn run_rows(
     only: Option<&game::ItemId>,
     letters: &mut std::str::Chars,
 ) -> Vec<Choice> {
+    run_rows_at(st, crate::net::Scene::Inside(b), pos, only, letters)
+}
+
+/// `run_rows` where you stand on the Net: in a construct its nodes and ICE in reach
+/// (and the hops off a backdoored server); out on the grid the nodes on or beside your
+/// tile and the ICE in reach, at the open Net's noise.
+pub fn run_rows_at(
+    st: &AppState,
+    scene: crate::net::Scene,
+    pos: Pos,
+    only: Option<&game::ItemId>,
+    letters: &mut std::str::Chars,
+) -> Vec<Choice> {
+    use crate::net::Scene;
     let mut choices = Vec::new();
     let now = st.net.now(st);
-    let security = st.constructs.get(b).map(|k| k.security).unwrap_or(0);
-    for (target, what) in crate::net::targets_near(st, b, pos) {
-        let Some(kind) = crate::net::target_kind(st, b, target) else {
+    for (target, what) in crate::net::targets_at(st, scene, pos) {
+        let Some(kind) = crate::net::kind_at(st, scene, target) else {
             continue;
         };
         let colour = match target {
             game::HackTarget::Node(_) => CYAN,
-            game::HackTarget::Guard { .. } => MAGENTA,
+            game::HackTarget::Guard { .. } | game::HackTarget::Foe(_) => MAGENTA,
             _ => TEXT,
         };
+        let security =
+            crate::net::owner_at(st, scene, target).map_or(0, |o| crate::owners::security(st, o));
         for item in st.character.loaded_programs(&st.content) {
             if only.is_some_and(|id| *id != item.id) {
                 continue;
@@ -632,6 +647,7 @@ pub fn run_rows(
                 continue;
             }
             if spec.op == game::Op::Backdoor
+                && let Scene::Inside(b) = scene
                 && let Some(why) = crate::net::plant_net_refusal(st, b)
             {
                 let mut c = Choice::on(key, verb, what.clone(), colour, Pick::Close)
@@ -647,6 +663,10 @@ pub fn run_rows(
             } else {
                 game::chance(pw, game::difficulty(security))
             };
+            let noise = match scene {
+                Scene::Inside(_) => spec.noise,
+                Scene::Outside => crate::owners::outside_noise(spec.noise),
+            };
             choices.push(
                 Choice::on(
                     key,
@@ -656,17 +676,55 @@ pub fn run_rows(
                     Pick::Run(item.id.clone(), target),
                 )
                 .tail(format!(
-                    " · {odds}% · {} turn{} · noise {}",
+                    " · {odds}% · {} turn{} · noise {noise}",
                     spec.work,
                     if spec.work == 1 { "" } else { "s" },
-                    spec.noise
                 )),
             );
         }
     }
-    choices.extend(hop_rows(st, b, pos, letters));
+    if let Scene::Inside(b) = scene {
+        choices.extend(hop_rows(st, b, pos, letters));
+    }
     choices
 }
+
+/// The verbs of the held node nearest you, on their own keys: `Loop: camera ·
+/// Kiroflux Mart`, the hour's time left on the first.
+pub fn verb_rows(st: &AppState) -> Vec<Choice> {
+    let Some((node, _)) = crate::holds::nearest(st) else {
+        return Vec::new();
+    };
+    let Some(city) = st.city.as_ref() else {
+        return Vec::new();
+    };
+    let n = city.net.node(node);
+    let what = match n.building {
+        Some(b) => format!("{} · {}", n.kind.label(), crate::net::building_name(st, b)),
+        None => n.kind.label().to_string(),
+    };
+    let now = st.net.now(st);
+    let left = crate::holds::held(st, node, now).map_or(0, |h| h.until - now);
+    crate::holds::verbs_of(st, node)
+        .into_iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let label = match v {
+                crate::holds::Verb::Tap if st.net.feed == Some(node) => "Close feed".to_string(),
+                _ => capitalised(v.label()),
+            };
+            let row = Choice::on(v.key(), label, what.clone(), HELD, Pick::Verb(v.key()));
+            if i == 0 {
+                row.tail(format!(" · held {left}m"))
+            } else {
+                row
+            }
+        })
+        .collect()
+}
+
+/// A held node's rows, green as its dock.
+const HELD: Color = crate::holds::HELD_FG;
 
 /// On the server of a construct you hold a backdoor on: `Hop: <building>` to every
 /// other backdoor's gate. A street run has no way home, so its rows are greyed.

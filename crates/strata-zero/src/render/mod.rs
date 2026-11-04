@@ -3,6 +3,7 @@
 pub mod atrium;
 pub mod bots;
 pub mod cord;
+pub mod feed;
 pub mod fx;
 pub mod ghost;
 pub mod glyphs;

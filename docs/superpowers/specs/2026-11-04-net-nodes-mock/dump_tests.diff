@@ -1,0 +1,164 @@
+diff --git a/crates/strata-zero/src/screens/shots.rs b/crates/strata-zero/src/screens/shots.rs
+index 1c34268..4234917 100644
+--- a/crates/strata-zero/src/screens/shots.rs
++++ b/crates/strata-zero/src/screens/shots.rs
+@@ -2745,3 +2745,159 @@ fn net_cord() {
+         false,
+     );
+ }
++
++// THROWAWAY (slice 2 mockups): Kiroflux Mart's construct beside its camera, the
++// street round the camera at night, and a dump of both.
++#[test]
++#[ignore]
++fn tmp_slice2() {
++    use citygen::NodeKind;
++    let Ok(dir) = std::env::var("SHOT_DIR") else {
++        return;
++    };
++    let mut st = state_home();
++    let mut map = MapScreen::walking(&mut st);
++    let city = st.city.clone().unwrap();
++    let b = city
++        .buildings
++        .iter()
++        .find(|b| b.name.as_deref() == Some("Kiroflux Mart"))
++        .map(|b| b.id)
++        .unwrap();
++    // The street first: on foot by the camera's anchor.
++    let cam = city
++        .net
++        .nodes
++        .iter()
++        .find(|n| n.building == Some(b) && n.kind == NodeKind::Camera)
++        .unwrap()
++        .clone();
++    let near = (1..6)
++        .flat_map(|r| {
++            let a = cam.anchor.1;
++            (-r..=r).flat_map(move |d| {
++                [
++                    a.offset(d, r),
++                    a.offset(r, d),
++                    a.offset(d, -r),
++                    a.offset(-r, d),
++                ]
++            })
++        })
++        .find(|p| city.walkable(StratumKind::Street, *p))
++        .unwrap();
++    stand_in(&mut st, Place::Stratum(StratumKind::Street), near);
++    st.rain = false;
++    {
++        let p = st.player.as_mut().unwrap();
++        for y in 0..city.size.h as i32 {
++            for x in 0..city.size.w as i32 {
++                p.set_vis(Pos::new(x, y), crate::render::Visibility::Visible);
++            }
++        }
++    }
++    let mut street = MapScreen::walking(&mut st);
++    street.cam.snap(cam.anchor.1);
++    pass(&mut st, 30);
++    street.update(&mut st, &[]);
++    {
++        let p = st.player.as_mut().unwrap();
++        for y in 0..city.size.h as i32 {
++            for x in 0..city.size.w as i32 {
++                p.set_vis(Pos::new(x, y), crate::render::Visibility::Visible);
++            }
++        }
++    }
++    let people = st
++        .world
++        .as_ref()
++        .map(|w| {
++            (cam.anchor.1.x - 20..cam.anchor.1.x + 20)
++                .flat_map(|x| (cam.anchor.1.y - 8..cam.anchor.1.y + 8).map(move |y| Pos::new(x, y)))
++                .filter(|p| w.person_at(*p).is_some())
++                .count()
++        })
++        .unwrap_or(0);
++    eprintln!("people near the camera: {people}");
++    write_svg(
++        &dir,
++        "s2_street",
++        &st,
++        &draw_stack(&st, &[&street], (120, 40)),
++        false,
++    );
++    // Then the construct, beside its camera node.
++    let k = citygen::construct::generate_construct(&city, b).unwrap();
++    {
++        let p = st.player.as_mut().unwrap();
++        p.body = Some((p.place, p.pos));
++        p.place = Place::Stratum(StratumKind::Net);
++        p.pos = crate::constructs::city_gate(&city, b).unwrap();
++    }
++    crate::constructs::enter_construct(&mut st, b).unwrap();
++    map.place = Place::Construct(b);
++    let cam_in = k
++        .nodes
++        .iter()
++        .find(|(id, _)| *id == cam.id)
++        .map(|(_, p)| *p)
++        .unwrap();
++    let here = cam_in
++        .neighbors4()
++        .chain(cam_in.neighbors8())
++        .find(|p| {
++            k.tiles
++                .get(*p)
++                .is_some_and(|t| t.is_walkable() && t.feature.is_none())
++        })
++        .unwrap();
++    stand_in(&mut st, Place::Construct(b), here);
++    map.cam.snap(here);
++    map.update(&mut st, &[]);
++    write_svg(
++        &dir,
++        "s2_inside",
++        &st,
++        &draw_stack(&st, &[&map], (120, 40)),
++        false,
++    );
++    // The building's shell, opened from the Net.
++    let mut term = Terminal::open(&mut st, HostId::Building(b), (Place::Construct(b), here));
++    type_lines(&mut st, &mut term, &["ls", "cat roster"]);
++    st.tick += 10_000;
++    term.update(&mut st, &[]);
++    write_svg(
++        &dir,
++        "s2_shell",
++        &st,
++        &draw_stack(&st, &[&map, &term], (120, 40)),
++        false,
++    );
++    let nodes: Vec<String> = k
++        .nodes
++        .iter()
++        .map(|(id, p)| {
++            format!(
++                "{{\"x\":{},\"y\":{},\"kind\":\"{}\"}}",
++                p.x,
++                p.y,
++                city.net.node(*id).kind.label()
++            )
++        })
++        .collect();
++    let json = format!(
++        "{{\"cam_anchor\":[{},{}],\"street_you\":[{},{}],\"cam_in\":[{},{}],\"you_in\":[{},{}],\"w\":{},\"h\":{},\"nodes\":[{}]}}",
++        cam.anchor.1.x,
++        cam.anchor.1.y,
++        near.x,
++        near.y,
++        cam_in.x,
++        cam_in.y,
++        here.x,
++        here.y,
++        k.size.w,
++        k.size.h,
++        nodes.join(",")
++    );
++    std::fs::write(format!("{dir}/s2_dump.json"), json).unwrap();
++}

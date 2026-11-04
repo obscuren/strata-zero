@@ -141,6 +141,12 @@ pub fn user_for(st: &AppState, id: HostId) -> String {
     }
     match id {
         HostId::Rig => rig_user(st),
+        // A street terminal held from the Net: a user on the district's host.
+        HostId::District(d)
+            if crate::holds::terminal_held(st, crate::owners::Owner::District(d)) =>
+        {
+            "user".to_string()
+        }
         HostId::District(_) => GUEST.to_string(),
         HostId::Building(b) => match tier_on(st, b) {
             Tier::Admin => ROOT.to_string(),
@@ -365,12 +371,14 @@ fn rig_disk(st: &AppState, look: &Look, host: &mut Host) {
 }
 
 fn district_disk(st: &AppState, d: DistrictId, look: &Look, host: &mut Host) {
-    host.users.push(User {
-        name: GUEST.into(),
-        home: "/tmp".into(),
-        display: GUEST.into(),
-        person: None,
-    });
+    for n in [GUEST, "user"] {
+        host.users.push(User {
+            name: n.into(),
+            home: "/tmp".into(),
+            display: n.into(),
+            person: None,
+        });
+    }
     let place = st
         .city
         .as_ref()

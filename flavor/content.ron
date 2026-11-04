@@ -448,7 +448,7 @@ Content(
              desc: "Brute force with manners. Opens anything that answers, loudly."),
         Item(id: "spoof", name: "Spoof", kind: Program, weight: 0.0, value: 200,
              program: Some(Program(op: Spoof, rating: 1, size: 1, noise: 2, work: 2)),
-             desc: "Tells a lock or a lift it already let you through."),
+             desc: "Tells a lock, a lift or a camera it already let you through."),
         Item(id: "blind", name: "Blind", kind: Program, weight: 0.0, value: 120,
              program: Some(Program(op: Blind, rating: 1, size: 1, noise: 2, work: 2)),
              desc: "A camera keeps recording. Just not you."),

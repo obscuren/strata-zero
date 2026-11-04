@@ -114,11 +114,11 @@ def inside():
                     c[0], c[1], c[3] = glyph, AMBER if t == "V" else WHITE, t in "VS"
             if (x, y) in watch:
                 grades = watch[(x, y)]
-                tint = RED if "black" in grades else GREY
+                tint = RED if "black" in grades else MAGENTA
                 c[2] = mix(c[2], tint, 0.45 if tint == RED else 0.3)
     for gd in K["guards"]:
         c = g.c[gd["y"] + oy][gd["x"] + ox]
-        col = RED if gd["grade"] == "black" else GREY
+        col = RED if gd["grade"] == "black" else MAGENTA
         c[0], c[1], c[3] = "◈", col, True
         c[2] = mix(VOID, col, 0.35)
     # Watch ends: a tick where each piece's sight stops.
@@ -225,35 +225,36 @@ def fig(g, title, lines):
                "".join("<li>%s</li>" % html.escape(s) for s in lines)))
 
 
-now = gen.frame("construct_now.svg")
-one = inside()
-two = lane_ride()
-for k, g in (("inside", one), ("ride", two)):
-    open(os.path.join(os.path.dirname(os.path.abspath(OUT)), "frame_%s.html" % k), "w").write(
-        "<style>%s</style>%s" % (term.CSS, term.render(gen.shade(g), 14)))
-css = term.CSS + """
-.opt{border:1px solid #1d2733;border-radius:8px;padding:12px;margin:0 0 22px;background:#0b0f15}
-.opt .hd{font:600 16px system-ui;margin:0 0 8px;color:#e6edf3}
-.opt ul{margin:10px 0 0 18px;padding:0;color:#b8c2cc;font:13.5px/1.5 system-ui}
-"""
-page = ("<style>%s</style><h2>The Net · round 2 · in B</h2>" % css
-        + '<p class="subtitle">Inside a construct with no light rule, and riding a lane. Same frame and data as '
-          "the game (seed 8).</p>"
-        + fig(now, "Now · inside Kirosoft Systems from the gate, light rule on", [
-            "You see the spine and nothing else; the wall mass is a grid of crossings.",
-        ])
-        + fig(one, "1 · Inside, in B · every room and every piece of ICE in view", [
-            "The construct's body takes its security: dark red here (black ICE), green for guarded, and so on; "
-            "rooms are carved out of it and lit by what they hold, cyan; the vault amber.",
-            "You're in the first room, beside its door. The grey ICE at the gate and the black ICE at the vault "
-            "door both stand on the spine; the stretch of spine each one watches is tinted (grey, red).",
-            "With nothing hidden, the run becomes reading the patrols and picking when to cross the spine.",
-            "The card reads the construct and its ICE; the minimap is the construct's plan.",
-        ])
-        + fig(two, "2 · A lane ride · Shift+direction", [
-            "Shift+k on the lane by Kiroflux Mart: you run the lane to the next junction (or gate) in one go.",
-            "Half way: the streak behind you, the stretch ahead lit, the stop marked.",
-            "A ride stops at a junction, a gate, a node on the lane or the lane's end; the open grid stays a walk.",
-        ]))
-open(OUT, "w").write(page)
-print("ok", OUT)
+if __name__ == "__main__":
+    now = gen.frame("construct_now.svg")
+    one = inside()
+    two = lane_ride()
+    for k, g in (("inside", one), ("ride", two)):
+        open(os.path.join(os.path.dirname(os.path.abspath(OUT)), "frame_%s.html" % k), "w").write(
+            "<style>%s</style>%s" % (term.CSS, term.render(gen.shade(g), 14)))
+    css = term.CSS + """
+    .opt{border:1px solid #1d2733;border-radius:8px;padding:12px;margin:0 0 22px;background:#0b0f15}
+    .opt .hd{font:600 16px system-ui;margin:0 0 8px;color:#e6edf3}
+    .opt ul{margin:10px 0 0 18px;padding:0;color:#b8c2cc;font:13.5px/1.5 system-ui}
+    """
+    page = ("<style>%s</style><h2>The Net · round 2 · in B</h2>" % css
+            + '<p class="subtitle">Inside a construct with no light rule, and riding a lane. Same frame and data as '
+              "the game (seed 8).</p>"
+            + fig(now, "Now · inside Kirosoft Systems from the gate, light rule on", [
+                "You see the spine and nothing else; the wall mass is a grid of crossings.",
+            ])
+            + fig(one, "1 · Inside, in B · every room and every piece of ICE in view", [
+                "The construct's body takes its security: dark red here (black ICE), green for guarded, and so on; "
+                "rooms are carved out of it and lit by what they hold, cyan; the vault amber.",
+                "You're in the first room, beside its door. The grey ICE at the gate and the black ICE at the vault "
+                "door both stand on the spine; the stretch of spine each one watches is tinted (grey, red).",
+                "With nothing hidden, the run becomes reading the patrols and picking when to cross the spine.",
+                "The card reads the construct and its ICE; the minimap is the construct's plan.",
+            ])
+            + fig(two, "2 · A lane ride · Shift+direction", [
+                "Shift+k on the lane by Kiroflux Mart: you run the lane to the next junction (or gate) in one go.",
+                "Half way: the streak behind you, the stretch ahead lit, the stop marked.",
+                "A ride stops at a junction, a gate, a node on the lane or the lane's end; the open grid stays a walk.",
+            ]))
+    open(OUT, "w").write(page)
+    print("ok", OUT)

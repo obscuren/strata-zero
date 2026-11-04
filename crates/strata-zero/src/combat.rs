@@ -301,6 +301,30 @@ pub fn attack_ice(st: &mut AppState, b: citygen::BuildingId, i: usize) -> Result
     }
 }
 
+/// The deck's loaded attack at a piece of ICE on the open Net: an action point, the
+/// run started and rolled at once. The program's slot, for the strip's flash.
+pub fn attack_grid(st: &mut AppState, foe: usize) -> Result<usize, String> {
+    let (id, slot) = loaded_attack(st).ok_or_else(|| "no attack loaded".to_string())?;
+    let me = st.player.as_ref().map(|p| p.pos).ok_or("no body")?;
+    if !crate::grid::in_reach(st, me).iter().any(|(i, _)| *i == foe) {
+        return Err("out of reach".to_string());
+    }
+    crate::net::spend_ap(st)?;
+    match crate::net::start_run(st, id, game::HackTarget::Foe(foe)) {
+        Ok(line) => {
+            st.say(line);
+            crate::net::step_run(st);
+            Ok(slot)
+        }
+        Err(why) => {
+            if let Some(e) = st.net.engaged.as_mut() {
+                e.ap = (e.ap + 1).min(crate::net::BASE_AP);
+            }
+            Err(why)
+        }
+    }
+}
+
 /// A foe takes damage; at zero it is down.
 pub(crate) fn wound_foe(st: &mut AppState, foe: usize, damage: u8) {
     let Some(f) = st.foes.get_mut(foe) else {

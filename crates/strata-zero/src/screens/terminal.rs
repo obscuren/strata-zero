@@ -19,6 +19,8 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use std::cell::RefCell;
 
+/// The device style of a shell reached from the Net (`flavor/style.ron`).
+const NET_LOOK: &str = "net";
 /// Ticks the LED stays red after a denial has typed.
 const DENIED_TICKS: u64 = 30;
 const TICKS_PER_SECOND: u64 = 30;
@@ -120,9 +122,51 @@ pub struct Terminal {
 
 impl Terminal {
     /// Powers the terminal on: a boot the first time this tile is used in a session.
+    /// Jacked in, it is no machine but the Net's jack window, whatever host it reaches.
     pub fn open(st: &mut AppState, origin: HostId, key: (Place, Pos)) -> Terminal {
-        let look = Look::pick(st, device_of(origin));
+        let look = if st.player.as_ref().is_some_and(|p| p.jacked_in()) {
+            Look::named(st, NET_LOOK, None, 0)
+        } else {
+            Look::pick(st, device_of(origin))
+        };
         Self::with_look(st, origin, key, look)
+    }
+
+    /// Whether this is the Net's jack window rather than a machine.
+    fn jacked(&self) -> bool {
+        self.look.name == NET_LOOK
+    }
+
+    /// The jack window's edges: the host's place, and who you are there with the hold's
+    /// time left when a held terminal seats you.
+    fn jack_labels(&self, st: &AppState) -> (String, String) {
+        let host = self.shell.host;
+        let place = access::place_label(st, host);
+        let owner = match host {
+            HostId::Building(b) => Some(crate::owners::Owner::Building(b)),
+            HostId::District(d) => Some(crate::owners::Owner::District(d)),
+            HostId::Rig => None,
+        };
+        let now = st.net.now(st);
+        let left = owner.and_then(|o| {
+            st.net
+                .holds
+                .iter()
+                .filter(|h| h.owner == o && now < h.until)
+                .filter(|h| {
+                    st.city.as_ref().is_some_and(|c| {
+                        c.net.nodes.get(h.node.index()).map(|n| n.kind)
+                            == Some(citygen::NodeKind::Terminal)
+                    })
+                })
+                .map(|h| h.until - now)
+                .max()
+        });
+        let right = match left {
+            Some(m) => format!("{} · HELD {}m", self.shell.user, m.max(1)),
+            None => self.shell.user.clone(),
+        };
+        (place, right)
     }
 
     /// Powers on with a given look: logged in on `origin` as your standing allows.
@@ -143,7 +187,14 @@ impl Terminal {
         } else {
             fresh.then(|| {
                 let mut lines = access::boot_lines(st, origin, &look);
-                lines.extend(motd(st, &shell));
+                let mut banner = motd(st, &shell);
+                // Jacked in, the handshake names the host: the machine's own banner (its
+                // maker and model, the place) gives way, its notice stays.
+                if look.name == NET_LOOK {
+                    let place = access::place_label(st, origin);
+                    banner.retain(|l| !l.contains("HELIX/OS") && !l.eq_ignore_ascii_case(&place));
+                }
+                lines.extend(banner);
                 Typing::new(lines, st.tick, look.style.cps)
             })
         };
@@ -451,8 +502,12 @@ impl Screen for Terminal {
             None if self.denied_at.is_some_and(|d| tick <= d + DENIED_TICKS) => Led::Fail,
             None => Led::Idle,
         };
+        let jack = self.jacked().then(|| self.jack_labels(st));
         let buf = f.buffer_mut();
-        let screen = device::crt(buf, r, &self.badge(), led, &self.look);
+        let screen = match &jack {
+            Some((title, right)) => device::jack(buf, r, title, right, led, &self.look),
+            None => device::crt(buf, r, &self.badge(), led, &self.look),
+        };
         // nano or HELIX mail owns the glass while open; the bezel, LED and scanlines stay.
         if let Some(nano) = &self.nano {
             nano.draw(buf, screen, &self.look);
@@ -620,6 +675,46 @@ mod tests {
         citygen::Place::Stratum(StratumKind::Street),
         citygen::Pos { x: 9, y: 9 },
     );
+
+    #[test]
+    fn jacked_in_a_shell_is_the_nets_jack_window() {
+        let (mut st, d, _) = state();
+        // On the street: the district's kiosk, bezel and badge.
+        let mut street = Terminal::open(&mut st, HostId::District(d), KEY_A);
+        st.tick += 10_000;
+        street.update(&mut st, &[]);
+        let text = draw(&street, &st);
+        assert!(
+            text.contains("KIOSK") || text.contains(&street.badge()),
+            "{text}"
+        );
+        assert!(!text.contains("◇ JACK"));
+        // Jacked in: the jack window, the host on its edge, no machine's banner.
+        let p = st.player.as_mut().unwrap();
+        p.body = Some((p.place, p.pos));
+        p.place = Place::Stratum(StratumKind::Net);
+        let mut net = Terminal::open(&mut st, HostId::District(d), KEY_B);
+        st.tick += 10_000;
+        net.update(&mut st, &[]);
+        let text = draw(&net, &st);
+        let place = access::place_label(&st, HostId::District(d));
+        assert!(text.contains(&format!("◇ JACK · {place}")), "{text}");
+        assert!(text.contains("handshake"));
+        assert!(text.contains("esc · back to the grid"));
+        assert!(
+            !text.contains(&street.badge()),
+            "no kiosk on the Net: {text}"
+        );
+        assert!(
+            text.contains("Authorised users only."),
+            "the host's notice stays"
+        );
+        // Esc leaves, as the frame says.
+        assert!(matches!(
+            net.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Pop { .. }
+        ));
+    }
 
     #[test]
     fn the_rig_boots_with_the_new_mail() {

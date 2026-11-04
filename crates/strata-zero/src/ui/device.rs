@@ -259,6 +259,95 @@ impl Look {
     }
 }
 
+/// A shell reached from the Net: no unit, a thin frame in the Net's colour on the dark
+/// glass, the host on its top edge, who you are on the right, the way out below, a
+/// faint lattice behind the text. A refusal turns the frame red while it types. The
+/// glass inside is where `crt` puts it, so a page holds the same lines.
+pub fn jack(buf: &mut Buffer, area: Rect, title: &str, right: &str, led: Led, look: &Look) -> Rect {
+    let glass = look.glass();
+    let edge = match led {
+        Led::Fail => DENY,
+        _ => look.edge(),
+    };
+    let lattice = look
+        .style
+        .edge
+        .unwrap_or(look.accent)
+        .scale(0.18)
+        .to_color();
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            let cell = &mut buf[(x, y)];
+            cell.reset();
+            cell.set_char(' ').set_bg(glass);
+        }
+    }
+    let screen = Rect::new(
+        area.x + 2,
+        area.y + 2,
+        area.width.saturating_sub(4),
+        area.height.saturating_sub(4),
+    );
+    for y in (screen.y..screen.bottom()).step_by(2) {
+        for x in (screen.x + 1..screen.right()).step_by(6) {
+            buf[(x, y)].set_char('·').set_fg(lattice);
+        }
+    }
+    if area.width < 4 || area.height < 3 {
+        return screen;
+    }
+    let (r, b) = (area.right() - 1, area.bottom() - 1);
+    for x in area.x..=r {
+        for y in [area.y, b] {
+            let ch = match (x == area.x, x == r, y == area.y) {
+                (true, _, true) => '┌',
+                (_, true, true) => '┐',
+                (true, _, false) => '└',
+                (_, true, false) => '┘',
+                _ => '─',
+            };
+            buf[(x, y)].set_char(ch).set_fg(edge);
+        }
+    }
+    for y in area.y + 1..b {
+        for x in [area.x, r] {
+            buf[(x, y)].set_char('│').set_fg(edge);
+        }
+    }
+    let mut put = |x: u16, y: u16, s: &str, fg: Color, bold: bool| {
+        for (i, ch) in s.chars().enumerate() {
+            let cx = x + i as u16;
+            if cx >= r {
+                break;
+            }
+            let cell = &mut buf[(cx, y)];
+            cell.set_char(ch).set_fg(fg);
+            if bold {
+                cell.modifier.insert(Modifier::BOLD);
+            }
+        }
+    };
+    let head = format!(" ◇ JACK · {title} ");
+    put(area.x + 2, area.y, &head, edge, true);
+    let right = format!(" {right} ");
+    let rw = right.chars().count() as u16;
+    let at = r.saturating_sub(rw + 1);
+    if at > area.x + 2 + head.chars().count() as u16 {
+        put(at, area.y, &right, JACK_SEAT, false);
+    }
+    put(
+        area.x + 2,
+        b,
+        " esc · back to the grid ",
+        look.text_dim(),
+        false,
+    );
+    screen
+}
+
+/// Who you are on a jacked host, on the window's edge: the held node's green.
+const JACK_SEAT: Color = Color::Rgb(80, 230, 120);
+
 /// The unit: the body, a heavy hairline edge, a badge and an LED.
 pub fn bezel(buf: &mut Buffer, area: Rect, badge: &str, led: Led, look: &Look) {
     if area.width < 6 || area.height < 4 {

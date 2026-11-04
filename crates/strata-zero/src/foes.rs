@@ -45,6 +45,8 @@ pub struct Foe {
     pub chrome: bool,
     /// Read by Deadeye: your chance on it is better for the fight.
     pub marked: bool,
+    /// ICE on the open Net: its grade, role and owner (`grid`).
+    pub ice: Option<crate::grid::GridIce>,
 }
 
 impl Foe {
@@ -66,6 +68,7 @@ impl Foe {
             glyph: '@',
             chrome: true,
             marked: false,
+            ice: None,
         }
     }
 
@@ -87,6 +90,7 @@ impl Foe {
             glyph: '&',
             chrome: true,
             marked: false,
+            ice: None,
         }
     }
 
@@ -103,7 +107,7 @@ impl Foe {
 pub fn blocks_sight(t: &Tile) -> bool {
     matches!(
         t.terrain,
-        Terrain::Wall | Terrain::Door | Terrain::Window | Terrain::Mass
+        Terrain::Wall | Terrain::Door | Terrain::Window | Terrain::Mass | Terrain::NetWall
     )
 }
 
@@ -148,9 +152,15 @@ fn known(st: &AppState, least: Visibility) -> Vec<usize> {
         return Vec::new();
     };
     let vis = p.vis();
+    // On the open Net everything is seen: only pieces near you count.
+    let net = p.place == Place::Stratum(citygen::StratumKind::Net);
     let mut out: Vec<usize> = standing(st, p.place)
         .into_iter()
+        .filter(|i| !net || st.foes[*i].pos.chebyshev(p.pos) <= crate::grid::FIGHT_RADIUS)
         .filter(|i| {
+            if net {
+                return true;
+            }
             vis.get(st.foes[*i].pos).is_some_and(|v| match least {
                 Visibility::Visible => *v == Visibility::Visible,
                 _ => *v != Visibility::Unseen,
@@ -173,9 +183,17 @@ pub fn in_memory(st: &AppState) -> Vec<usize> {
 
 /// Any standing foe of the place hunts.
 pub fn any_hunting(st: &AppState, place: Place) -> bool {
+    // On the open Net only what hunts near you holds a fight.
+    let near = |f: &Foe| {
+        place != Place::Stratum(citygen::StratumKind::Net)
+            || st
+                .player
+                .as_ref()
+                .is_some_and(|p| f.pos.chebyshev(p.pos) <= crate::grid::FIGHT_RADIUS)
+    };
     st.foes
         .iter()
-        .any(|f| f.standing() && f.place == place && f.hunting())
+        .any(|f| f.standing() && f.place == place && f.hunting() && near(f))
 }
 
 /// A foe looks: idle and seeing you, it hunts; hunting and seeing you, it marks
@@ -194,7 +212,23 @@ pub fn look(st: &mut AppState, i: usize) -> bool {
     if foe.down || foe.inert || foe.stunned > 0 || foe.place != me.0 {
         return foe.hunting();
     }
-    if sees(city, foe, me.1) {
+    // A tracer always knows where you are: it follows the trail.
+    if foe.ice.as_ref().is_some_and(crate::grid::GridIce::tracer) && foe.hunting() {
+        st.foes[i].mode = FoeMode::Hunting {
+            seen: me.1,
+            lost: 0,
+        };
+        return true;
+    }
+    let seen = match &foe.ice {
+        // On the open Net a piece only takes you for a threat while you're traced.
+        Some(ice) => {
+            (foe.hunting() || crate::grid::threat(st, ice))
+                && crate::grid::sees(city, foe, me.1, st.net.mask > 0)
+        }
+        None => sees(city, foe, me.1),
+    };
+    if seen {
         st.foes[i].mode = FoeMode::Hunting {
             seen: me.1,
             lost: 0,
@@ -206,11 +240,17 @@ pub fn look(st: &mut AppState, i: usize) -> bool {
 
 /// Every standing foe on the player's map looks; true when any hunts.
 pub fn look_all(st: &mut AppState) -> bool {
-    let Some(place) = st.player.as_ref().map(|p| p.place) else {
+    let Some((place, me)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
         return false;
     };
+    // On the open Net only the pieces near you count: one hunting across the city
+    // doesn't put you on turns.
+    let net = place == Place::Stratum(citygen::StratumKind::Net);
     let mut any = false;
     for i in standing(st, place) {
+        if net && st.foes[i].pos.chebyshev(me) > crate::grid::FIGHT_RADIUS {
+            continue;
+        }
         any |= look(st, i);
     }
     any
@@ -318,7 +358,16 @@ pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate
     let Some(city) = st.city.as_ref() else {
         return Step::Nothing;
     };
-    let in_reach = foe.pos.chebyshev(me) <= weapon_range(st, &foe)
+    // ICE on the grid hits from beside you, by its grade.
+    if foe.ice.is_some() && foe.pos.chebyshev(me) <= 1 {
+        if can_hit {
+            crate::grid::hit(st, i);
+            return Step::Hit;
+        }
+        return Step::Nothing;
+    }
+    let in_reach = foe.ice.is_none()
+        && foe.pos.chebyshev(me) <= weapon_range(st, &foe)
         && line_clear(city, foe.place, foe.pos, me)
         && sees(city, &foe, me);
     // In reach it fires, and with its shots gone it holds where it stands: no
@@ -384,10 +433,13 @@ pub fn lines(st: &AppState, seen: impl Fn(Pos) -> bool) -> Vec<String> {
     let Some(p) = st.player.as_ref() else {
         return Vec::new();
     };
+    // On the open Net only the pieces near you.
+    let net = p.place == Place::Stratum(citygen::StratumKind::Net);
     let mut foes: Vec<&Foe> = st
         .foes
         .iter()
         .filter(|f| f.standing() && f.place == p.place && seen(f.pos))
+        .filter(|f| !net || f.pos.chebyshev(p.pos) <= crate::grid::FIGHT_RADIUS)
         .collect();
     foes.sort_by_key(|f| f.pos.chebyshev(p.pos));
     foes.into_iter()

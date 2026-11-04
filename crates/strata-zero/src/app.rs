@@ -109,6 +109,8 @@ pub struct AppState {
     pub constructs: crate::constructs::Constructs,
     /// The Net's state: traces, hacks, backdoors, cooling, the program in flight.
     pub net: crate::net::NetState,
+    /// What patrols the open Net besides tracers: a dev switch in Settings.
+    pub grid_patrols: crate::grid::Patrols,
     /// Your backdoors, the route of a rig run, the trace home and the raid.
     pub backdoors: crate::backdoors::Backdoors,
     /// Items lying in the city.
@@ -303,6 +305,7 @@ impl AppState {
             interiors: Default::default(),
             constructs: Default::default(),
             net: Default::default(),
+            grid_patrols: Default::default(),
             backdoors: Default::default(),
             ground: game::Ground::default(),
             fx: Vec::new(),

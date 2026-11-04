@@ -72,6 +72,13 @@ pub enum Pick {
     JackOutAsk,
     /// Hops from a server to another backdoor's gate.
     Hop(citygen::BuildingId),
+    /// Uses the verb on this key of the held node nearest you.
+    Verb(char),
+    /// Puts a line on a held ad board's building's ads.
+    Hijack {
+        node: citygen::NodeId,
+        line: crate::holds::Line,
+    },
     /// A fixer's offer, in place of their window.
     Offer(crate::jobs::JobId),
     /// Takes the offered job.
@@ -258,7 +265,7 @@ pub(crate) fn wrapped_rows(line: &Line<'_>, width: usize) -> usize {
     rows
 }
 pub(crate) const MIN_W: u16 = 40;
-const MAX_W: u16 = 60;
+const MAX_W: u16 = 68;
 
 pub struct Popup {
     /// None: the top border is blank.
@@ -618,6 +625,22 @@ impl Popup {
                 )),
                 fx: TransitionKind::None,
             },
+            Pick::Verb(key) => match verb_opens(st, key) {
+                Some(to) => ScreenCmd::Replace {
+                    to,
+                    fx: TransitionKind::None,
+                },
+                None => ScreenCmd::Pop {
+                    fx: TransitionKind::None,
+                },
+            },
+            Pick::Hijack { node, line } => {
+                let said = crate::holds::hijack(st, node, line);
+                st.say(said);
+                ScreenCmd::Pop {
+                    fx: TransitionKind::None,
+                }
+            }
             Pick::Terminal { origin, key } => ScreenCmd::Replace {
                 to: Box::new(crate::screens::terminal::Terminal::open(st, origin, key)),
                 fx: TransitionKind::None,
@@ -1000,6 +1023,45 @@ impl Screen for Popup {
                 let bar = Rect::new(r.x + 1, rows.y, r.width - 2, rows.height);
                 self.draw_rows(st, rows, bar, buf);
             }
+        }
+    }
+}
+
+/// A held node's verb, by its key: a line logged, or the screen it opens (a held
+/// terminal's shell, an ad board's hijack picker). A refusal is warned.
+pub fn verb_opens(st: &mut AppState, key: char) -> Option<Box<dyn crate::app::Screen>> {
+    use crate::holds::VerbDone;
+    match crate::holds::use_verb(st, key) {
+        Ok(VerbDone::Said(line)) => {
+            st.say(line);
+            None
+        }
+        Ok(VerbDone::Shell(host, at)) => Some(Box::new(crate::screens::terminal::Terminal::open(
+            st, host, at,
+        ))),
+        Ok(VerbDone::Pick(node)) => {
+            let b = st
+                .city
+                .as_ref()
+                .and_then(|c| c.net.nodes.get(node.index()))
+                .and_then(|n| n.building)?;
+            let choices = crate::holds::hijack_lines(st, b)
+                .into_iter()
+                .map(|(line, text)| {
+                    Choice::on(
+                        line.key(),
+                        line.label(),
+                        text,
+                        crate::ui::chrome::MAGENTA,
+                        Pick::Hijack { node, line },
+                    )
+                })
+                .collect();
+            Some(Box::new(Popup::verbs("HIJACK", choices, st.tick)))
+        }
+        Err(why) => {
+            st.warn(why);
+            None
         }
     }
 }

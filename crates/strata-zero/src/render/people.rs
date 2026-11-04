@@ -82,12 +82,21 @@ impl Overlay for PeopleOverlay<'_> {
             if seen != Visibility::Visible {
                 continue;
             }
-            let fg = if f.stunned > 0 {
-                Rgb(255, 80, 80).scale(0.5).to_color()
-            } else {
-                FOE
+            // ICE on the grid in its grade's colour, as in a construct.
+            let fg = match (&f.ice, f.stunned > 0) {
+                (Some(ice), stunned) => {
+                    let c = crate::render::netlook::ice_colour(ice.grade, tick);
+                    if stunned { c.scale(0.5) } else { c }.to_color()
+                }
+                (None, true) => Rgb(255, 80, 80).scale(0.5).to_color(),
+                (None, false) => FOE,
             };
             cell.set_char(f.glyph).set_fg(fg);
+            // A grid piece glows in its grade's colour, apart from the nodes around it.
+            if let Some(ice) = &f.ice {
+                let glow = crate::render::netlook::ice_colour(ice.grade, tick).scale(0.32);
+                cell.set_bg(glow.to_color());
+            }
             if f.hunting() {
                 cell.modifier.insert(Modifier::BOLD);
             } else {
