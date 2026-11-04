@@ -33,6 +33,7 @@ mod mail_mark;
 mod messages;
 mod missions;
 mod net;
+mod outside;
 mod owners;
 mod render;
 mod rest;
