@@ -40,6 +40,7 @@ pub fn region(world: &Overworld, x0: i32, y0: i32, w: u32, h: u32) -> Grid<Tile>
     p.rivers();
     p.washes();
     p.shores();
+    p.roads();
     p.crop(x0, y0, w, h)
 }
 
@@ -316,6 +317,72 @@ impl<'a> Patch<'a> {
             .collect();
         for q in banks {
             self.set(q, Terrain::Scrub);
+        }
+    }
+
+    /// Highways: two lanes along each road tile's line (rows or columns 3–4 of the tile,
+    /// so a straight run never winds and every road meets itself at the edge), gravel
+    /// shoulders either side; over water the lanes are a bridge with rails for
+    /// shoulders, over a dry wash the road rides a culvert whose ends show as grates.
+    fn roads(&mut self) {
+        let w = self.world;
+        let mut lanes = Vec::new();
+        for t in self.tiles_in_reach() {
+            let mask = w.tile(t).unwrap().road;
+            if mask != 0 {
+                lanes.extend(centreline(w, t.x, t.y, mask, true, 0));
+            }
+        }
+        let mut deck = Vec::new();
+        self.brush_from(&lanes, 2, |_, q| deck.push(q));
+        let mut on_deck = Grid::filled(self.grid.size(), false);
+        for &q in &deck {
+            if let Some(v) = on_deck.get_mut(self.local(q)) {
+                *v = true;
+            }
+        }
+        let shoulders: Vec<Pos> = deck
+            .iter()
+            .flat_map(|q| q.neighbors8())
+            .filter(|q| self.in_world(*q))
+            .filter(|q| on_deck.get(self.local(*q)) == Some(&false))
+            .collect();
+        for &q in &deck {
+            let lane = if self.wet_at(q) != 0 {
+                Terrain::Bridge
+            } else {
+                Terrain::Road
+            };
+            self.set(q, lane);
+        }
+        // decided before any is set: a shoulder cell is reached from several lane cells
+        let sides: Vec<(Pos, Terrain)> = shoulders
+            .into_iter()
+            .filter_map(|q| {
+                let side = match self.get(q)?.terrain {
+                    _ if self.wet_at(q) != 0 => Terrain::Railing,
+                    Terrain::Wash => Terrain::Grate,
+                    _ => Terrain::Gravel,
+                };
+                Some((q, side))
+            })
+            .collect();
+        for (q, side) in sides {
+            self.set(q, side);
+        }
+    }
+
+    /// Stamps a square brush `width` wide reaching right and down from each of `cells`.
+    fn brush_from(&mut self, cells: &[Pos], width: i32, mut f: impl FnMut(&mut Self, Pos)) {
+        for c in cells {
+            for dy in 0..width {
+                for dx in 0..width {
+                    let p = c.offset(dx, dy);
+                    if self.get(p).is_some() && self.in_world(p) {
+                        f(self, p);
+                    }
+                }
+            }
         }
     }
 
@@ -667,6 +734,161 @@ mod tests {
                         r.count(|t| t.terrain == Terrain::Wash) >= 6,
                         "seed {seed}: the wash breaks at {a:?}-{b:?}"
                     );
+                }
+            }
+        }
+    }
+
+    use crate::overworld::{LINK_E, LINK_N, LINK_S, LINK_W};
+
+    #[test]
+    fn a_straight_highway_is_straight_one_level_down() {
+        let w = Overworld::generate(WorldParams {
+            seed: 0,
+            ..Default::default()
+        })
+        .unwrap();
+        let run: Vec<Pos> = w
+            .tiles
+            .iter()
+            .filter(|(_, t)| t.road == LINK_E | LINK_W && t.water == Water::None)
+            .map(|(p, _)| p)
+            .collect();
+        assert!(run.len() > 10, "{} straight tiles", run.len());
+        for p in run {
+            let g = ground(&w, p.x, p.y);
+            for x in 0..8 {
+                assert_eq!(g[Pos::new(x, 3)].terrain, Terrain::Road, "{p:?} col {x}");
+                assert_eq!(g[Pos::new(x, 4)].terrain, Terrain::Road, "{p:?} col {x}");
+                assert_ne!(g[Pos::new(x, 2)].terrain, Terrain::Road, "{p:?} col {x}");
+                assert_ne!(g[Pos::new(x, 5)].terrain, Terrain::Road, "{p:?} col {x}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_road_meets_itself_across_every_edge() {
+        let ok = |t: Terrain| matches!(t, Terrain::Road | Terrain::Bridge);
+        for seed in 0..6 {
+            let w = Overworld::generate(WorldParams {
+                seed,
+                ..Default::default()
+            })
+            .unwrap();
+            for (p, t) in w.tiles.iter() {
+                if t.road & LINK_E != 0 && w.tile(p.offset(1, 0)).is_some() {
+                    let (a, b) = (ground(&w, p.x, p.y), ground(&w, p.x + 1, p.y));
+                    for y in [3, 4] {
+                        assert!(
+                            ok(a[Pos::new(7, y)].terrain) && ok(b[Pos::new(0, y)].terrain),
+                            "seed {seed} {p:?} row {y}"
+                        );
+                    }
+                }
+                if t.road & LINK_S != 0 && w.tile(p.offset(0, 1)).is_some() {
+                    let (a, b) = (ground(&w, p.x, p.y), ground(&w, p.x, p.y + 1));
+                    for x in [3, 4] {
+                        assert!(
+                            ok(a[Pos::new(x, 7)].terrain) && ok(b[Pos::new(x, 0)].terrain),
+                            "seed {seed} {p:?} col {x}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_bridge_carries_the_road_across_the_whole_river() {
+        let mut bridges = 0;
+        for seed in 0..10 {
+            let w = Overworld::generate(WorldParams {
+                seed,
+                ..Default::default()
+            })
+            .unwrap();
+            for (p, t) in w
+                .tiles
+                .iter()
+                .filter(|(_, t)| t.road != 0 && t.water == Water::River)
+            {
+                let g = ground(&w, p.x, p.y);
+                let lanes: Vec<Pos> = match t.road {
+                    m if m == LINK_E | LINK_W => (0..8)
+                        .flat_map(|x| [Pos::new(x, 3), Pos::new(x, 4)])
+                        .collect(),
+                    m if m == LINK_N | LINK_S => (0..8)
+                        .flat_map(|y| [Pos::new(3, y), Pos::new(4, y)])
+                        .collect(),
+                    _ => continue,
+                };
+                for c in lanes {
+                    assert!(
+                        matches!(g[c].terrain, Terrain::Road | Terrain::Bridge),
+                        "seed {seed} {p:?} {c:?}: {:?}",
+                        g[c].terrain
+                    );
+                }
+                assert!(
+                    g.count(|c| c.terrain == Terrain::Railing) >= 2,
+                    "seed {seed} {p:?}: a bridge has rails"
+                );
+                bridges += 1;
+            }
+        }
+        assert!(bridges >= 3, "{bridges} bridges");
+    }
+
+    #[test]
+    fn a_highway_rides_over_a_wash_on_a_culvert() {
+        let mut seen = 0;
+        for seed in 0..8 {
+            let w = Overworld::generate(WorldParams {
+                seed,
+                ..Default::default()
+            })
+            .unwrap();
+            for (p, _) in w
+                .tiles
+                .iter()
+                .filter(|(_, t)| t.road != 0 && t.wash != 0 && t.water == Water::None)
+            {
+                let g = ground(&w, p.x, p.y);
+                assert!(
+                    g.count(|c| c.terrain == Terrain::Grate) >= 2,
+                    "seed {seed} {p:?}: no culvert"
+                );
+                seen += 1;
+            }
+        }
+        assert!(seen >= 4, "{seen} culverts");
+    }
+
+    #[test]
+    fn a_road_off_the_map_runs_to_the_edge() {
+        for seed in 0..10 {
+            let w = Overworld::generate(WorldParams {
+                seed,
+                ..Default::default()
+            })
+            .unwrap();
+            let (mw, mh) = (w.size.w as i32, w.size.h as i32);
+            for (p, t) in w.tiles.iter() {
+                let g = ground(&w, p.x, p.y);
+                let road = |x: i32, y: i32| {
+                    matches!(g[Pos::new(x, y)].terrain, Terrain::Road | Terrain::Bridge)
+                };
+                if p.x == mw - 1 && t.road & LINK_E != 0 {
+                    assert!(road(7, 3) && road(7, 4), "seed {seed} {p:?}");
+                }
+                if p.x == 0 && t.road & LINK_W != 0 {
+                    assert!(road(0, 3) && road(0, 4), "seed {seed} {p:?}");
+                }
+                if p.y == mh - 1 && t.road & LINK_S != 0 {
+                    assert!(road(3, 7) && road(4, 7), "seed {seed} {p:?}");
+                }
+                if p.y == 0 && t.road & LINK_N != 0 {
+                    assert!(road(3, 0) && road(4, 0), "seed {seed} {p:?}");
                 }
             }
         }
