@@ -42,6 +42,35 @@ pub fn build_city(params: citygen::GenParams) -> anyhow::Result<citygen::City> {
     Ok(citygen::Generator::run(params)?)
 }
 
+/// The home city of the world made from `params`' seed, built on its place in that
+/// world: its block of the overworld is its map, the world's water and roads in it. A
+/// world whose home city doesn't build, or has no flat for the runner, gives way to the
+/// next in the seed's line, so a new game always starts somewhere with its story.
+pub fn build_home(params: citygen::GenParams) -> anyhow::Result<citygen::City> {
+    const TRIES: u64 = 8;
+    let mut last = None;
+    for k in 0..TRIES {
+        let seed = match k {
+            0 => params.seed,
+            _ => citygen::rng::hash64(params.seed, k) % 1_000_000_007,
+        };
+        let world = citygen::overworld::Overworld::generate(crate::outside::world_params(seed))?;
+        let home = world.cities.iter().position(|c| c.home).unwrap_or(0) as u8;
+        let built = build_city(citygen::sited(&world, home, params.clone().with_seed(seed)));
+        match built {
+            Ok(city) if crate::home::HomeRig::find(&city).is_some() => return Ok(city),
+            Ok(_) => last = Some(anyhow::anyhow!("seed {seed}'s home city has no flat")),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| anyhow::anyhow!("no home city built")))
+}
+
+/// A new game's city: a fresh seed's home city, on its site.
+pub fn new_game_city(st: &crate::app::AppState) -> anyhow::Result<citygen::City> {
+    build_home(title::Title::fresh_params(st, st.tick))
+}
+
 /// Puts a built city in place and drops onto its street.
 pub fn enter_built_city(st: &mut crate::app::AppState, city: citygen::City) -> ScreenCmd {
     st.params = city.params.clone();
@@ -55,7 +84,15 @@ pub fn enter_built_city(st: &mut crate::app::AppState, city: citygen::City) -> S
 /// Builds a city from `params` and drops onto its street; a city that fails to build
 /// is a warning and nothing more.
 pub fn start_city(st: &mut crate::app::AppState, params: citygen::GenParams) -> ScreenCmd {
-    match build_city(params) {
+    start_built(st, build_city(params))
+}
+
+/// Drops onto the street of a city just built; one that failed is a warning.
+pub fn start_built(
+    st: &mut crate::app::AppState,
+    built: anyhow::Result<citygen::City>,
+) -> ScreenCmd {
+    match built {
         Ok(city) => enter_built_city(st, city),
         Err(e) => {
             st.warn(e.to_string());
@@ -107,6 +144,77 @@ mod tests {
             first.update(&mut st, &[]),
             ScreenCmd::Switch { .. }
         ));
+    }
+
+    #[test]
+    fn a_home_city_casts_the_whole_story() {
+        // a home city on its site is smaller than a lone large city: it still has the
+        // runner's home and someone for every role the story needs (but a second fixer)
+        for seed in [41u64, 3, 8, 26] {
+            let mut st = AppState::new();
+            let city = super::build_home(st.params.clone().with_seed(seed)).unwrap();
+            st.enter_city(city);
+            assert!(st.home.is_some(), "seed {seed}: no home rig");
+            crate::missions::begin(&mut st);
+            let uncast: Vec<&str> = st
+                .missions
+                .runs
+                .iter()
+                .zip(&st.book.missions)
+                .filter(|(r, _)| r.state == crate::missions::RunState::Uncast)
+                .map(|(_, m)| m.id.as_str())
+                .collect();
+            // a city with one fixer leaves Coz's ledger unplayed, as the story allows
+            let fixers = st
+                .world
+                .as_ref()
+                .unwrap()
+                .people()
+                .iter()
+                .filter(|p| p.profession == "fixer")
+                .count();
+            let allowed: &[&str] = if fixers < 2 { &["ledger"] } else { &[] };
+            assert!(
+                uncast.iter().all(|m| allowed.contains(m)),
+                "seed {seed}: uncast {uncast:?} with {fixers} fixers"
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_game_passes_over_a_world_whose_city_has_no_home() {
+        // seed 60's home city is too small for a megablock, so no flat for the runner:
+        // the new game goes on to the next world in its seed's line
+        let st = AppState::new();
+        let city = super::build_home(st.params.clone().with_seed(60)).unwrap();
+        assert_ne!(city.seed, 60);
+        assert!(crate::home::HomeRig::find(&city).is_some());
+        let again = super::build_home(st.params.clone().with_seed(60)).unwrap();
+        assert_eq!(again.seed, city.seed, "the same line every time");
+    }
+
+    #[test]
+    fn new_game_builds_the_home_city_on_its_site() {
+        // a new game's params, with a fixed seed for the test
+        let st = AppState::new();
+        let city = super::build_home(st.params.clone().with_seed(41)).unwrap();
+        let site = city
+            .params
+            .site
+            .as_ref()
+            .expect("a new game's city has its site");
+        assert_eq!(site.world, crate::outside::world_params(city.seed));
+        let world = citygen::overworld::Overworld::generate(site.world.clone()).unwrap();
+        assert!(
+            world.cities[site.city as usize].home,
+            "the world's home city"
+        );
+        let b = world.city_block(site.city);
+        assert_eq!(
+            (city.size.w, city.size.h),
+            ((8 * b.w) as u32, (8 * b.h) as u32),
+            "its map is its block"
+        );
     }
 }
 

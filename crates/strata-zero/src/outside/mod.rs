@@ -42,14 +42,10 @@ pub struct Outside {
 impl Outside {
     /// The world round `city`, made from its seed, with you in the city.
     pub fn new(city: &City) -> anyhow::Result<Outside> {
-        // the size in tiles, not the preset's name: a run keeps its world when the
-        // presets are retuned
-        let d = WorldParams::default();
-        let citygen::Size { w, h } = d.size.size();
-        let params = WorldParams {
-            seed: city.seed,
-            size: citygen::overworld::WorldSize::Custom { w, h },
-            ..d
+        // a city on its site stands in that world; one from before, in its seed's
+        let params = match &city.params.site {
+            Some(site) => site.world.clone(),
+            None => world_params(city.seed),
         };
         let world = Overworld::generate(params.clone())?;
         Ok(Outside {
@@ -74,9 +70,18 @@ impl Outside {
         }
     }
 
-    /// The overworld tiles the city's map covers: the city's size in tiles, centred on
-    /// the home city's own tiles, inside the world.
+    /// The overworld tiles the city's map covers: for a city on its site, the block it
+    /// was built on; for one from before, the city's size in tiles, centred on the home
+    /// city's own tiles, inside the world.
     pub fn block(&self, city: &City) -> Rect {
+        if let Some(site) = &city.params.site {
+            return Rect::new(
+                site.origin.x.div_euclid(TILE),
+                site.origin.y.div_euclid(TILE),
+                city.size.w as i32 / TILE,
+                city.size.h as i32 / TILE,
+            );
+        }
         let w = self.world();
         let (bw, bh) = (
             city.size.w.div_ceil(TILE as u32) as i32,
@@ -153,6 +158,18 @@ fn street_near(city: &City, cell: Pos) -> Pos {
             .is_some_and(|t| t.is_walkable() && t.building.is_none())
     })
     .unwrap_or(from)
+}
+
+/// A run's world for seed `seed`: the default world, its size kept in tiles rather than
+/// by the preset's name, so a run keeps its world when the presets are retuned.
+pub fn world_params(seed: u64) -> WorldParams {
+    let d = WorldParams::default();
+    let citygen::Size { w, h } = d.size.size();
+    WorldParams {
+        seed,
+        size: citygen::overworld::WorldSize::Custom { w, h },
+        ..d
+    }
 }
 
 /// Detail cells to an overworld tile, each way.
@@ -287,6 +304,69 @@ mod tests {
             ..Default::default()
         })
         .unwrap()
+    }
+
+    /// Seed 3's home city built on its place in its world, once for every test.
+    fn sited() -> &'static City {
+        static CITY: std::sync::OnceLock<City> = std::sync::OnceLock::new();
+        CITY.get_or_init(|| {
+            crate::screens::build_home(GenParams {
+                seed: 3,
+                ..Default::default()
+            })
+            .unwrap()
+        })
+    }
+
+    #[test]
+    fn the_block_is_the_generators() {
+        let city = sited();
+        let o = Outside::new(city).unwrap();
+        let site = city.params.site.as_ref().unwrap();
+        assert_eq!(o.params, site.world, "the city's own world");
+        assert_eq!(o.block(city), o.world().city_block(site.city));
+    }
+
+    #[test]
+    fn walking_off_the_city_the_ground_goes_on() {
+        // the cells along the city's edges are the open ground's own: walk off its map
+        // and the ground goes on as it was
+        let city = sited();
+        let o = Outside::new(city).unwrap();
+        let b = o.block(city);
+        let (w, h) = (city.size.w as i32, city.size.h as i32);
+        let ground = citygen::overworld::detail::region(
+            o.world(),
+            TILE * b.x,
+            TILE * b.y,
+            w as u32,
+            h as u32,
+        );
+        let edge = (0..h)
+            .flat_map(|y| [Pos::new(0, y), Pos::new(w - 1, y)])
+            .chain((0..w).flat_map(|x| [Pos::new(x, 0), Pos::new(x, h - 1)]))
+            .collect::<Vec<_>>();
+        let same = edge
+            .iter()
+            .filter(|p| city.tile(StratumKind::Street, **p).unwrap().terrain == ground[**p].terrain)
+            .count();
+        assert!(
+            same * 10 >= edge.len() * 9,
+            "{same} of {} edge cells are the ground's",
+            edge.len()
+        );
+    }
+
+    #[test]
+    fn an_old_save_keeps_its_block() {
+        // a city from before cities stood in the world has no site: its world comes
+        // from its seed and its block is centred on the home city, as it was
+        let city = medium();
+        assert!(city.params.site.is_none());
+        let o = Outside::new(&city).unwrap();
+        assert_eq!(o.params, world_params(city.seed));
+        let b = o.block(&city);
+        assert_eq!((b.w, b.h), (30, 15));
     }
 
     #[test]

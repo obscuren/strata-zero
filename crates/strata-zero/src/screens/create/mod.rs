@@ -14,7 +14,6 @@ mod summary;
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::render::Rgb;
 use crate::screens::broadcast::Broadcast;
-use crate::screens::title::Title;
 use crate::ui::chrome::{CYAN, CYAN_RGB, DIM, FAINT, MAGENTA, MAGENTA_RGB, RULE, solid};
 use crate::ui::logo::{self, Logo};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -184,7 +183,7 @@ impl Create {
         if st.build.is_none() {
             return ScreenCmd::Stay;
         }
-        match crate::screens::build_city(Title::fresh_params(st, st.tick)) {
+        match crate::screens::new_game_city(st) {
             Ok(city) => ScreenCmd::Push {
                 to: Box::new(Broadcast::new_game(st, city)),
                 fx: TransitionKind::Glitch,
