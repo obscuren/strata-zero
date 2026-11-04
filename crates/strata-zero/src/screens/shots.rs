@@ -1794,6 +1794,30 @@ fn talents_board() {
             shot_stack(&format!("{name}_{w}x{h}"), &st, &[&map, &deck], (w, h));
         }
     }
+    // ICE on the debug runner, every talent at its best: the cursor on Data surfer, and
+    // on Slipstream, which scrolls the board at 100x30.
+    for (name, spot) in [
+        ("talents_board_ice_surfer", (4, 3)),
+        ("talents_board_ice_slipstream", (5, 3)),
+    ] {
+        let mut st = state_home();
+        st.character = game::Character::debug_runner(&st.content);
+        let map = MapScreen::walking(&mut st);
+        let mut deck = Deck::new(st.tick);
+        deck.update(&mut st, &[key(KeyCode::Char('0'))]);
+        deck.talents = TalentsState {
+            tree: 4,
+            spots: vec![(0, 0), (0, 0), (0, 0), (0, 0), spot],
+        };
+        deck.changed = st.tick;
+        st.tick += 200;
+        if st.tick % 90 < 3 {
+            st.tick += 3;
+        }
+        for (w, h) in sizes {
+            shot_stack(&format!("{name}_{w}x{h}"), &st, &[&map, &deck], (w, h));
+        }
+    }
 }
 
 /// Ticks pass on the clock and the world alike.
