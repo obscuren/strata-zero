@@ -169,49 +169,78 @@ fn ridges(ctx: &mut Ctx) {
         return;
     }
     for _ in 0..count {
-        let mut start = land[rng.random_range(0..land.len())];
-        for _ in 0..200 {
-            let p = land[rng.random_range(0..land.len())];
-            let (px, py) = s(p);
-            let inside = px > 0.2 * sw && px < 0.8 * sw && py > 0.2 * sh && py < 0.8 * sh;
-            if inside && far[p] >= min_in && (ctx.sea_sides.is_empty() || far[p] < 0.95) {
-                start = p;
+        // A short walk (it ran into the sea or the edge) starts again elsewhere.
+        for _attempt in 0..12 {
+            let pts = walk(ctx, &mut rng, &land, &far, min_in, (sw, sh));
+            let length: f32 = pts.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum();
+            if length >= 30.0 {
+                ctx.ridges.push(pts);
                 break;
             }
-        }
-        let along = |side: Dir| match side {
-            Dir::N | Dir::S => 0.0,
-            _ => PI / 2.0,
-        };
-        let mut heading = match ctx.sea_sides.first() {
-            Some(side) => along(*side) + if rng.random_bool(0.5) { PI } else { 0.0 },
-            None => rng.random_range(0.0..2.0 * PI),
-        } + rng.random_range(-0.7..0.7);
-        let mut at = s(start);
-        let mut pts = vec![at];
-        let mut length = 0.0;
-        let want = rng.random_range(50.0..90.0);
-        while length < want {
-            let step = rng.random_range(10.0..16.0);
-            heading += rng.random_range(-0.44..0.44);
-            let next = (at.0 + heading.cos() * step, at.1 + heading.sin() * step);
-            let margin = 8.0;
-            if next.0 < margin || next.1 < margin || next.0 >= sw - margin || next.1 >= sh - margin {
-                break;
-            }
-            let tile = Pos::new(next.0 as i32, (next.1 / 2.0) as i32);
-            if ctx.tile(tile).water == Water::Sea {
-                break;
-            }
-            pts.push(next);
-            at = next;
-            length += step;
-        }
-        if pts.len() > 1 {
-            ctx.ridges.push(pts);
         }
     }
     ctx.ridges.sort_by(|a, b| b.len().cmp(&a.len()));
+}
+
+/// One ridge: a wandering walk with momentum from a start well inside the land, roughly
+/// along the coast, turning away from the sea and the map's edge.
+fn walk(
+    ctx: &Ctx,
+    rng: &mut impl Rng,
+    land: &[Pos],
+    far: &super::Grid<f32>,
+    min_in: f32,
+    (sw, sh): (f32, f32),
+) -> Vec<(f32, f32)> {
+    let mut start = land[rng.random_range(0..land.len())];
+    for _ in 0..200 {
+        let p = land[rng.random_range(0..land.len())];
+        let (px, py) = s(p);
+        let inside = px > 0.2 * sw && px < 0.8 * sw && py > 0.2 * sh && py < 0.8 * sh;
+        if inside && far[p] >= min_in && (ctx.sea_sides.is_empty() || far[p] < 0.95) {
+            start = p;
+            break;
+        }
+    }
+    let along = |side: Dir| match side {
+        Dir::N | Dir::S => 0.0,
+        _ => PI / 2.0,
+    };
+    let mut heading = match ctx.sea_sides.first() {
+        Some(side) => along(*side) + if rng.random_bool(0.5) { PI } else { 0.0 },
+        None => rng.random_range(0.0..2.0 * PI),
+    } + rng.random_range(-0.7..0.7);
+    let mut at = s(start);
+    let mut pts = vec![at];
+    let mut length = 0.0;
+    let want = rng.random_range(50.0..90.0);
+    let margin = 8.0;
+    let open = |q: (f32, f32)| {
+        q.0 >= margin
+            && q.1 >= margin
+            && q.0 < sw - margin
+            && q.1 < sh - margin
+            && ctx.tile(Pos::new(q.0 as i32, (q.1 / 2.0) as i32)).water != Water::Sea
+    };
+    while length < want {
+        let step = rng.random_range(10.0..16.0);
+        heading += rng.random_range(-0.44..0.44);
+        let mut next = None;
+        for turn in [0.0, 0.5, -0.5, 1.0, -1.0] {
+            let h = heading + turn;
+            let q = (at.0 + h.cos() * step, at.1 + h.sin() * step);
+            if open(q) {
+                heading = h;
+                next = Some(q);
+                break;
+            }
+        }
+        let Some(q) = next else { break };
+        pts.push(q);
+        at = q;
+        length += step;
+    }
+    pts
 }
 
 fn elevation(ctx: &mut Ctx) {
