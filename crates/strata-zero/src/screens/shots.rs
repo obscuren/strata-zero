@@ -3965,3 +3965,47 @@ fn poi_shots() {
         shot_stack(name, &st, &[&s], (120, 40));
     }
 }
+
+/// The open Net (#18): jacked in beside the truck stop's pump, by day.
+#[test]
+#[ignore]
+fn open_net_shots() {
+    use crate::outside::{At, TILE};
+    use crate::screens::outside::OutsideScreen;
+    use citygen::overworld::PoiKind;
+    let city = Generator::run(GenParams {
+        seed: 8,
+        size: SizePreset::Large,
+        districts: 7,
+        ..Default::default()
+    })
+    .unwrap();
+    let mut st = AppState::new();
+    st.enter_city_at(city, 13 * 60);
+    st.character = game::Character::debug_runner(&st.content);
+    st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
+    crate::outside::ensure(&mut st);
+    let w = st.outside.as_ref().unwrap().world().clone();
+    let poi = w
+        .pois
+        .iter()
+        .find(|p| p.kind == PoiKind::TruckStop)
+        .unwrap()
+        .clone();
+    let o = Pos::new(TILE * (poi.at.x - 3), TILE * (poi.at.y - 3));
+    let g = citygen::overworld::detail::region(&w, o.x, o.y, 7 * TILE as u32, 7 * TILE as u32);
+    let pump = g
+        .iter()
+        .find(|(_, t)| t.feature == Some(citygen::Feature::Furniture(citygen::Furniture::Vending)))
+        .map(|(p, _)| p)
+        .unwrap();
+    let beside = pump
+        .neighbors4()
+        .find(|q| g.get(*q).is_some_and(|t| t.is_walkable()))
+        .unwrap();
+    st.outside.as_mut().unwrap().at = At::Ground(Pos::new(o.x + beside.x, o.y + beside.y));
+    let mut s = OutsideScreen::new(&mut st);
+    s.update(&mut st, &[key(KeyCode::Char(' '))]);
+    s.update(&mut st, &[]);
+    shot_stack("open_net_truck_stop", &st, &[&s], (120, 40));
+}

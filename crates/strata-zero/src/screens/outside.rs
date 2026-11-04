@@ -461,7 +461,7 @@ impl Screen for OutsideScreen {
         let footer = hud::Footer {
             place: where_label(o).to_string(),
             saved: crate::runs::when::marked(st),
-            jacked: false,
+            jacked: o.net.is_some(),
             camera: false,
             overburdened: st.character.overburdened(&st.content),
             trace: None,
