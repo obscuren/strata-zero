@@ -47,6 +47,62 @@ pub fn region(world: &Overworld, x0: i32, y0: i32, w: u32, h: u32) -> Grid<Tile>
     p.crop(x0, y0, w, h)
 }
 
+/// Where you stand coming down onto tile `t`: its road nearest the middle, else the dry
+/// ground nearest the middle.
+pub fn landing(world: &Overworld, t: Pos) -> Option<Pos> {
+    // the tile and the ring round it, and which of its walkable cells join the open (a
+    // pen, a yard or a crater can shut cells away)
+    // (four tiles each way, so a pen or yard bigger than a tile is seen whole)
+    let (ox, oy) = (TILE * (t.x - 4), TILE * (t.y - 4));
+    let n = 9 * TILE as u32;
+    let g = region(world, ox, oy, n, n);
+    let walk = |p: Pos| {
+        g.get(p).is_some_and(|c| {
+            c.is_walkable()
+                && !matches!(
+                    c.terrain,
+                    Terrain::Water | Terrain::Shallows | Terrain::Void
+                )
+        })
+    };
+    let mut open = Grid::filled(g.size(), false);
+    let mut stack: Vec<Pos> = g
+        .iter()
+        .map(|(p, _)| p)
+        .filter(|p| p.x == 0 || p.y == 0 || p.x == n as i32 - 1 || p.y == n as i32 - 1)
+        .filter(|p| walk(*p))
+        .collect();
+    for p in &stack {
+        open[*p] = true;
+    }
+    while let Some(p) = stack.pop() {
+        for q in p.neighbors8() {
+            if walk(q) && !open[q] {
+                open[q] = true;
+                stack.push(q);
+            }
+        }
+    }
+    let mid = Pos::new(4 * TILE + TILE / 2, 4 * TILE + TILE / 2);
+    let nearest = |ok: &dyn Fn(Pos) -> bool, reach: i32| {
+        (0..=reach).find_map(|r| {
+            (-r..=r)
+                .flat_map(|dy| (-r..=r).map(move |dx| (dx, dy)))
+                .filter(|&(dx, dy)| dx.abs().max(dy.abs()) == r)
+                .map(|(dx, dy)| mid.offset(dx, dy))
+                .find(|p| ok(*p))
+        })
+    };
+    let joined = |p: Pos| open.get(p).copied().unwrap_or(false);
+    let road = |p: Pos| joined(p) && g.get(p).is_some_and(|c| c.terrain == Terrain::Road);
+    let spot = nearest(&road, TILE / 2)
+        .or_else(|| nearest(&joined, TILE / 2))
+        .or_else(|| nearest(&joined, TILE + TILE / 2))
+        // the deck of a rig, or ground the sea has shut away: still somewhere to stand
+        .or_else(|| nearest(&walk, TILE + TILE / 2))?;
+    Some(Pos::new(ox + spot.x, oy + spot.y))
+}
+
 /// Whether any water (or its shallows) lies in world-wide `rect` or a cell round it, from
 /// the ground and water alone: what a POI's building is placed by, the same whichever
 /// patch asks.

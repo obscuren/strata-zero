@@ -1,10 +1,10 @@
 //! Moving on the overworld, going down onto a tile and coming back up, on the city's
 //! clock: a step costs the walk across a tile of that ground.
 
-use super::{At, TILE, nearest};
+use super::{At, TILE};
 use crate::app::AppState;
 use citygen::overworld::{Ground, Overworld, Water, detail};
-use citygen::{Dir, Place, Pos, StratumKind, Terrain};
+use citygen::{Dir, Place, Pos, StratumKind};
 
 /// What a step did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,26 +81,9 @@ pub fn down(st: &mut AppState) -> Result<Moved, &'static str> {
     if o.block(city).contains(t) {
         return Ok(Moved::City(o.street_of(city, t)));
     }
-    // the tile and the ring of tiles round it: a tile can be all water one level down
-    // (a coast's shore or a wide river reaching over it), and then the nearest shore
-    let (ox, oy) = (TILE * (t.x - 1), TILE * (t.y - 1));
-    let g = detail::region(o.world(), ox, oy, 3 * TILE as u32, 3 * TILE as u32);
-    let mid = Pos::new(TILE + TILE / 2, TILE + TILE / 2);
-    let on = |want: fn(&citygen::Tile) -> bool, reach: i32| {
-        nearest(mid, reach, |p| g.get(p).is_some_and(want))
-    };
-    let dry = |c: &citygen::Tile| {
-        c.is_walkable()
-            && !matches!(
-                c.terrain,
-                Terrain::Water | Terrain::Shallows | Terrain::Void
-            )
-    };
-    let spot = on(|c| c.terrain == Terrain::Road, TILE / 2)
-        .or_else(|| on(dry, TILE / 2))
-        .or_else(|| on(dry, TILE + TILE / 2))
-        .ok_or("nothing to stand on there")?;
-    let cell = Pos::new(ox + spot.x, oy + spot.y);
+    // the road nearest the middle, else dry ground joined to the open (not shut in a
+    // pen or a crater), else the nearest shore when the tile is under water
+    let cell = detail::landing(o.world(), t).ok_or("nothing to stand on there")?;
     if let Some(o) = st.outside.as_mut() {
         o.at = At::Ground(cell);
     }
@@ -148,6 +131,7 @@ pub fn into_city(st: &mut AppState, cell: Pos) {
 pub(crate) mod tests {
     use super::*;
     use crate::outside::ensure;
+    use citygen::Terrain;
 
     /// The seed-8 medium city with its world, you on the overworld at `tile`.
     pub(crate) fn on_the_world() -> AppState {

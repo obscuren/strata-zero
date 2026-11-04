@@ -9,7 +9,7 @@ use crate::rng::hash64;
 use crate::tile::{Feature, Furniture, Terrain};
 
 /// How far any POI's layout reaches from its tile's middle, in cells each way.
-const REACH: i32 = 40;
+const REACH: i32 = 80;
 
 /// Lays every POI that reaches the patch.
 pub(crate) fn lay(p: &mut Patch) {
@@ -174,6 +174,11 @@ impl Site<'_, '_> {
                         | Terrain::Railing
                         | Terrain::Water
                         | Terrain::Cliff
+                        | Terrain::Wall
+                        | Terrain::Window
+                        | Terrain::Door
+                        | Terrain::Floor
+                        | Terrain::Mass
                 )
             })
     }
@@ -190,6 +195,32 @@ impl Site<'_, '_> {
         if self.open(q) {
             self.p.set_feature(q, f);
         }
+    }
+
+    /// A two-cell gate in `pen`'s fence: on its bottom side near `x`, else its top, on a
+    /// stretch the world has dry and in the world (decided from the overworld's tiles,
+    /// so every patch picks the same).
+    fn gate(&self, pen: Rect, x: i32) -> Rect {
+        let dry = |q: Pos| {
+            let t = Pos::new(q.x.div_euclid(TILE), q.y.div_euclid(TILE));
+            self.p.in_world(q)
+                && self
+                    .world
+                    .tile(t)
+                    .is_some_and(|t| t.water == Water::None && t.river == 0)
+        };
+        let rows = [pen.y + pen.h - 1, pen.y];
+        for y in rows {
+            for d in 0..pen.w - 3 {
+                for gx in [x + d, x - d] {
+                    let ok = gx > pen.x && gx + 1 < pen.x + pen.w - 1;
+                    if ok && dry(Pos::new(gx, y)) && dry(Pos::new(gx + 1, y)) {
+                        return Rect::new(gx, y, 2, 1);
+                    }
+                }
+            }
+        }
+        Rect::new(x, pen.y + pen.h - 1, 2, 1)
     }
 
     /// A fence round `r`, with a gap at `gap` (if any).
@@ -293,7 +324,8 @@ impl Site<'_, '_> {
                     (f.at(u, 11), Feature::Furniture(Furniture::Shelf)),
                 ]
             })
-            .filter(|(q, _)| q.x % 4 != 0)
+            // gaps between the shelves along each aisle (a row on a north-south road)
+            .filter(|(q, _)| (if f.across { q.x } else { q.y }) % 4 != 0)
             .chain([(f.at(store_u + 2, 8), Feature::Furniture(Furniture::Counter))])
             .collect();
         self.room(room, door, &front, &inside);
@@ -333,7 +365,10 @@ impl Site<'_, '_> {
             .unwrap_or("STOP")
             .to_uppercase();
         for (k, ch) in name.chars().take(8).enumerate() {
-            self.put(f.at(41 + k as i32, 2), Feature::Sign(ch));
+            // a letter a cell either way the road runs (a unit is half a row along a
+            // north-south one)
+            let step = if f.across { 1 } else { 2 };
+            self.put(f.at(41 + step * k as i32, 2), Feature::Sign(ch));
         }
         self.put(f.at(43, 0), Feature::Pipe);
         self.put(f.at(43, 1), Feature::Pipe);
@@ -345,14 +380,17 @@ impl Site<'_, '_> {
     fn checkpoint(&mut self, poi: &Poi) {
         for side in [1, -1] {
             let f = Frame::beside(self.world, poi.at, 8, side);
-            let room = f.rect(2, 1, 4, 3);
-            let door = f.at(3, 1);
-            let window = [f.at(4, 1)];
+            // three rows inside either way the road runs (a unit along a north-south road
+            // is half a row)
+            let along = if f.across { 4 } else { 6 };
+            let room = f.rect(2, 1, along, 3);
+            let door = f.at(2 + along / 2, 1);
+            let window = [f.at(2 + along / 2 + 1, 1)];
             self.room(
                 room,
                 door,
                 &window,
-                &[(f.at(3, 2), Feature::Furniture(Furniture::Desk))],
+                &[(f.at(2 + along / 2, 2), Feature::Furniture(Furniture::Desk))],
             );
             self.put(f.at(0, 0), Feature::Lamp);
             self.put(f.at(7, 0), Feature::Camera);
@@ -618,7 +656,7 @@ impl Site<'_, '_> {
             Rect::new(pen.x + 1, pen.y + 1, pen.w - 2, pen.h - 2),
             Terrain::Gravel,
         );
-        let gate = Rect::new(pen.x + 2, pen.y + pen.h - 1, 2, 1);
+        let gate = self.gate(pen, pen.x + 2);
         self.fence(pen, Some(gate));
         for y in (pen.y + 2..pen.y + pen.h - 2).step_by(2) {
             for x in pen.x + 7..pen.x + pen.w - 2 {
@@ -645,10 +683,8 @@ impl Site<'_, '_> {
             })
             .unwrap_or((1, 0));
         let pen = Self::centred(c.offset(-4 * to_water.0, -2 * to_water.1), 22, 9);
-        self.fence(
-            pen,
-            Some(Rect::new(pen.x + pen.w / 2, pen.y + pen.h - 1, 2, 1)),
-        );
+        let gate = self.gate(pen, pen.x + pen.w / 2);
+        self.fence(pen, Some(gate));
         let mut tanks = Vec::new();
         for k in 0..3 {
             let t = Rect::new(pen.x + 2 + 5 * k, pen.y + 2, 3, 2);
@@ -656,28 +692,36 @@ impl Site<'_, '_> {
                 tanks.push(t);
             }
         }
-        let house = Rect::new(pen.x + pen.w - 7, pen.y + pen.h - 5, 6, 4);
+        let house = Rect::new(pen.x + pen.w - 7, pen.y + pen.h - 6, 6, 4);
         self.room(
             house,
-            Pos::new(house.x + 2, house.y),
+            // its door on the yard's open side, toward the gate
+            Pos::new(house.x, house.y + 2),
             &[],
             &[(
                 Pos::new(house.x + 2, house.y + 2),
                 Feature::Furniture(Furniture::Machine),
             )],
         );
-        // the pipe along the tanks and on to the water
+        // the pipe along the tanks (with gaps to walk through) and on to the water from
+        // the house's side that faces it
         let y = pen.y + 5;
-        for x in pen.x + 2..pen.x + pen.w - 7 {
-            self.put(Pos::new(x, y), Feature::Pipe);
-        }
-        let from = Pos::new(c.x, y);
-        for k in 0..14 {
-            let q = from.offset(to_water.0 * k, to_water.1 * k / 2);
-            if self.p.wet_at(q) != 0 {
-                break;
+        for x in pen.x + 2..pen.x + pen.w - 8 {
+            if (x - pen.x) % 4 != 3 {
+                self.put(Pos::new(x, y), Feature::Pipe);
             }
-            self.put(q, Feature::Pipe);
+        }
+        let from = match to_water {
+            (1, _) => Pos::new(house.x + house.w, house.y + 1),
+            (-1, _) => Pos::new(pen.x - 1, y),
+            (_, 1) => Pos::new(house.x + 2, pen.y + pen.h),
+            _ => Pos::new(pen.x + 2, pen.y - 1),
+        };
+        for k in 0..14 {
+            self.put(
+                from.offset(to_water.0 * k, to_water.1 * k / 2),
+                Feature::Pipe,
+            );
         }
         self.put(Pos::new(pen.x, pen.y), Feature::Lamp);
     }
@@ -687,7 +731,8 @@ impl Site<'_, '_> {
     fn test_range(&mut self, poi: &Poi) {
         let c = self.centre(poi);
         let pen = Self::centred(c, 30, 13);
-        self.fence(pen, Some(Rect::new(pen.x + 3, pen.y + pen.h - 1, 2, 1)));
+        let gate = self.gate(pen, pen.x + 3);
+        self.fence(pen, Some(gate));
         for k in 0..4 {
             let x = pen.x + 4 + 7 * k;
             for q in [Pos::new(x, pen.y - 1), Pos::new(x, pen.y + pen.h)] {
@@ -700,7 +745,8 @@ impl Site<'_, '_> {
                 pen.x + 4 + (r % (pen.w as u64 - 8)) as i32,
                 pen.y + 3 + ((r >> 10) % (pen.h as u64 - 6)) as i32,
             );
-            for q in at.neighbors8() {
+            // a rim of rock, open to the east so nobody is shut in a crater
+            for q in at.neighbors8().filter(|q| q.x <= at.x) {
                 if self.open(q) {
                     self.p.set(q, Terrain::Rock);
                 }
@@ -1047,6 +1093,157 @@ mod tests {
             tracked * 10 >= checked * 6,
             "{tracked} of {checked} relays by a road have a track"
         );
+    }
+
+    /// Cells of `g` joined to its border over walkable cells.
+    fn open_from_border(g: &Grid<Tile>) -> Grid<bool> {
+        let size = g.size();
+        let mut seen = Grid::filled(size, false);
+        let mut stack: Vec<Pos> = g
+            .iter()
+            .map(|(p, _)| p)
+            .filter(|p| {
+                p.x == 0 || p.y == 0 || p.x == size.w as i32 - 1 || p.y == size.h as i32 - 1
+            })
+            .filter(|p| g[*p].is_walkable())
+            .collect();
+        for p in &stack {
+            seen[*p] = true;
+        }
+        while let Some(p) = stack.pop() {
+            for q in p.neighbors8() {
+                if g.get(q).is_some_and(|t| t.is_walkable()) && !seen[q] {
+                    seen[q] = true;
+                    stack.push(q);
+                }
+            }
+        }
+        seen
+    }
+
+    #[test]
+    fn every_pump_house_and_booth_can_be_entered() {
+        let mut doors = 0;
+        for seed in 0..20 {
+            let w = small(seed);
+            for poi in w.pois.iter().filter(|p| {
+                matches!(
+                    p.kind,
+                    PoiKind::WaterPlant | PoiKind::Checkpoint | PoiKind::Solar
+                )
+            }) {
+                let (o, g) = round(&w, poi, 5);
+                let open = open_from_border(&g);
+                for (p, t) in g.iter() {
+                    if t.terrain != Terrain::Door {
+                        continue;
+                    }
+                    let inside = p
+                        .neighbors4()
+                        .any(|q| g.get(q).is_some_and(|t| t.terrain == Terrain::Floor));
+                    let reached = open[p];
+                    assert!(
+                        inside && reached,
+                        "seed {seed} {poi:?}: the door at {:?} (inside {inside}, reached {reached})",
+                        p.offset(o.x, o.y)
+                    );
+                    doors += 1;
+                }
+            }
+        }
+        assert!(doors >= 20, "{doors} doors");
+    }
+
+    #[test]
+    fn landing_on_a_poi_reaches_the_open() {
+        use crate::overworld::detail::landing;
+        let mut landed = 0;
+        for seed in 0..20 {
+            let w = small(seed);
+            for poi in w.pois.iter().filter(|p| p.kind != PoiKind::Rig) {
+                let Some(c) = landing(&w, poi.at) else {
+                    continue;
+                };
+                let (o, g) = round(&w, poi, 4);
+                let open = open_from_border(&g);
+                assert!(
+                    open[Pos::new(c.x - o.x, c.y - o.y)],
+                    "seed {seed} {poi:?}: landed shut in at {c:?}"
+                );
+                landed += 1;
+            }
+        }
+        assert!(landed > 100, "{landed}");
+    }
+
+    #[test]
+    fn a_north_south_store_is_open_inside() {
+        use crate::overworld::{LINK_E, LINK_N, LINK_S, LINK_W};
+        let mut checked = 0;
+        for seed in [12, 14, 16, 20, 23] {
+            let w = small(seed);
+            for poi in w.pois.iter().filter(|p| p.kind == PoiKind::TruckStop) {
+                let ns = [
+                    poi.at,
+                    poi.at.offset(0, 1),
+                    poi.at.offset(0, -1),
+                    poi.at.offset(1, 0),
+                    poi.at.offset(-1, 0),
+                ]
+                .iter()
+                .filter_map(|t| w.tile(*t))
+                .any(|t| t.road & (LINK_N | LINK_S) != 0 && t.road & (LINK_E | LINK_W) == 0);
+                if !ns {
+                    continue;
+                }
+                let (_, g) = round(&w, poi, 6);
+                let open = open_from_border(&g);
+                let floor: Vec<Pos> = g
+                    .iter()
+                    .filter(|(_, t)| t.terrain == Terrain::Floor)
+                    .map(|(p, _)| p)
+                    .collect();
+                let shut = floor
+                    .iter()
+                    .filter(|p| {
+                        !p.neighbors8()
+                            .any(|q| open.get(q).copied().unwrap_or(false))
+                    })
+                    .count();
+                assert!(
+                    shut * 10 <= floor.len(),
+                    "seed {seed} {poi:?}: {shut} of {} floor cells shut away",
+                    floor.len()
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 2, "{checked} north-south stops");
+    }
+
+    #[test]
+    fn a_slid_stop_is_the_same_built_alone() {
+        let w = small(60);
+        let poi = w
+            .pois
+            .iter()
+            .find(|p| p.kind == PoiKind::TruckStop && p.at == Pos::new(59, 24));
+        let Some(poi) = poi else { return };
+        let (o, r) = round(&w, poi, 9);
+        for dy in -3..=3 {
+            for dx in -8..=8 {
+                let t = poi.at.offset(dx, dy);
+                let g = ground(&w, t.x, t.y);
+                for (c, a) in g.iter() {
+                    let b = r[Pos::new(TILE * t.x + c.x - o.x, TILE * t.y + c.y - o.y)];
+                    assert_eq!(
+                        (a.terrain, a.feature),
+                        (b.terrain, b.feature),
+                        "{t:?} {c:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
