@@ -382,7 +382,9 @@ pub(crate) fn sketch(w: &Overworld) -> String {
         for x in 0..w.size.w as i32 {
             let p = Pos::new(x, y);
             let t = w.tile(p).unwrap();
-            let ch = if w.poi_at(p).is_some() {
+            let ch = if let Some(c) = w.cities.iter().find(|c| c.centre == p) {
+                if c.home { '@' } else { 'C' }
+            } else if w.poi_at(p).is_some() {
                 '*'
             } else if t.road != 0 {
                 '='
