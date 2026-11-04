@@ -73,6 +73,19 @@ pub struct GenParams {
     pub decay: f32,
     pub water: WaterMode,
     pub flavor: String,
+    /// Where in a world the city stands; none for a lone city. With a site the city's
+    /// water, outline and highways are the world's, and `water` is not used.
+    #[serde(default)]
+    pub site: Option<CitySite>,
+}
+
+/// A city's place in a world: the world it is in, which of its cities it is, and the
+/// world-wide detail cell its map's top-left corner lies on.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CitySite {
+    pub world: crate::overworld::WorldParams,
+    pub city: u8,
+    pub origin: crate::geom::Pos,
 }
 
 impl Default for GenParams {
@@ -86,6 +99,7 @@ impl Default for GenParams {
             decay: 0.4,
             water: WaterMode::Bay,
             flavor: "default".into(),
+            site: None,
         }
     }
 }

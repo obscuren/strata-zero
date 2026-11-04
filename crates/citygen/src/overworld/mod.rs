@@ -267,6 +267,37 @@ pub struct Overworld {
 }
 
 impl Overworld {
+    /// The overworld tiles city `i`'s map covers: the bounding box of its own tiles
+    /// (not its towns'), two tiles more all round for its outskirts to fade in, inside
+    /// the world, no bigger than the city generator's largest map.
+    pub fn city_block(&self, i: u8) -> crate::geom::Rect {
+        let mine: Vec<Pos> = self
+            .tiles
+            .iter()
+            .filter(|(_, t)| t.urban.is_some_and(|u| u.city == i))
+            .map(|(p, _)| p)
+            .collect();
+        let centre = self
+            .cities
+            .get(i as usize)
+            .map_or(Pos::new(0, 0), |c| c.centre);
+        let (x0, x1) = mine
+            .iter()
+            .fold((centre.x, centre.x), |(a, b), p| (a.min(p.x), b.max(p.x)));
+        let (y0, y1) = mine
+            .iter()
+            .fold((centre.y, centre.y), |(a, b), p| (a.min(p.y), b.max(p.y)));
+        let tile = detail::TILE;
+        let (most_w, most_h) = (1024 / tile, 512 / tile);
+        let (x0, x1) = ((x0 - 2).max(0), (x1 + 2).min(self.size.w as i32 - 1));
+        let (y0, y1) = ((y0 - 2).max(0), (y1 + 2).min(self.size.h as i32 - 1));
+        let (w, h) = (
+            (x1 - x0 + 1).clamp(10, most_w),
+            (y1 - y0 + 1).clamp(5, most_h),
+        );
+        crate::geom::Rect::new(x0, y0, w, h)
+    }
+
     pub fn generate(params: WorldParams) -> Result<Overworld, GenError> {
         params.validate()?;
         let flavor = FlavorPack::load(&params.flavor)?;

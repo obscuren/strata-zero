@@ -149,6 +149,8 @@ impl Configure {
             decay: self.form.slider("Decay").unwrap_or(0.4),
             water,
             flavor: self.form.choice("Flavor").unwrap_or("default").to_string(),
+            // the dev's configured city stands alone (a lone city)
+            site: None,
         }
     }
 }

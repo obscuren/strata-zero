@@ -739,7 +739,7 @@ fn course(world: &Overworld, tx: i32, ty: i32, mask: u8, salt: u64) -> Vec<(f32,
 
 /// Noise spread over -1..1: the field keeps near its middle (about 0.5 ± 0.09), so
 /// this stretches it, clamping the rare extremes.
-fn wave(n: &Fbm, x: f32, y: f32) -> f32 {
+pub(crate) fn wave(n: &Fbm, x: f32, y: f32) -> f32 {
     ((n.at(x, y, 2) - 0.5) * 5.0).clamp(-1.0, 1.0)
 }
 
@@ -805,7 +805,7 @@ fn tile_at(world: &Overworld, x: i32, y: i32) -> &WorldTile {
 
 /// `f` blended between overworld tile centres at detail point `(x, y)` (bilinear); the
 /// world's outer tiles blend with themselves.
-fn blend(world: &Overworld, x: f32, y: f32, f: impl Fn(&WorldTile) -> f32) -> f32 {
+pub(crate) fn blend(world: &Overworld, x: f32, y: f32, f: impl Fn(&WorldTile) -> f32) -> f32 {
     let half = (TILE as f32 - 1.0) / 2.0;
     let (fx, fy) = ((x - half) / TILE as f32, (y - half) / TILE as f32);
     let (x0, y0) = (fx.floor(), fy.floor());

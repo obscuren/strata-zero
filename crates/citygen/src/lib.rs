@@ -23,6 +23,7 @@ pub mod world;
 pub use clinic::{Front, clinic_front, kind_label};
 pub use construct::*;
 pub use flavor::FlavorPack;
+pub use generate::site::sited;
 pub use generate::{Generator, Progress, Stage};
 pub use geom::{Dir, Grid, Pos, Rect, Size};
 pub use ids::*;

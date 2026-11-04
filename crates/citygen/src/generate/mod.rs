@@ -10,6 +10,7 @@ pub mod interiors;
 pub mod lots;
 pub mod naming;
 pub mod net;
+pub mod site;
 pub mod streets;
 pub mod terrain;
 pub mod verticals;
@@ -135,6 +136,8 @@ pub(crate) struct Scratch {
     pub lots: Vec<Lot>,
     pub lobbies: Vec<(BuildingId, Pos)>,
     pub water_edge: Option<crate::geom::Dir>,
+    /// The world's part when the city has a site (its ground, its density).
+    pub site: Option<site::Site>,
 }
 
 impl Scratch {
@@ -149,6 +152,7 @@ impl Scratch {
             lots: Vec::new(),
             lobbies: Vec::new(),
             water_edge: None,
+            site: None,
         }
     }
 }
@@ -338,8 +342,12 @@ impl Generator {
         if let Some(e) = self.error {
             return Err(e);
         }
-        self.ctx.city.validate().map_err(GenError::Invalid)?;
-        Ok(self.ctx.city)
+        let mut city = self.ctx.city;
+        if let Some(site) = self.ctx.scratch.site.as_ref() {
+            site::fill(&mut city, site);
+        }
+        city.validate().map_err(GenError::Invalid)?;
+        Ok(city)
     }
 
     /// Runs every stage to completion.

@@ -20,6 +20,9 @@ pub(crate) struct TerrainStage {
 
 impl TerrainStage {
     fn is_water(&self, ctx: &GenCtx, p: Pos) -> bool {
+        if let Some(site) = ctx.scratch.site.as_ref() {
+            return site.wet(p);
+        }
         let size = ctx.size();
         let (w, h) = (size.w as f64, size.h as f64);
         let noise = self.noise.as_ref().expect("begin sets noise");
@@ -54,6 +57,9 @@ impl TerrainStage {
 
 impl StageRunner for TerrainStage {
     fn begin(&mut self, ctx: &mut GenCtx) -> Result<(), GenError> {
+        if let Some(site) = ctx.params().site.clone() {
+            ctx.scratch.site = super::site::prepare(&site, ctx.size());
+        }
         let mut rng = ctx.rng(Stage::Terrain);
         self.noise = Some(OpenSimplex::new(ctx.seed as u32));
         self.edge = Dir::CARDINAL.choose(&mut rng).copied();
@@ -72,9 +78,25 @@ impl StageRunner for TerrainStage {
         let y = self.row;
         for x in 0..size.w as i32 {
             let p = Pos::new(x, y);
-            if self.is_water(ctx, p) {
+            // in a world: its highways are the city's roads, past its outline nothing is
+            // built (the open ground fills in at the end)
+            let site = ctx.scratch.site.as_ref();
+            let highway = site.and_then(|s| s.highway(p));
+            let outside = site.is_some_and(|s| !s.builds(p));
+            if let Some(t) = highway {
+                ctx.scratch.land.set(p, t == Terrain::Road);
+                ctx.scratch.road.set(p, true);
+                ctx.scratch.arterial.set(p, true);
+                ctx.set_terrain(StratumKind::Street, p, t);
+            } else if self.is_water(ctx, p) {
                 ctx.scratch.land.set(p, false);
-                ctx.set_terrain(StratumKind::Street, p, Terrain::Water);
+                let t = match site.and_then(|s| s.ground.get(p)).map(|t| t.terrain) {
+                    Some(Terrain::Ford) => Terrain::Ford,
+                    _ => Terrain::Water,
+                };
+                ctx.set_terrain(StratumKind::Street, p, t);
+            } else if outside {
+                ctx.scratch.land.set(p, false);
             }
         }
         self.row += 1;
