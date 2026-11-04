@@ -3,6 +3,7 @@
 //! the home city sits on a block of its tiles (until the city grows into the world, the
 //! whole block is the city). See `2026-11-04-overworld-screen-design.md`.
 
+pub mod ground;
 pub mod moves;
 
 use crate::app::AppState;
@@ -110,17 +111,38 @@ impl Outside {
     /// cell nearest the tile's middle.
     pub fn street_of(&self, city: &City, tile: Pos) -> Pos {
         let b = self.block(city);
-        let (cw, ch) = (city.size.w as i32, city.size.h as i32);
-        let mid = Pos::new(
-            (TILE * (tile.x - b.x) + TILE / 2).clamp(0, cw - 1),
-            (TILE * (tile.y - b.y) + TILE / 2).clamp(0, ch - 1),
-        );
-        nearest(mid, cw.max(ch), |p| {
-            city.tile(StratumKind::Street, p)
-                .is_some_and(|t| t.is_walkable() && t.building.is_none())
-        })
-        .unwrap_or(mid)
+        street_near(
+            city,
+            Pos::new(
+                TILE * (tile.x - b.x) + TILE / 2,
+                TILE * (tile.y - b.y) + TILE / 2,
+            ),
+        )
     }
+
+    /// Where you stand in the city walking in at world-wide cell `cell` of its block:
+    /// the outdoor street cell nearest the city's cell there.
+    pub fn street_at(&self, city: &City, cell: Pos) -> Pos {
+        let b = self.block(city);
+        street_near(city, Pos::new(cell.x - TILE * b.x, cell.y - TILE * b.y))
+    }
+
+    /// Whether world-wide detail cell `cell` lies in the city's block.
+    pub fn in_city(&self, city: &City, cell: Pos) -> bool {
+        self.block(city)
+            .contains(Pos::new(cell.x.div_euclid(TILE), cell.y.div_euclid(TILE)))
+    }
+}
+
+/// The outdoor street cell of `city` nearest `cell` (clamped into the city).
+fn street_near(city: &City, cell: Pos) -> Pos {
+    let (cw, ch) = (city.size.w as i32, city.size.h as i32);
+    let from = Pos::new(cell.x.clamp(0, cw - 1), cell.y.clamp(0, ch - 1));
+    nearest(from, cw.max(ch), |p| {
+        city.tile(StratumKind::Street, p)
+            .is_some_and(|t| t.is_walkable() && t.building.is_none())
+    })
+    .unwrap_or(from)
 }
 
 /// Detail cells to an overworld tile, each way.
