@@ -2401,6 +2401,52 @@ pub(crate) mod tests {
         assert!(st.log.iter().any(|e| e.text == "out"));
     }
 
+    /// The window closed while you sat in her chair, the piece in on her tab: the run
+    /// reopens with you up (the chair is the deck's, which opens anew), so the doctor's
+    /// `Chromed` step fires without the deck opened and closed first.
+    #[test]
+    fn a_run_saved_in_the_chair_reopens_up_and_chromed_fires() {
+        use crate::runs::file::{read, write};
+        use crate::runs::snapshot::{after_restore, restore};
+        let mut st = crate::clinic::testutil::seated();
+        let b = st.chair.unwrap().building;
+        st.book = doc_book(
+            r#"Mission(id: "m", title: "M", from: "doc", steps: [
+                Step(id: "tray", when: NewGame, then: [Tray(from: "doc", tab: "doc",
+                    title: "her tray", line: "One piece.",
+                    sets: [TraySet(need: All([]), items: ["neural_port"])])]),
+                Step(id: "out", when: Chromed("doc"), then: [Log("out")]),
+            ])"#,
+            "",
+        );
+        begin(&mut st);
+        cast_doc(&mut st, b);
+        take_from_tray(&mut st, 0);
+        let put = crate::actions::perform(
+            &mut st,
+            game::Action::Install {
+                item: ItemId::new("neural_port"),
+                site: game::Site::Neural,
+            },
+        );
+        assert!(put.is_ok(), "{put:?}");
+        assert!(st.missions.tab.as_ref().unwrap().spent);
+        tick(&mut st);
+        assert_eq!(st.missions.runs[0].at, 1, "still in the chair");
+        let dir = crate::runs::testutil::Dir::new("chair");
+        let st = crate::runs::testutil::running(st);
+        let path = write(&dir.0, &st).unwrap();
+        let mut back = AppState::new();
+        back.book = st.book.clone();
+        let (_, snap, lost) = read(&path, &back.book).unwrap();
+        restore(&mut back, snap);
+        after_restore(&mut back, lost);
+        assert_eq!(back.chair, None, "up out of the chair");
+        tick(&mut back);
+        assert!(matches!(back.missions.runs[0].state, RunState::Done { .. }));
+        assert!(back.log.iter().any(|e| e.text == "out"));
+    }
+
     #[test]
     fn dev_free_chrome_spends_the_tab_on_its_piece() {
         let (mut st, b, level, _) = crate::clinic::testutil::inside();

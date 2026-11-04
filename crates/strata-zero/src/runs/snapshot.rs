@@ -14,7 +14,6 @@ pub struct SnapshotRef<'a> {
     pub city: &'a Option<citygen::City>,
     pub player: &'a Option<crate::walker::Player>,
     pub tick: &'a u64,
-    pub chair: &'a Option<crate::clinic::Chair>,
     pub character: &'a game::Character,
     pub world: &'a Option<sim::World>,
     pub interiors: &'a crate::interiors::Interiors,
@@ -49,7 +48,6 @@ pub struct Snapshot {
     pub city: Option<citygen::City>,
     pub player: Option<crate::walker::Player>,
     pub tick: u64,
-    pub chair: Option<crate::clinic::Chair>,
     pub character: game::Character,
     pub world: Option<sim::World>,
     pub interiors: crate::interiors::Interiors,
@@ -94,7 +92,9 @@ pub fn snapshot(st: &AppState) -> SnapshotRef<'_> {
         show_eyes: _,    // dev switch
         show_light: _,   // dev switch
         free_chrome: _,  // dev switch
-        chair,
+        // UI: the deck's, Some only while it is open in the doc's chair; a reopened run
+        // starts the deck over, up out of the chair (`restore`).
+        chair: _,
         look_at: _, // UI: a popup's request, taken on the map's next frame
         jump_to: _, // UI: the console's request, taken on the map's next frame
         content,
@@ -153,7 +153,6 @@ pub fn snapshot(st: &AppState) -> SnapshotRef<'_> {
         city,
         player,
         tick,
-        chair,
         character,
         world,
         interiors,
@@ -201,9 +200,9 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
         show_eyes: _,    // dev switch
         show_light: _,   // dev switch
         free_chrome: _,  // dev switch
-        chair,
-        look_at: _, // UI: `clear_screens` below
-        jump_to: _, // UI: `clear_screens` below
+        chair,           // UI: the deck's; up out of it below
+        look_at: _,      // UI: `clear_screens` below
+        jump_to: _,      // UI: `clear_screens` below
         content,
         character,
         people: _, // content
@@ -261,7 +260,6 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
         city: s_city,
         player: s_player,
         tick: s_tick,
-        chair: s_chair,
         character: s_character,
         world: s_world,
         interiors: s_interiors,
@@ -291,7 +289,6 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
     *city = s_city;
     *player = s_player;
     *tick = s_tick;
-    *chair = s_chair;
     *character = s_character;
     *world = s_world;
     *interiors = s_interiors;
@@ -316,8 +313,10 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
     *track = s_track;
     *run = s_run;
     crate::credentials::put_back(content, keycards);
-    // Never saved asleep: the run comes back awake.
+    // Never saved asleep: the run comes back awake. Nor in the doc's chair: the deck it
+    // is opens anew, and you are up (as closing it gets you up, so `Chromed` can fire).
     *rest = None;
+    *chair = None;
     st.clear_screens();
 }
 
