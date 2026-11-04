@@ -45,5 +45,9 @@ StylePack(
         ("street", DeviceStyle(maker: "ZENBO", keypad: "ZK-2", terminal: "64", os_version: "2.2", body: (28, 26, 30), edge: Some((120, 62, 40)), glass: (20, 14, 6), text: Some((255, 176, 0)), text_dim: (140, 96, 20),
             keys_lit: false, scanlines: true, cracked: true, dead: 3, flicker: 110, cps: 40,
             boot: ["{OS} .. OK?", "MEM CHK 64K", "REDY"], denied: None)),
+        // Any shell reached from the Net: no machine, a jack window in the Net's own colours.
+        ("net", DeviceStyle(maker: "JACK", keypad: "", terminal: "", os_version: "4.1", body: (2, 10, 12), edge: Some((0, 255, 200)), glass: (2, 10, 12), text: Some((205, 212, 222)), text_dim: (95, 138, 134),
+            keys_lit: false, scanlines: false, cracked: false, dead: 0, flicker: 0, cps: 120,
+            boot: ["jack › {HOST}.net · {PLACE}", "handshake ·········· ok", "seat: {USER}"], denied: None)),
     ],
 )

@@ -174,6 +174,14 @@ you out it means that there's no danger in running there."
   the street, but the hold itself is a **user's seat** on that host for its hour (doors,
   lifts and cameras on a building's), never root: root stays the server's crack and a
   root backdoor. (Jeffrey agreed, after the first build.)
+- **Every shell reached while jacked in is the Net's jack window** (mock A of
+  `2026-11-04-net-shell-mock/`, Jeffrey's pick): no machine, no bezel or boot; a thin
+  signal-coloured frame the size of the CRT, `◇ JACK · <PLACE>` on its top edge, your
+  login (and `HELD 59m` when a held terminal seats you) on the right, `esc · back to the
+  grid` below, a faint lattice on the dark glass. A handshake (`jack › <host>.net`, `seat:
+  <user>`) replaces the boot, and the host's banner keeps only its notice. The style is
+  the `net` device in `flavor/style.ron`; the street's kiosks and your rig keep their
+  CRTs.
 
 ### Danger outside
 

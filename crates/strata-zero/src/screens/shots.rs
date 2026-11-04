@@ -3423,3 +3423,56 @@ fn net_space_camera() {
         false,
     );
 }
+
+/// A street terminal by Kiroflux Mart held from the Net and its shell opened there
+/// (`r`), typed out; and the Net behind it alone.
+#[test]
+#[ignore]
+fn net_shell() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (mut st, mut map) = on_the_open_net();
+    let city = st.city.clone().unwrap();
+    let d = city.buildings[kiroflux(&st).index()].district;
+    let owner = crate::owners::Owner::District(d);
+    let term = city
+        .net
+        .nodes
+        .iter()
+        .filter(|n| {
+            n.kind == citygen::NodeKind::Terminal
+                && crate::owners::owner_of(&city, n.id) == Some(owner)
+        })
+        .min_by_key(|n| n.cyber.chebyshev(Pos::new(201, 62)))
+        .expect("a street terminal");
+    let (id, at) = (term.id, term.cyber);
+    let here = at
+        .neighbors8()
+        .find(|q| city.walkable(StratumKind::Net, *q))
+        .unwrap_or(at);
+    stand_in(&mut st, Place::Stratum(StratumKind::Net), here);
+    map.cam.snap(here);
+    let now = st.net.now(&st);
+    crate::holds::take(&mut st, id, owner, now);
+    map.update(&mut st, &[]);
+    write_svg(
+        &dir,
+        "net_shell_bg",
+        &st,
+        &draw_stack(&st, &[&map], (120, 40)),
+        false,
+    );
+    let mut shell = crate::screens::popup::verb_opens(&mut st, 'r').expect("the shell");
+    for _ in 0..40 {
+        st.tick += 30;
+        shell.update(&mut st, &[]);
+    }
+    write_svg(
+        &dir,
+        "net_shell",
+        &st,
+        &draw_stack(&st, &[&map, shell.as_ref()], (120, 40)),
+        false,
+    );
+}
