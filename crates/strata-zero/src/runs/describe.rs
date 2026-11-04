@@ -63,6 +63,11 @@ pub fn place_line(st: &AppState) -> String {
     if p.body.is_some() {
         return "on the Net".to_string();
     }
+    match st.outside.as_ref().map(|o| o.at) {
+        Some(crate::outside::At::Overworld(_)) => return "overworld".to_string(),
+        Some(crate::outside::At::Ground(_)) => return "open ground".to_string(),
+        _ => {}
+    }
     match p.place {
         Place::Floor { building, level } => {
             let at = format!(
@@ -178,6 +183,15 @@ mod tests {
 
     /// 2026-11-04 10:44 UTC.
     const AT: u64 = 1_793_789_040;
+
+    #[test]
+    fn a_run_saved_out_in_the_world_says_where() {
+        let mut st = crate::outside::moves::tests::on_the_world();
+        crate::outside::ensure(&mut st).unwrap().at = crate::outside::At::Overworld(Pos::new(3, 3));
+        assert_eq!(place_line(&st), "overworld");
+        st.outside.as_mut().unwrap().at = crate::outside::At::Ground(Pos::new(30, 30));
+        assert_eq!(place_line(&st), "open ground");
+    }
 
     #[test]
     fn time_played_reads_in_hours_and_minutes() {

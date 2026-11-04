@@ -353,8 +353,7 @@ pub fn after_restore(st: &mut AppState, mut lost: Vec<String>) {
         }
     }
     crate::track::refollow(st);
-    // The overworld is skipped by the save: made again from its params.
-    if let Some(o) = st.outside.as_mut() {
-        o.rebuild();
-    }
+    // The overworld is skipped by the save: made again from its params, and you back
+    // in the city if what you stood on out there is gone.
+    crate::outside::reopened(st);
 }

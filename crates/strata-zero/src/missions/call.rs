@@ -602,6 +602,25 @@ mod tests {
     }
 
     #[test]
+    fn a_call_waits_while_you_are_out_of_the_city() {
+        use crate::outside::At;
+        let mut st = up();
+        crate::outside::ensure(&mut st).unwrap().at = At::Overworld(citygen::Pos::new(1, 1));
+        ticks(&mut st, 2 * RING_TICKS);
+        crate::clock::run(&mut st, Some(1), crate::clock::PATHS_PER_FRAME);
+        assert!(st.missions.call.is_some(), "it waits for you");
+        st.outside.as_mut().unwrap().at = At::City;
+        crate::clock::run(&mut st, Some(1), crate::clock::PATHS_PER_FRAME);
+        assert!(
+            st.missions.call.is_some(),
+            "and rings in full once you're back"
+        );
+        ticks(&mut st, RING_TICKS);
+        crate::clock::run(&mut st, Some(1), crate::clock::PATHS_PER_FRAME);
+        assert!(st.missions.call.is_none(), "then goes to voicemail as ever");
+    }
+
+    #[test]
     fn ringing_out_is_voicemail() {
         let mut st = up();
         let all = lines(&st);

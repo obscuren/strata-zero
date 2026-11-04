@@ -6,49 +6,107 @@ use super::moves::Moved;
 use super::{At, Outside, TILE};
 use crate::app::AppState;
 use citygen::overworld::{Overworld, detail};
-use citygen::{Dir, Grid, Pos, Terrain, Tile};
-use std::collections::BTreeSet;
+use citygen::{Dir, Grid, Pos, Rect, Terrain, Tile};
+use std::collections::{BTreeSet, HashMap};
 
-/// The region kept round you, in detail cells.
-pub const SPAN: (u32, u32) = (16 * TILE as u32, 8 * TILE as u32);
+/// A ring of tiles built beyond what's on screen and in sight, so the ground is there
+/// before you see it.
+pub const AHEAD: i32 = 1;
 
-/// How near its edge you may come before the region is made again round you.
-pub const KEEP: i32 = 24;
-
-/// A region of the open ground; not saved (made again from the world).
+/// The open ground round you, tile by tile: each overworld tile's cells built once and
+/// kept while near (a tile built alone is the same tile in any region, so they fit);
+/// not saved, made again from the world.
+#[derive(Default)]
 pub struct GroundView {
-    /// The world-wide cell of the region's top-left.
-    pub origin: Pos,
-    pub tiles: Grid<Tile>,
+    tiles: HashMap<Pos, Grid<Tile>>,
 }
 
 impl GroundView {
-    /// The region centred on `at`.
+    /// The ground round `at`: what you can see from there and a little more.
+    #[cfg(test)]
     pub fn round(world: &Overworld, at: Pos) -> GroundView {
-        let origin = Pos::new(at.x - SPAN.0 as i32 / 2, at.y - SPAN.1 as i32 / 2);
-        GroundView {
-            origin,
-            tiles: detail::region(world, origin.x, origin.y, SPAN.0, SPAN.1),
+        let mut v = GroundView::default();
+        v.cover(world, sight_area(at));
+        v
+    }
+
+    /// Builds every tile `area` (world-wide cells) touches that isn't built yet, and a
+    /// ring past it, all in one region; forgets tiles far from it.
+    pub fn cover(&mut self, world: &Overworld, area: Rect) {
+        let (ww, wh) = (world.size.w as i32, world.size.h as i32);
+        let t0 = Pos::new(
+            (area.x.div_euclid(TILE) - AHEAD).max(0),
+            (area.y.div_euclid(TILE) - AHEAD).max(0),
+        );
+        let t1 = Pos::new(
+            ((area.x + area.w).div_euclid(TILE) + AHEAD).min(ww - 1),
+            ((area.y + area.h).div_euclid(TILE) + AHEAD).min(wh - 1),
+        );
+        let missing: Vec<Pos> = (t0.y..=t1.y)
+            .flat_map(|y| (t0.x..=t1.x).map(move |x| Pos::new(x, y)))
+            .filter(|t| !self.tiles.contains_key(t))
+            .collect();
+        if let (Some(lo), Some(hi)) = (
+            missing
+                .iter()
+                .copied()
+                .reduce(|a, b| Pos::new(a.x.min(b.x), a.y.min(b.y))),
+            missing
+                .iter()
+                .copied()
+                .reduce(|a, b| Pos::new(a.x.max(b.x), a.y.max(b.y))),
+        ) {
+            let (w, h) = ((hi.x - lo.x + 1) as u32, (hi.y - lo.y + 1) as u32);
+            let g = detail::region(
+                world,
+                TILE * lo.x,
+                TILE * lo.y,
+                w * TILE as u32,
+                h * TILE as u32,
+            );
+            for t in missing {
+                let mut tile = Grid::filled(
+                    citygen::Size {
+                        w: TILE as u32,
+                        h: TILE as u32,
+                    },
+                    Tile::new(Terrain::Void),
+                );
+                for y in 0..TILE {
+                    for x in 0..TILE {
+                        let at = Pos::new(TILE * (t.x - lo.x) + x, TILE * (t.y - lo.y) + y);
+                        tile[Pos::new(x, y)] = g[at];
+                    }
+                }
+                self.tiles.insert(t, tile);
+            }
+        }
+        // keep what's near: a few tiles past the area, the rest forgotten
+        if self.tiles.len() > 2048 {
+            let keep = 4;
+            self.tiles.retain(|t, _| {
+                t.x >= t0.x - keep && t.x <= t1.x + keep && t.y >= t0.y - keep && t.y <= t1.y + keep
+            });
         }
     }
 
-    /// Makes the region again round `at` when `at` comes within `KEEP` of its edge;
-    /// whether it did.
-    pub fn keep(&mut self, world: &Overworld, at: Pos) -> bool {
-        let (x, y) = (at.x - self.origin.x, at.y - self.origin.y);
-        let (w, h) = (SPAN.0 as i32, SPAN.1 as i32);
-        let near = x < KEEP || y < KEEP / 2 || x >= w - KEEP || y >= h - KEEP / 2;
-        if near {
-            *self = GroundView::round(world, at);
-        }
-        near
-    }
-
-    /// The tile at world-wide cell `p`, if the region holds it.
+    /// The tile at world-wide cell `p`, if it is built.
     pub fn tile(&self, p: Pos) -> Option<&Tile> {
+        let t = Pos::new(p.x.div_euclid(TILE), p.y.div_euclid(TILE));
         self.tiles
-            .get(Pos::new(p.x - self.origin.x, p.y - self.origin.y))
+            .get(&t)?
+            .get(Pos::new(p.x.rem_euclid(TILE), p.y.rem_euclid(TILE)))
     }
+}
+
+/// The cells you might see from `at`: out to the open ground's day sight each way.
+pub fn sight_area(at: Pos) -> Rect {
+    Rect::new(
+        at.x - RADIUS_OPEN,
+        at.y - RADIUS_OPEN,
+        2 * RADIUS_OPEN + 1,
+        2 * RADIUS_OPEN + 1,
+    )
 }
 
 /// One step on the open ground: onto the next cell on the city's clock, or into the city
@@ -77,7 +135,7 @@ pub fn ground_step(st: &mut AppState, view: &mut GroundView, d: Dir) -> Moved {
     }
     if let Some(o) = st.outside.as_mut() {
         o.at = At::Ground(to);
-        view.keep(o.world(), to);
+        view.cover(o.world(), sight_area(to));
     }
     crate::clock::run(st, Some(sim::WALK_TICKS), crate::clock::PATHS_PER_FRAME);
     Moved::Stepped
@@ -108,22 +166,26 @@ pub fn sight(view: &GroundView, at: Pos, minute: u16) -> BTreeSet<Pos> {
 /// Marks `seen` as seen.
 pub fn remember(o: &mut Outside, seen: &BTreeSet<Pos>) {
     for p in seen {
-        let (tile, bit) = cell_bit(*p);
-        *o.seen.entry(tile).or_insert(0) |= 1 << bit;
+        let (chunk, bit) = cell_bit(*p);
+        *o.seen.entry(chunk).or_insert(0) |= 1 << bit;
     }
 }
 
 /// Whether world-wide cell `p` has been seen.
 pub fn remembered(o: &Outside, p: Pos) -> bool {
-    let (tile, bit) = cell_bit(p);
-    o.seen.get(&tile).is_some_and(|m| m & (1 << bit) != 0)
+    let (chunk, bit) = cell_bit(p);
+    o.seen.get(&chunk).is_some_and(|m| m & (1 << bit) != 0)
 }
 
-/// The overworld tile of cell `p` and its bit in that tile's mask.
+/// What you've seen is kept in chunks of 8×8 cells, a bit a cell: fixed, not the
+/// overworld tile's size, so the tile's size can change without the saves changing.
+const CHUNK: i32 = 8;
+
+/// The chunk of cell `p` and its bit in that chunk's mask.
 fn cell_bit(p: Pos) -> (Pos, u32) {
     (
-        Pos::new(p.x.div_euclid(TILE), p.y.div_euclid(TILE)),
-        (p.y.rem_euclid(TILE) * TILE + p.x.rem_euclid(TILE)) as u32,
+        Pos::new(p.x.div_euclid(CHUNK), p.y.div_euclid(CHUNK)),
+        (p.y.rem_euclid(CHUNK) * CHUNK + p.x.rem_euclid(CHUNK)) as u32,
     )
 }
 
@@ -190,10 +252,8 @@ mod tests {
             .map(|(p, _)| p)
             .unwrap();
         let view = GroundView::round(&w, Pos::new(TILE * t.x + 4, TILE * t.y + 4));
-        let (from, d) = view
-            .tiles
-            .iter()
-            .map(|(p, _)| Pos::new(view.origin.x + p.x, view.origin.y + p.y))
+        let (from, d) = (TILE * (t.y - 1)..TILE * (t.y + 2))
+            .flat_map(|y| (TILE * (t.x - 1)..TILE * (t.x + 2)).map(move |x| Pos::new(x, y)))
             .flat_map(|p| [Dir::N, Dir::E, Dir::S, Dir::W].map(|d| (p, d)))
             .find(|(p, d)| {
                 view.tile(*p).is_some_and(|c| c.is_walkable())
@@ -211,12 +271,11 @@ mod tests {
     }
 
     #[test]
-    fn the_region_recentres_without_moving_you() {
+    fn the_ground_stays_right_as_you_walk() {
         let mut st = on_the_world();
         let t = highway(&st);
         let start = Pos::new(TILE * t.x, TILE * t.y + 3);
         let mut view = stand(&mut st, start);
-        let first = view.origin;
         let w = outside(&st).world().clone();
         let mut steps = 0;
         while steps < 200 && ground_step(&mut st, &mut view, Dir::E) == Moved::Stepped {
@@ -232,7 +291,8 @@ mod tests {
         }
         assert!(steps >= 60, "{steps} steps along the highway");
         assert_eq!(at(&st), start.offset(steps, 0));
-        assert_ne!(view.origin, first, "the region moved with you");
+        // and what's ahead is built before you get there
+        assert!(view.tile(at(&st).offset(RADIUS_OPEN, 0)).is_some() || steps < 60);
     }
 
     #[test]

@@ -27,9 +27,18 @@ pub fn run(st: &mut AppState, world_ticks: Option<u64>, paths: usize) {
     st.net.minute(now, inside, &mut st.constructs, &roots);
     crate::net::tick_backdoors(st);
     crate::holds::tick(st);
-    crate::cameras::tick(st);
     crate::grid::tick(st);
     crate::jobs::tick(st);
+    // Out in the world the city holds still for you: its cameras look at no one, and
+    // its story waits (a call keeps ringing from the start when you're back).
+    if crate::outside::away(st) {
+        let now = st.clock_tick();
+        if let Some(c) = st.missions.call.as_mut().filter(|c| c.answered.is_none()) {
+            c.rang = now;
+        }
+        return;
+    }
+    crate::cameras::tick(st);
     crate::missions::tick(st);
 }
 

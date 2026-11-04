@@ -126,12 +126,18 @@ pub fn up(st: &mut AppState) {
 /// Into the city on its street at `cell`.
 pub fn into_city(st: &mut AppState, cell: Pos) {
     let street = Place::Stratum(StratumKind::Street);
-    match st.player.as_mut() {
-        Some(p) => {
-            p.place = street;
-            p.pos = cell;
-        }
-        None => st.player = Some(crate::walker::Player::at(street, cell)),
+    let (minute, bonus) = (st.minute_of_day(), st.sight_bonus());
+    if st.player.is_none() {
+        st.player = Some(crate::walker::Player::at(street, cell));
+    }
+    if let (Some(p), Some(city)) = (st.player.as_mut(), st.city.as_ref()) {
+        p.place = street;
+        p.pos = cell;
+        // you see where you've come in, not where you left
+        p.update_fov(
+            &crate::render::map::MapRef::stratum_at(city, StratumKind::Street, minute),
+            bonus,
+        );
     }
     if let Some(o) = st.outside.as_mut() {
         o.at = At::City;

@@ -21,6 +21,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
+use std::cell::Cell as Kept;
 use std::collections::BTreeSet;
 
 /// The least light on the open ground, at night.
@@ -55,6 +56,8 @@ pub struct OutsideScreen {
     /// What you see from where you stand on the ground.
     sight: BTreeSet<Pos>,
     help: bool,
+    /// The map area's size as last drawn, so the ground is built for all of it.
+    map: Kept<(u16, u16)>,
 }
 
 impl OutsideScreen {
@@ -69,6 +72,9 @@ impl OutsideScreen {
             view: None,
             sight: BTreeSet::new(),
             help: false,
+            // a big window's map until the first frame says otherwise, so even the
+            // first frame on the ground has nothing still to build
+            map: Kept::new((240, 80)),
         };
         s.settle(st);
         s
@@ -82,12 +88,19 @@ impl OutsideScreen {
         };
         match o.at {
             At::Ground(c) => {
-                match self.view.as_mut() {
-                    Some(v) if v.tile(c).is_some() => {
-                        v.keep(o.world(), c);
-                    }
-                    _ => self.view = Some(GroundView::round(o.world(), c)),
-                }
+                // all that's drawn and all you might see, built before it's drawn
+                let (mw, mh) = self.map.get();
+                let view = self.view.get_or_insert_with(GroundView::default);
+                view.cover(
+                    o.world(),
+                    citygen::Rect::new(
+                        c.x - mw as i32 / 2,
+                        c.y - mh as i32 / 2,
+                        mw as i32,
+                        mh as i32,
+                    ),
+                );
+                view.cover(o.world(), ground::sight_area(c));
                 let view = self.view.as_ref().expect("made above");
                 self.sight = ground::sight(view, c, minute);
                 ground::remember(o, &self.sight);
@@ -122,9 +135,28 @@ impl OutsideScreen {
                 };
             }
             KeyCode::Char('?') => self.help = true,
-            KeyCode::Char('s') => {
-                crate::runs::when::save_now(st);
+            KeyCode::Char('s') => match crate::save::refusal(st) {
+                Some(why) => st.warn(why),
+                None => {
+                    crate::runs::when::save_now(st);
+                }
+            },
+            KeyCode::Tab => {
+                let street = citygen::Place::Stratum(StratumKind::Street);
+                let (place, pos) = st
+                    .player
+                    .as_ref()
+                    .map_or((street, Pos::new(0, 0)), |p| (p.place, p.pos));
+                return ScreenCmd::Push {
+                    to: Box::new(
+                        crate::screens::deck::Deck::new(st.tick)
+                            .focus(place, pos)
+                            .restore(st),
+                    ),
+                    fx: TransitionKind::Glitch,
+                };
             }
+            KeyCode::Char('1'..='5') => st.warn("abilities don't work out here yet"),
             KeyCode::Enter if matches!(at, Some(At::Overworld(_))) => match moves::down(st) {
                 Ok(Moved::City(cell)) => return Self::into_city(st, cell),
                 Ok(_) => self.settle(st),
@@ -158,6 +190,8 @@ impl Screen for OutsideScreen {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
         // The city's clock runs out here as it does on the map.
         crate::clock::run(st, Some(1), crate::clock::PATHS_PER_FRAME);
+        // the ground for the view as drawn, and sight as the hour turns
+        self.settle(st);
         for k in keys {
             let cmd = self.key(st, k);
             if !matches!(cmd, ScreenCmd::Stay) {
@@ -178,6 +212,7 @@ impl Screen for OutsideScreen {
             return;
         }
         let r = layout(area, false);
+        self.map.set((r.map.width, r.map.height));
         let buf = f.buffer_mut();
         match o.at {
             At::Ground(c) => self.draw_ground(st, o, c, r.map, buf),
@@ -240,7 +275,7 @@ impl Screen for OutsideScreen {
         .render(r.band_r[1], buf);
         Paragraph::new(hud::exposure_row("", rw)).render(r.band_r[2], buf);
         // The panel: here, the map, what's near, the log.
-        draw_panel(st, o, r.side, buf);
+        let log_drawn = draw_panel(st, o, r.side, buf);
         // The footer.
         let slots = crate::screens::explore::ability_slots(st);
         let footer = hud::Footer {
@@ -257,7 +292,8 @@ impl Screen for OutsideScreen {
             ice: Vec::new(),
             slots_label: "ABILITIES",
             slots: &slots,
-            hollow: false,
+            // abilities don't work out here yet
+            hollow: true,
             budgets: None,
             acting: None,
             prompt: Some((String::new(), hint(o).to_string())),
@@ -269,6 +305,19 @@ impl Screen for OutsideScreen {
             .enumerate()
         {
             Paragraph::new(row).render(r.footer[i], buf);
+        }
+        // With no room for the LOG pane, the newest entry on the footer's free row.
+        if !log_drawn && let Some(e) = st.log.recent(st.tick) {
+            let fg = match e.kind {
+                crate::messages::Kind::Warn => crate::ui::chrome::MAGENTA,
+                crate::messages::Kind::Story => CYAN,
+                crate::messages::Kind::Info => TEXT,
+            };
+            Paragraph::new(Line::from(Span::styled(
+                format!(" {}", e.text),
+                Style::default().fg(fg),
+            )))
+            .render(r.footer[2], buf);
         }
         if self.help {
             crate::screens::help::draw_keys(f, "KEYS · OUTSIDE", KEYS);
@@ -542,10 +591,10 @@ fn bearing(dx: i32, dy: i32) -> &'static str {
     }
 }
 
-/// The panel: HERE, the map, NEAR and the log, each under a rule.
-fn draw_panel(st: &AppState, o: &Outside, side: Rect, buf: &mut Buffer) {
+/// The panel: HERE, the map, NEAR and the log, each under a rule; whether the log fit.
+fn draw_panel(st: &AppState, o: &Outside, side: Rect, buf: &mut Buffer) -> bool {
     if side.width == 0 || side.height < 4 {
-        return;
+        return false;
     }
     let w = side.width;
     let mut y = side.y;
@@ -588,7 +637,9 @@ fn draw_panel(st: &AppState, o: &Outside, side: Rect, buf: &mut Buffer) {
     if y + 2 < bottom {
         put(buf, vec![rule], &mut y, 1);
         crate::ui::sidebar::draw_log(&st.log, st.tick, Rect::new(side.x, y, w, bottom - y), buf);
+        return true;
     }
+    false
 }
 
 /// The whole world scaled into the pane, two tiles a row in half blocks, `@` on you.
@@ -903,6 +954,110 @@ mod tests {
                 .any(|l| l.contains(&home) && l.contains("here")),
             "{lines:?}"
         );
+    }
+
+    #[test]
+    fn walking_into_the_city_sees_where_you_stand() {
+        let mut st = on_the_world();
+        let mut s = OutsideScreen::new(&mut st);
+        let o = st.outside.as_ref().unwrap();
+        let b = o.block(st.city.as_ref().unwrap());
+        let w = o.world().clone();
+        let (from, d) = (b.y..b.y + b.h)
+            .flat_map(|y| {
+                [
+                    (Pos::new(b.x - 1, y), Dir::E),
+                    (Pos::new(b.x + b.w, y), Dir::W),
+                ]
+            })
+            .find(|(p, d)| step_cost(&w, *p).is_some() && step_cost(&w, p.step(*d)).is_some())
+            .unwrap();
+        st.outside.as_mut().unwrap().at = At::Overworld(from);
+        let code = if d == Dir::E {
+            KeyCode::Char('l')
+        } else {
+            KeyCode::Char('h')
+        };
+        s.update(&mut st, &[key(code)]);
+        let p = st.player.as_ref().unwrap();
+        assert_eq!(p.vis().get(p.pos), Some(&Visibility::Visible));
+    }
+
+    #[test]
+    fn the_ground_is_built_ahead_of_the_view() {
+        let (mut st, mut s) = out_there();
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        let w = st.outside.as_ref().unwrap().world().clone();
+        let (cw, ch) = (TILE * w.size.w as i32, TILE * w.size.h as i32);
+        let map = layout(Rect::new(0, 0, 200, 60), false).map;
+        for step in 0..80 {
+            let At::Ground(c) = st.outside.as_ref().unwrap().at else {
+                panic!()
+            };
+            let (x0, y0) = (c.x - map.width as i32 / 2, c.y - map.height as i32 / 2);
+            for y in y0..y0 + map.height as i32 {
+                for x in x0..x0 + map.width as i32 {
+                    let p = Pos::new(x, y);
+                    let inside = x >= 0 && y >= 0 && x < cw && y < ch;
+                    assert!(
+                        !inside || s.view.as_ref().unwrap().tile(p).is_some(),
+                        "step {step}: {p:?} not built"
+                    );
+                }
+            }
+            s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        }
+    }
+
+    #[test]
+    fn refusals_show_at_the_smallest_terminal() {
+        let (mut st, mut s) = out_there();
+        st.outside.as_mut().unwrap().at = At::Overworld(Pos::new(0, 10));
+        s.update(&mut st, &[key(KeyCode::Char('h'))]);
+        let page = text(&st, &s, 100, 30);
+        assert!(page.contains("the world ends here"), "{page}");
+    }
+
+    #[test]
+    fn tab_opens_the_deck_and_abilities_say_not_here() {
+        let (mut st, mut s) = out_there();
+        assert!(matches!(
+            s.update(&mut st, &[key(KeyCode::Tab)]),
+            ScreenCmd::Push { .. }
+        ));
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        assert!(
+            st.log
+                .recent(st.tick)
+                .is_some_and(|e| e.text.contains("out here"))
+        );
+    }
+
+    #[test]
+    fn a_run_reopened_onto_changed_ground_lands_in_the_city() {
+        let (mut st, _) = out_there();
+        // the world under a saved run has changed: its cell is now in the sea, or gone
+        st.outside.as_mut().unwrap().at = At::Ground(Pos::new(-50, -50));
+        crate::runs::snapshot::after_restore(&mut st, Vec::new());
+        assert_eq!(st.outside.as_ref().unwrap().at, At::City);
+        assert!(
+            st.log
+                .recent(st.tick)
+                .is_some_and(|e| e.text.contains("world"))
+        );
+    }
+
+    #[test]
+    fn w_waits_for_a_scene_or_a_call() {
+        let mut st = on_the_world();
+        let city = st.city.clone().unwrap();
+        let o = st.outside.as_ref().unwrap();
+        let cell = o.street_of(&city, Pos::new(o.block(&city).x + 10, o.block(&city).y + 7));
+        let p = st.player.as_mut().unwrap();
+        p.place = citygen::Place::Stratum(StratumKind::Street);
+        p.pos = cell;
+        st.missions.scenes.push_back((None, "waking".to_string()));
+        assert!(crate::outside::can_leave(&st).is_err());
     }
 
     #[test]

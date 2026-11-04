@@ -27,8 +27,8 @@ pub enum At {
 pub struct Outside {
     pub params: WorldParams,
     pub at: At,
-    /// What you have seen of the open ground: per overworld tile, a bit per detail cell
-    /// (`y * 8 + x`).
+    /// What you have seen of the open ground: per chunk of 8×8 detail cells (not per
+    /// overworld tile, whose size may change), a bit a cell (`y * 8 + x`).
     pub seen: BTreeMap<Pos, u64>,
     /// The overworld, made from `params`; rebuilt on load (`after_restore`).
     #[serde(skip)]
@@ -38,9 +38,14 @@ pub struct Outside {
 impl Outside {
     /// The world round `city`, made from its seed, with you in the city.
     pub fn new(city: &City) -> anyhow::Result<Outside> {
+        // the size in tiles, not the preset's name: a run keeps its world when the
+        // presets are retuned
+        let d = WorldParams::default();
+        let citygen::Size { w, h } = d.size.size();
         let params = WorldParams {
             seed: city.seed,
-            ..Default::default()
+            size: citygen::overworld::WorldSize::Custom { w, h },
+            ..d
         };
         let world = Overworld::generate(params.clone())?;
         Ok(Outside {
@@ -159,8 +164,46 @@ pub fn nearest(from: Pos, reach: i32, ok: impl Fn(Pos) -> bool) -> Option<Pos> {
     })
 }
 
+/// You are out of the city, on the overworld or the open ground: the city holds still
+/// for you (its story waits, its cameras look at no one), your body isn't on its street.
+pub fn away(st: &AppState) -> bool {
+    st.outside.as_ref().is_some_and(|o| o.at != At::City)
+}
+
+/// After a run is opened: the overworld made again, and you back in the city if what
+/// you stood on is no longer there (the world under a saved run can change between
+/// builds until seeds are fixed for 1.0).
+pub fn reopened(st: &mut AppState) {
+    let Some(o) = st.outside.as_mut() else {
+        return;
+    };
+    o.rebuild();
+    let Some(w) = o.world.as_ref() else {
+        st.outside = None;
+        st.warn("the world out there couldn't be made again · back in the city");
+        return;
+    };
+    let stands = match o.at {
+        At::City => true,
+        At::Overworld(t) => moves::step_cost(w, t).is_some(),
+        At::Ground(c) => {
+            let (cw, ch) = (TILE * w.size.w as i32, TILE * w.size.h as i32);
+            c.x >= 0
+                && c.y >= 0
+                && c.x < cw
+                && c.y < ch
+                && citygen::overworld::detail::region(w, c.x, c.y, 1, 1)[Pos::new(0, 0)]
+                    .is_walkable()
+        }
+    };
+    if !stands {
+        o.at = At::City;
+        st.warn("the world out there has changed since this run was saved · back in the city");
+    }
+}
+
 /// Whether you can leave the city for the world now: on foot on its open street, in a
-/// city (not the lot), not jacked in, not in a fight.
+/// city (not the lot), not jacked in, not in a fight, with no call or scene under way.
 pub fn can_leave(st: &AppState) -> Result<(), &'static str> {
     let (Some(city), Some(p)) = (st.city.as_ref(), st.player.as_ref()) else {
         return Err("nowhere to go");
@@ -173,6 +216,13 @@ pub fn can_leave(st: &AppState) -> Result<(), &'static str> {
     }
     if st.net.engaged.is_some() {
         return Err("not in a fight");
+    }
+    let m = &st.missions;
+    if m.call.is_some() || !m.calls.is_empty() {
+        return Err("not with a call on the line");
+    }
+    if m.scene.is_some() || !m.scenes.is_empty() {
+        return Err("not now");
     }
     let outdoors = p.place.is_street()
         && city
@@ -352,6 +402,17 @@ mod tests {
         assert_eq!(o.at, At::Overworld(Pos::new(40, 20)));
         assert_eq!(o.seen.get(&Pos::new(41, 20)), Some(&0xF0F0));
         assert_eq!(o.world().tiles, tiles);
+    }
+
+    #[test]
+    fn a_run_keeps_its_worlds_size_in_tiles() {
+        let o = Outside::new(&medium()).unwrap();
+        let citygen::Size { w, h } = WorldParams::default().size.size();
+        assert_eq!(
+            o.params.size,
+            citygen::overworld::WorldSize::Custom { w, h }
+        );
+        assert_eq!((o.world().size.w, o.world().size.h), (w, h));
     }
 
     #[test]
