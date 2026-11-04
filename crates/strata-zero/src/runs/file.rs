@@ -281,6 +281,148 @@ mod tests {
         assert!(h.death.is_none());
     }
 
+    /// You on foot on the street at `at`.
+    fn on_foot(st: &mut AppState, at: citygen::Pos) {
+        let p = st.player.as_mut().unwrap();
+        p.place = citygen::Place::Stratum(citygen::StratumKind::Street);
+        p.pos = at;
+        p.body = None;
+    }
+
+    /// A camera looped from the Net is as blind once the run is reopened, and stays so as
+    /// the game goes on: it sees you standing in front of it no more than before the
+    /// save, and its minute warms nothing.
+    #[test]
+    fn a_looped_camera_stays_blind_after_a_reopen() {
+        use crate::net::tests::{crack_to_landing, under_kiroflux};
+        use citygen::{Place, Pos, StratumKind};
+        let (mut a, b) = under_kiroflux();
+        let cam = crate::cameras::street_cameras(a.city.as_ref().unwrap())
+            .find(|c| c.building == b)
+            .expect("Kiroflux Mart's street camera");
+        let ahead = cam.at.step(cam.facing).step(cam.facing);
+        on_foot(&mut a, ahead);
+        assert_eq!(crate::cameras::seeing(&a), vec![cam], "it sees you there");
+        // Held from the lane under its wall and looped.
+        let at = a.city.as_ref().unwrap().net.node(cam.node).cyber;
+        {
+            let p = a.player.as_mut().unwrap();
+            p.place = Place::Stratum(StratumKind::Net);
+            p.pos = Pos::new(at.x, at.y + 1);
+            p.body = Some((Place::Stratum(StratumKind::Street), ahead));
+        }
+        crack_to_landing(&mut a, game::HackTarget::Node(cam.node));
+        crate::holds::use_verb(&mut a, 'o').unwrap();
+        on_foot(&mut a, ahead);
+        assert!(crate::cameras::seeing(&a).is_empty(), "looped");
+        let heat = |st: &AppState| st.net.traces.get(&b).map_or(0, |t| t.heat);
+        let warm = heat(&a);
+
+        let dir = Dir::new("looped");
+        let a = running(a);
+        let path = write(&dir.0, &a).unwrap();
+        let mut st = reopened(&path);
+        let now = st.net.now(&st);
+        assert!(crate::holds::looped(&st, cam.node, now), "the loop is kept");
+        assert_eq!(st.net.holds, a.net.holds, "until the same minute");
+        assert!(crate::cameras::seeing(&st).is_empty(), "still blind");
+        // The game goes on in front of it: two game minutes of the map, the cameras'
+        // minute run in each.
+        st.show_fps = false;
+        let mut map = MapScreen::resumed(&mut st);
+        let opened = st.tick;
+        while st.net.now(&st) < now + 2 {
+            st.tick += 1;
+            map.update(&mut st, &[]);
+            assert!(st.tick < opened + 3_000, "the clock runs");
+        }
+        assert_eq!(st.player.as_ref().unwrap().pos, ahead);
+        assert!(heat(&st) <= warm, "the crack's heat cools; no eye warms it");
+        let cooled = heat(&st);
+        st.net.eyes_minute = None;
+        crate::cameras::tick(&mut st);
+        assert!(crate::cameras::seeing(&st).is_empty(), "still blind");
+        assert_eq!(heat(&st), cooled, "nothing seen, nothing warmed");
+        // It is the loop: the hold gone, the camera sees you where you stand.
+        st.net.holds.clear();
+        assert_eq!(crate::cameras::seeing(&st), vec![cam]);
+    }
+
+    /// A district's lamps cut from its lamp grid are still out once the run is reopened,
+    /// until the minute they were cut till: the street's dark isn't saved, but is made
+    /// again from what is.
+    #[test]
+    fn the_lights_stay_out_after_a_reopen() {
+        use crate::net::tests::{crack_to_landing, under_kiroflux};
+        use citygen::{NodeKind, Place, Pos, StratumKind};
+        let (mut a, b) = under_kiroflux();
+        // Ten at night: the lamps burn.
+        {
+            let city = a.city.as_ref().unwrap();
+            let w = a.world.as_mut().unwrap();
+            while w.minute_of_day() != 22 * 60 {
+                let t = w.tick() + sim::TICKS_PER_MINUTE;
+                w.advance(city, t);
+            }
+        }
+        let city = a.city.as_ref().unwrap();
+        let d = city.buildings[b.index()].district;
+        let grid = city
+            .net
+            .nodes
+            .iter()
+            .find(|n| {
+                n.kind == NodeKind::LampGrid
+                    && crate::owners::owner_of(city, n.id)
+                        == Some(crate::owners::Owner::District(d))
+            })
+            .expect("the district's lamp grid");
+        let (node, at) = (grid.id, grid.cyber);
+        let street = city.stratum(StratumKind::Street).unwrap();
+        let lamp = street
+            .tiles
+            .iter()
+            .map(|(p, _)| p)
+            .find(|p| street.lamps[*p] > 0 && street.tiles[*p].district == Some(d))
+            .expect("a lamp-lit tile in the district");
+        let lit = street.emitted(lamp, 22 * 60);
+        {
+            let p = a.player.as_mut().unwrap();
+            p.place = Place::Stratum(StratumKind::Net);
+            p.pos = Pos::new(at.x + 1, at.y);
+        }
+        crack_to_landing(&mut a, game::HackTarget::Node(node));
+        crate::holds::use_verb(&mut a, 'o').unwrap();
+        let street_of = |st: &AppState| {
+            st.city
+                .as_ref()
+                .unwrap()
+                .stratum(StratumKind::Street)
+                .unwrap()
+                .clone()
+        };
+        assert!(!street_of(&a).lamps_lit(lamp, 22 * 60), "cut");
+
+        let dir = Dir::new("lights-out");
+        let a = running(a);
+        let path = write(&dir.0, &a).unwrap();
+        let mut st = reopened(&path);
+        assert_eq!(st.net.lights_out, a.net.lights_out, "till the same minute");
+        let minute = st.minute_of_day();
+        assert_eq!(minute, 22 * 60);
+        let street = street_of(&st);
+        assert!(street.dark.contains(&d), "the dark made again");
+        assert!(!street.lamps_lit(lamp, minute), "the lamps still out");
+        assert!(street.emitted(lamp, minute) < lit);
+        // A frame's clock keeps them out while the minute lasts.
+        crate::holds::tick(&mut st);
+        assert!(!street_of(&st).lamps_lit(lamp, minute));
+        // And the minute come, they burn again.
+        st.net.lights_out.values_mut().for_each(|u| *u = 0);
+        crate::holds::tick(&mut st);
+        assert_eq!(street_of(&st).emitted(lamp, minute), lit);
+    }
+
     #[test]
     fn reopens_on_the_floor_it_was_saved_on() {
         let size = (120, 40);
