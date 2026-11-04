@@ -90,7 +90,11 @@ fn ground_cell(world: &Overworld, p: Pos, style: &StylePack) -> Cell {
     let t = world.tile(p).expect("in bounds");
     let r = roll(world, p);
     if t.water == Water::River {
-        return cell(ROUND[(t.river & 15) as usize], Rgb(58, 138, 216), Rgb(6, 18, 31));
+        return cell(
+            ROUND[(t.river & 15) as usize],
+            Rgb(58, 138, 216),
+            Rgb(6, 18, 31),
+        );
     }
     if let Some(u) = t.urban {
         let v = u.density as f32 / 255.0;
@@ -120,15 +124,17 @@ fn ground_cell(world: &Overworld, p: Pos, style: &StylePack) -> Cell {
     match t.water {
         Water::Lake => return cell('≈', Rgb(42, 90, 138), Rgb(10, 26, 46)),
         Water::Sea => {
-            let shore = p.neighbors8().any(|q| {
-                world
-                    .tile(q)
-                    .is_some_and(|n| n.water != Water::Sea)
-            });
+            let shore = p
+                .neighbors8()
+                .any(|q| world.tile(q).is_some_and(|n| n.water != Water::Sea));
             return if shore {
                 cell('~', Rgb(42, 90, 138), Rgb(10, 26, 46))
             } else {
-                cell(if r < 0.12 { '~' } else { ' ' }, Rgb(26, 58, 92), Rgb(5, 12, 24))
+                cell(
+                    if r < 0.12 { '~' } else { ' ' },
+                    Rgb(26, 58, 92),
+                    Rgb(5, 12, 24),
+                )
             };
         }
         _ => {}
@@ -209,7 +215,10 @@ mod tests {
                 t.urban.is_some()
             ));
         }
-        assert!(kinds.len() > 12, "a world has many kinds of tile: {kinds:?}");
+        assert!(
+            kinds.len() > 12,
+            "a world has many kinds of tile: {kinds:?}"
+        );
         for poi in &w.pois {
             assert_eq!(atlas_cell(&w, poi.at, &style).ch, poi_glyph(poi.kind).0);
         }

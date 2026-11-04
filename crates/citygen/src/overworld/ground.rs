@@ -76,7 +76,10 @@ fn open_spots(ctx: &Ctx, ok: impl Fn(Pos) -> bool) -> Vec<Pos> {
     let lowland = |p: Pos| {
         ctx.in_bounds(p)
             && ctx.tile(p).water == Water::None
-            && matches!(ctx.tile(p).ground, Ground::Flats | Ground::Scrub | Ground::Fields)
+            && matches!(
+                ctx.tile(p).ground,
+                Ground::Flats | Ground::Scrub | Ground::Fields
+            )
     };
     let centres: Vec<Pos> = ctx.cities.iter().map(|c| c.centre).collect();
     ctx.all()
@@ -130,8 +133,14 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-            assert!(w.tiles.count(|t| t.ground == Ground::Spill) > 10, "seed {seed}");
-            assert!(w.tiles.count(|t| t.ground == Ground::Salt) > 10, "seed {seed}");
+            assert!(
+                w.tiles.count(|t| t.ground == Ground::Spill) > 10,
+                "seed {seed}"
+            );
+            assert!(
+                w.tiles.count(|t| t.ground == Ground::Salt) > 10,
+                "seed {seed}"
+            );
             let dead_water = w.tiles.count(|t| {
                 matches!(t.ground, Ground::Spill | Ground::Salt) && t.water != Water::None
             });

@@ -17,7 +17,11 @@ fn base64(data: &[u8]) -> String {
     const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
         let n = (b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32;
         for i in 0..4 {
             if i <= chunk.len() {
@@ -91,7 +95,9 @@ fn grid(world: &Overworld, style: &StylePack) -> String {
 
 fn summary(world: &Overworld, took: Duration) -> String {
     let mut out = String::new();
-    let land = world.tiles.count(|t| matches!(t.water, Water::None | Water::River)) as f32
+    let land = world
+        .tiles
+        .count(|t| matches!(t.water, Water::None | Water::River)) as f32
         / world.size.area() as f32;
     let _ = write!(
         out,
@@ -112,8 +118,12 @@ fn summary(world: &Overworld, took: Duration) -> String {
                 format!(", {} towns", c.towns.len())
             };
             let tiles = world.tiles.count(|t| {
-                t.urban
-                    .is_some_and(|u| world.cities.get(u.city as usize).is_some_and(|o| o.name == c.name))
+                t.urban.is_some_and(|u| {
+                    world
+                        .cities
+                        .get(u.city as usize)
+                        .is_some_and(|o| o.name == c.name)
+                })
             });
             format!(
                 "<b>{}</b> ({}size {:.1}, {} tiles{})",
@@ -170,7 +180,8 @@ fn summary(world: &Overworld, took: Duration) -> String {
 
 /// The page for `worlds`, each with the time it took to generate.
 pub fn world_sheet(worlds: &[(Overworld, Duration)], style: &StylePack) -> String {
-    let mut out = String::from("<!doctype html><meta charset=utf-8><title>World sheet</title><style>");
+    let mut out =
+        String::from("<!doctype html><meta charset=utf-8><title>World sheet</title><style>");
     let _ = write!(
         out,
         "@font-face{{font-family:'StrataFira';font-weight:400;src:url(data:font/ttf;base64,{}) format('truetype')}}\

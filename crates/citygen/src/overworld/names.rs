@@ -99,7 +99,10 @@ fn regions(ctx: &mut Ctx, rng: &mut impl Rng) {
     };
     let mut out: Vec<Region> = Vec::new();
     let high = |c: &Ctx, p: Pos| {
-        matches!(c.tile(p).ground, Ground::Hills | Ground::Mountains | Ground::Peak)
+        matches!(
+            c.tile(p).ground,
+            Ground::Hills | Ground::Mountains | Ground::Peak
+        )
     };
     for ridge in ctx.ridges.clone() {
         let (x, y) = ridge[ridge.len() / 2];
@@ -137,7 +140,9 @@ fn regions(ctx: &mut Ctx, rng: &mut impl Rng) {
         (RegionKind::Spill, Ground::Spill, ctx.spill),
         (RegionKind::Salt, Ground::Salt, ctx.salt),
     ] {
-        if let Some(at) = at.and_then(|a| nearest_inside(ctx, a, 12.0, |p| ctx.tile(p).ground == ground)) {
+        if let Some(at) =
+            at.and_then(|a| nearest_inside(ctx, a, 12.0, |p| ctx.tile(p).ground == ground))
+        {
             out.push(Region {
                 kind,
                 name: name(kind),
@@ -154,7 +159,9 @@ fn regions(ctx: &mut Ctx, rng: &mut impl Rng) {
         .filter(|p| ctx.tile(*p).ground == Ground::Flats && ctx.tile(*p).water == Water::None)
         .max_by(|a, b| {
             let f = |p: &Pos| road[*p].min(town[*p]).min(wet[*p]);
-            f(a).total_cmp(&f(b)).then(b.y.cmp(&a.y)).then(b.x.cmp(&a.x))
+            f(a).total_cmp(&f(b))
+                .then(b.y.cmp(&a.y))
+                .then(b.x.cmp(&a.x))
         })
     {
         out.push(Region {
@@ -237,7 +244,8 @@ mod tests {
                     RegionKind::Salt => t.ground == Ground::Salt,
                     RegionKind::Flats => t.ground == Ground::Flats,
                     RegionKind::Valley => {
-                        t.water == Water::River || matches!(t.ground, Ground::Fields | Ground::Scrub)
+                        t.water == Water::River
+                            || matches!(t.ground, Ground::Fields | Ground::Scrub)
                     }
                 };
                 assert!(inside, "seed {seed}: {} at {:?}", r.name, r.at);

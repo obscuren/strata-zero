@@ -172,14 +172,17 @@ fn ridges(ctx: &mut Ctx) {
         // A short walk (it ran into the sea or the edge) starts again elsewhere.
         for _attempt in 0..12 {
             let pts = walk(ctx, &mut rng, &land, &far, min_in, (sw, sh));
-            let length: f32 = pts.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum();
+            let length: f32 = pts
+                .windows(2)
+                .map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1))
+                .sum();
             if length >= 30.0 {
                 ctx.ridges.push(pts);
                 break;
             }
         }
     }
-    ctx.ridges.sort_by(|a, b| b.len().cmp(&a.len()));
+    ctx.ridges.sort_by_key(|r| std::cmp::Reverse(r.len()));
 }
 
 /// One ridge: a wandering walk with momentum from a start well inside the land, roughly
@@ -213,7 +216,7 @@ fn walk(
     let mut at = s(start);
     let mut pts = vec![at];
     let mut length = 0.0;
-    let want = rng.random_range(50.0..90.0);
+    let want = rng.random_range(40.0..75.0);
     let margin = 8.0;
     let open = |q: (f32, f32)| {
         q.0 >= margin
@@ -258,7 +261,7 @@ fn elevation(ctx: &mut Ctx) {
             sp.0 + 10.0 * (warp_x.at(sp.0 / 14.0, sp.1 / 14.0, 3) - 0.5),
             sp.1 + 10.0 * (warp_y.at(sp.0 / 14.0, sp.1 / 14.0, 3) - 0.5),
         );
-        let width = 11.0 * (0.7 + 0.6 * girth.at(sp.0 / 20.0, sp.1 / 20.0, 2));
+        let width = 9.5 * (0.7 + 0.6 * girth.at(sp.0 / 20.0, sp.1 / 20.0, 2));
         let m = ctx
             .ridges
             .iter()
@@ -320,7 +323,10 @@ mod tests {
                 w.tiles.count(|t| t.ground == Ground::Mountains) > 20,
                 "seed {seed}"
             );
-            assert!(w.tiles.count(|t| t.ground == Ground::Hills) > 40, "seed {seed}");
+            assert!(
+                w.tiles.count(|t| t.ground == Ground::Hills) > 40,
+                "seed {seed}"
+            );
         }
     }
 

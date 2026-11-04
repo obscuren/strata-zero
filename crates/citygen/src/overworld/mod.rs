@@ -86,7 +86,10 @@ impl WorldParams {
         let bad = |field: &'static str, reason: String| GenError::InvalidParams { field, reason };
         let Size { w, h } = self.size.size();
         if !(60..=512).contains(&w) || !(24..=256).contains(&h) {
-            return Err(bad("size", format!("{w}x{h} is outside 60..=512 by 24..=256")));
+            return Err(bad(
+                "size",
+                format!("{w}x{h} is outside 60..=512 by 24..=256"),
+            ));
         }
         if !(3..=8).contains(&self.cities) {
             return Err(bad("cities", format!("{} is outside 3..=8", self.cities)));
@@ -418,7 +421,11 @@ pub(crate) fn sketch(w: &Overworld) -> String {
 #[ignore]
 fn sketch_a_few() {
     for seed in 0..4 {
-        let w = Overworld::generate(WorldParams { seed, ..Default::default() }).unwrap();
+        let w = Overworld::generate(WorldParams {
+            seed,
+            ..Default::default()
+        })
+        .unwrap();
         println!("seed {seed}\n{}", sketch(&w));
     }
 }

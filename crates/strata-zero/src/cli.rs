@@ -5,9 +5,9 @@ use crate::save::save_city;
 use anyhow::{Context, Result, bail};
 use citygen::overworld::{Overworld, WorldParams, WorldSize};
 use citygen::{GenParams, Generator, SizePreset, WaterMode};
-use std::ops::Range;
 use clap::{Parser, Subcommand};
 use std::ffi::OsStr;
+use std::ops::Range;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -76,15 +76,24 @@ pub enum Cmd {
 pub fn parse_seeds(s: &str) -> Result<Range<u64>> {
     match s.split_once("..") {
         Some((a, b)) => {
-            let a: u64 = a.trim().parse().with_context(|| format!("bad seed `{a}`"))?;
-            let b: u64 = b.trim().parse().with_context(|| format!("bad seed `{b}`"))?;
+            let a: u64 = a
+                .trim()
+                .parse()
+                .with_context(|| format!("bad seed `{a}`"))?;
+            let b: u64 = b
+                .trim()
+                .parse()
+                .with_context(|| format!("bad seed `{b}`"))?;
             if a >= b {
                 bail!("seeds `{s}` run backwards or are empty");
             }
             Ok(a..b)
         }
         None => {
-            let n: u64 = s.trim().parse().with_context(|| format!("bad seed `{s}`"))?;
+            let n: u64 = s
+                .trim()
+                .parse()
+                .with_context(|| format!("bad seed `{s}`"))?;
             Ok(n..n + 1)
         }
     }

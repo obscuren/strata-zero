@@ -32,6 +32,16 @@ Sizes: `small` (160x80), `medium` (240x120), `large` (320x160) or `WxH`.
 Other flags: `--districts 4..12` (an upper bound; slivers merge into their
 neighbours), `--water none|bay|river`, `--density 0..1`.
 
+Overworlds, many seeds on one page in the atlas look, to open in a browser:
+
+```sh
+cargo run --release -p strata-zero -- world --seeds 0..12 --out world-sheet.html
+```
+
+`--seed N` for one; `--size small|medium|large|WxH` (120x40, 160x52, 220x72);
+`--cities 3..8`. The generator is `citygen::overworld`; its design is
+`docs/superpowers/specs/2026-11-04-world-generator-design.md`.
+
 Needs a truecolor terminal of at least 100x30 cells (iTerm2, Ghostty, kitty,
 WezTerm). Saved cities go to `./cities/*.city`.
 

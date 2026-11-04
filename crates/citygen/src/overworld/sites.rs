@@ -7,15 +7,15 @@ use crate::geom::Pos;
 use crate::params::GenError;
 use rand::Rng;
 
-const HOME_SIZE: f32 = 14.0;
-const TOWN_SIZE: f32 = 4.5;
+const HOME_SIZE: f32 = 16.0;
+const TOWN_SIZE: f32 = 5.0;
 
 pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
     let mut rng = ctx.rng(4);
     let scored = scores(ctx);
     let n = ctx.params.cities as usize;
     let middles: Vec<f32> = (0..n.saturating_sub(2))
-        .map(|_| rng.random_range(6.0..=9.0))
+        .map(|_| rng.random_range(7.0..=10.0))
         .collect();
     let wet = |p: Pos| {
         (-4..=4)
@@ -44,7 +44,12 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
                 && !matches!(t.ground, Ground::Hills | Ground::Mountains | Ground::Peak)
                 && wet(*p)
         })
-        .max_by(|a, b| sea[*a].total_cmp(&sea[*b]).then(b.y.cmp(&a.y)).then(b.x.cmp(&a.x)))
+        .max_by(|a, b| {
+            sea[*a]
+                .total_cmp(&sea[*b])
+                .then(b.y.cmp(&a.y))
+                .then(b.x.cmp(&a.x))
+        })
         .filter(|p| sea[*p] > sea[home])
         .unwrap_or(home);
     let mut spacing = 38.0f32;
@@ -113,7 +118,12 @@ fn scores(ctx: &Ctx) -> Vec<(f32, Pos)> {
     let mouth = distance_field(size, |p| ctx.mouths.contains(&p), 8.0);
     let high = distance_field(
         size,
-        |p| matches!(ctx.tile(p).ground, Ground::Hills | Ground::Mountains | Ground::Peak),
+        |p| {
+            matches!(
+                ctx.tile(p).ground,
+                Ground::Hills | Ground::Mountains | Ground::Peak
+            )
+        },
         12.0,
     );
     let (w, h) = (size.w as i32, size.h as i32);
@@ -155,14 +165,21 @@ fn scores(ctx: &Ctx) -> Vec<(f32, Pos)> {
                 score += 1.0;
             }
             let (x, y) = s(p);
-            let edge = x.min(w as f32 - 1.0 - x).min(y).min(2.0 * h as f32 - 2.0 - y);
+            let edge = x
+                .min(w as f32 - 1.0 - x)
+                .min(y)
+                .min(2.0 * h as f32 - 2.0 - y);
             if edge < 6.0 {
                 score -= 3.0;
             }
             (score + 0.5 * roll(ctx.seed(), 0x517E, p), p)
         })
         .collect();
-    out.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.y.cmp(&b.1.y)).then(a.1.x.cmp(&b.1.x)));
+    out.sort_by(|a, b| {
+        b.0.total_cmp(&a.0)
+            .then(a.1.y.cmp(&b.1.y))
+            .then(a.1.x.cmp(&b.1.x))
+    });
     out
 }
 

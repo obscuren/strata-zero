@@ -139,7 +139,10 @@ fn towns(ctx: &mut Ctx, f: &Fields, held: &mut Grid<Option<(u8, f32)>>) {
             let t = ctx.tile(at);
             if roll(ctx.seed(), 0x70E, at) >= 0.55
                 || matches!(t.water, Water::Sea | Water::Lake)
-                || matches!(t.ground, Ground::Peak | Ground::Spill | Ground::Salt | Ground::Mountains)
+                || matches!(
+                    t.ground,
+                    Ground::Peak | Ground::Spill | Ground::Salt | Ground::Mountains
+                )
                 || placed.iter().any(|q| sdist(*q, at) < 8.0)
                 || ctx
                     .cities
@@ -176,7 +179,9 @@ fn districts(ctx: &mut Ctx, f: &Fields) {
             .collect();
         let want = ((c.size / 2.4).round() as usize).clamp(1, 6);
         let mut order = mine.clone();
-        order.sort_by(|a, b| roll(seed, 0xD15 + ci as u64, *a).total_cmp(&roll(seed, 0xD15 + ci as u64, *b)));
+        order.sort_by(|a, b| {
+            roll(seed, 0xD15 + ci as u64, *a).total_cmp(&roll(seed, 0xD15 + ci as u64, *b))
+        });
         let mut seeds = vec![c.centre];
         for p in order {
             if seeds.len() >= want {
@@ -243,7 +248,10 @@ mod tests {
                         !matches!(t.water, Water::Sea | Water::Lake),
                         "seed {seed} {p:?}"
                     );
-                    assert!(!matches!(t.ground, Ground::Peak | Ground::Spill | Ground::Salt));
+                    assert!(!matches!(
+                        t.ground,
+                        Ground::Peak | Ground::Spill | Ground::Salt
+                    ));
                 }
             }
             for (i, c) in w.cities.iter().enumerate() {

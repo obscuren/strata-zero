@@ -176,7 +176,11 @@ fn flow(ctx: &Ctx, spring: Pos, target: Pos) -> Option<Vec<Pos>> {
         let (x, y) = s(to);
         let e = t.elevation as f32 / 255.0;
         let edge = to.x.min(w - 1 - to.x).min(2 * to.y.min(h - 1 - to.y));
-        let near_edge = if edge < 6 { 30.0 * (6 - edge) as f32 } else { 0.0 };
+        let near_edge = if edge < 6 {
+            30.0 * (6 - edge) as f32
+        } else {
+            0.0
+        };
         Some((10.0 + 300.0 * e + 120.0 * valley.at(x / 12.0, y / 12.0, 3) + near_edge) as u32)
     })?;
     let line = smooth(ctx, &route);
@@ -209,7 +213,11 @@ fn flow(ctx: &Ctx, spring: Pos, target: Pos) -> Option<Vec<Pos>> {
                 break;
             }
         }
-        if course.last().is_some_and(|l| ctx.tile(*l).water != Water::None) && course.len() > 1 {
+        if course
+            .last()
+            .is_some_and(|l| ctx.tile(*l).water != Water::None)
+            && course.len() > 1
+        {
             break;
         }
         add(&mut course, p);
@@ -272,10 +280,9 @@ fn smooth(ctx: &Ctx, route: &[Pos]) -> Vec<Pos> {
 /// Lays the course on the tiles: river where there's land, linked tile to tile, the
 /// last land tile linked on into the water it meets.
 fn mark(ctx: &mut Ctx, mut course: Vec<Pos>) {
-    let into = course
-        .last()
-        .copied()
-        .filter(|p| ctx.tile(*p).water != Water::None || ctx.rivers.iter().flatten().any(|q| q == p));
+    let into = course.last().copied().filter(|p| {
+        ctx.tile(*p).water != Water::None || ctx.rivers.iter().flatten().any(|q| q == p)
+    });
     if into.is_some() {
         course.pop();
     }
@@ -334,7 +341,9 @@ mod tests {
                 let ends_wet = end.neighbors4().chain([end]).any(|q| {
                     w.tile(q)
                         .is_some_and(|t| matches!(t.water, Water::Sea | Water::Lake))
-                        || w.rivers.iter().any(|o| !std::ptr::eq(o, r) && o.contains(&q))
+                        || w.rivers
+                            .iter()
+                            .any(|o| !std::ptr::eq(o, r) && o.contains(&q))
                 });
                 assert!(ends_wet, "seed {seed}: river ends dry at {end:?}");
             }

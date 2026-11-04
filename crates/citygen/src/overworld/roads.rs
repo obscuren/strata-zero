@@ -46,7 +46,11 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
         }
     }
     let loops = rng.random_range(1..=2);
-    for &(d, a, b) in spare.iter().filter(|(d, _, _)| *d < 1.4 * tree_longest).take(loops) {
+    for &(d, a, b) in spare
+        .iter()
+        .filter(|(d, _, _)| *d < 1.4 * tree_longest)
+        .take(loops)
+    {
         let _ = d;
         if let Some(path) = road(ctx, centres[a], centres[b]) {
             lay(ctx, path, None);
@@ -83,7 +87,7 @@ fn road(ctx: &Ctx, a: Pos, b: Pos) -> Option<Vec<Pos>> {
             _ => 0.0,
         };
         let (x, y) = s(to);
-        Some((ground + water + 8.0 * bends.at(x / 6.0, y / 6.0, 3)) as u32)
+        Some((ground + water + 26.0 * bends.at(x / 7.0, y / 7.0, 3)) as u32)
     })
 }
 
@@ -254,7 +258,11 @@ mod tests {
                     r.path.windows(2).all(|p| p[0].manhattan(p[1]) == 1),
                     "seed {seed}"
                 );
-                assert!(r.path.iter().all(|p| w.tile(*p).unwrap().water != Water::Sea));
+                assert!(
+                    r.path
+                        .iter()
+                        .all(|p| w.tile(*p).unwrap().water != Water::Sea)
+                );
                 assert!(r.path.iter().all(|p| w.tile(*p).unwrap().road != 0));
             }
             let exits = w.routes.iter().filter(|r| {

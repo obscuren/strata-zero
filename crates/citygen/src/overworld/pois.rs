@@ -45,11 +45,19 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
         let mut spots: Vec<Pos> = match kind {
             PoiKind::TruckStop => beside_middles(ctx),
             PoiKind::Checkpoint => outside_cities(ctx),
-            PoiKind::Relay => ctx.all().filter(|p| dry(*p) && ctx.tile(*p).ground == Ground::Hills).collect(),
-            PoiKind::Camp => ctx.all().filter(|p| lowland(*p) && road[*p] >= 10.0).collect(),
+            PoiKind::Relay => ctx
+                .all()
+                .filter(|p| dry(*p) && ctx.tile(*p).ground == Ground::Hills)
+                .collect(),
+            PoiKind::Camp => ctx
+                .all()
+                .filter(|p| lowland(*p) && road[*p] >= 10.0)
+                .collect(),
             PoiKind::Wreck => ctx
                 .all()
-                .filter(|p| dry(*p) && !matches!(ctx.tile(*p).ground, Ground::Peak | Ground::Mountains))
+                .filter(|p| {
+                    dry(*p) && !matches!(ctx.tile(*p).ground, Ground::Peak | Ground::Mountains)
+                })
                 .collect(),
             PoiKind::Arcology => ctx
                 .all()
@@ -60,7 +68,10 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
                         && centres.iter().all(|c| sdist(*p, *c) >= 15.0)
                 })
                 .collect(),
-            PoiKind::Solar => ctx.all().filter(|p| dry(*p) && ctx.tile(*p).ground == Ground::Flats).collect(),
+            PoiKind::Solar => ctx
+                .all()
+                .filter(|p| dry(*p) && ctx.tile(*p).ground == Ground::Flats)
+                .collect(),
             PoiKind::WaterPlant => ctx.all().filter(|p| dry(*p) && shore[*p] <= 1.5).collect(),
             PoiKind::TestRange => ctx.all().filter(|p| dry(*p) && dead[*p] <= 1.5).collect(),
             PoiKind::Rig => ctx
@@ -110,7 +121,9 @@ fn beside_middles(ctx: &Ctx) -> Vec<Pos> {
         let mut side: Vec<Pos> = r.path[r.path.len() / 3..2 * r.path.len() / 3]
             .iter()
             .flat_map(|p| p.neighbors4())
-            .filter(|q| ctx.in_bounds(*q) && ctx.tile(*q).road == 0 && ctx.tile(*q).water == Water::None)
+            .filter(|q| {
+                ctx.in_bounds(*q) && ctx.tile(*q).road == 0 && ctx.tile(*q).water == Water::None
+            })
             .collect();
         side.sort_by(|a, b| sdist(*a, mid).total_cmp(&sdist(*b, mid)));
         out.extend(side.into_iter().take(3));
@@ -156,7 +169,10 @@ mod tests {
             assert!(w.pois.len() >= 6, "seed {seed}: {}", w.pois.len());
             for p in &w.pois {
                 let t = w.tile(p.at).unwrap();
-                assert!(t.urban.is_none() && t.ground != Ground::Peak, "seed {seed} {p:?}");
+                assert!(
+                    t.urban.is_none() && t.ground != Ground::Peak,
+                    "seed {seed} {p:?}"
+                );
                 match p.kind {
                     PoiKind::Rig => assert_eq!(t.water, Water::Sea, "seed {seed}"),
                     PoiKind::Checkpoint => assert!(t.road != 0, "seed {seed}"),
