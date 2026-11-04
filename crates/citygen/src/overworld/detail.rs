@@ -10,7 +10,7 @@
 
 use super::field::Fbm;
 use super::{Ground, Overworld, Water, WorldTile};
-use crate::geom::{Grid, Pos, Size};
+use crate::geom::{Dir, Grid, Pos, Size};
 use crate::rng::{hash64, tile_hash};
 use crate::tile::{Terrain, Tile};
 use crate::world::StratumKind;
@@ -37,6 +37,8 @@ pub fn region(world: &Overworld, x0: i32, y0: i32, w: u32, h: u32) -> Grid<Tile>
     );
     p.cover();
     p.water();
+    p.rivers();
+    p.washes();
     p.shores();
     p.crop(x0, y0, w, h)
 }
@@ -53,7 +55,6 @@ struct Patch<'a> {
 
 const SEA: u8 = 1;
 const LAKE: u8 = 2;
-#[allow(dead_code)]
 const RIVER: u8 = 3;
 
 impl<'a> Patch<'a> {
@@ -185,14 +186,14 @@ impl<'a> Patch<'a> {
             let ring = (-2..=2)
                 .flat_map(|dx| (-1..=1).map(move |dy| (dx, dy)))
                 .filter(|&(dx, dy)| (dx, dy) != (0, 0) && near(dx, dy));
-            if wet != 0 {
+            if wet != 0 && self.get(p).is_some_and(|t| t.terrain == Terrain::Water) {
                 let by_land = ring
                     .map(|(dx, dy)| p.offset(dx, dy))
                     .any(|q| self.in_world(q) && self.get(q).is_some() && self.wet_at(q) == 0);
                 if by_land {
                     shallow.push(p);
                 }
-            } else if self.in_world(p) {
+            } else if wet == 0 && self.in_world(p) {
                 let touching: Vec<u8> = (-1..=1)
                     .flat_map(|dx| (-1..=1).map(move |dy| (dx, dy)))
                     .map(|(dx, dy)| self.wet_at(p.offset(dx, dy)))
@@ -221,6 +222,103 @@ impl<'a> Patch<'a> {
         }
     }
 
+    /// The overworld tiles whose lines (rivers, washes, roads) can reach the patch.
+    fn tiles_in_reach(&self) -> Vec<Pos> {
+        let Size { w, h } = self.grid.size();
+        let (tx0, ty0) = (self.x0.div_euclid(TILE) - 1, self.y0.div_euclid(TILE) - 1);
+        let (tx1, ty1) = (
+            (self.x0 + w as i32).div_euclid(TILE) + 1,
+            (self.y0 + h as i32).div_euclid(TILE) + 1,
+        );
+        (ty0..=ty1)
+            .flat_map(|ty| (tx0..=tx1).map(move |tx| Pos::new(tx, ty)))
+            .filter(|t| self.world.tile(*t).is_some())
+            .collect()
+    }
+
+    /// Stamps a square brush `width` wide round each of `cells` with `f`.
+    fn brush(&mut self, cells: &[Pos], width: i32, mut f: impl FnMut(&mut Self, Pos)) {
+        let lo = -(width / 2);
+        for c in cells {
+            for dy in lo..lo + width {
+                for dx in lo..lo + width {
+                    let p = c.offset(dx, dy);
+                    if self.get(p).is_some() && self.in_world(p) {
+                        f(self, p);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Rivers: water along each river tile's line, as wide as the river is there, the
+    /// narrow upper reaches with a ford here and there.
+    fn rivers(&mut self) {
+        let w = self.world;
+        let mut fords = Vec::new();
+        for t in self.tiles_in_reach() {
+            let mask = w.tile(t).unwrap().river;
+            if mask == 0 {
+                continue;
+            }
+            let width = river_width(w, t).max(3) as i32;
+            let line = centreline(w, t.x, t.y, mask, false, 2021);
+            self.brush(&line, width, |p, q| {
+                if p.wet_at(q) != SEA {
+                    p.set(q, Terrain::Water);
+                    p.set_wet(q, RIVER);
+                }
+            });
+            if width == 3 {
+                fords.extend(
+                    line.iter()
+                        .copied()
+                        .filter(|c| roll(w.seed, 2022, *c) < 1.0 / 6.0),
+                );
+            }
+        }
+        self.brush(&fords, 3, |p, q| {
+            if p.wet_at(q) == RIVER {
+                p.set(q, Terrain::Ford);
+            }
+        });
+    }
+
+    /// Dry washes: a sandy bed along each wash tile's line, 3 wide (4 in its lower half),
+    /// scrub along its banks; never over water.
+    fn washes(&mut self) {
+        let w = self.world;
+        let mut bed = Vec::new();
+        for t in self.tiles_in_reach() {
+            let mask = w.tile(t).unwrap().wash;
+            if mask == 0 {
+                continue;
+            }
+            let lower = w.washes.iter().any(|c| c[c.len() / 2..].contains(&t));
+            let line = centreline(w, t.x, t.y, mask, false, 2031);
+            self.brush(&line, if lower { 4 } else { 3 }, |p, q| {
+                if p.wet_at(q) == 0 {
+                    bed.push(q);
+                }
+            });
+        }
+        for &q in &bed {
+            self.set(q, Terrain::Wash);
+        }
+        let banks: Vec<Pos> = bed
+            .iter()
+            .flat_map(|q| q.neighbors8())
+            .filter(|q| {
+                self.get(*q).is_some_and(|t| {
+                    matches!(t.terrain, Terrain::Dirt | Terrain::Rise | Terrain::Crops)
+                })
+            })
+            .collect();
+        for q in banks {
+            self.set(q, Terrain::Scrub);
+        }
+    }
+
     /// The cells of `x0, y0, w, h`, each with its stable variant.
     fn crop(&self, x0: i32, y0: i32, w: u32, h: u32) -> Grid<Tile> {
         let mut out = Grid::filled(Size { w, h }, Tile::new(Terrain::Void));
@@ -236,6 +334,104 @@ impl<'a> Patch<'a> {
         }
         out
     }
+}
+
+/// How wide a river is (detail tiles) on overworld tile `p`: 3 at its spring, 7 at its
+/// last tile; 0 where no river runs.
+pub fn river_width(world: &Overworld, p: Pos) -> u8 {
+    world
+        .rivers
+        .iter()
+        .filter_map(|r| {
+            let k = r.iter().position(|q| *q == p)?;
+            Some((3.0 + 4.0 * k as f32 / (r.len().max(2) - 1) as f32).round() as u8)
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// Where a line out of tile `(tx, ty)` on `side` crosses into the next tile: the cell
+/// just inside this tile. A road crosses at the edge's middle, always; a river or wash
+/// at a spot the edge's own hash picks near the middle; both tiles compute the same.
+fn crossing(world: &Overworld, tx: i32, ty: i32, side: Dir, road: bool, salt: u64) -> Pos {
+    let offset = |etx: i32, ety: i32, vertical_edge: bool| -> i32 {
+        if road {
+            3
+        } else {
+            let h = hash64(
+                hash64(world.seed, salt),
+                ((etx as u32 as u64) << 33) ^ ((ety as u32 as u64) << 1) ^ vertical_edge as u64,
+            );
+            2 + (h % 4) as i32
+        }
+    };
+    match side {
+        Dir::E => Pos::new(TILE * tx + TILE - 1, TILE * ty + offset(tx, ty, true)),
+        Dir::W => Pos::new(TILE * tx, TILE * ty + offset(tx - 1, ty, true)),
+        Dir::S => Pos::new(TILE * tx + offset(tx, ty, false), TILE * ty + TILE - 1),
+        _ => Pos::new(TILE * tx + offset(tx, ty - 1, false), TILE * ty),
+    }
+}
+
+/// Four-connected cells from `a` to `b`, stepping along the longer way.
+fn straight(a: Pos, b: Pos) -> Vec<Pos> {
+    let (mut p, mut out) = (a, vec![a]);
+    while p != b {
+        let (dx, dy) = (b.x - p.x, b.y - p.y);
+        if dx != 0 && dx.abs() * 2 >= dy.abs() {
+            p.x += dx.signum();
+        } else {
+            p.y += dy.signum();
+        }
+        out.push(p);
+    }
+    out
+}
+
+/// The cells a line runs on through tile `(tx, ty)`, from the link mask: straight
+/// across when it passes through, else from each crossing to the tile's middle (a road
+/// exactly there, so its corners line up with its crossings).
+fn centreline(world: &Overworld, tx: i32, ty: i32, mask: u8, road: bool, salt: u64) -> Vec<Pos> {
+    use super::{LINK_E, LINK_N, LINK_S, LINK_W};
+    let cross = |d: Dir| crossing(world, tx, ty, d, road, salt);
+    if mask == LINK_E | LINK_W {
+        return straight(cross(Dir::W), cross(Dir::E));
+    }
+    if mask == LINK_N | LINK_S {
+        return straight(cross(Dir::N), cross(Dir::S));
+    }
+    let jiggle = |k: u64| {
+        if road {
+            0
+        } else {
+            (hash64(
+                world.seed ^ salt,
+                ((tx as u32 as u64) << 32 | ty as u32 as u64) + k,
+            ) % 2) as i32
+        }
+    };
+    let mid = Pos::new(TILE * tx + 3 + jiggle(1), TILE * ty + 3 + jiggle(2));
+    let mut out = vec![mid];
+    for (bit, d) in [
+        (LINK_N, Dir::N),
+        (LINK_E, Dir::E),
+        (LINK_S, Dir::S),
+        (LINK_W, Dir::W),
+    ] {
+        if mask & bit == 0 {
+            continue;
+        }
+        let c = cross(d);
+        // along the crossing's own axis first, so a road leaves its edge square
+        let bend = if matches!(d, Dir::E | Dir::W) {
+            Pos::new(mid.x, c.y)
+        } else {
+            Pos::new(c.x, mid.y)
+        };
+        out.extend(straight(c, bend));
+        out.extend(straight(bend, mid));
+    }
+    out
 }
 
 /// The overworld tile under detail point `(x, y)`, the nearest in-world one past the edge.
@@ -362,6 +558,7 @@ mod tests {
                                 n.terrain,
                                 Terrain::Water
                                     | Terrain::Shallows
+                                    | Terrain::Ford
                                     | Terrain::Void
                                     | Terrain::Bridge
                                     | Terrain::Railing
@@ -400,6 +597,79 @@ mod tests {
             whole(&w).count(|t| t.terrain == Terrain::Sand) > 50,
             "a coast has a beach"
         );
+    }
+
+    #[test]
+    fn rivers_run_unbroken_across_tiles() {
+        for seed in 0..3 {
+            let w = Overworld::generate(WorldParams {
+                seed,
+                ..Default::default()
+            })
+            .unwrap();
+            let r = whole(&w);
+            let wet = |p: Pos| {
+                r.get(p).is_some_and(|t| {
+                    matches!(
+                        t.terrain,
+                        Terrain::Water | Terrain::Shallows | Terrain::Ford | Terrain::Bridge
+                    )
+                })
+            };
+            for river in &w.rivers {
+                for pair in river.windows(2) {
+                    let (a, b) = (pair[0], pair[1]);
+                    // water in tile a reaches the edge it shares with tile b
+                    let edge: Vec<Pos> = (0..8)
+                        .map(|k| match (b.x - a.x, b.y - a.y) {
+                            (1, 0) => Pos::new(8 * a.x + 7, 8 * a.y + k),
+                            (-1, 0) => Pos::new(8 * a.x, 8 * a.y + k),
+                            (0, 1) => Pos::new(8 * a.x + k, 8 * a.y + 7),
+                            _ => Pos::new(8 * a.x + k, 8 * a.y),
+                        })
+                        .collect();
+                    let across = |p: Pos| Pos::new(p.x + (b.x - a.x), p.y + (b.y - a.y));
+                    assert!(
+                        edge.iter().any(|p| wet(*p) && wet(across(*p))),
+                        "seed {seed}: the river breaks between {a:?} and {b:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rivers_widen_toward_the_mouth() {
+        let w = Overworld::generate(WorldParams {
+            seed: 0,
+            ..Default::default()
+        })
+        .unwrap();
+        let river = w.rivers.iter().max_by_key(|r| r.len()).unwrap();
+        assert_eq!(river_width(&w, river[0]), 3);
+        assert_eq!(river_width(&w, *river.last().unwrap()), 7);
+        assert_eq!(river_width(&w, Pos::new(-5, -5)), 0);
+    }
+
+    #[test]
+    fn washes_run_unbroken_and_dry() {
+        for seed in 0..4 {
+            let w = Overworld::generate(WorldParams {
+                seed,
+                ..Default::default()
+            })
+            .unwrap();
+            for wash in &w.washes {
+                for pair in wash.windows(2) {
+                    let (a, b) = (pair[0], pair[1]);
+                    let r = region(&w, 8 * a.x.min(b.x), 8 * a.y.min(b.y), 16, 16);
+                    assert!(
+                        r.count(|t| t.terrain == Terrain::Wash) >= 6,
+                        "seed {seed}: the wash breaks at {a:?}-{b:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
