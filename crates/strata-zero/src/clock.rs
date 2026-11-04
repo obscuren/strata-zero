@@ -26,6 +26,8 @@ pub fn run(st: &mut AppState, world_ticks: Option<u64>, paths: usize) {
     let roots = st.backdoors.roots();
     st.net.minute(now, inside, &mut st.constructs, &roots);
     crate::net::tick_backdoors(st);
+    crate::holds::tick(st);
+    crate::cameras::tick(st);
     crate::jobs::tick(st);
     crate::missions::tick(st);
 }

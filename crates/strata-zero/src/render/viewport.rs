@@ -207,7 +207,7 @@ impl Widget for MapView<'_> {
                     connector: map.connector(p),
                     kind: map.kind(p),
                     wall_mask: mask,
-                    lamps_on: map.lamps_on(),
+                    lamps_on: map.lamps_on_at(p),
                     sky: sky_of(map),
                     glow: map.glow(p),
                 };

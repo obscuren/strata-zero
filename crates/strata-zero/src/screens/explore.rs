@@ -1468,6 +1468,49 @@ impl MapScreen {
         })
     }
 
+    /// A verb key jacked in: a line logged, the hijack's picker, or a held terminal's
+    /// shell; out of reach or spent, a warning.
+    fn verb_key(st: &mut AppState, c: char) -> ScreenCmd {
+        use crate::holds::VerbDone;
+        match crate::holds::use_verb(st, c) {
+            Ok(VerbDone::Said(line)) => st.say(line),
+            Ok(VerbDone::Shell(host, key)) => {
+                return ScreenCmd::Push {
+                    to: Box::new(crate::screens::terminal::Terminal::open(st, host, key)),
+                    fx: TransitionKind::Glitch,
+                };
+            }
+            Ok(VerbDone::Pick(node)) => {
+                let Some(b) = st
+                    .city
+                    .as_ref()
+                    .and_then(|c| c.net.nodes.get(node.index()))
+                    .and_then(|n| n.building)
+                else {
+                    return ScreenCmd::Stay;
+                };
+                let choices = crate::holds::hijack_lines(st, b)
+                    .into_iter()
+                    .map(|(line, text)| {
+                        Choice::on(
+                            line.key(),
+                            line.label(),
+                            text,
+                            crate::ui::chrome::MAGENTA,
+                            Pick::Hijack { node, line },
+                        )
+                    })
+                    .collect();
+                return ScreenCmd::Push {
+                    to: Box::new(Popup::verbs("HIJACK", choices, st.tick)),
+                    fx: TransitionKind::None,
+                };
+            }
+            Err(why) => st.warn(why),
+        }
+        ScreenCmd::Stay
+    }
+
     /// A number key jacked in: the deck's program in that slot, run at once against
     /// the one target it applies to, or the short list when there are several.
     fn program_key(&mut self, st: &mut AppState, n: usize) -> ScreenCmd {
@@ -2414,6 +2457,13 @@ impl MapScreen {
             }
             return Some(ScreenCmd::Stay);
         }
+        // A verb key on the Net: the verb of the held node nearest you.
+        if jacked
+            && let KeyCode::Char(c) = k.code
+            && crate::holds::VERB_KEYS.contains(&c)
+        {
+            return Some(Self::verb_key(st, c));
+        }
         // The aim: `g` starts it anywhere in a construct, the arrows move it while it
         // is up or while the board is on turns, enter walks it, esc drops it.
         let inside = match st.player.as_ref().map(|p| (p.place, p.pos)) {
@@ -3099,6 +3149,16 @@ impl Screen for MapScreen {
         // and a live blast's shading.
         let scorch = ScorchOverlay { fx: &st.fx, vis };
         overlays.push(&scorch);
+        // On the street: the cones of cameras that see you, or that you hold.
+        let cones = if self.place == Place::Stratum(StratumKind::Street) {
+            crate::cameras::cones(st)
+        } else {
+            Vec::new()
+        };
+        let cone_overlay = crate::cameras::ConeOverlay { cones: &cones, vis };
+        if !cones.is_empty() {
+            overlays.push(&cone_overlay);
+        }
         let live_place = st.player.as_ref().map(|p| p.place);
         let live_ground = live_place
             .map(|pl| crate::blast::live_footprints(st, pl))
@@ -3304,11 +3364,40 @@ impl Screen for MapScreen {
             .map(|view| crate::render::turns::TurnOverlay { view });
         // A calm run hangs off its target, under a roll's bolt and a slip's mark; when
         // it has no room the footer reads it instead.
-        let tether = crate::net::tether_view(st, self.place).and_then(|view| {
-            let layout =
-                crate::render::tether::layout(&view, map_area, origin, |p| map.tile(p).is_some())?;
-            Some((view, layout))
-        });
+        // A decoy floods the ad board's room.
+        let flood = match self.place {
+            Place::Construct(b) => crate::holds::decoy_room(st, b),
+            _ => Vec::new(),
+        };
+        let flood_blocks = crate::render::path::BlockOverlay {
+            tiles: &flood,
+            bg: crate::holds::FLOOD_BG,
+        };
+        if !flood.is_empty() {
+            overlays.push(&flood_blocks);
+        }
+        // With no run in flight, the held node nearest you carries the dock; the
+        // others glow on their tiles.
+        let held_glow: Vec<Pos> = crate::holds::held_on(st, self.place)
+            .into_iter()
+            .skip(1)
+            .map(|(_, at)| at)
+            .collect();
+        let held_blocks = crate::render::path::BlockOverlay {
+            tiles: &held_glow,
+            bg: crate::holds::HELD_BG,
+        };
+        if !held_glow.is_empty() {
+            overlays.push(&held_blocks);
+        }
+        let tether = crate::net::tether_view(st, self.place)
+            .or_else(|| crate::holds::dock_view(st, self.place))
+            .and_then(|view| {
+                let layout = crate::render::tether::layout(&view, map_area, origin, |p| {
+                    map.tile(p).is_some()
+                })?;
+                Some((view, layout))
+            });
         let tether_overlay =
             tether
                 .as_ref()
@@ -3373,6 +3462,16 @@ impl Screen for MapScreen {
                 .set_char(crate::render::tileset::holo_glyph(&st.style, st.tick))
                 .set_fg(crate::ui::chrome::MAGENTA);
         }
+        // A hijacked building's holo ads glow magenta, glyph kept.
+        if self.place.is_street() {
+            for (pos, _) in crate::holds::hijacked_ads(st) {
+                if vis.is_none_or(|v| v.get(pos) == Some(&crate::render::Visibility::Visible))
+                    && let Some((sx, sy)) = tile_to_screen(map_area, origin, pos)
+                {
+                    f.buffer_mut()[(sx, sy)].set_fg(crate::ui::chrome::MAGENTA);
+                }
+            }
+        }
         // A holo ad cutting into the news: its glow in MAGENTA, its glyph kept.
         if let Some(pos) = crate::missions::news::cut_in(st)
             && self.place.is_street()
@@ -3427,6 +3526,26 @@ impl Screen for MapScreen {
         // The daze swims the whole map picture, `@` and visitors with it; what floats
         // over the map below stays still.
         crate::missions::daze::draw(f.buffer_mut(), map_area, st);
+        // A tapped camera's feed hangs off its node, away from the dock's label.
+        if st.net.feed.is_some() && self.place == st.player.as_ref().map_or(self.place, |p| p.place)
+        {
+            let feed_at = st
+                .net
+                .feed
+                .and_then(|n| crate::holds::node_pos(st, self.place, n));
+            let avoid = tether
+                .as_ref()
+                .filter(|(view, _)| Some(view.target) == feed_at)
+                .map(|(_, lay)| lay.left);
+            crate::render::feed::draw(
+                f.buffer_mut(),
+                map_area,
+                origin,
+                st,
+                avoid,
+                area.width >= 110,
+            );
+        }
         // Your `@`'s cell, kept for what draws over the map: the HOLO call, the Rest
         // window here and the one a screen on top draws.
         let me = st
@@ -9655,6 +9774,74 @@ mod tests {
             ),
             "the picked piece"
         );
+    }
+
+    /// Seed 8 on the Net beside a street terminal of Kiroflux Mart's district, held.
+    fn street_terminal_held() -> (AppState, MapScreen) {
+        let (mut st, b) = crate::net::tests::under_kiroflux();
+        let mut s = MapScreen::explore(0);
+        let city = st.city.as_ref().unwrap();
+        let d = city.buildings[b.index()].district;
+        let owner = crate::owners::Owner::District(d);
+        let term = city
+            .net
+            .nodes
+            .iter()
+            .find(|n| {
+                n.kind == citygen::NodeKind::Terminal
+                    && crate::owners::owner_of(city, n.id) == Some(owner)
+            })
+            .expect("a street terminal");
+        let (id, at) = (term.id, term.cyber);
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), at);
+        let now = st.net.now(&st);
+        crate::holds::take(&mut st, id, owner, now);
+        (st, s)
+    }
+
+    #[test]
+    fn shell_opens_a_held_terminal_from_the_net() {
+        let (mut st, mut s) = street_terminal_held();
+        let cmd = s.update(&mut st, &[key(KeyCode::Char('r'))]);
+        assert!(matches!(cmd, ScreenCmd::Push { .. }), "the terminal opens");
+        // A key no held node answers says so.
+        let cmd = s.update(&mut st, &[key(KeyCode::Char('f'))]);
+        assert!(matches!(cmd, ScreenCmd::Stay));
+        assert_eq!(last(&st), Some("the terminal has nothing on [f]"));
+    }
+
+    #[test]
+    fn the_dock_draws_on_the_held_node() {
+        let (st, s) = street_terminal_held();
+        let text = draw_screen(&s, &st, 180, 40);
+        assert!(text.contains("TERMINAL  HELD 60m"), "{text}");
+        assert!(text.contains("[r] shell"));
+    }
+
+    #[test]
+    fn hijack_opens_the_picker_and_puts_the_line_up() {
+        let (mut st, b) = crate::net::tests::under_kiroflux();
+        let mut s = MapScreen::explore(0);
+        let (ad, at) = crate::net::tests::node_cyber(&st, b, citygen::NodeKind::AdBoard);
+        stand(
+            &mut st,
+            &mut s,
+            Place::Stratum(StratumKind::Net),
+            Pos::new(at.x, at.y - 1),
+        );
+        let now = st.net.now(&st);
+        crate::holds::take(&mut st, ad, crate::owners::Owner::Building(b), now);
+        let ScreenCmd::Push { to: mut picker, .. } = s.update(&mut st, &[key(KeyCode::Char('i'))])
+        else {
+            panic!("the hijack's picker");
+        };
+        picker.update(&mut st, &[key(KeyCode::Char('s'))]);
+        assert!(
+            last(&st).is_some_and(|l| l.contains("KIROFLUX MART SELLS YOUR FACE")),
+            "{:?}",
+            last(&st)
+        );
+        assert!(!crate::holds::hijacked_ads(&st).is_empty());
     }
 
     #[test]

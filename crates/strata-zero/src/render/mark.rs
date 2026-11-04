@@ -54,7 +54,7 @@ pub fn mark_tile(st: &AppState, map: &MapRef, pos: Pos) -> Option<(char, Color)>
         connector: map.connector(pos),
         kind: map.kind(pos),
         wall_mask: wall_mask(map, pos, tile.terrain),
-        lamps_on: map.lamps_on(),
+        lamps_on: map.lamps_on_at(pos),
         sky: sky_of(map),
         glow: map.glow(pos),
     };

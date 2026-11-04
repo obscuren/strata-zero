@@ -320,6 +320,20 @@ pub struct NetState {
     pub engaged: Option<Engagement>,
     /// Your turns left stunned by a blast of your own.
     pub stunned_you: u8,
+    /// The nodes you hold and the verbs spent on them (`holds`).
+    pub holds: Vec<crate::holds::Hold>,
+    /// The camera whose feed is open.
+    pub feed: Option<NodeId>,
+    /// Buildings whose holo ads say your line.
+    pub hijacks: Vec<crate::holds::Hijack>,
+    /// Districts whose street lamps are cut, until a game minute.
+    pub lights_out: BTreeMap<citygen::DistrictId, u64>,
+    /// An ad board flooding its room in a construct.
+    pub decoy: Option<crate::holds::Decoy>,
+    /// The game minute the street's cameras last warmed a trace.
+    pub eyes_minute: Option<u64>,
+    /// The clock tick a hijacked ad near you may say its line again.
+    pub line_next: u64,
     last_minute: u64,
     /// Every roll comes out this way, for tests.
     #[cfg(test)]
@@ -345,6 +359,13 @@ impl Default for NetState {
             beat: 0,
             engaged: None,
             stunned_you: 0,
+            holds: Vec::new(),
+            feed: None,
+            hijacks: Vec::new(),
+            lights_out: BTreeMap::new(),
+            decoy: None,
+            eyes_minute: None,
+            line_next: 0,
             last_minute: 0,
             #[cfg(test)]
             force_roll: None,
@@ -480,9 +501,13 @@ impl NetState {
         })
     }
 
+    /// A camera blinded, or looped by a hold that still lasts.
     pub fn blinded(&self, node: NodeId, now: u64) -> bool {
         self.live(now)
             .any(|h| h.target == HackTarget::Node(node) && h.op == Op::Blind)
+            || self.holds.iter().any(|h| {
+                h.node == node && now < h.until && h.used.contains(&crate::holds::Verb::Loop)
+            })
     }
 
     pub fn copied(&self, node: NodeId, now: u64) -> bool {
@@ -864,7 +889,7 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
                     land(st, b, run.target, kind, spec.op, spec.rating, now)
                 }
                 Some(crate::owners::Owner::District(_)) | None => {
-                    land_outside(st, run.target, kind, spec.op, now)
+                    land_outside(st, owner, run.target, kind, spec.op, now)
                 }
             };
             st.say(line.clone());
@@ -1009,6 +1034,12 @@ fn land(
             st.net.mask_fresh = true;
             format!("mask raised · {MASK_TURNS} turns")
         }
+        (Op::Crack | Op::Spoof, Target::Node(k)) if crate::holds::holdable(k) => match target {
+            HackTarget::Node(id) => {
+                crate::holds::take(st, id, crate::owners::Owner::Building(b), now)
+            }
+            _ => format!("{} {}", k.label(), op.done_label()),
+        },
         (Op::Crack, Target::Node(k)) => format!("{} cracked", k.label()),
         (op, _) => format!("{} landed", op.label()),
     };
@@ -1019,7 +1050,14 @@ fn land(
 
 /// A run landing on what no building owns: a district's node, or yourself on the open
 /// Net. Shield and mask work as inside; a district's node is cracked.
-fn land_outside(st: &mut AppState, target: HackTarget, kind: Target, op: Op, _now: u64) -> String {
+fn land_outside(
+    st: &mut AppState,
+    owner: Option<crate::owners::Owner>,
+    target: HackTarget,
+    kind: Target,
+    op: Op,
+    now: u64,
+) -> String {
     match (op, kind) {
         (Op::Shield, _) => {
             st.net.shield = (st.net.shield + 1).min(2);
@@ -1034,10 +1072,13 @@ fn land_outside(st: &mut AppState, target: HackTarget, kind: Target, op: Op, _no
             st.net.mask_fresh = true;
             format!("mask raised · {MASK_TURNS} turns")
         }
-        (_, Target::Node(k)) => {
-            let _ = target;
-            format!("{} {}", k.label(), op.done_label())
+        (Op::Crack | Op::Spoof, Target::Node(k)) if crate::holds::holdable(k) => {
+            match (target, owner) {
+                (HackTarget::Node(id), Some(o)) => crate::holds::take(st, id, o, now),
+                _ => format!("{} {}", k.label(), op.done_label()),
+            }
         }
+        (_, Target::Node(k)) => format!("{} {}", k.label(), op.done_label()),
         (op, _) => format!("{} landed", op.label()),
     }
 }
@@ -1684,6 +1725,13 @@ pub fn ice_step(st: &mut AppState, b: BuildingId, i: usize, can_move: bool, can_
     let mut moved = None;
     let mut hits = false;
     match ice.mode {
+        IceMode::Asleep if crate::holds::decoy_draw(st, b).is_some() => {
+            // A decoy floods a room: asleep, it goes to look, and stands there.
+            let to = crate::holds::decoy_draw(st, b).expect("checked");
+            if can_move && g.pos.chebyshev(to) > 1 {
+                moved = step_toward(k, g.pos, to, pos);
+            }
+        }
         IceMode::Asleep => {
             if can_move && g.beat.len() >= 2 {
                 let home = g.beat[ice.step.min(g.beat.len() - 1)];
@@ -2621,6 +2669,7 @@ pub fn beat(st: &mut AppState) {
         return;
     }
     ice_turn(st);
+    crate::holds::decoy_beat(st);
     if st
         .player
         .as_ref()
@@ -3181,7 +3230,7 @@ pub fn trace_lines(net: &NetState, b: BuildingId, now: u64) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use citygen::{BuildingId, IceGrade, NodeId, NodeKind};
     use game::{Op, Target};
@@ -3197,7 +3246,7 @@ mod tests {
     }
 
     /// Seed 8 on the open Net, on the lane under Kiroflux Mart's gate.
-    fn under_kiroflux() -> (AppState, BuildingId) {
+    pub(crate) fn under_kiroflux() -> (AppState, BuildingId) {
         let mut st = AppState::new();
         st.enter_city(
             citygen::Generator::run(citygen::GenParams {
@@ -3314,7 +3363,7 @@ mod tests {
     }
 
     /// The node of a kind at a building, by its tile on the open Net.
-    fn node_cyber(st: &AppState, b: BuildingId, kind: NodeKind) -> (NodeId, Pos) {
+    pub(crate) fn node_cyber(st: &AppState, b: BuildingId, kind: NodeKind) -> (NodeId, Pos) {
         let n = st
             .city
             .as_ref()
@@ -3328,7 +3377,7 @@ mod tests {
     }
 
     /// Runs a crack to its landing, every roll a hit.
-    fn crack_to_landing(st: &mut AppState, target: HackTarget) -> Vec<String> {
+    pub(crate) fn crack_to_landing(st: &mut AppState, target: HackTarget) -> Vec<String> {
         st.net.force_roll = Some(10);
         start_run(st, ItemId::new("crack"), target).unwrap();
         let mut lines = Vec::new();

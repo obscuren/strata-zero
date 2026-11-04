@@ -13,6 +13,8 @@ pub struct Exposure {
     pub light: u8,
     /// Everyone on the stratum who can see you.
     pub eyes: Vec<PersonId>,
+    /// The street cameras that see you, by their tile.
+    pub cameras: Vec<citygen::Pos>,
 }
 
 /// The exposure right now: on a stratum, from the walkers around you; dark and
@@ -33,7 +35,7 @@ pub fn of(st: &AppState) -> Exposure {
     let Some(world) = st.world.as_ref().filter(|_| k == StratumKind::Street) else {
         return Exposure {
             light,
-            eyes: vec![],
+            ..Exposure::default()
         };
     };
     let radius = player.radius_at(map.daylight());
@@ -50,6 +52,8 @@ pub fn of(st: &AppState) -> Exposure {
             MoverKind::Walker { id, .. } => Some((id, m.pos)),
             _ => None,
         })
+        // Walkers staring at a hijacked ad see nothing else.
+        .filter(|(_, from)| !crate::holds::staring(st, *from))
         .filter(|(_, from)| {
             sight::sees(
                 *from,
@@ -62,7 +66,12 @@ pub fn of(st: &AppState) -> Exposure {
         })
         .map(|(id, _)| id)
         .collect();
-    Exposure { light, eyes }
+    let cameras = crate::cameras::seeing(st).iter().map(|c| c.at).collect();
+    Exposure {
+        light,
+        eyes,
+        cameras,
+    }
 }
 
 /// The word for a light level.
@@ -75,7 +84,7 @@ pub fn band(light: u8) -> &'static str {
 
 /// The HUD's words: `dim · 2 eyes`, `bright · unseen`.
 pub fn text(e: &Exposure) -> String {
-    let eyes = match e.eyes.len() {
+    let eyes = match e.eyes.len() + e.cameras.len() {
         0 => "unseen".to_string(),
         1 => "1 eye".to_string(),
         n => format!("{n} eyes"),
@@ -150,19 +159,27 @@ mod tests {
         assert_eq!(band(255), "bright");
         let none = Exposure {
             light: 70,
-            eyes: vec![],
+            ..Exposure::default()
         };
         assert_eq!(text(&none), "dim · unseen");
         let two = Exposure {
             light: 200,
             eyes: vec![sim::PersonId(1), sim::PersonId(2)],
+            ..Exposure::default()
         };
         assert_eq!(text(&two), "bright · 2 eyes");
         let one = Exposure {
             light: 10,
             eyes: vec![sim::PersonId(1)],
+            ..Exposure::default()
         };
         assert_eq!(text(&one), "dark · 1 eye");
+        let cam = Exposure {
+            light: 10,
+            eyes: vec![sim::PersonId(1)],
+            cameras: vec![citygen::Pos::new(3, 4)],
+        };
+        assert_eq!(text(&cam), "dark · 2 eyes", "a camera is an eye");
     }
 
     #[test]

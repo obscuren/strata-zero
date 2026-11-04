@@ -45,6 +45,10 @@ pub trait TileMap {
     fn lamps_on(&self) -> bool {
         true
     }
+    /// Whether the lamps on a tile burn: by the clock, and not where a lamp grid is cut.
+    fn lamps_on_at(&self, _p: Pos) -> bool {
+        self.lamps_on()
+    }
     /// Whether light past the dark radius is seen here: the physical strata only.
     fn lit_sight(&self) -> bool {
         false
@@ -232,7 +236,7 @@ impl TileMap for StratumMap<'_> {
 
     fn emits(&self, p: Pos) -> bool {
         self.tile(p).is_some_and(|t| {
-            citygen::lighting::emits(t.terrain, t.feature, self.stratum, self.lamps_on())
+            citygen::lighting::emits(t.terrain, t.feature, self.stratum, self.lamps_on_at(p))
         })
     }
 
@@ -246,6 +250,12 @@ impl TileMap for StratumMap<'_> {
 
     fn lamps_on(&self) -> bool {
         citygen::lighting::lamps_on_at(self.stratum, self.minute)
+    }
+
+    fn lamps_on_at(&self, p: Pos) -> bool {
+        self.city
+            .stratum(self.stratum)
+            .map_or_else(|| self.lamps_on(), |s| s.lamps_lit(p, self.minute))
     }
 
     fn lit_sight(&self) -> bool {
@@ -396,6 +406,14 @@ impl TileMap for MapRef<'_> {
             MapRef::Stratum(m) => m.lamps_on(),
             MapRef::Floor(m) => m.lamps_on(),
             MapRef::Construct(m) => m.lamps_on(),
+        }
+    }
+
+    fn lamps_on_at(&self, p: Pos) -> bool {
+        match self {
+            MapRef::Stratum(m) => m.lamps_on_at(p),
+            MapRef::Floor(m) => m.lamps_on_at(p),
+            MapRef::Construct(m) => m.lamps_on_at(p),
         }
     }
 

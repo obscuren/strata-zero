@@ -43,7 +43,14 @@ pub fn applies(op: Op, target: Target) -> bool {
             | (Op::Shield | Op::Mask, Target::Deck)
             | (
                 Op::Spoof,
-                Target::Node(NodeKind::DoorLock | NodeKind::LiftCtrl)
+                Target::Node(
+                    NodeKind::DoorLock
+                        | NodeKind::LiftCtrl
+                        | NodeKind::Camera
+                        | NodeKind::AdBoard
+                        | NodeKind::LampGrid
+                        | NodeKind::Terminal
+                )
             )
             | (Op::Blind, Target::Node(NodeKind::Camera))
             | (
@@ -249,6 +256,8 @@ mod tests {
         assert!(applies(Op::Blind, Target::Node(NodeKind::Camera)));
         assert!(applies(Op::Spoof, Target::Node(NodeKind::LiftCtrl)));
         assert!(!applies(Op::Spoof, Target::Node(NodeKind::Server)));
+        assert!(applies(Op::Spoof, Target::Node(NodeKind::Camera)));
+        assert!(applies(Op::Spoof, Target::Node(NodeKind::LampGrid)));
         assert!(applies(Op::Copy, Target::Node(NodeKind::Server)));
         assert!(applies(Op::Copy, Target::Node(NodeKind::DataVault)));
         assert!(applies(Op::Backdoor, Target::Node(NodeKind::Server)));

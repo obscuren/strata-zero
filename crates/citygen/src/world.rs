@@ -95,6 +95,10 @@ pub struct Stratum {
     pub steady: Grid<u8>,
     /// Light from street lamps, which switch off by day. No ambient.
     pub lamps: Grid<u8>,
+    /// Districts whose street lamps are cut for now (a lamp grid's lights out). Only for
+    /// the session: never saved.
+    #[serde(skip)]
+    pub dark: std::collections::BTreeSet<DistrictId>,
 }
 
 impl Stratum {
@@ -104,13 +108,26 @@ impl Stratum {
             tiles: Grid::filled(size, Tile::VOID),
             steady: Grid::filled(size, 0),
             lamps: Grid::filled(size, 0),
+            dark: std::collections::BTreeSet::new(),
         }
+    }
+
+    /// Whether the lamps light the tile at `minute`: they burn by the clock, and not in
+    /// a district whose grid is cut.
+    pub fn lamps_lit(&self, p: Pos, minute: u16) -> bool {
+        crate::lighting::lamps_on_at(self.kind, minute)
+            && (self.dark.is_empty()
+                || !self
+                    .tiles
+                    .get(p)
+                    .and_then(|t| t.district)
+                    .is_some_and(|d| self.dark.contains(&d)))
     }
 
     /// Light the tile throws on its own at `minute`: steady fixtures plus lamps while on.
     pub fn emitted(&self, p: Pos, minute: u16) -> u8 {
         let steady = self.steady.get(p).copied().unwrap_or(0);
-        let lamps = if crate::lighting::lamps_on_at(self.kind, minute) {
+        let lamps = if self.lamps_lit(p, minute) {
             self.lamps.get(p).copied().unwrap_or(0)
         } else {
             0

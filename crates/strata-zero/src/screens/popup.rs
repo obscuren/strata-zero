@@ -72,6 +72,11 @@ pub enum Pick {
     JackOutAsk,
     /// Hops from a server to another backdoor's gate.
     Hop(citygen::BuildingId),
+    /// Puts a line on a held ad board's building's ads.
+    Hijack {
+        node: citygen::NodeId,
+        line: crate::holds::Line,
+    },
     /// A fixer's offer, in place of their window.
     Offer(crate::jobs::JobId),
     /// Takes the offered job.
@@ -618,6 +623,13 @@ impl Popup {
                 )),
                 fx: TransitionKind::None,
             },
+            Pick::Hijack { node, line } => {
+                let said = crate::holds::hijack(st, node, line);
+                st.say(said);
+                ScreenCmd::Pop {
+                    fx: TransitionKind::None,
+                }
+            }
             Pick::Terminal { origin, key } => ScreenCmd::Replace {
                 to: Box::new(crate::screens::terminal::Terminal::open(st, origin, key)),
                 fx: TransitionKind::None,
