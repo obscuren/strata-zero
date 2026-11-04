@@ -41,14 +41,34 @@ pub fn region(world: &Overworld, x0: i32, y0: i32, w: u32, h: u32) -> Grid<Tile>
     p.washes();
     p.shores();
     p.roads();
+    super::poi_ground::lay(&mut p);
     p.power_lines();
     p.litter();
     p.crop(x0, y0, w, h)
 }
 
+/// Whether any water (or its shallows) lies in world-wide `rect` or a cell round it, from
+/// the ground and water alone: what a POI's building is placed by, the same whichever
+/// patch asks.
+pub(crate) fn wet_in(world: &Overworld, rect: crate::geom::Rect) -> bool {
+    let mut p = Patch::new(
+        world,
+        rect.x - 1 - MARGIN,
+        rect.y - 1 - MARGIN,
+        (rect.w + 2 + 2 * MARGIN) as u32,
+        (rect.h + 2 + 2 * MARGIN) as u32,
+    );
+    p.cover();
+    p.water();
+    p.rivers();
+    (rect.y - 1..rect.y + rect.h + 1)
+        .flat_map(|y| (rect.x - 1..rect.x + rect.w + 1).map(move |x| Pos::new(x, y)))
+        .any(|q| p.wet_at(q) != 0)
+}
+
 /// A rectangle of the detail world while it is being built.
-struct Patch<'a> {
-    world: &'a Overworld,
+pub(crate) struct Patch<'a> {
+    pub(crate) world: &'a Overworld,
     x0: i32,
     y0: i32,
     grid: Grid<Tile>,
@@ -81,11 +101,11 @@ impl<'a> Patch<'a> {
         Pos::new(p.x - self.x0, p.y - self.y0)
     }
 
-    fn get(&self, p: Pos) -> Option<&Tile> {
+    pub(crate) fn get(&self, p: Pos) -> Option<&Tile> {
         self.grid.get(self.local(p))
     }
 
-    fn set(&mut self, p: Pos, terrain: Terrain) {
+    pub(crate) fn set(&mut self, p: Pos, terrain: Terrain) {
         let l = self.local(p);
         if let Some(t) = self.grid.get_mut(l) {
             t.terrain = terrain;
@@ -93,7 +113,7 @@ impl<'a> Patch<'a> {
     }
 
     /// Whether `p` lies inside the world.
-    fn in_world(&self, p: Pos) -> bool {
+    pub(crate) fn in_world(&self, p: Pos) -> bool {
         p.x >= 0
             && p.y >= 0
             && p.x < TILE * self.world.size.w as i32
@@ -135,7 +155,7 @@ impl<'a> Patch<'a> {
         }
     }
 
-    fn wet_at(&self, p: Pos) -> u8 {
+    pub(crate) fn wet_at(&self, p: Pos) -> u8 {
         self.wet.get(self.local(p)).copied().unwrap_or(0)
     }
 
@@ -519,7 +539,23 @@ impl<'a> Patch<'a> {
             })
     }
 
-    fn set_feature(&mut self, p: Pos, f: Feature) {
+    /// Whether `p` lies within `reach` cells of the patch.
+    pub(crate) fn near(&self, p: Pos, reach: i32) -> bool {
+        let Size { w, h } = self.grid.size();
+        p.x >= self.x0 - reach
+            && p.y >= self.y0 - reach
+            && p.x < self.x0 + w as i32 + reach
+            && p.y < self.y0 + h as i32 + reach
+    }
+
+    pub(crate) fn clear_feature(&mut self, p: Pos) {
+        let l = self.local(p);
+        if let Some(t) = self.grid.get_mut(l) {
+            t.feature = None;
+        }
+    }
+
+    pub(crate) fn set_feature(&mut self, p: Pos, f: Feature) {
         let l = self.local(p);
         if let Some(t) = self.grid.get_mut(l) {
             t.feature = Some(f);
@@ -865,7 +901,12 @@ mod tests {
                     w.tile(q)
                         .is_some_and(|n| n.river != 0 || n.wash != 0 || n.water != Water::None)
                 });
-                if by_line {
+                // and a POI's place is its own, not the ground's
+                let by_poi = w
+                    .pois
+                    .iter()
+                    .any(|o| (o.at.x - p.x).abs() <= 5 && (o.at.y - p.y).abs() <= 3);
+                if by_line || by_poi {
                     continue;
                 }
                 let own = |c: Terrain| match t.ground {
@@ -1467,6 +1508,10 @@ mod tests {
         }
     }
 
+    fn t_of(p: Pos) -> Option<Pos> {
+        Some(Pos::new(p.x.div_euclid(8), p.y.div_euclid(8)))
+    }
+
     #[test]
     fn nothing_stands_on_water_or_the_road() {
         for seed in 0..2 {
@@ -1476,8 +1521,16 @@ mod tests {
                 g.count(|t| t.feature.is_some()) > 100,
                 "seed {seed}: no dressing"
             );
+            // a checkpoint's gate stands across its road
+            let gate = |p: Pos| {
+                t_of(p).is_some_and(|t| {
+                    w.pois
+                        .iter()
+                        .any(|o| o.kind == crate::overworld::PoiKind::Checkpoint && o.at == t)
+                })
+            };
             for (p, t) in g.iter() {
-                if t.feature.is_some() {
+                if t.feature.is_some() && !(t.feature == Some(Feature::Barrier) && gate(p)) {
                     assert!(
                         !matches!(
                             t.terrain,
