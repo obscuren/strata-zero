@@ -389,7 +389,10 @@ impl AppIo<'_> {
         }
         match args {
             [] if self.st.journal.mails.is_empty() => Ok(one("NO MAIL")),
-            [] => Ok(lines(access::mail_inbox(self.st))),
+            [] => Ok(Output {
+                open_mail: true,
+                ..Output::default()
+            }),
             [n] => {
                 let i = n
                     .parse::<usize>()
@@ -856,15 +859,18 @@ mod tests {
         let me = user_for(&st, HostId::Rig);
         assert_eq!(sh.user, me);
         assert_eq!(sh.home, format!("/home/{me}"));
-        let inbox = text(&go(&mut st, &mut sh, "mail"));
-        assert!(inbox.contains('*'), "{inbox}");
-        assert!(!st.journal.mails[0].read);
+        // `mail` asks the screen for HELIX mail, and wins the line as nano does
+        let out = go(&mut st, &mut sh, "mail");
+        assert!(out.open_mail && out.lines.is_empty(), "{out:?}");
+        assert!(!st.journal.mails[0].read, "opening reads nothing");
+        let out = go(&mut st, &mut sh, "mail; echo hi");
+        assert!(out.open_mail && out.lines.is_empty(), "{out:?}");
+        let out = go(&mut st, &mut sh, "echo hi | mail");
+        assert!(out.open_mail, "{out:?}");
         let mail = text(&go(&mut st, &mut sh, "cat ~/mail/001-a-favour.txt"));
         assert!(mail.contains("Door code"), "{mail}");
         assert!(mail.starts_with("MAIL 1 OF 1 · NEW\nFROM     "), "{mail}");
         assert!(st.journal.mails[0].read);
-        let inbox = text(&go(&mut st, &mut sh, "mail"));
-        assert!(!inbox.contains('*'), "{inbox}");
         let one = text(&go(&mut st, &mut sh, "mail 1"));
         assert!(one.starts_with("MAIL 1 OF 1\nFROM     "), "{one}");
         let none = go(&mut st, &mut sh, "mail 9");

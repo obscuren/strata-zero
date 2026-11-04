@@ -475,24 +475,6 @@ pub fn alarm_state(st: &AppState, b: BuildingId) -> String {
     }
 }
 
-/// The rig's inbox, one row a mail, `*` for unread.
-pub fn mail_inbox(st: &AppState) -> Vec<String> {
-    st.journal
-        .mails
-        .iter()
-        .enumerate()
-        .map(|(i, m)| {
-            format!(
-                "{:>2}  {} {:<10} {}",
-                i + 1,
-                if m.read { " " } else { "*" },
-                m.from.to_uppercase(),
-                m.subject.to_uppercase()
-            )
-        })
-        .collect()
-}
-
 /// A mail's time of day, `hh:mm`.
 pub fn mail_time(m: &credentials::Mail) -> String {
     let t = crate::jobs::day_minute(m.at);
