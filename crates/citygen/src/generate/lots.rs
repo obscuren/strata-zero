@@ -268,6 +268,20 @@ impl StageRunner for LotsStage {
             });
             self.mega_blocks.extend(best);
         }
+        // A city on its site whose Megablocks districts are too broken up for one still
+        // raises its largest big-enough block as a megablock: the runner's home is in one.
+        if self.mega_blocks.is_empty() && ctx.params().site.is_some() {
+            let (w, h) = MEGABLOCK_MIN[MEGABLOCK_MIN.len() - 1];
+            let best = ctx
+                .scratch
+                .blocks
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| b.rect.w >= w && b.rect.h >= h)
+                .max_by_key(|(i, b)| (b.rect.area(), std::cmp::Reverse(*i)))
+                .map(|(i, _)| i);
+            self.mega_blocks.extend(best);
+        }
         self.next = 0;
         self.filled = false;
         ctx.scratch.lots.clear();

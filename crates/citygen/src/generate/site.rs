@@ -262,6 +262,30 @@ mod tests {
     }
 
     #[test]
+    fn every_home_city_has_the_runners_home() {
+        // the home is high in a megablock round an atrium: a home city whose Megablocks
+        // district is too broken up for one still has one somewhere (8's is)
+        for seed in [8u64, 3, 41] {
+            let w = Overworld::generate(crate::overworld::WorldParams {
+                seed,
+                ..Default::default()
+            })
+            .unwrap();
+            let home = w.cities.iter().position(|c| c.home).unwrap() as u8;
+            let p = sited(
+                &w,
+                home,
+                crate::GenParams {
+                    seed,
+                    ..Default::default()
+                },
+            );
+            let c = crate::Generator::run(p).unwrap();
+            assert!(crate::interior::home(&c).is_some(), "seed {seed}: no home");
+        }
+    }
+
+    #[test]
     fn every_home_city_builds_on_its_site() {
         // home cities each cut by their own water, all of them connected (69's is cut in
         // two by a river and bridged)
