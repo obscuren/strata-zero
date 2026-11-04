@@ -18,11 +18,12 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # The screens the app jobs draw: the title, a sheet, the rig, the skill cards, a glow
-  # and the street terminal.
+  # The screens the app jobs draw: the title, the launch splash, a sheet, the rig, the
+  # skill cards, a glow and the street terminal.
   SHOTS: >-
-    window::tests::window_shots shots::attributes_sheet shots::the_rig_at_home
-    shots::skill_cards shots::combat_bloom_mid shots::terminal_on_the_street
+    window::tests::window_shots shots::splash shots::attributes_sheet
+    shots::the_rig_at_home shots::skill_cards shots::combat_bloom_mid
+    shots::terminal_on_the_street
 
 jobs:
   fmt:

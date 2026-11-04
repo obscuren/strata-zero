@@ -298,7 +298,11 @@ impl Splash {
             x = lay.put(buf, x, y, &format!("{}  ", address(at_head)), fg(DIM));
             let done = (16.0 * p).round() as i32;
             for k in 0..16 {
-                let (ch, c) = if k < done { ('█', CYAN) } else { ('░', BAR_OFF) };
+                let (ch, c) = if k < done {
+                    ('█', CYAN)
+                } else {
+                    ('░', BAR_OFF)
+                };
                 lay.set(buf, x + k, y, ch, fg(c));
             }
             x += 17;
@@ -381,7 +385,10 @@ impl Splash {
         for (k, c, start, dur) in flying {
             let side = i32::from(unit(k, 1) >= 0.5);
             let arc = 2.0 + 5.0 * unit(k, 4);
-            let (sx, sy) = ((lay.x0 + byte_x(KEY_AT + c.i) + side) as f32, lay.head as f32);
+            let (sx, sy) = (
+                (lay.x0 + byte_x(KEY_AT + c.i) + side) as f32,
+                lay.head as f32,
+            );
             let at = |e: f32| {
                 let x = sx + (c.x as f32 - sx) * e;
                 let y = sy + (c.y as f32 - sy) * e - (std::f32::consts::PI * e).sin() * arc;
@@ -389,7 +396,10 @@ impl Splash {
             };
             let (tx, ty) = at(out_cubic((tf - 1.0 - start) / dur));
             lay.set(buf, tx, ty, '·', fg(MAGENTA.scale(0.45)));
-            let digit = format!("{:02X}", KEY[c.i]).chars().nth(side as usize).unwrap();
+            let digit = format!("{:02X}", KEY[c.i])
+                .chars()
+                .nth(side as usize)
+                .unwrap();
             let (x, y) = at(out_cubic((tf - start) / dur));
             lay.set(buf, x, y, digit, bold(MAGENTA.mix(WHITE, 0.35)));
         }
@@ -504,7 +514,12 @@ mod tests {
         let mut st = AppState::new();
         st.tick = 75;
         let text = buffer_text(&draw(&Splash::new(0, 7), &st, (120, 40)));
-        for want in ["53 54 52 41 54 41", "20 5A 45 52 4F", "STRATA ZERO", "KEY FOUND"] {
+        for want in [
+            "53 54 52 41 54 41",
+            "20 5A 45 52 4F",
+            "STRATA ZERO",
+            "KEY FOUND",
+        ] {
             assert!(text.contains(want), "{want}\n{text}");
         }
     }

@@ -39,7 +39,7 @@ use winit::window::{Fullscreen, Window, WindowAttributes, WindowId};
 const TEXT_PX: f32 = 15.0;
 /// The grid the window opens with, clamped to the screen.
 const OPEN: (u16, u16) = (120, 40);
-/// The frame `STRATA_WINDOW_SHOT` writes: 1.5 s in, after the title has typed out.
+/// The frame `STRATA_WINDOW_SHOT` writes: 1.5 s in, the launch splash mid-scan.
 const SHOT_FRAME: u64 = 45;
 /// How far Cmd+= and Cmd+- step the text size, and its bounds.
 const ZOOM_STEP: f32 = 1.1;
@@ -409,7 +409,7 @@ mod tests {
             if dev {
                 st.unlock_dev();
             }
-            let mut title = crate::screens::initial(&st);
+            let mut title = crate::screens::title::Title::new(&st, 0);
             for _ in 0..90 {
                 st.tick += 1;
                 title.update(&mut st, &[]);

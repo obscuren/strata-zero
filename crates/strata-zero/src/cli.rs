@@ -108,11 +108,11 @@ pub fn run() -> Result<()> {
         #[cfg(feature = "window")]
         None if cli.window || crate::window::IS_APP => {
             let st = start_state(dev);
-            crate::window::run(Box::new(crate::screens::initial(&st)), st)
+            crate::window::run(crate::screens::initial(&st), st)
         }
         None => {
             let st = start_state(dev);
-            app::run(Box::new(crate::screens::initial(&st)), st)
+            app::run(crate::screens::initial(&st), st)
         }
         Some(Cmd::Gen {
             seed,

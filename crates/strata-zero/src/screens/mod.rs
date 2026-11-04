@@ -30,9 +30,9 @@ pub mod workbench;
 
 use crate::app::{Screen, ScreenCmd, TransitionKind};
 
-/// The screen the app starts on.
-pub fn initial(st: &crate::app::AppState) -> impl Screen + use<> {
-    title::Title::new(st, 0)
+/// The screen the app starts on: the splash, which hands over to the title.
+pub fn initial(st: &crate::app::AppState) -> Box<dyn Screen> {
+    Box::new(splash::Splash::at_launch(st.tick))
 }
 
 /// A city built at once from `params`.
@@ -68,6 +68,29 @@ pub fn explore_screen(st: &mut crate::app::AppState) -> Box<dyn Screen> {
     let map = explore::MapScreen::walking(st);
     crate::missions::begin(st);
     Box::new(map)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::app::{AppState, ScreenCmd};
+
+    #[test]
+    fn the_game_opens_on_the_splash() {
+        let mut st = AppState::new();
+        let mut first = super::initial(&st);
+        for tick in 1..super::splash::HAND_OVER {
+            st.tick = tick;
+            assert!(
+                matches!(first.update(&mut st, &[]), ScreenCmd::Stay),
+                "{tick}"
+            );
+        }
+        st.tick = super::splash::HAND_OVER;
+        assert!(matches!(
+            first.update(&mut st, &[]),
+            ScreenCmd::Switch { .. }
+        ));
+    }
 }
 
 #[cfg(test)]

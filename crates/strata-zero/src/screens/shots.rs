@@ -165,6 +165,30 @@ fn combat_aim() -> (AppState, MapScreen) {
     (st, map)
 }
 
+/// The launch splash: the scan, the key found, the dump dissolving and the bytes in
+/// flight to the logo, at the usual size and the smallest.
+#[test]
+#[ignore]
+fn splash() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let splash = crate::screens::splash::Splash::new(0, 7);
+    let mut st = AppState::new();
+    for (name, tick) in [
+        ("scan", 30),
+        ("found", 76),
+        ("dissolve", 96),
+        ("flight", 118),
+    ] {
+        st.tick = tick;
+        for (w, h) in [(120, 40), (100, 30)] {
+            let buf = draw_stack(&st, &[&splash], (w, h));
+            write_svg(&dir, &format!("splash_{name}_{w}x{h}"), &st, &buf, false);
+        }
+    }
+}
+
 /// The COMBAT lot (dev mode) with the Scout drone out: three steps east and a few ticks,
 /// so it trails you with its wake behind it.
 #[test]
