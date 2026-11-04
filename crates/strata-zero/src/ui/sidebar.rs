@@ -468,7 +468,7 @@ fn draw_log(log: &MessageLog, tick: u64, area: Rect, buf: &mut Buffer) {
         if i + 1 == n
             && let Some(e) = log.latest()
         {
-            let p = tick.saturating_sub(e.tick) as f32 / REVEAL_TICKS as f32;
+            let p = tick.saturating_sub(e.shown) as f32 / REVEAL_TICKS as f32;
             out.extend(reveal(&lines, p, (tick / 4).is_multiple_of(2)));
         } else {
             out.extend(lines);
@@ -623,6 +623,22 @@ mod tests {
             jobs: crate::missions::ui::jobs_pane(st),
             story_lines: crate::missions::ui::story_line_count(st),
         }
+    }
+
+    #[test]
+    fn the_newest_line_types_out_after_a_sleep() {
+        let mut st = crate::jobs::testutil::state_home();
+        // A night's sleep moves the city's clock far ahead of the frame clock.
+        let city = st.city.as_ref().expect("a city");
+        let world = st.world.as_mut().expect("a world");
+        world.advance(city, world.tick() + 480 * sim::TICKS_PER_MINUTE);
+        assert!(st.clock_tick() > st.tick + 40_000);
+        st.story("`Mezz` · mail · the news");
+        st.tick += 30;
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 6));
+        draw_log(&st.log, st.tick, buf.area, &mut buf);
+        let text = buffer_text(&buf);
+        assert!(text.contains("Mezz · mail · the news"), "{text}");
     }
 
     fn draw_to(v: &SidebarView, flags: &Sidebar, w: u16, h: u16) -> String {
@@ -993,7 +1009,7 @@ mod tests {
     #[test]
     fn a_named_log_entry_lights_its_names() {
         let mut log = MessageLog::default();
-        log.push(Kind::Info, "Entering `Novbio Labs`", 0);
+        log.push(Kind::Info, "Entering `Novbio Labs`", 0, 0);
         let lines = entry_lines(log.latest().unwrap(), 40);
         let spans: Vec<(String, bool)> = lines[0]
             .spans
@@ -1008,7 +1024,7 @@ mod tests {
         assert_eq!(spans[1], ("Entering ".to_string(), false), "{spans:?}");
         assert_eq!(spans[2], ("Novbio Labs".to_string(), true), "{spans:?}");
         // A name that wraps keeps its light on both rows.
-        log.push(Kind::Info, "lock cracked · `Hextek Holdings`'s doors", 0);
+        log.push(Kind::Info, "lock cracked · `Hextek Holdings`'s doors", 0, 0);
         let lines = entry_lines(log.latest().unwrap(), 26);
         assert!(lines.len() >= 2, "{lines:?}");
         let lit = |l: &Line<'static>| {

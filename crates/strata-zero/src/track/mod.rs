@@ -5,7 +5,7 @@
 
 use crate::app::AppState;
 use crate::jobs::{JobId, Kind, State};
-use crate::missions::{RunState, Trigger, Where};
+use crate::missions::{Effect, Need, ReadAt, RunState, Trigger, Where};
 use citygen::{BuildingId, Place, Pos, StratumKind};
 use route::{Leg, NoLeg};
 use sim::{PersonId, Whereabouts};
@@ -494,9 +494,42 @@ fn resolve_story(st: &AppState, mission: usize, step: usize) -> Resolved {
                 _ => Target::Person(id),
             }
         }),
+        // The step before this one put out the news or sent the mail: the wait is for the
+        // set, or for the rig. A step that waits on a reading goes to the rig that shows it.
+        Trigger::Ended(id) => {
+            let then = st.book.missions[mission]
+                .steps
+                .iter()
+                .find(|s| s.id == *id)
+                .map(|s| &s.then[..])
+                .unwrap_or_default();
+            if then.iter().any(|e| matches!(e, Effect::News(_))) {
+                crate::missions::news::set_tile(st).map(|(place, pos)| spot(place, pos))
+            } else if then.iter().any(|e| matches!(e, Effect::Mail { .. })) {
+                rig_spot(st)
+            } else {
+                None
+            }
+        }
+        Trigger::Holds(Need::Read(item)) => {
+            crate::missions::reading(st, item, ReadAt::Rig).and_then(|_| rig_spot(st))
+        }
         _ => None,
     };
     target.map_or(Resolved::Nowhere, Resolved::Target)
+}
+
+fn spot(place: Place, pos: Pos) -> Target {
+    Target::Spot {
+        place,
+        pos,
+        radius: 1,
+    }
+}
+
+/// Your rig in the flat, where mail and readings are read.
+fn rig_spot(st: &AppState) -> Option<Target> {
+    st.home.map(|rig| spot(rig.place(), rig.home.rig))
 }
 
 /// A `Person` target made concrete: the tile they stand on, on the street or on the
@@ -748,6 +781,60 @@ pub(crate) mod tests {
             })
         );
         assert_eq!(resolve(&st, &story(m, sees)), done());
+    }
+
+    /// The shipped mission `id`: its index and the step its run waits on.
+    fn waiting_on(st: &AppState, id: &str) -> (usize, usize) {
+        let m = st.book.missions.iter().position(|m| m.id == id).unwrap();
+        (m, st.missions.runs[m].at)
+    }
+
+    fn near(place: Place, pos: Pos) -> Resolved {
+        Resolved::Target(Target::Spot {
+            place,
+            pos,
+            radius: 1,
+        })
+    }
+
+    #[test]
+    fn the_morning_after_tracks_the_set_then_the_rig() {
+        use crate::missions::tests::{the_morning_call, the_news_is_on, to_the_word};
+        let mut st = the_morning_call();
+        the_news_is_on(&mut st);
+        let (m, at) = waiting_on(&st, "morning_after");
+        assert_eq!(st.book.missions[m].steps[at].id, "saw");
+        let (place, pos) = crate::missions::news::set_tile(&st).unwrap();
+        assert_eq!(resolve(&st, &story(m, at)), near(place, pos));
+        assert!(set(&mut st, story(m, at)).is_ok());
+
+        crate::missions::news::switch_off(&mut st);
+        let (m, at) = waiting_on(&st, "morning_after");
+        assert_eq!(st.book.missions[m].steps[at].id, "word");
+        let rig = st.home.unwrap();
+        assert_eq!(resolve(&st, &story(m, at)), near(rig.place(), rig.home.rig));
+
+        // Mezz's mail read, the shard in your pack: the ledger waits on a reading.
+        let mut st = the_morning_call();
+        to_the_word(&mut st);
+        st.character.skills = [game::SkillId::new("hacking")].into_iter().collect();
+        crate::missions::tests::open_the_package(&mut st);
+        let (m, at) = waiting_on(&st, "ledger");
+        assert_eq!(st.book.missions[m].steps[at].id, "know");
+        let rig = st.home.unwrap();
+        assert_eq!(resolve(&st, &story(m, at)), near(rig.place(), rig.home.rig));
+    }
+
+    #[test]
+    fn a_reading_nobody_can_do_at_the_rig_tracks_nowhere() {
+        use crate::missions::tests::{open_the_package, the_morning_call, to_the_word};
+        let mut st = the_morning_call();
+        to_the_word(&mut st);
+        st.character.skills.clear();
+        open_the_package(&mut st);
+        let (m, at) = waiting_on(&st, "ledger");
+        assert_eq!(st.book.missions[m].steps[at].id, "know");
+        assert_eq!(resolve(&st, &story(m, at)), Resolved::Nowhere);
     }
 
     #[test]

@@ -26,6 +26,7 @@ mod interact;
 mod interiors;
 mod jobs;
 mod look;
+mod mail_mark;
 mod messages;
 mod missions;
 mod net;

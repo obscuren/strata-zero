@@ -2823,6 +2823,8 @@ impl Screen for MapScreen {
                 crate::clock::PATHS_PER_FRAME,
             );
         }
+        // The mails landed since the map's last frame, here or under a screen on top.
+        crate::mail_mark::notice(st);
         // The story moved you (an `Arrive`, a scene's walk): no aimed walk goes on from
         // where you were, and the map follows you before this frame draws.
         if st.player.as_ref().map(|p| (p.place, p.pos)) != before {
@@ -3453,6 +3455,18 @@ impl Screen for MapScreen {
         if self.mode == Mode::Walk && self.console.is_none() {
             crate::missions::asides::draw(f.buffer_mut(), map_area, origin, st);
         }
+        // A mail just landed: the pill on the map's top edge, right, a row in; held while
+        // a call or a rest covers the map's top.
+        let inset = crate::mail_mark::PILL_INSET;
+        let pill = crate::mail_mark::pill_line(st, map_area.width.saturating_sub(inset))
+            .filter(|p| p.width() > 0 && map_area.height > 1);
+        if let Some(line) = &pill {
+            let w = line.width() as u16;
+            f.render_widget(
+                Paragraph::new(line.clone()),
+                Rect::new(map_area.right() - inset - w, map_area.y + 1, w, 1),
+            );
+        }
         // The HOLO call in the map's corner, kept off your `@`.
         crate::missions::call::draw(f.buffer_mut(), map_area, me, st);
 
@@ -3478,6 +3492,12 @@ impl Screen for MapScreen {
                 credits: ch.credits,
                 seed: city.seed,
                 fps: st.show_fps.then_some(self.fps.fps),
+                // With no pill drawn (down, or held), the unread mail on the status line.
+                mail: if pill.is_some() {
+                    0
+                } else {
+                    crate::mail_mark::unread(st)
+                },
             },
             lw,
         );
@@ -13069,5 +13089,314 @@ mod tests {
             .collect();
         assert!(matches!(s.update(&mut st, &typed), ScreenCmd::Push { .. }));
         assert!(s.console.is_none());
+    }
+
+    /// The lot, you on foot and nobody about: a quiet map for the mail mark.
+    fn mail_lot() -> (AppState, MapScreen) {
+        let (mut st, mut s) = lot(Pos::new(30, 8));
+        st.foes.clear();
+        s.update(&mut st, &[]);
+        (st, s)
+    }
+
+    /// One map frame.
+    fn map_frame(st: &mut AppState, s: &mut MapScreen) {
+        st.tick += 1;
+        s.update(st, &[]);
+    }
+
+    /// The text of screen row `y`.
+    fn row_of(buf: &Buffer, y: u16) -> String {
+        (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect()
+    }
+
+    /// The pill's row as drawn, when the pill is on it.
+    fn drawn_pill(s: &MapScreen, st: &AppState, w: u16, h: u16) -> Option<String> {
+        let buf = draw_buffer(s, st, w, h);
+        let row = row_of(&buf, s.last_map.get().y + 1);
+        row.contains("▣ MAIL").then_some(row)
+    }
+
+    /// Map frames while the pill is drawn: how many it was drawn on.
+    fn frames_with_the_pill(st: &mut AppState, s: &mut MapScreen) -> u64 {
+        let mut n = 0;
+        while drawn_pill(s, st, 120, 40).is_some() {
+            n += 1;
+            assert!(n <= 1000, "the pill never goes");
+            map_frame(st, s);
+        }
+        n
+    }
+
+    fn announced(st: &AppState) -> usize {
+        st.log
+            .iter()
+            .filter(|e| e.text.contains(" · mail · "))
+            .count()
+    }
+
+    #[test]
+    fn a_landed_mail_logs_and_puts_the_pill_up() {
+        use crate::mail_mark::{MailPill, testutil::land};
+        let (mut st, mut s) = mail_lot();
+        let i = land(&mut st, "Mezz", "the news");
+        map_frame(&mut st, &mut s);
+        let e = st.log.latest().unwrap();
+        assert_eq!(
+            (e.text.as_str(), e.kind),
+            ("Mezz · mail · the news", Kind::Story)
+        );
+        assert_eq!(e.marks, vec![(0, 4)], "the sender marked");
+        assert_eq!(st.mail_pill, Some(MailPill { mail: i, frames: 1 }));
+        let buf = draw_buffer(&s, &st, 120, 40);
+        let map = s.last_map.get();
+        let y = map.y + 1;
+        let row = row_of(&buf, y);
+        let pill = " ▣ MAIL  MEZZ · the news ";
+        let end = (map.right() - crate::mail_mark::PILL_INSET) as usize;
+        let at = row.find(pill).expect(&row);
+        assert_eq!(
+            row[..at].chars().count() + pill.chars().count(),
+            end,
+            "{row:?}"
+        );
+        let x = (end - pill.chars().count()) as u16;
+        let lit = &buf[(x + 1, y)];
+        assert_eq!(
+            (lit.symbol(), lit.fg, lit.bg),
+            ("▣", hud::BADGE_FG, MAGENTA)
+        );
+        assert!(lit.modifier.contains(Modifier::BOLD));
+        let soft = &buf[(x + 9, y)];
+        assert_eq!(
+            (soft.symbol(), soft.fg, soft.bg),
+            ("M", Color::Rgb(255, 225, 245), Color::Rgb(120, 20, 90))
+        );
+        assert!(!row_of(&buf, 0).contains("MAIL"), "the pill is up: no mark");
+        // Logged once, as it lands.
+        map_frame(&mut st, &mut s);
+        assert_eq!(announced(&st), 1);
+    }
+
+    #[test]
+    fn the_pill_stays_six_seconds_of_map_frames_then_the_status_line_marks() {
+        let (mut st, mut s) = mail_lot();
+        crate::mail_mark::testutil::land(&mut st, "Mezz", "the news");
+        map_frame(&mut st, &mut s);
+        assert_eq!(
+            frames_with_the_pill(&mut st, &mut s),
+            crate::mail_mark::MAIL_PILL_TICKS
+        );
+        assert!(st.mail_pill.is_none());
+        let buf = draw_buffer(&s, &st, 120, 40);
+        let status = row_of(&buf, 0);
+        assert!(status.contains(" :: ▣ NEW MAIL"), "{status:?}");
+        assert!(!row_of(&buf, s.last_map.get().y + 1).contains("▣"));
+    }
+
+    #[test]
+    fn a_mail_behind_the_deck_shows_when_the_map_is_back() {
+        let (mut st, mut s) = mail_lot();
+        let ScreenCmd::Push { to: mut deck, .. } = s.update(&mut st, &[key(KeyCode::Tab)]) else {
+            panic!("tab opens the deck");
+        };
+        crate::mail_mark::testutil::land(&mut st, "Mezz", "the news");
+        for _ in 0..600 {
+            st.tick += 1;
+            deck.update(&mut st, &[]);
+        }
+        assert_eq!(announced(&st), 0, "the deck notices nothing");
+        assert!(st.mail_pill.is_none());
+        // The map under the deck shows neither mark: the mail isn't noticed yet.
+        let under = draw_buffer(&s, &st, 120, 40);
+        assert!(!row_of(&under, 0).contains("MAIL"));
+        assert!(drawn_pill(&s, &st, 120, 40).is_none());
+        // The map back on top: logged, and the pill up for its full six seconds.
+        map_frame(&mut st, &mut s);
+        assert_eq!(announced(&st), 1);
+        assert_eq!(
+            frames_with_the_pill(&mut st, &mut s),
+            crate::mail_mark::MAIL_PILL_TICKS
+        );
+    }
+
+    #[test]
+    fn the_mark_goes_when_all_is_read() {
+        use crate::mail_mark::testutil::land;
+        let (mut st, mut s) = mail_lot();
+        let news = land(&mut st, "Mezz", "the news");
+        let ten = land(&mut st, "Seren", "ten");
+        map_frame(&mut st, &mut s);
+        let pill = drawn_pill(&s, &st, 120, 40).expect("the pill is up");
+        assert!(pill.contains(" ▣ MAIL  SEREN · ten  +1 "), "{pill:?}");
+        frames_with_the_pill(&mut st, &mut s);
+        let status = |st: &AppState| row_of(&draw_buffer(&s, st, 120, 40), 0);
+        assert!(status(&st).contains(":: ▣ 2 NEW MAIL"), "{:?}", status(&st));
+        crate::credentials::mail_read(&mut st, news);
+        assert!(status(&st).contains(":: ▣ NEW MAIL"), "{:?}", status(&st));
+        crate::credentials::mail_read(&mut st, ten);
+        assert!(!status(&st).contains("MAIL"), "{:?}", status(&st));
+    }
+
+    #[test]
+    fn the_pill_fits_a_100x30_map() {
+        use crate::mail_mark::{PILL_INSET, testutil::land};
+        let (mut st, mut s) = mail_lot();
+        land(&mut st, "Mezz", "the news");
+        map_frame(&mut st, &mut s);
+        let buf = draw_buffer(&s, &st, 100, 30);
+        let map = s.last_map.get();
+        let y = map.y + 1;
+        let row = row_of(&buf, y);
+        let pill = " ▣ MAIL  MEZZ · the news ";
+        let at = row.find(pill).expect(&row);
+        let end = row[..at].chars().count() + pill.chars().count();
+        assert_eq!(end, (map.right() - PILL_INSET) as usize, "{row:?}");
+        // A subject longer than the map: cut to it, the inset kept, the rule untouched.
+        land(&mut st, "Mezz", &"a long way down ".repeat(8));
+        map_frame(&mut st, &mut s);
+        let buf = draw_buffer(&s, &st, 100, 30);
+        let lit = |x: u16| [MAGENTA, Color::Rgb(120, 20, 90)].contains(&buf[(x, y)].bg);
+        let first = (map.x..map.right()).find(|x| lit(*x)).expect("the pill");
+        let last = (map.x..map.right()).rev().find(|x| lit(*x)).unwrap();
+        assert_eq!((first, last), (map.x, map.right() - PILL_INSET - 1));
+        assert_eq!(buf[(last, y)].symbol(), "…");
+        assert_eq!(buf[(map.right(), y)].symbol(), "│");
+    }
+
+    #[test]
+    fn the_pill_waits_out_a_film_scene() {
+        use crate::missions::{Look, scene};
+        let mut st = crate::jobs::testutil::state_home();
+        let mut s = MapScreen::walking(&mut st);
+        crate::missions::begin(&mut st);
+        st.missions.feeds.clear();
+        scene::play(&mut st, "house_call");
+        map_frame(&mut st, &mut s);
+        let film = |st: &AppState| scene::running(st).is_some_and(|r| r.look() == Look::Film);
+        assert!(film(&st), "the film plays");
+        crate::mail_mark::testutil::land(&mut st, "Mezz", "the news");
+        for _ in 0..200 {
+            map_frame(&mut st, &mut s);
+            assert!(drawn_pill(&s, &st, 120, 40).is_none());
+        }
+        assert!(film(&st), "still playing");
+        assert!(st.mail_pill.is_some_and(|p| p.frames == 0), "waiting");
+        // The film over: the pill up from its first frame, for its full six seconds.
+        s.update(&mut st, &[key(KeyCode::Esc)]);
+        assert!(!film(&st));
+        assert_eq!(
+            frames_with_the_pill(&mut st, &mut s),
+            crate::mail_mark::MAIL_PILL_TICKS
+        );
+    }
+
+    /// Frames with the pill held: none drawn, its count still, the status line marking
+    /// the mail instead.
+    fn held_for(st: &mut AppState, s: &mut MapScreen, frames: usize) {
+        for _ in 0..frames {
+            map_frame(st, s);
+            assert!(drawn_pill(s, st, 120, 40).is_none());
+        }
+        assert!(st.mail_pill.is_some_and(|p| p.frames == 0), "waiting");
+        let status = row_of(&draw_buffer(s, st, 120, 40), 0);
+        assert!(status.contains(" :: ▣ NEW MAIL"), "{status:?}");
+    }
+
+    #[test]
+    fn a_call_up_holds_the_pill() {
+        let (mut st, mut s) = mail_lot();
+        let call = crate::missions::Effect::Call {
+            from: "castellan".into(),
+            lines: vec!["Pick up.".into()],
+        };
+        crate::missions::effects::apply(&mut st, usize::MAX, usize::MAX, &call);
+        assert!(st.missions.call.is_some(), "the call rings");
+        crate::mail_mark::testutil::land(&mut st, "Mezz", "the news");
+        held_for(&mut st, &mut s, 60);
+        // Sent to voicemail: the corner clear, the pill up for the voicemail, the news
+        // still unread beside it.
+        s.update(&mut st, &[key(KeyCode::Esc)]);
+        assert!(st.missions.call.is_none());
+        let pill = drawn_pill(&s, &st, 120, 40).expect("the pill is up");
+        assert!(
+            pill.contains(" ▣ MAIL  CASTELLAN · voicemail  +1 "),
+            "{pill:?}"
+        );
+        assert_eq!(
+            frames_with_the_pill(&mut st, &mut s),
+            crate::mail_mark::MAIL_PILL_TICKS
+        );
+    }
+
+    #[test]
+    fn the_rest_window_holds_the_pill() {
+        let (mut st, mut s) = mail_lot();
+        let until = crate::rest::now(&st) + 600;
+        crate::rest::start(&mut st, crate::rest::Kind::Wait, until);
+        assert!(st.rest.is_some(), "waiting it out");
+        crate::mail_mark::testutil::land(&mut st, "Mezz", "the news");
+        held_for(&mut st, &mut s, 60);
+        assert!(st.rest.is_some(), "still waiting");
+        // Woken: the pill up for its full six seconds.
+        s.update(&mut st, &[key(KeyCode::Esc)]);
+        assert!(st.rest.is_none());
+        assert_eq!(
+            frames_with_the_pill(&mut st, &mut s),
+            crate::mail_mark::MAIL_PILL_TICKS
+        );
+    }
+
+    #[test]
+    fn a_screen_on_top_does_not_eat_the_pills_frames() {
+        use crate::mail_mark::MAIL_PILL_TICKS;
+        let (mut st, mut s) = mail_lot();
+        crate::mail_mark::testutil::land(&mut st, "Mezz", "the news");
+        for _ in 0..60 {
+            map_frame(&mut st, &mut s);
+        }
+        assert_eq!(st.mail_pill.map(|p| p.frames), Some(60));
+        let ScreenCmd::Push { to: mut deck, .. } = s.update(&mut st, &[key(KeyCode::Tab)]) else {
+            panic!("tab opens the deck");
+        };
+        for _ in 0..600 {
+            st.tick += 1;
+            deck.update(&mut st, &[]);
+        }
+        assert_eq!(
+            st.mail_pill.map(|p| p.frames),
+            Some(60),
+            "the deck's frames"
+        );
+        // Back on the map: the frames it had left.
+        map_frame(&mut st, &mut s);
+        assert_eq!(frames_with_the_pill(&mut st, &mut s), MAIL_PILL_TICKS - 60);
+    }
+
+    #[test]
+    fn mezzs_mail_lands_through_the_story_to_the_pill() {
+        let mut st = crate::missions::tests::the_morning_call();
+        crate::missions::tests::the_news_is_on(&mut st);
+        let mut s = MapScreen::walking(&mut st);
+        map_frame(&mut st, &mut s);
+        // The set switched off: the book's `saw` step mails, the map's next frame tells.
+        crate::missions::news::switch_off(&mut st);
+        let news = st
+            .journal
+            .mails
+            .iter()
+            .position(|m| m.subject == "the news");
+        assert!(news.is_some(), "Mezz's mail landed");
+        let before = announced(&st);
+        map_frame(&mut st, &mut s);
+        assert_eq!(announced(&st), before + 1);
+        assert!(
+            st.log.iter().any(|e| e.text == "Mezz · mail · the news"),
+            "{:?}",
+            st.log.iter().map(|e| &e.text).collect::<Vec<_>>()
+        );
+        assert_eq!(st.mail_pill.map(|p| p.mail), news);
+        let pill = drawn_pill(&s, &st, 120, 40).expect("the pill is up");
+        assert!(pill.contains(" ▣ MAIL  MEZZ · the news"), "{pill:?}");
     }
 }

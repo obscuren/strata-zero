@@ -563,7 +563,12 @@ impl Popup {
         match choice.pick.clone() {
             Pick::Act(action) => {
                 let result = perform(st, action);
+                let done = result.is_ok();
                 report(st, result);
+                // Over the deck too, what it changed moves the story at once.
+                if done {
+                    crate::missions::settle(st);
+                }
                 ScreenCmd::Pop {
                     fx: TransitionKind::None,
                 }
@@ -634,10 +639,14 @@ impl Popup {
             // Offered on a state gone stale, it only closes.
             Pick::Read { item, at } => {
                 match crate::missions::reading::ReadCard::open(st, &item, at) {
-                    Some(card) => ScreenCmd::Replace {
-                        to: Box::new(card),
-                        fx: TransitionKind::None,
-                    },
+                    // One that tells moves the story under its card, at the bench too.
+                    Some(card) => {
+                        crate::missions::settle(st);
+                        ScreenCmd::Replace {
+                            to: Box::new(card),
+                            fx: TransitionKind::None,
+                        }
+                    }
                     None => ScreenCmd::Pop {
                         fx: TransitionKind::None,
                     },

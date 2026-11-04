@@ -19,16 +19,21 @@
 // once you are out of their building. `Unseal(item)` lets the pack open it. `Holo` says a
 // line through your flat's set while you are in; `Note(at, text)` leaves one under a
 // tile's Look. A mail's `code: Some(Clinic(role))` is learned as it lands and fills its
-// {code}.
+// {code}. The first read of a step's `Mail` marks the step `Ended`, as a feed's close does.
 // `Tray` holds out the first set whose need holds: one piece to take, on `tab`'s tab in
 // `from`'s chair. `Chromed(role)` fires once it is in and you are up.
 // `At(By(role, within))`: beside the role's person, in sight. The mark `Chair(role)`:
 // their chair.
 // A need asks who you are: `Skill`, `Read(item)`, `Carries(item)`, `Unsealed(item)`,
 // `Changed` / `Unchanged` (the jacket the camera saw), `Late(minute)`, `Not`, `All`. A
-// `Say` with a `need` is said only when it holds.
+// `Say` with a `need` is said only when it holds. `when: Holds(need)` fires once the need
+// holds, on any pass. `ObjectiveFit` sets the objective of the first `Fit` whose need holds;
+// the last one's need is `All([])`. `Told(item)`: someone said whose it is, so
+// `Read(item)` holds.
 // `readings` are what who you are finds in an item at the rig, at the bench or by its
-// Look; the first whose need holds there is the one read.
+// Look; the first whose need holds there is the one read. One with `tells: true` makes
+// `Read(item)` hold once it shows: its card at the rig or the bench, the pack's card of
+// the item for a Look.
 Story(
     cast: {
         "mezz": Role(
@@ -175,13 +180,21 @@ Story(
                     "Saw the news.",
                     "Don't go out looking like you.",
                 ]),
+                Objective("Read {mezz}'s mail · on your rig"),
+            ]),
+            // Seren breaks in once Mezz's mail is read.
+            Step(id: "word", when: Ended("saw"), then: [
+                Unseal("taped_package"),
+                Holo(from: "seren", text: "Doctor's in by ten. Eat first."),
+                Objective("Open the package · it's in your pack"),
+            ]),
+            Step(id: "open", when: Holds(Carries("ledger_shard")), then: [
+                Log("`The morning after` · a ledger shard, in your pack"),
             ]),
         ]),
         Mission(id: "doctor", title: "Doctor's in by ten", from: "castellan", steps: [
-            Step(id: "word", when: MissionDone(mission: "morning_after", minutes: 0), then: [
+            Step(id: "word", when: Holds(Unsealed("taped_package")), then: [
                 Hold("odile"),
-                Unseal("taped_package"),
-                Holo(from: "seren", text: "Doctor's in by ten. Eat first."),
                 Mail(from: "seren", subject: "ten", code: Some(Clinic("odile")), body: [
                     "Doctor's in by ten. Eat first.",
                     "Shutter's down till dark. Code's {code}. She knows you're coming.",
@@ -205,6 +218,8 @@ Story(
                     TraySet(need: All([]), items: ["subdermal_mesh", "target_lens", "neural_port"]),
                 ]),
                 Objective("Sit in {odile}'s chair · your piece is on {castellan}'s tab"),
+                // Her scene named the shard's owner to whoever hadn't read it.
+                Told("ledger_shard"),
             ]),
             Step(id: "out", when: Chromed("odile"), then: [Scene("odile_out")]),
             Step(id: "free", when: Ended("out"), then: [
@@ -213,9 +228,25 @@ Story(
             ]),
         ]),
         // The hook, its own mission so a city with one fixer (Mezz) still plays the doctor.
+        // It opens with the package; its last fit places the doctor, so a city without
+        // one leaves it uncast.
         Mission(id: "ledger", title: "The ledger", from: "castellan", steps: [
-            Step(id: "go", when: MissionDone(mission: "doctor", minutes: 0), then: [
-                Objective("Sell the ledger back to {coz} · {coz.place} · {coz.district}"),
+            Step(id: "whose", when: Holds(Carries("ledger_shard")), then: [
+                // Told already (the doctor named him): no hint, and the next step ticks it.
+                ObjectiveFit([
+                    Fit(need: Read("ledger_shard"), text: "Find out whose shard this is"),
+                    Fit(need: Skill("hacking"),
+                        text: "Find out whose shard this is · read it at your rig"),
+                    Fit(need: Skill("electronics"),
+                        text: "Find out whose shard this is · open the casing at your bench"),
+                    Fit(need: Skill("streetwise"),
+                        text: "Find out whose shard this is · look it over in your pack"),
+                    Fit(need: All([]),
+                        text: "Find out whose shard this is · ask the doctor at {odile.place}"),
+                ]),
+            ]),
+            Step(id: "know", when: Holds(Read("ledger_shard")), then: [
+                Objective("Bring it to {coz} · {coz.place} · {coz.district}"),
             ]),
             Step(id: "sell", when: Talk("coz"), then: [
                 Log("`{coz}` · \"The ledger? Not here. I'll find you.\""),
@@ -291,6 +322,9 @@ Story(
                 text: "That tape's {coz}'s. You're walking a fixer's ledger round in daylight."),
             Say(who: "odile", need: Some(All([Not(Read("ledger_shard")), Carries("ledger_shard")])),
                 text: "That shard's {coz}'s. You're walking a fixer's ledger round in daylight."),
+            Say(who: "odile", need: Some(All([Not(Read("ledger_shard")),
+                Not(Carries("taped_package")), Not(Carries("ledger_shard"))])),
+                text: "He told me what you're carrying. Black tape, three turns? That's {coz}'s."),
             Say(who: "odile", text: "{castellan} pays for one piece. Pick."),
         ]),
         "odile_out": Scene(title: "Doctor's in by ten", look: Bubbles,
@@ -376,7 +410,7 @@ Story(
                 Blank,
                 You("{coz}. Fixers sign their shards."),
             ]),
-            Reading(at: Look, need: Skill("streetwise"),
+            Reading(at: Look, need: Skill("streetwise"), tells: true,
                 text: "Black fixer's tape still round the casing, wound three times. {coz} wraps his like that."),
         ],
         "taped_package": [

@@ -56,6 +56,8 @@ pub enum BookError {
     NotAVisitor { place: String, role: String },
     #[error("missions: {place}: {what}")]
     BadNumber { place: String, what: String },
+    #[error("missions: {place}: {why}")]
+    BadFits { place: String, why: String },
     #[error("missions: no role may be called `{0}`")]
     ReservedRole(String),
     #[error("missions: scene `{0}` has no beats")]
@@ -391,12 +393,22 @@ pub struct Step {
 pub enum Trigger {
     NewGame,
     Ended(String),
-    Sees { role: String, within: i32 },
-    After { minutes: u64 },
+    Sees {
+        role: String,
+        within: i32,
+    },
+    After {
+        minutes: u64,
+    },
     At(Where),
     Talk(String),
-    MissionDone { mission: String, minutes: u64 },
+    MissionDone {
+        mission: String,
+        minutes: u64,
+    },
     Chromed(String),
+    /// Fires on any pass once the need holds.
+    Holds(Need),
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -442,6 +454,11 @@ pub enum Effect {
         look: String,
     },
     Objective(String),
+    /// Pushes the text of the first fit whose need holds, as `Objective` does.
+    ObjectiveFit(Vec<Fit>),
+    /// Records `Need::Read(item)` as if a telling reading had been shown: someone told
+    /// you whose it is.
+    Told(String),
     Mail {
         from: String,
         subject: String,
@@ -488,6 +505,13 @@ pub enum Effect {
     },
 }
 
+/// An objective's text for who you are: shown when its need holds.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Fit {
+    pub need: Need,
+    pub text: String,
+}
+
 /// The pieces a tray holds when its need does.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct TraySet {
@@ -517,6 +541,7 @@ impl Effect {
             Effect::Call { lines, .. } => lines.iter().map(String::as_str).collect(),
             Effect::Dead { look, .. } => vec![look],
             Effect::Objective(s) | Effect::Log(s) => vec![s],
+            Effect::ObjectiveFit(fits) => fits.iter().map(|f| f.text.as_str()).collect(),
             Effect::Holo { text, .. } | Effect::Note { text, .. } => vec![text],
             Effect::Tray { title, line, .. } => vec![title, line],
             Effect::Mail { subject, body, .. } => body
@@ -527,6 +552,7 @@ impl Effect {
             Effect::Give { .. }
             | Effect::Take { .. }
             | Effect::Unseal(_)
+            | Effect::Told(_)
             | Effect::Scene(_)
             | Effect::Arrive { .. }
             | Effect::Leave(_)
@@ -568,7 +594,11 @@ impl Effect {
     fn presents(&self) -> bool {
         matches!(
             self,
-            Effect::Feed { .. } | Effect::Call { .. } | Effect::Scene(_) | Effect::News(_)
+            Effect::Feed { .. }
+                | Effect::Call { .. }
+                | Effect::Scene(_)
+                | Effect::News(_)
+                | Effect::Mail { .. }
         )
     }
 }
@@ -1072,6 +1102,7 @@ impl Book {
                         return Err(BookError::UnknownMission(mission.clone()));
                     }
                 }
+                Trigger::Holds(need) => check_need(&place, need)?,
                 other => {
                     for role in other.named_roles() {
                         self.check_role(&place, role)?;
@@ -1120,6 +1151,7 @@ impl Book {
                         return Err(BookError::Empty(format!("call in {place}")));
                     }
                     Effect::Tray { sets, .. } => check_tray(&place, sets)?,
+                    Effect::ObjectiveFit(fits) => check_fits(&place, fits)?,
                     _ => {}
                 }
             }
@@ -1153,6 +1185,11 @@ impl Book {
     #[cfg(test)]
     pub fn items(&self) -> Vec<&str> {
         let mut out = BTreeSet::new();
+        for step in self.missions.iter().flat_map(|m| &m.steps) {
+            if let Trigger::Holds(need) = &step.when {
+                items_in(need, &mut out);
+            }
+        }
         for e in self
             .missions
             .iter()
@@ -1160,7 +1197,13 @@ impl Book {
             .flat_map(|s| &s.then)
         {
             match e {
-                Effect::Give { item, .. } | Effect::Take { item, .. } | Effect::Unseal(item) => {
+                Effect::ObjectiveFit(fits) => {
+                    fits.iter().for_each(|f| items_in(&f.need, &mut out));
+                }
+                Effect::Give { item, .. }
+                | Effect::Take { item, .. }
+                | Effect::Unseal(item)
+                | Effect::Told(item) => {
                     out.insert(item.as_str());
                 }
                 Effect::Tray { sets, .. } => {
@@ -1180,6 +1223,19 @@ impl Book {
             .and_then(|r| r.face.as_deref())
             .and_then(|f| self.faces.get(f))
             .unwrap_or_else(|| &self.faces[SILHOUETTE])
+    }
+}
+
+/// The items a need names, inside `Not` and `All` too.
+#[cfg(test)]
+fn items_in<'a>(need: &'a Need, out: &mut BTreeSet<&'a str>) {
+    match need {
+        Need::Carries(i) | Need::Read(i) | Need::Unsealed(i) => {
+            out.insert(i);
+        }
+        Need::Not(inner) => items_in(inner, out),
+        Need::All(needs) => needs.iter().for_each(|n| items_in(n, out)),
+        _ => {}
     }
 }
 
@@ -1226,6 +1282,25 @@ fn check_tray(place: &str, sets: &[TraySet]) -> Result<(), BookError> {
                 ),
             });
         }
+    }
+    Ok(())
+}
+
+/// An objective's fits: at least one, each need checked, and the last always holds, as
+/// the tray's sets are checked.
+fn check_fits(place: &str, fits: &[Fit]) -> Result<(), BookError> {
+    let Some(last) = fits.last() else {
+        return Err(BookError::Empty(format!("objective fits in {place}")));
+    };
+    for fit in fits {
+        check_need(place, &fit.need)?;
+    }
+    if last.need != Need::All(vec![]) {
+        return Err(BookError::BadFits {
+            place: place.into(),
+            why: "the last fit's need is not All([]), so a player could be left with no objective"
+                .into(),
+        });
     }
     Ok(())
 }
@@ -1342,10 +1417,17 @@ mod tests {
         let steps: Vec<&str> = doctor.steps.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(steps, ["word", "in", "tray", "out", "free"]);
         // The doc must be in the city, and the cook whose district the news named; the
-        // fixer she names needn't be, so only the hook waits on him.
+        // fixer she names needn't be, so only the hook waits on him. The hook sends whoever
+        // can't read the shard to her, so it waits on her too.
         let needs = |m: &Mission| b.needs_cast(m).into_iter().collect::<Vec<_>>();
         assert_eq!(needs(doctor), ["marlo", "odile"]);
-        assert_eq!(needs(ledger), ["coz"]);
+        assert_eq!(needs(ledger), ["coz", "odile"]);
+        let steps: Vec<&str> = ledger.steps.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(steps, ["whose", "know", "sell"]);
+        let morning = &b.missions[2];
+        let steps: Vec<&str> = morning.steps.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(steps, ["wake", "news", "saw", "word", "open"]);
+        assert!(b.needs_cast(morning).iter().all(|r| r != "odile"));
         assert_eq!(b.cast["odile"].pick, Pick::Nearest("ripperdoc".into()));
         assert!(matches!(
             &b.cast["coz"].pick,
@@ -1381,12 +1463,22 @@ mod tests {
         for r in b.readings.values().flatten() {
             skills_in(&r.need, &mut skills);
         }
+        for step in b.missions.iter().flat_map(|m| &m.steps) {
+            if let Trigger::Holds(n) = &step.when {
+                skills_in(n, &mut skills);
+            }
+            for e in &step.then {
+                if let Effect::ObjectiveFit(fits) = e {
+                    fits.iter().for_each(|f| skills_in(&f.need, &mut skills));
+                }
+            }
+        }
         for beat in b.scenes.values().flat_map(|s| &s.beats) {
             if let Beat::Say { need: Some(n), .. } = beat {
                 skills_in(n, &mut skills);
             }
         }
-        assert_eq!(skills.len(), 12, "{skills:?}");
+        assert_eq!(skills.len(), 15, "{skills:?}");
         let c = Content::load().unwrap();
         for id in skills {
             assert!(
@@ -1907,6 +1999,63 @@ mod tests {
         let seren =
             r#"Step(id: "a", when: NewGame, then: [Feed(from: "zed", text: ["x"], close: "y")])"#;
         assert_eq!(needed(seren), none);
+    }
+
+    #[test]
+    fn a_fit_placing_a_role_needs_it_cast() {
+        let zed: BTreeSet<String> = ["zed"].map(String::from).into();
+        let fit = r#"Step(id: "a", when: NewGame, then: [ObjectiveFit([
+            Fit(need: Skill("hacking"), text: "read it"),
+            Fit(need: All([]), text: "ask the doctor at {zed.place}"),
+        ])])"#;
+        assert_eq!(needed(fit), zed);
+        let bare = fit.replace("at {zed.place}", "");
+        assert_eq!(needed(&bare), BTreeSet::new());
+    }
+
+    #[test]
+    fn objective_fit_must_end_on_all() {
+        let fit =
+            |fits: &str| format!(r#"Step(id: "a", when: NewGame, then: [ObjectiveFit([{fits}])])"#);
+        let ok = fit(r#"Fit(need: Skill("hacking"), text: "a"), Fit(need: All([]), text: "b")"#);
+        assert!(with_steps(&ok).is_ok());
+        for bad in [
+            r#"Fit(need: Skill("hacking"), text: "a")"#,
+            r#"Fit(need: All([]), text: "a"), Fit(need: Skill("hacking"), text: "b")"#,
+            "",
+        ] {
+            assert!(with_steps(&fit(bad)).is_err(), "{bad}");
+        }
+        // Its words name the cast, and its needs are checked.
+        let nobody = fit(r#"Fit(need: All([]), text: "{nobody}")"#);
+        assert!(matches!(
+            with_steps(&nobody).unwrap_err(),
+            BookError::UnknownRole { .. }
+        ));
+        let late = fit(r#"Fit(need: Late(2000), text: "a"), Fit(need: All([]), text: "b")"#);
+        assert!(with_steps(&late).is_err());
+    }
+
+    #[test]
+    fn a_holds_step_has_its_need_checked() {
+        let holds = |need: &str| format!(r#"Step(id: "a", when: Holds({need}), then: [Log("x")])"#);
+        assert!(with_steps(&holds(r#"Carries("x")"#)).is_ok());
+        assert!(with_steps(&holds("Late(2000)")).is_err());
+    }
+
+    #[test]
+    fn the_book_names_the_items_its_needs_and_told_name() {
+        let b = with_steps(
+            r#"Step(id: "a", when: Holds(Not(Carries("c"))), then: [
+                Told("t"),
+                ObjectiveFit([
+                    Fit(need: All([Read("r"), Unsealed("u")]), text: "a"),
+                    Fit(need: All([]), text: "b"),
+                ]),
+            ])"#,
+        )
+        .unwrap();
+        assert_eq!(b.items(), ["c", "r", "t", "u"]);
     }
 
     #[test]

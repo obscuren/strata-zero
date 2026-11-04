@@ -534,7 +534,10 @@ pub fn first_favour(st: &mut AppState) {
         read: false,
         at: now,
         job: Some(id),
+        story: None,
     });
+    // In the inbox as the game starts: the map has nothing to announce.
+    st.mail_seen = st.journal.mails.len();
 }
 
 /// The first job's flat and tile, for the tests and shots that used the favour.

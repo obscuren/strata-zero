@@ -1002,6 +1002,7 @@ mod tests {
             read: false,
             at: 9,
             job: None,
+            story: None,
         });
         let host = ensure_host(&mut st, HostId::Rig).clone();
         assert_eq!(
@@ -1061,6 +1062,7 @@ mod tests {
             read: false,
             at: 9,
             job: None,
+            story: None,
         });
         let host = ensure_host(&mut st, HostId::Rig).clone();
         assert_eq!(

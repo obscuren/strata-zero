@@ -45,6 +45,13 @@ pub fn item_desc(st: &AppState, id: &ItemId) -> String {
     }
 }
 
+/// The pack shows the item's card: a Look reading that tells, when it holds, records the
+/// item read. True when that read is new.
+pub fn look_tells(st: &mut AppState, item: &ItemId) -> bool {
+    reading(st, &item.0, ReadAt::Look).is_some_and(|r| r.tells)
+        && st.missions.read.insert(item.0.clone())
+}
+
 /// A reading on the screen, over the map at the rig or the deck at the bench: the HOLO
 /// frame of the feed, its rows filled when it opened.
 pub struct ReadCard {
@@ -373,6 +380,70 @@ pub(crate) mod tests {
         assert!(ReadCard::open(&mut st, &shard(), ReadAt::Rig).is_none());
         assert!(ReadCard::open(&mut st, &shard(), ReadAt::Look).is_none());
         assert!(st.missions.read.is_empty());
+    }
+
+    /// `reader`'s state with the pack's cursor on the shard (a plain item) or a rebuilt
+    /// deck (held per copy), both with a Look that tells if `tells`, on GEAR & INVENTORY
+    /// if `on_kit`, and the deck updated once with no keys: whether the item was read.
+    fn shown(skills: &[&str], tells: bool, per_copy: bool, on_kit: bool) -> bool {
+        use crate::screens::{deck::Deck, deck::Detail, kit::Pane, testutil::key};
+        let mut st = reader(AppState::new(), skills);
+        let look = st
+            .book
+            .readings
+            .get_mut("ledger_shard")
+            .unwrap()
+            .iter_mut()
+            .filter(|r| r.at == ReadAt::Look)
+            .map(|r| {
+                r.tells = tells;
+                r.clone()
+            })
+            .collect::<Vec<_>>();
+        let item = if per_copy {
+            let deck = ItemId::new("rebuilt_deck");
+            st.book.readings.insert(deck.0.clone(), look);
+            st.character.give_item(&st.content, deck.clone(), 1);
+            deck
+        } else {
+            shard()
+        };
+        let mut d = Deck::new(st.tick);
+        d.update(&mut st, &[key(KeyCode::Char('3'))]);
+        d.kit.state.pane = Pane::Pack;
+        d.kit.state.row = d
+            .kit
+            .pack_rows(&st)
+            .iter()
+            .position(|r| match &r.detail {
+                Some(Detail::Item(i)) => *i == item,
+                Some(Detail::Copy(c)) => st
+                    .character
+                    .copy_in_pack(*c)
+                    .is_some_and(|s| s.item == item),
+                _ => false,
+            })
+            .unwrap();
+        if !on_kit {
+            // Another tab shows; the kit's cursor stays where it was.
+            d.update(&mut st, &[key(KeyCode::Char('1'))]);
+        }
+        st.missions.read.clear();
+        d.update(&mut st, &[]);
+        st.missions.read.contains(&item.0)
+    }
+
+    #[test]
+    fn a_telling_look_is_read_when_its_card_shows() {
+        for per_copy in [false, true] {
+            // A telling Look whose need holds.
+            assert!(shown(&["streetwise"], true, per_copy, true), "{per_copy}");
+            // One that doesn't tell, and one whose need doesn't hold.
+            assert!(!shown(&["streetwise"], false, per_copy, true));
+            assert!(!shown(&[], true, per_copy, true));
+            // The card shows on GEAR & INVENTORY only.
+            assert!(!shown(&["streetwise"], true, per_copy, false));
+        }
     }
 
     #[test]

@@ -2398,7 +2398,8 @@ fn jobs_tab() {
     }
 }
 
-/// The morning after, Seren's word come: in the flat, the doctor's mission open.
+/// The morning after, Mezz's mail read and Seren's word come: in the flat, the package
+/// unsealed, the doctor's mission open.
 fn seren_has_written() -> AppState {
     let mut st = crate::missions::tests::the_morning_call();
     crate::missions::tests::to_the_word(&mut st);
@@ -2744,4 +2745,111 @@ fn net_cord() {
         &draw_stack(&st, &[&map], (120, 40)),
         false,
     );
+}
+
+/// Every row of `buf` as one string, to look for the words a shot is for.
+fn buffer_text(buf: &Buffer) -> String {
+    (0..buf.area.height)
+        .map(|y| {
+            (0..buf.area.width)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Clear objectives (spec 2026-11-03), through the real chain: the JOBS card of the
+/// morning after waiting on its package and of the ledger for a hacker, then the map as
+/// Mezz's mail lands (the pill, the log line typed out) and 180 map frames on (the mark).
+#[test]
+#[ignore]
+fn objectives_shots() {
+    use crate::screens::jobs_tab::Entry;
+    let mission = |st: &AppState, id: &str| st.book.missions.iter().position(|m| m.id == id);
+    let jobs_on = |st: &mut AppState, m: usize| {
+        let mut deck = Deck::new(st.tick);
+        deck.update(st, &[key(KeyCode::Char('5'))]);
+        deck.jobs.select(st, &Entry::Mission(m));
+        // Off the deck's signal jitter, the card typed out.
+        st.tick += 200;
+        while st.tick % 90 < 3 {
+            st.tick += 1;
+        }
+        deck
+    };
+    for (w, h) in [(120u16, 40u16), (100, 30)] {
+        let size = (w, h);
+        let name = |what: &str| format!("objectives_{what}_{w}x{h}");
+
+        // The morning after, Seren's word in: the package in the pack, unopened.
+        let mut st = seren_has_written();
+        st.missions.daze = None;
+        let map = MapScreen::walking(&mut st);
+        let m = mission(&st, "morning_after").expect("the morning after");
+        let deck = jobs_on(&mut st, m);
+        let buf = draw_stack(&st, &[&map, &deck], size);
+        assert!(
+            buffer_text(&buf).contains("Open the package"),
+            "the card says what is next"
+        );
+        shot_stack(&name("jobs_morning"), &st, &[&map, &deck], size);
+
+        // A hacker with the package opened: the ledger's whose-shard objective.
+        let mut st = crate::missions::tests::the_morning_call();
+        st.character.skills.insert(game::SkillId::new("hacking"));
+        crate::missions::tests::to_the_word(&mut st);
+        crate::missions::tests::open_the_package(&mut st);
+        st.missions.daze = None;
+        let map = MapScreen::walking(&mut st);
+        let m = mission(&st, "ledger").expect("the ledger");
+        let deck = jobs_on(&mut st, m);
+        let buf = draw_stack(&st, &[&map, &deck], size);
+        assert!(
+            buffer_text(&buf).contains("read it at your rig"),
+            "a hacker reads it at the rig"
+        );
+        shot_stack(&name("jobs_ledger"), &st, &[&map, &deck], size);
+
+        // Mezz's mail lands on a map frame: the pill up, its log line typed out.
+        let mut st = crate::missions::tests::the_morning_call();
+        crate::missions::tests::the_news_is_on(&mut st);
+        st.missions.daze = None;
+        // The inbox read up to here, so the mark counts Mezz's mail alone.
+        st.journal.mails.iter_mut().for_each(|m| m.read = true);
+        st.mail_seen = st.journal.mails.len();
+        let mut map = MapScreen::walking(&mut st);
+        map.update(&mut st, &[]);
+        crate::missions::news::switch_off(&mut st);
+        crate::missions::tick(&mut st);
+        assert!(st.journal.mails.len() > st.mail_seen, "Mezz's mail landed");
+        st.tick += 1;
+        map.update(&mut st, &[]);
+        // The newest line types out against the frame clock.
+        st.tick += 30;
+        let text = buffer_text(&draw_stack(&st, &[&map], size));
+        assert!(text.contains("▣ MAIL"), "the pill is up");
+        assert!(
+            text.contains("mail · the news"),
+            "the log line is typed out"
+        );
+        assert!(
+            !text.contains("NEW MAIL"),
+            "the pill holds the status line back"
+        );
+        shot_stack(&name("mail_pill"), &st, &[&map], size);
+
+        // 180 map frames on: the pill is down, the mark on the status line.
+        for _ in 0..crate::mail_mark::MAIL_PILL_TICKS {
+            st.tick += 1;
+            map.update(&mut st, &[]);
+        }
+        let text = buffer_text(&draw_stack(&st, &[&map], size));
+        assert!(!text.contains("▣ MAIL"), "the pill is down");
+        assert!(
+            text.contains("▣ NEW MAIL"),
+            "the mark is on the status line\n{text}"
+        );
+        shot_stack(&name("mail_mark"), &st, &[&map], size);
+    }
 }

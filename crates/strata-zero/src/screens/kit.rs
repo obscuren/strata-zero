@@ -16,7 +16,7 @@ use crate::ui::chrome::{
 use crate::ui::cyberdeck::Pen;
 use crate::ui::preview::half;
 use crossterm::event::KeyCode;
-use game::{ItemKind, Slot};
+use game::{CopyId, ItemId, ItemKind, Slot};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -521,6 +521,23 @@ impl Kit {
     }
 }
 
+/// The item a row's card and the viewer show, whether it is worn, and its copy: the
+/// pack's item or copy, or what the slot has on.
+pub(crate) fn shown_item(st: &AppState, detail: &Detail) -> Option<(ItemId, bool, Option<CopyId>)> {
+    match detail {
+        Detail::Slot(slot) => st.character.equipped(*slot).map(|id| {
+            let copy = st.character.worn_copy(*slot).map(|k| k.id);
+            (id.clone(), true, copy)
+        }),
+        Detail::Item(id) => Some((id.clone(), false, None)),
+        Detail::Copy(copy) => st
+            .character
+            .copy_in_pack(*copy)
+            .map(|s| (s.item.clone(), false, Some(*copy))),
+        _ => None,
+    }
+}
+
 /// The viewer: a solid window with corner ticks and the selection's drawing at half
 /// size, centred and clipped to it, or the box that says it has none yet. An empty
 /// slot, or nothing selected, leaves only the ticks.
@@ -540,18 +557,7 @@ fn draw_viewer(st: &AppState, selected: Option<&Detail>, view: Rect, buf: &mut B
         put(buf, x, y, ch, corner, x + 1);
     }
 
-    let shown = match selected {
-        Some(Detail::Slot(slot)) => st.character.equipped(*slot).map(|id| {
-            let copy = st.character.worn_copy(*slot).map(|k| k.id);
-            (id.clone(), true, copy)
-        }),
-        Some(Detail::Item(id)) => Some((id.clone(), false, None)),
-        Some(Detail::Copy(copy)) => st
-            .character
-            .copy_in_pack(*copy)
-            .map(|s| (s.item.clone(), false, Some(*copy))),
-        _ => None,
-    };
+    let shown = selected.and_then(|d| shown_item(st, d));
     let Some((item, equipped, copy)) = shown else {
         return;
     };

@@ -16,8 +16,12 @@ pub enum Kind {
 pub struct Entry {
     pub text: String,
     pub kind: Kind,
-    /// The tick the entry arrived.
+    /// The city's tick the entry arrived; stamps the clock.
     pub tick: u64,
+    /// The frame tick the entry arrived; the log types the line out and `recent` ages it
+    /// on the frames, so a sleep that races the city's clock ahead neither hides the line
+    /// nor keeps it up.
+    pub shown: u64,
     /// Names in the text, as char ranges, lit when the log draws: a place, an item,
     /// a person. Writers mark them with backticks; the text keeps none.
     pub marks: Vec<(usize, usize)>,
@@ -68,7 +72,7 @@ impl MessageLog {
     /// How long the newest entry counts as recent.
     pub const RECENT_TICKS: u64 = 90;
 
-    pub fn push(&mut self, kind: Kind, text: impl Into<String>, tick: u64) {
+    pub fn push(&mut self, kind: Kind, text: impl Into<String>, tick: u64, shown: u64) {
         if self.entries.len() == Self::CAP {
             self.entries.pop_front();
         }
@@ -77,6 +81,7 @@ impl MessageLog {
             text,
             kind,
             tick,
+            shown,
             marks,
         });
     }
@@ -86,10 +91,11 @@ impl MessageLog {
         self.entries.back()
     }
 
-    /// The newest entry while it is younger than `RECENT_TICKS`.
+    /// The newest entry while it is younger than `RECENT_TICKS` frames, at frame tick
+    /// `tick`.
     pub fn recent(&self, tick: u64) -> Option<&Entry> {
         self.latest()
-            .filter(|e| tick.saturating_sub(e.tick) < Self::RECENT_TICKS)
+            .filter(|e| tick.saturating_sub(e.shown) < Self::RECENT_TICKS)
     }
 
     /// Oldest first.
@@ -114,19 +120,19 @@ mod tests {
     fn log_caps_and_reports_recent() {
         let mut log = MessageLog::default();
         assert!(log.is_empty() && log.latest().is_none() && log.recent(0).is_none());
-        log.push(Kind::Info, "took it", 10);
-        log.push(Kind::Warn, "no", 20);
+        log.push(Kind::Info, "took it", 10, 10);
+        log.push(Kind::Warn, "no", 20, 20);
         assert_eq!(log.len(), 2);
         assert_eq!(log.recent(20).map(|e| e.text.as_str()), Some("no"));
         assert_eq!(log.recent(109).map(|e| e.text.as_str()), Some("no"));
         assert!(log.recent(110).is_none());
         assert_eq!(log.latest().map(|e| e.marked()), Some("! no".to_string()));
-        log.push(Kind::Story, "level 2", 30);
+        log.push(Kind::Story, "level 2", 30, 30);
         assert_eq!(log.latest().unwrap().marked(), "▸ level 2");
         let texts: Vec<&str> = log.iter().map(|e| e.text.as_str()).collect();
         assert_eq!(texts, vec!["took it", "no", "level 2"]);
         for i in 0..MessageLog::CAP {
-            log.push(Kind::Info, format!("m{i}"), 100 + i as u64);
+            log.push(Kind::Info, format!("m{i}"), 100 + i as u64, 100 + i as u64);
         }
         // 203 pushes into a 200-cap log: the three first entries are gone.
         assert_eq!(log.len(), MessageLog::CAP);
@@ -135,13 +141,28 @@ mod tests {
     }
 
     #[test]
+    fn the_newest_line_stops_being_recent_after_a_sleep() {
+        let mut st = crate::jobs::testutil::state_home();
+        // A night's sleep moves the city's clock far ahead of the frame clock.
+        let city = st.city.as_ref().expect("a city");
+        let world = st.world.as_mut().expect("a world");
+        world.advance(city, world.tick() + 480 * sim::TICKS_PER_MINUTE);
+        assert!(st.clock_tick() > st.tick + 40_000);
+        st.story("`Mezz` · mail · the news");
+        st.tick += MessageLog::RECENT_TICKS - 1;
+        assert!(st.log.recent(st.tick).is_some());
+        st.tick += 1;
+        assert!(st.log.recent(st.tick).is_none(), "the toast clears");
+    }
+
+    #[test]
     fn backticks_mark_names_and_leave_the_text_plain() {
         let mut log = MessageLog::default();
-        log.push(Kind::Info, "Entering `Novbio Labs`", 5);
+        log.push(Kind::Info, "Entering `Novbio Labs`", 5, 5);
         let e = log.latest().unwrap();
         assert_eq!(e.text, "Entering Novbio Labs");
         assert_eq!(e.marks, vec![(9, 20)]);
-        log.push(Kind::Warn, "took 2× `Copper coil` from `Mama Sol`", 6);
+        log.push(Kind::Warn, "took 2× `Copper coil` from `Mama Sol`", 6, 6);
         let e = log.latest().unwrap();
         assert_eq!(e.text, "took 2× Copper coil from Mama Sol");
         assert_eq!(
@@ -150,9 +171,9 @@ mod tests {
             "offsets in chars, after stripping"
         );
         assert_eq!(e.marked(), "! took 2× Copper coil from Mama Sol");
-        log.push(Kind::Info, "no marks here", 7);
+        log.push(Kind::Info, "no marks here", 7, 7);
         assert!(log.latest().unwrap().marks.is_empty());
-        log.push(Kind::Info, "a lone ` tick", 8);
+        log.push(Kind::Info, "a lone ` tick", 8, 8);
         assert_eq!(log.latest().unwrap().text, "a lone  tick");
     }
 }
