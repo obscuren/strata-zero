@@ -33,6 +33,10 @@ pub struct Outside {
     /// The overworld, made from `params`; rebuilt on load (`after_restore`).
     #[serde(skip)]
     pub world: Option<Overworld>,
+    /// Jacked in on the open ground: where you are on its Net, your body on the ground
+    /// cell `at` names. Not saved: a run reopened out here wakes on the body.
+    #[serde(skip)]
+    pub net: Option<Pos>,
 }
 
 impl Outside {
@@ -53,6 +57,7 @@ impl Outside {
             at: At::City,
             seen: BTreeMap::new(),
             world: Some(world),
+            net: None,
         })
     }
 

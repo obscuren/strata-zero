@@ -19,6 +19,8 @@ pub const AHEAD: i32 = 1;
 #[derive(Default)]
 pub struct GroundView {
     tiles: HashMap<Pos, Grid<Tile>>,
+    /// The Net's layer rather than the ground's.
+    net: bool,
 }
 
 impl GroundView {
@@ -28,6 +30,14 @@ impl GroundView {
         let mut v = GroundView::default();
         v.cover(world, sight_area(at));
         v
+    }
+
+    /// The open Net round you, kept the same way.
+    pub fn net() -> GroundView {
+        GroundView {
+            net: true,
+            ..Default::default()
+        }
     }
 
     /// Builds every tile `area` (world-wide cells) touches that isn't built yet, and a
@@ -57,13 +67,12 @@ impl GroundView {
                 .reduce(|a, b| Pos::new(a.x.max(b.x), a.y.max(b.y))),
         ) {
             let (w, h) = ((hi.x - lo.x + 1) as u32, (hi.y - lo.y + 1) as u32);
-            let g = detail::region(
-                world,
-                TILE * lo.x,
-                TILE * lo.y,
-                w * TILE as u32,
-                h * TILE as u32,
-            );
+            let (x, y, w, h) = (TILE * lo.x, TILE * lo.y, w * TILE as u32, h * TILE as u32);
+            let g = if self.net {
+                citygen::overworld::net_ground::region(world, x, y, w, h)
+            } else {
+                detail::region(world, x, y, w, h)
+            };
             for t in missing {
                 let mut tile = Grid::filled(
                     citygen::Size {

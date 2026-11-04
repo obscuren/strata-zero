@@ -44,6 +44,8 @@ pub const KEYS: &[(&str, &str)] = &[
         "down onto the tile you're on · into the city on its tiles",
     ),
     ("W", "up: from the open ground to the overworld"),
+    ("space", "jack in at a port in reach: a cabinet or a pump"),
+    ("J", "jacked in: jack out onto your body"),
     ("s", "save game"),
     ("?", "this help"),
     ("esc q", "pause menu"),
@@ -53,6 +55,8 @@ pub const KEYS: &[(&str, &str)] = &[
 pub struct OutsideScreen {
     /// The ground round you while you're on it.
     view: Option<GroundView>,
+    /// Its Net while you're jacked in out here.
+    net_view: Option<GroundView>,
     /// What you see from where you stand on the ground.
     sight: BTreeSet<Pos>,
     help: bool,
@@ -70,6 +74,7 @@ impl OutsideScreen {
         }
         let mut s = OutsideScreen {
             view: None,
+            net_view: None,
             sight: BTreeSet::new(),
             help: false,
             // a big window's map until the first frame says otherwise, so even the
@@ -101,6 +106,20 @@ impl OutsideScreen {
                     ),
                 );
                 view.cover(o.world(), ground::sight_area(c));
+                if let Some(n) = o.net {
+                    let nv = self.net_view.get_or_insert_with(GroundView::net);
+                    nv.cover(
+                        o.world(),
+                        citygen::Rect::new(
+                            n.x - mw as i32 / 2,
+                            n.y - mh as i32 / 2,
+                            mw as i32,
+                            mh as i32,
+                        ),
+                    );
+                } else {
+                    self.net_view = None;
+                }
                 let view = self.view.as_ref().expect("made above");
                 self.sight = ground::sight(view, c, minute);
                 ground::remember(o, &self.sight);
@@ -157,6 +176,18 @@ impl OutsideScreen {
                 };
             }
             KeyCode::Char('1'..='5') => st.warn("abilities don't work out here yet"),
+            KeyCode::Char(' ') if matches!(at, Some(At::Ground(_))) && !jacked(st) => {
+                self.jack_in(st)
+            }
+            KeyCode::Char('J') if jacked(st) => {
+                if let Some(o) = st.outside.as_mut() {
+                    o.net = None;
+                }
+                self.net_view = None;
+                st.say("jacked out");
+                self.settle(st);
+            }
+            KeyCode::Char('W') if jacked(st) => st.warn("jack out first"),
             KeyCode::Enter if matches!(at, Some(At::Overworld(_))) => match moves::down(st) {
                 Ok(Moved::City(cell)) => return Self::into_city(st, cell),
                 Ok(_) => self.settle(st),
@@ -170,6 +201,10 @@ impl OutsideScreen {
                 let Some(d) = dir_for(code) else {
                     return ScreenCmd::Stay;
                 };
+                if jacked(st) {
+                    self.net_step(st, d);
+                    return ScreenCmd::Stay;
+                }
                 let moved = match (at, self.view.as_mut()) {
                     (Some(At::Overworld(_)), _) => moves::world_step(st, d),
                     (Some(At::Ground(_)), Some(view)) => ground::ground_step(st, view, d),
@@ -183,6 +218,150 @@ impl OutsideScreen {
             }
         }
         ScreenCmd::Stay
+    }
+}
+
+/// Jacked in on the open ground.
+fn jacked(st: &AppState) -> bool {
+    st.outside.as_ref().is_some_and(|o| o.net.is_some())
+}
+
+/// Whether Net cell `p` is within the body's reach: its tile and the eight round it
+/// (until how far the Net reaches is decided).
+fn in_reach(body: Pos, p: Pos) -> bool {
+    let t = |c: Pos| (c.x.div_euclid(TILE), c.y.div_euclid(TILE));
+    let ((bx, by), (px, py)) = (t(body), t(p));
+    (bx - px).abs() <= 1 && (by - py).abs() <= 1
+}
+
+impl OutsideScreen {
+    /// Space on the ground: jack in at a port in reach (a POI's cabinet or a pump).
+    fn jack_in(&mut self, st: &mut AppState) {
+        let Some(At::Ground(body)) = st.outside.as_ref().map(|o| o.at) else {
+            return;
+        };
+        let port = self.view.as_ref().is_some_and(|v| {
+            std::iter::once(body).chain(body.neighbors8()).any(|q| {
+                v.tile(q).is_some_and(|t| {
+                    matches!(
+                        t.feature,
+                        Some(citygen::Feature::Terminal)
+                            | Some(citygen::Feature::Furniture(citygen::Furniture::Vending))
+                    )
+                })
+            })
+        });
+        if !port {
+            st.warn("no port in reach");
+            return;
+        }
+        if let Some(left) = st.net.cooling(st.net.now(st)) {
+            st.warn(format!("deck cooling · {left} min"));
+            return;
+        }
+        let Some(o) = st.outside.as_mut() else {
+            return;
+        };
+        let mut nv = GroundView::net();
+        nv.cover(o.world(), ground::sight_area(body));
+        let start = crate::outside::nearest(body, 8, |p| {
+            nv.tile(p)
+                .is_some_and(|t| t.is_walkable() && t.terrain != citygen::Terrain::Void)
+        });
+        let Some(start) = start else {
+            st.warn("no signal here");
+            return;
+        };
+        o.net = Some(start);
+        self.net_view = Some(nv);
+        st.say("jacked in · the open Net");
+        self.settle(st);
+    }
+
+    /// A step on the open Net, within the body's reach.
+    fn net_step(&mut self, st: &mut AppState, d: citygen::Dir) {
+        let Some((At::Ground(body), Some(n))) = st.outside.as_ref().map(|o| (o.at, o.net)) else {
+            return;
+        };
+        let to = n.step(d);
+        if !in_reach(body, to) {
+            st.warn("the signal is too thin out there");
+            return;
+        }
+        let ok = self
+            .net_view
+            .as_ref()
+            .and_then(|v| v.tile(to))
+            .is_some_and(|t| t.is_walkable() && t.terrain != citygen::Terrain::Void);
+        if !ok {
+            return;
+        }
+        if let Some(o) = st.outside.as_mut() {
+            o.net = Some(to);
+        }
+        crate::clock::run(st, Some(sim::WALK_TICKS), crate::clock::PATHS_PER_FRAME);
+        self.settle(st);
+    }
+
+    /// The open Net round you: all of it in reach seen, past it dim; your body grey on
+    /// the ground below.
+    fn draw_net(&self, st: &AppState, body: Pos, n: Pos, map: Rect, buf: &mut Buffer) {
+        let Some(view) = self.net_view.as_ref() else {
+            return;
+        };
+        let origin = Pos::new(n.x - map.width as i32 / 2, n.y - map.height as i32 / 2);
+        for sy in 0..map.height {
+            for sx in 0..map.width {
+                let p = origin.offset(sx as i32, sy as i32);
+                let cell = match view.tile(p) {
+                    Some(t) => {
+                        let vis = if in_reach(body, p) {
+                            Visibility::Visible
+                        } else {
+                            Visibility::Remembered
+                        };
+                        let ctx = RenderCtx {
+                            style: &st.style,
+                            theme: None,
+                            stratum: StratumKind::Net,
+                            light: 255,
+                            tick: st.tick,
+                            vis,
+                            connector: None,
+                            kind: None,
+                            wall_mask: wall_mask(view, p, t.terrain),
+                            lamps_on: true,
+                            sky: None,
+                            glow: None,
+                        };
+                        lighting::apply_vis(tileset::cell(t, &ctx), vis)
+                    }
+                    None => blank(),
+                };
+                cell.write(buf, map.x + sx, map.y + sy);
+            }
+        }
+        let (bx, by) = (body.x - origin.x, body.y - origin.y);
+        if bx >= 0 && by >= 0 && (bx as u16) < map.width && (by as u16) < map.height {
+            buf[(map.x + bx as u16, map.y + by as u16)]
+                .set_char('@')
+                .set_style(
+                    Style::default()
+                        .fg(Color::Rgb(110, 120, 130))
+                        .add_modifier(Modifier::DIM),
+                );
+        }
+        let (sx, sy) = (n.x - origin.x, n.y - origin.y);
+        if sx >= 0 && sy >= 0 && (sx as u16) < map.width && (sy as u16) < map.height {
+            buf[(map.x + sx as u16, map.y + sy as u16)]
+                .set_char('@')
+                .set_style(
+                    Style::default()
+                        .fg(crate::render::netlook::YOU.to_color())
+                        .bg(crate::render::netlook::YOU_GLOW.to_color())
+                        .add_modifier(Modifier::BOLD),
+                );
+        }
     }
 }
 
@@ -214,10 +393,11 @@ impl Screen for OutsideScreen {
         let r = layout(area, false);
         self.map.set((r.map.width, r.map.height));
         let buf = f.buffer_mut();
-        match o.at {
-            At::Ground(c) => self.draw_ground(st, o, c, r.map, buf),
-            At::Overworld(t) => draw_world(st, o.world(), t, r.map, buf),
-            At::City => {}
+        match (o.at, o.net) {
+            (At::Ground(c), Some(n)) => self.draw_net(st, c, n, r.map, buf),
+            (At::Ground(c), None) => self.draw_ground(st, o, c, r.map, buf),
+            (At::Overworld(t), _) => draw_world(st, o.world(), t, r.map, buf),
+            (At::City, _) => {}
         }
         // The rules.
         for y in area.y..r.bottom_rule.y {
@@ -446,6 +626,9 @@ fn wall_mask(view: &GroundView, p: Pos, terrain: Terrain) -> u8 {
 
 /// The place word for the bands and the footer.
 fn where_label(o: &Outside) -> &'static str {
+    if o.net.is_some() {
+        return "the Net";
+    }
     match o.at {
         At::Overworld(_) => "overworld",
         _ => "open ground",
@@ -454,6 +637,9 @@ fn where_label(o: &Outside) -> &'static str {
 
 /// The footer's keys for where you are.
 fn hint(o: &Outside) -> &'static str {
+    if o.net.is_some() {
+        return "arrows run · J jack out · esc menu · ? keys";
+    }
     match o.at {
         At::Overworld(_) => "arrows walk · enter goes down · esc menu · ? keys",
         _ => "arrows walk · W up to the overworld · esc menu · ? keys",
@@ -1059,6 +1245,110 @@ mod tests {
         p.pos = cell;
         st.missions.scenes.push_back((None, "waking".to_string()));
         assert!(crate::outside::can_leave(&st).is_err());
+    }
+
+    /// On the ground beside a truck stop's pump, and the screen.
+    fn by_a_pump() -> (AppState, OutsideScreen) {
+        use citygen::overworld::PoiKind;
+        let mut st = on_the_world();
+        let w = st.outside.as_ref().unwrap().world().clone();
+        let poi = w
+            .pois
+            .iter()
+            .find(|p| p.kind == PoiKind::TruckStop)
+            .unwrap()
+            .clone();
+        let o = Pos::new(TILE * (poi.at.x - 3), TILE * (poi.at.y - 3));
+        let g = citygen::overworld::detail::region(&w, o.x, o.y, 7 * TILE as u32, 7 * TILE as u32);
+        let pump = g
+            .iter()
+            .find(|(_, t)| {
+                t.feature == Some(citygen::Feature::Furniture(citygen::Furniture::Vending))
+            })
+            .map(|(p, _)| p)
+            .unwrap();
+        let beside = pump
+            .neighbors4()
+            .find(|q| g.get(*q).is_some_and(|t| t.is_walkable()))
+            .unwrap();
+        st.outside.as_mut().unwrap().at = At::Ground(Pos::new(o.x + beside.x, o.y + beside.y));
+        let s = OutsideScreen::new(&mut st);
+        (st, s)
+    }
+
+    #[test]
+    fn space_by_a_terminal_jacks_in() {
+        let (mut st, mut s) = by_a_pump();
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert!(st.outside.as_ref().unwrap().net.is_some(), "jacked in");
+        let page = text(&st, &s, 120, 40);
+        assert!(page.contains("the Net"), "{page}");
+        // away from any port it says why not
+        let (mut st, mut s) = out_there();
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert!(st.outside.as_ref().unwrap().net.is_none());
+        assert!(
+            st.log
+                .recent(st.tick)
+                .is_some_and(|e| e.text.contains("port"))
+        );
+    }
+
+    #[test]
+    fn the_net_out_here_ends_at_the_bodys_reach() {
+        let (mut st, mut s) = by_a_pump();
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        let At::Ground(body) = st.outside.as_ref().unwrap().at else {
+            panic!()
+        };
+        for _ in 0..60 {
+            s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        }
+        let net = st.outside.as_ref().unwrap().net.unwrap();
+        assert!(
+            net.x.div_euclid(TILE) - body.x.div_euclid(TILE) <= 1,
+            "{net:?} from {body:?}"
+        );
+        // at the edge of reach, a step further is refused
+        let edge = Pos::new(TILE * (body.x.div_euclid(TILE) + 1) + TILE - 1, body.y);
+        st.outside.as_mut().unwrap().net = Some(edge);
+        s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        assert_eq!(st.outside.as_ref().unwrap().net, Some(edge));
+        assert!(
+            st.log
+                .recent(st.tick)
+                .is_some_and(|e| e.text.contains("signal"))
+        );
+    }
+
+    #[test]
+    fn jacking_out_wakes_on_the_body() {
+        let (mut st, mut s) = by_a_pump();
+        let at = st.outside.as_ref().unwrap().at;
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        s.update(&mut st, &[key(KeyCode::Char('J'))]);
+        let o = st.outside.as_ref().unwrap();
+        assert!(o.net.is_none());
+        assert_eq!(o.at, at);
+    }
+
+    #[test]
+    fn a_run_saved_jacked_in_reopens_on_its_body() {
+        let (mut st, mut s) = by_a_pump();
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        let at = st.outside.as_ref().unwrap().at;
+        let dir = crate::runs::testutil::Dir::new("open-net");
+        let st = crate::runs::testutil::running(st);
+        let path = crate::runs::file::write(&dir.0, &st).unwrap();
+        let mut back = AppState::new();
+        let (_, snap, lost) = crate::runs::file::read(&path, &back.book).unwrap();
+        crate::runs::snapshot::restore(&mut back, snap);
+        crate::runs::snapshot::after_restore(&mut back, lost);
+        let o = back.outside.as_ref().unwrap();
+        assert!(o.net.is_none(), "you wake on your body");
+        assert_eq!(o.at, at);
     }
 
     #[test]
