@@ -1,0 +1,85 @@
+# Saving the run
+
+How a run is saved and brought back, which parts take part, and what a change to the game
+has to do so a saved run still comes back whole. The design and its reasons are in
+`docs/superpowers/specs/2026-11-04-save-the-run-design.md`; this is the working map.
+
+The short of it: **a save is a snapshot of `AppState`.** Everything in `AppState` that is
+the world or your progress is written as it stands, and new state is saved without a line
+of save code, as long as it follows the rules under "Adding state" below.
+
+## The parts
+
+`crates/strata-zero/src/runs/`:
+
+| File | What it holds |
+|---|---|
+| `mod.rs` | `RunId`, `RunMeta` (id, the tick it started on, the world minute it was born), `RunHeader` and `Death` (what the lists show), `list` / `living` / `dead` / `newest` over a runs folder, and `open`, the one way to bring a run back. |
+| `snapshot.rs` | `SnapshotRef` (borrowed, written) and `Snapshot` (owned, read): the same fields. `snapshot(st)` and `restore(st, snapshot)` take `AppState` apart field by field; `after_restore(st, lost)` rebuilds what the save leaves out. |
+| `file.rs` | The file: magic `SZRN`, `u16` LE `FORMAT_VERSION`, `u32` LE header length, the header (`{ run: RunHeader, body: u64 }`, MessagePack with named fields), the body (the snapshot, the same, gzipped). `write` / `write_as` (temp file then rename), `read`, `header` (never opens the body). |
+| `ids.rs` | Story positions by id: `StepRef`, `with_book`, the `runs` serde module for `Missions.runs`, `read_snapshot` and `drop_lost`. The compatibility fixtures and their tests. |
+| `when.rs` | When it saves: `can_save`, `save_now`, `frame` (the due save and the five-minute one), `begin_run`, `flatline`, `marked` (the SAVED mark); `EVERY`, `MARK`. |
+| `describe.rs` | The header made from a state, and the strings the lists print (`place_line`, `story`, `played`, `lasted`, `credits`, `saved_at`, `clock`, `first_part`). |
+| `testutil.rs` | `same` (compares two values through MessagePack, maps in any order), `round` (a round trip), `Dir` (a temp folder that removes itself). |
+
+Elsewhere:
+
+- `app.rs`: the `AppState` fields `saves` (where this session saves; `None` in `AppState::new()`), `run`, `save_due`, `last_save`, `save_failed`; `AppState::clear_screens()`; `Screen::holds_story()`; `Runner::save_on_exit()`.
+- `cli.rs`: `start_state` is the only place that turns saving on (`saves = Some(runs::default_dir())`).
+- `window/mod.rs`: the window's ways out save through `Runner::save_on_exit`.
+- `screens/title.rs` (CONTINUE, HALL OF FAME, dev LOAD CITY), `screens/runs.rs` (LOAD GAME and HALL OF FAME), `screens/broadcast.rs` (`Broadcast::resume`: the run's own flags, no switches), `screens/mod.rs` (`resume_screen`), `screens/explore.rs` (`MapScreen::resumed`, the `s` key, the SAVED mark on the bottom status row, the flatline switch), `screens/pause.rs` (SAVE GAME, the ways out, `last saved · …`), `screens/flatlined.rs` (taunt or reload).
+- `credentials.rs`: `run_items` / `put_back`, the run-made `keycard:*` items.
+- `sim::World::rebuild`, `track::refollow`, `forget_unknown` on `game::Character`, `game::Ground` and `missions::Missions`.
+- Content: `flavor/flatline.ron` (the taunts), `flavor/broadcasts.ron` (`during` on a broadcast).
+
+## Writing a save
+
+1. **Something asks.**
+   - `begin_run` at JACK IN (and the dev start into a fresh city; the lot never has a run).
+   - `save_due`, set by `rest::wake` and `missions::run_step`, taken by `when::frame` at the end of the map's next full frame. A step that ends under a popup or the deck is saved once the map is back on top.
+   - The five-minute timer in `when::frame` (`EVERY` frames), which waits while you're `fighting` (on turns on the Net, or a foe hunting you).
+   - SAVE GAME and the map's `s`.
+   - The ways out, through `when::save_leaving`: the pause menu's LOAD GAME and both QUIT rows, and the window's close button, Cmd+Q, the menu bar's or Dock's Quit and a logout (`Runner::save_on_exit`, from the window's close and `exiting`, once an exit). A perma death runner killed this very frame is marked flatlined there instead of saved.
+2. **`when::can_save` decides.** A folder to save in, a run, a real city (not the lot), a player, not flatlined (`net.death`), not asleep (`rest`), no scene in flight (`missions.scene`). On the way out `Runner::save_on_exit` also refuses while any screen in the stack `holds_story()`. A refused save leaves the last one standing.
+3. **`file::write`.** The header from `describe::header`; the body is `snapshot(st)` written inside `ids::with_book(&st.book, …)` so story positions go out as ids; written to `<id>.run.tmp`, synced, renamed over `<id>.run` (retried briefly: Windows antivirus can hold the file). A failure logs `couldn't save · <cause>` and keeps the old file; on the pause menu's ways out it also stays on the menu and says so, and a second press leaves anyway.
+
+The desktop app moves into its app folder (`window::enter_app_dir`) before the first screen is built, because the title looks in `runs/` for a run to CONTINUE.
+
+## Bringing a run back
+
+The order matters; every opener goes through `runs::open`:
+
+1. **`file::read(path, &st.book)`.** Checks the magic, the version and that the file is as long as its header says, then `ids::read_snapshot` reads the body against this build's book and `drop_lost` removes whatever pointed at a mission or step the book no longer has. Returns the losses. A flatlined run is refused.
+2. **`snapshot::restore`.** Puts every saved field back (`st.tick` too, so every tick stamp keeps its meaning), puts the run-made keycards back into `st.content`, clears `rest`, stands you up out of a doctor's chair (`chair` is only set while the deck's chair is open, and no screen comes back), and `clear_screens` drops what the screens remembered of another run.
+3. **`snapshot::after_restore`.** Rebuilds what isn't saved: `World::rebuild` (places, labels, night lines), `home`, the track's walk (`track::refollow`). Drops content ids this build lacks (`forget_unknown`) and logs every loss as `lost in the update · …`.
+4. **The screens.** `Broadcast::resume` (LOAD GAME, CONTINUE) or straight to the map (reloading after a flatline), then `MapScreen::resumed`: it respects the restored player, sets its clock to `st.tick` so the first frame doesn't run the world a minute, and never calls `missions::begin` or `enter_city` (both would start things over).
+
+## Adding state: the checklist
+
+Go through this whenever you add or change something that lives through play.
+
+1. **A new `AppState` field doesn't compile** until `snapshot` and `restore` name it. Save it (add it to `SnapshotRef` and `Snapshot` and put it back in `restore`), or bind it `_` with a comment saying why not: UI, a setting, a dev switch, content, never set at a save, or rebuilt in `after_restore`.
+2. **A field inside a saved type is saved automatically** by its derive. Once a version has shipped, a new field needs `#[serde(default)]`, or the old saves won't open. The fixture tests catch a missing default.
+3. **A new type held by saved state** derives `Serialize` and `Deserialize`. Not in saved state: `HashSet` (it comes back in another order; use `BTreeSet`), `Rc`/`RefCell`/`Cell`, `Instant`, closures, `&'static str`, ratatui's `Color`. `HashMap` is fine.
+4. **A cache or derived field** can be `#[serde(skip)]` only if something rebuilds it on load: add the rebuild to `after_restore` and say so in a comment. If nothing rebuilds it, save it.
+5. **Pointing into `flavor/missions.ron`** by position (a mission index, a step index) goes through `runs::ids::StepRef`, never a bare `usize`; the save writes the ids. A new saved collection keyed by mission needs the same treatment as `Missions.runs`.
+6. **Holding content ids** (items, chrome, talents, skills, abilities): on load, ids this build lacks are dropped by `forget_unknown`. A new place that holds such ids either joins the right `forget_unknown` or makes every lookup survive a missing id.
+7. **Adding to `st.content` during play** (as the keycards do): content isn't saved, so anything a run adds there must be saved and put back the way `credentials::run_items` / `put_back` do.
+8. **Time.** Stamp with `st.tick` (frames), the world's tick, or `net.now` (game minutes); all three come back with the run. Never the wall clock in saved state.
+9. **A screen that takes story off `AppState` while it is open** (the HOLO feed pops its feed; the tray popup) returns true from `Screen::holds_story()`, or keeps the story in `AppState` until it closes. Otherwise closing the window over it saves a run whose story can't move on.
+10. **Something in flight that can't be saved** (a scene) belongs in `when::can_save`.
+11. **Set-up done in `enter_city_at`, `MapScreen::walking`'s first placement or `missions::begin`** doesn't run when a run is reopened. If a new system starts there, its state must be saved, or rebuilt in `after_restore`.
+12. **The world and the map.** The city, the floors walked into and the constructs are saved whole. If generation grows the play field a lot, the alternative is saving the seed plus what changed and regenerating the rest on load, which needs generation to stay deterministic. Size and time today (release build, the medium seed-8 morning after): about 1.0 MB on disk; a save takes about 24 ms on the frame thread (encoding 14.6 MB of MessagePack ~11 ms, gzip ~9 ms, write, sync and rename ~5 ms), under one 33 ms frame. The `#[ignore]` test `a_save_is_timed` in `runs/file.rs` measures it again (run it with `--release`); past a frame, move the gzip and the write to a thread and keep the encoding on the frame.
+13. **A screen that holds story in flight** can't stop the five-minute save, the due save or SAVE GAME, because those run from the map or the pause menu over it; only the ways out see the stack. Keep story that must survive a save in `AppState`.
+
+## Compatibility
+
+- `FORMAT_VERSION` (file.rs) is the file's version. Bump it only when the layout itself changes; a newer version lists as `this build can't open it`.
+- The fixtures in `crates/strata-zero/src/runs/fixtures/` are runs written by v1 and must keep opening in every later build: `run-v1.run` (a calm morning after) and `run-v1-busy.run` (jacked in and on turns, a foe, a bot out, a blast on a fuse, effects, a hack and a trace, a call mid-line, the tray up, a track, chrome with a fitted piece, a HELIX host, a fixer's job, a backdoor, a feed queued; `world.dates` is the one part it couldn't fill). The test reads both, restores them and plays the map a few frames. **Never regenerate a fixture to make its test pass.** Add `#[serde(default)]` to the new field instead. A new fixture is only written for a new format version, by the `#[ignore]` writers in `runs/ids.rs`.
+- Story by id means a book edit is safe: an added step waits its turn, removing the step a run was waiting on ends that mission (one that never began waits on the new first step), removing a step already passed changes nothing, a removed mission is dropped, and the log says what went.
+
+## Tests
+
+- `cargo test -p strata-zero --target-dir target/smoke runs::` covers the file, the snapshot, the ids and when it saves; `a_run_comes_back_whole` restores a save and compares every saved field.
+- Saving off by default: `AppState::new()` saves nowhere, and tests that save use `runs::testutil::Dir`. No test writes into the crate's folder except the `#[ignore]` fixture writers.
+- Shots: `save_title_shots`, `save_load_shots`, `save_hall_shots`, `save_flatline_shots`, `save_pause_shots` (see CLAUDE.md, "Seeing the window without opening it").
