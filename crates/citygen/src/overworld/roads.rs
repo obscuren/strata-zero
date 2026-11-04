@@ -6,7 +6,6 @@ use super::field::{length, s, sdist};
 use super::{Ctx, Ground, LINK_E, LINK_N, LINK_S, LINK_W, Route, Water, link_toward};
 use crate::geom::{Dir, Pos};
 use crate::params::GenError;
-use crate::pathing::astar;
 use rand::Rng;
 
 pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
@@ -61,10 +60,18 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
     Ok(())
 }
 
-/// A highway from `a` to `b`, or `None` where the land gives no way through.
+/// What a turn costs a highway: about four tiles of flats, so it runs straight until the
+/// land makes it bend.
+const TURN: u32 = 40;
+
+/// A highway from `a` to `b`, or `None` where the land gives no way through: the
+/// cheapest way across the land, paying for every turn (an A* over tile and heading),
+/// so it runs in long straights rather than a staircase.
 fn road(ctx: &Ctx, a: Pos, b: Pos) -> Option<Vec<Pos>> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
     let bends = ctx.fbm(1301);
-    astar(ctx.size, a, b, |_, to| {
+    let step = |to: Pos| -> Option<u32> {
         let t = ctx.tile(to);
         if t.water == Water::Sea || t.ground == Ground::Peak {
             return None;
@@ -88,7 +95,51 @@ fn road(ctx: &Ctx, a: Pos, b: Pos) -> Option<Vec<Pos>> {
         };
         let (x, y) = s(to);
         Some((ground + water + 26.0 * bends.at(x / 7.0, y / 7.0, 3)) as u32)
-    })
+    };
+    const DIRS: [(i32, i32); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)];
+    let (w, h) = (ctx.size.w as i32, ctx.size.h as i32);
+    let index = |p: Pos, d: usize| ((p.y * w + p.x) as usize) * 4 + d;
+    let mut best = vec![u32::MAX; (w * h) as usize * 4];
+    let mut came: Vec<Option<(Pos, usize)>> = vec![None; (w * h) as usize * 4];
+    let mut heap = BinaryHeap::new();
+    // Leaving the start, any heading is free.
+    for d in 0..4 {
+        best[index(a, d)] = 0;
+        heap.push(Reverse((a.manhattan(b) as u32, 0u32, a.y, a.x, d)));
+    }
+    while let Some(Reverse((_, g, y, x, d))) = heap.pop() {
+        let p = Pos::new(x, y);
+        if g > best[index(p, d)] {
+            continue;
+        }
+        if p == b {
+            let mut path = vec![p];
+            let mut at = (p, d);
+            while let Some(prev) = came[index(at.0, at.1)] {
+                if prev.0 != at.0 {
+                    path.push(prev.0);
+                }
+                at = prev;
+            }
+            path.reverse();
+            return Some(path);
+        }
+        for (nd, (dx, dy)) in DIRS.iter().enumerate() {
+            let q = Pos::new(x + dx, y + dy);
+            if !ctx.in_bounds(q) {
+                continue;
+            }
+            let Some(c) = step(q) else { continue };
+            let turn = if nd == d || p == a { 0 } else { TURN };
+            let ng = g + c + turn;
+            if ng < best[index(q, nd)] {
+                best[index(q, nd)] = ng;
+                came[index(q, nd)] = Some((p, d));
+                heap.push(Reverse((ng + q.manhattan(b) as u32, ng, q.y, q.x, nd)));
+            }
+        }
+    }
+    None
 }
 
 /// Lays `path` on the tiles, linked tile to tile; `out` links its last tile off the map.
@@ -318,5 +369,40 @@ mod tests {
             });
             assert!(exits.count() >= 1, "seed {seed}: the world doesn't go on");
         }
+    }
+}
+
+#[cfg(test)]
+mod straightness {
+    use crate::overworld::{Overworld, WorldParams};
+
+    /// Tiles per straight run, over all routes of seeds 0..20.
+    fn tiles_per_turn() -> f32 {
+        let (mut tiles, mut turns) = (0usize, 0usize);
+        for seed in 0..20 {
+            let w = Overworld::generate(WorldParams {
+                seed,
+                ..Default::default()
+            })
+            .unwrap();
+            for r in &w.routes {
+                tiles += r.path.len();
+                for k in 2..r.path.len() {
+                    let (a, b, c) = (r.path[k - 2], r.path[k - 1], r.path[k]);
+                    if (b.x - a.x, b.y - a.y) != (c.x - b.x, c.y - b.y) {
+                        turns += 1;
+                    }
+                }
+            }
+        }
+        tiles as f32 / turns.max(1) as f32
+    }
+
+    #[test]
+    fn highways_run_long_and_straight() {
+        // One level down every turn is a corner: a highway turns only where the land
+        // asks, not in a staircase every tile or two.
+        let t = tiles_per_turn();
+        assert!(t >= 9.0, "a turn every {t:.1} tiles");
     }
 }

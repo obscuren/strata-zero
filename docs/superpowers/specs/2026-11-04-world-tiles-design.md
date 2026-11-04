@@ -81,19 +81,44 @@ can be built in any order.
 Each shared edge between two tiles has one set of crossings, derived from the plan and
 a hash of the seed and the edge, so both sides compute the same:
 
-- **Road:** where an overworld road link crosses the edge, the road crosses at a
-  position along it (hashed within the middle half of the edge, so roads don't hug
-  corners), as two lanes with a gravel shoulder each side (round 2's Route 9).
-- **River:** where a river link crosses, at a hashed position and a width (rivers widen
-  downstream: the width grows with the river's length so far), with banks.
-- **Coast:** where the shoreline meets the edge, the land/sea boundary point along it.
+- **Road:** where an overworld road link crosses the edge, the road crosses at **the
+  middle of the edge, always**, as two lanes with a gravel shoulder each side (round
+  2's Route 9). So a road that runs straight on the overworld is dead straight one level
+  down, tile after tile, and so is its Net lane: nothing to steer round in a car, no
+  jog in the trunk. Jeffrey: winding straight roads are "really awkward" for cars and
+  look "really odd" in the Net.
+- **River:** where a river link crosses, at a hashed position near the middle and at
+  its width there (see Rivers below), so both banks meet across the edge.
+- **Coast and lake shores:** where the shoreline meets the edge, the land/water point
+  along it.
 - **Elevation:** the tile corners' heights, shared by the four tiles at each corner, so
   rises blend.
 - **Ground cover:** noise in world-wide coordinates, so texture runs straight on.
 
-Inside the tile, a road runs between its crossings (through the tile centre when the
-overworld tile is a junction, gently curved), a river the same way with a meander, the
-coast as a noisy line between its edge points.
+Inside the tile, a road runs straight between crossings on opposite edges; where the
+overworld road turns, it bends **once**, as a clean corner (a short curve of road
+tiles) in the turning tile, never as a jog; a junction meets at the tile's centre.
+Roads are straight lines with corners, like the city's streets. A river runs between
+its crossings with a meander; a shore as a natural line between its edge points (Water
+below).
+
+### Water
+
+Jeffrey: lakes "cut of harshly", and a river you can see from the overworld shouldn't
+be a one-tile creek one level down.
+
+- **Shores:** the shoreline is curved by noise at a few scales (coves, points, a spit
+  now and then), not a blend of the overworld's tile shapes. Between water and land a
+  **shore band**: a tile or two of shallows (lighter water), then the shore itself:
+  mud and reeds at a lake, sand or rocks at the sea, the spill's poison edge at the
+  spill.
+- **Depth:** water darkens away from the shore, so a lake reads as a bowl and the sea
+  deepens off the coast.
+- **Rivers are wide:** about 3 detail tiles near the spring, widening downstream to 6
+  or 7 near the mouth, nearly the whole tile; banks of mud or reeds, shallows along the
+  edges, depth down the middle. A bridge is a real span of road over open water (with
+  rails); fords only in the narrow upper reaches. A wide river is a barrier on foot,
+  which gives its bridges a point.
 
 ### Ground, one level down
 
@@ -111,7 +136,7 @@ Each overworld ground kind has its detail look (round 2's palettes and the stree
 | Peak | rock, impassable |
 | Sea | water, impassable; a beach or rocks at the shore |
 | Lake | water, impassable; reeds at the shore |
-| River | water with banks; crossed where a road crosses it (a bridge) and at fords (shallow stretches, a few per river tile run, marked) |
+| River | wide water with banks and shallows (see Water); crossed by bridges where roads cross it, fords only upstream |
 
 Dressing is sparse: power lines along some roads (pylons), rocks, wrecked cars near
 roads, trash near anything built. At night only POIs and the roads near cities are lit.
@@ -150,9 +175,12 @@ Each tile has its Net layer, built with its ground and joined across edges the s
 - **Trunks:** every highway carries a backbone lane (round 2: `═` in the lane colours)
   along its road, with packets on it; trunk crossings are the road crossings.
 - **Constructs:** each POI's buildings that have systems get a small construct (round
-  2's Kilo-9), with its nodes and a gate; a spur lane joins it to the nearest trunk.
-- **Lone nodes:** cameras on poles by checkpoints and stops, ad servers in billboards,
-  a relay mast's node, each on a spur to a trunk.
+  2's Kilo-9), with its nodes and a gate on the wall facing the road; a spur lane runs
+  straight from the gate to the trunk, so **every POI on the Net is wired to it**
+  (round 3's Kilo-9 is the reference; Jeffrey: "that was perfect").
+- **Lone nodes:** cameras on poles by checkpoints and stops hang off their POI's spur on
+  a short light line; ad servers in billboards and a relay mast's node each have a spur
+  of their own to the trunk.
 - **The grid:** drawn only near signal (lanes, constructs, nodes), fading to void a few
   tiles out, with the odd stray dot beyond (round 2's B).
 - **Barren but walkable, within reach:** the Net is drawn everywhere in the open and
@@ -173,7 +201,7 @@ Each tile has its Net layer, built with its ground and joined across edges the s
 
 ## My calls (Jeffrey can change any)
 
-- Roads cross edges within the middle half; rivers widen downstream; fords exist.
+- Rivers widen downstream from 3 to 6–7 detail tiles; fords only upstream.
 - Mountains have walls and passes; peaks, sea and lakes are impassable on foot.
 - POI layouts are generators per kind with variation, not fixed templates.
 - The rig is reached from a pier on the coast.

@@ -127,7 +127,10 @@ per stage, like the city generator's `stage_rng`).
    nearest it, so the world goes on. Each link is pathfound (four-connected) across the
    land: cheap on flats, dearer on scrub and fields, much dearer on hills, very dear on
    mountains, never on peaks or the sea, a bridge allowed over a river at a price,
-   reuse of an existing road cheap, plus a little noise so the roads bend naturally.
+   reuse of an existing road cheap, plus a little noise so the roads bend naturally,
+   and **a cost for every turn** (about four tiles of flats), so highways run in long
+   straights and bend where the land asks, not in staircases: one level down every
+   overworld turn is a corner.
    Routes are named: numbered "Route N", or a coast road where it mostly follows the
    shore; a route keeps its name across the cities it runs through.
 7. **Growth.** Each city grows out from its centre by the mock's rule. A tile's score:
