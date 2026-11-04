@@ -2571,3 +2571,177 @@ fn doctor_shots() {
         shot_stack(&name("chair_tab"), &st, &[&map, &deck], size);
     }
 }
+
+/// Out of the rig on the open Net (seed 8): on the lane under Kiroflux Mart's gate,
+/// tracking it. Spec `2026-11-03-net-look-design.md`.
+fn on_the_open_net() -> (AppState, MapScreen) {
+    let mut st = state_home();
+    let _ = MapScreen::walking(&mut st);
+    let city = st.city.clone().unwrap();
+    let kiroflux = city
+        .buildings
+        .iter()
+        .find(|b| b.name.as_deref() == Some("Kiroflux Mart"))
+        .map(|b| b.id)
+        .expect("Kiroflux Mart");
+    // Tracked from the street: the Net refuses a new track.
+    crate::track::set(
+        &mut st,
+        crate::track::Source::Listing(crate::track::ListingId::Building(kiroflux)),
+    )
+    .unwrap();
+    {
+        let p = st.player.as_mut().unwrap();
+        p.body = Some((p.place, p.pos));
+        p.place = Place::Stratum(StratumKind::Net);
+        p.pos = Pos::new(201, 62);
+    }
+    let bonus = st.sight_bonus();
+    let mut p = st.player.take().unwrap();
+    p.update_fov(
+        &crate::render::map::MapRef::stratum_of(&city, StratumKind::Net),
+        bonus,
+    );
+    st.player = Some(p);
+    let mut map = MapScreen::walking(&mut st);
+    map.update(&mut st, &[]);
+    (st, map)
+}
+
+#[test]
+#[ignore]
+fn net_open() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (st, map) = on_the_open_net();
+    for (name, size) in [("net_open", (120, 40)), ("net_open_small", (100, 30))] {
+        write_svg(&dir, name, &st, &draw_stack(&st, &[&map], size), false);
+    }
+}
+
+/// Inside the first black construct with a vault (seed 8), standing in its first room
+/// beside the door.
+#[test]
+#[ignore]
+fn net_inside() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let mut st = state_home();
+    let mut map = MapScreen::walking(&mut st);
+    let city = st.city.clone().unwrap();
+    let (k, b) = city
+        .buildings
+        .iter()
+        .filter_map(|b| citygen::construct::generate_construct(&city, b.id).map(|k| (k, b.id)))
+        .find(|(k, _)| k.vault_room().is_some() && k.security >= 230 && k.guards.len() == 2)
+        .expect("a black construct with a vault");
+    {
+        let p = st.player.as_mut().unwrap();
+        p.body = Some((p.place, p.pos));
+        p.place = Place::Stratum(StratumKind::Net);
+        p.pos = crate::constructs::city_gate(&city, b).unwrap();
+    }
+    crate::constructs::enter_construct(&mut st, b).unwrap();
+    map.place = Place::Construct(b);
+    // Inside the first room, on the tile in from its door.
+    let room = k.rooms[0];
+    let door = room
+        .grow(1)
+        .border()
+        .find(|p| k.tiles[*p].terrain == citygen::Terrain::NetGate)
+        .expect("the first room's door");
+    let inside = door
+        .neighbors4()
+        .find(|p| room.contains(*p))
+        .expect("the tile in from the door");
+    let here = if k.tiles[inside].feature.is_none() {
+        inside
+    } else {
+        room.iter().find(|p| k.tiles[*p].feature.is_none()).unwrap()
+    };
+    stand_in(&mut st, Place::Construct(b), here);
+    map.cam.snap(here);
+    map.update(&mut st, &[]);
+    for (name, size) in [("net_inside", (120, 40)), ("net_inside_small", (100, 30))] {
+        write_svg(&dir, name, &st, &draw_stack(&st, &[&map], size), false);
+    }
+}
+
+/// Moves the player within a place and refreshes their sight.
+fn stand_in(st: &mut AppState, place: Place, at: Pos) {
+    let bonus = st.sight_bonus();
+    let minute = st.minute_of_day();
+    let mut p = st.player.take().unwrap();
+    p.place = place;
+    p.pos = at;
+    if let Some(city) = st.city.as_ref()
+        && let Some(map) = crate::render::map::MapRef::for_place(
+            city,
+            &st.interiors,
+            &st.constructs,
+            place,
+            minute,
+        )
+    {
+        p.update_fov(&map, bonus);
+    }
+    st.player = Some(p);
+}
+
+/// Half way along a ride north up the lane by Kiroflux Mart.
+#[test]
+#[ignore]
+fn net_ride() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (mut st, mut map) = on_the_open_net();
+    stand_in(&mut st, Place::Stratum(StratumKind::Net), Pos::new(199, 61));
+    map.cam.snap(Pos::new(199, 61));
+    map.update(&mut st, &[key(KeyCode::Char('k'))]);
+    for _ in 0..3 {
+        pass(&mut st, crate::ride::RIDE_TICKS);
+        map.update(&mut st, &[]);
+    }
+    for (name, size) in [("net_ride", (120, 40)), ("net_ride_small", (100, 30))] {
+        write_svg(&dir, name, &st, &draw_stack(&st, &[&map], size), false);
+    }
+}
+
+/// A rig run that landed at a backdoor on Stack 101 Terminal and walked to Kiroflux
+/// Mart: the cord back to the relay and the hop home, then a trace on the relay.
+#[test]
+#[ignore]
+fn net_cord() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (mut st, mut map) = on_the_open_net();
+    let city = st.city.clone().unwrap();
+    let relay = city
+        .buildings
+        .iter()
+        .find(|b| b.name.as_deref() == Some("Stack 101 Terminal"))
+        .map(|b| b.id)
+        .expect("Stack 101 Terminal");
+    let home = st.home.unwrap();
+    st.player.as_mut().unwrap().body = Some((home.place(), home.home.rig));
+    let now = st.net.now(&st);
+    st.backdoors.plant_net(relay, 50, city.seed, now);
+    st.backdoors.start_route(Some(relay));
+    map.update(&mut st, &[]);
+    for (name, size) in [("net_cord", (120, 40)), ("net_cord_small", (100, 30))] {
+        write_svg(&dir, name, &st, &draw_stack(&st, &[&map], size), false);
+    }
+    st.backdoors.start_trace(now);
+    map.update(&mut st, &[]);
+    write_svg(
+        &dir,
+        "net_cord_traced",
+        &st,
+        &draw_stack(&st, &[&map], (120, 40)),
+        false,
+    );
+}

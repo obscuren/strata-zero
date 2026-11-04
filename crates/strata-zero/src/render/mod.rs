@@ -2,6 +2,7 @@
 
 pub mod atrium;
 pub mod bots;
+pub mod cord;
 pub mod fx;
 pub mod ghost;
 pub mod glyphs;
@@ -11,9 +12,11 @@ pub mod map;
 pub mod mappix;
 pub mod mark;
 pub mod minimap;
+pub mod netlook;
 pub mod overlay;
 pub mod path;
 pub mod people;
+pub mod ride;
 pub mod style;
 pub mod tether;
 pub mod tileset;

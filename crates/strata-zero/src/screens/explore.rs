@@ -33,7 +33,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Paragraph, Widget};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,6 +170,8 @@ pub struct MapScreen {
     last_phase: Option<crate::net::Phase>,
     /// The aimed walk being stepped, a tile per `WALK_TICKS`; keys wait for it.
     pub walking: Option<Walk>,
+    /// A ride along a lane of the open Net, a tile per `RIDE_TICKS`; any key stops it.
+    pub riding: Option<crate::ride::Ride>,
     /// A program waiting for its target.
     pub targeting: Option<Targeting>,
     /// Space asked which way.
@@ -188,6 +190,8 @@ pub struct MapScreen {
     cam_ready: bool,
     /// The map area of the last frame, so `update` knows the view size.
     last_map: Cell<Rect>,
+    /// The cord's walk, kept while neither end moves: (from, to, walk).
+    cord_walk: RefCell<Option<(Pos, Pos, Vec<Pos>)>>,
     /// Where the occupants of the floor the player walks stand, keyed by the place
     /// and the world's minute it was worked out for.
     placement: Option<(Place, u64, crate::interiors::Placement)>,
@@ -358,6 +362,7 @@ impl MapScreen {
             last_enemy: None,
             last_phase: None,
             walking: None,
+            riding: None,
             targeting: None,
             which_way: None,
             looking: None,
@@ -369,6 +374,7 @@ impl MapScreen {
             program_flash: None,
             cam_ready: false,
             last_map: Cell::new(Rect::new(0, 0, 100, 28)),
+            cord_walk: RefCell::new(None),
             placement: None,
         }
     }
@@ -391,16 +397,14 @@ impl MapScreen {
                 let Some(k) = st.constructs.get(b) else {
                     return Vec::new();
                 };
-                let vis = p.vis();
+                // Everything in a construct is in view; what the cursor can be on is
+                // what a program could reach: no wall between.
                 let mut out: Vec<(Enemy, Pos)> = k
                     .guards
                     .iter()
                     .enumerate()
                     .filter(|(i, g)| {
-                        k.guard_at(g.pos) == Some(*i)
-                            && vis
-                                .get(g.pos)
-                                .is_some_and(|v| *v == crate::render::Visibility::Visible)
+                        k.guard_at(g.pos) == Some(*i) && crate::net::line_clear_in(k, p.pos, g.pos)
                     })
                     .map(|(i, g)| (Enemy::Ice(i), g.pos))
                     .collect();
@@ -1914,6 +1918,61 @@ impl MapScreen {
 
     /// A construct's gate on the Net, stepped onto from the open grid, leads inside; the
     /// entry inside, stepped off outward, leads back onto the grid.
+    /// A step along a lane of the open Net, out of a fight: the lane carries you on to
+    /// its next stop. Whether a ride started.
+    fn start_ride(&mut self, st: &mut AppState, dir: Dir) -> bool {
+        if st.net.engaged.is_some() {
+            return false;
+        }
+        let (Some(city), Some(p)) = (st.city.as_ref(), st.player.as_ref()) else {
+            return false;
+        };
+        if p.place != Place::Stratum(StratumKind::Net) {
+            return false;
+        }
+        let path = crate::ride::ride_path(city, p.pos, dir);
+        if path.is_empty() {
+            return false;
+        }
+        self.riding = Some(crate::ride::Ride {
+            path,
+            done: Vec::new(),
+            next_at: st.clock_tick(),
+        });
+        true
+    }
+
+    /// The ride's tiles whose time has come, taken in turn; it ends at its stop, or
+    /// when you are no longer on the open Net.
+    fn ride_step(&mut self, st: &mut AppState) {
+        let Some(mut ride) = self.riding.take() else {
+            return;
+        };
+        let now = st.clock_tick();
+        let bonus = st.sight_bonus();
+        let (Some(city), Some(player)) = (st.city.as_ref(), st.player.as_mut()) else {
+            return;
+        };
+        if player.place != Place::Stratum(StratumKind::Net) {
+            return;
+        }
+        let map = MapRef::stratum_of(city, StratumKind::Net);
+        while now >= ride.next_at && !ride.path.is_empty() {
+            let next = ride.path.remove(0);
+            if !map.walkable(next) {
+                ride.path.clear();
+                break;
+            }
+            ride.done.push(player.pos);
+            player.pos = next;
+            ride.next_at += crate::ride::RIDE_TICKS;
+        }
+        player.update_fov(&map, bonus);
+        if !ride.path.is_empty() {
+            self.riding = Some(ride);
+        }
+    }
+
     fn gateway(&mut self, st: &mut AppState, dir: Dir) -> Option<ScreenCmd> {
         let player = st.player.as_ref()?;
         let (here, target) = (player.pos, player.pos.step(dir));
@@ -2437,6 +2496,9 @@ impl MapScreen {
             }
         }
         if let Some(dir) = dir_for(k.code) {
+            if self.start_ride(st, dir) {
+                return Some(ScreenCmd::Stay);
+            }
             if let Some(cmd) = self.gateway(st, dir) {
                 return Some(cmd);
             }
@@ -2615,6 +2677,11 @@ impl Screen for MapScreen {
         // A scene took a key this frame.
         let mut scened = false;
         for (i, k) in keys.iter().enumerate() {
+            // A ride in flight: any key stops it where it is, and does nothing else,
+            // before a scene, a rest or a call could take it.
+            if self.riding.take().is_some() {
+                continue;
+            }
             // Once a scene has had a key, the rest of the frame's are its too, or
             // nobody's: a second `esc` as one scene ends and the next waits its tick
             // never reaches the map.
@@ -2760,6 +2827,7 @@ impl Screen for MapScreen {
         // where you were, and the map follows you before this frame draws.
         if st.player.as_ref().map(|p| (p.place, p.pos)) != before {
             self.walking = None;
+            self.riding = None;
             self.aim = None;
             if self.mode == Mode::Walk && st.player.as_ref().is_some_and(|p| p.place != self.place)
             {
@@ -2770,6 +2838,7 @@ impl Screen for MapScreen {
         // nothing of the map's stays open to keep its keys after.
         if crate::missions::scene::running(st).is_some() || st.rest.is_some() {
             self.walking = None;
+            self.riding = None;
             self.aim = None;
             self.help = false;
             self.looking = None;
@@ -2863,6 +2932,7 @@ impl Screen for MapScreen {
         }
         if self.mode == Mode::Walk {
             self.walk_step(st);
+            self.ride_step(st);
         }
         // The fire cursor: opens on the last or nearest enemy as your act half
         // opens (a key, or the walk's last move), goes when the half does.
@@ -2957,6 +3027,61 @@ impl Screen for MapScreen {
         if let Some(o) = atrium.as_ref() {
             overlays.push(o);
         }
+        // The Net's own look, under everything else drawn on it.
+        let net_view = crate::render::netlook::NetLookView {
+            tick: st.tick,
+            tracked: match crate::track::target_now(st) {
+                Some(crate::track::Target::Building(b)) => Some(b),
+                _ => None,
+            },
+            home: st.home.map(|h| h.home.building),
+            watch: match self.place {
+                Place::Construct(b) => st
+                    .constructs
+                    .get(b)
+                    .map(crate::net::watched)
+                    .unwrap_or_default(),
+                _ => Default::default(),
+            },
+        };
+        let net_look = crate::render::netlook::NetLook { view: &net_view };
+        if matches!(
+            self.place,
+            Place::Stratum(StratumKind::Net) | Place::Construct(_)
+        ) {
+            overlays.push(&net_look);
+        }
+        // The cord: the way back to where you jacked in (Settings can hide it).
+        let cord = crate::net::cord_view(st)
+            .filter(|_| self.place == Place::Stratum(StratumKind::Net))
+            .zip(st.player.as_ref().map(|p| p.pos))
+            .map(|(mut view, you)| {
+                let mut kept = self.cord_walk.borrow_mut();
+                match kept.as_ref() {
+                    Some((from, to, walk)) if *from == view.entry && *to == you => {
+                        view.walk = walk.clone();
+                    }
+                    _ => {
+                        view.walk = crate::net::cord_walk(city, view.entry, you);
+                        *kept = Some((view.entry, you, view.walk.clone()));
+                    }
+                }
+                view
+            });
+        let cord_overlay = cord
+            .as_ref()
+            .map(|view| crate::render::cord::CordOverlay { view });
+        if let Some(o) = cord_overlay.as_ref() {
+            overlays.push(o);
+        }
+        let ride = self
+            .riding
+            .as_ref()
+            .zip(st.player.as_ref().filter(|p| p.place == self.place))
+            .map(|(ride, p)| crate::render::ride::RideOverlay { ride, me: p.pos });
+        if let Some(o) = ride.as_ref() {
+            overlays.push(o);
+        }
         if st.rain {
             overlays.push(&Weather);
         }
@@ -3020,8 +3145,7 @@ impl Screen for MapScreen {
         }
         let ghost = match self.place {
             Place::Construct(b) => Some(crate::render::ghost::GhostOverlay {
-                pieces: crate::net::ghost_pieces(st, b),
-                vis,
+                steps: crate::net::ghost_steps(st, b),
             }),
             _ => None,
         };
@@ -3391,7 +3515,12 @@ impl Screen for MapScreen {
             Paragraph::new(hud::location_line(&location, st.clock(), rw)),
             r.band_r[0],
         );
-        let exposure = if matches!(self.place, Place::Stratum(_)) {
+        let exposure = if matches!(
+            self.place,
+            Place::Stratum(StratumKind::Net) | Place::Construct(_)
+        ) {
+            crate::exposure::net_text(self.place, crate::net::hunted(st))
+        } else if matches!(self.place, Place::Stratum(_)) {
             crate::exposure::text(&crate::exposure::of(st))
         } else {
             String::new()
@@ -3455,6 +3584,22 @@ impl Screen for MapScreen {
             now: st.net.now(st),
             jobs: crate::missions::ui::jobs_pane(st),
             story_lines: crate::missions::ui::story_line_count(st),
+            card: match (self.place, st.player.as_ref()) {
+                (Place::Construct(b), Some(p)) if p.place == self.place => {
+                    crate::net::card_lines(st, b, None)
+                }
+                (Place::Stratum(StratumKind::Net), Some(p)) if p.place == self.place => st
+                    .net
+                    .nearest_trace(city, p.pos)
+                    .map(|(b, _)| crate::net::card_lines(st, b, Some(p.pos)))
+                    .unwrap_or_default(),
+                _ => Vec::new(),
+            },
+            tracked: match crate::track::target_now(st) {
+                Some(crate::track::Target::Building(b)) => Some(b),
+                _ => None,
+            },
+            port: crate::net::port_of(st),
             ice_lines: match (self.place, st.player.as_ref()) {
                 (Place::Construct(b), Some(p)) if p.place == self.place => {
                     let vis = p.vis();
@@ -8855,6 +9000,78 @@ mod tests {
         }
     }
 
+    /// A lane tile of the Net from which a step east rides three tiles or more, and
+    /// the ride.
+    fn a_lane_to_ride(st: &AppState) -> (Pos, Vec<Pos>) {
+        let city = st.city.as_ref().unwrap();
+        let net = city.stratum(StratumKind::Net).unwrap();
+        net.tiles
+            .iter()
+            .filter(|(_, t)| t.terrain == citygen::Terrain::NetLane)
+            .find_map(|(p, _)| {
+                let path = crate::ride::ride_path(city, p, Dir::E);
+                (path.len() >= 3).then_some((p, path))
+            })
+            .expect("a lane to ride")
+    }
+
+    fn on_a_lane(st: &mut AppState, s: &mut MapScreen) -> Vec<Pos> {
+        walking(st, s);
+        let (from, path) = a_lane_to_ride(st);
+        st.player.as_mut().unwrap().body = Some((Place::Stratum(StratumKind::Street), from));
+        stand(st, s, Place::Stratum(StratumKind::Net), from);
+        path
+    }
+
+    #[test]
+    fn a_step_along_a_lane_rides_to_its_stop() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let path = on_a_lane(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        assert_eq!(
+            st.player.as_ref().unwrap().pos,
+            path[0],
+            "the first tile at once"
+        );
+        assert!(s.riding.is_some());
+        for _ in 0..path.len() + 2 {
+            st.tick += crate::ride::RIDE_TICKS;
+            s.update(&mut st, &[]);
+        }
+        assert_eq!(st.player.as_ref().unwrap().pos, *path.last().unwrap());
+        assert!(s.riding.is_none(), "it ends at its stop");
+    }
+
+    #[test]
+    fn any_key_stops_a_ride() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let path = on_a_lane(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        let at = st.player.as_ref().unwrap().pos;
+        assert_eq!(at, path[0]);
+        s.update(&mut st, &[key(KeyCode::Char('x'))]);
+        assert!(s.riding.is_none());
+        assert!(s.looking.is_none(), "the key did nothing else");
+        for _ in 0..5 {
+            st.tick += 1;
+            s.update(&mut st, &[]);
+        }
+        assert_eq!(st.player.as_ref().unwrap().pos, at);
+    }
+
+    #[test]
+    fn no_ride_inside_a_construct() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        in_construct(&mut st, &mut s);
+        for code in ['h', 'j', 'k', 'l'] {
+            s.update(&mut st, &[key(KeyCode::Char(code))]);
+            assert!(s.riding.is_none());
+        }
+    }
+
     fn on_the_grid(st: &mut AppState, s: &mut MapScreen) -> citygen::BuildingId {
         let b = in_construct(st, s);
         let city = st.city.clone().unwrap();
@@ -9175,7 +9392,49 @@ mod tests {
     }
 
     #[test]
-    fn signal_ghost_feels_awake_ice_through_walls() {
+    fn the_fire_cursor_skips_ice_behind_a_wall() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        // A room tile some standing piece has no clear line to.
+        let hide = {
+            let k = st.constructs.get(b).unwrap();
+            k.rooms
+                .iter()
+                .flat_map(|r| r.iter())
+                .find(|p| {
+                    k.tiles[*p].is_walkable()
+                        && k.guards.iter().any(|g| {
+                            k.guard_at(g.pos).is_some() && !crate::net::line_clear_in(k, *p, g.pos)
+                        })
+                })
+                .expect("a room tile a wall hides from a piece")
+        };
+        stand(&mut st, &mut s, Place::Construct(b), hide);
+        let k = st.constructs.get(b).unwrap();
+        let standing: Vec<Pos> = k
+            .guards
+            .iter()
+            .filter(|g| k.guard_at(g.pos).is_some())
+            .map(|g| g.pos)
+            .collect();
+        let walled = standing
+            .iter()
+            .filter(|g| !crate::net::line_clear_in(k, hide, **g))
+            .count();
+        assert!(walled > 0, "a piece behind a wall from {hide:?}");
+        let picks = MapScreen::enemies_in_sight(&st);
+        for (_, at) in &picks {
+            assert!(
+                crate::net::line_clear_in(k, hide, *at),
+                "{at:?} is behind a wall"
+            );
+        }
+        assert_eq!(picks.len() + walled, standing.len());
+    }
+
+    #[test]
+    fn signal_ghost_marks_where_awake_ice_steps() {
         let mut st = state8();
         let mut s = MapScreen::explore(0);
         let b = in_construct(&mut st, &mut s);
@@ -9184,25 +9443,38 @@ mod tests {
         let hide = room_tile(&st, b);
         stand(&mut st, &mut s, Place::Construct(b), hide);
         assert!(
-            crate::net::ice_lines(&st, b, |_| false).is_empty(),
-            "asleep and unseen: nothing"
+            crate::net::ghost_steps(&st, b).is_empty(),
+            "asleep: nothing"
         );
-        assert!(crate::net::ghost_pieces(&st, b).is_empty());
         st.net.wake_all(b, hide);
-        let lines = crate::net::ice_lines(&st, b, |_| false);
+        let steps = crate::net::ghost_steps(&st, b);
+        assert!(!steps.is_empty(), "awake: a step each");
+        let now = st.constructs.get(b).unwrap();
+        for (p, _) in &steps {
+            assert!(
+                now.guards.iter().any(|g| g.pos.chebyshev(*p) == 1),
+                "a step beside its piece: {p:?}"
+            );
+        }
+        // A stunned piece loses its turn: no mark.
+        for ice in st.net.ice.get_mut(&b).unwrap().iter_mut() {
+            ice.stunned = 1;
+        }
+        assert!(
+            crate::net::ghost_steps(&st, b).is_empty(),
+            "stunned: nothing"
+        );
+        for ice in st.net.ice.get_mut(&b).unwrap().iter_mut() {
+            ice.stunned = 0;
+        }
+        // Everything in view: the lines list both pieces however the walls lie.
+        let lines = crate::net::ice_lines(&st, b, |_| true);
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert!(lines.iter().all(|l| l.contains("hunting")));
-        let felt = crate::net::ghost_pieces(&st, b);
-        assert_eq!(felt.len(), 2);
-        // Without the ability, nothing through walls.
+        // Without the ability, no steps.
         st.character =
             game::Character::from_template(&st.content, &game::TemplateId::new("kessler")).unwrap();
-        assert!(
-            !st.character
-                .has_ability(&st.content, &game::AbilityId::new("signal_ghost"))
-        );
-        assert!(crate::net::ice_lines(&st, b, |_| false).is_empty());
-        assert!(crate::net::ghost_pieces(&st, b).is_empty());
+        assert!(crate::net::ghost_steps(&st, b).is_empty());
     }
 
     #[test]

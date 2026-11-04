@@ -3,7 +3,7 @@
 //! track goes. Spec `docs/superpowers/specs/2026-11-02-minimap-design.md`.
 
 use crate::render::Rgb;
-use crate::render::map::{ConstructMap, FloorMap, MapRef, StratumMap, TileMap};
+use crate::render::map::{ConstructMap, FloorMap, MapRef, StratumMap};
 use crate::render::mappix::{Pixels, PlanColours, paint, plan_px, stratum_px};
 use crate::render::style::StylePack;
 use crate::track::mini::MapTrack;
@@ -38,6 +38,10 @@ pub struct Minimap<'a> {
     pub player: Option<Pos>,
     pub style: &'a StylePack,
     pub track: &'a MapTrack<'a>,
+    /// On the Net: the building you track, drawn amber.
+    pub tracked: Option<citygen::BuildingId>,
+    /// On the Net: the tile you jacked in at.
+    pub port: Option<Pos>,
 }
 
 /// Where a map is drawn: its cells, the tiles a pixel covers and the tile at its
@@ -270,12 +274,28 @@ impl Minimap<'_> {
             origin: close_up_origin(self.focus(), area.width, area.height),
         };
         let ground = self.ground();
+        let net = m.stratum == StratumKind::Net;
         let mut px = Pixels::new(area.width as i32, 2 * area.height as i32, |x, y| {
             let (x0, y0) = (v.origin.x + x * CLOSE, v.origin.y + y * CLOSE);
-            stratum_px(m.city, self.style, m.stratum, x0, y0, CLOSE).unwrap_or(ground)
+            if net {
+                crate::render::netlook::mini::net_px(
+                    m.city,
+                    self.style,
+                    x0,
+                    y0,
+                    CLOSE,
+                    self.tracked,
+                )
+                .unwrap_or(ground)
+            } else {
+                stratum_px(m.city, self.style, m.stratum, x0, y0, CLOSE).unwrap_or(ground)
+            }
         });
         glow_walk(&mut px, &v, self.track.walk);
         paint(buf, area, &px);
+        if let Some(port) = self.port.filter(|_| net) {
+            mark(buf, &px, &v, port, '▪', HOME, true);
+        }
         let w = self.view;
         if w.w > 0 && w.h > 0 {
             for (t, ch) in [
@@ -425,9 +445,31 @@ impl Minimap<'_> {
     /// A construct: its plan, walls and floor, in its building's colours; the target
     /// and you.
     fn construct_plan(&self, m: &ConstructMap, area: Rect, buf: &mut Buffer) {
-        let theme = m.theme(m.construct.entry);
-        let colours = PlanColours::of(self.style.theme_or_neutral(theme));
-        let (px, v) = self.plan(&m.construct.tiles, |_| None, &colours, area, buf);
+        let k = m.construct;
+        let size = k.tiles.size();
+        // A tile a pixel when the whole construct fits, as it does at the column's size.
+        let fits = size.w as i32 <= area.width as i32 && size.h as i32 <= 2 * area.height as i32;
+        let s = if fits {
+            1
+        } else {
+            plan_scale(size, area.width, area.height)
+        };
+        let at = self.focus();
+        let v = View {
+            area,
+            s,
+            origin: Pos::new(
+                plan_axis(size.w as i32, area.width as i32 * s, at.x, s),
+                plan_axis(size.h as i32, area.height as i32 * 2 * s, at.y, 2 * s),
+            ),
+        };
+        let watch = crate::net::watched(k);
+        let ground = self.ground();
+        let px = Pixels::new(area.width as i32, 2 * area.height as i32, |x, y| {
+            let (x0, y0) = (v.origin.x + x * s, v.origin.y + y * s);
+            crate::render::netlook::mini::plan_px(k, &watch, x0, y0, s).unwrap_or(ground)
+        });
+        paint(buf, area, &px);
         self.marks(buf, &px, &v);
     }
 
@@ -601,6 +643,8 @@ mod tests {
         let map = MapRef::stratum_of(c, StratumKind::Street);
         let mut buf = Buffer::empty(Rect::new(0, 0, w, h));
         Minimap {
+            tracked: None,
+            port: None,
             map: &map,
             view: TileRect::new(at.x - 15, at.y - 7, 30, 15),
             player: Some(at),
@@ -820,6 +864,8 @@ mod tests {
         let track = crate::track::mini::map_track(st, p.place);
         let mut buf = Buffer::empty(Rect::new(0, 0, w, h));
         Minimap {
+            tracked: None,
+            port: None,
             map: &map,
             view: TileRect::new(p.pos.x - 10, p.pos.y - 5, 20, 10),
             player: Some(p.pos),

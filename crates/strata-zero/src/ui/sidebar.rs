@@ -24,6 +24,8 @@ const LOG_MIN: u16 = 3;
 /// The fewest rows MAP keeps (separator, a squeezed minimap, its bottom row).
 const MAP_MIN: u16 = 7;
 const HERE_CAP: u16 = 7;
+/// HERE's cap on the Net, with the construct card on top.
+const NET_HERE_CAP: u16 = 10;
 /// The rows the job in hand may take; the story's lines come on top of them.
 const JOBS_CAP: u16 = 5;
 const INSPECT_CAP: u16 = 14;
@@ -196,6 +198,12 @@ pub struct SidebarView<'a> {
     pub now: u64,
     /// The ICE the player can see in their construct, one line each.
     pub ice_lines: Vec<String>,
+    /// On the Net: the construct card, HERE's first lines.
+    pub card: Vec<Line<'static>>,
+    /// On the Net: the building you track, amber on the minimap.
+    pub tracked: Option<citygen::BuildingId>,
+    /// On the Net: the tile you jacked in at, marked on the minimap.
+    pub port: Option<Pos>,
     /// The JOBS pane: the story, then the job in hand, from `missions::ui::jobs_pane`.
     pub jobs: Vec<Line<'static>>,
     /// How many of `jobs`' leading lines are the story's: they add their rows to the
@@ -216,9 +224,25 @@ fn separator(width: u16) -> Line<'static> {
 }
 
 /// The focus tile: its feature, then what lies on it.
+/// Rows HERE may take: more on the Net, where the card leads it.
+fn here_cap(v: &SidebarView) -> u16 {
+    if on_the_net(v) {
+        NET_HERE_CAP
+    } else {
+        HERE_CAP
+    }
+}
+
+fn on_the_net(v: &SidebarView) -> bool {
+    matches!(v.map, MapRef::Construct(_)) || v.map.stratum() == Some(StratumKind::Net)
+}
+
 pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
     let city = v.map.city();
-    let mut out = Vec::new();
+    let mut out = v.card.clone();
+    if out.is_empty() && v.map.stratum() == Some(StratumKind::Net) {
+        out.push(dim(" open grid"));
+    }
     if let citygen::Place::Construct(b) = v.map.place() {
         for (i, line) in crate::net::trace_lines(v.net, b, v.now)
             .into_iter()
@@ -260,7 +284,7 @@ pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
                     };
                     out.push(plain(format!(" ◆ {}{state}", k.label())));
                 }
-                Some(Feature::Ice(g)) => out.push(plain(format!(" ▣ ICE · {}", g.label()))),
+                Some(Feature::Ice(g)) => out.push(plain(format!(" ◈ ICE · {}", g.label()))),
                 _ => {}
             }
         }
@@ -472,7 +496,7 @@ pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) -> V
         let (lines, need) = match s {
             Section::Here => {
                 let l = here_lines(v);
-                let n = rows_for(&l, w).min(HERE_CAP);
+                let n = rows_for(&l, w).min(here_cap(v));
                 (l, n)
             }
             Section::Jobs => {
@@ -531,6 +555,8 @@ pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) -> V
                 player: v.player,
                 style: v.style,
                 track: &v.track,
+                tracked: v.tracked,
+                port: v.port,
             }
             .render(content, buf),
             Section::Log => draw_log(v.log, v.tick, content, buf),
@@ -591,6 +617,9 @@ mod tests {
             net: &st.net,
             now: 0,
             ice_lines: Vec::new(),
+            card: Vec::new(),
+            tracked: None,
+            port: None,
             jobs: crate::missions::ui::jobs_pane(st),
             story_lines: crate::missions::ui::story_line_count(st),
         }
@@ -603,6 +632,27 @@ mod tests {
         })
         .unwrap();
         buffer_text(t.backend().buffer())
+    }
+
+    #[test]
+    fn here_leads_with_the_card() {
+        let st = state();
+        let net = citygen::Place::Stratum(StratumKind::Net);
+        let mut v = view(&st, Pos::new(0, 0), net);
+        assert_eq!(
+            here_lines(&v)[0].to_string(),
+            " open grid",
+            "no construct in reach"
+        );
+        v.card = vec![Line::from(" KIROFLUX MART · shop ↑")];
+        assert_eq!(here_lines(&v)[0].to_string(), " KIROFLUX MART · shop ↑");
+        assert_eq!(here_cap(&v), NET_HERE_CAP);
+        let street = view(
+            &st,
+            Pos::new(0, 0),
+            citygen::Place::Stratum(StratumKind::Street),
+        );
+        assert_eq!(here_cap(&street), HERE_CAP);
     }
 
     #[test]

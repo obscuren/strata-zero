@@ -1,0 +1,263 @@
+diff --git a/crates/strata-zero/src/screens/shots.rs b/crates/strata-zero/src/screens/shots.rs
+index 673e5ca..570d83b 100644
+--- a/crates/strata-zero/src/screens/shots.rs
++++ b/crates/strata-zero/src/screens/shots.rs
+@@ -2571,3 +2571,258 @@ fn doctor_shots() {
+         shot_stack(&name("chair_tab"), &st, &[&map, &deck], size);
+     }
+ }
++
++// THROWAWAY (net mockups): the Net as it is from the rig's landing, and a dump of it.
++#[test]
++#[ignore]
++fn tmp_net_look() {
++    use citygen::{Feature, Terrain};
++    let Ok(dir) = std::env::var("SHOT_DIR") else {
++        return;
++    };
++    let mut st = state_home();
++    let mut map = MapScreen::walking(&mut st);
++    let city = st.city.clone().unwrap();
++    let landing = st.home.unwrap().landing;
++    let bonus = st.sight_bonus();
++    {
++        let p = st.player.as_mut().unwrap();
++        p.body = Some((p.place, p.pos));
++        p.place = Place::Stratum(StratumKind::Net);
++        p.pos = landing;
++        p.update_fov(
++            &crate::render::map::MapRef::stratum_of(&city, StratumKind::Net),
++            bonus,
++        );
++    }
++    map.place = Place::Stratum(StratumKind::Net);
++    map.cam.snap(landing);
++    map.update(&mut st, &[]);
++    let shot = |st: &AppState, map: &MapScreen, name: &str, size| {
++        write_svg(&dir, name, st, &draw_stack(st, &[map], size), false);
++    };
++    shot(&st, &map, "net_now", (120, 40));
++    shot(&st, &map, "net_now_small", (100, 30));
++    let s = city.stratum(StratumKind::Net).unwrap();
++    let size = s.tiles.size();
++    {
++        let p = st.player.as_mut().unwrap();
++        for y in 0..size.h as i32 {
++            for x in 0..size.w as i32 {
++                p.set_vis(Pos::new(x, y), crate::render::Visibility::Visible);
++            }
++        }
++    }
++    shot(&st, &map, "net_all_visible", (120, 40));
++    // The dump: terrain, nodes, buildings, districts.
++    let mut rows = Vec::new();
++    let mut drows = Vec::new();
++    for y in 0..size.h as i32 {
++        let mut r = String::new();
++        for x in 0..size.w as i32 {
++            let t = &s.tiles[Pos::new(x, y)];
++            r.push(match t.terrain {
++                Terrain::NetGrid => {
++                    if t.variant & 1 == 1 {
++                        ':'
++                    } else {
++                        '.'
++                    }
++                }
++                Terrain::NetLane => 'L',
++                Terrain::NetWall => 'W',
++                Terrain::NetFloor => 'F',
++                Terrain::NetGate => 'G',
++                _ => '?',
++            });
++        }
++        rows.push(format!("{r:?}"));
++        let d: String = (0..size.w as i32)
++            .map(|x| {
++                s.tiles[Pos::new(x, y)]
++                    .district
++                    .map_or('-', |d| char::from(b'0' + d.index() as u8))
++            })
++            .collect();
++        drows.push(format!("{d:?}"));
++    }
++    let mut nodes = Vec::new();
++    for n in &city.net.nodes {
++        let f = s.tiles[n.cyber].feature;
++        let _ = matches!(f, Some(Feature::Node(_)));
++        nodes.push(format!(
++            "{{\"x\":{},\"y\":{},\"kind\":\"{}\",\"b\":{},\"sec\":{}}}",
++            n.cyber.x,
++            n.cyber.y,
++            n.kind.label(),
++            n.building.map_or(-1, |b| b.index() as i64),
++            city.net.subnet(n.subnet).security
++        ));
++    }
++    let mut bs = Vec::new();
++    for b in &city.buildings {
++        let sec = city
++            .net
++            .subnets
++            .iter()
++            .find(|x| x.owner == citygen::SubnetOwner::Building(b.id))
++            .map_or(-1, |x| x.security as i64);
++        let gate = crate::constructs::city_gate(&city, b.id);
++        bs.push(format!(
++            "{{\"id\":{},\"name\":{:?},\"kind\":{:?},\"d\":{},\"x\":{},\"y\":{},\"w\":{},\"h\":{},\"sec\":{},\"gate\":{}}}",
++            b.id.index(),
++            b.name.clone().unwrap_or_else(|| citygen::kind_label(&city, b.id).to_string()),
++            format!("{:?}", b.kind),
++            b.district.index(),
++            b.footprint.x,
++            b.footprint.y,
++            b.footprint.w,
++            b.footprint.h,
++            sec,
++            gate.map_or("null".to_string(), |g| format!("[{},{}]", g.x, g.y))
++        ));
++    }
++    let mut ds = Vec::new();
++    for d in &city.districts {
++        ds.push(format!(
++            "{{\"id\":{},\"name\":{:?},\"theme\":{:?},\"x\":{},\"y\":{},\"bx\":{},\"by\":{},\"bw\":{},\"bh\":{}}}",
++            d.id.index(),
++            d.name,
++            format!("{:?}", d.theme),
++            d.center.x,
++            d.center.y,
++            d.bounds.x,
++            d.bounds.y,
++            d.bounds.w,
++            d.bounds.h
++        ));
++    }
++    let home_b = st.home.unwrap().home.building.index();
++    let json = format!(
++        "{{\"w\":{},\"h\":{},\"player\":[{},{}],\"home\":{},\"rows\":[{}],\"drows\":[{}],\"nodes\":[{}],\"buildings\":[{}],\"districts\":[{}]}}",
++        size.w,
++        size.h,
++        landing.x,
++        landing.y,
++        home_b,
++        rows.join(","),
++        drows.join(","),
++        nodes.join(","),
++        bs.join(","),
++        ds.join(",")
++    );
++    std::fs::write(format!("{dir}/net_dump.json"), json).unwrap();
++}
++
++// THROWAWAY (net mockups): a black-ICE construct as it is, and a dump of it.
++#[test]
++#[ignore]
++fn tmp_construct_look() {
++    use citygen::{Feature, NodeKind, SubnetOwner, Terrain};
++    let Ok(dir) = std::env::var("SHOT_DIR") else {
++        return;
++    };
++    let mut st = state_home();
++    let mut map = MapScreen::walking(&mut st);
++    let city = st.city.clone().unwrap();
++    let sec = |b: citygen::BuildingId| {
++        city.net
++            .subnets
++            .iter()
++            .find(|s| s.owner == SubnetOwner::Building(b))
++            .map_or(0, |s| s.security)
++    };
++    let (k, b) = city
++        .buildings
++        .iter()
++        .filter(|b| sec(b.id) >= 230)
++        .filter_map(|b| citygen::construct::generate_construct(&city, b.id).map(|k| (k, b.id)))
++        .filter(|(k, _)| k.size.w <= 40 && k.size.h <= 22 && k.vault_room().is_some())
++        .max_by_key(|(k, _)| (k.rooms.len(), k.size.w * k.size.h))
++        .expect("a black construct with a vault");
++    let name = city.building(b).name.clone().unwrap_or_default();
++    {
++        let p = st.player.as_mut().unwrap();
++        p.body = Some((p.place, p.pos));
++        p.place = Place::Stratum(StratumKind::Net);
++        p.pos = crate::constructs::city_gate(&city, b).unwrap();
++    }
++    crate::constructs::enter_construct(&mut st, b).unwrap();
++    map.place = Place::Construct(b);
++    let here = st.player.as_ref().unwrap().pos;
++    map.cam.snap(here);
++    map.update(&mut st, &[]);
++    let shot = |st: &AppState, map: &MapScreen, name: &str| {
++        write_svg(&dir, name, st, &draw_stack(st, &[map], (120, 40)), false);
++    };
++    shot(&st, &map, "construct_now");
++    {
++        let p = st.player.as_mut().unwrap();
++        for y in 0..k.size.h as i32 {
++            for x in 0..k.size.w as i32 {
++                p.set_vis(Pos::new(x, y), crate::render::Visibility::Visible);
++            }
++        }
++    }
++    shot(&st, &map, "construct_all_visible");
++    let mut rows = Vec::new();
++    for y in 0..k.size.h as i32 {
++        let mut r = String::new();
++        for x in 0..k.size.w as i32 {
++            let t = &k.tiles[Pos::new(x, y)];
++            r.push(match (t.terrain, t.feature) {
++                (_, Some(Feature::Ice(_))) => 'I',
++                (_, Some(Feature::Node(NodeKind::DataVault))) => 'V',
++                (_, Some(Feature::Node(NodeKind::Server))) => 'S',
++                (_, Some(Feature::Node(NodeKind::Terminal))) => 'T',
++                (_, Some(Feature::Node(NodeKind::DoorLock))) => 'D',
++                (_, Some(Feature::Node(NodeKind::Camera))) => 'C',
++                (_, Some(Feature::Node(NodeKind::LiftCtrl))) => 'U',
++                (_, Some(Feature::Node(_))) => 'N',
++                (Terrain::NetWall, _) => 'W',
++                (Terrain::NetFloor, _) => 'F',
++                (Terrain::NetLane, _) => 'L',
++                (Terrain::NetGate, _) => 'G',
++                _ => '?',
++            });
++        }
++        rows.push(format!("{r:?}"));
++    }
++    let guards: Vec<String> = k
++        .guards
++        .iter()
++        .map(|g| {
++            format!(
++                "{{\"x\":{},\"y\":{},\"grade\":\"{}\",\"beat\":[{}]}}",
++                g.pos.x,
++                g.pos.y,
++                g.grade.label(),
++                g.beat
++                    .iter()
++                    .map(|p| format!("[{},{}]", p.x, p.y))
++                    .collect::<Vec<_>>()
++                    .join(",")
++            )
++        })
++        .collect();
++    let rooms: Vec<String> = k
++        .rooms
++        .iter()
++        .map(|r| format!("[{},{},{},{}]", r.x, r.y, r.w, r.h))
++        .collect();
++    let json = format!(
++        "{{\"name\":{:?},\"sec\":{},\"w\":{},\"h\":{},\"entry\":[{},{}],\"you\":[{},{}],\"rows\":[{}],\"guards\":[{}],\"rooms\":[{}]}}",
++        name,
++        k.security,
++        k.size.w,
++        k.size.h,
++        k.entry.x,
++        k.entry.y,
++        here.x,
++        here.y,
++        rows.join(","),
++        guards.join(","),
++        rooms.join(",")
++    );
++    std::fs::write(format!("{dir}/construct_dump.json"), json).unwrap();
++}
