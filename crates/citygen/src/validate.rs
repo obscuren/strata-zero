@@ -1,6 +1,6 @@
 //! City invariants.
 
-use crate::generate::connectivity::reachable_from_street;
+use crate::generate::connectivity::{counts_for_reach, reachable_from_street};
 use crate::geom::{Grid, Pos};
 use crate::ids::{BuildingId, DistrictId, NodeId};
 use crate::net::NodeKind;
@@ -127,11 +127,15 @@ impl City {
         let reach = reachable_from_street(self);
         for k in StratumKind::PHYSICAL {
             let Some(st) = self.stratum(k) else { continue };
-            let walkable = st.tiles.count(|t| t.is_walkable());
+            let walkable = st.tiles.count(|t| counts_for_reach(self, k, t));
             if walkable == 0 {
                 continue;
             }
-            let reached = reach[k.index()].count(|&b| b);
+            let reached = st
+                .tiles
+                .iter()
+                .filter(|(p, t)| reach[k.index()][*p] && counts_for_reach(self, k, t))
+                .count();
             if (reached as f32) < REACH_TARGET * walkable as f32 {
                 out.push(Violation::StratumUnreachable {
                     stratum: k,

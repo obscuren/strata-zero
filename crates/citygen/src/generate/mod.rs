@@ -136,7 +136,7 @@ pub(crate) struct Scratch {
     pub lots: Vec<Lot>,
     pub lobbies: Vec<(BuildingId, Pos)>,
     pub water_edge: Option<crate::geom::Dir>,
-    /// The world's part when the city has a site (its ground, its density).
+    /// The world's part when the city has a site (its ground, its outline).
     pub site: Option<site::Site>,
 }
 

@@ -7,14 +7,16 @@ use crate::overworld::{Overworld, detail};
 use crate::params::{CitySite, GenParams, SizePreset};
 use crate::tile::{Terrain, Tile};
 
-/// How dense the city must be at a cell for it to build there: its outline.
-pub const OUTLINE: f32 = 0.3;
+/// Where the city's outline runs: halfway between its own overworld tiles and the
+/// others round them, so the city builds over its whole footprint on the overworld.
+pub const OUTLINE: f32 = 0.5;
 
-/// The world's part in a city being generated: its block's ground and how dense the
-/// city is at each cell.
+/// The world's part in a city being generated: its block's ground, and how much each
+/// cell is the city's (its own tiles blended across tile lines, with noise: the
+/// outline runs at [`OUTLINE`]).
 pub(crate) struct Site {
     pub ground: Grid<Tile>,
-    pub density: Grid<f32>,
+    pub outline: Grid<f32>,
 }
 
 /// `base` set to build world `world`'s city `city` on its block: its size the block's
@@ -36,32 +38,37 @@ pub fn sited(world: &Overworld, city: u8, base: GenParams) -> GenParams {
     }
 }
 
-/// The site's ground and density, built from its world.
+/// The site's ground and outline, built from its world.
 pub(crate) fn prepare(site: &CitySite, size: Size) -> Option<Site> {
     let world = Overworld::generate(site.world.clone()).ok()?;
     let o = site.origin;
     let ground = detail::region(&world, o.x, o.y, size.w, size.h);
     let edge = Fbm::new(world.seed, 4101);
-    let mut density = Grid::filled(size, 0.0f32);
+    let mut outline = Grid::filled(size, 0.0f32);
     for y in 0..size.h as i32 {
         for x in 0..size.w as i32 {
             let (wx, wy) = ((o.x + x) as f32, (o.y + y) as f32);
-            let d = detail::blend(&world, wx, wy, |t| {
-                t.urban
-                    .filter(|u| u.city == site.city)
-                    .map_or(0.0, |u| u.density as f32 / 255.0)
+            let own = detail::blend(&world, wx, wy, |t| {
+                if t.urban.is_some_and(|u| u.city == site.city) {
+                    1.0
+                } else {
+                    0.0
+                }
             });
-            // the outline runs through tiles, not along them
-            density[Pos::new(x, y)] = d + 0.12 * detail::wave(&edge, wx / 7.0, wy / 3.5);
+            // the outline runs through tiles, not along them: a wobble a block or two
+            // across, and a finer one
+            outline[Pos::new(x, y)] = own
+                + 0.22 * detail::wave(&edge, wx / 24.0, wy / 12.0)
+                + 0.08 * detail::wave(&edge, wx / 7.0 + 31.0, wy / 3.5);
         }
     }
-    Some(Site { ground, density })
+    Some(Site { ground, outline })
 }
 
 impl Site {
     /// Whether the city builds at `p`: dry, and inside its outline.
     pub fn builds(&self, p: Pos) -> bool {
-        !self.wet(p) && self.density.get(p).is_some_and(|d| *d >= OUTLINE)
+        !self.wet(p) && self.outline.get(p).is_some_and(|d| *d >= OUTLINE)
     }
 
     /// Whether the world has water at `p`.
@@ -77,7 +84,7 @@ impl Site {
     /// The world's highway at `p`, as the city's road (a road, or a bridge over water),
     /// where the city reaches (a little past its outline, so the roads meet it).
     pub fn highway(&self, p: Pos) -> Option<Terrain> {
-        let near = self.density.get(p).is_some_and(|d| *d >= OUTLINE - 0.15);
+        let near = self.outline.get(p).is_some_and(|d| *d >= OUTLINE - 0.2);
         self.ground
             .get(p)
             .map(|t| t.terrain)
@@ -232,9 +239,33 @@ mod tests {
     }
 
     #[test]
+    fn a_home_city_builds_over_its_footprint() {
+        // the city builds over its own tiles on the overworld, not only its densest part
+        let (w, c) = home();
+        let i = w.cities.iter().position(|c| c.home).unwrap() as u8;
+        let own = w
+            .tiles
+            .iter()
+            .filter(|(_, t)| t.urban.is_some_and(|u| u.city == i))
+            .count();
+        let land = c
+            .stratum(StratumKind::Street)
+            .unwrap()
+            .tiles
+            .count(|t| t.district.is_some());
+        let cells = own * (detail::TILE * detail::TILE) as usize;
+        assert!(
+            land * 10 >= cells * 7,
+            "{land} cells built of {cells} its tiles hold"
+        );
+        assert!(c.buildings.len() >= 120, "{} buildings", c.buildings.len());
+    }
+
+    #[test]
     fn every_home_city_builds_on_its_site() {
-        // eight worlds' home cities, each cut by its own water: all of them connected
-        for seed in 0..8u64 {
+        // home cities each cut by their own water, all of them connected (69's is cut in
+        // two by a river and bridged)
+        for seed in (0..8u64).chain([69]) {
             let w = Overworld::generate(crate::overworld::WorldParams {
                 seed,
                 ..Default::default()
