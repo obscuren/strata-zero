@@ -60,17 +60,27 @@ pub fn try_save(st: &mut AppState) -> Option<Result<(), String>> {
 
 /// The map's frame: the save the run asked for, or the one five minutes of play make
 /// (counted from the last save, or the last that failed, or else the run's start), once
-/// the run can take it.
+/// the run can take it. The five-minute one waits out a fight: taken at 2 HP beside
+/// black ICE, it is where "load last save" would put you back.
 pub fn frame(st: &mut AppState) {
     let since = st
         .last_save
         .map(|(t, _)| t)
         .max(st.save_failed)
         .or(st.run.map(|r| r.started));
-    let due = st.save_due || since.is_some_and(|t| st.tick.saturating_sub(t) >= EVERY);
-    if due {
+    let timed = since.is_some_and(|t| st.tick.saturating_sub(t) >= EVERY);
+    if st.save_due || (timed && !fighting(st)) {
         save_now(st);
     }
+}
+
+/// A fight is on: a map on turns, or a foe where you stand hunting you.
+fn fighting(st: &AppState) -> bool {
+    st.net.engaged.is_some()
+        || st
+            .player
+            .as_ref()
+            .is_some_and(|p| crate::foes::any_hunting(st, p.place))
 }
 
 /// Starts a run in the city just entered and saves it, you standing in it: JACK IN, and
@@ -300,6 +310,61 @@ mod tests {
         );
         assert_eq!(EVERY, 9_000);
         the_file(&dir);
+    }
+
+    /// Five minutes of play come round mid-fight: on turns, or a foe where you stand
+    /// hunting you. That save waits for the fight to end, so "load last save" never puts
+    /// you back in it; a save asked for goes as ever.
+    #[test]
+    fn the_five_minute_save_waits_out_a_fight() {
+        use citygen::{Place, StratumKind};
+        let street = Place::Stratum(StratumKind::Street);
+        let dir = Dir::new("fight");
+        let (mut st, _) = saving(&dir, small_city());
+        assert!(save_now(&mut st));
+        let saved = st.last_save.map(|(t, _)| t);
+        // On turns.
+        crate::net::engage(&mut st, street, true);
+        assert!(st.net.engaged.is_some());
+        st.tick += EVERY;
+        frame(&mut st);
+        assert_eq!(st.last_save.map(|(t, _)| t), saved, "not on turns");
+        st.net.engaged = None;
+        // A goon beside you, hunting you.
+        let at = st.player.as_ref().unwrap().pos;
+        let mut goon = crate::foes::Foe::goon(street, citygen::Pos::new(at.x + 3, at.y));
+        goon.mode = crate::foes::FoeMode::Hunting { seen: at, lost: 0 };
+        st.foes.push(goon);
+        st.tick += 1;
+        frame(&mut st);
+        assert_eq!(st.last_save.map(|(t, _)| t), saved, "not while hunted");
+        // A save asked for (a story step, waking) is taken mid-fight all the same.
+        st.save_due = true;
+        frame(&mut st);
+        assert_eq!(st.last_save.map(|(t, _)| t), Some(st.tick));
+        let asked = st.last_save;
+        // The fight over: the five-minute save goes once it is due again.
+        st.foes[0].mode = crate::foes::FoeMode::Idle;
+        st.tick += EVERY - 1;
+        frame(&mut st);
+        assert_eq!(st.last_save, asked);
+        st.tick += 1;
+        frame(&mut st);
+        assert_eq!(
+            st.last_save.map(|(t, _)| t),
+            Some(st.tick),
+            "the fight over"
+        );
+        // A fight that ran past the five minutes: the save waits, then goes at once.
+        st.foes[0].mode = crate::foes::FoeMode::Hunting { seen: at, lost: 0 };
+        st.tick += EVERY + 40;
+        frame(&mut st);
+        let held = st.last_save;
+        assert_ne!(held.map(|(t, _)| t), Some(st.tick));
+        st.foes[0].mode = crate::foes::FoeMode::Idle;
+        st.tick += 1;
+        frame(&mut st);
+        assert_eq!(st.last_save.map(|(t, _)| t), Some(st.tick), "right after");
     }
 
     #[test]
