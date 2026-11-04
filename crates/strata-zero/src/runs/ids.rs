@@ -919,18 +919,53 @@ mod tests {
         );
     }
 
+    /// The runs the first format wrote, calm and busy, read by this build, put in place
+    /// and played: back on the map as a load puts you (`MapScreen::resumed`), a few
+    /// frames of the game's own loop, drawn. Neither fixture is ever rewritten.
     #[test]
     fn the_first_saved_run_still_opens() {
-        let dir = Dir::new("v1");
-        let path = dir.0.join("first.run");
-        std::fs::write(&path, include_bytes!("fixtures/run-v1.run")).unwrap();
-        let mut st = AppState::new();
-        let (h, s, lost) = read(&path, &st.book).expect("the first run reads");
-        assert_eq!(h.seed, 8);
-        restore(&mut st, s);
-        after_restore(&mut st, lost);
-        assert!(st.city.is_some() && st.player.is_some() && st.world.is_some());
-        assert!(st.missions.begun);
+        use crate::app::Runner;
+        use crate::screens::explore::MapScreen;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let fixtures: [(&str, &[u8]); 2] = [
+            ("calm", include_bytes!("fixtures/run-v1.run")),
+            ("busy", include_bytes!("fixtures/run-v1-busy.run")),
+        ];
+        for (name, bytes) in fixtures {
+            let dir = Dir::new("v1");
+            let path = dir.0.join(format!("{name}.run"));
+            std::fs::write(&path, bytes).unwrap();
+            let mut st = AppState::new();
+            let (h, s, lost) =
+                read(&path, &st.book).unwrap_or_else(|e| panic!("the {name} run reads: {e:#}"));
+            assert_eq!(h.seed, 8, "{name}");
+            assert!(lost.is_empty(), "{name}: {lost:?}");
+            restore(&mut st, s);
+            after_restore(&mut st, lost);
+            assert!(
+                st.city.is_some() && st.player.is_some() && st.world.is_some(),
+                "{name}"
+            );
+            assert!(st.missions.begun, "{name}");
+            if name == "busy" {
+                let p = st.player.as_ref().unwrap();
+                assert!(
+                    matches!(p.place, citygen::Place::Construct(_)) && p.body.is_some(),
+                    "jacked into the construct"
+                );
+                assert!(st.net.engaged.is_some() && st.net.run.is_some(), "on turns");
+                assert!(!st.bots.is_empty() && !st.foes.is_empty() && !st.live.is_empty());
+                assert!(st.missions.call.is_some() && st.track.is_some());
+            }
+            st.show_fps = false;
+            let map = MapScreen::resumed(&mut st);
+            let mut runner = Runner::new(Box::new(map), st);
+            let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+            for _ in 0..12 {
+                assert!(runner.frame(&mut term, &[]).unwrap(), "{name} plays");
+            }
+        }
     }
 
     /// The morning after in the small seed-8 city, Seren's word come: the run the
@@ -961,10 +996,28 @@ mod tests {
     #[test]
     #[ignore = "writes the fixture into the source tree"]
     fn write_run_fixture() {
+        write_fixture(running(small_morning_after()), "run-v1.run");
+    }
+
+    /// Writes `fixtures/run-v1-busy.run`, once, as `write_run_fixture` does: never
+    /// rewritten to make a test pass.
+    #[test]
+    #[ignore = "writes the fixture into the source tree"]
+    fn write_busy_run_fixture() {
+        let st = running(busy_run());
+        let to = write_fixture(st, "run-v1-busy.run");
+        for (part, held) in parts_held(&body_of(&to)) {
+            eprintln!("{part}: {}", if held { "held" } else { "EMPTY" });
+        }
+    }
+
+    /// `st` written to `fixtures/<name>`; the path.
+    fn write_fixture(st: AppState, name: &str) -> std::path::PathBuf {
         let dir = Dir::new("fixture");
-        let st = running(small_morning_after());
         let path = write(&dir.0, &st).unwrap();
-        let to = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/runs/fixtures/run-v1.run");
+        let to = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/runs/fixtures")
+            .join(name);
         std::fs::create_dir_all(to.parent().unwrap()).unwrap();
         std::fs::copy(&path, &to).unwrap();
         eprintln!(
@@ -972,5 +1025,367 @@ mod tests {
             to.display(),
             std::fs::metadata(&to).unwrap().len()
         );
+        to
+    }
+
+    /// The parts of a run the calm fixture leaves empty, by their path in its body, and
+    /// whether `body` holds something in each (a chrome copy: one with a piece fitted).
+    fn parts_held(body: &Value) -> Vec<(String, bool)> {
+        let at = |path: &str| {
+            path.split('.').try_fold(body, |v, key| {
+                v.as_map()?
+                    .iter()
+                    .find(|(k, _)| k.as_str() == Some(key))
+                    .map(|(_, v)| v)
+            })
+        };
+        let filled = |v: Option<&Value>| match v {
+            None | Some(Value::Nil) => false,
+            Some(Value::Array(a)) => !a.is_empty(),
+            Some(Value::Map(m)) => !m.is_empty(),
+            Some(_) => true,
+        };
+        let mut out: Vec<(String, bool)> = BUSY_PARTS
+            .iter()
+            .map(|p| (p.to_string(), filled(at(p))))
+            .collect();
+        let fitted = at("character.chrome_copies")
+            .and_then(Value::as_map)
+            .is_some_and(|m| {
+                m.iter().any(|(_, copy)| {
+                    copy.as_map()
+                        .and_then(|c| c.iter().find(|(k, _)| k.as_str() == Some("fitted")))
+                        .and_then(|(_, f)| f.as_array())
+                        .is_some_and(|f| f.iter().any(|s| !s.is_nil()))
+                })
+            });
+        out.push(("character.chrome_copies (a piece fitted)".into(), fitted));
+        out
+    }
+
+    /// The parts `parts_held` looks at, past the chrome copies.
+    const BUSY_PARTS: &[&str] = &[
+        "fx",
+        "foes",
+        "bots",
+        "live",
+        "constructs.made",
+        "net.ice",
+        "net.traces",
+        "net.hacks",
+        "net.run",
+        "net.echo",
+        "net.engaged",
+        "backdoors.list",
+        "backdoors.route",
+        "backdoors.trace",
+        "backdoors.logins",
+        "helix.hosts",
+        "jobs.fixers",
+        "missions.feeds",
+        "missions.call",
+        "missions.calls",
+        "missions.visitors",
+        "missions.scenes",
+        "missions.notes",
+        "missions.tray",
+        "missions.tab",
+        "track",
+        "mail_pill",
+        // Not `world.dates`: no test can strike one (see `busy_run`).
+        "world.displaced",
+    ];
+
+    /// The run `fixtures/run-v1-busy.run` holds: the small morning after with every part
+    /// the calm fixture leaves empty made to hold something, as far as a test can set it
+    /// up. A walker sidestepped you (no date is struck on the strip: `sim`'s dates are
+    /// its own, and a week of this city's world strikes none); the rig's HELIX host
+    /// made and a fixer's offer rolled; the
+    /// Drone cradle in, its drone out, and a sticker on the deck; a goon hunting the
+    /// body, a satchel live on its fuse and a mark in flight beside it; a track on the
+    /// tower; a backdoor in it, a route through it and the trace walking home; Mezz
+    /// mid-line with a call behind, a feed and a scene queued, the doctor's tray held
+    /// out and a piece on her tab, a visitor and a note; the mail pill up. Then jacked
+    /// into the tower's construct and on turns there: its ICE, a trace, a hack, a crack
+    /// in flight and its last roll.
+    fn busy_run() -> AppState {
+        use crate::missions::{Call, FeedView, Tab, TrayOffer};
+        use crate::render::map::TileMap;
+        use citygen::{Place, Pos, StratumKind};
+        use game::{HackTarget, ItemId, Op, Site, Target};
+        let mut st = small_morning_after();
+        let city = st.city.clone().unwrap();
+
+        // A walker on the street sidestepped, the player taking their tile.
+        {
+            let world = st.world.as_mut().unwrap();
+            let (who, pos) = world
+                .people()
+                .iter()
+                .find_map(|p| match p.whereabouts {
+                    sim::Whereabouts::At { pos, .. } => Some((p.id, pos)),
+                    _ => None,
+                })
+                .expect("someone on the street");
+            let from = pos
+                .neighbors4()
+                .find(|n| city.walkable(StratumKind::Street, *n))
+                .unwrap();
+            assert!(world.swap(who, from, pos));
+        }
+        let now = st.net.now(&st);
+        let (place, body) = {
+            let p = st.player.as_ref().unwrap();
+            (p.place, p.pos)
+        };
+        // Free tiles about the body, nearest first.
+        let free: Vec<Pos> = {
+            let map = crate::render::map::MapRef::for_place(
+                &city,
+                &st.interiors,
+                &st.constructs,
+                place,
+                st.minute_of_day(),
+            )
+            .expect("the body's place is drawn");
+            let mut v: Vec<Pos> = (-5..=5)
+                .flat_map(|dy| (-5..=5).map(move |dx| Pos::new(body.x + dx, body.y + dy)))
+                .filter(|p| *p != body && map.walkable(*p))
+                .collect();
+            v.sort_by_key(|p| (p.chebyshev(body), p.y, p.x));
+            v
+        };
+        assert!(free.len() >= 8, "room about the body: {free:?}");
+
+        // HELIX, a fixer, the mail pill.
+        crate::helix::hosts::ensure_host(&mut st, crate::helix::shell::HostId::Rig);
+        let fixers: Vec<sim::PersonId> = st
+            .world
+            .as_ref()
+            .unwrap()
+            .people()
+            .iter()
+            .filter(|p| p.profession == "fixer" && st.jobs.taken(p.id).is_none())
+            .map(|p| p.id)
+            .collect();
+        let offered = fixers
+            .into_iter()
+            .find_map(|f| crate::jobs::offer(&mut st, f));
+        assert!(offered.is_some(), "a fixer's offer");
+        crate::mail_mark::testutil::land(&mut st, "Mezz", "you up?");
+        crate::mail_mark::notice(&mut st);
+        assert!(st.mail_pill.is_some());
+
+        // The Drone cradle in with its drone docked, and out; a sticker on the deck.
+        let cradle = ItemId::new("drone_cradle");
+        let mut copy = st.character.new_copy(&st.content, &cradle);
+        let socket = st.content.item(&cradle).unwrap().sockets[0];
+        let drone = st
+            .content
+            .items
+            .iter()
+            .find(|i| i.bot.as_ref().is_some_and(|b| b.docks == socket))
+            .unwrap()
+            .id
+            .clone();
+        let piece = st.character.new_copy(&st.content, &drone);
+        copy.fitted[0] = Some(game::Stack {
+            item: drone,
+            qty: 1,
+            copy: Some(piece),
+        });
+        st.character.install(Site::Back, cradle, Some(copy));
+        crate::bots::sync(&mut st);
+        assert_eq!(st.bots.len(), 1, "the drone is out");
+        let sticker = st
+            .content
+            .items
+            .iter()
+            .find(|i| i.kind == game::ItemKind::Sticker)
+            .unwrap()
+            .id
+            .clone();
+        if let Some(deck) = st.character.worn.get_mut(&game::Slot::Deck) {
+            deck.stickers.push(game::Stuck {
+                sticker,
+                x: 2,
+                y: 1,
+                turn: game::Turn::Quarter,
+            });
+        }
+
+        // About the body: a goon hunting it, a satchel live, a mark in flight.
+        let mut goon = crate::foes::Foe::goon(place, free[4]);
+        goon.mode = crate::foes::FoeMode::Hunting {
+            seen: body,
+            lost: 0,
+        };
+        st.foes.push(goon);
+        let satchel = st.content.item(&ItemId::new("satchel")).unwrap().clone();
+        let Some(game::Use::Throw { blast, .. }) = satchel.on_use else {
+            panic!("the satchel is thrown")
+        };
+        st.live.push(crate::blast::Live {
+            place,
+            pos: free[6],
+            blast,
+            fx: satchel.fx.clone(),
+            name: satchel.name.clone(),
+            turns: 1,
+            lands: st.tick,
+            wakes: Some(body),
+        });
+        st.fx.push(crate::app::FxInstance {
+            fx: game::Fx::Mark {
+                colour: crate::net::MARK_SLIP,
+                ticks: 600,
+            },
+            place,
+            origin: body,
+            radius: 0,
+            started: st.tick,
+            revealed: Vec::new(),
+            targets: vec![free[0]],
+            label: String::new(),
+            hit: false,
+            tint: None,
+            arc: None,
+        });
+
+        // The tower: tracked, a backdoor in it, a route through it, the trace walking.
+        let tower = city
+            .buildings
+            .iter()
+            .filter(|b| crate::constructs::city_gate(&city, b.id).is_some())
+            .find(|b| {
+                citygen::construct::generate_construct(&city, b.id)
+                    .is_some_and(|k| !k.guards.is_empty() && !k.nodes.is_empty())
+            })
+            .expect("a construct with ICE and a node")
+            .id;
+        let tracked = crate::track::set(
+            &mut st,
+            crate::track::Source::Listing(crate::track::ListingId::Building(tower)),
+        );
+        assert!(tracked.is_ok(), "{tracked:?}");
+        st.backdoors.plant_net(tower, 2, city.seed, now);
+        st.backdoors.start_route(Some(tower));
+        st.backdoors.start_trace(now);
+        st.backdoors.logins.push((now, tower, "root".into()));
+
+        // The story: Mezz mid-line, a call behind, a feed and a scene queued, the
+        // doctor's tray and tab, a visitor, a note.
+        let book = st.book.clone();
+        let m = book
+            .missions
+            .iter()
+            .position(|m| m.id == "morning_after")
+            .unwrap();
+        let here = StepRef::new(m, st.missions.runs[m].at);
+        let d = mission_at(&book, "doctor");
+        let doc_role = book.missions[d].from.clone();
+        let clock = st.clock_tick();
+        let call = Call {
+            story: Some(here),
+            from: "mezz".into(),
+            lines: vec!["You up, choom?".into(), "Don't open it.".into()],
+            rang: clock,
+            answered: Some(clock),
+            line: 1,
+            shown: clock,
+            full: false,
+        };
+        st.missions.calls.push_back(Call {
+            story: None,
+            answered: None,
+            line: 0,
+            ..call.clone()
+        });
+        st.missions.call = Some(call);
+        st.missions.feeds.push_back(FeedView {
+            story: Some(here),
+            from: "mezz".into(),
+            text: vec!["Word on the street.".into()],
+            close: "close".into(),
+        });
+        st.missions.scenes.push_back((Some(here), "waking".into()));
+        st.missions.tray = Some(TrayOffer {
+            story: StepRef::new(d, step_at(&book, d, "tray")),
+            from: doc_role.clone(),
+            tab: doc_role.clone(),
+            title: "her tray".into(),
+            line: "One piece.".into(),
+            items: vec![ItemId::new("neural_port")],
+            shown: true,
+        });
+        st.missions.tab = Some(Tab {
+            doc: st
+                .missions
+                .cast
+                .get(&doc_role)
+                .copied()
+                .unwrap_or(sim::PersonId(0)),
+            item: ItemId::new("neural_port"),
+            payer: doc_role.clone(),
+            spent: false,
+        });
+        crate::missions::visitors::arrive(&mut st, &doc_role, (place, free[2]));
+        st.missions
+            .notes
+            .push((place, free[3], "Someone was here.".into()));
+
+        // Jacked in from where the body stands, into the tower's construct, and on
+        // turns there.
+        let gate = crate::constructs::city_gate(&city, tower).unwrap();
+        {
+            let p = st.player.as_mut().unwrap();
+            p.body = Some((place, body));
+            p.place = Place::Stratum(StratumKind::Net);
+            p.pos = gate;
+        }
+        crate::constructs::enter_construct(&mut st, tower).unwrap();
+        let k = st.constructs.get(tower).unwrap().clone();
+        let (node, _) = k.nodes[0];
+        let kind = city.net.node(node).kind;
+        st.net.trace(tower).heat = 18;
+        st.net.land(
+            tower,
+            HackTarget::Node(node),
+            Target::Node(kind),
+            Op::Crack,
+            now,
+        );
+        let crack = game::Run {
+            program: ItemId::new("crack"),
+            target: HackTarget::Guard {
+                building: tower,
+                index: 0,
+            },
+            done: 1,
+            work: 3,
+        };
+        st.net.run = Some(crack.clone());
+        st.net.echo = Some(crate::net::RollEcho {
+            at: st.tick,
+            roll: crate::net::Roll::Hit,
+            building: tower,
+            run: crack,
+        });
+        crate::net::engage(&mut st, Place::Construct(tower), true);
+        assert!(st.net.engaged.is_some() && !st.net.ice.is_empty());
+        st
+    }
+
+    #[test]
+    fn the_busy_fixture_holds_what_the_calm_one_leaves_empty() {
+        let dir = Dir::new("busy-parts");
+        let path = dir.0.join("busy.run");
+        std::fs::write(&path, include_bytes!("fixtures/run-v1-busy.run")).unwrap();
+        let empty: Vec<String> = parts_held(&body_of(&path))
+            .into_iter()
+            .filter(|(_, held)| !held)
+            .map(|(part, _)| part)
+            .collect();
+        assert!(empty.is_empty(), "the fixture leaves empty: {empty:?}");
     }
 }
