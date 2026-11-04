@@ -66,12 +66,40 @@ mod tests {
     }
 
     #[test]
+    fn sets_come_back_the_same_in_any_order() {
+        use citygen::{Place, Pos, StratumKind};
+        let mut j = crate::credentials::Journal::default();
+        for i in 0..12 {
+            j.booted
+                .insert((Place::Stratum(StratumKind::Street), Pos::new(i * 3, 40 - i)));
+        }
+        for _ in 0..5 {
+            assert!(same(&j, &round(&j)));
+        }
+        let (st, _) = on_the_open_net();
+        let w = st.world.as_ref().unwrap();
+        assert!(w.open_buildings().count() >= 2, "several buildings open");
+        for _ in 0..5 {
+            assert!(same(w, &round(w)));
+        }
+    }
+
+    #[test]
     fn every_run_part_comes_back() {
         let st = seren_has_written();
         assert!(
             !st.missions.runs.is_empty() && st.missions.begun,
             "a story under way"
         );
+        assert!(!st.journal.mails.is_empty(), "mail in the inbox");
+        assert!(!st.missions.unsealed.is_empty(), "items unsealed");
+        // `helix.hosts` is empty in this state (hosts are made on first connect).
+        // Their maps are private: holding something is being unlike a fresh one.
+        assert!(
+            !same(&st.interiors, &crate::interiors::Interiors::default()),
+            "floors entered"
+        );
+        // No construct has been entered in this state, so `constructs` is empty here.
         let p = st.player.as_ref().unwrap();
         assert!(same(p, &round(p)), "player");
         assert!(same(&st.net, &round(&st.net)), "net");

@@ -123,7 +123,7 @@ pub struct World {
     /// The last minute stepped, counted from tick 0.
     minute: u64,
     start_minute: u16,
-    open: HashSet<BuildingId>,
+    open: BTreeSet<BuildingId>,
     chats: Vec<(Pos, u64)>,
     dates: Vec<Date>,
     rng: ChaCha8Rng,
@@ -187,7 +187,7 @@ impl World {
             tick,
             minute: tick / TICKS_PER_MINUTE,
             start_minute,
-            open: HashSet::new(),
+            open: BTreeSet::new(),
             chats: Vec::new(),
             dates: Vec::new(),
             rng,

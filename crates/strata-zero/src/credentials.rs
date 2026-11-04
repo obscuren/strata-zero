@@ -112,7 +112,7 @@ pub struct Journal {
     /// The rig's inbox, oldest first.
     pub mails: Vec<Mail>,
     /// Terminals already powered on this session, by their tile.
-    pub booted: std::collections::HashSet<(Place, Pos)>,
+    pub booted: std::collections::BTreeSet<(Place, Pos)>,
 }
 
 /// A mail has been read: marks it. The first reading of a story mail ends its step.

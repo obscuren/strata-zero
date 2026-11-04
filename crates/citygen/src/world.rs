@@ -307,7 +307,7 @@ impl StrataSpan {
 }
 
 /// Where a map is: a stratum of the city, or a floor inside a building.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Place {
     Stratum(StratumKind),
     Floor {
