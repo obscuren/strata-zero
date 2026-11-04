@@ -3,7 +3,7 @@
 //! region. See `2026-11-04-world-tiles-design.md`, "POIs, one level down".
 
 use super::detail::{Patch, TILE, wet_in};
-use super::{LINK_E, LINK_N, LINK_S, LINK_W, Overworld, Poi, PoiKind};
+use super::{LINK_E, LINK_N, LINK_S, LINK_W, Overworld, Poi, PoiKind, Water};
 use crate::geom::{Pos, Rect};
 use crate::rng::hash64;
 use crate::tile::{Feature, Furniture, Terrain};
@@ -24,7 +24,14 @@ pub(crate) fn lay(p: &mut Patch) {
         match poi.kind {
             PoiKind::TruckStop => site.truck_stop(poi),
             PoiKind::Checkpoint => site.checkpoint(poi),
-            _ => {}
+            PoiKind::Relay => site.relay(poi),
+            PoiKind::Camp => site.camp(poi),
+            PoiKind::Wreck => site.wreck(poi),
+            PoiKind::Arcology => site.arcology(poi),
+            PoiKind::Solar => site.solar(poi),
+            PoiKind::WaterPlant => site.water_plant(poi),
+            PoiKind::TestRange => site.test_range(poi),
+            PoiKind::Rig => site.rig(poi),
         }
     }
 }
@@ -162,7 +169,11 @@ impl Site<'_, '_> {
             && self.p.get(q).is_some_and(|t| {
                 !matches!(
                     t.terrain,
-                    Terrain::Road | Terrain::Bridge | Terrain::Railing | Terrain::Water
+                    Terrain::Road
+                        | Terrain::Bridge
+                        | Terrain::Railing
+                        | Terrain::Water
+                        | Terrain::Cliff
                 )
             })
     }
@@ -375,6 +386,389 @@ impl Site<'_, '_> {
             }
         }
     }
+
+    /// Where an off-road POI centres: its tile's middle, or beside the road when its
+    /// tile carries one (six rows off an east-west road, twelve columns off a
+    /// north-south one, the side by the POI's hash).
+    fn centre(&self, poi: &Poi) -> Pos {
+        let mid = Pos::new(TILE * poi.at.x + TILE / 2, TILE * poi.at.y + TILE / 2);
+        let road = self.world.tile(poi.at).map_or(0, |t| t.road);
+        let side = if self.roll(99).is_multiple_of(2) {
+            1
+        } else {
+            -1
+        };
+        if road & (LINK_E | LINK_W) != 0 {
+            mid.offset(0, 6 * side)
+        } else if road & (LINK_N | LINK_S) != 0 {
+            mid.offset(12 * side, 0)
+        } else {
+            mid
+        }
+    }
+
+    /// `w` columns by `h` rows centred on `c`.
+    fn centred(c: Pos, w: i32, h: i32) -> Rect {
+        Rect::new(c.x - w / 2, c.y - h / 2, w, h)
+    }
+
+    /// A solid block of `t` (a hull, a tank, a megastructure), where it can stand.
+    fn block(&mut self, r: Rect, t: Terrain) -> bool {
+        if !self.clear(r) {
+            return false;
+        }
+        for q in cells(r) {
+            if self.p.in_world(q) {
+                self.p.set(q, t);
+                self.p.clear_feature(q);
+            }
+        }
+        true
+    }
+
+    /// The nearest road lane cell within `reach` tiles of `from`'s tile that a track
+    /// from `from` (across, then along) reaches without crossing water, from the
+    /// overworld.
+    fn lane_near(&self, from: Pos, reach: i32) -> Option<Pos> {
+        let t = Pos::new(from.x.div_euclid(TILE), from.y.div_euclid(TILE));
+        let dry = |a: Pos, b: Pos| {
+            let (lo, hi) = (
+                Pos::new(a.x.min(b.x), a.y.min(b.y)),
+                Pos::new(a.x.max(b.x), a.y.max(b.y)),
+            );
+            (lo.y.div_euclid(TILE)..=hi.y.div_euclid(TILE)).all(|ty| {
+                (lo.x.div_euclid(TILE)..=hi.x.div_euclid(TILE)).all(|tx| {
+                    // only the tiles the track's two legs cross
+                    let on_leg = tx == a.x.div_euclid(TILE) || ty == b.y.div_euclid(TILE);
+                    !on_leg
+                        || self
+                            .world
+                            .tile(Pos::new(tx, ty))
+                            .is_some_and(|x| x.water == Water::None && x.river == 0)
+                })
+            })
+        };
+        (1..=reach).find_map(|r| {
+            (-r..=r)
+                .flat_map(|dy| (-r..=r).map(move |dx| (dx, dy)))
+                .filter(|&(dx, dy)| dx.abs().max(dy.abs()) == r)
+                .map(|(dx, dy)| t.offset(dx, dy))
+                .filter(|n| self.world.tile(*n).is_some_and(|x| x.road != 0))
+                .map(|n| Pos::new(TILE * n.x + 3, TILE * n.y + 3))
+                .find(|lane| dry(from, *lane))
+        })
+    }
+
+    /// A gravel track from `from` to `to`, across to `to`'s row then along it, on open
+    /// ground only.
+    fn track(&mut self, from: Pos, to: Pos) {
+        let bend = Pos::new(from.x, to.y);
+        let line = |a: Pos, b: Pos| -> Vec<Pos> {
+            let n = (b.x - a.x).abs().max((b.y - a.y).abs());
+            (0..=n)
+                .map(|k| {
+                    Pos::new(
+                        a.x + (b.x - a.x).signum() * k.min((b.x - a.x).abs()),
+                        a.y + (b.y - a.y).signum() * k.min((b.y - a.y).abs()),
+                    )
+                })
+                .collect()
+        };
+        for q in line(from, bend).into_iter().chain(line(bend, to)) {
+            if self.open(q) && self.p.get(q).is_some_and(|t| t.feature.is_none()) {
+                self.p.set(q, Terrain::Gravel);
+            }
+        }
+    }
+
+    /// A relay mast: fenced, on its hill, with an equipment cabinet and a service track
+    /// down to the nearest road.
+    fn relay(&mut self, poi: &Poi) {
+        let c = self.centre(poi);
+        let pen = Self::centred(c, 12, 6);
+        let lane = self.lane_near(c, 3);
+        // the gate on the side facing the road
+        let north = lane.is_some_and(|l| l.y < c.y);
+        let gate_y = if north { pen.y } else { pen.y + pen.h - 1 };
+        let gate = Rect::new(c.x, gate_y, 2, 1);
+        self.ground(
+            Rect::new(pen.x + 1, pen.y + 1, pen.w - 2, pen.h - 2),
+            Terrain::Gravel,
+        );
+        self.fence(pen, Some(gate));
+        self.ground(gate, Terrain::Gravel);
+        self.put(c, Feature::Pylon);
+        self.put(c.offset(1, 0), Feature::Pylon);
+        self.put(c.offset(-3, 1), Feature::Terminal);
+        self.put(c.offset(3, -1), Feature::Lamp);
+        if let Some(lane) = lane {
+            // out of the gate toward the road's row, then along to the road
+            let out = Pos::new(c.x, if north { pen.y - 1 } else { pen.y + pen.h });
+            self.track(out, lane);
+        }
+    }
+
+    /// A nomad camp: vehicles drawn up in a ring, tents inside, fire barrels.
+    fn camp(&mut self, poi: &Poi) {
+        let c = self.centre(poi);
+        let n = 7 + (self.roll(1) % 4) as i32;
+        for k in 0..n {
+            // round the ring at even angles, a vehicle three cells long
+            let a = k as f32 / n as f32 * std::f32::consts::TAU;
+            let (cx, cy) = (super::field::cos(a), super::field::sin(a));
+            let at = Pos::new(
+                c.x + (10.0 * cx).round() as i32,
+                c.y + (5.0 * cy).round() as i32,
+            );
+            for d in -1..=1 {
+                self.put(at.offset(d, 0), Feature::Furniture(Furniture::Couch));
+            }
+        }
+        for k in 0..(3 + self.roll(2) % 3) {
+            let r = self.roll(10 + k);
+            let at = c.offset((r % 11) as i32 - 5, ((r >> 8) % 5) as i32 - 2);
+            self.put(at, Feature::Stall);
+        }
+        self.put(c.offset(-1, 0), Feature::Lamp);
+        self.put(c.offset(3, 1), Feature::Lamp);
+        for k in 0..5 {
+            let r = self.roll(30 + k);
+            self.put(
+                c.offset((r % 17) as i32 - 8, ((r >> 8) % 7) as i32 - 3),
+                Feature::Trash,
+            );
+        }
+    }
+
+    /// A wreck: a crashed hull and its debris field, scorched ground round it.
+    fn wreck(&mut self, poi: &Poi) {
+        let c = self
+            .centre(poi)
+            .offset((self.roll(1) % 3) as i32 - 1, (self.roll(2) % 3) as i32 - 1);
+        let long = 5 + (self.roll(3) % 4) as i32;
+        let hull = if self.roll(4).is_multiple_of(2) {
+            Self::centred(c, long, 2)
+        } else {
+            Self::centred(c, 3, long / 2 + 1)
+        };
+        self.block(hull, Terrain::Mass);
+        for k in 0..24 {
+            let r = self.roll(10 + k);
+            let at = c.offset((r % 19) as i32 - 9, ((r >> 8) % 9) as i32 - 4);
+            if hull.contains(at) {
+                continue;
+            }
+            // two pieces in three are wreckage, the rest litter
+            if !((r >> 20) % 3).is_multiple_of(3) {
+                if self.open(at) {
+                    self.p.set(at, Terrain::Rock);
+                }
+            } else {
+                self.put(at, Feature::Trash);
+            }
+        }
+        for k in 0..6 {
+            let r = self.roll(40 + k);
+            let at = c.offset((r % 9) as i32 - 4, ((r >> 8) % 5) as i32 - 2);
+            if !hull.contains(at) && self.open(at) {
+                self.p.set(at, Terrain::Spill);
+            }
+        }
+    }
+
+    /// The base of a dead arcology: a sealed mass, its wall's gate shut, rubble.
+    fn arcology(&mut self, poi: &Poi) {
+        let c = self.centre(poi);
+        let base = Self::centred(c, 30, 12);
+        if self.block(base, Terrain::Mass) {
+            // a rim of wall, and the shut gate on its south face
+            for q in cells(base) {
+                let rim = q.x == base.x
+                    || q.x == base.x + base.w - 1
+                    || q.y == base.y
+                    || q.y == base.y + base.h - 1;
+                if rim && self.p.in_world(q) {
+                    self.p.set(q, Terrain::Wall);
+                }
+            }
+            for x in c.x - 2..c.x + 2 {
+                let q = Pos::new(x, base.y + base.h - 1);
+                if self.p.get(q).is_some() {
+                    self.p.set_feature(q, Feature::Barrier);
+                }
+            }
+        }
+        for k in 0..30 {
+            let r = self.roll(10 + k);
+            let at = Pos::new(
+                base.x - 4 + (r % (base.w as u64 + 8)) as i32,
+                base.y + base.h + ((r >> 12) % 4) as i32,
+            );
+            if self.open(at) {
+                self.p.set(at, Terrain::Rock);
+            }
+        }
+    }
+
+    /// A solar array: rows of panels in a fence, a maintenance shed, a lamp at the gate.
+    fn solar(&mut self, poi: &Poi) {
+        let c = self.centre(poi);
+        let pen = Self::centred(c, 28, 11);
+        self.ground(
+            Rect::new(pen.x + 1, pen.y + 1, pen.w - 2, pen.h - 2),
+            Terrain::Gravel,
+        );
+        let gate = Rect::new(pen.x + 2, pen.y + pen.h - 1, 2, 1);
+        self.fence(pen, Some(gate));
+        for y in (pen.y + 2..pen.y + pen.h - 2).step_by(2) {
+            for x in pen.x + 7..pen.x + pen.w - 2 {
+                self.put(Pos::new(x, y), Feature::AcUnit);
+            }
+        }
+        let shed = Rect::new(pen.x + 1, pen.y + 1, 5, 4);
+        self.room(shed, Pos::new(pen.x + 3, pen.y + 4), &[], &[]);
+        self.put(Pos::new(pen.x + 1, pen.y + pen.h), Feature::Lamp);
+    }
+
+    /// A water plant by its lake or river: tanks, a pump house, pipes running to the
+    /// water, a fence.
+    fn water_plant(&mut self, poi: &Poi) {
+        let c = self.centre(poi);
+        // the way to the water, from the overworld
+        let dirs = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+        let to_water = dirs
+            .into_iter()
+            .find(|d| {
+                self.world
+                    .tile(poi.at.offset(d.0, d.1))
+                    .is_some_and(|t| t.water != Water::None)
+            })
+            .unwrap_or((1, 0));
+        let pen = Self::centred(c.offset(-4 * to_water.0, -2 * to_water.1), 22, 9);
+        self.fence(
+            pen,
+            Some(Rect::new(pen.x + pen.w / 2, pen.y + pen.h - 1, 2, 1)),
+        );
+        let mut tanks = Vec::new();
+        for k in 0..3 {
+            let t = Rect::new(pen.x + 2 + 5 * k, pen.y + 2, 3, 2);
+            if self.block(t, Terrain::Mass) {
+                tanks.push(t);
+            }
+        }
+        let house = Rect::new(pen.x + pen.w - 7, pen.y + pen.h - 5, 6, 4);
+        self.room(
+            house,
+            Pos::new(house.x + 2, house.y),
+            &[],
+            &[(
+                Pos::new(house.x + 2, house.y + 2),
+                Feature::Furniture(Furniture::Machine),
+            )],
+        );
+        // the pipe along the tanks and on to the water
+        let y = pen.y + 5;
+        for x in pen.x + 2..pen.x + pen.w - 7 {
+            self.put(Pos::new(x, y), Feature::Pipe);
+        }
+        let from = Pos::new(c.x, y);
+        for k in 0..14 {
+            let q = from.offset(to_water.0 * k, to_water.1 * k / 2);
+            if self.p.wet_at(q) != 0 {
+                break;
+            }
+            self.put(q, Feature::Pipe);
+        }
+        self.put(Pos::new(pen.x, pen.y), Feature::Lamp);
+    }
+
+    /// A test range on or by dead ground: a long fence with warning signs, craters, a
+    /// watchtower.
+    fn test_range(&mut self, poi: &Poi) {
+        let c = self.centre(poi);
+        let pen = Self::centred(c, 30, 13);
+        self.fence(pen, Some(Rect::new(pen.x + 3, pen.y + pen.h - 1, 2, 1)));
+        for k in 0..4 {
+            let x = pen.x + 4 + 7 * k;
+            for q in [Pos::new(x, pen.y - 1), Pos::new(x, pen.y + pen.h)] {
+                self.put(q, Feature::Sign('!'));
+            }
+        }
+        for k in 0..5 {
+            let r = self.roll(10 + k);
+            let at = Pos::new(
+                pen.x + 4 + (r % (pen.w as u64 - 8)) as i32,
+                pen.y + 3 + ((r >> 10) % (pen.h as u64 - 6)) as i32,
+            );
+            for q in at.neighbors8() {
+                if self.open(q) {
+                    self.p.set(q, Terrain::Rock);
+                }
+            }
+            if self.open(at) {
+                self.p.set(at, Terrain::Spill);
+            }
+        }
+        self.block(Rect::new(pen.x + pen.w - 4, pen.y + 1, 2, 2), Terrain::Mass);
+        self.put(Pos::new(pen.x + pen.w - 5, pen.y + 1), Feature::Lamp);
+    }
+
+    /// An offshore rig: a deck on the sea with its works, and a pier from the nearest
+    /// land.
+    fn rig(&mut self, poi: &Poi) {
+        let c = self.centre(poi);
+        let deck = Self::centred(c, 14, 6);
+        for q in cells(deck) {
+            if self.p.in_world(q) && self.p.get(q).is_some() {
+                self.p.set(q, Terrain::Walkway);
+                self.p.clear_feature(q);
+            }
+        }
+        for (dx, dy) in [(-4, -1), (2, -2), (3, 1)] {
+            let q = c.offset(dx, dy);
+            if self.p.get(q).is_some() {
+                self.p.set(q, Terrain::Mass);
+            }
+        }
+        for q in [
+            Pos::new(deck.x, deck.y),
+            Pos::new(deck.x + deck.w - 1, deck.y + deck.h - 1),
+        ] {
+            if self.p.get(q).is_some() {
+                self.p.set_feature(q, Feature::Lamp);
+            }
+        }
+        // the pier: straight to the nearest land tile's middle, two cells wide
+        let land = (1..=8i32).find_map(|r| {
+            (-r..=r)
+                .flat_map(|dy| (-r..=r).map(move |dx| (dx, dy)))
+                .filter(|&(dx, dy)| dx.abs().max(dy.abs()) == r)
+                .map(|(dx, dy)| poi.at.offset(dx, dy))
+                .find(|n| self.world.tile(*n).is_some_and(|t| t.water == Water::None))
+        });
+        let Some(land) = land else {
+            return;
+        };
+        let to = Pos::new(TILE * land.x + TILE / 2, TILE * land.y + TILE / 2);
+        let (dx, dy) = (to.x - c.x, to.y - c.y);
+        let n = dx.abs().max(dy.abs()).max(1);
+        for k in 0..=n {
+            let q = Pos::new(c.x + dx * k / n, c.y + dy * k / n);
+            for q in [
+                q,
+                if dx.abs() >= dy.abs() {
+                    q.offset(0, 1)
+                } else {
+                    q.offset(1, 0)
+                },
+            ] {
+                if self.p.in_world(q) && self.p.wet_at(q) != 0 && self.p.get(q).is_some() {
+                    self.p.set(q, Terrain::Walkway);
+                    self.p.clear_feature(q);
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -415,47 +809,6 @@ mod tests {
 
     fn count(g: &Grid<Tile>, f: impl Fn(&Tile) -> bool) -> usize {
         g.count(|t| f(t))
-    }
-
-    #[test]
-    #[ignore]
-    fn dbg_stop() {
-        let w = small(3);
-        let poi = w
-            .pois
-            .iter()
-            .find(|p| p.kind == PoiKind::TruckStop)
-            .cloned()
-            .unwrap();
-        let (_, g) = round(&w, &poi, 3);
-        eprintln!("{poi:?} road {:04b}", w.tile(poi.at).unwrap().road);
-        for y in 0..g.size().h as i32 {
-            let row: String = (0..g.size().w as i32)
-                .map(|x| {
-                    let t = g[Pos::new(x, y)];
-                    match (t.feature, t.terrain) {
-                        (Some(Feature::Furniture(Furniture::Vending)), _) => 'P',
-                        (Some(Feature::Awning), _) => '^',
-                        (Some(Feature::Furniture(Furniture::Couch)), _) => '=',
-                        (Some(Feature::Furniture(_)), _) => 'f',
-                        (Some(Feature::Lamp), _) => 'L',
-                        (Some(Feature::Camera), _) => 'C',
-                        (Some(Feature::Sign(c)), _) => c,
-                        (_, Terrain::Road) => '#',
-                        (_, Terrain::Plaza) => '_',
-                        (_, Terrain::Wall) => 'W',
-                        (_, Terrain::Window) => 'w',
-                        (_, Terrain::Door) => 'D',
-                        (_, Terrain::Floor) => ' ',
-                        (_, Terrain::Gravel) => ':',
-                        (_, Terrain::Railing) => '|',
-                        (_, Terrain::Water | Terrain::Shallows) => '~',
-                        _ => '.',
-                    }
-                })
-                .collect();
-            eprintln!("{row}");
-        }
     }
 
     #[test]
@@ -553,8 +906,152 @@ mod tests {
     }
 
     #[test]
+    fn every_poi_lays_its_place() {
+        let has = |g: &Grid<Tile>, f: &dyn Fn(&Tile) -> bool| g.count(|t| f(t));
+        let feat = |f: Feature| move |t: &Tile| t.feature == Some(f);
+        let terr = |x: Terrain| move |t: &Tile| t.terrain == x;
+        for kind in [
+            PoiKind::Relay,
+            PoiKind::Camp,
+            PoiKind::Wreck,
+            PoiKind::Arcology,
+            PoiKind::Solar,
+            PoiKind::WaterPlant,
+            PoiKind::TestRange,
+            PoiKind::Rig,
+        ] {
+            let (w, poi) = find(kind);
+            let (_, g) = round(&w, &poi, 3);
+            let ok = match kind {
+                PoiKind::Relay => {
+                    has(&g, &terr(Terrain::Railing)) >= 10 && has(&g, &feat(Feature::Terminal)) >= 1
+                }
+                PoiKind::Camp => {
+                    has(&g, &feat(Feature::Stall)) >= 3
+                        && has(&g, &feat(Feature::Furniture(Furniture::Couch))) >= 6
+                }
+                PoiKind::Wreck => {
+                    has(&g, &terr(Terrain::Mass)) >= 6 && has(&g, &terr(Terrain::Rock)) >= 6
+                }
+                PoiKind::Arcology => has(&g, &terr(Terrain::Mass)) >= 100,
+                PoiKind::Solar => has(&g, &feat(Feature::AcUnit)) >= 20,
+                PoiKind::WaterPlant => {
+                    has(&g, &feat(Feature::Pipe)) >= 6 && has(&g, &terr(Terrain::Mass)) >= 6
+                }
+                PoiKind::TestRange => {
+                    has(&g, &terr(Terrain::Railing)) >= 20
+                        && has(&g, &feat(Feature::Sign('!'))) >= 2
+                }
+                PoiKind::Rig => has(&g, &terr(Terrain::Walkway)) >= 30,
+                _ => true,
+            };
+            assert!(ok, "{kind:?} at {:?} lays too little", poi.at);
+        }
+    }
+
+    #[test]
+    fn no_building_is_cut_by_water() {
+        for seed in 0..6 {
+            let w = small(seed);
+            for poi in &w.pois {
+                let (_, g) = round(&w, poi, 3);
+                for (p, t) in g.iter() {
+                    if matches!(t.terrain, Terrain::Wall | Terrain::Window | Terrain::Door) {
+                        let wet = p.neighbors8().any(|q| {
+                            g.get(q).is_some_and(|t| {
+                                matches!(t.terrain, Terrain::Water | Terrain::Shallows)
+                            })
+                        });
+                        assert!(!wet, "seed {seed} {poi:?}: water by a wall at {p:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_rig_is_reached_by_its_pier() {
+        let (w, poi) = find(PoiKind::Rig);
+        let (_, g) = round(&w, &poi, 6);
+        // from any dry ground, over walkable cells, onto the platform's deck
+        let dry = |t: &Tile| {
+            t.is_walkable()
+                && !matches!(
+                    t.terrain,
+                    Terrain::Walkway | Terrain::Ford | Terrain::Bridge
+                )
+        };
+        let mut seen = Grid::filled(g.size(), false);
+        let mut stack: Vec<Pos> = g.iter().filter(|(_, t)| dry(t)).map(|(p, _)| p).collect();
+        for p in &stack {
+            seen[*p] = true;
+        }
+        while let Some(p) = stack.pop() {
+            for q in p.neighbors8() {
+                if g.get(q).is_some_and(|t| t.is_walkable()) && !seen[q] {
+                    seen[q] = true;
+                    stack.push(q);
+                }
+            }
+        }
+        let deck: Vec<Pos> = g
+            .iter()
+            .filter(|(_, t)| t.terrain == Terrain::Walkway)
+            .map(|(p, _)| p)
+            .collect();
+        assert!(deck.len() >= 30, "a deck and a pier");
+        assert!(
+            deck.iter().all(|p| seen[*p]),
+            "the whole deck is reached from the shore"
+        );
+    }
+
+    #[test]
+    fn a_relay_mast_has_its_track_to_the_road() {
+        let (mut checked, mut tracked) = (0, 0);
+        for seed in 0..30 {
+            let w = small(seed);
+            for poi in w.pois.iter().filter(|p| p.kind == PoiKind::Relay) {
+                let near_road = (-3..=3)
+                    .flat_map(|dy| (-3..=3).map(move |dx| (dx, dy)))
+                    .any(|(dx, dy)| w.tile(poi.at.offset(dx, dy)).is_some_and(|t| t.road != 0));
+                if !near_road {
+                    continue;
+                }
+                let (_, g) = round(&w, poi, 4);
+                // from the cabinet over gravel to a road's lane
+                let mut seen = Grid::filled(g.size(), false);
+                let mut stack: Vec<Pos> = g
+                    .iter()
+                    .filter(|(_, t)| t.feature == Some(Feature::Terminal))
+                    .map(|(p, _)| p)
+                    .collect();
+                let mut road = false;
+                while let Some(p) = stack.pop() {
+                    for q in p.neighbors8() {
+                        let Some(t) = g.get(q) else { continue };
+                        road |= t.terrain == Terrain::Road;
+                        if !seen[q] && t.terrain == Terrain::Gravel {
+                            seen[q] = true;
+                            stack.push(q);
+                        }
+                    }
+                }
+                // a river or lake between the mast and its road leaves it without one
+                tracked += road as usize;
+                checked += 1;
+            }
+        }
+        assert!(checked >= 3, "{checked} relays by a road");
+        assert!(
+            tracked * 10 >= checked * 6,
+            "{tracked} of {checked} relays by a road have a track"
+        );
+    }
+
+    #[test]
     fn a_poi_tile_alone_equals_its_region() {
-        for kind in [PoiKind::TruckStop, PoiKind::Checkpoint] {
+        for kind in PoiKind::ALL {
             let (w, poi) = find(kind);
             let (o, r) = round(&w, &poi, 2);
             for dy in -2..=2 {
