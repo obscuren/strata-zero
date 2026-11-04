@@ -3,9 +3,11 @@
 //! A tile is drawn as one cell, twice as tall as it is wide, so shapes are measured in
 //! s-space: `(x, 2y)`. A circle there is a circle on screen.
 
-use crate::geom::Pos;
+use crate::geom::{Grid, Pos, Size};
 use crate::rng::hash64;
 use noise::{NoiseFn, OpenSimplex};
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 
 /// `p` in s-space.
 pub(crate) fn s(p: Pos) -> (f32, f32) {
@@ -72,4 +74,50 @@ impl Fbm {
         }
         ((t / norm * 0.5 + 0.5) as f32).clamp(0.0, 1.0)
     }
+}
+
+/// The on-screen distance from every tile to the nearest tile `from` accepts, out to
+/// `cap` (farther tiles read `cap`): a chamfer walk, a column 1, a row 2, a diagonal √5.
+pub(crate) fn distance_field(size: Size, from: impl Fn(Pos) -> bool, cap: f32) -> Grid<f32> {
+    let mut d = Grid::filled(size, cap);
+    // Distances in hundredths so the heap orders integers.
+    let mut heap = BinaryHeap::new();
+    for y in 0..size.h as i32 {
+        for x in 0..size.w as i32 {
+            let p = Pos::new(x, y);
+            if from(p) {
+                d[p] = 0.0;
+                heap.push(Reverse((0u32, x, y)));
+            }
+        }
+    }
+    const STEPS: [(i32, i32, u32); 8] = [
+        (1, 0, 100),
+        (-1, 0, 100),
+        (0, 1, 200),
+        (0, -1, 200),
+        (1, 1, 224),
+        (1, -1, 224),
+        (-1, 1, 224),
+        (-1, -1, 224),
+    ];
+    let cap100 = (cap * 100.0) as u32;
+    while let Some(Reverse((c, x, y))) = heap.pop() {
+        let p = Pos::new(x, y);
+        if c as f32 / 100.0 > d[p] {
+            continue;
+        }
+        for (dx, dy, w) in STEPS {
+            let q = Pos::new(x + dx, y + dy);
+            let nc = c + w;
+            if !size.contains(q) || nc >= cap100 {
+                continue;
+            }
+            if (nc as f32 / 100.0) < d[q] {
+                d[q] = nc as f32 / 100.0;
+                heap.push(Reverse((nc, q.x, q.y)));
+            }
+        }
+    }
+    d
 }

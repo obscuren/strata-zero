@@ -374,6 +374,64 @@ impl Ctx {
     }
 }
 
+/// The world as plain characters, for a look from a test (`--nocapture`).
+#[cfg(test)]
+pub(crate) fn sketch(w: &Overworld) -> String {
+    let mut out = String::new();
+    for y in 0..w.size.h as i32 {
+        for x in 0..w.size.w as i32 {
+            let p = Pos::new(x, y);
+            let t = w.tile(p).unwrap();
+            let ch = if w.poi_at(p).is_some() {
+                '*'
+            } else if t.road != 0 {
+                '='
+            } else if t.water == Water::River {
+                '-'
+            } else if let Some(u) = t.urban {
+                if u.density > 128 { '#' } else { '+' }
+            } else {
+                match (t.water, t.ground) {
+                    (Water::Sea, _) => '~',
+                    (Water::Lake, _) => 'o',
+                    (_, Ground::Peak) => 'A',
+                    (_, Ground::Mountains) => '^',
+                    (_, Ground::Hills) => 'n',
+                    (_, Ground::Spill) => 'x',
+                    (_, Ground::Salt) => ':',
+                    (_, Ground::Fields) => '_',
+                    (_, Ground::Scrub) => '"',
+                    _ => '.',
+                }
+            };
+            out.push(ch);
+        }
+        out.push('\n');
+    }
+    out
+}
+
+#[cfg(test)]
+#[test]
+#[ignore]
+fn sketch_a_few() {
+    for seed in 0..4 {
+        let w = Overworld::generate(WorldParams { seed, ..Default::default() }).unwrap();
+        println!("seed {seed}\n{}", sketch(&w));
+    }
+}
+
+/// A default world with `knobs` forced, for tests.
+#[cfg(test)]
+pub(crate) fn gen_with(knobs: Knobs, seed: u64) -> Overworld {
+    Overworld::generate(WorldParams {
+        seed,
+        knobs,
+        ..Default::default()
+    })
+    .unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
