@@ -1,0 +1,13 @@
+// What the FLATLINED screen says to a runner who died with perma death on: one line,
+// picked by the run, in pink where the way back would be. Short, lowercase, and on
+// the street's side, not the runner's. Not a word about the HALL OF FAME.
+(
+    taunts: [
+        "somebody's already wearing your jacket.",
+        "your rent's still due.",
+        "should've stayed in bed.",
+        "the street forgot you before you hit the floor.",
+        "the ICE didn't even slow down.",
+        "they'll sell your chrome by morning.",
+    ],
+)

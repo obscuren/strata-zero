@@ -3619,8 +3619,8 @@ fn save_title_shots() {
 }
 
 /// LOAD GAME with the save mock's runs, with a file it can't read among them, and
-/// empty; the HALL OF FAME before anyone has flatlined; and the broadcast a run opens
-/// with (the save mock's `load_game()` and `hall_empty()`), at 120x40.
+/// empty; and the broadcast a run opens with (the save mock's `load_game()`), at
+/// 120x40.
 #[test]
 #[ignore]
 fn save_load_shots() {
@@ -3638,14 +3638,6 @@ fn save_load_shots() {
         "save_load",
         &st,
         &draw_stack(&st, &[&list], (120, 40)),
-        false,
-    );
-    let hall = RunsScreen::hall(&st);
-    write_svg(
-        &out,
-        "save_hall_empty",
-        &st,
-        &draw_stack(&st, &[&hall], (120, 40)),
         false,
     );
 
@@ -3685,6 +3677,175 @@ fn save_load_shots() {
         "save_resume_broadcast",
         &st,
         &draw_stack(&st, &[on_air.as_ref()], (120, 40)),
+        false,
+    );
+}
+
+/// VEX at home in seed 8 with a run saved in `dir`: the state, the map and the file.
+fn vex_saved_at_home(
+    dir: &crate::runs::testutil::Dir,
+) -> (AppState, MapScreen, std::path::PathBuf) {
+    let mut st = state_home();
+    let map = MapScreen::walking(&mut st);
+    let mut st = crate::runs::testutil::running(st);
+    st.saves = Some(dir.0.clone());
+    assert!(crate::runs::when::save_now(&mut st));
+    let path = dir.0.join(format!("{}.run", st.run.unwrap().id));
+    (st, map, path)
+}
+
+/// The HALL OF FAME with the save mock's three dead, copies of VEX's file under their
+/// headers, and before anyone has flatlined (the save mock's `hall()` and
+/// `hall_empty()`), at 120x40.
+#[test]
+#[ignore]
+fn save_hall_shots() {
+    use crate::runs::{Death, file};
+    use crate::screens::runs::RunsScreen;
+    let Ok(out) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let dir = crate::runs::testutil::Dir::new("hall-shots");
+    let (_, _, vex) = vex_saved_at_home(&dir);
+    // 2026-11-02 10:44 UTC.
+    let nov_2 = 1_793_616_240;
+    for (i, (name, level, city, lasted, cause)) in [
+        (
+            "MOTH",
+            6,
+            "Saintburg",
+            3 * 1440 + 4 * 60,
+            "black ICE · Velform Group's vault",
+        ),
+        ("RIX", 3, "Lowport", 19 * 60 + 20, "black ICE · Zenbo"),
+        ("NAIL", 1, "Chromespire", 2 * 60 + 5, "black ICE · Aoki"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = dir.0.join(format!("{}.run", name.to_lowercase()));
+        std::fs::copy(&vex, &path).unwrap();
+        let mut h = file::header(&path).unwrap();
+        h.handle = name.into();
+        h.profession = "NETRUNNER".into();
+        h.level = level;
+        h.city = city.into();
+        h.mission = Some("The ledger".into());
+        h.objective = Some("Bring it to Coz · the Brass Lamp · Ironside".into());
+        h.credits = 2_340;
+        h.chrome = vec!["neural port".into(), "target lens".into()];
+        h.talents = 9;
+        h.played = 5 * 3600 + 40 * 60;
+        h.death = Some(Death {
+            cause: cause.into(),
+            day: 4,
+            minute: 3 * 60 + 12,
+            at: nov_2 - i as u64 * 86_400,
+            lasted,
+        });
+        file::rewrite_header(&path, &h).unwrap();
+    }
+    let mut st = AppState::new();
+    st.saves = Some(dir.0.clone());
+    let hall = RunsScreen::hall(&st);
+    write_svg(
+        &out,
+        "save_hall",
+        &st,
+        &draw_stack(&st, &[&hall], (120, 40)),
+        false,
+    );
+    let empty = crate::runs::testutil::Dir::new("hall-shots-empty");
+    st.saves = Some(empty.0.clone());
+    let hall = RunsScreen::hall(&st);
+    write_svg(
+        &out,
+        "save_hall_empty",
+        &st,
+        &draw_stack(&st, &[&hall], (120, 40)),
+        false,
+    );
+}
+
+/// The flatline with perma death on (the first taunt, as the save mock draws it) and
+/// off (VEX's own last save at home, the line the game makes of it): the save mock's
+/// `flatline(True)` and `flatline(False)`, at 120x40.
+#[test]
+#[ignore]
+fn save_flatline_shots() {
+    use crate::screens::flatlined::{End, Flatlined, Taunts};
+    let Ok(out) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let dir = crate::runs::testutil::Dir::new("flatline-shots");
+    let (mut st, _, _) = vex_saved_at_home(&dir);
+    let tower = {
+        let city = st.city.as_ref().unwrap();
+        city.buildings
+            .iter()
+            .find(|b| b.kind == citygen::BuildingKind::CorpTower)
+            .unwrap()
+            .id
+    };
+    let cause = format!("black ICE at {}", crate::net::building_name(&st, tower));
+    st.perma_death = false;
+    st.net.death = Some(cause.clone());
+    let reload = crate::screens::flatlined::end(&mut st, &cause);
+    assert!(
+        matches!(reload, End::Reload { .. }),
+        "the last save to go back to"
+    );
+    let perma = End::Perma {
+        taunt: Taunts::load().all()[0].clone(),
+    };
+    for (name, end) in [
+        ("save_flatline_perma", perma),
+        ("save_flatline_reload", reload),
+    ] {
+        let screen = Flatlined::new(cause.clone(), &st.character.handle, 1, st.tick, end);
+        st.tick += 40;
+        write_svg(
+            &out,
+            name,
+            &st,
+            &draw_stack(&st, &[&screen], (120, 40)),
+            false,
+        );
+    }
+}
+
+/// The pause menu two minutes after a save, its line under the rows, and the map just
+/// saved, the SAVED mark after the place (the save mock's `pause()` and
+/// `saved_mark()`), at 120x40.
+#[test]
+#[ignore]
+fn save_pause_shots() {
+    let Ok(out) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let dir = crate::runs::testutil::Dir::new("pause-shots");
+    let (mut st, mut map, _) = vex_saved_at_home(&dir);
+    map.settle(&mut st, (120, 40));
+    assert!(crate::runs::when::save_now(&mut st));
+    assert!(crate::runs::when::marked(&st));
+    write_svg(
+        &out,
+        "save_map_mark",
+        &st,
+        &draw_stack(&st, &[&map], (120, 40)),
+        false,
+    );
+    st.tick += crate::runs::when::MARK;
+    st.last_save = st
+        .last_save
+        .map(|(t, at)| (t, at - std::time::Duration::from_secs(150)));
+    let pause = crate::screens::pause::Pause::new(&st, st.tick);
+    st.tick += 90;
+    write_svg(
+        &out,
+        "save_pause",
+        &st,
+        &draw_stack(&st, &[&map, &pause], (120, 40)),
         false,
     );
 }

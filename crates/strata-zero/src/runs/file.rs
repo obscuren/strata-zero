@@ -4,7 +4,7 @@
 //! old file, so a crash mid-write keeps the last good save.
 
 use super::snapshot::{Snapshot, snapshot};
-use super::{RunHeader, describe, ids};
+use super::{RunHeader, RunId, describe, ids};
 use crate::app::AppState;
 use crate::missions::Book;
 use anyhow::{Context, Result, anyhow, bail};
@@ -33,9 +33,19 @@ struct Head {
     body: u64,
 }
 
-/// Writes the run in `st` to `<dir>/<id>.run`, the folder made if need be; the path.
+/// The file of the run `id` in `dir`: `<dir>/<id>.run`.
+pub fn path(dir: &Path, id: RunId) -> PathBuf {
+    dir.join(format!("{id}.run"))
+}
+
+/// Writes the run in `st` to its file in `dir`, the folder made if need be; the path.
 /// Changes nothing in `st`. A state with no run has nothing to write.
 pub fn write(dir: &Path, st: &AppState) -> Result<PathBuf> {
+    write_as(dir, st, &describe::header(st, None))
+}
+
+/// `write`, with `header` for the file's header: the flatline's, marked with the death.
+pub fn write_as(dir: &Path, st: &AppState, header: &RunHeader) -> Result<PathBuf> {
     let Some(run) = st.run else {
         bail!("no run to save");
     };
@@ -51,11 +61,11 @@ pub fn write(dir: &Path, st: &AppState) -> Result<PathBuf> {
     }
     let body = gz.finish().context("packing the run")?;
     let head = Head {
-        run: describe::header(st, None),
+        run: header.clone(),
         body: body.len() as u64,
     };
     std::fs::create_dir_all(dir).with_context(|| format!("making {}", dir.display()))?;
-    let path = dir.join(format!("{}.run", run.id));
+    let path = path(dir, run.id);
     put(&path, &head, &body)?;
     Ok(path)
 }
@@ -150,9 +160,9 @@ pub fn read(path: &Path, book: &Book) -> Result<(RunHeader, Snapshot, Vec<String
     Ok((head.run, snap, lost))
 }
 
-/// Puts `header` in place of the file's own, its body kept byte for byte.
-// The flatline marks a perma death run with it.
-#[cfg_attr(not(test), allow(dead_code))]
+/// Puts `header` in place of the file's own, its body kept byte for byte: how the
+/// tests stamp a run as saved or flatlined when they like.
+#[cfg(test)]
 pub fn rewrite_header(path: &Path, header: &RunHeader) -> Result<()> {
     let bytes = std::fs::read(path).map_err(|_| anyhow!(UNREADABLE))?;
     let (_, body) = split(&bytes)?;

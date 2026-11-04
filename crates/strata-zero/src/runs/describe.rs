@@ -5,7 +5,7 @@ use crate::app::{AppState, FPS};
 use citygen::{FloorPlan, Place, StratumKind};
 
 /// The wall clock in Unix seconds.
-fn unix_now() -> u64 {
+pub fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
@@ -109,8 +109,6 @@ pub fn played(secs: u64) -> String {
 }
 
 /// City time a run lasted, in its largest whole unit: `3 days`, `19 hours`, `40 min`.
-// The HALL OF FAME's LASTED, once a run can flatline into it.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn lasted(minutes: u64) -> String {
     let plural = |n: u64, one: &str| {
         if n == 1 {
@@ -148,6 +146,15 @@ pub fn saved_at(unix: u64, now: u64) -> String {
         format!("today {clock}")
     } else {
         full
+    }
+}
+
+/// The UTC date of a Unix time: `2026-11-02`.
+pub fn date(unix: u64) -> String {
+    let full = crate::screens::files::fmt_unix(unix);
+    match full.split_once(' ') {
+        Some((day, _)) => day.to_string(),
+        None => full,
     }
 }
 
@@ -206,6 +213,13 @@ mod tests {
         // Past midnight is another day.
         let late = AT - 10 * 3600 - 44 * 60 + 23 * 3600 + 59 * 60;
         assert_eq!(saved_at(late, late + 120), "2026-11-04 23:59");
+    }
+
+    #[test]
+    fn a_death_is_dated_by_its_day() {
+        assert_eq!(date(AT), "2026-11-04");
+        assert_eq!(date(AT - 2 * 86_400), "2026-11-02");
+        assert_eq!(date(0), "1970-01-01");
     }
 
     #[test]

@@ -166,9 +166,7 @@ pub fn open(st: &mut crate::app::AppState, path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The runs that flatlined, newest death first.
-// The HALL OF FAME lists them once a run can flatline into it.
-#[cfg_attr(not(test), allow(dead_code))]
+/// The runs that flatlined, newest death first: the HALL OF FAME.
 pub fn dead(dir: &Path) -> Vec<RunInfo> {
     let mut out: Vec<RunInfo> = list(dir).into_iter().filter(is_dead).collect();
     out.sort_by_key(|r| {

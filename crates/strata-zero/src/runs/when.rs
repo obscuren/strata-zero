@@ -2,7 +2,7 @@
 //! from the pause menu, as the window closes and every five minutes of play, each time
 //! only if the run can be saved right then; otherwise the last save stands.
 
-use super::{RunId, RunMeta, file};
+use super::{Death, RunHeader, RunId, RunMeta, describe, file};
 use crate::app::{AppState, FPS};
 use std::time::SystemTime;
 
@@ -80,6 +80,42 @@ pub fn begin_run(st: &mut AppState) {
         born: st.net.now(st),
     });
     save_now(st);
+}
+
+/// The run in `st` flatlined of `cause` (design §8). With perma death on it is written
+/// once more, though the dead can't otherwise save, its header marked with the death,
+/// and it is over: from then on it is only in the HALL OF FAME. Without, nothing is
+/// written and the last save stands, to go back to. The run's header on disk after
+/// either; none without a run or a folder, or when the last write fails (the log says
+/// why).
+pub fn flatline(st: &mut AppState, cause: &str) -> Option<RunHeader> {
+    let run = st.run?;
+    if !st.perma_death {
+        let dir = st.saves.as_deref()?;
+        return file::header(&file::path(dir, run.id)).ok();
+    }
+    let written = st.saves.clone().map(|dir| {
+        let at = describe::unix_now();
+        let death = Death {
+            cause: cause.to_string(),
+            day: crate::ui::hud::day_at(st.clock_tick()),
+            minute: st.minute_of_day(),
+            at,
+            lasted: st.net.now(st).saturating_sub(run.born),
+        };
+        let mut header = describe::header(st, Some(death));
+        header.saved = at;
+        file::write_as(&dir, st, &header).map(|_| header)
+    });
+    // Over whether or not it was written: nothing saves it again.
+    st.run = None;
+    match written? {
+        Ok(header) => Some(header),
+        Err(e) => {
+            st.warn(format!("couldn't save · {}", e.root_cause()));
+            None
+        }
+    }
 }
 
 /// Whether the SAVED mark is up: a save in the last three seconds.
@@ -425,6 +461,48 @@ mod tests {
             Box::new(crate::screens::messages::Messages::new(0)),
         ];
         assert!(others.iter().all(|s| !s.holds_story()));
+    }
+
+    #[test]
+    fn a_flatline_marks_only_a_perma_run() {
+        let dir = Dir::new("flatline");
+        let (mut st, _) = saving(&dir, small_city());
+        st.perma_death = false;
+        st.run.as_mut().unwrap().born = st.net.now(&st);
+        assert!(save_now(&mut st));
+        let path = the_file(&dir);
+        let bytes = std::fs::read(&path).unwrap();
+        st.net.death = Some("shot".into());
+        assert!(!can_save(&st), "the dead don't save");
+        // Perma death off: the last save, as it is on disk, untouched.
+        let h = flatline(&mut st, "shot").expect("the last save's header");
+        assert_eq!(h, file::header(&path).unwrap());
+        assert!(h.death.is_none());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "nothing written");
+        assert!(st.run.is_some(), "the run waits to be reloaded");
+        // Perma death on: written once more, the death in its header, and over.
+        st.perma_death = true;
+        let born = st.run.unwrap().born;
+        let h = flatline(&mut st, "shot").expect("written");
+        let d = h.death.clone().expect("the death");
+        assert_eq!(d.cause, "shot");
+        assert_eq!(d.minute, st.minute_of_day());
+        assert_eq!(d.day, crate::ui::hud::day_at(st.clock_tick()));
+        assert_eq!(d.lasted, st.net.now(&st) - born);
+        assert_eq!(file::header(&path).unwrap(), h);
+        assert!(st.run.is_none());
+        assert!(crate::runs::living(&dir.0).is_empty());
+        assert_eq!(crate::runs::dead(&dir.0).len(), 1);
+        // No run left: nothing.
+        assert!(flatline(&mut st, "shot").is_none());
+        // No folder: nothing written, either way.
+        let (mut st, _) = saving(&dir, small_city());
+        st.saves = None;
+        for perma in [true, false] {
+            st.perma_death = perma;
+            assert!(flatline(&mut st, "shot").is_none());
+        }
+        assert_eq!(crate::runs::list(&dir.0).len(), 1);
     }
 
     #[test]

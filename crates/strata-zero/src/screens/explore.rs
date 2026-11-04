@@ -2689,15 +2689,18 @@ impl Screen for MapScreen {
                 };
             }
         }
-        // Black ICE killed: the screen reads the cause. The track ends with you.
+        // Black ICE killed: the run is marked if it was your only one, and the screen
+        // reads the cause and how it ends. The track ends with you.
         if let Some(cause) = st.net.death.clone() {
             st.track = None;
+            let end = crate::screens::flatlined::end(st, &cause);
             return ScreenCmd::Switch {
                 to: Box::new(crate::screens::flatlined::Flatlined::new(
                     cause,
                     &st.character.handle,
                     st.character.level,
                     st.tick,
+                    end,
                 )),
                 fx: TransitionKind::Glitch,
             };
@@ -8840,6 +8843,186 @@ mod tests {
             ScreenCmd::Switch { .. }
         ));
         assert!(st.net.death.is_none());
+    }
+
+    /// Seed 8 walked into with a run saved in `dir`, standing in the flat: the state
+    /// and the run's file.
+    fn saved_at_home(
+        dir: &crate::runs::testutil::Dir,
+        perma: bool,
+    ) -> (AppState, std::path::PathBuf) {
+        let mut st = state_home();
+        let _ = MapScreen::walking(&mut st);
+        let mut st = crate::runs::testutil::running(st);
+        st.saves = Some(dir.0.clone());
+        st.perma_death = perma;
+        st.run.as_mut().unwrap().born = st.net.now(&st);
+        assert!(crate::runs::when::save_now(&mut st));
+        let path = dir.0.join(format!("{}.run", st.run.unwrap().id));
+        (st, path)
+    }
+
+    /// Black ICE kills you in a tower's construct, the failsafe off; the cause, and the
+    /// screen the map's next frame switches to, a breath on.
+    fn killed_on_the_net(st: &mut AppState) -> (String, Box<dyn Screen>) {
+        let mut s = MapScreen::explore(st.tick);
+        let b = in_construct_at(st, &mut s, 230);
+        let name = crate::net::building_name(st, b);
+        let vault_guard = st.constructs.get(b).unwrap().guards[1].clone();
+        assert_eq!(vault_guard.grade, IceGrade::Black);
+        let beside_vault = Pos::new(vault_guard.post.x - 1, vault_guard.post.y);
+        st.net.failsafe = false;
+        st.character.hp = 4;
+        stand(st, &mut s, Place::Construct(b), beside_vault);
+        assert_eq!(st.character.hp, 0);
+        let ScreenCmd::Switch { to: dead, .. } = s.update(st, &[]) else {
+            panic!("death switches the screen")
+        };
+        st.tick += 40;
+        (format!("black ICE at {name}"), dead)
+    }
+
+    #[test]
+    fn a_perma_flatline_goes_to_the_hall() {
+        use crate::runs::{self, file};
+        let dir = crate::runs::testutil::Dir::new("perma-flatline");
+        let (mut st, path) = saved_at_home(&dir, true);
+        let run = st.run.unwrap();
+        let saved = file::header(&path).unwrap();
+        advance_minutes(&mut st, 90);
+        let (cause, mut dead) = killed_on_the_net(&mut st);
+        // The file stays, its header marked with the death.
+        let h = file::header(&path).expect("the run's file stays");
+        let d = h.death.clone().expect("marked with the death");
+        assert_eq!(d.cause, cause);
+        assert_eq!(
+            (d.day, d.minute),
+            (crate::ui::hud::day_at(st.clock_tick()), st.minute_of_day())
+        );
+        assert_ne!(
+            (d.day, d.minute),
+            (saved.day, saved.minute),
+            "its own clock"
+        );
+        assert_eq!(d.lasted, st.net.now(&st) - run.born);
+        assert!(d.lasted >= 90, "{d:?}");
+        assert!(d.at >= saved.saved && d.at == h.saved, "{d:?}");
+        assert_eq!(h.place, "on the Net", "saved as it ended");
+        assert!(st.run.is_none(), "the run is over");
+        assert!(runs::living(&dir.0).is_empty(), "out of LOAD GAME");
+        let hall = runs::dead(&dir.0);
+        assert_eq!(hall.len(), 1);
+        assert_eq!(hall[0].path, path);
+        assert!(runs::newest(&dir.0).is_none(), "no CONTINUE");
+        assert!(runs::open(&mut AppState::new(), &path).is_err());
+        // The screen taunts, one line picked by the run, and says nothing of the hall.
+        let text = draw_screen(&*dead, &st, 120, 40);
+        let taunts = crate::screens::flatlined::Taunts::load();
+        let taunt = taunts.pick(run.id);
+        assert!(text.contains(taunt), "{text}");
+        assert_eq!(
+            taunts
+                .all()
+                .iter()
+                .filter(|t| text.contains(t.as_str()))
+                .count(),
+            1
+        );
+        assert!(text.contains(&cause) && text.contains("VEX · level 1"));
+        assert!(text.contains("any key · title"), "{text}");
+        assert!(!text.contains("HALL OF FAME"), "{text}");
+        // Any key: the title; nothing writes the run again.
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(matches!(
+            dead.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Switch { .. }
+        ));
+        assert!(!crate::runs::when::save_now(&mut st));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        // The HALL OF FAME has it.
+        let hall = crate::screens::runs::RunsScreen::hall(&st);
+        let text = draw_screen(&hall, &st, 120, 40);
+        assert!(text.contains("VEX") && text.contains("FLATLINED"), "{text}");
+    }
+
+    #[test]
+    fn a_flatline_without_perma_reloads() {
+        use crate::runs::{describe, file};
+        let dir = crate::runs::testutil::Dir::new("reload-flatline");
+        let (mut st, path) = saved_at_home(&dir, false);
+        let saved = file::header(&path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let home = st.player.as_ref().map(|p| (p.place, p.pos)).unwrap();
+        let Place::Floor { level, .. } = home.0 else {
+            panic!("saved in the flat: {home:?}")
+        };
+        let credits = st.character.credits;
+        st.character.credits += 500;
+        advance_minutes(&mut st, 25);
+        let (_, mut dead) = killed_on_the_net(&mut st);
+        assert_ne!(
+            st.minute_of_day(),
+            saved.minute,
+            "it died later than it saved"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "nothing is marked");
+        assert!(st.run.is_some());
+        // The line is the save's own: its clock and its place.
+        assert!(saved.place.ends_with(" · at home"), "{}", saved.place);
+        assert_eq!(describe::clock(saved.day, saved.minute), "day 1 22:00");
+        let line = format!("reload last save point · day 1 22:00 · {}", saved.place);
+        let text = draw_screen(&*dead, &st, 120, 40);
+        assert!(text.contains(&line), "{text}");
+        assert!(
+            text.contains("space · load last save     esc · title"),
+            "{text}"
+        );
+        assert!(!text.contains("any key"));
+        // Space: back in the flat as it was saved, straight onto the map.
+        let ScreenCmd::Switch { to: map, .. } = dead.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("space loads the last save")
+        };
+        assert!(st.net.death.is_none());
+        assert_eq!(st.character.credits, credits, "the saved credits");
+        let p = st.player.as_ref().unwrap();
+        assert_eq!((p.place, p.pos), home);
+        assert!(!p.jacked_in());
+        assert_eq!(st.run.map(|r| r.id), Some(saved.id));
+        let text = draw_screen(&*map, &st, 120, 40);
+        assert!(
+            text.contains(&format!(" on foot · {}", FloorPlan::label(level))),
+            "the map draws the flat\n{text}"
+        );
+        assert!(!text.contains("JACK IN"), "no broadcast");
+    }
+
+    #[test]
+    fn a_run_saved_in_a_construct_opens_there() {
+        let dir = crate::runs::testutil::Dir::new("resume-construct");
+        let (mut st, path) = saved_at_home(&dir, false);
+        let mut s = MapScreen::explore(st.tick);
+        let b = in_construct(&mut st, &mut s);
+        assert!(crate::runs::when::save_now(&mut st));
+        let at = st.player.as_ref().map(|p| (p.place, p.pos, p.body));
+        let mut back = AppState::new();
+        crate::runs::open(&mut back, &path).unwrap();
+        let map = MapScreen::resumed(&mut back);
+        assert_eq!(map.place, Place::Construct(b));
+        assert_eq!(back.player.as_ref().map(|p| (p.place, p.pos, p.body)), at);
+        let text = draw_screen(&map, &back, 120, 40);
+        let name = crate::net::building_name(&back, b);
+        let footer = text
+            .lines()
+            .find(|l| l.starts_with(" ⚡"))
+            .unwrap_or_else(|| panic!("jacked in, the footer says so\n{text}"));
+        assert!(
+            footer
+                .trim_start_matches([' ', '⚡'])
+                .starts_with(&format!("{name} · ")),
+            "the map draws the construct: {footer:?}"
+        );
+        assert!(!text.contains(" on foot · "), "{text}");
     }
 
     #[test]
