@@ -93,8 +93,10 @@ fn road(ctx: &Ctx, a: Pos, b: Pos) -> Option<Vec<Pos>> {
             Water::Lake => 500.0,
             _ => 0.0,
         };
+        // A dry wash is cheap to cross once (a culvert) and dear to follow.
+        let wash = if t.wash != 0 { 80.0 } else { 0.0 };
         let (x, y) = s(to);
-        Some((ground + water + 26.0 * bends.at(x / 7.0, y / 7.0, 3)) as u32)
+        Some((ground + water + wash + 26.0 * bends.at(x / 7.0, y / 7.0, 3)) as u32)
     };
     const DIRS: [(i32, i32); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)];
     let (w, h) = (ctx.size.w as i32, ctx.size.h as i32);

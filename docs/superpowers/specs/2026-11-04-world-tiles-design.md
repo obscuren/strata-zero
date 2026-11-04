@@ -137,9 +137,20 @@ Each overworld ground kind has its detail look (round 2's palettes and the stree
 | Sea | water, impassable; a beach or rocks at the shore |
 | Lake | water, impassable; reeds at the shore |
 | River | wide water with banks and shallows (see Water); crossed by bridges where roads cross it, fords only upstream |
+| Dry wash | a dry sandy bed, 3 detail tiles wide (4 in its lower half), walkable, thicker scrub along its banks; where a highway crosses, a culvert (see Dry washes) |
 
 Dressing is sparse: power lines along some roads (pylons), rocks, wrecked cars near
 roads, trash near anything built. At night only POIs and the roads near cities are lit.
+
+### Dry washes
+
+A wash runs between its crossings like a river (a hashed crossing near each edge's
+middle, so both tiles agree, with a meander), but dry: a bed of sand and gravel, banks
+with more scrub than the ground round them, here and there a puddle after rain. Where a
+highway crosses a wash it doesn't bridge it: the road runs straight over on its
+embankment, both lanes unbroken, and a culvert carries the bed underneath, its two ends
+grates on the shoulders either side (round 2's Kilo-9 had one). Jeffrey: "it adds great
+variation and it sells what you came up with earlier."
 
 ### POIs, one level down
 

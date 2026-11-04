@@ -1,5 +1,6 @@
 //! The overworld's atlas look: one cell a tile, the ground as glyphs, highways as double
-//! lines, rivers as thin ones, cities shaded by density in their districts' colours.
+//! lines, rivers as thin blue ones and dry washes as faint sandy ones, cities shaded by
+//! density in their districts' colours.
 //! `atlas_cell` is what the overworld screen and `strata world`'s sheet both draw.
 
 use crate::render::style::StylePack;
@@ -17,6 +18,10 @@ const DOUBLE: [char; 16] = [
 ];
 const ROUND: [char; 16] = [
     '─', '│', '─', '╰', '│', '│', '╭', '├', '─', '╯', '─', '┴', '╮', '┤', '┬', '┼',
+];
+
+const DASHED: [char; 16] = [
+    '┄', '┆', '┄', '╰', '┆', '┆', '╭', '├', '┄', '╯', '┄', '┴', '╮', '┤', '┬', '┼',
 ];
 
 /// A POI's glyph and colour.
@@ -95,6 +100,10 @@ fn ground_cell(world: &Overworld, p: Pos, style: &StylePack) -> Cell {
             Rgb(58, 138, 216),
             Rgb(6, 18, 31),
         );
+    }
+    if t.wash != 0 && t.urban.is_none() {
+        // A dry wash: a faint dashed sandy line, so it never reads as a road.
+        return cell(DASHED[(t.wash & 15) as usize], Rgb(88, 76, 56), ATLAS_BG);
     }
     if let Some(u) = t.urban {
         let v = u.density as f32 / 255.0;

@@ -44,9 +44,9 @@
 - Modify: any other exhaustive `match` on `Terrain` the compiler points at (`render/mappix.rs`, `screens/explore.rs`, `render/atrium.rs`, `interior/…`)
 
 **Interfaces:**
-- Produces, appended to `Terrain` after `Railing`: `Dirt, Scrub, Crops, Salt, Spill, Gravel, Sand, Reeds, Rock, Cliff, Shallows, Ford, Rise`. `Feature::Pylon` appended after `Fitting`.
-- Walkable: `Dirt, Scrub, Crops, Salt, Spill, Gravel, Sand, Reeds, Ford, Rise` (and the existing `Road`, `Bridge`). Not walkable: `Rock, Cliff, Shallows` (and `Water`). Blocks sight: `Cliff` only. `Feature::Pylon` blocks movement, not sight (like `Furniture`).
-- Labels: "dirt", "scrub", "crops", "salt", "spill", "gravel", "sand", "reeds", "rock", "cliff", "shallows", "ford", "rise".
+- Produces, appended to `Terrain` after `Railing`: `Dirt, Scrub, Crops, Salt, Spill, Gravel, Sand, Reeds, Rock, Cliff, Shallows, Ford, Rise, Wash`. `Feature::Pylon` appended after `Fitting`.
+- Walkable: `Dirt, Scrub, Crops, Salt, Spill, Gravel, Sand, Reeds, Ford, Rise, Wash` (and the existing `Road`, `Bridge`, `Grate`). Not walkable: `Rock, Cliff, Shallows` (and `Water`). Blocks sight: `Cliff` only. `Feature::Pylon` blocks movement, not sight (like `Furniture`).
+- Labels: "dirt", "scrub", "crops", "salt", "spill", "gravel", "sand", "reeds", "rock", "cliff", "shallows", "ford", "rise", "dry wash".
 - Glyphs and colours, round 2's T look (fg, bg; the renderer's light scales them as for streets):
   - Dirt: `·` rarely (variant % 16 == 0), else blank; (67,60,48) on (13,11,9). Low rises
     (`░`) come from the generator's relief (Task 2), not the glyph
@@ -62,6 +62,7 @@
   - Shallows: `~`, `≈` or blank; (106,166,216) on (18,60,94)
   - Ford: `·` or blank; (90,140,190) on (14,40,64)
   - Rise: `░` mostly, `·` now and then; (70,60,44) on (20,17,13)
+  - Wash: `░`, `·` or blank; (96,84,60) on (22,19,14)
   - Pylon: `╫`, (106,110,118)
 
 - [ ] **Step 1: Write the failing tests** in `tile.rs` and `tileset.rs`:
@@ -71,7 +72,7 @@
 #[test]
 fn open_ground_walks_and_sees_as_it_should() {
     use Terrain::*;
-    for t in [Dirt, Scrub, Crops, Salt, Spill, Gravel, Sand, Reeds, Ford, Rise] {
+    for t in [Dirt, Scrub, Crops, Salt, Spill, Gravel, Sand, Reeds, Ford, Rise, Wash] {
         assert!(Tile::new(t).is_walkable(), "{t:?}");
         assert!(!Tile::new(t).blocks_sight(), "{t:?}");
     }
@@ -83,8 +84,8 @@ fn open_ground_walks_and_sees_as_it_should() {
     let mut pylon = Tile::new(Dirt);
     pylon.feature = Some(Feature::Pylon);
     assert!(!pylon.is_walkable() && !pylon.blocks_sight());
-    assert_eq!(ALL_TERRAIN.len(), 41);
-    assert_eq!(*ALL_TERRAIN.last().unwrap(), Rise);
+    assert_eq!(ALL_TERRAIN.len(), 42);
+    assert_eq!(*ALL_TERRAIN.last().unwrap(), Wash);
 }
 ```
 
@@ -95,7 +96,7 @@ fn open_ground_draws_in_one_cell() {
     let style = StylePack::load().unwrap();
     for t in [Terrain::Dirt, Terrain::Scrub, Terrain::Crops, Terrain::Salt, Terrain::Spill,
               Terrain::Gravel, Terrain::Sand, Terrain::Reeds, Terrain::Rock, Terrain::Cliff,
-              Terrain::Shallows, Terrain::Ford, Terrain::Rise] {
+              Terrain::Shallows, Terrain::Ford, Terrain::Rise, Terrain::Wash] {
         for variant in 0..=255u8 {
             let mut tile = Tile::new(t);
             tile.variant = variant;
@@ -242,13 +243,15 @@ fn a_sea_tile_is_water_and_its_shore_is_sand() {
 - [ ] **Step 4: Run** — expect PASS (Task 2's tests too).
 - [ ] **Step 5: Commit** `tiles: natural shores, shallows and beaches`.
 
-### Task 4: Rivers, wide and joined
+### Task 4: Rivers and dry washes, joined
 
 **Files:**
 - Modify: `crates/citygen/src/overworld/detail.rs`
 
 **Interfaces:**
-- Produces: `pub fn river_width(world: &Overworld, p: Pos) -> u8` (3 at a river's spring tile to 7 at its last tile, by position along `world.rivers`; 0 off a river); `fn crossing(world, tx, ty, side: Dir, road: bool) -> Pos` (a road always at the edge's middle, a river at `2 + hash(seed, edge) % 4` along it; the same from both tiles: W and N edges delegate to the neighbour's E and S); `fn centreline(world, tx, ty, mask: u8, road: bool) -> Vec<Pos>` (straight crossing to crossing for a pass-through, else each crossing to the tile's middle, four-connected). River cells: a square brush of the width round each centreline cell, `Water`; its edges become `Shallows` and its banks `Reeds` by Task 3's bands; where the width is 3, a few hashed centreline cells (1 in 6) are `Ford`.
+- Produces: `pub fn river_width(world: &Overworld, p: Pos) -> u8` (3 at a river's spring tile to 7 at its last tile, by position along `world.rivers`; 0 off a river); `fn crossing(world, tx, ty, side: Dir, road: bool) -> Pos` (a road always at the edge's middle, a river at `2 + hash(seed, edge) % 4` along it; the same from both tiles: W and N edges delegate to the neighbour's E and S); `fn centreline(world, tx, ty, mask: u8, road: bool) -> Vec<Pos>` (straight crossing to crossing for a pass-through, else each crossing to the tile's middle, four-connected). River cells: a square brush of the width round each centreline cell, `Water`; its edges become `Shallows` and its banks `Reeds` by Task 3's bands; where the width is 3, a few hashed centreline cells (1 in 6) are `Ford`. Dry washes the
+  same way from `world.washes` and each tile's `wash` mask: `Terrain::Wash` 3 wide (4 in
+  the course's lower half), banks within 1 turned to `Scrub`, never over water.
 
 - [ ] **Step 1: Write the failing tests:**
 
@@ -275,6 +278,20 @@ fn rivers_run_unbroken_across_tiles() {
 }
 
 #[test]
+fn washes_run_unbroken_and_dry() {
+    for seed in 0..6 {
+        let w = Overworld::generate(WorldParams { seed, ..Default::default() }).unwrap();
+        for wash in &w.washes {
+            for pair in wash.windows(2) {
+                let (a, b) = (pair[0], pair[1]);
+                let r = region(&w, 8 * a.x.min(b.x), 8 * a.y.min(b.y), 16, 16);
+                assert!(r.count(|t| t.terrain == Terrain::Wash) >= 6, "seed {seed}: wash breaks at {a:?}-{b:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn rivers_widen_toward_the_mouth() {
     let w = Overworld::generate(WorldParams { seed: 0, ..Default::default() }).unwrap();
     let river = w.rivers.iter().max_by_key(|r| r.len()).unwrap();
@@ -288,14 +305,16 @@ fn rivers_widen_toward_the_mouth() {
 - [ ] **Step 4: Run** — expect PASS.
 - [ ] **Step 5: Commit** `tiles: rivers, wide, banked and joined across tiles`.
 
-### Task 5: Highways: straight, cornered, bridged
+### Task 5: Highways: straight, cornered, bridged, culverted
 
 **Files:**
 - Modify: `crates/citygen/src/overworld/detail.rs`
 
 **Interfaces:**
 - Consumes: `crossing(…, road: true)`, `centreline(…, road: true)`.
-- Produces: `Terrain::Road` two cells wide along each road centreline (the cell and the one right and/or below it, so horizontal runs fill rows 3–4 and vertical runs columns 3–4 of the tile); `Terrain::Gravel` shoulders on dry land beside it; over water, `Terrain::Bridge` with `Terrain::Railing` along both sides; a road that leaves the world runs straight to the world's edge.
+- Produces: `Terrain::Road` two cells wide along each road centreline (the cell and the one right and/or below it, so horizontal runs fill rows 3–4 and vertical runs columns 3–4 of the tile); `Terrain::Gravel` shoulders on dry land beside it; over water, `Terrain::Bridge` with `Terrain::Railing` along both sides; over a dry wash
+  the road stays `Road` and the wash's cells on the shoulders become `Terrain::Grate`
+  (the culvert's ends); a road that leaves the world runs straight to the world's edge.
 
 - [ ] **Step 1: Write the failing tests:**
 
@@ -361,6 +380,20 @@ fn a_bridge_carries_the_road_across_the_whole_river() {
             assert!(g.count(|c| c.terrain == Terrain::Railing) >= 2, "seed {seed} {p:?}: a bridge has rails");
         }
     }
+}
+
+#[test]
+fn a_highway_rides_over_a_wash_on_a_culvert() {
+    let mut seen = 0;
+    for seed in 0..8 {
+        let w = Overworld::generate(WorldParams { seed, ..Default::default() }).unwrap();
+        for (p, t) in w.tiles.iter().filter(|(_, t)| t.road != 0 && t.wash != 0 && t.water == Water::None) {
+            let g = ground(&w, p.x, p.y);
+            assert!(g.count(|c| c.terrain == Terrain::Grate) >= 2, "seed {seed} {p:?}: no culvert");
+            seen += 1;
+        }
+    }
+    assert!(seen >= 4, "{seen} culverts");
 }
 
 #[test]

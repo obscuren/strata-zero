@@ -13,6 +13,7 @@ mod pois;
 mod rivers;
 mod roads;
 mod sites;
+mod washes;
 
 use crate::flavor::FlavorPack;
 use crate::geom::{Dir, Grid, Pos, Size};
@@ -153,6 +154,8 @@ pub struct WorldTile {
     pub elevation: u8,
     pub road: u8,
     pub river: u8,
+    /// A dry wash's link mask (`LINK_*`), nonzero where one runs.
+    pub wash: u8,
     pub urban: Option<Urban>,
 }
 
@@ -254,6 +257,8 @@ pub struct Overworld {
     /// of it; the course keeps those tiles so it stays unbroken, and the tile's `water`
     /// says what is there.
     pub rivers: Vec<Vec<Pos>>,
+    /// Each dry wash's course, its high end first.
+    pub washes: Vec<Vec<Pos>>,
     pub pois: Vec<Poi>,
     pub regions: Vec<Region>,
 }
@@ -267,6 +272,7 @@ impl Overworld {
         rivers::run(&mut ctx)?;
         sites::run(&mut ctx)?;
         ground::run(&mut ctx)?;
+        washes::run(&mut ctx)?;
         roads::run(&mut ctx)?;
         growth::run(&mut ctx)?;
         pois::run(&mut ctx)?;
@@ -302,6 +308,7 @@ pub(crate) struct Ctx {
     pub bays: Vec<land::Bay>,
     pub ridges: Vec<Vec<(f32, f32)>>,
     pub rivers: Vec<Vec<Pos>>,
+    pub washes: Vec<Vec<Pos>>,
     pub mouths: Vec<Pos>,
     pub cities: Vec<WorldCity>,
     pub spill: Option<Pos>,
@@ -324,6 +331,7 @@ impl Ctx {
             bays: Vec::new(),
             ridges: Vec::new(),
             rivers: Vec::new(),
+            washes: Vec::new(),
             mouths: Vec::new(),
             cities: Vec::new(),
             spill: None,
@@ -376,6 +384,7 @@ impl Ctx {
             cities: self.cities,
             routes: self.routes,
             rivers: self.rivers,
+            washes: self.washes,
             pois: self.pois,
             regions: self.regions,
         }
@@ -497,6 +506,7 @@ pub(crate) fn fingerprint(w: &Overworld) -> u64 {
             | (t.elevation as u64) << 8
             | (t.road as u64) << 16
             | (t.river as u64) << 20
+            | (t.wash as u64) << 56
             | t.urban.map_or(0, |u| {
                 1 | (u.city as u64) << 1 | (u.density as u64) << 9 | (u.theme as u64) << 17
             }) << 24);
@@ -522,7 +532,13 @@ pub(crate) fn fingerprint(w: &Overworld) -> u64 {
         mix((c.centre.x as u64) << 32 | c.centre.y as u32 as u64);
         mix(c.size.to_bits() as u64);
     }
-    for path in w.routes.iter().map(|r| &r.path).chain(&w.rivers) {
+    for path in w
+        .routes
+        .iter()
+        .map(|r| &r.path)
+        .chain(&w.rivers)
+        .chain(&w.washes)
+    {
         for p in path {
             mix((p.x as u64) << 32 | p.y as u32 as u64);
         }
@@ -543,7 +559,7 @@ fn fingerprints_are_pinned() {
                 seed: 0,
                 ..Default::default()
             },
-            17397482069102751865,
+            9659042430022885391,
         ),
         (
             "medium 7",
@@ -551,7 +567,7 @@ fn fingerprints_are_pinned() {
                 seed: 7,
                 ..Default::default()
             },
-            17442017615735410060,
+            13821703677101156480,
         ),
         (
             "small 3",
@@ -560,7 +576,7 @@ fn fingerprints_are_pinned() {
                 size: WorldSize::Small,
                 ..Default::default()
             },
-            12137741619531716875,
+            18208813476832896280,
         ),
         (
             "large 11",
@@ -569,7 +585,7 @@ fn fingerprints_are_pinned() {
                 size: WorldSize::Large,
                 ..Default::default()
             },
-            2572272002561863403,
+            2213363804552518395,
         ),
         (
             "two seas 5",
@@ -581,7 +597,7 @@ fn fingerprints_are_pinned() {
                 },
                 ..Default::default()
             },
-            7478125472532038,
+            1856414223241012311,
         ),
         (
             "inland 2",
@@ -593,7 +609,7 @@ fn fingerprints_are_pinned() {
                 },
                 ..Default::default()
             },
-            11090841277572885135,
+            16183058830807330739,
         ),
     ];
     let got: Vec<(&str, u64)> = cases

@@ -115,6 +115,13 @@ per stage, like the city generator's `stage_rng`).
    irregular patch of a few to a dozen tiles across, placed in open land after the city
    sites are known (stage 5 runs its siting first): far enough off a site not to cover
    it, near enough to one city that it can shape that city's edge.
+4b. **Dry washes.** Seasonal streambeds, about one per 700 land tiles (3 to 14): each
+   starts at the foot of the high ground, clear of city cores, and runs downhill with a
+   meander (four-connected) until it meets a river, a lake or the sea, runs into a salt
+   pan or another wash, or the ground stops falling and it peters out; never into the
+   mountains. At least six tiles long. Stored as a link mask per tile and a course per
+   wash; on the overworld a faint dashed sandy line (`┄ ┆`), so it never reads as a road.
+   Highways cross them freely: one level down, a culvert.
 5. **City sites.** Every land tile gets a site score: a river mouth on a bay highest,
    then the sea coast, a river bank, a lake shore, the foot of the hills (near hills,
    not on them), flat ground; never on water, hills, peaks or dead ground. Sites keep a
@@ -183,6 +190,7 @@ model so a later slice can save it:
 - the cities: name, centre, size, home or not, their towns;
 - the routes: name and four-connected path;
 - the rivers: four-connected paths;
+- the dry washes: four-connected courses, high end first, and a `wash` link mask per tile;
 - the POIs: kind, name, tile;
 - the regions: kind, name, label point.
 
