@@ -112,8 +112,8 @@ impl<'a> Patch<'a> {
                 continue;
             }
             let (x, y) = (p.x as f32, p.y as f32);
-            let dx = (3.0 * (2.0 * jx.at(x / 9.0, y / 4.5, 2) - 1.0)).round() as i32;
-            let dy = (1.5 * (2.0 * jy.at(x / 9.0, y / 4.5, 2) - 1.0)).round() as i32;
+            let dx = (4.0 * wave(&jx, x / 9.0, y / 4.5)).round() as i32;
+            let dy = (2.0 * wave(&jy, x / 9.0, y / 4.5)).round() as i32;
             let t = tile_at(w, p.x + dx, p.y + dy);
             let terrain = match t.ground {
                 Ground::Flats => Terrain::Dirt,
@@ -123,10 +123,10 @@ impl<'a> Patch<'a> {
                 Ground::Spill => Terrain::Spill,
                 Ground::Hills if roll(w.seed, 2005, p) < 0.12 => Terrain::Rock,
                 Ground::Hills => Terrain::Dirt,
-                Ground::Mountains if pass.at(x / 4.0, y / 2.0, 3) < 0.45 => Terrain::Dirt,
+                Ground::Mountains if wave(&pass, x / 7.0, y / 3.5) < 0.0 => Terrain::Dirt,
                 Ground::Mountains | Ground::Peak => Terrain::Cliff,
             };
-            let terrain = if terrain == Terrain::Dirt && rise.at(x / 8.0, y / 4.0, 3) > 0.66 {
+            let terrain = if terrain == Terrain::Dirt && wave(&rise, x / 8.0, y / 4.0) > 0.45 {
                 Terrain::Rise
             } else {
                 terrain
@@ -156,16 +156,23 @@ impl<'a> Patch<'a> {
             Fbm::new(w.seed, 2012),
             Fbm::new(w.seed, 2013),
         ];
+        let warp = [Fbm::new(w.seed, 2014), Fbm::new(w.seed, 2015)];
         for p in self.cells().collect::<Vec<_>>() {
             if !self.in_world(p) {
                 continue;
             }
             let (x, y) = (p.x as f32, p.y as f32);
-            let shore = 0.34 * (n[0].at(x / 16.0, y / 8.0, 3) - 0.5)
-                + 0.22 * (n[1].at(x / 6.0, y / 3.0, 3) - 0.5)
-                + 0.10 * (n[2].at(x / 2.5, y / 1.25, 2) - 0.5);
-            let sea = blend(w, x, y, |t| (t.water == Water::Sea) as u8 as f32) + shore;
-            let lake = blend(w, x, y, |t| (t.water == Water::Lake) as u8 as f32) + shore;
+            let shore = 0.4
+                * (0.34 * wave(&n[0], x / 16.0, y / 8.0)
+                    + 0.22 * wave(&n[1], x / 6.0, y / 3.0)
+                    + 0.10 * wave(&n[2], x / 2.5, y / 1.25));
+            // the blend read a few cells off, so the shore leaves the tile lines
+            let (bx, by) = (
+                x + 5.0 * wave(&warp[0], x / 10.0, y / 5.0),
+                y + 3.5 * wave(&warp[1], x / 10.0, y / 5.0),
+            );
+            let sea = blend(w, bx, by, |t| (t.water == Water::Sea) as u8 as f32) + shore;
+            let lake = blend(w, bx, by, |t| (t.water == Water::Lake) as u8 as f32) + shore;
             if sea > 0.5 {
                 self.set(p, Terrain::Water);
                 self.set_wet(p, SEA);
@@ -239,21 +246,6 @@ impl<'a> Patch<'a> {
             .collect()
     }
 
-    /// Stamps a square brush `width` wide round each of `cells` with `f`.
-    fn brush(&mut self, cells: &[Pos], width: i32, mut f: impl FnMut(&mut Self, Pos)) {
-        let lo = -(width / 2);
-        for c in cells {
-            for dy in lo..lo + width {
-                for dx in lo..lo + width {
-                    let p = c.offset(dx, dy);
-                    if self.get(p).is_some() && self.in_world(p) {
-                        f(self, p);
-                    }
-                }
-            }
-        }
-    }
-
     /// Every cell within `radius` cells of the points of a course (in cells both ways,
     /// so a river running east-west is as many rows deep as one running north-south is
     /// columns wide, as round 4 drew them).
@@ -303,19 +295,30 @@ impl<'a> Patch<'a> {
                     p.set_wet(q, RIVER);
                 }
             });
-            if width == 3.0 {
-                fords.extend(
-                    cells_of(&pts)
-                        .into_iter()
-                        .filter(|c| roll(w.seed, 2022, *c) < 1.0 / 6.0),
-                );
+            // a third of the narrow reaches' tiles have a ford, at a point their hash picks
+            let h = hash64(
+                hash64(w.seed, 2022),
+                ((t.x as u32 as u64) << 32) | t.y as u32 as u64,
+            );
+            if width == 3.0 && h % 3 == 0 && !pts.is_empty() {
+                let (x, y) = pts[(h >> 8) as usize % pts.len()];
+                fords.push((x, y, radius(x, y).max(1.2)));
             }
         }
-        self.brush(&fords, 3, |p, q| {
-            if p.wet_at(q) == RIVER {
-                p.set(q, Terrain::Ford);
+        // a ford is the river's whole width there, bank to bank
+        for (x, y, r) in fords {
+            let reach = (r + 1.5).ceil() as i32;
+            let (cx, cy) = (x.floor() as i32, y.floor() as i32);
+            for dy in -reach..=reach {
+                for dx in -reach..=reach {
+                    let q = Pos::new(cx + dx, cy + dy);
+                    let (ex, ey) = (q.x as f32 + 0.5 - x, q.y as f32 + 0.5 - y);
+                    if ex * ex + ey * ey <= (r + 1.5) * (r + 1.5) && self.wet_at(q) == RIVER {
+                        self.set(q, Terrain::Ford);
+                    }
+                }
             }
-        });
+        }
     }
 
     /// Dry washes: a sandy bed along each wash tile's line, 3 wide (4 in its lower half),
@@ -697,16 +700,6 @@ fn wave(n: &Fbm, x: f32, y: f32) -> f32 {
     ((n.at(x, y, 2) - 0.5) * 5.0).clamp(-1.0, 1.0)
 }
 
-/// The cells a course's points fall in, each once.
-fn cells_of(pts: &[(f32, f32)]) -> Vec<Pos> {
-    let mut out: Vec<Pos> = pts
-        .iter()
-        .map(|&(x, y)| Pos::new(x.floor() as i32, y.floor() as i32))
-        .collect();
-    out.dedup();
-    out
-}
-
 /// Four-connected cells from `a` to `b`, stepping along the longer way.
 fn straight(a: Pos, b: Pos) -> Vec<Pos> {
     let (mut p, mut out) = (a, vec![a]);
@@ -856,26 +849,34 @@ mod tests {
                 if t.water != Water::None || t.road != 0 || t.wash != 0 || t.urban.is_some() {
                     continue;
                 }
-                // a wide river's or wash's banks spill into the tiles beside it
-                let by_line = p
-                    .neighbors8()
-                    .any(|q| w.tile(q).is_some_and(|n| n.river != 0 || n.wash != 0));
+                // a wide river's or wash's banks spill into the tiles beside it, and so
+                // does a coast
+                let by_line = p.neighbors8().any(|q| {
+                    w.tile(q)
+                        .is_some_and(|n| n.river != 0 || n.wash != 0 || n.water != Water::None)
+                });
                 if by_line {
                     continue;
                 }
-                let want = match t.ground {
-                    Ground::Flats | Ground::Hills => Terrain::Dirt,
-                    Ground::Scrub => Terrain::Scrub,
-                    Ground::Fields => Terrain::Crops,
-                    Ground::Salt => Terrain::Salt,
-                    Ground::Spill => Terrain::Spill,
-                    Ground::Mountains | Ground::Peak => Terrain::Cliff,
+                let own = |c: Terrain| match t.ground {
+                    Ground::Flats => matches!(c, Terrain::Dirt | Terrain::Rise),
+                    Ground::Hills => matches!(c, Terrain::Dirt | Terrain::Rise | Terrain::Rock),
+                    Ground::Scrub => c == Terrain::Scrub,
+                    Ground::Fields => c == Terrain::Crops,
+                    Ground::Salt => c == Terrain::Salt,
+                    Ground::Spill => c == Terrain::Spill,
+                    // cliffs, and the passes through them
+                    Ground::Mountains | Ground::Peak => {
+                        matches!(c, Terrain::Cliff | Terrain::Dirt | Terrain::Rise)
+                    }
                 };
-                // the centre of the patch is the tile's own ground (its edges blend)
-                let c = ground(&w, p.x, p.y)[Pos::new(4, 4)].terrain;
+                // a good part of the tile is its own ground: its edges blend with its
+                // neighbours', and where the jitter runs one way the whole tile leans
+                let g = ground(&w, p.x, p.y);
+                let mine = g.count(|c| own(c.terrain));
                 assert!(
-                    c == want || matches!(c, Terrain::Rock | Terrain::Dirt | Terrain::Rise),
-                    "seed {seed} {p:?}: {c:?} for {:?}",
+                    mine >= 24,
+                    "seed {seed} {p:?}: {mine} of 64 cells are {:?}'s",
                     t.ground
                 );
             }
@@ -1068,6 +1069,238 @@ mod tests {
         );
     }
 
+    /// Of the shore cells (`wet` with dry ground right beside on one side) that `count`
+    /// takes, how many run dead straight along a row or column for 8 or more.
+    fn straight_banks(
+        g: &Grid<Tile>,
+        wet: impl Fn(Pos) -> bool,
+        count: impl Fn(Pos) -> bool,
+    ) -> (i32, i32) {
+        let size = g.size();
+        let (mut bank, mut straight) = (0, 0);
+        let mut tally = |run: &mut i32| {
+            bank += *run;
+            if *run >= 8 {
+                straight += *run;
+            }
+            *run = 0;
+        };
+        let edge = |p: Pos, q: Pos| wet(p) && !wet(q) && g.get(q).is_some() && count(p);
+        for side in [-1, 1] {
+            for y in 0..size.h as i32 {
+                let mut run = 0;
+                for x in 0..size.w as i32 {
+                    let p = Pos::new(x, y);
+                    if edge(p, p.offset(0, side)) {
+                        run += 1;
+                    } else {
+                        tally(&mut run);
+                    }
+                }
+                tally(&mut run);
+            }
+            for x in 0..size.w as i32 {
+                let mut run = 0;
+                for y in 0..size.h as i32 {
+                    let p = Pos::new(x, y);
+                    if edge(p, p.offset(side, 0)) {
+                        run += 1;
+                    } else {
+                        tally(&mut run);
+                    }
+                }
+                tally(&mut run);
+            }
+        }
+        (bank, straight)
+    }
+
+    #[test]
+    fn coasts_and_lake_shores_curve_off_the_tile_lines() {
+        for seed in [0, 3] {
+            let w = Overworld::generate(WorldParams {
+                seed,
+                ..Default::default()
+            })
+            .unwrap();
+            let g = whole(&w);
+            let wet = |p: Pos| {
+                g.get(p)
+                    .is_some_and(|t| matches!(t.terrain, Terrain::Water | Terrain::Shallows))
+            };
+            // shores of the sea and lakes, away from rivers
+            let coast = |p: Pos| {
+                let t = Pos::new(p.x.div_euclid(8), p.y.div_euclid(8));
+                (-1..=1).all(|dx| {
+                    (-1..=1).all(|dy| w.tile(t.offset(dx, dy)).is_none_or(|t| t.river == 0))
+                })
+            };
+            let (bank, straight) = straight_banks(&g, wet, coast);
+            assert!(bank > 1000, "seed {seed}: {bank} shore cells");
+            assert!(
+                straight * 100 < bank * 15,
+                "seed {seed}: {straight} of {bank} shore cells run straight for 8 or more"
+            );
+        }
+    }
+
+    #[test]
+    fn ground_kinds_meet_off_the_tile_lines() {
+        let w = Overworld::generate(WorldParams {
+            seed: 0,
+            ..Default::default()
+        })
+        .unwrap();
+        let g = whole(&w);
+        let kind = |t: &Tile| match t.terrain {
+            Terrain::Dirt | Terrain::Rise | Terrain::Rock => Some(0),
+            Terrain::Scrub => Some(1),
+            Terrain::Crops => Some(2),
+            Terrain::Salt => Some(3),
+            Terrain::Spill => Some(4),
+            // cliffs and passes follow their own noise, not the tile's ground
+            _ => None,
+        };
+        let (mut seams, mut on_lines) = (0, 0);
+        for (p, t) in g.iter() {
+            let (Some(a), Some(b)) = (kind(t), g.get(p.offset(1, 0)).and_then(kind)) else {
+                continue;
+            };
+            // scrub also lines washes; the seams that matter are between ground kinds
+            if a != b && a >= 2 || b >= 2 && a != b {
+                seams += 1;
+                // a seam between x and x + 1, within a cell of a tile line
+                on_lines += matches!((p.x + 1).rem_euclid(8), 7 | 0 | 1) as i32;
+            }
+        }
+        assert!(seams > 500, "{seams}");
+        assert!(
+            on_lines * 100 < seams * 60,
+            "{on_lines} of {seams} ground seams sit within a cell of a tile line"
+        );
+    }
+
+    #[test]
+    fn passes_run_through_the_mountains() {
+        let w = Overworld::generate(WorldParams {
+            seed: 0,
+            ..Default::default()
+        })
+        .unwrap();
+        let g = whole(&w);
+        let in_range = |p: Pos| {
+            w.tile(Pos::new(p.x.div_euclid(8), p.y.div_euclid(8)))
+                .is_some_and(|t| t.ground == Ground::Mountains)
+        };
+        let open = |p: Pos| in_range(p) && g.get(p).is_some_and(|t| t.is_walkable());
+        let mut seen = Grid::filled(g.size(), false);
+        let (mut all, mut big) = (0, 0);
+        for (p, _) in g.iter() {
+            if seen[p] || !open(p) {
+                continue;
+            }
+            let mut stack = vec![p];
+            seen[p] = true;
+            let mut n = 0;
+            while let Some(q) = stack.pop() {
+                n += 1;
+                for r in q.neighbors8() {
+                    if g.get(r).is_some() && !seen[r] && open(r) {
+                        seen[r] = true;
+                        stack.push(r);
+                    }
+                }
+            }
+            all += n;
+            if n >= 60 {
+                big += n;
+            }
+        }
+        assert!(all > 1000, "{all} open cells in the mountains");
+        assert!(
+            big * 100 > all * 75,
+            "{big} of {all} open mountain cells in passes of 60+"
+        );
+    }
+
+    #[test]
+    fn every_ford_crosses_the_river() {
+        let mut fords = 0;
+        for seed in 0..4 {
+            let w = Overworld::generate(WorldParams {
+                seed,
+                ..Default::default()
+            })
+            .unwrap();
+            let g = whole(&w);
+            let land = |p: Pos| {
+                g.get(p)
+                    .is_some_and(|t| t.is_walkable() && t.terrain != Terrain::Ford)
+            };
+            let mut seen = Grid::filled(g.size(), false);
+            for (p, t) in g.iter() {
+                if t.terrain != Terrain::Ford || seen[p] {
+                    continue;
+                }
+                // the ford's patch
+                let mut patch = vec![];
+                let mut stack = vec![p];
+                seen[p] = true;
+                while let Some(q) = stack.pop() {
+                    patch.push(q);
+                    for r in q.neighbors8() {
+                        if g.get(r).is_some_and(|t| t.terrain == Terrain::Ford) && !seen[r] {
+                            seen[r] = true;
+                            stack.push(r);
+                        }
+                    }
+                }
+                let tile = |q: Pos| w.tile(Pos::new(q.x.div_euclid(8), q.y.div_euclid(8)));
+                if patch.iter().any(|q| {
+                    tile(*q).is_some_and(|t| matches!(t.ground, Ground::Hills | Ground::Mountains))
+                }) {
+                    continue; // a gorge: cliffs for banks
+                }
+                // the dry ground it touches, in pieces joined within a window round it
+                let (x0, x1) = (
+                    patch.iter().map(|q| q.x).min().unwrap() - 4,
+                    patch.iter().map(|q| q.x).max().unwrap() + 4,
+                );
+                let (y0, y1) = (
+                    patch.iter().map(|q| q.y).min().unwrap() - 4,
+                    patch.iter().map(|q| q.y).max().unwrap() + 4,
+                );
+                let inside = |q: Pos| q.x >= x0 && q.x <= x1 && q.y >= y0 && q.y <= y1;
+                let mut piece: std::collections::BTreeMap<Pos, usize> = Default::default();
+                let mut pieces = 0;
+                for &q in &patch {
+                    for start in q.neighbors8().filter(|r| land(*r)) {
+                        if piece.contains_key(&start) {
+                            continue;
+                        }
+                        let mut stack = vec![start];
+                        piece.insert(start, pieces);
+                        while let Some(r) = stack.pop() {
+                            for n in r.neighbors8() {
+                                if inside(n) && land(n) && !piece.contains_key(&n) {
+                                    piece.insert(n, pieces);
+                                    stack.push(n);
+                                }
+                            }
+                        }
+                        pieces += 1;
+                    }
+                }
+                assert!(
+                    pieces >= 2,
+                    "seed {seed}: a ford at {p:?} reaches {pieces} bank(s)"
+                );
+                fords += 1;
+            }
+        }
+        assert!(fords >= 10, "{fords} fords");
+    }
+
     #[test]
     fn rivers_widen_toward_the_mouth() {
         let w = Overworld::generate(WorldParams {
@@ -1120,11 +1353,13 @@ mod tests {
         assert!(run.len() > 10, "{} straight tiles", run.len());
         for p in run {
             let g = ground(&w, p.x, p.y);
+            // a lake's shore may reach the road, which bridges it, still straight
+            let lane = |t: Terrain| matches!(t, Terrain::Road | Terrain::Bridge);
             for x in 0..8 {
-                assert_eq!(g[Pos::new(x, 3)].terrain, Terrain::Road, "{p:?} col {x}");
-                assert_eq!(g[Pos::new(x, 4)].terrain, Terrain::Road, "{p:?} col {x}");
-                assert_ne!(g[Pos::new(x, 2)].terrain, Terrain::Road, "{p:?} col {x}");
-                assert_ne!(g[Pos::new(x, 5)].terrain, Terrain::Road, "{p:?} col {x}");
+                assert!(lane(g[Pos::new(x, 3)].terrain), "{p:?} col {x}");
+                assert!(lane(g[Pos::new(x, 4)].terrain), "{p:?} col {x}");
+                assert!(!lane(g[Pos::new(x, 2)].terrain), "{p:?} col {x}");
+                assert!(!lane(g[Pos::new(x, 5)].terrain), "{p:?} col {x}");
             }
         }
     }
@@ -1333,12 +1568,28 @@ mod tests {
         let pick = |f: &dyn Fn(&WorldTile) -> bool| {
             w.tiles.iter().find(|(_, t)| f(t)).map(|(p, _)| p).unwrap()
         };
+        let by_sea = |p: Pos| {
+            p.neighbors8()
+                .any(|q| w.tile(q).is_some_and(|t| t.water == Water::Sea))
+        };
+        let near = |f: &dyn Fn(Pos, &WorldTile) -> bool| {
+            w.tiles
+                .iter()
+                .find(|(p, t)| f(*p, t))
+                .map(|(p, _)| p)
+                .unwrap()
+        };
         let tiles = [
-            ("coast", pick(&|t| t.water == Water::Sea)),
+            (
+                "coast",
+                near(&|p, t| t.water == Water::None && t.road == 0 && by_sea(p)),
+            ),
+            ("mouth", near(&|p, t| t.water == Water::River && by_sea(p))),
             ("river", pick(&|t| t.water == Water::River && t.road == 0)),
             ("bridge", pick(&|t| t.water == Water::River && t.road != 0)),
+            ("junction", pick(&|t| t.road.count_ones() >= 3)),
             ("mountains", pick(&|t| t.ground == Ground::Mountains)),
-            ("salt", pick(&|t| t.ground == Ground::Salt)),
+            ("salt", pick(&|t| t.ground == Ground::Salt && t.road == 0)),
         ];
         let got: Vec<(&str, u64)> = tiles
             .iter()
@@ -1347,11 +1598,13 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                ("coast", 3962815746502327822),
-                ("river", 10113312973255718743),
+                ("coast", 11378437512918728102),
+                ("mouth", 2912163278796335393),
+                ("river", 11598598171805637510),
                 ("bridge", 16059526050686227486),
-                ("mountains", 17390919345350947746),
-                ("salt", 1906901485315573515)
+                ("junction", 9008432128871624991),
+                ("mountains", 11982162702875261886),
+                ("salt", 9176117940815289530),
             ]
         );
     }
