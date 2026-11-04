@@ -1,5 +1,6 @@
 /target
 /cities
+/runs
 **/*.rs.bk
 .DS_Store
 __pycache__/

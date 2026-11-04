@@ -349,7 +349,7 @@ pub struct NetState {
     /// nodes came after the first saves: each defaults, so those still open.
     #[serde(default)]
     pub district_traces: BTreeMap<citygen::DistrictId, Trace>,
-    /// Constructs whose trace has already been routed away once this session.
+    /// Constructs whose trace has already been routed away once this run.
     pub null_routed: BTreeSet<BuildingId>,
     pub hacks: Vec<Hack>,
     /// The game minute the dumped deck jacks in again.

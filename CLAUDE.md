@@ -105,8 +105,9 @@ how a run is opened. The rules that bite:
 - Saved types derive `Serialize` and `Deserialize`. No `HashSet` (use `BTreeSet`), `Rc`,
   `Cell`, `Instant` or `&'static str` in them. A cache can be `#[serde(skip)]` only if
   `runs::snapshot::after_restore` rebuilds it.
-- Once a version has shipped, a new field in a saved type needs `#[serde(default)]`; the
-  fixtures in `runs/fixtures/` must keep opening. Never regenerate them to pass a test.
+- A new field in a saved type needs `#[serde(default)]`, and renaming or reshaping one
+  needs a reader for its old shape (as `net::EchoRead` does); the fixtures in
+  `runs/fixtures/` must keep opening. Never regenerate them to pass a test.
 - A mission or step of `flavor/missions.ron` held by position is a `runs::ids::StepRef`,
   never a bare index; the save writes ids.
 - Set-up in `enter_city_at` or `missions::begin` doesn't run when a run is reopened, and
