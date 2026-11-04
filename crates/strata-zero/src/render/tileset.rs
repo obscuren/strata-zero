@@ -125,6 +125,7 @@ pub fn glyph_for(
             Feature::Pipe => '╌',
             Feature::Cable => '╌',
             Feature::Awning => '▔',
+            Feature::Pylon => '╫',
             Feature::Node(k) => node_glyph(k, style),
             Feature::Furniture(piece) => match piece {
                 Furniture::Desk => '▭',
@@ -257,7 +258,27 @@ pub fn glyph_for(
                 '│'
             }
         }
+        // Open ground: sparse, so the screen reads quiet and what's built carries it.
+        Terrain::Dirt => one_in(variant, 16, '·'),
+        Terrain::Scrub => ['"', ',', ' '][(variant % 3) as usize],
+        Terrain::Crops => one_in(variant, 2, '▬'),
+        Terrain::Salt => ['░', '·'][(variant % 2) as usize],
+        Terrain::Spill => ['≈', '·', '·', ' ', ' '][(variant % 5) as usize],
+        Terrain::Gravel => one_in(variant, 2, '∙'),
+        Terrain::Sand => ['░', '·', ' '][(variant % 3) as usize],
+        Terrain::Reeds => ['"', '·', ' '][(variant % 3) as usize],
+        Terrain::Rock => ['■', '▪', '▪'][(variant % 3) as usize],
+        Terrain::Cliff => ['█', '▓', '▓'][(variant % 3) as usize],
+        Terrain::Shallows => ['~', '≈', ' '][((tick / 6 + variant as u64) % 3) as usize],
+        Terrain::Ford => one_in(variant, 2, '·'),
+        Terrain::Rise => ['·', '░', '░', '░'][(variant % 4) as usize],
+        Terrain::Wash => ['░', '·', ' '][(variant % 3) as usize],
     }
+}
+
+/// `ch` on one tile in `n`, picked by its variant; blank on the rest.
+fn one_in(variant: u8, n: u8, ch: char) -> char {
+    if variant.is_multiple_of(n) { ch } else { ' ' }
 }
 
 /// Legend rows for a stratum: glyph and label.
@@ -366,6 +387,20 @@ fn terrain_colors(terrain: Terrain, tile: &Tile, ctx: &RenderCtx, tick: u64) -> 
         Terrain::NetGate => (Rgb(200, 255, 245), Rgb(6, 18, 22)),
         Terrain::Atrium => (bg0, bg0),
         Terrain::Railing => (ts.wall, ts.floor),
+        Terrain::Dirt => (Rgb(67, 60, 48), Rgb(13, 11, 9)),
+        Terrain::Scrub => (Rgb(74, 90, 48), Rgb(13, 12, 9)),
+        Terrain::Crops => (Rgb(58, 106, 48), Rgb(11, 12, 8)),
+        Terrain::Salt => (Rgb(90, 88, 82), Rgb(18, 18, 16)),
+        Terrain::Spill => (Rgb(74, 138, 34), Rgb(6, 12, 4)),
+        Terrain::Gravel => (Rgb(74, 69, 60), Rgb(20, 19, 16)),
+        Terrain::Sand => (Rgb(138, 122, 88), Rgb(28, 24, 18)),
+        Terrain::Reeds => (Rgb(94, 112, 64), Rgb(15, 18, 11)),
+        Terrain::Rock => (Rgb(94, 88, 80), Rgb(13, 11, 9)),
+        Terrain::Cliff => (Rgb(52, 49, 44), Rgb(12, 11, 10)),
+        Terrain::Shallows => (Rgb(106, 166, 216), Rgb(18, 60, 94)),
+        Terrain::Ford => (Rgb(90, 140, 190), Rgb(14, 40, 64)),
+        Terrain::Rise => (Rgb(70, 60, 44), Rgb(20, 17, 13)),
+        Terrain::Wash => (Rgb(96, 84, 60), Rgb(22, 19, 14)),
     }
 }
 
@@ -412,6 +447,7 @@ fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
         Feature::Furniture(Furniture::Counter | Furniture::Shrine) => ts.accent2,
         Feature::Furniture(Furniture::Chair) => CHAIR,
         Feature::Furniture(_) => ts.wall.scale(1.2),
+        Feature::Pylon => Rgb(106, 110, 118),
     }
 }
 
@@ -578,6 +614,37 @@ mod tests {
                 assert_eq!(c.width(), Some(1), "{label}");
             }
         }
+    }
+
+    #[test]
+    fn open_ground_draws_in_one_cell() {
+        let s = StylePack::load().unwrap();
+        let ground = [
+            Terrain::Dirt,
+            Terrain::Scrub,
+            Terrain::Crops,
+            Terrain::Salt,
+            Terrain::Spill,
+            Terrain::Gravel,
+            Terrain::Sand,
+            Terrain::Reeds,
+            Terrain::Rock,
+            Terrain::Cliff,
+            Terrain::Shallows,
+            Terrain::Ford,
+            Terrain::Rise,
+            Terrain::Wash,
+        ];
+        for t in ground {
+            let mut drawn = std::collections::BTreeSet::new();
+            for variant in 0..=255u8 {
+                let c = glyph_for(t, None, None, None, variant, 0, 0, &s);
+                assert_eq!(c.width(), Some(1), "{t:?} {variant}");
+                drawn.insert(c);
+            }
+            assert!(drawn.len() >= 2, "{t:?} draws only {drawn:?}");
+        }
+        assert_eq!(glyph_for(Terrain::Dirt, Some(Feature::Pylon), None, None, 0, 0, 0, &s), '╫');
     }
 
     #[test]
