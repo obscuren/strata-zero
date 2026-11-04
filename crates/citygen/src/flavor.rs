@@ -1,6 +1,7 @@
 //! Flavor pack: names and signage glyphs, loaded from RON.
 
 use crate::clinic::Front;
+use crate::overworld::{PoiKind, RegionKind};
 use crate::params::GenError;
 use crate::world::{BuildingKind, Theme};
 use rand::Rng;
@@ -36,6 +37,17 @@ pub struct FlavorPack {
     /// Handles for the people of the city.
     #[serde(default)]
     pub people: Vec<String>,
+    /// Names out in the world: regions by kind, POIs by kind.
+    #[serde(default)]
+    pub world: WorldNames,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct WorldNames {
+    #[serde(default)]
+    pub regions: Vec<(RegionKind, Vec<String>)>,
+    #[serde(default)]
+    pub pois: Vec<(PoiKind, NameParts)>,
 }
 
 fn pick<'a>(rng: &mut impl Rng, items: &'a [String]) -> &'a str {
