@@ -919,18 +919,20 @@ mod tests {
         );
     }
 
-    /// The runs the first format wrote, calm and busy, read by this build, put in place
-    /// and played: back on the map as a load puts you (`MapScreen::resumed`), a few
-    /// frames of the game's own loop, drawn. Neither fixture is ever rewritten.
+    /// The runs the first format wrote, calm, busy and out on the open Net, read by this
+    /// build, put in place and played: back on the map as a load puts you
+    /// (`MapScreen::resumed`), a few frames of the game's own loop, drawn. No fixture is
+    /// ever rewritten.
     #[test]
     fn the_first_saved_run_still_opens() {
         use crate::app::Runner;
         use crate::screens::explore::MapScreen;
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
-        let fixtures: [(&str, &[u8]); 2] = [
+        let fixtures: [(&str, &[u8]); 3] = [
             ("calm", include_bytes!("fixtures/run-v1.run")),
             ("busy", include_bytes!("fixtures/run-v1-busy.run")),
+            ("net", include_bytes!("fixtures/run-v1-net.run")),
         ];
         for (name, bytes) in fixtures {
             let dir = Dir::new("v1");
@@ -957,6 +959,15 @@ mod tests {
                 assert!(st.net.engaged.is_some() && st.net.run.is_some(), "on turns");
                 assert!(!st.bots.is_empty() && !st.foes.is_empty() && !st.live.is_empty());
                 assert!(st.missions.call.is_some() && st.track.is_some());
+                // Written before the open Net: its echo named the construct alone.
+                assert!(matches!(
+                    st.net.echo.as_ref().map(|e| e.scene),
+                    Some(crate::net::Scene::Inside(_))
+                ));
+                assert!(st.net.holds.is_empty() && st.foes.iter().all(|f| f.ice.is_none()));
+            }
+            if name == "net" {
+                net_run_came_back(&st);
             }
             st.show_fps = false;
             let map = MapScreen::resumed(&mut st);
@@ -1028,23 +1039,42 @@ mod tests {
         to
     }
 
-    /// The parts of a run the calm fixture leaves empty, by their path in its body, and
-    /// whether `body` holds something in each (a chrome copy: one with a piece fitted).
-    fn parts_held(body: &Value) -> Vec<(String, bool)> {
-        let at = |path: &str| {
-            path.split('.').try_fold(body, |v, key| {
-                v.as_map()?
-                    .iter()
-                    .find(|(k, _)| k.as_str() == Some(key))
-                    .map(|(_, v)| v)
-            })
-        };
-        let filled = |v: Option<&Value>| match v {
+    /// Writes `fixtures/run-v1-net.run`, once, as `write_run_fixture` does: never
+    /// rewritten to make a test pass.
+    #[test]
+    #[ignore = "writes the fixture into the source tree"]
+    fn write_net_run_fixture() {
+        let st = running(net_run());
+        let to = write_fixture(st, "run-v1-net.run");
+        for (part, held) in net_parts_held(&body_of(&to)) {
+            eprintln!("{part}: {}", if held { "held" } else { "EMPTY" });
+        }
+    }
+
+    /// The entry at a dotted `path` of map keys in `body`.
+    fn value_at<'a>(body: &'a Value, path: &str) -> Option<&'a Value> {
+        path.split('.').try_fold(body, |v, key| {
+            v.as_map()?
+                .iter()
+                .find(|(k, _)| k.as_str() == Some(key))
+                .map(|(_, v)| v)
+        })
+    }
+
+    /// Whether a part holds something: not missing, nil or empty.
+    fn filled(v: Option<&Value>) -> bool {
+        match v {
             None | Some(Value::Nil) => false,
             Some(Value::Array(a)) => !a.is_empty(),
             Some(Value::Map(m)) => !m.is_empty(),
             Some(_) => true,
-        };
+        }
+    }
+
+    /// The parts of a run the calm fixture leaves empty, by their path in its body, and
+    /// whether `body` holds something in each (a chrome copy: one with a piece fitted).
+    fn parts_held(body: &Value) -> Vec<(String, bool)> {
+        let at = |path: &str| value_at(body, path);
         let mut out: Vec<(String, bool)> = BUSY_PARTS
             .iter()
             .map(|p| (p.to_string(), filled(at(p))))
@@ -1388,5 +1418,311 @@ mod tests {
             .map(|(part, _)| part)
             .collect();
         assert!(empty.is_empty(), "the fixture leaves empty: {empty:?}");
+    }
+
+    /// The open Net's state the calm and busy fixtures were written before, by its path
+    /// in a body. Not `net.decoy`: a decoy only lasts inside its own construct, where the
+    /// open Net's trail and a street camera's feed are gone (its round trip is
+    /// `the_open_nets_state_comes_back_whole`'s).
+    const NET_PARTS: &[&str] = &[
+        "net.district_traces",
+        "net.holds",
+        "net.feed",
+        "net.hijacks",
+        "net.lights_out",
+        "net.eyes_minute",
+        "net.echo.scene",
+        "net.run",
+        "net.grid.trail",
+        "net.grid.rings",
+        "net.grid.alarmed",
+        "net.grid.last",
+    ];
+
+    /// `NET_PARTS` and whether `body` holds something in each, then the sentinels posted,
+    /// a camera's hold with its loop spent, and grid ICE among the foes: a sentinel and
+    /// a tracer.
+    fn net_parts_held(body: &Value) -> Vec<(String, bool)> {
+        let at = |path: &str| value_at(body, path);
+        let mut out: Vec<(String, bool)> = NET_PARTS
+            .iter()
+            .map(|p| (p.to_string(), filled(at(p))))
+            .collect();
+        out.push((
+            "net.grid.posted".into(),
+            at("net.grid.posted").and_then(Value::as_bool) == Some(true),
+        ));
+        let looped = at("net.holds")
+            .and_then(Value::as_array)
+            .is_some_and(|holds| {
+                holds.iter().any(|h| {
+                    value_at(h, "used")
+                        .and_then(Value::as_array)
+                        .is_some_and(|u| u.iter().any(|v| v.as_str() == Some("Loop")))
+                })
+            });
+        out.push(("net.holds (a camera looped)".into(), looped));
+        let roles: Vec<String> = at("foes")
+            .and_then(Value::as_array)
+            .map(|foes| {
+                foes.iter()
+                    .filter_map(|f| value_at(f, "ice.role")?.as_map()?.first())
+                    .filter_map(|(k, _)| k.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for role in ["Sentinel", "Tracer"] {
+            out.push((
+                format!("foes (a grid {role})"),
+                roles.iter().any(|r| r == role),
+            ));
+        }
+        out
+    }
+
+    /// The run `fixtures/run-v1-net.run` holds: the small morning after, jacked in from
+    /// the street and out on the open Net beside a building's street camera, the slice's
+    /// work done round it. The camera held, looped and its feed open; the building's ad
+    /// board held and hijacked; a street terminal of its district held; the district's
+    /// lamp grid held and its lamps cut (by day, so the street shows nothing yet); the
+    /// district's trace warmed to its alarm, its sentinels out and woken and a tracer on
+    /// your trail; a sweep's ring out of its hub (a dev switch rings them); a crack in
+    /// flight on a node beside you and its last roll.
+    fn net_run() -> AppState {
+        use crate::holds::{self, Line, Verb};
+        use crate::owners::Owner;
+        use citygen::{NodeKind, Place, Pos, StratumKind};
+        use game::HackTarget;
+        let mut st = small_morning_after();
+        let city = st.city.clone().unwrap();
+        let net = Place::Stratum(StratumKind::Net);
+        let of_district = |d: citygen::DistrictId, kind: NodeKind| {
+            city.net
+                .nodes
+                .iter()
+                .find(|n| {
+                    n.kind == kind
+                        && crate::owners::owner_of(&city, n.id) == Some(Owner::District(d))
+                })
+                .map(|n| n.id)
+        };
+        // A street camera whose building has a street ad board, whose district has a
+        // lamp grid, a street terminal and a hub, with a lane beside its wall.
+        let (cam, b, d, ad, lamp, term, hub, pos) = crate::cameras::street_cameras(&city)
+            .find_map(|cam| {
+                let b = cam.building;
+                let d = city.buildings[b.index()].district;
+                let ad = city.net.nodes.iter().find(|n| {
+                    n.building == Some(b)
+                        && n.kind == NodeKind::AdBoard
+                        && n.anchor.0 == StratumKind::Street
+                })?;
+                let hub = crate::grid::hubs(&city)
+                    .into_iter()
+                    .find(|(x, _)| *x == d)?
+                    .1;
+                let cyber = city.net.node(cam.node).cyber;
+                let pos = cyber
+                    .neighbors8()
+                    .find(|p| city.walkable(StratumKind::Net, *p))?;
+                Some((
+                    cam.node,
+                    b,
+                    d,
+                    ad.id,
+                    of_district(d, NodeKind::LampGrid)?,
+                    of_district(d, NodeKind::Terminal)?,
+                    hub,
+                    pos,
+                ))
+            })
+            .expect("a street camera with an ad board, a lamp grid and a terminal near");
+
+        // Jacked in from where the body stands, out on the open Net by the camera's wall,
+        // the trail you came by behind you.
+        {
+            let p = st.player.as_mut().unwrap();
+            p.body = Some((p.place, p.pos));
+            p.place = net;
+            p.pos = pos;
+        }
+        let mut trail: Vec<Pos> = pos
+            .neighbors4()
+            .filter(|p| city.walkable(StratumKind::Net, *p))
+            .take(2)
+            .collect();
+        trail.push(pos);
+        st.net.grid.trail = trail
+            .into_iter()
+            .map(|p| (p, crate::grid::by_a_hub(&city, p)))
+            .collect();
+        st.net.grid.last = Some((net, pos));
+        let clock = st.clock_tick();
+        let now = st.net.now(&st);
+
+        // The camera held, looped, its feed open.
+        holds::take(&mut st, cam, Owner::Building(b), now);
+        assert!(holds::use_verb(&mut st, Verb::Loop.key()).is_ok());
+        assert!(holds::use_verb(&mut st, Verb::Tap.key()).is_ok());
+        assert_eq!(st.net.feed, Some(cam));
+        // The ad board held and its building's ads saying your tag.
+        holds::take(&mut st, ad, Owner::Building(b), now);
+        holds::hijack(&mut st, ad, Line::Tag);
+        assert!(!st.net.hijacks.is_empty());
+        // A street terminal held: a user's seat on the district's host.
+        holds::take(&mut st, term, Owner::District(d), now);
+        // The district's lamp grid held and cut.
+        holds::take(&mut st, lamp, Owner::District(d), now);
+        holds::spend(&mut st, lamp, Verb::LightsOut);
+        st.net.lights_out.insert(d, now + holds::LIGHTS_OUT_MINUTES);
+        holds::relight(&mut st);
+        st.net.eyes_minute = Some(now);
+        st.net.line_next = clock + 90;
+
+        // The district's trace up to its alarm: the sentinels out and woken, a tracer
+        // off its hub on your trail. A sweep's ring out of the hub.
+        crate::grid::post_sentinels(&mut st);
+        let o = Owner::District(d);
+        crate::owners::heat_on(&mut st, o, 30);
+        assert_eq!(
+            crate::owners::heat_on(&mut st, o, 35),
+            crate::owners::Heat::Alarm
+        );
+        crate::grid::alarm(&mut st, o);
+        st.net.grid.rings.push(crate::grid::Ring {
+            district: d,
+            hub,
+            born: clock,
+        });
+        st.net.grid.ring_tick = clock;
+
+        // A crack in flight on a node beside you, one roll in.
+        let target = crate::net::targets_outside(&st, pos)
+            .into_iter()
+            .map(|(t, _)| t)
+            .find(|t| matches!(t, HackTarget::Node(n) if *n != cam))
+            .unwrap_or(HackTarget::Node(cam));
+        let crack = game::Run {
+            program: ItemId::new("crack"),
+            target,
+            done: 1,
+            work: 3,
+        };
+        st.net.run = Some(crack.clone());
+        st.net.echo = Some(crate::net::RollEcho {
+            at: st.tick,
+            roll: crate::net::Roll::Hit,
+            scene: crate::net::Scene::Outside,
+            run: crack,
+        });
+        st.net.beat = clock;
+        st
+    }
+
+    /// The net fixture as it comes back: on the open Net, the camera still looped and
+    /// its feed open, the lamps still cut (the street's dark made again), the district
+    /// still on alert with its ICE out.
+    fn net_run_came_back(st: &AppState) {
+        use citygen::{NodeKind, Place, StratumKind};
+        let p = st.player.as_ref().unwrap();
+        assert!(
+            p.place == Place::Stratum(StratumKind::Net) && p.body.is_some(),
+            "out on the open Net"
+        );
+        let city = st.city.as_ref().unwrap();
+        let now = st.net.now(st);
+        let cam = st
+            .net
+            .holds
+            .iter()
+            .find(|h| city.net.node(h.node).kind == NodeKind::Camera)
+            .expect("the camera's hold")
+            .node;
+        assert!(crate::holds::looped(st, cam, now) && st.net.blinded(cam, now));
+        assert_eq!(st.net.feed, Some(cam), "its feed open");
+        assert_eq!(
+            st.net.holds.len(),
+            4,
+            "camera, ad board, terminal, lamp grid"
+        );
+        assert!(!crate::holds::hijacked_ads(st).is_empty());
+        let (&d, _) = st.net.lights_out.first_key_value().expect("lights out");
+        let street = city.stratum(StratumKind::Street).unwrap();
+        assert!(street.dark.contains(&d), "the street's dark is made again");
+        let o = crate::owners::Owner::District(d);
+        assert!(crate::owners::alert(st, o, now) && st.net.grid.alarmed.contains(&o));
+        assert!(st.net.grid.posted && !st.net.grid.trail.is_empty());
+        assert!(
+            st.foes
+                .iter()
+                .any(|f| f.ice.as_ref().is_some_and(|i| i.tracer()))
+        );
+        assert_eq!(
+            st.net.echo.as_ref().map(|e| e.scene),
+            Some(crate::net::Scene::Outside)
+        );
+    }
+
+    #[test]
+    fn the_net_fixture_holds_the_open_nets_state() {
+        let dir = Dir::new("net-parts");
+        let path = dir.0.join("net.run");
+        std::fs::write(&path, include_bytes!("fixtures/run-v1-net.run")).unwrap();
+        let empty: Vec<String> = net_parts_held(&body_of(&path))
+            .into_iter()
+            .filter(|(_, held)| !held)
+            .map(|(part, _)| part)
+            .collect();
+        assert!(empty.is_empty(), "the fixture leaves empty: {empty:?}");
+    }
+
+    /// The open Net's state written and read back whole, the street's dark made again
+    /// from the lights out; and the parts no fixture holds (a decoy, a run on grid ICE).
+    #[test]
+    fn the_open_nets_state_comes_back_whole() {
+        use crate::runs::snapshot::snapshot;
+        use crate::runs::testutil::{round, same};
+        use citygen::StratumKind;
+        let dir = Dir::new("open-net");
+        let a = running(net_run());
+        let path = write(&dir.0, &a).unwrap();
+        let mut b = AppState::new();
+        let (_, s, lost) = read(&path, &b.book).unwrap();
+        assert!(lost.is_empty(), "{lost:?}");
+        restore(&mut b, s);
+        after_restore(&mut b, lost);
+        assert!(
+            same(&snapshot(&a), &snapshot(&b)),
+            "the run comes back whole"
+        );
+        assert_eq!(b.net.holds, a.net.holds);
+        assert_eq!(b.net.grid, a.net.grid);
+        let dark = |st: &AppState| {
+            st.city
+                .as_ref()
+                .unwrap()
+                .stratum(StratumKind::Street)
+                .unwrap()
+                .dark
+                .clone()
+        };
+        assert!(!dark(&a).is_empty());
+        assert_eq!(dark(&b), dark(&a), "not saved, but made again");
+        net_run_came_back(&b);
+
+        let decoy = crate::holds::Decoy {
+            building: citygen::BuildingId(3),
+            node: citygen::NodeId(7),
+            to: citygen::Pos::new(4, 5),
+            beats: crate::holds::DECOY_BEATS,
+        };
+        assert_eq!(round(&Some(decoy.clone())), Some(decoy));
+        let at_ice = game::Run {
+            program: ItemId::new("attack"),
+            target: game::HackTarget::Foe(2),
+            done: 0,
+            work: 1,
+        };
+        assert_eq!(round(&at_ice), at_ice);
     }
 }
