@@ -447,7 +447,7 @@ fn rows_for(lines: &[Line<'static>], width: u16) -> u16 {
 }
 
 /// Whole entries from the newest that fit `area`, oldest at the top; the newest reveals.
-fn draw_log(log: &MessageLog, tick: u64, area: Rect, buf: &mut Buffer) {
+pub(crate) fn draw_log(log: &MessageLog, tick: u64, area: Rect, buf: &mut Buffer) {
     if area.height == 0 || area.width == 0 {
         return;
     }

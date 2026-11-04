@@ -198,7 +198,7 @@ pub struct MapScreen {
     placement: Option<(Place, u64, crate::interiors::Placement)>,
 }
 
-fn dir_for(code: KeyCode) -> Option<Dir> {
+pub(crate) fn dir_for(code: KeyCode) -> Option<Dir> {
     Some(match code {
         KeyCode::Up | KeyCode::Char('k') => Dir::N,
         KeyCode::Down | KeyCode::Char('j') => Dir::S,
@@ -210,6 +210,30 @@ fn dir_for(code: KeyCode) -> Option<Dir> {
         KeyCode::Char('n') => Dir::SE,
         _ => return None,
     })
+}
+
+/// The footer's slots on foot: your abilities, cooling or ready, lit a moment after firing.
+pub(crate) fn ability_slots(st: &AppState) -> Vec<hud::Slot> {
+    MapScreen::actives(st)
+        .into_iter()
+        .filter_map(|id| {
+            let a = st.content.ability(&id)?;
+            let state = match st.character.cooling(&st.content, &id, st.tick) {
+                Some(left) => hud::SlotState::Cooling(left.div_ceil(30)),
+                None => hud::SlotState::Ready,
+            };
+            let flash = st
+                .character
+                .fired
+                .get(&id)
+                .is_some_and(|f| st.tick.saturating_sub(*f) < hud::FLASH_TICKS);
+            Some(hud::Slot {
+                name: a.name.clone(),
+                state,
+                flash,
+            })
+        })
+        .collect()
 }
 
 /// The grid: a four-row band, a heavy rule, the map beside the right column, a heavy
@@ -1170,26 +1194,7 @@ impl MapScreen {
                 .take(hud::SLOTS)
                 .collect();
         }
-        Self::actives(st)
-            .into_iter()
-            .filter_map(|id| {
-                let a = st.content.ability(&id)?;
-                let state = match st.character.cooling(&st.content, &id, st.tick) {
-                    Some(left) => hud::SlotState::Cooling(left.div_ceil(30)),
-                    None => hud::SlotState::Ready,
-                };
-                let flash = st
-                    .character
-                    .fired
-                    .get(&id)
-                    .is_some_and(|f| st.tick.saturating_sub(*f) < hud::FLASH_TICKS);
-                Some(hud::Slot {
-                    name: a.name.clone(),
-                    state,
-                    flash,
-                })
-            })
-            .collect()
+        ability_slots(st)
     }
 
     /// The VIEW popup: one row per sidebar section, its letter toggles it.

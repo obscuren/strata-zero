@@ -17,6 +17,7 @@ pub mod jobs_tab;
 pub mod keypad;
 pub mod kit;
 pub mod messages;
+pub mod outside;
 pub mod pause;
 pub mod popup;
 pub mod rest;
