@@ -122,10 +122,12 @@ District hubs keep double walls in white.
   grids, lift controls) in their wall's colour mixed halfway to white.
 - **Packets**: a white bold head on a signal glow, a two-tile tail fading behind it,
   moving one tile every few ticks. A packet leaves a node and runs the lane to another
-  node that lane joins it to (through junctions, never past another node), then picks
-  the next at random, not straight back while it has a choice; packets cross now and
-  then. One node in two round the view sends one. A look only. (Changed 2026-11-04 from
-  one packet per straight run, which ran node to junction: Jeffrey found that awkward.)
+  node that lane joins it to (through junctions, never past another node), picked at
+  random; there the node soaks it up: the head goes in, the tail drains after it, the
+  node flashes. A while later (up to 40 steps) its sender sends the next. Packets cross
+  now and then. One node in two round the view sends. A look only. (Changed 2026-11-04
+  from one packet per straight run, which ran node to junction, then from packets that
+  hopped on and turned back at dead ends: Jeffrey wanted them soaked up.)
 - **You**: `@` in signal, bold.
 
 ### Inside a construct

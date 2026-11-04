@@ -126,7 +126,7 @@ pub(super) fn draw(
                 continue;
             };
             let owner = tile.building.and_then(|b| built.get(&b));
-            let (mut ch, mut fg, bg, mut bold) = match (tile.terrain, owner) {
+            let (mut ch, mut fg, mut bg, mut bold) = match (tile.terrain, owner) {
                 (Terrain::NetLane, _) => {
                     let m = mask(p, |q| {
                         map.tile(q).is_some_and(|t| {
@@ -185,6 +185,12 @@ pub(super) fn draw(
                     view.tick,
                 );
                 bold = matches!(kind, NodeKind::Ice | NodeKind::Server | NodeKind::DataVault);
+                // Soaking up a packet: it flashes in the traffic's signal.
+                if let Some(g) = view.soaks.get(&p) {
+                    bg = bg.mix(SIGNAL, *g);
+                    fg = fg.mix(WHITE, *g);
+                    bold = true;
+                }
             }
             put(buf, sx, sy, ch, fg, bg, bold);
         }

@@ -150,6 +150,8 @@ pub struct NetLookView {
     pub tick: u64,
     /// The lane tiles the traffic lights this frame (`packets::Traffic::glows`).
     pub packets: HashMap<Pos, (f32, bool)>,
+    /// The nodes soaking a packet up this frame, with how bright (`Traffic::soaks`).
+    pub soaks: HashMap<Pos, f32>,
     pub tracked: Option<BuildingId>,
     pub home: Option<BuildingId>,
     pub watch: HashMap<Pos, IceGrade>,

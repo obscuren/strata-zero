@@ -3128,7 +3128,7 @@ impl Screen for MapScreen {
             overlays.push(o);
         }
         // The open Net's traffic moves on with the clock round the view.
-        let packets = if self.place == Place::Stratum(StratumKind::Net) {
+        let (packets, soaks) = if self.place == Place::Stratum(StratumKind::Net) {
             let mut traffic = self.traffic.borrow_mut();
             if traffic.seed() != city.seed {
                 *traffic = crate::render::netlook::packets::Traffic::new(city.seed);
@@ -3148,7 +3148,7 @@ impl Screen for MapScreen {
                 view,
                 st.tick,
             );
-            traffic.glows(st.tick)
+            (traffic.glows(st.tick), traffic.soaks(st.tick))
         } else {
             Default::default()
         };
@@ -3156,6 +3156,7 @@ impl Screen for MapScreen {
         let net_view = crate::render::netlook::NetLookView {
             tick: st.tick,
             packets,
+            soaks,
             tracked: match crate::track::target_now(st) {
                 Some(crate::track::Target::Building(b)) => Some(b),
                 _ => None,

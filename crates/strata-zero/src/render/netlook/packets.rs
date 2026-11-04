@@ -1,7 +1,8 @@
-//! Packets: the traffic on the open Net's lanes, a look only. A packet leaves a node,
-//! runs the lane to another node that lane joins it to, and there picks the next one
-//! at random (not straight back while it has a choice), so packets wander the grid
-//! from node to node and now and then cross. A white head with a fading tail.
+//! Packets: the traffic on the open Net's lanes, a look only. A packet leaves a node and
+//! runs the lane to another node that lane joins it to, picked at random; there the node
+//! soaks it up: the head goes in, the tail drains in after it and the node flashes. A
+//! while later the node that sent it sends another. Packets on the same lanes cross now
+//! and then. A white head with a fading tail.
 //!
 //! The traffic is kept by the map screen and moved on with the clock: packets are seeded
 //! at the nodes round the view as it comes near, and dropped once they are far off it.
@@ -12,39 +13,45 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Ticks a packet takes per tile.
 pub const PACKET_TICKS: u64 = 6;
+/// Steps a node takes to soak a packet up: its head in, then the two of its tail.
+pub const SOAK_STEPS: usize = 3;
 /// How far along the lanes a node looks for the nodes it is joined to.
 const REACH: usize = 64;
-/// One node in this many sends a packet.
+/// One node in this many sends packets.
 const SENDERS: u64 = 2;
+/// The longest a sender waits, in steps, after its packet is soaked up.
+const PAUSE_STEPS: u64 = 40;
 /// Packets are seeded this far round the view, and kept until this much further.
 const SEED_MARGIN: i32 = 12;
 const KEEP_MARGIN: i32 = 40;
-/// The most hops a packet takes in one step of the clock, so a long pause can't stall.
-const MAX_HOPS: usize = 8;
 
 /// A packet between two nodes: the lane tiles from beside one to beside the other, and
 /// the tick it left.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Packet {
-    id: u64,
     /// The node that sent it.
-    sender: Pos,
     from: Pos,
     to: Pos,
     path: Vec<Pos>,
     started: u64,
-    hops: u64,
 }
 
 impl Packet {
-    fn ends(&self) -> u64 {
-        self.started + self.path.len() as u64 * PACKET_TICKS
+    /// Steps since it left at `tick`: an index into its path while it runs, past the
+    /// path's end while its node soaks it up.
+    fn step(&self, tick: u64) -> usize {
+        (tick.saturating_sub(self.started) / PACKET_TICKS) as usize
     }
 
-    /// Its head at `tick`: an index into its path.
-    fn head(&self, tick: u64) -> usize {
-        let i = (tick.saturating_sub(self.started) / PACKET_TICKS) as usize;
-        i.min(self.path.len().saturating_sub(1))
+    /// Soaked up whole: head and tail in the node.
+    fn gone(&self, tick: u64) -> bool {
+        self.step(tick) >= self.path.len() + SOAK_STEPS
+    }
+
+    /// Where it is on the lane at `tick`: its head's tile, or the lane's last while it
+    /// goes into the node.
+    fn at(&self, tick: u64) -> Pos {
+        self.path[self.step(tick).min(self.path.len() - 1)]
     }
 }
 
@@ -55,8 +62,11 @@ pub struct Traffic {
     /// For each node tile, the nodes a lane joins it to without passing another node,
     /// each with the lane between.
     links: HashMap<Pos, Vec<(Pos, Vec<Pos>)>>,
-    /// Nodes whose packet is out.
-    sent: HashSet<Pos>,
+    /// Senders with a packet out.
+    out: HashSet<Pos>,
+    /// Senders whose last packet was soaked up: the tick they send the next, and how many
+    /// they have sent.
+    next: HashMap<Pos, (u64, u64)>,
     seed: u64,
 }
 
@@ -104,6 +114,10 @@ pub fn joined(
     found
 }
 
+fn key(p: Pos) -> u64 {
+    (p.x as u32 as u64) << 32 | p.y as u32 as u64
+}
+
 impl Traffic {
     pub fn new(seed: u64) -> Traffic {
         Traffic {
@@ -117,44 +131,29 @@ impl Traffic {
         self.seed
     }
 
-    fn links_of(
+    /// Where `node`'s packet number `n` goes: a node joined to it, at random.
+    fn destination(
         &mut self,
         lane: &impl Fn(Pos) -> bool,
         is_node: &impl Fn(Pos) -> bool,
         node: Pos,
-    ) -> &Vec<(Pos, Vec<Pos>)> {
-        self.links
-            .entry(node)
-            .or_insert_with(|| joined(lane, is_node, node))
-    }
-
-    /// The next hop from `at`, having come from `from`: a node joined to it at random,
-    /// not straight back while there is another; `None` where nothing joins it.
-    fn next_hop(
-        &mut self,
-        lane: &impl Fn(Pos) -> bool,
-        is_node: &impl Fn(Pos) -> bool,
-        id: u64,
-        hop: u64,
-        at: Pos,
-        from: Option<Pos>,
+        n: u64,
     ) -> Option<(Pos, Vec<Pos>)> {
         let seed = self.seed;
-        let links = self.links_of(lane, is_node, at);
-        let choices: Vec<&(Pos, Vec<Pos>)> = links
-            .iter()
-            .filter(|(to, _)| Some(*to) != from || links.len() == 1)
-            .collect();
-        if choices.is_empty() {
+        let links = self
+            .links
+            .entry(node)
+            .or_insert_with(|| joined(lane, is_node, node));
+        if links.is_empty() {
             return None;
         }
-        let pick = hash64(seed ^ id, hop) as usize % choices.len();
-        Some(choices[pick].clone())
+        let pick = hash64(seed ^ key(node), n) as usize % links.len();
+        Some(links[pick].clone())
     }
 
-    /// The clock moves to `tick` with `view` on screen: packets due at their node hop on,
-    /// the nodes round the view that send and have no packet out send one, and packets
-    /// far off the view are dropped.
+    /// The clock moves to `tick` with `view` on screen: packets soaked up whole are gone
+    /// and their senders wait a while; the senders round the view with nothing out and no
+    /// wait left send one; packets far off the view are dropped.
     pub fn advance(
         &mut self,
         lane: impl Fn(Pos) -> bool,
@@ -163,81 +162,95 @@ impl Traffic {
         view: Rect,
         tick: u64,
     ) {
+        // Soaked up: the sender waits, then sends its next.
+        let seed = self.seed;
+        let mut packets = std::mem::take(&mut self.packets);
+        packets.retain(|p| {
+            if !p.gone(tick) {
+                return true;
+            }
+            self.out.remove(&p.from);
+            let n = self.next.get(&p.from).map_or(0, |(_, n)| *n) + 1;
+            let pause = hash64(seed ^ 0x50a4, key(p.from) ^ n) % (PAUSE_STEPS + 1);
+            self.next.insert(p.from, (tick + pause * PACKET_TICKS, n));
+            false
+        });
+        self.packets = packets;
         let seeds = view.grow(SEED_MARGIN);
         for node in nodes {
-            if !seeds.contains(node) || self.sent.contains(&node) {
+            if !seeds.contains(node) || self.out.contains(&node) {
                 continue;
             }
-            let id = (node.x as u32 as u64) << 32 | node.y as u32 as u64;
-            if !hash64(self.seed, id).is_multiple_of(SENDERS) {
+            if !hash64(self.seed, key(node)).is_multiple_of(SENDERS) {
                 continue;
             }
-            self.sent.insert(node);
-            let Some((to, path)) = self.next_hop(&lane, &is_node, id, 0, node, None) else {
+            let (due, n) = self.next.get(&node).copied().unwrap_or((0, 0));
+            if tick < due {
+                continue;
+            }
+            let fresh = !self.next.contains_key(&node);
+            let Some((to, path)) = self.destination(&lane, &is_node, node, n) else {
                 continue;
             };
-            // Somewhere along its first lane already, so the grid is busy at once.
-            let along = hash64(self.seed ^ 0x9e37, id) % path.len().max(1) as u64;
+            // The first a node sends near the view is somewhere along its lane already,
+            // so the grid is busy at once; later ones leave from the node.
+            let along = if fresh {
+                hash64(self.seed ^ 0x9e37, key(node)) % path.len().max(1) as u64
+            } else {
+                0
+            };
+            self.out.insert(node);
+            self.next.insert(node, (due, n));
             self.packets.push(Packet {
-                id,
-                sender: node,
                 from: node,
                 to,
                 path,
                 started: tick.saturating_sub(along * PACKET_TICKS),
-                hops: 0,
             });
         }
-        let mut packets = std::mem::take(&mut self.packets);
-        for p in &mut packets {
-            for _ in 0..MAX_HOPS {
-                if tick < p.ends() {
-                    break;
-                }
-                let ended = p.ends();
-                let hop = p.hops + 1;
-                match self.next_hop(&lane, &is_node, p.id, hop, p.to, Some(p.from)) {
-                    Some((to, path)) => {
-                        p.from = p.to;
-                        p.to = to;
-                        p.path = path;
-                        p.started = ended;
-                        p.hops = hop;
-                    }
-                    None => break,
-                }
-            }
-            // Behind by more than its hops allow: it starts its lane over now.
-            if tick >= p.ends() {
-                p.started = tick;
-            }
-        }
+        // Far off the view: dropped, and seeded afresh on the way back.
         let keep = view.grow(KEEP_MARGIN);
-        let sent = &mut self.sent;
-        packets.retain(|p| {
-            let at = p.path[p.head(tick)];
-            let stays = keep.contains(at);
+        let (out, next) = (&mut self.out, &mut self.next);
+        self.packets.retain(|p| {
+            let stays = keep.contains(p.at(tick));
             if !stays {
-                sent.remove(&p.sender);
+                out.remove(&p.from);
+                next.remove(&p.from);
             }
             stays
         });
-        self.packets = packets;
     }
 
     /// Each lane tile a packet lights at `tick`, with how much: the head 0.6, its tail 0.3
-    /// and 0.13 behind it; `true` for the head. Where two packets meet the brighter shows.
+    /// and 0.13 behind it; `true` for the head. Going into its node the head is gone and
+    /// the tail drains after it. Where two packets meet the brighter shows.
     pub fn glows(&self, tick: u64) -> HashMap<Pos, (f32, bool)> {
         let mut out: HashMap<Pos, (f32, bool)> = HashMap::new();
         for p in &self.packets {
-            let at = p.head(tick);
+            let at = p.step(tick);
             for (k, glow) in [(0usize, 0.6f32), (1, 0.3), (2, 0.13)] {
                 let Some(i) = at.checked_sub(k) else { break };
-                let e = out.entry(p.path[i]).or_insert((0.0, false));
+                let Some(&tile) = p.path.get(i) else { continue };
+                let e = out.entry(tile).or_insert((0.0, false));
                 if glow > e.0 {
                     *e = (glow, k == 0);
                 }
             }
+        }
+        out
+    }
+
+    /// The nodes soaking a packet up at `tick`, with how bright: brightest as the head
+    /// goes in, fading as the tail follows.
+    pub fn soaks(&self, tick: u64) -> HashMap<Pos, f32> {
+        let mut out: HashMap<Pos, f32> = HashMap::new();
+        for p in &self.packets {
+            let Some(into) = p.step(tick).checked_sub(p.path.len()) else {
+                continue;
+            };
+            let glow = [0.7f32, 0.45, 0.2][into.min(SOAK_STEPS - 1)];
+            let e = out.entry(p.to).or_insert(0.0);
+            *e = e.max(glow);
         }
         out
     }
@@ -301,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn a_packet_runs_node_to_node_and_moves_on() {
+    fn a_packet_is_soaked_up_by_its_node_and_its_sender_sends_again() {
         let (lanes, nodes) = layout();
         let (lane, node) = grid(&lanes, &nodes);
         let view = Rect::new(-2, -8, 16, 10);
@@ -318,16 +331,46 @@ mod tests {
         let p = t.packets[0].clone();
         assert!(all().any(|n| n == p.from) && all().any(|n| n == p.to));
         assert_ne!(p.from, p.to);
-        // At its lane's end it hops on, from the node it reached.
-        let end = p.ends();
+        let end = p.started + p.path.len() as u64 * PACKET_TICKS;
+        // At the lane's end the head goes into the node: no head on the lane, the tail
+        // draining after it, the node flashing.
         t.advance(&lane, &node, all(), view, end);
-        let q = t.packets.iter().find(|q| q.id == p.id).unwrap();
-        assert_eq!(q.from, p.to, "on from where it got to");
-        assert_eq!(q.started, end);
-        // Lit on lane tiles only, one head per packet.
-        let g = t.glows(end + PACKET_TICKS);
-        assert!(g.keys().all(|p| lane(*p)));
-        assert!(g.values().filter(|(_, h)| *h).count() >= 1);
+        let mine = t
+            .packets
+            .iter()
+            .find(|q| q.from == p.from && q.started == p.started)
+            .expect("still draining");
+        assert_eq!(mine.step(end), p.path.len(), "its head is in the node");
+        let alone = Traffic {
+            packets: vec![mine.clone()],
+            ..Traffic::default()
+        };
+        let g = alone.glows(end);
+        assert!(g.values().all(|(_, h)| !h), "no head on the lane");
+        assert_eq!(g.get(p.path.last().unwrap()).map(|(v, _)| *v), Some(0.3));
+        assert!(
+            alone.soaks(end).get(&p.to).is_some_and(|v| *v > 0.5),
+            "the node flashes"
+        );
+        // Soaked up whole: gone, and never back the way it came.
+        let gone = end + SOAK_STEPS as u64 * PACKET_TICKS;
+        t.advance(&lane, &node, all(), view, gone);
+        assert!(
+            !t.packets
+                .iter()
+                .any(|q| q.from == p.from && q.started <= end),
+            "the packet is gone"
+        );
+        // A while later the sender sends again, from itself.
+        let later = gone + (PAUSE_STEPS + 1) * PACKET_TICKS;
+        t.advance(&lane, &node, all(), view, later);
+        let q = t
+            .packets
+            .iter()
+            .find(|q| q.from == p.from)
+            .expect("the sender sends again");
+        assert_eq!(q.started, later, "fresh from the node");
+        assert!(t.glows(later).keys().all(|p| lane(*p)), "lit on lanes only");
     }
 
     #[test]
