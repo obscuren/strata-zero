@@ -2926,8 +2926,8 @@ fn mail_shots() {
             "back at the prompt\n{text}"
         );
         assert!(
-            text.contains("mail 4"),
-            "the command is on the glass\n{text}"
+            text.contains("MAIL 4 OF 5") && text.contains("FROM     MEZZ"),
+            "mail 4 is read out on the glass\n{text}"
         );
         shot_stack(&name("n"), &st, &[&map, &term], size);
     }
