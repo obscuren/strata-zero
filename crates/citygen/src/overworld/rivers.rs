@@ -21,10 +21,12 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
         let at = low_spot(ctx, &mut rng);
         lake(ctx, &mut rng, at, (4.0, 6.0), (3.0, 4.0));
     }
+    // Springs whose rivers were laid keep their distance; ones that failed are only
+    // not tried again.
     let mut springs: Vec<Pos> = Vec::new();
+    let mut tried: Vec<Pos> = Vec::new();
     for i in 0..count {
-        // A spring whose water finds no way down gives way to another.
-        for _attempt in 0..6 {
+        'attempt: for _attempt in 0..6 {
             // The first river starts far up the range from the bay it runs to.
             let bay = ctx
                 .bays
@@ -32,17 +34,18 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
                 .max_by(|a, b| a.depth.total_cmp(&b.depth))
                 .map(|b| b.tip)
                 .filter(|_| i == 0);
-            let Some(spring) = spring(ctx, &mut rng, &springs, bay) else {
+            let Some(spring) = spring(ctx, &mut rng, &springs, &tried, bay) else {
                 break;
             };
-            springs.push(spring);
-            let Some(target) = target(ctx, &mut rng, i, spring) else {
-                continue;
-            };
-            if let Some(path) = flow(ctx, spring, target) {
-                mark(ctx, path);
-                break;
+            for target in targets(ctx, &mut rng, i, spring) {
+                if let Some(path) = flow(ctx, spring, target)
+                    && mark(ctx, path)
+                {
+                    springs.push(spring);
+                    break 'attempt;
+                }
             }
+            tried.push(spring);
         }
     }
     for _ in 0..rng.random_range(0..=2) {
@@ -102,9 +105,18 @@ fn lake(ctx: &mut Ctx, rng: &mut ChaCha8Rng, at: Pos, rx: (f32, f32), ry: (f32, 
     }
 }
 
-/// A spring high on a ridge, away from the springs before it; with `far_from`, one of
-/// the farthest from there.
-fn spring(ctx: &Ctx, rng: &mut ChaCha8Rng, taken: &[Pos], far_from: Option<Pos>) -> Option<Pos> {
+/// A spring high on a ridge, away from the springs before it and not one that failed;
+/// with `far_from`, one of the farthest from there.
+fn spring(
+    ctx: &Ctx,
+    rng: &mut ChaCha8Rng,
+    taken: &[Pos],
+    tried: &[Pos],
+    far_from: Option<Pos>,
+) -> Option<Pos> {
+    let free = |p: Pos| {
+        taken.iter().all(|q| sdist(p, *q) > 20.0) && tried.iter().all(|q| sdist(p, *q) > 4.0)
+    };
     let mut high: Vec<Pos> = ctx
         .all()
         .filter(|p| {
@@ -112,7 +124,7 @@ fn spring(ctx: &Ctx, rng: &mut ChaCha8Rng, taken: &[Pos], far_from: Option<Pos>)
             t.water == Water::None
                 && matches!(t.ground, Ground::Hills | Ground::Mountains)
                 && ctx.ridges.iter().any(|r| poly_dist(s(*p), r) < 8.0)
-                && taken.iter().all(|q| sdist(*p, *q) > 20.0)
+                && free(*p)
         })
         .collect();
     if high.is_empty() {
@@ -123,7 +135,7 @@ fn spring(ctx: &Ctx, rng: &mut ChaCha8Rng, taken: &[Pos], far_from: Option<Pos>)
                 let t = ctx.tile(*p);
                 t.water == Water::None && matches!(t.ground, Ground::Hills | Ground::Mountains)
             })
-            .filter(|p| taken.iter().all(|q| sdist(*p, *q) > 20.0))
+            .filter(|p| free(*p))
             .max_by_key(|p| ctx.tile(*p).elevation);
     }
     if let Some(from) = far_from {
@@ -133,30 +145,61 @@ fn spring(ctx: &Ctx, rng: &mut ChaCha8Rng, taken: &[Pos], far_from: Option<Pos>)
     Some(high[rng.random_range(0..high.len())])
 }
 
-/// Where river `i` from `spring` runs to: the first to the deepest bay, the rest to the
-/// nearest sea or lake, or half the time into a river already there.
-fn target(ctx: &Ctx, rng: &mut ChaCha8Rng, i: u8, spring: Pos) -> Option<Pos> {
-    let nearest = |f: &dyn Fn(Pos) -> bool| {
-        ctx.all()
-            .filter(|p| f(*p))
-            .min_by(|a, b| sdist(*a, spring).total_cmp(&sdist(*b, spring)))
-    };
-    if i == 0
-        && let Some(bay) = ctx.bays.iter().max_by(|a, b| a.depth.total_cmp(&b.depth))
-    {
-        return Some(bay.tip);
-    }
-    if i > 0 && rng.random_bool(0.5) {
-        let on: Vec<Pos> = ctx.rivers.iter().flatten().copied().collect();
-        if let Some(p) = on
-            .iter()
-            .copied()
+/// Where river `i` from `spring` may run, best first. The first river: the bays,
+/// deepest first. The others: half the time the river already there, else the nearest
+/// sea or lake. Always last: the nearest water the spring's land actually reaches.
+fn targets(ctx: &Ctx, rng: &mut ChaCha8Rng, i: u8, spring: Pos) -> Vec<Pos> {
+    let mut out = Vec::new();
+    if i == 0 {
+        let mut bays: Vec<_> = ctx.bays.iter().collect();
+        bays.sort_by(|a, b| b.depth.total_cmp(&a.depth));
+        out.extend(bays.iter().map(|b| b.tip));
+    } else {
+        if rng.random_bool(0.5)
+            && let Some(p) = ctx
+                .rivers
+                .iter()
+                .flatten()
+                .copied()
+                .min_by(|a, b| sdist(*a, spring).total_cmp(&sdist(*b, spring)))
+        {
+            out.push(p);
+        }
+        if let Some(p) = ctx
+            .all()
+            .filter(|p| matches!(ctx.tile(*p).water, Water::Sea | Water::Lake))
             .min_by(|a, b| sdist(*a, spring).total_cmp(&sdist(*b, spring)))
         {
-            return Some(p);
+            out.push(p);
         }
     }
-    nearest(&|p| matches!(ctx.tile(p).water, Water::Sea | Water::Lake))
+    if let Some(p) = reachable_water(ctx, spring) {
+        out.push(p);
+    }
+    out
+}
+
+/// The nearest sea or lake tile a walk over open land from `spring` comes to.
+fn reachable_water(ctx: &Ctx, spring: Pos) -> Option<Pos> {
+    let mut seen = crate::geom::Grid::filled(ctx.size, false);
+    let mut queue = std::collections::VecDeque::from([spring]);
+    seen[spring] = true;
+    while let Some(p) = queue.pop_front() {
+        for q in p.neighbors4() {
+            if !ctx.in_bounds(q) || seen[q] {
+                continue;
+            }
+            seen[q] = true;
+            let t = ctx.tile(q);
+            if matches!(t.water, Water::Sea | Water::Lake) {
+                return Some(q);
+            }
+            if t.water == Water::None && t.ground != Ground::Peak {
+                queue.push_back(q);
+            }
+        }
+    }
+    None
 }
 
 /// The river's course: a route down the valleys from `spring` to `target` (pathfound,
@@ -278,8 +321,9 @@ fn smooth(ctx: &Ctx, route: &[Pos]) -> Vec<Pos> {
 }
 
 /// Lays the course on the tiles: river where there's land, linked tile to tile, the
-/// last land tile linked on into the water it meets.
-fn mark(ctx: &mut Ctx, mut course: Vec<Pos>) {
+/// last land tile linked on into the water it meets. False when too little of it is
+/// land to make a river.
+fn mark(ctx: &mut Ctx, mut course: Vec<Pos>) -> bool {
     let into = course.last().copied().filter(|p| {
         ctx.tile(*p).water != Water::None || ctx.rivers.iter().flatten().any(|q| q == p)
     });
@@ -287,7 +331,7 @@ fn mark(ctx: &mut Ctx, mut course: Vec<Pos>) {
         course.pop();
     }
     if course.len() < 2 {
-        return;
+        return false;
     }
     for w in course.windows(2) {
         ctx.tile_mut(w[0]).river |= link_toward(w[0], w[1]);
@@ -312,20 +356,62 @@ fn mark(ctx: &mut Ctx, mut course: Vec<Pos>) {
         }
     }
     ctx.rivers.push(course);
+    true
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::overworld::{Knobs, Overworld, Water, WorldParams, gen_with};
+    use crate::overworld::{Knobs, Overworld, Water, WorldParams, WorldSize, gen_with};
+
+    /// Default worlds over seeds 0..20 at every preset, plus the seeds that once had no
+    /// river (a bay tip on the wrong coast, or boxed in by peaks).
+    fn spread() -> Vec<(String, Overworld)> {
+        let mut out = Vec::new();
+        for size in [WorldSize::Small, WorldSize::Medium, WorldSize::Large] {
+            for seed in 0..12 {
+                out.push((
+                    format!("{size:?} seed {seed}"),
+                    Overworld::generate(WorldParams {
+                        seed,
+                        size,
+                        ..Default::default()
+                    })
+                    .unwrap(),
+                ));
+            }
+        }
+        for seed in [52, 115, 149, 200, 245, 414, 475] {
+            out.push((
+                format!("seed {seed}"),
+                Overworld::generate(WorldParams {
+                    seed,
+                    ..Default::default()
+                })
+                .unwrap(),
+            ));
+        }
+        out
+    }
+
+    #[test]
+    fn every_world_has_a_river_and_the_first_reaches_the_sea() {
+        for (what, w) in spread() {
+            assert!(!w.rivers.is_empty(), "{what}: no river");
+            let has_sea = w.tiles.count(|t| t.water == Water::Sea) > 0;
+            if has_sea {
+                let end = *w.rivers[0].last().unwrap();
+                let at_sea = end
+                    .neighbors4()
+                    .chain([end])
+                    .any(|q| w.tile(q).is_some_and(|t| t.water == Water::Sea));
+                assert!(at_sea, "{what}: the first river ends inland at {end:?}");
+            }
+        }
+    }
 
     #[test]
     fn rivers_run_unbroken_from_the_hills_to_the_water() {
-        for seed in 0..20 {
-            let w = Overworld::generate(WorldParams {
-                seed,
-                ..Default::default()
-            })
-            .unwrap();
+        for (seed, w) in spread() {
             assert!(!w.rivers.is_empty(), "seed {seed}");
             for r in &w.rivers {
                 assert!(

@@ -3,8 +3,9 @@
 
 use super::field::{distance_field, roll, s, sdist};
 use super::{Ctx, Ground, Water, WorldCity};
-use crate::geom::Pos;
+use crate::geom::{Grid, Pos};
 use crate::params::GenError;
+use crate::pathing::components;
 use rand::Rng;
 
 const HOME_SIZE: f32 = 16.0;
@@ -12,7 +13,10 @@ const TOWN_SIZE: f32 = 5.0;
 
 pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
     let mut rng = ctx.rng(4);
-    let scored = scores(ctx);
+    // Every city on the one stretch of land a road can cross: the biggest piece not cut
+    // off by the sea or the peaks (no islets, no basins behind a range).
+    let main = mainland(ctx);
+    let scored: Vec<(f32, Pos)> = scores(ctx).into_iter().filter(|(_, p)| main[*p]).collect();
     let n = ctx.params.cities as usize;
     let middles: Vec<f32> = (0..n.saturating_sub(2))
         .map(|_| rng.random_range(7.0..=10.0))
@@ -40,6 +44,7 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
             let d = sdist(*p, home);
             let t = ctx.tile(*p);
             (4.0..=8.0).contains(&d)
+                && main[*p]
                 && t.water == Water::None
                 && !matches!(t.ground, Ground::Hills | Ground::Mountains | Ground::Peak)
                 && wet(*p)
@@ -107,6 +112,21 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
         })
         .collect();
     Ok(())
+}
+
+/// The largest four-connected piece of land a road can cross (anything but sea and peaks).
+fn mainland(ctx: &Ctx) -> Grid<bool> {
+    let open = |p: Pos| ctx.tile(p).water != Water::Sea && ctx.tile(p).ground != Ground::Peak;
+    // `components` sorts largest first, ties by their first tile.
+    let biggest = components(ctx.size, open)
+        .into_iter()
+        .next()
+        .unwrap_or_default();
+    let mut main = Grid::filled(ctx.size, false);
+    for p in biggest {
+        main[p] = true;
+    }
+    main
 }
 
 /// Every tile a city could stand on, best first.

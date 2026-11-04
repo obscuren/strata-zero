@@ -213,16 +213,63 @@ fn chain(ctx: &mut Ctx) {
 #[cfg(test)]
 mod tests {
     use crate::geom::Pos;
-    use crate::overworld::{Overworld, Water, WorldParams};
+    use crate::overworld::{Knobs, Overworld, Water, WorldParams, WorldSize};
+
+    fn worlds() -> Vec<(String, Overworld)> {
+        let mut out = Vec::new();
+        let mut add =
+            |what: String, p: WorldParams| out.push((what, Overworld::generate(p).unwrap()));
+        for seed in 0..40 {
+            add(
+                format!("seed {seed}"),
+                WorldParams {
+                    seed,
+                    ..Default::default()
+                },
+            );
+        }
+        for size in [WorldSize::Small, WorldSize::Large] {
+            for seed in 0..12 {
+                add(
+                    format!("{size:?} seed {seed}"),
+                    WorldParams {
+                        seed,
+                        size,
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+        // Once: a city on an islet or behind peaks, with no road to it.
+        for seed in [132, 259, 265] {
+            add(
+                format!("small seed {seed}"),
+                WorldParams {
+                    seed,
+                    size: WorldSize::Small,
+                    ..Default::default()
+                },
+            );
+        }
+        for seed in [38, 1, 2, 3, 4, 5] {
+            add(
+                format!("two seas seed {seed}"),
+                WorldParams {
+                    seed,
+                    knobs: Knobs {
+                        sea_sides: Some(2),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
+        }
+        out
+    }
 
     #[test]
     fn every_city_is_reachable_by_road() {
-        for seed in 0..40 {
-            let w = Overworld::generate(WorldParams {
-                seed,
-                ..Default::default()
-            })
-            .unwrap();
+        for (seed, w) in worlds() {
             let mut reached = vec![false; w.cities.len()];
             reached[0] = true;
             let at = |p: Pos| w.cities.iter().position(|c| c.centre == p);

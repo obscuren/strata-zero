@@ -82,6 +82,9 @@ pub(crate) fn run(ctx: &mut Ctx) -> Result<(), GenError> {
         spots.shuffle(&mut rng);
         candidates.push((kind, spots));
     }
+    // Kinds take turns in an order of the world's own, so the last in the list aren't
+    // always the ones left out.
+    candidates.shuffle(&mut rng);
     let mut placed: Vec<Poi> = Vec::new();
     let fits = |p: Pos, placed: &[Poi]| {
         let t = ctx.tile(p);
@@ -157,6 +160,26 @@ fn outside_cities(ctx: &Ctx) -> Vec<Pos> {
 mod tests {
     use crate::overworld::field::sdist;
     use crate::overworld::{Ground, Overworld, PoiKind, Water, WorldParams};
+
+    #[test]
+    fn every_kind_turns_up_across_worlds() {
+        let mut seen = [0usize; 10];
+        for seed in 0..30 {
+            let w = Overworld::generate(WorldParams {
+                seed,
+                ..Default::default()
+            })
+            .unwrap();
+            for (i, k) in PoiKind::ALL.iter().enumerate() {
+                if w.pois.iter().any(|p| p.kind == *k) {
+                    seen[i] += 1;
+                }
+            }
+        }
+        for (i, k) in PoiKind::ALL.iter().enumerate() {
+            assert!(seen[i] >= 5, "{k:?} in only {} of 30 worlds", seen[i]);
+        }
+    }
 
     #[test]
     fn pois_sit_where_their_kind_goes() {

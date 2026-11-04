@@ -430,6 +430,53 @@ fn sketch_a_few() {
     }
 }
 
+/// The invariants that once broke on a few seeds in a few hundred, over 500 seeds at
+/// two presets. Slow; run it after a tuning pass:
+/// `cargo test -p citygen --release overworld::sweep -- --ignored`.
+#[cfg(test)]
+#[test]
+#[ignore]
+fn sweep() {
+    let mut bad = Vec::new();
+    for size in [WorldSize::Small, WorldSize::Medium] {
+        for seed in 0..500 {
+            let w = Overworld::generate(WorldParams {
+                seed,
+                size,
+                ..Default::default()
+            })
+            .unwrap();
+            if w.rivers.is_empty() {
+                bad.push(format!("{size:?} {seed}: no river"));
+            }
+            if w.cities.len() < 3 {
+                bad.push(format!("{size:?} {seed}: {} cities", w.cities.len()));
+            }
+            let mut reached = vec![false; w.cities.len()];
+            reached[0] = true;
+            let at = |p: Pos| w.cities.iter().position(|c| c.centre == p);
+            loop {
+                let before = reached.iter().filter(|r| **r).count();
+                for r in &w.routes {
+                    if let (Some(a), Some(b)) = (at(r.path[0]), at(*r.path.last().unwrap()))
+                        && (reached[a] || reached[b])
+                    {
+                        reached[a] = true;
+                        reached[b] = true;
+                    }
+                }
+                if reached.iter().filter(|r| **r).count() == before {
+                    break;
+                }
+            }
+            if !reached.iter().all(|r| *r) {
+                bad.push(format!("{size:?} {seed}: a city with no road"));
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{} bad worlds: {bad:?}", bad.len());
+}
+
 /// A default world with `knobs` forced, for tests.
 #[cfg(test)]
 pub(crate) fn gen_with(knobs: Knobs, seed: u64) -> Overworld {

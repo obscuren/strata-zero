@@ -122,21 +122,33 @@ fn sea(ctx: &mut Ctx) {
         }
     }
     for b in &mut bays {
+        // The tip is this coast's sea, not the other side's: no deeper in from the side
+        // than the coast and the bay can reach, and with land beside it.
+        let coast = coasts
+            .iter()
+            .find(|c| c.side == b.side)
+            .expect("a bay has its coast");
         let mut best: Option<(f32, Pos)> = None;
         for p in ctx.all() {
             if ctx.tile(p).water != Water::Sea {
                 continue;
             }
-            let (t, d, _, _) = against(b.side, s(p), sw, sh);
-            if (t - b.t).abs() <= b.width / 2.0 && best.is_none_or(|(bd, _)| d > bd) {
+            let (t, d, _, extent) = against(b.side, s(p), sw, sh);
+            let reach = (coast.base + 0.045) * extent + b.depth + 4.0;
+            let shore = p
+                .neighbors4()
+                .any(|q| ctx.in_bounds(q) && ctx.tile(q).water != Water::Sea);
+            if (t - b.t).abs() <= b.width / 2.0
+                && d <= reach
+                && shore
+                && best.is_none_or(|(bd, _)| d > bd)
+            {
                 best = Some((d, p));
             }
         }
-        if let Some((_, p)) = best {
-            b.tip = p;
-        }
+        b.tip = best.map(|(_, p)| p).unwrap_or(Pos::new(-1, -1));
     }
-    bays.retain(|b| ctx.tile(b.tip).water == Water::Sea);
+    bays.retain(|b| ctx.in_bounds(b.tip) && ctx.tile(b.tip).water == Water::Sea);
     ctx.sea_sides = sides;
     ctx.bays = bays;
 }
@@ -288,7 +300,7 @@ fn elevation(ctx: &mut Ctx) {
 
 #[cfg(test)]
 mod tests {
-    use crate::overworld::{Ground, Knobs, Overworld, Water, WorldParams, gen_with};
+    use crate::overworld::{Ctx, Ground, Knobs, Overworld, Water, WorldParams, gen_with};
 
     #[test]
     fn most_of_the_map_is_land_and_the_sea_has_bays() {
@@ -327,6 +339,40 @@ mod tests {
                 w.tiles.count(|t| t.ground == Ground::Hills) > 40,
                 "seed {seed}"
             );
+        }
+    }
+
+    #[test]
+    fn every_bay_opens_off_its_own_coast() {
+        // On a two-sided sea a bay near the shared corner once put its tip across the map
+        // (seeds 52 and 149): a tip must be sea with land beside it.
+        let mut worlds: Vec<WorldParams> = [52, 149, 200]
+            .into_iter()
+            .map(|seed| WorldParams {
+                seed,
+                ..Default::default()
+            })
+            .collect();
+        worlds.extend((0..30).map(|seed| WorldParams {
+            seed,
+            knobs: Knobs {
+                sea_sides: Some(2),
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
+        for p in worlds {
+            let seed = p.seed;
+            let mut ctx = Ctx::new(p, crate::flavor::FlavorPack::load("default").unwrap());
+            super::run(&mut ctx).unwrap();
+            for b in &ctx.bays {
+                assert_eq!(ctx.tile(b.tip).water, Water::Sea, "seed {seed}");
+                let shore = b
+                    .tip
+                    .neighbors4()
+                    .any(|q| ctx.in_bounds(q) && ctx.tile(q).water != Water::Sea);
+                assert!(shore, "seed {seed}: bay tip {:?} is out at sea", b.tip);
+            }
         }
     }
 
