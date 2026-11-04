@@ -44,11 +44,20 @@ class World:
             elif a[0] == "r":
                 name, path = line[2:].rstrip("\n").split("|")
                 self.routes.append((name, [tuple(map(int, q.split(","))) for q in path.split()]))
+            elif a[0] == "v":
+                self.rivers.append([tuple(map(int, q.split(","))) for q in a[1:]])
             elif a[0] == "g":
                 self.regions.append(dict(x=int(a[1]), y=int(a[2]), kind=a[3], name=" ".join(a[4:])))
 
     def tile(self, tx, ty):
         return self.t.get((tx, ty))
+
+    def river_width(self, tx, ty):
+        """Detail tiles wide: 3 near the spring, 7 at the mouth."""
+        for r in self.rivers:
+            if (tx, ty) in r:
+                return round(3 + 4 * r.index((tx, ty)) / max(1, len(r) - 1))
+        return 3
 
 
 # ---- the detail world, from the plan
@@ -66,14 +75,14 @@ def bilinear(w, x, y, f):
     return v
 
 
-def crossing(w, tx, ty, side):
-    """Where a link out of tile (tx, ty) on `side` crosses the shared edge: the same
-    number from both tiles (the edge's own hash), in the edge's middle half."""
+def crossing(w, tx, ty, side, road=False):
+    """Where a link out of tile (tx, ty) on `side` crosses the shared edge, the same
+    from both tiles: a road always at the edge's middle, a river at the edge's hash."""
     if side == "W":
-        return crossing(w, tx - 1, ty, "E")
+        return crossing(w, tx - 1, ty, "E", road)
     if side == "N":
-        return crossing(w, tx, ty - 1, "S")
-    o = 3 + int(h32(w.seed, tx, ty, 1 if side == "E" else 2) * 2) % 2
+        return crossing(w, tx, ty - 1, "S", road)
+    o = 3 if road else 2 + int(h32(w.seed, tx, ty, 1 if side == "E" else 2) * 4) % 4
     return (K * tx + K, K * ty + o) if side == "E" else (K * tx + o, K * ty + K)
 
 
@@ -90,23 +99,24 @@ def straight(a, b):
     return out
 
 
-def centreline(w, tx, ty, mask, salt):
+def centreline(w, tx, ty, mask, salt, road=False):
     """The cells a road (or river) runs on through tile (tx, ty): straight from crossing
     to crossing when it only passes through, else from each crossing to a point near the
     centre, four-connected."""
     def inside(side):
-        ex, ey = crossing(w, tx, ty, side)
+        ex, ey = crossing(w, tx, ty, side, road)
         return (ex - 1, ey) if side == "E" else (ex, ey - 1) if side == "S" else (ex, ey)
     if mask in (2 | 8, 1 | 4):
         a, b = (inside("W"), inside("E")) if mask == 10 else (inside("N"), inside("S"))
         return straight(a, b)
-    cx = K * tx + 3 + int(h32(w.seed, tx, ty, salt) * 2)
-    cy = K * ty + 3 + int(h32(w.seed, tx, ty, salt + 1) * 2)
+    # a road bends at the tile's middle, where its crossings line up; a river anywhere near
+    cx = K * tx + 3 + (0 if road else int(h32(w.seed, tx, ty, salt) * 2))
+    cy = K * ty + 3 + (0 if road else int(h32(w.seed, tx, ty, salt + 1) * 2))
     out = []
     for bit, side in ((1, "N"), (2, "E"), (4, "S"), (8, "W")):
         if not mask & bit:
             continue
-        ex, ey = crossing(w, tx, ty, side)
+        ex, ey = crossing(w, tx, ty, side, road)
         # step into the tile from the edge point
         if side == "E":
             ex -= 1
@@ -128,7 +138,7 @@ def centreline(w, tx, ty, mask, salt):
 def build(w, X0, Y0):
     """The ground of the view at detail (X0, Y0): a Ground of terrains and features."""
     g = ow2.Ground(VW, VH, salt=w.seed)
-    road, river = set(), set()
+    road, river, lane = set(), set(), set()
     txs = range((X0 // K) - 1, (X0 + VW) // K + 2)
     tys = range((Y0 // K) - 1, (Y0 + VH) // K + 2)
     for ty in tys:
@@ -137,18 +147,24 @@ def build(w, X0, Y0):
             if not t:
                 continue
             if t["river"]:
+                wd = w.river_width(tx, ty)
                 for (x, y) in centreline(w, tx, ty, t["river"], 7):
-                    river.add((x, y))
-                    river.add((x + 1, y))
+                    for dy in range(-(wd // 2), wd - wd // 2):
+                        for dx in range(-(wd // 2), wd - wd // 2):
+                            river.add((x + dx, y + dy))
             if t["road"]:
-                for (x, y) in centreline(w, tx, ty, t["road"], 3):
+                for (x, y) in centreline(w, tx, ty, t["road"], 3, road=True):
+                    lane.add((x, y))
                     road.update({(x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)})
     wob = fbm  # world-wide noise: (x, y) are detail coordinates
     for vy in range(VH):
         for vx in range(VW):
             x, y = X0 + vx, Y0 + vy
-            sea = bilinear(w, x, y, lambda t: t["water"] == "Sea") + 0.45 * (wob(x / 7, y / 3.5, 11, 3) - 0.5)
-            lake = bilinear(w, x, y, lambda t: t["water"] == "Lake") + 0.45 * (wob(x / 5, y / 2.5, 12, 3) - 0.5)
+            # shores curved at three scales: coves, points, the odd spit
+            shore = (0.34 * (wob(x / 16, y / 8, 11, 3) - 0.5) + 0.22 * (wob(x / 6, y / 3, 17, 3) - 0.5)
+                     + 0.1 * (wob(x / 2.5, y / 1.25, 18, 2) - 0.5))
+            sea = bilinear(w, x, y, lambda t: t["water"] == "Sea") + shore
+            lake = bilinear(w, x, y, lambda t: t["water"] == "Lake") + shore
             jx = x + int(6 * (wob(x / 9, y / 4.5, 13, 2) - 0.5))
             jy = y + int(3 * (wob(x / 9, y / 4.5, 14, 2) - 0.5))
             t = w.tile(jx // K, jy // K) or w.tile(x // K, y // K)
@@ -235,6 +251,17 @@ def build(w, X0, Y0):
             for k in range(3):
                 if g.inb(vx + k, vy) and g.t[vy][vx + k] == "road":
                     g.feat(vx + k, vy, ("▬", col))
+    # the shore band: land a tile or two from the water
+    wet = {(vx, vy) for vy in range(VH) for vx in range(VW) if g.t[vy][vx] in ("sea", "lake", "river")}
+    for vy in range(VH):
+        for vx in range(VW):
+            if (vx, vy) in wet:
+                continue
+            near = [g.t[vy + dy][vx + dx] for dx in (-2, -1, 0, 1, 2) for dy in (-1, 0, 1)
+                    if (vx + dx, vy + dy) in wet and abs(dx) + 2 * abs(dy) <= 2]
+            if near and g.t[vy][vx] in ("dirt", "scrub", "crop", "salt", "rock", "gravel", "track", "lot"):
+                g.set(vx, vy, "sand" if "sea" in near else "reeds")
+    g.lane = lane
     return g, road
 
 
@@ -291,8 +318,21 @@ def poi_layout(w, g, road, X0, Y0, poi):
         for i, ch in enumerate("▣ｼﾞｭﾘ9▣"):
             if g.inb(sx + i, sy):
                 g.feat(sx + i, sy, (ch, "#ff8c00" if ch != "▣" else "#3c8cff"))
-        return [(bx, by, abs(x1 - x0) + 1, abs(y1 - y0) + 1, poi["name"].split()[0].upper())]
+        return [dict(rect=(bx, by, abs(x1 - x0) + 1, abs(y1 - y0) + 1),
+                     name=poi["name"].split()[0].upper(), gate=(dx, dy), camera=at(9, 2),
+                     sign=(sx, sy))]
     return []
+
+
+def depth_of(g, vx, vy):
+    """How far (tiles, rows count double) the water at (vx, vy) is from land."""
+    for d in range(1, 8):
+        for dy in range(-((d + 1) // 2), (d + 1) // 2 + 1):
+            for dx in range(-d, d + 1):
+                x, y = vx + dx, vy + dy
+                if g.inb(x, y) and g.t[y][x] not in ("sea", "lake", "river") and abs(dx) + 2 * abs(dy) <= d:
+                    return d
+    return 8
 
 
 def frame(w, X0, Y0, title, sub, here, pois=(), net=False):
@@ -306,10 +346,16 @@ def frame(w, X0, Y0, title, sub, here, pois=(), net=False):
         x, y = X0 + vx, Y0 + vy
         r = h32(x, y, 51)
         if t in ("sea", "lake", "river"):
-            ch = "≈~∼"[int((r * 3)) % 3] if r < 0.5 or t == "river" else " "
-            fg = "#3a6ea8" if t != "sea" else "#2e5c8e"
-            bg = "#081628" if t != "river" else "#0a1c34"
+            depth = depth_of(g, vx, vy)
+            k = min(1.0, (depth - 1) / 5)
+            bg = mix("#123c5e", "#050d1a", k)
+            fg = mix("#6aa6d8", "#1e4a78", k)
+            ch = "≈~∼"[int(r * 3) % 3] if r < 0.55 - 0.35 * k else " "
             cells[(vx, vy)] = [ch, fg, bg, False]
+        elif t == "sand":
+            cells[(vx, vy)] = ["░" if r < 0.4 else "·" if r < 0.7 else " ", "#8a7a58", "#1c1812", False]
+        elif t == "reeds":
+            cells[(vx, vy)] = ['"' if r < 0.45 else "·" if r < 0.7 else " ", "#5e7040", "#0f120b", False]
         elif t == "rock" and (w.tile((X0 + vx) // K, (Y0 + vy) // K) or {}).get("ground") in ("Mountains", "Peak"):
             cells[(vx, vy)] = ["▓" if r < 0.6 else "█", "#34312c", "#0c0b0a", False]
         elif t == "rail":
@@ -390,35 +436,62 @@ LANE = ("#3afbd3", "#013a2f")
 
 
 def paint_net(g, road, constructs, X0, Y0):
+    """The Net over the view: the highways' trunks (one lane down each road's line),
+    each POI's construct wired to the trunk by a spur from its gate, its lone nodes on
+    lines of their own, and the grid fading away from all of it."""
+    lane = {(x - X0, y - Y0) for (x, y) in g.lane}
+    spur, light, nodes = set(), set(), []
+
+    def nearest(p, among):
+        return min(among, key=lambda q: abs(q[0] - p[0]) + 2 * abs(q[1] - p[1]), default=None)
+
+    for c in constructs:
+        if lane:
+            spur.update(straight(c["gate"], nearest(c["gate"], lane))[1:])
+        nodes.append((c["camera"], "#9fe6ff"))
+        nodes.append((c["sign"], "#9fe6ff"))
+        if lane:
+            spur.update(straight(c["sign"], nearest(c["sign"], lane))[1:])
+        if spur:
+            light.update(straight(c["camera"], nearest(c["camera"], spur | lane))[1:-1])
+    wires = lane | spur
+    src = list(wires) + [n for n, _ in nodes]
+    for c in constructs:
+        bx, by, bw, bh = c["rect"]
+        src += [(bx, by), (bx + bw, by + bh), (bx + bw // 2, by + bh // 2)]
     cells = {}
-    lanes = {(x - X0, y - Y0) for (x, y) in road if (x - X0) >= 0}
-    # one lane per highway: the road's first row/column
-    lane = {p for p in lanes if (p[0], p[1] - 1) not in lanes or (p[0] - 1, p[1]) not in lanes}
-    lane = {p for p in lane if (p[0], p[1] - 1) not in lanes}
-    src = list(lane)
-    for (bx, by, bw, bh, _) in constructs:
-        src += [(bx, by), (bx + bw, by + bh)]
     for vy in range(VH):
         for vx in range(VW):
-            d = min((abs(vx - sx) / 2 + abs(vy - sy) for sx, sy in src[::3]), default=99)
+            d = min((abs(vx - sx) / 2 + abs(vy - sy) for sx, sy in src[::2]), default=99)
             k = max(0.0, 1 - d / 6.5)
             lattice = (X0 + vx) % 4 == 0 and (Y0 + vy) % 2 == 0
             cells[(vx, vy)] = ["·" if lattice and k > 0.05 else " ", mix("#010204", "#5a8a84", k),
                                mix("#010204", "#011412", k), False]
-            if g.t[vy][vx] in ("mass", "wall") and g.k[vy][vx] != "shanty":
+            if g.t[vy][vx] in ("mass", "wall") and g.k[vy][vx] not in ("shanty", "stop"):
                 cells[(vx, vy)] = [" ", "#c8d0dc", "#011916", False]
     dbl = "═║═╚║║╔╠═╝═╩╗╣╦╬"
-    for (x, y) in lane:
-        if not (0 <= x < VW and 0 <= y < VH):
-            continue
+    thin = "─│─└││┌├─┘─┴┐┤┬┼"
+
+    def mask(p, among):
         m = 0
         for bit, (dx, dy) in ((1, (0, -1)), (2, (1, 0)), (4, (0, 1)), (8, (-1, 0))):
-            if (x + dx, y + dy) in lane:
+            if (p[0] + dx, p[1] + dy) in among:
                 m |= bit
+        return m
+    for (x, y) in light:
+        if 0 <= x < VW and 0 <= y < VH:
+            cells[(x, y)] = [thin[mask((x, y), light | wires) & 15], "#00a27f", cells[(x, y)][2], False]
+    for (x, y) in wires:
+        if not (0 <= x < VW and 0 <= y < VH):
+            continue
+        m = mask((x, y), wires)
+        if (x, y) in lane and (x in (0, VW - 1)):
+            m |= 2 | 8
         cells[(x, y)] = [dbl[m], LANE[0], LANE[1], False]
-        if h32(X0 + x, Y0 + y, 61) < 0.04:
+        if (x, y) in lane and h32(X0 + x, Y0 + y, 61) < 0.05:
             cells[(x, y)] = [dbl[m], "#ffffff", "#00b08b", True]
-    for (bx, by, bw, bh, name) in constructs:
+    for c in constructs:
+        bx, by, bw, bh = c["rect"]
         for y in range(by, by + bh):
             for x in range(bx, bx + bw):
                 if not (0 <= x < VW and 0 <= y < VH):
@@ -427,14 +500,26 @@ def paint_net(g, road, constructs, X0, Y0):
                 if ex or ey:
                     m = (1 if ex and y > by else 0) | (4 if ex and y < by + bh - 1 else 0)
                     m |= (2 if ey and x < bx + bw - 1 else 0) | (8 if ey and x > bx else 0)
-                    cells[(x, y)] = ["─│─└││┌├─┘─┴┐┤┬┼"[m], "#00d9aa", "#011110", False]
+                    ch = thin[m]
+                    if (x - bx) % 5 == 2 and not (ex and ey):
+                        ch = "▪"
+                    cells[(x, y)] = [ch, "#00d9aa" if ch != "▪" else "#73f8df", "#011110", False]
                 else:
                     cells[(x, y)] = [" ", "#c8d0dc", "#014437", False]
-        for i, ch in enumerate(name[:bw - 4]):
-            if 0 <= bx + 2 + i < VW and 0 <= by + bh // 2 < VH:
-                cells[(bx + 2 + i, by + bh // 2)] = [ch, "#b8f3ec", "#014437", True]
-        if 0 <= bx + 2 < VW and 0 <= by + 1 < VH:
-            cells[(bx + 2, by + 1)] = ["◆", "#e6f0f5", "#014437", True]
+        name = c["name"]
+        nx, ny = bx + (bw - len(name)) // 2, by + bh // 2
+        for i, ch in enumerate(name):
+            if 0 <= nx + i < VW and 0 <= ny < VH and bx < nx + i < bx + bw - 1:
+                cells[(nx + i, ny)] = [ch, "#b8f3ec", "#014437", True]
+        for (px, py) in ((bx + 2, by + 1), (bx + bw - 3, by + bh - 2)):
+            if 0 <= px < VW and 0 <= py < VH:
+                cells[(px, py)] = ["◆", "#e6f0f5", "#014437", True]
+        gx, gy = c["gate"]
+        if 0 <= gx < VW and 0 <= gy < VH:
+            cells[(gx, gy)] = ["▯", "#e6f0f5", "#014e3f", True]
+    for (x, y), col in nodes:
+        if 0 <= x < VW and 0 <= y < VH:
+            cells[(x, y)] = ["◇", col, "#011916", True]
     return cells
 
 
@@ -452,23 +537,39 @@ def main():
     w = World(os.path.join(HERE, "dumps", "world_0.txt"))
     stop = next(p for p in w.pois if p["kind"] == "TruckStop")
     home = next(c for c in w.cities if c["home"])
-    r17 = next(p for n, p in w.routes if n == "Route 17")
-    edge = next(p for p in r17 if w.tile(*p)["city"] < 0)
-    inside = next(p for p in r17 if w.tile(*p)["city"] >= 0 and w.tile(*p)["density"] > 0.35 and p[0] < edge[0] + 12)
+    hi = w.cities.index(home)
+    # the home city's longest road out, its last dense tile and its first open one
+    out_of = max((p if p[0] == (home["x"], home["y"]) else p[::-1]
+                  for n, p in w.routes if (home["x"], home["y"]) in (p[0], p[-1])), key=len)
+    edge = next(p for p in out_of if w.tile(*p)["city"] != hi)
+    # where it thins: the last tile along the road out that is still properly city
+    thick = [p for p in out_of[:out_of.index(edge)] if w.tile(*p)["density"] >= 0.3]
+    thin_at = thick[-1] if thick else edge
+    mid = (thin_at[0] - 1, thin_at[1])
+    bridge = next(p for p, t in sorted(w.t.items()) if t["road"] and t["water"] == "River" and t["city"] < 0)
+    lake = [p for p, t in sorted(w.t.items()) if t["water"] == "Lake"]
+    lx = sum(p[0] for p in lake) // len(lake)
+    ly = sum(p[1] for p in lake) // len(lake)
+    sx, sy = K * stop["x"] - 36, K * stop["y"] - 13
     frames = [
-        ("%s on its highway" % stop["name"], "The world's own truck stop, beside the road the generator ran past it. "
-         "One cell a detail tile; the view spans about 10×4 overworld tiles (the minimap pane frames them).",
-         frame(w, K * stop["x"] - 32, K * stop["y"] - 13, "%s · Route 3" % "Dust Flats", "dim · seen",
-               stop["name"], pois=[stop])),
-        ("The same, jacked in", "The trunk along the highway, the stop's construct, the fading grid.",
-         frame(w, K * stop["x"] - 32, K * stop["y"] - 13, "Dust Flats · Net", "dead grid · unseen",
-               "Route trunk · 1 construct in reach", pois=[stop], net=True)),
-        ("The bridge east of it", "Where the highway crosses the river: the road's and the river's crossings "
-         "come from each tile edge's hash, so the tiles join.",
-         frame(w, K * 61 - 36, K * 36 - 12, "the Bottoms · Route 3", "dim · seen", "bridge over the river")),
-        ("Where %s ends, on Route 17" % home["name"], "The city's density, smoothed across tile lines, decides "
-         "towers, outskirts and open ground; Route 17 runs out west.",
-         frame(w, K * ((edge[0] + inside[0]) // 2) - 40, K * edge[1] - 14, "%s · Route 17" % home["name"], "bright · seen",
+        ("%s on its highway" % stop["name"], "The world's own truck stop beside the highway the generator "
+         "ran past it. The highway crosses every tile edge at its middle, so it runs dead straight "
+         "and turns only in clean corners. One cell a detail tile; the minimap frames the view's tiles.",
+         frame(w, sx, sy, "Dust Flats · highway", "dim · seen", stop["name"], pois=[stop])),
+        ("The same, jacked in", "The trunk down the highway's line; the stop's construct wired to it by a "
+         "spur from its gate; the pump camera off the spur, the sign's ad server on its own; the grid "
+         "fading away from it all (round 3's Kilo-9).",
+         frame(w, sx, sy, "Dust Flats · Net", "dead grid · unseen", "trunk · 1 construct in reach",
+               pois=[stop], net=True)),
+        ("A bridge over a wide river", "Rivers widen from 3 detail tiles at the spring to 7 at the mouth, "
+         "with reeds on the banks, shallows at the edges and depth down the middle; the highway spans it.",
+         frame(w, K * bridge[0] - 36, K * bridge[1] - 12, "the Bottoms · bridge", "dim · seen",
+               "bridge over the river")),
+        ("A lake's shore", "Shores curved at three scales, a band of reeds and mud, shallows, then deep water.",
+         frame(w, K * lx - 40, K * ly - 14, "lakeshore", "dim · seen", "the lake")),
+        ("Where %s ends" % home["name"], "The city's density, smoothed across tile lines, decides towers, "
+         "outskirts and open ground along its longest road out.",
+         frame(w, K * mid[0] - 36, K * mid[1] - 13, "%s · edge" % home["name"], "bright · seen",
                "the edge of %s" % home["name"])),
     ]
     out = ["<!doctype html><meta charset=utf-8><title>Overworld · round 4</title><style>%s</style>" % CSS,
