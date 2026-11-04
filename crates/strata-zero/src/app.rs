@@ -607,6 +607,12 @@ pub struct Runner {
     /// A screen change or transition asked for a full repaint once nothing is animating.
     repaint_pending: bool,
     full_repaints: u32,
+    /// The app is closing and its save has been taken or tried (`save_on_exit`).
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
+    leaving: bool,
+    /// A screen asked to quit (QUIT GAME, the title's QUIT): it saved on its way out.
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
+    quit: bool,
 }
 
 impl Runner {
@@ -618,6 +624,8 @@ impl Runner {
             last_frame: None,
             repaint_pending: false,
             full_repaints: 0,
+            leaving: false,
+            quit: false,
         }
     }
 
@@ -637,12 +645,17 @@ impl Runner {
         self.screens.len()
     }
 
-    /// Saves the run as the app is closed (the window's close button, Cmd+Q), if it can
-    /// be saved right now and no screen holds story in flight; else the last save
-    /// stands. True when it was saved.
+    /// Saves the run as the app is closed (the window's close button, Cmd+Q, the menu
+    /// bar's or the Dock's Quit, a logout), if it can be saved right now and no screen
+    /// holds story in flight; else the last save stands. Once an exit: the window asks
+    /// as it closes and again as its loop ends, and a quit the screens asked for (QUIT
+    /// GAME) saved on its own way out. True when it was saved.
     #[cfg(any(feature = "window", test))]
     pub fn save_on_exit(&mut self) -> bool {
-        if self.screens.iter().any(|s| s.holds_story()) {
+        if self.quit || self.screens.iter().any(|s| s.holds_story()) {
+            return false;
+        }
+        if std::mem::replace(&mut self.leaving, true) {
             return false;
         }
         crate::runs::when::save_now(&mut self.st)
@@ -704,7 +717,10 @@ impl Runner {
                 self.transition = Some(Transition::flash(fx, snapshot, self.st.tick));
                 self.repaint_pending = true;
             }
-            ScreenCmd::Quit => return Ok(false),
+            ScreenCmd::Quit => {
+                self.quit = true;
+                return Ok(false);
+            }
         }
         // Once nothing animates, repaint every cell: a glitch or a wide glyph may have
         // left the terminal out of step with what ratatui believes is on screen.

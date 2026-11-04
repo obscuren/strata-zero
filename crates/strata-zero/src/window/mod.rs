@@ -227,7 +227,9 @@ impl App {
             return;
         };
         self.zoom = match s {
-            // Cmd+Q: the run is saved first, when it can be (`Runner::save_on_exit`).
+            // Cmd+Q, if it reaches the window: the run is saved first, when it can be
+            // (`Runner::save_on_exit`). The menu's Quit usually takes the chord first,
+            // and comes in by `exiting`.
             Shortcut::Quit => {
                 self.runner.save_on_exit();
                 return el.exit();
@@ -389,6 +391,14 @@ impl ApplicationHandler for App {
             }
             _ => {}
         }
+    }
+
+    /// The loop is ending, however it was asked to: the arms above (they saved first),
+    /// or past them, as Cmd+Q, the menu bar's and the Dock's Quit and a logout end it on
+    /// a Mac (AppKit's `terminate:` takes them before a key reaches the window). The run
+    /// is saved, once an exit (`Runner::save_on_exit`).
+    fn exiting(&mut self, _el: &ActiveEventLoop) {
+        self.runner.save_on_exit();
     }
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {

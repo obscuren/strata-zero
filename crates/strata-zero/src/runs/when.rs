@@ -427,6 +427,39 @@ mod tests {
         assert_eq!(queued(&path), 0);
     }
 
+    /// The window asks for the exit's save as it closes and again as its loop ends
+    /// (`exiting`, where Cmd+Q, the menu's Quit and a logout arrive): one save. A QUIT
+    /// the screens asked for saved on its own way out.
+    #[test]
+    fn the_way_out_saves_once() {
+        use crate::app::Runner;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let dir = Dir::new("exit-once");
+        let (st, map) = saving(&dir, small_city());
+        let mut runner = Runner::new(Box::new(map), st);
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        runner.frame(&mut term, &[]).unwrap();
+        assert!(runner.save_on_exit(), "the close button saves");
+        let path = the_file(&dir);
+        stamp_old(&path);
+        runner.frame(&mut term, &[]).unwrap();
+        assert!(!runner.save_on_exit(), "the loop's end asks again: nothing");
+        assert_eq!(stamp(&path), 1, "not written again");
+        // QUIT GAME from the pause menu: saved there, and not again on the way out.
+        let dir = Dir::new("exit-quit");
+        let (st, map) = saving(&dir, small_city());
+        let mut runner = Runner::new(Box::new(map), st);
+        runner.frame(&mut term, &[key(KeyCode::Esc)]).unwrap();
+        assert_eq!(runner.depth(), 2, "paused");
+        let quit = [key(KeyCode::Up), key(KeyCode::Enter)];
+        assert!(!runner.frame(&mut term, &quit).unwrap(), "QUIT GAME");
+        let path = the_file(&dir);
+        stamp_old(&path);
+        assert!(!runner.save_on_exit());
+        assert_eq!(stamp(&path), 1, "QUIT GAME's save stands");
+    }
+
     #[test]
     fn screens_that_hold_story_say_so() {
         use crate::missions::{FeedView, TrayOffer};
