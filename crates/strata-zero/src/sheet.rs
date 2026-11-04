@@ -3,9 +3,12 @@
 
 use crate::render::overworld::atlas_cell;
 use crate::render::style::StylePack;
-use crate::render::{Cell, Rgb};
+use crate::render::tileset;
+use crate::render::{Cell, RenderCtx, Rgb, Visibility};
 use citygen::Pos;
-use citygen::overworld::{Overworld, PoiKind, RegionKind, Water};
+use citygen::overworld::{Overworld, PoiKind, RegionKind, Water, detail};
+use citygen::tile::Terrain;
+use citygen::world::StratumKind;
 use std::fmt::Write as _;
 use std::time::Duration;
 
@@ -48,15 +51,20 @@ fn escape(ch: char, out: &mut String) {
     }
 }
 
-/// One world as rows of spans, a run per style; a glyph outside ASCII sits in its own
-/// fixed-width box so a fallback font can't push the row out of line.
+/// One world in the atlas look.
 fn grid(world: &Overworld, style: &StylePack) -> String {
+    block(world.size.w as i32, world.size.h as i32, |x, y| {
+        atlas_cell(world, Pos::new(x, y), style)
+    })
+}
+
+/// `w`×`h` cells as rows of spans, a run per style; a glyph outside ASCII sits in its
+/// own fixed-width box so a fallback font can't push the row out of line.
+fn block(w: i32, h: i32, cell: impl Fn(i32, i32) -> Cell) -> String {
     let mut out = String::from("<div class=tm>");
-    for y in 0..world.size.h as i32 {
+    for y in 0..h {
         out.push_str("<div class=r>");
-        let cells: Vec<Cell> = (0..world.size.w as i32)
-            .map(|x| atlas_cell(world, Pos::new(x, y), style))
-            .collect();
+        let cells: Vec<Cell> = (0..w).map(|x| cell(x, y)).collect();
         let mut i = 0;
         while i < cells.len() {
             let c = cells[i];
@@ -187,10 +195,9 @@ fn summary(world: &Overworld, took: Duration) -> String {
     out
 }
 
-/// The page for `worlds`, each with the time it took to generate.
-pub fn world_sheet(worlds: &[(Overworld, Duration)], style: &StylePack) -> String {
-    let mut out =
-        String::from("<!doctype html><meta charset=utf-8><title>World sheet</title><style>");
+/// The page's head: the embedded font and the sheet's styles, up to its `<h1>`.
+fn head(title: &str) -> String {
+    let mut out = format!("<!doctype html><meta charset=utf-8><title>{title}</title><style>");
     let _ = write!(
         out,
         "@font-face{{font-family:'StrataFira';font-weight:400;src:url(data:font/ttf;base64,{}) format('truetype')}}\
@@ -204,9 +211,16 @@ pub fn world_sheet(worlds: &[(Overworld, Duration)], style: &StylePack) -> Strin
          p{max-width:1300px;line-height:1.5;margin:4px 0;font-size:14px}.note{color:#8b949e;font-size:13px}\
          .tm{font-family:'StrataFira',monospace;font-size:12px;line-height:1.25;display:inline-block;\
          background:#04060a;white-space:pre;margin-top:8px;box-shadow:0 0 0 1px #1a2230}\
-         .tm .r{height:1.25em}.tm i{display:inline-block;width:.6em;font-style:normal;text-align:center}",
+         .tm .r{height:1.25em}.tm i{display:inline-block;width:.6em;font-style:normal;text-align:center}\
+         .side{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}",
     );
-    out.push_str("</style><h1>World sheet</h1>");
+    let _ = write!(out, "</style><h1>{title}</h1>");
+    out
+}
+
+/// The page for `worlds`, each with the time it took to generate.
+pub fn world_sheet(worlds: &[(Overworld, Duration)], style: &StylePack) -> String {
+    let mut out = head("World sheet");
     out.push_str(
         "<p class=note>One cell a tile, the atlas look. ⌂ truck stop · ╪ checkpoint · ⬡ relay mast · \
          △ nomad camp · × wreck · ▣ dead arcology · ▦ solar array · ◎ water plant · ◈ test range · ◆ rig.</p>",
@@ -215,6 +229,91 @@ pub fn world_sheet(worlds: &[(Overworld, Duration)], style: &StylePack) -> Strin
         out.push_str(&summary(world, *took));
         out.push_str(&grid(world, style));
     }
+    out
+}
+
+/// One level down: the detail map of `span` overworld tiles round `centre`, drawn as the
+/// street draws it at full light with the water shaded by its distance from land,
+/// beside the overworld round it in the atlas look with the region framed.
+pub fn detail_sheet(world: &Overworld, centre: Pos, span: (u32, u32), style: &StylePack) -> String {
+    let (sw, sh) = (span.0.max(1) as i32, span.1.max(1) as i32);
+    let (tx0, ty0) = (centre.x - sw / 2, centre.y - sh / 2);
+    let t = detail::TILE;
+    let g = detail::region(world, t * tx0, t * ty0, (t * sw) as u32, (t * sh) as u32);
+    let size = g.size();
+    let wet = |p: Pos| {
+        g.get(p)
+            .is_none_or(|c| matches!(c.terrain, Terrain::Water | Terrain::Shallows))
+    };
+    let ctx = RenderCtx {
+        style,
+        theme: None,
+        stratum: StratumKind::Street,
+        light: 255,
+        tick: 0,
+        vis: Visibility::Visible,
+        connector: None,
+        kind: None,
+        wall_mask: 0,
+        lamps_on: true,
+        sky: None,
+        glow: None,
+    };
+    let ground = block(size.w as i32, size.h as i32, |x, y| {
+        let p = Pos::new(x, y);
+        let mut c = tileset::cell(&g[p], &ctx);
+        if g[p].terrain == Terrain::Water {
+            // how far to dry land, up to 6 (a cell is twice as tall as it is wide)
+            let depth = (1..=6)
+                .find(|&r| {
+                    (-r..=r).any(|dx| {
+                        (-(r / 2).max(1)..=(r / 2).max(1)).any(|dy| {
+                            !wet(Pos::new(x + dx, y + dy)) && g.get(p.offset(dx, dy)).is_some()
+                        })
+                    })
+                })
+                .unwrap_or(7);
+            c.bg = c.bg.scale(1.0 - 0.09 * (depth - 1) as f32);
+        }
+        c
+    });
+    let (aw, ah) = (56, (t * sh).max(16));
+    let (ax0, ay0) = (centre.x - aw / 2, centre.y - ah / 2);
+    let atlas = block(aw, ah, |x, y| {
+        let p = Pos::new(ax0 + x, ay0 + y);
+        if world.tile(p).is_none() {
+            return Cell {
+                ch: ' ',
+                fg: Rgb(0, 0, 0),
+                bg: Rgb(0, 0, 0),
+                bold: false,
+                dim: false,
+            };
+        }
+        let mut c = atlas_cell(world, p, style);
+        if (tx0..tx0 + sw).contains(&p.x) && (ty0..ty0 + sh).contains(&p.y) {
+            c.bg = c.bg.mix(Rgb(70, 90, 130), 0.45);
+        }
+        c
+    });
+    let mut out = head("One level down");
+    let here = world.tile(centre);
+    let _ = write!(
+        out,
+        "<h2>seed {} · tiles {},{} to {},{} · {}×{} cells</h2><p class=note>{}</p>",
+        world.seed,
+        tx0,
+        ty0,
+        tx0 + sw - 1,
+        ty0 + sh - 1,
+        size.w,
+        size.h,
+        here.map_or(String::new(), |h| esc(&format!(
+            "centre: {:?} ground, water {:?}, road links {:04b}, river {:04b}, wash {:04b}",
+            h.ground, h.water, h.road, h.river, h.wash
+        ))),
+    );
+    let _ = write!(out, "<div class=side>{ground}{atlas}</div>");
     out
 }
 
@@ -253,6 +352,18 @@ mod tests {
         w.cities[0].name = "A<B&C".into();
         let html = world_sheet(&[(w, std::time::Duration::ZERO)], &style);
         assert!(html.contains("A&lt;B&amp;C") && !html.contains("A<B&C"));
+    }
+
+    #[test]
+    fn the_detail_sheet_draws_the_ground() {
+        let style = StylePack::load().unwrap();
+        let w = Overworld::generate(WorldParams::default()).unwrap();
+        let html = detail_sheet(&w, Pos::new(50, 26), (4, 2), &style);
+        assert!(html.starts_with("<!doctype html>") && html.contains("@font-face"));
+        assert!(
+            html.matches("<div class=r>").count() >= 16 + 13,
+            "detail rows and the overworld beside"
+        );
     }
 
     #[test]

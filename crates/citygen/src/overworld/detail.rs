@@ -426,7 +426,7 @@ impl<'a> Patch<'a> {
         let mut pylons = Vec::new();
         for (i, r) in w.routes.iter().enumerate() {
             let h = hash64(hash64(w.seed, 2041), i as u64);
-            if h % 3 != 0 || r.path.len() < 2 {
+            if !h.is_multiple_of(3) || r.path.len() < 2 {
                 continue;
             }
             let side = if (h >> 8) & 1 == 0 { 1 } else { -1 };

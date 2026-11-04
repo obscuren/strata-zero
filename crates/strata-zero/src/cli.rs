@@ -66,10 +66,47 @@ pub enum Cmd {
         /// How many cities, 3 to 8.
         #[arg(long)]
         cities: Option<u8>,
+        /// Draw one level down instead: the detail map round overworld tile `TX,TY`
+        /// (needs `--seed`).
+        #[arg(long, requires = "seed", conflicts_with = "seeds")]
+        detail: Option<String>,
+        /// How many overworld tiles `--detail` draws, `WxH`.
+        #[arg(long, default_value = "10x4")]
+        span: String,
         /// The page to write.
         #[arg(long, default_value = "world-sheet.html")]
         out: PathBuf,
     },
+}
+
+/// An overworld tile, `TX,TY`.
+pub fn parse_tile(s: &str) -> Result<citygen::Pos> {
+    let (x, y) = s
+        .split_once(',')
+        .with_context(|| format!("tile `{s}` is not TX,TY"))?;
+    Ok(citygen::Pos::new(
+        x.trim()
+            .parse()
+            .with_context(|| format!("bad tile x `{x}`"))?,
+        y.trim()
+            .parse()
+            .with_context(|| format!("bad tile y `{y}`"))?,
+    ))
+}
+
+/// A span of tiles, `WxH`, each at least 1.
+pub fn parse_span(s: &str) -> Result<(u32, u32)> {
+    let (w, h) = s
+        .split_once('x')
+        .with_context(|| format!("span `{s}` is not WxH"))?;
+    let (w, h): (u32, u32) = (
+        w.parse().context("bad span width")?,
+        h.parse().context("bad span height")?,
+    );
+    if w == 0 || h == 0 {
+        bail!("span `{s}` is empty");
+    }
+    Ok((w, h))
 }
 
 /// `A..B` (B excluded, A below B) or a single seed `N`.
@@ -268,11 +305,39 @@ pub fn run() -> Result<()> {
             seeds,
             size,
             cities,
+            detail,
+            span,
             out,
         }) => {
             let range = seed_range(seed, seeds.as_deref())?;
             let size = parse_world_size(&size)?;
             let style = crate::render::style::StylePack::load()?;
+            if let Some(tile) = detail {
+                let mut params = WorldParams {
+                    seed: range.start,
+                    size,
+                    ..Default::default()
+                };
+                if let Some(c) = cities {
+                    params.cities = c;
+                }
+                let world = Overworld::generate(params)?;
+                let (centre, span) = (parse_tile(&tile)?, parse_span(&span)?);
+                if world.tile(centre).is_none() {
+                    bail!(
+                        "tile {tile} is outside the {}×{} world",
+                        world.size.w,
+                        world.size.h
+                    );
+                }
+                std::fs::write(
+                    &out,
+                    crate::sheet::detail_sheet(&world, centre, span, &style),
+                )
+                .with_context(|| format!("writing {}", out.display()))?;
+                println!("-> {}", out.display());
+                return Ok(());
+            }
             let mut worlds = Vec::new();
             for seed in range {
                 let mut params = WorldParams {
@@ -307,6 +372,12 @@ pub fn run() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tile_parses() {
+        assert_eq!(parse_tile("50,36").unwrap(), citygen::Pos::new(50, 36));
+        assert!(parse_tile("50").is_err() && parse_tile("a,b").is_err());
+    }
 
     #[test]
     fn dev_mode_is_asked_for_by_flag_or_env() {

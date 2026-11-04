@@ -45,6 +45,17 @@ cargo run --release -p strata-zero -- world --seeds 0..12 --out world-sheet.html
 `--cities 3..8`. The generator is `citygen::overworld`; its design is
 `docs/superpowers/specs/2026-11-04-world-generator-design.md`.
 
+One level down, the walkable ground of the tiles round one overworld tile, drawn as the
+street draws it beside the overworld round it:
+
+```sh
+cargo run --release -p strata-zero -- world --seed 0 --detail 108,30 --span 10x4 --out detail.html
+```
+
+`--detail TX,TY` needs `--seed`; `--span WxH` counts overworld tiles (8×8 detail tiles
+each). The ground is `citygen::overworld::detail`; its design is
+`docs/superpowers/specs/2026-11-04-world-tiles-design.md`.
+
 ### The window
 
 The `window` feature builds the window front end; `--window` opens it:
