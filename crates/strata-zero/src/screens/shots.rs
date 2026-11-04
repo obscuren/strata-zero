@@ -4031,3 +4031,71 @@ fn open_net_shots() {
     s.update(&mut st, &[]);
     shot_stack("open_net_barren", &st, &[&s], (120, 40));
 }
+
+/// Cities grown into the world (#19): seed 41's home city on its site, where its
+/// streets give way to the open ground, on its coast, and on the overworld.
+#[test]
+#[ignore]
+fn city_in_world_shots() {
+    use crate::screens::outside::OutsideScreen;
+    use citygen::{Place, StratumKind, Terrain};
+    let city = crate::screens::build_home(AppState::new().params.clone().with_seed(41)).unwrap();
+    let at = |pos: Pos, minute: u16| {
+        let mut st = AppState::new();
+        st.enter_city_at(city.clone(), minute);
+        st.character = game::Character::debug_runner(&st.content);
+        let mut p = crate::walker::Player::at(Place::Stratum(StratumKind::Street), pos);
+        let bonus = st.sight_bonus();
+        p.update_fov(
+            &crate::render::map::MapRef::stratum_at(
+                st.city.as_ref().unwrap(),
+                StratumKind::Street,
+                minute,
+            ),
+            bonus,
+        );
+        st.player = Some(p);
+        st
+    };
+    let street = &city.stratum(StratumKind::Street).unwrap().tiles;
+    let middle = Pos::new(city.size.w as i32 / 2, city.size.h as i32 / 2);
+    let nearest = |ok: &dyn Fn(Pos, &citygen::Tile) -> bool| {
+        street
+            .iter()
+            .filter(|(p, t)| ok(*p, t))
+            .min_by_key(|(p, _)| p.manhattan(middle))
+            .map(|(p, _)| p)
+            .unwrap()
+    };
+    let open = |t: &citygen::Tile| {
+        matches!(
+            t.terrain,
+            Terrain::Dirt | Terrain::Scrub | Terrain::Crops | Terrain::Rise | Terrain::Sand
+        )
+    };
+    // the edge: a sidewalk with the open ground a few steps west of it
+    let edge = nearest(&|p, t| {
+        t.terrain == Terrain::Sidewalk
+            && (3..6).all(|k| street.get(p.offset(-k, 0)).is_some_and(open))
+    });
+    let mut st = at(edge, 13 * 60);
+    let map = MapScreen::walking(&mut st);
+    shot_stack("city_edge_street", &st, &[&map], (120, 40));
+    let mut st = at(edge, 22 * 60);
+    let map = MapScreen::walking(&mut st);
+    shot_stack("city_edge_street_night", &st, &[&map], (120, 40));
+    // the coast: a sidewalk or road beside the world's water
+    let coast = nearest(&|p, t| {
+        matches!(t.terrain, Terrain::Sidewalk | Terrain::Road)
+            && p.neighbors4()
+                .any(|q| street.get(q).is_some_and(|u| u.terrain == Terrain::Water))
+    });
+    let mut st = at(coast, 13 * 60);
+    let map = MapScreen::walking(&mut st);
+    shot_stack("city_coast_street", &st, &[&map], (120, 40));
+    // up: the city on the overworld, its block drawn round you
+    let mut st = at(edge, 13 * 60);
+    crate::outside::ensure(&mut st);
+    let s = OutsideScreen::new(&mut st);
+    shot_stack("city_on_the_overworld", &st, &[&s], (120, 40));
+}
