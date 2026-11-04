@@ -146,7 +146,7 @@ pub fn key(st: &mut AppState, k: &KeyEvent) -> bool {
 }
 
 /// Ends the rest. A sleep heals HP and FOCUS by the part of a night slept; one line
-/// says what happened.
+/// says what happened, and the run is saved on the map's next frame that can take it.
 pub fn wake(st: &mut AppState, why: Why) {
     let Some(rest) = st.rest.take() else {
         return;
@@ -181,6 +181,7 @@ pub fn wake(st: &mut AppState, why: Why) {
         (Kind::Wait, Why::Visitor) => "Someone in the flat ends your wait.".to_string(),
     };
     st.say(line);
+    st.save_due = true;
 }
 
 /// The roles of the visitors standing in your flat.

@@ -1,11 +1,12 @@
 //! Helpers for the save tests: comparing two values by what they write, a round trip
 //! through MessagePack (both with the shipped book in scope, as a save has its own), a
-//! folder of the test's own, and a state with a run.
+//! folder of the test's own, a state with a run, and a game on the map that saves.
 
 use crate::app::AppState;
 use crate::missions::Book;
 use crate::runs::ids::with_book;
 use crate::runs::{RunId, RunMeta};
+use crate::screens::explore::MapScreen;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::path::PathBuf;
@@ -92,6 +93,40 @@ pub(crate) fn running(mut st: AppState) -> AppState {
         born: 0,
     });
     st
+}
+
+/// A small city, quick to build.
+pub(crate) fn small_city() -> citygen::City {
+    citygen::Generator::run(citygen::GenParams {
+        seed: 3,
+        size: citygen::SizePreset::Small,
+        districts: 4,
+        ..Default::default()
+    })
+    .unwrap()
+}
+
+/// The seed-8 city the story is played in, with a home.
+pub(crate) fn story_city() -> citygen::City {
+    citygen::Generator::run(citygen::GenParams {
+        seed: 8,
+        size: citygen::SizePreset::Medium,
+        districts: 7,
+        ..Default::default()
+    })
+    .unwrap()
+}
+
+/// `city` walked into with a run and `dir` to save it in, as a game stands once JACK
+/// IN is done; the story not begun, so nothing but the test asks for a save.
+pub(crate) fn saving(dir: &Dir, city: citygen::City) -> (AppState, MapScreen) {
+    let mut st = AppState::new();
+    st.enter_city(city);
+    st.show_fps = false;
+    let map = MapScreen::walking(&mut st);
+    let mut st = running(st);
+    st.saves = Some(dir.0.clone());
+    (st, map)
 }
 
 #[cfg(test)]

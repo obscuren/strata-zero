@@ -449,7 +449,8 @@ fn fire(st: &mut AppState, ev: Option<&Event>) {
     }
 }
 
-/// Runs the effects of the step mission `m` waits on and moves it to the next.
+/// Runs the effects of the step mission `m` waits on and moves it to the next; the run
+/// is saved on the map's next frame that can take it.
 fn run_step(st: &mut AppState, m: usize) {
     let Some(step) = waiting(st, m) else {
         return;
@@ -472,6 +473,7 @@ fn run_step(st: &mut AppState, m: usize) {
     } else {
         RunState::Open
     };
+    st.save_due = true;
 }
 
 /// Dev console: runs the step mission `m` waits on as if its trigger fired, then lets

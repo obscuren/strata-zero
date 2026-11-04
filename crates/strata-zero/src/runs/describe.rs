@@ -1,13 +1,8 @@
 //! What a run's header says of it, and the short forms the run lists print.
 
 use super::{Death, RunHeader, RunId};
-use crate::app::AppState;
+use crate::app::{AppState, FPS};
 use citygen::{FloorPlan, Place, StratumKind};
-
-/// Frames a second: the loop runs one every `app::FRAME`.
-fn frames_per_second() -> u64 {
-    (1_000_000 / crate::app::FRAME.as_micros()) as u64
-}
 
 /// The wall clock in Unix seconds.
 fn unix_now() -> u64 {
@@ -50,9 +45,9 @@ pub fn header(st: &AppState, death: Option<Death>) -> RunHeader {
         credits: ch.credits,
         chrome,
         talents: ch.talents.values().filter(|r| **r > 0).count() as u32,
-        played: st.run.map_or(0, |r| {
-            st.tick.saturating_sub(r.started) / frames_per_second()
-        }),
+        played: st
+            .run
+            .map_or(0, |r| st.tick.saturating_sub(r.started) / FPS),
         saved: unix_now(),
         death,
     }

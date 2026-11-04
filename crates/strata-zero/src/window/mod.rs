@@ -218,7 +218,11 @@ impl App {
             return;
         };
         self.zoom = match s {
-            Shortcut::Quit => return el.exit(),
+            // Cmd+Q: the run is saved first, if it can be right now.
+            Shortcut::Quit => {
+                crate::runs::when::save_now(&mut self.runner.st);
+                return el.exit();
+            }
             Shortcut::Fullscreen => {
                 let full = live.window.fullscreen().is_some();
                 live.window
@@ -319,7 +323,11 @@ impl ApplicationHandler for App {
 
     fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
-            WindowEvent::CloseRequested => el.exit(),
+            // The close button: the run is saved first, if it can be right now.
+            WindowEvent::CloseRequested => {
+                crate::runs::when::save_now(&mut self.runner.st);
+                el.exit();
+            }
             WindowEvent::Resized(size) => {
                 if let Some(live) = self.live.as_mut() {
                     let backend = live.term.backend_mut();

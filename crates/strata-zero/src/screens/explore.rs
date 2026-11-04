@@ -15,7 +15,6 @@ use crate::render::weather::Weather;
 use crate::screens::configure::Configure;
 use crate::screens::console;
 use crate::screens::deck::Deck;
-use crate::screens::files::Files;
 use crate::screens::help;
 use crate::screens::messages::Messages;
 use crate::screens::pause::Pause;
@@ -1001,6 +1000,7 @@ impl MapScreen {
         };
         hud::Footer {
             place,
+            saved: crate::runs::when::marked(st),
             jacked,
             camera: self.mode == Mode::Explore,
             overburdened: st.character.overburdened(&st.content),
@@ -1353,13 +1353,9 @@ impl MapScreen {
             KeyCode::Char('s') => {
                 if let Some(why) = crate::save::refusal(st) {
                     st.warn(why);
-                    return Some(ScreenCmd::Stay);
+                } else {
+                    crate::runs::when::save_now(st);
                 }
-                let name = st.city.as_ref().map(|c| c.name.clone())?;
-                return Some(ScreenCmd::Push {
-                    to: Box::new(Files::save(st.tick, &name)),
-                    fx: TransitionKind::None,
-                });
             }
             KeyCode::Char('q') | KeyCode::Esc => {
                 if self.help {
@@ -1369,7 +1365,7 @@ impl MapScreen {
                     st.say("feed closed");
                 } else {
                     return Some(ScreenCmd::Push {
-                        to: Box::new(Pause::new(st.tick)),
+                        to: Box::new(Pause::new(st, st.tick)),
                         fx: TransitionKind::None,
                     });
                 }
@@ -3047,6 +3043,8 @@ impl Screen for MapScreen {
         }
         self.last_phase = phase;
         self.refresh_placement(st);
+        // A save asked for, or five minutes of play since the last.
+        crate::runs::when::frame(st);
         ScreenCmd::Stay
     }
 
@@ -4653,11 +4651,12 @@ mod tests {
         assert!(buffer_text(t.backend().buffer()).contains("move"));
         s.update(&mut st, &[key(KeyCode::Esc)]);
         assert!(!s.help);
-        // Saving pushes the save screen over the live map; the map keeps its state.
+        // Saving saves the run where it stands, no screen over the map; the map keeps
+        // its state.
         s.place = Place::Stratum(StratumKind::Undercity);
         assert!(matches!(
             s.update(&mut st, &[key(KeyCode::Char('s'))]),
-            ScreenCmd::Push { .. }
+            ScreenCmd::Stay
         ));
         assert_eq!(
             (s.mode, s.place),
@@ -4980,7 +4979,7 @@ mod tests {
         );
         s.update(&mut st, &[key(KeyCode::Char('?'))]);
         t.draw(|f| s.draw(&st, f)).unwrap();
-        assert!(buffer_text(t.backend().buffer()).contains("save city"));
+        assert!(buffer_text(t.backend().buffer()).contains("save game"));
         s.update(&mut st, &[key(KeyCode::Char('?'))]);
     }
 

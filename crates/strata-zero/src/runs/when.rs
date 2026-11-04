@@ -1,0 +1,399 @@
+//! When the run saves (design §3): as it starts, when you wake, when a story step ends,
+//! from the pause menu, as the window closes and every five minutes of play, each time
+//! only if the run can be saved right then; otherwise the last save stands.
+
+use super::{RunId, RunMeta, file};
+use crate::app::{AppState, FPS};
+use std::time::SystemTime;
+
+/// Frames between the saves five minutes of play make.
+pub const EVERY: u64 = 5 * 60 * FPS;
+/// Frames the SAVED mark stays up after a save.
+pub const MARK: u64 = 3 * FPS;
+
+/// Whether the run can be saved right now: there is a folder to save in and a run in a
+/// city that isn't the lot, and you stand in it, alive, awake, with no scene in flight.
+/// A call or a feed waiting is part of the run and doesn't stop it, nor does a screen
+/// over the map.
+pub fn can_save(st: &AppState) -> bool {
+    st.saves.is_some()
+        && st.run.is_some()
+        && st.city.is_some()
+        && crate::save::refusal(st).is_none()
+        && st.player.is_some()
+        && st.net.death.is_none()
+        && st.rest.is_none()
+        && st.missions.scene.is_none()
+}
+
+/// Saves the run, if it can be saved right now: true when it was, and the SAVED mark
+/// goes up. A write that fails says why in the log and leaves the last save as it was;
+/// the save it was is not asked for again, and the five-minute one waits five minutes.
+pub fn save_now(st: &mut AppState) -> bool {
+    if !can_save(st) {
+        return false;
+    }
+    let Some(dir) = st.saves.clone() else {
+        return false;
+    };
+    st.save_due = false;
+    match file::write(&dir, st) {
+        Ok(_) => {
+            st.last_save = Some((st.tick, SystemTime::now()));
+            st.save_failed = None;
+            true
+        }
+        Err(e) => {
+            st.save_failed = Some(st.tick);
+            st.warn(format!("couldn't save · {e}"));
+            false
+        }
+    }
+}
+
+/// The map's frame: the save the run asked for, or the one five minutes of play make
+/// (counted from the last save, or the last that failed, or else the run's start), once
+/// the run can take it.
+pub fn frame(st: &mut AppState) {
+    let since = st
+        .last_save
+        .map(|(t, _)| t)
+        .max(st.save_failed)
+        .or(st.run.map(|r| r.started));
+    let due = st.save_due || since.is_some_and(|t| st.tick.saturating_sub(t) >= EVERY);
+    if due {
+        save_now(st);
+    }
+}
+
+/// Starts a run in the city just entered and saves it, you standing in it: JACK IN, and
+/// the dev start into a fresh city. The lot has no run.
+pub fn begin_run(st: &mut AppState) {
+    if st.city.is_none() || crate::save::refusal(st).is_some() {
+        return;
+    }
+    st.run = Some(RunMeta {
+        id: RunId::fresh(st.tick),
+        started: st.tick,
+        born: st.net.now(st),
+    });
+    save_now(st);
+}
+
+/// Whether the SAVED mark is up: a save in the last three seconds.
+pub fn marked(st: &AppState) -> bool {
+    st.last_save
+        .and_then(|(t, _)| st.tick.checked_sub(t))
+        .is_some_and(|since| since < MARK)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::{Screen, ScreenCmd};
+    use crate::runs::testutil::{Dir, saving, small_city, story_city};
+    use crate::screens::testutil::{buffer_text, key};
+    use crossterm::event::KeyCode;
+    use ratatui::style::{Color, Modifier};
+    use std::path::{Path, PathBuf};
+
+    /// The one run in `dir`.
+    fn the_file(dir: &Dir) -> PathBuf {
+        let runs = crate::runs::list(&dir.0);
+        assert_eq!(runs.len(), 1, "one run in {}", dir.0.display());
+        runs[0].path.clone()
+    }
+
+    /// When the file at `path` says it was saved, in Unix seconds.
+    fn stamp(path: &Path) -> u64 {
+        file::header(path).unwrap().saved
+    }
+
+    /// The file's stamp put back to the first second of 1970, so a save after shows
+    /// within the same second.
+    fn stamp_old(path: &Path) {
+        let mut h = file::header(path).unwrap();
+        h.saved = 1;
+        file::rewrite_header(path, &h).unwrap();
+    }
+
+    /// Frames of one tick on the map with no keys.
+    fn frames(st: &mut AppState, map: &mut dyn Screen, n: u64) {
+        for _ in 0..n {
+            st.tick += 1;
+            map.update(st, &[]);
+        }
+    }
+
+    /// The warnings that say a save failed.
+    fn failures(st: &AppState) -> usize {
+        st.log
+            .iter()
+            .filter(|e| e.text.starts_with("couldn't save · "))
+            .count()
+    }
+
+    #[test]
+    fn a_new_run_saves_as_it_starts() {
+        let dir = Dir::new("starts");
+        let mut st = AppState::new();
+        st.saves = Some(dir.0.clone());
+        let t = st
+            .content
+            .template(&game::TemplateId::new("vex"))
+            .unwrap()
+            .clone();
+        let mut build = game::Build::from_template(&st.content, &t);
+        build.handle = "Nyx".into();
+        st.build = Some(build);
+        let mut b = crate::screens::broadcast::Broadcast::new_game(&st, small_city());
+        let space = key(KeyCode::Char(' '));
+        // The first space shows the broadcast whole; the second is JACK IN.
+        b.update(&mut st, &[space]);
+        assert!(st.run.is_none() && crate::runs::list(&dir.0).is_empty());
+        assert!(matches!(
+            b.update(&mut st, &[space]),
+            ScreenCmd::Switch { .. }
+        ));
+        let run = st.run.expect("JACK IN starts a run");
+        assert_eq!(run.started, st.tick);
+        assert_eq!(run.born, st.net.now(&st));
+        let path = the_file(&dir);
+        assert_eq!(path, dir.0.join(format!("{run}.run", run = run.id)));
+        let h = file::header(&path).unwrap();
+        assert_eq!(h.handle, "Nyx", "the build's runner");
+        assert!(st.player.is_some(), "saved standing in the city");
+        assert_eq!(st.last_save.map(|(t, _)| t), Some(st.tick));
+        assert!(!st.save_due, "the story's first step is in that save");
+    }
+
+    #[test]
+    fn a_new_debug_game_starts_a_run_too() {
+        let dir = Dir::new("debug");
+        let mut st = AppState::new();
+        st.unlock_dev();
+        st.saves = Some(dir.0.clone());
+        st.params = small_city().params;
+        let mut t = crate::screens::title::Title::new(&st, 0);
+        t.update(&mut st, &[key(KeyCode::Down)]);
+        assert!(matches!(
+            t.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Switch { .. }
+        ));
+        assert!(!st.city.as_ref().unwrap().is_lot());
+        let run = st.run.expect("a run in the fresh city");
+        assert_eq!(the_file(&dir), dir.0.join(format!("{}.run", run.id)));
+    }
+
+    #[test]
+    fn waking_and_a_story_step_save() {
+        let dir = Dir::new("wake");
+        let (mut st, mut map) = saving(&dir, story_city());
+        assert!(save_now(&mut st));
+        let path = the_file(&dir);
+        // A wait, ended with esc: saved on that frame, not before.
+        stamp_old(&path);
+        let until = crate::rest::now(&st) + 120;
+        crate::rest::start(&mut st, crate::rest::Kind::Wait, until);
+        assert!(st.rest.is_some(), "waiting");
+        frames(&mut st, &mut map, 3);
+        assert_eq!(stamp(&path), 1, "no save while waiting");
+        st.tick += 1;
+        map.update(&mut st, &[key(KeyCode::Esc)]);
+        assert!(st.rest.is_none(), "esc ends the wait");
+        assert_ne!(stamp(&path), 1, "waking saves");
+        assert!(!st.save_due);
+        // A story step: its save waits for a frame the map gets to the end of (the
+        // welcome feed opens first).
+        stamp_old(&path);
+        crate::missions::begin(&mut st);
+        assert!(st.save_due, "the first step asks for a save");
+        frames(&mut st, &mut map, 2);
+        assert_ne!(stamp(&path), 1, "the step is saved");
+        assert!(!st.save_due);
+    }
+
+    #[test]
+    fn five_minutes_of_play_save() {
+        let dir = Dir::new("five");
+        let (mut st, mut map) = saving(&dir, small_city());
+        // Never saved yet: five minutes from the run's start.
+        st.run.as_mut().unwrap().started = st.tick;
+        let start = st.tick;
+        let (mut saves, mut last) = (Vec::new(), None);
+        for _ in 0..18_000 {
+            st.tick += 1;
+            map.update(&mut st, &[]);
+            let at = st.last_save.map(|(t, _)| t);
+            if at != last {
+                saves.extend(at);
+                last = at;
+            }
+        }
+        assert_eq!(
+            saves,
+            [start + 9_000, start + 18_000],
+            "once every five minutes"
+        );
+        assert_eq!(EVERY, 9_000);
+        the_file(&dir);
+    }
+
+    #[test]
+    fn a_scene_in_flight_waits_for_the_save() {
+        let dir = Dir::new("scene");
+        let (mut st, mut map) = saving(&dir, small_city());
+        assert!(save_now(&mut st));
+        let path = the_file(&dir);
+        stamp_old(&path);
+        crate::missions::scene::play(&mut st, "waking");
+        st.save_due = true;
+        frames(&mut st, &mut map, 1);
+        assert!(
+            crate::missions::scene::running(&st).is_some(),
+            "the scene plays"
+        );
+        assert!(!can_save(&st));
+        frames(&mut st, &mut map, 30);
+        assert_eq!(stamp(&path), 1, "no save with a scene in flight");
+        assert!(st.save_due, "the save still waits");
+        crate::missions::scene::skip(&mut st);
+        assert!(crate::missions::scene::running(&st).is_none());
+        frames(&mut st, &mut map, 1);
+        assert_ne!(stamp(&path), 1, "saved once the scene is over");
+        assert!(!st.save_due);
+    }
+
+    #[test]
+    fn a_failed_save_says_so_and_keeps_the_old_one() {
+        let dir = Dir::new("failed");
+        let (mut st, mut map) = saving(&dir, small_city());
+        // The folder to save in is a file.
+        let blocked = dir.0.join("not-a-folder");
+        std::fs::write(&blocked, b"a file").unwrap();
+        st.saves = Some(blocked.clone());
+        assert!(!save_now(&mut st));
+        let last = st.log.latest().unwrap().text.clone();
+        assert!(last.starts_with("couldn't save · "), "{last}");
+        assert_eq!(st.last_save, None);
+        assert_eq!(std::fs::read(&blocked).unwrap(), b"a file");
+        // A save over an older one that fails: the older one stands.
+        st.saves = Some(dir.0.clone());
+        assert!(save_now(&mut st));
+        let path = the_file(&dir);
+        let before = std::fs::read(&path).unwrap();
+        let saved = st.last_save;
+        std::fs::create_dir(path.with_extension("run.tmp")).unwrap();
+        st.tick += 100;
+        assert!(!save_now(&mut st));
+        let last = st.log.latest().unwrap().text.clone();
+        assert!(last.starts_with("couldn't save · "), "{last}");
+        assert_eq!(std::fs::read(&path).unwrap(), before, "the old save stands");
+        assert_eq!(st.last_save, saved);
+        // Asked for again, it is tried once, then not until five minutes on.
+        let failed = failures(&st);
+        st.save_due = true;
+        frames(&mut st, &mut map, 60);
+        assert_eq!(failures(&st), failed + 1, "tried once, not every frame");
+        frames(&mut st, &mut map, EVERY);
+        assert_eq!(failures(&st), failed + 2, "and again five minutes on");
+    }
+
+    #[test]
+    fn the_lot_never_saves() {
+        let dir = Dir::new("lot");
+        let mut st = AppState::new();
+        st.unlock_dev();
+        st.saves = Some(dir.0.clone());
+        // The COMBAT start on the street, then on the Net.
+        for net in [false, true] {
+            let mut t = crate::screens::title::Title::new(&st, 0);
+            t.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Down)]);
+            if net {
+                t.update(&mut st, &[key(KeyCode::Left)]);
+            }
+            let ScreenCmd::Switch { to: mut map, .. } = t.update(&mut st, &[key(KeyCode::Enter)])
+            else {
+                panic!("straight to the lot")
+            };
+            assert!(st.city.as_ref().unwrap().is_lot());
+            assert_eq!(st.run, None, "no run on the lot");
+            st.save_due = true;
+            frames(&mut st, map.as_mut(), 3);
+            st.tick += EVERY;
+            frames(&mut st, map.as_mut(), 1);
+            begin_run(&mut st);
+            assert_eq!(st.run, None, "nor once it is under way");
+            assert!(!can_save(&st) && !save_now(&mut st));
+            map.update(&mut st, &[key(KeyCode::Char('s'))]);
+            assert_eq!(
+                st.log.latest().map(|e| e.text.as_str()),
+                Some("nothing to save on the lot")
+            );
+            assert!(std::fs::read_dir(&dir.0).unwrap().next().is_none());
+        }
+    }
+
+    #[test]
+    fn s_on_the_map_saves_the_run() {
+        let dir = Dir::new("s-key");
+        let (mut st, mut map) = saving(&dir, small_city());
+        assert!(matches!(
+            map.update(&mut st, &[key(KeyCode::Char('s'))]),
+            ScreenCmd::Stay
+        ));
+        the_file(&dir);
+        assert!(marked(&st));
+    }
+
+    #[test]
+    fn nothing_saves_without_a_folder() {
+        let dir = Dir::new("no-folder");
+        let (mut st, mut map) = saving(&dir, small_city());
+        st.saves = None;
+        assert!(!can_save(&st) && !save_now(&mut st));
+        st.save_due = true;
+        frames(&mut st, &mut map, 2);
+        assert!(crate::runs::list(&dir.0).is_empty());
+        assert_eq!(failures(&st), 0, "no warning: nothing was tried");
+    }
+
+    #[test]
+    fn the_mark_shows_for_three_seconds() {
+        let dir = Dir::new("mark");
+        let (mut st, mut map) = saving(&dir, small_city());
+        frames(&mut st, &mut map, 1);
+        let status = |st: &AppState, map: &dyn Screen| {
+            let buf = crate::screens::shots::draw_stack(st, &[map], (120, 40));
+            let text = buffer_text(&buf);
+            let y = text
+                .lines()
+                .position(|l| l.starts_with(" on foot · "))
+                .expect("the status row");
+            (buf, y as u16, text.lines().nth(y).unwrap().to_string())
+        };
+        let (_, _, row) = status(&st, &map);
+        assert!(!row.contains("SAVED"), "{row:?}");
+        assert!(save_now(&mut st));
+        let (buf, y, row) = status(&st, &map);
+        let place = row.find(" :: SAVED").unwrap_or_else(|| panic!("{row:?}"));
+        assert!(
+            row[..place].trim_start().starts_with("on foot · "),
+            "right after the place: {row:?}"
+        );
+        let x = row[..place].chars().count() as u16;
+        assert_eq!(
+            buf[(x + 1, y)].fg,
+            Color::Rgb(100, 110, 125),
+            "the :: faint"
+        );
+        let s = &buf[(x + 4, y)];
+        assert_eq!((s.symbol(), s.fg), ("S", Color::Rgb(0, 204, 184)));
+        assert!(s.modifier.contains(Modifier::BOLD));
+        st.tick += 89;
+        assert!(status(&st, &map).2.contains(":: SAVED"), "up for 89 frames");
+        st.tick += 1;
+        let (_, _, row) = status(&st, &map);
+        assert!(!row.contains("SAVED"), "gone at 90: {row:?}");
+    }
+}

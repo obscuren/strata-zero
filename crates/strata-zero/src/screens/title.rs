@@ -104,10 +104,15 @@ impl Title {
         st.params.clone().with_seed(seed)
     }
 
-    /// NEW GAME (DEBUG): D'SHAWN, maxed out, straight into a fresh city.
+    /// NEW GAME (DEBUG): D'SHAWN, maxed out, straight into a fresh city, a run of his
+    /// own. (The COMBAT starts are on the lot, which has none.)
     fn debug_game(&self, st: &mut AppState) -> ScreenCmd {
         st.character = game::Character::debug_runner(&st.content);
-        crate::screens::start_city(st, Title::fresh_params(st, st.tick))
+        let cmd = crate::screens::start_city(st, Title::fresh_params(st, st.tick));
+        if matches!(cmd, ScreenCmd::Switch { .. }) {
+            crate::runs::when::begin_run(st);
+        }
+        cmd
     }
 
     /// COMBAT on the Net: D'SHAWN into a fresh city, and as it opens, jacked into a

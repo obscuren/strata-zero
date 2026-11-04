@@ -19,7 +19,9 @@ use std::time::{Duration, Instant};
 
 pub const MIN_W: u16 = 100;
 pub const MIN_H: u16 = 30;
-pub const FRAME: Duration = Duration::from_micros(33_333);
+/// Frames a second: the loop runs one every `FRAME`, and `tick` counts them.
+pub const FPS: u64 = 30;
+pub const FRAME: Duration = Duration::from_micros(1_000_000 / FPS);
 
 /// The screen effects a window draws over the game: none, a soft glow and vignette, or
 /// a CRT's glow, scanlines and curve.
@@ -195,13 +197,13 @@ pub struct AppState {
     /// has none until JACK IN gives it one.
     pub run: Option<crate::runs::RunMeta>,
     /// The run asked to be saved on the next frame that can take a save.
-    // Read by the save points, which come next.
-    #[allow(dead_code)]
     pub save_due: bool,
     /// This session's last save of the run: the frame tick, and the wall clock then.
-    // Read by the save points and the pause menu, which come next.
-    #[allow(dead_code)]
     pub last_save: Option<(u64, std::time::SystemTime)>,
+    /// The frame tick of a save that failed since the last that didn't: the
+    /// five-minute save counts from it too, so a folder that can't be written isn't
+    /// tried again every frame.
+    pub save_failed: Option<u64>,
 }
 
 /// One ability effect playing on the map.
@@ -362,6 +364,7 @@ impl AppState {
             run: None,
             save_due: false,
             last_save: None,
+            save_failed: None,
         }
     }
 
@@ -495,11 +498,12 @@ impl AppState {
 
     /// The deck's remembered tabs and rows and the MAP's view, as a new city has them:
     /// they point into the run that was in place. So do the requests waiting on the
-    /// map's next frame and a save that run asked for.
+    /// map's next frame and a save that run asked for or failed.
     pub fn clear_screens(&mut self) {
         self.look_at = None;
         self.jump_to = None;
         self.save_due = false;
+        self.save_failed = None;
         self.atlas = Default::default();
         self.deck_tab = Tab::Skills;
         self.deck_rows = [0; Tab::ALL.len()];

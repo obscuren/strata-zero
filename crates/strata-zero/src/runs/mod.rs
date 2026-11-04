@@ -1,10 +1,11 @@
 //! Saving the run: the whole game state, written and read back.
 //!
 //! One file per run in `runs/` (`file`): a small header the lists read (`RunHeader`,
-//! made by `describe`) and the run itself (`snapshot`).
+//! made by `describe`) and the run itself (`snapshot`), written when the run can take
+//! it (`when`).
 
-// Nothing outside the tests saves or opens a run until the save points and the
-// screens that list runs are wired in; remove this then.
+// The game saves runs, but nothing outside the tests opens or lists one until LOAD
+// GAME, CONTINUE and the HALL OF FAME are wired in; remove this then.
 #![allow(dead_code)]
 
 pub mod describe;
@@ -13,6 +14,7 @@ pub mod ids;
 pub mod snapshot;
 #[cfg(test)]
 pub(crate) mod testutil;
+pub mod when;
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

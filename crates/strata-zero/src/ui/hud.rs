@@ -345,6 +345,8 @@ pub struct Slot {
 pub struct Footer<'a> {
     /// `Night Market` on foot, `Hextek Holdings · Crown Circle` jacked in.
     pub place: String,
+    /// The run was just saved: ` :: SAVED` after the place.
+    pub saved: bool,
     pub jacked: bool,
     pub camera: bool,
     pub overburdened: bool,
@@ -396,6 +398,9 @@ pub enum ActState {
     Refused,
 }
 
+/// The SAVED mark: its ` :: ` and the word.
+const SAVED_FAINT: Color = Color::Rgb(100, 110, 125);
+const SAVED_PICK: Color = Color::Rgb(0, 204, 184);
 const ACT_KEY: Color = Color::Rgb(90, 90, 90);
 const ACT_THROWN: Color = Color::Rgb(190, 190, 140);
 const POOLS_FLASH_BG: Color = Color::Rgb(0, 90, 110);
@@ -506,6 +511,13 @@ pub fn footer_rows(f: &Footer, width: u16) -> [Line<'static>; 4] {
         row1.push(text(format!(" camera · {}", f.place)));
     } else {
         row1.push(text(format!(" on foot · {}", f.place)));
+    }
+    if f.saved {
+        row1.push(Span::styled(" :: ", Style::default().fg(SAVED_FAINT)));
+        row1.push(Span::styled(
+            "SAVED",
+            Style::default().fg(SAVED_PICK).add_modifier(Modifier::BOLD),
+        ));
     }
     if f.overburdened {
         row1.push(Span::styled(
@@ -1058,6 +1070,7 @@ mod tests {
         let footer = |slots: &[Slot]| {
             let f = Footer {
                 place: "Street".into(),
+                saved: false,
                 jacked: false,
                 camera: false,
                 overburdened: false,
@@ -1128,6 +1141,7 @@ mod tests {
     fn the_footer_is_four_rows_in_every_state() {
         let on_foot = Footer {
             place: "Night Market".into(),
+            saved: false,
             jacked: false,
             camera: false,
             overburdened: false,
@@ -1174,6 +1188,7 @@ mod tests {
         }
         let calm = Footer {
             place: "Hextek Holdings · Crown Circle".into(),
+            saved: false,
             jacked: true,
             camera: false,
             overburdened: false,
@@ -1356,6 +1371,7 @@ mod tests {
     fn the_footer_reads_the_act_row_with_the_action_points_first() {
         let f = Footer {
             place: "the lot".into(),
+            saved: false,
             jacked: false,
             camera: false,
             overburdened: false,
@@ -1405,6 +1421,7 @@ mod tests {
             .collect();
         let f = Footer {
             place: "the lot · construct".into(),
+            saved: false,
             jacked: true,
             camera: false,
             overburdened: false,

@@ -158,7 +158,8 @@ impl Broadcast {
         (n as f32 / self.chars as f32).min(1.0)
     }
 
-    /// Makes the runner on a new game, sets the run's flags and drops into the city.
+    /// Makes the runner on a new game, sets the run's flags and drops into the city; a
+    /// new game's run starts there, and is saved, once you stand in it.
     fn jack_in(&mut self, st: &mut AppState) -> ScreenCmd {
         let Some(city) = self.city.take() else {
             return ScreenCmd::Stay;
@@ -175,7 +176,11 @@ impl Broadcast {
         }
         st.perma_death = self.perma_death;
         st.tutorial_off = self.tutorial_off;
-        crate::screens::enter_built_city(st, city)
+        let cmd = crate::screens::enter_built_city(st, city);
+        if matches!(self.entry, Entry::NewGame) {
+            crate::runs::when::begin_run(st);
+        }
+        cmd
     }
 
     /// The broadcast's lines for a column `width` wide: the tag line and the clock, a

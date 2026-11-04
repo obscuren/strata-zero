@@ -144,8 +144,9 @@ pub fn snapshot(st: &AppState) -> SnapshotRef<'_> {
         atlas: _, // UI: the deck's MAP view
         saves: _, // setting: where this session saves
         run,
-        save_due: _,  // the session's: a save asked for
-        last_save: _, // the session's: when it last saved
+        save_due: _,    // the session's: a save asked for
+        last_save: _,   // the session's: when it last saved
+        save_failed: _, // the session's: when a save last failed
     } = st;
     SnapshotRef {
         params,
@@ -250,8 +251,9 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
         atlas: _, // UI: `clear_screens` below
         saves: _, // setting
         run,
-        save_due: _,  // the session's: `clear_screens` below
-        last_save: _, // the session's: the opener sets it
+        save_due: _,    // the session's: `clear_screens` below
+        last_save: _,   // the session's: the opener sets it
+        save_failed: _, // the session's: `clear_screens` below
     } = st;
     // Every field named, so one added to `Snapshot` and never put back doesn't compile.
     let Snapshot {
