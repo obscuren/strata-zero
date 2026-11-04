@@ -28,6 +28,7 @@ BG = "#04060a"
 class World:
     def __init__(self, path):
         self.t, self.cities, self.routes, self.rivers, self.pois, self.regions = {}, [], [], [], [], []
+        self.washes = []
         for line in open(path):
             a = line.rstrip("\n").split(" ")
             if a[0] == "world":
@@ -35,7 +36,8 @@ class World:
             elif a[0] == "t":
                 self.t[(int(a[1]), int(a[2]))] = dict(
                     water=a[3], ground=a[4], elev=int(a[5]) / 255, road=int(a[6]),
-                    river=int(a[7]), city=int(a[8]), density=int(a[9]) / 255, theme=a[10])
+                    river=int(a[7]), city=int(a[8]), density=int(a[9]) / 255, theme=a[10],
+                    wash=int(a[11]) if len(a) > 11 else 0)
             elif a[0] == "c":
                 self.cities.append(dict(x=int(a[1]), y=int(a[2]), size=float(a[3]),
                                         home=a[4] == "true", name=" ".join(a[5:])))
@@ -44,6 +46,8 @@ class World:
             elif a[0] == "r":
                 name, path = line[2:].rstrip("\n").split("|")
                 self.routes.append((name, [tuple(map(int, q.split(","))) for q in path.split()]))
+            elif a[0] == "w":
+                self.washes.append([tuple(map(int, q.split(","))) for q in a[1:]])
             elif a[0] == "v":
                 self.rivers.append([tuple(map(int, q.split(","))) for q in a[1:]])
             elif a[0] == "g":
@@ -138,7 +142,7 @@ def centreline(w, tx, ty, mask, salt, road=False):
 def build(w, X0, Y0):
     """The ground of the view at detail (X0, Y0): a Ground of terrains and features."""
     g = ow2.Ground(VW, VH, salt=w.seed)
-    road, river, lane = set(), set(), set()
+    road, river, lane, wash = set(), set(), set(), set()
     txs = range((X0 // K) - 1, (X0 + VW) // K + 2)
     tys = range((Y0 // K) - 1, (Y0 + VH) // K + 2)
     for ty in tys:
@@ -152,6 +156,13 @@ def build(w, X0, Y0):
                     for dy in range(-(wd // 2), wd - wd // 2):
                         for dx in range(-(wd // 2), wd - wd // 2):
                             river.add((x + dx, y + dy))
+            if t["wash"]:
+                lower = any((tx, ty) in c[len(c) // 2:] for c in w.washes)
+                wd = 4 if lower else 3
+                for (x, y) in centreline(w, tx, ty, t["wash"], 9):
+                    for dy in range(-(wd // 2), wd - wd // 2):
+                        for dx in range(-(wd // 2), wd - wd // 2):
+                            wash.add((x + dx, y + dy))
             if t["road"]:
                 for (x, y) in centreline(w, tx, ty, t["road"], 3, road=True):
                     lane.add((x, y))
@@ -181,6 +192,10 @@ def build(w, X0, Y0):
                 terr = "lake"
             if (x, y) in river and terr not in ("sea",):
                 terr = "river"
+            elif (x, y) in wash and terr not in ("sea", "lake"):
+                terr = "wash"
+            elif terr in ("dirt", "crop") and any((x + dx, y + dy) in wash for dx in (-1, 0, 1) for dy in (-1, 0, 1)):
+                terr = "scrub"
             g.set(vx, vy, terr)
     # cities: the world's density, smoothed across tiles. No building is cut by water:
     # a block the shore reaches gets a building fitted to its dry part (or none), and the
@@ -282,6 +297,9 @@ def build(w, X0, Y0):
             if g.inb(vx, vy) and (x + dx, y + dy) not in road:
                 if g.t[vy][vx] in ("river", "lake", "sea"):
                     g.set(vx, vy, "rail")
+                elif g.t[vy][vx] == "wash":
+                    g.set(vx, vy, "gravel")
+                    g.feat(vx, vy, "grate")  # the culvert's end
                 elif g.t[vy][vx] in ("dirt", "scrub", "crop", "salt", "rock", "track"):
                     g.set(vx, vy, "gravel")
     # traffic now and then
@@ -393,6 +411,8 @@ def frame(w, X0, Y0, title, sub, here, pois=(), net=False):
             fg = mix("#6aa6d8", "#1e4a78", k)
             ch = "≈~∼"[int(r * 3) % 3] if r < 0.55 - 0.35 * k else " "
             cells[(vx, vy)] = [ch, fg, bg, False]
+        elif t == "wash":
+            cells[(vx, vy)] = ["░" if r < 0.35 else "·" if r < 0.6 else " ", "#60543c", "#16130e", False]
         elif t == "sand":
             cells[(vx, vy)] = ["░" if r < 0.4 else "·" if r < 0.7 else " ", "#8a7a58", "#1c1812", False]
         elif t == "reeds":
@@ -592,6 +612,8 @@ def main():
     lx = sum(p[0] for p in lake) // len(lake)
     ly = sum(p[1] for p in lake) // len(lake)
     sx, sy = K * stop["x"] - 36, K * stop["y"] - 13
+    culvert = next(p for p, t in sorted(w.t.items())
+                   if t["road"] and t["wash"] and not t["road"] & t["wash"] and t["water"] == "None")
     frames = [
         ("%s on its highway" % stop["name"], "The world's own truck stop beside the highway the generator "
          "ran past it. The highway crosses every tile edge at its middle, so it runs dead straight "
@@ -606,6 +628,9 @@ def main():
          "with reeds on the banks, shallows at the edges and depth down the middle; the highway spans it.",
          frame(w, K * bridge[0] - 36, K * bridge[1] - 12, "the Bottoms · bridge", "dim · seen",
                "bridge over the river")),
+        ("A highway over a dry wash", "The wash runs down from the hills; the highway doesn't bridge it, it rides "
+         "straight over on a culvert, the grates on both shoulders its ends (round 2's Kilo-9 had one).",
+         frame(w, K * culvert[0] - 36, K * culvert[1] - 12, "Dust Flats · highway", "dim · seen", "culvert under the highway")),
         ("A lake's shore", "Shores curved at three scales, a band of reeds and mud, shallows, then deep water.",
          frame(w, K * lx - 40, K * ly - 14, "lakeshore", "dim · seen", "the lake")),
         ("Where %s ends" % home["name"], "The city's density, smoothed across tile lines, decides towers, "

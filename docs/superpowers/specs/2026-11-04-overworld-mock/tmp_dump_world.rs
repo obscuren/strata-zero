@@ -9,7 +9,7 @@ fn main() {
     writeln!(o, "world {} {} {}", w.seed, w.size.w, w.size.h).unwrap();
     for (p, t) in w.tiles.iter() {
         let (c, d, th) = t.urban.map_or((-1i32, 0u8, String::from("-")), |u| (u.city as i32, u.density, format!("{:?}", u.theme)));
-        writeln!(o, "t {} {} {:?} {:?} {} {} {} {} {} {}", p.x, p.y, t.water, t.ground, t.elevation, t.road, t.river, c, d, th).unwrap();
+        writeln!(o, "t {} {} {:?} {:?} {} {} {} {} {} {} {}", p.x, p.y, t.water, t.ground, t.elevation, t.road, t.river, c, d, th, t.wash).unwrap();
     }
     for c in &w.cities {
         writeln!(o, "c {} {} {} {} {}", c.centre.x, c.centre.y, c.size, c.home, c.name).unwrap();
@@ -21,6 +21,10 @@ fn main() {
     for r in &w.rivers {
         let path: Vec<String> = r.iter().map(|p| format!("{},{}", p.x, p.y)).collect();
         writeln!(o, "v {}", path.join(" ")).unwrap();
+    }
+    for r in &w.washes {
+        let path: Vec<String> = r.iter().map(|p| format!("{},{}", p.x, p.y)).collect();
+        writeln!(o, "w {}", path.join(" ")).unwrap();
     }
     for p in &w.pois {
         writeln!(o, "p {} {} {:?} {}", p.at.x, p.at.y, p.kind, p.name).unwrap();
