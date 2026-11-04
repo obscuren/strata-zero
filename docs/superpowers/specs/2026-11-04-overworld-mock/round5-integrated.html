@@ -1,0 +1,81 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overworld integrated</title>
+<style>
+  :root { --bg:#0d1117; --ink:#c9d1d9; --dim:#8b949e; --rule:#21262d; --cyan:#00e5ff; }
+  body { background:var(--bg); color:var(--ink); font-family:-apple-system,system-ui,sans-serif;
+         margin:24px 32px 64px; line-height:1.5; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  h2 { font-size:17px; margin:36px 0 6px; }
+  p, li { max-width:1080px; font-size:14px; }
+  .note { color:var(--dim); font-size:13px; }
+  code, kbd { font-family:ui-monospace,Menlo,monospace; font-size:13px; background:#161b22;
+              padding:1px 5px; border-radius:4px; }
+  img { display:block; width:100%; max-width:1080px; margin:10px 0 4px; border:1px solid var(--rule);
+        border-radius:4px; }
+  .pair { display:grid; grid-template-columns:1fr 1fr; gap:16px; max-width:1080px; }
+  .pair img { margin:6px 0; }
+  table { border-collapse:collapse; font-size:14px; margin:8px 0; }
+  td { padding:3px 14px 3px 0; vertical-align:top; }
+  td:first-child { color:var(--cyan); white-space:nowrap; font-family:ui-monospace,Menlo,monospace; }
+  @media (max-width: 760px) { body { margin:16px; } .pair { grid-template-columns:1fr; } }
+</style>
+
+<h1>The overworld, integrated</h1>
+<p class="note">Real screens from the game, drawn by the shot harness and painted the way the window
+paints them (seed 8, the large city). Nothing here is a mock: it is the play screen running
+<code>OutsideScreen</code> over the world the generator made.</p>
+
+<h2>Up from the city: on its block on the overworld</h2>
+<p>Press <kbd>W</kbd> on the open street and you're on the overworld, on the tile of the city you
+were standing in. The atlas look, one cell a tile, in the play screen's own bands, panel and footer.
+The panel has HERE (where you are, the road if one runs there, the ground and the hour), the whole
+world, NEAR (the nearest cities and places, how far and which way) and the log.</p>
+<img src="shots-22/outside_overworld.png" alt="The overworld beside Newmouth at 120 by 40">
+<p class="note">The same at the smallest terminal, 100×30:</p>
+<img src="shots-22/outside_overworld_small.png" alt="The overworld at 100 by 30" style="max-width:900px">
+
+<h2>Down onto the open ground</h2>
+<p><kbd>enter</kbd> on any tile puts you on its ground one level down, on its road if it has one.
+You walk cell by cell, and walking off a tile's edge takes you onto the next one. The time is the
+city's: a step costs what it does in the street, and a tile on the overworld costs eight of them,
+more in the hills and mountains. By day you see across the open ground. What you've seen stays
+dim behind you.</p>
+<div class="pair">
+  <figure style="margin:0"><img src="shots-22/outside_ground_highway.png" alt="A junction on Route 1 by day">
+    <figcaption class="note">Route 1 by day: two lanes with gravel shoulders and litter, a road
+    coming in from the north.</figcaption></figure>
+  <figure style="margin:0"><img src="shots-22/outside_ground_bridge.png" alt="A bridge over the river">
+    <figcaption class="note">The highway bridging the river: ragged banks, shallows, fields, the
+    rocks of Rust Ridge to the west.</figcaption></figure>
+</div>
+<img src="shots-22/outside_ground_night.png" alt="The same road at night" style="max-width:700px">
+<p class="note">The same road at 22:00: there are no lamps out here, just the moon.</p>
+
+<h2>Keys out there</h2>
+<table>
+  <tr><td>hjkl yubn ↑↓←→</td><td>walk: a tile on the overworld, a cell on the ground</td></tr>
+  <tr><td>enter</td><td>down onto the tile you're on (on a tile of the city: back into the city there)</td></tr>
+  <tr><td>W</td><td>up: from the open ground to the overworld; from the city's open street to the world</td></tr>
+  <tr><td>esc · s · ?</td><td>pause menu · save · the keys</td></tr>
+</table>
+<p>Stepping onto the city from outside takes you straight into it. Walking off the city's street at
+its edge takes you onto the ground beside it. Indoors, jacked in or in a fight, <kbd>W</kbd> says why
+not. A run saved out there opens out there again; an old save gets its world the first time you
+press <kbd>W</kbd>.</p>
+
+<h2>Running it</h2>
+<p><code>cargo run --release -p strata-zero --features window --target-dir target/smoke -- --window</code>
+(it builds into <code>target/smoke</code>, so your <code>target/release/strata</code> is left alone).
+NEW GAME builds the large city now; on any open street press <kbd>W</kbd>.</p>
+
+<h2>Not there yet (the slices after your OK)</h2>
+<ul>
+  <li>Until cities grow into the world (#19), the home city is today's generator on a rectangle of
+  tiles its size, so its bay and edges are its own, not the world's. Walking in from the ground can
+  land you some way in.</li>
+  <li>POIs one level down (#17): the truck stops, masts and camps are plain ground for now.</li>
+  <li>The Net out here (#18), jacked in on the overworld (#23), the deck MAP's world zoom (#24),
+  kept and changed tiles in the save (#25), every other city (#21).</li>
+</ul>

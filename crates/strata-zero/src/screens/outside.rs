@@ -23,6 +23,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 use std::collections::BTreeSet;
 
+/// The least light on the open ground, at night.
+const MOONLIGHT: u8 = 110;
+
 /// You, drawn over whatever you stand on.
 const YOU: Rgb = Rgb(255, 255, 255);
 const LABEL: Color = Color::Rgb(120, 130, 145);
@@ -281,7 +284,8 @@ impl OutsideScreen {
         };
         let minute = st.minute_of_day();
         let origin = Pos::new(c.x - map.width as i32 / 2, c.y - map.height as i32 / 2);
-        let light = citygen::lighting::ambient(StratumKind::Street, minute);
+        // no lamps out here: by night the moon, never as dark as an unlit street
+        let light = citygen::lighting::ambient(StratumKind::Street, minute).max(MOONLIGHT);
         for sy in 0..map.height {
             for sx in 0..map.width {
                 let p = origin.offset(sx as i32, sy as i32);
@@ -469,17 +473,29 @@ fn here_lines(st: &AppState, o: &Outside) -> Vec<Line<'static>> {
 }
 
 /// NEAR: the nearest cities and places out here, with how far and which way.
-fn near_lines(o: &Outside, n: usize) -> Vec<Line<'static>> {
+fn near_lines(st: &AppState, o: &Outside, n: usize) -> Vec<Line<'static>> {
     let w = o.world();
     let t = tile_of(o);
+    // the city whose tiles you stand on is here, whatever its middle's distance
+    let in_city = |i: usize| {
+        w.tile(t)
+            .and_then(|x| x.urban)
+            .is_some_and(|u| u.city as usize == i)
+            || w.cities[i].home && st.city.as_ref().is_some_and(|c| o.block(c).contains(t))
+    };
     let mut places: Vec<(i32, String, Pos)> = w
         .cities
         .iter()
-        .map(|c| (c.name.clone(), c.centre))
-        .chain(w.pois.iter().map(|p| (p.name.clone(), p.at)))
-        .map(|(name, at)| {
+        .enumerate()
+        .map(|(i, c)| (c.name.clone(), c.centre, in_city(i)))
+        .chain(w.pois.iter().map(|p| (p.name.clone(), p.at, p.at == t)))
+        .map(|(name, at, here)| {
             let (dx, dy) = (at.x - t.x, at.y - t.y);
-            let d = ((dx * dx + dy * dy) as f32).sqrt().round() as i32;
+            let d = if here {
+                0
+            } else {
+                ((dx * dx + dy * dy) as f32).sqrt().round().max(1.0) as i32
+            };
             (d, name, at)
         })
         .collect();
@@ -567,7 +583,7 @@ fn draw_panel(st: &AppState, o: &Outside, side: Rect, buf: &mut Buffer) {
     }
     put(buf, vec![rule.clone()], &mut y, 1);
     let mut near = vec![title("NEAR")];
-    near.extend(near_lines(o, 4));
+    near.extend(near_lines(st, o, 4));
     put(buf, near, &mut y, 5);
     if y + 2 < bottom {
         put(buf, vec![rule], &mut y, 1);
@@ -580,13 +596,26 @@ fn world_pane(st: &AppState, o: &Outside, pane: Rect, buf: &mut Buffer) {
     let w = o.world();
     let (ww, wh) = (w.size.w as i32, w.size.h as i32);
     let (pw, ph) = (pane.width as i32, pane.height as i32 * 2);
-    let sample = |px: i32, py: i32| Pos::new(px * ww / pw.max(1), py * wh / ph.max(1));
+    // each half-block pixel the mean of the tiles it covers, so the map reads in areas
+    let span = |i: i32, len: i32, n: i32| {
+        let a = i * len / n.max(1);
+        (a, ((i + 1) * len / n.max(1)).max(a + 1))
+    };
+    let pixel = |px: i32, py: i32| {
+        let ((x0, x1), (y0, y1)) = (span(px, ww, pw), span(py, wh, ph));
+        let (mut r, mut g, mut b, mut n) = (0u32, 0u32, 0u32, 0u32);
+        for ty in y0..y1 {
+            for tx in x0..x1 {
+                let c = ink(st, w, Pos::new(tx, ty));
+                (r, g, b, n) = (r + c.0 as u32, g + c.1 as u32, b + c.2 as u32, n + 1);
+            }
+        }
+        let n = n.max(1);
+        Rgb((r / n) as u8, (g / n) as u8, (b / n) as u8)
+    };
     for y in 0..pane.height as i32 {
         for x in 0..pw {
-            let (top, low) = (
-                ink(st, w, sample(x, 2 * y)),
-                ink(st, w, sample(x, 2 * y + 1)),
-            );
+            let (top, low) = (pixel(x, 2 * y), pixel(x, 2 * y + 1));
             buf[(pane.x + x as u16, pane.y + y as u16)]
                 .set_char('▀')
                 .set_style(Style::default().fg(top.to_color()).bg(low.to_color()));
@@ -856,6 +885,24 @@ mod tests {
         t.draw(|f| crate::screens::help::draw(f, crate::screens::explore::Mode::Walk, false))
             .unwrap();
         assert!(buffer_text(t.backend().buffer()).contains("up to the overworld"));
+    }
+
+    #[test]
+    fn the_city_you_stand_in_is_here() {
+        let mut st = on_the_world();
+        let _ = OutsideScreen::new(&mut st);
+        let o = st.outside.as_ref().unwrap();
+        let home = o.world().home().name.clone();
+        let lines: Vec<String> = near_lines(&st, o, 4)
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
+            .collect();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains(&home) && l.contains("here")),
+            "{lines:?}"
+        );
     }
 
     #[test]

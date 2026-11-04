@@ -150,6 +150,10 @@ pub fn glyph_for(
         };
     }
     let horizontal = mask & (MASK_E | MASK_W) != 0;
+    // A deck or a rail runs the way it goes on: east-west where it goes on both ways, or
+    // one way with nothing north or south (a deck two wide has its twin beside it).
+    let runs_across =
+        mask & (MASK_E | MASK_W) == MASK_E | MASK_W || horizontal && mask & (MASK_N | MASK_S) == 0;
     match terrain {
         Terrain::Void => ' ',
         Terrain::Water => pick(&g.water, tick / 6 + variant as u64),
@@ -190,7 +194,7 @@ pub fn glyph_for(
             }
         }
         Terrain::Bridge => {
-            if horizontal {
+            if runs_across {
                 '╍'
             } else {
                 '╏'
@@ -254,7 +258,7 @@ pub fn glyph_for(
         Terrain::NetGate => '▯',
         Terrain::Atrium => ' ',
         Terrain::Railing => {
-            if horizontal {
+            if runs_across {
                 '─'
             } else {
                 '│'
@@ -617,6 +621,21 @@ mod tests {
                 assert_eq!(c.width(), Some(1), "{label}");
             }
         }
+    }
+
+    #[test]
+    fn a_wide_bridge_runs_the_way_it_goes() {
+        let s = StylePack::load().unwrap();
+        let g = |t, mask| glyph_for(t, None, None, None, 1, 0, mask, &s);
+        // a deck two wide running north-south: each cell has its twin beside it
+        assert_eq!(g(Terrain::Bridge, MASK_N | MASK_S | MASK_E), '╏');
+        assert_eq!(g(Terrain::Bridge, MASK_N | MASK_S | MASK_W), '╏');
+        // and east-west, its twin above or below
+        assert_eq!(g(Terrain::Bridge, MASK_E | MASK_W | MASK_S), '╍');
+        assert_eq!(g(Terrain::Bridge, MASK_E | MASK_W), '╍');
+        assert_eq!(g(Terrain::Bridge, MASK_E), '╍');
+        assert_eq!(g(Terrain::Railing, MASK_N | MASK_S), '│');
+        assert_eq!(g(Terrain::Railing, MASK_W | MASK_E), '─');
     }
 
     #[test]

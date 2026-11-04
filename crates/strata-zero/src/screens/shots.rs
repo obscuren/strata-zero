@@ -3849,3 +3849,77 @@ fn save_pause_shots() {
         false,
     );
 }
+
+/// The world beyond the city (#22): the overworld after going up from the large seed-8
+/// city, and down on the open ground on a highway, beside a bridge, by day and night.
+#[test]
+#[ignore]
+fn outside_shots() {
+    use crate::outside::At;
+    use crate::screens::outside::OutsideScreen;
+    use citygen::overworld::Water;
+    let city = Generator::run(GenParams {
+        seed: 8,
+        size: SizePreset::Large,
+        districts: 7,
+        ..Default::default()
+    })
+    .unwrap();
+    let at = |minute: u16| {
+        let mut st = AppState::new();
+        st.enter_city_at(city.clone(), minute);
+        st.character = game::Character::debug_runner(&st.content);
+        st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
+        crate::outside::ensure(&mut st);
+        st
+    };
+    // Up from the city: on its block on the overworld.
+    let mut st = at(13 * 60);
+    let s = OutsideScreen::new(&mut st);
+    shot_stack("outside_overworld", &st, &[&s], (120, 40));
+    shot_stack("outside_overworld_small", &st, &[&s], (100, 30));
+    // Down on the open ground: a highway, then a bridge, outside the city's block.
+    let pick = |st: &AppState, f: &dyn Fn(&citygen::overworld::WorldTile) -> bool| {
+        let o = st.outside.as_ref().unwrap();
+        let b = o.block(st.city.as_ref().unwrap());
+        o.world()
+            .tiles
+            .iter()
+            .find(|(p, t)| !b.contains(*p) && f(t))
+            .map(|(p, _)| p)
+            .unwrap()
+    };
+    use citygen::overworld::{LINK_E, LINK_W};
+    for (name, minute, f) in [
+        (
+            "outside_ground_highway",
+            13 * 60,
+            &(|t: &citygen::overworld::WorldTile| {
+                t.road == LINK_E | LINK_W && t.water == Water::None
+            }) as &dyn Fn(&citygen::overworld::WorldTile) -> bool,
+        ),
+        (
+            "outside_ground_bridge",
+            13 * 60,
+            &|t: &citygen::overworld::WorldTile| t.road != 0 && t.water == Water::River,
+        ),
+        (
+            "outside_ground_night",
+            22 * 60,
+            &|t: &citygen::overworld::WorldTile| {
+                t.road == LINK_E | LINK_W && t.water == Water::None
+            },
+        ),
+    ] {
+        let mut st = at(minute);
+        let t = pick(&st, f);
+        st.outside.as_mut().unwrap().at = At::Overworld(t);
+        let mut s = OutsideScreen::new(&mut st);
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        // a few steps along, so the memory shows behind you
+        for _ in 0..6 {
+            s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        }
+        shot_stack(name, &st, &[&s], (120, 40));
+    }
+}

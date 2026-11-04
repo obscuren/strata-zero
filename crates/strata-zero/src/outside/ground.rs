@@ -83,13 +83,15 @@ pub fn ground_step(st: &mut AppState, view: &mut GroundView, d: Dir) -> Moved {
     Moved::Stepped
 }
 
-/// What you see from `at` at `minute`: as far as the street by day, less at night.
+/// How far you see out in the open by day, with nothing built to stand in the way.
+pub const RADIUS_OPEN: i32 = 40;
+
+/// What you see from `at` at `minute`: far across open ground by day, a little way at
+/// night with no lamps out here, between the two at dusk and dawn.
 pub fn sight(view: &GroundView, at: Pos, minute: u16) -> BTreeSet<Pos> {
-    let radius = if citygen::lighting::daylight(minute) > 0.25 {
-        crate::walker::RADIUS_STREET
-    } else {
-        crate::walker::RADIUS_UNDER + 2
-    };
+    let night = crate::walker::RADIUS_UNDER + 2;
+    let day = citygen::lighting::daylight(minute);
+    let radius = night + ((RADIUS_OPEN - night) as f32 * day).round() as i32;
     let mut seen = BTreeSet::new();
     crate::walker::fov::compute(
         at,
@@ -250,6 +252,21 @@ mod tests {
             assert!(remembered(outside(&st), *p), "{p:?}");
         }
         assert!(!remembered(outside(&st), here.offset(0, 60)));
+    }
+
+    #[test]
+    fn by_day_the_open_ground_is_seen_far() {
+        let mut st = on_the_world();
+        let t = highway(&st);
+        let here = Pos::new(TILE * t.x + 4, TILE * t.y + 3);
+        let view = stand(&mut st, here);
+        // along the highway's lane, flat and open
+        let far = here.offset(30, 0);
+        assert!(
+            sight(&view, here, 12 * 60).contains(&far),
+            "30 cells down the road by day"
+        );
+        assert!(!sight(&view, here, 0).contains(&far), "not at night");
     }
 
     #[test]

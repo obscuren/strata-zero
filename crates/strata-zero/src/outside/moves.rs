@@ -83,9 +83,7 @@ pub fn down(st: &mut AppState) -> Result<Moved, &'static str> {
     }
     let g = detail::ground(o.world(), t.x, t.y);
     let mid = Pos::new(TILE / 2, TILE / 2);
-    let on = |want: fn(&citygen::Tile) -> bool| {
-        nearest(mid, TILE, |p| g.get(p).is_some_and(|c| want(c)))
-    };
+    let on = |want: fn(&citygen::Tile) -> bool| nearest(mid, TILE, |p| g.get(p).is_some_and(want));
     let spot = on(|c| c.terrain == Terrain::Road)
         .or_else(|| {
             on(|c| c.is_walkable() && !matches!(c.terrain, Terrain::Water | Terrain::Shallows))
