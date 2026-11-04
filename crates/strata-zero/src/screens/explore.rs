@@ -1453,19 +1453,52 @@ impl MapScreen {
         let player = st.player.as_ref()?;
         let (place, pos) = (player.place, player.pos);
         let look = Choice::new('x', "Look", Pick::Look(pos));
-        if let Place::Construct(b) = place
+        let subjects = interact::gather(st, &|pl, p| self.inside_person_at(pl, p));
+        // On the Net: what a held node near you does, then what the deck's programs
+        // reach, after whatever else is here (the port's Jack out). In a construct
+        // always; on the open Net when there is any and at most one thing is here.
+        if let Some(scene) = crate::net::scene_of(place)
             && st.character.deck(&st.content).is_some()
         {
-            let mut letters = FREE_LETTERS.chars();
-            let rows = interact::run_rows(st, b, pos, None, &mut letters);
-            let mut choices = vec![look];
-            choices.extend(rows);
-            return Some(ScreenCmd::Push {
-                to: Box::new(Popup::verbs("", choices, st.tick)),
-                fx: TransitionKind::None,
-            });
+            let inside = matches!(place, Place::Construct(_));
+            let here = match (inside, subjects.as_slice()) {
+                (false, [s]) => Some(s),
+                _ => None,
+            };
+            let verbs = interact::verb_rows(st);
+            let taken: Vec<char> = here
+                .map(|s| s.choices.iter().map(|c| c.key).collect())
+                .unwrap_or_default();
+            let free: String = FREE_LETTERS
+                .chars()
+                .filter(|c| !verbs.iter().any(|v| v.key == *c) && !taken.contains(c))
+                .collect();
+            let mut letters = free.chars();
+            let rows = interact::run_rows_at(st, scene, pos, None, &mut letters);
+            let fits = inside || subjects.len() <= 1;
+            if fits && (inside || !verbs.is_empty() || !rows.is_empty()) {
+                let popup = match here {
+                    Some(s) => {
+                        let mut choices = vec![Choice::new('x', "Look", Pick::Look(s.pos))];
+                        choices.extend(s.choices.iter().cloned());
+                        choices.extend(verbs);
+                        choices.extend(rows);
+                        Popup::about(s.header.clone(), s.subtitle.clone(), choices, st.tick)
+                            .with_body(s.body.clone())
+                    }
+                    None => {
+                        let mut choices = vec![look];
+                        choices.extend(verbs);
+                        choices.extend(rows);
+                        Popup::verbs("", choices, st.tick)
+                    }
+                };
+                return Some(ScreenCmd::Push {
+                    to: Box::new(popup),
+                    fx: TransitionKind::None,
+                });
+            }
         }
-        let subjects = interact::gather(st, &|pl, p| self.inside_person_at(pl, p));
         let popup = match subjects.as_slice() {
             [] => Popup::verbs("", vec![look], st.tick),
             [s] => s.window(st.tick),
@@ -1486,44 +1519,13 @@ impl MapScreen {
     /// A verb key jacked in: a line logged, the hijack's picker, or a held terminal's
     /// shell; out of reach or spent, a warning.
     fn verb_key(st: &mut AppState, c: char) -> ScreenCmd {
-        use crate::holds::VerbDone;
-        match crate::holds::use_verb(st, c) {
-            Ok(VerbDone::Said(line)) => st.say(line),
-            Ok(VerbDone::Shell(host, key)) => {
-                return ScreenCmd::Push {
-                    to: Box::new(crate::screens::terminal::Terminal::open(st, host, key)),
-                    fx: TransitionKind::Glitch,
-                };
-            }
-            Ok(VerbDone::Pick(node)) => {
-                let Some(b) = st
-                    .city
-                    .as_ref()
-                    .and_then(|c| c.net.nodes.get(node.index()))
-                    .and_then(|n| n.building)
-                else {
-                    return ScreenCmd::Stay;
-                };
-                let choices = crate::holds::hijack_lines(st, b)
-                    .into_iter()
-                    .map(|(line, text)| {
-                        Choice::on(
-                            line.key(),
-                            line.label(),
-                            text,
-                            crate::ui::chrome::MAGENTA,
-                            Pick::Hijack { node, line },
-                        )
-                    })
-                    .collect();
-                return ScreenCmd::Push {
-                    to: Box::new(Popup::verbs("HIJACK", choices, st.tick)),
-                    fx: TransitionKind::None,
-                };
-            }
-            Err(why) => st.warn(why),
+        match crate::screens::popup::verb_opens(st, c) {
+            Some(to) => ScreenCmd::Push {
+                to,
+                fx: TransitionKind::None,
+            },
+            None => ScreenCmd::Stay,
         }
-        ScreenCmd::Stay
     }
 
     /// A number key jacked in: the deck's program in that slot, run at once against
@@ -9866,6 +9868,56 @@ mod tests {
             .unwrap();
         stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), me);
         (st, s, me)
+    }
+
+    #[test]
+    fn space_beside_a_camera_on_the_net_cracks_it_then_offers_its_verbs() {
+        let (mut st, b) = crate::net::tests::under_kiroflux();
+        st.grid_patrols = crate::grid::Patrols::Sweeps;
+        let mut s = MapScreen::explore(0);
+        let (cam, at) = crate::net::tests::node_cyber(&st, b, citygen::NodeKind::Camera);
+        stand(
+            &mut st,
+            &mut s,
+            Place::Stratum(StratumKind::Net),
+            Pos::new(at.x, at.y + 1),
+        );
+        // Space: the programs that reach what's beside you; `a` is Crack on the camera.
+        let ScreenCmd::Push { to: mut w, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("a window of what the deck reaches");
+        };
+        st.net.force_roll = Some(10);
+        w.update(&mut st, &[key(KeyCode::Char('a'))]);
+        assert_eq!(
+            st.net.run.as_ref().map(|r| r.target),
+            Some(game::HackTarget::Node(cam)),
+            "{:?}",
+            last(&st)
+        );
+        // Space hurries the beats until it lands.
+        for _ in 0..6 {
+            s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        }
+        let now = st.net.now(&st);
+        assert!(
+            crate::holds::held(&st, cam, now).is_some(),
+            "{:?}",
+            last(&st)
+        );
+        // Space again: the held camera's verbs on their own keys.
+        let ScreenCmd::Push { to: mut w, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("the window with the camera's verbs");
+        };
+        w.update(&mut st, &[key(KeyCode::Char('o'))]);
+        assert!(crate::holds::looped(&st, cam, now), "{:?}", last(&st));
+        let ScreenCmd::Push { to: mut w, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
+        else {
+            panic!("the window again");
+        };
+        w.update(&mut st, &[key(KeyCode::Char('f'))]);
+        assert_eq!(st.net.feed, Some(cam), "the feed opens from the window too");
     }
 
     #[test]

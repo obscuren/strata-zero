@@ -3361,3 +3361,47 @@ fn net_sweep() {
         false,
     );
 }
+
+/// Space beside Kiroflux Mart's camera on the Net: what the deck reaches; then, the
+/// camera held, its verbs.
+#[test]
+#[ignore]
+fn net_space_camera() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (mut st, mut map) = on_the_open_net();
+    let (cam, at) = kiroflux_node(&st, citygen::NodeKind::Camera);
+    let here = Pos::new(at.x, at.y + 1);
+    stand_in(&mut st, Place::Stratum(StratumKind::Net), here);
+    map.cam.snap(here);
+    map.update(&mut st, &[]);
+    let crate::app::ScreenCmd::Push { to: w, .. } = map.update(&mut st, &[key(KeyCode::Char(' '))])
+    else {
+        panic!("the window");
+    };
+    st.tick += 120;
+    write_svg(
+        &dir,
+        "net_space_camera",
+        &st,
+        &draw_stack(&st, &[&map, w.as_ref()], (120, 40)),
+        false,
+    );
+    let b = kiroflux(&st);
+    let now = st.net.now(&st);
+    crate::holds::take(&mut st, cam, crate::owners::Owner::Building(b), now);
+    map.update(&mut st, &[]);
+    let crate::app::ScreenCmd::Push { to: w, .. } = map.update(&mut st, &[key(KeyCode::Char(' '))])
+    else {
+        panic!("the window");
+    };
+    st.tick += 120;
+    write_svg(
+        &dir,
+        "net_space_held",
+        &st,
+        &draw_stack(&st, &[&map, w.as_ref()], (120, 40)),
+        false,
+    );
+}
