@@ -33,6 +33,10 @@ pub const AMBER: Rgb = Rgb(255, 176, 0);
 pub const TERMINAL: Rgb = Rgb(140, 150, 255);
 /// Rooms inside a construct.
 pub const ROOM: Rgb = Rgb(0, 229, 255);
+/// You, on the Net and in a construct: blue against the Net's greens and cyans.
+pub const YOU: Rgb = Rgb(70, 140, 255);
+/// The glow behind you there.
+pub const YOU_GLOW: Rgb = Rgb(14, 34, 84);
 
 /// Light box drawing with dashed straights: the open tier's wall.
 const DASHED: [char; 16] = [

@@ -3403,14 +3403,18 @@ impl Screen for MapScreen {
             if p.place == self.place
                 && let Some((sx, sy)) = tile_to_screen(map_area, origin, p.pos)
             {
-                let fg = if p.place == Place::Stratum(StratumKind::Net) {
-                    Color::Rgb(0, 255, 200)
+                // On the Net and in a construct you are blue on a blue glow, apart
+                // from the greens and cyans around you; elsewhere white.
+                let style = if p.sees_all() {
+                    Style::default()
+                        .fg(crate::render::netlook::YOU.to_color())
+                        .bg(crate::render::netlook::YOU_GLOW.to_color())
                 } else {
-                    Color::Rgb(255, 255, 255)
+                    Style::default().fg(Color::Rgb(255, 255, 255))
                 };
                 f.buffer_mut()[(sx, sy)]
                     .set_char('@')
-                    .set_style(Style::default().fg(fg).add_modifier(Modifier::BOLD));
+                    .set_style(style.add_modifier(Modifier::BOLD));
             }
         }
         // The daze swims the whole map picture, `@` and visitors with it; what floats
@@ -9041,6 +9045,24 @@ mod tests {
         st.player.as_mut().unwrap().body = Some((Place::Stratum(StratumKind::Street), from));
         stand(st, s, Place::Stratum(StratumKind::Net), from);
         path
+    }
+
+    #[test]
+    fn you_are_blue_on_the_net() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        on_a_lane(&mut st, &mut s);
+        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        t.draw(|f| s.draw(&st, f)).unwrap();
+        let buf = t.backend().buffer();
+        let you = crate::render::netlook::YOU.to_color();
+        let cells: Vec<_> = buf
+            .content()
+            .iter()
+            .filter(|c| c.symbol() == "@" && c.fg == you)
+            .collect();
+        assert_eq!(cells.len(), 1, "one blue @");
+        assert_eq!(cells[0].bg, crate::render::netlook::YOU_GLOW.to_color());
     }
 
     #[test]
