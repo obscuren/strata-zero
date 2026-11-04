@@ -2956,3 +2956,408 @@ fn mail_shots() {
         shot_stack(&name("n"), &st, &[&map, &term], size);
     }
 }
+
+/// The clock on to `minute` of the day, the city with it.
+fn on_to(st: &mut AppState, minute: u16) {
+    let ahead = (minute as u64 + 1440 - st.minute_of_day() as u64) % 1440;
+    let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+    for _ in 0..ahead {
+        let t = world.tick() + sim::TICKS_PER_MINUTE;
+        world.advance(city, t);
+        world.path_some(city, 64);
+    }
+}
+
+/// Kiroflux Mart's node of a kind: its id and its tile on the Net.
+fn kiroflux_node(st: &AppState, kind: citygen::NodeKind) -> (citygen::NodeId, Pos) {
+    let city = st.city.as_ref().unwrap();
+    let b = city
+        .buildings
+        .iter()
+        .find(|b| b.name.as_deref() == Some("Kiroflux Mart"))
+        .unwrap()
+        .id;
+    let n = city
+        .net
+        .nodes
+        .iter()
+        .find(|n| n.building == Some(b) && n.kind == kind)
+        .unwrap();
+    (n.id, n.cyber)
+}
+
+fn kiroflux(st: &AppState) -> citygen::BuildingId {
+    st.city
+        .as_ref()
+        .unwrap()
+        .buildings
+        .iter()
+        .find(|b| b.name.as_deref() == Some("Kiroflux Mart"))
+        .unwrap()
+        .id
+}
+
+/// On the lane under Kiroflux Mart's camera, the camera and an ad board held; with
+/// `tap`, the camera's feed open. Spec `2026-11-04-net-nodes-design.md`.
+fn held_camera(tap: bool) -> (AppState, MapScreen) {
+    use citygen::NodeKind;
+    let (mut st, mut map) = on_the_open_net();
+    on_to(&mut st, 21 * 60 + 30);
+    let b = kiroflux(&st);
+    let (cam, at) = kiroflux_node(&st, NodeKind::Camera);
+    let (ad, _) = kiroflux_node(&st, NodeKind::AdBoard);
+    let here = Pos::new(at.x - 2, at.y + 1);
+    stand_in(&mut st, Place::Stratum(StratumKind::Net), here);
+    map.cam.snap(here);
+    let now = st.net.now(&st);
+    crate::holds::take(&mut st, cam, crate::owners::Owner::Building(b), now);
+    crate::holds::take(&mut st, ad, crate::owners::Owner::Building(b), now);
+    if tap {
+        crate::holds::use_verb(&mut st, 'f').unwrap();
+    }
+    map.update(&mut st, &[]);
+    (st, map)
+}
+
+#[test]
+#[ignore]
+fn net_held() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (st, map) = held_camera(false);
+    for (name, size) in [("net_held", (120, 40)), ("net_held_small", (100, 30))] {
+        write_svg(&dir, name, &st, &draw_stack(&st, &[&map], size), false);
+    }
+}
+
+#[test]
+#[ignore]
+fn net_feed() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (st, map) = held_camera(true);
+    for (name, size) in [("net_feed", (120, 40)), ("net_feed_small", (100, 30))] {
+        let buf = draw_stack(&st, &[&map], size);
+        assert!(
+            buffer_text(&buf).contains("CAM · KIROFLUX"),
+            "feed {:?} held {:?} place {:?}\n{}",
+            st.net.feed,
+            st.net.holds,
+            st.player.as_ref().map(|p| (p.place, p.pos, p.body)),
+            buffer_text(&buf)
+        );
+        write_svg(&dir, name, &st, &buf, false);
+    }
+}
+
+/// A crack in flight from the lane on Kiroflux Mart's wall camera: the tether out on
+/// the open Net.
+#[test]
+#[ignore]
+fn net_outside_run() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (mut st, mut map) = on_the_open_net();
+    let (cam, at) = kiroflux_node(&st, citygen::NodeKind::Camera);
+    let here = Pos::new(at.x, at.y + 1);
+    stand_in(&mut st, Place::Stratum(StratumKind::Net), here);
+    map.cam.snap(here);
+    crate::net::start_run(&mut st, ItemId::new("crack"), game::HackTarget::Node(cam)).unwrap();
+    crate::net::step_run(&mut st);
+    st.net.beat = st.clock_tick();
+    pass(&mut st, crate::net::BEAT_TICKS / 2);
+    map.update(&mut st, &[]);
+    for (name, size) in [
+        ("net_outside_run", (120, 40)),
+        ("net_outside_run_small", (100, 30)),
+    ] {
+        write_svg(&dir, name, &st, &draw_stack(&st, &[&map], size), false);
+    }
+}
+
+/// On foot at night in front of Kiroflux Mart, in its camera's cone.
+fn on_foot_by_kiroflux(minute: u16) -> (AppState, MapScreen, Pos) {
+    let mut st = state_home();
+    on_to(&mut st, minute);
+    let city = st.city.clone().unwrap();
+    let cam = crate::cameras::street_cameras(&city)
+        .find(|c| c.building == kiroflux(&st))
+        .unwrap();
+    // The walkable tile of its cone furthest out within its dark reach.
+    let here = crate::cameras::cone(&city, &cam)
+        .into_iter()
+        .filter(|q| city.walkable(StratumKind::Street, *q))
+        .filter(|q| q.chebyshev(cam.at) <= crate::cameras::DARK_REACH)
+        .max_by_key(|q| (q.chebyshev(cam.at), -(q.x - cam.at.x).abs()))
+        .expect("somewhere to stand in the cone");
+    st.player = Some(crate::walker::Player::at(
+        Place::Stratum(StratumKind::Street),
+        here,
+    ));
+    stand_in(&mut st, Place::Stratum(StratumKind::Street), here);
+    let mut map = MapScreen::walking(&mut st);
+    map.cam.snap(here);
+    map.update(&mut st, &[]);
+    (st, map, cam.at)
+}
+
+#[test]
+#[ignore]
+fn street_eyes() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (st, map, cam) = on_foot_by_kiroflux(22 * 60);
+    assert!(
+        !crate::cameras::seeing(&st).is_empty(),
+        "the camera at {cam:?} sees you at {:?}",
+        st.player.as_ref().map(|p| (p.place, p.pos))
+    );
+    let buf = draw_stack(&st, &[&map], (120, 40));
+    write_svg(&dir, "street_eyes", &st, &buf, false);
+}
+
+#[test]
+#[ignore]
+fn street_hijack() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (mut st, mut map, _) = on_foot_by_kiroflux(22 * 60);
+    let b = kiroflux(&st);
+    let (ad, _) = kiroflux_node(&st, citygen::NodeKind::AdBoard);
+    let now = st.net.now(&st);
+    crate::holds::take(&mut st, ad, crate::owners::Owner::Building(b), now);
+    crate::holds::hijack(&mut st, ad, crate::holds::Line::Smear);
+    map.update(&mut st, &[]);
+    pass(&mut st, 60);
+    map.update(&mut st, &[]);
+    assert!(!st.missions.asides.is_empty(), "the ad says its line");
+    write_svg(
+        &dir,
+        "street_hijack",
+        &st,
+        &draw_stack(&st, &[&map], (120, 40)),
+        false,
+    );
+}
+
+#[test]
+#[ignore]
+fn street_dark() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (mut st, mut map, _) = on_foot_by_kiroflux(22 * 60);
+    let city = st.city.clone().unwrap();
+    let d = city.buildings[kiroflux(&st).index()].district;
+    // Out on the district's most lamp-lit pavement, lamps the only light.
+    let street = city.stratum(StratumKind::Street).unwrap();
+    let here = street
+        .tiles
+        .iter()
+        .filter(|(p, t)| {
+            t.district == Some(d)
+                && t.building.is_none()
+                && t.is_walkable()
+                && street.steady[*p] == 0
+        })
+        .max_by_key(|(p, _)| street.lamps[*p])
+        .map(|(p, _)| p)
+        .unwrap();
+    stand_in(&mut st, Place::Stratum(StratumKind::Street), here);
+    map.cam.snap(here);
+    map.update(&mut st, &[]);
+    write_svg(
+        &dir,
+        "street_dark_before",
+        &st,
+        &draw_stack(&st, &[&map], (120, 40)),
+        false,
+    );
+    let now = st.net.now(&st);
+    st.net
+        .lights_out
+        .insert(d, now + crate::holds::LIGHTS_OUT_MINUTES);
+    crate::holds::tick(&mut st);
+    let here = st.player.as_ref().unwrap().pos;
+    stand_in(&mut st, Place::Stratum(StratumKind::Street), here);
+    map.update(&mut st, &[]);
+    write_svg(
+        &dir,
+        "street_dark",
+        &st,
+        &draw_stack(&st, &[&map], (120, 40)),
+        false,
+    );
+}
+
+/// Inside a construct with a walking piece and an ad board, the board held and its
+/// decoy up, two beats on.
+#[test]
+#[ignore]
+fn net_decoy() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let mut st = state_home();
+    let mut map = MapScreen::walking(&mut st);
+    let city = st.city.clone().unwrap();
+    let (b, ad, at) = city
+        .buildings
+        .iter()
+        .find_map(|b| {
+            let k = citygen::construct::generate_construct(&city, b.id)?;
+            let g = k.guards.iter().find(|g| g.beat.len() >= 2 && !g.inert)?;
+            let (ad, at) = k
+                .nodes
+                .iter()
+                .find(|(n, _)| city.net.nodes[n.index()].kind == citygen::NodeKind::AdBoard)?;
+            (g.pos.chebyshev(*at) > 4).then_some((b.id, *ad, *at))
+        })
+        .expect("a construct with a walking piece and an ad board");
+    {
+        let p = st.player.as_mut().unwrap();
+        p.body = Some((p.place, p.pos));
+        p.place = Place::Stratum(StratumKind::Net);
+        p.pos = crate::constructs::city_gate(&city, b).unwrap();
+    }
+    crate::constructs::enter_construct(&mut st, b).unwrap();
+    map.place = Place::Construct(b);
+    let k = st.constructs.get(b).unwrap().clone();
+    let here = at
+        .neighbors8()
+        .find(|q| k.tiles.get(*q).is_some_and(|t| t.is_walkable()))
+        .unwrap_or(at);
+    stand_in(&mut st, Place::Construct(b), here);
+    map.cam.snap(here);
+    let now = st.net.now(&st);
+    crate::holds::take(&mut st, ad, crate::owners::Owner::Building(b), now);
+    crate::holds::use_verb(&mut st, 'z').unwrap();
+    for _ in 0..2 {
+        st.net.beat = st.clock_tick();
+        crate::net::beat(&mut st);
+        pass(&mut st, 2);
+    }
+    map.update(&mut st, &[]);
+    write_svg(
+        &dir,
+        "net_decoy",
+        &st,
+        &draw_stack(&st, &[&map], (120, 40)),
+        false,
+    );
+}
+
+/// Up the lane from Kiroflux Mart, a tracer off its gate on the trail behind you.
+#[test]
+#[ignore]
+fn net_tracer() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (mut st, mut map) = on_the_open_net();
+    st.grid_patrols = crate::grid::Patrols::Sweeps;
+    let b = kiroflux(&st);
+    // Walk west along the lane under the gate, then the tracer sets off.
+    let start = st.player.as_ref().unwrap().pos;
+    let city = st.city.clone().unwrap();
+    let mut p = start;
+    for _ in 0..10 {
+        let q = Pos::new(p.x - 1, p.y);
+        if !city.walkable(StratumKind::Net, q) {
+            break;
+        }
+        p = q;
+        stand_in(&mut st, Place::Stratum(StratumKind::Net), p);
+        map.update(&mut st, &[]);
+    }
+    crate::grid::send_tracer(&mut st, crate::owners::Owner::Building(b));
+    for _ in 0..6 {
+        pass(&mut st, crate::grid::TRACER_TICKS);
+        map.update(&mut st, &[]);
+    }
+    map.cam.snap(p);
+    map.update(&mut st, &[]);
+    let buf = draw_stack(&st, &[&map], (120, 40));
+    assert!(
+        buffer_text(&buf).contains('◈'),
+        "me {:?} foes {:?}",
+        st.player.as_ref().map(|p| (p.place, p.pos)),
+        st.foes
+            .iter()
+            .map(|f| (f.place, f.pos, f.down))
+            .collect::<Vec<_>>()
+    );
+    write_svg(&dir, "net_tracer", &st, &buf, false);
+}
+
+/// Beside the hub of Kiroflux Mart's district, its sentinels on their beats.
+#[test]
+#[ignore]
+fn net_sentinels() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (mut st, mut map) = on_the_open_net();
+    let city = st.city.clone().unwrap();
+    let d = city.buildings[kiroflux(&st).index()].district;
+    let (_, hub) = crate::grid::hubs(&city)
+        .into_iter()
+        .find(|(x, _)| *x == d)
+        .unwrap();
+    let here = (0..12)
+        .flat_map(|r| {
+            [
+                Pos::new(hub.x + 6 + r, hub.y + 4),
+                Pos::new(hub.x - 6 - r, hub.y + 4),
+            ]
+        })
+        .find(|q| city.walkable(StratumKind::Net, *q))
+        .unwrap();
+    stand_in(&mut st, Place::Stratum(StratumKind::Net), here);
+    map.cam.snap(hub);
+    map.update(&mut st, &[]);
+    pass(&mut st, crate::grid::SENTINEL_TICKS * 2);
+    map.update(&mut st, &[]);
+    write_svg(
+        &dir,
+        "net_sentinels",
+        &st,
+        &draw_stack(&st, &[&map], (120, 40)),
+        false,
+    );
+}
+
+/// Sweeps on, Kiroflux Mart's district on alert: a ring out of its hub.
+#[test]
+#[ignore]
+fn net_sweep() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (mut st, mut map) = on_the_open_net();
+    st.grid_patrols = crate::grid::Patrols::Sweeps;
+    let city = st.city.clone().unwrap();
+    let d = city.buildings[kiroflux(&st).index()].district;
+    let (_, hub) = crate::grid::hubs(&city)
+        .into_iter()
+        .find(|(x, _)| *x == d)
+        .unwrap();
+    crate::owners::heat_on(&mut st, crate::owners::Owner::District(d), game::ALARM_HEAT);
+    map.cam.snap(hub);
+    for _ in 0..(crate::grid::SWEEP_BEATS * crate::net::BEAT_TICKS + 24) {
+        pass(&mut st, 1);
+        map.update(&mut st, &[]);
+    }
+    write_svg(
+        &dir,
+        "net_sweep",
+        &st,
+        &draw_stack(&st, &[&map], (120, 40)),
+        false,
+    );
+}

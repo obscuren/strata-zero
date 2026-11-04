@@ -92,6 +92,11 @@ impl Overlay for PeopleOverlay<'_> {
                 (None, false) => FOE,
             };
             cell.set_char(f.glyph).set_fg(fg);
+            // A grid piece glows in its grade's colour, apart from the nodes around it.
+            if let Some(ice) = &f.ice {
+                let glow = crate::render::netlook::ice_colour(ice.grade, tick).scale(0.32);
+                cell.set_bg(glow.to_color());
+            }
             if f.hunting() {
                 cell.modifier.insert(Modifier::BOLD);
             } else {

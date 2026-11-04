@@ -423,10 +423,13 @@ pub fn lines(st: &AppState, seen: impl Fn(Pos) -> bool) -> Vec<String> {
     let Some(p) = st.player.as_ref() else {
         return Vec::new();
     };
+    // On the open Net only the pieces near you.
+    let net = p.place == Place::Stratum(citygen::StratumKind::Net);
     let mut foes: Vec<&Foe> = st
         .foes
         .iter()
         .filter(|f| f.standing() && f.place == p.place && seen(f.pos))
+        .filter(|f| !net || f.pos.chebyshev(p.pos) <= crate::grid::FIGHT_RADIUS)
         .collect();
     foes.sort_by_key(|f| f.pos.chebyshev(p.pos));
     foes.into_iter()
