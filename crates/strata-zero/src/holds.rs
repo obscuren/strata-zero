@@ -20,7 +20,8 @@ pub const STARE_REACH: i32 = 6;
 pub const LURE_REACH: i32 = 12;
 /// You on the street this near a hijacked ad see its line.
 pub const LINE_REACH: i32 = 12;
-/// The glow under a held node that is not the dock's.
+/// A held node is drawn in the green of a landed run: its glyph and its glow.
+pub const HELD_FG: ratatui::style::Color = ratatui::style::Color::Rgb(80, 230, 120);
 pub const HELD_BG: ratatui::style::Color = ratatui::style::Color::Rgb(15, 58, 31);
 /// The floor of a room a decoy floods.
 pub const FLOOD_BG: ratatui::style::Color = ratatui::style::Color::Rgb(60, 0, 46);
@@ -632,15 +633,16 @@ fn lure(st: &mut AppState, b: BuildingId) -> usize {
     n
 }
 
-/// The dock on the held node nearest you: the run's tether that stayed, its label
-/// the node and the time left, its second row the verbs and their keys.
+/// The dock on the held node nearest you, once you are within its verbs' reach: the
+/// run's tether that stayed, its label the node and the time left, its second row the
+/// verbs and their keys. Further off a held node is only its green.
 pub fn dock_view(st: &AppState, place: Place) -> Option<crate::render::tether::TetherView> {
     use crate::render::tether::{TetherState, TetherView};
     let p = st.player.as_ref().filter(|p| p.place == place)?;
     if st.net.engaged.is_some() {
         return None;
     }
-    let (node, at) = held_on(st, place).into_iter().next()?;
+    let (node, at) = nearest(st)?;
     let now = st.net.now(st);
     let hold = held(st, node, now)?;
     let kind = kind_of(st, node)?;
@@ -681,6 +683,31 @@ pub fn dock_view(st: &AppState, place: Place) -> Option<crate::render::tether::T
         phase: 0.0,
         state: TetherState::Landed { age: 0 },
     })
+}
+
+/// Every held node on the map in the landed run's green: glyph and glow.
+pub struct HeldOverlay<'a> {
+    pub tiles: &'a [Pos],
+}
+
+impl crate::render::viewport::Overlay for HeldOverlay<'_> {
+    fn draw(
+        &self,
+        _map: &crate::render::map::MapRef,
+        origin: Pos,
+        area: ratatui::layout::Rect,
+        _tick: u64,
+        buf: &mut ratatui::buffer::Buffer,
+        _style: &crate::render::style::StylePack,
+    ) {
+        for p in self.tiles {
+            if let Some((sx, sy)) = crate::render::viewport::tile_to_screen(area, origin, *p) {
+                let cell = &mut buf[(sx, sy)];
+                cell.set_fg(HELD_FG).set_bg(HELD_BG);
+                cell.modifier.insert(ratatui::style::Modifier::BOLD);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -781,6 +808,18 @@ mod tests {
         assert!(st.net.holds.is_empty());
         assert_eq!(st.net.feed, None, "the feed goes with it");
         assert!(dock_view(&st, Place::Stratum(StratumKind::Net)).is_none());
+    }
+
+    #[test]
+    fn the_dock_shows_only_within_reach() {
+        let (mut st, _) = camera_held();
+        assert!(dock_view(&st, Place::Stratum(StratumKind::Net)).is_some());
+        st.player.as_mut().unwrap().pos.x -= VERB_REACH + 2;
+        assert!(
+            dock_view(&st, Place::Stratum(StratumKind::Net)).is_none(),
+            "far off, the node is only green"
+        );
+        assert_eq!(held_on(&st, Place::Stratum(StratumKind::Net)).len(), 1);
     }
 
     #[test]

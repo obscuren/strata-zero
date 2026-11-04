@@ -3025,10 +3025,28 @@ fn net_held() {
     let Ok(dir) = std::env::var("SHOT_DIR") else {
         return;
     };
-    let (st, map) = held_camera(false);
+    let (mut st, mut map) = held_camera(false);
     for (name, size) in [("net_held", (120, 40)), ("net_held_small", (100, 30))] {
         write_svg(&dir, name, &st, &draw_stack(&st, &[&map], size), false);
     }
+    // Out of reach: the held nodes are only green, no dock.
+    let city = st.city.clone().unwrap();
+    let me = st.player.as_ref().unwrap().pos;
+    let far = (14..30)
+        .flat_map(|d| [Pos::new(me.x - d, me.y), Pos::new(me.x, me.y + d)])
+        .find(|q| city.walkable(StratumKind::Net, *q))
+        .expect("somewhere out of reach");
+    stand_in(&mut st, Place::Stratum(StratumKind::Net), far);
+    map.cam
+        .snap(Pos::new((far.x + me.x) / 2, (far.y + me.y) / 2));
+    map.update(&mut st, &[]);
+    write_svg(
+        &dir,
+        "net_held_far",
+        &st,
+        &draw_stack(&st, &[&map], (120, 40)),
+        false,
+    );
 }
 
 #[test]

@@ -115,7 +115,9 @@ you out it means that there's no danger in running there."
 
 ### The dock
 
-- The held node nearest you on screen carries a dock: the run's tether that stayed. Its
+- Every held node draws in the landed run's green (glyph and glow). The held node
+  nearest you, once you are within its verbs' reach (12), also carries a dock: the run's
+  tether that stayed. Further off there is no tether, so the screen stays clear. Its
   label reads `CAMERA` and `HELD 59m`, its second row the verbs (`[f] tap  [o] loop`),
   its wire lit whole to the node. Other held nodes on screen glow on their tile, no
   label.

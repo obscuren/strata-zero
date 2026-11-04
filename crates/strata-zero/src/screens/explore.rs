@@ -3415,19 +3415,15 @@ impl Screen for MapScreen {
         if !flood.is_empty() {
             overlays.push(&flood_blocks);
         }
-        // With no run in flight, the held node nearest you carries the dock; the
-        // others glow on their tiles.
-        let held_glow: Vec<Pos> = crate::holds::held_on(st, self.place)
+        // Every node you hold is drawn green; the nearest within reach also carries
+        // the dock, when no run is in flight.
+        let held_tiles: Vec<Pos> = crate::holds::held_on(st, self.place)
             .into_iter()
-            .skip(1)
             .map(|(_, at)| at)
             .collect();
-        let held_blocks = crate::render::path::BlockOverlay {
-            tiles: &held_glow,
-            bg: crate::holds::HELD_BG,
-        };
-        if !held_glow.is_empty() {
-            overlays.push(&held_blocks);
+        let held = crate::holds::HeldOverlay { tiles: &held_tiles };
+        if !held_tiles.is_empty() {
+            overlays.push(&held);
         }
         let tether = crate::net::tether_view(st, self.place)
             .or_else(|| crate::holds::dock_view(st, self.place))

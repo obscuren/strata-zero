@@ -724,7 +724,7 @@ pub fn verb_rows(st: &AppState) -> Vec<Choice> {
 }
 
 /// A held node's rows, green as its dock.
-const HELD: Color = Color::Rgb(80, 230, 120);
+const HELD: Color = crate::holds::HELD_FG;
 
 /// On the server of a construct you hold a backdoor on: `Hop: <building>` to every
 /// other backdoor's gate. A street run has no way home, so its rows are greyed.
