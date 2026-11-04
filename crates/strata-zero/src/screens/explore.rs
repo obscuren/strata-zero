@@ -3364,6 +3364,14 @@ impl Screen for MapScreen {
             .map(|view| crate::render::turns::TurnOverlay { view });
         // A calm run hangs off its target, under a roll's bolt and a slip's mark; when
         // it has no room the footer reads it instead.
+        // Sweeps ringing out of alarmed hubs on the open Net.
+        let rings = crate::grid::RingOverlay {
+            rings: &st.net.grid.rings,
+            tick: st.clock_tick(),
+        };
+        if self.place == Place::Stratum(StratumKind::Net) && !st.net.grid.rings.is_empty() {
+            overlays.push(&rings);
+        }
         // A decoy floods the ad board's room.
         let flood = match self.place {
             Place::Construct(b) => crate::holds::decoy_room(st, b),
@@ -10821,8 +10829,9 @@ mod tests {
         s.update(&mut st, &[key(KeyCode::Char('e'))]);
         assert_eq!(last(&st), Some("not your turn"));
         assert!(st.net.engaged.is_some());
-        // On the grid there is nothing to engage.
+        // On the grid with no ICE near there is nothing to engage.
         let mut st = state8();
+        st.grid_patrols = crate::grid::Patrols::Sweeps;
         let mut s = MapScreen::explore(0);
         on_the_grid(&mut st, &mut s);
         s.update(&mut st, &[key(KeyCode::Char('e'))]);

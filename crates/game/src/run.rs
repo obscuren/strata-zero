@@ -30,8 +30,13 @@ pub enum Target {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum HackTarget {
     Node(NodeId),
-    Guard { building: BuildingId, index: usize },
+    Guard {
+        building: BuildingId,
+        index: usize,
+    },
     Deck,
+    /// A piece of ICE on the open Net, by its index among the session's foes.
+    Foe(usize),
 }
 
 /// Whether an op does anything to a target.
