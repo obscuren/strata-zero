@@ -521,6 +521,58 @@ mod tests {
         s
     }
 
+    /// How long a save holds the frame, on the medium seed-8 morning after: `write`
+    /// whole, and its parts one by one (the snapshot to MessagePack, the gzip, the
+    /// file written, synced and renamed). Run in release:
+    /// `cargo test -p strata-zero --release --target-dir target/smoke -- --ignored
+    /// a_save_is_timed --nocapture`.
+    #[test]
+    #[ignore = "a measurement, in release"]
+    fn a_save_is_timed() {
+        use std::time::Instant;
+        const RUNS: usize = 7;
+        let dir = Dir::new("timed");
+        let st = running(crate::screens::shots::seren_has_written());
+        let ms = |t: Instant| t.elapsed().as_secs_f64() * 1000.0;
+        let median = |mut v: Vec<f64>| {
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            v[v.len() / 2]
+        };
+        let (mut whole, mut encode, mut gzip, mut put_ms) = (vec![], vec![], vec![], vec![]);
+        let (mut raw_len, mut body_len) = (0, 0);
+        for _ in 0..RUNS {
+            let t = Instant::now();
+            write(&dir.0, &st).unwrap();
+            whole.push(ms(t));
+
+            let t = Instant::now();
+            let raw = ids::with_book(&st.book, || rmp_serde::to_vec_named(&snapshot(&st))).unwrap();
+            encode.push(ms(t));
+            let t = Instant::now();
+            let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+            gz.write_all(&raw).unwrap();
+            let body = gz.finish().unwrap();
+            gzip.push(ms(t));
+            let head = Head {
+                run: describe::header(&st, None),
+                body: body.len() as u64,
+            };
+            let t = Instant::now();
+            put(&path(&dir.0, st.run.unwrap().id), &head, &body).unwrap();
+            put_ms.push(ms(t));
+            (raw_len, body_len) = (raw.len(), body.len());
+        }
+        eprintln!(
+            "a save of the medium seed-8 morning after, median of {RUNS}: write {:.1} ms \
+             · encode {:.1} ms ({raw_len} bytes) · gzip {:.1} ms ({body_len} bytes) \
+             · write+fsync+rename {:.1} ms",
+            median(whole),
+            median(encode),
+            median(gzip),
+            median(put_ms),
+        );
+    }
+
     #[test]
     fn a_refused_rename_is_tried_again() {
         let refused = || std::io::Error::from(std::io::ErrorKind::PermissionDenied);
