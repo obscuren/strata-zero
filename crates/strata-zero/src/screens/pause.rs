@@ -3,7 +3,7 @@
 
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::render::Rgb;
-use crate::runs::when::try_save;
+use crate::runs::when::{save_leaving, try_save};
 use crate::screens::files::Files;
 use crate::screens::runs::RunsScreen;
 use crate::screens::settings::Settings;
@@ -82,18 +82,21 @@ impl Pause {
         }
     }
 
-    /// The save a row takes before it goes on: true to go on. A save that fails keeps
-    /// the menu up, saying why; pressed again, the row goes on without it.
+    /// The save a way out of the run takes before it goes on (`save_leaving`: a perma
+    /// death runner killed this frame is marked flatlined instead): true to go on. A
+    /// save that fails keeps the menu up, saying why; pressed again, the row goes on
+    /// without it.
     fn saved_first(&mut self, st: &mut AppState, row: Row) -> bool {
         if self.failed.as_ref().is_some_and(|(r, _)| *r == row) {
             return true;
         }
-        self.save(st, row)
+        let tried = save_leaving(st);
+        self.took(row, tried)
     }
 
-    /// Saves the run if it can be saved; false when the write failed.
-    fn save(&mut self, st: &mut AppState, row: Row) -> bool {
-        match try_save(st) {
+    /// What a save `row` tried came to, kept for the line: false when the write failed.
+    fn took(&mut self, row: Row, tried: Option<Result<(), String>>) -> bool {
+        match tried {
             Some(Err(why)) => {
                 self.failed = Some((row, why));
                 false
@@ -117,7 +120,8 @@ impl Pause {
                 if let Some(why) = crate::save::refusal(st) {
                     st.warn(why);
                 } else {
-                    self.save(st, row);
+                    let tried = try_save(st);
+                    self.took(row, tried);
                 }
                 ScreenCmd::Stay
             }
@@ -559,6 +563,53 @@ mod tests {
         p.update(&mut st, &[key(KeyCode::Enter)]);
         let row = status_row(&p, &st).2;
         assert!(row.contains("last saved · just now"), "{row:?}");
+    }
+
+    /// Killed by a key, then the pause menu or the window's close in the same frame,
+    /// before the map's next frame puts up FLATLINED: a perma death run is marked
+    /// flatlined on the way out, not left living on its save from before.
+    #[test]
+    fn a_perma_run_left_the_frame_it_dies_is_flatlined() {
+        use crate::app::Runner;
+        let cause = "black ICE at Kiroflux Mart";
+        for way in ["QUIT TO TITLE", "QUIT GAME", "LOAD GAME", "the window"] {
+            let dir = Dir::new("dies-leaving");
+            let (mut st, map) = saving(&dir, small_city());
+            st.perma_death = true;
+            assert!(save_now(&mut st));
+            st.net.death = Some(cause.to_string());
+            if way == "the window" {
+                let mut runner = Runner::new(Box::new(map), st);
+                runner.save_on_exit();
+                assert_eq!(runner.st.run, None, "{way}: the run is over");
+            } else {
+                let mut p = Pause::new(&st, st.tick);
+                pick(&mut p, &mut st, way);
+                let cmd = p.update(&mut st, &[key(KeyCode::Enter)]);
+                assert!(!matches!(cmd, ScreenCmd::Stay), "{way} goes on");
+                assert_eq!(st.run, None, "{way}: the run is over");
+            }
+            assert!(crate::runs::living(&dir.0).is_empty(), "{way}: not living");
+            let dead = crate::runs::dead(&dir.0);
+            assert_eq!(dead.len(), 1, "{way}: in the HALL OF FAME");
+            let h = dead[0].header.as_ref().unwrap();
+            assert_eq!(h.death.as_ref().map(|d| d.cause.as_str()), Some(cause));
+        }
+        // Perma death off: nothing is marked, the last save stands to go back to.
+        let dir = Dir::new("dies-leaving-off");
+        let (mut st, _) = saving(&dir, small_city());
+        st.perma_death = false;
+        assert!(save_now(&mut st));
+        let path = crate::runs::list(&dir.0)[0].path.clone();
+        let before = std::fs::read(&path).unwrap();
+        st.net.death = Some(cause.to_string());
+        let mut p = Pause::new(&st, st.tick);
+        pick(&mut p, &mut st, "QUIT GAME");
+        assert!(matches!(
+            p.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Quit
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
     }
 
     #[test]

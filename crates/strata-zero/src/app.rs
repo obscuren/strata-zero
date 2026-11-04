@@ -649,16 +649,19 @@ impl Runner {
     /// bar's or the Dock's Quit, a logout), if it can be saved right now and no screen
     /// holds story in flight; else the last save stands. Once an exit: the window asks
     /// as it closes and again as its loop ends, and a quit the screens asked for (QUIT
-    /// GAME) saved on its own way out. True when it was saved.
+    /// GAME) saved on its own way out. A perma death runner killed this frame is marked
+    /// flatlined instead, whatever is up (`runs::when::save_leaving`). True when it was
+    /// saved.
     #[cfg(any(feature = "window", test))]
     pub fn save_on_exit(&mut self) -> bool {
-        if self.quit || self.screens.iter().any(|s| s.holds_story()) {
+        let dead = self.st.perma_death && self.st.net.death.is_some();
+        if self.quit || (!dead && self.screens.iter().any(|s| s.holds_story())) {
             return false;
         }
         if std::mem::replace(&mut self.leaving, true) {
             return false;
         }
-        crate::runs::when::save_now(&mut self.st)
+        matches!(crate::runs::when::save_leaving(&mut self.st), Some(Ok(())))
     }
 
     fn snapshot(&self, area: Rect) -> Buffer {

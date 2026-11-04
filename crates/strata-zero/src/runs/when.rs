@@ -94,11 +94,30 @@ pub fn begin_run(st: &mut AppState) {
 /// either; none without a run or a folder, or when the last write fails (the log says
 /// why).
 pub fn flatline(st: &mut AppState, cause: &str) -> Option<RunHeader> {
-    let run = st.run?;
     if !st.perma_death {
+        let run = st.run?;
         let dir = st.saves.as_deref()?;
         return file::header(&file::path(dir, run.id)).ok();
     }
+    mark_dead(st, cause)?.ok()
+}
+
+/// The save on a way out of the run (the pause menu's LOAD GAME and QUIT rows, the app
+/// closing): `try_save`, unless the runner has just died in a perma death run, before
+/// the map's next frame put up FLATLINED (a quit in the frame you die). That run is
+/// marked flatlined instead (`flatline`), so leaving doesn't keep it living.
+pub fn save_leaving(st: &mut AppState) -> Option<Result<(), String>> {
+    match st.net.death.clone() {
+        Some(cause) if st.perma_death => mark_dead(st, &cause).map(|r| r.map(|_| ())),
+        _ => try_save(st),
+    }
+}
+
+/// A perma death run written once more, though the dead can't otherwise save, its
+/// header marked with the death, and over. `None` without a run or a folder; why, when
+/// the write failed (the log says it too).
+fn mark_dead(st: &mut AppState, cause: &str) -> Option<Result<RunHeader, String>> {
+    let run = st.run?;
     let written = st.saves.clone().map(|dir| {
         let at = describe::unix_now();
         let death = Death {
@@ -115,10 +134,11 @@ pub fn flatline(st: &mut AppState, cause: &str) -> Option<RunHeader> {
     // Over whether or not it was written: nothing saves it again.
     st.run = None;
     match written? {
-        Ok(header) => Some(header),
+        Ok(header) => Some(Ok(header)),
         Err(e) => {
-            st.warn(format!("couldn't save · {}", e.root_cause()));
-            None
+            let why = e.root_cause().to_string();
+            st.warn(format!("couldn't save · {why}"));
+            Some(Err(why))
         }
     }
 }
