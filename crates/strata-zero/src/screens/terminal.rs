@@ -148,13 +148,19 @@ impl Terminal {
             })
         };
         let prompt = shell::prompt(&AppIo { st }, &shell);
+        // A re-open prints no motd, but the rig still says what mail waits, already typed.
+        let scrollback = if fresh || seized {
+            Vec::new()
+        } else {
+            new_mail_line(st, shell.host).into_iter().collect()
+        };
         Terminal {
             look,
             shell,
             nano: None,
             mailer: None,
             prompt,
-            scrollback: Vec::new(),
+            scrollback,
             typing,
             console: Console::default(),
             denied_at: None,
@@ -332,12 +338,17 @@ fn motd(st: &mut AppState, sh: &Shell) -> Vec<String> {
         Ok(Kind::File(text)) => text.lines().map(str::to_string).collect(),
         _ => Vec::new(),
     };
-    let new = st.journal.mails.iter().filter(|m| !m.read).count();
-    if sh.host == HostId::Rig && new > 0 {
+    if let Some(line) = new_mail_line(st, sh.host) {
         lines.push(String::new());
-        lines.push(format!("YOU HAVE {new} NEW MAIL · TYPE mail"));
+        lines.push(line);
     }
     lines
+}
+
+/// What the rig says about the mail it holds unread (nothing elsewhere, or when all is read).
+fn new_mail_line(st: &AppState, host: HostId) -> Option<String> {
+    let new = st.journal.mails.iter().filter(|m| !m.read).count();
+    (host == HostId::Rig && new > 0).then(|| format!("YOU HAVE {new} NEW MAIL · TYPE mail"))
 }
 
 fn pop() -> ScreenCmd {
@@ -631,6 +642,27 @@ mod tests {
         let there = new_shell(&mut st, HostId::District(d));
         let lines = motd(&mut st, &there);
         assert!(!lines.iter().any(|l| l.contains("NEW MAIL")), "{lines:?}");
+    }
+
+    #[test]
+    fn a_reopened_rig_still_shows_the_new_mail() {
+        let mut st = crate::jobs::testutil::state_home();
+        for m in &mut st.journal.mails {
+            m.read = true;
+        }
+        let first = Terminal::open(&mut st, HostId::Rig, KEY_A);
+        assert!(!first.text(st.tick).iter().any(|l| l.contains("NEW MAIL")));
+        st.journal.mails[0].read = false;
+        let again = Terminal::open(&mut st, HostId::Rig, KEY_A);
+        let text = again.text(st.tick);
+        assert_eq!(
+            text,
+            vec!["YOU HAVE 1 NEW MAIL · TYPE mail".to_string()],
+            "the line lands at once, with no boot"
+        );
+        st.journal.mails[0].read = true;
+        let quiet = Terminal::open(&mut st, HostId::Rig, KEY_A);
+        assert!(quiet.text(st.tick).is_empty());
     }
 
     #[test]
