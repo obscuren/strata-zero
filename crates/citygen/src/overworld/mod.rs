@@ -4,6 +4,7 @@
 //! stages before it. Shapes are measured on screen: a tile is twice as tall as it is
 //! wide, so every distance and noise sample works in s-space, `(x, 2y)` (see `field`).
 
+pub mod detail;
 pub(crate) mod field;
 mod ground;
 mod growth;

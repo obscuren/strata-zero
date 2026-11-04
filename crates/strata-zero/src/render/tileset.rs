@@ -644,7 +644,10 @@ mod tests {
             }
             assert!(drawn.len() >= 2, "{t:?} draws only {drawn:?}");
         }
-        assert_eq!(glyph_for(Terrain::Dirt, Some(Feature::Pylon), None, None, 0, 0, 0, &s), '╫');
+        assert_eq!(
+            glyph_for(Terrain::Dirt, Some(Feature::Pylon), None, None, 0, 0, 0, &s),
+            '╫'
+        );
     }
 
     #[test]

@@ -505,7 +505,9 @@ mod tests {
     #[test]
     fn open_ground_walks_and_sees_as_it_should() {
         use Terrain::*;
-        for t in [Dirt, Scrub, Crops, Salt, Spill, Gravel, Sand, Reeds, Ford, Rise, Wash] {
+        for t in [
+            Dirt, Scrub, Crops, Salt, Spill, Gravel, Sand, Reeds, Ford, Rise, Wash,
+        ] {
             assert!(Tile::new(t).is_walkable(), "{t:?}");
             assert!(!Tile::new(t).blocks_sight(), "{t:?}");
         }
