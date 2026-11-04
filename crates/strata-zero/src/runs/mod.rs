@@ -9,6 +9,7 @@
 
 pub mod describe;
 pub mod file;
+pub mod ids;
 pub mod snapshot;
 #[cfg(test)]
 pub(crate) mod testutil;

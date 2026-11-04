@@ -1,6 +1,7 @@
 //! Items lying in the city: piles of stacks per place and position.
 
 use crate::character::{CopyId, Stack};
+use crate::content::Content;
 use crate::model::ItemId;
 use citygen::{Place, Pos};
 use std::collections::HashMap;
@@ -84,6 +85,17 @@ impl Ground {
         self.piles.remove(&(place, p));
     }
 
+    /// Drops every stack whose item `c` lacks, and what the copies left lying hold that
+    /// it lacks; a pile left with nothing goes. A line for each, naming its id.
+    pub fn forget_unknown(&mut self, c: &Content) -> Vec<String> {
+        let mut lost = Vec::new();
+        for pile in self.piles.values_mut() {
+            pile.retain_mut(|s| s.still_known(c, &mut lost));
+        }
+        self.piles.retain(|_, pile| !pile.is_empty());
+        lost
+    }
+
     /// Every pile on one map.
     pub fn on(&self, place: Place) -> impl Iterator<Item = (Pos, &[Stack])> {
         self.piles
@@ -98,6 +110,61 @@ mod tests {
     use super::*;
     use crate::character::ItemCopy;
     use citygen::{BuildingId, StratumKind};
+
+    #[test]
+    fn the_ground_forgets_what_the_content_lacks() {
+        let c = crate::Content::load().unwrap();
+        let mut g = Ground::default();
+        let street = Place::Stratum(StratumKind::Street);
+        let (a, b) = (Pos::new(3, 4), Pos::new(9, 1));
+        g.add(street, a, ItemId::new("copper_coil"), 5);
+        g.add(street, a, ItemId::new("old_knife"), 1);
+        g.add(street, b, ItemId::new("old_knife"), 2);
+        // A known copy with a socket holding a piece the content lacks.
+        let deck = ItemId::new("rebuilt_deck");
+        let copy = ItemCopy {
+            id: CopyId(7),
+            fitted: vec![Some(Stack::new(ItemId::new("gone_chip"), 1)), None],
+            stickers: vec![],
+        };
+        assert!(c.item(&deck).is_some());
+        g.put(
+            street,
+            b,
+            Stack {
+                item: deck.clone(),
+                qty: 1,
+                copy: Some(copy),
+            },
+        );
+        let lost = g.forget_unknown(&c);
+        assert!(
+            lost.contains(&"an item (old_knife)".to_string()),
+            "{lost:?}"
+        );
+        assert!(
+            lost.contains(&"an item (gone_chip)".to_string()),
+            "{lost:?}"
+        );
+        assert_eq!(g.at(street, a), [Stack::new(ItemId::new("copper_coil"), 5)]);
+        let left = g.at(street, b);
+        assert_eq!(left.len(), 1, "the deck stays");
+        assert!(
+            left[0]
+                .copy
+                .as_ref()
+                .unwrap()
+                .fitted
+                .iter()
+                .all(Option::is_none),
+            "its socket is empty"
+        );
+        // A pile left with nothing goes.
+        g.add(street, Pos::new(1, 1), ItemId::new("old_knife"), 1);
+        g.forget_unknown(&c);
+        assert!(g.at(street, Pos::new(1, 1)).is_empty());
+        assert_eq!(g.on(street).count(), 2);
+    }
 
     #[test]
     fn the_ground_comes_back() {

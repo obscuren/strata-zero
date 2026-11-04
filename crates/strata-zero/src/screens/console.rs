@@ -818,14 +818,13 @@ fn story(st: &mut AppState, args: &[&str]) -> Result<String, String> {
             if !st.book.news.contains_key(*id) {
                 return Err(format!("unknown news {id}"));
             }
-            crate::missions::news::put_out(st, id, usize::MAX, usize::MAX);
+            crate::missions::news::put_out(st, id, None);
             Ok(format!("news {id}"))
         }
         ["feed"] => {
             let from = test_role()?;
             st.missions.feeds.push_back(crate::missions::FeedView {
-                mission: usize::MAX,
-                step: usize::MAX,
+                story: None,
                 from,
                 text: vec![
                     "Test feed. Words go here, then more words, wrapped to the box.".to_string(),
@@ -840,8 +839,7 @@ fn story(st: &mut AppState, args: &[&str]) -> Result<String, String> {
             crate::missions::call::ring(
                 st,
                 crate::missions::Call {
-                    mission: usize::MAX,
-                    step: usize::MAX,
+                    story: None,
                     from,
                     lines: vec![
                         "Test call. Can you hear me?".to_string(),
@@ -1283,7 +1281,7 @@ mod tests {
         let (mut st, at) = story_state();
         assert_eq!(run(&mut st, at, "story news marlo").unwrap(), "news marlo");
         let n = crate::missions::news::current(&st).expect("the item is current");
-        assert_eq!((n.mission, n.step), (usize::MAX, usize::MAX));
+        assert_eq!(n.story, None);
         assert_eq!(
             run(&mut st, at, "story news nope").unwrap_err(),
             "unknown news nope"

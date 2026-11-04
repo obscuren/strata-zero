@@ -68,7 +68,7 @@ impl Screen for Feed {
             .iter()
             .any(|k| matches!(k.code, KeyCode::Char(' ') | KeyCode::Enter | KeyCode::Esc))
         {
-            super::end(st, self.view.mission, self.view.step);
+            super::end_of(st, self.view.story);
             return ScreenCmd::Pop {
                 fx: crate::ui::transition::TransitionKind::None,
             };

@@ -4,8 +4,9 @@
 //! old file, so a crash mid-write keeps the last good save.
 
 use super::snapshot::{Snapshot, snapshot};
-use super::{RunHeader, describe};
+use super::{RunHeader, describe, ids};
 use crate::app::AppState;
+use crate::missions::Book;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -41,7 +42,11 @@ pub fn write(dir: &Path, st: &AppState) -> Result<PathBuf> {
     let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
     {
         let mut out = std::io::BufWriter::new(&mut gz);
-        rmp_serde::encode::write_named(&mut out, &snapshot(st)).context("writing the run")?;
+        // The story's positions go by the book's ids.
+        ids::with_book(&st.book, || {
+            rmp_serde::encode::write_named(&mut out, &snapshot(st))
+        })
+        .context("writing the run")?;
         out.flush().context("writing the run")?;
     }
     let body = gz.finish().context("packing the run")?;
@@ -131,16 +136,20 @@ pub fn header(path: &Path) -> Result<RunHeader> {
     Ok(head(&bytes, file_len)?.run)
 }
 
-/// The run at `path`: its header and its snapshot, for `snapshot::restore`.
-pub fn read(path: &Path) -> Result<(RunHeader, Snapshot)> {
+/// The run at `path` read against `book`: its header, its snapshot for
+/// `snapshot::restore`, and a line for each mission or step it had that the book lacks
+/// (what held them is gone), for `snapshot::after_restore` to say.
+pub fn read(path: &Path, book: &Book) -> Result<(RunHeader, Snapshot, Vec<String>)> {
     let bytes = std::fs::read(path).map_err(|_| anyhow!(UNREADABLE))?;
     let (head, body) = split(&bytes)?;
     let mut raw = Vec::new();
     flate2::read::GzDecoder::new(body)
         .read_to_end(&mut raw)
         .context("the run is broken")?;
-    let snap: Snapshot = rmp_serde::from_slice(&raw).context("the run is broken")?;
-    Ok((head.run, snap))
+    let (snap, found) = ids::reading(book, || rmp_serde::from_slice::<Snapshot>(&raw));
+    let mut snap = snap.context("the run is broken")?;
+    let lost = ids::settle(&mut snap, book, found);
+    Ok((head.run, snap, lost))
 }
 
 /// Puts `header` in place of the file's own, its body kept byte for byte.
@@ -159,50 +168,22 @@ mod tests {
     use super::*;
     use crate::app::{AppState, Screen, ScreenCmd};
     use crate::runs::snapshot::{after_restore, restore, snapshot};
-    use crate::runs::testutil::same;
+    use crate::runs::testutil::{Dir, book, running, same};
     use crate::runs::{RunId, RunMeta};
     use crate::screens::explore::MapScreen;
     use crate::screens::testutil::buffer_text;
     use std::path::PathBuf;
 
-    /// A folder of its own under the temp dir, removed when the test is done with it.
-    struct Dir(PathBuf);
-
-    impl Dir {
-        fn new(name: &str) -> Dir {
-            let dir = std::env::temp_dir().join(format!(
-                "strata-runs-{}-{name}-{:x}",
-                std::process::id(),
-                RunId::fresh(0).0
-            ));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            Dir(dir)
-        }
-    }
-
-    impl Drop for Dir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    /// The state with a run of its own, as JACK IN starts one.
-    fn running(mut st: AppState) -> AppState {
-        st.run = Some(RunMeta {
-            id: RunId::fresh(st.tick),
-            started: st.tick.saturating_sub(30 * 60),
-            born: 0,
-        });
-        st
-    }
-
     /// `path` read back into a new state, made whole.
     fn reopened(path: &std::path::Path) -> AppState {
-        let (_, s) = read(path).expect("the run reads back");
         let mut st = AppState::new();
+        let (_, s, lost) = read(path, &st.book).expect("the run reads back");
+        assert!(
+            lost.is_empty(),
+            "nothing is lost in the same build: {lost:?}"
+        );
         restore(&mut st, s);
-        after_restore(&mut st);
+        after_restore(&mut st, lost);
         st
     }
 
@@ -412,10 +393,13 @@ mod tests {
             "liar.run",
         ] {
             assert!(reason(name).is_err(), "{name} lists as unreadable");
-            assert!(read(&dir.0.join(name)).is_err(), "{name} doesn't open");
+            assert!(
+                read(&dir.0.join(name), book()).is_err(),
+                "{name} doesn't open"
+            );
         }
         assert_eq!(reason("newer.run").unwrap_err(), "this build can't open it");
-        assert!(read(&dir.0.join("newer.run")).is_err());
+        assert!(read(&dir.0.join("newer.run"), book()).is_err());
         // The living list keeps the good one first, the unreadable ones after it.
         let living = crate::runs::living(&dir.0);
         assert_eq!(living.len(), 8);
@@ -437,7 +421,7 @@ mod tests {
         std::fs::write(&path, &bytes).unwrap();
         let h = header(&path).expect("the header reads");
         assert_eq!(h.city, st.city.as_ref().unwrap().name);
-        assert!(read(&path).is_err(), "the body is garbage");
+        assert!(read(&path, book()).is_err(), "the body is garbage");
     }
 
     #[test]
@@ -455,10 +439,10 @@ mod tests {
         });
         rewrite_header(&path, &h).unwrap();
         assert_eq!(header(&path).unwrap(), h);
-        let (_, s) = read(&path).expect("the body still reads");
         let mut b = AppState::new();
+        let (_, s, lost) = read(&path, &b.book).expect("the body still reads");
         restore(&mut b, s);
-        after_restore(&mut b);
+        after_restore(&mut b, lost);
         assert!(same(&snapshot(&st), &snapshot(&b)));
         assert!(crate::runs::living(&dir.0).is_empty());
         assert_eq!(crate::runs::dead(&dir.0).len(), 1);
@@ -533,10 +517,19 @@ mod tests {
         b.deck_part = 4;
         b.deck_jobs_sel = Some(crate::screens::jobs_tab::Entry::Mission(1));
         b.rain = false;
-        let (_, s) = read(&path).unwrap();
+        b.look_at = Some(citygen::Pos::new(3, 4));
+        b.jump_to = Some(citygen::Pos::new(5, 6));
+        b.save_due = true;
+        let (_, s, _) = read(&path, book()).unwrap();
         restore(&mut b, s);
         assert_eq!(b.deck_part, 0, "the deck starts over, as in a new city");
         assert_eq!(b.deck_jobs_sel, None);
+        assert_eq!(
+            (b.look_at, b.jump_to),
+            (None, None),
+            "no map request carries over"
+        );
+        assert!(!b.save_due, "nor a save the last run asked for");
         assert!(!b.rain, "a setting stays as it was");
     }
 }

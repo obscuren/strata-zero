@@ -494,8 +494,12 @@ impl AppState {
     }
 
     /// The deck's remembered tabs and rows and the MAP's view, as a new city has them:
-    /// they point into the run that was in place.
+    /// they point into the run that was in place. So do the requests waiting on the
+    /// map's next frame and a save that run asked for.
     pub fn clear_screens(&mut self) {
+        self.look_at = None;
+        self.jump_to = None;
+        self.save_due = false;
         self.atlas = Default::default();
         self.deck_tab = Tab::Skills;
         self.deck_rows = [0; Tab::ALL.len()];

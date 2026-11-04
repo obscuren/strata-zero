@@ -1082,7 +1082,7 @@ mod tests {
         t(&mut d, &mut st);
         assert!(matches!(
             source(&st),
-            Some(Source::Story { mission: 0, .. })
+            Some(Source::Story(crate::runs::ids::StepRef { mission: 0, .. }))
         ));
         // A closed job: nothing changes.
         st.deck_jobs_open.insert(st.jobs.get(ids[3]).unwrap().fixer);

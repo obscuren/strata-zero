@@ -1136,7 +1136,7 @@ mod tests {
         use crate::missions::news;
         let mut st = crate::jobs::testutil::state_home();
         crate::missions::begin(&mut st);
-        news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        news::put_out(&mut st, "marlo", None);
         news::switch_off(&mut st);
         let mut p = Popup::about(
             None,

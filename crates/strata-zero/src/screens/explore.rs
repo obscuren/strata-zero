@@ -5573,7 +5573,7 @@ mod tests {
         let mut s = MapScreen::walking(&mut st);
         crate::missions::begin(&mut st);
         st.missions.feeds.clear();
-        crate::missions::news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        crate::missions::news::put_out(&mut st, "marlo", None);
         assert!(crate::missions::news::current(&st).is_some_and(|n| n.on));
         let (place, pos) = crate::missions::news::set_tile(&st).unwrap();
         let mut me = crate::walker::Player::at(place, pos.offset(dx, dy));
@@ -5631,7 +5631,7 @@ mod tests {
         let mut st = crate::jobs::testutil::state_home();
         crate::missions::begin(&mut st);
         st.missions.feeds.clear();
-        crate::missions::news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        crate::missions::news::put_out(&mut st, "marlo", None);
         let ad = crate::missions::news::tests::an_ad_cutting_in(&mut st);
         let s = MapScreen::walking(&mut st);
         assert!(s.place.is_street());

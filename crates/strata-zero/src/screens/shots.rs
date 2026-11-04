@@ -1614,7 +1614,7 @@ fn news_shots() {
         let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
         world.advance(city, world.tick() + ahead * sim::TICKS_PER_MINUTE);
     }
-    news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+    news::put_out(&mut st, "marlo", None);
     let about = person_of(&st, &news::current(&st).unwrap().about).unwrap();
     // You walk away in what you wear.
     let worn = st.character.equipped(Slot::Torso).cloned();

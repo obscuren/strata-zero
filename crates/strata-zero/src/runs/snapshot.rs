@@ -201,8 +201,8 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
         show_light: _,   // dev switch
         free_chrome: _,  // dev switch
         chair,
-        look_at: _, // UI: never left waiting at a save
-        jump_to: _, // UI: never left waiting at a save
+        look_at: _, // UI: `clear_screens` below
+        jump_to: _, // UI: `clear_screens` below
         content,
         character,
         people: _, // content
@@ -250,49 +250,90 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
         atlas: _, // UI: `clear_screens` below
         saves: _, // setting
         run,
-        save_due: _,  // the session's
+        save_due: _,  // the session's: `clear_screens` below
         last_save: _, // the session's: the opener sets it
     } = st;
-    *params = s.params;
-    *city = s.city;
-    *player = s.player;
-    *tick = s.tick;
-    *chair = s.chair;
-    *character = s.character;
-    *world = s.world;
-    *interiors = s.interiors;
-    *constructs = s.constructs;
-    *net = s.net;
-    *backdoors = s.backdoors;
-    *ground = s.ground;
-    *fx = s.fx;
-    *foes = s.foes;
-    *bots = s.bots;
-    *live = s.live;
-    *shots = s.shots;
-    *perma_death = s.perma_death;
-    *tutorial_off = s.tutorial_off;
-    *log = s.log;
-    *journal = s.journal;
-    *mail_seen = s.mail_seen;
-    *mail_pill = s.mail_pill;
-    *helix = s.helix;
-    *jobs = s.jobs;
-    *missions = s.missions;
-    *track = s.track;
-    *run = s.run;
-    crate::credentials::put_back(content, s.keycards);
+    // Every field named, so one added to `Snapshot` and never put back doesn't compile.
+    let Snapshot {
+        params: s_params,
+        city: s_city,
+        player: s_player,
+        tick: s_tick,
+        chair: s_chair,
+        character: s_character,
+        world: s_world,
+        interiors: s_interiors,
+        constructs: s_constructs,
+        net: s_net,
+        backdoors: s_backdoors,
+        ground: s_ground,
+        fx: s_fx,
+        foes: s_foes,
+        bots: s_bots,
+        live: s_live,
+        shots: s_shots,
+        perma_death: s_perma_death,
+        tutorial_off: s_tutorial_off,
+        log: s_log,
+        journal: s_journal,
+        mail_seen: s_mail_seen,
+        mail_pill: s_mail_pill,
+        helix: s_helix,
+        jobs: s_jobs,
+        missions: s_missions,
+        track: s_track,
+        run: s_run,
+        keycards,
+    } = s;
+    *params = s_params;
+    *city = s_city;
+    *player = s_player;
+    *tick = s_tick;
+    *chair = s_chair;
+    *character = s_character;
+    *world = s_world;
+    *interiors = s_interiors;
+    *constructs = s_constructs;
+    *net = s_net;
+    *backdoors = s_backdoors;
+    *ground = s_ground;
+    *fx = s_fx;
+    *foes = s_foes;
+    *bots = s_bots;
+    *live = s_live;
+    *shots = s_shots;
+    *perma_death = s_perma_death;
+    *tutorial_off = s_tutorial_off;
+    *log = s_log;
+    *journal = s_journal;
+    *mail_seen = s_mail_seen;
+    *mail_pill = s_mail_pill;
+    *helix = s_helix;
+    *jobs = s_jobs;
+    *missions = s_missions;
+    *track = s_track;
+    *run = s_run;
+    crate::credentials::put_back(content, keycards);
     // Never saved asleep: the run comes back awake.
     *rest = None;
     st.clear_screens();
 }
 
-/// Rebuilds what a restored run leaves out: the world's places and labels, the home,
-/// and the tracked walk.
-pub fn after_restore(st: &mut AppState) {
+/// Rebuilds what a restored run leaves out (the world's places and labels, the home,
+/// the tracked walk), drops whatever the run holds that this build's content lacks, and
+/// logs a warning for each thing gone: `lost`, from `file::read`, and those.
+pub fn after_restore(st: &mut AppState, mut lost: Vec<String>) {
     if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
         world.rebuild(city, &st.people);
     }
     st.home = st.city.as_ref().and_then(crate::home::HomeRig::find);
+    lost.extend(st.character.forget_unknown(&st.content));
+    lost.extend(st.ground.forget_unknown(&st.content));
+    let mut said = std::collections::BTreeSet::new();
+    for line in lost {
+        if said.insert(line.clone()) {
+            st.warn(format!("lost in the update · {line}"));
+        }
+    }
     crate::track::refollow(st);
 }

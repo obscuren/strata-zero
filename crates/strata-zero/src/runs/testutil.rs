@@ -1,14 +1,27 @@
-//! Helpers for the save tests: comparing two values by what they write, and a round
-//! trip through MessagePack.
+//! Helpers for the save tests: comparing two values by what they write, a round trip
+//! through MessagePack (both with the shipped book in scope, as a save has its own), a
+//! folder of the test's own, and a state with a run.
 
+use crate::app::AppState;
+use crate::missions::Book;
+use crate::runs::ids::with_book;
+use crate::runs::{RunId, RunMeta};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::path::PathBuf;
+use std::sync::OnceLock;
+
+/// The shipped book, read once.
+pub(crate) fn book() -> &'static Book {
+    static BOOK: OnceLock<Book> = OnceLock::new();
+    BOOK.get_or_init(|| Book::load().expect("the missions pack is valid"))
+}
 
 /// Whether `a` and `b` write the same. HashMaps write their entries in any order, so
 /// the bytes are never compared: both are read back as generic values and every map is
 /// sorted by the bytes of its encoded keys, all the way down, before they are compared.
 pub(crate) fn same<T: Serialize>(a: &T, b: &T) -> bool {
-    sorted(value_of(a)) == sorted(value_of(b))
+    with_book(book(), || sorted(value_of(a)) == sorted(value_of(b)))
 }
 
 fn value_of<T: Serialize>(t: &T) -> rmpv::Value {
@@ -43,8 +56,42 @@ fn sorted(v: rmpv::Value) -> rmpv::Value {
 
 /// `t` written and read back.
 pub(crate) fn round<T: Serialize + DeserializeOwned>(t: &T) -> T {
-    let bytes = rmp_serde::to_vec_named(t).expect("write");
-    rmp_serde::from_slice(&bytes).expect("read")
+    with_book(book(), || {
+        let bytes = rmp_serde::to_vec_named(t).expect("write");
+        rmp_serde::from_slice(&bytes).expect("read")
+    })
+}
+
+/// A folder of its own under the temp dir, removed when the test is done with it.
+pub(crate) struct Dir(pub PathBuf);
+
+impl Dir {
+    pub(crate) fn new(name: &str) -> Dir {
+        let dir = std::env::temp_dir().join(format!(
+            "strata-runs-{}-{name}-{:x}",
+            std::process::id(),
+            RunId::fresh(0).0
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Dir(dir)
+    }
+}
+
+impl Drop for Dir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The state with a run of its own, as JACK IN starts one.
+pub(crate) fn running(mut st: AppState) -> AppState {
+    st.run = Some(RunMeta {
+        id: RunId::fresh(st.tick),
+        started: st.tick.saturating_sub(30 * 60),
+        born: 0,
+    });
+    st
 }
 
 #[cfg(test)]

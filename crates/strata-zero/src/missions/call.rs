@@ -146,7 +146,7 @@ fn say(st: &mut AppState) {
 /// The call ends, the rest unsaid; its step moves the story on.
 fn hang_up(st: &mut AppState) {
     if let Some(call) = st.missions.call.take() {
-        super::end(st, call.mission, call.step);
+        super::end_of(st, call.story);
         next(st);
     }
 }
@@ -167,7 +167,7 @@ pub(super) fn voicemail(st: &mut AppState) {
     };
     // The map's mail mark logs it as it lands.
     st.journal.mails.push(mail);
-    super::end(st, call.mission, call.step);
+    super::end_of(st, call.story);
     next(st);
 }
 
@@ -636,8 +636,7 @@ mod tests {
         let mut st = up();
         let first = st.missions.call.clone().unwrap();
         let second = Call {
-            mission: 0,
-            step: 1,
+            story: Some(crate::runs::ids::StepRef::new(0, 1)),
             from: "mezz".into(),
             lines: vec!["Second.".into()],
             rang: 0,
@@ -652,8 +651,7 @@ mod tests {
         // A feed opened while it rings shows, closes, and leaves the call up.
         let mut map = MapScreen::walking(&mut st);
         st.missions.feeds.push_back(FeedView {
-            mission: 0,
-            step: 0,
+            story: Some(crate::runs::ids::StepRef::new(0, 0)),
             from: "mezz".into(),
             text: vec!["Feed.".into()],
             close: "ok".into(),

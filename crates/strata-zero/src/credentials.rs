@@ -47,8 +47,8 @@ pub struct Mail {
     pub at: u64,
     /// The job it is about, for a job's own mails.
     pub job: Option<crate::jobs::JobId>,
-    /// The story (mission, step) whose mail this is: reading it ends that step.
-    pub story: Option<(usize, usize)>,
+    /// The story step whose mail this is: reading it ends that step.
+    pub story: Option<crate::runs::ids::StepRef>,
 }
 
 /// The room number a building's street doors share one code under; no room has it.
@@ -121,8 +121,8 @@ pub fn mail_read(st: &mut AppState, index: usize) {
         return;
     };
     let first = !std::mem::replace(&mut m.read, true);
-    if let (true, Some((mission, step))) = (first, m.story) {
-        crate::missions::end(st, mission, step);
+    if let (true, Some(r)) = (first, m.story) {
+        crate::missions::end(st, r.mission, r.step);
     }
 }
 

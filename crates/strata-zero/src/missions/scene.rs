@@ -17,6 +17,7 @@ use super::{
 };
 use crate::app::AppState;
 use crate::render::map::{MapRef, TileMap};
+use crate::runs::ids::StepRef;
 use crate::screens::keypad::Keypad;
 use citygen::{Place, Pos, RoomKind};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -24,9 +25,8 @@ use crossterm::event::{KeyCode, KeyEvent};
 /// A scene playing: where it stands in its beats, and what it shows.
 #[derive(Clone, Debug)]
 pub struct SceneRun {
-    /// The mission and step that played it; `usize::MAX` from the console.
-    mission: usize,
-    step: usize,
+    /// The step that played it; none from the console.
+    story: Option<StepRef>,
     id: String,
     scene: Scene,
     /// The beat in progress.
@@ -141,7 +141,7 @@ impl SceneRun {
 
     /// The mission its lines' needs are asked for: none from the console.
     fn mission(&self) -> Option<usize> {
-        (self.mission != usize::MAX).then_some(self.mission)
+        self.story.map(|r| r.mission)
     }
 }
 
@@ -193,9 +193,7 @@ pub fn camera(st: &AppState) -> Option<(Place, Pos)> {
 /// Dev console: plays the scene next, then its `next`, for no mission's step, so their
 /// end moves nothing on.
 pub fn play(st: &mut AppState, id: &str) {
-    st.missions
-        .scenes
-        .push_front((usize::MAX, usize::MAX, id.to_string()));
+    st.missions.scenes.push_front((None, id.to_string()));
 }
 
 /// A scene takes every key while it plays: `space` and `enter` are next, `esc` skips,
@@ -309,18 +307,17 @@ fn start_next(st: &mut AppState) -> bool {
     if call::busy(st) {
         return false;
     }
-    let Some((mission, step, id)) = st.missions.scenes.pop_front() else {
+    let Some((story, id)) = st.missions.scenes.pop_front() else {
         return false;
     };
     let Some(scene) = st.book.scenes.get(&id).cloned() else {
         // Never so in a checked book; the step must not wait on it for ever.
-        super::end(st, mission, step);
+        super::end_of(st, story);
         return true;
     };
     let began = st.clock_tick();
     st.missions.scene = Some(SceneRun {
-        mission,
-        step,
+        story,
         id,
         scene,
         beat: 0,
@@ -377,8 +374,8 @@ fn close(st: &mut AppState, run: SceneRun) {
         land(st, w);
     }
     match run.scene.next {
-        Some(next) => st.missions.scenes.push_front((run.mission, run.step, next)),
-        None => super::end(st, run.mission, run.step),
+        Some(next) => st.missions.scenes.push_front((run.story, next)),
+        None => super::end_of(st, run.story),
     }
 }
 
@@ -1103,9 +1100,7 @@ pub(crate) mod tests {
         assert!(press(&mut st, KeyCode::Esc));
         assert!(!ended(&st), "the step waits on the scene after");
         // Next in line, ahead of anything queued behind the first.
-        st.missions
-            .scenes
-            .push_back((usize::MAX, usize::MAX, "s".into()));
+        st.missions.scenes.push_back((None, "s".into()));
         tick(&mut st);
         assert_eq!(running(&st).map(|r| r.id()), Some("t"));
         assert!(press(&mut st, KeyCode::Esc));

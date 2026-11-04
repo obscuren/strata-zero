@@ -45,6 +45,7 @@ pub use reading::{item_desc, reading};
 
 use crate::app::AppState;
 use crate::render::Visibility;
+use crate::runs::ids::StepRef;
 use citygen::{Place, Pos, StratumKind};
 use game::{ItemId, SkillId, Slot};
 use sim::PersonId;
@@ -55,7 +56,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Missions {
     pub cast: BTreeMap<String, PersonId>,
-    /// One per mission, in book order.
+    /// One per mission, in book order; saved by mission id.
+    #[serde(with = "crate::runs::ids::runs")]
     pub runs: Vec<Run>,
     pub bodies: Vec<Body>,
     /// Feeds opened, not yet shown.
@@ -70,17 +72,18 @@ pub struct Missions {
     pub visitors: Vec<visitors::Visitor>,
     /// How bright your flat is; `None` is normal.
     pub lights: Option<f32>,
-    /// Scenes queued by `Effect::Scene`: mission, step, scene id.
-    pub scenes: VecDeque<(usize, usize, String)>,
+    /// Scenes queued by `Effect::Scene`: the step that queued it (none from the
+    /// console), scene id.
+    pub scenes: VecDeque<(Option<StepRef>, String)>,
     /// The scene playing.
     // Never saved: a run is written only when no scene is in flight (it holds cloned content).
     #[serde(skip)]
     pub scene: Option<scene::SceneRun>,
     /// The news item put out last, fresh or not.
     pub news: Option<news::NewsRun>,
-    /// Steps whose news item a newer one replaced before they ended: mission, step. The
-    /// next news tick ends them.
-    pub news_ends: Vec<(usize, usize)>,
+    /// Steps whose news item a newer one replaced before they ended. The next news tick
+    /// ends them.
+    pub news_ends: Vec<StepRef>,
     /// The daze running, if one is.
     pub daze: Option<daze::Daze>,
     /// The bubbles up over the map that leave you the keys, oldest first.
@@ -104,8 +107,8 @@ pub struct Missions {
 /// A tray of pieces held out by a role (doctor spec §8): one to take, on a tab.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TrayOffer {
-    pub mission: usize,
-    pub step: usize,
+    /// The step that held it out.
+    pub story: StepRef,
     /// The role holding it out.
     pub from: String,
     /// The role whose tab pays.
@@ -187,8 +190,8 @@ pub struct Left {
 /// A HOLO feed waiting to be shown, its text filled.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FeedView {
-    pub mission: usize,
-    pub step: usize,
+    /// The step that opened it; none from the console.
+    pub story: Option<StepRef>,
     /// The role it comes from.
     pub from: String,
     pub text: Vec<String>,
@@ -199,8 +202,8 @@ pub struct FeedView {
 /// A HOLO call, ringing or talking, its lines filled.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Call {
-    pub mission: usize,
-    pub step: usize,
+    /// The step that rang it; none from the console.
+    pub story: Option<StepRef>,
     /// The role calling.
     pub from: String,
     pub lines: Vec<String>,
@@ -240,23 +243,7 @@ pub fn begin(st: &mut AppState) {
         .book
         .missions
         .iter()
-        .map(|m| Run {
-            at: 0,
-            since: now,
-            state: if st
-                .book
-                .needs_cast(m)
-                .iter()
-                .all(|r| st.missions.cast.contains_key(r))
-            {
-                RunState::Waiting
-            } else {
-                RunState::Uncast
-            },
-            objectives: Vec::new(),
-            ended: BTreeSet::new(),
-            began: None,
-        })
+        .map(|m| fresh_run(&st.book, &st.missions.cast, m, now))
         .collect();
     st.missions.runs = runs;
     if st.dev {
@@ -278,6 +265,23 @@ pub fn begin(st: &mut AppState) {
         game::remove_from_pack(&mut st.character, &id, held);
     }
     send(st, Event::NewGame);
+}
+
+/// Mission `m`'s run as the story begins at game minute `now`: waiting on its first
+/// step, or `Uncast` when a role it needs has nobody in `cast`.
+pub fn fresh_run(book: &Book, cast: &BTreeMap<String, PersonId>, m: &Mission, now: u64) -> Run {
+    Run {
+        at: 0,
+        since: now,
+        state: if book.needs_cast(m).iter().all(|r| cast.contains_key(r)) {
+            RunState::Waiting
+        } else {
+            RunState::Uncast
+        },
+        objectives: Vec::new(),
+        ended: BTreeSet::new(),
+        began: None,
+    }
 }
 
 /// Whether the story has unsealed the item, so the pack may open it.
@@ -360,6 +364,15 @@ pub fn end(st: &mut AppState, mission: usize, step: usize) {
         run.ended.insert(step);
     }
     fire(st, None);
+}
+
+/// `end` for what a step or the console put out: the console's ends no step, but the
+/// story still moves on whatever now holds.
+pub fn end_of(st: &mut AppState, story: Option<StepRef>) {
+    match story {
+        Some(r) => end(st, r.mission, r.step),
+        None => fire(st, None),
+    }
 }
 
 /// Something changed off the map's frame (a Look that told, an action in the deck):
@@ -847,8 +860,8 @@ pub(crate) mod tests {
         assert_eq!(st.missions.feeds.len(), 1);
         let feed = &st.missions.feeds[0];
         assert_eq!(
-            (feed.mission, feed.step, feed.from.as_str()),
-            (0, 0, "mezz")
+            (feed.story, feed.from.as_str()),
+            (Some(StepRef::new(0, 0)), "mezz")
         );
         assert!(feed.text[1].contains("Marlo"), "{:?}", feed.text);
         assert!(
@@ -1009,8 +1022,8 @@ pub(crate) mod tests {
         tick(&mut st);
         let call = st.missions.call.as_ref().expect("Mezz rings");
         assert_eq!(
-            (call.mission, call.step, call.from.as_str()),
-            (0, 3, "mezz")
+            (call.story, call.from.as_str()),
+            (Some(StepRef::new(0, 3)), "mezz")
         );
         assert_eq!(call.lines.len(), 3);
         assert!(
@@ -1676,7 +1689,11 @@ pub(crate) mod tests {
             ["Saw the news.", "Don't go out looking like you."]
         );
         assert!(!mails[0].read);
-        assert_eq!(mails[0].story, Some((2, 2)), "the morning after's `saw`");
+        assert_eq!(
+            mails[0].story,
+            Some(StepRef::new(2, 2)),
+            "the morning after's `saw`"
+        );
         let run = &st.missions.runs[2];
         assert_eq!(run.state, RunState::Open);
         assert_eq!(
@@ -1787,7 +1804,10 @@ pub(crate) mod tests {
         assert!(st.missions.daze.is_some(), "dizzy");
         let n = news::current(&st).expect("the news is on");
         assert!(n.on && !n.ended);
-        assert_eq!((n.id.as_str(), n.mission, n.step), ("marlo", 2, 1));
+        assert_eq!(
+            (n.id.as_str(), n.story),
+            ("marlo", Some(StepRef::new(2, 1)))
+        );
         assert_eq!(
             st.missions.runs[2].objectives.last().map(String::as_str),
             Some("Catch the news on the holo")
@@ -2104,7 +2124,7 @@ pub(crate) mod tests {
         assert_eq!(both(&st), (false, false), "no news item");
         // Marlo dies and the news is about him.
         end(&mut st, 0, 0);
-        news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        news::put_out(&mut st, "marlo", None);
         let jacket = ItemId::new("salvage_jacket");
         st.character.wear(game::Slot::Torso, jacket.clone(), None);
         assert_eq!(both(&st), (false, false), "nobody saw you go");
@@ -2403,6 +2423,16 @@ pub(crate) mod tests {
     /// The index of the book's mission `id`, and of its run.
     fn mission_at(st: &AppState, id: &str) -> usize {
         st.book.missions.iter().position(|m| m.id == id).unwrap()
+    }
+
+    /// `seren_has_written` in any city with a home moved into: the story begun and run
+    /// from your door to Seren's word.
+    pub(crate) fn to_seren_has_written(st: &mut AppState) {
+        begin(st);
+        to_your_door(st);
+        to_the_mail(st);
+        to_the_morning_call(st);
+        to_the_word(st);
     }
 
     /// The morning after to Seren's word: the news switched off, Mezz's mail come and
@@ -2967,7 +2997,7 @@ pub(crate) mod tests {
         st.journal
             .mails
             .iter()
-            .position(|m| m.story == Some((0, 0)))
+            .position(|m| m.story == Some(StepRef::new(0, 0)))
             .expect("the step sent its mail")
     }
 

@@ -720,8 +720,7 @@ mod tests {
         // A feed queued.
         let mut st = lie_down();
         st.missions.feeds.push_back(crate::missions::FeedView {
-            mission: 0,
-            step: 0,
+            story: Some(crate::runs::ids::StepRef::new(0, 0)),
             from: "mezz".into(),
             text: vec!["hi".into()],
             close: "ok".into(),

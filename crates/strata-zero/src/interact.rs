@@ -1337,7 +1337,7 @@ mod tests {
         let (place, set) = news::set_tile(&st).unwrap();
         st.player = Some(crate::walker::Player::at(place, set.offset(0, 1)));
         assert!(set_subject(&st).is_none(), "no news, no Watch");
-        news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        news::put_out(&mut st, "marlo", None);
         let watch = |st: &AppState| {
             let s = set_subject(st).expect("the set");
             assert_eq!(s.pos, set);

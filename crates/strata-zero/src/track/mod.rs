@@ -6,6 +6,7 @@
 use crate::app::AppState;
 use crate::jobs::{JobId, Kind, State};
 use crate::missions::{Effect, Need, ReadAt, RunState, Trigger, Where};
+use crate::runs::ids::StepRef;
 use citygen::{BuildingId, Place, Pos, StratumKind};
 use route::{Leg, NoLeg};
 use sim::{PersonId, Whereabouts};
@@ -30,8 +31,8 @@ pub enum ListingId {
 pub enum Source {
     /// A taken job's objective `objective` (its index when tracked).
     Job { job: JobId, objective: usize },
-    /// A story mission's waiting step `step` (its index when tracked).
-    Story { mission: usize, step: usize },
+    /// A story mission's waiting step (the one it waited on when tracked).
+    Story(StepRef),
     /// A listing from the map.
     Listing(ListingId),
     /// A tile picked on the map (or from the console), arrived within `radius`.
@@ -208,7 +209,7 @@ pub fn set(st: &mut AppState, source: Source) -> Result<String, String> {
     }
     let label = label(st, &source);
     // Tracked, it would clear on the next tick; a story's own trigger decides its own.
-    let story = matches!(source, Source::Story { .. });
+    let story = matches!(source, Source::Story(_));
     if !story && arrival(st, target, located, &label).is_some() {
         return Err("⌖ you're there".to_string());
     }
@@ -253,7 +254,7 @@ pub fn is_tracked(st: &AppState, source: &Source) -> bool {
     };
     match (t.source, *source) {
         (Source::Job { job: a, .. }, Source::Job { job: b, .. }) => a == b,
-        (Source::Story { mission: a, .. }, Source::Story { mission: b, .. }) => a == b,
+        (Source::Story(a), Source::Story(b)) => a.mission == b.mission,
         (a, b) => a == b,
     }
 }
@@ -303,7 +304,7 @@ fn follow(st: &mut AppState) {
         Resolved::Nowhere => kept,
     };
     let arrived = match source {
-        Source::Story { .. } => None,
+        Source::Story(_) => None,
         _ => arrival(st, target, located, &t.label),
     };
     if let Some(line) = arrived {
@@ -436,7 +437,7 @@ fn done() -> Resolved {
 pub fn resolve(st: &AppState, source: &Source) -> Resolved {
     match *source {
         Source::Job { job, objective } => resolve_job(st, job, objective),
-        Source::Story { mission, step } => resolve_story(st, mission, step),
+        Source::Story(r) => resolve_story(st, r.mission, r.step),
         Source::Listing(ListingId::Building(b)) => Resolved::Target(Target::Building(b)),
         Source::Listing(ListingId::Person(p)) => Resolved::Target(Target::Person(p)),
         Source::Listing(ListingId::Job(_) | ListingId::Story(_)) => Resolved::Nowhere,
@@ -621,7 +622,7 @@ pub fn label(st: &AppState, source: &Source) -> String {
             .jobs
             .get(job)
             .map_or_else(|| "a job".to_string(), |j| j.title.clone()),
-        Source::Story { mission, .. } | Source::Listing(ListingId::Story(mission)) => st
+        Source::Story(StepRef { mission, .. }) | Source::Listing(ListingId::Story(mission)) => st
             .book
             .missions
             .get(mission)
@@ -771,7 +772,7 @@ pub(crate) mod tests {
     }
 
     fn story(mission: usize, step: usize) -> Source {
-        Source::Story { mission, step }
+        Source::Story(StepRef::new(mission, step))
     }
 
     #[test]
