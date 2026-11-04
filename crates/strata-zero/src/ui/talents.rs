@@ -399,7 +399,12 @@ impl TalentsView<'_> {
                 buf[(x, y)].set_bg(PANEL_BG);
             }
         }
-        let mut pen = Board { buf, area };
+        let mut pen = Board {
+            buf,
+            area,
+            scroll: 0,
+            clip: 0,
+        };
         self.draw_slots(&mut pen);
         self.draw_board(&mut pen, tree);
         self.draw_readout(&mut pen);
@@ -521,6 +526,20 @@ impl TalentsView<'_> {
                 CHIP_Y + TIER_STEP * tier as u16,
             )
         };
+        // A tree taller than the board (ICE's six tiers on a small screen) scrolls to keep
+        // the cursor's tier in view, under the title row; arrows on the rail say more is
+        // above or below.
+        let last_row = chip(tree.tiers.len().saturating_sub(1), 0).1 + 3;
+        let h = pen.area.height;
+        let scroll = if last_row < h {
+            0
+        } else {
+            let cur = chip(self.cursor.tier, 0).1;
+            (cur + 3).saturating_sub(h - 1).min(last_row + 1 - h)
+        };
+        let more_below = last_row >= h + scroll;
+        pen.scroll = scroll;
+        pen.clip = 1;
 
         // The rail: lit down to the last open tier's tap.
         let tiers = tree.tiers.len();
@@ -663,6 +682,14 @@ impl TalentsView<'_> {
         ] {
             pen.text(cx, cy, s, WHITE, Some(ground), Modifier::BOLD);
         }
+        pen.scroll = 0;
+        pen.clip = 0;
+        if scroll > 0 {
+            pen.text(RAIL_X, 1, "▲", colour, Some(ground), Modifier::BOLD);
+        }
+        if more_below {
+            pen.text(RAIL_X, h - 1, "▼", colour, Some(ground), Modifier::BOLD);
+        }
     }
 
     /// The readout of the chip under the cursor, typing itself out; the key on its last
@@ -699,15 +726,19 @@ impl TalentsView<'_> {
     }
 }
 
-/// Writes inside the body, by offsets from its top-left, nothing outside it.
+/// Writes inside the body, by offsets from its top-left, nothing outside it; a scroll
+/// lifts what it writes by that many rows, and nothing lands above `clip`.
 struct Board<'b> {
     buf: &'b mut Buffer,
     area: Rect,
+    scroll: u16,
+    clip: u16,
 }
 
 impl Board<'_> {
     fn cell(&mut self, x: u16, y: u16) -> Option<&mut ratatui::buffer::Cell> {
-        if x >= self.area.width || y >= self.area.height {
+        let y = y.checked_sub(self.scroll)?;
+        if x >= self.area.width || y >= self.area.height || y < self.clip {
             return None;
         }
         Some(&mut self.buf[(self.area.x + x, self.area.y + y)])

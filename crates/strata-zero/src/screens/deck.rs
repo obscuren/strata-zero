@@ -3383,6 +3383,38 @@ mod tests {
     }
 
     #[test]
+    fn the_ice_tree_runs_to_data_surfer_and_scrolls_on_a_small_screen() {
+        let mut st = state();
+        let mut d = Deck::new(0);
+        d.update(&mut st, &[key(KeyCode::Char('0'))]);
+        // ICE is the fifth tree.
+        for _ in 0..4 {
+            d.update(&mut st, &[key(KeyCode::Char(']'))]);
+        }
+        st.tick += 60;
+        // The rail's column carries the scroll arrows.
+        let rail = |text: &str, ch: char| text.lines().any(|l| l.chars().nth(16) == Some(ch));
+        let big = draw(&d, &st, 120, 40);
+        assert!(big.contains("ICE · the deep end of the grid"), "{big}");
+        assert!(
+            big.contains("┣━12") && big.contains("┣━15"),
+            "six tiers at 120x40: {big}"
+        );
+        assert!(!rail(&big, '▼') && !rail(&big, '▲'), "it all fits: {big}");
+        // At 100x30 the sixth tier is below the board until the cursor goes down.
+        let small = draw(&d, &st, 100, 30);
+        assert!(rail(&small, '▼') && !small.contains("┣━15"), "{small}");
+        for _ in 0..5 {
+            d.update(&mut st, &[key(KeyCode::Down)]);
+        }
+        st.tick += 60;
+        let small = draw(&d, &st, 100, 30);
+        assert!(small.contains("┣━15"), "scrolled to the cursor: {small}");
+        assert!(rail(&small, '▲'), "{small}");
+        assert!(small.contains("SLIPSTREAM"), "the readout: {small}");
+    }
+
+    #[test]
     fn talents_board_draws_one_tree() {
         let mut st = state();
         let mut d = Deck::new(0);

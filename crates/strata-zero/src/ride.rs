@@ -14,6 +14,55 @@ pub struct Ride {
     pub done: Vec<Pos>,
     pub next_at: u64,
 }
+/// Whether you ride the lanes: the Data surfer talent.
+pub fn surfs(st: &crate::app::AppState) -> bool {
+    st.character.flags(&st.content).contains("data_surfer")
+}
+
+/// Slipstream's odds a tile ridden, in percent, and the share of each trace it sheds.
+pub const SLIP_CHANCE: u64 = 5;
+pub const SLIP_SHARE: u32 = 10;
+
+/// A tile ridden with the Slipstream talent: a `SLIP_CHANCE` in a hundred that every
+/// trace on you (a building's, a district's) sheds `SLIP_SHARE` percent of its heat,
+/// at least one. Whether it did.
+pub fn slipstream(st: &mut crate::app::AppState, at: Pos) -> bool {
+    if !st.character.flags(&st.content).contains("slipstream") {
+        return false;
+    }
+    let seed = st.city.as_ref().map_or(0, |c| c.seed);
+    let roll = citygen::rng::hash64(
+        seed ^ st.clock_tick(),
+        (at.x as u64) << 32 | (at.y as u32 as u64),
+    ) % 100;
+    #[cfg(test)]
+    let roll = match st.net.force_slip {
+        Some(true) => 0,
+        Some(false) => 99,
+        None => roll,
+    };
+    if roll >= SLIP_CHANCE {
+        return false;
+    }
+    let mut shed = false;
+    let net = &mut st.net;
+    for t in net
+        .traces
+        .values_mut()
+        .chain(net.district_traces.values_mut())
+    {
+        if t.heat > 0 {
+            let cut = (t.heat as u32 * SLIP_SHARE).div_ceil(100).max(1) as u8;
+            t.heat = t.heat.saturating_sub(cut);
+            shed = true;
+        }
+    }
+    if shed {
+        st.say("slipstream · the trace loses a tenth of you");
+    }
+    shed
+}
+
 /// The longest ride, so a loop of lane can never run away.
 const MAX_RIDE: usize = 512;
 

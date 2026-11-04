@@ -3,9 +3,7 @@
 //! ringed.
 
 use super::plate::{self, Ring};
-use super::{
-    AMBER, NetLookView, Tier, VOID, WHITE, label_for, node_colour, packets, put, security_of,
-};
+use super::{AMBER, NetLookView, Tier, VOID, WHITE, label_for, node_colour, put, security_of};
 use crate::render::Rgb;
 use crate::render::map::{MapRef, TileMap};
 use crate::render::overlay::SIGNAL;
@@ -119,8 +117,7 @@ pub(super) fn draw(
         .map(|n| n.cyber)
         .filter(|h| tiles.grow(14).contains(*h))
         .collect();
-    let lane = |p: Pos| map.tile(p).is_some_and(|t| t.terrain == Terrain::NetLane);
-    let glows = packets::glows(lane, tiles, view.tick);
+    let glows = &view.packets;
     for sy in area.y..area.bottom() {
         for sx in area.x..area.right() {
             let p = screen_to_tile(area, origin, (sx, sy));
@@ -129,7 +126,7 @@ pub(super) fn draw(
                 continue;
             };
             let owner = tile.building.and_then(|b| built.get(&b));
-            let (mut ch, mut fg, bg, mut bold) = match (tile.terrain, owner) {
+            let (mut ch, mut fg, mut bg, mut bold) = match (tile.terrain, owner) {
                 (Terrain::NetLane, _) => {
                     let m = mask(p, |q| {
                         map.tile(q).is_some_and(|t| {
@@ -188,6 +185,12 @@ pub(super) fn draw(
                     view.tick,
                 );
                 bold = matches!(kind, NodeKind::Ice | NodeKind::Server | NodeKind::DataVault);
+                // Soaking up a packet: it flashes in the traffic's signal.
+                if let Some(g) = view.soaks.get(&p) {
+                    bg = bg.mix(SIGNAL, *g);
+                    fg = fg.mix(WHITE, *g);
+                    bold = true;
+                }
             }
             put(buf, sx, sy, ch, fg, bg, bold);
         }
