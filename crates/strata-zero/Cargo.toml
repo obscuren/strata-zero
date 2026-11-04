@@ -18,6 +18,8 @@ sim = { path = "../sim" }
 serde.workspace = true
 postcard.workspace = true
 serde_json.workspace = true
+rmp-serde.workspace = true
+flate2.workspace = true
 anyhow.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
@@ -54,3 +56,4 @@ app = ["window", "dep:winresource", "dep:windows-sys"]
 dist = true
 
 [dev-dependencies]
+rmpv.workspace = true

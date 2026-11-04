@@ -1,5 +1,7 @@
 // What the city says as you drop in. The broadcast screen opens every NEW GAME and
 // LOAD GAME with one of these: among those whose `when` fits, the city's seed picks.
+// One with `during: Some("<mission id>")` airs only while that mission is under way,
+// and is picked over the rest then.
 // Slots in braces are filled from the city being entered and the runner: {city}
 // {city.loud} {you} {home} {corp}, and a district of a kind, {market} {zone} {blocks}
 // {docks} {core} {strip} {industry} {oldtown}. A slot in capitals ({CITY}) fills in
@@ -61,6 +63,7 @@ Broadcasts([
     Broadcast(
         id: "courier",
         when: LoadGame,
+        during: Some("morning_after"),
         tag: [
             ("●", Some((255, 40, 40))),
             (" ON AIR  ", Some((255, 40, 40))),

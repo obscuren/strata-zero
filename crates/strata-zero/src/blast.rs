@@ -20,7 +20,7 @@ pub fn throw_ticks(from: Pos, to: Pos) -> u64 {
 }
 
 /// A blast lying live with a fuse, counting your turns.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Live {
     pub place: Place,
     pub pos: Pos,

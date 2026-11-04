@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Interiors {
     plans: HashMap<BuildingId, FloorPlan>,
     floors: HashMap<(BuildingId, i32), Floor>,
@@ -24,7 +24,7 @@ pub struct Interiors {
 }
 
 /// Which household lives in which flat of one building: stable, in or out.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Homes {
     /// Every flat in the building, lived in or not, in assignment order.
     all: Vec<(i32, u16)>,

@@ -41,10 +41,9 @@ pub fn job_source(st: &AppState, id: JobId) -> Option<Source> {
 /// What `t` tracks on an open story mission: the step it waits on.
 pub fn story_source(st: &AppState, mission: usize) -> Option<Source> {
     let run = st.missions.runs.get(mission)?;
-    (run.state == RunState::Open).then_some(Source::Story {
-        mission,
-        step: run.at,
-    })
+    (run.state == RunState::Open).then_some(Source::Story(crate::runs::ids::StepRef::new(
+        mission, run.at,
+    )))
 }
 
 #[cfg(test)]

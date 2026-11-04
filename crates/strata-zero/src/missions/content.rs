@@ -27,6 +27,8 @@ const STILL_SIDE: usize = 18;
 pub const YOU: &str = "you";
 /// The `{code}` slot in a mail: the code it carries. No cast role takes it.
 pub const CODE: &str = "code";
+/// What a save says a mission waits on once it is past its last step. No step takes it.
+pub const END: &str = "end";
 
 #[derive(Clone, Debug, Error, PartialEq)]
 pub enum BookError {
@@ -60,6 +62,8 @@ pub enum BookError {
     BadFits { place: String, why: String },
     #[error("missions: no role may be called `{0}`")]
     ReservedRole(String),
+    #[error("missions: {mission}: no step may be called `{step}`")]
+    ReservedStep { mission: String, step: String },
     #[error("missions: scene `{0}` has no beats")]
     EmptyScene(String),
     #[error("missions: scene `{0}` comes back to itself through `next`")]
@@ -1081,6 +1085,12 @@ impl Book {
                     step: step.id.clone(),
                 });
             }
+            if step.id == END {
+                return Err(BookError::ReservedStep {
+                    mission: m.id.clone(),
+                    step: step.id.clone(),
+                });
+            }
             match &step.when {
                 Trigger::Ended(prev) => match seen.iter().find(|s| &s.id == prev) {
                     None => {
@@ -1704,6 +1714,18 @@ mod tests {
             tiny(cast, STEP, &scene_with(pace, "Wait(1.0)")),
             Err(BookError::ReservedRole(_))
         ));
+    }
+
+    #[test]
+    fn no_step_is_called_end() {
+        let step = r#"Step(id: "end", when: NewGame, then: [Log("hi")])"#;
+        assert_eq!(
+            tiny("", step, ""),
+            Err(BookError::ReservedStep {
+                mission: "m".into(),
+                step: END.into()
+            })
+        );
     }
 
     #[test]

@@ -5,7 +5,7 @@ use crate::geom::{Grid, Pos, Rect};
 use crate::tile::Tile;
 use crate::world::StratumKind;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RoomKind {
     Lobby,
     Corridor,
@@ -61,7 +61,7 @@ impl RoomKind {
 }
 
 /// Where someone at work or at leisure stands: the floor tile beside the furniture.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Role {
     Reception,
     Desk,
@@ -74,13 +74,13 @@ pub enum Role {
     Bay,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Station {
     pub pos: Pos,
     pub role: Role,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Room {
     pub rect: Rect,
     pub kind: RoomKind,
@@ -93,7 +93,7 @@ pub struct Room {
 }
 
 /// A door tile on the floor that leads outside.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Exit {
     /// The `Door` tile on this floor.
     pub at: Pos,
@@ -105,7 +105,7 @@ pub struct Exit {
     pub door: Pos,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Floor {
     pub level: i32,
     pub tiles: Grid<Tile>,

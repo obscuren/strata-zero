@@ -884,7 +884,7 @@ mod tests {
         use crate::missions::news;
         let mut st = crate::jobs::testutil::state_home();
         crate::missions::begin(&mut st);
-        news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        news::put_out(&mut st, "marlo", None);
         let headline = news::current(&st).unwrap().headline.to_uppercase();
         let ad = news::tests::an_ad_cutting_in(&mut st);
         let c = card(&st, ad);

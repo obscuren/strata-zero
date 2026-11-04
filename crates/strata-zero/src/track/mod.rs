@@ -6,6 +6,7 @@
 use crate::app::AppState;
 use crate::jobs::{JobId, Kind, State};
 use crate::missions::{Effect, Need, ReadAt, RunState, Trigger, Where};
+use crate::runs::ids::StepRef;
 use citygen::{BuildingId, Place, Pos, StratumKind};
 use route::{Leg, NoLeg};
 use sim::{PersonId, Whereabouts};
@@ -17,7 +18,7 @@ pub mod route;
 pub mod ui;
 
 /// A row of the map's listings, as a thing that can be tracked.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ListingId {
     Building(BuildingId),
     Person(PersonId),
@@ -26,12 +27,12 @@ pub enum ListingId {
 }
 
 /// What a track was made from; it follows this, not the place it first pointed at.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Source {
     /// A taken job's objective `objective` (its index when tracked).
     Job { job: JobId, objective: usize },
-    /// A story mission's waiting step `step` (its index when tracked).
-    Story { mission: usize, step: usize },
+    /// A story mission's waiting step (the one it waited on when tracked).
+    Story(StepRef),
     /// A listing from the map.
     Listing(ListingId),
     /// A tile picked on the map (or from the console), arrived within `radius`.
@@ -56,15 +57,26 @@ pub enum Resolved {
 }
 
 /// The one thing being tracked. Made only by `track::set`.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Track {
     pub source: Source,
     /// What the pane and the log call it: "Miracorp Tattoo", "The drop", "the spot".
     pub label: String,
+    // A cache of the route; `refollow` remakes it once the rest of the run is back.
+    #[serde(skip, default = "Walk::unmade")]
     walk: Walk,
+    // Pure animation; it starts again on the first beat.
+    #[serde(skip)]
     pulses: Pulses,
 }
 
 impl Track {
+    /// What the walk is to and the text that follows it, for tests.
+    #[cfg(test)]
+    pub(crate) fn walk_for_test(&self) -> (Target, Option<String>) {
+        (self.walk.target, self.walk.next.clone())
+    }
+
     /// The pulses on the leg as it stands at tick `t`.
     fn pulse(&mut self, t: u64) {
         let walk = self.walk.leg.as_ref().ok().map(|l| (l.place, l.path.len()));
@@ -144,6 +156,21 @@ struct Walk {
 }
 
 impl Walk {
+    /// A walk to be remade: it matches neither where you stand nor any target, so the next
+    /// `follow` makes the real one.
+    fn unmade() -> Walk {
+        Walk {
+            from: Some((Place::Stratum(StratumKind::Street), Pos::new(-1, -1))),
+            target: Target::Spot {
+                place: Place::Stratum(StratumKind::Street),
+                pos: Pos::new(-1, -1),
+                radius: 0,
+            },
+            leg: Err(NoLeg::NoWay),
+            next: None,
+        }
+    }
+
     /// The leg from where you stand to a located target.
     fn new(st: &AppState, target: Target) -> Walk {
         let leg = route::leg(st, target);
@@ -182,7 +209,7 @@ pub fn set(st: &mut AppState, source: Source) -> Result<String, String> {
     }
     let label = label(st, &source);
     // Tracked, it would clear on the next tick; a story's own trigger decides its own.
-    let story = matches!(source, Source::Story { .. });
+    let story = matches!(source, Source::Story(_));
     if !story && arrival(st, target, located, &label).is_some() {
         return Err("⌖ you're there".to_string());
     }
@@ -197,6 +224,12 @@ pub fn set(st: &mut AppState, source: Source) -> Result<String, String> {
     st.track = Some(track);
     st.say(text.clone());
     Ok(text)
+}
+
+/// Remakes the walk and the pulses of a track that was loaded without them, the same
+/// work a beat does when the walk is out of date. Needs the rest of the run restored.
+pub fn refollow(st: &mut AppState) {
+    tick(st);
 }
 
 /// Stops tracking, and logs it.
@@ -221,7 +254,7 @@ pub fn is_tracked(st: &AppState, source: &Source) -> bool {
     };
     match (t.source, *source) {
         (Source::Job { job: a, .. }, Source::Job { job: b, .. }) => a == b,
-        (Source::Story { mission: a, .. }, Source::Story { mission: b, .. }) => a == b,
+        (Source::Story(a), Source::Story(b)) => a.mission == b.mission,
         (a, b) => a == b,
     }
 }
@@ -271,7 +304,7 @@ fn follow(st: &mut AppState) {
         Resolved::Nowhere => kept,
     };
     let arrived = match source {
-        Source::Story { .. } => None,
+        Source::Story(_) => None,
         _ => arrival(st, target, located, &t.label),
     };
     if let Some(line) = arrived {
@@ -404,7 +437,7 @@ fn done() -> Resolved {
 pub fn resolve(st: &AppState, source: &Source) -> Resolved {
     match *source {
         Source::Job { job, objective } => resolve_job(st, job, objective),
-        Source::Story { mission, step } => resolve_story(st, mission, step),
+        Source::Story(r) => resolve_story(st, r.mission, r.step),
         Source::Listing(ListingId::Building(b)) => Resolved::Target(Target::Building(b)),
         Source::Listing(ListingId::Person(p)) => Resolved::Target(Target::Person(p)),
         Source::Listing(ListingId::Job(_) | ListingId::Story(_)) => Resolved::Nowhere,
@@ -589,7 +622,7 @@ pub fn label(st: &AppState, source: &Source) -> String {
             .jobs
             .get(job)
             .map_or_else(|| "a job".to_string(), |j| j.title.clone()),
-        Source::Story { mission, .. } | Source::Listing(ListingId::Story(mission)) => st
+        Source::Story(StepRef { mission, .. }) | Source::Listing(ListingId::Story(mission)) => st
             .book
             .missions
             .get(mission)
@@ -739,7 +772,7 @@ pub(crate) mod tests {
     }
 
     fn story(mission: usize, step: usize) -> Source {
-        Source::Story { mission, step }
+        Source::Story(StepRef::new(mission, step))
     }
 
     #[test]

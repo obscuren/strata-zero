@@ -406,7 +406,10 @@ mod tests {
         press(&mut st, 't');
         let step = st.missions.runs[0].at;
         let source = st.track.as_ref().map(|t| t.source);
-        assert_eq!(source, Some(Source::Story { mission: 0, step }));
+        assert_eq!(
+            source,
+            Some(Source::Story(crate::runs::ids::StepRef::new(0, step)))
+        );
         assert_eq!(source, story_source(&st, 0), "as the JOBS tab's t");
     }
 

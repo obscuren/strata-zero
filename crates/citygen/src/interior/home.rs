@@ -8,7 +8,7 @@ use crate::world::City;
 
 /// Where the player lives: the flat, its front door, the rig they jack in from
 /// and the floor beside the bed they wake on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Home {
     pub building: BuildingId,
     pub level: i32,

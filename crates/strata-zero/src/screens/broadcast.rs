@@ -1,6 +1,7 @@
 //! The way into a game: STRATA ZERO, what the city broadcasts as you drop in, the city
-//! cut open beside it, and the tutorial and perma death a last time. NEW GAME and LOAD
-//! GAME both come through here with the city already built; `space` enters it.
+//! cut open beside it, and the tutorial and perma death a last time. NEW GAME and a city
+//! load come through here with the city already built, and a run opened from its file
+//! (CONTINUE, LOAD GAME) with it already in place; `space` enters it.
 
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::broadcasts::{Aired, When, air};
@@ -45,7 +46,13 @@ const WHITE: Color = Color::Rgb(255, 255, 255);
 /// How the screen was reached, and so what `space` and `esc` do.
 pub enum Entry {
     NewGame,
-    Load { path: String },
+    /// A city from its `.city` file (dev): the run starts over in it.
+    Load {
+        path: String,
+    },
+    /// A run opened from its file (CONTINUE, LOAD GAME), already in place: its flags are
+    /// its own, and JACK IN puts you where you stood.
+    Resume,
 }
 
 pub struct Broadcast {
@@ -82,41 +89,88 @@ struct Places {
     lines: Vec<Line<'static>>,
 }
 
+/// The tag line's clock for a minute of the day: `07:40`.
+fn clock(minute: u16) -> String {
+    format!("{:02}:{:02}", minute / 60, minute % 60)
+}
+
+/// Whether the story's mission `id` is under way in `st`: begun and not yet done.
+fn under_way(st: &AppState, id: &str) -> bool {
+    st.book
+        .missions
+        .iter()
+        .zip(&st.missions.runs)
+        .any(|(m, run)| m.id == id && run.state == crate::missions::RunState::Open)
+}
+
 impl Broadcast {
     /// After JACK IN on the sheet: the build's runner, its perma death.
     pub fn new_game(st: &AppState, city: City) -> Self {
         let (handle, perma_death) = st.build.as_ref().map_or((String::new(), true), |b| {
             (b.handle.trim().to_string(), b.perma_death)
         });
-        let b = st.broadcasts.pick(When::NewGame, city.seed);
+        let b = st.broadcasts.pick_for(When::NewGame, city.seed, |_| false);
         let aired = air(b, &city, &handle);
-        Broadcast::open(st, city, Entry::NewGame, aired, handle, perma_death)
+        Broadcast::open(st, &city, Entry::NewGame, aired, handle, perma_death).holding(city)
     }
 
-    /// After picking a save: the runner the session has, its flags.
+    /// After picking a city file (dev): the runner the session has, its flags. The story
+    /// starts over in it, so no mission is under way.
     pub fn load(st: &AppState, city: City, path: String) -> Self {
         let handle = st.character.handle.clone();
-        let b = st.broadcasts.pick(When::LoadGame, city.seed);
+        let b = st.broadcasts.pick_for(When::LoadGame, city.seed, |_| false);
         let aired = air(b, &city, &handle);
         Broadcast::open(
             st,
-            city,
+            &city,
             Entry::Load { path },
             aired,
             handle,
             st.perma_death,
         )
+        .holding(city)
+    }
+
+    /// Over a run just opened (`runs::open`): its city, its runner, its own flags with
+    /// no switch for them, its clock, and what airs at its point in the story.
+    pub fn resume(st: &AppState) -> Self {
+        let lot;
+        let city = match st.city.as_ref() {
+            Some(city) => city,
+            None => {
+                lot = City::lot(0);
+                &lot
+            }
+        };
+        let handle = st.character.handle.clone();
+        let b = st
+            .broadcasts
+            .pick_for(When::LoadGame, city.seed, |id| under_way(st, id));
+        let aired = air(b, city, &handle);
+        let mut on_air = Broadcast::open(st, city, Entry::Resume, aired, handle, st.perma_death);
+        on_air.clock = clock(st.minute_of_day());
+        on_air
+    }
+
+    /// The city to enter on JACK IN.
+    fn holding(mut self, city: City) -> Self {
+        self.city = Some(city);
+        self
+    }
+
+    /// A run opened from its file, whose flags are its own.
+    fn resumed(&self) -> bool {
+        matches!(self.entry, Entry::Resume)
     }
 
     fn open(
         st: &AppState,
-        city: City,
+        city: &City,
         entry: Entry,
         aired: Aired,
         handle: String,
         perma_death: bool,
     ) -> Self {
-        let minute = crate::ui::hud::minute_at(st.tick);
         let chars = aired
             .tag
             .iter()
@@ -128,11 +182,12 @@ impl Broadcast {
         Broadcast {
             city_name: city.name.clone(),
             seed: city.seed,
-            city: Some(city),
+            city: None,
             entry,
             aired,
             handle,
-            clock: format!("{:02}:{:02}", minute / 60, minute % 60),
+            // The clock a city entered now starts on.
+            clock: clock(crate::ui::hud::minute_at(st.tick)),
             opened: st.tick,
             chars,
             full: false,
@@ -146,7 +201,7 @@ impl Broadcast {
     pub fn with(st: &AppState, city: City, b: &crate::broadcasts::Broadcast) -> Self {
         let handle = st.character.handle.clone();
         let aired = air(b, &city, &handle);
-        Broadcast::open(st, city, Entry::NewGame, aired, handle, st.perma_death)
+        Broadcast::open(st, &city, Entry::NewGame, aired, handle, st.perma_death).holding(city)
     }
 
     /// How much of the broadcast has typed, 0 to 1.
@@ -158,8 +213,16 @@ impl Broadcast {
         (n as f32 / self.chars as f32).min(1.0)
     }
 
-    /// Makes the runner on a new game, sets the run's flags and drops into the city.
+    /// Makes the runner on a new game, sets the run's flags and drops into the city; a
+    /// new game's run starts there, and is saved, once you stand in it. An opened run is
+    /// in place already: back onto its map where you stood.
     fn jack_in(&mut self, st: &mut AppState) -> ScreenCmd {
+        if self.resumed() {
+            return ScreenCmd::Switch {
+                to: crate::screens::resume_screen(st),
+                fx: TransitionKind::Glitch,
+            };
+        }
         let Some(city) = self.city.take() else {
             return ScreenCmd::Stay;
         };
@@ -172,10 +235,15 @@ impl Broadcast {
                 st.character = game::Character::from_build(&st.content, &b);
             }
             Entry::Load { path } => st.say(format!("loaded {path}")),
+            Entry::Resume => {}
         }
         st.perma_death = self.perma_death;
         st.tutorial_off = self.tutorial_off;
-        crate::screens::enter_built_city(st, city)
+        let cmd = crate::screens::enter_built_city(st, city);
+        if matches!(self.entry, Entry::NewGame) {
+            crate::runs::when::begin_run(st);
+        }
+        cmd
     }
 
     /// The broadcast's lines for a column `width` wide: the tag line and the clock, a
@@ -427,6 +495,10 @@ impl Broadcast {
             on_bg(first_style),
             inner_right - 1,
         );
+        // An opened run's perma death is its own: no line about switching it.
+        if self.resumed() {
+            return;
+        }
         // `[p]turn it off` at the right, in the footer's style.
         let keys_x = inner_right.saturating_sub(2 + 3 + verb.len() as u16);
         put(
@@ -457,8 +529,19 @@ impl Screen for Broadcast {
                     shown = true;
                 }
                 KeyCode::Char(' ') if !shown => return self.jack_in(st),
-                KeyCode::Char('t') => self.tutorial_off = !self.tutorial_off,
-                KeyCode::Char('p') => self.perma_death = !self.perma_death,
+                // An opened run keeps its own: quitting and reopening it can't turn perma
+                // death off.
+                KeyCode::Char('t') if !self.resumed() => self.tutorial_off = !self.tutorial_off,
+                KeyCode::Char('p') if !self.resumed() => self.perma_death = !self.perma_death,
+                // The run opened is in place of whatever was under the list, so there is
+                // nothing to go back to: it is left, for the title.
+                KeyCode::Esc if self.resumed() => {
+                    st.run = None;
+                    return ScreenCmd::Switch {
+                        to: Box::new(crate::screens::title::Title::new(st, st.tick)),
+                        fx: TransitionKind::SlideUp,
+                    };
+                }
                 KeyCode::Esc => {
                     return ScreenCmd::Pop {
                         fx: TransitionKind::SlideUp,
@@ -512,15 +595,20 @@ impl Screen for Broadcast {
         }
         self.draw_toggles(buf, at.column, at.toggles_y);
         self.draw_banner(buf, at.banner);
-        buf.set_line(
-            area.x + 2,
-            at.footer_y,
-            &keys_line(&[
+        let keys: &[(&str, &str)] = if self.resumed() {
+            &[("space", "JACK IN"), ("esc", "back")]
+        } else {
+            &[
                 ("space", "JACK IN"),
                 ("t", "tutorial"),
                 ("p", "perma death"),
                 ("esc", "back"),
-            ]),
+            ]
+        };
+        buf.set_line(
+            area.x + 2,
+            at.footer_y,
+            &keys_line(keys),
             area.width.saturating_sub(4),
         );
         let who = format!("{} · {}", self.city_name, self.handle);
@@ -620,6 +708,123 @@ mod tests {
             st.log
                 .iter()
                 .any(|e| e.text.contains("loaded cities/x.city"))
+        );
+    }
+
+    /// A run saved in `dir` with these flags, and the path of its file.
+    fn saved_run(dir: &crate::runs::testutil::Dir, perma: bool) -> std::path::PathBuf {
+        use crate::runs::testutil::{saving, small_city};
+        let (mut a, _) = saving(dir, small_city());
+        a.tick = 4_000;
+        a.perma_death = perma;
+        a.tutorial_off = true;
+        assert!(crate::runs::when::save_now(&mut a));
+        dir.0.join(format!("{}.run", a.run.unwrap().id))
+    }
+
+    #[test]
+    fn a_reopened_run_keeps_its_flags() {
+        let dir = crate::runs::testutil::Dir::new("flags");
+        for perma in [true, false] {
+            let path = saved_run(&dir, perma);
+            let mut st = AppState::new();
+            st.saves = Some(dir.0.clone());
+            // The session's flags are the other way round.
+            st.perma_death = !perma;
+            st.tutorial_off = false;
+            crate::runs::open(&mut st, &path).unwrap();
+            assert_eq!(
+                (st.perma_death, st.tutorial_off),
+                (perma, true),
+                "the run's own"
+            );
+            let mut b = Broadcast::resume(&st);
+            b.full = true;
+            let text = draw(&b, &st, 120, 40);
+            let banner = if perma {
+                "PERMA DEATH IS ON"
+            } else {
+                "PERMA DEATH IS OFF"
+            };
+            for want in [banner, "[✓] DISABLE TUTORIAL", "[space] JACK IN", "VEX"] {
+                assert!(text.contains(want), "wants {want:?}: {text}");
+            }
+            for hint in [
+                "[p]",
+                "[t]",
+                "last chance",
+                "Turn it on now",
+                "perma death",
+                "tutorial",
+            ] {
+                assert!(!text.contains(hint), "no switch: {hint:?} in {text}");
+            }
+            b.update(&mut st, &[key(KeyCode::Char('p')), key(KeyCode::Char('t'))]);
+            assert_eq!((b.perma_death, b.tutorial_off), (perma, true));
+            assert_eq!(draw(&b, &st, 120, 40), text, "p and t change nothing");
+            assert!(matches!(
+                b.update(&mut st, &[key(SPACE)]),
+                ScreenCmd::Switch { .. }
+            ));
+            assert_eq!((st.perma_death, st.tutorial_off), (perma, true));
+            assert!(st.run.is_some(), "the run goes on");
+        }
+    }
+
+    #[test]
+    fn esc_on_a_reopened_run_leaves_it_for_the_title() {
+        let dir = crate::runs::testutil::Dir::new("resume-esc");
+        let path = saved_run(&dir, true);
+        let mut st = AppState::new();
+        st.saves = Some(dir.0.clone());
+        crate::runs::open(&mut st, &path).unwrap();
+        let mut b = Broadcast::resume(&st);
+        let ScreenCmd::Switch { to: title, .. } = b.update(&mut st, &[key(KeyCode::Esc)]) else {
+            panic!("esc goes to the title: what was under the list was another run")
+        };
+        assert_eq!(st.run, None, "left: nothing on the title saves it");
+        let text = buffer_text(&crate::screens::shots::draw_stack(
+            &st,
+            &[title.as_ref()],
+            (120, 40),
+        ));
+        assert!(text.contains('█'), "the title's logo: {text}");
+    }
+
+    #[test]
+    fn the_courier_plays_while_the_morning_after_is_under_way() {
+        use crate::missions::{Run, RunState};
+        let mut st = AppState::new();
+        st.enter_city(small(5));
+        let run = |state| Run {
+            at: 0,
+            since: 0,
+            state,
+            objectives: Vec::new(),
+            ended: Default::default(),
+            began: None,
+        };
+        let morning = st
+            .book
+            .missions
+            .iter()
+            .position(|m| m.id == "morning_after")
+            .unwrap();
+        let mut shouts = Vec::new();
+        for state in [RunState::Waiting, RunState::Open, RunState::Done { at: 9 }] {
+            st.missions.runs = st
+                .book
+                .missions
+                .iter()
+                .map(|_| run(RunState::Open))
+                .collect();
+            st.missions.runs[morning] = run(state);
+            shouts.push(Broadcast::resume(&st).aired.shout);
+        }
+        assert!(shouts[1].contains("WHO'S THE COURIER"), "{shouts:?}");
+        assert!(
+            !shouts[0].contains("COURIER") && !shouts[2].contains("COURIER"),
+            "not before it begins, nor once it is done: {shouts:?}"
         );
     }
 

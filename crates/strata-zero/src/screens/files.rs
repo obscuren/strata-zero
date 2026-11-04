@@ -33,7 +33,13 @@ fn fmt_time(t: SystemTime) -> String {
     let secs = t
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or(0) as i64;
+        .unwrap_or(0);
+    fmt_unix(secs)
+}
+
+/// `YYYY-MM-DD HH:MM` in UTC for a time in Unix seconds.
+pub(crate) fn fmt_unix(secs: u64) -> String {
+    let secs = secs as i64;
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);
     let z = days + 719_468;

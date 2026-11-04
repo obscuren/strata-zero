@@ -283,6 +283,8 @@ pub struct Popup {
     card: Option<Vec<Line<'static>>>,
     /// Logged when esc puts the window down.
     esc_line: Option<String>,
+    /// The story's tray: marked shown as it was put up, settled as a piece is taken.
+    story: bool,
 }
 
 impl Popup {
@@ -310,6 +312,7 @@ impl Popup {
             opened: tick,
             card: None,
             esc_line: None,
+            story: false,
         }
     }
 
@@ -376,11 +379,11 @@ impl Popup {
             .collect();
         let from = crate::missions::role_name(st, &t.from);
         let title = format!("{from} · {}", t.title);
-        Some(
-            Popup::verbs(&title, rows, st.tick)
-                .with_body(vec![t.line.clone()])
-                .on_esc(format!("`{from}` · the tray waits · talk to take a piece")),
-        )
+        let mut tray = Popup::verbs(&title, rows, st.tick)
+            .with_body(vec![t.line.clone()])
+            .on_esc(format!("`{from}` · the tray waits · talk to take a piece"));
+        tray.story = true;
+        Some(tray)
     }
 
     #[cfg(test)]
@@ -958,6 +961,11 @@ impl Screen for Popup {
         ScreenCmd::Stay
     }
 
+    /// The story's tray, put up and marked shown, holds story until a piece is taken.
+    fn holds_story(&self) -> bool {
+        self.story
+    }
+
     fn draw(&self, st: &AppState, f: &mut Frame) {
         let r = self.rect(f.area());
         if r.width < 6 || r.height < 4 {
@@ -1136,7 +1144,7 @@ mod tests {
         use crate::missions::news;
         let mut st = crate::jobs::testutil::state_home();
         crate::missions::begin(&mut st);
-        news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        news::put_out(&mut st, "marlo", None);
         news::switch_off(&mut st);
         let mut p = Popup::about(
             None,
@@ -1550,6 +1558,10 @@ mod tests {
         };
         assert_eq!(st.chair, None);
         assert!(drawn(up.as_ref(), &mut st, 120, 40).contains("Doc Vance · her tray"));
+        assert!(
+            up.holds_story(),
+            "the tray holds story until a piece is taken"
+        );
         // Esc: back to the map, standing, the tray still waiting.
         assert!(matches!(
             up.update(&mut st, &[key(KeyCode::Esc)]),

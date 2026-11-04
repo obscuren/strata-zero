@@ -94,6 +94,25 @@ cargo test --workspace --features strata-zero/window --target-dir target/smoke
   `~/Library/Application Support/Strata Zero/` on a Mac, `%APPDATA%\Strata Zero` on
   Windows, and `~/.local/share/strata-zero` on Linux.
 
+## Saving the run
+
+A save is a snapshot of `AppState` (`crates/strata-zero/src/runs/`), one file per run in
+`runs/`. Read `docs/saving.md` before adding state that lives through play, or touching
+how a run is opened. The rules that bite:
+
+- A new `AppState` field doesn't compile until `runs::snapshot::snapshot` and `restore`
+  name it: save it, or bind it `_` with why not (UI, setting, dev, content, rebuilt).
+- Saved types derive `Serialize` and `Deserialize`. No `HashSet` (use `BTreeSet`), `Rc`,
+  `Cell`, `Instant` or `&'static str` in them. A cache can be `#[serde(skip)]` only if
+  `runs::snapshot::after_restore` rebuilds it.
+- Once a version has shipped, a new field in a saved type needs `#[serde(default)]`; the
+  fixtures in `runs/fixtures/` must keep opening. Never regenerate them to pass a test.
+- A mission or step of `flavor/missions.ron` held by position is a `runs::ids::StepRef`,
+  never a bare index; the save writes ids.
+- Set-up in `enter_city_at` or `missions::begin` doesn't run when a run is reopened, and
+  a screen that takes story off `AppState` while open must say `holds_story()`.
+- `AppState::new()` saves nowhere; tests that save use `runs::testutil::Dir`.
+
 ## Design notes
 
 Specs and plans live in `docs/superpowers/specs` and `docs/superpowers/plans`. The window

@@ -5,16 +5,17 @@ use super::{
     news, person_of, role_name, scene, visitors,
 };
 use crate::app::AppState;
+use crate::runs::ids::StepRef;
 use citygen::{Place, StratumKind};
 use game::ItemId;
 
 /// Runs one effect of step `step` of mission `mission`.
 pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
+    let here = StepRef::new(mission, step);
     match e {
         Effect::Feed { from, text, close } => {
             let view = FeedView {
-                mission,
-                step,
+                story: Some(here),
                 from: from.clone(),
                 text: text.iter().map(|t| fill(st, t)).collect(),
                 close: fill(st, close),
@@ -23,8 +24,7 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
         }
         Effect::Call { from, lines } => {
             let call = Call {
-                mission,
-                step,
+                story: Some(here),
                 from: from.clone(),
                 lines: lines.iter().map(|l| fill(st, l)).collect(),
                 rang: 0,
@@ -91,7 +91,7 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
                 read: false,
                 at: st.net.now(st),
                 job: None,
-                story: Some((mission, step)),
+                story: Some(here),
             };
             st.journal.mails.push(mail);
         }
@@ -99,13 +99,13 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
             let text = fill(st, text);
             st.story(text);
         }
-        Effect::Scene(id) => st.missions.scenes.push_back((mission, step, id.clone())),
+        Effect::Scene(id) => st.missions.scenes.push_back((Some(here), id.clone())),
         Effect::Arrive { role, at } => arrive(st, role, at),
         Effect::Leave(role) => visitors::leave(st, role),
         Effect::Lights(level) => lights(st, *level),
         Effect::Holo { from, text } => holo(st, from, text),
         Effect::Note { at, text } => note(st, at, text),
-        Effect::News(id) => news::put_out(st, id, mission, step),
+        Effect::News(id) => news::put_out(st, id, Some(here)),
         Effect::Daze(seconds) => daze::start(st, *seconds),
         Effect::Hold(role) => {
             if let (Some(id), Some(w)) = (person_of(st, role), st.world.as_mut()) {
@@ -132,8 +132,7 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
                 && person_of(st, from).is_some()
             {
                 st.missions.tray = Some(TrayOffer {
-                    mission,
-                    step,
+                    story: here,
                     from: from.clone(),
                     tab: tab.clone(),
                     title: fill(st, title),
@@ -362,7 +361,7 @@ mod tests {
         apply(&mut st, 3, 4, &Effect::Scene("film".into()));
         assert_eq!(
             st.missions.scenes,
-            [(3, 4, "film".to_string())]
+            [(Some(StepRef::new(3, 4)), "film".to_string())]
                 .into_iter()
                 .collect::<std::collections::VecDeque<_>>()
         );
@@ -442,7 +441,10 @@ mod tests {
         let mut st = state_home();
         apply(&mut st, 1, 2, &Effect::News("marlo".into()));
         let n = crate::missions::news::current(&st).unwrap();
-        assert_eq!((n.id.as_str(), n.mission, n.step), ("marlo", 1, 2));
+        assert_eq!(
+            (n.id.as_str(), n.story),
+            ("marlo", Some(StepRef::new(1, 2)))
+        );
     }
 
     /// At night beside the clinic's chair, its doc cast as `doc`: the state, the clinic
@@ -516,7 +518,7 @@ mod tests {
             t.items,
             ids(&["neural_port", "feedback_fuse", "limbic_damper"])
         );
-        assert_eq!((t.mission, t.step), (2, 3));
+        assert_eq!(t.story, StepRef::new(2, 3));
         assert_eq!((t.from.as_str(), t.tab.as_str()), ("doc", "castellan"));
         assert_eq!(t.title, "her tray");
         assert_eq!(t.line, "One piece, on Castellan's tab.");

@@ -1,5 +1,6 @@
 //! The constructs this session has entered: generated on the first visit and kept
-//! for the session, never saved. The gate on the Net leads in; the entry leads out.
+//! for the session, and written with the run. The gate on the Net leads in; the entry
+//! leads out.
 
 use crate::app::AppState;
 use crate::render::map::MapRef;
@@ -7,7 +8,7 @@ use citygen::{BuildingId, City, Construct, Place, Pos, StratumKind, Terrain, gen
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Constructs {
     made: HashMap<BuildingId, Construct>,
 }

@@ -8,7 +8,9 @@ use crate::app::AppState;
 use citygen::{BuildingId, City, DistrictId, NodeId, SubnetOwner};
 
 /// A building's subnet or a district's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum Owner {
     Building(BuildingId),
     District(DistrictId),

@@ -306,7 +306,7 @@ mod tests {
         let mut st = state_home();
         let map = MapScreen::walking(&mut st);
         crate::missions::begin(&mut st);
-        news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        news::put_out(&mut st, "marlo", None);
         (st, map)
     }
 
@@ -315,7 +315,7 @@ mod tests {
         let mut st = state_home();
         news_then_after(&mut st);
         crate::missions::begin(&mut st);
-        assert!(news::current(&st).is_some_and(|n| n.mission == 0));
+        assert!(news::current(&st).is_some_and(|n| n.story.is_some_and(|r| r.mission == 0)));
         st
     }
 
@@ -373,7 +373,7 @@ mod tests {
             let body = st.missions.bodies.iter_mut().find(|b| b.person == about);
             body.expect("the item's body").left = Some(Left {
                 at: (22, 41),
-                heading: "north",
+                heading: "north".to_string(),
                 worn: None,
             });
             let n = news::current(&st).unwrap();
@@ -532,7 +532,7 @@ mod tests {
         assert!(drawn(&st).trim().is_empty());
         // Stale.
         crate::missions::begin(&mut st);
-        news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        news::put_out(&mut st, "marlo", None);
         assert!(matches!(b.update(&mut st, &[]), ScreenCmd::Stay));
         assert!(!drawn(&st).trim().is_empty());
         st.missions.news.as_mut().unwrap().fresh = 0;

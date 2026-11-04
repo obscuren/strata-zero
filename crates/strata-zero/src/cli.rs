@@ -92,13 +92,32 @@ fn dev_asked(flag: bool, env: Option<&OsStr>) -> bool {
     flag || env.is_some_and(|v| !v.is_empty() && v != OsStr::new("0"))
 }
 
-/// The state a game starts from, dev mode unlocked and on if it was asked for.
+/// The state a game starts from: runs saved in the runs folder, dev mode unlocked and
+/// on if it was asked for.
 fn start_state(dev: bool) -> AppState {
     let mut st = AppState::new();
+    st.saves = Some(crate::runs::default_dir());
     if dev {
         st.unlock_dev();
     }
     st
+}
+
+/// The window's game: its first screen and its state, once `enter` has put the desktop
+/// app in its app folder (`window::enter_app_dir`), so the title finds the runs kept
+/// there to CONTINUE.
+#[cfg(feature = "window")]
+fn window_start(
+    dev: bool,
+    enter: impl FnOnce() -> Result<Option<PathBuf>>,
+) -> Result<(Box<dyn crate::app::Screen>, AppState)> {
+    let entered = enter()?;
+    let mut st = start_state(dev);
+    if let Some(dir) = entered {
+        // The folder `runs` names from there, by its whole path.
+        st.saves = Some(dir.join(crate::runs::default_dir()));
+    }
+    Ok((crate::screens::initial(&st), st))
 }
 
 pub fn run() -> Result<()> {
@@ -107,8 +126,8 @@ pub fn run() -> Result<()> {
     match cli.cmd {
         #[cfg(feature = "window")]
         None if cli.window || crate::window::IS_APP => {
-            let st = start_state(dev);
-            crate::window::run(crate::screens::initial(&st), st)
+            let (screen, st) = window_start(dev, crate::window::enter_app_dir)?;
+            crate::window::run(screen, st)
         }
         None => {
             let st = start_state(dev);
@@ -187,5 +206,52 @@ mod tests {
         assert!(!st.dev && !st.dev_unlocked);
         let st = start_state(true);
         assert!(st.dev && st.dev_unlocked);
+    }
+
+    #[test]
+    fn a_game_saves_its_runs_in_the_runs_folder() {
+        assert_eq!(start_state(false).saves, Some(crate::runs::default_dir()));
+        assert_eq!(AppState::new().saves, None, "nothing else saves");
+    }
+
+    /// The desktop app's title offers CONTINUE for a run in its app folder: the folder
+    /// is entered before the title looks. The run lands there only as the folder is
+    /// entered, so a title made before it would find nothing.
+    #[cfg(feature = "window")]
+    #[test]
+    fn the_window_enters_the_app_folder_before_the_title_looks() {
+        use crate::runs::testutil::{Dir, saving, small_city};
+        use crate::screens::testutil::buffer_text;
+        let app = Dir::new("app-folder");
+        let (mut run, _) = saving(&app, small_city());
+        run.saves = Some(app.0.join("runs"));
+        let enter = || {
+            assert!(crate::runs::when::save_now(&mut run));
+            Ok(Some(app.0.clone()))
+        };
+        let (mut splash, mut st) = window_start(false, enter).unwrap();
+        assert_eq!(
+            st.saves,
+            Some(app.0.join("runs")),
+            "runs/ in the app folder"
+        );
+        // The splash first, then the title it hands over to.
+        let mut title = loop {
+            st.tick += 1;
+            if let crate::app::ScreenCmd::Switch { to, .. } = splash.update(&mut st, &[]) {
+                break to;
+            }
+            assert!(st.tick < 1_000, "the splash hands over");
+        };
+        for _ in 0..90 {
+            st.tick += 1;
+            title.update(&mut st, &[]);
+        }
+        let text = buffer_text(&crate::screens::shots::draw_stack(
+            &st,
+            &[title.as_ref()],
+            (120, 40),
+        ));
+        assert!(text.contains("▸ CONTINUE"), "{text}");
     }
 }

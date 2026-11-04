@@ -18,7 +18,7 @@ const EXPLORE: &[(&str, &str)] = &[
     ("v", "view: the pane toggles as a popup"),
     ("m", "messages: the whole log"),
     ("d", "digital overlay"),
-    ("s", "save city"),
+    ("s", "save game"),
     ("r", "regenerate with a fresh seed"),
     ("g", "configure"),
     (":", "dev console (dev mode)"),
@@ -67,7 +67,7 @@ const WALK: &[(&str, &str)] = &[
     ("c", "back to free camera (dev mode)"),
     (":", "dev console (dev mode)"),
     ("`", "dev mode on / off"),
-    ("s", "save city"),
+    ("s", "save game"),
     ("?", "this help"),
     ("esc q", "pause menu"),
 ];

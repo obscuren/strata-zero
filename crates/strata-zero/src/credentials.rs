@@ -24,7 +24,7 @@ pub fn parse_keycard(id: &ItemId) -> Option<(BuildingId, HouseholdId)> {
 }
 
 /// Where a code came from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Source {
     ServerCopy,
     Home,
@@ -37,7 +37,7 @@ pub enum Source {
 }
 
 /// A message in the rig's inbox.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Mail {
     pub from: String,
     pub subject: String,
@@ -47,8 +47,8 @@ pub struct Mail {
     pub at: u64,
     /// The job it is about, for a job's own mails.
     pub job: Option<crate::jobs::JobId>,
-    /// The story (mission, step) whose mail this is: reading it ends that step.
-    pub story: Option<(usize, usize)>,
+    /// The story step whose mail this is: reading it ends that step.
+    pub story: Option<crate::runs::ids::StepRef>,
 }
 
 /// The room number a building's street doors share one code under; no room has it.
@@ -72,7 +72,7 @@ pub const LOCKOUT_MINUTES: u64 = 30;
 pub const MISSES: u8 = 3;
 
 /// A flat's keypad: misses so far, and the minute a lockout ends.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct KeypadState {
     pub wrong: u8,
     pub locked_until: Option<u64>,
@@ -87,7 +87,7 @@ pub enum Verdict {
 }
 
 /// A door code the player knows.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Code {
     pub building: BuildingId,
     pub level: i32,
@@ -102,7 +102,7 @@ pub struct Code {
 }
 
 /// What the player knows: door codes, and which lobbies already hold a lost card.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Journal {
     codes: Vec<Code>,
     /// Buildings whose lost keycard already lies in the lobby.
@@ -112,7 +112,7 @@ pub struct Journal {
     /// The rig's inbox, oldest first.
     pub mails: Vec<Mail>,
     /// Terminals already powered on this session, by their tile.
-    pub booted: std::collections::HashSet<(Place, Pos)>,
+    pub booted: std::collections::BTreeSet<(Place, Pos)>,
 }
 
 /// A mail has been read: marks it. The first reading of a story mail ends its step.
@@ -121,8 +121,8 @@ pub fn mail_read(st: &mut AppState, index: usize) {
         return;
     };
     let first = !std::mem::replace(&mut m.read, true);
-    if let (true, Some((mission, step))) = (first, m.story) {
-        crate::missions::end(st, mission, step);
+    if let (true, Some(r)) = (first, m.story) {
+        crate::missions::end(st, r.mission, r.step);
     }
 }
 
@@ -693,12 +693,33 @@ pub fn entries(st: &AppState) -> Vec<(BuildingId, String, Vec<Entry>)> {
     groups
 }
 
+/// A catalogue entry the run made (a keycard), not the build's content.
+fn run_made(id: &ItemId) -> bool {
+    id.0.starts_with("keycard:")
+}
+
 /// Drops every keycard of a previous city from the catalogue and the pack.
 pub fn purge(content: &mut game::Content, character: &mut game::Character) {
-    content.items.retain(|i| !i.id.0.starts_with("keycard:"));
-    character
-        .inventory
-        .retain(|s| !s.item.0.starts_with("keycard:"));
+    content.items.retain(|i| !run_made(&i.id));
+    character.inventory.retain(|s| !run_made(&s.item));
+}
+
+/// The catalogue entries this run made (its keycards), in catalogue order: saved with
+/// the run, since the build's content doesn't have them.
+pub fn run_items(content: &game::Content) -> Vec<Item> {
+    content
+        .items
+        .iter()
+        .filter(|i| run_made(&i.id))
+        .cloned()
+        .collect()
+}
+
+/// A saved run's own catalogue entries back in the catalogue, in place of any that
+/// another run left there; the pack is the saved run's and is left alone.
+pub fn put_back(content: &mut game::Content, items: Vec<Item>) {
+    content.items.retain(|i| !run_made(&i.id));
+    content.items.extend(items);
 }
 
 #[cfg(test)]

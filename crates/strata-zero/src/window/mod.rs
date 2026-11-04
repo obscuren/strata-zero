@@ -52,21 +52,30 @@ const ZOOM_START: f32 = 1.0 / (ZOOM_STEP * ZOOM_STEP * ZOOM_STEP);
 /// player's app folder.
 pub const IS_APP: bool = cfg!(feature = "app");
 
-/// Runs the game in a window until it quits. The desktop app first makes its app folder
-/// (`Platform::app_dir`) the working folder, so `cities/` is saved there.
+/// The desktop app makes its app folder (`Platform::app_dir`) the working folder, so
+/// `cities/` and `runs/` are kept there: before the game's state and its first screen are
+/// made, as the title looks in `runs/` for a run to CONTINUE. The folder, or `None`
+/// outside the app (`strata --window` keeps the folder it was started in).
+pub fn enter_app_dir() -> Result<Option<PathBuf>> {
+    if !IS_APP {
+        return Ok(None);
+    }
+    let dir = Platform::NATIVE
+        .app_dir(&platform::process_env)
+        .context("can't tell where to keep the game's files: set APPDATA (Windows) or HOME")?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    std::env::set_current_dir(&dir).with_context(|| format!("opening {}", dir.display()))?;
+    Ok(Some(dir))
+}
+
+/// Runs the game in a window until it quits. The desktop app is in its app folder by
+/// now (`enter_app_dir`).
 pub fn run(screen: Box<dyn Screen>, mut st: AppState) -> Result<()> {
     if let Some(fx) = std::env::var("STRATA_SCREEN_FX")
         .ok()
         .and_then(|s| ScreenFx::parse(&s))
     {
         st.screen_fx = fx;
-    }
-    if IS_APP {
-        let dir = Platform::NATIVE
-            .app_dir(&platform::process_env)
-            .context("can't tell where to keep the game's files: set APPDATA (Windows) or HOME")?;
-        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-        std::env::set_current_dir(&dir).with_context(|| format!("opening {}", dir.display()))?;
     }
     let fonts = Fonts::load();
     let event_loop = EventLoop::new()?;
@@ -218,7 +227,13 @@ impl App {
             return;
         };
         self.zoom = match s {
-            Shortcut::Quit => return el.exit(),
+            // Cmd+Q, if it reaches the window: the run is saved first, when it can be
+            // (`Runner::save_on_exit`). The menu's Quit usually takes the chord first,
+            // and comes in by `exiting`.
+            Shortcut::Quit => {
+                self.runner.save_on_exit();
+                return el.exit();
+            }
             Shortcut::Fullscreen => {
                 let full = live.window.fullscreen().is_some();
                 live.window
@@ -319,7 +334,11 @@ impl ApplicationHandler for App {
 
     fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
-            WindowEvent::CloseRequested => el.exit(),
+            // The close button: the run is saved first, when it can be.
+            WindowEvent::CloseRequested => {
+                self.runner.save_on_exit();
+                el.exit();
+            }
             WindowEvent::Resized(size) => {
                 if let Some(live) = self.live.as_mut() {
                     let backend = live.term.backend_mut();
@@ -372,6 +391,14 @@ impl ApplicationHandler for App {
             }
             _ => {}
         }
+    }
+
+    /// The loop is ending, however it was asked to: the arms above (they saved first),
+    /// or past them, as Cmd+Q, the menu bar's and the Dock's Quit and a logout end it on
+    /// a Mac (AppKit's `terminate:` takes them before a key reaches the window). The run
+    /// is saved, once an exit (`Runner::save_on_exit`).
+    fn exiting(&mut self, _el: &ActiveEventLoop) {
+        self.runner.save_on_exit();
     }
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {

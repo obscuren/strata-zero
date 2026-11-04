@@ -21,13 +21,13 @@ pub const QUIET_MINUTES: u64 = 24 * 60;
 pub const PLANT_NOISE: u8 = 15;
 pub const HONEYPOT_NOISE: u8 = 60;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Kind {
     Key { user: String },
     Net { rating: u8 },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Why {
     Decay,
     Trace,
@@ -48,14 +48,14 @@ impl Why {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum State {
     Live,
     Honeypot,
     Burned { at: u64, why: Why },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Backdoor {
     pub building: BuildingId,
     pub kind: Kind,
@@ -159,12 +159,12 @@ pub struct Burnt {
     pub cut_trace: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Route {
     pub relays: Vec<BuildingId>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HomeTrace {
     /// Nearest the target first.
     pub relays: Vec<BuildingId>,
@@ -173,7 +173,7 @@ pub struct HomeTrace {
     pub moves_at: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Raid {
     pub at: u64,
     pub mailed: bool,
@@ -187,7 +187,7 @@ pub enum Event {
     RigReturned,
 }
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Backdoors {
     pub list: Vec<Backdoor>,
     pub route: Option<Route>,

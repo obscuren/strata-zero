@@ -19,7 +19,9 @@ use std::time::{Duration, Instant};
 
 pub const MIN_W: u16 = 100;
 pub const MIN_H: u16 = 30;
-pub const FRAME: Duration = Duration::from_micros(33_333);
+/// Frames a second: the loop runs one every `FRAME`, and `tick` counts them.
+pub const FPS: u64 = 30;
+pub const FRAME: Duration = Duration::from_micros(1_000_000 / FPS);
 
 /// The screen effects a window draws over the game: none, a soft glow and vignette, or
 /// a CRT's glow, scanlines and curve.
@@ -149,10 +151,12 @@ pub struct AppState {
     pub deck_part: usize,
     /// The character being built, between the chooser and JACK IN.
     pub build: Option<game::Build>,
-    /// The run is played for one life. Carried through the game; nothing reads it yet.
+    /// The run is played for one life: a flatline marks it and sends it to the HALL OF
+    /// FAME (`runs::when::flatline`). Saved with the run, shown on its header and its
+    /// broadcast.
     pub perma_death: bool,
-    /// The player turned the tutorial off. Carried through the game; nothing reads it
-    /// yet.
+    /// The player turned the tutorial off. Saved with the run and shown on its
+    /// broadcast; nothing in play reads it yet.
     pub tutorial_off: bool,
     /// What happened, newest last.
     pub log: MessageLog,
@@ -188,10 +192,24 @@ pub struct AppState {
     pub track: Option<crate::track::Track>,
     /// The deck's MAP: its cursor, view, zoom, kind and fold, for the session.
     pub atlas: crate::screens::atlas::AtlasState,
+    /// The folder runs are saved in; `None` saves nothing. Only the state a real game
+    /// starts from (`cli::start_state`) has one.
+    pub saves: Option<std::path::PathBuf>,
+    /// The run under way: its id and when it started. Saved with the run; a new city
+    /// has none until JACK IN gives it one.
+    pub run: Option<crate::runs::RunMeta>,
+    /// The run asked to be saved on the next frame that can take a save.
+    pub save_due: bool,
+    /// This session's last save of the run: the frame tick, and the wall clock then.
+    pub last_save: Option<(u64, std::time::SystemTime)>,
+    /// The frame tick of a save that failed since the last that didn't: the
+    /// five-minute save counts from it too, so a folder that can't be written isn't
+    /// tried again every frame.
+    pub save_failed: Option<u64>,
 }
 
 /// One ability effect playing on the map.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FxInstance {
     pub fx: game::Fx,
     pub place: citygen::Place,
@@ -279,6 +297,10 @@ impl AppState {
         let character = game::Character::from_template(&content, &game::TemplateId::new("vex"))
             .expect("the vex template builds");
         let people = sim::People::load().expect("the people pack is valid");
+        let book = crate::missions::Book::load().expect("the missions pack is valid");
+        let broadcasts =
+            crate::broadcasts::Broadcasts::load(book.missions.iter().map(|m| m.id.as_str()))
+                .expect("the broadcasts are valid");
         AppState {
             params: GenParams::default(),
             city: None,
@@ -337,13 +359,18 @@ impl AppState {
             helix: Default::default(),
             jobs: Default::default(),
             flavor: crate::jobs::Flavor::load().expect("the jobs pack is valid"),
-            book: crate::missions::Book::load().expect("the missions pack is valid"),
-            broadcasts: crate::broadcasts::Broadcasts::load().expect("the broadcasts are valid"),
+            book,
+            broadcasts,
             missions: Default::default(),
             rest: None,
             drawn_you: Default::default(),
             track: None,
             atlas: Default::default(),
+            saves: None,
+            run: None,
+            save_due: false,
+            last_save: None,
+            save_failed: None,
         }
     }
 
@@ -461,7 +488,6 @@ impl AppState {
         self.missions = Default::default();
         self.rest = None;
         self.track = None;
-        self.atlas = Default::default();
         crate::credentials::purge(&mut self.content, &mut self.character);
         self.ground = Default::default();
         self.player = None;
@@ -469,6 +495,22 @@ impl AppState {
         self.foes.clear();
         self.bots.clear();
         self.live.clear();
+        // Another city is another run: JACK IN names it.
+        self.run = None;
+        self.save_due = false;
+        self.last_save = None;
+        self.clear_screens();
+    }
+
+    /// The deck's remembered tabs and rows and the MAP's view, as a new city has them:
+    /// they point into the run that was in place. So do the requests waiting on the
+    /// map's next frame and a save that run asked for or failed.
+    pub fn clear_screens(&mut self) {
+        self.look_at = None;
+        self.jump_to = None;
+        self.save_due = false;
+        self.save_failed = None;
+        self.atlas = Default::default();
         self.deck_tab = Tab::Skills;
         self.deck_rows = [0; Tab::ALL.len()];
         self.deck_kit = Default::default();
@@ -529,6 +571,15 @@ pub enum ScreenCmd {
 pub trait Screen {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd;
     fn draw(&self, st: &AppState, f: &mut Frame);
+
+    /// The screen holds a piece of the story in flight: taken off the state (or marked
+    /// shown) as it opened, settled only as it closes. While one is up the run isn't
+    /// saved on the way out; the save before it opened stands.
+    // Only the window has a way out that asks (`Runner::save_on_exit`).
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
+    fn holds_story(&self) -> bool {
+        false
+    }
 }
 
 /// Centered notice for terminals under the minimum size. Never panics, even at 1x1.
@@ -558,6 +609,12 @@ pub struct Runner {
     /// A screen change or transition asked for a full repaint once nothing is animating.
     repaint_pending: bool,
     full_repaints: u32,
+    /// The app is closing and its save has been taken or tried (`save_on_exit`).
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
+    leaving: bool,
+    /// A screen asked to quit (QUIT GAME, the title's QUIT): it saved on its way out.
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
+    quit: bool,
 }
 
 impl Runner {
@@ -569,6 +626,8 @@ impl Runner {
             last_frame: None,
             repaint_pending: false,
             full_repaints: 0,
+            leaving: false,
+            quit: false,
         }
     }
 
@@ -586,6 +645,25 @@ impl Runner {
     #[cfg(test)]
     pub fn depth(&self) -> usize {
         self.screens.len()
+    }
+
+    /// Saves the run as the app is closed (the window's close button, Cmd+Q, the menu
+    /// bar's or the Dock's Quit, a logout), if it can be saved right now and no screen
+    /// holds story in flight; else the last save stands. Once an exit: the window asks
+    /// as it closes and again as its loop ends, and a quit the screens asked for (QUIT
+    /// GAME) saved on its own way out. A perma death runner killed this frame is marked
+    /// flatlined instead, whatever is up (`runs::when::save_leaving`). True when it was
+    /// saved.
+    #[cfg(any(feature = "window", test))]
+    pub fn save_on_exit(&mut self) -> bool {
+        let dead = self.st.perma_death && self.st.net.death.is_some();
+        if self.quit || (!dead && self.screens.iter().any(|s| s.holds_story())) {
+            return false;
+        }
+        if std::mem::replace(&mut self.leaving, true) {
+            return false;
+        }
+        matches!(crate::runs::when::save_leaving(&mut self.st), Some(Ok(())))
     }
 
     fn snapshot(&self, area: Rect) -> Buffer {
@@ -644,7 +722,10 @@ impl Runner {
                 self.transition = Some(Transition::flash(fx, snapshot, self.st.tick));
                 self.repaint_pending = true;
             }
-            ScreenCmd::Quit => return Ok(false),
+            ScreenCmd::Quit => {
+                self.quit = true;
+                return Ok(false);
+            }
         }
         // Once nothing animates, repaint every cell: a glitch or a wide glyph may have
         // left the terminal out of step with what ratatui believes is on screen.

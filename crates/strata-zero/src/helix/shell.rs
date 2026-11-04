@@ -6,7 +6,7 @@ use citygen::{BuildingId, DistrictId};
 #[cfg(test)]
 use std::collections::HashMap;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum HostId {
     Rig,
     Building(BuildingId),

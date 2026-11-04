@@ -9,15 +9,21 @@ use rand::seq::SliceRandom;
 use rand_chacha::ChaCha8Rng;
 use std::collections::{HashMap, HashSet};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct PersonId(pub u32);
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct CarId(pub u32);
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct HouseholdId(pub u32);
 
 /// How many people, and how many cars.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SimParams {
     pub density: f32,
     pub car_share: f32,
@@ -33,7 +39,7 @@ impl Default for SimParams {
 }
 
 /// Where someone works.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Work {
     Building(BuildingId),
     Spot(Pos),
@@ -41,7 +47,7 @@ pub enum Work {
 }
 
 /// What a schedule segment heads for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Goal {
     Home,
     Work,
@@ -49,7 +55,7 @@ pub enum Goal {
 }
 
 /// From minute `at` of the day, the person heads for `goal`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Segment {
     pub at: u16,
     pub goal: Goal,
@@ -69,7 +75,7 @@ pub fn goal_at(schedule: &[Segment], minute_of_day: u16) -> Goal {
 }
 
 /// What someone standing on the street is doing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Activity {
     Working,
     Loitering,
@@ -78,20 +84,20 @@ pub enum Activity {
 }
 
 /// Where a trip ends.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Dest {
     Building(BuildingId),
     Spot(Pos),
 }
 
 /// One stretch of a trip: a path, on foot or in a car.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Leg {
     pub path: Vec<Pos>,
     pub car: Option<CarId>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Trip {
     pub from: Pos,
     pub depart: u64,
@@ -100,14 +106,14 @@ pub struct Trip {
     pub dest: Dest,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Whereabouts {
     Inside(BuildingId),
     At { pos: Pos, activity: Activity },
     Travelling(Trip),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Person {
     pub id: PersonId,
     pub name: String,
@@ -130,7 +136,7 @@ pub struct Person {
     pub tint: Option<Tint>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Car {
     pub id: CarId,
     pub owner: PersonId,
@@ -142,7 +148,7 @@ pub struct Car {
     pub bound: Option<Pos>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Population {
     pub people: Vec<Person>,
     pub cars: Vec<Car>,

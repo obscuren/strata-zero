@@ -14,14 +14,14 @@ pub const GOON_MOVE: u8 = 3;
 pub const GOON_AP: u8 = 1;
 
 /// What a foe is doing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FoeMode {
     Idle,
     Hunting { seen: Pos, lost: u8 },
 }
 
 /// Someone with a gun on your map this session.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Foe {
     pub name: String,
     pub place: Place,
@@ -45,7 +45,9 @@ pub struct Foe {
     pub chrome: bool,
     /// Read by Deadeye: your chance on it is better for the fight.
     pub marked: bool,
-    /// ICE on the open Net: its grade, role and owner (`grid`).
+    /// ICE on the open Net: its grade, role and owner (`grid`). After the first saves,
+    /// so it defaults: a foe they hold is no ICE.
+    #[serde(default)]
     pub ice: Option<crate::grid::GridIce>,
 }
 

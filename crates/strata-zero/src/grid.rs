@@ -28,7 +28,7 @@ pub const RING_MAX: i32 = 30;
 pub const RING_HEAT: u8 = 12;
 
 /// What a grid piece is for.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Role {
     /// Walks a beat, there and back, asleep until it sees you.
     Sentinel {
@@ -42,7 +42,7 @@ pub enum Role {
 }
 
 /// A piece of ICE on the open Net.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GridIce {
     pub grade: IceGrade,
     pub role: Role,
@@ -80,7 +80,7 @@ impl Patrols {
 }
 
 /// A ring out of a hub.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Ring {
     pub district: DistrictId,
     pub hub: Pos,
@@ -94,13 +94,14 @@ impl Ring {
     }
 }
 
-/// The open Net's own state this session.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// The open Net's own state this run, saved with it (its ticks are clock ticks).
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GridState {
     /// The tiles you stood on on the open Net, in order, each marked when it lies by a
     /// hub (a tracer that gets there is lost).
     pub trail: Vec<(Pos, bool)>,
-    /// The sentinels went out (once a session).
+    /// The sentinels went out (once a run: they are foes, saved with it, so a reopened
+    /// run doesn't post them again).
     pub posted: bool,
     /// The last clock tick a tracer stepped, a sentinel stepped, a sweep rang.
     pub tracer_tick: u64,

@@ -157,6 +157,9 @@ impl Screen for Configure {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
         for k in keys {
             if k.code == KeyCode::Esc {
+                // The run it was opened over is left, as QUIT TO TITLE leaves it:
+                // nothing on the title (the window closing) saves it again.
+                st.run = None;
                 return ScreenCmd::Switch {
                     to: Box::new(Title::new(st, st.tick)),
                     fx: TransitionKind::SlideUp,
@@ -317,5 +320,22 @@ mod tests {
             ScreenCmd::Switch { .. }
         ));
         assert_eq!(cfg.params().districts, 7);
+    }
+
+    /// Dev: opened over a run, esc goes to the title and leaves the run, as QUIT TO
+    /// TITLE does: the window closing on the title saves nothing.
+    #[test]
+    fn esc_to_the_title_leaves_the_run() {
+        let dir = crate::runs::testutil::Dir::new("configure");
+        let (mut st, _) = crate::runs::testutil::saving(&dir, crate::runs::testutil::small_city());
+        assert!(st.run.is_some());
+        let mut cfg = Configure::new(st.params.clone(), st.tick);
+        assert!(matches!(
+            cfg.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Switch { .. }
+        ));
+        assert_eq!(st.run, None);
+        assert!(!crate::runs::when::save_now(&mut st));
+        assert!(crate::runs::list(&dir.0).is_empty());
     }
 }

@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Kind {
     /// A plain result.
     Info,
@@ -12,7 +12,7 @@ pub enum Kind {
     Story,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Entry {
     pub text: String,
     pub kind: Kind,
@@ -62,7 +62,7 @@ impl Entry {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct MessageLog {
     entries: VecDeque<Entry>,
 }

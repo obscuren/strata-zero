@@ -6,6 +6,7 @@
 use super::asides::{self, READ_GAP, Speaker};
 use super::{Left, Mark, Where, fill, person_of};
 use crate::app::AppState;
+use crate::runs::ids::StepRef;
 use crate::ui::chrome::{DIM, MAGENTA};
 use crate::walker::Visibility;
 use citygen::{BuildingId, BuildingKind, Feature, Place, Pos, Rect, StratumKind};
@@ -62,13 +63,12 @@ const SCREENED: [BuildingKind; 3] = [
 ];
 
 /// The news item put out last, its texts filled.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct NewsRun {
     /// The book's id for it.
     pub id: String,
-    /// The mission and step that put it out; `usize::MAX` from the console.
-    pub mission: usize,
-    pub step: usize,
+    /// The step that put it out; none from the console.
+    pub story: Option<StepRef>,
     /// The game minute it was put out.
     pub started: u64,
     /// Game minutes it stays current.
@@ -113,9 +113,9 @@ impl NewsRun {
     }
 }
 
-/// Puts out the book's news item `id` for step `step` of mission `mission`: its texts
-/// filled, the set switched on, current in place of any earlier one.
-pub fn put_out(st: &mut AppState, id: &str, mission: usize, step: usize) {
+/// Puts out the book's news item `id` for the step `story` (none from the console): its
+/// texts filled, the set switched on, current in place of any earlier one.
+pub fn put_out(st: &mut AppState, id: &str, story: Option<StepRef>) {
     let Some(item) = st.book.news.get(id) else {
         if st.dev {
             st.warn(format!("story · no news {id}"));
@@ -125,8 +125,7 @@ pub fn put_out(st: &mut AppState, id: &str, mission: usize, step: usize) {
     let all = |texts: &[String]| texts.iter().map(|t| fill(st, t)).collect();
     let run = NewsRun {
         id: id.to_string(),
-        mission,
-        step,
+        story,
         started: st.net.now(st),
         fresh: item.fresh,
         channel: st
@@ -157,9 +156,10 @@ pub fn put_out(st: &mut AppState, id: &str, mission: usize, step: usize) {
         .missions
         .news
         .as_ref()
-        .filter(|n| !n.ended && n.mission != usize::MAX)
+        .filter(|n| !n.ended)
+        .and_then(|n| n.story)
     {
-        st.missions.news_ends.push((old.mission, old.step));
+        st.missions.news_ends.push(old);
     }
     st.missions.news = Some(run);
 }
@@ -170,8 +170,8 @@ pub fn put_out(st: &mut AppState, id: &str, mission: usize, step: usize) {
 /// first frame you are out of your flat (no home counts as out) or once the item is
 /// stale (spec builder rulings).
 pub fn tick(st: &mut AppState, walking: bool) {
-    for (mission, step) in std::mem::take(&mut st.missions.news_ends) {
-        super::end(st, mission, step);
+    for r in std::mem::take(&mut st.missions.news_ends) {
+        super::end(st, r.mission, r.step);
     }
     if walking {
         read(st);
@@ -182,7 +182,7 @@ pub fn tick(st: &mut AppState, walking: bool) {
     let Some(n) = st.missions.news.as_ref() else {
         return;
     };
-    if n.ended || n.mission == usize::MAX {
+    if n.ended || n.story.is_none() {
         return;
     }
     let stale = st.net.now(st).saturating_sub(n.started) >= n.fresh;
@@ -426,7 +426,7 @@ fn walk_away(st: &mut AppState) {
         if b.near && d > AWAY {
             b.left = Some(Left {
                 at,
-                heading: heading(b.pos, you),
+                heading: heading(b.pos, you).to_string(),
                 worn: worn.clone(),
             });
         }
@@ -554,8 +554,8 @@ pub fn end_step(st: &mut AppState) {
         return;
     };
     n.ended = true;
-    let (mission, step) = (n.mission, n.step);
-    super::end(st, mission, step);
+    let story = n.story;
+    super::end_of(st, story);
 }
 
 #[cfg(test)]
@@ -604,7 +604,7 @@ pub(crate) mod tests {
     #[test]
     fn putting_out_fills_the_texts_and_names_the_channel() {
         let mut st = begun();
-        put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        put_out(&mut st, "marlo", None);
         let n = current(&st).unwrap();
         assert!(n.on && !n.ended);
         assert_eq!(n.id, "marlo");
@@ -705,7 +705,7 @@ pub(crate) mod tests {
     #[test]
     fn news_goes_stale() {
         let mut st = begun();
-        put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        put_out(&mut st, "marlo", None);
         let fresh_for = current(&st).unwrap().fresh;
         advance(&mut st, fresh_for - 1);
         assert!(fresh(&st) && current(&st).is_some());
@@ -722,17 +722,17 @@ pub(crate) mod tests {
         let mut other = st.book.news["marlo"].clone();
         other.headline = "Lift nine out again".into();
         st.book.news.insert("lift".into(), other);
-        put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        put_out(&mut st, "marlo", None);
         switch_off(&mut st);
-        put_out(&mut st, "lift", 2, 3);
+        put_out(&mut st, "lift", Some(StepRef::new(2, 3)));
         let n = current(&st).unwrap();
         assert_eq!(
-            (n.id.as_str(), n.headline.as_str(), n.mission, n.step),
-            ("lift", "Lift nine out again", 2, 3)
+            (n.id.as_str(), n.headline.as_str(), n.story),
+            ("lift", "Lift nine out again", Some(StepRef::new(2, 3)))
         );
         assert!(n.on && !n.ended);
         // An id the book lacks changes nothing.
-        put_out(&mut st, "nope", 0, 0);
+        put_out(&mut st, "nope", Some(StepRef::new(0, 0)));
         assert_eq!(current(&st).unwrap().id, "lift");
     }
 
@@ -742,7 +742,7 @@ pub(crate) mod tests {
         news_then_after(&mut st);
         crate::missions::begin(&mut st);
         let n = current(&st).expect("the step put it out");
-        assert_eq!((n.mission, n.step), (0, 0));
+        assert_eq!(n.story, Some(StepRef::new(0, 0)));
         assert_eq!(st.missions.runs[0].state, RunState::Open);
         switch_off(&mut st);
         switch_off(&mut st);
@@ -757,7 +757,7 @@ pub(crate) mod tests {
         let mut st = begun();
         switch_on(&mut st);
         assert!(st.missions.news.is_none());
-        put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        put_out(&mut st, "marlo", None);
         switch_off(&mut st);
         switch_on(&mut st);
         let n = current(&st).unwrap();
@@ -774,7 +774,7 @@ pub(crate) mod tests {
     #[test]
     fn ending_the_step_leaves_the_set_on() {
         let mut st = begun();
-        put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        put_out(&mut st, "marlo", None);
         end_step(&mut st);
         let n = current(&st).unwrap();
         assert!(n.on && n.ended);
@@ -783,7 +783,7 @@ pub(crate) mod tests {
     #[test]
     fn putting_out_without_a_home_or_city_does_not_panic() {
         let mut st = AppState::new();
-        put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        put_out(&mut st, "marlo", None);
         assert_eq!(current(&st).unwrap().channel, "CITY NEWSLINE");
         switch_off(&mut st);
         assert!(!current(&st).unwrap().on);
@@ -828,7 +828,7 @@ pub(crate) mod tests {
         tick(&mut st, true);
         assert_eq!(afters(&st), 0, "in the flat, the step waits");
         // The console's item replaces it: the step is not ended there and then.
-        put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        put_out(&mut st, "marlo", None);
         assert_eq!(afters(&st), 0);
         tick(&mut st, true);
         assert_eq!(afters(&st), 1);
@@ -902,7 +902,7 @@ pub(crate) mod tests {
     /// The console's item out, you in your flat, nothing keeping the asides down.
     fn home_with_the_news() -> AppState {
         let mut st = begun();
-        put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        put_out(&mut st, "marlo", None);
         in_the_flat(&mut st);
         assert!(asides::live(&st));
         st
@@ -1035,7 +1035,7 @@ pub(crate) mod tests {
         stand(&mut st, STREET, at.offset(0, -13));
         let left = Some(Left {
             at: (22, 41),
-            heading: "north",
+            heading: "north".to_string(),
             worn: st.character.equipped(Slot::Torso).cloned(),
         });
         assert_eq!(st.missions.bodies[0].left, left);
@@ -1066,13 +1066,13 @@ pub(crate) mod tests {
         // Marlo dies: his body is the item's `about`.
         crate::missions::end(&mut st, 0, 0);
         assert_eq!(sought(&st), None, "no item out");
-        put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        put_out(&mut st, "marlo", None);
         st.character.attributes.body = 5;
         st.character
             .wear(Slot::Torso, ItemId::new("salvage_jacket"), None);
         st.missions.bodies[0].left = Some(Left {
             at: (22, 41),
-            heading: "north",
+            heading: "north".to_string(),
             worn: Some(ItemId::new("salvage_jacket")),
         });
         assert_eq!(
@@ -1102,7 +1102,7 @@ pub(crate) mod tests {
         let mut st = begun();
         // Marlo dies: his body is the item's `about`.
         crate::missions::end(&mut st, 0, 0);
-        put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        put_out(&mut st, "marlo", None);
         st.character.attributes.body = 5;
         let jacket = ItemId::new("salvage_jacket");
         st.character.wear(Slot::Torso, jacket.clone(), None);
@@ -1125,7 +1125,7 @@ pub(crate) mod tests {
     fn walking_away_in_nothing_is_dark_clothes_from_then_on() {
         let mut st = begun();
         crate::missions::end(&mut st, 0, 0);
-        put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        put_out(&mut st, "marlo", None);
         st.character.take_off(Slot::Torso);
         let (place, at) = (st.missions.bodies[0].place, st.missions.bodies[0].pos);
         stand(&mut st, place, at.offset(3, -3));
@@ -1321,7 +1321,7 @@ pub(crate) mod tests {
     /// The console's item out on seed 8, the story begun.
     fn out() -> AppState {
         let mut st = begun();
-        put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        put_out(&mut st, "marlo", None);
         assert!(asides::live(&st));
         st
     }
@@ -1507,7 +1507,7 @@ pub(crate) mod tests {
         }
         // No city, no world, nobody: nothing, and no panic.
         let mut st = AppState::new();
-        put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        put_out(&mut st, "marlo", None);
         tick(&mut st, true);
         assert_eq!(cut_in(&st), None);
     }
@@ -1611,11 +1611,11 @@ pub(crate) mod tests {
         stand(&mut st, STREET, shop_at);
         assert_eq!(shown(&st), 2, "the noodle bar again, and a shop");
         // A new item: the bar shows it too.
-        put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        put_out(&mut st, "marlo", None);
         stand(&mut st, bar_floor, Pos::new(1, 1));
         assert_eq!(shown(&st), 3);
         // A closed bar's tile on a city map is not its inside.
-        put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        put_out(&mut st, "marlo", None);
         let city = st.city.as_ref().unwrap();
         let wall = city
             .building(bar)
@@ -1633,7 +1633,7 @@ pub(crate) mod tests {
         tick(&mut st, true);
         assert_eq!(shown(&st), 4);
         // A walk-in's basement carries its id on the Undercity: not the screen.
-        put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+        put_out(&mut st, "marlo", None);
         // (Citygen writes it under a noodle bar's basement; here the bar is given one.)
         let under = StratumKind::Undercity;
         let cellar = st

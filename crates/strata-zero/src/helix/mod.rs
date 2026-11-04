@@ -13,7 +13,7 @@ use std::collections::{BTreeSet, HashMap};
 use vfs::Vfs;
 
 /// One account on a host.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct User {
     pub name: String,
     pub home: String,
@@ -22,7 +22,7 @@ pub struct User {
 }
 
 /// One machine: its name, its disk and who has an account on it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Host {
     pub name: String,
     pub fs: Vfs,
@@ -40,7 +40,7 @@ pub struct Host {
 
 /// A door code written into a notes file: the flat it opens, the code, the file and
 /// the resident whose notes they are.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Planted {
     pub flat: (i32, u16),
     pub code: u16,
@@ -49,7 +49,7 @@ pub struct Planted {
 }
 
 /// Every host touched this run, kept like the journal.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Helix {
     pub hosts: HashMap<HostId, Host>,
 }

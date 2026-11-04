@@ -1614,14 +1614,14 @@ fn news_shots() {
         let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
         world.advance(city, world.tick() + ahead * sim::TICKS_PER_MINUTE);
     }
-    news::put_out(&mut st, "marlo", usize::MAX, usize::MAX);
+    news::put_out(&mut st, "marlo", None);
     let about = person_of(&st, &news::current(&st).unwrap().about).unwrap();
     // You walk away in what you wear.
     let worn = st.character.equipped(Slot::Torso).cloned();
     let body = st.missions.bodies.iter_mut().find(|b| b.person == about);
     body.expect("the item's body").left = Some(Left {
         at: (22, 41),
-        heading: "north",
+        heading: "north".to_string(),
         worn,
     });
     let map = MapScreen::walking(&mut st);
@@ -2448,7 +2448,7 @@ fn jobs_tab() {
 
 /// The morning after, Mezz's mail read and Seren's word come: in the flat, the package
 /// unsealed, the doctor's mission open.
-fn seren_has_written() -> AppState {
+pub(crate) fn seren_has_written() -> AppState {
     let mut st = crate::missions::tests::the_morning_call();
     crate::missions::tests::to_the_word(&mut st);
     st
@@ -2623,7 +2623,7 @@ fn doctor_shots() {
 
 /// Out of the rig on the open Net (seed 8): on the lane under Kiroflux Mart's gate,
 /// tracking it. Spec `2026-11-03-net-look-design.md`.
-fn on_the_open_net() -> (AppState, MapScreen) {
+pub(crate) fn on_the_open_net() -> (AppState, MapScreen) {
     let mut st = state_home();
     let _ = MapScreen::walking(&mut st);
     let city = st.city.clone().unwrap();
@@ -3511,6 +3511,341 @@ fn net_shell() {
         "net_shell",
         &st,
         &draw_stack(&st, &[&map, shell.as_ref()], (120, 40)),
+        false,
+    );
+}
+
+/// The save mock's three runs in `dir`, from VEX at home in seed 8 (the newest, saved
+/// today at 10:44) and two copies of her file under other runners' headers.
+fn the_mock_runs(dir: &crate::runs::testutil::Dir) {
+    use crate::runs::{RunHeader, file};
+    let mut st = state_home();
+    let _ = MapScreen::walking(&mut st);
+    let mut st = crate::runs::testutil::running(st);
+    st.saves = Some(dir.0.clone());
+    assert!(crate::runs::when::save_now(&mut st));
+    let vex = dir.0.join(format!("{}.run", st.run.unwrap().id));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let today = now / 86_400 * 86_400;
+    let edit = |path: &std::path::Path, f: &dyn Fn(&mut RunHeader)| {
+        let mut h = file::header(path).unwrap();
+        f(&mut h);
+        file::rewrite_header(path, &h).unwrap();
+    };
+    edit(&vex, &|h| {
+        h.level = 4;
+        h.day = 2;
+        h.minute = 7 * 60 + 40;
+        h.mission = Some("The ledger".into());
+        h.objective = Some("Bring it to Coz · the Brass Lamp · Ironside".into());
+        h.credits = 1_240;
+        h.chrome = vec!["Neural port".into(), "Target lens".into()];
+        h.talents = 6;
+        h.played = 3 * 3600 + 12 * 60;
+        h.perma = true;
+        h.saved = today + 10 * 3600 + 44 * 60;
+    });
+    for (name, build, level, city, (day, minute), story, perma, saved) in [
+        (
+            "KESTREL",
+            "SOLO",
+            2,
+            "Lowport",
+            (1, 23 * 60 + 10),
+            "See the doctor",
+            true,
+            today - 86_400,
+        ),
+        (
+            "BRAM",
+            "TECHIE",
+            1,
+            "Chromespire",
+            (1, 6 * 60 + 5),
+            "Watch the news",
+            false,
+            today - 2 * 86_400,
+        ),
+    ] {
+        let path = dir.0.join(format!("{}.run", name.to_lowercase()));
+        std::fs::copy(&vex, &path).unwrap();
+        edit(&path, &|h| {
+            h.handle = name.into();
+            h.profession = build.into();
+            h.level = level;
+            h.city = city.into();
+            h.day = day;
+            h.minute = minute;
+            h.mission = Some("The morning after".into());
+            h.objective = Some(story.into());
+            h.perma = perma;
+            h.saved = saved;
+        });
+    }
+}
+
+/// The title with a run to go on with, as players see it and in dev mode, and without one
+/// (the save mock's `title()`), at 120x40.
+#[test]
+#[ignore]
+fn save_title_shots() {
+    let Ok(out) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let dir = crate::runs::testutil::Dir::new("title-shots");
+    the_mock_runs(&dir);
+    let empty = crate::runs::testutil::Dir::new("title-shots-empty");
+    for (name, saves, dev) in [
+        ("save_title", &dir, false),
+        ("save_title_dev", &dir, true),
+        ("save_title_none", &empty, false),
+    ] {
+        let mut st = AppState::new();
+        if dev {
+            st.unlock_dev();
+        }
+        st.saves = Some(saves.0.clone());
+        let mut title = crate::screens::title::Title::new(&st, 0);
+        for _ in 0..90 {
+            st.tick += 1;
+            title.update(&mut st, &[]);
+        }
+        let buf = draw_stack(&st, &[&title], (120, 40));
+        write_svg(&out, name, &st, &buf, false);
+    }
+}
+
+/// LOAD GAME with the save mock's runs, with a file it can't read among them, and
+/// empty; and the broadcast a run opens with (the save mock's `load_game()`), at
+/// 120x40.
+#[test]
+#[ignore]
+fn save_load_shots() {
+    use crate::screens::runs::RunsScreen;
+    let Ok(out) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let dir = crate::runs::testutil::Dir::new("load-shots");
+    the_mock_runs(&dir);
+    let mut st = AppState::new();
+    st.saves = Some(dir.0.clone());
+    let list = RunsScreen::load(&st);
+    write_svg(
+        &out,
+        "save_load",
+        &st,
+        &draw_stack(&st, &[&list], (120, 40)),
+        false,
+    );
+
+    std::fs::write(dir.0.join("zz.run"), b"not a run").unwrap();
+    let mut list = RunsScreen::load(&st);
+    list.update(&mut st, &[key(KeyCode::Up)]);
+    write_svg(
+        &out,
+        "save_load_unreadable",
+        &st,
+        &draw_stack(&st, &[&list], (120, 40)),
+        false,
+    );
+
+    let empty = crate::runs::testutil::Dir::new("load-shots-empty");
+    st.saves = Some(empty.0.clone());
+    let list = RunsScreen::load(&st);
+    write_svg(
+        &out,
+        "save_load_empty",
+        &st,
+        &draw_stack(&st, &[&list], (120, 40)),
+        false,
+    );
+
+    // VEX's run opened: its broadcast, the run's own flags and no switches.
+    st.saves = Some(dir.0.clone());
+    let mut list = RunsScreen::load(&st);
+    let crate::app::ScreenCmd::Switch { to: mut on_air, .. } =
+        list.update(&mut st, &[key(KeyCode::Char(' '))])
+    else {
+        panic!("space opens VEX's run")
+    };
+    on_air.update(&mut st, &[key(KeyCode::Char(' '))]);
+    write_svg(
+        &out,
+        "save_resume_broadcast",
+        &st,
+        &draw_stack(&st, &[on_air.as_ref()], (120, 40)),
+        false,
+    );
+}
+
+/// VEX at home in seed 8 with a run saved in `dir`: the state, the map and the file.
+fn vex_saved_at_home(
+    dir: &crate::runs::testutil::Dir,
+) -> (AppState, MapScreen, std::path::PathBuf) {
+    let mut st = state_home();
+    let map = MapScreen::walking(&mut st);
+    let mut st = crate::runs::testutil::running(st);
+    st.saves = Some(dir.0.clone());
+    assert!(crate::runs::when::save_now(&mut st));
+    let path = dir.0.join(format!("{}.run", st.run.unwrap().id));
+    (st, map, path)
+}
+
+/// The HALL OF FAME with the save mock's three dead, copies of VEX's file under their
+/// headers, and before anyone has flatlined (the save mock's `hall()` and
+/// `hall_empty()`), at 120x40.
+#[test]
+#[ignore]
+fn save_hall_shots() {
+    use crate::runs::{Death, file};
+    use crate::screens::runs::RunsScreen;
+    let Ok(out) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let dir = crate::runs::testutil::Dir::new("hall-shots");
+    let (_, _, vex) = vex_saved_at_home(&dir);
+    // 2026-11-02 10:44 UTC.
+    let nov_2 = 1_793_616_240;
+    for (i, (name, level, city, lasted, cause)) in [
+        (
+            "MOTH",
+            6,
+            "Saintburg",
+            3 * 1440 + 4 * 60,
+            "black ICE · Velform Group's vault",
+        ),
+        ("RIX", 3, "Lowport", 19 * 60 + 20, "black ICE · Zenbo"),
+        ("NAIL", 1, "Chromespire", 2 * 60 + 5, "black ICE · Aoki"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = dir.0.join(format!("{}.run", name.to_lowercase()));
+        std::fs::copy(&vex, &path).unwrap();
+        let mut h = file::header(&path).unwrap();
+        h.handle = name.into();
+        h.profession = "NETRUNNER".into();
+        h.level = level;
+        h.city = city.into();
+        h.mission = Some("The ledger".into());
+        h.objective = Some("Bring it to Coz · the Brass Lamp · Ironside".into());
+        h.credits = 2_340;
+        h.chrome = vec!["neural port".into(), "target lens".into()];
+        h.talents = 9;
+        h.played = 5 * 3600 + 40 * 60;
+        h.death = Some(Death {
+            cause: cause.into(),
+            day: 4,
+            minute: 3 * 60 + 12,
+            at: nov_2 - i as u64 * 86_400,
+            lasted,
+        });
+        file::rewrite_header(&path, &h).unwrap();
+    }
+    let mut st = AppState::new();
+    st.saves = Some(dir.0.clone());
+    let hall = RunsScreen::hall(&st);
+    write_svg(
+        &out,
+        "save_hall",
+        &st,
+        &draw_stack(&st, &[&hall], (120, 40)),
+        false,
+    );
+    let empty = crate::runs::testutil::Dir::new("hall-shots-empty");
+    st.saves = Some(empty.0.clone());
+    let hall = RunsScreen::hall(&st);
+    write_svg(
+        &out,
+        "save_hall_empty",
+        &st,
+        &draw_stack(&st, &[&hall], (120, 40)),
+        false,
+    );
+}
+
+/// The flatline with perma death on (the first taunt, as the save mock draws it) and
+/// off (VEX's own last save at home, the line the game makes of it): the save mock's
+/// `flatline(True)` and `flatline(False)`, at 120x40.
+#[test]
+#[ignore]
+fn save_flatline_shots() {
+    use crate::screens::flatlined::{End, Flatlined, Taunts};
+    let Ok(out) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let dir = crate::runs::testutil::Dir::new("flatline-shots");
+    let (mut st, _, _) = vex_saved_at_home(&dir);
+    let tower = {
+        let city = st.city.as_ref().unwrap();
+        city.buildings
+            .iter()
+            .find(|b| b.kind == citygen::BuildingKind::CorpTower)
+            .unwrap()
+            .id
+    };
+    let cause = format!("black ICE at {}", crate::net::building_name(&st, tower));
+    st.perma_death = false;
+    st.net.death = Some(cause.clone());
+    let reload = crate::screens::flatlined::end(&mut st, &cause);
+    assert!(
+        matches!(reload, End::Reload { .. }),
+        "the last save to go back to"
+    );
+    let perma = End::Perma {
+        taunt: Taunts::load().all()[0].clone(),
+    };
+    for (name, end) in [
+        ("save_flatline_perma", perma),
+        ("save_flatline_reload", reload),
+    ] {
+        let screen = Flatlined::new(cause.clone(), &st.character.handle, 1, st.tick, end);
+        st.tick += 40;
+        write_svg(
+            &out,
+            name,
+            &st,
+            &draw_stack(&st, &[&screen], (120, 40)),
+            false,
+        );
+    }
+}
+
+/// The pause menu two minutes after a save, its line under the rows, and the map just
+/// saved, the SAVED mark after the place (the save mock's `pause()` and
+/// `saved_mark()`), at 120x40.
+#[test]
+#[ignore]
+fn save_pause_shots() {
+    let Ok(out) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let dir = crate::runs::testutil::Dir::new("pause-shots");
+    let (mut st, mut map, _) = vex_saved_at_home(&dir);
+    map.settle(&mut st, (120, 40));
+    assert!(crate::runs::when::save_now(&mut st));
+    assert!(crate::runs::when::marked(&st));
+    write_svg(
+        &out,
+        "save_map_mark",
+        &st,
+        &draw_stack(&st, &[&map], (120, 40)),
+        false,
+    );
+    st.tick += crate::runs::when::MARK;
+    st.last_save = st
+        .last_save
+        .map(|(t, at)| (t, at - std::time::Duration::from_secs(150)));
+    let pause = crate::screens::pause::Pause::new(&st, st.tick);
+    st.tick += 90;
+    write_svg(
+        &out,
+        "save_pause",
+        &st,
+        &draw_stack(&st, &[&map, &pause], (120, 40)),
         false,
     );
 }

@@ -146,7 +146,7 @@ pub fn key(st: &mut AppState, k: &KeyEvent) -> bool {
 }
 
 /// Ends the rest. A sleep heals HP and FOCUS by the part of a night slept; one line
-/// says what happened.
+/// says what happened, and the run is saved on the map's next frame that can take it.
 pub fn wake(st: &mut AppState, why: Why) {
     let Some(rest) = st.rest.take() else {
         return;
@@ -181,6 +181,7 @@ pub fn wake(st: &mut AppState, why: Why) {
         (Kind::Wait, Why::Visitor) => "Someone in the flat ends your wait.".to_string(),
     };
     st.say(line);
+    st.save_due = true;
 }
 
 /// The roles of the visitors standing in your flat.
@@ -720,8 +721,7 @@ mod tests {
         // A feed queued.
         let mut st = lie_down();
         st.missions.feeds.push_back(crate::missions::FeedView {
-            mission: 0,
-            step: 0,
+            story: Some(crate::runs::ids::StepRef::new(0, 0)),
             from: "mezz".into(),
             text: vec!["hi".into()],
             close: "ok".into(),

@@ -1,12 +1,13 @@
 //! Items lying in the city: piles of stacks per place and position.
 
 use crate::character::{CopyId, Stack};
+use crate::content::Content;
 use crate::model::ItemId;
 use citygen::{Place, Pos};
 use std::collections::HashMap;
 
 /// Everything lying on the ground, keyed by place (a stratum or a floor) and tile.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Ground {
     piles: HashMap<(Place, Pos), Vec<Stack>>,
 }
@@ -84,6 +85,29 @@ impl Ground {
         self.piles.remove(&(place, p));
     }
 
+    /// Drops every stack whose item `c` lacks, and what the copies left lying hold that
+    /// it lacks; what a dropped copy held that `c` has lies on its tile instead, and a
+    /// pile left with nothing goes. A line for each thing gone, naming its id.
+    pub fn forget_unknown(&mut self, c: &Content) -> Vec<String> {
+        let mut lost = Vec::new();
+        let tiles: Vec<(Place, Pos)> = self.piles.keys().copied().collect();
+        for (place, p) in tiles {
+            let mut out = Vec::new();
+            let kept: Vec<Stack> = self
+                .take_all(place, p)
+                .into_iter()
+                .filter_map(|s| s.sift(c, &mut lost, &mut out))
+                .collect();
+            if !kept.is_empty() {
+                self.piles.insert((place, p), kept);
+            }
+            for s in out {
+                self.put(place, p, s);
+            }
+        }
+        lost
+    }
+
     /// Every pile on one map.
     pub fn on(&self, place: Place) -> impl Iterator<Item = (Pos, &[Stack])> {
         self.piles
@@ -98,6 +122,100 @@ mod tests {
     use super::*;
     use crate::character::ItemCopy;
     use citygen::{BuildingId, StratumKind};
+
+    #[test]
+    fn the_ground_forgets_what_the_content_lacks() {
+        let c = crate::Content::load().unwrap();
+        let mut g = Ground::default();
+        let street = Place::Stratum(StratumKind::Street);
+        let (a, b) = (Pos::new(3, 4), Pos::new(9, 1));
+        g.add(street, a, ItemId::new("copper_coil"), 5);
+        g.add(street, a, ItemId::new("old_knife"), 1);
+        g.add(street, b, ItemId::new("old_knife"), 2);
+        // A known copy with a socket holding a piece the content lacks.
+        let deck = ItemId::new("rebuilt_deck");
+        let copy = ItemCopy {
+            id: CopyId(7),
+            fitted: vec![Some(Stack::new(ItemId::new("gone_chip"), 1)), None],
+            stickers: vec![],
+        };
+        assert!(c.item(&deck).is_some());
+        g.put(
+            street,
+            b,
+            Stack {
+                item: deck.clone(),
+                qty: 1,
+                copy: Some(copy),
+            },
+        );
+        let lost = g.forget_unknown(&c);
+        assert!(
+            lost.contains(&"an item (old_knife)".to_string()),
+            "{lost:?}"
+        );
+        assert!(
+            lost.contains(&"an item (gone_chip)".to_string()),
+            "{lost:?}"
+        );
+        assert_eq!(g.at(street, a), [Stack::new(ItemId::new("copper_coil"), 5)]);
+        let left = g.at(street, b);
+        assert_eq!(left.len(), 1, "the deck stays");
+        assert!(
+            left[0]
+                .copy
+                .as_ref()
+                .unwrap()
+                .fitted
+                .iter()
+                .all(Option::is_none),
+            "its socket is empty"
+        );
+        // A pile left with nothing goes.
+        g.add(street, Pos::new(1, 1), ItemId::new("old_knife"), 1);
+        g.forget_unknown(&c);
+        assert!(g.at(street, Pos::new(1, 1)).is_empty());
+        assert_eq!(g.on(street).count(), 2);
+        // A host the content lacks leaves what it held on its tile.
+        let at = Pos::new(6, 6);
+        g.put(
+            street,
+            at,
+            Stack {
+                item: ItemId::new("gone_deck"),
+                qty: 1,
+                copy: Some(ItemCopy {
+                    id: CopyId(8),
+                    fitted: vec![Some(Stack::new(ItemId::new("copper_coil"), 1))],
+                    stickers: vec![],
+                }),
+            },
+        );
+        assert_eq!(g.forget_unknown(&c), ["an item (gone_deck)"]);
+        assert_eq!(
+            g.at(street, at),
+            [Stack::new(ItemId::new("copper_coil"), 1)]
+        );
+    }
+
+    #[test]
+    fn the_ground_comes_back() {
+        let mut g = Ground::default();
+        let a = (Place::Stratum(StratumKind::Street), Pos::new(3, 4));
+        let b = (Place::Stratum(StratumKind::Undercity), Pos::new(9, 1));
+        g.add(a.0, a.1, ItemId::new("copper_coil"), 5);
+        g.add(b.0, b.1, ItemId::new("dead_phone"), 1);
+        let bytes = rmp_serde::to_vec_named(&g).unwrap();
+        let back: Ground = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(back.at(a.0, a.1), g.at(a.0, a.1));
+        assert_eq!(back.at(b.0, b.1), g.at(b.0, b.1));
+        assert_eq!(
+            back.at(a.0, a.1)[0],
+            Stack::new(ItemId::new("copper_coil"), 5)
+        );
+        assert_eq!(back.on(a.0).count(), 1);
+        assert_eq!(back.on(b.0).count(), 1);
+    }
 
     #[test]
     fn piles_merge_take_and_vanish() {

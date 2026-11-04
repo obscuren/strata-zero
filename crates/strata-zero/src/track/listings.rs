@@ -175,7 +175,7 @@ pub fn source_of(st: &AppState, l: &Listing) -> Source {
 /// show, a job's or the story's `◆`, a picked spot `⌖`.
 pub fn marker_of(st: &AppState, source: &Source) -> (char, Color) {
     let kind = match *source {
-        Source::Job { .. } | Source::Story { .. } => Kind::Jobs,
+        Source::Job { .. } | Source::Story(_) => Kind::Jobs,
         Source::Listing(ListingId::Job(_) | ListingId::Story(_)) => Kind::Jobs,
         Source::Listing(ListingId::Person(_)) => Kind::Fixers,
         Source::Listing(ListingId::Building(b)) => {

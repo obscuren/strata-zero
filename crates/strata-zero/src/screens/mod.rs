@@ -20,6 +20,7 @@ pub mod messages;
 pub mod pause;
 pub mod popup;
 pub mod rest;
+pub mod runs;
 pub mod settings;
 pub mod sheet;
 pub mod splash;
@@ -63,11 +64,18 @@ pub fn start_city(st: &mut crate::app::AppState, params: citygen::GenParams) -> 
 }
 
 /// The screen shown once a city exists: the map, on foot, the story begun. Every new
-/// game, load and debug start comes through here.
+/// game, city load and debug start comes through here; an opened run goes through
+/// `resume_screen`.
 pub fn explore_screen(st: &mut crate::app::AppState) -> Box<dyn Screen> {
     let map = explore::MapScreen::walking(st);
     crate::missions::begin(st);
     Box::new(map)
+}
+
+/// The map over a run opened from its file (CONTINUE, LOAD GAME): you where you stood,
+/// the story where it was, nothing started over.
+pub fn resume_screen(st: &mut crate::app::AppState) -> Box<dyn Screen> {
+    Box::new(explore::MapScreen::resumed(st))
 }
 
 #[cfg(test)]

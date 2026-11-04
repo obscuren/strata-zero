@@ -27,7 +27,7 @@ pub const HELD_BG: ratatui::style::Color = ratatui::style::Color::Rgb(15, 58, 31
 pub const FLOOD_BG: ratatui::style::Color = ratatui::style::Color::Rgb(60, 0, 46);
 
 /// What a held node can be made to do.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Verb {
     Tap,
     Loop,
@@ -86,7 +86,7 @@ pub fn holdable(kind: NodeKind) -> bool {
 }
 
 /// A node you hold, until a game minute, and the verbs spent on it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Hold {
     pub node: NodeId,
     pub owner: Owner,
@@ -95,7 +95,7 @@ pub struct Hold {
 }
 
 /// What a hijacked ad says.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Line {
     /// The building named for what it does to you.
     Smear,
@@ -124,7 +124,7 @@ impl Line {
 }
 
 /// A building's holo ads saying your line, until the hold on the board runs out.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Hijack {
     pub node: NodeId,
     pub building: BuildingId,
@@ -134,7 +134,7 @@ pub struct Hijack {
 }
 
 /// An ad board flooding its room: the construct's asleep ICE goes to look.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Decoy {
     pub building: BuildingId,
     pub node: NodeId,
@@ -227,6 +227,13 @@ pub fn tick(st: &mut AppState) {
     }
     say_lines(st);
     st.net.lights_out.retain(|_, until| now < *until);
+    relight(st);
+}
+
+/// The street's lamps cut in the districts `NetState::lights_out` holds, and burning
+/// everywhere else. Each tick, and as a saved run is reopened
+/// (`runs::snapshot::after_restore`): the street's `dark` is never saved.
+pub fn relight(st: &mut AppState) {
     let dark: std::collections::BTreeSet<DistrictId> = st.net.lights_out.keys().copied().collect();
     if let Some(s) = st
         .city
