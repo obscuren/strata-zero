@@ -265,6 +265,31 @@ you out it means that there's no danger in running there."
 - **Cameras need light**: a camera sees you in its cone within 3 tiles, or further where
   your tile is lit, as walkers see (`sight::sees`); lights out blinds them at range.
 
+### Calls made while building
+
+- **On the grid even white ICE walks** (two tiles a turn; grey two, black three), unlike a
+  construct's gate piece, so a white sentinel can chase.
+- **A tracer through a gate waits there**: entering a construct clears your trail and
+  every tracer makes for the gate you went in by; it latches if you come back out there,
+  and goes when its owner's alarm clears. Jacking out sends tracers home.
+- **The trail keeps 600 tiles**; a tile within 2 of a hub is marked, and a tracer that
+  reaches a marked tile is lost there.
+- **Sentinels' beats** are straight lane runs of 5 to 12 tiles within 10 of the hub,
+  longest first, no two sharing a tile; a district with fewer runs than its grades
+  keeps fewer sentinels. Woken by an alarm, a far sentinel walks toward where it had
+  you in calm too, and loses you there.
+- **Lights out lives in the Net's session state** (`NetState.lights_out`) and drives the
+  street's `Stratum.dark`; the lamps' light drops by each tile's district.
+- **Hijack picker keys** `s` smear, `l` lure, `t` tag. The lure asks every free walker
+  within 12 (not one held by a story, not a spot worker) for a trip to the pavement in
+  front of the nearest ad, keeping their goal. The line aside says again a while after
+  it goes down.
+- **The feed** sits off the node on the side the dock doesn't take, or the top right of
+  the map when its node isn't on your map; it draws your own body white when it's in
+  frame.
+- **Grid pieces glow** in their grade's colour on their tile; the HERE panel and the
+  fight only count pieces within 20 tiles.
+
 ## What's left to the builder
 
 - How the owner-keyed heat path is shaped (an enum on new paths, the building map
