@@ -90,6 +90,28 @@ impl GroundView {
         }
     }
 
+    /// A lamp stood on `p` (tests).
+    #[cfg(test)]
+    pub fn light(&mut self, p: Pos) {
+        let t = Pos::new(p.x.div_euclid(TILE), p.y.div_euclid(TILE));
+        if let Some(g) = self.tiles.get_mut(&t)
+            && let Some(c) = g.get_mut(Pos::new(p.x.rem_euclid(TILE), p.y.rem_euclid(TILE)))
+        {
+            c.feature = Some(citygen::Feature::Lamp);
+        }
+    }
+
+    /// The lamps on the built ground within `r` columns of `at` (and `r / 2` rows).
+    pub fn lamps_near(&self, at: Pos, r: i32) -> Vec<Pos> {
+        (at.y - r / 2..=at.y + r / 2)
+            .flat_map(|y| (at.x - r..=at.x + r).map(move |x| Pos::new(x, y)))
+            .filter(|p| {
+                self.tile(*p)
+                    .is_some_and(|t| t.feature == Some(citygen::Feature::Lamp))
+            })
+            .collect()
+    }
+
     /// The tile at world-wide cell `p`, if it is built.
     pub fn tile(&self, p: Pos) -> Option<&Tile> {
         let t = Pos::new(p.x.div_euclid(TILE), p.y.div_euclid(TILE));
@@ -144,20 +166,43 @@ pub fn ground_step(st: &mut AppState, view: &mut GroundView, d: Dir) -> Moved {
 /// How far you see out in the open by day, with nothing built to stand in the way.
 pub const RADIUS_OPEN: i32 = 40;
 
+/// How far a lamp's light reaches, in columns (half as many rows).
+pub const LAMP_REACH: f32 = 8.0;
+
+/// The light the lamps throw on `p`: bright beside one, gone `LAMP_REACH` columns off,
+/// measured as it looks on screen (a row is two columns).
+pub fn lamp_light(lamps: &[Pos], p: Pos) -> u8 {
+    lamps
+        .iter()
+        .map(|l| {
+            let (dx, dy) = ((p.x - l.x) as f32, 2.0 * (p.y - l.y) as f32);
+            let d = (dx * dx + dy * dy).sqrt();
+            (230.0 * (1.0 - d / LAMP_REACH)).max(0.0) as u8
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 /// What you see from `at` at `minute`: far across open ground by day, a little way at
-/// night with no lamps out here, between the two at dusk and dawn.
+/// night, between the two at dusk and dawn; and by night, ground a lamp lights as far
+/// as you could see by day, where nothing stands between.
 pub fn sight(view: &GroundView, at: Pos, minute: u16) -> BTreeSet<Pos> {
     let night = crate::walker::RADIUS_UNDER + 2;
     let day = citygen::lighting::daylight(minute);
     let radius = night + ((RADIUS_OPEN - night) as f32 * day).round() as i32;
+    let lamps = view.lamps_near(at, RADIUS_OPEN + LAMP_REACH as i32);
+    let r2 = radius * radius;
     let mut seen = BTreeSet::new();
     crate::walker::fov::compute(
         at,
-        radius,
+        RADIUS_OPEN,
         |p| view.tile(p).is_none_or(|t| t.blocks_sight()),
         |p| view.tile(p).is_some(),
         |p| {
-            seen.insert(p);
+            let (dx, dy) = (p.x - at.x, p.y - at.y);
+            if dx * dx + dy * dy <= r2 || lamp_light(&lamps, p) >= 60 {
+                seen.insert(p);
+            }
         },
     );
     seen
@@ -327,6 +372,40 @@ mod tests {
             "30 cells down the road by day"
         );
         assert!(!sight(&view, here, 0).contains(&far), "not at night");
+    }
+
+    #[test]
+    fn a_lamp_lights_the_ground_round_it() {
+        let lamps = [Pos::new(100, 50)];
+        let near = lamp_light(&lamps, Pos::new(102, 50));
+        let far = lamp_light(&lamps, Pos::new(112, 50));
+        assert!(near > 150 && far == 0, "{near} {far}");
+        // a row is two columns on screen: two rows off is as dark as four columns
+        assert_eq!(
+            lamp_light(&lamps, Pos::new(100, 52)),
+            lamp_light(&lamps, Pos::new(104, 50))
+        );
+    }
+
+    #[test]
+    fn lit_ground_is_seen_from_afar() {
+        let mut st = on_the_world();
+        let t = highway(&st);
+        let here = Pos::new(TILE * t.x + 4, TILE * t.y + 3);
+        let mut view = stand(&mut st, here);
+        // a lamp down the road, well past night sight
+        let far = here.offset(24, 0);
+        view.light(far);
+        let night = sight(&view, here, 0);
+        assert!(night.contains(&far), "the lamp is seen");
+        assert!(
+            night.contains(&far.offset(-2, 0)),
+            "and the ground it lights"
+        );
+        assert!(
+            !night.contains(&here.offset(16, -6)),
+            "not the dark between"
+        );
     }
 
     #[test]

@@ -333,8 +333,9 @@ impl OutsideScreen {
         };
         let minute = st.minute_of_day();
         let origin = Pos::new(c.x - map.width as i32 / 2, c.y - map.height as i32 / 2);
-        // no lamps out here: by night the moon, never as dark as an unlit street
+        // by night the moon, never as dark as an unlit street, and the lamps' pools
         let light = citygen::lighting::ambient(StratumKind::Street, minute).max(MOONLIGHT);
+        let lamps = view.lamps_near(c, map.width as i32 / 2 + ground::LAMP_REACH as i32);
         for sy in 0..map.height {
             for sx in 0..map.width {
                 let p = origin.offset(sx as i32, sy as i32);
@@ -351,7 +352,7 @@ impl OutsideScreen {
                             style: &st.style,
                             theme: None,
                             stratum: StratumKind::Street,
-                            light,
+                            light: light.max(ground::lamp_light(&lamps, p)),
                             tick: st.tick,
                             vis,
                             connector: None,
