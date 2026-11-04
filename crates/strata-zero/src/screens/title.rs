@@ -58,6 +58,17 @@ impl Entry {
     }
 }
 
+/// The logo's neon.
+pub const LOGO_ACCENT: Rgb = Rgb(255, 0, 200);
+
+/// Where the title puts its logo's top left on `area`: centred, a sixth of the way down.
+pub fn logo_origin(area: Rect) -> (u16, u16) {
+    (
+        area.x + area.width.saturating_sub(logo::width(TITLE)) / 2,
+        area.y + area.height / 6,
+    )
+}
+
 const COMBAT_LABEL: &str = "NEW GAME · COMBAT";
 /// The pick in pink, the other in a grey that still reads.
 const PICKED: Color = Color::Rgb(255, 0, 200);
@@ -239,12 +250,11 @@ impl Screen for Title {
     fn draw(&self, st: &AppState, f: &mut Frame) {
         let area = f.area();
         let w = logo::width(TITLE);
-        let x = area.x + area.width.saturating_sub(w) / 2;
-        let y = area.y + area.height / 6;
+        let (x, y) = logo_origin(area);
         Logo {
             text: TITLE,
             tick: st.tick,
-            accent: Rgb(255, 0, 200),
+            accent: LOGO_ACCENT,
             steady: false,
         }
         .render(

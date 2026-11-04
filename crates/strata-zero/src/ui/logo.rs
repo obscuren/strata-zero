@@ -91,29 +91,33 @@ pub struct Logo<'a> {
     pub steady: bool,
 }
 
+/// The colour `Logo` gives row `row` of letter `i` at `tick`: the letter's neon flicker
+/// (every seventh from the fourth a broken tube, unless `steady`) and the scanline that
+/// sweeps down the rows, half white.
+pub fn letter_colour(tick: u64, i: usize, row: u16, accent: Rgb, steady: bool) -> Rgb {
+    let f = if steady {
+        1.0
+    } else {
+        flicker(tick, i as u8, i % 7 == 3)
+    };
+    let color = accent.scale(f);
+    let scan = ((tick / 2) % (ROWS as u64 + 10)) as u16;
+    if row == scan {
+        color.mix(Rgb(255, 255, 255), 0.5)
+    } else {
+        color
+    }
+}
+
 impl Widget for Logo<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let scan = ((self.tick / 2) % (ROWS as u64 + 10)) as u16;
         for (i, c) in self.text.chars().enumerate() {
-            let broken = i % 7 == 3;
-            let f = if self.steady {
-                1.0
-            } else {
-                flicker(self.tick, i as u8, broken)
-            };
-            let color = self.accent.scale(f);
-            let rows = glyph(c);
-            for (r, row) in rows.iter().enumerate() {
+            for (r, row) in glyph(c).iter().enumerate() {
                 let y = area.y + r as u16;
                 if y >= area.bottom() {
                     break;
                 }
-                let bright = r as u16 == scan;
-                let fg = if bright {
-                    color.mix(Rgb(255, 255, 255), 0.5)
-                } else {
-                    color
-                };
+                let fg = letter_colour(self.tick, i, r as u16, self.accent, self.steady);
                 for (col, ch) in row.chars().enumerate() {
                     if ch == ' ' {
                         continue;
@@ -136,6 +140,35 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::widgets::Widget;
+
+    #[test]
+    fn letter_colour_is_what_the_logo_draws() {
+        let accent = Rgb(255, 0, 200);
+        for tick in [4, 37] {
+            let mut buf = Buffer::empty(Rect::new(0, 0, width("STRATA ZERO"), ROWS));
+            Logo {
+                text: "STRATA ZERO",
+                tick,
+                accent,
+                steady: false,
+            }
+            .render(buf.area, &mut buf);
+            for y in 0..ROWS {
+                for x in 0..buf.area.width {
+                    let cell = &buf[(x, y)];
+                    if cell.symbol() == " " {
+                        continue;
+                    }
+                    let i = (x / CELL_W) as usize;
+                    assert_eq!(
+                        cell.fg,
+                        letter_colour(tick, i, y, accent, false).to_color(),
+                        "tick {tick}, letter {i}, row {y}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn logo_width_and_render() {
