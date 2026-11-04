@@ -108,8 +108,9 @@ landed, `[ 1 new left ]`); `mail 4` printed. Each asserts what it's for in the b
   The inbox lists newest first, so its top row is `{n} of {n}`; its rows show no number.
 - `mail` reports `Output.open_mail`, handled as `open_nano` is: it wins and ends the line
   (`mail; echo hi` opens the program and drops the rest).
-- The new-mail line shows wherever the rig's motd prints at boot today (each time the
-  terminal opens on the rig, and wherever an `ssh` back to the rig prints the motd).
+- The new-mail line shows on every open of the rig's terminal with unread mail: after the
+  motd on the session's first boot, and on a re-open as one line above the prompt (the
+  motd prints only on a first boot).
 - Each stored body line wraps on its own at word breaks; blank lines stay. `mail N`
   prints the stored lines as they are (the scrollback wraps as it does today).
 - `access::mail_open` takes §3's format, so `cat ~/mail/…` (which reads through it)
