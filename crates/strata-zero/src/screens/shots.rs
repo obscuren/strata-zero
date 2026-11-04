@@ -4099,3 +4099,73 @@ fn city_in_world_shots() {
     let s = OutsideScreen::new(&mut st);
     shot_stack("city_on_the_overworld", &st, &[&s], (120, 40));
 }
+
+/// The outskirts (#20): seed 41's home city where it thins, by a shanty by day and by
+/// night, by a scrapyard, and the same edge in the Net.
+#[test]
+#[ignore]
+fn outskirts_shots() {
+    use citygen::{Place, StratumKind, Terrain};
+    let city = crate::screens::build_home(AppState::new().params.clone().with_seed(41)).unwrap();
+    let at = |place: StratumKind, pos: Pos, minute: u16, body: Option<Pos>| {
+        let mut st = AppState::new();
+        st.enter_city_at(city.clone(), minute);
+        st.character = game::Character::debug_runner(&st.content);
+        let mut p = crate::walker::Player::at(Place::Stratum(place), pos);
+        if let Some(b) = body {
+            p.body = Some((Place::Stratum(StratumKind::Street), b));
+        }
+        let bonus = st.sight_bonus();
+        p.update_fov(
+            &crate::render::map::MapRef::stratum_at(st.city.as_ref().unwrap(), place, minute),
+            bonus,
+        );
+        st.player = Some(p);
+        st
+    };
+    let street = &city.stratum(StratumKind::Street).unwrap().tiles;
+    let walkable = |p: Pos| street.get(p).is_some_and(|t| t.is_walkable());
+    // a shanty's door, and the dirt in front of it
+    let door = street
+        .iter()
+        .find(|(p, t)| {
+            t.terrain == Terrain::Door && t.building.is_none() && walkable(p.offset(0, 1))
+        })
+        .map(|(p, _)| p)
+        .expect("a shanty");
+    let front = door.offset(0, 2);
+    for (name, minute) in [
+        ("outskirts_shanties", 13 * 60),
+        ("outskirts_shanties_night", 22 * 60),
+    ] {
+        let mut st = at(StratumKind::Street, front, minute, None);
+        let map = MapScreen::walking(&mut st);
+        shot_stack(name, &st, &[&map], (120, 40));
+    }
+    // a scrapyard's gate
+    let gate = street
+        .iter()
+        .find(|(p, t)| {
+            t.terrain == Terrain::Gravel
+                && street
+                    .get(p.offset(-1, 0))
+                    .is_some_and(|u| u.terrain == Terrain::Railing)
+                && walkable(p.offset(0, 1))
+        })
+        .map(|(p, _)| p.offset(0, 2));
+    if let Some(gate) = gate.filter(|p| walkable(*p)) {
+        let mut st = at(StratumKind::Street, gate, 13 * 60, None);
+        let map = MapScreen::walking(&mut st);
+        shot_stack("outskirts_yard", &st, &[&map], (120, 40));
+    }
+    // jacked in at the shanty's door: the grid thinning, the stolen line, the open Net
+    let net = &city.stratum(StratumKind::Net).unwrap().tiles;
+    let on_net = std::iter::once(door)
+        .chain(door.neighbors8())
+        .find(|p| net.get(*p).is_some_and(|t| t.is_walkable()))
+        .unwrap_or(door);
+    let mut st = at(StratumKind::Net, on_net, 22 * 60, Some(front));
+    let mut map = MapScreen::walking(&mut st);
+    map.update(&mut st, &[]);
+    shot_stack("outskirts_net", &st, &[&map], (120, 40));
+}
