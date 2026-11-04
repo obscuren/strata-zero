@@ -373,7 +373,7 @@ mod tests {
             let body = st.missions.bodies.iter_mut().find(|b| b.person == about);
             body.expect("the item's body").left = Some(Left {
                 at: (22, 41),
-                heading: "north",
+                heading: "north".to_string(),
                 worn: None,
             });
             let n = news::current(&st).unwrap();

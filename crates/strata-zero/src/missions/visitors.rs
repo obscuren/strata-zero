@@ -14,7 +14,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
 
 /// A visitor standing somewhere.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Visitor {
     pub role: String,
     pub place: Place,

@@ -23,7 +23,7 @@ pub const WAKE_TICKS: u64 = 9;
 const LOST: i32 = 24;
 
 /// A bot out with you.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BotOut {
     /// What it is.
     pub item: ItemId,

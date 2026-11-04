@@ -17,7 +17,7 @@ pub mod route;
 pub mod ui;
 
 /// A row of the map's listings, as a thing that can be tracked.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ListingId {
     Building(BuildingId),
     Person(PersonId),
@@ -26,7 +26,7 @@ pub enum ListingId {
 }
 
 /// What a track was made from; it follows this, not the place it first pointed at.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Source {
     /// A taken job's objective `objective` (its index when tracked).
     Job { job: JobId, objective: usize },
@@ -56,15 +56,26 @@ pub enum Resolved {
 }
 
 /// The one thing being tracked. Made only by `track::set`.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Track {
     pub source: Source,
     /// What the pane and the log call it: "Miracorp Tattoo", "The drop", "the spot".
     pub label: String,
+    // A cache of the route; `refollow` remakes it once the rest of the run is back.
+    #[serde(skip, default = "Walk::unmade")]
     walk: Walk,
+    // Pure animation; it starts again on the first beat.
+    #[serde(skip)]
     pulses: Pulses,
 }
 
 impl Track {
+    /// What the walk is to and the text that follows it, for tests.
+    #[cfg(test)]
+    pub(crate) fn walk_for_test(&self) -> (Target, Option<String>) {
+        (self.walk.target, self.walk.next.clone())
+    }
+
     /// The pulses on the leg as it stands at tick `t`.
     fn pulse(&mut self, t: u64) {
         let walk = self.walk.leg.as_ref().ok().map(|l| (l.place, l.path.len()));
@@ -144,6 +155,21 @@ struct Walk {
 }
 
 impl Walk {
+    /// A walk to be remade: it matches neither where you stand nor any target, so the next
+    /// `follow` makes the real one.
+    fn unmade() -> Walk {
+        Walk {
+            from: Some((Place::Stratum(StratumKind::Street), Pos::new(-1, -1))),
+            target: Target::Spot {
+                place: Place::Stratum(StratumKind::Street),
+                pos: Pos::new(-1, -1),
+                radius: 0,
+            },
+            leg: Err(NoLeg::NoWay),
+            next: None,
+        }
+    }
+
     /// The leg from where you stand to a located target.
     fn new(st: &AppState, target: Target) -> Walk {
         let leg = route::leg(st, target);
@@ -197,6 +223,14 @@ pub fn set(st: &mut AppState, source: Source) -> Result<String, String> {
     st.track = Some(track);
     st.say(text.clone());
     Ok(text)
+}
+
+/// Remakes the walk and the pulses of a track that was loaded without them, the same
+/// work a beat does when the walk is out of date. Needs the rest of the run restored.
+// Called by the load, which comes next; remove the allow then.
+#[allow(dead_code)]
+pub fn refollow(st: &mut AppState) {
+    tick(st);
 }
 
 /// Stops tracking, and logs it.

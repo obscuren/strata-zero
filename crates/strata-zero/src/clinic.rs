@@ -13,7 +13,7 @@ pub const OUTSIDE: &str = "chrome goes in and out in a ripperdoc's chair";
 const RIPPERDOC: &str = "ripperdoc";
 
 /// The chair you are sitting in: the floor it stands on and the doc at it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Chair {
     pub building: BuildingId,
     pub level: i32,

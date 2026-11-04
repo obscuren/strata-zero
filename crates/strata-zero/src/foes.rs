@@ -14,14 +14,14 @@ pub const GOON_MOVE: u8 = 3;
 pub const GOON_AP: u8 = 1;
 
 /// What a foe is doing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FoeMode {
     Idle,
     Hunting { seen: Pos, lost: u8 },
 }
 
 /// Someone with a gun on your map this session.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Foe {
     pub name: String,
     pub place: Place,

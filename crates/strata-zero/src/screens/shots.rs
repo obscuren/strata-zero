@@ -1621,7 +1621,7 @@ fn news_shots() {
     let body = st.missions.bodies.iter_mut().find(|b| b.person == about);
     body.expect("the item's body").left = Some(Left {
         at: (22, 41),
-        heading: "north",
+        heading: "north".to_string(),
         worn,
     });
     let map = MapScreen::walking(&mut st);
@@ -2448,7 +2448,7 @@ fn jobs_tab() {
 
 /// The morning after, Mezz's mail read and Seren's word come: in the flat, the package
 /// unsealed, the doctor's mission open.
-fn seren_has_written() -> AppState {
+pub(crate) fn seren_has_written() -> AppState {
     let mut st = crate::missions::tests::the_morning_call();
     crate::missions::tests::to_the_word(&mut st);
     st
@@ -2623,7 +2623,7 @@ fn doctor_shots() {
 
 /// Out of the rig on the open Net (seed 8): on the lane under Kiroflux Mart's gate,
 /// tracking it. Spec `2026-11-03-net-look-design.md`.
-fn on_the_open_net() -> (AppState, MapScreen) {
+pub(crate) fn on_the_open_net() -> (AppState, MapScreen) {
     let mut st = state_home();
     let _ = MapScreen::walking(&mut st);
     let city = st.city.clone().unwrap();

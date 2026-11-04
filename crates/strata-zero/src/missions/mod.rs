@@ -52,7 +52,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// The session's story: who plays each role, where each mission stands, the bodies
 /// it left and what the HOLO has waiting. Reset with the city.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Missions {
     pub cast: BTreeMap<String, PersonId>,
     /// One per mission, in book order.
@@ -73,6 +73,8 @@ pub struct Missions {
     /// Scenes queued by `Effect::Scene`: mission, step, scene id.
     pub scenes: VecDeque<(usize, usize, String)>,
     /// The scene playing.
+    // Never saved: a run is written only when no scene is in flight (it holds cloned content).
+    #[serde(skip)]
     pub scene: Option<scene::SceneRun>,
     /// The news item put out last, fresh or not.
     pub news: Option<news::NewsRun>,
@@ -82,6 +84,8 @@ pub struct Missions {
     /// The daze running, if one is.
     pub daze: Option<daze::Daze>,
     /// The bubbles up over the map that leave you the keys, oldest first.
+    // Never saved: asides last seconds, and carry a ratatui colour.
+    #[serde(skip)]
     pub asides: Vec<asides::Aside>,
     /// The items the story has unsealed, by id: `Need::Unsealed`.
     pub unsealed: BTreeSet<String>,
@@ -98,7 +102,7 @@ pub struct Missions {
 }
 
 /// A tray of pieces held out by a role (doctor spec §8): one to take, on a tab.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TrayOffer {
     pub mission: usize,
     pub step: usize,
@@ -115,7 +119,7 @@ pub struct TrayOffer {
 }
 
 /// A piece on someone's tab: in its doc's chair it goes in free, once.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Tab {
     pub doc: PersonId,
     pub item: ItemId,
@@ -125,7 +129,7 @@ pub struct Tab {
 }
 
 /// Where one mission stands.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Run {
     /// The step it waits on.
     pub at: usize,
@@ -140,7 +144,7 @@ pub struct Run {
     pub began: Option<u64>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RunState {
     /// Nothing fired yet; not shown.
     Waiting,
@@ -154,7 +158,7 @@ pub enum RunState {
 }
 
 /// A person the story killed, lying at their station.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Body {
     pub person: PersonId,
     pub name: String,
@@ -170,18 +174,18 @@ pub struct Body {
 
 /// You walking away from a body (morning news spec §7): the first time you were more
 /// than `news::AWAY` tiles from it after having been near.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Left {
     /// The clock: hour, minute.
     pub at: (u8, u8),
     /// The eight-point heading from the body to you: `north`, `north-east` …
-    pub heading: &'static str,
+    pub heading: String,
     /// What you wore on your torso then: the jacket the camera saw (doctor spec §7).
     pub worn: Option<ItemId>,
 }
 
 /// A HOLO feed waiting to be shown, its text filled.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FeedView {
     pub mission: usize,
     pub step: usize,
@@ -193,7 +197,7 @@ pub struct FeedView {
 }
 
 /// A HOLO call, ringing or talking, its lines filled.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Call {
     pub mission: usize,
     pub step: usize,
@@ -2106,7 +2110,7 @@ pub(crate) mod tests {
         assert_eq!(both(&st), (false, false), "nobody saw you go");
         st.missions.bodies[0].left = Some(Left {
             at: (22, 41),
-            heading: "north",
+            heading: "north".to_string(),
             worn: None,
         });
         assert_eq!(both(&st), (false, false), "nothing worn then");
@@ -2618,7 +2622,7 @@ pub(crate) mod tests {
         st.character.wear(Slot::Torso, jacket.clone(), None);
         st.missions.bodies[0].left = Some(Left {
             at: (22, 41),
-            heading: "north",
+            heading: "north".to_string(),
             worn: Some(jacket),
         });
         assert!(st.clock() < (10, 0), "{:?}", st.clock());
@@ -2672,7 +2676,7 @@ pub(crate) mod tests {
             .wear(Slot::Torso, ItemId::new("ballistic_weave"), None);
         st.missions.bodies[0].left = Some(Left {
             at: (22, 41),
-            heading: "north",
+            heading: "north".to_string(),
             worn: Some(ItemId::new("salvage_jacket")),
         });
         let (h, m) = st.clock();

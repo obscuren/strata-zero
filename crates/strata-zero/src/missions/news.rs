@@ -62,7 +62,7 @@ const SCREENED: [BuildingKind; 3] = [
 ];
 
 /// The news item put out last, its texts filled.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct NewsRun {
     /// The book's id for it.
     pub id: String,
@@ -426,7 +426,7 @@ fn walk_away(st: &mut AppState) {
         if b.near && d > AWAY {
             b.left = Some(Left {
                 at,
-                heading: heading(b.pos, you),
+                heading: heading(b.pos, you).to_string(),
                 worn: worn.clone(),
             });
         }
@@ -1035,7 +1035,7 @@ pub(crate) mod tests {
         stand(&mut st, STREET, at.offset(0, -13));
         let left = Some(Left {
             at: (22, 41),
-            heading: "north",
+            heading: "north".to_string(),
             worn: st.character.equipped(Slot::Torso).cloned(),
         });
         assert_eq!(st.missions.bodies[0].left, left);
@@ -1072,7 +1072,7 @@ pub(crate) mod tests {
             .wear(Slot::Torso, ItemId::new("salvage_jacket"), None);
         st.missions.bodies[0].left = Some(Left {
             at: (22, 41),
-            heading: "north",
+            heading: "north".to_string(),
             worn: Some(ItemId::new("salvage_jacket")),
         });
         assert_eq!(

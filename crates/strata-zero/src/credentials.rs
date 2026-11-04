@@ -24,7 +24,7 @@ pub fn parse_keycard(id: &ItemId) -> Option<(BuildingId, HouseholdId)> {
 }
 
 /// Where a code came from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Source {
     ServerCopy,
     Home,
@@ -37,7 +37,7 @@ pub enum Source {
 }
 
 /// A message in the rig's inbox.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Mail {
     pub from: String,
     pub subject: String,
@@ -72,7 +72,7 @@ pub const LOCKOUT_MINUTES: u64 = 30;
 pub const MISSES: u8 = 3;
 
 /// A flat's keypad: misses so far, and the minute a lockout ends.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct KeypadState {
     pub wrong: u8,
     pub locked_until: Option<u64>,
@@ -87,7 +87,7 @@ pub enum Verdict {
 }
 
 /// A door code the player knows.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Code {
     pub building: BuildingId,
     pub level: i32,
@@ -102,7 +102,7 @@ pub struct Code {
 }
 
 /// What the player knows: door codes, and which lobbies already hold a lost card.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Journal {
     codes: Vec<Code>,
     /// Buildings whose lost keycard already lies in the lobby.

@@ -191,7 +191,7 @@ pub struct AppState {
 }
 
 /// One ability effect playing on the map.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FxInstance {
     pub fx: game::Fx,
     pub place: citygen::Place,

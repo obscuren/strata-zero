@@ -16,7 +16,7 @@ use game::{
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// A hack that landed: on what, with which op, when, and until when (`None` forever).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Hack {
     pub building: BuildingId,
     pub target: HackTarget,
@@ -69,7 +69,7 @@ pub const MARK_SLIP: (u8, u8, u8) = (255, 0, 200);
 pub const MARK_SHIELD: (u8, u8, u8) = (0, 229, 255);
 
 /// Who acts in an engagement.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Actor {
     You,
     Ice(usize),
@@ -79,7 +79,7 @@ pub enum Actor {
 }
 
 /// Your turn in two halves: you move (or stay), then you act.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Phase {
     Move,
     Act,
@@ -87,7 +87,7 @@ pub enum Phase {
 
 /// A map on turns, a construct or the street: the order rolled once, whose turn it
 /// is, and the pools left to the actor acting.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Engagement {
     pub place: Place,
     pub round: u32,
@@ -143,7 +143,7 @@ pub const TRACE_NOISE: u8 = 5;
 pub const STUN_TURNS: u8 = 2;
 
 /// What a piece of ICE is doing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum IceMode {
     Asleep,
     Awake { seen: Pos, lost: u8 },
@@ -151,7 +151,7 @@ pub enum IceMode {
 
 /// A piece of ICE's state this session: its mode, what is left of it, and where it
 /// is on its beat.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Ice {
     pub mode: IceMode,
     pub integrity: u8,
@@ -162,7 +162,7 @@ pub struct Ice {
 }
 
 /// How a run's roll went.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Roll {
     Hit,
     Slip,
@@ -172,7 +172,7 @@ pub enum Roll {
 
 /// A run's last roll: when (`AppState::tick`), how it went, and the run as it stood
 /// after it (a landed run has `done == work` and is gone from `NetState::run`).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RollEcho {
     pub at: u64,
     pub roll: Roll,
@@ -297,6 +297,7 @@ pub fn odds_at(st: &AppState, scene: Scene, run: &Run) -> Option<u8> {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct NetState {
     /// One state per guard of every construct entered.
     pub ice: BTreeMap<BuildingId, Vec<Ice>>,
@@ -348,6 +349,8 @@ pub struct NetState {
     last_minute: u64,
     /// Every roll comes out this way, for tests.
     #[cfg(test)]
+    // A test switch, never part of a run.
+    #[serde(skip)]
     pub force_roll: Option<u8>,
     /// Slipstream always sheds (`Some(true)`) or never, for tests.
     #[cfg(test)]

@@ -18,7 +18,7 @@ pub const RADIUS_NET: i32 = 24;
 /// Indoors the walls do the limiting: a lit floor is seen across.
 pub const RADIUS_INSIDE: i32 = 30;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Player {
     pub pos: Pos,
     /// The map the player stands on: a stratum, or a floor inside a building.
@@ -28,7 +28,13 @@ pub struct Player {
     /// What has been seen, per place.
     memory: HashMap<Place, Grid<Visibility>>,
     /// What `vis` returns for a place never seen.
+    // Scratch: an empty grid, the same as `Player::at` makes; never saved.
+    #[serde(skip, default = "nothing_seen")]
     unseen: Grid<Visibility>,
+}
+
+fn nothing_seen() -> Grid<Visibility> {
+    Grid::filled(Size { w: 0, h: 0 }, Visibility::Unseen)
 }
 
 impl Player {
@@ -77,7 +83,7 @@ impl Player {
             place,
             body: None,
             memory: HashMap::new(),
-            unseen: Grid::filled(Size { w: 0, h: 0 }, Visibility::Unseen),
+            unseen: nothing_seen(),
         }
     }
 

@@ -7,7 +7,7 @@ use citygen::{BuildingId, City, Construct, Place, Pos, StratumKind, Terrain, gen
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Constructs {
     made: HashMap<BuildingId, Construct>,
 }

@@ -46,11 +46,13 @@ pub const DELIVER_MIN_RANGE: i32 = 30;
 /// The pane turns the clock red under this many minutes.
 pub const WARN_MINUTES: u64 = 60;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct JobId(pub u32);
 
 /// What a job is about, with its target in the city.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Kind {
     /// A paydata shard lies on `tile` of flat `number` on `level` of `building`.
     Fetch {
@@ -78,7 +80,7 @@ impl Kind {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum State {
     Offered,
     Taken,
@@ -87,13 +89,13 @@ pub enum State {
     Dropped,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Objective {
     pub text: String,
     pub done: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Job {
     pub id: JobId,
     pub fixer: PersonId,
@@ -117,14 +119,14 @@ pub struct Job {
 }
 
 /// How a job ended: the game minute, and the fixer's standing just after.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Closed {
     pub at: u64,
     pub standing: i32,
 }
 
 /// What a fixer thinks of you, and how many offers they have rolled.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Fixer {
     pub standing: i32,
     pub rolled: u32,
@@ -162,7 +164,7 @@ pub enum Change {
     Ticked { job: JobId, objective: usize },
 }
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Jobs {
     pub list: Vec<Job>,
     pub fixers: BTreeMap<PersonId, Fixer>,

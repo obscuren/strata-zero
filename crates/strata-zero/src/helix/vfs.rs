@@ -10,7 +10,7 @@ pub const GUEST: &str = "guest";
 /// The pseudo-owner whose owner bits belong to anyone but `guest`.
 pub const USERS: &str = "users";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Mode {
     pub owner_r: bool,
     pub owner_w: bool,
@@ -49,7 +49,7 @@ impl Mode {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Dev {
     Door,
     Lift,
@@ -64,14 +64,14 @@ pub enum Dev {
     Passwd,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Kind {
     Dir(BTreeMap<String, usize>),
     File(String),
     Dev(Dev),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Node {
     pub name: String,
     pub kind: Kind,
@@ -104,7 +104,7 @@ impl fmt::Display for VfsError {
 
 /// `nodes[0]` is `/`. Removed nodes are unlinked from their parent and left in the vec,
 /// so every id stays stable.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Vfs {
     nodes: Vec<Node>,
 }

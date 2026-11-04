@@ -13,7 +13,7 @@ const FRAMES_PER_SECOND: f32 = 30.0;
 pub const DRIFT: i32 = 2;
 
 /// A daze running.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Daze {
     /// The frame tick it began.
     pub start: u64,

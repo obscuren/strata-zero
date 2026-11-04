@@ -37,6 +37,7 @@ mod owners;
 mod render;
 mod rest;
 mod ride;
+mod runs;
 mod save;
 mod screens;
 mod term;

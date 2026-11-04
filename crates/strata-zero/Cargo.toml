@@ -56,3 +56,4 @@ app = ["window", "dep:winresource", "dep:windows-sys"]
 dist = true
 
 [dev-dependencies]
+rmpv.workspace = true

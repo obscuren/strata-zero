@@ -18,7 +18,7 @@ const PILL_BG: Color = Color::Rgb(120, 20, 90);
 
 /// The pill over the map: the mail it announces, and the clear map frames it has been
 /// up on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MailPill {
     pub mail: usize,
     pub frames: u64,
