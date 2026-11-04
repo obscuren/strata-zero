@@ -18,8 +18,13 @@ pub enum View {
     /// `sel` is the journal index under the bar, `top` the first row shown.
     Inbox { sel: usize, top: usize },
     /// `i` is the open mail's journal index, `scroll` the body rows scrolled past, `new`
-    /// whether it was unread as it opened.
-    Reading { i: usize, scroll: usize, new: bool },
+    /// whether it was unread as it opened, `top` the inbox's, for esc to come back to.
+    Reading {
+        i: usize,
+        scroll: usize,
+        new: bool,
+        top: usize,
+    },
 }
 
 pub struct Mailer {
@@ -119,10 +124,19 @@ impl Mailer {
     }
 
     /// Opens mail `i`, reading it: a story step it ends fires, and may land another.
-    fn read(&mut self, st: &mut AppState, i: usize) {
-        let new = !st.journal.mails[i].read;
+    /// `top` is the inbox's, kept for esc.
+    fn read(&mut self, st: &mut AppState, i: usize, top: usize) {
+        let Some(m) = st.journal.mails.get(i) else {
+            return;
+        };
+        let new = !m.read;
         credentials::mail_read(st, i);
-        self.view = View::Reading { i, scroll: 0, new };
+        self.view = View::Reading {
+            i,
+            scroll: 0,
+            new,
+            top,
+        };
     }
 
     pub fn key(&mut self, st: &mut AppState, k: KeyEvent) -> MailerEvent {
@@ -134,18 +148,24 @@ impl Mailer {
                 // the inbox lists newest first: up is the next mail in
                 KeyCode::Up if sel + 1 < n => self.view = View::Inbox { sel: sel + 1, top },
                 KeyCode::Down if sel > 0 => self.view = View::Inbox { sel: sel - 1, top },
-                KeyCode::Char(' ') if sel < n => self.read(st, sel),
+                KeyCode::Char(' ') => self.read(st, sel, top),
                 _ if next_new => {
                     if let Some(i) = newest_new(st) {
-                        self.read(st, i);
+                        self.read(st, i, top);
                     }
                 }
                 _ => {}
             },
-            View::Reading { i, scroll, new } => match k.code {
-                KeyCode::Esc => self.view = View::Inbox { sel: i, top: 0 },
-                KeyCode::Up if i + 1 < n => self.read(st, i + 1),
-                KeyCode::Down if i > 0 => self.read(st, i - 1),
+            View::Reading {
+                i,
+                scroll,
+                new,
+                top,
+            } => match k.code {
+                // back where the inbox was left, moved only as far as the bar needs
+                KeyCode::Esc => self.view = View::Inbox { sel: i, top },
+                KeyCode::Up if i + 1 < n => self.read(st, i + 1, top),
+                KeyCode::Down if i > 0 => self.read(st, i - 1, top),
                 KeyCode::PageUp | KeyCode::PageDown => {
                     let page = body_rows(GLASS_H);
                     let len = st
@@ -158,11 +178,16 @@ impl Mailer {
                     } else {
                         (scroll + page).min(len.saturating_sub(page))
                     };
-                    self.view = View::Reading { i, scroll, new };
+                    self.view = View::Reading {
+                        i,
+                        scroll,
+                        new,
+                        top,
+                    };
                 }
                 _ if next_new => {
                     if let Some(i) = newest_new(st) {
-                        self.read(st, i);
+                        self.read(st, i, top);
                     }
                 }
                 _ => {}
@@ -222,6 +247,7 @@ impl Mailer {
                 i,
                 scroll,
                 new: was,
+                ..
             } => {
                 if let Some(m) = mails.get(i) {
                     let head = [
@@ -300,7 +326,7 @@ mod tests {
         m.draw(st, &mut buf, GLASS, &look);
         buf
     }
-    fn row(buf: &Buffer, y: u16) -> String {
+    fn line_at(buf: &Buffer, y: u16) -> String {
         let a = buf.area;
         (a.x..a.right())
             .map(|x| buf[(x, y)].symbol().to_string())
@@ -310,7 +336,7 @@ mod tests {
     }
     fn rows(buf: &Buffer) -> Vec<String> {
         (buf.area.y..buf.area.bottom())
-            .map(|y| row(buf, y))
+            .map(|y| line_at(buf, y))
             .collect()
     }
     /// The morning after: Mezz's news mail just in, every older mail read.
@@ -368,7 +394,8 @@ mod tests {
             View::Reading {
                 i: mezz,
                 scroll: 0,
-                new: true
+                new: true,
+                top: 0
             }
         );
         assert!(st.journal.mails[mezz].read);
@@ -538,6 +565,54 @@ mod tests {
         assert!(
             matches!(m.view, View::Reading { i: 29, .. }),
             "the newest stops"
+        );
+    }
+
+    #[test]
+    fn esc_brings_the_inbox_back_where_it_was() {
+        let mut st = with(
+            (1..=30)
+                .map(|i| mail("a", &format!("mail {i:02}"), true, 600 + i))
+                .collect(),
+        );
+        let mut m = Mailer::open(&st).unwrap();
+        for _ in 0..20 {
+            m.key(&mut st, k(KeyCode::Down));
+        }
+        for _ in 0..3 {
+            m.key(&mut st, k(KeyCode::Up));
+        }
+        assert!(
+            matches!(m.view, View::Inbox { sel: 12, top: 6 }),
+            "{:?}",
+            m.view
+        );
+        m.key(&mut st, space());
+        m.key(&mut st, k(KeyCode::Esc));
+        assert!(
+            matches!(m.view, View::Inbox { sel: 12, top: 6 }),
+            "{:?}",
+            m.view
+        );
+        // a mail left for a neighbour still on the page: the bar on it, the list as it was
+        m.key(&mut st, space());
+        m.key(&mut st, k(KeyCode::Down));
+        m.key(&mut st, k(KeyCode::Esc));
+        assert!(
+            matches!(m.view, View::Inbox { sel: 11, top: 6 }),
+            "{:?}",
+            m.view
+        );
+        // one off the page: the list moves just enough to show the bar
+        m.key(&mut st, space());
+        for _ in 0..13 {
+            m.key(&mut st, k(KeyCode::Up));
+        }
+        m.key(&mut st, k(KeyCode::Esc));
+        assert!(
+            matches!(m.view, View::Inbox { sel: 24, top: 5 }),
+            "{:?}",
+            m.view
         );
     }
 
@@ -712,7 +787,7 @@ mod tests {
             let mut buf = Buffer::empty(g);
             let m = Mailer::open(st).unwrap();
             m.draw(st, &mut buf, g, &look);
-            row(&buf, 3)
+            line_at(&buf, 3)
         };
         st.journal.mails[0].subject = "a long subject".to_string();
         let time = mail_time(&st.journal.mails[0]);
