@@ -10,6 +10,7 @@ mod ground;
 mod growth;
 mod land;
 mod names;
+pub mod net_ground;
 mod poi_ground;
 mod pois;
 mod rivers;

@@ -73,6 +73,9 @@ pub enum Cmd {
         /// How many overworld tiles `--detail` draws, `WxH`.
         #[arg(long, default_value = "10x4")]
         span: String,
+        /// With `--detail`: draw the tiles' Net instead of their ground.
+        #[arg(long, requires = "detail")]
+        net: bool,
         /// The page to write.
         #[arg(long, default_value = "world-sheet.html")]
         out: PathBuf,
@@ -307,6 +310,7 @@ pub fn run() -> Result<()> {
             cities,
             detail,
             span,
+            net,
             out,
         }) => {
             let range = seed_range(seed, seeds.as_deref())?;
@@ -332,7 +336,7 @@ pub fn run() -> Result<()> {
                 }
                 std::fs::write(
                     &out,
-                    crate::sheet::detail_sheet(&world, centre, span, &style),
+                    crate::sheet::detail_sheet(&world, centre, span, &style, net),
                 )
                 .with_context(|| format!("writing {}", out.display()))?;
                 println!("-> {}", out.display());

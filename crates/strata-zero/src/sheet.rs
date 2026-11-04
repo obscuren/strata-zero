@@ -235,11 +235,37 @@ pub fn world_sheet(worlds: &[(Overworld, Duration)], style: &StylePack) -> Strin
 /// One level down: the detail map of `span` overworld tiles round `centre`, drawn as the
 /// street draws it at full light with the water shaded by its distance from land,
 /// beside the overworld round it in the atlas look with the region framed.
-pub fn detail_sheet(world: &Overworld, centre: Pos, span: (u32, u32), style: &StylePack) -> String {
+pub fn detail_sheet(
+    world: &Overworld,
+    centre: Pos,
+    span: (u32, u32),
+    style: &StylePack,
+    net: bool,
+) -> String {
     let (sw, sh) = (span.0.max(1) as i32, span.1.max(1) as i32);
     let (tx0, ty0) = (centre.x - sw / 2, centre.y - sh / 2);
     let t = detail::TILE;
-    let g = detail::region(world, t * tx0, t * ty0, (t * sw) as u32, (t * sh) as u32);
+    let (rw, rh) = ((t * sw) as u32, (t * sh) as u32);
+    let g = if net {
+        citygen::overworld::net_ground::region(world, t * tx0, t * ty0, rw, rh)
+    } else {
+        detail::region(world, t * tx0, t * ty0, rw, rh)
+    };
+    let mask = |p: Pos| {
+        use crate::render::tileset::{MASK_E, MASK_N, MASK_S, MASK_W, connects};
+        [
+            ((0, -1), MASK_N),
+            ((1, 0), MASK_E),
+            ((0, 1), MASK_S),
+            ((-1, 0), MASK_W),
+        ]
+        .into_iter()
+        .filter(|((dx, dy), _)| {
+            g.get(p.offset(*dx, *dy))
+                .is_some_and(|n| connects(g[p].terrain, n.terrain))
+        })
+        .fold(0, |m, (_, b)| m | b)
+    };
     let size = g.size();
     let wet = |p: Pos| {
         g.get(p)
@@ -248,7 +274,11 @@ pub fn detail_sheet(world: &Overworld, centre: Pos, span: (u32, u32), style: &St
     let ctx = RenderCtx {
         style,
         theme: None,
-        stratum: StratumKind::Street,
+        stratum: if net {
+            StratumKind::Net
+        } else {
+            StratumKind::Street
+        },
         light: 255,
         tick: 0,
         vis: Visibility::Visible,
@@ -261,6 +291,10 @@ pub fn detail_sheet(world: &Overworld, centre: Pos, span: (u32, u32), style: &St
     };
     let ground = block(size.w as i32, size.h as i32, |x, y| {
         let p = Pos::new(x, y);
+        let ctx = RenderCtx {
+            wall_mask: mask(p),
+            ..ctx
+        };
         let mut c = tileset::cell(&g[p], &ctx);
         if g[p].terrain == Terrain::Water {
             // how far to dry land, up to 6 (a cell is twice as tall as it is wide)
@@ -358,7 +392,7 @@ mod tests {
     fn the_detail_sheet_draws_the_ground() {
         let style = StylePack::load().unwrap();
         let w = Overworld::generate(WorldParams::default()).unwrap();
-        let html = detail_sheet(&w, Pos::new(50, 26), (4, 2), &style);
+        let html = detail_sheet(&w, Pos::new(50, 26), (4, 2), &style, false);
         assert!(html.starts_with("<!doctype html>") && html.contains("@font-face"));
         assert!(
             html.matches("<div class=r>").count() >= 16 + 13,

@@ -761,7 +761,7 @@ fn straight(a: Pos, b: Pos) -> Vec<Pos> {
 /// The cells a road runs on through tile `(tx, ty)`, from the link mask: straight
 /// across when it passes through, else from each crossing to the tile's middle, so its
 /// corners line up with its crossings and a straight road never winds.
-fn centreline(world: &Overworld, tx: i32, ty: i32, mask: u8) -> Vec<Pos> {
+pub(crate) fn centreline(world: &Overworld, tx: i32, ty: i32, mask: u8) -> Vec<Pos> {
     use super::{LINK_E, LINK_N, LINK_S, LINK_W};
     let cross = |d: Dir| crossing(world, tx, ty, d, true, 0);
     if mask == LINK_E | LINK_W {
@@ -842,7 +842,7 @@ pub fn fingerprint(world: &Overworld, tx: i32, ty: i32) -> u64 {
 }
 
 /// A detail cell's stable roll in 0..1 under `salt`.
-fn roll(seed: u64, salt: u64, p: Pos) -> f32 {
+pub(crate) fn roll(seed: u64, salt: u64, p: Pos) -> f32 {
     let packed = ((p.x as u32 as u64) << 32) | p.y as u32 as u64;
     (hash64(hash64(seed, salt), packed) >> 40) as f32 / (1u64 << 24) as f32
 }
