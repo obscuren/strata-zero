@@ -14,6 +14,7 @@ pub mod mappix;
 pub mod mark;
 pub mod minimap;
 pub mod netlook;
+pub mod overworld;
 pub mod overlay;
 pub mod path;
 pub mod people;
