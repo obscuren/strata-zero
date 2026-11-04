@@ -302,13 +302,20 @@ impl Terminal {
     }
 }
 
-/// The host's `/etc/motd` as the shell's user reads it; nothing if they cannot.
+/// The host's `/etc/motd` as the shell's user reads it (nothing if they cannot), and on
+/// the rig what mail waits.
 fn motd(st: &mut AppState, sh: &Shell) -> Vec<String> {
     let fs = &ensure_host(st, sh.host).fs;
-    match fs.read(&sh.user, &sh.cwd, &sh.home, "/etc/motd") {
+    let mut lines = match fs.read(&sh.user, &sh.cwd, &sh.home, "/etc/motd") {
         Ok(Kind::File(text)) => text.lines().map(str::to_string).collect(),
         _ => Vec::new(),
+    };
+    let new = st.journal.mails.iter().filter(|m| !m.read).count();
+    if sh.host == HostId::Rig && new > 0 {
+        lines.push(String::new());
+        lines.push(format!("YOU HAVE {new} NEW MAIL · TYPE mail"));
     }
+    lines
 }
 
 fn pop() -> ScreenCmd {
@@ -567,6 +574,29 @@ mod tests {
         citygen::Place::Stratum(StratumKind::Street),
         citygen::Pos { x: 9, y: 9 },
     );
+
+    #[test]
+    fn the_rig_boots_with_the_new_mail() {
+        let mut st = crate::jobs::testutil::state_home();
+        assert!(!st.journal.mails.is_empty() && st.journal.mails.iter().all(|m| !m.read));
+        let sh = new_shell(&mut st, HostId::Rig);
+        let lines = motd(&mut st, &sh);
+        let tail = [
+            "".to_string(),
+            "YOU HAVE 1 NEW MAIL · TYPE mail".to_string(),
+        ];
+        assert!(lines.ends_with(&tail), "{lines:?}");
+        for m in &mut st.journal.mails {
+            m.read = true;
+        }
+        let lines = motd(&mut st, &sh);
+        assert!(!lines.iter().any(|l| l.contains("NEW MAIL")), "{lines:?}");
+        st.journal.mails[0].read = false;
+        let d = st.city.as_ref().unwrap().buildings[0].district;
+        let there = new_shell(&mut st, HostId::District(d));
+        let lines = motd(&mut st, &there);
+        assert!(!lines.iter().any(|l| l.contains("NEW MAIL")), "{lines:?}");
+    }
 
     #[test]
     fn boots_with_motd_and_shows_a_unix_prompt() {
