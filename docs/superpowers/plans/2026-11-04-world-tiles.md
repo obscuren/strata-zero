@@ -44,9 +44,9 @@
 - Modify: any other exhaustive `match` on `Terrain` the compiler points at (`render/mappix.rs`, `screens/explore.rs`, `render/atrium.rs`, `interior/…`)
 
 **Interfaces:**
-- Produces, appended to `Terrain` after `Railing`: `Dirt, Scrub, Crops, Salt, Spill, Gravel, Sand, Reeds, Rock, Cliff, Shallows, Ford`. `Feature::Pylon` appended after `Fitting`.
-- Walkable: `Dirt, Scrub, Crops, Salt, Spill, Gravel, Sand, Reeds, Ford` (and the existing `Road`, `Bridge`). Not walkable: `Rock, Cliff, Shallows` (and `Water`). Blocks sight: `Cliff` only. `Feature::Pylon` blocks movement, not sight (like `Furniture`).
-- Labels: "dirt", "scrub", "crops", "salt", "spill", "gravel", "sand", "reeds", "rock", "cliff", "shallows", "ford".
+- Produces, appended to `Terrain` after `Railing`: `Dirt, Scrub, Crops, Salt, Spill, Gravel, Sand, Reeds, Rock, Cliff, Shallows, Ford, Rise`. `Feature::Pylon` appended after `Fitting`.
+- Walkable: `Dirt, Scrub, Crops, Salt, Spill, Gravel, Sand, Reeds, Ford, Rise` (and the existing `Road`, `Bridge`). Not walkable: `Rock, Cliff, Shallows` (and `Water`). Blocks sight: `Cliff` only. `Feature::Pylon` blocks movement, not sight (like `Furniture`).
+- Labels: "dirt", "scrub", "crops", "salt", "spill", "gravel", "sand", "reeds", "rock", "cliff", "shallows", "ford", "rise".
 - Glyphs and colours, round 2's T look (fg, bg; the renderer's light scales them as for streets):
   - Dirt: `·` rarely (variant % 16 == 0), else blank; (67,60,48) on (13,11,9). Low rises
     (`░`) come from the generator's relief (Task 2), not the glyph
@@ -61,6 +61,7 @@
   - Cliff: `▓` or `█`; (52,49,44) on (12,11,10)
   - Shallows: `~`, `≈` or blank; (106,166,216) on (18,60,94)
   - Ford: `·` or blank; (90,140,190) on (14,40,64)
+  - Rise: `░` mostly, `·` now and then; (70,60,44) on (20,17,13)
   - Pylon: `╫`, (106,110,118)
 
 - [ ] **Step 1: Write the failing tests** in `tile.rs` and `tileset.rs`:
@@ -70,7 +71,7 @@
 #[test]
 fn open_ground_walks_and_sees_as_it_should() {
     use Terrain::*;
-    for t in [Dirt, Scrub, Crops, Salt, Spill, Gravel, Sand, Reeds, Ford] {
+    for t in [Dirt, Scrub, Crops, Salt, Spill, Gravel, Sand, Reeds, Ford, Rise] {
         assert!(Tile::new(t).is_walkable(), "{t:?}");
         assert!(!Tile::new(t).blocks_sight(), "{t:?}");
     }
@@ -82,8 +83,8 @@ fn open_ground_walks_and_sees_as_it_should() {
     let mut pylon = Tile::new(Dirt);
     pylon.feature = Some(Feature::Pylon);
     assert!(!pylon.is_walkable() && !pylon.blocks_sight());
-    assert_eq!(ALL_TERRAIN.len(), 40);
-    assert_eq!(*ALL_TERRAIN.last().unwrap(), Ford);
+    assert_eq!(ALL_TERRAIN.len(), 41);
+    assert_eq!(*ALL_TERRAIN.last().unwrap(), Rise);
 }
 ```
 
@@ -94,7 +95,7 @@ fn open_ground_draws_in_one_cell() {
     let style = StylePack::load().unwrap();
     for t in [Terrain::Dirt, Terrain::Scrub, Terrain::Crops, Terrain::Salt, Terrain::Spill,
               Terrain::Gravel, Terrain::Sand, Terrain::Reeds, Terrain::Rock, Terrain::Cliff,
-              Terrain::Shallows, Terrain::Ford] {
+              Terrain::Shallows, Terrain::Ford, Terrain::Rise] {
         for variant in 0..=255u8 {
             let mut tile = Tile::new(t);
             tile.variant = variant;
@@ -123,9 +124,8 @@ fn open_ground_draws_in_one_cell() {
   - `pub fn ground(world: &Overworld, tx: i32, ty: i32) -> Grid<Tile>`: the 8×8 patch of overworld tile `(tx, ty)`, Street-level `Tile`s with `variant` from `rng::tile_hash(world.seed, StratumKind::Street, detail_pos)`.
   - `pub fn region(world: &Overworld, x0: i32, y0: i32, w: u32, h: u32) -> Grid<Tile>`: any rectangle of detail coordinates (may extend past the world: out-of-world cells are `Terrain::Void`), built from the same per-cell rules, so it equals the stitched `ground` patches.
   - Internal: `fn blend(world, x, y, f: impl Fn(&WorldTile) -> f32) -> f32` (bilinear between tile centres; a missing tile counts as its nearest in-world tile, so the outer edge blends with itself); `fn jitter_tile(world, x, y) -> (i32, i32)` (the overworld tile whose ground a detail cell takes, displaced by world-wide noise up to ±3 columns, ±1.5 rows, so ground kinds meet in curves).
-- Relief: world-wide noise over the blended elevation marks low rises on Dirt as
-  `Feature`-free `Terrain::Dirt` with `variant` forced to the `░` glyph's value; *(or a
-  `Rise` flag in `variant`'s top bit: builder's choice, kept out of the save's types)*.
+- Relief: world-wide noise (scale 8×4) over the blended elevation turns Dirt into
+  `Terrain::Rise` where it is above 0.66 (round 2's T look: low rises in `░`).
 - Ground cover by the jittered tile's `Ground`: Flats → Dirt; Scrub → Scrub; Fields → Crops; Salt → Salt; Spill → Spill; Hills → Dirt with Rock where a hash < 0.12; Mountains → Cliff where world-wide noise (scale 4×2) ≥ 0.45 else Dirt (passes); Peak → Cliff.
 
 - [ ] **Step 1: Write the failing tests** in `detail.rs`:
@@ -158,7 +158,7 @@ fn ground_follows_its_overworld_tile() {
                 continue;
             }
             let want = match t.ground {
-                Ground::Flats | Ground::Hills => Terrain::Dirt,
+                Ground::Flats | Ground::Hills => Terrain::Dirt, // or Rise, or Rock on hills
                 Ground::Scrub => Terrain::Scrub,
                 Ground::Fields => Terrain::Crops,
                 Ground::Salt => Terrain::Salt,
@@ -167,7 +167,7 @@ fn ground_follows_its_overworld_tile() {
             };
             // the centre of the patch is the tile's own ground (edges may blend)
             let c = ground(&w, p.x, p.y)[Pos::new(4, 4)].terrain;
-            assert!(c == want || matches!(c, Terrain::Rock | Terrain::Dirt), "seed {seed} {p:?}: {c:?} for {:?}", t.ground);
+            assert!(c == want || matches!(c, Terrain::Rock | Terrain::Dirt | Terrain::Rise), "seed {seed} {p:?}: {c:?} for {:?}", t.ground);
         }
     }
 }
