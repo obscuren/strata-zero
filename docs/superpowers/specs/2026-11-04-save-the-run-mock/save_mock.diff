@@ -1,0 +1,95 @@
+diff --git a/crates/strata-zero/src/screens/shots.rs b/crates/strata-zero/src/screens/shots.rs
+index f7e352d..c630f08 100644
+--- a/crates/strata-zero/src/screens/shots.rs
++++ b/crates/strata-zero/src/screens/shots.rs
+@@ -2932,3 +2932,90 @@ fn mail_shots() {
+         shot_stack(&name("n"), &st, &[&map, &term], size);
+     }
+ }
++
++/// Throwaway (the save mock): the title, the load list, the pause menu over the map and
++/// the flatline, as they draw today.
++#[test]
++#[ignore]
++fn save_mock_frames() {
++    let Ok(dir) = std::env::var("SHOT_DIR") else {
++        return;
++    };
++    let mut st = AppState::new();
++    let mut title = crate::screens::initial(&st);
++    for _ in 0..90 {
++        st.tick += 1;
++        title.update(&mut st, &[]);
++    }
++    write_svg(&dir, "save_title", &st, &draw_stack(&st, &[&title], (120, 40)), false);
++
++    let mut st = state_home();
++    let saves = std::path::PathBuf::from(&dir).join("cities");
++    std::fs::create_dir_all(&saves).unwrap();
++    for name in ["Lowport", "Chromespire"] {
++        crate::save::save_city(&saves.join(format!("{name}.city")), st.city.as_ref().unwrap())
++            .unwrap();
++    }
++    let files = crate::screens::files::Files::load_in(saves, st.tick);
++    write_svg(&dir, "save_files", &st, &draw_stack(&st, &[&files], (120, 40)), false);
++
++    let mut map = MapScreen::walking(&mut st);
++    for _ in 0..30 {
++        st.tick += 1;
++        map.update(&mut st, &[]);
++    }
++    let pause = crate::screens::pause::Pause::new(st.tick);
++    st.tick += 30;
++    write_svg(&dir, "save_pause", &st, &draw_stack(&st, &[&map, &pause], (120, 40)), false);
++    write_svg(&dir, "save_map", &st, &draw_stack(&st, &[&map], (120, 40)), false);
++
++    let flat = crate::screens::flatlined::Flatlined::new(
++        "black ICE · the bank's vault".to_string(),
++        &st.character.handle,
++        st.character.level,
++        st.tick,
++    );
++    st.tick += 90;
++    write_svg(&dir, "save_flatlined", &st, &draw_stack(&st, &[&flat], (120, 40)), false);
++}
++
++/// Throwaway (the save spike): how big and how slow the city is in each format.
++#[test]
++#[ignore]
++fn save_spike_sizes() {
++    use std::io::Write as _;
++    use std::time::Instant;
++    let st = state_home();
++    let city = st.city.as_ref().unwrap();
++    let t = Instant::now();
++    let pc = postcard::to_allocvec(city).unwrap();
++    let pc_t = t.elapsed();
++    let t = Instant::now();
++    let mp = rmp_serde::to_vec_named(city).unwrap();
++    let mp_t = t.elapsed();
++    let t = Instant::now();
++    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
++    gz.write_all(&mp).unwrap();
++    let gz = gz.finish().unwrap();
++    let gz_t = t.elapsed();
++    let t = Instant::now();
++    let back: citygen::City = rmp_serde::from_slice(&mp).unwrap();
++    let de_t = t.elapsed();
++    assert_eq!(back.seed, city.seed);
++    let t = Instant::now();
++    let mut d = flate2::read::GzDecoder::new(&gz[..]);
++    let mut raw = Vec::new();
++    std::io::Read::read_to_end(&mut d, &mut raw).unwrap();
++    let un_t = t.elapsed();
++    eprintln!(
++        "postcard {} B {:?} · msgpack named {} B {:?} · gz fast {} B {:?} · de {:?} · gunzip {:?}",
++        pc.len(),
++        pc_t,
++        mp.len(),
++        mp_t,
++        gz.len(),
++        gz_t,
++        de_t,
++        un_t
++    );
++}
