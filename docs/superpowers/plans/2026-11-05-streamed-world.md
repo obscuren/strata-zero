@@ -303,3 +303,18 @@ From Jeff's play: after travelling to another city (↵ down from the overworld 
 - [ ] Test `the_overworld_takes_dev_commands`: with dev unlocked, the console (and every dev key the map screen has that makes sense without a street: the console, the inspector of the tile, teleport/jump) opens on the overworld and the Net overworld; locked, they don't.
 - [ ] The overworld's and the Net overworld's hint lines go entirely (the `?` help stays); test that the drawn screen holds no hint line.
 - [ ] Five checks; commit `outside: one set of rules on every map`.
+
+### Task 15: The overworld in motion
+
+Jeff picked round 2 of `docs/superpowers/specs/2026-11-05-overworld-motion-mock/` (spec, "After the first play"). Build it in the real overworld exactly as `round2.html` shows it, with its rates (the page's notes table lists every layer's rate and what the Rust side needs).
+
+**Files:** `crates/strata-zero/src/render/overworld.rs` (the look "A" cells take the tick and the hour), `crates/strata-zero/src/screens/outside.rs` (pass the tick and minute of day), new modules under `render/` if a layer is big enough to deserve one.
+
+**Interfaces:**
+- The walked overworld's cells are a function of (world, tile, tick, minute of day): neon (each district's tiles breathe on a 600–1080-tick period rippled across the district in 5 brightness steps; half the signs stutter once every 60–90 s for 0.4 s; windows change every 60 s; tower beacons blink 6 ticks in 180); weather (no rain; swell, river glints, wind over fields, cloud shadows a tile at a time; a mountain gust every 40–70 s, ~8 s across the range in a 5-tile band: mountains whiten, hills take dust, a lake ripples); beacons (relay blink every 2 s with a halo after dark, the checkpoint's red cross every 12 ticks and its road's red glow, the other place beacons as in round 2); nothing on the roads. All of it from the tick and hashes of the cell and the world's seed (deterministic, no RNG state, nothing saved). The hour drives day/dusk/night as in the mock. 1 tick = 1/30 s (the app's frame tick).
+- The Net overworld is unchanged.
+- Cost: a frame of the overworld at 200×60 stays under ~2 ms in release (add a case to `streamed_draw_cost` or a sibling).
+
+- [ ] Tests: `the_overworld_moves_with_the_tick` (two ticks apart, some cells differ; the same tick twice, identical); `a_districts_breath_is_slow` (no cell's neon step changes more than once in 300 ticks); `no_light_on_the_roads` (road cells never take a beacon/lamp colour); `the_gust_comes_and_goes` (over 70 s of ticks a gust crosses the mountains, and most ticks have none); `the_net_overworld_is_still` (identical across ticks); `the_overworld_reads_the_hour` (day and night differ).
+- [ ] Shots: the overworld at day, dusk and night, and mid-gust; compare with `round2.html` side by side and match it.
+- [ ] Five checks; commit `render: the overworld in motion`.

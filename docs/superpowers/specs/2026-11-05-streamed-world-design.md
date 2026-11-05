@@ -209,8 +209,15 @@ some cities' light as overblown and stitched on, and the overworld as static. So
   packets, and so do the open Net's trunks in view. Replaces my calls 1 and 8.
 - **One light.** A city's cells look the same drawn from outside as from inside, at the
   same hour, people aside.
-- **The overworld moves**: options mocked in `2026-11-05-overworld-motion-mock/`,
-  built once one is picked.
+- **The overworld moves** (Jeff picked round 2 of `2026-11-05-overworld-motion-mock/`):
+  slow neon in the cities (a district breathes every 20–36 s, rippling across it; a
+  sign stutters about once a minute; tower beacons blink every 6 s); weather without
+  rain (swell on the shore, glints down the river, wind over the fields, cloud shadows
+  drifting a tile at a time, and now and then a gust through the mountains, every
+  40–70 s for about 8 s); beacons at places (the relay's green blink with a halo after
+  dark, the checkpoint's red cross, and the rest of round 2's), no lights on the roads.
+  No traffic. The Net overworld stays as it is: its calm suits it. The overworld's
+  hint line goes. Rates and the Rust notes are in `round2.html`.
 
 ## Constraints
 
