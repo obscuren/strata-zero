@@ -125,7 +125,7 @@ pub trait Overlay {
 }
 
 /// Bits N=1, E=2, S=4, W=8 for the neighbours of `p` whose terrain joins `terrain`.
-pub(crate) fn wall_mask(map: &MapRef, p: Pos, terrain: citygen::Terrain) -> u8 {
+pub(crate) fn wall_mask(map: &dyn TileMap, p: Pos, terrain: citygen::Terrain) -> u8 {
     let mut mask = 0u8;
     for (d, bit) in [
         ((0, -1), MASK_N),
@@ -142,19 +142,22 @@ pub(crate) fn wall_mask(map: &MapRef, p: Pos, terrain: citygen::Terrain) -> u8 {
     mask
 }
 
-/// Draws one map into an area, then the overlays, then the cursor.
-pub struct MapView<'a> {
-    pub map: &'a MapRef<'a>,
+/// One map's tiles drawn into an area from tile `origin` of the map's own frame: every
+/// cell `keep` takes (all of them with none), each seen as `vis` says. A cell the map
+/// doesn't hold shows the map's backdrop, else the background.
+pub struct TilePass<'a> {
+    pub map: &'a dyn TileMap,
+    /// Whose palette tints the tiles: a floor takes the street's.
+    pub stratum: StratumKind,
     pub origin: Pos,
     pub tick: u64,
     pub style: &'a StylePack,
-    pub vis: Option<&'a Grid<Visibility>>,
-    pub overlays: &'a [&'a dyn Overlay],
-    pub cursor: Option<Pos>,
+    pub vis: &'a dyn Fn(Pos) -> Visibility,
+    pub keep: Option<&'a dyn Fn(Pos) -> bool>,
 }
 
-impl Widget for MapView<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
+impl TilePass<'_> {
+    pub fn draw(&self, area: Rect, buf: &mut Buffer) {
         let map = self.map;
         let background = Cell {
             ch: ' ',
@@ -163,11 +166,13 @@ impl Widget for MapView<'_> {
             bold: false,
             dim: false,
         };
-        // A floor takes the street's palette tint.
-        let stratum = map.stratum().unwrap_or(StratumKind::Street);
+        let sky = sky_of(map);
         for sy in area.y..area.bottom() {
             for sx in area.x..area.right() {
                 let p = screen_to_tile(area, self.origin, (sx, sy));
+                if self.keep.is_some_and(|keep| !keep(p)) {
+                    continue;
+                }
                 let Some(tile) = map.tile(p) else {
                     // Beyond the edge: the map's own backdrop, remembered-dim, or nothing.
                     match map.backdrop(p) {
@@ -175,7 +180,7 @@ impl Widget for MapView<'_> {
                             let ctx = RenderCtx {
                                 style: self.style,
                                 theme: map.theme(p),
-                                stratum,
+                                stratum: self.stratum,
                                 light: 150,
                                 tick: self.tick,
                                 vis: Visibility::Remembered,
@@ -183,7 +188,7 @@ impl Widget for MapView<'_> {
                                 kind: None,
                                 wall_mask: 0,
                                 lamps_on: map.lamps_on(),
-                                sky: sky_of(map),
+                                sky,
                                 glow: None,
                             };
                             apply_vis(cell(&back, &ctx), Visibility::Remembered).write(buf, sx, sy);
@@ -192,28 +197,60 @@ impl Widget for MapView<'_> {
                     }
                     continue;
                 };
-                let mask = wall_mask(map, p, tile.terrain);
-                let vis = self
-                    .vis
-                    .and_then(|g| g.get(p).copied())
-                    .unwrap_or(Visibility::Visible);
+                let vis = (self.vis)(p);
                 let ctx = RenderCtx {
                     style: self.style,
                     theme: map.theme(p),
-                    stratum,
+                    stratum: self.stratum,
                     light: map.light(p),
                     tick: self.tick,
                     vis,
                     connector: map.connector(p),
                     kind: map.kind(p),
-                    wall_mask: mask,
+                    wall_mask: wall_mask(map, p, tile.terrain),
                     lamps_on: map.lamps_on_at(p),
-                    sky: sky_of(map),
+                    sky,
                     glow: map.glow(p),
                 };
                 apply_vis(cell(tile, &ctx), vis).write(buf, sx, sy);
             }
         }
+    }
+}
+
+/// Draws one map into an area, then the overlays, then the cursor.
+pub struct MapView<'a> {
+    pub map: &'a MapRef<'a>,
+    pub origin: Pos,
+    pub tick: u64,
+    pub style: &'a StylePack,
+    pub vis: Option<&'a Grid<Visibility>>,
+    /// The cells the map's tiles draw on: all with none; where other areas share the
+    /// view, the cells this map's city owns (what the others drew stays).
+    pub keep: Option<&'a dyn Fn(Pos) -> bool>,
+    pub overlays: &'a [&'a dyn Overlay],
+    pub cursor: Option<Pos>,
+}
+
+impl Widget for MapView<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let map = self.map;
+        let vis = |p: Pos| {
+            self.vis
+                .and_then(|g| g.get(p).copied())
+                .unwrap_or(Visibility::Visible)
+        };
+        TilePass {
+            map,
+            // A floor takes the street's palette tint.
+            stratum: map.stratum().unwrap_or(StratumKind::Street),
+            origin: self.origin,
+            tick: self.tick,
+            style: self.style,
+            vis: &vis,
+            keep: self.keep,
+        }
+        .draw(area, buf);
         for o in self.overlays {
             o.draw(map, self.origin, area, self.tick, buf, self.style);
         }
@@ -263,7 +300,8 @@ mod tests {
                         tick: 5,
                         style: &s,
                         vis: None,
-                        overlays: &[&Weather],
+                        keep: None,
+                        overlays: &[&Weather::default()],
                         cursor: Some(origin),
                     }
                     .render(f.area(), f.buffer_mut())
@@ -311,7 +349,8 @@ mod tests {
                             tick: steps as u64,
                             style: &s,
                             vis: None,
-                            overlays: &[&Weather],
+                            keep: None,
+                            overlays: &[&Weather::default()],
                             cursor: None,
                         }
                         .render(f.area(), f.buffer_mut())

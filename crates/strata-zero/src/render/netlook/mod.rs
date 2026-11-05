@@ -11,7 +11,7 @@ pub mod packets;
 pub mod plate;
 
 use crate::anim::effects::pulse;
-use crate::render::map::MapRef;
+use crate::render::map::{MapRef, TileMap};
 use crate::render::overlay::SIGNAL;
 use crate::render::style::StylePack;
 use crate::render::tileset::{DOUBLE, HEAVY, LIGHT};
@@ -159,6 +159,32 @@ pub struct NetLookView {
 
 pub struct NetLook<'a> {
     pub view: &'a NetLookView,
+    /// The cells of the city's Net the look draws: all with none; where other areas
+    /// share the view, the cells the city owns.
+    pub keep: Option<&'a dyn Fn(Pos) -> bool>,
+}
+
+/// What the look draws the Net of: a map in its own frame, the city whose Net it is
+/// (its constructs, its hubs, its districts; none for the open Net), and the cells it
+/// draws (all with none).
+#[derive(Clone, Copy)]
+pub struct NetArea<'a> {
+    pub map: &'a dyn TileMap,
+    pub city: Option<&'a City>,
+    pub keep: Option<&'a dyn Fn(Pos) -> bool>,
+}
+
+/// The Net of an area other than the city's own drawn in the look: another city's or
+/// town's with its own city, the open Net with none.
+pub fn draw_area(
+    net: NetArea,
+    view: &NetLookView,
+    origin: Pos,
+    area: Rect,
+    buf: &mut Buffer,
+    style: &StylePack,
+) {
+    grid::draw(net, view, origin, area, buf, style);
 }
 
 impl Overlay for NetLook<'_> {
@@ -173,7 +199,12 @@ impl Overlay for NetLook<'_> {
     ) {
         match map {
             MapRef::Stratum(m) if m.stratum == StratumKind::Net => {
-                grid::draw(map, self.view, origin, area, buf, style)
+                let net = NetArea {
+                    map,
+                    city: Some(m.city),
+                    keep: self.keep,
+                };
+                grid::draw(net, self.view, origin, area, buf, style)
             }
             MapRef::Construct(m) => inside::draw(m, self.view, origin, area, buf, style),
             _ => {}

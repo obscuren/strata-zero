@@ -54,8 +54,9 @@ pub fn header(st: &AppState, death: Option<Death>) -> RunHeader {
 }
 
 /// Where you stand, as the run's card says it: `{building} {floor} · at home` in the
-/// flat, `{building} {floor}` on another floor, the district on the street, `on the
-/// Net` jacked in. Empty before you stand anywhere.
+/// flat, `{building} {floor}` on another floor, the district on the street, `open
+/// ground` on the street past the city's cells, `on the Net` jacked in. Empty before
+/// you stand anywhere.
 pub fn place_line(st: &AppState) -> String {
     let (Some(city), Some(p)) = (st.city.as_ref(), st.player.as_ref()) else {
         return String::new();
@@ -67,6 +68,9 @@ pub fn place_line(st: &AppState) -> String {
         Some(crate::outside::At::Overworld(_)) => return "overworld".to_string(),
         Some(crate::outside::At::Ground(_)) => return "open ground".to_string(),
         _ => {}
+    }
+    if p.place.is_street() && !crate::outside::stream::live_owns(st, p.pos) {
+        return "open ground".to_string();
     }
     match p.place {
         Place::Floor { building, level } => {
@@ -192,6 +196,12 @@ mod tests {
         crate::outside::ensure(&mut st).unwrap().at = crate::outside::At::Overworld(Pos::new(3, 3));
         assert_eq!(place_line(&st), "overworld");
         st.outside.as_mut().unwrap().at = crate::outside::At::Ground(Pos::new(30, 30));
+        assert_eq!(place_line(&st), "open ground");
+        // on the street past the city's edge
+        st.outside.as_mut().unwrap().at = crate::outside::At::City;
+        let p = st.player.as_mut().unwrap();
+        p.place = Place::Stratum(StratumKind::Street);
+        p.pos = Pos::new(-3, 5);
         assert_eq!(place_line(&st), "open ground");
     }
 

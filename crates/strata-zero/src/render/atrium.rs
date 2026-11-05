@@ -233,6 +233,7 @@ mod tests {
             tick: 0,
             style: &s,
             vis: Some(&vis),
+            keep: None,
             overlays: &[&overlay],
             cursor: None,
         }
@@ -339,6 +340,7 @@ mod tests {
             tick: 0,
             style: &s,
             vis: Some(&vis),
+            keep: None,
             overlays: &[&overlay],
             cursor: None,
         }

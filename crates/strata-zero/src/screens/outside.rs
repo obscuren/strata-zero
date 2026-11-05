@@ -1318,14 +1318,18 @@ mod tests {
             Dir::N => KeyCode::Char('k'),
             _ => KeyCode::Char('j'),
         };
-        assert!(matches!(
-            m.update(&mut st, &[key(code)]),
-            ScreenCmd::Switch { .. }
-        ));
+        // the street carries on onto the ground, on the city's own screen
+        assert!(matches!(m.update(&mut st, &[key(code)]), ScreenCmd::Stay));
+        let to = from.step(d);
+        assert_eq!(st.player.as_ref().unwrap().pos, to);
+        assert!(!city.size.contains(to));
+        assert_eq!(st.outside.as_ref().unwrap().at, At::City);
+        let c = world_cell(to);
         assert_eq!(
-            st.outside.as_ref().unwrap().at,
-            At::Ground(world_cell(from.step(d)))
+            crate::outside::your_tile(&st),
+            Some(Pos::new(c.x.div_euclid(TILE), c.y.div_euclid(TILE)))
         );
+        assert!(crate::outside::away(&st));
     }
 
     #[test]
@@ -1719,7 +1723,21 @@ mod tests {
         crate::runs::snapshot::after_restore(&mut back, lost);
         let o = back.outside.as_ref().unwrap();
         assert!(o.net.is_none(), "you wake on your body");
-        assert_eq!(o.at, at);
+        // on the street past the city's edge, where the body was
+        let At::Ground(body) = at else {
+            panic!("jacked in on the ground")
+        };
+        assert_eq!(o.at, At::City);
+        let origin = o.origin(back.city.as_ref().unwrap());
+        let p = back.player.as_ref().unwrap();
+        assert_eq!(
+            (p.place, p.pos, p.body),
+            (
+                citygen::Place::Stratum(StratumKind::Street),
+                Pos::new(body.x - origin.x, body.y - origin.y),
+                None
+            )
+        );
     }
 
     #[test]

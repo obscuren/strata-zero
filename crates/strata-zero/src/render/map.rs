@@ -76,7 +76,10 @@ pub struct StratumMap<'a> {
     /// The minute of the day the stratum is seen at; ambient and lamps follow it.
     pub minute: u16,
     /// What lies past the city's edge, and the cells of it other areas own: none on a
-    /// map that ends at the city's edge (`MapRef::beyond` sets it).
+    /// map that ends at the city's edge (`MapRef::beyond` sets it). With it, `tile` may
+    /// answer with another area's tile, its building and district ids that area's:
+    /// such a map is for walking, sight and drawing, never for reading ids against
+    /// `city`.
     pub beyond: Option<&'a Beyond<'a>>,
 }
 
@@ -160,13 +163,6 @@ impl<'a> MapRef<'a> {
 
     /// The street's or the Net's map carried on past the city's edge by `b`; floors,
     /// constructs and the other strata as they are.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the city screen walks past the edge from #27's next task"
-        )
-    )]
     pub fn beyond(self, b: &'a Beyond<'a>) -> MapRef<'a> {
         match self {
             MapRef::Stratum(m) if matches!(m.stratum, StratumKind::Street | StratumKind::Net) => {
@@ -664,6 +660,7 @@ mod tests {
                 tick: 1,
                 style: &s,
                 vis: None,
+                keep: None,
                 overlays: &[],
                 cursor: None,
             }

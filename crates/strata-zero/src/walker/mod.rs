@@ -287,14 +287,9 @@ impl Player {
         newly
     }
 
-    /// The cells off the map in sight at the last look, in the map's frame.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the city screen walks past the edge from #27's next task"
-        )
-    )]
+    /// The cells off the map in sight at the last look, in the map's frame, sorted. On
+    /// the Net it stays empty (everything there is in sight, `sees_all`): a screen draws
+    /// the Net past the edge as in sight.
     pub fn beyond_sight(&self) -> &[Pos] {
         &self.beyond
     }

@@ -45,6 +45,12 @@ The open ground's tiles are never saved: the seed makes them again, the same eve
 and nothing the player does changes them yet. Jacked in out there (`net`) isn't saved:
 a run reopened there wakes on the body.
 
+The street carries on past the city's edge, so a run saved out on the open ground on foot is
+`At::City` with the player off the city's map (its position in the city's frame, past its
+edge). A run saved at `At::Ground` (the outside screen's ground) opens on the street at that
+cell, its body there and not jacked in (`outside::reopened`); if the ground there is gone,
+back in the city as before.
+
 In another city of the world the home city is set aside whole in `st.away`
 (`outside::Stay`: the city, its people, interiors, constructs, the Net's state, the
 ground's items, foes, bots, journal, jobs, story, track, HELIX, the mail's marks and the

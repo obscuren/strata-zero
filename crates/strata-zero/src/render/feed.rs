@@ -147,6 +147,7 @@ pub fn paint(buf: &mut Buffer, win: Rect, st: &AppState, anchor: (StratumKind, P
         tick: st.tick,
         style: &st.style,
         vis: None,
+        keep: None,
         overlays: &overlays,
         cursor: None,
     }

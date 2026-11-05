@@ -13,8 +13,9 @@ use citygen::{City, Pos, Rect, StratumKind};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// Where you are: in the city, on an overworld tile, or on a detail cell of the open
-/// ground (world-wide detail coordinates).
+/// Where you are: in the city (its street may carry you off its map, onto the open
+/// ground), on an overworld tile, or on a detail cell of the open ground (world-wide
+/// detail coordinates; a run reopened there is put on the street, `reopened`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum At {
     #[default]
@@ -64,7 +65,6 @@ pub struct Outside {
     /// The open ground round the view, street and Net: never saved, made again from the
     /// world as it's needed.
     #[serde(skip)]
-    #[cfg_attr(not(test), expect(dead_code, reason = "walked from #27's next tasks"))]
     pub stream: stream::Stream,
 }
 
@@ -355,19 +355,16 @@ impl Outside {
 
     /// Where the city's map sits in the world: the world cell of its cell `(0, 0)`, the
     /// corner of its block.
-    #[cfg_attr(not(test), expect(dead_code, reason = "used from #27's next tasks"))]
     pub fn origin(&self, city: &City) -> Pos {
         let b = self.block(city);
         Pos::new(TILE * b.x, TILE * b.y)
     }
 
-    /// The overworld tile a cell of the city's street lies in.
+    /// The overworld tile a cell of the city's street lies in, on its map or past its
+    /// edge.
     pub fn tile_of(&self, city: &City, p: Pos) -> Pos {
-        let b = self.block(city);
-        Pos::new(
-            b.x + p.x.div_euclid(TILE).clamp(0, b.w - 1),
-            b.y + p.y.div_euclid(TILE).clamp(0, b.h - 1),
-        )
+        let at = self.origin(city).offset(p.x, p.y);
+        Pos::new(at.x.div_euclid(TILE), at.y.div_euclid(TILE))
     }
 
     /// Where you stand in the city coming in on block tile `tile`: the outdoor street
@@ -652,10 +649,20 @@ pub fn nearest(from: Pos, reach: i32, ok: impl Fn(Pos) -> bool) -> Option<Pos> {
     })
 }
 
-/// You are out of the city, on the overworld or the open ground: the city holds still
-/// for you (its story waits, its cameras look at no one), your body isn't on its street.
+/// You are out of the city: on the overworld, or standing (your body, jacked in) off
+/// the cells the city owns. The city holds still for you (its story waits, its cameras
+/// look at no one), your body isn't on its street.
 pub fn away(st: &AppState) -> bool {
-    st.outside.as_ref().is_some_and(|o| o.at != At::City)
+    let Some(o) = st.outside.as_ref() else {
+        return false;
+    };
+    if o.at != At::City {
+        return true;
+    }
+    st.player.as_ref().is_some_and(|p| {
+        let (place, pos) = p.body.unwrap_or((p.place, p.pos));
+        place.stratum().is_some() && !stream::live_owns(st, pos)
+    })
 }
 
 /// After a run is opened: the overworld made again, and you back in the city if what
@@ -698,11 +705,29 @@ pub fn reopened(st: &mut AppState) {
     if !stands {
         o.at = At::City;
         st.warn("the world out there has changed since this run was saved · back in the city");
+        return;
+    }
+    // a run saved on the open ground before the street carried on past the city's
+    // edge: on the street there, off the city's map
+    if let At::Ground(c) = o.at {
+        o.at = At::City;
+        let Some(city) = st.city.as_ref() else {
+            return;
+        };
+        let origin = o.origin(city);
+        let street = citygen::Place::Stratum(StratumKind::Street);
+        let p = st
+            .player
+            .get_or_insert_with(|| crate::walker::Player::at(street, c));
+        p.place = street;
+        p.pos = Pos::new(c.x - origin.x, c.y - origin.y);
+        p.body = None;
     }
 }
 
-/// Whether you can leave the city for the world now: on foot on its open street, in a
-/// city (not the lot), not jacked in, not in a fight, with no call or scene under way.
+/// Whether you can leave the city for the world now: on foot on its open street (or on
+/// the ground past it), in a city (not the lot), not jacked in, not in a fight, with
+/// no call or scene under way.
 pub fn can_leave(st: &AppState) -> Result<(), &'static str> {
     let (Some(city), Some(p)) = (st.city.as_ref(), st.player.as_ref()) else {
         return Err("nowhere to go");
@@ -713,6 +738,29 @@ pub fn can_leave(st: &AppState) -> Result<(), &'static str> {
     if p.jacked_in() {
         return Err("jack out first");
     }
+    held_in(st)?;
+    let outdoors = p.place.is_street()
+        && (!stream::live_owns(st, p.pos)
+            || city
+                .tile(StratumKind::Street, p.pos)
+                .is_some_and(|t| t.building.is_none()));
+    if !outdoors {
+        return Err("only from the open street");
+    }
+    Ok(())
+}
+
+/// Whether you can walk off the cells the city owns on foot now: in a city (not the
+/// lot), not in a fight, with no call or scene under way.
+pub fn can_cross(st: &AppState) -> Result<(), &'static str> {
+    if st.city.as_ref().is_some_and(|c| c.is_lot()) {
+        return Err("there is no world past the lot");
+    }
+    held_in(st)
+}
+
+/// What holds you in the city: a fight, a call, a scene.
+fn held_in(st: &AppState) -> Result<(), &'static str> {
     if st.net.engaged.is_some() {
         return Err("not in a fight");
     }
@@ -723,38 +771,6 @@ pub fn can_leave(st: &AppState) -> Result<(), &'static str> {
     if m.scene.is_some() || !m.scenes.is_empty() {
         return Err("not now");
     }
-    let outdoors = p.place.is_street()
-        && city
-            .tile(StratumKind::Street, p.pos)
-            .is_some_and(|t| t.building.is_none());
-    if !outdoors {
-        return Err("only from the open street");
-    }
-    Ok(())
-}
-
-/// Out of the city by its edge: from street cell `from` a step `d` off the map, onto
-/// the open ground beside the block, where there is ground to stand on.
-pub fn leave_by(st: &mut AppState, from: Pos, d: citygen::Dir) -> Result<(), &'static str> {
-    can_leave(st)?;
-    let city = st.city.clone().ok_or("nowhere to go")?;
-    let o = ensure(st).ok_or("there is no world out here")?;
-    let b = o.block(&city);
-    let to = from.step(d);
-    let cell = Pos::new(TILE * b.x + to.x, TILE * b.y + to.y);
-    let w = o.world();
-    if cell.x < 0
-        || cell.y < 0
-        || cell.x >= TILE * w.size.w as i32
-        || cell.y >= TILE * w.size.h as i32
-    {
-        return Err("the world ends here");
-    }
-    let ground = citygen::overworld::detail::region(w, cell.x, cell.y, 1, 1)[Pos::new(0, 0)];
-    if !ground.is_walkable() {
-        return Err("no way out there");
-    }
-    o.at = At::Ground(cell);
     Ok(())
 }
 
@@ -1063,7 +1079,14 @@ pub(crate) mod tests {
         .is_walkable();
         let back = reopen(on_ground, "where-ground");
         if ground_ok {
-            assert_eq!(back.outside.as_ref().unwrap().at, At::Ground(cell));
+            // the ground is the street past the city's edge now
+            let o = back.outside.as_ref().unwrap();
+            assert_eq!(o.at, At::City);
+            let origin = o.origin(back.city.as_ref().unwrap());
+            assert_eq!(
+                back.player.as_ref().unwrap().pos,
+                Pos::new(cell.x - origin.x, cell.y - origin.y)
+            );
         }
         let mut in_town = home_run();
         let town = in_town
@@ -1081,6 +1104,31 @@ pub(crate) mod tests {
         assert_eq!((site.city, site.town), (town.city, town.town));
         assert!(back.away.is_some(), "home set aside");
         let _ = s;
+    }
+
+    #[test]
+    fn an_old_save_on_the_ground_opens_on_the_street() {
+        // a run saved out on the open ground before the street carried on past the
+        // city's edge: back on the street there, off the city's map
+        let mut st = home_run();
+        let (e, d) = stream::tests::beyond::edge_out(&st, 1);
+        let off = e.step(d);
+        let city = st.city.clone().unwrap();
+        let c = st
+            .outside
+            .as_ref()
+            .unwrap()
+            .origin(&city)
+            .offset(off.x, off.y);
+        st.outside.as_mut().unwrap().at = At::Ground(c);
+        let back = reopen(st, "old-ground");
+        assert_eq!(back.outside.as_ref().unwrap().at, At::City);
+        let p = back.player.as_ref().unwrap();
+        assert_eq!(
+            (p.place, p.pos, p.body),
+            (citygen::Place::Stratum(StratumKind::Street), off, None)
+        );
+        assert!(!city.size.contains(p.pos));
     }
 
     #[test]

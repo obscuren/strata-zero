@@ -49,7 +49,6 @@ impl std::fmt::Debug for Stream {
 impl Stream {
     /// Both layers built over `area` (world cells) and a ring past it; far tiles
     /// forgotten.
-    #[cfg_attr(not(test), expect(dead_code, reason = "walked from #27's next tasks"))]
     pub fn cover(&mut self, world: &Overworld, area: Rect) {
         self.cells = Size {
             w: TILE as u32 * world.size.w,
@@ -252,13 +251,6 @@ pub enum Owner<'a> {
 impl<'a> Beyond<'a> {
     /// What lies past the run's city: none with no world out there (the lot, a run
     /// before the world).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the city screen walks past the edge from #27's next task"
-        )
-    )]
     pub fn of(st: &'a AppState) -> Option<Beyond<'a>> {
         let city = st.city.as_ref()?;
         let o = st.outside.as_ref()?;
@@ -286,15 +278,24 @@ impl<'a> Beyond<'a> {
     }
 
     /// Whether the live city owns local cell `p` (and its map has it).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the city screen walks past the edge from #27's next task"
-        )
-    )]
     pub fn live_owns(&self, p: Pos) -> bool {
         self.elsewhere(p).is_none()
+    }
+
+    /// The world cell of the live city's `(0, 0)`.
+    pub fn origin(&self) -> Pos {
+        self.live.2
+    }
+
+    /// The other cities and towns held this session, each with the world cell of its
+    /// `(0, 0)`.
+    pub fn held(&self) -> impl Iterator<Item = (&'a City, Pos)> + '_ {
+        self.held.iter().map(|&(_, city, origin)| (city, origin))
+    }
+
+    /// The open ground round the view.
+    pub fn stream(&self) -> &'a Stream {
+        self.stream
     }
 
     /// Who answers for local cell `p` when the live city doesn't: the area owning its
@@ -318,15 +319,89 @@ impl<'a> Beyond<'a> {
     }
 }
 
+/// Whether the live city owns local cell `p`, as `Beyond::live_owns` says, without
+/// making a `Beyond`: every cell of its map with no world past it (the lot, a run
+/// before the world).
+pub fn live_owns(st: &AppState, p: Pos) -> bool {
+    let (Some(city), Some(o)) = (st.city.as_ref(), st.outside.as_ref()) else {
+        return true;
+    };
+    if city.is_lot() || o.world.is_none() || o.owners.is_none() {
+        return true;
+    }
+    if !city.size.contains(p) {
+        return false;
+    }
+    // a city from before the world is the home city, and owns its whole block
+    if city.params.site.is_none() {
+        return true;
+    }
+    let at = o.origin(city).offset(p.x, p.y);
+    o.owner(Pos::new(at.x.div_euclid(TILE), at.y.div_euclid(TILE))) == Some(o.here())
+}
+
+/// The stream built under `area` (cells of the live city's frame) wherever the live
+/// city doesn't own a cell of it: the open ground, and every settlement's but the
+/// live one's, built or not. Whether it built anything new.
+pub fn tend(st: &mut AppState, area: Rect) -> bool {
+    let Some(foreign) = Beyond::of(st).and_then(|b| b.foreign(area)) else {
+        return false;
+    };
+    let Some(o) = st.outside.as_mut() else {
+        return false;
+    };
+    let Some(world) = o.world.as_ref() else {
+        return false;
+    };
+    let before = (o.stream.street.held(), o.stream.net.held());
+    o.stream.cover(world, foreign);
+    before != (o.stream.street.held(), o.stream.net.held())
+}
+
+impl Beyond<'_> {
+    /// The overworld tiles `area` (the live city's frame) touches that hold a cell the
+    /// live city doesn't own, as one rectangle of world cells; none when it owns all.
+    fn foreign(&self, area: Rect) -> Option<Rect> {
+        let (live, city, origin) = self.live;
+        let at = Rect::new(origin.x + area.x, origin.y + area.y, area.w, area.h);
+        let map = Rect::new(origin.x, origin.y, city.size.w as i32, city.size.h as i32);
+        let (t0, t1) = (
+            Pos::new(at.x.div_euclid(TILE), at.y.div_euclid(TILE)),
+            Pos::new(
+                (at.right() - 1).div_euclid(TILE),
+                (at.bottom() - 1).div_euclid(TILE),
+            ),
+        );
+        let mut bounds: Option<(Pos, Pos)> = None;
+        for y in t0.y..=t1.y {
+            for x in t0.x..=t1.x {
+                let t = Pos::new(x, y);
+                let own = self.outside.owner(t) == Some(live)
+                    && map.contains(Pos::new(TILE * x, TILE * y))
+                    && map.contains(Pos::new(TILE * x + TILE - 1, TILE * y + TILE - 1));
+                if !own {
+                    bounds = Some(match bounds {
+                        None => (t, t),
+                        Some((lo, hi)) => (
+                            Pos::new(lo.x.min(x), lo.y.min(y)),
+                            Pos::new(hi.x.max(x), hi.y.max(y)),
+                        ),
+                    });
+                }
+            }
+        }
+        let (lo, hi) = bounds?;
+        Some(Rect::new(
+            TILE * lo.x,
+            TILE * lo.y,
+            TILE * (hi.x - lo.x + 1),
+            TILE * (hi.y - lo.y + 1),
+        ))
+    }
+}
+
 /// Marks what was in sight past the live city's edge at the last look as seen, in the
 /// world's record.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the city screen walks past the edge from #27's next task"
-    )
-)]
 pub fn remember_sight(st: &mut AppState) {
     let (Some(city), Some(p), Some(o)) =
         (st.city.as_ref(), st.player.as_ref(), st.outside.as_mut())
@@ -340,7 +415,7 @@ pub fn remember_sight(st: &mut AppState) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::outside::ground::CAP;
     use crate::outside::tests::sited;
@@ -750,7 +825,7 @@ mod tests {
     }
 
     /// The street and the Net carried on past the live city's edge.
-    mod beyond {
+    pub(crate) mod beyond {
         use super::*;
         use crate::app::AppState;
         use crate::outside::enter;
@@ -784,6 +859,12 @@ mod tests {
         /// A street cell on the live city's edge with open ground to walk on past it,
         /// and the way off.
         fn edge(st: &AppState) -> (Pos, Dir) {
+            edge_out(st, 1)
+        }
+
+        /// A street cell of the live city's own on its edge with `len` cells of open
+        /// ground to walk on straight out past it, and the way off.
+        pub(crate) fn edge_out(st: &AppState, len: i32) -> (Pos, Dir) {
             let city = st.city.as_ref().unwrap();
             let o = st.outside.as_ref().unwrap();
             let w = o.world();
@@ -794,12 +875,18 @@ mod tests {
                     (0..cw).flat_map(|x| [(Pos::new(x, 0), Dir::N), (Pos::new(x, ch - 1), Dir::S)]),
                 );
             sides
-                .filter(|(p, _)| city.walkable(StratumKind::Street, *p))
+                .filter(|(p, _)| {
+                    city.walkable(StratumKind::Street, *p)
+                        && o.owner(tile_of(world_cell(st, *p))) == Some(o.here())
+                })
                 .find(|(p, d)| {
-                    let off = world_cell(st, p.step(*d));
-                    w.tile(tile_of(off)).is_some()
-                        && o.owner(tile_of(off)).is_none()
-                        && detail::region(w, off.x, off.y, 1, 1)[Pos::new(0, 0)].is_walkable()
+                    let (dx, dy) = d.delta();
+                    (1..=len).all(|i| {
+                        let off = world_cell(st, p.offset(dx * i, dy * i));
+                        w.tile(tile_of(off)).is_some()
+                            && o.owner(tile_of(off)).is_none()
+                            && detail::region(w, off.x, off.y, 1, 1)[Pos::new(0, 0)].is_walkable()
+                    })
                 })
                 .expect("a way off the city onto open ground")
         }
@@ -1032,22 +1119,26 @@ mod tests {
             );
         }
 
+        /// A city of the world whose block holds tiles one of its towns owns, and the
+        /// town.
+        pub(crate) fn city_with_a_town(st: &AppState) -> (Settlement, Settlement) {
+            let o = st.outside.as_ref().unwrap();
+            o.others()
+                .into_iter()
+                .filter(|(s, _)| s.town.is_none())
+                .find_map(|(s, block)| {
+                    block
+                        .iter()
+                        .find_map(|t| o.owner(t).filter(|w| w.town.is_some()).map(|w| (s, w)))
+                })
+                .expect("a town owning tiles of its city's map")
+        }
+
         #[test]
         fn a_cell_of_the_live_map_another_settlement_owns_answers_from_it() {
             let mut st = home_run();
             // a city whose block holds tiles one of its towns owns
-            let (c, town) = {
-                let o = st.outside.as_ref().unwrap();
-                o.others()
-                    .into_iter()
-                    .filter(|(s, _)| s.town.is_none())
-                    .find_map(|(s, block)| {
-                        block
-                            .iter()
-                            .find_map(|t| o.owner(t).filter(|w| w.town.is_some()).map(|w| (s, w)))
-                    })
-                    .expect("a town owning tiles of its city's map")
-            };
+            let (c, town) = city_with_a_town(&st);
             enter(&mut st, c).unwrap();
             enter(&mut st, town).unwrap();
             enter(&mut st, c).unwrap();

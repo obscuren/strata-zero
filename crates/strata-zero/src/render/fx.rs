@@ -946,6 +946,7 @@ mod tests {
                 tick,
                 style: s,
                 vis,
+                keep: None,
                 overlays,
                 cursor: None,
             }
