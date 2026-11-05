@@ -5,8 +5,11 @@
 mod keys;
 pub mod map;
 mod pane;
+mod world;
 
 pub use keys::key;
+#[cfg(test)]
+pub(crate) use world::places as world_places;
 
 use crate::app::AppState;
 use crate::render::map::MapRef;
@@ -54,6 +57,8 @@ pub struct AtlasState {
     /// The pulses on the walk from your building's way out, while you are inside one
     /// (on the street the map's walk is the track's leg, with the track's pulses).
     pulses: Pulses,
+    /// Zoom 4's cursor and kind.
+    pub world: world::WorldView,
 }
 
 impl AtlasState {
@@ -81,6 +86,8 @@ pub enum Zoom {
     #[default]
     Two,
     Fit,
+    /// Zoom 4: the world (`world`).
+    World,
 }
 
 impl Zoom {
@@ -90,13 +97,14 @@ impl Zoom {
         match self {
             Zoom::One => 1,
             Zoom::Two => fit.min(2),
-            Zoom::Fit => fit,
+            Zoom::Fit | Zoom::World => fit,
         }
     }
 
     /// One step in, `+`: fit, 2, 1.
     pub fn closer(self) -> Zoom {
         match self {
+            Zoom::World => Zoom::Fit,
             Zoom::Fit => Zoom::Two,
             _ => Zoom::One,
         }
@@ -263,6 +271,9 @@ pub fn draw(st: &AppState, body: Rect, buf: &mut Buffer) -> MapLayout {
             buf[(x, y)].set_style(ground);
         }
     }
+    if st.atlas.zoom == Zoom::World && world::available(st) {
+        return world::draw(st, body, buf);
+    }
     let l = layout_in(st, body);
     if l.stratum.is_none() || body.height < 2 {
         map::draw_at(st, &l, &cached(st), None, buf);
@@ -312,6 +323,9 @@ fn title(st: &AppState, l: &MapLayout, body: Rect, buf: &mut Buffer) {
 
 /// The hint row: the keys, and `f fold` or `f unfold`.
 pub fn hint(st: &AppState) -> &'static str {
+    if st.atlas.zoom == Zoom::World && world::available(st) {
+        return world::HINT;
+    }
     if st.atlas.folded {
         HINT_FOLDED
     } else {

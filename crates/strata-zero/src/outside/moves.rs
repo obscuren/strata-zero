@@ -68,6 +68,7 @@ pub fn world_step(st: &mut AppState, d: Dir) -> Moved {
         o.at = At::Overworld(to);
     }
     crate::clock::run(st, Some(cost), crate::clock::PATHS_PER_FRAME);
+    crate::outside::reached_mark(st);
     Moved::Stepped
 }
 

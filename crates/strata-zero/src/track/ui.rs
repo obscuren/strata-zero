@@ -12,7 +12,18 @@ use ratatui::text::{Line, Span};
 /// The pane's first line while tracking: ` ⌖ {label} · {m} m`, then `· {next}`; or why
 /// there is no distance.
 pub fn pane_line(st: &AppState) -> Option<Line<'static>> {
-    let t = st.track.as_ref()?;
+    let Some(t) = st.track.as_ref() else {
+        // a place of the world marked on the MAP: its name, how far, which way
+        let (name, d, dir) = crate::outside::mark_way(st)?;
+        return Some(Line::from(vec![
+            Span::raw(" "),
+            Span::styled("⌖", Style::default().fg(CYAN)),
+            Span::styled(
+                format!(" {name} · {d} tiles {dir}"),
+                Style::default().fg(DIM),
+            ),
+        ]));
+    };
     let tail = match leg_now(st) {
         Some(Err(NoLeg::NoWay)) => " · no way from here".to_string(),
         Some(Err(NoLeg::JackedIn)) => " · jacked in".to_string(),

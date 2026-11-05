@@ -177,6 +177,7 @@ pub fn ground_step(st: &mut AppState, view: &mut GroundView, d: Dir) -> Moved {
         view.cover(o.world(), sight_area(to));
     }
     crate::clock::run(st, Some(sim::WALK_TICKS), crate::clock::PATHS_PER_FRAME);
+    crate::outside::reached_mark(st);
     Moved::Stepped
 }
 

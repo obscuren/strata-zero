@@ -255,6 +255,9 @@ impl OutsideScreen {
                 }
             },
             KeyCode::Tab => {
+                // out in the open the MAP is the world's
+                st.atlas.zoom = crate::screens::atlas::Zoom::World;
+                st.atlas.world.cursor = None;
                 let street = citygen::Place::Stratum(StratumKind::Street);
                 let (place, pos) = st
                     .player
@@ -924,6 +927,22 @@ fn here_lines(st: &AppState, o: &Outside) -> Vec<Line<'static>> {
 
 /// NEAR: the nearest cities and places out here, with how far and which way.
 fn near_lines(st: &AppState, o: &Outside, n: usize) -> Vec<Line<'static>> {
+    // the mark from the MAP first, then what's nearest
+    let mark = crate::outside::mark_way(st).map(|(name, d, dir)| {
+        Line::from(vec![
+            Span::styled(" ⌖ ", Style::default().fg(CYAN)),
+            Span::styled(name, Style::default().fg(TEXT)),
+            Span::styled(format!("  {d} {dir}"), Style::default().fg(DIM)),
+        ])
+    });
+    let n = n - mark.is_some() as usize;
+    let mut out: Vec<Line<'static>> = mark.into_iter().collect();
+    out.extend(nearest_lines(st, o, n));
+    out
+}
+
+/// NEAR's places: the nearest cities and places out here, with how far and which way.
+fn nearest_lines(st: &AppState, o: &Outside, n: usize) -> Vec<Line<'static>> {
     let w = o.world();
     let t = tile_of(st, o);
     // the city whose tiles you stand on is here, whatever its middle's distance
@@ -969,7 +988,7 @@ fn near_lines(st: &AppState, o: &Outside, n: usize) -> Vec<Line<'static>> {
 }
 
 /// The compass point from you toward `(dx, dy)`.
-fn bearing(dx: i32, dy: i32) -> &'static str {
+pub(crate) fn bearing(dx: i32, dy: i32) -> &'static str {
     let (ax, ay) = (dx.abs(), dy.abs());
     match (dx.signum(), dy.signum()) {
         _ if ax > 2 * ay => {

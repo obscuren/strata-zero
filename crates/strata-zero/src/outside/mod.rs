@@ -48,6 +48,17 @@ pub struct Outside {
     /// The other cities' and towns' blocks, from the world (`others`).
     #[serde(skip)]
     blocks: std::cell::OnceCell<Vec<(Settlement, Rect)>>,
+    /// A place of the world marked on the deck MAP's world zoom: its way shows until
+    /// you stand on it.
+    #[serde(default)]
+    pub mark: Option<Mark>,
+}
+
+/// A marked place of the world: its tile and its name.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Mark {
+    pub tile: Pos,
+    pub name: String,
 }
 
 /// A place on the overworld with a map of its own: a world city, or one of its towns.
@@ -256,6 +267,7 @@ impl Outside {
             here: None,
             built: BTreeMap::new(),
             blocks: Default::default(),
+            mark: None,
         })
     }
 
@@ -450,6 +462,49 @@ pub fn settlement_at(st: &AppState, tile: Pos) -> Option<Settlement> {
 #[cfg(test)]
 pub(crate) fn in_any_block(st: &AppState, tile: Pos) -> bool {
     settlement_at(st, tile).is_some()
+}
+
+/// The overworld tile you're on: out there, the one you stand on; in a city, the one
+/// its street there lies in.
+pub fn your_tile(st: &AppState) -> Option<Pos> {
+    let o = st.outside.as_ref()?;
+    Some(match o.at {
+        At::Overworld(t) => t,
+        At::Ground(c) => Pos::new(c.x.div_euclid(TILE), c.y.div_euclid(TILE)),
+        At::City => {
+            let (city, p) = (st.city.as_ref()?, st.player.as_ref()?);
+            o.tile_of(city, p.pos)
+        }
+    })
+}
+
+/// The mark's way from where you are: its name, how many tiles and which way.
+pub fn mark_way(st: &AppState) -> Option<(String, i32, &'static str)> {
+    let m = st.outside.as_ref()?.mark.as_ref()?;
+    let you = your_tile(st)?;
+    let (dx, dy) = (m.tile.x - you.x, m.tile.y - you.y);
+    let d = ((dx * dx + dy * dy) as f32).sqrt().round() as i32;
+    Some((m.name.clone(), d, crate::screens::outside::bearing(dx, dy)))
+}
+
+/// Standing on the marked tile: you're there, and the mark goes.
+pub fn reached_mark(st: &mut AppState) {
+    let there = match (
+        your_tile(st),
+        st.outside.as_ref().and_then(|o| o.mark.as_ref()),
+    ) {
+        (Some(you), Some(m)) => you == m.tile,
+        _ => false,
+    };
+    if there {
+        let name = st
+            .outside
+            .as_mut()
+            .and_then(|o| o.mark.take())
+            .map(|m| m.name)
+            .unwrap_or_default();
+        st.say(format!("⌖ you're at {name}"));
+    }
 }
 
 /// Whether the run is in a city or town other than its home: the story waits there.

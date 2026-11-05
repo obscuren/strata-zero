@@ -193,6 +193,94 @@ fn ground_cell(world: &Overworld, p: Pos, style: &StylePack) -> Cell {
     }
 }
 
+/// The survey chart's paper.
+pub const CHART_BG: Rgb = Rgb(4, 6, 10);
+
+/// How high a tile's ground stands, for the chart's contours.
+fn band(world: &Overworld, p: Pos) -> i32 {
+    match world.tile(p).map(|t| (t.water, t.ground)) {
+        None | Some((Water::Sea | Water::Lake, _)) => -1,
+        Some((_, Ground::Hills)) => 3,
+        Some((_, Ground::Mountains)) => 5,
+        Some((_, Ground::Peak)) => 7,
+        Some((_, Ground::Scrub)) => 1,
+        Some(_) => 0,
+    }
+}
+
+/// Tile `p` of `world` as round 1's survey chart (the deck MAP's world zoom): contour
+/// dots up the hills, the coast hatched, dead ground marked, the cities as tinted
+/// ground, rivers in thin blue, highways heavy and amber.
+pub fn chart_cell(world: &Overworld, p: Pos, style: &StylePack) -> Cell {
+    let Some(t) = world.tile(p) else {
+        return cell(' ', CHART_BG, CHART_BG);
+    };
+    let mut c = if matches!(t.water, Water::Sea | Water::Lake) {
+        let shore = p.neighbors8().any(|q| {
+            world
+                .tile(q)
+                .is_some_and(|n| !matches!(n.water, Water::Sea | Water::Lake))
+        });
+        if shore {
+            cell('░', Rgb(28, 74, 108), Rgb(5, 11, 20))
+        } else {
+            let dot = (p.x + p.y * 3).rem_euclid(6) == 0;
+            cell(if dot { '·' } else { ' ' }, Rgb(18, 48, 72), Rgb(5, 11, 20))
+        }
+    } else {
+        let b0 = band(world, p);
+        let edge = [(1, 0), (0, 1), (-1, 0), (0, -1)].iter().any(|(dx, dy)| {
+            let b = band(world, p.offset(*dx, *dy));
+            b >= 0 && b < b0
+        });
+        let mut c = cell(' ', CHART_BG, CHART_BG);
+        if edge && b0 >= 3 {
+            let k = ((b0 - 3) as f32 / 4.0).min(1.0);
+            c = cell('·', Rgb(42, 36, 24).mix(Rgb(138, 112, 72), k), CHART_BG);
+        }
+        match t.ground {
+            Ground::Spill => {
+                let x = (p.x + p.y).rem_euclid(3) == 0;
+                c = cell(if x { '╳' } else { ' ' }, Rgb(62, 122, 24), Rgb(7, 16, 10));
+            }
+            Ground::Salt => {
+                let x = p.y % 2 == 0 && p.x % 3 != 0;
+                c = cell(if x { '─' } else { ' ' }, Rgb(58, 57, 52), CHART_BG);
+            }
+            _ => {}
+        }
+        c
+    };
+    if let Some(u) = t.urban {
+        let v = u.density as f32 / 255.0;
+        let acc = style.theme_or_neutral(Some(u.theme)).accent;
+        let bg = CHART_BG.mix(acc, 0.10 + 0.22 * v);
+        let top = world
+            .tile(p.offset(0, -1))
+            .is_none_or(|n| n.urban.is_none());
+        c = if top {
+            cell('▔', bg.mix(acc, 0.6), bg)
+        } else {
+            cell(' ', CHART_BG, bg)
+        };
+    }
+    if t.water == Water::River {
+        c.ch = ROUND[(t.river & 15) as usize];
+        c.fg = Rgb(58, 138, 216);
+    }
+    if t.road != 0 {
+        c.ch = HEAVY[(t.road & 15) as usize];
+        c.fg = Rgb(224, 176, 96);
+    }
+    if let Some(poi) = world.poi_at(p) {
+        let (ch, fg) = poi_glyph(poi.kind);
+        c.ch = ch;
+        c.fg = fg;
+        c.bold = true;
+    }
+    c
+}
+
 /// Heavy box glyphs by link mask (N 1, E 2, S 4, W 8): the Net's trunks.
 pub const HEAVY: [char; 16] = [
     '━', '┃', '━', '┗', '┃', '┃', '┏', '┣', '━', '┛', '━', '┻', '┓', '┫', '┳', '╋',
@@ -341,6 +429,33 @@ mod tests {
     use super::*;
     use crate::render::style::StylePack;
     use citygen::overworld::{Overworld, WorldParams};
+
+    #[test]
+    fn every_world_tile_charts_one_cell() {
+        let w = Overworld::generate(WorldParams {
+            seed: 3,
+            ..Default::default()
+        })
+        .unwrap();
+        let style = StylePack::load().unwrap();
+        let mut glyphs = std::collections::BTreeSet::new();
+        for (p, _) in w.tiles.iter() {
+            let c = chart_cell(&w, p, &style);
+            assert_eq!(
+                unicode_width::UnicodeWidthChar::width(c.ch),
+                Some(1),
+                "{p:?}"
+            );
+            glyphs.insert(c.ch);
+        }
+        for ch in ['░', '▔', '·'] {
+            assert!(
+                glyphs.contains(&ch),
+                "{ch}: the coast, a city's edge, the contours"
+            );
+        }
+        assert!(HEAVY.iter().any(|h| glyphs.contains(h)), "the highways");
+    }
 
     #[test]
     fn the_net_over_the_world_is_trunks_nodes_and_dead_grid() {

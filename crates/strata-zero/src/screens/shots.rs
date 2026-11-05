@@ -4267,3 +4267,44 @@ fn net_overworld_shots() {
         shot_stack("net_overworld_city", &st, &[&map, to.as_ref()], (120, 40));
     }
 }
+
+/// The deck MAP's world zoom (#24): from seed 41's home city, the cursor on the
+/// nearest place with its card; and out on the overworld, with a place marked.
+#[test]
+#[ignore]
+fn world_zoom_shots() {
+    use crate::screens::atlas::Zoom;
+    let city = crate::screens::build_home(AppState::new().params.clone().with_seed(41)).unwrap();
+    let mut st = AppState::new();
+    st.enter_city_at(city, 13 * 60);
+    st.character = game::Character::debug_runner(&st.content);
+    st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
+    crate::outside::ensure(&mut st);
+    let map = MapScreen::walking(&mut st);
+    let mut deck = Deck::new(st.tick);
+    deck.update(&mut st, &[key(KeyCode::Char('7'))]);
+    st.atlas.zoom = Zoom::World;
+    let place = crate::screens::atlas::world_places(&st)
+        .into_iter()
+        .find(|p| p.what != "a city" && p.what != "the city you live in")
+        .unwrap();
+    st.atlas.world.cursor = Some(place.tile);
+    // past the deck's opening glitch
+    st.tick += 200;
+    for (name, size) in [
+        ("world_zoom_city", (120, 40)),
+        ("world_zoom_city_small", (100, 30)),
+    ] {
+        shot_stack(name, &st, &[&map, &deck], size);
+    }
+    // out on the overworld, the place marked
+    crate::screens::atlas::key(&mut st, KeyCode::Char('t'));
+    crate::outside::moves::up(&mut st);
+    let out = crate::screens::outside::OutsideScreen::new(&mut st);
+    shot_stack("world_zoom_marked_outside", &st, &[&out], (120, 40));
+    st.atlas.world.cursor = None;
+    let mut deck = Deck::new(st.tick);
+    deck.update(&mut st, &[key(KeyCode::Char('7'))]);
+    st.tick += 200;
+    shot_stack("world_zoom_outside", &st, &[&out, &deck], (120, 40));
+}
