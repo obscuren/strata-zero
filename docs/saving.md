@@ -33,6 +33,24 @@ Elsewhere:
 - `net.rs`: `NetState` is saved whole: the Net's nodes with it (`holds`: held nodes and the verbs spent, a camera's loop among them, the feed, hijacks, lights out, a decoy; `owners`: the districts' traces; `grid::GridState`: the open Net's trail, sentinels posted, tracers' and sentinels' pace, sweeps' rings, owners on alert). Grid ICE is a `foes::Foe` with `ice`. `RollEcho` reads the first saves' `building` as its `scene` (`EchoRead`).
 - Content: `flavor/flatline.ron` (the taunts), `flavor/broadcasts.ron` (`during` on a broadcast).
 
+## The world beyond the city
+
+`st.outside` (`outside::Outside`) holds the world: it is saved as its `params` (the overworld
+itself, `world`, is `#[serde(skip)]` and made again from them by `outside::reopened` in
+`after_restore`), where you are (`at`), what you've seen of the open ground (`seen`, per
+8×8 chunk), the city or town you're in (`here`), the cities and towns you've been into
+(`visited`) and the place marked on the MAP (`mark`). `built` (the other cities' maps this
+session) and `blocks` (the settlements' blocks) are caches made again when first needed.
+The open ground's tiles are never saved: the seed makes them again, the same every time,
+and nothing the player does changes them yet. Jacked in out there (`net`) isn't saved:
+a run reopened there wakes on the body.
+
+In another city of the world the home city is set aside whole in `st.away`
+(`outside::Stay`: the city, its people, interiors, constructs, the Net's state, the
+ground's items, foes, bots, journal, jobs, story, track, HELIX, the mail's marks and the
+keycards), saved with the run; the city you're in is `st.city` as ever. A save taken
+away holds two cities, about a quarter bigger.
+
 ## Writing a save
 
 1. **Something asks.**
@@ -52,7 +70,7 @@ The order matters; every opener goes through `runs::open`:
 
 1. **`file::read(path, &st.book)`.** Checks the magic, the version and that the file is as long as its header says, then `ids::read_snapshot` reads the body against this build's book and `drop_lost` removes whatever pointed at a mission or step the book no longer has. Returns the losses. A flatlined run is refused.
 2. **`snapshot::restore`.** Puts every saved field back (`st.tick` too, so every tick stamp keeps its meaning), puts the run-made keycards back into `st.content`, clears `rest`, stands you up out of a doctor's chair (`chair` is only set while the deck's chair is open, and no screen comes back), and `clear_screens` drops what the screens remembered of another run.
-3. **`snapshot::after_restore`.** Rebuilds what isn't saved: `World::rebuild` (places, labels, night lines), `home`, the street's `Stratum::dark` (the districts whose lamps a lights out cut, made from `net.lights_out` by `holds::relight`, as every tick makes it), the track's walk (`track::refollow`). Drops content ids this build lacks (`forget_unknown`) and logs every loss as `lost in the update · …`.
+3. **`snapshot::after_restore`.** Rebuilds what isn't saved: `World::rebuild` (places, labels, night lines), the home city set aside (`Stay::reopened`: its people's places, and what it holds that this build's content lacks), `home` (none in another city of the world), the street's `Stratum::dark` (the districts whose lamps a lights out cut, made from `net.lights_out` by `holds::relight`, as every tick makes it), the track's walk (`track::refollow`), and the overworld (`outside::reopened`: made again from its params; you back in the city if what you stood on is gone; if the world can't be made at all while you were away, the home city put back first). Drops content ids this build lacks (`forget_unknown`) and logs every loss as `lost in the update · …`. `drop_lost` runs over the home story set aside too.
 4. **The screens.** `Broadcast::resume` (LOAD GAME, CONTINUE) or straight to the map (reloading after a flatline), then `MapScreen::resumed`: it respects the restored player, sets its clock to `st.tick` so the first frame doesn't run the world a minute, and never calls `missions::begin` or `enter_city` (both would start things over).
 
 ## Adding state: the checklist
@@ -75,6 +93,8 @@ Go through this whenever you add or change something that lives through play.
 12. **The world and the map.** The city, the floors walked into and the constructs are saved whole. If generation grows the play field a lot, the alternative is saving the seed plus what changed and regenerating the rest on load, which needs generation to stay deterministic. Size and time today (release build, the medium seed-8 morning after): about 1.0 MB on disk; a save takes about 24 ms on the frame thread (encoding 14.6 MB of MessagePack ~11 ms, gzip ~9 ms, write, sync and rename ~5 ms), under one 33 ms frame. The `#[ignore]` test `a_save_is_timed` in `runs/file.rs` measures it again (run it with `--release`); past a frame, move the gzip and the write to a thread and keep the encoding on the frame.
 13. **A screen that holds story in flight** can't stop the five-minute save, the due save or SAVE GAME, because those run from the map or the pause menu over it; only the ways out see the stack. Keep story that must survive a save in `AppState`.
 14. **The map screen's own state isn't saved.** The open Net's packets (`MapScreen.traffic`) are a look only, seeded afresh round the view after a reopen; a lane ride in flight (`MapScreen.riding`, Data surfer's) ends on the lane tile you were carried to. What the run needs lives in `AppState`: a camera's feed is `net.feed`, so it reopens open; the jack window over a held terminal and the HIJACK picker hold nothing (a verb is spent as it acts), and the launch splash comes before any run.
+15. **State that belongs to one city** (anything keyed by its buildings, people or districts) goes in `outside::Stay` too: `take`, `fresh` and `put` name its fields, and nothing makes that exhaustive, so a new city-bound field left out of them follows you into another city. State that belongs to the runner (the character, the deck's failsafe and cooling, the log) stays put; `enter` carries the deck's across.
+16. **A cache in a saved type** may also be rebuilt when first needed rather than in `after_restore` (`Outside.built`, `Outside.blocks`), so long as it's `#[serde(skip)]` and made from saved state only.
 
 ## Compatibility
 

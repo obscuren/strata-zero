@@ -351,7 +351,13 @@ pub fn after_restore(st: &mut AppState, mut lost: Vec<String>) {
     if let Some(stay) = st.away.as_mut() {
         lost.extend(stay.reopened(&st.people, &st.content));
     }
-    st.home = st.city.as_ref().and_then(crate::home::HomeRig::find);
+    // the flat is the home city's: none in another city of the world
+    let away = st.outside.as_ref().is_some_and(|o| o.here.is_some());
+    st.home = if away {
+        None
+    } else {
+        st.city.as_ref().and_then(crate::home::HomeRig::find)
+    };
     // The street's `dark` is the city's, skipped by the save: made again from the
     // districts `net.lights_out` still holds.
     crate::holds::relight(st);

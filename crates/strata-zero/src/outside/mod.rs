@@ -641,7 +641,12 @@ pub fn reopened(st: &mut AppState) {
         // away from home, the home city comes back first: it's the one the run keeps
         if let Some(stay) = st.away.take() {
             let now = st.clock_tick();
+            // as coming home does: the other city's cards go, the deck's own state stays
+            let (failsafe, cooling) = (st.net.failsafe, st.net.cooling_until);
+            crate::credentials::purge(&mut st.content, &mut st.character);
             stay.put(st, true, now);
+            st.net.failsafe = failsafe;
+            st.net.cooling_until = cooling;
         }
         st.outside = None;
         st.warn("the world out there couldn't be made again · back in the city");
@@ -1073,12 +1078,26 @@ mod tests {
         let story = format!("{:?}", st.missions);
         let (s, _) = beside_another(&st);
         enter(&mut st, s).unwrap();
+        // a card to a door of that city, and the deck's own switch thrown there
+        let card = crate::credentials::keycard_id(citygen::BuildingId(999), sim::HouseholdId(1));
+        st.character.inventory.push(game::Stack {
+            item: card.clone(),
+            qty: 1,
+            copy: None,
+        });
+        st.net.failsafe = false;
         st.outside.as_mut().unwrap().params.cities = 99;
         let back = reopen(st, "no-world");
         assert!(back.outside.is_none());
         assert!(back.away.is_none());
         assert_eq!(back.city, city);
         assert_eq!(format!("{:?}", back.missions), story);
+        assert!(back.home.is_some(), "the flat back");
+        assert!(
+            back.character.inventory.iter().all(|s| s.item != card),
+            "no card to the other city's doors"
+        );
+        assert!(!back.net.failsafe, "the deck's switch goes where you go");
     }
 
     #[test]
@@ -1131,6 +1150,7 @@ mod tests {
         crate::runs::snapshot::after_restore(&mut back, lost);
         assert_eq!(back.city.as_ref().unwrap().seed, there);
         assert_eq!(back.outside.as_ref().unwrap().here, Some(s));
+        assert!(back.home.is_none(), "no flat of yours in another city");
         let home = back.outside.as_ref().unwrap().home();
         enter(&mut back, home).unwrap();
         assert_eq!(back.city, city, "the home city as it was");
