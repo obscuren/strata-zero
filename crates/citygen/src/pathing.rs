@@ -99,6 +99,55 @@ pub fn astar(
     None
 }
 
+/// Cheapest 4-path from `start` to the nearest `target` tile by `cost` (Dijkstra; of
+/// equal costs, the first reached). `cost(from, to)` returns `None` for impassable steps,
+/// a target's own step included. Path includes both ends; `start` is never its target.
+pub fn cheapest_to(
+    size: Size,
+    start: Pos,
+    cost: impl Fn(Pos, Pos) -> Option<u32>,
+    target: impl Fn(Pos) -> bool,
+) -> Option<Vec<Pos>> {
+    if !size.contains(start) {
+        return None;
+    }
+    let mut g = Grid::filled(size, u32::MAX);
+    let mut came: Grid<Option<Pos>> = Grid::filled(size, None);
+    let mut heap = BinaryHeap::new();
+    let mut counter = 0u32;
+    g.set(start, 0);
+    heap.push(Reverse((0u32, counter, start)));
+    while let Some(Reverse((d, _, p))) = heap.pop() {
+        if d > g[p] {
+            continue;
+        }
+        if p != start && target(p) {
+            let mut path = vec![p];
+            let mut cur = p;
+            while let Some(prev) = came[cur] {
+                path.push(prev);
+                cur = prev;
+            }
+            path.reverse();
+            return Some(path);
+        }
+        for n in p.neighbors4() {
+            if !size.contains(n) {
+                continue;
+            }
+            let Some(c) = cost(p, n) else { continue };
+            let nd = d.saturating_add(c);
+            if nd < g[n] {
+                g.set(n, nd);
+                came.set(n, Some(p));
+                counter += 1;
+                heap.push(Reverse((nd, counter, n)));
+            }
+        }
+    }
+    None
+}
+
 /// Shortest 4-path from `start` through `passable` tiles to the nearest `target` tile,
 /// at most `max` steps long. The target tile itself need not be passable.
 pub fn bfs_nearest(
@@ -204,6 +253,32 @@ mod tests {
         let p = bfs_nearest(size, Pos::new(0, 0), |_| true, |p| p.x == 7, 20).unwrap();
         assert_eq!(p.len(), 8);
         assert!(bfs_nearest(size, Pos::new(0, 0), |_| true, |p| p.x == 7, 3).is_none());
+    }
+
+    #[test]
+    fn cheapest_to_takes_the_cheap_way_to_the_nearest_target() {
+        // two targets: (6, 0) straight along row 0, (0, 3) down column 0; row 0 costs 3
+        // a step past x = 0, the rest 1, so the way down is the cheaper
+        let size = Size { w: 8, h: 5 };
+        let cost = |_: Pos, to: Pos| Some(if to.y == 0 { 3 } else { 1 });
+        let target = |p: Pos| p == Pos::new(6, 0) || p == Pos::new(0, 3);
+        let path = cheapest_to(size, Pos::new(0, 0), cost, target).unwrap();
+        assert_eq!(
+            path,
+            vec![
+                Pos::new(0, 0),
+                Pos::new(0, 1),
+                Pos::new(0, 2),
+                Pos::new(0, 3)
+            ]
+        );
+        // the start is never its own target, and a walled-off target is not found
+        let wall = |_: Pos, to: Pos| (to.x < 3).then_some(1);
+        assert_eq!(
+            cheapest_to(size, Pos::new(0, 0), wall, |p| p.x == 0).map(|p| p.len()),
+            Some(2)
+        );
+        assert!(cheapest_to(size, Pos::new(0, 0), wall, |p| p.x == 6).is_none());
     }
 
     #[test]

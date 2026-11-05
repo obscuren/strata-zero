@@ -142,6 +142,9 @@ pub(crate) struct Scratch {
     /// A city on its site: the Net's cells that are the open Net's (past its outline,
     /// away from the city), which the city's Net leaves as they are.
     pub open_net: Option<Grid<bool>>,
+    /// A city on its site: where the open Net's lanes run on into the city's own cells,
+    /// each lane's last cell on the open Net, for the trunks' joins.
+    pub trunk_ends: Vec<Pos>,
 }
 
 impl Scratch {
@@ -158,6 +161,7 @@ impl Scratch {
             water_edge: None,
             site: None,
             open_net: None,
+            trunk_ends: Vec::new(),
         }
     }
 }
