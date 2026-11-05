@@ -680,7 +680,7 @@ impl OutsideScreen {
                             sky: None,
                             glow: None,
                         };
-                        lighting::apply_vis(open_cell(t, &ctx), vis)
+                        lighting::apply_vis(tileset::cell(t, &ctx), vis)
                     }
                     _ => blank(),
                 };
@@ -742,22 +742,6 @@ fn blank() -> Cell {
         bold: false,
         dim: false,
     }
-}
-
-/// The orange of a roadside sign's letters (round 2's Kilo-9).
-const ROADSIDE_SIGN: Rgb = Rgb(255, 140, 0);
-
-/// A ground cell as the street draws it, but a roadside sign's letters in the sign's
-/// orange (the open ground has no district to colour them).
-fn open_cell(t: &citygen::Tile, ctx: &RenderCtx) -> Cell {
-    let mut c = tileset::cell(t, ctx);
-    if let Some(citygen::Feature::Sign(ch)) = t.feature
-        && ch != '▣'
-        && ch != '!'
-    {
-        c.fg = ROADSIDE_SIGN;
-    }
-    c
 }
 
 /// Which neighbours of `p` join its terrain, for the glyphs drawn by their neighbours
@@ -1145,33 +1129,6 @@ mod tests {
     use citygen::Dir;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-
-    #[test]
-    fn a_roadside_sign_is_orange_between_blue_caps() {
-        let st = AppState::new();
-        let ctx = RenderCtx {
-            style: &st.style,
-            theme: None,
-            stratum: StratumKind::Street,
-            light: 110,
-            tick: 0,
-            vis: Visibility::Visible,
-            connector: None,
-            kind: None,
-            wall_mask: 0,
-            lamps_on: true,
-            sky: None,
-            glow: None,
-        };
-        let sign = |c: char| {
-            let mut t = citygen::Tile::new(Terrain::Gravel);
-            t.feature = Some(citygen::Feature::Sign(c));
-            open_cell(&t, &ctx)
-        };
-        assert_eq!(sign('K').fg, ROADSIDE_SIGN);
-        assert_eq!(sign('▣').ch, '▣');
-        assert!(sign('▣').fg.2 > sign('▣').fg.0, "a blue cap");
-    }
 
     fn text(st: &AppState, s: &OutsideScreen, w: u16, h: u16) -> String {
         let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();

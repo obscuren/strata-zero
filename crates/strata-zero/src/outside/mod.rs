@@ -5,6 +5,7 @@
 
 pub mod ground;
 pub mod moves;
+pub mod stream;
 
 use crate::app::AppState;
 use citygen::overworld::{Overworld, WorldParams};
@@ -56,6 +57,15 @@ pub struct Outside {
     /// when you go back, the same every time).
     #[serde(default)]
     pub visited: std::collections::BTreeSet<Settlement>,
+    /// Who owns each overworld tile, made with the world (`new`, and `rebuild` on
+    /// load).
+    #[serde(skip)]
+    owners: Option<stream::Owners>,
+    /// The open ground round the view, street and Net: never saved, made again from the
+    /// world as it's needed.
+    #[serde(skip)]
+    #[cfg_attr(not(test), expect(dead_code, reason = "walked from #27's next tasks"))]
+    pub stream: stream::Stream,
 }
 
 /// A marked place of the world: its tile and its name.
@@ -262,7 +272,7 @@ impl Outside {
             None => world_params(city.seed),
         };
         let world = Overworld::generate(params.clone())?;
-        Ok(Outside {
+        let mut o = Outside {
             params,
             at: At::City,
             seen: BTreeMap::new(),
@@ -273,7 +283,11 @@ impl Outside {
             blocks: Default::default(),
             mark: None,
             visited: Default::default(),
-        })
+            owners: None,
+            stream: Default::default(),
+        };
+        o.owners = Some(stream::Owners::of(&o, city));
+        Ok(o)
     }
 
     pub fn world(&self) -> &Overworld {
@@ -282,10 +296,17 @@ impl Outside {
             .expect("the overworld is made with the run and on load")
     }
 
-    /// Makes the overworld again from its params (after a load).
-    pub fn rebuild(&mut self) {
+    /// Makes the overworld again from its params, and who owns its tiles with it, the
+    /// home city `home` (after a load).
+    pub fn rebuild(&mut self, home: Option<&City>) {
         if self.world.is_none() {
             self.world = Overworld::generate(self.params.clone()).ok();
+        }
+        if self.owners.is_none()
+            && self.world.is_some()
+            && let Some(home) = home
+        {
+            self.owners = Some(stream::Owners::of(self, home));
         }
     }
 
@@ -330,6 +351,14 @@ impl Outside {
             bw,
             bh,
         )
+    }
+
+    /// Where the city's map sits in the world: the world cell of its cell `(0, 0)`, the
+    /// corner of its block.
+    #[cfg_attr(not(test), expect(dead_code, reason = "used from #27's next tasks"))]
+    pub fn origin(&self, city: &City) -> Pos {
+        let b = self.block(city);
+        Pos::new(TILE * b.x, TILE * b.y)
     }
 
     /// The overworld tile a cell of the city's street lies in.
@@ -636,7 +665,8 @@ pub fn reopened(st: &mut AppState) {
     let Some(o) = st.outside.as_mut() else {
         return;
     };
-    o.rebuild();
+    // the home city is the one set aside while you're in another
+    o.rebuild(st.away.as_ref().map(|s| &s.city).or(st.city.as_ref()));
     let Some(w) = o.world.as_ref() else {
         // away from home, the home city comes back first: it's the one the run keeps
         if let Some(stay) = st.away.take() {
@@ -739,7 +769,7 @@ pub fn ensure(st: &mut AppState) -> Option<&mut Outside> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use citygen::{GenParams, Generator, SizePreset};
 
@@ -754,7 +784,7 @@ mod tests {
     }
 
     /// Seed 3's home city built on its place in its world, once for every test.
-    fn sited() -> &'static City {
+    pub(crate) fn sited() -> &'static City {
         static CITY: std::sync::OnceLock<City> = std::sync::OnceLock::new();
         CITY.get_or_init(|| {
             crate::screens::build_home(GenParams {
@@ -1051,6 +1081,30 @@ mod tests {
         assert_eq!((site.city, site.town), (town.city, town.town));
         assert!(back.away.is_some(), "home set aside");
         let _ = s;
+    }
+
+    #[test]
+    fn who_owns_the_world_comes_back_with_it() {
+        // not saved: made again with the world, at home and away
+        let st = home_run();
+        let o = st.outside.as_ref().unwrap();
+        let tiles: Vec<Pos> = o.world().tiles.iter().map(|(p, _)| p).collect();
+        let owners = |st: &AppState| {
+            let o = st.outside.as_ref().unwrap();
+            tiles.iter().map(|t| o.owner(*t)).collect::<Vec<_>>()
+        };
+        let before = owners(&st);
+        assert!(before.contains(&Some(o.home())));
+        let back = reopen(home_run(), "owners-home");
+        assert!(owners(&back) == before, "the owners come back");
+        let mut away = home_run();
+        let (s, _) = beside_another(&away);
+        enter(&mut away, s).unwrap();
+        let back = reopen(away, "owners-away");
+        assert!(
+            owners(&back) == before,
+            "the owners come back away from home, the home city's block its own"
+        );
     }
 
     #[test]

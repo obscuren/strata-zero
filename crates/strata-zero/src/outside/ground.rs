@@ -6,21 +6,39 @@ use super::moves::Moved;
 use super::{At, Outside, TILE};
 use crate::app::AppState;
 use citygen::overworld::{Overworld, detail};
-use citygen::{Dir, Grid, Pos, Rect, Terrain, Tile};
+use citygen::{Dir, Grid, Pos, Rect, StratumKind, Terrain, Tile};
 use std::collections::{BTreeSet, HashMap};
 
 /// A ring of tiles built beyond what's on screen and in sight, so the ground is there
 /// before you see it.
 pub const AHEAD: i32 = 1;
 
+/// The most tiles a view holds before it forgets the far ones.
+pub const CAP: usize = 2048;
+
 /// The open ground round you, tile by tile: each overworld tile's cells built once and
 /// kept while near (a tile built alone is the same tile in any region, so they fit);
 /// not saved, made again from the world.
 #[derive(Default)]
 pub struct GroundView {
-    tiles: HashMap<Pos, Grid<Tile>>,
+    tiles: HashMap<Pos, Built>,
     /// The Net's layer rather than the ground's.
     net: bool,
+}
+
+/// One overworld tile as a view keeps it.
+struct Built {
+    cells: Grid<Tile>,
+    /// The light it throws on its own, as a city's street bakes it; none on the Net.
+    #[cfg_attr(not(test), expect(dead_code, reason = "lit by the stream from #27"))]
+    light: Option<Light>,
+}
+
+/// A street tile's own light, ambient excluded: from what burns all day (a building's
+/// windows), and from its lamps, which burn by night.
+struct Light {
+    steady: Grid<u8>,
+    lamps: Grid<u8>,
 }
 
 impl GroundView {
@@ -68,30 +86,39 @@ impl GroundView {
         ) {
             let (w, h) = ((hi.x - lo.x + 1) as u32, (hi.y - lo.y + 1) as u32);
             let (x, y, w, h) = (TILE * lo.x, TILE * lo.y, w * TILE as u32, h * TILE as u32);
+            // the street is built a tile wider all round and lit whole as a city's street
+            // is lit, then cropped: a light past the batch's edge reaches into it as it
+            // would in any other batch
+            let m = if self.net { 0 } else { TILE };
             let g = if self.net {
                 citygen::overworld::net_ground::region(world, x, y, w, h)
             } else {
-                detail::region(world, x, y, w, h)
+                detail::region(world, x - m, y - m, w + 2 * m as u32, h + 2 * m as u32)
             };
-            for t in missing {
-                let mut tile = Grid::filled(
-                    citygen::Size {
-                        w: TILE as u32,
-                        h: TILE as u32,
-                    },
-                    Tile::new(Terrain::Void),
-                );
-                for y in 0..TILE {
-                    for x in 0..TILE {
-                        let at = Pos::new(TILE * (t.x - lo.x) + x, TILE * (t.y - lo.y) + y);
-                        tile[Pos::new(x, y)] = g[at];
-                    }
+            let light = (!self.net).then(|| {
+                use citygen::lighting::{compute, tuning};
+                let blocks = |p: Pos| g.get(p).is_none_or(|t| t.blocks_sight());
+                Light {
+                    steady: compute(&g, 0, blocks, |t| {
+                        tuning::steady_emission(t.terrain, t.feature, StratumKind::Street)
+                    }),
+                    lamps: compute(&g, 0, blocks, |t| tuning::lamp_emission(t.feature)),
                 }
-                self.tiles.insert(t, tile);
+            });
+            for t in missing {
+                let from = Pos::new(m + TILE * (t.x - lo.x), m + TILE * (t.y - lo.y));
+                let built = Built {
+                    cells: cut(&g, from),
+                    light: light.as_ref().map(|l| Light {
+                        steady: cut(&l.steady, from),
+                        lamps: cut(&l.lamps, from),
+                    }),
+                };
+                self.tiles.insert(t, built);
             }
         }
         // keep what's near: a few tiles past the area, the rest forgotten
-        if self.tiles.len() > 2048 {
+        if self.tiles.len() > CAP {
             let keep = 4;
             self.tiles.retain(|t, _| {
                 t.x >= t0.x - keep && t.x <= t1.x + keep && t.y >= t0.y - keep && t.y <= t1.y + keep
@@ -103,8 +130,10 @@ impl GroundView {
     #[cfg(test)]
     pub fn light(&mut self, p: Pos) {
         let t = Pos::new(p.x.div_euclid(TILE), p.y.div_euclid(TILE));
-        if let Some(g) = self.tiles.get_mut(&t)
-            && let Some(c) = g.get_mut(Pos::new(p.x.rem_euclid(TILE), p.y.rem_euclid(TILE)))
+        if let Some(b) = self.tiles.get_mut(&t)
+            && let Some(c) = b
+                .cells
+                .get_mut(Pos::new(p.x.rem_euclid(TILE), p.y.rem_euclid(TILE)))
         {
             c.feature = Some(citygen::Feature::Lamp);
         }
@@ -126,8 +155,43 @@ impl GroundView {
         let t = Pos::new(p.x.div_euclid(TILE), p.y.div_euclid(TILE));
         self.tiles
             .get(&t)?
+            .cells
             .get(Pos::new(p.x.rem_euclid(TILE), p.y.rem_euclid(TILE)))
     }
+
+    /// The light world-wide cell `p` throws on its own, ambient excluded: what burns all
+    /// day, and the lamps while `lamps_on`, as a city's street gives it
+    /// (`Stratum::emitted`). 0 where it isn't built, and on the Net.
+    #[cfg_attr(not(test), expect(dead_code, reason = "lit by the stream from #27"))]
+    pub fn emitted(&self, p: Pos, lamps_on: bool) -> u8 {
+        let t = Pos::new(p.x.div_euclid(TILE), p.y.div_euclid(TILE));
+        let at = Pos::new(p.x.rem_euclid(TILE), p.y.rem_euclid(TILE));
+        let Some(l) = self.tiles.get(&t).and_then(|b| b.light.as_ref()) else {
+            return 0;
+        };
+        let lamps = if lamps_on { l.lamps[at] } else { 0 };
+        l.steady[at].saturating_add(lamps)
+    }
+
+    /// How many overworld tiles the view holds.
+    pub fn held(&self) -> usize {
+        self.tiles.len()
+    }
+}
+
+/// The overworld tile's worth of `g` from `from` on.
+fn cut<T: Copy>(g: &Grid<T>, from: Pos) -> Grid<T> {
+    let size = citygen::Size {
+        w: TILE as u32,
+        h: TILE as u32,
+    };
+    let mut out = Grid::filled(size, g[from]);
+    for y in 0..TILE {
+        for x in 0..TILE {
+            out[Pos::new(x, y)] = g[from.offset(x, y)];
+        }
+    }
+    out
 }
 
 /// The cells you might see from `at`: out to the open ground's day sight each way.

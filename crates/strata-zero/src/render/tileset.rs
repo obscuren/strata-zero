@@ -419,6 +419,8 @@ const FIRE: Rgb = Rgb(255, 140, 58);
 
 /// The caps either end of a roadside sign (round 2's Kilo-9).
 const SIGN_CAP: Rgb = Rgb(60, 140, 255);
+/// The orange of a roadside sign's letters (round 2's Kilo-9).
+const ROADSIDE_SIGN: Rgb = Rgb(255, 140, 0);
 
 /// Feature foreground colour, if the feature overrides it.
 fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
@@ -571,6 +573,15 @@ pub fn cell(tile: &Tile, ctx: &RenderCtx) -> Cell {
         }
         bg = bg.mix(sky, w);
     }
+    // a roadside sign's letters in the sign's orange, where no district colours them:
+    // on the open ground and on a city's own ground past its outline alike
+    if let Some(Feature::Sign(c)) = tile.feature
+        && c != '▣'
+        && c != '!'
+        && tile.district.is_none()
+    {
+        fg = ROADSIDE_SIGN;
+    }
     let jack = ctx.connector.is_some_and(|c| c.kind == ConnectorKind::Jack);
     let bold = tile.is_connector()
         || matches!(tile.feature, Some(Feature::Sign(_) | Feature::Neon(_)))
@@ -596,6 +607,36 @@ mod tests {
         StratumKind, Terrain, Theme, Tile, Tone, Wear,
     };
     use unicode_width::UnicodeWidthChar;
+
+    #[test]
+    fn a_roadside_sign_is_orange_between_blue_caps() {
+        let style = StylePack::load().unwrap();
+        let ctx = RenderCtx {
+            style: &style,
+            theme: None,
+            stratum: StratumKind::Street,
+            light: 110,
+            tick: 0,
+            vis: Visibility::Visible,
+            connector: None,
+            kind: None,
+            wall_mask: 0,
+            lamps_on: true,
+            sky: None,
+            glow: None,
+        };
+        let sign = |c: char, district: Option<citygen::DistrictId>| {
+            let mut t = Tile::new(Terrain::Gravel);
+            t.feature = Some(Feature::Sign(c));
+            t.district = district;
+            cell(&t, &ctx)
+        };
+        assert_eq!(sign('K', None).fg, ROADSIDE_SIGN);
+        assert_eq!(sign('▣', None).ch, '▣');
+        assert!(sign('▣', None).fg.2 > sign('▣', None).fg.0, "a blue cap");
+        // a district's own sign keeps its colour
+        assert_ne!(sign('K', Some(citygen::DistrictId(0))).fg, ROADSIDE_SIGN);
+    }
 
     #[test]
     fn a_fire_barrel_burns_bright_at_night() {
