@@ -267,22 +267,19 @@ pub struct Overworld {
 }
 
 impl Overworld {
-    /// City `i`'s own tiles: those of its index joined (eight ways) to its centre, not
-    /// its outlying towns' (grown under its index along the highways out).
-    pub fn city_tiles(&self, i: u8) -> Vec<Pos> {
+    /// The tiles of city `i`'s index joined (eight ways) to `from`; none when `from`
+    /// isn't one of them.
+    fn blob(&self, i: u8, from: Pos) -> Vec<Pos> {
         let mine = |p: Pos| {
             self.tile(p)
                 .is_some_and(|t| t.urban.is_some_and(|u| u.city == i))
         };
-        let Some(centre) = self.cities.get(i as usize).map(|c| c.centre) else {
-            return Vec::new();
-        };
-        if !mine(centre) {
+        if !mine(from) {
             return Vec::new();
         }
         let mut seen = Grid::filled(self.size, false);
-        seen[centre] = true;
-        let mut out = vec![centre];
+        seen[from] = true;
+        let mut out = vec![from];
         let mut k = 0;
         while k < out.len() {
             let p = out[k];
@@ -297,21 +294,59 @@ impl Overworld {
         out
     }
 
+    /// City `i`'s own tiles: those of its index joined (eight ways) to its centre, not
+    /// its outlying towns' (grown under its index along the highways out).
+    pub fn city_tiles(&self, i: u8) -> Vec<Pos> {
+        match self.cities.get(i as usize) {
+            Some(c) => self.blob(i, c.centre),
+            None => Vec::new(),
+        }
+    }
+
+    /// Town `t` of city `i`'s own tiles: those joined to it and not to the city's
+    /// centre; none when it has grown into its city.
+    pub fn town_tiles(&self, i: u8, t: u8) -> Vec<Pos> {
+        let Some(c) = self.cities.get(i as usize) else {
+            return Vec::new();
+        };
+        let Some(&at) = c.towns.get(t as usize) else {
+            return Vec::new();
+        };
+        let blob = self.blob(i, at);
+        if blob.contains(&c.centre) {
+            return Vec::new();
+        }
+        blob
+    }
+
     /// The overworld tiles city `i`'s map covers: the bounding box of its own tiles
     /// (not its towns'), two tiles more all round for its outskirts to fade in, inside
     /// the world, no bigger than the city generator's largest map.
     pub fn city_block(&self, i: u8) -> crate::geom::Rect {
-        let mine = self.city_tiles(i);
         let centre = self
             .cities
             .get(i as usize)
             .map_or(Pos::new(0, 0), |c| c.centre);
-        let (x0, x1) = mine
+        self.block_round(&self.city_tiles(i), centre)
+    }
+
+    /// Town `t` of city `i`'s map, as a city's is drawn round its own tiles (at least
+    /// the generator's smallest map); none when the town has grown into its city.
+    pub fn town_block(&self, i: u8, t: u8) -> Option<crate::geom::Rect> {
+        let tiles = self.town_tiles(i, t);
+        let at = *tiles.first()?;
+        Some(self.block_round(&tiles, at))
+    }
+
+    /// The block round `tiles` (and `at`): their bounding box and two tiles all round,
+    /// at least 10 by 5 tiles and at most the generator's largest map, inside the world.
+    fn block_round(&self, tiles: &[Pos], at: Pos) -> crate::geom::Rect {
+        let (x0, x1) = tiles
             .iter()
-            .fold((centre.x, centre.x), |(a, b), p| (a.min(p.x), b.max(p.x)));
-        let (y0, y1) = mine
+            .fold((at.x, at.x), |(a, b), p| (a.min(p.x), b.max(p.x)));
+        let (y0, y1) = tiles
             .iter()
-            .fold((centre.y, centre.y), |(a, b), p| (a.min(p.y), b.max(p.y)));
+            .fold((at.y, at.y), |(a, b), p| (a.min(p.y), b.max(p.y)));
         let tile = detail::TILE;
         let (most_w, most_h) = (1024 / tile, 512 / tile);
         let (x0, x1) = ((x0 - 2).max(0), (x1 + 2).min(self.size.w as i32 - 1));
@@ -320,6 +355,9 @@ impl Overworld {
             (x1 - x0 + 1).clamp(10, most_w),
             (y1 - y0 + 1).clamp(5, most_h),
         );
+        // grown to its least, kept inside the world
+        let x0 = x0.min(self.size.w as i32 - w).max(0);
+        let y0 = y0.min(self.size.h as i32 - h).max(0);
         crate::geom::Rect::new(x0, y0, w, h)
     }
 

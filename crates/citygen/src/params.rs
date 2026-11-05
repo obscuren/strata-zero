@@ -86,6 +86,9 @@ pub struct CitySite {
     pub world: crate::overworld::WorldParams,
     pub city: u8,
     pub origin: crate::geom::Pos,
+    /// One of the city's outlying towns, on a map of its own, rather than the city.
+    #[serde(default)]
+    pub town: Option<u8>,
 }
 
 impl Default for GenParams {
@@ -110,6 +113,12 @@ impl GenParams {
         self
     }
 
+    /// The fewest districts the city may have: one on its site in a world (a small
+    /// city's or a town's, by its tiles); four for a lone city.
+    pub fn least_districts(&self) -> u8 {
+        if self.site.is_some() { 1 } else { 4 }
+    }
+
     pub fn validate(&self) -> Result<(), GenError> {
         let bad = |field: &'static str, reason: String| GenError::InvalidParams { field, reason };
         let Size { w, h } = self.size.size();
@@ -119,10 +128,11 @@ impl GenParams {
                 format!("{w}x{h} is outside 80..=1024 by 40..=512"),
             ));
         }
-        if !(4..=12).contains(&self.districts) {
+        let least = self.least_districts();
+        if !(least..=12).contains(&self.districts) {
             return Err(bad(
                 "districts",
-                format!("{} is outside 4..=12", self.districts),
+                format!("{} is outside {least}..=12", self.districts),
             ));
         }
         if (w as u64) * (h as u64) < self.districts as u64 * 800 {

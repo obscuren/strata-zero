@@ -30,17 +30,44 @@ pub(crate) struct Site {
 /// `base` set to build world `world`'s city `city` on its block: its size the block's
 /// in detail cells, its site the world and the block's corner.
 pub fn sited(world: &Overworld, city: u8, base: GenParams) -> GenParams {
-    let b = world.city_block(city);
+    let own = world.city_tiles(city).len();
+    on_block(world, city, None, world.city_block(city), own, base)
+}
+
+/// `base` set to build town `town` of world `world`'s city `city` on a small map of its
+/// own; none when the town has grown into its city.
+pub fn sited_town(world: &Overworld, city: u8, town: u8, base: GenParams) -> Option<GenParams> {
+    let b = world.town_block(city, town)?;
+    let own = world.town_tiles(city, town).len();
+    Some(on_block(world, city, Some(town), b, own, base))
+}
+
+/// Overworld tiles of a city to one of its districts: a small city has fewer, a town of
+/// a few tiles one.
+const TILES_A_DISTRICT: usize = 50;
+
+/// `base` on block `b` of the world: its size, its site, and its districts by its `own`
+/// tiles (never more than `base` asks for).
+fn on_block(
+    world: &Overworld,
+    city: u8,
+    town: Option<u8>,
+    b: crate::geom::Rect,
+    own: usize,
+    base: GenParams,
+) -> GenParams {
     let t = detail::TILE;
+    let (w, h) = ((t * b.w) as u32, (t * b.h) as u32);
+    let fits = ((w as u64 * h as u64) / 800).min(12) as usize;
+    let districts = (own / TILES_A_DISTRICT).clamp(1, fits.max(1));
     GenParams {
-        size: SizePreset::Custom {
-            w: (t * b.w) as u32,
-            h: (t * b.h) as u32,
-        },
+        size: SizePreset::Custom { w, h },
+        districts: (districts as u8).min(base.districts),
         site: Some(CitySite {
             world: world.params.clone(),
             city,
             origin: Pos::new(t * b.x, t * b.y),
+            town,
         }),
         ..base
     }
@@ -55,7 +82,11 @@ pub(crate) fn prepare(site: &CitySite, size: Size) -> Option<Site> {
     let mut outline = Grid::filled(size, 0.0f32);
     let mut density = Grid::filled(size, 0.0f32);
     let mut own = Grid::filled(world.size, false);
-    for t in world.city_tiles(site.city) {
+    let tiles = match site.town {
+        Some(t) => world.town_tiles(site.city, t),
+        None => world.city_tiles(site.city),
+    };
+    for t in tiles {
         own[t] = true;
     }
     for y in 0..size.h as i32 {
@@ -426,6 +457,85 @@ mod tests {
     }
 
     #[test]
+    fn a_town_builds_on_a_small_map_of_its_own() {
+        // the first town that hasn't grown into its city, over a few worlds
+        let found = (0..12u64).find_map(|seed| {
+            let w = Overworld::generate(WorldParams {
+                seed,
+                ..Default::default()
+            })
+            .unwrap();
+            (0..w.cities.len() as u8).find_map(|i| {
+                (0..w.cities[i as usize].towns.len() as u8).find_map(|t| {
+                    let p = sited_town(
+                        &w,
+                        i,
+                        t,
+                        GenParams {
+                            seed,
+                            ..Default::default()
+                        },
+                    )?;
+                    Some((w.clone(), i, t, p))
+                })
+            })
+        });
+        let (w, i, t, p) = found.expect("a town of its own in twelve worlds");
+        let b = w.town_block(i, t).unwrap();
+        assert!(b.contains(w.cities[i as usize].towns[t as usize]));
+        assert!(
+            !b.contains(w.cities[i as usize].centre),
+            "not its city's centre"
+        );
+        assert_eq!(p.site.as_ref().unwrap().town, Some(t));
+        let c = Generator::run(p).unwrap();
+        assert!(c.size.w >= 80 && c.size.h >= 40, "{:?}", c.size);
+        assert!(!c.buildings.is_empty());
+    }
+
+    #[test]
+    fn every_city_in_a_world_builds_on_its_site() {
+        let w = Overworld::generate(WorldParams {
+            seed: 8,
+            ..Default::default()
+        })
+        .unwrap();
+        for i in 0..w.cities.len() as u8 {
+            let p = sited(
+                &w,
+                i,
+                GenParams {
+                    seed: 8,
+                    ..Default::default()
+                },
+            );
+            let built = Generator::run(p);
+            assert!(
+                built.is_ok(),
+                "{}: {:?}",
+                w.cities[i as usize].name,
+                built.err()
+            );
+        }
+    }
+
+    #[test]
+    fn a_city_site_from_before_reads_without_a_town() {
+        let w = Overworld::generate(WorldParams {
+            seed: 8,
+            ..Default::default()
+        })
+        .unwrap();
+        let site = sited(&w, 0, GenParams::default()).site.unwrap();
+        let text = ron::to_string(&site).unwrap();
+        let old = text.replace(",town:None", "");
+        assert!(!old.contains("town"), "{old}");
+        let back: CitySite = ron::from_str(&old).unwrap();
+        assert_eq!(back.town, None);
+        assert_eq!(back, site);
+    }
+
+    #[test]
     #[ignore]
     fn every_home_city_of_400_worlds_builds() {
         // a sweep (release: cargo test -p citygen --lib --release -- --ignored
@@ -452,5 +562,43 @@ mod tests {
         }
         eprintln!("{} of 400 failed: {bad:?}", bad.len());
         assert!(bad.len() <= 4, "{} of 400 failed: {bad:?}", bad.len());
+    }
+
+    #[test]
+    #[ignore]
+    fn every_settlement_of_30_worlds_builds() {
+        // a sweep (release): every city and town of 30 worlds on its site
+        let (mut built, mut bad) = (0, Vec::new());
+        for seed in 0..30u64 {
+            let w = Overworld::generate(WorldParams {
+                seed,
+                ..Default::default()
+            })
+            .unwrap();
+            let base = GenParams {
+                seed,
+                ..Default::default()
+            };
+            for i in 0..w.cities.len() as u8 {
+                let mut all = vec![(None, Some(sited(&w, i, base.clone())))];
+                for t in 0..w.cities[i as usize].towns.len() as u8 {
+                    all.push((Some(t), sited_town(&w, i, t, base.clone())));
+                }
+                for (t, p) in all {
+                    let Some(p) = p else { continue };
+                    match Generator::run(p) {
+                        Ok(_) => built += 1,
+                        Err(e) => bad.push((seed, i, t, format!("{e}"))),
+                    }
+                }
+            }
+        }
+        eprintln!("{built} built, {} failed: {bad:?}", bad.len());
+        assert!(
+            bad.len() * 50 <= built,
+            "{} failed of {}",
+            bad.len(),
+            built + bad.len()
+        );
     }
 }
