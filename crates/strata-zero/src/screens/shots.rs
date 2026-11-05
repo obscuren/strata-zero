@@ -4170,3 +4170,47 @@ fn outskirts_shots() {
     map.update(&mut st, &[]);
     shot_stack("outskirts_net", &st, &[&map], (120, 40));
 }
+
+/// Every city in the world (#21): from seed 41's home city, the street of the nearest
+/// other city where you come in, and a town's.
+#[test]
+#[ignore]
+fn other_cities_shots() {
+    use crate::outside::enter;
+    let city = crate::screens::build_home(AppState::new().params.clone().with_seed(41)).unwrap();
+    let mut st = AppState::new();
+    st.enter_city_at(city, 13 * 60);
+    st.character = game::Character::debug_runner(&st.content);
+    st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
+    crate::outside::ensure(&mut st);
+    let others = st.outside.as_ref().unwrap().others();
+    let home = st.outside.as_ref().unwrap().home();
+    let centre = st.outside.as_ref().unwrap().world().cities[home.city as usize].centre;
+    let nearest = |town: bool| {
+        others
+            .iter()
+            .filter(|(s, _)| s.town.is_some() == town)
+            .min_by_key(|(_, b)| {
+                let (x, y) = (b.x + b.w / 2 - centre.x, b.y + b.h / 2 - centre.y);
+                x * x + y * y
+            })
+            .copied()
+    };
+    for (name, town) in [("another_city_street", false), ("a_town_street", true)] {
+        let Some((s, b)) = nearest(town) else {
+            continue;
+        };
+        if enter(&mut st, s).is_err() {
+            continue;
+        }
+        // in at the middle of its block's west edge
+        let o = st.outside.as_ref().unwrap();
+        let city = st.city.clone().unwrap();
+        let cell = o.street_of(&city, Pos::new(b.x, b.y + b.h / 2));
+        crate::outside::moves::into_city(&mut st, cell);
+        let map = MapScreen::walking(&mut st);
+        shot_stack(name, &st, &[&map], (120, 40));
+        let home = st.outside.as_ref().unwrap().home();
+        enter(&mut st, home).unwrap();
+    }
+}

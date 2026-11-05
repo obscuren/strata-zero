@@ -101,18 +101,18 @@ impl Stay {
         })
     }
 
-    /// A city as you first come into it: its people at their day, nothing else yet.
-    fn fresh(st: &AppState, city: City) -> Stay {
+    /// A city as you first come into it at clock tick `now`, minute `minute` of the
+    /// day: its people at their day, nothing else yet.
+    fn fresh(st: &AppState, city: City, now: u64, minute: u16) -> Stay {
         let day = 24 * 60;
-        let minute = st.minute_of_day() as u64;
-        let spent = (st.tick / sim::TICKS_PER_MINUTE) % day;
-        let start = (minute + day - spent) % day;
+        let spent = (now / sim::TICKS_PER_MINUTE) % day;
+        let start = (minute as u64 + day - spent) % day;
         let world = sim::World::seed(
             &city,
             &st.people,
             &sim::SimParams::default(),
             start as u16,
-            st.tick,
+            now,
         );
         Stay {
             city,
@@ -133,9 +133,10 @@ impl Stay {
         }
     }
 
-    /// Puts this city in place as the one the run is in, its people's places rebuilt
-    /// and its home (the flat, in the home city only) found again.
-    fn put(self, st: &mut AppState, home: bool) {
+    /// Puts this city in place as the one the run is in at clock tick `now` (its people
+    /// run on to it, as asleep), its people's places rebuilt and its home (the flat, in
+    /// the home city only) found again.
+    fn put(self, st: &mut AppState, home: bool, now: u64) {
         let Stay {
             city,
             player,
@@ -155,6 +156,9 @@ impl Stay {
         } = self;
         if let Some(w) = world.as_mut() {
             w.rebuild(&city, &st.people);
+            if w.tick() < now {
+                w.advance(&city, now);
+            }
         }
         st.home = if home {
             crate::home::HomeRig::find(&city)
@@ -447,6 +451,8 @@ pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
     if s == home && st.away.is_none() {
         return Err(format!("no way into {name}"));
     }
+    // the hour carries over: the run's clock is the city's you're in
+    let (now, minute) = (st.clock_tick(), st.minute_of_day());
     let Some(current) = Stay::take(st) else {
         return Err("nowhere to go".into());
     };
@@ -458,12 +464,12 @@ pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
     match next {
         None => {
             if let Some(stay) = st.away.take() {
-                stay.put(st, true);
+                stay.put(st, true, now);
             }
         }
         Some(city) => {
-            let stay = Stay::fresh(st, city);
-            stay.put(st, false);
+            let stay = Stay::fresh(st, city, now, minute);
+            stay.put(st, false, now);
         }
     }
     if let Some(o) = st.outside.as_mut() {
@@ -689,6 +695,34 @@ mod tests {
         );
         assert!(st.missions.runs.is_empty());
         assert_eq!(format!("{:?}", st.away.as_ref().unwrap().missions), story);
+    }
+
+    #[test]
+    fn time_runs_on_through_another_city_and_home() {
+        let mut st = home_run();
+        crate::clock::run(
+            &mut st,
+            Some(10 * sim::TICKS_PER_MINUTE),
+            crate::clock::PATHS_PER_FRAME,
+        );
+        let (tick, minute) = (st.clock_tick(), st.minute_of_day());
+        let (s, _) = beside_another(&st);
+        enter(&mut st, s).unwrap();
+        assert_eq!(
+            (st.clock_tick(), st.minute_of_day()),
+            (tick, minute),
+            "the same hour"
+        );
+        crate::clock::run(
+            &mut st,
+            Some(30 * sim::TICKS_PER_MINUTE),
+            crate::clock::PATHS_PER_FRAME,
+        );
+        let (later, at) = (st.clock_tick(), st.minute_of_day());
+        let home = st.outside.as_ref().unwrap().home();
+        enter(&mut st, home).unwrap();
+        assert_eq!(st.clock_tick(), later, "home has gone on too");
+        assert_eq!(st.minute_of_day(), at);
     }
 
     #[test]
