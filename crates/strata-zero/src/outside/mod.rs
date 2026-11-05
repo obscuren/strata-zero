@@ -579,8 +579,12 @@ pub fn your_tile(st: &AppState) -> Option<Pos> {
 
 /// The mark's way from where you are: its name, how many tiles and which way.
 pub fn mark_way(st: &AppState) -> Option<(String, i32, &'static str)> {
+    mark_way_from(st, your_tile(st)?)
+}
+
+/// The mark's way from overworld tile `you`: its name, how many tiles and which way.
+pub fn mark_way_from(st: &AppState, you: Pos) -> Option<(String, i32, &'static str)> {
     let m = st.outside.as_ref()?.mark.as_ref()?;
-    let you = your_tile(st)?;
     let (dx, dy) = (m.tile.x - you.x, m.tile.y - you.y);
     let d = ((dx * dx + dy * dy) as f32).sqrt().round() as i32;
     Some((m.name.clone(), d, here::bearing(dx, dy)))

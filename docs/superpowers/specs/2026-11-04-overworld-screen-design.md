@@ -33,8 +33,8 @@ deck's MAP zoomed out to the world.
 ## Non-goals
 
 - Encounters, vehicles, fuel, food, weather on the overworld.
-- Travel in the Net across the world, and how far the Net reaches from your body (open
-  question below).
+- Travel in the Net across the world, and how far the Net reaches from your body
+  (decided since in `2026-11-05-streamed-world-design.md`, below).
 - People moving between cities.
 
 ## Anti-goals
@@ -96,10 +96,9 @@ trunks along the highways with packets, dead grid between, lone nodes on spurs; 
 back down onto the tile's Net. Jacking out always puts you back with your body on its
 detail map, as in the city.
 
-**Open question (later):** how far the Net may take you from your body across tiles,
-and whether riding a trunk is travel. Until it's decided, the Net overworld can be
-looked at but not walked, and the street-level Net is walkable only within the body's
-place (see the tiles spec) *(my call)*.
+**Decided since** in `2026-11-05-streamed-world-design.md` ("The Net", "Up and down"):
+the Net has no reach limit from your body, and the Net overworld is walked, a tile's
+walk a step, ↵ dropping your Net self onto that tile's Net; riding a trunk isn't travel.
 
 ## The deck MAP's world zoom
 
@@ -138,7 +137,7 @@ later; nothing is built for it here.**
 - One clock: an overworld step costs the walk across a tile; no fast travel.
 - Rivers are crossed at bridges or waded slowly; mountains are slow, peaks closed.
 - No jacking in on the overworld (it has no ports); the Net overworld is reached by going
-  up from a street-level Net, look-only until the reach question is decided.
+  up from a street-level Net, and walked (`2026-11-05-streamed-world-design.md`).
 - MAP opens at zoom 4 out in the open; tracking a world place shows bearing and distance.
 - The overworld itself is saved as its seed and params and rebuilt on load.
 

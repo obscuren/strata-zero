@@ -194,12 +194,9 @@ Each tile has its Net layer, built with its ground and joined across edges the s
   of their own to the trunk.
 - **The grid:** drawn only near signal (lanes, constructs, nodes), fading to void a few
   tiles out, with the odd stray dot beyond (round 2's B).
-- **Barren but walkable, within reach:** the Net is drawn everywhere in the open and
-  joins across edges, but until the reach question is decided (the overworld spec's open
-  question), a runner walks it only within the place their body is in: the city's block
-  if the body is in a city, else the body's tile and the eight round it. Past that the
-  Net is drawn and the lanes run on, but the signal is too thin to walk *(my call, a
-  stopgap)*.
+- **Barren but walkable:** the Net is drawn everywhere in the open and joins across
+  edges. How far a runner may walk it from the body is decided in
+  `2026-11-05-streamed-world-design.md`: no reach limit, the void walkable too.
 
 ## Constraints
 
@@ -217,8 +214,8 @@ Each tile has its Net layer, built with its ground and joined across edges the s
 - POI layouts are generators per kind with variation, not fixed templates.
 - The rig is reached from a pier on the coast.
 - The dead arcology isn't enterable yet.
-- The open Net is walkable only within the body's place (its city's block, or its tile
-  and the eight round it) until the reach question is decided.
+- The open Net's reach from the body: none, decided in
+  `2026-11-05-streamed-world-design.md`.
 
 ## Left to the builder
 

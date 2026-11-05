@@ -192,6 +192,9 @@ pub struct MapScreen {
     last_map: Cell<Rect>,
     /// The cord's walk, kept while neither end moves: (from, to, walk).
     cord_walk: RefCell<Option<(Pos, Pos, Vec<Pos>)>>,
+    /// Where your Net self stood as the Net over the world opened over the map: back
+    /// from it somewhere else, the map goes with you.
+    up_from: Option<Pos>,
     /// The open Net's traffic: packets hopping node to node along the lanes.
     traffic: RefCell<crate::render::netlook::packets::Traffic>,
     /// Where the occupants of the floor the player walks stand, keyed by the place
@@ -361,10 +364,9 @@ fn ground_port_in_reach(st: &AppState) -> bool {
 }
 
 /// Space by a port of the open ground (`ground_port_in_reach`): jacked in there, your
-/// Net self on the nearest cell of the Net with signal within 8, your body left where
-/// it stands. Refused, with the word why, as the city's ports refuse.
+/// Net self on the nearest cell of the Net with signal (`net::ground_port`), your body
+/// left where it stands. Refused, with the word why, as the city's ports refuse.
 fn jack_in_on_the_ground(st: &mut AppState) {
-    use citygen::Terrain;
     let Some((place, pos)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
         return;
     };
@@ -372,21 +374,14 @@ fn jack_in_on_the_ground(st: &mut AppState) {
         st.warn("not with a gun on you");
         return;
     }
-    let start = {
-        let (Some(city), Some(beyond)) = (st.city.as_ref(), Beyond::of(st)) else {
-            return;
-        };
-        if let Some(left) = st.net.cooling(st.net.now(st)) {
-            st.warn(format!("deck cooling · {left} min"));
-            return;
-        }
-        let net = walked_map(st, city, Place::Stratum(StratumKind::Net), Some(&beyond));
-        crate::outside::nearest(pos, 8, |q| {
-            net.tile(q)
-                .is_some_and(|t| t.is_walkable() && t.terrain != Terrain::Void)
-        })
-    };
-    let Some(start) = start else {
+    if Beyond::of(st).is_none() {
+        return;
+    }
+    if let Some(left) = st.net.cooling(st.net.now(st)) {
+        st.warn(format!("deck cooling · {left} min"));
+        return;
+    }
+    let Some(start) = crate::net::ground_port(st, pos) else {
         st.warn("no signal here");
         return;
     };
@@ -759,6 +754,7 @@ impl MapScreen {
             cam_ready: false,
             last_map: Cell::new(Rect::new(0, 0, 100, 28)),
             cord_walk: RefCell::new(None),
+            up_from: None,
             traffic: RefCell::new(Default::default()),
             placement: None,
         }
@@ -3083,7 +3079,7 @@ impl MapScreen {
                 return Some(self.start_walk(st, aim));
             }
         }
-        // `W` jacked in on the city's Net: the Net over the world, to look at.
+        // `W` jacked in on the city's Net: the Net over the world, to walk.
         if k.code == KeyCode::Char('W')
             && st
                 .player
@@ -3091,6 +3087,7 @@ impl MapScreen {
                 .is_some_and(|p| p.jacked_in() && p.place == Place::Stratum(StratumKind::Net))
             && st.city.as_ref().is_some_and(|c| !c.is_lot())
         {
+            self.up_from = st.player.as_ref().map(|p| p.pos);
             return Some(ScreenCmd::Push {
                 to: Box::new(crate::screens::outside::OutsideScreen::net_from_city(st)),
                 fx: TransitionKind::Glitch,
@@ -3257,8 +3254,15 @@ impl Screen for MapScreen {
         self.last_tick = st.tick;
         self.fps.frame();
         st.prune_fx(st.tick);
-        // The map follows the player: a popup may have jacked them or taken the stairs.
-        if self.mode == Mode::Walk && st.player.as_ref().is_some_and(|p| p.place != self.place) {
+        // The map follows the player: a popup may have jacked them or taken the stairs,
+        // or the Net over the world dropped them onto another tile's Net.
+        let up_from = self.up_from.take();
+        if self.mode == Mode::Walk
+            && st
+                .player
+                .as_ref()
+                .is_some_and(|p| p.place != self.place || up_from.is_some_and(|q| q != p.pos))
+        {
             self.follow_player(st);
         }
         // Put on a cell another city or town owns (a run opened there, a landing): into
@@ -3732,7 +3736,7 @@ impl Screen for MapScreen {
                         view.walk = walk.clone();
                     }
                     _ => {
-                        view.walk = crate::net::cord_walk(city, view.entry, you);
+                        view.walk = crate::net::cord_walk_beyond(st, view.entry, you);
                         *kept = Some((view.entry, you, view.walk.clone()));
                     }
                 }
@@ -14989,6 +14993,50 @@ mod tests {
         }
 
         #[test]
+        fn landing_from_the_net_overworld_puts_the_camera_on_you() {
+            let (mut st, mut s, _, _) = at_the_edge(1);
+            jacked_at_a_port(&mut st, &mut s);
+            s.update(&mut st, &[]);
+            draw_buffer(&s, &st, 120, 40);
+            let cmd = s.update(&mut st, &[key(KeyCode::Char('W'))]);
+            assert!(matches!(cmd, ScreenCmd::Push { .. }), "W looks up");
+            let mut up = crate::screens::outside::OutsideScreen::net_from_city(&mut st);
+            let was = you(&st);
+            let from = up.net_up.as_ref().unwrap().tile;
+            let w = st.outside.as_ref().unwrap().world().size;
+            let d = if from.x < w.w as i32 / 2 { 'l' } else { 'h' };
+            let keys = vec![key(KeyCode::Char(d)); 12];
+            up.update(&mut st, &keys);
+            assert!(matches!(
+                up.update(&mut st, &[key(KeyCode::Enter)]),
+                ScreenCmd::Pop { .. }
+            ));
+            let landed = you(&st);
+            assert!(landed.chebyshev(was) > 60, "{was:?} → {landed:?}");
+            // back on the map: the camera on you at once, you seeing round you
+            s.update(&mut st, &[]);
+            let area = s.last_map.get();
+            let (sx, sy) = on_screen(&s, &st);
+            assert!(
+                (sx - area.width as i32 / 2).abs() <= 1 && (sy - area.height as i32 / 2).abs() <= 1,
+                "{:?} in a {}x{} view",
+                (sx, sy),
+                area.width,
+                area.height
+            );
+            let buf = draw_buffer(&s, &st, 120, 40);
+            let cell = &buf[(area.x + sx as u16, area.y + sy as u16)];
+            assert_eq!(cell.symbol(), "@");
+            let p = st.player.as_ref().unwrap();
+            assert_eq!(p.pos, landed);
+            assert!(
+                p.vis().get(p.pos) == Some(&crate::render::Visibility::Visible)
+                    || p.beyond_sight().binary_search(&p.pos).is_ok(),
+                "you see where you landed"
+            );
+        }
+
+        #[test]
         fn the_story_holds_still_off_the_map() {
             let (mut st, mut s, _, d) = at_the_edge(1);
             assert!(!crate::outside::away(&st));
@@ -16489,6 +16537,11 @@ mod tests {
                 }
                 t.press(st, KeyCode::Char('?'));
                 t.press(st, KeyCode::Char('?'));
+                // jacked in, a tile out over the Net and back, and down
+                if jacked {
+                    t.press(st, KeyCode::Char('l'));
+                    t.press(st, KeyCode::Char('h'));
+                }
                 t.press(st, KeyCode::Enter);
                 assert!(t.up.is_none() && t.depth() == 1, "back down");
                 // ↵ came down on the tile's road: back where the walk is

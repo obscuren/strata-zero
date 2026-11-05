@@ -37,7 +37,7 @@ pub fn step_cost(world: &Overworld, to: Pos) -> Option<u64> {
 }
 
 /// One step across the overworld: onto the next tile on the city's clock, or into the
-/// city when the step crosses into its block from outside.
+/// city or town that owns the tile stepped onto, from a tile it doesn't own.
 pub fn world_step(st: &mut AppState, d: Dir) -> Moved {
     let (Some(o), Some(_)) = (st.outside.as_ref(), st.city.as_ref()) else {
         return Moved::Blocked("there is no world out here");
@@ -46,9 +46,10 @@ pub fn world_step(st: &mut AppState, d: Dir) -> Moved {
         return Moved::Blocked("not on the overworld");
     };
     let to = from.step(d);
-    // onto a city's or a town's block from outside it: into it
-    if let Some(s) = crate::outside::settlement_at(st, to)
-        && crate::outside::settlement_at(st, from) != Some(s)
+    // onto a city's or a town's own tile from one it doesn't own: into it, as ↵ there
+    // goes (a town's own tile in its city's block is the town's)
+    if let Some(s) = crate::outside::tile_owner(st, to)
+        && crate::outside::tile_owner(st, from) != Some(s)
     {
         match crate::outside::enter(st, s) {
             Ok(()) => {
@@ -115,6 +116,107 @@ pub fn down(st: &mut AppState) -> Result<Moved, &'static str> {
     let city = st.city.as_ref().ok_or("there is no world out here")?;
     let origin = o.origin(city);
     Ok(Moved::City(Pos::new(cell.x - origin.x, cell.y - origin.y)))
+}
+
+/// One step across the Net overworld from tile `tile`, which moves with it: onto the
+/// next tile inside the world, any tile (the Net runs over the sea and the peaks too),
+/// for a tile's walk on the city's clock. Refused past the world's edge, and in a fight.
+pub fn net_world_step(st: &mut AppState, tile: &mut Pos, d: Dir) -> Moved {
+    let Some(o) = st.outside.as_ref().filter(|o| o.world.is_some()) else {
+        return Moved::Blocked("there is no world out here");
+    };
+    if st.net.engaged.is_some() {
+        return Moved::Blocked("not in a fight");
+    }
+    let to = tile.step(d);
+    if o.world().tile(to).is_none() {
+        return Moved::Blocked("the world ends here");
+    }
+    *tile = to;
+    crate::clock::run(
+        st,
+        Some(TILE as u64 * sim::WALK_TICKS),
+        crate::clock::PATHS_PER_FRAME,
+    );
+    Moved::Stepped
+}
+
+/// ↵ on the Net overworld over tile `tile`: your Net self onto that tile's Net, your
+/// body where it waits. On a lane of the tile (its trunk) nearest the tile's middle,
+/// else on the Net cell nearest the middle you can stand on outside a construct, in the
+/// live city's frame, whichever area owns the cell. The stream is built round the tile
+/// first, and a city or town owning the tile that isn't built yet is built now, as
+/// stepping into one builds it. Over the tile your Net self is over already, it stays
+/// where it is.
+pub fn net_down(st: &mut AppState, tile: Pos) -> Result<(), &'static str> {
+    use crate::render::map::{MapRef, TileMap};
+    use citygen::Terrain;
+    let net = Place::Stratum(StratumKind::Net);
+    let (mid, wait) = {
+        let (Some(o), Some(city), Some(p)) =
+            (st.outside.as_ref(), st.city.as_ref(), st.player.as_ref())
+        else {
+            return Err("there is no world out here");
+        };
+        if !p.jacked_in() || p.place != net {
+            return Err("not on the Net");
+        }
+        if st.net.engaged.is_some() {
+            return Err("not in a fight");
+        }
+        if o.world.is_none() || o.world().tile(tile).is_none() {
+            return Err("the world ends here");
+        }
+        if o.tile_of(city, p.pos) == tile {
+            return Ok(());
+        }
+        let origin = o.origin(city);
+        let mid = Pos::new(
+            TILE * tile.x + TILE / 2 - origin.x,
+            TILE * tile.y + TILE / 2 - origin.y,
+        );
+        // the home city, set aside, is held: it needs no build
+        let wait = o
+            .owner(tile)
+            .filter(|s| *s != o.here() && *s != o.home() && o.held_city(*s).is_none());
+        (mid, wait)
+    };
+    // the stream round the tile and its ring, the builds near it started, and the one
+    // owning it waited for
+    let ring = citygen::Rect::new(
+        mid.x - TILE - TILE / 2,
+        mid.y - TILE - TILE / 2,
+        3 * TILE,
+        3 * TILE,
+    );
+    crate::outside::stream::tend(st, ring);
+    if let (Some(s), Some(o)) = (wait, st.outside.as_mut()) {
+        o.stream.wait(s, &mut o.built);
+    }
+    let to = {
+        let city = st.city.as_ref().ok_or("there is no world out here")?;
+        let b = crate::outside::stream::Beyond::of(st).ok_or("there is no world out here")?;
+        let map = MapRef::stratum_at(city, StratumKind::Net, st.minute_of_day()).beyond(&b);
+        let corner = Pos::new(mid.x - TILE / 2, mid.y - TILE / 2);
+        let on_tile = |q: Pos| {
+            (corner.x..corner.x + TILE).contains(&q.x) && (corner.y..corner.y + TILE).contains(&q.y)
+        };
+        let terrain = |q: Pos| map.tile(q).map(|t| t.terrain);
+        crate::outside::nearest(mid, TILE, |q| {
+            on_tile(q) && terrain(q) == Some(Terrain::NetLane)
+        })
+        .or_else(|| {
+            crate::outside::nearest(mid, TILE, |q| {
+                map.walkable(q) && !matches!(terrain(q), Some(Terrain::NetFloor | Terrain::NetGate))
+            })
+        })
+        .ok_or("nothing to stand on there")?
+    };
+    if let Some(p) = st.player.as_mut() {
+        p.pos = to;
+    }
+    crate::screens::explore::look_round(st);
+    Ok(())
 }
 
 /// Up onto the overworld: from the open ground onto the tile you're on, from the city's
@@ -470,6 +572,37 @@ pub(crate) mod tests {
                 .owner(Pos::new(at.x.div_euclid(TILE), at.y.div_euclid(TILE))),
             Some(town)
         );
+    }
+
+    #[test]
+    fn stepping_onto_a_towns_tile_goes_into_the_town() {
+        // a town's own tile inside its city's block, stepped onto from a tile the town
+        // doesn't own: into the town, as ↵ there goes, not into the city whose map it is
+        use crate::outside::stream::tests::beyond::city_with_a_town;
+        let mut st = crate::outside::tests::home_run();
+        let (c, town) = city_with_a_town(&st);
+        let (from, d) = {
+            let o = st.outside.as_ref().unwrap();
+            let w = o.world();
+            let block = o.others().into_iter().find(|(s, _)| *s == c).unwrap().1;
+            block
+                .iter()
+                .filter(|t| o.owner(*t) == Some(town) && step_cost(w, *t).is_some())
+                .find_map(|t| {
+                    Dir::CARDINAL
+                        .into_iter()
+                        .map(|d| (t.step(d.opposite()), d))
+                        .find(|(f, _)| o.owner(*f) != Some(town) && step_cost(w, *f).is_some())
+                })
+                .expect("a way onto the town's tiles")
+        };
+        put(&mut st, At::Overworld(from));
+        let Moved::City(cell) = world_step(&mut st, d) else {
+            panic!("into the town")
+        };
+        assert_eq!(st.outside.as_ref().unwrap().here(), town);
+        into_city(&mut st, cell);
+        assert!(on_its_own_street(&st));
     }
 
     #[test]

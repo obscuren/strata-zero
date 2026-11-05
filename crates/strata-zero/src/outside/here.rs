@@ -95,7 +95,13 @@ pub fn here_lines(st: &AppState) -> Vec<Line<'static>> {
 /// HERE's line jacked in: the Net, and the trunk your Net self is over, or the city's
 /// node field, or the dead grid.
 fn net_over(st: &AppState) -> Option<String> {
-    let (o, t) = (st.outside.as_ref()?, tile(st)?);
+    net_over_at(st, tile(st)?)
+}
+
+/// HERE's line jacked in over overworld tile `t`: the Net, and the trunk over it, or the
+/// city's node field, or the dead grid.
+fn net_over_at(st: &AppState, t: Pos) -> Option<String> {
+    let o = st.outside.as_ref()?;
     let w = o.world();
     let over = match (
         w.routes.iter().find(|r| r.path.contains(&t)),
@@ -111,7 +117,15 @@ fn net_over(st: &AppState) -> Option<String> {
 /// HERE jacked in: the trunk your Net self is over, or the city's node field, or the
 /// dead grid.
 pub fn net_here_lines(st: &AppState) -> Vec<Line<'static>> {
-    net_over(st)
+    tile(st)
+        .map(|t| net_here_lines_at(st, t))
+        .unwrap_or_default()
+}
+
+/// HERE jacked in over overworld tile `t` (the Net overworld's): its trunk, or the
+/// city's node field, or the dead grid.
+pub fn net_here_lines_at(st: &AppState, t: Pos) -> Vec<Line<'static>> {
+    net_over_at(st, t)
         .map(|over| {
             vec![Line::from(Span::styled(
                 format!(" {over}"),
@@ -134,22 +148,39 @@ pub fn band(st: &AppState, net: bool) -> Option<String> {
 /// NEAR: the mark from the MAP first, then the nearest cities and places out here, with
 /// how far and which way; `n` lines at most.
 pub fn near_lines(st: &AppState, n: usize) -> Vec<Line<'static>> {
-    let mark = super::mark_way(st).map(|(name, d, dir)| {
-        Line::from(vec![
-            Span::styled(" ⌖ ", Style::default().fg(CYAN)),
-            Span::styled(name, Style::default().fg(TEXT)),
-            Span::styled(format!("  {d} {dir}"), Style::default().fg(DIM)),
-        ])
-    });
+    let Some(t) = tile(st) else {
+        return Vec::new();
+    };
+    near_from(st, super::your_tile(st), t, n)
+}
+
+/// NEAR from overworld tile `t` (the Net overworld's): the mark, then the nearest
+/// places, each from there.
+pub fn near_lines_at(st: &AppState, t: Pos, n: usize) -> Vec<Line<'static>> {
+    near_from(st, Some(t), t, n)
+}
+
+/// NEAR with the mark's way from tile `you` and the places' from tile `t`.
+fn near_from(st: &AppState, you: Option<Pos>, t: Pos, n: usize) -> Vec<Line<'static>> {
+    let mark = you
+        .and_then(|you| super::mark_way_from(st, you))
+        .map(|(name, d, dir)| {
+            Line::from(vec![
+                Span::styled(" ⌖ ", Style::default().fg(CYAN)),
+                Span::styled(name, Style::default().fg(TEXT)),
+                Span::styled(format!("  {d} {dir}"), Style::default().fg(DIM)),
+            ])
+        });
     let n = n.saturating_sub(mark.is_some() as usize);
     let mut out: Vec<Line<'static>> = mark.into_iter().collect();
-    out.extend(nearest_lines(st, n));
+    out.extend(nearest_lines(st, t, n));
     out
 }
 
-/// NEAR's places: the nearest cities and places out here, with how far and which way.
-fn nearest_lines(st: &AppState, n: usize) -> Vec<Line<'static>> {
-    let (Some(o), Some(t)) = (st.outside.as_ref(), tile(st)) else {
+/// NEAR's places from overworld tile `t`: the nearest cities and places out here, with
+/// how far and which way.
+fn nearest_lines(st: &AppState, t: Pos, n: usize) -> Vec<Line<'static>> {
+    let Some(o) = st.outside.as_ref() else {
         return Vec::new();
     };
     let w = o.world();

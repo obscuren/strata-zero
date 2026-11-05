@@ -49,12 +49,16 @@ and nothing the player does changes them yet.
 The street carries on past the city's edge and the open ground is walked on the city
 screen, so a run saved out on the open ground is `At::City` with the player off the city's
 cells (its position in the city's frame, past its edge), on foot or jacked in with the body
-there; it reopens as it was, jacked in too. `outside::reopened` checks that the cell can
-still be stood on (the world under a saved run can change between builds until 1.0): a
-body or a player on foot whose ground is gone is put back on the city's own street nearest
-it, a Net self whose cell is gone wakes on the body, each with a warning. A run saved at
-`At::Ground` (the outside screen's ground, before) opens on the street at that cell, its
-body there and not jacked in; if the ground there is gone, back in the city as before.
+there (the Net self anywhere on the Net: as far from the body as it walked or the Net
+overworld dropped it, over another city's Net too); it reopens as it was, jacked in too.
+The tile the Net overworld is over is the screen's, not saved: a run saved from its pause
+menu reopens on the map, the Net self where it stood. `outside::reopened` checks that the
+cell can still be stood on (the world under a saved run can change between builds until
+1.0): a body or a player on foot whose ground is gone is put back on the city's own street
+nearest it, a Net self whose cell is gone wakes on the body, each with a warning. A run
+saved at `At::Ground` (the outside screen's ground, before) opens on the street at that
+cell, its body there and not jacked in; if the ground there is gone, back in the city as
+before.
 Nothing lies on the open ground: items can't be dropped off the city's cells.
 
 In another city of the world the home city is set aside whole in `st.away`

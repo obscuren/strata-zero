@@ -3138,7 +3138,9 @@ pub fn piece_in_reach(st: &AppState, b: BuildingId, index: usize) -> bool {
 }
 
 /// The Net tile you jacked in at: your rig's landing when the body is at home, else the
-/// port beside the body; none when you are not jacked in.
+/// port beside the body; off the cells the city owns, where a port of the open ground
+/// put you (`ground_port`), or the body's own cell while the Net round it isn't built;
+/// none when you are not jacked in.
 pub fn port_of(st: &AppState) -> Option<Pos> {
     let p = st.player.as_ref()?;
     let (place, body) = p.body?;
@@ -3147,6 +3149,9 @@ pub fn port_of(st: &AppState) -> Option<Pos> {
     }
     let city = st.city.as_ref()?;
     let k = place.stratum()?;
+    if !crate::outside::stream::live_owns(st, body) {
+        return ground_port(st, body).or(Some(body));
+    }
     std::iter::once(body)
         .chain(body.neighbors8())
         .find_map(|q| {
@@ -3154,6 +3159,24 @@ pub fn port_of(st: &AppState) -> Option<Pos> {
                 .find(|c| c.kind == citygen::ConnectorKind::Jack && c.serves.contains(&k))
                 .map(|c| c.pos)
         })
+}
+
+/// How far from the body a port of the open ground finds the Net with signal.
+pub const GROUND_SIGNAL: i32 = 8;
+
+/// Where a port of the open ground beside the body at `body` (the live city's frame)
+/// puts you on the Net: the nearest cell of the Net with signal (not the void between)
+/// within `GROUND_SIGNAL`, over the Net past the city's edge; none where there is none,
+/// or the Net round the body isn't built now.
+pub fn ground_port(st: &AppState, body: Pos) -> Option<Pos> {
+    use crate::render::map::TileMap;
+    let city = st.city.as_ref()?;
+    let b = crate::outside::stream::Beyond::of(st)?;
+    let net = MapRef::stratum_at(city, StratumKind::Net, st.minute_of_day()).beyond(&b);
+    crate::outside::nearest(body, GROUND_SIGNAL, |q| {
+        net.tile(q)
+            .is_some_and(|t| t.is_walkable() && t.terrain != Terrain::Void)
+    })
 }
 
 /// The cord on the open Net: the way back from you to where the run came onto the
@@ -3263,6 +3286,67 @@ pub fn cord_walk(city: &City, entry: Pos, you: Pos) -> Vec<Pos> {
     let mut walk = citygen::pathing::astar(city.size, entry, you, cost).unwrap_or_default();
     walk.pop();
     walk
+}
+
+/// How far apart, each way, the cord's ends are walked over the Net past the city's
+/// edge; farther, the cord runs straight: a way looked for over more of the world
+/// would cost a frame.
+pub const CORD_REACH: i32 = 64;
+
+/// The cord's walk from `entry` to `you`, `you` left off: over the city's own Net as
+/// `cord_walk` finds it while both ends are on cells the city owns (or there is no
+/// world past it); else over the Net past its edge, whichever area owns each cell,
+/// lanes cheap and the open grid and the void dear, looked for round both ends
+/// (`stream::path_area`). Ends more than `CORD_REACH` apart, or no way found (ground
+/// not built), it runs straight.
+pub fn cord_walk_beyond(st: &AppState, entry: Pos, you: Pos) -> Vec<Pos> {
+    use crate::outside::stream::{Beyond, path_area, path_within};
+    use crate::render::map::TileMap;
+    let Some(city) = st.city.as_ref() else {
+        return Vec::new();
+    };
+    let Some(b) = Beyond::of(st) else {
+        return cord_walk(city, entry, you);
+    };
+    if b.live_owns(entry) && b.live_owns(you) {
+        return cord_walk(city, entry, you);
+    }
+    if entry.chebyshev(you) > CORD_REACH {
+        return straight(entry, you);
+    }
+    let net = MapRef::stratum_at(city, StratumKind::Net, st.minute_of_day()).beyond(&b);
+    let cost = |_: Pos, to: Pos| match net.tile(to)?.terrain {
+        Terrain::NetLane | Terrain::NetGate => Some(1),
+        Terrain::NetGrid | Terrain::Void => Some(3),
+        _ => None,
+    };
+    match path_within(path_area(city.size, entry, you), entry, you, cost) {
+        Some(mut walk) => {
+            walk.pop();
+            walk
+        }
+        None => straight(entry, you),
+    }
+}
+
+/// A four-way line from `a` toward `b`, `b` left off: the cord where no way is looked
+/// for, each step along whichever axis lags the straight line more.
+fn straight(a: Pos, b: Pos) -> Vec<Pos> {
+    let (n, m) = ((b.x - a.x).abs(), (b.y - a.y).abs());
+    let (sx, sy) = ((b.x - a.x).signum(), (b.y - a.y).signum());
+    let mut out = Vec::with_capacity((n + m) as usize);
+    let (mut x, mut y, mut p) = (0, 0, a);
+    while (x, y) != (n, m) {
+        out.push(p);
+        if y == m || (x < n && (2 * x + 1) * m < (2 * y + 1) * n) {
+            x += 1;
+            p = p.offset(sx, 0);
+        } else {
+            y += 1;
+            p = p.offset(0, sy);
+        }
+    }
+    out
 }
 
 /// The arrow from `from` toward `to`, eight ways; none on the tile itself.
