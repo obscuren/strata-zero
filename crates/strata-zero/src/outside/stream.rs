@@ -881,7 +881,7 @@ pub(crate) mod tests {
 
     /// Every city and town of seed 3's world built on its site as the game builds it,
     /// the home city first: built once for every test.
-    fn settlements() -> &'static [(Settlement, City)] {
+    pub(crate) fn settlements() -> &'static [(Settlement, City)] {
         static ALL: OnceLock<Vec<(Settlement, City)>> = OnceLock::new();
         ALL.get_or_init(|| {
             let (home, o) = seed3();

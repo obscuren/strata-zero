@@ -4798,3 +4798,46 @@ fn streamed_draw_cost() {
         println!("{what:<34} {ms:>7.2} ms a frame");
     }
 }
+
+/// One light (`2026-11-05-streamed-world-design.md`, "After the first play"): seed 3's
+/// next city drawn from the open ground beside it, held, and a step in, live, at 200x60,
+/// by day, at dusk and by night; then the dev light view (`light`) by day and by night at
+/// the line between a city and its town, and by day beside the next city.
+#[test]
+#[ignore]
+fn one_light_shots() {
+    use crate::outside::stream::tests::handover;
+    if std::env::var("SHOT_DIR").is_err() {
+        return;
+    }
+    const WIDE: (u16, u16) = (200, 60);
+    let (next, outside, inward) = beside_the_next_city();
+    for (hour, minute) in [("day", 13 * 60), ("dusk", 18 * 60), ("night", 22 * 60)] {
+        let mut st = sited_run(minute);
+        handover::on_foot(&mut st, outside);
+        let mut map = map_on_you(&mut st, WIDE);
+        assert_ne!(st.outside.as_ref().unwrap().here(), next, "beside it");
+        shot_stack(&format!("one_light_beside_{hour}"), &st, &[&map], WIDE);
+        walk_on(&mut st, &mut map, inward, 1, WIDE);
+        assert_eq!(st.outside.as_ref().unwrap().here(), next, "walked in");
+        shot_stack(&format!("one_light_inside_{hour}"), &st, &[&map], WIDE);
+    }
+    for (hour, minute) in [("day", 13 * 60), ("night", 22 * 60)] {
+        let mut st = sited_run(minute);
+        let (_, _, a, _) = handover::beside_a_town(&mut st);
+        handover::on_foot(&mut st, a);
+        let map = map_on_you(&mut st, WIDE);
+        st.show_light = true;
+        shot_stack(
+            &format!("one_light_view_town_line_{hour}"),
+            &st,
+            &[&map],
+            WIDE,
+        );
+    }
+    let mut st = sited_run(13 * 60);
+    handover::on_foot(&mut st, outside);
+    let map = map_on_you(&mut st, WIDE);
+    st.show_light = true;
+    shot_stack("one_light_view_beside_day", &st, &[&map], WIDE);
+}

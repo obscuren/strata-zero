@@ -208,7 +208,11 @@ some cities' light as overblown and stitched on, and the overworld as static. So
   people (their day only: no story, no cameras) and draws them; its lanes carry
   packets, and so do the open Net's trunks in view. Replaces my calls 1 and 8.
 - **One light.** A city's cells look the same drawn from outside as from inside, at the
-  same hour, people aside.
+  same hour, people aside. Its tiles, light, lamps, sky and sight already did; the dev
+  light view (`light`) greys every area by its own light, not only the live city's (so
+  the live city no longer stands out pale and cut off at its outline); and a city held
+  as you left it keeps the clock: its lights out, holds and hijacks run out as they
+  would inside, and its hijacked ads glow from outside too.
 - **The overworld moves** (Jeff picked round 2 of `2026-11-05-overworld-motion-mock/`):
   slow neon in the cities (a district breathes every 20–36 s, rippling across it; a
   sign stutters about once a minute; tower beacons blink every 6 s); weather without

@@ -529,6 +529,19 @@ fn draw_beyond(
             };
             fall.draw(corner, area, st.tick, buf, &st.style);
         }
+        // and the dev light view greys every area by its own light, as the city's
+        if st.show_light {
+            let seen = |q: Pos| match net {
+                true => crate::render::Visibility::Visible,
+                false => vis(Pos::new(q.x - shift.x, q.y - shift.y)),
+            };
+            crate::render::lighting::LightPass {
+                map,
+                vis: &seen,
+                keep: Some(keep),
+            }
+            .draw(corner, area, buf);
+        }
     };
     // the open ground, and every settlement not held, in world cells
     let live = b.origin();
@@ -561,6 +574,33 @@ fn draw_beyond(
         let map = MapRef::stratum_at(city, stratum, minute);
         draw(&map, Some(city), shift, &own, buf);
     }
+}
+
+/// The holo ads hijacked in the cities and towns held as you left them, on the cells
+/// each owns that `vis` says are in sight: cells of the live city's frame.
+fn hijacked_beyond(
+    st: &AppState,
+    b: &Beyond,
+    vis: &dyn Fn(Pos) -> crate::render::Visibility,
+) -> Vec<Pos> {
+    let Some(o) = st.outside.as_ref() else {
+        return Vec::new();
+    };
+    let (now, live) = (st.net.now(st), b.origin());
+    crate::outside::held_stays(st)
+        .flat_map(|stay| {
+            let at = o.origin(&stay.city);
+            let shift = Pos::new(at.x - live.x, at.y - live.y);
+            crate::holds::hijacked_ads_in(&stay.city, &stay.net, now)
+                .into_iter()
+                .map(move |(q, _)| (stay, q.offset(shift.x, shift.y)))
+        })
+        .filter(|(stay, p)| {
+            matches!(b.elsewhere(*p), Some(Owner::City(c, _)) if std::ptr::eq(c, &stay.city))
+                && vis(*p) == crate::render::Visibility::Visible
+        })
+        .map(|(_, p)| p)
+        .collect()
 }
 
 /// The footer's slots on foot: your abilities, cooling or ready, lit a moment after firing.
@@ -4051,7 +4091,7 @@ impl Screen for MapScreen {
         // ground layer above.
         let fx = FxOverlay { fx: &st.fx, vis };
         overlays.push(&fx);
-        let light = crate::render::lighting::LightOverlay { vis };
+        let light = crate::render::lighting::LightOverlay { vis, keep };
         if st.show_light {
             overlays.push(&light);
         }
@@ -4071,6 +4111,9 @@ impl Screen for MapScreen {
         if let Some(o) = track_overlay.as_ref() {
             overlays.push(o);
         }
+        // Holo ads hijacked in the cities held as you left them, in sight past the city's
+        // cells: they glow as they do from inside.
+        let mut held_ads = Vec::new();
         if let (Some(b), Some(stratum)) = (beyond.as_ref(), self.place.stratum()) {
             // Off the city's map: in sight now, else what the world's record remembers;
             // on it, your memory of the city's cells (another area's among them).
@@ -4093,6 +4136,9 @@ impl Screen for MapScreen {
                 }
             };
             draw_beyond(st, b, stratum, origin, map_area, &past, f.buffer_mut());
+            if self.place.is_street() {
+                held_ads = hijacked_beyond(st, b, &past);
+            }
         }
         MapView {
             map: &map,
@@ -4125,12 +4171,18 @@ impl Screen for MapScreen {
                 .set_char(crate::render::tileset::holo_glyph(&st.style, st.tick))
                 .set_fg(crate::ui::chrome::MAGENTA);
         }
-        // A hijacked building's holo ads glow magenta, glyph kept.
+        // A hijacked building's holo ads glow magenta, glyph kept: the live city's, and
+        // those of the cities held as you left them.
         if self.place.is_street() {
             for (pos, _) in crate::holds::hijacked_ads(st) {
                 if vis.is_none_or(|v| v.get(pos) == Some(&crate::render::Visibility::Visible))
                     && let Some((sx, sy)) = tile_to_screen(map_area, origin, pos)
                 {
+                    f.buffer_mut()[(sx, sy)].set_fg(crate::ui::chrome::MAGENTA);
+                }
+            }
+            for pos in held_ads {
+                if let Some((sx, sy)) = tile_to_screen(map_area, origin, pos) {
                     f.buffer_mut()[(sx, sy)].set_fg(crate::ui::chrome::MAGENTA);
                 }
             }
@@ -16889,6 +16941,415 @@ mod tests {
                 assert_eq!(t.depth(), 1);
                 assert_eq!(player(&st), (street, port), "in the body: {:?}", last(&st));
             }
+        }
+    }
+
+    /// One light (`2026-11-05-streamed-world-design.md`, "After the first play"): a
+    /// city's cells look the same drawn from outside it as from inside, at the same hour,
+    /// people aside.
+    mod one_light {
+        use super::*;
+        use crate::outside::stream::tests::{handover, settlements};
+        use crate::outside::{Settlement, TILE};
+        use std::collections::{BTreeMap, BTreeSet};
+
+        /// The view drawn: wide enough to take in a patch of a city from beside it.
+        const SIZE: (u16, u16) = (160, 50);
+
+        /// Noon, dusk (the lamps just lit) and midnight.
+        const HOURS: [(u16, &str); 3] = [(12 * 60, "noon"), (18 * 60, "dusk"), (0, "midnight")];
+
+        /// What a world cell looks like on screen: glyph, foreground, background and
+        /// modifiers.
+        type Look = (String, Color, Color, Modifier);
+
+        /// The world cells of a view, as drawn plainly and in the dev light view (`light`).
+        struct View {
+            plain: BTreeMap<Pos, Look>,
+            light: BTreeMap<Pos, Look>,
+        }
+
+        /// Seed 3's home city on its site at `minute` of the day, its world made, every
+        /// other city and town of it held (built as the game builds them); rain as play
+        /// has it.
+        fn run_at(minute: u16) -> AppState {
+            let mut st = AppState::new();
+            st.enter_city_at(crate::outside::tests::sited().clone(), minute);
+            st.player = Some(Player::spawn(st.city.as_ref().unwrap(), 1));
+            crate::outside::ensure(&mut st);
+            let o = st.outside.as_mut().unwrap();
+            let home = o.home();
+            for (s, city) in settlements() {
+                if *s != home {
+                    o.built.insert(*s, city.clone());
+                }
+            }
+            st
+        }
+
+        fn tile(c: Pos) -> Pos {
+            Pos::new(c.x.div_euclid(TILE), c.y.div_euclid(TILE))
+        }
+
+        /// `city`'s street cells in buildings.
+        fn built(city: &citygen::City) -> Vec<Pos> {
+            city.stratum(StratumKind::Street)
+                .unwrap()
+                .tiles
+                .iter()
+                .filter(|(_, t)| t.building.is_some())
+                .map(|(p, _)| p)
+                .collect()
+        }
+
+        /// A walkable cell of the open ground beside a street cell settlement `s` owns on
+        /// its map (`city`), nearest its cells `near`, and a cell of its own ten steps
+        /// further in: world cells. None where no open ground touches it.
+        fn beside(
+            st: &AppState,
+            s: Settlement,
+            city: &citygen::City,
+            near: &[Pos],
+        ) -> Option<(Pos, Pos)> {
+            use citygen::overworld::detail;
+            let o = st.outside.as_ref().unwrap();
+            let w = o.world();
+            let origin = o.origin(city);
+            let near = |q: Pos| {
+                near.iter()
+                    .map(|b| (b.x - q.x).abs().max(2 * (b.y - q.y).abs()))
+                    .min()
+                    .unwrap_or(i32::MAX)
+            };
+            let mut edge: Vec<(i32, Pos, Pos)> =
+                TileRect::new(0, 0, city.size.w as i32, city.size.h as i32)
+                    .iter()
+                    .filter(|q| {
+                        o.owner(tile(origin.offset(q.x, q.y))) == Some(s)
+                            && city.walkable(StratumKind::Street, *q)
+                    })
+                    .flat_map(|q| {
+                        q.neighbors4()
+                            .map(move |n| (q, origin.offset(n.x, n.y)))
+                            .collect::<Vec<_>>()
+                    })
+                    .filter(|(_, x)| w.tile(tile(*x)).is_some() && o.owner(tile(*x)).is_none())
+                    .map(|(q, x)| (near(q), origin.offset(q.x, q.y), x))
+                    .collect();
+            edge.sort();
+            edge.into_iter()
+                .find(|(_, _, x)| detail::region(w, x.x, x.y, 1, 1)[Pos::new(0, 0)].is_walkable())
+                .map(|(_, y, x)| (x, Pos::new(y.x + 10 * (y.x - x.x), y.y + 10 * (y.y - x.y))))
+        }
+
+        /// The world cells settlement `s` owns on its map (`city`).
+        fn owned_by(
+            st: &AppState,
+            s: Settlement,
+            city: &citygen::City,
+        ) -> impl Fn(Pos) -> bool + use<> {
+            let o = st.outside.as_ref().unwrap();
+            let origin = o.origin(city);
+            let size = city.size;
+            let tiles: BTreeSet<Pos> = TileRect::new(0, 0, size.w as i32, size.h as i32)
+                .iter()
+                .map(|q| tile(origin.offset(q.x, q.y)))
+                .filter(|t| o.owner(*t) == Some(s))
+                .collect();
+            move |c: Pos| {
+                size.contains(Pos::new(c.x - origin.x, c.y - origin.y)) && tiles.contains(&tile(c))
+            }
+        }
+
+        /// The world cells the live city's people and your bots stand on, or light (the
+        /// doors open buildings light by night): what isn't the city's own look.
+        fn people(st: &AppState) -> BTreeSet<Pos> {
+            let (Some(city), Some(world), Some(o)) =
+                (st.city.as_ref(), st.world.as_ref(), st.outside.as_ref())
+            else {
+                return BTreeSet::new();
+            };
+            let origin = o.origin(city);
+            let all = TileRect::new(
+                -200,
+                -200,
+                city.size.w as i32 + 400,
+                city.size.h as i32 + 400,
+            );
+            world
+                .visible(all)
+                .into_iter()
+                .map(|m| m.pos)
+                .chain(world.open_buildings().flat_map(|b| world.doors(b).to_vec()))
+                .chain(st.bots.iter().filter_map(|b| b.pos))
+                .chain(st.bots.iter().flat_map(|b| b.wake.iter().map(|(q, _)| *q)))
+                .map(|p| origin.offset(p.x, p.y))
+                .collect()
+        }
+
+        /// You on foot on the street at world cell `at` (having looked round from world
+        /// cell `from` first, when given), the screen on you at rest: every world cell of
+        /// the view `keep` takes, as drawn.
+        fn drawn(
+            st: &mut AppState,
+            from: Option<Pos>,
+            at: Pos,
+            keep: &dyn Fn(Pos) -> bool,
+        ) -> View {
+            if let Some(from) = from {
+                handover::on_foot(st, handover::local(st, from));
+                look_round(st);
+            }
+            handover::on_foot(st, handover::local(st, at));
+            look_round(st);
+            if crate::outside::stream::finish(st) {
+                look_round(st);
+            }
+            let mut s = MapScreen::resumed(st);
+            for _ in 0..30 {
+                s.update(st, &[]);
+            }
+            let look = |st: &AppState| {
+                let buf = draw_buffer(&s, st, SIZE.0, SIZE.1);
+                let area = s.last_map.get();
+                let origin = s.cam.origin(area.width, area.height);
+                let corner = {
+                    let o = st.outside.as_ref().unwrap();
+                    o.origin(st.city.as_ref().unwrap())
+                };
+                area.positions()
+                    .filter_map(|c| {
+                        let p = crate::render::viewport::screen_to_tile(area, origin, (c.x, c.y));
+                        let w = corner.offset(p.x, p.y);
+                        let cell = &buf[(c.x, c.y)];
+                        keep(w).then(|| {
+                            (
+                                w,
+                                (cell.symbol().to_string(), cell.fg, cell.bg, cell.modifier),
+                            )
+                        })
+                    })
+                    .collect::<BTreeMap<_, _>>()
+            };
+            let plain = look(st);
+            st.show_light = true;
+            let light = look(st);
+            st.show_light = false;
+            View { plain, light }
+        }
+
+        /// Every cell drawn in both that isn't `aside`, where they differ: how many were
+        /// compared, and each that differs with how it looked from outside and inside.
+        fn differences(
+            outside: &BTreeMap<Pos, Look>,
+            inside: &BTreeMap<Pos, Look>,
+            aside: &BTreeSet<Pos>,
+        ) -> (usize, Vec<(Pos, Look, Look)>) {
+            let mut both = 0;
+            let mut out = Vec::new();
+            for (w, a) in outside {
+                let Some(b) = inside.get(w).filter(|_| !aside.contains(w)) else {
+                    continue;
+                };
+                both += 1;
+                if a != b {
+                    out.push((*w, a.clone(), b.clone()));
+                }
+            }
+            (both, out)
+        }
+
+        /// What kinds of difference a set of them shows, with a few of them.
+        fn kinds(diffs: &[(Pos, Look, Look)]) -> String {
+            let n =
+                |f: &dyn Fn(&Look, &Look) -> bool| diffs.iter().filter(|(_, a, b)| f(a, b)).count();
+            let some: Vec<String> = diffs
+                .iter()
+                .take(3)
+                .map(|(w, a, b)| format!("{w:?} outside {a:?} inside {b:?}"))
+                .collect();
+            format!(
+                "{} cells (glyph {}, fg {}, bg {}, modifier {}): {}",
+                diffs.len(),
+                n(&|a, b| a.0 != b.0),
+                n(&|a, b| a.1 != b.1),
+                n(&|a, b| a.2 != b.2),
+                n(&|a, b| a.3 != b.3),
+                some.join("; ")
+            )
+        }
+
+        /// The views from outside and inside compared, plainly and in the light view, each
+        /// difference (or too few cells to tell) added to `failed` under `what`.
+        fn compare(
+            what: &str,
+            outside: &View,
+            inside: &View,
+            aside: &BTreeSet<Pos>,
+            failed: &mut Vec<String>,
+        ) {
+            for (how, a, b) in [
+                ("", &outside.plain, &inside.plain),
+                (" (light view)", &outside.light, &inside.light),
+            ] {
+                let (both, diffs) = differences(a, b, aside);
+                if both < 200 {
+                    failed.push(format!("{what}{how}: only {both} cells in both views"));
+                } else if !diffs.is_empty() {
+                    failed.push(format!("{what}{how}: {}", kinds(&diffs)));
+                }
+            }
+        }
+
+        /// `city`'s holo ads on the street: each ad board's node and building, and its
+        /// tile.
+        fn ad_boards(city: &citygen::City) -> Vec<(citygen::NodeId, citygen::BuildingId, Pos)> {
+            city.net
+                .nodes
+                .iter()
+                .filter(|n| n.kind == citygen::NodeKind::AdBoard)
+                .filter(|n| n.anchor.0 == StratumKind::Street)
+                .filter_map(|n| Some((n.id, n.building?, n.anchor.1)))
+                .collect()
+        }
+
+        #[test]
+        fn a_city_left_looks_the_same_from_outside_as_inside() {
+            use crate::holds::{self, LIGHTS_OUT_MINUTES, Line};
+            // the next city of the world with a holo ad nearest open ground beside it
+            let mut st = run_at(22 * 60);
+            let (s, at, inside) = {
+                let o = st.outside.as_ref().unwrap();
+                o.others()
+                    .into_iter()
+                    .filter(|(s, _)| s.town.is_none())
+                    .filter_map(|(s, _)| {
+                        let city = o.held_city(s)?;
+                        let ads: Vec<Pos> = ad_boards(city).into_iter().map(|a| a.2).collect();
+                        let (at, inside) = beside(&st, s, city, &ads)?;
+                        let mine = o.origin(city);
+                        let q = Pos::new(at.x - mine.x, at.y - mine.y);
+                        let d = ads.iter().map(|a| a.chebyshev(q)).min()?;
+                        Some((d, s, at, inside))
+                    })
+                    .min_by_key(|(d, ..)| *d)
+                    .map(|(_, s, at, inside)| (s, at, inside))
+                    .expect("a city with holo ads")
+            };
+            let home = st.outside.as_ref().unwrap().home();
+            // in it: every district's lamps cut, every holo ad hijacked
+            crate::outside::enter(&mut st, s).unwrap();
+            let now = st.net.now(&st);
+            let city = st.city.clone().unwrap();
+            for d in &city.districts {
+                st.net.lights_out.insert(d.id, now + LIGHTS_OUT_MINUTES);
+            }
+            for (node, b, _) in ad_boards(&city) {
+                holds::take(&mut st, node, crate::owners::Owner::Building(b), now);
+                holds::hijack(&mut st, node, Line::Tag);
+            }
+            holds::tick(&mut st);
+            assert!(!holds::hijacked_ads(&st).is_empty(), "its ads hijacked");
+            let keep = owned_by(&st, s, &city);
+            let mut failed = Vec::new();
+            // left for home: from outside, then back in; again half an hour on, its lamps
+            // lit again, its ads still hijacked
+            for (later, when) in [(0, "just left"), (30, "half an hour on")] {
+                crate::outside::enter(&mut st, home).unwrap();
+                if later > 0 {
+                    crate::clock::run(
+                        &mut st,
+                        Some(later * sim::TICKS_PER_MINUTE),
+                        crate::clock::PATHS_PER_FRAME,
+                    );
+                }
+                let dark = |st: &AppState| {
+                    let city = st.outside.as_ref().unwrap().held_city(s).unwrap();
+                    !city.stratum(StratumKind::Street).unwrap().dark.is_empty()
+                };
+                assert_eq!(
+                    dark(&st),
+                    later == 0,
+                    "{when}: its lamps cut till they come on"
+                );
+                let held = drawn(&mut st, Some(inside), at, &keep);
+                assert!(
+                    held.plain
+                        .values()
+                        .any(|l| l.1 == crate::ui::chrome::MAGENTA),
+                    "{when}: a hijacked ad in sight from outside"
+                );
+                let mut aside = people(&st);
+                crate::outside::enter(&mut st, s).unwrap();
+                let live = drawn(&mut st, None, at, &keep);
+                aside.extend(people(&st));
+                compare(when, &held, &live, &aside, &mut failed);
+            }
+            assert!(
+                failed.is_empty(),
+                "{} differ:\n{}",
+                failed.len(),
+                failed.join("\n")
+            );
+        }
+
+        #[test]
+        fn a_city_looks_the_same_from_outside_and_inside() {
+            let mut failed = Vec::new();
+            let others: Vec<Settlement> = {
+                let st = run_at(0);
+                let o = st.outside.as_ref().unwrap();
+                o.others().into_iter().map(|(s, _)| s).collect()
+            };
+            for (minute, hour) in HOURS {
+                // every other city and town: held beside the home city, then live, from
+                // the same cell, having looked round from inside it first
+                for &s in &others {
+                    let mut st = run_at(minute);
+                    let (name, city) = {
+                        let o = st.outside.as_ref().unwrap();
+                        (o.name(s), o.held_city(s).unwrap().clone())
+                    };
+                    let (at, inside) =
+                        beside(&st, s, &city, &built(&city)).expect("open ground beside it");
+                    let keep = owned_by(&st, s, &city);
+                    let held = drawn(&mut st, Some(inside), at, &keep);
+                    let mut aside = people(&st);
+                    crate::outside::enter(&mut st, s).unwrap();
+                    assert_eq!(st.minute_of_day(), minute, "the hour carries over");
+                    let live = drawn(&mut st, None, at, &keep);
+                    aside.extend(people(&st));
+                    compare(&format!("{hour} {name}"), &held, &live, &aside, &mut failed);
+                }
+                // the home city: live, then set aside while another is
+                let mut st = run_at(minute);
+                let (home, city, next) = {
+                    let o = st.outside.as_ref().unwrap();
+                    let next = others.iter().copied().find(|s| s.town.is_none()).unwrap();
+                    (o.home(), st.city.clone().unwrap(), next)
+                };
+                let (at, inside) =
+                    beside(&st, home, &city, &built(&city)).expect("open ground beside home");
+                let keep = owned_by(&st, home, &city);
+                let live = drawn(&mut st, Some(inside), at, &keep);
+                let mut aside = people(&st);
+                crate::outside::enter(&mut st, next).unwrap();
+                let held = drawn(&mut st, None, at, &keep);
+                aside.extend(people(&st));
+                compare(
+                    &format!("{hour} the home city set aside"),
+                    &held,
+                    &live,
+                    &aside,
+                    &mut failed,
+                );
+            }
+            assert!(
+                failed.is_empty(),
+                "{} differ:\n{}",
+                failed.len(),
+                failed.join("\n")
+            );
         }
     }
 }

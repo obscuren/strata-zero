@@ -787,6 +787,19 @@ fn stand_in(
     Some((citygen::Place::Stratum(StratumKind::Street), h.landing))
 }
 
+/// The cities and towns held as you left them: the home city set aside, and every other
+/// kept whole this session.
+pub fn held_stays(st: &AppState) -> impl Iterator<Item = &Stay> {
+    let kept = st.outside.iter().flat_map(|o| o.kept.0.values());
+    st.away.as_deref().into_iter().chain(kept)
+}
+
+/// `held_stays`, to change (their clock: `holds::tick`).
+pub(crate) fn held_stays_mut(st: &mut AppState) -> impl Iterator<Item = &mut Stay> {
+    let kept = st.outside.iter_mut().flat_map(|o| o.kept.0.values_mut());
+    st.away.as_deref_mut().into_iter().chain(kept)
+}
+
 /// Jacked in, your body as another city's frame can hold it (`stand_in`), in the live
 /// city's frame: none when you're not jacked in or it can't be held there.
 pub(crate) fn body_stand_in(st: &AppState) -> Option<(citygen::Place, Pos)> {
