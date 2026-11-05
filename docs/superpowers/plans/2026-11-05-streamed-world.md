@@ -318,3 +318,14 @@ Jeff picked round 2 of `docs/superpowers/specs/2026-11-05-overworld-motion-mock/
 - [ ] Tests: `the_overworld_moves_with_the_tick` (two ticks apart, some cells differ; the same tick twice, identical); `a_districts_breath_is_slow` (no cell's neon step changes more than once in 300 ticks); `no_light_on_the_roads` (road cells never take a beacon/lamp colour); `the_gust_comes_and_goes` (over 70 s of ticks a gust crosses the mountains, and most ticks have none); `the_net_overworld_is_still` (identical across ticks); `the_overworld_reads_the_hour` (day and night differ).
 - [ ] Shots: the overworld at day, dusk and night, and mid-gust; compare with `round2.html` side by side and match it.
 - [ ] Five checks; commit `render: the overworld in motion`.
+
+### Task 16: Solid signs, round night sight, city lights from afar
+
+Jeff's decisions after Tasks 13–14 (2026-11-05): billboards and road signs block you; the night sight is round like the day's; lit things are seen from farther where nothing blocks the view.
+
+**Files:** `crates/citygen/src/tile.rs` (`Tile::is_walkable`: `Feature::Sign` blocks), `crates/citygen/src/sight.rs` (the dark radius round: `dx² + dy² <= r²`, as `fov.rs` casts), `crates/citygen/src/lighting/tuning.rs` (`LIT_RADIUS`), `crates/strata-zero/src/walker/mod.rs` (`update_fov`'s cast), and whatever the change breaks.
+
+- [ ] Signs: every `Feature::Sign` cell (billboard caps and letters, truck-stop road signs, holo ads) blocks walking for the player, NPCs and pathing alike. Check every generator stage that places signs still leaves the city connected (the validators and the connectivity tests across the usual seed ranges); where a sign would cut a way through, the generator moves or drops it (deterministic). Test: `a_sign_blocks_you` (street and open ground) and the existing connectivity tests green.
+- [ ] Night sight: the dark radius is a circle in cells (`sight::lit_or_near` and `sight::sees`), matching the day and the FOV cast. Test: `the_night_sight_is_round` (at 22:00 on open ground, a cell at (r, 0) is seen and one at (r-1, r-1) beyond the circle isn't); NPC sight tests updated to the round rule.
+- [ ] Far lights: a lit cell (one the light rule says is lit enough to be seen past the dark radius) is seen as far as the view reaches, up to `LIT_RADIUS` raised to 96 cells, where the line of sight is clear. Test: `a_city_glows_from_afar` (at night on open ground 60–90 cells from a neighbour, its lit cells are visible and its dark cells aren't); the release draw/step cost stays in budget (measure a step's sight update at the new radius and report it).
+- [ ] Shots at night beside a neighbour from 30, 60 and 90 cells; five checks; commit `sight: solid signs, a round night, city lights from afar`.
