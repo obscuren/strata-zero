@@ -148,6 +148,11 @@ pub fn into_city(st: &mut AppState, cell: Pos) {
     if let Some(o) = st.outside.as_mut() {
         o.at = At::City;
     }
+    // the city's MAP is the city's again
+    if st.atlas.zoom == crate::screens::atlas::Zoom::World {
+        st.atlas.zoom = crate::screens::atlas::Zoom::Fit;
+    }
+    crate::outside::reached_mark(st);
 }
 
 #[cfg(test)]

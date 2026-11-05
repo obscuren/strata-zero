@@ -1299,6 +1299,10 @@ impl Deck {
             return;
         };
         self.set_tab(Tab::Map, st);
+        // a listing is the city's: off the world's zoom
+        if st.atlas.zoom == atlas::Zoom::World {
+            st.atlas.zoom = atlas::Zoom::Fit;
+        }
         st.atlas.leave();
         self.map_drawn.set(None);
         st.atlas.stratum = Some(atlas::map_stratum(st));
@@ -1846,6 +1850,21 @@ impl Screen for Deck {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jobs_show_on_the_map_comes_back_from_the_world() {
+        // the MAP last at zoom 4 (out in the open): JOBS' "show on the MAP" is the city's
+        let mut st = crate::jobs::testutil::state_home();
+        crate::outside::ensure(&mut st);
+        crate::screens::atlas::refresh(&mut st);
+        let id = crate::screens::atlas::listed(&st)[0].id;
+        st.atlas.zoom = crate::screens::atlas::Zoom::World;
+        st.deck_map_to = Some(id);
+        let mut deck = Deck::new(st.tick);
+        deck.show_on_map(&mut st);
+        assert_ne!(st.atlas.zoom, crate::screens::atlas::Zoom::World);
+        assert!(st.atlas.picked.is_some());
+    }
 
     fn open_labels(st: &mut AppState) -> Vec<String> {
         let p = item_popup(st, &ItemId::new("taped_package"), (0, 0)).unwrap();

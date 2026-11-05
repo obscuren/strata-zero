@@ -252,13 +252,9 @@ pub fn draw(st: &AppState, body: Rect, buf: &mut Buffer) -> MapLayout {
             .set_char('⌖')
             .set_style(Style::default().fg(CYAN).add_modifier(Modifier::BOLD));
     }
+    // the cursor lit, whatever it's on
     if let Some((x, y)) = cell_of(cursor) {
-        let c = &mut buf[(x, y)];
-        let fg = c.fg;
-        c.set_style(Style::default().fg(Color::Rgb(4, 6, 10)).bg(match fg {
-            Color::Reset => CYAN,
-            fg => fg,
-        }));
+        buf[(x, y)].set_style(Style::default().fg(Color::Rgb(4, 6, 10)).bg(CYAN));
     }
     // the title: the world, the zoom, the region under the cursor
     let here = w
@@ -639,6 +635,139 @@ mod tests {
         term.draw(|f| crate::app::Screen::draw(&s, &st, f)).unwrap();
         let text = buffer_text(term.backend().buffer());
         assert!(text.contains(&format!("⌖ {}", p.name)), "{text}");
+    }
+
+    #[test]
+    fn the_cursor_shows_on_plain_ground() {
+        let mut st = run();
+        st.atlas.zoom = Zoom::World;
+        let w = st.outside.as_ref().unwrap().world().clone();
+        let you = your_tile(&st).unwrap();
+        let flat = w
+            .tiles
+            .iter()
+            .filter(|(p, t)| {
+                t.ground == citygen::overworld::Ground::Flats
+                    && t.road == 0
+                    && t.urban.is_none()
+                    && t.water == citygen::overworld::Water::None
+                    && w.poi_at(*p).is_none()
+            })
+            .map(|(p, _)| p)
+            .min_by_key(|p| p.dist2(you))
+            .unwrap();
+        st.atlas.world.cursor = Some(flat);
+        let area = Rect::new(0, 0, 120, 36);
+        let mut buf = Buffer::empty(area);
+        let l = crate::screens::atlas::draw(&st, area, &mut buf);
+        let (x, y) = (
+            l.area.x + (flat.x - l.origin.x) as u16,
+            l.area.y + (flat.y - l.origin.y) as u16,
+        );
+        assert_eq!(buf[(x, y)].bg, crate::ui::chrome::CYAN, "the cursor lit");
+    }
+
+    #[test]
+    fn a_marked_city_clears_on_coming_in() {
+        let mut st = run();
+        let o = st.outside.as_ref().unwrap();
+        let (s, b) = o
+            .others()
+            .into_iter()
+            .find(|(s, b)| s.town.is_none() && b.x > 0)
+            .unwrap();
+        let c = o.world().cities[s.city as usize].clone();
+        st.outside.as_mut().unwrap().mark = Some(crate::outside::Mark {
+            tile: c.centre,
+            name: c.name.clone(),
+        });
+        st.outside.as_mut().unwrap().at =
+            crate::outside::At::Overworld(Pos::new(b.x - 1, b.y + b.h / 2));
+        let moved = crate::outside::moves::world_step(&mut st, citygen::Dir::E);
+        let crate::outside::moves::Moved::City(cell) = moved else {
+            panic!("into {}: {moved:?}", c.name);
+        };
+        crate::outside::moves::into_city(&mut st, cell);
+        assert!(
+            st.outside.as_ref().unwrap().mark.is_none(),
+            "you're in {}",
+            c.name
+        );
+    }
+
+    #[test]
+    fn a_place_at_sea_clears_from_its_shore() {
+        let mut st = run();
+        let w = st.outside.as_ref().unwrap().world().clone();
+        let rig = w
+            .pois
+            .iter()
+            .find(|p| p.kind == citygen::overworld::PoiKind::Rig)
+            .expect("a rig in seed 3's world")
+            .clone();
+        let shore = crate::outside::nearest(rig.at, 12, |p| {
+            crate::outside::moves::step_cost(&w, p).is_some()
+        })
+        .unwrap();
+        st.outside.as_mut().unwrap().mark = Some(crate::outside::Mark {
+            tile: rig.at,
+            name: rig.name.clone(),
+        });
+        st.outside.as_mut().unwrap().at = crate::outside::At::Overworld(shore);
+        crate::outside::reached_mark(&mut st);
+        assert!(
+            st.outside.as_ref().unwrap().mark.is_none(),
+            "as near as you can get"
+        );
+    }
+
+    #[test]
+    fn indoors_the_way_is_from_the_building() {
+        let mut st = run();
+        let rig = st.home.unwrap();
+        let bonus = st.sight_bonus();
+        let p = rig
+            .wake(
+                st.city.as_ref().unwrap(),
+                &mut st.interiors,
+                &st.constructs,
+                bonus,
+            )
+            .unwrap();
+        st.player = Some(p);
+        let out = crate::track::listings::walk_from(&st, citygen::StratumKind::Street).unwrap();
+        let o = st.outside.as_ref().unwrap();
+        assert_eq!(
+            your_tile(&st),
+            Some(o.tile_of(st.city.as_ref().unwrap(), out))
+        );
+    }
+
+    #[test]
+    fn coming_into_a_city_the_map_is_the_citys() {
+        let mut st = run();
+        st.atlas.zoom = Zoom::World;
+        let cell = st.player.as_ref().unwrap().pos;
+        crate::outside::moves::into_city(&mut st, cell);
+        assert_ne!(st.atlas.zoom, Zoom::World);
+    }
+
+    #[test]
+    fn a_mark_leads_the_pane_without_costing_a_job_row() {
+        let mut st = run();
+        let p = places(&st).into_iter().nth(2).unwrap();
+        st.outside.as_mut().unwrap().mark = Some(crate::outside::Mark {
+            tile: p.tile,
+            name: p.name,
+        });
+        assert!(st.track.is_none());
+        assert_eq!(
+            crate::missions::ui::story_line_count(&st),
+            1 + crate::missions::ui::jobs_pane(&st).len()
+                - crate::jobs::ui::pane_lines(&st).len()
+                - 1,
+            "the mark's line counted as the track's would be"
+        );
     }
 
     #[test]

@@ -50,7 +50,7 @@ pub fn pane_lines(st: &AppState) -> Vec<Line<'static>> {
 
 /// The lines the pane never caps: the track's, then the story's.
 pub fn story_line_count(st: &AppState) -> usize {
-    usize::from(st.track.is_some()) + pane_lines(st).len()
+    usize::from(crate::track::ui::pane_line(st).is_some()) + pane_lines(st).len()
 }
 
 /// The whole JOBS pane: the track, the story's lines, then the job in hand.

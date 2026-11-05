@@ -472,8 +472,11 @@ pub fn your_tile(st: &AppState) -> Option<Pos> {
         At::Overworld(t) => t,
         At::Ground(c) => Pos::new(c.x.div_euclid(TILE), c.y.div_euclid(TILE)),
         At::City => {
-            let (city, p) = (st.city.as_ref()?, st.player.as_ref()?);
-            o.tile_of(city, p.pos)
+            // indoors (or jacked in) the street cell you'd come out on
+            let city = st.city.as_ref()?;
+            let pos = crate::track::listings::walk_from(st, StratumKind::Street)
+                .or_else(|| st.player.as_ref().map(|p| p.pos))?;
+            o.tile_of(city, pos)
         }
     })
 }
@@ -487,15 +490,29 @@ pub fn mark_way(st: &AppState) -> Option<(String, i32, &'static str)> {
     Some((m.name.clone(), d, crate::screens::outside::bearing(dx, dy)))
 }
 
-/// Standing on the marked tile: you're there, and the mark goes.
+/// At the mark: you're there, and the mark goes. There is a tile from it, in the city
+/// or town it marks, or, for a place you can't stand on (a rig at sea), beside the
+/// nearest ground you can.
 pub fn reached_mark(st: &mut AppState) {
-    let there = match (
-        your_tile(st),
-        st.outside.as_ref().and_then(|o| o.mark.as_ref()),
-    ) {
-        (Some(you), Some(m)) => you == m.tile,
-        _ => false,
-    };
+    let there = (|| {
+        let o = st.outside.as_ref()?;
+        let m = o.mark.as_ref()?;
+        let you = your_tile(st)?;
+        let near = |a: Pos, b: Pos| (a.x - b.x).abs().max((a.y - b.y).abs()) <= 1;
+        if near(you, m.tile) {
+            return Some(true);
+        }
+        if o.at == At::City && settlement_at(st, m.tile) == Some(o.here()) {
+            return Some(true);
+        }
+        let w = o.world();
+        if moves::step_cost(w, m.tile).is_none() {
+            let shore = nearest(m.tile, 12, |p| moves::step_cost(w, p).is_some())?;
+            return Some(near(you, shore));
+        }
+        Some(false)
+    })()
+    .unwrap_or(false);
     if there {
         let name = st
             .outside
