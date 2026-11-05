@@ -241,3 +241,20 @@
 - [ ] **Step 2:** Run `SHOT_DIR=<scratch> cargo test -p strata-zero --features window --target-dir target/smoke -- --ignored streamed_world_shots` and look at every PNG: no seam at the edge, the light continuous, the neighbour's buildings in place.
 - [ ] **Step 3:** The five checks; `cargo check -p strata-zero --features window --target x86_64-pc-windows-msvc --target-dir target/smoke` and `x86_64-unknown-linux-gnu` if the targets are installed.
 - [ ] **Step 4:** Commit `shots: the streamed world`.
+
+### Task 10: The trunks run on into a city's lanes
+
+Added after Task 9's shots: on a city's Net the world's trunks stop where the city's own grid starts (Route 5 ends about 10 cells into Sable Bay's map, about 35 cells of dark grid short of its first lane), against "the Net is joined along the roads by its trunks". Ruling: the city's Net changes (pre-1.0 world tuning is allowed); the streets, the open Net past the outline and every construct stay as they are.
+
+**Files:**
+- Modify: `crates/citygen/src/generate/cyberspace.rs` (the Net stage on a site), `crates/strata-zero/src/outside/here.rs`, `crates/strata-zero/src/render/minimap.rs`
+
+**Interfaces:**
+- Produces: on a sited city's Net, every trunk (a `NetLane` run copied from the world's open Net) that reaches into the map is joined by `NetLane` cells to the city's own lanes: from the trunk's last cell to the nearest city lane, along the street's road under it where there is one, never through a construct (`NetWall`, `NetFloor`, `NetGate`) or a node; integer pathing only; deterministic.
+- On another city's Net the minimap's caption names that city as HERE does; on a cell a settlement owns, HERE names the settlement, not the trunk (trunk names only off every settlement's cells).
+
+- [ ] **Step 1: Write the failing tests:** `every_trunk_runs_on_into_the_citys_lanes` (citygen; seed 3's world, every settlement: each trunk entering the map is lane-connected to the city's lanes); `joining_the_trunks_touches_no_construct` (every construct cell equals the city built before the change's rule, by comparing with the lanes rule off); the stream's seam test stays green; `here_names_the_city_on_its_lanes` and `the_minimap_names_another_citys_net` (strata-zero).
+- [ ] **Step 2:** Run them — FAIL.
+- [ ] **Step 3:** Implement; re-pin any fingerprint the change moves, saying which.
+- [ ] **Step 4:** Run them — PASS; the five checks; rerun `streamed_world_shots` and look at `streamed_net_edge_wide` and `streamed_net_next_city`.
+- [ ] **Step 5:** Commit `citygen: the Net's trunks run on into a city's lanes`.
