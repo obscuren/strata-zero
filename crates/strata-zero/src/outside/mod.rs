@@ -558,6 +558,11 @@ pub fn build_params(
     }
 }
 
+/// The longest a city's people seeded by its build in the background are run on to the
+/// hour you walk in (a day): older, they're seeded again for the hour, cheaper than
+/// stepping every minute between on the frame.
+pub const RUN_ON: u64 = 24 * 60 * sim::TICKS_PER_MINUTE;
+
 /// `city`'s people as you first come into it at clock tick `now`, minute `minute` of
 /// the day: each at their day.
 pub fn seed_people(city: &City, people: &sim::People, now: u64, minute: u16) -> sim::World {
@@ -623,9 +628,13 @@ pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
             }
         }
         Some(city) => {
-            // its people as its build seeded them (run on to now as it's put in place),
-            // else seeded now
-            let people = st.outside.as_mut().and_then(|o| o.stream.take_people(s));
+            // its people as its build seeded them (run on to now as it's put in place)
+            // if that was no more than `RUN_ON` ago, else seeded now
+            let people = st
+                .outside
+                .as_mut()
+                .and_then(|o| o.stream.take_people(s))
+                .filter(|w| now.saturating_sub(w.tick()) <= RUN_ON);
             let world = people.unwrap_or_else(|| seed_people(&city, &st.people, now, minute));
             Stay::fresh(city, world).put(st, false, now);
         }

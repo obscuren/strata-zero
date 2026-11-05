@@ -2448,9 +2448,10 @@ impl MapScreen {
     /// The stream built under the view and round you wherever the city doesn't own the
     /// ground, before any step is checked, and the cities and towns near it building in
     /// the background; you look round again when new ground came into reach or a city
-    /// came in.
+    /// came in. Off the street and the Net the builds finished still land.
     fn tend(&self, st: &mut AppState) {
         if !carries_on(st, self.place) {
+            crate::outside::stream::collect(st);
             return;
         }
         let view = self.last_map.get();
@@ -14964,6 +14965,57 @@ mod tests {
             let city_drawn = pass(&MapRef::stratum_at(city, street, minute), origin);
             assert_eq!(buf[(sx, sy)], town_drawn, "the town's");
             assert_ne!(buf[(sx, sy)], city_drawn);
+        }
+
+        #[test]
+        fn a_build_lands_while_you_are_off_the_street() {
+            // asked for from the street, finished while you're in the undercity: the map
+            // collects it all the same, so one that broke says so at once
+            use crate::outside::stream::REACH;
+            let mut st = home_run();
+            let (s, b) = {
+                let o = st.outside.as_ref().unwrap();
+                o.others()
+                    .into_iter()
+                    .find(|(s, b)| s.town.is_none() && b.x > 4)
+                    .unwrap()
+            };
+            let view = {
+                let o = st.outside.as_ref().unwrap();
+                let live = o.origin(st.city.as_ref().unwrap());
+                let c = Pos::new(TILE * b.x - REACH, TILE * b.y + TILE * b.h / 2);
+                TileRect::new(c.x - live.x, c.y - live.y, 1, 1)
+            };
+            crate::outside::stream::tend(&mut st, view);
+            assert!(st.outside.as_ref().unwrap().stream.building(s));
+            let under = StratumKind::Undercity;
+            let down = st
+                .city
+                .as_ref()
+                .unwrap()
+                .stratum(under)
+                .unwrap()
+                .tiles
+                .iter()
+                .find(|(_, t)| t.is_walkable())
+                .map(|(p, _)| p)
+                .expect("an undercity cell to stand on");
+            {
+                let p = st.player.as_mut().unwrap();
+                p.place = Place::Stratum(under);
+                p.pos = down;
+            }
+            let mut map = MapScreen::walking(&mut st);
+            let landed = (0..3000).any(|_| {
+                map.update(&mut st, &[]);
+                let o = st.outside.as_ref().unwrap();
+                o.built.contains_key(&s) || {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    false
+                }
+            });
+            assert!(landed, "collected off the street");
+            assert_eq!(player(&st).0, Place::Stratum(under));
         }
 
         #[test]

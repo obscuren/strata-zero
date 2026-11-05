@@ -58,16 +58,63 @@ impl std::fmt::Debug for Stream {
 /// tiles.
 pub const REACH: i32 = 2 * TILE;
 
-/// What a build thread hands back: the city, and its people seeded; none when it
-/// wouldn't build.
+/// What a build makes: the city, and its people seeded; none when it wouldn't build.
 type Made = Option<(City, sim::World)>;
+
+/// What a build thread hands back: what it made, or what its panic said.
+type Landed = Result<Made, String>;
+
+thread_local! {
+    /// On a build's thread, what its panic said once it has (kept by the front ends'
+    /// panic hooks); none on any other thread.
+    static BUILD: std::cell::RefCell<Option<Option<String>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Whether this thread is a build's.
+#[cfg(test)]
+pub fn on_build_thread() -> bool {
+    BUILD.with(|b| b.borrow().is_some())
+}
+
+/// For a front end's panic hook, first: on a build's thread, what the panic says is kept
+/// for the main thread to say again when it collects the build, and true (the hook does
+/// nothing more: no restoring the terminal or showing a box while the game goes on);
+/// on any other thread, false.
+pub fn held_by_build(info: &std::panic::PanicHookInfo<'_>) -> bool {
+    BUILD.with(|b| match b.borrow_mut().as_mut() {
+        Some(said) => {
+            *said = Some(info.to_string());
+            true
+        }
+        None => false,
+    })
+}
+
+/// Runs `job` as a build's thread: a panic in it caught, and handed back as what it said
+/// (the hook's words, where it broke among them, else the panic's own).
+fn build_thread(job: impl FnOnce() -> Made) -> Landed {
+    BUILD.with(|b| *b.borrow_mut() = Some(None));
+    let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+    let kept = BUILD.with(|b| b.borrow_mut().take().flatten());
+    made.map_err(|panic| kept.unwrap_or_else(|| said(&*panic)))
+}
+
+/// What a panic's payload says.
+fn said(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "a build broke".into())
+}
 
 /// The cities and towns building off the frame, each on a thread of its own, and what
 /// came of them.
 #[derive(Default)]
 struct Builds {
     /// Building.
-    flight: BTreeMap<Settlement, std::thread::JoinHandle<Made>>,
+    flight: BTreeMap<Settlement, std::thread::JoinHandle<Landed>>,
     /// The people each city built here was seeded with, until you walk in.
     people: BTreeMap<Settlement, sim::World>,
     /// Those that wouldn't build: not tried again this session.
@@ -130,13 +177,23 @@ impl Stream {
             return;
         };
         let people = people.clone();
+        self.start_with(s, move || {
+            let city = citygen::Generator::run(params).ok()?;
+            let world = super::seed_people(&city, &people, now, minute);
+            Some((city, world))
+        });
+    }
+
+    /// Settlement `s` made by `job` on a thread of its own, named for it (`build 2`,
+    /// `build 2.1` for its town 1).
+    fn start_with(&mut self, s: Settlement, job: impl FnOnce() -> Made + Send + 'static) {
+        let name = match s.town {
+            None => format!("build {}", s.city),
+            Some(t) => format!("build {}.{t}", s.city),
+        };
         let build = std::thread::Builder::new()
-            .name(format!("build {}.{:?}", s.city, s.town))
-            .spawn(move || {
-                let city = citygen::Generator::run(params).ok()?;
-                let world = super::seed_people(&city, &people, now, minute);
-                Some((city, world))
-            });
+            .name(name)
+            .spawn(move || build_thread(job));
         match build {
             Ok(build) => {
                 self.builds.flight.insert(s, build);
@@ -185,14 +242,16 @@ impl Stream {
 
     /// What settlement `s`'s build came to: its city into `built` and its people kept,
     /// else remembered as one that won't build. Whether the city came in. A build that
-    /// panicked panics here, as building it on the spot would have: the front ends'
-    /// panic hooks take a panic for the end of the game.
+    /// panicked panics here, on the main thread, with what it said, as building it on
+    /// the spot would have: the front ends' panic hooks (which left the build's thread
+    /// be) take it for the end of the game.
     fn land(
         &mut self,
         s: Settlement,
-        made: std::thread::Result<Made>,
+        landed: std::thread::Result<Landed>,
         built: &mut BTreeMap<Settlement, City>,
     ) -> bool {
+        let made = landed.unwrap_or_else(|panic| Err(said(&*panic)));
         match made {
             Ok(Some((city, world))) => {
                 // one held already keeps its own
@@ -207,7 +266,7 @@ impl Stream {
                 self.builds.failed.insert(s);
                 false
             }
-            Err(panic) => std::panic::resume_unwind(panic),
+            Err(said) => panic!("building {s:?} broke: {said}"),
         }
     }
 
@@ -586,6 +645,15 @@ fn tend_builds(st: &mut AppState, area: Rect) -> bool {
         return false;
     };
     o.stream.tend(&mut o.built, wanted, &st.people, now, minute)
+}
+
+/// The builds finished collected, wherever you are: indoors too, so one that broke
+/// says so at once. Whether a city came in.
+pub fn collect(st: &mut AppState) -> bool {
+    let Some(o) = st.outside.as_mut() else {
+        return false;
+    };
+    o.stream.collect(&mut o.built, false)
 }
 
 /// Every city and town building waited for and collected, so a test or a shot sees
@@ -1488,7 +1556,7 @@ pub(crate) mod tests {
         use super::*;
         use crate::app::AppState;
         use crate::outside::tests::home_run;
-        use crate::outside::{build_params, enter, seed_people};
+        use crate::outside::{RUN_ON, build_params, enter, seed_people};
 
         fn o(st: &AppState) -> &Outside {
             st.outside.as_ref().unwrap()
@@ -1677,6 +1745,98 @@ pub(crate) mod tests {
             stream.finish(&mut built);
             assert!(built.is_empty(), "not tried again");
             assert_eq!(stream.started(), 0);
+        }
+
+        #[test]
+        fn a_streamed_city_entered_a_day_on_is_seeded_afresh() {
+            // people frozen at the ask for more than a day aren't run on across it on
+            // the frame: they're seeded for now, as on the spot
+            let mut st = home_run();
+            let (s, map) = a_city(&st);
+            let (asked, then) = (st.clock_tick(), st.minute_of_day());
+            tend_near(&mut st, map);
+            finish(&mut st);
+            crate::clock::run(
+                &mut st,
+                Some(RUN_ON + 60 * sim::TICKS_PER_MINUTE),
+                crate::clock::PATHS_PER_FRAME,
+            );
+            let (now, minute) = (st.clock_tick(), st.minute_of_day());
+            assert!(now - asked > RUN_ON);
+            let city = o(&st).built[&s].clone();
+            enter(&mut st, s).unwrap();
+            assert!(o(&st).stream.people(s).is_none(), "dropped");
+            let w = st.world.as_ref().unwrap();
+            assert_eq!(w.tick(), now);
+            let fresh = seed_people(&city, &st.people, now, minute);
+            assert!(w.people() == fresh.people(), "seeded for now");
+            let mut old = seed_people(&city, &st.people, asked, then);
+            old.rebuild(&city, &st.people);
+            old.advance(&city, now);
+            assert!(w.people() != old.people(), "not run on across the day");
+        }
+
+        #[test]
+        fn a_build_that_panics_is_said_on_the_main_thread() {
+            let mut stream = Stream::default();
+            let mut built = BTreeMap::new();
+            let s = Settlement {
+                city: 9,
+                town: Some(1),
+            };
+            assert!(!on_build_thread());
+            stream.start_with(s, || {
+                assert!(on_build_thread(), "a build's own thread");
+                assert_eq!(std::thread::current().name(), Some("build 9.1"));
+                panic!("the generator broke");
+            });
+            // the frame goes on: nothing is said until it's collected
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                stream.finish(&mut built)
+            }));
+            let said = said(&*caught.expect_err("the main thread panics on collecting it"));
+            assert!(said.contains("the generator broke"), "{said}");
+            assert!(built.is_empty() && !stream.building(s));
+        }
+
+        #[test]
+        fn a_front_ends_hook_leaves_a_builds_panic_to_the_main_thread() {
+            // a hook as the front ends' (term.rs, window/fatal.rs) start: what a build's
+            // panic said kept for the main thread, nothing done on the build's. The hook
+            // is the process's, so only this test's build's thread is counted.
+            let held = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let previous = std::sync::Arc::new(std::panic::take_hook());
+            std::panic::set_hook(Box::new({
+                let (previous, held) = (previous.clone(), held.clone());
+                move |info| {
+                    if held_by_build(info) {
+                        if std::thread::current().name() == Some("build 7") {
+                            held.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        }
+                        return;
+                    }
+                    previous(info);
+                }
+            }));
+            let mut stream = Stream::default();
+            let mut built = BTreeMap::new();
+            let s = Settlement {
+                city: 7,
+                town: None,
+            };
+            stream.start_with(s, || panic!("the generator broke"));
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                stream.finish(&mut built)
+            }));
+            let _ = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| previous(info)));
+            let said = said(&*caught.expect_err("the main thread panics on collecting it"));
+            assert_eq!(held.load(std::sync::atomic::Ordering::SeqCst), 1);
+            // the hook's own words, where it broke among them
+            assert!(
+                said.contains("the generator broke") && said.contains("stream.rs"),
+                "{said}"
+            );
         }
 
         #[test]

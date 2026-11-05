@@ -44,10 +44,15 @@ pub fn restore() {
     );
 }
 
-/// Makes a panic restore the terminal before printing its message.
+/// Makes a panic restore the terminal before printing its message. A city's build in
+/// the background is left be: its panic is said again on the main thread when the build
+/// is collected.
 pub fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        if crate::outside::stream::held_by_build(info) {
+            return;
+        }
         restore();
         previous(info);
     }));
