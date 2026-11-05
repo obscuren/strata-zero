@@ -694,7 +694,7 @@ pub fn entries(st: &AppState) -> Vec<(BuildingId, String, Vec<Entry>)> {
 }
 
 /// A catalogue entry the run made (a keycard), not the build's content.
-fn run_made(id: &ItemId) -> bool {
+pub fn run_made(id: &ItemId) -> bool {
     id.0.starts_with("keycard:")
 }
 

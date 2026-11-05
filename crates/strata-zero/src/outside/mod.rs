@@ -76,12 +76,29 @@ pub struct Stay {
     pub jobs: crate::jobs::Jobs,
     pub missions: crate::missions::Missions,
     pub track: Option<crate::track::Track>,
+    /// HELIX's hosts there (its buildings', its districts', the rig's).
+    pub helix: crate::helix::Helix,
+    /// How far through the journal's mails the log has said, and the mail's pill.
+    pub mail_seen: usize,
+    pub mail_pill: Option<crate::mail_mark::MailPill>,
+    /// The keycards to its doors: their catalogue entries and what's in the pack.
+    pub cards: Vec<game::Item>,
+    pub card_stacks: Vec<game::Stack>,
 }
 
 impl Stay {
     /// The city the run is in, taken out of it.
     fn take(st: &mut AppState) -> Option<Stay> {
         use std::mem::take;
+        let cards = crate::credentials::run_items(&st.content);
+        let card_stacks = st
+            .character
+            .inventory
+            .iter()
+            .filter(|s| crate::credentials::run_made(&s.item))
+            .cloned()
+            .collect();
+        crate::credentials::purge(&mut st.content, &mut st.character);
         Some(Stay {
             city: st.city.take()?,
             player: st.player.take(),
@@ -98,6 +115,11 @@ impl Stay {
             jobs: take(&mut st.jobs),
             missions: take(&mut st.missions),
             track: st.track.take(),
+            helix: take(&mut st.helix),
+            mail_seen: take(&mut st.mail_seen),
+            mail_pill: st.mail_pill.take(),
+            cards,
+            card_stacks,
         })
     }
 
@@ -130,6 +152,11 @@ impl Stay {
             jobs: Default::default(),
             missions: Default::default(),
             track: None,
+            helix: Default::default(),
+            mail_seen: 0,
+            mail_pill: None,
+            cards: Vec::new(),
+            card_stacks: Vec::new(),
         }
     }
 
@@ -153,6 +180,11 @@ impl Stay {
             jobs,
             missions,
             track,
+            helix,
+            mail_seen,
+            mail_pill,
+            cards,
+            card_stacks,
         } = self;
         if let Some(w) = world.as_mut() {
             w.rebuild(&city, &st.people);
@@ -180,15 +212,29 @@ impl Stay {
         st.jobs = jobs;
         st.missions = missions;
         st.track = track;
+        st.helix = helix;
+        st.mail_seen = mail_seen;
+        st.mail_pill = mail_pill;
+        crate::credentials::put_back(&mut st.content, cards);
+        st.character.inventory.extend(card_stacks);
         st.fx.clear();
+        // the deck's and the MAP's picks were the city you left's
+        st.deck_jobs_open.clear();
+        st.deck_jobs_sel = None;
+        st.deck_map_to = None;
+        st.atlas = Default::default();
         crate::holds::relight(st);
     }
 
-    /// After a run is reopened: the set-aside city's people's places rebuilt.
-    pub fn reopened(&mut self, people: &sim::People) {
+    /// After a run is reopened: the set-aside city's people's places rebuilt, and what
+    /// it holds that this build's content lacks dropped (its lines in `lost`).
+    pub fn reopened(&mut self, people: &sim::People, content: &game::Content) -> Vec<String> {
         if let Some(w) = self.world.as_mut() {
             w.rebuild(&self.city, people);
         }
+        let mut lost = self.ground.forget_unknown(content);
+        lost.extend(self.missions.forget_unknown(content));
+        lost
     }
 }
 
@@ -451,8 +497,10 @@ pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
     if s == home && st.away.is_none() {
         return Err(format!("no way into {name}"));
     }
-    // the hour carries over: the run's clock is the city's you're in
+    // the hour carries over: the run's clock is the city's you're in; and the deck's
+    // own switch and its cooling go where you go
     let (now, minute) = (st.clock_tick(), st.minute_of_day());
+    let (failsafe, cooling) = (st.net.failsafe, st.net.cooling_until);
     let Some(current) = Stay::take(st) else {
         return Err("nowhere to go".into());
     };
@@ -475,6 +523,8 @@ pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
     if let Some(o) = st.outside.as_mut() {
         o.here = (s != home).then_some(s);
     }
+    st.net.failsafe = failsafe;
+    st.net.cooling_until = cooling;
     st.say(format!("into {name}"));
     Ok(())
 }
@@ -666,6 +716,26 @@ mod tests {
     fn coming_home_puts_the_home_city_back() {
         let mut st = home_run();
         crate::missions::begin(&mut st);
+        let flat = st.home.unwrap();
+        let door = crate::track::Source::Spot {
+            place: flat.place(),
+            pos: flat.home.door,
+            radius: 0,
+        };
+        assert!(crate::track::set(&mut st, door).is_ok());
+        let tracked = st.track.as_ref().map(|t| format!("{:?}", t.source));
+        crate::clock::run(
+            &mut st,
+            Some(20 * sim::TICKS_PER_MINUTE),
+            crate::clock::PATHS_PER_FRAME,
+        );
+        let jobs = |st: &AppState| {
+            (
+                st.jobs.list.len(),
+                st.jobs.fixers.keys().copied().collect::<Vec<_>>(),
+            )
+        };
+        let before = jobs(&st);
         let story = format!("{:?}", st.missions);
         let city = st.city.clone();
         let flat = st.home.as_ref().map(|h| h.home.building);
@@ -676,9 +746,123 @@ mod tests {
         enter(&mut st, home).unwrap();
         assert_eq!(st.city, city);
         assert_eq!(format!("{:?}", st.missions), story);
+        assert_eq!(
+            st.track.as_ref().map(|t| format!("{:?}", t.source)),
+            tracked
+        );
+        assert_eq!(jobs(&st), before);
         assert_eq!(st.home.as_ref().map(|h| h.home.building), flat);
         assert!(st.away.is_none() && st.outside.as_ref().unwrap().here.is_none());
         assert!(!away_from_home(&st));
+    }
+
+    #[test]
+    fn a_citys_hosts_cards_and_mail_stay_with_it() {
+        // HELIX's hosts, the keycards to its doors and the mail's marks are the home
+        // city's: none of them in another city, all back as they were at home
+        let mut st = home_run();
+        let flat = st.home.unwrap().home.building;
+        crate::credentials::prepare(&mut st, flat);
+        crate::credentials::move_in(&mut st);
+        crate::helix::hosts::ensure_host(&mut st, crate::helix::shell::HostId::Building(flat));
+        st.mail_seen = 2;
+        st.mail_pill = Some(crate::mail_mark::MailPill { mail: 1, frames: 9 });
+        let cards = |st: &AppState| {
+            st.character
+                .inventory
+                .iter()
+                .filter(|s| crate::credentials::run_made(&s.item))
+                .count()
+        };
+        let (hosts, held, known) = (
+            st.helix.hosts.len(),
+            cards(&st),
+            crate::credentials::run_items(&st.content).len(),
+        );
+        assert!(hosts > 0 && held > 0 && known > 0);
+        let (s, _) = beside_another(&st);
+        enter(&mut st, s).unwrap();
+        assert!(st.helix.hosts.is_empty(), "no host of home's here");
+        assert_eq!(cards(&st), 0, "no card to home's doors here");
+        assert!(crate::credentials::run_items(&st.content).is_empty());
+        assert_eq!((st.mail_seen, st.mail_pill), (0, None));
+        let home = st.outside.as_ref().unwrap().home();
+        enter(&mut st, home).unwrap();
+        assert_eq!(st.helix.hosts.len(), hosts);
+        assert_eq!(cards(&st), held);
+        assert_eq!(crate::credentials::run_items(&st.content).len(), known);
+        assert_eq!(st.mail_seen, 2);
+        assert_eq!(
+            st.mail_pill,
+            Some(crate::mail_mark::MailPill { mail: 1, frames: 9 })
+        );
+    }
+
+    #[test]
+    fn the_deck_keeps_its_failsafe_and_its_cooling_everywhere() {
+        let mut st = home_run();
+        st.net.failsafe = false;
+        st.net.cooling_until = Some(st.net.now(&st) + 60);
+        let cooling = st.net.cooling_until;
+        let (s, _) = beside_another(&st);
+        enter(&mut st, s).unwrap();
+        assert!(!st.net.failsafe, "the deck's own switch");
+        assert_eq!(
+            st.net.cooling_until, cooling,
+            "a dumped deck cools wherever you go"
+        );
+        let home = st.outside.as_ref().unwrap().home();
+        enter(&mut st, home).unwrap();
+        assert!(!st.net.failsafe);
+        assert_eq!(st.net.cooling_until, cooling);
+    }
+
+    #[test]
+    fn the_deck_forgets_the_city_you_left() {
+        // the deck's and the MAP's picks point into the city you were in
+        let mut st = home_run();
+        st.deck_map_to = Some(crate::track::ListingId::Building(citygen::BuildingId(5)));
+        let (s, _) = beside_another(&st);
+        enter(&mut st, s).unwrap();
+        assert!(st.deck_map_to.is_none());
+    }
+
+    #[test]
+    fn stepping_between_overlapping_blocks_keeps_you() {
+        // where two blocks overlap, walking the overworld across them goes into one
+        // and back out, never losing you
+        let mut st = home_run();
+        let o = st.outside.as_ref().unwrap();
+        let blocks = o.others();
+        let pair = blocks.iter().enumerate().find_map(|(i, (a, ab))| {
+            blocks[i + 1..]
+                .iter()
+                .find(|(_, bb)| ab.intersects(*bb))
+                .map(|(b, bb)| (*a, *ab, *b, *bb))
+        });
+        let Some((a, ab, _, bb)) = pair else {
+            panic!("no overlapping blocks in seed 3's world");
+        };
+        // a tile in both, entered from the west outside both
+        let both = ab.iter().find(|p| {
+            bb.contains(*p) && !ab.contains(p.offset(-1, 0)) && !bb.contains(p.offset(-1, 0))
+        });
+        let Some(t) = both else {
+            return;
+        };
+        st.outside.as_mut().unwrap().at = At::Overworld(t.offset(-1, 0));
+        let moved = moves::world_step(&mut st, citygen::Dir::E);
+        let into = st.outside.as_ref().unwrap().here;
+        assert!(
+            matches!(moved, moves::Moved::City(_)) || into.is_none(),
+            "{moved:?}"
+        );
+        assert!(st.city.is_some() && st.player.is_some());
+        let _ = a;
+        // back out and home: the home city comes back
+        let home = st.outside.as_ref().unwrap().home();
+        enter(&mut st, home).unwrap();
+        assert!(st.away.is_none() && st.home.is_some());
     }
 
     #[test]

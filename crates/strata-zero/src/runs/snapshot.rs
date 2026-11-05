@@ -349,7 +349,7 @@ pub fn after_restore(st: &mut AppState, mut lost: Vec<String>) {
         world.rebuild(city, &st.people);
     }
     if let Some(stay) = st.away.as_mut() {
-        stay.reopened(&st.people);
+        lost.extend(stay.reopened(&st.people, &st.content));
     }
     st.home = st.city.as_ref().and_then(crate::home::HomeRig::find);
     // The street's `dark` is the city's, skipped by the save: made again from the
