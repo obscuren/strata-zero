@@ -88,6 +88,8 @@ pub enum Activity {
 pub enum Dest {
     Building(BuildingId),
     Spot(Pos),
+    /// Off the map, by the way in at this cell of its edge (`commute`).
+    Away(Pos),
 }
 
 /// One stretch of a trip: a path, on foot or in a car.
@@ -109,8 +111,13 @@ pub struct Trip {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Whereabouts {
     Inside(BuildingId),
-    At { pos: Pos, activity: Activity },
+    At {
+        pos: Pos,
+        activity: Activity,
+    },
     Travelling(Trip),
+    /// Off the map: home out of town, or out for what the city hasn't got (`commute`).
+    Away,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]

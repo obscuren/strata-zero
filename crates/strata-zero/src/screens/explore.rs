@@ -7035,14 +7035,35 @@ mod tests {
         let mut s = MapScreen::explore(0);
         walking(&mut st, &mut s);
         run_an_hour(&mut st, &mut s);
+        // someone standing on the street a few steps from you, as a walker draws: by night
+        // most of this city's people are off the map (they have no home in it), so one
+        // who's indoors steps out there
+        let (id, at) = {
+            let city = st.city.as_ref().unwrap();
+            let you = st.player.as_ref().unwrap().pos;
+            let world = st.world.as_ref().unwrap();
+            let free = |q: Pos| {
+                q != you && city.walkable(StratumKind::Street, q) && world.person_at(q).is_none()
+            };
+            let at = citygen::Rect::new(you.x - 6, you.y - 6, 13, 13)
+                .iter()
+                .filter(|q| free(*q) && q.neighbors4().any(free))
+                .min_by_key(|q| q.manhattan(you))
+                .expect("street near you");
+            let who = world
+                .people()
+                .iter()
+                .find(|p| p.tint.is_none() && matches!(p.whereabouts, sim::Whereabouts::Inside(_)))
+                .expect("someone indoors");
+            (who.id, at)
+        };
+        st.world.as_mut().unwrap().park(id, at);
         let city = st.city.as_ref().unwrap();
-        let whole = citygen::Rect::new(0, 0, city.size.w as i32, city.size.h as i32);
         let world = st.world.as_ref().unwrap();
-        let walker = world
-            .visible(whole)
-            .into_iter()
-            .find(|m| matches!(m.kind, sim::MoverKind::Walker { .. }))
-            .expect("someone is out");
+        let walker = sim::Mover {
+            pos: at,
+            kind: sim::MoverKind::Walker { id, tint: None },
+        };
         let beside = walker
             .pos
             .neighbors4()

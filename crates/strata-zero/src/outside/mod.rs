@@ -3,6 +3,8 @@
 //! the home city sits on a block of its tiles (until the city grows into the world, the
 //! whole block is the city). See `2026-11-04-overworld-screen-design.md`.
 
+#[cfg(test)]
+mod commuters;
 pub mod ground;
 pub mod here;
 pub mod moves;

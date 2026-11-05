@@ -41,6 +41,9 @@ pub struct Places {
     pub turf: HashMap<BuildingId, Vec<Pos>>,
     /// The street tile beside a building's first door, where muscle stands.
     pub posts: HashMap<BuildingId, Pos>,
+    /// Cells of the map's edge a road crosses, where people come in from off the map
+    /// (`commute::ways_in`).
+    pub ways_in: Vec<Pos>,
     kerb_set: HashSet<Pos>,
 }
 
@@ -175,6 +178,9 @@ impl Places {
             .filter(|(_, t)| !t.is_empty())
             .collect();
 
+        let door_set: HashSet<Pos> = doors.values().flatten().copied().collect();
+        let ways_in = crate::commute::ways_in(city, &door_set);
+
         Places {
             doors,
             kerbs,
@@ -183,6 +189,7 @@ impl Places {
             corners,
             turf,
             posts,
+            ways_in,
             kerb_set,
         }
     }

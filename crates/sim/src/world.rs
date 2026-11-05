@@ -1,6 +1,7 @@
 //! The world and its minute: who leaves, who arrives, who stands where, and what the
 //! player can see and ask.
 
+use crate::commute;
 use crate::content::{DAY, Leisure, People};
 use crate::paths::{drive_path, walk_cost, walk_path};
 use crate::people::{
@@ -415,7 +416,7 @@ impl World {
     pub fn swap(&mut self, id: PersonId, player_from: Pos, player_to: Pos) -> bool {
         let i = id.0 as usize;
         let back = match &self.people[i].whereabouts {
-            Whereabouts::Inside(_) => return false,
+            Whereabouts::Inside(_) | Whereabouts::Away => return false,
             Whereabouts::At { pos, .. } => Some(*pos),
             Whereabouts::Travelling(_) => None,
         };
@@ -459,7 +460,7 @@ impl World {
     fn place_everyone(&mut self, city: &City) {
         let mod_ = self.minute_of_day();
         for i in 0..self.people.len() {
-            let goal = goal_at(&self.people[i].schedule, mod_);
+            let goal = self.due(i, mod_);
             let dest = self.dest_for(city, i, goal);
             self.people[i].goal = goal;
             self.people[i].whereabouts = match dest {
@@ -472,17 +473,63 @@ impl World {
                         Activity::Loitering
                     },
                 },
+                Some(Dest::Away(_)) => Whereabouts::Away,
                 None => self.people[i].whereabouts.clone(),
             };
         }
     }
 
-    /// Where a goal takes a person: their home, their work, their bar, the Strip.
-    fn dest_for(&mut self, city: &City, i: usize, goal: Goal) -> Option<Dest> {
+    /// The way in `i` comes and goes by from off the map; none when no road leaves it.
+    fn way_in(&self, i: usize) -> Option<Pos> {
+        commute::way_in_of(&self.places.ways_in, self.people[i].id)
+    }
+
+    /// Minutes the walk to work from off the map takes `i`, who has no home in the city;
+    /// none for someone with one, a courier, or a map no road leaves.
+    fn walk_in(&self, i: usize) -> Option<u16> {
         let p = &self.people[i];
-        match goal {
+        if p.home.is_some() {
+            return None;
+        }
+        let way = self.way_in(i)?;
+        // the door nearest the way in, as the walk takes it
+        let at = match p.work {
+            Work::Building(b) => *self
+                .places
+                .doors
+                .get(&b)?
+                .iter()
+                .min_by_key(|d| d.manhattan(way))?,
+            Work::Spot(s) => s,
+            Work::Roaming => return None,
+        };
+        Some(commute::walk_minutes(way, at))
+    }
+
+    /// The goal `i` keeps at `minute` of the day: their schedule's, but someone who comes
+    /// in from off the map sets off for work as much earlier as the walk in takes.
+    fn due(&self, i: usize, minute: u16) -> Goal {
+        let schedule = &self.people[i].schedule;
+        let now = goal_at(schedule, minute);
+        if now == Goal::Work {
+            return now;
+        }
+        match self.walk_in(i) {
+            Some(lead) if goal_at(schedule, (minute + lead) % DAY) == Goal::Work => Goal::Work,
+            _ => now,
+        }
+    }
+
+    /// Where a goal takes a person: their home, their work, their bar, the Strip; off the
+    /// map by their way in when that's where it is (a home out of town) or the city has no
+    /// such place.
+    fn dest_for(&mut self, city: &City, i: usize, goal: Goal) -> Option<Dest> {
+        let away = self.way_in(i).map(Dest::Away);
+        let p = &self.people[i];
+        let here = match goal {
             Goal::Home => match p.home {
                 Some(h) => Some(Dest::Building(h)),
+                None if away.is_some() => away,
                 None => match p.work {
                     Work::Spot(s) => Some(Dest::Spot(s)),
                     _ => None,
@@ -500,14 +547,18 @@ impl World {
             Goal::Leisure(Leisure::NoodleBar) => self
                 .nearest_kind(city, i, BuildingKind::NoodleBar)
                 .map(Dest::Building),
-            Goal::Leisure(Leisure::Strip) => {
-                let mut districts: Vec<_> = self.places.beats.keys().copied().collect();
-                districts.sort_by_key(|d| d.index());
-                let d = *districts.get(self.rng.random_range(0..districts.len().max(1)))?;
-                let beats = &self.places.beats[&d];
-                Some(Dest::Spot(beats[self.rng.random_range(0..beats.len())]))
-            }
-        }
+            Goal::Leisure(Leisure::Strip) => self.a_beat(),
+        };
+        here.or(away)
+    }
+
+    /// A spot on the Strip's beats, at random; none without a beat.
+    fn a_beat(&mut self) -> Option<Dest> {
+        let mut districts: Vec<_> = self.places.beats.keys().copied().collect();
+        districts.sort_by_key(|d| d.index());
+        let d = *districts.get(self.rng.random_range(0..districts.len().max(1)))?;
+        let beats = &self.places.beats[&d];
+        Some(Dest::Spot(beats[self.rng.random_range(0..beats.len())]))
     }
 
     fn random_workplace(&mut self, city: &City) -> Option<Dest> {
@@ -535,6 +586,7 @@ impl World {
             Whereabouts::Inside(b) => self.places.doors.get(b).and_then(|d| d.first().copied()),
             Whereabouts::At { pos, .. } => Some(*pos),
             Whereabouts::Travelling(t) => t.legs.last().and_then(|l| l.path.last().copied()),
+            Whereabouts::Away => self.way_in(i),
         }
     }
 
@@ -604,16 +656,19 @@ impl World {
                         .min_by_key(|d| d.manhattan(from))
                         .unwrap_or(&doors[0])
                 }
-                Dest::Spot(s) => s,
+                Dest::Spot(s) | Dest::Away(s) => s,
             };
             if from == to {
                 self.arrive(i, req.dest, req.goal);
                 continue;
             }
             let mut legs: Vec<Leg> = Vec::new();
+            // off the map and back is on foot: the car stays where it's parked
+            let off_the_map = matches!(req.dest, Dest::Away(_))
+                || self.people[i].whereabouts == Whereabouts::Away;
             let car = self.people[i]
                 .car
-                .filter(|c| self.cars[c.0 as usize].parked);
+                .filter(|c| self.cars[c.0 as usize].parked && !off_the_map);
             if let Some(car_id) = car
                 && from.manhattan(to) > DRIVE_FROM
             {
@@ -659,6 +714,7 @@ impl World {
         let p = &mut self.people[i];
         p.whereabouts = match dest {
             Dest::Building(b) => Whereabouts::Inside(b),
+            Dest::Away(_) => Whereabouts::Away,
             Dest::Spot(pos) => Whereabouts::At {
                 pos,
                 activity: if goal == Goal::Work {
@@ -722,7 +778,7 @@ impl World {
             return Some((d.to, None));
         }
         match &self.people[i].whereabouts {
-            Whereabouts::Inside(_) => None,
+            Whereabouts::Inside(_) | Whereabouts::Away => None,
             Whereabouts::At { pos, .. } => {
                 if self.blocker == Some(*pos) {
                     None
@@ -881,7 +937,7 @@ impl World {
             {
                 continue;
             }
-            let goal = goal_at(&self.people[i].schedule, mod_);
+            let goal = self.due(i, mod_);
             if let Some(done) = self.satisfied.get(&PersonId(i as u32)) {
                 if *done == goal {
                     continue;
@@ -1145,6 +1201,7 @@ impl World {
     fn dest_name(city: &City, p: &Person, dest: Dest) -> String {
         match dest {
             Dest::Building(b) => Self::place_name(city, b),
+            Dest::Away(_) => "the edge of town".to_string(),
             Dest::Spot(_) => match p.profession.as_str() {
                 "sex_worker" => "the beat",
                 "fixer" => "the corner",
@@ -1210,6 +1267,7 @@ impl World {
                 "looking for company".to_string()
             }
             (Whereabouts::At { .. }, _) => "hanging around".to_string(),
+            (Whereabouts::Away, _) => "out of town".to_string(),
             (Whereabouts::Travelling(t), _) => match t.goal {
                 Goal::Home => "heading home".to_string(),
                 Goal::Work => match p.work {
@@ -1278,6 +1336,7 @@ impl World {
         };
         let lives = Some(match p.home {
             Some(h) => Self::place_name(city, h),
+            None if self.way_in(id.0 as usize).is_some() => "out of town".to_string(),
             None => "the street".to_string(),
         });
         let works = Some(match p.work {
@@ -1985,6 +2044,7 @@ mod tests {
                         assert!(trip.legs.iter().any(|l| l.path.contains(&m.pos)))
                     }
                     Whereabouts::Inside(_) => panic!("inside people are not drawn"),
+                    Whereabouts::Away => panic!("people off the map are not drawn"),
                 }
                 let there = w.person_at(m.pos).expect("someone stands there");
                 assert!(
@@ -2320,6 +2380,77 @@ mod tests {
         for (a, b) in w.people().iter().zip(back.people()) {
             assert_eq!(a.whereabouts, b.whereabouts, "{}", a.name);
         }
+    }
+
+    #[test]
+    fn a_world_saved_before_anyone_commuted_takes_it_up() {
+        // with no home in the city, as the sim before commuting left them: inside at work
+        // with nowhere to go, or at their spot, and none off the map
+        let c = Generator::run(GenParams {
+            seed: 6,
+            size: SizePreset::Custom { w: 120, h: 60 },
+            districts: 5,
+            ..Default::default()
+        })
+        .unwrap();
+        let people = People::load().unwrap();
+        let mut w = World::seed(&c, &people, &SimParams::default(), 22 * 60, 0);
+        let somewhere = *w.places.doors.keys().min_by_key(|b| b.index()).unwrap();
+        let without: Vec<PersonId> = w
+            .people
+            .iter()
+            .filter(|p| p.home.is_none())
+            .map(|p| p.id)
+            .collect();
+        assert!(without.len() > 100);
+        for &id in &without {
+            let p = &mut w.people[id.0 as usize];
+            p.goal = Goal::Home;
+            p.whereabouts = match p.work {
+                Work::Building(b) => Whereabouts::Inside(b),
+                Work::Spot(pos) => Whereabouts::At {
+                    pos,
+                    activity: Activity::Working,
+                },
+                Work::Roaming => Whereabouts::Inside(somewhere),
+            };
+        }
+        let bytes = rmp_serde::to_vec_named(&w).unwrap();
+        let mut back: World = rmp_serde::from_slice(&bytes).unwrap();
+        back.rebuild(&c, &people);
+        let ways = Places::derive(&c).ways_in;
+        let (mut went, mut came) = (BTreeSet::new(), BTreeSet::new());
+        // to ten the morning after next: the evening out, the morning in
+        let end = back.tick() + 36 * 60 * TICKS_PER_MINUTE;
+        while back.tick() < end {
+            let t = back.tick() + TICKS_PER_MINUTE;
+            back.advance(&c, t);
+            back.path_some(&c, usize::MAX);
+            for &id in &without {
+                match &back.people[id.0 as usize].whereabouts {
+                    Whereabouts::Away => {
+                        went.insert(id);
+                    }
+                    Whereabouts::Travelling(t) if ways.contains(&t.from) => {
+                        came.insert(id);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // nearly all have gone home out of town, and come back in
+        assert!(
+            went.len() * 10 >= without.len() * 9,
+            "{} of {} went",
+            went.len(),
+            without.len()
+        );
+        assert!(
+            came.len() * 2 >= without.len(),
+            "{} of {} came in",
+            came.len(),
+            without.len()
+        );
     }
 
     #[test]

@@ -76,7 +76,12 @@ again from the world. A city or town held but not live whose map is in view runs
 people's day on the clock (`outside::stream::run_neighbours`: the home city set aside,
 those kept, and those built in the background with the people their build seeded), so
 the home city set aside is saved with its people as they've run; nothing about it is
-saved besides.
+saved besides. Someone who works in
+a city with no home in it lives off the map (`sim::Whereabouts::Away`), coming in and
+going out by a road across the map's edge (`sim::commute`; which road is theirs is made
+again from the map, not saved), and so does anyone whose trip has no place in the city
+(`sim::Dest::Away`); a run saved before that has them where the sim left them, and they
+take up the commute at their next change of goal.
 
 Your Net self hands over the same way: walked (or dropped by the Net overworld) onto Net
 cells another city or town owns, that city is the live one and your Net self is in it on

@@ -4832,6 +4832,7 @@ fn streamed_draw_cost() {
     for (what, minute) in [
         ("street, beside the next city", 22 * 60),
         ("street, beside the next city, day", 13 * 60),
+        ("street, beside the next city, morning", 7 * 60 + 20),
     ] {
         let mut beside = sited_run(minute);
         handover::on_foot(&mut beside, at);
@@ -5095,6 +5096,76 @@ fn alive_next_door_shots() {
     for n in 1..=3 {
         play(&mut st, &mut map, 12);
         shot_stack(&format!("alive_trunk_{n}"), &st, &[&map], WIDE);
+    }
+}
+
+/// Every city lives (`2026-11-05-streamed-world-design.md`, "After the first play"): in
+/// seed 3's corporate neighbour, where few who work have a home, at 200x60: the morning,
+/// its people coming in along the road from the north edge and on to work, three game
+/// minutes apart; midday in the middle of the city, a few moments apart; the evening, its
+/// people walking back out that road, three minutes apart.
+#[test]
+#[ignore]
+fn commuters_shots() {
+    use crate::outside::stream::tests::handover;
+    if std::env::var("SHOT_DIR").is_err() {
+        return;
+    }
+    const WIDE: (u16, u16) = (200, 60);
+    let corporate = crate::outside::Settlement {
+        city: 1,
+        town: None,
+    };
+    let play = |st: &mut AppState, map: &mut MapScreen, frames: u64, draw: bool| {
+        let mut t = Term::new(TestBackend::new(WIDE.0, WIDE.1)).unwrap();
+        for _ in 0..frames {
+            st.tick += 1;
+            map.update(st, &[]);
+            if draw {
+                t.draw(|f| map.draw(st, f)).unwrap();
+            }
+        }
+    };
+    // in the corporate city at `minute`, on its street at the cell nearest `near`
+    let inside = |minute: u16, near: fn(&citygen::City) -> Pos| {
+        let mut st = sited_run(minute);
+        crate::outside::enter(&mut st, corporate).unwrap();
+        let at = {
+            let city = st.city.as_ref().unwrap();
+            let want = near(city);
+            city.size
+                .rect()
+                .iter()
+                .filter(|p| city.walkable(StratumKind::Street, *p))
+                .min_by_key(|p| p.manhattan(want))
+                .unwrap()
+        };
+        handover::on_foot(&mut st, at);
+        let map = map_on_you(&mut st, WIDE);
+        (st, map)
+    };
+    // by the road in from the north edge, a little way in
+    let by_the_road = |c: &citygen::City| Pos::new(c.size.w as i32 / 2 - 4, 14);
+    let middle = |c: &citygen::City| Pos::new(c.size.w as i32 / 2, c.size.h as i32 / 2);
+    let minutes = |n: u64| n * sim::TICKS_PER_MINUTE;
+    for (name, minute, near, on, apart) in [
+        (
+            "commute_morning",
+            7 * 60,
+            by_the_road as fn(&citygen::City) -> Pos,
+            20,
+            minutes(3),
+        ),
+        ("commute_midday", 12 * 60 + 30, middle, 2, 45),
+        ("commute_evening", 18 * 60, by_the_road, 20, minutes(3)),
+    ] {
+        let (mut st, mut map) = inside(minute, near);
+        play(&mut st, &mut map, minutes(on), false);
+        for n in 1..=3 {
+            play(&mut st, &mut map, apart - 12, false);
+            play(&mut st, &mut map, 12, true);
+            shot_stack(&format!("{name}_{n}"), &st, &[&map], WIDE);
+        }
     }
 }
 

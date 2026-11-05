@@ -996,15 +996,30 @@ mod tests {
         let (ad, at) = node_cyber(&st, b, NodeKind::AdBoard);
         st.player.as_mut().unwrap().pos = Pos::new(at.x, at.y - 1);
         crack_to_landing(&mut st, HackTarget::Node(ad));
-        // An hour on, people are about.
+        // On, until someone on foot is within reach of the ads.
         {
+            let ads: Vec<Pos> = ad_tiles(&st, b)
+                .into_iter()
+                .filter(|a| in_front(&st, *a).is_some())
+                .collect();
             let city = st.city.as_ref().unwrap();
             let w = st.world.as_mut().unwrap();
-            for _ in 0..60 {
+            let about = |w: &sim::World| {
+                w.people().iter().any(|p| {
+                    w.spot_of(p.id).is_none()
+                        && w.pos_of(p.id)
+                            .is_some_and(|at| ads.iter().any(|a| a.chebyshev(at) <= LURE_REACH))
+                })
+            };
+            for _ in 0..24 * 60 {
+                if about(w) {
+                    break;
+                }
                 let t = w.tick() + sim::TICKS_PER_MINUTE;
                 w.advance(city, t);
                 w.path_some(city, usize::MAX);
             }
+            assert!(about(w), "someone passes by in a day");
         }
         st.net.holds.iter_mut().for_each(|h| h.until = u64::MAX);
         let before = st.world.as_ref().unwrap().pending();
