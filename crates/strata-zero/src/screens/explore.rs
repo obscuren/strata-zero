@@ -2590,7 +2590,30 @@ impl MapScreen {
         Some(ScreenCmd::Stay)
     }
 
+    /// A step on the street or the Net off the city's map before the world out there
+    /// was needed: the world made (from the city, as `outside::ensure` makes it, as
+    /// leaving made it) and the ground there built, so the step can go on.
+    fn world_for(&self, st: &mut AppState, dir: Dir) {
+        let Some(p) = st.player.as_ref() else {
+            return;
+        };
+        let out = matches!(
+            p.place,
+            Place::Stratum(StratumKind::Street | StratumKind::Net)
+        ) && st
+            .city
+            .as_ref()
+            .is_some_and(|c| !c.is_lot() && !c.size.contains(p.pos.step(dir)));
+        if out && st.outside.is_none() {
+            crate::outside::ensure(st);
+            self.tend(st);
+        }
+    }
+
     fn handle_walk_inner(&mut self, st: &mut AppState, k: &KeyEvent) -> Option<ScreenCmd> {
+        if let Some(dir) = dir_for(k.code) {
+            self.world_for(st, dir);
+        }
         let jacked = st.player.as_ref().is_some_and(|p| p.jacked_in());
         if k.code == KeyCode::Char(' ') {
             // An aim on another tile: space confirms the walk, as enter does.
@@ -14484,6 +14507,24 @@ mod tests {
             // and back in
             s.update(&mut st, &[key(dir_key(d.opposite()))]);
             assert_eq!(you(&st), e);
+        }
+
+        #[test]
+        fn the_world_is_made_the_first_time_you_walk_out() {
+            // a new game has no world out there until it's needed, as leaving needed it
+            let (e, d) = edge_out(&home_run(), 1);
+            let mut st = AppState::new();
+            st.enter_city(crate::outside::tests::sited().clone());
+            st.player = Some(Player::at(Place::Stratum(StratumKind::Street), e));
+            let mut s = MapScreen::walking(&mut st);
+            s.update(&mut st, &[]);
+            assert!(st.outside.is_none());
+            assert!(matches!(
+                s.update(&mut st, &[key(dir_key(d))]),
+                ScreenCmd::Stay
+            ));
+            assert!(st.outside.is_some(), "the world made");
+            assert_eq!(you(&st), e.step(d), "and the ground there walked onto");
         }
 
         #[test]
