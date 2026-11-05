@@ -54,6 +54,14 @@ pub const KEYS: &[(&str, &str)] = &[
     ("esc q", "pause menu"),
 ];
 
+/// The keys while you look up at the Net over the world.
+pub const NET_UP_KEYS: &[(&str, &str)] = &[
+    ("enter esc W", "back down to where you were on the Net"),
+    ("J", "jack out onto your body"),
+    ("hjkl yubn ↑↓←→", "nothing: the Net out there is to look at"),
+    ("?", "this help"),
+];
+
 /// The overworld and the open ground, as a level of play.
 pub struct OutsideScreen {
     /// The ground round you while you're on it.
@@ -492,6 +500,8 @@ impl Screen for OutsideScreen {
             crate::app::draw_too_small(f);
             return;
         }
+        // the whole frame is this screen's, over whatever it was pushed on
+        Widget::render(ratatui::widgets::Clear, area, f.buffer_mut());
         let r = layout(area, false);
         self.map.set((r.map.width, r.map.height));
         let buf = f.buffer_mut();
@@ -621,7 +631,11 @@ impl Screen for OutsideScreen {
             .render(r.footer[2], buf);
         }
         if self.help {
-            crate::screens::help::draw_keys(f, "KEYS · OUTSIDE", KEYS);
+            if self.net_up.is_some() {
+                crate::screens::help::draw_keys(f, "KEYS · THE NET OVERWORLD", NET_UP_KEYS);
+            } else {
+                crate::screens::help::draw_keys(f, "KEYS · OUTSIDE", KEYS);
+            }
         }
     }
 }
@@ -1611,6 +1625,21 @@ mod tests {
     }
 
     #[test]
+    fn the_net_overworlds_help_is_its_own() {
+        let (mut st, mut s) = by_a_pump();
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        s.update(&mut st, &[key(KeyCode::Char('W')), key(KeyCode::Char('?'))]);
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| s.draw(&st, f)).unwrap();
+        let text = buffer_text(term.backend().buffer());
+        assert!(text.contains("THE NET OVERWORLD"), "{text}");
+        assert!(
+            !text.contains("save game"),
+            "the outside's keys aren't these"
+        );
+    }
+
+    #[test]
     fn j_from_the_net_overworld_jacks_out() {
         let (mut st, mut s) = by_a_pump();
         s.update(&mut st, &[key(KeyCode::Char(' '))]);
@@ -1639,10 +1668,19 @@ mod tests {
         let ScreenCmd::Push { to: mut up, .. } = cmd else {
             panic!("W on the city's Net looks up");
         };
+        // drawn over the city's map, as the stack draws it: nothing of the map shows
         let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
-        term.draw(|f| up.draw(&st, f)).unwrap();
+        term.draw(|f| {
+            map.draw(&st, f);
+            up.draw(&st, f);
+        })
+        .unwrap();
         let text = buffer_text(term.backend().buffer());
         assert!(text.contains("the Net overworld"), "{text}");
+        assert!(
+            !text.contains("[F1]"),
+            "the map's tabs show through: {text}"
+        );
         assert!(matches!(
             up.update(&mut st, &[key(KeyCode::Esc)]),
             ScreenCmd::Pop { .. }
