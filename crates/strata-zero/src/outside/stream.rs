@@ -119,6 +119,9 @@ struct Builds {
     people: BTreeMap<Settlement, sim::World>,
     /// Those that wouldn't build: not tried again this session.
     failed: BTreeSet<Settlement>,
+    /// Those that wouldn't build when walked into either: not walked into again this
+    /// session.
+    refused: BTreeSet<Settlement>,
     /// Builds started this session.
     started: usize,
 }
@@ -274,6 +277,17 @@ impl Stream {
     /// with.
     pub fn take_people(&mut self, s: Settlement) -> Option<sim::World> {
         self.builds.people.remove(&s)
+    }
+
+    /// Settlement `s` wouldn't build when walked into: it isn't tried again this
+    /// session, and its ground is walked as the open ground's.
+    pub fn refuse(&mut self, s: Settlement) {
+        self.builds.refused.insert(s);
+    }
+
+    /// Whether settlement `s` wouldn't build when walked into.
+    pub fn refused(&self, s: Settlement) -> bool {
+        self.builds.refused.contains(&s)
     }
 
     /// Whether settlement `s` is building.
@@ -588,6 +602,17 @@ pub fn live_owns(st: &AppState, p: Pos) -> bool {
     o.owner(Pos::new(at.x.div_euclid(TILE), at.y.div_euclid(TILE))) == Some(o.here())
 }
 
+/// The city or town that owns the overworld tile the live city's cell `p` lies in, on
+/// its map or past it: none on the open ground, and with no world out there.
+pub fn owner_of(st: &AppState, p: Pos) -> Option<Settlement> {
+    let (city, o) = (st.city.as_ref()?, st.outside.as_ref()?);
+    if city.is_lot() {
+        return None;
+    }
+    let at = o.origin(city).offset(p.x, p.y);
+    o.owner(Pos::new(at.x.div_euclid(TILE), at.y.div_euclid(TILE)))
+}
+
 /// The stream built under `area` (cells of the live city's frame) wherever the live
 /// city doesn't own a cell of it: the open ground, and every settlement's but the
 /// live one's, built or not; and every city and town but the live one whose map comes
@@ -745,6 +770,47 @@ pub fn path_within(
         cost(outer(a), outer(b))
     })?;
     Some(path.into_iter().map(outer).collect())
+}
+
+/// On foot on the street, on a cell another city or town owns: the run handed over to
+/// it in place (`enter`), you on the same world cell in its frame, its street
+/// remembering what the world's record has seen of it, your bots beside you, and your
+/// sight looked again. The shift from the old frame's cells to the new's (the old
+/// origin less the new), for the screen to move what it holds by; none when nothing was
+/// handed over (jacked in, on the live city's own cells or the open ground, or a city
+/// that wouldn't build).
+pub fn hand_over(st: &mut AppState) -> Option<Pos> {
+    let (s, was) = {
+        let (Some(city), Some(o), Some(p)) =
+            (st.city.as_ref(), st.outside.as_ref(), st.player.as_ref())
+        else {
+            return None;
+        };
+        if !p.place.is_street() || p.jacked_in() || city.is_lot() || o.world.is_none() {
+            return None;
+        }
+        let origin = o.origin(city);
+        let at = origin.offset(p.pos.x, p.pos.y);
+        let s = o.owner(Pos::new(at.x.div_euclid(TILE), at.y.div_euclid(TILE)))?;
+        // the home city comes back only from where it's set aside
+        let gone = s == o.home() && st.away.is_none();
+        if s == o.here() || o.stream.refused(s) || gone {
+            return None;
+        }
+        (s, origin)
+    };
+    if let Err(why) = super::enter(st, s) {
+        st.warn(why);
+        return None;
+    }
+    let now = st
+        .city
+        .as_ref()
+        .zip(st.outside.as_ref())
+        .map(|(city, o)| o.origin(city))?;
+    super::footing(st);
+    crate::screens::explore::look_round(st);
+    Some(Pos::new(was.x - now.x, was.y - now.y))
 }
 
 /// Marks what was in sight past the live city's edge at the last look as seen, in the
@@ -1848,6 +1914,271 @@ pub(crate) mod tests {
             assert!(!copy.building(s) && copy.started() == 0);
             finish(&mut st);
             assert!(o(&st).built.contains_key(&s));
+        }
+    }
+
+    /// Walking onto a cell another city or town owns: the run handed over to it in
+    /// place.
+    pub(crate) mod handover {
+        use super::*;
+        use crate::app::AppState;
+        use crate::outside::tests::home_run;
+        use crate::render::Visibility;
+        use citygen::overworld::detail;
+        use citygen::{Dir, Place};
+
+        fn o(st: &AppState) -> &Outside {
+            st.outside.as_ref().unwrap()
+        }
+
+        fn tile_of(c: Pos) -> Pos {
+            Pos::new(c.x.div_euclid(TILE), c.y.div_euclid(TILE))
+        }
+
+        /// The world cell of the live city's cell `p`.
+        pub(crate) fn world_of(st: &AppState, p: Pos) -> Pos {
+            o(st).origin(st.city.as_ref().unwrap()).offset(p.x, p.y)
+        }
+
+        /// The live city's cell at world cell `c`.
+        pub(crate) fn local(st: &AppState, c: Pos) -> Pos {
+            let at = o(st).origin(st.city.as_ref().unwrap());
+            Pos::new(c.x - at.x, c.y - at.y)
+        }
+
+        /// A city of the world held beside the live one (built as the game builds it),
+        /// a cell of the open ground beside its map, and the step from there onto a
+        /// cell it owns that its street lets you onto: the city, the ground cell (in the
+        /// live city's frame) and the step.
+        pub(crate) fn beside_a_city(st: &mut AppState) -> (Settlement, Pos, Dir) {
+            let (s, city, x, d) = {
+                let o = o(st);
+                let w = o.world();
+                let here = o.here();
+                settlements()
+                    .iter()
+                    .filter(|(s, _)| s.town.is_none() && *s != here && *s != o.home())
+                    .find_map(|(s, city)| {
+                        let origin = o.origin(city);
+                        let (cw, ch) = (city.size.w as i32, city.size.h as i32);
+                        // the edge cells of its map, each with the step onto it from
+                        // outside
+                        (0..ch)
+                            .flat_map(|y| [(Pos::new(0, y), Dir::E), (Pos::new(cw - 1, y), Dir::W)])
+                            .chain((0..cw).flat_map(|x| {
+                                [(Pos::new(x, 0), Dir::S), (Pos::new(x, ch - 1), Dir::N)]
+                            }))
+                            .find_map(|(q, d)| {
+                                let y = origin.offset(q.x, q.y);
+                                let x = y.step(d.opposite());
+                                let open = w.tile(tile_of(x)).is_some()
+                                    && detail::region(w, x.x, x.y, 1, 1)[Pos::new(0, 0)]
+                                        .is_walkable();
+                                (o.owner(tile_of(y)) == Some(*s)
+                                    && o.owner(tile_of(x)).is_none()
+                                    && city.walkable(StratumKind::Street, q)
+                                    && open)
+                                    .then_some((*s, city.clone(), x, d))
+                            })
+                    })
+                    .expect("a city with open ground beside its map")
+            };
+            st.outside.as_mut().unwrap().built.insert(s, city);
+            (s, local(st, x), d)
+        }
+
+        /// Settlement `s` held, built as the game builds it.
+        pub(crate) fn hold(st: &mut AppState, s: Settlement) {
+            let city = settlements()
+                .iter()
+                .find(|(t, _)| *t == s)
+                .unwrap()
+                .1
+                .clone();
+            st.outside.as_mut().unwrap().built.insert(s, city);
+        }
+
+        /// You on foot on the live city's street at `p`.
+        pub(crate) fn on_foot(st: &mut AppState, p: Pos) {
+            let pl = st.player.as_mut().unwrap();
+            pl.place = Place::Stratum(StratumKind::Street);
+            pl.pos = p;
+            pl.body = None;
+        }
+
+        /// The live city's street cells you remember (in sight or not), as world cells.
+        fn remembered_street(st: &AppState) -> Vec<Pos> {
+            let p = st.player.as_ref().unwrap();
+            p.vis_at(Place::Stratum(StratumKind::Street))
+                .map(|g| {
+                    g.iter()
+                        .filter(|(_, v)| **v != Visibility::Unseen)
+                        .map(|(q, _)| world_of(st, q))
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+
+        #[test]
+        fn a_cell_another_city_owns_hands_over_on_the_same_cell() {
+            let mut st = home_run();
+            let (s, x, d) = beside_a_city(&mut st);
+            on_foot(&mut st, x);
+            assert_eq!(hand_over(&mut st), None, "the open ground is nobody's");
+            let y = x.step(d);
+            let at = world_of(&st, y);
+            let before = o(&st).origin(st.city.as_ref().unwrap());
+            on_foot(&mut st, y);
+            let shift = hand_over(&mut st).expect("handed over");
+            assert_eq!(o(&st).here(), s);
+            let after = o(&st).origin(st.city.as_ref().unwrap());
+            assert_eq!(shift, Pos::new(before.x - after.x, before.y - after.y));
+            let p = st.player.as_ref().unwrap();
+            assert_eq!(world_of(&st, p.pos), at, "the same world cell");
+            assert_eq!(p.pos, y.offset(shift.x, shift.y));
+            assert!(live_owns(&st, p.pos), "on its own cells");
+            assert!(
+                st.log
+                    .iter()
+                    .any(|e| e.text == format!("into {}", o(&st).name(s)))
+            );
+            assert_eq!(hand_over(&mut st), None, "once is enough");
+        }
+
+        #[test]
+        fn nothing_hands_over_jacked_in() {
+            let mut st = home_run();
+            let (_, x, d) = beside_a_city(&mut st);
+            on_foot(&mut st, x);
+            let p = st.player.as_mut().unwrap();
+            p.body = Some((Place::Stratum(StratumKind::Street), x));
+            p.place = Place::Stratum(StratumKind::Net);
+            p.pos = x.step(d);
+            let here = o(&st).here();
+            assert_eq!(hand_over(&mut st), None);
+            assert_eq!(o(&st).here(), here);
+        }
+
+        #[test]
+        fn walking_home_hands_back() {
+            let mut st = home_run();
+            crate::missions::begin(&mut st);
+            let story = format!("{:?}", st.missions);
+            let spawn = st.player.as_ref().unwrap().pos;
+            crate::screens::explore::look_round(&mut st);
+            let known = remembered_street(&st);
+            assert!(!known.is_empty());
+            let home_cell = world_of(&st, spawn);
+            let (s, x, d) = beside_a_city(&mut st);
+            on_foot(&mut st, x.step(d));
+            hand_over(&mut st).expect("into the next city");
+            assert_eq!(o(&st).here(), s);
+            assert!(st.missions.runs.is_empty(), "the story waits at home");
+            // back onto a cell of home's own, from wherever
+            let back = local(&st, home_cell);
+            on_foot(&mut st, back);
+            hand_over(&mut st).expect("home again");
+            assert_eq!(o(&st).here(), o(&st).home());
+            assert!(st.away.is_none() && st.home.is_some());
+            assert_eq!(format!("{:?}", st.missions), story);
+            let p = st.player.as_ref().unwrap();
+            assert_eq!(world_of(&st, p.pos), home_cell);
+            let now = remembered_street(&st);
+            let lost: Vec<_> = known.iter().filter(|c| !now.contains(c)).collect();
+            assert!(lost.is_empty(), "home's streets forgotten: {lost:?}");
+        }
+
+        #[test]
+        fn your_bots_come_into_the_next_city() {
+            let mut st = home_run();
+            st.character = game::Character::debug_runner(&st.content);
+            let (s, x, d) = beside_a_city(&mut st);
+            on_foot(&mut st, x);
+            crate::screens::explore::look_round(&mut st);
+            crate::bots::sync(&mut st);
+            let out = |st: &AppState| {
+                st.bots
+                    .iter()
+                    .map(|b| (b.dock, b.item.clone(), b.pos.map(|p| world_of(st, p))))
+                    .collect::<Vec<_>>()
+            };
+            let before = out(&st);
+            assert!(
+                !before.is_empty() && before.iter().all(|b| b.2.is_some()),
+                "a bot out beside you"
+            );
+            on_foot(&mut st, x.step(d));
+            hand_over(&mut st).expect("handed over");
+            assert_eq!(o(&st).here(), s);
+            assert_eq!(out(&st), before, "where they were, in the new city's frame");
+            assert!(
+                st.away.as_ref().unwrap().bots.is_empty(),
+                "none left behind at home"
+            );
+        }
+
+        #[test]
+        fn what_a_city_saw_of_its_town_is_remembered_in_the_town() {
+            // a town's cells inside its city's map, seen while in the city, are kept in
+            // the city's memory: walking into the town, it remembers them
+            let mut st = home_run();
+            let (c, town) = super::beyond::city_with_a_town(&st);
+            crate::outside::enter(&mut st, c).unwrap();
+            hold(&mut st, town);
+            // a street cell of the city's beside one of the town's
+            let (a, b) = {
+                let city = st.city.as_ref().unwrap();
+                let bey = Beyond::of(&st).unwrap();
+                let map =
+                    crate::render::map::MapRef::stratum_of(city, StratumKind::Street).beyond(&bey);
+                Rect::new(0, 0, city.size.w as i32, city.size.h as i32)
+                    .iter()
+                    .filter(|p| bey.live_owns(*p) && city.walkable(StratumKind::Street, *p))
+                    .find_map(|p| {
+                        Dir::CARDINAL
+                            .into_iter()
+                            .map(|d| p.step(d))
+                            .find(|q| {
+                                city.size.contains(*q)
+                                    && o(&st).owner(tile_of(world_of(&st, *q))) == Some(town)
+                                    && map.walkable(*q)
+                            })
+                            .map(|q| (p, q))
+                    })
+                    .expect("the city's street beside the town's")
+            };
+            on_foot(&mut st, a);
+            crate::screens::explore::look_round(&mut st);
+            let theirs: Vec<Pos> = remembered_street(&st)
+                .into_iter()
+                .filter(|c| o(&st).owner(tile_of(*c)) == Some(town))
+                .collect();
+            assert!(!theirs.is_empty(), "the town's cells seen from the city");
+            on_foot(&mut st, b);
+            hand_over(&mut st).expect("into the town");
+            assert_eq!(o(&st).here(), town);
+            let now = remembered_street(&st);
+            let lost: Vec<_> = theirs.iter().filter(|c| !now.contains(c)).collect();
+            assert!(lost.is_empty(), "forgotten in the town: {lost:?}");
+        }
+
+        #[test]
+        fn a_run_saved_right_after_a_handover_reopens_there() {
+            let mut st = home_run();
+            let (s, x, d) = beside_a_city(&mut st);
+            on_foot(&mut st, x.step(d));
+            hand_over(&mut st).expect("handed over");
+            let (seed, at) = (
+                st.city.as_ref().unwrap().seed,
+                world_of(&st, st.player.as_ref().unwrap().pos),
+            );
+            let back = crate::outside::tests::reopen(st, "handed-over");
+            assert_eq!(o(&back).here(), s);
+            assert_eq!(back.city.as_ref().unwrap().seed, seed);
+            assert!(back.away.is_some(), "home set aside");
+            let p = back.player.as_ref().unwrap();
+            assert_eq!(p.place, Place::Stratum(StratumKind::Street));
+            assert_eq!(world_of(&back, p.pos), at, "at your cell");
         }
     }
 }

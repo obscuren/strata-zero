@@ -170,6 +170,46 @@ pub fn remembered(o: &Outside, p: Pos) -> bool {
     o.seen.get(&chunk).is_some_and(|m| m & (1 << bit) != 0)
 }
 
+/// Marks as seen every cell of a map whose `(0, 0)` is world-wide cell `origin` that
+/// `vis` says was seen (in sight, or remembered).
+pub fn remember_map(o: &mut Outside, origin: Pos, vis: &Grid<crate::render::Visibility>) {
+    // a chunk's bits gathered first: a map's worth of cells is a few hundred chunks
+    let mut masks: std::collections::BTreeMap<Pos, u64> = Default::default();
+    for (p, v) in vis.iter() {
+        if *v != crate::render::Visibility::Unseen {
+            let (chunk, bit) = cell_bit(origin.offset(p.x, p.y));
+            *masks.entry(chunk).or_insert(0) |= 1 << bit;
+        }
+    }
+    for (chunk, mask) in masks {
+        *o.seen.entry(chunk).or_insert(0) |= mask;
+    }
+}
+
+/// The world-wide cells of `area` that have been seen.
+pub fn seen_in(o: &Outside, area: Rect) -> Vec<Pos> {
+    if area.w <= 0 || area.h <= 0 {
+        return Vec::new();
+    }
+    let (lo, _) = cell_bit(Pos::new(area.x, area.y));
+    let (hi, _) = cell_bit(Pos::new(area.right() - 1, area.bottom() - 1));
+    let mut out = Vec::new();
+    // chunks are kept column by column (`Pos` orders by x, then y)
+    for cx in lo.x..=hi.x {
+        for (chunk, mask) in o.seen.range(Pos::new(cx, lo.y)..=Pos::new(cx, hi.y)) {
+            for bit in 0..(CHUNK * CHUNK) {
+                if mask & (1 << bit) != 0 {
+                    let p = Pos::new(CHUNK * chunk.x + bit % CHUNK, CHUNK * chunk.y + bit / CHUNK);
+                    if area.contains(p) {
+                        out.push(p);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// What you've seen is kept in chunks of 8×8 cells, a bit a cell: fixed, not the
 /// overworld tile's size, so the tile's size can change without the saves changing.
 const CHUNK: i32 = 8;

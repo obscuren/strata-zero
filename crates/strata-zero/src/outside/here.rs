@@ -21,6 +21,15 @@ pub fn tile(st: &AppState) -> Option<Pos> {
     })
 }
 
+/// The city or town whose tile `t` is: its owner, not whichever map covers it (a
+/// town's own tiles inside its city's block are the town's).
+fn owner_at(st: &AppState, t: Pos) -> Option<super::Settlement> {
+    st.outside
+        .as_ref()?
+        .owner(t)
+        .or_else(|| super::settlement_at(st, t))
+}
+
 /// The place word for where you stand.
 fn where_label(st: &AppState) -> &'static str {
     match st.outside.as_ref().map(|o| o.at) {
@@ -34,7 +43,7 @@ fn place_and_road(st: &AppState) -> Option<String> {
     let (o, t) = (st.outside.as_ref()?, tile(st)?);
     let w = o.world();
     let tile = w.tile(t)?;
-    let place = match (super::settlement_at(st, t), tile.urban) {
+    let place = match (owner_at(st, t), tile.urban) {
         (Some(s), _) => o.name(s),
         (_, Some(u)) => w
             .cities
@@ -99,7 +108,7 @@ fn net_over(st: &AppState) -> Option<String> {
     let w = o.world();
     let over = match (
         w.routes.iter().find(|r| r.path.contains(&t)),
-        super::settlement_at(st, t),
+        owner_at(st, t),
     ) {
         (Some(r), _) => format!("{} trunk", r.name),
         (None, Some(s)) => o.name(s),
@@ -270,5 +279,40 @@ mod tests {
                 .any(|l| l.contains(&home) && l.contains("here")),
             "{lines:?}"
         );
+    }
+
+    #[test]
+    fn here_names_the_town_whose_tile_it_is() {
+        // a town's own tiles inside its city's map, the city live: on the overworld and
+        // jacked in over them, HERE names the town, not the city whose map it is
+        use crate::outside::stream::tests::beyond::city_with_a_town;
+        use crate::outside::stream::tests::handover::{hold, local};
+        let mut st = crate::outside::tests::home_run();
+        let (c, town) = city_with_a_town(&st);
+        crate::outside::enter(&mut st, c).unwrap();
+        hold(&mut st, town);
+        let (t, name) = {
+            let o = st.outside.as_ref().unwrap();
+            let city = st.city.as_ref().unwrap();
+            let routes = &o.world().routes;
+            let t = o
+                .block(city)
+                .iter()
+                .find(|t| o.owner(*t) == Some(town) && !routes.iter().any(|r| r.path.contains(t)))
+                .expect("a tile of the town's off the roads");
+            (t, o.name(town))
+        };
+        st.outside.as_mut().unwrap().at = At::Overworld(t);
+        assert_eq!(
+            place_and_road(&st).unwrap().split(" · ").next(),
+            Some(name.as_str())
+        );
+        st.outside.as_mut().unwrap().at = At::City;
+        let cell = local(&st, Pos::new(TILE * t.x + TILE / 2, TILE * t.y + TILE / 2));
+        let p = st.player.as_mut().unwrap();
+        p.body = Some((p.place, p.pos));
+        p.place = citygen::Place::Stratum(citygen::StratumKind::Net);
+        p.pos = cell;
+        assert_eq!(net_over(&st).unwrap(), format!("the Net · {name}"));
     }
 }

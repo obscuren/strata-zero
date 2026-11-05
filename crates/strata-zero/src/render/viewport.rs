@@ -27,6 +27,15 @@ impl Camera {
         self.y = p.y as f32;
     }
 
+    /// Moves with the map's frame: where it is and where it's going, `d` cells on, so
+    /// nothing on screen moves.
+    pub fn shift(&mut self, d: Pos) {
+        self.x += d.x as f32;
+        self.y += d.y as f32;
+        self.tx += d.x;
+        self.ty += d.y;
+    }
+
     /// Lands on the target at once: no easing across a map change.
     pub fn settle(&mut self) {
         self.x = self.tx as f32;

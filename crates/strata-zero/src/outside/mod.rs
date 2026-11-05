@@ -31,8 +31,10 @@ pub enum At {
 pub struct Outside {
     pub params: WorldParams,
     pub at: At,
-    /// What you have seen of the open ground: per chunk of 8×8 detail cells (not per
-    /// overworld tile, whose size may change), a bit a cell (`y * 8 + x`).
+    /// What you have seen of the world off the live city's map (the open ground, and
+    /// each city's street as you left it, remembered again as you walk in): per chunk of
+    /// 8×8 detail cells (not per overworld tile, whose size may change), a bit a cell
+    /// (`y * 8 + x`).
     pub seen: BTreeMap<Pos, u64>,
     /// The overworld, made from `params`; rebuilt on load (`after_restore`).
     #[serde(skip)]
@@ -355,7 +357,7 @@ impl Outside {
     }
 
     /// Where you stand in the city coming in on block tile `tile`: the outdoor street
-    /// cell nearest the tile's middle.
+    /// cell of its own nearest the tile's middle.
     pub fn street_of(&self, city: &City, tile: Pos) -> Pos {
         let b = self.block(city);
         street_near(
@@ -364,7 +366,25 @@ impl Outside {
                 TILE * (tile.x - b.x) + TILE / 2,
                 TILE * (tile.y - b.y) + TILE / 2,
             ),
+            |p| self.owns(city, p),
         )
+    }
+
+    /// The city or town `city` is: the one its site names, the home city for one from
+    /// before the world.
+    pub fn settlement_of(&self, city: &City) -> Settlement {
+        match &city.params.site {
+            Some(site) => Settlement {
+                city: site.city,
+                town: site.town,
+            },
+            None => self.home(),
+        }
+    }
+
+    /// Whether `city` owns its cell `p`: the overworld tile it lies in is its own.
+    pub fn owns(&self, city: &City, p: Pos) -> bool {
+        self.owner(self.tile_of(city, p)) == Some(self.settlement_of(city))
     }
 
     /// The home city: the world's.
@@ -425,15 +445,18 @@ impl Outside {
     }
 }
 
-/// The outdoor street cell of `city` nearest `cell` (clamped into the city).
-fn street_near(city: &City, cell: Pos) -> Pos {
+/// The outdoor street cell of `city` nearest `cell` (clamped into the city) of those
+/// `own` keeps (the cells the city owns), else of any.
+fn street_near(city: &City, cell: Pos, own: impl Fn(Pos) -> bool) -> Pos {
     let (cw, ch) = (city.size.w as i32, city.size.h as i32);
     let from = Pos::new(cell.x.clamp(0, cw - 1), cell.y.clamp(0, ch - 1));
-    nearest(from, cw.max(ch), |p| {
+    let open = |p: Pos| {
         city.tile(StratumKind::Street, p)
             .is_some_and(|t| t.is_walkable() && t.building.is_none())
-    })
-    .unwrap_or(from)
+    };
+    nearest(from, cw.max(ch), |p| open(p) && own(p))
+        .or_else(|| nearest(from, cw.max(ch), open))
+        .unwrap_or(from)
 }
 
 /// A run's world for seed `seed`: the default world, its size kept in tiles rather than
@@ -592,6 +615,10 @@ pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
         return Ok(());
     }
     let name = o.name(s);
+    // one that wouldn't build when walked into isn't tried again this session
+    if o.stream.refused(s) {
+        return Err(format!("no way into {name}"));
+    }
     // one building in the background is waited for: no slower than building it here
     o.stream.wait(s, &mut o.built);
     let next = if s == home {
@@ -603,17 +630,25 @@ pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
         let built = build_params(o, s, &st.params).and_then(|p| citygen::Generator::run(p).ok());
         match built {
             Some(c) => Some(c),
-            None => return Err(format!("no way into {name}")),
+            None => {
+                o.stream.refuse(s);
+                return Err(format!("no way into {name}"));
+            }
         }
     };
-    if s == home && st.away.is_none() {
+    if (s == home && st.away.is_none()) || st.city.is_none() {
         return Err(format!("no way into {name}"));
     }
     // the hour carries over: the run's clock is the city's you're in; and the deck's
     // own switch and its cooling go where you go
     let (now, minute) = (st.clock_tick(), st.minute_of_day());
     let (failsafe, cooling) = (st.net.failsafe, st.net.cooling_until);
+    // where you stand in the world, and what you've seen of the city you leave, kept as
+    // its frame goes; your bots come with you
+    let (was, you) = leave(st);
+    let bots = std::mem::take(&mut st.bots);
     let Some(current) = Stay::take(st) else {
+        st.bots = bots;
         return Err("nowhere to go".into());
     };
     if here == home {
@@ -647,8 +682,88 @@ pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
     }
     st.net.failsafe = failsafe;
     st.net.cooling_until = cooling;
+    arrive(st, was, you, bots);
     st.say(format!("into {name}"));
     Ok(())
+}
+
+/// Before the run's city changes: what was in sight past its edge and what you
+/// remember of its street kept in the world's record. Where its map sits (the world cell
+/// of its `(0, 0)`), and the world cell you stand on (your body's, jacked in), if you
+/// stand on a stratum.
+fn leave(st: &mut AppState) -> (Pos, Option<Pos>) {
+    stream::remember_sight(st);
+    let (Some(city), Some(o)) = (st.city.as_ref(), st.outside.as_mut()) else {
+        return (Pos::new(0, 0), None);
+    };
+    let origin = o.origin(city);
+    let Some(p) = st.player.as_ref() else {
+        return (origin, None);
+    };
+    if let Some(vis) = p.vis_at(citygen::Place::Stratum(StratumKind::Street)) {
+        ground::remember_map(o, origin, vis);
+    }
+    let (place, pos) = p.body.unwrap_or((p.place, p.pos));
+    let you = place.stratum().map(|_| origin.offset(pos.x, pos.y));
+    (origin, you)
+}
+
+/// Into the run's new city, its map's corner having been at world cell `was` in the
+/// last's frame: you on the street on world cell `you` (in its frame now), its street
+/// remembered as far as the world's record has seen it, your `bots` where they were.
+fn arrive(st: &mut AppState, was: Pos, you: Option<Pos>, mut bots: Vec<crate::bots::BotOut>) {
+    let (Some(city), Some(o)) = (st.city.as_ref(), st.outside.as_ref()) else {
+        st.bots = bots;
+        return;
+    };
+    let origin = o.origin(city);
+    let into = |c: Pos| Pos::new(c.x - origin.x, c.y - origin.y);
+    let street = citygen::Place::Stratum(StratumKind::Street);
+    if let Some(at) = you.map(into) {
+        let p = st
+            .player
+            .get_or_insert_with(|| crate::walker::Player::at(street, at));
+        p.place = street;
+        p.pos = at;
+        p.body = None;
+    }
+    if let Some(p) = st.player.as_mut() {
+        let map = Rect::new(origin.x, origin.y, city.size.w as i32, city.size.h as i32);
+        let seen = ground::seen_in(o, map);
+        p.remember_place(street, city.size, seen.into_iter().map(into));
+    }
+    let shift = into(was);
+    for b in &mut bots {
+        b.pos = b.pos.map(|q| q.offset(shift.x, shift.y));
+        for (q, _) in &mut b.wake {
+            *q = q.offset(shift.x, shift.y);
+        }
+    }
+    st.bots = bots;
+}
+
+/// You on the live city's own street where it can't be stood on (a city built on the
+/// spot as you stepped onto its ground may have a wall there): moved to the nearest cell
+/// of its own street that can be.
+pub(crate) fn footing(st: &mut AppState) {
+    let to = {
+        let (Some(city), Some(o), Some(p)) =
+            (st.city.as_ref(), st.outside.as_ref(), st.player.as_ref())
+        else {
+            return;
+        };
+        if !p.place.is_street()
+            || p.jacked_in()
+            || !stream::live_owns(st, p.pos)
+            || city.walkable(StratumKind::Street, p.pos)
+        {
+            return;
+        }
+        street_near(city, p.pos, |q| o.owns(city, q))
+    };
+    if let Some(p) = st.player.as_mut() {
+        p.pos = to;
+    }
 }
 
 /// Detail cells to an overworld tile, each way.
@@ -786,7 +901,7 @@ fn still_stands(st: &mut AppState) {
     let body = p.body.unwrap_or((p.place, p.pos));
     let body_stands = stands(body.0, body.1);
     let net_stands = !jacked || stands(p.place, p.pos);
-    let back = street_near(city, body.1);
+    let back = street_near(city, body.1, |q| stream::live_owns(st, q));
     if body_stands && net_stands {
         return;
     }
@@ -1128,7 +1243,7 @@ pub(crate) mod tests {
     }
 
     /// A run written and read back, after_restore and all.
-    fn reopen(st: AppState, name: &str) -> AppState {
+    pub(crate) fn reopen(st: AppState, name: &str) -> AppState {
         let dir = crate::runs::testutil::Dir::new(name);
         let st = crate::runs::testutil::running(st);
         let path = crate::runs::file::write(&dir.0, &st).unwrap();

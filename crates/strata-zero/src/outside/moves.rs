@@ -83,9 +83,10 @@ fn closed(world: &Overworld, to: Pos) -> &'static str {
     }
 }
 
-/// ↵ on the overworld: onto the tile's ground (on its road if it has one, else the dry
-/// ground nearest its middle), on the city's street past its edge, or into the city on
-/// a tile of its block.
+/// ↵ on the overworld: into the city or town that owns the tile (on its own street
+/// nearest the tile's middle), else onto the tile's ground (on its road if it has one,
+/// else the dry ground nearest its middle), on the city's street past its edge; ground
+/// another city or town owns is handed over to it as you stand on it (`into_city`).
 pub fn down(st: &mut AppState) -> Result<Moved, &'static str> {
     let (Some(o), Some(_)) = (st.outside.as_ref(), st.city.as_ref()) else {
         return Err("there is no world out here");
@@ -93,7 +94,9 @@ pub fn down(st: &mut AppState) -> Result<Moved, &'static str> {
     let At::Overworld(t) = o.at else {
         return Err("not on the overworld");
     };
-    if let Some(s) = crate::outside::settlement_at(st, t) {
+    // whose tile it is, not whose map covers it: a town's own tile in its city's block
+    // is the town's
+    if let Some(s) = o.owner(t).or_else(|| crate::outside::settlement_at(st, t)) {
         match crate::outside::enter(st, s) {
             Ok(()) => {
                 if let (Some(o), Some(city)) = (st.outside.as_ref(), st.city.as_ref()) {
@@ -131,7 +134,8 @@ pub fn up(st: &mut AppState) {
 }
 
 /// Onto the city's street at `cell` of its frame: in the city, or past its edge on the
-/// open ground.
+/// open ground; on a cell another city or town owns, into it there, as walking onto it
+/// goes in.
 pub fn into_city(st: &mut AppState, cell: Pos) {
     let street = Place::Stratum(StratumKind::Street);
     if st.player.is_none() {
@@ -145,8 +149,10 @@ pub fn into_city(st: &mut AppState, cell: Pos) {
     if let Some(o) = st.outside.as_mut() {
         o.at = At::City;
     }
-    // you see where you've come down, not where you left
-    crate::screens::explore::look_round(st);
+    // you see where you've come down, not where you left (a handover looks round)
+    if crate::outside::stream::hand_over(st).is_none() {
+        crate::screens::explore::look_round(st);
+    }
     // the city's MAP is the city's again
     if st.atlas.zoom == crate::screens::atlas::Zoom::World {
         st.atlas.zoom = crate::screens::atlas::Zoom::Fit;
@@ -416,5 +422,92 @@ pub(crate) mod tests {
         up(&mut st);
         let o = st.outside.as_ref().unwrap();
         assert_eq!(o.at, At::Overworld(o.tile_of(&city, cell)));
+    }
+
+    /// The overworld tile `t`'s owner and you landing there by ↵: where you stand.
+    fn land(st: &mut AppState, t: Pos) -> Option<crate::outside::Settlement> {
+        put(st, At::Overworld(t));
+        let Ok(Moved::City(cell)) = down(st) else {
+            return None;
+        };
+        into_city(st, cell);
+        Some(st.outside.as_ref().unwrap().here())
+    }
+
+    /// Whether you stand on the live city's own cells, on its street.
+    fn on_its_own_street(st: &AppState) -> bool {
+        let p = st.player.as_ref().unwrap();
+        crate::outside::stream::live_owns(st, p.pos)
+            && st
+                .city
+                .as_ref()
+                .unwrap()
+                .walkable(StratumKind::Street, p.pos)
+    }
+
+    #[test]
+    fn down_on_a_towns_tile_is_into_the_town() {
+        // a town's own tile inside its city's block: ↵ there goes into the town
+        use crate::outside::stream::tests::beyond::city_with_a_town;
+        let mut st = crate::outside::tests::home_run();
+        let (c, town) = city_with_a_town(&st);
+        let t = {
+            let o = st.outside.as_ref().unwrap();
+            let block = o.others().into_iter().find(|(s, _)| *s == c).unwrap().1;
+            block
+                .iter()
+                .find(|t| o.owner(*t) == Some(town) && step_cost(o.world(), *t).is_some())
+                .unwrap()
+        };
+        assert_eq!(land(&mut st, t), Some(town));
+        assert!(on_its_own_street(&st));
+        let p = st.player.as_ref().unwrap();
+        let at = world_cell(&st, p.pos);
+        assert_eq!(
+            st.outside
+                .as_ref()
+                .unwrap()
+                .owner(Pos::new(at.x.div_euclid(TILE), at.y.div_euclid(TILE))),
+            Some(town)
+        );
+    }
+
+    #[test]
+    fn coming_down_on_a_cell_another_city_owns_is_into_it() {
+        // put on the street on a cell another city owns (as ↵ onto the ground beside
+        // its map can land you): handed over to it, on the same cell
+        use crate::outside::stream::tests::handover::{beside_a_city, world_of};
+        let mut st = crate::outside::tests::home_run();
+        let (s, x, d) = beside_a_city(&mut st);
+        let at = world_of(&st, x.step(d));
+        into_city(&mut st, x.step(d));
+        assert_eq!(st.outside.as_ref().unwrap().here(), s);
+        assert_eq!(world_of(&st, st.player.as_ref().unwrap().pos), at);
+        assert!(on_its_own_street(&st));
+    }
+
+    #[test]
+    fn down_on_a_tile_of_the_live_map_another_owns_is_into_it() {
+        // a town's own tile inside the live city's block: ↵ there is into the town, not
+        // onto the live city's map there (the ground under the town's buildings), drawn
+        // from the town's
+        use crate::outside::stream::tests::beyond::city_with_a_town;
+        let mut st = crate::outside::tests::home_run();
+        let (c, town) = city_with_a_town(&st);
+        crate::outside::enter(&mut st, c).unwrap();
+        let t = {
+            let o = st.outside.as_ref().unwrap();
+            let b = o.block(st.city.as_ref().unwrap());
+            b.iter()
+                .find(|t| o.owner(*t) == Some(town) && step_cost(o.world(), *t).is_some())
+                .unwrap()
+        };
+        assert_eq!(
+            crate::outside::settlement_at(&st, t),
+            Some(c),
+            "the live map's"
+        );
+        assert_eq!(land(&mut st, t), Some(town));
+        assert!(on_its_own_street(&st));
     }
 }

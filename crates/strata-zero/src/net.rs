@@ -269,6 +269,44 @@ pub fn targets_outside(st: &AppState, pos: Pos) -> Vec<(HackTarget, String)> {
     out
 }
 
+/// What a gate or a node of a city other than the one your body is in says to you:
+/// you can walk its Net and look, not touch.
+pub const TOO_FAR: &str = "too far from your body to touch it";
+
+/// The nodes of another city's or town's Net on `pos` or beside it (cells of the live
+/// city's frame) that the open Net would reach there, as `targets_outside` finds the
+/// live city's, each by its kind: found through who owns the cell, each city's on its
+/// own map. Out of reach: your body is in the live city.
+pub fn out_of_reach(st: &AppState, pos: Pos) -> Vec<NodeKind> {
+    out_of_reach_on(st, std::iter::once(pos).chain(pos.neighbors8()))
+}
+
+/// `out_of_reach`'s nodes on `cells` alone.
+pub fn out_of_reach_on(st: &AppState, cells: impl Iterator<Item = Pos>) -> Vec<NodeKind> {
+    use crate::outside::stream::{Beyond, Owner};
+    let Some(b) = Beyond::of(st) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for p in cells {
+        let Some(Owner::City(city, q)) = b.elsewhere(p) else {
+            continue;
+        };
+        let on_wall = city
+            .tile(StratumKind::Net, q)
+            .is_some_and(|t| matches!(t.terrain, Terrain::NetWall | Terrain::NetGate));
+        out.extend(
+            city.net
+                .nodes
+                .iter()
+                .filter(|n| n.cyber == q && !matches!(n.kind, NodeKind::Backbone | NodeKind::Ice))
+                .filter(|n| n.building.is_none() || on_wall)
+                .map(|n| n.kind),
+        );
+    }
+    out
+}
+
 /// A target's kind where you stand.
 pub fn kind_at(st: &AppState, scene: Scene, target: HackTarget) -> Option<Target> {
     match scene {

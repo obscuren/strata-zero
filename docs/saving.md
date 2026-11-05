@@ -37,10 +37,12 @@ Elsewhere:
 
 `st.outside` (`outside::Outside`) holds the world: it is saved as its `params` (the overworld
 itself, `world`, is `#[serde(skip)]` and made again from them by `outside::reopened` in
-`after_restore`), where you are (`at`), what you've seen of the open ground (`seen`, per
-8×8 chunk), the city or town you're in (`here`), the cities and towns you've been into
-(`visited`) and the place marked on the MAP (`mark`). `built` (the other cities' maps this
-session) and `blocks` (the settlements' blocks) are caches made again when first needed.
+`after_restore`), where you are (`at`), what you've seen of the world off the live city's
+map (`seen`, per 8×8 chunk: the open ground, and each city's street as you left it, which
+walking into it remembers), the city or town you're in (`here`), the cities and towns
+you've been into (`visited`) and the place marked on the MAP (`mark`). `built` (the other
+cities' maps this session) and `blocks` (the settlements' blocks) are caches made again
+when first needed.
 The open ground's tiles are never saved: the seed makes them again, the same every time,
 and nothing the player does changes them yet.
 
@@ -57,9 +59,12 @@ Nothing lies on the open ground: items can't be dropped off the city's cells.
 
 In another city of the world the home city is set aside whole in `st.away`
 (`outside::Stay`: the city, its people, interiors, constructs, the Net's state, the
-ground's items, foes, bots, journal, jobs, story, track, HELIX, the mail's marks and the
-keycards), saved with the run; the city you're in is `st.city` as ever. A save taken
-away holds two cities, about a quarter bigger.
+ground's items, foes, journal, jobs, story, track, HELIX, the mail's marks and the
+keycards; its `bots` stay empty, as yours come with you), saved with the run; the city
+you're in is `st.city` as ever. A save taken away holds two cities, about a quarter
+bigger. Walked into on foot, a city takes over where you stand
+(`outside::stream::hand_over`): your cell, your bots and what you've seen of it carry
+over, and a save taken a step later opens in it.
 
 ## Writing a save
 
@@ -103,7 +108,7 @@ Go through this whenever you add or change something that lives through play.
 12. **The world and the map.** The city, the floors walked into and the constructs are saved whole. If generation grows the play field a lot, the alternative is saving the seed plus what changed and regenerating the rest on load, which needs generation to stay deterministic. Size and time today (release build, the medium seed-8 morning after): about 1.0 MB on disk; a save takes about 24 ms on the frame thread (encoding 14.6 MB of MessagePack ~11 ms, gzip ~9 ms, write, sync and rename ~5 ms), under one 33 ms frame. The `#[ignore]` test `a_save_is_timed` in `runs/file.rs` measures it again (run it with `--release`); past a frame, move the gzip and the write to a thread and keep the encoding on the frame.
 13. **A screen that holds story in flight** can't stop the five-minute save, the due save or SAVE GAME, because those run from the map or the pause menu over it; only the ways out see the stack. Keep story that must survive a save in `AppState`.
 14. **The map screen's own state isn't saved.** The open Net's packets (`MapScreen.traffic`) are a look only, seeded afresh round the view after a reopen; a lane ride in flight (`MapScreen.riding`, Data surfer's) ends on the lane tile you were carried to. What the run needs lives in `AppState`: a camera's feed is `net.feed`, so it reopens open; the jack window over a held terminal and the HIJACK picker hold nothing (a verb is spent as it acts), and the launch splash comes before any run.
-15. **State that belongs to one city** (anything keyed by its buildings, people or districts) goes in `outside::Stay` too: `take`, `fresh` and `put` name its fields, and nothing makes that exhaustive, so a new city-bound field left out of them follows you into another city. State that belongs to the runner (the character, the deck's failsafe and cooling, the log) stays put; `enter` carries the deck's across.
+15. **State that belongs to one city** (anything keyed by its buildings, people or districts) goes in `outside::Stay` too: `take`, `fresh` and `put` name its fields, and nothing makes that exhaustive, so a new city-bound field left out of them follows you into another city. State that belongs to the runner (the character, the deck's failsafe and cooling, the bots out, the log) stays put; `enter` carries the deck's and the bots across, and you on the same world cell.
 16. **A cache in a saved type** may also be rebuilt when first needed rather than in `after_restore` (`Outside.built`, `Outside.blocks`), so long as it's `#[serde(skip)]` and made from saved state only.
 
 ## Compatibility
