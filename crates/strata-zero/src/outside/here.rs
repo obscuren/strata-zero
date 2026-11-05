@@ -92,38 +92,44 @@ pub fn here_lines(st: &AppState) -> Vec<Line<'static>> {
     ]
 }
 
-/// HERE's line jacked in: the Net, and the trunk your Net self is over, or the city's
-/// node field, or the dead grid.
+/// HERE's line jacked in: the Net, and the city or town whose tile your Net self is
+/// over, or the trunk, or the dead grid.
 fn net_over(st: &AppState) -> Option<String> {
     net_over_at(st, tile(st)?)
 }
 
-/// HERE's line jacked in over overworld tile `t`: the Net, and the trunk over it, or the
-/// city's node field, or the dead grid.
+/// HERE's line jacked in over overworld tile `t`: the Net, and the city or town that
+/// owns the tile, or the trunk over it off every settlement's, or the dead grid.
 fn net_over_at(st: &AppState, t: Pos) -> Option<String> {
     let o = st.outside.as_ref()?;
     let w = o.world();
     let over = match (
-        w.routes.iter().find(|r| r.path.contains(&t)),
         super::tile_owner(st, t),
+        w.routes.iter().find(|r| r.path.contains(&t)),
     ) {
-        (Some(r), _) => format!("{} trunk", r.name),
-        (None, Some(s)) => o.name(s),
+        (Some(s), _) => o.name(s),
+        (None, Some(r)) => format!("{} trunk", r.name),
         (None, None) => "dead grid".to_string(),
     };
-    Some(format!("the Net · {over}"))
+    Some(on_the_net(&over))
 }
 
-/// HERE jacked in: the trunk your Net self is over, or the city's node field, or the
-/// dead grid.
+/// The words for being jacked in over `over` (a city, a trunk, the dead grid), as HERE
+/// and the minimap say them.
+pub fn on_the_net(over: &str) -> String {
+    format!("the Net · {over}")
+}
+
+/// HERE jacked in: the city or town whose tile your Net self is over, or the trunk, or
+/// the dead grid.
 pub fn net_here_lines(st: &AppState) -> Vec<Line<'static>> {
     tile(st)
         .map(|t| net_here_lines_at(st, t))
         .unwrap_or_default()
 }
 
-/// HERE jacked in over overworld tile `t` (the Net overworld's): its trunk, or the
-/// city's node field, or the dead grid.
+/// HERE jacked in over overworld tile `t` (the Net overworld's): the city or town that
+/// owns it, or its trunk, or the dead grid.
 pub fn net_here_lines_at(st: &AppState, t: Pos) -> Vec<Line<'static>> {
     net_over_at(st, t)
         .map(|over| {
@@ -336,5 +342,68 @@ mod tests {
         p.place = citygen::Place::Stratum(citygen::StratumKind::Net);
         p.pos = cell;
         assert_eq!(net_over(&st).unwrap(), format!("the Net · {name}"));
+    }
+
+    #[test]
+    fn here_names_the_city_on_its_lanes() {
+        // jacked in on a lane of another city's Net, on a tile of its own a highway's
+        // trunk runs through: HERE names the city; off every settlement's cells, the
+        // trunk
+        use crate::outside::stream::tests::handover::{hold, local};
+        let mut st = crate::outside::tests::home_run();
+        let on_route = |st: &AppState, t: Pos| {
+            let routes = &st.outside.as_ref().unwrap().world().routes;
+            routes
+                .iter()
+                .find(|r| r.path.contains(&t))
+                .map(|r| r.name.clone())
+        };
+        let cities: Vec<_> = {
+            let o = st.outside.as_ref().unwrap();
+            o.others()
+                .into_iter()
+                .filter(|(s, _)| s.town.is_none())
+                .collect()
+        };
+        let found = cities.into_iter().find_map(|(s, block)| {
+            hold(&mut st, s);
+            let o = st.outside.as_ref().unwrap();
+            let city = o.held_city(s).unwrap();
+            let origin = o.origin(city);
+            let net = &city.stratum(citygen::StratumKind::Net).unwrap().tiles;
+            block
+                .iter()
+                .filter(|t| o.owner(*t) == Some(s) && on_route(&st, *t).is_some())
+                .find_map(|t| {
+                    citygen::Rect::new(TILE * t.x, TILE * t.y, TILE, TILE)
+                        .iter()
+                        .find(|c| {
+                            net.get(Pos::new(c.x - origin.x, c.y - origin.y))
+                                .is_some_and(|x| x.terrain == citygen::Terrain::NetLane)
+                        })
+                })
+                .map(|c| (o.name(s), c))
+        });
+        let (name, at) = found.expect("a lane of another city's on a tile with a trunk");
+        let cell = local(&st, at);
+        let p = st.player.as_mut().unwrap();
+        p.body = Some((p.place, p.pos));
+        p.place = citygen::Place::Stratum(citygen::StratumKind::Net);
+        p.pos = cell;
+        assert_eq!(net_over(&st).unwrap(), format!("the Net · {name}"));
+        // a trunk's tile no settlement owns
+        let (t, route) = {
+            let o = st.outside.as_ref().unwrap();
+            o.world()
+                .routes
+                .iter()
+                .flat_map(|r| r.path.iter().copied())
+                .find(|t| o.owner(*t).is_none())
+                .map(|t| (t, on_route(&st, t).unwrap()))
+                .expect("a trunk on the open ground")
+        };
+        st.player.as_mut().unwrap().pos =
+            local(&st, Pos::new(TILE * t.x + TILE / 2, TILE * t.y + TILE / 2));
+        assert_eq!(net_over(&st).unwrap(), format!("the Net · {route} trunk"));
     }
 }

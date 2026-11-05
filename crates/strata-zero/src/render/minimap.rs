@@ -525,12 +525,14 @@ impl Minimap<'_> {
         let dim = |t: String| Span::styled(t, Style::default().fg(DIM));
         match self.map {
             MapRef::Stratum(m) if self.beyond.is_some_and(|b| !b.live_owns(self.focus())) => {
-                let label = if m.stratum == StratumKind::Net {
-                    "the open Net"
-                } else {
-                    "open ground"
+                // on the Net another city's or town's cells are named as HERE names them
+                let owner = self.beyond.and_then(|b| b.owner_name(self.focus()));
+                let label = match (m.stratum == StratumKind::Net, owner) {
+                    (true, Some(name)) => crate::outside::here::on_the_net(&name),
+                    (true, None) => "the open Net".to_string(),
+                    (false, _) => "open ground".to_string(),
                 };
-                vec![dim(label.to_string())]
+                vec![dim(label)]
             }
             MapRef::Stratum(m) => {
                 let city = m.city;
@@ -1274,6 +1276,60 @@ mod tests {
             "{drawn} of {} drawn from the ground",
             cells.len()
         );
+    }
+
+    #[test]
+    fn the_minimap_names_another_citys_net() {
+        // jacked in on another city's Net, the bottom row names that city as HERE does;
+        // on the open Net past every settlement's cells, the open Net
+        use crate::outside::TILE;
+        use crate::outside::stream::tests::beyond::edge_out;
+        use crate::outside::stream::tests::handover::{hold, local};
+        let mut st = crate::outside::tests::home_run();
+        let (s, block) = st
+            .outside
+            .as_ref()
+            .unwrap()
+            .others()
+            .into_iter()
+            .find(|(s, _)| s.town.is_none())
+            .unwrap();
+        hold(&mut st, s);
+        let (name, theirs) = {
+            let o = st.outside.as_ref().unwrap();
+            let t = block.iter().find(|t| o.owner(*t) == Some(s)).unwrap();
+            (
+                o.name(s),
+                local(&st, Pos::new(TILE * t.x + TILE / 2, TILE * t.y + TILE / 2)),
+            )
+        };
+        let (e, d) = edge_out(&st, 4);
+        let (dx, dy) = d.delta();
+        let open = e.offset(4 * dx, 4 * dy);
+        let city = st.city.as_ref().unwrap();
+        let b = Beyond::of(&st).unwrap();
+        assert!(!b.live_owns(theirs) && !b.live_owns(open));
+        let map = MapRef::stratum_at(city, StratumKind::Net, 12 * 60);
+        let track = MapTrack::default();
+        let bottom = |at: Pos| {
+            let mut buf = Buffer::empty(Rect::new(0, 0, 40, 13));
+            Minimap {
+                tracked: None,
+                port: None,
+                beyond: Some(&b),
+                map: &map,
+                view: TileRect::new(at.x - 15, at.y - 7, 30, 15),
+                player: Some(at),
+                style: &st.style,
+                track: &track,
+            }
+            .render(Rect::new(0, 0, 40, 13), &mut buf);
+            row(&buf, 12)
+        };
+        let said = bottom(theirs);
+        assert!(said.contains(&format!("the Net · {name}")), "{said:?}");
+        let said = bottom(open);
+        assert!(said.contains("the open Net"), "{said:?}");
     }
 
     #[test]

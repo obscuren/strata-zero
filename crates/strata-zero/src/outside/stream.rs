@@ -560,6 +560,16 @@ impl<'a> Beyond<'a> {
         self.stream
     }
 
+    /// The name of the city or town that owns the overworld tile local cell `p` lies
+    /// in: none on the open ground.
+    pub fn owner_name(&self, p: Pos) -> Option<String> {
+        let at = self.live.2.offset(p.x, p.y);
+        let s = self
+            .outside
+            .owner(Pos::new(at.x.div_euclid(TILE), at.y.div_euclid(TILE)))?;
+        Some(self.outside.name(s))
+    }
+
     /// Who answers for local cell `p` when the live city doesn't: the area owning its
     /// overworld tile, held, with the cell on its map; else the stream. None for the
     /// live city's own cells.
