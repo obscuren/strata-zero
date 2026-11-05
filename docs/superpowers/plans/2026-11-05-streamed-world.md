@@ -258,3 +258,37 @@ Added after Task 9's shots: on a city's Net the world's trunks stop where the ci
 - [ ] **Step 3:** Implement; re-pin any fingerprint the change moves, saying which.
 - [ ] **Step 4:** Run them — PASS; the five checks; rerun `streamed_world_shots` and look at `streamed_net_edge_wide` and `streamed_net_next_city`.
 - [ ] **Step 5:** Commit `citygen: the Net's trunks run on into a city's lanes`.
+
+### Task 11: The Net hands over with your Net self
+
+From Jeff's first play (spec, "After the first play"): another city's Net reads as dead and the cord stays behind on the Net you came from.
+
+**Files:** `crates/strata-zero/src/outside/stream.rs` (`hand_over` for the Net self), `crates/strata-zero/src/outside/mod.rs` (`enter` keeps the body where it is, in the new frame), `crates/strata-zero/src/screens/explore.rs`, `crates/strata-zero/src/net.rs` (the cord; the far-city refusals go), `docs/saving.md`
+
+**Interfaces:**
+- `hand_over` also runs jacked in: when the Net self stands on a Net cell another settlement owns, that settlement becomes the live city through `enter` (refused by `can_cross`'s rules: a fight, a call, a scene), the Net self on the same world cell, the body on its own world cell in the new frame (it stands in the city you left, which is held, not live); the screen shifts as on foot.
+- Jacking out with the body on another settlement's cells hands that settlement back (the on-foot handover does it once you're on foot).
+- `too far from your body to touch it` goes wherever the Net self stands on the live city's cells; it stays only for acting at range on a node or gate another city owns.
+- The cord runs from the Net self back to the body across areas and handovers, drawn over every area it crosses (no part left behind on the Net you came from).
+- A run saved jacked in after a Net handover reopens there (the body in the city it stands in, rebuilt if it isn't home).
+
+- [ ] Tests: `walking_the_net_into_another_city_hands_it_over`; `its_ice_and_nodes_answer_after_the_handover`; `the_body_stays_in_the_city_you_left`; `jacking_out_hands_the_bodys_city_back`; `a_fight_holds_your_net_self_at_the_line`; `the_cord_follows_you_into_the_next_citys_net` (drawn cells along the whole way); `a_run_saved_after_a_net_handover_reopens_there`.
+- [ ] Implement; five checks; commit `outside: the Net hands the run over with your Net self`.
+
+### Task 12: Neighbours alive in view
+
+**Files:** `crates/strata-zero/src/outside/stream.rs`, `crates/strata-zero/src/screens/explore.rs` (draw other areas' people and packets), `crates/strata-zero/src/render/people.rs`, `crates/strata-zero/src/render/netlook/packets.rs`
+
+**Interfaces:**
+- Each held city or town (kept `Stay`, streamed build with seeded people, the home city set aside) whose map meets the view runs its people's day on the clock (`sim::World::advance`, no story, no cameras, no foes) and draws them on the cells it owns, through the same people overlay as the live city, in its own frame. Cities out of view hold still.
+- Packets run on every area's lanes in view (each held city's own traffic in its frame) and along the open Net's trunks in view, with the same look as the live city's.
+- Cost: the release draw-cost test (`streamed_draw_cost`) gains a case beside a neighbour with its people and packets; a frame stays under ~4 ms at 200×60.
+- [ ] Tests: `a_neighbours_people_walk_while_in_view`; `a_neighbour_out_of_view_holds_still`; `the_open_nets_trunks_carry_packets`; `a_neighbours_lanes_carry_packets`; handing over keeps its people where they were drawn.
+- [ ] Implement; five checks; shots; commit `outside: the cities next door are alive`.
+
+### Task 13: One light
+
+**Files:** found by the test.
+
+- [ ] Test `a_city_looks_the_same_from_outside_and_inside`: for every settlement of seed 3's world, at noon, dusk and midnight, draw a patch of its cells from the ground beside it (held), then hand over and draw the same world cells at the same minute (live, with the same sight): every cell's glyph, foreground and background equal, people aside. Also the home city set aside vs live.
+- [ ] Fix every difference at its cause (sight, light, lamps, the minute, the theme); five checks; shots by night beside and inside a neighbour; commit `render: a city looks the same from outside and inside`.

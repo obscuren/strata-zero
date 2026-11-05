@@ -192,6 +192,26 @@ grid you're over. The minimap shows the street round you across edges.
 - The stream and builds in flight are not saved. Neither is sight past the edge; the
   world's seen record is.
 
+## After the first play (2026-11-05)
+
+Jeff played the streamed world: the neighbouring cities read as abandoned (no people),
+their Nets as dead (no packets, no ICE, a cord left behind on the Net you came from),
+some cities' light as overblown and stitched on, and the overworld as static. So:
+
+- **The live city follows your Net self too.** Jacked in, stepping onto Net cells
+  another city owns hands the run over to it, as walking in does on foot: its Net is
+  live (its ICE, its nodes, its packets, its jobs). Your body stays where you jacked in,
+  in the city you left, which holds still while you're away from it; jacking out puts
+  you back in your body and hands that city back. The crossing is refused for the same
+  reasons as on foot. Replaces my call 2.
+- **Neighbours are alive in view.** A held city or town whose map is in view runs its
+  people (their day only: no story, no cameras) and draws them; its lanes carry
+  packets, and so do the open Net's trunks in view. Replaces my calls 1 and 8.
+- **One light.** A city's cells look the same drawn from outside as from inside, at the
+  same hour, people aside.
+- **The overworld moves**: options mocked in `2026-11-05-overworld-motion-mock/`,
+  built once one is picked.
+
 ## Constraints
 
 - Seeds: nothing generated changes. Worlds and cities come out cell for cell as before.
