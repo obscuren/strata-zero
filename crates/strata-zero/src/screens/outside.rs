@@ -9,6 +9,7 @@ use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::outside::At;
 use crate::outside::here;
 use crate::outside::moves::{self, Moved};
+use crate::render::overworld::live::{Hour, LiveAtlas};
 use crate::render::overworld::{ATLAS_BG, atlas_cell};
 use crate::render::{Cell, Rgb};
 use crate::screens::explore::{dir_for, layout};
@@ -72,6 +73,8 @@ pub struct OutsideScreen {
     pub(crate) net_up: Option<NetUp>,
     /// The world jacked in, drawn from once it's first looked at.
     net_atlas: std::cell::OnceCell<crate::render::overworld::NetAtlas>,
+    /// The world on foot in motion, drawn from once it's first looked at.
+    live_atlas: std::cell::OnceCell<LiveAtlas>,
     /// The dev console while it is open; it takes every key.
     pub(crate) console: Option<Console>,
 }
@@ -95,6 +98,7 @@ impl OutsideScreen {
             help: false,
             net_up: None,
             net_atlas: Default::default(),
+            live_atlas: Default::default(),
             console: None,
         }
     }
@@ -109,6 +113,7 @@ impl OutsideScreen {
                 tile: here::tile(st).unwrap_or(Pos::new(0, 0)),
             }),
             net_atlas: Default::default(),
+            live_atlas: Default::default(),
             console: None,
         }
     }
@@ -367,7 +372,10 @@ impl Screen for OutsideScreen {
                     .get_or_init(|| crate::render::overworld::NetAtlas::new(o.world()));
                 draw_net_world(st, o.world(), atlas, up.tile, r.map, buf);
             }
-            (At::Overworld(t), None) => draw_world(st, o.world(), t, r.map, buf),
+            (At::Overworld(t), None) => {
+                let atlas = self.live_atlas.get_or_init(|| LiveAtlas::new(o.world()));
+                draw_world(st, o.world(), atlas, t, r.map, buf);
+            }
             _ => {}
         }
         let up = self.net_up.is_some();
@@ -499,8 +507,16 @@ impl Screen for OutsideScreen {
     }
 }
 
-/// The overworld round tile `t` in the atlas look, one cell a tile.
-fn draw_world(st: &AppState, world: &Overworld, t: Pos, map: Rect, buf: &mut Buffer) {
+/// The overworld round tile `t` in the atlas look, one cell a tile, in motion at the
+/// frame tick and the hour.
+fn draw_world(
+    st: &AppState,
+    world: &Overworld,
+    atlas: &LiveAtlas,
+    t: Pos,
+    map: Rect,
+    buf: &mut Buffer,
+) {
     // centred on you, held inside the world where the world is bigger than the view
     let fit = |at: i32, view: u16, len: u32| {
         let (view, len) = (view as i32, len as i32);
@@ -514,11 +530,12 @@ fn draw_world(st: &AppState, world: &Overworld, t: Pos, map: Rect, buf: &mut Buf
         fit(t.x, map.width, world.size.w),
         fit(t.y, map.height, world.size.h),
     );
+    let minute = st.minute_of_day();
     for sy in 0..map.height {
         for sx in 0..map.width {
             let p = origin.offset(sx as i32, sy as i32);
             let cell = if world.tile(p).is_some() {
-                atlas_cell(world, p, &st.style)
+                atlas.cell(world, p, &st.style, st.tick, minute)
             } else {
                 blank()
             };
@@ -638,7 +655,13 @@ fn draw_panel(
     let map_rows = 9.min(bottom.saturating_sub(y + 8));
     if map_rows > 0 {
         let pane = Rect::new(side.x + 1, y, w.saturating_sub(2), map_rows);
-        world_pane(st, over, pane, buf);
+        // on foot the map darkens with the hour, as the overworld does
+        let dim = if net_up {
+            1.0
+        } else {
+            Hour::of(st.minute_of_day()).pick([1.0, 0.75, 0.5])
+        };
+        world_pane(st, over, dim, pane, buf);
         y += map_rows;
     }
     put(buf, vec![rule.clone()], &mut y, 1);
@@ -707,9 +730,9 @@ fn inspect_lines(st: &AppState, net_up: bool, t: Pos) -> Vec<Line<'static>> {
     out
 }
 
-/// The whole world scaled into the pane, two tiles a row in half blocks, `@` on tile
-/// `over`.
-fn world_pane(st: &AppState, over: Option<Pos>, pane: Rect, buf: &mut Buffer) {
+/// The whole world scaled into the pane, two tiles a row in half blocks, at `dim` of its
+/// colour, `@` on tile `over`.
+fn world_pane(st: &AppState, over: Option<Pos>, dim: f32, pane: Rect, buf: &mut Buffer) {
     let Some(o) = st.outside.as_ref() else {
         return;
     };
@@ -731,7 +754,7 @@ fn world_pane(st: &AppState, over: Option<Pos>, pane: Rect, buf: &mut Buffer) {
             }
         }
         let n = n.max(1);
-        Rgb((r / n) as u8, (g / n) as u8, (b / n) as u8)
+        Rgb((r / n) as u8, (g / n) as u8, (b / n) as u8).scale(dim)
     };
     for y in 0..pane.height as i32 {
         for x in 0..pw {
@@ -813,6 +836,93 @@ mod tests {
     fn world_cell(st: &AppState, p: Pos) -> Pos {
         let o = st.outside.as_ref().unwrap();
         o.origin(st.city.as_ref().unwrap()).offset(p.x, p.y)
+    }
+
+    /// Up out of the city onto its block on the overworld, the city's clock at `minute`.
+    fn up_at(minute: u16) -> (AppState, OutsideScreen) {
+        let mut st = AppState::new();
+        st.enter_city_at(crate::runs::testutil::story_city(), minute);
+        let city = st.city.clone().unwrap();
+        st.player = Some(crate::walker::Player::spawn(&city, 1));
+        crate::outside::ensure(&mut st);
+        let s = OutsideScreen::new(&mut st);
+        (st, s)
+    }
+
+    /// The map's cells of `s` drawn at 120x40.
+    fn map_cells(st: &AppState, s: &dyn Screen) -> Vec<ratatui::buffer::Cell> {
+        let (w, h) = (120, 40);
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| s.draw(st, f)).unwrap();
+        let map = layout(Rect::new(0, 0, w, h), false).map;
+        let buf = t.backend().buffer();
+        (map.y..map.bottom())
+            .flat_map(|y| (map.x..map.right()).map(move |x| (x, y)))
+            .map(|(x, y)| buf[(x, y)].clone())
+            .collect()
+    }
+
+    #[test]
+    fn the_overworld_moves_with_the_tick() {
+        let (mut st, s) = up_at(22 * 60);
+        st.tick = 6000;
+        let a = map_cells(&st, &s);
+        assert_eq!(a, map_cells(&st, &s), "the same tick twice, the same map");
+        st.tick += 2;
+        let b = map_cells(&st, &s);
+        let moved = a.iter().zip(&b).filter(|(x, y)| x != y).count();
+        assert!(moved > 0, "two ticks on, something moves");
+        assert!(
+            moved * 10 < a.len(),
+            "a few cells a tick, not the whole map: {moved} of {}",
+            a.len()
+        );
+    }
+
+    #[test]
+    fn the_overworld_reads_the_hour() {
+        let (mut day, s) = up_at(13 * 60);
+        let (mut night, _) = up_at(22 * 60);
+        day.tick = 6000;
+        night.tick = 6000;
+        let (a, b) = (map_cells(&day, &s), map_cells(&night, &s));
+        let differ = a.iter().zip(&b).filter(|(x, y)| x != y).count();
+        assert!(
+            differ * 2 > a.len(),
+            "day and night: {differ} of {}",
+            a.len()
+        );
+    }
+
+    #[test]
+    fn the_net_overworld_is_still() {
+        // jacked in, the Net over the world is today's: only the packets move, along the
+        // open trunks, whatever the tick and the hour
+        let (mut day, _) = up_at(13 * 60);
+        let (mut night, _) = up_at(22 * 60);
+        let up = OutsideScreen::net_from_city(&mut day);
+        let _ = OutsideScreen::net_from_city(&mut night);
+        day.tick = 6000;
+        let a = map_cells(&day, &up);
+        let trunk = |c: &ratatui::buffer::Cell| {
+            let ch = c.symbol().chars().next().unwrap();
+            crate::render::overworld::HEAVY.contains(&ch)
+        };
+        let still = |st: &AppState| {
+            let b = map_cells(st, &up);
+            for (x, y) in a.iter().zip(&b).filter(|(x, y)| x != y) {
+                assert!(
+                    trunk(x) && trunk(y),
+                    "only a packet on a trunk moves: {x:?} {y:?}"
+                );
+            }
+        };
+        day.tick = 6090;
+        still(&day);
+        night.tick = 6000;
+        still(&night);
+        night.tick = 6150;
+        still(&night);
     }
 
     #[test]

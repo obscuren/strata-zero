@@ -1,7 +1,13 @@
 //! The overworld's atlas look: one cell a tile, the ground as glyphs, highways as double
 //! lines, rivers as thin blue ones and dry washes as faint sandy ones, cities shaded by
 //! density in their districts' colours.
-//! `atlas_cell` is what the overworld screen and `strata world`'s sheet both draw.
+//! `atlas_cell` is what `strata world`'s sheet draws; the overworld screen draws it in
+//! motion under the clock's light (`live`).
+
+mod beacons;
+pub mod live;
+mod neon;
+mod weather;
 
 use crate::render::style::StylePack;
 use crate::render::{Cell, Rgb};
@@ -56,18 +62,35 @@ fn roll(world: &Overworld, p: Pos) -> f32 {
     (hash64(hash64(world.seed, 0xA71A5), packed) >> 40) as f32 / (1u64 << 24) as f32
 }
 
+/// What an atlas cell shows, for the clock's light: each kind dims to its own depth at
+/// night (`live::lit`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    Ground,
+    Water,
+    Urban,
+    /// A highway on the open ground.
+    Road,
+    /// A highway through a city or town.
+    CityRoad,
+    Place,
+}
+
 /// Tile `p` of `world` in the atlas look.
 pub fn atlas_cell(world: &Overworld, p: Pos, style: &StylePack) -> Cell {
-    let Some(t) = world.tile(p) else {
-        return cell(' ', ATLAS_BG, ATLAS_BG);
-    };
-    let mut c = ground_cell(world, p, style);
+    base_cell(world, p, style).map_or(cell(' ', ATLAS_BG, ATLAS_BG), |(c, _)| c)
+}
+
+/// Tile `p` in the atlas look and what it shows; none past the world's edge.
+fn base_cell(world: &Overworld, p: Pos, style: &StylePack) -> Option<(Cell, Kind)> {
+    let t = world.tile(p)?;
+    let (mut c, kind) = ground_cell(world, p, style);
     if let Some(poi) = world.poi_at(p) {
         let (ch, fg) = poi_glyph(poi.kind);
         c.ch = ch;
         c.fg = fg;
         c.bold = true;
-        return c;
+        return Some((c, Kind::Place));
     }
     if t.road != 0 {
         let in_city = t.urban.is_some();
@@ -85,25 +108,28 @@ pub fn atlas_cell(world: &Overworld, p: Pos, style: &StylePack) -> Cell {
         };
         let mut c = cell(DOUBLE[(t.road & 15) as usize], fg, bg);
         c.bold = in_city;
-        return c;
+        let kind = if in_city { Kind::CityRoad } else { Kind::Road };
+        return Some((c, kind));
     }
-    c
+    Some((c, kind))
 }
 
 /// Everything under the roads and POIs: river, city, water, ground.
-fn ground_cell(world: &Overworld, p: Pos, style: &StylePack) -> Cell {
+fn ground_cell(world: &Overworld, p: Pos, style: &StylePack) -> (Cell, Kind) {
     let t = world.tile(p).expect("in bounds");
     let r = roll(world, p);
     if t.water == Water::River {
-        return cell(
+        let c = cell(
             ROUND[(t.river & 15) as usize],
             Rgb(58, 138, 216),
             Rgb(6, 18, 31),
         );
+        return (c, Kind::Water);
     }
     if t.wash != 0 && t.urban.is_none() {
         // A dry wash: a faint dashed sandy line, so it never reads as a road.
-        return cell(DASHED[(t.wash & 15) as usize], Rgb(88, 76, 56), ATLAS_BG);
+        let c = cell(DASHED[(t.wash & 15) as usize], Rgb(88, 76, 56), ATLAS_BG);
+        return (c, Kind::Ground);
     }
     if let Some(u) = t.urban {
         let v = u.density as f32 / 255.0;
@@ -126,17 +152,17 @@ fn ground_cell(world: &Overworld, p: Pos, style: &StylePack) -> Cell {
             .mix(a, 0.22 + 0.38 * v);
         let bg = ATLAS_BG.mix(a, 0.03 + 0.06 * v);
         if v > 0.45 && r > 0.92 {
-            return cell('▪', a, bg);
+            return (cell('▪', a, bg), Kind::Urban);
         }
-        return cell(ch, fg, bg);
+        return (cell(ch, fg, bg), Kind::Urban);
     }
     match t.water {
-        Water::Lake => return cell('≈', Rgb(42, 90, 138), Rgb(10, 26, 46)),
+        Water::Lake => return (cell('≈', Rgb(42, 90, 138), Rgb(10, 26, 46)), Kind::Water),
         Water::Sea => {
             let shore = p
                 .neighbors8()
                 .any(|q| world.tile(q).is_some_and(|n| n.water != Water::Sea));
-            return if shore {
+            let c = if shore {
                 cell('~', Rgb(42, 90, 138), Rgb(10, 26, 46))
             } else {
                 cell(
@@ -145,11 +171,12 @@ fn ground_cell(world: &Overworld, p: Pos, style: &StylePack) -> Cell {
                     Rgb(5, 12, 24),
                 )
             };
+            return (c, Kind::Water);
         }
         _ => {}
     }
     let bg = ATLAS_BG;
-    match t.ground {
+    let c = match t.ground {
         Ground::Peak => cell('▲', Rgb(200, 204, 216), bg),
         Ground::Mountains => cell('▲', Rgb(120, 124, 138), bg),
         Ground::Hills => cell(if r < 0.7 { '∩' } else { '·' }, Rgb(122, 102, 72), bg),
@@ -190,7 +217,8 @@ fn ground_cell(world: &Overworld, p: Pos, style: &StylePack) -> Cell {
             };
             cell(ch, Rgb(74, 66, 52), bg)
         }
-    }
+    };
+    (c, Kind::Ground)
 }
 
 /// The survey chart's paper.

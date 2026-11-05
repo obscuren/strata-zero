@@ -5140,3 +5140,144 @@ fn one_light_shots() {
     st.show_light = true;
     shot_stack("one_light_view_beside_day", &st, &[&map], WIDE);
 }
+
+/// What a frame of the overworld screen costs to draw at 200x60, the mean of a run of
+/// frames, the tick moving on each: up from seed 3's home city on foot by day, at dusk
+/// and by night, and on the Net over the world. Built with `--release`, it says what play
+/// pays: `cargo test -p strata-zero --release --target-dir target/smoke -- --ignored
+/// overworld_draw_cost --nocapture`.
+#[test]
+#[ignore]
+fn overworld_draw_cost() {
+    use crate::screens::outside::OutsideScreen;
+    const SIZE: (u16, u16) = (200, 60);
+    const FRAMES: u32 = 240;
+    let cost = |st: &mut AppState, s: &dyn Screen| {
+        let mut t = Term::new(TestBackend::new(SIZE.0, SIZE.1)).unwrap();
+        t.draw(|f| s.draw(st, f)).unwrap();
+        let start = std::time::Instant::now();
+        for _ in 0..FRAMES {
+            st.tick += 1;
+            t.draw(|f| s.draw(st, f)).unwrap();
+        }
+        start.elapsed().as_secs_f64() * 1000.0 / f64::from(FRAMES)
+    };
+    for (what, minute) in [
+        ("overworld, day", 13 * 60),
+        ("overworld, dusk", 18 * 60 + 20),
+        ("overworld, night", 22 * 60),
+    ] {
+        let mut st = sited_run(minute);
+        let s = OutsideScreen::new(&mut st);
+        println!("{what:<24} {:>7.2} ms a frame", cost(&mut st, &s));
+    }
+    let mut st = sited_run(22 * 60);
+    let s = OutsideScreen::net_from_city(&mut st);
+    println!(
+        "{:<24} {:>7.2} ms a frame",
+        "the Net overworld",
+        cost(&mut st, &s)
+    );
+}
+
+/// The overworld in motion (round 2 of `2026-11-05-overworld-motion-mock/`): on foot on
+/// seed 3's world where the view takes in mountains, the sea, a river and the most of a
+/// city, at 128x42 as the mock draws it, by day, at dusk and by night; and amid the most
+/// mountains, by night and by day, with a gust's band on the middle of them and two
+/// seconds after.
+#[test]
+#[ignore]
+fn overworld_motion_shots() {
+    use crate::outside::At;
+    use crate::render::overworld::live::LiveAtlas;
+    use crate::screens::outside::OutsideScreen;
+    use citygen::overworld::{Ground, Water};
+    if std::env::var("SHOT_DIR").is_err() {
+        return;
+    }
+    const SIZE: (u16, u16) = (128, 42);
+    let st = sited_run(13 * 60);
+    let w = st.outside.as_ref().unwrap().world().clone();
+    // the view (about 85 by 32 tiles) with mountains, the sea and a river, and the most
+    // of a city
+    let (hw, hh) = (40, 14);
+    let score = |c: Pos| {
+        let (mut high, mut sea, mut river, mut urban) = (false, false, false, 0);
+        for y in c.y - hh..=c.y + hh {
+            for x in c.x - hw..=c.x + hw {
+                let Some(t) = w.tile(Pos::new(x, y)) else {
+                    continue;
+                };
+                high |= matches!(t.ground, Ground::Mountains | Ground::Peak);
+                sea |= t.water == Water::Sea;
+                river |= t.water == Water::River;
+                urban += t.urban.is_some() as u32;
+            }
+        }
+        (high && sea && river, urban)
+    };
+    let at = (hh..w.size.h as i32 - hh)
+        .step_by(4)
+        .flat_map(|y| {
+            (hw..w.size.w as i32 - hw)
+                .step_by(4)
+                .map(move |x| Pos::new(x, y))
+        })
+        .max_by_key(|c| (score(*c), -c.x, -c.y))
+        .unwrap();
+    let up = |minute: u16, tick: u64| {
+        let mut st = sited_run(minute);
+        let s = OutsideScreen::new(&mut st);
+        st.outside.as_mut().unwrap().at = At::Overworld(at);
+        st.tick = tick;
+        (st, s)
+    };
+    const TICK: u64 = 6000;
+    for (name, minute) in [
+        ("overworld_motion_day", 13 * 60),
+        ("overworld_motion_dusk", 18 * 60 + 20),
+        ("overworld_motion_night", 22 * 60),
+    ] {
+        let (st, s) = up(minute, TICK);
+        shot_stack(name, &st, &[&s], SIZE);
+    }
+    // a gust: on the mountain at the middle of the world's widest stretch of them, the
+    // tick its band is full there
+    let atlas = LiveAtlas::new(&w);
+    let high = |p: Pos| {
+        w.tile(p).is_some_and(|t| {
+            matches!(t.ground, Ground::Mountains | Ground::Peak)
+                && t.water == Water::None
+                && t.road == 0
+                && t.urban.is_none()
+        })
+    };
+    let peak = w
+        .tiles
+        .iter()
+        .map(|(p, _)| p)
+        .filter(|p| high(*p))
+        .max_by_key(|p| {
+            let n = (-hw..=hw)
+                .flat_map(|dx| (-hh..=hh).map(move |dy| (dx, dy)))
+                .filter(|(dx, dy)| high(p.offset(*dx, *dy)))
+                .count();
+            (n, -p.x, -p.y)
+        })
+        .unwrap();
+    let gust = (TICK..TICK + 2400)
+        .find(|t| atlas.gust(peak, *t) == Some(1.0))
+        .expect("a gust within 80 s");
+    for (name, minute) in [
+        ("overworld_motion_gust_night", 22 * 60),
+        ("overworld_motion_gust_day", 13 * 60),
+    ] {
+        let (mut st, s) = up(minute, gust);
+        st.outside.as_mut().unwrap().at = At::Overworld(peak);
+        shot_stack(name, &st, &[&s], SIZE);
+        // and two seconds on, the hills quiet again
+        st.tick += 60;
+        shot_stack(&format!("{name}_after"), &st, &[&s], SIZE);
+    }
+    eprintln!("overworld motion shots round {at:?}, the gust on {peak:?} at tick {gust}");
+}
