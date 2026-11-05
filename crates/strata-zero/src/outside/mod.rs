@@ -37,6 +37,155 @@ pub struct Outside {
     /// cell `at` names. Not saved: a run reopened out here wakes on the body.
     #[serde(skip)]
     pub net: Option<Pos>,
+    /// The city or town the run's city is; none for the home city (and every run from
+    /// before other cities could be walked into).
+    #[serde(default)]
+    pub here: Option<Settlement>,
+    /// The other cities and towns built this session, each the same from its world every
+    /// time it's built: kept so walking back in is quick.
+    #[serde(skip)]
+    pub built: BTreeMap<Settlement, City>,
+    /// The other cities' and towns' blocks, from the world (`others`).
+    #[serde(skip)]
+    blocks: std::cell::OnceCell<Vec<(Settlement, Rect)>>,
+}
+
+/// A place on the overworld with a map of its own: a world city, or one of its towns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct Settlement {
+    pub city: u8,
+    pub town: Option<u8>,
+}
+
+/// Everything a run holds of the city it is in: set aside, for the home city, while
+/// you're in another (and saved with the run).
+#[derive(Serialize, Deserialize)]
+pub struct Stay {
+    pub city: City,
+    pub player: Option<crate::walker::Player>,
+    pub world: Option<sim::World>,
+    pub interiors: crate::interiors::Interiors,
+    pub constructs: crate::constructs::Constructs,
+    pub net: crate::net::NetState,
+    pub backdoors: crate::backdoors::Backdoors,
+    pub ground: game::Ground,
+    pub foes: Vec<crate::foes::Foe>,
+    pub bots: Vec<crate::bots::BotOut>,
+    pub live: Vec<crate::blast::Live>,
+    pub journal: crate::credentials::Journal,
+    pub jobs: crate::jobs::Jobs,
+    pub missions: crate::missions::Missions,
+    pub track: Option<crate::track::Track>,
+}
+
+impl Stay {
+    /// The city the run is in, taken out of it.
+    fn take(st: &mut AppState) -> Option<Stay> {
+        use std::mem::take;
+        Some(Stay {
+            city: st.city.take()?,
+            player: st.player.take(),
+            world: st.world.take(),
+            interiors: take(&mut st.interiors),
+            constructs: take(&mut st.constructs),
+            net: take(&mut st.net),
+            backdoors: take(&mut st.backdoors),
+            ground: take(&mut st.ground),
+            foes: take(&mut st.foes),
+            bots: take(&mut st.bots),
+            live: take(&mut st.live),
+            journal: take(&mut st.journal),
+            jobs: take(&mut st.jobs),
+            missions: take(&mut st.missions),
+            track: st.track.take(),
+        })
+    }
+
+    /// A city as you first come into it: its people at their day, nothing else yet.
+    fn fresh(st: &AppState, city: City) -> Stay {
+        let day = 24 * 60;
+        let minute = st.minute_of_day() as u64;
+        let spent = (st.tick / sim::TICKS_PER_MINUTE) % day;
+        let start = (minute + day - spent) % day;
+        let world = sim::World::seed(
+            &city,
+            &st.people,
+            &sim::SimParams::default(),
+            start as u16,
+            st.tick,
+        );
+        Stay {
+            city,
+            player: None,
+            world: Some(world),
+            interiors: Default::default(),
+            constructs: Default::default(),
+            net: Default::default(),
+            backdoors: Default::default(),
+            ground: Default::default(),
+            foes: Vec::new(),
+            bots: Vec::new(),
+            live: Vec::new(),
+            journal: Default::default(),
+            jobs: Default::default(),
+            missions: Default::default(),
+            track: None,
+        }
+    }
+
+    /// Puts this city in place as the one the run is in, its people's places rebuilt
+    /// and its home (the flat, in the home city only) found again.
+    fn put(self, st: &mut AppState, home: bool) {
+        let Stay {
+            city,
+            player,
+            mut world,
+            interiors,
+            constructs,
+            net,
+            backdoors,
+            ground,
+            foes,
+            bots,
+            live,
+            journal,
+            jobs,
+            missions,
+            track,
+        } = self;
+        if let Some(w) = world.as_mut() {
+            w.rebuild(&city, &st.people);
+        }
+        st.home = if home {
+            crate::home::HomeRig::find(&city)
+        } else {
+            None
+        };
+        st.city = Some(city);
+        st.player = player;
+        st.world = world;
+        st.interiors = interiors;
+        st.constructs = constructs;
+        st.net = net;
+        st.backdoors = backdoors;
+        st.ground = ground;
+        st.foes = foes;
+        st.bots = bots;
+        st.live = live;
+        st.journal = journal;
+        st.jobs = jobs;
+        st.missions = missions;
+        st.track = track;
+        st.fx.clear();
+        crate::holds::relight(st);
+    }
+
+    /// After a run is reopened: the set-aside city's people's places rebuilt.
+    pub fn reopened(&mut self, people: &sim::People) {
+        if let Some(w) = self.world.as_mut() {
+            w.rebuild(&self.city, people);
+        }
+    }
 }
 
 impl Outside {
@@ -54,6 +203,9 @@ impl Outside {
             seen: BTreeMap::new(),
             world: Some(world),
             net: None,
+            here: None,
+            built: BTreeMap::new(),
+            blocks: Default::default(),
         })
     }
 
@@ -142,10 +294,61 @@ impl Outside {
         street_near(city, Pos::new(cell.x - TILE * b.x, cell.y - TILE * b.y))
     }
 
-    /// Whether world-wide detail cell `cell` lies in the city's block.
-    pub fn in_city(&self, city: &City, cell: Pos) -> bool {
-        self.block(city)
-            .contains(Pos::new(cell.x.div_euclid(TILE), cell.y.div_euclid(TILE)))
+    /// The home city: the world's.
+    pub fn home(&self) -> Settlement {
+        let city = self.world().cities.iter().position(|c| c.home).unwrap_or(0) as u8;
+        Settlement { city, town: None }
+    }
+
+    /// The city or town the run is in.
+    pub fn here(&self) -> Settlement {
+        self.here.unwrap_or_else(|| self.home())
+    }
+
+    /// Every city and town of the world but the home city, each with its block.
+    pub fn others(&self) -> Vec<(Settlement, Rect)> {
+        self.blocks.get_or_init(|| self.blocks_of_others()).clone()
+    }
+
+    fn blocks_of_others(&self) -> Vec<(Settlement, Rect)> {
+        let w = self.world();
+        let home = self.home();
+        let mut out = Vec::new();
+        for (i, c) in w.cities.iter().enumerate() {
+            let i = i as u8;
+            let s = Settlement {
+                city: i,
+                town: None,
+            };
+            if s != home {
+                out.push((s, w.city_block(i)));
+            }
+            for t in 0..c.towns.len() as u8 {
+                if let Some(b) = w.town_block(i, t) {
+                    out.push((
+                        Settlement {
+                            city: i,
+                            town: Some(t),
+                        },
+                        b,
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    /// What a city or town is called.
+    pub fn name(&self, s: Settlement) -> String {
+        let city = self
+            .world()
+            .cities
+            .get(s.city as usize)
+            .map_or("the city", |c| c.name.as_str());
+        match s.town {
+            None => city.to_string(),
+            Some(_) => format!("a town off {city}"),
+        }
     }
 }
 
@@ -170,6 +373,104 @@ pub fn world_params(seed: u64) -> WorldParams {
         size: citygen::overworld::WorldSize::Custom { w, h },
         ..d
     }
+}
+
+/// The city or town whose map covers overworld tile `tile`: the one you're in first,
+/// then the home city (set aside), then the rest.
+pub fn settlement_at(st: &AppState, tile: Pos) -> Option<Settlement> {
+    let o = st.outside.as_ref()?;
+    let city = st.city.as_ref()?;
+    if o.block(city).contains(tile) {
+        return Some(o.here());
+    }
+    let home = o.home();
+    if let Some(stay) = st.away.as_ref()
+        && o.block(&stay.city).contains(tile)
+    {
+        return Some(home);
+    }
+    o.others()
+        .into_iter()
+        .find(|(s, b)| *s != o.here() && b.contains(tile))
+        .map(|(s, _)| s)
+}
+
+/// Whether overworld tile `tile` is on any city's or town's block (tests pick open
+/// ground off them all).
+#[cfg(test)]
+pub(crate) fn in_any_block(st: &AppState, tile: Pos) -> bool {
+    settlement_at(st, tile).is_some()
+}
+
+/// Whether the run is in a city or town other than its home: the story waits there.
+pub fn away_from_home(st: &AppState) -> bool {
+    st.outside
+        .as_ref()
+        .is_some_and(|o| o.here.is_some_and(|h| h != o.home()))
+}
+
+/// Into city or town `s`: the one you're in set aside (kept with the run when it's the
+/// home city), `s` built on its site the first time this session (else as it was kept).
+/// One that won't build leaves you where you were.
+pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
+    let Some(o) = st.outside.as_ref() else {
+        return Err("there is no world out here".into());
+    };
+    let (here, home) = (o.here(), o.home());
+    if s == here {
+        return Ok(());
+    }
+    let name = o.name(s);
+    let next = if s == home {
+        None
+    } else if let Some(c) = o.built.get(&s) {
+        Some(c.clone())
+    } else {
+        let w = o.world();
+        let base = citygen::GenParams {
+            seed: citygen::rng::hash64(
+                w.seed ^ 0xC17E,
+                ((s.city as u64) << 8) | s.town.map_or(0, |t| t as u64 + 1),
+            ) % 1_000_000_007,
+            ..st.params.clone()
+        };
+        let params = match s.town {
+            None => Some(citygen::sited(w, s.city, base)),
+            Some(t) => citygen::sited_town(w, s.city, t, base),
+        };
+        let built = params.and_then(|p| citygen::Generator::run(p).ok());
+        match built {
+            Some(c) => Some(c),
+            None => return Err(format!("no way into {name}")),
+        }
+    };
+    if s == home && st.away.is_none() {
+        return Err(format!("no way into {name}"));
+    }
+    let Some(current) = Stay::take(st) else {
+        return Err("nowhere to go".into());
+    };
+    if here == home {
+        st.away = Some(Box::new(current));
+    } else if let Some(o) = st.outside.as_mut() {
+        o.built.insert(here, current.city);
+    }
+    match next {
+        None => {
+            if let Some(stay) = st.away.take() {
+                stay.put(st, true);
+            }
+        }
+        Some(city) => {
+            let stay = Stay::fresh(st, city);
+            stay.put(st, false);
+        }
+    }
+    if let Some(o) = st.outside.as_mut() {
+        o.here = (s != home).then_some(s);
+    }
+    st.say(format!("into {name}"));
+    Ok(())
 }
 
 /// Detail cells to an overworld tile, each way.
@@ -316,6 +617,130 @@ mod tests {
             })
             .unwrap()
         })
+    }
+
+    /// A run in seed 3's home city on its site, its world made, you on its street.
+    fn home_run() -> AppState {
+        let mut st = AppState::new();
+        st.enter_city(sited().clone());
+        st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
+        ensure(&mut st);
+        st
+    }
+
+    /// Another city of the world, and the overworld tile west of its block's middle
+    /// row, a step east into it.
+    fn beside_another(st: &AppState) -> (Settlement, Pos) {
+        let o = st.outside.as_ref().unwrap();
+        let (s, b) = o
+            .others()
+            .into_iter()
+            .find(|(s, b)| s.town.is_none() && b.x > 0)
+            .unwrap();
+        (s, Pos::new(b.x - 1, b.y + b.h / 2))
+    }
+
+    #[test]
+    fn stepping_onto_another_city_goes_into_it() {
+        let mut st = home_run();
+        let home = st.city.as_ref().unwrap().seed;
+        let (s, from) = beside_another(&st);
+        st.outside.as_mut().unwrap().at = At::Overworld(from);
+        let moved = moves::world_step(&mut st, citygen::Dir::E);
+        assert!(matches!(moved, moves::Moved::City(_)));
+        let site = st.city.as_ref().unwrap().params.site.clone().unwrap();
+        assert_eq!((site.city, site.town), (s.city, s.town));
+        assert_eq!(st.outside.as_ref().unwrap().here, Some(s));
+        assert_eq!(st.away.as_ref().unwrap().city.seed, home, "home set aside");
+        assert!(st.home.is_none(), "no flat in another city");
+        assert!(away_from_home(&st));
+    }
+
+    #[test]
+    fn coming_home_puts_the_home_city_back() {
+        let mut st = home_run();
+        crate::missions::begin(&mut st);
+        let story = format!("{:?}", st.missions);
+        let city = st.city.clone();
+        let flat = st.home.as_ref().map(|h| h.home.building);
+        let (s, _) = beside_another(&st);
+        enter(&mut st, s).unwrap();
+        assert!(st.missions.runs.is_empty(), "the story isn't there");
+        let home = st.outside.as_ref().unwrap().home();
+        enter(&mut st, home).unwrap();
+        assert_eq!(st.city, city);
+        assert_eq!(format!("{:?}", st.missions), story);
+        assert_eq!(st.home.as_ref().map(|h| h.home.building), flat);
+        assert!(st.away.is_none() && st.outside.as_ref().unwrap().here.is_none());
+        assert!(!away_from_home(&st));
+    }
+
+    #[test]
+    fn the_story_waits_in_another_city() {
+        let mut st = home_run();
+        crate::missions::begin(&mut st);
+        let story = format!("{:?}", st.missions);
+        let (s, _) = beside_another(&st);
+        enter(&mut st, s).unwrap();
+        crate::clock::run(
+            &mut st,
+            Some(30 * sim::TICKS_PER_MINUTE),
+            crate::clock::PATHS_PER_FRAME,
+        );
+        assert!(st.missions.runs.is_empty());
+        assert_eq!(format!("{:?}", st.away.as_ref().unwrap().missions), story);
+    }
+
+    #[test]
+    fn a_run_saved_in_another_city_reopens_there() {
+        let mut st = home_run();
+        let city = st.city.clone();
+        let (s, _) = beside_another(&st);
+        enter(&mut st, s).unwrap();
+        let there = st.city.as_ref().unwrap().seed;
+        let dir = crate::runs::testutil::Dir::new("away");
+        let st = crate::runs::testutil::running(st);
+        let path = crate::runs::file::write(&dir.0, &st).unwrap();
+        let mut back = AppState::new();
+        let (_, snap, lost) = crate::runs::file::read(&path, &back.book).unwrap();
+        crate::runs::snapshot::restore(&mut back, snap);
+        crate::runs::snapshot::after_restore(&mut back, lost);
+        assert_eq!(back.city.as_ref().unwrap().seed, there);
+        assert_eq!(back.outside.as_ref().unwrap().here, Some(s));
+        let home = back.outside.as_ref().unwrap().home();
+        enter(&mut back, home).unwrap();
+        assert_eq!(back.city, city, "the home city as it was");
+    }
+
+    #[test]
+    fn a_settlement_that_wont_build_leaves_you_outside() {
+        let mut st = home_run();
+        let city = st.city.clone();
+        let (s, _) = beside_another(&st);
+        let nowhere = Settlement {
+            city: s.city,
+            town: Some(99),
+        };
+        assert!(enter(&mut st, nowhere).is_err());
+        assert_eq!(st.city, city);
+        assert!(st.away.is_none() && st.outside.as_ref().unwrap().here.is_none());
+    }
+
+    #[test]
+    fn a_town_is_walked_into() {
+        let mut st = home_run();
+        let town = st
+            .outside
+            .as_ref()
+            .unwrap()
+            .others()
+            .into_iter()
+            .find(|(s, _)| s.town.is_some())
+            .map(|(s, _)| s)
+            .expect("a town of its own in seed 3's world");
+        enter(&mut st, town).unwrap();
+        let site = st.city.as_ref().unwrap().params.site.clone().unwrap();
+        assert_eq!((site.city, site.town), (town.city, town.town));
     }
 
     #[test]

@@ -38,17 +38,29 @@ pub fn step_cost(world: &Overworld, to: Pos) -> Option<u64> {
 /// One step across the overworld: onto the next tile on the city's clock, or into the
 /// city when the step crosses into its block from outside.
 pub fn world_step(st: &mut AppState, d: Dir) -> Moved {
-    let (Some(o), Some(city)) = (st.outside.as_ref(), st.city.as_ref()) else {
+    let (Some(o), Some(_)) = (st.outside.as_ref(), st.city.as_ref()) else {
         return Moved::Blocked("there is no world out here");
     };
     let At::Overworld(from) = o.at else {
         return Moved::Blocked("not on the overworld");
     };
     let to = from.step(d);
-    let block = o.block(city);
-    if block.contains(to) && !block.contains(from) {
-        return Moved::City(o.street_of(city, to));
+    // onto a city's or a town's block from outside it: into it
+    if let Some(s) = crate::outside::settlement_at(st, to)
+        && crate::outside::settlement_at(st, from) != Some(s)
+    {
+        match crate::outside::enter(st, s) {
+            Ok(()) => {
+                if let (Some(o), Some(city)) = (st.outside.as_ref(), st.city.as_ref()) {
+                    return Moved::City(o.street_of(city, to));
+                }
+            }
+            Err(why) => st.warn(why),
+        }
     }
+    let Some(o) = st.outside.as_ref() else {
+        return Moved::Blocked("there is no world out here");
+    };
     let Some(cost) = step_cost(o.world(), to) else {
         return Moved::Blocked(closed(o.world(), to));
     };
@@ -72,15 +84,25 @@ fn closed(world: &Overworld, to: Pos) -> &'static str {
 /// ↵ on the overworld: onto the tile's ground (on its road if it has one, else the dry
 /// ground nearest its middle), or into the city on a tile of its block.
 pub fn down(st: &mut AppState) -> Result<Moved, &'static str> {
-    let (Some(o), Some(city)) = (st.outside.as_ref(), st.city.as_ref()) else {
+    let (Some(o), Some(_)) = (st.outside.as_ref(), st.city.as_ref()) else {
         return Err("there is no world out here");
     };
     let At::Overworld(t) = o.at else {
         return Err("not on the overworld");
     };
-    if o.block(city).contains(t) {
-        return Ok(Moved::City(o.street_of(city, t)));
+    if let Some(s) = crate::outside::settlement_at(st, t) {
+        match crate::outside::enter(st, s) {
+            Ok(()) => {
+                if let (Some(o), Some(city)) = (st.outside.as_ref(), st.city.as_ref()) {
+                    return Ok(Moved::City(o.street_of(city, t)));
+                }
+            }
+            Err(why) => st.warn(why),
+        }
     }
+    let Some(o) = st.outside.as_ref() else {
+        return Err("there is no world out here");
+    };
     // the road nearest the middle, else dry ground joined to the open (not shut in a
     // pen or a crater), else the nearest shore when the tile is under water
     let cell = detail::landing(o.world(), t).ok_or("nothing to stand on there")?;
@@ -164,12 +186,11 @@ pub(crate) mod tests {
 
     /// A tile outside the block where `f` holds, with a neighbour on `d` that also does.
     fn find(st: &AppState, f: impl Fn(Pos) -> bool) -> Pos {
-        let b = block(st);
         world(st)
             .tiles
             .iter()
             .map(|(p, _)| p)
-            .find(|p| !b.contains(*p) && f(*p))
+            .find(|p| !crate::outside::in_any_block(st, *p) && f(*p))
             .expect("such a tile")
     }
 
@@ -307,7 +328,11 @@ pub(crate) mod tests {
         );
         let mut landed = 0;
         for (i, (p, t)) in w.tiles.iter().enumerate() {
-            if i % 7 != 0 || b.contains(p) || matches!(t.water, Water::Sea | Water::Lake) {
+            if i % 7 != 0
+                || b.contains(p)
+                || crate::outside::in_any_block(&st, p)
+                || matches!(t.water, Water::Sea | Water::Lake)
+            {
                 continue;
             }
             put(&mut st, At::Overworld(p));

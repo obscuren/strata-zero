@@ -143,15 +143,23 @@ pub fn sight_area(at: Pos) -> Rect {
 /// One step on the open ground: onto the next cell on the city's clock, or into the city
 /// when the cell is in its block.
 pub fn ground_step(st: &mut AppState, view: &mut GroundView, d: Dir) -> Moved {
-    let (Some(o), Some(city)) = (st.outside.as_ref(), st.city.as_ref()) else {
+    let (Some(o), Some(_)) = (st.outside.as_ref(), st.city.as_ref()) else {
         return Moved::Blocked("there is no world out here");
     };
     let At::Ground(from) = o.at else {
         return Moved::Blocked("not on the open ground");
     };
     let to = from.step(d);
-    if o.in_city(city, to) {
-        return Moved::City(o.street_at(city, to));
+    let tile = Pos::new(to.x.div_euclid(TILE), to.y.div_euclid(TILE));
+    if let Some(s) = crate::outside::settlement_at(st, tile) {
+        match crate::outside::enter(st, s) {
+            Ok(()) => {
+                if let (Some(o), Some(city)) = (st.outside.as_ref(), st.city.as_ref()) {
+                    return Moved::City(o.street_at(city, to));
+                }
+            }
+            Err(why) => st.warn(why),
+        }
     }
     let Some(t) = view.tile(to) else {
         return Moved::Blocked("the world ends here");
@@ -274,13 +282,18 @@ mod tests {
         let w = o.world();
         let ew = |p: Pos| {
             !b.contains(p)
+                && !crate::outside::in_any_block(st, p)
                 && w.tile(p)
                     .is_some_and(|t| t.road == LINK_E | LINK_W && t.water == Water::None)
         };
         w.tiles
             .iter()
             .map(|(p, _)| p)
-            .find(|p| ew(*p) && ew(p.offset(1, 0)))
+            .find(|p| {
+                ew(*p)
+                    && ew(p.offset(1, 0))
+                    && (2..10).all(|k| !crate::outside::in_any_block(st, p.offset(k, 0)))
+            })
             .expect("a highway")
     }
 
@@ -327,8 +340,25 @@ mod tests {
     #[test]
     fn the_ground_stays_right_as_you_walk() {
         let mut st = on_the_world();
-        let t = highway(&st);
-        let start = Pos::new(TILE * t.x, TILE * t.y + 3);
+        // a highway whose row is open ground for 64 cells east, off every city's block
+        let start = {
+            let o = outside(&st);
+            let w = o.world();
+            w.tiles
+                .iter()
+                .filter(|(p, t)| {
+                    t.road == LINK_E | LINK_W
+                        && t.water == Water::None
+                        && (0..9).all(|k| !crate::outside::in_any_block(&st, p.offset(k, 0)))
+                })
+                .map(|(p, _)| Pos::new(TILE * p.x, TILE * p.y + 3))
+                .find(|c| {
+                    detail::region(w, c.x, c.y, 64, 1)
+                        .iter()
+                        .all(|(_, t)| t.is_walkable())
+                })
+                .expect("an open stretch of highway")
+        };
         let mut view = stand(&mut st, start);
         let w = outside(&st).world().clone();
         let mut steps = 0;

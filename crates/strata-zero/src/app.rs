@@ -179,6 +179,8 @@ pub struct AppState {
     /// The world beyond the city: the overworld and where you are on it; made from the
     /// city's seed on first need, forgotten with the city.
     pub outside: Option<crate::outside::Outside>,
+    /// The home city, set aside while you're in another city or town of the world.
+    pub away: Option<Box<crate::outside::Stay>>,
     /// The story missions' book.
     pub book: crate::missions::Book,
     /// What the city says as you drop in.
@@ -367,6 +369,7 @@ impl AppState {
             jobs: Default::default(),
             flavor: crate::jobs::Flavor::load().expect("the jobs pack is valid"),
             outside: None,
+            away: None,
             book,
             broadcasts,
             missions: Default::default(),
@@ -497,6 +500,7 @@ impl AppState {
         self.rest = None;
         self.track = None;
         self.outside = None;
+        self.away = None;
         crate::credentials::purge(&mut self.content, &mut self.character);
         self.ground = Default::default();
         self.player = None;

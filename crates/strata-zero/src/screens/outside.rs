@@ -683,8 +683,8 @@ fn here_lines(st: &AppState, o: &Outside) -> Vec<Line<'static>> {
     let Some(tile) = w.tile(t) else {
         return Vec::new();
     };
-    let place = match (st.city.as_ref(), tile.urban) {
-        (Some(city), _) if o.block(city).contains(t) => w.home().name.clone(),
+    let place = match (crate::outside::settlement_at(st, t), tile.urban) {
+        (Some(s), _) => o.name(s),
         (_, Some(u)) => w
             .cities
             .get(u.city as usize)
@@ -738,7 +738,8 @@ fn near_lines(st: &AppState, o: &Outside, n: usize) -> Vec<Line<'static>> {
         w.tile(t)
             .and_then(|x| x.urban)
             .is_some_and(|u| u.city as usize == i)
-            || w.cities[i].home && st.city.as_ref().is_some_and(|c| o.block(c).contains(t))
+            || crate::outside::settlement_at(st, t)
+                .is_some_and(|s| s.town.is_none() && s.city as usize == i)
     };
     let mut places: Vec<(i32, String, Pos)> = w
         .cities
@@ -974,6 +975,7 @@ mod tests {
             .map(|(p, _)| p)
             .find(|p| {
                 !b.contains(*p)
+                    && !crate::outside::in_any_block(&st, *p)
                     && w.tile(*p)
                         .is_some_and(|t| t.road != 0 && t.water == Water::None)
             })
@@ -1303,7 +1305,12 @@ mod tests {
         let poi = w
             .pois
             .iter()
-            .find(|p| p.kind == PoiKind::TruckStop)
+            .find(|p| {
+                p.kind == PoiKind::TruckStop
+                    && (-3..=3).all(|dy| {
+                        (-3..=3).all(|dx| !crate::outside::in_any_block(&st, p.at.offset(dx, dy)))
+                    })
+            })
             .unwrap()
             .clone();
         let o = Pos::new(TILE * (poi.at.x - 3), TILE * (poi.at.y - 3));

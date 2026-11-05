@@ -39,7 +39,10 @@ pub fn run(st: &mut AppState, world_ticks: Option<u64>, paths: usize) {
         return;
     }
     crate::cameras::tick(st);
-    crate::missions::tick(st);
+    // in another city of the world the home city's story waits for you
+    if !crate::outside::away_from_home(st) {
+        crate::missions::tick(st);
+    }
 }
 
 #[cfg(test)]

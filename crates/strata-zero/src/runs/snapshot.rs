@@ -37,6 +37,7 @@ pub struct SnapshotRef<'a> {
     pub missions: &'a crate::missions::Missions,
     pub track: &'a Option<crate::track::Track>,
     pub outside: &'a Option<crate::outside::Outside>,
+    pub away: &'a Option<Box<crate::outside::Stay>>,
     pub run: &'a Option<RunMeta>,
     /// The catalogue entries the run made (its keycards): the build's content lacks them.
     pub keycards: Vec<game::Item>,
@@ -74,6 +75,9 @@ pub struct Snapshot {
     /// The world beyond the city; the first saves have none (it is made on first need).
     #[serde(default)]
     pub outside: Option<crate::outside::Outside>,
+    /// The home city set aside while the run is in another; the first saves have none.
+    #[serde(default)]
+    pub away: Option<Box<crate::outside::Stay>>,
     pub run: Option<RunMeta>,
     pub keycards: Vec<game::Item>,
 }
@@ -143,6 +147,7 @@ pub fn snapshot(st: &AppState) -> SnapshotRef<'_> {
         book: _,       // content: the story's book
         broadcasts: _, // content
         outside,
+        away,
         missions,
         rest: _,      // never Some at a save: no save is taken asleep
         drawn_you: _, // UI: where the last frame drew you
@@ -182,6 +187,7 @@ pub fn snapshot(st: &AppState) -> SnapshotRef<'_> {
         missions,
         track,
         outside,
+        away,
         run,
         keycards: crate::credentials::run_items(content),
     }
@@ -252,6 +258,7 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
         book: _,       // content
         broadcasts: _, // content
         outside,
+        away,
         missions,
         rest,
         drawn_you: _, // UI
@@ -292,6 +299,7 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
         missions: s_missions,
         track: s_track,
         outside: s_outside,
+        away: s_away,
         run: s_run,
         keycards,
     } = s;
@@ -322,6 +330,7 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
     *missions = s_missions;
     *track = s_track;
     *outside = s_outside;
+    *away = s_away;
     *run = s_run;
     crate::credentials::put_back(content, keycards);
     // Never saved asleep: the run comes back awake. Nor in the doc's chair: the deck it
@@ -338,6 +347,9 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
 pub fn after_restore(st: &mut AppState, mut lost: Vec<String>) {
     if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
         world.rebuild(city, &st.people);
+    }
+    if let Some(stay) = st.away.as_mut() {
+        stay.reopened(&st.people);
     }
     st.home = st.city.as_ref().and_then(crate::home::HomeRig::find);
     // The street's `dark` is the city's, skipped by the save: made again from the
