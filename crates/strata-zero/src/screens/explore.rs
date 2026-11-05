@@ -2446,8 +2446,9 @@ impl MapScreen {
     }
 
     /// The stream built under the view and round you wherever the city doesn't own the
-    /// ground, before any step is checked; you look round again when new ground came
-    /// into reach.
+    /// ground, before any step is checked, and the cities and towns near it building in
+    /// the background; you look round again when new ground came into reach or a city
+    /// came in.
     fn tend(&self, st: &mut AppState) {
         if !carries_on(st, self.place) {
             return;
@@ -14963,6 +14964,109 @@ mod tests {
             let city_drawn = pass(&MapRef::stratum_at(city, street, minute), origin);
             assert_eq!(buf[(sx, sy)], town_drawn, "the town's");
             assert_ne!(buf[(sx, sy)], city_drawn);
+        }
+
+        #[test]
+        fn the_neighbour_draws_before_you_walk_in() {
+            // on the open ground beside another city's map, never in it: once its build
+            // in the background is done, its buildings draw past the edge
+            use citygen::overworld::detail;
+            let mut st = home_run();
+            st.rain = false;
+            let (s, b) = {
+                let o = st.outside.as_ref().unwrap();
+                o.others()
+                    .into_iter()
+                    .find(|(s, b)| s.town.is_none() && b.x > 4)
+                    .unwrap()
+            };
+            let (live, beside) = {
+                let o = st.outside.as_ref().unwrap();
+                let w = o.world();
+                // a cell of the open ground a tile west of its map you can stand on
+                let beside = (b.y..b.bottom())
+                    .map(|y| Pos::new(b.x - 1, y))
+                    .filter(|t| o.owner(*t).is_none())
+                    .find_map(|t| {
+                        let at = Pos::new(TILE * t.x, TILE * t.y);
+                        detail::region(w, at.x, at.y, TILE as u32, TILE as u32)
+                            .iter()
+                            .find(|(_, c)| c.is_walkable())
+                            .map(|(p, _)| at.offset(p.x, p.y))
+                    })
+                    .expect("open ground beside the city");
+                (o.origin(st.city.as_ref().unwrap()), beside)
+            };
+            let you = Pos::new(beside.x - live.x, beside.y - live.y);
+            {
+                let p = st.player.as_mut().unwrap();
+                p.place = Place::Stratum(StratumKind::Street);
+                p.pos = you;
+            }
+            let mut walk = MapScreen::walking(&mut st);
+            draw_buffer(&walk, &st, 120, 40);
+            walk.update(&mut st, &[]);
+            {
+                let o = st.outside.as_ref().unwrap();
+                assert!(o.stream.building(s), "building as you near it");
+                assert!(!o.built.contains_key(&s), "not built on the frame");
+            }
+            // the nearest cell of one of its buildings, on a tile it owns
+            let street = StratumKind::Street;
+            let (q, theirs_at) = {
+                let o = st.outside.as_ref().unwrap();
+                let params = crate::outside::build_params(o, s, &st.params).unwrap();
+                let them = citygen::Generator::run(params).unwrap();
+                let theirs = o.origin(&them);
+                let w = o.world();
+                them.stratum(street)
+                    .unwrap()
+                    .tiles
+                    .iter()
+                    .filter(|(q, t)| {
+                        let at = theirs.offset(q.x, q.y);
+                        let tile = Pos::new(at.x.div_euclid(TILE), at.y.div_euclid(TILE));
+                        t.building.is_some()
+                            && o.owner(tile) == Some(s)
+                            && detail::region(w, at.x, at.y, 1, 1)[Pos::new(0, 0)].terrain
+                                != t.terrain
+                    })
+                    .min_by_key(|(q, _)| theirs.offset(q.x, q.y).manhattan(beside))
+                    .map(|(q, _)| (theirs.offset(q.x, q.y), theirs))
+                    .expect("a building of theirs")
+            };
+            let p = Pos::new(q.x - live.x, q.y - live.y);
+            let drawn = |st: &AppState| {
+                let mut look = MapScreen::explore(st.tick);
+                look.cam.snap(p);
+                look.cursor = Pos::new(-1000, -1000);
+                let buf = draw_buffer(&look, st, 120, 40);
+                let area = look.last_map.get();
+                let origin = look.cam.origin(area.width, area.height);
+                let (sx, sy) = tile_to_screen(area, origin, p).unwrap();
+                (buf[(sx, sy)].clone(), area, origin, (sx, sy))
+            };
+            let (before, ..) = drawn(&st);
+            crate::outside::stream::finish(&mut st);
+            let o = st.outside.as_ref().unwrap();
+            assert_eq!(o.here(), o.home(), "never walked in");
+            let them = &o.built[&s];
+            assert_eq!(o.origin(them), theirs_at);
+            let (after, area, origin, (sx, sy)) = drawn(&st);
+            let mut out = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 120, 40));
+            let shift = Pos::new(live.x - theirs_at.x, live.y - theirs_at.y);
+            TilePass {
+                map: &MapRef::stratum_at(them, street, st.minute_of_day()),
+                stratum: street,
+                origin: origin.offset(shift.x, shift.y),
+                tick: st.tick,
+                style: &st.style,
+                vis: &|_| crate::render::Visibility::Visible,
+                keep: None,
+            }
+            .draw(area, &mut out);
+            assert_eq!(after, out[(sx, sy)].clone(), "their building");
+            assert_ne!(before, after, "drawn as the ground before it was built");
         }
 
         /// The text of the sidebar's column, right of the map.

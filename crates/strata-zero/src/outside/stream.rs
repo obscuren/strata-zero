@@ -9,9 +9,11 @@ use crate::render::ConnDir;
 use crate::render::map::TileMap;
 use citygen::overworld::Overworld;
 use citygen::{BuildingKind, City, Grid, Pos, Rect, Size, StratumKind, Terrain, Theme, Tile};
+use std::collections::{BTreeMap, BTreeSet};
 
-/// The open ground round the view, both its layers: the street's and the Net's. Not
-/// saved: everything in it is made again from the world.
+/// The open ground round the view, both its layers: the street's and the Net's, and the
+/// cities and towns building as the view nears them. Not saved: everything in it is made
+/// again from the world.
 pub struct Stream {
     /// The street's layer, with its light (its windows' and its lamps').
     pub street: GroundView,
@@ -19,6 +21,8 @@ pub struct Stream {
     pub net: GroundView,
     /// The world's size in cells, from the last cover.
     cells: Size,
+    /// The cities and towns building off the frame, and what came of them.
+    builds: Builds,
 }
 
 impl Default for Stream {
@@ -27,11 +31,13 @@ impl Default for Stream {
             street: GroundView::default(),
             net: GroundView::net(),
             cells: Size { w: 0, h: 0 },
+            builds: Builds::default(),
         }
     }
 }
 
-/// A clone starts empty: the stream is made again from the world as it's needed.
+/// A clone starts empty: the stream is made again from the world as it's needed, and
+/// the builds in flight stay with the one that started them.
 impl Clone for Stream {
     fn clone(&self) -> Stream {
         Stream::default()
@@ -42,11 +48,194 @@ impl std::fmt::Debug for Stream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Stream")
             .field("tiles", &(self.street.held() + self.net.held()))
+            .field("building", &self.builds.flight.keys().collect::<Vec<_>>())
+            .field("failed", &self.builds.failed)
             .finish()
     }
 }
 
+/// Cells past the view's rectangle a city or town starts building at: two overworld
+/// tiles.
+pub const REACH: i32 = 2 * TILE;
+
+/// What a build thread hands back: the city, and its people seeded; none when it
+/// wouldn't build.
+type Made = Option<(City, sim::World)>;
+
+/// The cities and towns building off the frame, each on a thread of its own, and what
+/// came of them.
+#[derive(Default)]
+struct Builds {
+    /// Building.
+    flight: BTreeMap<Settlement, std::thread::JoinHandle<Made>>,
+    /// The people each city built here was seeded with, until you walk in.
+    people: BTreeMap<Settlement, sim::World>,
+    /// Those that wouldn't build: not tried again this session.
+    failed: BTreeSet<Settlement>,
+    /// Builds started this session.
+    started: usize,
+}
+
+/// In a test no build outlives the run that started it: dropped, it waits for them.
+/// In play they're let go, to finish unwanted.
+#[cfg(test)]
+impl Drop for Builds {
+    fn drop(&mut self) {
+        for (_, build) in std::mem::take(&mut self.flight) {
+            let _ = build.join();
+        }
+    }
+}
+
 impl Stream {
+    /// Starts a build of each of `wanted` not built (in `built`), building or failed:
+    /// a settlement with its params (made from the run; none: it has no map), on a
+    /// thread of its own that then seeds its people with `people` for clock tick `now`,
+    /// minute `minute` of the day, as walking in seeds them. The builds finished are
+    /// collected: each city into `built`, its people kept here. Whether a city came
+    /// in.
+    pub fn tend(
+        &mut self,
+        built: &mut BTreeMap<Settlement, City>,
+        wanted: Vec<(Settlement, Option<citygen::GenParams>)>,
+        people: &sim::People,
+        now: u64,
+        minute: u16,
+    ) -> bool {
+        for (s, params) in wanted {
+            if !built.contains_key(&s) && !self.asked(s) {
+                self.start(s, params, people, now, minute);
+            }
+        }
+        self.collect(built, false)
+    }
+
+    /// Whether settlement `s` has been asked for and isn't to be again: building, or
+    /// it wouldn't build.
+    pub fn asked(&self, s: Settlement) -> bool {
+        self.builds.flight.contains_key(&s) || self.builds.failed.contains(&s)
+    }
+
+    /// Settlement `s` building on a thread of its own, its people seeded after.
+    fn start(
+        &mut self,
+        s: Settlement,
+        params: Option<citygen::GenParams>,
+        people: &sim::People,
+        now: u64,
+        minute: u16,
+    ) {
+        let Some(params) = params else {
+            self.builds.failed.insert(s);
+            return;
+        };
+        let people = people.clone();
+        let build = std::thread::Builder::new()
+            .name(format!("build {}.{:?}", s.city, s.town))
+            .spawn(move || {
+                let city = citygen::Generator::run(params).ok()?;
+                let world = super::seed_people(&city, &people, now, minute);
+                Some((city, world))
+            });
+        match build {
+            Ok(build) => {
+                self.builds.flight.insert(s, build);
+                self.builds.started += 1;
+            }
+            // no thread to be had: walking in builds it on the spot
+            Err(_) => {
+                self.builds.failed.insert(s);
+            }
+        }
+    }
+
+    /// Settlement `s`'s build, if it is in flight, waited for and collected into
+    /// `built`.
+    pub fn wait(&mut self, s: Settlement, built: &mut BTreeMap<Settlement, City>) {
+        if let Some(build) = self.builds.flight.remove(&s) {
+            self.land(s, build.join(), built);
+        }
+    }
+
+    /// Every build in flight waited for and collected into `built`. Whether a city came
+    /// in.
+    #[cfg(test)]
+    pub fn finish(&mut self, built: &mut BTreeMap<Settlement, City>) -> bool {
+        self.collect(built, true)
+    }
+
+    /// The builds finished (every one in flight, if `wait`) collected into `built`.
+    /// Whether a city came in.
+    fn collect(&mut self, built: &mut BTreeMap<Settlement, City>, wait: bool) -> bool {
+        let done: Vec<Settlement> = self
+            .builds
+            .flight
+            .iter()
+            .filter(|(_, build)| wait || build.is_finished())
+            .map(|(s, _)| *s)
+            .collect();
+        let mut came = false;
+        for s in done {
+            if let Some(build) = self.builds.flight.remove(&s) {
+                came |= self.land(s, build.join(), built);
+            }
+        }
+        came
+    }
+
+    /// What settlement `s`'s build came to: its city into `built` and its people kept,
+    /// else remembered as one that won't build. Whether the city came in. A build that
+    /// panicked panics here, as building it on the spot would have: the front ends'
+    /// panic hooks take a panic for the end of the game.
+    fn land(
+        &mut self,
+        s: Settlement,
+        made: std::thread::Result<Made>,
+        built: &mut BTreeMap<Settlement, City>,
+    ) -> bool {
+        match made {
+            Ok(Some((city, world))) => {
+                // one held already keeps its own
+                if built.contains_key(&s) {
+                    return false;
+                }
+                built.insert(s, city);
+                self.builds.people.insert(s, world);
+                true
+            }
+            Ok(None) => {
+                self.builds.failed.insert(s);
+                false
+            }
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
+    }
+
+    /// The people seeded with settlement `s` when it was built here, taken to walk in
+    /// with.
+    pub fn take_people(&mut self, s: Settlement) -> Option<sim::World> {
+        self.builds.people.remove(&s)
+    }
+
+    /// Whether settlement `s` is building.
+    #[cfg(test)]
+    pub fn building(&self, s: Settlement) -> bool {
+        self.builds.flight.contains_key(&s)
+    }
+
+    /// How many builds were started.
+    #[cfg(test)]
+    pub fn started(&self) -> usize {
+        self.builds.started
+    }
+
+    /// The people seeded with settlement `s` when it was built here, until you walk
+    /// in.
+    #[cfg(test)]
+    pub fn people(&self, s: Settlement) -> Option<&sim::World> {
+        self.builds.people.get(&s)
+    }
+
     /// Both layers built over `area` (world cells) and a ring past it; far tiles
     /// forgotten.
     pub fn cover(&mut self, world: &Overworld, area: Rect) {
@@ -342,20 +531,71 @@ pub fn live_owns(st: &AppState, p: Pos) -> bool {
 
 /// The stream built under `area` (cells of the live city's frame) wherever the live
 /// city doesn't own a cell of it: the open ground, and every settlement's but the
-/// live one's, built or not. Whether it built anything new.
+/// live one's, built or not; and every city and town but the live one whose map comes
+/// within `REACH` cells of `area` building in the background, those finished collected.
+/// Whether it built anything new, or a city came in.
 pub fn tend(st: &mut AppState, area: Rect) -> bool {
+    let came = tend_builds(st, area);
     let Some(foreign) = Beyond::of(st).and_then(|b| b.foreign(area)) else {
-        return false;
+        return came;
     };
     let Some(o) = st.outside.as_mut() else {
-        return false;
+        return came;
     };
     let Some(world) = o.world.as_ref() else {
-        return false;
+        return came;
     };
     let before = (o.stream.street.held(), o.stream.net.held());
     o.stream.cover(world, foreign);
-    before != (o.stream.street.held(), o.stream.net.held())
+    came || before != (o.stream.street.held(), o.stream.net.held())
+}
+
+/// Every city and town but the live one (and the home city, always held) whose map
+/// comes within `REACH` cells of `area` (the live city's frame) building in the
+/// background, its params made here, its people seeded for this hour; those finished
+/// collected. Whether a city came in.
+fn tend_builds(st: &mut AppState, area: Rect) -> bool {
+    let wanted: Vec<_> = {
+        let (Some(city), Some(o)) = (st.city.as_ref(), st.outside.as_ref()) else {
+            return false;
+        };
+        if city.is_lot() || o.world.is_none() {
+            return false;
+        }
+        let at = o.origin(city);
+        let near = Rect::new(
+            at.x + area.x - REACH,
+            at.y + area.y - REACH,
+            area.w + 2 * REACH,
+            area.h + 2 * REACH,
+        );
+        let here = o.here();
+        o.others()
+            .into_iter()
+            .filter(|(s, b)| {
+                *s != here
+                    && !o.built.contains_key(s)
+                    && !o.stream.asked(*s)
+                    && near.intersects(Rect::new(TILE * b.x, TILE * b.y, TILE * b.w, TILE * b.h))
+            })
+            .map(|(s, _)| (s, super::build_params(o, s, &st.params)))
+            .collect()
+    };
+    let (now, minute) = (st.clock_tick(), st.minute_of_day());
+    let Some(o) = st.outside.as_mut() else {
+        return false;
+    };
+    o.stream.tend(&mut o.built, wanted, &st.people, now, minute)
+}
+
+/// Every city and town building waited for and collected, so a test or a shot sees
+/// what play shows once they're done. Whether a city came in.
+#[cfg(test)]
+pub fn finish(st: &mut AppState) -> bool {
+    let Some(o) = st.outside.as_mut() else {
+        return false;
+    };
+    o.stream.finish(&mut o.built)
 }
 
 impl Beyond<'_> {
@@ -461,7 +701,6 @@ pub(crate) mod tests {
     use crate::render::map::StratumMap;
     use citygen::overworld::detail;
     use citygen::{Feature, GenParams, Generator, SizePreset};
-    use std::collections::BTreeMap;
     use std::sync::OnceLock;
 
     /// The night: the lamps burn.
@@ -475,22 +714,15 @@ pub(crate) mod tests {
         (city, Outside::new(city).unwrap())
     }
 
-    /// Every city and town of seed 3's world built on its site, the home city first:
-    /// built once for every test.
+    /// Every city and town of seed 3's world built on its site as the game builds it,
+    /// the home city first: built once for every test.
     fn settlements() -> &'static [(Settlement, City)] {
         static ALL: OnceLock<Vec<(Settlement, City)>> = OnceLock::new();
         ALL.get_or_init(|| {
             let (home, o) = seed3();
-            let w = o.world();
+            let base = AppState::new().params;
             let others = o.others().into_iter().map(|(s, _)| {
-                let base = GenParams {
-                    seed: 1 + ((s.city as u64) << 8) + s.town.map_or(0, |t| t as u64 + 1),
-                    ..Default::default()
-                };
-                let params = match s.town {
-                    None => Some(citygen::sited(w, s.city, base)),
-                    Some(t) => citygen::sited_town(w, s.city, t, base),
-                };
+                let params = crate::outside::build_params(&o, s, &base);
                 (s, Generator::run(params.unwrap()).unwrap())
             });
             std::iter::once((o.home(), home.clone()))
@@ -826,7 +1058,7 @@ pub(crate) mod tests {
         o.stream.cover(o.world.as_ref().unwrap(), area);
         let held = o.stream.street.held() + o.stream.net.held();
         assert!(held > 0);
-        assert!(format!("{o:?}").contains(&format!("Stream {{ tiles: {held} }}")));
+        assert!(format!("{o:?}").contains(&format!("Stream {{ tiles: {held}, ")));
         let copy = o.clone();
         assert_eq!(copy.stream.street.held() + copy.stream.net.held(), 0);
         let mine = o.world().city_tiles(o.home().city)[0];
@@ -1248,6 +1480,214 @@ pub(crate) mod tests {
                 o_stream(&st).street.tile(world_cell(&st, p)).unwrap()
             ));
             assert_eq!(map.kind(p), None);
+        }
+    }
+
+    /// Cities and towns built off the frame as the view nears them.
+    mod builds {
+        use super::*;
+        use crate::app::AppState;
+        use crate::outside::tests::home_run;
+        use crate::outside::{build_params, enter, seed_people};
+
+        fn o(st: &AppState) -> &Outside {
+            st.outside.as_ref().unwrap()
+        }
+
+        /// A block's cells: the map built on it, in world cells.
+        fn cells(b: Rect) -> Rect {
+            Rect::new(TILE * b.x, TILE * b.y, TILE * b.w, TILE * b.h)
+        }
+
+        /// Another city of the world (not a town) with room west of its map, and its map
+        /// in world cells.
+        fn a_city(st: &AppState) -> (Settlement, Rect) {
+            o(st)
+                .others()
+                .into_iter()
+                .find(|(s, b)| s.town.is_none() && b.x > 4)
+                .map(|(s, b)| (s, cells(b)))
+                .expect("a city with room west of it")
+        }
+
+        /// A view one cell across at world cell `c`, in the live city's frame.
+        fn view_at(st: &AppState, c: Pos) -> Rect {
+            let at = o(st).origin(st.city.as_ref().unwrap());
+            Rect::new(c.x - at.x, c.y - at.y, 1, 1)
+        }
+
+        /// The view `REACH` cells west of map `map`, level with its middle.
+        fn reach_of(st: &AppState, map: Rect) -> Rect {
+            view_at(st, Pos::new(map.x - REACH, map.y + map.h / 2))
+        }
+
+        /// The stream tended for a view one cell across at world cell `c`.
+        fn tend_at(st: &mut AppState, c: Pos) {
+            let view = view_at(st, c);
+            tend(st, view);
+        }
+
+        /// The stream tended for the view `REACH` cells west of map `map`.
+        fn tend_near(st: &mut AppState, map: Rect) {
+            let view = reach_of(st, map);
+            tend(st, view);
+        }
+
+        /// The cells between `c` and rectangle `r`, the longer way.
+        fn gap(c: Pos, r: Rect) -> i32 {
+            let dx = (r.x - c.x).max(c.x - (r.right() - 1)).max(0);
+            let dy = (r.y - c.y).max(c.y - (r.bottom() - 1)).max(0);
+            dx.max(dy)
+        }
+
+        #[test]
+        fn a_city_near_the_view_builds_in_the_background() {
+            let mut st = home_run();
+            let (s, map) = a_city(&st);
+            tend_near(&mut st, map);
+            // started, and the frame didn't wait for it
+            assert!(o(&st).stream.building(s), "building");
+            assert!(!o(&st).built.contains_key(&s), "not built on the frame");
+            finish(&mut st);
+            assert!(!o(&st).stream.building(s));
+            assert!(o(&st).built.contains_key(&s), "built");
+            assert!(o(&st).stream.people(s).is_some(), "its people seeded");
+            assert_eq!(o(&st).here(), o(&st).home(), "you're where you were");
+        }
+
+        #[test]
+        fn far_cities_are_not_built() {
+            // one cell past `REACH` of a city's map: not that city
+            let mut st = home_run();
+            let (s, map) = a_city(&st);
+            let past = Pos::new(map.x - REACH - 1, map.y + map.h / 2);
+            tend_at(&mut st, past);
+            finish(&mut st);
+            assert!(!o(&st).built.contains_key(&s));
+            // and more than `REACH` from every other map: nothing at all
+            let mut st = home_run();
+            let maps: Vec<Rect> = o(&st).others().iter().map(|(_, b)| cells(*b)).collect();
+            let w = o(&st).world().size;
+            let far = Rect::new(0, 0, w.w as i32, w.h as i32)
+                .iter()
+                .map(|t| Pos::new(TILE * t.x + TILE / 2, TILE * t.y + TILE / 2))
+                .find(|c| maps.iter().all(|m| gap(*c, *m) > REACH))
+                .expect("a cell far from every other map");
+            tend_at(&mut st, far);
+            finish(&mut st);
+            assert_eq!(o(&st).stream.started(), 0);
+            assert!(o(&st).built.is_empty());
+        }
+
+        #[test]
+        fn a_streamed_city_is_the_city_built_on_the_spot() {
+            let mut st = home_run();
+            let (city, map) = a_city(&st);
+            // and a town of the world
+            let (town, by) = o(&st)
+                .others()
+                .into_iter()
+                .find(|(s, b)| s.town.is_some() && b.x > 4)
+                .map(|(s, b)| (s, cells(b)))
+                .expect("a town with room west of it");
+            tend_near(&mut st, map);
+            tend_near(&mut st, by);
+            finish(&mut st);
+            for s in [city, town] {
+                let streamed = &o(&st).built[&s];
+                let params = build_params(o(&st), s, &st.params).unwrap();
+                let spot = citygen::Generator::run(params).unwrap();
+                assert_eq!((streamed.seed, streamed.size), (spot.seed, spot.size));
+                for k in [StratumKind::Street, StratumKind::Net] {
+                    assert!(
+                        streamed.stratum(k).unwrap().tiles == spot.stratum(k).unwrap().tiles,
+                        "{s:?} {k:?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn a_streamed_citys_people_are_ready_when_you_walk_in() {
+            let mut st = home_run();
+            let (s, map) = a_city(&st);
+            let (asked, minute) = (st.clock_tick(), st.minute_of_day());
+            tend_near(&mut st, map);
+            finish(&mut st);
+            // the hour runs on before you walk in
+            crate::clock::run(
+                &mut st,
+                Some(40 * sim::TICKS_PER_MINUTE),
+                crate::clock::PATHS_PER_FRAME,
+            );
+            let now = st.clock_tick();
+            assert!(now > asked);
+            let city = o(&st).built[&s].clone();
+            enter(&mut st, s).unwrap();
+            assert!(o(&st).stream.people(s).is_none(), "taken in with you");
+            let w = st.world.as_ref().unwrap();
+            assert_eq!(w.tick(), now);
+            // the people seeded for the hour the build was asked for, run on to now
+            let mut want = seed_people(&city, &st.people, asked, minute);
+            want.rebuild(&city, &st.people);
+            want.advance(&city, now);
+            assert!(w.people() == want.people(), "run on from when it was asked");
+            // not seeded again
+            let again = seed_people(&city, &st.people, now, st.minute_of_day());
+            assert!(w.people() != again.people(), "seeded again on the frame");
+        }
+
+        #[test]
+        fn the_same_city_is_never_built_twice() {
+            let mut st = home_run();
+            let (s, map) = a_city(&st);
+            let view = reach_of(&st, map);
+            tend(&mut st, view);
+            let started = o(&st).stream.started();
+            assert!(started >= 1 && o(&st).stream.building(s));
+            for _ in 0..20 {
+                tend(&mut st, view);
+            }
+            assert_eq!(o(&st).stream.started(), started, "while it builds");
+            finish(&mut st);
+            for _ in 0..3 {
+                tend(&mut st, view);
+            }
+            assert_eq!(o(&st).stream.started(), started, "once it's built");
+            // walked into and out of: kept, not built again
+            enter(&mut st, s).unwrap();
+            let home = o(&st).home();
+            enter(&mut st, home).unwrap();
+            tend(&mut st, view);
+            finish(&mut st);
+            assert_eq!(o(&st).stream.started(), started, "once walked into");
+        }
+
+        #[test]
+        fn a_city_that_wont_build_is_not_tried_again() {
+            let st = home_run();
+            let (s, _) = a_city(&st);
+            let params = build_params(o(&st), s, &st.params);
+            let mut stream = Stream::default();
+            let mut built = BTreeMap::new();
+            stream.tend(&mut built, vec![(s, None)], &st.people, 0, 0);
+            stream.finish(&mut built);
+            assert!(built.is_empty() && !stream.building(s));
+            stream.tend(&mut built, vec![(s, params)], &st.people, 0, 0);
+            stream.finish(&mut built);
+            assert!(built.is_empty(), "not tried again");
+            assert_eq!(stream.started(), 0);
+        }
+
+        #[test]
+        fn a_copy_starts_with_nothing_in_flight() {
+            let mut st = home_run();
+            let (s, map) = a_city(&st);
+            tend_near(&mut st, map);
+            let copy = o(&st).stream.clone();
+            assert!(!copy.building(s) && copy.started() == 0);
+            finish(&mut st);
+            assert!(o(&st).built.contains_key(&s));
         }
     }
 }

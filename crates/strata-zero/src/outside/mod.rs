@@ -146,19 +146,9 @@ impl Stay {
         })
     }
 
-    /// A city as you first come into it at clock tick `now`, minute `minute` of the
-    /// day: its people at their day, nothing else yet.
-    fn fresh(st: &AppState, city: City, now: u64, minute: u16) -> Stay {
-        let day = 24 * 60;
-        let spent = (now / sim::TICKS_PER_MINUTE) % day;
-        let start = (minute as u64 + day - spent) % day;
-        let world = sim::World::seed(
-            &city,
-            &st.people,
-            &sim::SimParams::default(),
-            start as u16,
-            now,
-        );
+    /// A city as you first come into it, with its people `world` (`seed_people`):
+    /// nothing else yet.
+    fn fresh(city: City, world: sim::World) -> Stay {
         Stay {
             city,
             player: None,
@@ -546,6 +536,37 @@ pub fn reached_mark(st: &mut AppState) {
     }
 }
 
+/// What city or town `s` of the run's world is built from, on `base` (the run's own
+/// params): its seed from the world's and its place in it, the same every time, set on
+/// its site. None when it has none (a town grown into its city, or no world).
+pub fn build_params(
+    o: &Outside,
+    s: Settlement,
+    base: &citygen::GenParams,
+) -> Option<citygen::GenParams> {
+    let w = o.world.as_ref()?;
+    let base = citygen::GenParams {
+        seed: citygen::rng::hash64(
+            w.seed ^ 0xC17E,
+            ((s.city as u64) << 8) | s.town.map_or(0, |t| t as u64 + 1),
+        ) % 1_000_000_007,
+        ..base.clone()
+    };
+    match s.town {
+        None => Some(citygen::sited(w, s.city, base)),
+        Some(t) => citygen::sited_town(w, s.city, t, base),
+    }
+}
+
+/// `city`'s people as you first come into it at clock tick `now`, minute `minute` of
+/// the day: each at their day.
+pub fn seed_people(city: &City, people: &sim::People, now: u64, minute: u16) -> sim::World {
+    let day = 24 * 60;
+    let spent = (now / sim::TICKS_PER_MINUTE) % day;
+    let start = (minute as u64 + day - spent) % day;
+    sim::World::seed(city, people, &sim::SimParams::default(), start as u16, now)
+}
+
 /// Whether the run is in a city or town other than its home: the story waits there.
 pub fn away_from_home(st: &AppState) -> bool {
     st.outside
@@ -554,10 +575,11 @@ pub fn away_from_home(st: &AppState) -> bool {
 }
 
 /// Into city or town `s`: the one you're in set aside (kept with the run when it's the
-/// home city), `s` built on its site the first time this session (else as it was kept).
-/// One that won't build leaves you where you were.
+/// home city); `s` as it was kept, or as its build in the background left it (its
+/// people seeded there run on to now), else built and its people seeded on the spot the
+/// first time this session. One that won't build leaves you where you were.
 pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
-    let Some(o) = st.outside.as_ref() else {
+    let Some(o) = st.outside.as_mut() else {
         return Err("there is no world out here".into());
     };
     let (here, home) = (o.here(), o.home());
@@ -565,24 +587,15 @@ pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
         return Ok(());
     }
     let name = o.name(s);
+    // one building in the background is waited for: no slower than building it here
+    o.stream.wait(s, &mut o.built);
     let next = if s == home {
         None
     } else if let Some(c) = o.built.get(&s) {
+        // kept from before, or built in the background as you neared it
         Some(c.clone())
     } else {
-        let w = o.world();
-        let base = citygen::GenParams {
-            seed: citygen::rng::hash64(
-                w.seed ^ 0xC17E,
-                ((s.city as u64) << 8) | s.town.map_or(0, |t| t as u64 + 1),
-            ) % 1_000_000_007,
-            ..st.params.clone()
-        };
-        let params = match s.town {
-            None => Some(citygen::sited(w, s.city, base)),
-            Some(t) => citygen::sited_town(w, s.city, t, base),
-        };
-        let built = params.and_then(|p| citygen::Generator::run(p).ok());
+        let built = build_params(o, s, &st.params).and_then(|p| citygen::Generator::run(p).ok());
         match built {
             Some(c) => Some(c),
             None => return Err(format!("no way into {name}")),
@@ -610,8 +623,11 @@ pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
             }
         }
         Some(city) => {
-            let stay = Stay::fresh(st, city, now, minute);
-            stay.put(st, false, now);
+            // its people as its build seeded them (run on to now as it's put in place),
+            // else seeded now
+            let people = st.outside.as_mut().and_then(|o| o.stream.take_people(s));
+            let world = people.unwrap_or_else(|| seed_people(&city, &st.people, now, minute));
+            Stay::fresh(city, world).put(st, false, now);
         }
     }
     if let Some(o) = st.outside.as_mut() {

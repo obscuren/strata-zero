@@ -3922,6 +3922,7 @@ fn outside_shots() {
         for _ in 0..6 {
             map.update(&mut st, &[key(KeyCode::Char('l'))]);
         }
+        built_round(&mut st);
         shot_stack(name, &st, &[map.as_ref()], (120, 40));
     }
 }
@@ -3934,7 +3935,18 @@ fn down(st: &mut AppState) -> Box<dyn Screen> {
         panic!("down onto the city screen")
     };
     map.update(st, &[]);
+    built_round(st);
     map
+}
+
+/// The cities and towns building in the background near the view finished, and you
+/// looking round again: the shot shows what play shows once they're in, however fast
+/// the machine builds.
+fn built_round(st: &mut AppState) {
+    if crate::outside::stream::finish(st) {
+        crate::screens::explore::look_round(st);
+        crate::outside::stream::finish(st);
+    }
 }
 
 /// On the street at world cell `cell` (past the city's edge), on foot: the city screen,
@@ -3951,6 +3963,7 @@ fn on_the_ground(st: &mut AppState, cell: Pos) -> MapScreen {
     p.body = None;
     let mut map = MapScreen::walking(st);
     map.update(st, &[]);
+    built_round(st);
     map
 }
 
@@ -4040,6 +4053,7 @@ fn open_net_shots() {
     let mut map = on_the_ground(&mut st, cell);
     map.update(&mut st, &[key(KeyCode::Char(' '))]);
     map.update(&mut st, &[]);
+    built_round(&mut st);
     shot_stack("open_net_truck_stop", &st, &[&map], (120, 40));
     // a barren stretch: dry land with no road and no POI for three tiles round, its Net
     // the odd stray dot in the void
@@ -4066,6 +4080,7 @@ fn open_net_shots() {
     }
     map.update(&mut st, &[]);
     map.update(&mut st, &[]);
+    built_round(&mut st);
     shot_stack("open_net_barren", &st, &[&map], (120, 40));
 }
 
@@ -4246,6 +4261,7 @@ fn other_cities_shots() {
         let cell = o.street_of(&city, Pos::new(b.x, b.y + b.h / 2));
         crate::outside::moves::into_city(&mut st, cell);
         let map = MapScreen::walking(&mut st);
+        built_round(&mut st);
         shot_stack(name, &st, &[&map], (120, 40));
         let home = st.outside.as_ref().unwrap().home();
         enter(&mut st, home).unwrap();
@@ -4274,6 +4290,7 @@ fn net_overworld_shots() {
     let mut map = on_the_ground(&mut st, cell);
     map.update(&mut st, &[key(KeyCode::Char(' '))]);
     map.update(&mut st, &[]);
+    built_round(&mut st);
     if let crate::app::ScreenCmd::Push { to, .. } = map.update(&mut st, &[key(KeyCode::Char('W'))])
     {
         shot_stack("net_overworld_ground", &st, &[&map, to.as_ref()], (120, 40));
