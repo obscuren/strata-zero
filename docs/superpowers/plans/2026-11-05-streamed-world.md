@@ -329,3 +329,13 @@ Jeff's decisions after Tasks 13–14 (2026-11-05): billboards and road signs blo
 - [ ] Night sight: the dark radius is a circle in cells (`sight::lit_or_near` and `sight::sees`), matching the day and the FOV cast. Test: `the_night_sight_is_round` (at 22:00 on open ground, a cell at (r, 0) is seen and one at (r-1, r-1) beyond the circle isn't); NPC sight tests updated to the round rule.
 - [ ] Far lights: a lit cell (one the light rule says is lit enough to be seen past the dark radius) is seen as far as the view reaches, up to `LIT_RADIUS` raised to 96 cells, where the line of sight is clear. Test: `a_city_glows_from_afar` (at night on open ground 60–90 cells from a neighbour, its lit cells are visible and its dark cells aren't); the release draw/step cost stays in budget (measure a step's sight update at the new radius and report it).
 - [ ] Shots at night beside a neighbour from 30, 60 and 90 cells; five checks; commit `sight: solid signs, a round night, city lights from afar`.
+
+### Task 17: Every city lives
+
+Found in Task 12: seed 3's corporate neighbour has 116 people, 101 working there with no home in it and 15 standing at spots; the sim gives them no trips all day, so the city stands still from outside and inside — Jeff's "the city feels abandoned". Ruling (mine, Jeff can overturn): people who work in a city but have no home in it commute — they live off the map, come in along a road where it crosses the city's edge in the morning, walk to work, and walk back out and leave in the evening (and the same for any other trip whose end has no place in the city).
+
+**Files:** the `sim` crate (seeding and trips), `crates/strata-zero` where people are drawn/kept, found by the tests.
+
+- [ ] First, a table in the report: for every settlement of seed 3's world, people, with a home in the city, without, trips in a day today.
+- [ ] Tests: `a_city_without_homes_still_has_its_commute` (seed 3's corporate neighbour: commuters appear at road entries in the morning, reach their work, and leave in the evening; the day has trips); `commuters_come_in_where_a_road_crosses_the_edge`; a city with homes behaves exactly as before (its trips unchanged, by comparing a day's trips before/after on the home city).
+- [ ] Deterministic; the run-on and catch-up (`World::advance`) handle commuters; saved runs with people from before open (docs/saving.md rules for any saved type that changes); five checks; shots by day in that city; commit `sim: commuters for cities without homes`.
