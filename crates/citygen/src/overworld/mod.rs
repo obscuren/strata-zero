@@ -294,6 +294,20 @@ impl Overworld {
         out
     }
 
+    /// What city `i` is called, or its town `town`: the city by its name, a town as one
+    /// off it. A city or town built on its site carries this name, so every reader of
+    /// either agrees.
+    pub fn settlement_name(&self, i: u8, town: Option<u8>) -> String {
+        let city = self
+            .cities
+            .get(i as usize)
+            .map_or("the city", |c| c.name.as_str());
+        match town {
+            None => city.to_string(),
+            Some(_) => format!("a town off {city}"),
+        }
+    }
+
     /// City `i`'s own tiles: those of its index joined (eight ways) to its centre, not
     /// its outlying towns' (grown under its index along the highways out).
     pub fn city_tiles(&self, i: u8) -> Vec<Pos> {

@@ -485,17 +485,10 @@ impl Outside {
         out
     }
 
-    /// What a city or town is called.
+    /// What a city or town is called: the world's name for it, which a city or town
+    /// built on its site carries as its own (`Overworld::settlement_name`).
     pub fn name(&self, s: Settlement) -> String {
-        let city = self
-            .world()
-            .cities
-            .get(s.city as usize)
-            .map_or("the city", |c| c.name.as_str());
-        match s.town {
-            None => city.to_string(),
-            Some(_) => format!("a town off {city}"),
-        }
+        self.world().settlement_name(s.city, s.town)
     }
 }
 

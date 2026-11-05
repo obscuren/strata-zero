@@ -225,7 +225,9 @@ some cities' light as overblown and stitched on, and the overworld as static. So
   screen's words; a wall, or anything standing in the way, nothing, as in the city. On
   the Net the status bar, HERE and the minimap name a cell by who owns its tile (the
   city or town, else the trunk, else the dead grid); on foot the minimap and the run's
-  card name a city's or town's street as HERE does. A drop from the Net overworld is
+  card name a city's or town's street as HERE does. A city or town built on its site is
+  called what its world calls it (citygen names it so), so the status bar and the band
+  name it as HERE and the overworld do. A drop from the Net overworld is
   refused for what refuses walking across. The overworlds take the map's dev keys that
   need no street (`` ` ``, the console with `tp` over the world, F5's inspector of the
   tile) and carry no line of keys: `?` lists them.
