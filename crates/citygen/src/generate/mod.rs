@@ -139,6 +139,9 @@ pub(crate) struct Scratch {
     pub water_edge: Option<crate::geom::Dir>,
     /// The world's part when the city has a site (its ground, its outline).
     pub site: Option<site::Site>,
+    /// A city on its site: the Net's cells that are the open Net's (past its outline,
+    /// away from the city), which the city's Net leaves as they are.
+    pub open_net: Option<Grid<bool>>,
 }
 
 impl Scratch {
@@ -154,6 +157,7 @@ impl Scratch {
             lobbies: Vec::new(),
             water_edge: None,
             site: None,
+            open_net: None,
         }
     }
 }

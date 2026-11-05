@@ -174,6 +174,10 @@ pub(super) fn draw(
                     (DOUBLE[m], WHITE, VOID.mix(WHITE, 0.12), false)
                 }
                 (Terrain::NetGate, None) => ('▯', WHITE, VOID.mix(WHITE, 0.12), true),
+                // the void (the open Net past a city's outline): no lattice, never walked
+                (Terrain::Void, _) => {
+                    void_cell(map, p, tile.variant & !1, tile.district, &hubs, style)
+                }
                 _ => void_cell(map, p, tile.variant, tile.district, &hubs, style),
             };
             if let Some(Feature::Node(kind)) = tile.feature {
@@ -326,6 +330,28 @@ mod tests {
             VOID.to_color(),
             "the void is dark"
         );
+    }
+
+    #[test]
+    fn a_void_cell_is_never_a_dot() {
+        // the open Net past a city's outline holds void: walking there is barred, so it
+        // draws as nothing even beside data, whatever its variant
+        let mut c = city();
+        let map0 = MapRef::stratum_of(&c, StratumKind::Net);
+        let at = net_tiles(&c)
+            .find(|(p, t)| t.terrain == Terrain::NetGrid && near_data(&map0, *p) == 1)
+            .map(|(p, _)| p)
+            .expect("a grid tile beside data");
+        let t = c
+            .stratum_mut(StratumKind::Net)
+            .unwrap()
+            .tiles
+            .get_mut(at)
+            .unwrap();
+        t.terrain = Terrain::Void;
+        t.variant |= 1;
+        let buf = paint(&c, &NetLookView::default());
+        assert_eq!(buf[(at.x as u16, at.y as u16)].symbol(), " ");
     }
 
     #[test]

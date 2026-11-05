@@ -476,11 +476,11 @@ mod tests {
             let o = site.origin;
             let open =
                 crate::overworld::net_ground::region(&site.world, o.x, o.y, c.size.w, c.size.h);
+            let mask = crate::generate::cyberspace::open_net_mask(street(c), site);
+            assert!(mask.count(|m| *m) > 1000, "seed {seed}: little open Net");
             let mut off = 0;
             for (p, t) in net(c).iter() {
-                if site.outline[p] < crate::generate::site::OUTLINE
-                    && (t.terrain, t.feature) != (open[p].terrain, open[p].feature)
-                {
+                if mask[p] && (t.terrain, t.feature) != (open[p].terrain, open[p].feature) {
                     off += 1;
                 }
             }
@@ -493,18 +493,15 @@ mod tests {
 
     #[test]
     fn a_trunk_meets_the_citys_grid() {
-        // a highway's trunk out past the outline runs into the city's walkable Net
+        // the open Net's trunk along a highway runs into the city's own walkable Net
         for (seed, c, site) in homes() {
             let n = net(c);
+            let mask = crate::generate::cyberspace::open_net_mask(street(c), site);
             let met = n.iter().any(|(p, t)| {
                 t.terrain == Terrain::NetLane
-                    && site.outline[p] < crate::generate::site::OUTLINE
+                    && mask[p]
                     && p.neighbors4().any(|q| {
-                        n.get(q).is_some_and(|u| u.is_walkable())
-                            && site
-                                .outline
-                                .get(q)
-                                .is_some_and(|o| *o >= crate::generate::site::OUTLINE)
+                        mask.get(q).is_some_and(|m| !m) && n.get(q).is_some_and(|u| u.is_walkable())
                     })
             });
             assert!(met, "seed {seed}: no trunk meets the city's grid");
@@ -513,15 +510,48 @@ mod tests {
 
     #[test]
     fn a_shanty_splices_a_line() {
-        // the shanties are off the grid, but one has a stolen line off a lane
-        let spliced = homes().iter().any(|(_, c, _)| {
-            street(c).iter().any(|(p, t)| {
-                t.terrain == Terrain::Door
-                    && t.building.is_none()
-                    && net(c).get(p).is_some_and(|u| u.terrain == Terrain::NetLane)
+        // the shanties are off the grid, but in every city that has them one has a
+        // stolen line off a lane
+        for (seed, c, _) in homes() {
+            let doors: Vec<Pos> = street(c)
+                .iter()
+                .filter(|(_, t)| t.terrain == Terrain::Door && t.building.is_none())
+                .map(|(p, _)| p)
+                .collect();
+            if doors.is_empty() {
+                continue;
+            }
+            let spliced = doors.iter().any(|p| {
+                net(c)
+                    .get(*p)
+                    .is_some_and(|u| u.terrain == Terrain::NetLane)
+            });
+            assert!(spliced, "seed {seed}: no shanty taps a line");
+        }
+    }
+
+    #[test]
+    fn the_open_net_doesnt_cut_the_citys_net() {
+        // past the outline the open Net's void must not cut a corner of the city's grid
+        // off its hub (109's, 145's and 165's home cities sealed a construct's gate)
+        for seed in [109u64, 145, 165] {
+            let w = Overworld::generate(WorldParams {
+                seed,
+                ..Default::default()
             })
-        });
-        assert!(spliced, "no shanty taps a line");
+            .unwrap();
+            let i = w.cities.iter().position(|c| c.home).unwrap() as u8;
+            let p = sited(
+                &w,
+                i,
+                GenParams {
+                    seed,
+                    ..Default::default()
+                },
+            );
+            let built = Generator::run(p);
+            assert!(built.is_ok(), "seed {seed}: {:?}", built.err());
+        }
     }
 
     #[test]

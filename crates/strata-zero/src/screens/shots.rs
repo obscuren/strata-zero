@@ -4147,6 +4147,7 @@ fn outskirts_shots() {
         .iter()
         .find(|(p, t)| {
             t.terrain == Terrain::Gravel
+                && t.district.is_some()
                 && street
                     .get(p.offset(-1, 0))
                     .is_some_and(|u| u.terrain == Terrain::Railing)

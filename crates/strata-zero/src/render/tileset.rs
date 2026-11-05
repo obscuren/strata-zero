@@ -533,7 +533,8 @@ pub fn cell(tile: &Tile, ctx: &RenderCtx) -> Cell {
             | Feature::Terminal
             | Feature::Camera
             | Feature::Node(_)
-            | Feature::Fitting(_),
+            | Feature::Fitting(_)
+            | Feature::FireBarrel,
         ) => true,
         _ => false,
     };
@@ -595,6 +596,31 @@ mod tests {
         StratumKind, Terrain, Theme, Tile, Tone, Wear,
     };
     use unicode_width::UnicodeWidthChar;
+
+    #[test]
+    fn a_fire_barrel_burns_bright_at_night() {
+        let style = crate::render::style::StylePack::load().unwrap();
+        let mut t = Tile::new(Terrain::Dirt);
+        t.feature = Some(Feature::FireBarrel);
+        let at = |light: u8| {
+            let ctx = RenderCtx {
+                style: &style,
+                theme: None,
+                stratum: StratumKind::Street,
+                light,
+                tick: 0,
+                vis: Visibility::Visible,
+                connector: None,
+                kind: None,
+                wall_mask: 0,
+                lamps_on: true,
+                sky: None,
+                glow: None,
+            };
+            cell(&t, &ctx).fg
+        };
+        assert_eq!(at(20), at(255), "a fire lights itself");
+    }
 
     #[test]
     fn style_glyphs_are_single_width() {

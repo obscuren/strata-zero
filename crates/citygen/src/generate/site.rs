@@ -424,4 +424,33 @@ mod tests {
             assert!(built.is_ok(), "seed {seed}: {:?}", built.err());
         }
     }
+
+    #[test]
+    #[ignore]
+    fn every_home_city_of_400_worlds_builds() {
+        // a sweep (release: cargo test -p citygen --lib --release -- --ignored
+        // every_home_city_of_400): the generator's own rate is under 1 in 100
+        let mut bad = Vec::new();
+        for seed in 0..400u64 {
+            let w = Overworld::generate(WorldParams {
+                seed,
+                ..Default::default()
+            })
+            .unwrap();
+            let i = w.cities.iter().position(|c| c.home).unwrap() as u8;
+            let p = sited(
+                &w,
+                i,
+                GenParams {
+                    seed,
+                    ..Default::default()
+                },
+            );
+            if let Err(e) = Generator::run(p) {
+                bad.push((seed, format!("{e}")));
+            }
+        }
+        eprintln!("{} of 400 failed: {bad:?}", bad.len());
+        assert!(bad.len() <= 4, "{} of 400 failed: {bad:?}", bad.len());
+    }
 }
