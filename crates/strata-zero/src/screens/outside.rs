@@ -1450,8 +1450,8 @@ mod tests {
     }
 
     #[test]
-    fn landing_over_another_city_is_on_its_net_with_no_handover() {
-        let (mut st, _m, mut up) = up_here();
+    fn landing_over_another_city_hands_it_over() {
+        let (mut st, mut m, mut up) = up_here();
         let (s, t, here) = {
             let o = st.outside.as_ref().unwrap();
             let (s, b) = o
@@ -1468,11 +1468,7 @@ mod tests {
             ScreenCmd::Pop { .. }
         ));
         let o = st.outside.as_ref().unwrap();
-        assert_eq!(
-            o.here(),
-            here,
-            "the Net self walks it; the body's city stays live"
-        );
+        assert_eq!(o.here(), here, "down on its Net, not yet in");
         assert!(o.held_city(s).is_some(), "built to land on");
         let p = st.player.as_ref().unwrap().pos;
         let b = crate::outside::stream::Beyond::of(&st).unwrap();
@@ -1484,6 +1480,16 @@ mod tests {
             "on its own map's Net"
         );
         assert!(net_walkable(&st, p));
+        // the map's next frame: the city whose Net you stand on is the live one, your
+        // body where it was
+        let body = st.player.as_ref().unwrap().body;
+        let body_at = body.map(|(_, b)| world_cell(&st, b));
+        let at = world_cell(&st, p);
+        m.update(&mut st, &[]);
+        assert_eq!(st.outside.as_ref().unwrap().here(), s, "handed over");
+        let p = st.player.as_ref().unwrap();
+        assert_eq!((p.place, world_cell(&st, p.pos)), (NET, at));
+        assert_eq!(p.body.map(|(_, b)| world_cell(&st, b)), body_at);
     }
 
     #[test]
@@ -1511,9 +1517,23 @@ mod tests {
         crate::runs::snapshot::restore(&mut back, snap);
         crate::runs::snapshot::after_restore(&mut back, lost);
         assert_eq!(back.player.as_ref().map(|p| (p.place, p.pos, p.body)), was);
+        // on its Net the city is made again and handed over, you on the Net on the same
+        // world cell
+        let at = world_cell(&back, back.player.as_ref().unwrap().pos);
         let mut map = crate::screens::resume_screen(&mut back);
         map.update(&mut back, &[]);
-        assert!(text(&back, map.as_ref(), 120, 40).contains("the Net ·"));
+        let o = back.outside.as_ref().unwrap();
+        assert_eq!(
+            Some(o.here()),
+            crate::outside::tile_owner(
+                &back,
+                Pos::new(at.x.div_euclid(TILE), at.y.div_euclid(TILE))
+            )
+        );
+        let p = back.player.as_ref().unwrap();
+        assert!(p.jacked_in() && p.place == NET);
+        assert_eq!(world_cell(&back, p.pos), at);
+        assert!(text(&back, map.as_ref(), 120, 40).contains("the Net"));
     }
 
     #[test]

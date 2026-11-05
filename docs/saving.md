@@ -49,8 +49,8 @@ and nothing the player does changes them yet.
 The street carries on past the city's edge and the open ground is walked on the city
 screen, so a run saved out on the open ground is `At::City` with the player off the city's
 cells (its position in the city's frame, past its edge), on foot or jacked in with the body
-there (the Net self anywhere on the Net: as far from the body as it walked or the Net
-overworld dropped it, over another city's Net too); it reopens as it was, jacked in too.
+there (the Net self anywhere on the open Net: as far from the body as it walked or the Net
+overworld dropped it); it reopens as it was, jacked in too.
 The tile the Net overworld is over is the screen's, not saved: a run saved from its pause
 menu reopens on the map, the Net self where it stood. `outside::reopened` checks that the
 cell can still be stood on (the world under a saved run can change between builds until
@@ -73,6 +73,24 @@ this session is kept whole in memory (`Outside.kept`, `#[serde(skip)]`: its peop
 ground, its foes, as you left them) and put back as it was when you walk in again; a
 save keeps only the home city and the one you're in, so after a reopen the rest are made
 again from the world.
+
+Your Net self hands over the same way: walked (or dropped by the Net overworld) onto Net
+cells another city or town owns, that city is the live one and your Net self is in it on
+the same world cell, the deck's own state with you (`net::Carried`: the failsafe, the
+cooling, the mask, the shield). The body stays in the city you left, held: the player's
+`body` is its cell in the live city's frame, past the live city's own cells, as a body
+left on the open ground is; a body inside at the flat's rig stands in there by the rig's
+landing (the port the cord runs to), and the home city's own `Stay.player` keeps the body
+as it is, the floor and all (`Stay.player` is you as each city last had you: what you'd
+seen of it, and, left on the Net, your body in it). So a save jacked in after a Net
+handover opens in the city your Net self is in, the body's cell in its frame. Jacking out
+puts you on that cell (`net::jack_out`, as ever), and the step's handover on foot hands the
+body's city back (`outside::arrive`: on the cell its kept body stands on, you're in that
+body where it is, at the rig too, and the rig's route ends as a jack out ends it). The
+body's city, home, is set aside in the save; any other isn't saved, and after a reopen is
+made again from the world when you jack out into it (a body left in one stands on a
+stratum: only the home city has the rig). While it's held, `outside::body_stay` reads it: the port the cord runs to, the
+rig's relays and its trace home (a dump on a rig run starts that trace there).
 
 ## Writing a save
 
@@ -116,7 +134,7 @@ Go through this whenever you add or change something that lives through play.
 12. **The world and the map.** The city, the floors walked into and the constructs are saved whole. If generation grows the play field a lot, the alternative is saving the seed plus what changed and regenerating the rest on load, which needs generation to stay deterministic. Size and time today (release build, the medium seed-8 morning after): about 1.0 MB on disk; a save takes about 24 ms on the frame thread (encoding 14.6 MB of MessagePack ~11 ms, gzip ~9 ms, write, sync and rename ~5 ms), under one 33 ms frame. The `#[ignore]` test `a_save_is_timed` in `runs/file.rs` measures it again (run it with `--release`); past a frame, move the gzip and the write to a thread and keep the encoding on the frame.
 13. **A screen that holds story in flight** can't stop the five-minute save, the due save or SAVE GAME, because those run from the map or the pause menu over it; only the ways out see the stack. Keep story that must survive a save in `AppState`.
 14. **The map screen's own state isn't saved.** The open Net's packets (`MapScreen.traffic`) are a look only, seeded afresh round the view after a reopen; a lane ride in flight (`MapScreen.riding`, Data surfer's) ends on the lane tile you were carried to. What the run needs lives in `AppState`: a camera's feed is `net.feed`, so it reopens open; the jack window over a held terminal and the HIJACK picker hold nothing (a verb is spent as it acts), and the launch splash comes before any run.
-15. **State that belongs to one city** (anything keyed by its buildings, people or districts) goes in `outside::Stay` too: `take`, `fresh` and `put` name its fields, and nothing makes that exhaustive, so a new city-bound field left out of them follows you into another city. State that belongs to the runner (the character, the deck's failsafe and cooling, the bots out, the log) stays put; `enter` carries the deck's and the bots across, and you on the same world cell.
+15. **State that belongs to one city** (anything keyed by its buildings, people or districts) goes in `outside::Stay` too: `take`, `fresh` and `put` name its fields, and nothing makes that exhaustive, so a new city-bound field left out of them follows you into another city. State that belongs to the runner (the character, the deck's failsafe and cooling, the mask and the shield on your Net self, the bots out, the log) stays put; `enter` carries the deck's (`net::Carried`: a new runner's field of `NetState` goes in it) and the bots across, and you on the same world cell, your Net self too with the body where it stands.
 16. **A cache in a saved type** may also be rebuilt when first needed rather than in `after_restore` (`Outside.built`, `Outside.blocks`), so long as it's `#[serde(skip)]` and made from saved state only.
 
 ## Compatibility

@@ -111,6 +111,8 @@ pub struct Settlement {
 #[derive(Serialize, Deserialize)]
 pub struct Stay {
     pub city: City,
+    /// You as this city last had you: what you'd seen of it, and, left on the Net, your
+    /// body as it stands in it (inside at the rig too), its frame's.
     pub player: Option<crate::walker::Player>,
     pub world: Option<sim::World>,
     pub interiors: crate::interiors::Interiors,
@@ -714,12 +716,12 @@ pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
             }
         }
     };
-    // the hour carries over: the run's clock is the city's you're in; and the deck's
-    // own switch and its cooling go where you go
+    // the hour carries over: the run's clock is the city's you're in; and what of the
+    // Net's state is the deck's and your Net self's goes where you go
     let (now, minute) = (st.clock_tick(), st.minute_of_day());
-    let (failsafe, cooling) = (st.net.failsafe, st.net.cooling_until);
-    // where you stand in the world, and what you've seen of the city you leave, kept as
-    // its frame goes; your bots come with you
+    let deck = st.net.carried();
+    // where you stand in the world (your Net self and your body, jacked in), and what
+    // you've seen of the city you leave, kept as its frame goes; your bots come with you
     let (was, you) = leave(st);
     let bots = std::mem::take(&mut st.bots);
     let Some(current) = Stay::take(st) else {
@@ -757,38 +759,171 @@ pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
             o.visited.insert(s);
         }
     }
-    st.net.failsafe = failsafe;
-    st.net.cooling_until = cooling;
+    st.net.carry(deck);
     arrive(st, was, you, bots);
     st.say(format!("into {name}"));
     Ok(())
 }
 
+/// Where you stand as the run's city changes, in world cells.
+#[derive(Clone, Copy, Debug)]
+enum Standing {
+    /// On no stratum (no player, or inside with no body out).
+    Nowhere,
+    /// On foot on the street at this cell (jacked in off the Net's stratum, your body's).
+    Foot(Pos),
+    /// Your Net self on the Net at `at`, your body standing at `body` (as `stand_in`
+    /// gives it, its cell a world cell).
+    Net {
+        at: Pos,
+        body: (citygen::Place, Pos),
+    },
+}
+
+/// Your body as another city's frame can hold it: on a stratum, as it stands; inside at
+/// the flat's rig (`home`), by the rig's landing on the street, the port the cord runs
+/// to. None for a body anywhere else.
+fn stand_in(
+    home: Option<crate::home::HomeRig>,
+    body: (citygen::Place, Pos),
+) -> Option<(citygen::Place, Pos)> {
+    if body.0.stratum().is_some() {
+        return Some(body);
+    }
+    let h = home.filter(|h| h.place() == body.0)?;
+    Some((citygen::Place::Stratum(StratumKind::Street), h.landing))
+}
+
+/// Jacked in, your body as another city's frame can hold it (`stand_in`), in the live
+/// city's frame: none when you're not jacked in or it can't be held there.
+pub(crate) fn body_stand_in(st: &AppState) -> Option<(citygen::Place, Pos)> {
+    stand_in(st.home, st.player.as_ref()?.body?)
+}
+
+/// What city or town `s` holds as you left it, if it's held: the home city set aside,
+/// or another kept whole this session.
+fn stay_of(st: &AppState, s: Settlement) -> Option<&Stay> {
+    let o = st.outside.as_ref()?;
+    if s == o.home() {
+        return st.away.as_deref().filter(|_| o.here() != s);
+    }
+    o.kept.0.get(&s)
+}
+
+/// Jacked in with your body in a city or town your Net self has walked out of (handed
+/// over on the Net, the body's cell off the live city's own): what that city holds as
+/// you left it (its map, its backdoors, your body as it keeps it, inside at the rig
+/// too) and the shift from its frame to the live city's. None while the body is in the
+/// live city or on the open ground, or its city isn't kept (made again from the world
+/// after a reopen: `held_city` has its map).
+pub fn body_stay(st: &AppState) -> Option<(&Stay, Pos)> {
+    let (place, body) = st.player.as_ref()?.body?;
+    place.stratum()?;
+    let (city, o) = (st.city.as_ref()?, st.outside.as_ref()?);
+    let s = stream::owner_of(st, body).filter(|s| *s != o.here())?;
+    let stay = stay_of(st, s)?;
+    let (live, theirs) = (o.origin(city), o.origin(&stay.city));
+    Some((stay, Pos::new(theirs.x - live.x, theirs.y - live.y)))
+}
+
+/// `body_stay`'s city, to change (a dump on a rig run starts its trace home there).
+pub(crate) fn body_stay_mut(st: &mut AppState) -> Option<&mut Stay> {
+    let s = {
+        let (stay, _) = body_stay(st)?;
+        st.outside.as_ref()?.settlement_of(&stay.city)
+    };
+    let o = st.outside.as_mut()?;
+    if s == o.home() {
+        return st.away.as_deref_mut();
+    }
+    o.kept.0.get_mut(&s)
+}
+
+/// Jacked in with your body in a city or town your Net self has walked out of: the Net
+/// tile you jacked in at there, in the live city's frame (the rig's landing for a body
+/// at the flat's rig; else the terminal beside the body on that city's map). None while
+/// the body is in the live city or on the open ground, or no map of its city is held.
+pub fn held_port(st: &AppState) -> Option<Pos> {
+    let (place, body) = st.player.as_ref()?.body?;
+    let k = place.stratum()?;
+    let (city, o) = (st.city.as_ref()?, st.outside.as_ref()?);
+    let s = stream::owner_of(st, body).filter(|s| *s != o.here())?;
+    let (map, shift) = match body_stay(st) {
+        Some((stay, shift)) => {
+            // a body at the rig stands in by the rig's landing: that's the port
+            let inside = stay
+                .player
+                .as_ref()
+                .and_then(|p| p.body)
+                .is_some_and(|(pl, _)| pl.stratum().is_none());
+            if inside {
+                return Some(body);
+            }
+            (&stay.city, shift)
+        }
+        None => {
+            let map = o.held_city(s)?;
+            let (live, theirs) = (o.origin(city), o.origin(map));
+            (map, Pos::new(theirs.x - live.x, theirs.y - live.y))
+        }
+    };
+    let q = Pos::new(body.x - shift.x, body.y - shift.y);
+    std::iter::once(q).chain(q.neighbors8()).find_map(|c| {
+        map.connectors_at(c)
+            .find(|j| j.kind == citygen::ConnectorKind::Jack && j.serves.contains(&k))
+            .map(|j| j.pos.offset(shift.x, shift.y))
+    })
+}
+
 /// Before the run's city changes: what was in sight past its edge and what you
 /// remember of its street kept in the world's record. Where its map sits (the world cell
-/// of its `(0, 0)`), and the world cell you stand on (your body's, jacked in), if you
-/// stand on a stratum.
-fn leave(st: &mut AppState) -> (Pos, Option<Pos>) {
+/// of its `(0, 0)`), and where you stand in the world: on foot (your body, jacked in off
+/// the Net's stratum), or your Net self on the Net with your body where it stands.
+fn leave(st: &mut AppState) -> (Pos, Standing) {
     stream::remember_sight(st);
+    let home = st.home;
     let (Some(city), Some(o)) = (st.city.as_ref(), st.outside.as_mut()) else {
-        return (Pos::new(0, 0), None);
+        return (Pos::new(0, 0), Standing::Nowhere);
     };
     let origin = o.origin(city);
     let Some(p) = st.player.as_ref() else {
-        return (origin, None);
+        return (origin, Standing::Nowhere);
     };
     if let Some(vis) = p.vis_at(citygen::Place::Stratum(StratumKind::Street)) {
         ground::remember_map(o, origin, vis);
     }
+    let world = |q: Pos| origin.offset(q.x, q.y);
+    let net = p
+        .body
+        .filter(|_| p.place == citygen::Place::Stratum(StratumKind::Net));
+    if let Some((place, at)) = net.and_then(|b| stand_in(home, b)) {
+        return (
+            origin,
+            Standing::Net {
+                at: world(p.pos),
+                body: (place, world(at)),
+            },
+        );
+    }
     let (place, pos) = p.body.unwrap_or((p.place, p.pos));
-    let you = place.stratum().map(|_| origin.offset(pos.x, pos.y));
+    let you = match place.stratum() {
+        Some(_) => Standing::Foot(world(pos)),
+        None => Standing::Nowhere,
+    };
     (origin, you)
 }
 
 /// Into the run's new city, its map's corner having been at world cell `was` in the
-/// last's frame: you on the street on world cell `you` (in its frame now), its street
-/// remembered as far as the world's record has seen it, your `bots` where they were.
-fn arrive(st: &mut AppState, was: Pos, you: Option<Pos>, mut bots: Vec<crate::bots::BotOut>) {
+/// last's frame: you where you stood (`Standing`, its cells world cells), in its frame
+/// now, its street remembered as far as the world's record has seen it, your `bots`
+/// where they were.
+///
+/// On foot, you're on the street on your cell; but on the cell your body waits on as
+/// this city kept it (you left it jacked in, and jacked out back to it), you're in your
+/// body where it is, inside at the rig too, and the rig's route ends as a jack out ends
+/// it. Your Net self, you're on the Net on your cell with your body as this city kept
+/// it when it's the one it stands in, else on its own cell past this city's.
+fn arrive(st: &mut AppState, was: Pos, you: Standing, mut bots: Vec<crate::bots::BotOut>) {
     let (Some(city), Some(o)) = (st.city.as_ref(), st.outside.as_ref()) else {
         st.bots = bots;
         return;
@@ -796,21 +931,54 @@ fn arrive(st: &mut AppState, was: Pos, you: Option<Pos>, mut bots: Vec<crate::bo
     let origin = o.origin(city);
     let into = |c: Pos| Pos::new(c.x - origin.x, c.y - origin.y);
     let street = citygen::Place::Stratum(StratumKind::Street);
-    if let Some(at) = you.map(into) {
-        let p = st
-            .player
-            .get_or_insert_with(|| crate::walker::Player::at(street, at));
-        p.place = street;
-        p.pos = at;
-        p.body = None;
+    let net = citygen::Place::Stratum(StratumKind::Net);
+    // where a body this city kept stands in the world, as `stand_in` takes it
+    let home = st.home;
+    let anchor = |b: (citygen::Place, Pos)| stand_in(home, b).map(|(_, q)| origin.offset(q.x, q.y));
+    let mut woke = false;
+    match you {
+        Standing::Foot(at) => {
+            let p = st
+                .player
+                .get_or_insert_with(|| crate::walker::Player::at(street, into(at)));
+            let body = p.body.filter(|b| anchor(*b) == Some(at));
+            (p.place, p.pos) = body.unwrap_or((street, into(at)));
+            p.body = None;
+            woke = body.is_some();
+        }
+        Standing::Net { at, body } => {
+            let p = st
+                .player
+                .get_or_insert_with(|| crate::walker::Player::at(net, into(at)));
+            let kept = p.body.filter(|b| anchor(*b) == Some(body.1));
+            p.place = net;
+            p.pos = into(at);
+            p.body = Some(kept.unwrap_or((body.0, into(body.1))));
+        }
+        Standing::Nowhere => {}
+    }
+    if woke {
+        st.backdoors.end_route();
     }
     if let Some(p) = st.player.as_mut() {
         let map = Rect::new(origin.x, origin.y, city.size.w as i32, city.size.h as i32);
         let seen = ground::seen_in(o, map);
         p.remember_place(street, city.size, seen.into_iter().map(into));
     }
+    // the bots by your body: on a stratum where they were; one inside (by the rig) has
+    // no cell this frame holds, and comes over to you as `bots::sync` brings it
     let shift = into(was);
+    let by = st
+        .player
+        .as_ref()
+        .map(|p| p.body.unwrap_or((p.place, p.pos)).0);
     for b in &mut bots {
+        if b.place.stratum().is_none() {
+            b.place = by.unwrap_or(street);
+            b.pos = None;
+            b.wake.clear();
+            continue;
+        }
         b.pos = b.pos.map(|q| q.offset(shift.x, shift.y));
         for (q, _) in &mut b.wake {
             *q = q.offset(shift.x, shift.y);
@@ -858,8 +1026,9 @@ pub fn nearest(from: Pos, reach: i32, ok: impl Fn(Pos) -> bool) -> Option<Pos> {
 }
 
 /// You are out of the city: on the overworld, or standing (your body, jacked in) off
-/// the cells the city owns. The city holds still for you (its story waits, its cameras
-/// look at no one), your body isn't on its street.
+/// the cells the city owns: on the open ground, or in the city your Net self walked out
+/// of. The city holds still for you (its story waits, its cameras look at no one), your
+/// body isn't on its street.
 pub fn away(st: &AppState) -> bool {
     let Some(o) = st.outside.as_ref() else {
         return false;
@@ -887,11 +1056,10 @@ pub fn reopened(st: &mut AppState) {
         if let Some(stay) = st.away.take() {
             let now = st.clock_tick();
             // as coming home does: the other city's cards go, the deck's own state stays
-            let (failsafe, cooling) = (st.net.failsafe, st.net.cooling_until);
+            let deck = st.net.carried();
             crate::credentials::purge(&mut st.content, &mut st.character);
             stay.put(st, true, now);
-            st.net.failsafe = failsafe;
-            st.net.cooling_until = cooling;
+            st.net.carry(deck);
         }
         st.outside = None;
         st.warn("the world out there couldn't be made again · back in the city");
@@ -1024,13 +1192,19 @@ pub fn can_leave(st: &AppState) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Whether you can walk off the cells the city owns on foot now: in a city (not the
-/// lot), not in a fight, with no call or scene under way.
+/// Whether you can walk off the cells the city owns on foot now, or into another city's
+/// or town's on foot or on the Net: in a city (not the lot), not in a fight, with no call
+/// or scene under way; jacked in, with no run in flight (a run is its city's Net's, not
+/// to be left hanging behind you).
 pub fn can_cross(st: &AppState) -> Result<(), &'static str> {
     if st.city.as_ref().is_some_and(|c| c.is_lot()) {
         return Err("there is no world past the lot");
     }
-    held_in(st)
+    held_in(st)?;
+    if st.net.run.is_some() && st.player.as_ref().is_some_and(|p| p.jacked_in()) {
+        return Err("finish the run first");
+    }
+    Ok(())
 }
 
 /// What holds you in the city: a fight, a call, a scene.

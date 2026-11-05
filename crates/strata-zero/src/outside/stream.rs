@@ -782,13 +782,16 @@ pub fn path_within(
     Some(path.into_iter().map(outer).collect())
 }
 
-/// On foot on the street, on a cell another city or town owns: the run handed over to
-/// it in place (`enter`), you on the same world cell in its frame, its street
-/// remembering what the world's record has seen of it, your bots beside you, and your
-/// sight looked again. The shift from the old frame's cells to the new's (the old
-/// origin less the new), for the screen to move what it holds by; none when nothing was
-/// handed over (jacked in, on the live city's own cells or the open ground, a city that
-/// wouldn't build, or held in the live city by a fight, a call or a scene).
+/// On foot on the street, or your Net self on the Net, on a cell another city or town
+/// owns: the run handed over to it in place (`enter`), you on the same world cell in its
+/// frame, its street remembering what the world's record has seen of it, your bots
+/// beside you, and your sight looked again. Jacked in, your body stays where it stands,
+/// in the city you left (held now, not live), on its own world cell in the new frame;
+/// jacked out onto it again, the step on foot hands that city back. The shift from the
+/// old frame's cells to the new's (the old origin less the new), for the screen to move
+/// what it holds by; none when nothing was handed over (in a construct or indoors, on
+/// the live city's own cells or the open ground, a city that wouldn't build, or held in
+/// the live city by a fight, a call, a scene or a run in flight).
 pub fn hand_over(st: &mut AppState) -> Option<Pos> {
     let (s, was) = {
         let (Some(city), Some(o), Some(p)) =
@@ -796,7 +799,11 @@ pub fn hand_over(st: &mut AppState) -> Option<Pos> {
         else {
             return None;
         };
-        if !p.place.is_street() || p.jacked_in() || city.is_lot() || o.world.is_none() {
+        let foot = p.place.is_street() && !p.jacked_in();
+        // your Net self, with a body the next city's frame can hold
+        let net = p.place == citygen::Place::Stratum(StratumKind::Net)
+            && super::body_stand_in(st).is_some();
+        if !(foot || net) || city.is_lot() || o.world.is_none() {
             return None;
         }
         let s = owner_of(st, p.pos)?;
@@ -805,8 +812,8 @@ pub fn hand_over(st: &mut AppState) -> Option<Pos> {
         if s == o.here() || o.stream.refused(s) || gone {
             return None;
         }
-        // what holds you in the city (a fight, a call, a scene) holds you out of the
-        // next: the step onto it says so, a run put there waits
+        // what holds you in the city (a fight, a call, a scene, a run in flight) holds
+        // you out of the next: the step onto it says so, a run put there waits
         if super::can_cross(st).is_err() {
             return None;
         }
@@ -2087,18 +2094,193 @@ pub(crate) mod tests {
             assert_eq!(hand_over(&mut st), None, "once is enough");
         }
 
-        #[test]
-        fn nothing_hands_over_jacked_in() {
-            let mut st = home_run();
-            let (_, x, d) = beside_a_city(&mut st);
-            on_foot(&mut st, x);
+        /// Jacked in with the body at `body` (the live city's frame), your Net self on
+        /// its Net at `at`.
+        pub(crate) fn jacked(st: &mut AppState, body: (Place, Pos), at: Pos) {
             let p = st.player.as_mut().unwrap();
-            p.body = Some((Place::Stratum(StratumKind::Street), x));
+            p.body = Some(body);
             p.place = Place::Stratum(StratumKind::Net);
-            p.pos = x.step(d);
+            p.pos = at;
+        }
+
+        /// Seed 3's home run jacked in from its street where you stood, your Net self on
+        /// the open Net beside the next city (`beside_a_city`): the city, the cell (in
+        /// home's frame), the step onto its cells, and the body's cell.
+        fn jacked_beside_a_city(st: &mut AppState) -> (Settlement, Pos, Dir, Pos) {
+            let body = st.player.as_ref().unwrap().pos;
+            let (s, x, d) = beside_a_city(st);
+            jacked(st, (Place::Stratum(StratumKind::Street), body), x);
+            (s, x, d, body)
+        }
+
+        #[test]
+        fn walking_the_net_into_another_city_hands_it_over() {
+            let mut st = home_run();
+            let (s, x, d, _) = jacked_beside_a_city(&mut st);
+            assert_eq!(hand_over(&mut st), None, "the open Net is nobody's");
+            let y = x.step(d);
+            let at = world_of(&st, y);
+            let before = o(&st).origin(st.city.as_ref().unwrap());
+            st.player.as_mut().unwrap().pos = y;
+            let shift = hand_over(&mut st).expect("handed over");
+            assert_eq!(o(&st).here(), s);
+            let after = o(&st).origin(st.city.as_ref().unwrap());
+            assert_eq!(shift, Pos::new(before.x - after.x, before.y - after.y));
+            let p = st.player.as_ref().unwrap();
+            assert_eq!(
+                p.place,
+                Place::Stratum(StratumKind::Net),
+                "still on the Net"
+            );
+            assert!(p.jacked_in(), "still jacked in");
+            assert_eq!(world_of(&st, p.pos), at, "the same world cell");
+            assert_eq!(p.pos, y.offset(shift.x, shift.y));
+            assert!(live_owns(&st, p.pos), "on its own cells");
+            assert!(
+                st.log
+                    .iter()
+                    .any(|e| e.text == format!("into {}", o(&st).name(s)))
+            );
+            assert_eq!(hand_over(&mut st), None, "once is enough");
+        }
+
+        #[test]
+        fn the_body_stays_in_the_city_you_left() {
+            let mut st = home_run();
+            let home = o(&st).home();
+            let (s, x, d, body) = jacked_beside_a_city(&mut st);
+            let was = world_of(&st, body);
+            st.player.as_mut().unwrap().pos = x.step(d);
+            hand_over(&mut st).expect("handed over");
+            assert_eq!(o(&st).here(), s);
+            let (place, b) = st.player.as_ref().unwrap().body.expect("jacked in");
+            assert_eq!(place, Place::Stratum(StratumKind::Street));
+            assert_eq!(world_of(&st, b), was, "on its own world cell");
+            assert!(!live_owns(&st, b), "off the live city's cells");
+            assert_eq!(owner_of(&st, b), Some(home), "in the city you left");
+            assert!(st.away.is_some(), "home set aside");
+            assert!(crate::outside::away(&st), "not on the live city's street");
+            // the city you left holds still while you're away from it
+            let held = |st: &AppState| st.away.as_ref().unwrap().world.as_ref().unwrap().tick();
+            let then = held(&st);
+            crate::clock::run(
+                &mut st,
+                Some(5 * sim::TICKS_PER_MINUTE),
+                crate::clock::PATHS_PER_FRAME,
+            );
+            assert_eq!(held(&st), then, "its people hold still");
+            // the Net walked back into it: the body is in the live city again, as it was
+            st.player.as_mut().unwrap().pos = local(&st, was);
+            hand_over(&mut st).expect("home on the Net");
+            assert_eq!(o(&st).here(), home);
+            let p = st.player.as_ref().unwrap();
+            assert_eq!(p.body, Some((Place::Stratum(StratumKind::Street), body)));
+            assert!(!crate::outside::away(&st), "the body is home");
+        }
+
+        #[test]
+        fn jacking_out_hands_the_bodys_city_back() {
+            // jacked in from the street: back in the body there, its city live again
+            let mut st = home_run();
+            let home = o(&st).home();
+            let (s, x, d, body) = jacked_beside_a_city(&mut st);
+            st.player.as_mut().unwrap().pos = x.step(d);
+            hand_over(&mut st).expect("handed over");
+            assert_eq!(o(&st).here(), s);
+            crate::net::jack_out(&mut st).unwrap();
+            hand_over(&mut st).expect("the body's city back");
+            assert_eq!(o(&st).here(), home);
+            let p = st.player.as_ref().unwrap();
+            assert_eq!(
+                (p.place, p.pos, p.body),
+                (Place::Stratum(StratumKind::Street), body, None)
+            );
+            // jacked in from the flat's rig: the cord ends at the rig's landing, and
+            // jacking out wakes you in the chair
+            let mut st = home_run();
+            let rig = st.home.expect("the flat's rig");
+            let landing = world_of(&st, rig.landing);
+            let (s, x, d) = beside_a_city(&mut st);
+            jacked(&mut st, (rig.place(), rig.home.rig), x.step(d));
+            hand_over(&mut st).expect("handed over from the rig");
+            assert_eq!(o(&st).here(), s);
+            assert!(crate::outside::away(&st), "the body isn't here");
+            assert_eq!(
+                crate::net::port_of(&st).map(|q| world_of(&st, q)),
+                Some(landing),
+                "the cord's end"
+            );
+            crate::net::jack_out(&mut st).unwrap();
+            hand_over(&mut st).expect("home again");
+            assert_eq!(o(&st).here(), home);
+            let p = st.player.as_ref().unwrap();
+            assert_eq!(
+                (p.place, p.pos, p.body),
+                (rig.place(), rig.home.rig, None),
+                "at the rig"
+            );
+        }
+
+        #[test]
+        fn a_dump_on_a_rig_run_in_another_city_starts_the_trace_home() {
+            // landed at a relay of home's, then walked the Net into the next city
+            let mut st = home_run();
+            let rig = st.home.expect("the flat's rig");
+            let (relay, gate) = {
+                let city = st.city.as_ref().unwrap();
+                city.buildings
+                    .iter()
+                    .find_map(|b| Some((b.id, crate::constructs::city_gate(city, b.id)?)))
+                    .expect("a construct of home's")
+            };
+            let gate = world_of(&st, gate);
+            let (s, x, d) = beside_a_city(&mut st);
+            jacked(&mut st, (rig.place(), rig.home.rig), x.step(d));
+            st.backdoors.start_route(Some(relay));
+            hand_over(&mut st).expect("handed over from the rig");
+            assert_eq!(o(&st).here(), s);
+            assert!(st.backdoors.route.is_none(), "the rig's route is home's");
+            // the cord runs back through home's relay, where it stands
+            let v = crate::net::cord_view(&st).expect("the cord");
+            assert_eq!(world_of(&st, v.entry), gate, "from the relay's gate");
+            assert_eq!(
+                v.relays
+                    .iter()
+                    .map(|(g, _)| world_of(&st, *g))
+                    .collect::<Vec<_>>(),
+                vec![gate]
+            );
+            crate::net::dump(&mut st, "test");
+            assert!(
+                st.away.as_ref().unwrap().backdoors.trace.is_some(),
+                "the trace starts at home"
+            );
+            assert!(st.log.iter().any(|e| e.text.starts_with("trace running")));
+            hand_over(&mut st).expect("home again");
+            assert_eq!(o(&st).here(), o(&st).home());
+            assert!(st.backdoors.trace.is_some(), "and walks there");
+            assert!(st.backdoors.route.is_none(), "the run's route over");
+            let p = st.player.as_ref().unwrap();
+            assert_eq!((p.place, p.body), (rig.place(), None), "in the chair");
+        }
+
+        #[test]
+        fn a_run_in_flight_holds_your_net_self_out_of_a_handover() {
+            let mut st = home_run();
+            let (_, x, d, _) = jacked_beside_a_city(&mut st);
+            st.net.run = Some(game::Run {
+                program: game::ItemId::new("crack"),
+                target: game::HackTarget::Deck,
+                done: 0,
+                work: 3,
+            });
+            st.player.as_mut().unwrap().pos = x.step(d);
             let here = o(&st).here();
             assert_eq!(hand_over(&mut st), None);
-            assert_eq!(o(&st).here(), here);
+            assert_eq!(o(&st).here(), here, "a run put there waits");
+            assert_eq!(crate::outside::can_cross(&st), Err("finish the run first"));
+            st.net.run = None;
+            assert!(hand_over(&mut st).is_some(), "the run done, in");
         }
 
         #[test]
@@ -2306,6 +2488,65 @@ pub(crate) mod tests {
             let p = back.player.as_ref().unwrap();
             assert_eq!(p.place, Place::Stratum(StratumKind::Street));
             assert_eq!(world_of(&back, p.pos), at, "at your cell");
+        }
+
+        #[test]
+        fn a_run_saved_after_a_net_handover_reopens_there() {
+            // the body at home, the Net self in the next city: reopened there, and
+            // jacking out goes home to the body
+            let mut st = home_run();
+            let home = o(&st).home();
+            let (s, x, d, _) = jacked_beside_a_city(&mut st);
+            st.player.as_mut().unwrap().pos = x.step(d);
+            hand_over(&mut st).expect("handed over");
+            let ends = |st: &AppState| {
+                let p = st.player.as_ref().unwrap();
+                let (place, b) = p.body.expect("jacked in");
+                (p.place, world_of(st, p.pos), place, world_of(st, b))
+            };
+            let was = ends(&st);
+            let mut back = crate::outside::tests::reopen(st, "net-handover");
+            assert_eq!(o(&back).here(), s);
+            assert!(back.away.is_some(), "home set aside, the body in it");
+            assert_eq!(ends(&back), was);
+            crate::net::jack_out(&mut back).unwrap();
+            hand_over(&mut back).expect("home again");
+            assert_eq!(o(&back).here(), home);
+            let p = back.player.as_ref().unwrap();
+            assert_eq!(
+                (p.place, world_of(&back, p.pos), p.body),
+                (Place::Stratum(StratumKind::Street), was.3, None)
+            );
+            // the body in the next city, the Net self walked home on the Net: the city
+            // the body stands in isn't kept over a reopen, and is made again from the
+            // world to jack out into
+            let mut st = home_run();
+            let spawn = world_of(&st, st.player.as_ref().unwrap().pos);
+            let (s, x, d) = beside_a_city(&mut st);
+            on_foot(&mut st, x.step(d));
+            hand_over(&mut st).expect("into the next city on foot");
+            let body = st.player.as_ref().unwrap().pos;
+            let body_at = world_of(&st, body);
+            let net_at = local(&st, spawn);
+            jacked(&mut st, (Place::Stratum(StratumKind::Street), body), net_at);
+            hand_over(&mut st).expect("home on the Net");
+            assert_eq!(o(&st).here(), home);
+            let mut back = crate::outside::tests::reopen(st, "net-handover-home");
+            assert_eq!(o(&back).here(), home);
+            assert!(back.away.is_none(), "home is live");
+            let p = back.player.as_ref().unwrap();
+            assert_eq!(world_of(&back, p.pos), spawn, "the Net self where it stood");
+            let (_, b) = p.body.expect("still jacked in");
+            assert_eq!(world_of(&back, b), body_at, "the body where it stands");
+            assert!(o(&back).held_city(s).is_none(), "not kept over a reopen");
+            crate::net::jack_out(&mut back).unwrap();
+            hand_over(&mut back).expect("into the city the body stands in");
+            assert_eq!(o(&back).here(), s);
+            let p = back.player.as_ref().unwrap();
+            assert_eq!(
+                (p.place, world_of(&back, p.pos), p.body),
+                (Place::Stratum(StratumKind::Street), body_at, None)
+            );
         }
     }
 }

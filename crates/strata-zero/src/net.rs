@@ -267,14 +267,15 @@ pub fn targets_outside(st: &AppState, pos: Pos) -> Vec<(HackTarget, String)> {
     out
 }
 
-/// What a gate or a node of a city other than the one your body is in says to you:
-/// you can walk its Net and look, not touch.
+/// What a gate or a node of a city or town other than the live one says when you act on
+/// it from across the line (a program, the look cursor, a step into its gate): you can
+/// see it, not touch it. Standing on its own cells, it's the live one and answers.
 pub const TOO_FAR: &str = "too far from your body to touch it";
 
 /// The nodes of another city's or town's Net on `pos` or beside it (cells of the live
 /// city's frame) that the open Net would reach there, as `targets_outside` finds the
 /// live city's, each by its kind: found through who owns the cell, each city's on its
-/// own map. Out of reach: your body is in the live city.
+/// own map. Out of reach: only the live city's Net answers.
 pub fn out_of_reach(st: &AppState, pos: Pos) -> Vec<NodeKind> {
     out_of_reach_on(st, std::iter::once(pos).chain(pos.neighbors8()))
 }
@@ -483,7 +484,39 @@ impl Default for NetState {
     }
 }
 
+/// What of the Net's state is the deck's and your Net self's, not a city's: the
+/// failsafe, the cooling, and the mask and the shield on you. It goes where you go
+/// (`outside::enter`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Carried {
+    failsafe: bool,
+    cooling_until: Option<u64>,
+    mask: u8,
+    mask_fresh: bool,
+    shield: u8,
+}
+
 impl NetState {
+    /// What of this state goes where you go.
+    pub fn carried(&self) -> Carried {
+        Carried {
+            failsafe: self.failsafe,
+            cooling_until: self.cooling_until,
+            mask: self.mask,
+            mask_fresh: self.mask_fresh,
+            shield: self.shield,
+        }
+    }
+
+    /// What went where you go, put on this city's state.
+    pub fn carry(&mut self, c: Carried) {
+        self.failsafe = c.failsafe;
+        self.cooling_until = c.cooling_until;
+        self.mask = c.mask;
+        self.mask_fresh = c.mask_fresh;
+        self.shield = c.shield;
+    }
+
     /// The game minute now.
     pub fn now(&self, st: &AppState) -> u64 {
         st.clock_tick() / sim::TICKS_PER_MINUTE
@@ -740,7 +773,11 @@ impl NetState {
 }
 
 pub(crate) fn building_name(st: &AppState, b: BuildingId) -> String {
-    let city = st.city.as_ref();
+    name_in(st.city.as_ref(), b)
+}
+
+/// Building `b`'s name in `city`, as `building_name` says it.
+fn name_in(city: Option<&City>, b: BuildingId) -> String {
     city.and_then(|c| c.building_opt(b).map(|x| (c, x)))
         .map(|(c, x)| {
             x.name
@@ -1436,23 +1473,26 @@ pub fn dump_for(st: &mut AppState, why: &str, cooling: u64) {
     st.net.run = None;
     st.net.cooling_until = Some(now + cooling);
     st.character.focus = 0;
-    // A dump on a rig run starts the trace home from the relay nearest you.
-    if st.backdoors.route.is_some() {
-        let running = st.backdoors.trace.is_some();
-        st.backdoors.start_trace(now);
-        let first = st
-            .backdoors
-            .trace
-            .as_ref()
-            .and_then(|t| t.relays.first().copied());
-        match first {
-            _ if running => st.warn("trace running · already on its way"),
-            Some(b) => st.warn(format!(
-                "trace running · it starts at `{}`",
-                building_name(st, b)
-            )),
-            None => st.warn("trace running · straight to your door"),
-        }
+    // A dump on a rig run starts the trace home from the relay nearest you. The rig's
+    // route is your body's city's: held as you left it when your Net self walked out.
+    let trace = |doors: &mut crate::backdoors::Backdoors, city: Option<&City>| {
+        doors.route.as_ref()?;
+        let running = doors.trace.is_some();
+        doors.start_trace(now);
+        let first = doors.trace.as_ref().and_then(|t| t.relays.first().copied());
+        Some(match first {
+            _ if running => "trace running · already on its way".to_string(),
+            Some(b) => format!("trace running · it starts at `{}`", name_in(city, b)),
+            None => "trace running · straight to your door".to_string(),
+        })
+    };
+    let line = if st.backdoors.route.is_some() {
+        trace(&mut st.backdoors, st.city.as_ref())
+    } else {
+        crate::outside::body_stay_mut(st).and_then(|s| trace(&mut s.backdoors, Some(&s.city)))
+    };
+    if let Some(line) = line {
+        st.warn(line);
     }
     let _ = jack_out(st);
     kick(st, 20);
@@ -3138,9 +3178,10 @@ pub fn piece_in_reach(st: &AppState, b: BuildingId, index: usize) -> bool {
 }
 
 /// The Net tile you jacked in at: your rig's landing when the body is at home, else the
-/// port beside the body; off the cells the city owns, where a port of the open ground
-/// put you (`ground_port`), or the body's own cell while the Net round it isn't built;
-/// none when you are not jacked in.
+/// port beside the body; in a city your Net self has walked out of, that city's port,
+/// in this frame (`outside::held_port`); off the cells every city owns, where a port of
+/// the open ground put you (`ground_port`), or the body's own cell while the Net round it
+/// isn't built; none when you are not jacked in.
 pub fn port_of(st: &AppState) -> Option<Pos> {
     let p = st.player.as_ref()?;
     let (place, body) = p.body?;
@@ -3150,7 +3191,9 @@ pub fn port_of(st: &AppState) -> Option<Pos> {
     let city = st.city.as_ref()?;
     let k = place.stratum()?;
     if !crate::outside::stream::live_owns(st, body) {
-        return ground_port(st, body).or(Some(body));
+        return crate::outside::held_port(st)
+            .or_else(|| ground_port(st, body))
+            .or(Some(body));
     }
     std::iter::once(body)
         .chain(body.neighbors8())
@@ -3206,7 +3249,8 @@ pub struct CordView {
 
 /// The cord while you stand on the open Net, jacked in, with the cord on in Settings;
 /// its walk left empty for `cord_walk`. A trace shows on it only when it walks this
-/// run's route.
+/// run's route. The route and its relays are the body's city's: when your Net self has
+/// walked out of it, as it holds them, in this frame.
 pub fn cord_view(st: &AppState) -> Option<CordView> {
     if !st.cord {
         return None;
@@ -3215,21 +3259,26 @@ pub fn cord_view(st: &AppState) -> Option<CordView> {
     if p.place != Place::Stratum(StratumKind::Net) || !p.jacked_in() {
         return None;
     }
-    let city = st.city.as_ref()?;
     let port = port_of(st);
-    let relays: Vec<(BuildingId, Pos)> = st
-        .backdoors
+    let (doors, gates, shift) = match crate::outside::body_stay(st) {
+        Some((stay, shift)) => (&stay.backdoors, &stay.city, shift),
+        None => (&st.backdoors, st.city.as_ref()?, Pos::new(0, 0)),
+    };
+    let relays: Vec<(BuildingId, Pos)> = doors
         .route
         .as_ref()
         .map(|r| {
             r.relays
                 .iter()
-                .filter_map(|b| crate::constructs::city_gate(city, *b).map(|g| (*b, g)))
+                .filter_map(|b| {
+                    crate::constructs::city_gate(gates, *b)
+                        .map(|g| (*b, g.offset(shift.x, shift.y)))
+                })
                 .collect()
         })
         .unwrap_or_default();
     let entry = relays.last().map(|(_, g)| *g).or(port)?;
-    let held = |b: BuildingId| st.backdoors.held(b).is_some();
+    let held = |b: BuildingId| doors.held(b).is_some();
     // Each hop with the relay at its end nearest you.
     let mut hops: Vec<(BuildingId, (Pos, Pos))> = relays
         .windows(2)
@@ -3240,12 +3289,12 @@ pub fn cord_view(st: &AppState) -> Option<CordView> {
         hops.push((*first, (*gate, port)));
     }
     let this_run = |t: &crate::backdoors::HomeTrace| {
-        st.backdoors
+        doors
             .route
             .as_ref()
             .is_some_and(|r| t.relays.iter().all(|b| r.relays.contains(b)))
     };
-    let trace = st.backdoors.trace.as_ref().filter(|t| this_run(t));
+    let trace = doors.trace.as_ref().filter(|t| this_run(t));
     // A hop is the trace's once it has passed the relay at its near end, or that
     // relay burned before it came (a sprung honeypot, a key gone stale): the trace
     // goes on past a dead relay. With no trace on, a dead relay's hop is cut.

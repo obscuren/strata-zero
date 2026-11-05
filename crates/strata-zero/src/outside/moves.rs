@@ -146,8 +146,8 @@ pub fn net_world_step(st: &mut AppState, tile: &mut Pos, d: Dir) -> Moved {
 /// else on the Net cell nearest the middle you can stand on outside a construct, in the
 /// live city's frame, whichever area owns the cell. The stream is built round the tile
 /// first, and a city or town owning the tile that isn't built yet is built now, as
-/// stepping into one builds it. Over the tile your Net self is over already, it stays
-/// where it is.
+/// stepping into one builds it (and the map hands it over on its next frame, as a step
+/// onto it does). Over the tile your Net self is over already, it stays where it is.
 pub fn net_down(st: &mut AppState, tile: Pos) -> Result<(), &'static str> {
     use crate::render::map::{MapRef, TileMap};
     use citygen::Terrain;

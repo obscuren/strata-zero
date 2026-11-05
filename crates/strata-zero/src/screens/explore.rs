@@ -305,16 +305,18 @@ fn open_at(st: &AppState, place: Place, to: Pos) -> bool {
     walked_map(st, city, place, beyond.as_ref()).walkable(to)
 }
 
-/// Why a step on foot from `from` to `to` on the street may not cross the edge of the
-/// cells the city owns now, or into another city or town's (a fight, a call, a scene);
-/// `None` when it may, or when it doesn't cross. The Net self walks off freely.
+/// Why a step from `from` to `to` may not cross now: on foot on the street, off the
+/// cells the city owns or into another city's or town's; your Net self on the Net, into
+/// another's (a fight, a call, a scene, a run in flight). `None` when it may, or when it
+/// doesn't cross. The Net self walks off onto the open Net freely.
 fn crossing_refused(st: &AppState, from: Pos, to: Pos) -> Option<&'static str> {
     let p = st.player.as_ref()?;
-    if !p.place.is_street() || p.jacked_in() {
+    let net = p.jacked_in() && p.place == Place::Stratum(StratumKind::Net);
+    if !net && (!p.place.is_street() || p.jacked_in()) {
         return None;
     }
     let live = |q: Pos| crate::outside::stream::live_owns(st, q);
-    let leaving = live(from) && !live(to);
+    let leaving = !net && live(from) && !live(to);
     // onto another city's or town's cells: walking in, as leaving is
     let into = !live(to) && {
         let owner = |q: Pos| crate::outside::stream::owner_of(st, q);
@@ -427,8 +429,8 @@ fn say_why_not(st: &mut AppState, dir: Dir) {
 }
 
 /// Whether a step `dir` on the Net goes onto a gate of another city's or town's Net
-/// (found through who owns the cell, on its own map): one your body, in the live city,
-/// can't go through.
+/// (found through who owns the cell, on its own map) from across the line: one only its
+/// own cells, where it's the live city, go through.
 fn foreign_gate(st: &AppState, dir: Dir) -> bool {
     let Some(p) = st.player.as_ref() else {
         return false;
@@ -2468,9 +2470,10 @@ impl MapScreen {
         }
     }
 
-    /// On foot on a cell another city or town owns: the run handed over to it in place
-    /// (`outside::stream::hand_over`), and everything the screen holds in the city's
-    /// cells moved with the frame, so nothing on screen jumps and nothing changes.
+    /// On foot or your Net self on a cell another city or town owns: the run handed
+    /// over to it in place (`outside::stream::hand_over`), and everything the screen
+    /// holds in the city's cells moved with the frame, so nothing on screen jumps and
+    /// nothing changes.
     fn hand_over(&mut self, st: &mut AppState) {
         let Some(d) = crate::outside::stream::hand_over(st) else {
             return;
@@ -2496,6 +2499,11 @@ impl MapScreen {
         self.riding = None;
         self.placement = None;
         self.cord_walk.replace(None);
+        // back from the Net onto your body's cell, woken in it where its city kept it
+        // (inside at the rig): the screen goes there
+        if st.player.as_ref().is_some_and(|p| p.place != self.place) {
+            self.follow_player(st);
+        }
     }
 
     /// The screen's place and camera catch up with the player after a jump, and on a
@@ -2829,9 +2837,10 @@ impl MapScreen {
         cmd
     }
 
-    /// A step on foot off the cells the city owns, onto ground you could stand on, while
-    /// something holds you in the city (a fight, a call, a scene): refused, with the word
-    /// why. `None` when the step may go on (the Net self walks off freely).
+    /// A step on foot off the cells the city owns, or your Net self's into another
+    /// city's or town's, onto ground you could stand on, while something holds you in the
+    /// city (a fight, a call, a scene, a run in flight): refused, with the word why.
+    /// `None` when the step may go on (the Net self walks off onto the open Net freely).
     fn off_the_edge(&mut self, st: &mut AppState, dir: Dir) -> Option<ScreenCmd> {
         let from = st.player.as_ref()?.pos;
         let why = crossing_refused(st, from, from.step(dir))?;
@@ -15949,30 +15958,193 @@ mod tests {
         }
 
         #[test]
-        fn the_net_self_walks_another_citys_net_without_a_handover() {
-            let (mut st, mut s, _, x, d) = beside_the_next_city();
-            let home = st.outside.as_ref().unwrap().home();
+        fn the_net_self_walks_into_the_next_city_and_it_hands_over() {
+            let (mut st, mut s, c, x, d) = beside_the_next_city();
             jacked_at_a_port(&mut st, &mut s);
-            let body = st.player.as_ref().unwrap().body;
+            let (place, body) = st.player.as_ref().unwrap().body.unwrap();
+            let body_at = handover::world_of(&st, body);
             stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), x);
             assert!(
                 net_at(&st, x.step(d))
                     .is_some_and(|t| t.is_walkable() || t.terrain == citygen::Terrain::Void),
                 "the next city's Net to walk onto"
             );
+            let at = handover::world_of(&st, x.step(d));
+            draw_buffer(&s, &st, 120, 40);
+            for _ in 0..30 {
+                s.update(&mut st, &[]);
+            }
+            let before = on_screen(&s, &st);
             s.update(&mut st, &[key(dir_key(d))]);
+            let o = st.outside.as_ref().unwrap();
+            assert_eq!(o.here(), c, "the next city is the live one");
+            assert!(logged(&st, &format!("into {}", o.name(c))));
             let p = st.player.as_ref().unwrap();
             assert_eq!(p.place, Place::Stratum(StratumKind::Net));
-            assert_eq!(p.pos, x.step(d), "on the next city's Net");
-            assert_eq!(p.body, body, "the body where it was");
             assert_eq!(
-                st.outside.as_ref().unwrap().here(),
-                home,
-                "nothing handed over"
+                handover::world_of(&st, p.pos),
+                at,
+                "on the cell walked onto"
             );
+            assert!(crate::outside::stream::live_owns(&st, p.pos));
+            let (now, b) = p.body.expect("still jacked in");
+            assert_eq!(
+                (now, handover::world_of(&st, b)),
+                (place, body_at),
+                "the body where it was"
+            );
+            let (dx, dy) = d.delta();
+            assert_eq!(
+                on_screen(&s, &st),
+                (before.0 + dx, before.1 + dy),
+                "nothing on screen jumps"
+            );
+        }
+
+        #[test]
+        fn jacking_out_in_the_next_city_wakes_you_at_the_rig() {
+            // jacked in from the flat's rig, the Net self walked into the next city: J
+            // hands home back, you in the chair and the screen on the flat
+            let (mut st, mut s, c, x, d) = beside_the_next_city();
+            let rig = st.home.expect("the flat's rig");
+            let city = st.city.clone().unwrap();
+            st.interiors
+                .ensure(&city, rig.home.building, rig.home.level)
+                .expect("the flat's floor");
+            handover::jacked(&mut st, (rig.place(), rig.home.rig), x);
+            stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), x);
+            s.update(&mut st, &[key(dir_key(d))]);
+            assert_eq!(st.outside.as_ref().unwrap().here(), c, "handed over");
+            jack_out(&mut st, &mut s);
+            let o = st.outside.as_ref().unwrap();
+            assert_eq!(o.here(), o.home(), "home again");
+            assert_eq!(player(&st), (rig.place(), rig.home.rig), "at the rig");
+            assert_eq!(s.place, rig.place(), "the screen on the flat");
+            let p = st.player.as_ref().unwrap();
+            assert!(!p.jacked_in());
             assert!(
-                !crate::outside::stream::live_owns(&st, p.pos),
-                "the next city's cell"
+                p.vis().iter().any(|(_, v)| *v == Visibility::Visible),
+                "seeing the flat"
+            );
+        }
+
+        #[test]
+        fn a_fight_holds_your_net_self_at_the_line() {
+            let (mut st, mut s, _, x, d) = beside_the_next_city();
+            let home = st.outside.as_ref().unwrap().home();
+            jacked_at_a_port(&mut st, &mut s);
+            stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), x);
+            let held = |st: &AppState| {
+                assert_eq!(you(st), x, "not a step in");
+                assert_eq!(st.outside.as_ref().unwrap().here(), home);
+            };
+            crate::net::engage(&mut st, Place::Stratum(StratumKind::Net), true);
+            s.update(&mut st, &[key(dir_key(d))]);
+            held(&st);
+            assert!(logged(&st, "not in a fight"), "{:?}", last(&st));
+            // a run in flight belongs to this city's Net: not left hanging behind you
+            st.net.engaged = None;
+            st.net.run = Some(game::Run {
+                program: ItemId::new("crack"),
+                target: game::HackTarget::Deck,
+                done: 0,
+                work: 3,
+            });
+            st.net.beat = st.clock_tick();
+            s.update(&mut st, &[key(dir_key(d))]);
+            held(&st);
+            assert!(logged(&st, "finish the run first"), "{:?}", last(&st));
+            // a call on the line
+            st.net.run = None;
+            st.missions.call = Some(ringing(&st));
+            s.update(&mut st, &[key(dir_key(d))]);
+            held(&st);
+            assert!(
+                logged(&st, "not with a call on the line"),
+                "{:?}",
+                last(&st)
+            );
+            // nothing holding you: in
+            st.missions.call = None;
+            s.update(&mut st, &[key(dir_key(d))]);
+            assert_ne!(st.outside.as_ref().unwrap().here(), home, "in");
+        }
+
+        /// Jacked in at the live city's street port nearest `near`, your body beside the
+        /// port, your Net self on `near` and the screen on it.
+        fn jacked_near(st: &mut AppState, s: &mut MapScreen, near: Pos) {
+            let city = st.city.clone().unwrap();
+            let port = city
+                .connectors
+                .iter()
+                .filter(|c| {
+                    c.kind == citygen::ConnectorKind::Jack
+                        && c.serves.contains(&StratumKind::Street)
+                        && city.walkable(StratumKind::Net, c.pos)
+                })
+                .min_by_key(|c| c.pos.manhattan(near))
+                .expect("a street terminal")
+                .pos;
+            let beside = std::iter::once(port)
+                .chain(port.neighbors8())
+                .find(|q| city.walkable(StratumKind::Street, *q))
+                .unwrap();
+            stand(st, s, Place::Stratum(StratumKind::Street), beside);
+            st.player.as_mut().unwrap().jack_in(&city, None, 0).unwrap();
+            stand(st, s, Place::Stratum(StratumKind::Net), near);
+        }
+
+        #[test]
+        fn the_cord_follows_you_into_the_next_citys_net() {
+            let (mut st, mut s, c, x, d) = beside_the_next_city();
+            jacked_near(&mut st, &mut s, x);
+            assert_eq!(you(&st), x);
+            s.update(&mut st, &[]);
+            draw_buffer(&s, &st, 120, 40);
+            let v = crate::net::cord_view(&st).expect("the cord");
+            let port = handover::world_of(&st, v.port.expect("a port"));
+            // three steps onto the next city's Net: it's live, the cord comes along
+            for _ in 0..3 {
+                s.update(&mut st, &[key(dir_key(d))]);
+            }
+            assert_eq!(st.outside.as_ref().unwrap().here(), c, "handed over");
+            let v = crate::net::cord_view(&st).expect("the cord, still");
+            assert_eq!(
+                v.port.map(|q| handover::world_of(&st, q)),
+                Some(port),
+                "from the port you jacked in at"
+            );
+            let me = you(&st);
+            let buf = draw_buffer(&s, &st, 120, 40);
+            let walk = s
+                .cord_walk
+                .borrow()
+                .as_ref()
+                .map(|(_, _, w)| w.clone())
+                .expect("the cord drawn");
+            assert_eq!(
+                walk,
+                crate::net::cord_walk_beyond(&st, v.entry, me),
+                "walked in the live city's frame"
+            );
+            assert_eq!(walk.first(), Some(&v.entry));
+            assert_eq!(walk.last().map(|q| q.manhattan(me)), Some(1), "up to you");
+            // drawn along all of it the view takes in, whoever's cells it crosses
+            let area = s.last_map.get();
+            let origin = s.cam.origin(area.width, area.height);
+            let shown: Vec<(Pos, (u16, u16))> = walk
+                .iter()
+                .filter_map(|q| tile_to_screen(area, origin, *q).map(|at| (*q, at)))
+                .collect();
+            assert!(shown.len() > 5, "{} cells of the cord in view", shown.len());
+            for (q, at) in &shown {
+                assert_eq!(buf[*at].fg, Color::Rgb(230, 240, 245), "the cord at {q:?}");
+            }
+            assert!(
+                shown
+                    .iter()
+                    .any(|(q, _)| !crate::outside::stream::live_owns(&st, *q)),
+                "over the cells you came from"
             );
         }
 
@@ -16014,44 +16186,96 @@ mod tests {
         }
 
         #[test]
-        fn another_citys_gate_is_too_far_to_touch() {
+        fn another_citys_gate_goes_through_once_you_are_on_its_cells() {
             let (mut st, mut s, c, _, _) = beside_the_next_city();
-            let home = st.outside.as_ref().unwrap().home();
             jacked_at_a_port(&mut st, &mut s);
             let (from, d) = by_their_net(&st, c, &|them, q| {
                 them.tile(StratumKind::Net, q)
                     .is_some_and(|t| t.terrain == citygen::Terrain::NetGate && t.building.is_some())
             });
             stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), from);
+            assert_eq!(st.outside.as_ref().unwrap().here(), c, "handed over");
+            let was = player(&st);
             s.update(&mut st, &[key(dir_key(d))]);
-            assert_eq!(
-                player(&st),
-                (Place::Stratum(StratumKind::Net), from),
-                "no move"
-            );
-            assert!(logged(&st, "too far from your body to touch it"));
-            assert_eq!(st.outside.as_ref().unwrap().here(), home);
+            assert!(!logged(&st, crate::net::TOO_FAR), "{:?}", last(&st));
+            assert_ne!(player(&st), was, "onto their gate: {:?}", last(&st));
+        }
+
+        /// A node of held settlement `s`'s put out on its grid on its cell at `at` (the
+        /// live city's frame): none is that near on this seed.
+        fn put_their_node(st: &mut AppState, s: Settlement, at: Pos) {
+            let w = handover::world_of(st, at);
+            let o = st.outside.as_mut().unwrap();
+            let origin = o.origin(o.held_city(s).unwrap());
+            let them = o.built.get_mut(&s).expect("held as built");
+            let n = them
+                .net
+                .nodes
+                .iter_mut()
+                .find(|n| !matches!(n.kind, NodeKind::Backbone | NodeKind::Ice))
+                .expect("a node of theirs");
+            n.building = None;
+            n.cyber = Pos::new(w.x - origin.x, w.y - origin.y);
         }
 
         #[test]
-        fn another_citys_node_is_too_far_to_touch() {
-            let (mut st, mut s, c, _, _) = beside_the_next_city();
-            st.character = game::Character::debug_runner(&st.content);
+        fn a_gate_across_the_line_is_too_far_to_touch() {
+            // a gate of the town's on its cell beside the city's own (put there on the
+            // town's map): from the city's side of the line it's out of reach
+            let mut st = home_run();
+            st.rain = false;
+            let (c, town, a, d) = handover::beside_a_town(&mut st);
+            {
+                let w = handover::world_of(&st, a.step(d));
+                let o = st.outside.as_mut().unwrap();
+                let origin = o.origin(o.held_city(town).unwrap());
+                let them = o.built.get_mut(&town).expect("held as built");
+                let gate = them
+                    .stratum(StratumKind::Net)
+                    .unwrap()
+                    .tiles
+                    .iter()
+                    .find_map(|(_, t)| {
+                        (t.terrain == citygen::Terrain::NetGate)
+                            .then_some(t.building)
+                            .flatten()
+                    })
+                    .expect("a construct's gate");
+                let q = Pos::new(w.x - origin.x, w.y - origin.y);
+                let net = them.stratum_mut(StratumKind::Net).unwrap();
+                net.tiles[q].terrain = citygen::Terrain::NetGate;
+                net.tiles[q].building = Some(gate);
+            }
+            handover::on_foot(&mut st, a);
+            let mut s = MapScreen::walking(&mut st);
+            s.update(&mut st, &[]);
             jacked_at_a_port(&mut st, &mut s);
-            // a node of theirs out on the grid, as the open Net reaches nodes
-            let (from, d) = by_their_net(&st, c, &|them, q| {
-                them.net.nodes.iter().any(|n| {
-                    n.cyber == q
-                        && n.building.is_none()
-                        && !matches!(n.kind, NodeKind::Backbone | NodeKind::Ice)
-                })
-            });
-            stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), from);
-            assert_eq!(you(&st), from);
+            stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), a);
+            assert_eq!(st.outside.as_ref().unwrap().here(), c);
+            s.update(&mut st, &[key(dir_key(d))]);
+            assert_eq!(
+                player(&st),
+                (Place::Stratum(StratumKind::Net), a),
+                "no move"
+            );
+            assert!(logged(&st, crate::net::TOO_FAR), "{:?}", last(&st));
+            assert_eq!(st.outside.as_ref().unwrap().here(), c);
+        }
+
+        #[test]
+        fn a_node_across_the_line_is_too_far_to_touch() {
+            let (mut st, mut s, c, x, d) = beside_the_next_city();
+            let home = st.outside.as_ref().unwrap().home();
+            st.character = game::Character::debug_runner(&st.content);
+            put_their_node(&mut st, c, x.step(d));
+            jacked_at_a_port(&mut st, &mut s);
+            stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), x);
+            assert_eq!(you(&st), x);
+            assert_eq!(st.outside.as_ref().unwrap().here(), home, "on the open Net");
             let said = |st: &AppState| {
                 st.log
                     .iter()
-                    .filter(|e| e.text == "too far from your body to touch it")
+                    .filter(|e| e.text == crate::net::TOO_FAR)
                     .count()
             };
             // space is still this city's window (Jack out, Look), not their node's
@@ -16064,7 +16288,7 @@ mod tests {
                 s.update(&mut st, &[key(KeyCode::Esc)]);
             }
             assert!(said(&st) > 0, "a program: {:?}", last(&st));
-            assert_eq!(you(&st), from, "no move");
+            assert_eq!(you(&st), x, "no move");
             // and looked at, space on it
             let before = said(&st);
             s.update(&mut st, &[key(KeyCode::Char('x'))]);
@@ -16075,41 +16299,88 @@ mod tests {
         }
 
         #[test]
+        fn its_ice_and_nodes_answer_after_the_handover() {
+            let (mut st, mut s, c, _, _) = beside_the_next_city();
+            st.character = game::Character::debug_runner(&st.content);
+            jacked_at_a_port(&mut st, &mut s);
+            // a node of theirs out on the grid, and a cell of their Net beside it
+            let (from, d) = by_their_net(&st, c, &|them, q| {
+                them.net.nodes.iter().any(|n| {
+                    n.cyber == q
+                        && n.building.is_none()
+                        && !matches!(n.kind, NodeKind::Backbone | NodeKind::Ice)
+                })
+            });
+            stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), from);
+            assert_eq!(st.outside.as_ref().unwrap().here(), c, "handed over");
+            let me = you(&st);
+            let node = st
+                .city
+                .as_ref()
+                .unwrap()
+                .net
+                .nodes
+                .iter()
+                .find(|n| n.cyber == me.step(d) && n.building.is_none())
+                .map(|n| n.id)
+                .expect("their node, in their own frame");
+            assert!(
+                crate::net::targets_outside(&st, me)
+                    .iter()
+                    .any(|(t, _)| *t == game::HackTarget::Node(node)),
+                "their node answers"
+            );
+            assert!(crate::net::out_of_reach(&st, me).is_empty());
+            // a program at it, and looked at: no word of your body
+            for n in '1'..='5' {
+                s.update(&mut st, &[key(KeyCode::Char(n))]);
+                s.update(&mut st, &[key(KeyCode::Esc)]);
+            }
+            s.update(&mut st, &[key(KeyCode::Char('x'))]);
+            s.update(&mut st, &[key(dir_key(d))]);
+            assert_eq!(
+                s.looking.map(|l| l.cursor),
+                Some(me.step(d)),
+                "on their node"
+            );
+            s.update(&mut st, &[key(KeyCode::Char(' '))]);
+            assert!(!logged(&st, crate::net::TOO_FAR), "{:?}", last(&st));
+            // their ICE out on their grid, their packets on their lanes
+            s.looking = None;
+            for _ in 0..3 {
+                s.update(&mut st, &[]);
+            }
+            assert!(st.net.grid.posted, "their sentinels posted");
+            assert!(
+                st.foes.iter().any(|f| f.ice.is_some() && !f.down),
+                "their ICE out"
+            );
+            draw_buffer(&s, &st, 120, 40);
+            assert_eq!(
+                s.traffic.borrow().seed(),
+                st.city.as_ref().unwrap().seed,
+                "packets on their lanes"
+            );
+        }
+
+        #[test]
         fn space_by_another_citys_node_still_opens_the_live_popup() {
-            // a node of the town's beside you and a node of the live city's held in
-            // reach (put on the city's cell nearest: none is that near on this seed):
-            // space opens the live city's window, its verbs on it
+            // a node of the town's across the line beside you (put there on the town's
+            // map) and a node of the live city's held in reach (put on its own cell
+            // nearest): space opens the live city's window, its verbs on it
             let mut st = home_run();
             st.rain = false;
             st.character = game::Character::debug_runner(&st.content);
-            let (_, town, a, _) = handover::beside_a_town(&mut st);
+            let (_, town, a, d) = handover::beside_a_town(&mut st);
+            put_their_node(&mut st, town, a.step(d));
             handover::on_foot(&mut st, a);
             let mut s = MapScreen::walking(&mut st);
             s.update(&mut st, &[]);
             jacked_at_a_port(&mut st, &mut s);
-            let (from, spot) = {
-                let o = st.outside.as_ref().unwrap();
-                let city = st.city.as_ref().unwrap();
-                let them = o.held_city(town).unwrap();
+            let spot = {
                 let b = Beyond::of(&st).unwrap();
-                let map = walked_map(&st, city, Place::Stratum(StratumKind::Net), Some(&b));
-                let mine = |q: Pos| matches!(b.elsewhere(q), Some(Owner::City(t, _)) if std::ptr::eq(t, them));
-                let from = TileRect::new(a.x - 60, a.y - 60, 121, 121)
-                    .iter()
-                    .filter(|f| {
-                        mine(*f)
-                            && map.walkable(*f)
-                            && map
-                                .tile(*f)
-                                .is_some_and(|t| t.terrain != citygen::Terrain::NetGate)
-                            && !crate::net::out_of_reach(&st, *f).is_empty()
-                    })
-                    .min_by_key(|f| f.chebyshev(a))
-                    .expect("a node of the town's to stand by");
-                let spot =
-                    crate::outside::nearest(from, crate::holds::VERB_REACH, |q| b.live_owns(q))
-                        .expect("the city's own cells in reach");
-                (from, spot)
+                crate::outside::nearest(a, crate::holds::VERB_REACH, |q| q != a && b.live_owns(q))
+                    .expect("the city's own cells in reach")
             };
             let held = {
                 let n = st
@@ -16127,9 +16398,9 @@ mod tests {
             let now = st.net.now(&st);
             let owner = crate::owners::owner_of(st.city.as_ref().unwrap(), held).unwrap();
             crate::holds::take(&mut st, held, owner, now);
-            stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), from);
+            stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), a);
             assert!(
-                !crate::net::out_of_reach(&st, from).is_empty(),
+                !crate::net::out_of_reach(&st, a).is_empty(),
                 "the town's node beside you"
             );
             assert!(
@@ -16142,7 +16413,7 @@ mod tests {
                 "the window: {:?}",
                 last(&st)
             );
-            assert!(!logged(&st, "too far from your body to touch it"));
+            assert!(!logged(&st, crate::net::TOO_FAR));
         }
 
         #[test]
