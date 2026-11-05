@@ -329,12 +329,35 @@ fn stepped_outside(st: &mut AppState, from: Pos) {
     }
 }
 
-/// Space on the open ground, off the cells the city owns: jacked in at a port in reach
-/// (a terminal or a vending machine on your cell or beside it, whoever's ground it is),
-/// your Net self on the nearest cell of the Net with signal within 8, your body left
-/// where it stands. Refused, with the word why, as the city's ports refuse.
+/// Whether a port of the open ground is in reach, off the cells the city owns, on foot:
+/// a terminal or a vending machine on your cell or beside it, whoever's ground it is.
+fn ground_port_in_reach(st: &AppState) -> bool {
+    use citygen::{Feature, Furniture};
+    let Some(p) = st.player.as_ref() else {
+        return false;
+    };
+    if !p.place.is_street() || p.jacked_in() || crate::outside::stream::live_owns(st, p.pos) {
+        return false;
+    }
+    let (Some(city), Some(beyond)) = (st.city.as_ref(), Beyond::of(st)) else {
+        return false;
+    };
+    let street = walked_map(st, city, p.place, Some(&beyond));
+    std::iter::once(p.pos).chain(p.pos.neighbors8()).any(|q| {
+        street.tile(q).is_some_and(|t| {
+            matches!(
+                t.feature,
+                Some(Feature::Terminal) | Some(Feature::Furniture(Furniture::Vending))
+            )
+        })
+    })
+}
+
+/// Space by a port of the open ground (`ground_port_in_reach`): jacked in there, your
+/// Net self on the nearest cell of the Net with signal within 8, your body left where
+/// it stands. Refused, with the word why, as the city's ports refuse.
 fn jack_in_on_the_ground(st: &mut AppState) {
-    use citygen::{Feature, Furniture, Terrain};
+    use citygen::Terrain;
     let Some((place, pos)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
         return;
     };
@@ -346,19 +369,6 @@ fn jack_in_on_the_ground(st: &mut AppState) {
         let (Some(city), Some(beyond)) = (st.city.as_ref(), Beyond::of(st)) else {
             return;
         };
-        let street = walked_map(st, city, place, Some(&beyond));
-        let port = std::iter::once(pos).chain(pos.neighbors8()).any(|q| {
-            street.tile(q).is_some_and(|t| {
-                matches!(
-                    t.feature,
-                    Some(Feature::Terminal) | Some(Feature::Furniture(Furniture::Vending))
-                )
-            })
-        });
-        if !port {
-            st.warn("no port in reach");
-            return;
-        }
         if let Some(left) = st.net.cooling(st.net.now(st)) {
             st.warn(format!("deck cooling · {left} min"));
             return;
@@ -381,6 +391,37 @@ fn jack_in_on_the_ground(st: &mut AppState) {
     look(st);
     crate::net::after_jack_in(st, place, None);
     st.say("jacked in · the open Net");
+}
+
+/// Why the open ground won't take a step onto `tile`, in the outside screen's words:
+/// water, a climb, the world's end (past it, or ground not made), anything else.
+fn ground_refusal(tile: Option<&citygen::Tile>) -> &'static str {
+    use citygen::Terrain;
+    match tile.map(|t| t.terrain) {
+        None | Some(Terrain::Void) => "the world ends here",
+        Some(Terrain::Water | Terrain::Shallows) => "too deep to wade",
+        Some(Terrain::Cliff | Terrain::Rock) => "too steep to climb",
+        Some(_) => "something in the way",
+    }
+}
+
+/// A step `dir` on foot that didn't go, onto a cell off the city's own: the ground says
+/// why. In the city, and on the Net, a wall says nothing.
+fn say_why_not(st: &mut AppState, dir: Dir) {
+    let Some(p) = st.player.as_ref() else {
+        return;
+    };
+    let to = p.pos.step(dir);
+    if !p.place.is_street() || p.jacked_in() || crate::outside::stream::live_owns(st, to) {
+        return;
+    }
+    let line = {
+        let (Some(city), Some(b)) = (st.city.as_ref(), Beyond::of(st)) else {
+            return;
+        };
+        ground_refusal(walked_map(st, city, p.place, Some(&b)).tile(to))
+    };
+    st.warn(line);
 }
 
 /// One step `dir` over the map you stand on (past the city's edge where it goes on), and
@@ -1149,6 +1190,7 @@ impl MapScreen {
         }
         // A blocked step costs nothing.
         if !open_step(st, dir) {
+            say_why_not(st, dir);
             return ScreenCmd::Stay;
         }
         if let Err(why) = crate::net::spend_move(st) {
@@ -1997,14 +2039,20 @@ impl MapScreen {
                     let step = if fast { 8 } else { 1 };
                     let (dx, dy) = d.delta();
                     let view = self.view_rect();
+                    // the view bounds the cursor, and the map too where it ends; the
+                    // street and the Net carry on past the city's edge
                     let size = st
                         .city
                         .as_ref()
+                        .filter(|_| !carries_on(st, self.place))
                         .map(|city| TileMap::size(&self.map(st, city)));
-                    let (w, h) = size.map_or((i32::MAX, i32::MAX), |s| (s.w as i32, s.h as i32));
-                    let lo_x = view.x.max(0);
+                    let (lo, (w, h)) = match size {
+                        Some(s) => (0, (s.w as i32, s.h as i32)),
+                        None => (i32::MIN, (i32::MAX, i32::MAX)),
+                    };
+                    let lo_x = view.x.max(lo);
                     let hi_x = (view.x + view.w - 1).min(w - 1).max(lo_x);
-                    let lo_y = view.y.max(0);
+                    let lo_y = view.y.max(lo);
                     let hi_y = (view.y + view.h - 1).min(h - 1).max(lo_y);
                     Pos::new(
                         (cursor.x + dx * step).clamp(lo_x, hi_x),
@@ -2750,14 +2798,9 @@ impl MapScreen {
                 st.say("staying put · act");
                 return Some(ScreenCmd::Stay);
             }
-            // Off the city's cells on foot: the open ground's ports.
-            if !jacked
-                && st.player.as_ref().is_some_and(|p| {
-                    p.place.is_street()
-                        && carries_on(st, p.place)
-                        && !crate::outside::stream::live_owns(st, p.pos)
-                })
-            {
+            // Off the city's cells on foot by a port of the open ground: jacked in
+            // there. With none in reach, space is what it is on the street.
+            if ground_port_in_reach(st) {
                 jack_in_on_the_ground(st);
                 return Some(ScreenCmd::Stay);
             }
@@ -3029,7 +3072,10 @@ impl MapScreen {
             }
             KeyCode::Char('.') => look(st),
             code => {
-                step(st, dir_for(code)?);
+                let dir = dir_for(code)?;
+                if !step(st, dir) {
+                    say_why_not(st, dir);
+                }
             }
         }
         Some(ScreenCmd::Stay)
@@ -4148,7 +4194,14 @@ impl Screen for MapScreen {
         for (i, row) in rows.into_iter().enumerate() {
             f.render_widget(Paragraph::new(row), r.band_l[i + 1]);
         }
-        let mut location = hud::location(city, &st.interiors, self.place, cursor);
+        // On foot or jacked in off the city's cells, where you are as HERE names it.
+        let mut location = match st.player.as_ref() {
+            Some(p) if self.mode == Mode::Walk && p.place == self.place && !live_owns(p.pos) => {
+                crate::outside::here::band(st, self.place == Place::Stratum(StratumKind::Net))
+            }
+            _ => None,
+        }
+        .unwrap_or_else(|| hud::location(city, &st.interiors, self.place, cursor));
         let alert_building = match self.place {
             Place::Construct(b) | Place::Floor { building: b, .. } => Some(b),
             Place::Stratum(_) => None,
@@ -15196,6 +15249,613 @@ mod tests {
                     s.update(&mut st, &[key(dir_key(d.opposite()))]);
                     draw_buffer(&s, &st, 100, 30);
                 }
+            }
+        }
+
+        /// A cell of the open ground beside a pump of the truck stop nearest the
+        /// city, in the city's frame.
+        fn by_a_pump(st: &AppState) -> Pos {
+            use citygen::overworld::{PoiKind, detail};
+            use citygen::{Feature, Furniture};
+            let o = st.outside.as_ref().unwrap();
+            let w = o.world();
+            let origin = o.origin(st.city.as_ref().unwrap());
+            let home = Pos::new(origin.x.div_euclid(TILE), origin.y.div_euclid(TILE));
+            let poi = w
+                .pois
+                .iter()
+                .filter(|p| {
+                    p.kind == PoiKind::TruckStop
+                        && (-3..=3).all(|dy| {
+                            (-3..=3)
+                                .all(|dx| !crate::outside::in_any_block(st, p.at.offset(dx, dy)))
+                        })
+                })
+                .min_by_key(|p| p.at.dist2(home))
+                .expect("a truck stop out on its own");
+            let c = Pos::new(TILE * (poi.at.x - 3), TILE * (poi.at.y - 3));
+            let g = detail::region(w, c.x, c.y, 7 * TILE as u32, 7 * TILE as u32);
+            let pump = g
+                .iter()
+                .find(|(_, t)| t.feature == Some(Feature::Furniture(Furniture::Vending)))
+                .map(|(p, _)| p)
+                .expect("a pump");
+            let beside = pump
+                .neighbors4()
+                .find(|q| g.get(*q).is_some_and(|t| t.is_walkable()))
+                .expect("ground beside the pump");
+            Pos::new(c.x + beside.x - origin.x, c.y + beside.y - origin.y)
+        }
+
+        /// What would stop a step from `near` out to `r` cells round it on `place`: an
+        /// open cell of the ground, and the way onto one of the ground that won't
+        /// take you whose tile `wanted` says yes to.
+        fn refused_near(
+            st: &AppState,
+            place: Place,
+            near: Pos,
+            r: i32,
+            wanted: &dyn Fn(Option<&citygen::Tile>) -> bool,
+        ) -> Option<(Pos, Dir)> {
+            let city = st.city.as_ref().unwrap();
+            let b = Beyond::of(st).unwrap();
+            let map = walked_map(st, city, place, Some(&b));
+            let ground = |p: Pos| matches!(b.elsewhere(p), Some(Owner::Ground(..)));
+            TileRect::new(near.x - r, near.y - r, 2 * r + 1, 2 * r + 1)
+                .iter()
+                .filter(|p| ground(*p) && map.walkable(*p))
+                .flat_map(|p| Dir::ALL.map(|d| (p, d)))
+                .find(|(p, d)| {
+                    let to = p.step(*d);
+                    ground(to) && !map.walkable(to) && wanted(map.tile(to))
+                })
+        }
+
+        /// How many times the log says `line`.
+        fn said(st: &AppState, line: &str) -> usize {
+            st.log.iter().filter(|e| e.text == line).count()
+        }
+
+        #[test]
+        fn a_step_the_ground_refuses_says_why_on_foot_and_nothing_on_the_net() {
+            use citygen::Terrain;
+            let (mut st, mut s, e, _) = at_the_edge(1);
+            let street = Place::Stratum(StratumKind::Street);
+            // water: too deep to wade
+            crate::outside::stream::tend(&mut st, TileRect::new(e.x - 160, e.y - 160, 321, 321));
+            let wet = |t: Option<&citygen::Tile>| {
+                t.is_some_and(|t| matches!(t.terrain, Terrain::Water | Terrain::Shallows))
+            };
+            let (from, d) = refused_near(&st, street, e, 150, &wet).expect("water near the city");
+            stand(&mut st, &mut s, street, from);
+            s.update(&mut st, &[key(dir_key(d))]);
+            assert_eq!(you(&st), from);
+            assert_eq!(last(&st), Some("too deep to wade"));
+            // a pump: something in the way
+            let by = by_a_pump(&st);
+            stand(&mut st, &mut s, street, by);
+            let pump = Dir::ALL
+                .into_iter()
+                .find(|d| !open_at(&st, street, by.step(*d)))
+                .expect("the pump beside you");
+            s.update(&mut st, &[key(dir_key(pump))]);
+            assert_eq!(you(&st), by);
+            assert_eq!(last(&st), Some("something in the way"));
+            // on the Net out there a wall stops you as one does in the city: nothing said
+            s.update(&mut st, &[key(KeyCode::Char(' '))]);
+            assert!(st.player.as_ref().unwrap().jacked_in(), "{:?}", last(&st));
+            let net = Place::Stratum(StratumKind::Net);
+            let (from, d) = refused_near(&st, net, you(&st), 40, &|t| t.is_some())
+                .expect("a wall on the open Net");
+            stand(&mut st, &mut s, net, from);
+            let lines = [
+                "too deep to wade",
+                "too steep to climb",
+                "the world ends here",
+                "something in the way",
+            ];
+            let before = lines.map(|l| said(&st, l));
+            s.update(&mut st, &[key(dir_key(d))]);
+            assert_eq!(you(&st), from);
+            assert_eq!(lines.map(|l| said(&st, l)), before, "the Net says nothing");
+        }
+
+        #[test]
+        fn the_grounds_refusals_are_the_outside_screens_words() {
+            use citygen::{Terrain, Tile};
+            let line = |t: Terrain| ground_refusal(Some(&Tile::new(t)));
+            assert_eq!(ground_refusal(None), "the world ends here");
+            assert_eq!(line(Terrain::Void), "the world ends here");
+            assert_eq!(line(Terrain::Water), "too deep to wade");
+            assert_eq!(line(Terrain::Shallows), "too deep to wade");
+            assert_eq!(line(Terrain::Cliff), "too steep to climb");
+            assert_eq!(line(Terrain::Rock), "too steep to climb");
+            assert_eq!(line(Terrain::Wall), "something in the way");
+        }
+
+        #[test]
+        fn space_on_the_ground_with_no_port_in_reach_is_space_on_the_street() {
+            use citygen::{Feature, Furniture};
+            let (mut st, mut s, _, d) = at_the_edge(4);
+            for _ in 0..4 {
+                s.update(&mut st, &[key(dir_key(d))]);
+            }
+            let me = you(&st);
+            assert!(off_the_map(&st, me));
+            {
+                let city = st.city.as_ref().unwrap();
+                let b = Beyond::of(&st).unwrap();
+                let map = walked_map(&st, city, Place::Stratum(StratumKind::Street), Some(&b));
+                let port = std::iter::once(me).chain(me.neighbors8()).any(|q| {
+                    map.tile(q).is_some_and(|t| {
+                        matches!(
+                            t.feature,
+                            Some(Feature::Terminal) | Some(Feature::Furniture(Furniture::Vending))
+                        )
+                    })
+                });
+                assert!(!port, "no port beside you");
+            }
+            let cmd = s.update(&mut st, &[key(KeyCode::Char(' '))]);
+            assert!(
+                matches!(cmd, ScreenCmd::Push { .. }),
+                "space opens what's in reach, Look at least: {:?}",
+                last(&st)
+            );
+            assert!(!logged(&st, "no port in reach"));
+            assert!(!st.player.as_ref().unwrap().jacked_in());
+        }
+
+        #[test]
+        fn the_top_band_off_the_map_says_where_you_are_as_here_does() {
+            let (mut st, mut s, _, d) = at_the_edge(4);
+            let band = |s: &MapScreen, st: &AppState| row_of(&draw_buffer(s, st, 120, 40), 0);
+            assert!(band(&s, &st).contains("· Street"), "the city's own street");
+            for _ in 0..4 {
+                s.update(&mut st, &[key(dir_key(d))]);
+            }
+            assert!(off_the_map(&st, you(&st)));
+            let place = |lines: Vec<ratatui::text::Line>| {
+                lines[0]
+                    .spans
+                    .iter()
+                    .map(|s| s.content.to_string())
+                    .collect::<String>()
+                    .trim()
+                    .to_string()
+            };
+            let here = place(crate::outside::here::here_lines(&st));
+            let top = band(&s, &st);
+            assert!(top.contains(&here), "{here:?} in {top:?}");
+            assert!(!top.contains("Street"), "{top:?}");
+            // jacked in at a pump, your Net self off the city's map: the Net HERE names
+            let by = by_a_pump(&st);
+            stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), by);
+            s.update(&mut st, &[key(KeyCode::Char(' '))]);
+            assert!(st.player.as_ref().unwrap().jacked_in(), "{:?}", last(&st));
+            s.update(&mut st, &[]);
+            let here = place(crate::outside::here::net_here_lines(&st));
+            let top = band(&s, &st);
+            assert!(top.contains(&here), "{here:?} in {top:?}");
+            // and back on the city's own street, the city's band
+            let (mut st, mut s, _, d) = at_the_edge(4);
+            for _ in 0..4 {
+                s.update(&mut st, &[key(dir_key(d))]);
+            }
+            for _ in 0..4 {
+                s.update(&mut st, &[key(dir_key(d.opposite()))]);
+            }
+            assert!(band(&s, &st).contains("· Street"));
+        }
+
+        #[test]
+        fn the_look_cursor_walks_the_ground_off_the_map() {
+            let (mut st, mut s, _, d) = at_the_edge(10);
+            for _ in 0..10 {
+                s.update(&mut st, &[key(dir_key(d))]);
+            }
+            for _ in 0..30 {
+                s.update(&mut st, &[]);
+            }
+            draw_buffer(&s, &st, 120, 40);
+            let me = you(&st);
+            assert!(off_the_map(&st, me));
+            s.update(&mut st, &[key(KeyCode::Char('x'))]);
+            // two steps further out, where nothing of the city is
+            s.update(&mut st, &[key(dir_key(d)), key(dir_key(d))]);
+            let (dx, dy) = d.delta();
+            let cursor = s.looking.map(|l| l.cursor);
+            assert_eq!(cursor, Some(me.offset(2 * dx, 2 * dy)));
+            assert!(s.view_rect().contains(cursor.unwrap()));
+        }
+
+        /// The long walk: out across the open ground and back on foot, then jacked in
+        /// at a ground port and out across the open Net and back, the clock running all
+        /// the way and every frame drawn at three sizes; four times on each walk out,
+        /// every window the map opens and every key its help lists.
+        mod long_walk {
+            use super::*;
+            use crate::screens::deck::Tab;
+            use crossterm::event::KeyEvent;
+
+            /// The sizes every frame is drawn at.
+            const SIZES: [(u16, u16); 3] = [(80, 24), (120, 40), (200, 60)];
+            /// Steps out, and as many back.
+            const STEPS: usize = 120;
+            /// Where on the way out every window and key is tried.
+            const STOPS: [usize; 4] = [0, 40, 80, 120];
+
+            /// The screens as the app stacks them: the city screen, or the overworld a
+            /// `W` switched to in its place, and what was pushed over either.
+            struct Stack {
+                map: MapScreen,
+                up: Option<Box<dyn Screen>>,
+                over: Vec<Box<dyn Screen>>,
+            }
+
+            impl Stack {
+                fn new(st: &mut AppState) -> Stack {
+                    let mut t = Stack {
+                        map: MapScreen::walking(st),
+                        up: None,
+                        over: Vec::new(),
+                    };
+                    t.frame(st, &[]);
+                    t
+                }
+
+                fn depth(&self) -> usize {
+                    1 + self.over.len()
+                }
+
+                /// One frame as the app runs it: the clock a tick on, the keys to the
+                /// top screen, what it asks done, the whole stack drawn at every size.
+                fn frame(&mut self, st: &mut AppState, keys: &[KeyEvent]) {
+                    st.tick += 1;
+                    let top: &mut dyn Screen = match (self.over.last_mut(), self.up.as_mut()) {
+                        (Some(s), _) => s.as_mut(),
+                        (None, Some(s)) => s.as_mut(),
+                        (None, None) => &mut self.map,
+                    };
+                    match top.update(st, keys) {
+                        ScreenCmd::Stay | ScreenCmd::Flash(_) => {}
+                        ScreenCmd::Push { to, .. } => self.over.push(to),
+                        ScreenCmd::Pop { .. } => {
+                            self.over.pop();
+                        }
+                        ScreenCmd::Replace { to, .. } => {
+                            self.over.pop();
+                            self.over.push(to);
+                        }
+                        // down from the overworld: the city screen, as a run resumes it
+                        ScreenCmd::Switch { .. } if self.up.is_some() => {
+                            self.over.clear();
+                            self.up = None;
+                            self.map = MapScreen::resumed(st);
+                        }
+                        ScreenCmd::Switch { to, .. } => {
+                            self.over.clear();
+                            self.up = Some(to);
+                        }
+                        ScreenCmd::Quit => panic!("the game quit"),
+                    }
+                    self.draw(st);
+                }
+
+                fn draw(&self, st: &AppState) {
+                    for (w, h) in SIZES {
+                        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+                        term.draw(|f| {
+                            match &self.up {
+                                Some(s) => s.draw(st, f),
+                                None => self.map.draw(st, f),
+                            }
+                            for s in &self.over {
+                                crate::ui::dim::wash(f.buffer_mut());
+                                s.draw(st, f);
+                            }
+                        })
+                        .unwrap();
+                    }
+                }
+
+                fn press(&mut self, st: &mut AppState, code: KeyCode) {
+                    self.frame(st, &[key(code)]);
+                }
+
+                /// Esc until only the map is left, and a pick or a target put away.
+                fn close(&mut self, st: &mut AppState) {
+                    for _ in 0..6 {
+                        if self.depth() == 1 {
+                            break;
+                        }
+                        self.press(st, KeyCode::Esc);
+                    }
+                    assert_eq!(self.depth(), 1, "put away: {:?}", last(st));
+                    if self.map.which_way.is_some() || self.map.targeting.is_some() {
+                        self.press(st, KeyCode::Esc);
+                    }
+                }
+            }
+
+            /// One step `d` from `from` on `place`, frames apart as a player's keys are,
+            /// a minute of the clock run on every tenth: you're where the step says.
+            fn go(st: &mut AppState, t: &mut Stack, place: Place, from: Pos, d: Dir, i: usize) {
+                st.tick += sim::WALK_TICKS;
+                // the arrows on every other step, the letters on the rest
+                let arrows = i.is_multiple_of(2);
+                let code = match d {
+                    Dir::N if arrows => KeyCode::Up,
+                    Dir::S if arrows => KeyCode::Down,
+                    Dir::E if arrows => KeyCode::Right,
+                    Dir::W if arrows => KeyCode::Left,
+                    _ => dir_key(d),
+                };
+                t.press(st, code);
+                assert_eq!(
+                    player(st),
+                    (place, from.step(d)),
+                    "step {i} {d:?}: {:?}",
+                    last(st)
+                );
+                if i % 10 == 9 {
+                    crate::clock::run(
+                        st,
+                        Some(sim::TICKS_PER_MINUTE),
+                        crate::clock::PATHS_PER_FRAME,
+                    );
+                }
+            }
+
+            /// `STEPS` steps of a seeded wander from where you stand, only onto cells of
+            /// the open ground the map you're on lets you onto, two in three away from
+            /// the city's middle; everything tried at each of `STOPS`. The steps taken.
+            fn wander(st: &mut AppState, t: &mut Stack, seed: u64) -> Vec<Dir> {
+                let mut taken = Vec::new();
+                for i in 0..=STEPS {
+                    if STOPS.contains(&i) {
+                        everything(st, t);
+                    }
+                    if i == STEPS {
+                        break;
+                    }
+                    let (place, from) = player(st);
+                    let d = {
+                        let city = st.city.as_ref().unwrap();
+                        let b = Beyond::of(st).unwrap();
+                        let map = walked_map(st, city, place, Some(&b));
+                        let open: Vec<Dir> = Dir::ALL
+                            .into_iter()
+                            .filter(|d| {
+                                let to = from.step(*d);
+                                map.walkable(to)
+                                    && matches!(b.elsewhere(to), Some(Owner::Ground(..)))
+                            })
+                            .collect();
+                        assert!(!open.is_empty(), "step {i}: nowhere to go from {from:?}");
+                        let mid = city.size.center();
+                        let h = hash64(seed, i as u64);
+                        if h.is_multiple_of(3) {
+                            open[(h / 3) as usize % open.len()]
+                        } else {
+                            *open
+                                .iter()
+                                .max_by_key(|d| from.step(**d).dist2(mid))
+                                .unwrap()
+                        }
+                    };
+                    go(st, t, place, from, d, i);
+                    taken.push(d);
+                }
+                taken
+            }
+
+            /// The way back, step for step.
+            fn back(st: &mut AppState, t: &mut Stack, taken: &[Dir]) {
+                for (i, d) in taken.iter().rev().enumerate() {
+                    let (place, from) = player(st);
+                    go(st, t, place, from, d.opposite(), i);
+                }
+            }
+
+            /// Every window the map opens and every key its help lists, each put away
+            /// again, a frame drawn after every key: you end where you were.
+            fn everything(st: &mut AppState, t: &mut Stack) {
+                let was = player(st);
+                let jacked = st.player.as_ref().unwrap().jacked_in();
+                // the deck on every tab, ATTRIBUTES the sheet, the MAP at every zoom
+                t.press(st, KeyCode::Tab);
+                assert_eq!(t.depth(), 2, "the deck: {:?}", last(st));
+                for (n, tab) in Tab::ALL.iter().enumerate() {
+                    t.press(
+                        st,
+                        KeyCode::Char(char::from_digit(n as u32 + 1, 10).unwrap()),
+                    );
+                    for k in [
+                        KeyCode::Down,
+                        KeyCode::Down,
+                        KeyCode::Up,
+                        KeyCode::Right,
+                        KeyCode::Left,
+                    ] {
+                        t.press(st, k);
+                    }
+                    if *tab == Tab::Map {
+                        // in to zoom 1, then out a step at a time to the world
+                        for _ in 0..3 {
+                            t.press(st, KeyCode::Char('+'));
+                        }
+                        for _ in 0..4 {
+                            for c in "hlkjHLKJ[]<>fft".chars() {
+                                t.press(st, KeyCode::Char(c));
+                            }
+                            t.press(st, KeyCode::Char('-'));
+                        }
+                        // on the world: a place marked and unmarked, then back in
+                        for c in "]tt+".chars() {
+                            t.press(st, KeyCode::Char(c));
+                        }
+                    }
+                }
+                t.press(st, KeyCode::Tab);
+                assert_eq!(t.depth(), 1, "the deck put away");
+                // the panes, the inspector and the legend among them, each off and on
+                for n in 1..=6 {
+                    t.press(st, KeyCode::F(n));
+                    t.press(st, KeyCode::F(n));
+                }
+                // look mode, the inspector reading the cursor
+                st.sidebar.set(Section::Inspect, true);
+                t.press(st, KeyCode::Char('x'));
+                assert!(t.map.looking.is_some(), "look mode");
+                for c in "hhhllllllkkkjjjjjjyubnHJKLYUBN".chars() {
+                    t.press(st, KeyCode::Char(c));
+                    let l = t.map.looking.expect("still looking");
+                    assert!(
+                        t.map.view_rect().contains(l.cursor),
+                        "the look cursor {:?} out of view {:?}, you at {:?}, cam {:?}",
+                        l.cursor,
+                        t.map.view_rect(),
+                        player(st),
+                        (t.map.cam.x, t.map.cam.y)
+                    );
+                }
+                for k in [
+                    KeyCode::Tab,
+                    KeyCode::Tab,
+                    KeyCode::BackTab,
+                    KeyCode::Char(' '),
+                ] {
+                    t.press(st, k);
+                }
+                t.close(st);
+                if t.map.looking.is_some() {
+                    t.press(st, KeyCode::Esc);
+                }
+                assert!(t.map.looking.is_none(), "look put away");
+                // the windows the keys push, each put away
+                for c in ['v', 'm', 'a', 'q'] {
+                    t.press(st, KeyCode::Char(c));
+                    t.close(st);
+                }
+                t.press(st, KeyCode::Esc);
+                assert_eq!(t.depth(), 2, "esc pauses");
+                t.close(st);
+                // space: what's in reach (a port beside you on foot jacks you in: out)
+                t.press(st, KeyCode::Char(' '));
+                if !jacked && st.player.as_ref().unwrap().jacked_in() {
+                    t.press(st, KeyCode::Char('J'));
+                    t.press(st, KeyCode::Char('y'));
+                }
+                t.close(st);
+                // on and off again: help, the digital overlay, dev mode
+                for c in ['?', 'd', '`'] {
+                    t.press(st, KeyCode::Char(c));
+                    t.press(st, KeyCode::Char(c));
+                }
+                // stairs, a wait, engage, aim, save
+                for c in ['<', '>', '.', 'e', 'g', 's'] {
+                    t.press(st, KeyCode::Char(c));
+                    if st.net.engaged.is_some() {
+                        t.press(st, KeyCode::Char('e'));
+                    }
+                    t.close(st);
+                }
+                // the slots: an ability on foot, a program jacked in
+                for c in '1'..='5' {
+                    t.press(st, KeyCode::Char(c));
+                    t.close(st);
+                }
+                // J asks jacked in, and you stay
+                t.press(st, KeyCode::Char('J'));
+                if jacked {
+                    assert_eq!(t.depth(), 2, "J asks");
+                    t.press(st, KeyCode::Char('n'));
+                }
+                assert_eq!(t.depth(), 1);
+                // the free camera, and back on foot
+                t.press(st, KeyCode::Char('c'));
+                assert_eq!(t.map.mode, Mode::Explore);
+                for c in "hjkl[]".chars() {
+                    t.press(st, KeyCode::Char(c));
+                }
+                t.press(st, KeyCode::Char('w'));
+                assert_eq!(t.map.mode, Mode::Walk);
+                // the console
+                t.press(st, KeyCode::Char(':'));
+                assert!(t.map.console.is_some(), "the console");
+                t.press(st, KeyCode::Esc);
+                assert!(t.map.console.is_none());
+                // up: the overworld on foot, the Net over the world jacked in; and down
+                t.press(st, KeyCode::Char('W'));
+                if jacked {
+                    assert_eq!(t.depth(), 2, "W looks up at the Net: {:?}", last(st));
+                } else {
+                    assert!(t.up.is_some(), "W goes up: {:?}", last(st));
+                }
+                t.press(st, KeyCode::Char('?'));
+                t.press(st, KeyCode::Char('?'));
+                t.press(st, KeyCode::Enter);
+                assert!(t.up.is_none() && t.depth() == 1, "back down");
+                // ↵ came down on the tile's road: back where the walk is
+                if player(st) != was {
+                    stand(st, &mut t.map, was.0, was.1);
+                }
+                assert_eq!(player(st), was, "{:?}", last(st));
+                assert_eq!(t.map.mode, Mode::Walk);
+            }
+
+            #[test]
+            fn a_long_walk_out_and_back_never_breaks() {
+                let (mut st, _, e, _) = at_the_edge(1);
+                st.rain = true;
+                st.unlock_dev();
+                st.character = game::Character::debug_runner(&st.content);
+                crate::bots::sync(&mut st);
+                let street = Place::Stratum(StratumKind::Street);
+                let mut t = Stack::new(&mut st);
+                let minutes =
+                    |st: &AppState, from: u64| (st.clock_tick() - from) / sim::TICKS_PER_MINUTE;
+                // on foot: out across the ground, and back the way you came
+                let from = st.clock_tick();
+                let out = wander(&mut st, &mut t, 3);
+                assert!(off_the_map(&st, you(&st)));
+                back(&mut st, &mut t, &out);
+                assert_eq!(player(&st), (street, e), "back where the walk began");
+                assert!(
+                    minutes(&st, from) >= 30,
+                    "the clock ran: {}",
+                    minutes(&st, from)
+                );
+                // by a pump on the ground: jacked in, out across the open Net and back
+                let port = by_a_pump(&st);
+                stand(&mut st, &mut t.map, street, port);
+                t.press(&mut st, KeyCode::Char(' '));
+                assert!(
+                    st.player.as_ref().unwrap().jacked_in(),
+                    "jacked in: {:?}",
+                    last(&st)
+                );
+                let start = player(&st);
+                // a mask on, wearing out on the grid, and a tracer on your trail
+                st.net.mask = 6;
+                let d = st.city.as_ref().unwrap().districts[0].id;
+                crate::grid::send_tracer(&mut st, crate::owners::Owner::District(d));
+                let from = st.clock_tick();
+                let out = wander(&mut st, &mut t, 4);
+                assert!(off_the_map(&st, you(&st)));
+                back(&mut st, &mut t, &out);
+                assert_eq!(player(&st), start, "back where the Net walk began");
+                assert!(
+                    minutes(&st, from) >= 30,
+                    "the clock ran: {}",
+                    minutes(&st, from)
+                );
+                // and out of the Net, back in the body by the pump
+                t.press(&mut st, KeyCode::Char('J'));
+                t.press(&mut st, KeyCode::Char('y'));
+                assert_eq!(t.depth(), 1);
+                assert_eq!(player(&st), (street, port), "in the body: {:?}", last(&st));
             }
         }
     }

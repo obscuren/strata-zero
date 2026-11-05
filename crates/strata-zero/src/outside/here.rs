@@ -4,14 +4,11 @@
 
 use super::{At, TILE};
 use crate::app::AppState;
-use crate::ui::chrome::CYAN;
+use crate::ui::chrome::{CYAN, DIM, TEXT};
 use citygen::Pos;
 use citygen::overworld::{Ground, Water};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-
-const TEXT: Color = Color::Rgb(205, 212, 222);
-const DIM: Color = Color::Rgb(110, 118, 130);
 
 /// The overworld tile you're on: on the overworld, the one you stand on; in the city,
 /// the one your world cell lies in (your Net self's, jacked in), on its map or past it.
@@ -32,16 +29,11 @@ fn where_label(st: &AppState) -> &'static str {
     }
 }
 
-/// HERE: the region (or the city) and the road, then where you are, the ground and the
-/// hour.
-pub fn here_lines(st: &AppState) -> Vec<Line<'static>> {
-    let (Some(o), Some(t)) = (st.outside.as_ref(), tile(st)) else {
-        return Vec::new();
-    };
+/// HERE's first line: the region (or the city) you're in and the road you're on.
+fn place_and_road(st: &AppState) -> Option<String> {
+    let (o, t) = (st.outside.as_ref()?, tile(st)?);
     let w = o.world();
-    let Some(tile) = w.tile(t) else {
-        return Vec::new();
-    };
+    let tile = w.tile(t)?;
     let place = match (super::settlement_at(st, t), tile.urban) {
         (Some(s), _) => o.name(s),
         (_, Some(u)) => w
@@ -60,6 +52,18 @@ pub fn here_lines(st: &AppState) -> Vec<Line<'static>> {
         .find(|r| r.path.contains(&t))
         .map(|r| format!(" · {}", r.name))
         .unwrap_or_default();
+    Some(format!("{place}{road}"))
+}
+
+/// HERE: the region (or the city) and the road, then where you are, the ground and the
+/// hour.
+pub fn here_lines(st: &AppState) -> Vec<Line<'static>> {
+    let (Some(o), Some(t)) = (st.outside.as_ref(), tile(st)) else {
+        return Vec::new();
+    };
+    let (Some(tile), Some(place)) = (o.world().tile(t), place_and_road(st)) else {
+        return Vec::new();
+    };
     let ground = match (tile.water, tile.ground) {
         (Water::River, _) if tile.road != 0 => "a bridge",
         (Water::River, _) => "the river",
@@ -78,7 +82,7 @@ pub fn here_lines(st: &AppState) -> Vec<Line<'static>> {
     };
     vec![
         Line::from(Span::styled(
-            format!(" {place}{road}"),
+            format!(" {place}"),
             Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
@@ -88,12 +92,10 @@ pub fn here_lines(st: &AppState) -> Vec<Line<'static>> {
     ]
 }
 
-/// HERE jacked in: the trunk your Net self is over, or the city's node field, or the
-/// dead grid.
-pub fn net_here_lines(st: &AppState) -> Vec<Line<'static>> {
-    let (Some(o), Some(t)) = (st.outside.as_ref(), tile(st)) else {
-        return Vec::new();
-    };
+/// HERE's line jacked in: the Net, and the trunk your Net self is over, or the city's
+/// node field, or the dead grid.
+fn net_over(st: &AppState) -> Option<String> {
+    let (o, t) = (st.outside.as_ref()?, tile(st)?);
     let w = o.world();
     let over = match (
         w.routes.iter().find(|r| r.path.contains(&t)),
@@ -103,10 +105,30 @@ pub fn net_here_lines(st: &AppState) -> Vec<Line<'static>> {
         (None, Some(s)) => o.name(s),
         (None, None) => "dead grid".to_string(),
     };
-    vec![Line::from(Span::styled(
-        format!(" the Net · {over}"),
-        Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
-    ))]
+    Some(format!("the Net · {over}"))
+}
+
+/// HERE jacked in: the trunk your Net self is over, or the city's node field, or the
+/// dead grid.
+pub fn net_here_lines(st: &AppState) -> Vec<Line<'static>> {
+    net_over(st)
+        .map(|over| {
+            vec![Line::from(Span::styled(
+                format!(" {over}"),
+                Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
+            ))]
+        })
+        .unwrap_or_default()
+}
+
+/// Where you are off the live city's cells, for the top band, as HERE names it: the
+/// place and the road on foot, the Net and what it runs over on the Net.
+pub fn band(st: &AppState, net: bool) -> Option<String> {
+    if net {
+        net_over(st)
+    } else {
+        place_and_road(st)
+    }
 }
 
 /// NEAR: the mark from the MAP first, then the nearest cities and places out here, with
@@ -207,6 +229,33 @@ mod tests {
             .iter()
             .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
             .collect()
+    }
+
+    #[test]
+    fn here_and_near_are_dim_as_the_sidebar_is() {
+        let mut st = on_the_world();
+        crate::outside::moves::up(&mut st);
+        st.outside.as_mut().unwrap().mark = Some(crate::outside::Mark {
+            tile: Pos::new(0, 0),
+            name: "the old relay".into(),
+        });
+        let dim = |lines: &[Line]| {
+            lines
+                .iter()
+                .flat_map(|l| l.spans.iter())
+                .filter(|s| !s.content.trim().is_empty())
+                .filter_map(|s| s.style.fg)
+                .filter(|c| *c != CYAN && *c != crate::ui::chrome::TEXT)
+                .collect::<Vec<_>>()
+        };
+        for lines in [here_lines(&st), near_lines(&st, 4)] {
+            let quiet = dim(&lines);
+            assert!(!quiet.is_empty(), "{:?}", text(&lines));
+            assert!(
+                quiet.iter().all(|c| *c == crate::ui::chrome::DIM),
+                "{quiet:?}"
+            );
+        }
     }
 
     #[test]

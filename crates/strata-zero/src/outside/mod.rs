@@ -757,23 +757,29 @@ fn still_stands(st: &mut AppState) {
             _ => detail::region(w, c.x, c.y, 1, 1)[Pos::new(0, 0)].is_walkable(),
         }
     };
+    let jacked = p.body.is_some();
     let body = p.body.unwrap_or((p.place, p.pos));
     let body_stands = stands(body.0, body.1);
-    let net_stands = p.body.is_none() || stands(p.place, p.pos);
+    let net_stands = !jacked || stands(p.place, p.pos);
     let back = street_near(city, body.1);
-    let Some(p) = st.player.as_mut() else {
+    if body_stands && net_stands {
         return;
-    };
-    if !body_stands {
+    }
+    // out of the Net as a jack out takes you: the run, the mask and the rig's route
+    // go with it
+    if jacked {
+        let _ = crate::net::jack_out(st);
+    }
+    if body_stands {
+        st.warn("the world out there has changed since this run was saved · jacked out");
+        return;
+    }
+    if let Some(p) = st.player.as_mut() {
         p.body = None;
         p.place = Place::Stratum(StratumKind::Street);
         p.pos = back;
-        st.warn("the world out there has changed since this run was saved · back in the city");
-    } else if !net_stands && let Some((place, at)) = p.body.take() {
-        p.place = place;
-        p.pos = at;
-        st.warn("the world out there has changed since this run was saved · jacked out");
     }
+    st.warn("the world out there has changed since this run was saved · back in the city");
 }
 
 /// Whether you can leave the city for the world now: on foot on its open street (or on

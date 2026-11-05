@@ -1041,22 +1041,63 @@ mod tests {
             "{:?} from {at:?}",
             p.pos
         );
-        // away from any port it says why not
+        // away from any port, space is space on the street: Look at least
         let (mut st, mut s) = out_there();
         let ScreenCmd::Switch { to: mut map, .. } = s.update(&mut st, &[key(KeyCode::Enter)])
         else {
             panic!("down onto the city screen")
         };
         map.update(&mut st, &[]);
-        map.update(&mut st, &[key(KeyCode::Char(' '))]);
+        let cmd = map.update(&mut st, &[key(KeyCode::Char(' '))]);
         assert!(!st.player.as_ref().unwrap().jacked_in());
         assert!(
-            st.log
-                .recent(st.tick)
-                .is_some_and(|e| e.text.contains("no port in reach")),
+            matches!(cmd, ScreenCmd::Push { .. }),
             "{:?}",
             st.log.latest().map(|e| e.text.clone())
         );
+        assert!(!logged(&st, "no port in reach"));
+    }
+
+    #[test]
+    fn a_net_self_since_gone_wakes_with_the_net_put_away() {
+        // saved jacked in on the ground, a run in flight, a mask up and the rig's route
+        // open, the Net self where the world has since changed: woken on the body as a
+        // jack out wakes you, none of the Net left over
+        let (mut st, _) = jacked_by_a_pump();
+        let body = st.player.as_ref().unwrap().body.unwrap();
+        let origin = st
+            .outside
+            .as_ref()
+            .unwrap()
+            .origin(st.city.as_ref().unwrap());
+        st.player.as_mut().unwrap().pos = Pos::new(-origin.x - 50, -origin.y - 50);
+        st.net.run = Some(game::Run {
+            program: game::ItemId::new("crack"),
+            target: game::HackTarget::Deck,
+            done: 0,
+            work: 2,
+        });
+        st.net.mask = 3;
+        st.backdoors.start_route(None);
+        crate::runs::snapshot::after_restore(&mut st, Vec::new());
+        let p = st.player.as_ref().unwrap();
+        assert_eq!((p.place, p.pos, p.body), (body.0, body.1, None));
+        assert!(st.net.run.is_none(), "the run went with the jack");
+        assert_eq!(st.net.mask, 0, "and the mask");
+        assert!(st.backdoors.route.is_none(), "and the rig's route");
+        assert!(logged(&st, "jacked out"));
+        // the body gone too: back on the city's street, and the same left over
+        let (mut st, _) = jacked_by_a_pump();
+        let p = st.player.as_mut().unwrap();
+        p.body = Some((STREET, Pos::new(-origin.x - 60, -origin.y - 60)));
+        st.net.mask = 3;
+        st.backdoors.start_route(None);
+        crate::runs::snapshot::after_restore(&mut st, Vec::new());
+        let p = st.player.as_ref().unwrap();
+        assert_eq!((p.place, p.body), (STREET, None));
+        assert!(st.city.as_ref().unwrap().size.contains(p.pos));
+        assert_eq!(st.net.mask, 0);
+        assert!(st.backdoors.route.is_none());
     }
 
     #[test]
