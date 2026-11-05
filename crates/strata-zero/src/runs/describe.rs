@@ -93,7 +93,9 @@ pub fn place_line(st: &AppState) -> String {
 /// The title and the current objective of the first mission in book order that is
 /// under way.
 pub fn story(st: &AppState) -> (Option<String>, Option<String>) {
-    st.missions
+    // away in another city, the home story is set aside with the home city
+    let missions = st.away.as_ref().map_or(&st.missions, |a| &a.missions);
+    missions
         .runs
         .iter()
         .zip(&st.book.missions)

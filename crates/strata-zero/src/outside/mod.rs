@@ -52,6 +52,10 @@ pub struct Outside {
     /// you stand on it.
     #[serde(default)]
     pub mark: Option<Mark>,
+    /// The cities and towns you've been into (their maps are made again from the world
+    /// when you go back, the same every time).
+    #[serde(default)]
+    pub visited: std::collections::BTreeSet<Settlement>,
 }
 
 /// A marked place of the world: its tile and its name.
@@ -268,6 +272,7 @@ impl Outside {
             built: BTreeMap::new(),
             blocks: Default::default(),
             mark: None,
+            visited: Default::default(),
         })
     }
 
@@ -594,6 +599,9 @@ pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
     }
     if let Some(o) = st.outside.as_mut() {
         o.here = (s != home).then_some(s);
+        if s != home {
+            o.visited.insert(s);
+        }
     }
     st.net.failsafe = failsafe;
     st.net.cooling_until = cooling;
@@ -630,6 +638,11 @@ pub fn reopened(st: &mut AppState) {
     };
     o.rebuild();
     let Some(w) = o.world.as_ref() else {
+        // away from home, the home city comes back first: it's the one the run keeps
+        if let Some(stay) = st.away.take() {
+            let now = st.clock_tick();
+            stay.put(st, true, now);
+        }
         st.outside = None;
         st.warn("the world out there couldn't be made again · back in the city");
         return;
@@ -979,6 +992,127 @@ mod tests {
         enter(&mut st, home).unwrap();
         assert_eq!(st.clock_tick(), later, "home has gone on too");
         assert_eq!(st.minute_of_day(), at);
+    }
+
+    /// A run written and read back, after_restore and all.
+    fn reopen(st: AppState, name: &str) -> AppState {
+        let dir = crate::runs::testutil::Dir::new(name);
+        let st = crate::runs::testutil::running(st);
+        let path = crate::runs::file::write(&dir.0, &st).unwrap();
+        let mut back = AppState::new();
+        let (_, snap, lost) = crate::runs::file::read(&path, &back.book).unwrap();
+        crate::runs::snapshot::restore(&mut back, snap);
+        crate::runs::snapshot::after_restore(&mut back, lost);
+        back
+    }
+
+    #[test]
+    fn a_run_reopens_where_it_was_wherever_that_was() {
+        // the overworld, the open ground, a town: back where it was saved
+        let st = home_run();
+        let (s, from) = beside_another(&st);
+        let mut on_world = home_run();
+        on_world.outside.as_mut().unwrap().at = At::Overworld(from);
+        let back = reopen(on_world, "where-world");
+        assert_eq!(back.outside.as_ref().unwrap().at, At::Overworld(from));
+        let mut on_ground = home_run();
+        let cell = Pos::new(TILE * from.x + 3, TILE * from.y + 3);
+        on_ground.outside.as_mut().unwrap().at = At::Ground(cell);
+        let ground_ok = citygen::overworld::detail::region(
+            on_ground.outside.as_ref().unwrap().world(),
+            cell.x,
+            cell.y,
+            1,
+            1,
+        )[Pos::new(0, 0)]
+        .is_walkable();
+        let back = reopen(on_ground, "where-ground");
+        if ground_ok {
+            assert_eq!(back.outside.as_ref().unwrap().at, At::Ground(cell));
+        }
+        let mut in_town = home_run();
+        let town = in_town
+            .outside
+            .as_ref()
+            .unwrap()
+            .others()
+            .into_iter()
+            .find(|(t, _)| t.town.is_some())
+            .unwrap()
+            .0;
+        enter(&mut in_town, town).unwrap();
+        let back = reopen(in_town, "where-town");
+        let site = back.city.as_ref().unwrap().params.site.clone().unwrap();
+        assert_eq!((site.city, site.town), (town.city, town.town));
+        assert!(back.away.is_some(), "home set aside");
+        let _ = s;
+    }
+
+    #[test]
+    fn the_cities_you_have_been_to_are_kept() {
+        let mut st = home_run();
+        let (s, _) = beside_another(&st);
+        enter(&mut st, s).unwrap();
+        let home = st.outside.as_ref().unwrap().home();
+        enter(&mut st, home).unwrap();
+        assert!(st.outside.as_ref().unwrap().visited.contains(&s));
+        let back = reopen(st, "visited");
+        assert!(
+            back.outside.as_ref().unwrap().visited.contains(&s),
+            "kept with the run"
+        );
+    }
+
+    #[test]
+    fn a_world_that_wont_come_back_puts_you_home() {
+        // away from home, a world that can't be made again on reopening: the home city
+        // and its story back in place, not lost
+        let mut st = home_run();
+        crate::missions::begin(&mut st);
+        let city = st.city.clone();
+        let story = format!("{:?}", st.missions);
+        let (s, _) = beside_another(&st);
+        enter(&mut st, s).unwrap();
+        st.outside.as_mut().unwrap().params.cities = 99;
+        let back = reopen(st, "no-world");
+        assert!(back.outside.is_none());
+        assert!(back.away.is_none());
+        assert_eq!(back.city, city);
+        assert_eq!(format!("{:?}", back.missions), story);
+    }
+
+    #[test]
+    fn the_runs_card_tells_the_home_story_while_away() {
+        let mut st = home_run();
+        crate::missions::begin(&mut st);
+        let open = st
+            .missions
+            .runs
+            .iter()
+            .position(|r| r.state != crate::missions::RunState::Uncast)
+            .unwrap();
+        st.missions.runs[open].state = crate::missions::RunState::Open;
+        st.missions.runs[open]
+            .objectives
+            .push("Find the doctor".into());
+        let at_home = crate::runs::describe::story(&st);
+        assert!(at_home.0.is_some());
+        let (s, _) = beside_another(&st);
+        enter(&mut st, s).unwrap();
+        assert_eq!(crate::runs::describe::story(&st), at_home);
+    }
+
+    #[test]
+    fn the_save_holds_the_worlds_params_not_its_tiles() {
+        let st = home_run();
+        let o = st.outside.as_ref().unwrap();
+        let bytes = rmp_serde::to_vec_named(o).unwrap();
+        let tiles = o.world().tiles.size().area();
+        assert!(
+            bytes.len() < tiles,
+            "{} bytes for a world of {tiles} tiles",
+            bytes.len()
+        );
     }
 
     #[test]

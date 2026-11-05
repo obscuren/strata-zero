@@ -363,11 +363,30 @@ fn pane(st: &AppState, r: Rect, buf: &mut Buffer) {
         right,
     );
     put(buf, x, y + 1, &p.name, head, right);
+    // a city you've been into says so
+    let been = p.kind == WorldKind::City
+        && st.outside.as_ref().is_some_and(|o| {
+            o.world()
+                .cities
+                .iter()
+                .position(|c| c.name == p.name)
+                .is_some_and(|i| {
+                    o.visited.contains(&crate::outside::Settlement {
+                        city: i as u8,
+                        town: None,
+                    })
+                })
+        });
+    let what = if been {
+        format!("{} · you've been", p.what)
+    } else {
+        p.what.clone()
+    };
     put(
         buf,
         x,
         y + 2,
-        &p.what,
+        &what,
         Style::default().fg(DIM).bg(PANEL_BG),
         right,
     );
