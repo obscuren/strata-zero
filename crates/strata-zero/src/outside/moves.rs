@@ -96,7 +96,7 @@ pub fn down(st: &mut AppState) -> Result<Moved, &'static str> {
     };
     // whose tile it is, not whose map covers it: a town's own tile in its city's block
     // is the town's
-    if let Some(s) = o.owner(t).or_else(|| crate::outside::settlement_at(st, t)) {
+    if let Some(s) = crate::outside::tile_owner(st, t) {
         match crate::outside::enter(st, s) {
             Ok(()) => {
                 if let (Some(o), Some(city)) = (st.outside.as_ref(), st.city.as_ref()) {

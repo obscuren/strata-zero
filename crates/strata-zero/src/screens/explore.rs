@@ -452,17 +452,6 @@ fn foreign_gate(st: &AppState, dir: Dir) -> bool {
     )
 }
 
-/// On the open Net with another city's or town's nodes on your tile or beside it, and
-/// nothing of the live city's for a program but yourself.
-fn only_foreign_nodes(st: &AppState) -> bool {
-    let Some(p) = st.player.as_ref() else {
-        return false;
-    };
-    p.place == Place::Stratum(StratumKind::Net)
-        && !crate::net::out_of_reach(st, p.pos).is_empty()
-        && crate::net::targets_outside(st, p.pos).len() <= 1
-}
-
 /// One step `dir` over the map you stand on (past the city's edge where it goes on), and
 /// a look round after it. Whether you moved.
 fn step(st: &mut AppState, dir: Dir) -> bool {
@@ -2450,10 +2439,13 @@ impl MapScreen {
         match player.place {
             Place::Stratum(StratumKind::Net) => {
                 // Onto the gate from the grid, or from the gate into the construct's bulk.
+                // the live city's own, on the cells it owns: on another's, that one's
+                // map is what's there
                 let gate_of = |p: Pos| {
                     city.tile(StratumKind::Net, p)
                         .filter(|t| t.terrain == citygen::Terrain::NetGate)
                         .and_then(|t| t.building)
+                        .filter(|_| crate::outside::stream::live_owns(st, p))
                 };
                 let fp = |b: citygen::BuildingId| city.building_opt(b).map(|x| x.footprint);
                 let b = match (gate_of(target), gate_of(here)) {
@@ -2917,12 +2909,9 @@ impl MapScreen {
                 }
                 return Some(ScreenCmd::Stay);
             }
-            // On the open Net by another city's nodes and none of this one's: out of
-            // your body's reach.
-            if jacked && only_foreign_nodes(st) {
-                st.warn(crate::net::TOO_FAR);
-                return Some(ScreenCmd::Stay);
-            }
+            // By another city's node jacked in, space is still this city's window (your
+            // tile's Jack out and Look, the verbs held): the look cursor and a program
+            // are what act on that node, and they say it's out of your body's reach.
             return self.interact(st);
         }
         // `e`: turns by hand, and back to real time when nothing hunts you.
@@ -15031,7 +15020,7 @@ mod tests {
             }
             let city = st.city.as_ref().unwrap();
             let o = st.outside.as_ref().unwrap();
-            let them = &o.built[&town];
+            let them = o.held_city(town).unwrap();
             let (live, theirs) = (o.origin(city), o.origin(them));
             let shift = Pos::new(live.x - theirs.x, live.y - theirs.y);
             let street = StratumKind::Street;
@@ -15844,7 +15833,7 @@ mod tests {
             // the city's own cells seen from the ground, in the world's record
             let theirs: Vec<Pos> = {
                 let o = st.outside.as_ref().unwrap();
-                let city = &o.built[&c];
+                let city = o.held_city(c).unwrap();
                 let at = o.origin(city);
                 let map = TileRect::new(at.x, at.y, city.size.w as i32, city.size.h as i32);
                 crate::outside::ground::seen_in(o, map)
@@ -15885,31 +15874,7 @@ mod tests {
             // town takes over at the line, and the cell you stand on is the town's
             let mut st = home_run();
             st.rain = false;
-            let (c, town) = city_with_a_town(&st);
-            crate::outside::enter(&mut st, c).unwrap();
-            handover::hold(&mut st, town);
-            let (a, d) = {
-                let city = st.city.as_ref().unwrap();
-                let o = st.outside.as_ref().unwrap();
-                let b = Beyond::of(&st).unwrap();
-                let map = walked_map(&st, city, Place::Stratum(StratumKind::Street), Some(&b));
-                TileRect::new(0, 0, city.size.w as i32, city.size.h as i32)
-                    .iter()
-                    .filter(|p| b.live_owns(*p) && city.walkable(StratumKind::Street, *p))
-                    .find_map(|p| {
-                        Dir::CARDINAL
-                            .into_iter()
-                            .find(|d| {
-                                let q = p.step(*d);
-                                let w = handover::world_of(&st, q);
-                                o.owner(Pos::new(w.x.div_euclid(TILE), w.y.div_euclid(TILE)))
-                                    == Some(town)
-                                    && map.walkable(q)
-                            })
-                            .map(|d| (p, d))
-                    })
-                    .expect("the city's street beside the town's")
-            };
+            let (c, town, a, d) = handover::beside_a_town(&mut st);
             handover::on_foot(&mut st, a);
             let mut s = MapScreen::walking(&mut st);
             s.update(&mut st, &[]);
@@ -15972,7 +15937,7 @@ mod tests {
             want: &dyn Fn(&citygen::City, Pos) -> bool,
         ) -> (Pos, Dir) {
             let o = st.outside.as_ref().unwrap();
-            let them = &o.built[&c];
+            let them = o.held_city(c).unwrap();
             let at = o.origin(them);
             let b = Beyond::of(st).unwrap();
             let city = st.city.as_ref().unwrap();
@@ -16041,15 +16006,16 @@ mod tests {
                     .filter(|e| e.text == "too far from your body to touch it")
                     .count()
             };
+            // space is still this city's window (Jack out, Look), not their node's
             let cmd = s.update(&mut st, &[key(KeyCode::Char(' '))]);
-            assert!(matches!(cmd, ScreenCmd::Stay), "no window");
-            assert_eq!(said(&st), 1, "space: {:?}", last(&st));
-            // a program at it, from the deck's slots: the same
+            assert!(matches!(cmd, ScreenCmd::Push { .. }), "the window");
+            assert_eq!(said(&st), 0, "space: {:?}", last(&st));
+            // a program at it, from the deck's slots
             for n in '1'..='5' {
                 s.update(&mut st, &[key(KeyCode::Char(n))]);
                 s.update(&mut st, &[key(KeyCode::Esc)]);
             }
-            assert!(said(&st) > 1, "a program: {:?}", last(&st));
+            assert!(said(&st) > 0, "a program: {:?}", last(&st));
             assert_eq!(you(&st), from, "no move");
             // and looked at, space on it
             let before = said(&st);
@@ -16058,6 +16024,140 @@ mod tests {
             let cmd = s.update(&mut st, &[key(KeyCode::Char(' '))]);
             assert!(matches!(cmd, ScreenCmd::Stay), "no window");
             assert_eq!(said(&st), before + 1, "look: {:?}", last(&st));
+        }
+
+        #[test]
+        fn space_by_another_citys_node_still_opens_the_live_popup() {
+            // a node of the town's beside you and a node of the live city's held in
+            // reach (put on the city's cell nearest: none is that near on this seed):
+            // space opens the live city's window, its verbs on it
+            let mut st = home_run();
+            st.rain = false;
+            st.character = game::Character::debug_runner(&st.content);
+            let (_, town, a, _) = handover::beside_a_town(&mut st);
+            handover::on_foot(&mut st, a);
+            let mut s = MapScreen::walking(&mut st);
+            s.update(&mut st, &[]);
+            jacked_at_a_port(&mut st, &mut s);
+            let (from, spot) = {
+                let o = st.outside.as_ref().unwrap();
+                let city = st.city.as_ref().unwrap();
+                let them = o.held_city(town).unwrap();
+                let b = Beyond::of(&st).unwrap();
+                let map = walked_map(&st, city, Place::Stratum(StratumKind::Net), Some(&b));
+                let mine = |q: Pos| matches!(b.elsewhere(q), Some(Owner::City(t, _)) if std::ptr::eq(t, them));
+                let from = TileRect::new(a.x - 60, a.y - 60, 121, 121)
+                    .iter()
+                    .filter(|f| {
+                        mine(*f)
+                            && map.walkable(*f)
+                            && map
+                                .tile(*f)
+                                .is_some_and(|t| t.terrain != citygen::Terrain::NetGate)
+                            && !crate::net::out_of_reach(&st, *f).is_empty()
+                    })
+                    .min_by_key(|f| f.chebyshev(a))
+                    .expect("a node of the town's to stand by");
+                let spot =
+                    crate::outside::nearest(from, crate::holds::VERB_REACH, |q| b.live_owns(q))
+                        .expect("the city's own cells in reach");
+                (from, spot)
+            };
+            let held = {
+                let n = st
+                    .city
+                    .as_mut()
+                    .unwrap()
+                    .net
+                    .nodes
+                    .iter_mut()
+                    .find(|n| n.kind == NodeKind::Camera)
+                    .expect("a camera of the city's");
+                n.cyber = spot;
+                n.id
+            };
+            let now = st.net.now(&st);
+            let owner = crate::owners::owner_of(st.city.as_ref().unwrap(), held).unwrap();
+            crate::holds::take(&mut st, held, owner, now);
+            stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), from);
+            assert!(
+                !crate::net::out_of_reach(&st, from).is_empty(),
+                "the town's node beside you"
+            );
+            assert!(
+                !interact::verb_rows(&st).is_empty(),
+                "the held camera's verbs"
+            );
+            let cmd = s.update(&mut st, &[key(KeyCode::Char(' '))]);
+            assert!(
+                matches!(cmd, ScreenCmd::Push { .. }),
+                "the window: {:?}",
+                last(&st)
+            );
+            assert!(!logged(&st, "too far from your body to touch it"));
+        }
+
+        #[test]
+        fn the_live_citys_nodes_and_gates_answer_only_on_its_own_cells() {
+            // a node and a gate of the live city's put on a cell its town owns (no seed
+            // has one there yet): the town's map is what's there, so neither answers
+            let mut st = home_run();
+            st.rain = false;
+            let (_, _, a, d) = handover::beside_a_town(&mut st);
+            let q = a.step(d);
+            let (node, gate) = {
+                let city = st.city.as_mut().unwrap();
+                let gate = city
+                    .stratum(StratumKind::Net)
+                    .unwrap()
+                    .tiles
+                    .iter()
+                    .find_map(|(_, t)| {
+                        (t.terrain == citygen::Terrain::NetGate)
+                            .then_some(t.building)
+                            .flatten()
+                    })
+                    .expect("a construct's gate");
+                let n = city
+                    .net
+                    .nodes
+                    .iter_mut()
+                    .find(|n| {
+                        n.building.is_none()
+                            && !matches!(n.kind, NodeKind::Backbone | NodeKind::Ice)
+                    })
+                    .expect("a node out on the grid");
+                n.cyber = q;
+                (n.id, gate)
+            };
+            handover::on_foot(&mut st, a);
+            let mut s = MapScreen::walking(&mut st);
+            s.update(&mut st, &[]);
+            jacked_at_a_port(&mut st, &mut s);
+            stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), a);
+            assert!(
+                !crate::net::targets_outside(&st, a)
+                    .iter()
+                    .any(|(t, _)| *t == game::HackTarget::Node(node)),
+                "the city's node on the town's cell"
+            );
+            {
+                let net = st
+                    .city
+                    .as_mut()
+                    .unwrap()
+                    .stratum_mut(StratumKind::Net)
+                    .unwrap();
+                net.tiles[q].terrain = citygen::Terrain::NetGate;
+                net.tiles[q].building = Some(gate);
+            }
+            s.update(&mut st, &[key(dir_key(d))]);
+            assert_eq!(
+                player(&st).0,
+                Place::Stratum(StratumKind::Net),
+                "not through the city's gate on the town's cell: {:?}",
+                last(&st)
+            );
         }
 
         /// The long walk: out across the open ground and back on foot, then jacked in
@@ -16219,8 +16319,11 @@ mod tests {
                             .into_iter()
                             .filter(|d| {
                                 let to = from.step(*d);
+                                // the open ground's own, never a city's or a town's
+                                // (a step there would hand the run over)
                                 map.walkable(to)
                                     && matches!(b.elsewhere(to), Some(Owner::Ground(..)))
+                                    && crate::outside::stream::owner_of(st, to).is_none()
                             })
                             .collect();
                         assert!(!open.is_empty(), "step {i}: nowhere to go from {from:?}");

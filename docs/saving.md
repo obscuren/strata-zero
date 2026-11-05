@@ -64,7 +64,11 @@ keycards; its `bots` stay empty, as yours come with you), saved with the run; th
 you're in is `st.city` as ever. A save taken away holds two cities, about a quarter
 bigger. Walked into on foot, a city takes over where you stand
 (`outside::stream::hand_over`): your cell, your bots and what you've seen of it carry
-over, and a save taken a step later opens in it.
+over, and a save taken a step later opens in it. Every other city or town you've been in
+this session is kept whole in memory (`Outside.kept`, `#[serde(skip)]`: its people, its
+ground, its foes, as you left them) and put back as it was when you walk in again; a
+save keeps only the home city and the one you're in, so after a reopen the rest are made
+again from the world.
 
 ## Writing a save
 

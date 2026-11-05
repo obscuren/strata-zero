@@ -43,10 +43,13 @@ pub struct Outside {
     /// before other cities could be walked into).
     #[serde(default)]
     pub here: Option<Settlement>,
-    /// The other cities and towns built this session, each the same from its world every
-    /// time it's built: kept so walking back in is quick.
+    /// The other cities and towns built this session and not walked into yet, each the
+    /// same from its world every time it's built (once walked into, one is `kept`).
     #[serde(skip)]
     pub built: BTreeMap<Settlement, City>,
+    /// The other cities and towns you've been in this session, each kept whole.
+    #[serde(skip)]
+    kept: Kept,
     /// The other cities' and towns' blocks, from the world (`others`).
     #[serde(skip)]
     blocks: std::cell::OnceCell<Vec<(Settlement, Rect)>>,
@@ -66,6 +69,27 @@ pub struct Outside {
     /// world as it's needed.
     #[serde(skip)]
     pub stream: stream::Stream,
+}
+
+/// The cities and towns you've been in this session but the home city (set aside in
+/// `st.away`), each whole as you left it (its people, its ground, its foes, its Net),
+/// put back as it was when you walk in again. Not saved (a save keeps only the home city
+/// besides the one you're in); a copy starts empty.
+#[derive(Default)]
+pub struct Kept(BTreeMap<Settlement, Stay>);
+
+impl Clone for Kept {
+    fn clone(&self) -> Kept {
+        Kept::default()
+    }
+}
+
+impl std::fmt::Debug for Kept {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Kept")
+            .field(&self.0.keys().collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 /// A marked place of the world: its tile and its name.
@@ -269,6 +293,7 @@ impl Outside {
             world: Some(world),
             here: None,
             built: BTreeMap::new(),
+            kept: Kept::default(),
             blocks: Default::default(),
             mark: None,
             visited: Default::default(),
@@ -387,6 +412,33 @@ impl Outside {
         self.owner(self.tile_of(city, p)) == Some(self.settlement_of(city))
     }
 
+    /// The map of city or town `s` held this session (kept whole, or built and not
+    /// walked into yet), if it is.
+    pub fn held_city(&self, s: Settlement) -> Option<&City> {
+        self.kept
+            .0
+            .get(&s)
+            .map(|k| &k.city)
+            .or_else(|| self.built.get(&s))
+    }
+
+    /// Every city and town held this session but the one you're in and the home city
+    /// set aside, each once: those kept whole, and those built and not walked into yet.
+    pub fn held(&self) -> impl Iterator<Item = (Settlement, &City)> {
+        self.kept
+            .0
+            .iter()
+            .map(|(s, k)| (*s, &k.city))
+            .chain(self.built.iter().map(|(s, c)| (*s, c)))
+    }
+
+    /// City or town `s` no longer held (a test's way to see the stream answer for it).
+    #[cfg(test)]
+    pub fn let_go(&mut self, s: Settlement) {
+        self.built.remove(&s);
+        self.kept.0.remove(&s);
+    }
+
     /// The home city: the world's.
     pub fn home(&self) -> Settlement {
         let city = self.world().cities.iter().position(|c| c.home).unwrap_or(0) as u8;
@@ -489,6 +541,16 @@ pub fn settlement_at(st: &AppState, tile: Pos) -> Option<Settlement> {
         .into_iter()
         .find(|(s, b)| *s != o.here() && b.contains(tile))
         .map(|(s, _)| s)
+}
+
+/// The city or town whose overworld tile `tile` is: its owner, not whichever map covers
+/// it (a town's own tiles inside its city's block are the town's); the map covering it
+/// before who owns the world's tiles is known.
+pub fn tile_owner(st: &AppState, tile: Pos) -> Option<Settlement> {
+    st.outside
+        .as_ref()?
+        .owner(tile)
+        .or_else(|| settlement_at(st, tile))
 }
 
 /// Whether overworld tile `tile` is on any city's or town's block (tests pick open
@@ -602,10 +664,19 @@ pub fn away_from_home(st: &AppState) -> bool {
         .is_some_and(|o| o.here.is_some_and(|h| h != o.home()))
 }
 
-/// Into city or town `s`: the one you're in set aside (kept with the run when it's the
-/// home city); `s` as it was kept, or as its build in the background left it (its
-/// people seeded there run on to now), else built and its people seeded on the spot the
-/// first time this session. One that won't build leaves you where you were.
+/// Where `enter` takes you: home, set aside; a city kept whole from before; or one
+/// built (in the background or on the spot) and walked into the first time.
+enum Next {
+    Home,
+    Kept(Box<Stay>),
+    Fresh(Box<City>),
+}
+
+/// Into city or town `s`: the one you're in set aside (with the run when it's the home
+/// city, kept whole for the session when not); `s` as it was kept, or as its build in
+/// the background left it (its people seeded there run on to now), else built and its
+/// people seeded on the spot the first time this session. One that won't build leaves
+/// you where you were.
 pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
     let Some(o) = st.outside.as_mut() else {
         return Err("there is no world out here".into());
@@ -615,30 +686,30 @@ pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
         return Ok(());
     }
     let name = o.name(s);
-    // one that wouldn't build when walked into isn't tried again this session
-    if o.stream.refused(s) {
+    // the home city only from where it's set aside; one that wouldn't build when
+    // walked into isn't tried again this session
+    if (s == home && st.away.is_none()) || st.city.is_none() || o.stream.refused(s) {
         return Err(format!("no way into {name}"));
     }
     // one building in the background is waited for: no slower than building it here
     o.stream.wait(s, &mut o.built);
     let next = if s == home {
-        None
-    } else if let Some(c) = o.built.get(&s) {
-        // kept from before, or built in the background as you neared it
-        Some(c.clone())
+        Next::Home
+    } else if let Some(stay) = o.kept.0.remove(&s) {
+        Next::Kept(Box::new(stay))
+    } else if let Some(c) = o.built.remove(&s) {
+        // built in the background as you neared it
+        Next::Fresh(Box::new(c))
     } else {
         let built = build_params(o, s, &st.params).and_then(|p| citygen::Generator::run(p).ok());
         match built {
-            Some(c) => Some(c),
+            Some(c) => Next::Fresh(Box::new(c)),
             None => {
                 o.stream.refuse(s);
                 return Err(format!("no way into {name}"));
             }
         }
     };
-    if (s == home && st.away.is_none()) || st.city.is_none() {
-        return Err(format!("no way into {name}"));
-    }
     // the hour carries over: the run's clock is the city's you're in; and the deck's
     // own switch and its cooling go where you go
     let (now, minute) = (st.clock_tick(), st.minute_of_day());
@@ -654,15 +725,17 @@ pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
     if here == home {
         st.away = Some(Box::new(current));
     } else if let Some(o) = st.outside.as_mut() {
-        o.built.insert(here, current.city);
+        o.kept.0.insert(here, current);
     }
     match next {
-        None => {
+        Next::Home => {
             if let Some(stay) = st.away.take() {
                 stay.put(st, true, now);
             }
         }
-        Some(city) => {
+        // as you left it, its people run on to now
+        Next::Kept(stay) => stay.put(st, false, now),
+        Next::Fresh(city) => {
             // its people as its build seeded them (run on to now as it's put in place)
             // if that was no more than `RUN_ON` ago, else seeded now
             let people = st
@@ -671,7 +744,7 @@ pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
                 .and_then(|o| o.stream.take_people(s))
                 .filter(|w| now.saturating_sub(w.tick()) <= RUN_ON);
             let world = people.unwrap_or_else(|| seed_people(&city, &st.people, now, minute));
-            Stay::fresh(city, world).put(st, false, now);
+            Stay::fresh(*city, world).put(st, false, now);
         }
     }
     if let Some(o) = st.outside.as_mut() {

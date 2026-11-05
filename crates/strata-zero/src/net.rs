@@ -239,7 +239,8 @@ pub fn targets_at(st: &AppState, scene: Scene, pos: Pos) -> Vec<(HackTarget, Str
 
 /// The nodes a program reaches from the open Net at `pos`: on its tile or beside it, on
 /// a construct's outer wall (a facade's camera, holo ad, lock) or out on the grid (a
-/// district's lamp grid, a street terminal); not hubs, not ICE. Yourself first.
+/// district's lamp grid, a street terminal); not hubs, not ICE; and only on the cells
+/// the live city owns (on another's, that one's map is what's there). Yourself first.
 pub fn targets_outside(st: &AppState, pos: Pos) -> Vec<(HackTarget, String)> {
     let mut out = vec![(HackTarget::Deck, "yourself".to_string())];
     let Some(city) = st.city.as_ref() else {
@@ -247,13 +248,10 @@ pub fn targets_outside(st: &AppState, pos: Pos) -> Vec<(HackTarget, String)> {
     };
     let near: Vec<Pos> = std::iter::once(pos).chain(pos.neighbors8()).collect();
     for n in &city.net.nodes {
-        if !near.contains(&n.cyber) || matches!(n.kind, NodeKind::Backbone | NodeKind::Ice) {
-            continue;
-        }
-        let on_wall = city
-            .tile(StratumKind::Net, n.cyber)
-            .is_some_and(|t| matches!(t.terrain, Terrain::NetWall | Terrain::NetGate));
-        if n.building.is_some() && !on_wall {
+        if !near.contains(&n.cyber)
+            || !grid_reaches(city, n)
+            || !crate::outside::stream::live_owns(st, n.cyber)
+        {
             continue;
         }
         let what = match n.building {
@@ -292,19 +290,28 @@ pub fn out_of_reach_on(st: &AppState, cells: impl Iterator<Item = Pos>) -> Vec<N
         let Some(Owner::City(city, q)) = b.elsewhere(p) else {
             continue;
         };
-        let on_wall = city
-            .tile(StratumKind::Net, q)
-            .is_some_and(|t| matches!(t.terrain, Terrain::NetWall | Terrain::NetGate));
         out.extend(
             city.net
                 .nodes
                 .iter()
-                .filter(|n| n.cyber == q && !matches!(n.kind, NodeKind::Backbone | NodeKind::Ice))
-                .filter(|n| n.building.is_none() || on_wall)
+                .filter(|n| n.cyber == q && grid_reaches(city, n))
                 .map(|n| n.kind),
         );
     }
     out
+}
+
+/// Whether the open Net reaches node `n` of `city` from its tile or beside it: out on
+/// the grid, or on a construct's outer wall (a facade's camera, holo ad, lock); not hubs,
+/// not ICE.
+fn grid_reaches(city: &City, n: &citygen::Node) -> bool {
+    if matches!(n.kind, NodeKind::Backbone | NodeKind::Ice) {
+        return false;
+    }
+    n.building.is_none()
+        || city
+            .tile(StratumKind::Net, n.cyber)
+            .is_some_and(|t| matches!(t.terrain, Terrain::NetWall | Terrain::NetGate))
 }
 
 /// A target's kind where you stand.

@@ -21,15 +21,6 @@ pub fn tile(st: &AppState) -> Option<Pos> {
     })
 }
 
-/// The city or town whose tile `t` is: its owner, not whichever map covers it (a
-/// town's own tiles inside its city's block are the town's).
-fn owner_at(st: &AppState, t: Pos) -> Option<super::Settlement> {
-    st.outside
-        .as_ref()?
-        .owner(t)
-        .or_else(|| super::settlement_at(st, t))
-}
-
 /// The place word for where you stand.
 fn where_label(st: &AppState) -> &'static str {
     match st.outside.as_ref().map(|o| o.at) {
@@ -43,7 +34,7 @@ fn place_and_road(st: &AppState) -> Option<String> {
     let (o, t) = (st.outside.as_ref()?, tile(st)?);
     let w = o.world();
     let tile = w.tile(t)?;
-    let place = match (owner_at(st, t), tile.urban) {
+    let place = match (super::tile_owner(st, t), tile.urban) {
         (Some(s), _) => o.name(s),
         (_, Some(u)) => w
             .cities
@@ -108,7 +99,7 @@ fn net_over(st: &AppState) -> Option<String> {
     let w = o.world();
     let over = match (
         w.routes.iter().find(|r| r.path.contains(&t)),
-        owner_at(st, t),
+        super::tile_owner(st, t),
     ) {
         (Some(r), _) => format!("{} trunk", r.name),
         (None, Some(s)) => o.name(s),
