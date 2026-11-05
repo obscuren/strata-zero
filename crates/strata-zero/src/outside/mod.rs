@@ -274,6 +274,8 @@ impl Stay {
     pub fn reopened(&mut self, people: &sim::People, content: &game::Content) -> Vec<String> {
         if let Some(w) = self.world.as_mut() {
             w.rebuild(&self.city, people);
+            // who its story cast stays in town: the sim's mark isn't saved
+            crate::missions::cast::keep_in_town(w, &self.missions);
         }
         let mut lost = self.ground.forget_unknown(content);
         lost.extend(self.missions.forget_unknown(content));

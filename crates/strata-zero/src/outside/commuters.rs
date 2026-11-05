@@ -135,11 +135,12 @@ fn a_city_without_homes_still_has_its_commute() {
         .map(|p| p.id)
         .collect();
     assert!(day.len() >= 40, "{} day workers", day.len());
-    let (mut at_five, mut at_one) = (Vec::new(), Vec::new());
+    let (mut at_five, mut at_three) = (Vec::new(), Vec::new());
     let (w, trips) = a_day(city, FOUR, 24 * 60, |w| match w.minute_of_day() {
         300 => at_five = day.iter().map(|id| off_the_map(w, *id)).collect(),
-        780 => {
-            at_one = day
+        // after any break at midday
+        900 => {
+            at_three = day
                 .iter()
                 .map(|id| {
                     let p = &w.people()[id.0 as usize];
@@ -183,7 +184,7 @@ fn a_city_without_homes_still_has_its_commute() {
         );
         assert!(off_the_map(&w, *id), "{} is gone by the night", p.name);
     }
-    assert!(at_one.iter().all(|at| *at), "at work at one");
+    assert!(at_three.iter().all(|at| *at), "at work at three");
     // the day has trips: every day worker in and out
     assert!(
         trips.len() >= 2 * day.len(),
@@ -291,5 +292,257 @@ fn a_city_with_homes_keeps_its_day() {
             was,
             "town {s:?} changed its day"
         );
+    }
+}
+
+/// New games' home cities for seeds 1 to 8, as a new game builds them: built once.
+fn new_homes() -> &'static [(u64, City)] {
+    static HOMES: std::sync::OnceLock<Vec<(u64, City)>> = std::sync::OnceLock::new();
+    HOMES.get_or_init(|| {
+        (1..=8)
+            .map(|s| {
+                let params = crate::app::AppState::new().params.with_seed(s);
+                (s, crate::screens::build_home(params).unwrap())
+            })
+            .collect()
+    })
+}
+
+/// A new game in seed `seed`'s home city: moved in at the hour a new game opens, the
+/// story begun (its cast picked).
+fn new_game(seed: u64) -> crate::app::AppState {
+    let mut st = crate::app::AppState::new();
+    let city = new_homes()
+        .iter()
+        .find(|(s, _)| *s == seed)
+        .unwrap()
+        .1
+        .clone();
+    st.enter_city(city);
+    crate::missions::begin(&mut st);
+    st
+}
+
+/// `st`'s people a minute on, every walk asked for found.
+fn a_minute(st: &mut crate::app::AppState) {
+    let city = st.city.as_ref().unwrap();
+    let w = st.world.as_mut().unwrap();
+    let t = w.tick() + sim::TICKS_PER_MINUTE;
+    w.advance(city, t);
+    w.path_some(city, usize::MAX);
+}
+
+#[test]
+fn the_story_fixers_keep_their_corner() {
+    // Coz and Mezz have no home in these cities: by day as by night they're at their
+    // corner, where the story and the jobs send you
+    let mut missed = Vec::new();
+    for seed in [1, 7, 8] {
+        let mut st = new_game(seed);
+        let fixers: Vec<(&str, PersonId)> = ["coz", "mezz"]
+            .into_iter()
+            .map(|r| (r, st.missions.cast[r]))
+            .collect();
+        for (role, id) in &fixers {
+            let p = &st.world.as_ref().unwrap().people()[id.0 as usize];
+            assert!(p.home.is_none(), "seed {seed}: {role} has a home");
+        }
+        for _ in 0..25 * 60 {
+            a_minute(&mut st);
+            let w = st.world.as_ref().unwrap();
+            let m = w.minute_of_day();
+            if ![8 * 60, 12 * 60, 16 * 60, 22 * 60].contains(&m) {
+                continue;
+            }
+            for (role, id) in &fixers {
+                let spot = w.spot_of(*id).unwrap();
+                if !w.pos_of(*id).is_some_and(|at| at.manhattan(spot) <= 1) {
+                    missed.push((
+                        seed,
+                        *role,
+                        m / 60,
+                        w.people()[id.0 as usize].whereabouts.clone(),
+                    ));
+                }
+            }
+        }
+    }
+    assert!(missed.is_empty(), "not at their corner: {missed:?}");
+}
+
+#[test]
+fn every_fixer_of_a_new_game_can_be_found_all_day() {
+    // on the street or in a building, never off the map, from six in the morning to
+    // eleven at night
+    let mut missed = Vec::new();
+    for seed in 1..=8 {
+        let mut st = new_game(seed);
+        let fixers: Vec<PersonId> = st
+            .world
+            .as_ref()
+            .unwrap()
+            .people()
+            .iter()
+            .filter(|p| p.profession == "fixer")
+            .map(|p| p.id)
+            .collect();
+        assert!(!fixers.is_empty(), "seed {seed}");
+        for _ in 0..25 * 60 {
+            a_minute(&mut st);
+            let w = st.world.as_ref().unwrap();
+            let m = w.minute_of_day();
+            if !m.is_multiple_of(60) || !(6 * 60..=23 * 60).contains(&m) {
+                continue;
+            }
+            for id in &fixers {
+                let p = &w.people()[id.0 as usize];
+                if w.pos_of(*id).is_none() && !matches!(p.whereabouts, Whereabouts::Inside(_)) {
+                    missed.push((seed, p.name.clone(), m / 60));
+                }
+            }
+        }
+    }
+    assert!(missed.is_empty(), "nowhere to be found: {missed:?}");
+}
+
+/// Those who work `city`'s buildings by day with no home in it, as seeded at four.
+fn day_commuters(w: &World) -> Vec<(PersonId, citygen::BuildingId)> {
+    w.people()
+        .iter()
+        .filter(|p| p.home.is_none() && (7 * 60..=11 * 60).contains(&p.shift_start))
+        .filter_map(|p| match p.work {
+            Work::Building(b) => Some((p.id, b)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn commuters_take_lunch() {
+    // a third or so of those who come in to work step out at midday, to something to eat
+    // or a spot along the street, and are back at work after
+    let city = settlement(CORPORATE);
+    let people = sim::People::load().unwrap();
+    let day = day_commuters(&World::seed(
+        city,
+        &people,
+        &sim::SimParams::default(),
+        FOUR,
+        0,
+    ));
+    let (mut out, mut back) = (Vec::new(), 0);
+    a_day(city, FOUR, (15 * 60 - FOUR) as u64, |w| {
+        let m = w.minute_of_day();
+        for &(id, b) in &day {
+            let p = &w.people()[id.0 as usize];
+            if m == 12 * 60 + 45
+                && p.whereabouts != Whereabouts::Inside(b)
+                && p.whereabouts != Whereabouts::Away
+            {
+                out.push(id);
+            }
+            if m == 15 * 60 && p.whereabouts == Whereabouts::Inside(b) {
+                back += 1;
+            }
+        }
+    });
+    assert!(
+        out.len() >= 5 && out.len() * 2 <= day.len(),
+        "{} of {} out at a quarter to one",
+        out.len(),
+        day.len()
+    );
+    assert_eq!(back, day.len(), "all back at work by three");
+}
+
+#[test]
+fn some_commuters_stay_for_a_drink() {
+    // a third or so of those who come in to work stay on in town after, at a bar, and
+    // walk out late; by two in the morning they've all gone
+    let (s, city) = [
+        CORPORATE,
+        Settlement {
+            city: 2,
+            town: None,
+        },
+    ]
+    .into_iter()
+    .map(|s| (s, settlement(s)))
+    .find(|(_, c)| {
+        c.buildings
+            .iter()
+            .any(|b| b.kind == citygen::world::BuildingKind::Bar)
+    })
+    .expect("a neighbour with a bar");
+    let people = sim::People::load().unwrap();
+    // those who work its buildings with no home in it and knock off by day
+    let day: Vec<(PersonId, citygen::BuildingId)> =
+        World::seed(city, &people, &sim::SimParams::default(), FOUR, 0)
+            .people()
+            .iter()
+            .filter(|p| p.home.is_none() && (14 * 60..21 * 60).contains(&p.shift.1))
+            .filter_map(|p| match p.work {
+                Work::Building(b) => Some((p.id, b)),
+                _ => None,
+            })
+            .collect();
+    let (mut stayed, mut at_work, mut left) = (0, 0, 0);
+    a_day(city, FOUR, (26 * 60 - FOUR) as u64, |w| {
+        let m = w.minute_of_day();
+        for &(id, b) in &day {
+            let p = &w.people()[id.0 as usize];
+            if m == 22 * 60 && p.whereabouts != Whereabouts::Away {
+                stayed += 1;
+                if p.whereabouts == Whereabouts::Inside(b) {
+                    at_work += 1;
+                }
+            }
+            if m == 2 * 60 && p.whereabouts == Whereabouts::Away {
+                left += 1;
+            }
+        }
+    });
+    assert!(
+        stayed >= 3 && stayed * 2 <= day.len(),
+        "{s:?}: {stayed} of {} still in town at ten",
+        day.len()
+    );
+    assert_eq!(at_work, 0, "{s:?}: in town for a drink, not at work");
+    assert_eq!(left, day.len(), "{s:?}: all gone by two");
+}
+
+#[test]
+fn the_cast_stays_in_town_after_a_reopen() {
+    // a part of the story's who works a building with no home in the city never goes out
+    // of town, in the run as begun and in it saved and reopened (the sim doesn't save the
+    // mark: the cast marks it again)
+    let (seed, role) = (1..=8)
+        .flat_map(|s| ["marlo", "odile"].map(|r| (s, r)))
+        .find(|&(s, r)| {
+            let st = new_game(s);
+            let id = st.missions.cast[r];
+            let p = &st.world.as_ref().unwrap().people()[id.0 as usize];
+            p.home.is_none() && matches!(p.work, Work::Building(_))
+        })
+        .expect("a cast part with no home in a new game's city");
+    let st = new_game(seed);
+    let id = st.missions.cast[role];
+    let dir = crate::runs::testutil::Dir::new("cast");
+    let path = crate::runs::file::write(&dir.0, &crate::runs::testutil::running(st)).unwrap();
+    let mut back = crate::app::AppState::new();
+    let (_, s, lost) = crate::runs::file::read(&path, &back.book).unwrap();
+    crate::runs::snapshot::restore(&mut back, s);
+    crate::runs::snapshot::after_restore(&mut back, lost);
+    let mut fresh = new_game(seed);
+    for st in [&mut fresh, &mut back] {
+        for _ in 0..24 * 60 {
+            a_minute(st);
+            let p = &st.world.as_ref().unwrap().people()[id.0 as usize];
+            assert_ne!(
+                p.whereabouts,
+                Whereabouts::Away,
+                "seed {seed}: {role} went out of town"
+            );
+        }
     }
 }

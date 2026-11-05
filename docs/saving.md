@@ -81,7 +81,11 @@ a city with no home in it lives off the map (`sim::Whereabouts::Away`), coming i
 going out by a road across the map's edge (`sim::commute`; which road is theirs is made
 again from the map, not saved), and so does anyone whose trip has no place in the city
 (`sim::Dest::Away`); a run saved before that has them where the sim left them, and they
-take up the commute at their next change of goal.
+take up the commute at their next change of goal. A spot worker with no home keeps to the
+spot, and fixers and the story's cast never leave town: the sim's mark for the cast
+isn't saved, and is made again from `missions.cast` on reopening. A break at midday
+(`sim::Goal::Lunch`) and a drink after work are picked by a hash of who someone is, so
+nothing about them is saved but the goal and the trip in flight.
 
 Your Net self hands over the same way: walked (or dropped by the Net overworld) onto Net
 cells another city or town owns, that city is the live one and your Net self is in it on
@@ -120,7 +124,7 @@ The order matters; every opener goes through `runs::open`:
 
 1. **`file::read(path, &st.book)`.** Checks the magic, the version and that the file is as long as its header says, then `ids::read_snapshot` reads the body against this build's book and `drop_lost` removes whatever pointed at a mission or step the book no longer has. Returns the losses. A flatlined run is refused.
 2. **`snapshot::restore`.** Puts every saved field back (`st.tick` too, so every tick stamp keeps its meaning), puts the run-made keycards back into `st.content`, clears `rest`, stands you up out of a doctor's chair (`chair` is only set while the deck's chair is open, and no screen comes back), and `clear_screens` drops what the screens remembered of another run.
-3. **`snapshot::after_restore`.** Rebuilds what isn't saved: `World::rebuild` (places, labels, night lines), the home city set aside (`Stay::reopened`: its people's places, and what it holds that this build's content lacks), `home` (none in another city of the world), the street's `Stratum::dark` (the districts whose lamps a lights out cut, made from `net.lights_out` by `holds::relight`, as every tick makes it), the track's walk (`track::refollow`), and the overworld (`outside::reopened`: made again from its params; you back in the city if what you stood on is gone; if the world can't be made at all while you were away, the home city put back first). Drops content ids this build lacks (`forget_unknown`) and logs every loss as `lost in the update · …`. `drop_lost` runs over the home story set aside too.
+3. **`snapshot::after_restore`.** Rebuilds what isn't saved: `World::rebuild` (places, labels, night lines) and the story's cast kept in town (`missions::cast::keep_in_town`, the home city set aside too), the home city set aside (`Stay::reopened`: its people's places, and what it holds that this build's content lacks), `home` (none in another city of the world), the street's `Stratum::dark` (the districts whose lamps a lights out cut, made from `net.lights_out` by `holds::relight`, as every tick makes it), the track's walk (`track::refollow`), and the overworld (`outside::reopened`: made again from its params; you back in the city if what you stood on is gone; if the world can't be made at all while you were away, the home city put back first). Drops content ids this build lacks (`forget_unknown`) and logs every loss as `lost in the update · …`. `drop_lost` runs over the home story set aside too.
 4. **The screens.** `Broadcast::resume` (LOAD GAME, CONTINUE) or straight to the map (reloading after a flatline), then `MapScreen::resumed`: it respects the restored player, sets its clock to `st.tick` so the first frame doesn't run the world a minute, and never calls `missions::begin` or `enter_city` (both would start things over).
 
 ## Adding state: the checklist

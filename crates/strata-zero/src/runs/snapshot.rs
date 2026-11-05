@@ -347,6 +347,8 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
 pub fn after_restore(st: &mut AppState, mut lost: Vec<String>) {
     if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
         world.rebuild(city, &st.people);
+        // who the story cast stays in town: the sim's mark isn't saved
+        crate::missions::cast::keep_in_town(world, &st.missions);
     }
     if let Some(stay) = st.away.as_mut() {
         lost.extend(stay.reopened(&st.people, &st.content));

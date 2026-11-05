@@ -94,6 +94,67 @@ pub fn way_in_of(ways: &[Pos], who: PersonId) -> Option<Pos> {
     Some(ways[i as usize])
 }
 
+/// One in this many who come in to work a building take a break at midday.
+pub const LUNCH_ONE_IN: u64 = 3;
+/// The earliest a break begins, and how far after it the last one does (12:00–13:30).
+pub const LUNCH_FROM: u16 = 12 * 60;
+pub const LUNCH_SPREAD: u16 = 90;
+/// How long a break lasts, from the shortest to the longest.
+pub const LUNCH_FOR: (u16, u16) = (30, 60);
+/// How far from work (Manhattan, cells) somewhere to eat may be; past it, a spot along
+/// the street near work does.
+pub const LUNCH_REACH: i32 = 60;
+/// A spot along the street for a break: this near work, and no nearer.
+pub const LUNCH_SPOT: (i32, i32) = (3, 8);
+
+/// One in this many who come in to work stay on for a drink after.
+pub const DRINK_ONE_IN: u64 = 3;
+/// The earliest they walk out after a drink, and how far after it the last does
+/// (21:00–01:00).
+pub const DRINK_UNTIL: u16 = 21 * 60;
+pub const DRINK_SPREAD: u16 = 240;
+/// Who knocks off between these (a day's work) may stay for a drink.
+pub const DRINK_AFTER: (u16, u16) = (14 * 60, 21 * 60);
+
+/// What spreads breaks and drinks over people and the hour.
+const LUNCH: u64 = 0x1C_4C4;
+const DRINK: u64 = 0xD2_14C;
+
+/// Whether `who` takes a break at midday, and when and for how long (minute of the day
+/// it begins, minutes): one in `LUNCH_ONE_IN`, by a hash of who they are.
+pub fn lunch_of(who: PersonId) -> Option<(u16, u16)> {
+    let h = |k: u64| hash64(LUNCH ^ k, u64::from(who.0));
+    if h(0) % LUNCH_ONE_IN != 0 {
+        return None;
+    }
+    let from = LUNCH_FROM + (h(1) % (u64::from(LUNCH_SPREAD) + 1)) as u16;
+    let span = u64::from(LUNCH_FOR.1 - LUNCH_FOR.0) + 1;
+    Some((from, LUNCH_FOR.0 + (h(2) % span) as u16))
+}
+
+/// Whether `who` stays for a drink after work, and the minute of the day they walk out:
+/// one in `DRINK_ONE_IN`, by a hash of who they are.
+pub fn drink_until(who: PersonId) -> Option<u16> {
+    let h = |k: u64| hash64(DRINK ^ k, u64::from(who.0));
+    if h(0) % DRINK_ONE_IN != 0 {
+        return None;
+    }
+    let late = (h(1) % (u64::from(DRINK_SPREAD) + 1)) as u16;
+    Some((DRINK_UNTIL + late) % crate::content::DAY)
+}
+
+/// One of `n` for `who`, by a hash of who they are and `salt`: the city's dice are left
+/// alone.
+pub fn pick_for(who: PersonId, salt: u64, n: usize) -> usize {
+    (hash64(salt, u64::from(who.0)) % n.max(1) as u64) as usize
+}
+
+/// Whether `minute` of the day lies in `from` up to (not at) `to`, over midnight too.
+pub fn between(minute: u16, from: u16, to: u16) -> bool {
+    let day = crate::content::DAY;
+    (minute + day - from) % day < (to + day - from) % day
+}
+
 /// Game minutes a walk from `from` to `to` takes, about.
 pub fn walk_minutes(from: Pos, to: Pos) -> u16 {
     let per = TILES_A_MINUTE.max(1);
@@ -199,7 +260,7 @@ mod tests {
                 .all(|i| w.people()[*i].whereabouts == Whereabouts::Away)
         );
         let mut came = vec![false; w.people().len()];
-        for _ in 0..9 * 60 {
+        for _ in 0..11 * 60 {
             a_minute(&mut w, &c);
             for &i in &day {
                 if let Whereabouts::Travelling(t) = &w.people()[i].whereabouts
@@ -211,7 +272,8 @@ mod tests {
                 }
             }
         }
-        // one in the afternoon: every one came in by a way in, and is at work
+        // three in the afternoon, after any break: every one came in by a way in, and is
+        // at work
         for &i in &day {
             let p = &w.people()[i];
             assert!(came[i], "{} came in by road", p.name);
@@ -222,7 +284,7 @@ mod tests {
         }
         // three in the morning: every one has walked back out
         let mut left = vec![false; w.people().len()];
-        for _ in 0..14 * 60 {
+        for _ in 0..12 * 60 {
             a_minute(&mut w, &c);
             for &i in &day {
                 if let Whereabouts::Travelling(t) = &w.people()[i].whereabouts
@@ -403,6 +465,64 @@ mod tests {
         }
         for (a, b) in w.people().iter().zip(back.people()) {
             assert_eq!(a.whereabouts, b.whereabouts, "{}", a.name);
+        }
+    }
+
+    #[test]
+    fn a_spot_worker_with_no_home_keeps_to_their_spot() {
+        // off shift as on it: never off the map, and at noon on their spot
+        let c = city();
+        let mut w = world(&c, 4 * 60);
+        let spot: Vec<usize> = w
+            .people()
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.home.is_none() && matches!(p.work, Work::Spot(_)))
+            .map(|(i, _)| i)
+            .collect();
+        assert!(spot.len() >= 5, "{} spot workers with no home", spot.len());
+        for _ in 0..24 * 60 {
+            a_minute(&mut w, &c);
+            for &i in &spot {
+                let p = &w.people()[i];
+                assert_ne!(p.whereabouts, Whereabouts::Away, "{} left town", p.name);
+                if w.minute_of_day() == 12 * 60 {
+                    let Work::Spot(at) = p.work else {
+                        unreachable!()
+                    };
+                    assert!(
+                        w.pos_of(p.id).is_some_and(|q| q.manhattan(at) <= 1),
+                        "{} on their spot at noon: {:?}",
+                        p.name,
+                        p.whereabouts
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn someone_kept_in_town_never_goes_off_the_map() {
+        // a day worker with no home, kept in town (the story has a part for them): in at
+        // work by day, and never out of town after
+        let c = city();
+        let mut w = world(&c, 12 * 60);
+        let kept: Vec<usize> = day_workers(&w, 7 * 60, 10 * 60)
+            .into_iter()
+            .take(5)
+            .collect();
+        assert_eq!(kept.len(), 5);
+        for &i in &kept {
+            let id = w.people()[i].id;
+            w.keep_in_town(id);
+            assert_eq!(w.card(id, &c).lives.as_deref(), Some("the street"));
+        }
+        for _ in 0..24 * 60 {
+            a_minute(&mut w, &c);
+            for &i in &kept {
+                let p = &w.people()[i];
+                assert_ne!(p.whereabouts, Whereabouts::Away, "{} left town", p.name);
+            }
         }
     }
 

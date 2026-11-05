@@ -44,6 +44,12 @@ pub struct Places {
     /// Cells of the map's edge a road crosses, where people come in from off the map
     /// (`commute::ways_in`).
     pub ways_in: Vec<Pos>,
+    /// Somewhere to get something to eat at midday, each by its first door: noodle bars,
+    /// markets and bars, in building order.
+    pub food: Vec<(BuildingId, Pos)>,
+    /// Where a drink after work is had in this city: of a bar, a noodle bar and the
+    /// Strip, those it has, in that order.
+    pub drinks: Vec<crate::content::Leisure>,
     kerb_set: HashSet<Pos>,
 }
 
@@ -180,6 +186,31 @@ impl Places {
 
         let door_set: HashSet<Pos> = doors.values().flatten().copied().collect();
         let ways_in = crate::commute::ways_in(city, &door_set);
+        let has = |kind: BuildingKind| {
+            city.buildings
+                .iter()
+                .any(|b| b.kind == kind && doors.contains_key(&b.id))
+        };
+        let food = city
+            .buildings
+            .iter()
+            .filter(|b| {
+                matches!(
+                    b.kind,
+                    BuildingKind::NoodleBar | BuildingKind::Market | BuildingKind::Bar
+                )
+            })
+            .filter_map(|b| Some((b.id, *doors.get(&b.id)?.first()?)))
+            .collect();
+        use crate::content::Leisure;
+        let drinks = [
+            (Leisure::Bar, has(BuildingKind::Bar)),
+            (Leisure::NoodleBar, has(BuildingKind::NoodleBar)),
+            (Leisure::Strip, !beats.is_empty()),
+        ]
+        .into_iter()
+        .filter_map(|(l, here)| here.then_some(l))
+        .collect();
 
         Places {
             doors,
@@ -190,6 +221,8 @@ impl Places {
             turf,
             posts,
             ways_in,
+            food,
+            drinks,
             kerb_set,
         }
     }

@@ -5102,8 +5102,9 @@ fn alive_next_door_shots() {
 /// Every city lives (`2026-11-05-streamed-world-design.md`, "After the first play"): in
 /// seed 3's corporate neighbour, where few who work have a home, at 200x60: the morning,
 /// its people coming in along the road from the north edge and on to work, three game
-/// minutes apart; midday in the middle of the city, a few moments apart; the evening, its
-/// people walking back out that road, three minutes apart.
+/// minutes apart; a quarter to one in the middle of the city, some out on a break, a few
+/// moments apart; the evening, its people walking back out that road, three minutes
+/// apart; half past nine in the middle of the city.
 #[test]
 #[ignore]
 fn commuters_shots() {
@@ -5156,8 +5157,9 @@ fn commuters_shots() {
             20,
             minutes(3),
         ),
-        ("commute_midday", 12 * 60 + 30, middle, 2, 45),
+        ("commute_midday", 12 * 60 + 20, middle, 25, 45),
         ("commute_evening", 18 * 60, by_the_road, 20, minutes(3)),
+        ("commute_late", 21 * 60, middle, 30, 45),
     ] {
         let (mut st, mut map) = inside(minute, near);
         play(&mut st, &mut map, minutes(on), false);

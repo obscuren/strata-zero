@@ -52,6 +52,9 @@ pub enum Goal {
     Home,
     Work,
     Leisure(Leisure),
+    /// A break from work: something to eat in town, or a spot along the street
+    /// (`commute`).
+    Lunch,
 }
 
 /// From minute `at` of the day, the person heads for `goal`.

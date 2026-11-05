@@ -5,12 +5,12 @@ use crate::commute;
 use crate::content::{DAY, Leisure, People};
 use crate::paths::{drive_path, walk_cost, walk_path};
 use crate::people::{
-    Activity, Car, CarId, Dest, Goal, Leg, Person, PersonId, Population, SimParams, Trip,
+    Activity, Car, CarId, Dest, Goal, Leg, Person, PersonId, Population, Segment, SimParams, Trip,
     Whereabouts, Work, goal_at, seed_population,
 };
 use crate::places::Places;
-use citygen::world::{BuildingKind, City, Theme};
-use citygen::{BuildingId, FlavorPack, Hue, Pos, Rect};
+use citygen::world::{BuildingKind, City, StratumKind, Theme};
+use citygen::{BuildingId, FlavorPack, Hue, Pos, Rect, Terrain};
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -25,6 +25,8 @@ pub const WALK_TICKS: u64 = 9;
 pub const DRIVE_TICKS: u64 = 3;
 /// A trip longer than this, on foot, is driven when there is a car.
 pub const DRIVE_FROM: i32 = 60;
+/// The profession that never leaves town: the city's jobs go through its fixers.
+const FIXER: &str = "fixer";
 
 /// A trip someone wants; `path_some` turns it into legs.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -140,6 +142,10 @@ pub struct World {
     dead: BTreeSet<PersonId>,
     /// People held at work: the schedule does not send them home.
     held: BTreeSet<PersonId>,
+    /// People who never go off the map, whom the story has cast: not saved, made again
+    /// from the cast whenever a run is reopened (`keep_in_town`).
+    #[serde(skip)]
+    in_town: BTreeSet<PersonId>,
 }
 
 fn labels_of(people: &People) -> HashMap<String, String> {
@@ -156,6 +162,16 @@ fn night_lines_of(people: &People) -> HashMap<String, String> {
         .iter()
         .filter_map(|p| p.night_line.clone().map(|l| (p.id.clone(), l)))
         .collect()
+}
+
+/// The minute of the day a schedule's work ends: when the next of its segments begins.
+fn knock_off(schedule: &[Segment]) -> Option<u16> {
+    let work = schedule.iter().find(|s| s.goal == Goal::Work)?.at;
+    schedule
+        .iter()
+        .filter(|s| s.goal != Goal::Work)
+        .min_by_key(|s| (s.at + DAY - work) % DAY)
+        .map(|s| s.at)
 }
 
 impl World {
@@ -198,6 +214,7 @@ impl World {
             satisfied: HashMap::new(),
             dead: BTreeSet::new(),
             held: BTreeSet::new(),
+            in_town: BTreeSet::new(),
         };
         w.place_everyone(city);
         w.refresh_open();
@@ -329,6 +346,14 @@ impl World {
     /// Lets a held person follow their schedule again.
     pub fn release(&mut self, id: PersonId) {
         self.held.remove(&id);
+    }
+
+    /// Keeps a person in town: they never go off the map, home or out for anything (the
+    /// story has a part for them). Not saved: the story marks its cast again on reopening.
+    pub fn keep_in_town(&mut self, id: PersonId) {
+        if (id.0 as usize) < self.people.len() {
+            self.in_town.insert(id);
+        }
     }
 
     /// Whether this person is held at work.
@@ -484,56 +509,115 @@ impl World {
         commute::way_in_of(&self.places.ways_in, self.people[i].id)
     }
 
-    /// Minutes the walk to work from off the map takes `i`, who has no home in the city;
-    /// none for someone with one, a courier, or a map no road leaves.
-    fn walk_in(&self, i: usize) -> Option<u16> {
+    /// The road `i` leaves the map by: none for someone the story keeps in town
+    /// (`keep_in_town`), a fixer, or a map no road leaves.
+    fn way_out(&self, i: usize) -> Option<Pos> {
         let p = &self.people[i];
-        if p.home.is_some() {
+        if p.profession == FIXER || self.in_town.contains(&p.id) {
+            return None;
+        }
+        self.way_in(i)
+    }
+
+    /// Whether `i` comes in to work from off the map: no home in the city, work that
+    /// isn't a spot of the street's, and a road out they may take.
+    fn commuter(&self, i: usize) -> bool {
+        let p = &self.people[i];
+        p.home.is_none() && !matches!(p.work, Work::Spot(_)) && self.way_out(i).is_some()
+    }
+
+    /// Minutes the walk to work from off the map takes `i`, who comes in to a building;
+    /// none for anyone else.
+    fn walk_in(&self, i: usize) -> Option<u16> {
+        let Work::Building(b) = self.people[i].work else {
+            return None;
+        };
+        if !self.commuter(i) {
             return None;
         }
         let way = self.way_in(i)?;
         // the door nearest the way in, as the walk takes it
-        let at = match p.work {
-            Work::Building(b) => *self
-                .places
-                .doors
-                .get(&b)?
-                .iter()
-                .min_by_key(|d| d.manhattan(way))?,
-            Work::Spot(s) => s,
-            Work::Roaming => return None,
-        };
+        let at = *self
+            .places
+            .doors
+            .get(&b)?
+            .iter()
+            .min_by_key(|d| d.manhattan(way))?;
         Some(commute::walk_minutes(way, at))
     }
 
+    /// Whether `i`, who comes in to a building, is on their break at `minute` of the day:
+    /// one in a few, the break wholly within their day's work (`commute::lunch_of`).
+    fn at_lunch(&self, i: usize, minute: u16) -> bool {
+        let p = &self.people[i];
+        if !matches!(p.work, Work::Building(_)) {
+            return false;
+        }
+        let Some((from, long)) = commute::lunch_of(p.id) else {
+            return false;
+        };
+        let to = (from + long) % DAY;
+        commute::between(minute, from, to)
+            && goal_at(&p.schedule, from) == Goal::Work
+            && goal_at(&p.schedule, to) == Goal::Work
+    }
+
+    /// Where `i`, who comes in to work, has a drink after it at `minute` of the day, if
+    /// they're one who stays on (`commute::drink_until`), knocked off by day and not
+    /// gone yet: their own leisure if the city has it, else the first it has; none in a
+    /// city without a bar, a noodle bar or the Strip.
+    fn drink(&self, i: usize, minute: u16) -> Option<Leisure> {
+        let p = &self.people[i];
+        let until = commute::drink_until(p.id)?;
+        let off = knock_off(&p.schedule)?;
+        let (early, late) = commute::DRINK_AFTER;
+        if !(early..late).contains(&off) || !commute::between(minute, off, until) {
+            return None;
+        }
+        let drinks = &self.places.drinks;
+        let own = p.schedule.iter().find_map(|s| match s.goal {
+            Goal::Leisure(l) => Some(l),
+            _ => None,
+        });
+        own.filter(|l| drinks.contains(l))
+            .or_else(|| drinks.first().copied())
+    }
+
     /// The goal `i` keeps at `minute` of the day: their schedule's, but someone who comes
-    /// in from off the map sets off for work as much earlier as the walk in takes.
+    /// in from off the map sets off for work as much earlier as the walk in takes, may
+    /// take a break at midday and may stay on in town for a drink after.
     fn due(&self, i: usize, minute: u16) -> Goal {
         let schedule = &self.people[i].schedule;
         let now = goal_at(schedule, minute);
-        if now == Goal::Work {
+        if !self.commuter(i) {
             return now;
         }
-        match self.walk_in(i) {
-            Some(lead) if goal_at(schedule, (minute + lead) % DAY) == Goal::Work => Goal::Work,
-            _ => now,
+        if now == Goal::Work {
+            return if self.at_lunch(i, minute) {
+                Goal::Lunch
+            } else {
+                now
+            };
         }
+        if let Some(lead) = self.walk_in(i)
+            && goal_at(schedule, (minute + lead) % DAY) == Goal::Work
+        {
+            return Goal::Work;
+        }
+        self.drink(i, minute).map_or(now, Goal::Leisure)
     }
 
-    /// Where a goal takes a person: their home, their work, their bar, the Strip; off the
-    /// map by their way in when that's where it is (a home out of town) or the city has no
-    /// such place.
+    /// Where a goal takes a person: their home, their work, their bar, the Strip, a break;
+    /// off the map by their way in when that's where it is (a home out of town) or the
+    /// city has no such place. A spot worker with no home keeps to their spot.
     fn dest_for(&mut self, city: &City, i: usize, goal: Goal) -> Option<Dest> {
-        let away = self.way_in(i).map(Dest::Away);
+        let away = self.way_out(i).map(Dest::Away);
         let p = &self.people[i];
         let here = match goal {
-            Goal::Home => match p.home {
-                Some(h) => Some(Dest::Building(h)),
-                None if away.is_some() => away,
-                None => match p.work {
-                    Work::Spot(s) => Some(Dest::Spot(s)),
-                    _ => None,
-                },
+            Goal::Home => match (p.home, p.work) {
+                (Some(h), _) => Some(Dest::Building(h)),
+                (None, Work::Spot(s)) => Some(Dest::Spot(s)),
+                (None, _) => away,
             },
             Goal::Work => match p.work {
                 Work::Building(b) => Some(Dest::Building(b)),
@@ -547,9 +631,63 @@ impl World {
             Goal::Leisure(Leisure::NoodleBar) => self
                 .nearest_kind(city, i, BuildingKind::NoodleBar)
                 .map(Dest::Building),
+            // a drink their day wouldn't have had: a beat by who they are, the city's dice
+            // left alone
+            Goal::Leisure(Leisure::Strip) if goal_at(&p.schedule, self.minute_of_day()) != goal => {
+                self.beat_for(i)
+            }
             Goal::Leisure(Leisure::Strip) => self.a_beat(),
+            Goal::Lunch => self.lunch_place(city, i),
         };
-        here.or(away)
+        match goal {
+            Goal::Lunch => here,
+            _ => here.or(away),
+        }
+    }
+
+    /// Where `i` goes on their break: somewhere to eat within reach of work, else a spot
+    /// along the street near it, by who they are.
+    fn lunch_place(&self, city: &City, i: usize) -> Option<Dest> {
+        let p = &self.people[i];
+        let Work::Building(b) = p.work else {
+            return None;
+        };
+        let door = *self.places.doors.get(&b)?.first()?;
+        let food = self
+            .places
+            .food
+            .iter()
+            .filter(|(f, _)| *f != b)
+            .map(|(f, d)| (d.manhattan(door), f.index(), *f))
+            .filter(|(d, _, _)| *d <= commute::LUNCH_REACH)
+            .min();
+        if let Some((_, _, f)) = food {
+            return Some(Dest::Building(f));
+        }
+        let (near, far) = commute::LUNCH_SPOT;
+        let spots: Vec<Pos> = Rect::new(door.x - far, door.y - far, 2 * far + 1, 2 * far + 1)
+            .iter()
+            .filter(|q| (near..=far).contains(&q.manhattan(door)))
+            .filter(|q| {
+                matches!(
+                    city.tile(StratumKind::Street, *q).map(|t| t.terrain),
+                    Some(Terrain::Sidewalk | Terrain::Plaza | Terrain::Walkway)
+                ) && walk_cost(city, *q, *q) == Some(1)
+            })
+            .collect();
+        (!spots.is_empty()).then(|| Dest::Spot(spots[commute::pick_for(p.id, 0x5B07, spots.len())]))
+    }
+
+    /// A spot on the Strip's beats by who `i` is; none without a beat.
+    fn beat_for(&self, i: usize) -> Option<Dest> {
+        let id = self.people[i].id;
+        let mut districts: Vec<_> = self.places.beats.keys().copied().collect();
+        districts.sort_by_key(|d| d.index());
+        let d = *districts.get(commute::pick_for(id, 0xBEA7, districts.len()))?;
+        let beats = &self.places.beats[&d];
+        Some(Dest::Spot(
+            beats[commute::pick_for(id, 0xBEA8, beats.len())],
+        ))
     }
 
     /// A spot on the Strip's beats, at random; none without a beat.
@@ -1194,6 +1332,7 @@ impl World {
             Goal::Leisure(Leisure::Bar) => "the bar",
             Goal::Leisure(Leisure::NoodleBar) => "noodles",
             Goal::Leisure(Leisure::Strip) => "the Strip",
+            Goal::Lunch => "a break",
         }
     }
 
@@ -1266,6 +1405,7 @@ impl World {
             (Whereabouts::At { .. }, Goal::Leisure(Leisure::Strip)) => {
                 "looking for company".to_string()
             }
+            (Whereabouts::At { .. }, Goal::Lunch) => "on a break".to_string(),
             (Whereabouts::At { .. }, _) => "hanging around".to_string(),
             (Whereabouts::Away, _) => "out of town".to_string(),
             (Whereabouts::Travelling(t), _) => match t.goal {
@@ -1277,6 +1417,7 @@ impl World {
                 Goal::Leisure(Leisure::Bar) => "off to the bar".to_string(),
                 Goal::Leisure(Leisure::NoodleBar) => "off for noodles".to_string(),
                 Goal::Leisure(Leisure::Strip) => "heading for the Strip".to_string(),
+                Goal::Lunch => "out on a break".to_string(),
             },
         };
         let night = (18 * 60..DAY).contains(&self.minute_of_day()) || self.minute_of_day() < 5 * 60;
@@ -1336,7 +1477,7 @@ impl World {
         };
         let lives = Some(match p.home {
             Some(h) => Self::place_name(city, h),
-            None if self.way_in(id.0 as usize).is_some() => "out of town".to_string(),
+            None if self.commuter(id.0 as usize) => "out of town".to_string(),
             None => "the street".to_string(),
         });
         let works = Some(match p.work {
@@ -2396,10 +2537,11 @@ mod tests {
         let people = People::load().unwrap();
         let mut w = World::seed(&c, &people, &SimParams::default(), 22 * 60, 0);
         let somewhere = *w.places.doors.keys().min_by_key(|b| b.index()).unwrap();
+        // (a spot worker with no home keeps to their spot: not among them)
         let without: Vec<PersonId> = w
             .people
             .iter()
-            .filter(|p| p.home.is_none())
+            .filter(|p| p.home.is_none() && !matches!(p.work, Work::Spot(_)))
             .map(|p| p.id)
             .collect();
         assert!(without.len() > 100);
