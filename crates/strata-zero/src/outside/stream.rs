@@ -1,16 +1,10 @@
 //! The open ground as one stream round the view: its street and its Net, built tile by
 //! tile from the world, lit by the street's rule, and who owns each overworld tile.
 //! See `2026-11-05-streamed-world-design.md`, "Areas and the stream".
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the city screen walks the stream from #27's next tasks"
-    )
-)]
 
 use super::ground::GroundView;
 use super::{Outside, Settlement, TILE};
+use crate::app::AppState;
 use crate::render::ConnDir;
 use crate::render::map::TileMap;
 use citygen::overworld::Overworld;
@@ -55,6 +49,7 @@ impl std::fmt::Debug for Stream {
 impl Stream {
     /// Both layers built over `area` (world cells) and a ring past it; far tiles
     /// forgotten.
+    #[cfg_attr(not(test), expect(dead_code, reason = "walked from #27's next tasks"))]
     pub fn cover(&mut self, world: &Overworld, area: Rect) {
         self.cells = Size {
             w: TILE as u32 * world.size.w,
@@ -74,12 +69,17 @@ pub struct GroundMap<'a> {
     pub minute: u16,
 }
 
-impl GroundMap<'_> {
-    fn view(&self) -> &GroundView {
+impl<'a> GroundMap<'a> {
+    fn view(&self) -> &'a GroundView {
         match self.layer {
             StratumKind::Net => &self.stream.net,
             _ => &self.stream.street,
         }
+    }
+
+    /// The tile at world cell `p`, if it is built: held as long as the stream is.
+    pub fn cell(&self, p: Pos) -> Option<&'a Tile> {
+        self.view().tile(p)
     }
 }
 
@@ -89,7 +89,7 @@ impl TileMap for GroundMap<'_> {
     }
 
     fn tile(&self, p: Pos) -> Option<&Tile> {
-        self.view().tile(p)
+        self.cell(p)
     }
 
     /// Ambient for the hour plus what the cell is lit by, as a city's stratum is lit.
@@ -225,6 +225,117 @@ impl Outside {
     /// open ground (or before the world is made).
     pub fn owner(&self, tile: Pos) -> Option<Settlement> {
         self.owners.as_ref()?.0.get(tile).copied().flatten()
+    }
+}
+
+/// The street and the Net past the live city's edge, and the cells of its map other
+/// areas own: for each cell of the live city's frame, the area that owns it answers.
+/// Made from the run each time it's wanted; holds nothing of its own.
+pub struct Beyond<'a> {
+    /// Who owns each overworld tile.
+    outside: &'a Outside,
+    /// The live city and the world cell of its `(0, 0)`.
+    live: (Settlement, &'a City, Pos),
+    /// The other cities and towns held this session, each with its origin.
+    held: Vec<(Settlement, &'a City, Pos)>,
+    stream: &'a Stream,
+}
+
+/// Who answers for a cell of the live city's frame that the live city doesn't own.
+pub enum Owner<'a> {
+    /// Another city or town held this session: its map, at its own cell.
+    City(&'a City, Pos),
+    /// The stream, at the world cell: the open ground, or a settlement not built yet.
+    Ground(&'a Stream, Pos),
+}
+
+impl<'a> Beyond<'a> {
+    /// What lies past the run's city: none with no world out there (the lot, a run
+    /// before the world).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the city screen walks past the edge from #27's next task"
+        )
+    )]
+    pub fn of(st: &'a AppState) -> Option<Beyond<'a>> {
+        let city = st.city.as_ref()?;
+        let o = st.outside.as_ref()?;
+        if city.is_lot() || o.world.is_none() || o.owners.is_none() {
+            return None;
+        }
+        let (here, home) = (o.here(), o.home());
+        let away = st
+            .away
+            .as_ref()
+            .filter(|_| here != home)
+            .map(|stay| (home, &stay.city));
+        let held = away
+            .into_iter()
+            .chain(o.built.iter().map(|(s, c)| (*s, c)))
+            .filter(|(s, _)| *s != here)
+            .map(|(s, c)| (s, c, o.origin(c)))
+            .collect();
+        Some(Beyond {
+            outside: o,
+            live: (here, city, o.origin(city)),
+            held,
+            stream: &o.stream,
+        })
+    }
+
+    /// Whether the live city owns local cell `p` (and its map has it).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the city screen walks past the edge from #27's next task"
+        )
+    )]
+    pub fn live_owns(&self, p: Pos) -> bool {
+        self.elsewhere(p).is_none()
+    }
+
+    /// Who answers for local cell `p` when the live city doesn't: the area owning its
+    /// overworld tile, held, with the cell on its map; else the stream. None for the
+    /// live city's own cells.
+    pub fn elsewhere(&self, p: Pos) -> Option<Owner<'a>> {
+        let (live, city, origin) = self.live;
+        let at = origin.offset(p.x, p.y);
+        let owner = self
+            .outside
+            .owner(Pos::new(at.x.div_euclid(TILE), at.y.div_euclid(TILE)));
+        if owner == Some(live) && city.size.contains(p) {
+            return None;
+        }
+        let theirs = owner.and_then(|s| {
+            let &(_, city, origin) = self.held.iter().find(|h| h.0 == s)?;
+            let q = Pos::new(at.x - origin.x, at.y - origin.y);
+            city.size.contains(q).then_some(Owner::City(city, q))
+        });
+        Some(theirs.unwrap_or(Owner::Ground(self.stream, at)))
+    }
+}
+
+/// Marks what was in sight past the live city's edge at the last look as seen, in the
+/// world's record.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the city screen walks past the edge from #27's next task"
+    )
+)]
+pub fn remember_sight(st: &mut AppState) {
+    let (Some(city), Some(p), Some(o)) =
+        (st.city.as_ref(), st.player.as_ref(), st.outside.as_mut())
+    else {
+        return;
+    };
+    let origin = o.origin(city);
+    for c in p.beyond_sight() {
+        super::ground::remember_cell(o, origin.offset(c.x, c.y));
     }
 }
 
@@ -435,6 +546,7 @@ mod tests {
                             city,
                             stratum: layer,
                             minute: NIGHT,
+                            beyond: None,
                         };
                         if layer == StratumKind::Net && mine.terrain == theirs.terrain {
                             assert_eq!(ground.light(at), lit.light(p), "{s:?} {p:?} {mine:?}");
@@ -505,6 +617,7 @@ mod tests {
                         city,
                         stratum: StratumKind::Street,
                         minute,
+                        beyond: None,
                     };
                     let ground = GroundMap {
                         stream: &stream,
@@ -634,5 +747,377 @@ mod tests {
             stream.street.tile(start).is_none(),
             "the start is forgotten"
         );
+    }
+
+    /// The street and the Net carried on past the live city's edge.
+    mod beyond {
+        use super::*;
+        use crate::app::AppState;
+        use crate::outside::enter;
+        use crate::outside::ground::remembered;
+        use crate::outside::tests::home_run;
+        use crate::render::map::MapRef;
+        use crate::walker::Player;
+        use citygen::{Dir, Place};
+
+        /// The world cell of the live city's cell `p`.
+        fn world_cell(st: &AppState, p: Pos) -> Pos {
+            let o = st.outside.as_ref().unwrap();
+            o.origin(st.city.as_ref().unwrap()).offset(p.x, p.y)
+        }
+
+        /// The overworld tile of world cell `c`.
+        fn tile_of(c: Pos) -> Pos {
+            Pos::new(c.x.div_euclid(TILE), c.y.div_euclid(TILE))
+        }
+
+        /// The stream built `r` cells round the live city's cell `p`.
+        fn cover_round(st: &mut AppState, p: Pos, r: i32) {
+            let at = world_cell(st, p);
+            let o = st.outside.as_mut().unwrap();
+            o.stream.cover(
+                o.world.as_ref().unwrap(),
+                Rect::new(at.x - r, at.y - r, 2 * r + 1, 2 * r + 1),
+            );
+        }
+
+        /// A street cell on the live city's edge with open ground to walk on past it,
+        /// and the way off.
+        fn edge(st: &AppState) -> (Pos, Dir) {
+            let city = st.city.as_ref().unwrap();
+            let o = st.outside.as_ref().unwrap();
+            let w = o.world();
+            let (cw, ch) = (city.size.w as i32, city.size.h as i32);
+            let sides = (0..ch)
+                .flat_map(|y| [(Pos::new(0, y), Dir::W), (Pos::new(cw - 1, y), Dir::E)])
+                .chain(
+                    (0..cw).flat_map(|x| [(Pos::new(x, 0), Dir::N), (Pos::new(x, ch - 1), Dir::S)]),
+                );
+            sides
+                .filter(|(p, _)| city.walkable(StratumKind::Street, *p))
+                .find(|(p, d)| {
+                    let off = world_cell(st, p.step(*d));
+                    w.tile(tile_of(off)).is_some()
+                        && o.owner(tile_of(off)).is_none()
+                        && detail::region(w, off.x, off.y, 1, 1)[Pos::new(0, 0)].is_walkable()
+                })
+                .expect("a way off the city onto open ground")
+        }
+
+        /// Settlement `s` built and held this session, as walking in and back out
+        /// leaves it, the home city live again.
+        fn hold(st: &mut AppState, s: Settlement) {
+            let home = st.outside.as_ref().unwrap().home();
+            enter(st, s).unwrap();
+            enter(st, home).unwrap();
+            assert!(st.outside.as_ref().unwrap().built.contains_key(&s));
+        }
+
+        #[test]
+        fn the_street_walks_off_the_city_and_back() {
+            let mut st = home_run();
+            let (e, d) = edge(&st);
+            cover_round(&mut st, e, 16);
+            let city = st.city.as_ref().unwrap();
+            let b = Beyond::of(&st).unwrap();
+            let bare = MapRef::stratum_at(city, StratumKind::Street, NIGHT);
+            let map = bare.beyond(&b);
+            let off = e.step(d);
+            assert!(!city.size.contains(off));
+            let mut p = Player::at(Place::Stratum(StratumKind::Street), e);
+            assert!(
+                !p.try_move(&bare, d),
+                "without the beyond the edge stops you"
+            );
+            assert_eq!(p.pos, e);
+            assert!(p.try_move(&map, d), "off the city onto the ground");
+            assert_eq!(p.pos, off);
+            assert!(b.live_owns(e) && !b.live_owns(off));
+            let ground = GroundMap {
+                stream: o_stream(&st),
+                layer: StratumKind::Street,
+                minute: NIGHT,
+            };
+            assert_eq!(map.tile(off), ground.tile(world_cell(&st, off)));
+            assert!(p.try_move(&map, d.opposite()), "and back");
+            assert_eq!(p.pos, e);
+            // the undercity keeps to the city's own map
+            let under = MapRef::stratum_at(city, StratumKind::Undercity, NIGHT).beyond(&b);
+            assert!(matches!(under, MapRef::Stratum(m) if m.beyond.is_none()));
+            assert!(!under.reaches(off));
+        }
+
+        fn o_stream(st: &AppState) -> &Stream {
+            &st.outside.as_ref().unwrap().stream
+        }
+
+        #[test]
+        fn sight_crosses_the_edge() {
+            let mut st = home_run();
+            let (e, _) = edge(&st);
+            cover_round(&mut st, e, 72);
+            let mut p = Player::at(Place::Stratum(StratumKind::Street), e);
+            let city = st.city.as_ref().unwrap();
+            let bare = MapRef::stratum_at(city, StratumKind::Street, NOON);
+            {
+                let b = Beyond::of(&st).unwrap();
+                let map = bare.beyond(&b);
+                p.update_fov(&map, 0);
+                let off = p.beyond_sight();
+                assert!(off.len() > 100, "{} cells past the edge seen", off.len());
+                for c in off {
+                    assert!(!city.size.contains(*c), "{c:?} is off the map");
+                    assert!(map.reaches(*c) && !b.live_owns(*c), "{c:?}");
+                    assert!(
+                        o_stream(&st).street.tile(world_cell(&st, *c)).is_some(),
+                        "{c:?} is the ground's"
+                    );
+                }
+            }
+            let seen = p.beyond_sight().to_vec();
+            // a look without the beyond sees nothing past the edge
+            let mut q = p.clone();
+            q.update_fov(&bare, 0);
+            assert!(q.beyond_sight().is_empty());
+            // a cell past the edge out of sight
+            let unseen = Rect::new(e.x - 100, e.y - 100, 201, 201)
+                .iter()
+                .find(|c| !city.size.contains(*c) && !seen.contains(c))
+                .unwrap();
+            st.player = Some(p);
+            remember_sight(&mut st);
+            let o = st.outside.as_ref().unwrap();
+            for c in &seen {
+                assert!(remembered(o, world_cell(&st, *c)), "{c:?} remembered");
+            }
+            assert!(
+                !remembered(o, world_cell(&st, unseen)),
+                "{unseen:?} wasn't in sight"
+            );
+        }
+
+        #[test]
+        fn the_nets_void_is_walked_and_walls_are_not() {
+            let mut st = home_run();
+            let (e, d) = edge(&st);
+            cover_round(&mut st, e.step(d), 24);
+            let city = st.city.as_ref().unwrap();
+            let b = Beyond::of(&st).unwrap();
+            let bare = MapRef::stratum_at(city, StratumKind::Net, NIGHT);
+            let map = bare.beyond(&b);
+            let net = &city.stratum(StratumKind::Net).unwrap().tiles;
+            // the city's own Net past its outline
+            let void = net
+                .iter()
+                .find(|(p, t)| t.terrain == Terrain::Void && b.live_owns(*p))
+                .map(|(p, _)| p)
+                .expect("a void cell of the city's Net");
+            assert!(
+                !bare.walkable(void),
+                "the city's Net alone keeps to its grid"
+            );
+            assert!(map.walkable(void), "{void:?}");
+            // the open Net past the edge
+            let open = Rect::new(e.x - 24, e.y - 24, 49, 49)
+                .iter()
+                .filter(|p| !city.size.contains(*p))
+                .find(|p| map.tile(*p).is_some_and(|t| t.terrain == Terrain::Void))
+                .expect("a void cell of the open Net past the edge");
+            assert!(
+                std::ptr::eq(
+                    map.tile(open).unwrap(),
+                    o_stream(&st).net.tile(world_cell(&st, open)).unwrap()
+                ),
+                "the stream's"
+            );
+            assert!(map.walkable(open) && map.reaches(open), "{open:?}");
+            let wall = net
+                .iter()
+                .find(|(_, t)| t.terrain == Terrain::NetWall)
+                .map(|(p, _)| p)
+                .expect("a construct's wall");
+            assert!(!map.walkable(wall), "{wall:?}");
+        }
+
+        #[test]
+        fn an_unbuilt_cell_cannot_be_walked() {
+            let st = home_run();
+            let (e, d) = edge(&st);
+            let city = st.city.as_ref().unwrap();
+            let b = Beyond::of(&st).unwrap();
+            let off = e.step(d);
+            for k in [StratumKind::Street, StratumKind::Net] {
+                let map = MapRef::stratum_at(city, k, NIGHT).beyond(&b);
+                assert!(map.tile(off).is_none(), "{k:?}");
+                assert!(!map.walkable(off) && !map.reaches(off), "{k:?}");
+            }
+            let map = MapRef::stratum_at(city, StratumKind::Street, NIGHT).beyond(&b);
+            let mut p = Player::at(Place::Stratum(StratumKind::Street), e);
+            assert!(!p.try_move(&map, d));
+            assert_eq!(p.pos, e);
+        }
+
+        #[test]
+        fn another_citys_cells_answer_from_that_city() {
+            let mut st = home_run();
+            let s = st
+                .outside
+                .as_ref()
+                .unwrap()
+                .others()
+                .into_iter()
+                .map(|(s, _)| s)
+                .find(|s| s.town.is_none())
+                .unwrap();
+            hold(&mut st, s);
+            let city = st.city.as_ref().unwrap();
+            let o = st.outside.as_ref().unwrap();
+            let other = &o.built[&s];
+            let (live, theirs) = (o.origin(city), o.origin(other));
+            // a building of theirs on a tile they own, whose ids read otherwise here
+            let (q, t) = other
+                .stratum(StratumKind::Street)
+                .unwrap()
+                .tiles
+                .iter()
+                .find(|(q, t)| {
+                    let (Some(id), Some(d)) = (t.building, t.district) else {
+                        return false;
+                    };
+                    let at = theirs.offset(q.x, q.y);
+                    o.owner(tile_of(at)) == Some(s)
+                        && city.building_opt(id).map(|b| b.kind) != Some(other.building(id).kind)
+                        && city.district_opt(d).map(|d| d.theme) != Some(other.district(d).theme)
+                })
+                .expect("a building of the other city");
+            let at = theirs.offset(q.x, q.y);
+            let p = Pos::new(at.x - live.x, at.y - live.y);
+            let b = Beyond::of(&st).unwrap();
+            assert!(!b.live_owns(p));
+            for minute in [NIGHT, NOON] {
+                let map = MapRef::stratum_at(city, StratumKind::Street, minute).beyond(&b);
+                assert!(std::ptr::eq(map.tile(p).unwrap(), t), "their tile");
+                let id = t.building.unwrap();
+                assert_eq!(map.kind(p), Some(other.building(id).kind));
+                assert_eq!(
+                    map.theme(p),
+                    Some(other.district(t.district.unwrap()).theme)
+                );
+                let them = StratumMap {
+                    city: other,
+                    stratum: StratumKind::Street,
+                    minute,
+                    beyond: None,
+                };
+                assert_eq!(map.light(p), them.light(q));
+                assert_eq!(map.emitted(p), them.emitted(q));
+                assert!(map.reaches(p));
+            }
+            // and one of their connectors is theirs
+            let c = other
+                .connectors
+                .iter()
+                .find(|c| {
+                    c.serves.contains(&StratumKind::Street)
+                        && o.owner(tile_of(theirs.offset(c.pos.x, c.pos.y))) == Some(s)
+                })
+                .expect("a connector of theirs");
+            let map = MapRef::stratum_at(city, StratumKind::Street, NIGHT).beyond(&b);
+            let them = MapRef::stratum_at(other, StratumKind::Street, NIGHT);
+            let at = theirs.offset(c.pos.x, c.pos.y);
+            let p = Pos::new(at.x - live.x, at.y - live.y);
+            assert_eq!(
+                map.connector(p).map(|d| (d.kind, d.up, d.down)),
+                them.connector(c.pos).map(|d| (d.kind, d.up, d.down))
+            );
+        }
+
+        #[test]
+        fn a_cell_of_the_live_map_another_settlement_owns_answers_from_it() {
+            let mut st = home_run();
+            // a city whose block holds tiles one of its towns owns
+            let (c, town) = {
+                let o = st.outside.as_ref().unwrap();
+                o.others()
+                    .into_iter()
+                    .filter(|(s, _)| s.town.is_none())
+                    .find_map(|(s, block)| {
+                        block
+                            .iter()
+                            .find_map(|t| o.owner(t).filter(|w| w.town.is_some()).map(|w| (s, w)))
+                    })
+                    .expect("a town owning tiles of its city's map")
+            };
+            enter(&mut st, c).unwrap();
+            enter(&mut st, town).unwrap();
+            enter(&mut st, c).unwrap();
+            let p = {
+                let city = st.city.as_ref().unwrap();
+                let o = st.outside.as_ref().unwrap();
+                assert_eq!(o.here(), c);
+                let (live, theirs) = (o.origin(city), o.origin(&o.built[&town]));
+                let them = &o.built[&town];
+                // a cell of the live map the town owns, built otherwise in its map
+                let owned: Vec<Pos> = Rect::new(0, 0, city.size.w as i32, city.size.h as i32)
+                    .iter()
+                    .filter(|p| o.owner(tile_of(live.offset(p.x, p.y))) == Some(town))
+                    .collect();
+                assert!(!owned.is_empty());
+                let theirs_at = |p: Pos| {
+                    let at = live.offset(p.x, p.y);
+                    them.tile(
+                        StratumKind::Street,
+                        Pos::new(at.x - theirs.x, at.y - theirs.y),
+                    )
+                };
+                owned
+                    .iter()
+                    .copied()
+                    .find(|p| {
+                        theirs_at(*p).map(|t| t.terrain)
+                            != city.tile(StratumKind::Street, *p).map(|t| t.terrain)
+                    })
+                    .expect("a cell the town built otherwise than the live map has it")
+            };
+            let city = st.city.as_ref().unwrap();
+            {
+                let o = st.outside.as_ref().unwrap();
+                let them = &o.built[&town];
+                let at = world_cell(&st, p);
+                let q = {
+                    let theirs = o.origin(them);
+                    Pos::new(at.x - theirs.x, at.y - theirs.y)
+                };
+                let b = Beyond::of(&st).unwrap();
+                assert!(!b.live_owns(p) && city.size.contains(p));
+                let map = MapRef::stratum_at(city, StratumKind::Street, NIGHT).beyond(&b);
+                let want = them.tile(StratumKind::Street, q).unwrap();
+                assert!(std::ptr::eq(map.tile(p).unwrap(), want), "the town's tile");
+                assert_ne!(
+                    Some(want.terrain),
+                    city.tile(StratumKind::Street, p).map(|t| t.terrain)
+                );
+                assert_eq!(
+                    map.kind(p),
+                    MapRef::stratum_of(them, StratumKind::Street).kind(q)
+                );
+            }
+            // the town not held: the stream answers (nothing yet, then the ground)
+            st.outside.as_mut().unwrap().built.remove(&town);
+            {
+                let b = Beyond::of(&st).unwrap();
+                let map = MapRef::stratum_at(city, StratumKind::Street, NIGHT).beyond(&b);
+                assert!(map.tile(p).is_none() && !map.reaches(p) && !map.walkable(p));
+            }
+            cover_round(&mut st, p, 8);
+            let city = st.city.as_ref().unwrap();
+            let b = Beyond::of(&st).unwrap();
+            let map = MapRef::stratum_at(city, StratumKind::Street, NIGHT).beyond(&b);
+            assert!(std::ptr::eq(
+                map.tile(p).unwrap(),
+                o_stream(&st).street.tile(world_cell(&st, p)).unwrap()
+            ));
+            assert_eq!(map.kind(p), None);
+        }
     }
 }

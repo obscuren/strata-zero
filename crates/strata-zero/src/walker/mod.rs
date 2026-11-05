@@ -31,6 +31,10 @@ pub struct Player {
     // Scratch: an empty grid, the same as `Player::at` makes; never saved.
     #[serde(skip, default = "nothing_seen")]
     unseen: Grid<Visibility>,
+    /// The cells off the map in sight at the last look (a street carried on past the
+    /// city's edge); never saved, the world's own record keeps what was seen.
+    #[serde(skip)]
+    beyond: Vec<Pos>,
 }
 
 fn nothing_seen() -> Grid<Visibility> {
@@ -84,6 +88,7 @@ impl Player {
             body: None,
             memory: HashMap::new(),
             unseen: nothing_seen(),
+            beyond: Vec::new(),
         }
     }
 
@@ -218,9 +223,13 @@ impl Player {
     /// Recomputes what the player sees on the current map, demoting old sight to memory.
     /// `sight_bonus` is the character's equipment bonus to the dark radius. On a
     /// physical stratum the cast reaches `LIT_RADIUS` and keeps lit tiles past the dark
-    /// radius; interiors see the plain radius; the Net sees everything.
+    /// radius; interiors see the plain radius; the Net sees everything. Sight goes as
+    /// far as the map reaches: what it sees off the map is `beyond_sight`.
     pub fn update_fov(&mut self, map: &dyn TileMap, sight_bonus: i32) {
+        let mut beyond = std::mem::take(&mut self.beyond);
+        beyond.clear();
         if self.sees_all() {
+            self.beyond = beyond;
             let size = map.size();
             self.memory_for(size)
                 .as_mut_slice()
@@ -242,13 +251,21 @@ impl Player {
             pos,
             cast,
             |p| map.tile(p).is_none_or(|t| t.blocks_sight()),
-            |p| size.contains(p),
+            |p| map.reaches(p),
             |p| {
                 if !lit || sight::lit_or_near(pos, p, dark, |q| map.emitted(q), |q| map.emits(q)) {
-                    grid.set(p, Visibility::Visible);
+                    if size.contains(p) {
+                        grid.set(p, Visibility::Visible);
+                    } else if map.reaches(p) {
+                        beyond.push(p);
+                    }
                 }
             },
         );
+        // the quadrants share their edges
+        beyond.sort_unstable();
+        beyond.dedup();
+        self.beyond = beyond;
     }
 
     /// Paints every tile within `radius` on the current map into memory, walls or not;
@@ -268,6 +285,18 @@ impl Player {
             }
         }
         newly
+    }
+
+    /// The cells off the map in sight at the last look, in the map's frame.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the city screen walks past the edge from #27's next task"
+        )
+    )]
+    pub fn beyond_sight(&self) -> &[Pos] {
+        &self.beyond
     }
 
     /// Visibility grid for the current place.

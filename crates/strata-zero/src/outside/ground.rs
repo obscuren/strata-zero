@@ -30,7 +30,6 @@ pub struct GroundView {
 struct Built {
     cells: Grid<Tile>,
     /// The light it throws on its own, as a city's street bakes it; none on the Net.
-    #[cfg_attr(not(test), expect(dead_code, reason = "lit by the stream from #27"))]
     light: Option<Light>,
 }
 
@@ -162,7 +161,6 @@ impl GroundView {
     /// The light world-wide cell `p` throws on its own, ambient excluded: what burns all
     /// day, and the lamps while `lamps_on`, as a city's street gives it
     /// (`Stratum::emitted`). 0 where it isn't built, and on the Net.
-    #[cfg_attr(not(test), expect(dead_code, reason = "lit by the stream from #27"))]
     pub fn emitted(&self, p: Pos, lamps_on: bool) -> u8 {
         let t = Pos::new(p.x.div_euclid(TILE), p.y.div_euclid(TILE));
         let at = Pos::new(p.x.rem_euclid(TILE), p.y.rem_euclid(TILE));
@@ -293,9 +291,14 @@ pub fn sight(view: &GroundView, at: Pos, minute: u16) -> BTreeSet<Pos> {
 /// Marks `seen` as seen.
 pub fn remember(o: &mut Outside, seen: &BTreeSet<Pos>) {
     for p in seen {
-        let (chunk, bit) = cell_bit(*p);
-        *o.seen.entry(chunk).or_insert(0) |= 1 << bit;
+        remember_cell(o, *p);
     }
+}
+
+/// Marks world-wide cell `p` as seen.
+pub fn remember_cell(o: &mut Outside, p: Pos) {
+    let (chunk, bit) = cell_bit(p);
+    *o.seen.entry(chunk).or_insert(0) |= 1 << bit;
 }
 
 /// Whether world-wide cell `p` has been seen.

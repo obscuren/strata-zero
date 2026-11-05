@@ -796,7 +796,7 @@ pub(crate) mod tests {
     }
 
     /// A run in seed 3's home city on its site, its world made, you on its street.
-    fn home_run() -> AppState {
+    pub(crate) fn home_run() -> AppState {
         let mut st = AppState::new();
         st.enter_city(sited().clone());
         st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
