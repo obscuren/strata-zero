@@ -2622,6 +2622,19 @@ impl MapScreen {
                 return Some(self.start_walk(st, aim));
             }
         }
+        // `W` jacked in on the city's Net: the Net over the world, to look at.
+        if k.code == KeyCode::Char('W')
+            && st
+                .player
+                .as_ref()
+                .is_some_and(|p| p.jacked_in() && p.place == Place::Stratum(StratumKind::Net))
+            && st.city.as_ref().is_some_and(|c| !c.is_lot())
+        {
+            return Some(ScreenCmd::Push {
+                to: Box::new(crate::screens::outside::OutsideScreen::net_from_city(st)),
+                fx: TransitionKind::Glitch,
+            });
+        }
         // `W`: up out of the city onto the overworld, from the open street.
         if k.code == KeyCode::Char('W') {
             return Some(match crate::outside::can_leave(st) {

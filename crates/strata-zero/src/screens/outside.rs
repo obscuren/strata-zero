@@ -43,7 +43,10 @@ pub const KEYS: &[(&str, &str)] = &[
         "enter",
         "down onto the tile you're on · into the city on its tiles",
     ),
-    ("W", "up: from the open ground to the overworld"),
+    (
+        "W",
+        "up: from the open ground to the overworld · jacked in, the Net over it",
+    ),
     ("space", "jack in at a port in reach: a cabinet or a pump"),
     ("J", "jacked in: jack out onto your body"),
     ("s", "save game"),
@@ -62,6 +65,17 @@ pub struct OutsideScreen {
     help: bool,
     /// The map area's size as last drawn, so the ground is built for all of it.
     map: Kept<(u16, u16)>,
+    /// Jacked in, looking up at the Net over the world (look only).
+    pub(crate) net_up: Option<NetUp>,
+    /// The world jacked in, drawn from once it's first looked at.
+    net_atlas: std::cell::OnceCell<crate::render::overworld::NetAtlas>,
+}
+
+/// Looking up at the Net over the world: over which tile, and whether from the city's
+/// map (going back down there closes this screen).
+pub(crate) struct NetUp {
+    pub tile: Pos,
+    from_city: bool,
 }
 
 impl OutsideScreen {
@@ -80,9 +94,78 @@ impl OutsideScreen {
             // a big window's map until the first frame says otherwise, so even the
             // first frame on the ground has nothing still to build
             map: Kept::new((240, 80)),
+            net_up: None,
+            net_atlas: Default::default(),
         };
         s.settle(st);
         s
+    }
+
+    /// Jacked in on the city's Net: the Net over the world, looking up from the city's
+    /// tile you're on (look only; ↵ or esc goes back down to the city's Net).
+    pub fn net_from_city(st: &mut AppState) -> OutsideScreen {
+        crate::outside::ensure(st);
+        let tile = match (st.outside.as_ref(), st.city.as_ref(), st.player.as_ref()) {
+            (Some(o), Some(city), Some(p)) => o.tile_of(city, p.pos),
+            _ => Pos::new(0, 0),
+        };
+        OutsideScreen {
+            view: None,
+            net_view: None,
+            sight: BTreeSet::new(),
+            help: false,
+            map: Kept::new((240, 80)),
+            net_up: Some(NetUp {
+                tile,
+                from_city: true,
+            }),
+            net_atlas: Default::default(),
+        }
+    }
+
+    /// The keys while you look up at the Net over the world.
+    fn net_up_key(&mut self, st: &mut AppState, k: &KeyEvent) -> ScreenCmd {
+        let from_city = self.net_up.as_ref().is_some_and(|u| u.from_city);
+        let down = |s: &mut Self| {
+            if from_city {
+                ScreenCmd::Pop {
+                    fx: TransitionKind::Glitch,
+                }
+            } else {
+                s.net_up = None;
+                ScreenCmd::Stay
+            }
+        };
+        match k.code {
+            KeyCode::Enter | KeyCode::Esc | KeyCode::Char('W') | KeyCode::Char('q') => down(self),
+            KeyCode::Char('J') if from_city => {
+                match crate::net::jack_out(st) {
+                    Ok(()) => st.say("jacked out"),
+                    Err(why) => st.warn(why),
+                }
+                down(self)
+            }
+            KeyCode::Char('J') => {
+                if let Some(o) = st.outside.as_mut() {
+                    o.net = None;
+                }
+                self.net_view = None;
+                self.net_up = None;
+                st.say("jacked out");
+                self.settle(st);
+                ScreenCmd::Stay
+            }
+            KeyCode::Char('?') => {
+                self.help = true;
+                ScreenCmd::Stay
+            }
+            code => {
+                if dir_for(code).is_some() {
+                    st.warn("the Net out there can be looked at, not walked");
+                }
+                ScreenCmd::Stay
+            }
+        }
     }
 
     /// The ground view and what you see, for where you are now.
@@ -146,6 +229,9 @@ impl OutsideScreen {
             self.help = false;
             return ScreenCmd::Stay;
         }
+        if self.net_up.is_some() {
+            return self.net_up_key(st, k);
+        }
         match k.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 return ScreenCmd::Push {
@@ -187,7 +273,15 @@ impl OutsideScreen {
                 st.say("jacked out");
                 self.settle(st);
             }
-            KeyCode::Char('W') if jacked(st) => st.warn("jack out first"),
+            // jacked in out here: look up at the Net over the world
+            KeyCode::Char('W') if jacked(st) => {
+                if let Some(At::Ground(c)) = at {
+                    self.net_up = Some(NetUp {
+                        tile: Pos::new(c.x.div_euclid(TILE), c.y.div_euclid(TILE)),
+                        from_city: false,
+                    });
+                }
+            }
             KeyCode::Enter if matches!(at, Some(At::Overworld(_))) => match moves::down(st) {
                 Ok(Moved::City(cell)) => return Self::into_city(st, cell),
                 Ok(_) => self.settle(st),
@@ -372,10 +466,13 @@ impl OutsideScreen {
 
 impl Screen for OutsideScreen {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
-        // The city's clock runs out here as it does on the map.
-        crate::clock::run(st, Some(1), crate::clock::PATHS_PER_FRAME);
-        // the ground for the view as drawn, and sight as the hour turns
-        self.settle(st);
+        // The city's clock runs out here as it does on the map, but not while you look
+        // up at the Net over the world.
+        if self.net_up.is_none() {
+            crate::clock::run(st, Some(1), crate::clock::PATHS_PER_FRAME);
+            // the ground for the view as drawn, and sight as the hour turns
+            self.settle(st);
+        }
         for k in keys {
             let cmd = self.key(st, k);
             if !matches!(cmd, ScreenCmd::Stay) {
@@ -398,12 +495,24 @@ impl Screen for OutsideScreen {
         let r = layout(area, false);
         self.map.set((r.map.width, r.map.height));
         let buf = f.buffer_mut();
-        match (o.at, o.net) {
-            (At::Ground(c), Some(n)) => self.draw_net(st, c, n, r.map, buf),
-            (At::Ground(c), None) => self.draw_ground(st, o, c, r.map, buf),
-            (At::Overworld(t), _) => draw_world(st, o.world(), t, r.map, buf),
-            (At::City, _) => {}
+        match (o.at, o.net, self.net_up.as_ref()) {
+            (_, _, Some(up)) => {
+                let atlas = self
+                    .net_atlas
+                    .get_or_init(|| crate::render::overworld::NetAtlas::new(o.world()));
+                draw_net_world(st, o.world(), atlas, up.tile, r.map, buf);
+            }
+            (At::Ground(c), Some(n), None) => self.draw_net(st, c, n, r.map, buf),
+            (At::Ground(c), None, None) => self.draw_ground(st, o, c, r.map, buf),
+            (At::Overworld(t), _, None) => draw_world(st, o.world(), t, r.map, buf),
+            (At::City, _, None) => {}
         }
+        let up = self.net_up.is_some();
+        let place = if up {
+            "the Net overworld"
+        } else {
+            where_label(o)
+        };
         // The rules.
         for y in area.y..r.bottom_rule.y {
             if y != r.top_rule.y {
@@ -451,7 +560,7 @@ impl Screen for OutsideScreen {
         for (i, row) in rows.into_iter().enumerate() {
             Paragraph::new(row).render(r.band_l[i + 1], buf);
         }
-        Paragraph::new(hud::location_line(where_label(o), st.clock(), rw)).render(r.band_r[0], buf);
+        Paragraph::new(hud::location_line(place, st.clock(), rw)).render(r.band_r[0], buf);
         Paragraph::new(hud::carry_row(
             ch.weight(&st.content),
             ch.carry_cap(&st.content),
@@ -460,13 +569,13 @@ impl Screen for OutsideScreen {
         .render(r.band_r[1], buf);
         Paragraph::new(hud::exposure_row("", rw)).render(r.band_r[2], buf);
         // The panel: here, the map, what's near, the log.
-        let log_drawn = draw_panel(st, o, r.side, buf);
+        let log_drawn = draw_panel(st, o, up, r.side, buf);
         // The footer.
         let slots = crate::screens::explore::ability_slots(st);
         let footer = hud::Footer {
-            place: where_label(o).to_string(),
+            place: place.to_string(),
             saved: crate::runs::when::marked(st),
-            jacked: o.net.is_some(),
+            jacked: o.net.is_some() || up,
             camera: false,
             overburdened: st.character.overburdened(&st.content),
             trace: None,
@@ -481,7 +590,14 @@ impl Screen for OutsideScreen {
             hollow: true,
             budgets: None,
             acting: None,
-            prompt: Some((String::new(), hint(o).to_string())),
+            prompt: Some((
+                String::new(),
+                if up {
+                    "look only · enter back down · J jack out · ? keys".to_string()
+                } else {
+                    hint(o).to_string()
+                },
+            )),
             act: None,
             flash_pools: false,
         };
@@ -667,19 +783,82 @@ fn hint(o: &Outside) -> &'static str {
     }
 }
 
-/// The overworld tile you're on.
-fn tile_of(o: &Outside) -> Pos {
+/// The overworld tile you're on (in the city, the one its street there lies in).
+fn tile_of(st: &AppState, o: &Outside) -> Pos {
     match o.at {
         At::Overworld(t) => t,
         At::Ground(c) => Pos::new(c.x.div_euclid(TILE), c.y.div_euclid(TILE)),
-        At::City => Pos::new(0, 0),
+        At::City => match (st.city.as_ref(), st.player.as_ref()) {
+            (Some(city), Some(p)) => o.tile_of(city, p.pos),
+            _ => Pos::new(0, 0),
+        },
     }
+}
+
+/// HERE jacked in, looking up: the trunk you're over (or the city's node field, or
+/// the dead grid), and that it's for looking.
+fn net_here_lines(st: &AppState, o: &Outside) -> Vec<Line<'static>> {
+    let w = o.world();
+    let t = tile_of(st, o);
+    let over = match (
+        w.routes.iter().find(|r| r.path.contains(&t)),
+        crate::outside::settlement_at(st, t),
+    ) {
+        (Some(r), _) => format!("{} trunk", r.name),
+        (None, Some(s)) => o.name(s),
+        (None, None) => "dead grid".to_string(),
+    };
+    vec![
+        Line::from(Span::styled(
+            format!(" the Net · {over}"),
+            Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            " the Net overworld · look only".to_string(),
+            Style::default().fg(DIM),
+        )),
+    ]
+}
+
+/// The Net over the world round `t`, as `draw_world` draws the world, `@` on `t`.
+fn draw_net_world(
+    st: &AppState,
+    world: &Overworld,
+    atlas: &crate::render::overworld::NetAtlas,
+    t: Pos,
+    map: Rect,
+    buf: &mut Buffer,
+) {
+    let fit = |at: i32, view: u16, len: u32| {
+        let (view, len) = (view as i32, len as i32);
+        if len > view {
+            (at - view / 2).clamp(0, len - view)
+        } else {
+            (len - view) / 2
+        }
+    };
+    let origin = Pos::new(
+        fit(t.x, map.width, world.size.w),
+        fit(t.y, map.height, world.size.h),
+    );
+    for sy in 0..map.height {
+        for sx in 0..map.width {
+            let p = origin.offset(sx as i32, sy as i32);
+            let cell = if world.tile(p).is_some() {
+                atlas.cell(world, p, &st.style, st.tick)
+            } else {
+                blank()
+            };
+            cell.write(buf, map.x + sx, map.y + sy);
+        }
+    }
+    you(buf, map, origin, t);
 }
 
 /// HERE: the region (or the city) and the road, then the ground and the hour.
 fn here_lines(st: &AppState, o: &Outside) -> Vec<Line<'static>> {
     let w = o.world();
-    let t = tile_of(o);
+    let t = tile_of(st, o);
     let Some(tile) = w.tile(t) else {
         return Vec::new();
     };
@@ -732,7 +911,7 @@ fn here_lines(st: &AppState, o: &Outside) -> Vec<Line<'static>> {
 /// NEAR: the nearest cities and places out here, with how far and which way.
 fn near_lines(st: &AppState, o: &Outside, n: usize) -> Vec<Line<'static>> {
     let w = o.world();
-    let t = tile_of(o);
+    let t = tile_of(st, o);
     // the city whose tiles you stand on is here, whatever its middle's distance
     let in_city = |i: usize| {
         w.tile(t)
@@ -801,7 +980,7 @@ fn bearing(dx: i32, dy: i32) -> &'static str {
 }
 
 /// The panel: HERE, the map, NEAR and the log, each under a rule; whether the log fit.
-fn draw_panel(st: &AppState, o: &Outside, side: Rect, buf: &mut Buffer) -> bool {
+fn draw_panel(st: &AppState, o: &Outside, net_up: bool, side: Rect, buf: &mut Buffer) -> bool {
     if side.width == 0 || side.height < 4 {
         return false;
     }
@@ -826,7 +1005,11 @@ fn draw_panel(st: &AppState, o: &Outside, side: Rect, buf: &mut Buffer) -> bool 
         *y += rows;
     };
     let mut here = vec![title("HERE")];
-    here.extend(here_lines(st, o));
+    if net_up {
+        here.extend(net_here_lines(st, o));
+    } else {
+        here.extend(here_lines(st, o));
+    }
     put(buf, here, &mut y, 3);
     put(buf, vec![rule.clone()], &mut y, 1);
     put(buf, vec![title("MAP")], &mut y, 1);
@@ -834,6 +1017,7 @@ fn draw_panel(st: &AppState, o: &Outside, side: Rect, buf: &mut Buffer) -> bool 
     if map_rows > 0 {
         let pane = Rect::new(side.x + 1, y, w.saturating_sub(2), map_rows);
         match o.at {
+            _ if net_up => world_pane(st, o, pane, buf),
             At::Overworld(_) => world_pane(st, o, pane, buf),
             _ => round_pane(st, o, pane, buf),
         }
@@ -881,7 +1065,7 @@ fn world_pane(st: &AppState, o: &Outside, pane: Rect, buf: &mut Buffer) {
                 .set_style(Style::default().fg(top.to_color()).bg(low.to_color()));
         }
     }
-    let t = tile_of(o);
+    let t = tile_of(st, o);
     let (x, y) = (t.x * pw / ww.max(1), t.y * ph / wh.max(1) / 2);
     if x < pw && y < pane.height as i32 {
         buf[(pane.x + x as u16, pane.y + y as u16)]
@@ -903,7 +1087,7 @@ fn ink(st: &AppState, w: &Overworld, p: Pos) -> Rgb {
 /// The overworld round you in the atlas look, one cell a tile, `@` on your tile.
 fn round_pane(st: &AppState, o: &Outside, pane: Rect, buf: &mut Buffer) {
     let w = o.world();
-    let t = tile_of(o);
+    let t = tile_of(st, o);
     let origin = Pos::new(t.x - pane.width as i32 / 2, t.y - pane.height as i32 / 2);
     for y in 0..pane.height {
         for x in 0..pane.width {
@@ -1374,6 +1558,99 @@ mod tests {
             st.log
                 .recent(st.tick)
                 .is_some_and(|e| e.text.contains("signal"))
+        );
+    }
+
+    #[test]
+    fn w_jacked_in_out_here_looks_up_at_the_net() {
+        let (mut st, mut s) = by_a_pump();
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        let (at, net) = {
+            let o = st.outside.as_ref().unwrap();
+            (o.at, o.net)
+        };
+        let At::Ground(body) = at else { panic!() };
+        s.update(&mut st, &[key(KeyCode::Char('W'))]);
+        let up = s.net_up.as_ref().expect("looking up at the Net");
+        assert_eq!(
+            up.tile,
+            Pos::new(body.x.div_euclid(TILE), body.y.div_euclid(TILE))
+        );
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| s.draw(&st, f)).unwrap();
+        let text = buffer_text(term.backend().buffer());
+        assert!(text.contains("the Net overworld"), "{text}");
+        assert!(
+            crate::render::overworld::HEAVY
+                .iter()
+                .any(|c| text.contains(*c)),
+            "a trunk on the map"
+        );
+        s.update(&mut st, &[key(KeyCode::Enter)]);
+        assert!(s.net_up.is_none());
+        let o = st.outside.as_ref().unwrap();
+        assert_eq!((o.at, o.net), (at, net), "back where you were on the Net");
+    }
+
+    #[test]
+    fn the_net_overworld_is_look_only() {
+        let (mut st, mut s) = by_a_pump();
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        s.update(&mut st, &[key(KeyCode::Char('W'))]);
+        let (net, tick) = (st.outside.as_ref().unwrap().net, st.clock_tick());
+        s.update(&mut st, &[key(KeyCode::Char('l')), key(KeyCode::Char('j'))]);
+        assert_eq!(st.outside.as_ref().unwrap().net, net);
+        assert!(s.net_up.is_some(), "still looking");
+        assert_eq!(st.clock_tick(), tick, "the clock holds while you look");
+        assert!(
+            st.log
+                .iter()
+                .any(|e| e.text.contains("looked at, not walked")),
+            "it says why"
+        );
+    }
+
+    #[test]
+    fn j_from_the_net_overworld_jacks_out() {
+        let (mut st, mut s) = by_a_pump();
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        s.update(&mut st, &[key(KeyCode::Char('W'))]);
+        s.update(&mut st, &[key(KeyCode::Char('J'))]);
+        assert!(s.net_up.is_none());
+        assert!(st.outside.as_ref().unwrap().net.is_none());
+    }
+
+    #[test]
+    fn the_net_overworld_fits_the_smallest_terminal() {
+        let (mut st, mut s) = by_a_pump();
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        s.update(&mut st, &[key(KeyCode::Char('W'))]);
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        term.draw(|f| s.draw(&st, f)).unwrap();
+        let text = buffer_text(term.backend().buffer());
+        assert!(text.contains("look only"), "{text}");
+    }
+
+    #[test]
+    fn w_jacked_in_in_the_city_looks_up_at_the_net() {
+        let (mut st, mut map) = crate::screens::shots::on_the_open_net();
+        let pos = st.player.as_ref().unwrap().pos;
+        let cmd = map.update(&mut st, &[key(KeyCode::Char('W'))]);
+        let ScreenCmd::Push { to: mut up, .. } = cmd else {
+            panic!("W on the city's Net looks up");
+        };
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| up.draw(&st, f)).unwrap();
+        let text = buffer_text(term.backend().buffer());
+        assert!(text.contains("the Net overworld"), "{text}");
+        assert!(matches!(
+            up.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Pop { .. }
+        ));
+        let p = st.player.as_ref().unwrap();
+        assert!(
+            p.jacked_in() && p.pos == pos,
+            "still jacked in where you were"
         );
     }
 

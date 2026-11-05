@@ -193,11 +193,212 @@ fn ground_cell(world: &Overworld, p: Pos, style: &StylePack) -> Cell {
     }
 }
 
+/// Heavy box glyphs by link mask (N 1, E 2, S 4, W 8): the Net's trunks.
+pub const HEAVY: [char; 16] = [
+    '━', '┃', '━', '┗', '┃', '┃', '┏', '┣', '━', '┛', '━', '┻', '┓', '┫', '┳', '╋',
+];
+
+/// The Net's void and its signal colour (the city Net's).
+const NET_VOID: Rgb = Rgb(1, 2, 4);
+const NET_SIGNAL: Rgb = Rgb(0, 255, 200);
+
+/// The world jacked in, round 1's D: trunks down the highways with packets on them,
+/// the cities as node fields in their districts' colours, every POI a node with a spur
+/// to its trunk, the dead grid between. Built once for a world (its spurs and the
+/// trunks' packet stops).
+pub struct NetAtlas {
+    /// Spur cells from each POI to the nearest trunk, with their glyph.
+    pub spurs: std::collections::HashMap<Pos, char>,
+    /// Where along its highway each trunk tile is, for the packets.
+    stops: std::collections::HashMap<Pos, Vec<usize>>,
+}
+
+impl NetAtlas {
+    pub fn new(world: &Overworld) -> NetAtlas {
+        let mut stops: std::collections::HashMap<Pos, Vec<usize>> = Default::default();
+        for r in &world.routes {
+            for (k, p) in r.path.iter().enumerate() {
+                stops.entry(*p).or_default().push(k);
+            }
+        }
+        let mut spurs = std::collections::HashMap::new();
+        for poi in &world.pois {
+            if poi_node(poi.kind).is_none() {
+                continue;
+            }
+            let road = |p: Pos| world.tile(p).is_some_and(|t| t.road != 0);
+            let near = (1..=6i32).find_map(|d| {
+                (-d..=d)
+                    .flat_map(|dx| {
+                        let dy = d - dx.abs();
+                        [poi.at.offset(dx, dy), poi.at.offset(dx, -dy)]
+                    })
+                    .find(|q| road(*q))
+            });
+            let Some(to) = near else { continue };
+            // across to the trunk's column, then along it
+            let mut q = poi.at;
+            while q != to {
+                let across = q.x != to.x;
+                q = if across {
+                    q.offset((to.x - q.x).signum(), 0)
+                } else {
+                    q.offset(0, (to.y - q.y).signum())
+                };
+                if q != to && !road(q) && world.poi_at(q).is_none() {
+                    spurs.insert(q, if across { '┄' } else { '┆' });
+                }
+            }
+        }
+        NetAtlas { spurs, stops }
+    }
+
+    /// Tile `p` jacked in, at game tick `tick` (the packets move along the trunks).
+    pub fn cell(&self, world: &Overworld, p: Pos, style: &StylePack, tick: u64) -> Cell {
+        let Some(t) = world.tile(p) else {
+            return cell(' ', NET_VOID, NET_VOID);
+        };
+        let lattice = p.x % 4 == 0 && p.y % 2 == 0;
+        let wet = matches!(t.water, Water::Sea | Water::Lake);
+        let mut c = if wet {
+            cell(
+                if lattice { '·' } else { ' ' },
+                Rgb(10, 26, 40),
+                Rgb(1, 3, 9),
+            )
+        } else {
+            cell(if lattice { '·' } else { ' ' }, Rgb(15, 51, 48), NET_VOID)
+        };
+        if let Some(u) = t.urban {
+            let v = u.density as f32 / 255.0;
+            let acc = style.theme_or_neutral(Some(u.theme)).accent;
+            let bg = NET_VOID.mix(acc, 0.05 + 0.10 * v);
+            let r = roll(world, p);
+            c = if r < 0.18 + 0.4 * v {
+                let ch = if r < 0.06 * (1.0 + v) {
+                    '◆'
+                } else if r < 0.2 {
+                    '◇'
+                } else {
+                    '▫'
+                };
+                cell(ch, Rgb(26, 74, 72).mix(acc, 0.4 + 0.5 * v), bg)
+            } else {
+                cell('·', NET_VOID.mix(acc, 0.25), bg)
+            };
+        }
+        if let Some(ch) = self.spurs.get(&p) {
+            c.ch = *ch;
+            c.fg = Rgb(42, 106, 96);
+        }
+        if t.road != 0 {
+            let in_city = t.urban.is_some();
+            c.ch = HEAVY[(t.road & 15) as usize];
+            c.fg = if in_city {
+                NET_SIGNAL
+            } else {
+                Rgb(31, 138, 118)
+            };
+            c.bold = in_city;
+            // a packet every 23 tiles, a tile on every few ticks
+            let step = (tick / crate::render::netlook::packets::PACKET_TICKS) as usize;
+            let packet = self
+                .stops
+                .get(&p)
+                .is_some_and(|ks| ks.iter().any(|k| (k + step) % 23 == 7));
+            if packet && !in_city {
+                c.fg = Rgb(200, 255, 240);
+                c.bold = true;
+            }
+        }
+        if let Some(poi) = world.poi_at(p)
+            && let Some((ch, tier)) = poi_node(poi.kind)
+        {
+            c = cell(ch, tier, NET_VOID.mix(tier, 0.18));
+            c.bold = true;
+        }
+        c
+    }
+}
+
+/// A POI's node on the Net and its tier's colour; a camp has none.
+fn poi_node(kind: PoiKind) -> Option<(char, Rgb)> {
+    let open = NET_SIGNAL;
+    let black = Rgb(255, 40, 72);
+    let grey = Rgb(159, 230, 255);
+    Some(match kind {
+        PoiKind::TruckStop | PoiKind::Wreck | PoiKind::Solar => ('◇', grey),
+        PoiKind::Checkpoint | PoiKind::TestRange => ('◈', black),
+        PoiKind::Relay => ('⬡', open),
+        PoiKind::WaterPlant => ('◆', open),
+        PoiKind::Arcology | PoiKind::Rig => ('⌗', grey),
+        PoiKind::Camp => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::render::style::StylePack;
     use citygen::overworld::{Overworld, WorldParams};
+
+    #[test]
+    fn the_net_over_the_world_is_trunks_nodes_and_dead_grid() {
+        // round 1's D: the highways as trunks, cities as node fields, every POI a node
+        // with its spur to a trunk, the dead grid between
+        let w = Overworld::generate(WorldParams {
+            seed: 3,
+            ..Default::default()
+        })
+        .unwrap();
+        let style = StylePack::load().unwrap();
+        let net = NetAtlas::new(&w);
+        let mut trunks = 0;
+        let mut nodes = 0;
+        for (p, t) in w.tiles.iter() {
+            let c = net.cell(&w, p, &style, 0);
+            assert_eq!(
+                unicode_width::UnicodeWidthChar::width(c.ch),
+                Some(1),
+                "{:?} {p:?}",
+                c.ch
+            );
+            if t.road != 0 && w.poi_at(p).is_none() {
+                assert!(HEAVY.contains(&c.ch), "a trunk at {p:?}: {:?}", c.ch);
+                trunks += 1;
+            }
+            if t.urban.is_some() && t.road == 0 && matches!(c.ch, '◆' | '◇' | '▫') {
+                nodes += 1;
+            }
+        }
+        assert!(
+            trunks > 100 && nodes > 20,
+            "{trunks} trunk tiles, {nodes} city nodes"
+        );
+        for poi in &w.pois {
+            let c = net.cell(&w, poi.at, &style, 0);
+            if poi.kind != PoiKind::Camp {
+                assert!(c.bold && c.ch != '·', "{:?} at {:?}", poi.kind, poi.at);
+            }
+        }
+        assert!(!net.spurs.is_empty(), "spurs from the POIs to the trunks");
+        // the dead grid: a lattice dot on bare ground
+        let bare = w
+            .tiles
+            .iter()
+            .find(|(p, t)| {
+                t.road == 0
+                    && t.urban.is_none()
+                    && t.water == Water::None
+                    && p.x % 4 == 0
+                    && p.y % 2 == 0
+                    && w.poi_at(*p).is_none()
+                    && !net.spurs.contains_key(p)
+            })
+            .map(|(p, _)| p)
+            .unwrap();
+        assert_eq!(net.cell(&w, bare, &style, 0).ch, '·');
+    }
 
     #[test]
     fn every_kind_of_tile_draws_one_cell() {
