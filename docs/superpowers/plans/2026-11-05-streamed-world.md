@@ -292,3 +292,14 @@ From Jeff's first play (spec, "After the first play"): another city's Net reads 
 
 - [ ] Test `a_city_looks_the_same_from_outside_and_inside`: for every settlement of seed 3's world, at noon, dusk and midnight, draw a patch of its cells from the ground beside it (held), then hand over and draw the same world cells at the same minute (live, with the same sight): every cell's glyph, foreground and background equal, people aside. Also the home city set aside vs live.
 - [ ] Fix every difference at its cause (sight, light, lamps, the minute, the theme); five checks; shots by night beside and inside a neighbour; commit `render: a city looks the same from outside and inside`.
+
+### Task 14: One set of rules everywhere
+
+From Jeff's play: after travelling to another city (↵ down from the overworld into it, or walking in), terminals (and likely other objects) have no collision; the overworld has no dev commands; the overworld's hint line ("arrows walk · enter goes down …") should go. Principle: no discrepancy between areas or layers — the open ground, the live city, a held city, the Net, however you got there (walked in, ↵ down, Net handover, a reopened run).
+
+**Files:** found by the tests; `crates/strata-zero/src/screens/outside.rs` (hints, dev keys), `crates/strata-zero/src/screens/explore.rs`, `crates/strata-zero/src/outside/`
+
+- [ ] Test `every_object_blocks_the_same_everywhere`: for each way into a city (walked in across the line, ↵ down from the overworld onto its tile, a Net handover then jack out, a run saved and reopened there) and for the open ground and a held city seen from outside: stepping into each blocking kind present (wall, terminal, vending machine, furniture, a construct's wall on the Net, a lamp post or any feature the city blocks on) is refused exactly as in the home city at start; walking onto open cells moves you. Fix every difference at its cause.
+- [ ] Test `the_overworld_takes_dev_commands`: with dev unlocked, the console (and every dev key the map screen has that makes sense without a street: the console, the inspector of the tile, teleport/jump) opens on the overworld and the Net overworld; locked, they don't.
+- [ ] The overworld's and the Net overworld's hint lines go entirely (the `?` help stays); test that the drawn screen holds no hint line.
+- [ ] Five checks; commit `outside: one set of rules on every map`.
