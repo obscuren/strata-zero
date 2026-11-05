@@ -213,6 +213,9 @@ pub(crate) fn dir_for(code: KeyCode) -> Option<Dir> {
     })
 }
 
+/// NEAR's places in HERE off the city's cells.
+const NEAR_ROWS: usize = 4;
+
 /// Whether `place`'s map carries on past the city's edge: the street and the Net, with a
 /// world out there.
 fn carries_on(st: &AppState, place: Place) -> bool {
@@ -259,17 +262,125 @@ fn look(st: &mut AppState) {
     crate::outside::stream::remember_sight(st);
 }
 
+/// How far round you sight may reach on your place's map at its brightest: the stream
+/// is built that far before you look.
+fn sight_reach(st: &AppState, p: &Player) -> i32 {
+    (p.radius_at(1.0) + st.sight_bonus().max(0)).max(citygen::lighting::tuning::LIT_RADIUS) + 1
+}
+
+/// You look round where you've been put (down from the overworld, in from it): the
+/// ground in reach of your sight built first where the street carries on.
+pub(crate) fn look_round(st: &mut AppState) {
+    if let Some(p) = st.player.as_ref()
+        && carries_on(st, p.place)
+    {
+        let r = sight_reach(st, p);
+        let area = TileRect::new(p.pos.x - r, p.pos.y - r, 2 * r + 1, 2 * r + 1);
+        crate::outside::stream::tend(st, area);
+    }
+    look(st);
+}
+
 /// Whether a step `dir` from where you stand on a stratum lands on ground you can stand
 /// on, past the city's edge where the map goes on.
 fn open_step(st: &AppState, dir: Dir) -> bool {
-    let (Some(p), Some(city)) = (st.player.as_ref(), st.city.as_ref()) else {
+    st.player
+        .as_ref()
+        .is_some_and(|p| open_at(st, p.place, p.pos.step(dir)))
+}
+
+/// Whether `to` on stratum `place` is ground you can stand on, past the city's edge where
+/// the map goes on.
+fn open_at(st: &AppState, place: Place, to: Pos) -> bool {
+    let Some(city) = st.city.as_ref() else {
         return false;
     };
-    if p.place.stratum().is_none() {
+    if place.stratum().is_none() {
         return false;
     }
     let beyond = Beyond::of(st);
-    walked_map(st, city, p.place, beyond.as_ref()).walkable(p.pos.step(dir))
+    walked_map(st, city, place, beyond.as_ref()).walkable(to)
+}
+
+/// Why a step on foot from `from` to `to` on the street may not cross the edge of the
+/// cells the city owns now (a fight, a call, a scene); `None` when it may, or when it
+/// doesn't cross. The Net self walks off freely.
+fn crossing_refused(st: &AppState, from: Pos, to: Pos) -> Option<&'static str> {
+    let p = st.player.as_ref()?;
+    let crossing = p.place.is_street()
+        && !p.jacked_in()
+        && crate::outside::stream::live_owns(st, from)
+        && !crate::outside::stream::live_owns(st, to);
+    if !crossing {
+        return None;
+    }
+    crate::outside::can_cross(st).err()
+}
+
+/// After a step on the street off the cells the city owns, or back onto them: at the
+/// MAP's mark, it goes.
+fn stepped_outside(st: &mut AppState, from: Pos) {
+    let Some(p) = st.player.as_ref() else {
+        return;
+    };
+    let off = |q: Pos| !crate::outside::stream::live_owns(st, q);
+    if p.place.is_street() && !p.jacked_in() && (off(from) || off(p.pos)) {
+        crate::outside::reached_mark(st);
+    }
+}
+
+/// Space on the open ground, off the cells the city owns: jacked in at a port in reach
+/// (a terminal or a vending machine on your cell or beside it, whoever's ground it is),
+/// your Net self on the nearest cell of the Net with signal within 8, your body left
+/// where it stands. Refused, with the word why, as the city's ports refuse.
+fn jack_in_on_the_ground(st: &mut AppState) {
+    use citygen::{Feature, Furniture, Terrain};
+    let Some((place, pos)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
+        return;
+    };
+    if crate::net::engaged_on_foot(st) {
+        st.warn("not with a gun on you");
+        return;
+    }
+    let start = {
+        let (Some(city), Some(beyond)) = (st.city.as_ref(), Beyond::of(st)) else {
+            return;
+        };
+        let street = walked_map(st, city, place, Some(&beyond));
+        let port = std::iter::once(pos).chain(pos.neighbors8()).any(|q| {
+            street.tile(q).is_some_and(|t| {
+                matches!(
+                    t.feature,
+                    Some(Feature::Terminal) | Some(Feature::Furniture(Furniture::Vending))
+                )
+            })
+        });
+        if !port {
+            st.warn("no port in reach");
+            return;
+        }
+        if let Some(left) = st.net.cooling(st.net.now(st)) {
+            st.warn(format!("deck cooling · {left} min"));
+            return;
+        }
+        let net = walked_map(st, city, Place::Stratum(StratumKind::Net), Some(&beyond));
+        crate::outside::nearest(pos, 8, |q| {
+            net.tile(q)
+                .is_some_and(|t| t.is_walkable() && t.terrain != Terrain::Void)
+        })
+    };
+    let Some(start) = start else {
+        st.warn("no signal here");
+        return;
+    };
+    if let Some(p) = st.player.as_mut() {
+        p.body = Some((place, pos));
+        p.place = Place::Stratum(StratumKind::Net);
+        p.pos = start;
+    }
+    look(st);
+    crate::net::after_jack_in(st, place, None);
+    st.say("jacked in · the open Net");
 }
 
 /// One step `dir` over the map you stand on (past the city's edge where it goes on), and
@@ -278,6 +389,7 @@ fn step(st: &mut AppState, dir: Dir) -> bool {
     let Some(mut p) = st.player.take() else {
         return false;
     };
+    let from = p.pos;
     let moved = st.city.as_ref().is_some_and(|city| {
         let beyond = Beyond::of(st);
         p.try_move(&walked_map(st, city, p.place, beyond.as_ref()), dir)
@@ -285,6 +397,7 @@ fn step(st: &mut AppState, dir: Dir) -> bool {
     st.player = Some(p);
     if moved {
         look(st);
+        stepped_outside(st, from);
     }
     moved
 }
@@ -2297,9 +2410,7 @@ impl MapScreen {
         let you = st.player.as_ref().filter(|p| p.place == self.place);
         let here = you.is_some();
         if let Some(p) = you {
-            let r = (p.radius_at(1.0) + st.sight_bonus().max(0))
-                .max(citygen::lighting::tuning::LIT_RADIUS)
-                + 1;
+            let r = sight_reach(st, p);
             lo = Pos::new(lo.x.min(p.pos.x - r), lo.y.min(p.pos.y - r));
             hi = Pos::new(hi.x.max(p.pos.x + r + 1), hi.y.max(p.pos.y + r + 1));
         }
@@ -2348,12 +2459,20 @@ impl MapScreen {
     fn street_path(&self, st: &AppState, from: Pos, to: Pos) -> Option<Vec<Pos>> {
         let city = st.city.as_ref()?;
         let place = st.player.as_ref()?.place;
-        let k = place.stratum()?;
+        place.stratum()?;
         if from == to {
             return Some(Vec::new());
         }
-        let path = citygen::pathing::astar(city.size, from, to, |_, step| {
-            (city.walkable(k, step) && crate::foes::foe_at(st, place, step).is_none()).then_some(1)
+        // over the street past the city's edge too, but not across it while something
+        // holds you in the city
+        let beyond = Beyond::of(st);
+        let map = walked_map(st, city, place, beyond.as_ref());
+        let area = crate::outside::stream::path_area(city.size, from, to);
+        let path = crate::outside::stream::path_within(area, from, to, |at, step| {
+            (map.walkable(step)
+                && crate::foes::foe_at(st, place, step).is_none()
+                && crossing_refused(st, at, step).is_none())
+            .then_some(1)
         })?;
         Some(path.into_iter().filter(|p| *p != from).collect())
     }
@@ -2417,10 +2536,13 @@ impl MapScreen {
             self.walking = None;
             return;
         };
+        if let Some(why) = crossing_refused(st, here, next) {
+            self.walking = None;
+            st.warn(why);
+            return;
+        }
         let open = here.chebyshev(next) <= 1
-            && place
-                .stratum()
-                .is_some_and(|k| st.city.as_ref().is_some_and(|c| c.walkable(k, next)))
+            && open_at(st, place, next)
             && crate::foes::foe_at(st, place, next).is_none();
         if !open {
             self.walking = None;
@@ -2436,6 +2558,7 @@ impl MapScreen {
             player.pos = next;
         }
         look(st);
+        stepped_outside(st, here);
         let now = st.clock_tick();
         if let Some(w) = self.walking.as_mut() {
             w.path.remove(0);
@@ -2576,16 +2699,11 @@ impl MapScreen {
     /// something holds you in the city (a fight, a call, a scene): refused, with the word
     /// why. `None` when the step may go on (the Net self walks off freely).
     fn off_the_edge(&mut self, st: &mut AppState, dir: Dir) -> Option<ScreenCmd> {
-        let p = st.player.as_ref()?;
-        let to = p.pos.step(dir);
-        let crossing = p.place.is_street()
-            && !p.jacked_in()
-            && crate::outside::stream::live_owns(st, p.pos)
-            && !crate::outside::stream::live_owns(st, to);
-        if !crossing || !open_step(st, dir) {
+        let from = st.player.as_ref()?.pos;
+        let why = crossing_refused(st, from, from.step(dir))?;
+        if !open_step(st, dir) {
             return None;
         }
-        let why = crate::outside::can_cross(st).err()?;
         st.warn(why);
         Some(ScreenCmd::Stay)
     }
@@ -2630,6 +2748,17 @@ impl MapScreen {
             if crate::net::stay(st) {
                 self.aim = None;
                 st.say("staying put · act");
+                return Some(ScreenCmd::Stay);
+            }
+            // Off the city's cells on foot: the open ground's ports.
+            if !jacked
+                && st.player.as_ref().is_some_and(|p| {
+                    p.place.is_street()
+                        && carries_on(st, p.place)
+                        && !crate::outside::stream::live_owns(st, p.pos)
+                })
+            {
+                jack_in_on_the_ground(st);
                 return Some(ScreenCmd::Stay);
             }
             // A run in flight: space rolls it, an action point in a fight, the next
@@ -3535,6 +3664,7 @@ impl Screen for MapScreen {
             content: &st.content,
             foes: &st.foes,
             vis,
+            beyond: st.player.as_ref().map_or(&[], |p| p.beyond_sight()),
             now: st.clock_tick(),
         };
         overlays.push(&bots);
@@ -4115,6 +4245,25 @@ impl Screen for MapScreen {
                 _ => None,
             },
             port: crate::net::port_of(st),
+            outside: match st.player.as_ref() {
+                Some(p)
+                    if p.place == self.place
+                        && beyond.as_ref().is_some_and(|b| !b.live_owns(p.pos)) =>
+                {
+                    match self.place {
+                        Place::Stratum(StratumKind::Net) => {
+                            crate::outside::here::net_here_lines(st)
+                        }
+                        _ => {
+                            let mut l = crate::outside::here::here_lines(st);
+                            l.extend(crate::outside::here::near_lines(st, NEAR_ROWS));
+                            l
+                        }
+                    }
+                }
+                _ => Vec::new(),
+            },
+            beyond: beyond.as_ref(),
             ice_lines: match (self.place, st.player.as_ref()) {
                 (Place::Construct(b), Some(p)) if p.place == self.place => {
                     let vis = p.vis();
@@ -14761,6 +14910,251 @@ mod tests {
             let city_drawn = pass(&MapRef::stratum_at(city, street, minute), origin);
             assert_eq!(buf[(sx, sy)], town_drawn, "the town's");
             assert_ne!(buf[(sx, sy)], city_drawn);
+        }
+
+        /// The text of the sidebar's column, right of the map.
+        fn side_text(s: &MapScreen, buf: &ratatui::buffer::Buffer) -> String {
+            let x0 = s.last_map.get().right() + 1;
+            let mut out = String::new();
+            for y in buf.area.y..buf.area.bottom() {
+                for x in x0..buf.area.right() {
+                    out.push_str(buf[(x, y)].symbol());
+                }
+                out.push('\n');
+            }
+            out
+        }
+
+        #[test]
+        fn here_off_the_map_names_the_place_and_the_road() {
+            let (mut st, mut s, _, d) = at_the_edge(4);
+            for _ in 0..4 {
+                s.update(&mut st, &[key(dir_key(d))]);
+            }
+            assert!(off_the_map(&st, you(&st)));
+            draw_buffer(&s, &st, 120, 40);
+            let buf = draw_buffer(&s, &st, 120, 40);
+            let side = side_text(&s, &buf);
+            assert!(side.contains("open ground ·"), "{side}");
+            let o = st.outside.as_ref().unwrap();
+            let w = o.world();
+            let t = crate::outside::here::tile(&st).unwrap();
+            let named = match w.routes.iter().find(|r| r.path.contains(&t)) {
+                Some(r) => side.contains(&r.name),
+                None => {
+                    w.regions.iter().any(|r| side.contains(&r.name))
+                        || w.cities.iter().any(|c| side.contains(&c.name))
+                }
+            };
+            assert!(named, "the tile's road or region: {side}");
+            // and on its own street, the city's HERE
+            for _ in 0..4 {
+                s.update(&mut st, &[key(dir_key(d.opposite()))]);
+            }
+            let buf = draw_buffer(&s, &st, 120, 40);
+            assert!(!side_text(&s, &buf).contains("open ground ·"));
+        }
+
+        #[test]
+        fn a_bot_follows_you_onto_the_ground() {
+            let (mut st, mut s, _, d) = at_the_edge(10);
+            st.character = game::Character::debug_runner(&st.content);
+            crate::bots::sync(&mut st);
+            assert!(
+                st.bots.first().is_some_and(|b| b.pos.is_some()),
+                "a bot out"
+            );
+            for _ in 0..10 {
+                s.update(&mut st, &[key(dir_key(d))]);
+                for _ in 0..8 {
+                    st.tick += 1;
+                    s.update(&mut st, &[]);
+                }
+            }
+            let me = you(&st);
+            assert!(off_the_map(&st, me));
+            let b = &st.bots[0];
+            assert_eq!(b.place, Place::Stratum(StratumKind::Street));
+            let at = b.pos.expect("the bot is out there with you");
+            assert!(
+                at.chebyshev(me) <= crate::bots::LEASH,
+                "the bot at {at:?}, you at {me:?}"
+            );
+            // and drawn where it is
+            let buf = draw_buffer(&s, &st, 120, 40);
+            let area = s.last_map.get();
+            let origin = s.cam.origin(area.width, area.height);
+            let (sx, sy) = tile_to_screen(area, origin, at).expect("in view");
+            let frames = &crate::bots::spec(&st, 0).unwrap().frames;
+            assert!(
+                frames
+                    .iter()
+                    .any(|f| buf[(sx, sy)].symbol() == f.to_string()),
+                "{:?} isn't the bot",
+                buf[(sx, sy)].symbol()
+            );
+        }
+
+        #[test]
+        fn nothing_is_dropped_on_the_open_ground() {
+            let (mut st, mut s, _, d) = at_the_edge(1);
+            s.update(&mut st, &[key(dir_key(d))]);
+            assert!(off_the_map(&st, you(&st)));
+            let stim = ItemId::new("stim_patch");
+            st.character.give_item(&st.content, stim.clone(), 2);
+            let held = st.character.count(&stim);
+            let drop = || game::Action::Drop {
+                item: stim.clone(),
+                qty: 1,
+            };
+            assert_eq!(
+                crate::actions::perform(&mut st, drop()),
+                Err("nowhere to leave it out here".to_string())
+            );
+            assert_eq!(st.character.count(&stim), held, "the item kept");
+            let (place, pos) = player(&st);
+            assert!(st.ground.at(place, pos).is_empty());
+            // on the city's own street it goes down
+            s.update(&mut st, &[key(dir_key(d.opposite()))]);
+            assert!(crate::actions::perform(&mut st, drop()).is_ok());
+            assert_eq!(st.character.count(&stim), held - 1);
+        }
+
+        #[test]
+        fn the_ground_is_built_ahead_of_the_view() {
+            let (mut st, mut s, _, d) = at_the_edge(10);
+            draw_buffer(&s, &st, 200, 60);
+            let w = st.outside.as_ref().unwrap().world().clone();
+            let world = TileRect::new(0, 0, TILE * w.size.w as i32, TILE * w.size.h as i32);
+            for step in 0..10 {
+                s.update(&mut st, &[]);
+                let area = s.last_map.get();
+                let origin = s.cam.origin(area.width, area.height);
+                let b = Beyond::of(&st).unwrap();
+                for p in
+                    TileRect::new(origin.x, origin.y, area.width as i32, area.height as i32).iter()
+                {
+                    if !world.contains(b.origin().offset(p.x, p.y)) {
+                        continue;
+                    }
+                    if let Some(Owner::Ground(stream, at)) = b.elsewhere(p) {
+                        assert!(
+                            stream.street.tile(at).is_some(),
+                            "step {step}: {p:?} not built"
+                        );
+                    }
+                }
+                s.update(&mut st, &[key(dir_key(d))]);
+                draw_buffer(&s, &st, 200, 60);
+            }
+        }
+
+        #[test]
+        fn the_ground_underfoot_is_the_worlds_and_water_stops_you() {
+            use citygen::Terrain;
+            use citygen::overworld::detail;
+            let (mut st, mut s, _, d) = at_the_edge(10);
+            let w = st.outside.as_ref().unwrap().world().clone();
+            let cell = |st: &AppState, p: Pos| {
+                let c = Beyond::of(st).unwrap().origin().offset(p.x, p.y);
+                detail::region(&w, c.x, c.y, 1, 1)[Pos::new(0, 0)]
+            };
+            for _ in 0..10 {
+                s.update(&mut st, &[key(dir_key(d))]);
+                let here = you(&st);
+                let city = st.city.as_ref().unwrap();
+                let b = Beyond::of(&st).unwrap();
+                let map = MapRef::stratum_of(city, StratumKind::Street).beyond(&b);
+                let (got, want) = (*map.tile(here).unwrap(), cell(&st, here));
+                assert_eq!((got.terrain, got.variant), (want.terrain, want.variant));
+            }
+            // somewhere on the ground beside deep water: the step in is refused
+            let here = you(&st);
+            crate::outside::stream::tend(
+                &mut st,
+                TileRect::new(here.x - 160, here.y - 160, 321, 321),
+            );
+            let wet = |t: &citygen::Tile| matches!(t.terrain, Terrain::Water | Terrain::Shallows);
+            let (from, dir) = {
+                let city = st.city.as_ref().unwrap();
+                let b = Beyond::of(&st).unwrap();
+                let map = MapRef::stratum_of(city, StratumKind::Street).beyond(&b);
+                TileRect::new(here.x - 150, here.y - 150, 301, 301)
+                    .iter()
+                    .filter(|p| !b.live_owns(*p) && map.walkable(*p))
+                    .flat_map(|p| [Dir::N, Dir::E, Dir::S, Dir::W].map(|d| (p, d)))
+                    .find(|(p, d)| {
+                        !b.live_owns(p.step(*d)) && map.tile(p.step(*d)).is_some_and(wet)
+                    })
+                    .expect("water near the edge")
+            };
+            stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), from);
+            s.update(&mut st, &[key(dir_key(dir))]);
+            assert_eq!(you(&st), from, "too deep to wade");
+        }
+
+        #[test]
+        fn an_aimed_walk_goes_over_the_ground() {
+            let (mut st, mut s, _, d) = at_the_edge(6);
+            for _ in 0..3 {
+                s.update(&mut st, &[key(dir_key(d))]);
+            }
+            let from = you(&st);
+            assert!(off_the_map(&st, from));
+            crate::net::engage(&mut st, Place::Stratum(StratumKind::Street), true);
+            s.update(&mut st, &[key(KeyCode::Char('g'))]);
+            s.update(&mut st, &[key(dir_key(d)), key(dir_key(d))]);
+            assert_eq!(s.aim, Some(from.step(d).step(d)), "the aim on the ground");
+            s.update(&mut st, &[key(KeyCode::Enter)]);
+            walk_tick(&mut st, &mut s);
+            walk_tick(&mut st, &mut s);
+            assert_eq!(you(&st), from.step(d).step(d));
+        }
+
+        #[test]
+        fn an_aimed_walk_keeps_to_the_city_in_a_fight() {
+            let (mut st, mut s, e, d) = at_the_edge(2);
+            crate::net::engage(&mut st, Place::Stratum(StratumKind::Street), true);
+            // the aim doesn't reach across the city's edge
+            s.update(&mut st, &[key(KeyCode::Char('g'))]);
+            s.update(&mut st, &[key(dir_key(d))]);
+            assert_eq!(s.aim, Some(e), "the aim stays on the city's side");
+            // nor does a walk step over it
+            s.aim = None;
+            s.walking = Some(Walk {
+                path: vec![e.step(d)],
+                next_at: 0,
+            });
+            walk_tick(&mut st, &mut s);
+            assert_eq!(you(&st), e);
+            assert!(logged(&st, "not in a fight"));
+        }
+
+        #[test]
+        fn reaching_the_mark_on_the_ground_clears_it() {
+            let (mut st, mut s, e, d) = at_the_edge(2);
+            let (dx, dy) = d.delta();
+            let far = e.offset(2 * dx, 2 * dy);
+            let o = st.outside.as_mut().unwrap();
+            let city = st.city.as_ref().unwrap();
+            let tile = o.tile_of(city, far.offset(3 * TILE * dx, 3 * TILE * dy));
+            o.mark = Some(crate::outside::Mark {
+                tile,
+                name: "the old relay".into(),
+            });
+            s.update(&mut st, &[key(dir_key(d))]);
+            assert!(st.outside.as_ref().unwrap().mark.is_some(), "not there yet");
+            st.outside.as_mut().unwrap().mark = Some(crate::outside::Mark {
+                tile: st
+                    .outside
+                    .as_ref()
+                    .unwrap()
+                    .tile_of(st.city.as_ref().unwrap(), far),
+                name: "the old relay".into(),
+            });
+            s.update(&mut st, &[key(dir_key(d))]);
+            assert!(st.outside.as_ref().unwrap().mark.is_none());
+            assert!(logged(&st, "you're at the old relay"));
         }
 
         #[test]

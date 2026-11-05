@@ -1,6 +1,7 @@
 //! The sidebar beside the map: toggleable panes sharing one column.
 
 use crate::messages::{Entry, Kind, MessageLog};
+use crate::outside::stream::Beyond;
 use crate::render::glyphs::kind_icon;
 use crate::render::map::{MapRef, TileMap};
 use crate::render::minimap::Minimap;
@@ -209,6 +210,12 @@ pub struct SidebarView<'a> {
     /// How many of `jobs`' leading lines are the story's: they add their rows to the
     /// pane's cap, so the job in hand keeps its own.
     pub story_lines: usize,
+    /// Off the cells the city owns: HERE's words for where you are in the world (the
+    /// place and the road, and NEAR; jacked in, what the Net is over), from
+    /// `outside::here`. Empty on the city's own cells.
+    pub outside: Vec<Line<'static>>,
+    /// What lies past the city's edge outdoors, for the MAP's close up only.
+    pub beyond: Option<&'a Beyond<'a>>,
 }
 
 fn plain(text: impl Into<String>) -> Line<'static> {
@@ -240,7 +247,7 @@ fn on_the_net(v: &SidebarView) -> bool {
 pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
     let city = v.map.city();
     let mut out = v.card.clone();
-    if out.is_empty() && v.map.stratum() == Some(StratumKind::Net) {
+    if out.is_empty() && v.map.stratum() == Some(StratumKind::Net) && v.outside.is_empty() {
         out.push(dim(" open grid"));
     }
     if let citygen::Place::Construct(b) = v.map.place() {
@@ -267,6 +274,11 @@ pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
             format!(" {line}"),
             Style::default().fg(colour),
         )));
+    }
+    // Off the city's cells nothing of its own is here: where you are in the world.
+    if !v.outside.is_empty() {
+        out.extend(v.outside.iter().cloned());
+        return out;
     }
     if let citygen::Place::Construct(_) = v.map.place() {
         if let Some(t) = v.map.tile(v.focus) {
@@ -557,6 +569,7 @@ pub fn draw(v: &SidebarView, flags: &Sidebar, area: Rect, buf: &mut Buffer) -> V
                 track: &v.track,
                 tracked: v.tracked,
                 port: v.port,
+                beyond: v.beyond,
             }
             .render(content, buf),
             Section::Log => draw_log(v.log, v.tick, content, buf),
@@ -622,6 +635,8 @@ mod tests {
             port: None,
             jobs: crate::missions::ui::jobs_pane(st),
             story_lines: crate::missions::ui::story_line_count(st),
+            outside: Vec::new(),
+            beyond: None,
         }
     }
 

@@ -42,14 +42,18 @@ itself, `world`, is `#[serde(skip)]` and made again from them by `outside::reope
 (`visited`) and the place marked on the MAP (`mark`). `built` (the other cities' maps this
 session) and `blocks` (the settlements' blocks) are caches made again when first needed.
 The open ground's tiles are never saved: the seed makes them again, the same every time,
-and nothing the player does changes them yet. Jacked in out there (`net`) isn't saved:
-a run reopened there wakes on the body.
+and nothing the player does changes them yet.
 
-The street carries on past the city's edge, so a run saved out on the open ground on foot is
-`At::City` with the player off the city's map (its position in the city's frame, past its
-edge). A run saved at `At::Ground` (the outside screen's ground) opens on the street at that
-cell, its body there and not jacked in (`outside::reopened`); if the ground there is gone,
-back in the city as before.
+The street carries on past the city's edge and the open ground is walked on the city
+screen, so a run saved out on the open ground is `At::City` with the player off the city's
+cells (its position in the city's frame, past its edge), on foot or jacked in with the body
+there; it reopens as it was, jacked in too. `outside::reopened` checks that the cell can
+still be stood on (the world under a saved run can change between builds until 1.0): a
+body or a player on foot whose ground is gone is put back on the city's own street nearest
+it, a Net self whose cell is gone wakes on the body, each with a warning. A run saved at
+`At::Ground` (the outside screen's ground, before) opens on the street at that cell, its
+body there and not jacked in; if the ground there is gone, back in the city as before.
+Nothing lies on the open ground: items can't be dropped off the city's cells.
 
 In another city of the world the home city is set aside whole in `st.away`
 (`outside::Stay`: the city, its people, interiors, constructs, the Net's state, the

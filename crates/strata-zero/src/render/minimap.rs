@@ -2,6 +2,7 @@
 //! floor you are on indoors, and a bottom row that says where you are and where the
 //! track goes. Spec `docs/superpowers/specs/2026-11-02-minimap-design.md`.
 
+use crate::outside::stream::Beyond;
 use crate::render::Rgb;
 use crate::render::map::{ConstructMap, FloorMap, MapRef, StratumMap};
 use crate::render::mappix::{Pixels, PlanColours, paint, plan_px, stratum_px};
@@ -42,6 +43,9 @@ pub struct Minimap<'a> {
     pub tracked: Option<citygen::BuildingId>,
     /// On the Net: the tile you jacked in at.
     pub port: Option<Pos>,
+    /// What lies past the city's edge, outdoors: the close up draws the cells the city
+    /// doesn't own from the area that does.
+    pub beyond: Option<&'a Beyond<'a>>,
 }
 
 /// Where a map is drawn: its cells, the tiles a pixel covers and the tile at its
@@ -277,19 +281,7 @@ impl Minimap<'_> {
         let net = m.stratum == StratumKind::Net;
         let mut px = Pixels::new(area.width as i32, 2 * area.height as i32, |x, y| {
             let (x0, y0) = (v.origin.x + x * CLOSE, v.origin.y + y * CLOSE);
-            if net {
-                crate::render::netlook::mini::net_px(
-                    m.city,
-                    self.style,
-                    x0,
-                    y0,
-                    CLOSE,
-                    self.tracked,
-                )
-                .unwrap_or(ground)
-            } else {
-                stratum_px(m.city, self.style, m.stratum, x0, y0, CLOSE).unwrap_or(ground)
-            }
+            self.close_px(m, x0, y0).unwrap_or(ground)
         });
         glow_walk(&mut px, &v, self.track.walk);
         paint(buf, area, &px);
@@ -308,6 +300,43 @@ impl Minimap<'_> {
             }
         }
         self.marks(buf, &px, &v);
+    }
+
+    /// The close up's pixel at tile (`x0`, `y0`): from the city's own map on its cells;
+    /// past its edge, from the area whose cell the pixel's middle is (another city's or
+    /// town's map, else the open ground), each read with its own city's ids.
+    fn close_px(&self, m: &StratumMap, x0: i32, y0: i32) -> Option<Rgb> {
+        use crate::outside::stream::{GroundMap, Owner};
+        use crate::render::mappix::tiles_px;
+        use crate::render::netlook::mini::{net_px, net_tiles_px};
+        let net = m.stratum == StratumKind::Net;
+        let mid = Pos::new(x0 + CLOSE / 2, y0 + CLOSE / 2);
+        match self.beyond.and_then(|b| b.elsewhere(mid)) {
+            None if net => net_px(m.city, self.style, x0, y0, CLOSE, self.tracked),
+            None => stratum_px(m.city, self.style, m.stratum, x0, y0, CLOSE),
+            Some(Owner::City(city, q)) => {
+                let (x, y) = (x0 + q.x - mid.x, y0 + q.y - mid.y);
+                if net {
+                    net_px(city, self.style, x, y, CLOSE, None)
+                } else {
+                    stratum_px(city, self.style, m.stratum, x, y, CLOSE)
+                }
+            }
+            Some(Owner::Ground(stream, at)) => {
+                let (x, y) = (x0 + at.x - mid.x, y0 + at.y - mid.y);
+                let ground = GroundMap {
+                    stream,
+                    layer: m.stratum,
+                    minute: m.minute,
+                };
+                let tile = |p: Pos| ground.cell(p);
+                if net {
+                    net_tiles_px(&tile, None, self.style, x, y, CLOSE, None)
+                } else {
+                    tiles_px(&tile, None, self.style, x, y, CLOSE)
+                }
+            }
+        }
     }
 
     /// A plan in `area`: the whole of it at 2 or 3 tiles a pixel, or round you when it
@@ -495,6 +524,14 @@ impl Minimap<'_> {
     fn here(&self) -> Vec<Span<'static>> {
         let dim = |t: String| Span::styled(t, Style::default().fg(DIM));
         match self.map {
+            MapRef::Stratum(m) if self.beyond.is_some_and(|b| !b.live_owns(self.focus())) => {
+                let label = if m.stratum == StratumKind::Net {
+                    "the open Net"
+                } else {
+                    "open ground"
+                };
+                vec![dim(label.to_string())]
+            }
             MapRef::Stratum(m) => {
                 let city = m.city;
                 let district = city
@@ -645,6 +682,7 @@ mod tests {
         Minimap {
             tracked: None,
             port: None,
+            beyond: None,
             map: &map,
             view: TileRect::new(at.x - 15, at.y - 7, 30, 15),
             player: Some(at),
@@ -866,6 +904,7 @@ mod tests {
         Minimap {
             tracked: None,
             port: None,
+            beyond: None,
             map: &map,
             view: TileRect::new(p.pos.x - 10, p.pos.y - 5, 20, 10),
             player: Some(p.pos),
@@ -1177,6 +1216,64 @@ mod tests {
         let source = st.track.as_ref().unwrap().source;
         crate::track::set(&mut st, source).unwrap();
         assert_eq!(inside(&st, 40, 12)[cell].symbol(), "≡");
+    }
+
+    #[test]
+    fn the_minimap_shows_the_ground_past_the_edge() {
+        use crate::outside::stream::tests::beyond::edge_out;
+        let mut st = crate::outside::tests::home_run();
+        let (e, d) = edge_out(&st, 4);
+        let (dx, dy) = d.delta();
+        let you = e.offset(4 * dx, 4 * dy);
+        crate::outside::stream::tend(&mut st, TileRect::new(you.x - 80, you.y - 40, 161, 81));
+        let city = st.city.as_ref().unwrap();
+        let b = Beyond::of(&st).unwrap();
+        let map = MapRef::stratum_at(city, StratumKind::Street, 12 * 60);
+        let track = MapTrack::default();
+        let draw = |beyond: Option<&Beyond>| {
+            let mut buf = Buffer::empty(Rect::new(0, 0, 40, 13));
+            Minimap {
+                tracked: None,
+                port: None,
+                beyond,
+                map: &map,
+                view: TileRect::new(you.x - 15, you.y - 7, 30, 15),
+                player: Some(you),
+                style: &st.style,
+                track: &track,
+            }
+            .render(Rect::new(0, 0, 40, 13), &mut buf);
+            buf
+        };
+        let (with, without) = (draw(Some(&b)), draw(None));
+        // the cells whose pixels lie wholly past the city's own cells
+        let o = close_up_origin(you, 40, 12);
+        let past = |x: u16, y: u16| {
+            (0..2 * CLOSE).all(|ty| {
+                (0..CLOSE).all(|tx| {
+                    !b.live_owns(Pos::new(
+                        o.x + x as i32 * CLOSE + tx,
+                        o.y + 2 * y as i32 * CLOSE + ty,
+                    ))
+                })
+            })
+        };
+        let bg = st.style.background.to_color();
+        let cells: Vec<(u16, u16)> = (0..12u16)
+            .flat_map(|y| (0..40u16).map(move |x| (x, y)))
+            .filter(|&(x, y)| past(x, y) && with[(x, y)].symbol() != "@")
+            .collect();
+        assert!(cells.len() > 40, "{} cells past the edge", cells.len());
+        assert!(
+            cells.iter().all(|c| without[*c].bg == bg),
+            "without the beyond the city's map ends"
+        );
+        let drawn = cells.iter().filter(|c| with[**c].bg != bg).count();
+        assert!(
+            drawn * 2 > cells.len(),
+            "{drawn} of {} drawn from the ground",
+            cells.len()
+        );
     }
 
     #[test]

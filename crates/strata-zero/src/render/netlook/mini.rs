@@ -22,18 +22,40 @@ pub fn net_px(
     tracked: Option<BuildingId>,
 ) -> Option<Rgb> {
     let stratum = city.stratum(StratumKind::Net)?;
+    net_tiles_px(
+        &|p| stratum.tiles.get(p),
+        Some(city),
+        style,
+        x0,
+        y0,
+        s,
+        tracked,
+    )
+}
+
+/// `net_px` over any of the Net's tiles: `tile` says what lies at each, `city` names
+/// their buildings and districts (none on the open Net, which has neither).
+pub fn net_tiles_px<'t>(
+    tile: &dyn Fn(Pos) -> Option<&'t citygen::Tile>,
+    city: Option<&City>,
+    style: &StylePack,
+    x0: i32,
+    y0: i32,
+    s: i32,
+    tracked: Option<BuildingId>,
+) -> Option<Rgb> {
     let colour = |b: BuildingId| {
         if tracked == Some(b) {
             AMBER
         } else {
-            Tier::of(security_of(city, b).unwrap_or(0)).colour()
+            Tier::of(city.and_then(|c| security_of(c, b)).unwrap_or(0)).colour()
         }
     };
     let (mut wall, mut lane, mut hub, mut floor, mut district, mut any) =
         (None, false, false, None, None, false);
     for y in y0..y0 + s {
         for x in x0..x0 + s {
-            let Some(t) = stratum.tiles.get(Pos::new(x, y)) else {
+            let Some(t) = tile(Pos::new(x, y)) else {
                 continue;
             };
             any = true;
@@ -59,7 +81,9 @@ pub fn net_px(
     } else if hub {
         WHITE
     } else {
-        let theme = district.and_then(|d| city.district_opt(d)).map(|d| d.theme);
+        let theme = district
+            .and_then(|d| city?.district_opt(d))
+            .map(|d| d.theme);
         VOID.mix(style.theme_or_neutral(theme).accent, 0.12)
     })
 }

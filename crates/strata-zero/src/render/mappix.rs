@@ -42,13 +42,26 @@ pub fn stratum_px(
     s: i32,
 ) -> Option<Rgb> {
     let stratum = city.stratum(k)?;
+    tiles_px(&|p| stratum.tiles.get(p), Some(city), style, x0, y0, s)
+}
+
+/// `stratum_px` over any tiles: `tile` says what lies at each, `city` names their
+/// districts (none on the open ground, which has none).
+pub fn tiles_px<'t>(
+    tile: &dyn Fn(Pos) -> Option<&'t Tile>,
+    city: Option<&City>,
+    style: &StylePack,
+    x0: i32,
+    y0: i32,
+    s: i32,
+) -> Option<Rgb> {
     let (mut n, mut solid, mut water, mut road, mut walk) = (0, 0, 0, false, false);
     // The districts met, and how often; a pixel meets few.
     let mut districts: [(Option<DistrictId>, u32); 8] = [(None, 0); 8];
     for y in y0..y0 + s {
         for x in x0..x0 + s {
             let p = Pos::new(x, y);
-            let Some(t) = stratum.tiles.get(p) else {
+            let Some(t) = tile(p) else {
                 continue;
             };
             n += 1;
@@ -95,7 +108,7 @@ pub fn stratum_px(
         )
         .0;
     let theme = district
-        .and_then(|d| city.district_opt(d))
+        .and_then(|d| city?.district_opt(d))
         .map(|d| style.theme_or_neutral(Some(d.theme)));
     Some(match (class, theme) {
         (Class::Water, _) => WATER,

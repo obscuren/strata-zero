@@ -4,6 +4,7 @@
 //! whole block is the city). See `2026-11-04-overworld-screen-design.md`.
 
 pub mod ground;
+pub mod here;
 pub mod moves;
 pub mod stream;
 
@@ -13,9 +14,10 @@ use citygen::{City, Pos, Rect, StratumKind};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// Where you are: in the city (its street may carry you off its map, onto the open
-/// ground), on an overworld tile, or on a detail cell of the open ground (world-wide
-/// detail coordinates; a run reopened there is put on the street, `reopened`).
+/// Where you are: in the city (its street carries you off its map, onto the open ground,
+/// walked on the city screen), or on an overworld tile. `Ground`, a detail cell of the
+/// open ground (world-wide detail coordinates), is only read from a run saved before the
+/// ground was the city screen's: it is put on the street there (`reopened`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum At {
     #[default]
@@ -35,10 +37,6 @@ pub struct Outside {
     /// The overworld, made from `params`; rebuilt on load (`after_restore`).
     #[serde(skip)]
     pub world: Option<Overworld>,
-    /// Jacked in on the open ground: where you are on its Net, your body on the ground
-    /// cell `at` names. Not saved: a run reopened out here wakes on the body.
-    #[serde(skip)]
-    pub net: Option<Pos>,
     /// The city or town the run's city is; none for the home city (and every run from
     /// before other cities could be walked into).
     #[serde(default)]
@@ -277,7 +275,6 @@ impl Outside {
             at: At::City,
             seen: BTreeMap::new(),
             world: Some(world),
-            net: None,
             here: None,
             built: BTreeMap::new(),
             blocks: Default::default(),
@@ -378,13 +375,6 @@ impl Outside {
                 TILE * (tile.y - b.y) + TILE / 2,
             ),
         )
-    }
-
-    /// Where you stand in the city walking in at world-wide cell `cell` of its block:
-    /// the outdoor street cell nearest the city's cell there.
-    pub fn street_at(&self, city: &City, cell: Pos) -> Pos {
-        let b = self.block(city);
-        street_near(city, Pos::new(cell.x - TILE * b.x, cell.y - TILE * b.y))
     }
 
     /// The home city: the world's.
@@ -518,7 +508,7 @@ pub fn mark_way(st: &AppState) -> Option<(String, i32, &'static str)> {
     let you = your_tile(st)?;
     let (dx, dy) = (m.tile.x - you.x, m.tile.y - you.y);
     let d = ((dx * dx + dy * dy) as f32).sqrt().round() as i32;
-    Some((m.name.clone(), d, crate::screens::outside::bearing(dx, dy)))
+    Some((m.name.clone(), d, here::bearing(dx, dy)))
 }
 
 /// At the mark: you're there, and the mark goes. There is a tile from it, in the city
@@ -533,7 +523,8 @@ pub fn reached_mark(st: &mut AppState) {
         if near(you, m.tile) {
             return Some(true);
         }
-        if o.at == At::City && settlement_at(st, m.tile) == Some(o.here()) {
+        // in the city it marks, on its own cells
+        if o.at == At::City && !away(st) && settlement_at(st, m.tile) == Some(o.here()) {
             return Some(true);
         }
         let w = o.world();
@@ -722,6 +713,66 @@ pub fn reopened(st: &mut AppState) {
         p.place = street;
         p.pos = Pos::new(c.x - origin.x, c.y - origin.y);
         p.body = None;
+        return;
+    }
+    still_stands(st);
+}
+
+/// A run reopened on the open ground past its city's edge, on foot, or jacked in with the
+/// body or the Net self out there: if the world has changed under it since (until seeds
+/// are fixed for 1.0) and the cell can't be stood on, back on the city's own street
+/// nearest it, or, for the Net self alone, woken on the body.
+fn still_stands(st: &mut AppState) {
+    use citygen::Place;
+    use citygen::overworld::{detail, net_ground};
+    let (Some(city), Some(o), Some(p)) =
+        (st.city.as_ref(), st.outside.as_ref(), st.player.as_ref())
+    else {
+        return;
+    };
+    let Some(w) = o.world.as_ref() else {
+        return;
+    };
+    let origin = o.origin(city);
+    let (cw, ch) = (TILE * w.size.w as i32, TILE * w.size.h as i32);
+    let stands = |place: Place, q: Pos| {
+        if place.stratum().is_none() || stream::live_owns(st, q) {
+            return true;
+        }
+        let c = origin.offset(q.x, q.y);
+        if c.x < 0 || c.y < 0 || c.x >= cw || c.y >= ch {
+            return false;
+        }
+        // another city's or town's cell: its own map answers for it, made again as ever
+        if o.owner(Pos::new(c.x.div_euclid(TILE), c.y.div_euclid(TILE)))
+            .is_some()
+        {
+            return true;
+        }
+        match place {
+            Place::Stratum(StratumKind::Net) => {
+                let t = net_ground::region(w, c.x, c.y, 1, 1)[Pos::new(0, 0)];
+                t.is_walkable() || t.terrain == citygen::Terrain::Void
+            }
+            _ => detail::region(w, c.x, c.y, 1, 1)[Pos::new(0, 0)].is_walkable(),
+        }
+    };
+    let body = p.body.unwrap_or((p.place, p.pos));
+    let body_stands = stands(body.0, body.1);
+    let net_stands = p.body.is_none() || stands(p.place, p.pos);
+    let back = street_near(city, body.1);
+    let Some(p) = st.player.as_mut() else {
+        return;
+    };
+    if !body_stands {
+        p.body = None;
+        p.place = Place::Stratum(StratumKind::Street);
+        p.pos = back;
+        st.warn("the world out there has changed since this run was saved · back in the city");
+    } else if !net_stands && let Some((place, at)) = p.body.take() {
+        p.place = place;
+        p.pos = at;
+        st.warn("the world out there has changed since this run was saved · jacked out");
     }
 }
 

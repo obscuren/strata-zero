@@ -331,7 +331,7 @@ fn pane(st: &AppState, r: Rect, buf: &mut Buffer) {
         let y = r.y + 2 + (k - first) as u16;
         let (dx, dy) = (p.tile.x - you.x, p.tile.y - you.y);
         let d = ((dx * dx + dy * dy) as f32).sqrt().round() as i32;
-        let way = format!("{d:>3} {:<2}", crate::screens::outside::bearing(dx, dy));
+        let way = format!("{d:>3} {:<2}", crate::outside::here::bearing(dx, dy));
         let w = (r.width as usize).saturating_sub(way.len() + 3);
         let name: String = p.name.chars().take(w).collect();
         let style = if Some(k) == sel {
@@ -395,7 +395,7 @@ fn pane(st: &AppState, r: Rect, buf: &mut Buffer) {
     let way = if d == 0 {
         "you're here".to_string()
     } else {
-        format!("{d} tiles {}", crate::screens::outside::bearing(dx, dy))
+        format!("{d} tiles {}", crate::outside::here::bearing(dx, dy))
     };
     let road = st
         .outside

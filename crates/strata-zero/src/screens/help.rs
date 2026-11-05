@@ -30,10 +30,8 @@ const EXPLORE: &[(&str, &str)] = &[
 const WALK: &[(&str, &str)] = &[
     ("hjkl yubn ↑↓←→", "move"),
     ("< >", "take stairs, lift, ladder or manhole"),
-    (
-        "W",
-        "up to the overworld, from the open street · on the Net, the Net over it",
-    ),
+    ("W", "up to the overworld, from the street or the ground"),
+    ("W on the Net", "the Net over the world, to look at"),
     (
         "space",
         "the thing in reach: look, talk, take, jack in, stairs · continue a run",

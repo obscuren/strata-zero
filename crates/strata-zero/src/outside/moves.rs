@@ -12,7 +12,8 @@ pub enum Moved {
     Stepped,
     /// Refused, and why (a line for the log).
     Blocked(&'static str),
-    /// Into the city, on this street cell.
+    /// Onto the city's street at this cell of its frame: in the city, or past its edge
+    /// on the open ground.
     City(Pos),
 }
 
@@ -83,7 +84,8 @@ fn closed(world: &Overworld, to: Pos) -> &'static str {
 }
 
 /// ↵ on the overworld: onto the tile's ground (on its road if it has one, else the dry
-/// ground nearest its middle), or into the city on a tile of its block.
+/// ground nearest its middle), on the city's street past its edge, or into the city on
+/// a tile of its block.
 pub fn down(st: &mut AppState) -> Result<Moved, &'static str> {
     let (Some(o), Some(_)) = (st.outside.as_ref(), st.city.as_ref()) else {
         return Err("there is no world out here");
@@ -107,10 +109,9 @@ pub fn down(st: &mut AppState) -> Result<Moved, &'static str> {
     // the road nearest the middle, else dry ground joined to the open (not shut in a
     // pen or a crater), else the nearest shore when the tile is under water
     let cell = detail::landing(o.world(), t).ok_or("nothing to stand on there")?;
-    if let Some(o) = st.outside.as_mut() {
-        o.at = At::Ground(cell);
-    }
-    Ok(Moved::Stepped)
+    let city = st.city.as_ref().ok_or("there is no world out here")?;
+    let origin = o.origin(city);
+    Ok(Moved::City(Pos::new(cell.x - origin.x, cell.y - origin.y)))
 }
 
 /// Up onto the overworld: from the open ground onto the tile you're on, from the city's
@@ -129,25 +130,23 @@ pub fn up(st: &mut AppState) {
     }
 }
 
-/// Into the city on its street at `cell`.
+/// Onto the city's street at `cell` of its frame: in the city, or past its edge on the
+/// open ground.
 pub fn into_city(st: &mut AppState, cell: Pos) {
     let street = Place::Stratum(StratumKind::Street);
-    let (minute, bonus) = (st.minute_of_day(), st.sight_bonus());
     if st.player.is_none() {
         st.player = Some(crate::walker::Player::at(street, cell));
     }
-    if let (Some(p), Some(city)) = (st.player.as_mut(), st.city.as_ref()) {
+    if let Some(p) = st.player.as_mut() {
         p.place = street;
         p.pos = cell;
-        // you see where you've come in, not where you left
-        p.update_fov(
-            &crate::render::map::MapRef::stratum_at(city, StratumKind::Street, minute),
-            bonus,
-        );
+        p.body = None;
     }
     if let Some(o) = st.outside.as_mut() {
         o.at = At::City;
     }
+    // you see where you've come down, not where you left
+    crate::screens::explore::look_round(st);
     // the city's MAP is the city's again
     if st.atlas.zoom == crate::screens::atlas::Zoom::World {
         st.atlas.zoom = crate::screens::atlas::Zoom::Fit;
@@ -313,6 +312,12 @@ pub(crate) mod tests {
         assert!(matches!(down(&mut st), Ok(Moved::City(_))));
     }
 
+    /// The world cell of the live city's cell `p`.
+    fn world_cell(st: &AppState, p: Pos) -> Pos {
+        let o = st.outside.as_ref().unwrap();
+        o.origin(st.city.as_ref().unwrap()).offset(p.x, p.y)
+    }
+
     #[test]
     fn down_lands_on_the_road_or_dry_ground() {
         let mut st = on_the_world();
@@ -323,10 +328,10 @@ pub(crate) mod tests {
                 .is_some_and(|t| t.road != 0 && t.water == Water::None)
         });
         put(&mut st, At::Overworld(road));
-        assert_eq!(down(&mut st), Ok(Moved::Stepped));
-        let At::Ground(c) = st.outside.as_ref().unwrap().at else {
-            panic!("on the ground")
+        let Ok(Moved::City(cell)) = down(&mut st) else {
+            panic!("onto the street past the city's edge")
         };
+        let c = world_cell(&st, cell);
         let g = detail::ground(&w, road.x, road.y);
         assert_eq!(
             g[Pos::new(c.x - TILE * road.x, c.y - TILE * road.y)].terrain,
@@ -343,10 +348,8 @@ pub(crate) mod tests {
             }
             put(&mut st, At::Overworld(p));
             match down(&mut st) {
-                Ok(Moved::Stepped) => {
-                    let At::Ground(c) = st.outside.as_ref().unwrap().at else {
-                        panic!()
-                    };
+                Ok(Moved::City(cell)) => {
+                    let c = world_cell(&st, cell);
                     let r = detail::region(&w, c.x, c.y, 1, 1);
                     let cell = r[Pos::new(0, 0)];
                     assert!(cell.is_walkable(), "{p:?}: {:?}", cell.terrain);
@@ -369,9 +372,38 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn down_onto_the_ground_is_the_citys_street_past_its_edge() {
+        let mut st = on_the_world();
+        let w = world(&st).clone();
+        let road = find(&st, |p| {
+            w.tile(p)
+                .is_some_and(|t| t.road != 0 && t.water == Water::None)
+        });
+        put(&mut st, At::Overworld(road));
+        let Ok(Moved::City(cell)) = down(&mut st) else {
+            panic!("onto the street")
+        };
+        // still on the overworld until it's stood on
+        assert_eq!(st.outside.as_ref().unwrap().at, At::Overworld(road));
+        into_city(&mut st, cell);
+        assert_eq!(st.outside.as_ref().unwrap().at, At::City);
+        let p = st.player.as_ref().unwrap();
+        assert_eq!(
+            (p.place, p.pos),
+            (Place::Stratum(StratumKind::Street), cell)
+        );
+        assert!(!st.city.as_ref().unwrap().size.contains(cell));
+        assert!(p.beyond_sight().len() > 50, "you see the ground round you");
+    }
+
+    #[test]
     fn up_from_the_ground_is_the_tile_you_are_on() {
         let mut st = on_the_world();
-        put(&mut st, At::Ground(Pos::new(8 * 12 + 5, 8 * 7 + 2)));
+        // on the street past the city's edge: the tile its world cell lies in
+        let city = st.city.clone().unwrap();
+        let origin = st.outside.as_ref().unwrap().origin(&city);
+        let cell = Pos::new(8 * 12 + 5 - origin.x, 8 * 7 + 2 - origin.y);
+        st.player.as_mut().unwrap().pos = cell;
         up(&mut st);
         assert_eq!(
             st.outside.as_ref().unwrap().at,
@@ -379,12 +411,10 @@ pub(crate) mod tests {
         );
         // from the city: the block tile your street cell lies in
         put(&mut st, At::City);
-        let cell = st.player.as_ref().unwrap().pos;
+        let cell = st.city.as_ref().unwrap().size.center();
+        st.player.as_mut().unwrap().pos = cell;
         up(&mut st);
         let o = st.outside.as_ref().unwrap();
-        assert_eq!(
-            o.at,
-            At::Overworld(o.tile_of(st.city.as_ref().unwrap(), cell))
-        );
+        assert_eq!(o.at, At::Overworld(o.tile_of(&city, cell)));
     }
 }

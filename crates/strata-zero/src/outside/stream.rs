@@ -400,6 +400,45 @@ impl Beyond<'_> {
     }
 }
 
+/// Cells round both ends a way over a map that carries on past its edge is looked for in,
+/// when an end lies off the map.
+pub const PATH_MARGIN: i32 = 24;
+
+/// Where a way from `from` to `to` over a map of `size` is looked for: the map's own
+/// cells when both ends are on it, as ever; else the box round both ends, `PATH_MARGIN`
+/// cells wider all round, on the map or past its edge.
+pub fn path_area(size: Size, from: Pos, to: Pos) -> Rect {
+    if size.contains(from) && size.contains(to) {
+        return Rect::new(0, 0, size.w as i32, size.h as i32);
+    }
+    let m = PATH_MARGIN;
+    let (x0, y0) = (from.x.min(to.x) - m, from.y.min(to.y) - m);
+    let (x1, y1) = (from.x.max(to.x) + m, from.y.max(to.y) + m);
+    Rect::new(x0, y0, x1 - x0 + 1, y1 - y0 + 1)
+}
+
+/// The shortest way from `start` to `goal` four ways within `area` (cells of the live
+/// city's frame, on its map or past it), as `citygen::pathing::astar` finds it on a map
+/// of its own; `cost` is asked in the same frame.
+pub fn path_within(
+    area: Rect,
+    start: Pos,
+    goal: Pos,
+    cost: impl Fn(Pos, Pos) -> Option<u32>,
+) -> Option<Vec<Pos>> {
+    let o = Pos::new(area.x, area.y);
+    let size = Size {
+        w: area.w.max(0) as u32,
+        h: area.h.max(0) as u32,
+    };
+    let inner = |p: Pos| Pos::new(p.x - o.x, p.y - o.y);
+    let outer = |p: Pos| Pos::new(p.x + o.x, p.y + o.y);
+    let path = citygen::pathing::astar(size, inner(start), inner(goal), |a, b| {
+        cost(outer(a), outer(b))
+    })?;
+    Some(path.into_iter().map(outer).collect())
+}
+
 /// Marks what was in sight past the live city's edge at the last look as seen, in the
 /// world's record.
 pub fn remember_sight(st: &mut AppState) {
@@ -811,7 +850,7 @@ pub(crate) mod tests {
         let start = Pos::new(TILE * 2, TILE * 10);
         for t in path {
             let at = Pos::new(TILE * t.x + TILE / 2, TILE * t.y + TILE / 2);
-            stream.cover(w, crate::outside::ground::sight_area(at));
+            stream.cover(w, Rect::new(at.x - 40, at.y - 40, 81, 81));
             assert!(
                 stream.street.held() <= CAP && stream.net.held() <= CAP,
                 "{stream:?} at {t:?}"

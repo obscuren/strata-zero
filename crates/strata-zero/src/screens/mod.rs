@@ -113,6 +113,15 @@ pub fn start_built(
 /// game, city load and debug start comes through here; an opened run goes through
 /// `resume_screen`.
 pub fn explore_screen(st: &mut crate::app::AppState) -> Box<dyn Screen> {
+    // a city on its site has its world from the first frame, so the street past its
+    // edge draws from the start (a dev start's own city and the lot have none)
+    if st
+        .city
+        .as_ref()
+        .is_some_and(|c| c.params.site.is_some() && !c.is_lot())
+    {
+        crate::outside::ensure(st);
+    }
     let map = explore::MapScreen::walking(st);
     crate::missions::begin(st);
     Box::new(map)
@@ -121,6 +130,10 @@ pub fn explore_screen(st: &mut crate::app::AppState) -> Box<dyn Screen> {
 /// The map over a run opened from its file (CONTINUE, LOAD GAME): you where you stood,
 /// the story where it was, nothing started over.
 pub fn resume_screen(st: &mut crate::app::AppState) -> Box<dyn Screen> {
+    // a run from before the world has it made as it opens, as a new game does
+    if st.city.as_ref().is_some_and(|c| !c.is_lot()) {
+        crate::outside::ensure(st);
+    }
     let outside = st
         .outside
         .as_ref()
@@ -201,6 +214,38 @@ mod tests {
         assert_eq!(again.seed, city.seed, "the same line every time");
         let home = super::build_home(st.params.clone().with_seed(60)).unwrap();
         assert!(crate::home::HomeRig::find(&home).is_some());
+    }
+
+    #[test]
+    fn a_city_in_the_world_has_it_from_the_first_frame() {
+        use crate::walker::Player;
+        // a new game's city on its site: the world made before the map's first frame,
+        // so the street past its edge draws from the start
+        let mut st = AppState::new();
+        st.enter_city(crate::outside::tests::sited().clone());
+        let _ = super::explore_screen(&mut st);
+        assert!(st.outside.is_some(), "a new game's world");
+        // a run opened from before the world: made as it opens
+        let mut st = AppState::new();
+        st.enter_city(crate::runs::testutil::story_city());
+        st.player = Some(Player::spawn(st.city.as_ref().unwrap(), 1));
+        let _ = super::resume_screen(&mut st);
+        assert!(st.outside.is_some(), "an old run's world");
+        // the lot and a dev start's own city have none until it's needed
+        for city in [citygen::City::lot(1), crate::runs::testutil::story_city()] {
+            let mut st = AppState::new();
+            st.enter_city(city);
+            let _ = super::explore_screen(&mut st);
+            assert!(st.outside.is_none());
+        }
+        let mut st = AppState::new();
+        st.enter_city(citygen::City::lot(1));
+        st.player = Some(Player::at(
+            citygen::Place::Stratum(citygen::StratumKind::Street),
+            citygen::Pos::new(6, 8),
+        ));
+        let _ = super::resume_screen(&mut st);
+        assert!(st.outside.is_none(), "no world past the lot");
     }
 
     #[test]

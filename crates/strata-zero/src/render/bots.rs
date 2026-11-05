@@ -36,14 +36,18 @@ pub struct BotOverlay<'a> {
     pub foes: &'a [Foe],
     /// Your sight on foot; the free camera sees everything.
     pub vis: Option<&'a Grid<Visibility>>,
+    /// What you see past the city's edge on foot (sorted), where `vis` has no cells.
+    pub beyond: &'a [Pos],
     /// The world's clock: the rotor and the wake stand when it does.
     pub now: u64,
 }
 
 impl BotOverlay<'_> {
     fn seen(&self, p: Pos) -> bool {
-        self.vis
-            .is_none_or(|v| v.get(p).copied() == Some(Visibility::Visible))
+        self.vis.is_none_or(|v| match v.get(p) {
+            Some(v) => *v == Visibility::Visible,
+            None => self.beyond.binary_search(&p).is_ok(),
+        })
     }
 
     fn held(&self, map: &MapRef, p: Pos) -> bool {
@@ -173,6 +177,7 @@ mod tests {
             content: &c,
             foes,
             vis,
+            beyond: &[],
             now,
         }
         .draw(

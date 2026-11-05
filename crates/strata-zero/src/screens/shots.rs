@@ -3851,7 +3851,8 @@ fn save_pause_shots() {
 }
 
 /// The world beyond the city (#22): the overworld after going up from the large seed-8
-/// city, and down on the open ground on a highway, beside a bridge, by day and night.
+/// city, and down on the open ground on a highway, beside a bridge, by day and night,
+/// walked on the city screen.
 #[test]
 #[ignore]
 fn outside_shots() {
@@ -3878,16 +3879,15 @@ fn outside_shots() {
     let s = OutsideScreen::new(&mut st);
     shot_stack("outside_overworld", &st, &[&s], (120, 40));
     shot_stack("outside_overworld_small", &st, &[&s], (100, 30));
-    // Down on the open ground: a highway, then a bridge, outside the city's block.
+    // Down on the open ground: a highway, then a bridge, off every city's and town's
+    // block.
     let pick = |st: &AppState, f: &dyn Fn(&citygen::overworld::WorldTile) -> bool| {
         let o = st.outside.as_ref().unwrap();
-        let b = o.block(st.city.as_ref().unwrap());
         o.world()
             .tiles
             .iter()
-            .find(|(p, t)| !b.contains(*p) && f(t))
+            .find(|(p, t)| crate::outside::settlement_at(st, *p).is_none() && f(t))
             .map(|(p, _)| p)
-            .unwrap()
     };
     use citygen::overworld::{LINK_E, LINK_W};
     for (name, minute, f) in [
@@ -3912,16 +3912,71 @@ fn outside_shots() {
         ),
     ] {
         let mut st = at(minute);
-        let t = pick(&st, f);
+        let Some(t) = pick(&st, f) else {
+            eprintln!("{name}: none on the open ground of this world");
+            continue;
+        };
         st.outside.as_mut().unwrap().at = At::Overworld(t);
-        let mut s = OutsideScreen::new(&mut st);
-        s.update(&mut st, &[key(KeyCode::Enter)]);
+        let mut map = down(&mut st);
         // a few steps along, so the memory shows behind you
         for _ in 0..6 {
-            s.update(&mut st, &[key(KeyCode::Char('l'))]);
+            map.update(&mut st, &[key(KeyCode::Char('l'))]);
         }
-        shot_stack(name, &st, &[&s], (120, 40));
+        shot_stack(name, &st, &[map.as_ref()], (120, 40));
     }
+}
+
+/// ↵ on the overworld where you stand: the city screen it lands on, a frame run.
+fn down(st: &mut AppState) -> Box<dyn Screen> {
+    let mut s = crate::screens::outside::OutsideScreen::new(st);
+    let crate::app::ScreenCmd::Switch { to: mut map, .. } = s.update(st, &[key(KeyCode::Enter)])
+    else {
+        panic!("down onto the city screen")
+    };
+    map.update(st, &[]);
+    map
+}
+
+/// On the street at world cell `cell` (past the city's edge), on foot: the city screen,
+/// a frame run.
+fn on_the_ground(st: &mut AppState, cell: Pos) -> MapScreen {
+    let origin = st
+        .outside
+        .as_ref()
+        .unwrap()
+        .origin(st.city.as_ref().unwrap());
+    let p = st.player.as_mut().unwrap();
+    p.place = Place::Stratum(StratumKind::Street);
+    p.pos = Pos::new(cell.x - origin.x, cell.y - origin.y);
+    p.body = None;
+    let mut map = MapScreen::walking(st);
+    map.update(st, &[]);
+    map
+}
+
+/// Beside the first truck stop's pump of the run's world: its world cell.
+fn by_the_pump(st: &AppState) -> Pos {
+    use crate::outside::TILE;
+    use citygen::overworld::PoiKind;
+    let w = st.outside.as_ref().unwrap().world();
+    let poi = w
+        .pois
+        .iter()
+        .find(|p| p.kind == PoiKind::TruckStop)
+        .unwrap()
+        .clone();
+    let o = Pos::new(TILE * (poi.at.x - 3), TILE * (poi.at.y - 3));
+    let g = citygen::overworld::detail::region(w, o.x, o.y, 7 * TILE as u32, 7 * TILE as u32);
+    let pump = g
+        .iter()
+        .find(|(_, t)| t.feature == Some(citygen::Feature::Furniture(citygen::Furniture::Vending)))
+        .map(|(p, _)| p)
+        .unwrap();
+    let beside = pump
+        .neighbors4()
+        .find(|q| g.get(*q).is_some_and(|t| t.is_walkable()))
+        .unwrap();
+    Pos::new(o.x + beside.x, o.y + beside.y)
 }
 
 /// POIs one level down (#17): the truck stop by day and by night, a checkpoint, a camp
@@ -3930,7 +3985,6 @@ fn outside_shots() {
 #[ignore]
 fn poi_shots() {
     use crate::outside::At;
-    use crate::screens::outside::OutsideScreen;
     use citygen::overworld::PoiKind;
     let city = Generator::run(GenParams {
         seed: 8,
@@ -3959,20 +4013,17 @@ fn poi_shots() {
             continue;
         };
         st.outside.as_mut().unwrap().at = At::Overworld(poi.at);
-        let mut s = OutsideScreen::new(&mut st);
-        s.update(&mut st, &[key(KeyCode::Enter)]);
-        s.update(&mut st, &[]);
-        shot_stack(name, &st, &[&s], (120, 40));
+        let map = down(&mut st);
+        shot_stack(name, &st, &[map.as_ref()], (120, 40));
     }
 }
 
-/// The open Net (#18): jacked in beside the truck stop's pump, by day.
+/// The open Net (#18): jacked in beside the truck stop's pump, by day, on the city
+/// screen; and a barren stretch's Net.
 #[test]
 #[ignore]
 fn open_net_shots() {
-    use crate::outside::{At, TILE};
-    use crate::screens::outside::OutsideScreen;
-    use citygen::overworld::PoiKind;
+    use crate::outside::TILE;
     let city = Generator::run(GenParams {
         seed: 8,
         size: SizePreset::Large,
@@ -3985,31 +4036,14 @@ fn open_net_shots() {
     st.character = game::Character::debug_runner(&st.content);
     st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
     crate::outside::ensure(&mut st);
-    let w = st.outside.as_ref().unwrap().world().clone();
-    let poi = w
-        .pois
-        .iter()
-        .find(|p| p.kind == PoiKind::TruckStop)
-        .unwrap()
-        .clone();
-    let o = Pos::new(TILE * (poi.at.x - 3), TILE * (poi.at.y - 3));
-    let g = citygen::overworld::detail::region(&w, o.x, o.y, 7 * TILE as u32, 7 * TILE as u32);
-    let pump = g
-        .iter()
-        .find(|(_, t)| t.feature == Some(citygen::Feature::Furniture(citygen::Furniture::Vending)))
-        .map(|(p, _)| p)
-        .unwrap();
-    let beside = pump
-        .neighbors4()
-        .find(|q| g.get(*q).is_some_and(|t| t.is_walkable()))
-        .unwrap();
-    st.outside.as_mut().unwrap().at = At::Ground(Pos::new(o.x + beside.x, o.y + beside.y));
-    let mut s = OutsideScreen::new(&mut st);
-    s.update(&mut st, &[key(KeyCode::Char(' '))]);
-    s.update(&mut st, &[]);
-    shot_stack("open_net_truck_stop", &st, &[&s], (120, 40));
+    let cell = by_the_pump(&st);
+    let mut map = on_the_ground(&mut st, cell);
+    map.update(&mut st, &[key(KeyCode::Char(' '))]);
+    map.update(&mut st, &[]);
+    shot_stack("open_net_truck_stop", &st, &[&map], (120, 40));
     // a barren stretch: dry land with no road and no POI for three tiles round, its Net
     // the odd stray dot in the void
+    let w = st.outside.as_ref().unwrap().world().clone();
     let barren = w
         .tiles
         .iter()
@@ -4024,12 +4058,15 @@ fn open_net_shots() {
         })
         .unwrap();
     let cell = Pos::new(TILE * barren.x + TILE / 2, TILE * barren.y + TILE / 2);
-    let o = st.outside.as_mut().unwrap();
-    o.at = At::Ground(cell);
-    o.net = Some(cell);
-    s.update(&mut st, &[]);
-    s.update(&mut st, &[]);
-    shot_stack("open_net_barren", &st, &[&s], (120, 40));
+    let mut map = on_the_ground(&mut st, cell);
+    {
+        let p = st.player.as_mut().unwrap();
+        p.body = Some((p.place, p.pos));
+        p.place = Place::Stratum(StratumKind::Net);
+    }
+    map.update(&mut st, &[]);
+    map.update(&mut st, &[]);
+    shot_stack("open_net_barren", &st, &[&map], (120, 40));
 }
 
 /// Cities grown into the world (#19): seed 41's home city on its site, where its
@@ -4220,9 +4257,6 @@ fn other_cities_shots() {
 #[test]
 #[ignore]
 fn net_overworld_shots() {
-    use crate::outside::{At, TILE};
-    use crate::screens::outside::OutsideScreen;
-    use citygen::overworld::PoiKind;
     // from the open ground: jacked in at the first truck stop's pump, W
     let city = Generator::run(GenParams {
         seed: 8,
@@ -4236,30 +4270,20 @@ fn net_overworld_shots() {
     st.character = game::Character::debug_runner(&st.content);
     st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
     crate::outside::ensure(&mut st);
-    let w = st.outside.as_ref().unwrap().world().clone();
-    let poi = w
-        .pois
-        .iter()
-        .find(|p| p.kind == PoiKind::TruckStop)
-        .unwrap()
-        .clone();
-    let o = Pos::new(TILE * (poi.at.x - 3), TILE * (poi.at.y - 3));
-    let g = citygen::overworld::detail::region(&w, o.x, o.y, 7 * TILE as u32, 7 * TILE as u32);
-    let pump = g
-        .iter()
-        .find(|(_, t)| t.feature == Some(citygen::Feature::Furniture(citygen::Furniture::Vending)))
-        .map(|(p, _)| p)
-        .unwrap();
-    let beside = pump
-        .neighbors4()
-        .find(|q| g.get(*q).is_some_and(|t| t.is_walkable()))
-        .unwrap();
-    st.outside.as_mut().unwrap().at = At::Ground(Pos::new(o.x + beside.x, o.y + beside.y));
-    let mut s = OutsideScreen::new(&mut st);
-    s.update(&mut st, &[key(KeyCode::Char(' '))]);
-    s.update(&mut st, &[key(KeyCode::Char('W'))]);
-    shot_stack("net_overworld_ground", &st, &[&s], (120, 40));
-    shot_stack("net_overworld_ground_small", &st, &[&s], (100, 30));
+    let cell = by_the_pump(&st);
+    let mut map = on_the_ground(&mut st, cell);
+    map.update(&mut st, &[key(KeyCode::Char(' '))]);
+    map.update(&mut st, &[]);
+    if let crate::app::ScreenCmd::Push { to, .. } = map.update(&mut st, &[key(KeyCode::Char('W'))])
+    {
+        shot_stack("net_overworld_ground", &st, &[&map, to.as_ref()], (120, 40));
+        shot_stack(
+            "net_overworld_ground_small",
+            &st,
+            &[&map, to.as_ref()],
+            (100, 30),
+        );
+    }
     // from the city's Net
     let (mut st, mut map) = on_the_open_net();
     if let crate::app::ScreenCmd::Push { to, .. } = map.update(&mut st, &[key(KeyCode::Char('W'))])
